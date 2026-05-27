@@ -1,0 +1,5 @@
+{
+    "model_mode": "text2video",
+    "prompt": "The camera moves smoothly through an empty office, gliding past rows of cubicles with computers and desks. Bright overhead lights illuminate the space, and large windows reveal trees outside. The quiet, organized layout suggests a modern workspace.",
+    "autoregressive": true
+}

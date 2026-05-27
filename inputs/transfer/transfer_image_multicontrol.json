@@ -1,0 +1,9 @@
+{
+    "model_mode": "image2image",
+    "name": "transfer_multicontrol",
+    "prompt": "A wide view of a bus terminal with multiple buses parked at covered bays, concrete platforms, and overhead shelters. The steel canopy frames, bus window outlines, and platform edges are sharply defined, while the partly cloudy sky above transitions through soft gradients of pale blue and diffuse white light that casts gentle, low-contrast shadows across the concrete.",
+    "vision_path": "https://media.githubusercontent.com/media/nvidia-cosmos/cosmos-predict2.5/main/assets/base/bus_terminal.jpg",
+    "resolution": "720",
+    "blur": {},
+    "edge": {}
+}

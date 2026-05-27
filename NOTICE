@@ -1,0 +1,54 @@
+Cosmos
+
+Copyright (c) 2025-2026 NVIDIA CORPORATION & AFFILIATES.
+
+This file contains attribution notices for third-party source code that is
+adapted, copied, or vendored in this repository. Dependency notices are listed
+separately in ATTRIBUTIONS.md.
+
+HuggingFace Transformers / Qwen
+Source: https://github.com/huggingface/transformers
+License: Apache-2.0
+Notices:
+  Copyright 2024 The Qwen team, Alibaba Group and the HuggingFace Inc. team.
+  Copyright 2025 The Qwen team, Alibaba Group and the HuggingFace Inc. team.
+  Copyright 2025 The Qwen Team and The HuggingFace Inc. team.
+  Copyright 2025 HuggingFace Inc. team.
+Files:
+  cosmos_framework/model/vfm/vlm/qwen3_vl/configuration_qwen3_vl.py
+  cosmos_framework/model/vfm/vlm/qwen3_vl/qwen3_vl.py
+  cosmos_framework/model/vfm/vlm/qwen3_vl/utils.py
+  cosmos_framework/model/vfm/vlm/qwen3_vl/video_processing_qwen3_vl.py
+
+ByteDance-Seed Bagel / Qwen2 tokenizer
+Source: https://github.com/ByteDance-Seed/Bagel
+License: Apache-2.0
+Notice:
+  Copyright 2024 The Qwen Team and The HuggingFace Inc. team.
+File:
+  cosmos_framework/model/vfm/tokenizers/tokenization_qwen2.py
+
+HuggingFace Diffusers UniPC scheduler
+Source: https://github.com/huggingface/diffusers
+License: Apache-2.0
+Notices:
+  Copyright 2024 TSAIL Team and The HuggingFace Team. All rights reserved.
+  Copyright 2024-2025 The Alibaba Wan Team Authors. All rights reserved.
+File:
+  cosmos_framework/model/vfm/diffusion/samplers/fm_solvers_unipc.py
+
+Detectron2 lazy config helpers
+Source: https://github.com/facebookresearch/detectron2
+License: Apache-2.0
+Notice:
+  Copyright (c) Facebook, Inc. and its affiliates.
+File:
+  cosmos_framework/utils/lazy_config/__init__.py
+
+TaylorSeer
+Source: https://github.com/Shenyi-Z/TaylorSeer
+License: GPL-3.0
+Notice:
+  Upstream source files do not contain an explicit copyright notice.
+Files:
+  cosmos_framework/model/vfm/utils/taylorseer.py

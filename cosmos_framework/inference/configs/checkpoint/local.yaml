@@ -1,0 +1,35 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: OpenMDW-1.1
+
+# @package checkpoint
+_type: cosmos3._src.imaginaire.config.CheckpointConfig
+broadcast_via_filesystem: true
+dcp_async_mode_enabled: true
+enable_gcs_patch_in_boto3: false
+jit:
+  _type: cosmos3._src.imaginaire.config.JITConfig
+  device: cuda
+  dtype: bfloat16
+  enabled: false
+  input_shape: null
+  strict: true
+keys_not_to_resume: []
+keys_to_skip_loading: []
+load_ema_to_reg: false
+load_from_object_store:
+  _type: cosmos3._src.imaginaire.config.ObjectStoreConfig
+  bucket: ''
+  credentials: ''
+  enabled: false
+load_path: ''
+load_training_state: false
+only_load_scheduler_state: false
+save_iter: 5000
+save_to_object_store:
+  _type: cosmos3._src.imaginaire.config.ObjectStoreConfig
+  bucket: ''
+  credentials: ''
+  enabled: false
+strict_resume: true
+type: null
+verbose: true

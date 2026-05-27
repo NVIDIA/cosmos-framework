@@ -1,0 +1,9 @@
+{
+    "model_mode": "text2image",
+    "name": "transfer_depth",
+    "prompt": "three people are having a conversation. the man on the left has his arms held in the middle of the air, the woman in the middle is looking at the man. Another man on the right is looking at the woman",
+    "resolution": "720",
+    "depth": {
+        "control_path": "https://huggingface.co/nvidia/Cosmos3-Experimental/blob/main/assets/transfer/depth.png"
+    }
+}

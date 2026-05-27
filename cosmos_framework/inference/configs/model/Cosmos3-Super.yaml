@@ -1,0 +1,181 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: OpenMDW-1.1
+
+_metadata:
+  args:
+    config_file: cosmos3/_src/vfm/configs/base/config.py
+    config_file_type: module
+    experiment: cosmos3_ga_64bm32b_v3p1_midtrain
+    experiment_overrides: []
+model:
+  _recursive_: false
+  _target_: cosmos3._src.vfm.models.omni_mot_model.OmniMoTModel
+  config:
+    _type: cosmos3._src.vfm.configs.base.defaults.model_config.OmniMoTModelConfig
+    action_gen: true
+    activation_checkpointing:
+      _type: cosmos3._src.vfm.configs.base.defaults.activation_checkpointing.ActivationCheckpointingConfig
+      determinism_check: default
+      mode: full
+      preserve_rng_state: true
+      save_ops_regex:
+      - fmha
+    causal_training_strategy: none
+    diffusion_expert_config:
+      _type: cosmos3._src.vfm.configs.base.defaults.model_config.DiffusionExpertConfig
+      base_fps: 24
+      enable_fps_modulation: true
+      load_weights_from_pretrained: false
+      max_vae_latent_side_after_patchify: 20
+      patch_spatial: 2
+      position_embedding_type: unified_3d_mrope
+      rope_h_extrapolation_ratio: 1.0
+      rope_t_extrapolation_ratio: 1.0
+      rope_w_extrapolation_ratio: 1.0
+      timestep_range: 1.0
+      unified_3d_mrope_reset_spatial_ids: true
+      unified_3d_mrope_temporal_modality_margin: 15000
+    ema:
+      _type: cosmos3._src.vfm.configs.base.defaults.ema.EMAConfig
+      enabled: true
+      iteration_shift: 0
+      rate: 0.1
+    fixed_step_sampler_config: null
+    input_caption_key: ai_caption
+    input_image_key: images
+    input_video_key: video
+    joint_attn_implementation: two_way
+    latent_downsample_factor: 16
+    lbl:
+      _type: cosmos3._src.vfm.configs.base.defaults.model_config.LBLConfig
+      coeff_gen: null
+      coeff_und: null
+      method: local
+    log_enc_time_every_n: 100
+    lora_alpha: 32
+    lora_enabled: false
+    lora_rank: 16
+    lora_target_modules: q_proj_moe_gen,k_proj_moe_gen,v_proj_moe_gen,o_proj_moe_gen
+    max_action_dim: 64
+    max_num_tokens_after_packing: 74000
+    natten_parameter_list: null
+    net: null
+    num_embodiment_domains: 32
+    parallelism:
+      _type: cosmos3._src.vfm.configs.base.defaults.parallelism.ParallelismConfig
+      cfg_parallel_shard_degree: 1
+      compile_dynamic: true
+      compiled_region: language
+      context_parallel_shard_degree: 1
+      coordinate_descent_tuning: false
+      data_parallel_replicate_degree: 1
+      data_parallel_shard_degree: 128
+      enable_inference_mode: false
+      max_autotune_pointwise: false
+      precision: bfloat16
+      use_cuda_graphs: false
+      use_torch_compile: true
+    rectified_flow_inference_config:
+      _type: cosmos3._src.vfm.configs.base.defaults.model_config.RectifiedFlowInferenceConfig
+      num_train_timesteps: 1000
+      scheduler_type: unipc
+      shift: 1
+      use_dynamic_shifting: false
+    rectified_flow_training_config:
+      _type: cosmos3._src.vfm.configs.base.defaults.model_config.RectifiedFlowTrainingConfig
+      action_loss_weight: 10.0
+      high_sigma_ratio: 0.05
+      high_sigma_timesteps_max: 1000
+      high_sigma_timesteps_min: 995
+      image_loss_scale: null
+      independent_action_schedule: false
+      independent_sound_schedule: false
+      loss_scale: 10.0
+      normalize_loss_by_active: false
+      shift:
+        '256': 3
+        '480': 5
+        '720': 10
+      shift_action: null
+      shift_sound: null
+      sound_loss_scale: 2.0
+      train_time_action_distribution: logitnormal
+      train_time_image_distribution: logitnormal
+      train_time_sound_distribution: logitnormal
+      train_time_video_distribution: waver
+      train_time_weight: uniform
+      use_discrete_rf: false
+      use_dynamic_shift: false
+      use_high_sigma_strategy: false
+      use_high_sigma_strategy_action: false
+      use_high_sigma_strategy_sound: false
+    resolution: '720'
+    sound_dim: 64
+    sound_gen: true
+    sound_latent_fps: 25
+    sound_tokenizer:
+      _target_: cosmos3._src.vfm.tokenizers.audio.avae.AVAEInterface
+      audio_channels: 2
+      avae_config_path: ''
+      avae_path: pretrained/tokenizers/audio/avae/avae_48k_noncausal_25hz_64ch.ckpt
+      bucket_name: bucket
+      hop_size: 1920
+      io_channels: 64
+      latent_mean: null
+      latent_std: null
+      normalization_type: none
+      normalize_latents: false
+      object_store_credential_path_pretrained: credentials/gcp_training.secret
+      sample_rate: 48000
+      tanh_clamp: 0.995
+      tanh_input_scale: 1.5
+      tanh_output_scale: 3.5
+    state_ch: 48
+    state_t: 300
+    tokenizer:
+      _target_: cosmos3._src.vfm.tokenizers.wan2pt2_vae_4x16x16.Wan2pt2VAEInterface
+      bucket_name: bucket
+      chunk_duration: 93
+      encode_bucket_multiple: null
+      encode_chunk_frames:
+        '256': 68
+        '480': 24
+        '720': 12
+      encode_exact_durations:
+      - 17
+      - 61
+      - 73
+      keep_decoder_cache: false
+      object_store_credential_path_pretrained: credentials/gcp_training.secret
+      spatial_compression_factor: 16
+      temporal_compression_factor: 4
+      temporal_window: null
+      use_streaming_encode: false
+      vae_path: pretrained/tokenizers/video/wan2pt2/Wan2.2_VAE.pth
+    video_temporal_causal: false
+    vision_gen: true
+    vlm_config:
+      _type: cosmos3._src.vfm.configs.base.defaults.vlm.VLMConfig
+      layer_module: null
+      model_instance:
+        _target_: cosmos3._src.vfm.models.mot.unified_mot.Qwen3VLTextForCausalLM
+        config:
+          _target_: cosmos3._src.vfm.configs.base.defaults.vlm.create_vlm_config
+          base_config:
+            _target_: cosmos3._src.vfm.models.mot.unified_mot.Qwen3VLMoTConfig.from_json_file
+            json_file: cosmos3/_src/vfm/models/vlm/qwen3_vl/configs/Qwen3-VL-32B-Instruct.json
+          include_visual: true
+          qk_norm_for_text: true
+      model_name: nvidia/Cosmos3-Super-Reasoner
+      pretrained_weights:
+        _type: cosmos3._src.vfm.configs.base.defaults.vlm.PretrainedWeightsConfig
+        backbone_path: s3://bucket/cosmos3/pretrained/huggingface/Cosmos-Reason/Cosmos3-Super-Reasoner-b6df0d1/
+        checkpoint_format: null
+        credentials_path: credentials/gcp_checkpoint.secret
+        enable_gcs_patch_in_boto3: true
+        enabled: true
+      tokenizer:
+        _target_: cosmos3._src.vfm.processors.build_processor_lazy
+        config_variant: gcp
+        tokenizer_type: Qwen/Qwen3-VL-32B-Instruct
+      use_system_prompt: false

@@ -1,0 +1,95 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: OpenMDW-1.1
+
+# action_fdm_sft_nano — Bridge LeRobot forward-dynamics SFT (Qwen3-VL-8B / nano)
+# Consumed by cosmos_framework.configs.toml_config.sft_config.load_experiment_from_toml.
+# Only the knobs modeled in SFTExperimentConfig are listed. Unmodeled knobs
+# (e.g. log_enc_time_every_n, max_vae_latent_side_after_patchify, action loss
+# scale, encode_exact_durations) stay at the per-experiment Python defaults.
+
+[job]
+task         = "vfm"
+experiment   = "action_fdm_sft_nano"
+project      = "cosmos3_action_bridge"
+group        = "sft"
+name         = "action_fdm_sft_nano"
+wandb_mode   = "disabled"
+
+[model]
+max_num_tokens_after_packing = -1        # action_fdm-specific (no per-batch cap)
+joint_attn_implementation    = "two_way"
+
+[model.ema]
+enabled         = true
+rate            = 0.1
+iteration_shift = 0
+
+[model.parallelism]
+use_torch_compile               = true
+compile_dynamic                 = true
+data_parallel_shard_degree      = -1                     # -1 = auto from WORLD_SIZE (matches legacy)
+data_parallel_replicate_degree  = 1
+precision                       = "bfloat16"
+
+[model.activation_checkpointing]
+mode                = "full"
+save_ops_regex      = ["fmha"]
+preserve_rng_state  = true
+determinism_check   = "default"
+
+[model.tokenizer]
+vae_path = "${oc.env:WAN_VAE_PATH}"      # Wan2.2_VAE.pth path from the env
+
+[optimizer]
+betas         = [0.9, 0.99]
+eps           = 1.0e-8
+fused         = true
+keys_to_select = [
+    "moe_gen",
+    "time_embedder",
+    "vae2llm",
+    "llm2vae",
+    "action2llm",
+    "llm2action",
+    "action_modality_embed",
+]
+lr            = 2.0e-4
+weight_decay  = 0.05
+
+[optimizer.lr_multipliers]
+action2llm            = 5.0
+action_modality_embed = 5.0
+llm2action            = 5.0
+
+[scheduler]
+cycle_lengths      = [20000]
+f_max              = [0.4]
+f_min              = [0.05]
+f_start            = [1.0e-6]
+verbosity_interval = 0
+warm_up_steps      = [100]
+
+[trainer]
+distributed_parallelism = "fsdp"
+grad_accum_iter         = 2                              # matches legacy mini_batch=2
+logging_iter            = 50
+max_iter                = 16000
+
+[trainer.callbacks.compile_tokenizer]
+compile_after_iterations = 3
+enabled                  = true
+warmup_resolutions       = ["480"]
+
+[trainer.callbacks.grad_clip]
+clip_norm    = 1.0
+force_finite = true
+
+[checkpoint]
+keys_to_skip_loading = ["net_ema."]
+load_path = "${oc.env:BASE_CHECKPOINT_PATH}"
+save_iter = 100
+
+[dataloader_train]
+max_samples_per_batch = 32
+# max_sequence_length omitted (None at experiment level)
+seed                  = 42

@@ -1,0 +1,9 @@
+{
+    "model_mode": "text2image",
+    "name": "transfer_seg",
+    "prompt": "This image captures a robotic arm, characterized by its sleek white and black segments, performing a task within a domestic bathroom setting. The robot's end effector, a multi-fingered black gripper, appears to be manipulating a blue cloth or sponge over a dark countertop or sink area. In the background, a small shelf holds various personal care products, including bottles with red and yellow caps, while a mirror to the left reflects the mechanical joints of the upper arm, emphasizing the robot's physical presence in the room. The scene suggests a demonstration of service robotics, showcasing the machine's ability to navigate and interact with everyday human environments and objects.",
+    "resolution": "720",
+    "seg": {
+        "control_path": "https://huggingface.co/nvidia/Cosmos3-Experimental/resolve/main/assets/transfer/seg.png"
+    }
+}

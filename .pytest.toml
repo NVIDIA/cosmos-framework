@@ -1,0 +1,35 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: OpenMDW-1.1
+
+[pytest]
+python_files = [
+    "*_test.py",
+]
+norecursedirs = [
+    "_src",
+    "imaginaire",
+    "packages",
+    "projects",
+]
+addopts = [
+    "--suppress-no-test-exit-code",
+]
+filterwarnings = [
+    "ignore::DeprecationWarning",
+    "ignore::FutureWarning",
+]
+markers = [
+    "manual: Test requires --manual.",
+    "level(l): Test level <l> in [0, 1, 2].",
+    "gpus(n): Test requires <n> GPUs.",
+]
+
+[pytest_env]
+COSMOS_VERBOSE = { value = "0", skip_if_set = true }
+CUDA_VISIBLE_DEVICES = { unset = true }
+PYTORCH_CUDA_ALLOC_CONF = "expandable_segments:True" # Reduce chance of OOM errors
+# Limit threading to reduce contention
+MKL_NUM_THREADS = "1"
+NUMEXPR_NUM_THREADS = "1"
+OMP_NUM_THREADS = "1"
+OPENBLAS_NUM_THREADS = "1"

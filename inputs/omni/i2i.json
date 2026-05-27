@@ -1,0 +1,5 @@
+{
+    "model_mode": "image2image",
+    "prompt": "Add a red car.",
+    "vision_path": "https://github.com/nvidia-cosmos/cosmos-dependencies/raw/refs/heads/assets/cosmos3/inputs/vision/bus_terminal.jpg"
+}

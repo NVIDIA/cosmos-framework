@@ -1,0 +1,6 @@
+{
+    "model_mode": "image2video",
+    "prompt": "The camera moves up a modern white staircase with metal railings, revealing an office space with cubicles, boxes, and equipment. The view shifts from the stairs to a glass-walled room with a patterned surface, showing a reflection of a passing car outside.",
+    "vision_path": "https://huggingface.co/nvidia/Cosmos3-Experimental/resolve/main/assets/interactive/office.png",
+    "autoregressive": true
+}

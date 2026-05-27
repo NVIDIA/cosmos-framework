@@ -1,0 +1,50 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: OpenMDW-1.1
+
+"""Load the understanding tower of a Cosmos3 checkpoint."""
+
+import logging
+
+from transformers import Qwen3VLForConditionalGeneration
+
+logger = logging.getLogger(__name__)
+
+_DROP_PATTERNS: tuple[str, ...] = (
+    # Generation
+    r"_moe_gen",
+    r"^llm2vae\.",
+    r"^vae2llm\.",
+    r"^time_embedder\.",
+    # Sound
+    r"^llm2sound\.",
+    r"^sound2llm\.",
+    r"^sound_modality_embed$",
+    # Action
+    r"^llm2action\.",
+    r"^action2llm\.",
+    r"^action_modality_embed$",
+)
+"""Drop patterns (regex, matched via `re.search`)."""
+
+_KEY_MAPPING: dict[str, str] = {
+    # Flat Qwen3 -> nested HF Qwen3-VL. Negative lookahead skips already-nested keys.
+    r"^model\.(?!language_model\.)(.+)$": r"model.language_model.\1",
+    # Flat Qwen3-VL vision component -> nested HF Qwen3-VL.
+    r"^(blocks\.|merger\.|patch_embed\.|pos_embed\.|deepstack_merger_list\.)(.*)$": r"model.visual.\1\2",
+}
+
+
+class Cosmos3ForConditionalGeneration(Qwen3VLForConditionalGeneration):
+    # Drop-pattern keys don't match any model parameter after rename -- the
+    # loader skips them; these patterns silence the resulting warning.
+    _keys_to_ignore_on_load_unexpected = list(_DROP_PATTERNS)
+
+    @classmethod
+    def from_pretrained(cls, *args, **kwargs):
+        # `_checkpoint_conversion_mapping` is a global model_type -> mapping
+        # registry, so subclassing doesn't register new renames. Inject via
+        # the per-call `key_mapping=` kwarg instead, letting callers override.
+        merged = {**_KEY_MAPPING, **(kwargs.pop("key_mapping", None) or {})}
+        kwargs["key_mapping"] = merged
+        logger.info("Cosmos3 transformers shim: applying key_mapping=%s", merged)
+        return super().from_pretrained(*args, **kwargs)

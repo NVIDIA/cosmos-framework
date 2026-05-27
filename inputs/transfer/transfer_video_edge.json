@@ -1,0 +1,16 @@
+{
+    "model_mode": "video2video",
+    "name": "transfer_video_edge",
+    "prompt": "The video opens with a view from inside a vehicle, approaching an intersection at dusk. The scene is framed by a row of tall evergreen trees lining the left side of the ego vehicle, casting dappled shadows over the asphalt marked with double yellow lines. On the left, a building with a sign reading \"a 3080\" is partially visible, surrounded by lush greenery. To the right, a construction zone enclosed by traffic cones and a temporary wall is prominent. Several vehicles are seen passing from right to left across the frames. As the video progresses, the ego vehicle moves forward, slows down, and comes to a stop to prepare to make a right turn. The traffic light on the right side shows a green light, signaling to traffic on the left that it is safe to pass. The camera angle shifts subtly, revealing more of the surroundings, including additional trees and buildings in the distance. The final frame captures the car stopping at the red light, with the construction site still visible on the main vehicle's right, and the road ahead clear and open.",
+    "vision_path": "https://huggingface.co/nvidia/Cosmos3-Experimental/resolve/main/assets/transfer/vehicle.mp4",
+    "num_frames": 93,
+    "resolution": "480",
+    "guidance": 4.0,
+    "num_steps": 50,
+    "negative_metadata_mode": "none",
+    "negative_prompt_keep_metadata": false,
+    "num_video_frames_per_chunk": 61,
+    "edge": {
+        "preset_edge_threshold": "very_low"
+    }
+}

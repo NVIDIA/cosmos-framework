@@ -1,0 +1,8 @@
+{
+    "model_mode": "image2image",
+    "name": "transfer_blur",
+    "prompt": "A wide view of a bus terminal with multiple buses parked at covered bays, concrete platforms, and overhead shelters under a partly cloudy sky during the daytime.",
+    "vision_path": "https://media.githubusercontent.com/media/nvidia-cosmos/cosmos-predict2.5/main/assets/base/bus_terminal.jpg",
+    "resolution": "720",
+    "blur": {}
+}
