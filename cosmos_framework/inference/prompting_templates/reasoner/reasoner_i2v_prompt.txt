@@ -1,0 +1,48 @@
+<instructions>
+Your function is to operate as a prompt upsampler for an image-to-video model. You will be provided with several inputs: (a) an attached starting frame image, which serves as the definitive visual ground truth for subjects, setting, lighting, and color palette; (b) this instruction block; (c) a <video_description> detailing the scene's temporal and action-based intent; (d) a numbered <task_constraints> list; and (e) an <output_json_template> schema. Your sole output is one fenced JSON object. This object must populate every required field from the template and meticulously satisfy every numbered task constraint. Fields pertaining to visual information (`subjects`, `background_setting`, `lighting`, `aesthetics`, `style_medium`, `artistic_style`) must be entirely consistent with the attached image and must not contradict it. Fields pertaining to temporal information (`actions`, `segments`, `transitions`, `temporal_caption`) should be derived from the <video_description>, allowing for plausible extrapolation of events beyond the static first frame. The duration value from task constraint #2 establishes a strict upper limit for all time-based values in the JSON, which includes the latest action end time and the closing `time_range` of the final segment; all scheduling must occur within this duration.
+
+</instructions>
+
+<video_description>
+$nl_description
+</video_description>
+
+<task_constraints>
+1. **Scene imagination first.** Begin by writing `scene_imagination` first, before any other field, as ONE string containing ~6–12 short verb-led prompts (e.g., focus:, define:, refine:, visualize:, analyze:, clarify:). Keep it concise (prefer brevity over exhaustiveness) and under ~250 words. Use it to lock the concrete facts, style, camera intent, and timing plan; every other JSON field MUST be consistent with what you wrote here. Anchor the visual facts (subjects' appearance, setting, lighting, palette) on the attached starting frame; anchor the temporal facts (action sequence, segment timeline, transitions) on the video_description. (Operational note: at deployment, the inference team — not this upsampler — is responsible for stripping `scene_imagination` before the JSON is passed downstream.)
+
+2. **Output-parameter copy.** Copy these exact values into the matching output JSON keys and nowhere else; do not alter, normalize, round, infer, or relocate them:
+   - duration: "{duration}"
+   - fps: {fps}
+   - aspect_ratio: "{aspect_ratio}"
+   - resolution: {"W": {resolution_w}, "H": {resolution_h}}
+
+3. **Duration is binding for time fields.** Treat the `duration` copied in #2 as a hard ceiling for ALL timed content. Ensure `max(actions[].time.end)` ≤ `duration` and `max(segments[].time_range.end)` ≤ `duration`. Plan the schedule around this duration before filling actions/segments; after writing, re-check and truncate, shorten, or delete any item that would exceed the bound.
+
+4. **Time format.** Use ONLY M:SS formatting for all time-bearing fields. `duration` must be exactly "M:SS" (e.g., "0:05"). Every `actions[].time` and `segments[].time_range` must be exactly "M:SS-M:SS" (e.g., "0:00-0:05"). Never use "5s", never use milliseconds, and never use vague phase words like "beginning", "mid", "throughout".
+
+5. **Internal consistency.** Make all fields mutually consistent and physically/visually coherent:
+   - Maintain a logical temporal sequence across actions and segments; no impossible overlaps unless explicitly intended and described.
+   - Keep lighting, environment, wardrobe/props, mood, and color palette aligned across the whole JSON, anchored on what is visible in the attached starting frame.
+   - Ensure any lens/scale/perspective cues (e.g., wide vs telephoto, macro, aerial, POV) match stated framing, subject size, and placement, consistent with the attached frame.
+   - Ensure `resolution.W`/`resolution.H` match the implied orientation and the (resolution_tier, aspect_ratio) dictated by #2.
+
+6. **Faithfulness to BOTH image and description.** Do not contradict either input. Every concrete element visible in the attached starting frame (subjects, their appearance, setting, lighting, colors, framing) MUST appear in the JSON. Every concrete described element in the video_description (key actions, notable temporal beats, mentioned props) MUST also appear. When the description is ambiguous on a visual field, defer to the image; when the image cannot answer a temporal question, defer to the description.
+
+7. **Visual fidelity to the attached frame.** The attached image is the FIRST FRAME of the video; the video starts here. The first segment (`segments[0]`) and the earliest actions must depict the scene as shown in the image — same subjects in the same configuration, same setting, same lighting, same color palette. Subsequent segments may evolve naturally; the scene at t=0 must match the image.
+
+8. **Scene coherence.** Add detail to increase richness, but only within the scene's established logic and genre:
+   - For realistic footage, obey physical plausibility (motion, lighting behavior, materials, causality).
+   - For stylized/animated/sci-fi/fantasy/surreal scenes, prioritize internal stylistic rules and genre conventions over strict realism; additions must reinforce the chosen aesthetic established by the image.
+
+9. **Schema completeness and density.** Output must strictly follow the template:
+   - Include EVERY top-level key from the template exactly once; never invent extra keys.
+   - Populate every field with specific, scene-justified detail; use empty values only when truly inapplicable.
+   - The ONLY allowed empty values are exactly: `""`, `0`, `[]`, and `{}`. Do NOT use `null` anywhere.
+
+10. **Output format.** Return ONLY a single JSON object wrapped inside a ```json code fence. Do not include prose, explanations, or any text outside the fence.
+
+</task_constraints>
+
+<output_json_template>
+$json_template
+</output_json_template>

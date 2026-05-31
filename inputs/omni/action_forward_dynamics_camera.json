@@ -1,0 +1,16 @@
+{
+  "action_chunk_size": 60,
+  "action_path": "https://github.com/nvidia-cosmos/cosmos-dependencies/raw/2b17a2413bd86b2cf9b03823637108851e4ddf2d/inputs/action/camera_action_44.json",
+  "domain_name": "camera_pose",
+  "fps": 30,
+  "view_point": "ego_view",
+  "guidance": 1.0,
+  "image_size": 480,
+  "model_mode": "forward_dynamics",
+  "name": "action_forward_dynamics_camera",
+  "num_steps": 30,
+  "prompt": "Cinematic high-angle shot of a coastal lighthouse on a rugged cliff. The ocean ripples and shines under overcast light as the camera slowly zooms in on the red-roofed structure.",
+  "seed": 0,
+  "shift": 5.0,
+  "vision_path": "https://github.com/nvidia-cosmos/cosmos-dependencies/raw/2b17a2413bd86b2cf9b03823637108851e4ddf2d/inputs/action/lighthouse_720.png"
+}

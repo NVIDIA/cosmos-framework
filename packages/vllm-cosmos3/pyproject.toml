@@ -1,0 +1,22 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: OpenMDW-1.1
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "vllm-cosmos3"
+version = "0.1.0"
+description = "vLLM plugin that loads Cosmos3 checkpoints"
+requires-python = ">=3.10"
+dependencies = [
+    "transformers-cosmos3",
+    "vllm>=0.19",
+]
+
+[project.entry-points."vllm.general_plugins"]
+register_cosmos3 = "vllm_cosmos3:register"
+
+[tool.uv.sources]
+transformers-cosmos3 = { path = "../transformers-cosmos3", editable = true }

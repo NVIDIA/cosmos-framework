@@ -1,0 +1,19 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: OpenMDW-1.1
+
+name: Pre-commit
+on:
+  pull_request:
+  push:
+    branches: [main]
+jobs:
+  pre-commit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          lfs: true
+      - uses: actions/setup-python@v6
+      - uses: astral-sh/setup-uv@v7
+      - run: uvx pre-commit@4.5.1 run -a -c ci/.pre-commit-config-base.yaml
+      - run: uvx pre-commit@4.5.1 run -a

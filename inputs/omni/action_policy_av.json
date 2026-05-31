@@ -1,0 +1,18 @@
+{
+  "action_chunk_size": 60,
+  "domain_name": "av",
+  "extra": {
+    "golden_action_path": "https://github.com/nvidia-cosmos/cosmos-dependencies/raw/2b17a2413bd86b2cf9b03823637108851e4ddf2d/inputs/action/av_480_20260501_7.json",
+    "golden_mse_max": 0.05,
+    "golden_psnr_min": 14.0
+  },
+  "fps": 10,
+  "image_size": 480,
+  "view_point": "ego_view",
+  "model_mode": "policy",
+  "name": "action_policy_av",
+  "prompt": "You are an autonomous vehicle planning system.",
+  "seed": 0,
+  "vision_path": "https://github.com/nvidia-cosmos/cosmos-dependencies/raw/2b17a2413bd86b2cf9b03823637108851e4ddf2d/inputs/action/av_480_20260501_7.mp4",
+  "action_path": "https://github.com/nvidia-cosmos/cosmos-dependencies/raw/2b17a2413bd86b2cf9b03823637108851e4ddf2d/inputs/action/av_480_20260501_7.json"
+}

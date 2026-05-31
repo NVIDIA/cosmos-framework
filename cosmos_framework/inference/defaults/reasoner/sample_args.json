@@ -1,0 +1,10 @@
+{
+    "model_mode": "reasoner",
+    "max_new_tokens": 64,
+    "do_sample": false,
+    "temperature": 1.0,
+    "top_k": null,
+    "top_p": null,
+    "repetition_penalty": 1.0,
+    "presence_penalty": 0.0
+}

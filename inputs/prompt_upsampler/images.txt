@@ -1,0 +1,2 @@
+inputs/prompt_upsampler/image_inputs/car_driving.jpg
+inputs/prompt_upsampler/image_inputs/humanoid_robot.jpg

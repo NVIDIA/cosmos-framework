@@ -1,0 +1,16 @@
+{
+  "action_chunk_size": 16,
+  "action_path": "https://github.com/nvidia-cosmos/cosmos-dependencies/raw/2b17a2413bd86b2cf9b03823637108851e4ddf2d/inputs/action/bridge_20260501_0.json",
+  "domain_name": "bridge_orig_lerobot",
+  "extra": {
+    "golden_psnr_min": 14.0
+  },
+  "fps": 5,
+  "view_point": "ego_view",
+  "image_size": 480,
+  "model_mode": "forward_dynamics",
+  "name": "action_forward_dynamics_robot",
+  "prompt": "Put the pot to the left of the purple item.",
+  "seed": 0,
+  "vision_path": "https://github.com/nvidia-cosmos/cosmos-dependencies/raw/2b17a2413bd86b2cf9b03823637108851e4ddf2d/inputs/action/bridge_20260501_0.mp4"
+}

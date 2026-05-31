@@ -1,0 +1,84 @@
+{
+  "scene_imagination": "single string; verb-led scratchpad (focus:, define:, refine:, visualize:, analyze:); ~6-12 prompts; under ~250 words",
+  "temporal_caption": "the canonical, timestamped playback timeline that downstream video generators consume to physicalize the clip; walk the clip from t=0:00 to the duration in #4 with timestamped beats placed where notable events occur (subject actions, camera motion, transitions, lighting/state changes, visual changes) — beat density should reflect how much actually happens (a busy clip will have many close beats; a slow contemplative clip will have a few sparse beats; a static shot may have only one beat at t=0:00 plus an ending observation); MUST be consistent with `actions[].time` and `segments[].time_range`; NO word limit — match the natural verbosity of the scene",
+  "audio_description": "audio cues / soundscape for the clip — dialogue, music, SFX, ambience; ideally aligned to the beats in `temporal_caption` (use M:SS timestamps when audio events are time-localized, e.g. 'soft ambient hum 0:00-0:03; sudden footstep at 0:04')",
+
+  "subjects": [
+    {
+      "description": "full visual description of the subject (appearance, clothing, identifying features)",
+      "appearance_details": "additional visual details (accessories, distinguishing features)",
+      "relationship": "how this subject relates to others or to the scene",
+      "location": "where in frame (e.g., 'center foreground', 'left background')",
+      "relative_size": "size within frame (e.g., 'Small within frame', 'Medium within frame', 'Large within frame')",
+      "orientation": "direction subject faces relative to camera",
+      "pose": "body position and posture",
+      "action": "what the subject is doing (brief)",
+      "state_changes": "how pose or action changes; 'No significant change.' if static",
+      "clothing": "clothing and accessories; '' if non-human or not visible",
+      "expression": "facial expression; '' if non-human or not visible",
+      "gender": "one of 'Male', 'Female', 'Unknown'; '' if non-human",
+      "age": "age category (e.g., 'Child', 'Young adult', 'Adult', 'Middle-aged', 'Elderly')",
+      "skin_tone_and_texture": "skin tone description; '' if non-human",
+      "facial_features": "notable facial features; '' if non-human or not visible",
+      "number_of_subjects": "int; total in this subject's group; 0 if N/A",
+      "number_of_arms": "int; 2 for humans, 0 if non-human",
+      "number_of_legs": "int; 2 for humans, 0 if non-human"
+    }
+  ],
+  "background_setting": "the setting / environment in which the scene takes place",
+  "lighting": {
+    "conditions": "overall lighting conditions (e.g., 'natural daylight', 'dim warm interior')",
+    "direction": "primary light direction (e.g., 'front-lit', 'side-lit from left')",
+    "shadows": "shadow character (e.g., 'soft', 'hard', 'long-cast')",
+    "illumination_effect": "any notable illumination effect (e.g., 'rim-light', 'god rays', 'lens flare')"
+  },
+  "aesthetics": {
+    "composition": "compositional choices (e.g., 'rule-of-thirds', 'symmetric', 'leading lines')",
+    "color_scheme": "dominant color palette and mood",
+    "mood_atmosphere": "emotional tone of the scene",
+    "patterns": "notable repeating patterns; '' if none"
+  },
+  "cinematography": {
+    "camera_motion": "camera motion (e.g., 'Static', 'Pan left', 'Tracking shot')",
+    "framing": "shot framing (e.g., 'wide', 'medium', 'close-up')",
+    "camera_angle": "camera angle (e.g., 'eye-level', 'high-angle', 'Dutch angle')",
+    "depth_of_field": "depth-of-field choice (e.g., 'shallow', 'deep')",
+    "focus": "what is in focus (e.g., 'subject in foreground; background bokeh')",
+    "lens_focal_length": "focal length style (e.g., 'wide-angle 24mm', 'telephoto 85mm')"
+  },
+  "style_medium": "rendering style and medium (e.g., 'photoreal live-action', 'cel-shaded animation')",
+  "artistic_style": "broader artistic style if applicable (e.g., 'noir', 'pastoral painterly')",
+  "context": "broader narrative or situational context",
+  "actions": [
+    {
+      "time": "M:SS-M:SS time range (e.g., '0:00-0:03'); end MUST be <= duration",
+      "description": "what happens during this time range"
+    }
+  ],
+  "text_and_signage_elements": [
+    {
+      "text": "the exact text/sign content",
+      "category": "one of 'physical_in_scene', 'scene_sign', 'ui_text', 'caption', 'logo', or similar",
+      "appearance": "how the text appears (font style, color, size)",
+      "spatial_temporal": "where and when in the clip the text appears",
+      "context": "narrative or situational context for the text"
+    }
+  ],
+  "segments": [
+    {
+      "segment_index": "int; 0-based ordinal of this segment",
+      "time_range": "M:SS-M:SS time range; end MUST be <= duration",
+      "description": "what happens in this segment",
+      "key_changes": "key state/scene changes within this segment",
+      "camera": "camera behaviour within this segment"
+    }
+  ],
+  "transitions": [
+    "transition descriptions between segments; [] if single continuous shot"
+  ],
+
+  "resolution":   "Per task constraint #4",
+  "aspect_ratio": "Per task constraint #4",
+  "duration":     "Per task constraint #4",
+  "fps":          "Per task constraint #4"
+}

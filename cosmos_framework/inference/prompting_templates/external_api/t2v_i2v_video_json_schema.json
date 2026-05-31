@@ -1,0 +1,84 @@
+{
+  "subjects": [
+    {
+      "description": "full visual description of the subject (appearance, clothing, identifying features)",
+      "appearance_details": "additional visual details (accessories, distinguishing features)",
+      "relationship": "how this subject relates to others or to the scene",
+      "location": "where in frame (e.g., 'center foreground', 'left background')",
+      "relative_size": "size within frame (e.g., 'Small within frame', 'Medium within frame', 'Large within frame')",
+      "orientation": "direction subject faces relative to camera",
+      "pose": "body position and posture",
+      "action": "what the subject is doing (brief)",
+      "state_changes": "how pose or action changes; 'No significant change.' if static",
+      "clothing": "clothing and accessories; '' if non-human or not visible",
+      "expression": "facial expression; '' if non-human or not visible",
+      "gender": "one of 'Male', 'Female', 'Unknown'; '' if non-human",
+      "age": "age category (e.g., 'Child', 'Young adult', 'Adult', 'Middle-aged', 'Elderly')",
+      "skin_tone_and_texture": "skin tone description; '' if non-human",
+      "facial_features": "notable facial features, including eye shape/color, hair color/style, lip shape, wrinkles, moles, scars, freckles, facial hair, and other visible fine-grained facial attributes; '' if non-human or not visible",
+      "number_of_subjects": "int; total in this subject group, 0 if N/A",
+      "number_of_arms": "int; 2 for humans, 0 if non-human",
+      "number_of_legs": "int; 2 for humans, 0 if non-human"
+    }
+  ],
+  "background_setting": "full prose description of the environment and setting",
+  "lighting": {
+    "conditions": "type and quality of light (e.g., 'Bright daylight', 'Overcast', 'Studio lighting')",
+    "direction": "where light comes from (e.g., 'top-lit', 'front-lit', 'side-lit from right')",
+    "shadows": "description of shadows",
+    "illumination_effect": "overall effect of the lighting on the scene"
+  },
+  "aesthetics": {
+    "composition": "framing and compositional choices",
+    "color_scheme": "dominant colors and palette description",
+    "mood_atmosphere": "emotional atmosphere in short phrases",
+    "patterns": "notable repeating visual patterns; '' if none"
+  },
+  "cinematography": {
+    "camera_motion": "camera movement (e.g., 'Static', 'Pan left', 'Tracking shot', 'Handheld')",
+    "framing": "shot type (e.g., 'Close-up', 'Medium shot', 'Wide shot')",
+    "camera_angle": "angle (e.g., 'Eye-level', 'Low angle', 'High angle', 'Overhead')",
+    "depth_of_field": "'Shallow', 'Deep', or 'Uniform'",
+    "focus": "what is in sharp focus",
+    "lens_focal_length": "descriptive focal length"
+  },
+  "style_medium": "visual medium (e.g., 'Live-action video', 'Animation', 'CGI')",
+  "artistic_style": "genre or approach (e.g., 'realistic', 'cinematic', 'documentary')",
+  "context": "scene context or use case (brief)",
+  "actions": [
+    {
+      "time": "'M:SS-M:SS' (e.g., '0:00-0:08')",
+      "description": "what happens in this timed interval"
+    }
+  ],
+  "text_and_signage_elements": [
+    {
+      "text": "the visible text content",
+      "category": "one of 'physical_in_scene', 'scene_sign', 'ui_text', 'vehicle_graphic', 'logo', 'label'",
+      "appearance": "font, color, size, style",
+      "spatial_temporal": "position in scene and when visible",
+      "context": "purpose or meaning of the text"
+    }
+  ],
+  "segments": [
+    {
+      "segment_index": "int; 0-based index",
+      "time_range": "'M:SS-M:SS' spanning this segment",
+      "description": "what happens in this segment",
+      "key_changes": "notable changes within the segment",
+      "camera": "camera behavior in this segment"
+    }
+  ],
+  "transitions": [
+    "transition description between segments; empty list [] if single continuous shot"
+  ],
+  "temporal_caption": "a temporally coherent, second-by-second natural-language narrative of the whole video",
+  "audio_description": "a natural-language description of the audio: speech, music, ambient, and notable effects",
+  "resolution": {
+    "H": "must follow resolution_ratio_dict",
+    "W": "must follow resolution_ratio_dict"
+  },
+  "aspect_ratio": "must be one of: '16,9', '1,1', '9,16', '4,3', '3,4'",
+  "duration": "must be one of: '2s','3s','4s','5s','6s','7s','8s','9s','10s'",
+  "fps": "must be one of: 10, 12, 14, 16, 18, 20, 22, 24, 26, 28, 30"
+}

@@ -1,0 +1,31 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: OpenMDW-1.1
+
+# https://rumdl.dev/global-settings/
+[global]
+flavor = "standard"
+exclude = [
+    "ATTRIBUTIONS.md",
+    "_src",
+]
+disable = [
+    "MD013", # line-length
+    "MD033", # inline-html
+    "MD040", # fenced-code-language
+]
+
+# https://rumdl.dev/rules/
+
+[per-file-ignores]
+"README.md" = [
+    "MD041" # first-line-heading
+]
+
+# ul-style
+[MD004]
+style = "dash"
+
+# table-format
+[MD060]
+enabled = true
+style = "aligned"

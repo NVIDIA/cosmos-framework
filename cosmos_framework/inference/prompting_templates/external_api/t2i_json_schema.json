@@ -1,0 +1,72 @@
+{
+  "subjects": [
+    {
+      "description": "full visual description of the subject",
+      "appearance_details": "additional visual details (accessories, texture, distinguishing features)",
+      "relationship": "how this subject relates to others or to the scene",
+      "location": "where in frame (e.g., 'Center foreground', 'Top right')",
+      "relative_size": "size within frame",
+      "orientation": "direction subject faces relative to camera",
+      "pose": "body position and posture",
+      "clothing": "clothing and accessories; '' if non-human or N/A",
+      "expression": "facial expression; '' if non-human or N/A",
+      "gender": "one of 'Male', 'Female', 'Unknown', 'N/A'",
+      "age": "age category",
+      "skin_tone_and_texture": "skin tone description; '' if non-human",
+      "facial_features": "notable facial features, including eye shape/color, hair color/style, lip shape, wrinkles, moles, scars, freckles, facial hair, and other visible fine-grained facial attributes; '' if non-human or not visible",
+      "number_of_subjects": "int; total in this subject group, 0 if N/A",
+      "number_of_arms": "int; 2 for humans, 0 if non-human",
+      "number_of_legs": "int; 2 for humans, 0 if non-human",
+      "number_of_hands": "int; 2 for humans, 0 if non-human",
+      "number_of_fingers": "int; 10 for humans, 0 if non-human"
+    }
+  ],
+  "subject_details": {
+    "key_name_1": "free-form image-specific attribute (keys vary by image content; {} if N/A)"
+  },
+  "background_setting": "full prose description of the environment and setting",
+  "lighting": {
+    "conditions": "type and quality of light",
+    "direction": "where light comes from; 'None' for flat digital images",
+    "shadows": "shadow description; 'None' for flat digital images",
+    "illumination_effect": "overall effect of the lighting"
+  },
+  "aesthetics": {
+    "composition": "framing and compositional choices",
+    "color_scheme": "dominant colors and palette",
+    "mood_atmosphere": "emotional atmosphere in short phrases",
+    "patterns": "notable repeating visual patterns; 'None' if none"
+  },
+  "cinematography": {
+    "framing": "shot type",
+    "camera_angle": "angle (e.g., 'Eye-level', 'Low angle', 'High angle')",
+    "depth_of_field": "'Shallow', 'Deep', 'Uniform focus', or 'N/A'",
+    "focus": "what is in sharp focus",
+    "lens_focal_length": "descriptive focal length"
+  },
+  "style_medium": "visual medium (e.g., 'Photography', 'Digital presentation slide', 'Screenshot')",
+  "artistic_style": "genre or approach",
+  "context": "scene context or use case (brief)",
+  "text_and_signage_elements": [
+    {
+      "text": "the visible text content",
+      "category": "one of 'physical_in_scene', 'ui_text', 'body_text', 'scene_sign', 'logo', 'label'",
+      "appearance": "font, color, size, style",
+      "spatial": "position in image",
+      "context": "purpose or meaning of the text"
+    }
+  ],
+  "quadrant_scan": {
+    "top_left": "description of what appears in the top-left region",
+    "top_right": "description of what appears in the top-right region",
+    "bottom_left": "description of what appears in the bottom-left region",
+    "bottom_right": "description of what appears in the bottom-right region",
+    "absolute_center": "description of what appears at the center"
+  },
+  "comprehensive_t2i_caption": "a comprehensive, full-scene natural-language prose description of the image",
+  "resolution": {
+    "H": "must follow resolution_ratio_dict",
+    "W": "must follow resolution_ratio_dict"
+  },
+  "aspect_ratio": "must be one of: '16,9', '1,1', '9,16', '4,3', '3,4'"
+}

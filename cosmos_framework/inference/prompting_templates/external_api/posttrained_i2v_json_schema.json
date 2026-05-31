@@ -1,0 +1,10 @@
+{
+  "temporal_caption": "a temporally coherent natural-language narrative of the whole video",
+  "duration": "placeholder",
+  "fps": "placeholder",
+  "resolution": {
+    "H": "placeholder",
+    "W": "placeholder"
+  },
+  "aspect_ratio": "placeholder"
+}

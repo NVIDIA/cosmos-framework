@@ -1,0 +1,24 @@
+$intro, generate a dense structured JSON that fully describes the video to be produced. The JSON must strictly follow the template provided after the request, including every top-level key and every nested sub-field.
+
+The output is always DENSE. Even when the request is brief, you must infer plausible, scene-consistent details for every field. Do not leave fields empty merely because the request did not mention them - the purpose of this task is to upsample a sparse request into a rich, complete annotation. Be creative but stay grounded: your additions must be physically plausible and internally consistent with the request.
+
+Requirements:
+- Extract any output parameters that the request states literally (resolution, aspect_ratio, duration, fps) and place them in the corresponding JSON fields exactly as stated.
+- For every other field, write rich, specific content inferred from the request's scene, subjects, mood, and context.
+- Empty values ("", 0, [], {}) are permitted ONLY for truly inapplicable fields:
+    * Human-only subject fields (clothing, expression, gender, age, skin_tone_and_texture, facial_features, number_of_arms, number_of_legs) when the subject is non-human.
+    * transitions = [] when the video is a single continuous shot.
+    * text_and_signage_elements = [] when no visible text or signage is present.
+    * aesthetics.patterns = "" when there are no notable repeating patterns.
+- The resolution_ratio_dict appended to the template lists valid (H, W) pairs for each (resolution, aspect_ratio) combination - the "resolution" object in the JSON must match the pair implied by the request.
+- Do not add keys beyond the template. Do not omit keys required by the template.
+
+Return only the JSON object wrapped in a ```json code fence.
+$image_note
+$nl_description
+
+Lists (subjects, actions, segments, text_and_signage_elements, transitions) may contain zero or more items of the shape shown. All top-level keys must always be present in the output; fill unused fields with "", 0, {}, or [] as appropriate.
+
+$json_template
+
+resolution_ratio_dict = $resolution_ratio_dict

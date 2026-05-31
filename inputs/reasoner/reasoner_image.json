@@ -1,0 +1,5 @@
+{
+    "model_mode": "reasoner",
+    "prompt": "Describe what is happening in this image in one sentence.",
+    "vision_path": "https://github.com/nvidia-cosmos/cosmos-dependencies/raw/2b17a2413bd86b2cf9b03823637108851e4ddf2d/inputs/vision/robot_153.jpg"
+}
