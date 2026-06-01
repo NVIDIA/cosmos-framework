@@ -857,7 +857,7 @@ _CHECKPOINTS: dict[str, CheckpointConfig] = {
         s3_uri="s3://bucket1/cosmos3_vfm/cosmos3_ga_midtraining/cosmos3_ga_16bm8b_v2_midtrain/checkpoints/iter_000006000/",
         hf=CheckpointDirHf(
             repository="nvidia/Cosmos3-Nano",
-            revision="a18b727665f0dd03bc032229a6acb47ba11dc4cb",
+            revision="main",
         ),
     ),
     "Cosmos3-Super": CheckpointConfig(
@@ -866,7 +866,7 @@ _CHECKPOINTS: dict[str, CheckpointConfig] = {
         s3_uri="s3://bucket1/cosmos3_vfm/cosmos3_ga_midtraining/cosmos3_ga_64bm32b_v3_midtrain/checkpoints/iter_000001800/",
         hf=CheckpointDirHf(
             repository="nvidia/Cosmos3-Super",
-            revision="6121c7c697d255d3dfd226a64d4fd5f576037edb",
+            revision="main",
         ),
     ),
 }

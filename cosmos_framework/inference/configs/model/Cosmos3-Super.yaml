@@ -182,5 +182,5 @@ model:
       tokenizer:
         _target_: cosmos3._src.vfm.processors.build_processor_lazy
         repository: nvidia/Cosmos3-Super
-        revision: 6121c7c697d255d3dfd226a64d4fd5f576037edb
+        revision: main
       use_system_prompt: false

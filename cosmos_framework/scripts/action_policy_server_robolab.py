@@ -73,7 +73,7 @@ _CONCAT_VIEW_DESCRIPTION = (
     "The bottom row contains two horizontally concatenated third-person perspective views of the scene from opposite "
     "sides, with the robot visible."
 )
-_DEFAULT_HF_REVISION = "3e936098b920eba3462070865a49ec5422ca9489"
+_DEFAULT_HF_REVISION = "main"
 _ROBOLAB_POLICY_HF_REPOSITORIES = {
     "Cosmos3-Nano-Policy-DROID": "nvidia/Cosmos3-Nano-Policy-DROID",
     "nvidia/Cosmos3-Nano-Policy-DROID": "nvidia/Cosmos3-Nano-Policy-DROID",

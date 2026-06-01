@@ -182,5 +182,5 @@ model:
       tokenizer:
         _target_: cosmos3._src.vfm.processors.build_processor_lazy
         repository: nvidia/Cosmos3-Nano
-        revision: a18b727665f0dd03bc032229a6acb47ba11dc4cb
+        revision: main
       use_system_prompt: false

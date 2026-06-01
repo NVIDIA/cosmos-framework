@@ -246,7 +246,7 @@ def register_checkpoints():
             ),
             hf=CheckpointDirHf(
                 repository="nvidia/Cosmos3-Nano",
-                revision="a18b727665f0dd03bc032229a6acb47ba11dc4cb",
+                revision="main",
                 subdirectory="sound_tokenizer",
             ),
             # The sound_tokenizer/ safetensors are decoder-only and use the diffusers
