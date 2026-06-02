@@ -16,7 +16,7 @@ ______________________________________________________________________
 - [Models](#models)
 - [Modes](#modes)
 - [Parallelism Arguments](#parallelism-arguments)
-- [CPU Offloading](#cpu-offloading-single-gpu)
+- [CPU Offloading (single-GPU)](#cpu-offloading-single-gpu)
 - [Sample Arguments](#sample-arguments)
   - [Text](#text)
   - [Vision (Image/Video)](#vision-imagevideo)
