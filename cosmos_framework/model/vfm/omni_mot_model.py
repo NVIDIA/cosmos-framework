@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import collections
+import contextvars
 import json
 import time
 from contextlib import contextmanager
@@ -59,6 +60,66 @@ from cosmos_framework.utils.vfm.data_utils import get_vision_data_resolution
 from cosmos_framework.utils.vfm.dtensor_helper import DTensorFastEmaModelUpdater
 from cosmos_framework.utils.vfm.model_weights_stats import WeightTrainingStat
 from cosmos_framework.utils.vfm.parallelism import ParallelDims
+
+
+# Names of the network offload groups (from ``Cosmos3VFMNetwork.offload_module_groups``)
+# whose weights should be materialized directly on CPU at load time (two-phase
+# materialization), so they never occupy GPU memory. Set by the inference layer via
+# ``cpu_offload_materialization`` around model construction; read inside ``build_net``.
+_CPU_OFFLOAD_NET_PARTS: contextvars.ContextVar[tuple[str, ...]] = contextvars.ContextVar(
+    "_cpu_offload_net_parts", default=()
+)
+
+
+@contextmanager
+def cpu_offload_materialization(net_parts: tuple[str, ...]):
+    """Materialize the named network offload groups on CPU during model construction.
+
+    Wrap model loading (``from_pretrained_dcp`` / ``load_model_from_checkpoint``) with
+    this so the listed groups (e.g. ``("reasoner", "generator")``) are built directly on
+    CPU and the checkpoint shards load into CPU tensors — they never touch the GPU. Empty
+    ``net_parts`` is a no-op (default joint materialization, unchanged).
+    """
+    token = _CPU_OFFLOAD_NET_PARTS.set(tuple(net_parts))
+    try:
+        yield
+    finally:
+        _CPU_OFFLOAD_NET_PARTS.reset(token)
+
+
+def _offloaded_tensor_ids(net: torch.nn.Module, net_parts: tuple[str, ...]) -> set[int]:
+    """Collect ``id()`` of every parameter/buffer belonging to the offloaded groups."""
+    groups = net.offload_module_groups()
+    ids: set[int] = set()
+    for part in net_parts:
+        for module in groups.get(part, []):
+            for tensor in (*module.parameters(recurse=True), *module.buffers(recurse=True)):
+                ids.add(id(tensor))
+    return ids
+
+
+def _materialize_meta_tensors(net: torch.nn.Module, device: torch.device, skip_ids: set[int] | None) -> None:
+    """Materialize every still-``meta`` parameter/buffer on ``device`` (skipping ``skip_ids``).
+
+    Allocates real empty tensors in place. ``skip_ids`` leaves the offloaded tensors on
+    ``meta`` for the first (GPU) pass so they sidestep the wasted random init, then a
+    second pass with ``skip_ids=None`` lands them on CPU.
+    """
+    for module in net.modules():
+        for name, param in list(module._parameters.items()):
+            if param is None or not param.is_meta:
+                continue
+            if skip_ids is not None and id(param) in skip_ids:
+                continue
+            module._parameters[name] = torch.nn.Parameter(
+                torch.empty_like(param, device=device), requires_grad=param.requires_grad
+            )
+        for name, buffer in list(module._buffers.items()):
+            if buffer is None or not buffer.is_meta:
+                continue
+            if skip_ids is not None and id(buffer) in skip_ids:
+                continue
+            module._buffers[name] = torch.empty_like(buffer, device=device)
 
 
 class OmniMoTModel(ImaginaireModel):
@@ -241,12 +302,27 @@ class OmniMoTModel(ImaginaireModel):
 
         with misc.timer("meta to cuda and broadcast model states"):
             net = net.to(dtype=dtype)
-            net.to_empty(device=DEVICE)
+            cpu_offload_net_parts = _CPU_OFFLOAD_NET_PARTS.get() if DEVICE == Device.CUDA else ()
+            if cpu_offload_net_parts:
+                # Single-GPU CPU offloading: materialize only the non-offloaded modules on
+                # the GPU and keep the offloaded towers on ``meta``, so ``init_weights``
+                # skips their random init — pure waste here (they come entirely from the
+                # checkpoint and have no non-persistent buffers) and crippling on CPU.
+                _materialize_meta_tensors(
+                    net, torch.device("cuda"), skip_ids=_offloaded_tensor_ids(net, cpu_offload_net_parts)
+                )
+            else:
+                net.to_empty(device=DEVICE)
+
+            # Weight init is only needed on CUDA (CPU/meta are for checkpoint conversion and
+            # smoke tests). It initializes the non-offloaded modules and their non-persistent
+            # buffers (e.g. RoPE); the offloaded towers stay on ``meta`` (init no-ops there).
             if DEVICE == Device.CUDA:
-                # Weight initialization is not needed for other devices (cpu,
-                # meta), since they are only for checkpoint conversion and smoke
-                # tests.
                 net.init_weights(buffer_device=DEVICE)
+                if cpu_offload_net_parts:
+                    # Land the offloaded towers on CPU; ``dcp.load`` fills them next, so they
+                    # never occupy GPU memory.
+                    _materialize_meta_tensors(net, torch.device("cpu"), skip_ids=None)
                 if getattr(self.config, "lora_enabled", False):
                     self._init_lora_weights_post_materialization(net)
 
