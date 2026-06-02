@@ -51,7 +51,7 @@ from cosmos_framework.utils import log
 from cosmos_framework.tools.visualize.video import save_img_or_video
 from cosmos_framework.configs.base.defaults.compile import CompileConfig
 from cosmos_framework.configs.base.defaults.parallelism import ParallelismConfig
-from cosmos_framework.model.vfm.omni_mot_model import OmniMoTModel
+from cosmos_framework.model.vfm.omni_mot_model import OmniMoTModel, cpu_offload_materialization
 from cosmos_framework.model.vfm.vlm.qwen3_vl.utils import _SYSTEM_PROMPT_IMAGE_EDITING
 from cosmos_framework.model.vfm.upsampler.prompts import is_upsampled_prompt
 
@@ -74,67 +74,19 @@ ARENA_OFFLOAD_PARTS = (REASONER_OFFLOAD_PART, GENERATOR_OFFLOAD_PART, VAE_OFFLOA
 def build_omni_offload_parts(model: OmniMoTModel) -> dict[str, "torch.nn.Module"]:
     """Group the in-tree Cosmos3 model into offloadable module groups.
 
-    The MoT packs both pathways into a single network with dual projections per
-    layer, so rather than pointing at whole towers we gather the per-layer
-    understanding (``reasoner``) vs generation (``generator``) submodules into two
-    synthetic ``nn.ModuleList`` groups (referencing the existing submodule objects,
-    so the module tree, checkpoint loading, and the joint forward are unaffected).
-    The generation-side diffusion heads (``vae2llm`` / ``llm2vae`` / ``time_embedder``
-    and the optional action/sound heads) join the generator group because the
-    reasoner prefill skips vision/action/sound encode and decode entirely. The
-    ``vae`` group is the vision tokenizer network (staged around encode/decode).
-
-    All groups are disjoint (distinct module instances), as ``ModuleOffloadManager``
-    requires. Returns every known group; callers stage only the requested subset.
-    Modules left out of every staged group stay GPU-resident.
+    The reasoner/generator partition is owned by the network
+    (:meth:`Cosmos3VFMNetwork.offload_module_groups`) so the load-time CPU
+    materialization and this runtime ``OffloadPipeline`` share one source of truth.
+    Each group is wrapped in an ``nn.ModuleList`` referencing the existing submodule
+    objects (no module-tree changes), and the ``vae`` group is added for the vision
+    tokenizer network. All groups are disjoint; callers stage only the requested
+    subset, and modules left out of every staged group stay GPU-resident.
     """
     import torch.nn as nn
 
-    net = model.net
-    lm = net.language_model.model  # Qwen3VL(Moe)TextModel: embed_tokens, layers, norm, norm_moe_gen
+    groups = model.net.offload_module_groups()  # {"reasoner": [...], "generator": [...]}
+    parts: dict[str, nn.Module] = {name: nn.ModuleList(modules) for name, modules in groups.items()}
 
-    reasoner_modules: list[nn.Module] = [lm.embed_tokens, lm.norm]
-    generator_modules: list[nn.Module] = [lm.norm_moe_gen]
-
-    # Generation-side diffusion encode/decode heads (only present when enabled).
-    for head_name in ("time_embedder", "vae2llm", "llm2vae", "action2llm", "llm2action", "sound2llm", "llm2sound"):
-        head = getattr(net, head_name, None)
-        if isinstance(head, nn.Module):
-            generator_modules.append(head)
-
-    for raw_layer in lm.layers:
-        # Unwrap torch.compile's OptimizedModule so we reference the real submodules
-        # (the manager rebinds their parameters between stages, which the compiled
-        # graph picks up as graph inputs on the next call).
-        layer = getattr(raw_layer, "_orig_mod", raw_layer)
-        attn = layer.self_attn
-        reasoner_modules += [
-            attn.q_proj,
-            attn.k_proj,
-            attn.v_proj,
-            attn.o_proj,
-            attn.q_norm,
-            attn.k_norm,
-            layer.input_layernorm,
-            layer.post_attention_layernorm,
-            layer.mlp,
-        ]
-        generator_modules += [
-            attn.q_proj_moe_gen,
-            attn.k_proj_moe_gen,
-            attn.v_proj_moe_gen,
-            attn.o_proj_moe_gen,
-            attn.q_norm_moe_gen,
-            attn.k_norm_moe_gen,
-            layer.input_layernorm_moe_gen,
-            layer.post_attention_layernorm_moe_gen,
-            layer.mlp_moe_gen,
-        ]
-
-    parts: dict[str, nn.Module] = {
-        REASONER_OFFLOAD_PART: nn.ModuleList(reasoner_modules),
-        GENERATOR_OFFLOAD_PART: nn.ModuleList(generator_modules),
-    }
     # The vision tokenizer's underlying network (the offloadable VAE weights).
     # ``tokenizer_vision_gen.model`` may itself be a thin (non-Module) wrapper whose
     # ``.model`` is the actual nn.Module (e.g. Wan2pt2VAEInterface -> WanVAE -> WanVAE_).
@@ -1102,60 +1054,68 @@ class OmniInference(Inference):
         sampler_override = setup_args.sampler
         parallelism_config = cls._get_parallelism_config(setup_args)
         compile_config = cls._get_compile_config(setup_args)
-        if setup_args.checkpoint_type == CheckpointType.DCP and setup_args.config_file_type == ConfigFileType.MODULE:
-            from cosmos_framework.inference.common.config import save_config
-            from cosmos_framework.utils.vfm.model_loader import load_model_from_checkpoint
+        # Two-phase materialization for single-GPU CPU offloading: build the reasoner/
+        # generator towers directly on CPU during model construction so they never occupy
+        # GPU memory (the checkpoint shards load straight into CPU tensors). No-op when
+        # those stages aren't requested.
+        net_offload_parts = tuple(
+            s for s in setup_args.offload_stages if s in (REASONER_OFFLOAD_PART, GENERATOR_OFFLOAD_PART)
+        )
+        with cpu_offload_materialization(net_offload_parts):
+            if setup_args.checkpoint_type == CheckpointType.DCP and setup_args.config_file_type == ConfigFileType.MODULE:
+                from cosmos_framework.inference.common.config import save_config
+                from cosmos_framework.utils.vfm.model_loader import load_model_from_checkpoint
 
-            if not setup_args.experiment:
-                raise ValueError("'experiment' is required")
-            if not setup_args.config_file:
-                raise ValueError("'config_file' is required")
+                if not setup_args.experiment:
+                    raise ValueError("'experiment' is required")
+                if not setup_args.config_file:
+                    raise ValueError("'config_file' is required")
 
-            Cosmos3OmniModel.before_load_model()
-            model, config = load_model_from_checkpoint(
-                experiment_name=setup_args.experiment,
-                config_file=setup_args.config_file,
-                checkpoint_path=setup_args.checkpoint_path,
-                credential_path=setup_args.credential_path or None,
-                parallelism_config=attrs.asdict(parallelism_config),
-                compile_config=attrs.asdict(compile_config),
-                load_ema_to_reg=setup_args.use_ema_weights,
-                experiment_opts=[
-                    *setup_args.experiment_overrides,
-                    f"model.config.rectified_flow_inference_config.scheduler_type={sampler_override}",
-                ],
-                use_cache_checkpoint=setup_args.checkpoint_cache_dir is not None,
-                cache_checkpoint_rootdir=str(setup_args.checkpoint_cache_dir or ""),
-            )
-            model = cast("OmniMoTModel", model)
-            Cosmos3OmniModel.after_load_model(model)
-            save_config(config, setup_args.output_dir)
-        else:
-            checkpoint_path = setup_args.download_checkpoint()
-            if setup_args.config_file_type == ConfigFileType.MODULE:
-                config = None
+                Cosmos3OmniModel.before_load_model()
+                model, config = load_model_from_checkpoint(
+                    experiment_name=setup_args.experiment,
+                    config_file=setup_args.config_file,
+                    checkpoint_path=setup_args.checkpoint_path,
+                    credential_path=setup_args.credential_path or None,
+                    parallelism_config=attrs.asdict(parallelism_config),
+                    compile_config=attrs.asdict(compile_config),
+                    load_ema_to_reg=setup_args.use_ema_weights,
+                    experiment_opts=[
+                        *setup_args.experiment_overrides,
+                        f"model.config.rectified_flow_inference_config.scheduler_type={sampler_override}",
+                    ],
+                    use_cache_checkpoint=setup_args.checkpoint_cache_dir is not None,
+                    cache_checkpoint_rootdir=str(setup_args.checkpoint_cache_dir or ""),
+                )
+                model = cast("OmniMoTModel", model)
+                Cosmos3OmniModel.after_load_model(model)
+                save_config(config, setup_args.output_dir)
             else:
-                model_dict = setup_args.load_model_config_dict()
-                if setup_args.vlm_processor_from_checkpoint:
-                    # Source the VLM processor from the loaded checkpoint's own
-                    # bundled files instead of the repository hardcoded in the
-                    # model config. Drops the redundant base-model download.
-                    tokenizer_cfg = model_dict["config"]["vlm_config"]["tokenizer"]
-                    tokenizer_cfg.pop("repository", None)
-                    tokenizer_cfg.pop("revision", None)
-                    tokenizer_cfg.pop("subdir", None)
-                    tokenizer_cfg["tokenizer_type"] = str(checkpoint_path)
-                config = Cosmos3OmniConfig(model=model_dict)
-            model = Cosmos3OmniModel.from_pretrained_dcp(
-                checkpoint_path,
-                config=config,
-                parallelism_config=parallelism_config,
-                compile_config=compile_config,
-            ).model
-            if model.config.rectified_flow_inference_config.scheduler_type != sampler_override:
-                model.config.rectified_flow_inference_config.scheduler_type = sampler_override
-                model.set_up_scheduler_and_sampler()
-                log.debug(f"Sampler overridden to: {sampler_override}")
+                checkpoint_path = setup_args.download_checkpoint()
+                if setup_args.config_file_type == ConfigFileType.MODULE:
+                    config = None
+                else:
+                    model_dict = setup_args.load_model_config_dict()
+                    if setup_args.vlm_processor_from_checkpoint:
+                        # Source the VLM processor from the loaded checkpoint's own
+                        # bundled files instead of the repository hardcoded in the
+                        # model config. Drops the redundant base-model download.
+                        tokenizer_cfg = model_dict["config"]["vlm_config"]["tokenizer"]
+                        tokenizer_cfg.pop("repository", None)
+                        tokenizer_cfg.pop("revision", None)
+                        tokenizer_cfg.pop("subdir", None)
+                        tokenizer_cfg["tokenizer_type"] = str(checkpoint_path)
+                    config = Cosmos3OmniConfig(model=model_dict)
+                model = Cosmos3OmniModel.from_pretrained_dcp(
+                    checkpoint_path,
+                    config=config,
+                    parallelism_config=parallelism_config,
+                    compile_config=compile_config,
+                ).model
+                if model.config.rectified_flow_inference_config.scheduler_type != sampler_override:
+                    model.config.rectified_flow_inference_config.scheduler_type = sampler_override
+                    model.set_up_scheduler_and_sampler()
+                    log.debug(f"Sampler overridden to: {sampler_override}")
 
         # Single-GPU CPU offloading (opt-in via --offload-stages). The diffusion parts
         # (reasoner / generator / vae) time-share one reusable GPU arena; 'guardrails'

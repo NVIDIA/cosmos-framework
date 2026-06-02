@@ -269,6 +269,52 @@ class Cosmos3VFMNetwork(PreTrainedModel):
 
         self.language_model.init_weights(buffer_device=buffer_device)
 
+    def offload_module_groups(self) -> dict[str, list[torch.nn.Module]]:
+        """Partition the network into the reasoner vs generator CPU-offload groups.
+
+        The MoT interleaves both pathways per layer, so each group gathers the
+        per-layer understanding (reasoner) vs generation submodules — plus the
+        generation-side diffusion encode/decode heads, which the reasoner prefill
+        never touches. Returns references to the existing submodule objects (no
+        module-tree changes); the two groups are disjoint, as the offload manager
+        and the two-phase materialization both require. Single source of truth for
+        both the load-time CPU materialization and the runtime ``OffloadPipeline``.
+        """
+        lm = self.language_model.model  # Qwen3VL(Moe)TextModel
+        reasoner: list[torch.nn.Module] = [lm.embed_tokens, lm.norm]
+        generator: list[torch.nn.Module] = [lm.norm_moe_gen]
+        for head_name in ("time_embedder", "vae2llm", "llm2vae", "action2llm", "llm2action", "sound2llm", "llm2sound"):
+            head = getattr(self, head_name, None)
+            if isinstance(head, torch.nn.Module):
+                generator.append(head)
+        for raw_layer in lm.layers:
+            # Unwrap torch.compile's OptimizedModule so we reference the real submodules.
+            layer = getattr(raw_layer, "_orig_mod", raw_layer)
+            attn = layer.self_attn
+            reasoner += [
+                attn.q_proj,
+                attn.k_proj,
+                attn.v_proj,
+                attn.o_proj,
+                attn.q_norm,
+                attn.k_norm,
+                layer.input_layernorm,
+                layer.post_attention_layernorm,
+                layer.mlp,
+            ]
+            generator += [
+                attn.q_proj_moe_gen,
+                attn.k_proj_moe_gen,
+                attn.v_proj_moe_gen,
+                attn.o_proj_moe_gen,
+                attn.q_norm_moe_gen,
+                attn.k_norm_moe_gen,
+                layer.input_layernorm_moe_gen,
+                layer.post_attention_layernorm_moe_gen,
+                layer.mlp_moe_gen,
+            ]
+        return {"reasoner": reasoner, "generator": generator}
+
     def generate_reasoner_text(
         self,
         input_ids: torch.Tensor,
