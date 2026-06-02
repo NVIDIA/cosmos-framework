@@ -2265,43 +2265,6 @@ class OmniMoTModel(ImaginaireModel):
 
         assert n_sample == len(seed), f"Number of samples {n_sample} must match number of seeds {len(seed)}"
 
-        # FSDP collective-sequence alignment (throughput-preset inference).
-        #
-        # In throughput-preset inference each rank holds a different sample,
-        # and different samples can diverge on (a) the CFG decision per
-        # step — ``guidance != 1.0`` (and the optional ``guidance_interval``
-        # gate) determines whether ``velocity_fn`` issues 1 or 2 model
-        # forwards — and (b) ``num_steps``. Either divergence makes the
-        # FSDP allgather sequence misalign across ranks, deadlocking NCCL
-        # at the 30-min watchdog timeout.
-        #
-        # We align in two places:
-        #   1. Inside velocity_fn (per call): all_reduce the local CFG
-        #      decision; if ANY rank needs CFG, every rank does both
-        #      forwards (cond + uncond). Ranks whose local decision was
-        #      "no CFG" return ``cond_v`` directly — bit-identical to the
-        #      original no-CFG path (no guidance blend, no normalize_cfg).
-        #   2. Around the sampler call: all_reduce the local num_steps;
-        #      ranks with local < max issue a dummy sampler call with the
-        #      remaining steps to pad the FSDP allgather stream. The
-        #      dummy call's output is discarded; ``latents`` is never
-        #      re-bound.
-        #
-        # Both collectives are scoped to the FSDP shard group (the only
-        # process group whose collective sequence is at risk), so they're
-        # safe under non-trivial parallel layouts.
-        if (
-            self.parallel_dims is not None
-            and self.parallel_dims.dp_shard_mesh is not None
-            and torch.distributed.is_initialized()
-            and self.parallel_dims.dp_shard_mesh.size() > 1
-        ):
-            _dp_shard_group = self.parallel_dims.dp_shard_mesh.get_group()
-            _align_device = self.tensor_kwargs["device"]
-        else:
-            _dp_shard_group = None
-            _align_device = None
-
         # Create a velocity function for a single sample (for use with self.sampler).
 
         def velocity_fn(noise_x: list[torch.Tensor], timestep: torch.Tensor) -> list[torch.Tensor]:
@@ -2326,30 +2289,13 @@ class OmniMoTModel(ImaginaireModel):
                     skip_text_tokens=skip_text_tokens,
                 )
 
-            # Local CFG decision — honors ``guidance_interval`` for this rank.
-            _local_needs_cfg = guidance != 1.0
-            if _local_needs_cfg and guidance_interval is not None:
+            needs_cfg = guidance != 1.0
+            # _local_needs_cfg = guidance != 1.0
+            if needs_cfg and guidance_interval is not None:
                 assert len(guidance_interval) == 2, f"guidance_interval must be [lo, hi], got {guidance_interval}"
                 t_lo, t_hi = guidance_interval
-                _local_needs_cfg = t_lo < timestep[0].item() < t_hi
 
-            # FSDP alignment: if ANY rank in the shard group needs CFG this
-            # call, every rank computes both forwards. Cheap 1-element
-            # all_reduce per velocity_fn call; the alternative (forcing CFG
-            # always-on globally) would silently ignore the per-timestep
-            # ``guidance_interval`` gate.
-            if _dp_shard_group is not None:
-                _cfg_t = torch.tensor(
-                    [1 if _local_needs_cfg else 0], device=_align_device, dtype=torch.int32
-                )
-                torch.distributed.all_reduce(
-                    _cfg_t, op=torch.distributed.ReduceOp.MAX, group=_dp_shard_group
-                )
-                _any_needs_cfg = bool(_cfg_t.item())
-            else:
-                _any_needs_cfg = _local_needs_cfg
-
-            if not _any_needs_cfg:
+            if not needs_cfg:
                 return _single_velocity_fn(cond_tokens, skip_text_tokens=False)
 
             # Both forwards happen — needed for FSDP collective alignment
@@ -2361,14 +2307,6 @@ class OmniMoTModel(ImaginaireModel):
                 single_velocity_fn=_single_velocity_fn,
             )
 
-            if not _local_needs_cfg:
-                # This rank doesn't actually need CFG (guidance==1.0 or sigma
-                # outside guidance_interval). Return cond_v directly so the
-                # output is bit-identical to the original no-CFG path; the
-                # uncond_v forward was only run to keep the FSDP allgather
-                # sequence aligned with peers.
-                return cond_v
-
             v_pred = [u_i + guidance * (c_i - u_i) for c_i, u_i in zip(cond_v, uncond_v)]
 
             if normalize_cfg:
@@ -2378,22 +2316,6 @@ class OmniMoTModel(ImaginaireModel):
                 ]
 
             return v_pred
-
-        # FSDP collective-sequence alignment (sampler outer loop). See the
-        # large block above the velocity_fn definition for the full
-        # rationale. all_reduce on the local num_steps so every rank knows
-        # the max; below, ranks with local < max issue a dummy sampler call
-        # to pad their FSDP allgather sequence.
-        if _dp_shard_group is not None:
-            _local_steps_t = torch.tensor([num_steps], device=_align_device, dtype=torch.int32)
-            torch.distributed.all_reduce(
-                _local_steps_t, op=torch.distributed.ReduceOp.MAX, group=_dp_shard_group
-            )
-            _max_num_steps = int(_local_steps_t.item())
-        else:
-            _max_num_steps = num_steps
-        _extra_num_steps = _max_num_steps - num_steps
-
         # Run sampler for all samples at once.
         sampler = sampler or self.sampler
         scheduler_type = self.config.rectified_flow_inference_config.scheduler_type
@@ -2410,23 +2332,6 @@ class OmniMoTModel(ImaginaireModel):
                 shift=shift,
                 seed=seed,
             )
-            if _extra_num_steps > 0:
-                # Dummy sampler call to issue (_extra_num_steps × per-step)
-                # FSDP allgathers; output discarded so `latents` keeps the
-                # real result captured above. Slow ranks have _extra_num_steps==0
-                # here, but they're issuing the SAME number of in-sampler
-                # collectives via their longer real call.
-                log.debug(
-                    f"FSDP alignment: dummy sampler run with {_extra_num_steps} "
-                    f"extra steps (local={num_steps}, max={_max_num_steps})"
-                )
-                _ = sampler(
-                    velocity_fn,
-                    latents,
-                    num_steps=_extra_num_steps,
-                    shift=shift,
-                    seed=seed,
-                )
         else:
             # EDM Sampler
             chunk_sizes = [_x.shape[0] for _x in initial_noise]
@@ -2453,41 +2358,6 @@ class OmniMoTModel(ImaginaireModel):
                 sigma_min=0.002,
                 solver_option="2ab",
             )
-            if _extra_num_steps > 0:
-                # Pad the FSDP allgather sequence with ``_extra_num_steps``
-                # direct ``x0_fn`` calls instead of a second EDM sampler
-                # run. Avoids two EDM-specific footguns:
-                #   (1) ``EDMSampler._forward_impl`` always runs an extra
-                #       ``sample_clean`` denoiser forward (see
-                #       ``cosmos_framework/model/vfm/diffusion/samplers/edm.py``).
-                #       A nested sampler call would add one too many
-                #       forwards on fast ranks, since the slow rank's
-                #       single call also pays the ``sample_clean`` cost.
-                #   (2) ``get_rev_ts(..., num_steps=0)`` divides by zero,
-                #       producing NaN sigmas. The fix's ``extra==1`` edge
-                #       case would need num_steps=0 to balance the count.
-                # Direct ``x0_fn`` calls bypass both: each call routes
-                # through the same ``velocity_fn`` closure (so the
-                # per-call CFG all_reduce still aligns ranks), issues
-                # exactly one model forward, and discards its return.
-                # ``latents`` is the catted single tensor at this point;
-                # the dummy sigma value is irrelevant for collective
-                # alignment because the model's allgather sequence is
-                # determined by tensor shapes, not sigma.
-                log.debug(
-                    f"FSDP alignment: padding {_extra_num_steps} dummy x0_fn calls "
-                    f"(local={num_steps}, max={_max_num_steps})"
-                )
-                # ``x0_fn`` expects a sigma in the RF domain (the real EDM
-                # loop converts raw sigmas via ``sigmas_L / (1 + sigmas_L)``
-                # at edm.py:174, landing them in ``(0, 1)``). Mirror that
-                # transform here so the dummy call's timestep stays in the
-                # same numerical domain as a real sampler step. The exact
-                # value doesn't matter for collective alignment, only the
-                # domain.
-                _dummy_sigma = latents.new_tensor(sigma_max / (1.0 + sigma_max))
-                for _ in range(_extra_num_steps):
-                    _ = x0_fn(latents, _dummy_sigma)
             latents = list(torch.split(latents, chunk_sizes, dim=0))
 
         # Split flattened latents back into vision, action, and sound
