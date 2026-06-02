@@ -50,7 +50,7 @@ from cosmos_framework.model.vfm.utils.data_and_condition import (
     build_dense_sound_schedule,
     unwrap_and_densify,
 )
-from cosmos_framework.model.vfm.utils.memory import MemoryState
+from cosmos_framework.model.vfm.utils.memory import MemoryState, ReasonerMemoryState
 from cosmos_framework.model.vfm.utils.safetensors_loader import load_language_model as load_language_model_safetensors
 from cosmos_framework.model.vfm.vlm.qwen3_vl.utils import tokenize_caption
 from cosmos_framework.model.vfm.tokenizers.interface import VideoTokenizerInterface
@@ -1879,6 +1879,7 @@ class OmniMoTModel(ImaginaireModel):
         sequence_plans: list[SequencePlan],
         gen_data_clean: GenerationDataClean,
         skip_text_tokens: bool = False,
+        memory: MemoryState | None = None,
     ) -> list[torch.Tensor]:
         """
         Compute velocity prediction for a single sampling step.
@@ -2002,7 +2003,13 @@ class OmniMoTModel(ImaginaireModel):
             fps_vision=gen_data_clean.fps_vision,
             fps_action=fps_action,
             fps_sound=fps_sound,
+            memory=memory,
         )
+
+        if memory is not None and memory.is_und_only():
+            # Reasoner prefill: the network populated the per-layer understanding K/V
+            # cache as a side effect (no generation output). Nothing to mask/return.
+            return []
 
         # --- Apply velocity masks ---
         # Zero out velocity for conditioned parts (they don't change during sampling)
@@ -2201,6 +2208,76 @@ class OmniMoTModel(ImaginaireModel):
         else:
             return other_v_list, v_list
 
+    def _build_no_control_inference_state(
+        self,
+        sequence_plans: list[SequencePlan],
+        gen_data_clean: GenerationDataClean,
+    ) -> tuple[list[SequencePlan], GenerationDataClean, list[int]] | None:
+        """Build inference state without control-map vision (for control-CFG).
+
+        Transfer packs [control_map(s), target_clip] per sample. The no-control branch
+        drops the control maps from the vision sequence; the text caption and target
+        clip remain. Returns None when every sample has at most one vision item.
+
+        Also returns ``ctrl_dims_per_sample``: flattened control-token width per sample,
+        used to slice ``noise_x`` and blend velocities on the target suffix.
+        """
+        num_items_per_sample = gen_data_clean.num_vision_items_per_sample
+        if num_items_per_sample is None or all(n <= 1 for n in num_items_per_sample):
+            return None
+
+        assert gen_data_clean.x0_tokens_vision is not None
+
+        new_x0_tokens_vision: list[torch.Tensor] = []
+        new_raw_state_vision: list[torch.Tensor] | None = [] if gen_data_clean.raw_state_vision is not None else None
+        ctrl_dims_per_sample: list[int] = []
+        vis_offset = 0
+        for n_vis in num_items_per_sample:
+            ctrl_dim_i = 0
+            for j in range(n_vis - 1):
+                sh = gen_data_clean.x0_tokens_vision[vis_offset + j].shape
+                ctrl_dim_i += int(torch.tensor(list(sh)).prod().item())
+            ctrl_dims_per_sample.append(ctrl_dim_i)
+            tgt_idx = vis_offset + n_vis - 1
+            new_x0_tokens_vision.append(gen_data_clean.x0_tokens_vision[tgt_idx])
+            if new_raw_state_vision is not None:
+                new_raw_state_vision.append(gen_data_clean.raw_state_vision[tgt_idx])  # type: ignore[index]
+            vis_offset += n_vis
+
+        gdc_nc = GenerationDataClean(
+            batch_size=gen_data_clean.batch_size,
+            is_image_batch=gen_data_clean.is_image_batch,
+            raw_state_vision=new_raw_state_vision,
+            x0_tokens_vision=new_x0_tokens_vision,
+            fps_vision=gen_data_clean.fps_vision,
+            num_vision_items_per_sample=None,
+            raw_state_action=gen_data_clean.raw_state_action,
+            x0_tokens_action=gen_data_clean.x0_tokens_action,
+            action_domain_id=gen_data_clean.action_domain_id,
+            fps_action=gen_data_clean.fps_action,
+            raw_action_dim=gen_data_clean.raw_action_dim,
+            raw_state_sound=gen_data_clean.raw_state_sound,
+            x0_tokens_sound=gen_data_clean.x0_tokens_sound,
+            fps_sound=gen_data_clean.fps_sound,
+        )
+
+        sp_nc = [
+            SequencePlan(
+                has_text=sp.has_text,
+                has_vision=sp.has_vision,
+                condition_frame_indexes_vision=sp.condition_frame_indexes_vision,
+                share_vision_temporal_positions=False,
+                has_action=sp.has_action,
+                condition_frame_indexes_action=sp.condition_frame_indexes_action,
+                action_start_frame_offset=sp.action_start_frame_offset,
+                has_sound=sp.has_sound,
+                condition_frame_indexes_sound=sp.condition_frame_indexes_sound,
+            )
+            for sp in sequence_plans
+        ]
+
+        return sp_nc, gdc_nc, ctrl_dims_per_sample
+
     @torch.no_grad()
     def generate_samples_from_batch(
         self,
@@ -2209,10 +2286,13 @@ class OmniMoTModel(ImaginaireModel):
         sampler: Any | None = None,
         guidance: float = 1.5,
         guidance_interval: Optional[list[float]] = None,
+        control_guidance: float = 1.0,
+        control_guidance_interval: Optional[list[float]] = None,
         seed: list[int] | int = 1,
         n_sample: int | None = None,
         has_negative_prompt: bool = False,
         num_steps: int = 35,
+        align_num_steps: int | None = None,
         shift: float = 5.0,
         sigma_max: float = 80.0,
         skip_text_tokens_for_cfg: bool = False,
@@ -2247,6 +2327,11 @@ class OmniMoTModel(ImaginaireModel):
             guidance (float): Classifier-free guidance weight.
             guidance_interval (list[float] | None): Optional timestep interval to apply guidance.
                 For the timesteps (ranging between 0-1000) that fall between the interval, we perform CFG, otherwise, we skip the unconditional generation.
+            control_guidance (float): Control-CFG scale for transfer inference. ``1.0`` (default)
+                disables the extra comparison forward; values ``> 1.0`` blend velocities from
+                with-control-map vs without-control-map forwards on the generated clip.
+            control_guidance_interval (list[float] | None): Optional timestep interval to apply
+                control-CFG; ``None`` applies on every step.
             seed (list[int] | int): Random seeds for noise generation. For all new use-cases,
                 we use a list of seeds, one for each sample. The length of the list must match
                 the number of samples. Legacy use-cases use a single integer seed which is
@@ -2255,6 +2340,9 @@ class OmniMoTModel(ImaginaireModel):
             n_sample (int | None): Number of samples to generate; defaults to batch size.
             has_negative_prompt (bool): If True, use negative prompt for unconditional branch.
             num_steps (int): Number of sampling steps for the diffusion process.
+            align_num_steps (int | None): FSDP collective-sequence alignment target.
+                Ranks with ``num_steps < align_num_steps`` run discarded sampler
+                steps to keep the FSDP all-gather count identical.
             shift (float): Time shift parameter for the sampler.
             sigma_max (float): Maximum sigma for the EDM sampler.
             skip_text_tokens_for_cfg (bool): If True, skip text tokens in unconditional branch.
@@ -2362,32 +2450,20 @@ class OmniMoTModel(ImaginaireModel):
 
         assert n_sample == len(seed), f"Number of samples {n_sample} must match number of seeds {len(seed)}"
 
-        # Create a velocity function for a single sample (for use with self.sampler).
-        # FSDP collective-sequence alignment (throughput-preset inference).
-        #
-        # In throughput-preset inference each rank holds a different sample,
-        # and different samples can diverge on (a) the CFG decision per
-        # step — ``guidance != 1.0`` (and the optional ``guidance_interval``
-        # gate) determines whether ``velocity_fn`` issues 1 or 2 model
-        # forwards — and (b) ``num_steps``. Either divergence makes the
-        # FSDP allgather sequence misalign across ranks, deadlocking NCCL
-        # at the 30-min watchdog timeout.
-        #
-        # We align in two places:
-        #   1. Inside velocity_fn (per call): all_reduce the local CFG
-        #      decision; if ANY rank needs CFG, every rank does both
-        #      forwards (cond + uncond). Ranks whose local decision was
-        #      "no CFG" return ``cond_v`` directly — bit-identical to the
-        #      original no-CFG path (no guidance blend, no normalize_cfg).
-        #   2. Around the sampler call: all_reduce the local num_steps;
-        #      ranks with local < max issue a dummy sampler call with the
-        #      remaining steps to pad the FSDP allgather stream. The
-        #      dummy call's output is discarded; ``latents`` is never
-        #      re-bound.
-        #
-        # Both collectives are scoped to the FSDP shard group (the only
-        # process group whose collective sequence is at risk), so they're
-        # safe under non-trivial parallel layouts.
+        no_control_state = None
+        if control_guidance != 1.0:
+            no_control_state = self._build_no_control_inference_state(sequence_plans, gen_data_clean)
+            if no_control_state is None:
+                log.warning(
+                    "control_guidance != 1.0 but no multi-vision sample found; "
+                    "control-CFG disabled (single-branch inference)."
+                )
+
+        # FSDP collective-sequence alignment (throughput-style inference). Each
+        # FSDP-shard rank holds a different sample, and ``velocity_fn`` can issue
+        # different forward counts when CFG/control-CFG decisions diverge. The
+        # per-call decisions are MAX-reduced over the dp_shard group so every rank
+        # runs the same number of forwards.
         if (
             self.parallel_dims is not None
             and self.parallel_dims.dp_shard_mesh is not None
@@ -2399,6 +2475,63 @@ class OmniMoTModel(ImaginaireModel):
         else:
             _dp_shard_group = None
             _align_device = None
+
+        # --- Reasoner/generator split (single-GPU CPU offloading). Default off. ---
+        # When enabled (set by the inference layer via ``_reasoner_generator_split``),
+        # the understanding ("reasoner") pathway is computed once as a prefill that
+        # caches the per-layer understanding K/V; the diffusion denoise loop then runs
+        # generator-only and reuses that cache. ``_offload_stage_fn`` (optional, also
+        # set by the inference layer) stages the reasoner/generator weight groups into
+        # the single GPU arena around the prefill / denoise; the model itself never
+        # imports the inference-side offload machinery.
+        _split_enabled = getattr(self, "_reasoner_generator_split", False)
+        _stage_fn = getattr(self, "_offload_stage_fn", None)
+        _mem_cond: ReasonerMemoryState | None = None
+        _mem_uncond: ReasonerMemoryState | None = None
+        if _split_enabled:
+            if self.parallel_dims is not None and (
+                self.parallel_dims.cp_enabled
+                or self.parallel_dims.cfgp_enabled
+                or (self.parallel_dims.dp_shard_mesh is not None and self.parallel_dims.dp_shard_mesh.size() > 1)
+            ):
+                raise NotImplementedError(
+                    "Reasoner/generator-split CPU offloading is single-GPU only "
+                    "(no context-, CFG-, or FSDP-shard parallelism)."
+                )
+            net_obj = net or self.net
+            num_layers = len(net_obj.language_model.model.layers)
+            # The reasoner prefill is independent of the diffusion timestep (the
+            # understanding pathway never reads the timestep embedding), so any value
+            # works; the noise values are likewise unused (vision encode is skipped).
+            prefill_timestep = torch.zeros((n_sample, 1))
+
+            def _prefill_reasoner(tokens: list[list[int]], skip_text_tokens: bool) -> ReasonerMemoryState:
+                mem = ReasonerMemoryState(num_layers)
+                mem.set_mode("prefill")
+                self._get_velocity(
+                    net=net,
+                    noise_x=initial_noise,
+                    timestep=prefill_timestep,
+                    text_tokens=tokens,
+                    sequence_plans=sequence_plans,
+                    gen_data_clean=gen_data_clean,
+                    skip_text_tokens=skip_text_tokens,
+                    memory=mem,
+                )
+                mem.set_mode("gen")
+                return mem
+
+            if _stage_fn is not None:
+                _stage_fn("reasoner")
+            _mem_cond = _prefill_reasoner(cond_tokens, skip_text_tokens=False)
+            if guidance != 1.0:
+                _mem_uncond = _prefill_reasoner(uncond_tokens, skip_text_tokens=skip_text_tokens_for_cfg)
+
+            # Stage the generator for the whole denoise loop (reasoner now offloaded).
+            if _stage_fn is not None:
+                _stage_fn("generator")
+
+        # Create a velocity function for a single sample (for use with self.sampler).
 
         def velocity_fn(noise_x: list[torch.Tensor], timestep: torch.Tensor) -> list[torch.Tensor]:
             # len(noise_x) == B, noise_x[i] is shape (D)
@@ -2412,6 +2545,12 @@ class OmniMoTModel(ImaginaireModel):
             timestep = timestep.repeat(len(noise_x), 1)
 
             def _single_velocity_fn(tokens: list[list[int]], skip_text_tokens: bool):
+                # In the reasoner/generator split, route each CFG branch to its own
+                # prefilled understanding K/V cache (cond vs uncond). Identity check on
+                # the token-list object distinguishes the branches.
+                _mem = None
+                if _split_enabled:
+                    _mem = _mem_cond if tokens is cond_tokens else _mem_uncond
                 return self._get_velocity(
                     net=net,
                     noise_x=noise_x,
@@ -2420,46 +2559,104 @@ class OmniMoTModel(ImaginaireModel):
                     sequence_plans=sequence_plans,
                     gen_data_clean=gen_data_clean,
                     skip_text_tokens=skip_text_tokens,
+                    memory=_mem,
                 )
 
-            # Skip unconditional branch when outside the guidance interval
-            needs_cfg = guidance != 1.0
-            if needs_cfg and guidance_interval is not None:
+            # Local CFG decision for THIS rank, honoring guidance_interval.
+            _local_needs_text_cfg = guidance != 1.0
+            if _local_needs_text_cfg and guidance_interval is not None:
                 assert len(guidance_interval) == 2, f"guidance_interval must be [lo, hi], got {guidance_interval}"
                 t_lo, t_hi = guidance_interval
-                needs_cfg = t_lo < timestep[0].item() < t_hi
+                _local_needs_text_cfg = t_lo < timestep[0].item() < t_hi
 
-            # FSDP alignment: if ANY rank in the shard group needs CFG this
-            # call, every rank computes both forwards. Cheap 1-element
-            # all_reduce per velocity_fn call; the alternative (forcing CFG
-            # always-on globally) would silently ignore the per-timestep
-            # ``guidance_interval`` gate.
+            _local_needs_control_cfg = no_control_state is not None
+            if _local_needs_control_cfg and control_guidance_interval is not None:
+                assert len(control_guidance_interval) == 2, (
+                    f"control_guidance_interval must be [lo, hi], got {control_guidance_interval}"
+                )
+                t_lo_c, t_hi_c = control_guidance_interval
+                _local_needs_control_cfg = t_lo_c < timestep[0].item() < t_hi_c
+
+            # FSDP alignment: if ANY rank in the shard group needs CFG or control-CFG
+            # this call, every rank computes the matching forwards.
             if _dp_shard_group is not None:
-                _cfg_t = torch.tensor([1 if needs_cfg else 0], device=_align_device, dtype=torch.int32)
+                _cfg_t = torch.tensor(
+                    [1 if _local_needs_text_cfg else 0], device=_align_device, dtype=torch.int32
+                )
                 torch.distributed.all_reduce(_cfg_t, op=torch.distributed.ReduceOp.MAX, group=_dp_shard_group)
-                _any_needs_cfg = bool(_cfg_t.item())
+                _any_needs_text_cfg = bool(_cfg_t.item())
+                _ctrl_t = torch.tensor(
+                    [1 if _local_needs_control_cfg else 0], device=_align_device, dtype=torch.int32
+                )
+                torch.distributed.all_reduce(_ctrl_t, op=torch.distributed.ReduceOp.MAX, group=_dp_shard_group)
+                _any_needs_control_cfg = bool(_ctrl_t.item())
             else:
-                _any_needs_cfg = needs_cfg
+                _any_needs_text_cfg = _local_needs_text_cfg
+                _any_needs_control_cfg = _local_needs_control_cfg
 
-            if not _any_needs_cfg:
+            if not _any_needs_text_cfg and not _any_needs_control_cfg:
                 return _single_velocity_fn(cond_tokens, skip_text_tokens=False)
 
-            cond_v, uncond_v = self._run_classifier_free_guidance(
-                cond_tokens=cond_tokens,
-                uncond_tokens=uncond_tokens,
-                skip_text_tokens_for_cfg=skip_text_tokens_for_cfg,
-                single_velocity_fn=_single_velocity_fn,
-            )
+            if _any_needs_control_cfg:
+                cond_v_full = _single_velocity_fn(cond_tokens, skip_text_tokens=False)
+                ctrl_dims: list[int] | None = None
+                if no_control_state is not None:
+                    sp_nc, gdc_nc, ctrl_dims = no_control_state
+                    noise_x_nc = [nx[ctrl_dim:] for nx, ctrl_dim in zip(noise_x, ctrl_dims)]
+                    cond_v_nc = self._get_velocity(
+                        net=net,
+                        noise_x=noise_x_nc,
+                        timestep=timestep,
+                        text_tokens=cond_tokens,
+                        sequence_plans=sp_nc,
+                        gen_data_clean=gdc_nc,
+                        skip_text_tokens=False,
+                        memory=_mem_cond if _split_enabled else None,
+                    )
+                else:
+                    # Another rank in the dp_shard group needs control-CFG, so this
+                    # rank executes a second forward only for FSDP collective alignment.
+                    cond_v_nc = _single_velocity_fn(cond_tokens, skip_text_tokens=False)
+                if _local_needs_control_cfg:
+                    assert ctrl_dims is not None, "local control-CFG requires no_control_state"
+                    cond_v = []
+                    for v_full_i, v_nc_i, ctrl_dim_i in zip(cond_v_full, cond_v_nc, ctrl_dims):
+                        suffix_full = v_full_i[ctrl_dim_i:]
+                        assert suffix_full.shape == v_nc_i.shape, (
+                            f"shape mismatch in control-CFG mix: full suffix {suffix_full.shape} "
+                            f"vs no-control {v_nc_i.shape}"
+                        )
+                        mixed_suffix = v_nc_i + control_guidance * (suffix_full - v_nc_i)
+                        cond_v.append(torch.cat([v_full_i[:ctrl_dim_i], mixed_suffix], dim=0))
+                else:
+                    cond_v = cond_v_full
 
-            if not needs_cfg:
-                # This rank doesn't actually need CFG (guidance==1.0 or sigma
-                # outside guidance_interval). Return cond_v directly so the
-                # output is bit-identical to the original no-CFG path; the
-                # uncond_v forward was only run to keep the FSDP allgather
-                # sequence aligned with peers.
-                return cond_v
+                if not _any_needs_text_cfg:
+                    return cond_v
 
-            v_pred = [u_i + guidance * (c_i - u_i) for c_i, u_i in zip(cond_v, uncond_v)]
+                uncond_v = _single_velocity_fn(uncond_tokens, skip_text_tokens=skip_text_tokens_for_cfg)
+                if not _local_needs_text_cfg:
+                    return cond_v
+
+                v_pred = [u_i + guidance * (c_i - u_i) for c_i, u_i in zip(cond_v, uncond_v)]
+            else:
+                # Both forwards happen — needed for FSDP collective alignment
+                # across ranks even if THIS rank's local decision was "no CFG".
+                cond_v, uncond_v = self._run_classifier_free_guidance(
+                    cond_tokens=cond_tokens,
+                    uncond_tokens=uncond_tokens,
+                    skip_text_tokens_for_cfg=skip_text_tokens_for_cfg,
+                    single_velocity_fn=_single_velocity_fn,
+                )
+
+                if not _local_needs_text_cfg:
+                    # This rank didn't actually need CFG (guidance==1.0, or sigma
+                    # outside guidance_interval). Return cond_v directly so the output
+                    # is bit-identical to the no-CFG path; the uncond_v forward ran
+                    # only to keep the FSDP all-gather sequence aligned with peers.
+                    return cond_v
+
+                v_pred = [u_i + guidance * (c_i - u_i) for c_i, u_i in zip(cond_v, uncond_v)]
 
             if normalize_cfg:
                 v_pred = [
@@ -2469,18 +2666,16 @@ class OmniMoTModel(ImaginaireModel):
 
             return v_pred
 
-        # FSDP collective-sequence alignment (sampler outer loop). See the
-        # large block above the velocity_fn definition for the full
-        # rationale. all_reduce on the local num_steps so every rank knows
-        # the max; below, ranks with local < max issue a dummy sampler call
-        # to pad their FSDP allgather sequence.
-        if _dp_shard_group is not None:
+        # FSDP collective-sequence alignment (sampler outer loop). The inference
+        # caller passes the cross-rank MAX of num_steps as ``align_num_steps``; if
+        # absent, fall back to reducing here for direct callers.
+        if align_num_steps is None and _dp_shard_group is not None:
             _local_steps_t = torch.tensor([num_steps], device=_align_device, dtype=torch.int32)
             torch.distributed.all_reduce(_local_steps_t, op=torch.distributed.ReduceOp.MAX, group=_dp_shard_group)
-            _max_num_steps = int(_local_steps_t.item())
-        else:
-            _max_num_steps = num_steps
-        _extra_num_steps = _max_num_steps - num_steps
+            align_num_steps = int(_local_steps_t.item())
+        _extra_num_steps = 0
+        if align_num_steps is not None and align_num_steps > num_steps:
+            _extra_num_steps = align_num_steps - num_steps
 
         # Run sampler for all samples at once.
         sampler = sampler or self.sampler
@@ -2506,7 +2701,7 @@ class OmniMoTModel(ImaginaireModel):
                 # collectives via their longer real call.
                 log.debug(
                     f"FSDP alignment: dummy sampler run with {_extra_num_steps} "
-                    f"extra steps (local={num_steps}, max={_max_num_steps})"
+                    f"extra steps (local={num_steps}, aligned={align_num_steps})"
                 )
                 _ = sampler(
                     velocity_fn,
@@ -2564,7 +2759,7 @@ class OmniMoTModel(ImaginaireModel):
                 # determined by tensor shapes, not sigma.
                 log.debug(
                     f"FSDP alignment: padding {_extra_num_steps} dummy x0_fn calls "
-                    f"(local={num_steps}, max={_max_num_steps})"
+                    f"(local={num_steps}, aligned={align_num_steps})"
                 )
                 # ``x0_fn`` expects a sigma in the RF domain (the real EDM
                 # loop converts raw sigmas via ``sigmas_L / (1 + sigmas_L)``
@@ -2853,6 +3048,11 @@ class OmniMoTModel(ImaginaireModel):
         self._normalize_video_databatch_inplace(data_batch)
         self._augment_image_dim_inplace(data_batch)  # converts each image tensor to (1, C, 1, H, W)
         raw_state_vision = data_batch[self.input_image_key if is_image_batch else self.input_video_key]
+        # Stage the VAE onto the GPU arena for conditioning encode when it is offloaded
+        # (no-op otherwise, and skipped entirely when there is nothing to encode, e.g. t2v).
+        _stage_fn = getattr(self, "_offload_stage_fn", None)
+        if _stage_fn is not None and len(raw_state_vision) > 0:
+            _stage_fn("vae")
         x0_tokens_vision = [
             self.encode(raw_state_vision_i).contiguous().float() for raw_state_vision_i in raw_state_vision
         ]
@@ -3641,6 +3841,10 @@ class OmniMoTModel(ImaginaireModel):
             fps_sound=fps_sound,
             memory=memory,
         )
+        if memory is not None and memory.is_und_only():
+            # Reasoner prefill: the network only populated the understanding K/V cache
+            # (side effect on ``memory``) and returned no generation predictions.
+            return dict()
         output_dict = dict()
         output_dict["preds_vision"] = out_net["preds_vision"]
         if self.config.action_gen and "preds_action" in out_net:

@@ -165,9 +165,10 @@ Try these in order:
    export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
    ```
 
-2. **Increase `--dp-shard-size`** to shard model weights across more GPUs via FSDP. Inference auto-picks a value that fits the model at ~75% device memory (see `_get_dp_shard_size` in `cosmos_framework/inference/args.py`); passing a larger explicit value drops per-GPU memory at the cost of more all-gather traffic. Requires multi-GPU.
-3. **Lower `--device-memory-utilization`** (default `0.75`). The auto-`dp_shard_size` formula is `ceil(model_memory / device_memory / utilization)`, so passing e.g. `--device-memory-utilization=0.5` forces auto-mode to pick a larger `dp_shard_size` and leaves more per-GPU headroom for activations / KV cache. Requires multi-GPU.
-4. **Add `--offload-guardrail-models`** to move the text and video guardrail models to CPU. Frees the GPU memory they would otherwise hold for the full run, at the cost of some extra latency when guardrails are invoked.
+2. **(Single-GPU) Add `--offload-stages reasoner generator vae`** to offload the transformer towers and VAE to pinned CPU memory, staging each back onto one reusable GPU arena only while in use. This is the biggest single-GPU lever (e.g. ~13 GiB lower peak for Cosmos3-Nano `text2video`). Incompatible with CUDA graphs. See [inference.md § CPU Offloading](./inference.md#cpu-offloading-single-gpu).
+3. **Increase `--dp-shard-size`** to shard model weights across more GPUs via FSDP. Inference auto-picks a value that fits the model at ~75% device memory (see `_get_dp_shard_size` in `cosmos_framework/inference/args.py`); passing a larger explicit value drops per-GPU memory at the cost of more all-gather traffic. Requires multi-GPU.
+4. **Lower `--device-memory-utilization`** (default `0.75`). The auto-`dp_shard_size` formula is `ceil(model_memory / device_memory / utilization)`, so passing e.g. `--device-memory-utilization=0.5` forces auto-mode to pick a larger `dp_shard_size` and leaves more per-GPU headroom for activations / KV cache. Requires multi-GPU.
+5. **Add `--offload-guardrail-models`** to move the text and video guardrail models to CPU. Frees the GPU memory they would otherwise hold for the full run, at the cost of some extra latency when guardrails are invoked.
 
 See [inference.md#torch-cuda-out-of-memory-error](./inference.md#torch-cuda-out-of-memory-error) for the full troubleshooting section.
 

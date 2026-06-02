@@ -37,6 +37,7 @@ from cosmos_framework.inference.common.args import (
 from cosmos_framework.inference.common.inference import Inference, sync_distributed_errors
 from cosmos_framework.inference.common.init import get_rank, get_world_size
 from cosmos_framework.inference.model import Cosmos3OmniConfig, Cosmos3OmniModel
+from cosmos_framework.inference.offloading import OffloadPipeline
 from cosmos_framework.inference.vision import (
     build_conditioned_video_batch,
     build_image_edit_batch,
@@ -58,6 +59,91 @@ if TYPE_CHECKING:
     from cosmos_framework.configs.base.defaults.model_config import OmniMoTModelConfig
 
 UpsampleTask = Literal["t2i", "t2v", "i2v"]
+
+# Reasoner/generator CPU-offload group names (single-GPU). The two MoT pathways
+# are interleaved per layer, so the groups gather the per-layer understanding vs
+# generation submodules (plus the generation-side diffusion heads) by reference.
+REASONER_OFFLOAD_PART = "reasoner"
+GENERATOR_OFFLOAD_PART = "generator"
+VAE_OFFLOAD_PART = "vae"
+# Offload stages that ride the diffusion GPU arena (``guardrails`` is handled
+# separately by the guardrail runners' own CPU-offload path).
+ARENA_OFFLOAD_PARTS = (REASONER_OFFLOAD_PART, GENERATOR_OFFLOAD_PART, VAE_OFFLOAD_PART)
+
+
+def build_omni_offload_parts(model: OmniMoTModel) -> dict[str, "torch.nn.Module"]:
+    """Group the in-tree Cosmos3 model into offloadable module groups.
+
+    The MoT packs both pathways into a single network with dual projections per
+    layer, so rather than pointing at whole towers we gather the per-layer
+    understanding (``reasoner``) vs generation (``generator``) submodules into two
+    synthetic ``nn.ModuleList`` groups (referencing the existing submodule objects,
+    so the module tree, checkpoint loading, and the joint forward are unaffected).
+    The generation-side diffusion heads (``vae2llm`` / ``llm2vae`` / ``time_embedder``
+    and the optional action/sound heads) join the generator group because the
+    reasoner prefill skips vision/action/sound encode and decode entirely. The
+    ``vae`` group is the vision tokenizer network (staged around encode/decode).
+
+    All groups are disjoint (distinct module instances), as ``ModuleOffloadManager``
+    requires. Returns every known group; callers stage only the requested subset.
+    Modules left out of every staged group stay GPU-resident.
+    """
+    import torch.nn as nn
+
+    net = model.net
+    lm = net.language_model.model  # Qwen3VL(Moe)TextModel: embed_tokens, layers, norm, norm_moe_gen
+
+    reasoner_modules: list[nn.Module] = [lm.embed_tokens, lm.norm]
+    generator_modules: list[nn.Module] = [lm.norm_moe_gen]
+
+    # Generation-side diffusion encode/decode heads (only present when enabled).
+    for head_name in ("time_embedder", "vae2llm", "llm2vae", "action2llm", "llm2action", "sound2llm", "llm2sound"):
+        head = getattr(net, head_name, None)
+        if isinstance(head, nn.Module):
+            generator_modules.append(head)
+
+    for raw_layer in lm.layers:
+        # Unwrap torch.compile's OptimizedModule so we reference the real submodules
+        # (the manager rebinds their parameters between stages, which the compiled
+        # graph picks up as graph inputs on the next call).
+        layer = getattr(raw_layer, "_orig_mod", raw_layer)
+        attn = layer.self_attn
+        reasoner_modules += [
+            attn.q_proj,
+            attn.k_proj,
+            attn.v_proj,
+            attn.o_proj,
+            attn.q_norm,
+            attn.k_norm,
+            layer.input_layernorm,
+            layer.post_attention_layernorm,
+            layer.mlp,
+        ]
+        generator_modules += [
+            attn.q_proj_moe_gen,
+            attn.k_proj_moe_gen,
+            attn.v_proj_moe_gen,
+            attn.o_proj_moe_gen,
+            attn.q_norm_moe_gen,
+            attn.k_norm_moe_gen,
+            layer.input_layernorm_moe_gen,
+            layer.post_attention_layernorm_moe_gen,
+            layer.mlp_moe_gen,
+        ]
+
+    parts: dict[str, nn.Module] = {
+        REASONER_OFFLOAD_PART: nn.ModuleList(reasoner_modules),
+        GENERATOR_OFFLOAD_PART: nn.ModuleList(generator_modules),
+    }
+    # The vision tokenizer's underlying network (the offloadable VAE weights).
+    # ``tokenizer_vision_gen.model`` may itself be a thin (non-Module) wrapper whose
+    # ``.model`` is the actual nn.Module (e.g. Wan2pt2VAEInterface -> WanVAE -> WanVAE_).
+    vae = getattr(model.tokenizer_vision_gen, "model", None)
+    if vae is not None and not isinstance(vae, nn.Module):
+        vae = getattr(vae, "model", None)
+    if isinstance(vae, nn.Module):
+        parts[VAE_OFFLOAD_PART] = vae
+    return parts
 
 
 _BatchItem = TypeVar("_BatchItem")
@@ -1103,6 +1189,44 @@ class OmniInference(Inference):
                 model.set_up_scheduler_and_sampler()
                 log.debug(f"Sampler overridden to: {sampler_override}")
 
+        # Single-GPU CPU offloading (opt-in via --offload-stages). The diffusion parts
+        # (reasoner / generator / vae) time-share one reusable GPU arena; 'guardrails'
+        # is handled separately by the guardrail runners. Default-off; when off the
+        # model's ``memory`` stays None (joint path, unchanged).
+        arena_stages = tuple(s for s in setup_args.offload_stages if s in ARENA_OFFLOAD_PARTS)
+        if arena_stages:
+            if compile_config.use_cuda_graphs:
+                raise NotImplementedError(
+                    "CPU offloading is incompatible with CUDA graphs (staging rebinds weight "
+                    "tensors between calls, which breaks captured static addresses). "
+                    "Disable --use-cuda-graphs or --offload-stages."
+                )
+            world = setup_args.dp_shard_size * setup_args.cp_size * setup_args.cfgp_size
+            if world != 1:
+                raise NotImplementedError(
+                    f"CPU offloading is single-GPU only (dp_shard*cp*cfgp must be 1, got {world})."
+                )
+            available_parts = build_omni_offload_parts(model)
+            missing = [s for s in arena_stages if s not in available_parts]
+            if missing:
+                raise ValueError(f"Requested offload stage(s) {missing} are unavailable for this model.")
+            offloader = OffloadPipeline(
+                stages=arena_stages,
+                parts={s: available_parts[s] for s in arena_stages},
+                device=torch.device("cuda", torch.cuda.current_device()),
+                pin_memory=True,
+            )
+            offloader.initialize()
+            # Drive staging from the model/decode sites without leaking inference-side
+            # machinery into the model: callers invoke ``_offload_stage_fn(part)``, which
+            # is a no-op for parts that aren't being offloaded (so call sites are uniform).
+            model._offloader = offloader  # keep alive
+            model._offload_stage_fn = lambda part: offloader.context(part) if offloader.has_part(part) else None
+            model._reasoner_generator_split = bool(
+                {REASONER_OFFLOAD_PART, GENERATOR_OFFLOAD_PART} & set(arena_stages)
+            )
+            log.info(f"Enabled single-GPU CPU offloading for stages: {', '.join(arena_stages)}.")
+
         vae_decode_stream: torch.cuda.Stream | None = None
         if setup_args.use_separate_pipeline_vision_decode_gpu:
             # The CP/CFGP ranks are partitioned into replica-local groups of size
@@ -1506,6 +1630,12 @@ class OmniInference(Inference):
 
             with self._get_timer(f"{self.model.__class__.__name__}.decode"):
                 output_vision = outputs.pop("vision")
+                # Stage the VAE onto the GPU arena for decode (no-op unless 'vae' is an
+                # offloaded stage). The denoise loop left the generator staged; this
+                # rebinds it back to CPU and brings the VAE in.
+                _stage_fn = getattr(self.model, "_offload_stage_fn", None)
+                if _stage_fn is not None:
+                    _stage_fn(VAE_OFFLOAD_PART)
                 decoded_vision = [decode_vision(vision) for vision in output_vision]
                 outputs["vision"] = [cast(torch.Tensor, vision) for vision in decoded_vision]
                 if self.vae_decode_stream is not None:

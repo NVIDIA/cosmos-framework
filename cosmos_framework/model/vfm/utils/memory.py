@@ -100,3 +100,97 @@ class MemoryState(ABC):
         visibility itself return ``False``.
         """
         return True
+
+    def is_und_only(self) -> bool:
+        """Return ``True`` when only the understanding (reasoner) pathway should run.
+
+        When ``True``, the decoder layer runs the reasoner prefill: it computes
+        the understanding pathway over the text tokens and caches the per-layer
+        K/V, skipping the generation pathway entirely. Defaults to ``False`` so
+        existing memory states (which only toggle gen-only) are unaffected.
+        """
+        return False
+
+
+@dataclass
+class ReasonerMemoryValue(MemoryValue):
+    """Read-only per-layer understanding (reasoner) K/V snapshot.
+
+    Carries the post-RoPE understanding-pathway keys/values cached during the
+    one-time reasoner prefill, so the generator-only denoise pass can attend to
+    them without recomputing the understanding pathway. Shapes follow the
+    ``KVToStore`` contract produced by ``PackedAttentionMoT.forward``:
+    ``[1, und_len, num_kv_heads, head_dim]``.
+    """
+
+    # ``None`` only during the prefill pass (cache not yet populated); the
+    # generator-only attention path asserts these are present before use.
+    und_k: torch.Tensor | None
+    und_v: torch.Tensor | None
+
+
+class ReasonerMemoryState(MemoryState):
+    """Per-layer understanding-K/V cache for the reasoner/generator split.
+
+    Single-sample inference only (the offloaded single-GPU path). Drives a
+    one-time understanding prefill followed by generator-only denoise steps via
+    a three-valued ``mode``:
+
+    - ``"prefill"`` (``is_und_only()`` is ``True``): each decoder layer runs the
+      reasoner pathway only and ``write_for_layer`` stores the understanding K/V.
+    - ``"gen"`` (``is_gen_only()`` is ``True``): each decoder layer runs the
+      generation pathway only and ``read_for_layer`` returns the cached
+      understanding K/V for the gen->und cross-attention.
+    - ``None`` (default): both ``is_und_only()`` and ``is_gen_only()`` are
+      ``False`` so the decoder runs the joint forward.
+
+    The understanding tokens are the (fixed) text prompt and the understanding
+    pathway attends causally over understanding tokens only, so its per-layer
+    K/V are independent of the diffusion timestep and are valid across all
+    denoise steps.
+    """
+
+    _VALID_MODES = (None, "prefill", "gen")
+
+    def __init__(self, num_layers: int) -> None:
+        self._num_layers = num_layers
+        self._und_k: list[torch.Tensor | None] = [None] * num_layers
+        self._und_v: list[torch.Tensor | None] = [None] * num_layers
+        self._mode: str | None = None
+
+    def init(self, hidden_states: dict, device: torch.device) -> None:  # noqa: D401 - see base
+        # Nothing to allocate up front; entries are filled by write_for_layer.
+        return None
+
+    def set_mode(self, mode: str | None) -> None:
+        if mode not in self._VALID_MODES:
+            raise ValueError(f"Invalid ReasonerMemoryState mode {mode!r}; expected one of {self._VALID_MODES}.")
+        self._mode = mode
+
+    def is_gen_only(self) -> bool:
+        return self._mode == "gen"
+
+    def is_und_only(self) -> bool:
+        return self._mode == "prefill"
+
+    @property
+    def is_initialized(self) -> bool:
+        return all(k is not None for k in self._und_k)
+
+    def read_for_layer(self, layer_idx: int) -> ReasonerMemoryValue:
+        # Never raises: the decoder loop calls this on every layer, including
+        # during the prefill pass when the cache is still empty. During prefill
+        # the returned (None) K/V are ignored by the attention dispatch (the
+        # generation sequence is empty, so the und-only prefill path runs); only
+        # the generator-only path consumes the cached K/V (and asserts they exist).
+        return ReasonerMemoryValue(und_k=self._und_k[layer_idx], und_v=self._und_v[layer_idx])
+
+    def write_for_layer(self, layer_idx: int, kv_to_store: KVToStore) -> None:
+        # kv_to_store == (gen_k, gen_v, und_k, und_v); only the understanding
+        # K/V are persisted, and only during the prefill pass. On generator-only
+        # steps the understanding sequence is empty, so skip (keep the cache).
+        if self._mode != "prefill":
+            return
+        _, _, und_k, und_v = kv_to_store
+        self._und_k[layer_idx] = und_k
+        self._und_v[layer_idx] = und_v

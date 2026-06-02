@@ -50,6 +50,11 @@ else:
     Training = Suppress
 
 
+# Single-GPU CPU-offload stages selectable via ``--offload-stages``. (Guardrail
+# offloading has its own dedicated flag, ``--offload-guardrail-models``.)
+OffloadStage = Literal["reasoner", "generator", "vae"]
+
+
 IMAGE_EXTENSIONS = [".png", ".jpg", ".jpeg", ".webp"]
 VIDEO_EXTENSIONS = [".mp4"]
 MEDIA_EXTENSIONS = IMAGE_EXTENSIONS + VIDEO_EXTENSIONS
@@ -712,6 +717,7 @@ class SetupArgs(ABC, CheckpointArgs, ParallelismArgs, GuardrailArgs):
     warmup: pydantic.NonNegativeInt
     max_model_len: pydantic.PositiveInt | None
     max_num_seqs: pydantic.PositiveInt | None
+    offload_stages: tuple[OffloadStage, ...]
 
     # Subclass must implement these fields/methods
     # ------------------------------------------------------------
@@ -762,6 +768,14 @@ class SetupOverrides(ABC, CheckpointOverrides, ParallelismOverrides, GuardrailOv
     max_num_seqs: pydantic.PositiveInt | None = 1
     """Maximum number of sequences per batch.  When set, samples are packed into
     batches by number of sequences."""
+    offload_stages: tuple[OffloadStage, ...] = ()
+    """Single-GPU CPU-offload stages. Each named component is offloaded to pinned CPU
+    storage and staged into one reusable GPU arena only while in use, reducing peak
+    GPU memory. Choices: 'reasoner' / 'generator' (the MoT towers — enabling either
+    runs the understanding pathway once as a prefill that caches the per-layer K/V, then
+    runs the denoise loop generator-only) and 'vae' (the vision tokenizer, staged around
+    encode/decode). Empty = off (joint path, unchanged). Single-GPU only; incompatible
+    with CUDA graphs. Guardrail offloading has its own flag, --offload-guardrail-models."""
 
     def _build_setup(self):
         pass
