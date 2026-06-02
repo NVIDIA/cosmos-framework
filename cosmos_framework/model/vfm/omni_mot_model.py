@@ -2117,6 +2117,7 @@ class OmniMoTModel(ImaginaireModel):
         n_sample: int | None = None,
         has_negative_prompt: bool = False,
         num_steps: int = 35,
+        align_num_steps: int | None = None,
         shift: float = 5.0,
         sigma_max: float = 80.0,
         skip_text_tokens_for_cfg: bool = False,
@@ -2159,6 +2160,17 @@ class OmniMoTModel(ImaginaireModel):
             n_sample (int | None): Number of samples to generate; defaults to batch size.
             has_negative_prompt (bool): If True, use negative prompt for unconditional branch.
             num_steps (int): Number of sampling steps for the diffusion process.
+            align_num_steps (int | None): FSDP collective-sequence alignment
+                target. Under throughput-style inference each FSDP-shard rank holds
+                a different sample, and ``num_steps`` can diverge across ranks.
+                Since the model is sharded across the dp_shard group, every sampler
+                step issues a param all-gather over that group, so a step-count
+                mismatch deadlocks NCCL. The inference caller all_reduce(MAX)es the
+                local ``num_steps`` over the dp_shard group and passes the result
+                here; ranks with ``num_steps < align_num_steps`` run the deficit as
+                extra *discarded* sampler steps to keep every rank's all-gather
+                count identical. ``None`` (or a value ``<= num_steps``) disables
+                padding.
             shift (float): Time shift parameter for the sampler.
             sigma_max (float): Maximum sigma for the EDM sampler.
             skip_text_tokens_for_cfg (bool): If True, skip text tokens in unconditional branch.
@@ -2316,6 +2328,16 @@ class OmniMoTModel(ImaginaireModel):
                 ]
 
             return v_pred
+
+        # FSDP collective-sequence alignment (throughput-preset inference). The
+        # inference caller passes the cross-rank MAX of num_steps as
+        # ``align_num_steps``; ranks short of it pad their FSDP all-gather stream
+        # with ``_extra_num_steps`` discarded sampler steps below. See the
+        # ``align_num_steps`` arg docstring for the full rationale.
+        _extra_num_steps = 0
+        if align_num_steps is not None and align_num_steps > num_steps:
+            _extra_num_steps = align_num_steps - num_steps
+
         # Run sampler for all samples at once.
         sampler = sampler or self.sampler
         scheduler_type = self.config.rectified_flow_inference_config.scheduler_type
@@ -2332,6 +2354,23 @@ class OmniMoTModel(ImaginaireModel):
                 shift=shift,
                 seed=seed,
             )
+            if _extra_num_steps > 0:
+                # Dummy sampler call issuing (_extra_num_steps × per-step) FSDP
+                # all-gathers to pad this rank's collective stream. Output is
+                # discarded (``latents`` keeps the real result above); slow ranks
+                # have _extra_num_steps==0 and issue the same all-gather count via
+                # their longer real call.
+                log.debug(
+                    f"FSDP alignment: dummy UniPC run with {_extra_num_steps} extra steps "
+                    f"(local={num_steps}, aligned={align_num_steps})"
+                )
+                _ = sampler(
+                    velocity_fn,
+                    latents,
+                    num_steps=_extra_num_steps,
+                    shift=shift,
+                    seed=seed,
+                )
         else:
             # EDM Sampler
             chunk_sizes = [_x.shape[0] for _x in initial_noise]
@@ -2358,6 +2397,22 @@ class OmniMoTModel(ImaginaireModel):
                 sigma_min=0.002,
                 solver_option="2ab",
             )
+            if _extra_num_steps > 0:
+                # Pad the FSDP all-gather stream with ``_extra_num_steps`` direct
+                # ``x0_fn`` calls rather than a nested EDM sampler run, which would
+                # add an extra ``sample_clean`` forward (see edm.py) and hit a
+                # ``get_rev_ts(num_steps=0)`` divide-by-zero. Each x0_fn call routes
+                # through the same ``velocity_fn`` closure (one model forward,
+                # discarded). The dummy sigma is mapped into the RF domain
+                # ``sigma/(1+sigma)`` the real EDM loop uses; its exact value is
+                # irrelevant for alignment (collective shape, not sigma, drives it).
+                log.debug(
+                    f"FSDP alignment: padding {_extra_num_steps} dummy x0_fn calls "
+                    f"(local={num_steps}, aligned={align_num_steps})"
+                )
+                _dummy_sigma = latents.new_tensor(sigma_max / (1.0 + sigma_max))
+                for _ in range(_extra_num_steps):
+                    _ = x0_fn(latents, _dummy_sigma)
             latents = list(torch.split(latents, chunk_sizes, dim=0))
 
         # Split flattened latents back into vision, action, and sound

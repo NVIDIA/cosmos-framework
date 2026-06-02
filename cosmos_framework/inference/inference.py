@@ -1373,6 +1373,57 @@ class OmniInference(Inference):
                 )
             upsample_task = next(iter(distinct_upsample_tasks))
 
+            # FSDP collective-sequence alignment (throughput-style inference where
+            # ranks hold different samples). Each per-step model forward issues a
+            # param all-gather over the FSDP-shard (dp_shard) group, so if dp_shard
+            # peers disagree on ``num_steps`` that group's collective stream
+            # desyncs and deadlocks NCCL at the watchdog timeout (observed: rank0
+            # wedged at step 31/50 the instant its dp_shard peer finished 35).
+            #
+            # all_reduce(MAX) the local num_steps over the *dp_shard group* and
+            # pass it as ``align_num_steps``; ranks below the max pad with
+            # discarded dummy steps in generate_samples_from_batch. Scope = the
+            # dp_shard group (not world), because that keeps the reduction within a
+            # single modality: modality must already be homogeneous within any
+            # per-forward collective group (else the forward itself desyncs), and
+            # reasoner-only batches take an early return below and never reach this
+            # collective — a world reduction would deadlock against them. The
+            # per-step CP / CFGP collectives are also covered: cp/cfgp groups
+            # always sit inside one data-parallel replica (replica_id =
+            # rank // (cp*cfgp)), so when dp_shard and the replica block (cp*cfgp)
+            # nest, every cp/cfgp peer lands in a dp_shard group with the same MAX.
+            # The nesting precondition is asserted just below.
+            local_num_steps = _getattr(sample_args_list, "num_steps")
+            align_num_steps = local_num_steps
+            parallel_dims = getattr(self.model, "parallel_dims", None)
+            if (
+                parallel_dims is not None
+                and parallel_dims.dp_shard_mesh is not None
+                and torch.distributed.is_initialized()
+                and parallel_dims.dp_shard_mesh.size() > 1
+            ):
+                # Non-nesting CP/CFGP overlays (neither dp_shard nor the cp*cfgp
+                # replica block divides the other) let a cp/cfgp group straddle two
+                # dp_shard groups with different maxima, which a dp_shard-scoped
+                # reduction cannot align. Both presets nest (throughput: cp=cfgp=1;
+                # latency: single replica), so this only guards hand-built layouts.
+                replica_block = parallel_dims.cp * parallel_dims.cfgp
+                dp_shard_sz = parallel_dims.dp_shard
+                if replica_block > 1 and dp_shard_sz % replica_block != 0 and replica_block % dp_shard_sz != 0:
+                    raise NotImplementedError(
+                        "num_steps collective alignment requires dp_shard "
+                        f"({dp_shard_sz}) and cp*cfgp ({replica_block}) to nest "
+                        "(one must divide the other). Non-nesting CP/CFGP overlays "
+                        "with divergent per-sample num_steps are unsupported."
+                    )
+                _steps_t = torch.tensor(
+                    [local_num_steps], device=self.model.tensor_kwargs["device"], dtype=torch.int32
+                )
+                torch.distributed.all_reduce(
+                    _steps_t, op=torch.distributed.ReduceOp.MAX, group=parallel_dims.dp_shard_mesh.get_group()
+                )
+                align_num_steps = int(_steps_t.item())
+
             with self._get_timer(f"{self.model.__class__.__name__}.generate_samples_from_batch"):
                 outputs = self.model.generate_samples_from_batch(
                     data_batch,
@@ -1380,7 +1431,8 @@ class OmniInference(Inference):
                     guidance=guidance,
                     guidance_interval=_getattr(sample_args_list, "guidance_interval"),
                     seed=seed,
-                    num_steps=_getattr(sample_args_list, "num_steps"),
+                    num_steps=local_num_steps,
+                    align_num_steps=align_num_steps,
                     shift=_getattr(sample_args_list, "shift"),
                     sigma_max=_getattr(sample_args_list, "sigma_max"),
                     has_negative_prompt=neg_key in data_batch,
