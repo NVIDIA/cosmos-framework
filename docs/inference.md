@@ -16,6 +16,7 @@ ______________________________________________________________________
 - [Models](#models)
 - [Modes](#modes)
 - [Parallelism Arguments](#parallelism-arguments)
+- [CPU Offloading](#cpu-offloading-single-gpu)
 - [Sample Arguments](#sample-arguments)
   - [Text](#text)
   - [Vision (Image/Video)](#vision-imagevideo)
@@ -157,6 +158,39 @@ By default the model weights are sharded (FSDP) across **all** visible GPUs (`dp
 - `--dp-shard-size`: Number of ranks the model is sharded over (FSDP). Defaults to all ranks (`WORLD_SIZE`).
 - `--max-num-seqs`: Maximum number of samples batched together per replica.
 
+## CPU Offloading (single-GPU)
+
+On a single GPU, the largest model components can be offloaded to pinned CPU memory and staged back onto **one** reusable GPU "arena" only while they are in use, cutting peak GPU memory at a small latency cost. This lets larger resolutions / longer videos (and smaller-VRAM GPUs) fit. Enable it with `--offload-stages`, naming the components to offload (space-separated):
+
+```shell
+python -m cosmos_framework.scripts.inference \
+    --parallelism-preset=latency \
+    -i "inputs/omni/t2v.json" \
+    -o outputs/omni_nano \
+    --checkpoint-path Cosmos3-Nano \
+    --offload-stages reasoner generator vae \
+    --seed=0
+```
+
+| Stage       | Offloaded component                                          | On GPU only during           |
+| ----------- | ------------------------------------------------------------ | ---------------------------- |
+| `reasoner`  | Understanding (reasoner) tower of the MoT                    | the reasoner prefill         |
+| `generator` | Generation (diffusion) tower + diffusion encode/decode heads | the denoise loop             |
+| `vae`       | Vision tokenizer (Wan2.2 VAE)                                | conditioning encode + decode |
+
+(Guardrail offloading is controlled separately by [`--offload-guardrail-models`](#guardrails).)
+
+**How the reasoner/generator split works.** When `reasoner` and/or `generator` are offloaded, the understanding pathway is computed **once** as a prefill that caches the per-layer understanding K/V; the diffusion denoise loop then runs **generator-only**, reusing that cache, so the reasoner weights stay on CPU throughout denoising. The two towers (~half the transformer each) time-share one GPU arena sized to the larger tower, so peak transformer-weight residency is roughly halved. `vae` shares the same arena (staged around encode/decode).
+
+The split is numerically equivalent to the standard joint path — bit-identical without `torch.compile`, and within bf16 tolerance with it. Default off (no `--offload-stages`) leaves the joint path unchanged.
+
+**Measured** (Cosmos3-Nano, single GH200, `text2video` at 256p / 24 frames): peak GPU memory dropped from **34.0 GiB to 21.1 GiB** (≈13 GiB / ≈38% lower) with `--offload-stages reasoner generator`; adding `vae` lowers it further.
+
+Constraints:
+
+- **Single-GPU only** — incompatible with multi-GPU sharding / context / CFG parallelism (`dp_shard_size * cp_size * cfgp_size` must be `1`).
+- **Incompatible with CUDA graphs** (`--use-cuda-graphs`): staging rebinds weight tensors between calls, which breaks captured static addresses.
+
 ## Sample Arguments
 
 Sample arguments are read from multiple sources (in priority order):
@@ -247,6 +281,8 @@ Error: `torch.cuda.OutOfMemoryError: CUDA out of memory. Tried to allocate X MiB
 ```shell
 export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 ```
+
+On a single GPU, [CPU Offloading](#cpu-offloading-single-gpu) (`--offload-stages reasoner generator vae`) is the most effective lever — it offloads the transformer towers and VAE to CPU and stages them back only while in use.
 
 If that's not enough, see [FAQ § OOM during inference](./faq.md#q-i-get-torchcudaoutofmemoryerror-during-inference) for the full ladder (`--dp-shard-size`, `--device-memory-utilization`, `--offload-guardrail-models`).
 

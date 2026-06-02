@@ -48,7 +48,7 @@ from cosmos_framework.model.vfm.utils.data_and_condition import (
     build_dense_sound_schedule,
     unwrap_and_densify,
 )
-from cosmos_framework.model.vfm.utils.memory import MemoryState
+from cosmos_framework.model.vfm.utils.memory import MemoryState, ReasonerMemoryState
 from cosmos_framework.model.vfm.utils.safetensors_loader import load_language_model as load_language_model_safetensors
 from cosmos_framework.model.vfm.vlm.qwen3_vl.utils import tokenize_caption
 from cosmos_framework.model.vfm.tokenizers.interface import VideoTokenizerInterface
@@ -1784,6 +1784,7 @@ class OmniMoTModel(ImaginaireModel):
         sequence_plans: list[SequencePlan],
         gen_data_clean: GenerationDataClean,
         skip_text_tokens: bool = False,
+        memory: MemoryState | None = None,
     ) -> list[torch.Tensor]:
         """
         Compute velocity prediction for a single sampling step.
@@ -1906,7 +1907,13 @@ class OmniMoTModel(ImaginaireModel):
             fps_vision=gen_data_clean.fps_vision,
             fps_action=fps_action,
             fps_sound=fps_sound,
+            memory=memory,
         )
+
+        if memory is not None and memory.is_und_only():
+            # Reasoner prefill: the network populated the per-layer understanding K/V
+            # cache as a side effect (no generation output). Nothing to mask/return.
+            return []
 
         # --- Apply velocity masks ---
         # Zero out velocity for conditioned parts (they don't change during sampling)
@@ -2302,6 +2309,61 @@ class OmniMoTModel(ImaginaireModel):
             _dp_shard_group = None
             _align_device = None
 
+        # --- Reasoner/generator split (single-GPU CPU offloading). Default off. ---
+        # When enabled (set by the inference layer via ``_reasoner_generator_split``),
+        # the understanding ("reasoner") pathway is computed once as a prefill that
+        # caches the per-layer understanding K/V; the diffusion denoise loop then runs
+        # generator-only and reuses that cache. ``_offload_stage_fn`` (optional, also
+        # set by the inference layer) stages the reasoner/generator weight groups into
+        # the single GPU arena around the prefill / denoise; the model itself never
+        # imports the inference-side offload machinery.
+        _split_enabled = getattr(self, "_reasoner_generator_split", False)
+        _stage_fn = getattr(self, "_offload_stage_fn", None)
+        _mem_cond: ReasonerMemoryState | None = None
+        _mem_uncond: ReasonerMemoryState | None = None
+        if _split_enabled:
+            if self.parallel_dims is not None and (
+                self.parallel_dims.cp_enabled
+                or self.parallel_dims.cfgp_enabled
+                or (self.parallel_dims.dp_shard_mesh is not None and self.parallel_dims.dp_shard_mesh.size() > 1)
+            ):
+                raise NotImplementedError(
+                    "Reasoner/generator-split CPU offloading is single-GPU only "
+                    "(no context-, CFG-, or FSDP-shard parallelism)."
+                )
+            net_obj = net or self.net
+            num_layers = len(net_obj.language_model.model.layers)
+            # The reasoner prefill is independent of the diffusion timestep (the
+            # understanding pathway never reads the timestep embedding), so any value
+            # works; the noise values are likewise unused (vision encode is skipped).
+            prefill_timestep = torch.zeros((n_sample, 1))
+
+            def _prefill_reasoner(tokens: list[list[int]], skip_text_tokens: bool) -> ReasonerMemoryState:
+                mem = ReasonerMemoryState(num_layers)
+                mem.set_mode("prefill")
+                self._get_velocity(
+                    net=net,
+                    noise_x=initial_noise,
+                    timestep=prefill_timestep,
+                    text_tokens=tokens,
+                    sequence_plans=sequence_plans,
+                    gen_data_clean=gen_data_clean,
+                    skip_text_tokens=skip_text_tokens,
+                    memory=mem,
+                )
+                mem.set_mode("gen")
+                return mem
+
+            if _stage_fn is not None:
+                _stage_fn("reasoner")
+            _mem_cond = _prefill_reasoner(cond_tokens, skip_text_tokens=False)
+            if guidance != 1.0:
+                _mem_uncond = _prefill_reasoner(uncond_tokens, skip_text_tokens=skip_text_tokens_for_cfg)
+
+            # Stage the generator for the whole denoise loop (reasoner now offloaded).
+            if _stage_fn is not None:
+                _stage_fn("generator")
+
         # Create a velocity function for a single sample (for use with self.sampler).
 
         def velocity_fn(noise_x: list[torch.Tensor], timestep: torch.Tensor) -> list[torch.Tensor]:
@@ -2316,6 +2378,12 @@ class OmniMoTModel(ImaginaireModel):
             timestep = timestep.repeat(len(noise_x), 1)
 
             def _single_velocity_fn(tokens: list[list[int]], skip_text_tokens: bool):
+                # In the reasoner/generator split, route each CFG branch to its own
+                # prefilled understanding K/V cache (cond vs uncond). Identity check on
+                # the token-list object distinguishes the branches.
+                _mem = None
+                if _split_enabled:
+                    _mem = _mem_cond if tokens is cond_tokens else _mem_uncond
                 return self._get_velocity(
                     net=net,
                     noise_x=noise_x,
@@ -2324,6 +2392,7 @@ class OmniMoTModel(ImaginaireModel):
                     sequence_plans=sequence_plans,
                     gen_data_clean=gen_data_clean,
                     skip_text_tokens=skip_text_tokens,
+                    memory=_mem,
                 )
 
             # Local CFG decision for THIS rank, honoring guidance_interval.
@@ -2717,6 +2786,11 @@ class OmniMoTModel(ImaginaireModel):
         self._normalize_video_databatch_inplace(data_batch)
         self._augment_image_dim_inplace(data_batch)  # converts each image tensor to (1, C, 1, H, W)
         raw_state_vision = data_batch[self.input_image_key if is_image_batch else self.input_video_key]
+        # Stage the VAE onto the GPU arena for conditioning encode when it is offloaded
+        # (no-op otherwise, and skipped entirely when there is nothing to encode, e.g. t2v).
+        _stage_fn = getattr(self, "_offload_stage_fn", None)
+        if _stage_fn is not None and len(raw_state_vision) > 0:
+            _stage_fn("vae")
         x0_tokens_vision = [
             self.encode(raw_state_vision_i).contiguous().float() for raw_state_vision_i in raw_state_vision
         ]
@@ -3405,6 +3479,10 @@ class OmniMoTModel(ImaginaireModel):
             fps_sound=fps_sound,
             memory=memory,
         )
+        if memory is not None and memory.is_und_only():
+            # Reasoner prefill: the network only populated the understanding K/V cache
+            # (side effect on ``memory``) and returned no generation predictions.
+            return dict()
         output_dict = dict()
         output_dict["preds_vision"] = out_net["preds_vision"]
         if self.config.action_gen and "preds_action" in out_net:
