@@ -2277,6 +2277,31 @@ class OmniMoTModel(ImaginaireModel):
 
         assert n_sample == len(seed), f"Number of samples {n_sample} must match number of seeds {len(seed)}"
 
+        # FSDP collective-sequence alignment (throughput-style inference). Each
+        # FSDP-shard rank holds a different sample, and ``velocity_fn`` issues 1
+        # model forward when this rank skips CFG (guidance == 1.0, or a timestep
+        # outside guidance_interval) but 2 forwards otherwise. Mixed-modality
+        # batches put e.g. action samples (guidance=1.0 -> 1 forward) and vision
+        # samples (guidance>1 -> 2 forwards) on different ranks of the same
+        # dp_shard group, so the per-step param all-gather count diverges and NCCL
+        # deadlocks. The per-call CFG decision is MAX-reduced over the dp_shard
+        # group inside ``velocity_fn`` below so every rank runs the same number of
+        # forwards. Scoped to dp_shard for the same reason as the num_steps
+        # alignment (see inference.py): cp/cfgp peers share a sample -> same
+        # guidance -> same decision, and the caller's nesting guard rejects layouts
+        # where that would not hold.
+        if (
+            self.parallel_dims is not None
+            and self.parallel_dims.dp_shard_mesh is not None
+            and torch.distributed.is_initialized()
+            and self.parallel_dims.dp_shard_mesh.size() > 1
+        ):
+            _dp_shard_group = self.parallel_dims.dp_shard_mesh.get_group()
+            _align_device = self.tensor_kwargs["device"]
+        else:
+            _dp_shard_group = None
+            _align_device = None
+
         # Create a velocity function for a single sample (for use with self.sampler).
 
         def velocity_fn(noise_x: list[torch.Tensor], timestep: torch.Tensor) -> list[torch.Tensor]:
@@ -2301,13 +2326,25 @@ class OmniMoTModel(ImaginaireModel):
                     skip_text_tokens=skip_text_tokens,
                 )
 
-            needs_cfg = guidance != 1.0
-            # _local_needs_cfg = guidance != 1.0
-            if needs_cfg and guidance_interval is not None:
+            # Local CFG decision for THIS rank, honoring guidance_interval.
+            _local_needs_cfg = guidance != 1.0
+            if _local_needs_cfg and guidance_interval is not None:
                 assert len(guidance_interval) == 2, f"guidance_interval must be [lo, hi], got {guidance_interval}"
                 t_lo, t_hi = guidance_interval
+                _local_needs_cfg = t_lo < timestep[0].item() < t_hi
 
-            if not needs_cfg:
+            # FSDP alignment: if ANY rank in the shard group needs CFG this call,
+            # every rank computes both forwards (cheap 1-element all_reduce per
+            # velocity_fn call). Forcing CFG always-on globally would instead
+            # silently ignore the per-timestep guidance_interval gate.
+            if _dp_shard_group is not None:
+                _cfg_t = torch.tensor([1 if _local_needs_cfg else 0], device=_align_device, dtype=torch.int32)
+                torch.distributed.all_reduce(_cfg_t, op=torch.distributed.ReduceOp.MAX, group=_dp_shard_group)
+                _any_needs_cfg = bool(_cfg_t.item())
+            else:
+                _any_needs_cfg = _local_needs_cfg
+
+            if not _any_needs_cfg:
                 return _single_velocity_fn(cond_tokens, skip_text_tokens=False)
 
             # Both forwards happen — needed for FSDP collective alignment
@@ -2318,6 +2355,13 @@ class OmniMoTModel(ImaginaireModel):
                 skip_text_tokens_for_cfg=skip_text_tokens_for_cfg,
                 single_velocity_fn=_single_velocity_fn,
             )
+
+            if not _local_needs_cfg:
+                # This rank didn't actually need CFG (guidance==1.0, or sigma
+                # outside guidance_interval). Return cond_v directly so the output
+                # is bit-identical to the no-CFG path; the uncond_v forward ran
+                # only to keep the FSDP all-gather sequence aligned with peers.
+                return cond_v
 
             v_pred = [u_i + guidance * (c_i - u_i) for c_i, u_i in zip(cond_v, uncond_v)]
 
