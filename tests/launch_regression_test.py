@@ -464,8 +464,12 @@ def _assert_spec_matches_goldens(spec_key: str, tmp_path: Path, paths: dict[str,
     spec = _build_specs(paths)[spec_key]
 
     log_path = _run_torchrun(spec, tmp_path)
-    loss, grad_norm = _parse_series(log_path.read_text(errors="replace"), spec.loss_re)
-    assert len(loss) == 10, f"expected 10 iterations, parsed {len(loss)} (loss={loss})"
+    log_text = log_path.read_text(errors="replace")
+    loss, grad_norm = _parse_series(log_text, spec.loss_re)
+    # The run log also streamed live under ``pytest -s``; include its tail in any
+    # failure message so the run detail is attached to the failure report too.
+    run_detail = f"\n--- {spec.key} run log (last 4000 chars) ---\n{log_text[-4000:]}"
+    assert len(loss) == 10, f"expected 10 iterations, parsed {len(loss)} (loss={loss}){run_detail}"
 
     # Refresh path: print captured values for manual copy into ``_GOLDENS``.
     if os.environ.get("COSMOS_REGRESSION_UPDATE_GOLDENS") == "1":
@@ -495,14 +499,22 @@ def _assert_spec_matches_goldens(spec_key: str, tmp_path: Path, paths: dict[str,
 
     assert loss[:n] == pytest.approx(
         expected["loss"][:n], rel=_DEFAULT_RTOL, abs=_DEFAULT_ATOL
-    ), f"{spec.key} ({arch}): rank-0 loss[:{n}] does not match goldens"
+    ), (
+        f"{spec.key} ({arch}): rank-0 loss[:{n}] does not match goldens\n"
+        f"  got     : {loss[:n]}\n"
+        f"  expected: {expected['loss'][:n]}{run_detail}"
+    )
     # ``grad_norm`` is optional: ``None`` skips the check when the FSDP
     # global-norm all-reduce isn't bit-exact on this arch.
     if expected["grad_norm"] is None:
         return
     assert grad_norm[:n] == pytest.approx(
         expected["grad_norm"][:n], rel=_DEFAULT_RTOL, abs=_DEFAULT_ATOL
-    ), f"{spec.key} ({arch}): global grad-norm[:{n}] does not match goldens"
+    ), (
+        f"{spec.key} ({arch}): global grad-norm[:{n}] does not match goldens\n"
+        f"  got     : {grad_norm[:n]}\n"
+        f"  expected: {expected['grad_norm'][:n]}{run_detail}"
+    )
 
 
 # Define only the test function matching MAX_GPUS — the conftest rejects

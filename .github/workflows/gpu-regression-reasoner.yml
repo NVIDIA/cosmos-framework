@@ -1,0 +1,58 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: OpenMDW-1.1
+
+# Reasoner (VLM) SFT loss regression on a self-hosted 8×H200 runner (4-GPU
+# subset). Runs the single ``llava_ov_datapacker`` spec of
+# tests/launch_regression_test.py.
+#
+# Requires:
+#   * a self-hosted runner labelled [self-hosted, gpu, h200] with >=4 GPUs,
+#     NVIDIA drivers, and `uv` on PATH;
+#   * an `HF_TOKEN` repository secret (gated dataset/model downloads, incl. the
+#     streamed LLaVA-OneVision-Data dataset).
+#
+# The h100 goldens are reused on H200 (see _detect_arch).
+name: GPU Regression (Reasoner)
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: gpu-regression-reasoner-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  reasoner-regression:
+    runs-on: [self-hosted, gpu, h200]
+    timeout-minutes: 60
+    env:
+      HF_TOKEN: ${{ secrets.HF_TOKEN }}
+      HF_HUB_DISABLE_XET: "1"
+      # Select the 4-GPU regression test variant (uses 4 of the 8 GPUs).
+      TEST_MAX_GPUS: "4"
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: astral-sh/setup-uv@v7
+
+      - name: Sync environment (cu128-train)
+        run: uv sync --all-extras --group=cu128-train
+
+      # Reasoner (llava_ov_datapacker) iter-0 loss vs the h100 goldens. -s streams
+      # the live log.
+      - name: Reasoner regression (llava_ov_datapacker, 4-GPU subset)
+        run: |
+          export LD_LIBRARY_PATH=
+          uv run --all-extras --group=cu128-train python -m pytest -v -s \
+            tests/launch_regression_test.py -k llava_ov_datapacker \
+            --num-gpus=4 --levels=2 -o addopts=
+
+      # The h100_inputs fixture removes its DCP stage on teardown; clear the
+      # pytest tmp dirs too (logs + any run output). The HF cache is kept.
+      - name: Clean up run outputs
+        if: always()
+        run: |
+          rm -rf "${TMPDIR:-/tmp}"/pytest-of-* /tmp/pytest-of-* || true
