@@ -24,6 +24,7 @@ EMBODIMENT_TO_DOMAIN_ID: dict[str, int] = {
 EMBODIMENT_TO_RAW_ACTION_DIM: dict[str, int] = {
     "av": 9,
     "camera_pose": 9,
+    "hand_pose": 57,
     "pusht": 2,
     "umi": 10,
     "bridge_orig_lerobot": 10,
