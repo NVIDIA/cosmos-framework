@@ -93,24 +93,36 @@ REPO_ROOT = THIS_DIR.parent
 # below skips the GB200 arch instead of re-running it.
 
 
-def _h100_paths_from_env() -> dict[str, str]:
-    """Resolve H100 input paths from env vars (set by tests/_stage_h100_inputs.sh).
+def _hf_download(args: list[str]) -> str:
+    """``uvx hf download <args> --quiet`` -> the local path it prints (from the HF cache)."""
+    result = subprocess.run(
+        ["uvx", "hf@latest", "download", *args, "--quiet"],
+        cwd=str(REPO_ROOT),
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        pytest.fail(f"hf download failed for {args} (exit {result.returncode}):\n{result.stdout}\n{result.stderr}")
+    lines = [ln.strip() for ln in result.stdout.splitlines() if ln.strip()]
+    if not lines:
+        pytest.fail(f"hf download for {args} printed no path:\n{result.stdout}\n{result.stderr}")
+    return lines[-1]
 
-    All four env vars are required because the SFT TOMLs interpolate
-    ``DATASET_PATH`` / ``WAN_VAE_PATH`` / ``BASE_CHECKPOINT_PATH`` at load time
-    and the VLM spec passes ``MODEL_PATH`` as a Hydra backbone override.
-    """
-    missing = [
-        var
-        for var in ("DATASET_PATH", "WAN_VAE_PATH", "BASE_CHECKPOINT_PATH", "MODEL_PATH")
-        if not os.environ.get(var)
-    ]
-    if missing:
-        pytest.skip(
-            f"H100 regression needs env vars: {missing}. "
-            "Run tests/_stage_h100_inputs.sh and `source $STAGE_DIR/env.sh` first."
-        )
-    return {"vlm_model_path": os.environ["MODEL_PATH"]}
+
+def _convert_nano_dcp(dest: Path) -> None:
+    """Convert the Cosmos3-Nano checkpoint to DCP at ``dest`` (Step 2 of docs/training.md)."""
+    env = os.environ.copy()
+    env["PYTHONPATH"] = f".:{env.get('PYTHONPATH', '')}"
+    result = subprocess.run(
+        [
+            sys.executable, "-m", "cosmos_framework.scripts.convert_model_to_dcp",
+            "-o", str(dest), "--checkpoint-path", "Cosmos3-Nano",
+        ],
+        cwd=str(REPO_ROOT),
+        env=env,
+    )
+    if result.returncode != 0:
+        pytest.fail(f"convert_model_to_dcp (Cosmos3-Nano) failed with exit code {result.returncode}")
 
 
 def _detect_arch() -> str:
@@ -122,17 +134,17 @@ def _detect_arch() -> str:
     name = torch.cuda.get_device_name(0).upper()
     if "GB200" in name:
         return "gb200"
-    if "H100" in name:
+    # H200 shares the Hopper kernels with H100 and is treated identically here:
+    # both map to the ``h100`` goldens key (the GitHub GPU CI runs on 8×H200).
+    if "H100" in name or "H200" in name:
         return "h100"
     return "unknown"
 
 
-def _resolve_paths(arch: str) -> dict[str, str]:
-    if arch == "h100":
-        return _h100_paths_from_env()
-    if arch == "gb200":
-        pytest.skip("gb200 inputs not in OSS layout; goldens kept for historical reference only.")
-    pytest.skip(f"no regression goldens for GPU arch {arch!r}; only h100 supported")
+# Pinned revisions mirror tests/_stage_h100_inputs.sh so prepared inputs match
+# the captured h100 goldens.
+_BRIDGE_REVISION = "46468e12ac0dd36901e9e3240d4fc7620942b5d7"
+_QWEN_VL_REVISION = "0c351dd01ed87e9c1b53cbc748cba10e6187ff3b"
 
 
 # Tolerances for ``pytest.approx``. The launch passes ``--deterministic`` and
@@ -336,20 +348,30 @@ def _run_torchrun(spec: LaunchSpec, run_dir: Path) -> Path:
     env["IMAGINAIRE_OUTPUT_ROOT"] = str(run_dir / "output")
     env.update(spec.extra_env)
 
+    # Tee: stream the torchrun output live to stdout (so CI shows training
+    # progress under ``pytest -s``) while capturing it into the log file.
     with log_file.open("w") as fp:
-        result = subprocess.run(
+        proc = subprocess.Popen(
             cmd,
             env=env,
             cwd=str(REPO_ROOT),
-            stdout=fp,
+            stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
+            text=True,
+            bufsize=1,
         )
-    if result.returncode != 0:
+        assert proc.stdout is not None
+        for line in proc.stdout:
+            sys.stdout.write(line)
+            sys.stdout.flush()
+            fp.write(line)
+        returncode = proc.wait()
+    if returncode != 0:
         # Tolerate harmless PyGIL teardown warnings if training did complete.
         text = log_file.read_text(errors="replace")
         if "Done with training" not in text:
             pytest.fail(
-                f"{spec.key}: torchrun failed with exit code {result.returncode} "
+                f"{spec.key}: torchrun failed with exit code {returncode} "
                 "and log does not contain 'Done with training'.\n"
                 f"Log tail:\n{text[-2000:]}"
             )
@@ -372,13 +394,68 @@ def _require_4_gpus() -> None:
         pytest.skip(f"requires 4 visible CUDA devices, found {torch.cuda.device_count()}")
 
 
+@pytest.fixture(scope="module")
+def h100_inputs(tmp_path_factory: pytest.TempPathFactory):
+    """Provide the regression input paths, preparing any not already set in env.
+
+    Mirrors the download/convert steps of ``tests/_stage_h100_inputs.sh`` (it
+    does NOT set up the environment -- ``uv sync`` and the ``transformers``
+    pin still belong to that script / the caller). Honors pre-set env vars (so
+    ``source env.sh`` still works); anything prepared here goes under a temp
+    stage dir that is removed on teardown. The four vars are exported because
+    the SFT TOMLs interpolate ``DATASET_PATH`` / ``WAN_VAE_PATH`` /
+    ``BASE_CHECKPOINT_PATH`` at load time and the VLM spec passes ``MODEL_PATH``
+    as a Hydra backbone override.
+    """
+    arch = _detect_arch()
+    if arch == "gb200":
+        pytest.skip("gb200 inputs not in OSS layout; goldens kept for historical reference only.")
+    if arch != "h100":
+        pytest.skip(f"no regression goldens for GPU arch {arch!r}; only h100 supported")
+    if shutil.which("uvx") is None:
+        pytest.skip("uvx not on PATH -- required to prepare regression inputs")
+
+    stage = tmp_path_factory.mktemp("h100_stage")
+    set_vars: list[str] = []
+
+    def _ensure(var: str, value_fn) -> None:
+        if not os.environ.get(var):
+            os.environ[var] = str(value_fn())
+            set_vars.append(var)
+
+    _ensure(
+        "DATASET_PATH",
+        lambda: Path(
+            _hf_download(
+                ["--repo-type", "dataset", "nvidia/bridge-v2-subset-synthetic-captions",
+                 "--revision", _BRIDGE_REVISION]
+            )
+        ) / "sft_dataset_bridge",
+    )
+    _ensure("WAN_VAE_PATH", lambda: _hf_download(["Wan-AI/Wan2.2-TI2V-5B", "Wan2.2_VAE.pth"]))
+    _ensure("MODEL_PATH", lambda: _hf_download(["Qwen/Qwen3-VL-8B-Instruct", "--revision", _QWEN_VL_REVISION]))
+
+    def _make_dcp() -> Path:
+        dest = stage / "Cosmos3-Nano-DCP"
+        _convert_nano_dcp(dest)
+        return dest
+
+    _ensure("BASE_CHECKPOINT_PATH", _make_dcp)
+
+    try:
+        yield {"vlm_model_path": os.environ["MODEL_PATH"]}
+    finally:
+        for var in set_vars:
+            os.environ.pop(var, None)
+        shutil.rmtree(stage, ignore_errors=True)
+
+
 # --- tests -------------------------------------------------------------------
 
 
-def _assert_spec_matches_goldens(spec_key: str, tmp_path: Path) -> None:
+def _assert_spec_matches_goldens(spec_key: str, tmp_path: Path, paths: dict[str, str]) -> None:
     """Re-run ``spec``'s torchrun command and check loss / grad-norm against goldens."""
     arch = _detect_arch()
-    paths = _resolve_paths(arch)
     spec = _build_specs(paths)[spec_key]
 
     log_path = _run_torchrun(spec, tmp_path)
@@ -430,9 +507,9 @@ if MAX_GPUS == 4:
     @pytest.mark.level(2)
     @pytest.mark.gpus(4)
     @pytest.mark.parametrize("spec_key", _SPEC_KEYS, ids=lambda k: k.removeprefix("launch_"))
-    def test_launch_regression(spec_key: str, tmp_path: Path) -> None:
+    def test_launch_regression(spec_key: str, tmp_path: Path, h100_inputs: dict[str, str]) -> None:
         """Re-run ``spec``'s torchrun command and check loss / grad-norm against goldens."""
-        _assert_spec_matches_goldens(spec_key, tmp_path)
+        _assert_spec_matches_goldens(spec_key, tmp_path, h100_inputs)
 
 
 if MAX_GPUS == 8:
@@ -443,9 +520,9 @@ if MAX_GPUS == 8:
     @pytest.mark.parametrize(
         "spec_key", _SPEC_KEYS_8GPU, ids=lambda k: k.removeprefix("launch_")
     )
-    def test_launch_regression_8gpu(spec_key: str, tmp_path: Path) -> None:
+    def test_launch_regression_8gpu(spec_key: str, tmp_path: Path, h100_inputs: dict[str, str]) -> None:
         """8-GPU variant for ``vision_sft_super`` (dp_shard=4 × cp=2)."""
-        _assert_spec_matches_goldens(spec_key, tmp_path)
+        _assert_spec_matches_goldens(spec_key, tmp_path, h100_inputs)
 
 
 # Goldens keyed by GPU arch then ``LaunchSpec.key``. Refresh with
@@ -463,11 +540,12 @@ _GOLDENS: dict[str, dict[str, dict[str, list[float] | None]]] = {
             ],
         },
     },
-    # Captured 2026-05-27 on a 4 × NVIDIA H100 80GB HBM3 node with seed 42.
-    # Inputs come from ``tests/_stage_h100_inputs.sh``; VLM model is
-    # ``Qwen/Qwen3-VL-8B-Instruct``.
+    # Recaptured 2026-06-03 on a 4 × NVIDIA H100 80GB HBM3 node with seed 42 and
+    # transformers==4.57.6. VLM model is ``Qwen/Qwen3-VL-8B-Instruct``; inputs are
+    # prepared in-test by the ``h100_inputs`` fixture (or via
+    # ``tests/_stage_h100_inputs.sh`` if its env vars are pre-set).
     "h100": {
-        # Recaptured 2026-05-27 with deterministic mode off (both ``--deterministic``
+        # Recaptured 2026-06-03 with deterministic mode off (both ``--deterministic``
         # and ``model.config.deterministic`` are False — the Hopper FMHA
         # backward refuses to run under PyTorch deterministic mode on H100, see
         # ``LaunchSpec.deterministic`` and the spec's hydra override). The full
@@ -475,16 +553,16 @@ _GOLDENS: dict[str, dict[str, dict[str, list[float] | None]]] = {
         # loss is asserted; iter 1+ drifts because the backward isn't bit-exact,
         # and even iter-0 grad-norm drifts (so grad_norm is skipped via ``None``).
         "llava_ov_datapacker": {
-            "loss": [0.88798, 1.01436, 1.06162, 1.04558, 1.00519, 0.91837, 1.10527, 1.03337, 0.9421, 0.69604],
+            "loss": [0.88798, 1.01583, 1.06096, 1.05566, 1.00613, 0.91551, 1.10534, 1.03794, 0.94166, 0.69613],
             "grad_norm": None,
         },
-        # Recaptured 2026-05-27 after the TOML-config rewrite shifted some
+        # Recaptured 2026-06-03 after the TOML-config rewrite shifted some
         # defaults. Runs under ``--deterministic`` so loss reproduces bit-exact
         # across all 10 iters, but grad_norm is non-det because
         # ``compile.enabled=true`` makes the all-rank reduction not bit-exact
         # on H100.
         "vision_sft_nano": {
-            "loss": [0.2337, 0.2233, 0.2075, 0.2374, 0.2228, 0.2778, 0.2907, 0.223, 0.2125, 0.2699],
+            "loss": [0.2272, 0.2181, 0.2028, 0.2306, 0.218, 0.2734, 0.2865, 0.2162, 0.2055, 0.2643],
             "grad_norm": None,
         },
         "vision_sft_super": {
