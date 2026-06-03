@@ -1235,7 +1235,16 @@ class OmniInference(Inference):
         # --- Phase 4: pad with dummy batches so every replica calls
         #     generate_batch the same number of times (prevents collective
         #     deadlocks in context-parallel / CFG-parallel communication).
-        dummy_sa = sample_args_list[0].model_copy(update={"output_dir": None, "name": "padding"})
+        # Minimal-cost padding sample: the dummy batch only exists to keep the
+        # generate_batch call count aligned across replicas, and its output is
+        # discarded (output_dir=None). Force num_steps=1 / guidance=1.0 so it never
+        # raises the per-iteration align_num_steps MAX (which would make the dummy
+        # *and* real samples on peer ranks pad up). The per-step alignment still
+        # pads this dummy up to MAX(real samples), so collective alignment holds;
+        # we just stop inflating that MAX with the (arbitrary) global sample[0].
+        dummy_sa = sample_args_list[0].model_copy(
+            update={"output_dir": None, "name": "padding", "num_steps": 1, "guidance": 1.0}
+        )
         dummy_data = dataset[0][1]
         while batches_yielded < global_max_batches:
             yield [dummy_sa], dummy_data
