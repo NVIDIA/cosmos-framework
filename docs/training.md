@@ -41,7 +41,7 @@ Select one of the following recipes:
 
 <details open><summary><b>Vision SFT (Cosmos3-Nano)</b></summary>
 
-T2V/I2V/V2V SFT on [nvidia/bridge-v2-subset-synthetic-captions](https://huggingface.co/datasets/nvidia/bridge-v2-subset-synthetic-captions/tree/main). `$DATASET_PATH` should be the directory containing `train/video_dataset_file.jsonl`.
+T2V/I2V/V2V SFT on [nvidia/BridgeData2-Subset-Synthetic-Captions](https://huggingface.co/datasets/nvidia/BridgeData2-Subset-Synthetic-Captions/tree/main). `$DATASET_PATH` should be the directory containing `train/video_dataset_file.jsonl`. Each clip carries a structured-JSON caption (`caption_json`) — the model's native prompt format — which the SFT loader trains on by default (the dense narrative is kept as a backup), so training stays aligned with [Inference](./dataset_jsonl.md#inference); see [JSONL Dataset → Format](./dataset_jsonl.md#format).
 
 Launch shell: `examples/launch_sft_vision_nano.sh`
 
@@ -49,9 +49,9 @@ Launch shell: `examples/launch_sft_vision_nano.sh`
 BASE_CHECKPOINT_NAME=Cosmos3-Nano
 
 # Defaults match the launcher (see Step 3 → Option A to override).
-uvx hf@latest download --repo-type dataset nvidia/bridge-v2-subset-synthetic-captions \
-    --revision 46468e12ac0dd36901e9e3240d4fc7620942b5d7 \
-    --local-dir examples/data/bridge-v2-subset-synthetic-captions --quiet
+uvx hf@latest download --repo-type dataset nvidia/BridgeData2-Subset-Synthetic-Captions \
+    --revision 40d018ac1c1a2a4b9734f17fdb21f3d933c49a01 \
+    --local-dir examples/data/BridgeData2-Subset-Synthetic-Captions --quiet
 uvx hf@latest download Wan-AI/Wan2.2-TI2V-5B Wan2.2_VAE.pth \
     --local-dir examples/checkpoints/wan22_vae --quiet
 ```
@@ -68,9 +68,9 @@ Launch shell: `examples/launch_sft_vision_super.sh`
 BASE_CHECKPOINT_NAME=Cosmos3-Super
 
 # Defaults match the launcher (see Step 3 → Option A to override).
-uvx hf@latest download --repo-type dataset nvidia/bridge-v2-subset-synthetic-captions \
-    --revision 46468e12ac0dd36901e9e3240d4fc7620942b5d7 \
-    --local-dir examples/data/bridge-v2-subset-synthetic-captions --quiet
+uvx hf@latest download --repo-type dataset nvidia/BridgeData2-Subset-Synthetic-Captions \
+    --revision 40d018ac1c1a2a4b9734f17fdb21f3d933c49a01 \
+    --local-dir examples/data/BridgeData2-Subset-Synthetic-Captions --quiet
 uvx hf@latest download Wan-AI/Wan2.2-TI2V-5B Wan2.2_VAE.pth \
     --local-dir examples/checkpoints/wan22_vae --quiet
 ```
@@ -154,12 +154,12 @@ bash examples/launch_sft_vision_nano.sh
 
 Each launcher's default paths come from the `DATASET_PATH` + `BASE_CHECKPOINT_PATH` defaults declared at the top of its `.sh` (each uses `: "${VAR:=…}"` so any value you `export` in the shell before launching wins over the default):
 
-| Launch shell                          | Post-Training Task | Default $DATASET_PATH (under examples/data/)             | Default $BASE_CHECKPOINT_PATH (under examples/checkpoints/) |
-| ------------------------------------- | ------------------ | -------------------------------------------------------- | ----------------------------------------------------------- |
-| `launch_sft_vision_nano.sh`           | Generator SFT      | `bridge-v2-subset-synthetic-captions/sft_dataset_bridge` | `Cosmos3-Nano`                                              |
-| `launch_sft_vision_super.sh`          | Generator SFT      | `bridge-v2-subset-synthetic-captions/sft_dataset_bridge` | `Cosmos3-Super`                                             |
-| `launch_sft_llava_ov.sh`              | Reasoner SFT       | (none; dataset streams from HF Hub)                      | (none; backbone fetched at startup)                         |
-| `launch_sft_videophy2_nano.sh`        | Reasoner SFT       | (none; set `VIDEOPHYSICS_ROOT` env)                      | (none; set `VLM_SAFETENSORS_PATH` env)                      |
+| Launch shell                   | Post-Training Task | Default $DATASET_PATH (under examples/data/)               | Default $BASE_CHECKPOINT_PATH (under examples/checkpoints/) |
+| ------------------------------ | ------------------ | ---------------------------------------------------------- | ----------------------------------------------------------- |
+| `launch_sft_vision_nano.sh`    | Generator SFT      | `BridgeData2-Subset-Synthetic-Captions/sft_dataset_bridge` | `Cosmos3-Nano`                                              |
+| `launch_sft_vision_super.sh`   | Generator SFT      | `BridgeData2-Subset-Synthetic-Captions/sft_dataset_bridge` | `Cosmos3-Super`                                             |
+| `launch_sft_llava_ov.sh`       | Reasoner SFT       | (none; dataset streams from HF Hub)                        | (none; backbone fetched at startup)                         |
+| `launch_sft_videophy2_nano.sh` | Reasoner SFT       | (none; set `VIDEOPHYSICS_ROOT` env)                        | (none; set `VLM_SAFETENSORS_PATH` env)                      |
 
 `WAN_VAE_PATH` defaults to `examples/checkpoints/wan22_vae/Wan2.2_VAE.pth` for every non-reasoner recipe.
 
@@ -178,7 +178,7 @@ If you'd rather put data or checkpoints on a different filesystem (e.g. a faster
 
 ```shell
 # Example: data on /scratch, base DCP on /nfs/ckpts.
-export DATASET_PATH=/scratch/bridge-v2-subset-synthetic-captions/sft_dataset_bridge
+export DATASET_PATH=/scratch/BridgeData2-Subset-Synthetic-Captions/sft_dataset_bridge
 export BASE_CHECKPOINT_PATH=/nfs/ckpts/Cosmos3-Nano
 export WAN_VAE_PATH=/nfs/ckpts/wan22_vae/Wan2.2_VAE.pth
 bash examples/launch_sft_vision_nano.sh
@@ -207,7 +207,7 @@ Run from the repo root (the directory containing `pyproject.toml` and `examples/
 TOML_FILE="examples/toml/sft_config/vision_sft_nano.toml"
 
 # Match the launcher's defaults — or substitute your own paths.
-export DATASET_PATH="$PWD/examples/data/bridge-v2-subset-synthetic-captions/sft_dataset_bridge"
+export DATASET_PATH="$PWD/examples/data/BridgeData2-Subset-Synthetic-Captions/sft_dataset_bridge"
 export BASE_CHECKPOINT_PATH="$PWD/examples/checkpoints/Cosmos3-Nano"
 export WAN_VAE_PATH="$PWD/examples/checkpoints/wan22_vae/Wan2.2_VAE.pth"
 

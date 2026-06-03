@@ -327,13 +327,13 @@ _SFT_GET_ENV = {
         base_checkpoint_name="Cosmos3-Nano",
         config_file="cosmos3/configs/experiment/vision_sft_nano.yaml",
         job_name="vision_sft_nano",
-        dataset_name="nvidia/bridge-v2-subset-synthetic-captions",
+        dataset_name="nvidia/BridgeData2-Subset-Synthetic-Captions",
     ),
     "vision_super": SftGetEnv(
         base_checkpoint_name="Cosmos3-Super",
         config_file="cosmos3/configs/experiment/vision_sft_super.yaml",
         job_name="vision_sft_super",
-        dataset_name="nvidia/bridge-v2-subset-synthetic-captions",
+        dataset_name="nvidia/BridgeData2-Subset-Synthetic-Captions",
     ),
 }
 _DEFAULT_SFT_NAME = "vision"

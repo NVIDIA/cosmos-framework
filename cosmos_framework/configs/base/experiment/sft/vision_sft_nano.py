@@ -34,15 +34,14 @@ import copy
 
 from hydra.core.config_store import ConfigStore
 
-from cosmos_framework.utils.lazy_config import LazyCall as L
-from cosmos_framework.utils.lazy_config import LazyDict
-
 from cosmos_framework.configs.base.experiment.sft.models.nano_model_config import NANO_MODEL_CONFIG
 from cosmos_framework.data.vfm.joint_dataloader import (
     PackingDataLoader,
     RankPartitionedDataLoader,
 )
 from cosmos_framework.data.vfm.local_datasets.sft_dataset import get_sft_dataset
+from cosmos_framework.utils.lazy_config import LazyCall as L
+from cosmos_framework.utils.lazy_config import LazyDict
 
 cs = ConfigStore.instance()
 
@@ -237,6 +236,10 @@ vision_sft_nano = LazyDict(
                         dataset=L(get_sft_dataset)(
                             append_duration_fps_timestamps=True,
                             append_resolution_info=True,
+                            # Structured-JSON captions are long; raise the token budget so
+                            # the loader does not truncate them (see sft_dataset.py
+                            # _MAX_NUM_TOKENS). 2048 covers the example set (measured max ~1790).
+                            max_num_tokens=2048,
                             caption_suffix="",
                             cfg_dropout_keep_metadata=False,
                             cfg_dropout_rate=0.1,
