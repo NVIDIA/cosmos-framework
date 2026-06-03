@@ -31,6 +31,7 @@ not collected.
 import os
 import re
 import shutil
+import socket
 import subprocess
 import sys
 from pathlib import Path
@@ -50,8 +51,13 @@ _WAN_VAE = REPO_ROOT / "examples/checkpoints/wan22_vae/Wan2.2_VAE.pth"
 _DCP_DIR = REPO_ROOT / "examples/checkpoints/Cosmos3-Nano"
 _LAUNCHER = "tests/launch_sft_vision_nano_1iter.sh"
 
-# Distinct from torchrun's default (29500) and the inference smoke port (29560).
-_MASTER_PORT = 50112
+
+def _free_port() -> int:
+    """Return a currently-free TCP port for the launcher's torchrun rendezvous
+    (avoids EADDRINUSE from a hardcoded port / lingering process)."""
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.bind(("", 0))
+        return s.getsockname()[1]
 
 
 def _run(cmd: list[str], log_file: Path, extra_env: dict | None = None) -> tuple[int, str]:
@@ -176,7 +182,7 @@ if MAX_GPUS == 8:
             ["bash", _LAUNCHER],
             tmp_path / "train.log",
             extra_env={
-                "MASTER_PORT": str(_MASTER_PORT),
+                "MASTER_PORT": str(_free_port()),
                 "OUTPUT_ROOT": str(tmp_path / "launcher_out"),
                 "NPROC_PER_NODE": "8",
             },

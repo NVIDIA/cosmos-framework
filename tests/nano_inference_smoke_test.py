@@ -29,6 +29,7 @@ not collected.
 
 import os
 import shutil
+import socket
 import subprocess
 import sys
 from pathlib import Path
@@ -39,9 +40,17 @@ from cosmos_framework.inference.fixtures.args import MAX_GPUS
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
-# Distinct from the SFT launcher (50012) and torchrun's default (29500) so a
-# concurrent training smoke run does not collide on the rendezvous port.
-_MASTER_PORT = 29560
+
+def _free_port() -> int:
+    """Return a currently-free TCP port for torchrun's rendezvous.
+
+    Avoids hardcoded ports that ``EADDRINUSE`` when a prior run's process
+    lingers or a port is in TIME_WAIT. (Small TOCTOU window between close and
+    torchrun's bind, acceptable for a single-node test.)
+    """
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.bind(("", 0))
+        return s.getsockname()[1]
 
 # Audio sanity thresholds for the muxed sound track.
 _RMS_SILENCE_FLOOR = 1e-4  # below this the track is effectively silence
@@ -154,7 +163,7 @@ if MAX_GPUS == 8:
         cmd = [
             "torchrun",
             "--nproc_per_node=8",
-            f"--master_port={_MASTER_PORT}",
+            f"--master_port={_free_port()}",
             "-m",
             "cosmos_framework.scripts.inference",
             "--parallelism-preset=throughput",

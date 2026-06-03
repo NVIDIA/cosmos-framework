@@ -71,6 +71,7 @@ from __future__ import annotations
 import os
 import re
 import shutil
+import socket
 import subprocess
 import sys
 from dataclasses import dataclass, field
@@ -84,6 +85,14 @@ THIS_DIR = Path(__file__).resolve().parent
 # ``cosmos_framework.scripts.train`` and the ``--sft-toml=...`` paths are relative to
 # the repo root; we always invoke torchrun from there.
 REPO_ROOT = THIS_DIR.parent
+
+
+def _free_port() -> int:
+    """Return a currently-free TCP port for torchrun's rendezvous, instead of a
+    hardcoded ``master_port`` that ``EADDRINUSE``s when a prior run lingers."""
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.bind(("", 0))
+        return s.getsockname()[1]
 
 # --- per-arch input paths ----------------------------------------------------
 #
@@ -178,7 +187,6 @@ class LaunchSpec:
 
     key: str  # goldens key + pytest parametrize id source
     sft_toml: str  # ``--sft-toml=...`` value, relative to REPO_ROOT
-    master_port: int
     extra_hydra_args: tuple[str, ...]
     loss_re: re.Pattern[str]
     deterministic_iters: int  # how many leading iters are bit-exact deterministic
@@ -216,7 +224,6 @@ def _build_specs(paths: dict[str, str]) -> dict[str, LaunchSpec]:
             # Replicates launch_sft_llava_ov.sh, capped to 10 iters.
             key="llava_ov_datapacker",
             sft_toml="examples/toml/sft_config/llava_ov_datapacker.toml",
-            master_port=50012,
             extra_hydra_args=(
                 # TAIL_OVERRIDES from launch_sft_llava_ov.sh — fields not modeled
                 # by SFTExperimentConfig.
@@ -261,7 +268,6 @@ def _build_specs(paths: dict[str, str]) -> dict[str, LaunchSpec]:
             # needed beyond the regression-cap overrides below.
             key="vision_sft_nano",
             sft_toml="examples/toml/sft_config/vision_sft_nano.toml",
-            master_port=50022,
             extra_hydra_args=(
                 "model.config.parallelism.data_parallel_shard_degree=4",
                 "model.config.compile.enabled=true",
@@ -280,7 +286,6 @@ def _build_specs(paths: dict[str, str]) -> dict[str, LaunchSpec]:
             # backbone's compile path is not bit-exact across runs on H100.
             key="vision_sft_super",
             sft_toml="examples/toml/sft_config/vision_sft_super.toml",
-            master_port=50023,
             nproc_per_node=8,
             extra_hydra_args=(
                 "model.config.parallelism.data_parallel_shard_degree=4",
@@ -327,7 +332,7 @@ def _run_torchrun(spec: LaunchSpec, run_dir: Path) -> Path:
     cmd = [
         "torchrun",
         f"--nproc_per_node={spec.nproc_per_node}",
-        f"--master_port={spec.master_port}",
+        f"--master_port={_free_port()}",
         "-m",
         "cosmos_framework.scripts.train",
         f"--sft-toml={spec.sft_toml}",
