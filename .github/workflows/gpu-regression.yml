@@ -1,0 +1,57 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: OpenMDW-1.1
+
+# SFT loss/grad-norm regression on a self-hosted 8×H200 runner (4-GPU subset).
+#
+# Requires:
+#   * a self-hosted runner labelled [self-hosted, gpu, h200] with >=4 GPUs,
+#     NVIDIA drivers, and `uv` on PATH;
+#   * an `HF_TOKEN` repository secret (gated dataset/model downloads).
+#
+# Inputs (Cosmos3-Nano -> DCP, bridge dataset, Wan VAE, Qwen3-VL-8B-Instruct)
+# are downloaded / converted in-test into a temp stage that is removed on
+# teardown; raw downloads are cached in the runner's HF cache. The h100 goldens
+# are reused on H200 (see _detect_arch).
+name: GPU Regression
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: gpu-regression-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  sft-regression:
+    runs-on: [self-hosted, gpu, h200]
+    timeout-minutes: 60
+    env:
+      HF_TOKEN: ${{ secrets.HF_TOKEN }}
+      HF_HUB_DISABLE_XET: "1"
+      # Select the 4-GPU regression test variant (uses 4 of the 8 GPUs).
+      TEST_MAX_GPUS: "4"
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: astral-sh/setup-uv@v7
+
+      - name: Sync environment (cu128-train)
+        run: uv sync --all-extras --group=cu128-train
+
+      # llava_ov_datapacker + vision_sft_nano vs the h100 goldens (H200 maps to
+      # the same key). -s streams the live training log.
+      - name: SFT regression (4-GPU subset)
+        run: |
+          export LD_LIBRARY_PATH=
+          uv run --all-extras --group=cu128-train python -m pytest -v -s \
+            tests/launch_regression_test.py --num-gpus=4 --levels=2 -o addopts=
+
+      # The h100_inputs fixture removes its DCP stage on teardown; clear the
+      # pytest tmp dirs too (logs + any run output). The HF cache is kept.
+      - name: Clean up run outputs
+        if: always()
+        run: |
+          rm -rf "${TMPDIR:-/tmp}"/pytest-of-* /tmp/pytest-of-* || true
