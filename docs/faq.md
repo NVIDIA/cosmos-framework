@@ -225,6 +225,25 @@ Delete the torchinductor cache under the /tmp directory, `rm -rf /tmp/torchinduc
 
 ---
 
+### Q: I get `torch.distributed.DistNetworkError: ... port: 29500 ... EADDRINUSE, address already in use`
+
+`torchrun` defaults its rendezvous to port `29500`. The error means that port is already taken on the node — usually because another `torchrun` job (yours or someone else's on a shared node) is still using it.
+
+Pass a different free port with `--master-port`, placed **before** `-m` (it is a `torchrun` argument, not an inference argument):
+
+```shell
+torchrun --nproc-per-node=8 --master-port=29501 -m cosmos_framework.scripts.inference \
+  --parallelism-preset=throughput \
+  -i "inputs/omni/t2i.json" \
+  -o outputs/omni_t2i \
+  --checkpoint-path Cosmos3-Super-Text2Image \
+  --seed=0
+```
+
+Any free port works (e.g. `29501`, `29510`); give each concurrent job on the same node a distinct port. Alternatively, `--rdzv-endpoint=localhost:0` lets `torchrun` auto-pick a free port.
+
+---
+
 ## Training
 
 ### Q: I get `torch.cuda.OutOfMemoryError` during training (SFT)

@@ -1050,6 +1050,15 @@ class OmniInference(Inference):
                 config = None
             else:
                 model_dict = setup_args.load_model_config_dict()
+                if setup_args.vlm_processor_from_checkpoint:
+                    # Source the VLM processor from the loaded checkpoint's own
+                    # bundled files instead of the repository hardcoded in the
+                    # model config. Drops the redundant base-model download.
+                    tokenizer_cfg = model_dict["config"]["vlm_config"]["tokenizer"]
+                    tokenizer_cfg.pop("repository", None)
+                    tokenizer_cfg.pop("revision", None)
+                    tokenizer_cfg.pop("subdir", None)
+                    tokenizer_cfg["tokenizer_type"] = str(checkpoint_path)
                 config = Cosmos3OmniConfig(model=model_dict)
             model = Cosmos3OmniModel.from_pretrained_dcp(
                 checkpoint_path,

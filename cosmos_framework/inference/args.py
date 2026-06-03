@@ -869,6 +869,33 @@ _CHECKPOINTS: dict[str, CheckpointConfig] = {
             revision="main",
         ),
     ),
+    # Task-specialized Super variants published as diffusers HF checkpoints.
+    # s3_uri is unused for HF-backed checkpoints (kept for parity with the
+    # registry schema); the architecture lives in each model YAML.
+    "Cosmos3-Super-Image2Video": CheckpointConfig(
+        model_memory_bytes=MODEL_MEMORY_BYTES_BY_SIZE["32B"],
+        config_file=str(CONFIG_DIR / "model/Cosmos3-Super.yaml"),
+        s3_uri="s3://bucket1/cosmos3_vfm/cosmos3_ga_image2video/",
+        hf=CheckpointDirHf(
+            repository="nvidia/Cosmos3-Super-Image2Video",
+            revision="main",
+        ),
+        # Self-contained checkpoint: use its bundled processor instead of
+        # downloading the base Cosmos3-Super repo just for the tokenizer.
+        vlm_processor_from_checkpoint=True,
+    ),
+    "Cosmos3-Super-Text2Image": CheckpointConfig(
+        model_memory_bytes=MODEL_MEMORY_BYTES_BY_SIZE["32B"],
+        config_file=str(CONFIG_DIR / "model/Cosmos3-Super.yaml"),
+        s3_uri="s3://bucket1/cosmos3_vfm/cosmos3_ga_text2image/",
+        hf=CheckpointDirHf(
+            repository="nvidia/Cosmos3-Super-Text2Image",
+            revision="main",
+        ),
+        # Self-contained checkpoint: use its bundled processor instead of
+        # downloading the base Cosmos3-Super repo just for the tokenizer.
+        vlm_processor_from_checkpoint=True,
+    ),
 }
 DEFAULT_CHECKPOINT_NAME = "Cosmos3-Nano"
 DEFAULT_CHECKPOINT = _CHECKPOINTS[DEFAULT_CHECKPOINT_NAME]

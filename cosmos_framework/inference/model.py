@@ -318,6 +318,16 @@ class _DiffusersLoadPlanner(dcp.DefaultLoadPlanner):
         missing_keys = set(target_state_dict) - loaded_keys
         if not self.has_vision_weights:
             missing_keys = {key for key in missing_keys if not key.startswith("language_model.visual.")}
+        # Task-specialized checkpoints (e.g. Text2Image, Image2Video) omit the
+        # optional generative-modality projection heads (action, sound). They
+        # are unused for those tasks, so tolerate their absence the same way
+        # vision weights are tolerated when the checkpoint provides none of them.
+        for modality_prefixes in (
+            ("action2llm.", "llm2action.", "action_modality_embed"),
+            ("sound2llm.", "llm2sound.", "sound_modality_embed"),
+        ):
+            if not any(key.startswith(modality_prefixes) for key in loaded_keys):
+                missing_keys = {key for key in missing_keys if not key.startswith(modality_prefixes)}
         if missing_keys:
             sample = sorted(missing_keys)[:10]
             raise ValueError(

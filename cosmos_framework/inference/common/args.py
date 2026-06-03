@@ -385,6 +385,17 @@ class CheckpointConfig(pydantic.BaseModel):
     hf: CheckpointDirHf
     """Config for checkpoint on Hugging Face."""
 
+    vlm_processor_from_checkpoint: bool = False
+    """When True, load the VLM text/vision processor from the checkpoint's own
+    bundled files (its local download directory) instead of the repository
+    hardcoded in the model config's ``vlm_config.tokenizer`` node.
+
+    Set this only for self-contained checkpoints that ship their own processor
+    at the repository root (e.g. the task-specialized Text2Image / Image2Video
+    diffusers checkpoints). Avoids a redundant download of the base model repo
+    just to obtain the tokenizer.
+    """
+
     def download(self) -> str:
         return self.hf.download()
 
@@ -404,6 +415,7 @@ class CheckpointArgs(ConfigArgs):
     model_memory_bytes: int | None
 
     checkpoint_hf: CheckpointDirHf | None
+    vlm_processor_from_checkpoint: bool = False
 
     credential_path: str
     use_ema_weights: bool
@@ -443,6 +455,8 @@ class CheckpointOverrides(ConfigOverrides):
 
     checkpoint_hf: Suppress[CheckpointDirHf | None] = None
     """Hugging Face checkpoint directory."""
+    vlm_processor_from_checkpoint: Suppress[bool] = False
+    """Load the VLM processor from the loaded checkpoint instead of a hardcoded repo."""
 
     credential_path: Training[str] = "credentials/gcp_checkpoint.secret"
     """Path to S3 credentials file for remote checkpoint loading."""
@@ -459,6 +473,7 @@ class CheckpointOverrides(ConfigOverrides):
             self.model_memory_bytes = checkpoint.model_memory_bytes
             self.config_file = checkpoint.config_file
             self.checkpoint_hf = checkpoint.hf
+            self.vlm_processor_from_checkpoint = checkpoint.vlm_processor_from_checkpoint
         elif self.checkpoint_path.startswith("s3://"):
             self.checkpoint_type = CheckpointType.DCP
             self.checkpoint_path = self.checkpoint_path.rstrip("/")
