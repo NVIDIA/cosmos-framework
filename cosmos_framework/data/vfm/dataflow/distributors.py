@@ -61,6 +61,12 @@ class MapDistributor(DataDistributor):
         stream_id = dp_rank * num_workers + worker_id
         total_streams = dp_world_size * num_workers
         n = len(self._dataset)  # type: ignore[arg-type]
+        if n == 0:
+            return
+        if stream_id >= n:
+            # This (rank, worker) owns no items for any epoch (dataset smaller
+            # than dp_world_size * num_workers). Terminate instead of spinning.
+            return
         epoch = 0
         while True:
             if self._shuffle:

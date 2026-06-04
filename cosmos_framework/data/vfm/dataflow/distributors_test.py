@@ -81,3 +81,24 @@ def test_map_sharding_disjoint_and_covers_one_epoch():
         for b in range(a + 1, 4):
             assert seen[a].isdisjoint(seen[b])
     assert set().union(*seen) == set(range(12))
+
+
+def test_map_empty_dataset_terminates():
+    d = MapDistributor(_MapDS(0), shuffle=False)
+    assert list(d.stream(0, 1, 0, 1)) == []
+
+
+def test_map_empty_shard_terminates_no_hang():
+    # dataset smaller than dp_world_size * num_workers -> stream_id 3 >= n 2 -> empty shard.
+    it = MapDistributor(_MapDS(2), shuffle=False).stream(
+        dp_rank=0, dp_world_size=1, worker_id=3, num_workers=4
+    )
+    assert list(it) == []
+
+
+def test_map_nonempty_shard_still_infinite():
+    # guard must NOT terminate a valid non-empty shard (stays infinite).
+    it = MapDistributor(_MapDS(4), shuffle=False).stream(0, 1, 0, 1)
+    first = [next(it)["i"] for _ in range(4)]
+    assert first == [0, 1, 2, 3]
+    assert next(it)["i"] == 0  # wraps into epoch 1, still producing

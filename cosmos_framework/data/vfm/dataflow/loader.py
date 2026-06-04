@@ -112,9 +112,16 @@ class CosmosDataLoader(torch.utils.data.DataLoader):
             dp_world_size=dp_world_size,
         )
 
+        if persistent_workers and num_workers == 0:
+            log.info(
+                "CosmosDataLoader: persistent_workers=True ignored because num_workers=0.",
+                rank0_only=True,
+            )
+            persistent_workers = False
+
         loader_kwargs: dict = dict(
             num_workers=num_workers,
-            persistent_workers=persistent_workers and num_workers > 0,
+            persistent_workers=persistent_workers,
             pin_memory=pin_memory,
         )
         if num_workers > 0 and prefetch_factor is not None:
