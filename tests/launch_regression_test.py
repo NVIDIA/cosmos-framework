@@ -53,11 +53,15 @@ Determinism notes:
     deterministic mode (raises ``NotImplementedError`` under PyTorch's
     deterministic context). ``VLMModel.__init__`` honors the config-level
     flag via ``init_flash_attn_meta`` independently of the launcher arg, so
-    both must be off. It also streams ``lmms-lab/LLaVA-OneVision-Data`` from
-    HuggingFace Hub: iter-0 is bit-exact but iters 1+ drift run-to-run with
-    shard arrival order + non-det kernels. All 10 iters are asserted, but with
-    the spec's loose ``loss_rtol``/``loss_atol`` (vs the tight 1e-3 the
-    deterministic vision spec uses) to absorb that drift.
+    both must be off. It streams ``lmms-lab/LLaVA-OneVision-Data`` from the
+    HuggingFace Hub with ``dataloader_train.num_workers=0`` so the data order is
+    fully deterministic (single process); the only run-to-run noise left is the
+    FMHA backward kernel. iter-0 is bit-exact (forward only) but iters 1+ drift
+    (the Hopper FMHA backward has no deterministic mode — confirmed: forcing
+    ``deterministic=true`` raises ``NotImplementedError``, and a 2-run
+    ``num_workers=0`` check still drifts ≤0.006 on iters 1-9). All 10 iters are
+    asserted with a tiered tolerance (``loss_tol_bands``): iter-0 at
+    1e-3, iters 1-2 at 1e-2, iters 3-9 at 2e-2.
 
 Refreshing the goldens (after an intentional numerical change)::
 
@@ -200,10 +204,14 @@ class LaunchSpec:
     # practice (see ``deterministic_iters``).
     deterministic: bool = True
     # Per-spec goldens tolerance for ``pytest.approx``. Deterministic specs use
-    # the tight default; non-deterministic specs (e.g. the reasoner) need a
-    # looser band to absorb per-step drift across the iters they assert.
+    # the tight default uniformly across all asserted iters.
     loss_rtol: float = _DEFAULT_RTOL
     loss_atol: float = _DEFAULT_ATOL
+    # Optional tiered tolerance: each ``(count, rtol, atol)`` applies to the next
+    # ``count`` iters in order, and the counts must sum to ``deterministic_iters``.
+    # Lets the reasoner tighten its bit-exact iter-0 while loosening the
+    # non-deterministic tail. When empty, all iters use ``loss_rtol/loss_atol``.
+    loss_tol_bands: tuple[tuple[int, float, float], ...] = ()
 
 
 # 4-GPU specs run by ``test_launch_regression``; 8-GPU specs run by
@@ -238,15 +246,18 @@ def _build_specs(paths: dict[str, str]) -> dict[str, LaunchSpec]:
                 # 4-GPU subset for the test (TOML pins dp_shard=8 for the 8-GPU
                 # launch shell).
                 "model.config.parallelism.data_parallel_shard_degree=4",
-                # The Qwen3-VL text path's Hopper FMHA backward (under the
-                # ``cosmos`` attention impl) raises NotImplementedError under
-                # PyTorch deterministic mode on H100. ``VLMModel.__init__``
-                # honors ``config.deterministic`` (default ``True`` on
-                # VLMModelConfig) by calling ``init_flash_attn_meta(True)``,
-                # which flips ``torch.use_deterministic_algorithms(True)``, so
-                # dropping the launcher's ``--deterministic`` flag isn't
-                # enough — the config-level default must also be off.
+                # The Hopper FMHA backward raises under PyTorch
+                # deterministic mode, so both the config default and the
+                # launcher's --deterministic flag must be off (see the
+                # determinism notes in the module docstring).
                 "model.config.deterministic=false",
+                # num_workers=0: fully-ordered single-process streaming, so the
+                # only run-to-run noise is the FMHA backward kernel, not data
+                # order. prefetch_factor/persistent_workers must be unset for
+                # num_workers=0 (torch DataLoader rejects them otherwise).
+                "dataloader_train.num_workers=0",
+                "dataloader_train.prefetch_factor=null",
+                "dataloader_train.persistent_workers=false",
                 # Regression-specific tweaks.
                 "trainer.max_iter=10",
                 "trainer.logging_iter=1",
@@ -257,21 +268,16 @@ def _build_specs(paths: dict[str, str]) -> dict[str, LaunchSpec]:
                 "upload_reproducible_setup=false",
             ),
             loss_re=_VLM_LOSS_RE,
-            # Non-deterministic spec: iter-0 is bit-exact (pure forward on a
-            # seed-fixed batch + init), but iters 1+ drift run-to-run (the Hopper
-            # FMHA backward has no deterministic kernel and the LLaVA-OneVision
-            # data is streamed). We still assert all 10 iters but with a loose
-            # tolerance (loss_rtol/loss_atol below) to absorb that drift.
             deterministic_iters=10,
-            # See the ``deterministic=false`` override above for the
-            # Hopper-FMHA rationale; the launcher flag is dropped to match.
             deterministic=False,
-            # Loose band for the non-deterministic per-step loss (vs the tight
-            # 1e-3 default the deterministic VFM spec uses). Two H200 samples
-            # differ by at most ~0.006 across the 10 iters, so 0.01 holds with
-            # margin while still catching a real numerical regression.
-            loss_rtol=0.01,
-            loss_atol=0.01,
+            # Tiered tolerance: iter-0 is bit-exact (forward only) → 1e-3; iters
+            # 1+ carry the FMHA-backward noise (≤0.006 across two num_workers=0
+            # runs) → 1e-2 for the early iters 1-2, 2e-2 for the tail 3-9.
+            loss_tol_bands=(
+                (1, 1e-3, 1e-3),  # iter 0
+                (2, 1e-2, 1e-2),  # iters 1-2
+                (7, 2e-2, 2e-2),  # iters 3-9
+            ),
         ),
         "vision_sft_nano": LaunchSpec(
             # Replicates launch_sft_vision_nano.sh, capped to 10 iters.
@@ -507,13 +513,29 @@ def _assert_spec_matches_goldens(spec_key: str, tmp_path: Path, paths: dict[str,
 
     n = spec.deterministic_iters
 
-    assert loss[:n] == pytest.approx(
-        expected["loss"][:n], rel=spec.loss_rtol, abs=spec.loss_atol
-    ), (
-        f"{spec.key} ({arch}): rank-0 loss[:{n}] does not match goldens\n"
-        f"  got     : {loss[:n]}\n"
-        f"  expected: {expected['loss'][:n]}{run_detail}"
-    )
+    # Build the per-iter tolerance segments: either the spec's tiered bands or a
+    # single uniform band spanning all asserted iters.
+    if spec.loss_tol_bands:
+        assert sum(c for c, _, _ in spec.loss_tol_bands) == n, (
+            f"{spec.key}: loss_tol_bands counts {[c for c, _, _ in spec.loss_tol_bands]} "
+            f"must sum to deterministic_iters={n}"
+        )
+        bands = spec.loss_tol_bands
+    else:
+        bands = ((n, spec.loss_rtol, spec.loss_atol),)
+
+    start = 0
+    for count, rtol, atol in bands:
+        end = start + count
+        assert loss[start:end] == pytest.approx(
+            expected["loss"][start:end], rel=rtol, abs=atol
+        ), (
+            f"{spec.key} ({arch}): rank-0 loss[{start}:{end}] (rel/abs={rtol}) "
+            f"does not match goldens\n"
+            f"  got     : {loss[start:end]}\n"
+            f"  expected: {expected['loss'][start:end]}{run_detail}"
+        )
+        start = end
     # ``grad_norm`` is optional: ``None`` skips the check when the FSDP
     # global-norm all-reduce isn't bit-exact on this arch.
     if expected["grad_norm"] is None:
@@ -572,15 +594,12 @@ _GOLDENS: dict[str, dict[str, dict[str, list[float] | None]]] = {
     # prepared in-test by the ``h100_inputs`` fixture (or via
     # ``tests/_stage_h100_inputs.sh`` if its env vars are pre-set).
     "h100": {
-        # Recaptured 2026-06-03 with deterministic mode off (both ``--deterministic``
-        # and ``model.config.deterministic`` are False — the Hopper FMHA
-        # backward refuses to run under PyTorch deterministic mode on H100, see
-        # ``LaunchSpec.deterministic`` and the spec's hydra override). These are
-        # H200 values (iter-0 is bit-exact H100==H200). All 10 iters are asserted
-        # but against the spec's loose tolerance (loss_rtol/loss_atol=0.01) since
-        # iters 1+ drift run-to-run; grad-norm is non-det too, so skipped (None).
+        # num_workers=0, deterministic mode off (see the spec's hydra overrides
+        # and the loss_tol_bands tiers). Centered on the midpoint of two H200 CI
+        # runs (CI runs on H200) so the tiered bands keep maximum margin; iter-0
+        # is bit-exact across H100/H200 runs. grad-norm is non-det, so None.
         "llava_ov_datapacker": {
-            "loss": [0.88798, 1.01444, 1.0565, 1.04765, 0.99979, 0.92324, 1.1051, 1.03238, 0.93775, 0.69643],
+            "loss": [1.06924, 0.88399, 1.09293, 1.16314, 1.03592, 0.99041, 1.11041, 0.97001, 0.81246, 0.98548],
             "grad_norm": None,
         },
         # Recaptured 2026-06-03 after the TOML-config rewrite shifted some
