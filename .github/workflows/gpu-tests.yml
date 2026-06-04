@@ -1,0 +1,167 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: OpenMDW-1.1
+
+# Cosmos3-Nano GPU test suite on a self-hosted 8×H200 runner.
+#
+# A single ``pre-commit`` (lint) job runs first; the four GPU jobs all
+# ``needs:`` it, so they wait on ONE pre-commit run and are skipped if lint
+# fails — the single self-hosted runner is never spent on a lint-failing commit.
+# The four GPU jobs then run (one at a time on the single runner):
+#   * training-smoke       — Nano SFT pipeline (convert -> train 5 -> export -> t2i)
+#   * generator-regression — vision_sft_nano loss vs goldens (4-GPU subset)
+#   * inference-smoke      — Nano multi-modality inference (t2vs + policy + forward_dynamics)
+#   * reasoner-regression  — llava_ov_datapacker loss vs goldens (4-GPU subset)
+#
+# Requires:
+#   * a self-hosted runner labelled [self-hosted, gpu, h200] with 8 GPUs,
+#     NVIDIA drivers, and `uv` on PATH;
+#   * an `HF_TOKEN` repository secret (gated dataset/model downloads, incl. the
+#     streamed LLaVA-OneVision-Data dataset).
+#
+# Inputs/checkpoints download to examples/ + the HF cache and are reused across
+# runs (the h100 goldens are reused on H200 — see _detect_arch).
+name: GPU Tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: gpu-tests-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # Single lint gate: runs once on ubuntu-latest; every GPU job below waits on it
+  # and is skipped if it fails.
+  pre-commit:
+    uses: ./.github/workflows/pre-commit.yml
+
+  training-smoke:
+    needs: pre-commit
+    runs-on: [self-hosted, gpu, h200]
+    timeout-minutes: 90
+    env:
+      HF_TOKEN: ${{ secrets.HF_TOKEN }}
+      HF_HUB_DISABLE_XET: "1"
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: astral-sh/setup-uv@v7
+
+      - name: Sync environment (cu128-train)
+        run: uv sync --all-extras --group=cu128-train
+
+      # Full SFT pipeline: download + convert Nano->DCP, train 5 steps (loss
+      # trend), export to HF safetensors, then a t2i generation from the export.
+      # MAX_GPUS defaults to 8. -s streams the live process log.
+      - name: Nano SFT pipeline smoke (convert -> train 5 -> export -> t2i, 8 GPU)
+        run: |
+          export LD_LIBRARY_PATH=
+          uv run --all-extras --group=cu128-train python -m pytest -v -s \
+            tests/nano_training_smoke_test.py --num-gpus=8 --levels=2 -o addopts=
+
+      # Clear the heavy artifacts (even on failure): examples/checkpoints (the
+      # Cosmos3-Nano DCP + Wan VAE, ~30 GB) and the pytest tmp dirs (the SFT
+      # checkpoint + logs). The small examples/data dataset and the HF cache are
+      # intentionally kept so subsequent runs reuse them.
+      - name: Clean up run outputs
+        if: always()
+        run: |
+          rm -rf examples/checkpoints || true
+          rm -rf "${TMPDIR:-/tmp}"/pytest-of-* /tmp/pytest-of-* || true
+
+  generator-regression:
+    needs: pre-commit
+    runs-on: [self-hosted, gpu, h200]
+    timeout-minutes: 60
+    env:
+      HF_TOKEN: ${{ secrets.HF_TOKEN }}
+      HF_HUB_DISABLE_XET: "1"
+      # Select the 4-GPU regression test variant (uses 4 of the 8 GPUs).
+      TEST_MAX_GPUS: "4"
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: astral-sh/setup-uv@v7
+
+      - name: Sync environment (cu128-train)
+        run: uv sync --all-extras --group=cu128-train
+
+      # Generator (vision_sft_nano) loss vs the h100 goldens. -s streams the live log.
+      - name: Generator regression (vision_sft_nano, 4-GPU subset)
+        run: |
+          export LD_LIBRARY_PATH=
+          uv run --all-extras --group=cu128-train python -m pytest -v -s \
+            tests/launch_regression_test.py -k vision_sft_nano \
+            --num-gpus=4 --levels=2 -o addopts=
+
+      # The h100_inputs fixture removes its DCP stage on teardown; clear the
+      # pytest tmp dirs too (logs + any run output). The HF cache is kept.
+      - name: Clean up run outputs
+        if: always()
+        run: |
+          rm -rf "${TMPDIR:-/tmp}"/pytest-of-* /tmp/pytest-of-* || true
+
+  inference-smoke:
+    needs: pre-commit
+    runs-on: [self-hosted, gpu, h200]
+    timeout-minutes: 60
+    env:
+      HF_TOKEN: ${{ secrets.HF_TOKEN }}
+      HF_HUB_DISABLE_XET: "1"
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: astral-sh/setup-uv@v7
+
+      - name: Sync environment (cu128-train)
+        run: uv sync --all-extras --group=cu128-train
+
+      # One inference call over t2vs (+sound), action policy, and forward_dynamics; checks each output.
+      # MAX_GPUS defaults to 8. -s streams the live process log.
+      - name: Nano inference smoke (t2vs + action policy + forward_dynamics, 8 GPU)
+        run: |
+          export LD_LIBRARY_PATH=
+          uv run --all-extras --group=cu128-train python -m pytest -v -s \
+            tests/nano_inference_smoke_test.py --num-gpus=8 --levels=2 -o addopts=
+
+      # Inference writes only the pytest tmp dir (the t2vs video + logs); the
+      # checkpoint download stays in the HF cache (kept). No examples/ artifacts.
+      - name: Clean up run outputs
+        if: always()
+        run: |
+          rm -rf "${TMPDIR:-/tmp}"/pytest-of-* /tmp/pytest-of-* || true
+
+  reasoner-regression:
+    needs: pre-commit
+    runs-on: [self-hosted, gpu, h200]
+    timeout-minutes: 60
+    env:
+      HF_TOKEN: ${{ secrets.HF_TOKEN }}
+      HF_HUB_DISABLE_XET: "1"
+      # Select the 4-GPU regression test variant (uses 4 of the 8 GPUs).
+      TEST_MAX_GPUS: "4"
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: astral-sh/setup-uv@v7
+
+      - name: Sync environment (cu128-train)
+        run: uv sync --all-extras --group=cu128-train
+
+      # Reasoner (llava_ov_datapacker) loss vs the h100 goldens. -s streams the live log.
+      - name: Reasoner regression (llava_ov_datapacker, 4-GPU subset)
+        run: |
+          export LD_LIBRARY_PATH=
+          uv run --all-extras --group=cu128-train python -m pytest -v -s \
+            tests/launch_regression_test.py -k llava_ov_datapacker \
+            --num-gpus=4 --levels=2 -o addopts=
+
+      # The h100_inputs fixture removes its DCP stage on teardown; clear the
+      # pytest tmp dirs too (logs + any run output). The HF cache is kept.
+      - name: Clean up run outputs
+        if: always()
+        run: |
+          rm -rf "${TMPDIR:-/tmp}"/pytest-of-* /tmp/pytest-of-* || true
