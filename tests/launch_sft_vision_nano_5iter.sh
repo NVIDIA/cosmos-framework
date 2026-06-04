@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: OpenMDW-1.1
+
 # SMOKE wrapper (test fixture) for tests/nano_training_smoke_test.py — mirrors
 # examples/launch_sft_vision_nano.sh but points at tests/vision_sft_nano_5iter.toml
 # (max_iter=5, save_iter=5). Reuses the shared launcher helper from examples/.
