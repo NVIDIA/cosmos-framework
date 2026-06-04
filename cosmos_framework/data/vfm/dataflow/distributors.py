@@ -31,3 +31,44 @@ class IterableDistributor(DataDistributor):
         for i, item in enumerate(self._iterable):
             if i % total_streams == my_stream:
                 yield item
+
+
+import torch
+
+
+class MapDistributor(DataDistributor):
+    """Per-epoch shuffle + slice sharding of a map-style Dataset. Resume (env-var
+    fast-forward) is added in a later plan; for now the ABC no-op defaults apply."""
+
+    def __init__(
+        self,
+        dataset: torch.utils.data.Dataset,
+        seed: int = 0,
+        shuffle: bool = True,
+        name: str = "",
+    ):
+        self._dataset = dataset
+        self._seed = seed
+        self._shuffle = shuffle
+        self._name = name
+
+    def __len__(self) -> int:
+        return len(self._dataset)  # type: ignore[arg-type]
+
+    def stream(
+        self, dp_rank: int, dp_world_size: int, worker_id: int, num_workers: int
+    ):
+        stream_id = dp_rank * num_workers + worker_id
+        total_streams = dp_world_size * num_workers
+        n = len(self._dataset)  # type: ignore[arg-type]
+        epoch = 0
+        while True:
+            if self._shuffle:
+                g = torch.Generator().manual_seed(self._seed + epoch)
+                perm = torch.randperm(n, generator=g).tolist()
+            else:
+                perm = list(range(n))
+            stream_slice = perm[stream_id::total_streams]
+            for pos in range(len(stream_slice)):
+                yield self._dataset[stream_slice[pos]]
+            epoch += 1
