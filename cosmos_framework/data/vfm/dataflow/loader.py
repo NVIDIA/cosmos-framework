@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import torch
 import torch.utils.data
+import numpy as np
 
 from cosmos_framework.utils import log
 from cosmos_framework.data.vfm.dataflow.base import (
@@ -180,3 +181,87 @@ class CosmosDataLoader(torch.utils.data.DataLoader):
         if num_workers > 0 and prefetch_factor is not None:
             loader_kwargs["prefetch_factor"] = prefetch_factor
         super().__init__(dataset, batch_size=None, **loader_kwargs)
+
+
+class JointCosmosDataLoader:
+    """Wraps multiple ``CosmosDataLoader`` instances with ratio-based seeded selection.
+
+    Ports ``JointDataPackerDataLoader`` (data_packer_dataloader.py:526-624), renamed
+    and typed to ``CosmosDataLoader``.  One output batch = one inner loader, selected
+    deterministically by ratio at each step.  Adds a ``"dataset_name"`` key to every
+    yielded batch so downstream callbacks can route state updates to the correct inner
+    loader.
+
+    Parameters
+    ----------
+    dataloaders:
+        ``{name: {"dataloader": CosmosDataLoader, "ratio": int}}`` mapping.
+        Entries with ``ratio <= 0`` are silently skipped.
+    seed:
+        Base seed for per-step dataset selection.  Step ``i`` uses
+        ``np.random.RandomState(seed + i)`` — fully reproducible on resume via
+        ``set_start_iteration``.
+    """
+
+    def __init__(
+        self,
+        dataloaders: dict,
+        seed: int = 42,
+    ) -> None:
+        entries = [
+            (name, cfg["dataloader"], cfg["ratio"])
+            for name, cfg in dataloaders.items()
+            if cfg.get("ratio", 0) > 0
+        ]
+        if not entries:
+            raise ValueError("JointCosmosDataLoader: no dataloaders with ratio > 0")
+
+        self._names: list[str] = [e[0] for e in entries]
+        if "global_id" in self._names:
+            raise ValueError(
+                "JointCosmosDataLoader: dataset name 'global_id' is reserved "
+                "by the checkpoint state format; use a different name."
+            )
+        self._loaders: list[CosmosDataLoader] = [e[1] for e in entries]
+        ratios = np.array([e[2] for e in entries], dtype=float)
+        self._probs: np.ndarray = ratios / ratios.sum()
+        self._seed = seed
+        self._global_id = 0
+        # Iterators are created lazily on the first __iter__ call so that
+        # DataLoaderStateCallback.load_state_dict can install resume env vars
+        # before workers are spawned (for num_workers > 0, iter(DataLoader)
+        # forks workers immediately; env vars must be set in the parent first).
+        self._iterators: list | None = None
+
+        total = ratios.sum()
+        lines = [f"JointCosmosDataLoader: {len(self._names)} streams"]
+        for name, ratio in zip(self._names, ratios):
+            lines.append(f"  {name}: ratio={ratio:.4g} ({ratio / total:.1%})")
+        log.info("\n".join(lines))
+
+    def set_start_iteration(self, iteration: int) -> None:
+        """Restore deterministic selection sequence after checkpoint resume.
+
+        Called by ``JointDataLoaderStateCallback.load_state_dict`` and by the
+        trainer (if present) via ``hasattr`` guard.
+        """
+        self._global_id = iteration
+
+    def __iter__(self):
+        # Lazy init: create iterators here (not in __init__) so that
+        # load_state_dict can set resume env vars before workers fork.
+        if self._iterators is None:
+            self._iterators = [iter(loader) for loader in self._loaders]
+        while True:
+            rng = np.random.RandomState(self._seed + self._global_id)
+            idx = int(rng.choice(len(self._loaders), p=self._probs))
+            try:
+                batch = next(self._iterators[idx])
+            except StopIteration:
+                # Inner CosmosDataLoaders are infinite; this guard handles
+                # the unlikely case of a finite IterableDataset inner source.
+                self._iterators[idx] = iter(self._loaders[idx])
+                batch = next(self._iterators[idx])
+            batch["dataset_name"] = self._names[idx]
+            self._global_id += 1
+            yield batch
