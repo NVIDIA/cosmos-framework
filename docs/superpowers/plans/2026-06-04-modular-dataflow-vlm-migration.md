@@ -13,6 +13,7 @@
 > **HARD INVARIANT (from spec):** This refactor must not break dataloader resume or checkpoint saving. VLM uses an iterable (streaming HF) source, which is non-resumable today; the mirror must preserve that exact behavior (placeholder `(epoch=0,index=0)` stamps, model/optim/scheduler resume unaffected). It must NOT touch `DataLoaderStateCallback` / `JointDataLoaderStateCallback` or the checkpoint format. Map-style resume is a separate later plan.
 
 **Source references (read before porting):**
+
 - Pool engine to port: `cosmos_framework/data/vfm/packing_iterable_dataset.py:30-277`.
 - VLM roles to extract: `cosmos_framework/configs/base/vlm/experiment/llava_ov_datapacker_experiment.py:128-358`.
 
@@ -20,23 +21,24 @@
 
 ## File Structure
 
-| File | Responsibility |
-|---|---|
-| `cosmos_framework/data/vfm/dataflow/batchers.py` (modify) | add `PoolPackingBatcher` next to `SimpleBatcher` |
-| `cosmos_framework/data/vfm/dataflow/batchers_test.py` (modify) | add pool-packing tests |
-| `cosmos_framework/configs/base/vlm/experiment/dataflow_roles.py` (create) | `VLMProcessor`, `VLMCollator` (recipe-specific roles) |
-| `cosmos_framework/configs/base/vlm/experiment/dataflow_roles_test.py` (create) | unit tests for the two roles |
-| `cosmos_framework/data/vfm/dataflow/golden_vlm_test.py` (create) | old-loader vs new-loader batch equality |
-| `cosmos_framework/configs/base/vlm/experiment/llava_ov_datapacker_v2_experiment.py` (create) | mirror experiment wiring the new loader |
-| `examples/toml/sft_config/llava_ov_datapacker_v2.toml` (create) | mirror recipe TOML (selects the v2 experiment) |
-| `examples/launch_sft_llava_ov_datapacker.sh` (create) | launch wrapper for the mirror (TOML-based, same path as baseline) |
-| `cosmos_framework/data/vfm/dataflow/__init__.py` (modify) | export `PoolPackingBatcher` |
+| File                                                                                         | Responsibility                                                    |
+| -------------------------------------------------------------------------------------------- | ----------------------------------------------------------------- |
+| `cosmos_framework/data/vfm/dataflow/batchers.py` (modify)                                    | add `PoolPackingBatcher` next to `SimpleBatcher`                  |
+| `cosmos_framework/data/vfm/dataflow/batchers_test.py` (modify)                               | add pool-packing tests                                            |
+| `cosmos_framework/configs/base/vlm/experiment/dataflow_roles.py` (create)                    | `VLMProcessor`, `VLMCollator` (recipe-specific roles)             |
+| `cosmos_framework/configs/base/vlm/experiment/dataflow_roles_test.py` (create)               | unit tests for the two roles                                      |
+| `cosmos_framework/data/vfm/dataflow/golden_vlm_test.py` (create)                             | old-loader vs new-loader batch equality                           |
+| `cosmos_framework/configs/base/vlm/experiment/llava_ov_datapacker_v2_experiment.py` (create) | mirror experiment wiring the new loader                           |
+| `examples/toml/sft_config/llava_ov_datapacker_v2.toml` (create)                              | mirror recipe TOML (selects the v2 experiment)                    |
+| `examples/launch_sft_llava_ov_datapacker.sh` (create)                                        | launch wrapper for the mirror (TOML-based, same path as baseline) |
+| `cosmos_framework/data/vfm/dataflow/__init__.py` (modify)                                    | export `PoolPackingBatcher`                                       |
 
 ---
 
 ### Task 1: `PoolPackingBatcher` — port the bin-packing engine
 
 **Files:**
+
 - Modify: `cosmos_framework/data/vfm/dataflow/batchers.py`
 - Modify: `cosmos_framework/data/vfm/dataflow/__init__.py`
 - Modify: `cosmos_framework/data/vfm/dataflow/batchers_test.py`
@@ -44,6 +46,7 @@
 - [ ] **Step 1: Write the failing test**
 
 Append to `cosmos_framework/data/vfm/dataflow/batchers_test.py`:
+
 ```python
 import torch
 
@@ -111,6 +114,7 @@ Expected: FAIL — `ImportError: cannot import name 'PoolPackingBatcher'`.
 - [ ] **Step 3: Write minimal implementation**
 
 Append to `cosmos_framework/data/vfm/dataflow/batchers.py` (ported from `packing_iterable_dataset.py:30-277`, pulling from the upstream `samples` iterator instead of owning dataset iterators):
+
 ```python
 from collections import deque
 from enum import Enum
@@ -276,9 +280,11 @@ class PoolPackingBatcher(SampleBatcher):
 ```
 
 Add to `__init__.py`:
+
 ```python
 from cosmos_framework.data.vfm.dataflow.batchers import PoolPackingBatcher, SimpleBatcher
 ```
+
 (replace the existing `SimpleBatcher`-only import) and add `"PoolPackingBatcher",` to `__all__`.
 
 - [ ] **Step 4: Run test to verify it passes**
@@ -300,6 +306,7 @@ git commit -m "feat(dataflow): add PoolPackingBatcher (port of PackingIterableDa
 ### Task 2: `VLMProcessor` + `VLMCollator` (extract from VLMDataPacker)
 
 **Files:**
+
 - Create: `cosmos_framework/configs/base/vlm/experiment/dataflow_roles.py`
 - Test: `cosmos_framework/configs/base/vlm/experiment/dataflow_roles_test.py`
 
@@ -311,6 +318,7 @@ collation including the resume-meta stamps (zeros for the streaming source).
 - [ ] **Step 1: Write the failing test**
 
 `cosmos_framework/configs/base/vlm/experiment/dataflow_roles_test.py`:
+
 ```python
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: OpenMDW-1.1
@@ -382,6 +390,7 @@ Expected: FAIL — `ModuleNotFoundError: ... dataflow_roles`.
 - [ ] **Step 3: Write minimal implementation**
 
 `cosmos_framework/configs/base/vlm/experiment/dataflow_roles.py`:
+
 ```python
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: OpenMDW-1.1
@@ -503,6 +512,7 @@ git commit -m "feat(vlm): extract VLMProcessor/VLMCollator from VLMDataPacker"
 ### Task 3: Golden-batch equality test (old loader vs new loader)
 
 **Files:**
+
 - Create: `cosmos_framework/data/vfm/dataflow/golden_vlm_test.py`
 
 Drives a fixed in-memory dataset through BOTH the legacy `DataPackerDataLoader`
@@ -514,6 +524,7 @@ tensor-identical. `num_workers=0`, fixed `random.seed`.
 - [ ] **Step 1: Write the failing test**
 
 `cosmos_framework/data/vfm/dataflow/golden_vlm_test.py`:
+
 ```python
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: OpenMDW-1.1
@@ -630,6 +641,7 @@ git commit -m "test(dataflow): golden-batch equality VLM legacy vs new loader"
 ### Task 4: Mirror experiment `pre_exp012_llava_ov_datapacker_v2`
 
 **Files:**
+
 - Create: `cosmos_framework/configs/base/vlm/experiment/llava_ov_datapacker_v2_experiment.py`
 
 A copy of `pre_exp012_llava_ov_datapacker` (`llava_ov_datapacker_experiment.py:286-369`)
@@ -641,6 +653,7 @@ defaults) is identical. Imports the existing `get_llava_ov_streaming` and
 - [ ] **Step 1: Write the failing test**
 
 Add a registration smoke test at `cosmos_framework/configs/base/vlm/experiment/llava_ov_datapacker_v2_test.py`:
+
 ```python
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: OpenMDW-1.1
@@ -669,6 +682,7 @@ Expected: FAIL — `ModuleNotFoundError: ... llava_ov_datapacker_v2_experiment`.
 - [ ] **Step 3: Write minimal implementation**
 
 `cosmos_framework/configs/base/vlm/experiment/llava_ov_datapacker_v2_experiment.py`:
+
 ```python
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: OpenMDW-1.1
@@ -787,6 +801,7 @@ git commit -m "feat(vlm): add mirror experiment pre_exp012_llava_ov_datapacker_v
 ### Task 5: Mirror TOML + launch wrapper + loss-curve regression run
 
 **Files:**
+
 - Create: `examples/toml/sft_config/llava_ov_datapacker_v2.toml`
 - Create: `examples/launch_sft_llava_ov_datapacker.sh`
 
@@ -803,6 +818,7 @@ resolves it and overlays the TOML scalars. The launch wrapper just sets
 `examples/toml/sft_config/llava_ov_datapacker_v2.toml` (mirror of
 `llava_ov_datapacker.toml`, differing only in `experiment`, `name`, and the
 wandb/iters knobs for the regression run):
+
 ```toml
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: OpenMDW-1.1
@@ -891,6 +907,7 @@ as the baseline does (see the baseline launch wrapper's tail args).
 - [ ] **Step 2: Write the launch wrapper**
 
 `examples/launch_sft_llava_ov_datapacker.sh`:
+
 ```bash
 #!/usr/bin/env bash
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
@@ -928,6 +945,7 @@ node. The baseline reuses the existing `launch_sft_llava_ov.sh` with the same
 regression overrides via `TAIL_OVERRIDES`.
 
 Baseline (`/tmp/run_llava_baseline.sh`):
+
 ```bash
 set -uo pipefail
 cd /lustre/fsw/portfolios/sw/projects/sw_aidot/users/maoshengl/nvda/cosmos-framework
@@ -950,6 +968,7 @@ source examples/_sft_launcher_common.sh
 ```
 
 Mirror (`/tmp/run_llava_v2.sh`):
+
 ```bash
 set -uo pipefail
 cd /lustre/fsw/portfolios/sw/projects/sw_aidot/users/maoshengl/nvda/cosmos-framework
@@ -961,6 +980,7 @@ bash examples/launch_sft_llava_ov_datapacker.sh
 ```
 
 Run via:
+
 ```bash
 JOB_ID=$(squeue -u maoshengl --format="%i" -h | head -1)
 srun --overlap --jobid "$JOB_ID" --container-name bob_echo_dev bash -s < /tmp/run_llava_baseline.sh &
@@ -991,6 +1011,7 @@ git commit -m "chore(vlm): mirror TOML + launch wrapper for llava_ov dataflow re
 ## Self-Review
 
 **Spec coverage (Plan 2 scope):**
+
 - `PoolPackingBatcher` (spec built-ins; "Goal 1 VLM mapping") → Task 1. ✅
 - `VLMProcessor` / `VLMCollator` extraction (spec "Goal 1 VLM mapping", "Processor placement: VLM = real processor") → Task 2. ✅
 - Golden-batch equality (spec Testing tier 2) → Task 3. ✅

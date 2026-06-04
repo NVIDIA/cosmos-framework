@@ -9,6 +9,7 @@
 **Tech Stack:** Python, PyTorch (`torch.utils.data.DataLoader`/`IterableDataset`), pytest (co-located `*_test.py`).
 
 **Scope boundaries (explicit):**
+
 - IN: the 4 ABCs; `IdentityProcessor`, `DefaultBatchCollator`, `SimpleBatcher`, `IterableDistributor`, `MapDistributor` (shuffle + sharding only); the new `CosmosDataLoader` (DP-coord resolution, `batch_size` sugar, worker config, `__iter__` orchestration); unit + integration tests.
 - OUT (later plans): `PoolPackingBatcher` / `SequentialPackingBatcher`, `RankPartitionedDistributor`, `MixtureDistributor`; resume/`state_dict` env-var fast-forward + `DataLoaderStateCallback` integration + `_dp_*` meta threading; all recipe migrations; `docs/dataflow.md`; deletion of old code.
 - `state_dict`/`load_state_dict` are defined on the ABC as no-op defaults so the contract exists; their real bodies land in the resume plan.
@@ -19,21 +20,21 @@
 
 ## File Structure
 
-| File | Responsibility |
-|---|---|
-| `cosmos_framework/data/vfm/dataflow/__init__.py` | Re-export the 4 ABCs + built-ins |
-| `cosmos_framework/data/vfm/dataflow/base.py` | The 4 role ABCs |
-| `cosmos_framework/data/vfm/dataflow/processors.py` | `IdentityProcessor` |
-| `cosmos_framework/data/vfm/dataflow/collators.py` | `DefaultBatchCollator` |
-| `cosmos_framework/data/vfm/dataflow/batchers.py` | `SimpleBatcher` |
-| `cosmos_framework/data/vfm/dataflow/distributors.py` | `IterableDistributor`, `MapDistributor` |
-| `cosmos_framework/data/vfm/dataflow/loader.py` | `CosmosDataLoader` orchestrator |
-| `cosmos_framework/data/vfm/dataflow/base_test.py` | ABC contract tests |
-| `cosmos_framework/data/vfm/dataflow/processors_test.py` | `IdentityProcessor` test |
-| `cosmos_framework/data/vfm/dataflow/collators_test.py` | `DefaultBatchCollator` test |
-| `cosmos_framework/data/vfm/dataflow/batchers_test.py` | `SimpleBatcher` test |
-| `cosmos_framework/data/vfm/dataflow/distributors_test.py` | distributor sharding/shuffle tests |
-| `cosmos_framework/data/vfm/dataflow/loader_test.py` | end-to-end orchestrator tests |
+| File                                                      | Responsibility                          |
+| --------------------------------------------------------- | --------------------------------------- |
+| `cosmos_framework/data/vfm/dataflow/__init__.py`          | Re-export the 4 ABCs + built-ins        |
+| `cosmos_framework/data/vfm/dataflow/base.py`              | The 4 role ABCs                         |
+| `cosmos_framework/data/vfm/dataflow/processors.py`        | `IdentityProcessor`                     |
+| `cosmos_framework/data/vfm/dataflow/collators.py`         | `DefaultBatchCollator`                  |
+| `cosmos_framework/data/vfm/dataflow/batchers.py`          | `SimpleBatcher`                         |
+| `cosmos_framework/data/vfm/dataflow/distributors.py`      | `IterableDistributor`, `MapDistributor` |
+| `cosmos_framework/data/vfm/dataflow/loader.py`            | `CosmosDataLoader` orchestrator         |
+| `cosmos_framework/data/vfm/dataflow/base_test.py`         | ABC contract tests                      |
+| `cosmos_framework/data/vfm/dataflow/processors_test.py`   | `IdentityProcessor` test                |
+| `cosmos_framework/data/vfm/dataflow/collators_test.py`    | `DefaultBatchCollator` test             |
+| `cosmos_framework/data/vfm/dataflow/batchers_test.py`     | `SimpleBatcher` test                    |
+| `cosmos_framework/data/vfm/dataflow/distributors_test.py` | distributor sharding/shuffle tests      |
+| `cosmos_framework/data/vfm/dataflow/loader_test.py`       | end-to-end orchestrator tests           |
 
 The new `CosmosDataLoader` lives in `dataflow/loader.py` (NOT the old `data_packer_dataloader.py`) so both coexist during migration; the cleanup PR later deletes the old module and makes `dataflow` canonical.
 
@@ -42,6 +43,7 @@ The new `CosmosDataLoader` lives in `dataflow/loader.py` (NOT the old `data_pack
 ### Task 1: Scaffold package + the four role ABCs
 
 **Files:**
+
 - Create: `cosmos_framework/data/vfm/dataflow/__init__.py`
 - Create: `cosmos_framework/data/vfm/dataflow/base.py`
 - Test: `cosmos_framework/data/vfm/dataflow/base_test.py`
@@ -49,6 +51,7 @@ The new `CosmosDataLoader` lives in `dataflow/loader.py` (NOT the old `data_pack
 - [ ] **Step 1: Write the failing test**
 
 `cosmos_framework/data/vfm/dataflow/base_test.py`:
+
 ```python
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: OpenMDW-1.1
@@ -102,6 +105,7 @@ Expected: FAIL — `ModuleNotFoundError: No module named 'cosmos_framework.data.
 - [ ] **Step 3: Write minimal implementation**
 
 `cosmos_framework/data/vfm/dataflow/base.py`:
+
 ```python
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: OpenMDW-1.1
@@ -171,6 +175,7 @@ class BatchCollator(ABC):
 ```
 
 `cosmos_framework/data/vfm/dataflow/__init__.py`:
+
 ```python
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: OpenMDW-1.1
@@ -214,6 +219,7 @@ git commit -m "feat(dataflow): add four role ABCs (DataDistributor/RawItemProces
 ### Task 2: `IdentityProcessor`
 
 **Files:**
+
 - Create: `cosmos_framework/data/vfm/dataflow/processors.py`
 - Modify: `cosmos_framework/data/vfm/dataflow/__init__.py`
 - Test: `cosmos_framework/data/vfm/dataflow/processors_test.py`
@@ -221,6 +227,7 @@ git commit -m "feat(dataflow): add four role ABCs (DataDistributor/RawItemProces
 - [ ] **Step 1: Write the failing test**
 
 `cosmos_framework/data/vfm/dataflow/processors_test.py`:
+
 ```python
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: OpenMDW-1.1
@@ -252,6 +259,7 @@ Expected: FAIL — `ModuleNotFoundError: ... dataflow.processors`.
 - [ ] **Step 3: Write minimal implementation**
 
 `cosmos_framework/data/vfm/dataflow/processors.py`:
+
 ```python
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: OpenMDW-1.1
@@ -277,9 +285,11 @@ class IdentityProcessor(RawItemProcessor):
 ```
 
 Add to `__init__.py` (alphabetical in the import block and `__all__`):
+
 ```python
 from cosmos_framework.data.vfm.dataflow.processors import IdentityProcessor
 ```
+
 and add `"IdentityProcessor",` to `__all__`.
 
 - [ ] **Step 4: Run test to verify it passes**
@@ -301,6 +311,7 @@ git commit -m "feat(dataflow): add IdentityProcessor"
 ### Task 3: `DefaultBatchCollator`
 
 **Files:**
+
 - Create: `cosmos_framework/data/vfm/dataflow/collators.py`
 - Modify: `cosmos_framework/data/vfm/dataflow/__init__.py`
 - Test: `cosmos_framework/data/vfm/dataflow/collators_test.py`
@@ -308,6 +319,7 @@ git commit -m "feat(dataflow): add IdentityProcessor"
 - [ ] **Step 1: Write the failing test**
 
 `cosmos_framework/data/vfm/dataflow/collators_test.py`:
+
 ```python
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: OpenMDW-1.1
@@ -340,6 +352,7 @@ Expected: FAIL — `ModuleNotFoundError: ... dataflow.collators`.
 - [ ] **Step 3: Write minimal implementation**
 
 `cosmos_framework/data/vfm/dataflow/collators.py`:
+
 ```python
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: OpenMDW-1.1
@@ -361,9 +374,11 @@ class DefaultBatchCollator(BatchCollator):
 ```
 
 Add to `__init__.py`:
+
 ```python
 from cosmos_framework.data.vfm.dataflow.collators import DefaultBatchCollator
 ```
+
 and `"DefaultBatchCollator",` to `__all__`.
 
 - [ ] **Step 4: Run test to verify it passes**
@@ -385,6 +400,7 @@ git commit -m "feat(dataflow): add DefaultBatchCollator"
 ### Task 4: `SimpleBatcher`
 
 **Files:**
+
 - Create: `cosmos_framework/data/vfm/dataflow/batchers.py`
 - Modify: `cosmos_framework/data/vfm/dataflow/__init__.py`
 - Test: `cosmos_framework/data/vfm/dataflow/batchers_test.py`
@@ -392,6 +408,7 @@ git commit -m "feat(dataflow): add DefaultBatchCollator"
 - [ ] **Step 1: Write the failing test**
 
 `cosmos_framework/data/vfm/dataflow/batchers_test.py`:
+
 ```python
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: OpenMDW-1.1
@@ -429,6 +446,7 @@ Expected: FAIL — `ModuleNotFoundError: ... dataflow.batchers`.
 - [ ] **Step 3: Write minimal implementation**
 
 `cosmos_framework/data/vfm/dataflow/batchers.py`:
+
 ```python
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: OpenMDW-1.1
@@ -463,9 +481,11 @@ class SimpleBatcher(SampleBatcher):
 ```
 
 Add to `__init__.py`:
+
 ```python
 from cosmos_framework.data.vfm.dataflow.batchers import SimpleBatcher
 ```
+
 and `"SimpleBatcher",` to `__all__`.
 
 - [ ] **Step 4: Run test to verify it passes**
@@ -487,6 +507,7 @@ git commit -m "feat(dataflow): add SimpleBatcher"
 ### Task 5: `IterableDistributor`
 
 **Files:**
+
 - Create: `cosmos_framework/data/vfm/dataflow/distributors.py`
 - Modify: `cosmos_framework/data/vfm/dataflow/__init__.py`
 - Test: `cosmos_framework/data/vfm/dataflow/distributors_test.py`
@@ -494,6 +515,7 @@ git commit -m "feat(dataflow): add SimpleBatcher"
 - [ ] **Step 1: Write the failing test**
 
 `cosmos_framework/data/vfm/dataflow/distributors_test.py`:
+
 ```python
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: OpenMDW-1.1
@@ -548,6 +570,7 @@ Expected: FAIL — `ModuleNotFoundError: ... dataflow.distributors`.
 - [ ] **Step 3: Write minimal implementation**
 
 `cosmos_framework/data/vfm/dataflow/distributors.py`:
+
 ```python
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: OpenMDW-1.1
@@ -586,9 +609,11 @@ class IterableDistributor(DataDistributor):
 ```
 
 Add to `__init__.py`:
+
 ```python
 from cosmos_framework.data.vfm.dataflow.distributors import IterableDistributor
 ```
+
 and `"IterableDistributor",` to `__all__`.
 
 - [ ] **Step 4: Run test to verify it passes**
@@ -610,6 +635,7 @@ git commit -m "feat(dataflow): add IterableDistributor with round-robin sharding
 ### Task 6: `MapDistributor` (shuffle + sharding; no resume yet)
 
 **Files:**
+
 - Modify: `cosmos_framework/data/vfm/dataflow/distributors.py`
 - Modify: `cosmos_framework/data/vfm/dataflow/__init__.py`
 - Modify: `cosmos_framework/data/vfm/dataflow/distributors_test.py`
@@ -617,6 +643,7 @@ git commit -m "feat(dataflow): add IterableDistributor with round-robin sharding
 - [ ] **Step 1: Write the failing test**
 
 Append to `cosmos_framework/data/vfm/dataflow/distributors_test.py`:
+
 ```python
 import torch
 
@@ -681,6 +708,7 @@ Expected: FAIL — `ImportError: cannot import name 'MapDistributor'`.
 - [ ] **Step 3: Write minimal implementation**
 
 Append to `cosmos_framework/data/vfm/dataflow/distributors.py`:
+
 ```python
 import torch
 
@@ -734,9 +762,11 @@ class MapDistributor(DataDistributor):
 ```
 
 Add to `__init__.py`:
+
 ```python
 from cosmos_framework.data.vfm.dataflow.distributors import IterableDistributor, MapDistributor
 ```
+
 (replace the existing single-name import line) and add `"MapDistributor",` to `__all__`.
 
 - [ ] **Step 4: Run test to verify it passes**
@@ -758,6 +788,7 @@ git commit -m "feat(dataflow): add MapDistributor (per-epoch shuffle + slice sha
 ### Task 7: `CosmosDataLoader` orchestrator
 
 **Files:**
+
 - Create: `cosmos_framework/data/vfm/dataflow/loader.py`
 - Modify: `cosmos_framework/data/vfm/dataflow/__init__.py`
 - Test: `cosmos_framework/data/vfm/dataflow/loader_test.py`
@@ -770,6 +801,7 @@ the roles inside the worker) and the public `CosmosDataLoader`. DP coords:
 - [ ] **Step 1: Write the failing test**
 
 `cosmos_framework/data/vfm/dataflow/loader_test.py`:
+
 ```python
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: OpenMDW-1.1
@@ -854,6 +886,7 @@ Expected: FAIL — `ImportError: cannot import name 'CosmosDataLoader'`.
 - [ ] **Step 3: Write minimal implementation**
 
 `cosmos_framework/data/vfm/dataflow/loader.py`:
+
 ```python
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: OpenMDW-1.1
@@ -983,9 +1016,11 @@ class CosmosDataLoader(torch.utils.data.DataLoader):
 ```
 
 Add to `__init__.py`:
+
 ```python
 from cosmos_framework.data.vfm.dataflow.loader import CosmosDataLoader
 ```
+
 and `"CosmosDataLoader",` to `__all__`.
 
 - [ ] **Step 4: Run test to verify it passes**
@@ -1011,11 +1046,13 @@ coverage when run through an actual multi-worker `torch.utils.data.DataLoader`
 (not just direct `stream()` calls).
 
 **Files:**
+
 - Modify: `cosmos_framework/data/vfm/dataflow/loader_test.py`
 
 - [ ] **Step 1: Write the failing test**
 
 Append to `cosmos_framework/data/vfm/dataflow/loader_test.py`:
+
 ```python
 def test_multiworker_disjoint_and_complete_one_epoch():
     # 1 rank, 2 workers over a 12-item map dataset, batch_size=1, no shuffle.
@@ -1060,6 +1097,7 @@ git commit -m "test(dataflow): multi-worker disjoint-coverage integration test"
 ## Self-Review
 
 **Spec coverage (Plan 1 scope only):**
+
 - Four role ABCs (spec "Role contracts") → Task 1. ✅
 - `IdentityProcessor` (spec "Processor placement") → Task 2. ✅
 - `DefaultBatchCollator` (spec built-ins) → Task 3. ✅

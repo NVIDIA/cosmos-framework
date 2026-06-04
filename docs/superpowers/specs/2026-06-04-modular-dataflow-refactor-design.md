@@ -133,26 +133,26 @@ Non-packing batchers (e.g. `SimpleBatcher`) never call it.
 
 **Distributors** (`dataflow/distributors.py`):
 
-| Built-in | Wraps | Sharding | Shuffle | Resume | Replaces |
-|---|---|---|---|---|---|
-| `IterableDistributor` | iterable / `IterableDataset` | round-robin `i % total == mine` | no | no (`state_dict → {}`) | `_IterableWrapper` |
-| `MapDistributor` | map-style `Dataset` | per-epoch `randperm` slice | yes | yes (env-var fast-forward) | `_ShuffledMapIterableDataset` |
-| `RankPartitionedDistributor` | multiple datasets | whole ranks → datasets by ratio | per-dataset | per inner | `RankPartitionedDataLoader` |
-| `MixtureDistributor` | multiple distributors | ratio-weighted sample merge into one stream | per source | per source | `PackingIterableDataset.datasets_cfg` / `_get_next_sample` |
+| Built-in                     | Wraps                        | Sharding                                    | Shuffle     | Resume                     | Replaces                                                   |
+| ---------------------------- | ---------------------------- | ------------------------------------------- | ----------- | -------------------------- | ---------------------------------------------------------- |
+| `IterableDistributor`        | iterable / `IterableDataset` | round-robin `i % total == mine`             | no          | no (`state_dict → {}`)     | `_IterableWrapper`                                         |
+| `MapDistributor`             | map-style `Dataset`          | per-epoch `randperm` slice                  | yes         | yes (env-var fast-forward) | `_ShuffledMapIterableDataset`                              |
+| `RankPartitionedDistributor` | multiple datasets            | whole ranks → datasets by ratio             | per-dataset | per inner                  | `RankPartitionedDataLoader`                                |
+| `MixtureDistributor`         | multiple distributors        | ratio-weighted sample merge into one stream | per source  | per source                 | `PackingIterableDataset.datasets_cfg` / `_get_next_sample` |
 
 **Batchers** (`dataflow/batchers.py`):
 
-| Built-in | Strategy | `sample_size`? | Replaces |
-|---|---|---|---|
-| `SimpleBatcher` | fixed `batch_size`, pull-N | no | (new — normal torch DataLoader behavior) |
-| `PoolPackingBatcher` | pool-based greedy bin-packing (reorders within buffer to minimize padding); modality segregation | yes | `PackingIterableDataset._best_fit_batch` etc. |
-| `SequentialPackingBatcher` | order-preserving pull-until-budget; discards oversized | yes | VFM `PackingDataLoader.__iter__` |
+| Built-in                   | Strategy                                                                                         | `sample_size`? | Replaces                                      |
+| -------------------------- | ------------------------------------------------------------------------------------------------ | -------------- | --------------------------------------------- |
+| `SimpleBatcher`            | fixed `batch_size`, pull-N                                                                       | no             | (new — normal torch DataLoader behavior)      |
+| `PoolPackingBatcher`       | pool-based greedy bin-packing (reorders within buffer to minimize padding); modality segregation | yes            | `PackingIterableDataset._best_fit_batch` etc. |
+| `SequentialPackingBatcher` | order-preserving pull-until-budget; discards oversized                                           | yes            | VFM `PackingDataLoader.__iter__`              |
 
 **Collators** (`dataflow/collators.py`):
 
-| Built-in | Behavior | Replaces |
-|---|---|---|
-| `DefaultBatchCollator` | `torch.utils.data.default_collate` (stack) | (new) |
+| Built-in               | Behavior                                   | Replaces |
+| ---------------------- | ------------------------------------------ | -------- |
+| `DefaultBatchCollator` | `torch.utils.data.default_collate` (stack) | (new)    |
 
 Recipe-specific roles live with their recipes: `VLMProcessor` / `VLMCollator`
 (VLM experiment dir); `VideoPhy2Processor` (videophy2 experiment); `VFMListCollator`
@@ -216,14 +216,14 @@ The abstraction was validated against **every** dataloader/dataset class in the
 repo, not just VLM + VFM. Verdict: the four-role model covers all **live**
 recipes; the unused classes are expressible; there is no WebDataset obstacle.
 
-| Class | Live config? | Four-role expression |
-|---|---|---|
-| `PackingDataLoader` + `RankPartitionedDataLoader` (`joint_dataloader.py:768`, `:640`) | yes — vision_sft_nano, vision_sft_super | `RankPartitionedDistributor` + `SequentialPackingBatcher` + `VFMListCollator` |
-| `DataPackerDataLoader` / pool engine | yes — llava_ov | `IterableDistributor` + `PoolPackingBatcher` + `VLMCollator` |
-| `LocalSFTDataset` / `_UnshardedLocalSFTDataset` (`local_sft_dataset.py:190`, `videophy2_sft_nano.py:33`) | yes — videophy2_sft_nano | `IterableDistributor` + extracted augmentation processor + `PoolPackingBatcher` |
-| `DROIDLeRobotDataset` (`droid_lerobot_dataset.py:50`) | no (exported, no live config) | map-style → `MapDistributor` + `IdentityProcessor` |
-| `IterativeJointDataLoader` (`joint_dataloader.py:502`) | no | expressible as `JointCosmosDataLoader` (batch-interleave) |
-| `RandomJointDataLoader` (`joint_dataloader.py:879`) | no | expressible as Joint variant w/ per-rank RNG |
+| Class                                                                                                    | Live config?                            | Four-role expression                                                            |
+| -------------------------------------------------------------------------------------------------------- | --------------------------------------- | ------------------------------------------------------------------------------- |
+| `PackingDataLoader` + `RankPartitionedDataLoader` (`joint_dataloader.py:768`, `:640`)                    | yes — vision_sft_nano, vision_sft_super | `RankPartitionedDistributor` + `SequentialPackingBatcher` + `VFMListCollator`   |
+| `DataPackerDataLoader` / pool engine                                                                     | yes — llava_ov                          | `IterableDistributor` + `PoolPackingBatcher` + `VLMCollator`                    |
+| `LocalSFTDataset` / `_UnshardedLocalSFTDataset` (`local_sft_dataset.py:190`, `videophy2_sft_nano.py:33`) | yes — videophy2_sft_nano                | `IterableDistributor` + extracted augmentation processor + `PoolPackingBatcher` |
+| `DROIDLeRobotDataset` (`droid_lerobot_dataset.py:50`)                                                    | no (exported, no live config)           | map-style → `MapDistributor` + `IdentityProcessor`                              |
+| `IterativeJointDataLoader` (`joint_dataloader.py:502`)                                                   | no                                      | expressible as `JointCosmosDataLoader` (batch-interleave)                       |
+| `RandomJointDataLoader` (`joint_dataloader.py:879`)                                                      | no                                      | expressible as Joint variant w/ per-rank RNG                                    |
 
 **WebDataset is not an obstacle.** `JointDataLoader(webdataset.WebLoader)` never
 calls `super().__init__()` and uses zero WebDataset machinery (no tar shards, no
@@ -250,12 +250,12 @@ Heavy per-sample work today lives inside the dataset classes, not a separate
 processor. Mapping is decided per recipe (pragmatic balance — extract where cheap
 and valuable, keep-in-dataset where extraction is risky):
 
-| Recipe | RawItemProcessor |
-|---|---|
-| VLM (llava_ov) | real `VLMProcessor` (already separated in `VLMDataPacker`) |
-| videophy2 | extract augmentation chain → `VideoPhy2Processor`; dataset yields raw read samples |
+| Recipe                | RawItemProcessor                                                                                 |
+| --------------------- | ------------------------------------------------------------------------------------------------ |
+| VLM (llava_ov)        | real `VLMProcessor` (already separated in `VLMDataPacker`)                                       |
+| videophy2             | extract augmentation chain → `VideoPhy2Processor`; dataset yields raw read samples               |
 | VFM (vision_sft_nano) | `IdentityProcessor`; `SFTDataset.process_one_sample` stays in the dataset (extraction too risky) |
-| DROID (action) | `IdentityProcessor`; heavy `__getitem__` stays in the dataset |
+| DROID (action)        | `IdentityProcessor`; heavy `__getitem__` stays in the dataset                                    |
 
 For the keep-in-dataset recipes the `DataDistributor` wraps the existing dataset
 (which still processes) and `IdentityProcessor` is a no-op — behavior-preserving
@@ -286,10 +286,10 @@ pool + prewarm), while **homogeneous** mixing uses the flat `MixtureDistributor`
 
 Three distinct join semantics exist today and map to different homes:
 
-| Join semantic | New-design expression |
-|---|---|
-| sample-level mixing (homogeneous; one packing/collation) | `MixtureDistributor` — one pipeline |
-| rank-level partitioning | `RankPartitionedDistributor` |
+| Join semantic                                                                      | New-design expression                                                                                          |
+| ---------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------- |
+| sample-level mixing (homogeneous; one packing/collation)                           | `MixtureDistributor` — one pipeline                                                                            |
+| rank-level partitioning                                                            | `RankPartitionedDistributor`                                                                                   |
 | batch-level interleaving (heterogeneous; different processor/collator per dataset) | keep `JointCosmosDataLoader` as a slim outer wrapper composing N four-role loaders + per-loader resume routing |
 
 Homogeneous joins dissolve into `DataDistributor` built-ins (a real
@@ -302,13 +302,13 @@ stays — now composing the refactored loaders.
 
 ### Goal 1 — VLM (`llava_ov_datapacker`), behavior-preserving
 
-| Today (`llava_ov_datapacker_experiment.py`) | New role |
-|---|---|
-| `get_llava_ov_streaming()` → HF `IterableDataset` | `IterableDistributor(stream)` (round-robin, no resume) |
-| `VLMDataPacker.sft_process_sample` | `VLMProcessor.process` (verbatim) |
-| `VLMDataPacker.compute_num_tokens` → `len(input_ids)` | `PoolPackingBatcher.sample_size` (one-line override / `size_fn`) |
-| pool engine (`max_tokens`, `pool_size`, `max_batch_size=1`, `long_threshold`, `apply_long_sample_halving`) | `PoolPackingBatcher(...)` |
-| `VLMDataPacker.sft_collate_fn` | `VLMCollator.collate` (verbatim) |
+| Today (`llava_ov_datapacker_experiment.py`)                                                                | New role                                                         |
+| ---------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------- |
+| `get_llava_ov_streaming()` → HF `IterableDataset`                                                          | `IterableDistributor(stream)` (round-robin, no resume)           |
+| `VLMDataPacker.sft_process_sample`                                                                         | `VLMProcessor.process` (verbatim)                                |
+| `VLMDataPacker.compute_num_tokens` → `len(input_ids)`                                                      | `PoolPackingBatcher.sample_size` (one-line override / `size_fn`) |
+| pool engine (`max_tokens`, `pool_size`, `max_batch_size=1`, `long_threshold`, `apply_long_sample_halving`) | `PoolPackingBatcher(...)`                                        |
+| `VLMDataPacker.sft_collate_fn`                                                                             | `VLMCollator.collate` (verbatim)                                 |
 
 Recipe wiring:
 
@@ -327,13 +327,13 @@ Modality segregation (`_get_modality`) and `max_batch_size=1` move into
 
 ### Goal 2 — VFM (`vision_sft_nano`), behavior-preserving
 
-| Today (`joint_dataloader.py`, `sft_dataset.py`) | New role |
-|---|---|
-| `RankPartitionedDataLoader` (`:640-766`) | `RankPartitionedDistributor` |
-| `SFTDataset` (`sft_dataset.py:64-330`) | wrapped by `RankPartitionedDistributor`; `process_one_sample` stays in the dataset + `IdentityProcessor` (per-recipe choice — extraction too risky) |
-| `PackingDataLoader.__iter__` (sequential pull-until-budget, `:819-876`) | `SequentialPackingBatcher` |
-| `_compute_num_tokens_per_sample` (`:325-400`, VAE formula + config) | `SequentialPackingBatcher.sample_size` (ctor args: compression factors, patch size) |
-| `custom_collate_fn` (`:26-110`) | `VFMListCollator` — **must preserve** sparse-key handling (`sound=None` placeholders kept 1:1 with `sequence_plan`), optional-key dropping, and worker-timing aggregation |
+| Today (`joint_dataloader.py`, `sft_dataset.py`)                         | New role                                                                                                                                                                  |
+| ----------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `RankPartitionedDataLoader` (`:640-766`)                                | `RankPartitionedDistributor`                                                                                                                                              |
+| `SFTDataset` (`sft_dataset.py:64-330`)                                  | wrapped by `RankPartitionedDistributor`; `process_one_sample` stays in the dataset + `IdentityProcessor` (per-recipe choice — extraction too risky)                       |
+| `PackingDataLoader.__iter__` (sequential pull-until-budget, `:819-876`) | `SequentialPackingBatcher`                                                                                                                                                |
+| `_compute_num_tokens_per_sample` (`:325-400`, VAE formula + config)     | `SequentialPackingBatcher.sample_size` (ctor args: compression factors, patch size)                                                                                       |
+| `custom_collate_fn` (`:26-110`)                                         | `VFMListCollator` — **must preserve** sparse-key handling (`sound=None` placeholders kept 1:1 with `sequence_plan`), optional-key dropping, and worker-timing aggregation |
 
 The new loader produces the identical batch dict (`video` as `list[Tensor]`,
 `text_token_ids`, `sequence_plan`, …); VAE-encode-in-model, sequence packing, and
@@ -349,11 +349,11 @@ Already runs on `DataPackerDataLoader` today (`_UnshardedLocalSFTDataset` delega
 sharding to `_IterableWrapper`), so it is a strong precedent for the
 loader-owns-sharding model:
 
-| Today (`videophy2_sft_nano.py`, `local_sft_dataset.py`) | New role |
-|---|---|
-| `_UnshardedLocalSFTDataset` (disabled internal sharding) | `IterableDistributor(LocalSFTDataset(...))` (loader does the sharding) |
-| `LocalSFTDataset` augmentation chain (`_run_augmentor_chain`) | extracted → `VideoPhy2Processor.process` |
-| `VideoPhy2DataPacker` packing/collation | `PoolPackingBatcher` + a videophy2 collator |
+| Today (`videophy2_sft_nano.py`, `local_sft_dataset.py`)       | New role                                                               |
+| ------------------------------------------------------------- | ---------------------------------------------------------------------- |
+| `_UnshardedLocalSFTDataset` (disabled internal sharding)      | `IterableDistributor(LocalSFTDataset(...))` (loader does the sharding) |
+| `LocalSFTDataset` augmentation chain (`_run_augmentor_chain`) | extracted → `VideoPhy2Processor.process`                               |
+| `VideoPhy2DataPacker` packing/collation                       | `PoolPackingBatcher` + a videophy2 collator                            |
 
 ### Goal 2.5 — DROID / action (no live config yet)
 

@@ -80,19 +80,19 @@ collate`) is enforced by the loader, so the stages can't be misordered.
 
 ### Built-ins
 
-| Role | Built-in | Use it when |
-|---|---|---|
-| Distributor | `IterableDistributor(iterable)` | streaming / `IterableDataset` source (round-robin shard; **not** resumable) |
-| | `MapDistributor(dataset, seed=0, shuffle=True, name="")` | map-style `Dataset` (per-epoch shuffle, slice shard, **resumable**) |
-| | `RankPartitionedDistributor({name: {"dataset":…, "ratio":…}})` | assign whole DP ranks to different datasets by ratio |
-| | `MixtureDistributor({name: (distributor, ratio)}, seed=0)` | mix several distributors into one stream at the sample level |
-| Processor | `IdentityProcessor()` | the dataset already yields finished sample dicts |
-| | *(write your own)* | decode/tokenize/transform a raw record |
-| Batcher | `SimpleBatcher(batch_size, drop_last=False)` | fixed-size batches |
-| | `PoolPackingBatcher(max_tokens, pool_size=16, max_batch_size=1, long_threshold=6400, batching_strategy="prefer_closest", apply_long_sample_halving=True, size_fn=None)` | token-budget bin-packing (reorders within a pool to minimize padding) |
-| | `SequentialPackingBatcher(max_sequence_length, …, max_samples_per_batch=None)` | order-preserving pack-until-budget (no reordering) |
-| Collator | `DefaultBatchCollator()` | stack with `torch.utils.data.default_collate` |
-| | `VFMListCollator()` | VFM packed batches (media kept as per-sample lists) |
+| Role        | Built-in                                                                                                                                                                | Use it when                                                                 |
+| ----------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------- |
+| Distributor | `IterableDistributor(iterable)`                                                                                                                                         | streaming / `IterableDataset` source (round-robin shard; **not** resumable) |
+|             | `MapDistributor(dataset, seed=0, shuffle=True, name="")`                                                                                                                | map-style `Dataset` (per-epoch shuffle, slice shard, **resumable**)         |
+|             | `RankPartitionedDistributor({name: {"dataset":…, "ratio":…}})`                                                                                                          | assign whole DP ranks to different datasets by ratio                        |
+|             | `MixtureDistributor({name: (distributor, ratio)}, seed=0)`                                                                                                              | mix several distributors into one stream at the sample level                |
+| Processor   | `IdentityProcessor()`                                                                                                                                                   | the dataset already yields finished sample dicts                            |
+|             | *(write your own)*                                                                                                                                                      | decode/tokenize/transform a raw record                                      |
+| Batcher     | `SimpleBatcher(batch_size, drop_last=False)`                                                                                                                            | fixed-size batches                                                          |
+|             | `PoolPackingBatcher(max_tokens, pool_size=16, max_batch_size=1, long_threshold=6400, batching_strategy="prefer_closest", apply_long_sample_halving=True, size_fn=None)` | token-budget bin-packing (reorders within a pool to minimize padding)       |
+|             | `SequentialPackingBatcher(max_sequence_length, …, max_samples_per_batch=None)`                                                                                          | order-preserving pack-until-budget (no reordering)                          |
+| Collator    | `DefaultBatchCollator()`                                                                                                                                                | stack with `torch.utils.data.default_collate`                               |
+|             | `VFMListCollator()`                                                                                                                                                     | VFM packed batches (media kept as per-sample lists)                         |
 
 Recipe-specific roles live next to their recipes, e.g. `VLMProcessor` /
 `VLMCollator` (in `configs/base/vlm/experiment/dataflow_roles.py`) and
@@ -116,6 +116,7 @@ loader = CosmosDataLoader(
     num_workers=4,
 )
 ```
+
 Map-style sources are **resumable** (see §5).
 
 ### Bring your own streaming / iterable dataset
@@ -128,6 +129,7 @@ loader = CosmosDataLoader(
     batch_size=8,
 )
 ```
+
 Iterable sources are **not** resumable (you can't random-access to fast-forward).
 
 ### Token-budget packing for variable-length sequences
@@ -140,6 +142,7 @@ loader = CosmosDataLoader(
     collator=MyCollator(),
 )
 ```
+
 `PoolPackingBatcher.sample_size` defaults to `len(sample["input_ids"])`; pass
 `size_fn=lambda s: …` (or subclass and override `sample_size`) for a custom cost.
 
@@ -153,6 +156,7 @@ batcher=SequentialPackingBatcher(
     patch_spatial=2,
 )
 ```
+
 Packs samples in stream order until the token budget is hit (no reordering).
 Exactly one of `max_sequence_length` (token-budget mode) or
 `max_samples_per_batch` (count-only mode) must be set.
@@ -166,6 +170,7 @@ distributor=MixtureDistributor(
     seed=0,
 )
 ```
+
 Ratio-weighted merge into a single stream — use when the datasets share one
 processor/batcher/collator (homogeneous join).
 
@@ -180,6 +185,7 @@ joint = JointCosmosDataLoader(
     seed=42,
 )
 ```
+
 Each output batch comes from one selected inner `CosmosDataLoader` (ratio-weighted,
 seeded). Use when the joined datasets need *different* processing — each inner
 loader is a full four-role pipeline. Every yielded batch is tagged with
@@ -202,6 +208,7 @@ dataloader_train = L(CosmosDataLoader)(
     num_workers=2,
 )
 ```
+
 Override from the CLI like any Hydra node, e.g.
 `dataloader_train.batcher.max_tokens=8000`. See the live recipes for full examples:
 `vision_sft_nano_v2` (VFM), `pre_exp012_llava_ov_datapacker_v2` (VLM),

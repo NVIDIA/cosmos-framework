@@ -13,6 +13,7 @@
 > **HARD INVARIANT:** No change to `cosmos_framework/callbacks/dataloader_state.py` or the on-disk DCP state format. After this plan, a map-style `CosmosDataLoader` + `DataLoaderStateCallback(distributor_type="data_packer")` must checkpoint mid-epoch, restart, and resume at the exact next sample with no dup/skip — identical to the legacy loader.
 
 **Source references (verbatim behavior to reproduce):**
+
 - `cosmos_framework/data/vfm/data_packer_dataloader.py:224-262` — `_ShuffledMapIterableDataset.__iter__` env-var fast-forward + `_dp_epoch`/`_dp_stream_pos`.
 - `cosmos_framework/data/vfm/data_packer_dataloader.py:328-358` — `_get_next_sample` strip/re-attach + `collate_batch` batch stamping.
 - `cosmos_framework/callbacks/dataloader_state.py:38-123` — callback save/load (UNCHANGED; tested against).
@@ -24,25 +25,27 @@ Env-var format (must match exactly): `DP_STATE_WORKER_{worker_id}_EPOCH`, `DP_ST
 
 ## File Structure
 
-| File | Change |
-|---|---|
-| `cosmos_framework/data/vfm/dataflow/distributors.py` | `MapDistributor`: add `name`, env-var fast-forward, `_dp_*` meta attach |
-| `cosmos_framework/data/vfm/dataflow/loader.py` | `CosmosDataLoader`/`_DataflowIterableDataset`: meta strip/re-attach + batch stamping; enforce `persistent_workers=True` for `MapDistributor` |
-| `cosmos_framework/data/vfm/dataflow/distributors_test.py` | resume fast-forward unit tests |
-| `cosmos_framework/data/vfm/dataflow/loader_test.py` | meta-threading + stamping unit tests |
-| `cosmos_framework/data/vfm/dataflow/resume_test.py` (create) | checkpoint→restart integration test with the real callback |
+| File                                                         | Change                                                                                                                                       |
+| ------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------- |
+| `cosmos_framework/data/vfm/dataflow/distributors.py`         | `MapDistributor`: add `name`, env-var fast-forward, `_dp_*` meta attach                                                                      |
+| `cosmos_framework/data/vfm/dataflow/loader.py`               | `CosmosDataLoader`/`_DataflowIterableDataset`: meta strip/re-attach + batch stamping; enforce `persistent_workers=True` for `MapDistributor` |
+| `cosmos_framework/data/vfm/dataflow/distributors_test.py`    | resume fast-forward unit tests                                                                                                               |
+| `cosmos_framework/data/vfm/dataflow/loader_test.py`          | meta-threading + stamping unit tests                                                                                                         |
+| `cosmos_framework/data/vfm/dataflow/resume_test.py` (create) | checkpoint→restart integration test with the real callback                                                                                   |
 
 ---
 
 ### Task 1: `MapDistributor` env-var fast-forward + `_dp_*` meta
 
 **Files:**
+
 - Modify: `cosmos_framework/data/vfm/dataflow/distributors.py`
 - Modify: `cosmos_framework/data/vfm/dataflow/distributors_test.py`
 
 - [ ] **Step 1: Write the failing test**
 
 Append to `distributors_test.py`:
+
 ```python
 import os
 
@@ -88,6 +91,7 @@ Expected: FAIL — `MapDistributor` doesn't attach `_dp_*` or read env vars yet,
 - [ ] **Step 3: Replace `MapDistributor.stream` (and `__init__` already has `name`)**
 
 In `distributors.py`, replace the `MapDistributor.stream` body with the resume-aware version (reproduces `_ShuffledMapIterableDataset.__iter__`, `data_packer_dataloader.py:224-262`):
+
 ```python
     def stream(
         self, dp_rank: int, dp_world_size: int, worker_id: int, num_workers: int
@@ -145,6 +149,7 @@ git commit -m "feat(dataflow): MapDistributor env-var resume fast-forward + _dp_
 ### Task 2: `CosmosDataLoader` meta-threading + batch stamping
 
 **Files:**
+
 - Modify: `cosmos_framework/data/vfm/dataflow/loader.py`
 - Modify: `cosmos_framework/data/vfm/dataflow/loader_test.py`
 
@@ -157,6 +162,7 @@ batch when samples carry meta. Also enforce `persistent_workers=True` for a
 - [ ] **Step 1: Write the failing test**
 
 Append to `loader_test.py`:
+
 ```python
 def test_map_source_stamps_resume_meta_on_batch():
     loader = CosmosDataLoader(
@@ -194,6 +200,7 @@ Expected: FAIL — current orchestrator neither strips `_dp_*` nor stamps batche
 - [ ] **Step 3: Update `_DataflowIterableDataset.__iter__`**
 
 Replace `_DataflowIterableDataset.__iter__` in `loader.py` with the meta-aware version:
+
 ```python
     def __iter__(self):
         info = torch.utils.data.get_worker_info()
@@ -228,6 +235,7 @@ Replace `_DataflowIterableDataset.__iter__` in `loader.py` with the meta-aware v
 
 And in `CosmosDataLoader.__init__`, after resolving the distributor, enforce
 persistent workers for stateful map sources (insert before building loader_kwargs):
+
 ```python
         from cosmos_framework.data.vfm.dataflow.distributors import MapDistributor
 
@@ -260,6 +268,7 @@ git commit -m "feat(dataflow): CosmosDataLoader resume meta-threading + batch st
 ### Task 3: Resume integration test against the real callback
 
 **Files:**
+
 - Create: `cosmos_framework/data/vfm/dataflow/resume_test.py`
 
 Mirrors the single-process flow of `test_dp_state_distributed.py`: train N batches
@@ -271,6 +280,7 @@ assert it resumes at exactly the next sample with no dup/skip.
 - [ ] **Step 1: Write the failing test**
 
 `cosmos_framework/data/vfm/dataflow/resume_test.py`:
+
 ```python
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: OpenMDW-1.1
@@ -342,6 +352,7 @@ truth for fixing the env-var format, `resume_pos+1` start, or batch stamping.
 - [ ] **Step 3: Add a multi-worker variant**
 
 Append to `resume_test.py`:
+
 ```python
 def test_resume_multiworker_disjoint(monkeypatch):
     # 2 workers; each worker tracks its own (epoch,index). After resume each

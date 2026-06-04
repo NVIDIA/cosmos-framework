@@ -13,6 +13,7 @@
 > **HARD INVARIANT:** Resume + saving must not break. VFM resume goes through the `RankPartitionedDistributor` + the existing callbacks; the golden + a resume check guard it. The model side (VAE-encode-in-model, sequence packing, flow-matching loss) is downstream and unchanged.
 
 **Source references (verbatim to port):**
+
 - `cosmos_framework/data/vfm/joint_dataloader.py:16-110` — `custom_collate_fn` + `_aggregate_worker_timing` + `_BATCH_TIMING_KEYS` → `VFMListCollator`.
 - `cosmos_framework/data/vfm/joint_dataloader.py:325-400` — `_compute_num_tokens_per_sample` (VFM VAE token formula) → `SequentialPackingBatcher.sample_size`.
 - `cosmos_framework/data/vfm/joint_dataloader.py:819-876` — `PackingDataLoader.__iter__` (sequential packing + lookahead + oversized discard) → `SequentialPackingBatcher.batches`.
@@ -27,30 +28,32 @@
 
 ## File Structure
 
-| File | Change |
-|---|---|
-| `cosmos_framework/data/vfm/dataflow/collators.py` | add `VFMListCollator` |
-| `cosmos_framework/data/vfm/dataflow/batchers.py` | add `SequentialPackingBatcher` |
-| `cosmos_framework/data/vfm/dataflow/distributors.py` | add `RankPartitionedDistributor`, `MixtureDistributor` |
-| `cosmos_framework/data/vfm/dataflow/loader.py` | add `JointCosmosDataLoader` |
-| `cosmos_framework/data/vfm/dataflow/__init__.py` | export the four new symbols |
-| `*_test.py` co-located | unit tests per symbol |
-| `cosmos_framework/data/vfm/dataflow/golden_vfm_test.py` (create) | legacy-vs-new VFM batch equality |
-| `cosmos_framework/configs/base/experiment/sft/vision_sft_nano_v2.py` (create) | mirror experiment |
-| `examples/toml/sft_config/vision_sft_nano_v2.toml` (create) | mirror TOML |
-| `examples/launch_sft_vision_nano_datapacker.sh` (create) | launch wrapper |
+| File                                                                          | Change                                                 |
+| ----------------------------------------------------------------------------- | ------------------------------------------------------ |
+| `cosmos_framework/data/vfm/dataflow/collators.py`                             | add `VFMListCollator`                                  |
+| `cosmos_framework/data/vfm/dataflow/batchers.py`                              | add `SequentialPackingBatcher`                         |
+| `cosmos_framework/data/vfm/dataflow/distributors.py`                          | add `RankPartitionedDistributor`, `MixtureDistributor` |
+| `cosmos_framework/data/vfm/dataflow/loader.py`                                | add `JointCosmosDataLoader`                            |
+| `cosmos_framework/data/vfm/dataflow/__init__.py`                              | export the four new symbols                            |
+| `*_test.py` co-located                                                        | unit tests per symbol                                  |
+| `cosmos_framework/data/vfm/dataflow/golden_vfm_test.py` (create)              | legacy-vs-new VFM batch equality                       |
+| `cosmos_framework/configs/base/experiment/sft/vision_sft_nano_v2.py` (create) | mirror experiment                                      |
+| `examples/toml/sft_config/vision_sft_nano_v2.toml` (create)                   | mirror TOML                                            |
+| `examples/launch_sft_vision_nano_datapacker.sh` (create)                      | launch wrapper                                         |
 
 ---
 
 ### Task 1: `VFMListCollator` (port `custom_collate_fn`)
 
 **Files:**
+
 - Modify: `cosmos_framework/data/vfm/dataflow/collators.py`, `__init__.py`
 - Modify: `cosmos_framework/data/vfm/dataflow/collators_test.py`
 
 - [ ] **Step 1: Write the failing test**
 
 Append to `collators_test.py`:
+
 ```python
 from cosmos_framework.data.vfm.dataflow.collators import VFMListCollator
 
@@ -90,6 +93,7 @@ Append to `collators.py`. **Copy verbatim** the module-level constants
 (`_TIMING_KEYS`, `_BATCH_TIMING_KEYS`), the `custom_collate_fn` body, and
 `_aggregate_worker_timing` from `joint_dataloader.py:16-110`, then wrap as a
 `BatchCollator`:
+
 ```python
 import torch
 from torch.utils.data import default_collate
@@ -139,6 +143,7 @@ git commit -m "feat(dataflow): add VFMListCollator (port of custom_collate_fn)"
 ### Task 2: `SequentialPackingBatcher`
 
 **Files:**
+
 - Modify: `cosmos_framework/data/vfm/dataflow/batchers.py`, `__init__.py`, `batchers_test.py`
 
 Port `PackingDataLoader.__iter__` (`joint_dataloader.py:819-876`): pull samples in
@@ -149,6 +154,7 @@ ports `_compute_num_tokens_per_sample` (`:325-400`, the VAE token formula).
 - [ ] **Step 1: Write the failing test**
 
 Append to `batchers_test.py`:
+
 ```python
 from cosmos_framework.data.vfm.dataflow.batchers import SequentialPackingBatcher
 
@@ -205,6 +211,7 @@ Expected: FAIL — `SequentialPackingBatcher` not defined.
 - [ ] **Step 3: Implement**
 
 Append to `batchers.py`:
+
 ```python
 from collections import deque as _deque
 
@@ -322,6 +329,7 @@ git commit -m "feat(dataflow): add SequentialPackingBatcher (port of PackingData
 ### Task 3: `RankPartitionedDistributor`
 
 **Files:**
+
 - Modify: `cosmos_framework/data/vfm/dataflow/distributors.py`, `__init__.py`, `distributors_test.py`
 
 Ports `RankPartitionedDataLoader.__init__` rank-allocation (`:707-744`) and
@@ -333,6 +341,7 @@ self-shards across workers via `worker_info`).
 - [ ] **Step 1: Write the failing test**
 
 Append to `distributors_test.py`:
+
 ```python
 from cosmos_framework.data.vfm.dataflow.distributors import RankPartitionedDistributor
 
@@ -371,6 +380,7 @@ Expected: FAIL — not defined.
 - [ ] **Step 3: Implement**
 
 Append to `distributors.py`:
+
 ```python
 from cosmos_framework.utils.lazy_config import instantiate
 
@@ -456,6 +466,7 @@ git commit -m "feat(dataflow): add RankPartitionedDistributor (port of RankParti
 ### Task 4: `MixtureDistributor`
 
 **Files:**
+
 - Modify: `cosmos_framework/data/vfm/dataflow/distributors.py`, `__init__.py`, `distributors_test.py`
 
 Ratio-weighted merge of multiple `DataDistributor`s into one stream (ports the
@@ -465,6 +476,7 @@ weighted `random.choices` selection of `PackingIterableDataset._get_next_sample`
 - [ ] **Step 1: Write the failing test**
 
 Append to `distributors_test.py`:
+
 ```python
 import random as _random
 
@@ -499,6 +511,7 @@ Expected: FAIL — not defined.
 - [ ] **Step 3: Implement**
 
 Append to `distributors.py`:
+
 ```python
 import random as _random_mod
 
@@ -547,6 +560,7 @@ git commit -m "feat(dataflow): add MixtureDistributor (ratio-weighted homogeneou
 ### Task 5: `JointCosmosDataLoader`
 
 **Files:**
+
 - Modify: `cosmos_framework/data/vfm/dataflow/loader.py`, `__init__.py`
 - Create: `cosmos_framework/data/vfm/dataflow/joint_loader_test.py`
 
@@ -559,6 +573,7 @@ works unchanged.
 - [ ] **Step 1: Write the failing test**
 
 `joint_loader_test.py`:
+
 ```python
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: OpenMDW-1.1
@@ -638,6 +653,7 @@ git commit -m "feat(dataflow): add JointCosmosDataLoader (port of JointDataPacke
 ### Task 6: VFM golden-batch + mirror experiment + regression
 
 **Files:**
+
 - Create: `cosmos_framework/data/vfm/dataflow/golden_vfm_test.py`
 - Create: `cosmos_framework/configs/base/experiment/sft/vision_sft_nano_v2.py`
 - Create: `examples/toml/sft_config/vision_sft_nano_v2.toml`
@@ -648,6 +664,7 @@ git commit -m "feat(dataflow): add JointCosmosDataLoader (port of JointDataPacke
 `golden_vfm_test.py`: build a small fixed map-style stub dataset that yields
 SFTDataset-shaped samples (`video`, `text_token_ids`, `sequence_plan`,
 `image_size`, ...). Drive BOTH:
+
 - legacy: `PackingDataLoader(dataloader=RankPartitionedDataLoader(datasets={"video": {dataset: stub, ratio: 1}}, batch_size=1), max_sequence_length=..., tokenizer_spatial_compression_factor=16, tokenizer_temporal_compression_factor=4, patch_spatial=2)` (run under `torch.distributed` single-process init, or stub `shard_world_size/shard_rank`).
 - new: `CosmosDataLoader(distributor=RankPartitionedDistributor({"video": {dataset: stub, ratio: 1}}), processor=IdentityProcessor(), batcher=SequentialPackingBatcher(max_sequence_length=..., tokenizer_spatial_compression_factor=16, tokenizer_temporal_compression_factor=4, patch_spatial=2), collator=VFMListCollator())`.
 Assert the first N packed batches are equal (compare per-key: list lengths +
@@ -666,6 +683,7 @@ Run: `pytest cosmos_framework/data/vfm/dataflow/golden_vfm_test.py -v` and fix
 
 `vision_sft_nano_v2.py`: copy `vision_sft_nano.py` (`:50-275`), replacing only the
 `dataloader_train` block with the four-role wiring:
+
 ```python
 dataloader_train=L(CosmosDataLoader)(
     distributor=L(RankPartitionedDistributor)(
@@ -687,6 +705,7 @@ dataloader_train=L(CosmosDataLoader)(
     prefetch_factor=4,
 ),
 ```
+
 Keep the `get_sft_dataset(...)` args identical to the original (`:235-268`).
 Register as `vision_sft_nano_v2` in the ConfigStore. Add a registration smoke test.
 
@@ -698,6 +717,7 @@ set `[job].experiment="vision_sft_nano_v2"`, `[job].name` likewise,
 `[trainer].logging_iter=1`, `[trainer].max_iter=500`.
 
 `examples/launch_sft_vision_nano_datapacker.sh`:
+
 ```bash
 #!/usr/bin/env bash
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.

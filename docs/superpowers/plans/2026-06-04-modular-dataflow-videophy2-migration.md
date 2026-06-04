@@ -13,6 +13,7 @@
 > **HARD INVARIANT:** videophy2's source is iterable → non-resumable today; the mirror must preserve that (no resume, callbacks untouched). Checkpoint *saving* (model/optim) is unaffected.
 
 **Source references:**
+
 - `cosmos_framework/configs/base/vlm/experiment/videophy2_sft_nano.py` — `_UnshardedLocalSFTDataset` (`:33-49`), `VideoPhy2DataPacker` (`:114-245`: `sft_process_sample` `:185-213`, `compute_num_tokens` `:215-216`, `sft_collate_fn` `:218-245`), `build_videophy2_local_dataset` (`:52-75`), `build_videophy2_datapacker_dataloader` (`:78-81`), dataloader wiring (`:315-356`).
 - `cosmos_framework/data/vlm/local_sft_dataset.py:190` — `LocalSFTDataset`.
 - `examples/toml/sft_config/videophy2_sft_nano.toml`, `examples/launch_sft_videophy2_nano.sh`.
@@ -21,21 +22,22 @@
 
 ## File Structure
 
-| File | Change |
-|---|---|
-| `cosmos_framework/configs/base/vlm/experiment/videophy2_dataflow_roles.py` (create) | `VideoPhy2Processor` (extracted) |
-| `cosmos_framework/configs/base/vlm/experiment/videophy2_dataflow_roles_test.py` (create) | processor unit test |
-| `cosmos_framework/data/vfm/dataflow/golden_videophy2_test.py` (create) | legacy-vs-new batch equality |
-| `cosmos_framework/configs/base/vlm/experiment/videophy2_sft_nano_v2_experiment.py` (create) | mirror experiment (train+val) |
-| `cosmos_framework/configs/base/vlm/experiment/videophy2_sft_nano_v2_test.py` (create) | registration smoke |
-| `examples/toml/sft_config/videophy2_sft_nano_v2.toml` (create) | mirror recipe TOML |
-| `examples/launch_sft_videophy2_datapacker.sh` (create) | launch wrapper for the mirror |
+| File                                                                                        | Change                           |
+| ------------------------------------------------------------------------------------------- | -------------------------------- |
+| `cosmos_framework/configs/base/vlm/experiment/videophy2_dataflow_roles.py` (create)         | `VideoPhy2Processor` (extracted) |
+| `cosmos_framework/configs/base/vlm/experiment/videophy2_dataflow_roles_test.py` (create)    | processor unit test              |
+| `cosmos_framework/data/vfm/dataflow/golden_videophy2_test.py` (create)                      | legacy-vs-new batch equality     |
+| `cosmos_framework/configs/base/vlm/experiment/videophy2_sft_nano_v2_experiment.py` (create) | mirror experiment (train+val)    |
+| `cosmos_framework/configs/base/vlm/experiment/videophy2_sft_nano_v2_test.py` (create)       | registration smoke               |
+| `examples/toml/sft_config/videophy2_sft_nano_v2.toml` (create)                              | mirror recipe TOML               |
+| `examples/launch_sft_videophy2_datapacker.sh` (create)                                      | launch wrapper for the mirror    |
 
 ---
 
 ### Task 1: `VideoPhy2Processor` (extract from VideoPhy2DataPacker)
 
 **Files:**
+
 - Create: `cosmos_framework/configs/base/vlm/experiment/videophy2_dataflow_roles.py`
 - Test: `cosmos_framework/configs/base/vlm/experiment/videophy2_dataflow_roles_test.py`
 
@@ -47,6 +49,7 @@ that helper verbatim and wrap it as a `RawItemProcessor`.
 - [ ] **Step 1: Write the failing test**
 
 `videophy2_dataflow_roles_test.py`:
+
 ```python
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: OpenMDW-1.1
@@ -107,6 +110,7 @@ Expected: FAIL — module not found.
 `videophy2_dataflow_roles.py` — copy `VideoPhy2DataPacker.sft_process_sample`
 (`videophy2_sft_nano.py:185-213`) and its helper `_materialize_media_in_conversation`
 **verbatim** into a `RawItemProcessor`:
+
 ```python
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: OpenMDW-1.1
@@ -183,6 +187,7 @@ git commit -m "feat(videophy2): extract VideoPhy2Processor from VideoPhy2DataPac
 ### Task 2: Golden-batch equality (legacy vs new)
 
 **Files:**
+
 - Create: `cosmos_framework/data/vfm/dataflow/golden_videophy2_test.py`
 
 Same pattern as Plan 2 Task 3, but with `VideoPhy2DataPacker` (legacy) vs
@@ -192,6 +197,7 @@ videophy2 `sft_collate_fn` truly equals `VLMCollator` by reusing the latter.
 - [ ] **Step 1: Write the failing/characterization test**
 
 `golden_videophy2_test.py`:
+
 ```python
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: OpenMDW-1.1
@@ -291,6 +297,7 @@ git commit -m "test(dataflow): golden-batch equality videophy2 legacy vs new"
 ### Task 3: Mirror experiment (train + val) + registration smoke
 
 **Files:**
+
 - Create: `cosmos_framework/configs/base/vlm/experiment/videophy2_sft_nano_v2_experiment.py`
 - Create: `cosmos_framework/configs/base/vlm/experiment/videophy2_sft_nano_v2_test.py`
 
@@ -301,6 +308,7 @@ Copy the `videophy2_sft_nano` experiment, swapping BOTH `dataloader_train` and
 - [ ] **Step 1: Write the registration smoke test**
 
 `videophy2_sft_nano_v2_test.py`:
+
 ```python
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: OpenMDW-1.1
@@ -328,6 +336,7 @@ Expected: FAIL — module not found.
 (defaults, job, trainer, model, checkpoint, data_setting) verbatim from
 `videophy2_sft_nano.py`, changing only `job.name` to
 `"videophy2_sft_nano_v2_${now:...}"` and replacing the two dataloaders:
+
 ```python
 # (imports: LazyCall as L, LazyDict, ConfigStore, build_processor, IGNORE_INDEX,
 #  the new dataflow roles, and the original build_videophy2_local_dataset)
@@ -361,6 +370,7 @@ def _dl(dataset_key, split, num_workers):
 # ))
 # cs.store(group="experiment", package="_global_", name="videophy2_sft_nano_v2", node=videophy2_sft_nano_v2)
 ```
+
 Copy the non-dataloader blocks (job/trainer/model/checkpoint/data_setting/defaults)
 exactly from `videophy2_sft_nano.py:248-370` so only the dataloaders differ.
 
@@ -382,6 +392,7 @@ git commit -m "feat(videophy2): mirror experiment videophy2_sft_nano_v2 on dataf
 ### Task 4: Mirror TOML + launch wrapper + regression run
 
 **Files:**
+
 - Create: `examples/toml/sft_config/videophy2_sft_nano_v2.toml`
 - Create: `examples/launch_sft_videophy2_datapacker.sh`
 
@@ -395,6 +406,7 @@ Copy `examples/toml/sft_config/videophy2_sft_nano.toml` to
 - [ ] **Step 2: Write the launch wrapper**
 
 `examples/launch_sft_videophy2_datapacker.sh`:
+
 ```bash
 #!/usr/bin/env bash
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.

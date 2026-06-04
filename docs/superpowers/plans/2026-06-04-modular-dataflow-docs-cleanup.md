@@ -1,7 +1,7 @@
 # Modular Dataflow — Tutorial + Cleanup (Plan 6 of N)
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans. Steps use checkbox (`- [ ]`) syntax.
-
+>
 > **EXECUTION ORDER: LAST.** Do not execute the cleanup tasks (Tasks 2–4) until ALL mirror experiments (VLM, videophy2, VFM) have passed golden-batch + loss-curve equivalence from Plans 2/4/5. Deleting the legacy baseline before equivalence is confirmed removes the only ground truth. The docs task (Task 1) can be drafted earlier but is finalized here.
 
 **Goal:** Ship `docs/dataflow.md` (the bring-your-own-dataset tutorial), promote the validated `*_v2` mirror experiments to canonical names, and delete the legacy dataloaders + superseded experiments in one cleanup PR.
@@ -18,27 +18,30 @@
 
 ## File Structure
 
-| File | Change |
-|---|---|
-| `docs/dataflow.md` | create — the tutorial |
-| `AGENTS.md`, `docs/code_structure.md`, docs index, `cosmos3-post-training` skill | add a link to `docs/dataflow.md` |
-| `examples/toml/sft_config/*_v2.toml`, `examples/launch_sft_*_datapacker.sh` | promote to canonical names |
-| `cosmos_framework/configs/base/**/experiment/*_v2*.py` | promote to canonical experiment names |
-| `cosmos_framework/data/vfm/joint_dataloader.py`, `data_packer.py`, `packing_iterable_dataset.py`, `data_packer_dataloader.py` | delete (or reduce to nothing) |
-| call sites importing the above | update imports to `dataflow.*` |
+| File                                                                                                                          | Change                                |
+| ----------------------------------------------------------------------------------------------------------------------------- | ------------------------------------- |
+| `docs/dataflow.md`                                                                                                            | create — the tutorial                 |
+| `AGENTS.md`, `docs/code_structure.md`, docs index, `cosmos3-post-training` skill                                              | add a link to `docs/dataflow.md`      |
+| `examples/toml/sft_config/*_v2.toml`, `examples/launch_sft_*_datapacker.sh`                                                   | promote to canonical names            |
+| `cosmos_framework/configs/base/**/experiment/*_v2*.py`                                                                        | promote to canonical experiment names |
+| `cosmos_framework/data/vfm/joint_dataloader.py`, `data_packer.py`, `packing_iterable_dataset.py`, `data_packer_dataloader.py` | delete (or reduce to nothing)         |
+| call sites importing the above                                                                                                | update imports to `dataflow.*`        |
 
 ---
 
 ### Task 1: Write `docs/dataflow.md` (tutorial)
 
 **Files:**
+
 - Create: `docs/dataflow.md`
 
 - [ ] **Step 1: Write the tutorial following the spec outline**
 
 Write `docs/dataflow.md` with these sections (spec "Documentation deliverable"):
+
 1. **Mental model** — the diagram `DataDistributor → RawItemProcessor → SampleBatcher → BatchCollator`, one sentence each.
 2. **Quickstart (60s)** — runnable:
+
    ```python
    from cosmos_framework.data.vfm.dataflow import (
        CosmosDataLoader, MapDistributor, IdentityProcessor,
@@ -49,6 +52,7 @@ Write `docs/dataflow.md` with these sections (spec "Documentation deliverable"):
        batch_size=32,
    )
    ```
+
 3. **The four roles** — each: purpose, ABC signature (copy from `dataflow/base.py`), built-ins, a minimal custom example.
 4. **Recipes by use-case** — map dataset (`MapDistributor` + shuffle + resume), iterable (`IterableDistributor`), token-budget packing (`PoolPackingBatcher` + `size_fn`), order-preserving packing (`SequentialPackingBatcher`), ratio mixing (`MixtureDistributor`), heterogeneous interleave (`JointCosmosDataLoader`).
 5. **Wiring into a training recipe** — Hydra `LazyCall` block + CLI overrides (`dataloader_train.batcher.max_tokens=...`).
@@ -84,6 +88,7 @@ git commit -m "docs: add docs/dataflow.md bring-your-own-dataset tutorial + cros
 ### Task 2: Promote `*_v2` mirrors to canonical names
 
 **Files:**
+
 - experiments, TOMLs, launch wrappers
 
 > Gate: only after all three loss-curve regressions pass.
@@ -125,6 +130,7 @@ git commit -m "refactor: promote dataflow mirror recipes to canonical names"
 ### Task 3: Delete legacy dataloaders
 
 **Files:**
+
 - Delete: `cosmos_framework/data/vfm/joint_dataloader.py`, `cosmos_framework/data/vfm/data_packer.py`, `cosmos_framework/data/vfm/packing_iterable_dataset.py`, `cosmos_framework/data/vfm/data_packer_dataloader.py` (and their `*_test.py`)
 - Delete: `VLMDataPacker`/`VideoPhy2DataPacker` and their now-unused helpers in the experiment modules
 - Update: every import of the deleted symbols
@@ -132,9 +138,11 @@ git commit -m "refactor: promote dataflow mirror recipes to canonical names"
 - [ ] **Step 1: Find every reference**
 
 Run:
+
 ```bash
 grep -rn "joint_dataloader\|data_packer_dataloader\|packing_iterable_dataset\|\bDataPacker\b\|VLMDataPacker\|VideoPhy2DataPacker\|JointDataPackerDataLoader\|RankPartitionedDataLoader\|PackingDataLoader\|custom_collate_fn" cosmos_framework examples | grep -v "/dataflow/"
 ```
+
 Expected: a list of call sites to update or delete. The golden tests in
 `dataflow/golden_*_test.py` import the legacy loaders — these tests have served
 their purpose (equivalence proven); convert them to frozen-fixture tests OR delete
@@ -191,6 +199,7 @@ this only confirms the canonical recipe still runs.)
 git add -A
 git commit -m "chore: dataflow refactor cleanup complete; CosmosDataLoader canonical"
 ```
+
 Open the PR summarizing: new four-role abstraction, three migrated recipes with
 loss-curve-equivalence run URLs, resume parity, legacy deletion.
 
