@@ -122,10 +122,14 @@ _PACKER_KWARGS = dict(
 # Helpers
 # ──────────────────────────────────────────────────────────────────────────────
 
-def _setup_dist():
-    """Init a single-process gloo group; return True if we used gloo, False for monkeypatch."""
-    os.environ.setdefault("MASTER_ADDR", "127.0.0.1")
-    os.environ.setdefault("MASTER_PORT", "29557")
+def _setup_dist(monkeypatch):
+    """Init a single-process gloo group; return True if we used gloo, False for monkeypatch.
+
+    Uses monkeypatch.setenv (auto-restored at teardown) so the test does not leave
+    MASTER_ADDR/MASTER_PORT dirtied in os.environ — the repo conftest enforces this.
+    """
+    monkeypatch.setenv("MASTER_ADDR", "127.0.0.1")
+    monkeypatch.setenv("MASTER_PORT", "29557")
     if not dist.is_initialized():
         try:
             dist.init_process_group(backend="gloo", rank=0, world_size=1)
@@ -223,7 +227,7 @@ def test_vfm_golden_batches_match(monkeypatch):
     )
 
     # ── distributed bootstrap ──────────────────────────────────────────────
-    used_gloo = _setup_dist()
+    used_gloo = _setup_dist(monkeypatch)
     if not used_gloo:
         _monkeypatch_dist(monkeypatch)
 
