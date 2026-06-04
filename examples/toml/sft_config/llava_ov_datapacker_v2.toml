@@ -101,5 +101,8 @@ keys_to_skip_loading = []
 load_path            = "???"                      # MISSING sentinel; skipped by build_hydra_overrides — supply at runtime
 save_iter            = 100
 
-[dataloader_train]
-max_samples_per_batch = 1                          # → dataloader_train.max_batch_size on VLM
+# NOTE: no [dataloader_train] block. The v2 experiment wires a four-role
+# CosmosDataLoader whose batch cap lives in PoolPackingBatcher(max_batch_size=1);
+# the legacy `max_samples_per_batch -> dataloader_train.max_batch_size` remap
+# would target a key that no longer exists on the CosmosDataLoader node
+# (ConfigAttributeError: Key 'max_batch_size' is not in struct).

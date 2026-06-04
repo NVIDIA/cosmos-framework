@@ -53,5 +53,6 @@ def test_resume_continues_without_dup_or_skip():
     cb2.load_state_dict(state)
 
     loader2 = _build()
-    resumed = [next(iter(loader2))["id"].item() for _ in range(3)]
+    it2 = iter(loader2)  # one iterator: env-var fast-forward happens once, then continues
+    resumed = [next(it2)["id"].item() for _ in range(3)]
     assert resumed == [5, 6, 7]

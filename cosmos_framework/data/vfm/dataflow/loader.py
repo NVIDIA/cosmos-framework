@@ -45,11 +45,10 @@ class _DataflowIterableDataset(torch.utils.data.IterableDataset):
         self._collator = collator
         self._dp_rank = dp_rank
         self._dp_world_size = dp_world_size
-        self._cached_gen = None  # persistent generator for MapDistributor (single-process)
 
-    def _make_batch_gen(self, worker_id: int, num_workers: int):
-        """Create the batch generator for this worker. Called once; result is cached
-        for MapDistributor sources so resume state survives across iter() calls."""
+    def __iter__(self):
+        info = torch.utils.data.get_worker_info()
+        worker_id, num_workers = (info.id, info.num_workers) if info else (0, 1)
         raw = self._distributor.stream(self._dp_rank, self._dp_world_size, worker_id, num_workers)
 
         def _processed():
@@ -76,21 +75,6 @@ class _DataflowIterableDataset(torch.utils.data.IterableDataset):
             else:
                 batch = self._collator.collate(group)
             yield batch
-
-    def __iter__(self):
-        info = torch.utils.data.get_worker_info()
-        worker_id, num_workers = (info.id, info.num_workers) if info else (0, 1)
-        from cosmos_framework.data.vfm.dataflow.distributors import MapDistributor
-
-        if isinstance(self._distributor, MapDistributor) and info is None:
-            # Single-process mode: keep the generator alive across iter() calls so
-            # that resume state (env-var fast-forward on first call, then plain
-            # continuation) is preserved — same semantics as persistent_workers.
-            if self._cached_gen is None:
-                self._cached_gen = self._make_batch_gen(worker_id, num_workers)
-            return self._cached_gen
-        else:
-            return self._make_batch_gen(worker_id, num_workers)
 
 
 class CosmosDataLoader(torch.utils.data.DataLoader):
