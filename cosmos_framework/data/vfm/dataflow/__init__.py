@@ -13,7 +13,7 @@ from cosmos_framework.data.vfm.dataflow.base import (
     SampleBatcher,
 )
 from cosmos_framework.data.vfm.dataflow.batchers import PoolPackingBatcher, SimpleBatcher
-from cosmos_framework.data.vfm.dataflow.collators import DefaultBatchCollator
+from cosmos_framework.data.vfm.dataflow.collators import DefaultBatchCollator, VFMListCollator
 from cosmos_framework.data.vfm.dataflow.distributors import IterableDistributor, MapDistributor
 from cosmos_framework.data.vfm.dataflow.loader import CosmosDataLoader
 from cosmos_framework.data.vfm.dataflow.processors import IdentityProcessor
@@ -30,4 +30,5 @@ __all__ = [
     "RawItemProcessor",
     "SampleBatcher",
     "SimpleBatcher",
+    "VFMListCollator",
 ]
