@@ -24,7 +24,13 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # Gate: run pre-commit (lint) first; the GPU job below is skipped if it fails,
+  # so the single self-hosted runner isn't spent on a lint-failing commit.
+  pre-commit:
+    uses: ./.github/workflows/pre-commit.yml
+
   inference-smoke:
+    needs: pre-commit
     runs-on: [self-hosted, gpu, h200]
     timeout-minutes: 60
     env:
