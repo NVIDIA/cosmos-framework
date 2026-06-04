@@ -71,3 +71,16 @@ def test_requires_batcher_or_batch_size():
             distributor=IterableDistributor([]),
             processor=IdentityProcessor(),
         )
+
+
+def test_multiworker_disjoint_and_complete_one_epoch():
+    loader = CosmosDataLoader(
+        distributor=MapDistributor(_MapDS(12), shuffle=False),
+        processor=IdentityProcessor(),
+        batch_size=1,
+        num_workers=2,
+    )
+    it = iter(loader)
+    seen = [next(it)["i"].item() for _ in range(12)]
+    assert sorted(seen) == list(range(12))
+    assert len(set(seen)) == 12
