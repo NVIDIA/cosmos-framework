@@ -594,11 +594,12 @@ _GOLDENS: dict[str, dict[str, dict[str, list[float] | None]]] = {
     # prepared in-test by the ``h100_inputs`` fixture (or via
     # ``tests/_stage_h100_inputs.sh`` if its env vars are pre-set).
     "h100": {
-        # Recaptured 2026-06-04 on H100 with num_workers=0 (deterministic mode
-        # off — see the spec's hydra overrides and the loss_tol_bands tiers).
-        # grad-norm is non-det, so skipped (None).
+        # num_workers=0, deterministic mode off (see the spec's hydra overrides
+        # and the loss_tol_bands tiers). Centered on the midpoint of two H200 CI
+        # runs (CI runs on H200) so the tiered bands keep maximum margin; iter-0
+        # is bit-exact across H100/H200 runs. grad-norm is non-det, so None.
         "llava_ov_datapacker": {
-            "loss": [1.06924, 0.88348, 1.0908, 1.15844, 1.03463, 0.99349, 1.11166, 0.96545, 0.80903, 0.98361],
+            "loss": [1.06924, 0.88399, 1.09293, 1.16314, 1.03592, 0.99041, 1.11041, 0.97001, 0.81246, 0.98548],
             "grad_norm": None,
         },
         # Recaptured 2026-06-03 after the TOML-config rewrite shifted some
