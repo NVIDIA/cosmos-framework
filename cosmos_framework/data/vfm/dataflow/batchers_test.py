@@ -76,3 +76,44 @@ def test_pool_does_not_mix_modalities():
     groups = list(b.batches(iter([img, txt])))
     assert len(groups) == 2
     assert all(len(g) == 1 for g in groups)
+
+
+from cosmos_framework.data.vfm.dataflow.batchers import SequentialPackingBatcher
+
+
+def _vid(text_len, t=1, h=64, w=64):
+    return {"text_token_ids": torch.arange(text_len), "video": torch.zeros(3, t, h, w)}
+
+
+def test_sequential_size_uses_vae_formula():
+    b = SequentialPackingBatcher(
+        max_sequence_length=100000,
+        tokenizer_spatial_compression_factor=16,
+        tokenizer_temporal_compression_factor=4,
+        patch_spatial=2,
+    )
+    # text(5) + 1 (eos) + vision: latent_h=64//(16*2)=2, latent_w=2, latent_t=1 -> 2*2*1+2=6
+    assert b.sample_size(_vid(5)) == 5 + 1 + 6
+
+
+def test_sequential_packs_in_order_until_budget():
+    b = SequentialPackingBatcher(
+        max_sequence_length=40,
+        tokenizer_spatial_compression_factor=16,
+        tokenizer_temporal_compression_factor=4,
+        patch_spatial=2,
+    )
+    groups = list(b.batches(iter([_vid(5) for _ in range(7)])))
+    assert len(groups[0]) == 3   # ~12 tokens each; 3 fit under 40
+
+
+def test_sequential_discards_oversized_when_batch_empty():
+    b = SequentialPackingBatcher(
+        max_sequence_length=10,
+        tokenizer_spatial_compression_factor=16,
+        tokenizer_temporal_compression_factor=4,
+        patch_spatial=2,
+    )
+    groups = list(b.batches(iter([_vid(50), _vid(1)])))
+    flat = [s for g in groups for s in g]
+    assert all(s["text_token_ids"].shape[0] == 1 for s in flat)  # big one discarded
