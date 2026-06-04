@@ -1,7 +1,7 @@
 # Modular Dataflow Refactor: DataPackerDataLoader & DataPacker
 
 **Date:** 2026-06-04
-**Status:** Design approved, pending implementation plan
+**Status:** Design approved; implementation plan in progress
 **Scope:** All three goals (see below)
 
 ## Problem
@@ -136,7 +136,10 @@ Non-packing batchers (e.g. `SimpleBatcher`) never call it.
 | `DefaultBatchCollator` | `torch.utils.data.default_collate` (stack) | (new) |
 
 Recipe-specific roles live with their recipes: `VLMProcessor` / `VLMCollator`
-(VLM experiment dir); `SFTVideoProcessor` / `VFMListCollator` (VFM data package).
+(VLM experiment dir); `VideoPhy2Processor` (videophy2 experiment); `VFMListCollator`
+(VFM data package). VFM/DROID use the built-in `IdentityProcessor` for now
+(`SFTVideoProcessor` / `DROIDProcessor` are the deferred follow-up — see
+"Processor placement" below).
 
 **Built-in naming convention:** built-ins use the full role word as suffix
 (`VLMProcessor` *is-a* `RawItemProcessor`, `VLMCollator` *is-a* `BatchCollator`).
