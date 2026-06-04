@@ -236,6 +236,18 @@ For the keep-in-dataset recipes the `DataDistributor` wraps the existing dataset
 (which still processes) and `IdentityProcessor` is a no-op — behavior-preserving
 by construction.
 
+**Known deviation (deferred, accepted).** `IdentityProcessor` + a still-processing
+dataset means the Processor role is *hollow* for VFM/DROID — processing stays
+welded to `SFTDataset` / `DROIDLeRobotDataset` instead of living in a swappable
+`RawItemProcessor`. This is a deliberate, conscious break from the clean
+four-role separation, chosen for safety and a minimal migration diff. It does not
+block Goals 1–3 (the loader and the other three roles are fully modular; only
+these two recipes under-use the Processor slot). Tracked as a **follow-up
+refactor**: later, split `SFTDataset.process_one_sample` (and DROID's
+`__getitem__` work) into real `SFTVideoProcessor` / `DROIDProcessor` so the
+distributor yields raw metadata/rows and processing becomes reusable. Until then,
+treat the hollow Processor as intentional, not an oversight.
+
 ### Prewarm + per-dataset worker pools
 
 `JointDataLoader._prewarm_dataloaders` (`:258-323`) forces each inner loader to
@@ -399,7 +411,9 @@ into `VFMListCollator`.
 - cosmos-rl name compatibility dropped; borrow design only.
 - Resume/checkpoint format unchanged.
 - Processor placement is per-recipe: real processor for VLM + videophy2;
-  `IdentityProcessor` (heavy work stays in dataset) for VFM + DROID.
+  `IdentityProcessor` (heavy work stays in dataset) for VFM + DROID. This is an
+  accepted, deferred deviation from the clean four-role split (hollow Processor
+  for those recipes) — refactor into real processors later.
 - `webdataset.WebLoader` base is vestigial → dropped; whole `joint_dataloader.py`
   family (incl. legacy `IterativeJointDataLoader` / `RandomJointDataLoader`)
   replaced/deleted after live recipes migrate.
