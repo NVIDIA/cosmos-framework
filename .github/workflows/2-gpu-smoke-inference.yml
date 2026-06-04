@@ -1,0 +1,54 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: OpenMDW-1.1
+
+# Cosmos3-Nano 8-GPU multi-modality inference smoke (t2vs + policy + forward_dynamics) on a
+# self-hosted 8×H200 runner.
+#
+# Requires:
+#   * a self-hosted runner labelled [self-hosted, gpu, h200] with 8 GPUs,
+#     NVIDIA drivers, and `uv` on PATH;
+#   * an `HF_TOKEN` repository secret (gated model downloads).
+#
+# The Cosmos3-Nano checkpoint (and its sound tokenizer) download to the runner's
+# HF cache; later runs reuse it.
+name: GPU Smoke (Inference)
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: gpu-smoke-inference-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  inference-smoke:
+    runs-on: [self-hosted, gpu, h200]
+    timeout-minutes: 60
+    env:
+      HF_TOKEN: ${{ secrets.HF_TOKEN }}
+      HF_HUB_DISABLE_XET: "1"
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: astral-sh/setup-uv@v7
+
+      - name: Sync environment (cu128-train)
+        run: uv sync --all-extras --group=cu128-train
+
+      # One inference call over t2vs (+sound), action policy, and forward_dynamics; checks each output.
+      # MAX_GPUS defaults to 8. -s streams the live process log.
+      - name: Nano inference smoke (t2vs + action policy + forward_dynamics, 8 GPU)
+        run: |
+          export LD_LIBRARY_PATH=
+          uv run --all-extras --group=cu128-train python -m pytest -v -s \
+            tests/nano_inference_smoke_test.py --num-gpus=8 --levels=2 -o addopts=
+
+      # Inference writes only the pytest tmp dir (the t2vs video + logs); the
+      # checkpoint download stays in the HF cache (kept). No examples/ artifacts.
+      - name: Clean up run outputs
+        if: always()
+        run: |
+          rm -rf "${TMPDIR:-/tmp}"/pytest-of-* /tmp/pytest-of-* || true
