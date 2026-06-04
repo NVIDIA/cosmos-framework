@@ -350,6 +350,50 @@ DataPackerDataLoader(
 )
 ```
 
+## Documentation deliverable: `docs/dataflow.md`
+
+A new user-facing tutorial is a required deliverable (not optional) — Goal 3
+("users define their own dataflow") only lands if it is easy to follow. It sits
+alongside `docs/training.md` / `docs/dataset_jsonl.md` / `docs/inference.md`, is
+referenced from `AGENTS.md`, `docs/code_structure.md`, the docs index, and the
+`cosmos3-post-training` skill. Audience: a user who has their own dataset and
+wants to train on it without reading the dataloader internals.
+
+Structure (task-oriented, copy-pasteable, progressively deeper):
+
+1. **Mental model** — one diagram: `DataDistributor → RawItemProcessor →
+   SampleBatcher → BatchCollator`, one sentence each. "Pick a built-in for each
+   slot, or write your own."
+2. **Quickstart (60-second path)** — "I have a HuggingFace/map dataset and want
+   normal batching": `DataPackerDataLoader(distributor=MapDistributor(ds,
+   shuffle=True), processor=IdentityProcessor(), batch_size=32)`. Runnable.
+3. **The four roles**, each: what it does, the ABC signature, when to use a
+   built-in vs. write your own, a minimal custom example.
+4. **Recipes by use-case** (the core of the doc):
+   - bring your own map-style dataset (`MapDistributor` + shuffle + resume)
+   - bring your own streaming/iterable dataset (`IterableDistributor`)
+   - token-budget packing for variable-length sequences (`PoolPackingBatcher` +
+     `sample_size`)
+   - order-preserving sequence packing (`SequentialPackingBatcher`)
+   - mix multiple datasets by ratio (`MixtureDistributor`)
+   - interleave heterogeneous pipelines (`JointDataPackerDataLoader`)
+5. **Wiring into a training recipe** — Hydra `LazyCall` in an experiment SKU and
+   CLI overrides (`dataloader_train.batcher.max_tokens=...`).
+6. **Checkpoint / resume** — `MapDistributor` + `DataLoaderStateCallback`; what is
+   and isn't resumable (iterable sources are not).
+7. **Distributed & sharding** — DP rank vs. workers, `parallel_dims`, how disjoint
+   coverage works; the `name=` namespacing for joint loaders.
+8. **Troubleshooting / FAQ** — OOM → `apply_long_sample_halving`; modality mixing
+   in pool packing; `num_workers` / `persistent_workers` rules; oversized-sample
+   discard.
+9. **End-to-end worked example** — a complete, novel custom dataset (e.g. a local
+   image-caption folder) wired through all four roles into a runnable training
+   command.
+
+Each role's reference docstrings + the recipe code blocks are the primary spec
+for the tutorial; the live VLM/videophy2/VFM recipes serve as real-world examples
+to link to.
+
 ## File layout
 
 ```
@@ -361,6 +405,8 @@ cosmos_framework/data/vfm/
     batchers.py            # Simple / PoolPacking / SequentialPacking
     collators.py           # DefaultBatchCollator
   data_packer_dataloader.py  # DataPackerDataLoader (new internals) + JointDataPackerDataLoader
+
+docs/dataflow.md             # NEW user tutorial (bring-your-own-dataset)
 ```
 
 **Deleted in the Phase-5 cleanup PR** (kept as the regression baseline until all
@@ -421,11 +467,15 @@ serve as the regression baseline. Deletion happens only in the final Phase 5 PR.
    `vision_sft_nano_datapacker` (and `_super`) mirror; pass golden-batch +
    loss-curve equivalence. Also add `MixtureDistributor` + reconcile
    `JointDataPackerDataLoader` as the outer composer.
-5. **Cleanup PR (separate)** — once all mirrors are validated: promote mirror
+5. **Docs** — write `docs/dataflow.md` (the bring-your-own-dataset tutorial) and
+   link it from `AGENTS.md`, `docs/code_structure.md`, the docs index, and the
+   `cosmos3-post-training` skill. Drafted incrementally as roles land (Phase 1)
+   and finalized once all recipes are migrated.
+6. **Cleanup PR (separate)** — once all mirrors are validated: promote mirror
    experiments to the default names, then delete the old dataloaders
    (`joint_dataloader.py` family, `data_packer.py`, `packing_iterable_dataset.py`,
    private wrappers) and the superseded original experiments.
-6. **(Optional / future)** `DROIDLeRobotDataset` via `MapDistributor` when an
+7. **(Optional / future)** `DROIDLeRobotDataset` via `MapDistributor` when an
    action recipe goes live; later, extract real `RawItemProcessor`s for the
    keep-in-dataset recipes (the deferred hollow-Processor refactor).
 
