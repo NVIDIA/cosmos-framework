@@ -9,17 +9,29 @@ IdentityProcessor, SequentialPackingBatcher, VFMListCollator) yields the SAME
 packed batches as PackingDataLoader(RankPartitionedDataLoader(...)) given an
 identical input stream.
 
-Architecture differences that are EXPECTED and explicitly excluded:
-  - Keys starting with '_' (internal bookkeeping: _num_tokens, _num_samples, etc.)
-    are emitted by the legacy PackingDataLoader but not by the new stack.
-  - 'dataset_name': set by the legacy packing loop but not by SequentialPackingBatcher.
-  - Nesting depth for multi-item keys:
-    * Legacy: video / text_token_ids stored as list[list[tensor]] (inner list wraps
-      each sample via v[i:i+1] in _get_next_sample).
-    * New:    video / text_token_ids stored as list[tensor] (VFMListCollator puts
-              each sample's tensor directly in the list, no inner wrapping).
-    The per-sample tensor CONTENTS are identical; we compare them elementwise.
-  - 'image_size': both paths flatten to a plain list of tensors (same shape).
+Equality is asserted on the meaningful PAYLOAD keys — specifically ``video``,
+``text_token_ids``, and ``image_size`` — after normalising for known structural
+differences.  Bookkeeping keys are intentionally excluded from comparison:
+
+  - Keys starting with ``_`` (e.g. ``_num_tokens``, ``_num_samples``): emitted
+    by the legacy PackingDataLoader as internal metadata but not produced by the
+    new four-role stack.
+  - ``dataset_name``: set by the legacy packing loop; not emitted by
+    SequentialPackingBatcher.
+
+List-nesting is also normalised before comparison:
+
+  - Legacy: ``video`` / ``text_token_ids`` are ``list[list[tensor]]`` (each
+    sample is wrapped in an inner single-element list by ``_get_next_sample``).
+  - New:    ``video`` / ``text_token_ids`` are ``list[tensor]`` (VFMListCollator
+    places each sample's tensor directly in the list).
+
+The per-sample tensor CONTENTS are identical in both cases; ``_unwrap_video`` /
+``_unwrap_text`` normalise the nesting so tensor-level equality can be checked.
+
+In other words this test proves *payload equivalence*, not byte-identity of all
+output keys: bookkeeping fields and inner-list wrapping are explicitly out of
+scope.
 """
 
 from __future__ import annotations

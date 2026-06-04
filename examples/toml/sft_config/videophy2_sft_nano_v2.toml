@@ -25,10 +25,10 @@
 [job]
 task         = "vlm"
 experiment   = "videophy2_sft_nano_v2"
-project      = "cosmos_oss_alignment"
+project      = "cosmos3"
 group        = "vlm_videophy2_sft"
 name         = "videophy2_sft_nano_v2"
-wandb_mode   = "online"
+wandb_mode   = "disabled"
 
 [model]
 attn_implementation = "cosmos"

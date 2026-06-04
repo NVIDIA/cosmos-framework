@@ -21,7 +21,7 @@ from cosmos_framework.configs.base.vlm.experiment.videophy2_sft_nano import buil
 cs = ConfigStore.instance()
 
 
-def _dl(dataset_key, split, num_workers):
+def _dl(dataset_key, split, num_workers, persistent_workers=False, pin_memory=False, prefetch_factor=None):
     return L(CosmosDataLoader)(
         distributor=L(IterableDistributor)(
             iterable=L(build_videophy2_local_dataset)(dataset_key=dataset_key, split=split),
@@ -41,6 +41,9 @@ def _dl(dataset_key, split, num_workers):
         ),
         collator=L(VLMCollator)(),
         num_workers=num_workers,
+        persistent_workers=persistent_workers,
+        pin_memory=pin_memory,
+        prefetch_factor=prefetch_factor,
     )
 
 
@@ -111,8 +114,8 @@ videophy2_sft_nano_v2 = LazyDict(
             hf_export=dict(enabled=True),
         ),
         upload_reproducible_setup=False,
-        dataloader_train=_dl("videophy2_train", "train", 2),
-        dataloader_val=_dl("videophy2_val", "val", 0),
+        dataloader_train=_dl("videophy2_train", "train", 2, persistent_workers=True, pin_memory=True, prefetch_factor=2),
+        dataloader_val=_dl("videophy2_val", "val", 0, persistent_workers=False, pin_memory=True, prefetch_factor=None),
     ),
     flags={"allow_objects": True},
 )

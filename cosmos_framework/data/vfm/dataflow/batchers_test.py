@@ -117,3 +117,29 @@ def test_sequential_discards_oversized_when_batch_empty():
     groups = list(b.batches(iter([_vid(50), _vid(1)])))
     flat = [s for g in groups for s in g]
     assert all(s["text_token_ids"].shape[0] == 1 for s in flat)  # big one discarded
+
+
+def test_sequential_count_only_mode():
+    # max_sequence_length=None + max_samples_per_batch=2 -> fixed 2-sample groups.
+    b = SequentialPackingBatcher(
+        max_sequence_length=None,
+        tokenizer_spatial_compression_factor=16,
+        tokenizer_temporal_compression_factor=4,
+        patch_spatial=2,
+        max_samples_per_batch=2,
+    )
+    groups = list(b.batches(iter([_vid(5) for _ in range(6)])))
+    assert all(len(g) == 2 for g in groups)
+    assert len(groups) == 3
+
+
+def test_sequential_requires_exactly_one_mode():
+    import pytest
+    with pytest.raises(AssertionError):
+        SequentialPackingBatcher(  # both None -> invalid
+            max_sequence_length=None,
+            tokenizer_spatial_compression_factor=16,
+            tokenizer_temporal_compression_factor=4,
+            patch_spatial=2,
+            max_samples_per_batch=None,
+        )

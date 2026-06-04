@@ -2,7 +2,18 @@
 # SPDX-License-Identifier: OpenMDW-1.1
 
 """Golden-batch equality: legacy DataPackerDataLoader+VideoPhy2DataPacker vs the new
-four-role dataflow loader on the same fixed source must yield identical batches."""
+four-role dataflow loader on the same fixed source must yield identical batches.
+
+SINGLETON-scope by design: this test is intentionally constrained to
+``max_batch_size=1`` (one sample per batch).  Both the VideoPhy2 recipe and the
+legacy ``VideoPhy2DataPacker.sft_collate_fn`` hard-assert ``len(samples) == 1``,
+so a multi-sample legacy-vs-new parity test is not constructible without forking
+the legacy code.
+
+Multi-sample ``PoolPackingBatcher`` packing behaviour is covered independently
+by ``batchers_test.py::test_pool_packs_multiple_within_budget`` and related
+pool-batcher tests.
+"""
 
 from __future__ import annotations
 

@@ -16,10 +16,10 @@
 [job]
 task         = "vfm"
 experiment   = "vision_sft_nano_v2"
-project      = "cosmos_oss_alignment"
+project      = "cosmos3"
 group        = "sft"
 name         = "vision_sft_nano_v2"
-wandb_mode   = "online"
+wandb_mode   = "disabled"
 
 [model]
 max_num_tokens_after_packing = 45056

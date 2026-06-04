@@ -199,10 +199,10 @@ class SequentialPackingBatcher(SampleBatcher):
 
     def __init__(
         self,
-        max_sequence_length: int,
-        tokenizer_spatial_compression_factor: int,
-        tokenizer_temporal_compression_factor: int,
-        patch_spatial: int,
+        max_sequence_length: Optional[int] = None,
+        tokenizer_spatial_compression_factor: int = 16,
+        tokenizer_temporal_compression_factor: int = 4,
+        patch_spatial: int = 2,
         max_samples_per_batch=None,
         lookahead_limit: int = 10,
         sound_latent_fps: float = 0,
@@ -216,6 +216,10 @@ class SequentialPackingBatcher(SampleBatcher):
         self.lookahead_limit = lookahead_limit
         self.sound_latent_fps = sound_latent_fps
         self.audio_sample_rate = audio_sample_rate
+        assert (self.max_sequence_length is None) != (self.max_samples_per_batch is None), (
+            "Exactly one of max_sequence_length or max_samples_per_batch must be set "
+            "(token-budget mode vs count-only mode), matching legacy PackingDataLoader."
+        )
 
     def sample_size(self, sample: dict) -> int:
         # PORT of _compute_num_tokens_per_sample (joint_dataloader.py:325-400),
@@ -324,7 +328,7 @@ class SequentialPackingBatcher(SampleBatcher):
                     exhausted = True
                     break
                 n = self.sample_size(s)
-                if current_len + n >= self.max_sequence_length:
+                if self.max_sequence_length is not None and current_len + n >= self.max_sequence_length:
                     if not group:
                         log.error(
                             f"SequentialPackingBatcher: discarding oversized sample with {n} "
