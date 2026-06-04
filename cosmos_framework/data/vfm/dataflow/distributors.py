@@ -55,19 +55,20 @@ class MapDistributor(DataDistributor):
     def __len__(self) -> int:
         return len(self._dataset)  # type: ignore[arg-type]
 
-    def stream(
-        self, dp_rank: int, dp_world_size: int, worker_id: int, num_workers: int
-    ):
+    def stream(self, dp_rank, dp_world_size, worker_id, num_workers):
+        import os
+
         stream_id = dp_rank * num_workers + worker_id
         total_streams = dp_world_size * num_workers
         n = len(self._dataset)  # type: ignore[arg-type]
         if n == 0:
             return
         if stream_id >= n:
-            # This (rank, worker) owns no items for any epoch (dataset smaller
-            # than dp_world_size * num_workers). Terminate instead of spinning.
             return
-        epoch = 0
+        _pfx = f"DP_STATE_{self._name}_" if self._name else "DP_STATE_"
+        resume_epoch = int(os.environ.pop(f"{_pfx}WORKER_{worker_id}_EPOCH", 0))
+        resume_pos = int(os.environ.pop(f"{_pfx}WORKER_{worker_id}_INDEX", -1))
+        epoch = resume_epoch
         while True:
             if self._shuffle:
                 g = torch.Generator().manual_seed(self._seed + epoch)
@@ -75,6 +76,11 @@ class MapDistributor(DataDistributor):
             else:
                 perm = list(range(n))
             stream_slice = perm[stream_id::total_streams]
-            for pos in range(len(stream_slice)):
-                yield self._dataset[stream_slice[pos]]
+            start = (resume_pos + 1) if epoch == resume_epoch else 0
+            for pos in range(start, len(stream_slice)):
+                item = self._dataset[stream_slice[pos]]
+                if isinstance(item, dict):
+                    yield {"_dp_epoch": epoch, "_dp_stream_pos": pos, **item}
+                else:
+                    yield item
             epoch += 1

@@ -102,3 +102,38 @@ def test_map_nonempty_shard_still_infinite():
     first = [next(it)["i"] for _ in range(4)]
     assert first == [0, 1, 2, 3]
     assert next(it)["i"] == 0  # wraps into epoch 1, still producing
+
+
+import os
+
+
+def test_map_resume_fast_forwards_from_env(monkeypatch):
+    monkeypatch.setenv("DP_STATE_WORKER_0_EPOCH", "0")
+    monkeypatch.setenv("DP_STATE_WORKER_0_INDEX", "3")
+    d = MapDistributor(_MapDS(10), shuffle=False)
+    it = d.stream(dp_rank=0, dp_world_size=1, worker_id=0, num_workers=1)
+    first = next(it)
+    assert first["i"] == 4
+    assert first["_dp_epoch"] == 0
+    assert first["_dp_stream_pos"] == 4
+
+
+def test_map_attaches_dp_meta_when_no_resume():
+    d = MapDistributor(_MapDS(4), shuffle=False)
+    it = d.stream(dp_rank=0, dp_world_size=1, worker_id=0, num_workers=1)
+    s0 = next(it)
+    assert s0["i"] == 0 and s0["_dp_epoch"] == 0 and s0["_dp_stream_pos"] == 0
+
+
+def test_map_resume_env_is_consumed_once(monkeypatch):
+    monkeypatch.setenv("DP_STATE_WORKER_0_INDEX", "2")
+    d = MapDistributor(_MapDS(6), shuffle=False)
+    next(d.stream(0, 1, 0, 1))
+    assert "DP_STATE_WORKER_0_INDEX" not in os.environ
+
+
+def test_map_name_namespaces_env(monkeypatch):
+    monkeypatch.setenv("DP_STATE_vlm_WORKER_0_INDEX", "1")
+    d = MapDistributor(_MapDS(6), shuffle=False, name="vlm")
+    first = next(d.stream(0, 1, 0, 1))
+    assert first["i"] == 2
