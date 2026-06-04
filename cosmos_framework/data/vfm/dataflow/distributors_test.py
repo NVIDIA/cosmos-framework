@@ -137,3 +137,34 @@ def test_map_name_namespaces_env(monkeypatch):
     d = MapDistributor(_MapDS(6), shuffle=False, name="vlm")
     first = next(d.stream(0, 1, 0, 1))
     assert first["i"] == 2
+
+
+from cosmos_framework.data.vfm.dataflow.distributors import RankPartitionedDistributor
+
+
+class _ShardAwareDS(torch.utils.data.IterableDataset):
+    def __init__(self, tag):
+        self.tag = tag
+        self.shard_world_size = None
+        self.shard_rank = None
+        self.shard_id = None
+
+    def __iter__(self):
+        yield {"tag": self.tag, "sw": self.shard_world_size, "sr": self.shard_rank, "sid": self.shard_id}
+
+
+def _rp():
+    return RankPartitionedDistributor({
+        "video": {"dataset": _ShardAwareDS("video"), "ratio": 3},
+        "image": {"dataset": _ShardAwareDS("image"), "ratio": 1},
+    })
+
+
+def test_rank_partition_allocates_and_sets_shards():
+    # world=4, ratios 3:1 -> ranks 0-2 video (shard_world_size=3), rank 3 image.
+    r0 = next(_rp().stream(dp_rank=0, dp_world_size=4, worker_id=0, num_workers=1))
+    assert r0["tag"] == "video" and r0["sw"] == 3 and r0["sr"] == 0
+    r2 = next(_rp().stream(dp_rank=2, dp_world_size=4, worker_id=0, num_workers=1))
+    assert r2["tag"] == "video" and r2["sr"] == 2
+    r3 = next(_rp().stream(dp_rank=3, dp_world_size=4, worker_id=0, num_workers=1))
+    assert r3["tag"] == "image" and r3["sw"] == 1 and r3["sr"] == 0
