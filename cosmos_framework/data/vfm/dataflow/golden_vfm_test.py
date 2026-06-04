@@ -1,37 +1,27 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: OpenMDW-1.1
 
-"""Golden-batch equality: legacy PackingDataLoader+RankPartitionedDataLoader vs the
-new four-role VFM dataflow stack on the same fixed, deterministic source.
+"""Golden-batch EXACT equality: legacy PackingDataLoader+RankPartitionedDataLoader
+vs the new four-role VFM dataflow stack on the same fixed, deterministic source.
 
 This test proves that the new CosmosDataLoader(RankPartitionedDistributor,
-IdentityProcessor, SequentialPackingBatcher, VFMListCollator) yields the SAME
-packed batches as PackingDataLoader(RankPartitionedDataLoader(...)) given an
-identical input stream.
+IdentityProcessor, SequentialPackingBatcher, VFMListCollator) yields STRUCTURALLY
+IDENTICAL packed batches to PackingDataLoader(RankPartitionedDataLoader(...)) given
+an identical input stream — INCLUDING the list[list[Tensor]] nesting for
+_MULTI_ITEM_KEYS.
 
-Equality is asserted on the meaningful PAYLOAD keys — specifically ``video``,
-``text_token_ids``, and ``image_size`` — after normalising for known structural
-differences.  Bookkeeping keys are intentionally excluded from comparison:
+Comparison covers all payload keys (those not starting with ``_`` and not
+``dataset_name``).  No nesting normalization is applied.
 
-  - Keys starting with ``_`` (e.g. ``_num_tokens``, ``_num_samples``): emitted
-    by the legacy PackingDataLoader as internal metadata but not produced by the
-    new four-role stack.
+  - ``video``, ``text_token_ids``: both stacks produce ``list[list[Tensor]]``
+    (each inner list is a single-element list wrapping the sample tensor).
+  - ``image_size``: both stacks produce a flat ``list[Tensor]``
+    (``_FLATTEN_LIST_KEYS`` path → extend rather than append).
+
+Bookkeeping keys excluded from comparison:
+  - Keys starting with ``_`` (e.g. ``_num_tokens``): legacy internal metadata.
   - ``dataset_name``: set by the legacy packing loop; not emitted by
     SequentialPackingBatcher.
-
-List-nesting is also normalised before comparison:
-
-  - Legacy: ``video`` / ``text_token_ids`` are ``list[list[tensor]]`` (each
-    sample is wrapped in an inner single-element list by ``_get_next_sample``).
-  - New:    ``video`` / ``text_token_ids`` are ``list[tensor]`` (VFMListCollator
-    places each sample's tensor directly in the list).
-
-The per-sample tensor CONTENTS are identical in both cases; ``_unwrap_video`` /
-``_unwrap_text`` normalise the nesting so tensor-level equality can be checked.
-
-In other words this test proves *payload equivalence*, not byte-identity of all
-output keys: bookkeeping fields and inner-list wrapping are explicitly out of
-scope.
 """
 
 from __future__ import annotations
@@ -66,6 +56,7 @@ _SAMPLE_SPECS = [
     (6,  1, 64, 64),
 ]
 
+
 def _make_fixed_samples():
     """Return a deterministic list of SFT-shaped sample dicts."""
     samples = []
@@ -73,7 +64,7 @@ def _make_fixed_samples():
         # Use constant tensors so equality checks are trivially deterministic.
         video = torch.full((3, T, H, W), float(idx), dtype=torch.float32)
         text_token_ids = torch.arange(tlen, dtype=torch.long)
-        # image_size: a small tensor exercising the collator's list path.
+        # image_size: a small tensor exercising the _FLATTEN_LIST_KEYS path.
         image_size = torch.tensor([H, W], dtype=torch.long)
         samples.append({
             "video": video,
@@ -84,7 +75,7 @@ def _make_fixed_samples():
 
 
 class _FixedSFTDataset(torch.utils.data.IterableDataset):
-    """Yields the fixed sample list, cycling indefinitely.
+    """Yields the fixed sample list, cycling twice.
 
     Exposes shard_world_size / shard_rank / shard_id attributes so
     RankPartitionedDataLoader and RankPartitionedDistributor can set them.
@@ -158,7 +149,7 @@ def _drain(loader, n: int) -> list[dict]:
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# Payload-key extraction helpers
+# Exact structural comparison helpers
 # ──────────────────────────────────────────────────────────────────────────────
 
 _SKIP_KEYS = {"dataset_name"}  # bookkeeping only, not in new stack
@@ -169,79 +160,56 @@ def _payload_keys(batch: dict) -> set[str]:
     return {k for k in batch if not k.startswith("_") and k not in _SKIP_KEYS}
 
 
-def _unwrap_video(val):
-    """Normalise legacy list[list[tensor]] and new list[tensor] to list[tensor]."""
-    out = []
-    for item in val:
-        if isinstance(item, list):
-            # legacy wraps each sample as a single-element list
-            out.extend(item)
-        else:
-            out.append(item)
-    return out
+def _assert_tensors_equal(a, b, label: str) -> None:
+    assert isinstance(a, torch.Tensor) and isinstance(b, torch.Tensor), (
+        f"{label}: expected two Tensors, got {type(a)} and {type(b)}"
+    )
+    assert torch.equal(a, b), f"{label}: tensor mismatch:\n  legacy={a}\n  new={b}"
 
 
-def _unwrap_text(val):
-    """Same unwrapping for text_token_ids."""
-    return _unwrap_video(val)
+def _assert_exact(legacy_val, new_val, key: str) -> None:
+    """Recursively assert exact structural and value equality."""
+    if isinstance(legacy_val, list) and isinstance(new_val, list):
+        assert len(legacy_val) == len(new_val), (
+            f"key={key}: list length mismatch: legacy={len(legacy_val)}, new={len(new_val)}"
+        )
+        for i, (a, b) in enumerate(zip(legacy_val, new_val)):
+            _assert_exact(a, b, f"{key}[{i}]")
+    elif isinstance(legacy_val, torch.Tensor) and isinstance(new_val, torch.Tensor):
+        _assert_tensors_equal(legacy_val, new_val, f"key={key}")
+    else:
+        assert type(legacy_val) == type(new_val), (
+            f"key={key}: type mismatch: legacy={type(legacy_val)}, new={type(new_val)}"
+        )
+        assert legacy_val == new_val, (
+            f"key={key}: value mismatch: legacy={legacy_val!r}, new={new_val!r}"
+        )
 
 
-def _compare_batches(legacy: dict, new: dict) -> None:
-    """Assert that the meaningful payload keys match between the two batches."""
+def _compare_batches_exact(legacy: dict, new: dict, batch_idx: int) -> None:
+    """Assert EXACT structural identity (including list[list[Tensor]] nesting)."""
     lk = _payload_keys(legacy)
     nk = _payload_keys(new)
-    assert lk == nk, f"Key mismatch: legacy={sorted(lk)}, new={sorted(nk)}"
-
+    assert lk == nk, (
+        f"Batch {batch_idx}: key mismatch: legacy={sorted(lk)}, new={sorted(nk)}"
+    )
     for key in sorted(lk):
-        lv = legacy[key]
-        nv = new[key]
-
-        if key in ("video", "text_token_ids"):
-            # Both are lists; legacy may wrap each element in an inner list.
-            lu = _unwrap_video(lv)
-            nu = _unwrap_text(nv)
-            assert len(lu) == len(nu), (
-                f"key={key}: per-sample count mismatch: "
-                f"legacy_unwrapped={len(lu)}, new_unwrapped={len(nu)}"
-            )
-            for i, (a, b) in enumerate(zip(lu, nu)):
-                assert torch.equal(a, b), (
-                    f"key={key} sample[{i}] mismatch: legacy={a}, new={b}"
-                )
-
-        elif key == "image_size":
-            # Both should be flat lists of equal-shaped tensors.
-            assert len(lv) == len(nv), (
-                f"key={key}: list length mismatch: legacy={len(lv)}, new={len(nv)}"
-            )
-            for i, (a, b) in enumerate(zip(lv, nv)):
-                assert torch.equal(a, b), (
-                    f"key={key}[{i}] mismatch: legacy={a}, new={b}"
-                )
-
-        elif isinstance(lv, torch.Tensor) and isinstance(nv, torch.Tensor):
-            assert torch.equal(lv, nv), f"key={key} tensor mismatch"
-
-        elif isinstance(lv, list) and isinstance(nv, list):
-            assert len(lv) == len(nv), f"key={key} list length mismatch"
-            for i, (a, b) in enumerate(zip(lv, nv)):
-                if isinstance(a, torch.Tensor) and isinstance(b, torch.Tensor):
-                    assert torch.equal(a, b), f"key={key}[{i}] tensor mismatch"
-                else:
-                    assert a == b, f"key={key}[{i}] value mismatch"
-        else:
-            assert lv == nv, f"key={key} value mismatch: {lv!r} vs {nv!r}"
+        _assert_exact(legacy[key], new[key], f"batch[{batch_idx}][{key}]")
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# The golden-batch equality test
+# The golden-batch EXACT equality test
 # ──────────────────────────────────────────────────────────────────────────────
 
 N_BATCHES = 5
 
 
 def test_vfm_golden_batches_match(monkeypatch):
-    """New four-role stack yields same packed batches as legacy PackingDataLoader."""
+    """New four-role stack yields STRUCTURALLY IDENTICAL packed batches as legacy PackingDataLoader.
+
+    Asserts exact list[list[Tensor]] nesting for _MULTI_ITEM_KEYS (video, text_token_ids)
+    and flat list[Tensor] for image_size — no nesting normalization.
+    """
     from cosmos_framework.data.vfm.joint_dataloader import (
         PackingDataLoader,
         RankPartitionedDataLoader,
@@ -297,13 +265,7 @@ def test_vfm_golden_batches_match(monkeypatch):
         assert len(new_batches) == N_BATCHES, f"Expected {N_BATCHES} new batches"
 
         for i, (lb, nb) in enumerate(zip(legacy_batches, new_batches)):
-            # Number of packed samples (inferred from video list length after unwrap)
-            n_legacy = len(_unwrap_video(lb["video"]))
-            n_new = len(_unwrap_text(nb["video"]))
-            assert n_legacy == n_new, (
-                f"Batch {i}: sample count mismatch: legacy={n_legacy}, new={n_new}"
-            )
-            _compare_batches(lb, nb)
+            _compare_batches_exact(lb, nb, batch_idx=i)
 
     finally:
         if used_gloo and dist.is_initialized():

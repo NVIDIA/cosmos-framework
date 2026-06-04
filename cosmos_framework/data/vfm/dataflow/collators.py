@@ -20,7 +20,11 @@ class DefaultBatchCollator(BatchCollator):
 
 
 # ---------------------------------------------------------------------------
-# VFMListCollator — verbatim port of custom_collate_fn from joint_dataloader.py
+# VFMListCollator — reproduces the legacy PackingDataLoader packed-batch structure:
+#   for each raw sample, inner-collate at batch_size=1 (custom_collate_fn copy),
+#   split per _get_next_sample i=0 rules, then _update_output_batch-accumulate.
+#
+# This produces list[list[Tensor]] for _MULTI_ITEM_KEYS (not flat list[Tensor]).
 # ---------------------------------------------------------------------------
 
 _TIMING_KEYS = {"_sample_time", "_aug_time", "_pre_aug_time", "_aug_step_times"}
@@ -32,9 +36,17 @@ _BATCH_TIMING_KEYS = {
     "_worker_id",
 }
 
+# Verbatim copy of JointDataLoader._MULTI_ITEM_KEYS
+_MULTI_ITEM_KEYS = {"text_token_ids", "images", "video", "action", "sound"}
 
-def _vfm_collate(batch):
+# Verbatim copy of JointDataLoader._FLATTEN_LIST_KEYS
+_FLATTEN_LIST_KEYS = {"image_size"}
+
+
+def _vfm_inner_collate(batch):
     """
+    Verbatim copy of custom_collate_fn from joint_dataloader.py.
+
     Collate function that works like default_collate for all keys other than "text_token_ids", "images", and "video".
     For "text_token_ids", "images", and "video" it simply returns them in a list, instead of stacking them as a tensor.
     """
@@ -120,10 +132,80 @@ def _aggregate_worker_timing(samples: list[dict]) -> dict:
     return info
 
 
+def _split_one(batch: dict) -> dict:
+    """Port of _get_next_sample split rules for i=0 (verbatim from joint_dataloader.py lines 470-490).
+
+    Splitting rules:
+        - _BATCH_TIMING_KEYS: passed through as-is.
+        - _MULTI_ITEM_KEYS with list value: elem = v[0]; if elem is a list → sample[k]=elem,
+          else → sample[k]=v[0:1] (single-element list wrapping the tensor).
+        - Other list values: sample[k] = v[0] (bare element, direct-indexed).
+        - Non-list (tensor/scalar) values: sample[k] = v[0:1] (preserve batch dim).
+    """
+    sample = {}
+    for k, v in batch.items():
+        if k in _BATCH_TIMING_KEYS:
+            sample[k] = v
+        elif isinstance(v, list) and k in _MULTI_ITEM_KEYS:
+            elem = v[0]
+            sample[k] = elem if isinstance(elem, list) else v[0:1]
+        elif isinstance(v, list):
+            sample[k] = v[0]
+        else:
+            sample[k] = v[0:1]
+    return sample
+
+
+def _accumulate(output_batch: dict, output: dict) -> None:
+    """Port of _update_output_batch from joint_dataloader.py lines 405-418."""
+    for key, value in output.items():
+        if key in _BATCH_TIMING_KEYS:
+            if key not in output_batch:
+                output_batch[key] = value
+        elif key in _FLATTEN_LIST_KEYS and isinstance(value, list):
+            if key not in output_batch:
+                output_batch[key] = value
+            else:
+                output_batch[key].extend(value)
+        elif key not in output_batch:
+            output_batch[key] = [value]
+        else:
+            output_batch[key].append(value)
+
+
+# Keep _vfm_collate as an alias for the inner collate (used by legacy callers).
+_vfm_collate = _vfm_inner_collate
+
+
 class VFMListCollator(BatchCollator):
-    """custom_collate_fn as a BatchCollator: media kept as lists, sparse `sound`
-    None placeholders preserved 1:1 with sequence_plan, optional keys dropped,
-    per-worker timing aggregated. Behavior-identical to the legacy collate_fn."""
+    """Reproduces the legacy PackingDataLoader packed-batch structure.
+
+    For a group of N raw SFTDataset samples, the packed output has:
+      - ``_MULTI_ITEM_KEYS`` (``text_token_ids``, ``video``, ``images``,
+        ``action``, ``sound``): ``list[list[Tensor]]`` — each inner list
+        is a single-element list ``[tensor]``, matching the
+        ``v[i:i+1]`` slice from ``_get_next_sample``.
+      - Metadata list keys (``sequence_plan``, ``domain_id``,
+        ``raw_action_dim``): flat ``list[element]``.
+      - ``image_size`` (``_FLATTEN_LIST_KEYS``): flat ``list[Tensor]``
+        (extended, not appended).
+      - Non-list tensor keys: ``list[Tensor(1,...)]``.
+      - ``_BATCH_TIMING_KEYS``: set once from the first sample.
+
+    Implementation: for each sample, inner-collate at batch_size=1 via
+    ``_vfm_inner_collate`` (verbatim ``custom_collate_fn``), split
+    sample 0 per ``_split_one`` (verbatim ``_get_next_sample`` i=0
+    rules), then accumulate via ``_accumulate`` (verbatim
+    ``_update_output_batch``).  Byte-identical to the legacy packer.
+    """
 
     def collate(self, samples: list[dict]) -> dict:
-        return _vfm_collate(samples)
+        # Reproduce the legacy PackingDataLoader packed batch: for each sample,
+        # inner-collate at batch_size=1, split sample 0 per _MULTI_ITEM_KEYS /
+        # list / tensor rules, then _update_output_batch-accumulate across the group.
+        output_batch: dict = {}
+        for s in samples:
+            collated = _vfm_inner_collate([s])      # verbatim custom_collate_fn copy
+            split = _split_one(collated)            # i=0 split (rules from _get_next_sample)
+            _accumulate(output_batch, split)        # _update_output_batch copy
+        return output_batch
