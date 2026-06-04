@@ -50,6 +50,25 @@ source-handling logic is entangled with the packing engine.
 - No on-disk checkpoint format change — resume stays compatible with the
   existing `DataLoaderStateCallback` / `JointDataLoaderStateCallback`.
 
+## Hard invariants (must hold for every phase)
+
+These are non-negotiable acceptance criteria. A change that violates any of them
+is rejected regardless of other benefits.
+
+1. **Dataloader resume and checkpoint saving must not break.** The existing
+   checkpoint-save path and the dataloader state save/restore
+   (`DataLoaderStateCallback` / `JointDataLoaderStateCallback`, env-var
+   fast-forward, on-disk DCP state format) must keep working bit-for-bit for
+   every migrated recipe. A migrated map-style recipe must checkpoint mid-epoch,
+   restart, and resume at the exact next sample with **no duplicated or skipped
+   samples** — identical to the pre-refactor loader. This is verified by the
+   resume integration test (see Testing) and is a blocking gate for any recipe
+   migration. Iterable sources remain non-resumable exactly as today (no
+   regression, no new capability required).
+2. **Behavior preservation per live recipe** — golden-batch tensor-equality and
+   deterministic loss-curve equality vs. the untouched baseline.
+3. **No on-disk checkpoint format change.**
+
 ## Architecture: four hierarchical roles
 
 A raw item flows through four small, independently-swappable roles in a fixed
@@ -439,14 +458,29 @@ proven equivalent. Three tiers:
    live recipe, add a **mirror experiment** that differs from the original in
    *only* the dataloader wiring (new `DataPackerDataLoader` + roles) — e.g.
    `vision_sft_nano` (baseline) ↔ `vision_sft_nano_datapacker` (new). Run both
-   with `train.py --deterministic` + fixed `PYTHONHASHSEED`/`seed` for a short
-   run (a few hundred iters). Because the model/optimizer code is untouched,
-   identical batches ⇒ **bit-identical loss** under deterministic mode; assert
-   loss-curve equality. A secondary, longer **non-deterministic** run confirms the
-   curves overlap within numerical noise (same data, nondeterministic kernels).
+   with `train.py --deterministic` + fixed `PYTHONHASHSEED`/`seed`. Because the
+   model/optimizer code is untouched, identical batches ⇒ **bit-identical loss**
+   under deterministic mode; assert loss-curve equality. A secondary, longer
+   **non-deterministic** run confirms the curves overlap within numerical noise.
    - Determinism hook already exists: `train.py --deterministic` sets fixed
      seeds, `cudnn.deterministic`, `num_workers=0`, `dataset.detshuffle=True`,
      and disables `torch.compile`.
+
+   **Concrete run config (both baseline and mirror, per recipe):**
+   - **Launch via the existing wrappers** for the baselines:
+     `examples/launch_sft_llava_ov.sh` (VLM) and
+     `examples/launch_sft_vision_nano.sh` (VFM); the mirror experiments get
+     parallel launch wrappers (e.g. `launch_sft_vision_nano_datapacker.sh`).
+   - **Overrides** (Hydra tail / `TAIL_OVERRIDES`): `trainer.logging_iter=1`,
+     `trainer.max_iter=500`.
+   - **wandb:** `project=cosmos_oss_alignment`, a **fresh unique run name** per
+     run (e.g. `<recipe>_baseline_<date>` vs `<recipe>_datapacker_<date>`),
+     `wandb_mode=online` (the recipe TOMLs default to `disabled` — override).
+   - **Environment:** provisioned via the `cosmos3-run-env` skill (venv
+     activation, `LD_LIBRARY_PATH=`, dataset / VAE / checkpoint paths, and
+     `WANDB_API_KEY`), launched on a Slurm node via the `slurm-node` skill.
+   - Compare the two runs' loss curves in the `cosmos_oss_alignment` project;
+     under `--deterministic` they must coincide.
 
 ### Resume integration test
 
@@ -502,3 +536,8 @@ serve as the regression baseline. Deletion happens only in the final Phase 5 PR.
   replaced/deleted after live recipes migrate.
 - `VFMListCollator` must preserve `custom_collate_fn` sparse-key / optional-key /
   timing-aggregation behavior.
+- **Hard invariant:** never break dataloader resume + checkpoint saving (see
+  "Hard invariants"). Regression validated by launching the existing wrappers
+  (`launch_sft_llava_ov.sh`, `launch_sft_vision_nano.sh`) as baselines vs. mirror
+  `*_datapacker` experiments, `logging_iter=1`, `max_iter=500`, wandb
+  `project=cosmos_oss_alignment`, fresh run names, env via `cosmos3-run-env`.
