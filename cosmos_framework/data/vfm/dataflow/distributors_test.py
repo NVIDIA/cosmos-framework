@@ -168,3 +168,26 @@ def test_rank_partition_allocates_and_sets_shards():
     assert r2["tag"] == "video" and r2["sr"] == 2
     r3 = next(_rp().stream(dp_rank=3, dp_world_size=4, worker_id=0, num_workers=1))
     assert r3["tag"] == "image" and r3["sw"] == 1 and r3["sr"] == 0
+
+
+from cosmos_framework.data.vfm.dataflow.distributors import MixtureDistributor
+
+
+def test_mixture_draws_from_both_by_ratio():
+    a = IterableDistributor([{"src": "a", "i": i} for i in range(100000)])
+    b = IterableDistributor([{"src": "b", "i": i} for i in range(100000)])
+    m = MixtureDistributor({"a": (a, 3.0), "b": (b, 1.0)}, seed=0)
+    it = m.stream(0, 1, 0, 1)
+    draws = [next(it)["src"] for _ in range(400)]
+    frac_a = draws.count("a") / len(draws)
+    assert 0.6 < frac_a < 0.85
+
+
+def test_mixture_is_seeded_reproducible():
+    def build():
+        a = IterableDistributor([{"i": i} for i in range(100000)])
+        b = IterableDistributor([{"i": -i} for i in range(100000)])
+        return MixtureDistributor({"a": (a, 1.0), "b": (b, 1.0)}, seed=42)
+    it1 = build().stream(0, 1, 0, 1)
+    it2 = build().stream(0, 1, 0, 1)
+    assert [next(it1)["i"] for _ in range(50)] == [next(it2)["i"] for _ in range(50)]

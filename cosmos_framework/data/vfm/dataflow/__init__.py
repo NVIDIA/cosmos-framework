@@ -14,7 +14,7 @@ from cosmos_framework.data.vfm.dataflow.base import (
 )
 from cosmos_framework.data.vfm.dataflow.batchers import PoolPackingBatcher, SequentialPackingBatcher, SimpleBatcher
 from cosmos_framework.data.vfm.dataflow.collators import DefaultBatchCollator, VFMListCollator
-from cosmos_framework.data.vfm.dataflow.distributors import IterableDistributor, MapDistributor, RankPartitionedDistributor
+from cosmos_framework.data.vfm.dataflow.distributors import IterableDistributor, MapDistributor, MixtureDistributor, RankPartitionedDistributor
 from cosmos_framework.data.vfm.dataflow.loader import CosmosDataLoader
 from cosmos_framework.data.vfm.dataflow.processors import IdentityProcessor
 
@@ -26,6 +26,7 @@ __all__ = [
     "IdentityProcessor",
     "IterableDistributor",
     "MapDistributor",
+    "MixtureDistributor",
     "RankPartitionedDistributor",
     "PoolPackingBatcher",
     "RawItemProcessor",

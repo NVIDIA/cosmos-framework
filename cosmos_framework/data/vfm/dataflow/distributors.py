@@ -147,3 +147,29 @@ class RankPartitionedDistributor(DataDistributor):
         ds.shard_rank = shard_rank
         ds.shard_id = idx
         return ds
+
+
+import random as _random_mod
+
+
+class MixtureDistributor(DataDistributor):
+    """Ratio-weighted merge of multiple distributors into one stream (homogeneous
+    join). Generalizes PackingIterableDataset's weighted _get_next_sample."""
+
+    def __init__(self, sources: dict, seed: int = 0):
+        # sources: {name: (DataDistributor, ratio_float)}
+        self._names = list(sources.keys())
+        self._dists = [sources[n][0] for n in self._names]
+        self._ratios = [float(sources[n][1]) for n in self._names]
+        self._seed = seed
+
+    def stream(self, dp_rank, dp_world_size, worker_id, num_workers):
+        rng = _random_mod.Random(self._seed + dp_rank * 100003 + worker_id)
+        iters = [d.stream(dp_rank, dp_world_size, worker_id, num_workers) for d in self._dists]
+        while True:
+            idx = rng.choices(range(len(iters)), weights=self._ratios, k=1)[0]
+            try:
+                yield next(iters[idx])
+            except StopIteration:
+                iters[idx] = self._dists[idx].stream(dp_rank, dp_world_size, worker_id, num_workers)
+                yield next(iters[idx])
