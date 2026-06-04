@@ -65,8 +65,29 @@ class _DataflowIterableDataset(torch.utils.data.IterableDataset):
         for group in self._batcher.batches(_processed()):
             has_meta = bool(group) and isinstance(group[0], dict) and "_dp_epoch" in group[0]
             if has_meta:
-                max_epoch = max(s["_dp_epoch"] for s in group)
-                max_pos = max(s["_dp_stream_pos"] for s in group)
+                epochs = [s["_dp_epoch"] for s in group]
+                positions = [s["_dp_stream_pos"] for s in group]
+                max_epoch = max(epochs)
+                max_pos = max(positions)
+                # Resume records (max_epoch, max_pos) and fast-forwards to max_pos+1 —
+                # bit-for-bit with the legacy collate_batch. That is gap-free only when
+                # this batch is a single sample (max_batch_size=1, all live recipes) or a
+                # single-epoch contiguous run (sequential packing). A reordering batcher
+                # (pool packing) at batch_size>1, or a batch spanning an epoch boundary,
+                # would leave buffered lower positions unrecorded and skip them on resume.
+                # Fail loudly rather than silently drop samples in that unsupported combo.
+                if len(group) > 1:
+                    contiguous = min(epochs) == max_epoch and sorted(positions) == list(
+                        range(min(positions), max_pos + 1)
+                    )
+                    if not contiguous:
+                        raise ValueError(
+                            "Map-style resume cannot safely stamp a multi-sample batch whose "
+                            "_dp_stream_pos values are non-contiguous or span epochs (reordering "
+                            "batcher + batch_size>1). Use max_batch_size=1 with pool packing, a "
+                            "sequential (order-preserving) batcher, or an iterable (non-resumable) "
+                            "source."
+                        )
                 clean = [{k: v for k, v in s.items() if not k.startswith("_dp_")} for s in group]
                 batch = self._collator.collate(clean)
                 batch["sample_worker_id"] = torch.tensor([worker_id] * len(group))

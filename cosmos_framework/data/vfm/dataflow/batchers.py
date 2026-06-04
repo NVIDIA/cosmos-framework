@@ -71,7 +71,8 @@ class PoolPackingBatcher(SampleBatcher):
     def sample_size(self, sample: dict) -> int:
         if self._size_fn is not None:
             return self._size_fn(sample)
-        return int(sample["input_ids"].shape[0])
+        # len() == shape[0] for a 1-D tensor and also works for list input_ids.
+        return len(sample["input_ids"])
 
     def batches(self, samples: Iterator[dict]) -> Iterator[list[dict]]:
         pool: deque[dict] = deque()

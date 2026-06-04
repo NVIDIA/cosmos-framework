@@ -110,3 +110,29 @@ def test_iterable_source_has_no_resume_meta():
     )
     batch = next(iter(loader))
     assert "sample_worker_id" not in batch
+
+
+def test_map_multisample_noncontiguous_batch_raises():
+    """A reordering/multi-sample batch over a resumable MapDistributor must fail
+    loudly (no silent resume gap), per the loader's contiguity guard."""
+    from cosmos_framework.data.vfm.dataflow.base import BatchCollator, SampleBatcher
+
+    class _ReorderBatcher(SampleBatcher):
+        def batches(self, samples):
+            a = next(samples)
+            next(samples)  # b (pos 1) buffered/skipped
+            c = next(samples)
+            yield [a, c]  # positions [0, 2] -> non-contiguous
+
+    class _PassCollator(BatchCollator):
+        def collate(self, samples):
+            return {"n": torch.tensor(len(samples))}
+
+    loader = CosmosDataLoader(
+        distributor=MapDistributor(_MapDS(10), shuffle=False),
+        processor=IdentityProcessor(),
+        batcher=_ReorderBatcher(),
+        collator=_PassCollator(),
+    )
+    with pytest.raises(ValueError, match="non-contiguous|resume"):
+        next(iter(loader))
