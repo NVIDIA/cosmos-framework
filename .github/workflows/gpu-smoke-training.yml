@@ -1,17 +1,19 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: OpenMDW-1.1
 
-# Cosmos3-Nano 8-GPU smoke tests on a self-hosted 8×H200 runner.
+# Cosmos3-Nano 8-GPU SFT pipeline smoke test (convert -> train 5 -> export ->
+# t2i infer) on a self-hosted 8×H200 runner.
 #
 # Requires:
 #   * a self-hosted runner labelled [self-hosted, gpu, h200] with 8 GPUs,
 #     NVIDIA drivers, and `uv` on PATH;
 #   * an `HF_TOKEN` repository secret (gated dataset/model downloads).
 #
-# Inputs (Cosmos3-Nano checkpoint, bridge dataset, Wan VAE) are downloaded /
-# converted in-test and cached in the runner's HF cache; the first run is slow
-# (~30 GB Nano + DCP convert), later runs reuse the cache.
-name: GPU Smoke Tests
+# Inputs (Cosmos3-Nano -> DCP, bridge dataset, Wan VAE) are downloaded /
+# converted in-test and cached under examples/ + the HF cache; the first run is
+# slow (~30 GB Nano + DCP convert + 5-step train + export + a t2i generation),
+# later runs reuse the cache.
+name: GPU Smoke (Training)
 
 on:
   push:
@@ -20,13 +22,13 @@ on:
     branches: [main]
 
 concurrency:
-  group: gpu-smoke-tests-${{ github.ref }}
+  group: gpu-smoke-training-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
-  nano-smoke:
+  training-smoke:
     runs-on: [self-hosted, gpu, h200]
-    timeout-minutes: 60
+    timeout-minutes: 90
     env:
       HF_TOKEN: ${{ secrets.HF_TOKEN }}
       HF_HUB_DISABLE_XET: "1"
@@ -38,19 +40,19 @@ jobs:
       - name: Sync environment (cu128-train)
         run: uv sync --all-extras --group=cu128-train
 
-      # Cosmos3-Nano t2vs inference (+ sound check) and a 1-iter Vision SFT.
+      # Full SFT pipeline: download + convert Nano->DCP, train 5 steps (loss
+      # trend), export to HF safetensors, then a t2i generation from the export.
       # MAX_GPUS defaults to 8. -s streams the live process log.
-      - name: Nano smoke tests (8 GPU)
+      - name: Nano SFT pipeline smoke (convert -> train 5 -> export -> t2i, 8 GPU)
         run: |
           export LD_LIBRARY_PATH=
           uv run --all-extras --group=cu128-train python -m pytest -v -s \
-            tests/nano_inference_smoke_test.py tests/nano_training_smoke_test.py \
-            --num-gpus=8 --levels=2 -o addopts=
+            tests/nano_training_smoke_test.py --num-gpus=8 --levels=2 -o addopts=
 
-      # Clear the run's heavy artifacts (even on failure): examples/checkpoints
-      # (the Cosmos3-Nano DCP + Wan VAE, ~30 GB) and the pytest tmp dirs
-      # (t2vs video + the SFT checkpoint). The small examples/data dataset and
-      # the HF cache are intentionally kept so subsequent runs reuse them.
+      # Clear the heavy artifacts (even on failure): examples/checkpoints (the
+      # Cosmos3-Nano DCP + Wan VAE, ~30 GB) and the pytest tmp dirs (the SFT
+      # checkpoint + logs). The small examples/data dataset and the HF cache are
+      # intentionally kept so subsequent runs reuse them.
       - name: Clean up run outputs
         if: always()
         run: |

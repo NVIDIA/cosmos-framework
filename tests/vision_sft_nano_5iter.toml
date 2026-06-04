@@ -5,15 +5,18 @@
 # Consumed by cosmos_framework.configs.toml_config.sft_config.load_experiment_from_toml.
 # Uses PackingDataLoader (no dataloader_train.seed slot — keep it omitted here).
 #
-# SMOKE COPY of vision_sft_nano.toml: max_iter=1 + save_iter=1 so it trains a
-# single optimizer step and immediately writes a DCP checkpoint.
+# SMOKE COPY of vision_sft_nano.toml used by tests/nano_training_smoke_test.py:
+# max_iter=5 + save_iter=5 so it trains a few optimizer steps and writes a DCP
+# checkpoint at the end. warm_up_steps=1 (vs the production warmup) so the LR is
+# at full value almost immediately and the training loss visibly trends down
+# across the 5 logged steps (the test asserts mean(loss[-2:]) < loss[0]).
 
 [job]
 task         = "vfm"
 experiment   = "vision_sft_nano"
 project      = "cosmos3"
 group        = "sft"
-name         = "vision_sft_nano_1iter"
+name         = "vision_sft_nano_5iter"
 wandb_mode   = "disabled"
 
 [model]
@@ -63,13 +66,13 @@ f_max              = [1.0]
 f_min              = [0.0]
 f_start            = [0.0]
 verbosity_interval = 0
-warm_up_steps      = [50]
+warm_up_steps      = [1]                                 # smoke: full LR almost immediately so loss trends down in 5 steps
 
 [trainer]
 distributed_parallelism = "fsdp"
 grad_accum_iter         = 2
 logging_iter            = 1
-max_iter                = 1
+max_iter                = 5
 
 [trainer.callbacks.compile_tokenizer]
 compile_after_iterations = 3
@@ -83,7 +86,7 @@ force_finite = true
 [checkpoint]
 keys_to_skip_loading = ["net_ema."]
 load_path            = "${oc.env:BASE_CHECKPOINT_PATH}"
-save_iter            = 1
+save_iter            = 5
 
 [dataloader_train]
 max_sequence_length = 45056
