@@ -190,31 +190,3 @@ python -m cosmos_framework.scripts.inference_prompts_to_json \
 ```
 
 This reads `val/captions/<episode>/caption.json` and replaces the (dense) `prompt` with the serialized structured JSON, preserving `resolution`, `aspect_ratio`, `num_frames`, `fps`, and `vision_path`. Pass `--dry-run` to preview.
-
-## Evaluate generated videos
-
-After running [inference](#inference) on the validation prompts, score the generated clips
-against the ground-truth videos with `cosmos_framework.scripts.eval`. It pairs each predicted
-`<output_dir>/<mode>/<episode>/vision.mp4` with `val/videos/<episode>.mp4` and reports PSNR /
-SSIM aggregated per conditioning mode (T2V / I2V / V2V):
-
-```shell
-python -m cosmos_framework.scripts.eval \
-    --gt-dir "$DATASET_PATH/val/videos" \
-    --predictions-dir outputs/train_inference \
-    --output-dir outputs/eval
-```
-
-To compare two runs — e.g. the structured-JSON prompts against the dense baseline — score one,
-then score the other with `--compare-baseline` pointing at the first run's
-`metrics_aggregate.json`; a per-mode delta table is written to `comparison.md`:
-
-```shell
-python -m cosmos_framework.scripts.eval --gt-dir "$DATASET_PATH/val/videos" \
-    --predictions-dir outputs/infer_json --output-dir outputs/eval_json \
-    --compare-baseline outputs/eval_dense/metrics_aggregate.json
-```
-
-> PSNR/SSIM-vs-GT is most meaningful for the conditioned modes (I2V/V2V); for T2V the model
-> generates from text alone, so pixel/structural similarity to the single GT take is only a
-> weak proxy. Per-mode aggregation keeps these separate.
