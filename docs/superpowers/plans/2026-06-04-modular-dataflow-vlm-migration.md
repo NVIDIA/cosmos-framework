@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Port the pool-based bin-packing engine into a `PoolPackingBatcher`, extract the VLM sample-processing and collation into `VLMProcessor` / `VLMCollator`, wire a behavior-preserving mirror experiment on the new `DataPackerDataLoader`, and validate it by golden-batch equality + a loss-curve regression run vs. the untouched `llava_ov` baseline.
+**Goal:** Port the pool-based bin-packing engine into a `PoolPackingBatcher`, extract the VLM sample-processing and collation into `VLMProcessor` / `VLMCollator`, wire a behavior-preserving mirror experiment on the new `CosmosDataLoader`, and validate it by golden-batch equality + a loss-curve regression run vs. the untouched `llava_ov` baseline.
 
 **Architecture:** Builds on Plan 1's `dataflow/` package. `PoolPackingBatcher` faithfully re-homes `PackingIterableDataset`'s greedy bin-packing (`_best_fit_batch` / `_find_best_candidate_*` / `_max_tokens` / `_get_modality`) but pulls from the upstream sample iterator instead of owning dataset iterators. `VLMProcessor` and `VLMCollator` are 1:1 extractions of `VLMDataPacker.sft_process_sample` / `sft_collate_fn`. A new mirror experiment `pre_exp012_llava_ov_datapacker_v2` differs from the original **only** in dataloader wiring. The original `VLMDataPacker` / `llava_ov` experiment and all legacy dataloaders stay UNTOUCHED (living baseline).
 
@@ -507,7 +507,7 @@ git commit -m "feat(vlm): extract VLMProcessor/VLMCollator from VLMDataPacker"
 
 Drives a fixed in-memory dataset through BOTH the legacy `DataPackerDataLoader`
 (`data_packer_dataloader.DataPackerDataLoader` + `VLMDataPacker`) and the new
-`dataflow.DataPackerDataLoader` (`IterableDistributor` + `VLMProcessor` +
+`dataflow.CosmosDataLoader` (`IterableDistributor` + `VLMProcessor` +
 `PoolPackingBatcher` + `VLMCollator`), then asserts the first N batches are
 tensor-identical. `num_workers=0`, fixed `random.seed`.
 
@@ -531,7 +531,7 @@ from cosmos_framework.configs.base.vlm.experiment.dataflow_roles import VLMColla
 from cosmos_framework.configs.base.vlm.experiment.llava_ov_datapacker_experiment import VLMDataPacker
 from cosmos_framework.data.vfm.data_packer_dataloader import DataPackerDataLoader as LegacyLoader
 from cosmos_framework.data.vfm.dataflow import (
-    DataPackerDataLoader as NewLoader,
+    CosmosDataLoader as NewLoader,
     IterableDistributor,
     PoolPackingBatcher,
 )
@@ -633,8 +633,8 @@ git commit -m "test(dataflow): golden-batch equality VLM legacy vs new loader"
 - Create: `cosmos_framework/configs/base/vlm/experiment/llava_ov_datapacker_v2_experiment.py`
 
 A copy of `pre_exp012_llava_ov_datapacker` (`llava_ov_datapacker_experiment.py:286-369`)
-that swaps the `data_packer=`/`DataPackerDataLoader` wiring for the four-role
-`dataflow.DataPackerDataLoader`. Everything else (model, optimizer, checkpoint,
+that swaps the legacy `data_packer=`/`DataPackerDataLoader` wiring for the
+four-role `dataflow.CosmosDataLoader`. Everything else (model, optimizer, checkpoint,
 defaults) is identical. Imports the existing `get_llava_ov_streaming` and
 `build_processor` from the original module to avoid duplication.
 
@@ -677,7 +677,7 @@ Expected: FAIL — `ModuleNotFoundError: ... llava_ov_datapacker_v2_experiment`.
 
 Differs from the original ONLY in dataloader wiring (DataDistributor +
 RawItemProcessor + SampleBatcher + BatchCollator via the new
-cosmos_framework.data.vfm.dataflow.DataPackerDataLoader). Used as the
+cosmos_framework.data.vfm.dataflow.CosmosDataLoader). Used as the
 loss-curve regression mirror — see the spec's Testing strategy.
 """
 
@@ -688,7 +688,7 @@ from hydra.core.config_store import ConfigStore
 from cosmos_framework.utils.lazy_config import LazyCall as L
 from cosmos_framework.utils.lazy_config import LazyDict
 from cosmos_framework.data.vfm.dataflow import (
-    DataPackerDataLoader,
+    CosmosDataLoader,
     IterableDistributor,
     PoolPackingBatcher,
 )
@@ -739,7 +739,7 @@ pre_exp012_llava_ov_datapacker_v2 = LazyDict(
             load_from_object_store=dict(enabled=False, credentials="", bucket=""),
             save_to_object_store=dict(enabled=False, credentials="", bucket=""),
         ),
-        dataloader_train=L(DataPackerDataLoader)(
+        dataloader_train=L(CosmosDataLoader)(
             distributor=L(IterableDistributor)(
                 iterable=L(get_llava_ov_streaming)(subset="ai2d(gpt4v)", split="train"),
             ),
@@ -808,7 +808,7 @@ wandb/iters knobs for the regression run):
 # SPDX-License-Identifier: OpenMDW-1.1
 
 # Dataflow-loader mirror of llava_ov_datapacker for loss-curve regression.
-# Selects the v2 experiment (new four-role DataPackerDataLoader); everything
+# Selects the v2 experiment (new four-role CosmosDataLoader); everything
 # else matches llava_ov_datapacker.toml.
 
 [job]
@@ -1001,7 +1001,7 @@ git commit -m "chore(vlm): mirror TOML + launch wrapper for llava_ov dataflow re
 
 **Placeholder scan:** Run config has intentional `<from cosmos3-run-env skill>` / `<qwen3-vl path>` placeholders in Task 5 *operational* commands (secrets/paths resolved at run time via the named skills, not committed) — these are not code placeholders. All code steps contain complete code.
 
-**Type consistency:** `PoolPackingBatcher(max_tokens, pool_size, max_batch_size, long_threshold, batching_strategy, apply_long_sample_halving, size_fn)` used identically in Tasks 1, 3, 4. `VLMProcessor(processor, ignore_index)` and `VLMCollator()` consistent across Tasks 2, 3, 4. New `DataPackerDataLoader(distributor, processor, batcher, collator, num_workers)` matches Plan 1 Task 7's signature. `IterableDistributor(iterable=...)` keyword matches Plan 1 Task 5.
+**Type consistency:** `PoolPackingBatcher(max_tokens, pool_size, max_batch_size, long_threshold, batching_strategy, apply_long_sample_halving, size_fn)` used identically in Tasks 1, 3, 4. `VLMProcessor(processor, ignore_index)` and `VLMCollator()` consistent across Tasks 2, 3, 4. New `CosmosDataLoader(distributor, processor, batcher, collator, num_workers)` matches Plan 1 Task 7's signature. `IterableDistributor(iterable=...)` keyword matches Plan 1 Task 5.
 
 **Launch path (resolved):** The baseline `launch_sft_llava_ov.sh` drives `train.py --sft-toml=...` via `_sft_launcher_common.sh` (verified `:86-90`). Task 5 mirrors that exactly: a v2 TOML whose `[job].experiment` selects the Task-4 ConfigStore node, launched through the same common launcher with `TAIL_OVERRIDES`. No `--config`/`experiment=` path is used.
 

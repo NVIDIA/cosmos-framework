@@ -2,14 +2,14 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Build the four-role dataflow abstraction (`DataDistributor`, `RawItemProcessor`, `SampleBatcher`, `BatchCollator`) plus the slim `DataPackerDataLoader` orchestrator and the simple/default built-ins, as a new package that touches no existing recipe.
+**Goal:** Build the four-role dataflow abstraction (`DataDistributor`, `RawItemProcessor`, `SampleBatcher`, `BatchCollator`) plus the slim `CosmosDataLoader` orchestrator and the simple/default built-ins, as a new package that touches no existing recipe.
 
-**Architecture:** A new `cosmos_framework/data/vfm/dataflow/` package. Four small ABCs, each with one responsibility and a different arity (item→sample, sample-stream→list, list→batch). A new `DataPackerDataLoader` wires them in fixed order (`distribute → process → batch → collate`) inside each DataLoader worker, resolving DP coordinates and passing them into `DataDistributor.stream(...)`. The existing `data_packer_dataloader.py` / `joint_dataloader.py` / `packing_iterable_dataset.py` stay UNTOUCHED — this plan only adds code.
+**Architecture:** A new `cosmos_framework/data/vfm/dataflow/` package. Four small ABCs, each with one responsibility and a different arity (item→sample, sample-stream→list, list→batch). A new `CosmosDataLoader` wires them in fixed order (`distribute → process → batch → collate`) inside each DataLoader worker, resolving DP coordinates and passing them into `DataDistributor.stream(...)`. The existing `data_packer_dataloader.py` / `joint_dataloader.py` / `packing_iterable_dataset.py` stay UNTOUCHED — this plan only adds code.
 
 **Tech Stack:** Python, PyTorch (`torch.utils.data.DataLoader`/`IterableDataset`), pytest (co-located `*_test.py`).
 
 **Scope boundaries (explicit):**
-- IN: the 4 ABCs; `IdentityProcessor`, `DefaultBatchCollator`, `SimpleBatcher`, `IterableDistributor`, `MapDistributor` (shuffle + sharding only); the new `DataPackerDataLoader` (DP-coord resolution, `batch_size` sugar, worker config, `__iter__` orchestration); unit + integration tests.
+- IN: the 4 ABCs; `IdentityProcessor`, `DefaultBatchCollator`, `SimpleBatcher`, `IterableDistributor`, `MapDistributor` (shuffle + sharding only); the new `CosmosDataLoader` (DP-coord resolution, `batch_size` sugar, worker config, `__iter__` orchestration); unit + integration tests.
 - OUT (later plans): `PoolPackingBatcher` / `SequentialPackingBatcher`, `RankPartitionedDistributor`, `MixtureDistributor`; resume/`state_dict` env-var fast-forward + `DataLoaderStateCallback` integration + `_dp_*` meta threading; all recipe migrations; `docs/dataflow.md`; deletion of old code.
 - `state_dict`/`load_state_dict` are defined on the ABC as no-op defaults so the contract exists; their real bodies land in the resume plan.
 
@@ -27,7 +27,7 @@
 | `cosmos_framework/data/vfm/dataflow/collators.py` | `DefaultBatchCollator` |
 | `cosmos_framework/data/vfm/dataflow/batchers.py` | `SimpleBatcher` |
 | `cosmos_framework/data/vfm/dataflow/distributors.py` | `IterableDistributor`, `MapDistributor` |
-| `cosmos_framework/data/vfm/dataflow/loader.py` | `DataPackerDataLoader` orchestrator |
+| `cosmos_framework/data/vfm/dataflow/loader.py` | `CosmosDataLoader` orchestrator |
 | `cosmos_framework/data/vfm/dataflow/base_test.py` | ABC contract tests |
 | `cosmos_framework/data/vfm/dataflow/processors_test.py` | `IdentityProcessor` test |
 | `cosmos_framework/data/vfm/dataflow/collators_test.py` | `DefaultBatchCollator` test |
@@ -35,7 +35,7 @@
 | `cosmos_framework/data/vfm/dataflow/distributors_test.py` | distributor sharding/shuffle tests |
 | `cosmos_framework/data/vfm/dataflow/loader_test.py` | end-to-end orchestrator tests |
 
-The new `DataPackerDataLoader` lives in `dataflow/loader.py` (NOT the old `data_packer_dataloader.py`) so both coexist during migration; the cleanup PR later deletes the old module and makes `dataflow` canonical.
+The new `CosmosDataLoader` lives in `dataflow/loader.py` (NOT the old `data_packer_dataloader.py`) so both coexist during migration; the cleanup PR later deletes the old module and makes `dataflow` canonical.
 
 ---
 
@@ -176,7 +176,7 @@ class BatchCollator(ABC):
 # SPDX-License-Identifier: OpenMDW-1.1
 
 """Modular training dataflow: DataDistributor -> RawItemProcessor ->
-SampleBatcher -> BatchCollator, wired by DataPackerDataLoader."""
+SampleBatcher -> BatchCollator, wired by CosmosDataLoader."""
 
 from __future__ import annotations
 
@@ -755,7 +755,7 @@ git commit -m "feat(dataflow): add MapDistributor (per-epoch shuffle + slice sha
 
 ---
 
-### Task 7: `DataPackerDataLoader` orchestrator
+### Task 7: `CosmosDataLoader` orchestrator
 
 **Files:**
 - Create: `cosmos_framework/data/vfm/dataflow/loader.py`
@@ -763,7 +763,7 @@ git commit -m "feat(dataflow): add MapDistributor (per-epoch shuffle + slice sha
 - Test: `cosmos_framework/data/vfm/dataflow/loader_test.py`
 
 This task has two internal classes: a private `_DataflowIterableDataset` (wires
-the roles inside the worker) and the public `DataPackerDataLoader`. DP coords:
+the roles inside the worker) and the public `CosmosDataLoader`. DP coords:
 `parallel_dims.dp_coord` > `torch.distributed` > `(0, 1)` — mirrors
 `data_packer_dataloader.py:476-496`.
 
@@ -774,7 +774,7 @@ the roles inside the worker) and the public `DataPackerDataLoader`. DP coords:
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: OpenMDW-1.1
 
-"""End-to-end tests for the DataPackerDataLoader orchestrator (Plan 1 scope:
+"""End-to-end tests for the CosmosDataLoader orchestrator (Plan 1 scope:
 explicit roles + batch_size sugar, single process, no resume)."""
 
 from __future__ import annotations
@@ -783,7 +783,7 @@ import pytest
 import torch
 
 from cosmos_framework.data.vfm.dataflow import (
-    DataPackerDataLoader,
+    CosmosDataLoader,
     IdentityProcessor,
     IterableDistributor,
     MapDistributor,
@@ -803,7 +803,7 @@ class _MapDS(torch.utils.data.Dataset):
 
 
 def test_explicit_roles_end_to_end():
-    loader = DataPackerDataLoader(
+    loader = CosmosDataLoader(
         distributor=IterableDistributor([{"x": torch.tensor([float(i)])} for i in range(6)]),
         processor=IdentityProcessor(),
         batcher=SimpleBatcher(batch_size=2),
@@ -817,7 +817,7 @@ def test_explicit_roles_end_to_end():
 
 
 def test_batch_size_sugar_builds_simple_batcher_and_default_collator():
-    loader = DataPackerDataLoader(
+    loader = CosmosDataLoader(
         distributor=MapDistributor(_MapDS(10), shuffle=False),
         processor=IdentityProcessor(),
         batch_size=4,
@@ -830,7 +830,7 @@ def test_batch_size_sugar_builds_simple_batcher_and_default_collator():
 
 def test_batch_size_with_explicit_batcher_is_rejected():
     with pytest.raises(ValueError, match="batch_size"):
-        DataPackerDataLoader(
+        CosmosDataLoader(
             distributor=IterableDistributor([]),
             processor=IdentityProcessor(),
             batch_size=4,
@@ -840,7 +840,7 @@ def test_batch_size_with_explicit_batcher_is_rejected():
 
 def test_requires_batcher_or_batch_size():
     with pytest.raises(ValueError, match="batcher.*batch_size|batch_size.*batcher"):
-        DataPackerDataLoader(
+        CosmosDataLoader(
             distributor=IterableDistributor([]),
             processor=IdentityProcessor(),
         )
@@ -849,7 +849,7 @@ def test_requires_batcher_or_batch_size():
 - [ ] **Step 2: Run test to verify it fails**
 
 Run: `pytest cosmos_framework/data/vfm/dataflow/loader_test.py -v`
-Expected: FAIL — `ImportError: cannot import name 'DataPackerDataLoader'`.
+Expected: FAIL — `ImportError: cannot import name 'CosmosDataLoader'`.
 
 - [ ] **Step 3: Write minimal implementation**
 
@@ -858,13 +858,13 @@ Expected: FAIL — `ImportError: cannot import name 'DataPackerDataLoader'`.
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: OpenMDW-1.1
 
-"""DataPackerDataLoader — slim orchestrator that wires the four dataflow roles
+"""CosmosDataLoader — slim orchestrator that wires the four dataflow roles
 (DataDistributor -> RawItemProcessor -> SampleBatcher -> BatchCollator) inside
 each DataLoader worker.
 
 Lives in dataflow/loader.py during the migration so it coexists with the legacy
 cosmos_framework/data/vfm/data_packer_dataloader.py; the cleanup PR makes this
-the canonical DataPackerDataLoader.
+the canonical CosmosDataLoader.
 """
 
 from __future__ import annotations
@@ -912,7 +912,7 @@ class _DataflowIterableDataset(torch.utils.data.IterableDataset):
             yield self._collator.collate(group)
 
 
-class DataPackerDataLoader(torch.utils.data.DataLoader):
+class CosmosDataLoader(torch.utils.data.DataLoader):
     """Public entry point: bring any dataset into training via four roles.
 
     Either pass an explicit ``batcher`` (and optional ``collator``), or pass a
@@ -954,7 +954,7 @@ class DataPackerDataLoader(torch.utils.data.DataLoader):
             dp_world_size = torch.distributed.get_world_size()
             if dp_world_size > 1:
                 log.info(
-                    "DataPackerDataLoader: using global rank for DP sharding. "
+                    "CosmosDataLoader: using global rank for DP sharding. "
                     "For FSDP+TP/PP pass parallel_dims= for the correct DP rank.",
                     rank0_only=True,
                 )
@@ -984,9 +984,9 @@ class DataPackerDataLoader(torch.utils.data.DataLoader):
 
 Add to `__init__.py`:
 ```python
-from cosmos_framework.data.vfm.dataflow.loader import DataPackerDataLoader
+from cosmos_framework.data.vfm.dataflow.loader import CosmosDataLoader
 ```
-and `"DataPackerDataLoader",` to `__all__`.
+and `"CosmosDataLoader",` to `__all__`.
 
 - [ ] **Step 4: Run test to verify it passes**
 
@@ -999,7 +999,7 @@ Expected: PASS (4 tests).
 git add cosmos_framework/data/vfm/dataflow/loader.py \
         cosmos_framework/data/vfm/dataflow/loader_test.py \
         cosmos_framework/data/vfm/dataflow/__init__.py
-git commit -m "feat(dataflow): add DataPackerDataLoader orchestrator + batch_size sugar"
+git commit -m "feat(dataflow): add CosmosDataLoader orchestrator + batch_size sugar"
 ```
 
 ---
@@ -1021,7 +1021,7 @@ def test_multiworker_disjoint_and_complete_one_epoch():
     # 1 rank, 2 workers over a 12-item map dataset, batch_size=1, no shuffle.
     # Each worker streams its slice; collect one epoch (6 items/worker) and
     # assert union == all indices, with no duplicates.
-    loader = DataPackerDataLoader(
+    loader = CosmosDataLoader(
         distributor=MapDistributor(_MapDS(12), shuffle=False),
         processor=IdentityProcessor(),
         batch_size=1,
@@ -1065,12 +1065,12 @@ git commit -m "test(dataflow): multi-worker disjoint-coverage integration test"
 - `DefaultBatchCollator` (spec built-ins) → Task 3. ✅
 - `SimpleBatcher` (spec built-ins) → Task 4. ✅
 - `IterableDistributor` / `MapDistributor` (spec built-ins, sharding/shuffle) → Tasks 5–6. ✅
-- `DataPackerDataLoader` orchestration + DP-coord resolution + `batch_size` sugar (spec "Loader orchestration") → Task 7. ✅
+- `CosmosDataLoader` orchestration + DP-coord resolution + `batch_size` sugar (spec "Loader orchestration") → Task 7. ✅
 - Disjoint-coverage sharding behavior (spec correctness claim) → Tasks 5, 6, 8. ✅
 - Explicitly OUT of Plan 1 (tracked for later plans): `PoolPackingBatcher`/`SequentialPackingBatcher`, `RankPartitionedDistributor`/`MixtureDistributor`, resume (`state_dict` env-var fast-forward + `DataLoaderStateCallback` + `_dp_*` meta), recipe migrations, `docs/dataflow.md`, old-code deletion. These are named in the spec's Implementation Order phases 2–7.
 
 **Placeholder scan:** No TBD/TODO; every code step contains complete, runnable code; every test step shows the assertions.
 
-**Type consistency:** `DataDistributor.stream(dp_rank, dp_world_size, worker_id, num_workers)` is used identically in Tasks 5, 6, 7. `SampleBatcher.batches(samples)` and `BatchCollator.collate(samples)` match Task 1's ABCs in Tasks 3, 4, 7. `DataPackerDataLoader(distributor=, processor=, batcher=, collator=, batch_size=)` signature in Task 7 matches its usage in Tasks 7–8. `__init__.py` re-exports accumulate consistently (`base` → `processors` → `collators` → `batchers` → `distributors` → `loader`).
+**Type consistency:** `DataDistributor.stream(dp_rank, dp_world_size, worker_id, num_workers)` is used identically in Tasks 5, 6, 7. `SampleBatcher.batches(samples)` and `BatchCollator.collate(samples)` match Task 1's ABCs in Tasks 3, 4, 7. `CosmosDataLoader(distributor=, processor=, batcher=, collator=, batch_size=)` signature in Task 7 matches its usage in Tasks 7–8. `__init__.py` re-exports accumulate consistently (`base` → `processors` → `collators` → `batchers` → `distributors` → `loader`).
 
 **Note for the resume plan (next):** `MapDistributor.stream` will need the `_dp_epoch`/`_dp_stream_pos` meta and env-var fast-forward (`data_packer_dataloader.py:239-260`), and the orchestrator will need to strip/re-attach that meta around `processor.process` and tag batches with `sample_worker_id`/`sample_epoch`/`sample_index` (`:328-358`) so `DataLoaderStateCallback` keeps working. Plan 1 intentionally omits this.

@@ -1,4 +1,4 @@
-# Modular Dataflow Refactor: DataPackerDataLoader & DataPacker
+# Modular Dataflow Refactor: DataPackerDataLoader → CosmosDataLoader
 
 **Date:** 2026-06-04
 **Status:** Design approved; implementation plan in progress
@@ -165,8 +165,11 @@ Recipe-specific roles live with their recipes: `VLMProcessor` / `VLMCollator`
 
 ## Loader orchestration
 
-`DataPackerDataLoader` keeps its name but gets new internals — a slim
-orchestrator that wires the four roles in fixed order inside each worker:
+The new loader is **`CosmosDataLoader`** (in `dataflow/loader.py`) — a slim
+orchestrator that wires the four roles in fixed order inside each worker. It
+**replaces** the legacy `DataPackerDataLoader` (and `JointCosmosDataLoader`
+replaces `JointDataPackerDataLoader`); the legacy classes are kept untouched as
+the regression baseline until the Phase-5 cleanup PR. Orchestration:
 
 ```python
 def __iter__(self):
@@ -219,7 +222,7 @@ recipes; the unused classes are expressible; there is no WebDataset obstacle.
 | `DataPackerDataLoader` / pool engine | yes — llava_ov | `IterableDistributor` + `PoolPackingBatcher` + `VLMCollator` |
 | `LocalSFTDataset` / `_UnshardedLocalSFTDataset` (`local_sft_dataset.py:190`, `videophy2_sft_nano.py:33`) | yes — videophy2_sft_nano | `IterableDistributor` + extracted augmentation processor + `PoolPackingBatcher` |
 | `DROIDLeRobotDataset` (`droid_lerobot_dataset.py:50`) | no (exported, no live config) | map-style → `MapDistributor` + `IdentityProcessor` |
-| `IterativeJointDataLoader` (`joint_dataloader.py:502`) | no | expressible as `JointDataPackerDataLoader` (batch-interleave) |
+| `IterativeJointDataLoader` (`joint_dataloader.py:502`) | no | expressible as `JointCosmosDataLoader` (batch-interleave) |
 | `RandomJointDataLoader` (`joint_dataloader.py:879`) | no | expressible as Joint variant w/ per-rank RNG |
 
 **WebDataset is not an obstacle.** `JointDataLoader(webdataset.WebLoader)` never
@@ -276,7 +279,7 @@ treat the hollow Processor as intentional, not an oversight.
 spawn workers and load one batch before training, with a `dist.barrier()`, to
 avoid NCCL timeouts from slow action-dataset init. This per-dataset-worker-pool
 need is exactly why **heterogeneous** multi-dataset training stays in the
-`JointDataPackerDataLoader` outer wrapper (each inner loader keeps its own worker
+`JointCosmosDataLoader` outer wrapper (each inner loader keeps its own worker
 pool + prewarm), while **homogeneous** mixing uses the flat `MixtureDistributor`.
 
 ## Multi-dataset joining
@@ -287,12 +290,12 @@ Three distinct join semantics exist today and map to different homes:
 |---|---|
 | sample-level mixing (homogeneous; one packing/collation) | `MixtureDistributor` — one pipeline |
 | rank-level partitioning | `RankPartitionedDistributor` |
-| batch-level interleaving (heterogeneous; different processor/collator per dataset) | keep `JointDataPackerDataLoader` as a slim outer wrapper composing N four-role loaders + per-loader resume routing |
+| batch-level interleaving (heterogeneous; different processor/collator per dataset) | keep `JointCosmosDataLoader` as a slim outer wrapper composing N four-role loaders + per-loader resume routing |
 
 Homogeneous joins dissolve into `DataDistributor` built-ins (a real
 simplification — "mix multiple datasets" is just another distributor). The
 heterogeneous batch-level join is a genuine higher-order concern (no single
-processor/collator, per-inner-loader state routing), so `JointDataPackerDataLoader`
+processor/collator, per-inner-loader state routing), so `JointCosmosDataLoader`
 stays — now composing the refactored loaders.
 
 ## Migration mapping
@@ -310,7 +313,7 @@ stays — now composing the refactored loaders.
 Recipe wiring:
 
 ```python
-dataloader_train = L(DataPackerDataLoader)(
+dataloader_train = L(CosmosDataLoader)(
     distributor = L(IterableDistributor)(L(get_llava_ov_streaming)(subset=..., split="train")),
     processor   = L(VLMProcessor)(backbone=..., processor=...),
     batcher     = L(PoolPackingBatcher)(max_tokens="${data_setting.max_tokens}",
@@ -364,7 +367,7 @@ Falls out for free: subclass whichever roles you need, reuse built-ins for the
 rest; the loader enforces the fixed order so stages can't be misordered.
 
 ```python
-DataPackerDataLoader(
+CosmosDataLoader(
     distributor = MyShardedDistributor(...),
     processor   = MyProcessor(...),
     batcher     = PoolPackingBatcher(...),   # reuse built-in
@@ -387,7 +390,7 @@ Structure (task-oriented, copy-pasteable, progressively deeper):
    SampleBatcher → BatchCollator`, one sentence each. "Pick a built-in for each
    slot, or write your own."
 2. **Quickstart (60-second path)** — "I have a HuggingFace/map dataset and want
-   normal batching": `DataPackerDataLoader(distributor=MapDistributor(ds,
+   normal batching": `CosmosDataLoader(distributor=MapDistributor(ds,
    shuffle=True), processor=IdentityProcessor(), batch_size=32)`. Runnable.
 3. **The four roles**, each: what it does, the ABC signature, when to use a
    built-in vs. write your own, a minimal custom example.
@@ -398,7 +401,7 @@ Structure (task-oriented, copy-pasteable, progressively deeper):
      `sample_size`)
    - order-preserving sequence packing (`SequentialPackingBatcher`)
    - mix multiple datasets by ratio (`MixtureDistributor`)
-   - interleave heterogeneous pipelines (`JointDataPackerDataLoader`)
+   - interleave heterogeneous pipelines (`JointCosmosDataLoader`)
 5. **Wiring into a training recipe** — Hydra `LazyCall` in an experiment SKU and
    CLI overrides (`dataloader_train.batcher.max_tokens=...`).
 6. **Checkpoint / resume** — `MapDistributor` + `DataLoaderStateCallback`; what is
@@ -426,9 +429,12 @@ cosmos_framework/data/vfm/
     distributors.py        # Iterable / Map / RankPartitioned / Mixture
     batchers.py            # Simple / PoolPacking / SequentialPacking
     collators.py           # DefaultBatchCollator
-  data_packer_dataloader.py  # DataPackerDataLoader (new internals) + JointDataPackerDataLoader
+    loader.py              # CosmosDataLoader + JointCosmosDataLoader (the new orchestrators)
 
 docs/dataflow.md             # NEW user tutorial (bring-your-own-dataset)
+
+# Legacy (kept as baseline, deleted in Phase-5 cleanup):
+#   data_packer_dataloader.py  # DataPackerDataLoader + JointDataPackerDataLoader
 ```
 
 **Deleted in the Phase-5 cleanup PR** (kept as the regression baseline until all
@@ -456,7 +462,7 @@ proven equivalent. Three tiers:
    tensor-equality. One per live recipe: VLM, videophy2, VFM.
 3. **End-to-end loss-curve equivalence** (the primary regression gate): for each
    live recipe, add a **mirror experiment** that differs from the original in
-   *only* the dataloader wiring (new `DataPackerDataLoader` + roles) — e.g.
+   *only* the dataloader wiring (new `CosmosDataLoader` + roles) — e.g.
    `vision_sft_nano` (baseline) ↔ `vision_sft_nano_datapacker` (new). Run both
    with `train.py --deterministic` + fixed `PYTHONHASHSEED`/`seed`. Because the
    model/optimizer code is untouched, identical batches ⇒ **bit-identical loss**
@@ -503,7 +509,7 @@ serve as the regression baseline. Deletion happens only in the final Phase 5 PR.
    `SequentialPackingBatcher`, `IdentityProcessor`, `VFMListCollator`); add
    `vision_sft_nano_datapacker` (and `_super`) mirror; pass golden-batch +
    loss-curve equivalence. Also add `MixtureDistributor` + reconcile
-   `JointDataPackerDataLoader` as the outer composer.
+   `JointCosmosDataLoader` as the outer composer.
 5. **Docs** — write `docs/dataflow.md` (the bring-your-own-dataset tutorial) and
    link it from `AGENTS.md`, `docs/code_structure.md`, the docs index, and the
    `cosmos3-post-training` skill. Drafted incrementally as roles land (Phase 1)
@@ -520,10 +526,14 @@ serve as the regression baseline. Deletion happens only in the final Phase 5 PR.
 
 - Four roles, fixed order; no `DataPacker` bundle (Option 2 — explicit
   `processor`/`batcher`/`collator`).
+- The loader is renamed `DataPackerDataLoader` → **`CosmosDataLoader`** (and
+  `JointDataPackerDataLoader` → **`JointCosmosDataLoader`**) since `DataPacker` is
+  gone and packing is just one batcher. New loader lives in `dataflow/loader.py`;
+  the legacy classes stay as the regression baseline until the Phase-5 cleanup PR.
 - `DataDistributor` fully user-pluggable (sharding + shuffle + resume).
 - `sample_size` is an overridable `SampleBatcher` method (+ optional `size_fn`).
 - `batch_size=N` sugar → `SimpleBatcher` + `DefaultBatchCollator`.
-- Joining: `MixtureDistributor` for homogeneous; keep `JointDataPackerDataLoader`
+- Joining: `MixtureDistributor` for homogeneous; keep `JointCosmosDataLoader`
   for heterogeneous batch-level interleaving.
 - cosmos-rl name compatibility dropped; borrow design only.
 - Resume/checkpoint format unchanged.
