@@ -363,7 +363,8 @@ cosmos_framework/data/vfm/
   data_packer_dataloader.py  # DataPackerDataLoader (new internals) + JointDataPackerDataLoader
 ```
 
-**Deleted after migration:** `data_packer.py` (`DataPacker` ABC);
+**Deleted in the Phase-5 cleanup PR** (kept as the regression baseline until all
+mirror experiments are validated): `data_packer.py` (`DataPacker` ABC);
 `packing_iterable_dataset.py` (logic → `PoolPackingBatcher`); private wrappers
 `_IterableWrapper` / `_ShuffledMapIterableDataset` / `_DataPackerIterableDataset`;
 the `joint_dataloader.py` loader family (`JointDataLoader` and its
@@ -374,30 +375,59 @@ into `VFMListCollator`.
 
 ## Testing strategy
 
-1. **Golden-batch equality** (core safety net): fixed seed + fixed data slice →
-   first N batches from old loader vs new loader, assert tensor-equality. One per
-   live recipe: VLM, videophy2, VFM.
-2. **Per-role unit tests:** distributors (disjoint coverage across ranks/workers;
+The old dataloaders stay in the codebase as a **living baseline** for the whole
+migration; the current training scripts are not touched until everything is
+proven equivalent. Three tiers:
+
+1. **Per-role unit tests:** distributors (disjoint coverage across ranks/workers;
    `MapDistributor` resume fast-forward), batchers (packing decisions, budget /
-   halving, oversized discard), collators (output shapes).
-3. **Resume integration test:** checkpoint mid-epoch with `MapDistributor`,
-   restart, assert no duplicated/skipped samples (preserves
-   `DataLoaderStateCallback` behavior).
+   halving, oversized discard), collators (output shapes; `VFMListCollator`
+   sparse-key / optional-key / timing behavior).
+2. **Golden-batch equality** (fast, no GPU training): fixed seed + fixed data
+   slice → first N batches from the old loader vs the new loader, assert
+   tensor-equality. One per live recipe: VLM, videophy2, VFM.
+3. **End-to-end loss-curve equivalence** (the primary regression gate): for each
+   live recipe, add a **mirror experiment** that differs from the original in
+   *only* the dataloader wiring (new `DataPackerDataLoader` + roles) — e.g.
+   `vision_sft_nano` (baseline) ↔ `vision_sft_nano_datapacker` (new). Run both
+   with `train.py --deterministic` + fixed `PYTHONHASHSEED`/`seed` for a short
+   run (a few hundred iters). Because the model/optimizer code is untouched,
+   identical batches ⇒ **bit-identical loss** under deterministic mode; assert
+   loss-curve equality. A secondary, longer **non-deterministic** run confirms the
+   curves overlap within numerical noise (same data, nondeterministic kernels).
+   - Determinism hook already exists: `train.py --deterministic` sets fixed
+     seeds, `cudnn.deterministic`, `num_workers=0`, `dataset.detshuffle=True`,
+     and disables `torch.compile`.
+
+### Resume integration test
+
+Checkpoint mid-epoch with `MapDistributor`, restart, assert no duplicated/skipped
+samples (preserves `DataLoaderStateCallback` behavior + on-disk format).
 
 ## Implementation order
 
-1. Build the four role ABCs + built-ins + slim orchestrator alongside existing
-   code (no behavior change yet).
-2. Migrate VLM → pass VLM golden test → delete `data_packer.py`,
-   `packing_iterable_dataset.py`, and the private wrappers.
-3. Migrate videophy2 (extract `VideoPhy2Processor`) → pass videophy2 golden test.
-4. Add VFM built-ins (`RankPartitionedDistributor`, `SequentialPackingBatcher`,
-   `IdentityProcessor`, `VFMListCollator`) → migrate VFM → pass VFM golden test →
-   delete the `joint_dataloader.py` loader family.
-5. Add `MixtureDistributor`; reconcile `JointDataPackerDataLoader` as the outer
-   composer over refactored loaders.
-6. (Optional / future) `DROIDLeRobotDataset` via `MapDistributor` when an action
-   recipe goes live.
+Old dataloaders + original experiments stay **untouched** through Phases 1–4 and
+serve as the regression baseline. Deletion happens only in the final Phase 5 PR.
+
+1. **Build** the four role ABCs + built-ins + slim orchestrator alongside
+   existing code (no behavior change, nothing removed).
+2. **VLM mirror** — add `pre_exp012_llava_ov_datapacker` mirror experiment
+   (`IterableDistributor` + `VLMProcessor` + `PoolPackingBatcher` + `VLMCollator`);
+   pass golden-batch + deterministic loss-curve equivalence vs the original.
+3. **videophy2 mirror** — extract `VideoPhy2Processor`; add mirror experiment;
+   pass golden-batch + loss-curve equivalence.
+4. **VFM mirror** — add VFM built-ins (`RankPartitionedDistributor`,
+   `SequentialPackingBatcher`, `IdentityProcessor`, `VFMListCollator`); add
+   `vision_sft_nano_datapacker` (and `_super`) mirror; pass golden-batch +
+   loss-curve equivalence. Also add `MixtureDistributor` + reconcile
+   `JointDataPackerDataLoader` as the outer composer.
+5. **Cleanup PR (separate)** — once all mirrors are validated: promote mirror
+   experiments to the default names, then delete the old dataloaders
+   (`joint_dataloader.py` family, `data_packer.py`, `packing_iterable_dataset.py`,
+   private wrappers) and the superseded original experiments.
+6. **(Optional / future)** `DROIDLeRobotDataset` via `MapDistributor` when an
+   action recipe goes live; later, extract real `RawItemProcessor`s for the
+   keep-in-dataset recipes (the deferred hollow-Processor refactor).
 
 ## Key decisions log
 
