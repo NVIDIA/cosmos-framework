@@ -6,6 +6,9 @@ on:
   pull_request:
   push:
     branches: [main]
+  # Allow the GPU workflows to gate on this as a reusable workflow so their
+  # (single, expensive) self-hosted runner only runs after lint passes.
+  workflow_call:
 jobs:
   pre-commit:
     runs-on: ubuntu-latest
