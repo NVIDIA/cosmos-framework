@@ -185,6 +185,66 @@ Preserve the existing callback contract so checkpoints stay compatible:
   `MapDistributor`.
 - The on-disk DCP checkpoint format is unchanged.
 
+## Coverage audit (all existing dataloaders)
+
+The abstraction was validated against **every** dataloader/dataset class in the
+repo, not just VLM + VFM. Verdict: the four-role model covers all **live**
+recipes; the unused classes are expressible; there is no WebDataset obstacle.
+
+| Class | Live config? | Four-role expression |
+|---|---|---|
+| `PackingDataLoader` + `RankPartitionedDataLoader` (`joint_dataloader.py:768`, `:640`) | yes — vision_sft_nano, vision_sft_super | `RankPartitionedDistributor` + `SequentialPackingBatcher` + `VFMListCollator` |
+| `DataPackerDataLoader` / pool engine | yes — llava_ov | `IterableDistributor` + `PoolPackingBatcher` + `VLMCollator` |
+| `LocalSFTDataset` / `_UnshardedLocalSFTDataset` (`local_sft_dataset.py:190`, `videophy2_sft_nano.py:33`) | yes — videophy2_sft_nano | `IterableDistributor` + extracted augmentation processor + `PoolPackingBatcher` |
+| `DROIDLeRobotDataset` (`droid_lerobot_dataset.py:50`) | no (exported, no live config) | map-style → `MapDistributor` + `IdentityProcessor` |
+| `IterativeJointDataLoader` (`joint_dataloader.py:502`) | no | expressible as `JointDataPackerDataLoader` (batch-interleave) |
+| `RandomJointDataLoader` (`joint_dataloader.py:879`) | no | expressible as Joint variant w/ per-rank RNG |
+
+**WebDataset is not an obstacle.** `JointDataLoader(webdataset.WebLoader)` never
+calls `super().__init__()` and uses zero WebDataset machinery (no tar shards, no
+`.compose`, no `.batched`) — `joint_dataloader.py:155-256`. The inheritance is
+vestigial; it treats inner dataloaders as opaque iterables. The four-role model
+**replaces** the family; the `webdataset.WebLoader` base is dropped.
+
+**The current "fusions" are composition artifacts, not abstraction limits.**
+Today `JointDataLoader` composes pre-built inner DataLoaders that already
+batch+collate, then *un-batches* them back into samples (`:288-312`) and
+*re-packs*. That batch→sample→repack dance is what looks inseparable. The
+four-role batcher consumes a **flat sample stream directly** (no inner
+collation), so the un-batch/re-pack step does not exist — strictly simpler.
+
+**`IterativeJointDataLoader` / `RandomJointDataLoader` are legacy** (no live
+config). We do not migrate them; we only assert their semantics are expressible
+(Iterative ≡ Joint batch-interleave; Random ≡ Joint with unsynchronized per-rank
+RNG). They are deleted with the rest of `joint_dataloader.py` once the live
+recipes are migrated.
+
+### Processor placement: per-recipe choice
+
+Heavy per-sample work today lives inside the dataset classes, not a separate
+processor. Mapping is decided per recipe (pragmatic balance — extract where cheap
+and valuable, keep-in-dataset where extraction is risky):
+
+| Recipe | RawItemProcessor |
+|---|---|
+| VLM (llava_ov) | real `VLMProcessor` (already separated in `VLMDataPacker`) |
+| videophy2 | extract augmentation chain → `VideoPhy2Processor`; dataset yields raw read samples |
+| VFM (vision_sft_nano) | `IdentityProcessor`; `SFTDataset.process_one_sample` stays in the dataset (extraction too risky) |
+| DROID (action) | `IdentityProcessor`; heavy `__getitem__` stays in the dataset |
+
+For the keep-in-dataset recipes the `DataDistributor` wraps the existing dataset
+(which still processes) and `IdentityProcessor` is a no-op — behavior-preserving
+by construction.
+
+### Prewarm + per-dataset worker pools
+
+`JointDataLoader._prewarm_dataloaders` (`:258-323`) forces each inner loader to
+spawn workers and load one batch before training, with a `dist.barrier()`, to
+avoid NCCL timeouts from slow action-dataset init. This per-dataset-worker-pool
+need is exactly why **heterogeneous** multi-dataset training stays in the
+`JointDataPackerDataLoader` outer wrapper (each inner loader keeps its own worker
+pool + prewarm), while **homogeneous** mixing uses the flat `MixtureDistributor`.
+
 ## Multi-dataset joining
 
 Three distinct join semantics exist today and map to different homes:
@@ -233,10 +293,10 @@ Modality segregation (`_get_modality`) and `max_batch_size=1` move into
 | Today (`joint_dataloader.py`, `sft_dataset.py`) | New role |
 |---|---|
 | `RankPartitionedDataLoader` (`:640-766`) | `RankPartitionedDistributor` |
-| `SFTDataset.process_one_sample` (`sft_dataset.py:143-330`) | `SFTVideoProcessor.process` (verbatim) |
+| `SFTDataset` (`sft_dataset.py:64-330`) | wrapped by `RankPartitionedDistributor`; `process_one_sample` stays in the dataset + `IdentityProcessor` (per-recipe choice — extraction too risky) |
 | `PackingDataLoader.__iter__` (sequential pull-until-budget, `:819-876`) | `SequentialPackingBatcher` |
 | `_compute_num_tokens_per_sample` (`:325-400`, VAE formula + config) | `SequentialPackingBatcher.sample_size` (ctor args: compression factors, patch size) |
-| `custom_collate_fn` (keep media as lists, `:26-89`) | `VFMListCollator` |
+| `custom_collate_fn` (`:26-110`) | `VFMListCollator` — **must preserve** sparse-key handling (`sound=None` placeholders kept 1:1 with `sequence_plan`), optional-key dropping, and worker-timing aggregation |
 
 The new loader produces the identical batch dict (`video` as `list[Tensor]`,
 `text_token_ids`, `sequence_plan`, …); VAE-encode-in-model, sequence packing, and
@@ -245,6 +305,24 @@ flow-matching loss are downstream and need **zero changes**.
 This validates the abstraction: VFM uses *sequential* packing (order-preserving)
 while VLM uses *pool* bin-packing (reorders to minimize padding) — genuinely
 different `SampleBatcher`s satisfying one contract.
+
+### Goal 1.5 — videophy2 (`videophy2_sft_nano`), behavior-preserving
+
+Already runs on `DataPackerDataLoader` today (`_UnshardedLocalSFTDataset` delegates
+sharding to `_IterableWrapper`), so it is a strong precedent for the
+loader-owns-sharding model:
+
+| Today (`videophy2_sft_nano.py`, `local_sft_dataset.py`) | New role |
+|---|---|
+| `_UnshardedLocalSFTDataset` (disabled internal sharding) | `IterableDistributor(LocalSFTDataset(...))` (loader does the sharding) |
+| `LocalSFTDataset` augmentation chain (`_run_augmentor_chain`) | extracted → `VideoPhy2Processor.process` |
+| `VideoPhy2DataPacker` packing/collation | `PoolPackingBatcher` + a videophy2 collator |
+
+### Goal 2.5 — DROID / action (no live config yet)
+
+Map-style → `MapDistributor(DROIDLeRobotDataset)` + `IdentityProcessor` (heavy
+`__getitem__` stays in the dataset) + `SimpleBatcher`/packing batcher as needed.
+Confirms the abstraction handles map-style + heavy-per-item-processing datasets.
 
 ### Goal 3 — arbitrary user dataflows
 
@@ -275,13 +353,18 @@ cosmos_framework/data/vfm/
 
 **Deleted after migration:** `data_packer.py` (`DataPacker` ABC);
 `packing_iterable_dataset.py` (logic → `PoolPackingBatcher`); private wrappers
-`_IterableWrapper` / `_ShuffledMapIterableDataset` / `_DataPackerIterableDataset`.
+`_IterableWrapper` / `_ShuffledMapIterableDataset` / `_DataPackerIterableDataset`;
+the `joint_dataloader.py` loader family (`JointDataLoader` and its
+`webdataset.WebLoader` base, `IterativeJointDataLoader`, `RandomJointDataLoader`,
+`RankPartitionedDataLoader`, `PackingDataLoader`) once VFM is migrated — their
+logic moves into distributors/batchers/collators. `custom_collate_fn` logic moves
+into `VFMListCollator`.
 
 ## Testing strategy
 
 1. **Golden-batch equality** (core safety net): fixed seed + fixed data slice →
-   first N batches from old loader vs new loader, assert tensor-equality. One for
-   VLM, one for VFM.
+   first N batches from old loader vs new loader, assert tensor-equality. One per
+   live recipe: VLM, videophy2, VFM.
 2. **Per-role unit tests:** distributors (disjoint coverage across ranks/workers;
    `MapDistributor` resume fast-forward), batchers (packing decisions, budget /
    halving, oversized discard), collators (output shapes).
@@ -295,10 +378,14 @@ cosmos_framework/data/vfm/
    code (no behavior change yet).
 2. Migrate VLM → pass VLM golden test → delete `data_packer.py`,
    `packing_iterable_dataset.py`, and the private wrappers.
-3. Add VFM built-ins (`RankPartitionedDistributor`, `SequentialPackingBatcher`,
-   `SFTVideoProcessor`, `VFMListCollator`) → migrate VFM → pass VFM golden test.
-4. Add `MixtureDistributor`; reconcile `JointDataPackerDataLoader` as the outer
+3. Migrate videophy2 (extract `VideoPhy2Processor`) → pass videophy2 golden test.
+4. Add VFM built-ins (`RankPartitionedDistributor`, `SequentialPackingBatcher`,
+   `IdentityProcessor`, `VFMListCollator`) → migrate VFM → pass VFM golden test →
+   delete the `joint_dataloader.py` loader family.
+5. Add `MixtureDistributor`; reconcile `JointDataPackerDataLoader` as the outer
    composer over refactored loaders.
+6. (Optional / future) `DROIDLeRobotDataset` via `MapDistributor` when an action
+   recipe goes live.
 
 ## Key decisions log
 
@@ -311,3 +398,10 @@ cosmos_framework/data/vfm/
   for heterogeneous batch-level interleaving.
 - cosmos-rl name compatibility dropped; borrow design only.
 - Resume/checkpoint format unchanged.
+- Processor placement is per-recipe: real processor for VLM + videophy2;
+  `IdentityProcessor` (heavy work stays in dataset) for VFM + DROID.
+- `webdataset.WebLoader` base is vestigial → dropped; whole `joint_dataloader.py`
+  family (incl. legacy `IterativeJointDataLoader` / `RandomJointDataLoader`)
+  replaced/deleted after live recipes migrate.
+- `VFMListCollator` must preserve `custom_collate_fn` sparse-key / optional-key /
+  timing-aggregation behavior.
