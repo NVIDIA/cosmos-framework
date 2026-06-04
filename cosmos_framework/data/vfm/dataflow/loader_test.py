@@ -84,3 +84,29 @@ def test_multiworker_disjoint_and_complete_one_epoch():
     seen = [next(it)["i"].item() for _ in range(12)]
     assert sorted(seen) == list(range(12))
     assert len(set(seen)) == 12
+
+
+def test_map_source_stamps_resume_meta_on_batch():
+    loader = CosmosDataLoader(
+        distributor=MapDistributor(_MapDS(10), shuffle=False),
+        processor=IdentityProcessor(),
+        batch_size=2,
+        num_workers=0,
+    )
+    it = iter(loader)
+    batch = next(it)
+    assert "sample_worker_id" in batch
+    assert batch["sample_epoch"].tolist() == [0, 0]
+    assert batch["sample_index"].tolist() == [1, 1]
+    assert "_dp_epoch" not in batch and "_dp_stream_pos" not in batch
+
+
+def test_iterable_source_has_no_resume_meta():
+    loader = CosmosDataLoader(
+        distributor=IterableDistributor([{"x": torch.tensor([float(i)])} for i in range(4)]),
+        processor=IdentityProcessor(),
+        batch_size=2,
+        num_workers=0,
+    )
+    batch = next(iter(loader))
+    assert "sample_worker_id" not in batch

@@ -50,9 +50,31 @@ class _DataflowIterableDataset(torch.utils.data.IterableDataset):
         info = torch.utils.data.get_worker_info()
         worker_id, num_workers = (info.id, info.num_workers) if info else (0, 1)
         raw = self._distributor.stream(self._dp_rank, self._dp_world_size, worker_id, num_workers)
-        samples = (self._processor.process(item) for item in raw)
-        for group in self._batcher.batches(samples):
-            yield self._collator.collate(group)
+
+        def _processed():
+            for item in raw:
+                if isinstance(item, dict):
+                    meta = {k: item.pop(k) for k in list(item) if k.startswith("_dp_")}
+                else:
+                    meta = {}
+                s = self._processor.process(item)
+                if meta and isinstance(s, dict):
+                    s.update(meta)
+                yield s
+
+        for group in self._batcher.batches(_processed()):
+            has_meta = bool(group) and isinstance(group[0], dict) and "_dp_epoch" in group[0]
+            if has_meta:
+                max_epoch = max(s["_dp_epoch"] for s in group)
+                max_pos = max(s["_dp_stream_pos"] for s in group)
+                clean = [{k: v for k, v in s.items() if not k.startswith("_dp_")} for s in group]
+                batch = self._collator.collate(clean)
+                batch["sample_worker_id"] = torch.tensor([worker_id] * len(group))
+                batch["sample_epoch"] = torch.tensor([max_epoch] * len(group))
+                batch["sample_index"] = torch.tensor([max_pos] * len(group))
+            else:
+                batch = self._collator.collate(group)
+            yield batch
 
 
 class CosmosDataLoader(torch.utils.data.DataLoader):
@@ -111,6 +133,16 @@ class CosmosDataLoader(torch.utils.data.DataLoader):
             dp_rank=dp_rank,
             dp_world_size=dp_world_size,
         )
+
+        from cosmos_framework.data.vfm.dataflow.distributors import MapDistributor
+
+        if isinstance(distributor, MapDistributor) and num_workers > 0 and not persistent_workers:
+            log.info(
+                "CosmosDataLoader: MapDistributor requires persistent_workers=True for "
+                "correct stateful resume; overriding to True.",
+                rank0_only=True,
+            )
+            persistent_workers = True
 
         if persistent_workers and num_workers == 0:
             log.info(
