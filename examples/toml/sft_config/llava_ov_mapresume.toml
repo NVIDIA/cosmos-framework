@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: OpenMDW-1.1
+
 # pre_exp012_llava_ov_mapresume — map-style resumable VLM recipe
 # Base config = cosmos_framework/configs/base/vlm/config.py (task="vlm").
 #
