@@ -95,7 +95,6 @@ Users can also supply a custom defaults file per-request via the `defaults_file`
 | ---------------------------------- | -------------------------------------------------------------------------------------------- |
 | Batch inference                    | `python -m cosmos_framework.scripts.inference`                                               |
 | Training                           | `python -m cosmos_framework.scripts.train --sft-toml=examples/toml/sft_config/<recipe>.toml` |
-| Action evaluation                  | `python -m cosmos_framework.scripts.eval`                                                    |
 | Online serving (Ray)               | `python -m cosmos_framework.inference.ray.serve`                                             |
 | Submit to Ray server               | `python -m cosmos_framework.inference.ray.submit`                                            |
 | Gradio UI                          | `python -m cosmos_framework.inference.ray.gradio`                                            |
