@@ -3,9 +3,10 @@
 
 """Map-style, resumable variant of the LLaVA-OV VLM recipe for resume validation.
 
-Materialises the first ``n`` items of a single LLaVA-OneVision-Data subset into
-an in-memory ``datasets.Dataset`` (map-style) so that ``MapDistributor`` can
-checkpoint exact ``(epoch, index)`` positions per worker.  The
+Loads a single LLaVA-OneVision-Data subset as a real on-disk ``datasets.Dataset``
+(``load_dataset(..., streaming=False)`` — map-style, random-access), filters it,
+and caps it to ``n`` rows so that ``MapDistributor`` can checkpoint exact
+``(epoch, index)`` positions per worker.  The
 ``dataloader_state`` callback is wired with ``distributor_type="cosmos_dataloader"``
 so the ``COSMOS_DL_STATE_WORKER_<id>_{EPOCH,INDEX}`` env vars are set on resume, and
 the ``MapDistributor`` fast-forwards each worker to the saved position.
@@ -28,7 +29,6 @@ Resume run::
 
 from __future__ import annotations
 
-import itertools
 from typing import Any
 
 from hydra.core.config_store import ConfigStore
@@ -55,25 +55,31 @@ cs = ConfigStore.instance()
 def get_llava_ov_map(
     subset: str = "ai2d(gpt4v)",
     split: str = "train",
-    n: int = 800,
+    n: int = 4000,
 ) -> Any:
-    """Materialize the first ``n`` filtered LLaVA-OV items into a map-style Dataset
-    (so the dataloader is resumable via MapDistributor). Streams to avoid a full download.
+    """Load a filtered LLaVA-OV subset as a real map-style ``datasets.Dataset``.
+
+    Uses ``load_dataset(..., streaming=False)`` so the result is a genuine
+    random-access (map-style) Dataset — exactly the case ``MapDistributor`` is
+    built to shard + resume.  The subset is filtered to valid image/conversation
+    rows and capped to ``n`` rows (via ``.select``) so a ``save_iter=100`` run
+    saves/resumes well inside one epoch (mid-epoch resume, no epoch-wrap).
 
     Args:
         subset: Dataset config/subset name (e.g. ``"ai2d(gpt4v)"``).
         split: Dataset split (default ``"train"``).
-        n: Number of items to materialise.
+        n: Max number of rows to keep after filtering.
 
     Returns:
         A ``datasets.Dataset`` (map-style) with columns from LLaVA-OV.
     """
-    from datasets import load_dataset, Dataset
+    from datasets import load_dataset
 
-    stream = load_dataset("lmms-lab/LLaVA-OneVision-Data", name=subset, split=split, streaming=True)
-    stream = stream.filter(lambda x: x.get("image") is not None and len(x.get("conversations") or []) >= 2)
-    items = list(itertools.islice(stream, n))
-    return Dataset.from_list(items)
+    ds = load_dataset("lmms-lab/LLaVA-OneVision-Data", name=subset, split=split, streaming=False)
+    ds = ds.filter(lambda x: x.get("image") is not None and len(x.get("conversations") or []) >= 2)
+    if n is not None and n < len(ds):
+        ds = ds.select(range(n))
+    return ds
 
 
 # ---------------------------------------------------------------------------
@@ -139,7 +145,7 @@ pre_exp012_llava_ov_mapresume = LazyDict(
         # simple for resume tests (multi-worker resume is covered by unit tests).
         dataloader_train=L(CosmosDataLoader)(
             distributor=L(MapDistributor)(
-                dataset=L(get_llava_ov_map)(subset="ai2d(gpt4v)", split="train", n=800),
+                dataset=L(get_llava_ov_map)(subset="ai2d(gpt4v)", split="train", n=4000),
                 shuffle=True,
                 seed=42,
                 name="",
