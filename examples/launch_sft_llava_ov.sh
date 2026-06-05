@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: OpenMDW-1.1
 
 # Structured-TOML launch for llava_ov_datapacker (VLM SFT on
-# lmms-lab/LLaVA-OneVision-Data via DataPackerDataLoader). Drives
+# lmms-lab/LLaVA-OneVision-Data via CosmosDataLoader). Drives
 # cosmos_framework.scripts.train against
 # examples/toml/sft_config/llava_ov_datapacker.toml.
 #

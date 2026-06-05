@@ -105,8 +105,8 @@ class DataLoaderStateCallback(Callback):
 
         self.state = {}
         # Build env var prefix. For data_packer, namespacing avoids conflicts
-        # when multiple DataPackerDataLoader instances share the same process
-        # (e.g. inside JointDataPackerDataLoader). name="" → original format.
+        # when multiple CosmosDataLoader instances share the same process
+        # (e.g. inside JointCosmosDataLoader). name="" → original format.
         _dp_pfx = f"DP_STATE_{self.name}_" if self.name else "DP_STATE_"
         for worker_id, per_worker_state in state_dict.items():
             epoch = per_worker_state["epoch"]
@@ -123,7 +123,7 @@ class DataLoaderStateCallback(Callback):
 
 
 class JointDataLoaderStateCallback(Callback):
-    """Checkpoint/resume state for ``JointDataPackerDataLoader``.
+    """Checkpoint/resume state for ``JointCosmosDataLoader``.
 
     Manages two levels of state in a single DCP checkpoint entry
     (``checkpoint_component = "dataloader"``):
@@ -140,7 +140,7 @@ class JointDataLoaderStateCallback(Callback):
 
     Usage in experiment configs::
 
-        joint_loader = JointDataPackerDataLoader(dataloaders={...}, seed=42)
+        joint_loader = JointCosmosDataLoader(dataloaders={...}, seed=42)
         exp["dataloader_train"] = joint_loader
         exp["trainer"]["callbacks"]["dataloader_state"] = JointDataLoaderStateCallback(
             outer_loader=joint_loader,
@@ -193,7 +193,7 @@ class JointDataLoaderStateCallback(Callback):
         iteration: int = 0,
     ) -> None:
         if self.config and iteration % self.config.trainer.logging_iter == 0:
-            msg = f"\nJointDataPackerDataLoader global_id={self._outer._global_id}\n"
+            msg = f"\nJointCosmosDataLoader global_id={self._outer._global_id}\n"
             for name, cb in self._inner.items():
                 for wid, state in cb.state.items():
                     msg += f"  [{name}] worker {wid}: epoch={state.epoch}, index={state.index}\n"

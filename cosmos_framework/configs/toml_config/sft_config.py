@@ -614,7 +614,7 @@ class DataloaderTrainConfig(BaseModel):
     """Top-level dataloader scalars only. The dataloader's class (LazyCall)
     and full pipeline wiring (datasets, packers, …) stay in the experiment
     Python — they vary too much between VFM IterativeJointDataLoader,
-    PackingDataLoader, and VLM DataPackerDataLoader to model uniformly.
+    PackingDataLoader, and VLM CosmosDataLoader to model uniformly.
     """
 
     model_config = _PYDANTIC_MODEL_CONFIG
@@ -623,7 +623,7 @@ class DataloaderTrainConfig(BaseModel):
         default=None,
         description=(
             "Cap on samples per micro-batch. Remapped to 'max_batch_size' "
-            "on the VLM DataPackerDataLoader. None = no per-count cap "
+            "on the VLM CosmosDataLoader. None = no per-count cap "
             "(the packer's token budget is what limits batch size)."
         ),
     )
@@ -631,13 +631,13 @@ class DataloaderTrainConfig(BaseModel):
         default=None,
         description=(
             "Cap on tokens per packed sequence. Remapped to 'max_tokens' "
-            "on the VLM DataPackerDataLoader. None = no per-token cap."
+            "on the VLM CosmosDataLoader. None = no per-token cap."
         ),
     )
     seed: int = Field(
         default=42,
         description=(
-            "Dataloader RNG seed. Skipped on VLM (DataPackerDataLoader has "
+            "Dataloader RNG seed. Skipped on VLM (CosmosDataLoader has "
             "no seed ctor kwarg there)."
         ),
     )

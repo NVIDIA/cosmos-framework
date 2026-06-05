@@ -3,11 +3,7 @@
 
 """CosmosDataLoader — slim orchestrator that wires the four dataflow roles
 (DataDistributor -> RawItemProcessor -> SampleBatcher -> BatchCollator) inside
-each DataLoader worker.
-
-Lives in dataflow/loader.py during the migration so it coexists with the legacy
-cosmos_framework/data/vfm/data_packer_dataloader.py; the cleanup PR makes this
-the canonical loader.
+each DataLoader worker. The canonical training dataloader.
 """
 
 from __future__ import annotations
@@ -186,11 +182,9 @@ class CosmosDataLoader(torch.utils.data.DataLoader):
 class JointCosmosDataLoader:
     """Wraps multiple ``CosmosDataLoader`` instances with ratio-based seeded selection.
 
-    Ports ``JointDataPackerDataLoader`` (data_packer_dataloader.py:526-624), renamed
-    and typed to ``CosmosDataLoader``.  One output batch = one inner loader, selected
-    deterministically by ratio at each step.  Adds a ``"dataset_name"`` key to every
-    yielded batch so downstream callbacks can route state updates to the correct inner
-    loader.
+    One output batch = one inner loader, selected deterministically by ratio at each
+    step.  Adds a ``"dataset_name"`` key to every yielded batch so downstream callbacks
+    can route state updates to the correct inner loader.
 
     Parameters
     ----------
