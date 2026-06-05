@@ -46,16 +46,23 @@ See ``launch_vlm_llava_ov.sh`` for a ready-to-run shell script.
 
 from __future__ import annotations
 
+import copy
 from typing import Any
 
 from hydra.core.config_store import ConfigStore
 
 from cosmos_framework.utils.lazy_config import LazyCall as L
 from cosmos_framework.utils.lazy_config import LazyDict
-from cosmos_framework.data.vfm.dataflow import CosmosDataLoader, IterableDistributor, PoolPackingBatcher
+from cosmos_framework.data.vfm.dataflow import (
+    CosmosDataLoader,
+    IterableDistributor,
+    MapDistributor,
+    PoolPackingBatcher,
+)
 from cosmos_framework.data.vfm.processors import build_processor
 from cosmos_framework.utils.vlm.constant import IGNORE_INDEX
 from cosmos_framework.configs.base.vlm.experiment.dataflow_roles import VLMProcessor, VLMCollator
+from cosmos_framework.callbacks.dataloader_state import DataLoaderStateCallback
 
 cs = ConfigStore.instance()
 
@@ -99,6 +106,45 @@ def get_llava_ov_streaming(
     # sft_process_sample never receives unparseable samples (the packing
     # engine does not tolerate None returns from the processor).
     return ds.filter(lambda x: x.get("image") is not None and len(x.get("conversations") or []) >= 2)
+
+
+# ---------------------------------------------------------------------------
+# Map-style data source factory (for the resumable variant below)
+#
+# Loads a subset as a real on-disk ``datasets.Dataset`` (streaming=False —
+# random-access), filters it, and caps it to ``n`` rows so ``MapDistributor``
+# can checkpoint exact ``(epoch, index)`` positions per worker.
+# ---------------------------------------------------------------------------
+
+
+def get_llava_ov_map(
+    subset: str = "ai2d(gpt4v)",
+    split: str = "train",
+    n: int = 4000,
+) -> Any:
+    """Load a filtered LLaVA-OV subset as a real map-style ``datasets.Dataset``.
+
+    Uses ``load_dataset(..., streaming=False)`` so the result is a genuine
+    random-access (map-style) Dataset — exactly the case ``MapDistributor`` is
+    built to shard + resume.  The subset is filtered to valid image/conversation
+    rows and capped to ``n`` rows (via ``.select``) so a ``save_iter=100`` run
+    saves/resumes well inside one epoch (mid-epoch resume, no epoch-wrap).
+
+    Args:
+        subset: Dataset config/subset name (e.g. ``"ai2d(gpt4v)"``).
+        split: Dataset split (default ``"train"``).
+        n: Max number of rows to keep after filtering.
+
+    Returns:
+        A ``datasets.Dataset`` (map-style) with columns from LLaVA-OV.
+    """
+    from datasets import load_dataset
+
+    ds = load_dataset("lmms-lab/LLaVA-OneVision-Data", name=subset, split=split, streaming=False)
+    ds = ds.filter(lambda x: x.get("image") is not None and len(x.get("conversations") or []) >= 2)
+    if n is not None and n < len(ds):
+        ds = ds.select(range(n))
+    return ds
 
 
 # ---------------------------------------------------------------------------
@@ -194,4 +240,56 @@ cs.store(
     package="_global_",
     name="pre_exp012_llava_ov",
     node=pre_exp012_llava_ov,
+)
+
+
+# ---------------------------------------------------------------------------
+# pre_exp012_llava_ov_mapstyle_dataloader — map-style, resumable variant.
+#
+# Identical to pre_exp012_llava_ov except it swaps the streaming
+# IterableDistributor for a MapDistributor over a real on-disk Dataset
+# (get_llava_ov_map, streaming=False), which gives exact per-worker (epoch,
+# index) checkpoint/resume. It therefore also: wires the dataloader_state
+# callback with distributor_type="cosmos_dataloader" (sets COSMOS_DL_STATE_*
+# env vars on resume so MapDistributor fast-forwards), enables checkpoint
+# saving (save_iter=100), and uses num_workers=0 to keep worker bookkeeping
+# simple. Every other block is reused verbatim from pre_exp012_llava_ov.
+# ---------------------------------------------------------------------------
+pre_exp012_llava_ov_mapstyle_dataloader = copy.deepcopy(pre_exp012_llava_ov)
+pre_exp012_llava_ov_mapstyle_dataloader.job.name = (
+    "pre_exp012_llava_ov_mapstyle_dataloader_${now:%Y-%m-%d}_${now:%H-%M-%S}"
+)
+# Activate dataloader-state resume. We cannot set data_setting.distributor_type
+# (its attrs validator only accepts "with_replace"/"no_replace"), so override
+# the callback directly; it merges over the basic_log callbacks group.
+pre_exp012_llava_ov_mapstyle_dataloader.trainer.callbacks = dict(
+    dataloader_state=L(DataLoaderStateCallback)(distributor_type="cosmos_dataloader"),
+)
+pre_exp012_llava_ov_mapstyle_dataloader.checkpoint.save_iter = 100
+pre_exp012_llava_ov_mapstyle_dataloader.dataloader_train = L(CosmosDataLoader)(
+    distributor=L(MapDistributor)(
+        dataset=L(get_llava_ov_map)(subset="ai2d(gpt4v)", split="train", n=4000),
+        shuffle=True,
+        seed=42,
+        name="",
+    ),
+    processor=L(VLMProcessor)(
+        processor=L(build_processor)(
+            tokenizer_type="${model.config.policy.backbone.model_name}",
+            config_variant="hf",
+        ),
+        ignore_index=IGNORE_INDEX,
+    ),
+    batcher=L(PoolPackingBatcher)(
+        max_tokens=16000, pool_size=16, max_batch_size=1, long_threshold=6400,
+    ),
+    collator=L(VLMCollator)(),
+    num_workers=0,
+)
+
+cs.store(
+    group="experiment",
+    package="_global_",
+    name="pre_exp012_llava_ov_mapstyle_dataloader",
+    node=pre_exp012_llava_ov_mapstyle_dataloader,
 )
