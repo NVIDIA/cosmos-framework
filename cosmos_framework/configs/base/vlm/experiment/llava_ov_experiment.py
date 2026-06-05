@@ -36,7 +36,7 @@ Usage (smoke test)::
 
     torchrun --nproc_per_node=4 --master_port=12344 -m cosmos_framework.scripts.train \\
         --config=cosmos_framework/configs/base/vlm/config.py -- \\
-        experiment=pre_exp012_llava_ov_datapacker \\
+        experiment=pre_exp012_llava_ov \\
         "model.config.policy.backbone.model_name=/path/to/Siglip2-Qwen3-1.7B-BF16-Alignment" \\
         trainer.max_iter=10 trainer.logging_iter=1 \\
         job.wandb_mode=disabled ckpt_type=dummy
@@ -106,7 +106,7 @@ def get_llava_ov_streaming(
 # ---------------------------------------------------------------------------
 
 
-pre_exp012_llava_ov_datapacker = LazyDict(
+pre_exp012_llava_ov = LazyDict(
     dict(
         # Hydra defaults — inlined from the former pre_exp012_000_phase2_vlm_smoke_4gpu_8b
         # smoke recipe. data_train/data_val intentionally omitted because the
@@ -121,7 +121,7 @@ pre_exp012_llava_ov_datapacker = LazyDict(
             "_self_",
         ],
         job=dict(
-            name="pre_exp012_llava_ov_datapacker_${now:%Y-%m-%d}_${now:%H-%M-%S}",
+            name="pre_exp012_llava_ov_${now:%Y-%m-%d}_${now:%H-%M-%S}",
             group="vlm_llava_ov_demo",
             wandb_mode="disabled",
         ),
@@ -192,6 +192,6 @@ pre_exp012_llava_ov_datapacker = LazyDict(
 cs.store(
     group="experiment",
     package="_global_",
-    name="pre_exp012_llava_ov_datapacker",
-    node=pre_exp012_llava_ov_datapacker,
+    name="pre_exp012_llava_ov",
+    node=pre_exp012_llava_ov,
 )

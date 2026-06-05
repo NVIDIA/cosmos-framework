@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: OpenMDW-1.1
 
 """VLM dataflow roles (RawItemProcessor + BatchCollator) extracted 1:1 from
-VLMDataPacker (llava_ov_datapacker_experiment.py). Behavior-preserving."""
+VLMDataPacker (llava_ov_experiment.py). Behavior-preserving."""
 
 from __future__ import annotations
 

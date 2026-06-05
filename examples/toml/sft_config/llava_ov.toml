@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: OpenMDW-1.1
 
-# pre_exp012_llava_ov_datapacker — VLM training on lmms-lab/LLaVA-OneVision-Data
+# pre_exp012_llava_ov — VLM training on lmms-lab/LLaVA-OneVision-Data
 # via CosmosDataLoader. Base config = cosmos_framework/configs/base/vlm/config.py
 # (selected by [job].task="vlm").
 #
@@ -14,7 +14,7 @@
 #
 # Example launch:
 #   torchrun --nproc_per_node=4 -m cosmos_framework.scripts.train \
-#       --sft-toml examples/toml/sft_config/llava_ov_datapacker.toml -- \
+#       --sft-toml examples/toml/sft_config/llava_ov.toml -- \
 #       data_setting.max_tokens=16000
 #
 # Per-task remap (see _PATH_REMAPS["vlm"]):
@@ -30,10 +30,10 @@
 
 [job]
 task         = "vlm"
-experiment   = "pre_exp012_llava_ov_datapacker"
+experiment   = "pre_exp012_llava_ov"
 project      = "cosmos3"                                 # matches legacy
 group        = "vlm_llava_ov_demo"
-name         = "pre_exp012_llava_ov_datapacker"
+name         = "pre_exp012_llava_ov"
 wandb_mode   = "disabled"
 
 [model]
