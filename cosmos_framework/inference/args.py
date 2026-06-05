@@ -41,6 +41,27 @@ if TYPE_CHECKING:
     from cosmos_framework.inference.common.inference import Inference
 
 
+def _load_transfer_prompt_path(path: str | Path) -> str:
+    """Load a transfer prompt from a ``.json`` or plain ``.txt`` file."""
+    resolved = Path(path)
+    text = resolved.read_text()
+    if resolved.suffix.lower() == ".json":
+        return json.dumps(json.loads(text))
+    return text.strip()
+
+
+def _load_transfer_negative_prompt_file(path: str | Path) -> str:
+    """Load a JSON negative caption file for transfer inference."""
+    candidate = Path(path)
+    if not candidate.is_file():
+        defaults_path = PACKAGE_DIR / "defaults" / candidate.name
+        if defaults_path.is_file():
+            candidate = defaults_path
+        else:
+            raise FileNotFoundError(f"Missing negative prompt file: {path} (also checked {defaults_path})")
+    return json.dumps(json.loads(candidate.read_text()))
+
+
 @cache
 def _load_modality_defaults(model_mode: str) -> dict[str, Any]:
     default_file = PACKAGE_DIR / f"defaults/{model_mode}/sample_args.json"
@@ -59,6 +80,7 @@ def _load_modality_defaults(model_mode: str) -> dict[str, Any]:
 Guidance = Annotated[float, pydantic.Field(ge=0, le=7)]
 GuidanceInterval = tuple[pydantic.NonNegativeFloat, pydantic.NonNegativeFloat]
 PromptUpsamplerProbability = Annotated[float, pydantic.Field(ge=0, le=1)]
+ControlGuidance = Annotated[float, pydantic.Field(ge=0, le=10)]
 
 
 class SamplingArgs(ArgsBase):
@@ -300,7 +322,11 @@ class TextDataOverrides(OverridesBase):
         if self.prompt is not None:
             pass
         elif self.prompt_path is not None:
-            self.prompt = self.prompt_path.read_text().strip()
+            transfer_self = cast("_TransferDataBase", self)
+            if transfer_self.transfer_hints:
+                self.prompt = _load_transfer_prompt_path(self.prompt_path)
+            else:
+                self.prompt = self.prompt_path.read_text().strip()
         else:
             self.prompt = ""
 
@@ -612,6 +638,150 @@ class ReasonerDataOverrides(OverridesBase):
             raise ValueError("Reasoner inference requires a non-empty 'prompt'.")
 
 
+class _TransferDataBase:
+    @property
+    def transfer_hints(self) -> dict[TransferHintKey, TransferOverrides | TransferArgs]:
+        # Iteration order is `TransferHintKey` enum order, not JSON-key order — keep this
+        # deterministic so the model sees a stable [ctrl_1, ..., ctrl_N] sequence.
+        return {key: getattr(self, key.value) for key in TransferHintKey if getattr(self, key.value) is not None}
+
+
+class TransferDataArgs(ArgsBase, _TransferDataBase):
+    control_guidance: ControlGuidance = 1.0
+    control_guidance_interval: GuidanceInterval | None = None
+    edge: EdgeTransferArgs | None = None
+    blur: BlurTransferArgs | None = None
+    depth: TransferArgs | None = None
+    seg: TransferArgs | None = None
+    wsm: TransferArgs | None = None
+    negative_prompt_file: str | None = None
+    """JSON negative caption file for transfer specs (absolute path or filename under ``defaults/``)."""
+    num_video_frames_per_chunk: pydantic.PositiveInt | None = None
+    num_conditional_frames: pydantic.NonNegativeInt | None = None
+    max_frames: pydantic.PositiveInt | None = None
+    show_control_condition: bool | None = None
+    show_input: bool | None = None
+    num_first_chunk_conditional_frames: pydantic.NonNegativeInt | None = None
+    share_vision_temporal_positions: bool | None = None
+
+
+class TransferDataOverrides(OverridesBase, _TransferDataBase):
+    """Transfer inference overrides — activated when at least one control hint is set."""
+
+    control_guidance: Training[ControlGuidance | None] = None
+    """Control-CFG scale for transfer. The control map stays in the main forward; 1.0 disables
+    the extra comparison forward that drops control-map vision items. Values > 1.0 blend
+    velocities from with-maps vs without-maps forwards on the generated clip."""
+    control_guidance_interval: Training[GuidanceInterval | None] = None
+    """Timestep interval [lo, hi] (0–1000) in which control-CFG is applied; None applies
+    on every step."""
+    edge: EdgeTransferOverrides | None = None
+    blur: BlurTransferOverrides | None = None
+    depth: TransferOverrides | None = None
+    seg: TransferOverrides | None = None
+    wsm: TransferOverrides | None = None
+    negative_prompt_file: str | None = None
+    """JSON negative caption file for transfer specs (absolute path or filename under ``defaults/``)."""
+    num_video_frames_per_chunk: pydantic.PositiveInt | None = None
+    num_conditional_frames: pydantic.NonNegativeInt | None = None
+    max_frames: pydantic.PositiveInt | None = None
+    show_control_condition: bool | None = None
+    show_input: bool | None = None
+    num_first_chunk_conditional_frames: pydantic.NonNegativeInt | None = None
+    share_vision_temporal_positions: bool | None = None
+
+    @pydantic.model_validator(mode="after")
+    def _validate_transfer_hints(self) -> Self:
+        hint_field_names = {k.value for k in TransferHintKey}
+        transfer_only = [
+            name
+            for name in TransferDataOverrides.__annotations__
+            if name in type(self).model_fields and name not in hint_field_names
+        ]
+        if any(getattr(self, f) is not None for f in transfer_only) and not self.transfer_hints:
+            raise ValueError(
+                f"transfer inference requires at least one control hint ({', '.join(k.value for k in TransferHintKey)})"
+            )
+        return self
+
+    @override
+    def download(self, output_dir: Path):
+        super().download(output_dir)
+        for config in self.transfer_hints.values():
+            assert isinstance(config, TransferOverrides)
+            config.download(output_dir)
+
+    _TRANSFER_SAMPLE_DEFAULTS: ClassVar[dict[str, Any]] = {
+        "num_video_frames_per_chunk": 93,
+        "num_conditional_frames": 1,
+        "max_frames": 5000,
+        "show_control_condition": False,
+        "show_input": False,
+        "num_first_chunk_conditional_frames": 0,
+        "share_vision_temporal_positions": True,
+    }
+    _TRANSFER_HINT_DEFAULTS: ClassVar[dict[TransferHintKey, dict[str, Any]]] = {
+        TransferHintKey.EDGE: {"preset_edge_threshold": PresetEdgeThreshold.MEDIUM},
+        TransferHintKey.BLUR: {"preset_blur_strength": PresetBlurStrength.MEDIUM},
+    }
+    # Tuned guidance / control_guidance per transfer task. Applied when the input JSON omits
+    # these fields (generic video2video sampling defaults otherwise apply).
+    _TRANSFER_DEFAULTS: ClassVar[dict[TransferHintKey, dict[str, Any]]] = {
+        TransferHintKey.EDGE: {"guidance": 3.0, "control_guidance": 1.5, "shift": 10.0},
+        TransferHintKey.BLUR: {"guidance": 3.0, "control_guidance": 1.5, "shift": 10.0},
+        TransferHintKey.DEPTH: {"guidance": 3.0, "control_guidance": 1.5, "shift": 10.0},
+        TransferHintKey.SEG: {"guidance": 3.0, "control_guidance": 2.0, "shift": 10.0},
+        TransferHintKey.WSM: {
+            "guidance": 1.0,
+            "control_guidance": 3.0,
+            "shift": 10.0,
+            "num_frames": 101,
+            "fps": 10,
+            "num_video_frames_per_chunk": 101,
+        },
+    }
+
+    def _build_transfer_data(
+        self,
+        model_config: "OmniMoTModelConfig",
+        sample_meta: SampleMeta,
+        *,
+        user_fields: frozenset[str] | None = None,
+    ):
+        self = cast("SampleDataOverrides", self)
+        # ``control_guidance`` is a required float in ``TransferDataArgs``.
+        # Keep it concrete even for non-transfer samples so ``OmniSampleArgs``
+        # validation never sees ``None``.
+        if self.control_guidance is None:
+            self.control_guidance = 1.0
+        hints = self.transfer_hints
+        if not hints:
+            return
+
+        if self.negative_prompt is None and self.negative_prompt_file is not None:
+            self.negative_prompt = _load_transfer_negative_prompt_file(self.negative_prompt_file)
+
+        for field, default in self._TRANSFER_SAMPLE_DEFAULTS.items():
+            if getattr(self, field) is None:
+                setattr(self, field, default)
+
+        for hint_key, config in hints.items():
+            for field, default in self._TRANSFER_HINT_DEFAULTS.get(hint_key, {}).items():
+                if getattr(config, field) is None:
+                    setattr(config, field, default)
+
+            if self.vision_path is None and config.control_path is None:
+                raise ValueError(
+                    f"transfer inference requires 'vision_path' or a pre-computed 'control_path' (hint: {hint_key})"
+                )
+
+        if len(hints) == 1:
+            hint_key = next(iter(hints))
+            for field, value in self._TRANSFER_DEFAULTS[hint_key].items():
+                if user_fields is None or field not in user_fields:
+                    setattr(self, field, value)
+
+
 class _SampleDataBase:
     @property
     def resolved_model_mode(self) -> ModelMode:
@@ -641,6 +811,7 @@ class SampleDataArgs(
     SoundDataArgs,
     ActionDataArgs,
     ReasonerDataArgs,
+    TransferDataArgs,
 ):
     model_mode: ModelMode
 
@@ -652,6 +823,7 @@ class SampleDataOverrides(
     SoundDataOverrides,
     ActionDataOverrides,
     ReasonerDataOverrides,
+    TransferDataOverrides,
 ):
     """Sample data arguments for 'OmniMoTModel.generate_samples'."""
 
@@ -791,6 +963,7 @@ class OmniSampleOverrides(
             defaults = _load_modality_defaults(sample_meta.model_mode)
         overrides = self.model_dump(exclude_none=True)
         shift_configured = "shift" in overrides or defaults.get("shift") is not None
+        user_fields = frozenset(overrides)
         merged_data = _deep_merge(defaults, overrides)
         merged_data = {k: v for k, v in merged_data.items() if k in type(self).model_fields}
         merged = type(self).model_validate(merged_data)
@@ -810,6 +983,10 @@ class OmniSampleOverrides(
         self._build_sound_data(model_config=model_config, sample_meta=sample_meta)
 
         self._build_reasoner_data(model_config=model_config, sample_meta=sample_meta)
+
+        self._build_transfer_data(
+            model_config=model_config, sample_meta=sample_meta, user_fields=user_fields
+        )
 
         if not shift_configured and not sample_meta.model_mode.is_reasoner:
             model_size = self._VLM_MODEL_SIZE[model_config.vlm_config.model_name]
