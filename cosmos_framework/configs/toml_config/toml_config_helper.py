@@ -74,8 +74,10 @@ PATH_REMAPS: dict[str, dict[tuple[str, ...], "tuple[str, ...] | None"]] = {
         ("model", "attn_implementation"): ("model", "config", "policy", "attn_implementation"),
         ("model", "ema"): ("model", "config", "ema"),
         ("model", "backbone"): ("model", "config", "policy", "backbone"),
-        ("dataloader_train", "max_samples_per_batch"): ("dataloader_train", "max_batch_size"),
-        ("dataloader_train", "max_sequence_length"): ("dataloader_train", "max_tokens"),
+        # VLM uses CosmosDataLoader whose batch/token caps live on the nested
+        # PoolPackingBatcher (dataloader_train.batcher.*), not flat on the loader.
+        ("dataloader_train", "max_samples_per_batch"): ("dataloader_train", "batcher", "max_batch_size"),
+        ("dataloader_train", "max_sequence_length"): ("dataloader_train", "batcher", "max_tokens"),
         # Catch-all for any other model.* sub-keys
         ("model",): ("model", "config"),
     },

@@ -622,16 +622,18 @@ class DataloaderTrainConfig(BaseModel):
     max_samples_per_batch: Optional[int] = Field(
         default=None,
         description=(
-            "Cap on samples per micro-batch. Remapped to 'max_batch_size' "
-            "on the VLM CosmosDataLoader. None = no per-count cap "
+            "Cap on samples per micro-batch. Remapped to "
+            "'dataloader_train.batcher.max_batch_size' on the VLM CosmosDataLoader "
+            "(its PoolPackingBatcher). None = no per-count cap "
             "(the packer's token budget is what limits batch size)."
         ),
     )
     max_sequence_length: Optional[int] = Field(
         default=None,
         description=(
-            "Cap on tokens per packed sequence. Remapped to 'max_tokens' "
-            "on the VLM CosmosDataLoader. None = no per-token cap."
+            "Cap on tokens per packed sequence. Remapped to "
+            "'dataloader_train.batcher.max_tokens' on the VLM CosmosDataLoader "
+            "(its PoolPackingBatcher). None = no per-token cap."
         ),
     )
     seed: int = Field(

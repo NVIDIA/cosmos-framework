@@ -83,8 +83,9 @@ keys_to_skip_loading = []
 load_path            = "???"
 save_iter            = 100
 
-# NOTE: no [dataloader_train] block. The experiment wires a four-role
-# CosmosDataLoader whose batch cap lives in PoolPackingBatcher(max_batch_size=1);
-# the legacy `max_samples_per_batch -> dataloader_train.max_batch_size` remap
-# would target a key that no longer exists on the CosmosDataLoader node
-# (ConfigAttributeError: Key 'max_batch_size' is not in struct).
+[dataloader_train]
+# Routed by PATH_REMAPS["vlm"] onto the CosmosDataLoader's nested PoolPackingBatcher:
+#   max_samples_per_batch -> dataloader_train.batcher.max_batch_size
+#   max_sequence_length   -> dataloader_train.batcher.max_tokens
+max_samples_per_batch = 1
+max_sequence_length   = 16000
