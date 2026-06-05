@@ -13,7 +13,6 @@ import torchvision.transforms.functional
 from typing_extensions import Self
 
 from cosmos_framework.data.vfm.utils import VIDEO_RES_SIZE_INFO
-from cosmos_framework.inference.metrics import compute_action_mse, compute_psnr
 from cosmos_framework.inference.args import (
     IMAGE_ONLY_RESOLUTIONS,
     AspectRatio,
@@ -27,6 +26,7 @@ from cosmos_framework.inference.common.args import SampleOutputs
 from cosmos_framework.inference.common.checkpoints import CHECKPOINTS, DATASETS, DatasetConfig
 from cosmos_framework.inference.fixtures.args import MAX_GPUS
 from cosmos_framework.inference.fixtures.script import INPUT_DIR, ScriptConfig, ScriptRunner, script_test
+from cosmos_framework.inference.metrics import compute_action_mse, compute_psnr
 from cosmos_framework.utils.checkpoint_db import CheckpointConfig
 
 _CURRENT_DIR = Path(__file__).parent.absolute()
@@ -393,15 +393,6 @@ for name, get_env in _SFT_GET_ENV.items():
             gpus=(1, MAX_GPUS, MAX_GPUS),
             marks=marks,
             get_env=get_env,
-        ),
-        ScriptConfig(
-            name=f"eval_{name}",
-            script=_TEST_DIR / "eval.sh",
-            levels=(0, 2),
-            gpus=(1, MAX_GPUS, MAX_GPUS),
-            marks=marks,
-            get_env=get_env,
-            after_script=_action_after_script,
         ),
     ]
 

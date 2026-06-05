@@ -216,7 +216,6 @@ If there is no attention backend wheel for your torch/cuda versions, you can bui
 Optional package extras:
 
 - `train`: Training infrastructure (FSDP, parallelism, checkpointing, datasets)
-- `eval`: Evaluation harnesses for trained checkpoints
 
 #### CUDA Variants
 
