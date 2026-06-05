@@ -234,7 +234,7 @@ dataloader_train = L(CosmosDataLoader)(
 Override from the CLI like any Hydra node, e.g.
 `dataloader_train.batcher.max_tokens=8000`. See the live recipes for full examples:
 `pre_exp012_llava_ov` (VLM), `videophy2_sft_nano` (videophy2),
-`pre_exp012_llava_ov_mapresume` (map-style resumable VLM), and
+`pre_exp012_llava_ov_mapstyle_dataloader` (map-style resumable VLM), and
 `vision_sft_nano_v2` (VFM, alongside the legacy `vision_sft_nano`).
 
 > **Structured-TOML launches.** When you launch a VLM recipe via `--sft-toml`,
@@ -271,7 +271,7 @@ cb = DataLoaderStateCallback(distributor_type="cosmos_dataloader")
 - Use `ckpt_type=dcp` (the default) — not `ckpt_type=dummy`, which disables all
   checkpointing. The on-disk checkpoint format is unchanged.
 
-> **Validated:** a live save→stop→resume on `pre_exp012_llava_ov_mapresume`
+> **Validated:** a live save→stop→resume on `pre_exp012_llava_ov_mapstyle_dataloader`
 > (8 dp ranks, `save_iter=100`) reproduces the original run's per-rank
 > `input_ids` shapes exactly across the resume boundary — no duplicated or
 > skipped samples on any rank.
@@ -379,7 +379,7 @@ collator:    VLMCollator
 ```
 
 Streaming source → **not** resumable. For a resumable variant of the same recipe,
-see `llava_ov_mapresume_experiment.py` (`pre_exp012_llava_ov_mapresume`): it loads
+see `llava_ov_mapstyle_dataloader_experiment.py` (`pre_exp012_llava_ov_mapstyle_dataloader`): it loads
 the subset as a real map-style `Dataset` (`load_dataset(..., streaming=False)`) and
 wraps it in a `MapDistributor`, so checkpoint/resume works (see §5).
 
@@ -451,4 +451,4 @@ collator:    VFMListCollator                                   # media kept as p
   `distributors.py`, `batchers.py`, `collators.py`, `processors.py`, `loader.py`).
 - Public symbols are re-exported from `cosmos_framework.data.vfm.dataflow`.
 - Live recipes using the loader: `pre_exp012_llava_ov`,
-  `pre_exp012_llava_ov_mapresume`, `videophy2_sft_nano`, and `vision_sft_nano_v2`.
+  `pre_exp012_llava_ov_mapstyle_dataloader`, `videophy2_sft_nano`, and `vision_sft_nano_v2`.

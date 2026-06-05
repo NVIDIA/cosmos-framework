@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: OpenMDW-1.1
 
-# pre_exp012_llava_ov_mapresume — map-style resumable VLM recipe
+# pre_exp012_llava_ov_mapstyle_dataloader — map-style resumable VLM recipe
 # Base config = cosmos_framework/configs/base/vlm/config.py (task="vlm").
 #
 # Loads LLaVA-OneVision-Data ai2d(gpt4v) as a real map-style Dataset
@@ -12,21 +12,21 @@
 #
 # dryrun::
 #   python -m cosmos_framework.scripts.train \
-#       --sft-toml=examples/toml/sft_config/llava_ov_mapresume.toml --dryrun -- \
+#       --sft-toml=examples/toml/sft_config/llava_ov_mapstyle_dataloader.toml --dryrun -- \
 #       data_setting.max_tokens=16000
 #
 # Fresh run::
 #   torchrun --nproc_per_node=4 --master_port=12344 \
 #       -m cosmos_framework.scripts.train \
-#       --sft-toml=examples/toml/sft_config/llava_ov_mapresume.toml -- \
+#       --sft-toml=examples/toml/sft_config/llava_ov_mapstyle_dataloader.toml -- \
 #       data_setting.max_tokens=16000
 #
 # Resume run (from iter 100 checkpoint)::
 #   torchrun --nproc_per_node=4 --master_port=12344 \
 #       -m cosmos_framework.scripts.train \
-#       --sft-toml=examples/toml/sft_config/llava_ov_mapresume.toml -- \
+#       --sft-toml=examples/toml/sft_config/llava_ov_mapstyle_dataloader.toml -- \
 #       data_setting.max_tokens=16000 \
-#       checkpoint.load_path=/tmp/imaginaire4-output/cosmos_oss_alignment/vlm_llava_ov_demo/pre_exp012_llava_ov_mapresume/checkpoints/iter_000000100 \
+#       checkpoint.load_path=/tmp/imaginaire4-output/cosmos_oss_alignment/vlm_llava_ov_demo/pre_exp012_llava_ov_mapstyle_dataloader/checkpoints/iter_000000100 \
 #       checkpoint.load_training_state=true
 #
 # Per-task remap (see _PATH_REMAPS["vlm"]):
@@ -41,10 +41,10 @@
 
 [job]
 task         = "vlm"
-experiment   = "pre_exp012_llava_ov_mapresume"
+experiment   = "pre_exp012_llava_ov_mapstyle_dataloader"
 project      = "cosmos_oss_alignment"
 group        = "vlm_llava_ov_demo"
-name         = "pre_exp012_llava_ov_mapresume"
+name         = "pre_exp012_llava_ov_mapstyle_dataloader"
 wandb_mode   = "online"
 
 [model]

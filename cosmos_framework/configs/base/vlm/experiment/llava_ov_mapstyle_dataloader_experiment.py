@@ -14,14 +14,14 @@ the ``MapDistributor`` fast-forwards each worker to the saved position.
 Usage (smoke / dryrun)::
 
     python -m cosmos_framework.scripts.train \\
-        --sft-toml=examples/toml/sft_config/llava_ov_mapresume.toml --dryrun -- \\
+        --sft-toml=examples/toml/sft_config/llava_ov_mapstyle_dataloader.toml --dryrun -- \\
         data_setting.max_tokens=16000
 
 Resume run::
 
     torchrun --nproc_per_node=4 --master_port=12344 \\
         -m cosmos_framework.scripts.train \\
-        --sft-toml=examples/toml/sft_config/llava_ov_mapresume.toml -- \\
+        --sft-toml=examples/toml/sft_config/llava_ov_mapstyle_dataloader.toml -- \\
         data_setting.max_tokens=16000 \\
         checkpoint.load_path=/tmp/imaginaire4-output/<project>/<group>/<name>/checkpoints/iter_000000100 \\
         checkpoint.load_training_state=true
@@ -87,7 +87,7 @@ def get_llava_ov_map(
 # ---------------------------------------------------------------------------
 
 
-pre_exp012_llava_ov_mapresume = LazyDict(
+pre_exp012_llava_ov_mapstyle_dataloader = LazyDict(
     dict(
         # Same Hydra defaults as pre_exp012_llava_ov — pins VLM model, checkpoint
         # backend, and the basic_vlm + basic_log callback groups (the latter
@@ -100,7 +100,7 @@ pre_exp012_llava_ov_mapresume = LazyDict(
             "_self_",
         ],
         job=dict(
-            name="pre_exp012_llava_ov_mapresume_${now:%Y-%m-%d}_${now:%H-%M-%S}",
+            name="pre_exp012_llava_ov_mapstyle_dataloader_${now:%Y-%m-%d}_${now:%H-%M-%S}",
             group="vlm_llava_ov_demo",
             wandb_mode="disabled",
         ),
@@ -172,6 +172,6 @@ pre_exp012_llava_ov_mapresume = LazyDict(
 cs.store(
     group="experiment",
     package="_global_",
-    name="pre_exp012_llava_ov_mapresume",
-    node=pre_exp012_llava_ov_mapresume,
+    name="pre_exp012_llava_ov_mapstyle_dataloader",
+    node=pre_exp012_llava_ov_mapstyle_dataloader,
 )
