@@ -211,8 +211,8 @@ dataloader_train = L(CosmosDataLoader)(
 
 Override from the CLI like any Hydra node, e.g.
 `dataloader_train.batcher.max_tokens=8000`. See the live recipes for full examples:
-`vision_sft_nano_v2` (VFM), `pre_exp012_llava_ov_datapacker_v2` (VLM),
-`videophy2_sft_nano_v2`.
+`pre_exp012_llava_ov` (VLM), `videophy2_sft_nano` (videophy2), and
+`vision_sft_nano_v2` (VFM, alongside the legacy `vision_sft_nano`).
 
 ---
 
@@ -327,5 +327,5 @@ collator that pads/stacks accordingly — nothing else changes.
 - ABCs + built-ins: `cosmos_framework/data/vfm/dataflow/` (`base.py`,
   `distributors.py`, `batchers.py`, `collators.py`, `processors.py`, `loader.py`).
 - Public symbols are re-exported from `cosmos_framework.data.vfm.dataflow`.
-- Live recipes using the loader: `vision_sft_nano_v2`,
-  `pre_exp012_llava_ov_datapacker_v2`, `videophy2_sft_nano_v2`.
+- Live recipes using the loader: `pre_exp012_llava_ov`, `videophy2_sft_nano`,
+  and `vision_sft_nano_v2` (the VFM new-loader variant).
