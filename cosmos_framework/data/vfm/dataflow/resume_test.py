@@ -37,7 +37,7 @@ def _build(seed=0):
 
 
 def test_resume_continues_without_dup_or_skip():
-    cb = DataLoaderStateCallback(distributor_type="data_packer")
+    cb = DataLoaderStateCallback(distributor_type="cosmos_dataloader")
     loader = _build()
     it = iter(loader)
     seen_ids = []
@@ -49,7 +49,7 @@ def test_resume_continues_without_dup_or_skip():
 
     state = cb.state_dict()
     assert state[0]["index"] == 4
-    cb2 = DataLoaderStateCallback(distributor_type="data_packer")
+    cb2 = DataLoaderStateCallback(distributor_type="cosmos_dataloader")
     cb2.load_state_dict(state)
 
     loader2 = _build()

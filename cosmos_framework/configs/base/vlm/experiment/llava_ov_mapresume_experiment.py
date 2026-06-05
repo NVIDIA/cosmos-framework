@@ -6,8 +6,8 @@
 Materialises the first ``n`` items of a single LLaVA-OneVision-Data subset into
 an in-memory ``datasets.Dataset`` (map-style) so that ``MapDistributor`` can
 checkpoint exact ``(epoch, index)`` positions per worker.  The
-``dataloader_state`` callback is wired with ``distributor_type="data_packer"``
-so the ``DP_STATE_WORKER_<id>_{EPOCH,INDEX}`` env vars are set on resume, and
+``dataloader_state`` callback is wired with ``distributor_type="cosmos_dataloader"``
+so the ``COSMOS_DL_STATE_WORKER_<id>_{EPOCH,INDEX}`` env vars are set on resume, and
 the ``MapDistributor`` fast-forwards each worker to the saved position.
 
 Usage (smoke / dryrun)::
@@ -102,13 +102,13 @@ pre_exp012_llava_ov_mapresume = LazyDict(
             max_iter=10,
             logging_iter=1,
             run_validation=False,
-            # Override dataloader_state.distributor_type to "data_packer" so the
-            # DataLoaderStateCallback activates resume env vars (DP_STATE_WORKER_*)
+            # Override dataloader_state.distributor_type to "cosmos_dataloader" so the
+            # DataLoaderStateCallback activates resume env vars (COSMOS_DL_STATE_WORKER_*)
             # on load_state_dict.  We cannot set data_setting.distributor_type
             # because its attrs validator only accepts "with_replace"/"no_replace".
             callbacks=dict(
                 dataloader_state=L(DataLoaderStateCallback)(
-                    distributor_type="data_packer",
+                    distributor_type="cosmos_dataloader",
                 ),
             ),
         ),

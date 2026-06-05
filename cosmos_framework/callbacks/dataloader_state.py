@@ -50,7 +50,13 @@ class DataLoaderStateCallback(Callback):
             ):
                 self.state[worker_id] = NoReplaceShardlistState(epoch=epoch, index=index)
 
-    _ACTIVE_DISTRIBUTOR_TYPES = ("no_replace", "data_packer")
+    # NOTE: ``distributor_type`` here selects the *resume-state strategy*, NOT the
+    # dataflow ``DataDistributor`` role (cosmos_framework.data.vfm.dataflow). Values:
+    #   "with_replace" / "no_replace" — legacy WebDataset shardlist strategies;
+    #   "cosmos_dataloader"           — CosmosDataLoader's env-var fast-forward
+    #                                   (MapDistributor reads COSMOS_DL_STATE_* on resume).
+    # Only the values listed below actually persist/restore dataloader position.
+    _ACTIVE_DISTRIBUTOR_TYPES = ("no_replace", "cosmos_dataloader")
 
     def on_training_step_batch_end(
         self,
@@ -104,18 +110,18 @@ class DataLoaderStateCallback(Callback):
             return
 
         self.state = {}
-        # Build env var prefix. For data_packer, namespacing avoids conflicts
+        # Build env var prefix. For cosmos_dataloader, namespacing avoids conflicts
         # when multiple CosmosDataLoader instances share the same process
         # (e.g. inside JointCosmosDataLoader). name="" → original format.
-        _dp_pfx = f"DP_STATE_{self.name}_" if self.name else "DP_STATE_"
+        _dp_pfx = f"COSMOS_DL_STATE_{self.name}_" if self.name else "COSMOS_DL_STATE_"
         for worker_id, per_worker_state in state_dict.items():
             epoch = per_worker_state["epoch"]
             index = per_worker_state["index"]
             self.state[worker_id] = NoReplaceShardlistState(epoch=epoch, index=index)
-            if self.distributor_type == "data_packer":
+            if self.distributor_type == "cosmos_dataloader":
                 os.environ[f"{_dp_pfx}WORKER_{worker_id}_EPOCH"] = str(epoch)
                 os.environ[f"{_dp_pfx}WORKER_{worker_id}_INDEX"] = str(index)
-                log.info(f"Loaded data_packer dataloader state for worker {worker_id}: epoch={epoch}, index={index}")
+                log.info(f"Loaded cosmos_dataloader dataloader state for worker {worker_id}: epoch={epoch}, index={index}")
             else:
                 os.environ[f"NSL_STATE_WORKER_{worker_id}_EPOCH"] = str(epoch)
                 os.environ[f"NSL_STATE_WORKER_{worker_id}_INDEX"] = str(index)
@@ -144,7 +150,7 @@ class JointDataLoaderStateCallback(Callback):
         exp["dataloader_train"] = joint_loader
         exp["trainer"]["callbacks"]["dataloader_state"] = JointDataLoaderStateCallback(
             outer_loader=joint_loader,
-            distributor_type="data_packer",
+            distributor_type="cosmos_dataloader",
         )
 
     The ``checkpoint_component = "dataloader"`` class attribute ensures the DCP
@@ -159,7 +165,7 @@ class JointDataLoaderStateCallback(Callback):
     def __init__(
         self,
         outer_loader: Any,
-        distributor_type: str = "data_packer",
+        distributor_type: str = "cosmos_dataloader",
     ) -> None:
         super().__init__()
         self._outer = outer_loader

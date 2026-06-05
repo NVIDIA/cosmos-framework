@@ -65,7 +65,7 @@ class MapDistributor(DataDistributor):
             return
         if stream_id >= n:
             return
-        _pfx = f"DP_STATE_{self._name}_" if self._name else "DP_STATE_"
+        _pfx = f"COSMOS_DL_STATE_{self._name}_" if self._name else "COSMOS_DL_STATE_"
         resume_epoch = int(os.environ.pop(f"{_pfx}WORKER_{worker_id}_EPOCH", 0))
         resume_pos = int(os.environ.pop(f"{_pfx}WORKER_{worker_id}_INDEX", -1))
         epoch = resume_epoch
