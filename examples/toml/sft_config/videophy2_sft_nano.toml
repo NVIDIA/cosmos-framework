@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: OpenMDW-1.1
 
-# videophy2_sft_nano — VLM dialog SFT on VideoPhy-2 via DataPackerDataLoader.
+# videophy2_sft_nano — VLM dialog SFT on VideoPhy-2 via CosmosDataLoader.
 # Base config = cosmos_framework/configs/base/vlm/config.py (selected by [job].task="vlm").
 #
 # Dataset prep:
@@ -83,5 +83,8 @@ keys_to_skip_loading = []
 load_path            = "???"
 save_iter            = 100
 
-[dataloader_train]
-max_samples_per_batch = 1
+# NOTE: no [dataloader_train] block. The experiment wires a four-role
+# CosmosDataLoader whose batch cap lives in PoolPackingBatcher(max_batch_size=1);
+# the legacy `max_samples_per_batch -> dataloader_train.max_batch_size` remap
+# would target a key that no longer exists on the CosmosDataLoader node
+# (ConfigAttributeError: Key 'max_batch_size' is not in struct).
