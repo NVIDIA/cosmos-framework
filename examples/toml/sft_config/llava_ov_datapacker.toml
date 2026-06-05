@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: OpenMDW-1.1
 
 # pre_exp012_llava_ov_datapacker — VLM training on lmms-lab/LLaVA-OneVision-Data
-# via DataPackerDataLoader. Base config = cosmos_framework/configs/base/vlm/config.py
+# via CosmosDataLoader. Base config = cosmos_framework/configs/base/vlm/config.py
 # (selected by [job].task="vlm").
 #
 # One knob that the SFTExperimentConfig dataclass does NOT model — supply
@@ -25,7 +25,6 @@
 #   model.attn_implementation      -> model.config.policy.attn_implementation
 #   model.backbone.*               -> model.config.policy.backbone.*
 #   model.ema.*                    -> model.config.ema.*
-#   dataloader_train.max_samples_per_batch -> dataloader_train.max_batch_size
 #   model.{max_num_tokens_after_packing, joint_attn_implementation, lora_*,
 #          tokenizer.*} and dataloader_train.{max_sequence_length, seed} -> SKIPPED
 
@@ -101,5 +100,8 @@ keys_to_skip_loading = []
 load_path            = "???"                      # MISSING sentinel; skipped by build_hydra_overrides — supply at runtime
 save_iter            = 100
 
-[dataloader_train]
-max_samples_per_batch = 1                          # → dataloader_train.max_batch_size on VLM
+# NOTE: no [dataloader_train] block. The experiment wires a four-role
+# CosmosDataLoader whose batch cap lives in PoolPackingBatcher(max_batch_size=1);
+# the legacy `max_samples_per_batch -> dataloader_train.max_batch_size` remap
+# would target a key that no longer exists on the CosmosDataLoader node
+# (ConfigAttributeError: Key 'max_batch_size' is not in struct).
