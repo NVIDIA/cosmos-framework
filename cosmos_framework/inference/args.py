@@ -1046,8 +1046,16 @@ def _get_dp_shard_size(
 
 @cache
 def _get_device_memory_bytes() -> int:
-    pynvml.nvmlInit()
-    handle = pynvml.nvmlDeviceGetHandleByIndex(0)
-    info = pynvml.nvmlDeviceGetMemoryInfo(handle)
-    pynvml.nvmlShutdown()
-    return info.total
+    try:
+        pynvml.nvmlInit()
+        handle = pynvml.nvmlDeviceGetHandleByIndex(0)
+        info = pynvml.nvmlDeviceGetMemoryInfo(handle)
+        pynvml.nvmlShutdown()
+        return info.total
+    except Exception:
+        # Fallback for unified memory architectures (e.g., GB10) where
+        # nvmlDeviceGetMemoryInfo is not supported.
+        import torch
+        if torch.cuda.is_available():
+            return int(torch.cuda.get_device_properties(0).total_memory)
+        return 128 * 1024**3  # Default 128GB
