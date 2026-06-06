@@ -254,10 +254,11 @@ vision_sft_super = LazyDict(
                         dataset=L(get_sft_dataset)(
                             append_duration_fps_timestamps=True,
                             append_resolution_info=True,
-                            # Structured-JSON captions are long; raise the token budget so
-                            # the loader does not truncate them (see sft_dataset.py
-                            # _MAX_NUM_TOKENS). 2048 covers the example set (measured max ~1790).
-                            max_num_tokens=2048,
+                            # Per-caption token cap. Structured-JSON captions are long, so
+                            # default to 2048 (measured max ~1790); tune via the TOML knob
+                            # [dataloader_train].max_caption_tokens. See sft_dataset.py
+                            # _MAX_CAPTION_TOKENS.
+                            max_caption_tokens=2048,
                             caption_suffix="",
                             cfg_dropout_keep_metadata=False,
                             cfg_dropout_rate=0.1,

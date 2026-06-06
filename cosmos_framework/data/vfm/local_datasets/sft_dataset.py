@@ -32,7 +32,7 @@ from cosmos_framework.utils import log
 from cosmos_framework.utils.flags import INTERNAL
 from cosmos_framework.utils.lazy_config import instantiate as lazy_instantiate
 
-_MAX_NUM_TOKENS = 1024
+_MAX_CAPTION_TOKENS = 1024
 _DURATION_TEMPLATE = "The video is {duration:.1f} seconds long and is of {fps:.0f} FPS."
 _RESOLUTION_TEMPLATE = "This video is of {height}x{width} resolution."
 
@@ -108,7 +108,7 @@ class SFTDataset(torch.utils.data.IterableDataset):
         tokenizer_config: Optional[Any] = None,
         cfg_dropout_rate: float = 0.0,
         use_system_prompt: bool = False,
-        max_num_tokens: int = _MAX_NUM_TOKENS,
+        max_caption_tokens: int = _MAX_CAPTION_TOKENS,
         append_duration_fps_timestamps: bool = True,
         append_resolution_info: bool = True,
         cfg_dropout_keep_metadata: bool = False,
@@ -134,7 +134,7 @@ class SFTDataset(torch.utils.data.IterableDataset):
         self.tokenizer_config = tokenizer_config
         self.cfg_dropout_rate = cfg_dropout_rate
         self.use_system_prompt = use_system_prompt
-        self.max_num_tokens = max_num_tokens
+        self.max_caption_tokens = max_caption_tokens
         self.append_duration_fps_timestamps = append_duration_fps_timestamps
         self.append_resolution_info = append_resolution_info
         self.cfg_dropout_keep_metadata = cfg_dropout_keep_metadata
@@ -170,9 +170,9 @@ class SFTDataset(torch.utils.data.IterableDataset):
             is_video=True,
             use_system_prompt=self.use_system_prompt,
         )
-        if len(text_ids) > self.max_num_tokens:
-            log.warning(f"Text ids are too long, truncating: {len(text_ids)} > {self.max_num_tokens}")
-        text_ids = text_ids[: self.max_num_tokens]
+        if len(text_ids) > self.max_caption_tokens:
+            log.warning(f"Text ids are too long, truncating: {len(text_ids)} > {self.max_caption_tokens}")
+        text_ids = text_ids[: self.max_caption_tokens]
         return text_ids, caption
 
     def process_one_sample(self, metadata: dict) -> dict | None:
@@ -582,7 +582,7 @@ def get_sft_dataset(
     tokenizer_config: Optional[Any] = None,
     cfg_dropout_rate: float = 0.1,
     use_system_prompt: bool = False,
-    max_num_tokens: int = _MAX_NUM_TOKENS,
+    max_caption_tokens: int = _MAX_CAPTION_TOKENS,
     append_duration_fps_timestamps: bool = True,
     append_resolution_info: bool = True,
     cfg_dropout_keep_metadata: bool = False,
@@ -699,7 +699,7 @@ def get_sft_dataset(
         tokenizer_config=tokenizer_config,
         cfg_dropout_rate=cfg_dropout_rate,
         use_system_prompt=use_system_prompt,
-        max_num_tokens=max_num_tokens,
+        max_caption_tokens=max_caption_tokens,
         append_duration_fps_timestamps=append_duration_fps_timestamps,
         append_resolution_info=append_resolution_info,
         cfg_dropout_keep_metadata=cfg_dropout_keep_metadata,

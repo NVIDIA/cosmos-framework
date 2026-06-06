@@ -204,14 +204,14 @@ async def _process_single(
         (output_dir / "caption.txt").write_text(final_prompt)
         (output_dir / "caption.json").write_text(json.dumps(caption_json, indent=2, ensure_ascii=False))
 
-        # Advisory: the SFT loader truncates very long prompts (see _MAX_NUM_TOKENS
+        # Advisory: the SFT loader truncates very long prompts (see _MAX_CAPTION_TOKENS
         # in sft_dataset.py). ~4 chars/token is a rough guide; warn if the serialized
-        # JSON looks large so it can be checked against the recipe's max_num_tokens.
+        # JSON looks large so it can be checked against the recipe's max_caption_tokens.
         approx_tokens = len(json.dumps(caption_json, ensure_ascii=False)) // 4
         if approx_tokens > 1024:
             log.warning(
                 f"{name}: structured caption is ~{approx_tokens} tokens (rough estimate); "
-                "ensure the SFT recipe's max_num_tokens covers it to avoid truncation."
+                "ensure the SFT recipe's max_caption_tokens covers it to avoid truncation."
             )
         return True
 

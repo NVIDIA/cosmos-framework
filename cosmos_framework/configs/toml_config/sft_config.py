@@ -634,6 +634,15 @@ class DataloaderTrainConfig(BaseModel):
             "on the VLM DataPackerDataLoader. None = no per-token cap."
         ),
     )
+    max_caption_tokens: Optional[int] = Field(
+        default=None,
+        description=(
+            "VFM only. Per-caption token cap before truncation — remapped to the SFT "
+            "dataset's 'max_caption_tokens'. Structured-JSON captions are longer than dense "
+            "prose, so the example recipes set 2048 (measured max ~1790). None = keep the "
+            "recipe default. Skipped on VLM (the data packer caps via max_sequence_length)."
+        ),
+    )
     seed: int = Field(
         default=42,
         description=(

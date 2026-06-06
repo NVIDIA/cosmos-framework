@@ -57,9 +57,9 @@ def get_sft_video_dataset(
     use_system_prompt: bool = False,
     # Structured-JSON captions are far longer than dense prose; raise the token
     # budget so the loader does not truncate them mid-JSON (see sft_dataset.py
-    # _MAX_NUM_TOKENS). 2048 covers the example dataset (measured max ~1790 Qwen
+    # _MAX_CAPTION_TOKENS). 2048 covers the example dataset (measured max ~1790 Qwen
     # tokens) with margin; keep consistent with the inference prompt budget.
-    max_num_tokens: int = 2048,
+    max_caption_tokens: int = 2048,
     caption_suffix: str = "",
     cfg_dropout_rate: float = 0.1,
     cfg_dropout_keep_metadata: bool = False,
@@ -90,7 +90,7 @@ def get_sft_video_dataset(
         append_duration_fps_timestamps=append_duration_fps_timestamps,
         append_resolution_info=append_resolution_info,
         use_system_prompt=use_system_prompt,
-        max_num_tokens=max_num_tokens,
+        max_caption_tokens=max_caption_tokens,
         caption_suffix=caption_suffix,
         cfg_dropout_rate=cfg_dropout_rate,
         cfg_dropout_keep_metadata=cfg_dropout_keep_metadata,
