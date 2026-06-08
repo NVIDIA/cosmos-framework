@@ -609,6 +609,12 @@ class ReasonerDataArgs(ArgsBase):
     top_p: _ReasonerTopP | None = None
     repetition_penalty: _ReasonerRepetitionPenalty | None = None
     presence_penalty: float | None = None
+    video_fps: float | None = None
+    video_num_frames: pydantic.PositiveInt | None = None
+    video_min_frames: pydantic.PositiveInt | None = None
+    video_max_frames: pydantic.PositiveInt | None = None
+    video_min_pixels: pydantic.PositiveInt | None = None
+    video_max_pixels: pydantic.PositiveInt | None = None
 
 
 class ReasonerDataOverrides(OverridesBase):
@@ -629,6 +635,24 @@ class ReasonerDataOverrides(OverridesBase):
     """CTRL/HF-style multiplicative repetition penalty (>0). ``1.0`` is identity."""
     presence_penalty: float | None = None
     """Additive presence penalty (any sign). ``0.0`` is identity."""
+    video_fps: float | None = None
+    """Frames per second to sample from a video vision_path. Mutually exclusive with video_num_frames. None -> processor default."""
+    video_num_frames: pydantic.PositiveInt | None = None
+    """Fixed number of frames to sample from a video vision_path. Mutually exclusive with video_fps. None -> processor default."""
+    video_min_frames: pydantic.PositiveInt | None = None
+    """Lower bound on sampled frame count. None -> processor default."""
+    video_max_frames: pydantic.PositiveInt | None = None
+    """Upper bound on sampled frame count. None -> processor default."""
+    video_min_pixels: pydantic.PositiveInt | None = None
+    """Lower bound on per-frame pixel budget (drives smart_resize). None -> processor default."""
+    video_max_pixels: pydantic.PositiveInt | None = None
+    """Upper bound on per-frame pixel budget (drives smart_resize). None -> processor default."""
+
+    def _validate_video_sampling(self) -> None:
+        if self.video_fps is not None and self.video_num_frames is not None:
+            raise ValueError(
+                "video_fps and video_num_frames are mutually exclusive — set at most one."
+            )
 
     def _build_reasoner_data(self, model_config: "OmniMoTModelConfig", sample_meta: SampleMeta):
         if not sample_meta.model_mode.is_reasoner:
@@ -636,6 +660,7 @@ class ReasonerDataOverrides(OverridesBase):
         self = cast("SampleDataOverrides", self)
         if not self.prompt.strip():
             raise ValueError("Reasoner inference requires a non-empty 'prompt'.")
+        self._validate_video_sampling()
 
 
 class _TransferDataBase:

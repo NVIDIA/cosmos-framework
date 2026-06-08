@@ -15,6 +15,7 @@ from cosmos_framework.inference.args import (
     ModelMode,
     OmniSampleOverrides,
     OmniSetupOverrides,
+    ReasonerDataOverrides,
 )
 from cosmos_framework.inference.common.config import structure_config
 
@@ -156,3 +157,24 @@ def test_sample_args(tmp_path: Path):
     assert text2image_args.num_steps == 50
     assert text2image_args.guidance == 4.0
     assert text2image_args.shift == 3.0
+
+
+def test_reasoner_video_fields_default_none():
+    ov = ReasonerDataOverrides()
+    assert ov.video_fps is None
+    assert ov.video_num_frames is None
+    assert ov.video_min_frames is None
+    assert ov.video_max_frames is None
+    assert ov.video_min_pixels is None
+    assert ov.video_max_pixels is None
+
+
+def test_reasoner_video_fps_and_num_frames_mutually_exclusive():
+    ov = ReasonerDataOverrides(video_fps=2, video_num_frames=16)
+    with pytest.raises(ValueError, match="video_fps.*video_num_frames|mutually exclusive"):
+        ov._validate_video_sampling()
+
+
+def test_reasoner_video_fps_alone_ok():
+    ov = ReasonerDataOverrides(video_fps=2)
+    ov._validate_video_sampling()  # no raise
