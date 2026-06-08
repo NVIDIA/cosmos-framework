@@ -16,10 +16,7 @@ CHECKPOINTS: dict[str, CheckpointConfig] = {
 
 
 def test_download_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-    # This test covers the download/symlink/meta mechanics, which assume each
-    # download is independent (e.g. force-re-download lands at a fresh path). The
-    # opt-in cache (COSMOS_DOWNLOAD_CACHE_DIR, set in CI) dedups by URL and would
-    # break that assumption, so disable it here.
+    # Disable the URL cache; this test asserts each download is independent.
     monkeypatch.delenv("COSMOS_DOWNLOAD_CACHE_DIR", raising=False)
 
     download_url_1 = (
