@@ -121,10 +121,7 @@ jobs:
 
       # One inference call over t2vs (+sound), action policy, and forward_dynamics; checks each output.
       # MAX_GPUS defaults to 8. -s streams the live process log.
-      # COSMOS_DOWNLOAD_CACHE_DIR: action/forward_dynamics download GitHub-raw
-      # input assets; cache them in the same persistent dir as the unittest job
-      # (under $RUNNER_WORKSPACE, outside the repo tree) so both jobs -- and runs
-      # across PRs on this runner -- reuse one warm cache. See the unittest job.
+      # Reuse the same input-asset cache dir as the unittest job.
       - name: Nano inference smoke (t2vs + action policy + forward_dynamics, 8 GPU)
         run: |
           export LD_LIBRARY_PATH=
@@ -198,12 +195,8 @@ jobs:
       # is absent (via RunIf / pytest.skip guards), so this is green without
       # internal credentials; provide the credential file on the runner to
       # exercise them. New tests are picked up automatically (no markers/lists).
-      # COSMOS_DOWNLOAD_CACHE_DIR caches the downloaded input assets (e.g. the
-      # GitHub-raw test inputs) in a persistent, URL-keyed dir under
-      # $RUNNER_WORKSPACE -- outside the repo tree, so the cleanup step below
-      # doesn't wipe it. Reused across runs, so the flaky GitHub-raw 504s are hit
-      # at most once per asset (the in-code backoff retry is the cold-cache
-      # fallback). Safe because the asset URLs are commit-pinned (.../raw/<sha>/).
+      # Cache downloaded input assets in a persistent dir (outside the repo tree,
+      # so the cleanup step keeps it) and reuse it across runs.
       - name: Unit tests
         run: |
           export LD_LIBRARY_PATH=

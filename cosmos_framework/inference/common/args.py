@@ -55,17 +55,12 @@ VIDEO_EXTENSIONS = [".mp4"]
 MEDIA_EXTENSIONS = IMAGE_EXTENSIONS + VIDEO_EXTENSIONS
 
 
-# Network downloads (e.g. the GitHub-raw input assets) intermittently return
-# transient gateway errors (502/503/504). obstore retries internally but only
-# within a short (~15s) window, so wrap each download in an outer retry with
-# exponential backoff + jitter. All three are env-overridable so CI can tune them
-# without a code change.
+# Retry transient download errors with exponential backoff (env-overridable).
 _DOWNLOAD_MAX_ATTEMPTS = int(os.environ.get("COSMOS_DOWNLOAD_MAX_ATTEMPTS", "6"))
 _DOWNLOAD_BACKOFF_BASE_S = float(os.environ.get("COSMOS_DOWNLOAD_BACKOFF_S", "4"))
 _DOWNLOAD_BACKOFF_CAP_S = float(os.environ.get("COSMOS_DOWNLOAD_BACKOFF_CAP_S", "60"))
 
-# HTTP statuses that won't be fixed by retrying — fail fast instead of burning
-# the whole backoff budget on a permanent error.
+# Statuses not worth retrying.
 _PERMANENT_HTTP_MARKERS = ("400 Bad Request", "401 Unauthorized", "403 Forbidden", "404 Not Found")
 
 
@@ -85,12 +80,12 @@ def _download_file_url(url: str, path: Path):
         try:
             _download_file_url_once(url, path)
             return
-        except Exception as exc:  # noqa: BLE001 — classify below; reraise if permanent/exhausted
+        except Exception as exc:  # noqa: BLE001
             last_exc = exc
             if _is_permanent_download_error(exc) or attempt == _DOWNLOAD_MAX_ATTEMPTS:
                 break
             delay = min(_DOWNLOAD_BACKOFF_CAP_S, _DOWNLOAD_BACKOFF_BASE_S * 2 ** (attempt - 1))
-            delay += random.uniform(0, delay * 0.25)  # jitter to de-correlate concurrent jobs
+            delay += random.uniform(0, delay * 0.25)  # jitter
             log.warning(
                 f"Download attempt {attempt}/{_DOWNLOAD_MAX_ATTEMPTS} for {url} failed "
                 f"({type(exc).__name__}: {exc}); retrying in {delay:.1f}s."
@@ -136,12 +131,8 @@ def _download_file_hf(url: str, path: Path):
 def _resolve_url_download(url: str, name: str) -> Path:
     """Fetch ``url`` to a local file and return its path.
 
-    When ``COSMOS_DOWNLOAD_CACHE_DIR`` is set, downloads are cached there keyed by
-    URL and reused across runs — the input-asset URLs are pinned to a content
-    commit (``.../raw/<sha>/...``), so the URL fully identifies the bytes. This
-    lets CI skip re-fetching the flaky GitHub-raw assets on every run (the retry
-    in ``_download_file_url`` becomes the cold-cache fallback). When unset, the
-    legacy behavior is used: a throwaway temp directory per download.
+    When ``COSMOS_DOWNLOAD_CACHE_DIR`` is set, downloads are cached there by URL
+    and reused across runs; otherwise a fresh temp dir is used per download.
     """
     cache_root = os.environ.get("COSMOS_DOWNLOAD_CACHE_DIR")
     if not cache_root:
@@ -156,8 +147,7 @@ def _resolve_url_download(url: str, name: str) -> Path:
     if cache_path.exists() and done_marker.exists():
         return cache_path
     cache_dir.mkdir(parents=True, exist_ok=True)
-    # Download to a unique temp file in the cache dir, then atomically move it
-    # into place so concurrent workers/ranks never observe a half-written file.
+    # Atomic move so concurrent writers never observe a half-written file.
     tmp_path = cache_path.with_name(f"{cache_path.name}.{os.getpid()}.tmp")
     _download_file_url(url, tmp_path)
     os.replace(tmp_path, cache_path)
