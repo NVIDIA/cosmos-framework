@@ -177,6 +177,15 @@ def pytest_runtest_setup(item: pytest.Item):
 
     args = get_args()
 
+    # Distributed tests launched via torchrun manage their own per-rank device
+    # (each rank calls torch.cuda.set_device(rank/LOCAL_RANK)). We must NOT pin
+    # CUDA_VISIBLE_DEVICES here or every rank would see only GPU 0, and rank>0's
+    # set_device(rank) crashes with "invalid device ordinal". torchrun sets RANK
+    # in the environment, so use it to detect the distributed launch and leave
+    # device selection to the test.
+    if "RANK" in os.environ:
+        return
+
     gpus_mark = item.get_closest_marker(name="gpus")
     try:
         gpus = _parse_gpus_marker(gpus_mark) if gpus_mark else 0
@@ -198,7 +207,11 @@ def pytest_runtest_setup(item: pytest.Item):
         test_max_processes = int(os.environ.get("TEST_MAX_PROCESSES", "8"))
         device_memory_fraction = 1 / max(args.worker_count, test_max_processes)
         os.environ["DEVICE_MEMORY_FRACTION"] = str(device_memory_fraction)
-        torch.cuda.set_per_process_memory_fraction(device_memory_fraction)
+        # Guard the GPU-only call so CPU-only test runs (e.g. the cpu-tests CI
+        # job on a GPU-less runner) don't crash in setup; a no-op when a GPU is
+        # present, so GPU CI behavior is unchanged.
+        if torch.cuda.is_available():
+            torch.cuda.set_per_process_memory_fraction(device_memory_fraction)
 
 
 @pytest.fixture(autouse=True)
@@ -222,6 +235,12 @@ def init_torch_test():
     # Reproducibility
     set_seed(0)
 
+    # Restore autograd in case a previously-imported/-run module left it
+    # globally disabled (e.g. inference/ray/serve.py calls
+    # torch.set_grad_enabled(False) at import time), which would otherwise break
+    # later tests that need backward().
+    torch.set_grad_enabled(True)
+
     yield
 
     # Cleanup memory
@@ -236,6 +255,8 @@ _WHITELIST_ENV_VARS = {
     "QT_QPA_FONTDIR",
     "QT_QPA_PLATFORM_PLUGIN_PATH",
     "TORCHINDUCTOR_CACHE_DIR",
+    "TRITON_CACHE_DIR",  # set by Triton during flex-attention compilation
+    "NVTE_CUDA_INCLUDE_DIR",  # set by Transformer Engine during its CUDA extension setup
 }
 
 

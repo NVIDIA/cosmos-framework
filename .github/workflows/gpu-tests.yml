@@ -165,3 +165,67 @@ jobs:
         if: always()
         run: |
           rm -rf "${TMPDIR:-/tmp}"/pytest-of-* /tmp/pytest-of-* || true
+
+  # Co-located unit tests: every *_test.py under cosmos_framework/ (CPU and GPU
+  # together) in one pytest invocation, plus two torchrun steps for the
+  # distributed tests that hardcode their world size. Runs parallel to the four
+  # jobs above (all gated on the single pre-commit lint).
+  unittest:
+    needs: pre-commit
+    runs-on: [self-hosted, gpu, h200]
+    # 60 (not 30) so the first cold-cache run can download the Cosmos3-Nano
+    # checkpoint for scripts/_test's convert->export->inference pipeline; steady
+    # state (warm HF cache) is a few minutes.
+    timeout-minutes: 60
+    env:
+      HF_TOKEN: ${{ secrets.HF_TOKEN }}
+      HF_HUB_DISABLE_XET: "1"
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: astral-sh/setup-uv@v7
+
+      - name: Sync environment (cu128-train)
+        run: uv sync --all-extras --group=cu128-train
+
+      # Run the whole co-located suite (CPU + GPU). Tests that load internal
+      # pretrained weights from S3 skip themselves when credentials/pretrained.secret
+      # is absent (via RunIf / pytest.skip guards), so this is green without
+      # internal credentials; provide the credential file on the runner to
+      # exercise them. New tests are picked up automatically (no markers/lists).
+      - name: Unit tests
+        run: |
+          export LD_LIBRARY_PATH=
+          uv run --all-extras --group=cu128-train python -m pytest -v -s \
+            cosmos_framework/ -o addopts=
+
+      # The cfgp_ar / context_parallel tests call dist.init_process_group and
+      # skip under plain pytest (world_size 1); they must be launched with
+      # torchrun. They hardcode their world size via ParallelDims, so each file
+      # needs the matching --nproc_per_node and they cannot share one launch:
+      #   * cfgp_ar          -> cfgp=2,  dp_shard=1  => world_size must be 2
+      #   * context_parallel -> cp=4 (and cp=world_size) => world_size must be 4
+      # Over-provisioning (e.g. 8) makes ParallelDims' product != world_size and
+      # fails, so these sizes are fixed, not "the more GPUs the better".
+      - name: Distributed unit tests - cfgp_ar (torchrun, 2 ranks)
+        run: |
+          export LD_LIBRARY_PATH=
+          uv run --all-extras --group=cu128-train torchrun --nproc_per_node=2 -m pytest -v \
+            cosmos_framework/model/vfm/mot/cfgp_ar_test.py -o addopts=
+
+      - name: Distributed unit tests - context_parallel (torchrun, 4 ranks)
+        run: |
+          export LD_LIBRARY_PATH=
+          uv run --all-extras --group=cu128-train torchrun --nproc_per_node=4 -m pytest -v \
+            cosmos_framework/model/vfm/mot/context_parallel_test.py -o addopts=
+
+      # Clear everything the suite writes into the working tree (all gitignored
+      # scratch): pytest tmp dirs (DCP checkpoint, logs), the script-test
+      # `outputs/` dir, any `examples/checkpoints`, and the `schemas/` dir from
+      # export_schemas_test. The HF cache lives outside the tree and is kept for
+      # reuse across runs. Runs on success or failure.
+      - name: Clean up run outputs
+        if: always()
+        run: |
+          rm -rf "${TMPDIR:-/tmp}"/pytest-of-* /tmp/pytest-of-* \
+            outputs examples/checkpoints schemas || true

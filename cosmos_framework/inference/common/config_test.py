@@ -123,10 +123,13 @@ if TRAINING:
         config_module = importlib.import_module(config_helper.get_config_module(config_file))
         config_module.make_config()
 
-    def test_serialize_config(tmp_path: Path):
+    def test_serialize_config(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+        # vision_sft_nano interpolates the dataset location from ${oc.env:DATASET_PATH};
+        # serialization only needs the variable defined, not a real dataset on disk.
+        monkeypatch.setenv("DATASET_PATH", "/tmp/dataset")
         config = load_config(
             config_file="cosmos_framework/configs/base/config.py",
-            experiment="t2w_mot_dryrun_exp100_006_qwen3_0p6b_256res_resume_from_t2i",
+            experiment="vision_sft_nano",
         )
 
         for suffix in [".yaml", ".json"]:
