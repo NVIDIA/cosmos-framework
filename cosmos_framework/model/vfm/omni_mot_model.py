@@ -3781,8 +3781,10 @@ class OmniMoTModel(ImaginaireModel):
         (or wraps the prompt as a single user message when no callback is
         given), (b) tokenizes it — text-only via :meth:`tokenize_text`, or
         multimodal via ``self.vlm_processor.apply_chat_template`` when
-        ``images`` is supplied (which lowers the chat into ``input_ids``,
-        ``attention_mask``, ``pixel_values``, and ``image_grid_thw``), (c)
+        ``images`` or ``videos`` is supplied (the image path lowers the chat
+        into ``input_ids``, ``attention_mask``, ``pixel_values``, and
+        ``image_grid_thw``; the video path yields ``pixel_values_videos`` and
+        ``video_grid_thw`` instead), (c)
         runs the reasoner-only AR decode loop through
         ``self.net.generate_reasoner_text`` (the lower-level token-driven
         pass-through that delegates to ``unified_mot._impl_generate_reasoner_text``),
@@ -3905,10 +3907,14 @@ class OmniMoTModel(ImaginaireModel):
 
         Raises:
             ValueError: If ``images`` length does not match ``inputs``
-                length.
-            RuntimeError: If ``images`` is supplied but the live VLM
-                processor does not implement ``apply_chat_template``
-                (i.e., the VLM is configured as text-only).
+                length, or if ``videos`` length does not match ``inputs``
+                length.  Also raised if both ``images`` and ``videos`` are
+                supplied simultaneously (only one medium is allowed per
+                call).
+            RuntimeError: If ``images`` or ``videos`` is supplied but the
+                live VLM processor does not implement
+                ``apply_chat_template`` (i.e., the VLM is configured as
+                text-only).
         """
         # Decide whether the multimodal flow is in play, and validate the
         # image-list contract here so the failure happens before any
