@@ -1,61 +1,90 @@
-You are an expert video captioner for a text-to-video model. Your task is to watch the provided video frames and produce a dense, multi-sentence narrative caption that faithfully describes what you see.
+You are an expert video captioner for a text-to-video model. Your task is to watch the provided video frames and produce (1) a structured JSON analysis and (2) a dense, multi-sentence narrative caption that faithfully describes what you see.
 
-To ensure the final caption contains the correct density of visual, cinematic, and temporal details, you must complete this task in two phases.
+To ensure the outputs contain the correct density of visual, cinematic, and temporal detail, you must complete this task in two phases.
 
 ---
-### PHASE 1: SCENE ANALYSIS (JSON DRAFT)
-First, analyze the video frames and fill out a strict JSON schema describing what you observe. Output this JSON inside `<scene_draft>` XML tags.
+### PHASE 1: SCENE ANALYSIS (STRUCTURED JSON)
+First, analyze the video frames and fill out the strict JSON schema below. Output this JSON inside `<scene_draft>` XML tags. This is the canonical structured prompt format the model consumes, so populate every field you can observe; use "" (or [] for lists) when something is genuinely not visible. Do NOT invent details. Do NOT include the `resolution`, `aspect_ratio`, `duration`, or `fps` fields — those are filled in automatically from the video file.
+
+For all time-bearing fields (`actions[].time`, `segments[].time_range`) use `M:SS-M:SS` (e.g. `0:00-0:08`) measured from the start of the clip.
 
 JSON Schema to complete:
 {
-  "short_description": "Concise summary of subjects, actions, and setting.",
   "subjects": [
     {
-      "description": "Detailed visual description, posture, colors",
-      "appearance_details": "Accessories, markings, logos",
-      "relationship": "Relation to other subjects",
-      "location": "Placement (e.g., center, left foreground)",
-      "relative_size": "e.g., small, large within frame",
-      "orientation": "e.g., facing left, profile",
-      "pose": "Body position",
-      "action": "Main action",
-      "clothing": "Attire, colors, footwear (if human)",
-      "expression": "Facial expression (if human)",
-      "gender": "Apparent gender presentation (if human)",
-      "age": "Apparent age group (if human)",
-      "skin_tone_and_texture": "Apparent skin tone (if human)"
+      "description": "Full visual description: appearance, posture, colors, identifying features",
+      "appearance_details": "Accessories, markings, logos, distinguishing features",
+      "relationship": "How this subject relates to other subjects or the scene",
+      "location": "Placement in frame (e.g., center foreground, left background)",
+      "relative_size": "Small / Medium / Large within frame",
+      "orientation": "Direction the subject faces relative to camera",
+      "pose": "Body position and posture",
+      "action": "Main action (brief)",
+      "state_changes": "How pose/action changes over time; 'No significant change.' if static",
+      "clothing": "Attire, colors, footwear; '' if non-human or not visible",
+      "expression": "Facial expression; '' if non-human or not visible",
+      "gender": "'Male' / 'Female' / 'Unknown'; '' if non-human",
+      "age": "Age category (e.g., Child, Young adult, Adult, Elderly); '' if non-human",
+      "skin_tone_and_texture": "Apparent skin tone; '' if non-human",
+      "facial_features": "Notable facial features; '' if non-human or not visible",
+      "number_of_subjects": 1,
+      "number_of_arms": 0,
+      "number_of_legs": 0
     }
   ],
-  "background_setting": "Environment type, key structures, scenery, furniture.",
+  "background_setting": "Environment type, key structures, scenery, furniture",
   "lighting": {
-    "conditions": "e.g., bright daylight, dim indoor",
-    "direction": "e.g., front-lit, backlit",
-    "shadows": "Presence and quality of shadows"
+    "conditions": "e.g., bright daylight, dim indoor, studio lighting",
+    "direction": "e.g., front-lit, backlit, side-lit from right",
+    "shadows": "Presence and quality of shadows",
+    "illumination_effect": "Overall effect of the lighting on the scene"
   },
   "aesthetics": {
     "composition": "e.g., rule of thirds, centered",
-    "color_scheme": "Dominant colors, contrasts",
-    "mood_atmosphere": "Visual mood"
+    "color_scheme": "Dominant colors and contrasts",
+    "mood_atmosphere": "Visual mood in short phrases",
+    "patterns": "Notable repeating visual patterns; '' if none"
   },
   "cinematography": {
-    "camera_motion": "e.g., static, slow pan left, tracking",
-    "framing": "e.g., close-up, wide shot",
-    "camera_angle": "e.g., eye-level, low angle",
-    "depth_of_field": "e.g., shallow, deep",
+    "camera_motion": "e.g., static, slow pan left, tracking shot",
+    "framing": "e.g., close-up, medium shot, wide shot",
+    "camera_angle": "e.g., eye-level, low angle, overhead",
+    "depth_of_field": "'Shallow', 'Deep', or 'Uniform'",
     "focus": "Where the focus lies",
     "lens_focal_length": "e.g., wide-angle, telephoto"
   },
-  "style_medium": "e.g., live-action video, 3D animation",
-  "artistic_style": "e.g., minimalist, highly realistic",
-  "context": "e.g., vlog, product demo, cinematic shot",
-  "actions": ["Array of visually observable events in chronological order"],
-  "text_renders": ["Array of visible text, location, size, color, font"],
-  "temporal_structure": "Organization over time (e.g., single continuous shot, loop)"
+  "style_medium": "e.g., live-action video, 3D animation, CGI",
+  "artistic_style": "e.g., realistic, cinematic, documentary",
+  "context": "Scene context or use case (brief)",
+  "actions": [
+    { "time": "M:SS-M:SS", "description": "What happens in this timed interval" }
+  ],
+  "text_and_signage_elements": [
+    {
+      "text": "Visible text content",
+      "category": "one of 'physical_in_scene', 'scene_sign', 'ui_text', 'logo', 'label'",
+      "appearance": "Font, color, size, style",
+      "spatial_temporal": "Position in scene and when visible",
+      "context": "Purpose or meaning of the text"
+    }
+  ],
+  "segments": [
+    {
+      "segment_index": 0,
+      "time_range": "M:SS-M:SS",
+      "description": "What happens in this segment",
+      "key_changes": "Notable changes within the segment",
+      "camera": "Camera behavior in this segment"
+    }
+  ],
+  "transitions": ["Transition description between segments; [] if single continuous shot"],
+  "temporal_caption": "A temporally coherent, beat-by-beat narrative of the whole clip from start to end",
+  "audio_description": "Natural-language description of likely audio (speech, music, ambient, effects); '' if unknown"
 }
 
 ---
 ### PHASE 2: DENSE NARRATIVE REWRITE
-After drafting the JSON, generate the final output. This must be a dense, multi-sentence caption derived STRICTLY from your scene analysis. Put this final output inside `<final_prompt>` XML tags.
+After drafting the JSON, generate the final caption. This must be a dense, multi-sentence narrative derived STRICTLY from your scene analysis. Put this final output inside `<final_prompt>` XML tags.
 
 Rules for the Final Narrative:
 - Length & Format: Write exactly ONE coherent paragraph consisting of several full sentences. Do not use bullet points or lists.

@@ -16,9 +16,6 @@ import boto3
 import numpy as np
 import torch
 
-from cosmos_framework.utils.flags import INTERNAL
-from cosmos_framework.utils.lazy_config import instantiate as lazy_instantiate
-from cosmos_framework.utils import log
 from cosmos_framework.data.vfm.local_datasets.helper import (
     client_config,
     download_from_s3,
@@ -29,9 +26,13 @@ from cosmos_framework.data.vfm.local_datasets.helper import (
 )
 from cosmos_framework.data.vfm.sequence_packing import SequencePlan, add_special_tokens
 from cosmos_framework.data.vfm.utils import VIDEO_RES_SIZE_INFO
+from cosmos_framework.inference.structured_caption import CAPTION_JSON_KEY, caption_json_to_prompt
 from cosmos_framework.model.vfm.vlm.qwen3_vl.utils import tokenize_caption
+from cosmos_framework.utils import log
+from cosmos_framework.utils.flags import INTERNAL
+from cosmos_framework.utils.lazy_config import instantiate as lazy_instantiate
 
-_MAX_NUM_TOKENS = 1024
+_MAX_CAPTION_TOKENS = 1024
 _DURATION_TEMPLATE = "The video is {duration:.1f} seconds long and is of {fps:.0f} FPS."
 _RESOLUTION_TEMPLATE = "This video is of {height}x{width} resolution."
 
@@ -61,6 +62,38 @@ CAPTION_TYPES = list(CAPTION_TYPES_AND_WEIGHTS.keys())
 CAPTION_WEIGHTS = list(CAPTION_TYPES_AND_WEIGHTS.values())
 
 
+def _select_caption(t2w_window: dict) -> tuple[str, str, bool] | None:
+    """Pick a window's caption: ``(caption_key, caption_text, used_structured_json)``.
+
+    Priority: ``caption_json`` (structured — the default training target) →
+    ``qwen3_32b_rewrite-dense`` → ``caption`` (dense backup) → a weighted-random
+    ``CAPTION_TYPES`` style.  A structured-JSON caption (a dict, or a value under
+    ``caption_json``) is serialised verbatim so the training prompt is byte-identical
+    to the inference prompt; it must NOT receive the dense prose period-normalisation,
+    which would append a stray ``.`` after the closing ``}``.  Returns ``None`` when
+    the window has no known caption key.
+    """
+    if CAPTION_JSON_KEY in t2w_window:
+        caption_key = CAPTION_JSON_KEY
+    elif "qwen3_32b_rewrite-dense" in t2w_window:
+        caption_key = "qwen3_32b_rewrite-dense"
+    elif "caption" in t2w_window:
+        caption_key = "caption"
+    else:
+        available_types = [ct for ct in CAPTION_TYPES if ct in t2w_window]
+        if not available_types:
+            return None
+        available_weights = [CAPTION_TYPES_AND_WEIGHTS[ct] for ct in available_types]
+        caption_key = random.choices(available_types, weights=available_weights, k=1)[0]
+
+    raw = t2w_window[caption_key]
+    if isinstance(raw, dict):
+        return caption_key, caption_json_to_prompt(raw), True
+    if caption_key == CAPTION_JSON_KEY:
+        return caption_key, str(raw).strip(), True
+    return caption_key, raw.strip().rstrip(".") + ".", False
+
+
 class SFTDataset(torch.utils.data.IterableDataset):
     """Dataset for loading SFT video clips with captions from JSONL metadata on S3."""
 
@@ -75,6 +108,7 @@ class SFTDataset(torch.utils.data.IterableDataset):
         tokenizer_config: Optional[Any] = None,
         cfg_dropout_rate: float = 0.0,
         use_system_prompt: bool = False,
+        max_caption_tokens: int = _MAX_CAPTION_TOKENS,
         append_duration_fps_timestamps: bool = True,
         append_resolution_info: bool = True,
         cfg_dropout_keep_metadata: bool = False,
@@ -100,6 +134,7 @@ class SFTDataset(torch.utils.data.IterableDataset):
         self.tokenizer_config = tokenizer_config
         self.cfg_dropout_rate = cfg_dropout_rate
         self.use_system_prompt = use_system_prompt
+        self.max_caption_tokens = max_caption_tokens
         self.append_duration_fps_timestamps = append_duration_fps_timestamps
         self.append_resolution_info = append_resolution_info
         self.cfg_dropout_keep_metadata = cfg_dropout_keep_metadata
@@ -135,9 +170,9 @@ class SFTDataset(torch.utils.data.IterableDataset):
             is_video=True,
             use_system_prompt=self.use_system_prompt,
         )
-        if len(text_ids) > _MAX_NUM_TOKENS:
-            log.warning(f"Text ids are too long, truncating: {len(text_ids)} > {_MAX_NUM_TOKENS}")
-        text_ids = text_ids[:_MAX_NUM_TOKENS]
+        if len(text_ids) > self.max_caption_tokens:
+            log.warning(f"Text ids are too long, truncating: {len(text_ids)} > {self.max_caption_tokens}")
+        text_ids = text_ids[: self.max_caption_tokens]
         return text_ids, caption
 
     def process_one_sample(self, metadata: dict) -> dict | None:
@@ -248,22 +283,14 @@ class SFTDataset(torch.utils.data.IterableDataset):
         # image_size: [target_h, target_w, orig_h, orig_w] in pixel space, for the model to crop the video
         image_size = torch.tensor([target_h, target_w, target_h, target_w], dtype=torch.float32)
 
-        available_types = [ct for ct in CAPTION_TYPES if ct in t2w_window]
-        if "qwen3_32b_rewrite-dense" in t2w_window:
-            caption_key = "qwen3_32b_rewrite-dense"
-        elif "caption" in t2w_window:
-            caption_key = "caption"
-        elif available_types:
-            available_weights = [CAPTION_TYPES_AND_WEIGHTS[ct] for ct in available_types]
-            caption_key = random.choices(available_types, weights=available_weights, k=1)[0]
-        else:
+        selected = _select_caption(t2w_window)
+        if selected is None:
             log.warning(
                 f"No known caption key found in t2w_window for sample {metadata['uuid']}. "
                 f"Keys: {list(t2w_window)}. Skipping sample."
             )
             return None
-        caption = t2w_window[caption_key]
-        caption = caption.strip().rstrip(".") + "."
+        caption_key, caption, used_structured_json = selected
 
         num_decoded_frames = video.shape[1]
         cond_fps = fps if self.conditioning_fps < 0 else self.conditioning_fps
@@ -271,7 +298,7 @@ class SFTDataset(torch.utils.data.IterableDataset):
             noise_factor = np.exp(np.random.randn() * self.conditioning_fps_noise_std)
             cond_fps = cond_fps * noise_factor
 
-        if self.caption_suffix:
+        if self.caption_suffix and not used_structured_json:
             caption = (caption + " " + self.caption_suffix).strip()
 
         # CFG dropout: when cfg_dropout_keep_metadata is True, dropout fires
@@ -281,11 +308,14 @@ class SFTDataset(torch.utils.data.IterableDataset):
             if random.random() < self.cfg_dropout_rate:
                 caption = ""
 
-        if self.append_duration_fps_timestamps:
+        # Structured-JSON captions already carry duration/fps/resolution inside the
+        # JSON, so skip the natural-language metadata suffixes for them. This also
+        # makes the training prompt byte-match the inference prompt.
+        if self.append_duration_fps_timestamps and not used_structured_json:
             duration = num_decoded_frames / cond_fps
             suffix = _DURATION_TEMPLATE.format(duration=duration, fps=cond_fps)
             caption = caption + " " + suffix
-        if self.append_resolution_info:
+        if self.append_resolution_info and not used_structured_json:
             suffix = _RESOLUTION_TEMPLATE.format(height=target_h, width=target_w)
             caption = caption + " " + suffix
         caption = caption.strip()
@@ -552,6 +582,7 @@ def get_sft_dataset(
     tokenizer_config: Optional[Any] = None,
     cfg_dropout_rate: float = 0.1,
     use_system_prompt: bool = False,
+    max_caption_tokens: int = _MAX_CAPTION_TOKENS,
     append_duration_fps_timestamps: bool = True,
     append_resolution_info: bool = True,
     cfg_dropout_keep_metadata: bool = False,
@@ -668,6 +699,7 @@ def get_sft_dataset(
         tokenizer_config=tokenizer_config,
         cfg_dropout_rate=cfg_dropout_rate,
         use_system_prompt=use_system_prompt,
+        max_caption_tokens=max_caption_tokens,
         append_duration_fps_timestamps=append_duration_fps_timestamps,
         append_resolution_info=append_resolution_info,
         cfg_dropout_keep_metadata=cfg_dropout_keep_metadata,

@@ -21,15 +21,18 @@ from cosmos_framework.utils.config_helper import get_config_module, override
 @pytest.mark.parametrize(
     "experiment_name",
     [
-        "t2i_mot_exp001_009_qwen3_vl_2b_256res_frozen_llm",
+        "vision_sft_nano",
     ],
 )
-def test_config_init_experiment_mot(experiment_name):
+def test_config_init_experiment_mot(experiment_name, monkeypatch):
     """
     Parameterized test to verify config initialization for multiple experiments.
     PYTHONPATH=. torchrun --nproc_per_node=8 -m pytest -s cosmos_framework/configs/base/config_test_mot.py --L1
     """
-    config_file = "configs/base/config.py"
+    # The SFT experiments interpolate the dataset location from ${oc.env:DATASET_PATH};
+    # config construction only needs the variable defined, not a real dataset on disk.
+    monkeypatch.setenv("DATASET_PATH", "/tmp/dataset")
+    config_file = "cosmos_framework/configs/base/config.py"
     config_module = get_config_module(config_file)
     config = importlib.import_module(config_module).make_config()
     config = override(

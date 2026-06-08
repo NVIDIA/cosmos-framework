@@ -84,5 +84,8 @@ save_iter            = 100
 
 [dataloader_train]
 max_sequence_length = 45056
+# Per-caption token cap before truncation. Structured-JSON captions run longer than
+# dense prose (measured max ~1790 tokens), so keep headroom; raise it for longer captions.
+max_caption_tokens = 2048
 # max_samples_per_batch omitted (None — PackingDataLoader doesn't cap by sample count)
 # seed omitted — PackingDataLoader has no seed ctor kwarg
