@@ -299,11 +299,11 @@ class DatasetConfig(pydantic.BaseModel):
 
 
 DATASETS = {
-    "nvidia/bridge-v2-subset-synthetic-captions": DatasetConfig(
+    "nvidia/BridgeData2-Subset-Synthetic-Captions": DatasetConfig(
         hf=CheckpointDirHf(
             repository_type=RepositoryType.DATASET,
-            repository="nvidia/bridge-v2-subset-synthetic-captions",
-            revision="46468e12ac0dd36901e9e3240d4fc7620942b5d7",
+            repository="nvidia/BridgeData2-Subset-Synthetic-Captions",
+            revision="40d018ac1c1a2a4b9734f17fdb21f3d933c49a01",
             subdirectory="sft_dataset_bridge",
         ),
     ),

@@ -1,11 +1,15 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: OpenMDW-1.1
 
-"""Generate dense narrative captions from video files using a Vision-Language Model.
+"""Generate structured-JSON and dense narrative captions from video files using a VLM.
 
 Each video is passed directly to a VLM server via a ``video_url`` content part
 using a ``file://`` path.  A structured prompt template guides the VLM through
-a two-phase captioning process (scene analysis → dense narrative rewrite).
+a two-phase captioning process (Phase 1: structured-JSON scene analysis →
+Phase 2: dense narrative rewrite).  Both outputs are persisted: ``caption.json``
+(the canonical structured caption, with the dense narrative embedded as
+``temporal_caption`` and the clip's real media fields) and ``caption.txt`` (the
+dense narrative on its own).
 
 The VLM server must support the OpenAI chat-completions API with vision and
 must be started with ``--allowed-local-media-path`` pointing to the root of
@@ -31,7 +35,7 @@ Example usage::
 """
 
 import asyncio
-import re
+import json
 from pathlib import Path
 from typing import Annotated
 
@@ -42,6 +46,13 @@ from tqdm import tqdm
 
 from cosmos_framework.inference.args import OmniSampleOverrides
 from cosmos_framework.inference.common.args import VIDEO_EXTENSIONS
+from cosmos_framework.inference.structured_caption import (
+    assemble_caption_json,
+    extract_xml_tag,
+    media_fields_from_metadata,
+    parse_structured_caption,
+)
+from cosmos_framework.scripts.video_metadata import probe_video_metadata
 from cosmos_framework.utils import log
 
 _PACKAGE_DIR = Path(__file__).parents[1].absolute()
@@ -49,9 +60,11 @@ _PACKAGE_DIR = Path(__file__).parents[1].absolute()
 
 class Args(pydantic.BaseModel):
     input_files: Annotated[list[Path] | None, tyro.conf.arg(aliases=("-i",))] = None
-    """Path to input sample argument files (JSON/JSONL).
-    Each entry should have at least 'name' and 'vision_path' fields.
-    Mutually exclusive with --video."""
+    """Path to input manifest files (JSON/JSONL).
+    Each entry needs a 'vision_path' (a local path or an http(s)/data URL) and may
+    include 'name' and a 'media' dict (resolution/aspect_ratio/duration/fps) — the
+    latter is used as the caption's media fields when the video is a remote URL that
+    ffprobe cannot read locally. Mutually exclusive with --video."""
 
     video: Annotated[Path | None, tyro.conf.arg(aliases=("-v",))] = None
     """Path to a single video file or a directory of videos.
@@ -69,6 +82,8 @@ class Args(pydantic.BaseModel):
     """Maximum number of concurrent requests to the API."""
     max_retries: int = 5
     """Maximum number of retries for each request."""
+    timeout: float = 600.0
+    """Per-request client timeout in seconds; a hung request fails after this and is retried."""
 
     prompt_template_path: Path | None = None
     """Path to a custom prompt template. Defaults to the built-in video_captioner.txt."""
@@ -77,31 +92,31 @@ class Args(pydantic.BaseModel):
     """If True, save raw API responses for debugging."""
 
 
-def _extract_xml_tag(text: str, tag: str) -> str | None:
-    pattern = rf"<{tag}>\s*(.*?)\s*</{tag}>"
-    match = re.search(pattern, text, re.DOTALL)
-    if match:
-        return match.group(1).strip()
-    return None
+def _is_remote_ref(ref: str) -> bool:
+    """True if ``ref`` is something the server fetches itself (URL / data URI)."""
+    return "://" in ref or ref.startswith("data:")
 
 
-def _build_vlm_messages(
-    video_path: Path,
-    prompt_template: str,
-) -> list[dict]:
-    """Build an OpenAI-compatible multimodal message with a video file URL + text prompt.
+def _video_url(video_ref: str) -> str:
+    """Map a local path or remote ref to the ``video_url`` string the server receives.
 
-    The vLLM server must be started with ``--allowed-local-media-path`` so it
-    can read the video directly from the shared filesystem.
+    Remote refs (``http(s)://`` or ``data:``) are passed through untouched, so the
+    server fetches them itself — this is what makes captioning work against a remote
+    VLM endpoint.  Local paths become ``file://`` URLs, which require a local server
+    started with ``--allowed-local-media-path``.
     """
+    if _is_remote_ref(video_ref):
+        return video_ref
+    return f"file://{Path(video_ref).absolute()}"
+
+
+def _build_vlm_messages(video_ref: str, prompt_template: str) -> list[dict]:
+    """Build an OpenAI-compatible multimodal message with a video + text prompt."""
     return [
         {
             "role": "user",
             "content": [
-                {
-                    "type": "video_url",
-                    "video_url": {"url": f"file://{video_path.absolute()}"},
-                },
+                {"type": "video_url", "video_url": {"url": _video_url(video_ref)}},
                 {"type": "text", "text": prompt_template},
             ],
         }
@@ -112,13 +127,14 @@ async def _process_single(
     args: Args,
     client: openai.AsyncOpenAI,
     name: str,
-    video_path: Path,
+    video_ref: str,
+    media_override: dict | None,
     prompt_template: str,
 ) -> bool:
     assert args.model
 
     output_dir = args.output_dir / name
-    messages = _build_vlm_messages(video_path, prompt_template)
+    messages = _build_vlm_messages(video_ref, prompt_template)
 
     for i_retry in range(args.max_retries):
         try:
@@ -147,9 +163,33 @@ async def _process_single(
             continue
 
         text = choice.message.content.strip()
-        final_prompt = _extract_xml_tag(text, "final_prompt")
+        final_prompt = extract_xml_tag(text, "final_prompt")
         if final_prompt is None:
             log.warning(f"[{i_retry + 1}/{args.max_retries}] Failed to extract final prompt for {name}")
+            continue
+
+        scene_draft = parse_structured_caption(text)
+        if scene_draft is None:
+            log.warning(f"[{i_retry + 1}/{args.max_retries}] Failed to parse scene_draft JSON for {name}")
+            continue
+
+        # Media fields: prefer a manifest-provided override; else ffprobe a local
+        # file; else leave empty (e.g. a remote URL ffprobe cannot read).
+        if media_override is not None:
+            media = media_override
+        elif not _is_remote_ref(video_ref):
+            try:
+                media = media_fields_from_metadata(probe_video_metadata(video_ref))
+            except Exception as e:  # noqa: BLE001 - degrade gracefully, keep the caption
+                log.warning(f"ffprobe failed for {name}: {e}; writing caption_json without media fields")
+                media = {}
+        else:
+            media = {}
+
+        try:
+            caption_json = assemble_caption_json(scene_draft, final_prompt, media)
+        except pydantic.ValidationError as e:
+            log.warning(f"[{i_retry + 1}/{args.max_retries}] caption_json failed validation for {name}: {e}")
             continue
 
         output_dir.mkdir(parents=True, exist_ok=True)
@@ -157,12 +197,22 @@ async def _process_single(
         sample_overrides = OmniSampleOverrides(
             name=name,
             prompt=final_prompt,
-            vision_path=str(video_path),
+            vision_path=video_ref,
             output_dir=output_dir,
         )
         (output_dir / "sample_args.json").write_text(sample_overrides.model_dump_json())
-
         (output_dir / "caption.txt").write_text(final_prompt)
+        (output_dir / "caption.json").write_text(json.dumps(caption_json, indent=2, ensure_ascii=False))
+
+        # Advisory: the SFT loader truncates very long prompts (see _MAX_CAPTION_TOKENS
+        # in sft_dataset.py). ~4 chars/token is a rough guide; warn if the serialized
+        # JSON looks large so it can be checked against the recipe's max_caption_tokens.
+        approx_tokens = len(json.dumps(caption_json, ensure_ascii=False)) // 4
+        if approx_tokens > 1024:
+            log.warning(
+                f"{name}: structured caption is ~{approx_tokens} tokens (rough estimate); "
+                "ensure the SFT recipe's max_caption_tokens covers it to avoid truncation."
+            )
         return True
 
     log.warning(f"Failed to get caption for {name}")
@@ -174,36 +224,60 @@ async def _process_with_semaphore(
     client: openai.AsyncOpenAI,
     semaphore: asyncio.Semaphore,
     name: str,
-    video_path: Path,
+    video_ref: str,
+    media_override: dict | None,
     prompt_template: str,
 ) -> bool:
     async with semaphore:
-        return await _process_single(args, client, name, video_path, prompt_template)
+        return await _process_single(args, client, name, video_ref, media_override, prompt_template)
 
 
-def _collect_video_items(args: Args) -> list[tuple[str, Path]]:
-    """Return a list of (name, video_path) pairs from the CLI arguments."""
-    items: list[tuple[str, Path]] = []
+def _read_manifest_entries(input_files: list[Path]) -> list[tuple[str, str, dict | None]]:
+    """Parse ``-i`` JSON/JSONL manifests into ``(name, video_ref, media)`` tuples.
+
+    Each entry must have a ``vision_path`` (a local path or an ``http(s)``/``data``
+    URL) and may carry an optional ``name`` and an optional ``media`` dict (the
+    structured caption's media fields: resolution/aspect_ratio/duration/fps).  The
+    ``media`` override lets remote-URL videos — which ffprobe cannot read — still
+    get accurate media fields.
+    """
+    items: list[tuple[str, str, dict | None]] = []
+    for path in input_files:
+        text = path.read_text()
+        if path.suffix == ".jsonl":
+            entries = [json.loads(line) for line in text.splitlines() if line.strip()]
+        else:
+            data = json.loads(text)
+            entries = data if isinstance(data, list) else [data]
+        for e in entries:
+            vp = e.get("vision_path")
+            name = e.get("name")
+            if not vp:
+                log.warning(f"Skipping entry with no vision_path: {name or '?'}")
+                continue
+            if Path(vp).suffix.lower() not in VIDEO_EXTENSIONS:
+                log.warning(f"Skipping '{name or vp}': vision_path is not a video ({Path(vp).suffix})")
+                continue
+            items.append((name or Path(vp).stem, vp, e.get("media")))
+    return items
+
+
+def _collect_video_items(args: Args) -> list[tuple[str, str, dict | None]]:
+    """Return ``(name, video_ref, media_override)`` items from the CLI arguments.
+
+    ``video_ref`` is a local filesystem path or a remote URL (``http(s)``/``data``).
+    """
+    items: list[tuple[str, str, dict | None]] = []
 
     if args.input_files:
-        sample_overrides_list = OmniSampleOverrides.from_files(args.input_files)
-        for s in sample_overrides_list:
-            if not s.vision_path:
-                log.warning(f"Skipping '{s.name}': no vision_path")
-                continue
-            vp = Path(s.vision_path)
-            if vp.suffix.lower() not in VIDEO_EXTENSIONS:
-                log.warning(f"Skipping '{s.name}': vision_path is not a video ({vp.suffix})")
-                continue
-            items.append((s.name or vp.stem, vp))
-
+        items = _read_manifest_entries(args.input_files)
     elif args.video:
         if args.video.is_dir():
             for vp in sorted(args.video.iterdir()):
                 if vp.suffix.lower() in VIDEO_EXTENSIONS:
-                    items.append((vp.stem, vp))
+                    items.append((vp.stem, str(vp), None))
         elif args.video.is_file():
-            items.append((args.video.stem, args.video))
+            items.append((args.video.stem, str(args.video), None))
         else:
             raise FileNotFoundError(f"Video path does not exist: {args.video}")
 
@@ -219,14 +293,14 @@ async def caption_from_video(args: Args):
     if args.prompt_template_path:
         prompt_template = args.prompt_template_path.read_text()
     else:
-        prompt_template = (_PACKAGE_DIR / "defaults/video_captioner.txt").read_text()
+        prompt_template = (_PACKAGE_DIR / "inference/defaults/video_captioner.txt").read_text()
 
     items = _collect_video_items(args)
 
     client = openai.AsyncOpenAI(
         api_key="EMPTY",
         base_url=args.server,
-        timeout=3600,
+        timeout=args.timeout,
     )
     if not args.model:
         models = await client.models.list()
@@ -241,10 +315,11 @@ async def caption_from_video(args: Args):
             client=client,
             semaphore=semaphore,
             name=name,
-            video_path=video_path,
+            video_ref=video_ref,
+            media_override=media,
             prompt_template=prompt_template,
         )
-        for name, video_path in items
+        for name, video_ref, media in items
     ]
     n_success = 0
     for result in tqdm(asyncio.as_completed(tasks), desc="Captioning", total=len(tasks)):

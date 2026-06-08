@@ -26,19 +26,19 @@ tree the same modules live under ``cosmos_framework.data.vfm.*``.
 
 from hydra.core.config_store import ConfigStore
 
+from cosmos_framework.configs.base.defaults.vlm import create_qwen2_tokenizer_with_download
 from cosmos_framework.data.vfm.joint_dataloader import (
     PackingDataLoader,
     RankPartitionedDataLoader,
 )
 from cosmos_framework.data.vfm.local_datasets.sft_dataset import get_sft_dataset
 from cosmos_framework.utils.lazy_config import LazyCall as L
-from cosmos_framework.configs.base.defaults.vlm import create_qwen2_tokenizer_with_download
-
 
 # ---------------------------------------------------------------------------
 # Inner: SFT video dataset (matches the inline ``get_sft_dataset`` call in the
 # reference YAML).
 # ---------------------------------------------------------------------------
+
 
 def get_sft_video_dataset(
     *,
@@ -55,6 +55,11 @@ def get_sft_video_dataset(
     append_duration_fps_timestamps: bool = True,
     append_resolution_info: bool = True,
     use_system_prompt: bool = False,
+    # Structured-JSON captions are far longer than dense prose; raise the token
+    # budget so the loader does not truncate them mid-JSON (see sft_dataset.py
+    # _MAX_CAPTION_TOKENS). 2048 covers the example dataset (measured max ~1790 Qwen
+    # tokens) with margin; keep consistent with the inference prompt budget.
+    max_caption_tokens: int = 2048,
     caption_suffix: str = "",
     cfg_dropout_rate: float = 0.1,
     cfg_dropout_keep_metadata: bool = False,
@@ -85,6 +90,7 @@ def get_sft_video_dataset(
         append_duration_fps_timestamps=append_duration_fps_timestamps,
         append_resolution_info=append_resolution_info,
         use_system_prompt=use_system_prompt,
+        max_caption_tokens=max_caption_tokens,
         caption_suffix=caption_suffix,
         cfg_dropout_rate=cfg_dropout_rate,
         cfg_dropout_keep_metadata=cfg_dropout_keep_metadata,
@@ -102,6 +108,7 @@ def get_sft_video_dataset(
 # Outer: full PackingDataLoader → RankPartitionedDataLoader → SFT dataset
 # pipeline. This is the registered config_store node.
 # ---------------------------------------------------------------------------
+
 
 def get_open_source_sft_dataloader(
     *,
@@ -164,6 +171,7 @@ def get_open_source_sft_dataloader(
 # ---------------------------------------------------------------------------
 # ConfigStore registration.
 # ---------------------------------------------------------------------------
+
 
 def register_open_source_dataloaders() -> None:
     """Register named dataloader configs under the ``data_train`` Hydra group.

@@ -11,7 +11,7 @@ Prerequisites:
 Run inference on a single sample:
 
 ```shell
-export DATASET_PATH=$(uvx hf@latest download --repo-type dataset nvidia/bridge-v2-subset-synthetic-captions --revision 46468e12ac0dd36901e9e3240d4fc7620942b5d7 --quiet)/sft_dataset_bridge
+export DATASET_PATH=$(uvx hf@latest download --repo-type dataset nvidia/BridgeData2-Subset-Synthetic-Captions --revision 40d018ac1c1a2a4b9734f17fdb21f3d933c49a01 --quiet)/sft_dataset_bridge
 
 torchrun --nproc-per-node=8 -m cosmos_framework.scripts.inference \
     --parallelism-preset=latency \
@@ -55,7 +55,20 @@ Each example below uses the following layout:
 
 ## Format
 
-Example sample:
+Each `t2w_window` may carry **two** caption representations:
+
+- **`caption_json`** — the canonical structured-JSON caption (an object). The SFT loader
+  prefers this and trains on it by default, serialising it to the exact JSON string the
+  model consumes at inference. The dense narrative is embedded inside it as
+  `temporal_caption`, and the clip's media fields (`resolution`, `aspect_ratio`,
+  `duration`, `fps`) describe the source clip.
+- **`caption`** — the dense narrative string, kept as the **backup** the loader falls
+  back to when `caption_json` is absent.
+
+This keeps the post-training example aligned with inference, which also uses the
+structured-JSON prompt format (see [Inference](#inference)).
+
+Example sample (the structured object is abbreviated for readability):
 
 ```json
 {
@@ -69,15 +82,31 @@ Example sample:
             "start_frame": 0,
             "end_frame": 86,
             "temporal_interval": 1,
-            "caption": "A black robotic arm, featuring articulated joints and a metallic finish, extends over a white tray placed on a wooden table, manipulating small black objects that resemble beads or marbles. The arm moves with precision, grasping clusters of these objects, lifting them, and relocating them across the tray\u2019s surface in a methodical manner, often shifting them from one side to another. The background reveals an indoor workspace with visible equipment, illuminated by bright, even lighting that casts minimal shadows, emphasizing the technical nature of the scene. The camera remains static throughout, offering a medium shot that centers on the robotic arm and tray, with a slightly angled top-down perspective that highlights the contrast between the black objects, white tray, and wooden table. The robotic arm\u2019s movements are continuous and deliberate, showcasing its ability to handle and reposition the objects with accuracy, while the scene maintains a minimalist and functional aesthetic throughout."
+            "caption_json": {
+                "subjects": [
+                    {"description": "A black robotic arm with articulated joints and a metallic finish", "action": "grasps and relocates small black objects across a white tray"}
+                ],
+                "background_setting": "An indoor workspace with visible equipment on a wooden table",
+                "cinematography": {"camera_motion": "static", "framing": "medium shot", "camera_angle": "slightly angled top-down"},
+                "actions": [{"time": "0:00-0:17", "description": "the arm repeatedly lifts and repositions clusters of objects"}],
+                "temporal_caption": "A black robotic arm, featuring articulated joints and a metallic finish, extends over a white tray ... maintaining a minimalist and functional aesthetic throughout.",
+                "resolution": {"H": 256, "W": 256},
+                "aspect_ratio": "1,1",
+                "duration": "17s",
+                "fps": 5
+            },
+            "caption": "A black robotic arm, featuring articulated joints and a metallic finish, extends over a white tray placed on a wooden table, manipulating small black objects that resemble beads or marbles. The arm moves with precision, grasping clusters of these objects, lifting them, and relocating them across the tray’s surface in a methodical manner, often shifting them from one side to another. The background reveals an indoor workspace with visible equipment, illuminated by bright, even lighting that casts minimal shadows, emphasizing the technical nature of the scene. The camera remains static throughout, offering a medium shot that centers on the robotic arm and tray, with a slightly angled top-down perspective that highlights the contrast between the black objects, white tray, and wooden table. The robotic arm’s movements are continuous and deliberate, showcasing its ability to handle and reposition the objects with accuracy, while the scene maintains a minimalist and functional aesthetic throughout."
         }
     ]
 }
 ```
 
+> Older datasets that contain only the dense `caption` field still work unchanged — the
+> loader simply falls back to it.
+
 ## Video Captioning
 
-If you have video sources and would like to synthesize caption annotations to build video–text pairs for training, follow this section for data preprocessing. The script sends each video directly to a Reasoner (vision-language model), which analyzes the visual content and produces a dense narrative caption following a two-phase process (scene analysis → narrative rewrite) — the same format expected by the Cosmos3 training pipeline.
+If you have video sources and would like to synthesize caption annotations to build video–text pairs for training, follow this section for data preprocessing. The script sends each video directly to a Reasoner (vision-language model), which analyzes the visual content via a two-phase process (Phase 1: structured-JSON scene analysis → Phase 2: dense narrative rewrite) and saves **both** outputs: a `caption.json` (the canonical structured caption that the Cosmos3 training pipeline and inference consume, with the dense narrative embedded as `temporal_caption`) and a `caption.txt` (the dense narrative on its own).
 
 The captioning prompt template is available at [`cosmos_framework/inference/defaults/video_captioner.txt`](../cosmos_framework/inference/defaults/video_captioner.txt).
 
@@ -128,7 +157,7 @@ Options:
 | `--prompt_template_path` | built-in | Path to a custom prompt template |
 | `--debug`                | `False`  | Save raw API responses           |
 
-Each video produces an output directory containing `caption.txt` (the plain-text caption) and `sample_args.json` (metadata).
+Each video produces an output directory containing `caption.json` (the canonical structured caption), `caption.txt` (the dense narrative), and `sample_args.json` (metadata).
 
 ### Create Dataset
 
@@ -149,4 +178,15 @@ python -m cosmos_framework.scripts.captions_to_sft_jsonl \
     -o outputs/sft_dataset/train/video_dataset_file.jsonl
 ```
 
-It will create a dataset JSONL file containing captions and their corresponding paths to video files.
+Each JSONL line contains both `caption_json` (structured, preferred for training) and `caption` (dense, backup) for every window, plus the corresponding video path. The converter mirrors the loader's silent filters (clips longer than 61 s, and windows shorter than `max(61, --num-video-frames)` frames) so the kept count matches what training will actually consume — pass `--num-video-frames` to match your recipe (the example recipe uses `-1`, i.e. all frames, so the default keeps short example clips). A sibling `<output>.summary.json` records the kept count and per-reason drop counts.
+
+#### Align the inference prompts
+
+To make the validation inference prompts use the **same** structured-JSON format as training, rewrite each `val/inference_prompt{,_i2v,_v2v}/<episode>.json` file's `prompt` field with the clip's structured caption:
+
+```shell
+python -m cosmos_framework.scripts.inference_prompts_to_json \
+    --val-dir outputs/sft_dataset/val
+```
+
+This reads `val/captions/<episode>/caption.json` and replaces the (dense) `prompt` with the serialized structured JSON, preserving `resolution`, `aspect_ratio`, `num_frames`, `fps`, and `vision_path`. Pass `--dry-run` to preview.

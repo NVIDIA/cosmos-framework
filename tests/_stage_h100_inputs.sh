@@ -51,12 +51,12 @@ fi
 echo ">>> $(date '+%H:%M:%S') transformers=$(python -c 'import transformers; print(transformers.__version__)')"
 
 # ----------------------------------------------------------------------------
-# 1. Mixed-modality SFT dataset (bridge-v2-subset-synthetic-captions).
+# 1. Mixed-modality SFT dataset (BridgeData2-Subset-Synthetic-Captions).
 # ----------------------------------------------------------------------------
-echo ">>> $(date '+%H:%M:%S') downloading bridge-v2-subset-synthetic-captions ..."
+echo ">>> $(date '+%H:%M:%S') downloading BridgeData2-Subset-Synthetic-Captions ..."
 BRIDGE_ROOT=$(uvx hf@latest download --repo-type dataset \
-    nvidia/bridge-v2-subset-synthetic-captions \
-    --revision 46468e12ac0dd36901e9e3240d4fc7620942b5d7 \
+    nvidia/BridgeData2-Subset-Synthetic-Captions \
+    --revision 40d018ac1c1a2a4b9734f17fdb21f3d933c49a01 \
     --quiet)
 DATASET_PATH="$BRIDGE_ROOT/sft_dataset_bridge"
 echo "DATASET_PATH=$DATASET_PATH"
