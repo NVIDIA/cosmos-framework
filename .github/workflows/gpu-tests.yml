@@ -121,9 +121,14 @@ jobs:
 
       # One inference call over t2vs (+sound), action policy, and forward_dynamics; checks each output.
       # MAX_GPUS defaults to 8. -s streams the live process log.
+      # COSMOS_DOWNLOAD_CACHE_DIR: action/forward_dynamics download GitHub-raw
+      # input assets; cache them in the same persistent dir as the unittest job
+      # (under $RUNNER_WORKSPACE, outside the repo tree) so both jobs -- and runs
+      # across PRs on this runner -- reuse one warm cache. See the unittest job.
       - name: Nano inference smoke (t2vs + action policy + forward_dynamics, 8 GPU)
         run: |
           export LD_LIBRARY_PATH=
+          export COSMOS_DOWNLOAD_CACHE_DIR="$RUNNER_WORKSPACE/cosmos_input_cache"
           uv run --all-extras --group=cu128-train python -m pytest -v -s \
             tests/nano_inference_smoke_test.py --num-gpus=8 --levels=2 -o addopts=
 
