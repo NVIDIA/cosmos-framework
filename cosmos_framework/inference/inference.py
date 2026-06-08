@@ -507,6 +507,9 @@ def get_sample_data(
     if sample_args.model_mode.is_reasoner:
         return _get_reasoner_sample_data(sample_args, model)
 
+    if sample_args.transfer_hints:
+        return {}
+
     if sample_args.model_mode.is_action:
         from cosmos_framework.inference.action import get_action_sample_data
 
@@ -1267,6 +1270,12 @@ class OmniInference(Inference):
     ) -> list[SampleOutputs]:
         assert all(isinstance(sa, OmniSampleArgs) for sa in sample_args_list)
 
+        transfer_flags = [bool(sa.transfer_hints) for sa in sample_args_list]
+        if any(transfer_flags):
+            assert all(transfer_flags), "Cannot mix transfer and non-transfer samples in a batch"
+            assert len(sample_args_list) == 1, "Batching is not supported for transfer inference"
+            return self._generate_transfer_batch(sample_args_list[0], warmup=warmup)
+
         reasoner_flags = [cast(OmniSampleArgs, sa).model_mode.is_reasoner for sa in sample_args_list]
         if any(reasoner_flags):
             assert all(reasoner_flags), "Cannot mix reasoner and non-reasoner samples in a batch"
@@ -1560,6 +1569,74 @@ class OmniInference(Inference):
                 for sample_args in sample_args_list
                 if self.should_process_sample(sample_args)
             ]
+
+        return sample_outputs
+
+    @torch.no_grad()
+    def _generate_transfer_batch(self, sample_args: OmniSampleArgs, *, warmup: bool = False) -> list[SampleOutputs]:
+        """Handle transfer inference using the autoregressive generate_transfer_sample path."""
+        from cosmos_framework.inference.transfer import generate_transfer_sample
+
+        try:
+            with sync_distributed_errors():
+                if self.should_process_sample(sample_args) and not warmup:
+                    log.debug(f"{sample_args.__class__.__name__}({sample_args})")
+                    assert sample_args.output_dir is not None
+                    sample_args.output_dir.mkdir(parents=True, exist_ok=True)
+                    sample_args_file = sample_args.output_dir / "sample_args.json"
+                    sample_args_file.write_text(sample_args.model_dump_json())
+                    log.info(f"Saved sample args to '{sample_args_file}'", rank0_only=False)
+        except Exception as e:
+            if self.should_process_sample(sample_args) and not warmup:
+                return [self._handle_sample_exception(sample_args, e)]
+            return []
+
+        transfer_output = generate_transfer_sample(sample_args=sample_args, model=self.model)
+
+        if warmup:
+            return []
+
+        sample_outputs: list[SampleOutputs] = []
+        try:
+            with sync_distributed_errors():
+                if self.should_process_sample(sample_args):
+                    assert sample_args.output_dir is not None
+                    content: dict[str, Any] = {}
+                    files: list[Path] = []
+
+                    vision_cthw = ((1.0 + transfer_output.output_video.squeeze(0)) / 2).clamp(0, 1)
+
+                    if vision_cthw.shape[1] == 1:
+                        quality = sample_args.image_save_quality
+                    else:
+                        quality = sample_args.video_save_quality
+                    vision_file = sample_args.output_dir / f"vision{sample_args.vision_extension}"
+                    output_fps = transfer_output.fps
+                    save_img_or_video(vision_cthw, str(vision_file.with_suffix("")), fps=output_fps, quality=quality)
+                    assert vision_file.is_file(), vision_file
+                    files.append(vision_file)
+
+                    for hint_key, control_video in transfer_output.control_videos.items():
+                        control_cthw = ((1.0 + control_video.squeeze(0)) / 2).clamp(0, 1)
+                        control_file = sample_args.output_dir / f"control_{hint_key}{sample_args.vision_extension}"
+                        save_img_or_video(
+                            control_cthw, str(control_file.with_suffix("")), fps=output_fps, quality=quality
+                        )
+                        files.append(control_file)
+                        log.info(f"Saved control video to '{control_file}'", rank0_only=False)
+
+                    sample_output = SampleOutputs(
+                        args=sample_args.model_dump(mode="json"),
+                        outputs=[SampleOutput(content=content, files=files)],
+                    )
+                    sample_outputs_file = sample_args.output_dir / "sample_outputs.json"
+                    sample_outputs_file.write_text(sample_output.model_dump_json())
+                    log.success(f"Saved transfer outputs to '{sample_outputs_file}'", rank0_only=False)
+
+                    sample_outputs.append(sample_output)
+
+        except Exception as e:
+            return [self._handle_sample_exception(sample_args, e)] if self.should_process_sample(sample_args) else []
 
         return sample_outputs
 

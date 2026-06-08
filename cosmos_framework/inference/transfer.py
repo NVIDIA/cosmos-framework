@@ -351,6 +351,8 @@ def generate_transfer_sample(
             sampler=sampler,
             guidance=guidance,
             guidance_interval=sample_args.guidance_interval,
+            control_guidance=sample_args.control_guidance,
+            control_guidance_interval=sample_args.control_guidance_interval,
             seed=[seed + chunk_id],
             n_sample=1,
             has_negative_prompt=negative_prompt is not None,
