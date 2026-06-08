@@ -14,14 +14,15 @@ import cattrs
 import cattrs.preconf.json
 import safetensors.torch
 import torch
+import torchvision.io
 from PIL import Image
+from qwen_vl_utils.vision_process import smart_nframes
 from torch.utils._pytree import tree_map_only
 from torch.utils.data import Dataset
 from typing_extensions import Self
 
 from cosmos_framework.configs.base.defaults.compile import CompileConfig
 from cosmos_framework.configs.base.defaults.parallelism import ParallelismConfig
-from cosmos_framework.data.vfm.vlm.video_decoder_qwen import _video_decoder_qwen_func
 from cosmos_framework.inference.args import (
     ModelMode,
     NegativeMetadataMode,
@@ -55,7 +56,6 @@ from cosmos_framework.model.vfm.upsampler.prompts import is_upsampled_prompt
 from cosmos_framework.model.vfm.vlm.qwen3_vl.utils import _SYSTEM_PROMPT_IMAGE_EDITING
 from cosmos_framework.tools.visualize.video import save_img_or_video
 from cosmos_framework.utils import log
-from cosmos_framework.utils.vfm.video_preprocess import tensor_to_pil_images
 
 if TYPE_CHECKING:
     from cosmos_framework.configs.base.defaults.model_config import OmniMoTModelConfig
@@ -469,17 +469,23 @@ def _get_prompt_sample_data(sample_args: OmniSampleArgs, model: OmniMoTModel, *,
 def _decode_reasoner_video(vision_path: str, video_fps: float | None) -> dict[str, Any]:
     """Decode a local video file into the frame-list payload the Qwen3-VL processor expects.
 
-    Returns ``{"frames": [PIL.Image, ...], "fps": float}``. Reuses the dataloader's
-    decode path (``_video_decoder_qwen_func`` + ``tensor_to_pil_images``)."""
-    with open(vision_path, "rb") as f:
-        video_bytes = f.read()
-    decode_kwargs: dict[str, Any] = {}
-    if video_fps is not None:
-        decode_kwargs["target_fps"] = video_fps
-    result = _video_decoder_qwen_func(key="video.mp4", data=video_bytes, **decode_kwargs)
-    if result is None:
-        raise ValueError(f"Failed to decode reasoner video: {vision_path}")
-    return {"frames": tensor_to_pil_images(result["videos"]), "fps": result["fps"]}
+    Returns ``{"frames": [PIL.Image, ...], "fps": float}``. Uses the same
+    ``torchvision.io.read_video`` decode the rest of the inference path relies on
+    (no ``decord`` dependency), then uniformly samples frames toward ``video_fps``
+    (default 2.0) via Qwen's ``smart_nframes``. The repo ``Qwen3VLProcessor`` runs
+    with ``do_sample_frames=False``, so it consumes this pre-sampled frame list
+    as-is and handles its own per-frame resize."""
+    frames, _, info = torchvision.io.read_video(str(vision_path), pts_unit="sec")  # [T,H,W,C] uint8
+    total_frames = int(frames.shape[0])
+    if total_frames == 0:
+        raise ValueError(f"Decoded zero frames from reasoner video: {vision_path}")
+    src_fps = float(info.get("video_fps") or 0.0) or 1.0
+    target_fps = video_fps if video_fps is not None else 2.0
+    nframes = smart_nframes({"fps": target_fps}, total_frames=total_frames, video_fps=src_fps)
+    idx = torch.linspace(0, total_frames - 1, nframes).round().long().tolist()
+    pil_frames = [Image.fromarray(frames[i].numpy()) for i in idx]
+    sample_fps = nframes / total_frames * src_fps
+    return {"frames": pil_frames, "fps": sample_fps}
 
 
 def _get_reasoner_sample_data(sample_args: OmniSampleArgs, model: OmniMoTModel) -> dict[str, Any]:
