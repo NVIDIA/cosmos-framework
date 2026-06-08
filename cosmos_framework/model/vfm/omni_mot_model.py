@@ -2105,6 +2105,76 @@ class OmniMoTModel(ImaginaireModel):
         else:
             return other_v_list, v_list
 
+    def _build_no_control_inference_state(
+        self,
+        sequence_plans: list[SequencePlan],
+        gen_data_clean: GenerationDataClean,
+    ) -> tuple[list[SequencePlan], GenerationDataClean, list[int]] | None:
+        """Build inference state without control-map vision (for control-CFG).
+
+        Transfer packs [control_map(s), target_clip] per sample. The no-control branch
+        drops the control maps from the vision sequence; the text caption and target
+        clip remain. Returns None when every sample has at most one vision item.
+
+        Also returns ``ctrl_dims_per_sample``: flattened control-token width per sample,
+        used to slice ``noise_x`` and blend velocities on the target suffix.
+        """
+        num_items_per_sample = gen_data_clean.num_vision_items_per_sample
+        if num_items_per_sample is None or all(n <= 1 for n in num_items_per_sample):
+            return None
+
+        assert gen_data_clean.x0_tokens_vision is not None
+
+        new_x0_tokens_vision: list[torch.Tensor] = []
+        new_raw_state_vision: list[torch.Tensor] | None = [] if gen_data_clean.raw_state_vision is not None else None
+        ctrl_dims_per_sample: list[int] = []
+        vis_offset = 0
+        for n_vis in num_items_per_sample:
+            ctrl_dim_i = 0
+            for j in range(n_vis - 1):
+                sh = gen_data_clean.x0_tokens_vision[vis_offset + j].shape
+                ctrl_dim_i += int(torch.tensor(list(sh)).prod().item())
+            ctrl_dims_per_sample.append(ctrl_dim_i)
+            tgt_idx = vis_offset + n_vis - 1
+            new_x0_tokens_vision.append(gen_data_clean.x0_tokens_vision[tgt_idx])
+            if new_raw_state_vision is not None:
+                new_raw_state_vision.append(gen_data_clean.raw_state_vision[tgt_idx])  # type: ignore[index]
+            vis_offset += n_vis
+
+        gdc_nc = GenerationDataClean(
+            batch_size=gen_data_clean.batch_size,
+            is_image_batch=gen_data_clean.is_image_batch,
+            raw_state_vision=new_raw_state_vision,
+            x0_tokens_vision=new_x0_tokens_vision,
+            fps_vision=gen_data_clean.fps_vision,
+            num_vision_items_per_sample=None,
+            raw_state_action=gen_data_clean.raw_state_action,
+            x0_tokens_action=gen_data_clean.x0_tokens_action,
+            action_domain_id=gen_data_clean.action_domain_id,
+            fps_action=gen_data_clean.fps_action,
+            raw_action_dim=gen_data_clean.raw_action_dim,
+            raw_state_sound=gen_data_clean.raw_state_sound,
+            x0_tokens_sound=gen_data_clean.x0_tokens_sound,
+            fps_sound=gen_data_clean.fps_sound,
+        )
+
+        sp_nc = [
+            SequencePlan(
+                has_text=sp.has_text,
+                has_vision=sp.has_vision,
+                condition_frame_indexes_vision=sp.condition_frame_indexes_vision,
+                share_vision_temporal_positions=False,
+                has_action=sp.has_action,
+                condition_frame_indexes_action=sp.condition_frame_indexes_action,
+                action_start_frame_offset=sp.action_start_frame_offset,
+                has_sound=sp.has_sound,
+                condition_frame_indexes_sound=sp.condition_frame_indexes_sound,
+            )
+            for sp in sequence_plans
+        ]
+
+        return sp_nc, gdc_nc, ctrl_dims_per_sample
+
     @torch.no_grad()
     def generate_samples_from_batch(
         self,
@@ -2113,6 +2183,8 @@ class OmniMoTModel(ImaginaireModel):
         sampler: Any | None = None,
         guidance: float = 1.5,
         guidance_interval: Optional[list[float]] = None,
+        control_guidance: float = 1.0,
+        control_guidance_interval: Optional[list[float]] = None,
         seed: list[int] | int = 1,
         n_sample: int | None = None,
         has_negative_prompt: bool = False,
@@ -2152,6 +2224,11 @@ class OmniMoTModel(ImaginaireModel):
             guidance (float): Classifier-free guidance weight.
             guidance_interval (list[float] | None): Optional timestep interval to apply guidance.
                 For the timesteps (ranging between 0-1000) that fall between the interval, we perform CFG, otherwise, we skip the unconditional generation.
+            control_guidance (float): Control-CFG scale for transfer inference. ``1.0`` (default)
+                disables the extra comparison forward; values ``> 1.0`` blend velocities from
+                with-control-map vs without-control-map forwards on the generated clip.
+            control_guidance_interval (list[float] | None): Optional timestep interval to apply
+                control-CFG; ``None`` applies on every step.
             seed (list[int] | int): Random seeds for noise generation. For all new use-cases,
                 we use a list of seeds, one for each sample. The length of the list must match
                 the number of samples. Legacy use-cases use a single integer seed which is
@@ -2277,6 +2354,15 @@ class OmniMoTModel(ImaginaireModel):
 
         assert n_sample == len(seed), f"Number of samples {n_sample} must match number of seeds {len(seed)}"
 
+        no_control_state = None
+        if control_guidance != 1.0:
+            no_control_state = self._build_no_control_inference_state(sequence_plans, gen_data_clean)
+            if no_control_state is None:
+                log.warning(
+                    "control_guidance != 1.0 but no multi-vision sample found; "
+                    "control-CFG disabled (single-branch inference)."
+                )
+
         # FSDP collective-sequence alignment (throughput-style inference). Each
         # FSDP-shard rank holds a different sample, and ``velocity_fn`` issues 1
         # model forward when this rank skips CFG (guidance == 1.0, or a timestep
@@ -2327,43 +2413,101 @@ class OmniMoTModel(ImaginaireModel):
                 )
 
             # Local CFG decision for THIS rank, honoring guidance_interval.
-            _local_needs_cfg = guidance != 1.0
-            if _local_needs_cfg and guidance_interval is not None:
+            _local_needs_text_cfg = guidance != 1.0
+            if _local_needs_text_cfg and guidance_interval is not None:
                 assert len(guidance_interval) == 2, f"guidance_interval must be [lo, hi], got {guidance_interval}"
                 t_lo, t_hi = guidance_interval
-                _local_needs_cfg = t_lo < timestep[0].item() < t_hi
+                _local_needs_text_cfg = t_lo < timestep[0].item() < t_hi
 
-            # FSDP alignment: if ANY rank in the shard group needs CFG this call,
-            # every rank computes both forwards (cheap 1-element all_reduce per
+            _local_needs_control_cfg = no_control_state is not None
+            if _local_needs_control_cfg and control_guidance_interval is not None:
+                assert len(control_guidance_interval) == 2, (
+                    f"control_guidance_interval must be [lo, hi], got {control_guidance_interval}"
+                )
+                t_lo_c, t_hi_c = control_guidance_interval
+                _local_needs_control_cfg = t_lo_c < timestep[0].item() < t_hi_c
+
+            # FSDP alignment: if ANY rank in the shard group needs CFG or control-CFG this call,
+            # every rank computes the matching forwards (cheap 1-element all_reduce per
             # velocity_fn call). Forcing CFG always-on globally would instead
             # silently ignore the per-timestep guidance_interval gate.
             if _dp_shard_group is not None:
-                _cfg_t = torch.tensor([1 if _local_needs_cfg else 0], device=_align_device, dtype=torch.int32)
+                _cfg_t = torch.tensor(
+                    [1 if _local_needs_text_cfg else 0], device=_align_device, dtype=torch.int32
+                )
                 torch.distributed.all_reduce(_cfg_t, op=torch.distributed.ReduceOp.MAX, group=_dp_shard_group)
-                _any_needs_cfg = bool(_cfg_t.item())
+                _any_needs_text_cfg = bool(_cfg_t.item())
+                _ctrl_t = torch.tensor(
+                    [1 if _local_needs_control_cfg else 0], device=_align_device, dtype=torch.int32
+                )
+                torch.distributed.all_reduce(_ctrl_t, op=torch.distributed.ReduceOp.MAX, group=_dp_shard_group)
+                _any_needs_control_cfg = bool(_ctrl_t.item())
             else:
-                _any_needs_cfg = _local_needs_cfg
+                _any_needs_text_cfg = _local_needs_text_cfg
+                _any_needs_control_cfg = _local_needs_control_cfg
 
-            if not _any_needs_cfg:
+            if not _any_needs_text_cfg and not _any_needs_control_cfg:
                 return _single_velocity_fn(cond_tokens, skip_text_tokens=False)
 
-            # Both forwards happen — needed for FSDP collective alignment
-            # across ranks even if THIS rank's local decision was "no CFG".
-            cond_v, uncond_v = self._run_classifier_free_guidance(
-                cond_tokens=cond_tokens,
-                uncond_tokens=uncond_tokens,
-                skip_text_tokens_for_cfg=skip_text_tokens_for_cfg,
-                single_velocity_fn=_single_velocity_fn,
-            )
+            if _any_needs_control_cfg:
+                cond_v_full = _single_velocity_fn(cond_tokens, skip_text_tokens=False)
+                ctrl_dims: list[int] | None = None
+                if no_control_state is not None:
+                    sp_nc, gdc_nc, ctrl_dims = no_control_state
+                    noise_x_nc = [nx[ctrl_dim:] for nx, ctrl_dim in zip(noise_x, ctrl_dims)]
+                    cond_v_nc = self._get_velocity(
+                        net=net,
+                        noise_x=noise_x_nc,
+                        timestep=timestep,
+                        text_tokens=cond_tokens,
+                        sequence_plans=sp_nc,
+                        gen_data_clean=gdc_nc,
+                        skip_text_tokens=False,
+                    )
+                else:
+                    # Another rank in the dp_shard group needs control-CFG, so this
+                    # rank executes a second forward only for FSDP collective alignment.
+                    cond_v_nc = _single_velocity_fn(cond_tokens, skip_text_tokens=False)
+                if _local_needs_control_cfg:
+                    assert ctrl_dims is not None, "local control-CFG requires no_control_state"
+                    cond_v = []
+                    for v_full_i, v_nc_i, ctrl_dim_i in zip(cond_v_full, cond_v_nc, ctrl_dims):
+                        suffix_full = v_full_i[ctrl_dim_i:]
+                        assert suffix_full.shape == v_nc_i.shape, (
+                            f"shape mismatch in control-CFG mix: full suffix {suffix_full.shape} "
+                            f"vs no-control {v_nc_i.shape}"
+                        )
+                        mixed_suffix = v_nc_i + control_guidance * (suffix_full - v_nc_i)
+                        cond_v.append(torch.cat([v_full_i[:ctrl_dim_i], mixed_suffix], dim=0))
+                else:
+                    cond_v = cond_v_full
 
-            if not _local_needs_cfg:
-                # This rank didn't actually need CFG (guidance==1.0, or sigma
-                # outside guidance_interval). Return cond_v directly so the output
-                # is bit-identical to the no-CFG path; the uncond_v forward ran
-                # only to keep the FSDP all-gather sequence aligned with peers.
-                return cond_v
+                if not _any_needs_text_cfg:
+                    return cond_v
 
-            v_pred = [u_i + guidance * (c_i - u_i) for c_i, u_i in zip(cond_v, uncond_v)]
+                uncond_v = _single_velocity_fn(uncond_tokens, skip_text_tokens=skip_text_tokens_for_cfg)
+                if not _local_needs_text_cfg:
+                    return cond_v
+
+                v_pred = [u_i + guidance * (c_i - u_i) for c_i, u_i in zip(cond_v, uncond_v)]
+            else:
+                # Both forwards happen — needed for FSDP collective alignment
+                # across ranks even if THIS rank's local decision was "no CFG".
+                cond_v, uncond_v = self._run_classifier_free_guidance(
+                    cond_tokens=cond_tokens,
+                    uncond_tokens=uncond_tokens,
+                    skip_text_tokens_for_cfg=skip_text_tokens_for_cfg,
+                    single_velocity_fn=_single_velocity_fn,
+                )
+
+                if not _local_needs_text_cfg:
+                    # This rank didn't actually need CFG (guidance==1.0, or sigma
+                    # outside guidance_interval). Return cond_v directly so the output
+                    # is bit-identical to the no-CFG path; the uncond_v forward ran
+                    # only to keep the FSDP all-gather sequence aligned with peers.
+                    return cond_v
+
+                v_pred = [u_i + guidance * (c_i - u_i) for c_i, u_i in zip(cond_v, uncond_v)]
 
             if normalize_cfg:
                 v_pred = [
