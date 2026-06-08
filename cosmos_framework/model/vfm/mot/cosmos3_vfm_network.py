@@ -276,6 +276,8 @@ class Cosmos3VFMNetwork(PreTrainedModel):
         *,
         pixel_values: torch.Tensor | None = None,
         image_grid_thw: torch.Tensor | None = None,
+        pixel_values_videos: torch.Tensor | None = None,
+        video_grid_thw: torch.Tensor | None = None,
         attention_mask: torch.Tensor | None = None,
         eos_token_id: int | list[int] | None = None,
         pad_token_id: int | None = None,
@@ -296,9 +298,11 @@ class Cosmos3VFMNetwork(PreTrainedModel):
         prompts through this single entry point: pass
         ``pixel_values`` + ``image_grid_thw`` (and optionally
         ``attention_mask``) for image-conditioned prefill via the Qwen3-VL
-        visual encoder, or omit them for text-only prefill.  Uses the
-        und-pathway weights (those WITHOUT the ``_moe_gen`` suffix) plus
-        ``embed_tokens`` / ``norm`` / ``lm_head``; the generation pathway
+        visual encoder, or omit them for text-only prefill.  Video
+        conditioning is also supported via ``pixel_values_videos`` +
+        ``video_grid_thw``; the image and video pairs are mutually exclusive.
+        Uses the und-pathway weights (those WITHOUT the ``_moe_gen`` suffix)
+        plus ``embed_tokens`` / ``norm`` / ``lm_head``; the generation pathway
         and all VFM-level multimodal embedders / heads (``vae2llm``,
         ``llm2vae``, ``sound2llm``, etc.) are bypassed.
 
@@ -327,6 +331,8 @@ class Cosmos3VFMNetwork(PreTrainedModel):
             max_new_tokens=max_new_tokens,
             pixel_values=pixel_values,
             image_grid_thw=image_grid_thw,
+            pixel_values_videos=pixel_values_videos,
+            video_grid_thw=video_grid_thw,
             attention_mask=attention_mask,
             eos_token_id=eos_token_id,
             pad_token_id=pad_token_id,
