@@ -6,8 +6,10 @@ import glob
 import itertools
 import json
 import os
+import random
 import re
 import tempfile
+import time
 from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import (
@@ -52,7 +54,52 @@ VIDEO_EXTENSIONS = [".mp4"]
 MEDIA_EXTENSIONS = IMAGE_EXTENSIONS + VIDEO_EXTENSIONS
 
 
+# Network downloads (e.g. the GitHub-raw input assets) intermittently return
+# transient gateway errors (502/503/504). obstore retries internally but only
+# within a short (~15s) window, so wrap each download in an outer retry with
+# exponential backoff + jitter. All three are env-overridable so CI can tune them
+# without a code change.
+_DOWNLOAD_MAX_ATTEMPTS = int(os.environ.get("COSMOS_DOWNLOAD_MAX_ATTEMPTS", "6"))
+_DOWNLOAD_BACKOFF_BASE_S = float(os.environ.get("COSMOS_DOWNLOAD_BACKOFF_S", "4"))
+_DOWNLOAD_BACKOFF_CAP_S = float(os.environ.get("COSMOS_DOWNLOAD_BACKOFF_CAP_S", "60"))
+
+# HTTP statuses that won't be fixed by retrying — fail fast instead of burning
+# the whole backoff budget on a permanent error.
+_PERMANENT_HTTP_MARKERS = ("400 Bad Request", "401 Unauthorized", "403 Forbidden", "404 Not Found")
+
+
+def _is_permanent_download_error(exc: BaseException) -> bool:
+    if type(exc).__name__ in {"NotFoundError", "PermissionError"}:
+        return True
+    msg = str(exc)
+    return any(marker in msg for marker in _PERMANENT_HTTP_MARKERS)
+
+
 def _download_file_url(url: str, path: Path):
+    """Download ``url`` to ``path``, retrying transient network/server errors."""
+    from cosmos_framework.utils import log
+
+    last_exc: BaseException | None = None
+    for attempt in range(1, _DOWNLOAD_MAX_ATTEMPTS + 1):
+        try:
+            _download_file_url_once(url, path)
+            return
+        except Exception as exc:  # noqa: BLE001 — classify below; reraise if permanent/exhausted
+            last_exc = exc
+            if _is_permanent_download_error(exc) or attempt == _DOWNLOAD_MAX_ATTEMPTS:
+                break
+            delay = min(_DOWNLOAD_BACKOFF_CAP_S, _DOWNLOAD_BACKOFF_BASE_S * 2 ** (attempt - 1))
+            delay += random.uniform(0, delay * 0.25)  # jitter to de-correlate concurrent jobs
+            log.warning(
+                f"Download attempt {attempt}/{_DOWNLOAD_MAX_ATTEMPTS} for {url} failed "
+                f"({type(exc).__name__}: {exc}); retrying in {delay:.1f}s."
+            )
+            time.sleep(delay)
+
+    raise RuntimeError(f"Failed to download {url} after {_DOWNLOAD_MAX_ATTEMPTS} attempt(s)") from last_exc
+
+
+def _download_file_url_once(url: str, path: Path):
     if "huggingface.co" in url:
         _download_file_hf(url, path)
     else:
