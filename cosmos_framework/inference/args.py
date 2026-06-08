@@ -676,29 +676,50 @@ class TransferDataOverrides(OverridesBase, _TransferDataBase):
     """Timestep interval [lo, hi] (0–1000) in which control-CFG is applied; None applies
     on every step."""
     edge: EdgeTransferOverrides | None = None
+    """Edge (Canny) control-hint overrides; set to activate the edge transfer hint."""
     blur: BlurTransferOverrides | None = None
+    """Blur control-hint overrides; set to activate the blur transfer hint."""
     depth: TransferOverrides | None = None
+    """Depth control-hint overrides; set to activate the depth transfer hint."""
     seg: TransferOverrides | None = None
+    """Segmentation control-hint overrides; set to activate the segmentation transfer hint."""
     wsm: TransferOverrides | None = None
+    """World-surface-map (WSM) control-hint overrides; set to activate the WSM transfer hint."""
     negative_prompt_file: str | None = None
     """JSON negative caption file for transfer specs (absolute path or filename under ``defaults/``)."""
     num_video_frames_per_chunk: pydantic.PositiveInt | None = None
+    """Number of video frames generated per autoregressive chunk."""
     num_conditional_frames: pydantic.NonNegativeInt | None = None
+    """Number of conditioning frames carried into each generated chunk."""
     max_frames: pydantic.PositiveInt | None = None
+    """Maximum number of frames to generate across all chunks."""
     show_control_condition: bool | None = None
+    """If set, include the control condition (hint map) in the saved output."""
     show_input: bool | None = None
+    """If set, include the input video alongside the generated output."""
     num_first_chunk_conditional_frames: pydantic.NonNegativeInt | None = None
+    """Number of conditioning frames for the first chunk (defaults to ``num_conditional_frames``)."""
     share_vision_temporal_positions: bool | None = None
+    """Share vision temporal position ids across autoregressive chunks."""
 
     @pydantic.model_validator(mode="after")
     def _validate_transfer_hints(self) -> Self:
         hint_field_names = {k.value for k in TransferHintKey}
+        # ``control_guidance`` is concretized to its no-op default (1.0) by
+        # ``_build_transfer_data`` for *every* sample, transfer or not, so the
+        # default value must round-trip without a hint. Only an *explicit*
+        # non-default ``control_guidance`` signals an intended-but-incomplete
+        # transfer config, so it is checked separately below.
+        exempt = hint_field_names | {"control_guidance"}
         transfer_only = [
             name
             for name in TransferDataOverrides.__annotations__
-            if name in type(self).model_fields and name not in hint_field_names
+            if name in type(self).model_fields and name not in exempt
         ]
-        if any(getattr(self, f) is not None for f in transfer_only) and not self.transfer_hints:
+        configured = any(getattr(self, f) is not None for f in transfer_only)
+        cg = self.control_guidance
+        cg_configured = cg is not None and cg != 1.0
+        if (configured or cg_configured) and not self.transfer_hints:
             raise ValueError(
                 f"transfer inference requires at least one control hint ({', '.join(k.value for k in TransferHintKey)})"
             )
