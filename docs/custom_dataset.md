@@ -235,7 +235,7 @@ Override from the CLI like any Hydra node, e.g.
 `dataloader_train.batcher.max_tokens=8000`. See the live recipes for full examples:
 `pre_exp012_llava_ov` (VLM), `videophy2_sft_nano` (videophy2),
 `pre_exp012_llava_ov_mapstyle_dataloader` (map-style resumable VLM), and
-`vision_sft_nano_v2` (VFM, alongside the legacy `vision_sft_nano`).
+`vision_sft_nano_mapstyle_dataloader` (VFM, alongside the legacy `vision_sft_nano`).
 
 > **Structured-TOML launches.** When you launch a VLM recipe via `--sft-toml`,
 > the flat `[dataloader_train]` knobs `max_samples_per_batch` and
@@ -368,7 +368,7 @@ collator that pads/stacks accordingly — nothing else changes.
 
 ### Reasoner (VLM) — HuggingFace image-text dataset, streaming
 
-**File**: `cosmos_framework/configs/base/vlm/experiment/llava_ov_experiment.py`
+**File**: `cosmos_framework/configs/base/vlm/experiment/llava_ov_vlm.py`
 (`pre_exp012_llava_ov`)
 
 ```
@@ -397,7 +397,7 @@ collator:    VLMCollator
 
 ### Generator (VFM) — Cosmos video SFT
 
-**File**: the `vision_sft_nano_v2` experiment (the new-loader VFM variant,
+**File**: the `vision_sft_nano_mapstyle_dataloader` experiment (the new-loader VFM variant,
 alongside the legacy `vision_sft_nano`).
 
 ```
@@ -451,4 +451,4 @@ collator:    VFMListCollator                                   # media kept as p
   `distributors.py`, `batchers.py`, `collators.py`, `processors.py`, `loader.py`).
 - Public symbols are re-exported from `cosmos_framework.data.vfm.dataflow`.
 - Live recipes using the loader: `pre_exp012_llava_ov`,
-  `pre_exp012_llava_ov_mapstyle_dataloader`, `videophy2_sft_nano`, and `vision_sft_nano_v2`.
+  `pre_exp012_llava_ov_mapstyle_dataloader`, `videophy2_sft_nano`, and `vision_sft_nano_mapstyle_dataloader`.

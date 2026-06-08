@@ -282,16 +282,16 @@ vision_sft_nano = LazyDict(
 )
 
 
-# ``vision_sft_nano_v2`` — identical to ``vision_sft_nano`` except the training
+# ``vision_sft_nano_mapstyle_dataloader`` — identical to ``vision_sft_nano`` except the training
 # dataloader uses the four-role ``CosmosDataLoader`` stack
 # (``RankPartitionedDistributor`` → ``IdentityProcessor`` →
 # ``SequentialPackingBatcher`` → ``VFMListCollator``) instead of the legacy
 # ``PackingDataLoader`` + ``RankPartitionedDataLoader``. Every other block is reused
 # verbatim by deep-copying the base recipe and overriding only ``job.name`` and
 # ``dataloader_train``.
-vision_sft_nano_v2 = copy.deepcopy(vision_sft_nano)
-vision_sft_nano_v2.job.name = "vision_sft_nano_v2"
-vision_sft_nano_v2.dataloader_train = L(CosmosDataLoader)(
+vision_sft_nano_mapstyle_dataloader = copy.deepcopy(vision_sft_nano)
+vision_sft_nano_mapstyle_dataloader.job.name = "vision_sft_nano_mapstyle_dataloader"
+vision_sft_nano_mapstyle_dataloader.dataloader_train = L(CosmosDataLoader)(
     distributor=L(RankPartitionedDistributor)(
         datasets=dict(
             video=dict(
@@ -337,6 +337,6 @@ vision_sft_nano_v2.dataloader_train = L(CosmosDataLoader)(
 )
 
 
-for _item in [vision_sft_nano, vision_sft_nano_v2]:
+for _item in [vision_sft_nano, vision_sft_nano_mapstyle_dataloader]:
     _name = [k for k, v in globals().items() if v is _item][0]
     cs.store(group="experiment", package="_global_", name=_name, node=_item)

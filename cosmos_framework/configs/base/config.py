@@ -96,7 +96,7 @@ def make_config() -> Config:
     register_vlm()
 
     # Register shipped experiments explicitly. (vision_sft_nano also defines
-    # vision_sft_nano_v2 — the CosmosDataLoader variant — in the same module.)
+    # vision_sft_nano_mapstyle_dataloader — the CosmosDataLoader variant — in the same module.)
     import cosmos_framework.configs.base.experiment.sft.vision_sft_nano  # noqa: F401
     import cosmos_framework.configs.base.experiment.sft.vision_sft_super  # noqa: F401
     return c

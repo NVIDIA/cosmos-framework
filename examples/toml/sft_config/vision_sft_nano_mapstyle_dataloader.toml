@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: OpenMDW-1.1
 
-# vision_sft_nano_v2 — T2V / I2V / V2V vision-only SFT (Qwen3-VL-8B / nano)
+# vision_sft_nano_mapstyle_dataloader — T2V / I2V / V2V vision-only SFT (Qwen3-VL-8B / nano)
 # Dataflow-loader mirror of vision_sft_nano: uses CosmosDataLoader +
 # RankPartitionedDistributor + SequentialPackingBatcher + VFMListCollator.
 #
@@ -10,15 +10,15 @@
 # mapped onto PackingDataLoader's constructor kwarg. CosmosDataLoader has no
 # top-level max_sequence_length attribute — the batcher (SequentialPackingBatcher)
 # owns it, and max_sequence_length=45056 is already hardcoded in the experiment
-# LazyDict (vision_sft_nano_v2.py). Applying the key onto the CosmosDataLoader node
+# LazyDict (vision_sft_nano_mapstyle_dataloader.py). Applying the key onto the CosmosDataLoader node
 # would raise ConfigAttributeError, so it is omitted here.
 
 [job]
 task         = "vfm"
-experiment   = "vision_sft_nano_v2"
+experiment   = "vision_sft_nano_mapstyle_dataloader"
 project      = "cosmos3"
 group        = "sft"
-name         = "vision_sft_nano_v2"
+name         = "vision_sft_nano_mapstyle_dataloader"
 wandb_mode   = "disabled"
 
 [model]
