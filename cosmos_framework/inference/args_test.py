@@ -170,11 +170,9 @@ def test_reasoner_video_fields_default_none():
 
 
 def test_reasoner_video_fps_and_num_frames_mutually_exclusive():
-    ov = ReasonerDataOverrides(video_fps=2, video_num_frames=16)
     with pytest.raises(ValueError, match="video_fps.*video_num_frames|mutually exclusive"):
-        ov._validate_video_sampling()
+        ReasonerDataOverrides(video_fps=2, video_num_frames=16)
 
 
 def test_reasoner_video_fps_alone_ok():
-    ov = ReasonerDataOverrides(video_fps=2)
-    ov._validate_video_sampling()  # no raise
+    ReasonerDataOverrides(video_fps=2)  # no raise
