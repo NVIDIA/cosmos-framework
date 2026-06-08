@@ -21,6 +21,7 @@ from typing_extensions import Self
 
 from cosmos_framework.configs.base.defaults.compile import CompileConfig
 from cosmos_framework.configs.base.defaults.parallelism import ParallelismConfig
+from cosmos_framework.data.vfm.vlm.video_decoder_qwen import _video_decoder_qwen_func
 from cosmos_framework.inference.args import (
     ModelMode,
     NegativeMetadataMode,
@@ -54,6 +55,7 @@ from cosmos_framework.model.vfm.upsampler.prompts import is_upsampled_prompt
 from cosmos_framework.model.vfm.vlm.qwen3_vl.utils import _SYSTEM_PROMPT_IMAGE_EDITING
 from cosmos_framework.tools.visualize.video import save_img_or_video
 from cosmos_framework.utils import log
+from cosmos_framework.utils.vfm.video_preprocess import tensor_to_pil_images
 
 if TYPE_CHECKING:
     from cosmos_framework.configs.base.defaults.model_config import OmniMoTModelConfig
@@ -464,13 +466,29 @@ def _get_prompt_sample_data(sample_args: OmniSampleArgs, model: OmniMoTModel, *,
     return out
 
 
+def _decode_reasoner_video(vision_path: str, video_fps: float | None) -> dict[str, Any]:
+    """Decode a local video file into the frame-list payload the Qwen3-VL processor expects.
+
+    Returns ``{"frames": [PIL.Image, ...], "fps": float}``. Reuses the dataloader's
+    decode path (``_video_decoder_qwen_func`` + ``tensor_to_pil_images``)."""
+    with open(vision_path, "rb") as f:
+        video_bytes = f.read()
+    decode_kwargs: dict[str, Any] = {}
+    if video_fps is not None:
+        decode_kwargs["target_fps"] = video_fps
+    result = _video_decoder_qwen_func(key="video.mp4", data=video_bytes, **decode_kwargs)
+    if result is None:
+        raise ValueError(f"Failed to decode reasoner video: {vision_path}")
+    return {"frames": tensor_to_pil_images(result["videos"]), "fps": result["fps"]}
+
+
 def _get_reasoner_sample_data(sample_args: OmniSampleArgs, model: OmniMoTModel) -> dict[str, Any]:
     """Sample batch for reasoner text generation: prompt + optional conditioning image or video."""
     image: Image.Image | None = None
-    video: str | None = None
+    video: dict[str, Any] | None = None
     if sample_args.vision_path is not None:
         if Path(sample_args.vision_path).suffix.lower() in VIDEO_EXTENSIONS:
-            video = str(sample_args.vision_path)
+            video = _decode_reasoner_video(str(sample_args.vision_path), sample_args.video_fps)
         else:
             image = Image.open(sample_args.vision_path).convert("RGB")
     out: dict[str, Any] = {
@@ -479,18 +497,6 @@ def _get_reasoner_sample_data(sample_args: OmniSampleArgs, model: OmniMoTModel) 
     }
     if video is not None:
         out["reasoner_videos"] = [video]
-        out["video_sampling_kwargs"] = {
-            k: v
-            for k, v in {
-                "fps": sample_args.video_fps,
-                "num_frames": sample_args.video_num_frames,
-                "min_frames": sample_args.video_min_frames,
-                "max_frames": sample_args.video_max_frames,
-                "min_pixels": sample_args.video_min_pixels,
-                "max_pixels": sample_args.video_max_pixels,
-            }.items()
-            if v is not None
-        }
     return out
 
 
@@ -1675,8 +1681,7 @@ class OmniInference(Inference):
 
         prompts: list[str] = data_batch[self.model.input_caption_key]
         raw_images: list[Image.Image | None] = data_batch["reasoner_images"]
-        raw_videos: list[str | None] | None = data_batch.get("reasoner_videos")
-        video_sampling_kwargs: dict[str, Any] = data_batch.get("video_sampling_kwargs", {})
+        raw_videos: list[dict[str, Any] | None] | None = data_batch.get("reasoner_videos")
 
         n_img = sum(img is not None for img in raw_images)
         n_vid = sum(v is not None for v in (raw_videos or []))
@@ -1695,8 +1700,8 @@ class OmniInference(Inference):
                 f"({n_vid}/{len(raw_videos)} have a video vision_path). Split into separate batches."
             )
         images: list[Image.Image] | None = cast(list[Image.Image], raw_images) if n_img == len(raw_images) else None
-        videos: list[str] | None = (
-            cast(list[str], raw_videos) if raw_videos is not None and n_vid == len(raw_videos) else None
+        videos: list[dict[str, Any]] | None = (
+            cast(list[dict[str, Any]], raw_videos) if raw_videos is not None and n_vid == len(raw_videos) else None
         )
 
         try:
@@ -1723,7 +1728,6 @@ class OmniInference(Inference):
                 max_new_tokens=sample_args_list[0].max_new_tokens,
                 images=images,
                 videos=videos,
-                video_sampling_kwargs=video_sampling_kwargs or None,
                 do_sample=sample_args_list[0].do_sample,
                 temperature=sample_args_list[0].temperature,
                 top_k=sample_args_list[0].top_k,

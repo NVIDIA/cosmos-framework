@@ -357,16 +357,7 @@ def test_reasoner_defaults_validate_against_overrides() -> None:
 
 
 def _fake_sa(vision_path: Any, **video_kw: Any) -> SimpleNamespace:
-    base: dict[str, Any] = dict(
-        prompt="describe",
-        vision_path=vision_path,
-        video_fps=None,
-        video_num_frames=None,
-        video_min_frames=None,
-        video_max_frames=None,
-        video_min_pixels=None,
-        video_max_pixels=None,
-    )
+    base: dict[str, Any] = dict(prompt="describe", vision_path=vision_path, video_fps=None)
     base.update(video_kw)
     return SimpleNamespace(**base)
 
@@ -385,13 +376,14 @@ def test_reasoner_sample_data_text_only() -> None:
 
 
 @pytest.mark.L0
-def test_reasoner_sample_data_video_routes_to_videos(tmp_path: Path) -> None:
+def test_reasoner_sample_data_video_routes_to_videos(monkeypatch: pytest.MonkeyPatch) -> None:
+    import cosmos_framework.inference.inference as inf
     from cosmos_framework.inference.inference import _get_reasoner_sample_data
 
-    clip = tmp_path / "clip.mp4"
-    clip.write_bytes(b"\x00")  # not decoded by the builder
-    out = _get_reasoner_sample_data(_fake_sa(str(clip), video_fps=2), _fake_model)
+    sentinel = {"frames": ["F0", "F1"], "fps": 2.0}
+    monkeypatch.setattr(inf, "_decode_reasoner_video", lambda path, fps: sentinel)
+    out = _get_reasoner_sample_data(_fake_sa("/tmp/clip.mp4", video_fps=2.0), _fake_model)
     assert out["caption"] == ["describe"]
-    assert out["reasoner_videos"] == [str(clip)]
+    assert out["reasoner_videos"] == [sentinel]
     assert out["reasoner_images"] == [None]
-    assert out["video_sampling_kwargs"] == {"fps": 2}
+    assert "video_sampling_kwargs" not in out

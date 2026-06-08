@@ -3764,7 +3764,6 @@ class OmniMoTModel(ImaginaireModel):
         *,
         images: list[Any] | None = None,
         videos: list[Any] | None = None,
-        video_sampling_kwargs: dict[str, Any] | None = None,
         prompt_builder: Callable[[str], list[dict[str, Any]]] | None = None,
         do_sample: bool = False,
         temperature: float | None = 1.0,
@@ -3840,13 +3839,13 @@ class OmniMoTModel(ImaginaireModel):
                 accepts works (file path ``str``, ``PIL.Image.Image``,
                 ``np.ndarray``, or a CHW / HWC tensor).
             videos: Optional per-prompt conditioning videos (mutually
-                exclusive with ``images``). Each entry is forwarded into a
-                ``{"type": "video", "video": ...}`` chat block; the
-                processor decodes/samples frames and produces
+                exclusive with ``images``). Each entry must be a
+                ``{"frames": [...PIL...], "fps": float}`` payload
+                (pre-decoded by the caller, e.g. via
+                ``_decode_reasoner_video``). The frames list and fps are
+                forwarded into the ``{"type": "video", "video": frames,
+                "fps": fps}`` chat block so the processor produces
                 ``pixel_values_videos`` / ``video_grid_thw``.
-            video_sampling_kwargs: Optional dict of non-None frame-sampling
-                controls (fps, num_frames, min_frames, max_frames,
-                min_pixels, max_pixels) forwarded to the processor.
             prompt_builder: Optional callback that maps a raw prompt
                 string to a chat-style messages list (e.g.
                 :func:`projects.cosmos3.vfm.upsampler.prompts.build_messages`
@@ -3941,8 +3940,6 @@ class OmniMoTModel(ImaginaireModel):
                     f"{type(self.vlm_processor).__name__!r} does not implement "
                     "apply_chat_template — the live VLM is configured as text-only."
                 )
-        video_kwargs = {k: v for k, v in (video_sampling_kwargs or {}).items() if v is not None}
-
         # Resolve EOS / pad ids internally so callers don't have to know
         # about VLM-specific id wiring.  EOS comes from the cached VLM
         # special-tokens dict (set in ``set_up_tokenizers``); pad mirrors
@@ -3983,7 +3980,7 @@ class OmniMoTModel(ImaginaireModel):
                 last_user = messages[-1]
                 last_text = last_user["content"] if isinstance(last_user.get("content"), str) else ""
                 if use_video:
-                    media_item: dict[str, Any] = {"type": "video", "video": media[idx]}
+                    media_item: dict[str, Any] = {"type": "video", "video": media[idx]["frames"], "fps": media[idx]["fps"]}
                 else:
                     media_item = {"type": "image", "image": media[idx]}
                 multimodal_messages = list(messages[:-1])
@@ -3993,15 +3990,11 @@ class OmniMoTModel(ImaginaireModel):
                         "content": [media_item, {"type": "text", "text": last_text}],
                     }
                 )
-                # video_kwargs (fps/num_frames/min_frames/max_frames/min_pixels/max_pixels)
-                # are forwarded to the processor here. The exact kwarg surface depends on the
-                # installed transformers Qwen3VLProcessor; verified on GPU.
                 processor_inputs = self.vlm_processor.apply_chat_template(
                     multimodal_messages,
                     tokenize=True,
                     add_generation_prompt=True,
                     return_tensors="pt",
-                    **(video_kwargs if use_video else {}),
                 )
                 inner_input_ids = processor_inputs["input_ids"].to(device).unsqueeze(0)
                 inner_attention_mask = processor_inputs["attention_mask"].to(device).unsqueeze(0)

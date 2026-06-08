@@ -610,11 +610,6 @@ class ReasonerDataArgs(ArgsBase):
     repetition_penalty: _ReasonerRepetitionPenalty | None = None
     presence_penalty: float | None = None
     video_fps: pydantic.PositiveFloat | None = None
-    video_num_frames: pydantic.PositiveInt | None = None
-    video_min_frames: pydantic.PositiveInt | None = None
-    video_max_frames: pydantic.PositiveInt | None = None
-    video_min_pixels: pydantic.PositiveInt | None = None
-    video_max_pixels: pydantic.PositiveInt | None = None
 
 
 class ReasonerDataOverrides(OverridesBase):
@@ -636,23 +631,7 @@ class ReasonerDataOverrides(OverridesBase):
     presence_penalty: float | None = None
     """Additive presence penalty (any sign). ``0.0`` is identity."""
     video_fps: pydantic.PositiveFloat | None = None
-    """Frames per second to sample from a video vision_path. Mutually exclusive with video_num_frames. None -> processor default."""
-    video_num_frames: pydantic.PositiveInt | None = None
-    """Fixed number of frames to sample from a video vision_path. Mutually exclusive with video_fps. None -> processor default."""
-    video_min_frames: pydantic.PositiveInt | None = None
-    """Lower bound on sampled frame count. None -> processor default."""
-    video_max_frames: pydantic.PositiveInt | None = None
-    """Upper bound on sampled frame count. None -> processor default."""
-    video_min_pixels: pydantic.PositiveInt | None = None
-    """Lower bound on per-frame pixel budget (drives smart_resize). None -> processor default."""
-    video_max_pixels: pydantic.PositiveInt | None = None
-    """Upper bound on per-frame pixel budget (drives smart_resize). None -> processor default."""
-
-    @pydantic.model_validator(mode="after")
-    def _validate_video_sampling(self) -> Self:
-        if self.video_fps is not None and self.video_num_frames is not None:
-            raise ValueError("video_fps and video_num_frames are mutually exclusive; set at most one.")
-        return self
+    """Frames per second to sample from a video vision_path. None -> decoder default (2.0)."""
 
     def _build_reasoner_data(self, model_config: "OmniMoTModelConfig", sample_meta: SampleMeta):
         if not sample_meta.model_mode.is_reasoner:

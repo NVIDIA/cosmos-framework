@@ -7,10 +7,5 @@
     "top_p": null,
     "repetition_penalty": 1.0,
     "presence_penalty": 0.0,
-    "video_fps": null,
-    "video_num_frames": null,
-    "video_min_frames": null,
-    "video_max_frames": null,
-    "video_min_pixels": null,
-    "video_max_pixels": null
+    "video_fps": null
 }

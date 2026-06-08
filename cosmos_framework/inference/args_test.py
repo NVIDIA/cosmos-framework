@@ -159,20 +159,11 @@ def test_sample_args(tmp_path: Path):
     assert text2image_args.shift == 3.0
 
 
-def test_reasoner_video_fields_default_none():
+def test_reasoner_video_fps_defaults_none():
     ov = ReasonerDataOverrides()
     assert ov.video_fps is None
-    assert ov.video_num_frames is None
-    assert ov.video_min_frames is None
-    assert ov.video_max_frames is None
-    assert ov.video_min_pixels is None
-    assert ov.video_max_pixels is None
 
 
-def test_reasoner_video_fps_and_num_frames_mutually_exclusive():
-    with pytest.raises(ValueError, match="video_fps.*video_num_frames|mutually exclusive"):
-        ReasonerDataOverrides(video_fps=2, video_num_frames=16)
-
-
-def test_reasoner_video_fps_alone_ok():
-    ReasonerDataOverrides(video_fps=2)  # no raise
+def test_reasoner_video_fps_accepts_positive_float():
+    ov = ReasonerDataOverrides(video_fps=2.0)
+    assert ov.video_fps == 2.0
