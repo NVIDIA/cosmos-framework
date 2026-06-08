@@ -193,9 +193,16 @@ jobs:
       # is absent (via RunIf / pytest.skip guards), so this is green without
       # internal credentials; provide the credential file on the runner to
       # exercise them. New tests are picked up automatically (no markers/lists).
+      # COSMOS_DOWNLOAD_CACHE_DIR caches the downloaded input assets (e.g. the
+      # GitHub-raw test inputs) in a persistent, URL-keyed dir under
+      # $RUNNER_WORKSPACE -- outside the repo tree, so the cleanup step below
+      # doesn't wipe it. Reused across runs, so the flaky GitHub-raw 504s are hit
+      # at most once per asset (the in-code backoff retry is the cold-cache
+      # fallback). Safe because the asset URLs are commit-pinned (.../raw/<sha>/).
       - name: Unit tests
         run: |
           export LD_LIBRARY_PATH=
+          export COSMOS_DOWNLOAD_CACHE_DIR="$RUNNER_WORKSPACE/cosmos_input_cache"
           uv run --all-extras --group=cu128-train python -m pytest -v -s \
             cosmos_framework/ -o addopts=
 

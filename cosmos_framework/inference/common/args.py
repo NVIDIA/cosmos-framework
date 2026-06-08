@@ -3,6 +3,7 @@
 
 import contextlib
 import glob
+import hashlib
 import itertools
 import json
 import os
@@ -132,6 +133,38 @@ def _download_file_hf(url: str, path: Path):
             f.write(chunk)
 
 
+def _resolve_url_download(url: str, name: str) -> Path:
+    """Fetch ``url`` to a local file and return its path.
+
+    When ``COSMOS_DOWNLOAD_CACHE_DIR`` is set, downloads are cached there keyed by
+    URL and reused across runs — the input-asset URLs are pinned to a content
+    commit (``.../raw/<sha>/...``), so the URL fully identifies the bytes. This
+    lets CI skip re-fetching the flaky GitHub-raw assets on every run (the retry
+    in ``_download_file_url`` becomes the cold-cache fallback). When unset, the
+    legacy behavior is used: a throwaway temp directory per download.
+    """
+    cache_root = os.environ.get("COSMOS_DOWNLOAD_CACHE_DIR")
+    if not cache_root:
+        local_path = Path(tempfile.mkdtemp()) / name
+        _download_file_url(url, local_path)
+        return local_path
+
+    cache_dir = Path(cache_root)
+    digest = hashlib.sha256(url.encode()).hexdigest()[:16]
+    cache_path = cache_dir / f"{digest}-{name}"
+    done_marker = Path(f"{cache_path}.done")
+    if cache_path.exists() and done_marker.exists():
+        return cache_path
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    # Download to a unique temp file in the cache dir, then atomically move it
+    # into place so concurrent workers/ranks never observe a half-written file.
+    tmp_path = cache_path.with_name(f"{cache_path.name}.{os.getpid()}.tmp")
+    _download_file_url(url, tmp_path)
+    os.replace(tmp_path, cache_path)
+    done_marker.write_text(url)
+    return cache_path
+
+
 def _download_file(url: str, path: Path):
     if "://" not in url and Path(url).resolve() == path.resolve():
         return
@@ -141,10 +174,9 @@ def _download_file(url: str, path: Path):
             return
 
     if "://" in url:
-        # Download to a temporary directory and symlink to the final path.
-        # This keeps the output directory small.
-        local_path = Path(tempfile.TemporaryDirectory(delete=False).name) / path.name
-        _download_file_url(url, local_path)
+        # Download (optionally via the persistent cache) and symlink to the final
+        # path. This keeps the output directory small.
+        local_path = _resolve_url_download(url, path.name)
     else:
         local_path = Path(url)
 
