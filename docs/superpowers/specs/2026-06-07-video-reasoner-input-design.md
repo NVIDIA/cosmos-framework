@@ -1,8 +1,17 @@
 # Video input for the `reasoner` model-mode of inference — design
 
+> **⚠️ SUPERSEDED (2026-06-08) — historical record.** Review found the inference
+> processor is the repo `Qwen3VLProcessor` wrapper, which runs
+> `do_sample_frames=False` and expects a **pre-decoded PIL frame list** (it drops
+> forwarded kwargs) — not a path it samples itself. The shipped implementation
+> therefore decodes frames via `torchvision.io.read_video` + Qwen `smart_nframes`
+> and exposes **only `video_fps`** (the `num_frames`/`min_frames`/`max_frames`/
+> `min_pixels`/`max_pixels` knobs described below were dropped). Treat the sections
+> below as the original design intent; the code is the source of truth.
+
 **Date:** 2026-06-07
 **Branch:** `maoshengl/video_reasoner_inference`
-**Status:** approved design, ready for implementation plan
+**Status:** superseded by implementation (see banner above)
 
 ## Goal
 

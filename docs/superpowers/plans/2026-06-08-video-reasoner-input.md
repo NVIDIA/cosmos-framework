@@ -1,5 +1,13 @@
 # Video input for `reasoner` model-mode — Implementation Plan
 
+> **⚠️ PARTIALLY SUPERSEDED (2026-06-08).** Tasks 1/6/7 below assumed the processor
+> decodes the mp4 path and accepts `video_*` sampling kwargs. Review showed the repo
+> `Qwen3VLProcessor` instead needs a **pre-decoded PIL frame list** (`do_sample_frames=False`)
+> and drops forwarded kwargs. The shipped code decodes frames itself
+> (`torchvision.io.read_video` + Qwen `smart_nframes`) and exposes **only `video_fps`**.
+> The other five `video_*` knobs and the processor-side-sampling approach were dropped.
+> The code is the source of truth.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Let `model_mode=reasoner` in `python -m cosmos_framework.scripts.inference` accept a local mp4 video as conditioning input (Cosmos3-Nano and Cosmos3-Super), producing text that reasons over the clip.

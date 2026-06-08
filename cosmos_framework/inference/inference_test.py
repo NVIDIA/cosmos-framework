@@ -372,7 +372,7 @@ def test_reasoner_sample_data_text_only() -> None:
     out = _get_reasoner_sample_data(_fake_sa(None), _fake_model)
     assert out["caption"] == ["describe"]
     assert out["reasoner_images"] == [None]
-    assert "reasoner_videos" not in out
+    assert out["reasoner_videos"] == [None]
 
 
 @pytest.mark.L0

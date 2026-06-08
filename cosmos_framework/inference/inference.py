@@ -497,13 +497,14 @@ def _get_reasoner_sample_data(sample_args: OmniSampleArgs, model: OmniMoTModel) 
             video = _decode_reasoner_video(str(sample_args.vision_path), sample_args.video_fps)
         else:
             image = Image.open(sample_args.vision_path).convert("RGB")
-    out: dict[str, Any] = {
+    # Both keys are emitted for every sample (``None`` when absent) so the batch
+    # builder can positionally align them and the three-way homogeneity check in
+    # ``_generate_reasoner_batch`` reliably detects an image/video/text mix.
+    return {
         model.input_caption_key: [sample_args.prompt],
         "reasoner_images": [image],
+        "reasoner_videos": [video],
     }
-    if video is not None:
-        out["reasoner_videos"] = [video]
-    return out
 
 
 def _get_image_edit_sample_data(
