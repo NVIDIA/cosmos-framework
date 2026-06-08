@@ -454,7 +454,7 @@ class VisionDataOverrides(OverridesBase, _VisionDataBase):
         if self.vision_path and "://" in self.vision_path:
             raise ValueError("Must call `download()` before building vision data")
 
-        # Reasoner mode treats ``vision_path`` as a PIL image source; resolution/fps/num_frames are unused.
+        # Reasoner mode treats ``vision_path`` as an image (PIL) or video (mp4) source; resolution/fps/num_frames are unused.
         if sample_meta.model_mode.is_reasoner:
             self.condition_frame_indexes_vision = self.condition_frame_indexes_vision or []
             self.condition_video_keep = self.condition_video_keep or "first"
