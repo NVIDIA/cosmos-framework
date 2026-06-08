@@ -539,6 +539,20 @@ class DistributedCheckpointer(AbstractCheckpointer):
                                     "Ensure the model has net_ema submodule."
                                 )
                                 _state_dict[sd_key] = _state_dict[key_ema]
+                    elif warm_start and any(k.startswith("net_ema.") for k in _state_dict):
+                        # Warm-start init checkpoints (e.g. HF -> DCP via convert_model_to_dcp)
+                        # contain only net.* and no net_ema.*. So after dcp.load() the net_ema.*
+                        # entries keep the model's construction-time values from build_net()
+                        # (default/random init — the pretrained backbone is NOT loaded at
+                        # construction when vlm_config.pretrained_weights.enabled=False), which
+                        # would seed EMA from random weights. Copy net.* -> net_ema.* so EMA
+                        # starts from the freshly-loaded warm-start init instead.
+                        log.info("Warm start: resetting net_ema = net so EMA starts from the init weights.")
+                        for sd_key in list(_state_dict.keys()):
+                            if sd_key.startswith("net."):
+                                key_ema = "net_ema." + sd_key.removeprefix("net.")
+                                if key_ema in _state_dict:
+                                    _state_dict[key_ema] = _state_dict[sd_key]
                     results = _model_wrapper.load_state_dict(_state_dict)
                     if results is not None:
                         if len(results.missing_keys) > 0:
