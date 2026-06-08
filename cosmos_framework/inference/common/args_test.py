@@ -5,6 +5,8 @@ import json
 import os
 from pathlib import Path
 
+import pytest
+
 from cosmos_framework.inference.args import DEFAULT_CHECKPOINT, DEFAULT_CHECKPOINT_NAME
 from cosmos_framework.inference.common.args import CheckpointConfig, CheckpointOverrides, download_file
 
@@ -13,7 +15,13 @@ CHECKPOINTS: dict[str, CheckpointConfig] = {
 }
 
 
-def test_download_file(tmp_path: Path):
+def test_download_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    # This test covers the download/symlink/meta mechanics, which assume each
+    # download is independent (e.g. force-re-download lands at a fresh path). The
+    # opt-in cache (COSMOS_DOWNLOAD_CACHE_DIR, set in CI) dedups by URL and would
+    # break that assumption, so disable it here.
+    monkeypatch.delenv("COSMOS_DOWNLOAD_CACHE_DIR", raising=False)
+
     download_url_1 = (
         "https://github.com/nvidia-cosmos/cosmos-dependencies/raw/2b17a2413bd86b2cf9b03823637108851e4ddf2d/inputs/vision/robot_153.jpg"
     )
