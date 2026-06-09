@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: OpenMDW-1.1
 
-"""Action dataset wrappers for Cosmos Action training.
+"""Action dataset wrappers for Cosmos Action.
 
 All concrete datasets inherit from :class:`ActionBaseDataset` and expose a
 ``load_action_stats()`` classmethod for retrieving pre-computed normalization

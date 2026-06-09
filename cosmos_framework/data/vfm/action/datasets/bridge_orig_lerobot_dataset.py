@@ -36,7 +36,7 @@ _DEFAULT_ROTATION = np.array(
     dtype=np.float32,
 )
 
-# Kinematics frame -> OpenCV frame used by Cosmos action training.
+# Kinematics frame -> OpenCV frame used by Cosmos action.
 _BRIDGE_TO_OPENCV = np.array(
     [[0.0, 0.0, 1.0], [-1.0, 0.0, 0.0], [0.0, -1.0, 0.0]],
     dtype=np.float32,
