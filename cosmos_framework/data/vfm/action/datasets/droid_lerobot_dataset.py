@@ -50,8 +50,6 @@ class DROIDLeRobotDataset(ActionBaseDataset):
     prefixing, and image augmentation from the production wrapper are omitted.
     """
 
-    _normalization_method = "quantile_rot"
-
     def __init__(
         self,
         root: str = "/path/to/cosmos3_action_datasets/droid_plus_lerobot_640x360_20260412",

@@ -62,7 +62,7 @@ class BridgeOrigLeRobotDataset(ActionBaseDataset):
         [pos_delta(3), rot6d_delta(6), gripper(1)]
 
     Uses a single ``image_0`` ego-view video, backward-framewise rot6d actions,
-    and quantile-rotation normalization.
+    and quantile normalization.
     """
 
 
