@@ -431,10 +431,8 @@ def h100_inputs(tmp_path_factory: pytest.TempPathFactory):
     as a Hydra backbone override.
     """
     arch = _detect_arch()
-    if arch == "gb200":
-        pytest.skip("gb200 inputs not in OSS layout; goldens kept for historical reference only.")
-    if arch != "h100":
-        pytest.skip(f"no regression goldens for GPU arch {arch!r}; only h100 supported")
+    if arch not in ("h100", "gb200"):
+        pytest.skip(f"no regression goldens for GPU arch {arch!r}; only h100/gb200 supported")
     if shutil.which("uvx") is None:
         pytest.skip("uvx not on PATH -- required to prepare regression inputs")
 
@@ -466,7 +464,7 @@ def h100_inputs(tmp_path_factory: pytest.TempPathFactory):
     _ensure("BASE_CHECKPOINT_PATH", _make_dcp)
 
     try:
-        yield {"vlm_model_path": os.environ["MODEL_PATH"]}
+        yield {"vlm_model_path": os.environ.get("MODEL_PATH", "")}
     finally:
         for var in set_vars:
             os.environ.pop(var, None)
@@ -587,6 +585,16 @@ _GOLDENS: dict[str, dict[str, dict[str, list[float] | None]]] = {
                 38.62454, 23.61477, 30.53218, 36.46255, 25.06240,
                 39.70305, 48.52226, 52.18334, 22.77521, 25.06970,
             ],
+        },
+        # Captured 2026-06-09 on a 4 × NVIDIA GB200 node with seed 42 against the
+        # current TOML-config pipeline (inputs prepared in-test by ``h100_inputs``,
+        # which now also serves gb200). Runs under ``--deterministic`` so loss
+        # reproduces bit-exact across all 10 iters; loss matches the h100 nano
+        # series within ~1e-3. grad_norm is non-det because ``compile.enabled=true``
+        # makes the all-rank reduction not bit-exact, so None (same as h100).
+        "vision_sft_nano": {
+            "loss": [0.2269, 0.2181, 0.2026, 0.2309, 0.2178, 0.273, 0.2871, 0.2164, 0.2059, 0.264],
+            "grad_norm": None,
         },
     },
     # Recaptured 2026-06-03 on a 4 × NVIDIA H100 80GB HBM3 node with seed 42 and
