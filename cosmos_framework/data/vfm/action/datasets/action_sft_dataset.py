@@ -47,6 +47,7 @@ def get_action_droid_sft_dataset(
     use_state: bool = True,
     action_normalization: str | None = None,
     viewpoint: str = "concat_view",
+    use_image_augmentation: bool = False,
     resolution: str | int = "256",
     max_action_dim: int = 64,
     tokenizer_config: dict | None = None,
@@ -67,6 +68,7 @@ def get_action_droid_sft_dataset(
         action_space=action_space,
         use_state=use_state,
         action_normalization=action_normalization,
+        use_image_augmentation=use_image_augmentation,
     )
     transform = ActionTransformPipeline(
         tokenizer_config=tokenizer_config,

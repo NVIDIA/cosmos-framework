@@ -192,6 +192,7 @@ action_policy_droid_nano = LazyDict(
                             chunk_length=32,
                             action_space="joint_pos",
                             use_state=True,
+                            use_image_augmentation=True,  # SR boost (random crop+rescale + color jitter)
                             action_normalization=None,
                             viewpoint="concat_view",  # wrist 480p (top) + L/R shoulder 320x180 (bottom)
                             resolution="480",  # 640x360 data @ 480p (matches internal res480 run)

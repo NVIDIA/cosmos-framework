@@ -14,6 +14,7 @@ import numpy as np
 import pyarrow.parquet as pq
 import torch
 import torch.nn.functional as F
+import torchvision.transforms as T
 from lerobot.datasets.video_utils import decode_video_frames
 from torch.utils.data import Dataset
 
@@ -84,6 +85,7 @@ class DROIDLeRobotDataset(Dataset):
         action_space: str = "ee_pose",
         use_state: bool = False,
         action_normalization: str | None = "quantile",
+        use_image_augmentation: bool = False,
     ) -> None:
         super().__init__()
         if pose_convention != "backward_framewise":
@@ -104,6 +106,10 @@ class DROIDLeRobotDataset(Dataset):
         self._viewpoint = viewpoint
         self._action_space = action_space
         self._use_state = bool(use_state)
+        # Per-sample image augmentation (random crop+rescale + color jitter), applied
+        # to all views with shared params (temporally + cross-view consistent). Lazy-built.
+        self._use_image_augmentation = bool(use_image_augmentation)
+        self._image_augmentor: T.Compose | None = None
         # joint_pos trains on raw 8D joint values (the internal canonical run
         # leaves action_normalization=None); ee_pose keeps quantile normalization.
         self._action_normalization = None if action_space == "joint_pos" else action_normalization
@@ -293,6 +299,25 @@ class DROIDLeRobotDataset(Dataset):
         wrist = frames_by_view["wrist"]
         left = frames_by_view["left"]
         right = frames_by_view["right"]
+
+        if self._use_image_augmentation:
+            # Random crop+rescale (spatial jitter) + color jitter, BEFORE the concat.
+            # All three views are stacked so one sampled set of params is applied
+            # uniformly across every frame and view (temporally + cross-view consistent),
+            # while each __getitem__ resamples. Matches the internal DROID recipe.
+            if self._image_augmentor is None:
+                _, _, h, w = wrist.shape
+                self._image_augmentor = T.Compose(
+                    [
+                        T.RandomCrop((int(h * 0.95), int(w * 0.95))),
+                        T.Resize((h, w), antialias=True),
+                        T.ColorJitter(brightness=0.3, contrast=0.4, saturation=0.5, hue=0.08),
+                    ]
+                )
+            n, m = wrist.shape[0], wrist.shape[0] + left.shape[0]
+            combined = self._image_augmentor(torch.cat([wrist, left, right], dim=0))
+            wrist, left, right = combined[:n], combined[n:m], combined[m:]
+
         _, _, h_w, w_w = wrist.shape
         half_h, half_w = h_w // 2, w_w // 2
         left = F.interpolate(left, size=(half_h, half_w), mode="bilinear", align_corners=False)
