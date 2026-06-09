@@ -193,6 +193,10 @@ action_policy_droid_nano = LazyDict(
                             action_space="joint_pos",
                             use_state=True,
                             use_image_augmentation=True,  # SR boost (random crop+rescale + color jitter)
+                            # Keep-ranges window filter (drops idle/non-task frames). Off by default;
+                            # the launcher sets use_filter_dict=True + filter_dict_path for internal parity.
+                            use_filter_dict=False,
+                            filter_dict_path=None,
                             action_normalization=None,
                             viewpoint="concat_view",  # wrist 480p (top) + L/R shoulder 320x180 (bottom)
                             resolution="480",  # 640x360 data @ 480p (matches internal res480 run)

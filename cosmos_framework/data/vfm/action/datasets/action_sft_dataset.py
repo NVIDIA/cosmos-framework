@@ -48,6 +48,8 @@ def get_action_droid_sft_dataset(
     action_normalization: str | None = None,
     viewpoint: str = "concat_view",
     use_image_augmentation: bool = False,
+    use_filter_dict: bool = False,
+    filter_dict_path: str | None = None,
     resolution: str | int = "256",
     max_action_dim: int = 64,
     tokenizer_config: dict | None = None,
@@ -69,6 +71,8 @@ def get_action_droid_sft_dataset(
         use_state=use_state,
         action_normalization=action_normalization,
         use_image_augmentation=use_image_augmentation,
+        use_filter_dict=use_filter_dict,
+        filter_dict_path=filter_dict_path,
     )
     transform = ActionTransformPipeline(
         tokenizer_config=tokenizer_config,

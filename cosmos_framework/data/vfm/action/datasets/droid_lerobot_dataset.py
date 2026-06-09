@@ -86,6 +86,8 @@ class DROIDLeRobotDataset(Dataset):
         use_state: bool = False,
         action_normalization: str | None = "quantile",
         use_image_augmentation: bool = False,
+        use_filter_dict: bool = False,
+        filter_dict_path: str | None = None,
     ) -> None:
         super().__init__()
         if pose_convention != "backward_framewise":
@@ -110,6 +112,13 @@ class DROIDLeRobotDataset(Dataset):
         # to all views with shared params (temporally + cross-view consistent). Lazy-built.
         self._use_image_augmentation = bool(use_image_augmentation)
         self._image_augmentor: T.Compose | None = None
+        # Keep-ranges window filter (internal use_filter_dict): restrict training windows
+        # to curated active segments, dropping idle/non-task frames. Off by default; the
+        # keep-ranges JSON is supplied via filter_dict_path (an internal data artifact).
+        self._use_filter_dict = bool(use_filter_dict)
+        self._filter_dict_path = filter_dict_path
+        if self._use_filter_dict and not self._filter_dict_path:
+            raise ValueError("use_filter_dict=True requires filter_dict_path")
         # joint_pos trains on raw 8D joint values (the internal canonical run
         # leaves action_normalization=None); ee_pose keeps quantile normalization.
         self._action_normalization = None if action_space == "joint_pos" else action_normalization
@@ -175,6 +184,37 @@ class DROIDLeRobotDataset(Dataset):
         self._ep_starts = ep_starts.astype(np.int64)
         self._valid_cum = np.cumsum(np.maximum(0, ep_counts - self._chunk_length)).astype(np.int64)
 
+        # Keep-ranges filter: build a per-segment index over only the kept windows.
+        # Mirrors internal _append_index_records (use_filter_dict): the filter dict maps a
+        # gs:// trajectory key -> list of [start, end] frame ranges; keep windows whose start
+        # is in [max(start,0), min(end-chunk, valid)). Episodes absent from the dict are dropped.
+        if self._use_filter_dict:
+            with open(self._filter_dict_path) as f:
+                filter_dict = json.load(f)
+            seg_ep_pos, seg_win_start, seg_len = [], [], []
+            for pos in range(len(self._ep_vals)):
+                valid = int(max(0, ep_counts[pos] - self._chunk_length))
+                if valid <= 0:
+                    continue
+                ep_id = str(self._episodes[int(self._ep_vals[pos])]["episode_id"])
+                key = (
+                    f"gs://xembodiment_data/r2d2/r2d2-data-full/{ep_id}/recordings/"
+                    f"MP4--gs://xembodiment_data/r2d2/r2d2-data-full/{ep_id}/trajectory.h5"
+                )
+                ranges = filter_dict.get(key)
+                if ranges is None:
+                    continue
+                for s, e in ranges:
+                    ws = max(int(s), 0)
+                    we = min(int(e) - self._chunk_length, valid)
+                    if we - ws > 0:
+                        seg_ep_pos.append(pos)
+                        seg_win_start.append(ws)
+                        seg_len.append(we - ws)
+            self._seg_ep_pos = np.asarray(seg_ep_pos, dtype=np.int64)
+            self._seg_win_start = np.asarray(seg_win_start, dtype=np.int64)
+            self._seg_cum = np.cumsum(seg_len).astype(np.int64) if seg_len else np.zeros(0, dtype=np.int64)
+
     @property
     def fps(self) -> float:
         return self._fps
@@ -231,9 +271,15 @@ class DROIDLeRobotDataset(Dataset):
         mode = self._choose_mode()
         idx = int(idx)
         # Map the flat sample index to a within-episode frame window.
-        ep = int(np.searchsorted(self._valid_cum, idx, side="right"))
-        prev = int(self._valid_cum[ep - 1]) if ep > 0 else 0
-        start = int(self._ep_starts[ep]) + (idx - prev)
+        if self._use_filter_dict:
+            seg = int(np.searchsorted(self._seg_cum, idx, side="right"))
+            base = int(self._seg_cum[seg - 1]) if seg > 0 else 0
+            ep = int(self._seg_ep_pos[seg])
+            start = int(self._ep_starts[ep]) + int(self._seg_win_start[seg]) + (idx - base)
+        else:
+            ep = int(np.searchsorted(self._valid_cum, idx, side="right"))
+            prev = int(self._valid_cum[ep - 1]) if ep > 0 else 0
+            start = int(self._ep_starts[ep]) + (idx - prev)
         episode_index = int(self._ep_vals[ep])
         episode = self._episodes[episode_index]
 
@@ -409,4 +455,6 @@ class DROIDLeRobotDataset(Dataset):
         return self._norm_stats
 
     def __len__(self) -> int:
+        if self._use_filter_dict:
+            return int(self._seg_cum[-1]) if self._seg_cum.size else 0
         return int(self._valid_cum[-1]) if self._valid_cum.size else 0
