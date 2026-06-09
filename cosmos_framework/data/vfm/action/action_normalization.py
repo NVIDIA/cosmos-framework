@@ -39,11 +39,28 @@ def normalize_action(
     if method == "quantile":
         q01, q99 = stats["q01"], stats["q99"]
         denom = (q99 - q01).clamp(min=1e-8)
-        return (2.0 * (action - q01) / denom - 1.0).clamp(-1.0, 1.0)
+        return 2.0 * (action - q01) / denom - 1.0
     if method == "meanstd":
         return (action - stats["mean"]) / stats["std"].clamp(min=1e-8)
     if method == "minmax":
         lo, hi = stats["min"], stats["max"]
         denom = (hi - lo).clamp(min=1e-8)
-        return (2.0 * (action - lo) / denom - 1.0).clamp(-1.0, 1.0)
+        return 2.0 * (action - lo) / denom - 1.0
+    raise ValueError(f"Unknown normalization method: {method!r}")
+
+
+def denormalize_action(
+    action: torch.Tensor,
+    method: str,
+    stats: dict[str, torch.Tensor],
+) -> torch.Tensor:
+    """Denormalize action tensor."""
+    if method == "quantile":
+        q01, q99 = stats["q01"], stats["q99"]
+        return 0.5 * (action + 1.0) * (q99 - q01) + q01
+    if method == "meanstd":
+        return action * stats["std"] + stats["mean"]
+    if method == "minmax":
+        lo, hi = stats["min"], stats["max"]
+        return 0.5 * (action + 1.0) * (hi - lo) + lo
     raise ValueError(f"Unknown normalization method: {method!r}")

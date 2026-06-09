@@ -1,7 +1,13 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: OpenMDW-1.1
 
-"""Minimal DROID LeRobot dataset for Cosmos Action v1.2 defaults."""
+"""Minimal RoboMIND Franka LeRobot dataset for Cosmos Action examples.
+
+This is a stripped-down counterpart of the internal RoboMIND Franka dataset
+wrapper. It intentionally keeps only the pieces needed by the cookbook asset:
+RoboMIND Franka dual-arm, concat-view video, backward-framewise rot6d actions,
+    and quantile-rotation action normalization.
+"""
 
 from __future__ import annotations
 
@@ -30,56 +36,83 @@ PoseConvention = Literal["backward_framewise"]
 Viewpoint = Literal["concat_view"]
 
 _IMAGE_FEATURES = {
-    "wrist": "observation.image.wrist_image_left",
-    "left": "observation.image.exterior_image_1_left",
-    "right": "observation.image.exterior_image_2_left",
+    "front": "observation.images.camera_front",
+    "left": "observation.images.camera_left",
+    "right": "observation.images.camera_right",
 }
-_STATE_FEATURE = "observation.state.cartesian_position"
+_STATE_FEATURE = "observation.states.end_effector"
+_ACTION_FEATURE = "actions.joint_position"
 
 # 90-degree clockwise rotation about the Z axis in the local frame. This matches
-# the production DROID wrapper conversion from Franka panda_link8 to OpenCV.
-_DROID_TO_OPENCV: np.ndarray = np.array(
+# the production RoboMIND Franka wrapper conversion to OpenCV coordinates.
+_ROBOMIND_FRANKA_TO_OPENCV: np.ndarray = np.array(
     [[0.0, -1.0, 0.0], [1.0, 0.0, 0.0], [0.0, 0.0, 1.0]],
     dtype=np.float32,
 )
 
-_NORMALIZER_PATH = Path(__file__).parent / "droid_lerobot_normalization.json"
+_NORMALIZER_PATH = Path(__file__).parent / "robomind_franka_normalization.json"
 _MODE_CHOICES = ("forward_dynamics", "inverse_dynamics", "policy")
 
 
-class DROIDLeRobotDataset(Dataset):
-    """DROID Action dataset matching the v1.2 midtrain config default.
+def _dual_arm_action_spec():
+    return build_action_spec(
+        Pos(prefix="left"),
+        Rot("rot6d", prefix="left"),
+        Gripper(prefix="left"),
+        Pos(prefix="right"),
+        Rot("rot6d", prefix="right"),
+        Gripper(prefix="right"),
+    )
 
-    The supported action layout is 10D ``[pos_delta(3), rot6d_delta(6), gripper(1)]``.
-    Unsupported branches from the production wrapper, such as joint-space
-    actions, filter dictionaries, temporal-segment validation, state prefixing,
-    and image augmentation, are intentionally omitted.
+
+class RoboMINDFrankaDataset(Dataset):
+    """RoboMIND Franka dual-arm dataset matching Cosmos Action v1.2 defaults.
+
+    The supported action layout is 20D::
+
+        [left_pos_delta(3), left_rot6d_delta(6), left_gripper(1),
+         right_pos_delta(3), right_rot6d_delta(6), right_gripper(1)]
+
+    Unsupported production features such as single-arm shards, split/filter
+    logic, image augmentation, fast initialization, and alternate viewpoints are
+    intentionally omitted to keep the cookbook dependency small and readable.
     """
 
     def __init__(
         self,
-        root: str = "/path/to/cosmos3_action_datasets/droid_plus_lerobot_640x360_20260412",
-        fps: float = 15.0,
+        root: str = (
+            "/lustre/fsw/portfolios/cosmos/projects/cosmos_base_training/"
+            "cosmos3_action_datasets/RoboMIND_20251228"
+        ),
+        fps: float = 10.0,
         chunk_length: int = 16,
         mode: str = "joint",
+        embodiment_type: str = "robomind-franka-dual",
         pose_convention: PoseConvention = "backward_framewise",
-        tolerance_s: float = 2e-4,
+        tolerance_s: float = 1e-4,
         viewpoint: Viewpoint = "concat_view",
+        sample_stride: int = 1,
     ) -> None:
         super().__init__()
+        if embodiment_type != "robomind-franka-dual":
+            raise NotImplementedError("This minimal RoboMIND dataset only supports robomind-franka-dual.")
         if pose_convention != "backward_framewise":
-            raise NotImplementedError("This minimal DROID dataset only supports backward_framewise pose deltas.")
+            raise NotImplementedError("This minimal RoboMIND dataset only supports backward_framewise pose deltas.")
         if viewpoint != "concat_view":
-            raise NotImplementedError("This minimal DROID dataset only supports concat_view.")
+            raise NotImplementedError("This minimal RoboMIND dataset only supports concat_view.")
 
         self._fps = float(fps)
         self._dt = 1.0 / self._fps
         self._chunk_length = int(chunk_length)
+        self._sample_stride = int(sample_stride)
+        if self._sample_stride < 1:
+            raise ValueError(f"sample_stride must be >= 1, got {self._sample_stride}")
         self._mode = mode
+        self._embodiment_type = embodiment_type
         self._pose_convention = pose_convention
         self._tolerance_s = float(tolerance_s)
         self._viewpoint = viewpoint
-        self._domain_id = get_domain_id("droid_lerobot")
+        self._domain_id = get_domain_id(embodiment_type)
         self._norm_stats: dict[str, torch.Tensor] | None = None
 
         self._root = Path(root)
@@ -124,11 +157,11 @@ class DROIDLeRobotDataset(Dataset):
 
     @property
     def action_dim(self) -> int:
-        return 10
+        return 20
 
     @property
     def action_names(self) -> list[str]:
-        return build_action_spec(Pos(), Rot("rot6d"), Gripper()).names
+        return _dual_arm_action_spec().names
 
     def _choose_mode(self) -> str:
         if self._mode == "joint":
@@ -141,23 +174,25 @@ class DROIDLeRobotDataset(Dataset):
         first_row = self._rows[idx]
         episode = self._episodes[int(first_row["episode_index"])]
 
-        observation_rows = self._rows[idx : idx + self._chunk_length + 1]
+        row_idx = idx * self._sample_stride
+        observation_rows = self._rows[row_idx : row_idx + self._chunk_length + 1]
         action_rows = observation_rows[: self._chunk_length]
 
         video = self._load_concat_video(episode, observation_rows)
-        raw_action, initial_pose = self._build_raw_action(observation_rows, action_rows)
+        raw_action, initial_pose_left, initial_pose_right = self._build_raw_action(observation_rows, action_rows)
         task = self._tasks[int(observation_rows[0]["task_index"])]
-        ai_caption = random.choice(task.split(" | "))
+        ai_caption = random.choice([part.strip() for part in task.split(" | ") if part.strip()] or [task])
 
         return self._build_result(
             mode=mode,
             video=video,
             action=raw_action,
             ai_caption=ai_caption,
-            initial_pose=initial_pose,
+            initial_pose=initial_pose_left,
+            initial_pose_right=initial_pose_right,
             additional_view_description=(
-                "The top row is from the wrist-mounted camera. "
-                "The bottom row contains two horizontally concatenated third-person perspective views of the scene from opposite sides, with the robot visible."
+                "The top row shows a third-person perspective looking towards the dual-arm Franka robot from the front. "
+                "The bottom-left view looks at the scene from the left side, and the bottom-right view looks at the scene from the right side."
             ),
         )
 
@@ -176,15 +211,15 @@ class DROIDLeRobotDataset(Dataset):
             for name, video_key in _IMAGE_FEATURES.items()
         }
 
-        wrist = frames_by_view["wrist"]
+        front = frames_by_view["front"]
         left = frames_by_view["left"]
         right = frames_by_view["right"]
-        _, _, h_w, w_w = wrist.shape
-        half_h, half_w = h_w // 2, w_w // 2
+        _, _, h_front, w_front = front.shape
+        half_h, half_w = h_front // 2, w_front // 2
         left = F.interpolate(left, size=(half_h, half_w), mode="bilinear", align_corners=False)
         right = F.interpolate(right, size=(half_h, half_w), mode="bilinear", align_corners=False)
         bottom = torch.cat([left, right], dim=-1)
-        return torch.cat([wrist, bottom], dim=-2)
+        return torch.cat([front, bottom], dim=-2)
 
     def _video_path(self, episode: dict[str, Any], video_key: str) -> Path:
         chunk_idx = int(
@@ -208,21 +243,37 @@ class DROIDLeRobotDataset(Dataset):
         )
         return self._root / rel
 
+    def _build_relative_poses(
+        self,
+        positions: np.ndarray,
+        euler_xyz: np.ndarray,
+    ) -> tuple[np.ndarray, torch.Tensor]:
+        poses_abs = build_abs_pose_from_components(positions, euler_xyz, "euler_xyz")
+        poses_abs[:, :3, :3] = poses_abs[:, :3, :3] @ _ROBOMIND_FRANKA_TO_OPENCV
+        initial_pose = torch.from_numpy(poses_abs[0].copy()).float()
+        poses_rel = pose_abs_to_rel(poses_abs, rotation_format="rot6d", pose_convention=self._pose_convention)
+        return poses_rel, initial_pose
+
     def _build_raw_action(
         self,
         observation_rows: list[dict[str, Any]],
         action_rows: list[dict[str, Any]],
-    ) -> tuple[torch.Tensor, torch.Tensor]:
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         state = np.asarray([row[_STATE_FEATURE] for row in observation_rows], dtype=np.float32)
-        poses_abs = build_abs_pose_from_components(state[:, 0:3], state[:, 3:6], "euler_xyz")
-        poses_abs[:, :3, :3] = poses_abs[:, :3, :3] @ _DROID_TO_OPENCV
+        gripper = np.asarray([row[_ACTION_FEATURE] for row in action_rows], dtype=np.float32)
 
-        initial_pose = torch.from_numpy(poses_abs[0].copy()).float()
-        poses_rel = pose_abs_to_rel(poses_abs, rotation_format="rot6d", pose_convention=self._pose_convention)
-        gripper = np.asarray([row["action.gripper_position"] for row in action_rows], dtype=np.float32).reshape(-1, 1)
-        gripper = 1.0 - gripper
-        action = np.concatenate([poses_rel[-self._chunk_length :], gripper[-self._chunk_length :]], axis=-1)
-        return torch.from_numpy(action).float(), initial_pose
+        poses_rel_left, initial_pose_left = self._build_relative_poses(state[:, 0:3], state[:, 3:6])
+        poses_rel_right, initial_pose_right = self._build_relative_poses(state[:, 6:9], state[:, 9:12])
+        action = np.concatenate(
+            [
+                poses_rel_left[-self._chunk_length :],
+                1.0 - gripper[-self._chunk_length :, [7]],
+                poses_rel_right[-self._chunk_length :],
+                1.0 - gripper[-self._chunk_length :, [15]],
+            ],
+            axis=-1,
+        )
+        return torch.from_numpy(action).float(), initial_pose_left, initial_pose_right
 
     def _build_result(
         self,
@@ -233,7 +284,7 @@ class DROIDLeRobotDataset(Dataset):
         ai_caption: str,
         **extras: Any,
     ) -> dict[str, Any]:
-        spec = build_action_spec(Pos(), Rot("rot6d"), Gripper())
+        spec = _dual_arm_action_spec()
         idle_frames = compute_idle_frames(
             action,
             spec,
@@ -243,7 +294,7 @@ class DROIDLeRobotDataset(Dataset):
             joint_threshold=5e-3 / self._fps,
             min_streak=3,
         )
-        normalized_action = normalize_action(action, "quantile", self._load_norm_stats())
+        normalized_action = normalize_action(action, "quantile_rot", self._load_norm_stats())
         formatted_video = (video * 255.0).clamp(0.0, 255.0).to(torch.uint8).permute(1, 0, 2, 3)
         return {
             "ai_caption": ai_caption,
@@ -262,7 +313,7 @@ class DROIDLeRobotDataset(Dataset):
         """Return action normalization stats for this dataset as torch tensors."""
         return {
             key: torch.from_numpy(value).float()
-            for key, value in load_action_stats(str(_NORMALIZER_PATH)).items()
+            for key, value in load_action_stats(str(_NORMALIZER_PATH), stats_key="global_raw").items()
         }
 
     def _load_norm_stats(self) -> dict[str, torch.Tensor]:
@@ -271,4 +322,4 @@ class DROIDLeRobotDataset(Dataset):
         return self._norm_stats
 
     def __len__(self) -> int:
-        return max(0, len(self._rows) - self._chunk_length)
+        return max(0, (len(self._rows) - self._chunk_length + self._sample_stride - 1) // self._sample_stride)
