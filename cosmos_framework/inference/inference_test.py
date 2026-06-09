@@ -169,6 +169,7 @@ def _make_reasoner_sample_args(**overrides: Any) -> SimpleNamespace:
         model_mode=ModelMode.REASONER,
         prompt="Describe a robotic arm.",
         vision_path=None,
+        video_fps=None,
         max_new_tokens=8,
         do_sample=False,
         temperature=1.0,
@@ -189,7 +190,11 @@ def test_get_sample_data_reasoner_text_only() -> None:
 
     out = inference.get_sample_data(sample_args, model, device="cpu")
 
-    assert out == {"caption": ["Describe a robotic arm."], "reasoner_images": [None]}
+    assert out == {
+        "caption": ["Describe a robotic arm."],
+        "reasoner_images": [None],
+        "reasoner_videos": [None],
+    }
 
 
 @pytest.mark.L0
@@ -205,11 +210,33 @@ def test_get_sample_data_reasoner_with_image(tmp_path: Path) -> None:
 
     out = inference.get_sample_data(sample_args, model, device="cpu")
 
-    assert list(out) == ["caption", "reasoner_images"]
+    assert list(out) == ["caption", "reasoner_images", "reasoner_videos"]
     assert out["caption"] == ["Describe a robotic arm."]
+    assert out["reasoner_videos"] == [None]
     assert len(out["reasoner_images"]) == 1
     assert out["reasoner_images"][0].size == (8, 8)
     assert out["reasoner_images"][0].mode == "RGB"
+
+
+@pytest.mark.L0
+def test_get_sample_data_reasoner_with_video(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A video ``vision_path`` routes through ``_decode_reasoner_video`` into ``reasoner_videos``.
+
+    The decoder is monkeypatched (real decode needs torchvision + an actual clip);
+    this asserts the routing/contract, not the decode itself."""
+    from cosmos_framework.inference import inference
+
+    decoded = {"frames": ["F0", "F1"], "fps": 2.0}
+    monkeypatch.setattr(inference, "_decode_reasoner_video", lambda path, fps: decoded)
+    model = SimpleNamespace(input_caption_key="caption")
+    sample_args = _make_reasoner_sample_args(vision_path="/tmp/clip.mp4", video_fps=2.0)
+
+    out = inference.get_sample_data(sample_args, model, device="cpu")
+
+    assert out["caption"] == ["Describe a robotic arm."]
+    assert out["reasoner_videos"] == [decoded]
+    assert out["reasoner_images"] == [None]
+    assert "video_sampling_kwargs" not in out
 
 
 @pytest.mark.L0
@@ -351,39 +378,3 @@ def test_reasoner_defaults_validate_against_overrides() -> None:
     OmniSampleOverrides.model_validate(filtered)
 
 
-# ---------------------------------------------------------------------------
-# _get_reasoner_sample_data: image / video / text-only routing
-# ---------------------------------------------------------------------------
-
-
-def _fake_sa(vision_path: Any, **video_kw: Any) -> SimpleNamespace:
-    base: dict[str, Any] = dict(prompt="describe", vision_path=vision_path, video_fps=None)
-    base.update(video_kw)
-    return SimpleNamespace(**base)
-
-
-_fake_model = SimpleNamespace(input_caption_key="caption")
-
-
-@pytest.mark.L0
-def test_reasoner_sample_data_text_only() -> None:
-    from cosmos_framework.inference.inference import _get_reasoner_sample_data
-
-    out = _get_reasoner_sample_data(_fake_sa(None), _fake_model)
-    assert out["caption"] == ["describe"]
-    assert out["reasoner_images"] == [None]
-    assert out["reasoner_videos"] == [None]
-
-
-@pytest.mark.L0
-def test_reasoner_sample_data_video_routes_to_videos(monkeypatch: pytest.MonkeyPatch) -> None:
-    import cosmos_framework.inference.inference as inf
-    from cosmos_framework.inference.inference import _get_reasoner_sample_data
-
-    sentinel = {"frames": ["F0", "F1"], "fps": 2.0}
-    monkeypatch.setattr(inf, "_decode_reasoner_video", lambda path, fps: sentinel)
-    out = _get_reasoner_sample_data(_fake_sa("/tmp/clip.mp4", video_fps=2.0), _fake_model)
-    assert out["caption"] == ["describe"]
-    assert out["reasoner_videos"] == [sentinel]
-    assert out["reasoner_images"] == [None]
-    assert "video_sampling_kwargs" not in out
