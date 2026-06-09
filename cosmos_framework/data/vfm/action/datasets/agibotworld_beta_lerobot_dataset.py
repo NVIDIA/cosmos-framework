@@ -1,21 +1,17 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: OpenMDW-1.1
 
-"""Minimal AgiBotWorld-Beta LeRobot dataset for Cosmos Action examples."""
+"""AgiBotWorld-Beta LeRobot dataset."""
 
 from __future__ import annotations
 
-import json
-import random
 from pathlib import Path
 from typing import Any, Literal
 
 import numpy as np
-import pyarrow.parquet as pq
 import torch
 import torch.nn.functional as F
 from lerobot.datasets.video_utils import decode_video_frames
-from torch.utils.data import Dataset
 
 from cosmos_framework.data.vfm.action.agibot_gear_fk import (
     AGIBOT_GEAR_GRIPPER_TO_OPENCV_BY_WRIST,
@@ -24,9 +20,9 @@ from cosmos_framework.data.vfm.action.agibot_gear_fk import (
     compute_fk_transforms_batch,
     convert_gripper_state_to_open_fraction,
 )
-from cosmos_framework.data.vfm.action.action_normalization import load_action_stats, normalize_action
+from cosmos_framework.data.vfm.action.action_normalization import load_action_stats
 from cosmos_framework.data.vfm.action.action_spec import Gripper, Pos, Rot, build_action_spec
-from cosmos_framework.data.vfm.action.domain_utils import get_domain_id
+from cosmos_framework.data.vfm.action.datasets.base_dataset import ActionBaseDataset
 from cosmos_framework.data.vfm.action.pose_utils import pose_abs_to_rel
 
 PoseConvention = Literal["backward_framewise"]
@@ -44,8 +40,7 @@ _WAIST_KEY = "observation.states.waist.position"
 _ROBOT_POSITION_KEY = "observation.states.robot.position"
 _ROBOT_ORIENTATION_KEY = "observation.states.robot.orientation"
 
-_NORMALIZER_PATH = Path(__file__).parent / "agibotworld_beta_lerobot_normalization.json"
-_MODE_CHOICES = ("forward_dynamics", "inverse_dynamics", "policy")
+_NORMALIZER_PATH = Path(__file__).parent / "stats/agibotworld_beta_lerobot_stats.json"
 
 
 def _split_task_for_caption(task: str) -> tuple[str, str]:
@@ -70,7 +65,38 @@ def _assemble_agibot_gear_state(
     return np.concatenate([joint_pos, effector_pos, body_head], axis=-1).astype(np.float32, copy=False)
 
 
-class AgiBotWorldBetaLeRobotDataset(Dataset):
+def _compute_idle_frames_agibot(action: torch.Tensor) -> int:
+    """Small local idle-frame helper for the 29D AgiBot FK layout.
+
+    The shared `compute_idle_frames` expects one rotation group after each
+    position block; AgiBot's action spec has three such groups plus grippers.
+    For cookbook inference, idle frames are metadata only, so this conservative
+    implementation marks the initial low-motion streak length.
+    """
+
+    if action.numel() == 0:
+        return 0
+    abs_action = action.detach().abs()
+    motion = torch.cat(
+        [
+            abs_action[:, 0:3],
+            abs_action[:, 9:12],
+            abs_action[:, 18:21],
+            abs_action[:, 18:19].diff(dim=0, prepend=abs_action[0:1, 18:19]),
+            abs_action[:, 28:29].diff(dim=0, prepend=abs_action[0:1, 28:29]),
+        ],
+        dim=-1,
+    ).amax(dim=-1)
+    below = motion < 1e-3
+    count = 0
+    for value in below.tolist():
+        if not value:
+            break
+        count += 1
+    return count
+
+
+class AgiBotWorldBetaLeRobotDataset(ActionBaseDataset):
     """AgiBotWorld-Beta dataset with FK-pose 29D actions.
 
     Action layout matches the AgiBot GEAR gripper normalizer:
@@ -83,6 +109,7 @@ class AgiBotWorldBetaLeRobotDataset(Dataset):
     wrist views resized and concatenated on the bottom.
     """
 
+
     def __init__(
         self,
         root: str,
@@ -94,42 +121,18 @@ class AgiBotWorldBetaLeRobotDataset(Dataset):
         viewpoint: Viewpoint = "concat_view",
         sample_stride: int = 1,
     ) -> None:
-        super().__init__()
-        if pose_convention != "backward_framewise":
-            raise NotImplementedError("This minimal AgiBotWorld-Beta dataset only supports backward_framewise.")
         if viewpoint not in ("concat_view", "ego_view"):
             raise NotImplementedError("Supported viewpoints are concat_view and ego_view.")
-
-        self._root = Path(root)
-        self._fps = float(fps)
-        self._chunk_length = int(chunk_length)
-        self._sample_stride = int(sample_stride)
-        if self._sample_stride < 1:
-            raise ValueError(f"sample_stride must be >= 1, got {self._sample_stride}")
-        self._mode = mode
-        self._pose_convention = pose_convention
-        self._tolerance_s = float(tolerance_s)
-        self._viewpoint = viewpoint
-        self._domain_id = get_domain_id("agibot_gear_gripper")
-        self._norm_stats: dict[str, torch.Tensor] | None = None
-
-        self._info = json.loads((self._root / "meta" / "info.json").read_text())
-        self._episodes = {
-            int(row["episode_index"]): row
-            for path in sorted((self._root / "meta" / "episodes").glob("chunk-*/file-*.parquet"))
-            for row in pq.read_table(path).to_pylist()
-        }
-        self._tasks = {
-            int(row["task_index"]): str(row["task"])
-            for row in pq.read_table(self._root / "meta" / "tasks.parquet").to_pylist()
-        }
-        self._rows = sorted(
-            (
-                row
-                for path in sorted((self._root / "data").glob("chunk-*/file-*.parquet"))
-                for row in pq.read_table(path).to_pylist()
-            ),
-            key=lambda row: int(row["index"]),
+        super().__init__(
+            root=root,
+            domain_name="agibot_gear_gripper",
+            fps=fps,
+            chunk_length=chunk_length,
+            mode=mode,
+            pose_convention=pose_convention,
+            tolerance_s=tolerance_s,
+            viewpoint=viewpoint,
+            sample_stride=sample_stride,
         )
         self._rows_by_episode: dict[int, list[dict[str, Any]]] = {}
         for row in self._rows:
@@ -138,26 +141,6 @@ class AgiBotWorldBetaLeRobotDataset(Dataset):
             episode_id: np.asarray([float(row["timestamp"]) for row in rows], dtype=np.float64)
             for episode_id, rows in self._rows_by_episode.items()
         }
-
-    @property
-    def fps(self) -> float:
-        return self._fps
-
-    @property
-    def chunk_length(self) -> int:
-        return self._chunk_length
-
-    @property
-    def mode(self) -> str:
-        return self._mode
-
-    @mode.setter
-    def mode(self, value: str) -> None:
-        self._mode = value
-
-    @property
-    def domain_id(self) -> int:
-        return self._domain_id
 
     @property
     def action_dim(self) -> int:
@@ -176,10 +159,16 @@ class AgiBotWorldBetaLeRobotDataset(Dataset):
             Gripper(prefix="left"),
         ).names
 
-    def _choose_mode(self) -> str:
-        if self._mode == "joint":
-            return random.choice(_MODE_CHOICES)
-        return self._mode
+    @classmethod
+    def load_action_stats(cls) -> dict[str, torch.Tensor]:
+        """Return action normalization stats for this dataset as torch tensors."""
+        return {
+            key: torch.from_numpy(value).float()
+            for key, value in load_action_stats(str(_NORMALIZER_PATH), stats_key="global_raw").items()
+        }
+
+    def _compute_idle_frames(self, action: torch.Tensor) -> int:
+        return _compute_idle_frames_agibot(action)
 
     def __len__(self) -> int:
         return max(0, (len(self._rows) - self._chunk_length + self._sample_stride - 1) // self._sample_stride)
@@ -204,7 +193,14 @@ class AgiBotWorldBetaLeRobotDataset(Dataset):
         if debug_caption:
             extras["debug_caption"] = debug_caption
 
-        return self._build_result(mode=mode, video=video, action=action, ai_caption=ai_caption, **extras)
+        return self._build_result(
+            mode=mode,
+            video=video,
+            action=action,
+            ai_caption=ai_caption,
+            action_spec_names=self.action_names,
+            **extras,
+        )
 
     def _select_observation_rows(self, start_row: dict[str, Any]) -> list[dict[str, Any]]:
         """Select T+1 rows at this wrapper's target FPS within one episode."""
@@ -247,28 +243,6 @@ class AgiBotWorldBetaLeRobotDataset(Dataset):
             self._tolerance_s,
         )
 
-    def _video_path(self, episode: dict[str, Any], video_key: str) -> Path:
-        chunk_idx = int(
-            episode.get(
-                f"videos/{video_key}/chunk_index",
-                episode.get(f"videos/{video_key}/episode_chunk", episode.get("data/chunk_index", 0)),
-            )
-        )
-        file_idx = int(
-            episode.get(
-                f"videos/{video_key}/file_index",
-                episode.get(f"videos/{video_key}/episode_file", episode.get("data/file_index", 0)),
-            )
-        )
-        rel = self._info["video_path"].format(
-            video_key=video_key,
-            chunk_index=chunk_idx,
-            file_index=file_idx,
-            episode_chunk=chunk_idx,
-            episode_file=file_idx,
-        )
-        return self._root / rel
-
     def _compose_multi_view(self, top: torch.Tensor, left: torch.Tensor, right: torch.Tensor) -> torch.Tensor:
         # Inputs are [T,C,H,W] float tensors in [0,1].
         _, _, h_top, w_top = top.shape
@@ -305,82 +279,3 @@ class AgiBotWorldBetaLeRobotDataset(Dataset):
             "initial_pose_left": torch.from_numpy(fk["left_wrist"][0].copy()).float(),
         }
         return torch.from_numpy(action_np).float(), extras
-
-    def _build_result(
-        self,
-        *,
-        mode: str,
-        video: torch.Tensor,
-        action: torch.Tensor,
-        ai_caption: str,
-        **extras: Any,
-    ) -> dict[str, Any]:
-        spec = build_action_spec(
-            Pos(prefix="head"),
-            Rot("rot6d", prefix="head"),
-            Pos(prefix="right"),
-            Rot("rot6d", prefix="right"),
-            Gripper(prefix="right"),
-            Pos(prefix="left"),
-            Rot("rot6d", prefix="left"),
-            Gripper(prefix="left"),
-        )
-        idle_frames = compute_idle_frames_agibot(action)
-        normalized_action = normalize_action(action, "quantile_rot", self._load_norm_stats())
-        formatted_video = (video * 255.0).clamp(0.0, 255.0).to(torch.uint8).permute(1, 0, 2, 3)
-        return {
-            "ai_caption": ai_caption,
-            "video": formatted_video,
-            "action": normalized_action,
-            "conditioning_fps": torch.tensor(self._fps, dtype=torch.long),
-            "mode": mode,
-            "domain_id": torch.tensor(self._domain_id, dtype=torch.long),
-            "viewpoint": self._viewpoint,
-            "idle_frames": torch.tensor(idle_frames, dtype=torch.long),
-            "action_spec_names": spec.names,
-            **extras,
-        }
-
-    @classmethod
-    def load_action_stats(cls) -> dict[str, torch.Tensor]:
-        """Return action normalization stats for this dataset as torch tensors."""
-        return {
-            key: torch.from_numpy(value).float()
-            for key, value in load_action_stats(str(_NORMALIZER_PATH), stats_key="global_raw").items()
-        }
-
-    def _load_norm_stats(self) -> dict[str, torch.Tensor]:
-        if self._norm_stats is None:
-            self._norm_stats = self.load_action_stats()
-        return self._norm_stats
-
-
-def compute_idle_frames_agibot(action: torch.Tensor) -> int:
-    """Small local idle-frame helper for the 29D AgiBot FK layout.
-
-    The shared `compute_idle_frames` expects one rotation group after each
-    position block; AgiBot's action spec has three such groups plus grippers.
-    For cookbook inference, idle frames are metadata only, so this conservative
-    implementation marks the initial low-motion streak length.
-    """
-
-    if action.numel() == 0:
-        return 0
-    abs_action = action.detach().abs()
-    motion = torch.cat(
-        [
-            abs_action[:, 0:3],
-            abs_action[:, 9:12],
-            abs_action[:, 18:21],
-            abs_action[:, 18:19].diff(dim=0, prepend=abs_action[0:1, 18:19]),
-            abs_action[:, 28:29].diff(dim=0, prepend=abs_action[0:1, 28:29]),
-        ],
-        dim=-1,
-    ).amax(dim=-1)
-    below = motion < 1e-3
-    count = 0
-    for value in below.tolist():
-        if not value:
-            break
-        count += 1
-    return count

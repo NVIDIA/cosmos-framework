@@ -1,31 +1,22 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: OpenMDW-1.1
 
-"""Minimal RoboMIND Franka LeRobot dataset for Cosmos Action examples.
-
-This is a stripped-down counterpart of the internal RoboMIND Franka dataset
-wrapper. It intentionally keeps only the pieces needed by the cookbook asset:
-RoboMIND Franka dual-arm, concat-view video, backward-framewise rot6d actions,
-    and quantile-rotation action normalization.
-"""
+"""RoboMIND Franka LeRobot dataset."""
 
 from __future__ import annotations
 
-import json
 import random
 from pathlib import Path
 from typing import Any, Literal
 
 import numpy as np
-import pyarrow.parquet as pq
 import torch
 import torch.nn.functional as F
 from lerobot.datasets.video_utils import decode_video_frames
-from torch.utils.data import Dataset
 
-from cosmos_framework.data.vfm.action.action_normalization import load_action_stats, normalize_action
+from cosmos_framework.data.vfm.action.action_normalization import load_action_stats
 from cosmos_framework.data.vfm.action.action_spec import Gripper, Pos, Rot, build_action_spec
-from cosmos_framework.data.vfm.action.domain_utils import get_domain_id
+from cosmos_framework.data.vfm.action.datasets.base_dataset import ActionBaseDataset
 from cosmos_framework.data.vfm.action.pose_utils import (
     build_abs_pose_from_components,
     compute_idle_frames,
@@ -50,8 +41,7 @@ _ROBOMIND_FRANKA_TO_OPENCV: np.ndarray = np.array(
     dtype=np.float32,
 )
 
-_NORMALIZER_PATH = Path(__file__).parent / "robomind_franka_normalization.json"
-_MODE_CHOICES = ("forward_dynamics", "inverse_dynamics", "policy")
+_NORMALIZER_PATH = Path(__file__).parent / "stats/robomind_franka_stats.json"
 
 
 def _dual_arm_action_spec():
@@ -65,25 +55,20 @@ def _dual_arm_action_spec():
     )
 
 
-class RoboMINDFrankaDataset(Dataset):
-    """RoboMIND Franka dual-arm dataset matching Cosmos Action v1.2 defaults.
-
-    The supported action layout is 20D::
+class RoboMINDFrankaDataset(ActionBaseDataset):
+    """RoboMIND Franka dual-arm dataset with 20D cartesian actions::
 
         [left_pos_delta(3), left_rot6d_delta(6), left_gripper(1),
          right_pos_delta(3), right_rot6d_delta(6), right_gripper(1)]
 
-    Unsupported production features such as single-arm shards, split/filter
-    logic, image augmentation, fast initialization, and alternate viewpoints are
-    intentionally omitted to keep the cookbook dependency small and readable.
+    Single-arm shards, split/filter logic, image augmentation, fast
+    initialization, and alternate viewpoints are omitted.
     """
+
 
     def __init__(
         self,
-        root: str = (
-            "/lustre/fsw/portfolios/cosmos/projects/cosmos_base_training/"
-            "cosmos3_action_datasets/RoboMIND_20251228"
-        ),
+        root: str = "/path/to/cosmos3_action_datasets/RoboMIND_20251228",
         fps: float = 10.0,
         chunk_length: int = 16,
         mode: str = "joint",
@@ -93,67 +78,22 @@ class RoboMINDFrankaDataset(Dataset):
         viewpoint: Viewpoint = "concat_view",
         sample_stride: int = 1,
     ) -> None:
-        super().__init__()
         if embodiment_type != "robomind-franka-dual":
             raise NotImplementedError("This minimal RoboMIND dataset only supports robomind-franka-dual.")
-        if pose_convention != "backward_framewise":
-            raise NotImplementedError("This minimal RoboMIND dataset only supports backward_framewise pose deltas.")
         if viewpoint != "concat_view":
             raise NotImplementedError("This minimal RoboMIND dataset only supports concat_view.")
-
-        self._fps = float(fps)
-        self._dt = 1.0 / self._fps
-        self._chunk_length = int(chunk_length)
-        self._sample_stride = int(sample_stride)
-        if self._sample_stride < 1:
-            raise ValueError(f"sample_stride must be >= 1, got {self._sample_stride}")
-        self._mode = mode
         self._embodiment_type = embodiment_type
-        self._pose_convention = pose_convention
-        self._tolerance_s = float(tolerance_s)
-        self._viewpoint = viewpoint
-        self._domain_id = get_domain_id(embodiment_type)
-        self._norm_stats: dict[str, torch.Tensor] | None = None
-
-        self._root = Path(root)
-        self._info = json.loads((self._root / "meta" / "info.json").read_text())
-        self._episodes = {
-            int(row["episode_index"]): row
-            for path in sorted((self._root / "meta" / "episodes").glob("chunk-*/file-*.parquet"))
-            for row in pq.read_table(path).to_pylist()
-        }
-        self._tasks = {
-            int(row["task_index"]): str(row["task"])
-            for row in pq.read_table(self._root / "meta" / "tasks.parquet").to_pylist()
-        }
-        self._rows = sorted(
-            (
-                row
-                for path in sorted((self._root / "data").glob("chunk-*/file-*.parquet"))
-                for row in pq.read_table(path).to_pylist()
-            ),
-            key=lambda row: int(row["index"]),
+        super().__init__(
+            root=root,
+            domain_name=embodiment_type,
+            fps=fps,
+            chunk_length=chunk_length,
+            mode=mode,
+            pose_convention=pose_convention,
+            tolerance_s=tolerance_s,
+            viewpoint=viewpoint,
+            sample_stride=sample_stride,
         )
-
-    @property
-    def fps(self) -> float:
-        return self._fps
-
-    @property
-    def chunk_length(self) -> int:
-        return self._chunk_length
-
-    @property
-    def mode(self) -> str:
-        return self._mode
-
-    @mode.setter
-    def mode(self, value: str) -> None:
-        self._mode = value
-
-    @property
-    def domain_id(self) -> int:
-        return self._domain_id
 
     @property
     def action_dim(self) -> int:
@@ -163,10 +103,24 @@ class RoboMINDFrankaDataset(Dataset):
     def action_names(self) -> list[str]:
         return _dual_arm_action_spec().names
 
-    def _choose_mode(self) -> str:
-        if self._mode == "joint":
-            return random.choice(_MODE_CHOICES)
-        return self._mode
+    @classmethod
+    def load_action_stats(cls) -> dict[str, torch.Tensor]:
+        """Return action normalization stats for this dataset as torch tensors."""
+        return {
+            key: torch.from_numpy(value).float()
+            for key, value in load_action_stats(str(_NORMALIZER_PATH), stats_key="global_raw").items()
+        }
+
+    def _compute_idle_frames(self, action: torch.Tensor) -> int:
+        return compute_idle_frames(
+            action,
+            _dual_arm_action_spec(),
+            eps_t=5e-3 / self._fps,
+            eps_r=np.deg2rad(1.5) / self._fps,
+            eps_g=1e-2,
+            joint_threshold=5e-3 / self._fps,
+            min_streak=3,
+        )
 
     def __getitem__(self, idx: int) -> dict[str, Any]:
         mode = self._choose_mode()
@@ -221,28 +175,6 @@ class RoboMINDFrankaDataset(Dataset):
         bottom = torch.cat([left, right], dim=-1)
         return torch.cat([front, bottom], dim=-2)
 
-    def _video_path(self, episode: dict[str, Any], video_key: str) -> Path:
-        chunk_idx = int(
-            episode.get(
-                f"videos/{video_key}/chunk_index",
-                episode.get(f"videos/{video_key}/episode_chunk", episode.get("data/chunk_index", 0)),
-            )
-        )
-        file_idx = int(
-            episode.get(
-                f"videos/{video_key}/file_index",
-                episode.get(f"videos/{video_key}/episode_file", episode.get("data/file_index", 0)),
-            )
-        )
-        rel = self._info["video_path"].format(
-            video_key=video_key,
-            chunk_index=chunk_idx,
-            file_index=file_idx,
-            episode_chunk=chunk_idx,
-            episode_file=file_idx,
-        )
-        return self._root / rel
-
     def _build_relative_poses(
         self,
         positions: np.ndarray,
@@ -274,52 +206,3 @@ class RoboMINDFrankaDataset(Dataset):
             axis=-1,
         )
         return torch.from_numpy(action).float(), initial_pose_left, initial_pose_right
-
-    def _build_result(
-        self,
-        *,
-        mode: str,
-        video: torch.Tensor,
-        action: torch.Tensor,
-        ai_caption: str,
-        **extras: Any,
-    ) -> dict[str, Any]:
-        spec = _dual_arm_action_spec()
-        idle_frames = compute_idle_frames(
-            action,
-            spec,
-            eps_t=5e-3 / self._fps,
-            eps_r=np.deg2rad(1.5) / self._fps,
-            eps_g=1e-2,
-            joint_threshold=5e-3 / self._fps,
-            min_streak=3,
-        )
-        normalized_action = normalize_action(action, "quantile_rot", self._load_norm_stats())
-        formatted_video = (video * 255.0).clamp(0.0, 255.0).to(torch.uint8).permute(1, 0, 2, 3)
-        return {
-            "ai_caption": ai_caption,
-            "video": formatted_video,
-            "action": normalized_action,
-            "conditioning_fps": torch.tensor(self._fps, dtype=torch.long),
-            "mode": mode,
-            "domain_id": torch.tensor(self._domain_id, dtype=torch.long),
-            "viewpoint": self._viewpoint,
-            "idle_frames": torch.tensor(idle_frames, dtype=torch.long),
-            **extras,
-        }
-
-    @classmethod
-    def load_action_stats(cls) -> dict[str, torch.Tensor]:
-        """Return action normalization stats for this dataset as torch tensors."""
-        return {
-            key: torch.from_numpy(value).float()
-            for key, value in load_action_stats(str(_NORMALIZER_PATH), stats_key="global_raw").items()
-        }
-
-    def _load_norm_stats(self) -> dict[str, torch.Tensor]:
-        if self._norm_stats is None:
-            self._norm_stats = self.load_action_stats()
-        return self._norm_stats
-
-    def __len__(self) -> int:
-        return max(0, (len(self._rows) - self._chunk_length + self._sample_stride - 1) // self._sample_stride)
