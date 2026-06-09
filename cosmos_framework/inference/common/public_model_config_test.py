@@ -28,6 +28,10 @@ def test_public_model_config_round_trip_removes_internal_metadata():
                 "_type": "cosmos_framework.configs.base.defaults.activation_checkpointing.ActivationCheckpointingConfig",
                 "mode": "full",
             },
+            "compile": {
+                "_target_": "cosmos_framework.configs.base.defaults.compile.CompileConfig",
+                "enabled": False,
+            },
             "tokenizer": {
                 "_target_": "cosmos_framework.model.vfm.tokenizers.wan2pt2_vae_4x16x16.Wan2pt2VAEInterface",
                 "vae_path": "pretrained/tokenizers/video/wan2pt2/Wan2.2_VAE.pth",
@@ -56,6 +60,7 @@ def test_public_model_config_round_trip_removes_internal_metadata():
     assert not _has_key(public_model_config, "config_name")
     assert public_model_config["_target"] == "omni_mot_model"
     assert public_model_config["config"]["_type"] == "omni_mot_model_config"
+    assert public_model_config["config"]["compile"]["_target"] == "compile_config"
     assert "projects.cosmos3" not in text
     assert "projects/cosmos3" not in text
     assert "cosmos3._src" not in text
