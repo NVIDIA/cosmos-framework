@@ -236,7 +236,7 @@ class JointCosmosDataLoader:
     def set_start_iteration(self, iteration: int) -> None:
         """Restore deterministic selection sequence after checkpoint resume.
 
-        Called by ``JointDataLoaderStateCallback.load_state_dict`` and by the
+        Called by ``JointCosmosDataLoaderStateCallback.load_state_dict`` and by the
         trainer (if present) via ``hasattr`` guard.
         """
         self._global_id = iteration
