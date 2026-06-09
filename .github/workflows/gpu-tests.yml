@@ -121,9 +121,11 @@ jobs:
 
       # One inference call over t2vs (+sound), action policy, and forward_dynamics; checks each output.
       # MAX_GPUS defaults to 8. -s streams the live process log.
+      # Reuse the same input-asset cache dir as the unittest job.
       - name: Nano inference smoke (t2vs + action policy + forward_dynamics, 8 GPU)
         run: |
           export LD_LIBRARY_PATH=
+          export COSMOS_DOWNLOAD_CACHE_DIR="$RUNNER_WORKSPACE/cosmos_input_cache"
           uv run --all-extras --group=cu128-train python -m pytest -v -s \
             tests/nano_inference_smoke_test.py --num-gpus=8 --levels=2 -o addopts=
 
@@ -193,9 +195,12 @@ jobs:
       # is absent (via RunIf / pytest.skip guards), so this is green without
       # internal credentials; provide the credential file on the runner to
       # exercise them. New tests are picked up automatically (no markers/lists).
+      # Cache downloaded input assets in a persistent dir (outside the repo tree,
+      # so the cleanup step keeps it) and reuse it across runs.
       - name: Unit tests
         run: |
           export LD_LIBRARY_PATH=
+          export COSMOS_DOWNLOAD_CACHE_DIR="$RUNNER_WORKSPACE/cosmos_input_cache"
           uv run --all-extras --group=cu128-train python -m pytest -v -s \
             cosmos_framework/ -o addopts=
 
