@@ -50,13 +50,7 @@ class DataLoaderStateCallback(Callback):
             ):
                 self.state[worker_id] = NoReplaceShardlistState(epoch=epoch, index=index)
 
-    # NOTE: ``distributor_type`` here selects the *resume-state strategy*, NOT the
-    # dataflow ``DataDistributor`` role (cosmos_framework.data.vfm.dataflow). Values:
-    #   "with_replace" / "no_replace" — legacy WebDataset shardlist strategies;
-    #   "cosmos_dataloader"           — CosmosDataLoader's env-var fast-forward
-    #                                   (MapDistributor reads COSMOS_DL_STATE_* on resume).
-    # Only the values listed below actually persist/restore dataloader position.
-    _ACTIVE_DISTRIBUTOR_TYPES = ("no_replace", "cosmos_dataloader")
+    _ACTIVE_DISTRIBUTOR_TYPES = ("no_replace", "data_packer")
 
     def on_training_step_batch_end(
         self,
@@ -110,18 +104,18 @@ class DataLoaderStateCallback(Callback):
             return
 
         self.state = {}
-        # Build env var prefix. For cosmos_dataloader, namespacing avoids conflicts
-        # when multiple CosmosDataLoader instances share the same process
-        # (e.g. inside JointCosmosDataLoader). name="" → original format.
-        _dp_pfx = f"COSMOS_DL_STATE_{self.name}_" if self.name else "COSMOS_DL_STATE_"
+        # Build env var prefix. For data_packer, namespacing avoids conflicts
+        # when multiple DataPackerDataLoader instances share the same process
+        # (e.g. inside JointDataPackerDataLoader). name="" → original format.
+        _dp_pfx = f"DP_STATE_{self.name}_" if self.name else "DP_STATE_"
         for worker_id, per_worker_state in state_dict.items():
             epoch = per_worker_state["epoch"]
             index = per_worker_state["index"]
             self.state[worker_id] = NoReplaceShardlistState(epoch=epoch, index=index)
-            if self.distributor_type == "cosmos_dataloader":
+            if self.distributor_type == "data_packer":
                 os.environ[f"{_dp_pfx}WORKER_{worker_id}_EPOCH"] = str(epoch)
                 os.environ[f"{_dp_pfx}WORKER_{worker_id}_INDEX"] = str(index)
-                log.info(f"Loaded cosmos_dataloader dataloader state for worker {worker_id}: epoch={epoch}, index={index}")
+                log.info(f"Loaded data_packer dataloader state for worker {worker_id}: epoch={epoch}, index={index}")
             else:
                 os.environ[f"NSL_STATE_WORKER_{worker_id}_EPOCH"] = str(epoch)
                 os.environ[f"NSL_STATE_WORKER_{worker_id}_INDEX"] = str(index)
@@ -129,7 +123,7 @@ class DataLoaderStateCallback(Callback):
 
 
 class JointDataLoaderStateCallback(Callback):
-    """Checkpoint/resume state for ``JointCosmosDataLoader``.
+    """Checkpoint/resume state for ``JointDataPackerDataLoader``.
 
     Manages two levels of state in a single DCP checkpoint entry
     (``checkpoint_component = "dataloader"``):
@@ -146,11 +140,11 @@ class JointDataLoaderStateCallback(Callback):
 
     Usage in experiment configs::
 
-        joint_loader = JointCosmosDataLoader(dataloaders={...}, seed=42)
+        joint_loader = JointDataPackerDataLoader(dataloaders={...}, seed=42)
         exp["dataloader_train"] = joint_loader
         exp["trainer"]["callbacks"]["dataloader_state"] = JointDataLoaderStateCallback(
             outer_loader=joint_loader,
-            distributor_type="cosmos_dataloader",
+            distributor_type="data_packer",
         )
 
     The ``checkpoint_component = "dataloader"`` class attribute ensures the DCP
@@ -165,7 +159,7 @@ class JointDataLoaderStateCallback(Callback):
     def __init__(
         self,
         outer_loader: Any,
-        distributor_type: str = "cosmos_dataloader",
+        distributor_type: str = "data_packer",
     ) -> None:
         super().__init__()
         self._outer = outer_loader
@@ -199,7 +193,7 @@ class JointDataLoaderStateCallback(Callback):
         iteration: int = 0,
     ) -> None:
         if self.config and iteration % self.config.trainer.logging_iter == 0:
-            msg = f"\nJointCosmosDataLoader global_id={self._outer._global_id}\n"
+            msg = f"\nJointDataPackerDataLoader global_id={self._outer._global_id}\n"
             for name, cb in self._inner.items():
                 for wid, state in cb.state.items():
                     msg += f"  [{name}] worker {wid}: epoch={state.epoch}, index={state.index}\n"

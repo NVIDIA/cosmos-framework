@@ -2,13 +2,13 @@
 # SPDX-License-Identifier: OpenMDW-1.1
 
 """Checkpoint->restart resume parity for CosmosDataLoader(MapDistributor) using
-the real DataLoaderStateCallback (unchanged). Single process, num_workers=0."""
+CosmosDataLoaderStateCallback. Single process, num_workers=0."""
 
 from __future__ import annotations
 
 import torch
 
-from cosmos_framework.callbacks.dataloader_state import DataLoaderStateCallback
+from cosmos_framework.callbacks.cosmos_dataloader_state import CosmosDataLoaderStateCallback
 from cosmos_framework.data.vfm.dataflow import (
     CosmosDataLoader,
     IdentityProcessor,
@@ -37,7 +37,7 @@ def _build(seed=0):
 
 
 def test_resume_continues_without_dup_or_skip():
-    cb = DataLoaderStateCallback(distributor_type="cosmos_dataloader")
+    cb = CosmosDataLoaderStateCallback()
     loader = _build()
     it = iter(loader)
     seen_ids = []
@@ -49,7 +49,7 @@ def test_resume_continues_without_dup_or_skip():
 
     state = cb.state_dict()
     assert state[0]["index"] == 4
-    cb2 = DataLoaderStateCallback(distributor_type="cosmos_dataloader")
+    cb2 = CosmosDataLoaderStateCallback()
     cb2.load_state_dict(state)
 
     loader2 = _build()

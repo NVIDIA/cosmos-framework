@@ -62,7 +62,7 @@ from cosmos_framework.data.vfm.dataflow import (
 from cosmos_framework.data.vfm.processors import build_processor
 from cosmos_framework.utils.vlm.constant import IGNORE_INDEX
 from cosmos_framework.configs.base.vlm.experiment.dataflow_roles import VLMProcessor, VLMCollator
-from cosmos_framework.callbacks.dataloader_state import DataLoaderStateCallback
+from cosmos_framework.callbacks.cosmos_dataloader_state import CosmosDataLoaderStateCallback
 
 cs = ConfigStore.instance()
 
@@ -250,20 +250,17 @@ cs.store(
 # IterableDistributor for a MapDistributor over a real on-disk Dataset
 # (get_llava_ov_map, streaming=False), which gives exact per-worker (epoch,
 # index) checkpoint/resume. It therefore also: wires the dataloader_state
-# callback with distributor_type="cosmos_dataloader" (sets COSMOS_DL_STATE_*
-# env vars on resume so MapDistributor fast-forwards), enables checkpoint
-# saving (save_iter=100), and uses num_workers=0 to keep worker bookkeeping
-# simple. Every other block is reused verbatim from pre_exp012_llava_ov.
+# CosmosDataLoaderStateCallback (sets COSMOS_DL_STATE_* env vars on resume so
+# MapDistributor fast-forwards), enables checkpoint saving (save_iter=100), and
+# uses num_workers=0 to keep worker bookkeeping simple. Every other block is
+# reused verbatim from pre_exp012_llava_ov.
 # ---------------------------------------------------------------------------
 pre_exp012_llava_ov_mapstyle_dataloader = copy.deepcopy(pre_exp012_llava_ov)
 pre_exp012_llava_ov_mapstyle_dataloader.job.name = (
     "pre_exp012_llava_ov_mapstyle_dataloader_${now:%Y-%m-%d}_${now:%H-%M-%S}"
 )
-# Activate dataloader-state resume. We cannot set data_setting.distributor_type
-# (its attrs validator only accepts "with_replace"/"no_replace"), so override
-# the callback directly; it merges over the basic_log callbacks group.
 pre_exp012_llava_ov_mapstyle_dataloader.trainer.callbacks = dict(
-    dataloader_state=L(DataLoaderStateCallback)(distributor_type="cosmos_dataloader"),
+    dataloader_state=L(CosmosDataLoaderStateCallback)(),
 )
 pre_exp012_llava_ov_mapstyle_dataloader.checkpoint.save_iter = 100
 pre_exp012_llava_ov_mapstyle_dataloader.dataloader_train = L(CosmosDataLoader)(
