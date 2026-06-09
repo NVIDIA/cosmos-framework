@@ -133,21 +133,41 @@ class ImageioVideoHandler(BaseFileHandler):
             obj = obj.cpu().numpy()
         h, w = obj.shape[1:-1]
 
+        # Encode as universally playable H.264: yuv420p chroma + a finite CRF.
+        #
+        # We deliberately bypass imageio-ffmpeg's `quality` knob here. At its top
+        # setting (quality=10, used for action rollouts) it requests *lossless*
+        # x264, and lossless x264 is only available under the "High 4:4:4
+        # Predictive" profile. The result is a file whose pixels are yuv420p but
+        # whose profile header advertises 4:4:4 — a mismatch that most players,
+        # browsers, and hardware decoders render as an all-black video.
+        #
+        # Forcing `-crf 18` (visually lossless) keeps the encode out of lossless
+        # mode, so x264 emits a standard "High" profile that plays everywhere.
+        compat_output_params = ["-pix_fmt", "yuv420p", "-crf", "18"]
+
         # Default ffmpeg params that ensure width and height are set
         default_ffmpeg_params = ["-s", f"{w}x{h}"]
 
         # Use provided ffmpeg_params if any, otherwise use defaults
         final_ffmpeg_params = ffmpeg_params if ffmpeg_params is not None else default_ffmpeg_params
+        final_ffmpeg_params = list(final_ffmpeg_params) + compat_output_params
 
         mimsave_kwargs = {
             "fps": fps,
-            "quality": quality,
             "macro_block_size": 1,
+            "codec": "libx264",
+            # Output pixel format is set via `-pix_fmt` in `compat_output_params`
+            # below; we don't pass `pixelformat` here to avoid a duplicate
+            # `-pix_fmt` on the ffmpeg command line.
             "ffmpeg_params": final_ffmpeg_params,
             "output_params": ["-f", "mp4"],
         }
         # Update with any other kwargs
         mimsave_kwargs.update(kwargs)
+        # Drop the caller's `quality` so it can't reintroduce lossless x264 and the
+        # broken 4:4:4 profile; our explicit `-crf` governs quality instead.
+        mimsave_kwargs.pop("quality", None)
         log.debug(f"mimsave_kwargs: {mimsave_kwargs}")
 
         imageio.mimsave(file, obj, format, **mimsave_kwargs)
