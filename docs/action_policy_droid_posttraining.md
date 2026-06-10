@@ -55,6 +55,7 @@ The OSS flow mirrors the other recipes (see [docs/training.md](./training.md)):
 
 ```shell
 # Step 1: prepare DROID LeRobot v3.0 success split -> $DATASET_PATH (see "Inputs you provide")
+
 # Step 2: convert the base checkpoint -> $BASE_CHECKPOINT_PATH
 python -m cosmos_framework.scripts.convert_model_to_dcp \
   -o $BASE_CHECKPOINT_PATH --checkpoint-path Cosmos3-Nano
