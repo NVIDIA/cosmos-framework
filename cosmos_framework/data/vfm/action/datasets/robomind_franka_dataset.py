@@ -14,7 +14,6 @@ import torch
 import torch.nn.functional as F
 from lerobot.datasets.video_utils import decode_video_frames
 
-from cosmos_framework.data.vfm.action.action_normalization import load_action_stats
 from cosmos_framework.data.vfm.action.action_spec import Gripper, Pos, Rot, build_action_spec
 from cosmos_framework.data.vfm.action.datasets.base_dataset import ActionBaseDataset
 from cosmos_framework.data.vfm.action.pose_utils import (
@@ -104,12 +103,8 @@ class RoboMINDFrankaDataset(ActionBaseDataset):
         return _dual_arm_action_spec().names
 
     @classmethod
-    def load_action_stats(cls) -> dict[str, torch.Tensor]:
-        """Return action normalization stats for this dataset as torch tensors."""
-        return {
-            key: torch.from_numpy(value).float()
-            for key, value in load_action_stats(str(_NORMALIZER_PATH), stats_key="global_raw").items()
-        }
+    def _stats_path(cls) -> Path:
+        return _NORMALIZER_PATH
 
     def _compute_idle_frames(self, action: torch.Tensor) -> int:
         return compute_idle_frames(

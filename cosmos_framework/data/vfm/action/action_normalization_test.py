@@ -51,22 +51,6 @@ def test_load_action_stats_flat(tmp_path):
         np.testing.assert_array_equal(value, np.array(_RAW_STATS[key], dtype=np.float32))
 
 
-def test_load_action_stats_nested_key(tmp_path):
-    nested = {"global_raw": _RAW_STATS, "other": {"mean": [99.0]}}
-    p = tmp_path / "stats.json"
-    p.write_text(json.dumps(nested))
-    result = load_action_stats(str(p), stats_key="global_raw")
-    assert set(result) == set(_RAW_STATS)
-
-
-def test_load_action_stats_default_global_key(tmp_path):
-    nested = {"global": _RAW_STATS}
-    p = tmp_path / "stats.json"
-    p.write_text(json.dumps(nested))
-    result = load_action_stats(str(p))
-    assert "mean" in result
-
-
 def test_load_action_stats_filters_unknown_keys(tmp_path):
     raw = {**_RAW_STATS, "extra_field": [1.0, 2.0]}
     p = tmp_path / "stats.json"
@@ -78,20 +62,6 @@ def test_load_action_stats_filters_unknown_keys(tmp_path):
 def test_load_action_stats_missing_file():
     with pytest.raises(FileNotFoundError):
         load_action_stats("/nonexistent/path/stats.json")
-
-
-def test_load_action_stats_missing_key_raises(tmp_path):
-    p = tmp_path / "stats.json"
-    p.write_text(json.dumps({"other_key": _RAW_STATS}))
-    with pytest.raises(KeyError):
-        load_action_stats(str(p), stats_key="missing_key")
-
-
-def test_load_action_stats_non_dict_block_raises(tmp_path):
-    p = tmp_path / "stats.json"
-    p.write_text(json.dumps({"global": [1.0, 2.0]}))
-    with pytest.raises(TypeError):
-        load_action_stats(str(p))
 
 
 # ---------------------------------------------------------------------------

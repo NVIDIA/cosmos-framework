@@ -12,7 +12,7 @@ import torch
 from cosmos_framework.utils import log
 
 
-def load_action_stats(stats_path: str, stats_key: str = "global") -> dict[str, np.ndarray]:
+def load_action_stats(stats_path: str) -> dict[str, np.ndarray]:
     """Load pre-computed action normalization stats from a JSON file."""
     path = Path(stats_path)
     if not path.exists():
@@ -20,12 +20,6 @@ def load_action_stats(stats_path: str, stats_key: str = "global") -> dict[str, n
     log.info(f"Loading action normalization stats from {stats_path}")
     with path.open("r") as f:
         raw = json.load(f)
-    if stats_key in raw:
-        raw = raw[stats_key]
-        if not isinstance(raw, dict):
-            raise TypeError(f"Action normalization stats block {stats_key!r} in {stats_path} must be a dict.")
-    elif stats_key != "global":
-        raise KeyError(f"Action normalization stats block {stats_key!r} not found in {stats_path}.")
     stat_keys = {"mean", "std", "min", "max", "q01", "q99"}
     return {key: np.array(value, dtype=np.float32) for key, value in raw.items() if key in stat_keys}
 

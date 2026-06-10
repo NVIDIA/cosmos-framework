@@ -17,6 +17,7 @@ from torch.utils.data import Dataset
 
 from cosmos_framework.data.vfm.action.action_normalization import normalize_action
 from cosmos_framework.data.vfm.action.domain_utils import get_domain_id
+from cosmos_framework.data.vfm.action.action_normalization import load_action_stats
 
 _MODE_CHOICES = ("forward_dynamics", "inverse_dynamics", "policy")
 
@@ -109,7 +110,17 @@ class ActionBaseDataset(ABC, Dataset):
 
     @classmethod
     @abstractmethod
-    def load_action_stats(cls) -> dict[str, torch.Tensor]: ...
+    def _stats_path(cls) -> Path:
+        """Return the path to the stats JSON file for this dataset."""
+        ...
+
+    @classmethod
+    def load_action_stats(cls) -> dict[str, torch.Tensor]:
+        """Return action normalization stats for this dataset as torch tensors."""
+        return {
+            key: torch.from_numpy(value).float()
+            for key, value in load_action_stats(str(cls._stats_path())).items()
+        }
 
     @abstractmethod
     def __getitem__(self, idx: int) -> dict[str, Any]: ...
