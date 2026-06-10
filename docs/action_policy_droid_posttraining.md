@@ -88,7 +88,7 @@ before any large allocation.
 - Saved every `save_iter` iters (1000 in the validated run) to the object store, at
   `<bucket>/<project>/<group>/<job.name>/checkpoints/iter_<N>/`.
 - The run is **resumable** from the latest checkpoint (re-launch with the same `job.name`).
-- Export to HF safetensors via `cosmos_framework.scripts.export_model` (see training.md).
+- Export to HF safetensors via `cosmos_framework.scripts.export_model` (see [docs/training.md](./training.md)).
 
 ## Non-goals
 
