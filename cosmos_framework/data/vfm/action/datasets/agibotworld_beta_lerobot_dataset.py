@@ -124,7 +124,7 @@ class AgiBotWorldBetaLeRobotDataset(ActionBaseDataset):
             raise NotImplementedError("Supported viewpoints are concat_view and ego_view.")
         super().__init__(
             root=root,
-            domain_name="agibot_gear_gripper",
+            domain_name="agibotworld",
             fps=fps,
             chunk_length=chunk_length,
             mode=mode,
