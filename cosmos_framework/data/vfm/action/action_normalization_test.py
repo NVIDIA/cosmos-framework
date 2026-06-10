@@ -79,39 +79,58 @@ def test_round_trip(method):
 
 
 # ---------------------------------------------------------------------------
-# normalize_action — correctness
+# normalize_action — endpoint correctness
 # ---------------------------------------------------------------------------
 
 
 def test_normalize_quantile_endpoints():
-    # q01 maps to -1, q99 maps to +1
     stats = _tensor_stats()
-    q01 = stats["q01"]
-    q99 = stats["q99"]
+    q01, q99 = stats["q01"], stats["q99"]
     assert torch.allclose(normalize_action(q01.unsqueeze(0), "quantile", stats), torch.full((1, 3), -1.0))
     assert torch.allclose(normalize_action(q99.unsqueeze(0), "quantile", stats), torch.full((1, 3), 1.0))
 
 
 def test_normalize_minmax_endpoints():
     stats = _tensor_stats()
-    lo = stats["min"]
-    hi = stats["max"]
+    lo, hi = stats["min"], stats["max"]
     assert torch.allclose(normalize_action(lo.unsqueeze(0), "minmax", stats), torch.full((1, 3), -1.0))
     assert torch.allclose(normalize_action(hi.unsqueeze(0), "minmax", stats), torch.full((1, 3), 1.0))
 
 
 def test_normalize_meanstd_zero_mean():
     stats = _tensor_stats()
-    mean = stats["mean"]
-    result = normalize_action(mean.unsqueeze(0), "meanstd", stats)
+    result = normalize_action(stats["mean"].unsqueeze(0), "meanstd", stats)
     assert torch.allclose(result, torch.zeros(1, 3))
 
 
+# ---------------------------------------------------------------------------
+# denormalize_action — endpoint correctness
+# ---------------------------------------------------------------------------
+
+
+def test_denormalize_quantile_endpoints():
+    stats = _tensor_stats()
+    q01, q99 = stats["q01"], stats["q99"]
+    assert torch.allclose(denormalize_action(torch.full((1, 3), -1.0), "quantile", stats), q01.unsqueeze(0))
+    assert torch.allclose(denormalize_action(torch.full((1, 3), 1.0), "quantile", stats), q99.unsqueeze(0))
+
+
+def test_denormalize_minmax_endpoints():
+    stats = _tensor_stats()
+    lo, hi = stats["min"], stats["max"]
+    assert torch.allclose(denormalize_action(torch.full((1, 3), -1.0), "minmax", stats), lo.unsqueeze(0))
+    assert torch.allclose(denormalize_action(torch.full((1, 3), 1.0), "minmax", stats), hi.unsqueeze(0))
+
+
+# ---------------------------------------------------------------------------
+# Edge cases
+# ---------------------------------------------------------------------------
+
+
 def test_normalize_zero_range_no_nan():
-    # When q01 == q99 the clamp should prevent NaN/Inf.
     stats = {k: torch.zeros(3) for k in ("q01", "q99", "mean", "std", "min", "max")}
     action = torch.ones(1, 3)
-    for method in ("quantile", "minmax"):
+    for method in ("quantile", "meanstd", "minmax"):
         result = normalize_action(action, method, stats)
         assert torch.isfinite(result).all(), f"{method} produced non-finite output with zero range"
 

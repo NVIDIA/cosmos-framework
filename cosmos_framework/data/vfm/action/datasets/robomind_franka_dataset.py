@@ -67,7 +67,7 @@ class RoboMINDFrankaDataset(ActionBaseDataset):
 
     def __init__(
         self,
-        root: str = "/path/to/cosmos3_action_datasets/RoboMIND_20251228",
+        root: str,
         fps: float = 10.0,
         chunk_length: int = 16,
         mode: str = "joint",

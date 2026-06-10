@@ -67,7 +67,7 @@ class BridgeOrigLeRobotDataset(ActionBaseDataset):
 
     def __init__(
         self,
-        root: str = "/path/to/cosmos3_action_datasets/bridge_raw",
+        root: str,
         fps: float = 5.0,
         chunk_length: int = 16,
         mode: str = "joint",
