@@ -58,7 +58,8 @@ The OSS flow mirrors the other recipes (see [docs/training.md](./training.md)):
 
 # Step 2: convert the base checkpoint -> $BASE_CHECKPOINT_PATH
 python -m cosmos_framework.scripts.convert_model_to_dcp \
-  -o $BASE_CHECKPOINT_PATH --checkpoint-path Cosmos3-Nano
+  --checkpoint-path Cosmos3-Nano \
+  -o $BASE_CHECKPOINT_PATH 
 
 # Step 3: launch. The TOML selects the experiment + scalars; the dataset/action
 # knobs come from the registered experiment.
