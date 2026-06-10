@@ -41,9 +41,12 @@ action_policy_droid_nano = LazyDict(
             {"override /model": "mot_fsdp"},
             {"override /data_train": None},
             {"override /data_val": None},
-            # internal used fusedadamw (apex FusedAdam); adamw + fused=True is the
-            # torch-native, apex-free equivalent (kept for OSS portability).
-            {"override /optimizer": "adamw"},
+            # Match internal droid_lerobot_8b_policy: apex FusedAdam with fp32
+            # master_weights + eps 1e-8. adamw + fused + eps 1e-6 (bf16, no fp32
+            # master) under-steps the small 5x-lr action heads and leaves the action
+            # loss on a noisy high plateau; an exact-match forward/optimizer test
+            # confirmed the convergence gap was the optimizer, not the model.
+            {"override /optimizer": "fusedadamw"},
             {"override /scheduler": "lambdalinear"},  # matches internal droid_lerobot_8b (was lambdacosine)
             {"override /checkpoint": "s3"},
             {
@@ -72,8 +75,8 @@ action_policy_droid_nano = LazyDict(
         ),
         optimizer=dict(
             betas=[0.9, 0.99],
-            eps=1.0e-06,
-            fused=True,
+            eps=1.0e-08,
+            fused=True,  # popped by build_optimizer for FusedAdam (fused by construction)
             # Generation + action heads (mirrors internal droid_lerobot_8b_policy).
             keys_to_select=[
                 "moe_gen",
@@ -90,7 +93,7 @@ action_policy_droid_nano = LazyDict(
                 "llm2action": 5.0,
                 "action_modality_embed": 5.0,
             },
-            optimizer_type="AdamW",
+            optimizer_type="FusedAdam",
             weight_decay=0.05,
         ),
         scheduler=dict(
