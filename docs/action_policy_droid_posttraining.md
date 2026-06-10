@@ -63,9 +63,11 @@ python -m cosmos_framework.scripts.convert_model_to_dcp \
 
 # Step 3: launch. The TOML selects the experiment + scalars; the dataset/action
 # knobs come from the registered experiment.
-DATASET_PATH=<droid_lerobot/success> BASE_CHECKPOINT_PATH=$BASE_CHECKPOINT_PATH \
-WAN_VAE_PATH=<Wan2.2_VAE.pth> NPROC_PER_NODE=8 \
-  bash examples/launch_sft_action_policy_droid.sh
+export DATASET_PATH=/path/to/dataset/success
+export BASE_CHECKPOINT_PATH=/path/to/base_checkpoint
+export WAN_VAE_PATH=/path/to/Wan2.2_VAE.pth
+export NPROC_PER_NODE=8
+bash examples/launch_sft_action_policy_droid.sh
 ```
 
 The recipe TOML (`examples/toml/sft_config/action_policy_droid_repro.toml`) sets the scalar
