@@ -99,4 +99,5 @@ def make_config() -> Config:
     # vision_sft_nano_mapstyle_dataloader — the CosmosDataLoader variant — in the same module.)
     import cosmos_framework.configs.base.experiment.sft.vision_sft_nano  # noqa: F401
     import cosmos_framework.configs.base.experiment.sft.vision_sft_super  # noqa: F401
+    import cosmos_framework.configs.base.experiment.action.posttrain_config.action_policy_droid_nano  # noqa: F401
     return c
