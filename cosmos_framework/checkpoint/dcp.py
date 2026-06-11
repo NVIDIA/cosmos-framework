@@ -539,6 +539,20 @@ class DistributedCheckpointer(AbstractCheckpointer):
                                     "Ensure the model has net_ema submodule."
                                 )
                                 _state_dict[sd_key] = _state_dict[key_ema]
+                    elif warm_start and any(str(s).startswith("net_ema") for s in self.keys_to_skip_loading):
+                        # Only when net_ema.* is explicitly skipped on load (e.g. an HF->DCP
+                        # init from convert_model_to_dcp that has only net.*): the skipped
+                        # net_ema.* keep build_net() construction values (random init when
+                        # vlm_config.pretrained_weights.enabled=False), which would seed EMA
+                        # from random weights -> copy net.* -> net_ema.* so EMA starts from the
+                        # freshly-loaded init. When net_ema.* IS loaded (e.g. a training DCP
+                        # that carries a trained EMA), do NOT clobber it.
+                        log.info("Warm start: net_ema. skipped on load -> resetting net_ema = net.")
+                        for sd_key in list(_state_dict.keys()):
+                            if sd_key.startswith("net."):
+                                key_ema = "net_ema." + sd_key.removeprefix("net.")
+                                if key_ema in _state_dict:
+                                    _state_dict[key_ema] = _state_dict[sd_key]
                     results = _model_wrapper.load_state_dict(_state_dict)
                     if results is not None:
                         if len(results.missing_keys) > 0:
