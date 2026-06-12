@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: OpenMDW-1.1
 
 import json
+import types
 from pathlib import Path
 
 import omegaconf
@@ -15,6 +16,7 @@ from cosmos_framework.inference.args import (
     ModelMode,
     OmniSampleOverrides,
     OmniSetupOverrides,
+    SoundDataOverrides,
 )
 from cosmos_framework.inference.common.config import structure_config
 
@@ -156,3 +158,48 @@ def test_sample_args(tmp_path: Path):
     assert text2image_args.num_steps == 50
     assert text2image_args.guidance == 4.0
     assert text2image_args.shift == 3.0
+
+
+def test_build_sound_data_requires_sound_path_for_a2v():
+    model_config = types.SimpleNamespace(sound_gen=True)
+    sample_meta = types.SimpleNamespace(model_mode=ModelMode.AUDIO_IMAGE2VIDEO)
+
+    overrides = SoundDataOverrides(sound_path=None)
+    with pytest.raises(ValueError, match="sound_path"):
+        overrides._build_sound_data(model_config=model_config, sample_meta=sample_meta)
+
+    overrides = SoundDataOverrides(sound_path="clip.wav")
+    overrides._build_sound_data(model_config=model_config, sample_meta=sample_meta)
+    assert overrides.enable_sound is True
+
+
+def test_build_sound_data_rejects_model_without_sound_gen():
+    model_config = types.SimpleNamespace(sound_gen=False)
+    sample_meta = types.SimpleNamespace(model_mode=ModelMode.AUDIO_IMAGE2VIDEO)
+    overrides = SoundDataOverrides(sound_path="clip.wav")
+    with pytest.raises(ValueError, match="sound tokenizer"):
+        overrides._build_sound_data(model_config=model_config, sample_meta=sample_meta)
+
+
+def test_audio_image2video_conditions_image_and_sound(tmp_path: Path):
+    import omegaconf
+    from cosmos_framework.inference.common.config import structure_config
+
+    setup_args = OmniSetupOverrides(
+        checkpoint_path=DEFAULT_CHECKPOINT_NAME,
+        output_dir=tmp_path / "outputs",
+    ).build_setup()
+    model_dict = structure_config(setup_args.load_model_config_dict(), omegaconf.DictConfig)
+
+    args = OmniSampleOverrides(
+        name="a2v",
+        output_dir=tmp_path / "a2v",
+        model_mode=ModelMode.AUDIO_IMAGE2VIDEO,
+        vision_path="robot.jpg",
+        sound_path="clip.wav",
+    ).build_sample(model_config=model_dict.config)
+
+    assert args.condition_vision_mode.value == "image"
+    assert args.condition_frame_indexes_vision == [0]
+    assert args.enable_sound is True
+    assert args.sound_path == "clip.wav"
