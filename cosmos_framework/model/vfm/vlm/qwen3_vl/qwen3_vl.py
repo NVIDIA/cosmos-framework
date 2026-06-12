@@ -320,7 +320,11 @@ class Qwen3VLTextRotaryEmbedding(nn.Module):
         self.original_max_seq_len = config.max_position_embeddings
 
         self.config = config
-        self.rope_init_fn = ROPE_INIT_FUNCTIONS[self.rope_type]
+        rope_type = self.rope_type
+        if rope_type not in ROPE_INIT_FUNCTIONS and rope_type == "default":
+            # transformers>=5 renamed "default" RoPE entry to "proportional".
+            rope_type = "proportional"
+        self.rope_init_fn = ROPE_INIT_FUNCTIONS[rope_type]
 
         self.mrope_section = (
             config.rope_scaling.get("mrope_section", [24, 20, 20]) if config.rope_scaling is not None else [24, 20, 20]

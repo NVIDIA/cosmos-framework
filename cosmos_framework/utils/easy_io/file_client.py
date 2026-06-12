@@ -375,7 +375,7 @@ class FileClient:
         """
         return self.client.isfile(filepath)
 
-    def join_path(self, filepath: Union[str, Path], *filepaths: Union[str, Path]) -> str:
+    def join_path(self, filepath: Union[str, Path], *filepaths: Union[str, Path]) -> Union[str, Path]:
         r"""Concatenate all file paths.
 
         Join one or more filepath components intelligently. The return value
@@ -385,7 +385,7 @@ class FileClient:
             filepath (str or Path): Path to be concatenated.
 
         Returns:
-            str: The result of concatenation.
+            str or Path: The result of concatenation. Returns a Path if any input is a Path.
         """
         return self.client.join_path(filepath, *filepaths)
 

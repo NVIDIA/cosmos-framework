@@ -424,7 +424,7 @@ def join_path(
         backend_key (str, optional): The key to get the backend from register.
 
     Returns:
-        str: The result of concatenation.
+        str or Path: The result of concatenation. Returns a Path if any input is a Path.
 
     Examples:
         >>> filepath1 = '/path/of/dir1'

@@ -284,7 +284,7 @@ class Boto3Backend(BaseStorageBackend):
         self,
         filepath: Union[str, Path],
         *filepaths: Union[str, Path],
-    ) -> str:
+    ) -> Union[str, Path]:
         r"""Concatenate all file paths.
 
         Join one or more filepath components intelligently. The return value
@@ -294,7 +294,7 @@ class Boto3Backend(BaseStorageBackend):
             filepath (str or Path): Path to be concatenated.
 
         Returns:
-            str: The result after concatenation.
+            str or Path: The result after concatenation.
 
         Examples:
             >>> backend = Boto3Backend()

@@ -187,7 +187,7 @@ class LocalBackend(BaseStorageBackend):
         """
         return osp.isfile(filepath)
 
-    def join_path(self, filepath: Union[str, Path], *filepaths: Union[str, Path]) -> str:
+    def join_path(self, filepath: Union[str, Path], *filepaths: Union[str, Path]) -> Union[str, Path]:
         r"""Concatenate all file paths.
 
         Join one or more filepath components intelligently. The return value
@@ -197,7 +197,7 @@ class LocalBackend(BaseStorageBackend):
             filepath (str or Path): Path to be concatenated.
 
         Returns:
-            str: The result of concatenation.
+            str or Path: The result of concatenation. Returns a Path if any input is a Path.
 
         Examples:
             >>> backend = LocalBackend()
@@ -207,8 +207,10 @@ class LocalBackend(BaseStorageBackend):
             >>> backend.join_path(filepath1, filepath2, filepath3)
             '/path/of/dir/dir2/path/of/file'
         """
-        # TODO, if filepath or filepaths are Path, should return Path
-        return osp.join(filepath, *filepaths)
+        result = osp.join(filepath, *filepaths)
+        if isinstance(filepath, Path) or any(isinstance(p, Path) for p in filepaths):
+            return Path(result)
+        return result
 
     @contextmanager
     def get_local_path(
