@@ -186,7 +186,7 @@ class ActionBaseDataset(ABC, Dataset):
         **extras: Any,
     ) -> dict[str, Any]:
         idle_frames = self._compute_idle_frames(action)
-        normalized_action = normalize_action(action, self._normalization_method, self._load_norm_stats())
+        normalized_action = normalize_action(action, self.action_normalization, self._load_norm_stats())
         formatted_video = (video * 255.0).clamp(0.0, 255.0).to(torch.uint8).permute(1, 0, 2, 3)
         return {
             "ai_caption": ai_caption,
