@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: OpenMDW-1.1
 
-"""DROID LeRobot dataset."""
+"""Minimal DROID LeRobot dataset for Cosmos Action v1.2 defaults."""
 
 from __future__ import annotations
 
