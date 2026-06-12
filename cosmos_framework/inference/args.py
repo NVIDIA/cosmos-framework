@@ -160,6 +160,7 @@ class ModelMode(StrEnum):
     IMAGE2IMAGE = "image2image"
     IMAGE2VIDEO = "image2video"
     VIDEO2VIDEO = "video2video"
+    AUDIO_IMAGE2VIDEO = "audio_image2video"
 
     # Action
     FORWARD_DYNAMICS = "forward_dynamics"
@@ -176,6 +177,10 @@ class ModelMode(StrEnum):
     def is_reasoner(self) -> bool:
         return self in REASONER_MODEL_MODES
 
+    @property
+    def is_sound_condition(self) -> bool:
+        return self in SOUND_CONDITION_MODEL_MODES
+
 
 # Image-output modes: ``num_frames`` defaults to 1 and the output is saved as a still image.
 _IMAGE_OUTPUT_MODES: frozenset[ModelMode] = frozenset({ModelMode.TEXT2IMAGE, ModelMode.IMAGE2IMAGE})
@@ -186,6 +191,10 @@ ACTION_MODEL_MODES: frozenset[ModelMode] = frozenset(
 )
 
 REASONER_MODEL_MODES: frozenset[ModelMode] = frozenset({ModelMode.REASONER})
+
+# Modes that condition generation on a real input audio clip (require a model
+# with ``sound_gen=True`` and a ``sound_path``).
+SOUND_CONDITION_MODEL_MODES: frozenset[ModelMode] = frozenset({ModelMode.AUDIO_IMAGE2VIDEO})
 
 
 class VisionMode(StrEnum):
