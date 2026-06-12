@@ -247,17 +247,17 @@ def register_checkpoints():
                 uri="s3://bucket/pretrained/tokenizers/audio/avae",
             ),
             hf=CheckpointDirHf(
-                repository="nvidia/Cosmos3-Experimental",
+                repository="nvidia/Cosmos3-Nano",
                 revision="main",
-                subdirectory="nano_diffusers_sound_encoder/sound_tokenizer",
+                subdirectory="sound_tokenizer",
             ),
-            # The nano_diffusers_sound_encoder/sound_tokenizer/ safetensors ship the FULL
-            # AVAE: the diffusers OobleckDecoder decoder (decoder.block.*) plus the native
-            # SpecConvNeXt encoder (encoder.layers.*). _materialize_avae_ckpt remaps the
-            # decoder keys back to the legacy decoder.layers.* layout and passes the
-            # already-native encoder keys through unchanged. The encoder is required to
-            # ENCODE input audio for sound-conditioned modes (audio_image2video); the base
-            # nvidia/Cosmos3-Nano/sound_tokenizer is decoder-only and cannot encode.
+            # The sound_tokenizer/ safetensors ship the full AVAE: the diffusers
+            # OobleckDecoder decoder (decoder.block.*) plus the native SpecConvNeXt
+            # encoder (encoder.layers.*). _materialize_avae_ckpt remaps the decoder keys
+            # back to the legacy decoder.layers.* layout and passes the already-native
+            # encoder keys through unchanged. The encoder is required to ENCODE input
+            # audio for sound-conditioned modes (audio_image2video); the decoder alone
+            # only supports sound generation.
             post_download=_materialize_avae_ckpt,
         ),
     )

@@ -130,7 +130,6 @@ The four `--{dp,cp,cfgp}-*-size` flags override the auto-selected values from `-
 | ------------- | --------------------------------- | ---------------------------------------------- |
 | Cosmos3-Nano  | `--checkpoint-path=Cosmos3-Nano`  | All                                            |
 | Cosmos3-Super | `--checkpoint-path=Cosmos3-Super` | `text2image`, `text2video`, `image2video`      |
-| Cosmos3-Nano-SoundEncoder | `--checkpoint-path=Cosmos3-Nano-SoundEncoder` | `audio_image2video` (audio+image → video), plus all Nano modes |
 
 ## Modes
 
@@ -147,7 +146,7 @@ The four `--{dp,cp,cfgp}-*-size` flags override the auto-selected values from `-
 | `inverse_dynamics` | observation video + prompt                 | predicted action sequence in `sample_outputs.json`                                         | `domain_name`, `vision_path`                | [`inputs/omni/action_inverse_dynamics_av.json`](../inputs/omni/action_inverse_dynamics_av.json), [`inputs/omni/action_inverse_dynamics_robot.json`](../inputs/omni/action_inverse_dynamics_robot.json), [`inputs/omni/action_inverse_dynamics_batch.jsonl`](../inputs/omni/action_inverse_dynamics_batch.jsonl)                                                                                                          |
 | `policy`           | observation image/video + prompt           | predicted action sequence in `sample_outputs.json` + future visual rollout in `vision.mp4` | `domain_name`, `vision_path`                | [`inputs/omni/action_policy_av.json`](../inputs/omni/action_policy_av.json), [`inputs/omni/action_policy_robot.json`](../inputs/omni/action_policy_robot.json), [`inputs/omni/action_policy_batch.jsonl`](../inputs/omni/action_policy_batch.jsonl)                                                                                                                                                                      |
 
-Set `enable_sound: true` on a `text2video` sample (see [`inputs/omni/t2vs.json`](../inputs/omni/t2vs.json)) to also generate audio. To instead **condition** generation on a real audio clip (audio+image → video), use `model_mode: audio_image2video` with a `sound_path` and the sound-encoder checkpoint `--checkpoint-path Cosmos3-Nano-SoundEncoder` (see [`inputs/omni/a2v.json`](../inputs/omni/a2v.json)). To run every example in one batch, use `-i "inputs/omni/*.json"`.
+Set `enable_sound: true` on a `text2video` sample (see [`inputs/omni/t2vs.json`](../inputs/omni/t2vs.json)) to also generate audio. To instead **condition** generation on a real audio clip (audio+image → video), use `model_mode: audio_image2video` with a `sound_path` (see [`inputs/omni/a2v.json`](../inputs/omni/a2v.json)). To run every example in one batch, use `-i "inputs/omni/*.json"`.
 
 ## Parallelism Arguments
 
