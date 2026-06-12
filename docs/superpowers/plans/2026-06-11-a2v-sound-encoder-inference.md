@@ -6,7 +6,7 @@
 
 **Architecture:** Reuse the existing `ts2v` (sound-conditioned) sequence plan plus the existing image first-frame vision conditioning, which `inject_sound_into_batch` already preserves. Add a real-audio loader and a `model_mode` + `sound_path` input field; no model/network/tokenizer changes.
 
-**Tech Stack:** Python, PyTorch, pydantic args, `soundfile`/`torchaudio` for audio I/O, `pytest` (colocated `*_test.py`), the Cosmos3 OmniMoT diffusers-format checkpoint loader.
+**Tech Stack:** Python, PyTorch, pydantic args, `soundfile` (read) + `scipy.signal` (resample) for audio I/O, `pytest` (colocated `*_test.py`), the Cosmos3 OmniMoT diffusers-format checkpoint loader. Note: `torchaudio` is NOT a project dependency and is absent from the inference container — do not use it.
 
 **Spec:** `docs/superpowers/specs/2026-06-11-a2v-sound-encoder-inference-design.md`
 
@@ -340,11 +340,18 @@ def load_conditioning_audio(
     data, src_sr = sf.read(str(path), dtype="float32", always_2d=True)  # [N, C]
     waveform = torch.from_numpy(data).transpose(0, 1).contiguous()  # [C, N]
 
-    # Resample to the tokenizer's rate.
+    # Resample to the tokenizer's rate. Uses scipy (a declared dependency);
+    # torchaudio is intentionally avoided as it is not a project dependency
+    # and is absent from the inference container.
     if src_sr != sample_rate:
-        import torchaudio
+        from math import gcd
 
-        waveform = torchaudio.functional.resample(waveform, orig_freq=src_sr, new_freq=sample_rate)
+        import scipy.signal
+
+        g = gcd(int(src_sr), int(sample_rate))
+        up, down = int(sample_rate) // g, int(src_sr) // g
+        resampled = scipy.signal.resample_poly(waveform.numpy(), up, down, axis=-1)  # [C, N']
+        waveform = torch.from_numpy(resampled.astype("float32")).contiguous()
 
     # Conform channels.
     cur_channels = waveform.shape[0]
