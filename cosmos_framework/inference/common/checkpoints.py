@@ -76,11 +76,8 @@ def _materialize_avae_ckpt(local_dir: str) -> None:
     ``[C]`` and loads via ``load_state_dict(strict=False)`` — so without remapping
     the keys, none match and every decoder weight is silently left at init (noise).
     We invert the forward conversion (key remap + snake reshape) and wrap the result
-    under ``state_dict``. The decoder alone is sufficient for sound generation. If the
-    checkpoint also ships the SpecConvNeXt encoder (already in the native
-    ``encoder.layers.*`` layout), those keys pass through ``_avae_block_key_to_legacy``
-    unchanged and load directly — required for encoding input audio in sound-conditioned
-    modes (audio_image2video). Idempotent.
+    under ``state_dict``. Native ``encoder.layers.*`` keys pass through
+    ``_avae_block_key_to_legacy`` unchanged. Idempotent.
     """
     import torch
     from safetensors.torch import load_file
@@ -252,14 +249,9 @@ def register_checkpoints():
                 revision="main",
                 subdirectory="sound_tokenizer",
             ),
-            # The sound_tokenizer/ safetensors use the diffusers OobleckDecoder layout
-            # (decoder.block.*); _materialize_avae_ckpt remaps them back to the legacy
-            # decoder.layers.* layout the native AVAE loader expects. Sound *generation*
-            # (t2vs/i2vs) needs only the decoder. Sound *conditioning* (audio_image2video)
-            # additionally needs the SpecConvNeXt encoder (native encoder.layers.* keys),
-            # which pass through unchanged and load when present. NOTE: the current
-            # Cosmos3-Nano sound_tokenizer is decoder-only; audio_image2video produces
-            # faithful audio only once this checkpoint is updated to also ship the encoder.
+            # _materialize_avae_ckpt remaps the diffusers OobleckDecoder keys
+            # (decoder.block.*) back to the legacy decoder.layers.* layout the native AVAE
+            # loader expects; native encoder.layers.* keys pass through unchanged.
             post_download=_materialize_avae_ckpt,
         ),
     )
