@@ -2,10 +2,10 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: OpenMDW-1.1
 
-# Structured-TOML launch for llava_ov_datapacker (VLM SFT on
-# lmms-lab/LLaVA-OneVision-Data via DataPackerDataLoader). Drives
+# Structured-TOML launch for llava_ov (VLM SFT on
+# lmms-lab/LLaVA-OneVision-Data via CosmosDataLoader). Drives
 # cosmos_framework.scripts.train against
-# examples/toml/sft_config/llava_ov_datapacker.toml.
+# examples/toml/sft_config/llava_ov.toml.
 #
 # [job].task = "vlm" — picks cosmos_framework/configs/base/vlm/config.py as the base config.
 #
@@ -20,6 +20,6 @@
 # Usage (8-GPU allocation, inside the training container, from the repo root):
 #   bash examples/launch_sft_llava_ov.sh
 
-TOML_FILE="examples/toml/sft_config/llava_ov_datapacker.toml"
+TOML_FILE="examples/toml/sft_config/llava_ov.toml"
 
 source "$(dirname "${BASH_SOURCE[0]}")/_sft_launcher_common.sh"

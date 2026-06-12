@@ -1,8 +1,8 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: OpenMDW-1.1
 
-# pre_exp012_llava_ov_datapacker — VLM training on lmms-lab/LLaVA-OneVision-Data
-# via DataPackerDataLoader. Base config = cosmos_framework/configs/base/vlm/config.py
+# pre_exp012_llava_ov — VLM training on lmms-lab/LLaVA-OneVision-Data
+# via CosmosDataLoader. Base config = cosmos_framework/configs/base/vlm/config.py
 # (selected by [job].task="vlm").
 #
 # One knob that the SFTExperimentConfig dataclass does NOT model — supply
@@ -14,7 +14,7 @@
 #
 # Example launch:
 #   torchrun --nproc_per_node=4 -m cosmos_framework.scripts.train \
-#       --sft-toml examples/toml/sft_config/llava_ov_datapacker.toml -- \
+#       --sft-toml examples/toml/sft_config/llava_ov.toml -- \
 #       data_setting.max_tokens=16000
 #
 # Per-task remap (see _PATH_REMAPS["vlm"]):
@@ -25,16 +25,15 @@
 #   model.attn_implementation      -> model.config.policy.attn_implementation
 #   model.backbone.*               -> model.config.policy.backbone.*
 #   model.ema.*                    -> model.config.ema.*
-#   dataloader_train.max_samples_per_batch -> dataloader_train.max_batch_size
 #   model.{max_num_tokens_after_packing, joint_attn_implementation, lora_*,
 #          tokenizer.*} and dataloader_train.{max_sequence_length, seed} -> SKIPPED
 
 [job]
 task         = "vlm"
-experiment   = "pre_exp012_llava_ov_datapacker"
+experiment   = "pre_exp012_llava_ov"
 project      = "cosmos3"                                 # matches legacy
 group        = "vlm_llava_ov_demo"
-name         = "pre_exp012_llava_ov_datapacker"
+name         = "pre_exp012_llava_ov"
 wandb_mode   = "disabled"
 
 [model]
@@ -102,4 +101,8 @@ load_path            = "???"                      # MISSING sentinel; skipped by
 save_iter            = 100
 
 [dataloader_train]
-max_samples_per_batch = 1                          # → dataloader_train.max_batch_size on VLM
+# Routed by PATH_REMAPS["vlm"] onto the CosmosDataLoader's nested PoolPackingBatcher:
+#   max_samples_per_batch -> dataloader_train.batcher.max_batch_size
+#   max_sequence_length   -> dataloader_train.batcher.max_tokens
+max_samples_per_batch = 1
+max_sequence_length   = 16000

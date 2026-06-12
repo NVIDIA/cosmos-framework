@@ -252,6 +252,11 @@ def init_torch_test():
 
 _WHITELIST_ENV_VARS = {
     "LD_LIBRARY_PATH",
+    # Set as a side-effect of importing TransformerEngine (via NANO_MODEL_CONFIG /
+    # SUPER_MODEL_CONFIG).  Any SFT experiment config test that imports a model config
+    # will trigger this; whitelisting avoids a spurious teardown error that is
+    # unrelated to the test logic.
+    "NVTE_CUDA_INCLUDE_DIR",
     "QT_QPA_FONTDIR",
     "QT_QPA_PLATFORM_PLUGIN_PATH",
     "TORCHINDUCTOR_CACHE_DIR",

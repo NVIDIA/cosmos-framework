@@ -1,498 +1,454 @@
 # Custom Datasets for Generator and Reasoner Training
 
-This guide explains how to bring your own dataset into Cosmos training using
-`DataPackerDataLoader` and `JointDataPackerDataLoader` — the OSS-facing data
-layer that works without any internal infrastructure (no WebDataset, no
-object-store credentials).
+Bring your own dataset into Cosmos training with **`CosmosDataLoader`** — the
+OSS-facing data layer that works without any internal infrastructure (no
+WebDataset, no object-store credentials).
+
+`CosmosDataLoader` turns any dataset into training batches by composing four
+small, swappable roles. Pick a built-in for each slot, or write your own — the
+loader wires them together in a fixed, safe order.
+
+```
+DataDistributor   →   RawItemProcessor   →   SampleBatcher   →   BatchCollator
+(raw items, sharded     (one raw item        (a stream of         (a group of
+ across DP ranks ×       → one sample         samples → groups     samples → one
+ workers, shuffled,      dict)                that form a batch)   batch dict for
+ resumable)                                                        model.forward)
+```
+
+- **`DataDistributor`** owns the dataset and yields *this* rank/worker's disjoint
+  slice of raw items (sharding, shuffle, checkpoint/resume).
+- **`RawItemProcessor`** turns one raw item into one training-ready sample dict
+  (decode, tokenize, etc.).
+- **`SampleBatcher`** pulls from the sample stream and decides *which* samples go
+  together in a batch (fixed size, token-budget packing, …).
+- **`BatchCollator`** turns a chosen group of samples into one batch dict.
+
+Everything lives in `cosmos_framework.data.vfm.dataflow`. The loader is a
+`torch.utils.data.DataLoader` subclass, so it drops into existing training loops.
 
 ---
 
 ## Contents
 
-1. [Overview](#overview)
-2. [DataPackerDataLoader](#datapackerdataloader)
-   - [Step 1 — Prepare your data source](#step-1--prepare-your-data-source)
-   - [Step 2 — Write your DataPacker](#step-2--write-your-datapacker)
-   - [Step 3 — Wire into an experiment config](#step-3--wire-everything-into-an-experiment-config)
-   - [Key parameters](#key-parameters)
-   - [Shuffle and stateful checkpoint/resume](#shuffle-and-stateful-checkpointresume)
-   - [Data-parallel sharding](#data-parallel-sharding)
-3. [JointDataPackerDataLoader](#jointdatapackerdataloader)
-   - [When to use it](#when-to-use-it)
-   - [How to wire it up](#how-to-wire-it-up)
-   - [Stateful checkpoint/resume](#stateful-checkpointresume)
-4. [Real-world examples](#real-world-examples)
-5. [Checklist](#checklist-for-a-new-dataset)
+1. [Quickstart (60 seconds)](#1-quickstart-60-seconds)
+2. [The four roles](#2-the-four-roles)
+3. [Recipes by use-case](#3-recipes-by-use-case)
+4. [Wiring into a training recipe (Hydra)](#4-wiring-into-a-training-recipe-hydra)
+5. [Checkpoint / resume](#5-checkpoint--resume)
+6. [Distributed & sharding](#6-distributed--sharding)
+7. [Troubleshooting / FAQ](#7-troubleshooting--faq)
+8. [End-to-end worked example](#8-end-to-end-worked-example-custom-dataset--training)
+9. [Real-world examples](#9-real-world-examples)
+10. [Checklist for a new dataset](#10-checklist-for-a-new-dataset)
 
 ---
 
-## Overview
+## 1. Quickstart (60 seconds)
 
-The data pipeline has two parts you control:
-
-```
-Your dataset (Dataset or IterableDataset)
-        │
-        ▼
-┌────────────────────────────────────────────────┐
-│           DataPackerDataLoader                 │
-│                                                │
-│  map-style Dataset (any shuffle setting):      │
-│  ┌──────────────────────────────────────────┐  │
-│  │    _ShuffledMapIterableDataset           │  │
-│  │  • per-epoch randperm (shuffle=True)     │  │
-│  │    or sequential (shuffle=False)         │  │
-│  │  • DP × worker sharding                  │  │
-│  │  • position metadata for stateful resume │  │
-│  └──────────────────┬───────────────────────┘  │
-│                     │                          │
-│  IterableDataset:                              │
-│  ┌──────────────────────────────────────────┐  │
-│  │    _IterableWrapper                      │  │
-│  │  • DP × worker sharding only             │  │
-│  │  • no stateful resume                    │  │
-│  └──────────────────┬───────────────────────┘  │
-│                     │ raw item                 │
-│  ┌──────────────────▼───────────────────────┐  │
-│  │    _DataPackerIterableDataset            │  │
-│  │    (subclass of PackingIterableDataset)  │  │
-│  │                                          │  │
-│  │  • fill pool (pool_size samples)         │  │
-│  │  • greedy bin-pack within max_tokens     │  │
-│  │  • cap at max_batch_size                 │  │
-│  │                                          │  │
-│  │  → DataPacker.sft_process_sample  ← you  │  │
-│  │  → DataPacker.compute_num_tokens  ← you  │  │
-│  │  → DataPacker.sft_collate_fn      ← you  │  │
-│  └──────────────────────────────────────────┘  │
-└────────────────────────────────────────────────┘
-        │ fully-collated batch dict
-        ▼
-     Trainer / model.forward()
-```
-
-Key point: **all map-style datasets** (whether `shuffle=True` or `shuffle=False`)
-are routed through `_ShuffledMapIterableDataset`, which attaches position
-metadata to every sample. This means stateful checkpoint/resume works regardless
-of whether shuffle is enabled.
-
----
-
-## DataPackerDataLoader
-
-### Step 1 — Prepare your data source
-
-`DataPackerDataLoader` accepts either a **map-style** `torch.utils.data.Dataset`
-or an **iterable-style** `torch.utils.data.IterableDataset`. Plain lists and
-generators are rejected with a `TypeError`.
-
-| Type                                      | Notes                                                                                 |
-| ----------------------------------------- | ------------------------------------------------------------------------------------- |
-| `torch.utils.data.Dataset` (map-style)    | Pass directly. Supports `shuffle=True/False` and stateful checkpoint/resume.          |
-| `torch.utils.data.IterableDataset`        | Pass directly. No shuffle, no stateful resume — shuffle externally if needed.         |
-| HuggingFace `Dataset`                     | Is a `torch.utils.data.Dataset` subclass — pass directly, `shuffle=True` works.       |
-| HuggingFace `IterableDataset` (streaming) | Is a `torch.utils.data.IterableDataset` — pass directly, use `.shuffle()` externally. |
-
-#### Loading from HuggingFace (simplest)
+"I have a map-style dataset and just want normal, shuffled, resumable batches":
 
 ```python
-from cosmos_framework.data.vfm.data_packer_dataloader import load_data_source
-
-# HuggingFace Hub dataset (downloaded, map-style)
-data_source = load_data_source("liuhaotian/LLaVA-Instruct-150K", split="train")
-
-# Dataset saved with dataset.save_to_disk()
-data_source = load_data_source("/path/to/my_saved_dataset", split="train")
-
-# Then pass with shuffle for per-epoch shuffling + stateful resume
-DataPackerDataLoader(data_source=data_source, ..., shuffle=True, seed=42)
-```
-
-#### Streaming from HuggingFace (no disk space)
-
-```python
-from datasets import load_dataset
-
-data_source = load_dataset(
-    "lmms-lab/LLaVA-OneVision-Data", name="si", split="train", streaming=True
+from cosmos_framework.data.vfm.dataflow import (
+    CosmosDataLoader, MapDistributor, IdentityProcessor,
 )
-# shuffle before passing — IterableDataset does not support internal shuffle
-data_source = data_source.shuffle(seed=42, buffer_size=10_000)
+
+loader = CosmosDataLoader(
+    distributor=MapDistributor(my_dataset, shuffle=True, seed=0),  # any torch map Dataset
+    processor=IdentityProcessor(),                                 # dataset already yields samples
+    batch_size=32,                                                 # sugar → SimpleBatcher + DefaultBatchCollator
+)
+
+for batch in loader:
+    out = model(**batch)
 ```
 
-#### Custom map-style dataset
-
-```python
-class MyMapDataset(torch.utils.data.Dataset):
-    def __len__(self): return 10_000
-    def __getitem__(self, idx): return {"video": ..., "text": ...}
-
-# Pass directly — DataPackerDataLoader handles sharding and shuffle internally
-DataPackerDataLoader(data_source=MyMapDataset(), ..., shuffle=True, seed=42)
-```
+`batch_size=N` is convenience sugar: when you don't pass an explicit `batcher`,
+the loader builds a `SimpleBatcher(N)` + `DefaultBatchCollator()` (stock
+`torch.utils.data` stacking). Pass an explicit `batcher`/`collator` for anything
+fancier. (Passing both `batch_size=` and `batcher=` is an error.)
 
 ---
 
-### Step 2 — Write your DataPacker
+## 2. The four roles
 
-`DataPacker` is an abstract base class. Implement all three methods, then place
-the class in the same experiment config file that uses it.
-
-```python
-from cosmos_framework.data.vfm.data_packer import DataPacker
-
-class MyDataPacker(DataPacker):
-
-    def sft_process_sample(self, item: dict) -> dict:
-        """
-        Convert one raw item from data_source into a training-ready sample.
-        Called inside DataLoader workers — tokenization, decoding, transforms go here.
-        """
-        ...
-        return {"input_ids": ..., "labels": ..., ...}
-
-    def compute_num_tokens(self, sample: dict) -> int:
-        """
-        Return the token cost of one processed sample.
-        Used by the packing engine to decide how many samples fit in a batch.
-        """
-        return int(sample["input_ids"].shape[0])
-
-    def sft_collate_fn(self, samples: list[dict], max_len: int,
-                       ignore_label_id: int = -100) -> dict:
-        """
-        Collate a list of processed samples into one batch dict.
-        max_len is the longest token sequence in this batch (for padding).
-        """
-        ...
-        return {"input_ids": ..., "labels": ..., ...}
-```
-
-> **Note on extra batch keys**: For map-style datasets, `DataPackerDataLoader`
-> automatically appends `sample_worker_id`, `sample_epoch`, and `sample_index` to
-> every batch dict. These are used by `DataLoaderStateCallback` for stateful
-> checkpoint/resume and are transparent to the model as long as `training_step`
-> accesses the batch by key (not `**kwargs` unpack).
-
-#### Token counting for Generator models
+Each role is a tiny ABC in `cosmos_framework.data.vfm.dataflow.base`. Implement
+the one method (plus, for distributors, optional resume hooks).
 
 ```python
-import math
+class DataDistributor(ABC):
+    def stream(self, dp_rank, dp_world_size, worker_id, num_workers) -> Iterator[Any]:
+        """Yield this (rank, worker)'s disjoint slice of raw items, indefinitely."""
+    def state_dict(self) -> dict: ...          # optional, for resume
+    def load_state_dict(self, state) -> None: ...
 
-def compute_num_tokens(self, sample: dict) -> int:
-    tokens = 1 + len(sample.get("text_token_ids", []))
-    v = sample.get("video")   # shape [C, T, H, W]
-    if v is not None:
-        _, T, H, W = v.shape
-        latent_h = math.ceil(H / (self.spatial_compression * self.patch_spatial))
-        latent_w = math.ceil(W / (self.spatial_compression * self.patch_spatial))
-        latent_t = 1 + (T - 1) // self.temporal_compression
-        tokens += latent_h * latent_w * latent_t + 2
-    return tokens
+class RawItemProcessor(ABC):
+    def process(self, item) -> dict: ...        # one raw item → one sample dict
+
+class SampleBatcher(ABC):
+    def batches(self, samples: Iterator[dict]) -> Iterator[list[dict]]: ...
+    def sample_size(self, sample) -> int: ...   # only packing batchers need this
+
+class BatchCollator(ABC):
+    def collate(self, samples: list[dict]) -> dict: ...   # group → batch dict
 ```
 
-Typical values: `spatial_compression=16`, `temporal_compression=4`, `patch_spatial=2`.
+The loader passes the rank/worker coordinates *into* `stream()` — you never read
+`get_worker_info()` yourself. The fixed order (`distribute → process → batch →
+collate`) is enforced by the loader, so the stages can't be misordered.
+
+### Built-ins
+
+| Role        | Built-in                                                                                                                                                                | Use it when                                                                 |
+| ----------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------- |
+| Distributor | `IterableDistributor(iterable)`                                                                                                                                         | streaming / `IterableDataset` source (round-robin shard; **not** resumable) |
+|             | `MapDistributor(dataset, seed=0, shuffle=True, name="")`                                                                                                                | map-style `Dataset` (per-epoch shuffle, slice shard, **resumable**)         |
+|             | `RankPartitionedDistributor({name: {"dataset":…, "ratio":…}})`                                                                                                          | assign whole DP ranks to different datasets by ratio                        |
+|             | `MixtureDistributor({name: (distributor, ratio)}, seed=0)`                                                                                                              | mix several distributors into one stream at the sample level                |
+| Processor   | `IdentityProcessor()`                                                                                                                                                   | the dataset already yields finished sample dicts                            |
+|             | *(write your own)*                                                                                                                                                      | decode/tokenize/transform a raw record                                      |
+| Batcher     | `SimpleBatcher(batch_size, drop_last=False)`                                                                                                                            | fixed-size batches                                                          |
+|             | `PoolPackingBatcher(max_tokens, pool_size=16, max_batch_size=1, long_threshold=6400, batching_strategy="prefer_closest", apply_long_sample_halving=True, size_fn=None)` | token-budget bin-packing (reorders within a pool to minimize padding)       |
+|             | `SequentialPackingBatcher(max_sequence_length, …, max_samples_per_batch=None)`                                                                                          | order-preserving pack-until-budget (no reordering)                          |
+| Collator    | `DefaultBatchCollator()`                                                                                                                                                | stack with `torch.utils.data.default_collate`                               |
+|             | `VFMListCollator()`                                                                                                                                                     | VFM packed batches (media kept as per-sample lists)                         |
+
+Recipe-specific roles live next to their recipes, e.g. `VLMProcessor` /
+`VLMCollator` (in `configs/base/vlm/experiment/dataflow_roles.py`) and
+`VideoPhy2Processor`.
 
 ---
 
-### Step 3 — Wire everything into an experiment config
+## 3. Recipes by use-case
+
+### Bring your own map-style dataset (shuffle + resume)
 
 ```python
-from cosmos_framework.utils.lazy_config import LazyCall as L, LazyDict
-from cosmos_framework.data.vfm.data_packer_dataloader import DataPackerDataLoader, load_data_source
-from cosmos_framework.callbacks.dataloader_state import DataLoaderStateCallback
-from hydra.core.config_store import ConfigStore
+class MyImageCaptionDataset(torch.utils.data.Dataset):
+    def __len__(self): return len(self.records)
+    def __getitem__(self, i): return self.records[i]   # a plain dict
 
-cs = ConfigStore.instance()
-
-my_experiment = LazyDict(dict(
-    defaults=[...],   # inherit model, optimizer, scheduler from a base
-
-    trainer=dict(
-        callbacks=dict(
-            # Tracks per-worker (epoch, position) for checkpoint/resume.
-            # Works with both shuffle=True and shuffle=False for map-style datasets.
-            dataloader_state=L(DataLoaderStateCallback)(distributor_type="data_packer"),
-        ),
-    ),
-
-    dataloader_train=L(DataPackerDataLoader)(
-        data_source=L(load_data_source)(name="my-org/my-dataset", split="train"),
-        data_packer=L(MyDataPacker)(...),
-        max_tokens=16000,
-        pool_size=16,
-        max_batch_size=1,
-        shuffle=True,            # per-epoch randperm, different order every epoch
-        seed=42,                 # epoch e uses seed+e → reproducible permutations
-        num_workers=4,
-        prefetch_factor=4,
-        persistent_workers=True,
-        pin_memory=True,
-    ),
-    dataloader_val=None,
-), flags={"allow_objects": True})
-
-cs.store(group="experiment", package="_global_", name="my_experiment", node=my_experiment)
-```
-
-Launch:
-
-```bash
-torchrun --nproc_per_node=8 -m cosmos_framework.scripts.train \
-    --config=cosmos_framework/configs/base/config.py -- \
-    experiment=my_experiment \
-    trainer.max_iter=1000
-```
-
----
-
-### Key parameters
-
-| Parameter            | What it controls                                                                                                                                                                                                                                                                                                        |
-| -------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `max_tokens`         | Token budget per batch. Packing stops when adding one more sample would exceed this. For Generator, counts video latent tokens; for Reasoner, counts `input_ids` length.                                                                                                                                                |
-| `pool_size`          | Samples to buffer before bin-packing. Larger pool → better packing efficiency, more memory. Default: 16.                                                                                                                                                                                                                |
-| `max_batch_size`     | Hard cap on samples per batch regardless of token budget. Use `1` for Reasoner (one image per step), `128`–`256` for action policy training.                                                                                                                                                                            |
-| `shuffle`            | `True` → per-epoch `randperm` shuffle for map-style datasets (no effect on `IterableDataset`, a warning is logged). `False` → sequential, still resumable.                                                                                                                                                              |
-| `seed`               | Base seed for the shuffle permutation. Epoch `e` uses `seed + e` → reproducible, different ordering every epoch. Default: `0`.                                                                                                                                                                                          |
-| `name`               | Optional string that namespaces resume env vars. **Required** when multiple `DataPackerDataLoader` instances share the same process (i.e., inside `JointDataPackerDataLoader`). Each inner loader must have a unique `name` matching its key in the `dataloaders` dict. Leave empty (default) for single-loader setups. |
-| `long_threshold`     | Samples with token count ≥ this are emitted as singleton batches, bypassing packing. Default: 6400.                                                                                                                                                                                                                     |
-| `batching_strategy`  | `"prefer_closest"` (default) picks candidates nearest in token length. `"prefer_first"` picks the first that fits.                                                                                                                                                                                                      |
-| `num_workers`        | DataLoader workers for `sft_process_sample`. Use `0` for debugging.                                                                                                                                                                                                                                                     |
-| `persistent_workers` | Automatically promoted to `True` for all map-style datasets when `num_workers > 0` (required for correct resume behaviour).                                                                                                                                                                                             |
-
----
-
-### Shuffle and stateful checkpoint/resume
-
-For map-style datasets, `DataPackerDataLoader` tracks each worker's position and
-resumes training from **exactly** where it left off after a checkpoint. This works
-for both `shuffle=True` and `shuffle=False`.
-
-#### How it works
-
-1. Each epoch, a permutation is generated with `torch.randperm(n, generator=torch.Generator().manual_seed(seed + epoch))` (or `list(range(n))` when `shuffle=False`).
-2. Each `(dp_rank, worker_id)` pair sees a disjoint stride: `perm[stream_id :: total_streams]` where `stream_id = dp_rank * num_workers + worker_id`.
-3. After each training step, `DataLoaderStateCallback` reads `sample_epoch` and `sample_index` from the batch and tracks the high-water mark per worker.
-4. At checkpoint, the DCP checkpointer saves the state to `iter_XXXXXXXXX/dataloader/rank_{rank}.pkl`.
-5. On resume, `load_state_dict` sets `DP_STATE_WORKER_{worker_id}_EPOCH/INDEX` env vars before workers start, and workers fast-forward past already-seen samples.
-
-**At most `pool_size` (default 16) samples are re-processed** at each resume (they pass through `sft_process_sample` again but are trained on only once).
-
-#### Required wiring
-
-```python
-from cosmos_framework.callbacks.dataloader_state import DataLoaderStateCallback
-
-exp["trainer"]["callbacks"]["dataloader_state"] = L(DataLoaderStateCallback)(
-    distributor_type="data_packer"
+loader = CosmosDataLoader(
+    distributor=MapDistributor(MyImageCaptionDataset(...), shuffle=True, seed=42),
+    processor=MyProcessor(),     # turns the record into {"input_ids": …, "pixel_values": …}
+    batch_size=8,
+    num_workers=4,
 )
 ```
 
-Use `ckpt_type=dcp` (the default) — not `ckpt_type=dummy` which disables all checkpointing.
+Map-style sources are **resumable** (see §5).
 
-#### Limitations
+### Bring your own streaming / iterable dataset
 
-- **Map-style datasets only.** Stateful resume is not supported for `IterableDataset` sources.
-- **`fork` start method required** (the default for Linux/CUDA). `spawn` is not supported.
-- **`persistent_workers=True` required** when `num_workers > 0` (auto-enforced for all map-style datasets).
+```python
+hf_stream = load_dataset("some/dataset", split="train", streaming=True)
+loader = CosmosDataLoader(
+    distributor=IterableDistributor(hf_stream),   # round-robin shard across rank×worker
+    processor=MyProcessor(),
+    batch_size=8,
+)
+```
+
+Iterable sources are **not** resumable (you can't random-access to fast-forward).
+
+### Token-budget packing for variable-length sequences
+
+```python
+loader = CosmosDataLoader(
+    distributor=IterableDistributor(stream),
+    processor=MyProcessor(),                       # yields {"input_ids": Tensor[L], …}
+    batcher=PoolPackingBatcher(max_tokens=16000, pool_size=16, max_batch_size=1),
+    collator=MyCollator(),
+)
+```
+
+`PoolPackingBatcher.sample_size` defaults to `len(sample["input_ids"])`; pass
+`size_fn=lambda s: …` (or subclass and override `sample_size`) for a custom cost.
+
+### Order-preserving sequence packing
+
+```python
+batcher=SequentialPackingBatcher(
+    max_sequence_length=45056,
+    tokenizer_spatial_compression_factor=16,
+    tokenizer_temporal_compression_factor=4,
+    patch_spatial=2,
+)
+```
+
+Packs samples in stream order until the token budget is hit (no reordering).
+Exactly one of `max_sequence_length` (token-budget mode) or
+`max_samples_per_batch` (count-only mode) must be set.
+
+### Mix multiple datasets by ratio (one pipeline)
+
+```python
+distributor=MixtureDistributor(
+    {"webvid": (IterableDistributor(webvid), 3.0),
+     "internal": (IterableDistributor(internal), 1.0)},
+    seed=0,
+)
+```
+
+Ratio-weighted merge into a single stream — use when the datasets share one
+processor/batcher/collator (homogeneous join).
+
+### Interleave heterogeneous pipelines (different processors/collators)
+
+```python
+from cosmos_framework.data.vfm.dataflow import JointCosmosDataLoader
+
+joint = JointCosmosDataLoader(
+    dataloaders={
+        "vlm": {"dataloader": vlm_loader, "ratio": 1},
+        "vfm": {"dataloader": vfm_loader, "ratio": 3},
+    },
+    seed=42,
+)
+```
+
+Each output batch comes from one selected inner `CosmosDataLoader` (ratio-weighted,
+seeded). Use when the joined datasets need *different* processing — each inner
+loader is a full four-role pipeline. Every yielded batch is tagged with
+`"dataset_name"`. (`"global_id"` is reserved by the checkpoint state and cannot be
+used as a dataset name.)
 
 ---
 
-### Data-parallel sharding
+## 4. Wiring into a training recipe (Hydra)
 
-`DataPackerDataLoader` automatically shards `data_source` across ranks **and**
-DataLoader workers. Each `(dp_rank, worker_id)` pair receives a disjoint subset —
-a strided slice of the (shuffled) permutation.
-
-**If your dataset already shards internally** (like `SFTDataset`), disable its
-sharding before passing it to `DataPackerDataLoader`:
+Recipes build the loader with `LazyCall` so CLI overrides work:
 
 ```python
-def get_my_dataset_no_dp(**kwargs):
-    dataset = MyDataset(**kwargs)
-    dataset.shard_world_size = 1   # disable internal sharding
-    dataset.shard_rank = 0
-    return dataset
-```
-
-**For FSDP + TP/PP**: pass `parallel_dims` so the correct DP rank is used
-(global rank ≠ DP rank in these setups):
-
-```python
-DataPackerDataLoader(..., parallel_dims=parallel_dims)
-```
-
----
-
-## JointDataPackerDataLoader
-
-### When to use it
-
-`JointDataPackerDataLoader` wraps **multiple** `DataPackerDataLoader` instances
-with ratio-based seeded selection. Use it when training on multiple datasets with
-different modalities or formats — for example, video + action data at a 3:1 ratio.
-
-Semantics mirror `IterativeJointDataLoader`:
-
-- **One batch = one dataset** — samples from different datasets never share a packed batch.
-- Ratios control how frequently each dataset is visited (per batch, not per sample).
-- Selection is deterministic: step `i` always picks the same dataset given the same `seed`.
-- Stateful checkpoint/resume: both the outer step counter (`global_id`) and each inner
-  loader's per-worker position are saved and restored.
-
-### How to wire it up
-
-Each inner `DataPackerDataLoader` must be given a unique `name` that matches its
-key in the `dataloaders` dict. The `name` namespaces the resume env vars to
-prevent conflicts between concurrent loaders.
-
-```python
-from cosmos_framework.data.vfm.data_packer_dataloader import DataPackerDataLoader, JointDataPackerDataLoader
-from cosmos_framework.callbacks.dataloader_state import JointDataLoaderStateCallback
 from cosmos_framework.utils.lazy_config import LazyCall as L
 
-# Build the joint loader
-joint_loader = JointDataPackerDataLoader(
-    dataloaders={
-        "video": {
-            "dataloader": DataPackerDataLoader(
-                data_source=MyVideoDataset(...),
-                data_packer=MyVideoDataPacker(...),
-                max_tokens=45056,
-                shuffle=True,
-                seed=0,
-                name="video",          # must match the key above
-                num_workers=4,
-                persistent_workers=True,
-                pin_memory=True,
-            ),
-            "ratio": 3,                # video 3×, action 1×
-        },
-        "action": {
-            "dataloader": DataPackerDataLoader(
-                data_source=MyActionDataset(...),
-                data_packer=MyActionDataPacker(...),
-                max_tokens=999_999,
-                max_batch_size=128,
-                shuffle=True,
-                seed=0,
-                name="action",         # must match the key above
-                num_workers=4,
-                persistent_workers=True,
-                pin_memory=True,
-            ),
-            "ratio": 1,
-        },
-    },
-    seed=42,   # controls outer dataset selection sequence
-)
-
-# Wire into the experiment config
-exp["dataloader_train"] = joint_loader
-exp["trainer"]["callbacks"]["dataloader_state"] = JointDataLoaderStateCallback(
-    outer_loader=joint_loader,
-    distributor_type="data_packer",
+dataloader_train = L(CosmosDataLoader)(
+    distributor=L(MapDistributor)(dataset=L(my_dataset_factory)(...), shuffle=True),
+    processor=L(MyProcessor)(...),
+    batcher=L(PoolPackingBatcher)(max_tokens="${data_setting.max_tokens}", max_batch_size=1),
+    collator=L(MyCollator)(),
+    num_workers=2,
 )
 ```
 
-> **Reserved name**: `"global_id"` cannot be used as a dataset name — it is
-> reserved by the checkpoint state format.
+Override from the CLI like any Hydra node, e.g.
+`dataloader_train.batcher.max_tokens=8000`. See the live recipes for full examples:
+`pre_exp012_llava_ov` (VLM), `videophy2_sft_nano` (videophy2),
+`pre_exp012_llava_ov_mapstyle_dataloader` (map-style resumable VLM), and
+`vision_sft_nano_mapstyle_dataloader` (VFM, alongside the legacy `vision_sft_nano`).
 
-#### `JointDataPackerDataLoader` parameters
-
-| Parameter     | What it controls                                                                                                         |
-| ------------- | ------------------------------------------------------------------------------------------------------------------------ |
-| `dataloaders` | Dict mapping dataset name → `{"dataloader": DataPackerDataLoader, "ratio": int}`. Entries with `ratio <= 0` are skipped. |
-| `seed`        | Base seed for outer dataset selection. Step `i` uses `np.random.RandomState(seed + i)` → same sequence on every rank.    |
-
-#### `JointDataLoaderStateCallback`
-
-This single callback replaces the per-inner-loader `DataLoaderStateCallback`
-instances. It saves:
-
-- `global_id` — the outer step counter, which determines which dataset fires at each step on resume.
-- Per-dataset, per-worker `(epoch, index)` — each inner loader's position.
-
-All state is written to a single DCP checkpoint entry (`checkpoint_component="dataloader"`).
-
-### Stateful checkpoint/resume
-
-At checkpoint step `N`:
-
-- `global_id = N` is saved.
-- Each inner loader saves its per-worker `(epoch, index)` under its `name` key.
-
-On resume:
-
-1. `JointDataLoaderStateCallback.load_state_dict` calls `set_start_iteration(N)` on the outer loader → selection sequence resumes from step `N`.
-2. Each inner `DataLoaderStateCallback.load_state_dict` sets namespaced env vars (`DP_STATE_{name}_WORKER_{id}_EPOCH/INDEX`) → workers fast-forward to the saved position.
-
-Inner loader iterators are created lazily on the **first** `__iter__` call (not at
-`__init__` time), ensuring workers fork **after** env vars have been set.
+> **Structured-TOML launches.** When you launch a VLM recipe via `--sft-toml`,
+> the flat `[dataloader_train]` knobs `max_samples_per_batch` and
+> `max_sequence_length` are routed onto the loader's nested batcher
+> (`dataloader_train.batcher.max_batch_size` and `…batcher.max_tokens`) by
+> `PATH_REMAPS["vlm"]` in `configs/toml_config/toml_config_helper.py`. This only
+> works for experiments whose batcher actually has those fields (e.g.
+> `PoolPackingBatcher`).
 
 ---
 
-## Real-world examples
+## 5. Checkpoint / resume
 
-### Reasoner — HuggingFace image-text dataset
+Resume is handled by the existing `DataLoaderStateCallback`:
 
-**File**: `cosmos_framework/configs/base/vlm/experiment/llava_ov_datapacker_experiment.py`
-
-```
-data_source:  lmms-lab/LLaVA-OneVision-Data  (streaming IterableDataset)
-DataPacker:   VLMDataPacker
-  sft_process_sample:  ShareGPT → OpenAI messages → Qwen3-VL processor
-  compute_num_tokens:  len(input_ids)
-  sft_collate_fn:      unsqueeze batch dim, keep pixel_values flat
-max_batch_size: 1
-max_tokens:    ~16000
-shuffle:       False  (streaming IterableDataset — use .shuffle() externally)
+```python
+from cosmos_framework.callbacks.dataloader_state import DataLoaderStateCallback
+cb = DataLoaderStateCallback(distributor_type="cosmos_dataloader")
 ```
 
-### Action Policy — Robot learning (LIBERO)
+- Use a **`MapDistributor`** source. On save, the callback records each worker's
+  `(epoch, index)` from the per-batch `sample_worker_id`/`sample_epoch`/`sample_index`
+  tensors the loader stamps. On load, it sets `COSMOS_DL_STATE_*` env vars *before*
+  workers fork; `MapDistributor.stream` reads them and fast-forwards to the exact
+  next sample — no duplicated or skipped samples.
+- **Iterable** sources are not resumable (no position to fast-forward to); the
+  stream restarts from the beginning.
+- For multiple loaders sharing a process (e.g. inside `JointCosmosDataLoader`),
+  give each a distinct `name=` so resume env vars are namespaced
+  (`COSMOS_DL_STATE_{name}_WORKER_{id}_{EPOCH,INDEX}`), and use a single
+  `JointDataLoaderStateCallback(outer_loader=joint_loader, distributor_type="cosmos_dataloader")`
+  instead of one `DataLoaderStateCallback` per inner loader.
+- Use `ckpt_type=dcp` (the default) — not `ckpt_type=dummy`, which disables all
+  checkpointing. The on-disk checkpoint format is unchanged.
 
-**File**: `cosmos_framework/configs/base/experiment/action/posttrain_config/libero_policy_datapacker_experiment.py`
-
-```
-data_source:  LIBERODataset  (map-style Dataset, passed directly)
-DataPacker:   ActionDataPacker
-  sft_process_sample:  full ActionTransformPipeline (resize, tokenize, pad action)
-  compute_num_tokens:  VAE video tokens + text tokens
-  sft_collate_fn:      action/domain_id/sequence_plan fields + video + text
-max_batch_size: 128   (token budget disabled — batch bounded by max_batch_size)
-max_tokens:    999999
-shuffle:       True, seed=0
-```
-
-`LIBERODataset` is a map-style `Dataset` passed directly. `shuffle=True` enables
-per-epoch shuffling and stateful checkpoint/resume. This pattern (high `max_tokens`
-
-- bounded `max_batch_size`) is standard for action policy training where you want
-a fixed number of demonstrations per step.
+> **Validated:** a live save→stop→resume on `pre_exp012_llava_ov_mapstyle_dataloader`
+> (8 dp ranks, `save_iter=100`) reproduces the original run's per-rank
+> `input_ids` shapes exactly across the resume boundary — no duplicated or
+> skipped samples on any rank.
 
 ---
 
-## Checklist for a new dataset
+## 6. Distributed & sharding
 
-### Single dataset (`DataPackerDataLoader`)
+- The loader resolves the data-parallel coordinates as
+  `parallel_dims.dp_coord` > `torch.distributed` > `(0, 1)`. For FSDP+TP/PP, pass
+  `parallel_dims=` so sharding uses the correct DP rank (not the global rank).
+- `IterableDistributor`/`MapDistributor` give each `(dp_rank, worker_id)` pair a
+  disjoint, complete slice: stream `i` is taken iff
+  `i % (dp_world_size × num_workers) == dp_rank × num_workers + worker_id`.
+- `RankPartitionedDistributor` instead assigns *whole ranks* to datasets by ratio
+  and sets `shard_world_size`/`shard_rank` on the chosen dataset (which then
+  self-shards across the ranks sharing it). If your dataset already shards
+  internally, disable that (`dataset.shard_world_size = 1; dataset.shard_rank = 0`)
+  before handing it to a per-`(rank,worker)`-sharding distributor.
+- A `MapDistributor` source with `num_workers > 0` is automatically promoted to
+  `persistent_workers=True` (required for correct stateful resume). The `fork`
+  start method (the Linux/CUDA default) is required; `spawn` is not supported.
 
-- [ ] Choose a `data_source`: map-style `Dataset` or `IterableDataset` (no plain lists/generators)
-- [ ] For map-style: pass directly; use `shuffle=True, seed=<N>` for per-epoch shuffle
-- [ ] For iterable: shuffle externally before passing (e.g. `.shuffle(buffer_size=N)`)
-- [ ] If dataset has internal DP sharding, disable it (`shard_world_size=1`)
-- [ ] Subclass `DataPacker` and implement `sft_process_sample`, `compute_num_tokens`, `sft_collate_fn`
-- [ ] Choose `max_tokens` and `max_batch_size` for your modality
-- [ ] Add `DataLoaderStateCallback(distributor_type="data_packer")` to the experiment's callbacks (works for both `shuffle=True` and `shuffle=False` on map-style datasets)
-- [ ] Use `ckpt_type=dcp` (not `dummy`) for real checkpoint/resume
-- [ ] Register in Hydra ConfigStore with `cs.store(group="experiment", ...)`
-- [ ] Smoke-test with `ckpt_type=dummy trainer.max_iter=10` before a full run
+---
 
-### Multiple datasets (`JointDataPackerDataLoader`)
+## 7. Troubleshooting / FAQ
 
-- [ ] Give each inner `DataPackerDataLoader` a unique `name` matching its key in `dataloaders`
-- [ ] Set appropriate `ratio` for each dataset (controls visit frequency per batch)
-- [ ] Use `JointDataLoaderStateCallback(outer_loader=joint_loader)` instead of `DataLoaderStateCallback`
-- [ ] Do **not** also register standalone `DataLoaderStateCallback` for inner loaders — `JointDataLoaderStateCallback` handles all of them
-- [ ] Avoid using `"global_id"` as a dataset name (reserved)
-- [ ] Use `ckpt_type=dcp` for real checkpoint/resume
+- **OOM on large packed batches.** `PoolPackingBatcher(apply_long_sample_halving=True)`
+  (default) halves the token budget for any batch whose largest sample ≥ 1000
+  tokens. Set `False` only after validating memory headroom at the literal budget.
+- **`ValueError: Provide either a batcher= or a batch_size=`.** You passed neither;
+  give one. Passing both is also an error.
+- **`ValueError: Map-style resume cannot safely stamp a multi-sample batch …`.**
+  A reordering batcher (pool packing) with `batch_size > 1` on a resumable
+  `MapDistributor` can't record a gap-free resume position. Use `max_batch_size=1`
+  with pool packing, a sequential (order-preserving) batcher, or an iterable
+  (non-resumable) source.
+- **`'int' object is not iterable` / wrong tensor shapes in the model.** Your
+  `BatchCollator` is producing a different batch structure than the model expects.
+  Match the structure the model consumes (for VFM, that's `VFMListCollator`, which
+  keeps media as per-sample lists).
+- **Oversized samples silently dropped (sequential packing).** A single sample
+  larger than `max_sequence_length` is discarded with a logged error — increase
+  the budget or filter upstream.
+- **`num_workers` / `persistent_workers`.** `persistent_workers=True` is ignored
+  (with a log) when `num_workers=0`.
+
+---
+
+## 8. End-to-end worked example (custom dataset → training)
+
+A local image-caption folder, fully custom processor, normal batching:
+
+```python
+import torch
+from cosmos_framework.data.vfm.dataflow import (
+    CosmosDataLoader, MapDistributor, RawItemProcessor, DefaultBatchCollator, SimpleBatcher,
+)
+
+class ImageCaptionFolder(torch.utils.data.Dataset):
+    def __init__(self, records): self.records = records          # [{"image_path":…, "caption":…}, …]
+    def __len__(self): return len(self.records)
+    def __getitem__(self, i): return self.records[i]
+
+class ImageCaptionProcessor(RawItemProcessor):
+    def __init__(self, tokenizer, image_loader):
+        self.tokenizer, self.image_loader = tokenizer, image_loader
+    def process(self, item):
+        return {
+            "pixel_values": self.image_loader(item["image_path"]),   # Tensor[C,H,W]
+            "input_ids": self.tokenizer(item["caption"]),            # Tensor[L]
+        }
+
+loader = CosmosDataLoader(
+    distributor=MapDistributor(ImageCaptionFolder(records), shuffle=True, seed=0),
+    processor=ImageCaptionProcessor(tokenizer, image_loader),
+    batcher=SimpleBatcher(batch_size=16),
+    collator=DefaultBatchCollator(),
+    num_workers=4,
+)
+
+for batch in loader:                  # batch = {"pixel_values": [16,C,H,W], "input_ids": [16,L]}
+    loss = model(**batch)
+    loss.backward()
+```
+
+To pack variable-length captions by token budget instead of fixed size, swap the
+batcher for `PoolPackingBatcher(max_tokens=…, max_batch_size=1)` and provide a
+collator that pads/stacks accordingly — nothing else changes.
+
+---
+
+## 9. Real-world examples
+
+### Reasoner (VLM) — HuggingFace image-text dataset, streaming
+
+**File**: `cosmos_framework/configs/base/vlm/experiment/llava_ov_vlm.py`
+(`pre_exp012_llava_ov`)
+
+```
+distributor: IterableDistributor(get_llava_ov_streaming(...))   # lmms-lab/LLaVA-OneVision-Data
+processor:   VLMProcessor   (ShareGPT → OpenAI messages → Qwen3-VL processor)
+batcher:     PoolPackingBatcher(max_tokens≈16000, max_batch_size=1)
+collator:    VLMCollator
+```
+
+Streaming source → **not** resumable. For a resumable variant of the same recipe,
+see `llava_ov_mapstyle_dataloader_experiment.py` (`pre_exp012_llava_ov_mapstyle_dataloader`): it loads
+the subset as a real map-style `Dataset` (`load_dataset(..., streaming=False)`) and
+wraps it in a `MapDistributor`, so checkpoint/resume works (see §5).
+
+### Reasoner (VLM) — local video dialog dataset
+
+**File**: `cosmos_framework/configs/base/vlm/experiment/videophy2_sft_nano.py`
+(`videophy2_sft_nano`)
+
+```
+distributor: IterableDistributor(build_videophy2_local_dataset(...))
+processor:   VideoPhy2Processor
+batcher:     PoolPackingBatcher(max_tokens≈16000, max_batch_size=1)
+collator:    VLMCollator
+```
+
+### Generator (VFM) — Cosmos video SFT
+
+**File**: the `vision_sft_nano_mapstyle_dataloader` experiment (the new-loader VFM variant,
+alongside the legacy `vision_sft_nano`).
+
+```
+distributor: IterableDistributor over the Cosmos video dataset
+processor:   recipe processor (decode + tokenize)
+batcher:     SequentialPackingBatcher(max_sequence_length=…)   # order-preserving token packing
+collator:    VFMListCollator                                   # media kept as per-sample lists
+```
+
+---
+
+## 10. Checklist for a new dataset
+
+### Single dataset (`CosmosDataLoader`)
+
+- [ ] Pick a **distributor**: `MapDistributor` (map-style `Dataset`, shuffle +
+      **resume**) or `IterableDistributor` (streaming, not resumable).
+- [ ] Write a **`RawItemProcessor`** (or use `IdentityProcessor` if your dataset
+      already yields finished sample dicts).
+- [ ] Pick a **batcher**: `batch_size=N` sugar, `SimpleBatcher`,
+      `PoolPackingBatcher` (token-budget, reorders), or `SequentialPackingBatcher`
+      (token-budget, order-preserving).
+- [ ] Pick a **collator**: `DefaultBatchCollator`, `VFMListCollator`, or your own
+      (must match the structure the model consumes).
+- [ ] For real resume: use a `MapDistributor`, add
+      `DataLoaderStateCallback(distributor_type="cosmos_dataloader")`, and
+      `ckpt_type=dcp` (not `dummy`).
+- [ ] For FSDP+TP/PP, pass `parallel_dims=` so the correct DP rank is used.
+- [ ] Register the experiment in the Hydra ConfigStore
+      (`cs.store(group="experiment", …)`).
+- [ ] Smoke-test with `--dryrun` (config build) then `trainer.max_iter=10` before a
+      full run.
+
+### Multiple datasets (`JointCosmosDataLoader`)
+
+- [ ] Build each inner pipeline as its own `CosmosDataLoader`; give each a unique
+      `name=` matching its key in `dataloaders` (namespaces resume env vars).
+- [ ] Set each dataset's `ratio` (controls how often it is visited, per batch).
+- [ ] Use a single
+      `JointDataLoaderStateCallback(outer_loader=joint_loader, distributor_type="cosmos_dataloader")`
+      — do **not** also register a standalone `DataLoaderStateCallback` per inner
+      loader.
+- [ ] Avoid `"global_id"` as a dataset name (reserved by the checkpoint state).
+- [ ] Use `ckpt_type=dcp` for real checkpoint/resume.
+
+---
+
+## Reference: where things live
+
+- ABCs + built-ins: `cosmos_framework/data/vfm/dataflow/` (`base.py`,
+  `distributors.py`, `batchers.py`, `collators.py`, `processors.py`, `loader.py`).
+- Public symbols are re-exported from `cosmos_framework.data.vfm.dataflow`.
+- Live recipes using the loader: `pre_exp012_llava_ov`,
+  `pre_exp012_llava_ov_mapstyle_dataloader`, `videophy2_sft_nano`, and `vision_sft_nano_mapstyle_dataloader`.

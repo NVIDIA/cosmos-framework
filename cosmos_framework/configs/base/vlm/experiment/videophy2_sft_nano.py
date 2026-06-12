@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: OpenMDW-1.1
 
-"""VideoPhy-2 SFT recipe: LocalSFTDataset + DataPackerDataLoader on Qwen3-VL.
+"""VideoPhy-2 SFT recipe: LocalSFTDataset + CosmosDataLoader on Qwen3-VL.
 
 Launch via examples/launch_sft_videophy2_nano.sh after running
 prepare_videophy2_from_hf to populate $VIDEOPHYSICS_ROOT.
@@ -18,14 +18,15 @@ import torch.utils.data
 from hydra.core.config_store import ConfigStore
 
 from cosmos_framework.utils.lazy_config import LazyCall as L
-from cosmos_framework.utils.lazy_config import LazyDict, instantiate
-from cosmos_framework.data.vfm.data_packer import DataPacker
-from cosmos_framework.data.vfm.data_packer_dataloader import DataPackerDataLoader
+from cosmos_framework.utils.lazy_config import LazyDict
+from cosmos_framework.data.vfm.dataflow import CosmosDataLoader, IterableDistributor, PoolPackingBatcher
 from cosmos_framework.data.vfm.processors import build_processor
 from cosmos_framework.data.vlm.local_sft_dataset import LocalSFTDataset
 from cosmos_framework.data.vlm.data_sources_videophy2.videophy2 import DATAINFO
 from cosmos_framework.utils import log
 from cosmos_framework.utils.vlm.constant import IGNORE_INDEX, PROCESSOR_KEYS_TO_ADD
+from cosmos_framework.configs.base.vlm.experiment.dataflow_roles import VLMCollator
+from cosmos_framework.configs.base.vlm.experiment.videophy2_dataflow_roles import VideoPhy2Processor
 
 cs = ConfigStore.instance()
 
@@ -33,7 +34,7 @@ cs = ConfigStore.instance()
 class _UnshardedLocalSFTDataset(LocalSFTDataset):
     """Yield the full shuffled manifest per iteration.
 
-    Why: ``DataPackerDataLoader._IterableWrapper`` already shards by
+    Why: ``CosmosDataLoader``'s IterableDistributor already shards by
     ``dp_rank * num_workers + worker_id``; stock ``LocalSFTDataset`` shards
     again inside ``__iter__``, double-sharding to ``1 / (world*workers)^2``.
     """
@@ -53,7 +54,7 @@ def build_videophy2_local_dataset(
     dataset_key: str,
     split: str,
 ) -> _UnshardedLocalSFTDataset:
-    # augmentor_config=None: the DataPacker decodes+tokenizes inline; the
+    # augmentor_config=None: the Processor decodes+tokenizes inline; the
     # BytesToMedia/TokenizeData augmentors aren't shipped in OSS.
     source = DATAINFO[dataset_key]
     if split not in source.manifest_path:
@@ -73,12 +74,6 @@ def build_videophy2_local_dataset(
         split=split,
         dataset_name=dataset_key,
     )
-
-
-def build_videophy2_datapacker_dataloader(**kwargs) -> DataPackerDataLoader:
-    for _spurious in ("storage_type",):
-        kwargs.pop(_spurious, None)
-    return DataPackerDataLoader(**kwargs)
 
 
 _MAX_VIDEO_FRAMES = 32
@@ -111,138 +106,30 @@ def _decode_video_to_pil_frames(video_bytes: bytes) -> tuple[list, float]:
     return frames, float(effective_fps)
 
 
-class VideoPhy2DataPacker(DataPacker):
-    """LocalSFTDataset + Qwen3-VL processor adapter; max_batch_size=1."""
-
-    def __init__(
-        self,
-        tokenizer_config: Any,
-        max_seq_len: int = 16000,
-        ignore_index: int = IGNORE_INDEX,
-    ) -> None:
-        self._max_seq_len = max_seq_len
-        self._ignore_index = ignore_index
-        self._processor = (
-            tokenizer_config if hasattr(tokenizer_config, "apply_chat_template") else instantiate(tokenizer_config)
-        )
-
-    def _materialize_media_in_conversation(
-        self,
-        conversation: list,
-        media_bytes_by_key: dict,
-    ) -> list:
-        # Resolve "video": "<key>" / "image": "<key>" references against
-        # data_dict["media"] (bytes); decode each unique key once.
-        decoded_cache: dict[str, tuple[list, float]] = {}
-        new_messages: list[dict] = []
-        for message in conversation:
-            if not isinstance(message, dict):
-                continue
-            content = message.get("content")
-            if isinstance(content, str):
-                new_messages.append({"role": message.get("role", "user"), "content": content})
-                continue
-            if not isinstance(content, list):
-                continue
-            new_content: list[dict] = []
-            for item in content:
-                if not isinstance(item, dict):
-                    continue
-                kind = item.get("type")
-                if kind == "video":
-                    key = item.get("video")
-                    if not isinstance(key, str):
-                        new_content.append(item)
-                        continue
-                    if key not in media_bytes_by_key:
-                        raise KeyError(
-                            f"conversation references video key {key!r} not present in "
-                            f"sample['media'] (keys: {list(media_bytes_by_key)})"
-                        )
-                    if key not in decoded_cache:
-                        decoded_cache[key] = _decode_video_to_pil_frames(media_bytes_by_key[key])
-                    frames, fps = decoded_cache[key]
-                    new_content.append({"type": "video", "video": frames, "fps": fps})
-                elif kind == "image":
-                    key = item.get("image")
-                    if not isinstance(key, str):
-                        new_content.append(item)
-                        continue
-                    if key not in media_bytes_by_key:
-                        raise KeyError(
-                            f"conversation references image key {key!r} not present in "
-                            f"sample['media'] (keys: {list(media_bytes_by_key)})"
-                        )
-                    from PIL import Image
-
-                    img = Image.open(io.BytesIO(media_bytes_by_key[key])).convert("RGB")
-                    new_content.append({"type": "image", "image": img})
-                else:
-                    new_content.append(item)
-            new_messages.append({"role": message.get("role", "user"), "content": new_content})
-        return new_messages
-
-    def sft_process_sample(self, item: dict) -> dict:
-        conversation = item.get("texts")
-        if not isinstance(conversation, list):
-            raise TypeError(
-                f"LocalSFTDataset sample expected 'texts' to be a list, got {type(conversation).__name__}"
-            )
-        media_bytes_by_key = item.get("media") or {}
-        messages = self._materialize_media_in_conversation(conversation, media_bytes_by_key)
-
-        inputs = self._processor.apply_chat_template(
-            messages,
-            tokenize=True,
-            add_generation_prompt=False,
-        )
-        input_ids = inputs["input_ids"]  # [N]
-
-        token_mask = self._processor.add_assistant_tokens_mask(input_ids)  # [N] bool
-        labels = input_ids.clone()
-        labels[~token_mask] = self._ignore_index
-
-        result: dict = {
-            "input_ids": input_ids,
-            "labels": labels,
-        }
-        for key in PROCESSOR_KEYS_TO_ADD:
-            if key in inputs and inputs[key] is not None:
-                result[key] = inputs[key]
-
-        return result
-
-    def compute_num_tokens(self, sample: dict) -> int:
-        return int(sample["input_ids"].shape[0])
-
-    def sft_collate_fn(
-        self,
-        samples: list[dict],
-        max_len: int,
-        ignore_label_id: int = IGNORE_INDEX,
-    ) -> dict:
-        assert len(samples) == 1, f"VideoPhy2DataPacker expects max_batch_size=1, got {len(samples)}"
-        s = samples[0]
-
-        worker_info = torch.utils.data.get_worker_info()
-        worker_id = worker_info.id if worker_info is not None else 0
-
-        batch: dict = {
-            "input_ids": s["input_ids"].unsqueeze(0),
-            "labels": s["labels"].unsqueeze(0),
-            "sample_worker_id": torch.tensor([worker_id]),
-            "sample_epoch": torch.tensor([0]),
-            "sample_index": torch.tensor([0]),
-        }
-
-        if "attention_mask" in s and s["attention_mask"] is not None:
-            batch["attention_mask"] = s["attention_mask"].unsqueeze(0)
-
-        for key in ("pixel_values", "pixel_values_videos", "image_grid_thw", "video_grid_thw", "second_per_grid_ts"):
-            if key in s and s[key] is not None:
-                batch[key] = s[key]
-
-        return batch
+def _dl(dataset_key, split, num_workers, persistent_workers=False, pin_memory=False, prefetch_factor=None):
+    return L(CosmosDataLoader)(
+        distributor=L(IterableDistributor)(
+            iterable=L(build_videophy2_local_dataset)(dataset_key=dataset_key, split=split),
+        ),
+        processor=L(VideoPhy2Processor)(
+            processor=L(build_processor)(
+                tokenizer_type="${model.config.policy.backbone.model_name}",
+                config_variant="hf",
+            ),
+            ignore_index=IGNORE_INDEX,
+        ),
+        batcher=L(PoolPackingBatcher)(
+            max_tokens="${data_setting.max_tokens}",
+            pool_size=16,
+            max_batch_size=1,
+            long_threshold=6400,
+        ),
+        collator=L(VLMCollator)(),
+        num_workers=num_workers,
+        persistent_workers=persistent_workers,
+        pin_memory=pin_memory,
+        prefetch_factor=prefetch_factor,
+    )
 
 
 videophy2_sft_nano = LazyDict(
@@ -312,48 +199,8 @@ videophy2_sft_nano = LazyDict(
             hf_export=dict(enabled=True),
         ),
         upload_reproducible_setup=False,
-        dataloader_train=L(build_videophy2_datapacker_dataloader)(
-            data_source=L(build_videophy2_local_dataset)(
-                dataset_key="videophy2_train",
-                split="train",
-            ),
-            data_packer=L(VideoPhy2DataPacker)(
-                tokenizer_config=L(build_processor)(
-                    tokenizer_type="${model.config.policy.backbone.model_name}",
-                    config_variant="hf",
-                ),
-                max_seq_len="${data_setting.max_tokens}",
-                ignore_index=IGNORE_INDEX,
-            ),
-            max_tokens="${data_setting.max_tokens}",
-            max_batch_size=1,
-            pool_size=16,
-            num_workers=2,
-            prefetch_factor=2,
-            persistent_workers=True,
-            pin_memory=True,
-        ),
-        dataloader_val=L(build_videophy2_datapacker_dataloader)(
-            data_source=L(build_videophy2_local_dataset)(
-                dataset_key="videophy2_val",
-                split="val",
-            ),
-            data_packer=L(VideoPhy2DataPacker)(
-                tokenizer_config=L(build_processor)(
-                    tokenizer_type="${model.config.policy.backbone.model_name}",
-                    config_variant="hf",
-                ),
-                max_seq_len="${data_setting.max_tokens}",
-                ignore_index=IGNORE_INDEX,
-            ),
-            max_tokens="${data_setting.max_tokens}",
-            max_batch_size=1,
-            pool_size=16,
-            num_workers=0,
-            prefetch_factor=None,
-            persistent_workers=False,
-            pin_memory=True,
-        ),
+        dataloader_train=_dl("videophy2_train", "train", 2, persistent_workers=True, pin_memory=True, prefetch_factor=2),
+        dataloader_val=_dl("videophy2_val", "val", 0, persistent_workers=False, pin_memory=True, prefetch_factor=None),
     ),
     flags={"allow_objects": True},
 )

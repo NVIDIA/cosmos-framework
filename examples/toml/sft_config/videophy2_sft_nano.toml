@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: OpenMDW-1.1
 
-# videophy2_sft_nano — VLM dialog SFT on VideoPhy-2 via DataPackerDataLoader.
+# videophy2_sft_nano — VLM dialog SFT on VideoPhy-2 via CosmosDataLoader.
 # Base config = cosmos_framework/configs/base/vlm/config.py (selected by [job].task="vlm").
 #
 # Dataset prep:
@@ -84,4 +84,8 @@ load_path            = "???"
 save_iter            = 100
 
 [dataloader_train]
+# Routed by PATH_REMAPS["vlm"] onto the CosmosDataLoader's nested PoolPackingBatcher:
+#   max_samples_per_batch -> dataloader_train.batcher.max_batch_size
+#   max_sequence_length   -> dataloader_train.batcher.max_tokens
 max_samples_per_batch = 1
+max_sequence_length   = 16000

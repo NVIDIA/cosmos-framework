@@ -10,7 +10,7 @@
 #   * training-smoke       — Nano SFT pipeline (convert -> train 5 -> export -> t2i)
 #   * generator-regression — vision_sft_nano loss vs goldens (4-GPU subset)
 #   * inference-smoke      — Nano multi-modality inference (t2vs + policy + forward_dynamics)
-#   * reasoner-regression  — llava_ov_datapacker loss vs goldens (4-GPU subset)
+#   * reasoner-regression  — llava_ov loss vs goldens (4-GPU subset)
 #
 # Requires:
 #   * a self-hosted runner labelled [self-hosted, gpu, h200] with 8 GPUs,
@@ -153,12 +153,12 @@ jobs:
       - name: Sync environment (cu128-train)
         run: uv sync --all-extras --group=cu128-train
 
-      # Reasoner (llava_ov_datapacker) loss vs the h100 goldens. -s streams the live log.
-      - name: Reasoner regression (llava_ov_datapacker, 4-GPU subset)
+      # Reasoner (llava_ov) loss vs the h100 goldens. -s streams the live log.
+      - name: Reasoner regression (llava_ov, 4-GPU subset)
         run: |
           export LD_LIBRARY_PATH=
           uv run --all-extras --group=cu128-train python -m pytest -v -s \
-            tests/launch_regression_test.py -k llava_ov_datapacker \
+            tests/launch_regression_test.py -k llava_ov \
             --num-gpus=4 --levels=2 -o addopts=
 
       # The h100_inputs fixture removes its DCP stage on teardown; clear the
