@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import collections
+import contextvars
 import time
 from contextlib import contextmanager
 from typing import Any, Callable, Dict, Mapping, Optional, Tuple
@@ -48,7 +49,7 @@ from cosmos_framework.model.vfm.utils.data_and_condition import (
     build_dense_sound_schedule,
     unwrap_and_densify,
 )
-from cosmos_framework.model.vfm.utils.memory import MemoryState
+from cosmos_framework.model.vfm.utils.memory import MemoryState, ReasonerMemoryState
 from cosmos_framework.model.vfm.utils.safetensors_loader import load_language_model as load_language_model_safetensors
 from cosmos_framework.model.vfm.vlm.qwen3_vl.utils import tokenize_caption
 from cosmos_framework.model.vfm.tokenizers.interface import VideoTokenizerInterface
@@ -57,6 +58,66 @@ from cosmos_framework.utils.vfm.data_utils import get_vision_data_resolution
 from cosmos_framework.utils.vfm.dtensor_helper import DTensorFastEmaModelUpdater
 from cosmos_framework.utils.vfm.model_weights_stats import WeightTrainingStat
 from cosmos_framework.utils.vfm.parallelism import ParallelDims
+
+
+# Names of the network offload groups (from ``Cosmos3VFMNetwork.offload_module_groups``)
+# whose weights should be materialized directly on CPU at load time (two-phase
+# materialization), so they never occupy GPU memory. Set by the inference layer via
+# ``cpu_offload_materialization`` around model construction; read inside ``build_net``.
+_CPU_OFFLOAD_NET_PARTS: contextvars.ContextVar[tuple[str, ...]] = contextvars.ContextVar(
+    "_cpu_offload_net_parts", default=()
+)
+
+
+@contextmanager
+def cpu_offload_materialization(net_parts: tuple[str, ...]):
+    """Materialize the named network offload groups on CPU during model construction.
+
+    Wrap model loading (``from_pretrained_dcp`` / ``load_model_from_checkpoint``) with
+    this so the listed groups (e.g. ``("reasoner", "generator")``) are built directly on
+    CPU and the checkpoint shards load into CPU tensors — they never touch the GPU. Empty
+    ``net_parts`` is a no-op (default joint materialization, unchanged).
+    """
+    token = _CPU_OFFLOAD_NET_PARTS.set(tuple(net_parts))
+    try:
+        yield
+    finally:
+        _CPU_OFFLOAD_NET_PARTS.reset(token)
+
+
+def _offloaded_tensor_ids(net: torch.nn.Module, net_parts: tuple[str, ...]) -> set[int]:
+    """Collect ``id()`` of every parameter/buffer belonging to the offloaded groups."""
+    groups = net.offload_module_groups()
+    ids: set[int] = set()
+    for part in net_parts:
+        for module in groups.get(part, []):
+            for tensor in (*module.parameters(recurse=True), *module.buffers(recurse=True)):
+                ids.add(id(tensor))
+    return ids
+
+
+def _materialize_meta_tensors(net: torch.nn.Module, device: torch.device, skip_ids: set[int] | None) -> None:
+    """Materialize every still-``meta`` parameter/buffer on ``device`` (skipping ``skip_ids``).
+
+    Allocates real empty tensors in place. ``skip_ids`` leaves the offloaded tensors on
+    ``meta`` for the first (GPU) pass so they sidestep the wasted random init, then a
+    second pass with ``skip_ids=None`` lands them on CPU.
+    """
+    for module in net.modules():
+        for name, param in list(module._parameters.items()):
+            if param is None or not param.is_meta:
+                continue
+            if skip_ids is not None and id(param) in skip_ids:
+                continue
+            module._parameters[name] = torch.nn.Parameter(
+                torch.empty_like(param, device=device), requires_grad=param.requires_grad
+            )
+        for name, buffer in list(module._buffers.items()):
+            if buffer is None or not buffer.is_meta:
+                continue
+            if skip_ids is not None and id(buffer) in skip_ids:
+                continue
+            module._buffers[name] = torch.empty_like(buffer, device=device)
 
 
 class OmniMoTModel(ImaginaireModel):
@@ -241,12 +302,27 @@ class OmniMoTModel(ImaginaireModel):
 
         with misc.timer("meta to cuda and broadcast model states"):
             net = net.to(dtype=dtype)
-            net.to_empty(device=DEVICE)
+            cpu_offload_net_parts = _CPU_OFFLOAD_NET_PARTS.get() if DEVICE == Device.CUDA else ()
+            if cpu_offload_net_parts:
+                # Single-GPU CPU offloading: materialize only the non-offloaded modules on
+                # the GPU and keep the offloaded towers on ``meta``, so ``init_weights``
+                # skips their random init — pure waste here (they come entirely from the
+                # checkpoint and have no non-persistent buffers) and crippling on CPU.
+                _materialize_meta_tensors(
+                    net, torch.device("cuda"), skip_ids=_offloaded_tensor_ids(net, cpu_offload_net_parts)
+                )
+            else:
+                net.to_empty(device=DEVICE)
+
+            # Weight init is only needed on CUDA (CPU/meta are for checkpoint conversion and
+            # smoke tests). It initializes the non-offloaded modules and their non-persistent
+            # buffers (e.g. RoPE); the offloaded towers stay on ``meta`` (init no-ops there).
             if DEVICE == Device.CUDA:
-                # Weight initialization is not needed for other devices (cpu,
-                # meta), since they are only for checkpoint conversion and smoke
-                # tests.
                 net.init_weights(buffer_device=DEVICE)
+                if cpu_offload_net_parts:
+                    # Land the offloaded towers on CPU; ``dcp.load`` fills them next, so they
+                    # never occupy GPU memory.
+                    _materialize_meta_tensors(net, torch.device("cpu"), skip_ids=None)
                 if getattr(self.config, "lora_enabled", False):
                     self._init_lora_weights_post_materialization(net)
 
@@ -1784,6 +1860,7 @@ class OmniMoTModel(ImaginaireModel):
         sequence_plans: list[SequencePlan],
         gen_data_clean: GenerationDataClean,
         skip_text_tokens: bool = False,
+        memory: MemoryState | None = None,
     ) -> list[torch.Tensor]:
         """
         Compute velocity prediction for a single sampling step.
@@ -1906,7 +1983,13 @@ class OmniMoTModel(ImaginaireModel):
             fps_vision=gen_data_clean.fps_vision,
             fps_action=fps_action,
             fps_sound=fps_sound,
+            memory=memory,
         )
+
+        if memory is not None and memory.is_und_only():
+            # Reasoner prefill: the network populated the per-layer understanding K/V
+            # cache as a side effect (no generation output). Nothing to mask/return.
+            return []
 
         # --- Apply velocity masks ---
         # Zero out velocity for conditioned parts (they don't change during sampling)
@@ -2388,6 +2471,61 @@ class OmniMoTModel(ImaginaireModel):
             _dp_shard_group = None
             _align_device = None
 
+        # --- Reasoner/generator split (single-GPU CPU offloading). Default off. ---
+        # When enabled (set by the inference layer via ``_reasoner_generator_split``),
+        # the understanding ("reasoner") pathway is computed once as a prefill that
+        # caches the per-layer understanding K/V; the diffusion denoise loop then runs
+        # generator-only and reuses that cache. ``_offload_stage_fn`` (optional, also
+        # set by the inference layer) stages the reasoner/generator weight groups into
+        # the single GPU arena around the prefill / denoise; the model itself never
+        # imports the inference-side offload machinery.
+        _split_enabled = getattr(self, "_reasoner_generator_split", False)
+        _stage_fn = getattr(self, "_offload_stage_fn", None)
+        _mem_cond: ReasonerMemoryState | None = None
+        _mem_uncond: ReasonerMemoryState | None = None
+        if _split_enabled:
+            if self.parallel_dims is not None and (
+                self.parallel_dims.cp_enabled
+                or self.parallel_dims.cfgp_enabled
+                or (self.parallel_dims.dp_shard_mesh is not None and self.parallel_dims.dp_shard_mesh.size() > 1)
+            ):
+                raise NotImplementedError(
+                    "Reasoner/generator-split CPU offloading is single-GPU only "
+                    "(no context-, CFG-, or FSDP-shard parallelism)."
+                )
+            net_obj = net or self.net
+            num_layers = len(net_obj.language_model.model.layers)
+            # The reasoner prefill is independent of the diffusion timestep (the
+            # understanding pathway never reads the timestep embedding), so any value
+            # works; the noise values are likewise unused (vision encode is skipped).
+            prefill_timestep = torch.zeros((n_sample, 1))
+
+            def _prefill_reasoner(tokens: list[list[int]], skip_text_tokens: bool) -> ReasonerMemoryState:
+                mem = ReasonerMemoryState(num_layers)
+                mem.set_mode("prefill")
+                self._get_velocity(
+                    net=net,
+                    noise_x=initial_noise,
+                    timestep=prefill_timestep,
+                    text_tokens=tokens,
+                    sequence_plans=sequence_plans,
+                    gen_data_clean=gen_data_clean,
+                    skip_text_tokens=skip_text_tokens,
+                    memory=mem,
+                )
+                mem.set_mode("gen")
+                return mem
+
+            if _stage_fn is not None:
+                _stage_fn("reasoner")
+            _mem_cond = _prefill_reasoner(cond_tokens, skip_text_tokens=False)
+            if guidance != 1.0:
+                _mem_uncond = _prefill_reasoner(uncond_tokens, skip_text_tokens=skip_text_tokens_for_cfg)
+
+            # Stage the generator for the whole denoise loop (reasoner now offloaded).
+            if _stage_fn is not None:
+                _stage_fn("generator")
+
         # Create a velocity function for a single sample (for use with self.sampler).
 
         def velocity_fn(noise_x: list[torch.Tensor], timestep: torch.Tensor) -> list[torch.Tensor]:
@@ -2402,6 +2540,12 @@ class OmniMoTModel(ImaginaireModel):
             timestep = timestep.repeat(len(noise_x), 1)
 
             def _single_velocity_fn(tokens: list[list[int]], skip_text_tokens: bool):
+                # In the reasoner/generator split, route each CFG branch to its own
+                # prefilled understanding K/V cache (cond vs uncond). Identity check on
+                # the token-list object distinguishes the branches.
+                _mem = None
+                if _split_enabled:
+                    _mem = _mem_cond if tokens is cond_tokens else _mem_uncond
                 return self._get_velocity(
                     net=net,
                     noise_x=noise_x,
@@ -2410,6 +2554,7 @@ class OmniMoTModel(ImaginaireModel):
                     sequence_plans=sequence_plans,
                     gen_data_clean=gen_data_clean,
                     skip_text_tokens=skip_text_tokens,
+                    memory=_mem,
                 )
 
             # Local CFG decision for THIS rank, honoring guidance_interval.
@@ -2861,6 +3006,11 @@ class OmniMoTModel(ImaginaireModel):
         self._normalize_video_databatch_inplace(data_batch)
         self._augment_image_dim_inplace(data_batch)  # converts each image tensor to (1, C, 1, H, W)
         raw_state_vision = data_batch[self.input_image_key if is_image_batch else self.input_video_key]
+        # Stage the VAE onto the GPU arena for conditioning encode when it is offloaded
+        # (no-op otherwise, and skipped entirely when there is nothing to encode, e.g. t2v).
+        _stage_fn = getattr(self, "_offload_stage_fn", None)
+        if _stage_fn is not None and len(raw_state_vision) > 0:
+            _stage_fn("vae")
         x0_tokens_vision = [
             self.encode(raw_state_vision_i).contiguous().float() for raw_state_vision_i in raw_state_vision
         ]
@@ -3549,6 +3699,10 @@ class OmniMoTModel(ImaginaireModel):
             fps_sound=fps_sound,
             memory=memory,
         )
+        if memory is not None and memory.is_und_only():
+            # Reasoner prefill: the network only populated the understanding K/V cache
+            # (side effect on ``memory``) and returned no generation predictions.
+            return dict()
         output_dict = dict()
         output_dict["preds_vision"] = out_net["preds_vision"]
         if self.config.action_gen and "preds_action" in out_net:

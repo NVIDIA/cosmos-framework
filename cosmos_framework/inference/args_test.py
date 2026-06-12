@@ -122,6 +122,32 @@ def test_setup_args(tmp_path: Path):
     check_model_equal(OmniSetupOverrides.model_validate(args.model_dump()).build_setup(), args)
 
 
+def test_offload_stages(tmp_path: Path):
+    def _build(**kwargs):
+        return OmniSetupOverrides(
+            checkpoint_path=DEFAULT_CHECKPOINT_NAME,
+            output_dir=tmp_path / "outputs",
+            **kwargs,
+        ).build_setup()
+
+    # Default: offloading disabled.
+    args = _build()
+    assert args.offload_stages == ()
+
+    # Arena stages round-trip through build_setup.
+    args = _build(offload_stages=("reasoner", "generator", "vae"))
+    assert args.offload_stages == ("reasoner", "generator", "vae")
+
+    # Guardrail offloading is a separate flag, not an --offload-stages value.
+    for bad in (("guardrails",), ("bogus",)):
+        with pytest.raises(pydantic.ValidationError):
+            OmniSetupOverrides(
+                checkpoint_path=DEFAULT_CHECKPOINT_NAME,
+                output_dir=tmp_path / "outputs",
+                offload_stages=bad,
+            )
+
+
 def test_sample_args(tmp_path: Path):
     setup_args = OmniSetupOverrides(
         checkpoint_path=DEFAULT_CHECKPOINT_NAME,

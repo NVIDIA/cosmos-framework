@@ -269,6 +269,52 @@ class Cosmos3VFMNetwork(PreTrainedModel):
 
         self.language_model.init_weights(buffer_device=buffer_device)
 
+    def offload_module_groups(self) -> dict[str, list[torch.nn.Module]]:
+        """Partition the network into the reasoner vs generator CPU-offload groups.
+
+        The MoT interleaves both pathways per layer, so each group gathers the
+        per-layer understanding (reasoner) vs generation submodules — plus the
+        generation-side diffusion encode/decode heads, which the reasoner prefill
+        never touches. Returns references to the existing submodule objects (no
+        module-tree changes); the two groups are disjoint, as the offload manager
+        and the two-phase materialization both require. Single source of truth for
+        both the load-time CPU materialization and the runtime ``OffloadPipeline``.
+        """
+        lm = self.language_model.model  # Qwen3VL(Moe)TextModel
+        reasoner: list[torch.nn.Module] = [lm.embed_tokens, lm.norm]
+        generator: list[torch.nn.Module] = [lm.norm_moe_gen]
+        for head_name in ("time_embedder", "vae2llm", "llm2vae", "action2llm", "llm2action", "sound2llm", "llm2sound"):
+            head = getattr(self, head_name, None)
+            if isinstance(head, torch.nn.Module):
+                generator.append(head)
+        for raw_layer in lm.layers:
+            # Unwrap torch.compile's OptimizedModule so we reference the real submodules.
+            layer = getattr(raw_layer, "_orig_mod", raw_layer)
+            attn = layer.self_attn
+            reasoner += [
+                attn.q_proj,
+                attn.k_proj,
+                attn.v_proj,
+                attn.o_proj,
+                attn.q_norm,
+                attn.k_norm,
+                layer.input_layernorm,
+                layer.post_attention_layernorm,
+                layer.mlp,
+            ]
+            generator += [
+                attn.q_proj_moe_gen,
+                attn.k_proj_moe_gen,
+                attn.v_proj_moe_gen,
+                attn.o_proj_moe_gen,
+                attn.q_norm_moe_gen,
+                attn.k_norm_moe_gen,
+                layer.input_layernorm_moe_gen,
+                layer.post_attention_layernorm_moe_gen,
+                layer.mlp_moe_gen,
+            ]
+        return {"reasoner": reasoner, "generator": generator}
+
     def generate_reasoner_text(
         self,
         input_ids: torch.Tensor,
@@ -599,6 +645,27 @@ class Cosmos3VFMNetwork(PreTrainedModel):
             packed_text_embedding  # [N_text,hidden_size] scattered into [N_total,hidden_size]
         )
         return packed_sequence, packed_text_embedding.dtype
+
+    def _alloc_hidden_states_gen_only(
+        self,
+        packed_seq: PackedSequence,
+    ) -> tuple[torch.Tensor, torch.dtype]:
+        """Allocate a zeroed packed-sequence buffer without the reasoner ``embed_tokens``.
+
+        Used by the generator-only denoise path: only the generation (vision) hidden
+        states are needed and the understanding K/V come from the prefilled cache, so
+        the text embeddings (a reasoner weight) are not required and the reasoner can
+        stay offloaded on CPU. The understanding rows are left as zeros (the generator
+        pathway never reads them).
+        """
+        # Use the embed_tokens weight dtype/device as the reference compute dtype.
+        # Reading ``.dtype`` / ``.device`` is metadata-only and does not move or
+        # invoke the (possibly offloaded) reasoner weight.
+        ref = self.language_model.model.embed_tokens.weight
+        packed_sequence = torch.zeros(
+            (packed_seq.sequence_length, self.hidden_size), device=packed_seq.text_indexes.device, dtype=ref.dtype
+        )  # [N_total,hidden_size]
+        return packed_sequence, ref.dtype
 
     def _encode_vision(
         self,
@@ -988,19 +1055,34 @@ class Cosmos3VFMNetwork(PreTrainedModel):
         # This is intentional for proper batch norm / dropout behavior
         # assert self.training, "Cosmos3VFMNetwork only supports training mode"
 
-        packed_sequence, target_dtype = self._encode_text(packed_seq)  # packed_sequence: [N_total,hidden_size]
+        # Reasoner/generator-split offload modes (``memory`` is a ReasonerMemoryState):
+        #  - prefill (und_only): encode text only; skip the generation-side encoders so
+        #    the generator weights stay offloaded. The reasoner populates the per-layer
+        #    understanding K/V cache and the forward returns early (no generation output).
+        #  - gen (gen_only): skip the reasoner ``embed_tokens`` (offloaded); the
+        #    understanding K/V come from the prefilled cache.
+        _und_only = memory is not None and memory.is_und_only()
+        _gen_only = memory is not None and memory.is_gen_only()
 
-        # encode vision tokens
+        if _gen_only:
+            packed_sequence, target_dtype = self._alloc_hidden_states_gen_only(packed_seq)
+        else:
+            packed_sequence, target_dtype = self._encode_text(packed_seq)  # packed_sequence: [N_total,hidden_size]
+
+        # encode vision/action/sound tokens. Skipped during the reasoner prefill: the
+        # understanding pathway does not attend to generation tokens, so their hidden
+        # states are irrelevant there and the generation-side encoders (vae2llm,
+        # time_embedder, ...) must stay offloaded.
         original_latent_shapes: List[Tuple[int, int, int]] | None = None
-        if self.config.vision_gen:
+        if self.config.vision_gen and not _und_only:
             original_latent_shapes = self._encode_vision(packed_seq, packed_sequence, target_dtype, fps_vision)
 
         # encode action tokens
-        if self.config.action_gen:
+        if self.config.action_gen and not _und_only:
             self._encode_action(packed_seq, packed_sequence, target_dtype, fps_action)
 
         # encode sound tokens
-        if self.config.sound_gen:
+        if self.config.sound_gen and not _und_only:
             self._encode_sound(packed_seq, packed_sequence, target_dtype, fps_sound)
 
         assert packed_seq.attn_modes is not None
@@ -1076,6 +1158,14 @@ class Cosmos3VFMNetwork(PreTrainedModel):
             natten_metadata_list=natten_metadata_list,
             memory=memory,
         )
+
+        if _und_only:
+            # Reasoner prefill: ``self.language_model`` has populated the per-layer
+            # understanding K/V cache via ``memory.write_for_layer`` (side effect).
+            # There is no generation output to decode, so return early before any
+            # generation-side decode head runs (keeps the generator offloaded).
+            return dict()
+
         last_hidden_state = get_context_parallel_last_hidden_state(
             packed_outputs=packed_outputs,
             parallel_dims=self.parallel_dims,

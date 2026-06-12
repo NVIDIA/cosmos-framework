@@ -30,6 +30,7 @@ All paths below are relative to the cosmos3 package root (`../../../` from this 
 | Which model should I use? (Nano vs Super, memory, shift)                | `README.md` § Models                                                                    |
 | Which modality? (t2i, t2v, i2v, examples)                               | `README.md` § Modalities                                                                |
 | What parallelism preset? (latency vs throughput)                        | `README.md` § Inference                                                                 |
+| How do I lower GPU memory / offload to CPU? (`--offload-stages`)        | `docs/inference.md` § CPU Offloading                                                    |
 | What input fields are available? (prompt, vision_path, num_frames, ...) | `docs/inference.md` § Sample Arguments                                                  |
 | What are the default parameter values?                                  | `cosmos_framework/inference/defaults/<model_mode>/sample_args.json` (per-modality JSON) |
 | How do I use custom defaults?                                           | `docs/inference.md` § Custom Defaults                                                   |
