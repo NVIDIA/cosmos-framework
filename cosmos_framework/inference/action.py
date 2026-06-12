@@ -70,6 +70,8 @@ def _format_prompt(
     }
     prompt_json_formatter = ActionPromptJsonFormatter()
     ai_caption = prompt_json_formatter(data_dict)[prompt_json_formatter.caption_key]
+    if isinstance(ai_caption, dict):
+        ai_caption = json.dumps(ai_caption)
     return ai_caption
 
 
