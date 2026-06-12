@@ -612,17 +612,29 @@ def get_sample_data(
                 create_placeholder_audio,
                 get_audio_tokenizer_info,
                 inject_sound_into_batch,
+                load_conditioning_audio,
             )
 
             audio_info = get_audio_tokenizer_info(model)
             if not audio_info.has_sound:
                 raise ValueError("enable_sound=True but model has no sound tokenizer")
-            audio_placeholder = create_placeholder_audio(
-                num_frames=sample_args.num_frames,
-                conditioning_fps=sample_args.fps,
-                audio_info=audio_info,
-            )
-            inject_sound_into_batch(out, audio_placeholder, model)
+
+            condition_sound = sample_args.sound_path is not None
+            if condition_sound:
+                num_samples = int(sample_args.num_frames / sample_args.fps * audio_info.sample_rate)
+                audio = load_conditioning_audio(
+                    Path(sample_args.sound_path),
+                    sample_rate=audio_info.sample_rate,
+                    audio_channels=getattr(audio_info.tokenizer, "audio_channels", 2),
+                    num_samples=num_samples,
+                )
+            else:
+                audio = create_placeholder_audio(
+                    num_frames=sample_args.num_frames,
+                    conditioning_fps=sample_args.fps,
+                    audio_info=audio_info,
+                )
+            inject_sound_into_batch(out, audio, model, condition_sound=condition_sound)
 
         return out
 
