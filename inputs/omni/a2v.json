@@ -1,0 +1,7 @@
+{
+  "model_mode": "audio_image2video",
+  "name": "a2v",
+  "prompt": "{\"temporal_caption\": \"A silver robotic arm in a clean lab pours water from a glass jar into a white ceramic cup; soft mechanical whirring and gentle water trickling are audible.\", \"audio_description\": \"Gentle splashing and trickling of water with a faint mechanical whir from servo motors; no speech or music.\", \"resolution\": {\"H\": 720, \"W\": 1280}, \"aspect_ratio\": \"16,9\", \"fps\": 24}",
+  "vision_path": "https://github.com/nvidia-cosmos/cosmos-dependencies/raw/2b17a2413bd86b2cf9b03823637108851e4ddf2d/inputs/vision/robot_153.jpg",
+  "sound_path": "assets/a2v_audio.wav"
+}
