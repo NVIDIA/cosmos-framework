@@ -1077,17 +1077,22 @@ class OmniInference(Inference):
                 # Source the AVAE sound tokenizer from the loaded checkpoint's own
                 # bundled sound_tokenizer/ (matched to the transformer; uses whatever
                 # encoder/decoder that checkpoint ships) instead of the global "AVAE"
-                # registry repo. Mirrors vlm_processor_from_checkpoint above; falls back
-                # to the registry when the checkpoint bundles no sound_tokenizer/.
+                # registry repo.
                 sound_cfg = model_dict["config"].get("sound_tokenizer")
-                if sound_cfg:
-                    from cosmos_framework.inference.common.checkpoints import (
-                        _AVAE_LEGACY_CKPT_NAME,
-                        _materialize_avae_ckpt,
-                    )
-
+                if sound_cfg is not None:
+                    # ``from_checkpoint`` is an inference-only routing key on the
+                    # sound_tokenizer node; pop it so it never reaches AVAEInterface.
+                    # True (default): use the checkpoint's bundled sound_tokenizer/.
+                    # False: keep the configured avae_path (the registered "AVAE" repo),
+                    # even when the checkpoint bundles a sound_tokenizer/.
+                    from_checkpoint = sound_cfg.pop("from_checkpoint", True)
                     sound_tokenizer_dir = Path(checkpoint_path) / "sound_tokenizer"
-                    if sound_tokenizer_dir.is_dir():
+                    if from_checkpoint and sound_tokenizer_dir.is_dir():
+                        from cosmos_framework.inference.common.checkpoints import (
+                            _AVAE_LEGACY_CKPT_NAME,
+                            _materialize_avae_ckpt,
+                        )
+
                         _materialize_avae_ckpt(str(sound_tokenizer_dir))
                         sound_cfg["bucket_name"] = ""
                         sound_cfg["avae_path"] = str(sound_tokenizer_dir / _AVAE_LEGACY_CKPT_NAME)
