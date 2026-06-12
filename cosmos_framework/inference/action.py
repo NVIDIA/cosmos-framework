@@ -9,12 +9,16 @@ from typing import Any
 
 import torch
 
+from cosmos_framework.data.vfm.action.action_processing import (
+    ActionProcessingRecord,
+    make_batched_action_processing_fields,
+    pad_action_to_max_dim,
+)
 from cosmos_framework.data.vfm.action.domain_utils import EMBODIMENT_TO_RAW_ACTION_DIM, get_domain_id
 from cosmos_framework.data.vfm.action.json_formatter import ActionPromptJsonFormatter
 from cosmos_framework.data.vfm.action.transforms import (
     build_sequence_plan_from_mode,
     find_closest_target_size,
-    pad_action_to_max_dim,
     reflection_pad_to_target,
 )
 from cosmos_framework.inference.args import ModelMode
@@ -66,8 +70,6 @@ def _format_prompt(
     }
     prompt_json_formatter = ActionPromptJsonFormatter()
     ai_caption = prompt_json_formatter(data_dict)[prompt_json_formatter.caption_key]
-    if isinstance(ai_caption, dict):
-        ai_caption = json.dumps(ai_caption)
     return ai_caption
 
 
@@ -122,10 +124,15 @@ def build_action_batch(
         image_size=padded_image_size,
     )
 
+    action_processing_record = ActionProcessingRecord(
+        raw_action_dim=raw_action_dim,
+        action_normalizer=None,
+    )
+
     return {
         input_video_key: [[video_padded]] * batch_size,
         "action": [[action]] * batch_size,
-        "raw_action_dim": [torch.tensor(raw_action_dim, dtype=torch.long)] * batch_size,
+        **make_batched_action_processing_fields(action_processing_record, batch_size),
         "mode": [model_mode.value] * batch_size,
         "ai_caption": [ai_caption] * batch_size,
         "prompt": [prompt] * batch_size,
