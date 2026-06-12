@@ -1494,6 +1494,8 @@ def _impl_generate_reasoner_text(
     *,
     pixel_values: torch.Tensor | None = None,
     image_grid_thw: torch.Tensor | None = None,
+    pixel_values_videos: torch.Tensor | None = None,
+    video_grid_thw: torch.Tensor | None = None,
     attention_mask: torch.Tensor | None = None,
     eos_token_id: int | list[int] | None = None,
     pad_token_id: int | None = None,
@@ -1550,10 +1552,9 @@ def _impl_generate_reasoner_text(
             ``Qwen3VLProcessor`` emits — pass it through unchanged.
             Moved to the prompt's device internally.  ``None`` (default)
             means text-only prompt; in that case the multimodal prefill
-            path is skipped entirely.  Videos are *not* supported here —
-            this function has no ``pixel_values_videos`` / ``video_grid_thw``
-            parameters; for I2V conditioning, frames must be passed as
-            images.
+            path is skipped entirely.  For video conditioning, pass ``pixel_values_videos`` +
+            ``video_grid_thw`` instead (mutually exclusive with the image
+            pair).
         image_grid_thw: Optional ``[num_images, 3]`` long tensor giving
             ``(t, h, w)`` — the temporal / height / width feature-grid
             size per image as produced by ``Qwen3VLProcessor`` (``t`` is
@@ -1643,11 +1644,15 @@ def _impl_generate_reasoner_text(
 
     if (pixel_values is None) != (image_grid_thw is None):
         raise ValueError("pixel_values and image_grid_thw must be provided together.")
+    if (pixel_values_videos is None) != (video_grid_thw is None):
+        raise ValueError("pixel_values_videos and video_grid_thw must be provided together.")
+    if pixel_values is not None and pixel_values_videos is not None:
+        raise ValueError("Reasoner conditions on one medium at a time: pass image OR video, not both.")
 
     _prefill_start = time.time()
 
     mrope_position_deltas: torch.Tensor | None = None
-    if pixel_values is None:
+    if pixel_values is None and pixel_values_videos is None:
         hidden = model.reasoner_forward(input_ids, cache=cache)  # [B,T_prompt,hidden_size]
     else:
         if not hasattr(causal_lm, "visual"):
@@ -1663,6 +1668,8 @@ def _impl_generate_reasoner_text(
             input_ids=input_ids,
             pixel_values=pixel_values,
             image_grid_thw=image_grid_thw,
+            pixel_values_videos=pixel_values_videos,
+            video_grid_thw=video_grid_thw,
             attention_mask=attention_mask,
         )
         hidden = model.reasoner_forward(
@@ -1936,6 +1943,8 @@ class Qwen3VLTextForCausalLM(Qwen3VLPreTrainedModel):
         *,
         pixel_values: torch.Tensor | None = None,
         image_grid_thw: torch.Tensor | None = None,
+        pixel_values_videos: torch.Tensor | None = None,
+        video_grid_thw: torch.Tensor | None = None,
         attention_mask: torch.Tensor | None = None,
         eos_token_id: int | list[int] | None = None,
         pad_token_id: int | None = None,
@@ -1956,6 +1965,8 @@ class Qwen3VLTextForCausalLM(Qwen3VLPreTrainedModel):
         the Qwen3-VL visual encoder; omit them for text-only prefill.  The
         two arguments are mutually required: passing exactly one raises
         ``ValueError`` inside :func:`_impl_generate_reasoner_text`.
+        Video conditioning is also supported via ``pixel_values_videos`` +
+        ``video_grid_thw``; the image and video pairs are mutually exclusive.
 
         Uses the und-pathway weights (those WITHOUT the ``_moe_gen`` suffix)
         plus the model-level ``embed_tokens`` / ``norm`` / ``lm_head``, and —
@@ -1970,6 +1981,8 @@ class Qwen3VLTextForCausalLM(Qwen3VLPreTrainedModel):
             max_new_tokens=max_new_tokens,
             pixel_values=pixel_values,
             image_grid_thw=image_grid_thw,
+            pixel_values_videos=pixel_values_videos,
+            video_grid_thw=video_grid_thw,
             attention_mask=attention_mask,
             eos_token_id=eos_token_id,
             pad_token_id=pad_token_id,
@@ -2064,6 +2077,8 @@ class Qwen3VLMoeTextForCausalLM(Qwen3VLMoePreTrainedModel):
         *,
         pixel_values: torch.Tensor | None = None,
         image_grid_thw: torch.Tensor | None = None,
+        pixel_values_videos: torch.Tensor | None = None,
+        video_grid_thw: torch.Tensor | None = None,
         attention_mask: torch.Tensor | None = None,
         eos_token_id: int | list[int] | None = None,
         pad_token_id: int | None = None,
@@ -2084,6 +2099,8 @@ class Qwen3VLMoeTextForCausalLM(Qwen3VLMoePreTrainedModel):
         the Qwen3-VL visual encoder; omit them for text-only prefill.  The
         two arguments are mutually required: passing exactly one raises
         ``ValueError`` inside :func:`_impl_generate_reasoner_text`.
+        Video conditioning is also supported via ``pixel_values_videos`` +
+        ``video_grid_thw``; the image and video pairs are mutually exclusive.
 
         Uses the und-pathway weights (those WITHOUT the ``_moe_gen`` suffix)
         plus the model-level ``embed_tokens`` / ``norm`` / ``lm_head``, and —
@@ -2099,6 +2116,8 @@ class Qwen3VLMoeTextForCausalLM(Qwen3VLMoePreTrainedModel):
             max_new_tokens=max_new_tokens,
             pixel_values=pixel_values,
             image_grid_thw=image_grid_thw,
+            pixel_values_videos=pixel_values_videos,
+            video_grid_thw=video_grid_thw,
             attention_mask=attention_mask,
             eos_token_id=eos_token_id,
             pad_token_id=pad_token_id,

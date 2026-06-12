@@ -19,6 +19,7 @@ ______________________________________________________________________
 - [Sample Arguments](#sample-arguments)
   - [Text](#text)
   - [Vision (Image/Video)](#vision-imagevideo)
+  - [Reasoner](#reasoner)
   - [Action](#action)
   - [Custom Defaults](#custom-defaults)
 - [Guardrails](#guardrails)
@@ -195,6 +196,14 @@ Generation arguments:
 - `num_frames`: Number of output frames. `1` = image; `≥24` = video. Default 189; resolution-dependent max — see [FAQ § How many frames can I generate?](./faq.md#q-how-many-frames-can-i-generate).
 
 Outputs `vision.jpg` or `vision.mp4` depending on `num_frames`.
+
+### Reasoner
+
+For `model_mode=reasoner`, `vision_path` may point to an **image** (`.jpg`/`.png`/…) or a **video** (`.mp4`). A video is decoded into frames using the dataloader's canonical decode path and then passed to the Qwen3-VL processor.
+
+- `video_fps`: frames per second to sample from the video (default: the decoder's default of 2.0).
+
+Example: [`inputs/reasoner/reasoner_video.json`](../inputs/reasoner/reasoner_video.json).
 
 ### Action
 

@@ -3763,6 +3763,7 @@ class OmniMoTModel(ImaginaireModel):
         max_new_tokens: int,
         *,
         images: list[Any] | None = None,
+        videos: list[Any] | None = None,
         prompt_builder: Callable[[str], list[dict[str, Any]]] | None = None,
         do_sample: bool = False,
         temperature: float | None = 1.0,
@@ -3779,8 +3780,10 @@ class OmniMoTModel(ImaginaireModel):
         (or wraps the prompt as a single user message when no callback is
         given), (b) tokenizes it — text-only via :meth:`tokenize_text`, or
         multimodal via ``self.vlm_processor.apply_chat_template`` when
-        ``images`` is supplied (which lowers the chat into ``input_ids``,
-        ``attention_mask``, ``pixel_values``, and ``image_grid_thw``), (c)
+        ``images`` or ``videos`` is supplied (the image path lowers the chat
+        into ``input_ids``, ``attention_mask``, ``pixel_values``, and
+        ``image_grid_thw``; the video path yields ``pixel_values_videos`` and
+        ``video_grid_thw`` instead), (c)
         runs the reasoner-only AR decode loop through
         ``self.net.generate_reasoner_text`` (the lower-level token-driven
         pass-through that delegates to ``unified_mot._impl_generate_reasoner_text``),
@@ -3835,6 +3838,14 @@ class OmniMoTModel(ImaginaireModel):
                 ``processor.apply_chat_template``, so any input it
                 accepts works (file path ``str``, ``PIL.Image.Image``,
                 ``np.ndarray``, or a CHW / HWC tensor).
+            videos: Optional per-prompt conditioning videos (mutually
+                exclusive with ``images``). Each entry must be a
+                ``{"frames": [...PIL...], "fps": float}`` payload
+                (pre-decoded by the caller, e.g. via
+                ``_decode_reasoner_video``). The frames list and fps are
+                forwarded into the ``{"type": "video", "video": frames,
+                "fps": fps}`` chat block so the processor produces
+                ``pixel_values_videos`` / ``video_grid_thw``.
             prompt_builder: Optional callback that maps a raw prompt
                 string to a chat-style messages list (e.g.
                 :func:`projects.cosmos3.vfm.upsampler.prompts.build_messages`
@@ -3895,32 +3906,40 @@ class OmniMoTModel(ImaginaireModel):
 
         Raises:
             ValueError: If ``images`` length does not match ``inputs``
-                length.
-            RuntimeError: If ``images`` is supplied but the live VLM
-                processor does not implement ``apply_chat_template``
-                (i.e., the VLM is configured as text-only).
+                length, or if ``videos`` length does not match ``inputs``
+                length.  Also raised if both ``images`` and ``videos`` are
+                supplied simultaneously (only one medium is allowed per
+                call).
+            RuntimeError: If ``images`` or ``videos`` is supplied but the
+                live VLM processor does not implement
+                ``apply_chat_template`` (i.e., the VLM is configured as
+                text-only).
         """
         # Decide whether the multimodal flow is in play, and validate the
         # image-list contract here so the failure happens before any
         # decoding work — far easier to debug than a downstream
         # ``apply_chat_template`` error.
-        use_multimodal = images is not None
+        if images is not None and videos is not None:
+            raise ValueError("generate_reasoner_text conditions on one medium at a time: pass `images` OR `videos`, not both.")
+        use_image = images is not None
+        use_video = videos is not None
+        use_multimodal = use_image or use_video
+        media = images if use_image else videos
         if use_multimodal:
-            assert images is not None  # narrowed by `use_multimodal`
-            if len(images) != len(inputs):
+            assert media is not None  # narrowed by `use_multimodal`
+            if len(media) != len(inputs):
                 raise ValueError(
-                    f"generate_reasoner_text: `images` length ({len(images)}) "
+                    f"generate_reasoner_text: media length ({len(media)}) "
                     f"must equal `inputs` length ({len(inputs)}) for the "
-                    "image-conditioned flow."
+                    "vision-conditioned flow."
                 )
             if not callable(getattr(self.vlm_processor, "apply_chat_template", None)):
                 raise RuntimeError(
-                    "generate_reasoner_text(images=...) requires a multimodal "
+                    "generate_reasoner_text(images=/videos=...) requires a multimodal "
                     "VLM processor (e.g. Qwen3VLProcessor) but the live processor "
                     f"{type(self.vlm_processor).__name__!r} does not implement "
                     "apply_chat_template — the live VLM is configured as text-only."
                 )
-
         # Resolve EOS / pad ids internally so callers don't have to know
         # about VLM-specific id wiring.  EOS comes from the cached VLM
         # special-tokens dict (set in ``set_up_tokenizers``); pad mirrors
@@ -3957,22 +3976,18 @@ class OmniMoTModel(ImaginaireModel):
                 messages = [{"role": "user", "content": prompt}]
 
             if use_multimodal:
-                assert images is not None  # narrowed by `use_multimodal`
-                # Replace the LAST user message's content with a Qwen3-VL
-                # multimodal block (image + text).  Earlier messages
-                # (system, prior turns) are kept verbatim so any chat
-                # scaffolding the callback added still governs the
-                # assistant response.
+                assert media is not None  # narrowed by `use_multimodal`
                 last_user = messages[-1]
                 last_text = last_user["content"] if isinstance(last_user.get("content"), str) else ""
+                if use_video:
+                    media_item: dict[str, Any] = {"type": "video", "video": media[idx]["frames"], "fps": media[idx]["fps"]}
+                else:
+                    media_item = {"type": "image", "image": media[idx]}
                 multimodal_messages = list(messages[:-1])
                 multimodal_messages.append(
                     {
                         "role": "user",
-                        "content": [
-                            {"type": "image", "image": images[idx]},
-                            {"type": "text", "text": last_text},
-                        ],
+                        "content": [media_item, {"type": "text", "text": last_text}],
                     }
                 )
                 processor_inputs = self.vlm_processor.apply_chat_template(
@@ -3981,31 +3996,48 @@ class OmniMoTModel(ImaginaireModel):
                     add_generation_prompt=True,
                     return_tensors="pt",
                 )
-                # ``Qwen3VLProcessor.apply_chat_template`` strips the
-                # leading batch dim from ``input_ids`` / ``attention_mask``
-                # (see its inline comment); restore it so the inner
-                # token-level call sees ``[B=1, T_prompt]``.
                 inner_input_ids = processor_inputs["input_ids"].to(device).unsqueeze(0)
                 inner_attention_mask = processor_inputs["attention_mask"].to(device).unsqueeze(0)
-                inner_pixel_values = processor_inputs["pixel_values"].to(device)  # [N_patches,C,H,W]
-                inner_image_grid_thw = processor_inputs["image_grid_thw"].to(device)  # [num_images,3]
-                out_ids = self.net.generate_reasoner_text(
-                    input_ids=inner_input_ids,
-                    max_new_tokens=max_new_tokens,
-                    pixel_values=inner_pixel_values,
-                    image_grid_thw=inner_image_grid_thw,
-                    attention_mask=inner_attention_mask,
-                    eos_token_id=eos_id,
-                    pad_token_id=pad_id,
-                    do_sample=do_sample,
-                    temperature=temperature if temperature is not None else 1.0,
-                    top_k=top_k,
-                    top_p=top_p,
-                    repetition_penalty=repetition_penalty,
-                    presence_penalty=presence_penalty,
-                    seed=seed,
-                    return_only_new_tokens=True,
-                )
+                if use_video:
+                    inner_pixel_values_videos = processor_inputs["pixel_values_videos"].to(device)
+                    inner_video_grid_thw = processor_inputs["video_grid_thw"].to(device)
+                    out_ids = self.net.generate_reasoner_text(
+                        input_ids=inner_input_ids,
+                        max_new_tokens=max_new_tokens,
+                        pixel_values_videos=inner_pixel_values_videos,
+                        video_grid_thw=inner_video_grid_thw,
+                        attention_mask=inner_attention_mask,
+                        eos_token_id=eos_id,
+                        pad_token_id=pad_id,
+                        do_sample=do_sample,
+                        temperature=temperature if temperature is not None else 1.0,
+                        top_k=top_k,
+                        top_p=top_p,
+                        repetition_penalty=repetition_penalty,
+                        presence_penalty=presence_penalty,
+                        seed=seed,
+                        return_only_new_tokens=True,
+                    )
+                else:
+                    inner_pixel_values = processor_inputs["pixel_values"].to(device)  # [N_patches,C,H,W]
+                    inner_image_grid_thw = processor_inputs["image_grid_thw"].to(device)  # [num_images,3]
+                    out_ids = self.net.generate_reasoner_text(
+                        input_ids=inner_input_ids,
+                        max_new_tokens=max_new_tokens,
+                        pixel_values=inner_pixel_values,
+                        image_grid_thw=inner_image_grid_thw,
+                        attention_mask=inner_attention_mask,
+                        eos_token_id=eos_id,
+                        pad_token_id=pad_id,
+                        do_sample=do_sample,
+                        temperature=temperature if temperature is not None else 1.0,
+                        top_k=top_k,
+                        top_p=top_p,
+                        repetition_penalty=repetition_penalty,
+                        presence_penalty=presence_penalty,
+                        seed=seed,
+                        return_only_new_tokens=True,
+                    )
             else:
                 # Text-only path.  Pull the system prompt (if any) and
                 # the last user message text out of the messages list,

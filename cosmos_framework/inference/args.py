@@ -454,7 +454,7 @@ class VisionDataOverrides(OverridesBase, _VisionDataBase):
         if self.vision_path and "://" in self.vision_path:
             raise ValueError("Must call `download()` before building vision data")
 
-        # Reasoner mode treats ``vision_path`` as a PIL image source; resolution/fps/num_frames are unused.
+        # Reasoner mode treats ``vision_path`` as an image (PIL) or video (mp4) source; resolution/fps/num_frames are unused.
         if sample_meta.model_mode.is_reasoner:
             self.condition_frame_indexes_vision = self.condition_frame_indexes_vision or []
             self.condition_video_keep = self.condition_video_keep or "first"
@@ -609,6 +609,7 @@ class ReasonerDataArgs(ArgsBase):
     top_p: _ReasonerTopP | None = None
     repetition_penalty: _ReasonerRepetitionPenalty | None = None
     presence_penalty: float | None = None
+    video_fps: pydantic.PositiveFloat | None = None
 
 
 class ReasonerDataOverrides(OverridesBase):
@@ -629,6 +630,8 @@ class ReasonerDataOverrides(OverridesBase):
     """CTRL/HF-style multiplicative repetition penalty (>0). ``1.0`` is identity."""
     presence_penalty: float | None = None
     """Additive presence penalty (any sign). ``0.0`` is identity."""
+    video_fps: pydantic.PositiveFloat | None = None
+    """Frames per second to sample from a video vision_path. None -> decoder default (2.0)."""
 
     def _build_reasoner_data(self, model_config: "OmniMoTModelConfig", sample_meta: SampleMeta):
         if not sample_meta.model_mode.is_reasoner:

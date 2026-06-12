@@ -497,8 +497,10 @@ def get_placeholder_mask(
 def prepare_multimodal_reasoner_inputs(
     causal_lm: Any,
     input_ids: torch.Tensor,  # [B,T_prompt]
-    pixel_values: torch.Tensor,  # [N_patches,C,H,W]
-    image_grid_thw: torch.Tensor,  # [num_images,3]
+    pixel_values: torch.Tensor | None = None,  # [N_patches,C,H,W]
+    image_grid_thw: torch.Tensor | None = None,  # [num_images,3]
+    pixel_values_videos: torch.Tensor | None = None,  # [N_patches,C,H,W]
+    video_grid_thw: torch.Tensor | None = None,  # [num_videos,3]
     attention_mask: Optional[torch.Tensor] = None,
 ) -> tuple[
     torch.Tensor,  # inputs_embeds [B,T_prompt,hidden_size]
@@ -525,11 +527,11 @@ def prepare_multimodal_reasoner_inputs(
     ``*TextModel.reasoner_forward`` instead of HF's full
     ``self.language_model(...)`` forward, so HF's
     ``past_key_values`` / ``cache_position`` lifecycle is replaced by
-    the AR loop's :class:`ReasonerKVCache` lifecycle.  Videos and
-    dual image+video paths are not supported here; only
-    ``image_grid_thw`` is consumed — matching the public
-    ``generate_reasoner_text`` API, which has no
-    ``pixel_values_videos`` / ``video_grid_thw`` parameters.
+    the AR loop's :class:`ReasonerKVCache` lifecycle.  Either the
+    image pair (``pixel_values`` + ``image_grid_thw``) or the
+    video pair (``pixel_values_videos`` + ``video_grid_thw``) is consumed —
+    not both. The video recipe mirrors the image recipe but routes through
+    the video placeholder mask and ``video_grid_thw`` rope index.
 
     Validation: ``get_placeholder_mask`` raises ``ValueError`` if the
     number of image placeholder tokens in ``input_ids`` does not match
@@ -574,21 +576,36 @@ def prepare_multimodal_reasoner_inputs(
             mrope_position_deltas: Per-sample rope delta used by the
                 caller to extend positions during decode.
     """
+    is_video = pixel_values_videos is not None
     inputs_embeds = causal_lm.model.embed_tokens(input_ids).clone()  # [B,T_prompt,hidden_size]
-    pixel_values = pixel_values.to(device=inputs_embeds.device)
-    image_grid_thw = image_grid_thw.to(device=inputs_embeds.device)
 
-    image_embeds, deepstack_visual_embeds = get_image_features(causal_lm, pixel_values, image_grid_thw)
-    image_embeds = torch.cat(image_embeds, dim=0).to(device=inputs_embeds.device, dtype=inputs_embeds.dtype)
-
-    image_mask, _video_mask = get_placeholder_mask(
-        causal_lm,
-        input_ids,
-        inputs_embeds=inputs_embeds,
-        image_features=image_embeds,
-    )
-    inputs_embeds = inputs_embeds.masked_scatter(image_mask, image_embeds)  # [B,T_prompt,hidden_size]
-    visual_pos_masks = image_mask[..., 0]  # [B,T_prompt]
+    if is_video:
+        pixel_values_videos = pixel_values_videos.to(device=inputs_embeds.device)
+        video_grid_thw = video_grid_thw.to(device=inputs_embeds.device)
+        # get_video_features == get_image_features (same visual tower); reuse the free helper.
+        video_embeds, deepstack_visual_embeds = get_image_features(causal_lm, pixel_values_videos, video_grid_thw)
+        video_embeds = torch.cat(video_embeds, dim=0).to(device=inputs_embeds.device, dtype=inputs_embeds.dtype)
+        _image_mask, video_mask = get_placeholder_mask(
+            causal_lm,
+            input_ids,
+            inputs_embeds=inputs_embeds,
+            video_features=video_embeds,
+        )
+        inputs_embeds = inputs_embeds.masked_scatter(video_mask, video_embeds)  # [B,T_prompt,hidden_size]
+        visual_pos_masks = video_mask[..., 0]  # [B,T_prompt]
+    else:
+        pixel_values = pixel_values.to(device=inputs_embeds.device)
+        image_grid_thw = image_grid_thw.to(device=inputs_embeds.device)
+        image_embeds, deepstack_visual_embeds = get_image_features(causal_lm, pixel_values, image_grid_thw)
+        image_embeds = torch.cat(image_embeds, dim=0).to(device=inputs_embeds.device, dtype=inputs_embeds.dtype)
+        image_mask, _video_mask = get_placeholder_mask(
+            causal_lm,
+            input_ids,
+            inputs_embeds=inputs_embeds,
+            image_features=image_embeds,
+        )
+        inputs_embeds = inputs_embeds.masked_scatter(image_mask, image_embeds)  # [B,T_prompt,hidden_size]
+        visual_pos_masks = image_mask[..., 0]  # [B,T_prompt]
 
     deepstack_visual_embeds = [
         embed.to(device=inputs_embeds.device, dtype=inputs_embeds.dtype) for embed in deepstack_visual_embeds
@@ -597,7 +614,8 @@ def prepare_multimodal_reasoner_inputs(
     position_ids, mrope_position_deltas = get_rope_index(
         causal_lm,
         input_ids=input_ids,
-        image_grid_thw=image_grid_thw,
+        image_grid_thw=None if is_video else image_grid_thw,
+        video_grid_thw=video_grid_thw if is_video else None,
         attention_mask=attention_mask,
     )
 
