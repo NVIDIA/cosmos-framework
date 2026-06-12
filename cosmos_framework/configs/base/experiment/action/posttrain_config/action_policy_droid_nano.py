@@ -59,7 +59,6 @@ action_policy_droid_nano = LazyDict(
             {"override /ema": "power"},
             {"override /tokenizer": "wan2pt2_tokenizer"},
             {"override /sound_tokenizer": None},
-            {"override /cluster": None},
             {"override /vlm_config": None},
             {"override /ckpt_type": "dcp"},
             "_self_",
