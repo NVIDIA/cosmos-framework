@@ -168,7 +168,7 @@ def test_build_sound_data_requires_sound_path_for_a2v():
     with pytest.raises(ValueError, match="sound_path"):
         overrides._build_sound_data(model_config=model_config, sample_meta=sample_meta)
 
-    overrides = SoundDataOverrides(sound_path="clip.wav")
+    overrides = SoundDataOverrides(sound_path="https://example.com/clip.wav")
     overrides._build_sound_data(model_config=model_config, sample_meta=sample_meta)
     assert overrides.enable_sound is True
 
@@ -176,7 +176,7 @@ def test_build_sound_data_requires_sound_path_for_a2v():
 def test_build_sound_data_rejects_model_without_sound_gen():
     model_config = types.SimpleNamespace(sound_gen=False)
     sample_meta = types.SimpleNamespace(model_mode=ModelMode.AUDIO_IMAGE2VIDEO)
-    overrides = SoundDataOverrides(sound_path="clip.wav")
+    overrides = SoundDataOverrides(sound_path="https://example.com/clip.wav")
     with pytest.raises(ValueError, match="sound tokenizer"):
         overrides._build_sound_data(model_config=model_config, sample_meta=sample_meta)
 
@@ -191,15 +191,20 @@ def test_audio_image2video_conditions_image_and_sound(tmp_path: Path):
     ).build_setup()
     model_dict = structure_config(setup_args.load_model_config_dict(), omegaconf.DictConfig)
 
+    img = tmp_path / "robot.jpg"
+    img.write_bytes(b"\xff\xd8\xff\xe0")  # minimal non-empty file; not actually decoded here
+    clip = tmp_path / "clip.wav"
+    clip.write_bytes(b"RIFF")
+
     args = OmniSampleOverrides(
         name="a2v",
         output_dir=tmp_path / "a2v",
         model_mode=ModelMode.AUDIO_IMAGE2VIDEO,
-        vision_path="robot.jpg",
-        sound_path="clip.wav",
+        vision_path=str(img),
+        sound_path=str(clip),
     ).build_sample(model_config=model_dict.config)
 
     assert args.condition_vision_mode.value == "image"
     assert args.condition_frame_indexes_vision == [0]
     assert args.enable_sound is True
-    assert args.sound_path == "clip.wav"
+    assert Path(args.sound_path).name == "clip.wav"

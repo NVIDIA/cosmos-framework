@@ -530,7 +530,7 @@ class SoundDataOverrides(OverridesBase):
 
     enable_sound: Training[bool | None] = None
     """Enable joint video+sound generation (t2vs mode). Requires a checkpoint with sound modules."""
-    sound_path: str | None = None
+    sound_path: ResolvedFilePathOrUrl | None = None
     """Path or URL to a conditioning audio clip (e.g. .wav/.mp3/.flac). Required for
     audio_image2video; the clip is encoded by the AVAE and used as a clean condition."""
 
