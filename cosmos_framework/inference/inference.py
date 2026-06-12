@@ -1074,25 +1074,17 @@ class OmniInference(Inference):
                     tokenizer_cfg.pop("revision", None)
                     tokenizer_cfg.pop("subdir", None)
                     tokenizer_cfg["tokenizer_type"] = str(checkpoint_path)
-                # AVAE sound-tokenizer source precedence: prefer the registered "AVAE"
-                # repo (the configured ``avae_path``); fall back to the loaded
-                # checkpoint's own bundled ``sound_tokenizer/`` only when no AVAE is
-                # registered. The inference-only ``from_checkpoint`` key (default False)
-                # forces the bundled one even when an AVAE is registered; it is popped so
-                # it never reaches AVAEInterface.
+                # AVAE sound-tokenizer source: use the configured ``avae_path`` (the
+                # registered "AVAE" repo) when one is set; fall back to the loaded
+                # checkpoint's own bundled ``sound_tokenizer/`` only when no avae_path is
+                # configured. The inference-only ``from_checkpoint`` key (default False)
+                # forces the bundled one even when avae_path is set; it is popped so it
+                # never reaches AVAEInterface.
                 sound_cfg = model_dict["config"].get("sound_tokenizer")
                 if sound_cfg is not None:
-                    from cosmos_framework.inference.common.checkpoints import register_checkpoints
-                    from cosmos_framework.utils.checkpoint_db import CheckpointConfig, sanitize_uri
-
-                    register_checkpoints()
                     from_checkpoint = sound_cfg.pop("from_checkpoint", False)
-                    bucket = sound_cfg.get("bucket_name") or ""
-                    avae_path = sound_cfg.get("avae_path") or ""
-                    avae_dir = f"s3://{bucket}/{Path(avae_path).parent}" if (bucket and avae_path) else avae_path
-                    avae_registered = bool(avae_path) and CheckpointConfig.maybe_from_uri(sanitize_uri(avae_dir)) is not None
                     sound_tokenizer_dir = Path(checkpoint_path) / "sound_tokenizer"
-                    if sound_tokenizer_dir.is_dir() and (from_checkpoint or not avae_registered):
+                    if sound_tokenizer_dir.is_dir() and (from_checkpoint or not sound_cfg.get("avae_path")):
                         from cosmos_framework.inference.common.checkpoints import (
                             _AVAE_LEGACY_CKPT_NAME,
                             _materialize_avae_ckpt,
