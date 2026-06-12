@@ -16,7 +16,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from torch.utils.data import Dataset
+from torch.utils.data import Dataset, IterableDataset, get_worker_info
 
 from cosmos_framework.data.vfm.action.datasets.droid_lerobot_dataset import DROIDLeRobotDataset
 from cosmos_framework.data.vfm.action.transforms import ActionTransformPipeline
@@ -36,6 +36,56 @@ class ActionSFTDataset(Dataset):
 
     def __getitem__(self, idx: int) -> dict[str, Any]:
         return self._transform(self._dataset[idx], self._resolution)
+
+    def get_shuffle_blocks(self):
+        """Delegate to the inner DROIDLeRobotDataset (per-episode/segment flat-index blocks)."""
+        return self._dataset.get_shuffle_blocks()
+
+
+
+class ActionIterableShuffleDataset(IterableDataset):
+    """i4-compatible streaming view of a map-style ``ActionSFTDataset``.
+
+    Each ``(rank, worker)`` is assigned a DISJOINT subset of episodes (sharded over
+    ``shard_world_size * num_workers``), shuffles its episode ORDER, and streams the
+    windows WITHIN each episode sequentially -> within-rank batch diversity (the N
+    workers of a rank stream N different episodes) AND cross-rank diversity, while
+    keeping reads sequential (I/O locality + COW; no RandomSampler random-access OOM).
+    Mirrors ``ActionUnifiedIterableDataset.assign_worker`` in i4. Re-shuffles each
+    internal epoch and streams indefinitely (the trainer stops at ``max_iter``).
+
+    ``shard_world_size`` / ``shard_rank`` are set by ``RankPartitionedDataLoader``.
+    """
+
+    def __init__(self, dataset: "ActionSFTDataset", seed: int = 42):
+        super().__init__()
+        self._dataset = dataset
+        self._seed = int(seed)
+        self.shard_world_size = 1
+        self.shard_rank = 0
+
+    def __len__(self) -> int:  # informational only; iteration is infinite
+        return len(self._dataset)
+
+    def __iter__(self):
+        import torch
+
+        blocks = self._dataset.get_shuffle_blocks()
+        wi = get_worker_info()
+        wid = wi.id if wi is not None else 0
+        nw = wi.num_workers if wi is not None else 1
+        global_shard = int(self.shard_rank) * nw + wid
+        total_shards = max(1, int(self.shard_world_size) * nw)
+        epoch = 0
+        while True:
+            g = torch.Generator()
+            g.manual_seed(self._seed + epoch)  # same permutation across all (rank,worker) -> disjoint shard
+            order = torch.randperm(len(blocks), generator=g).tolist()
+            for b in order[global_shard::total_shards]:
+                start, length = blocks[b]
+                for idx in range(start, start + length):
+                    yield self._dataset[idx]
+            epoch += 1
 
 
 def get_action_droid_sft_dataset(
@@ -58,7 +108,9 @@ def get_action_droid_sft_dataset(
     append_duration_fps_timestamps: bool = True,
     append_resolution_info: bool = True,
     append_idle_frames: bool = False,
-) -> ActionSFTDataset:
+    iterable_shuffle: bool = False,
+    episode_shuffle_seed: int = 42,
+) -> Dataset:
     """Build the DROID action SFT dataset (joint_pos 8D by default), matching the
     internal ``droid_lerobot_8b_policy`` data: ``action_space='joint_pos'`` +
     ``use_state`` (8D, raw/un-normalized), concat_view, chunk_length 32."""
@@ -83,4 +135,7 @@ def get_action_droid_sft_dataset(
         append_resolution_info=append_resolution_info,
         append_idle_frames=append_idle_frames,
     )
-    return ActionSFTDataset(dataset, transform, resolution)
+    sft = ActionSFTDataset(dataset, transform, resolution)
+    if iterable_shuffle:
+        return ActionIterableShuffleDataset(sft, seed=episode_shuffle_seed)
+    return sft

@@ -42,10 +42,8 @@ action_policy_droid_nano = LazyDict(
             {"override /data_train": None},
             {"override /data_val": None},
             # Match internal droid_lerobot_8b_policy: apex FusedAdam with fp32
-            # master_weights + eps 1e-8. adamw + fused + eps 1e-6 (bf16, no fp32
-            # master) under-steps the small 5x-lr action heads and leaves the action
-            # loss on a noisy high plateau; an exact-match forward/optimizer test
-            # confirmed the convergence gap was the optimizer, not the model.
+            # master_weights + eps 1e-8. (adamw + fused + eps 1e-6 diverged on the
+            # action loss; exact-match forward test confirmed the gap was the optimizer.)
             {"override /optimizer": "fusedadamw"},
             {"override /scheduler": "lambdalinear"},  # matches internal droid_lerobot_8b (was lambdacosine)
             {"override /checkpoint": "s3"},
@@ -87,7 +85,7 @@ action_policy_droid_nano = LazyDict(
                 "llm2action",
                 "action_modality_embed",
             ],
-            lr=2.0e-04,  # matches internal droid_lerobot_8b_policy submit (--lr 2e-4)
+            lr=1.0e-04,  # sqrt-scaled for 2048 global batch (internal 2e-4 was for 8192 = 4x)
             lr_multipliers={
                 "action2llm": 5.0,
                 "llm2action": 5.0,
@@ -186,6 +184,13 @@ action_policy_droid_nano = LazyDict(
                 pin_memory=True,
                 prefetch_factor=4,
                 sampler=None,
+                # Shuffling is handled by the dataset (iterable_shuffle=True below):
+                # ActionIterableShuffleDataset streams rank x worker-sharded, episode-order-
+                # shuffled, sequential-within-episode (matches i4's ActionUnifiedIterableDataset).
+                # The map-style dataset has no internal shuffle, so a SequentialSampler would feed
+                # every rank the SAME consecutive overlapping windows -> global batch ~1 episode
+                # -> unstable grad-norm; a plain RandomSampler decorrelates but does random-access
+                # I/O -> 11min/iter + OOM. The iterable gives decorrelation with sequential reads.
                 datasets=dict(
                     droid=dict(
                         ratio=1,
@@ -195,6 +200,8 @@ action_policy_droid_nano = LazyDict(
                             chunk_length=32,
                             action_space="joint_pos",
                             use_state=True,
+                            iterable_shuffle=True,  # i4-compatible rank x worker episode-shuffle stream
+                            episode_shuffle_seed=42,
                             use_image_augmentation=True,  # SR boost (random crop+rescale + color jitter)
                             # Keep-ranges window filter (drops idle/non-task frames). Off by default;
                             # the launcher sets use_filter_dict=True + filter_dict_path for internal parity.
