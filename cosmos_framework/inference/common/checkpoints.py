@@ -76,8 +76,10 @@ def _materialize_avae_ckpt(local_dir: str) -> None:
     ``[C]`` and loads via ``load_state_dict(strict=False)`` — so without remapping
     the keys, none match and every decoder weight is silently left at init (noise).
     We invert the forward conversion (key remap + snake reshape) and wrap the result
-    under ``state_dict``. Decoder-only is sufficient: generation only decodes sound
-    latents to a waveform. Idempotent.
+    under ``state_dict``. The encoder ships in the already-native ``encoder.layers.*``
+    layout, so it passes through ``_avae_block_key_to_legacy`` unchanged and loads
+    directly (required for encoding input audio in sound-conditioned modes).
+    Idempotent.
     """
     import torch
     from safetensors.torch import load_file
@@ -245,13 +247,17 @@ def register_checkpoints():
                 uri="s3://bucket/pretrained/tokenizers/audio/avae",
             ),
             hf=CheckpointDirHf(
-                repository="nvidia/Cosmos3-Nano",
+                repository="nvidia/Cosmos3-Experimental",
                 revision="main",
-                subdirectory="sound_tokenizer",
+                subdirectory="nano_diffusers_sound_encoder/sound_tokenizer",
             ),
-            # The sound_tokenizer/ safetensors are decoder-only and use the diffusers
-            # OobleckDecoder key layout; _materialize_avae_ckpt remaps them back to the
-            # legacy decoder.layers.* layout the native AVAE loader expects.
+            # The nano_diffusers_sound_encoder/sound_tokenizer/ safetensors ship the FULL
+            # AVAE: the diffusers OobleckDecoder decoder (decoder.block.*) plus the native
+            # SpecConvNeXt encoder (encoder.layers.*). _materialize_avae_ckpt remaps the
+            # decoder keys back to the legacy decoder.layers.* layout and passes the
+            # already-native encoder keys through unchanged. The encoder is required to
+            # ENCODE input audio for sound-conditioned modes (audio_image2video); the base
+            # nvidia/Cosmos3-Nano/sound_tokenizer is decoder-only and cannot encode.
             post_download=_materialize_avae_ckpt,
         ),
     )
