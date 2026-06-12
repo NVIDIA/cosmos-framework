@@ -1058,6 +1058,19 @@ _CHECKPOINTS: dict[str, CheckpointConfig] = {
             revision="main",
         ),
     ),
+    # Diffusers HF checkpoint whose transformer is trained to condition on
+    # (encode) input sound, enabling audio_image2video (A2V). Reuses the
+    # Cosmos3-Nano architecture (OmniMoTModelConfig, sound_gen=True).
+    "Cosmos3-Nano-SoundEncoder": CheckpointConfig(
+        model_memory_bytes=MODEL_MEMORY_BYTES_BY_SIZE["8B"],
+        config_file=str(CONFIG_DIR / "model/Cosmos3-Nano.yaml"),
+        s3_uri="",  # unused for HF-backed checkpoints
+        hf=CheckpointDirHf(
+            repository="nvidia/Cosmos3-Experimental",
+            revision="main",
+            subdirectory="nano_diffusers_sound_encoder",
+        ),
+    ),
     "Cosmos3-Super": CheckpointConfig(
         model_memory_bytes=MODEL_MEMORY_BYTES_BY_SIZE["32B"],
         config_file=str(CONFIG_DIR / "model/Cosmos3-Super.yaml"),
