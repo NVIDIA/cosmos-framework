@@ -55,4 +55,4 @@ class VLMModelConfig:
     # Force deterministic kernels in Flash-Attention init (slower; required for
     # parity bit-exactness). VLM-only knob — consumed by VLMModel.__init__ via
     # init_flash_attn_meta.
-    deterministic: bool = True
+    deterministic: bool = False
