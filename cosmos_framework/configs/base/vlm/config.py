@@ -4,10 +4,9 @@
 from cosmos_framework.trainer import ImaginaireTrainer
 from cosmos_framework.utils import log
 from cosmos_framework.utils.config_helper import import_all_modules_from_package
+from cosmos_framework.configs.base.defaults.checkpointer import register_checkpoint, register_ckpt_type
 from cosmos_framework.configs.base.vlm.defaults.callbacks import register_callbacks
-from cosmos_framework.configs.base.vlm.defaults.checkpointer import register_checkpoint, register_ckpt_type
 from cosmos_framework.configs.base.vlm.defaults.config import Config
-
 from cosmos_framework.configs.base.vlm.defaults.model import register_model
 from cosmos_framework.configs.base.vlm.defaults.optimizer import register_optimizer, register_scheduler
 from cosmos_framework.configs.base.vlm.defaults.vlm_policy import register_vlm_policy

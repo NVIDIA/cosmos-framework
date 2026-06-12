@@ -54,7 +54,7 @@ def init() -> int | None:
         timeout_timedelta = timedelta(seconds=int(timeout_seconds))
         dist.init_process_group(backend="nccl", init_method="env://", timeout=timeout_timedelta)
         log.critical(
-            f"Initialized distributed runtime with local rank {local_rank} with timeout {timeout_seconds}",
+            f"Initialized distributed training with local rank {local_rank} with timeout {timeout_seconds}",
             rank0_only=False,
         )
     # Increase the L2 fetch granularity for faster speed.
@@ -65,7 +65,7 @@ def init() -> int | None:
         p_value = ctypes.cast((ctypes.c_int * 1)(), ctypes.POINTER(ctypes.c_int))
         _libcudart.cudaDeviceSetLimit(ctypes.c_int(0x05), ctypes.c_int(128))
         _libcudart.cudaDeviceGetLimit(p_value, ctypes.c_int(0x05))
-    log.info(f"Distributed setup with {get_world_size()} GPUs.")
+    log.info(f"Training with {get_world_size()} GPUs.")
 
 
 def get_rank(group: Optional[dist.ProcessGroup] = None) -> int:

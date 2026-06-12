@@ -1,5 +1,6 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: OpenMDW-1.1
+
 """Rectified-flow matching loss (vision / action / sound modalities).
 
 Extracted from OmniMoTModel._compute_flow_matching_loss. The loss math is

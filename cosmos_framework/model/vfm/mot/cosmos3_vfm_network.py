@@ -121,6 +121,7 @@ class Cosmos3VFMNetwork(PreTrainedModel):
         text_config = config.vlm_config.text_config if hasattr(config.vlm_config, "text_config") else config.vlm_config
         self.hidden_size = text_config.hidden_size
         self.num_heads = text_config.num_attention_heads
+        self.num_kv_heads = text_config.num_key_value_heads
         self.head_dim = text_config.head_dim
         self.num_hidden_layers = text_config.num_hidden_layers
         self.predict_text_tokens = config.predict_text_tokens
@@ -882,7 +883,7 @@ class Cosmos3VFMNetwork(PreTrainedModel):
         packed_tokens_sound = packed_tokens_sound.to(target_dtype)  # [total_sound_tokens,sound_dim]
 
         # Project sound tokens + modality embedding
-
+        # NOTE: Sound position info comes from m-RoPE position IDs in the attention layers.
         # No additive position embedding is used (unlike legacy video which keeps one for backward compat).
         packed_tokens_sound = (
             self.sound2llm(packed_tokens_sound) + self.sound_modality_embed
@@ -1054,7 +1055,7 @@ class Cosmos3VFMNetwork(PreTrainedModel):
             natten_parameter_list=self.natten_parameter_list,
             cp_world_size=self.parallel_dims.cp_size if self.parallel_dims else 1,
             video_temporal_causal=self.video_temporal_causal,
-            use_rolling_kv_cache=memory is not None and memory.uses_rolling_kv_cache,
+            skip_natten_metadata=memory is not None and not memory.requires_natten_metadata(),
             vision_token_shapes=vision_token_shapes,
             action_token_shapes=packed_seq.action.token_shapes if packed_seq.action else None,
             num_action_tokens_per_supertoken=num_action_tokens_per_supertoken,

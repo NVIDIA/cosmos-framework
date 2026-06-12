@@ -224,7 +224,6 @@ class ImaginaireTrainer:
             model_ddp = model
         else:
             raise ValueError(f"Unknown distributed parallelism mode: {self.config.trainer.distributed_parallelism}")
-
         log.info("Starting training...")
         sm_carveout = int(os.environ.get("GROUPED_MM_SM_CARVEOUT", "0"))
         if sm_carveout:

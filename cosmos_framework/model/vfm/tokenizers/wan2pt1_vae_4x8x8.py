@@ -757,7 +757,10 @@ class Wan2pt1VAEInterface(VideoTokenizerInterface):
         use_channels_last_memory_format: bool = False,
         spatial_compression_factor: int = 8,
         temporal_compression_factor: int = 4,
+        causal: bool = True,
     ):
+        self._causal = causal
+        assert self._causal, "Wan2pt1VAEInterface is a causal tokenizer; causal must be True."
         vae_path_full = f"s3://{bucket_name}/{vae_path}"
         self.keep_decoder_cache = keep_decoder_cache
         self.keep_encoder_cache = keep_encoder_cache

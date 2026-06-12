@@ -8,7 +8,7 @@ records how many frames of the action chunk were "idle" out of the total action
 frames (i.e. the relative-pose delta is close to identity and the gripper
 command does not change). The upstream dataset is responsible for populating
 ``data_dict[idle_frames_key]`` via
-:func:`projects.cosmos3.vfm.datasets.action.pose_utils.compute_idle_frames`.
+:func:`cosmos_framework.data.vfm.action.pose_utils.compute_idle_frames`.
 
 Per-field dropout (default 5%) is applied here, matching Pi0.7's approach of
 independently dropping each metadata component. This is complementary to the

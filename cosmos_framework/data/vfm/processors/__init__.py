@@ -125,7 +125,12 @@ def build_processor(
         return Qwen3VLProcessor(tokenizer_type, credentials=credentials, bucket=bucket, cache_dir=cache_dir)
     elif "nvidia/NVIDIA-Nemotron-Nano-12B-v2-VL-BF16" in tokenizer_type:
         return NemotronVLProcessor(tokenizer_type, credentials=credentials, bucket=bucket, cache_dir=cache_dir)
-    elif "NVIDIA-Nemotron-3-Dense-VL" in tokenizer_type or "Qwen3-2B-ViT" in tokenizer_type:
+    elif (
+        "NVIDIA-Nemotron-3-Dense-VL" in tokenizer_type
+        or "Qwen3-2B-ViT" in tokenizer_type
+        or "nvidia/Cosmos3-Reasoner-2B-Private" in tokenizer_type
+        or "nvidia/Cosmos3-Edge-Reasoner" in tokenizer_type
+    ):
         return Nemotron3DenseVLProcessor(tokenizer_type, credentials=credentials, bucket=bucket, cache_dir=cache_dir)
     elif "Qwen/Qwen3-0.6B" in tokenizer_type:
         local_path = _download_llm_tokenizer(tokenizer_type, credentials, bucket, cache_dir)
@@ -136,7 +141,6 @@ def build_processor(
         return LLMTokenizerProcessor(PreTrainedTokenizerFast.from_pretrained(local_path, trust_remote_code=True))
     else:
         raise ValueError(f"Tokenizer type {tokenizer_type} not supported")
-
 
 def build_processor_lazy(
     *args,

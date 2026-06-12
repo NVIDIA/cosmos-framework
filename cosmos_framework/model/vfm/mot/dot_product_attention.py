@@ -1,4 +1,4 @@
-# Copyright (c) 2022-2025, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: OpenMDW-1.1
 
 """
@@ -117,7 +117,6 @@ def cudnn_fused_attn(
     o_quantizer = None
     rng_gen = None
 
-
     # "thd_thd_thd" format requires contiguous tensors.
     # We should benchmark thd_th2d / th3d formats as well.
     q = q.contiguous()
@@ -176,7 +175,7 @@ def cudnn_fused_attn(
         # is_cuda_graph
         args += (False,)
 
-
+    # NOTE: The reason we do this instead of just calling DotProductAttention.forward is
     # I'd have to create DotProductAttention class and somehow pass it in here, but argument types for these torch.ops are very strict.
     # Moreover, back-propagation would still need additional tweaks to work properly.
     output_tensors = tex.fused_attn_fwd(*args)
@@ -207,7 +206,7 @@ def _get_max_tokens(num_tokens: int) -> int:
     return max_t
 
 
-
+# NOTE: we need register_fake in order to make this operator fully torch.compile compatible.
 # The goal for this function is to return fake tensors of the correct shape and dtype
 # without having to run the actual operator.
 

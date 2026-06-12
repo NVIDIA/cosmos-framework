@@ -1,8 +1,13 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: OpenMDW-1.1
+
 import attrs
 
+# from cosmos_framework.configs.base.defaults.cluster import DefaultClusterConfig
+
 # We are hardcoding the unittest assets in this file.
+
+# CLUSTER_CONFIG = DefaultClusterConfig
 
 # add codeowner for cosmos_framework/model/vfm/tokenizers
 

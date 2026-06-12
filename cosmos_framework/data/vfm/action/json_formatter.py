@@ -7,9 +7,9 @@ import math
 
 import torch
 
+from cosmos_framework.utils import log
 from cosmos_framework.data.vfm.action.viewpoint_utils import DEFAULT_VIEWPOINT_TEMPLATES
 from cosmos_framework.data.vfm.utils import VIDEO_RES_SIZE_INFO
-from cosmos_framework.utils import log
 
 
 def _should_append_idle_frame_info(mode: object) -> bool:

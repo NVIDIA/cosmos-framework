@@ -13,6 +13,8 @@ from cosmos_framework.utils.easy_io import easy_io
 
 
 def save_video(grid, video_name, fps=30):
+    # Remove ffmpegcv for license issue
+    # Use imageio instead
     import imageio
 
     grid = (grid * 255).astype(np.uint8)
@@ -26,7 +28,6 @@ def save_video(grid, video_name, fps=30):
         pixelformat="yuv420p",
         macro_block_size=1,
     )
-
 
 def save_img_or_video(
     sample: Tensor,  # [C,T,H,W] in [0,1] range

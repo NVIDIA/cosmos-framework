@@ -1,5 +1,6 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: OpenMDW-1.1
+
 """
 Unified data and condition interface where we save the tokenized states and/or
 noised latent states for diffusion/flow-matching training.
@@ -25,6 +26,7 @@ class GenerationDataClean:
     raw_state_vision: list[torch.Tensor] | None = None  # raw state in pixel space
     x0_tokens_vision: list[torch.Tensor] | None = None  # tokenized latent state
     fps_vision: torch.Tensor | None = None
+    temporal_positions_vision: list[torch.Tensor] | None = None  # one [T] tensor per vision latent item
 
     # Image editing: number of vision items per sample.
     # When set, x0_tokens_vision is a flat list of individually-encoded image latents

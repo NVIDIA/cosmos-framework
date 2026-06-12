@@ -346,7 +346,7 @@ class NVTXConfig:
 @make_freezable
 @attrs.define(slots=False)
 class StragglerDetectionConfig:
-    """Config for the Straggler detection tool."""
+    """Config for Straggler detection tool: https://invalid_url"""
 
     # Enable the Straggler Detection.
     enabled: bool = False
@@ -512,7 +512,6 @@ class Config:
         distributed.broadcast(job_name_tensor, 0)
         self.job.name = job_name_tensor.cpu().numpy().tobytes().decode("utf-8")
 
-
         assert self.job.project != ""
         assert self.job.group != ""
         assert self.job.name != ""
@@ -551,7 +550,7 @@ def load_config(config_path: str, opts: list[str], enable_one_logger: bool = Fal
 
 
 def _load_py_config(config_path: str, opts: list[str], validate: bool = True) -> Config:
-
+    # NOTE: circular dependency
     from cosmos_framework.utils.config_helper import get_config_module, override
 
     t1 = time.monotonic_ns()

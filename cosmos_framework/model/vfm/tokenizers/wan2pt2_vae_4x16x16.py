@@ -1,8 +1,6 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: OpenMDW-1.1
 
-# Copyright 2024-2025 The Alibaba Wan Team Authors. All rights reserved.
-
 import os
 import time
 from collections.abc import Callable, Generator, Mapping, Sequence
@@ -1323,6 +1321,7 @@ class Wan2pt2VAEInterface(VideoTokenizerInterface):
         # with older configurations.
         temporal_window: int | None = None,
         encode_bucket_multiple: int | None = None,
+        causal: bool = True,
     ):
         # Remove temporal_window and encode_bucket_multiple once they have been
         # removed from the uploaded HuggingFace checkpoint.
@@ -1367,6 +1366,8 @@ class Wan2pt2VAEInterface(VideoTokenizerInterface):
 
         self._spatial_compression_factor = spatial_compression_factor
         self._temporal_compression_factor = temporal_compression_factor
+        self._causal = causal
+        assert self._causal, "Wan2pt2VAEInterface is a causal tokenizer; causal must be True."
 
     @property
     def dtype(self) -> torch.dtype:
@@ -1417,6 +1418,8 @@ class Wan2pt2VAEInterface(VideoTokenizerInterface):
         warmup_resolutions: Sequence[str],
         output_dir: str,
         aspect_ratio: str | None = None,
+        # ignores torch compile args
+        **kwargs,
     ) -> None:
         """AOT-compile the tokenizer's chunk-level encode for every resolution.
 

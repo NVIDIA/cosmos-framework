@@ -1,11 +1,14 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: OpenMDW-1.1
 
+from collections.abc import Sequence
+
 import torch
 
 from cosmos_framework.utils import log
 from cosmos_framework.utils.distributed import get_rank, sync_model_states
 from cosmos_framework.utils.easy_io import easy_io
+from cosmos_framework.data.vfm.utils import VIDEO_RES_SIZE_INFO
 from cosmos_framework.model.vfm.tokenizers.dc_ae.dc_ae_v import (
     DCAEV,
     DCAEVConfig,
@@ -13,7 +16,7 @@ from cosmos_framework.model.vfm.tokenizers.dc_ae.dc_ae_v import (
 )
 from cosmos_framework.model.vfm.tokenizers.interface import VideoTokenizerInterface
 
-DEFAULT_MODEL_NAME = "dcae4x32x32_c64_t120_256p_fps_all_encoder_causal_decoder_chunk_causal_4_nogan_cosmos_pad_7_v0.1"
+DEFAULT_MODEL_NAME = "dcae4x32x32_c64_t120_256p_fps_all_encoder_causal_decoder_chunk_causal_4_nogan_cosmos_pad_7_v0.2"
 
 
 class DCAE4x32x32Interface(VideoTokenizerInterface):
@@ -22,7 +25,7 @@ class DCAE4x32x32Interface(VideoTokenizerInterface):
         bucket_name: str = "",
         object_store_credential_path_pretrained: str = "",
         vae_path: str = "",
-        chunk_duration: int = 81,
+        chunk_duration: int = 16,
         model_name: str = DEFAULT_MODEL_NAME,
         spatial_compression_factor: int = 32,
         temporal_compression_factor: int = 4,
@@ -30,15 +33,21 @@ class DCAE4x32x32Interface(VideoTokenizerInterface):
         encode_bucket_multiple: int = 2,  # Placeholder
         device: str = "cuda",
         compilable: bool = True,
+        causal: bool = True,
     ):
+        self._causal = causal
+        assert self._causal, "DCAE4x32x32Interface is a causal tokenizer; causal must be True."
         vae_path_full = f"s3://{bucket_name}/{vae_path}"
         self._spatial_compression_factor = spatial_compression_factor
         self._temporal_compression_factor = temporal_compression_factor
         self.chunk_duration = chunk_duration
+        self.model_name = model_name
+        self.resolutions = None
 
         # Build config (without pretrained_path so DCAEV doesn't try to load itself).
         cfg: DCAEVConfig = dc_ae_v_f32t4_encoder_causal_decoder_chunk_causal_4(model_name, pretrained_path=None)
         cfg.compilable = compilable
+        cfg.encode_temporal_tile_size = chunk_duration
 
         # Instantiate model on meta device to avoid double allocation.
         with torch.device("meta"):
@@ -61,6 +70,7 @@ class DCAE4x32x32Interface(VideoTokenizerInterface):
         self.model.to(dtype=torch.bfloat16)
 
         sync_model_states(self.model)
+        self.model.encoder = self.model.encoder.to(memory_format=torch.channels_last_3d)
         self.is_compiled = False
         self.use_streaming_encode = False
 
@@ -72,10 +82,51 @@ class DCAE4x32x32Interface(VideoTokenizerInterface):
         dynamic: bool = False,
         backend: str = "inductor",
     ) -> None:
-
-        self.model.encoder = self.model.encoder.to(memory_format=torch.channels_last_3d)
         self.model.encoder = torch.compile(self.model.encoder, fullgraph=True, mode=mode)
         self.is_compiled = True
+
+    @torch.inference_mode()
+    def compile_encode(
+        self,
+        warmup_resolutions: Sequence[str],
+        output_dir: str | None = None,
+        aspect_ratio: str | None = None,
+        backend: str | None = "inductor",
+        mode: str | None = "reduce-overhead",
+        fullgraph: bool = False,
+        dynamic: bool = False,
+    ) -> None:
+        """Compile the encode function for the given resolutions."""
+        if self.is_compiled:
+            log.warning("Tokenizer is already compiled, skipping compilation.")
+            return
+
+        if backend is None:
+            raise ValueError("backend must be provided")
+
+        self.compile_encode_for_cudagraphs(mode=mode, fullgraph=fullgraph, dynamic=dynamic, backend=backend)
+
+        # Run warmup resolutions
+        if aspect_ratio is None:
+            aspect_ratios = list(VIDEO_RES_SIZE_INFO["256"].keys())
+        else:
+            if isinstance(aspect_ratio, str):
+                if aspect_ratio not in VIDEO_RES_SIZE_INFO["256"]:
+                    raise ValueError(f"Aspect ratio {aspect_ratio} not found in predefined aspect ratios")
+                aspect_ratios = [aspect_ratio]
+            else:
+                raise ValueError(f"Aspect ratio {aspect_ratio} must be a string")
+
+        self.resolutions = warmup_resolutions
+        self.aspect_ratios = aspect_ratios
+
+        T = self.chunk_duration - self.model.cfg.num_pad_frames
+        for resolution in warmup_resolutions:
+            for aspect_ratio in aspect_ratios:
+                H, W = VIDEO_RES_SIZE_INFO[resolution][aspect_ratio]
+                log.info(f"Warming up {resolution} {aspect_ratio}")
+                for _ in range(2):
+                    self.model.encode(torch.randn(1, 3, T, H, W).cuda().to(torch.bfloat16))
 
     @property
     def dtype(self):
@@ -86,6 +137,12 @@ class DCAE4x32x32Interface(VideoTokenizerInterface):
 
     @torch.inference_mode()
     def encode(self, state: torch.Tensor) -> torch.Tensor:
+        if self.resolutions is not None:
+            for resolution in self.resolutions:
+                if tuple(state.shape[3:]) in VIDEO_RES_SIZE_INFO[resolution].values():
+                    break
+            else:
+                raise ValueError(f"State shape {state.shape[2:]} is not in {self.resolutions}")
         in_dtype = state.dtype
         tcf = self._temporal_compression_factor
         # Add padding to the sequence length to make it divisible by

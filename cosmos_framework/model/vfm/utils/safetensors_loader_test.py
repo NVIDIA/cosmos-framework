@@ -1,7 +1,6 @@
-# -----------------------------------------------------------------------------
-# Copyright (c) 2025 NVIDIA CORPORATION & AFFILIATES.
-# All rights reserved.
-# -----------------------------------------------------------------------------
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: OpenMDW-1.1
+
 """
 Unit tests for safetensors_loader helpers and load_vlm_model.
 
@@ -64,12 +63,12 @@ def _make_safetensors(tmp_path: Path, tensors: dict[str, torch.Tensor]) -> Path:
     return ckpt_dir
 
 
-
+# NOTE on ``parallel_dims`` in ``load_vlm_model`` tests:
 #
 # The single-rank CPU fallback is reached by passing ``parallel_dims=None``
 # (the documented escape hatch — see ``load_vlm_model`` docstring). All
 # end-to-end tests below use that path; multi-rank behavior is covered in
-# the GPU-marked tests under ``projects/cosmos3/vfm/models/mot/``.
+# the GPU-marked tests under ``cosmos_framework/model/vfm/mot/``.
 #
 # Do NOT introduce a "fake" ``ParallelDims`` MagicMock fixture for this
 # fallback: ``MagicMock.__getitem__`` returns another MagicMock rather than

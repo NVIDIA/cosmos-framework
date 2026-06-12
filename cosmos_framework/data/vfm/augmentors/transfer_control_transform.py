@@ -5,7 +5,7 @@
 Augmentors for transfer (control-conditioned) image and video generation in the cosmos3 VFM pipeline.
 
 Transfer training conditions the model on control signals (edge, blur, depth, or segmentation)
-to generate images or videos, aligned with cosmos_framework/transfer2. This module provides:
+to generate images or videos, aligned with cosmos/transfer2. This module provides:
 
 - **TransferToTrainingFormat**: Converts (control_input, target) into the joint dataloader format
   with SequencePlan (condition frame + generated frame), for both image and video outputs.

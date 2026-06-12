@@ -1,7 +1,5 @@
-# -----------------------------------------------------------------------------
-# Copyright (c) 2025 NVIDIA CORPORATION & AFFILIATES.
-# All rights reserved.
-# -----------------------------------------------------------------------------
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: OpenMDW-1.1
 
 """Multi-rank tests for CFGP (CFG Parallelism) in AR inference.
 

@@ -148,6 +148,8 @@ def _hf_download(cmd_args: list[str]) -> str:
     is_rank0 = os.environ.get("RANK", "0") == "0"
     cmd = [
         "uvx",
+        "--with",
+        "click",
         f"hf@{HF_VERSION}",
         "download",
         "--format=json",
@@ -291,7 +293,6 @@ class CheckpointConfig(pydantic.BaseModel):
     """Config for checkpoint on S3."""
     hf: CheckpointHf
     """Config for checkpoint on Hugging Face."""
-
     post_download: Callable[[str], None] | None = pydantic.Field(default=None, exclude=True)
     """Optional callback invoked with the local path after a successful download.
 
@@ -424,6 +425,11 @@ def download_checkpoint(checkpoint_uri: str, *, check_exists: bool = True) -> st
     - HuggingFace URI: hf://org/repo/path/to/file.pth
     - Local path: /path/to/checkpoint
     """
+    # Local-path short-circuit: if the URI exists on disk, return it as-is
+    # without consulting the registry. Prevents the registry from rewriting
+    # a known basename (e.g. Wan2.2_VAE.pth) into an s3:// URI we can't open.
+    if os.path.exists(checkpoint_uri):
+        return checkpoint_uri
     if INTERNAL:
         return checkpoint_uri
     if (checkpoint := CheckpointConfig.maybe_from_uri(checkpoint_uri)) is not None:
@@ -441,11 +447,6 @@ def download_checkpoint_v2(checkpoint_uri: str, *, check_exists: bool = True) ->
 
     Similar to 'download_checkpoint', but unknown S3 URIs are passed through.
     """
-    # Local-path short-circuit: if the URI exists on disk, return it as-is
-    # without consulting the registry. Prevents the registry from rewriting
-    # a known basename (e.g. Wan2.2_VAE.pth) into an s3:// URI we can't open.
-    if os.path.exists(checkpoint_uri):
-        return checkpoint_uri
     if INTERNAL:
         return checkpoint_uri
     if (checkpoint := CheckpointConfig.maybe_from_uri(sanitize_uri(checkpoint_uri))) is not None:

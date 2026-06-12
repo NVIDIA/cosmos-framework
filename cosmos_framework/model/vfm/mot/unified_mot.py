@@ -189,7 +189,7 @@ class _MoTConfigBase(object):
       ``text_config`` access picks it up.
 
     Post-construction overrides via plain ``setattr`` (the
-    ``create_vlm_config`` flow in ``cosmos_framework/configs/base/defaults/vlm.py``)
+    ``create_vlm_config`` flow in ``configs/base/defaults/vlm.py``)
     just update the same plain attributes, so the next property access
     picks up the latest values.  No cache, no ``__setattr__``
     interception, no override bucket — the property rebuild is cheap
@@ -229,6 +229,7 @@ class _MoTConfigBase(object):
         qk_norm_for_text: bool = True,
         qk_norm_for_diffusion: bool = True,
         include_visual: bool = False,
+        gen_noisy_gating: bool = False,
         text_config_overrides: Mapping[str, Any] | None = None,
     ):
         # Defensive copy so downstream materialization can't mutate the
@@ -237,6 +238,9 @@ class _MoTConfigBase(object):
         self.qk_norm_for_text = qk_norm_for_text
         self.qk_norm_for_diffusion = qk_norm_for_diffusion
         self.include_visual = include_visual
+        # Noisy top-k gating on the generation-tower MoE blocks (Shazeer 2017).
+        # Gen-tower only; the understanding tower never receives this flag.
+        self.gen_noisy_gating = gen_noisy_gating
         # Plain attribute (not a property) so the ``create_vlm_config``
         # post-construction ``setattr`` flow can replace the whole
         # mapping in one shot; default to ``{}`` so the merge in
@@ -620,7 +624,7 @@ class PackedAttentionMoT(nn.Module):
         in a clean AR loop.
 
         All attention compute is dispatched through
-        ``imaginaire.attention.attention`` (per repo policy) which expects the
+        ``cosmos_framework.model.attention.attention`` (per repo policy) which expects the
         heads-last contiguous layout ``[B, S, H, D]`` and natively handles GQA
         (``H_KV != H``) — no manual head expansion is needed.
 
@@ -653,7 +657,7 @@ class PackedAttentionMoT(nn.Module):
         # q: [B,T,num_heads,head_dim], k: [B,T,num_kv_heads,head_dim]
 
         # The KV cache stores tensors in the same BSHD layout that
-        # ``imaginaire.attention.attention`` expects, with the seq dim at axis 1.
+        # ``cosmos_framework.model.attention.attention`` expects, with the seq dim at axis 1.
         if cache is not None:
             k_full, v_full = cache.update(layer_idx, k, v)
         else:
@@ -684,6 +688,7 @@ def _impl_init(
     layer_types: LayerTypes,
     qk_norm_for_text: bool,
     qk_norm_for_diffusion: bool,
+    gen_noisy_gating: bool = False,
 ):
     """Shared ``__init__`` body for the three MoT text-model variants.
 
@@ -705,6 +710,7 @@ def _impl_init(
                 layer_idx=layer_idx,
                 qk_norm_for_text=qk_norm_for_text,
                 qk_norm_for_diffusion=qk_norm_for_diffusion,
+                gen_noisy_gating=gen_noisy_gating,
             )
         )
 
@@ -881,6 +887,7 @@ class MoTDecoderLayer(nn.Module):
         layer_types: LayerTypes,
         qk_norm_for_text: bool,
         qk_norm_for_diffusion: bool,
+        gen_noisy_gating: bool = False,
     ):
         super().__init__()
         self.hidden_size = config.hidden_size
@@ -898,7 +905,8 @@ class MoTDecoderLayer(nn.Module):
             and (config.num_experts > 0 and (layer_idx + 1) % config.decoder_sparse_step == 0)
         ):
             self.mlp = Qwen3VLMoeTextSparseMoeBlock(config)
-            self.mlp_moe_gen = Qwen3VLMoeTextSparseMoeBlock(config)
+            # Noisy gating is gen-tower only.
+            self.mlp_moe_gen = Qwen3VLMoeTextSparseMoeBlock(config, noisy_gating=gen_noisy_gating)
         else:
             self.mlp = layer_types.mlp(config)
             self.mlp_moe_gen = layer_types.mlp(config)
@@ -1024,7 +1032,7 @@ class MoTDecoderLayer(nn.Module):
             ln_out_gen = self.post_attention_layernorm_moe_gen(residual_gen)  # [N_gen,hidden_size]
 
             # UNPAD MLP INPUT ===============
-
+            # NOTE: This is only need for the MoE auxiliary loss computation and to avoid
             #       artificial expert inbalance due to routing padding tokens.
             gen_len = pack_attn_out["_num_full_tokens"]
             und_len = pack_attn_out["_num_causal_tokens"]
@@ -1147,6 +1155,7 @@ class Qwen3VLMoeTextModel(Qwen3VLMoePreTrainedModel):
         *,
         qk_norm_for_text: bool,
         qk_norm_for_diffusion: bool,
+        gen_noisy_gating: bool = False,
     ):
         super().__init__(config)
         _impl_init(
@@ -1155,6 +1164,7 @@ class Qwen3VLMoeTextModel(Qwen3VLMoePreTrainedModel):
             layer_types=LayerTypes("qwen3_vl_moe"),
             qk_norm_for_text=qk_norm_for_text,
             qk_norm_for_diffusion=qk_norm_for_diffusion,
+            gen_noisy_gating=gen_noisy_gating,
         )
 
     def init_taylorseer(self, cache_dic=None, current=None):
@@ -1225,7 +1235,7 @@ class ReasonerKVCache:
     """Per-layer KV cache for the reasoner-tower autoregressive loop.
 
     Tensors are stored in the heads-last BSHD layout that
-    ``imaginaire.attention.attention`` expects::
+    ``cosmos_framework.model.attention.attention`` expects::
 
         keys[layer_idx]:   [B, T, num_kv_heads, head_dim]
         values[layer_idx]: [B, T, num_kv_heads, head_dim]
@@ -1364,7 +1374,8 @@ def _sample_next_token(
     top_p: float | None,
     repetition_penalty: float = 1.0,
     presence_penalty: float = 0.0,
-    seen_mask: torch.Tensor | None = None,  # [B,vocab_size] bool
+    seen_mask: torch.Tensor | None = None,  # [B,vocab_size] bool — prompt ∪ output, for repetition_penalty
+    output_seen_mask: torch.Tensor | None = None,  # [B,vocab_size] bool — output only,    for presence_penalty
     generator: torch.Generator | None = None,
 ) -> torch.Tensor:  # [B]
     """Greedy / multinomial sampling with optional top-k, top-p, and presence/repetition penalties.
@@ -1375,20 +1386,21 @@ def _sample_next_token(
            ``>1.0`` discourages repetition, ``<1.0`` encourages it,
            ``1.0`` is identity.
         2. Presence penalty (OpenAI semantics) — additive shift of every
-           logit at a position seen in history.  ``>0`` discourages,
-           ``<0`` encourages, ``0`` is identity.  Applied once per token
-           regardless of how often it appeared (presence, not frequency).
+           logit at a position seen in **output** (``output_seen_mask``).  ``>0``
+           discourages, ``<0`` encourages, ``0`` is identity.
         3. ``do_sample=False`` short-circuits to argmax.  The two
            penalties above are applied *before* this branch so they
            legitimately shift the greedy argmax — they're logit
            transformations, not sampling-only tricks.
         4. ``do_sample=True``: temperature → top-k → top-p → multinomial.
 
-    ``seen_mask`` is the canonical "has this vocab id appeared in this
-    sample's history" matrix maintained by
-    :func:`_impl_generate_reasoner_text`.  Both penalties default to
-    identity, and the fast path (both off) skips all penalty work and
-    leaves the existing greedy/sampling logic bit-identical.
+    Mask semantics (match vLLM):
+      * ``seen_mask``  is seeded with prompt tokens and updated with each
+        generated token — penalizes prompt ∪ output (HF convention).
+      * ``output_seen_mask`` is updated with each generated token only — penalizes
+        output only.
+    Both penalties default to identity; the fast path (both off) leaves the
+    existing greedy/sampling logic bit-identical.
 
     ``generator`` is the only RNG-consuming primitive in this module:
     when provided, it is threaded into ``torch.multinomial`` so the
@@ -1398,30 +1410,22 @@ def _sample_next_token(
     pre-seed behavior of consuming the device's default RNG and is
     bit-identical to the previous call signature.
     """
-    # Logit-transform stage: repetition + presence penalties.  Both gate
-    # on ``seen_mask`` being present AND a non-identity coefficient, so
-    # the default-off path costs zero extra ops.
-    if seen_mask is not None and (repetition_penalty != 1.0 or presence_penalty != 0.0):
-        if repetition_penalty != 1.0:
-            # CTRL/HF formula: divide positive logits, multiply negative
-            # logits (both by ``penalty``).  Phrasing the scale as a
-            # single ``where`` over a precomputed factor keeps the
-            # masked-update path branchless and lets autograd / inductor
-            # fuse it with the surrounding ops.
-            penalty_factor = torch.where(
-                logits > 0,
-                torch.full_like(logits, 1.0 / repetition_penalty),
-                torch.full_like(logits, repetition_penalty),
-            )
-            logits = torch.where(seen_mask, logits * penalty_factor, logits)
-        if presence_penalty != 0.0:
-            # OpenAI semantics: subtract a constant from every seen
-            # token's logit, once per token (presence, not frequency).
-            logits = torch.where(
-                seen_mask,
-                logits - presence_penalty,
-                logits,
-            )
+    if seen_mask is not None and repetition_penalty != 1.0:
+        # CTRL/HF formula: divide positive logits, multiply negative.
+        penalty_factor = torch.where(
+            logits > 0,
+            torch.full_like(logits, 1.0 / repetition_penalty),
+            torch.full_like(logits, repetition_penalty),
+        )
+        logits = torch.where(seen_mask, logits * penalty_factor, logits)
+    if output_seen_mask is not None and presence_penalty != 0.0:
+        # OpenAI semantics: subtract a constant from every seen
+        # token's logit, once per token (presence, not frequency).
+        logits = torch.where(
+            output_seen_mask,
+            logits - presence_penalty,
+            logits,
+        )
 
     if not do_sample:
         return torch.argmax(logits, dim=-1)
@@ -1590,9 +1594,11 @@ def _impl_generate_reasoner_text(
             — appearing twice costs the same as appearing once.
             Both penalties are applied *before* the ``do_sample``
             argmax/multinomial branch, so they shift the greedy
-            argmax too.  When both are at identity, the per-sample
-            ``seen_mask`` is never allocated and the loop is
-            bit-identical to the un-penalized fast path.
+            argmax too.  When both are at identity, no history mask
+            is allocated and the loop is bit-identical to the
+            un-penalized fast path. Repetition penalty uses prompt ∪
+            output; presence penalty uses output only (OpenAI / vLLM
+            convention).
         seed: Optional integer seed for the sampling RNG.  When provided
             (and ``do_sample=True``), a fresh ``torch.Generator`` is
             allocated on ``input_ids.device`` and seeded once with
@@ -1675,23 +1681,15 @@ def _impl_generate_reasoner_text(
         )  # [B,T_prompt,hidden_size]
     logits = causal_lm.lm_head(hidden[:, -1, :])  # [B,vocab_size]
 
-    # ``seen_mask`` is the per-sample "vocab id has appeared in this
-    # sample's history" matrix consumed by ``_sample_next_token``'s
-    # repetition / presence penalty paths.  Allocate only when at least
-    # one penalty is non-identity so the un-penalized fast path is
-    # bit-identical to the previous behavior (no extra alloc, no scatter,
-    # no per-step writes).  We size from ``logits.size(-1)`` so we don't
-    # have to reach into ``lm_head.weight.shape`` (which would also
-    # work under FSDP but is one extra coupling point).  The mask
-    # captures prompt tokens first so the prefill's own sampling step
-    # already sees the prompt as history — matching HF's
-    # ``RepetitionPenaltyLogitsProcessor`` convention of penalizing
-    # against the full ``input_ids``.
-    apply_penalties = repetition_penalty != 1.0 or presence_penalty != 0.0
+    # seen_mask is seeded with prompt tokens (HF convention).
+    # output_seen_mask stays empty until output tokens accumulate (OpenAI convention).
     seen_mask: torch.Tensor | None = None
-    if apply_penalties:
+    output_seen_mask: torch.Tensor | None = None
+    if repetition_penalty != 1.0:
         seen_mask = torch.zeros(B, logits.size(-1), dtype=torch.bool, device=device)
         seen_mask.scatter_(1, input_ids, True)
+    if presence_penalty != 0.0:
+        output_seen_mask = torch.zeros(B, logits.size(-1), dtype=torch.bool, device=device)
 
     # Build a device-local ``torch.Generator`` only when an explicit
     # seed is supplied.  ``torch.multinomial(generator=None)`` falls
@@ -1717,13 +1715,14 @@ def _impl_generate_reasoner_text(
         repetition_penalty=repetition_penalty,
         presence_penalty=presence_penalty,
         seen_mask=seen_mask,
+        output_seen_mask=output_seen_mask,
         generator=generator,
     )  # [B]
+    # Fold the just-sampled token into both penalty histories.
     if seen_mask is not None:
-        # Fold the just-sampled token into each sample's history so the
-        # next decode step penalizes it too.  Per-sample row writes are
-        # idempotent — writing True over True is a no-op.
         seen_mask.scatter_(1, next_token.unsqueeze(1), True)
+    if output_seen_mask is not None:
+        output_seen_mask.scatter_(1, next_token.unsqueeze(1), True)
 
     # Hoist invariants used by every decode step out of the loop body so we
     # don't pay per-iter Python and allocator overhead for what is in fact
@@ -1804,19 +1803,19 @@ def _impl_generate_reasoner_text(
             repetition_penalty=repetition_penalty,
             presence_penalty=presence_penalty,
             seen_mask=seen_mask,
+            output_seen_mask=output_seen_mask,
             generator=generator,
         )  # [B]
         # Force pad on already-finished samples; finished stays True afterwards.
         # ``pad_tensor`` is hoisted above so we avoid the per-step
         # ``torch.full_like(next_token, pad_token_id)`` allocation.
         next_token = torch.where(finished, pad_tensor, next_token)
+        # Record (post-pad) emitted token in both penalty histories. Finished
+        # samples write pad_token_id, which is dead state and harmless.
         if seen_mask is not None:
-            # Record the (post-pad) emitted token in history.  For
-            # still-running samples this is the actual sampled token;
-            # for already-finished samples it's ``pad_token_id``, which
-            # is harmless because finished samples don't sample anymore
-            # — their row of ``seen_mask`` is dead state from here on.
             seen_mask.scatter_(1, next_token.unsqueeze(1), True)
+        if output_seen_mask is not None:
+            output_seen_mask.scatter_(1, next_token.unsqueeze(1), True)
         if eos_tensor is not None:
             # Vectorized EOS comparison: broadcast ``next_token`` (``[B,1]``)
             # against ``eos_tensor`` (``[E]``) and reduce-any across the
@@ -2000,6 +1999,7 @@ class Qwen3VLMoeTextForCausalLM(Qwen3VLMoePreTrainedModel):
             text_config,
             qk_norm_for_text=config.qk_norm_for_text,
             qk_norm_for_diffusion=config.qk_norm_for_diffusion,
+            gen_noisy_gating=config.gen_noisy_gating,
         )
         self.vocab_size = text_config.vocab_size
         self.lm_head = nn.Linear(text_config.hidden_size, text_config.vocab_size, bias=False)
@@ -2027,6 +2027,10 @@ class Qwen3VLMoeTextForCausalLM(Qwen3VLMoePreTrainedModel):
             original_name = name.replace("_moe_gen", "").replace("_checkpoint_wrapped_module.", "")
             if original_name in state_dict:
                 param.data.copy_(state_dict[original_name].data)
+            elif "gate_noise" in original_name:
+                # Noisy-gating projection is gen-tower only (the und tower has no
+                # gate_noise counterpart), so keep its zero-init rather than copy.
+                pass
             else:
                 raise ValueError(f"Could not find {original_name} in state_dict for initialization of {name}")
 
@@ -2197,5 +2201,4 @@ class Nemotron3DenseVLTextForCausalLM(Nemotron3DenseVLPreTrainedModel):
         seed: int | None = None,
         return_only_new_tokens: bool = False,
     ) -> torch.Tensor:
-
         raise NotImplementedError("This method is not implemented for Nemotron 3 Dense VL.")

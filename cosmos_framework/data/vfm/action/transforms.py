@@ -19,6 +19,11 @@ from __future__ import annotations
 import torch
 import torchvision.transforms.functional as transforms_F
 
+from cosmos_framework.utils import log
+from cosmos_framework.data.vfm.action.action_processing import (
+    ActionNormalizer,
+    ActionProcessor,
+)
 from cosmos_framework.data.vfm.action.json_formatter import ActionPromptJsonFormatter
 from cosmos_framework.data.vfm.action.viewpoint_utils import ViewpointTextInfo
 from cosmos_framework.data.vfm.augmentors.duration_fps_text_timestamps import DurationFPSTextTimeStamps
@@ -27,35 +32,12 @@ from cosmos_framework.data.vfm.augmentors.resolution_text_info import Resolution
 from cosmos_framework.data.vfm.augmentors.text_tokenizer import TextTokenizerTransform
 from cosmos_framework.data.vfm.sequence_packing import SequencePlan
 from cosmos_framework.data.vfm.utils import VIDEO_RES_SIZE_INFO
-from cosmos_framework.utils import log
 from cosmos_framework.utils.vfm.data_utils import get_vision_data_resolution
 
 
 def _should_append_idle_frame_info(mode: object) -> bool:
     """Return whether idle-frame prompt metadata should be surfaced."""
     return mode != "inverse_dynamics"
-
-
-def pad_action_to_max_dim(action: torch.Tensor, max_action_dim: int) -> torch.Tensor:
-    """Pad action tensor to max_action_dim along the last dimension.
-
-    Args:
-        action: Action tensor of shape (T, D) where D is the current action dimension.
-        max_action_dim: Target action dimension to pad to.
-
-    Returns:
-        Padded action tensor of shape (T, max_action_dim).
-    """
-    if action.shape[-1] > max_action_dim:
-        raise ValueError(f"Action dimension {action.shape[-1]} is greater than max_action_dim {max_action_dim}")
-    elif action.shape[-1] == max_action_dim:
-        return action
-    else:
-        padding_size = max_action_dim - action.shape[-1]
-        zero_padding = torch.zeros(
-            *action.shape[:-1], padding_size, dtype=action.dtype, device=action.device
-        )  # [T,padding_size]
-        return torch.cat([action, zero_padding], dim=-1)  # [T,max_action_dim]
 
 
 def find_closest_target_size(h: int, w: int, resolution: str | int) -> tuple[int, int]:
@@ -205,7 +187,7 @@ def reflection_pad_to_target(
 
 def remove_reflection_padding(
     tensor: torch.Tensor,
-    image_size: torch.Tensor,
+    image_size: torch.Tensor | list[torch.Tensor] | None,
 ) -> torch.Tensor:
     """Remove reflection padding added by :func:`reflection_pad_to_target`.
 
@@ -215,17 +197,30 @@ def remove_reflection_padding(
         tensor: Tensor whose last two dimensions are the padded spatial dims.
             Supports any leading dimensions, e.g. ``(C, T, H, W)`` or
             ``(C, H, W)``.
-        image_size: 1-D tensor of shape ``(4,)`` containing
-            ``[target_h, target_w, orig_h_resized, orig_w_resized]`` where
-            ``orig_h/w_resized`` is the original spatial size after
-            aspect-preserving resize (i.e. the content region before
-            padding) — the same convention stored by
-            :func:`reflection_pad_to_target` and VFM's
-            ``ReflectionPadding``.
+        image_size: Spatial metadata using the convention produced by
+            :func:`reflection_pad_to_target`. Accepted forms are ``None`` (no
+            crop), a tensor with shape ``(4,)`` or ``(1, 4)``, or a non-empty
+            list whose first element has one of those tensor shapes. The four
+            values are ``[target_h, target_w, orig_h_resized,
+            orig_w_resized]``, where ``orig_h/w_resized`` is the original
+            spatial size after aspect-preserving resize (i.e. the content
+            region before padding). This matches the convention stored by
+            :func:`reflection_pad_to_target` and VFM's ``ReflectionPadding``.
 
     Returns:
         Cropped tensor of shape ``(..., orig_h_resized, orig_w_resized)``.
     """
+    if image_size is None:
+        return tensor
+    if isinstance(image_size, list):
+        if not image_size:
+            raise ValueError("Expected at least one image_size entry")
+        image_size = image_size[0]  # [1,4] or [4]
+    if image_size.ndim == 2 and image_size.shape[0] == 1:
+        image_size = image_size[0]  # [4]
+    if image_size.ndim != 1:
+        raise ValueError(f"Expected image_size shape [4] or [1,4], got {tuple(image_size.shape)}")
+
     target_h = int(image_size[0].item())
     target_w = int(image_size[1].item())
     orig_h_resized = int(image_size[2].item())
@@ -309,7 +304,6 @@ def build_sequence_plan_from_mode(
     base_action_length = action_length - num_history_actions
     if mode == "forward_dynamics":
         condition_frame_indexes_action = list(range(action_length))
-
     # This currently assumes that the action length is the same as the video length - 1
     # and if action length is the same as the video length, then the first action is the conditioning action
     elif base_action_length == video_length - 1:
@@ -487,6 +481,10 @@ class ActionTransformPipeline:
         self.video_temporal_downsample: int = video_temporal_downsample
         self.max_action_dim: int = max_action_dim
         self.action_channel_masking: bool = action_channel_masking
+        self.action_processor: ActionProcessor = ActionProcessor(
+            max_action_dim=max_action_dim,
+            action_channel_masking=action_channel_masking,
+        )
 
         # --- Spatial resize/padding stage (resolution supplied at call time) ---
         self.video_resize: VideoResize = VideoResize(
@@ -557,7 +555,12 @@ class ActionTransformPipeline:
                 },
             )
 
-    def __call__(self, data_dict: dict, resolution: str | None) -> dict:
+    def __call__(
+        self,
+        data_dict: dict,
+        resolution: str | None,
+        action_normalizer: ActionNormalizer | None = None,
+    ) -> dict:
         """Apply the transform pipeline to a single data dictionary.
 
         Resolution is required at call time and is the only source of truth
@@ -576,7 +579,9 @@ class ActionTransformPipeline:
            sample is in inverse dynamics mode (if enabled).
         7. Tokenize caption text (if enabled).
         8. Build a ``SequencePlan`` from the ``"mode"`` key (if present).
-        9. If action is needed by the plan, pad ``"action"`` to ``max_action_dim``.
+        9. If action is needed by the plan, normalize real channels, pad
+           ``"action"`` to ``max_action_dim``, and attach
+           ``"action_processing_record"``.
         10. Otherwise, nullify ``"action"`` and ``"domain_id"`` (e.g. in
            ``"image2video"`` mode).
 
@@ -584,11 +589,14 @@ class ActionTransformPipeline:
             data_dict: A sample dictionary as returned by a Action dataset.
             resolution: Resolution tier key (e.g. ``"256"``, ``"480"``, ``"720"``)
                 for this sample. When ``None``, auto-detected from video dimensions.
+            action_normalizer: Optional source-provided action normalizer. When
+                present, only unpadded real action channels are normalized
+                before model-space channel padding.
 
         Returns:
             The same dictionary, mutated in-place with padded tensors,
-            ``image_size``, tokenized text IDs, and a
-            ``"sequence_plan"`` entry added.
+            ``image_size``, tokenized text IDs, a ``"sequence_plan"`` entry,
+            and action processing metadata added.
         """
         mode = data_dict.get("mode")
         assert mode is not None, "mode is required"
@@ -654,13 +662,17 @@ class ActionTransformPipeline:
 
         if sequence_plan.has_action:
             assert isinstance(action, torch.Tensor), "action tensor is required when sequence plan has action"
-            data_dict["raw_action_dim"] = torch.tensor(action.shape[1]) if self.action_channel_masking else None
-            data_dict["action"] = pad_action_to_max_dim(action, self.max_action_dim)
+            data_dict = self.action_processor.preprocess_action(
+                data_dict,
+                action,
+                action_normalizer=action_normalizer,
+            )
         else:
             # Nullify action-related fields when action is not needed so the
             # collate function can simply stack all non-None actions.
             data_dict["raw_action_dim"] = None
             data_dict["action"] = None
             data_dict["domain_id"] = None
+            data_dict["action_processing_record"] = None
 
         return data_dict

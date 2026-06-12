@@ -1,18 +1,4 @@
-# Copyright 2025 The Qwen Team and The HuggingFace Inc. team. All rights reserved.
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
-
-# SPDX-FileCopyrightText: Copyright (c) 2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: OpenMDW-1.1
 
 # Source Repository: https://github.com/huggingface/transformers
@@ -33,6 +19,21 @@ from transformers.generation import GenerationMixin
 from transformers.modeling_flash_attention_utils import FlashAttentionKwargs
 from transformers.modeling_outputs import BaseModelOutputWithPast, ModelOutput
 from transformers.modeling_rope_utils import ROPE_INIT_FUNCTIONS, dynamic_rope_update
+
+# "default" rope type was removed from ROPE_INIT_FUNCTIONS in transformers>=5.x
+if "default" not in ROPE_INIT_FUNCTIONS:
+
+    def _default_rope_init(config, device=None, **kwargs):
+        base = config.rope_theta
+        head_dim = getattr(config, "head_dim", None) or config.hidden_size // config.num_attention_heads
+        partial_rotary_factor = getattr(config, "partial_rotary_factor", 1.0)
+        dim = int(head_dim * partial_rotary_factor)
+        inv_freq = 1.0 / (
+            base ** (torch.arange(0, dim, 2, dtype=torch.int64).to(device=device, dtype=torch.float) / dim)
+        )
+        return inv_freq, 1.0
+
+    ROPE_INIT_FUNCTIONS["default"] = _default_rope_init
 from transformers.modeling_utils import ALL_ATTENTION_FUNCTIONS, PreTrainedModel
 from transformers.processing_utils import Unpack
 from transformers.utils import is_torchdynamo_compiling
@@ -320,11 +321,7 @@ class Qwen3VLTextRotaryEmbedding(nn.Module):
         self.original_max_seq_len = config.max_position_embeddings
 
         self.config = config
-        rope_type = self.rope_type
-        if rope_type not in ROPE_INIT_FUNCTIONS and rope_type == "default":
-            # transformers>=5 renamed "default" RoPE entry to "proportional".
-            rope_type = "proportional"
-        self.rope_init_fn = ROPE_INIT_FUNCTIONS[rope_type]
+        self.rope_init_fn = ROPE_INIT_FUNCTIONS[self.rope_type]
 
         self.mrope_section = (
             config.rope_scaling.get("mrope_section", [24, 20, 20]) if config.rope_scaling is not None else [24, 20, 20]

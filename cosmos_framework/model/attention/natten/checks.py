@@ -118,7 +118,7 @@ def choose_natten_backend(
 
     target_fn = partial(log_or_raise_error, raise_error=raise_error)
 
-
+    # NOTE: assumes attention_tensor_checks have already been run once!
     arch_tag = get_arch_tag(device)
 
     is_mla = query_shape[-1] != value_shape[-1]

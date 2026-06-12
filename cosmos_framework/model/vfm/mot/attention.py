@@ -100,7 +100,7 @@ def two_way_attention(
 
     use_dont_care_mask = causal_q_offsets is causal_k_offsets
 
-
+    # NOTE: cosmos_framework attention is BSHD in, BSHD out
     causal_res = attention(
         causal_q.unsqueeze(0),  # [1,N_und,heads,head_dim]
         causal_k.unsqueeze(0),  # [1,N_und,heads,head_dim]
@@ -178,7 +178,7 @@ def three_way_attention(
 
     use_dont_care_mask = causal_q_offsets is causal_k_offsets
 
-
+    # NOTE: cosmos_framework attention is BSHD in, BSHD out
     causal_res = attention(
         causal_q.unsqueeze(0),  # [1,N_und,heads,head_dim]
         causal_k.unsqueeze(0),  # [1,N_und,heads,head_dim]
@@ -338,7 +338,7 @@ def build_packed_sequence(
     is_image_batch: bool = False,
     cp_world_size: int = 1,
     video_temporal_causal: bool = False,
-    use_rolling_kv_cache: bool = False,
+    skip_natten_metadata: bool = False,
     vision_token_shapes: list[tuple[int, int, int]] | None = None,
     action_token_shapes: list[tuple[int, ...]] | None = None,
     num_action_tokens_per_supertoken: int = 0,
@@ -386,9 +386,9 @@ def build_packed_sequence(
             null_action_supertokens=null_action_supertokens,
         )
         make_pack = factored_from_joint_sequence
-        # The rolling KV-cache path implements temporal causality in
-        # three_way_attention_with_kv_cache; skip NATTEN metadata.
-        if not use_rolling_kv_cache:
+        # Some memory-driven attention paths implement temporal visibility in
+        # their own attention kernels; skip NATTEN metadata for those paths.
+        if not skip_natten_metadata:
             # Temporal causal: encode (T, S) supertoken layout; spatial NATTEN: encode (H, W) layout.
             if video_temporal_causal:
                 natten_metadata_list = generate_temporal_causal_natten_metadata(

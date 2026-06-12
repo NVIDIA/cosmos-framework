@@ -1,9 +1,6 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: OpenMDW-1.1
 
-# Core masking functions extracted from transformers.masking_utils for BAGEL compatibility
-# Original Copyright 2025 HuggingFace Inc. team. Licensed under the Apache License, Version 2.0
-
 from typing import Any, Callable, ClassVar, Optional, cast
 
 import torch

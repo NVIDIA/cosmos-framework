@@ -11,24 +11,14 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, Optional
 from urllib.parse import urlparse
 
-import boto3
 import numpy as np
 import torch
 import yaml
-from botocore.config import Config
 from PIL import Image
 
-import cosmos_framework.utils.easy_io.backends.auto_auth as auto
 from cosmos_framework.utils import distributed, log
 from cosmos_framework.utils.easy_io import easy_io
 
-GLOBAL_S3_CONFIG = Config(
-    retries={"max_attempts": 20, "mode": "adaptive"},
-    connect_timeout=10,
-    read_timeout=60,
-    request_checksum_calculation="when_required",
-    response_checksum_validation="when_required",
-)
 Image.MAX_IMAGE_PIXELS = None
 
 if TYPE_CHECKING:
@@ -41,26 +31,18 @@ class ObjectStore:
     **Deprecated**. Use `easy_io` directly instead.
 
     Attributes:
-        client (botocore.client.S3): Object store client object.
         easy_io_backend: easy_io backend.
         bucket (str): Object store bucket name.
     """
 
     def __init__(self, config_object_storage: ObjectStoreConfig):
-
-        #       extracts the easy_io backend instead of the boto3 S3 client.
-        with auto.open_auth(config_object_storage.credentials, "r") as file:
-            object_storage_config = auto.json_load_auth(file)
-            self.client = Boto3Wrapper(
-                "s3",
-                **object_storage_config,
-            )
         self.easy_io_backend = easy_io.get_file_backend(
             backend_args={
                 "backend": "s3",
                 "s3_credential_path": config_object_storage.credentials,
                 "path_mapping": None,
-            }
+            },
+            enable_singleton=True,
         )
         self.bucket = config_object_storage.bucket
 
@@ -158,7 +140,6 @@ class ObjectStore:
         """
         assert type is not None or save_func is not None
         with io.BytesIO() as buffer:
-
             # Write to buffer for common data types.
             if type == "torch":
                 torch.save(object, buffer)
@@ -199,31 +180,6 @@ class ObjectStore:
         return self.easy_io_backend.exists(filepath=self._translate_key(key=key))
 
 
-class Boto3Wrapper:
-    """
-    This class serves as a wrapper around boto3.client in order to make boto3.client serializable. It's required to use
-    spawn method of creating DataLoader workers, which is in turn required to avoid segfaults when using Triton, e.g.
-    for torch.compile or custom kernels.
-    """
-
-    def __init__(self, *args, **kwargs):
-        self._args = args
-        self._kwargs = kwargs
-        self.client = None
-
-    def __setstate__(self, state):
-        self.__dict__ = state
-
-    def __getattr__(self, item):
-        is_worker = torch.utils.data.get_worker_info() is not None
-        client = (
-            boto3.client(*self._args, **self._kwargs, config=GLOBAL_S3_CONFIG) if self.client is None else self.client
-        )
-        if is_worker:
-            self.client = client
-        return getattr(client, item)
-
-
 def sync_s3_dir_to_local(
     s3_dir: str,
     s3_credential_path: str,
@@ -241,7 +197,7 @@ def sync_s3_dir_to_local(
             ALL distributed workers using `distributed.barrier()`. Defaults to True.
         cache_dir (str, optional): The cache folder to sync the S3 directory to.
             If None, the environment variable `IMAGINAIRE_CACHE_DIR` (defaulting
-            to "~/.cache/imaginaire") will be used.
+            to "~/.cache/cosmos_framework") will be used.
         local_rank_sync (bool, optional): Whether to synchronize download across
             workers within the same node using a node-level barrier. This is useful
             when the cache directory is not shared across nodes. Defaults to False.
@@ -275,7 +231,7 @@ def sync_s3_dir_to_local(
 
     # If the local directory is not specified, use the default cache directory
     cache_dir = (
-        os.environ.get("IMAGINAIRE_CACHE_DIR", os.path.expanduser("~/.cache/imaginaire"))
+        os.environ.get("IMAGINAIRE_CACHE_DIR", os.path.expanduser("~/.cache/cosmos_framework"))
         if cache_dir is None
         else cache_dir
     )
@@ -363,7 +319,7 @@ def download_from_s3_with_cache(
         }
     )
     cache_dir = (
-        os.environ.get("IMAGINAIRE_CACHE_DIR", os.path.expanduser("~/.cache/imaginaire"))
+        os.environ.get("IMAGINAIRE_CACHE_DIR", os.path.expanduser("~/.cache/cosmos_framework"))
         if cache_dir is None
         else cache_dir
     )

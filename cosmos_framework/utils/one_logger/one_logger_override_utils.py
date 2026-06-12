@@ -12,7 +12,7 @@ from cosmos_framework.utils.log import logger
 
 
 def override_one_logger_callback(config) -> None:
-    """Add OneLoggerCallback to imaginaire config"""
+    """Add OneLoggerCallback to cosmos_framework config"""
 
     # Enable OneLogger by environment variable.
     enable_onelogger = os.environ.get("ENABLE_ONELOGGER", "FALSE").lower() == "true"

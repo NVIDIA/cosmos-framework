@@ -66,7 +66,6 @@ def to(
     assert device is not None or dtype is not None or memory_format is not None, (
         "at least one of device, dtype, memory_format should be specified"
     )
-
     if isinstance(data, torch.Tensor):
         if (
             memory_format == torch.channels_last
@@ -542,7 +541,8 @@ class NVTXRangeContext:
 
 
 class StragglerDetectorV2:
-    """StragglerDetectorV2 is a class that allows you to easily integrate the "straggler" tool.
+    """StragglerDetectorV2 is a class that allows you to easily integrate "straggler" tool:
+    https://gitlab-master.nvidia.com/dl/gwe/fault_tolerance_related/straggler/-/tree/cupti?ref_type=heads.
 
     This tool detects stragglers using low-level CUPTI tool, which can gather kernel execution time with very low overhead.
     The execution times are compared across different ranks, as well as to the execution time of the exact same kernels in the past.
@@ -579,9 +579,9 @@ class StragglerDetectorV2:
     def initialize(self):
         if self.enabled:
             if not straggler:
-
                 raise RuntimeError(
-                    "Please install the `straggler` package before using StragglerDetectionV2."
+                    "Please install straggler package before using StragglerDetectionV2."
+                    "Package can be installed from here: https://invalid_url"
                 )
 
             straggler.Detector.initialize(

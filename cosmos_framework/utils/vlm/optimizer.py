@@ -42,7 +42,6 @@ class OptimizerConfig:
 
 def _optimizer_cls(params: list[nn.Parameter], optimizer_kwargs: dict[str, Any], name: str):
     if name.lower() == "adam":
-
         optimizer = torch.optim.Adam(params, **optimizer_kwargs)
     elif name.lower() == "adamw":
         optimizer = torch.optim.AdamW(params, **optimizer_kwargs)

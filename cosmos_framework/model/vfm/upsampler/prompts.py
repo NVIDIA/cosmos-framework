@@ -1,5 +1,6 @@
-# Copyright (c) 2025 NVIDIA CORPORATION & AFFILIATES.
-# All rights reserved.
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: OpenMDW-1.1
+
 """Canonical V4.2 upsampler prompt templates — inference-team entry point.
 
 Standalone module. No file I/O, no non-stdlib imports. The canonical templates
@@ -19,10 +20,31 @@ Usage::
         resolution_w=1280, resolution_h=720,
     )
 
-    # Text-to-image (image parameters required; fps/duration omitted)
+    # Text-to-image: the v4.2 default is the EXPRESSIVE body — v4.2 structure
+    # plus a "fill plausibly, leave empties only when truly non-applicable"
+    # rule.  Use without a version override unless you want a different t2i
+    # variant (see below).
     user_text = build_user_text(
         task="t2i", description="A photo of a corgi",
         aspect_ratio="1,1", resolution_w=960, resolution_h=960,
+    )
+
+    # Text-to-image, original v4.2 baseline body (kept for A/B comparisons
+    # against the expressive default — e.g. UGB baseline MR-366).
+    user_text = build_user_text(
+        task="t2i", description="A photo of a corgi",
+        aspect_ratio="1,1", resolution_w=960, resolution_h=960,
+        version="v4.2-original",
+    )
+
+    # Text-to-image, anti-hallucination variant: adds source-anchoring +
+    # rewrite-reflex suppression + person-attribute silence rules. Use
+    # when the source caption is sparse and the upsampler must NOT invent
+    # specifics absent from the source.
+    user_text = build_user_text(
+        task="t2i", description="A photo of a corgi",
+        aspect_ratio="1,1", resolution_w=960, resolution_h=960,
+        version="v4.2-constrained",
     )
 
     # Image-to-video (video parameters required)
@@ -325,6 +347,229 @@ You are a prompt upsampler for a text-to-image model. This instructions block go
 }
 </output_json_template>"""
 
+_TEMPLATE_T2I_V4_2_CONSTRAINED = r"""<instructions>
+You are a prompt upsampler for a text-to-image model. This instructions block governs the response. Next come an <image_description> scene description, a <task_constraints> numbered constraint list, and an <output_json_template> JSON schema. Produce exactly one fenced JSON object. The object fully populates every field in the template, uses valid JSON, and strictly satisfies each numbered task constraint without omission or deviation.
+</instructions>
+
+<image_description>
+{description}
+</image_description>
+
+<task_constraints>
+1. **SOURCE ANCHORING (highest priority).** Every concrete noun anywhere in your output — entity, material, color, count, named object, person attribute (gender, age, wardrobe, hair, skin, facial feature), on-screen or signage text, displayed number, brand, label — MUST already appear in <image_description>, either verbatim or as a direct unambiguous paraphrase. If <image_description> is silent on a property, your output must also be silent: leave the field empty or use the generic word the source used.
+
+   The rule is categorical, not phrase-specific. Apply it to any input by recognizing the category. Pattern templates:
+   - If source names an OBJECT generically (e.g. "the device", "a tool") without specifying material → do not invent a material in your output.
+   - If source names a COUNT generically ("dozens", "several", "many") → keep the same generic word; do not pick a specific number ("over fifty", "twelve").
+   - If source mentions a PERSON without an attribute (gender / age / hair / skin / wardrobe) → do not introduce that attribute. Use the same generic word the source used.
+   - If source mentions a SIGN or SCREEN-TEXT without giving the exact text content → do not invent text content; describe the sign generically.
+   - If source uses a precise PART-NAME or named component → reuse that exact phrase wherever you mention the thing.
+   These templates illustrate the principle; the principle applies to any noun in any input.
+
+2. **REWRITE-REFLEX SUPPRESSION.** Do NOT rewrite a source-anchored phrase into a different specific. If <image_description> already states a concrete noun, copy that noun verbatim wherever you mention the thing. Do NOT substitute a synonym, do NOT category-shift (e.g. "X" → "X-variant"), do NOT pick a more-specific subtype, do NOT replace the source phrase with an "elaborated" equivalent. Photographic descriptors (lens, lighting, framing) are NOT concrete nouns and may be added freely.
+
+3. **CHAIN-LOCK across fields.** Every concrete noun in `comprehensive_t2i_caption`, in any `subjects[]` field, in `background_setting`, in `subject_details`, in `quadrant_scan`, in `text_and_signage_elements`, and in `context` MUST already appear in `scene_imagination` OR in <image_description>. New concrete nouns may NOT be introduced after scene_imagination is written. The only freely-added content across all fields is the photographic-descriptor class (see constraint #5).
+
+4. **PERSON-ATTRIBUTE SILENCE (HARD RULE for human / humanoid subjects).** When <image_description> mentions a person without specifying an attribute, use these defaults — never invent:
+   - `gender` = "Unknown" unless <image_description> uses an explicit gendered word
+   - `age` = the exact age word <image_description> uses (or "Unknown" if no age word)
+   - `clothing` = "" unless <image_description> mentions clothing
+   - `skin_tone_and_texture` = "" unless <image_description> mentions skin
+   - `facial_features` = "" unless <image_description> mentions a specific feature
+   - `expression` = the exact word <image_description> uses (or "" if no expression word)
+   This rule applies to every human/humanoid subject in `subjects[]`. Filling these slots from your training prior is forbidden when source is silent.
+
+5. **PHOTOGRAPHIC DESCRIPTORS — freely add.** Only the following classes may be invented (because they describe HOW the image is captured, not WHAT is in it):
+   - camera framing / angle / lens / focal length / depth of field
+   - lighting quality / direction (only when source mentions or implies lighting)
+   - composition (rule-of-thirds, leading lines, symmetry, negative space)
+   - rendering style (photoreal / illustration / cartoon — only when source implies)
+   - atmospheric quality (haze, contrast, mood, color palette)
+   - generic shadow / reflection / specular behavior
+
+6. **Order of generation.** First fill `scene_imagination` (verb-led scratchpad, 6-12 prompts, ~250 words max) using source-anchored vocabulary. Then fill `comprehensive_t2i_caption` (one tight paragraph, 80-200 words) reusing scene_imagination's concrete vocabulary verbatim — only adding photographic descriptors. Then fill the remaining structured fields (subjects[], background_setting, etc.), all of which inherit vocabulary from constraint #3.
+
+7. **Output-parameter copy.** Copy these values byte-for-byte:
+   - aspect_ratio: "{aspect_ratio}"
+   - resolution: {"W": {resolution_w}, "H": {resolution_h}}
+
+8. **Internal consistency.** Lighting / setting / time-of-day / framing / mood must be mutually consistent.
+
+9. **Schema completeness.** Include every top-level key from the template; never add keys; never omit keys. Permitted empties: "", 0, [], {}. No null. If any subject is human/humanoid: number_of_hands=2, number_of_fingers=10. If all non-human: both = 0.
+
+10. **subject_details density.** `subject_details` non-empty with 2-5 source-anchored attribute keys. Never `{}`.
+
+11. **Output format.** ONLY one JSON object inside a ```json code fence. No prose outside.
+</task_constraints>
+
+<output_json_template>
+{
+  "scene_imagination": "Per #1, #2, #6 — verb-led scratchpad with source-anchored concrete nouns only; under ~250 words",
+  "comprehensive_t2i_caption": "Per #3, #6 — same concrete vocabulary as scene_imagination plus photographic descriptors only",
+  "subjects": [
+    {
+      "description": "Per #1, #3 — source-anchored only",
+      "appearance_details": "Per #1, #3 — source-anchored only",
+      "relationship": "how this subject relates to others",
+      "location": "where in frame",
+      "relative_size": "size within frame",
+      "orientation": "direction subject faces relative to camera",
+      "pose": "body position and posture",
+      "clothing": "Per #4 — '' if source-silent or non-human",
+      "expression": "Per #4 — '' if source-silent or non-human",
+      "gender": "Per #4 — 'Unknown' if source-silent",
+      "age": "Per #4 — source's word verbatim; 'Unknown' if no age word",
+      "skin_tone_and_texture": "Per #4 — '' if source-silent or non-human",
+      "facial_features": "Per #4 — '' if source-silent or non-human",
+      "number_of_subjects": "int; total in this subject's group; 0 if N/A",
+      "number_of_arms": "int",
+      "number_of_legs": "int",
+      "number_of_hands": "int",
+      "number_of_fingers": "int"
+    }
+  ],
+  "subject_details": { "<key_name>": "Per #1, #3 — source-anchored attribute" },
+  "background_setting": "Per #1, #3 — source-anchored",
+  "lighting": { "conditions": "...", "direction": "...", "shadows": "...", "illumination_effect": "..." },
+  "aesthetics": { "composition": "...", "color_scheme": "...", "mood_atmosphere": "...", "patterns": "" },
+  "cinematography": { "framing": "...", "camera_angle": "...", "depth_of_field": "...", "focus": "...", "lens_focal_length": "..." },
+  "style_medium": "rendering style per source",
+  "artistic_style": "broader style only if source implies",
+  "context": "Per #1, #3 — source-anchored",
+  "text_and_signage_elements": [
+    { "text": "exact source text; entry omitted if source-silent on specific text content", "category": "...", "appearance": "...", "spatial": "...", "context": "..." }
+  ],
+  "quadrant_scan": { "top_left": "Per #1, #3", "top_right": "Per #1, #3", "bottom_left": "Per #1, #3", "bottom_right": "Per #1, #3", "absolute_center": "Per #1, #3" },
+  "resolution": "Per #7",
+  "aspect_ratio": "Per #7"
+}
+</output_json_template>"""
+
+
+_TEMPLATE_T2I_V4_2_EXPRESSIVE = r"""<instructions>
+You are a prompt upsampler for a text-to-image model. Your job is to UPSAMPLE — take a sparse natural-language request and expand it into a rich, dense, structured JSON description of the target image. This instructions block governs the response. Next come an <image_description> scene description, a <task_constraints> numbered constraint list, and an <output_json_template> JSON schema. Produce exactly one fenced JSON object that fully populates every top-level key, satisfies every numbered task constraint, and is internally consistent with the request.
+
+The output is always DENSE. Even when the request is brief, infer plausible, scene-consistent details for every field. Do not leave fields empty merely because the request did not mention them — the purpose of upsampling is to turn a sparse request into a complete, image-ready annotation. Be creative but stay grounded: additions must be physically plausible and internally consistent with the request's setting, subjects, mood, and context.
+</instructions>
+
+<image_description>
+{description}
+</image_description>
+
+<task_constraints>
+1. **Scene imagination first.** Begin by filling `scene_imagination` first, before any other field, as one single string made of short verb-led prompts (e.g., focus:, define:, refine:, visualize:, analyze:). Write ~6-12 prompts, under ~250 words total. Use this as your scratchpad for the whole scene: focus the main subject, define key elements, refine details, visualize lighting/camera/atmosphere, analyze coherence. Every later field must be consistent with what you wrote here. (Operational note: at deployment, the inference team strips `scene_imagination` before the JSON is passed downstream.)
+
+2. **Comprehensive T2I caption — pinned 2nd, dense, downstream-actionable.** After `scene_imagination`, populate `comprehensive_t2i_caption` immediately (MUST remain the 2nd top-level key). This is the natural-language prose passed to the downstream image generator; all other JSON keys exist to support it.
+
+   - **Density**: 80-200 words as a SINGLE tight paragraph (1-3 sentences). Not a one-line synopsis; not a list.
+   - **Integration**: merge EVERY concrete detail from the structured fields you populate below — primary and secondary subjects (appearance, wardrobe, expression, pose), background_setting, lighting (conditions, direction, shadow behavior, illumination effect), aesthetics (composition, palette, mood, patterns), cinematography (framing, angle, depth-of-field, focus, lens), style_medium, artistic_style, and any visible text/signage. Do not exclude any concrete item present in `subjects[]` or other populated fields.
+   - **Phrasing**: be immediate and literal. Start with the subject in the setting — NEVER begin with "this image shows", "an image of", "a picture of", "depicting", "we see", or any meta-intro.
+     DO  : "A young woman in a crimson dress stands at the rim of a moonlit canyon..."
+     DON'T: "This image shows a young woman in a crimson dress standing at the rim..."
+   - **Specificity**: use visually-executable adjectives. Swap vague terms ("good lighting") for concrete directives ("warm late-afternoon golden light raking across...").
+
+3. **Output-parameter copy.** Copy these exact values into the matching output JSON keys, byte-for-byte:
+   - aspect_ratio: "{aspect_ratio}"
+   - resolution: {"W": {resolution_w}, "H": {resolution_h}}
+   Do not modify, normalize, or relocate them. (T2I has no duration or fps.)
+
+4. **Internal consistency.** Lighting / setting / time-of-day / camera / framing / mood must be mutually consistent. No contradictions (e.g. "harsh noon sun" with "dim candlelit interior" unless justified).
+
+5. **Faithfulness.** Do not contradict the provided image description. Every concrete element it mentions (subjects, actions/poses, wardrobe, props, background features, environment, style cues) must appear in the JSON or be extended in a way that is clearly plausible and non-conflicting.
+
+6. **EXPRESSIVE DENSITY (highest priority for empties).** The purpose of the upsampler is to FILL the structured annotation, not echo it. Even when the request is brief, infer plausible details for every field consistent with the request's scene, subjects, and mood. Be creative but stay grounded:
+   - Additions must be physically plausible and internally consistent.
+   - For realistic scenes, additions are physically plausible and context-appropriate.
+   - For animation/sci-fi/fantasy/surreal, additions follow that genre's conventions and visual language.
+   - Inferences must support the comprehensive_t2i_caption — not contradict source, not introduce conflicting elements.
+
+7. **Schema completeness and permitted empties.** Include every top-level key from the template exactly once. Never add keys beyond the template. Populate every field with specific, image-grounded detail. Empty values are permitted ONLY for truly inapplicable fields:
+   - Human-only subject fields (clothing, expression, gender, age, skin_tone_and_texture, facial_features, number_of_arms, number_of_legs, number_of_hands, number_of_fingers) when the subject is non-human.
+   - `text_and_signage_elements = []` when no visible text or signage is present.
+   - `aesthetics.patterns = ""` when there are no notable repeating patterns.
+   - `subject_details = {}` when no image-specific structured attributes apply.
+   The only permitted empty literals are exactly: `""`, `0`, `[]`, `{}`. Do not use `null`.
+   - If any subject is human/humanoid: set `number_of_hands = 2` and `number_of_fingers = 10`. If all subjects are non-human, set both to 0.
+
+8. **subject_details density (T2I-only).** Top-level `subject_details` dict is present and non-empty: 2-5 image-specific attribute keys with concrete descriptive string values (e.g. `"hairstyle": "wavy auburn shoulder-length"`, `"footwear": "tan leather Chelsea boots"`, `"hand_props": "antique brass pocket watch in right hand"`). Vary keys per image; never reuse `subjects[].*` field names; never output `{}` when at least one human/humanoid subject is present.
+
+9. **Output format.** Return ONLY the single JSON object, wrapped inside a ```json code fence. No prose, explanations, comments, or text outside the fence.
+</task_constraints>
+
+<output_json_template>
+{
+  "scene_imagination": "single string; verb-led scratchpad (focus:, define:, refine:, visualize:, analyze:); ~6-12 prompts; under ~250 words",
+  "comprehensive_t2i_caption": "Per task constraint #2 — dense single paragraph, 80-200 words, integrates every concrete item from structured fields, starts with subject-in-setting, no meta intros",
+  "subjects": [
+    {
+      "description": "full visual description of the subject (appearance, identifying features, distinctive traits)",
+      "appearance_details": "secondary visual details (accessories, textures, surface character)",
+      "relationship": "how this subject relates to others or to the scene",
+      "location": "where in frame (e.g., 'Center foreground', 'Top right')",
+      "relative_size": "size within frame (e.g., 'Small within frame', 'Medium within frame', 'Large within frame')",
+      "orientation": "direction subject faces relative to camera",
+      "pose": "body position and posture",
+      "clothing": "clothing and accessories; '' if non-human",
+      "expression": "facial expression; '' if non-human or not visible",
+      "gender": "one of 'Male', 'Female', 'Unknown', 'N/A'",
+      "age": "age category (e.g., 'Child', 'Young adult', 'Adult', 'Middle-aged', 'Elderly')",
+      "skin_tone_and_texture": "skin tone and texture description; '' if non-human",
+      "facial_features": "notable facial features incl. eye shape/color, hair color/style/length, lip shape, wrinkles, moles, scars, freckles, facial hair, glasses, makeup, and other visible fine-grained facial attributes; '' if non-human or not visible",
+      "number_of_subjects": "int; total in this subject's group; 0 if N/A",
+      "number_of_arms": "int; 2 for humans, 0 if non-human",
+      "number_of_legs": "int; 2 for humans, 0 if non-human",
+      "number_of_hands": "int; 2 for humans, 0 if non-human",
+      "number_of_fingers": "int; 10 for humans, 0 if non-human"
+    }
+  ],
+  "subject_details": {
+    "<key_name>": "free-form image-specific structured attribute; keys vary per image; '' value strings allowed but never the whole dict empty"
+  },
+  "background_setting": "full prose description of the environment / setting / context behind the main subject(s)",
+  "lighting": {
+    "conditions": "type and quality of light (e.g., 'Bright daylight', 'Overcast', 'Studio lighting', 'Golden hour')",
+    "direction": "primary light direction (e.g., 'top-lit', 'front-lit', 'side-lit from right')",
+    "shadows": "shadow character (e.g., 'soft', 'hard', 'long-cast')",
+    "illumination_effect": "any notable illumination effect (e.g., 'rim-light', 'god rays', 'lens flare', 'soft fill')"
+  },
+  "aesthetics": {
+    "composition": "compositional choices (e.g., 'rule-of-thirds', 'symmetric', 'leading lines', 'center-weighted')",
+    "color_scheme": "dominant color palette and mood",
+    "mood_atmosphere": "emotional tone of the image",
+    "patterns": "notable repeating visual patterns; '' if none"
+  },
+  "cinematography": {
+    "framing": "shot framing (e.g., 'wide', 'medium', 'close-up')",
+    "camera_angle": "camera angle (e.g., 'eye-level', 'high-angle', 'Dutch angle')",
+    "depth_of_field": "depth-of-field choice (e.g., 'shallow', 'deep', 'uniform focus')",
+    "focus": "what is in sharp focus (e.g., 'subject in foreground; background bokeh')",
+    "lens_focal_length": "focal length style (e.g., 'wide-angle 24mm', 'telephoto 85mm')"
+  },
+  "style_medium": "rendering style and medium (e.g., 'photoreal photograph', 'oil painting', 'cel-shaded animation', 'digital presentation slide', 'screenshot')",
+  "artistic_style": "broader artistic style if applicable (e.g., 'noir', 'pastoral painterly', 'cyberpunk')",
+  "context": "broader narrative or situational context (brief)",
+  "text_and_signage_elements": [
+    {
+      "text": "the exact text/sign content",
+      "category": "one of 'physical_in_scene', 'scene_sign', 'ui_text', 'body_text', 'caption', 'logo', 'label'",
+      "appearance": "how the text appears (font style, color, size, weight)",
+      "spatial": "where in the image the text appears",
+      "context": "narrative or situational context for the text"
+    }
+  ],
+  "quadrant_scan": {
+    "top_left": "what is in the top-left region",
+    "top_right": "what is in the top-right region",
+    "bottom_left": "what is in the bottom-left region",
+    "bottom_right": "what is in the bottom-right region",
+    "absolute_center": "what is in the dead-center of the frame"
+  },
+  "resolution": "Per task constraint #3",
+  "aspect_ratio": "Per task constraint #3"
+}
+</output_json_template>"""
+
+
 _TEMPLATE_I2V_V4_2 = r"""<instructions>
 Your function is to operate as a prompt upsampler for an image-to-video model. You will be provided with several inputs: (a) an attached starting frame image, which serves as the definitive visual ground truth for subjects, setting, lighting, and color palette; (b) this instruction block; (c) a <video_description> detailing the scene's temporal and action-based intent; (d) a numbered <task_constraints> list; and (e) an <output_json_template> schema. Your sole output is one fenced JSON object. This object must populate every required field from the template and meticulously satisfy every numbered task constraint. Fields pertaining to visual information (`subjects`, `background_setting`, `lighting`, `aesthetics`, `style_medium`, `artistic_style`) must be entirely consistent with the attached image and must not contradict it. Fields pertaining to temporal information (`actions`, `segments`, `transitions`, `temporal_caption`) should be derived from the <video_description>, allowing for plausible extrapolation of events beyond the static first frame. The duration value from task constraint #2 establishes a strict upper limit for all time-based values in the JSON, which includes the latest action end time and the closing `time_range` of the final segment; all scheduling must occur within this duration.
 
@@ -612,12 +857,22 @@ _TRANSFER_INSTRUCTION_FAMILIES_V4_2: dict[str, tuple[str, ...]] = {
 }
 
 
+# Registry of every (version, task) → template body. `build_user_text` /
+# `build_messages` select an entry via the `version=` kwarg (default
+# "v4.2"). For t2i, the v4.2 default body is the EXPRESSIVE variant — the
+# v4.2-baseline body remains addressable as ("v4.2-original", "t2i") for
+# baseline / A-B comparisons. The constrained anti-hallucination variant is
+# at ("v4.2-constrained", "t2i"). Transfer has an analogous structured
+# variant at ("v4.2-structured", "transfer").
 CANONICAL_TEMPLATES: dict[tuple[str, str], str] = {
     ("v4.2", "t2v"): _TEMPLATE_T2V_V4_2,
-    ("v4.2", "t2i"): _TEMPLATE_T2I_V4_2,
+    ("v4.2", "t2i"): _TEMPLATE_T2I_V4_2_EXPRESSIVE,
     ("v4.2", "i2v"): _TEMPLATE_I2V_V4_2,
     ("v4.2", "transfer"): _TEMPLATE_TRANSFER_V4_2,
     ("v4.2-structured", "transfer"): _TEMPLATE_TRANSFER_STRUCTURED_V4_2,
+    ("v4.2-expressive", "t2i"): _TEMPLATE_T2I_V4_2_EXPRESSIVE,
+    ("v4.2-original", "t2i"): _TEMPLATE_T2I_V4_2,
+    ("v4.2-constrained", "t2i"): _TEMPLATE_T2I_V4_2_CONSTRAINED,
 }
 
 
@@ -908,7 +1163,7 @@ def is_upsampled_prompt(prompt: str) -> bool:
     the native upsampler again.
 
     Used by inference callers (e.g.
-    ``cosmos_framework.inference.OmniInference._iter_predictions``) to decide
+    ``cosmos3.inference.OmniInference._iter_predictions``) to decide
     per-batch whether to pass a native prompt-upsample task to
     :meth:`OmniMoTModel.generate_samples_from_batch`.  Two motivating
     cases produce already-upsampled prompts:

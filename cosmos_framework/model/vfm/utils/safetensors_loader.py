@@ -988,7 +988,7 @@ def load_language_model(
 
     if tie_embeddings:
         # The `*ForCausalLM` classes in
-        # `projects/cosmos3/vfm/models/mot/unified_mot.py` override
+        # `cosmos_framework/model/vfm/mot/unified_mot.py` override
         # `get_input_embeddings` (canonical HF idiom) to return the inner
         # `model.embed_tokens`, so this call returns a real `nn.Embedding`
         # rather than raising `NotImplementedError`.
@@ -1200,7 +1200,7 @@ def load_vfm_model(
     r"""Load a complete Cosmos3 VFM checkpoint (safetensors) into a Cosmos3VFMNetwork.
 
     Loads the *entire* state of a
-    :class:`~projects.cosmos3.vfm.models.mot.cosmos3_vfm_network.Cosmos3VFMNetwork`
+    :class:`~cosmos_framework.model.vfm.mot.cosmos3_vfm_network.Cosmos3VFMNetwork`
     in one shot:
 
     - the language tower (``language_model.*``), which carries the

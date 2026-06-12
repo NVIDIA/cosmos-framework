@@ -12,10 +12,12 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from cosmos_framework.model.tokenizer.models.modules.attention.full_attn import tensor_dense_scaled_dot_product_attention
+from cosmos_framework.model.tokenizer.models.modules.attention.full_attn import (
+    tensor_dense_scaled_dot_product_attention,
+)
 
-DenseRuntimeBackend = Literal["varlen", "batched", "auto"]
-DenseResolvedBackend = Literal["varlen", "batched"]
+DenseRuntimeBackend = Literal["varlen", "batched", "batched_with_padding", "auto"]
+DenseResolvedBackend = Literal["varlen", "batched", "batched_with_padding"]
 
 
 def resolve_dense_backend(backend: DenseRuntimeBackend, use_compile: bool) -> DenseResolvedBackend:
@@ -33,7 +35,7 @@ def resolve_dense_backend(backend: DenseRuntimeBackend, use_compile: bool) -> De
     """
     if backend == "auto":
         return "batched" if use_compile else "varlen"
-    if backend in ("varlen", "batched"):
+    if backend in ("varlen", "batched", "batched_with_padding"):
         return backend
     raise ValueError(f"Unsupported dense runtime backend: {backend}")
 
@@ -69,6 +71,8 @@ def run_varlen_block_stack(
 def run_batched_block_stack(
     blocks: nn.ModuleList,
     feats: torch.Tensor,
+    cu_seqlens_q: torch.Tensor | None = None,
+    max_q_seqlen: int | None = None,
     q_freqs_cis: torch.Tensor | None = None,
 ) -> torch.Tensor:
     """Run the dense batched block path over uniform `[B, S, D]` chunks."""
@@ -79,21 +83,31 @@ def run_batched_block_stack(
     for block in blocks:
         if block.training and getattr(block, "use_checkpoint", False):
             output = torch.utils.checkpoint.checkpoint(
-                partial(run_batched_block, block, q_freqs_cis=q_freqs_cis),
+                partial(
+                    run_batched_block,
+                    block,
+                    cu_seqlens_q=cu_seqlens_q,
+                    max_q_seqlen=max_q_seqlen,
+                    q_freqs_cis=q_freqs_cis,
+                ),
                 output,
                 use_reentrant=False,
             )
         else:
-            output = run_batched_block(block, output, q_freqs_cis=q_freqs_cis)
+            output = run_batched_block(
+                block, output, cu_seqlens_q=cu_seqlens_q, max_q_seqlen=max_q_seqlen, q_freqs_cis=q_freqs_cis
+            )
     return output
 
 
 def run_batched_block(
     block: nn.Module,
     feats: torch.Tensor,
+    cu_seqlens_q: torch.Tensor | None = None,
+    max_q_seqlen: int | None = None,
     q_freqs_cis: torch.Tensor | None = None,
 ) -> torch.Tensor:
-    """Run one transformer block with the dense batched attention path."""
+    """Run one transformer block with the dense batched attention path with optional padding."""
     if getattr(block, "multiscale", None) is not None:
         raise NotImplementedError("Dense runtime batched backend does not support multiscale blocks.")
     if getattr(block.attn, "_type", None) != "self":
@@ -101,7 +115,9 @@ def run_batched_block(
 
     residual = feats
     h = block.norm1(feats)
-    h = run_batched_attention(block.attn, h, q_freqs_cis=q_freqs_cis)
+    h = run_batched_attention(
+        block.attn, h, cu_seqlens_q=cu_seqlens_q, max_q_seqlen=max_q_seqlen, q_freqs_cis=q_freqs_cis
+    )
     feats = residual + h
     residual = feats
     h = block.norm2(feats)
@@ -112,15 +128,19 @@ def run_batched_block(
 def run_batched_attention(
     attention: nn.Module,
     feats: torch.Tensor,
+    cu_seqlens_q: torch.Tensor | None = None,
+    max_q_seqlen: int | None = None,
     q_freqs_cis: torch.Tensor | None = None,
 ) -> torch.Tensor:
-    """Run one dense self-attention layer via the imaginaire attention frontend."""
+    """Run one dense self-attention layer via the cosmos_framework attention frontend."""
     if not hasattr(attention, "to_qkv"):
         raise ValueError("Dense runtime batched backend requires fused to_qkv linear projections.")
     if not hasattr(attention, "to_out"):
         raise ValueError("Dense runtime batched backend requires an output projection linear layer.")
 
+    # feats: [B, S_padded, hidden]  (S_padded = pad_to tokens per batch item, padded for CUDA graph)
     batch_size, seq_len, hidden_size = feats.shape
+    # qkv: [B, S_padded, 3, H, D]
     qkv = F.linear(feats, attention.to_qkv.weight, attention.to_qkv.bias).reshape(
         batch_size,
         seq_len,
@@ -128,9 +148,11 @@ def run_batched_attention(
         attention.num_heads,
         -1,
     )
+    # q, k, v: [B, S_padded, H, D]
     q, k, v = qkv.unbind(dim=2)
 
     if getattr(attention, "qk_rms_norm", False):
+        # flatten to [B*S_padded, H, D] for per-token RMSNorm, then restore
         flat_q = q.reshape(batch_size * seq_len, attention.num_heads, -1)
         flat_k = k.reshape(batch_size * seq_len, attention.num_heads, -1)
         q = attention.q_rms_norm(flat_q).reshape(batch_size, seq_len, attention.num_heads, -1)
@@ -139,6 +161,7 @@ def run_batched_attention(
     if getattr(attention, "use_rope", False):
         if q_freqs_cis is None:
             raise ValueError("Dense runtime batched backend requires precomputed q_freqs_cis when RoPE is enabled.")
+        # flatten to [B*S_padded, H, D] for RoPE application, then restore to [B, S_padded, H, D]
         flat_q = q.reshape(batch_size * seq_len, attention.num_heads, -1)
         flat_k = k.reshape(batch_size * seq_len, attention.num_heads, -1)
         flat_q, flat_k = attention.rope.apply_rotary_emb(
@@ -150,6 +173,16 @@ def run_batched_attention(
         q = flat_q.reshape(batch_size, seq_len, attention.num_heads, -1)
         k = flat_k.reshape(batch_size, seq_len, attention.num_heads, -1)
 
-    h = tensor_dense_scaled_dot_product_attention(q=q, k=k, v=v)
+    # q, k, v: [B, S_padded, H, D] → attention → h: [B, S_padded, H, D]
+    h = tensor_dense_scaled_dot_product_attention(
+        q=q,
+        k=k,
+        v=v,
+        cu_seqlens_q=cu_seqlens_q,
+        cu_seqlens_kv=cu_seqlens_q,
+        max_q_seqlen=max_q_seqlen,
+        max_kv_seqlen=max_q_seqlen,
+    )
+    # h: [B, S_padded, hidden]
     h = h.reshape(batch_size, seq_len, hidden_size)
     return F.linear(h, attention.to_out.weight, attention.to_out.bias)

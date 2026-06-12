@@ -23,14 +23,24 @@ class ClusterConfig:
 
 DefaultClusterConfig: ClusterConfig = ClusterConfig(
     object_store_bucket_data="",
-    object_store_bucket_checkpoint="bucket-checkpoint",
-    object_store_bucket_pretrained="bucket-pretrained",
-    object_store_credential_data="credentials/data.secret",
-    object_store_credential_checkpoint="credentials/checkpoint.secret",
-    object_store_credential_pretrained="credentials/pretrained.secret",
+    object_store_bucket_checkpoint="bucket4",
+    object_store_bucket_pretrained="bucket4",
+    object_store_credential_data="credentials/s3_training.secret",
+    object_store_credential_checkpoint="credentials/s3_checkpoint.secret",
+    object_store_credential_pretrained="credentials/s3_checkpoint.secret",
+)
+
+DefaultClusterConfig: ClusterConfig = ClusterConfig(
+    object_store_bucket_data="",
+    object_store_bucket_checkpoint="bucket1",
+    object_store_bucket_pretrained="bucket0",
+    object_store_credential_data="credentials/gcp_checkpoint.secret",
+    object_store_credential_checkpoint="credentials/gcp_training.secret",
+    object_store_credential_pretrained="credentials/gcp_training.secret",
 )
 
 
 def register_cluster():
     cs = ConfigStore.instance()
-    cs.store(group="cluster", package="job.cluster", name="default", node=DefaultClusterConfig)
+    cs.store(group="cluster", package="job.cluster", name="aws_iad_h100", node=DefaultClusterConfig)
+    cs.store(group="cluster", package="job.cluster", name="gcp_iad_gb200", node=DefaultClusterConfig)

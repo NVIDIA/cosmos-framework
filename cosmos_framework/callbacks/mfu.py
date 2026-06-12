@@ -138,7 +138,6 @@ class MFUCallback(EveryN):
         ac_cfg = getattr(model_cfg, "activation_checkpointing", None)
         ac_mode = getattr(ac_cfg, "mode", "none")
 
-
         # Some activations don't need to be recomputed under selective AC, so
         # we need to remove them from the FLOP computation.
         self._use_activation_checkpointing = ac_mode != "none"

@@ -17,21 +17,19 @@ import pytest
 from cosmos_framework.utils.config_helper import get_config_module, override
 
 
+@pytest.mark.timeout(300)
 @pytest.mark.L0
 @pytest.mark.parametrize(
     "experiment_name",
     [
-        "vision_sft_nano",
+        "t2i_mot_exp001_009_qwen3_vl_2b_256res_frozen_llm",
     ],
 )
-def test_config_init_experiment_mot(experiment_name, monkeypatch):
+def test_config_init_experiment_mot(experiment_name):
     """
     Parameterized test to verify config initialization for multiple experiments.
     PYTHONPATH=. torchrun --nproc_per_node=8 -m pytest -s cosmos_framework/configs/base/config_test_mot.py --L1
     """
-    # The SFT experiments interpolate the dataset location from ${oc.env:DATASET_PATH};
-    # config construction only needs the variable defined, not a real dataset on disk.
-    monkeypatch.setenv("DATASET_PATH", "/tmp/dataset")
     config_file = "cosmos_framework/configs/base/config.py"
     config_module = get_config_module(config_file)
     config = importlib.import_module(config_module).make_config()
@@ -44,11 +42,17 @@ def test_config_init_experiment_mot(experiment_name, monkeypatch):
     )
 
 
-def _make_self_mock(*, pretrained_enabled: bool, load_weights_from_pretrained: bool) -> MagicMock:
+def _make_self_mock(
+    *,
+    pretrained_enabled: bool,
+    load_weights_from_pretrained: bool,
+    exclude_reasoner_weights_from_checkpoint: bool = False,
+) -> MagicMock:
     """Mock the OmniMoTModel attributes that load_pretrained_model_if_needed reads."""
     self_mock = MagicMock()
     self_mock.vlm_config.pretrained_weights.enabled = pretrained_enabled
     self_mock.config.diffusion_expert_config.load_weights_from_pretrained = load_weights_from_pretrained
+    self_mock.config.exclude_reasoner_weights_from_checkpoint = exclude_reasoner_weights_from_checkpoint
     self_mock.config.ema.enabled = False
     return self_mock
 
@@ -88,6 +92,17 @@ class TestLoadPretrainedGate:
         self_mock = _make_self_mock(pretrained_enabled=True, load_weights_from_pretrained=True)
         loader = self._call(self_mock, has_resumable_checkpoint=True, has_load_path=False)
         loader.assert_not_called()
+        self_mock.net.language_model.init_moe.assert_not_called()
+
+    def test_resume_reloads_reasoner_when_excluded_from_checkpoint(self):
+        """Reasoner-excluding resumable checkpoint: HF load, but no generation copy."""
+        self_mock = _make_self_mock(
+            pretrained_enabled=True,
+            load_weights_from_pretrained=True,
+            exclude_reasoner_weights_from_checkpoint=True,
+        )
+        loader = self._call(self_mock, has_resumable_checkpoint=True, has_load_path=False)
+        loader.assert_called_once()
         self_mock.net.language_model.init_moe.assert_not_called()
 
     def test_warm_start_loads_but_skips_copy(self):

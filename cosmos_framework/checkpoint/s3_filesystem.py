@@ -3,32 +3,89 @@
 
 import io
 import os
+import threading
 import time
 from contextlib import contextmanager
 from typing import Generator, Union
 from urllib.parse import urlparse
 
+import boto3
+from botocore.config import Config as S3Config
 from botocore.exceptions import ClientError
 from torch.distributed.checkpoint import FileSystemReader, FileSystemWriter
 from torch.distributed.checkpoint.filesystem import FileSystemBase
 
 from cosmos_framework.utils import log
 from cosmos_framework.utils.easy_io import easy_io
+from cosmos_framework.utils.easy_io.backends import auto_auth
 
 
-class S3Stream(io.BytesIO):
+class _CancellableReader:
+    """Pipe-reader wrapper whose ``read`` raises once a cancel event is set.
+
+    Lets us abort an in-flight ``client.upload_fileobj`` on producer error: a
+    read exception makes boto3 abort the multipart upload, whereas just
+    closing the pipe writer would signal EOF and finalize a truncated file.
     """
-    Workaround for PyTorch manually closing the stream before we can upload it to S3. We override the close() as noop
-    and instead call our own _true_close() method to close the stream after we are done using it.
-    The commit at fault is https://github.com/pytorch/pytorch/commit/9c909bf3bb122db2cce95e2eb7459bbe50dfa15a
+
+    def __init__(self, f, cancel_event: threading.Event) -> None:
+        self._f = f
+        self._cancel = cancel_event
+
+    def read(self, n: int = -1) -> bytes:
+        if self._cancel.is_set():
+            raise IOError("S3 upload cancelled by caller")
+        return self._f.read(n)
+
+    def readable(self) -> bool:
+        return True
+
+    def close(self) -> None:
+        self._f.close()
+
+
+class _CountingPipeWriter(io.RawIOBase):
+    """Write-only pipe wrapper that fakes ``tell()`` by counting bytes written.
+
+    DCP calls ``stream.tell()`` to record per-tensor byte offsets in the
+    checkpoint metadata, but kernel pipes aren't seekable. We maintain the
+    byte count ourselves; nothing actually seeks.
     """
 
-    def close(self):
-        self.flush()
-        # No close
+    def __init__(self, write_file) -> None:
+        super().__init__()
+        self._f = write_file
+        self._pos = 0
 
-    def _true_close(self):
-        super().close()
+    def write(self, b) -> int:
+        n = self._f.write(b)
+        if n is None:
+            raise OSError("_CountingPipeWriter: underlying pipe write returned None; expected a blocking write.")
+        self._pos += n
+        return n
+
+    def writable(self) -> bool:
+        return True
+
+    def seekable(self) -> bool:
+        return False  # pipes can't seek; consumers (zipfile, etc.) check this
+
+    def tell(self) -> int:
+        return self._pos
+
+    def fileno(self) -> int:
+        return self._f.fileno()
+
+    def flush(self) -> None:
+        self._f.flush()
+
+    def close(self) -> None:
+        if self.closed:
+            return
+        try:
+            super().close()  # invokes self.flush(), then sets self.closed = True
+        finally:
+            self._f.close()
 
 
 class S3FileSystem(FileSystemBase):
@@ -68,6 +125,33 @@ class S3FileSystem(FileSystemBase):
         self.enable_gcs_patch_in_boto3 = enable_gcs_patch_in_boto3
         if enable_gcs_patch_in_boto3:
             log.info("enable_gcs_patch_in_boto3: True")
+
+        # Direct boto3 client for streaming-multipart uploads (``upload_fileobj``
+        # via boto3's TransferManager). We can't reuse ``self.easy_io_backend``'s
+        # client: easy_io abstracts the transport (could be ``Boto3Backend`` or
+        # ``MSCBackend``) and intentionally doesn't expose a raw boto3 client.
+        # Built lazily so read-only callers don't pay for it.
+        self._credential_path = credential_path
+        self._boto3_client = None
+
+    def _get_boto3_client(self):
+        """Lazily build a boto3 S3 client configured for our endpoint.
+
+        Config mirrors cosmos_framework/utils/easy_io/backends/boto3_client.py:289 to
+        preserve GCS-via-S3 signature/checksum compatibility.
+        """
+        if self._boto3_client is None:
+            with auto_auth.open_auth(self._credential_path, "r") as f:
+                cred_info = auto_auth.json_load_auth(f)
+            cfg = S3Config(
+                signature_version="s3v4",
+                s3={"addressing_style": "virtual"},
+                response_checksum_validation="when_required",
+                request_checksum_calculation="when_required",
+                retries={"max_attempts": 5, "mode": "adaptive"},
+            )
+            self._boto3_client = boto3.client("s3", **cred_info, config=cfg)
+        return self._boto3_client
 
     def _retry_with_backoff(self, operation_func, *args, **kwargs):
         """
@@ -135,24 +219,61 @@ class S3FileSystem(FileSystemBase):
 
                 log.info(f"S3 Filesystem: Downloading {key} from bucket {bucket}", rank0_only=False)
                 self._retry_with_backoff(download_operation)
-                log.info("S3 Filesystem: Download complete", rank0_only=False)
+                log.info(f"S3 Filesystem: Download complete for {key} in bucket {bucket}", rank0_only=False)
                 yield stream
             finally:
                 stream.close()
         elif mode == "wb":
-            stream = S3Stream()
+            # Streaming multipart upload: yield the writer end of a pipe to DCP
+            # and drain the reader end via ``client.upload_fileobj`` in a
+            # background thread. Peak memory is bounded by boto3's TransferConfig
+            # (~80 MiB) regardless of file size; the pipe (~64 KiB) provides
+            # backpressure. See ``_CancellableReader`` for how producer-side
+            # errors abort the multipart upload.
+            client = self._get_boto3_client()
+            r_fd, w_fd = os.pipe()
+            read_file = os.fdopen(r_fd, "rb")
+            write_file = os.fdopen(w_fd, "wb")
+            counting_writer = _CountingPipeWriter(write_file)
+            upload_err: list = [None]
+            cancel_event = threading.Event()
+
+            def _upload_thread():
+                try:
+                    client.upload_fileobj(
+                        _CancellableReader(read_file, cancel_event),
+                        Bucket=bucket,
+                        Key=key,
+                    )
+                except Exception as e:  # noqa: BLE001 — capture and re-raise on main thread
+                    upload_err[0] = e
+                finally:
+                    try:
+                        read_file.close()
+                    except Exception:
+                        pass
+
+            log.info(f"S3 Filesystem: Streaming upload {key} to bucket {bucket}", rank0_only=False)
+            uploader = threading.Thread(target=_upload_thread, daemon=True, name=f"s3-upload-{key[-32:]}")
+            uploader.start()
+
+            caller_raised = False
             try:
-                yield stream
-
-                def upload_operation():
-                    stream.seek(0)
-                    self.easy_io_backend.put(obj=stream, filepath=path_str)
-
-                log.info(f"S3 Filesystem: Uploading {key} to bucket {bucket}", rank0_only=False)
-                self._retry_with_backoff(upload_operation)
-                log.info("S3 Filesystem: Upload complete", rank0_only=False)
+                yield counting_writer
+            except Exception:
+                caller_raised = True
+                cancel_event.set()
+                raise
             finally:
-                stream._true_close()
+                try:
+                    counting_writer.close()  # closes the pipe write end → EOF for the reader
+                except Exception:
+                    pass
+                uploader.join()
+                if upload_err[0] is not None and not caller_raised:
+                    # Upload thread failed; surface that to the caller.
+                    raise upload_err[0]
+            log.info(f"S3 Filesystem: Upload complete for {key}", rank0_only=False)
         else:
             raise ValueError(f"Unsupported mode: {mode}")
 
@@ -285,7 +406,7 @@ class S3StorageWriter(FileSystemWriter):
         """
         super().__init__(
             path=path,
-            sync_files=False,
+            sync_files=False,  # FIXME: setting this to True makes the run to fail (L#333: `os.fsync(stream.fileno())`)
             **kwargs,
         )
         self.fs = S3FileSystem(credential_path, enable_gcs_patch_in_boto3=enable_gcs_patch_in_boto3)  # type: ignore

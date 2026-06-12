@@ -75,17 +75,12 @@ def flash2_attention_check(
         )
         return False
 
-
-    # mixed_modality_sft_8b smoke on Blackwell — flash3 isn't built for arch
-    # 100/103 and natten doesn't support varlen. Revisit before production
-    # training on this hardware.
-    # if is_varlen:
-    #     target_fn(
-    #         "Flash Attention v2 (flash2) varlen is banned due to instability. "
-    #         "Please choose another backend.",
-    #         exception=ValueError,
-    #     )
-    #     return False
+    if is_varlen:
+        target_fn(
+            "Flash Attention v2 (flash2) varlen is banned due to instability. Please choose another backend.",
+            exception=ValueError,
+        )
+        return False
 
     arch_tag = get_arch_tag(device)
     fwd_dtypes = get_fwd_dtypes(arch_tag)

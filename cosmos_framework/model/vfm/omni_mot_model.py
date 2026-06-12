@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import collections
+import json
 import time
 from contextlib import contextmanager
 from typing import Any, Callable, Dict, Mapping, Optional, Tuple
@@ -25,6 +26,7 @@ from cosmos_framework.utils.timer import Timer
 from cosmos_framework.model.vfm.algorithm.loss.flow_matching import compute_flow_matching_loss
 from cosmos_framework.model.vfm.algorithm.loss.load_balancing import compute_load_balancing_loss
 from cosmos_framework.configs.base.defaults.model_config import OmniMoTModelConfig
+from cosmos_framework.data.vfm.action.action_processing import ActionProcessor, get_action_processing_records
 from cosmos_framework.data.vfm.sequence_packing import (
     PackedSequence,
     SequencePlan,
@@ -69,6 +71,7 @@ class OmniMoTModel(ImaginaireModel):
         super().__init__()
         self.config = config
         log.info(f"OmniMoTModel: config {self.config}")
+
         # 0. Set up precision
         self.set_precision()
 
@@ -99,7 +102,6 @@ class OmniMoTModel(ImaginaireModel):
         torch.backends.cudnn.allow_tf32 = torch.backends.cuda.matmul.allow_tf32 = False
 
     def set_up_data_key(self) -> None:
-
         self.input_video_key = self.config.input_video_key  # by default it is video key for Video diffusion model
         self.input_image_key = self.config.input_image_key
         self.input_caption_key = self.config.input_caption_key
@@ -143,7 +145,6 @@ class OmniMoTModel(ImaginaireModel):
         vlm_tokenizer, special_tokens = add_special_tokens(vlm_tokenizer)
         self.vlm_tokenizer = vlm_tokenizer
 
-
         self.llm_special_tokens = special_tokens
         self.llm_special_tokens["eos_token_id"] = vlm_tokenizer.eos_token_id
 
@@ -170,7 +171,6 @@ class OmniMoTModel(ImaginaireModel):
             self.tokenizer_sound_gen = None
 
 
-
     def build_net(self, dtype: torch.dtype):
         # Build model network and parallelize it.
         with torch.device("meta"):
@@ -178,7 +178,7 @@ class OmniMoTModel(ImaginaireModel):
 
             language_model = lazy_instantiate(self.vlm_config.model_instance)
 
-
+            # NOTE: We pass "RF timesteps" to the network in the same scale as the scheduler
             # (i.e., roughly [0, num_train_timesteps]). The MoT network expects to internally
             # rescale timesteps before embedding; avoid hard-coding 1e-3 by computing it from
             # the configured scheduler resolution.
@@ -258,28 +258,64 @@ class OmniMoTModel(ImaginaireModel):
         has_resumable_checkpoint: bool,
         has_load_path: bool,
     ) -> None:
-        """Load HF understanding-pathway weights, gated by runtime checkpoint state.
+        """Conditionally seed pretrained understanding/reasoner weights at startup.
+
+        OmniMoT has two weight groups: the understanding/reasoner pathway (the
+        ``language_model`` backbone, e.g. Qwen3-VL / Cosmos-Reason) and the
+        generation pathway (the diffusion MoE experts). This hook runs after the
+        model is built and after DCP has had a chance to restore a checkpoint. It
+        decides (a) whether the understanding weights still need to be seeded from
+        the pretrained HuggingFace source, and (b) whether those weights must be
+        copied into the generation pathway.
 
         Args:
-            has_resumable_checkpoint: A latest_checkpoint.txt exists in the load
-                directory; DCP has already populated the full model. Skip HF load entirely.
-            has_load_path: ``checkpoint.load_path`` is set; DCP has loaded the full
-                model from the warm-start path. Reload HF understanding-pathway weights
-                (e.g. swap Qwen3-VL → Cosmos-Reason) but skip the understanding→generation
-                copy since the generation pathway is already populated by load_path.
+            has_resumable_checkpoint: A ``latest_checkpoint.txt`` exists in the
+                load directory, i.e. DCP has already restored the full model from a
+                mid-run checkpoint. The understanding weights are normally present
+                in such a checkpoint, so the HF load is skipped -- unless
+                ``exclude_reasoner_weights_from_checkpoint`` is set, in which case
+                those weights were never checkpointed and must be re-seeded here.
+            has_load_path: ``checkpoint.load_path`` is set, i.e. DCP has loaded the
+                full model from a warm-start path. The understanding weights are
+                still re-seeded from HF (e.g. to swap Qwen3-VL -> Cosmos-Reason),
+                but the understanding->generation copy is skipped because the
+                generation pathway was already populated from ``load_path``.
 
-        Three cases the gates produce:
-          1. Fresh init (neither): full HF load + understanding→generation copy.
-          2. Warm-start (load_path only): reload understanding, skip the copy.
-          3. Resume (resumable checkpoint): skip everything.
+        The gates combine into three startup scenarios:
+          1. Fresh init (neither gate set): seed understanding weights from HF and
+             copy them into the generation pathway.
+          2. Warm-start (``has_load_path`` only): re-seed understanding weights,
+             skip the understanding->generation copy.
+          3. Resume (``has_resumable_checkpoint`` set): skip everything, unless
+             ``exclude_reasoner_weights_from_checkpoint`` forces re-seeding the
+             understanding weights (the copy is still skipped).
         """
+        # A checkpoint of any kind (mid-run resume or warm-start load_path) means
+        # the generation pathway is already populated, so the understanding->
+        # generation copy further below must be skipped.
+        has_checkpoint = has_resumable_checkpoint or has_load_path
+
         pretrained_weights = self.vlm_config.pretrained_weights
-        if not pretrained_weights.enabled:
-            return
-        if has_resumable_checkpoint:
-            log.info("Resumable checkpoint exists; skipping HF understanding-pathway load.")
+
+        if self.config.exclude_reasoner_weights_from_checkpoint and not pretrained_weights.enabled:
+            raise ValueError(
+                "Reasoner weights must be loaded from pretrained checkpoint when "
+                "exclude_reasoner_weights_from_checkpoint is True. However, "
+                "pretrained_weights.enabled is set to False."
+            )
+
+        # Seed understanding weights from HF only when the source is enabled and
+        # either there is no resumable checkpoint to restore them from, or they
+        # were deliberately excluded from the checkpoint (so it cannot contain
+        # them and they must be reloaded from the pretrained source).
+        load_pretrained_weights = pretrained_weights.enabled and (
+            self.config.exclude_reasoner_weights_from_checkpoint or not has_resumable_checkpoint
+        )
+        if not load_pretrained_weights:
             return
 
+        # Load the language_model (understanding/reasoner backbone) safetensors
+        # into the given net, respecting the active parallelism layout.
         def _load_language_model(net: torch.nn.Module):
             load_language_model_safetensors(
                 model=net.language_model,
@@ -289,18 +325,25 @@ class OmniMoTModel(ImaginaireModel):
                 checkpoint_format=pretrained_weights.checkpoint_format,
             )
 
-        log.info(f"Loading understanding pathway weights from {pretrained_weights.backbone_path}")
+        log.info(f"Loading reasoner pathway weights from {pretrained_weights.backbone_path}")
         _load_language_model(self.net)
+        # Keep the EMA copy in sync with the freshly seeded understanding weights.
         if self.config.ema.enabled:
             _load_language_model(self.net_ema)
-        log.info("Successfully loaded understanding pathway weights.")
+        log.info("Successfully loaded reasoner pathway weights.")
 
-        if not self.config.diffusion_expert_config.load_weights_from_pretrained:
-            return
-        if has_load_path:
-            log.info("Warm-start load_path active; skipping understanding→generation copy.")
+        # Copy understanding -> generation only on a truly fresh init: the config
+        # must request it and no checkpoint (resume or warm-start) may have already
+        # populated the generation pathway.
+        load_pretrained_diffusion_weights = (
+            self.config.diffusion_expert_config.load_weights_from_pretrained and not has_checkpoint
+        )
+        if not load_pretrained_diffusion_weights:
+            log.info("Skipping diffusion pathway weights copying.")
             return
 
+        # init_moe() copies the understanding-pathway weights into the generation
+        # (diffusion MoE) experts so generation starts from the pretrained backbone.
         log.info("Copying understanding pathway weights to generation pathway.")
         self.net.language_model.init_moe()
         if self.config.ema.enabled:
@@ -320,7 +363,6 @@ class OmniMoTModel(ImaginaireModel):
                 self.net_ema.requires_grad_(False)
 
                 self.net_ema_worker = DTensorFastEmaModelUpdater()
-
 
                 s = config.ema.rate
                 self.ema_exp_coefficient = np.roots([1, 7, 16 - s**-2, 12 - s**-2]).real.max()
@@ -500,7 +542,7 @@ class OmniMoTModel(ImaginaireModel):
     ) -> PackedSequence:
         """Wrap ``pack_input_sequence`` with all config-derived args pre-filled.
 
-        Centralises the 9 config-derived positional/embedding args so callers only
+        Centralises the 10 config-derived positional/embedding args so callers only
         supply the four per-call arguments (sequence_plans, text tokens, data, timesteps)
         plus three optional flags.
         """
@@ -519,11 +561,65 @@ class OmniMoTModel(ImaginaireModel):
             unified_3d_mrope_temporal_modality_margin=self.config.diffusion_expert_config.unified_3d_mrope_temporal_modality_margin,
             enable_fps_modulation=self.config.diffusion_expert_config.enable_fps_modulation,
             base_fps=float(self.config.diffusion_expert_config.base_fps),
+            sound_base_temporal_compression_factor=self.config.diffusion_expert_config.sound_base_temporal_compression_factor,
             temporal_compression_factor=self.tokenizer_vision_gen.temporal_compression_factor,
+            vision_temporal_position_mode=self.config.diffusion_expert_config.vision_temporal_position_mode,
             video_temporal_causal=self.config.video_temporal_causal,
             action_dim=self.config.max_action_dim,
             initial_mrope_temporal_offset=initial_mrope_temporal_offset,
         )
+
+    def _get_temporal_positions_vision(
+        self,
+        raw_state_vision: list[torch.Tensor],
+        x0_tokens_vision: list[torch.Tensor],
+    ) -> list[torch.Tensor] | None:
+        """Return optional per-latent temporal coordinates for vision tokens."""
+        mode = self.config.diffusion_expert_config.vision_temporal_position_mode
+        if mode == "latent_index":
+            return None
+        if mode != "uniae_source_right_edge":
+            raise ValueError(
+                "Unsupported vision_temporal_position_mode: "
+                f"{mode}. Expected 'latent_index' or 'uniae_source_right_edge'."
+            )
+
+        assert self.tokenizer_vision_gen is not None
+        temporal_positions_vision: list[torch.Tensor] = []
+        for raw_state_vision_i, x0_tokens_vision_i in zip(raw_state_vision, x0_tokens_vision, strict=True):
+            if raw_state_vision_i.dim() == 5:
+                num_pixel_frames = int(raw_state_vision_i.shape[2])
+            elif raw_state_vision_i.dim() == 4:
+                num_pixel_frames = int(raw_state_vision_i.shape[1])
+            else:
+                raise ValueError(
+                    "raw_state_vision items must have shape [B,C,T,H,W] or [C,T,H,W], "
+                    f"got shape {tuple(raw_state_vision_i.shape)}."
+                )
+            num_latent_frames = int(x0_tokens_vision_i.shape[2])
+            frame_h = int(raw_state_vision_i.shape[-2])
+            frame_w = int(raw_state_vision_i.shape[-1])
+            resolution = get_vision_data_resolution((frame_h, frame_w))
+            temporal_positions = self.tokenizer_vision_gen.get_latent_temporal_positions(
+                num_pixel_frames=num_pixel_frames,
+                resolution=resolution,
+                num_latent_frames=num_latent_frames,
+            )  # [T_latent]
+            if temporal_positions is None:
+                raise ValueError(
+                    f"{type(self.tokenizer_vision_gen).__name__} does not support vision_temporal_position_mode={mode}."
+                )
+            if temporal_positions.shape[0] != num_latent_frames:
+                raise ValueError(
+                    "Vision temporal position count must match latent frames: "
+                    f"got {temporal_positions.shape[0]} positions for {num_latent_frames} latent frames."
+                )
+            temporal_positions = temporal_positions.to(
+                device=x0_tokens_vision_i.device,
+                dtype=torch.float32,
+            )  # [T_latent]
+            temporal_positions_vision.append(temporal_positions)
+        return temporal_positions_vision
 
     # ------------------------ training ------------------------
 
@@ -1120,7 +1216,6 @@ class OmniMoTModel(ImaginaireModel):
         Returns:
             (timesteps, sigmas): Both [B,1] for TF/base, or [B,T_max] for diffusion_forcing.
         """
-
 
         rectified_flow = self.rectified_flow_image if is_image_batch else self.rectified_flow_video
 
@@ -1860,6 +1955,7 @@ class OmniMoTModel(ImaginaireModel):
             raw_state_vision=gen_data_clean.raw_state_vision,
             x0_tokens_vision=noise_x_vision,
             fps_vision=gen_data_clean.fps_vision,
+            temporal_positions_vision=gen_data_clean.temporal_positions_vision,
             # Action fields
             raw_state_action=gen_data_clean.raw_state_action if has_action else None,
             x0_tokens_action=noise_x_action if has_action else None,
@@ -2105,76 +2201,6 @@ class OmniMoTModel(ImaginaireModel):
         else:
             return other_v_list, v_list
 
-    def _build_no_control_inference_state(
-        self,
-        sequence_plans: list[SequencePlan],
-        gen_data_clean: GenerationDataClean,
-    ) -> tuple[list[SequencePlan], GenerationDataClean, list[int]] | None:
-        """Build inference state without control-map vision (for control-CFG).
-
-        Transfer packs [control_map(s), target_clip] per sample. The no-control branch
-        drops the control maps from the vision sequence; the text caption and target
-        clip remain. Returns None when every sample has at most one vision item.
-
-        Also returns ``ctrl_dims_per_sample``: flattened control-token width per sample,
-        used to slice ``noise_x`` and blend velocities on the target suffix.
-        """
-        num_items_per_sample = gen_data_clean.num_vision_items_per_sample
-        if num_items_per_sample is None or all(n <= 1 for n in num_items_per_sample):
-            return None
-
-        assert gen_data_clean.x0_tokens_vision is not None
-
-        new_x0_tokens_vision: list[torch.Tensor] = []
-        new_raw_state_vision: list[torch.Tensor] | None = [] if gen_data_clean.raw_state_vision is not None else None
-        ctrl_dims_per_sample: list[int] = []
-        vis_offset = 0
-        for n_vis in num_items_per_sample:
-            ctrl_dim_i = 0
-            for j in range(n_vis - 1):
-                sh = gen_data_clean.x0_tokens_vision[vis_offset + j].shape
-                ctrl_dim_i += int(torch.tensor(list(sh)).prod().item())
-            ctrl_dims_per_sample.append(ctrl_dim_i)
-            tgt_idx = vis_offset + n_vis - 1
-            new_x0_tokens_vision.append(gen_data_clean.x0_tokens_vision[tgt_idx])
-            if new_raw_state_vision is not None:
-                new_raw_state_vision.append(gen_data_clean.raw_state_vision[tgt_idx])  # type: ignore[index]
-            vis_offset += n_vis
-
-        gdc_nc = GenerationDataClean(
-            batch_size=gen_data_clean.batch_size,
-            is_image_batch=gen_data_clean.is_image_batch,
-            raw_state_vision=new_raw_state_vision,
-            x0_tokens_vision=new_x0_tokens_vision,
-            fps_vision=gen_data_clean.fps_vision,
-            num_vision_items_per_sample=None,
-            raw_state_action=gen_data_clean.raw_state_action,
-            x0_tokens_action=gen_data_clean.x0_tokens_action,
-            action_domain_id=gen_data_clean.action_domain_id,
-            fps_action=gen_data_clean.fps_action,
-            raw_action_dim=gen_data_clean.raw_action_dim,
-            raw_state_sound=gen_data_clean.raw_state_sound,
-            x0_tokens_sound=gen_data_clean.x0_tokens_sound,
-            fps_sound=gen_data_clean.fps_sound,
-        )
-
-        sp_nc = [
-            SequencePlan(
-                has_text=sp.has_text,
-                has_vision=sp.has_vision,
-                condition_frame_indexes_vision=sp.condition_frame_indexes_vision,
-                share_vision_temporal_positions=False,
-                has_action=sp.has_action,
-                condition_frame_indexes_action=sp.condition_frame_indexes_action,
-                action_start_frame_offset=sp.action_start_frame_offset,
-                has_sound=sp.has_sound,
-                condition_frame_indexes_sound=sp.condition_frame_indexes_sound,
-            )
-            for sp in sequence_plans
-        ]
-
-        return sp_nc, gdc_nc, ctrl_dims_per_sample
-
     @torch.no_grad()
     def generate_samples_from_batch(
         self,
@@ -2183,13 +2209,10 @@ class OmniMoTModel(ImaginaireModel):
         sampler: Any | None = None,
         guidance: float = 1.5,
         guidance_interval: Optional[list[float]] = None,
-        control_guidance: float = 1.0,
-        control_guidance_interval: Optional[list[float]] = None,
         seed: list[int] | int = 1,
         n_sample: int | None = None,
         has_negative_prompt: bool = False,
         num_steps: int = 35,
-        align_num_steps: int | None = None,
         shift: float = 5.0,
         sigma_max: float = 80.0,
         skip_text_tokens_for_cfg: bool = False,
@@ -2224,11 +2247,6 @@ class OmniMoTModel(ImaginaireModel):
             guidance (float): Classifier-free guidance weight.
             guidance_interval (list[float] | None): Optional timestep interval to apply guidance.
                 For the timesteps (ranging between 0-1000) that fall between the interval, we perform CFG, otherwise, we skip the unconditional generation.
-            control_guidance (float): Control-CFG scale for transfer inference. ``1.0`` (default)
-                disables the extra comparison forward; values ``> 1.0`` blend velocities from
-                with-control-map vs without-control-map forwards on the generated clip.
-            control_guidance_interval (list[float] | None): Optional timestep interval to apply
-                control-CFG; ``None`` applies on every step.
             seed (list[int] | int): Random seeds for noise generation. For all new use-cases,
                 we use a list of seeds, one for each sample. The length of the list must match
                 the number of samples. Legacy use-cases use a single integer seed which is
@@ -2237,17 +2255,6 @@ class OmniMoTModel(ImaginaireModel):
             n_sample (int | None): Number of samples to generate; defaults to batch size.
             has_negative_prompt (bool): If True, use negative prompt for unconditional branch.
             num_steps (int): Number of sampling steps for the diffusion process.
-            align_num_steps (int | None): FSDP collective-sequence alignment
-                target. Under throughput-style inference each FSDP-shard rank holds
-                a different sample, and ``num_steps`` can diverge across ranks.
-                Since the model is sharded across the dp_shard group, every sampler
-                step issues a param all-gather over that group, so a step-count
-                mismatch deadlocks NCCL. The inference caller all_reduce(MAX)es the
-                local ``num_steps`` over the dp_shard group and passes the result
-                here; ranks with ``num_steps < align_num_steps`` run the deficit as
-                extra *discarded* sampler steps to keep every rank's all-gather
-                count identical. ``None`` (or a value ``<= num_steps``) disables
-                padding.
             shift (float): Time shift parameter for the sampler.
             sigma_max (float): Maximum sigma for the EDM sampler.
             skip_text_tokens_for_cfg (bool): If True, skip text tokens in unconditional branch.
@@ -2298,7 +2305,8 @@ class OmniMoTModel(ImaginaireModel):
         Returns:
             Dict with keys:
                 - "vision": List of vision latent tensors (one per sample, variable shapes)
-                - "action": List of action latent tensors or None (only present when action_gen=True and has_action)
+                - "action": List of external-space action tensors or None
+                  (only present when action_gen=True and has_action)
 
         Raises:
             ValueError: If the number of samples does not match the number of noise tensors or seeds.
@@ -2354,28 +2362,32 @@ class OmniMoTModel(ImaginaireModel):
 
         assert n_sample == len(seed), f"Number of samples {n_sample} must match number of seeds {len(seed)}"
 
-        no_control_state = None
-        if control_guidance != 1.0:
-            no_control_state = self._build_no_control_inference_state(sequence_plans, gen_data_clean)
-            if no_control_state is None:
-                log.warning(
-                    "control_guidance != 1.0 but no multi-vision sample found; "
-                    "control-CFG disabled (single-branch inference)."
-                )
-
-        # FSDP collective-sequence alignment (throughput-style inference). Each
-        # FSDP-shard rank holds a different sample, and ``velocity_fn`` issues 1
-        # model forward when this rank skips CFG (guidance == 1.0, or a timestep
-        # outside guidance_interval) but 2 forwards otherwise. Mixed-modality
-        # batches put e.g. action samples (guidance=1.0 -> 1 forward) and vision
-        # samples (guidance>1 -> 2 forwards) on different ranks of the same
-        # dp_shard group, so the per-step param all-gather count diverges and NCCL
-        # deadlocks. The per-call CFG decision is MAX-reduced over the dp_shard
-        # group inside ``velocity_fn`` below so every rank runs the same number of
-        # forwards. Scoped to dp_shard for the same reason as the num_steps
-        # alignment (see inference.py): cp/cfgp peers share a sample -> same
-        # guidance -> same decision, and the caller's nesting guard rejects layouts
-        # where that would not hold.
+        # Create a velocity function for a single sample (for use with self.sampler).
+        # FSDP collective-sequence alignment (throughput-preset inference).
+        #
+        # In throughput-preset inference each rank holds a different sample,
+        # and different samples can diverge on (a) the CFG decision per
+        # step — ``guidance != 1.0`` (and the optional ``guidance_interval``
+        # gate) determines whether ``velocity_fn`` issues 1 or 2 model
+        # forwards — and (b) ``num_steps``. Either divergence makes the
+        # FSDP allgather sequence misalign across ranks, deadlocking NCCL
+        # at the 30-min watchdog timeout.
+        #
+        # We align in two places:
+        #   1. Inside velocity_fn (per call): all_reduce the local CFG
+        #      decision; if ANY rank needs CFG, every rank does both
+        #      forwards (cond + uncond). Ranks whose local decision was
+        #      "no CFG" return ``cond_v`` directly — bit-identical to the
+        #      original no-CFG path (no guidance blend, no normalize_cfg).
+        #   2. Around the sampler call: all_reduce the local num_steps;
+        #      ranks with local < max issue a dummy sampler call with the
+        #      remaining steps to pad the FSDP allgather stream. The
+        #      dummy call's output is discarded; ``latents`` is never
+        #      re-bound.
+        #
+        # Both collectives are scoped to the FSDP shard group (the only
+        # process group whose collective sequence is at risk), so they're
+        # safe under non-trivial parallel layouts.
         if (
             self.parallel_dims is not None
             and self.parallel_dims.dp_shard_mesh is not None
@@ -2387,8 +2399,6 @@ class OmniMoTModel(ImaginaireModel):
         else:
             _dp_shard_group = None
             _align_device = None
-
-        # Create a velocity function for a single sample (for use with self.sampler).
 
         def velocity_fn(noise_x: list[torch.Tensor], timestep: torch.Tensor) -> list[torch.Tensor]:
             # len(noise_x) == B, noise_x[i] is shape (D)
@@ -2412,102 +2422,48 @@ class OmniMoTModel(ImaginaireModel):
                     skip_text_tokens=skip_text_tokens,
                 )
 
-            # Local CFG decision for THIS rank, honoring guidance_interval.
-            _local_needs_text_cfg = guidance != 1.0
-            if _local_needs_text_cfg and guidance_interval is not None:
+            # Skip unconditional branch when outside the guidance interval
+            needs_cfg = guidance != 1.0
+            if needs_cfg and guidance_interval is not None:
                 assert len(guidance_interval) == 2, f"guidance_interval must be [lo, hi], got {guidance_interval}"
                 t_lo, t_hi = guidance_interval
-                _local_needs_text_cfg = t_lo < timestep[0].item() < t_hi
+                needs_cfg = t_lo < timestep[0].item() < t_hi
 
-            _local_needs_control_cfg = no_control_state is not None
-            if _local_needs_control_cfg and control_guidance_interval is not None:
-                assert len(control_guidance_interval) == 2, (
-                    f"control_guidance_interval must be [lo, hi], got {control_guidance_interval}"
-                )
-                t_lo_c, t_hi_c = control_guidance_interval
-                _local_needs_control_cfg = t_lo_c < timestep[0].item() < t_hi_c
-
-            # FSDP alignment: if ANY rank in the shard group needs CFG or control-CFG this call,
-            # every rank computes the matching forwards (cheap 1-element all_reduce per
-            # velocity_fn call). Forcing CFG always-on globally would instead
-            # silently ignore the per-timestep guidance_interval gate.
+            # FSDP alignment: if ANY rank in the shard group needs CFG this
+            # call, every rank computes both forwards. Cheap 1-element
+            # all_reduce per velocity_fn call; the alternative (forcing CFG
+            # always-on globally) would silently ignore the per-timestep
+            # ``guidance_interval`` gate.
             if _dp_shard_group is not None:
                 _cfg_t = torch.tensor(
-                    [1 if _local_needs_text_cfg else 0], device=_align_device, dtype=torch.int32
+                    [1 if needs_cfg else 0], device=_align_device, dtype=torch.int32
                 )
-                torch.distributed.all_reduce(_cfg_t, op=torch.distributed.ReduceOp.MAX, group=_dp_shard_group)
-                _any_needs_text_cfg = bool(_cfg_t.item())
-                _ctrl_t = torch.tensor(
-                    [1 if _local_needs_control_cfg else 0], device=_align_device, dtype=torch.int32
+                torch.distributed.all_reduce(
+                    _cfg_t, op=torch.distributed.ReduceOp.MAX, group=_dp_shard_group
                 )
-                torch.distributed.all_reduce(_ctrl_t, op=torch.distributed.ReduceOp.MAX, group=_dp_shard_group)
-                _any_needs_control_cfg = bool(_ctrl_t.item())
+                _any_needs_cfg = bool(_cfg_t.item())
             else:
-                _any_needs_text_cfg = _local_needs_text_cfg
-                _any_needs_control_cfg = _local_needs_control_cfg
+                _any_needs_cfg = needs_cfg
 
-            if not _any_needs_text_cfg and not _any_needs_control_cfg:
+            if not _any_needs_cfg:
                 return _single_velocity_fn(cond_tokens, skip_text_tokens=False)
 
-            if _any_needs_control_cfg:
-                cond_v_full = _single_velocity_fn(cond_tokens, skip_text_tokens=False)
-                ctrl_dims: list[int] | None = None
-                if no_control_state is not None:
-                    sp_nc, gdc_nc, ctrl_dims = no_control_state
-                    noise_x_nc = [nx[ctrl_dim:] for nx, ctrl_dim in zip(noise_x, ctrl_dims)]
-                    cond_v_nc = self._get_velocity(
-                        net=net,
-                        noise_x=noise_x_nc,
-                        timestep=timestep,
-                        text_tokens=cond_tokens,
-                        sequence_plans=sp_nc,
-                        gen_data_clean=gdc_nc,
-                        skip_text_tokens=False,
-                    )
-                else:
-                    # Another rank in the dp_shard group needs control-CFG, so this
-                    # rank executes a second forward only for FSDP collective alignment.
-                    cond_v_nc = _single_velocity_fn(cond_tokens, skip_text_tokens=False)
-                if _local_needs_control_cfg:
-                    assert ctrl_dims is not None, "local control-CFG requires no_control_state"
-                    cond_v = []
-                    for v_full_i, v_nc_i, ctrl_dim_i in zip(cond_v_full, cond_v_nc, ctrl_dims):
-                        suffix_full = v_full_i[ctrl_dim_i:]
-                        assert suffix_full.shape == v_nc_i.shape, (
-                            f"shape mismatch in control-CFG mix: full suffix {suffix_full.shape} "
-                            f"vs no-control {v_nc_i.shape}"
-                        )
-                        mixed_suffix = v_nc_i + control_guidance * (suffix_full - v_nc_i)
-                        cond_v.append(torch.cat([v_full_i[:ctrl_dim_i], mixed_suffix], dim=0))
-                else:
-                    cond_v = cond_v_full
+            cond_v, uncond_v = self._run_classifier_free_guidance(
+                cond_tokens=cond_tokens,
+                uncond_tokens=uncond_tokens,
+                skip_text_tokens_for_cfg=skip_text_tokens_for_cfg,
+                single_velocity_fn=_single_velocity_fn,
+            )
 
-                if not _any_needs_text_cfg:
-                    return cond_v
+            if not needs_cfg:
+                # This rank doesn't actually need CFG (guidance==1.0 or sigma
+                # outside guidance_interval). Return cond_v directly so the
+                # output is bit-identical to the original no-CFG path; the
+                # uncond_v forward was only run to keep the FSDP allgather
+                # sequence aligned with peers.
+                return cond_v
 
-                uncond_v = _single_velocity_fn(uncond_tokens, skip_text_tokens=skip_text_tokens_for_cfg)
-                if not _local_needs_text_cfg:
-                    return cond_v
-
-                v_pred = [u_i + guidance * (c_i - u_i) for c_i, u_i in zip(cond_v, uncond_v)]
-            else:
-                # Both forwards happen — needed for FSDP collective alignment
-                # across ranks even if THIS rank's local decision was "no CFG".
-                cond_v, uncond_v = self._run_classifier_free_guidance(
-                    cond_tokens=cond_tokens,
-                    uncond_tokens=uncond_tokens,
-                    skip_text_tokens_for_cfg=skip_text_tokens_for_cfg,
-                    single_velocity_fn=_single_velocity_fn,
-                )
-
-                if not _local_needs_text_cfg:
-                    # This rank didn't actually need CFG (guidance==1.0, or sigma
-                    # outside guidance_interval). Return cond_v directly so the output
-                    # is bit-identical to the no-CFG path; the uncond_v forward ran
-                    # only to keep the FSDP all-gather sequence aligned with peers.
-                    return cond_v
-
-                v_pred = [u_i + guidance * (c_i - u_i) for c_i, u_i in zip(cond_v, uncond_v)]
+            v_pred = [u_i + guidance * (c_i - u_i) for c_i, u_i in zip(cond_v, uncond_v)]
 
             if normalize_cfg:
                 v_pred = [
@@ -2517,14 +2473,20 @@ class OmniMoTModel(ImaginaireModel):
 
             return v_pred
 
-        # FSDP collective-sequence alignment (throughput-preset inference). The
-        # inference caller passes the cross-rank MAX of num_steps as
-        # ``align_num_steps``; ranks short of it pad their FSDP all-gather stream
-        # with ``_extra_num_steps`` discarded sampler steps below. See the
-        # ``align_num_steps`` arg docstring for the full rationale.
-        _extra_num_steps = 0
-        if align_num_steps is not None and align_num_steps > num_steps:
-            _extra_num_steps = align_num_steps - num_steps
+        # FSDP collective-sequence alignment (sampler outer loop). See the
+        # large block above the velocity_fn definition for the full
+        # rationale. all_reduce on the local num_steps so every rank knows
+        # the max; below, ranks with local < max issue a dummy sampler call
+        # to pad their FSDP allgather sequence.
+        if _dp_shard_group is not None:
+            _local_steps_t = torch.tensor([num_steps], device=_align_device, dtype=torch.int32)
+            torch.distributed.all_reduce(
+                _local_steps_t, op=torch.distributed.ReduceOp.MAX, group=_dp_shard_group
+            )
+            _max_num_steps = int(_local_steps_t.item())
+        else:
+            _max_num_steps = num_steps
+        _extra_num_steps = _max_num_steps - num_steps
 
         # Run sampler for all samples at once.
         sampler = sampler or self.sampler
@@ -2543,14 +2505,14 @@ class OmniMoTModel(ImaginaireModel):
                 seed=seed,
             )
             if _extra_num_steps > 0:
-                # Dummy sampler call issuing (_extra_num_steps × per-step) FSDP
-                # all-gathers to pad this rank's collective stream. Output is
-                # discarded (``latents`` keeps the real result above); slow ranks
-                # have _extra_num_steps==0 and issue the same all-gather count via
-                # their longer real call.
+                # Dummy sampler call to issue (_extra_num_steps × per-step)
+                # FSDP allgathers; output discarded so `latents` keeps the
+                # real result captured above. Slow ranks have _extra_num_steps==0
+                # here, but they're issuing the SAME number of in-sampler
+                # collectives via their longer real call.
                 log.debug(
-                    f"FSDP alignment: dummy UniPC run with {_extra_num_steps} extra steps "
-                    f"(local={num_steps}, aligned={align_num_steps})"
+                    f"FSDP alignment: dummy sampler run with {_extra_num_steps} "
+                    f"extra steps (local={num_steps}, max={_max_num_steps})"
                 )
                 _ = sampler(
                     velocity_fn,
@@ -2586,30 +2548,50 @@ class OmniMoTModel(ImaginaireModel):
                 solver_option="2ab",
             )
             if _extra_num_steps > 0:
-                # Pad the FSDP all-gather stream with ``_extra_num_steps`` direct
-                # ``x0_fn`` calls rather than a nested EDM sampler run, which would
-                # add an extra ``sample_clean`` forward (see edm.py) and hit a
-                # ``get_rev_ts(num_steps=0)`` divide-by-zero. Each x0_fn call routes
-                # through the same ``velocity_fn`` closure (one model forward,
-                # discarded). The dummy sigma is mapped into the RF domain
-                # ``sigma/(1+sigma)`` the real EDM loop uses; its exact value is
-                # irrelevant for alignment (collective shape, not sigma, drives it).
+                # Pad the FSDP allgather sequence with ``_extra_num_steps``
+                # direct ``x0_fn`` calls instead of a second EDM sampler
+                # run. Avoids two EDM-specific footguns:
+                #   (1) ``EDMSampler._forward_impl`` always runs an extra
+                #       ``sample_clean`` denoiser forward (see
+                #       ``cosmos_framework/model/vfm/diffusion/samplers/edm.py``).
+                #       A nested sampler call would add one too many
+                #       forwards on fast ranks, since the slow rank's
+                #       single call also pays the ``sample_clean`` cost.
+                #   (2) ``get_rev_ts(..., num_steps=0)`` divides by zero,
+                #       producing NaN sigmas. The fix's ``extra==1`` edge
+                #       case would need num_steps=0 to balance the count.
+                # Direct ``x0_fn`` calls bypass both: each call routes
+                # through the same ``velocity_fn`` closure (so the
+                # per-call CFG all_reduce still aligns ranks), issues
+                # exactly one model forward, and discards its return.
+                # ``latents`` is the catted single tensor at this point;
+                # the dummy sigma value is irrelevant for collective
+                # alignment because the model's allgather sequence is
+                # determined by tensor shapes, not sigma.
                 log.debug(
                     f"FSDP alignment: padding {_extra_num_steps} dummy x0_fn calls "
-                    f"(local={num_steps}, aligned={align_num_steps})"
+                    f"(local={num_steps}, max={_max_num_steps})"
                 )
+                # ``x0_fn`` expects a sigma in the RF domain (the real EDM
+                # loop converts raw sigmas via ``sigmas_L / (1 + sigmas_L)``
+                # at edm.py:174, landing them in ``(0, 1)``). Mirror that
+                # transform here so the dummy call's timestep stays in the
+                # same numerical domain as a real sampler step. The exact
+                # value doesn't matter for collective alignment, only the
+                # domain.
                 _dummy_sigma = latents.new_tensor(sigma_max / (1.0 + sigma_max))
                 for _ in range(_extra_num_steps):
                     _ = x0_fn(latents, _dummy_sigma)
             latents = list(torch.split(latents, chunk_sizes, dim=0))
 
-        # Split flattened latents back into vision, action, and sound
+        # Split flattened latents back into vision latents, external actions, and sound latents
         # Mirror the per-sample logic from _prepare_inference_data:
         # Order: [vision | action (if present) | sound (if present)]
         # action/sound lists are dense (only modality-having samples), so use separate indexes.
         result_vision: list[torch.Tensor] = []
         result_action: list[torch.Tensor] = []
         result_sound: list[torch.Tensor] = []
+        action_processing_records = get_action_processing_records(data_batch)
         idx_vision = 0
         idx_action = 0
         idx_sound = 0
@@ -2624,7 +2606,6 @@ class OmniMoTModel(ImaginaireModel):
                 vision_shape = gen_data_clean.x0_tokens_vision[idx_vision + j].shape
                 vision_dim = int(torch.prod(torch.tensor(vision_shape)))
                 if j == n_vis - 1:  # the last vision item is the only target for each sample.
-
                     result_vision.append(latents[i][offset : offset + vision_dim].reshape(vision_shape))
                 else:  # the other vision items are the condition inputs that we don't need to return
                     pass
@@ -2636,7 +2617,15 @@ class OmniMoTModel(ImaginaireModel):
                 assert gen_data_clean.x0_tokens_action is not None
                 action_shape = gen_data_clean.x0_tokens_action[idx_action].shape
                 action_dim = int(torch.prod(torch.tensor(action_shape)))
-                result_action.append(latents[i][offset : offset + action_dim].reshape(action_shape))
+                action_model = latents[i][offset : offset + action_dim].reshape(action_shape)  # [T,D_model]
+                action_record = action_processing_records[i] if i < len(action_processing_records) else None
+                if action_record is None:
+                    raise ValueError(
+                        f"Generated action output for sample {i} cannot be externalized without "
+                        "action_processing_record"
+                    )
+                action_external = ActionProcessor.postprocess_action(action_model, action_record)  # [T,D_raw]
+                result_action.append(action_external)
                 offset += action_dim
                 idx_action += 1
 
@@ -2744,12 +2733,22 @@ class OmniMoTModel(ImaginaireModel):
             subset_raw_vision = (
                 gen_data_clean.raw_state_vision[vis_start:vis_end] if gen_data_clean.raw_state_vision else None
             )
+            subset_temporal_positions_vision = (
+                gen_data_clean.temporal_positions_vision[vis_start:vis_end]
+                if gen_data_clean.temporal_positions_vision
+                else None
+            )
             subset_num_items = num_items[start:limit]
         else:
             # Standard single-item mode
             subset_x0_vision = gen_data_clean.x0_tokens_vision[start:limit]
             subset_raw_vision = (
                 gen_data_clean.raw_state_vision[start:limit] if gen_data_clean.raw_state_vision else None
+            )
+            subset_temporal_positions_vision = (
+                gen_data_clean.temporal_positions_vision[start:limit]
+                if gen_data_clean.temporal_positions_vision
+                else None
             )
             subset_num_items = None
         fps_vision = gen_data_clean.fps_vision[start:limit] if gen_data_clean.fps_vision is not None else None
@@ -2788,6 +2787,7 @@ class OmniMoTModel(ImaginaireModel):
             x0_tokens_action=x0_tokens_action,
             x0_tokens_sound=x0_tokens_sound,
             fps_vision=fps_vision,
+            temporal_positions_vision=subset_temporal_positions_vision,
             fps_action=fps_action,
             fps_sound=fps_sound,
             action_domain_id=action_domain_id,
@@ -2814,7 +2814,6 @@ class OmniMoTModel(ImaginaireModel):
         is_image_batch = self.is_image_batch(data_batch)
         sample_vision_list = data_batch[self.input_image_key if is_image_batch else self.input_video_key]
 
-
         # we should always get this information here during training. If we can read this field
         # from data_batch it means we are in the visualization callback:
         if "num_vision_items_per_sample" not in data_batch:
@@ -2827,7 +2826,6 @@ class OmniMoTModel(ImaginaireModel):
             num_vision_items_per_sample: list[int] | None = (
                 [len(v) for v in sample_vision_list] if has_multiple_vision_per_sample else None
             )
-
             # information is only stored in the GenerationDataClean object which will be discarded
             # outside the training loop. Error will be raised when the data batch is passed to the
             # visualization callbacks.
@@ -2868,6 +2866,11 @@ class OmniMoTModel(ImaginaireModel):
         frame_size = data_batch.get("image_size", None)
         if frame_size is not None:
             x0_tokens_vision = self._remove_padding_from_latent(x0_tokens_vision, frame_size)
+
+        temporal_positions_vision = self._get_temporal_positions_vision(
+            raw_state_vision=raw_state_vision,
+            x0_tokens_vision=x0_tokens_vision,
+        )
 
         # Action – extract dense action / domain_id without mutating data_batch,
         # so downstream callbacks can still read the original per-sample domain_ids.
@@ -2934,6 +2937,7 @@ class OmniMoTModel(ImaginaireModel):
             x0_tokens_action=x0_tokens_action,
             x0_tokens_sound=x0_tokens_sound,
             fps_vision=fps_vision,
+            temporal_positions_vision=temporal_positions_vision,
             fps_action=fps_action,
             fps_sound=fps_sound,
             action_domain_id=action_domain_id,
@@ -3135,14 +3139,59 @@ class OmniMoTModel(ImaginaireModel):
 
     # ------------------ Checkpointing ------------------
 
-    def state_dict(self, prefix: str = "", **kwargs) -> Dict[str, Any]:
-        final_state_dict = self.net.state_dict(prefix=prefix + "net.", **kwargs)
-        if self.config.ema.enabled:
-            ema_state_dict = self.net_ema.state_dict(prefix=prefix + "net_ema.", **kwargs)
-            final_state_dict.update(ema_state_dict)
-        return final_state_dict
+    def state_dict(
+        self,
+        destination: dict[str, Any] | None = None,
+        prefix: str = "",
+        keep_vars: bool = False,
+    ) -> dict[str, Any]:
+        """Return checkpointable model weights using OmniMoT's flat key layout.
 
-    def load_state_dict(self, state_dict: Mapping[str, Any], strict: bool = True, assign: bool = False):
+        The regular network is saved under ``net.*`` keys.  When EMA is
+        enabled, the EMA copy is saved under matching ``net_ema.*`` keys so
+        the DCP loader can materialize both trees from one flat state dict.
+        The optional ``prefix`` is prepended before those namespaces, matching
+        the ``torch.nn.Module.state_dict`` convention.
+
+        The full ``torch.nn.Module.state_dict`` signature (``destination``,
+        ``prefix``, ``keep_vars``) is honored so this module behaves correctly
+        when a parent module's ``state_dict`` recurses into it: PyTorch ignores
+        the child return value and expects the entries to be written into the
+        provided ``destination`` mapping.
+
+        If ``exclude_reasoner_weights_from_checkpoint`` is enabled, the
+        understanding/reasoner tower keys are omitted from both regular and
+        EMA state dicts; generation-pathway weights and VFM heads remain
+        checkpointed.
+        """
+        reg_state_dict = self._net_state_dict(
+            self.net,
+            prefix=prefix + "net.",
+            keep_vars=keep_vars,
+        )
+
+        if self.config.ema.enabled:
+            ema_state_dict = self._net_state_dict(
+                self.net_ema,
+                prefix=prefix + "net_ema.",
+                keep_vars=keep_vars,
+            )
+        else:
+            ema_state_dict = {}
+
+        if destination is not None:
+            destination.update(reg_state_dict)
+            destination.update(ema_state_dict)
+            return destination
+
+        return {**reg_state_dict, **ema_state_dict}
+
+    def load_state_dict(
+        self,
+        state_dict: Mapping[str, Any],
+        strict: bool = True,
+        assign: bool = False,
+    ) -> _IncompatibleKeys:
         """
         Loads a state dictionary into the model and optionally its EMA counterpart.
 
@@ -3150,40 +3199,89 @@ class OmniMoTModel(ImaginaireModel):
             state_dict (Mapping[str, Any]): A dictionary containing separate state
                 dictionaries for the model and potentially for an EMA version of the model
                 under the keys 'net' and 'net_ema', respectively.
-            strict (bool, optional): If True, the method will enforce that the keys in
-                the state dict match exactly those in the model and EMA model (if applicable).
-                Defaults to True.
-            assign (bool, optional): If True and in strict mode, will assign the state dictionary
-                directly rather than matching keys one-by-one. This is typically used when loading
-                parts of state dicts or using customized loading procedures. Defaults to False.
+            strict (bool, optional): Must be False. Missing and unexpected keys are
+                returned to the caller in an `_IncompatibleKeys` object so the DCP
+                wrapper can report them after `set_model_state_dict` completes.
+                Passing True raises ValueError.
+            assign (bool, optional): Must be False. Assign-mode loading is not
+                supported by this checkpoint path; passing True raises ValueError.
+                Defaults to False.
+
+        Returns:
+            _IncompatibleKeys: A tuple containing the missing and unexpected keys.
         """
-        if not strict:
-            raise ValueError("Strict mode is required for OmniMoTModel load_state_dict")
+        # Note that strict must be set to False to avoid facing errors inside the
+        # `set_model_state_dict` function in the parent class. The caller must check
+        # the returned `_IncompatibleKeys` to get the missing and unexpected keys,
+        # and raise errors if needed.
+        if strict:
+            raise ValueError("Strict mode is not supported for OmniMoTModel load_state_dict")
         if assign:
             raise ValueError("Assign mode is not supported for OmniMoTModel load_state_dict")
+
+        missing_keys: list[str] = []
+        unexpected_keys: list[str] = []
 
         _reg_state_dict = collections.OrderedDict()
         _ema_state_dict = collections.OrderedDict()
         for k, v in state_dict.items():
             if k.startswith("net."):
-                _reg_state_dict[k.replace("net.", "")] = v
-            elif k.startswith("net_ema."):
-                _ema_state_dict[k.replace("net_ema.", "")] = v
+                _reg_state_dict[k.removeprefix("net.")] = v
+            elif k.startswith("net_ema.") and self.config.ema.enabled:
+                _ema_state_dict[k.removeprefix("net_ema.")] = v
+            else:
+                # If the key is prefixed with "net_ema." but EMA is not enabled, it
+                # is unexpected. If the key is not prefixed with "net." or "net_ema.",
+                # it is unexpected.
+                unexpected_keys.append(k)
 
-        state_dict = _reg_state_dict
-
-        reg_results: _IncompatibleKeys = self.net.load_state_dict(_reg_state_dict, strict=True, assign=False)
-        missing_keys = reg_results.missing_keys
-        unexpected_keys = reg_results.unexpected_keys
+        reg_results = self._load_net_state_dict(self.net, _reg_state_dict)
+        missing_keys.extend(f"net.{k}" for k in reg_results.missing_keys)
+        unexpected_keys.extend(f"net.{k}" for k in reg_results.unexpected_keys)
 
         if self.config.ema.enabled:
-            ema_results: _IncompatibleKeys = self.net_ema.load_state_dict(_ema_state_dict, strict=True, assign=False)
-            missing_keys += ema_results.missing_keys
-            unexpected_keys += ema_results.unexpected_keys
-        else:
-            assert len(_ema_state_dict) == 0, f"EMA is disabled but EMA state dict is not empty: {len(_ema_state_dict)}"
+            ema_results = self._load_net_state_dict(self.net_ema, _ema_state_dict)
+            missing_keys.extend(f"net_ema.{k}" for k in ema_results.missing_keys)
+            unexpected_keys.extend(f"net_ema.{k}" for k in ema_results.unexpected_keys)
 
         return _IncompatibleKeys(missing_keys=missing_keys, unexpected_keys=unexpected_keys)
+
+    def _net_state_dict(
+        self,
+        net: torch.nn.Module,
+        prefix: str = "",
+        keep_vars: bool = False,
+    ) -> dict[str, Any]:
+        if self.config.exclude_reasoner_weights_from_checkpoint:
+            return {
+                k: v
+                for k, v in net.state_dict(prefix=prefix, keep_vars=keep_vars).items()
+                if not _is_reasoner_state_dict_key(k.removeprefix(prefix))
+            }
+        else:
+            return net.state_dict(prefix=prefix, keep_vars=keep_vars)
+
+    def _load_net_state_dict(
+        self,
+        net: torch.nn.Module,
+        state_dict: Mapping[str, Any],
+    ) -> _IncompatibleKeys:
+        if self.config.exclude_reasoner_weights_from_checkpoint:
+            # Leave pretrained reasoner weights untouched even if an incoming
+            # checkpoint contains them, and tolerate their absence when they
+            # were intentionally not checkpointed.
+            state_dict = collections.OrderedDict(
+                (k, v) for k, v in state_dict.items() if not _is_reasoner_state_dict_key(k)
+            )
+
+        ret: _IncompatibleKeys = net.load_state_dict(state_dict, strict=False, assign=False)
+
+        if self.config.exclude_reasoner_weights_from_checkpoint:
+            missing_keys = [k for k in ret.missing_keys if not _is_reasoner_state_dict_key(k)]
+        else:
+            missing_keys = ret.missing_keys
+
+        return _IncompatibleKeys(missing_keys=missing_keys, unexpected_keys=ret.unexpected_keys)
 
     # ------------------ public methods ------------------
 
@@ -3236,7 +3334,7 @@ class OmniMoTModel(ImaginaireModel):
         tensor (``shape[-1]`` for width, ``shape[-2]`` for height), and
         the ``aspect_ratio`` string is reverse-looked-up against the
         canonical ``{IMAGE,VIDEO}_RES_SIZE_INFO`` tables in
-        :mod:`projects.cosmos3.vfm.datasets.utils` — image table for
+        :mod:`cosmos_framework.data.vfm.utils` — image table for
         ``"t2i"``, video table otherwise.  Note these tables are
         ``{res: {ar: (W, H)}}`` (the first entry is *width*); the
         existing logging-only lookup in
@@ -3251,7 +3349,7 @@ class OmniMoTModel(ImaginaireModel):
         where ``num_frames`` is the temporal dimension
         (``shape[-3]``) of the same vision tensor.  For ``"t2i"`` both
         fields are returned as ``None`` so
-        :func:`projects.cosmos3.vfm.upsampler.prompts.build_user_text`'s
+        :func:`cosmos_framework.model.vfm.upsampler.prompts.build_user_text`'s
         ``t2i``-must-have-no-video-args contract is satisfied.
 
         Args:
@@ -3326,7 +3424,7 @@ class OmniMoTModel(ImaginaireModel):
             raise ValueError(f"upsample task={task!r}: conditioning_fps must be positive; got {fps_int}.")
         num_frames = int(sample.shape[-3])
         # Integer-floor seconds matches the canonical V4.2 ``M:SS`` rendering
-        # in :func:`projects.cosmos3.vfm.upsampler.prompts._format_duration`,
+        # in :func:`cosmos_framework.model.vfm.upsampler.prompts._format_duration`,
         # which expects an int and rejects fractional seconds.
         duration_secs = max(1, num_frames // fps_int)
         return aspect_ratio, w, h, fps_int, duration_secs
@@ -3837,7 +3935,7 @@ class OmniMoTModel(ImaginaireModel):
                 ``np.ndarray``, or a CHW / HWC tensor).
             prompt_builder: Optional callback that maps a raw prompt
                 string to a chat-style messages list (e.g.
-                :func:`projects.cosmos3.vfm.upsampler.prompts.build_messages`
+                :func:`cosmos_framework.model.vfm.upsampler.prompts.build_messages`
                 for V4.2 caption upsampling).  When ``None``, prompts are
                 wrapped as ``[{"role": "user", "content": prompt}]`` with
                 no system message.
@@ -4082,7 +4180,7 @@ class OmniMoTModel(ImaginaireModel):
         prompt-driven branch.  The only thing this method adds on top of
         the generic per-prompt loop is the V4.2 chat-template injection:
         each caption is wrapped via
-        :func:`projects.cosmos3.vfm.upsampler.prompts.build_messages`
+        :func:`cosmos_framework.model.vfm.upsampler.prompts.build_messages`
         (which returns ``[system, user]`` with the user content embedding
         the caption inside the canonical V4.2 template — instructions,
         task constraints, and output JSON schema for the requested task).
@@ -4105,7 +4203,7 @@ class OmniMoTModel(ImaginaireModel):
           position ids) before kicking off the AR decode loop.
 
         Each raw reasoner output is post-processed by
-        :func:`projects.cosmos3.vfm.upsampler.prompts.clean_response`
+        :func:`cosmos_framework.model.vfm.upsampler.prompts.clean_response`
         before being returned.  The cleaner strips
         ``<think>`` / ``<reasoning>`` / ``<thinking>`` / etc. reasoning
         blocks and any prose preamble that appears before the
@@ -4157,7 +4255,7 @@ class OmniMoTModel(ImaginaireModel):
             fps: Target frames-per-second for the generated clip.
                 Required for the video tasks (``"t2v"``, ``"i2v"``)
                 and must be ``None`` for ``"t2i"`` — the underlying
-                :func:`projects.cosmos3.vfm.upsampler.prompts.build_user_text`
+                :func:`cosmos_framework.model.vfm.upsampler.prompts.build_user_text`
                 raises ``ValueError`` if a video task is missing
                 ``fps`` or ``duration_secs``.
             duration_secs: Clip duration in whole seconds (rendered as
@@ -4259,25 +4357,32 @@ class OmniMoTModel(ImaginaireModel):
         # into ``data_batch[self.input_caption_key]`` at the call site.
         cleaned_outputs: list[str] = []
         n_stripped = 0
-        n_fallback = 0
         for raw, original in zip(raw_outputs, captions):
             cleaned_text, clean_info = clean_response(raw)
             if not clean_info["was_clean"]:
                 n_stripped += 1
             if not cleaned_text.strip():
                 cleaned_text = original
-                n_fallback += 1
+
+            # Stamp the actual generation ``duration`` onto the upsampled
+            # JSON object using the duration_secs argument. Only done for
+            # T2V and I2V tasks.
+            if duration_secs is not None:
+                cleaned_text = cleaned_text.removeprefix("```json").removesuffix("```").strip()
+                obj = json.loads(cleaned_text)
+                assert isinstance(obj, dict), f"JSON parsing failed with error: {type(obj)}"
+                obj["duration"] = f"{duration_secs}s"
+                cleaned_text = json.dumps(obj)
+
             cleaned_outputs.append(cleaned_text)
 
         # Stay silent on the canonical all-clean path; only emit
         # telemetry when something actually happened.  Logged per-rank
         # to match the surrounding upsampling logs in
         # :meth:`generate_samples_from_batch` (line ~2218).
-        if n_stripped or n_fallback:
+        if n_stripped:
             log.info(
-                f"upsample_captions(task={task!r}, n={len(raw_outputs)}): "
-                f"thinking-stripped={n_stripped}, "
-                f"empty-clean-fallback={n_fallback}",
+                f"upsample_captions(task={task!r}, n={len(raw_outputs)}): thinking-stripped={n_stripped}",
                 rank0_only=False,
             )
 
@@ -4401,3 +4506,18 @@ def _broadcast_seed(seed: list[int], group: dist.ProcessGroup, rank: int) -> lis
 
     dist.broadcast(seed_tensor, group=group, group_src=0)
     return seed_tensor.tolist()
+
+
+def _is_reasoner_state_dict_key(key: str) -> bool:
+    """Return True for und/reasoner-tower weights nested under ``language_model``.
+
+    Reasoner weights are the understanding-pathway parameters in the MoT
+    language tower: ``embed_tokens``, ``norm``, ``lm_head``, ``visual``, and
+    every layer weight *without* the ``_moe_gen`` suffix.  Generation-pathway
+    duplicates (``*_moe_gen``) and all non-``language_model`` VFM heads are
+    excluded from this predicate.
+    """
+    key = key.replace("_orig_mod.", "").replace("_checkpoint_wrapped_module.", "")
+    if not key.startswith("language_model."):
+        return False
+    return "_moe_gen" not in key

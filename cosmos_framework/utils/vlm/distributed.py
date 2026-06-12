@@ -141,7 +141,7 @@ NCCL_REDUCE_OPS = {
 #             grads[i] = g.to_local()
 
 #     # create bucket for all grads, we can allreduce them in one go
-#
+#     # NOTE: why we don't set DTensor as bucket view?
 #     # This is becuase we can't be sure that the training framework
 #     # never release grad, or clean grad by set None.
 #     # Create temporary bucket is a more reliable solution.
@@ -215,7 +215,7 @@ def gradient_norm_clipping(
     # If total_norm is a DTensor, the placements must be `torch.distributed._tensor.ops.math_ops._NormPartial`.
     # We can simply reduce the DTensor to get the total norm in this tensor's process group
     # and then convert it to a local tensor.
-
+    # NOTE: It has two purposes:
     #       1. to make sure the total norm is computed correctly when PP is used (see below)
     #       2. to return a reduced total_norm tensor whose .item() would return the correct value
     if isinstance(total_norm, DTensor):

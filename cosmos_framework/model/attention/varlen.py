@@ -23,7 +23,7 @@ def generate_varlen_parameters(
 ) -> (
     tuple[None, None, int, int] | tuple[Tensor, Tensor, int, int]
 ):  # (cumseqlen_Q[B+1], cumseqlen_KV[B+1], max_seqlen_Q, max_seqlen_KV)
-
+    # NOTE: max_seqlen_{Q,KV} require a device-host sync, since they're expected to be ints (with
     # which we launch the varlen kernel) and not device tensors.
     # .item() introduces control flow and breaks the graph.
     # It is also inefficient to repeat this per-op, and mostly there for convenience.
@@ -97,7 +97,7 @@ def generate_varlen_parameters(
     if max_seqlen_Q < 0 or max_seqlen_KV < 0:
         raise ValueError(f"max_seqlen_Q and max_seqlen_KV cannot be negative, got {max_seqlen_Q=}, {max_seqlen_KV=}.")
 
-
+    # NOTE: max_seqlen_Q == max_seqlen_KV == 0 is a valid case (skip kernel / empty batch).
     # This feature may require support in the backends themselves; see NATTEN PR:
     # https://github.com/SHI-Labs/NATTEN/pull/327
     if (max_seqlen_Q == 0) != (max_seqlen_KV == 0):
@@ -106,7 +106,7 @@ def generate_varlen_parameters(
             f"but computed {max_seqlen_Q=}, {max_seqlen_KV=} from provided seqlens."
         )
 
-
+    # NOTE: we have to prepend with 0 manually :(
     z = torch.tensor([0], dtype=torch.int32, device=seqlens_Q.device)  # [1]
     cumulative_seqlen_Q = torch.cat([z, seqlens_Q.cumsum(0).to(torch.int32)], dim=0)  # [B+1]
     cumulative_seqlen_KV = torch.cat([z, seqlens_KV.cumsum(0).to(torch.int32)], dim=0)  # [B+1]

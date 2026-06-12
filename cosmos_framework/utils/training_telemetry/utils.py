@@ -26,7 +26,10 @@ def import_training_telemetry() -> Optional[ModuleType]:
         __training_telemetry_module = importlib.import_module("training_telemetry")
         return __training_telemetry_module
     except ImportError as e:
-        logger.error(f"Telemetry is enabled but the `training_telemetry` package is not installed: {e}")
+        logger.error(f"Heimdall telemetry is enabled but package is not installed: {e}")
+        logger.info(
+            "Please install the package using `pip install aidot-training-telemetry --index-url=https://invalid_url`"
+        )
         return None
 
 
@@ -36,7 +39,9 @@ def set_telemetry_provider(local_path: str) -> Optional[Any]:
     """
     global __enable_telemetry
     if not __enable_telemetry:
-        logger.info("Training telemetry is disabled. Set ENABLE_TELEMETRY=true to enable it.")
+        logger.info(
+            "Heimdall telemetry is disabled, if using Heimdall,consider setting ENABLE_TELEMETRY=true to enable it"
+        )
         return None
 
     global __provider
@@ -46,8 +51,7 @@ def set_telemetry_provider(local_path: str) -> Optional[Any]:
     training_telemetry = import_training_telemetry()
     if training_telemetry is None:
         logger.error(
-            "Training telemetry is enabled but the `training_telemetry` package is not installed. "
-            "Set ENABLE_TELEMETRY=false to disable, or install the package."
+            "Heimdall telemetry is enabled but package is not installed, consider setting ENABLE_TELEMETRY=false to disable it, or install the package using `pip install aidot-training-telemetry --index-url=https://invalid_url`"
         )
         __enable_telemetry = False
         return None

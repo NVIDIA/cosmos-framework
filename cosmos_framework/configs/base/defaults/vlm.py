@@ -95,11 +95,7 @@ def download_tokenizer_files(model_name: str, config_variant: str) -> str:
     return destination_dir
 
 
-def create_qwen2_tokenizer_with_download(pretrained_model_name: str, config_variant: str, **_unused_kwargs):
-    # **_unused_kwargs absorbs extras (e.g. tokenizer_type) that OmegaConf
-    # merges in from a vlm_config preset's tokenizer block when an experiment
-    # overrides the tokenizer with this function but doesn't fully replace
-    # the preset's kwarg dict.
+def create_qwen2_tokenizer_with_download(pretrained_model_name: str, config_variant: str):
     destination_dir = download_tokenizer_files(pretrained_model_name, config_variant)
     return LLMTokenizerProcessor(Qwen2Tokenizer.from_pretrained(destination_dir))
 
@@ -140,7 +136,7 @@ class VLMConfig:
     # HuggingFace model identifier or local path. Drives AutoConfig + AutoModel selection.
     model_name: str = ""
 
-    # Safetensor path for model
+    # Safetensor path for model for load a safetensor from different folder 
     safetensors_path: str = ""
 
     # Optional pretrained-weights overlay (separate from the AutoModel structural
@@ -280,29 +276,6 @@ Qwen3VLMoT_VLM_30b_a3b_Instruct_GCP_Config: VLMConfig = VLMConfig(
     layer_module="Qwen3VLMoeTextMoTDecoderLayer",
     pretrained_weights=PretrainedWeightsConfig(
         backbone_path="s3://bucket0/cosmos3/pretrained/huggingface/Qwen/Qwen3-VL-30B-A3B-Instruct/",
-        credentials_path="credentials/gcp_checkpoint.secret",
-        enable_gcs_patch_in_boto3=True,
-    ),
-)
-
-CosmosReason2_VLM_30b_a3b_Private_GCP_Config: VLMConfig = VLMConfig(
-    model_name="nvidia/Cosmos-Reason2-30B-A3B-Private",
-    model_instance=L(Qwen3VLMoeTextForCausalLM)(
-        config=L(create_vlm_config)(
-            base_config=L(Qwen3VLMoeMoTConfig.from_json_file)(
-                json_file="cosmos_framework/model/vfm/vlm/qwen3_vl_moe/configs/Qwen3-VL-30B-A3B-Instruct.json"
-            ),
-            layer_module="Qwen3VLMoeTextMoTDecoderLayer",
-            qk_norm_for_text=True,
-        ),
-    ),
-    tokenizer=L(build_processor_lazy)(
-        tokenizer_type="Qwen/Qwen3-VL-30B-A3B-Instruct",
-        config_variant="gcp",
-    ),
-    layer_module="Qwen3VLMoeTextMoTDecoderLayer",
-    pretrained_weights=PretrainedWeightsConfig(
-        backbone_path="s3://bucket0/cosmos3/pretrained/huggingface/Cosmos-Reason/Cosmos-Reason2-30B-A3B-Private/",
         credentials_path="credentials/gcp_checkpoint.secret",
         enable_gcs_patch_in_boto3=True,
     ),
@@ -458,48 +431,6 @@ CosmosReason2_VLM_2b_GCP_Config: VLMConfig = VLMConfig(
     ),
 )
 
-CosmosReason2_VLM_2b_Private_GCP_Config: VLMConfig = VLMConfig(
-    model_name="nvidia/Cosmos-Reason2-2B-Private",
-    model_instance=L(Qwen3VLTextForCausalLM)(
-        config=L(create_vlm_config)(
-            base_config=L(Qwen3VLMoTConfig.from_json_file)(
-                json_file="cosmos_framework/model/vfm/vlm/qwen3_vl/configs/Qwen3-VL-2B-Instruct.json"
-            ),
-            qk_norm_for_text=True,
-        ),
-    ),
-    tokenizer=L(build_processor_lazy)(
-        tokenizer_type="Qwen/Qwen3-VL-2B-Instruct",
-        config_variant="gcp",
-    ),
-    pretrained_weights=PretrainedWeightsConfig(
-        backbone_path="s3://bucket0/cosmos3/pretrained/huggingface/Cosmos-Reason/Cosmos-Reason2-2B-Private/",
-        credentials_path="credentials/gcp_checkpoint.secret",
-        enable_gcs_patch_in_boto3=True,
-    ),
-)
-
-Cosmos3Reasoner_VLM_2b_Private_GCP_Config: VLMConfig = VLMConfig(
-    model_name="nvidia/Cosmos3-Reasoner-2B-Private",
-    model_instance=L(Qwen3VLTextForCausalLM)(
-        config=L(create_vlm_config)(
-            base_config=L(Qwen3VLMoTConfig.from_json_file)(
-                json_file="cosmos_framework/model/vfm/vlm/qwen3_vl/configs/Qwen3-VL-2B-Instruct.json"
-            ),
-            qk_norm_for_text=True,
-        ),
-    ),
-    tokenizer=L(build_processor_lazy)(
-        tokenizer_type="Qwen/Qwen3-VL-2B-Instruct",
-        config_variant="gcp",
-    ),
-    pretrained_weights=PretrainedWeightsConfig(
-        backbone_path="s3://bucket0/cosmos3/pretrained/huggingface/Cosmos-Reason/Cosmos3-Reasoner-2B-Private/",
-        credentials_path="credentials/gcp_checkpoint.secret",
-        enable_gcs_patch_in_boto3=True,
-    ),
-)
-
 # Config for Qwen3VL 4B Instruct model
 # Qwen3VL uses Qwen2Tokenizer
 Qwen3VLMoT_VLM_4b_Instruct_Config: VLMConfig = VLMConfig(
@@ -586,27 +517,6 @@ Qwen3VLMoT_VLM_8b_Instruct_GCP_Config: VLMConfig = VLMConfig(
     ),
 )
 
-CosmosReason2_VLM_8b_Private_GCP_Config: VLMConfig = VLMConfig(
-    model_name="nvidia/Cosmos-Reason2-8B-Private",
-    model_instance=L(Qwen3VLTextForCausalLM)(
-        config=L(create_vlm_config)(
-            base_config=L(Qwen3VLMoTConfig.from_json_file)(
-                json_file="cosmos_framework/model/vfm/vlm/qwen3_vl/configs/Qwen3-VL-8B-Instruct.json"
-            ),
-            qk_norm_for_text=True,
-        ),
-    ),
-    tokenizer=L(build_processor_lazy)(
-        tokenizer_type="Qwen/Qwen3-VL-8B-Instruct",
-        config_variant="gcp",
-    ),
-    pretrained_weights=PretrainedWeightsConfig(
-        backbone_path="s3://bucket0/cosmos3/pretrained/huggingface/Cosmos-Reason/Cosmos-Reason2-8B-Private/",
-        credentials_path="credentials/gcp_checkpoint.secret",
-        enable_gcs_patch_in_boto3=True,
-    ),
-)
-
 Cosmos3Reasoner_VLM_8b_Private_GCP_Config: VLMConfig = VLMConfig(
     model_name="nvidia/Cosmos3-Reasoner-8B-Private",
     model_instance=L(Qwen3VLTextForCausalLM)(
@@ -649,6 +559,26 @@ Cosmos3NanoReasoner_VLM_GCP_Config: VLMConfig = VLMConfig(
     ),
 )
 
+Cosmos3NanoReasoner_VLM_GCP_Config_0517: VLMConfig = VLMConfig(
+    model_name="nvidia/Cosmos3-Nano-Reasoner",
+    model_instance=L(Qwen3VLTextForCausalLM)(
+        config=L(create_vlm_config)(
+            base_config=L(Qwen3VLMoTConfig.from_json_file)(
+                json_file="cosmos_framework/model/vfm/vlm/qwen3_vl/configs/Qwen3-VL-8B-Instruct.json"
+            ),
+            qk_norm_for_text=True,
+        ),
+    ),
+    tokenizer=L(create_qwen2_tokenizer_with_download)(
+        pretrained_model_name="Qwen/Qwen3-VL-8B-Instruct",
+        config_variant="gcp",
+    ),
+    pretrained_weights=PretrainedWeightsConfig(
+        backbone_path="s3://bucket0/cosmos3/pretrained/huggingface/Cosmos-Reason/Cosmos3-Nano-Reasoner-bb9c6f5/",
+        credentials_path="credentials/gcp_checkpoint.secret",
+        enable_gcs_patch_in_boto3=True,
+    ),
+)
 
 # Config for Qwen3VL 32B Instruct model
 # Qwen3VL uses Qwen2Tokenizer
@@ -688,27 +618,6 @@ Qwen3VLMoT_VLM_32b_Instruct_GCP_Config: VLMConfig = VLMConfig(
     ),
     pretrained_weights=PretrainedWeightsConfig(
         backbone_path="s3://bucket0/cosmos3/pretrained/huggingface/Qwen/Qwen3-VL-32B-Instruct/",
-        credentials_path="credentials/gcp_checkpoint.secret",
-        enable_gcs_patch_in_boto3=True,
-    ),
-)
-
-CosmosReason2_VLM_32b_Private_GCP_Config: VLMConfig = VLMConfig(
-    model_name="nvidia/Cosmos-Reason2-32B-Private",
-    model_instance=L(Qwen3VLTextForCausalLM)(
-        config=L(create_vlm_config)(
-            base_config=L(Qwen3VLMoTConfig.from_json_file)(
-                json_file="cosmos_framework/model/vfm/vlm/qwen3_vl/configs/Qwen3-VL-32B-Instruct.json"
-            ),
-            qk_norm_for_text=True,
-        ),
-    ),
-    tokenizer=L(build_processor_lazy)(
-        tokenizer_type="Qwen/Qwen3-VL-32B-Instruct",
-        config_variant="gcp",
-    ),
-    pretrained_weights=PretrainedWeightsConfig(
-        backbone_path="s3://bucket0/cosmos3/pretrained/huggingface/Cosmos-Reason/Cosmos-Reason2-32B-Private/",
         credentials_path="credentials/gcp_checkpoint.secret",
         enable_gcs_patch_in_boto3=True,
     ),
@@ -756,6 +665,78 @@ Cosmos3SuperReasoner_VLM_GCP_Config: VLMConfig = VLMConfig(
     ),
 )
 
+Cosmos3SuperReasoner_VLM_GCP_Config_0517: VLMConfig = VLMConfig(
+    model_name="nvidia/Cosmos3-Super-Reasoner",
+    model_instance=L(Qwen3VLTextForCausalLM)(
+        config=L(create_vlm_config)(
+            base_config=L(Qwen3VLMoTConfig.from_json_file)(
+                json_file="cosmos_framework/model/vfm/vlm/qwen3_vl/configs/Qwen3-VL-32B-Instruct.json"
+            ),
+            qk_norm_for_text=True,
+        ),
+    ),
+    tokenizer=L(create_qwen2_tokenizer_with_download)(
+        pretrained_model_name="Qwen/Qwen3-VL-32B-Instruct",
+        config_variant="gcp",
+    ),
+    pretrained_weights=PretrainedWeightsConfig(
+        backbone_path="s3://bucket0/cosmos3/pretrained/huggingface/Cosmos-Reason/Cosmos3-Super-Reasoner-b6df0d1/",
+        credentials_path="credentials/gcp_checkpoint.secret",
+        enable_gcs_patch_in_boto3=True,
+    ),
+)
+
+# Cosmos3-Edge-Reasoner at commit 4acb717.
+# nemotron_siglip2 architecture: Nemotron text backbone (56-block hybrid layout, 2048 hidden)
+# + SigLIP2 vision encoder.  The text transformer is identical in shape to
+# Nemotron-3-Dense-VL-2B (hidden_size=2048, 56 alternating attn/MLP blocks → 28
+# effective MoT layers after _transform_text_dict).  Uses the same
+# nemotron_3_dense_vl weight remapping and config JSON.
+Cosmos3EdgeReasoner_VLM_GCP_Config_4acb717: VLMConfig = VLMConfig(
+    model_name="nvidia/Cosmos3-Edge-Reasoner",
+    model_instance=L(Nemotron3DenseVLTextForCausalLM)(
+        config=L(create_vlm_config)(
+            base_config=L(Nemotron3DenseVLMoTConfig.from_json_file)(
+                json_file="cosmos_framework/model/vfm/vlm/nemotron_3_dense_vl/configs/Nemotron-2B-Dense-VL.json"
+            ),
+            qk_norm_for_text=False,
+        ),
+    ),
+    tokenizer=L(build_processor_lazy)(
+        tokenizer_type="nvidia/Cosmos3-Edge-Reasoner",
+        config_variant="gcp",
+    ),
+    pretrained_weights=PretrainedWeightsConfig(
+        backbone_path="s3://bucket0/cosmos3/pretrained/huggingface/nvidia/Cosmos3-Edge-Reasoner-4acb717/",
+        credentials_path="credentials/gcp_checkpoint.secret",
+        enable_gcs_patch_in_boto3=True,
+        checkpoint_format="nemotron_3_dense_vl",
+    ),
+)
+
+# Cosmos3-Edge-Reasoner at commit 9b4c028 (2026-05-29).
+# Same nemotron_siglip2 architecture as 4acb717; new weights uploaded 2026-05-29.
+Cosmos3EdgeReasoner_VLM_GCP_Config_9b4c028: VLMConfig = VLMConfig(
+    model_name="nvidia/Cosmos3-Edge-Reasoner",
+    model_instance=L(Nemotron3DenseVLTextForCausalLM)(
+        config=L(create_vlm_config)(
+            base_config=L(Nemotron3DenseVLMoTConfig.from_json_file)(
+                json_file="cosmos_framework/model/vfm/vlm/nemotron_3_dense_vl/configs/Nemotron-2B-Dense-VL.json"
+            ),
+            qk_norm_for_text=False,
+        ),
+    ),
+    tokenizer=L(build_processor_lazy)(
+        tokenizer_type="nvidia/Cosmos3-Edge-Reasoner",
+        config_variant="gcp",
+    ),
+    pretrained_weights=PretrainedWeightsConfig(
+        backbone_path="s3://bucket0/cosmos3/pretrained/huggingface/nvidia/Cosmos3-Edge-Reasoner-9b4c028/",
+        credentials_path="credentials/gcp_checkpoint.secret",
+        enable_gcs_patch_in_boto3=True,
+        checkpoint_format="nemotron_3_dense_vl",
+    ),
+)
 
 
 def register_vlm():
@@ -835,24 +816,6 @@ def register_vlm():
     cs.store(
         group="vlm_config",
         package="model.config.vlm_config",
-        name="cosmos_reason2_vlm_2b_private_gcp",
-        node=CosmosReason2_VLM_2b_Private_GCP_Config,
-    )
-    cs.store(
-        group="vlm_config",
-        package="model.config.vlm_config",
-        name="cosmos3_reasoner_vlm_2b_private_gcp",
-        node=Cosmos3Reasoner_VLM_2b_Private_GCP_Config,
-    )
-    cs.store(
-        group="vlm_config",
-        package="model.config.vlm_config",
-        name="cosmos_reason2_vlm_8b_private_gcp",
-        node=CosmosReason2_VLM_8b_Private_GCP_Config,
-    )
-    cs.store(
-        group="vlm_config",
-        package="model.config.vlm_config",
         name="cosmos3_reasoner_vlm_8b_private_gcp",
         node=Cosmos3Reasoner_VLM_8b_Private_GCP_Config,
     )
@@ -865,8 +828,8 @@ def register_vlm():
     cs.store(
         group="vlm_config",
         package="model.config.vlm_config",
-        name="cosmos_reason2_vlm_32b_private_gcp",
-        node=CosmosReason2_VLM_32b_Private_GCP_Config,
+        name="cosmos3_nano_reasoner_vlm_gcp_0517",
+        node=Cosmos3NanoReasoner_VLM_GCP_Config_0517,
     )
     cs.store(
         group="vlm_config",
@@ -883,8 +846,8 @@ def register_vlm():
     cs.store(
         group="vlm_config",
         package="model.config.vlm_config",
-        name="cosmos_reason2_vlm_30b_a3b_private_gcp",
-        node=CosmosReason2_VLM_30b_a3b_Private_GCP_Config,
+        name="cosmos3_super_reasoner_vlm_gcp_0517",
+        node=Cosmos3SuperReasoner_VLM_GCP_Config_0517,
     )
     cs.store(
         group="vlm_config",
@@ -921,4 +884,16 @@ def register_vlm():
         package="model.config.vlm_config",
         name="qwen3_vl_mot_vlm_32b_instruct_gcp",
         node=Qwen3VLMoT_VLM_32b_Instruct_GCP_Config,
+    )
+    cs.store(
+        group="vlm_config",
+        package="model.config.vlm_config",
+        name="cosmos3_edge_reasoner_vlm_gcp_4acb717",
+        node=Cosmos3EdgeReasoner_VLM_GCP_Config_4acb717,
+    )
+    cs.store(
+        group="vlm_config",
+        package="model.config.vlm_config",
+        name="cosmos3_edge_reasoner_vlm_gcp_9b4c028",
+        node=Cosmos3EdgeReasoner_VLM_GCP_Config_9b4c028,
     )

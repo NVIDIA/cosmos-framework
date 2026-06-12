@@ -29,7 +29,7 @@ class PolicyConfig:
     trainable_map: Union[str, None] = None
     monkey_patch_for_text_only_data: bool = False
 
-    # HF attention impl. Default "cosmos" routes through imaginaire.attention
+    # HF attention impl. Default "cosmos" routes through cosmos_framework.model.attention
     # (NATTEN/blackwell-fmha on GB200). Override to "flash_attention_2",
     # "sdpa", or "eager" for fallback.
     attn_implementation: str = "cosmos"
@@ -53,5 +53,6 @@ class VLMModelConfig:
     ema: EMAConfig = EMAConfig(enabled=False)
 
     # Force deterministic kernels in Flash-Attention init (slower; required for
-    # parity bit-exactness)
-    deterministic: bool = False
+    # parity bit-exactness). VLM-only knob — consumed by VLMModel.__init__ via
+    # init_flash_attn_meta.
+    deterministic: bool = True

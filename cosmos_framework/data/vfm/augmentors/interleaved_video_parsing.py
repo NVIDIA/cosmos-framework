@@ -414,7 +414,7 @@ class VideoTransferAlignedLegacyChunkParsing(VideoTransferAlignedFullFramesParsi
             )  # [C,T,H,W]
             num_multiplier = (end_frame - start_frame) / self.num_frames
 
-
+        # NOTE: matches legacy VideoParsing.__call__ output keys exactly. Do NOT add
         # variable-length fields like ``frame_indices`` here -- ``video_flatten_keys`` in
         # ``get_video_transfer_augmentor`` lists ``frame_indices``, and surfacing a
         # per-sample list there would crash ``custom_collate_fn`` (default_collate requires

@@ -3,7 +3,8 @@
 
 """Sound data utilities for building sequence plans and handling audio-video generation modes.
 
-This module provides utilities for building SequencePlan objects based on sound generation modes.
+This module provides utilities for building SequencePlan objects based on sound generation modes,
+similar to how action modes are handled in cosmos_framework/data/vfm/action/data_utils.py.
 
 Supported modes:
     - t2vs: Text → Video + Sound (joint generation)
@@ -27,7 +28,8 @@ def build_sequence_plan_for_sound(
     """Build a SequencePlan based on the sound generation mode.
 
     This function determines the appropriate condition frame indexes for vision and sound
-    based on the specified mode.
+    based on the specified mode. It mirrors how `build_sequence_plan_from_mode` works
+    for action in cosmos_framework/data/vfm/action/data_utils.py.
 
     Args:
         mode: Generation mode. One of:

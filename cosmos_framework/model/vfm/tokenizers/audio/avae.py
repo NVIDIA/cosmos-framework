@@ -2,9 +2,9 @@
 # SPDX-License-Identifier: OpenMDW-1.1
 
 """
-AVAE (Audio Variational AutoEncoder) Tokenizer.
-
-Ported from BigVGAN (https://github.com/NVIDIA/BigVGAN).
+AVAE (Audio Variational AutoEncoder) Tokenizer for Imaginaire4
+ported from https://gitlab-master.nvidia.com/ADLR/bigvgan
+commit hash: 80fbd8cfecb1867cc864e6d4fe0a474d8403a474
 """
 
 import os
@@ -128,7 +128,7 @@ def _load_avae_model(
         )
 
     # Create model directly on device (don't use meta device)
-
+    # NOTE: Unlike WanVAE/FluxVAE, AVAE uses weight_norm extensively in OobleckDecoder
     # and SpectrogramConvNeXtEncoder. After loading the checkpoint, we must call
     # remove_weight_norm() which requires materialized tensors (not meta tensors).
     # Therefore, we create the model directly on the target device instead of using
@@ -358,7 +358,6 @@ class AVAEInterface(AudioTokenizerInterface):
             use_object_store = False
 
             # Parent directory is registered in checkpoint_db.
-
             if vae_path_full:
                 vae_dir, vae_name = os.path.split(vae_path_full)
                 vae_dir = download_checkpoint_v2(vae_dir)

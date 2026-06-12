@@ -13,7 +13,7 @@ from transformers.utils.import_utils import is_torchdynamo_compiling
 
 from cosmos_framework.utils import log
 
-_EXPECTED_TRANSFORMERS_VERSION_PREFIX = "4.57."
+_EXPECTED_TRANSFORMERS_VERSION = "4.57."
 
 
 def patch_qwen3_vl_forward(model):

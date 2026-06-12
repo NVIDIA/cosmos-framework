@@ -393,7 +393,7 @@ def multi_dimensional_attention(
 
     # Automatic transformation for 1s in token layout
     # I.e. Attention over a (1, 16, 32) token layout is identical to over a (16, 32)
-
+    # NOTE: assumes QKV token layouts match
     token_layout_ones = [i for i in range(num_dims) if token_layout_shape[i] == 1]
     if len(token_layout_ones) > 0:
         token_layout_t = tuple(s for i, s in enumerate(token_layout_shape) if i not in token_layout_ones)
@@ -552,7 +552,7 @@ def multi_dimensional_attention_varlen(
         value (Tensor): 4-D value tensor with sequence-packed layout
             (`[1, seqlen_total, heads_kv, head_dim_v]`)
 
-        metadata (dict): Pre-computed varlen metadata from `imaginaire.varlen.generate_multi_dim_varlen_parameters`.
+        metadata (dict): Pre-computed varlen metadata from `cosmos_framework.varlen.generate_multi_dim_varlen_parameters`.
 
         scale (float | None): Attention scale. Defaults to head_dim ** -0.5.
 

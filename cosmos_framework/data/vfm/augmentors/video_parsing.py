@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: OpenMDW-1.1
 
 import random
+from collections.abc import Mapping
 from typing import Optional
 
 import numpy as np
@@ -15,12 +16,18 @@ from cosmos_framework.data.imaginaire.webdataset.augmentors.augmentor import Aug
 from cosmos_framework.data.imaginaire.webdataset.augmentors.image.misc import obtain_augmentation_size
 from cosmos_framework.utils import log
 from cosmos_framework.data.vfm.utils import VIDEO_RES_SIZE_INFO
+from cosmos_framework.model.vfm.tokenizers.uniae.frame_math import (
+    align_uniae_num_video_frames,
+    get_uniae_chunk_frames,
+    normalize_uniae_chunk_frames,
+)
 
 # Map dataset_resolution_type to resolution tier key in VIDEO_RES_SIZE_INFO
 _DATASET_RESOLUTION_TIER: dict[str, str] = {"gt480p": "480", "gt720p": "720", "gt1080p": "1080"}
 
 _MIN_FPS = 10
 _MAX_FPS = 60
+_UNIAE_TEMPORAL_COMPRESSION_FACTOR = 4
 
 
 class VideoParsing(Augmentor):
@@ -345,7 +352,7 @@ class VideoParsing(Augmentor):
         video_info["video"] = video_frames
         video_info["num_multiplier"] = num_multiplier  # Store the frame skipping multiplier
 
-
+        # NOTE: Explaining the logic of conditioning FPS calculation:
         # 1. Our video parser stores the original video FPS of the video.
         # 2. We have multiple modes of frame selection -- consecutive chunk of frames or subsampled frames.
         # Here's what we do in each case:
@@ -434,6 +441,45 @@ class VideoParsingWithFullFrames(Augmentor):
         self.dataset_resolution_type = args.get("dataset_resolution_type", "all")
         self.resolution_tier = _DATASET_RESOLUTION_TIER.get(self.dataset_resolution_type)
 
+        # VAE temporal alignment mode.
+        # causal_vae=True  (default): align to 1+4N (causal VAE, e.g. Wan 2.2)
+        # causal_vae=False: align to 4N (non-causal VAE, e.g. UniAE)
+        self.causal_vae = args.get("causal_vae", True)
+        self.target_resolution_key = None if args.get("resolution") is None else str(args["resolution"])
+        self.uniae_pad_frames = None if args.get("uniae_pad_frames") is None else int(args["uniae_pad_frames"])
+        self.uniae_chunk_frames = self._normalize_uniae_chunk_frames(args.get("uniae_chunk_frames", None))
+
+    def _normalize_uniae_chunk_frames(
+        self, uniae_chunk_frames: int | Mapping[str, int] | None
+    ) -> int | dict[str, int] | None:
+        return normalize_uniae_chunk_frames(
+            uniae_chunk_frames,
+            pad_frames=self.uniae_pad_frames,
+            temporal_compression_factor=_UNIAE_TEMPORAL_COMPRESSION_FACTOR,
+            missing_pad_message="uniae_pad_frames must be specified if uniae_chunk_frames is specified",
+            temporal_divisibility_name="UniAE temporal compression factor",
+        )
+
+    def _get_uniae_chunk_frames(self, spatial_shape: tuple[int, int] | None = None) -> int:
+        assert self.uniae_chunk_frames is not None
+        return get_uniae_chunk_frames(
+            self.uniae_chunk_frames,
+            spatial_shape=spatial_shape,
+            target_resolution_key=self.target_resolution_key,
+        )
+
+    def _align_uniae_num_video_frames(self, num_video_frames: int, spatial_shape: tuple[int, int] | None = None) -> int:
+        assert self.uniae_pad_frames is not None
+        assert self.uniae_chunk_frames is not None
+        return align_uniae_num_video_frames(
+            num_video_frames,
+            self.uniae_chunk_frames,
+            pad_frames=self.uniae_pad_frames,
+            temporal_compression_factor=_UNIAE_TEMPORAL_COMPRESSION_FACTOR,
+            spatial_shape=spatial_shape,
+            target_resolution_key=self.target_resolution_key,
+        )
+
     def _sample_stride_with_bias(self, max_stride: int, min_stride: int = 1) -> int:
         """Sample a stride from [min_stride, max_stride] with bias controlled by low_fps_bias.
 
@@ -520,7 +566,6 @@ class VideoParsingWithFullFrames(Augmentor):
         return True
 
     def __call__(self, data_dict: dict) -> dict | None:
-
         # if in future we need to train with batch size > 1, need to pad frames
         try:
             meta_dict = data_dict[self.meta_key]
@@ -553,8 +598,10 @@ class VideoParsingWithFullFrames(Augmentor):
                 f"Resize error. orig {(orig_w, orig_h)} desire {img_size} compute {target_size}"
             )
             transform = [Resize(target_size)]
+            output_spatial_shape = target_size
         else:
             transform = None
+            output_spatial_shape = (meta_dict["height"], meta_dict["width"])
 
         # Adding try-expcept because some of the data is bad and video decoding call fail.
         try:
@@ -569,11 +616,33 @@ class VideoParsingWithFullFrames(Augmentor):
             stride = self._sample_stride_with_bias(self.max_stride, self.min_stride)
             frame_indices = np.arange(0, num_video_frames, stride).tolist()
 
-            # VAE compress temporal by 4x, with 1 as condition
-            # thus the max_video_frames must be 1 + 4N
+            # Align frame count to the active VAE temporal contract.
+            # causal_vae=True: 1+4N (causal VAE, e.g. Wan 2.2).
+            # causal_vae=False: UniAE chunk/pad alignment if configured; otherwise 4N.
             num_video_frames = min(len(frame_indices), self.args.get("max_num_frames", 1000))
-            N = (num_video_frames - 1) // 4
-            num_video_frames = 1 + 4 * N
+            if self.causal_vae:
+                N = (num_video_frames - 1) // 4
+                num_video_frames = 1 + 4 * N
+            else:
+                # If this is UniAE, we need to align the frame count to the chunk size and padding.
+                if self.uniae_chunk_frames is not None:
+                    # T is valid when r = (T-1) % effective_chunk_frames satisfies:
+                    #   r == 0  (exact multiple of chunks)
+                    #   OR r % 4 == target_r  where target_r = (-2*pad_frames) % 4
+                    # Compute minimum trim delta in O(1):
+                    #   delta = steps to nearest r' <= r satisfying the condition.
+                    num_video_frames = self._align_uniae_num_video_frames(num_video_frames, output_spatial_shape)
+
+                    if num_video_frames == 0:
+                        log.warning(
+                            f"VideoParsingWithFullFrames: video too short for UniAE. "
+                            f"url: {data_dict['__url__']}, key: {data_dict['__key__']}",
+                            rank0_only=False,
+                        )
+                        return None
+                else:
+                    N = num_video_frames // 4
+                    num_video_frames = 4 * N
             frame_indices = frame_indices[0:num_video_frames]
 
             frame_batch = video_decoder.get_frames_at(frame_indices)
@@ -698,7 +767,6 @@ class VideoParsingChunkedFrames(VideoParsingWithFullFrames):
         super().__init__(input_keys, output_keys, args)
 
     def __call__(self, data_dict: dict) -> dict | None:
-
         # if in future we need to train with batch size > 1, need to pad frames
         try:
             meta_dict = data_dict[self.meta_key]
@@ -743,8 +811,10 @@ class VideoParsingChunkedFrames(VideoParsingWithFullFrames):
                 f"Resize error. orig {(orig_w, orig_h)} desire {img_size} compute {target_size}"
             )
             transform = [Resize(target_size)]
+            output_spatial_shape = target_size
         else:
             transform = None
+            output_spatial_shape = (meta_dict["height"], meta_dict["width"])
 
         # Adding try-expcept because some of the data is bad and video decoding call fail.
         try:
@@ -772,11 +842,19 @@ class VideoParsingChunkedFrames(VideoParsingWithFullFrames):
             stride = self._sample_stride_with_bias(self.max_stride, self.min_stride)
             frame_indices = np.arange(chunk_start_clamped, chunk_end_clamped, stride).tolist()
 
-            # VAE compress temporal by 4x, with 1 as condition
-            # thus the max_video_frames must be 1 + 4N
+            # Align frame count to the active VAE temporal contract.
+            # causal_vae=True: 1+4N (causal VAE, e.g. Wan 2.2).
+            # causal_vae=False: UniAE chunk/pad alignment if configured; otherwise 4N.
             num_video_frames = min(len(frame_indices), self.args.get("max_num_frames", 1000))
-            N = (num_video_frames - 1) // 4
-            num_video_frames = 1 + 4 * N
+            if self.causal_vae:
+                N = (num_video_frames - 1) // 4
+                num_video_frames = 1 + 4 * N
+            else:
+                if self.uniae_chunk_frames is not None:
+                    num_video_frames = self._align_uniae_num_video_frames(num_video_frames, output_spatial_shape)
+                else:
+                    N = num_video_frames // 4
+                    num_video_frames = 4 * N
             if num_video_frames < 1:
                 log.warning(
                     f"VideoParsingChunkedFrames: chunk too short for stride. "

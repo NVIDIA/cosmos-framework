@@ -93,11 +93,10 @@ class MemoryState(ABC):
         Used for autoregressive frame-by-frame generation of video.
         """
 
-    @property
-    def uses_rolling_kv_cache(self) -> bool:
-        """Whether this memory uses the rolling KV-cache / compile-safe path.
+    def requires_natten_metadata(self) -> bool:
+        """Whether the packed-sequence builder should create NATTEN metadata.
 
-        When ``True``, the network skips NATTEN metadata computation because
-        temporal causality is handled inside three-way attention instead.
+        Memory paths whose attention implementation handles temporal
+        visibility itself return ``False``.
         """
-        return False
+        return True
