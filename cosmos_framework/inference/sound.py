@@ -121,6 +121,8 @@ def inject_sound_into_batch(
     data_batch: dict[str, Any],
     audio_tensor: torch.Tensor | None,
     model: Any,
+    *,
+    condition_sound: bool = False,
 ) -> dict[str, Any]:
     """Add sound data and upgrade the SequencePlan in an existing data batch.
 
@@ -131,6 +133,9 @@ def inject_sound_into_batch(
         data_batch: Existing data batch (from get_video_sample_batch or build_conditioned_video_batch).
         audio_tensor: Audio waveform tensor (1, C, N) or None.
         model: The OmniMoTModel instance.
+        condition_sound: When True, the provided audio is used as a clean
+            condition (mode "ts2v") and the video is generated from it. When
+            False (default), sound is generated jointly (mode "t2vs").
 
     Returns:
         The same data_batch dict, mutated in-place with sound fields added.
@@ -161,7 +166,7 @@ def inject_sound_into_batch(
 
         # existing vision conditioning is preserved in the sequence plan for i2v and v2v modes
         sequence_plan = build_sequence_plan_for_sound(
-            mode="t2vs",
+            mode="ts2v" if condition_sound else "t2vs",
             video_latent_length=video_latent_t,
             sound_latent_length=sound_latent_t,
         )
