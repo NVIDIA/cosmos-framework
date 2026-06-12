@@ -1074,6 +1074,23 @@ class OmniInference(Inference):
                     tokenizer_cfg.pop("revision", None)
                     tokenizer_cfg.pop("subdir", None)
                     tokenizer_cfg["tokenizer_type"] = str(checkpoint_path)
+                # Source the AVAE sound tokenizer from the loaded checkpoint's own
+                # bundled sound_tokenizer/ (matched to the transformer; uses whatever
+                # encoder/decoder that checkpoint ships) instead of the global "AVAE"
+                # registry repo. Mirrors vlm_processor_from_checkpoint above; falls back
+                # to the registry when the checkpoint bundles no sound_tokenizer/.
+                sound_cfg = model_dict["config"].get("sound_tokenizer")
+                if sound_cfg:
+                    from cosmos_framework.inference.common.checkpoints import (
+                        _AVAE_LEGACY_CKPT_NAME,
+                        _materialize_avae_ckpt,
+                    )
+
+                    sound_tokenizer_dir = Path(checkpoint_path) / "sound_tokenizer"
+                    if sound_tokenizer_dir.is_dir():
+                        _materialize_avae_ckpt(str(sound_tokenizer_dir))
+                        sound_cfg["bucket_name"] = ""
+                        sound_cfg["avae_path"] = str(sound_tokenizer_dir / _AVAE_LEGACY_CKPT_NAME)
                 config = Cosmos3OmniConfig(model=model_dict)
             model = Cosmos3OmniModel.from_pretrained_dcp(
                 checkpoint_path,
