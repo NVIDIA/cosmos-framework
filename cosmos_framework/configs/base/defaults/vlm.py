@@ -136,7 +136,7 @@ class VLMConfig:
     # HuggingFace model identifier or local path. Drives AutoConfig + AutoModel selection.
     model_name: str = ""
 
-    # Safetensor path for model for load a safetensor from different folder 
+    # Safetensor path for model for load a safetensor from different folder
     safetensors_path: str = ""
 
     # Optional pretrained-weights overlay (separate from the AutoModel structural

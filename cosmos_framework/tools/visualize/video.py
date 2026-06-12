@@ -29,6 +29,7 @@ def save_video(grid, video_name, fps=30):
         macro_block_size=1,
     )
 
+
 def save_img_or_video(
     sample: Tensor,  # [C,T,H,W] in [0,1] range
     save_fp_wo_ext: Union[str, IO[Any]],

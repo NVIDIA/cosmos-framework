@@ -542,7 +542,7 @@ class NVTXRangeContext:
 
 class StragglerDetectorV2:
     """StragglerDetectorV2 is a class that allows you to easily integrate "straggler" tool:
-    https://gitlab-master.nvidia.com/dl/gwe/fault_tolerance_related/straggler/-/tree/cupti?ref_type=heads.
+    https://invalid_url.
 
     This tool detects stragglers using low-level CUPTI tool, which can gather kernel execution time with very low overhead.
     The execution times are compared across different ranks, as well as to the execution time of the exact same kernels in the past.

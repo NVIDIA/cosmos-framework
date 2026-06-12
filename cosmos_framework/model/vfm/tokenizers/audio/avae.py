@@ -3,7 +3,7 @@
 
 """
 AVAE (Audio Variational AutoEncoder) Tokenizer for Imaginaire4
-ported from https://gitlab-master.nvidia.com/ADLR/bigvgan
+ported from https://invalid_url
 commit hash: 80fbd8cfecb1867cc864e6d4fe0a474d8403a474
 """
 
