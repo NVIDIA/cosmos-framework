@@ -142,6 +142,7 @@ def build_processor(
     else:
         raise ValueError(f"Tokenizer type {tokenizer_type} not supported")
 
+
 def build_processor_lazy(
     *args,
     repository: Optional[str] = None,

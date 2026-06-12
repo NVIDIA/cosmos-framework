@@ -2435,12 +2435,8 @@ class OmniMoTModel(ImaginaireModel):
             # always-on globally) would silently ignore the per-timestep
             # ``guidance_interval`` gate.
             if _dp_shard_group is not None:
-                _cfg_t = torch.tensor(
-                    [1 if needs_cfg else 0], device=_align_device, dtype=torch.int32
-                )
-                torch.distributed.all_reduce(
-                    _cfg_t, op=torch.distributed.ReduceOp.MAX, group=_dp_shard_group
-                )
+                _cfg_t = torch.tensor([1 if needs_cfg else 0], device=_align_device, dtype=torch.int32)
+                torch.distributed.all_reduce(_cfg_t, op=torch.distributed.ReduceOp.MAX, group=_dp_shard_group)
                 _any_needs_cfg = bool(_cfg_t.item())
             else:
                 _any_needs_cfg = needs_cfg
@@ -2480,9 +2476,7 @@ class OmniMoTModel(ImaginaireModel):
         # to pad their FSDP allgather sequence.
         if _dp_shard_group is not None:
             _local_steps_t = torch.tensor([num_steps], device=_align_device, dtype=torch.int32)
-            torch.distributed.all_reduce(
-                _local_steps_t, op=torch.distributed.ReduceOp.MAX, group=_dp_shard_group
-            )
+            torch.distributed.all_reduce(_local_steps_t, op=torch.distributed.ReduceOp.MAX, group=_dp_shard_group)
             _max_num_steps = int(_local_steps_t.item())
         else:
             _max_num_steps = num_steps
