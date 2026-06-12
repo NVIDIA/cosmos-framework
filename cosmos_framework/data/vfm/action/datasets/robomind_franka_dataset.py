@@ -14,11 +14,10 @@ import torch
 import torch.nn.functional as F
 from lerobot.datasets.video_utils import decode_video_frames
 
-from cosmos_framework.data.vfm.action.action_spec import Gripper, Pos, Rot, build_action_spec
+from cosmos_framework.data.vfm.action.action_spec import ActionSpec, Gripper, Pos, Rot, build_action_spec
 from cosmos_framework.data.vfm.action.datasets.base_dataset import ActionBaseDataset
 from cosmos_framework.data.vfm.action.pose_utils import (
     build_abs_pose_from_components,
-    compute_idle_frames,
     pose_abs_to_rel,
 )
 
@@ -75,6 +74,7 @@ class RoboMINDFrankaDataset(ActionBaseDataset):
         pose_convention: PoseConvention = "backward_framewise",
         tolerance_s: float = 1e-4,
         viewpoint: Viewpoint = "concat_view",
+        action_normalization: str | None = "quantile",
         sample_stride: int = 1,
     ) -> None:
         if embodiment_type != "robomind-franka-dual":
@@ -91,6 +91,7 @@ class RoboMINDFrankaDataset(ActionBaseDataset):
             pose_convention=pose_convention,
             tolerance_s=tolerance_s,
             viewpoint=viewpoint,
+            action_normalization=action_normalization,
             sample_stride=sample_stride,
         )
 
@@ -98,24 +99,12 @@ class RoboMINDFrankaDataset(ActionBaseDataset):
     def action_dim(self) -> int:
         return 20
 
-    @property
-    def action_names(self) -> list[str]:
-        return _dual_arm_action_spec().names
+    def _action_spec(self) -> ActionSpec:
+        return _dual_arm_action_spec()
 
     @classmethod
     def _stats_path(cls) -> Path:
         return _NORMALIZER_PATH
-
-    def _compute_idle_frames(self, action: torch.Tensor) -> int:
-        return compute_idle_frames(
-            action,
-            _dual_arm_action_spec(),
-            eps_t=5e-3 / self._fps,
-            eps_r=np.deg2rad(1.5) / self._fps,
-            eps_g=1e-2,
-            joint_threshold=5e-3 / self._fps,
-            min_streak=3,
-        )
 
     def __getitem__(self, idx: int) -> dict[str, Any]:
         mode = self._choose_mode()

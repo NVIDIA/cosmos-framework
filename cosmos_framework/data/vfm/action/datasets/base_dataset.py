@@ -11,13 +11,15 @@ from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import Any
 
+import numpy as np
 import pyarrow.parquet as pq
 import torch
 from torch.utils.data import Dataset
 
-from cosmos_framework.data.vfm.action.action_normalization import normalize_action
+from cosmos_framework.data.vfm.action.action_normalization import load_action_stats, normalize_action
+from cosmos_framework.data.vfm.action.action_spec import ActionSpec
 from cosmos_framework.data.vfm.action.domain_utils import get_domain_id
-from cosmos_framework.data.vfm.action.action_normalization import load_action_stats
+from cosmos_framework.data.vfm.action.pose_utils import compute_idle_frames
 
 _MODE_CHOICES = ("forward_dynamics", "inverse_dynamics", "policy")
 
@@ -25,11 +27,8 @@ _MODE_CHOICES = ("forward_dynamics", "inverse_dynamics", "policy")
 class ActionBaseDataset(ABC, Dataset):
     """Abstract base for Action LeRobot datasets.
 
-    Subclasses must implement the abstract methods listed below and may override
-    ``_normalization_method`` (default: ``"quantile"``).
+    Subclasses must implement the abstract methods listed below.
     """
-
-    _normalization_method: str = "quantile"
 
     def __init__(
         self,
@@ -41,6 +40,7 @@ class ActionBaseDataset(ABC, Dataset):
         pose_convention: str,
         tolerance_s: float,
         viewpoint: str,
+        action_normalization: str | None = "quantile",
         sample_stride: int = 1,
     ) -> None:
         super().__init__()
@@ -58,6 +58,7 @@ class ActionBaseDataset(ABC, Dataset):
         self._tolerance_s = float(tolerance_s)
         self._viewpoint = viewpoint
         self._domain_id = get_domain_id(domain_name)
+        self._action_normalization = action_normalization
         self._norm_stats: dict[str, torch.Tensor] | None = None
 
         self._root = Path(root)
@@ -101,12 +102,19 @@ class ActionBaseDataset(ABC, Dataset):
         return self._domain_id
 
     @property
-    @abstractmethod
-    def action_dim(self) -> int: ...
+    def action_normalization(self) -> str:
+        return self._action_normalization
 
     @property
     @abstractmethod
-    def action_names(self) -> list[str]: ...
+    def action_dim(self) -> int: ...
+
+    @abstractmethod
+    def _action_spec(self) -> ActionSpec: ...
+
+    @property
+    def action_names(self) -> list[str]:
+        return self._action_spec().names
 
     @classmethod
     @abstractmethod
@@ -125,8 +133,16 @@ class ActionBaseDataset(ABC, Dataset):
     @abstractmethod
     def __getitem__(self, idx: int) -> dict[str, Any]: ...
 
-    @abstractmethod
-    def _compute_idle_frames(self, action: torch.Tensor) -> int: ...
+    def _compute_idle_frames(self, action: torch.Tensor) -> int:
+        return compute_idle_frames(
+            action,
+            self._action_spec(),
+            eps_t=5e-3 / self._fps,
+            eps_r=np.deg2rad(1.5) / self._fps,
+            eps_g=1e-2,
+            joint_threshold=5e-3 / self._fps,
+            min_streak=3,
+        )
 
     def _choose_mode(self) -> str:
         if self._mode == "joint":

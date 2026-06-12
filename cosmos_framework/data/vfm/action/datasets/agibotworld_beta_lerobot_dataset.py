@@ -20,7 +20,7 @@ from cosmos_framework.data.vfm.action.agibot_fk import (
     compute_fk_transforms_batch,
     convert_gripper_state_to_open_fraction,
 )
-from cosmos_framework.data.vfm.action.action_spec import Gripper, Pos, Rot, build_action_spec
+from cosmos_framework.data.vfm.action.action_spec import ActionSpec, Gripper, Pos, Rot, build_action_spec
 from cosmos_framework.data.vfm.action.datasets.base_dataset import ActionBaseDataset
 from cosmos_framework.data.vfm.action.pose_utils import pose_abs_to_rel
 
@@ -118,6 +118,7 @@ class AgiBotWorldBetaLeRobotDataset(ActionBaseDataset):
         pose_convention: PoseConvention = "backward_framewise",
         tolerance_s: float = 3e-4,
         viewpoint: Viewpoint = "concat_view",
+        action_normalization: str | None = "quantile",
         sample_stride: int = 1,
     ) -> None:
         if viewpoint not in ("concat_view", "ego_view"):
@@ -131,6 +132,7 @@ class AgiBotWorldBetaLeRobotDataset(ActionBaseDataset):
             pose_convention=pose_convention,
             tolerance_s=tolerance_s,
             viewpoint=viewpoint,
+            action_normalization=action_normalization,
             sample_stride=sample_stride,
         )
         self._rows_by_episode: dict[int, list[dict[str, Any]]] = {}
@@ -145,8 +147,7 @@ class AgiBotWorldBetaLeRobotDataset(ActionBaseDataset):
     def action_dim(self) -> int:
         return 29
 
-    @property
-    def action_names(self) -> list[str]:
+    def _action_spec(self) -> ActionSpec:
         return build_action_spec(
             Pos(prefix="head"),
             Rot("rot6d", prefix="head"),
@@ -156,7 +157,7 @@ class AgiBotWorldBetaLeRobotDataset(ActionBaseDataset):
             Pos(prefix="left"),
             Rot("rot6d", prefix="left"),
             Gripper(prefix="left"),
-        ).names
+        )
 
     @classmethod
     def _stats_path(cls) -> Path:
