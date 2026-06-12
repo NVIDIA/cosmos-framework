@@ -82,9 +82,7 @@ def load_conditioning_audio(
     data, src_sr = sf.read(str(path), dtype="float32", always_2d=True)  # [N, C]
     waveform = torch.from_numpy(data).transpose(0, 1).contiguous()  # [C, N]
 
-    # Resample to the tokenizer's rate. Uses scipy (a declared dependency);
-    # torchaudio is intentionally avoided as it is not a project dependency
-    # and is absent from the inference container.
+    # Resample with scipy (torchaudio is not a project dependency).
     if src_sr != sample_rate:
         from math import gcd
 

@@ -1074,11 +1074,9 @@ class OmniInference(Inference):
                     tokenizer_cfg.pop("revision", None)
                     tokenizer_cfg.pop("subdir", None)
                     tokenizer_cfg["tokenizer_type"] = str(checkpoint_path)
-                # AVAE sound-tokenizer source: use the configured ``avae_path`` (the
-                # registered "AVAE" repo) when one is set; fall back to the loaded
-                # checkpoint's own bundled ``sound_tokenizer/`` only when no avae_path is
-                # configured. The inference-only ``from_checkpoint`` key (default False)
-                # forces the bundled one even when avae_path is set; it is popped so it
+                # AVAE source: the configured ``avae_path`` when set, else the loaded
+                # checkpoint's bundled ``sound_tokenizer/``. The inference-only
+                # ``from_checkpoint`` key (default False) forces bundled; pop it so it
                 # never reaches AVAEInterface.
                 sound_cfg = model_dict["config"].get("sound_tokenizer")
                 if sound_cfg is not None:
