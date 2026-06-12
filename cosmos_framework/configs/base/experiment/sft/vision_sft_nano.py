@@ -39,6 +39,13 @@ from cosmos_framework.data.vfm.joint_dataloader import (
     PackingDataLoader,
     RankPartitionedDataLoader,
 )
+from cosmos_framework.data.vfm.dataflow import (
+    CosmosDataLoader,
+    IdentityProcessor,
+    RankPartitionedDistributor,
+    SequentialPackingBatcher,
+    VFMListCollator,
+)
 from cosmos_framework.data.vfm.local_datasets.sft_dataset import get_sft_dataset
 from cosmos_framework.utils.lazy_config import LazyCall as L
 from cosmos_framework.utils.lazy_config import LazyDict
@@ -279,6 +286,61 @@ vision_sft_nano = LazyDict(
 )
 
 
-for _item in [vision_sft_nano]:
+# ``vision_sft_nano_mapstyle_dataloader`` — identical to ``vision_sft_nano`` except the training
+# dataloader uses the four-role ``CosmosDataLoader`` stack
+# (``RankPartitionedDistributor`` → ``IdentityProcessor`` →
+# ``SequentialPackingBatcher`` → ``VFMListCollator``) instead of the legacy
+# ``PackingDataLoader`` + ``RankPartitionedDataLoader``. Every other block is reused
+# verbatim by deep-copying the base recipe and overriding only ``job.name`` and
+# ``dataloader_train``.
+vision_sft_nano_mapstyle_dataloader = copy.deepcopy(vision_sft_nano)
+vision_sft_nano_mapstyle_dataloader.job.name = "vision_sft_nano_mapstyle_dataloader"
+vision_sft_nano_mapstyle_dataloader.dataloader_train = L(CosmosDataLoader)(
+    distributor=L(RankPartitionedDistributor)(
+        datasets=dict(
+            video=dict(
+                ratio=1,
+                dataset=L(get_sft_dataset)(
+                    append_duration_fps_timestamps=True,
+                    append_resolution_info=True,
+                    caption_suffix="",
+                    cfg_dropout_keep_metadata=False,
+                    cfg_dropout_rate=0.1,
+                    # 70% T2V, 20% I2V (first frame), 10% V2V (first 5 frames / 2 latent frames)
+                    conditioning_config={0: 0.7, 1: 0.2, 2: 0.1},
+                    conditioning_fps=-1,
+                    conditioning_fps_noise_std=0.0,
+                    frame_selection_mode="first",
+                    jsonl_paths=["${oc.env:DATASET_PATH}/train/video_dataset_file.jsonl"],
+                    min_short_edge=0,
+                    num_video_frames=-1,
+                    resolution="256",
+                    sample_by_window=False,
+                    temporal_compression_factor=4,
+                    temporal_interval_mode="max_30fps",
+                    use_system_prompt=False,
+                    tokenizer_config="${model.config.vlm_config.tokenizer}",
+                ),
+            ),
+        ),
+    ),
+    processor=L(IdentityProcessor)(),
+    batcher=L(SequentialPackingBatcher)(
+        max_sequence_length=45056,
+        tokenizer_spatial_compression_factor=16,
+        tokenizer_temporal_compression_factor=4,
+        patch_spatial=2,
+        max_samples_per_batch=None,
+        sound_latent_fps=0,
+        audio_sample_rate=48000,
+    ),
+    collator=L(VFMListCollator)(),
+    num_workers=4,
+    persistent_workers=True,
+    prefetch_factor=4,
+)
+
+
+for _item in [vision_sft_nano, vision_sft_nano_mapstyle_dataloader]:
     _name = [k for k, v in globals().items() if v is _item][0]
     cs.store(group="experiment", package="_global_", name=_name, node=_item)

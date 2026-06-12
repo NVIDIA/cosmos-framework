@@ -47,7 +47,7 @@ root)::
   ``pytest-custom-exit-code`` plugin (not installed in the training image).
 
 Determinism notes:
-  * ``llava_ov_datapacker`` runs **without** ``--deterministic`` on H100 AND
+  * ``llava_ov`` runs **without** ``--deterministic`` on H100 AND
     overrides ``model.config.deterministic=false``: the Qwen3-VL text
     path uses an attention backend whose Hopper FMHA backward kernel has no
     deterministic mode (raises ``NotImplementedError`` under PyTorch's
@@ -169,7 +169,7 @@ _DEFAULT_ATOL = 1e-3
 
 # --- log parsers -------------------------------------------------------------
 #
-# VLM (``pre_exp012_llava_ov_datapacker``) logs the DP-reduced loss on rank 0::
+# VLM (``pre_exp012_llava_ov``) logs the DP-reduced loss on rank 0::
 #
 #     train/loss_avg: 1.32225 (iteration 0)
 #
@@ -218,7 +218,7 @@ class LaunchSpec:
 # ``test_launch_regression_8gpu`` (the ``gpus`` marker carries only one value,
 # so the test functions are split).
 _SPEC_KEYS = (
-    "llava_ov_datapacker",
+    "llava_ov",
     "vision_sft_nano",
 )
 _SPEC_KEYS_8GPU = ("vision_sft_super",)
@@ -234,10 +234,10 @@ def _build_specs(paths: dict[str, str]) -> dict[str, LaunchSpec]:
         super_extra_env["BASE_CHECKPOINT_PATH"] = super_ckpt
 
     return {
-        "llava_ov_datapacker": LaunchSpec(
+        "llava_ov": LaunchSpec(
             # Replicates launch_sft_llava_ov.sh, capped to 10 iters.
-            key="llava_ov_datapacker",
-            sft_toml="examples/toml/sft_config/llava_ov_datapacker.toml",
+            key="llava_ov",
+            sft_toml="examples/toml/sft_config/llava_ov.toml",
             extra_hydra_args=(
                 # TAIL_OVERRIDES from launch_sft_llava_ov.sh — fields not modeled
                 # by SFTExperimentConfig.
@@ -579,7 +579,7 @@ _GOLDENS: dict[str, dict[str, dict[str, list[float] | None]]] = {
     # and seed 42 against the legacy training pipeline. VLM backbone is not
     # part of the OSS layout.
     "gb200": {
-        "llava_ov_datapacker": {
+        "llava_ov": {
             "loss": [1.32208, 1.20886, 1.39254, 1.40460, 1.16652, 1.24852, 1.38463, 1.22766, 0.96263, 1.14468],
             "grad_norm": [
                 38.62454, 23.61477, 30.53218, 36.46255, 25.06240,
@@ -606,7 +606,7 @@ _GOLDENS: dict[str, dict[str, dict[str, list[float] | None]]] = {
         # and the loss_tol_bands tiers). Centered on the midpoint of two H200 CI
         # runs (CI runs on H200) so the tiered bands keep maximum margin; iter-0
         # is bit-exact across H100/H200 runs. grad-norm is non-det, so None.
-        "llava_ov_datapacker": {
+        "llava_ov": {
             "loss": [1.06924, 0.88399, 1.09293, 1.16314, 1.03592, 0.99041, 1.11041, 0.97001, 0.81246, 0.98548],
             "grad_norm": None,
         },

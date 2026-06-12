@@ -1,0 +1,117 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: OpenMDW-1.1
+
+# pre_exp012_llava_ov_mapstyle_dataloader — map-style resumable VLM recipe
+# Base config = cosmos_framework/configs/base/vlm/config.py (task="vlm").
+#
+# Loads LLaVA-OneVision-Data ai2d(gpt4v) as a real map-style Dataset
+# (load_dataset(streaming=False)), filters + caps to 4000 rows, and shards it
+# with MapDistributor — enabling deterministic per-worker (epoch, index)
+# checkpointing and resume. With dp_shard=8 that is 500 samples/rank/epoch, so
+# the iter-100 checkpoint (100 samples/rank) lands mid-epoch.
+#
+# dryrun::
+#   python -m cosmos_framework.scripts.train \
+#       --sft-toml=examples/toml/sft_config/llava_ov_mapstyle_dataloader.toml --dryrun -- \
+#       data_setting.max_tokens=16000
+#
+# Fresh run::
+#   torchrun --nproc_per_node=4 --master_port=12344 \
+#       -m cosmos_framework.scripts.train \
+#       --sft-toml=examples/toml/sft_config/llava_ov_mapstyle_dataloader.toml -- \
+#       data_setting.max_tokens=16000
+#
+# Resume run (from iter 100 checkpoint)::
+#   torchrun --nproc_per_node=4 --master_port=12344 \
+#       -m cosmos_framework.scripts.train \
+#       --sft-toml=examples/toml/sft_config/llava_ov_mapstyle_dataloader.toml -- \
+#       data_setting.max_tokens=16000 \
+#       checkpoint.load_path=/tmp/imaginaire4-output/cosmos_oss_alignment/vlm_llava_ov_demo/pre_exp012_llava_ov_mapstyle_dataloader/checkpoints/iter_000000100 \
+#       checkpoint.load_training_state=true
+#
+# Per-task remap (see _PATH_REMAPS["vlm"]):
+#   model.parallelism.*              -> model.config.parallelism.*
+#   model.compile.*                  -> model.config.compile.*
+#   model.activation_checkpointing.* -> model.config.activation_checkpointing.*
+#   model.precision                  -> model.config.precision
+#   model.attn_implementation        -> model.config.policy.attn_implementation
+#   model.backbone.*                 -> model.config.policy.backbone.*
+#   model.ema.*                      -> model.config.ema.*
+#   dataloader_train.{max_sequence_length, seed} -> SKIPPED (handled by batcher)
+
+[job]
+task         = "vlm"
+experiment   = "pre_exp012_llava_ov_mapstyle_dataloader"
+project      = "cosmos_oss_alignment"
+group        = "vlm_llava_ov_demo"
+name         = "pre_exp012_llava_ov_mapstyle_dataloader"
+wandb_mode   = "online"
+
+[model]
+attn_implementation = "cosmos"
+precision           = "bfloat16"
+
+[model.backbone]
+model_name = "Qwen/Qwen3-VL-8B-Instruct"
+
+[model.ema]
+enabled         = false
+rate            = 0.1
+iteration_shift = 0
+
+[model.parallelism]
+data_parallel_shard_degree      = 8
+data_parallel_replicate_degree  = -1
+context_parallel_shard_degree   = 1
+cfg_parallel_shard_degree       = 1
+
+[model.compile]
+enabled          = false
+compile_dynamic  = true
+
+[model.activation_checkpointing]
+mode                = "full"
+save_ops_regex      = ["fmha"]
+preserve_rng_state  = true
+determinism_check   = "default"
+
+[optimizer]
+betas         = [0.9, 0.95]
+eps           = 1.0e-8
+fused         = true
+lr            = 1.0e-5
+weight_decay  = 0.1
+
+[scheduler]
+cycle_lengths      = [500]
+f_max              = [1.0]
+f_min              = [0.5]
+f_start            = [0.05]
+verbosity_interval = 0
+warm_up_steps      = [1000]
+
+[trainer]
+distributed_parallelism = "fsdp"
+grad_accum_iter         = 1
+logging_iter            = 1
+max_iter                = 500
+
+[trainer.callbacks.compile_tokenizer]
+compile_after_iterations = 3
+enabled                  = false
+
+[trainer.callbacks.grad_clip]
+clip_norm    = 1.0
+force_finite = false
+
+[checkpoint]
+keys_to_skip_loading = []
+load_path            = "???"   # MISSING sentinel; supply at resume time
+save_iter            = 100
+
+[dataloader_train]
+# Routed by PATH_REMAPS["vlm"] onto the CosmosDataLoader's nested PoolPackingBatcher:
+#   max_samples_per_batch -> dataloader_train.batcher.max_batch_size
+#   max_sequence_length   -> dataloader_train.batcher.max_tokens
+max_samples_per_batch = 1
+max_sequence_length   = 16000
