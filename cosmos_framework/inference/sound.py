@@ -59,6 +59,64 @@ def create_placeholder_audio(
     return torch.zeros(1, sound_channels, sound_num_samples)  # [1,C_audio,N_samples]
 
 
+def load_conditioning_audio(
+    path: Path,
+    *,
+    sample_rate: int,
+    audio_channels: int,
+    num_samples: int,
+) -> torch.Tensor:
+    """Decode an audio file into a conditioning waveform aligned to the video.
+
+    Reads ``path`` with soundfile, resamples to ``sample_rate``, conforms the
+    channel count to ``audio_channels`` (mono->stereo duplicate, stereo->mono
+    mean), and trims or zero-pads to exactly ``num_samples`` so the audio and
+    video latent streams cover the same duration.
+
+    Returns:
+        Audio tensor of shape (1, C, N) where C == audio_channels and
+        N == num_samples, dtype float32.
+    """
+    import soundfile as sf  # type: ignore[import-not-found]
+
+    data, src_sr = sf.read(str(path), dtype="float32", always_2d=True)  # [N, C]
+    waveform = torch.from_numpy(data).transpose(0, 1).contiguous()  # [C, N]
+
+    # Resample to the tokenizer's rate. Uses scipy (a declared dependency);
+    # torchaudio is intentionally avoided as it is not a project dependency
+    # and is absent from the inference container.
+    if src_sr != sample_rate:
+        from math import gcd
+
+        import scipy.signal
+
+        g = gcd(int(src_sr), int(sample_rate))
+        up, down = int(sample_rate) // g, int(src_sr) // g
+        resampled = scipy.signal.resample_poly(waveform.numpy(), up, down, axis=-1)  # [C, N']
+        waveform = torch.from_numpy(resampled.astype("float32")).contiguous()
+
+    # Conform channels.
+    cur_channels = waveform.shape[0]
+    if cur_channels != audio_channels:
+        if cur_channels == 1 and audio_channels == 2:
+            waveform = waveform.repeat(2, 1)
+        elif cur_channels == 2 and audio_channels == 1:
+            waveform = waveform.mean(dim=0, keepdim=True)
+        else:
+            raise ValueError(
+                f"Cannot convert {cur_channels}-channel audio to {audio_channels} channels"
+            )
+
+    # Trim or zero-pad to num_samples.
+    n = waveform.shape[-1]
+    if n > num_samples:
+        waveform = waveform[:, :num_samples]
+    elif n < num_samples:
+        waveform = torch.nn.functional.pad(waveform, (0, num_samples - n))
+
+    return waveform.unsqueeze(0).to(dtype=torch.float32)  # [1, C, N]
+
+
 def inject_sound_into_batch(
     data_batch: dict[str, Any],
     audio_tensor: torch.Tensor | None,
