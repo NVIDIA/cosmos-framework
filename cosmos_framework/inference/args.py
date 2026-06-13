@@ -160,6 +160,7 @@ class ModelMode(StrEnum):
     IMAGE2IMAGE = "image2image"
     IMAGE2VIDEO = "image2video"
     VIDEO2VIDEO = "video2video"
+    AUDIO_IMAGE2VIDEO = "audio_image2video"
 
     # Action
     FORWARD_DYNAMICS = "forward_dynamics"
@@ -176,6 +177,10 @@ class ModelMode(StrEnum):
     def is_reasoner(self) -> bool:
         return self in REASONER_MODEL_MODES
 
+    @property
+    def is_sound_condition(self) -> bool:
+        return self in SOUND_CONDITION_MODEL_MODES
+
 
 # Image-output modes: ``num_frames`` defaults to 1 and the output is saved as a still image.
 _IMAGE_OUTPUT_MODES: frozenset[ModelMode] = frozenset({ModelMode.TEXT2IMAGE, ModelMode.IMAGE2IMAGE})
@@ -186,6 +191,10 @@ ACTION_MODEL_MODES: frozenset[ModelMode] = frozenset(
 )
 
 REASONER_MODEL_MODES: frozenset[ModelMode] = frozenset({ModelMode.REASONER})
+
+# Modes that condition generation on a real input audio clip (require a model
+# with ``sound_gen=True`` and a ``sound_path``).
+SOUND_CONDITION_MODEL_MODES: frozenset[ModelMode] = frozenset({ModelMode.AUDIO_IMAGE2VIDEO})
 
 
 class VisionMode(StrEnum):
@@ -513,6 +522,7 @@ class VisionDataOverrides(OverridesBase, _VisionDataBase):
 
 class SoundDataArgs(ArgsBase):
     enable_sound: bool = False
+    sound_path: ResolvedFilePath | None = None
 
 
 class SoundDataOverrides(OverridesBase):
@@ -520,8 +530,23 @@ class SoundDataOverrides(OverridesBase):
 
     enable_sound: Training[bool | None] = None
     """Enable joint video+sound generation (t2vs mode). Requires a checkpoint with sound modules."""
+    sound_path: ResolvedFilePathOrUrl | None = None
+    """Path or URL to a conditioning audio clip (e.g. .wav/.mp3/.flac). Required for
+    audio_image2video; the clip is encoded by the AVAE and used as a clean condition."""
+
+    @override
+    def download(self, output_dir: Path):
+        super().download(output_dir)
+        self.sound_path = download_file(self.sound_path, output_dir, "sound")
 
     def _build_sound_data(self, model_config: "OmniMoTModelConfig", sample_meta: SampleMeta):
+        if sample_meta.model_mode.is_sound_condition:
+            if self.sound_path is None:
+                raise ValueError(
+                    f"model_mode={sample_meta.model_mode.value} requires a `sound_path` "
+                    "(a conditioning audio clip)"
+                )
+            self.enable_sound = True
         if self.enable_sound is None:
             self.enable_sound = False
         if self.enable_sound and not model_config.sound_gen:

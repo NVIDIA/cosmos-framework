@@ -612,17 +612,29 @@ def get_sample_data(
                 create_placeholder_audio,
                 get_audio_tokenizer_info,
                 inject_sound_into_batch,
+                load_conditioning_audio,
             )
 
             audio_info = get_audio_tokenizer_info(model)
             if not audio_info.has_sound:
                 raise ValueError("enable_sound=True but model has no sound tokenizer")
-            audio_placeholder = create_placeholder_audio(
-                num_frames=sample_args.num_frames,
-                conditioning_fps=sample_args.fps,
-                audio_info=audio_info,
-            )
-            inject_sound_into_batch(out, audio_placeholder, model)
+
+            condition_sound = sample_args.sound_path is not None
+            if condition_sound:
+                num_samples = int(sample_args.num_frames / sample_args.fps * audio_info.sample_rate)
+                audio = load_conditioning_audio(
+                    Path(sample_args.sound_path),
+                    sample_rate=audio_info.sample_rate,
+                    audio_channels=getattr(audio_info.tokenizer, "audio_channels", 2),
+                    num_samples=num_samples,
+                )
+            else:
+                audio = create_placeholder_audio(
+                    num_frames=sample_args.num_frames,
+                    conditioning_fps=sample_args.fps,
+                    audio_info=audio_info,
+                )
+            inject_sound_into_batch(out, audio, model, condition_sound=condition_sound)
 
         return out
 
@@ -1062,6 +1074,23 @@ class OmniInference(Inference):
                     tokenizer_cfg.pop("revision", None)
                     tokenizer_cfg.pop("subdir", None)
                     tokenizer_cfg["tokenizer_type"] = str(checkpoint_path)
+                # AVAE source: the configured ``avae_path`` when set, else the loaded
+                # checkpoint's bundled ``sound_tokenizer/``. The inference-only
+                # ``from_checkpoint`` key (default False) forces bundled; pop it so it
+                # never reaches AVAEInterface.
+                sound_cfg = model_dict["config"].get("sound_tokenizer")
+                if sound_cfg is not None:
+                    from_checkpoint = sound_cfg.pop("from_checkpoint", False)
+                    sound_tokenizer_dir = Path(checkpoint_path) / "sound_tokenizer"
+                    if sound_tokenizer_dir.is_dir() and (from_checkpoint or not sound_cfg.get("avae_path")):
+                        from cosmos_framework.inference.common.checkpoints import (
+                            _AVAE_LEGACY_CKPT_NAME,
+                            _materialize_avae_ckpt,
+                        )
+
+                        _materialize_avae_ckpt(str(sound_tokenizer_dir))
+                        sound_cfg["bucket_name"] = ""
+                        sound_cfg["avae_path"] = str(sound_tokenizer_dir / _AVAE_LEGACY_CKPT_NAME)
                 config = Cosmos3OmniConfig(model=model_dict)
             model = Cosmos3OmniModel.from_pretrained_dcp(
                 checkpoint_path,
