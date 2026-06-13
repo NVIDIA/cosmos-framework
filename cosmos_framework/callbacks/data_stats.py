@@ -51,7 +51,6 @@ class DataStatsCallback(Callback):
 
         # Handle case where dataset_name gets batched into a list
         if isinstance(dataset_name, list):
-
             assert len(dataset_name) == 1, "dataset_name should be a list of 1"
             dataset_name = dataset_name[0]
 

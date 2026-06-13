@@ -298,24 +298,15 @@ def build_abs_pose_from_components(
 def _delta_transform_to_pose_vector(
     delta_T: np.ndarray,
     rotation_output_format: RotationConvention,
-    translation_scale: float = 1.0,
-    rotation_scale: float = 1.0,
 ) -> np.ndarray:
     """Encode a relative transform as an action vector.
 
     The shared action-vector layout is always ``[translation(3), rotation(...)]``.
-    The translation block is multiplied by ``translation_scale`` before concatenation,
-    and the rotation block is multiplied by ``rotation_scale``.
 
     Args:
         delta_T: Relative transform of shape ``(4, 4)``.
         rotation_output_format: Concrete convention used for the output rotation
             block.
-        translation_scale: Scalar multiplier applied to the translation block.
-        rotation_scale: Scalar multiplier applied to the rotation block. Used to
-            match the loss scale of the rotation block to the translation block.
-            The decoder must divide by the same factor before reconstructing the
-            rotation matrix.
 
     Returns:
         A ``float32`` action vector whose first three values are translation and
@@ -325,12 +316,11 @@ def _delta_transform_to_pose_vector(
     if delta_np.shape != (4, 4):
         raise ValueError(f"delta_T must have shape (4, 4), got {delta_np.shape}")
 
-    translation = delta_np[:3, 3] * translation_scale
+    translation = delta_np[:3, 3]
     rotation = np.asarray(
         convert_rotation(delta_np[:3, :3], input_format="matrix", output_format=rotation_output_format),
         dtype=np.float32,
     )
-    rotation = rotation * rotation_scale
     return np.concatenate([translation, rotation]).astype(np.float32)
 
 
@@ -344,19 +334,19 @@ def _pose_vector_to_delta_transform(
     """Decode an action vector back into a relative homogeneous transform.
 
     This is the inverse of `_delta_transform_to_pose_vector()` when the same
-    rotation convention and scale are used.
+    rotation convention is used. Scale arguments are provided for callers that
+    need to decode model-space pose actions before action-normalizer
+    denormalization has been applied.
 
     Args:
         pose_vector: Relative-pose action vector with layout
             ``[translation(3), rotation(...)]``.
         rotation_input_format: Concrete convention used by the rotation block.
-        translation_scale: Scalar used to undo the translation scaling applied during
-            encoding.
+        translation_scale: Scalar used to undo translation scaling in the input
+            vector.
         normalize_rotation: Whether to project the decoded rotation to a valid
             matrix before assembling the transform.
-        rotation_scale: Scalar used to undo the rotation scaling applied during
-            encoding. Must match the value used by
-            `_delta_transform_to_pose_vector()`.
+        rotation_scale: Scalar used to undo rotation scaling in the input vector.
 
     Returns:
         A relative homogeneous transform with shape ``(4, 4)`` and dtype
@@ -440,8 +430,6 @@ def pose_abs_to_rel(
     poses_abs: np.ndarray,
     rotation_format: RotationConvention = "rot9d",
     pose_convention: PoseConvention = "backward_framewise",
-    translation_scale: float = 1.0,
-    rotation_scale: float = 1.0,
 ) -> np.ndarray:
     """Convert an absolute-pose trajectory into relative-pose action vectors.
 
@@ -454,12 +442,6 @@ def pose_abs_to_rel(
         pose_convention: Pose convention:
             - ``backward_framewise``: ``delta_T = T_i^{-1} @ T_{i+1}``
             - ``backward_anchored``: ``delta_T = T_0^{-1} @ T_{i+1}``
-        translation_scale: Scalar multiplier applied to the translation block of each
-            encoded action vector.
-        rotation_scale: Scalar multiplier applied to the rotation block of each
-            encoded action vector. Use this to match the loss scale of rotation
-            and translation. `pose_rel_to_abs()` must be called with the same
-            value to invert the scaling.
 
     Returns:
         An array of shape ``(T - 1, D)`` where ``D = 3 + rotation_dim``.
@@ -481,8 +463,6 @@ def pose_abs_to_rel(
             _delta_transform_to_pose_vector(
                 delta_T,
                 rotation_output_format=rotation_format,
-                translation_scale=translation_scale,
-                rotation_scale=rotation_scale,
             )
         )
 
@@ -510,10 +490,12 @@ def pose_rel_to_abs(
             identity transform is used.
         normalize_rotation: Whether to project decoded rotations onto ``SO(3)``
             before composing them back into the trajectory.
-        translation_scale: Scalar used to undo the translation scaling applied during
-            `pose_abs_to_rel()`.
-        rotation_scale: Scalar used to undo the rotation scaling applied during
-            `pose_abs_to_rel()`. Must match the value passed there.
+        translation_scale: Scalar used to undo translation scaling in
+            ``poses_rel``. Prefer denormalizing with the dataset action
+            normalizer before calling this function.
+        rotation_scale: Scalar used to undo rotation scaling in ``poses_rel``.
+            Prefer denormalizing with the dataset action normalizer before
+            calling this function.
 
     Returns:
         Absolute poses with shape ``(T, 4, 4)`` where ``T = len(poses_rel) + 1``.

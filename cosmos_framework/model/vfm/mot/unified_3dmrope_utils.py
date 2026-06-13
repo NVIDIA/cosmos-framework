@@ -83,6 +83,8 @@ def get_3d_mrope_ids_vae_tokens(
     temporal_compression_factor: int = 4,
     base_temporal_compression_factor: int | None = None,
     start_frame_offset: int = 0,
+    temporal_positions: torch.Tensor | None = None,
+    actual_temporal_compression_factor: int | None = None,
 ) -> tuple[torch.Tensor, int | float]:
     """Generate 3D mRoPE position IDs for VAE vision tokens (image/video latents).
 
@@ -111,6 +113,11 @@ def get_3d_mrope_ids_vae_tokens(
             defaults to ``temporal_compression_factor`` (typical case where base matches actual).
         start_frame_offset: Offset added to frame indices before FPS scaling.
             Use 1 for action embeddings so they start at frame 1 instead of 0.
+        temporal_positions: Optional explicit temporal coordinates for each latent
+            frame, in source-frame / actual-temporal-compression-factor units.
+            When provided, positions can be fractional and must have shape ``(grid_t,)``.
+        actual_temporal_compression_factor: Temporal compression factor that defines
+            ``temporal_positions``. Defaults to ``temporal_compression_factor``.
 
     Returns:
         Tuple of:
@@ -124,6 +131,7 @@ def get_3d_mrope_ids_vae_tokens(
     # Enabled whenever fps is provided, including grid_t=1 (per-frame AR packs).
     # Callers that want integer positions (e.g. images) pass fps=None.
     fps_modulation_enabled = fps is not None
+    explicit_temporal_positions = temporal_positions is not None
 
     # Default base_temporal_compression_factor to temporal_compression_factor if not specified
     effective_base_tcf = (
@@ -131,8 +139,33 @@ def get_3d_mrope_ids_vae_tokens(
         if base_temporal_compression_factor is not None
         else temporal_compression_factor
     )
+    effective_actual_tcf = (
+        actual_temporal_compression_factor
+        if actual_temporal_compression_factor is not None
+        else temporal_compression_factor
+    )
 
-    if fps_modulation_enabled:
+    if explicit_temporal_positions:
+        assert temporal_positions is not None
+        if temporal_positions.ndim != 1 or temporal_positions.shape[0] != grid_t:
+            raise ValueError(
+                f"temporal_positions must have shape (grid_t,), got {tuple(temporal_positions.shape)} for {grid_t=}."
+            )
+        # Explicit coordinates are in latent-time units. Convert nonzero start-frame
+        # offsets from source-frame units into the same coordinate space.
+        frame_indices = temporal_positions.to(dtype=torch.float32)  # [grid_t]
+        if start_frame_offset != 0:
+            frame_indices = frame_indices + start_frame_offset / effective_actual_tcf  # [grid_t]
+
+        if fps_modulation_enabled:
+            scaled_t = (
+                frame_indices * effective_actual_tcf * (base_fps / effective_base_tcf) / fps + temporal_offset
+            )  # [grid_t]
+        else:
+            scaled_t = frame_indices + temporal_offset  # [grid_t]
+
+        t_index = scaled_t.view(-1, 1).expand(-1, grid_h * grid_w).flatten()  # [grid_t*grid_h*grid_w]
+    elif fps_modulation_enabled:
         # FPS modulation: scale temporal indices to reflect real time
         # tps = tokens per second (fps divided by temporal compression)
         # base_tps = base tokens per second
@@ -147,7 +180,6 @@ def get_3d_mrope_ids_vae_tokens(
 
         # Expand temporal indices for all spatial positions
         t_index = scaled_t.view(-1, 1).expand(-1, grid_h * grid_w).flatten()  # [grid_t*grid_h*grid_w]
-        t_dtype = torch.float32
     else:
         # No FPS modulation: use integer frame indices
         # Apply start_frame_offset for cross-modality alignment (e.g., action tokens start at frame 1)
@@ -158,16 +190,16 @@ def get_3d_mrope_ids_vae_tokens(
             + int(temporal_offset)
             + start_frame_offset
         )
-        t_dtype = torch.long
 
     # Height axis: for each temporal frame, cycles through h values, each repeated w times
+    device = t_index.device
     h_index = (
-        torch.arange(grid_h, dtype=torch.long).view(1, -1, 1).expand(grid_t, -1, grid_w).flatten()
+        torch.arange(grid_h, dtype=torch.long, device=device).view(1, -1, 1).expand(grid_t, -1, grid_w).flatten()
     )  # [grid_t*grid_h*grid_w]
 
     # Width axis: for each temporal frame and height, cycles through w values
     w_index = (
-        torch.arange(grid_w, dtype=torch.long).view(1, 1, -1).expand(grid_t, grid_h, -1).flatten()
+        torch.arange(grid_w, dtype=torch.long, device=device).view(1, 1, -1).expand(grid_t, grid_h, -1).flatten()
     )  # [grid_t*grid_h*grid_w]
 
     if not reset_spatial_indices:
@@ -177,9 +209,9 @@ def get_3d_mrope_ids_vae_tokens(
         w_index = w_index + spatial_offset  # [grid_t*grid_h*grid_w]
 
     # Stack into (3, T*H*W) tensor
-    # Note: When FPS modulation is enabled, temporal axis is float, spatial axes are long
-    # We convert h_index and w_index to the same dtype as t_index for stacking
-    if fps_modulation_enabled:
+    # Note: When FPS modulation or explicit temporal positions are enabled, temporal
+    # axis is float. Convert h_index and w_index to the same dtype for stacking.
+    if fps_modulation_enabled or explicit_temporal_positions:
         mrope_ids = torch.stack(
             [t_index, h_index.to(torch.float32), w_index.to(torch.float32)], dim=0
         )  # [3,grid_t*grid_h*grid_w]

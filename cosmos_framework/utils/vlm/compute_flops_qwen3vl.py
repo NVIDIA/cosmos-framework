@@ -8,7 +8,7 @@ This script provides utilities to calculate the theoretical FLOPs for a Qwen3VL 
 given the model configuration and input specifications (total tokens, visual tokens, etc.).
 
 Usage:
-    from cosmos_framework.utils.vlm.compute_flops_qwen3vl import compute_qwen3vl_flops
+    from cosmos_framework.utils.scripts.compute_qwen3vl_flops import compute_qwen3vl_flops
 
     flops = compute_qwen3vl_flops(
         num_text_layers=32,
@@ -480,7 +480,7 @@ def compute_qwen3vl_flops(
         flops_breakdown["vision_encoder"] = 0
 
     # Embedding layer FLOPs
-
+    # NOTE: Only text tokens need embeddings. Visual tokens are already embedded by vision encoder.
     text_tokens = total_tokens - visual_tokens
     if include_embeddings:
         # Embedding lookup: typically counted as 0 or hidden_size operations per token

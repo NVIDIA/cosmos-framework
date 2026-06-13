@@ -376,8 +376,10 @@ class FluxVAEInterface(VideoTokenizerInterface):
         chunk_duration: int = 1,
         spatial_compression_factor: int = 8,
         temporal_compression_factor: int = 1,
+        causal: bool = True,
     ):
         super().__init__(object_store_credential_path_pretrained=object_store_credential_path_pretrained)
+        self._causal = causal
 
         # Load the Flux VAE model, passing backend_args for S3 support
         vae_path_full = f"s3://{bucket_name}/{vae_path}"

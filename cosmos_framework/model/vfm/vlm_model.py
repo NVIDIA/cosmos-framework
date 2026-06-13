@@ -1,5 +1,6 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: OpenMDW-1.1
+
 """VLMModel: config-instantiable ImaginaireModel for VLM training.
 
 Config usage (in vfm/configs/base/vlm/defaults/model.py):
@@ -124,7 +125,7 @@ def _get_overlay_config(model_type: str) -> tuple[list[str], Callable[[str], boo
 
 def _get_vision_encoder_modules(model: nn.Module, model_type: str) -> list:
     if model_type in _QWEN_VL_TYPES:
-
+        # NOTE: intentional semantic change from `model_utils.get_model_vision_encoder`,
         # which returns only [patch_embed, blocks]. Qwen3-VL adds a learnable `pos_embed`
         # (nn.Embedding — see qwen3_vl.py Qwen3VLVisionModel); leaving it trainable while
         # freezing the rest of the vision encoder contradicts the intent of
@@ -420,6 +421,7 @@ class VLMModel(ImaginaireModel):
             # model.language_model.*, so no temp-dir remap is needed.
             # Mirrors legacy vlm/train.py:221-233 semantics.
             llm_path = policy.backbone.pretrained_weights.backbone_path
+
             if llm_path:
                 overlay_skip_patterns, is_lm_key = _get_overlay_config(hf_model.hf_config.model_type)
                 llm_local_path = maybe_download_hf_model_from_s3(

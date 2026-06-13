@@ -9,7 +9,11 @@ import pytest
 import torch
 
 from cosmos_framework.data.vfm.action.json_formatter import ActionPromptJsonFormatter
-from cosmos_framework.data.vfm.action.transforms import ActionTransformPipeline
+from cosmos_framework.data.vfm.action.transforms import (
+    ActionTransformPipeline,
+    reflection_pad_to_target,
+    remove_reflection_padding,
+)
 from cosmos_framework.data.vfm.augmentors.duration_fps_text_timestamps import DurationFPSTextTimeStamps
 from cosmos_framework.data.vfm.augmentors.resolution_text_info import ResolutionTextInfo
 
@@ -58,6 +62,24 @@ def test_action_prompt_json_formatter_builds_requested_structure() -> None:
         "aspect_ratio": "4,3",
     }
     assert "additional_view_description" not in result
+
+
+@pytest.mark.L0
+def test_video_padding_round_trips_to_unpadded_region() -> None:
+    video = torch.arange(3 * 2 * 4 * 5, dtype=torch.float32).reshape(3, 2, 4, 5)  # [C,T,H,W]
+    data_dict = {"video": video}
+
+    padded = reflection_pad_to_target(
+        data_dict,
+        keys=["video"],
+        keep_aspect_ratio=True,
+        target_w=8,
+        target_h=6,
+    )
+    round_tripped = remove_reflection_padding(padded["video"], padded["image_size"])  # [C,T,H,W]
+
+    assert padded["video"].shape == (3, 2, 6, 8)
+    torch.testing.assert_close(round_tripped, video)
 
 
 @pytest.mark.L0

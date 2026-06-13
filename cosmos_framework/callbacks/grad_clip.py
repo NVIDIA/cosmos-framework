@@ -132,7 +132,7 @@ def _clip_grad(
         # `torch.distributed._tensor.ops.math_ops._NormPartial`.
         # We can simply reduce the DTensor to get the total norm in this
         # tensor's process group and then convert it to a local tensor.
-
+        # NOTE: It has two purposes:
         # 1. to make sure the total norm is computed correctly when PP is used (see below)
         # 2. to return a reduced mesh_norm tensor whose .item() would return the correct value
         if isinstance(mesh_norm, DTensor):

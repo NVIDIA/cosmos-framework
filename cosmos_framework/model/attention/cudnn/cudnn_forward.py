@@ -19,7 +19,6 @@ from cosmos_framework.model.attention.utils import get_arch_tag
 from cosmos_framework.model.attention.utils.safe_ops import log
 from cosmos_framework.model.attention.utils.safe_ops.functools import lru_cache
 
-
 # Force using padded mask as a potential workaround for failing use cases
 FORCE_PADDED_MASK = False
 
@@ -316,7 +315,7 @@ def cudnn_sdpa_fwd_generate_op(
     handle = cudnn.create_handle()
 
     def cudnn_operation(q: Tensor, k: Tensor, v: Tensor, output: Tensor, lse: Tensor | None = None):
-
+        # NOTE: This is INCREDIBLY important to do -- this is what wasted days of my time
         # with random NaNs and illegal memory accesses and things of that nature.
         stream = torch.cuda.current_stream(q.device)
         cudnn.set_stream(handle=handle, stream=stream.cuda_stream)

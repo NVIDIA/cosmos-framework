@@ -196,14 +196,12 @@ def test_pose_abs_to_rel_roundtrips_through_pose_rel_to_abs(
         poses_abs,
         rotation_format=rotation_format,
         pose_convention=pose_convention,
-        translation_scale=2.5,
     )
     reconstructed = pose_rel_to_abs(
         poses_rel,
         rotation_format=rotation_format,
         pose_convention=pose_convention,
         initial_pose=poses_abs[0],
-        translation_scale=2.5,
     )
 
     np.testing.assert_allclose(reconstructed, poses_abs, atol=1e-5)

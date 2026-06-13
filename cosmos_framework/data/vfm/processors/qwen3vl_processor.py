@@ -71,7 +71,7 @@ class Qwen3VLProcessor(
         num_video, video_fps, video_total_num_frames, video_frames_indices = maybe_parse_video_content(messages)
         if num_video > 0:
             # Here we add the args to avoid the error:
-            # File "/usr/local/lib/python3.12/dist-packages/transformers/video_processing_utils.py", line 321, in _decode_and_sample_videos
+            # File "/invalid_dir", line 321, in _decode_and_sample_videos
             #     raise ValueError(
             # ValueError: Sampling frames from a list of images is not supported! Set `do_sample_frames=False`.
             kwargs["videos_kwargs"] = dict(do_sample_frames=False)
@@ -178,7 +178,7 @@ if __name__ == "__main__":
             "content": [
                 {
                     "type": "video",
-                    "video": ["https://qianwen-res.oss-cn-beijing.aliyuncs.com/Qwen-VL/assets/demo.jpeg"] * 4,
+                    "video": ["https://invalid_url"] * 4,
                     "fps": 12,
                 },
                 {"type": "text", "text": "What is the capital of France?"},

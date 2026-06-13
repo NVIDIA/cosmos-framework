@@ -1,5 +1,6 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: OpenMDW-1.1
+
 """HFExportCallback: export VLM DCP checkpoints to HuggingFace safetensors format.
 
 Design notes
@@ -137,11 +138,11 @@ class HFExportCallback(Callback):
         if not isinstance(model, VLMModel):
             # The legacy vlm/train.py path passes model_parts: list[nn.Module] (raw HF
             # models without the VLMModel attribute structure).  HF export requires the
-            # VLMModel wrapper, which is only available via the unified cosmos_framework/scripts/train.py path.
+            # VLMModel wrapper, which is only available via the unified scripts/train.py path.
             if isinstance(model, list):
                 log.warning(
                     "[HFExportCallback] Received model_parts (list) instead of VLMModel. "
-                    "HF export requires the unified training path (cosmos_framework/scripts/train.py). Skipping."
+                    "HF export requires the unified training path (scripts/train.py). Skipping."
                 )
             else:
                 log.warning(

@@ -291,6 +291,78 @@ class RQBottleneck(nn.Module):
 
         self.commitment_loss = commitment_loss
 
+    def to_code_shape(self, x: torch.Tensor) -> torch.Tensor:
+        """Reshape dense latent features to code-grid feature vectors."""
+        embed_dim = self.codebooks[0].weight.shape[-1]
+        if x.ndim == 2 and x.shape[-1] == embed_dim:
+            return x  # [N,E]
+
+        if x.ndim != 4 or tuple(x.shape[1:]) != tuple(self.latent_shape):
+            raise ValueError(
+                f"Expected latent shape [B,{tuple(self.latent_shape)}] or [N,{embed_dim}], got {tuple(x.shape)}."
+            )
+
+        batch_size = x.shape[0]
+        latent_h, latent_w, latent_dim = [int(dim) for dim in self.latent_shape]
+        code_h, code_w, _ = [int(dim) for dim in self.code_shape]
+        height_factor = latent_h // code_h
+        width_factor = latent_w // code_w
+
+        x = x.reshape(batch_size, code_h, height_factor, code_w, width_factor, latent_dim)  # [B,h,Hs,w,Ws,D]
+        x = x.permute(0, 1, 3, 2, 4, 5).contiguous()  # [B,h,w,Hs,Ws,D]
+        return x.reshape(batch_size, code_h, code_w, embed_dim)  # [B,h,w,E]
+
+    def to_latent_shape(self, embeds: torch.Tensor) -> torch.Tensor:
+        """Reshape code-grid embeddings back to dense latent layout."""
+        embed_dim = self.codebooks[0].weight.shape[-1]
+        if embeds.ndim == 2 and embeds.shape[-1] == embed_dim:
+            return embeds  # [N,E]
+
+        code_h, code_w, _ = [int(dim) for dim in self.code_shape]
+        if embeds.ndim != 4 or tuple(embeds.shape[1:3]) != (code_h, code_w) or embeds.shape[-1] != embed_dim:
+            raise ValueError(
+                f"Expected code embedding shape [B,{code_h},{code_w},{embed_dim}] or [N,{embed_dim}], "
+                f"got {tuple(embeds.shape)}."
+            )
+
+        batch_size = embeds.shape[0]
+        latent_h, latent_w, latent_dim = [int(dim) for dim in self.latent_shape]
+        height_factor = latent_h // code_h
+        width_factor = latent_w // code_w
+
+        embeds = embeds.reshape(batch_size, code_h, code_w, height_factor, width_factor, latent_dim)  # [B,h,w,Hs,Ws,D]
+        embeds = embeds.permute(0, 1, 3, 2, 4, 5).contiguous()  # [B,h,Hs,w,Ws,D]
+        return embeds.reshape(batch_size, latent_h, latent_w, latent_dim)  # [B,H,W,D]
+
+    def _embed_code_slices(self, code: torch.Tensor) -> list[torch.Tensor]:
+        """Look up per-depth codebook embeddings without summing codebook depth."""
+        if code.shape[-1] != self.code_shape[-1]:
+            raise ValueError(f"Expected code depth {self.code_shape[-1]}, got code shape {tuple(code.shape)}.")
+
+        code = code.long()  # [...,Dq]
+        code_slices = torch.chunk(code, chunks=code.shape[-1], dim=-1)  # list[[...,1]]
+
+        if self.shared_codebook:
+            embeds = [self.codebooks[0].embed(code_slice) for code_slice in code_slices]  # list[[...,1,E]]
+        else:
+            embeds = [
+                self.codebooks[i].embed(code_slice) for i, code_slice in enumerate(code_slices)
+            ]  # list[[...,1,E]]
+
+        return embeds
+
+    def get_codes_from_indices(self, indices: torch.Tensor) -> torch.Tensor:
+        """Decode flat residual-quantizer indices to summed embedding vectors."""
+        if indices.ndim == 1:
+            if self.code_shape[-1] != 1:
+                raise ValueError(
+                    f"Flat indices require one codebook, but this RQ bottleneck has depth {self.code_shape[-1]}."
+                )
+            indices = indices.unsqueeze(-1)  # [N,1]
+
+        embeds = self._embed_code_slices(indices)  # list[[...,1,E]]
+        return torch.cat(embeds, dim=-2).sum(-2)  # [...,E]
+
     def quantize(self, x: torch.Tensor) -> tuple[list[torch.Tensor], torch.Tensor]:
         """Quantize input using residual quantization.
 
@@ -365,22 +437,22 @@ class RQBottleneck(nn.Module):
         """Decode codes to embeddings.
 
         Args:
-            code: Code tensor of shape (B, h, w, d).
+            code: Code tensor of shape (B, h, w, d) or flat shape (N, d).
 
         Returns:
-            Embedded features of shape (B, H, W, embed_dim).
+            Embedded features of shape (B, H, W, D) or flat shape (N, embed_dim).
         """
-        assert code.shape[1:] == self.code_shape
+        if code.ndim == 2:
+            return self.get_codes_from_indices(code)  # [N,E]
 
-        code_slices = torch.chunk(code, chunks=code.shape[-1], dim=-1)
+        if tuple(code.shape[1:]) != tuple(self.code_shape):
+            raise ValueError(
+                f"Expected code shape [B,{tuple(self.code_shape)}] or [N,{self.code_shape[-1]}], "
+                f"got {tuple(code.shape)}."
+            )
 
-        if self.shared_codebook:
-            embeds = [self.codebooks[0].embed(code_slice) for i, code_slice in enumerate(code_slices)]
-        else:
-            embeds = [self.codebooks[i].embed(code_slice) for i, code_slice in enumerate(code_slices)]
-
-        embeds = torch.cat(embeds, dim=-2).sum(-2)
-        embeds = self.to_latent_shape(embeds)
+        embeds = self.get_codes_from_indices(code)  # [B,h,w,E]
+        embeds = self.to_latent_shape(embeds)  # [B,H,W,D]
 
         return embeds
 
@@ -397,18 +469,11 @@ class RQBottleneck(nn.Module):
         Returns:
             Tuple of (embedded features, None).
         """
-        assert code.shape[-1] == self.code_shape[-1]
-
-        code_slices = torch.chunk(code, chunks=code.shape[-1], dim=-1)
-
-        if self.shared_codebook:
-            embeds = [self.codebooks[0].embed(code_slice) for i, code_slice in enumerate(code_slices)]
-        else:
-            embeds = [self.codebooks[i].embed(code_slice) for i, code_slice in enumerate(code_slices)]
+        embeds = self._embed_code_slices(code)  # list[[...,1,E]]
 
         if to_latent_shape:
-            embeds = [self.to_latent_shape(embed.squeeze(-2)).unsqueeze(-2) for embed in embeds]
-        embeds = torch.cat(embeds, dim=-2)
+            embeds = [self.to_latent_shape(embed.squeeze(-2)).unsqueeze(-2) for embed in embeds]  # list[[B,H,W,1,D]]
+        embeds = torch.cat(embeds, dim=-2)  # [...,Dq,E] or [B,H,W,Dq,D]
 
         return embeds, None
 
@@ -429,25 +494,23 @@ class RQBottleneck(nn.Module):
         Returns:
             Quantized feature map.
         """
-        assert code.shape[1:] == self.code_shape
-        assert code_idx < code.shape[-1]
+        if tuple(code.shape[1:]) != tuple(self.code_shape):
+            raise ValueError(f"Expected code shape [B,{tuple(self.code_shape)}], got {tuple(code.shape)}.")
+        if code_idx >= code.shape[-1]:
+            raise ValueError(f"code_idx must be smaller than code depth {code.shape[-1]}, got {code_idx}.")
 
         B, h, w, _ = code.shape
 
-        code_slices = torch.chunk(code, chunks=code.shape[-1], dim=-1)
-        if self.shared_codebook:
-            embeds = [self.codebooks[0].embed(code_slice) for i, code_slice in enumerate(code_slices)]
-        else:
-            embeds = [self.codebooks[i].embed(code_slice) for i, code_slice in enumerate(code_slices)]
+        embeds = self._embed_code_slices(code)  # list[[B,h,w,1,E]]
 
         if decode_type == "select":
-            embeds = embeds[code_idx].view(B, h, w, -1)
+            embeds = embeds[code_idx].view(B, h, w, -1)  # [B,h,w,E]
         elif decode_type == "add":
-            embeds = torch.cat(embeds[: code_idx + 1], dim=-2).sum(-2)
+            embeds = torch.cat(embeds[: code_idx + 1], dim=-2).sum(-2)  # [B,h,w,E]
         else:
             raise NotImplementedError(f"{decode_type} is not implemented in partial decoding")
 
-        embeds = self.to_latent_shape(embeds)
+        embeds = self.to_latent_shape(embeds)  # [B,H,W,D]
 
         return embeds
 
@@ -468,30 +531,30 @@ class RQBottleneck(nn.Module):
         Returns:
             Tuple of (soft codes, hard codes).
         """
-        x = self.to_code_shape(x)
+        x = self.to_code_shape(x)  # [N,E] or [B,h,w,E]
 
-        residual_feature = x.detach().clone()
+        residual_feature = x.detach().clone()  # [N,E] or [B,h,w,E]
         soft_code_list = []
         code_list = []
 
         n_codebooks = self.code_shape[-1]
         for i in range(n_codebooks):
             codebook = self.codebooks[i]
-            distances = codebook.compute_distances(residual_feature)
-            soft_code = F.softmax(-distances / temp, dim=-1)
+            distances = codebook.compute_distances(residual_feature)  # [N,K] or [B,h,w,K]
+            soft_code = F.softmax(-distances / temp, dim=-1)  # [N,K] or [B,h,w,K]
 
             if stochastic:
-                soft_code_flat = soft_code.reshape(-1, soft_code.shape[-1])
-                code = torch.multinomial(soft_code_flat, 1)
-                code = code.reshape(*soft_code.shape[:-1])
+                soft_code_flat = soft_code.reshape(-1, soft_code.shape[-1])  # [M,K]
+                code = torch.multinomial(soft_code_flat, 1)  # [M,1]
+                code = code.reshape(*soft_code.shape[:-1])  # [N] or [B,h,w]
             else:
-                code = distances.argmin(dim=-1)
-            quants = codebook.embed(code)
-            residual_feature -= quants
+                code = distances.argmin(dim=-1)  # [N] or [B,h,w]
+            quants = codebook.embed(code)  # [N,E] or [B,h,w,E]
+            residual_feature -= quants  # [N,E] or [B,h,w,E]
 
             code_list.append(code.unsqueeze(-1))
             soft_code_list.append(soft_code.unsqueeze(-2))
 
-        code = torch.cat(code_list, dim=-1)
-        soft_code = torch.cat(soft_code_list, dim=-2)
+        code = torch.cat(code_list, dim=-1)  # [N,Dq] or [B,h,w,Dq]
+        soft_code = torch.cat(soft_code_list, dim=-2)  # [N,Dq,K] or [B,h,w,Dq,K]
         return soft_code, code

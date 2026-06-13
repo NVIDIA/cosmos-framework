@@ -53,13 +53,13 @@ def slice_data_batch(
     data_batch: dict[str, Any],
     start: int,
     limit: int,
-    multi_item_fields: Iterable[str] = ("image", "video", "image_size"),
+    multi_item_fields: Iterable[str] = ("image", "images", "video", "videos", "image_size"),
 ) -> dict[str, Any]:
     """Slice a data batch based on the start and limit indices.
 
     For most fields, the slice ``[start:limit]`` is applied directly along the
-    sample dimension. For fields listed in ``multi_item_fields`` (e.g. ``image``
-    and ``video``), each sample may contribute multiple visual items that are
+    sample dimension. For fields listed in ``multi_item_fields`` (e.g. ``image``,
+    ``images``, ``video``, and ``videos``), each sample may contribute multiple visual items that are
     concatenated in flat order. In that case, when
     ``num_vision_items_per_sample`` is present in ``data_batch``, the slice is
     expanded to cover all visual items belonging to the requested samples.

@@ -154,8 +154,6 @@ class EveryNDrawSample(EveryN):
         tag = "ema" if self.is_ema else "reg"
 
         log.debug("starting data and condition model", rank0_only=False)
-
-
         data_clean = model.get_data_and_condition(data_batch)
         raw_data = data_clean.raw_state_vision
         x0 = data_clean.x0_tokens_vision
@@ -185,7 +183,6 @@ class EveryNDrawSample(EveryN):
             log.debug(f"done denoising {sigma}", rank0_only=False)
             mse_loss = distributed.dist_reduce_tensor(F.mse_loss(sample, x0))
             mse_loss_list.append(mse_loss)
-
             if hasattr(model, "decode"):
                 sample = model.decode(sample)
             to_show.append(sample.float().cpu())
@@ -316,7 +313,6 @@ class EveryNDrawSample(EveryN):
             for sample_idx in range(data_clean.batch_size):
                 n_vis = num_items[sample_idx]
                 # First item(s) are condition, last item is generation target
-
                 # but we need to support multiple conditions per sample in the future. Current code
                 # can handle this without throwing an error.
                 condition_images.append(raw_data[vis_offset])  # source image (1, C, 1, H, W)

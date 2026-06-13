@@ -18,6 +18,7 @@ the output format expected by the main training pipeline:
 
 from __future__ import annotations
 
+import json
 import random
 
 import torch
@@ -26,13 +27,12 @@ from PIL import Image
 
 from cosmos_framework.data.imaginaire.webdataset.augmentors.augmentor import Augmentor
 from cosmos_framework.utils import log
-from cosmos_framework.data.vfm.sequence_packing import SequencePlan
 
 
 class ExtractImageEditingConversation(Augmentor):
     """Extract and validate image editing conversation from standard annotation format.
 
-    This augmentor processes the cosmos-interleaved conversation format for image editing:
+    This augmentor processes cosmos-interleaved conversation data for image editing:
     - Validates that the conversation has exactly one round (user + assistant)
     - User message must contain at least one image and text instruction
     - Assistant message must contain exactly one image (the edited result)
@@ -42,6 +42,9 @@ class ExtractImageEditingConversation(Augmentor):
         - texts: Dict containing "content" with conversation data
         - mllm_media_list: Dict mapping image keys to PIL images (for understanding)
         - diffusion_media_list: Dict mapping image keys to PIL images (for diffusion/VAE)
+        - optional structured instruction key: Dict, JSON string, or JSON bytes containing
+          text_json.content and gemini_rewrite. When configured, gemini_rewrite is used as
+          the training prompt and text_json.content is used only to recover image references.
 
     Output Format (added to data_dict):
         - source_image: PIL.Image (the input image for editing)
@@ -53,10 +56,124 @@ class ExtractImageEditingConversation(Augmentor):
         self,
         input_keys: list | None = None,
         max_round: int = 1,
+        instruction_key: str = "texts",
+        conversation_key: str = "texts",
+        structured_instruction_field: str | None = None,
         args: dict | None = None,
     ) -> None:
         super().__init__(input_keys or [], None, args)
-        self.max_round = max_round
+        self.max_round: int = max_round
+        self.instruction_key: str = instruction_key
+        self.conversation_key: str = conversation_key
+        self.structured_instruction_field: str | None = structured_instruction_field
+
+    def _decode_json_text(self, text: str, payload_name: str, sample_key: str) -> dict | None:
+        try:
+            payload = json.loads(text)
+        except json.JSONDecodeError as e:
+            log.warning(
+                f"Error decoding {payload_name} JSON: {sample_key}, {str(e)}",
+                rank0_only=False,
+            )
+            return None
+
+        if not isinstance(payload, dict):
+            log.warning(
+                f"Decoded {payload_name} is not a dict: {sample_key}, got {type(payload)}",
+                rank0_only=False,
+            )
+            return None
+        return payload
+
+    def _decode_payload(self, payload: object, payload_name: str, sample_key: str) -> dict | None:
+        if isinstance(payload, dict):
+            return payload
+
+        if isinstance(payload, str):
+            return self._decode_json_text(payload, payload_name, sample_key)
+
+        if isinstance(payload, (bytes, bytearray)):
+            try:
+                text = bytes(payload).decode("utf-8")
+            except UnicodeDecodeError as e:
+                log.warning(
+                    f"Error decoding {payload_name} bytes as UTF-8: {sample_key}, {str(e)}",
+                    rank0_only=False,
+                )
+                return None
+            return self._decode_json_text(text, payload_name, sample_key)
+
+        log.warning(
+            f"Unsupported {payload_name} payload type: {sample_key}, got {type(payload)}",
+            rank0_only=False,
+        )
+        return None
+
+    def _get_instruction_payload(self, data_dict: dict, sample_key: str) -> dict | None:
+        payload = data_dict.get(self.instruction_key)
+        if payload is None:
+            log.warning(
+                f"{self.instruction_key} not found in data_dict: {sample_key}",
+                rank0_only=False,
+            )
+            return None
+        return self._decode_payload(payload, self.instruction_key, sample_key)
+
+    def _get_conversation_payload(
+        self,
+        data_dict: dict,
+        instruction_payload: dict,
+        sample_key: str,
+    ) -> dict | None:
+        if self.conversation_key == self.instruction_key:
+            return instruction_payload
+
+        if self.conversation_key in data_dict:
+            return self._decode_payload(data_dict[self.conversation_key], self.conversation_key, sample_key)
+
+        nested_payload = instruction_payload.get(self.conversation_key)
+        if nested_payload is None:
+            log.warning(
+                f"{self.conversation_key} not found in {self.instruction_key}: {sample_key}",
+                rank0_only=False,
+            )
+            return None
+        return self._decode_payload(nested_payload, f"{self.instruction_key}.{self.conversation_key}", sample_key)
+
+    def _get_structured_instruction(self, instruction_payload: dict, sample_key: str) -> str | None:
+        if self.structured_instruction_field is None:
+            return None
+
+        rewrite_error = instruction_payload.get("rewrite_error")
+        if rewrite_error is not None:
+            log.warning(
+                f"Structured instruction rewrite_error is non-null: {sample_key}, {rewrite_error}",
+                rank0_only=False,
+            )
+            return None
+
+        structured_payload = instruction_payload.get(self.structured_instruction_field)
+        if not isinstance(structured_payload, dict):
+            log.warning(
+                f"{self.structured_instruction_field} missing or not a dict: {sample_key}",
+                rank0_only=False,
+            )
+            return None
+
+        edit_type = structured_payload.get("edit_type")
+        structured_instruction = structured_payload.get("structured_instruction")
+        if not isinstance(edit_type, str) or not edit_type:
+            log.warning(f"Structured instruction edit_type missing: {sample_key}", rank0_only=False)
+            return None
+        if not isinstance(structured_instruction, dict) or not structured_instruction:
+            log.warning(f"Structured instruction body missing: {sample_key}", rank0_only=False)
+            return None
+
+        prompt = {
+            "edit_type": edit_type,
+            "structured_instruction": structured_instruction,
+        }
+        return json.dumps(prompt, ensure_ascii=False)
 
     def __call__(self, data_dict: dict) -> dict | None:
         """Extract image editing conversation.
@@ -69,23 +186,30 @@ class ExtractImageEditingConversation(Augmentor):
             or None if the data is invalid.
         """
         # Validate required keys
-        for required_key in ["mllm_media_list", "diffusion_media_list", "texts"]:
+        sample_key = data_dict.get("__key__", "unknown")
+        for required_key in ["diffusion_media_list", self.instruction_key]:
             if required_key not in data_dict:
                 log.warning(
-                    f"{required_key} not found in data_dict: {data_dict.get('__key__', 'unknown')}",
+                    f"{required_key} not found in data_dict: {sample_key}",
                     rank0_only=False,
                 )
                 return None
 
-        mllm_media_list = data_dict["mllm_media_list"]
         diffusion_media_list = data_dict["diffusion_media_list"]
+        instruction_payload = self._get_instruction_payload(data_dict, sample_key)
+        if instruction_payload is None:
+            return None
+        conversation_payload = self._get_conversation_payload(data_dict, instruction_payload, sample_key)
+        if conversation_payload is None:
+            return None
+        conversation_content_key = f"{self.conversation_key}.content"
 
         # Get conversation content
         try:
-            texts_content = data_dict["texts"].get("content")
+            texts_content = conversation_payload.get("content")
             if texts_content is None:
                 log.warning(
-                    f"texts.content is None: {data_dict.get('__key__', 'unknown')}",
+                    f"{conversation_content_key} is None: {sample_key}",
                     rank0_only=False,
                 )
                 return None
@@ -99,13 +223,13 @@ class ExtractImageEditingConversation(Augmentor):
                     selected_conversations = texts_content
             else:
                 log.warning(
-                    f"Unexpected texts.content format: {data_dict.get('__key__', 'unknown')}",
+                    f"Unexpected {conversation_content_key} format: {sample_key}",
                     rank0_only=False,
                 )
                 return None
         except Exception as e:
             log.warning(
-                f"Error accessing texts.content: {data_dict.get('__key__', 'unknown')}, {str(e)}",
+                f"Error accessing {conversation_content_key}: {sample_key}, {str(e)}",
                 rank0_only=False,
             )
             return None
@@ -115,15 +239,14 @@ class ExtractImageEditingConversation(Augmentor):
         if len(selected_conversations) > 2:
             log.warning(
                 f"Multi-round conversation found ({len(selected_conversations)} messages), "
-                f"keeping only first round: {data_dict.get('__key__', 'unknown')}",
+                f"keeping only first round: {sample_key}",
                 rank0_only=False,
             )
             selected_conversations = selected_conversations[:2]
 
         if len(selected_conversations) < 2:
             log.warning(
-                f"Expected at least 2 messages (user + assistant), got {len(selected_conversations)}: "
-                f"{data_dict.get('__key__', 'unknown')}",
+                f"Expected at least 2 messages (user + assistant), got {len(selected_conversations)}: {sample_key}",
                 rank0_only=False,
             )
             return None
@@ -134,14 +257,14 @@ class ExtractImageEditingConversation(Augmentor):
 
         if user_msg.get("role") != "user":
             log.warning(
-                f"First message role is not 'user': {data_dict.get('__key__', 'unknown')}",
+                f"First message role is not 'user': {sample_key}",
                 rank0_only=False,
             )
             return None
 
         if assistant_msg.get("role") != "assistant":
             log.warning(
-                f"Second message role is not 'assistant': {data_dict.get('__key__', 'unknown')}",
+                f"Second message role is not 'assistant': {sample_key}",
                 rank0_only=False,
             )
             return None
@@ -167,24 +290,29 @@ class ExtractImageEditingConversation(Augmentor):
 
         if user_image_key is None:
             log.warning(
-                f"No image found in user message: {data_dict.get('__key__', 'unknown')}",
+                f"No image found in user message: {sample_key}",
                 rank0_only=False,
             )
             return None
 
-        editing_instruction = " ".join(user_text_parts).strip()
-        if not editing_instruction:
-            log.warning(
-                f"No text instruction found in user message: {data_dict.get('__key__', 'unknown')}",
-                rank0_only=False,
-            )
-            return None
+        if self.structured_instruction_field is None:
+            editing_instruction = " ".join(user_text_parts).strip()
+            if not editing_instruction:
+                log.warning(
+                    f"No text instruction found in user message: {sample_key}",
+                    rank0_only=False,
+                )
+                return None
+        else:
+            editing_instruction = self._get_structured_instruction(instruction_payload, sample_key)
+            if editing_instruction is None:
+                return None
 
         # Extract assistant content: must have exactly one image
         assistant_content = assistant_msg.get("content", [])
         if isinstance(assistant_content, str):
             log.warning(
-                f"Assistant content is text-only (no image): {data_dict.get('__key__', 'unknown')}",
+                f"Assistant content is text-only (no image): {sample_key}",
                 rank0_only=False,
             )
             return None
@@ -199,7 +327,7 @@ class ExtractImageEditingConversation(Augmentor):
 
         if assistant_image_key is None:
             log.warning(
-                f"No image found in assistant message: {data_dict.get('__key__', 'unknown')}",
+                f"No image found in assistant message: {sample_key}",
                 rank0_only=False,
             )
             return None
@@ -208,7 +336,7 @@ class ExtractImageEditingConversation(Augmentor):
         for media_key in [user_image_key, assistant_image_key]:
             if media_key not in diffusion_media_list:
                 log.warning(
-                    f"Image {media_key} not found in diffusion_media_list: {data_dict.get('__key__', 'unknown')}",
+                    f"Image {media_key} not found in diffusion_media_list: {sample_key}",
                     rank0_only=False,
                 )
                 return None
@@ -225,7 +353,7 @@ class ExtractImageEditingConversation(Augmentor):
 
         if source_image is None or target_image is None:
             log.warning(
-                f"Source or target image is None: {data_dict.get('__key__', 'unknown')}",
+                f"Source or target image is None: {sample_key}",
                 rank0_only=False,
             )
             return None
@@ -329,6 +457,8 @@ class ImageEditingToTrainingFormat(Augmentor):
             # by GenerationDataClean.num_vision_items_per_sample (set in get_data_and_condition).
             # In pack_input_sequence, all items except the last are fully conditioned;
             # the last item uses condition_frame_indexes_vision ([] = fully generated).
+            from cosmos_framework.data.vfm.sequence_packing import SequencePlan
+
             data_dict["sequence_plan"] = SequencePlan(
                 has_text=True,
                 has_vision=True,

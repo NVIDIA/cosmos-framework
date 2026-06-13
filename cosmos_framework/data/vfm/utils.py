@@ -6,7 +6,6 @@ from typing import List, Tuple
 
 IMAGE_RES_SIZE_INFO: dict[str, dict[str, tuple[int, int]]] = {
     # Our desired 256 resolution is the one below (commented).
-
     # Desired: "256": {"1,1": (336, 336), "4,3": (384, 288), "3,4": (288, 384), "16,9": (448, 256), "9,16": (256, 448)},
     "256": {
         "1,1": (256, 256),
@@ -41,7 +40,6 @@ IMAGE_RES_SIZE_INFO: dict[str, dict[str, tuple[int, int]]] = {
 
 VIDEO_RES_SIZE_INFO: dict[str, dict[str, tuple[int, int]]] = {
     # Our desired 256 resolution is the one below (commented).
-
     # Desired: "256": {"1,1": (336, 336), "4,3": (384, 288), "3,4": (288, 384), "16,9": (448, 256), "9,16": (256, 448)},
     "256": {
         "1,1": (256, 256),
@@ -111,10 +109,42 @@ def parse_frame_range_from_wdinfo(wdinfo: str) -> tuple[int, int] | None:
     return None
 
 
+def _normalize_skip_frame_ranges(
+    skip_frame_range: str | list[str] | None,
+) -> set[tuple[int, int]]:
+    """Normalize ``skip_frame_range`` into a set of (min_frames, max_frames) buckets.
+
+    Args:
+        skip_frame_range: A single bucket string like ``"300_400"``, a list of such
+            strings, or None. Each string identifies the frame-range bucket
+            (e.g. ``frames_300_400``) that should be skipped.
+
+    Returns:
+        Set of (min_frames, max_frames) tuples to skip. Empty if ``skip_frame_range`` is None.
+    """
+    if skip_frame_range is None:
+        return set()
+
+    if isinstance(skip_frame_range, str):
+        skip_frame_range = [skip_frame_range]
+
+    skip_buckets: set[tuple[int, int]] = set()
+    for bucket in skip_frame_range:
+        match = re.fullmatch(r"(\d+)_(\d+)", bucket.strip())
+        if match is None:
+            raise ValueError(
+                f"Invalid skip_frame_range entry {bucket!r}. Expected the form '<min>_<max>', e.g. '300_400'."
+            )
+        skip_buckets.add((int(match.group(1)), int(match.group(2))))
+
+    return skip_buckets
+
+
 def filter_wdinfos_by_frame_range(
     wdinfos: list[str],
     min_frames: int | None = None,
     max_frames: int | None = None,
+    skip_frame_range: str | list[str] | None = None,
 ) -> list[str]:
     """
     Filter wdinfo files based on frame range.
@@ -125,10 +155,16 @@ def filter_wdinfos_by_frame_range(
     - min_frames is EXCLUSIVE: wdinfo_max must be > min_frames
     - max_frames is INCLUSIVE: wdinfo_max must be <= max_frames
 
+    Additionally, any wdinfo whose frame-range bucket matches an entry in
+    ``skip_frame_range`` is excluded.
+
     Args:
         wdinfos: List of wdinfo paths
         min_frames: Minimum number of frames (exclusive). If None, no lower bound.
         max_frames: Maximum number of frames (inclusive). If None, no upper bound.
+        skip_frame_range: Frame-range bucket(s) to exclude, e.g. ``"300_400"`` to
+            drop the ``frames_300_400`` bucket. Accepts a single string or a list
+            of strings. If None, no bucket is skipped.
 
     Returns:
         Filtered list of wdinfo paths
@@ -144,8 +180,14 @@ def filter_wdinfos_by_frame_range(
         # frames_400_500 excluded because wdinfo_max (500) <= min_frames (500)
         # frames_500_600 included because wdinfo_max (600) > min_frames (500) AND <= max_frames (600)
         # frames_600_700 excluded because wdinfo_max (700) > max_frames (600)
+
+        >>> filter_wdinfos_by_frame_range(wdinfos, skip_frame_range="500_600")
+        ['wdinfo/frames_400_500/wdinfo.json', 'wdinfo/frames_600_700/wdinfo.json']
+        # frames_500_600 excluded because its bucket matches skip_frame_range
     """
-    if min_frames is None and max_frames is None:
+    skip_buckets = _normalize_skip_frame_ranges(skip_frame_range)
+
+    if min_frames is None and max_frames is None and not skip_buckets:
         return wdinfos
 
     filtered = []
@@ -157,6 +199,10 @@ def filter_wdinfos_by_frame_range(
             continue
 
         wdinfo_min, wdinfo_max = frame_range
+
+        # Skip explicitly excluded buckets (matched on the full (min, max) bucket).
+        if (wdinfo_min, wdinfo_max) in skip_buckets:
+            continue
 
         # Filter based on wdinfo's upper bound (wdinfo_max):
         # - min_frames is exclusive: wdinfo_max must be > min_frames

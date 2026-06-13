@@ -193,16 +193,11 @@ def maybe_download_hf_model_from_s3(
     s3_prefix: str = "cosmos_reason2/hf_models",
     require_s3_exists: bool = False,
 ) -> str:
-    # Short-circuit when model_name_or_path is already a local directory — no
-    # S3 or HF Hub fetch is needed. Prevents opening credentials/*.secret
-    # in OSS/local-checkpoint smoke runs that already have the model on disk.
-    if os.path.isdir(model_name_or_path):
-        return model_name_or_path
     exclude_list = [".safetensors"] if not include_model_weights else []
     s3_prefix = os.path.join(s3_prefix, model_name_or_path)
     # download the model from s3 to local cache
     if cache_dir is None:
-        cache_dir = os.path.expanduser(os.getenv("IMAGINAIRE_CACHE_DIR", "~/.cache/imaginaire"))
+        cache_dir = os.path.expanduser(os.getenv("IMAGINAIRE_CACHE_DIR", "~/.cache/cosmos_framework"))
 
     cache_dir = os.path.join(cache_dir, s3_prefix)
 

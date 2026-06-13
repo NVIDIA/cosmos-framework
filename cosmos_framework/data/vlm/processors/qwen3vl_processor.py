@@ -131,17 +131,18 @@ class Qwen3VLProcessor:
         num_video, video_fps, video_total_num_frames, video_frames_indices = maybe_parse_video_content(messages)
         if num_video > 0:
             # Here we add the args to avoid the error:
-            # File "/usr/local/lib/python3.12/dist-packages/transformers/video_processing_utils.py", line 321, in _decode_and_sample_videos
+            # File "/invalid_dir", line 321, in _decode_and_sample_videos
             #     raise ValueError(
             # ValueError: Sampling frames from a list of images is not supported! Set `do_sample_frames=False`.
-            kwargs["videos_kwargs"] = dict(do_sample_frames=False)
-            assert num_video == 1, "only support one video for now"
-            fps = video_fps[0]
-            total_num_frames = video_total_num_frames[0]
-            frames_indices = video_frames_indices[0]
+            video_metadata = [
+                dict(fps=fps, total_num_frames=total_num_frames, frames_indices=frames_indices)
+                for fps, total_num_frames, frames_indices in zip(
+                    video_fps, video_total_num_frames, video_frames_indices
+                )
+            ]
             kwargs["videos_kwargs"] = {
                 "do_sample_frames": False,
-                "video_metadata": dict(fps=fps, total_num_frames=total_num_frames, frames_indices=frames_indices),
+                "video_metadata": video_metadata[0] if num_video == 1 else video_metadata,
             }
         inputs = self.processor.apply_chat_template(
             messages,
@@ -273,12 +274,12 @@ if __name__ == "__main__":
             "content": [
                 {
                     "type": "video",
-                    "video": ["https://qianwen-res.oss-cn-beijing.aliyuncs.com/Qwen-VL/assets/demo.jpeg"] * 4,
+                    "video": ["https://invalid_url"] * 4,
                     "fps": 12,
                 },
                 # {
                 #     "type": "image",
-                #     "image": "https://qianwen-res.oss-cn-beijing.aliyuncs.com/Qwen-VL/assets/demo.jpeg",
+                #     "image": "https://invalid_url",
                 #     "max_pixels": 256 * 32 * 32,  # this will lead to 486 vision tokens
                 #     "min_pixels": 32 * 32,
                 # },

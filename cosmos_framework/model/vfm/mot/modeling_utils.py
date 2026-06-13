@@ -162,7 +162,6 @@ class VideoRopePosition3DEmb(nn.Module):
         dim_w = dim_h
         dim_t = dim - 2 * dim_h
         assert dim == dim_h + dim_w + dim_t, f"bad dim: {dim} != {dim_h} + {dim_w} + {dim_t}"
-
         self.register_buffer(
             "dim_spatial_range",
             torch.arange(0, dim_h, 2)[: (dim_h // 2)].float() / dim_h,

@@ -27,14 +27,12 @@ VIDEO_DECODER_OPTIONS = {}
 
 def token_to_pixels(token_length: int, patch_size: int = 14, temporal_patch_size: int = 2) -> int:
     """Convert token length to pixels based on patch size and temporal patch size."""
-
     merged_patch_size = patch_size * 2
     return token_length * merged_patch_size**2 * temporal_patch_size
 
 
 def pixels_to_token(pixels: int, patch_size: int = 14, temporal_patch_size: int = 2) -> int:
     """Convert pixels to token length based on patch size and temporal patch size."""
-
     merged_patch_size = patch_size * 2
     return pixels // merged_patch_size**2 // temporal_patch_size
 

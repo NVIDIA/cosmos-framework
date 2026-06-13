@@ -1,19 +1,19 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: OpenMDW-1.1
 
-"""HF ``ALL_ATTENTION_FUNCTIONS`` adapter delegating to ``imaginaire.attention``.
+"""HF ``ALL_ATTENTION_FUNCTIONS`` adapter delegating to ``cosmos_framework.model.attention``.
 
 Registered as the ``"cosmos"`` entry in HF's attention dispatch.
-``imaginaire.attention`` owns backend selection (cuDNN / NATTEN / flash2 /
+``cosmos_framework.model.attention`` owns backend selection (cuDNN / NATTEN / flash2 /
 flash3); to fall back to HF's own flash_attention_2 set
 ``policy.attn_implementation=flash_attention_2``.
 
 Layout: HF passes Q/K/V as BHSD ``[B, num_heads, N, head_dim]`` and expects
-BSHD output. ``imaginaire.attention`` is BSHD throughout, so we transpose on
+BSHD output. ``cosmos_framework.model.attention`` is BSHD throughout, so we transpose on
 entry; output layout already matches HF's expected return.
 
 Strict guards (raise rather than silently break loss parity):
-- ``dropout > 0`` — ``imaginaire.attention`` has no dropout parameter.
+- ``dropout > 0`` — ``cosmos_framework.model.attention`` has no dropout parameter.
   Qwen3-VL has ``attention_dropout=0`` so this never triggers in practice.
 - ``attention_mask is not None`` — adapter expects causal mask via
   ``is_causal=True`` (and no padding, i.e. Qwen3-VL VLM training with
@@ -70,7 +70,7 @@ def hf_attention_cosmos(
     v = value.transpose(1, 2)
 
     # Cast fp32 -> bf16 if needed.
-    # imaginaire's flash2/flash3/cuDNN backends only accept fp16/bf16; NATTEN
+    # cosmos_framework's flash2/flash3/cuDNN backends only accept fp16/bf16; NATTEN
     # also accepts fp32 but routing fp32 attention loses Tensor Core
     # acceleration (10-20x slower). HF's flash_attention_2 internally casts
     # fp32->bf16 and we replicate that so this adapter is a drop-in replacement

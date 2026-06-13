@@ -110,7 +110,7 @@ def _patch_import():
     old_import = builtins.__import__
 
     def find_relative_file(original_file, relative_import_path, level):
-
+        # NOTE: "from . import x" is not handled. Because then it's unclear
         # if such import should produce `x` as a python module or DictConfig.
         # This can be discussed further if needed.
         relative_import_err = """
@@ -322,10 +322,7 @@ class LazyConfig:
                 return False
 
         # For classes / functions / bound methods we want the importable dotted
-        # path, not `repr(obj)` — the latter yields strings like
-        # `<class 'cosmos.X'>` or `<function f at 0x…>` which break any
-        # downstream consumer that calls hydra.utils.instantiate on the loaded
-        # YAML (e.g. cosmos_framework.scripts.export_model).
+        # path, not `repr(obj)`
         from cosmos_framework.utils.lazy_config.registry import convert_target_to_string
 
         def _to_safe_string(value):

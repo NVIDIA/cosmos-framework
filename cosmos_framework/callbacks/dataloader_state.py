@@ -26,18 +26,14 @@ class DataLoaderStateCallback(Callback):
     def __init__(
         self,
         distributor_type: str | None = None,
-        name: str = "",
     ) -> None:
         super().__init__()
         self.distributor_type = distributor_type
-        self.name = name
         self.config: Any = None
         self.state: dict[int, NoReplaceShardlistState] = {}
         self.verbose = True
 
     def _update_state_from_batch(self, data_batch: dict[str, torch.Tensor]) -> None:
-        if "sample_worker_id" not in data_batch:
-            return  # batch has no position metadata (shuffle=False or iterable data_source)
         worker_ids = data_batch["sample_worker_id"].tolist()  # [B]
         epochs = data_batch["sample_epoch"].tolist()  # [B]
         indices = data_batch["sample_index"].tolist()  # [B]
@@ -50,8 +46,6 @@ class DataLoaderStateCallback(Callback):
             ):
                 self.state[worker_id] = NoReplaceShardlistState(epoch=epoch, index=index)
 
-    _ACTIVE_DISTRIBUTOR_TYPES = ("no_replace",)
-
     def on_training_step_batch_end(
         self,
         model: ImaginaireModel,
@@ -60,7 +54,7 @@ class DataLoaderStateCallback(Callback):
         loss: torch.Tensor,
         iteration: int = 0,
     ) -> None:
-        if self.distributor_type in self._ACTIVE_DISTRIBUTOR_TYPES:
+        if self.distributor_type == "no_replace":
             self._update_state_from_batch(data_batch)
 
     def on_training_step_end(
@@ -71,7 +65,7 @@ class DataLoaderStateCallback(Callback):
         loss: torch.Tensor,
         iteration: int = 0,
     ) -> None:
-        if self.distributor_type in self._ACTIVE_DISTRIBUTOR_TYPES:
+        if self.distributor_type == "no_replace":
             if self.verbose:
                 if iteration % self.config.trainer.logging_iter == 0:
                     msg = "\n"
@@ -80,10 +74,10 @@ class DataLoaderStateCallback(Callback):
                     log.info(msg)
 
     def has_checkpoint_state(self) -> bool:
-        return self.distributor_type in self._ACTIVE_DISTRIBUTOR_TYPES
+        return self.distributor_type == "no_replace"
 
     def state_dict(self) -> dict[int, dict[str, int]]:
-        if self.distributor_type not in self._ACTIVE_DISTRIBUTOR_TYPES:
+        if self.distributor_type != "no_replace":
             return {}
 
         state_dict: dict[int, dict[str, int]] = {}
@@ -96,7 +90,7 @@ class DataLoaderStateCallback(Callback):
         return state_dict
 
     def load_state_dict(self, state_dict: dict[int, dict[str, int]]) -> None:
-        if self.distributor_type not in self._ACTIVE_DISTRIBUTOR_TYPES:
+        if self.distributor_type != "no_replace":
             return
 
         if not state_dict:
@@ -110,4 +104,4 @@ class DataLoaderStateCallback(Callback):
             self.state[worker_id] = NoReplaceShardlistState(epoch=epoch, index=index)
             os.environ[f"NSL_STATE_WORKER_{worker_id}_EPOCH"] = str(epoch)
             os.environ[f"NSL_STATE_WORKER_{worker_id}_INDEX"] = str(index)
-            log.info(f"Loaded no_replace dataloader state for worker {worker_id}: epoch={epoch}, index={index}")
+            log.info(f"Loaded no replace dataloader state for worker {worker_id}: epoch={epoch}, index={index}")

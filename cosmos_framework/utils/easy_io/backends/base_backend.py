@@ -70,7 +70,7 @@ class BaseStorageBackend(metaclass=ABCMeta):
         pass
 
     @abstractmethod
-    def join_path(self, filepath: Union[str, Path], *filepaths: Union[str, Path]) -> Union[str, Path]:
+    def join_path(self, filepath: Union[str, Path], *filepaths: Union[str, Path]) -> str:
         pass
 
     @abstractmethod

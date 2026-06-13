@@ -44,7 +44,7 @@ def _optimizer_cls(
     - ``"adam"`` / ``"adamw"``: forwarded to ``torch.optim.Adam`` /
       ``torch.optim.AdamW``.  ``fused`` (if present in ``optimizer_kwargs``)
       flows through and selects the fused CUDA kernel.
-    - ``"fusedadam"``: NVIDIA's :class:`projects.cosmos3.vfm.utils.fused_adam.FusedAdam`.
+    - ``"fusedadam"``: NVIDIA's :class:`cosmos_framework.utils.vfm.fused_adam.FusedAdam`.
       It is fused by construction and rejects a ``fused`` kwarg, so any
       ``fused`` entry is popped before instantiation.  We also force
       ``capturable=True`` and ``master_weights=True`` because those are the
@@ -341,14 +341,6 @@ class OptimizersContainer(Stateful):
         )
 
     def load_state_dict(self, state_dict: dict[str, Any]) -> None:
-        # Backward compat with old VLM checkpoints that prefix every key with
-        # "optimizer_0/" (the legacy list-of-optimizers layout; cosmos3 only
-        # ever ran with N=1). Strip the prefix transparently so those
-        # checkpoints continue to resume.
-        legacy_prefix = "optimizer_0/"
-        if any(k.startswith(legacy_prefix) for k in state_dict):
-            state_dict = {k.removeprefix(legacy_prefix): v for k, v in state_dict.items()}
-
         set_optimizer_state_dict(
             model=self.model,
             optimizers=self.optimizers,

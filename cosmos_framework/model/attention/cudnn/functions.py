@@ -236,7 +236,6 @@ def cudnn_attention(
         raise_error=True,
     )
 
-
     assert not is_varlen  # cudnn_attention_check should prevent this assertion failing
 
     num_heads = query.shape[-2]

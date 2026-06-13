@@ -346,7 +346,7 @@ def context_parallel_attention(
         f"Local query heads ({q_heads_per_rank}) must be divisible by local KV heads ({kv_heads_per_rank})"
     )
 
-
+    # NOTE: q_und_seq, k_und_seq, and v_und_seq may have length 0
     # when doing AR-inference with a KV-cache.
 
     if kv_head_repeats > 1:

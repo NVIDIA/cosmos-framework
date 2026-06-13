@@ -1354,8 +1354,9 @@ class AutoencoderKL(ModelMixin, ConfigMixin, FromOriginalModelMixin):
         self._logged_decoder_temporal_plan = False
 
         # Load SigLIP2 pretrained model (text encoder always needed for text alignment)
-        # Use HF_HOME env var for cache, with local_files_only to avoid network downloads
-        hf_cache_dir = os.environ.get("HF_HOME")
+        # Use HF_HUB_CACHE (set by configure_hf_cache_env to HF_HOME/hub) so the cache_dir
+        # matches the actual hub layout where models are stored.
+        hf_cache_dir = os.environ.get("HF_HUB_CACHE") or os.environ.get("HF_HOME")
         local_files_only = hf_cache_dir is not None
         pretrained_model = None
         pretrained_vision_model = None
@@ -1419,7 +1420,7 @@ class AutoencoderKL(ModelMixin, ConfigMixin, FromOriginalModelMixin):
         if use_quantizer:
             if self.quantizer_type == "lfq":
                 self.quantizer = LFQ(
-                    dim=latent_channels,
+                    dim=self.quantizer_feature_dim // self.quantizer_chunk_size,
                     codebook_size=self.quantizer_codebook_size // self.quantizer_chunk_size,
                     num_codebooks=self.quantizer_num_codebooks,
                     sample_minimization_weight=1.0,
@@ -1517,7 +1518,7 @@ class AutoencoderKL(ModelMixin, ConfigMixin, FromOriginalModelMixin):
             self.post_logit_scale = None
             self.post_logit_bias = None
 
-        # Text decoder (Qwen3-based causal LM for image-to-text generation)
+        # Text decoder (configured causal LM for image-to-text generation)
         if self.use_text_decoder and text_decoder_model_name is not None:
             from cosmos_framework.model.tokenizer.models.text_decoder import (
                 TextDecoderWrapper,
@@ -1595,6 +1596,22 @@ class AutoencoderKL(ModelMixin, ConfigMixin, FromOriginalModelMixin):
         """Disable sliced VAE decoding."""
         self.use_slicing = False
 
+    def _frame_count_to_latent_steps(self, frame_count: int, name: str, *, allow_zero: bool = False) -> int:
+        """Convert a raw frame count to latent temporal steps with strict divisibility checks."""
+        frame_count = int(frame_count)
+        temporal_patch_size = int(self.patch_size[0])
+        if temporal_patch_size <= 0:
+            raise ValueError(f"patch_size[0] must be positive, got {temporal_patch_size}.")
+        if frame_count == 0 and allow_zero:
+            return 0
+        if frame_count < 0 and allow_zero:
+            raise ValueError(f"{name} must be non-negative, got {frame_count}.")
+        if frame_count <= 0:
+            raise ValueError(f"{name} must be positive, got {frame_count}.")
+        if frame_count % temporal_patch_size != 0:
+            raise ValueError(f"{name} must be divisible by patch_size[0]={temporal_patch_size}, got {frame_count}.")
+        return frame_count // temporal_patch_size
+
     def _encode(
         self,
         x: SparseTensor,
@@ -1617,7 +1634,10 @@ class AutoencoderKL(ModelMixin, ConfigMixin, FromOriginalModelMixin):
         else:
             num_sample_frames_batch_size = self.num_sample_frames_batch_size
 
-        frame_batch_size = num_sample_frames_batch_size // self.patch_size[0]
+        frame_batch_size = self._frame_count_to_latent_steps(
+            int(num_sample_frames_batch_size),
+            "num_sample_frames_batch_size",
+        )
 
         temporal_slices = x.split_by_temporal_batches(frame_batch_size, adjust_temporal=True)
         processed_slices = []
@@ -1827,13 +1847,26 @@ class AutoencoderKL(ModelMixin, ConfigMixin, FromOriginalModelMixin):
             num_sample_frames_batch_size = self.num_sample_frames_batch_size
 
         if training:
-            frame_batch_size = num_sample_frames_batch_size // self.patch_size[0]
+            frame_batch_size = self._frame_count_to_latent_steps(
+                int(num_sample_frames_batch_size),
+                "num_sample_frames_batch_size",
+            )
             frame_batch_strides = frame_batch_size
             kv_cache_size = 0
         else:
-            frame_batch_size = self.inference_num_sample_frames_batch_size // self.patch_size[0]
-            frame_batch_strides = self.inference_num_sample_frames_stride // self.patch_size[0]
-            kv_cache_size = self.inference_kv_cache_size // self.patch_size[0]
+            frame_batch_size = self._frame_count_to_latent_steps(
+                self.inference_num_sample_frames_batch_size,
+                "inference_num_sample_frames_batch_size",
+            )
+            frame_batch_strides = self._frame_count_to_latent_steps(
+                self.inference_num_sample_frames_stride,
+                "inference_num_sample_frames_stride",
+            )
+            kv_cache_size = self._frame_count_to_latent_steps(
+                self.inference_kv_cache_size,
+                "inference_kv_cache_size",
+                allow_zero=True,
+            )
             if frame_batch_size < frame_batch_strides:
                 raise ValueError(
                     "Non-causal inference requires inference_num_sample_frames_batch_size >= "

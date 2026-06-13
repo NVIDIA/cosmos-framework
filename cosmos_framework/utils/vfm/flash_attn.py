@@ -1,5 +1,6 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: OpenMDW-1.1
+
 """Flash attention initialization for the vfm/ unified VLM training path.
 
 This module replaces `cosmos_rl.policy.kernel.modeling_utils.init_flash_attn_meta`

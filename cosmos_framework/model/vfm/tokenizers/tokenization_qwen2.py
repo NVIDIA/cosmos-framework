@@ -1,5 +1,4 @@
-# Copyright 2024 The Qwen Team and The HuggingFace Inc. team.
-# SPDX-FileCopyrightText: Copyright (c) 2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: OpenMDW-1.1
 
 # Source Repository: https://github.com/ByteDance-Seed/Bagel
@@ -173,7 +172,7 @@ class Qwen2Tokenizer(PreTrainedTokenizer):
                     continue
                 bpe_merges.append(tuple(line.split()))
         self.bpe_ranks = dict(zip(bpe_merges, range(len(bpe_merges))))
-
+        # NOTE: the cache can grow without bound and will get really large for long running processes
         # (esp. for texts of language that do not use space between word, e.g. Chinese); technically
         # not a memory leak but appears as one.
         # GPT2Tokenizer has the same problem, so let's be consistent.

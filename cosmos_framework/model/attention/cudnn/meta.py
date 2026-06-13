@@ -46,5 +46,4 @@ def get_bwd_dtypes(arch_tag: int) -> list[torch.dtype]:
 
     """
 
-
     return []

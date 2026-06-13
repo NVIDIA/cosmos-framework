@@ -1,5 +1,6 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: OpenMDW-1.1
+
 # Implementation adapted from https://github.com/EdwardDixon/snake under the MIT license.
 
 from typing import List

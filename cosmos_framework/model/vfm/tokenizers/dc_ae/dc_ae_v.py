@@ -688,7 +688,7 @@ def _build_encoder_feature_cache(
                         w,
                         dtype=dtype,
                         device=device,
-                    )
+                    ).to(memory_format=torch.channels_last_3d)
                 )
         elif isinstance(module, ResBlock3d):
             _visit(module.conv1)
@@ -783,7 +783,8 @@ class DCAEV(nn.Module):
 
         row = []
         for i in tqdm(range(0, x.shape[2], overlap_size), desc="Tiled Encode", disable=not self.cfg.verbose):
-            tile = x[:, :, i : i + tile_size, :, :]
+            # Clone is required for compiled tokenizer to avoid recompilation (view has different memory strides).
+            tile = x[:, :, i : i + tile_size, :, :].clone()
             actual_t = tile.shape[2]
             remove_padding = False
             if actual_t < tile_size and self.cfg.compilable:
@@ -897,7 +898,7 @@ def dc_ae_v_f32t4_encoder_causal_decoder_chunk_causal_4(
     elif name in [
         "dcae4x32x32_c64_t120_256p_fps_all_encoder_causal_decoder_chunk_causal_4_nogan_cosmos_pad_7_v0.2",
     ]:
-        latent_channels, num_pad_frames, temporal_remainder, scaling_factor = 64, 7, 1, 0.7103
+        latent_channels, num_pad_frames, temporal_remainder, scaling_factor = 64, 7, 1, 0.5704
         encoder_width_list = [0, 64, 128, 512, 1024, 1024, 1024]
     elif name in [
         "dcae4x32x32_c96_t120_256p_fps_all_encoder_causal_decoder_chunk_causal_4_nogan_cosmos_pad_7_v0.2",

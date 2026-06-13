@@ -85,8 +85,12 @@ def tensor_dense_scaled_dot_product_attention(
     q: torch.Tensor,
     k: torch.Tensor,
     v: torch.Tensor,
+    cu_seqlens_q: torch.Tensor | None = None,
+    cu_seqlens_kv: torch.Tensor | None = None,
+    max_q_seqlen: int | None = None,
+    max_kv_seqlen: int | None = None,
 ) -> torch.Tensor:
-    """Apply dense batched attention via the imaginaire attention frontend."""
+    """Apply dense batched attention via the cosmos_framework attention frontend."""
     if q.ndim != 4 or k.ndim != 4 or v.ndim != 4:
         raise ValueError(
             "Dense tensor attention expects [B, S, H, D]-style tensors, "
@@ -99,6 +103,10 @@ def tensor_dense_scaled_dot_product_attention(
         query=q.contiguous(),
         key=k.contiguous(),
         value=v.contiguous(),
+        cumulative_seqlen_Q=cu_seqlens_q,
+        cumulative_seqlen_KV=cu_seqlens_kv,
+        max_seqlen_Q=max_q_seqlen,
+        max_seqlen_KV=max_kv_seqlen,
     )
 
 

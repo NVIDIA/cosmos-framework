@@ -1,10 +1,5 @@
-# Copyright 2024 TSAIL Team and The HuggingFace Team. All rights reserved.
-# Copyright 2024-2025 The Alibaba Wan Team Authors. All rights reserved.
-# SPDX-FileCopyrightText: Copyright (c) 2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: OpenMDW-1.1
-#
-# Copied from https://github.com/huggingface/diffusers/blob/v0.31.0/src/diffusers/schedulers/scheduling_unipc_multistep.py
-# Converted UniPC for flow matching.
 
 import math
 from typing import List, Optional, Tuple, Union

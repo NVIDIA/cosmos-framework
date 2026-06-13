@@ -13,6 +13,8 @@ from cosmos_framework.utils.easy_io import easy_io
 
 
 def save_video(grid, video_name, fps=30):
+    # Remove ffmpegcv for license issue
+    # Use imageio instead
     import imageio
 
     grid = (grid * 255).astype(np.uint8)

@@ -1,5 +1,6 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: OpenMDW-1.1
+
 """Loss functions used by VFM (rectified flow) and VLM (next-token CE) training paths."""
 
 __all__: list[str] = []

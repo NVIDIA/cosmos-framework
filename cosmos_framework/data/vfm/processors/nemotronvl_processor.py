@@ -248,7 +248,6 @@ class NemotronVLProcessor(
         # NemotronVL hardcodes these helper attributes because they are not
         # discoverable from the HF model config; the values match the upstream
         # vision-encoder configuration.
-        # HACK: hardcoded based on the model config.
         self.min_height_width = 512
         self.patch_size = 16
         self.temporal_patch_size = 1
@@ -258,7 +257,6 @@ class NemotronVLProcessor(
     def _resolve_pad_id(self):
         # NemotronVL's tokenizer does not specify a pad_token; reserve
         # <SPECIAL_999> for padding (project convention).
-
         return self.processor.tokenizer.convert_tokens_to_ids("<SPECIAL_999>")
 
     def apply_chat_template(
@@ -396,7 +394,7 @@ if __name__ == "__main__":
 
     import requests
 
-    response = requests.get("https://qianwen-res.oss-cn-beijing.aliyuncs.com/Qwen-VL/assets/demo.jpeg")
+    response = requests.get("https://invalid_url")
     img = Image.open(BytesIO(response.content))
 
     # test video

@@ -280,7 +280,7 @@ def load_model_from_checkpoint(
               * **safetensors**: a directory containing one or more
                 ``*.safetensors`` shards in the native Cosmos3 VFM state-dict
                 layout.  Loaded via
-                :func:`projects.cosmos3.vfm.models.utils.safetensors_loader.load_vfm_model`.
+                :func:`cosmos_framework.model.vfm.utils.safetensors_loader.load_vfm_model`.
                 No ``/model`` suffix is appended.
         credential_path: Path to credentials file (if required for remote storage). Optional.
         enable_gcs_patch_in_boto3: Whether to enable the boto3 patch for GCS S3-compatibility.

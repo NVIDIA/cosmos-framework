@@ -1,5 +1,6 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: OpenMDW-1.1
+
 """Unified ParallelDims for Cosmos3 VFM and VLM (multi-mesh, overlay design).
 
 Topology
@@ -27,8 +28,8 @@ Use cases
 - VFM inference     — ``dp_shard`` + cfgp/cp overlays; replicate forced to 1.
 
 FSDP wrapping for VLM ``HFModel`` instances lives in
-``projects.cosmos3.vfm.models.parallelize_vlm``; MoT wrapping lives in
-``projects.cosmos3.vfm.models.mot.parallelize_unified_mot``.  Both consume
+``cosmos_framework.model.vfm.parallelize_vlm``; MoT wrapping lives in
+``cosmos_framework.model.vfm.mot.parallelize_unified_mot``.  Both consume
 ``ParallelDims`` from this module.
 """
 

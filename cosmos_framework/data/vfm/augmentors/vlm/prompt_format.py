@@ -45,7 +45,6 @@ class PromptFormat(Augmentor):
         if isinstance(list_of_conversation[0], list):
             selected_conversation = random.sample(list_of_conversation, 1)[0]
         elif isinstance(list_of_conversation[0], dict):
-
             selected_conversation = list_of_conversation
         else:
             raise ValueError(
@@ -82,7 +81,6 @@ class PromptFormat(Augmentor):
 
         del data_dict[conversation_key]
 
-
         # # enforce chat order
         # self._enforce_text_chat_order(selected_conversation)
 
@@ -91,7 +89,7 @@ class PromptFormat(Augmentor):
     def _enforce_text_chat_order(self, conversation: list) -> None:
         """
         Reorder text content within user messages based on text_chat_order setting.
-        NOTE: this does NOT work for interleaved data!!!!!!
+        NOTE (maxzhaoshuol): this does NOT work for interleaved data!!!!!!
 
         Args:
             conversation: List of message dictionaries
