@@ -1272,8 +1272,7 @@ def _get_device_memory_bytes() -> int:
     try:
         pynvml.nvmlInit()
         handle = pynvml.nvmlDeviceGetHandleByIndex(0)
-        info = pynvml.nvmlDeviceGetMemoryInfo(handle)
-        pynvml.nvmlShutdown()
+        info = _get_nvml_device_memory_info(handle)
         return info.total
     except Exception:
         # Fallback for unified memory architectures (e.g., GB10) where
@@ -1282,3 +1281,17 @@ def _get_device_memory_bytes() -> int:
         if torch.cuda.is_available():
             return int(torch.cuda.get_device_properties(0).total_memory)
         return 128 * 1024**3  # Default 128GB
+    finally:
+        try:
+            pynvml.nvmlShutdown()
+        except Exception:
+            pass
+
+
+def _get_nvml_device_memory_info(handle: Any) -> Any:
+    try:
+        return pynvml.nvmlDeviceGetMemoryInfo_v2(handle)
+    except AttributeError:
+        return pynvml.nvmlDeviceGetMemoryInfo(handle)
+    except pynvml.NVMLError_NotSupported:
+        return pynvml.nvmlDeviceGetMemoryInfo(handle)

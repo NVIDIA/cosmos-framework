@@ -17,6 +17,7 @@ from cosmos_framework.inference.args import (
     OmniSampleOverrides,
     OmniSetupOverrides,
     SoundDataOverrides,
+    _get_nvml_device_memory_info,
 )
 from cosmos_framework.inference.common.config import structure_config
 
@@ -93,6 +94,31 @@ def test_build_parallelism(monkeypatch: pytest.MonkeyPatch):
         compile_dynamic=False,
     ).build_parallelism(world_size=16, device_memory_bytes=_H100_MEMORY_BYTES)
     assert parallelism_args.compile_dynamic is False
+
+
+def test_get_nvml_device_memory_info_prefers_v2(monkeypatch: pytest.MonkeyPatch):
+    from cosmos_framework.inference import args
+
+    expected_info = types.SimpleNamespace(total=96 * 1024**3)
+
+    def fail_v1(_handle):
+        raise args.pynvml.NVMLError_NotSupported()
+
+    monkeypatch.setattr(args.pynvml, "nvmlDeviceGetMemoryInfo_v2", lambda _handle: expected_info)
+    monkeypatch.setattr(args.pynvml, "nvmlDeviceGetMemoryInfo", fail_v1)
+
+    assert _get_nvml_device_memory_info(object()) is expected_info
+
+
+def test_get_nvml_device_memory_info_falls_back_when_v2_unavailable(monkeypatch: pytest.MonkeyPatch):
+    from cosmos_framework.inference import args
+
+    expected_info = types.SimpleNamespace(total=80 * 1024**3)
+
+    monkeypatch.delattr(args.pynvml, "nvmlDeviceGetMemoryInfo_v2", raising=False)
+    monkeypatch.setattr(args.pynvml, "nvmlDeviceGetMemoryInfo", lambda _handle: expected_info)
+
+    assert _get_nvml_device_memory_info(object()) is expected_info
 
 
 def test_checkpoints():
