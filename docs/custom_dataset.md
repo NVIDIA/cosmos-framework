@@ -249,11 +249,11 @@ Override from the CLI like any Hydra node, e.g.
 
 ## 5. Checkpoint / resume
 
-Resume is handled by the existing `DataLoaderStateCallback`:
+Resume is handled by `CosmosDataLoaderStateCallback`:
 
 ```python
-from cosmos_framework.callbacks.dataloader_state import DataLoaderStateCallback
-cb = DataLoaderStateCallback(distributor_type="cosmos_dataloader")
+from cosmos_framework.callbacks.cosmos_dataloader_state import CosmosDataLoaderStateCallback
+cb = CosmosDataLoaderStateCallback()
 ```
 
 - Use a **`MapDistributor`** source. On save, the callback records each worker's
@@ -266,8 +266,8 @@ cb = DataLoaderStateCallback(distributor_type="cosmos_dataloader")
 - For multiple loaders sharing a process (e.g. inside `JointCosmosDataLoader`),
   give each a distinct `name=` so resume env vars are namespaced
   (`COSMOS_DL_STATE_{name}_WORKER_{id}_{EPOCH,INDEX}`), and use a single
-  `JointDataLoaderStateCallback(outer_loader=joint_loader, distributor_type="cosmos_dataloader")`
-  instead of one `DataLoaderStateCallback` per inner loader.
+  `JointCosmosDataLoaderStateCallback(outer_loader=joint_loader)`
+  instead of one `CosmosDataLoaderStateCallback` per inner loader.
 - Use `ckpt_type=dcp` (the default) — not `ckpt_type=dummy`, which disables all
   checkpointing. The on-disk checkpoint format is unchanged.
 
@@ -423,7 +423,7 @@ collator:    VFMListCollator                                   # media kept as p
 - [ ] Pick a **collator**: `DefaultBatchCollator`, `VFMListCollator`, or your own
       (must match the structure the model consumes).
 - [ ] For real resume: use a `MapDistributor`, add
-      `DataLoaderStateCallback(distributor_type="cosmos_dataloader")`, and
+      `CosmosDataLoaderStateCallback()`, and
       `ckpt_type=dcp` (not `dummy`).
 - [ ] For FSDP+TP/PP, pass `parallel_dims=` so the correct DP rank is used.
 - [ ] Register the experiment in the Hydra ConfigStore
@@ -437,8 +437,8 @@ collator:    VFMListCollator                                   # media kept as p
       `name=` matching its key in `dataloaders` (namespaces resume env vars).
 - [ ] Set each dataset's `ratio` (controls how often it is visited, per batch).
 - [ ] Use a single
-      `JointDataLoaderStateCallback(outer_loader=joint_loader, distributor_type="cosmos_dataloader")`
-      — do **not** also register a standalone `DataLoaderStateCallback` per inner
+      `JointCosmosDataLoaderStateCallback(outer_loader=joint_loader)`
+      — do **not** also register a standalone `CosmosDataLoaderStateCallback` per inner
       loader.
 - [ ] Avoid `"global_id"` as a dataset name (reserved by the checkpoint state).
 - [ ] Use `ckpt_type=dcp` for real checkpoint/resume.
