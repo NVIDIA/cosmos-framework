@@ -104,7 +104,7 @@ def test_get_nvml_device_memory_info_prefers_v2(monkeypatch: pytest.MonkeyPatch)
     def fail_v1(_handle):
         raise args.pynvml.NVMLError_NotSupported()
 
-    monkeypatch.setattr(args.pynvml, "nvmlDeviceGetMemoryInfo_v2", lambda _handle: expected_info)
+    monkeypatch.setattr(args.pynvml, "nvmlDeviceGetMemoryInfo_v2", lambda _handle: expected_info, raising=False)
     monkeypatch.setattr(args.pynvml, "nvmlDeviceGetMemoryInfo", fail_v1)
 
     assert _get_nvml_device_memory_info(object()) is expected_info
