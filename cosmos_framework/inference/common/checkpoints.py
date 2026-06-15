@@ -76,8 +76,8 @@ def _materialize_avae_ckpt(local_dir: str) -> None:
     ``[C]`` and loads via ``load_state_dict(strict=False)`` — so without remapping
     the keys, none match and every decoder weight is silently left at init (noise).
     We invert the forward conversion (key remap + snake reshape) and wrap the result
-    under ``state_dict``. Decoder-only is sufficient: generation only decodes sound
-    latents to a waveform. Idempotent.
+    under ``state_dict``. Native ``encoder.layers.*`` keys pass through
+    ``_avae_block_key_to_legacy`` unchanged. Idempotent.
     """
     import torch
     from safetensors.torch import load_file
@@ -249,9 +249,9 @@ def register_checkpoints():
                 revision="main",
                 subdirectory="sound_tokenizer",
             ),
-            # The sound_tokenizer/ safetensors are decoder-only and use the diffusers
-            # OobleckDecoder key layout; _materialize_avae_ckpt remaps them back to the
-            # legacy decoder.layers.* layout the native AVAE loader expects.
+            # _materialize_avae_ckpt remaps the diffusers OobleckDecoder keys
+            # (decoder.block.*) back to the legacy decoder.layers.* layout the native AVAE
+            # loader expects; native encoder.layers.* keys pass through unchanged.
             post_download=_materialize_avae_ckpt,
         ),
     )

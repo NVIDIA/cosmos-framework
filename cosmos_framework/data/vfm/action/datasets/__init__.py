@@ -1,8 +1,23 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: OpenMDW-1.1
 
-"""Minimal Action dataset wrappers."""
+"""Action dataset wrappers for Cosmos Action.
 
+All concrete datasets inherit from :class:`ActionBaseDataset` and expose a
+``load_action_stats()`` classmethod for retrieving pre-computed normalization
+statistics without instantiating the dataset.
+"""
+
+from cosmos_framework.data.vfm.action.datasets.agibotworld_beta_lerobot_dataset import AgiBotWorldBetaLeRobotDataset
+from cosmos_framework.data.vfm.action.datasets.base_dataset import ActionBaseDataset
+from cosmos_framework.data.vfm.action.datasets.bridge_orig_lerobot_dataset import BridgeOrigLeRobotDataset
 from cosmos_framework.data.vfm.action.datasets.droid_lerobot_dataset import DROIDLeRobotDataset
+from cosmos_framework.data.vfm.action.datasets.robomind_franka_dataset import RoboMINDFrankaDataset
 
-__all__ = ["DROIDLeRobotDataset"]
+__all__ = [
+    "ActionBaseDataset",
+    "AgiBotWorldBetaLeRobotDataset",
+    "BridgeOrigLeRobotDataset",
+    "DROIDLeRobotDataset",
+    "RoboMINDFrankaDataset",
+]
