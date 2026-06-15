@@ -104,7 +104,7 @@ class EMAModelTracker(torch.nn.Module):
     The EMA weights are registered as buffers, which are extractable as state dicts. The names follow those of the
     regular weights, except all "." are replaced with "-" (limitation of register_buffer()). This is similar to SDXL's
     implementation of EMA. There are no optimizable parameters.
-    TODO: multi-EMA weights.
+    TODO(snah): multi-EMA weights.
 
     Attributes:
         collected_params (list): temporarily stores the regular weights while in EMA mode.

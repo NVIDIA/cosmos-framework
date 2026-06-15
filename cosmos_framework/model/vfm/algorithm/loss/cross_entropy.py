@@ -1,5 +1,6 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: OpenMDW-1.1
+
 """CE loss for VLM training.
 
 Ported from cosmos_rl.policy.trainer.llm_trainer.sft_trainer.async_safe_ce

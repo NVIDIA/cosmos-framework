@@ -124,7 +124,6 @@ def cudnn_attention_check(
         causal_type=causal_type,
     )
 
-
     if is_causal and causal_type not in [CausalType.TopLeft, CausalType.DontCare]:
         target_fn("cuDNN Attention only supports top-left causal masking for now.", exception=RuntimeError)
         return False

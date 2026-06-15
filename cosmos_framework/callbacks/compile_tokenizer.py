@@ -4,7 +4,7 @@
 """Training callback that defers AOT compilation of the VAE tokenizer.
 
 The actual compilation logic lives in
-:meth:`~projects.cosmos3.vfm.tokenizers.wan2pt2_vae_4x16x16.Wan2pt2VAEInterface.compile_encode`.
+:meth:`~cosmos_framework.model.vfm.tokenizers.wan2pt2_vae_4x16x16.Wan2pt2VAEInterface.compile_encode`.
 This module provides a :class:`CompileTokenizer` callback that invokes it
 at the right point during training (after ``compile_after_iterations``
 steps, to avoid NCCL timeouts during CUDA/cuDNN warm-up).
@@ -21,6 +21,7 @@ Typical config usage
 """
 
 from collections.abc import Sequence
+from typing import Literal
 
 import torch
 
@@ -43,6 +44,10 @@ class CompileTokenizer(Callback):
         enabled: bool = False,
         compile_after_iterations: int = 3,
         warmup_resolutions: Sequence[str] | None = None,
+        backend: Literal["cudagraphs", "inductor"] = "inductor",
+        mode: Literal["reduce-overhead", "max-autotune"] | None = "reduce-overhead",
+        fullgraph: bool = False,
+        dynamic: bool = False,
     ):
         """
         Args:
@@ -60,6 +65,10 @@ class CompileTokenizer(Callback):
         self.compile_after_iterations: int = compile_after_iterations
         self.skip_counter: int = 0
         self.warmup_resolutions: Sequence[str] | None = warmup_resolutions
+        self.backend: Literal["cudagraphs", "inductor"] = backend
+        self.mode: Literal["reduce-overhead", "max-autotune"] | None = mode
+        self.fullgraph: bool = fullgraph
+        self.dynamic: bool = dynamic
 
         if self.enabled:
             if self.warmup_resolutions is None:
@@ -101,6 +110,10 @@ class CompileTokenizer(Callback):
                 tokenizer.compile_encode(
                     self.warmup_resolutions,
                     output_dir=self.config.job.path_local,
+                    backend=self.backend,
+                    mode=self.mode,
+                    fullgraph=self.fullgraph,
+                    dynamic=self.dynamic,
                 )
 
         self.skip_counter += 1

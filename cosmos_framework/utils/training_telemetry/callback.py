@@ -197,8 +197,8 @@ class TelemetryCallback(Callback):
                 average_forward_time=avg_forward_time,
                 average_backward_time=avg_backward_time,
                 average_dataloader_time=avg_dataloader_time,
-                tflops=0.0,
-                tokens_per_second=0.0,
+                tflops=0.0,  # FIXME: is this available?
+                tokens_per_second=0.0,  # FIXME: is this available?
                 loss=loss.item(),
                 batch_size=batch_size,
             )

@@ -1,7 +1,5 @@
-# -----------------------------------------------------------------------------
-# Copyright (c) 2025 NVIDIA CORPORATION & AFFILIATES.
-# All rights reserved.
-# -----------------------------------------------------------------------------
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: OpenMDW-1.1
 
 """Text decoder modules for image-to-text generation in the tokenizer.
 
@@ -1257,8 +1255,8 @@ class TextDecoderWrapper(nn.Module):
         """Generate an answer to a question about an image.
 
         Qwen3 uses its native chat template. Nemotron uses its own native
-        chat template with ``<|im_start|>``, ``<|im_end|>``, and
-        ``</think>`` in no-thinking mode.
+        chat template with ``<|im_start|>``, ``<|im_end|>``, and the
+        ``</think>\n`` no-thinking prefix.
 
         Args:
             image_feats_tensor: [N, encoder_dim] features for ONE image.

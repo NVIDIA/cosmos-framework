@@ -13,7 +13,7 @@ import math
 
 import torch
 import torch.nn as nn
-from einops import pack, rearrange, unpack
+from einops import rearrange
 from torch import Tensor, int32
 from torch.amp import autocast
 from torch.nn import Module
@@ -102,16 +102,6 @@ def default(*args):
         if exists(arg):
             return arg
     return None
-
-
-def pack_one(t, pattern):
-    """Pack single tensor."""
-    return pack([t], pattern)
-
-
-def unpack_one(t, ps, pattern):
-    """Unpack single tensor."""
-    return unpack(t, ps, pattern)[0]
 
 
 def round_ste(z: Tensor) -> Tensor:

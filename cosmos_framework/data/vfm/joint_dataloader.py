@@ -1,7 +1,9 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: OpenMDW-1.1
 
+import math
 from collections import deque
+from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any, ClassVar, Dict, Union
 
@@ -12,6 +14,11 @@ from torch.utils.data.dataloader import default_collate
 
 from cosmos_framework.utils.lazy_config import instantiate
 from cosmos_framework.utils import log
+from cosmos_framework.model.vfm.tokenizers.uniae.frame_math import (
+    get_uniae_chunk_frames,
+    get_uniae_latent_num_frames,
+    normalize_uniae_chunk_frames,
+)
 
 _TIMING_KEYS = {"_sample_time", "_aug_time", "_pre_aug_time", "_aug_step_times"}
 _BATCH_TIMING_KEYS = {
@@ -38,6 +45,7 @@ def custom_collate_fn(batch):
         "sound",
         "raw_action_dim",
         "image_size",
+        "action_processing_record",
     }
 
     # Data keys where a per-sample value of ``None`` is a meaningful signal
@@ -57,7 +65,6 @@ def custom_collate_fn(batch):
     # Handle standard list of samples
     elem = batch[0]
     if isinstance(elem, dict):
-
         # Some Action datasets add optional metadata keys (for example
         # ``additional_view_description`` for concat-view captions) only for a
         # subset of samples.  PyTorch can batch such samples together when
@@ -72,6 +79,9 @@ def custom_collate_fn(batch):
             if key in _TIMING_KEYS:
                 continue
             values = [d.get(key) for d in batch]
+            if key == "action_processing_record":
+                result[key] = values
+                continue
             if any(value is None for value in values):
                 # Sparse data keys keep their None placeholders to preserve
                 # 1:1 alignment with sequence_plan.  Other (optional metadata)
@@ -165,6 +175,8 @@ class JointDataLoader(webdataset.WebLoader):
         prewarm: bool = True,
         default_lookahead_limit: int = _DEFAULT_LOOKAHEAD_LIMIT,
         lookahead_limits: Dict[str, int] | None = None,
+        uniae_chunk_frames: int | Mapping[str, int] | None = None,
+        uniae_pad_frames: int | None = None,
     ):
         """
         Initialize the JointDataLoader with multiple datasets.
@@ -186,6 +198,8 @@ class JointDataLoader(webdataset.WebLoader):
             default_lookahead_limit: Packing-loop look-ahead fallback for dataloaders not in
                 ``lookahead_limits``.
             lookahead_limits: Optional ``{dataset_name: int}`` per-dataloader override.
+            uniae_chunk_frames: Optional UniAE full chunk size, or resolution-keyed chunk sizes.
+            uniae_pad_frames: Optional UniAE boundary padding frames per chunk.
 
         Example:
             joint_loader = IterativeJointDataLoader(
@@ -211,6 +225,8 @@ class JointDataLoader(webdataset.WebLoader):
         self.sound_latent_fps = sound_latent_fps
         self.audio_sample_rate = audio_sample_rate
         self.default_lookahead_limit = int(default_lookahead_limit)
+        self.uniae_pad_frames = int(uniae_pad_frames) if uniae_pad_frames is not None else None
+        self.uniae_chunk_frames = self._normalize_uniae_chunk_frames(uniae_chunk_frames)
 
         assert (self.max_sequence_length is None) != (self.max_samples_per_batch is None), (
             "Exactly one of max_sequence_length or max_samples_per_batch must be None, but not both."
@@ -221,6 +237,8 @@ class JointDataLoader(webdataset.WebLoader):
         assert not unknown, f"lookahead_limits references unknown dataloaders {unknown}; valid: {sorted(dataloaders)}"
 
         for dataset_name, dataloader_data in dataloaders.items():
+            if dataloader_data is None:
+                continue
             assert set(dataloader_data.keys()) == {"dataloader", "ratio"}, f"Invalid config: {dataloader_data}"
             if dataloader_data["ratio"] <= 0:
                 continue
@@ -255,13 +273,42 @@ class JointDataLoader(webdataset.WebLoader):
                 "JointDataLoader: prewarm DISABLED (debug mode); first iteration may incur per-stream cold-load cost"
             )
 
+    def _normalize_uniae_chunk_frames(
+        self, uniae_chunk_frames: int | Mapping[str, int] | None
+    ) -> int | dict[str, int] | None:
+        return normalize_uniae_chunk_frames(
+            uniae_chunk_frames,
+            pad_frames=self.uniae_pad_frames,
+            temporal_compression_factor=self.tokenizer_temporal_compression_factor,
+            temporal_divisibility_name="tokenizer_temporal_compression_factor",
+        )
+
+    def _get_uniae_chunk_frames(self, spatial_shape: tuple[int, int]) -> int:
+        assert self.uniae_chunk_frames is not None
+        return get_uniae_chunk_frames(self.uniae_chunk_frames, spatial_shape=spatial_shape)
+
+    def _compute_vision_latent_t_shape(self, T: int, H: int, W: int) -> int:
+        if T < 1:
+            raise ValueError(f"Vision media must contain at least one frame, got {T}.")
+        if T == 1 or self.uniae_chunk_frames is None:
+            return 1 + (T - 1) // self.tokenizer_temporal_compression_factor
+
+        assert self.uniae_pad_frames is not None
+        return get_uniae_latent_num_frames(
+            T,
+            self.uniae_chunk_frames,
+            pad_frames=self.uniae_pad_frames,
+            temporal_compression_factor=self.tokenizer_temporal_compression_factor,
+            spatial_shape=(H, W),
+        )
+
     def _prewarm_dataloaders(self) -> None:
         """Force all dataloader iterators to spawn workers and produce one batch.
 
         The first ``next()`` call on an ``InfiniteDataLoader`` iterator triggers
         ``DataLoader.__iter__()`` which spawns worker processes.  For action
         dataloaders using ``multiprocessing_context='spawn'``, each worker must
-        fully initialise heavy datasets (BridgeOrigLeRobotDataset, EMBODIMENT_A, etc.)
+        fully initialise heavy datasets (BridgeOrigLeRobotDataset, embodiment_a, etc.)
         from scratch.  If this happens lazily during training, the resulting
         delay (potentially minutes) causes NCCL collective timeouts when faster
         ranks enter the forward pass while slower ranks are still loading data.
@@ -362,14 +409,13 @@ class JointDataLoader(webdataset.WebLoader):
             else:
                 _, T, H, W = media.shape
 
-            vae_spatial_downsample = self.tokenizer_spatial_compression_factor * self.patch_spatial
-            vae_temporal_downsample = self.tokenizer_temporal_compression_factor
+            latent_h_shape = H // self.tokenizer_spatial_compression_factor
+            latent_w_shape = W // self.tokenizer_spatial_compression_factor
+            patch_h_shape = math.ceil(latent_h_shape / self.patch_spatial)
+            patch_w_shape = math.ceil(latent_w_shape / self.patch_spatial)
+            latent_t_shape = self._compute_vision_latent_t_shape(T, H, W)
 
-            latent_h_shape = H // vae_spatial_downsample
-            latent_w_shape = W // vae_spatial_downsample
-            latent_t_shape = 1 + (T - 1) // vae_temporal_downsample
-
-            num_vision_tokens = latent_h_shape * latent_w_shape * latent_t_shape + 2
+            num_vision_tokens = patch_h_shape * patch_w_shape * latent_t_shape + 2
             num_tokens += num_vision_tokens
 
         # Action part: each action time step is 1 token.
@@ -534,6 +580,8 @@ class IterativeJointDataLoader(JointDataLoader):
         prewarm: bool = True,
         default_lookahead_limit: int = JointDataLoader._DEFAULT_LOOKAHEAD_LIMIT,
         lookahead_limits: Dict[str, int] | None = None,
+        uniae_chunk_frames: int | Mapping[str, int] | None = None,
+        uniae_pad_frames: int | None = None,
     ):
         super().__init__(
             dataloaders,
@@ -547,6 +595,8 @@ class IterativeJointDataLoader(JointDataLoader):
             prewarm=prewarm,
             default_lookahead_limit=default_lookahead_limit,
             lookahead_limits=lookahead_limits,
+            uniae_chunk_frames=uniae_chunk_frames,
+            uniae_pad_frames=uniae_pad_frames,
         )
         self.seed = seed
         # Calculate probabilities for random sampling
@@ -787,6 +837,8 @@ class PackingDataLoader(JointDataLoader):
         audio_sample_rate: int = 48000,
         dataset_name: str = "default",
         lookahead_limit: int = JointDataLoader._DEFAULT_LOOKAHEAD_LIMIT,
+        uniae_chunk_frames: int | Mapping[str, int] | None = None,
+        uniae_pad_frames: int | None = None,
     ):
         """
         Args:
@@ -802,6 +854,8 @@ class PackingDataLoader(JointDataLoader):
             audio_sample_rate: Audio sample rate in Hz.
             dataset_name: Name tag attached to every sample in the output batch.
             lookahead_limit: Packing-loop look-ahead for the wrapped dataloader.
+            uniae_chunk_frames: Optional UniAE full chunk size, or resolution-keyed chunk sizes.
+            uniae_pad_frames: Optional UniAE boundary padding frames per chunk.
         """
         wrapped = {dataset_name: {"dataloader": dataloader, "ratio": 1}}
         super().__init__(
@@ -814,6 +868,8 @@ class PackingDataLoader(JointDataLoader):
             sound_latent_fps=sound_latent_fps,
             audio_sample_rate=audio_sample_rate,
             lookahead_limits={dataset_name: int(lookahead_limit)},
+            uniae_chunk_frames=uniae_chunk_frames,
+            uniae_pad_frames=uniae_pad_frames,
         )
 
     def __iter__(self):
@@ -905,6 +961,8 @@ class RandomJointDataLoader(JointDataLoader):
         audio_sample_rate: int = 48000,
         default_lookahead_limit: int = JointDataLoader._DEFAULT_LOOKAHEAD_LIMIT,
         lookahead_limits: Dict[str, int] | None = None,
+        uniae_chunk_frames: int | Mapping[str, int] | None = None,
+        uniae_pad_frames: int | None = None,
     ):
         super().__init__(
             dataloaders,
@@ -917,6 +975,8 @@ class RandomJointDataLoader(JointDataLoader):
             audio_sample_rate=audio_sample_rate,
             default_lookahead_limit=default_lookahead_limit,
             lookahead_limits=lookahead_limits,
+            uniae_chunk_frames=uniae_chunk_frames,
+            uniae_pad_frames=uniae_pad_frames,
         )
 
         # Convert data ratios to probabilities

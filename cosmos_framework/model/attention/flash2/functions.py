@@ -175,7 +175,7 @@ def flash2_attention(
     assert output.dim() == 4  # [B,N,H,Dv] or [1,total_tokens,H,Dv]
     assert lse.dim() == 3  # [B,H,N] or [1,H,total_tokens]
 
-
+    # NOTE: Do NOT call .contiguous on LSE, otherwise Attention Merging backward pass will be
     # incorrect. All output and lse tensors passed into `merge_attentions` must have the same data
     # pointer as their corresponding attention autograd ops!
     lse = lse.permute(0, 2, 1)  # [B,N,H] or [1,total_tokens,H]

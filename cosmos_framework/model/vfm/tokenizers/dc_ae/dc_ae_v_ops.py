@@ -311,7 +311,6 @@ class ConvLayer3d(nn.Module):
             x = F.pad(x, self.custom_padding, mode=self.custom_padding_mode)
 
         if self.causal_chunk_length is not None:
-
             B, C, T, H, W = x.shape
             assert T % self.causal_chunk_length == 0
             assert self.conv.stride[0] == 1

@@ -391,7 +391,7 @@ class IterationLoggerCallback(Callback):
         loss: torch.Tensor,
         iteration: int = 0,
     ) -> None:
-
+        # FIXME - this is not correct when using gradient accumulation since self.start_iteration_time is updated every batch
         # but this is only called when the optimizer is updated, so it's only the time for the last batch.
         self.elapsed_iteration_time += time.time() - self.start_iteration_time
 

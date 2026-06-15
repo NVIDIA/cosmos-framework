@@ -1,5 +1,6 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: OpenMDW-1.1
+
 """Minimal HFModel for the vfm/ unified VLM training path.
 
 Responsibilities:
@@ -259,8 +260,8 @@ class HFModel(nn.Module):
                 ``org/model`` repo IDs fall back to Hugging Face.
             credential_path: S3 credential file, or None for local/HF.
             parallel_dims: ``ParallelDims`` instance (from
-                ``projects.cosmos3.vfm.utils.parallelism``).  The loader uses
-                it via :func:`~projects.cosmos3.vfm.models.utils.safetensors_loader._get_dp_shard_mesh`
+                ``cosmos_framework.utils.vfm.parallelism``).  The loader uses
+                it via :func:`~cosmos_framework.model.vfm.utils.safetensors_loader._get_dp_shard_mesh`
                 to obtain the 1-D ``dp_shard`` sub-mesh (or None when
                 ``dp_shard <= 1``) for striping checkpoint reads across
                 FSDP shard ranks.  When non-None, the caller MUST have
@@ -317,7 +318,7 @@ class HFModel(nn.Module):
             "raw_video",
             # image_sizes is collected by collate_fn but is NOT a Qwen3-VL forward arg
             # (Qwen3-VL uses image_grid_thw instead). Strip it so strict HF signatures
-            # don't reject it.
+            # don't reject it. NOTE: image_sizes IS valid for LLaVA-style models — if
             # a future Phase extends to those, remove this entry.
             "image_sizes",
         }

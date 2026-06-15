@@ -25,7 +25,6 @@ class FlopCalculator:
     # estimator to underestimate per-sample work and the dynamic batcher to
     # pack batches too large. Keep this False until the slope and intercept
     # are refit against is_causal=True benchmark data.
-
     # benchmark runs and flip _IS_CAUSAL_FOR_CALIBRATION to True so this
     # calculator inherits the algorithmically correct FLOP count by default.
     _IS_CAUSAL_FOR_CALIBRATION: bool = False

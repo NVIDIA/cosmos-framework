@@ -11,6 +11,7 @@ Flash Attention v2 (flash2) Backend
 import torch
 
 from cosmos_framework.model.attention.utils.safe_ops import log
+from cosmos_framework.model.attention.utils.version import version_in_range
 
 # We lock to safe releases of Flash 2
 # We will have a separate backend identifier for 2025 releases with CuTeDSL
@@ -50,15 +51,13 @@ def flash2_supported() -> bool:
     else:
         flash2_version_str = flash_attn.__version__
 
-    # Version range check disabled to accept whatever flash_attn the OSS
-    # container ships.
-    # if not version_in_range(flash2_version_str, FLASH_ATTENTION_V2_MIN_VERSION, FLASH_ATTENTION_V2_MAX_VERSION):
-    #     log.debug(
-    #         "Flash Attention v2 build is not supported; this backend only supports versions "
-    #         f"{FLASH_ATTENTION_V2_MIN_VERSION} through {FLASH_ATTENTION_V2_MAX_VERSION}, got "
-    #         f"{flash2_version_str}."
-    #     )
-    #     return False
+    if not version_in_range(flash2_version_str, FLASH_ATTENTION_V2_MIN_VERSION, FLASH_ATTENTION_V2_MAX_VERSION):
+        log.debug(
+            "Flash Attention v2 build is not supported; this backend only supports versions "
+            f"{FLASH_ATTENTION_V2_MIN_VERSION} through {FLASH_ATTENTION_V2_MAX_VERSION}, got "
+            f"{flash2_version_str}."
+        )
+        return False
 
     return True
 

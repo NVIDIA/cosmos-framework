@@ -160,7 +160,7 @@ def maybe_download_hf_model_from_s3(
     s3_prefix = os.path.join(s3_prefix, model_name_or_path)
     # download the model from s3 to local cache
     if cache_dir is None:
-        cache_dir = os.path.expanduser(os.getenv("IMAGINAIRE_CACHE_DIR", "~/.cache/imaginaire"))
+        cache_dir = os.path.expanduser(os.getenv("IMAGINAIRE_CACHE_DIR", "~/.cache/cosmos_framework"))
 
     cache_dir = os.path.join(cache_dir, s3_prefix)
 

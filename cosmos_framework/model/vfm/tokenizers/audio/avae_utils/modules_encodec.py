@@ -1,5 +1,6 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: OpenMDW-1.1
+
 # Adapted from https://github.com/facebookresearch/encodec under the MIT license.
 
 """Convolutional layers wrappers and utilities."""

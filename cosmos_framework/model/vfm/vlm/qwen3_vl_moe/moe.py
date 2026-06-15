@@ -1,7 +1,6 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: OpenMDW-1.1
 
-
 from typing import Callable
 
 import torch
@@ -104,6 +103,7 @@ class Qwen3VLMoeTextExpertsGroupedMm(nn.Module):
         sentinel = torch.tensor([num_tokens], device=hidden_states.device)  # for padding slots
         token_indices_ext = torch.cat([token_indices_sorted, sentinel])
         combined_indices = token_indices_ext[permuted_indices.long()]
+        combined_indices = combined_indices.unsqueeze(-1).expand(-1, dim)
 
         # Pad scores with a zero sentinel so padding slots contribute nothing
         scores_ext = torch.cat([topk_scores_sorted, topk_scores_sorted.new_zeros(1)])
@@ -111,7 +111,7 @@ class Qwen3VLMoeTextExpertsGroupedMm(nn.Module):
 
         # Single gather (with a zero-padded sentinel row)
         input_padded = torch.cat([hidden_states, hidden_states.new_zeros(1, dim)])
-        routed_input = input_padded.index_select(dim=0, index=combined_indices)
+        routed_input = input_padded.gather(dim=0, index=combined_indices)
 
         # Run experts
         routed_output = _run_experts_grouped_mm(
@@ -124,7 +124,7 @@ class Qwen3VLMoeTextExpertsGroupedMm(nn.Module):
         )
 
         output_padded = torch.zeros_like(input_padded)
-        output_padded.index_add_(dim=0, index=combined_indices, source=routed_output)
+        output_padded.scatter_add_(dim=0, index=combined_indices, src=routed_output)
         return output_padded[:-1]
 
     def _reorder_tokens(
@@ -219,8 +219,9 @@ class Qwen3VLMoeTextExpertsNaive(nn.Module):
                 assert weighted_output.dtype == hidden_states.dtype
                 next_states.index_add_(0, token_idx, weighted_output)
         else:
-            hidden_states = hidden_states.unsqueeze(0).expand(
-                self.num_experts, -1, -1
+            hidden_states = hidden_states.repeat(self.num_experts, 1)  # [num_experts*num_tokens,hidden_size]
+            hidden_states = hidden_states.view(
+                self.num_experts, -1, self.hidden_size
             )  # [num_experts,num_tokens,hidden_size]
             gate_up = torch.bmm(hidden_states, self.gate_up_proj)  # [num_experts,num_tokens,2*moe_intermediate_size]
             gate, up = gate_up.chunk(

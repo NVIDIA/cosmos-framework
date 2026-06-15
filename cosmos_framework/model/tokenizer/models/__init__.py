@@ -11,6 +11,8 @@ This module provides:
 
 # Generic utilities
 # Metrics (moved from utils to metrics module for consolidation)
+from cosmos_framework.model.tokenizer.evaluation.reconstruction_metrics import calculate_psnr
+
 # Dense runtime
 from cosmos_framework.model.tokenizer.models.dense_runtime import (
     DenseAutoencoderRuntime,
@@ -46,6 +48,7 @@ __all__ = [
     # Utils
     "average_with_scatter_add",
     "batch_tensor_to_sparse",
+    "calculate_psnr",
     "crop_tensors_to_match",
     "reconstruct_from_temporal_slices",
     "resize_and_crop",

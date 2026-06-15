@@ -254,7 +254,7 @@ def varlen_tensor_checks(
             f"Q, K, and V must match in batch size, got {query.shape[0]=}, {key.shape[0]=}, {value.shape[0]=}."
         )
 
-
+    # NOTE: these checks introduce recompiles
     if not is_torch_compiling():
         # Validate max_seqlen values: neither can be negative, and they must be
         # both zero/None (not varlen) or both positive (varlen).
@@ -299,7 +299,7 @@ def varlen_tensor_checks(
         )
 
     # Validate user-input cumulative_seqlen_{Q,KV}, max_seqlen_{Q,KV}, total_seqlen_{Q,KV}
-
+    # NOTE: max_seqlen_Q == max_seqlen_KV == 0 is valid here (skip kernel / empty-batch case).
     # Mismatch (one 0, the other positive) is already caught by the early check above.
     # This feature may require support in the backends themselves; see NATTEN PR:
     # https://github.com/SHI-Labs/NATTEN/pull/327
@@ -334,7 +334,7 @@ def varlen_tensor_checks(
     total_seqlen_Q = query.shape[1]
     total_seqlen_KV = key.shape[1]
 
-
+    # NOTE: these checks introduce recompiles
     if not is_torch_compiling():
         # When both max_seqlens are 0, skip bounds checks (skip kernel / empty-batch case).
         # Mismatch is already caught by the early check, so at this point either both are 0 or both are positive.

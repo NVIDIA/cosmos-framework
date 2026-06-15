@@ -94,13 +94,22 @@ class Qwen3VLMoeTextRMSNorm(nn.Module):
 
 
 class Qwen3VLMoeTextSparseMoeBlock(nn.Module):
-    def __init__(self, config):
+    def __init__(self, config, noisy_gating: bool = False):
         super().__init__()
         self.config = config
         self.hidden_size = config.hidden_size
         self.num_experts = config.num_experts
         self.top_k = config.num_experts_per_tok
         self.gate = nn.Linear(config.hidden_size, config.num_experts, bias=False)
+        # Noisy top-k gating (Shazeer 2017): a second projection produces a
+        # per-token, per-expert noise magnitude. During training the top-k
+        # selection is made on clean_logits + N(0,1) * softplus(gate_noise(x)),
+        # which keeps under-used experts in play and fights routing collapse.
+        # Gen-tower only; the und tower constructs this block with
+        # noisy_gating=False so it has no gate_noise parameter.
+        self.noisy_gating = noisy_gating
+        if noisy_gating:
+            self.gate_noise = nn.Linear(config.hidden_size, config.num_experts, bias=False)
         self.experts = create_text_experts(config, implementation_type="grouped_mm")
 
         # ── Heatmap tracking ──────────────────────────────────────────────────────
@@ -236,10 +245,25 @@ class Qwen3VLMoeTextSparseMoeBlock(nn.Module):
         num_tokens = hidden_states.shape[0]
 
         router_logits = self.gate(hidden_states)  # [num_tokens,num_experts]
+        # Clean router distribution. Always used for monitoring (entropy/stability
+        # buffers) and the load-balancing-loss probability term so those stay
+        # comparable regardless of whether noisy gating is enabled.
         routing_weights = torch.nn.functional.softmax(
             router_logits, dim=-1, dtype=torch.float32
         )  # [num_tokens,num_experts]
-        expert_weights, expert_indices = torch.topk(routing_weights, self.top_k, dim=-1)
+
+        # Noisy top-k gating: only the expert *selection* (and the combine
+        # weights over the selected experts) sees the noise. When noise is off
+        # or at eval time, selection_weights == routing_weights, so behavior is
+        # identical to plain top-k gating.
+        if self.noisy_gating and self.training:
+            noise_std = torch.nn.functional.softplus(self.gate_noise(hidden_states))  # [num_tokens,num_experts]
+            noisy_logits = router_logits + torch.randn_like(router_logits) * noise_std
+            selection_weights = torch.nn.functional.softmax(noisy_logits, dim=-1, dtype=torch.float32)
+        else:
+            selection_weights = routing_weights
+
+        expert_weights, expert_indices = torch.topk(selection_weights, self.top_k, dim=-1)
         # expert_weights: [num_tokens,top_k], expert_indices: [num_tokens,top_k]
 
         expert_weights = expert_weights / expert_weights.sum(dim=-1, keepdim=True)  # [num_tokens,top_k]
@@ -385,6 +409,10 @@ class Qwen3VLMoeTextSparseMoeBlock(nn.Module):
         nn.init.normal_(self.gate.weight, mean=0.0, std=std)
         nn.init.normal_(self.experts.gate_up_proj, mean=0.0, std=std)
         nn.init.normal_(self.experts.down_proj, mean=0.0, std=std)
+        if self.noisy_gating:
+            # Zero-init so the initial per-expert noise std is softplus(0)=ln(2)
+            # uniformly, giving symmetric exploration before gate_noise learns.
+            nn.init.zeros_(self.gate_noise.weight)
 
 
 def rotate_half(x):

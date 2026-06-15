@@ -17,10 +17,12 @@ PRETRAINED_TOKENIZER_WAN2PT2_VAE_PTH = "pretrained/tokenizers/video/wan2pt2/Wan2
 PRETRAINED_TOKENIZER_FLUX_VAE_PTH = "pretrained/tokenizers/image/flux/ae.safetensors"
 
 # UniAE checkpoint paths
-PRETRAINED_TOKENIZER_UNIAE_4X16X16_C48_T8TO24_64TO512P_FPS_ALL_ENCODER_NONCAUSAL_DECODER_NONCAUSAL_NOGAN_BEST_S1_VAE_PTH = "pretrained/tokenizers/video/cosmos/uniae4x16x16_c48_t8to24_64to512p_fps_all_encoder_noncausal_decoder_noncausal_nogan_best_s1.pt"
+PRETRAINED_TOKENIZER_UNIAE_4X16X16_C48_T16TO160_MIXP_FPS_MIX_ENCODER_NONCAUSAL_DECODER_NONCAUSAL_NOGAN_S3_NEMOTRON2B_VAE_PTH = (
+    "s3://bucket1/uniae/tok_experiments/"
+    "s3_siglip2_so400m_singledec_l48_textdec_nemotron2b_32node_bucketed_256480_v45i32c23_t16-160_exp009/checkpoints/iter_000050000.pt"
+)
 
 # DCAE checkpoint paths
-PRETRAINED_TOKENIZER_DCAE_PTH = "pretrained/tokenizers/video/cosmos/dc-ae-v-1.0-f32t4c64-cosmos-encoder-causal-decoder-chunk-causal-4-frame-120-pad-7-no-gan.pt"
 PRETRAINED_TOKENIZER_DCAE_4X32X32_C64_T120_256P_FPS_ALL_ENCODER_CAUSAL_DECODER_CHUNKCAUSAL4_NOGAN_COSMOS_PAD_7_V0PT2_PTH = "pretrained/tokenizers/video/cosmos/dcae4x32x32_c64_t120_256p_fps_all_encoder_causal_decoder_chunk_causal_4_nogan_cosmos_pad_7_v0.2.pt"
 PRETRAINED_TOKENIZER_DCAE_4X32X32_C96_T120_256P_FPS_ALL_ENCODER_CAUSAL_DECODER_CHUNKCAUSAL4_NOGAN_COSMOS_PAD_7_V0PT2_PTH = "pretrained/tokenizers/video/cosmos/dcae4x32x32_c96_t120_256p_fps_all_encoder_causal_decoder_chunk_causal_4_nogan_cosmos_pad_7_v0.2.pt"
 PRETRAINED_TOKENIZER_DCAE_4X32X32_C128_T120_256P_FPS_ALL_ENCODER_CAUSAL_DECODER_CHUNKCAUSAL4_NOGAN_COSMOS_PAD_7_V0PT2_PTH = "pretrained/tokenizers/video/cosmos/dcae4x32x32_c128_t120_256p_fps_all_encoder_causal_decoder_chunk_causal_4_nogan_cosmos_pad_7_v0.2.pt"
@@ -44,6 +46,7 @@ FluxVAEConfig: LazyDict = L(FluxVAEInterface)(
     chunk_duration=1,
     spatial_compression_factor=8,
     temporal_compression_factor=1,
+    causal=True,
 )
 
 Wan2pt1VAEConfig: LazyDict = L(Wan2pt1VAEInterface)(
@@ -53,6 +56,7 @@ Wan2pt1VAEConfig: LazyDict = L(Wan2pt1VAEInterface)(
     vae_path=PRETRAINED_TOKENIZER_WAN2PT1_VAE_PTH,
     spatial_compression_factor=8,
     temporal_compression_factor=4,
+    causal=True,
 )
 
 Wan2pt2VAEConfig: LazyDict = L(Wan2pt2VAEInterface)(
@@ -61,14 +65,7 @@ Wan2pt2VAEConfig: LazyDict = L(Wan2pt2VAEInterface)(
     vae_path=PRETRAINED_TOKENIZER_WAN2PT2_VAE_PTH,
     spatial_compression_factor=16,
     temporal_compression_factor=4,
-)
-
-DCAE4x32x32Config: LazyDict = L(DCAE4x32x32Interface)(
-    bucket_name=PLACEHOLDER,
-    object_store_credential_path_pretrained=PLACEHOLDER,
-    vae_path=PRETRAINED_TOKENIZER_DCAE_PTH,
-    spatial_compression_factor=32,
-    temporal_compression_factor=4,
+    causal=True,
 )
 
 DCAE4x32x32C64T120_256pFpsAllEncoderCausalDecoderChunkCausal4NoganCosmosPad7V0pt2Config: LazyDict = L(
@@ -80,6 +77,7 @@ DCAE4x32x32C64T120_256pFpsAllEncoderCausalDecoderChunkCausal4NoganCosmosPad7V0pt
     model_name="dcae4x32x32_c64_t120_256p_fps_all_encoder_causal_decoder_chunk_causal_4_nogan_cosmos_pad_7_v0.2",
     spatial_compression_factor=32,
     temporal_compression_factor=4,
+    causal=True,
 )
 
 DCAE4x32x32C96T120_256pFpsAllEncoderCausalDecoderChunkCausal4NoganCosmosPad7V0pt2Config: LazyDict = L(
@@ -104,12 +102,17 @@ DCAE4x32x32C128T120_256pFpsAllEncoderCausalDecoderChunkCausal4NoganCosmosPad7V0p
     temporal_compression_factor=4,
 )
 
-UniAE4x16x16C48T8to24_64to512pFpsAllEncoderNoncausalDecoderNoncausalNoganBestS1Config: LazyDict = L(UniAEVAEInterface)(
+
+UniAE4x16x16C48T16to160MixpFpsMixEncoderNoncausalDecoderNoncausalNoganS3Nemotron2bVAEConfig: LazyDict = L(
+    UniAEVAEInterface
+)(
     bucket_name=PLACEHOLDER,
     object_store_credential_path_pretrained=PLACEHOLDER,
-    vae_path=PRETRAINED_TOKENIZER_UNIAE_4X16X16_C48_T8TO24_64TO512P_FPS_ALL_ENCODER_NONCAUSAL_DECODER_NONCAUSAL_NOGAN_BEST_S1_VAE_PTH,
+    vae_path=PRETRAINED_TOKENIZER_UNIAE_4X16X16_C48_T16TO160_MIXP_FPS_MIX_ENCODER_NONCAUSAL_DECODER_NONCAUSAL_NOGAN_S3_NEMOTRON2B_VAE_PTH,
     spatial_compression_factor=16,
     temporal_compression_factor=4,
+    pixel_trim=True,
+    causal=False,
 )
 
 # =============================================================================
@@ -173,8 +176,8 @@ def register_tokenizer():
     cs.store(
         group="tokenizer",
         package="model.config.tokenizer",
-        name="uniae_4x16x16_c48_t8to24_64to512p_fps_all_encoder_noncausal_decoder_noncausal_nogan_best_s1_tokenizer",
-        node=UniAE4x16x16C48T8to24_64to512pFpsAllEncoderNoncausalDecoderNoncausalNoganBestS1Config,
+        name="uniae_4x16x16_c48_t16to160_mixp_fps_mix_encoder_noncausal_decoder_noncausal_nogan_s3_nemotron2b_tokenizer",
+        node=UniAE4x16x16C48T16to160MixpFpsMixEncoderNoncausalDecoderNoncausalNoganS3Nemotron2bVAEConfig,
     )
     # Flux tokenizer
     cs.store(group="tokenizer", package="model.config.tokenizer", name="flux_tokenizer", node=FluxVAEConfig)
@@ -182,25 +185,19 @@ def register_tokenizer():
     cs.store(
         group="tokenizer",
         package="model.config.tokenizer",
-        name="dc_ae_4x32x32_tokenizer",
-        node=DCAE4x32x32Config,
-    )
-    cs.store(
-        group="tokenizer",
-        package="model.config.tokenizer",
-        name="dc_ae_4x32x32_c64_t120_256p_fps_all_encoder_causal_decoder_chunk_causal_4_nogan_cosmos_pad_7_v0.2_tokenizer",
+        name="dcae4x32x32_c64_t120_256p_fps_all_encoder_causal_decoder_chunk_causal_4_nogan_cosmos_pad_7_v0.2_tokenizer",
         node=DCAE4x32x32C64T120_256pFpsAllEncoderCausalDecoderChunkCausal4NoganCosmosPad7V0pt2Config,
     )
     cs.store(
         group="tokenizer",
         package="model.config.tokenizer",
-        name="dc_ae_4x32x32_c96_t120_256p_fps_all_encoder_causal_decoder_chunk_causal_4_nogan_cosmos_pad_7_v0.2_tokenizer",
+        name="dcae4x32x32_c96_t120_256p_fps_all_encoder_causal_decoder_chunk_causal_4_nogan_cosmos_pad_7_v0.2_tokenizer",
         node=DCAE4x32x32C96T120_256pFpsAllEncoderCausalDecoderChunkCausal4NoganCosmosPad7V0pt2Config,
     )
     cs.store(
         group="tokenizer",
         package="model.config.tokenizer",
-        name="dc_ae_4x32x32_c128_t120_256p_fps_all_encoder_causal_decoder_chunk_causal_4_nogan_cosmos_pad_7_v0.2_tokenizer",
+        name="dcae4x32x32_c128_t120_256p_fps_all_encoder_causal_decoder_chunk_causal_4_nogan_cosmos_pad_7_v0.2_tokenizer",
         node=DCAE4x32x32C128T120_256pFpsAllEncoderCausalDecoderChunkCausal4NoganCosmosPad7V0pt2Config,
     )
 

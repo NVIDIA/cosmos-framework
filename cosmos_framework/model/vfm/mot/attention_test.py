@@ -244,7 +244,7 @@ def _test_attention_impls(
                 kwargs["sdpa_func"] = self.sdpa_func
             return self.attention_func(*args, **kwargs)
 
-
+    # NOTE: we should try and maintain only one copy of QKV offsets if they're identical
     # between queries and key/values, since this enables the "don't care" mask, which enables
     # more attention backends in I4 attention.
     if query_factored_1["_causal_seq_offsets"].equal(key_factored_1["_causal_seq_offsets"]) and query_factored_1[

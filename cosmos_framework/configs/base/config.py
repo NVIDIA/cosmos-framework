@@ -38,7 +38,6 @@ class Config(config.Config):
             {"ema": "power"},
             {"tokenizer": "wan2pt2_tokenizer"},
             {"sound_tokenizer": None},  # Optional: for audio-video generation
-            {"cluster": "default"},
             {"vlm_config": None},
             {"ckpt_type": "dcp"},
             {"experiment": None},
@@ -72,7 +71,6 @@ def make_config() -> Config:
 
     from cosmos_framework.configs.base.defaults.callbacks import register_callbacks
     from cosmos_framework.configs.base.defaults.checkpointer import register_checkpoint, register_ckpt_type
-    from cosmos_framework.configs.base.defaults.cluster import register_cluster
     from cosmos_framework.configs.base.defaults.ema import register_ema
 
     # from cosmos_framework.configs.base.defaults.data import register_data
@@ -92,7 +90,6 @@ def make_config() -> Config:
     register_tokenizer()
     register_sound_tokenizer()
     register_ema()
-    register_cluster()
     register_vlm()
 
     # Register shipped experiments explicitly. (vision_sft_nano also defines

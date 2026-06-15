@@ -1,14 +1,15 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: OpenMDW-1.1
+
 """FSDP2 wrapping for Cosmos3 VLM ``HFModel`` instances.
 
 Hosts the single VLM-specific ``parallelize`` entry point used by
-``vlm_model.VLMModel._init_vlm``.  Lives under ``projects/cosmos3/vfm/models/``
+``vlm_model.VLMModel._init_vlm``.  Lives under ``cosmos_framework/model/vfm/``
 so the FSDP wrapping concern sits next to the model class it operates on
 (mirroring the layout of ``models/mot/parallelize_unified_mot.py`` for the
 MoT path).
 
-Pure parallelism plumbing — :class:`~projects.cosmos3.vfm.utils.parallelism.ParallelDims`
+Pure parallelism plumbing — :class:`~cosmos_framework.utils.vfm.parallelism.ParallelDims`
 and its meshes — stays in ``vfm/utils/parallelism.py``.
 """
 

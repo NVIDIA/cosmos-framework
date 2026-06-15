@@ -112,7 +112,7 @@ class HTTPBackend(BaseStorageBackend):
     def isfile(self, filepath: Union[str, Path]) -> bool:
         raise NotImplementedError(f"isfile not supported in {self.name}")
 
-    def join_path(self, filepath: Union[str, Path], *filepaths: Union[str, Path]) -> Union[str, Path]:
+    def join_path(self, filepath: Union[str, Path], *filepaths: Union[str, Path]) -> str:
         raise NotImplementedError(f"join_path not supported in {self.name}")
 
     @contextmanager

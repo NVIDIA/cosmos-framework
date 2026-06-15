@@ -516,7 +516,7 @@ def compute_qwen3vl_flops(
         flops_breakdown["vision_encoder"] = 0
 
     # Embedding layer FLOPs
-
+    # NOTE: Only text tokens need embeddings. Visual tokens are already embedded by vision encoder.
     text_tokens = total_tokens - visual_tokens
     if include_embeddings:
         # Embedding lookup: typically counted as 0 or hidden_size operations per token

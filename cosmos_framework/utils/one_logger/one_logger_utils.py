@@ -317,8 +317,10 @@ class OneLoggerUtils:
                 self.one_logger = OneLogger(config=config)
             except BaseException:
                 logger.info(
-                    "WARNING: the `one_logger` package is required to enable e2e metrics tracking, "
-                    "but it is not installed."
+                    "WARNING: one_logger package is required to enable e2e metrics "
+                    "tracking. please go to "
+                    "https://invalid_url"
+                    " for details to install it"
                 )
         else:
             self.one_logger = None
@@ -1142,7 +1144,7 @@ class OneLoggerUtils:
 
         self._store_set(f"productive_time:{global_step}", productive_time)
 
-
+        # NOTE: If on_save_checkpoint_success is called already, track productive metrics here
         if self._store_has_key(f"on_save_checkpoint_success:{global_step}"):
             successful_save_checkpoint_sync_finish_time = productive_time.pop(
                 "successful_save_checkpoint_sync_finish_time"
@@ -1210,7 +1212,7 @@ class OneLoggerUtils:
         # Fetch productivity metrics cached on_save_checkpoint_start
         productive_metrics = self.one_logger.store_pop(f"productive_metrics:{global_step}")
 
-
+        # NOTE: Only track *_sync_* metrics after on_save_checkpoint_end is called.
         # Check if on_save_checkpoint_end is called.
         if self._store_has_key(f"on_save_checkpoint_end:{global_step}"):
             productive_time = self._store_get(f"productive_time:{global_step}")

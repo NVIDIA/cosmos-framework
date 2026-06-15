@@ -1,7 +1,6 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: OpenMDW-1.1
 
-
 from typing import Any
 
 import attrs
@@ -42,6 +41,14 @@ class DiffusionExpertConfig:
     rope_t_extrapolation_ratio: float = 1.0
     enable_fps_modulation: bool = False
     base_fps: int = 24
+    # Base temporal compression factor for SOUND m-RoPE. None = current behavior
+    # (sound advances at base_fps positions/sec). Set to the vision tcf (4) to put
+    # sound on the same latent-frame temporal grid as vision/action.
+    sound_base_temporal_compression_factor: int | None = None
+    # Temporal coordinates used for unified_3d_mrope vision tokens.
+    # - "latent_index": legacy behavior, positions are 0, 1, ..., T_latent-1.
+    # - "uniae_source_right_edge": use UniAE padded-patch right-edge source-frame coordinates.
+    vision_temporal_position_mode: str = "latent_index"
     # For unified_3d_mrope: whether spatial (H, W) indices reset to 0 for each vision segment
     unified_3d_mrope_reset_spatial_ids: bool = True
     # Setting the temporal gap on the boundary of the different modalities, default is 0, using a value greater than 0 will add an additional offset on the accumulated temporal offset.
@@ -273,3 +280,12 @@ class OmniMoTModelConfig:
     sound_latent_fps: int = 25  # Sound tokenizer's latent rate (e.g., 48kHz / 1920 hop = 25 Hz)
 
     log_enc_time_every_n: int = 100  # Frequency of logging encoding time to W&B
+
+    # When True, ``OmniMoTModel.state_dict`` / ``load_state_dict`` skip the
+    # reasoner (und) pathway weights under ``language_model`` — i.e. every key
+    # WITHOUT a ``_moe_gen`` suffix (including ``visual`` / ``lm_head`` /
+    # ``embed_tokens``).  These are not written to checkpoints and are left
+    # untouched on load (typically already populated from the HF pretrained
+    # backbone).  Generation-pathway (``_moe_gen``) and VFM heads are saved /
+    # loaded as usual.
+    exclude_reasoner_weights_from_checkpoint: bool = False

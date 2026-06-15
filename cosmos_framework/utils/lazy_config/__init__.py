@@ -1,4 +1,4 @@
-# Copyright (c) Facebook, Inc. and its affiliates.
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: OpenMDW-1.1
 
 import os
@@ -15,7 +15,7 @@ OmegaConf.to_object = to_object
 PLACEHOLDER = None
 
 
-class LazyDict(DictConfig):
+class LazyDict(DictConfig):  # NOTE: to differentiate between LazyDict & DictConfig
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
 

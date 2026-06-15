@@ -158,7 +158,6 @@ class TokenizeData(Augmentor):
             if message["role"] == "user" and isinstance(message["content"], list):
                 total_images += len([content for content in message["content"] if content["type"] == "image"])
                 total_videos += len([content for content in message["content"] if content["type"] == "video"])
-
         assert total_videos == 1 or total_videos == 0, "Only one video is supported for now"
 
         # url
@@ -167,7 +166,6 @@ class TokenizeData(Augmentor):
         # go through each message in the conversation
         for message in conversation:
             # for user message, we insert the media
-
             if message["role"] == "user" and isinstance(
                 message["content"], list
             ):  # Otherwise it's text and content is a string
@@ -225,7 +223,6 @@ class TokenizeData(Augmentor):
                         raw_images.append(image)
 
                     elif content["type"] == "video":
-
                         # as tokenization will NOT upsample the video, we can use a larger value here at the cost of multiple video having 1.5x token length
                         max_total_pixels = token_to_pixels(self.max_video_token_length * 1.5, temporal_patch_size=2)
                         media_key = content["video"]
@@ -248,7 +245,6 @@ class TokenizeData(Augmentor):
                             return None
                         videos = data_dict["media"][media_key]["videos"]  # list of PIL images
                         fps = data_dict["media"][media_key]["fps"]
-
                         # this is because videos are decoded to be around "max_video_token_length" tokens
 
                         videos = maybe_subsample_frames(

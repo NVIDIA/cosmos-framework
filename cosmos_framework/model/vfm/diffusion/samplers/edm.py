@@ -199,7 +199,7 @@ def fori_loop(lower: int, upper: int, body_fun: Callable[[int, Any], Any], init_
     """
     val = init_val
     for i in range(lower, upper):
-        # Periodic log during sampling so long-running jobs keep producing output.
+        # Add log during sampling to meet APS job health requirement of one log every 2mins
         if i % 10 == 0:
             log.info(f"fori_loop: {i}")
         val = body_fun(i, val)

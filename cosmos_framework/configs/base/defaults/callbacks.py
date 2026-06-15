@@ -10,7 +10,6 @@ from cosmos_framework.utils.lazy_config import PLACEHOLDER
 from cosmos_framework.utils.lazy_config import LazyCall as L
 from cosmos_framework.utils.callback import LowPrecisionCallback, WandBCallback
 from cosmos_framework.callbacks.compile_tokenizer import CompileTokenizer
-
 from cosmos_framework.callbacks.device_monitor import DeviceMonitor
 from cosmos_framework.callbacks.every_n_draw_sample import EveryNDrawSample
 from cosmos_framework.callbacks.expert_heatmap import ExpertHeatmap
