@@ -237,6 +237,12 @@ action_policy_droid_nano["model"]["config"]["tokenizer"]["encode_exact_durations
 action_policy_droid_nano["model"]["config"]["max_num_tokens_after_packing"] = -1
 
 
+# Weight the vision flow-matching loss 10x in the total loss (the NANO default is 1.0).
+# loss_scale multiplies only the vision term, balancing it against the action loss
+# (action_loss_weight=10) so both heads train at comparable gradient magnitude.
+action_policy_droid_nano["model"]["config"]["rectified_flow_training_config"]["loss_scale"] = 10.0
+
+
 for _item in [action_policy_droid_nano]:
     _name = [k for k, v in globals().items() if v is _item][0]
     cs.store(group="experiment", package="_global_", name=_name, node=_item)
