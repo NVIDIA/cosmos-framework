@@ -112,7 +112,7 @@ class AgiBotWorldBetaLeRobotDataset(ActionBaseDataset):
     def __init__(
         self,
         root: str,
-        fps: float = 10.0,
+        fps: float = 30.0,
         chunk_length: int = 16,
         mode: str = "joint",
         pose_convention: PoseConvention = "backward_framewise",

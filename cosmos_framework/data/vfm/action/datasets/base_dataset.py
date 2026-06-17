@@ -57,6 +57,7 @@ class ActionBaseDataset(ABC, Dataset):
         self._pose_convention = pose_convention
         self._tolerance_s = float(tolerance_s)
         self._viewpoint = viewpoint
+        self._domain_name = domain_name
         self._domain_id = get_domain_id(domain_name)
         self._action_normalization = action_normalization
         self._norm_stats: dict[str, torch.Tensor] | None = None
@@ -96,6 +97,14 @@ class ActionBaseDataset(ABC, Dataset):
     @mode.setter
     def mode(self, value: str) -> None:
         self._mode = value
+
+    @property
+    def domain_name(self) -> str:
+        return self._domain_name
+
+    @property
+    def viewpoint(self) -> str:
+        return self._viewpoint
 
     @property
     def domain_id(self) -> int:
