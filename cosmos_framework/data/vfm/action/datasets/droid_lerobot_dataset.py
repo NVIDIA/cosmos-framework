@@ -351,3 +351,19 @@ class DROIDLeRobotDataset(ActionBaseDataset):
         if self._use_filter_dict:
             return int(self._seg_cum[-1]) if self._seg_cum.size else 0
         return int(self._valid_cum[-1]) if self._valid_cum.size else 0
+
+    def get_shuffle_blocks(self) -> list[tuple[int, int]]:
+        """Per-episode (or per kept-segment, when ``use_filter_dict``) flat-index blocks
+        ``(start, length)``. ``ActionIterableShuffleDataset`` shuffles the ORDER of these
+        blocks and shards them disjointly across ranks, while keeping windows *within* a
+        block sequential -> decorrelates batches across ranks without random-access I/O
+        (preserves locality + copy-on-write memory sharing across workers)."""
+        cum = self._seg_cum if self._use_filter_dict else self._valid_cum
+        blocks: list[tuple[int, int]] = []
+        prev = 0
+        for c in np.asarray(cum).tolist():
+            c = int(c)
+            if c > prev:
+                blocks.append((prev, c - prev))
+            prev = c
+        return blocks

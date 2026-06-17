@@ -20,6 +20,10 @@
 #                        (e.g. data_setting.max_tokens=16000 for VLM smokes).
 #   MASTER_PORT          torchrun --master_port; default 50012.
 #   NPROC_PER_NODE       torchrun --nproc_per_node; default 8.
+#   NNODES               torchrun --nnodes; multi-node only (unset = single-node).
+#   NODE_RANK            torchrun --node_rank; this worker's 0-based index.
+#   MASTER_ADDR          torchrun --master_addr; rank-0 host (multi-node only — it
+#                        has no torchrun env fallback, so it must be passed here).
 #   LOG_FILENAME         override $LOG_DIR/${LOG_FILENAME}
 #                        (default <toml-stem>_sft.log).
 #
@@ -83,8 +87,16 @@ if (( ${#TAIL_OVERRIDES[@]} > 0 )); then
     TRAILING_ARGS=(-- "${TAIL_OVERRIDES[@]}")
 fi
 
+# torchrun topology. Single-node by default; a SLURM/Lepton wrapper sets NNODES /
+# NODE_RANK / MASTER_ADDR for multi-node. Each is appended only when set, so with all
+# three unset the invocation is identical to the single-node case.
+TORCHRUN_ARGS=(--nproc_per_node="${NPROC_PER_NODE:-8}" --master_port="${MASTER_PORT:-50012}")
+[[ -n "${NNODES:-}" ]]      && TORCHRUN_ARGS+=(--nnodes="$NNODES")
+[[ -n "${NODE_RANK:-}" ]]   && TORCHRUN_ARGS+=(--node_rank="$NODE_RANK")
+[[ -n "${MASTER_ADDR:-}" ]] && TORCHRUN_ARGS+=(--master_addr="$MASTER_ADDR")
+
 IMAGINAIRE_OUTPUT_ROOT="$IMAGINAIRE_OUTPUT_ROOT" PYTHONPATH=. \
-    torchrun --nproc_per_node="${NPROC_PER_NODE:-8}" --master_port="${MASTER_PORT:-50012}" -m cosmos_framework.scripts.train \
+    torchrun "${TORCHRUN_ARGS[@]}" -m cosmos_framework.scripts.train \
     --sft-toml="$TOML_FILE" \
     "${TRAILING_ARGS[@]}" \
     2>&1 | tee "$LOG_FILE"
