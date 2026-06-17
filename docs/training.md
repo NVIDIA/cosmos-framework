@@ -79,7 +79,7 @@ uvx hf@latest download Wan-AI/Wan2.2-TI2V-5B Wan2.2_VAE.pth \
 
 <details><summary><b>Reasoner Alignment SFT with LLaVA-OneVision (vfm-vlm)</b></summary>
 
-Alignment SFT for the Reasoner variant on the [lmms-lab/LLaVA-OneVision-Data](https://huggingface.co/datasets/lmms-lab/LLaVA-OneVision-Data) dataset (streamed from HF Hub). Skips Step 2: the backbone is `Qwen/Qwen3-VL-8B-Instruct` (set by the parent experiment's `vlm_policy=qwen3_vl_8b_instruct` default) and is fetched from the HF Hub by the model downloader at startup — no DCP conversion needed and no env-var plumbing required.
+Alignment SFT for the Reasoner variant on the [lmms-lab/LLaVA-OneVision-Data](https://huggingface.co/datasets/lmms-lab/LLaVA-OneVision-Data) dataset (streamed from HF Hub). Skips Step 2: by default the backbone `Qwen/Qwen3-VL-8B-Instruct` is fetched from the HF Hub by the model downloader at startup — no DCP conversion needed and no required env vars. To instead start from a merged Cosmos3 reasoner snapshot (Cosmos3-Nano LM merged onto the Qwen3-VL visual tower), build it with `convert_model_to_vlm_safetensors` (see [Step 2](#step-2--prepare-checkpoint)) and point `VLM_SAFETENSORS_PATH` at it — same mechanism as the VideoPhy-2 recipe below.
 
 Launch shell: `examples/launch_sft_llava_ov.sh`
 
@@ -91,6 +91,11 @@ Launch shell: `examples/launch_sft_llava_ov.sh`
 # (optional) HF_TOKEN raises HF Hub rate limits for the streamed dataset
 # revision lookup — useful if you're running 8-rank fan-out from a single IP:
 # export HF_TOKEN=hf_...
+#
+# (optional) VLM_SAFETENSORS_PATH starts training from a local pre-converted
+# Qwen3-VL safetensors snapshot (e.g. Cosmos3-Nano LM merged with the Qwen3-VL
+# visual tower) instead of the public HF backbone:
+# export VLM_SAFETENSORS_PATH=$PWD/examples/checkpoints/Cosmos3-Nano-VLM
 ```
 
 </details>
@@ -127,7 +132,7 @@ python -m cosmos_framework.scripts.convert_model_to_dcp \
 
 `$BASE_CHECKPOINT_NAME` (e.g. `Cosmos3-Nano`, `Cosmos3-Super`) is a registered name in the checkpoint catalog; the converter downloads the matching repo from the Hugging Face Hub and writes the DCP into `examples/checkpoints/$BASE_CHECKPOINT_NAME`.
 
-**Reasoner Alignment SFT with LLaVA-OneVision (vfm-vlm):** Skip this step — the Reasoner alignment SFT loads `Qwen/Qwen3-VL-8B-Instruct` from the HF Hub at startup (no DCP conversion, no env vars).
+**Reasoner Alignment SFT with LLaVA-OneVision (vfm-vlm):** Skip this step — the Reasoner alignment SFT loads `Qwen/Qwen3-VL-8B-Instruct` from the HF Hub at startup (no DCP conversion required). To start from a merged Cosmos3 reasoner snapshot instead, build one with `convert_model_to_vlm_safetensors` (see the VideoPhy-2 note below) and pass it via `VLM_SAFETENSORS_PATH`.
 
 **Reasoner Alignment SFT with VideoPhy-2 (Cosmos3-Nano):** Use `cosmos_framework.scripts.convert_model_to_vlm_safetensors` instead.
 
@@ -154,12 +159,12 @@ bash examples/launch_sft_vision_nano.sh
 
 Each launcher's default paths come from the `DATASET_PATH` + `BASE_CHECKPOINT_PATH` defaults declared at the top of its `.sh` (each uses `: "${VAR:=…}"` so any value you `export` in the shell before launching wins over the default):
 
-| Launch shell                   | Post-Training Task | Default $DATASET_PATH (under examples/data/)               | Default $BASE_CHECKPOINT_PATH (under examples/checkpoints/) |
-| ------------------------------ | ------------------ | ---------------------------------------------------------- | ----------------------------------------------------------- |
-| `launch_sft_vision_nano.sh`    | Generator SFT      | `BridgeData2-Subset-Synthetic-Captions/sft_dataset_bridge` | `Cosmos3-Nano`                                              |
-| `launch_sft_vision_super.sh`   | Generator SFT      | `BridgeData2-Subset-Synthetic-Captions/sft_dataset_bridge` | `Cosmos3-Super`                                             |
-| `launch_sft_llava_ov.sh`       | Reasoner SFT       | (none; dataset streams from HF Hub)                        | (none; backbone fetched at startup)                         |
-| `launch_sft_videophy2_nano.sh` | Reasoner SFT       | (none; set `VIDEOPHYSICS_ROOT` env)                        | (none; set `VLM_SAFETENSORS_PATH` env)                      |
+| Launch shell                   | Post-Training Task | Default $DATASET_PATH (under examples/data/)               | Default $BASE_CHECKPOINT_PATH (under examples/checkpoints/)        |
+| ------------------------------ | ------------------ | ---------------------------------------------------------- | ------------------------------------------------------------------ |
+| `launch_sft_vision_nano.sh`    | Generator SFT      | `BridgeData2-Subset-Synthetic-Captions/sft_dataset_bridge` | `Cosmos3-Nano`                                                     |
+| `launch_sft_vision_super.sh`   | Generator SFT      | `BridgeData2-Subset-Synthetic-Captions/sft_dataset_bridge` | `Cosmos3-Super`                                                    |
+| `launch_sft_llava_ov.sh`       | Reasoner SFT       | (none; dataset streams from HF Hub)                        | (none; backbone fetched at startup, or set `VLM_SAFETENSORS_PATH`) |
+| `launch_sft_videophy2_nano.sh` | Reasoner SFT       | (none; set `VIDEOPHYSICS_ROOT` env)                        | (none; set `VLM_SAFETENSORS_PATH` env)                             |
 
 `WAN_VAE_PATH` defaults to `examples/checkpoints/wan22_vae/Wan2.2_VAE.pth` for every non-reasoner recipe.
 
