@@ -10,16 +10,32 @@
 # [job].task = "vlm" — picks cosmos_framework/configs/base/vlm/config.py as the base config.
 #
 # The dataset streams from the HuggingFace Hub, so DATASET_PATH /
-# WAN_VAE_PATH / BASE_CHECKPOINT_PATH are NOT required; only HF_TOKEN may
-# be needed for gated tokenizer downloads. Two model knobs that the
-# SFTExperimentConfig dataclass does not model live in TAIL_OVERRIDES:
+# WAN_VAE_PATH / BASE_CHECKPOINT_PATH are NOT required.
 #
-#   model.config.policy.backbone.model_name=<HF or local path>
-#   data_setting.max_tokens=<int>
+# Optional env:
+#   HF_TOKEN               for gated Qwen3-VL-8B-Instruct downloads.
+#   VLM_SAFETENSORS_PATH   local directory of pre-converted Qwen3-VL safetensors
+#                          (e.g. a Cosmos3-Nano LM merged with Qwen3-VL visual via
+#                          `cosmos_framework.scripts.convert_model_to_vlm_safetensors`).
+#                          When set, plumbed to backbone.safetensors_path via a
+#                          tail override. When unset, the framework falls back
+#                          to the public Qwen/Qwen3-VL-8B-Instruct HF snapshot.
 #
 # Usage (8-GPU allocation, inside the training container, from the repo root):
 #   bash examples/launch_sft_llava_ov.sh
 
 TOML_FILE="examples/toml/sft_config/llava_ov.toml"
+
+TAIL_OVERRIDES=(
+    ${EXTRA_TAIL_OVERRIDES:-}
+)
+
+# When VLM_SAFETENSORS_PATH is set, plumb it to backbone.safetensors_path so the
+# framework loads weights from the local snapshot (e.g. a Cosmos3-Nano LM merged
+# with Qwen3-VL visual via `cosmos_framework.scripts.convert_model_to_vlm_safetensors`)
+# while keeping the public HF model_name for tokenizer/architecture discovery.
+if [[ -n "${VLM_SAFETENSORS_PATH:-}" ]]; then
+    TAIL_OVERRIDES+=("model.config.policy.backbone.safetensors_path=$VLM_SAFETENSORS_PATH")
+fi
 
 source "$(dirname "${BASH_SOURCE[0]}")/_sft_launcher_common.sh"
