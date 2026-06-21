@@ -1,6 +1,10 @@
 # Cosmos3-Nano-Policy-DROID Post-Training
 
-[Cosmos3-Nano-Policy-DROID](https://huggingface.co/nvidia/Cosmos3-Nano-Policy-DROID) is an action policy fine-tuned from [`Cosmos3-Nano`](https://huggingface.co/nvidia/Cosmos3-Nano) (the 8B MoT) on the **DROID LeRobot** dataset, using absolute joint-position actions plus proprioceptive state at 480p. This example reproduces that post-training. The registered `action_policy_droid_nano` experiment, the DROID action dataset class (`joint_pos` 8-D + `use_state`), and the EMA warm-start fix all ship in this package; you supply two external inputs — a prepared DROID LeRobot dataset and a DCP base checkpoint converted from `nvidia/Cosmos3-Nano` (see [Inputs You Provide](#inputs-you-provide)). Validated end-to-end on H200: 1 node / 8 GPU and 2 nodes / 16 ranks (HSDP).
+[Cosmos3-Nano-Policy-DROID](https://huggingface.co/nvidia/Cosmos3-Nano-Policy-DROID) is an action policy model post-trained from [Cosmos3-Nano](https://huggingface.co/nvidia/Cosmos3-Nano), a 16B Mixture-of-Transformers model, on the [Cosmos3-DROID](https://huggingface.co/datasets/nvidia/Cosmos3-DROID) dataset. The model predicts absolute joint-position actions conditioned on proprioceptive state and video observations at a resolution of 480p (`640×360`). This example reproduces the post-training procedure used to train the model.
+
+Two external inputs are required: (1) a pre-downloaded Cosmos3-DROID dataset in LeRobotDataset v3.0 format, and (2) a DCP base checkpoint converted from Cosmos3-Nano.
+
+The recipe runs multi-node via HSDP (single node / 8 GPUs and beyond).
 
 <!--TOC-->
 
@@ -8,8 +12,8 @@ ______________________________________________________________________
 
 **Table of Contents**
 
+- [Prerequisites](#prerequisites)
 - [Inputs You Provide](#inputs-you-provide)
-- [Dataset](#dataset)
 - [Recipe](#recipe)
 - [Full Reproduction](#full-reproduction)
 - [Checkpoints](#checkpoints)
@@ -18,13 +22,13 @@ ______________________________________________________________________
 
 <!--TOC-->
 
-Prerequisites:
+## Prerequisites
 
 - [Setup](../README.md#setup) — clone the repo, install the training extras (`uv sync --all-extras --group=cu130-train`), and activate the environment.
-- [Environment Variables](./environment_variables.md)
-- [FAQ](./faq.md) — troubleshooting (OOM during SFT, defaults), common pitfalls.
+- [Environment Variables](./environment_variables.md) — set environment variables.
+- [FAQ](./faq.md) — troubleshooting (OOM during SFT, defaults) and common pitfalls.
 
-The runnable artifacts (TOML recipe, paired launch shell) live in [`examples/`](../examples/README.md); all commands below run from the repo root with the environment activated.
+The runnable artifacts (TOML recipe, paired launch shell) live in [`examples/`](../examples); all commands below run from the repo root with the environment activated.
 
 ## Inputs You Provide
 
@@ -33,53 +37,44 @@ the DROID action dataset class with the recipe knobs (`action_space=joint_pos`, 
 `concat_view`), and the EMA warm-start in `checkpoint/dcp.py`. Two inputs are external and must
 be provided per environment:
 
-1. **Prepared DROID LeRobot v3.0 dataset** — the LeRobot v2.0→v3.0 conversion + success
-   filtering is run out-of-band (not yet in this repo). Point `DROID_ROOT` at the resulting
-   `…/droid_lerobot/success` directory (must contain `meta/info.json`).
-2. **DCP base checkpoint** — convert `nvidia/Cosmos3-Nano` to DCP and point
+1. **[Cosmos3-DROID](https://huggingface.co/datasets/nvidia/Cosmos3-DROID) dataset (in LeRobotDataset v3.0 format)** — pre-download the
+   dataset and point `DROID_ROOT` at the resulting `…/Cosmos3-DROID/success` directory (must
+   contain `meta/info.json`).
+2. **DCP base checkpoint** — convert [Cosmos3-Nano](https://huggingface.co/nvidia/Cosmos3-Nano) to DCP and point
    `BASE_CHECKPOINT_PATH` at it (see [Full Reproduction](#full-reproduction)). Action heads are
    not loaded from it (they init fresh).
 
-## Dataset
-
-The **DROID LeRobot** dataset. To be released.
-
 ## Recipe
 
-| knob              | value                                                                                                 |
-| ----------------- | ----------------------------------------------------------------------------------------------------- |
-| init              | `nvidia/Cosmos3-Nano` (public Hugging Face repo)                                                      |
-| action space      | `joint_pos` (absolute joint position, 8-D incl. gripper)                                              |
-| state             | `use_state=true` (proprioception; valid only with `joint_pos`)                                        |
-| task mode         | `policy` (single-task; the `joint` multi-task default is avoided)                                     |
-| resolution        | `480`                                                                                                 |
-| viewpoint / video | `concat_view` / `video_mode=null`                                                                     |
-| chunk length      | `32` (tokenizer `encode_exact_durations=[33]`)                                                        |
-| sequence packing  | `max_num_tokens_after_packing=-1` (full vision sequence per step)                                     |
-| shuffle           | episode-shuffle stream (decorrelates the per-step global batch)                                       |
-| window filter     | keep-ranges (`KarlP/droid`) — trains the curated ≈74% window set                                      |
-| lr                | `2e-4`                                                                                                |
-| global batch      | `8192` (e.g. 128 samples/rank × 64 ranks; lower per-rank + raise `grad_accum_iter` to fit GPU memory) |
-| eval              | disabled for the reproduction run                                                                     |
-
-> The dataset streams an **episode-shuffle** order (decorrelates the per-step global batch — a
-> plain sequential read feeds every rank the same overlapping windows → unstable grad-norm). The
-> **keep-ranges window filter** drops idle/non-task frames (trains the curated ≈74% window set);
-> the reproduction enables it by default — see [Full Reproduction](#full-reproduction).
+| knob              | value                                                                                                                                              |
+| ----------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- |
+| init              | `Cosmos3-Nano` (public Hugging Face repo)                                                                                                          |
+| action space      | `joint_pos` (absolute joint position, 8-D incl. gripper)                                                                                           |
+| state             | `use_state=true` (proprioception; valid only with `joint_pos`)                                                                                     |
+| task mode         | `policy` (single-task; the `joint` multi-task default is avoided)                                                                                  |
+| resolution        | `480`                                                                                                                                              |
+| viewpoint / video | `concat_view` / `video_mode=null`                                                                                                                  |
+| chunk length      | `32` (tokenizer `encode_exact_durations=[33]`)                                                                                                     |
+| sequence packing  | `max_num_tokens_after_packing=-1` (full vision sequence per step)                                                                                  |
+| shuffle           | episode-shuffle stream (decorrelates the per-step global batch)                                                                                    |
+| window filter     | [keep_ranges_1_0_1.json](https://huggingface.co/KarlP/droid/blob/main/keep_ranges_1_0_1.json) (`KarlP/droid`) — trains the curated ≈74% window set |
+| lr                | `2e-4`                                                                                                                                             |
+| global batch      | `8192` = `max_samples_per_batch` × world size × `grad_accum_iter` (reduce the first / raise the last to fit GPU memory)                            |
+| eval              | disabled for the reproduction run                                                                                                                  |
 
 ## Full Reproduction
 
 The OSS flow mirrors the other recipes (see [docs/training.md](./training.md)):
 
 ```shell
-# Step 1: prepare DROID LeRobot v3.0 success split -> $DATASET_PATH (see "Inputs You Provide")
+# Step 1: prepare Cosmos3-DROID success split -> $DATASET_PATH (see "Inputs You Provide")
 
 # Step 2: convert the base checkpoint -> $BASE_CHECKPOINT_PATH
 python -m cosmos_framework.scripts.convert_model_to_dcp \
-  -o $BASE_CHECKPOINT_PATH \
-  --checkpoint-path Cosmos3-Nano
+  --checkpoint-path Cosmos3-Nano \
+  -o $BASE_CHECKPOINT_PATH
 
-# Step 3: download the keep-ranges window filter (drops idle/non-task frames -> trains
+# Step 3: download the keep_ranges_1_0_1.json window filter (drops idle/non-task frames -> trains
 # the curated ~74% window set, matching the released model).
 hf download KarlP/droid keep_ranges_1_0_1.json --local-dir $FILTER_DIR
 
@@ -89,21 +84,22 @@ export DATASET_PATH=/path/to/dataset/success
 export BASE_CHECKPOINT_PATH=/path/to/base_checkpoint
 export WAN_VAE_PATH=/path/to/Wan2.2_VAE.pth
 export NPROC_PER_NODE=8
-# Enable the keep-ranges filter via EXTRA_TAIL_OVERRIDES (space-separated Hydra
+# Enable the keep_ranges_1_0_1.json filter via EXTRA_TAIL_OVERRIDES (space-separated Hydra
 # overrides; an exported string survives `bash <wrapper>`).
-export EXTRA_TAIL_OVERRIDES="\
-dataloader_train.dataloader.datasets.droid.dataset.use_filter_dict=True \
-dataloader_train.dataloader.datasets.droid.dataset.filter_dict_path=$FILTER_DIR/keep_ranges_1_0_1.json"
+export EXTRA_TAIL_OVERRIDES=" \
+  dataloader_train.dataloader.datasets.droid.dataset.use_filter_dict=True \
+  dataloader_train.dataloader.datasets.droid.dataset.filter_dict_path=$FILTER_DIR/keep_ranges_1_0_1.json \
+"
 bash examples/launch_sft_action_policy_droid.sh
 ```
 
-The recipe TOML (`examples/toml/sft_config/action_policy_droid_repro.toml`) sets the scalar
+The recipe TOML ([`examples/toml/sft_config/action_policy_droid_repro.toml`](../examples/toml/sft_config/action_policy_droid_repro.toml)) sets the scalar
 knobs (`max_iter`, `save_iter`, `grad_clip`, parallelism, wandb); the dataset/action knobs
 (`joint_pos`, `use_state`, `concat_view`, 480p, chunk 32, count-based batch) live in the
 registered `action_policy_droid_nano` experiment per the schema's design. For multi-node HSDP,
 set `model.config.parallelism.data_parallel_replicate_degree = <num_nodes>` (intra-node shard stays 8).
 
-The **keep-ranges filter** maps each DROID trajectory key to a list of `[start, end]` frame
+The **keep_ranges_1_0_1.json filter** maps each DROID trajectory key to a list of `[start, end]` frame
 ranges; only windows whose start falls inside a kept range are trained on (episodes absent from
 the dict are dropped). To train on the full window set instead, leave `EXTRA_TAIL_OVERRIDES` unset.
 

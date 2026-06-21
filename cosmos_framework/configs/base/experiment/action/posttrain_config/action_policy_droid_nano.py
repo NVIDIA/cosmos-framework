@@ -203,7 +203,7 @@ action_policy_droid_nano = LazyDict(
                             iterable_shuffle=True,  # rank x worker episode-shuffle stream
                             episode_shuffle_seed=42,
                             use_image_augmentation=True,  # SR boost (random crop+rescale + color jitter)
-                            # Keep-ranges window filter (drops idle/non-task frames). Off by default;
+                            # keep_ranges_1_0_1.json window filter (drops idle/non-task frames). Off by default;
                             # set use_filter_dict=True + filter_dict_path to enable.
                             use_filter_dict=False,
                             filter_dict_path=None,
