@@ -5,9 +5,8 @@
 
 Mirrors the vision SFT stack (PackingDataLoader + RankPartitionedDataLoader),
 but feeds the DROID action dataset (``joint_pos`` 8D + ``use_state``, raw/
-un-normalized — same as the internal ``droid_lerobot_8b_policy`` run) through
-``ActionTransformPipeline``, and trains the generation + action heads from the
-public ``nvidia/Cosmos3-Nano`` base.
+un-normalized) through ``ActionTransformPipeline``, and trains the generation +
+action heads from the public ``nvidia/Cosmos3-Nano`` base.
 
 Usage (1 node, 8 GPU)::
 
@@ -41,13 +40,10 @@ action_policy_droid_nano = LazyDict(
             {"override /model": "mot_fsdp"},
             {"override /data_train": None},
             {"override /data_val": None},
-            # Match internal droid_lerobot_8b_policy: apex FusedAdam with fp32
-            # master_weights + eps 1e-8. adamw + fused + eps 1e-6 (bf16, no fp32
-            # master) under-steps the small 5x-lr action heads and leaves the action
-            # loss on a noisy high plateau; an exact-match forward/optimizer test
-            # confirmed the convergence gap was the optimizer, not the model.
+            # FusedAdam with fp32 master_weights + eps 1e-8 (bf16 params + eps 1e-6
+            # diverged on the action loss).
             {"override /optimizer": "fusedadamw"},
-            {"override /scheduler": "lambdalinear"},  # matches internal droid_lerobot_8b (was lambdacosine)
+            {"override /scheduler": "lambdalinear"},  # linear LR decay
             {"override /checkpoint": "s3"},
             {
                 "override /callbacks": [
@@ -76,7 +72,7 @@ action_policy_droid_nano = LazyDict(
             betas=[0.9, 0.99],
             eps=1.0e-08,
             fused=True,  # popped by build_optimizer for FusedAdam (fused by construction)
-            # Generation + action heads (mirrors internal droid_lerobot_8b_policy).
+            # Train the generation + action heads.
             keys_to_select=[
                 "moe_gen",
                 "time_embedder",
@@ -86,7 +82,7 @@ action_policy_droid_nano = LazyDict(
                 "llm2action",
                 "action_modality_embed",
             ],
-            lr=2.0e-04,  # matches internal droid_lerobot_8b_policy submit (--lr 2e-4)
+            lr=2.0e-04,  # for the 8192 global batch
             lr_multipliers={
                 "action2llm": 5.0,
                 "llm2action": 5.0,
@@ -96,7 +92,7 @@ action_policy_droid_nano = LazyDict(
             weight_decay=0.05,
         ),
         scheduler=dict(
-            lr_scheduler_type="LambdaLinear",  # matches internal droid_lerobot_8b (was LambdaCosine)
+            lr_scheduler_type="LambdaLinear",
             cycle_lengths=[100],  # smoke: 100 iters (real run sets via TOML)
             f_max=[0.4],
             f_min=[0.0],
@@ -125,7 +121,7 @@ action_policy_droid_nano = LazyDict(
                 device_monitor=dict(
                     every_n=200, log_memory_detail=True, save_s3=False, step_size=1, upload_every_n_mul=5
                 ),
-                grad_clip=dict(clip_norm=1.0, force_finite=True),  # matches internal make_8b
+                grad_clip=dict(clip_norm=1.0, force_finite=True),
                 heart_beat=dict(every_n=200, save_s3=False, step_size=1, update_interval_in_minute=20),
                 iter_speed=dict(every_n=1, hit_thres=50, save_s3=False, save_s3_every_log_n=500),
                 low_precision=dict(update_iter=1),
@@ -140,10 +136,9 @@ action_policy_droid_nano = LazyDict(
             dcp_async_mode_enabled=False,
             enable_gcs_patch_in_boto3=True,
             keys_not_to_resume=[],
-            # Skip net_ema. (→ EMA warm-start copies net→net_ema, see dcp.py) AND the
-            # action heads, so they init fresh from the base — matches internal
-            # make_8b _DEFAULT_KEYS_TO_SKIP (Cosmos3-Nano's action heads are not
-            # DROID-policy-trained).
+            # Skip net_ema. (EMA warm-starts from net, see dcp.py) and the action
+            # heads, so they init fresh from the base (the base has no DROID-trained
+            # action heads).
             keys_to_skip_loading=[
                 "net_ema.",
                 "action2llm",
@@ -171,7 +166,7 @@ action_policy_droid_nano = LazyDict(
         dataloader_train=L(PackingDataLoader)(
             audio_sample_rate=48000,
             dataset_name="action_droid",
-            max_samples_per_batch=128,  # count-based batch (matches internal res480 8B)
+            max_samples_per_batch=128,  # per rank -> 8192 global batch at 64 ranks (16 nodes, shard 8 x replicate 8)
             max_sequence_length=None,  # None disables token packing (TOML can't express null)
             patch_spatial=2,
             sound_latent_fps=0,
@@ -185,6 +180,13 @@ action_policy_droid_nano = LazyDict(
                 pin_memory=True,
                 prefetch_factor=4,
                 sampler=None,
+                # Shuffling is handled by the dataset (iterable_shuffle=True below):
+                # ActionIterableShuffleDataset streams rank x worker-sharded, episode-order-
+                # shuffled, sequential-within-episode. The map-style dataset has no internal
+                # shuffle, so a SequentialSampler would feed every rank the SAME consecutive
+                # overlapping windows -> global batch ~1 episode -> unstable grad-norm; a plain
+                # RandomSampler decorrelates but does random-access I/O -> slow + OOM. The
+                # iterable gives decorrelation with sequential reads.
                 datasets=dict(
                     droid=dict(
                         ratio=1,
@@ -193,15 +195,21 @@ action_policy_droid_nano = LazyDict(
                             fps=15.0,
                             chunk_length=32,
                             action_space="joint_pos",
+                            # Policy-only task mode. "joint" would randomly pick
+                            # forward_dynamics/inverse_dynamics/policy per sample (multi-task),
+                            # which dilutes each per-task loss by ~1/3.
+                            mode="policy",
                             use_state=True,
+                            iterable_shuffle=True,  # rank x worker episode-shuffle stream
+                            episode_shuffle_seed=42,
                             use_image_augmentation=True,  # SR boost (random crop+rescale + color jitter)
-                            # Keep-ranges window filter (drops idle/non-task frames). Off by default;
-                            # the launcher sets use_filter_dict=True + filter_dict_path for internal parity.
+                            # keep_ranges_1_0_1.json window filter (drops idle/non-task frames). Off by default;
+                            # set use_filter_dict=True + filter_dict_path to enable.
                             use_filter_dict=False,
                             filter_dict_path=None,
                             action_normalization=None,
                             viewpoint="concat_view",  # wrist 480p (top) + L/R shoulder 320x180 (bottom)
-                            resolution="480",  # 640x360 data @ 480p (matches internal res480 run)
+                            resolution="480",  # 640x360 data @ 480p
                             max_action_dim="${model.config.max_action_dim}",
                             cfg_dropout_rate=0.1,
                             tokenizer_config="${model.config.vlm_config.tokenizer}",
@@ -217,10 +225,22 @@ action_policy_droid_nano = LazyDict(
 )
 
 
-# chunk_length=32 → 33 observation frames; pin the VAE encode duration to match
-# (internal used [17] for chunk_length=16). Set post-construction so it lands on
-# the deep-copied NANO_MODEL_CONFIG.tokenizer.
+# chunk_length=32 -> 33 observation frames; pin the VAE encode duration to match.
+# Set post-construction so it lands on the deep-copied NANO_MODEL_CONFIG.tokenizer.
 action_policy_droid_nano["model"]["config"]["tokenizer"]["encode_exact_durations"] = [33]
+
+
+# Uncap the packed-sequence length. The NANO default (45056) caps the packed sequence,
+# truncating long DROID windows to ~1/4 of their natural length; -1 (uncapped) processes
+# the full vision sequence per step. Does not change the per-token loss; widens the
+# effective vision context per step.
+action_policy_droid_nano["model"]["config"]["max_num_tokens_after_packing"] = -1
+
+
+# Weight the vision flow-matching loss 10x in the total loss (the NANO default is 1.0).
+# loss_scale multiplies only the vision term, balancing it against the action loss
+# (action_loss_weight=10) so both heads train at comparable gradient magnitude.
+action_policy_droid_nano["model"]["config"]["rectified_flow_training_config"]["loss_scale"] = 10.0
 
 
 for _item in [action_policy_droid_nano]:

@@ -57,6 +57,7 @@ class ActionBaseDataset(ABC, Dataset):
         self._pose_convention = pose_convention
         self._tolerance_s = float(tolerance_s)
         self._viewpoint = viewpoint
+        self._domain_name = domain_name
         self._domain_id = get_domain_id(domain_name)
         self._action_normalization = action_normalization
         self._norm_stats: dict[str, torch.Tensor] | None = None
@@ -96,6 +97,14 @@ class ActionBaseDataset(ABC, Dataset):
     @mode.setter
     def mode(self, value: str) -> None:
         self._mode = value
+
+    @property
+    def domain_name(self) -> str:
+        return self._domain_name
+
+    @property
+    def viewpoint(self) -> str:
+        return self._viewpoint
 
     @property
     def domain_id(self) -> int:
@@ -186,7 +195,11 @@ class ActionBaseDataset(ABC, Dataset):
         **extras: Any,
     ) -> dict[str, Any]:
         idle_frames = self._compute_idle_frames(action)
-        normalized_action = normalize_action(action, self.action_normalization, self._load_norm_stats())
+        # action_normalization=None -> use raw actions (no normalization), e.g. joint_pos.
+        if self.action_normalization is None:
+            normalized_action = action
+        else:
+            normalized_action = normalize_action(action, self.action_normalization, self._load_norm_stats())
         formatted_video = (video * 255.0).clamp(0.0, 255.0).to(torch.uint8).permute(1, 0, 2, 3)
         return {
             "ai_caption": ai_caption,

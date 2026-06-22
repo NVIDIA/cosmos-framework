@@ -5,6 +5,7 @@ import json
 import time
 from collections.abc import Mapping
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 import torch
@@ -138,6 +139,29 @@ class LayerTypes:
 # -----------------------------------------------------------------------------
 # MoT wrapper configs — one per architecture family
 # -----------------------------------------------------------------------------
+
+# Package root = parent of the top-level ``cosmos_framework`` package directory,
+# i.e. the framework repo root in an editable install or site-packages for a
+# wheel. The shipped model-config JSONs live under ``cosmos_framework/model/...``
+# beneath it.
+_PACKAGE_ROOT = Path(__file__).resolve().parents[4]
+
+
+def _resolve_packaged_config_path(json_file: str) -> str:
+    """Resolve a model-config JSON path so it loads regardless of CWD.
+
+    Absolute paths and paths that already exist relative to the CWD are returned
+    unchanged (preserving existing behavior when launched from the repo root).
+    A relative path that does not exist against the CWD — e.g. the shipped
+    ``"cosmos_framework/model/.../X.json"`` defaults — is resolved against the
+    installed package root. If that candidate is missing too, the original path
+    is returned so ``open()`` raises the familiar ``FileNotFoundError``.
+    """
+    path = Path(json_file)
+    if path.is_absolute() or path.exists():
+        return json_file
+    candidate = _PACKAGE_ROOT / json_file
+    return str(candidate) if candidate.exists() else json_file
 
 
 class _MoTConfigBase(object):
@@ -365,8 +389,16 @@ class _MoTConfigBase(object):
         fields (when present) are surfaced lazily via
         :pyattr:`vision_config` and by HF downstream consumers reading
         the dict directly.
+
+        ``json_file`` may be absolute, or relative. The shipped config
+        defaults reference these JSONs by a repo-root-relative path (e.g.
+        ``"cosmos_framework/model/vfm/vlm/qwen3_vl/configs/X.json"``), which
+        only resolves when the process CWD is the framework repo root. To keep
+        ``cosmos_framework.scripts.*`` runnable from any working directory, a
+        relative path that does not exist against the CWD is resolved against
+        the installed package root.
         """
-        with open(json_file, encoding="utf-8") as reader:
+        with open(_resolve_packaged_config_path(json_file), encoding="utf-8") as reader:
             config_dict = json.load(reader)
         return cls(config_dict=config_dict)
 

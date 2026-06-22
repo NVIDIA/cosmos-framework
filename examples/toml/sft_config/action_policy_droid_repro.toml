@@ -27,7 +27,7 @@ wandb_mode   = "online"
 precision = "bfloat16"
 
 [model.parallelism]
-data_parallel_shard_degree     = 8    # intra-node (8x H200); set replicate for multi-node HSDP
+data_parallel_shard_degree     = 8    # 8-GPU model shard; set replicate for multi-node HSDP
 data_parallel_replicate_degree = 1
 
 [model.activation_checkpointing]
@@ -48,6 +48,8 @@ logging_iter = 50
 load_path = "${oc.env:BASE_CHECKPOINT_PATH}"
 save_iter = 1000
 
-# Per-rank batch is 128 in the experiment (res480; matches the reference recipe).
-# 128 OOMs on a 139 GiB H200 — override at launch for H200:
+# max_samples_per_batch is 128 in the experiment — samples packed into each per-rank batch
+# (the num_workers x prefetch_factor workers just decode in parallel to keep it fed); res480,
+# reference recipe, validated multi-node on GB200.
+# On lower-memory GPUs, reduce it at launch, e.g.:
 #   --opts dataloader_train.max_samples_per_batch=32
