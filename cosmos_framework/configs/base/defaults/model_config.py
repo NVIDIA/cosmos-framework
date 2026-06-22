@@ -249,6 +249,14 @@ class OmniMoTModelConfig:
     max_action_dim: int = 32  # maximum dimension of the action space, we need to pad the data to this dimension.
     num_embodiment_domains: int = 32  # number of domains for the domain-aware linear layer
 
+    # Optional GPU-side photometric augmentation applied per-sample to the input video
+    # during training (in _normalize_video_databatch_inplace), as a dict of
+    # torchvision ColorJitter kwargs e.g. {"brightness":0.3,"contrast":0.4,"saturation":0.5,"hue":0.08}.
+    # None disables it. Moving ColorJitter here (GPU, batched) instead of in the CPU
+    # dataloader workers avoids the ~14x per-sample slowdown from float32 rgb<->hsv on
+    # ~1 core/worker (the dataloader's dominant cost for video action SFT).
+    train_color_jitter: dict | None = None
+
     # sound configs
     sound_gen: bool = False  # whether to use sound related parameters and condition/generate sound tokens
     sound_tokenizer: LazyDict | None = None  # Sound tokenizer config (e.g., AVAE)

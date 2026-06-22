@@ -99,6 +99,7 @@ def get_action_droid_sft_dataset(
     action_normalization: str | None = None,
     viewpoint: str = "concat_view",
     use_image_augmentation: bool = False,
+    apply_color_jitter: bool = True,
     use_filter_dict: bool = False,
     filter_dict_path: str | None = None,
     resolution: str | int = "256",
@@ -124,6 +125,7 @@ def get_action_droid_sft_dataset(
         use_state=use_state,
         action_normalization=action_normalization,
         use_image_augmentation=use_image_augmentation,
+        apply_color_jitter=apply_color_jitter,
         use_filter_dict=use_filter_dict,
         filter_dict_path=filter_dict_path,
     )

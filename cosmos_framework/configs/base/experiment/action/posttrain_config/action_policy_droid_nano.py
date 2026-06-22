@@ -203,6 +203,10 @@ action_policy_droid_nano = LazyDict(
                             iterable_shuffle=True,  # rank x worker episode-shuffle stream
                             episode_shuffle_seed=42,
                             use_image_augmentation=True,  # SR boost (random crop+rescale + color jitter)
+                            # ColorJitter moved to GPU (model.config.train_color_jitter); the CPU
+                            # augmentor keeps only the cheap spatial crop+resize. Avoids the ~14x
+                            # per-sample dataloader slowdown from float32 rgb<->hsv on 1 core/worker.
+                            apply_color_jitter=False,
                             # keep_ranges_1_0_1.json window filter (drops idle/non-task frames). Off by default;
                             # set use_filter_dict=True + filter_dict_path to enable.
                             use_filter_dict=False,
@@ -241,6 +245,15 @@ action_policy_droid_nano["model"]["config"]["max_num_tokens_after_packing"] = -1
 # loss_scale multiplies only the vision term, balancing it against the action loss
 # (action_loss_weight=10) so both heads train at comparable gradient magnitude.
 action_policy_droid_nano["model"]["config"]["rectified_flow_training_config"]["loss_scale"] = 10.0
+
+
+# Photometric augmentation runs GPU-side per-sample during training (see
+# OmniMoTModel._normalize_video_databatch_inplace). Pairs with the dataset's
+# apply_color_jitter=False above (CPU augmentor keeps only crop+resize). Matches the
+# previous CPU ColorJitter params but at ~free GPU cost instead of ~14x dataloader cost.
+action_policy_droid_nano["model"]["config"]["train_color_jitter"] = dict(
+    brightness=0.3, contrast=0.4, saturation=0.5, hue=0.08
+)
 
 
 for _item in [action_policy_droid_nano]:

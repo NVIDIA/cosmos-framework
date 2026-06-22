@@ -81,6 +81,7 @@ class DROIDLeRobotDataset(ActionBaseDataset):
         use_state: bool = False,
         action_normalization: str | None = "quantile",
         use_image_augmentation: bool = False,
+        apply_color_jitter: bool = True,
         use_filter_dict: bool = False,
         filter_dict_path: str | None = None,
     ) -> None:
@@ -111,6 +112,10 @@ class DROIDLeRobotDataset(ActionBaseDataset):
         # Per-sample image augmentation (random crop+rescale + color jitter), applied
         # to all views with shared params (temporally + cross-view consistent). Lazy-built.
         self._use_image_augmentation = bool(use_image_augmentation)
+        # When False, the (expensive) ColorJitter is dropped from the CPU augmentor and
+        # is expected to be applied GPU-side in the model (config.train_color_jitter).
+        # Spatial crop+resize stays on CPU (cheap, and geometric -> must precede compose).
+        self._apply_color_jitter = bool(apply_color_jitter)
         self._image_augmentor: T.Compose | None = None
         # Keep-ranges window filter (internal use_filter_dict): restrict training windows
         # to curated active segments, dropping idle/non-task frames. Off by default; the
@@ -313,13 +318,13 @@ class DROIDLeRobotDataset(ActionBaseDataset):
             # while each __getitem__ resamples. Matches the internal DROID recipe.
             if self._image_augmentor is None:
                 _, _, h, w = wrist.shape
-                self._image_augmentor = T.Compose(
-                    [
-                        T.RandomCrop((int(h * 0.95), int(w * 0.95))),
-                        T.Resize((h, w), antialias=True),
-                        T.ColorJitter(brightness=0.3, contrast=0.4, saturation=0.5, hue=0.08),
-                    ]
-                )
+                _aug = [
+                    T.RandomCrop((int(h * 0.95), int(w * 0.95))),
+                    T.Resize((h, w), antialias=True),
+                ]
+                if self._apply_color_jitter:
+                    _aug.append(T.ColorJitter(brightness=0.3, contrast=0.4, saturation=0.5, hue=0.08))
+                self._image_augmentor = T.Compose(_aug)
             n, m = wrist.shape[0], wrist.shape[0] + left.shape[0]
             combined = self._image_augmentor(torch.cat([wrist, left, right], dim=0))
             wrist, left, right = combined[:n], combined[n:m], combined[m:]
