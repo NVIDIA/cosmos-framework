@@ -104,5 +104,5 @@ save_iter            = 100
 # Routed by PATH_REMAPS["vlm"] onto the CosmosDataLoader's nested PoolPackingBatcher:
 #   max_samples_per_batch -> dataloader_train.batcher.max_batch_size
 #   max_sequence_length   -> dataloader_train.batcher.max_tokens
-max_samples_per_batch = 1
+max_samples_per_batch = 4
 max_sequence_length   = 16000
