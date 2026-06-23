@@ -6,6 +6,7 @@ import importlib.util
 import os
 import pkgutil
 import sys
+import threading
 from dataclasses import fields as dataclass_fields
 from dataclasses import is_dataclass
 from typing import Any, Dict, Optional
@@ -19,6 +20,8 @@ from omegaconf import DictConfig, OmegaConf
 
 from cosmos_framework.utils.config import Config
 from cosmos_framework.utils import log
+
+_HYDRA_LOCK = threading.RLock()
 
 
 def is_attrs_or_dataclass(obj) -> bool:
@@ -77,16 +80,20 @@ def override(config: Config, overrides: Optional[list[str]] = None, remove_defau
                 f'Hydra config overrides must be separated with a "--" token. but got overrides={overrides}, and overrides[0]={overrides[0]}'
             )
         overrides = overrides[1:]
-    # Use Hydra to handle overrides
-    cs = ConfigStore.instance()
-    cs.store(name="config", node=config_omegaconf)
-    if not GlobalHydra().is_initialized():
-        with initialize(version_base=None):
+    # Use Hydra to handle overrides. Hydra's GlobalHydra and ConfigStore are
+    # process-global; this function stores the caller's root config under the
+    # fixed name "config" and then composes that name, so concurrent calls can
+    # observe each other's root config or race GlobalHydra initialization.
+    with _HYDRA_LOCK:
+        cs = ConfigStore.instance()
+        cs.store(name="config", node=config_omegaconf)
+        if not GlobalHydra().is_initialized():
+            with initialize(version_base=None):
+                config_omegaconf = compose(config_name="config", overrides=overrides)
+                OmegaConf.resolve(config_omegaconf)
+        else:
             config_omegaconf = compose(config_name="config", overrides=overrides)
             OmegaConf.resolve(config_omegaconf)
-    else:
-        config_omegaconf = compose(config_name="config", overrides=overrides)
-        OmegaConf.resolve(config_omegaconf)
 
     def config_from_dict(ref_instance: Any, kwargs: Any) -> Any:
         """

@@ -12,6 +12,10 @@ from cosmos_framework.model.vfm.algorithm.loss.time_weight import TrainTimeWeigh
 
 class TrainTimeSampler:
     _WAVER_MODE_S = 1.29
+    # 99.9th and 0.5th percentiles of the standard normal, used for ltx2 stretching.
+    _LTX2_NORMAL_999_PCTILE = 3.0902
+    _LTX2_NORMAL_005_PCTILE = -2.5758
+    _LTX2_UNIFORM_PROB = 0.1
 
     def __init__(
         self,
@@ -26,12 +30,22 @@ class TrainTimeSampler:
         device: torch.device = torch.device("cpu"),
         dtype: torch.dtype = torch.float32,
         generator: torch.Generator | None = None,
+        shifts: torch.Tensor | None = None,
     ) -> torch.Tensor:
         """
-        Sample time tensor for training
+        Sample sigma ∈ [0, 1] for training.
+
+        Args:
+            batch_size: Number of samples.
+            device: Target device.
+            dtype: Target dtype.
+            shifts: Optional 1-D per-sample shift values, shape ``(batch_size,)``.  For non-ltx2
+                distributions, the raw sample ``t`` is warped through
+                ``sigma = shift * t / (1 + (shift-1) * t)``.  For ``ltx2``, ``shifts`` is
+                required and used as the per-sample logit-normal mean.
 
         Returns:
-            torch.Tensor: Time tensor, shape (batch_size,)
+            torch.Tensor: sigma ∈ [0, 1], shape (batch_size,).
         """
         if self.distribution == "uniform":
             t = torch.rand((batch_size,), generator=generator).to(device=device, dtype=dtype)  # [B]
@@ -41,8 +55,39 @@ class TrainTimeSampler:
             u = torch.rand((batch_size,), dtype=torch.float32, generator=generator)  # [B]
             t = 1.0 - u - self._WAVER_MODE_S * (torch.cos(torch.pi / 2.0 * u) ** 2 - 1 + u)  # [B]
             t = t.to(device=device, dtype=dtype)  # [B]
+        elif self.distribution == "ltx2":
+            # Shifted logit-normal with percentile-based stretching and 10% uniform fallback.
+            assert shifts is not None, "'ltx2' distribution requires per-sample shifts."
+            # shift(sigmoid(t), s) = sigmoid(t + ln(s))
+            mu = torch.log(shifts.to(device=torch.device("cpu"), dtype=torch.float32))  # [B]
+            std = 1.0
+            eps = 1e-3
+
+            normal_samples = torch.randn((batch_size,), dtype=torch.float32, generator=generator) * std + mu  # [B]
+            logitnormal_samples = torch.sigmoid(normal_samples)  # [B]
+
+            percentile_999 = torch.sigmoid(mu + self._LTX2_NORMAL_999_PCTILE * std)  # [B]
+            percentile_005 = torch.sigmoid(mu + self._LTX2_NORMAL_005_PCTILE * std)  # [B]
+
+            zero_terminal_raw = (logitnormal_samples - percentile_005) / (percentile_999 - percentile_005)
+            stretched = torch.where(
+                zero_terminal_raw >= eps,
+                zero_terminal_raw,
+                2 * eps - zero_terminal_raw,
+            )
+            stretched = torch.clamp(stretched, 0, 1)
+
+            uniform = (1 - eps) * torch.rand((batch_size,), dtype=torch.float32, generator=generator) + eps
+            prob = torch.rand((batch_size,), dtype=torch.float32, generator=generator)
+            t = torch.where(prob > self._LTX2_UNIFORM_PROB, stretched, uniform).to(device=device, dtype=dtype)
+
+            return t  # skip post-shift
         else:
-            raise NotImplementedError(f"Time distribution '{self.dist}' is not implemented.")
+            raise NotImplementedError(f"Time distribution '{self.distribution}' is not implemented.")
+
+        if shifts is not None:
+            shifts = shifts.to(device=device, dtype=dtype)  # [B]
+            t = shifts * t / (1 + (shifts - 1) * t)  # [B], sigma ∈ [0,1]
 
         return t  # [B]
 
@@ -86,18 +131,20 @@ class RectifiedFlow:
         self.device = torch.device(device) if isinstance(device, str) else device
         self.dtype = torch.dtype(dtype) if isinstance(dtype, str) else dtype
 
-    def sample_train_time(self, batch_size: int, iteration: int | None = None) -> torch.Tensor:
+    def sample_train_time(self, batch_size: int, iteration: int | None = None, shifts: torch.Tensor | None = None):
         r"""This method calls the `TrainTimeSampler` to sample training times.
 
         Args:
-            batch_size: Number of time values to sample.
+            batch_size: Number of samples.
             iteration: When provided, sampling uses a local generator seeded from
                 ``(iteration, rank)`` so results are identical across independent runs
                 regardless of prior global RNG state.
+            shifts: Optional 1-D shift tensor, shape ``(batch_size,)``.  Forwarded to
+                ``TrainTimeSampler.__call__``; see that docstring for details.
 
         Returns:
             t (`torch.Tensor`):
-                A tensor of sampled training times with shape `(batch_size,)`,
+                A tensor of sampled sigmas with shape `(batch_size,)`,
                 matching the class specified `device` and `dtype`.
         """
         generator = None
@@ -105,7 +152,9 @@ class RectifiedFlow:
             rank = torch.distributed.get_rank() if torch.distributed.is_initialized() else 0
             generator = torch.Generator()
             generator.manual_seed(iteration * 65536 + rank)
-        time = self.train_time_sampler(batch_size, device=self.device, dtype=self.dtype, generator=generator)
+        time = self.train_time_sampler(
+            batch_size, device=self.device, dtype=self.dtype, generator=generator, shifts=shifts
+        )
         return time
 
     def get_discrete_timestamp(self, u, tensor_kwargs):

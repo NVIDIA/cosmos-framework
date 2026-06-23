@@ -1143,15 +1143,18 @@ class Qwen3VLMoeTextRotaryEmbedding(nn.Module):
     @dynamic_rope_update  # power user: used with advanced RoPE types (e.g. dynamic rope)
     def forward(self, x, position_ids):
         assert self.inv_freq.dtype == torch.float32, f"inv_freq must be float32, but got {self.inv_freq.dtype}"
+        assert position_ids.dtype in [torch.long, torch.float32], (
+            f"position_ids must be long or float32, but got {position_ids.dtype}"
+        )
 
         # In contrast to other models, Qwen3VLMoe has different position ids for the grids
         # So we expand the inv_freq to shape (3, ...)
         if position_ids.ndim == 2:
             position_ids = position_ids[None, ...].expand(3, position_ids.shape[0], -1)  # [3,B,N]
-        inv_freq_expanded = (
-            self.inv_freq[None, None, :, None].float().expand(3, position_ids.shape[1], -1, 1)
+        inv_freq_expanded = self.inv_freq[None, None, :, None].expand(
+            3, position_ids.shape[1], -1, 1
         )  # [3,B,head_dim//2,1]
-        position_ids_expanded = position_ids[:, :, None, :].float()  # [3,B,1,N]
+        position_ids_expanded = position_ids[:, :, None, :]  # [3,B,1,N]
 
         freqs = (inv_freq_expanded.float() @ position_ids_expanded.float()).transpose(2, 3)  # [3,B,N,head_dim//2]
         freqs = self.apply_interleaved_mrope(freqs, self.mrope_section)  # [B,N,head_dim//2]

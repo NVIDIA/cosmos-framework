@@ -1653,7 +1653,7 @@ class Wan2pt2VAEInterface(VideoTokenizerInterface):
     def get_latent_num_frames(self, num_pixel_frames: int) -> int:
         return 1 + (num_pixel_frames - 1) // 4
 
-    def get_pixel_num_frames(self, num_latent_frames: int) -> int:
+    def get_pixel_num_frames(self, num_latent_frames: int, **kwargs) -> int:
         return (num_latent_frames - 1) * 4 + 1
 
     @property

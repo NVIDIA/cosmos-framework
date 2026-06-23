@@ -37,11 +37,11 @@ import torch
 import torch.distributed as dist
 from torch.distributed.device_mesh import DeviceMesh
 from torch.distributed.tensor import DTensor, Replicate, Shard
-from torch.nn.attention.flex_attention import BlockMask
 
-from cosmos_framework.data.vfm.sequence_packing import (
-    FactoredSequencePack,
-    JointSequencePack,
+from cosmos_framework.model.vfm.mot.attention import SplitInfo
+from cosmos_framework.model.vfm.utils.memory import KVToStore, MemoryValue
+from cosmos_framework.data.vfm.sequence_packing.runtime import (
+    SequencePack,
     from_mode_splits,
     get_all_seq,
     get_causal_seq,
@@ -51,8 +51,6 @@ from cosmos_framework.data.vfm.sequence_packing import (
     get_und_position_ids,
     get_und_seq,
 )
-from cosmos_framework.model.vfm.mot.attention import SplitInfo
-from cosmos_framework.model.vfm.utils.memory import KVToStore, MemoryValue
 from cosmos_framework.utils.vfm.parallelism import ParallelDims
 
 
@@ -96,10 +94,10 @@ def context_parallel_broadcast_tensor_list(
 
 def get_context_parallel_sharded_sequence(
     attn_implementation: str,
-    input_pack: FactoredSequencePack,
+    input_pack: SequencePack,
     position_ids: torch.Tensor,
     parallel_dims: ParallelDims | None,
-) -> tuple[FactoredSequencePack, torch.Tensor]:
+) -> tuple[SequencePack, torch.Tensor]:
     """
     Splits the full input_pack into a local shard for Context Parallelism.
     """
@@ -157,7 +155,7 @@ def get_context_parallel_sharded_sequence(
 
 
 def get_context_parallel_last_hidden_state(
-    packed_outputs: FactoredSequencePack,
+    packed_outputs: SequencePack,
     parallel_dims: ParallelDims | None,
 ) -> torch.Tensor:
     if parallel_dims is None or not parallel_dims.cp_enabled:
@@ -237,7 +235,7 @@ def gather_seq_scatter_heads(
         x: shape of [z, seq, h, ...]
         seq_dim: the dimension to gather
         head_dim: the dimension to scatter
-        cp_mesh: ulysses sequence parallelism size
+        cp_mesh: sequence-sharded context-parallel mesh
     Returns:
         torch.Tensor: shape of gathered and scattered tensor
     """
@@ -260,7 +258,7 @@ def gather_heads_scatter_seq(
         x (torch.Tensor): shape of [bsz, seq, h/n, ...]
         head_dim (int): the dimension to gather
         seq_dim (int): the dimension to scatter
-        cp_mesh (DeviceMesh): ulysses sequence parallelism size
+        cp_mesh (DeviceMesh): sequence-sharded context-parallel mesh
         splits (List[torch.Tensor], optional): Manual splits for variable length scattering
 
     Returns:
@@ -271,14 +269,14 @@ def gather_heads_scatter_seq(
 
 def context_parallel_attention(
     cp_mesh: DeviceMesh,
-    packed_query_states: FactoredSequencePack,
-    packed_key_states: FactoredSequencePack,
-    packed_value_states: FactoredSequencePack,
-    attention_mask: BlockMask | SplitInfo,
+    packed_query_states: SequencePack,
+    packed_key_states: SequencePack,
+    packed_value_states: SequencePack,
+    attention_mask: SplitInfo,
     attention_function: Callable,
     natten_metadata: dict | None = None,
     memory_value: MemoryValue | None = None,
-) -> tuple[FactoredSequencePack | JointSequencePack, KVToStore | None]:
+) -> tuple[SequencePack, KVToStore | None]:
     """Ulysses-style context parallel attention for packed und+gen sequences.
 
     Each rank holds a sequence shard [S/cp, H, D] for Q and [S/cp, H_kv, D]

@@ -461,6 +461,15 @@ class DenseAutoencoderRuntime(nn.Module):
         When ``pixel_trim`` is enabled and ``pad_frames > 0``, the latent
         contains boundary tokens from encoding.  After decoding, the
         corresponding boundary pixel frames are trimmed from each chunk.
+
+        **Output shape contract**:
+        - Video (``temporal_patches > 1``): ``[B, T, H, W, C]`` where T is the
+          total number of decoded pixel frames across all chunks (after trim).
+        - Image (``temporal_patches == 1``): ``[B, 1, H, W, C]``.  The image
+          latent is decoded into ``patch_time`` identical frames (it was encoded
+          from ``patch_time`` copies of the same frame); only the last frame is
+          kept.  This differs from pre-``dense_runtime`` behaviour where the
+          full ``[B, patch_time, H, W, C]`` was returned.
         """
         if self.decoder_cache_spec.patch_frames != 0:
             raise NotImplementedError("Dense runtime decoder V1 does not support KV cache.")
@@ -481,21 +490,20 @@ class DenseAutoencoderRuntime(nn.Module):
         pad_frames = self.pad_frames
         trim_pixel = self.pixel_trim and pad_frames > 0
 
-        patch_time = self.patch_size[0]
         # Images were encoded as a single latent (no noncausal first chunk).
         # Videos have temporal_patches > 1: latent[0] is the noncausal first frame.
         is_image = temporal_patches == 1
 
+        # Patch 0 is always a single-latent chunk — either the noncausal first
+        # frame (video) or the sole image latent.  Both were encoded from
+        # [frame × patch_time] copies, so all decoded frames are equivalent;
+        # keep the last one.  For images temporal_patches == 1, so the loop
+        # below is empty and this is the only chunk.
         decoded_chunks: list[torch.Tensor] = []
+        decoded_first = self._decode_latent_chunk(latent[:, 0:1])  # [B, patch_time, H, W, C]
+        decoded_chunks.append(decoded_first[:, -1:])
 
-        if not is_image:
-            # Noncausal first latent: decode → patch_time pixel frames, keep last
-            # (the reconstructed original first frame).
-            first_latent = latent[:, 0:1]
-            decoded_first = self._decode_latent_chunk(first_latent)  # [B, patch_time, H, W, C]
-            decoded_chunks.append(decoded_first[:, -1:])
-
-        for start_patch in range(0 if is_image else 1, temporal_patches, chunk_patch_frames):
+        for start_patch in range(1, temporal_patches, chunk_patch_frames):
             end_patch = min(start_patch + chunk_patch_frames, temporal_patches)
             latent_chunk = latent[:, start_patch:end_patch]
             decoded_chunk = self._decode_latent_chunk(latent_chunk)

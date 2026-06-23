@@ -23,7 +23,6 @@ def compute_flow_matching_loss(
     has_valid_tokens: bool,
     rectified_flow: RectifiedFlow,
     tensor_kwargs_fp32: dict,
-    loss_scale: float | None = None,
     raw_action_dim: list[torch.Tensor] | None = None,
     normalize_by_active: bool = False,
 ) -> tuple[torch.Tensor, torch.Tensor]:
@@ -43,11 +42,6 @@ def compute_flow_matching_loss(
         rectified_flow: The rectified flow object for time weighting.
         tensor_kwargs_fp32: Dict of dtype/device kwargs forwarded to
             ``rectified_flow.train_time_weight``.
-        loss_scale: Optional per-modality loss scale. Falls back to the global
-            ``rectified_flow_training_config.loss_scale`` when *None*.
-            (Currently unused inside the function body — scaling is applied at the
-            call site in ``OmniMoTModel._compute_losses``. Kept in the signature
-            to preserve the original API.)
         normalize_by_active: When True, normalize per-instance loss by the count of
             active (noisy) elements rather than all elements. Preserves the
             ``sum / active_count`` semantics needed for distillation critics where
