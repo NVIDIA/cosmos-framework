@@ -104,3 +104,17 @@ def test_collate_vision_flat_concat():
     assert out["pixel_values"].shape[0] == 13
     # image_grid_thw concatenated: 2 rows of [1,2,2]
     assert out["image_grid_thw"].shape == (2, 3)
+
+
+def test_collate_uses_per_sample_pad_token_id():
+    # Distinct pad ids per sample: each row's pad region must use its OWN pad id,
+    # not a single global value taken from samples[0].
+    samples = [_sample(3, pad_id=11), _sample(8, pad_id=22)]
+    out = VLMCollator().collate(samples)
+    assert out["input_ids"].shape == (2, 16)        # max 8 -> 16
+    # row 0 (len 3) real tokens, then its own pad id 11
+    assert out["input_ids"][0, :3].tolist() == [1, 2, 3]
+    assert out["input_ids"][0, 3:].eq(11).all()
+    # row 1 (len 8) real tokens, then its own pad id 22
+    assert out["input_ids"][1, :8].tolist() == list(range(1, 9))
+    assert out["input_ids"][1, 8:].eq(22).all()

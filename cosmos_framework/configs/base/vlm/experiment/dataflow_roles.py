@@ -110,10 +110,12 @@ class VLMCollator(BatchCollator):
         if samples and samples[0].get("collated"):
             return samples[0]
 
-        # All sequence tensors must be 1-D per sample before padding/stacking.
+        # All four sequence tensors must be present and 1-D on every sample
+        # before padding/stacking (matches i4 custom_collate). A missing key
+        # here would otherwise fall through to default_collate as a ragged list.
         for key in ("input_ids", "token_mask", "attention_mask", "labels"):
-            assert all(s[key].ndim == 1 for s in samples if key in s), (
-                f"VLMCollator: {key} must be 1-D per sample"
+            assert all(key in s and s[key].ndim == 1 for s in samples), (
+                f"VLMCollator: {key} must be present and 1-D on every sample"
             )
 
         # Right-pad target length, rounded up to a multiple of 16 (FP8 support).
@@ -148,10 +150,10 @@ class VLMCollator(BatchCollator):
             dim=0,
         )
 
-        # token_mask / attention_mask: pad with False.
+        # token_mask / attention_mask: pad with False (guaranteed present by the
+        # assertion above).
         for key in ("token_mask", "attention_mask"):
-            if all(key in s for s in samples):
-                regular[key] = _pad_stack(key, False, torch.bool)
+            regular[key] = _pad_stack(key, False, torch.bool)
 
         # labels: pad with each sample's ignore_index.
         regular["labels"] = torch.stack(
