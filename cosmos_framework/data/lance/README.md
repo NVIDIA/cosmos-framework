@@ -26,6 +26,27 @@ Why the base loaders structurally can't capture these wins: [`WHY_BASE_CANT.md`]
 Proof the optimized clips preserve the real training data (PSNR/SSIM, visual, content):
 [`VALIDATION.md`](VALIDATION.md).
 
+## Disk footprint (action loader) — the pre-composed clips are *smaller*, not bigger
+
+A common worry: doesn't re-encoding (especially all-intra gop=1) blow up disk? Measured on
+the DROID subset and extrapolated to full DROID (27.6M frames, 3 views). Fusing 3 views → 1
+half-resolution clip more than offsets the all-intra penalty, so even gop=1 is **0.35× the
+original** — and nowhere near the per-frame-JPEG option we rejected.
+
+| storage | KB/frame | full-DROID est. | vs original |
+| ------- | -------- | --------------- | ----------- |
+| original 3-view long-GOP (320×180 ×3) | 16.3 | ~450 GB | 1.00× |
+| **composed gop=1 (shipped)** | **5.7** | **~160 GB** | **0.35×** |
+| composed gop=2 | 4.7 | ~131 GB | 0.29× |
+| composed gop=8 | 2.8 | ~80 GB | 0.18× |
+| composed gop=30 | 2.5 | ~69 GB | 0.15× |
+| ~~per-frame JPEG q95~~ (rejected — disk blowup) | 29.3 | ~828 GB | 1.8× |
+
+Concretely on the 100-episode subset: composed gop=1 = **162 MB** vs ~459 MB of equivalent
+original 3-view footage. gop=1 gives the fastest random-window seek (every frame a keyframe);
+gop=2–8 roughly halves disk again for a small decode cost since training windows are
+contiguous runs. Derivation in [`VALIDATION.md`](VALIDATION.md).
+
 ## What changed, per loader, and how it was built
 
 ### 1. Action / LeRobot — `action_dataset.py`
