@@ -369,4 +369,46 @@ class LanceDROIDComposedDataset(DROIDLeRobotDataset):
         return results
 
 
-__all__ = ["LanceDROIDDataset", "LanceDROIDComposedDataset"]
+class LanceDROIDComposedIterable(torch.utils.data.IterableDataset):
+    """Episode-shuffle stream over a :class:`LanceDROIDComposedDataset` (borrowed from
+    the base ``ActionIterableShuffleDataset``).
+
+    Shuffles per-episode block ORDER and streams windows WITHIN each episode
+    sequentially, sharded disjointly across (rank, worker). Because consecutive windows
+    share an episode, the per-worker decoder for that episode's clip is built ONCE and
+    reused for all its windows — instead of ``RandomSampler`` rebuilding it (a fresh
+    ``take_blobs`` + ``VideoDecoder``) on nearly every window. This keeps batch diversity
+    (N workers stream N different episodes) while making blob reads sequential — a large
+    win in the data-bound / object-store regime. Re-shuffles each epoch, streams forever.
+    """
+
+    def __init__(self, composed: LanceDROIDComposedDataset, seed: int = 42):
+        super().__init__()
+        self._ds = composed
+        self._seed = int(seed)
+        self.shard_world_size = 1
+        self.shard_rank = 0
+
+    def __len__(self) -> int:
+        return len(self._ds)
+
+    def __iter__(self):
+        blocks = self._ds.get_shuffle_blocks()  # per-episode (start, length), inherited
+        info = torch.utils.data.get_worker_info()
+        wid = info.id if info is not None else 0
+        nw = info.num_workers if info is not None else 1
+        shard = int(self.shard_rank) * nw + wid
+        total = max(1, int(self.shard_world_size) * nw)
+        epoch = 0
+        while True:
+            g = torch.Generator()
+            g.manual_seed(self._seed + epoch)
+            order = torch.randperm(len(blocks), generator=g).tolist()
+            for b in order[shard::total]:
+                start, length = blocks[b]
+                for idx in range(start, start + length):
+                    yield self._ds[idx]
+            epoch += 1
+
+
+__all__ = ["LanceDROIDDataset", "LanceDROIDComposedDataset", "LanceDROIDComposedIterable"]

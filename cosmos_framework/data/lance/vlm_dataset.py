@@ -189,7 +189,13 @@ class LanceVLMShuffleScan(torch.utils.data.IterableDataset):
         my_frags = frags[wid::nw]
         buf: list[dict] = []
         for frag in my_frags:
-            for batch in frag.to_batches(columns=_COLS, batch_size=self.batch_size):
+            # batch_readahead prefetches the next batches' IO (matters on S3); falls back
+            # gracefully if an older lance build doesn't accept the kwarg.
+            try:
+                batches = frag.to_batches(columns=_COLS, batch_size=self.batch_size, batch_readahead=8)
+            except TypeError:
+                batches = frag.to_batches(columns=_COLS, batch_size=self.batch_size)
+            for batch in batches:
                 ids = batch.column("sample_id").to_pylist()
                 imgs = batch.column("image_bytes").to_pylist()
                 convs = batch.column("conversations").to_pylist()
