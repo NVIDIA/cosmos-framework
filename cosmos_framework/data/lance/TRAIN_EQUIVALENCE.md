@@ -60,3 +60,20 @@ data-bound** — which fast/many GPUs (H100, 8×) and/or object-store I/O produc
 1.74× (149 → 258 global samples/s), trending toward the isolated 2.5× decode ceiling as
 compute → 0. It applies to the video loaders (2.5–6.5×), not the VLM (image-processor-bound).
 The tiny head is a PROXY for "GPU ≈ infinitely fast", not the real Cosmos model.
+
+## Decent-epochs real training: outputs are identical (capstone)
+`train_equiv_real.py`, Qwen2.5-VL-3B + LoRA, 4 epochs × 600 samples (2400 steps), three
+trainings (base / base2-control / lance), same init+seed+order. Compared base-vs-lance
+against base-vs-base2 (the nondeterminism floor):
+
+| comparison | base↔lance | base↔base2 (noise floor) |
+| ---------- | ---------- | ------------------------ |
+| step-0 loss | identical | identical |
+| mean \|Δ train loss\| (2400 steps) | 3.03e-3 | 3.14e-3 |
+| held-out eval loss | 0.0123 vs 0.0131 | 0.0130 vs 0.0131 |
+| final LoRA max\|Δw\| | 2.24e-2 | 2.40e-2 |
+| greedy generations identical | 12/12 | 12/12 |
+
+base↔lance ≤ base↔base2 on every metric, and the held-out **generations match 12/12** — the
+base- and lance-trained models produce identical text. The Lance loader is a correct,
+training-equivalent drop-in over a full multi-epoch run.
