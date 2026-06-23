@@ -48,7 +48,7 @@ class TinyHead(nn.Module):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--loader", choices=["base", "lance"], required=True)
+    ap.add_argument("--loader", choices=["base", "lance", "lance-episode"], required=True)
     ap.add_argument("--n", type=int, default=800)
     ap.add_argument("--epochs", type=int, default=3)
     ap.add_argument("--bs", type=int, default=2)
@@ -60,16 +60,26 @@ def main():
     dist.init_process_group("nccl"); torch.cuda.set_device(local)
     dev = torch.device("cuda", local)
 
-    from cosmos_framework.data.lance import LanceDROIDComposedDataset
+    import math
+    from cosmos_framework.data.lance import LanceDROIDComposedDataset, LanceDROIDComposedIterable
     from cosmos_framework.data.vfm.action.datasets.droid_lerobot_dataset import DROIDLeRobotDataset
 
-    if args.loader == "base":
-        ds = DROIDLeRobotDataset(root=S3_ROOT, **KW)
+    so = {"region": "us-east-2"}
+    sampler = None
+    max_steps = math.ceil(args.n / world / args.bs)  # samples/rank/epoch budget (caps the infinite episode stream)
+    if args.loader == "lance-episode":
+        composed = LanceDROIDComposedDataset(root=S3_ROOT, lance_uri=S3_LANCE,
+                                             decode_device="cpu", storage_options=so, **KW)
+        ds = LanceDROIDComposedIterable(composed, seed=0)
+        ds.shard_rank = rank; ds.shard_world_size = world  # disjoint episode shards per rank
     else:
-        ds = LanceDROIDComposedDataset(root=S3_ROOT, lance_uri=S3_LANCE,
-                                       decode_device="cpu", storage_options={"region": "us-east-2"}, **KW)
-    ds = torch.utils.data.Subset(ds, list(range(args.n)))
-    sampler = torch.utils.data.distributed.DistributedSampler(ds, num_replicas=world, rank=rank, shuffle=True, seed=0)
+        if args.loader == "base":
+            ds = DROIDLeRobotDataset(root=S3_ROOT, **KW)
+        else:
+            ds = LanceDROIDComposedDataset(root=S3_ROOT, lance_uri=S3_LANCE,
+                                           decode_device="cpu", storage_options=so, **KW)
+        ds = torch.utils.data.Subset(ds, list(range(args.n)))
+        sampler = torch.utils.data.distributed.DistributedSampler(ds, num_replicas=world, rank=rank, shuffle=True, seed=0)
     loader = torch.utils.data.DataLoader(ds, batch_size=args.bs, sampler=sampler, num_workers=args.workers,
                                          collate_fn=collate, persistent_workers=True, prefetch_factor=4,
                                          multiprocessing_context="spawn")
@@ -78,14 +88,17 @@ def main():
     opt = torch.optim.SGD(model.parameters(), lr=1e-3)
 
     for ep in range(args.epochs):
-        sampler.set_epoch(ep)
-        torch.cuda.synchronize(); t0 = time.perf_counter(); t_data = 0.0; last = time.perf_counter(); n = 0
+        if sampler is not None:
+            sampler.set_epoch(ep)
+        torch.cuda.synchronize(); t0 = time.perf_counter(); t_data = 0.0; last = time.perf_counter(); n = 0; step = 0
         for video, action in loader:
             t_data += time.perf_counter() - last
             video = video.to(dev, non_blocking=True); action = action.to(dev, non_blocking=True)
             loss = ((model(video) - action.flatten(1)) ** 2).mean()
             loss.backward(); opt.step(); opt.zero_grad()
-            n += video.shape[0]; last = time.perf_counter()
+            n += video.shape[0]; step += 1; last = time.perf_counter()
+            if step >= max_steps:  # cap (sampler modes end naturally ~here; episode stream is infinite)
+                break
         torch.cuda.synchronize()
         ep_t = time.perf_counter() - t0
         stats = torch.tensor([ep_t, t_data, n], device=dev); dist.all_reduce(stats)

@@ -43,3 +43,19 @@ Permutation API with `select_columns` + `with_format("arrow")`; batched `__getit
 (dedup + single fetch); worker-safe lazy handles (`__getstate__` nulls, `_ensure_open`);
 `seek_mode="approximate"`; per-worker decoder LRU cache; blob-v2 byte-range reads via
 `take_blobs`; columnar/selective reads.
+
+## Re-measure: did the optimizations move the S3 training-throughput demo?
+`train_databound_demo.py` now supports `--loader lance-episode`. 4× L40S, S3, data-bound:
+
+| loader | s/epoch | samples/s | vs base |
+| ------ | ------- | --------- | ------- |
+| base | 5.3 | 151 | 1.0× |
+| lance (random) | 3.0 | ~260 | 1.74× |
+| lance-episode | 3.4–3.8 | ~220 | ~1.5× |
+
+The demo subset is the first ~800 flat indices ≈ **3 episodes**, which fit entirely in the
+decoder LRU (32), so `RandomSampler` never misses and episode-shuffle has nothing to recover
+(its iterable overhead even makes it marginally slower). Episode-shuffle's win requires
+episodes-in-flight > cache (the real many-episode regime), where `bench_episode_shuffle`
+(cache=4, S3) measured **2.55×** (35 → 90 samples/s). Lesson: episode-shuffle is a
+large-dataset/object-store optimization, not a small-subset one.
