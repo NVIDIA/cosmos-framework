@@ -866,6 +866,16 @@ class DistributedCheckpointer(AbstractCheckpointer):
                         raise ValueError(
                             f"Unexpected keys (found in checkpoint but not in model): {results.unexpected_keys}"
                         )
+                    # Warm start that skipped net_ema (e.g. loading an EMA-only HF export
+                    # with no net_ema.* keys): the EMA shadow would otherwise keep its random
+                    # build-time generation pathway (init_moe is skipped when a checkpoint is
+                    # present). Seed net_ema from the freshly loaded net so the EMA starts equal
+                    # to net ("EMA warm-starts from net") instead of from random weights.
+                    if warm_start and any("net_ema" in skip_key for skip_key in keys_to_skip_loading):
+                        ema_worker = getattr(model, "net_ema_worker", None)
+                        if ema_worker is not None and getattr(model, "net_ema", None) is not None:
+                            ema_worker.copy_to(src_model=model.net, tgt_model=model.net_ema)
+                            log.info("Warm start: re-seeded net_ema from net (net_ema was skipped on load).")
 
                 elif key == "optim":
                     log.info("- Loading the optimizer...")
