@@ -59,3 +59,24 @@ decoder LRU (32), so `RandomSampler` never misses and episode-shuffle has nothin
 episodes-in-flight > cache (the real many-episode regime), where `bench_episode_shuffle`
 (cache=4, S3) measured **2.55×** (35 → 90 samples/s). Lesson: episode-shuffle is a
 large-dataset/object-store optimization, not a small-subset one.
+
+## Deep-research: lance random reads from S3 — confirmed latency-bound + concurrency is the fix
+Random S3 point reads are **latency-bound, not a Lance defect**: each GET pays ~30–200 ms TTFB
+independent of size; a serial stream ≈ one connection ≈ ~85 MB/s (our measured ~80). S3 throughput
+scales horizontally — need ~7–8 concurrent requests per 620 MB/s (16–64+ for true random). So
+"random from S3 shouldn't matter" is right *only with enough concurrency*. Checklist + our status:
+
+1. **Batch take_blobs** — replace per-row loops with one `take_blobs([all rows])`. ✅ done
+   (`_ensure_decoders`); measured 44 → 60.8 samp/s (4w) and 130 → 149 (8w).
+2. **Concurrency `LANCE_IO_THREADS`** (default 64 cloud / 8 local → 128–256). ✅ tested: 130 → 149
+   samp/s at 256. Also `lance_aimd_*` rate limiter (≤5000 req/s), scanner `io_buffer_size`.
+3. **Oversubscribe `num_workers`** beyond vCPU. ✅ benchmarks use 8 (raise to 32–64+ for S3).
+4. **Shuffle = fragment/shard order + sequential within** (= our episode-shuffle; matches base
+   `ActionIterableShuffleDataset` *and* `lance.torch.data` ShardedFragmentSampler). ✅
+5. **Multi-GPU: shard fragments per rank** (`fragments[rank::world]`). ✅ `LanceDROIDComposedIterable`
+   shard_rank/shard_world_size.
+6. **Layout**: per-episode blobs land in dedicated `.blob` files; size fragments small enough for
+   shuffle randomness, large enough to amortize TTFB. (REFUTED: large blobs do NOT remove the
+   concurrency requirement.) — current single-fragment tables fine at this scale.
+7. **Spread across S3 prefixes** if request-rate-bound (>5,500 GET/s/prefix). — not needed yet.
+8. `batch_readahead` (16) / `fragment_readahead` (4) on scans. ✅ added to VLM scan.

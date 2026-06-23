@@ -4,20 +4,29 @@ Drop-in LanceDB replacements for the three dataloaders Cosmos mixes during train
 (LeRobot action, WebDataset VLM, local vision-SFT), built to demonstrate higher
 dataloading throughput and better scalability while preserving the training signal.
 
-All comparisons below are **fair** (same decode device, same shuffle, same hardware) and
-**measured** on a single node with 4× NVIDIA L40S / 48 CPU, reading **shuffled** as in
-real training. Nothing here uses per-frame JPEG (disk blowup) — everything stays
-video-encoded; the action/vision-SFT wins come from a one-time, offline, *lossy* re-encode
-into a training-optimized layout.
+All comparisons below are **fair** (same decode device, same hardware, and the base's
+**production shuffle** — for action that is *episode-shuffle*, `iterable_shuffle=True`, not
+RandomSampler), on a single node with 4× NVIDIA L40S / 48 CPU. **Storage regime is labelled
+local vs S3** — it matters: S3 random reads are latency-bound, so the right pattern + enough
+concurrency (`LANCE_IO_THREADS`, batched `take_blobs`) is required (see `AUDIT.md`). Nothing
+uses per-frame JPEG (disk blowup); the action/vision-SFT wins come from a one-time, offline,
+*lossy* re-encode into a training-optimized layout.
 
 ## Results at a glance
 
 | dataloader | base (cosmos) | Lance | speedup | bound by |
 | ---------- | ------------- | ----- | ------- | -------- |
-| action / lerobot (DROID) | `DROIDLeRobotDataset` | `LanceDROIDComposedDataset` | **2.0–2.5×** e2e | video decode |
-| webdataset / VLM (LLaVA-OneVision) | `webdataset.WebLoader` | `LanceVLMShuffleScan` | **3.7× raw access** (≈1× e2e) | model-side image-proc |
-| local vision-SFT (Bridge) | `SFTDataset` | `LanceVisionSFTDataset` | **6.5×** e2e | video decode |
-| **combined (1:1:1 mix)** | all-base trio | all-Lance trio | **2.75× raw / 2.23× e2e** | the two video loaders |
+| action / lerobot (DROID), **local** | `DROIDLeRobotDataset` (episode-shuffle) | `LanceDROIDComposedDataset` | **1.89×** | video decode |
+| action / lerobot (DROID), **S3** (327 ep) | episode-shuffle | episode-shuffle | **1.69×** | video decode |
+| webdataset / VLM (LLaVA-OneVision), local | `webdataset.WebLoader` | `LanceVLMShuffleScan` | **3.7× raw access** (≈1× e2e) | model-side image-proc |
+| local vision-SFT (Bridge), local | `SFTDataset` | `LanceVisionSFTDataset` | **6.5×** e2e | video decode |
+| **combined (1:1:1 mix)**, local | all-base trio | all-Lance trio | **2.75× raw / 2.23× e2e** | the two video loaders |
+
+> Earlier drafts cited the action loader at **2.5×** — that compared against base-*RandomSampler*,
+> which is ~2× artificially slow. The production base uses **episode-shuffle**, against which the
+> faithful speedup is **1.89× (local) / 1.69× (S3, 327 episodes, cache 16, 8 workers)**. `lance-random`
+> is fine locally (2.15×) but drops to 1.09× on S3 at scale (re-fetches clips); episode-shuffle is
+> the right pattern and what both the base and `lance.torch.data` use. Reproduce: `bench_action_faithful.py`.
 
 Full numbers, methodology, and worker-scaling: [`RESULTS.md`](RESULTS.md).
 The decode-bound optimization roadmap (incl. why NVDEC is *not* the win at these frame
