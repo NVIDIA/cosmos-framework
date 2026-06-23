@@ -27,3 +27,20 @@ nondeterminism. The Lance VLM loader is a true, training-equivalent drop-in.
 Note: this uses the token-exact + image-exact VLM loader (so equivalence should be near-perfect,
 which it is). The action/vision-SFT loaders re-encode video lossily (~32–37 dB); their model is
 the 16B Cosmos3-Nano diffusion stack — a separate, heavier run not done here.
+
+## Multi-GPU per-epoch time (does the loader speedup => faster training?)
+4× L40S, DDP, LoRA-SFT Qwen2.5-VL-3B, 600 samples/epoch, `train_multigpu_time.py`
+(epoch 0 = warmup, discounted):
+
+| loader | steady per-epoch | data-wait | loss (ep2) |
+| ------ | ---------------- | --------- | ---------- |
+| base   | 29.7 s | 1.1% | 0.023 |
+| lance  | 30.8 s | 1.1% | 0.023 |
+
+**Compute-bound, not data-bound.** Data-wait is 1.1% — the GPUs spend ~99% of the epoch on
+forward/backward and the base loader already keeps them fed via prefetch, so per-epoch time is
+equal (the 3% is noise) and loss is identical. The *ceiling* on any loader speedup here is the
+1.1% data-wait. The dataloader throughput wins (VLM 22× raw access, video 2.5–6.5×) reduce
+wall-clock **only in the data-bound regime** (GPUs starving for data) — lighter models, many
+more GPUs per CPU, or slow object-store I/O. On a single node with a heavy model, Lance's value
+is freed CPU + storage/scalability + filtered reads + train-equivalence, not single-node wall-clock.
