@@ -44,3 +44,19 @@ equal (the 3% is noise) and loss is identical. The *ceiling* on any loader speed
 wall-clock **only in the data-bound regime** (GPUs starving for data) — lighter models, many
 more GPUs per CPU, or slow object-store I/O. On a single node with a heavy model, Lance's value
 is freed CPU + storage/scalability + filtered reads + train-equivalence, not single-node wall-clock.
+
+## When training IS data-bound: Lance cuts wall-clock (S3 + fast-GPU proxy)
+`train_databound_demo.py`, 4× L40S, action/video loader reading from S3, with a *tiny*
+compute head (proxy for an H100/large-cluster where GPU compute ≈ 0 so the loader is the
+bottleneck — the data-bound regime):
+
+| regime | base s/epoch | lance s/epoch | speedup | data-wait |
+| ------ | ------------ | ------------- | ------- | --------- |
+| heavy model, local (compute-bound) | 29.7 | 30.8 | 1.0× | 1.1% |
+| tiny compute, S3 (data-bound)       | 5.4  | 3.1  | 1.74× | base ~45% / lance ~32% |
+
+So the dataloader speedup converts to **faster training wall-clock once training is
+data-bound** — which fast/many GPUs (H100, 8×) and/or object-store I/O produce. Here it's
+1.74× (149 → 258 global samples/s), trending toward the isolated 2.5× decode ceiling as
+compute → 0. It applies to the video loaders (2.5–6.5×), not the VLM (image-processor-bound).
+The tiny head is a PROXY for "GPU ≈ infinitely fast", not the real Cosmos model.
