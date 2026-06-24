@@ -30,6 +30,13 @@ _BATCH_TIMING_KEYS = {
 }
 
 
+def recursive(val, i):
+    if isinstance(val, dict):
+        return {k: recursive(v, i) for k, v in val.items()}
+    else:
+        return val[i : i + 1]
+
+
 def custom_collate_fn(batch):
     """
     Collate function that works like default_collate for all keys other than "text_token_ids", "images", and "video".
@@ -352,6 +359,8 @@ class JointDataLoader(webdataset.WebLoader):
                             sample[k] = v[j : j + 1]
                     elif isinstance(v, list):
                         sample[k] = v[j]
+                    elif isinstance(v, dict):
+                        sample[k] = recursive(v, j)
                     elif isinstance(v, torch.Tensor) and v.dim() > 0:
                         sample[k] = v[j : j + 1]
                     else:
@@ -532,6 +541,8 @@ class JointDataLoader(webdataset.WebLoader):
                             sample[k] = v[i : i + 1]
                     elif isinstance(v, list):
                         sample[k] = v[i]
+                    elif isinstance(v, dict):
+                        sample[k] = recursive(v, i)
                     else:
                         sample[k] = v[i : i + 1]
                 buffer.append(sample)

@@ -424,6 +424,8 @@ class ImaginaireTrainer:
         # Evaluate on the full validation set.
         with ema.ema_scope(model, enabled=model.config.ema.enabled):
             for val_iter, data_batch in enumerate(dataloader_val):
+                if val_iter >= len(dataloader_val):
+                    break  # Break if validation is over (webdatasets may repeat infinitely, so putting a hard stop here)
                 if self.config.trainer.max_val_iter is not None and val_iter >= self.config.trainer.max_val_iter:
                     break
                 data_batch = misc.to(data_batch, device="cuda")
