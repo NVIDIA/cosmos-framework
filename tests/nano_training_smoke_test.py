@@ -281,14 +281,14 @@ def _require_8_gpus() -> None:
         import torch
     except Exception as exc:  # pragma: no cover
         pytest.skip(f"torch unavailable ({exc!r})")
-    if not torch.cuda.is_available() or torch.cuda.device_count() < 8:
-        pytest.skip(f"requires 8 visible CUDA devices, found {torch.cuda.device_count()}")
+    if not torch.cuda.is_available() or torch.cuda.device_count() < MAX_GPUS:
+        pytest.skip(f"requires {MAX_GPUS} visible CUDA devices, found {torch.cuda.device_count()}")
 
 
-if MAX_GPUS == 8:
+if MAX_GPUS >= 1:
 
     @pytest.mark.level(2)
-    @pytest.mark.gpus(8)
+    @pytest.mark.gpus(MAX_GPUS)
     def test_nano_sft_train_export_infer(tmp_path: Path) -> None:
         """Full Cosmos3-Nano SFT pipeline: convert -> train 5 -> export -> t2i infer."""
         # 1-2. Inputs + HF->DCP convert, then DCP completeness.
@@ -304,7 +304,7 @@ if MAX_GPUS == 8:
             extra_env={
                 "MASTER_PORT": str(_free_port()),
                 "OUTPUT_ROOT": str(tmp_path / "launcher_out"),
-                "NPROC_PER_NODE": "8",
+                "NPROC_PER_NODE": str(MAX_GPUS),
             },
         )
         assert rc == 0, f"SFT launch failed (exit {rc}):\nLog tail:\n{out[-4000:]}"
@@ -346,7 +346,7 @@ if MAX_GPUS == 8:
         infer_out = tmp_path / "exported_out"
         rc, out = _run(
             [
-                "torchrun", "--nproc_per_node=8", f"--master_port={_free_port()}",
+                "torchrun", f"--nproc_per_node={MAX_GPUS}", f"--master_port={_free_port()}",
                 "-m", "cosmos_framework.scripts.inference",
                 "--parallelism-preset=throughput",
                 "-i", "inputs/omni/t2i.json",
