@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import pytest
 import torch
 
 from cosmos_framework.configs.base.vlm.experiment.dataflow_roles import (
@@ -104,6 +105,32 @@ def test_collate_vision_flat_concat():
     assert out["pixel_values"].shape[0] == 13
     # image_grid_thw concatenated: 2 rows of [1,2,2]
     assert out["image_grid_thw"].shape == (2, 3)
+
+
+class _NoPadTok:
+    pass  # neither pad_token_id nor eos_token_id
+
+
+class _NoPadProcessor:
+    tokenizer = _NoPadTok()
+
+
+class _EosOnlyTok:
+    eos_token_id = 5  # no pad_token_id
+
+
+class _EosOnlyProcessor:
+    tokenizer = _EosOnlyTok()
+
+
+def test_processor_raises_when_no_pad_or_eos():
+    with pytest.raises(ValueError, match="neither pad_token_id nor"):
+        VLMProcessor(processor=_NoPadProcessor())
+
+
+def test_processor_falls_back_to_eos_token_id():
+    proc = VLMProcessor(processor=_EosOnlyProcessor())
+    assert proc._pad_token_id == 5
 
 
 def test_collate_uses_per_sample_pad_token_id():

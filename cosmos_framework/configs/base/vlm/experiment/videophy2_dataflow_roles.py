@@ -51,7 +51,13 @@ class VideoPhy2Processor(RawItemProcessor):
         tok = getattr(processor, "tokenizer", processor)
         pad_id = getattr(tok, "pad_token_id", None)
         if pad_id is None:
-            pad_id = getattr(tok, "eos_token_id", 0)
+            pad_id = getattr(tok, "eos_token_id", None)
+        if pad_id is None:
+            raise ValueError(
+                "VideoPhy2Processor: tokenizer exposes neither pad_token_id nor "
+                "eos_token_id; cannot determine a padding id for VLMCollator. "
+                "Configure the tokenizer's pad/eos token."
+            )
         self._pad_token_id = int(pad_id)
 
     def _materialize_media_in_conversation(
