@@ -218,7 +218,41 @@ def _normalize_diffusers_target_key(name: str) -> str:
     return name.removeprefix("model.net.").replace("_orig_mod.", "").replace("_checkpoint_wrapped_module.", "")
 
 
-class _DiffusersHuggingFaceStorageReader(HuggingFaceStorageReader):
+class _MmapSafeReadMixin:
+    """Materialize each safetensors slice into anonymous RAM before the H2D copy.
+
+    ``HuggingFaceStorageReader._process_read_request`` copies tensors straight from
+    the ``mmap``-backed safetensors slice onto the GPU (``target.copy_(slice)``). On
+    the GB300 / CUDA 13 / driver 610.43.02 stack a ``cudaMemcpyAsync`` issued directly
+    from file-backed ``mmap`` host pages deadlocks inside the driver
+    (``cuMemcpyHtoDAsync_v2`` spins forever, GPU copy engine idle) — see issue #42.
+    Copies from anonymous (or pinned) host memory are unaffected, so we ``clone()``
+    the slice first. The extra host copy is negligible next to the weight load and is
+    correctness-neutral on every platform.
+    """
+
+    def _process_read_request(self, f, req, planner) -> None:  # noqa: ANN001 - matches torch private API
+        slices = tuple(
+            slice(offset, offset + length)
+            for offset, length in zip(req.storage_offsets, req.lengths)
+        )
+        # .clone() forces materialization into anonymous RAM, sidestepping the
+        # mmap-page H2D driver deadlock above.
+        tensor = f.get_slice(req.storage_index.fqn)[slices].clone()
+        target_tensor = planner.resolve_tensor(req).detach()
+        if target_tensor.size() != tensor.size():
+            raise AssertionError(
+                f"req {req.storage_index} mismatch sizes {target_tensor.size()} vs {tensor.size()}"
+            )
+        target_tensor.copy_(tensor)
+        planner.commit_tensor(req, target_tensor)
+
+
+class _MmapSafeHuggingFaceStorageReader(_MmapSafeReadMixin, HuggingFaceStorageReader):
+    """Plain HF safetensors reader with the GB300 mmap-H2D deadlock workaround."""
+
+
+class _DiffusersHuggingFaceStorageReader(_MmapSafeReadMixin, HuggingFaceStorageReader):
     """Hugging Face safetensors reader that follows diffusers' root weight map."""
 
     def __init__(self, checkpoint_path: Path) -> None:
@@ -473,7 +507,7 @@ class Cosmos3OmniModel(transformers.PreTrainedModel):
                     )
                     return model
                 state_dict = get_model_state_dict(model)
-                storage_reader = HuggingFaceStorageReader(str(checkpoint_path))
+                storage_reader = _MmapSafeHuggingFaceStorageReader(str(checkpoint_path))
             case _:
                 assert_never(checkpoint_type)
         dcp.load(state_dict=state_dict, storage_reader=storage_reader)
