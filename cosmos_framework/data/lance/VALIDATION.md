@@ -1,7 +1,8 @@
 # Validation: do the pre-composed clips preserve the real training data?
 
-Short answer: **yes.** The "2.5× faster + 0.35× disk" result is a legitimate offline-
-transcode optimization, not a measurement artifact and not noise. Evidence below.
+Short answer: **yes.** The "faster (~1.9× action at 8 workers, ~7.6× vision-SFT) + 0.35× disk"
+result is a legitimate offline-transcode optimization, not a measurement artifact and not noise.
+Evidence below.
 
 ## 1. Visual (eyeball)
 `validation/droid_base_vs_composed_idx5000_f0.png` — base (left) vs composed (right),
@@ -42,3 +43,13 @@ DALI video pipelines, the LeRobot g=2 re-encode):
 It is a one-time **lossy re-encode** (~32 dB). For workflows needing strict bit-exact
 pixels vs the original mp4, use the bit-exact `LanceDROIDDataset` video-blob variant
 (no re-encode, slower). For throughput, `LanceDROIDComposedDataset` (this one) is the win.
+
+## 6. Labels & training-output equivalence (not just pixels)
+- **Action loader**: `tests/data/lance/test_action_equivalence.py` (8/8) — `video max|Δ|=0`
+  (bit-exact video-blob variant), action/caption/pose/idle bit-exact for `joint_pos` + `ee_pose`.
+- **Vision-SFT loader**: `tests/data/lance/test_vision_sft_equivalence.py` (7/7) — caption **token
+  ids exact** (40/40 clips), video mean|Δ|/255 = 0.013 (re-encode loss only).
+- **End-to-end training**: `benchmarks/lance/train_equiv_real.py` LoRA-SFTs the same model with
+  base vs lance (same init/seed/order/LR) and compares loss curves, eval, weights, and generated
+  outputs. base↔lance differences sit **within the base↔base2 nondeterminism floor** (a second
+  base run) — i.e. the loader swap is indistinguishable from run-to-run noise.

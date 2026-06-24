@@ -4,36 +4,77 @@ Drop-in LanceDB replacements for the three dataloaders Cosmos mixes during train
 (LeRobot action, WebDataset VLM, local vision-SFT), built to demonstrate higher
 dataloading throughput and better scalability while preserving the training signal.
 
-All comparisons below are **fair** (same decode device, same hardware, and the base's
-**production shuffle** — for action that is *episode-shuffle*, `iterable_shuffle=True`, not
-RandomSampler), on a single node with 4× NVIDIA L40S / 48 CPU. **Storage regime is labelled
-local vs S3** — it matters: S3 random reads are latency-bound, so the right pattern + enough
-concurrency (`LANCE_IO_THREADS`, batched `take_blobs`) is required (see `AUDIT.md`). Nothing
-uses per-frame JPEG (disk blowup); the action/vision-SFT wins come from a one-time, offline,
-*lossy* re-encode into a training-optimized layout.
+All comparisons below are **fair**: same decode device (**CPU decode on both sides** — the base
+can only decode on CPU), same hardware (single node, 48 CPU), and the base's **production shuffle**
+(for action that is *episode-shuffle*, `iterable_shuffle=True`, not RandomSampler). RAW =
+data-access + decode, no model. Nothing uses per-frame JPEG (disk blowup); the action/vision-SFT
+wins come from a one-time, offline, *lossy* re-encode into a training-optimized layout.
+
+**Two storage regimes, because they answer different questions.** Cosmos's documented workflow
+**downloads datasets to local disk, then trains** (every public NVIDIA post-training guide), so
+**LOCAL is the apples-to-apples comparison**. S3 is Lance's *additional* value: it reads object
+storage **natively**, which the stock action/VLM loaders cannot do at all (they only read
+`Path(root)`; only the vision-SFT `SFTDataset` has a boto3 reader). For the S3 row the base
+accesses each dataset the way the stock loader actually would — action/VLM via an s3fs FUSE
+mount (the only option), vision-SFT via boto3 download-per-sample.
 
 ## Results at a glance
 
-| dataloader | base (cosmos) | Lance | speedup | bound by |
-| ---------- | ------------- | ----- | ------- | -------- |
-| action / lerobot (DROID), **local** | `DROIDLeRobotDataset` (episode-shuffle) | `LanceDROIDComposedDataset` | **1.89×** | video decode |
-| action / lerobot (DROID), **S3** (327 ep) | episode-shuffle | episode-shuffle | **1.69×** | video decode |
-| webdataset / VLM (LLaVA-OneVision), local | `webdataset.WebLoader` | `LanceVLMShuffleScan` | **3.7× raw access** (≈1× e2e) | model-side image-proc |
-| local vision-SFT (Bridge), local | `SFTDataset` | `LanceVisionSFTDataset` | **6.5×** e2e | video decode |
-| **combined (1:1:1 mix)**, local | all-base trio | all-Lance trio | **2.75× raw / 2.23× e2e** | the two video loaders |
+327 DROID episodes, 1:1:1 round-robin mixer, 6 workers/loader, batch 16, CPU decode both sides.
+Reproduce: `benchmarks/lance/bench_combined_faithful.py` (run `--trios base` and `--trios lance`
+in **separate** processes). Per-loader detail: [`RESULTS.md`](RESULTS.md).
 
-> Earlier drafts cited the action loader at **2.5×** — that compared against base-*RandomSampler*,
-> which is ~2× artificially slow. The production base uses **episode-shuffle**, against which the
-> faithful speedup is **1.89× (local) / 1.69× (S3, 327 episodes, cache 16, 8 workers)**. `lance-random`
-> is fine locally (2.15×) but drops to 1.09× on S3 at scale (re-fetches clips); episode-shuffle is
-> the right pattern and what both the base and `lance.torch.data` use. Reproduce: `bench_action_faithful.py`.
+**LOCAL — apples-to-apples, cosmos's real workflow:**
+
+| loader (RAW) | base (cosmos) | Lance | speedup |
+| ------------ | ------------- | ----- | ------- |
+| action / DROID (episode-shuffle both sides) | 62.2 | 119.9 | **1.93×** |
+| webdataset / VLM (LLaVA-OneVision) | 21,918 | 35,728 | **1.63×** (raw; ≈1× e2e) |
+| local vision-SFT (Bridge) | 41.9 | 317.3 | **7.57×** |
+| **combined (1:1:1 mixer)** | **122.1** | **379.5** | **3.11×** |
+
+**S3 — Lance native `s3://` vs stock base access (`LANCE_IO_THREADS=256`):**
+
+| loader (RAW) | base (stock S3 access) | Lance | speedup |
+| ------------ | ---------------------- | ----- | ------- |
+| action / DROID (base via FUSE) | 73.8 | 126.4 | **1.71×** |
+| webdataset / VLM (base via FUSE) | 18,838 | 32,097 | **1.70×** |
+| vision-SFT (base via boto3) | 31.4 | 83.4 | **2.66×** |
+| **combined (1:1:1 mixer)** | **95.5** | **251.9** | **2.64×** |
+
+**DEFAULT-MIXED — each loader on its *actual* default storage** (the most realistic single number):
+base → action LOCAL, vision-SFT S3 (boto3), VLM HF-Hub streaming; Lance → action LOCAL, vision-SFT S3, VLM S3.
+
+| loader (RAW) | base (default) | Lance | speedup |
+| ------------ | -------------- | ----- | ------- |
+| action / DROID (both local) | 81.6 | 138.6 | **1.70×** |
+| VLM (base: HF-Hub stream · Lance: S3 scan) | 901 | 39,428 | 43.7×† |
+| vision-SFT (base: boto3 S3 · Lance: S3) | 39.1 | 98.2 | **2.51×** |
+| **combined (1:1:1 mixer)** | **95.3** | **253.5** | **2.66×** |
+
+†The 43.7× VLM number compares the base's HF-Hub *streaming* (decodes PIL over the network) vs Lance's
+S3 columnar byte-scan — different work, and VLM is never the mixer bottleneck (it's ~10–400× faster than
+the video loaders), so it doesn't move the combined number. The combined is gated by the video loaders.
+
+**How to read the combined number.** The 1:1:1 mixer aggregate is **gated by the slowest loader**
+(aggregate ≈ 3×slowest — verified: local 379≈3×120, S3 252≈3×83). So the combined "speedup" tracks
+whichever loader bottlenecks each trio; it is *not* a multiplicative win across loaders. The honest
+combined dataloader speedup is **~3× (local) / ~2.6× (S3)** — consistent across regimes and with the
+per-loader wins. (An earlier draft reported **8.5× from S3**; that was an artifact of benchmarking the
+vision-SFT base through a FUSE mount at 11.2 samples/s. The *stock* base downloads via boto3 at 31.4,
+which collapses the combined to the honest 2.64×. Lesson recorded in [`RESULTS.md`](RESULTS.md).)
+
+> **Action 2×2 (the speedup is worker-count-dependent, not shuffle-mode-dependent).** Early drafts
+> cited 2.5× — that was at **4 workers / batch 8**. At a fixed 8-worker config (local, CPU decode):
+> `base-random 92.4 / base-episode 95.4 / lance-random 195.5 / lance-episode 177.4`. So `base-random`
+> ≈ `base-episode` — **shuffle mode is throughput-neutral locally** (episode-shuffle's win shows up on
+> S3, avoiding clip re-fetch); the ratio drops from 2.5×→~1.9× because the base's heavier 3-view decode
+> parallelizes better as workers scale. Reproduce: `bench_action_faithful.py --modes base-random
+> base-episode lance-random lance-episode`.
 
 Full numbers, methodology, and worker-scaling: [`RESULTS.md`](RESULTS.md).
-The decode-bound optimization roadmap (incl. why NVDEC is *not* the win at these frame
-sizes): [`OPTIMIZATION_ROADMAP.md`](OPTIMIZATION_ROADMAP.md).
-Why the base loaders structurally can't capture these wins: [`WHY_BASE_CANT.md`](WHY_BASE_CANT.md).
-Proof the optimized clips preserve the real training data (PSNR/SSIM, visual, content):
-[`VALIDATION.md`](VALIDATION.md).
+Proof the optimized clips preserve the real training data (token-exact labels, PSNR/SSIM,
+training-output equivalence): [`VALIDATION.md`](VALIDATION.md).
 
 ## Disk footprint (action loader) — the pre-composed clips are *smaller*, not bigger
 
@@ -83,10 +124,10 @@ contiguous runs. Derivation in [`VALIDATION.md`](VALIDATION.md).
   tar at low/moderate worker counts. Converter: `tools/lance_datagen/build_wds_shards.py`
   (writes the comparison tar shards) + `convert_llava_to_lance` (the Lance table; stores
   original PNG bytes inline, no re-encode). Output dict matches the base raw record, so the
-  same downstream tokenizer produces identical tensors. The raw access win is large
-  (3.7–18×) but the end-to-end VLM step is gated by the Qwen image-processor, so the
-  storage win doesn't surface e2e on a single node — it matters at object-store/multi-node
-  scale and for true global shuffle.
+  same downstream tokenizer produces identical tensors. The raw-access win is large at big
+  batches (up to ~22× at batch 16384) but ~1.6–1.7× at a training batch of 16; either way the
+  end-to-end VLM step is gated by the Qwen image-processor (≈1× e2e on a single node). It
+  matters at object-store/multi-node scale and for true global shuffle.
 
 ### 3. Local vision-SFT — `vision_sft_dataset.py`
 - **Base**: `SFTDataset` (faithful local stand-in `sft_local_dataset.py`) seeks the source
@@ -98,7 +139,11 @@ contiguous runs. Derivation in [`VALIDATION.md`](VALIDATION.md).
   work is a cheap tokenize.
 
 ## Why this isn't doable/practical without LanceDB
-See [`WHY_BASE_CANT.md`](WHY_BASE_CANT.md) for the full argument. In short:
+- **Object-store-native (Lance-only)**: the stock cosmos action and VLM loaders read
+  `Path(root)` / `data_root` on the **local filesystem only** — no S3 reader (verified:
+  `action/datasets/base_dataset.py:65`). cosmos's docs tell you to pre-download to local
+  disk. Lance reads `s3://` natively (batched `take_blobs` + concurrency), so it *enables*
+  efficient object-store training the base can't do without a FUSE mount or full download.
 - **Structural (Lance-only)**: true random access + global shuffle (a WebDataset tar is
   sequential-only; its shuffle is an approximate buffer), columnar/filtered reads, and
   blob-v2 byte-range reads from object storage.
@@ -110,29 +155,36 @@ See [`WHY_BASE_CANT.md`](WHY_BASE_CANT.md) for the full argument. In short:
   representation a first-class, queryable, versioned dataset.
 
 ## Reproduce / verify independently
-Environment: Python 3.12 venv with `torch==2.10+cu128`, `torchvision`, `torchcodec` (+
-`nvidia-npp-cu12` on `LD_LIBRARY_PATH`), `lancedb`/`pylance`, `lerobot`, `lerobot-lancedb`,
-`webdataset`, `transformers`, system `ffmpeg`. Datasets are public on HF
+**→ Full step-by-step recipe (exact env, dataset downloads, conversions, S3 setup, all three
+benchmark regimes, and expected numbers): [`REPRODUCE.md`](REPRODUCE.md).** Start there.
+
+Quick orientation — Python 3.12 venv with `torch==2.10+cu128`, `torchvision==0.25+cu128`,
+`torchcodec==0.10+cu128` (+ `nvidia-npp-cu12` on `LD_LIBRARY_PATH`), `lancedb`/`pylance`,
+`lerobot`, `webdataset`, `transformers`, `datasets`, `boto3`, system `ffmpeg`. `source
+benchmarks/lance/_env.sh` sets the `LD_LIBRARY_PATH` torchcodec needs. Datasets are public on HF
 (`lerobot/droid_1.0.1`, `lmms-lab/LLaVA-OneVision-Data`, `nvidia/BridgeData2-Subset-Synthetic-Captions`).
 
 ```bash
+source benchmarks/lance/_env.sh
 # action: prepare a Cosmos-canonical DROID subset, build the composed table, benchmark
 python tools/lance_datagen/prepare_droid_subset.py --src <droid_1.0.1> --out <out> --num-episodes 100
 python tools/lance_datagen/build_composed_droid.py --root <out>/success --uri <lance> --gop 1
 DROID_COSMOS_ROOT=<out>/success DROID_LANCE_URI=<videoblob_lance> \
   pytest tests/data/lance/test_action_equivalence.py        # bit-exact equivalence
-python benchmarks/lance/bench_action.py --root <out>/success --uri <lance> --modes base lance-composed
+# action 2x2 (random vs episode-shuffle, both sides):
+python benchmarks/lance/bench_action_faithful.py --root <out>/success --uri <lance_dir> \
+  --modes base-random base-episode lance-random lance-episode
 
-# vlm
-python tools/lance_datagen/build_wds_shards.py --out <wds>          # base tar shards
+# vlm / vision-sft per-loader
 python benchmarks/lance/bench_vlm.py --lance-uri <lance> --wds-shards "<wds>/shard-{00000..00019}.tar" --mode raw
-
-# vision-sft
-python tools/lance_datagen/build_vision_sft.py ...                  # see file args
 python benchmarks/lance/bench_vision_sft.py ...
 
-# combined
-python benchmarks/lance/bench_combined.py
+# combined (LOCAL = apples-to-apples; run base and lance in SEPARATE processes)
+python benchmarks/lance/bench_combined_faithful.py --action-root ... --action-uri ... \
+  --vlm-wds ... --vlm-uri ... --vsft-jsonl ... --vsft-uri ... --trios base
+python benchmarks/lance/bench_combined_faithful.py ... --trios lance
+# combined (S3): add --region us-east-2, s3:// uris, and --vsft-s3-bucket/--vsft-s3-prefix
+# (stock boto3 vsft base); set LANCE_IO_THREADS=256.
 ```
 
 Layout: dataloaders in `cosmos_framework/data/lance/`, offline converters in

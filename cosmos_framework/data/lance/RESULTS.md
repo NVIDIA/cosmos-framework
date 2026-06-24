@@ -1,7 +1,58 @@
-# LanceDB action dataloader — results (DROID)
+# LanceDB Cosmos dataloaders — results
 
-Hardware: 4× NVIDIA L40S, driver 580. Data: 100-episode subset of public
-`lerobot/droid_1.0.1` (27,985 frames, 3 camera views, 320×180), renamed to the
+Hardware: single node, 48 CPU + NVIDIA L40S, driver 580. **CPU decode on both sides** (the
+base can only decode on CPU). All comparisons use the base's production config; for action
+that is episode-shuffle on both sides. Per-loader datasets noted in each section.
+
+## Combined 3-loader throughput (the headline)
+
+327 DROID episodes, 1:1:1 round-robin mixer, 6 workers/loader, batch 16. The mixer aggregate is
+**gated by the slowest loader** (aggregate ≈ 3×slowest), so the combined "speedup" tracks the
+bottleneck loader, not a multiplicative win. Reproduce: `bench_combined_faithful.py` (run
+`--trios base` and `--trios lance` in SEPARATE processes — the torchcodec/lance teardown raises a
+benign SIGABRT between trios).
+
+**LOCAL (apples-to-apples — cosmos's documented workflow is download-to-local-then-train):**
+
+| loader (RAW) | base | lance | speedup |
+| ------------ | ---- | ----- | ------- |
+| action / DROID | 62.2 | 119.9 | 1.93× |
+| VLM (raw access) | 21,918 | 35,728 | 1.63× |
+| vision-SFT | 41.9 | 317.3 | 7.57× |
+| **combined (1:1:1)** | **122.1** | **379.5** | **3.11×** |
+
+**S3 (Lance native `s3://`, `LANCE_IO_THREADS=256`; base = stock access per loader):**
+
+| loader (RAW) | base | lance | speedup | base S3 access |
+| ------------ | ---- | ----- | ------- | -------------- |
+| action / DROID | 73.8 | 126.4 | 1.71× | s3fs FUSE (no native reader) |
+| VLM | 18,838 | 32,097 | 1.70× | s3fs FUSE (no native reader) |
+| vision-SFT | 31.4 | 83.4 | 2.66× | boto3 download-per-sample (stock `SFTDataset`) |
+| **combined (1:1:1)** | **95.5** | **251.9** | **2.64×** |
+
+**DEFAULT-MIXED (each loader on its actual default storage — the most realistic single run):**
+base → action LOCAL, vision-SFT S3 (boto3), VLM HF-Hub streaming; Lance → action LOCAL, vision-SFT S3, VLM S3.
+
+| loader (RAW) | base | lance | speedup | notes |
+| ------------ | ---- | ----- | ------- | ----- |
+| action / DROID | 81.6 | 138.6 | 1.70× | both local |
+| VLM | 901 | 39,428 | 43.7× | base = HF-Hub stream (PIL decode); lance = S3 byte-scan; **not the bottleneck** |
+| vision-SFT | 39.1 | 98.2 | 2.51× | base boto3 S3 / lance S3 |
+| **combined (1:1:1)** | **95.3** | **253.5** | **2.66×** | gated by the video loaders |
+
+All three regimes agree: **combined ≈ 2.6–3.1×**, gated by the slowest (video) loader. The VLM's huge
+raw ratio never surfaces in the combined because it's already 10–400× faster than the video loaders.
+
+**Methodology lesson (do not repeat).** An earlier draft reported **8.49× from S3**. That was an
+artifact of benchmarking the vision-SFT base through an **s3fs FUSE mount** (ffmpeg seeky reads →
+11.2 samples/s). The *stock* cosmos vision-SFT loader (`SFTDataset`) downloads each video via
+**boto3** (`download_from_s3`), which runs at **31.4** — ~2.8× faster than FUSE. Using the correct
+stock base collapses the combined to the honest **2.64×**. Always benchmark against the loader the
+base *actually ships*, and label exactly how each side accessed storage.
+
+# LanceDB action dataloader — detail (DROID)
+
+Data: subsets of public `lerobot/droid_1.0.1` (3 camera views, 320×180), renamed to the
 Cosmos-canonical schema so the base and LanceDB loaders read identical inputs.
 
 ## Equivalence (bit-exact)
@@ -25,12 +76,12 @@ files (best case for the mp4 base path). Cosmos trains at 640×360 over thousand
 of files, where decode dominates and the base path also pays file-open/seek and
 page-cache misses.
 
-## End-to-end DataLoader, `bench_action.py`
+## End-to-end DataLoader, `bench_action_faithful.py`
 On this subset the full per-sample pipeline (index map, pose/action math) is a
 large share of per-sample cost at 320×180, so end-to-end speedup is smaller than
-the decode-isolated number; the GPU path also currently runs single-process
-(torchcodec CUDA is not fork-safe in DataLoader workers). Closing the e2e gap
-(CPU-worker prep + a GPU decode stage) and scaling to 640×360 are the next steps.
+the decode-isolated number. The GPU decode path is intentionally NOT used in any
+base-vs-lance comparison (the base can only decode on CPU; comparing CPU-vs-GPU
+would be invalid).
 
 # LanceDB VLM dataloader — results (LLaVA-OneVision)
 
@@ -47,11 +98,13 @@ access + true global shuffle). Both feed the SAME tokenize+image-process step.
 | raw access (samples/s, no process)  | 966                  | 21635 | 22.4×   |
 | end-to-end (w/ Qwen image+tokenize) | 300                  | 324   | 1.08×   |
 
-The access layer — exactly the webdataset/IterableDataset bottleneck — is ~22× faster.
-But single-node end-to-end is gated by per-sample processing compute (image
-patchify/normalize + tokenize), which is storage-independent, so the access win only
-surfaces e2e when that compute is precomputed (disk cost) or the pipeline is
-access/IO-bound (object storage, many nodes, global shuffle — i.e. at scale).
+The access layer — exactly the webdataset/IterableDataset bottleneck — is ~22× faster
+**at a large batch (16384)**. This is batch-regime-dependent: at a training batch of 16 with
+6 workers (the combined-table config) the raw-access advantage is **~1.6–1.7×** (local/S3), and
+single-node **end-to-end is ~1×** because it's gated by per-sample processing compute (image
+patchify/normalize + tokenize), which is storage-independent. The access win surfaces e2e only
+when that compute is precomputed (disk cost) or the pipeline is access/IO-bound (object storage,
+many nodes, global shuffle — i.e. at scale). Report the regime; don't quote 22× as an e2e win.
 
 # S3 / object-storage findings (the scalability regime)
 
@@ -82,18 +135,24 @@ Key facts:
 
 # Action loader BEATS base via pre-composed representation (the decode-bound win)
 
-Per the researched roadmap (OPTIMIZATION_ROADMAP.md): GPU/NVDEC is NOT the win at small
-frames; instead store a training-optimized representation the base loader can't. We
-pre-compose each episode's 3 views (base's exact resize+concat) into ONE 270x320 clip,
-re-encoded all-intra (gop=1), one per-episode blob (162M for 100 eps vs 1.5GB raw blobs).
+GPU/NVDEC is NOT the win at these small (270×320) frames; instead store a training-optimized
+representation the base loader can't. We pre-compose each episode's 3 views (base's exact
+resize+concat) into ONE 270×320 clip, re-encoded all-intra (gop=1), one per-episode blob (162M
+for 100 eps vs 1.5GB raw blobs).
 
 `LanceDROIDComposedDataset` decodes that single small clip (approximate seek, per-worker
-LRU decoder cache) instead of 3 full views + F.interpolate + concat. Fair CPU-vs-CPU,
-shuffled, local:
+LRU decoder cache) instead of 3 full views + F.interpolate + concat. Fair CPU-vs-CPU, shuffled,
+local. **The speedup is worker-count-dependent** (the base's heavier 3-view decode parallelizes
+better as workers scale), so report the config:
 
-| workers | base samples/s | lance-composed | speedup |
-| ------- | -------------- | -------------- | ------- |
-| 4       | 43.2           | 108.0          | 2.50×   |
+| config | base-random | base-episode | lance-random | lance-episode | faithful speedup |
+| ------ | ----------- | ------------ | ------------ | ------------- | ---------------- |
+| 4 workers / batch 8  | 43.2 | — | 108.0 | — | 2.50× |
+| 8 workers / batch 16 | 92.4 | 95.4 | 195.5 | 177.4 | **1.86×** (episode) |
+
+At a fixed config `base-random ≈ base-episode` — **shuffle mode is throughput-neutral locally**
+(episode-shuffle's win is on S3, where it avoids re-fetching clips). The honest single-loader
+action speedup at a realistic 8-worker config is **~1.9×**, not the 2.5× seen at 4 workers.
 
 Equivalence: action/captions/idle bit-exact; video mean|Δ|≈4/255 (~1.6%, H.264 re-encode
 loss only — the resize/concat is the base's exact op done once offline). Use the bit-exact
