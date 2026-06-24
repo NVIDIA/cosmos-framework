@@ -100,10 +100,6 @@ BASIC_LLM_CALLBACKS = dict(
     param_count=L(ParamCount)(
         save_s3="${upload_reproducible_setup}",
     ),
-    dataloader_speed=L(DetailedDataLoadingSpeedMonitor)(
-        every_n=100,
-        save_s3="${upload_reproducible_setup}",
-    ),
     wandb_val=L(WandBCallbackEval)(
         save_s3="${upload_reproducible_setup}",
     ),
