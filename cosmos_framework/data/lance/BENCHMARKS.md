@@ -172,10 +172,24 @@ So real Cosmos training reads local disk **and** remote object storage at once �
 
 ---
 
-## 9. Disk footprint (action loader) — the optimized clips are *smaller*
+## 9. Dataset sizes — the recreated combined-view store (measured)
 
-Composed gop=1 (shipped) = **0.35× the original** 3-view footage (fusing 3 views → 1 half-res clip offsets
-the all-intra penalty); gop=8 → 0.18×. Per-frame JPEG (rejected) would be 1.8×. Full table in `README.md`.
+On-disk size of the datasets actually built for these benchmarks (S3 byte sums; local matches within
+rounding). Lance tables use plain `large_binary`, gop=1 (all-intra).
+
+| modality (combined view) | base format & size | Lance size | ratio | representation |
+| ------------------------ | ------------------ | ---------- | ----- | -------------- |
+| action / DROID — 327 eps, 3×320×180 | raw 3-view mp4 **1.55 GB** | composed **0.55 GB** | **0.35×** | 3 views → 1 half-res all-intra clip/episode |
+| VLM / LLaVA figureqa — 99,995 samples | HF parquet **2.22 GB** (wds tar 2.76 GB) | **2.23 GB** | **~1.0×** | original PNG bytes inline, no re-encode |
+| vision-SFT / Bridge — 200 clips, 256² | raw mp4 + jsonl **0.10 GB** | **0.11 GB** | **~1.1×** | pre-resized all-intra clip/sample |
+| **combined total** | **~3.87 GB** (4.4 GB if VLM = wds) | **~2.89 GB** | **0.75×** | smaller overall, driven by composed action |
+
+The combined Lance store is **smaller than the base** — the action composed clips (3→1 view, half-res)
+more than offset the all-intra penalty, while VLM/vision-SFT store the original bytes columnar (no blowup,
+no re-encode for VLM). The bit-exact action variant (`droid_video`, raw mp4 bytes as a blob) is ~1.5 GB ≈
+base (it keeps the original bytes); the composed variant is the small one. Action representation footprint
+scales with GOP: gop=1 (shipped, fastest seek) **0.35×**, gop=8 → ~0.18× the original. Per-frame JPEG
+(rejected) would be **1.8×** — the reason that format was vetoed.
 
 ---
 
