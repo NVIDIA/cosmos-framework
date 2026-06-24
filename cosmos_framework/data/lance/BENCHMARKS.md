@@ -56,6 +56,7 @@ per-loader numbers matter standalone. base → lance (speedup), same run as the 
 | action / DROID (`action_policy_droid`) | 162.7 → 295.6 (**1.82×**) | 143.8 → 385.4 (**2.68×**) |
 | VLM / LLaVA (`llava_ov`) | 9,925 → 49,034 (**4.94×**) | 13,404 → 50,816 (**3.79×**) |
 | vision-SFT / Bridge (`vision_sft_nano`) | 130.2 → 1,071.6 (**8.23×**) | 105.6 → 768.6 (**7.28×**) |
+| **combined (1:1:1 mixer)** | **224.7 → 1,035.6 (4.61×)** | **197.3 → 1,278.1 (6.48×)** |
 
 **At cosmos-default 4 workers:**
 
@@ -64,6 +65,10 @@ per-loader numbers matter standalone. base → lance (speedup), same run as the 
 | action / DROID | 48.2 → 89.3 (1.85×) | 54.3 → 89.5 (1.65×) |
 | VLM / LLaVA | 15,292 → 42,316 (2.77×) | 14,829 → 49,715 (3.35×) |
 | vision-SFT / Bridge | 31.2 → 229.2 (7.35×) | 22.0 → 209.2 (9.5×) |
+| **combined (1:1:1 mixer)** | **88.8 → 252.7 (2.85×)** | **67.4 → 253.4 (3.76×)** |
+
+The combined row is the 1:1:1 mixer aggregate (bottleneck-gated by the slowest loader — action/vsft),
+**not** a sum of the per-loader columns; it's the same number as §1's matrix.
 
 (MIXED VLM base = HF-Hub streaming: 724 samples/s vs lance S3-scan 50,355 = ~70× — different work; VLM is
 never the mixer bottleneck.) vision-SFT is the biggest per-loader win and it **holds end-to-end** (~6.5×)
