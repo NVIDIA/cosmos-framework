@@ -115,7 +115,43 @@ class LanceVisionSFTDataset(torch.utils.data.Dataset):
             f"{self._lance_uri}/{self._table}.lance", storage_options=self._storage_options
         )
         self._rows = self._ds.to_table(columns=_META_COLS).to_pylist()
+        # plain large_binary reads ~6x faster on S3 via a columnar take (parallel IO)
+        # than blob take_blobs (serialized BlobFile reads). See action_dataset for the
+        # measurement. Encoding is auto-detected so old blob tables still work.
+        meta = self._ds.schema.field("video_bytes").metadata or {}
+        self._is_blob = meta.get(b"lance-encoding:blob") == b"true"
         self._decoders = {}
+
+    def _read_clip_bytes(self, rows: list[int]) -> list[bytes]:
+        if self._is_blob:
+            out = []
+            for blob in self._ds.take_blobs(blob_column="video_bytes", indices=rows):
+                out.append(blob.readall())
+                blob.close()
+            return out
+        col = self._ds.take(rows, columns=["video_bytes"]).column("video_bytes")
+        return [v.as_py() for v in col]
+
+    def _build_decoder(self, data: bytes) -> VideoDecoder:
+        if self._decode_device is not None:
+            return VideoDecoder(data, seek_mode="approximate", device=str(self._decode_device))
+        return VideoDecoder(data, seek_mode="approximate")
+
+    def _ensure_decoders(self, rows: list[int]) -> None:
+        """Batch-fetch all cache-missing clips in ONE take call (parallel IO on S3),
+        then build their decoders. Mirrors LanceDROIDComposedDataset._ensure_decoders."""
+        needed = list(dict.fromkeys(rows))
+        needed_set = set(needed)
+        missing = [r for r in needed if r not in self._decoders]
+        if not missing:
+            return
+        for r, data in zip(missing, self._read_clip_bytes(missing)):
+            while len(self._decoders) >= self._cache_size:
+                victim = next((k for k in self._decoders if k not in needed_set), None)
+                if victim is None:
+                    break
+                self._decoders.pop(victim)
+            self._decoders[r] = self._build_decoder(data)
 
     def _ensure_tokenizer(self):
         if self._tokenizer is None:
@@ -130,14 +166,8 @@ class LanceVisionSFTDataset(torch.utils.data.Dataset):
 
     def _decoder(self, row: int) -> VideoDecoder:
         d = self._decoders.get(row)
-        if d is None:
-            blob = self._ds.take_blobs(blob_column="video_bytes", indices=[row])[0]
-            data = blob.readall()
-            blob.close()
-            if self._decode_device is not None:
-                d = VideoDecoder(data, seek_mode="approximate", device=str(self._decode_device))
-            else:
-                d = VideoDecoder(data, seek_mode="approximate")
+        if d is None:  # single-row fallback (batch pre-fetch missed it)
+            d = self._build_decoder(self._read_clip_bytes([row])[0])
             if len(self._decoders) >= self._cache_size:
                 self._decoders.pop(next(iter(self._decoders)))
             self._decoders[row] = d
@@ -201,6 +231,7 @@ class LanceVisionSFTDataset(torch.utils.data.Dataset):
     def __getitems__(self, indices: list[int]) -> list[dict[str, Any]]:
         self._ensure_open()
         n = len(indices)
+        self._ensure_decoders([int(i) for i in indices])  # one batched read for the batch
 
         # Phase 1 — per sample: resolve clip metadata, compute the window frame
         # indices, register them into a per-clip decode plan.

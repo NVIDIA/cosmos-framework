@@ -194,7 +194,10 @@ def build_vlm_loader(which, wds, uri, region, batch_size, num_workers, hf_subset
         ds = bench_vlm.build_base_wds(wds)  # webdataset-tar alternative
         return torch.utils.data.DataLoader(
             ds, batch_size=batch_size, num_workers=num_workers, collate_fn=collate,
-            persistent_workers=num_workers > 0, prefetch_factor=4 if num_workers > 0 else None)
+            persistent_workers=num_workers > 0, prefetch_factor=4 if num_workers > 0 else None,
+            # spawn for ALL loaders in the combined runner: mixing fork (wds default)
+            # with the spawn-based torchcodec loaders in one process SIGABRTs a worker.
+            multiprocessing_context="spawn" if num_workers > 0 else None)
     from cosmos_framework.data.lance.vlm_dataset import LanceVLMShuffleScan
 
     ds = LanceVLMShuffleScan(uri, "llava", buffer_size=1000, storage_options=_so(region, uri))
@@ -227,13 +230,14 @@ def build_vsft_loader(which, jsonl, uri, region, batch_size, num_workers, n_tota
         multiprocessing_context="spawn" if num_workers > 0 else None)
 
 
-def run_trio(which, paths, *, region, cache, batch_size, num_workers, rounds, warmup, vsft_n_total,
+def run_trio(which, paths, *, region, cache, batch_size, workers, rounds, warmup, vsft_n_total,
              vsft_s3_bucket, vsft_s3_prefix, vlm_hf_subset):
-    print(f"\n========== {which.upper()}-TRIO (faithful) ==========", flush=True)
-    a = build_action_loader(which, paths["action_root"], paths["action_uri"], region, cache, batch_size, num_workers)
-    v = build_vlm_loader(which, paths["vlm_wds"], paths["vlm_uri"], region, batch_size, num_workers,
+    aw, vw, sw = workers["action"], workers["vlm"], workers["vision-sft"]
+    print(f"\n========== {which.upper()}-TRIO (faithful) workers a={aw}/v={vw}/s={sw} ==========", flush=True)
+    a = build_action_loader(which, paths["action_root"], paths["action_uri"], region, cache, batch_size, aw)
+    v = build_vlm_loader(which, paths["vlm_wds"], paths["vlm_uri"], region, batch_size, vw,
                          hf_subset=vlm_hf_subset if which == "base" else None)
-    s = build_vsft_loader(which, paths["vsft_jsonl"], paths["vsft_uri"], region, batch_size, num_workers,
+    s = build_vsft_loader(which, paths["vsft_jsonl"], paths["vsft_uri"], region, batch_size, sw,
                           vsft_n_total, vsft_s3_bucket, vsft_s3_prefix)
     loaders, names = [a, v, s], ["action", "vlm", "vision-sft"]
     standalone = {}
@@ -260,7 +264,10 @@ def main():
     ap.add_argument("--region", default=None)
     ap.add_argument("--cache-size", type=int, default=16)
     ap.add_argument("--batch-size", type=int, default=16)
-    ap.add_argument("--num-workers", type=int, default=6)
+    ap.add_argument("--num-workers", type=int, default=6, help="default per-loader worker count")
+    ap.add_argument("--action-workers", type=int, default=None, help="override workers for the action loader")
+    ap.add_argument("--vlm-workers", type=int, default=None, help="override workers for the VLM loader")
+    ap.add_argument("--vsft-workers", type=int, default=None, help="override workers for the vision-SFT loader")
     ap.add_argument("--rounds", type=int, default=30)
     ap.add_argument("--warmup", type=int, default=10)
     ap.add_argument("--trios", nargs="+", default=["base", "lance"])
@@ -276,10 +283,15 @@ def main():
           f"batch={args.batch_size} workers={args.num_workers}/loader rounds={args.rounds} "
           f"LANCE_IO_THREADS={os.environ.get('LANCE_IO_THREADS','default')}", flush=True)
 
+    workers = {
+        "action": args.action_workers or args.num_workers,
+        "vlm": args.vlm_workers or args.num_workers,
+        "vision-sft": args.vsft_workers or args.num_workers,
+    }
     results = {}
     for which in args.trios:
         results[which] = run_trio(which, paths, region=args.region, cache=args.cache_size,
-                                  batch_size=args.batch_size, num_workers=args.num_workers,
+                                  batch_size=args.batch_size, workers=workers,
                                   rounds=args.rounds, warmup=args.warmup, vsft_n_total=vsft_n_total,
                                   vsft_s3_bucket=args.vsft_s3_bucket, vsft_s3_prefix=args.vsft_s3_prefix,
                                   vlm_hf_subset=args.vlm_hf_subset)

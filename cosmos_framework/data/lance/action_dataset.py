@@ -300,7 +300,25 @@ class LanceDROIDComposedDataset(DROIDLeRobotDataset):
         )
         rows = self._comp.to_table(columns=["episode_index"]).to_pylist()
         self._ep_row = {int(r["episode_index"]): i for i, r in enumerate(rows)}
+        # A plain large_binary column is read far faster on object storage with a
+        # columnar `take` (uses the IO thread pool) than `take_blobs` (which streams
+        # BlobFile handles read one-at-a-time -> serialized GETs, ~6x slower on S3).
+        # Blob encoding only pays off for multi-GB payloads; training clips are <2MB.
+        meta = self._comp.schema.field("video_bytes").metadata or {}
+        self._is_blob = meta.get(b"lance-encoding:blob") == b"true"
         self._decoders = {}
+
+    def _read_clip_bytes(self, rows: list[int]) -> list[bytes]:
+        """Fetch the mp4 bytes for the given table rows, batched. Uses a columnar
+        take for plain binary (parallel IO) and take_blobs for a blob column."""
+        if self._is_blob:
+            out = []
+            for blob in self._comp.take_blobs(blob_column="video_bytes", indices=rows):
+                out.append(blob.readall())
+                blob.close()
+            return out
+        col = self._comp.take(rows, columns=["video_bytes"]).column("video_bytes")
+        return [v.as_py() for v in col]
 
     def _build_decoder(self, data: bytes) -> VideoDecoder:
         if self._decode_device is not None:
@@ -317,10 +335,8 @@ class LanceDROIDComposedDataset(DROIDLeRobotDataset):
         missing = [e for e in needed if e not in self._decoders]
         if not missing:
             return
-        blobs = self._comp.take_blobs(blob_column="video_bytes", indices=[self._ep_row[e] for e in missing])
-        for e, blob in zip(missing, blobs):
-            data = blob.readall()
-            blob.close()
+        datas = self._read_clip_bytes([self._ep_row[e] for e in missing])
+        for e, data in zip(missing, datas):
             # evict an LRU entry NOT needed by the current batch (never drop a hit we're
             # about to decode); if all cached entries are needed, exceed the cap this batch.
             while len(self._decoders) >= self._cache_size:

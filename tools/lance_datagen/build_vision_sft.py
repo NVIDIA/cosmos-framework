@@ -77,10 +77,17 @@ def main() -> None:
     ap.add_argument("--table", default="vision_sft")
     ap.add_argument("--resolution", default="256")
     ap.add_argument("--gop", type=int, default=1, help="keyframe interval (1=all-intra)")
+    ap.add_argument(
+        "--storage", choices=["plain", "blob"], default="plain",
+        help="video_bytes encoding. 'plain' large_binary reads ~6x faster on S3 via a "
+        "columnar take; 'blob' (lance blob-v2) only helps for multi-GB payloads. Clips "
+        "are small, so plain is the default. The loader auto-detects either.",
+    )
     args = ap.parse_args()
 
     base_dir = os.path.dirname(os.path.abspath(args.jsonl))
     output_sizes = VIDEO_RES_SIZE_INFO[args.resolution]
+    vb_meta = _BLOB if args.storage == "blob" else None
 
     schema = pa.schema(
         [
@@ -95,7 +102,7 @@ def main() -> None:
             pa.field("fps", pa.float64()),
             pa.field("caption_json", pa.string()),
             pa.field("caption", pa.string()),
-            pa.field("video_bytes", pa.large_binary(), metadata=_BLOB),
+            pa.field("video_bytes", pa.large_binary(), metadata=vb_meta),
         ]
     )
 

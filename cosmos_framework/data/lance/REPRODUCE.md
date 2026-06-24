@@ -136,6 +136,6 @@ ratio — base HF-stream 901 vs Lance S3-scan 39,428 — but it's never the mixe
 - **The combined number is bottleneck-gated** (aggregate ≈ 3×slowest loader); report the per-loader
   breakdown alongside it, never a bare combined multiple.
 - **S3 base access matters**: ffmpeg-through-FUSE is much slower than boto3 download-per-sample — use
-  each base loader's *actual* stock S3 path, or you'll inflate the win (see RESULTS.md methodology note).
+  each base loader's *actual* stock S3 path, or you'll inflate the win (see BENCHMARKS.md).
 - We did **not** modify any stock base loader; S3 reading is either FUSE (no code change) or the base's
   own already-shipped boto3 reader.

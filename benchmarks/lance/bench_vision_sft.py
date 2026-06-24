@@ -36,7 +36,7 @@ def _collate(samples):
     return out
 
 
-def _build(mode, jsonl, uri, tokenize):
+def _build(mode, jsonl, uri, tokenize, region=None, table="vision_sft"):
     from cosmos_framework.data.lance import LanceVisionSFTDataset
     from cosmos_framework.data.vfm.local_datasets.sft_local_dataset import LocalSFTDataset
 
@@ -44,7 +44,8 @@ def _build(mode, jsonl, uri, tokenize):
     if mode == "base":
         ds = LocalSFTDataset(jsonl, **_KW)
     else:
-        ds = LanceVisionSFTDataset(uri, table="vision_sft", decode_device="cpu", **_KW)
+        so = {"region": region} if (region and str(uri).startswith("s3://")) else None
+        ds = LanceVisionSFTDataset(uri, table=table, decode_device="cpu", storage_options=so, **_KW)
     ds.skip_tokenize = not tokenize  # raw mode: skip the storage-independent tokenize compute
     return ds
 
@@ -86,6 +87,8 @@ def main():
     ap.add_argument("--mode", choices=["raw", "e2e"], default="e2e",
                     help="raw = video only (no tokenize); e2e = video + tokenize")
     ap.add_argument("--modes", nargs="+", default=["base", "lance"])
+    ap.add_argument("--region", default=None, help="storage_options region for an s3:// --uri")
+    ap.add_argument("--table", default="vision_sft")
     args = ap.parse_args()
 
     tokenize = args.mode == "e2e"
@@ -95,7 +98,7 @@ def main():
     for workers in args.num_workers:
         sps = {}
         for m in args.modes:
-            ds = _build(m, args.jsonl, args.uri, tokenize)
+            ds = _build(m, args.jsonl, args.uri, tokenize, region=args.region, table=args.table)
             sps[m] = _measure(
                 ds, batch_size=args.batch_size, num_workers=workers,
                 num_batches=args.num_batches, warmup=args.warmup, n_total=n_total,

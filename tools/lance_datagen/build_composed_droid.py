@@ -55,6 +55,13 @@ def main() -> None:
     ap.add_argument("--uri", required=True, help="output LanceDB dir")
     ap.add_argument("--table", default="droid_composed")
     ap.add_argument("--gop", type=int, default=1, help="keyframe interval (1=all-intra)")
+    ap.add_argument(
+        "--storage", choices=["plain", "blob"], default="plain",
+        help="video_bytes column encoding. 'plain' large_binary reads ~6x faster on S3 "
+        "via a columnar take (the IO thread pool parallelizes the GETs); 'blob' (lance "
+        "blob-v2) only pays off for multi-GB payloads and serializes take_blobs reads. "
+        "Per-episode clips are <2MB, so plain is the default.",
+    )
     args = ap.parse_args()
 
     from cosmos_framework.data.vfm.action.datasets.droid_lerobot_dataset import DROIDLeRobotDataset
@@ -63,12 +70,13 @@ def main() -> None:
         root=args.root, action_space="joint_pos", use_state=True, mode="policy", chunk_length=16
     )
     fps = int(round(base._fps))
+    vb_meta = _BLOB if args.storage == "blob" else None
     schema = pa.schema(
         [
             pa.field("episode_index", pa.int64()),
             pa.field("ep_start", pa.int64()),
             pa.field("length", pa.int64()),
-            pa.field("video_bytes", pa.large_binary(), metadata=_BLOB),
+            pa.field("video_bytes", pa.large_binary(), metadata=vb_meta),
         ]
     )
 
