@@ -61,6 +61,8 @@ def _build(mode, root, uri, region, cache):
     from cosmos_framework.data.vfm.action.datasets.droid_lerobot_dataset import DROIDLeRobotDataset
 
     so = {"region": region} if region else None
+    if mode == "base-random":
+        return DROIDLeRobotDataset(root=root, **_KW), "random"
     if mode == "base-episode":
         return _EpisodeShuffle(DROIDLeRobotDataset(root=root, **_KW)), None
     comp = LanceDROIDComposedDataset(root=root, lance_uri=uri, decode_device="cpu",
