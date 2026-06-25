@@ -8,7 +8,7 @@ from __future__ import annotations
 import importlib
 import os
 import time
-from typing import Any, Dict, Optional, Type, TypeVar, Union
+from typing import Any, Callable, Dict, Optional, Type, TypeVar, Union
 
 import attrs
 import torch
@@ -517,7 +517,18 @@ class Config:
         assert self.job.name != ""
 
 
-def load_config(config_path: str, opts: list[str], enable_one_logger: bool = False) -> Config:
+def load_config(
+    config_path: str,
+    opts: list[str],
+    enable_one_logger: bool = False,
+    pre_override: Optional[Callable[[Config], None]] = None,
+) -> Config:
+    """Load a config from a ``.yaml`` or ``.py`` path and apply ``opts``.
+
+    ``pre_override`` is an optional hook called on the freshly-built config
+    (after ``make_config()``, before ``override()``) — use it to mutate the
+    config so the change is part of the OmegaConf tree Hydra resolves.
+    """
     from cosmos_framework.utils.serialization import from_yaml, load_callable
 
     t1 = time.monotonic_ns()
@@ -528,9 +539,11 @@ def load_config(config_path: str, opts: list[str], enable_one_logger: bool = Fal
 
         from cosmos_framework.utils.config_helper import override
 
+        if pre_override is not None:
+            pre_override(config)
         config = override(config, opts, remove_defaults=True)
     else:
-        config = _load_py_config(config_path, opts, validate=False)
+        config = _load_py_config(config_path, opts, validate=False, pre_override=pre_override)
 
     if enable_one_logger:
         try:
@@ -549,7 +562,12 @@ def load_config(config_path: str, opts: list[str], enable_one_logger: bool = Fal
     return config
 
 
-def _load_py_config(config_path: str, opts: list[str], validate: bool = True) -> Config:
+def _load_py_config(
+    config_path: str,
+    opts: list[str],
+    validate: bool = True,
+    pre_override: Optional[Callable[[Config], None]] = None,
+) -> Config:
     # NOTE: circular dependency
     from cosmos_framework.utils.config_helper import get_config_module, override
 
@@ -562,6 +580,9 @@ def _load_py_config(config_path: str, opts: list[str], validate: bool = True) ->
     config = importlib.import_module(config_module).make_config()
     t2 = time.monotonic_ns()
     logging.debug(f"importlib.import_module: took {(t2 - t1) / 1e6:.2f}ms")
+
+    if pre_override is not None:
+        pre_override(config)
 
     t1 = time.monotonic_ns()
     config = override(config, opts)

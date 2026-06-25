@@ -746,18 +746,15 @@ def load_experiment_from_toml(
             overrides.append(o)
 
     # Import lazily so this module stays cheap to import in non-training contexts.
-    import importlib
+    from cosmos_framework.utils.config import load_config
 
-    from cosmos_framework.utils.config_helper import get_config_module, override
-
-    # Set [custom] on the base Config before override() so it is part of the
-    # OmegaConf tree Hydra resolves (enables ${custom} interpolation) and lands
-    # verbatim rather than being per-leaf-remapped by build_hydra_overrides.
-    config_module = get_config_module(base_config_path)
-    config = importlib.import_module(config_module).make_config()
-
+    # Inject [custom] before override() (via load_config's pre_override hook) so
+    # it is part of the OmegaConf tree Hydra resolves (enables ${custom}
+    # interpolation) and lands verbatim rather than being per-leaf-remapped.
     custom = raw.get("custom")
-    if custom:
-        config.custom = custom
 
-    return override(config, overrides)
+    def _inject_custom(config: Any) -> None:
+        if custom:
+            config.custom = custom
+
+    return load_config(base_config_path, overrides, pre_override=_inject_custom)

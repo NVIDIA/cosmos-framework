@@ -322,7 +322,7 @@ A few useful knobs aren't currently modeled by `SFTExperimentConfig` because the
 3. Picks the base config from `[job].task`: `TASK_TO_BASE_CONFIG["vfm"|"vlm"]`.
 4. Calls `build_hydra_overrides(raw)` to produce a `["--", "experiment=<name>", "k.p=v", …]` list with per-task remaps applied and MISSING values filtered. `[custom]` is skipped here (it is injected verbatim in step 6, not per-leaf-remapped).
 5. Appends `extra_overrides` (CLI tail) so they take precedence over the TOML.
-6. Imports the base config module and runs `make_config()` (registers every config group and imports every experiment SKU's `cs.store(group="experiment", …)`), sets the TOML's `[custom]` table onto `config.custom` (so it is part of the single OmegaConf tree Hydra resolves — that's what lets `${custom}` interpolations resolve), then runs `override(config, overrides)` — Hydra `compose` resolves the `experiment=<name>` selector against `ConfigStore` and applies the dotted-path overrides.
+6. Calls `cosmos_framework.utils.config.load_config(base_config_path, overrides, pre_override=…)`, which imports the base config module and runs `make_config()` (registers every config group and imports every experiment SKU's `cs.store(group="experiment", …)`). The `pre_override` hook sets the TOML's `[custom]` table onto `config.custom` before `override()` runs, so `[custom]` is part of the single OmegaConf tree Hydra resolves — that's what lets `${custom}` interpolations resolve. `override(config, overrides)` then has Hydra `compose` resolve the `experiment=<name>` selector against `ConfigStore` and apply the dotted-path overrides.
 
 The returned `Config` is ready for `launch()`.
 
