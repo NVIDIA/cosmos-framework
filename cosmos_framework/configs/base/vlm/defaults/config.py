@@ -52,6 +52,9 @@ class DataSetting:
 class Config(config.Config):
     policy: PolicyConfig = PolicyConfig()
     data_setting: DataSetting = DataSetting()
+    # Free-form, project-owned escape hatch fed by the SFT TOML's [custom] section.
+    # Default-empty so ${custom} interpolation and config.custom always resolve.
+    custom: dict = attrs.field(factory=dict)
     defaults: List[Any] = attrs.field(
         factory=lambda: [
             "_self_",

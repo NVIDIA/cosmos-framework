@@ -669,6 +669,14 @@ class SFTExperimentConfig(BaseModel):
     trainer: TrainerConfig = Field(default_factory=TrainerConfig)
     checkpoint: CheckpointConfig = Field(default_factory=CheckpointConfig)
     dataloader_train: DataloaderTrainConfig = Field(default_factory=DataloaderTrainConfig)
+    custom: dict[str, Any] = Field(
+        default_factory=dict,
+        description=(
+            "Free-form, project-owned escape hatch. Arbitrary nested content "
+            "passes through verbatim — the framework never validates inside it. "
+            "Reachable as config.custom and via '${custom}' interpolation."
+        ),
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -693,16 +701,16 @@ def load_experiment_from_toml(
         ["optimizer.lr=1e-5", "trainer.max_iter=200"]
         ["model.config.parallelism.data_parallel_shard_degree=4"]
 
-    Calls ``cosmos_framework.utils.config.load_config`` which:
+    The load then:
 
-    1. Imports the base config module and runs ``make_config()``. This
-       registers every config group (model, ema, tokenizer, ...) and imports
-       all experiment modules so their ``cs.store(group="experiment", ...)``
-       side-effects fire.
-    2. Runs ``override(config, overrides)`` — Hydra ``compose`` then resolves
-       the ``experiment=<name>`` selector against ``ConfigStore`` and applies
-       the dotted-path overrides we generated from the TOML, followed by
-       ``extra_overrides``.
+    1. Imports the base config module and runs ``make_config()`` (registers
+       config groups + experiment modules).
+    2. Sets the TOML's ``[custom]`` table (if any) onto ``config.custom`` so it
+       is part of the OmegaConf tree Hydra resolves — kept out of
+       ``build_hydra_overrides`` so it lands verbatim, not per-leaf-remapped.
+    3. Runs ``override(config, overrides)`` — Hydra ``compose`` resolves the
+       ``experiment=<name>`` selector and applies the dotted-path overrides,
+       followed by ``extra_overrides``.
 
     Returns the merged ``Config`` instance, ready for ``launch()``.
     """
@@ -738,6 +746,18 @@ def load_experiment_from_toml(
             overrides.append(o)
 
     # Import lazily so this module stays cheap to import in non-training contexts.
-    from cosmos_framework.utils.config import load_config
+    import importlib
 
-    return load_config(base_config_path, overrides)
+    from cosmos_framework.utils.config_helper import get_config_module, override
+
+    # Set [custom] on the base Config before override() so it is part of the
+    # OmegaConf tree Hydra resolves (enables ${custom} interpolation) and lands
+    # verbatim rather than being per-leaf-remapped by build_hydra_overrides.
+    config_module = get_config_module(base_config_path)
+    config = importlib.import_module(config_module).make_config()
+
+    custom = raw.get("custom")
+    if custom:
+        config.custom = custom
+
+    return override(config, overrides)
