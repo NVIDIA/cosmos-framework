@@ -9,7 +9,7 @@
 # The five GPU jobs then run (one at a time on the single runner):
 #   * training-smoke                — Nano SFT pipeline (convert -> train 5 -> export -> t2i)
 #   * generator-training-regression — vision_sft_nano loss vs goldens (4-GPU subset)
-#   * inference-smoke               — Nano multi-modality inference (t2vs + policy + forward_dynamics)
+#   * generator-inference-smoke     — Nano multi-modality inference (t2vs + policy + forward_dynamics)
 #   * reasoner-inference-smoke      — Nano reasoner inference first-token logits vs golden (image-conditioned, 4-GPU)
 #   * reasoner-training-regression  — llava_ov loss vs goldens (4-GPU subset)
 #
@@ -105,7 +105,7 @@ jobs:
         run: |
           rm -rf "${TMPDIR:-/tmp}"/pytest-of-* /tmp/pytest-of-* || true
 
-  inference-smoke:
+  generator-inference-smoke:
     needs: pre-commit
     runs-on: [self-hosted, gpu, h200]
     timeout-minutes: 60
@@ -160,7 +160,7 @@ jobs:
       # allclose rtol/atol=1e-3). -s streams the live process log. The text-only
       # variant lives in the same file but is not exercised in CI. Cache the
       # downloaded image asset (reasoner_image.json's remote vision_path) in the
-      # persistent input-asset dir shared with the inference-smoke job.
+      # persistent input-asset dir shared with the generator-inference-smoke job.
       - name: Nano reasoner inference (image-conditioned first-token logits golden, 4 GPU)
         run: |
           export LD_LIBRARY_PATH=
