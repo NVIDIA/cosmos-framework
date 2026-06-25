@@ -296,6 +296,104 @@ def block_flex_attention(
     return from_joint(packed_attn_output, packed_query_states)
 
 
+def _two_way_attention_gen_only(
+    packed_query_states: FactoredSequencePack | JointSequencePack,
+    packed_key_states: FactoredSequencePack | JointSequencePack,
+    packed_value_states: FactoredSequencePack | JointSequencePack,
+    memory_value: MemoryValue,
+):
+    """Generator-only two-way attention using cached understanding K/V.
+
+    Used by the reasoner/generator-split offload path: the understanding
+    (causal) sequence is empty, and the generation queries attend to
+    ``cat(cached und K/V, fresh gen K/V)`` — the same key/value set the joint
+    ``two_way_attention`` full path sees, with the understanding K/V supplied
+    from the prefill cache instead of recomputed. Single packed sample only.
+    """
+    und_k = getattr(memory_value, "und_k", None)
+    und_v = getattr(memory_value, "und_v", None)
+    assert und_k is not None and und_v is not None, (
+        "Generator-only attention requires a populated reasoner K/V cache; run the prefill pass first."
+    )
+
+    full_q, full_q_offsets = get_full_only_seq(packed_query_states)  # [N_gen,heads,head_dim]
+    # Take only the generation (full) tokens. ``get_all_seq`` would re-expand to
+    # the full packed length, zero-filling the (empty) understanding slots, which
+    # would inject spurious all-zero keys/values into the attention; ``get_full_only_seq``
+    # returns exactly the N_gen generation tokens.
+    gen_k, _ = get_full_only_seq(packed_key_states)  # [N_gen,kv_heads,head_dim]
+    gen_v, _ = get_full_only_seq(packed_value_states)  # [N_gen,kv_heads,head_dim]
+
+    assert full_q_offsets.numel() == 2, (
+        "Reasoner/generator-split offload supports a single packed sample per forward."
+    )
+
+    und_k = und_k.squeeze(0).to(gen_k.dtype)  # [und_len,kv_heads,head_dim]
+    und_v = und_v.squeeze(0).to(gen_v.dtype)  # [und_len,kv_heads,head_dim]
+    kv_k = torch.cat([und_k, gen_k], dim=0)  # [und_len+N_gen,kv_heads,head_dim]
+    kv_v = torch.cat([und_v, gen_v], dim=0)  # [und_len+N_gen,kv_heads,head_dim]
+
+    n_gen = full_q.shape[0]
+    n_kv = kv_k.shape[0]
+    kv_offsets = torch.tensor([0, n_kv], device=full_q.device, dtype=full_q_offsets.dtype)
+
+    full_res = attention(
+        full_q.unsqueeze(0),  # [1,N_gen,heads,head_dim]
+        kv_k.unsqueeze(0),  # [1,und_len+N_gen,kv_heads,head_dim]
+        kv_v.unsqueeze(0),  # [1,und_len+N_gen,kv_heads,head_dim]
+        cumulative_seqlen_Q=full_q_offsets,
+        cumulative_seqlen_KV=kv_offsets,
+        max_seqlen_Q=n_gen,
+        max_seqlen_KV=n_kv,
+    )  # [1,N_gen,heads,head_dim]
+    full_out = full_res.squeeze(0).flatten(-2, -1)  # [N_gen,heads*head_dim]
+    causal_out = full_out.new_empty(0, full_out.shape[-1])  # understanding is empty
+    return from_mode_splits(causal_out, full_out, packed_query_states)
+
+
+def _two_way_attention_und_only(
+    packed_query_states: FactoredSequencePack | JointSequencePack,
+    packed_key_states: FactoredSequencePack | JointSequencePack,
+    packed_value_states: FactoredSequencePack | JointSequencePack,
+):
+    """Understanding-only two-way attention used during the reasoner prefill.
+
+    The generation (full) sequence is empty, so only the causal understanding
+    self-attention runs — identical to the causal half of ``two_way_attention``.
+    Computing only the causal path avoids invoking ``attention`` with an empty
+    full query. ``PackedAttentionMoT.forward`` captures the post-RoPE
+    understanding K/V into the cache via ``kv_to_store``.
+
+    In the joint two-way path the understanding (causal) pathway attends to
+    understanding keys only (``is_causal=True`` over the causal sequence) and is
+    completely independent of the generation tokens, so the per-layer und K/V
+    and und hidden states produced here are bit-for-bit the same as the joint
+    pass — which is what makes the generator-only denoise numerically match.
+    """
+    causal_q, causal_q_offsets = get_causal_seq(packed_query_states)
+    causal_k, causal_k_offsets = get_causal_seq(packed_key_states)
+    causal_v, _ = get_causal_seq(packed_value_states)
+
+    use_dont_care_mask = causal_q_offsets is causal_k_offsets
+
+    causal_res = attention(
+        causal_q.unsqueeze(0),  # [1,N_und,heads,head_dim]
+        causal_k.unsqueeze(0),  # [1,N_und,heads,head_dim]
+        causal_v.unsqueeze(0),  # [1,N_und,heads,head_dim]
+        cumulative_seqlen_Q=causal_q_offsets,
+        cumulative_seqlen_KV=causal_k_offsets,
+        max_seqlen_Q=packed_query_states["max_causal_len"],
+        max_seqlen_KV=packed_query_states["max_causal_len"],
+        is_causal=True,
+        causal_type=CausalType.DontCare if use_dont_care_mask else CausalType.TopLeft,
+    )  # [1,N_und,heads,head_dim]
+    causal_out = causal_res.squeeze(0).flatten(-2, -1)  # type: ignore  # [N_und,heads*head_dim]
+
+    # The generation (full) sequence is empty in the prefill.
+    full_out = causal_out.new_empty(0, causal_out.shape[-1])  # [0,heads*head_dim]
+    return from_mode_splits(causal_out, full_out, packed_query_states)
+
+
 def dispatch_attention(
     packed_query_states: FactoredSequencePack | JointSequencePack,
     packed_key_states: FactoredSequencePack | JointSequencePack,
@@ -304,7 +402,24 @@ def dispatch_attention(
     natten_metadata: dict | None = None,
     memory_value: MemoryValue | None = None,
 ) -> tuple[FactoredSequencePack | JointSequencePack, KVToStore | None]:
-    assert memory_value is None, "Base dispatch_attention does not handle MemoryValue"
+    if memory_value is not None:
+        # Reasoner/generator-split offload path. Only the two-way (full
+        # attention) layout is supported; NATTEN / three-way is rejected.
+        assert isinstance(attention_mask, SplitInfo) and not attention_mask.is_three_way, (
+            "Reasoner/generator-split offload supports only the two_way attention path "
+            "(joint_attn_implementation='two_way', video_temporal_causal=False)."
+        )
+        assert natten_metadata is None, "Reasoner/generator-split offload does not support NATTEN."
+        causal_q, _ = get_causal_seq(packed_query_states)
+        if causal_q.shape[0] == 0:
+            # Generator-only denoise step: attend gen queries to cached und K/V + fresh gen K/V.
+            return _two_way_attention_gen_only(
+                packed_query_states, packed_key_states, packed_value_states, memory_value
+            ), None
+        # Reasoner prefill: understanding-only causal self-attention.
+        # PackedAttentionMoT captures the understanding K/V into the cache via kv_to_store.
+        return _two_way_attention_und_only(packed_query_states, packed_key_states, packed_value_states), None
+
     if isinstance(attention_mask, SplitInfo) and attention_mask.is_three_way:
         output = three_way_attention(
             packed_query_states,

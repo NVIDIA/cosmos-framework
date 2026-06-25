@@ -563,46 +563,52 @@ class PackedAttentionMoT(nn.Module):
             memory_value: Optional read-only tensor container for memory-augmented attention.
         """
 
-        q_und_in = self.q_proj(get_und_seq(pack))  # [N_und,num_heads*head_dim]
-        q_gen_in = self.q_proj_moe_gen(get_gen_seq(pack))  # [N_gen,num_heads*head_dim]
-
-        k_und_in = self.k_proj(get_und_seq(pack))  # [N_und,num_kv_heads*head_dim]
-        k_gen_in = self.k_proj_moe_gen(get_gen_seq(pack))  # [N_gen,num_kv_heads*head_dim]
-
-        v_und_in = self.v_proj(get_und_seq(pack))  # [N_und,num_kv_heads*head_dim]
-        v_gen_in = self.v_proj_moe_gen(get_gen_seq(pack))  # [N_gen,num_kv_heads*head_dim]
-
-        q_und = q_und_in.view(-1, self.num_attention_heads, self.head_dim)  # [N_und,num_heads,head_dim]
-        k_und = k_und_in.view(-1, self.num_key_value_heads, self.head_dim)  # [N_und,num_kv_heads,head_dim]
-        v_und = v_und_in.view(-1, self.num_key_value_heads, self.head_dim)  # [N_und,num_kv_heads,head_dim]
-
-        q_gen = q_gen_in.view(-1, self.num_attention_heads, self.head_dim)  # [N_gen,num_heads,head_dim]
-        k_gen = k_gen_in.view(-1, self.num_key_value_heads, self.head_dim)  # [N_gen,num_kv_heads,head_dim]
-        v_gen = v_gen_in.view(-1, self.num_key_value_heads, self.head_dim)  # [N_gen,num_kv_heads,head_dim]
-
-        q_und = self.q_norm(q_und)  # [N_und,num_heads,head_dim]
-        k_und = self.k_norm(k_und)  # [N_und,num_kv_heads,head_dim]
-
-        q_gen = self.q_norm_moe_gen(q_gen)  # [N_gen,num_heads,head_dim]
-        k_gen = self.k_norm_moe_gen(k_gen)  # [N_gen,num_kv_heads,head_dim]
+        und_seq = get_und_seq(pack)  # [N_und,hidden_size]
+        gen_seq = get_gen_seq(pack)  # [N_gen,hidden_size]
+        # True-skip each pathway when its sequence is empty so the corresponding
+        # weights are never invoked (required for reasoner/generator CPU offload).
+        # When both are non-empty (the joint path) behavior is unchanged.
+        has_und = und_seq.shape[0] > 0
+        has_gen = gen_seq.shape[0] > 0
 
         packed_cos = packed_position_embeddings[0]
         packed_sin = packed_position_embeddings[1]
 
-        q_und_, k_und_ = self._apply_rotary_pos_emb(
-            q_und,
-            k_und,
-            get_und_seq(packed_cos),
-            get_und_seq(packed_sin),
-            unsqueeze_dim=1,
-        )  # q_und_: [N_und,num_heads,head_dim], k_und_: [N_und,num_kv_heads,head_dim]
-        q_gen_, k_gen_ = self._apply_rotary_pos_emb(
-            q_gen,
-            k_gen,
-            get_gen_seq(packed_cos),
-            get_gen_seq(packed_sin),
-            unsqueeze_dim=1,
-        )  # q_gen_: [N_gen,num_heads,head_dim], k_gen_: [N_gen,num_kv_heads,head_dim]
+        if has_und:
+            q_und = self.q_proj(und_seq).view(-1, self.num_attention_heads, self.head_dim)
+            k_und = self.k_proj(und_seq).view(-1, self.num_key_value_heads, self.head_dim)
+            v_und = self.v_proj(und_seq).view(-1, self.num_key_value_heads, self.head_dim)
+            q_und = self.q_norm(q_und)  # [N_und,num_heads,head_dim]
+            k_und = self.k_norm(k_und)  # [N_und,num_kv_heads,head_dim]
+            q_und_, k_und_ = self._apply_rotary_pos_emb(
+                q_und,
+                k_und,
+                get_und_seq(packed_cos),
+                get_und_seq(packed_sin),
+                unsqueeze_dim=1,
+            )  # q_und_: [N_und,num_heads,head_dim], k_und_: [N_und,num_kv_heads,head_dim]
+        else:
+            q_und_ = und_seq.new_empty(0, self.num_attention_heads, self.head_dim)
+            k_und_ = und_seq.new_empty(0, self.num_key_value_heads, self.head_dim)
+            v_und = und_seq.new_empty(0, self.num_key_value_heads, self.head_dim)
+
+        if has_gen:
+            q_gen = self.q_proj_moe_gen(gen_seq).view(-1, self.num_attention_heads, self.head_dim)
+            k_gen = self.k_proj_moe_gen(gen_seq).view(-1, self.num_key_value_heads, self.head_dim)
+            v_gen = self.v_proj_moe_gen(gen_seq).view(-1, self.num_key_value_heads, self.head_dim)
+            q_gen = self.q_norm_moe_gen(q_gen)  # [N_gen,num_heads,head_dim]
+            k_gen = self.k_norm_moe_gen(k_gen)  # [N_gen,num_kv_heads,head_dim]
+            q_gen_, k_gen_ = self._apply_rotary_pos_emb(
+                q_gen,
+                k_gen,
+                get_gen_seq(packed_cos),
+                get_gen_seq(packed_sin),
+                unsqueeze_dim=1,
+            )  # q_gen_: [N_gen,num_heads,head_dim], k_gen_: [N_gen,num_kv_heads,head_dim]
+        else:
+            q_gen_ = gen_seq.new_empty(0, self.num_attention_heads, self.head_dim)
+            k_gen_ = gen_seq.new_empty(0, self.num_key_value_heads, self.head_dim)
+            v_gen = gen_seq.new_empty(0, self.num_key_value_heads, self.head_dim)
 
         packed_query_states_ = from_und_gen_splits(q_und_, q_gen_, pack)  # [N_und+N_gen,num_heads,head_dim]
         packed_key_states_ = from_und_gen_splits(k_und_, k_gen_, pack)  # [N_und+N_gen,num_kv_heads,head_dim]
@@ -635,9 +641,22 @@ class PackedAttentionMoT(nn.Module):
                 v_und[:und_len].unsqueeze(0),
             )
 
-        # Apply projections directly to get final results
-        und_seq = self.o_proj(get_und_seq(packed_attn_output))  # [N_und,hidden_size]
-        gen_seq = self.o_proj_moe_gen(get_gen_seq(packed_attn_output))  # [N_gen,hidden_size]
+        # Apply output projections. True-skip each pathway when its sequence is
+        # empty so the corresponding ``o_proj`` weight is never invoked (required
+        # for reasoner/generator CPU offload, where the inactive pathway's weights
+        # live on CPU). When both are non-empty (joint path) behavior is unchanged.
+        und_attn_out = get_und_seq(packed_attn_output)  # [N_und,heads*head_dim]
+        gen_attn_out = get_gen_seq(packed_attn_output)  # [N_gen,heads*head_dim]
+        und_seq = (
+            self.o_proj(und_attn_out)
+            if has_und
+            else und_attn_out.new_empty(0, self.hidden_size)
+        )  # [N_und,hidden_size]
+        gen_seq = (
+            self.o_proj_moe_gen(gen_attn_out)
+            if has_gen
+            else gen_attn_out.new_empty(0, self.hidden_size)
+        )  # [N_gen,hidden_size]
         return from_und_gen_splits(und_seq, gen_seq, pack), kv_to_store  # [N_und+N_gen,hidden_size]
 
     def reasoner_forward(
@@ -830,8 +849,9 @@ def _impl_forward(
     if memory is not None:
         memory.init(hidden_states, device)
 
-    # Derive gen_only once (outside compile) if using MemoryState
+    # Derive gen_only / und_only once (outside compile) if using MemoryState
     memory_gen_only = memory.is_gen_only() if memory is not None else False
+    memory_und_only = memory.is_und_only() if memory is not None else False
 
     for i, decoder_layer in enumerate(self.layers):
         # MemoryState: produce read-only MemoryValue for this layer (outside compile)
@@ -844,6 +864,7 @@ def _impl_forward(
             natten_metadata=None if natten_metadata_list is None else natten_metadata_list[i],
             memory_value=memory_value,
             gen_only=memory_gen_only,
+            und_only=memory_und_only,
         )
 
         # MemoryState: store K/V produced by this layer (outside compile)
@@ -873,8 +894,14 @@ def _impl_forward(
             )
 
     hidden_states_out = zeros_like(hidden_states)
-    set_und_seq(hidden_states_out, self.norm(get_und_seq(hidden_states)))  # [N_und,hidden_size]
-    set_gen_seq(hidden_states_out, self.norm_moe_gen(get_gen_seq(hidden_states)))  # [N_gen,hidden_size]
+    # Final norms: skip the offloaded tower's norm in the reasoner/generator-split
+    # modes (``self.norm`` is a reasoner weight; ``self.norm_moe_gen`` a generator
+    # weight) so the inactive tower's weights are never invoked. The joint path
+    # (both flags False) runs both, unchanged.
+    if not memory_gen_only:
+        set_und_seq(hidden_states_out, self.norm(get_und_seq(hidden_states)))  # [N_und,hidden_size]
+    if not memory_und_only:
+        set_gen_seq(hidden_states_out, self.norm_moe_gen(get_gen_seq(hidden_states)))  # [N_gen,hidden_size]
 
     return hidden_states_out, final_lbl_metadata
 
@@ -956,6 +983,7 @@ class MoTDecoderLayer(nn.Module):
         natten_metadata: dict | None = None,
         memory_value: MemoryValue | None = None,
         gen_only: bool = False,
+        und_only: bool = False,
     ) -> tuple[FactoredSequencePack, dict[str, LBLMetadata], KVToStore | None]:
         """Forward pass with MoT routing and optional memory-augmented attention.
 
@@ -965,6 +993,18 @@ class MoTDecoderLayer(nn.Module):
         ``MemoryState.write_for_layer()`` outside the ``torch.compile``
         boundary.
 
+        Three mutually exclusive execution branches (``und_only`` and
+        ``gen_only`` are never both True):
+
+        - ``und_only`` (reasoner prefill): run only the understanding pathway;
+          the generator pathway is skipped and its tokens pass through
+          unchanged. The understanding K/V are captured via ``kv_to_store``.
+        - ``gen_only`` (offloaded denoise step): run only the generation
+          pathway; the understanding pathway is skipped and its tokens pass
+          through unchanged (the und K/V come from the prefill cache).
+        - standard (else): the joint path that runs both pathways. This branch
+          is numerically identical to the pre-offload implementation.
+
         Args:
             input: Packed sequence with und/gen tokens
             attention_mask: Attention mask
@@ -972,56 +1012,68 @@ class MoTDecoderLayer(nn.Module):
             natten_metadata: Optional NATTEN metadata for neighborhood attention.
             memory_value: Read-only tensor container from MemoryState.read_for_layer().
             gen_only: When True, skip the understanding pathway (und K/V come from cache).
+            und_only: When True, run only the understanding pathway (reasoner prefill).
         """
-        # Pre-Attention layernorm
-        pack_norm_out = from_und_gen_splits(
-            self.input_layernorm(get_und_seq(input)),  # [N_und,hidden_size]
-            self.input_layernorm_moe_gen(get_gen_seq(input)),  # [N_gen,hidden_size]
-            input,
-        )  # [N_und+N_gen,hidden_size]
-
-        # Self Attention + Residual
+        und_in = get_und_seq(input)  # [N_und,hidden_size]
+        gen_in = get_gen_seq(input)  # [N_gen,hidden_size]
+        lbl_metadata_dict: dict[str, LBLMetadata] = dict()
         kv_to_store: KVToStore | None = None
-        if gen_only:
-            assert natten_metadata is None
-            # gen_only: skip und, compute gen tokens only (und K/V come from cache)
-            _gen_norm = get_gen_seq(pack_norm_out)
-            gen_pack = from_und_gen_splits(
-                _gen_norm.new_empty(0, _gen_norm.shape[-1]),
-                _gen_norm,
-                pack_norm_out,
-            )
 
-            # Build position embeddings whose und length matches gen_pack's
-            # und length (always 0).  Required when the outer pack carries
-            # a padded causal_seq (``pad_for_cuda_graphs=True``): without
-            # this, the und RoPE inside ``PackedAttentionMoT.forward``
-            # would broadcast cos/sin of shape ``(MAX_CAUSAL_LEN, head_dim)``
-            # onto a length-0 ``q_und`` / ``k_und`` and crash.  When the
-            # outer pack is unpadded (eager AR path), the und cos/sin
-            # already have length 0 and this slice is a no-op.
-            _cos, _sin = packed_position_embeddings
-            _empty_cos_und = get_und_seq(_cos)[:0]
-            _empty_sin_und = get_und_seq(_sin)[:0]
-            gen_position_embeddings = (
-                from_und_gen_splits(_empty_cos_und, get_gen_seq(_cos), _cos),
-                from_und_gen_splits(_empty_sin_und, get_gen_seq(_sin), _sin),
-            )
+        # The single-tower packs below carry an empty opposite pathway, so
+        # ``PackedAttentionMoT`` true-skips it (``has_und`` / ``has_gen``) and never
+        # reads its RoPE — ``packed_position_embeddings`` can be passed unchanged.
+        if und_only:
+            # REASONER PREFILL: run only the understanding pathway; generation tokens
+            # pass through unchanged so the generator weights stay offloaded. The
+            # understanding K/V are captured via kv_to_store for the gen-only steps.
+            und_norm = self.input_layernorm(und_in)  # [N_und,hidden_size]
+            und_pack = from_und_gen_splits(und_norm, und_norm.new_empty(0, und_norm.shape[-1]), input)
 
             pack_attn_out, kv_to_store = self.self_attn(
-                gen_pack,
-                attention_mask,
-                gen_position_embeddings,
-                natten_metadata=natten_metadata,
-                memory_value=memory_value,
+                und_pack, attention_mask, packed_position_embeddings, natten_metadata=natten_metadata, memory_value=memory_value
             )
-            gen_attn_out = get_gen_seq(pack_attn_out)
-            # No residual_und here: the gen_only MLP branch below builds its own
-            # length-0 und sequence for ``mlp_out_und_seq``; carrying one through
-            # this branch is dead code.
-            residual_gen = get_gen_seq(input) + gen_attn_out
+            residual_und = und_in + get_und_seq(pack_attn_out)  # [N_und,hidden_size]
+
+            ln_out_und = self.post_attention_layernorm(residual_und)  # [N_und,hidden_size]
+            und_len = pack_attn_out["_num_causal_tokens"]
+            mlp_out_und_unpadded, lbl_metadata_und = _run_mlp(self.mlp, ln_out_und[:und_len])
+            mlp_out_und = torch.cat([mlp_out_und_unpadded, ln_out_und[und_len:]], dim=0)  # [N_und,hidden_size]
+            if lbl_metadata_und is not None:
+                lbl_metadata_dict["und"] = lbl_metadata_und
+
+            mlp_out_und_seq = residual_und + mlp_out_und  # [N_und,hidden_size]
+            mlp_out_gen_seq = gen_in  # passthrough (generation pathway untouched)
+        elif gen_only:
+            assert natten_metadata is None
+            # GENERATOR-ONLY DENOISE STEP: run only the generation pathway; the
+            # understanding tokens pass through unchanged (their K/V come from the
+            # prefill cache) so the reasoner weights stay offloaded.
+            gen_norm = self.input_layernorm_moe_gen(gen_in)  # [N_gen,hidden_size]
+            gen_pack = from_und_gen_splits(gen_norm.new_empty(0, gen_norm.shape[-1]), gen_norm, input)
+
+            pack_attn_out, kv_to_store = self.self_attn(
+                gen_pack, attention_mask, packed_position_embeddings, natten_metadata=natten_metadata, memory_value=memory_value
+            )
+            residual_gen = gen_in + get_gen_seq(pack_attn_out)  # [N_gen,hidden_size]
+
+            ln_out_gen = self.post_attention_layernorm_moe_gen(residual_gen)  # [N_gen,hidden_size]
+            gen_len = pack_attn_out["_num_full_tokens"]
+            mlp_out_gen_unpadded, lbl_metadata_gen = _run_mlp(self.mlp_moe_gen, ln_out_gen[:gen_len])
+            mlp_out_gen = torch.cat([mlp_out_gen_unpadded, ln_out_gen[gen_len:]], dim=0)  # [N_gen,hidden_size]
+            if lbl_metadata_gen is not None:
+                lbl_metadata_dict["gen"] = lbl_metadata_gen
+
+            mlp_out_und_seq = und_in  # passthrough (understanding pathway untouched)
+            mlp_out_gen_seq = residual_gen + mlp_out_gen  # [N_gen,hidden_size]
         else:
-            # STANDARD PATH: Process both und and gen tokens
+            # STANDARD (joint) PATH: process both und and gen tokens. This branch
+            # is numerically identical to the pre-offload implementation.
+            pack_norm_out = from_und_gen_splits(
+                self.input_layernorm(und_in),  # [N_und,hidden_size]
+                self.input_layernorm_moe_gen(gen_in),  # [N_gen,hidden_size]
+                input,
+            )  # [N_und+N_gen,hidden_size]
+
             pack_attn_out, kv_to_store = self.self_attn(
                 pack_norm_out,
                 attention_mask,
@@ -1029,37 +1081,9 @@ class MoTDecoderLayer(nn.Module):
                 natten_metadata=natten_metadata,
                 memory_value=memory_value,
             )
-            residual_und = get_und_seq(input) + get_und_seq(pack_attn_out)  # [N_und,hidden_size]
-            residual_gen = get_gen_seq(input) + get_gen_seq(pack_attn_out)  # [N_gen,hidden_size]
+            residual_und = und_in + get_und_seq(pack_attn_out)  # [N_und,hidden_size]
+            residual_gen = gen_in + get_gen_seq(pack_attn_out)  # [N_gen,hidden_size]
 
-        # Pre-MLP layernorm and processing
-        lbl_metadata_dict: dict[str, LBLMetadata] = dict()
-
-        if gen_only:
-            # gen_only: skip und, compute gen tokens only
-            ln_out_und = residual_gen.new_empty(0, residual_gen.shape[-1])
-            ln_out_gen = self.post_attention_layernorm_moe_gen(residual_gen)
-
-            # UNPAD MLP INPUT (gen only)
-            gen_len = pack_attn_out["_num_full_tokens"]
-            ln_out_gen_unpadded = ln_out_gen[:gen_len]  # [N_gen_unpadded,hidden_size]
-
-            # Run MLP (gen only)
-            mlp_out_gen_unpadded, lbl_metadata_gen = _run_mlp(self.mlp_moe_gen, ln_out_gen_unpadded)
-            # mlp_out_gen_unpadded: [N_gen_unpadded,hidden_size]
-
-            # PAD MLP OUTPUT (gen only)
-            mlp_out_gen = torch.cat([mlp_out_gen_unpadded, ln_out_gen[gen_len:]], dim=0)  # [N_gen,hidden_size]
-
-            # Build metadata dict (no und metadata in optimized path)
-            if lbl_metadata_gen is not None:
-                lbl_metadata_dict["gen"] = lbl_metadata_gen
-
-            # Final output with residual (gen only)
-            mlp_out_und_seq = residual_gen.new_empty(0, residual_gen.shape[-1])
-            mlp_out_gen_seq = residual_gen + mlp_out_gen
-        else:
-            # STANDARD PATH: Process both und and gen tokens
             ln_out_und = self.post_attention_layernorm(residual_und)  # [N_und,hidden_size]
             ln_out_gen = self.post_attention_layernorm_moe_gen(residual_gen)  # [N_gen,hidden_size]
 
