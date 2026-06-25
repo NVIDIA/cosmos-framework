@@ -160,7 +160,7 @@ task         = "vfm"
 experiment   = "vision_sft_nano"
 project      = "cosmos3"
 group        = "sft"
-name         = "toml_custom_section_test"
+name         = "sft_config_custom_test"
 wandb_mode   = "disabled"
 
 [model.tokenizer]
