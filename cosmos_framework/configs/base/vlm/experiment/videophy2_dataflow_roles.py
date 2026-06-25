@@ -47,6 +47,18 @@ class VideoPhy2Processor(RawItemProcessor):
     def __init__(self, processor: Any, ignore_index: int = IGNORE_INDEX) -> None:
         self._processor = processor
         self._ignore_index = ignore_index
+        # Resolve pad token id once; VLMCollator uses it to right-pad input_ids.
+        tok = getattr(processor, "tokenizer", processor)
+        pad_id = getattr(tok, "pad_token_id", None)
+        if pad_id is None:
+            pad_id = getattr(tok, "eos_token_id", None)
+        if pad_id is None:
+            raise ValueError(
+                "VideoPhy2Processor: tokenizer exposes neither pad_token_id nor "
+                "eos_token_id; cannot determine a padding id for VLMCollator. "
+                "Configure the tokenizer's pad/eos token."
+            )
+        self._pad_token_id = int(pad_id)
 
     def _materialize_media_in_conversation(
         self,
@@ -117,7 +129,13 @@ class VideoPhy2Processor(RawItemProcessor):
         token_mask = self._processor.add_assistant_tokens_mask(input_ids)
         labels = input_ids.clone()
         labels[~token_mask] = self._ignore_index
-        result: dict = {"input_ids": input_ids, "labels": labels}
+        result: dict = {
+            "input_ids": input_ids,
+            "labels": labels,
+            "token_mask": token_mask,
+            "pad_token_id": self._pad_token_id,
+            "ignore_index": self._ignore_index,
+        }
         for key in PROCESSOR_KEYS_TO_ADD:
             if key in inputs and inputs[key] is not None:
                 result[key] = inputs[key]
