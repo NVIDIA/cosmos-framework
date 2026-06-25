@@ -586,15 +586,19 @@ _GOLDENS: dict[str, dict[str, dict[str, list[float] | None]]] = {
                 39.70305, 48.52226, 52.18334, 22.77521, 25.06970,
             ],
         },
-        # Captured 2026-06-09 on a 4 × NVIDIA GB200 node with seed 42 against the
+        # Recaptured 2026-06-25 on a 4 × NVIDIA GB200 node with seed 42 against the
         # current TOML-config pipeline (inputs prepared in-test by ``h100_inputs``,
-        # which now also serves gb200). Runs under ``--deterministic`` so loss
-        # reproduces bit-exact across all 10 iters; loss matches the h100 nano
-        # series within ~1e-3. grad_norm is non-det because ``compile.enabled=true``
-        # makes the all-rank reduction not bit-exact, so None (same as h100).
+        # which now also serves gb200). The numerical shift from the 2026-06-09
+        # capture reflects the rectified-flow sigma-sampling refactor
+        # (``t = 1 - t_raw`` flip moved into the sampler via per-sample ``shifts``)
+        # and is expected. Runs under ``--deterministic`` so loss reproduces bit-exact
+        # across all 10 iters. grad_norm is deterministic here (compile.enabled=false
+        # in nano_model_config under the new release branch), so values are pinned;
+        # flip to None if a future change re-enables compile and reintroduces
+        # non-determinism in the all-rank reduction.
         "vision_sft_nano": {
-            "loss": [0.2269, 0.2181, 0.2026, 0.2309, 0.2178, 0.273, 0.2871, 0.2164, 0.2059, 0.264],
-            "grad_norm": None,
+            "loss": [0.2243, 0.2133, 0.2437, 0.2255, 0.2616, 0.2552, 0.3313, 0.2247, 0.2036, 0.2621],
+            "grad_norm": [0.42188, 0.30469, 0.30078, 0.26953, 0.30273, 0.41406, 0.42773, 0.38477, 0.27344, 0.27344],
         },
     },
     # Recaptured 2026-06-03 on a 4 × NVIDIA H100 80GB HBM3 node with seed 42 and
@@ -616,7 +620,7 @@ _GOLDENS: dict[str, dict[str, dict[str, list[float] | None]]] = {
         # ``compile.enabled=true`` makes the all-rank reduction not bit-exact
         # on H100.
         "vision_sft_nano": {
-            "loss": [0.2272, 0.2181, 0.2028, 0.2306, 0.218, 0.2734, 0.2865, 0.2162, 0.2055, 0.2643],
+            "loss": [0.2242, 0.2141, 0.2429, 0.2259, 0.2608, 0.2555, 0.332, 0.2256, 0.2041, 0.2621],
             "grad_norm": None,
         },
         "vision_sft_super": {
