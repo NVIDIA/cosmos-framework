@@ -65,14 +65,15 @@ python -m cosmos_framework.scripts.action_policy_server_libero \
 ```
 
 The LIBERO sim needs a separate venv (robosuite/mujoco pins conflict with the
-training env) and graphics enabled in the container:
+training env):
 
 ```bash
-export NVIDIA_DRIVER_CAPABILITIES=all
-apt-get install -y libegl1 libglvnd0 libgl1 libglib2.0-0 ffmpeg
-mkdir -p /usr/share/glvnd/egl_vendor.d
-echo '{"file_format_version":"1.0.0","ICD":{"library_path":"libEGL_nvidia.so.0"}}' \
-  > /usr/share/glvnd/egl_vendor.d/10_nvidia.json
+# Optional — only on a headless container without working GPU EGL:
+#   export NVIDIA_DRIVER_CAPABILITIES=all
+#   apt-get install -y libegl1 libglvnd0 libgl1 libglib2.0-0 ffmpeg
+#   mkdir -p /usr/share/glvnd/egl_vendor.d
+#   echo '{"file_format_version":"1.0.0","ICD":{"library_path":"libEGL_nvidia.so.0"}}' \
+#     > /usr/share/glvnd/egl_vendor.d/10_nvidia.json
 
 uv venv --python 3.10 .libenv && VV=.libenv/bin/python
 git clone https://github.com/Lifelong-Robot-Learning/LIBERO.git && \
