@@ -46,8 +46,7 @@ bash examples/launch_sft_action_policy_libero.sh   # HSDP 2x8; set NNODES/NODE_R
 
 Recipe knobs live in `action_policy_libero_nano`; the TOML sets run-level scalars
 (lr 5e-5, warmup 500, cycle 16000, `save_iter=500`, HSDP 2x8). Global batch is
-2048 = `max_samples_per_batch` 128 × 16 ranks × grad_accum 1. Sweep the saved
-checkpoints to pick the best iteration.
+2048 = `max_samples_per_batch` 128 × 16 ranks × grad_accum 1.
 
 ## 3. Closed-loop eval
 

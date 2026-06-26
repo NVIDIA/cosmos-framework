@@ -23,7 +23,7 @@
 #   hf download nvidia/LIBERO_LeRobot_v3 --repo-type dataset --include 'libero_10/**' --local-dir <dir>
 #   export LIBERO_ROOT=<dir>/libero_10
 #
-# Usage (8-GPU allocation, inside the training container, from the repo root):
+# Usage (HSDP 2x8; set NNODES/NODE_RANK/MASTER_ADDR per node):
 #   LIBERO_ROOT=<dir>/libero_10 bash examples/launch_sft_action_policy_libero.sh
 
 TOML_FILE="examples/toml/sft_config/action_policy_libero_repro.toml"
