@@ -229,32 +229,24 @@ Top-level dataloader scalars only. The dataloader's class (LazyCall) and full pi
 
 ## `[custom]` (free-form escape hatch)
 
-`[custom]` is the **one** section the framework does not model, validate, or remap. It exists so a project built on cosmos-framework can carry its own config (dataset paths, sampling ratios, pairing constraints, …) in the **same** TOML as the framework training knobs — instead of a second sidecar file.
+`[custom]` lets a project carry its own config (dataset paths, sampling ratios, …) in the **same** TOML as the framework knobs. The framework never looks inside it — it's the one section exempt from the `extra="forbid"` typo guard (every other section still rejects unknown keys).
 
-Rules:
+How it works:
 
-- **Arbitrary nested content** is allowed and passes through verbatim: scalars, sub-tables (`[custom.a.b]`), and arrays-of-tables (`[[custom.items]]`). The framework never validates *inside* `[custom]` (the schema field is a plain `dict[str, Any]`).
-- It is the **only** top-level key exempt from the `extra="forbid"` typo guard's *contents*. Every other section — and any unknown top-level key that isn't `custom` — still raises `ValidationError`.
-- It is **not** routed through `PATH_REMAPS`. Instead of per-leaf Hydra overrides, the whole `[custom]` table is attached verbatim onto a top-level `custom` node on the resolved `Config`.
-- The resolved node is reachable two ways:
-  - **OmegaConf/Hydra interpolation** from an experiment recipe — e.g. a LazyCall arg `config="${custom}"` or `"${custom.some_key}"` resolves to the custom content; and
-  - **attribute access** — `config.custom`.
-- It converts back to a plain dict via `OmegaConf.to_container(config.custom, resolve=True)`, so a project can run `MyProjectConfig.model_validate(<that dict>)`.
-
-When `[custom]` is absent, `config.custom` is a default-empty node (`{}`) — `${custom}` still resolves and existing TOMLs are unaffected.
+- **Arbitrary nested content** passes through verbatim — scalars, sub-tables (`[custom.a.b]`), arrays-of-tables (`[[custom.items]]`).
+- It does **not** go through Hydra. After `load_config` finishes, the table is attached as a plain `dict` via `config.custom = raw.get("custom", {})` (or `{}` when absent — reading `config.custom` is always safe).
+- So values must be **concrete**: `${custom}` interpolation is **not** supported, and `config.custom` is **not** part of `config.to_dict()` / serialized config dumps.
 
 ```toml
 [custom]
 your_custom_files = "custom_value"
 ```
 
-A project's experiment recipe then wires its data pipeline straight from `[custom]`, e.g.:
+Read it directly to wire your own pipeline:
 
 ```python
-config = L(TrainingDatasetConfig.model_validate)("${custom}")
+project_cfg = TrainingDatasetConfig.model_validate(config.custom)
 ```
-
-so a single TOML drives both the framework training and the project data pipeline.
 
 ## Cross-cutting behaviors
 
@@ -320,9 +312,10 @@ A few useful knobs aren't currently modeled by `SFTExperimentConfig` because the
 1. Reads the TOML with `tomllib`.
 2. Validates the parsed dict against `SFTExperimentConfig` (raises `ValidationError` on unknown keys).
 3. Picks the base config from `[job].task`: `TASK_TO_BASE_CONFIG["vfm"|"vlm"]`.
-4. Calls `build_hydra_overrides(raw)` to produce a `["--", "experiment=<name>", "k.p=v", …]` list with per-task remaps applied and MISSING values filtered. `[custom]` is skipped here (it is injected verbatim in step 6, not per-leaf-remapped).
+4. Calls `build_hydra_overrides(raw)` to produce a `["--", "experiment=<name>", "k.p=v", …]` list with per-task remaps applied and MISSING values filtered. `[custom]` is skipped here (it is injected verbatim in step 7, not per-leaf-remapped).
 5. Appends `extra_overrides` (CLI tail) so they take precedence over the TOML.
-6. Calls `cosmos_framework.utils.config.load_config(base_config_path, overrides, pre_override=…)`, which imports the base config module and runs `make_config()` (registers every config group and imports every experiment SKU's `cs.store(group="experiment", …)`). The `pre_override` hook sets the TOML's `[custom]` table onto `config.custom` before `override()` runs, so `[custom]` is part of the single OmegaConf tree Hydra resolves — that's what lets `${custom}` interpolations resolve. `override(config, overrides)` then has Hydra `compose` resolve the `experiment=<name>` selector against `ConfigStore` and apply the dotted-path overrides.
+6. Calls `cosmos_framework.utils.config.load_config(base_config_path, overrides)`, which imports the base config module and runs `make_config()` (registers every config group and imports every experiment SKU's `cs.store(group="experiment", …)`), then `override(config, overrides)` has Hydra `compose` resolve the `experiment=<name>` selector against `ConfigStore` and apply the dotted-path overrides.
+7. Injects `[custom]` after loading: `config.custom = raw.get("custom", {})`. This runs **after** Hydra resolution, so it leaves the framework-owned base config and `load_config` untouched and lands as a plain `dict` (no `${custom}` interpolation; not part of serialized config dumps).
 
 The returned `Config` is ready for `launch()`.
 
