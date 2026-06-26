@@ -23,6 +23,7 @@ ______________________________________________________________________
   - [`[trainer.callbacks.grad_clip]`](#trainercallbacksgrad_clip)
 - [`[checkpoint]`](#checkpoint)
 - [`[dataloader_train]`](#dataloader_train)
+- [`[custom]` (free-form escape hatch)](#custom-free-form-escape-hatch)
 - [Cross-cutting behaviors](#cross-cutting-behaviors)
   - [`"???"` (MISSING) sentinel](#-missing-sentinel)
   - [Env interpolation](#env-interpolation)
@@ -60,6 +61,7 @@ After validation, the TOML dict is converted to a Hydra override list by [`build
 [trainer.callbacks.grad_clip]        # clip_norm + force_finite
 [checkpoint]                         # load_path, save_iter, key-skip blocklist
 [dataloader_train]                   # top-level scalars only
+[custom]                             # free-form, project-owned escape hatch (opaque to the framework)
 ```
 
 The full pipeline (dataloader class, dataset wiring, model_instance LazyCall, etc.) lives in the experiment SKU Python file under `cosmos_framework/configs/base/experiment/sft/<recipe>.py`. The TOML only surfaces values the recipe author wants users to tune.
@@ -225,6 +227,27 @@ Top-level dataloader scalars only. The dataloader's class (LazyCall) and full pi
 | `max_sequence_length`   | `null`  | Cap on tokens per packed sequence. Remapped to `max_tokens` on the VLM `DataPackerDataLoader`. `null` = no per-token cap.                                                        |
 | `seed`                  | `42`    | Dataloader RNG seed. **VFM only** — skipped on VLM (DataPackerDataLoader has no `seed` ctor kwarg).                                                                              |
 
+## `[custom]` (free-form escape hatch)
+
+`[custom]` lets a project carry its own config (dataset paths, sampling ratios, …) in the **same** TOML as the framework knobs. The framework never looks inside it — it's the one section exempt from the `extra="forbid"` typo guard (every other section still rejects unknown keys).
+
+How it works:
+
+- **Arbitrary nested content** passes through verbatim — scalars, sub-tables (`[custom.a.b]`), arrays-of-tables (`[[custom.items]]`).
+- It does **not** go through Hydra. After `load_config` finishes, the table is attached as a plain `dict` via `config.custom = raw.get("custom", {})` (or `{}` when absent — reading `config.custom` is always safe).
+- So values must be **concrete**: `${custom}` interpolation is **not** supported, and `config.custom` is **not** part of `config.to_dict()` / serialized config dumps.
+
+```toml
+[custom]
+your_custom_files = "custom_value"
+```
+
+Read it directly to wire your own pipeline:
+
+```python
+project_cfg = TrainingDatasetConfig.model_validate(config.custom)
+```
+
 ## Cross-cutting behaviors
 
 ### `"???"` (MISSING) sentinel
@@ -289,9 +312,10 @@ A few useful knobs aren't currently modeled by `SFTExperimentConfig` because the
 1. Reads the TOML with `tomllib`.
 2. Validates the parsed dict against `SFTExperimentConfig` (raises `ValidationError` on unknown keys).
 3. Picks the base config from `[job].task`: `TASK_TO_BASE_CONFIG["vfm"|"vlm"]`.
-4. Calls `build_hydra_overrides(raw)` to produce a `["--", "experiment=<name>", "k.p=v", …]` list with per-task remaps applied and MISSING values filtered.
+4. Calls `build_hydra_overrides(raw)` to produce a `["--", "experiment=<name>", "k.p=v", …]` list with per-task remaps applied and MISSING values filtered. `[custom]` is skipped here (it is injected verbatim in step 7, not per-leaf-remapped).
 5. Appends `extra_overrides` (CLI tail) so they take precedence over the TOML.
-6. Calls `cosmos_framework.utils.config.load_config(base_config_path, overrides)`, which imports the base config module (running `make_config()` to register every config group and import every experiment SKU's `cs.store(group="experiment", …)`), then runs `override(config, overrides)` — Hydra `compose` resolves the `experiment=<name>` selector against `ConfigStore` and applies the dotted-path overrides.
+6. Calls `cosmos_framework.utils.config.load_config(base_config_path, overrides)`, which imports the base config module and runs `make_config()` (registers every config group and imports every experiment SKU's `cs.store(group="experiment", …)`), then `override(config, overrides)` has Hydra `compose` resolve the `experiment=<name>` selector against `ConfigStore` and apply the dotted-path overrides.
+7. Injects `[custom]` after loading: `config.custom = raw.get("custom", {})`. This runs **after** Hydra resolution, so it lands as a plain `dict` (no `${custom}` interpolation; not part of serialized config dumps).
 
 The returned `Config` is ready for `launch()`.
 
