@@ -674,7 +674,8 @@ class SFTExperimentConfig(BaseModel):
         description=(
             "Free-form, project-owned escape hatch. Arbitrary nested content "
             "passes through verbatim — the framework never validates inside it. "
-            "Reachable as config.custom and via '${custom}' interpolation."
+            "Injected onto the loaded config as ``config.custom`` after Hydra "
+            "resolution; specify concrete values here (no ${...} interpolation)."
         ),
     )
 
@@ -703,14 +704,15 @@ def load_experiment_from_toml(
 
     The load then:
 
-    1. Imports the base config module and runs ``make_config()`` (registers
-       config groups + experiment modules).
-    2. Sets the TOML's ``[custom]`` table (if any) onto ``config.custom`` so it
-       is part of the OmegaConf tree Hydra resolves — kept out of
-       ``build_hydra_overrides`` so it lands verbatim, not per-leaf-remapped.
-    3. Runs ``override(config, overrides)`` — Hydra ``compose`` resolves the
-       ``experiment=<name>`` selector and applies the dotted-path overrides,
-       followed by ``extra_overrides``.
+    1. Runs ``load_config`` — imports the base config module, runs
+       ``make_config()`` (registers config groups + experiment modules), and
+       lets Hydra ``compose`` resolve the ``experiment=<name>`` selector and
+       apply the dotted-path overrides, followed by ``extra_overrides``.
+    2. Injects the TOML's ``[custom]`` table (if any) verbatim onto
+       ``config.custom`` *after* loading — kept out of ``build_hydra_overrides``
+       so it lands as-is, not per-leaf-remapped. Because this happens after
+       Hydra resolution, ``[custom]`` must hold concrete values; ``${...}``
+       interpolation against ``custom`` is not supported.
 
     Returns the merged ``Config`` instance, ready for ``launch()``.
     """
@@ -748,13 +750,10 @@ def load_experiment_from_toml(
     # Import lazily so this module stays cheap to import in non-training contexts.
     from cosmos_framework.utils.config import load_config
 
-    # Inject [custom] before override() (via load_config's pre_override hook) so
-    # it is part of the OmegaConf tree Hydra resolves (enables ${custom}
-    # interpolation) and lands verbatim rather than being per-leaf-remapped.
-    custom = raw.get("custom")
+    config = load_config(base_config_path, overrides)
 
-    def _inject_custom(config: Any) -> None:
-        if custom:
-            config.custom = custom
-
-    return load_config(base_config_path, overrides, pre_override=_inject_custom)
+    # Inject [custom] verbatim after Hydra resolution. Kept off the base config
+    # schema so the framework-owned hydra configs stay untouched; lands as a
+    # plain dict reachable via config.custom.
+    config.custom = raw.get("custom", {})
+    return config

@@ -7,7 +7,6 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import attrs
 import pytest
 from pydantic import ValidationError
 
@@ -104,55 +103,7 @@ class TestBuildHydraOverrides:
 
 
 # --------------------------------------------------------------------------- #
-# 3. interpolation (${custom}) + attribute access via the real override path   #
-# --------------------------------------------------------------------------- #
-@attrs.define(slots=False)
-class _ProbeConfig:
-    """Minimal attrs config (no ``defaults`` field) so ``override`` resolves it
-    without needing registered config groups / the training stack."""
-
-    custom: dict = attrs.field(factory=dict)
-    dataloader_train: object = None
-
-
-class TestCustomInterpolationAndAccess:
-    def test_interpolation_resolves_and_attribute_access(self) -> None:
-        from omegaconf import OmegaConf
-
-        from cosmos_framework.utils.config_helper import override
-        from cosmos_framework.utils.lazy_config import instantiate
-
-        # builtins.dict is a LazyCall-shaped, instantiate-locatable target.
-        probe = _ProbeConfig(
-            custom=dict(_CUSTOM_PAYLOAD),
-            dataloader_train={
-                "_target_": "builtins.dict",
-                "whole": "${custom}",
-                "leaf": "${custom.scalar_int}",
-                "deep": "${custom.sampling.nested.deep}",
-            },
-        )
-
-        resolved = override(probe, ["--"])
-
-        # attribute access + to_container round-trips to the plain dict.
-        assert OmegaConf.to_container(resolved.custom, resolve=True) == _CUSTOM_PAYLOAD
-
-        # ${custom...} interpolations resolved against the top-level node.
-        dl = resolved.dataloader_train
-        assert OmegaConf.to_container(dl["whole"], resolve=True) == _CUSTOM_PAYLOAD
-        assert dl["leaf"] == _CUSTOM_PAYLOAD["scalar_int"]
-        assert dl["deep"] == _CUSTOM_PAYLOAD["sampling"]["nested"]["deep"]
-
-        # instantiate() yields the resolved content.
-        obj = instantiate(resolved.dataloader_train)
-        assert obj["leaf"] == _CUSTOM_PAYLOAD["scalar_int"]
-        assert obj["deep"] == _CUSTOM_PAYLOAD["sampling"]["nested"]["deep"]
-        assert OmegaConf.to_container(obj["whole"], resolve=True) == _CUSTOM_PAYLOAD
-
-
-# --------------------------------------------------------------------------- #
-# 4. end-to-end load_experiment_from_toml on the shipped vision_sft_nano recipe #
+# 3. end-to-end load_experiment_from_toml on the shipped vision_sft_nano recipe #
 # --------------------------------------------------------------------------- #
 _BASE_TOML = """\
 [job]
@@ -214,8 +165,6 @@ def _dummy_recipe_env(monkeypatch: pytest.MonkeyPatch) -> None:
 
 class TestEndToEndLoader:
     def test_load_with_custom_section(self, tmp_path: Path, _dummy_recipe_env: None) -> None:
-        from omegaconf import OmegaConf
-
         toml_path = tmp_path / "with_custom.toml"
         toml_path.write_text(_BASE_TOML + _CUSTOM_TOML_BLOCK)
 
@@ -232,16 +181,14 @@ class TestEndToEndLoader:
                 {"path": "/data/b", "weight": 2.0},
             ],
         }
-        # Reachable by attribute access and convertible to a plain dict, so a
-        # project can run MyProjectConfig.model_validate(<that dict>).
-        assert OmegaConf.to_container(config.custom, resolve=True) == expected
+        # Injected verbatim as a plain dict after Hydra resolution, so a project
+        # can run MyProjectConfig.model_validate(config.custom) directly.
+        assert config.custom == expected
 
     def test_load_without_custom_section_defaults_empty(self, tmp_path: Path, _dummy_recipe_env: None) -> None:
-        from omegaconf import OmegaConf
-
         toml_path = tmp_path / "no_custom.toml"
         toml_path.write_text(_BASE_TOML)
 
         config = _load_or_skip(toml_path)
 
-        assert OmegaConf.to_container(config.custom, resolve=True) == {}
+        assert config.custom == {}
