@@ -24,7 +24,7 @@ PoseConvention = Literal["backward_framewise"]
 Viewpoint = Literal["wrist_view"]
 
 # Default image key for wrist camera in UMI LeRobot datasets.
-_IMAGE_FEATURE = "observation.images.image"
+_IMAGE_FEATURE = "observation.images.camera0"
 _STATE_FEATURE = "observation.state"
 _ACTION_FEATURE = "action"
 
@@ -64,7 +64,7 @@ class UMILeRobotDataset(ActionBaseDataset):
             raise NotImplementedError("This UMI dataset only supports wrist_view.")
         super().__init__(
             root=root,
-            domain_name="umi_lerobot",
+            domain_name="umi",
             fps=fps,
             chunk_length=chunk_length,
             mode=mode,
