@@ -24,7 +24,8 @@ from cosmos_framework.data.vfm.local_datasets.helper import (
     get_video_metadata,
     parse_s3_url,
 )
-from cosmos_framework.data.vfm.sequence_packing import SequencePlan, add_special_tokens
+from cosmos_framework.data.vfm.sequence_packing import SequencePlan
+from cosmos_framework.data.vfm.sequence_packing.modalities import add_special_tokens
 from cosmos_framework.data.vfm.utils import VIDEO_RES_SIZE_INFO
 from cosmos_framework.inference.structured_caption import CAPTION_JSON_KEY, caption_json_to_prompt
 from cosmos_framework.model.vfm.vlm.qwen3_vl.utils import tokenize_caption

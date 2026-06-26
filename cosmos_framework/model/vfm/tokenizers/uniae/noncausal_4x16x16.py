@@ -512,5 +512,9 @@ class UniAEVAEInterface(VideoTokenizerInterface):
         )
 
     @property
+    def pad_frames(self) -> int:
+        return self.vae._pad_frames
+
+    @property
     def latent_ch(self) -> int:
         return self.vae.z_dim

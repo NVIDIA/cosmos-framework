@@ -9,16 +9,16 @@ import torch
 
 import cosmos_framework.model.vfm.mot.attention as attention
 from cosmos_framework.model.attention.natten import NATTEN_SUPPORTED
-from cosmos_framework.data.vfm.sequence_packing import (
+from cosmos_framework.model.vfm.mot.attention import (
+    build_packed_sequence,
+)
+from cosmos_framework.data.vfm.sequence_packing.runtime import (
     get_all_seq,
     get_gen_seq,
     get_und_seq,
     set_gen_seq,
     set_und_seq,
     zeros_like,
-)
-from cosmos_framework.model.vfm.mot.attention import (
-    build_packed_sequence,
 )
 
 MAX_SEQ_LEN = 24
@@ -64,7 +64,6 @@ def _test_attention_impls(
     torch.compiler.reset()
 
     IMPL_TO_FN = {
-        "flex": attention.block_flex_attention,
         "two_way": attention.two_way_attention,
         "three_way": attention.three_way_attention,
     }
@@ -151,23 +150,7 @@ def _test_attention_impls(
     def make_pack_three_way(x):
         return _make_pack_decomposed(x, "three_way")
 
-    def make_pack_flex(x):
-        return build_packed_sequence(
-            "flex",
-            packed_sequence=x,
-            attn_modes=attn_modes,
-            split_lens=split_lens,
-            sample_lens=sample_lens,
-            packed_und_token_indexes=packed_und_idx_t,
-            packed_gen_token_indexes=packed_gen_idx_t,
-            num_heads=num_q_heads,
-            head_dim=head_dim,
-            num_layers=num_layers,
-            token_shapes=token_shapes,
-        )[0]
-
     IMPL_TO_MAKE_PACK = {
-        "flex": make_pack_flex,
         "two_way": make_pack_two_way,
         "three_way": make_pack_three_way,
     }
@@ -271,27 +254,8 @@ def _test_attention_impls(
         key_joint_2["_causal_seq_offsets"] = query_joint_2["_causal_seq_offsets"]
         value_joint_2["_causal_seq_offsets"] = query_joint_2["_causal_seq_offsets"]
 
-    # Build a matching flex attention_meta for the given shapes
     kwargs_1 = {}
     kwargs_2 = {}
-    if impl_1 == "flex" or impl_2 == "flex":
-        packed_sequence = packed_qkv22 if impl_2 == "flex" else packed_qkv21
-        _, attention_mask, _ = build_packed_sequence(
-            "flex",
-            packed_sequence=packed_sequence[:, :num_q_heads, :],
-            attn_modes=attn_modes,
-            split_lens=split_lens,
-            sample_lens=sample_lens,
-            packed_und_token_indexes=packed_und_idx_t,
-            packed_gen_token_indexes=packed_gen_idx_t,
-            num_heads=num_q_heads,
-            head_dim=head_dim,
-            num_layers=num_layers,
-        )
-        if impl_1 == "flex":
-            kwargs_1["attention_mask"] = attention_mask
-        elif impl_2 == "flex":
-            kwargs_2["attention_mask"] = attention_mask
 
     # natten_metadata is a required argument, but setting it to None implements standard self attn.
     if impl_1 == "three_way":
@@ -329,7 +293,7 @@ def _test_attention_impls(
     )
     torch.cuda.synchronize()
 
-    # joint vs factored test. should be same
+    # Independent packs for the same implementation should be the same.
     torch.testing.assert_close(
         get_all_seq(output1_factored)[:real_len], get_all_seq(output1_joint)[:real_len], atol=atol_self, rtol=rtol_self
     )
@@ -367,14 +331,30 @@ def _test_attention_impls(
 
 @pytest.mark.L0
 @pytest.mark.skipif(not NATTEN_SUPPORTED, reason="NATTEN is not available, or too old.")
-def test_two_way_attention_cmp_flex_attn():
-    _test_attention_impls("two_way", "flex")
+def test_two_way_attention_vs_three_way_attention():
+    _test_attention_impls("two_way", "three_way")
 
 
 @pytest.mark.L0
-@pytest.mark.skipif(not NATTEN_SUPPORTED, reason="NATTEN is not available, or too old.")
-def test_two_way_attention_vs_three_way_attention():
-    _test_attention_impls("two_way", "three_way")
+def test_build_packed_sequence_rejects_flex():
+    device = torch.device("cpu")
+    packed_sequence = torch.randn(4, 8, device=device)  # [N,D]
+    packed_und_token_indexes = torch.tensor([0, 1], device=device, dtype=torch.long)  # [N_und]
+    packed_gen_token_indexes = torch.tensor([2, 3], device=device, dtype=torch.long)  # [N_gen]
+
+    with pytest.raises(ValueError, match="Must be 'two_way' or 'three_way'"):
+        build_packed_sequence(
+            "flex",
+            packed_sequence=packed_sequence,
+            attn_modes=["causal", "full"],
+            split_lens=[2, 2],
+            sample_lens=[4],
+            packed_und_token_indexes=packed_und_token_indexes,
+            packed_gen_token_indexes=packed_gen_token_indexes,
+            num_heads=1,
+            head_dim=8,
+            num_layers=1,
+        )
 
 
 @pytest.mark.L0
@@ -383,7 +363,7 @@ def test_decoder_layer_optimized_path_empty_und_tensor_shape():
 
     In the optimized path (frame > 0, KV cache active), the decoder layer creates empty
     und tensors for all intermediate und variables.  These tensors are stored as
-    ``causal_seq`` in the output FactoredSequencePack, and the *next* decoder layer
+    ``causal_seq`` in the output SequencePack, and the *next* decoder layer
     calls ``get_und_seq(input)`` to retrieve them.  If they are 1D ``[0]``, a subsequent
     RMSNorm ``weight [H] * hidden_states [0]`` triggers:
         RuntimeError: The size of tensor a (H) must match tensor b (0) at non-singleton dim 0
@@ -413,7 +393,7 @@ def test_decoder_layer_optimized_path_empty_und_tensor_shape():
     norm_out = weight * new_und  # [H] * [0, H] → [0, H]
     assert norm_out.shape == (0, hidden_dim)
 
-    # Verify round-trip through FactoredSequencePack preserves 2D shape.
+    # Verify round-trip through SequencePack preserves 2D shape.
     # from_mode_splits(und, gen, meta) stores und as causal_seq; get_und_seq retrieves it.
     meta = {"causal_seq": new_und, "full_only_seq": ref}
     retrieved = get_und_seq(meta)  # type: ignore[arg-type]
@@ -421,5 +401,4 @@ def test_decoder_layer_optimized_path_empty_und_tensor_shape():
 
 
 if __name__ == "__main__":
-    test_two_way_attention_cmp_flex_attn()
     test_two_way_attention_vs_three_way_attention()

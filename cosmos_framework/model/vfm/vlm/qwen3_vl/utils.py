@@ -148,7 +148,7 @@ def prepare_padding_mask(
         # Pad it if necessary
         if (padding_length := kv_length + kv_offset - attention_mask.shape[-1]) > 0:
             local_padding_mask = torch.nn.functional.pad(attention_mask, (0, padding_length))
-        # For flex, we should not slice them, only use an offset
+        # Some callers require an unsliced mask and apply the offset separately.
         if _slice:
             # Equivalent to: `local_padding_mask = attention_mask[:, kv_offset : kv_offset + kv_length]`,
             # but without data-dependent slicing (i.e. torch.compile friendly)

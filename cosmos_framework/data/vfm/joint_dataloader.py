@@ -389,13 +389,15 @@ class JointDataLoader(webdataset.WebLoader):
         # vae temporal downsampling factor
         # Action tokens have 1 token per time step (no spatial dimension)
 
-        text_token_ids = data_batch["text_token_ids"]
-        if isinstance(text_token_ids, list):
-            num_text_tokens = text_token_ids[0].shape[0]
-        else:
-            num_text_tokens = text_token_ids.shape[1]
-
-        num_tokens = num_text_tokens + 1
+        has_text_tokens = "text_token_ids" in data_batch
+        num_tokens = 0
+        if has_text_tokens:
+            text_token_ids = data_batch["text_token_ids"]
+            if isinstance(text_token_ids, list):
+                num_text_tokens = text_token_ids[0].shape[0]
+            else:
+                num_text_tokens = text_token_ids.shape[1]
+            num_tokens += num_text_tokens + 1
 
         # Vision part
         is_image_batch = "images" in data_batch
@@ -415,7 +417,9 @@ class JointDataLoader(webdataset.WebLoader):
             patch_w_shape = math.ceil(latent_w_shape / self.patch_spatial)
             latent_t_shape = self._compute_vision_latent_t_shape(T, H, W)
 
-            num_vision_tokens = patch_h_shape * patch_w_shape * latent_t_shape + 2
+            num_vision_tokens = patch_h_shape * patch_w_shape * latent_t_shape
+            if has_text_tokens:
+                num_vision_tokens += 2
             num_tokens += num_vision_tokens
 
         # Action part: each action time step is 1 token.
