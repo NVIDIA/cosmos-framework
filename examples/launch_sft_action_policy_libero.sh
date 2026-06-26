@@ -3,13 +3,13 @@
 # SPDX-License-Identifier: OpenMDW-1.1
 
 # Structured-TOML launch for action_policy_libero_nano — Cosmos3-Nano LIBERO
-# action-policy SFT (8-GPU FSDP, full SFT, no LoRA). Reproduces the Table-20
-# LIBERO-10 result (~97.4% @ ckpt 2000). Drives cosmos_framework.scripts.train
+# action-policy SFT (HSDP, full SFT, no LoRA). Drives cosmos_framework.scripts.train
 # against examples/toml/sft_config/action_policy_libero_repro.toml.
 #
-# REPRODUCTION: point LIBERO_ROOT at the libero_10 suite ONLY. The full suite
-# mix dilutes libero_10 to ~1 pass in 2000 steps (~82%); libero_10 alone is ~2.7
-# passes (~97%). Use the 20 FPS nvidia/LIBERO_LeRobot_v3. See docs/action_policy_libero_sft.md.
+# Point LIBERO_ROOT at the libero_10 suite ONLY (the full suite mix dilutes
+# libero_10). Use the 20 FPS nvidia/LIBERO_LeRobot_v3. The default recipe is
+# HSDP 2x8 (global batch 2048); set NNODES/NODE_RANK/MASTER_ADDR per node.
+# See docs/action_policy_libero_sft.md.
 #
 # Required env vars:
 #   LIBERO_ROOT           local LIBERO-10 LeRobot dataset dir, e.g. <dir>/libero_10 (no default)

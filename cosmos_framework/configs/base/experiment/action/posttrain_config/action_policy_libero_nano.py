@@ -1,29 +1,13 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: OpenMDW-1.1
 
-"""``action_policy_libero_nano`` — Cosmos3-Nano LIBERO action-policy SFT recipe.
+"""``action_policy_libero_nano`` — Cosmos3-Nano LIBERO-10 action-policy SFT recipe.
 
-Reproduces the Cosmos3-Nano LIBERO-10 result (Table 20, 97.4% @ ckpt 2000).
-Mirrors ``action_policy_droid_nano`` (PackingDataLoader + RankPartitionedDataLoader
-+ ActionIterableShuffleDataset), but feeds ``LIBEROLeRobotDataset`` (frame-wise-relative
-rot6d actions, ``quantile_rot``-normalized, concat_view third-person + wrist at
-256x256 each -> 256x512) through ``ActionTransformPipeline``, and trains the
-generation + action heads from the public ``nvidia/Cosmos3-Nano`` base. Full SFT
-(no LoRA) — the LoRA variant is the 32B "super" tier only.
-
-LIBERO-10 reproduction note: the public Table-20 number is reached training on
-``libero_10`` ALONE. Training on the full 4-suite mix dilutes libero_10 to ~1 pass
-in 2000 steps (~82%); libero_10 alone is ~2.7 passes (~97%). Point ``LIBERO_ROOT``
-(and ``LIBERO_REPO_ID``) at the libero_10 LeRobot conversion only.
-
-Usage (1 node, 8 GPU)::
-
-    LIBERO_ROOT=/path/to/libero_10_lerobot \\
-    LIBERO_REPO_ID=lerobot/libero_10 \\
-    BASE_CHECKPOINT_PATH=<Cosmos3-Nano DCP dir> \\
-    WAN_VAE_PATH=<Wan2.2_VAE.pth> \\
-    torchrun --nproc_per_node=8 -m cosmos_framework.scripts.train \\
-        --sft-toml examples/toml/sft_config/action_policy_libero_repro.toml
+Mirrors ``action_policy_droid_nano`` but feeds ``LIBEROLeRobotDataset``
+(frame-wise-relative rot6d, ``quantile_rot``, concat_view third-person + wrist)
+and trains the generation + action heads from the public ``nvidia/Cosmos3-Nano``
+base. Train on ``libero_10`` alone (``LIBERO_ROOT``).
+See docs/action_policy_libero_sft.md.
 """
 
 import copy
@@ -44,16 +28,9 @@ cs = ConfigStore.instance()
 
 
 def _action_policy_libero_nano_model_config() -> dict:
-    """GA LIBERO model config: capped packed tokens, selective activation
-    checkpointing, fresh diffusion-expert init, 10x vision flow-matching loss, and
-    the VAE encode durations [17, 61, 73] carried by the Cosmos3 base.
-
-    NOTE: keep ``encode_exact_durations=[17, 61, 73]`` — do NOT reduce it to [17]
-    even though ``mode="policy"`` only produces 17-frame windows at the data level.
-    The public Cosmos3-Nano base was pretrained with [17, 61, 73]; the reference
-    GA LIBERO SFT (``action_policy_sft_nano`` on ``mharrim-nv-patch-1``) retains it,
-    and empirically reducing it to [17] regresses the policy badly
-    (60.8% vs 94.6% at iter 2000)."""
+    """LIBERO model config: capped packed tokens, selective activation
+    checkpointing, fresh diffusion-expert init, 10x vision flow-matching loss.
+    Keep ``encode_exact_durations=[17, 61, 73]`` to match the Cosmos3-Nano base."""
     cfg = copy.deepcopy(NANO_MODEL_CONFIG)  # action_gen=True, max_action_dim=64
     # Cap the packed sequence. Uncapped (-1) + a large max_samples_per_batch packs
     # one very long sequence and OOMs even on H200; 74000 keeps the GA-validated bound.
@@ -219,8 +196,8 @@ action_policy_libero_nano = LazyDict(
                     libero=dict(
                         ratio=1,
                         dataset=L(get_action_libero_sft_dataset)(
-                            # Local LeRobot dir for the libero_10 suite ONLY (Table-20
-                            # reproduction; full suite mix -> ~82%, see module docstring). Use the
+                            # Local LeRobot dir for the libero_10 suite ONLY (the
+                            # full suite mix dilutes libero_10; see module docstring). Use the
                             # 20 FPS nvidia/LIBERO_LeRobot_v3 (matches the bundled stats + 20 Hz eval):
                             #   hf download nvidia/LIBERO_LeRobot_v3 --repo-type dataset \
                             #     --include 'libero_10/**' --local-dir <dir>   # LIBERO_ROOT=<dir>/libero_10

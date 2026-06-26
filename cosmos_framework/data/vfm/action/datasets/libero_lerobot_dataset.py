@@ -16,8 +16,8 @@ re-encoded to the requested ``rotation_space`` -> ``[dpos(3), rot6d(6), gripper(
 
 NOTE on FPS / stats fidelity: the bundled ``quantile_rot`` stats were computed on
 a 20 FPS conversion. Per-frame deltas at 10 FPS span 2x the wall-clock motion, so
-for a faithful Table-20 reproduction use a 20 FPS LIBERO dataset (or recompute
-stats for the dataset's FPS). Loading/training is correct at any FPS regardless.
+use a 20 FPS LIBERO dataset (or recompute stats for the dataset's FPS).
+Loading/training is correct at any FPS regardless.
 """
 
 from __future__ import annotations
@@ -259,9 +259,7 @@ class LIBEROLeRobotDataset(ActionBaseDataset):
     # ---- sample build ------------------------------------------------------
 
     def __getitem__(self, idx: int) -> dict[str, Any]:
-        # Resilience: a single unreadable/corrupt video frame (e.g. a torchcodec
-        # decode error on the packed LeRobot-v3 mp4s) must not crash a multi-node
-        # run. Resample a different valid window on failure (bounded retries).
+        # Resample a different valid window if a frame fails to decode (bounded retries).
         n = len(self)
         last_err: Exception | None = None
         for _attempt in range(8):
