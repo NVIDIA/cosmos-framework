@@ -11,20 +11,6 @@ import torch
 import torch.distributed as dist
 
 from cosmos_framework.data.vfm.joint_dataloader import IterativeJointDataLoader
-from cosmos_framework.data.vfm.sequence_packing import (
-    FactoredSequencePack,
-    PackedSequence,
-    build_sequence_plans_from_data_batch,
-    factored_from_joint_sequence,
-    from_joint,
-    from_mode_splits,
-    get_all_seq,
-    get_gen_seq,
-    get_und_seq,
-    pack_input_sequence,
-    set_gen_seq,
-    set_und_seq,
-)
 from cosmos_framework.model.vfm.mot.attention import (
     SplitInfo,
     dispatch_attention,
@@ -33,7 +19,25 @@ from cosmos_framework.model.vfm.mot.context_parallel_utils import (
     context_parallel_attention,
     get_context_parallel_sharded_sequence,
 )
+from cosmos_framework.model.vfm.mot.parallelize_unified_mot import ARReplicatedIODispatch
+from cosmos_framework.model.vfm.mot.unified_mot import _apply_head_sharded_o_proj
 from cosmos_framework.model.vfm.utils.data_and_condition import GenerationDataClean
+from cosmos_framework.data.vfm.sequence_packing import (
+    PackedSequence,
+    build_sequence_plans_from_data_batch,
+    pack_input_sequence,
+)
+from cosmos_framework.data.vfm.sequence_packing.runtime import (
+    SequencePack,
+    from_all_seq,
+    from_mode_splits,
+    get_all_seq,
+    get_gen_seq,
+    get_und_seq,
+    sequence_pack_from_packed_sequence,
+    set_gen_seq,
+    set_und_seq,
+)
 from cosmos_framework.utils.vfm.parallelism import ParallelDims
 
 
@@ -154,7 +158,7 @@ def get_factored_qkv_data(
     print(f"DEBUG: packed_und_token_indexes length: {packed_und_token_indexes.shape[0]}")
     print(f"DEBUG: split_lens sum causal: {sum(l for l, m in zip(split_lens, attn_modes) if m == 'causal')}")
 
-    global_q_pack = factored_from_joint_sequence(
+    global_q_pack = sequence_pack_from_packed_sequence(
         packed_sequence=global_packed_sequence_q,
         attn_modes=attn_modes,
         split_lens=split_lens,
@@ -162,8 +166,8 @@ def get_factored_qkv_data(
         packed_und_token_indexes=packed_und_token_indexes,
         packed_gen_token_indexes=packed_gen_token_indexes,
     )
-    global_k_pack = from_joint(global_packed_sequence_k, global_q_pack)
-    global_v_pack = from_joint(global_packed_sequence_v, global_q_pack)
+    global_k_pack = from_all_seq(global_packed_sequence_k, global_q_pack)
+    global_v_pack = from_all_seq(global_packed_sequence_v, global_q_pack)
     print(f"DEBUG: global_q_pack causal_seq shape: {get_und_seq(global_q_pack).shape}")
     return global_q_pack, global_k_pack, global_v_pack
 
@@ -193,8 +197,8 @@ def verify_fwd_output(
 
     # COMPARE: On rank 0, concatenate the shards and compare with the baseline
     if rank == 0:
-        # cast baseline_output_pack to FactoredSequencePack
-        baseline_output_pack = cast(FactoredSequencePack, baseline_output_pack)
+        # cast baseline_output_pack to SequencePack
+        baseline_output_pack = cast(SequencePack, baseline_output_pack)
 
         print(f"Comparing results for world_size={world_size}...")
         baseline_und_seq = get_und_seq(baseline_output_pack)
@@ -376,7 +380,12 @@ def test_context_parallel_attention_two_way():
     attention_function_to_wrap = partial(dispatch_attention)
 
     print(f"DEBUG: world_size: {world_size}")
-    parallel_dims = ParallelDims(enable_inference_mode=True, world_size=world_size, dp_shard=1, cp=cp_size)
+    parallel_dims = ParallelDims(
+        enable_inference_mode=True,
+        world_size=world_size,
+        dp_shard=1,
+        cp=cp_size,
+    )
     parallel_dims.build_meshes("cuda")
     cp_mesh = parallel_dims.cp_mesh
 
@@ -657,7 +666,7 @@ def simple_packed_test():
     head_dim = 128
     global_packed_sequence_q, _, _ = create_qkv_sequences(global_packed_data, device, num_heads, num_heads, head_dim)
 
-    factored_q_pack = factored_from_joint_sequence(
+    factored_q_pack = sequence_pack_from_packed_sequence(
         packed_sequence=global_packed_sequence_q,
         attn_modes=global_packed_data.attn_modes,
         split_lens=global_packed_data.split_lens,
@@ -709,8 +718,8 @@ def _make_factored_pack(
     S_gen_global: int,
     device: torch.device,
     is_sharded: bool = False,
-) -> FactoredSequencePack:
-    """Minimal single-sample FactoredSequencePack for unit tests.
+) -> SequencePack:
+    """Minimal single-sample SequencePack for unit tests.
 
     Metadata always uses GLOBAL (pre-sharding) token counts so the metadata
     is consistent before and after all-to-all inside context_parallel_attention().
@@ -734,13 +743,15 @@ def _make_factored_pack(
     }
 
 
+
+
 @pytest.mark.L0
 def test_get_context_parallel_sharded_sequence_three_way():
     """get_context_parallel_sharded_sequence() accepts three_way attn_implementation.
 
     The causal_8b_480p config uses joint_attn_implementation="three_way" (required by
     video_temporal_causal=True).  The sharding logic is identical to "two_way" — it
-    operates on the FactoredSequencePack (und/gen split), not on the attention pattern —
+    operates on the SequencePack (und/gen split), not on the attention pattern —
     so "three_way" must not be rejected by the assertion.
 
     Verifies that both und and gen sequences are sharded to 1/world_size tokens per rank,

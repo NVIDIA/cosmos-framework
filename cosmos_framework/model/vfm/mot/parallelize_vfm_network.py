@@ -47,6 +47,7 @@ def parallelize_vfm_network(
     parallel_dims: ParallelDims | None,
     compile_config: CompileConfig,
     ac_config: ActivationCheckpointingConfig,
+    attention_io_layout: str = "sequence_sharded",
 ) -> torch.nn.Module:
     """Optimize the model using FSDP, CP, activation checkpointing, and torch.compile.
 
@@ -62,7 +63,9 @@ def parallelize_vfm_network(
             ``OmniMoTModelConfig.sac``. Forwarded to
             ``parallelize_unified_mot``; ``None`` falls back to the
             ``ActivationCheckpointingConfig`` defaults.
+        attention_io_layout: Tensor layout at the attention boundary under CP.
     """
+    model.attention_io_layout = attention_io_layout
     if parallel_dims is not None and parallel_dims.cp_enabled:
         model.parallel_dims = parallel_dims
 
@@ -71,6 +74,7 @@ def parallelize_vfm_network(
         parallel_dims=parallel_dims,
         compile_config=compile_config,
         ac_config=ac_config,
+        attention_io_layout=attention_io_layout,
     )
 
     if compile_config.enabled and compile_config.compiled_region == "all":

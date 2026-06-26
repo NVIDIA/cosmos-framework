@@ -4,10 +4,10 @@
 import torch
 import wandb
 
-import cosmos_framework.data.vfm.sequence_packing as sequence_packing
 from cosmos_framework.callbacks.every_n import EveryN
 from cosmos_framework.model._base import ImaginaireModel
 from cosmos_framework.trainer import ImaginaireTrainer
+from cosmos_framework.data.vfm.sequence_packing.runtime import get_padding_stats
 
 
 class SequencePackingPadding(EveryN):
@@ -32,11 +32,12 @@ class SequencePackingPadding(EveryN):
         iteration: int,
     ) -> None:
         if wandb.run:
+            padding_stats = get_padding_stats()
             log_dict = {
-                "SequencePackingPadding/max_causal_len_image_batch": sequence_packing.MAX_CAUSAL_LEN_IMAGE_BATCH,
-                "SequencePackingPadding/max_full_len_image_batch": sequence_packing.MAX_FULL_LEN_IMAGE_BATCH,
-                "SequencePackingPadding/max_causal_len_video_batch": sequence_packing.MAX_CAUSAL_LEN_VIDEO_BATCH,
-                "SequencePackingPadding/max_full_len_video_batch": sequence_packing.MAX_FULL_LEN_VIDEO_BATCH,
+                "SequencePackingPadding/max_causal_len_image_batch": padding_stats["MAX_CAUSAL_LEN_IMAGE_BATCH"],
+                "SequencePackingPadding/max_full_len_image_batch": padding_stats["MAX_FULL_LEN_IMAGE_BATCH"],
+                "SequencePackingPadding/max_causal_len_video_batch": padding_stats["MAX_CAUSAL_LEN_VIDEO_BATCH"],
+                "SequencePackingPadding/max_full_len_video_batch": padding_stats["MAX_FULL_LEN_VIDEO_BATCH"],
             }
             modality = "video"
             if "is_image_batch" in output_batch:

@@ -9,7 +9,6 @@ from torch import nn
 from transformers.configuration_utils import PretrainedConfig
 from transformers.modeling_utils import PreTrainedModel
 
-from cosmos_framework.data.vfm.sequence_packing import ModalityData, PackedSequence, verify_natten_parameter_list
 from cosmos_framework.model.vfm.mot.attention import build_packed_sequence
 from cosmos_framework.model.vfm.mot.context_parallel_utils import (
     get_context_parallel_last_hidden_state,
@@ -22,6 +21,8 @@ from cosmos_framework.model.vfm.mot.modeling_utils import (
     VideoRopePosition3DEmb,
 )
 from cosmos_framework.model.vfm.utils.memory import MemoryState
+from cosmos_framework.data.vfm.sequence_packing import ModalityData, PackedSequence
+from cosmos_framework.data.vfm.sequence_packing.natten import verify_natten_parameter_list
 
 
 class Cosmos3VFMNetworkConfig(PretrainedConfig):
@@ -124,6 +125,7 @@ class Cosmos3VFMNetwork(PreTrainedModel):
         self.num_kv_heads = text_config.num_key_value_heads
         self.head_dim = text_config.head_dim
         self.num_hidden_layers = text_config.num_hidden_layers
+        self.attention_io_layout = "sequence_sharded"
         self.predict_text_tokens = config.predict_text_tokens
 
         if config.natten_parameter_list is not None and config.joint_attn_implementation != "three_way":
@@ -628,13 +630,17 @@ class Cosmos3VFMNetwork(PreTrainedModel):
         assert vision.token_shapes is not None
         assert isinstance(vision.sequence_indexes, torch.Tensor)
         assert isinstance(vision.timesteps, torch.Tensor)
+        torch._assert(
+            vision.timesteps.dtype in (torch.long, torch.float32),
+            f"Timestep must be long/float32, got {vision.timesteps.dtype}",
+        )
+
         assert isinstance(vision.mse_loss_indexes, torch.Tensor)
 
         packed_tokens_vision, original_latent_shapes = self.patchify_and_pack_latents(
             vision.tokens, vision.token_shapes
         )  # packed_tokens_vision: [total_vision_patches,patch_latent_dim]
-
-        packed_tokens_vision = self.vae2llm(packed_tokens_vision)  # [total_vision_patches,hidden_size]
+        packed_tokens_vision = self.vae2llm(packed_tokens_vision.to(target_dtype))  # [total_vision_patches,hidden_size]
 
         # Add absolute position embedding only when NOT using unified 3D mRoPE
         # (3D mRoPE provides positional information via rotary embeddings instead)
@@ -647,7 +653,7 @@ class Cosmos3VFMNetwork(PreTrainedModel):
         has_noisy_vision = vision.mse_loss_indexes.numel() > 0
 
         if has_noisy_vision:
-            timesteps_vision = vision.timesteps * self.timestep_scale  # [N_noisy_frames_vision]
+            timesteps_vision = vision.timesteps.to(dtype=torch.float32) * self.timestep_scale  # [N_noisy_frames_vision]
 
             # Timesteps are computed in FP32 for numerical stability.
             with torch.autocast("cuda", enabled=True, dtype=torch.float32):
@@ -1033,11 +1039,27 @@ class Cosmos3VFMNetwork(PreTrainedModel):
 
         # The packer is the single source of truth for the supertoken layout.
         # ``num_action_tokens_per_supertoken`` is stamped onto ``packed_seq`` by
-        # ``_pack_supertokens_temporal_causal`` (= tcf when actions are packed
+        # ``pack_supertokens_temporal_causal`` (= tcf when actions are packed
         # inline, 0 otherwise) and read unchanged by the attention builder, the
         # NATTEN metadata generator, and the rolling KV-cache state — keeping
         # all downstream supertoken geometry automatically in sync with the pack.
         num_action_tokens_per_supertoken = packed_seq.num_action_tokens_per_supertoken
+
+        replicated_attention_io_cp = (
+            self.attention_io_layout == "replicated"
+            and self.parallel_dims is not None
+            and self.parallel_dims.cp_enabled
+        )
+        # ``sequence_sharded`` attention I/O shards the token sequence, so
+        # packing must pad sequence lengths to the CP size and the input/output
+        # sequence helpers need the CP mesh.  ``replicated`` attention I/O keeps
+        # current-frame sequences replicated and uses the CP mesh later inside
+        # attention to slice local heads, so the effective sequence-sharding
+        # world size is 1 here.
+        sequence_shard_parallel_dims = None if replicated_attention_io_cp else self.parallel_dims
+        sequence_shard_world_size = (
+            1 if replicated_attention_io_cp else (self.parallel_dims.cp_size if self.parallel_dims else 1)
+        )
 
         input_pack, attention_meta, natten_metadata_list = build_packed_sequence(
             self.config.joint_attn_implementation,
@@ -1053,7 +1075,7 @@ class Cosmos3VFMNetwork(PreTrainedModel):
             num_layers=self.num_hidden_layers,
             token_shapes=packed_seq.vision.token_shapes,
             natten_parameter_list=self.natten_parameter_list,
-            cp_world_size=self.parallel_dims.cp_size if self.parallel_dims else 1,
+            cp_world_size=sequence_shard_world_size,
             video_temporal_causal=self.video_temporal_causal,
             skip_natten_metadata=memory is not None and not memory.requires_natten_metadata(),
             vision_token_shapes=vision_token_shapes,
@@ -1067,7 +1089,7 @@ class Cosmos3VFMNetwork(PreTrainedModel):
             attn_implementation=self.config.joint_attn_implementation,
             input_pack=input_pack,
             position_ids=packed_seq.position_ids,
-            parallel_dims=self.parallel_dims,
+            parallel_dims=sequence_shard_parallel_dims,
         )
 
         packed_outputs, lbl_metadata = self.language_model(
@@ -1079,7 +1101,7 @@ class Cosmos3VFMNetwork(PreTrainedModel):
         )
         last_hidden_state = get_context_parallel_last_hidden_state(
             packed_outputs=packed_outputs,
-            parallel_dims=self.parallel_dims,
+            parallel_dims=sequence_shard_parallel_dims,
         )  # [N_total,hidden_size]
         output_dict = dict()
 

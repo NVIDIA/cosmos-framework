@@ -73,7 +73,9 @@ class CropToMultiple(Augmentor):
                 # log.info(f"Data cropped from ({h}, {w}) to ({new_h}, {new_w})")
                 data_dict[key] = transforms_F.crop(data, top=top, left=left, height=new_h, width=new_w)
 
-            # Store final dimensions for downstream use (e.g., resolution text info)
+            # Store final dimensions for downstream use (e.g., ResolutionTextInfo)
+            # Use the same image_size format as ReflectionPadding: [target_h, target_w, orig_h, orig_w]
+            data_dict["image_size"] = torch.tensor([new_h, new_w, h, w], dtype=torch.float)
             data_dict["final_height"] = new_h
             data_dict["final_width"] = new_w
 

@@ -18,6 +18,7 @@ from PIL import Image
 
 from cosmos_framework.utils import distributed, log
 from cosmos_framework.utils.easy_io import easy_io
+from cosmos_framework.utils.easy_io.transient_retry import retry_on_transient_error
 
 Image.MAX_IMAGE_PIXELS = None
 
@@ -87,7 +88,13 @@ class ObjectStore:
         """
         assert type is not None or load_func is not None, "Either type or load_func should be specified."
 
-        buffer = io.BytesIO(self.easy_io_backend.get(filepath=self._translate_key(key=key)))
+        path = self._translate_key(key=key)
+        buffer = io.BytesIO(
+            retry_on_transient_error(
+                lambda: self.easy_io_backend.get(filepath=path),
+                operation=f"load_object({key})",
+            )
+        )
         buffer.seek(0)
 
         # Read from buffer for common data types.
@@ -177,7 +184,11 @@ class ObjectStore:
         Returns:
             bool: True if the object exists, False if not.
         """
-        return self.easy_io_backend.exists(filepath=self._translate_key(key=key))
+        path = self._translate_key(key=key)
+        return retry_on_transient_error(
+            lambda: self.easy_io_backend.exists(filepath=path),
+            operation=f"object_exists({key})",
+        )
 
 
 def sync_s3_dir_to_local(

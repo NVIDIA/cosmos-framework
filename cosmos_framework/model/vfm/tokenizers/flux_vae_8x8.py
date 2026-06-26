@@ -450,7 +450,7 @@ class FluxVAEInterface(VideoTokenizerInterface):
         """Get number of latent frames from pixel frames."""
         return num_pixel_frames  # Flux VAE doesn't compress temporally
 
-    def get_pixel_num_frames(self, num_latent_frames: int) -> int:
+    def get_pixel_num_frames(self, num_latent_frames: int, **kwargs) -> int:
         """Get number of pixel frames from latent frames."""
         return num_latent_frames  # Flux VAE doesn't compress temporally
 

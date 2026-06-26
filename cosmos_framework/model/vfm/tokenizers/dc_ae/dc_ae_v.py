@@ -795,12 +795,18 @@ class DCAEV(nn.Module):
             if feat_idx is not None:
                 feat_idx[0] = 0
             if feature_cache is not None and self.cfg.compilable:
+                old_feature_cache = feature_cache
                 feature_cache = [f.clone() if f is not None else None for f in feature_cache]
+                if old_feature_cache is not None:
+                    old_feature_cache.clear()
             tile = self.encoder(tile, feature_cache=feature_cache, feat_idx=feat_idx)[0].clone()
             if remove_padding:
                 valid_latent_t = (actual_t + compression_factor - 1) // compression_factor
                 tile = tile[:, :, :valid_latent_t, :, :]
             row.append(tile)
+
+        if feature_cache is not None:
+            feature_cache.clear()
 
         result_row = []
         for i, tile in enumerate(row):
@@ -901,14 +907,14 @@ def dc_ae_v_f32t4_encoder_causal_decoder_chunk_causal_4(
         latent_channels, num_pad_frames, temporal_remainder, scaling_factor = 64, 7, 1, 0.5704
         encoder_width_list = [0, 64, 128, 512, 1024, 1024, 1024]
     elif name in [
-        "dcae4x32x32_c96_t120_256p_fps_all_encoder_causal_decoder_chunk_causal_4_nogan_cosmos_pad_7_v0.2",
+        "dcae4x32x32_c96_t120_256p_fps_all_encoder_causal_decoder_chunk_causal_4_nogan_cosmos_pad_7_v0.2_lcr",
     ]:
-        latent_channels, num_pad_frames, temporal_remainder, scaling_factor = 96, 7, 1, 0.5185
+        latent_channels, num_pad_frames, temporal_remainder, scaling_factor = 96, 7, 1, 0.4766
         encoder_width_list = [0, 64, 128, 512, 1024, 1024, 1024]
     elif name in [
-        "dcae4x32x32_c128_t120_256p_fps_all_encoder_causal_decoder_chunk_causal_4_nogan_cosmos_pad_7_v0.2",
+        "dcae4x32x32_c128_t120_256p_fps_all_encoder_causal_decoder_chunk_causal_4_nogan_cosmos_pad_7_v0.2_lcr",
     ]:
-        latent_channels, num_pad_frames, temporal_remainder, scaling_factor = 128, 7, 1, 0.5209
+        latent_channels, num_pad_frames, temporal_remainder, scaling_factor = 128, 7, 1, 0.5637
         encoder_width_list = [0, 64, 128, 512, 1024, 1024, 1024]
     else:
         raise ValueError(f"model {name} is not supported")

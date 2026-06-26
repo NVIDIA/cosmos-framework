@@ -160,7 +160,7 @@ class DCAE4x32x32Interface(VideoTokenizerInterface):
     def get_latent_num_frames(self, num_pixel_frames: int) -> int:
         return (num_pixel_frames + self.model.cfg.num_pad_frames) // self._temporal_compression_factor
 
-    def get_pixel_num_frames(self, num_latent_frames: int) -> int:
+    def get_pixel_num_frames(self, num_latent_frames: int, **kwargs) -> int:
         return num_latent_frames * self._temporal_compression_factor - self.model.cfg.num_pad_frames
 
     @property

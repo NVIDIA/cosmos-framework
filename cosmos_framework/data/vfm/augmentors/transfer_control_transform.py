@@ -29,8 +29,8 @@ import torchvision.transforms.functional as transforms_F
 from cosmos_framework.data.imaginaire.webdataset.augmentors.augmentor import Augmentor
 from cosmos_framework.utils import log
 from cosmos_framework.data.vfm.augmentors.transfer_control_input import AddControlInputComb
-from cosmos_framework.data.vfm.sequence_packing import SequencePlan
 from cosmos_framework.data.vfm.utils import VIDEO_RES_SIZE_INFO
+from cosmos_framework.data.vfm.sequence_packing import SequencePlan
 
 
 class SampleResolution(Augmentor):

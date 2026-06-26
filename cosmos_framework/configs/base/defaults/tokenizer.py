@@ -8,10 +8,12 @@ from cosmos_framework.utils.lazy_config import LazyCall as L
 from cosmos_framework.model.vfm.tokenizers.audio.avae import AVAEInterface
 from cosmos_framework.model.vfm.tokenizers.dc_ae.dc_ae_4x32x32 import DCAE4x32x32Interface
 from cosmos_framework.model.vfm.tokenizers.flux_vae_8x8 import FluxVAEInterface
+from cosmos_framework.model.vfm.tokenizers.stable_diffusion_vae_8x8 import StableDiffusionVAEInterface
 from cosmos_framework.model.vfm.tokenizers.uniae.noncausal_4x16x16 import UniAEVAEInterface
 from cosmos_framework.model.vfm.tokenizers.wan2pt1_vae_4x8x8 import Wan2pt1VAEInterface
 from cosmos_framework.model.vfm.tokenizers.wan2pt2_vae_4x16x16 import Wan2pt2VAEInterface
 
+PRETRAINED_TOKENIZER_SD_VAE_REPO = "stabilityai/sd-vae-ft-ema"
 PRETRAINED_TOKENIZER_WAN2PT1_VAE_PTH = "pretrained/tokenizers/video/wan2pt1/Wan2.1_VAE.pth"
 PRETRAINED_TOKENIZER_WAN2PT2_VAE_PTH = "pretrained/tokenizers/video/wan2pt2/Wan2.2_VAE.pth"
 PRETRAINED_TOKENIZER_FLUX_VAE_PTH = "pretrained/tokenizers/image/flux/ae.safetensors"
@@ -24,8 +26,8 @@ PRETRAINED_TOKENIZER_UNIAE_4X16X16_C48_T16TO160_MIXP_FPS_MIX_ENCODER_NONCAUSAL_D
 
 # DCAE checkpoint paths
 PRETRAINED_TOKENIZER_DCAE_4X32X32_C64_T120_256P_FPS_ALL_ENCODER_CAUSAL_DECODER_CHUNKCAUSAL4_NOGAN_COSMOS_PAD_7_V0PT2_PTH = "pretrained/tokenizers/video/cosmos/dcae4x32x32_c64_t120_256p_fps_all_encoder_causal_decoder_chunk_causal_4_nogan_cosmos_pad_7_v0.2.pt"
-PRETRAINED_TOKENIZER_DCAE_4X32X32_C96_T120_256P_FPS_ALL_ENCODER_CAUSAL_DECODER_CHUNKCAUSAL4_NOGAN_COSMOS_PAD_7_V0PT2_PTH = "pretrained/tokenizers/video/cosmos/dcae4x32x32_c96_t120_256p_fps_all_encoder_causal_decoder_chunk_causal_4_nogan_cosmos_pad_7_v0.2.pt"
-PRETRAINED_TOKENIZER_DCAE_4X32X32_C128_T120_256P_FPS_ALL_ENCODER_CAUSAL_DECODER_CHUNKCAUSAL4_NOGAN_COSMOS_PAD_7_V0PT2_PTH = "pretrained/tokenizers/video/cosmos/dcae4x32x32_c128_t120_256p_fps_all_encoder_causal_decoder_chunk_causal_4_nogan_cosmos_pad_7_v0.2.pt"
+PRETRAINED_TOKENIZER_DCAE_4X32X32_C96_T120_256P_FPS_ALL_ENCODER_CAUSAL_DECODER_CHUNKCAUSAL4_NOGAN_COSMOS_PAD_7_V0PT2_LCR_PTH = "pretrained/tokenizers/video/cosmos/dcae4x32x32_c96_t120_256p_fps_all_encoder_causal_decoder_chunk_causal_4_nogan_cosmos_pad_7_v0.2_lcr.pt"
+PRETRAINED_TOKENIZER_DCAE_4X32X32_C128_T120_256P_FPS_ALL_ENCODER_CAUSAL_DECODER_CHUNKCAUSAL4_NOGAN_COSMOS_PAD_7_V0PT2_LCR_PTH = "pretrained/tokenizers/video/cosmos/dcae4x32x32_c128_t120_256p_fps_all_encoder_causal_decoder_chunk_causal_4_nogan_cosmos_pad_7_v0.2_lcr.pt"
 
 # AVAE (Audio VAE) checkpoint paths
 PRETRAINED_TOKENIZER_AVAE_PTH = "pretrained/tokenizers/audio/avae/model_unwrap.ckpt"
@@ -47,6 +49,19 @@ FluxVAEConfig: LazyDict = L(FluxVAEInterface)(
     spatial_compression_factor=8,
     temporal_compression_factor=1,
     causal=True,
+)
+
+StableDiffusionVAEConfig: LazyDict = L(StableDiffusionVAEInterface)(
+    # Stable Diffusion VAE used by the original DiT ImageNet setup.
+    bucket_name="",
+    object_store_credential_path_pretrained=None,
+    vae_path=PRETRAINED_TOKENIZER_SD_VAE_REPO,
+    scaling_factor=0.18215,
+    sample_posterior=True,
+    dtype="float32",
+    chunk_duration=1,
+    spatial_compression_factor=8,
+    temporal_compression_factor=1,
 )
 
 Wan2pt1VAEConfig: LazyDict = L(Wan2pt1VAEInterface)(
@@ -80,26 +95,28 @@ DCAE4x32x32C64T120_256pFpsAllEncoderCausalDecoderChunkCausal4NoganCosmosPad7V0pt
     causal=True,
 )
 
-DCAE4x32x32C96T120_256pFpsAllEncoderCausalDecoderChunkCausal4NoganCosmosPad7V0pt2Config: LazyDict = L(
+DCAE4x32x32C96T120_256pFpsAllEncoderCausalDecoderChunkCausal4NoganCosmosPad7V0pt2LCRConfig: LazyDict = L(
     DCAE4x32x32Interface
 )(
     bucket_name=PLACEHOLDER,
     object_store_credential_path_pretrained=PLACEHOLDER,
-    vae_path=PRETRAINED_TOKENIZER_DCAE_4X32X32_C96_T120_256P_FPS_ALL_ENCODER_CAUSAL_DECODER_CHUNKCAUSAL4_NOGAN_COSMOS_PAD_7_V0PT2_PTH,
-    model_name="dcae4x32x32_c96_t120_256p_fps_all_encoder_causal_decoder_chunk_causal_4_nogan_cosmos_pad_7_v0.2",
+    vae_path=PRETRAINED_TOKENIZER_DCAE_4X32X32_C96_T120_256P_FPS_ALL_ENCODER_CAUSAL_DECODER_CHUNKCAUSAL4_NOGAN_COSMOS_PAD_7_V0PT2_LCR_PTH,
+    model_name="dcae4x32x32_c96_t120_256p_fps_all_encoder_causal_decoder_chunk_causal_4_nogan_cosmos_pad_7_v0.2_lcr",
     spatial_compression_factor=32,
     temporal_compression_factor=4,
+    causal=True,
 )
 
-DCAE4x32x32C128T120_256pFpsAllEncoderCausalDecoderChunkCausal4NoganCosmosPad7V0pt2Config: LazyDict = L(
+DCAE4x32x32C128T120_256pFpsAllEncoderCausalDecoderChunkCausal4NoganCosmosPad7V0pt2LCRConfig: LazyDict = L(
     DCAE4x32x32Interface
 )(
     bucket_name=PLACEHOLDER,
     object_store_credential_path_pretrained=PLACEHOLDER,
-    vae_path=PRETRAINED_TOKENIZER_DCAE_4X32X32_C128_T120_256P_FPS_ALL_ENCODER_CAUSAL_DECODER_CHUNKCAUSAL4_NOGAN_COSMOS_PAD_7_V0PT2_PTH,
-    model_name="dcae4x32x32_c128_t120_256p_fps_all_encoder_causal_decoder_chunk_causal_4_nogan_cosmos_pad_7_v0.2",
+    vae_path=PRETRAINED_TOKENIZER_DCAE_4X32X32_C128_T120_256P_FPS_ALL_ENCODER_CAUSAL_DECODER_CHUNKCAUSAL4_NOGAN_COSMOS_PAD_7_V0PT2_LCR_PTH,
+    model_name="dcae4x32x32_c128_t120_256p_fps_all_encoder_causal_decoder_chunk_causal_4_nogan_cosmos_pad_7_v0.2_lcr",
     spatial_compression_factor=32,
     temporal_compression_factor=4,
+    causal=True,
 )
 
 
@@ -166,9 +183,16 @@ AVAE_48k_25hzConfig: LazyDict = L(AVAEInterface)(
 )
 
 
-def register_tokenizer():
+def register_tokenizer() -> None:
     cs = ConfigStore.instance()
 
+    # Stable Diffusion image tokenizer
+    cs.store(
+        group="tokenizer",
+        package="model.config.tokenizer",
+        name="sd_vae_tokenizer",
+        node=StableDiffusionVAEConfig,
+    )
     # Wan2pt1 and Wan2pt2 tokenizers
     cs.store(group="tokenizer", package="model.config.tokenizer", name="wan2pt1_tokenizer", node=Wan2pt1VAEConfig)
     cs.store(group="tokenizer", package="model.config.tokenizer", name="wan2pt2_tokenizer", node=Wan2pt2VAEConfig)
@@ -191,18 +215,18 @@ def register_tokenizer():
     cs.store(
         group="tokenizer",
         package="model.config.tokenizer",
-        name="dcae4x32x32_c96_t120_256p_fps_all_encoder_causal_decoder_chunk_causal_4_nogan_cosmos_pad_7_v0.2_tokenizer",
-        node=DCAE4x32x32C96T120_256pFpsAllEncoderCausalDecoderChunkCausal4NoganCosmosPad7V0pt2Config,
+        name="dcae4x32x32_c96_t120_256p_fps_all_encoder_causal_decoder_chunk_causal_4_nogan_cosmos_pad_7_v0.2_lcr_tokenizer",
+        node=DCAE4x32x32C96T120_256pFpsAllEncoderCausalDecoderChunkCausal4NoganCosmosPad7V0pt2LCRConfig,
     )
     cs.store(
         group="tokenizer",
         package="model.config.tokenizer",
-        name="dcae4x32x32_c128_t120_256p_fps_all_encoder_causal_decoder_chunk_causal_4_nogan_cosmos_pad_7_v0.2_tokenizer",
-        node=DCAE4x32x32C128T120_256pFpsAllEncoderCausalDecoderChunkCausal4NoganCosmosPad7V0pt2Config,
+        name="dcae4x32x32_c128_t120_256p_fps_all_encoder_causal_decoder_chunk_causal_4_nogan_cosmos_pad_7_v0.2_lcr_tokenizer",
+        node=DCAE4x32x32C128T120_256pFpsAllEncoderCausalDecoderChunkCausal4NoganCosmosPad7V0pt2LCRConfig,
     )
 
 
-def register_sound_tokenizer():
+def register_sound_tokenizer() -> None:
     """Register sound tokenizers in Hydra ConfigStore under model.config.sound_tokenizer."""
     cs = ConfigStore.instance()
     cs.store(

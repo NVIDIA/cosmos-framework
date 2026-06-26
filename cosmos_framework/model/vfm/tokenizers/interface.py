@@ -49,7 +49,7 @@ class VideoTokenizerInterface(ABC):
         pass
 
     @abstractmethod
-    def get_pixel_num_frames(self, num_latent_frames: int) -> int:
+    def get_pixel_num_frames(self, num_latent_frames: int, **kwargs) -> int:
         pass
 
     def get_latent_temporal_positions(

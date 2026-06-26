@@ -64,7 +64,7 @@ class MemoryState(ABC):
         Called once before any transformer layers are processed.
 
         Args:
-            hidden_states: The packed sequence (``FactoredSequencePack``).
+            hidden_states: The packed sequence (``SequencePack``).
             device: Target device for any new tensors.
         """
 
