@@ -2432,6 +2432,7 @@ class OmniMoTModel(ImaginaireModel):
                     # Peers needed CFG so we ran the uncond forward to keep
                     # FSDP allgather aligned; locally we still return cond.
                     return cond_v
+
                 v_pred = [u_i + guidance * (c_i - u_i) for c_i, u_i in zip(cond_v, uncond_v)]
                 if normalize_cfg:
                     v_pred = [
@@ -2448,22 +2449,6 @@ class OmniMoTModel(ImaginaireModel):
             uncond_v = _single_velocity_fn(uncond_tokens, skip_text_tokens=skip_text_tokens_for_cfg)
             if not needs_text_cfg:
                 # Same alignment story as above for the postprocess branch.
-                return cond_v
-
-            if not needs_cfg:
-                # This rank doesn't actually need CFG (guidance==1.0 or sigma
-                # outside guidance_interval). Return cond_v directly so the
-                # output is bit-identical to the original no-CFG path; the
-                # uncond_v forward was only run to keep the FSDP allgather
-                # sequence aligned with peers.
-                return cond_v
-
-            if not needs_cfg:
-                # This rank doesn't actually need CFG (guidance==1.0 or sigma
-                # outside guidance_interval). Return cond_v directly so the
-                # output is bit-identical to the original no-CFG path; the
-                # uncond_v forward was only run to keep the FSDP allgather
-                # sequence aligned with peers.
                 return cond_v
 
             v_pred = [u_i + guidance * (c_i - u_i) for c_i, u_i in zip(cond_v, uncond_v)]

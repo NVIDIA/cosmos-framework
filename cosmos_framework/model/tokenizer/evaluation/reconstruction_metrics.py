@@ -486,9 +486,6 @@ class Rank0FIDMetric(nn.Module):
         if self._fid_metric is not None:
             self._fid_metric.reset()
 
-
-# COSMOS-RELEASE-END-IGNORE
-
 __all__ = [
     "TokenizerMetric",
     "PSNRMetric",
