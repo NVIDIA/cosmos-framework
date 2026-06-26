@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: OpenMDW-1.1
 
 # Structured-TOML launch for action_policy_libero_nano — Cosmos3-Nano LIBERO
-# action-policy SFT (HSDP, full SFT, no LoRA). Drives cosmos_framework.scripts.train
+# action-policy SFT (HSDP, full SFT). Drives cosmos_framework.scripts.train
 # against examples/toml/sft_config/action_policy_libero_repro.toml.
 #
 # Point LIBERO_ROOT at the libero_10 suite ONLY (the full suite mix dilutes

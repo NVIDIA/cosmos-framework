@@ -1,7 +1,7 @@
 # Cosmos3-Nano LIBERO-10 action-policy SFT
 
-Full SFT (no LoRA) of the public `nvidia/Cosmos3-Nano` base into a LIBERO-10
-action policy: vision + language in, action chunks out.
+Full SFT of the public `nvidia/Cosmos3-Nano` base into a LIBERO-10 action
+policy: vision + language in, action chunks out.
 
 | Piece            | Path                                                                                            |
 | ---------------- | ----------------------------------------------------------------------------------------------- |

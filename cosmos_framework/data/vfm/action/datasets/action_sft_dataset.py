@@ -18,10 +18,7 @@ from typing import Any
 
 from torch.utils.data import Dataset, IterableDataset, get_worker_info
 
-from cosmos_framework.data.vfm.action.datasets.droid_lerobot_dataset import (
-    DROIDLeRobotDataset,
-    ShardedDROIDLeRobotDataset,
-)
+from cosmos_framework.data.vfm.action.datasets.droid_lerobot_dataset import DROIDLeRobotDataset
 from cosmos_framework.data.vfm.action.datasets.libero_lerobot_dataset import LIBEROLeRobotDataset
 from cosmos_framework.data.vfm.action.transforms import ActionTransformPipeline
 
@@ -102,7 +99,6 @@ def get_action_droid_sft_dataset(
     action_normalization: str | None = None,
     viewpoint: str = "concat_view",
     use_image_augmentation: bool = False,
-    apply_color_jitter: bool = True,
     use_filter_dict: bool = False,
     filter_dict_path: str | None = None,
     resolution: str | int = "256",
@@ -115,24 +111,11 @@ def get_action_droid_sft_dataset(
     append_idle_frames: bool = False,
     iterable_shuffle: bool = False,
     episode_shuffle_seed: int = 42,
-    sharded: bool = False,
-    lerobot_roots: list[str] | None = None,
-    use_success_only: bool = True,
 ) -> Dataset:
     """Build the DROID action SFT dataset: ``action_space='joint_pos'`` (8D) +
-    ``use_state`` (raw/un-normalized), concat_view, chunk_length 32.
-
-    ``sharded=True`` consumes the per-lab sharded layout (``<root>/success/<lab>``)
-    via :class:`ShardedDROIDLeRobotDataset` — one ``DROIDLeRobotDataset`` per lab
-    concatenated into one flat index — reproducing the internal sharded run's
-    per-shard index construction. ``sharded=False`` (default) reads ``root`` as a
-    single flat LeRobot dataset (the prior behavior). ``lerobot_roots`` optionally
-    pins the shard sub-paths (relative to ``root``); otherwise they are
-    auto-discovered."""
-    # ``sharded`` may arrive as a string from env-var config resolution.
-    if isinstance(sharded, str):
-        sharded = sharded.strip().lower() in ("1", "true", "yes", "on")
-    shard_kwargs = dict(
+    ``use_state`` (raw/un-normalized), concat_view, chunk_length 32."""
+    dataset = DROIDLeRobotDataset(
+        root=root,
         fps=fps,
         chunk_length=chunk_length,
         viewpoint=viewpoint,
@@ -141,19 +124,9 @@ def get_action_droid_sft_dataset(
         use_state=use_state,
         action_normalization=action_normalization,
         use_image_augmentation=use_image_augmentation,
-        apply_color_jitter=apply_color_jitter,
         use_filter_dict=use_filter_dict,
         filter_dict_path=filter_dict_path,
     )
-    if sharded:
-        dataset: Dataset = ShardedDROIDLeRobotDataset(
-            root=root,
-            lerobot_roots=lerobot_roots,
-            use_success_only=use_success_only,
-            **shard_kwargs,
-        )
-    else:
-        dataset = DROIDLeRobotDataset(root=root, **shard_kwargs)
     transform = ActionTransformPipeline(
         tokenizer_config=tokenizer_config,
         cfg_dropout_rate=cfg_dropout_rate,
@@ -198,14 +171,12 @@ def get_action_libero_sft_dataset(
 ) -> Dataset:
     """Build the LIBERO action-policy SFT dataset (GA reproduction defaults).
 
-    Mirrors :func:`get_action_droid_sft_dataset` but feeds ``LIBEROLeRobotDataset``
-    (frame-wise-relative rot6d actions, ``quantile_rot``-normalized, concat_view
-    third-person + wrist at 256x256 each → 256x512) through
-    ``ActionTransformPipeline``. ``root`` is a LOCAL LeRobot dir (read parquet +
-    video directly, like DROID); pre-sync the HF dataset once, e.g.
-    ``hf download lerobot/libero_10 --repo-type dataset --local-dir <root>``. For
-    the Table-20 LIBERO-10 reproduction point ``root`` at libero_10 alone (the
-    4-suite mix dilutes libero_10 to ~1 pass in 2000 steps → ~82% vs ~97%). The
+    Feeds ``LIBEROLeRobotDataset`` (frame-wise-relative rot6d actions,
+    ``quantile_rot``-normalized, concat_view third-person + wrist at 256x256 each
+    → 256x512) through ``ActionTransformPipeline``. ``root`` is a LOCAL LeRobot dir
+    (read parquet + video directly); pre-sync the HF dataset once, e.g.
+    ``hf download lerobot/libero_10 --repo-type dataset --local-dir <root>``. Point
+    ``root`` at libero_10 alone (the all-suites mix dilutes libero_10 per step). The
     dataset is FPS-agnostic (decodes at real frame timestamps); ``fps`` is metadata
     for ``conditioning_fps`` / prompt duration.
     """

@@ -99,7 +99,7 @@ def _concat_view_layout_description(cameras: list[str]) -> str:
 
 
 def _augment_task_prompt_with_viewpoint(task_description: str, cameras: list[str]) -> str:
-    """Mirror DROID-style concat-view caption augmentation for closed-loop LIBERO eval."""
+    """Concat-view caption augmentation for closed-loop LIBERO eval."""
     if len(cameras) <= 1:
         return task_description
     prompt = _append_prompt_sentence(task_description, DEFAULT_VIEWPOINT_TEMPLATES["concat_view"])

@@ -13,7 +13,7 @@ from cosmos_framework.data.vfm.action.pose_utils import (
     build_abs_pose_from_components,
 )
 
-# Same local-frame post-rotation pattern used by DROID/Bridge/Fractal:
+# Local-frame post-rotation pattern:
 # R_opencv = R_native @ *_TO_OPENCV.
 LIBERO_TO_OPENCV: np.ndarray = np.array(
     [[0.0, -1.0, 0.0], [1.0, 0.0, 0.0], [0.0, 0.0, 1.0]],

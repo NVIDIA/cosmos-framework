@@ -3,11 +3,10 @@
 
 """``action_policy_libero_nano`` — Cosmos3-Nano LIBERO-10 action-policy SFT recipe.
 
-Mirrors ``action_policy_droid_nano`` but feeds ``LIBEROLeRobotDataset``
-(frame-wise-relative rot6d, ``quantile_rot``, concat_view third-person + wrist)
-and trains the generation + action heads from the public ``nvidia/Cosmos3-Nano``
-base. Train on ``libero_10`` alone (``LIBERO_ROOT``).
-See docs/action_policy_libero_sft.md.
+Feeds ``LIBEROLeRobotDataset`` (frame-wise-relative rot6d, ``quantile_rot``,
+concat_view third-person + wrist) and trains the generation + action heads from
+the public ``nvidia/Cosmos3-Nano`` base. Train on ``libero_10`` alone
+(``LIBERO_ROOT``). See docs/action_policy_libero_sft.md.
 """
 
 import copy
