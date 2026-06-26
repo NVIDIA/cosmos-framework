@@ -41,13 +41,14 @@ export BASE_CHECKPOINT_PATH=<Cosmos3-Nano DCP dir>
 export WAN_VAE_PATH=<Wan2.2_VAE.pth>
 export IMAGINAIRE_OUTPUT_ROOT=/path/to/output_root
 
-bash examples/launch_sft_action_policy_libero.sh   # HSDP 8x8; set NNODES/NODE_RANK/MASTER_ADDR per node
+bash examples/launch_sft_action_policy_libero.sh   # HSDP 2x8; set NNODES/NODE_RANK/MASTER_ADDR per node
 ```
 
 Recipe knobs live in `action_policy_libero_nano`; the TOML sets run-level scalars
-(lr 5e-5, warmup 500, cycle 16000, global batch 2048, `save_iter=500`). The launch
-sets `max_samples_per_batch=32` (32 × 64 ranks = gbs 2048); reduce it further on
-lower-memory GPUs. Sweep the saved checkpoints to pick the best iteration.
+(lr 5e-5, warmup 500, cycle 16000, `save_iter=500`, HSDP 2x8). Global batch is
+2048 = `max_samples_per_batch` 128 × 16 ranks × grad_accum 1; on lower-memory GPUs
+reduce it: `--opts dataloader_train.max_samples_per_batch=64`. Sweep the saved
+checkpoints to pick the best iteration.
 
 ## 3. Closed-loop eval
 

@@ -8,7 +8,7 @@
 #
 # Point LIBERO_ROOT at the libero_10 suite ONLY (the full suite mix dilutes
 # libero_10). Use the 20 FPS nvidia/LIBERO_LeRobot_v3. The default recipe is
-# HSDP 8x8 (global batch 2048); set NNODES/NODE_RANK/MASTER_ADDR per node.
+# HSDP 2x8 (global batch 2048); set NNODES/NODE_RANK/MASTER_ADDR per node.
 # See docs/action_policy_libero_sft.md.
 #
 # Required env vars:
@@ -40,7 +40,6 @@ EXTRA_DATASET_CHECK='[[ -f "$LIBERO_ROOT/meta/info.json" ]] || { echo "ERROR: LI
 # process), unlike a TAIL_OVERRIDES array set in your shell. Use it for smoke runs,
 # e.g. EXTRA_TAIL_OVERRIDES="trainer.max_iter=5 job.wandb_mode=offline".
 TAIL_OVERRIDES=(
-    dataloader_train.max_samples_per_batch=32   # 32 x (shard 8 x replicate 8) x ga1 = global batch 2048
     ${EXTRA_TAIL_OVERRIDES:-}
 )
 
