@@ -46,8 +46,7 @@ bash examples/launch_sft_action_policy_libero.sh   # HSDP 2x8; set NNODES/NODE_R
 
 Recipe knobs live in `action_policy_libero_nano`; the TOML sets run-level scalars
 (lr 5e-5, warmup 500, cycle 16000, `save_iter=500`, HSDP 2x8). Global batch is
-2048 = `max_samples_per_batch` 128 × 16 ranks × grad_accum 1; on lower-memory GPUs
-reduce it: `--opts dataloader_train.max_samples_per_batch=64`. Sweep the saved
+2048 = `max_samples_per_batch` 128 × 16 ranks × grad_accum 1. Sweep the saved
 checkpoints to pick the best iteration.
 
 ## 3. Closed-loop eval
@@ -93,9 +92,13 @@ MUJOCO_GL=egl PYTHONPATH=$PWD:$PWD/LIBERO $VV \
   --output_dir results/libero_closed_loop_10
 ```
 
-## 4. Eval parity
+## 4. Heads-up
 
-The client/server already handle these; verify them if accuracy is low:
+- **Lower-memory GPUs** — reduce the per-rank batch:
+  `--opts dataloader_train.max_samples_per_batch=64` (scale `replicate` to keep
+  global batch 2048).
+
+Eval parity — the client/server already handle these; verify if accuracy is low:
 
 - **Concat layout** — run with `--camera agentview,wrist --image_size 256` so the
   256×512 concat matches training (the server snaps it to 192×320 identically).

@@ -6,9 +6,9 @@
 # action-policy SFT (HSDP, full SFT). Drives cosmos_framework.scripts.train
 # against examples/toml/sft_config/action_policy_libero_repro.toml.
 #
-# Point LIBERO_ROOT at the libero_10 suite ONLY (the full suite mix dilutes
-# libero_10). Use the 20 FPS nvidia/LIBERO_LeRobot_v3. The default recipe is
-# HSDP 2x8 (global batch 2048); set NNODES/NODE_RANK/MASTER_ADDR per node.
+# Point LIBERO_ROOT at the libero_10 suite ONLY. Use the 20 FPS
+# nvidia/LIBERO_LeRobot_v3. The default recipe is HSDP 2x8 (global batch 2048);
+# set NNODES/NODE_RANK/MASTER_ADDR per node.
 # See docs/action_policy_libero_sft.md.
 #
 # Required env vars:

@@ -195,8 +195,7 @@ action_policy_libero_nano = LazyDict(
                     libero=dict(
                         ratio=1,
                         dataset=L(get_action_libero_sft_dataset)(
-                            # Local LeRobot dir for the libero_10 suite ONLY (the
-                            # full suite mix dilutes libero_10; see module docstring). Use the
+                            # Local LeRobot dir for the libero_10 suite ONLY. Use the
                             # 20 FPS nvidia/LIBERO_LeRobot_v3 (matches the bundled stats + 20 Hz eval):
                             #   hf download nvidia/LIBERO_LeRobot_v3 --repo-type dataset \
                             #     --include 'libero_10/**' --local-dir <dir>   # LIBERO_ROOT=<dir>/libero_10

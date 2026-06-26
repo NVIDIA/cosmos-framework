@@ -176,7 +176,7 @@ def get_action_libero_sft_dataset(
     → 256x512) through ``ActionTransformPipeline``. ``root`` is a LOCAL LeRobot dir
     (read parquet + video directly); pre-sync the HF dataset once, e.g.
     ``hf download lerobot/libero_10 --repo-type dataset --local-dir <root>``. Point
-    ``root`` at libero_10 alone (the all-suites mix dilutes libero_10 per step). The
+    ``root`` at libero_10 alone. The
     dataset is FPS-agnostic (decodes at real frame timestamps); ``fps`` is metadata
     for ``conditioning_fps`` / prompt duration.
     """
