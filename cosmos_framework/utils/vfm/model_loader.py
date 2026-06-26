@@ -18,21 +18,7 @@ import torch.distributed.checkpoint as dcp
 try:
     from filelock import SoftReadWriteLock
 except ImportError:  # Older filelock versions in some inference containers.
-    try:
-        from filelock import ReadWriteLock as SoftReadWriteLock
-    except ImportError:
-        from filelock import FileLock
-
-        class SoftReadWriteLock:
-            """Compatibility adapter for filelock versions without read/write locks."""
-
-            def __init__(self, *args: Any, **kwargs: Any) -> None:
-                self._lock = FileLock(*args, **kwargs)
-
-            def write_lock(self) -> FileLock:
-                return self._lock
-
-
+    from filelock import ReadWriteLock as SoftReadWriteLock
 from torch.distributed.checkpoint.filesystem import FileSystemReader, FileSystemWriter
 
 from cosmos_framework.checkpoint.s3_filesystem import S3StorageReader
@@ -185,32 +171,6 @@ def _checkpoint_cache_group_lock(
         yield action
 
 
-def _reload_pretrained_reasoner_after_checkpoint_load(model: torch.nn.Module) -> None:
-    """Re-seed the reasoner pathway after a DCP load, mirroring the LoadPretrained
-    callback that runs during training (inference does not run training callbacks).
-
-    The decision is delegated entirely to the model's own gate in
-    ``load_pretrained_model_if_needed``: this is a no-op unless the model was built
-    with ``exclude_reasoner_weights_from_checkpoint=True`` (and pretrained weights
-    enabled), i.e. the case where the DCP checkpoint deliberately omits the reasoner
-    tower so it must be re-seeded from the pretrained source. For a normal checkpoint
-    that already contains the reasoner, the model's gate evaluates to False and
-    nothing is reloaded.
-
-    ``has_resumable_checkpoint=True`` / ``has_load_path=False`` is load-bearing: it
-    re-seeds the reasoner from the pretrained source while skipping the
-    understanding->generation copy (the generation pathway was already populated by
-    the DCP load). Passing ``has_load_path=True`` would instead force a reasoner
-    reload even for non-excluded checkpoints, clobbering any fine-tuned reasoner
-    weights restored from the DCP.
-    """
-    load_pretrained_model_if_needed = getattr(model, "load_pretrained_model_if_needed")
-    load_pretrained_model_if_needed(
-        has_resumable_checkpoint=True,
-        has_load_path=False,
-    )
-
-
 def _load_model(
     model: torch.nn.Module,
     checkpoint_path: str,
@@ -234,9 +194,6 @@ def _load_model(
     start_time = time.time()
 
     state_dict = ModelWrapper(model).state_dict()
-    if any(key.startswith("net_teacher.") for key in state_dict):
-        log.info("Dropping net_teacher.* keys from inference load target; distillation checkpoints do not save them.")
-        state_dict = {key: value for key, value in state_dict.items() if not key.startswith("net_teacher.")}
 
     if checkpoint_path.startswith("s3://"):
         storage_reader = S3StorageReader(
@@ -252,10 +209,19 @@ def _load_model(
         keys_to_skip_loading=keys_to_skip_loading or [],
     )
 
+    # Single-rank load (e.g. the action policy inference server): force no_dist so
+    # ``dcp.load`` skips the collective ``gather_object`` over the load plan. That
+    # gather pickles the plan, which fails with "cannot pickle code objects" for
+    # training/EMA DCPs whose metadata carries non-tensor objects; a single process
+    # owns the full checkpoint anyway, so the collective is unnecessary. Multi-rank
+    # (sharded) loads keep the default distributed path.
+    no_dist = not (dist.is_available() and dist.is_initialized() and dist.get_world_size() > 1)
+
     dcp.load(
         state_dict=state_dict,
         storage_reader=storage_reader,
         planner=load_planner,
+        no_dist=no_dist,
     )
 
     log.info(f"Successfully loaded model from {checkpoint_path}")
@@ -394,16 +360,6 @@ def load_model_from_checkpoint(
 
     # Disable EMA for inference.
     config.model.config.ema.enabled = False
-    if hasattr(config.model.config, "load_teacher_weights"):
-        log.info("Setting load_teacher_weights=False for inference to skip teacher checkpoint download.")
-        config.model.config.load_teacher_weights = False
-
-    if (
-        config.model.config.exclude_reasoner_weights_from_checkpoint
-        and not config.model.config.vlm_config.pretrained_weights.enabled
-    ):
-        log.info("Enabling pretrained reasoner weights because this checkpoint excludes the reasoner tower from DCP.")
-        config.model.config.vlm_config.pretrained_weights.enabled = True
 
     config.validate()
     config.freeze()  # type: ignore
@@ -479,7 +435,6 @@ def load_model_from_checkpoint(
 
     if checkpoint_cache_path is None:
         load_model(checkpoint_path)
-        _reload_pretrained_reasoner_after_checkpoint_load(model)
         return model, config
 
     cache_lock_path = f"{checkpoint_cache_path}.lock"
@@ -496,7 +451,5 @@ def load_model_from_checkpoint(
 
     if cache_action == _CheckpointCacheAction.LOAD_CACHE:
         load_model(checkpoint_cache_path)
-
-    _reload_pretrained_reasoner_after_checkpoint_load(model)
 
     return model, config
