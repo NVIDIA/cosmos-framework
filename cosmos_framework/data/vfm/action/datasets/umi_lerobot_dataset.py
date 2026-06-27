@@ -13,6 +13,7 @@ import numpy as np
 import torch
 from lerobot.datasets.video_utils import decode_video_frames
 
+from cosmos_framework.data.vfm.action.action_normalization import load_action_stats
 from cosmos_framework.data.vfm.action.action_spec import ActionSpec, Gripper, Pos, Rot, build_action_spec
 from cosmos_framework.data.vfm.action.datasets.base_dataset import ActionBaseDataset
 from cosmos_framework.data.vfm.action.pose_utils import (
@@ -23,12 +24,23 @@ from cosmos_framework.data.vfm.action.pose_utils import (
 PoseConvention = Literal["backward_framewise"]
 Viewpoint = Literal["wrist_view"]
 
-# Default image key for wrist camera in UMI LeRobot datasets.
-_IMAGE_FEATURE = "observation.images.camera0"
-_STATE_FEATURE = "observation.state"
-_ACTION_FEATURE = "action"
+# Feature keys matching UMI LeRobot parquet columns.
+# Trajectory: 7D [pos(3), quat_wxyz(4)] — the main-camera TCP pose.
+_TRAJ_KEY = "observation.state.right_main_camera_trajectory_xyz_wxyz"
+_GRIPPER_KEY = "observation.state.right_gripper_width_m"
+_IMAGE_FEATURE = "observation.image.right_main_camera_rgb"
+
+# Default EEF-in-camera-frame offset (most UMI rigs).
+# touch_in_the_wild / FastUMI use FORWARD_EEF_IN_CAMERA_FRAME_XYZ_WXYZ with z=0.056.
+_DEFAULT_EEF_IN_CAMERA_FRAME_XYZ_WXYZ: tuple[float, ...] = (0.0, 0.086, 0.09, 1.0, 0.0, 0.0, 0.0)
+FORWARD_EEF_IN_CAMERA_FRAME_XYZ_WXYZ: tuple[float, ...] = (0.0, 0.086, 0.056, 1.0, 0.0, 0.0, 0.0)
+"""EEF offset for touch_in_the_wild / FastUMI rigs (camera mounted slightly forward)."""
 
 _NORMALIZER_PATH = Path(__file__).parent / "stats/umi_lerobot_stats.json"
+
+# Action layout: single-arm is the first 10D of the 20D bimanual stats file
+# (right_eef_poses(9) + right_eef_commands(1)).
+_SINGLE_ARM_ACTION_DIM = 10
 
 
 class UMILeRobotDataset(ActionBaseDataset):
@@ -37,14 +49,17 @@ class UMILeRobotDataset(ActionBaseDataset):
         [pos_delta(3), rot6d_delta(6), gripper_width(1)]
 
     Expects a LeRobot v2 dataset with:
-      * ``observation.images.image``: wrist-mounted RGB video (configurable via
-        ``image_key``).
-      * ``observation.state``: 7D EEF state ``[pos(3), rot_axisangle(3),
-        gripper_width(1)]``.
-      * ``action``: 7D commanded state in the same format.
+      * ``observation.images.camera0``: wrist-mounted RGB video (configurable
+        via ``image_key``).
+      * ``observation.state.right_main_camera_trajectory_xyz_wxyz``: 7D camera
+        TCP pose ``[pos(3), quat_wxyz(4)]`` for frames [0 .. chunk_length].
+      * ``observation.state.right_gripper_width_m``: scalar gripper width for
+        frames [1 .. chunk_length] (commanded future widths).
 
-    Absolute axis-angle EEF poses are converted to backward-framewise rot6d
-    relative poses, and the gripper width is taken from the commanded action.
+    Poses are transformed from the camera TCP frame to the EEF frame via
+    ``eef_in_camera_frame_xyz_wxyz``, then converted to backward-framewise
+    rot6d relative poses.  The stats file stores 20D bimanual stats (right +
+    left arm); single-arm normalization uses only the first 10D (right arm).
     """
 
     def __init__(
@@ -54,11 +69,12 @@ class UMILeRobotDataset(ActionBaseDataset):
         chunk_length: int = 16,
         mode: str = "joint",
         pose_convention: PoseConvention = "backward_framewise",
-        tolerance_s: float = 2e-4,
+        tolerance_s: float = 1e-4,
         viewpoint: Viewpoint = "wrist_view",
         action_normalization: str | None = "quantile",
         sample_stride: int = 1,
         image_key: str = _IMAGE_FEATURE,
+        eef_in_camera_frame_xyz_wxyz: tuple[float, ...] = _DEFAULT_EEF_IN_CAMERA_FRAME_XYZ_WXYZ,
     ) -> None:
         if viewpoint != "wrist_view":
             raise NotImplementedError("This UMI dataset only supports wrist_view.")
@@ -76,9 +92,14 @@ class UMILeRobotDataset(ActionBaseDataset):
         )
         self._image_key = image_key
 
+        xyz_wxyz = np.asarray(eef_in_camera_frame_xyz_wxyz, dtype=np.float32).reshape(1, 7)
+        self._eef_in_camera_frame_mat: np.ndarray = build_abs_pose_from_components(
+            xyz_wxyz[:, :3], xyz_wxyz[:, 3:], "quat_wxyz"
+        )[0]  # [4, 4]
+
     @property
     def action_dim(self) -> int:
-        return 10
+        return _SINGLE_ARM_ACTION_DIM
 
     def _action_spec(self) -> ActionSpec:
         return build_action_spec(Pos(), Rot("rot6d"), Gripper())
@@ -87,16 +108,26 @@ class UMILeRobotDataset(ActionBaseDataset):
     def _stats_path(cls) -> Path:
         return _NORMALIZER_PATH
 
+    @classmethod
+    def load_action_stats(cls) -> dict[str, torch.Tensor]:
+        # Stats file stores 20D bimanual layout (right + left arm).
+        # Single-arm normalization uses only the first 10D (right arm).
+        raw = {
+            key: torch.from_numpy(value).float()
+            for key, value in load_action_stats(str(cls._stats_path())).items()
+        }
+        return {key: tensor[:_SINGLE_ARM_ACTION_DIM] for key, tensor in raw.items()}
+
     def __getitem__(self, idx: int) -> dict[str, Any]:
         mode = self._choose_mode()
         idx = int(idx)
         row_idx = idx * self._sample_stride
+        # T+1 rows: current frame + T future frames
         observation_rows = self._rows[row_idx : row_idx + self._chunk_length + 1]
-        action_rows = observation_rows[: self._chunk_length]
 
         episode = self._episodes[int(observation_rows[0]["episode_index"])]
         video = self._load_video(episode, observation_rows)
-        raw_action, initial_pose = self._build_raw_action(observation_rows, action_rows)
+        raw_action, initial_pose = self._build_raw_action(observation_rows)
         task = self._tasks[int(observation_rows[0]["task_index"])]
         ai_caption = random.choice([part.strip() for part in task.split(" | ") if part.strip()] or [task])
 
@@ -119,16 +150,26 @@ class UMILeRobotDataset(ActionBaseDataset):
     def _build_raw_action(
         self,
         observation_rows: list[dict[str, Any]],
-        action_rows: list[dict[str, Any]],
     ) -> tuple[torch.Tensor, torch.Tensor]:
-        # State is 7D: [pos(3), rot_axisangle(3), gripper_width(1)]
-        state = np.asarray([row[_STATE_FEATURE] for row in observation_rows], dtype=np.float32)
-        poses_abs = build_abs_pose_from_components(state[:, 0:3], state[:, 3:6], "axisangle")
+        # Trajectory: T+1 poses, [pos(3), quat_wxyz(4)] per frame.
+        traj = np.asarray([row[_TRAJ_KEY] for row in observation_rows], dtype=np.float32)  # [T+1, 7]
+        poses_abs = build_abs_pose_from_components(traj[:, :3], traj[:, 3:], "quat_wxyz")  # [T+1, 4, 4]
 
         initial_pose = torch.from_numpy(poses_abs[0].copy()).float()
-        poses_rel = pose_abs_to_rel(poses_abs, rotation_format="rot6d", pose_convention=self._pose_convention)
 
-        # Gripper width from commanded action (7th column)
-        gripper = np.asarray([row[_ACTION_FEATURE][6] for row in action_rows], dtype=np.float32).reshape(-1, 1)
-        action = np.concatenate([poses_rel[-self._chunk_length :], gripper[-self._chunk_length :]], axis=-1)
+        # Transform from camera TCP frame to EEF frame, then compute relative poses.
+        eef_poses_abs = poses_abs @ self._eef_in_camera_frame_mat  # [T+1, 4, 4]
+        eef_poses_rel = pose_abs_to_rel(
+            eef_poses_abs, rotation_format="rot6d", pose_convention=self._pose_convention
+        )  # [T, 9]
+
+        # Gripper command: future frames only (rows[1:]), matching gripper_indices=[1..T].
+        gripper_rows = observation_rows[1:]
+        gripper_vals = [row[_GRIPPER_KEY] for row in gripper_rows]
+        gripper = np.asarray(
+            [float(v) if np.isscalar(v) else float(v[0]) for v in gripper_vals],
+            dtype=np.float32,
+        ).reshape(-1, 1)  # [T, 1]
+
+        action = np.concatenate([eef_poses_rel, gripper], axis=-1)  # [T, 10]
         return torch.from_numpy(action).float(), initial_pose
