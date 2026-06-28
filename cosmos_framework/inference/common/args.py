@@ -195,14 +195,31 @@ def download_file(url, output_dir, output_name):
     """Download a file from a URL to a local path.
 
     * Skip if the file already exists.
-    * Only download on rank 0.
+    * Only download on rank 0, then synchronize the resolved path across ranks.
     """
     if not url or "://" not in url:
         return url
     ext = Path(url).suffix.lower()
     download_path = output_dir / f"{output_name}{ext}"
+    rank0_error: Exception | None = None
     if is_rank0():
-        _download_file(url, download_path)
+        try:
+            _download_file(url, download_path)
+        except Exception as exc:  # noqa: BLE001
+            rank0_error = exc
+
+    import torch.distributed as dist
+
+    rank0_error_message = None if rank0_error is None else f"{type(rank0_error).__name__}: {rank0_error}"
+    if dist.is_available() and dist.is_initialized():
+        error_messages = [rank0_error_message]
+        dist.broadcast_object_list(error_messages, src=0)
+        rank0_error_message = error_messages[0]
+
+    if rank0_error_message is not None:
+        raise RuntimeError(f"Distributed download failed for {url}: {rank0_error_message}") from rank0_error
+    if not download_path.exists():
+        raise FileNotFoundError(f"Expected downloaded file to exist after synchronization: {download_path}")
     return str(download_path)
 
 
