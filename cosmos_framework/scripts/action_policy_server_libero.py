@@ -68,6 +68,7 @@ from cosmos_framework.data.vfm.action.action_processing import (
     make_batched_action_processing_fields,
 )
 from cosmos_framework.data.vfm.action.domain_utils import get_domain_id
+from cosmos_framework.data.vfm.action.json_formatter import ActionPromptJsonFormatter
 from cosmos_framework.data.vfm.action.transforms import (
     build_sequence_plan_from_mode,
     find_closest_target_size,
@@ -95,6 +96,11 @@ ResolvedActionNormalization = Literal["meanstd", "minmax", "quantile", "quantile
 
 _DURATION_FPS_TEMPLATE = "The video is {duration:.1f} seconds long and is of {fps:.0f} FPS."
 _RESOLUTION_TEMPLATE = "This video is of {height}x{width} resolution."
+
+# Viewpoint tag for the concat_view (third-person + wrist) eval the LIBERO client runs;
+# matches LIBEROLeRobotDataset's _VIEWPOINT_BY_CAMERA["concat_view"]. Used only when the
+# experiment trains with JSON-structured prompts (format_prompt_as_json=True).
+_LIBERO_JSON_VIEWPOINT = "concat_view"
 
 
 # ---------------------------------------------------------------------------
@@ -474,6 +480,12 @@ class ActionServerArgs(pydantic.BaseModel):
     """Action normalization to invert. ``auto`` reads ``action_normalization``
     from the experiment config (default ``minmax`` if unspecified)."""
 
+    # ----- prompt format ------------------------------------------------------
+    format_prompt_as_json: bool | None = None
+    """Serve prompts as structured JSON (matching training ``format_prompt_as_json``).
+    ``None`` reads the flag from the experiment config; set explicitly to override when
+    the eval experiment differs from the checkpoint's training prompt format."""
+
     # ----- debug dumps --------------------------------------------------------
     dump_dir: Path | None = None
     """If set, dump observations, predicted actions, and rollout videos under
@@ -647,9 +659,23 @@ class ActionModelService:
         self.append_resolution_info = _extract_bool_from_config(
             self.experiment_config, "append_resolution_info", default=True
         )
+        # When the experiment trains with format_prompt_as_json=True, the caption is a
+        # structured JSON dict (ActionPromptJsonFormatter) and the legacy string appenders
+        # are skipped. Mirror that at serve time so the prompt format matches training. The
+        # CLI flag overrides the config when the eval experiment differs from the checkpoint.
+        if args.format_prompt_as_json is not None:
+            self.format_prompt_as_json = bool(args.format_prompt_as_json)
+        else:
+            self.format_prompt_as_json = _extract_bool_from_config(
+                self.experiment_config, "format_prompt_as_json", default=False
+            )
+        self._prompt_json_formatter = (
+            ActionPromptJsonFormatter(caption_key="ai_caption") if self.format_prompt_as_json else None
+        )
         log.info(
             f"[action-server] prompt augmentation: "
-            f"append_duration_fps={self.append_duration_fps}, append_resolution_info={self.append_resolution_info}"
+            f"append_duration_fps={self.append_duration_fps}, append_resolution_info={self.append_resolution_info}, "
+            f"format_prompt_as_json={self.format_prompt_as_json}"
         )
 
         # Action denormalization stats.
@@ -815,6 +841,28 @@ class ActionModelService:
             input_video_key = getattr(self.model, "config", None).input_video_key  # type: ignore[union-attr]
         return input_video_key
 
+    def _build_json_prompt(self, prompt: str, *, video: torch.Tensor, image_size: torch.Tensor) -> str:
+        """Reproduce the training-time JSON prompt for format_prompt_as_json=True runs.
+
+        Runs the same ``ActionPromptJsonFormatter`` the training pipeline uses (after
+        spatial resize/pad), then ``json.dumps`` the dict exactly as
+        ``TextTokenizerTransform`` does before tokenization. ``idle_frames=0`` matches the
+        modal active-manipulation chunk (the policy should keep moving); ``viewpoint`` and
+        the zero ``action`` (total-frame count) mirror the LIBERO concat_view dataset."""
+        data_dict: dict[str, Any] = {
+            "ai_caption": prompt,
+            "viewpoint": _LIBERO_JSON_VIEWPOINT,
+            "video": video,  # post-pad [C,T,H,W]; formatter reads T for duration
+            "image_size": image_size,  # post-pad [H,W]; formatter reads resolution
+            "conditioning_fps": torch.tensor(self.cfg.fps, dtype=torch.long),
+            "mode": "policy",
+            # Zero action chunk: only its frame count (chunk length) is read, for "<idle> out of <N>".
+            "action": torch.zeros((self.cfg.action_chunk_size, self.cfg.max_action_dim), dtype=torch.float32),
+            "idle_frames": torch.tensor(0, dtype=torch.long),
+        }
+        formatted = self._prompt_json_formatter(data_dict)["ai_caption"]
+        return json.dumps(formatted) if isinstance(formatted, dict) else str(formatted)
+
     def _prep_policy_item(self, req: dict[str, Any]) -> dict[str, Any]:
         """Validate one request and build the per-sample model inputs (video pad,
         prompt augmentation, sequence_plan). Shared by predict_policy (batch=1) and
@@ -856,15 +904,20 @@ class ActionModelService:
             action_length=self.cfg.action_chunk_size,
             has_text=True,
         )
-        augmented_prompt = _augment_prompt_with_metadata(
-            prompt,
-            t_frames=t_frames,
-            fps=self.cfg.fps,
-            height=final_h,
-            width=final_w,
-            append_duration_fps=self.append_duration_fps,
-            append_resolution_info=self.append_resolution_info,
-        )
+        if self._prompt_json_formatter is not None:
+            augmented_prompt = self._build_json_prompt(
+                prompt, video=pad_dict["video"], image_size=pad_dict["image_size"]
+            )
+        else:
+            augmented_prompt = _augment_prompt_with_metadata(
+                prompt,
+                t_frames=t_frames,
+                fps=self.cfg.fps,
+                height=final_h,
+                width=final_w,
+                append_duration_fps=self.append_duration_fps,
+                append_resolution_info=self.append_resolution_info,
+            )
         return {
             "img_chw_uint8": img_chw_uint8,
             "video_padded": pad_dict["video"],
