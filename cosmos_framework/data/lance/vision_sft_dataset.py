@@ -18,7 +18,7 @@ from transformers import AutoTokenizer
 
 from cosmos_framework.data.vfm.local_datasets.helper import get_aspect_ratio
 from cosmos_framework.data.vfm.local_datasets.sft_dataset import _select_caption
-from cosmos_framework.data.vfm.sequence_packing import add_special_tokens
+from cosmos_framework.data.vfm.sequence_packing.modalities import add_special_tokens
 from cosmos_framework.data.vfm.utils import VIDEO_RES_SIZE_INFO
 from cosmos_framework.model.vfm.vlm.qwen3_vl.utils import tokenize_caption
 
