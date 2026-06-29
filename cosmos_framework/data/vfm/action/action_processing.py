@@ -91,6 +91,7 @@ def load_action_stats(stats_path: str, stats_key: str = "global") -> dict[str, n
 def resolve_action_normalization(
     method: ActionNormalizationMethod,
     stats: dict[str, torch.Tensor],
+    apply_forward_clamp: bool = False,
 ) -> ActionAffineNormalization:
     """Resolve configured action stats into affine forward/inverse parameters."""
     if method == "meanstd":
@@ -109,10 +110,17 @@ def resolve_action_normalization(
 
     offset = (hi + lo) / 2.0  # [D]
     scale = (hi - lo).clamp(min=1e-8) / 2.0  # [D]
+
+    if apply_forward_clamp:
+        # Ideally this hardcode should be removed, but for now we keep it so we can be aligned with mid-training checkpoints.
+        forward_clamp = (-1.0, 1.0)
+    else:
+        forward_clamp = None
+
     return ActionAffineNormalization(
         offset=offset,
         scale=scale,
-        forward_clamp=(-1.0, 1.0),
+        forward_clamp=forward_clamp,
     )
 
 

@@ -669,6 +669,15 @@ class SFTExperimentConfig(BaseModel):
     trainer: TrainerConfig = Field(default_factory=TrainerConfig)
     checkpoint: CheckpointConfig = Field(default_factory=CheckpointConfig)
     dataloader_train: DataloaderTrainConfig = Field(default_factory=DataloaderTrainConfig)
+    custom: dict[str, Any] = Field(
+        default_factory=dict,
+        description=(
+            "Free-form, project-owned escape hatch. Arbitrary nested content "
+            "passes through verbatim — the framework never validates inside it. "
+            "Injected onto the loaded config as ``config.custom`` after Hydra "
+            "resolution; specify concrete values here (no ${...} interpolation)."
+        ),
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -693,16 +702,17 @@ def load_experiment_from_toml(
         ["optimizer.lr=1e-5", "trainer.max_iter=200"]
         ["model.config.parallelism.data_parallel_shard_degree=4"]
 
-    Calls ``cosmos_framework.utils.config.load_config`` which:
+    The load then:
 
-    1. Imports the base config module and runs ``make_config()``. This
-       registers every config group (model, ema, tokenizer, ...) and imports
-       all experiment modules so their ``cs.store(group="experiment", ...)``
-       side-effects fire.
-    2. Runs ``override(config, overrides)`` — Hydra ``compose`` then resolves
-       the ``experiment=<name>`` selector against ``ConfigStore`` and applies
-       the dotted-path overrides we generated from the TOML, followed by
-       ``extra_overrides``.
+    1. Runs ``load_config`` — imports the base config module, runs
+       ``make_config()`` (registers config groups + experiment modules), and
+       lets Hydra ``compose`` resolve the ``experiment=<name>`` selector and
+       apply the dotted-path overrides, followed by ``extra_overrides``.
+    2. Injects the TOML's ``[custom]`` table (if any) verbatim onto
+       ``config.custom`` *after* loading — kept out of ``build_hydra_overrides``
+       so it lands as-is, not per-leaf-remapped. Because this happens after
+       Hydra resolution, ``[custom]`` must hold concrete values; ``${...}``
+       interpolation against ``custom`` is not supported.
 
     Returns the merged ``Config`` instance, ready for ``launch()``.
     """
@@ -740,4 +750,10 @@ def load_experiment_from_toml(
     # Import lazily so this module stays cheap to import in non-training contexts.
     from cosmos_framework.utils.config import load_config
 
-    return load_config(base_config_path, overrides)
+    config = load_config(base_config_path, overrides)
+
+    # Inject [custom] verbatim after Hydra resolution. Kept off the base config
+    # schema so the framework-owned hydra configs stay untouched; lands as a
+    # plain dict reachable via config.custom.
+    config.custom = raw.get("custom", {})
+    return config

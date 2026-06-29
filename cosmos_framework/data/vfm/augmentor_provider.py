@@ -10,6 +10,7 @@ import cosmos_framework.data.imaginaire.webdataset.augmentors.image.resize as re
 import cosmos_framework.data.vfm.augmentors.append_fps_frames_for_image as append_fps_frames_for_image
 import cosmos_framework.data.vfm.augmentors.audio_caption as audio_caption
 import cosmos_framework.data.vfm.augmentors.caption_filter as caption_filter
+import cosmos_framework.data.vfm.augmentors.cropping as cosmos_cropping
 import cosmos_framework.data.vfm.augmentors.duration_fps_text_timestamps as duration_fps_text_timestamps
 import cosmos_framework.data.vfm.augmentors.image_resolution_filter as image_resolution_filter
 import cosmos_framework.data.vfm.augmentors.merge_datadict as merge_datadict
@@ -24,6 +25,9 @@ from cosmos_framework.utils.lazy_config import LazyDict
 from cosmos_framework.utils import log
 from cosmos_framework.data.vfm.augmentors import sequence_plan
 from cosmos_framework.data.vfm.utils import IMAGE_RES_SIZE_INFO, VIDEO_RES_SIZE_INFO
+
+# UniAE requires spatial dimensions divisible by (spatial_compression * patch_spatial) = 16 * 2 = 32.
+UNIAE_SPATIAL_MULTIPLE = 32
 
 AUGMENTOR_OPTIONS = {}
 
@@ -617,9 +621,20 @@ def get_video_augmentor_v3(
                 input_keys=["video"],
                 args={"size": VIDEO_RES_SIZE_INFO[resolution]},
             ),
-            "reflection_padding": L(padding.ReflectionPadding)(
-                input_keys=["video"],
-                args={"size": VIDEO_RES_SIZE_INFO[resolution]},
+            **(
+                {
+                    "reflection_padding": L(padding.ReflectionPadding)(
+                        input_keys=["video"],
+                        args={"size": VIDEO_RES_SIZE_INFO[resolution]},
+                    )
+                }
+                if causal_vae
+                else {
+                    "crop_to_multiple": L(cosmos_cropping.CropToMultiple)(
+                        input_keys=["video"],
+                        args={"multiple": UNIAE_SPATIAL_MULTIPLE},
+                    )
+                }
             ),
             "text_transform": L(text_transforms_for_video.TextTransformForVideoWithFullFrames)(
                 input_keys=["metas", "ai_caption", "sequence_plan"],
@@ -781,6 +796,8 @@ def get_video_augmentor_v3_json_caption(
     use_dynamic_fps: bool = False,
     max_stride: int = 3,
     min_stride: int = 1,
+    min_fps: float = 10.0,
+    max_fps: float = 60.0,
     use_system_prompt: bool = False,
     resize_on_read: bool = False,
     dataset_resolution_type: str = "all",
@@ -842,7 +859,6 @@ def get_video_augmentor_v3_json_caption(
     uniae_pad_frames = kwargs.get("uniae_pad_frames", None)
     uniae_chunk_frames = kwargs.get("uniae_chunk_frames", None)
 
-    print("Running video_augmentor_v3_json_caption...")
     augmentors = {
         # Caption parsing runs BEFORE video parsing so that VideoParsingChunkedFrames can
         # decode only the frames belonging to a randomly sampled caption chunk.
@@ -863,6 +879,8 @@ def get_video_augmentor_v3_json_caption(
                 "use_dynamic_fps": use_dynamic_fps,
                 "max_stride": max_stride,
                 "min_stride": min_stride,
+                "min_fps": min_fps,
+                "max_fps": max_fps,
                 "seek_mode": "exact",
                 "dataset_resolution_type": dataset_resolution_type,
                 "resolution": resolution,
@@ -908,9 +926,20 @@ def get_video_augmentor_v3_json_caption(
                 input_keys=["video"],
                 args={"size": VIDEO_RES_SIZE_INFO[resolution]},
             ),
-            "reflection_padding": L(padding.ReflectionPadding)(
-                input_keys=["video"],
-                args={"size": VIDEO_RES_SIZE_INFO[resolution]},
+            **(
+                {
+                    "reflection_padding": L(padding.ReflectionPadding)(
+                        input_keys=["video"],
+                        args={"size": VIDEO_RES_SIZE_INFO[resolution]},
+                    )
+                }
+                if causal_vae
+                else {
+                    "crop_to_multiple": L(cosmos_cropping.CropToMultiple)(
+                        input_keys=["video"],
+                        args={"multiple": UNIAE_SPATIAL_MULTIPLE},
+                    )
+                }
             ),
             # Duration/FPS timestamp augmentor - appends metadata like "The video is 2.5 seconds long and is of 24 FPS."
             # To customize the template or separator, add them to the args dict below:

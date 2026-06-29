@@ -93,6 +93,23 @@ def register_schedulers(lambdacosine_kwargs: dict[str, Any]) -> None:
             **lambdacosine_kwargs,
         ),
     )
+    # WSD (Warmup-Stable-Decay) scheduler for LLM pretraining
+    cs.store(
+        group="scheduler",
+        package="scheduler",
+        name="wsd",
+        node=L(build_lr_scheduler)(
+            optimizer=PLACEHOLDER,
+            lr_scheduler_type="wsd",
+            warm_up_steps=2000,
+            total_steps=50000,
+            decay_steps=5000,
+            decay_type="cosine",
+            f_start=0.01,
+            f_max=1.0,
+            f_min=0.1,
+        ),
+    )
 
 
 def register_optimizer() -> None:

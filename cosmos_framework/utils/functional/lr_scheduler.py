@@ -164,3 +164,98 @@ class LambdaLinearScheduler(LambdaWarmUpCosineScheduler):
             )
             self.last_f = f
             return f
+
+
+class WSDScheduler:
+    """Warmup-Stable-Decay (WSD) learning rate scheduler for LLM pretraining.
+
+    Three phases:
+        1. **Warmup** (steps 0 .. warm_up_steps-1):
+           Linear ramp from ``f_start`` to ``f_max``.
+        2. **Stable** (steps warm_up_steps .. total_steps - decay_steps - 1):
+           Constant at ``f_max``.
+        3. **Decay** (last ``decay_steps`` steps):
+           Anneal from ``f_max`` to ``f_min`` using ``decay_type``.
+
+    After ``total_steps`` the multiplier holds at ``f_min`` indefinitely,
+    so training can safely overshoot ``max_iter`` without crashing.
+
+    Reference: MiniCPM / Warmup-Stable-Decay schedule
+    (https://arxiv.org/abs/2404.06395)
+
+    Parameters:
+        warm_up_steps: Number of linear warmup steps.
+        total_steps: Total training steps (warmup + stable + decay).
+        decay_steps: Number of decay steps at the end.
+        decay_type: Decay curve shape — ``"cosine"`` or ``"linear"``.
+        f_start: LR multiplier at step 0.
+        f_max: LR multiplier during the stable phase.
+        f_min: LR multiplier after decay completes.
+        verbosity_interval: Log every N steps (0 = silent).
+
+    Examples:
+        >>> scheduler = WSDScheduler(
+                warm_up_steps=2000, total_steps=50000, decay_steps=5000,
+                decay_type="cosine", f_start=0.01, f_max=1.0, f_min=0.1)
+        >>> for step in range(55000):
+        >>>     lr_multiplier = scheduler(step)
+    """
+
+    def __init__(
+        self,
+        warm_up_steps: int,
+        total_steps: int,
+        decay_steps: int,
+        f_start: float,
+        f_max: float,
+        f_min: float,
+        decay_type: str = "cosine",
+        verbosity_interval: int = 0,
+    ):
+        if decay_type not in ("cosine", "linear"):
+            raise ValueError(f"decay_type must be 'cosine' or 'linear' now, got '{decay_type}'")
+        self.warm_up_steps = warm_up_steps
+        self.total_steps = total_steps
+        self.decay_steps = decay_steps
+        self.decay_type = decay_type
+        self.stable_end = total_steps - decay_steps
+        self.f_start = f_start
+        self.f_max = f_max
+        self.f_min = f_min
+        self.verbosity_interval = verbosity_interval
+        self.last_f = 0.0
+        self._model = None
+
+    @property
+    def model(self):
+        return self._model
+
+    @model.setter
+    def model(self, model):
+        self._model = model
+
+    def schedule(self, n, **kwargs):
+        if n < self.warm_up_steps:
+            # Warmup: linear ramp
+            f = self.f_start + (self.f_max - self.f_start) * n / self.warm_up_steps
+        elif n < self.stable_end:
+            # Stable: constant
+            f = self.f_max
+        elif n < self.total_steps:
+            # Decay
+            t = (n - self.stable_end) / self.decay_steps
+            if self.decay_type == "cosine":
+                f = self.f_min + 0.5 * (self.f_max - self.f_min) * (1 + np.cos(t * np.pi))
+            else:  # linear
+                f = self.f_max + (self.f_min - self.f_max) * t
+        else:
+            # Past total_steps: hold at f_min
+            f = self.f_min
+
+        self.last_f = f
+        if self.verbosity_interval > 0 and n % self.verbosity_interval == 0:
+            log.info(f"current step: {n}, lr-multiplier: {f:.6f}")
+        return f
+
+    def __call__(self, n, **kwargs):
+        return self.schedule(n, **kwargs)

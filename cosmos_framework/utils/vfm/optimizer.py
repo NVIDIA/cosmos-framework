@@ -12,7 +12,7 @@ from torch.distributed.checkpoint.state_dict import StateDictOptions, get_optimi
 from torch.distributed.checkpoint.stateful import Stateful
 from torch.optim.lr_scheduler import LambdaLR, LRScheduler
 
-from cosmos_framework.utils.functional.lr_scheduler import LambdaLinearScheduler, LambdaWarmUpCosineScheduler
+from cosmos_framework.utils.functional.lr_scheduler import LambdaLinearScheduler, LambdaWarmUpCosineScheduler, WSDScheduler
 from cosmos_framework.utils import log
 
 
@@ -404,23 +404,26 @@ def build_optimizer(
 def _lr_scheduler_cls(
     lr_scheduler_type: str,
     **lr_scheduler_kwargs: Any,
-) -> LambdaLinearScheduler | LambdaWarmUpCosineScheduler:
+) -> LambdaLinearScheduler | LambdaWarmUpCosineScheduler | WSDScheduler:
     """Instantiate a lambda-style scheduler whose ``.schedule(step)`` returns an LR multiplier.
 
     Both returned classes expose a ``schedule(step) -> float`` callable that
     :class:`LRSchedulersContainer` wraps with ``torch.optim.lr_scheduler.LambdaLR``
     to drive each optimizer's param-group LRs.  ``lr_scheduler_type`` matching is
-    case-insensitive; valid values are ``"lambdalinear"`` (linear decay) and
-    ``"lambdacosine"`` (warmup + cosine decay).  Any other value raises
-    ``NotImplementedError``.  All remaining ``**lr_scheduler_kwargs`` are
-    forwarded verbatim to the underlying scheduler constructor (e.g.
-    ``warm_up_steps``, ``cycle_lengths``, ``f_start``, ``f_max``, ``f_min``,
+    case-insensitive; valid values are ``"lambdalinear"`` (linear decay),
+    ``"lambdacosine"`` (warmup + cosine decay), and ``"wsd"``
+    (warmup-stable-decay).  Any other value raises ``NotImplementedError``.
+    All remaining ``**lr_scheduler_kwargs`` are forwarded verbatim to the
+    underlying scheduler constructor (e.g. ``warm_up_steps``, ``cycle_lengths``,
+    ``total_steps``, ``decay_steps``, ``f_start``, ``f_max``, ``f_min``,
     ``verbosity_interval``).
     """
     if lr_scheduler_type.lower() == "lambdalinear":
         lr_scheduler = LambdaLinearScheduler(**lr_scheduler_kwargs)
     elif lr_scheduler_type.lower() == "lambdacosine":
         lr_scheduler = LambdaWarmUpCosineScheduler(**lr_scheduler_kwargs)
+    elif lr_scheduler_type.lower() == "wsd":
+        lr_scheduler = WSDScheduler(**lr_scheduler_kwargs)
     else:
         raise NotImplementedError(f"LR Scheduler {lr_scheduler_type} not found.")
     return lr_scheduler
@@ -574,7 +577,7 @@ def build_lr_scheduler(
             :class:`torch.optim.lr_scheduler.LambdaLR` will be built per
             element of this container.
         lr_scheduler_type: Scheduler kind accepted by :func:`_lr_scheduler_cls`
-            — ``"lambdalinear"`` or ``"lambdacosine"`` (case-insensitive).
+            — ``"lambdalinear"``, ``"lambdacosine"``, or ``"wsd"`` (case-insensitive).
         **lr_scheduler_kwargs: Forwarded verbatim to the underlying lambda
             scheduler constructor (e.g. ``warm_up_steps``, ``cycle_lengths``,
             ``f_start``, ``f_max``, ``f_min``, ``verbosity_interval``).

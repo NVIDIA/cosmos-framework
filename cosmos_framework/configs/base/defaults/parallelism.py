@@ -3,13 +3,19 @@
 
 """User-facing parallelism degrees shared by VFM and VLM trainers."""
 
+from typing import Literal
+
 import attrs
 import torch
+
+AttentionIOLayout = Literal["sequence_sharded", "replicated"]
 
 # Canonical mapping from precision string (used in user-facing configs and
 # threaded through OmegaConf) to ``torch.dtype``. Consumed by sites that
 # need to translate ``precision`` / ``fsdp_master_dtype`` into concrete
 # torch dtypes (e.g. ``MixedPrecisionPolicy``, ``HFModel`` meta-init).
+
+
 PRECISION_TO_TORCH_DTYPE: dict[str, torch.dtype] = {
     "bfloat16": torch.bfloat16,
     "float16": torch.float16,
@@ -30,6 +36,15 @@ class ParallelismConfig:
 
     # Number of ranks for context parallelism.
     context_parallel_shard_degree: int = 1
+
+    # Tensor layout at the attention boundary when CP is enabled.  Both
+    # layouts may run the attention kernel with head-sharded Q/K/V:
+    # ``sequence_sharded`` keeps surrounding projections/MLP sequence-sharded
+    # with Ulysses-style all-to-all into/out of attention, while
+    # ``replicated`` keeps current-frame hidden states replicated, slices
+    # local heads before attention, then reduces/gathers attention output back
+    # to replicated hidden states.
+    attention_io_layout: AttentionIOLayout = "sequence_sharded"
 
     # Number of ranks for CFG parallelism.
     cfg_parallel_shard_degree: int = 1

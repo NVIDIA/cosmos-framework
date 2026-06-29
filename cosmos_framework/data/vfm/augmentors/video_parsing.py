@@ -442,8 +442,9 @@ class VideoParsingWithFullFrames(Augmentor):
         self.resolution_tier = _DATASET_RESOLUTION_TIER.get(self.dataset_resolution_type)
 
         # VAE temporal alignment mode.
-        # causal_vae=True  (default): align to 1+4N (causal VAE, e.g. Wan 2.2)
-        # causal_vae=False: align to 4N (non-causal VAE, e.g. UniAE)
+        # causal_vae=True  (default): align to 1+4N                      (causal VAE, e.g. Wan 2.2)
+        # causal_vae=False: align to 1+effective_chunk_frames*N (UniAE with chunk structure)
+        #                   or 4N                               (generic non-causal VAE)
         self.causal_vae = args.get("causal_vae", True)
         self.target_resolution_key = None if args.get("resolution") is None else str(args["resolution"])
         self.uniae_pad_frames = None if args.get("uniae_pad_frames") is None else int(args["uniae_pad_frames"])

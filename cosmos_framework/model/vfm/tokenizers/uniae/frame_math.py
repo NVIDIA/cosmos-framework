@@ -311,6 +311,44 @@ def align_uniae_num_video_frames(
     return num_video_frames
 
 
+def ceil_uniae_num_video_frames(
+    num_video_frames: int,
+    uniae_chunk_frames: int | Mapping[str, int],
+    *,
+    pad_frames: int,
+    temporal_compression_factor: int,
+    resolution: str | None = None,
+    spatial_shape: tuple[int, int] | None = None,
+    target_resolution_key: str | None = None,
+    missing_resolution_message: str = (
+        "spatial_shape or target resolution must be provided for resolution-keyed UniAE chunks"
+    ),
+) -> int:
+    """Round up to the nearest valid UniAE noncausal count, preserving valid partial tails."""
+    if num_video_frames < 1:
+        return 0
+
+    for candidate in range(num_video_frames, num_video_frames + temporal_compression_factor + 1):
+        aligned_candidate = align_uniae_num_video_frames(
+            candidate,
+            uniae_chunk_frames,
+            pad_frames=pad_frames,
+            temporal_compression_factor=temporal_compression_factor,
+            resolution=resolution,
+            spatial_shape=spatial_shape,
+            target_resolution_key=target_resolution_key,
+            missing_resolution_message=missing_resolution_message,
+        )
+        if aligned_candidate == candidate:
+            return candidate
+
+    raise RuntimeError(
+        "Failed to find a valid UniAE frame count within one temporal-compression window: "
+        f"{num_video_frames=}, {uniae_chunk_frames=}, {pad_frames=}, {temporal_compression_factor=}, "
+        f"{resolution=}, {spatial_shape=}, {target_resolution_key=}."
+    )
+
+
 def _validate_full_chunk(
     full_chunk: int,
     *,

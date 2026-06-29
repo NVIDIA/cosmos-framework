@@ -107,9 +107,6 @@ SUPER_MODEL_CONFIG = dict(
     ),
     rectified_flow_training_config=dict(
         action_loss_weight=10.0,
-        high_sigma_ratio=0.05,
-        high_sigma_timesteps_max=1000,
-        high_sigma_timesteps_min=995,
         image_loss_scale=1.0,
         independent_action_schedule=False,
         loss_scale=1.0,
@@ -122,8 +119,6 @@ SUPER_MODEL_CONFIG = dict(
         train_time_weight="uniform",
         use_discrete_rf=False,
         use_dynamic_shift=False,
-        use_high_sigma_strategy=False,
-        use_high_sigma_strategy_action=False,
     ),
     tokenizer=dict(
         bucket_name="",

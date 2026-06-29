@@ -3,9 +3,10 @@
 
 """8-GPU multi-modality inference smoke test for Cosmos3-Nano.
 
-Runs ONE ``cosmos_framework.scripts.inference`` call over three input samples of
-different modalities (the ``-i`` flag takes a list of files) and validates each
-sample's output:
+Runs two ``cosmos_framework.scripts.inference`` calls and validates each output:
+
+1. A ``throughput`` call over three input samples of different modalities (the
+   ``-i`` flag takes a list of files):
 
   * ``inputs/omni/t2vs.json`` (text2video + sound) -> a ``vision.mp4`` whose
     muxed audio is real sound (finite, non-empty, non-silent, non-constant).
@@ -15,8 +16,19 @@ sample's output:
   * ``inputs/omni/action_policy_robot.json`` (policy) -> BOTH a ``vision.mp4`` and
     a finite, non-empty predicted ``action`` array in ``sample_outputs.json``.
 
-All three samples produce a video; the policy sample additionally produces an
-action and the t2vs sample an audio track.
+2. A separate ``latency`` call for a video2video transfer spec (``_TRANSFER_SPEC``,
+   an edge control hint with ``control_guidance`` > 1.0, written to a temp file at
+   run time rather than committed under ``inputs/``) -> a non-degenerate
+   ``vision.mp4``. Exercises the transfer control-CFG path (the extra control-input
+   forward driven by ``control_guidance``). Transfer needs the ``latency`` preset:
+   under ``throughput`` (data-parallel over samples, FSDP-sharded) the extra
+   control forward runs on only the transfer rank and deadlocks the cross-rank
+   allgather, so it cannot share the call above — matching the cookbook's
+   multi-GPU transfer recipe, which is also ``latency``.
+
+All four samples produce a video; the policy sample additionally produces an
+action, the t2vs sample an audio track, and the transfer sample exercises the
+control-guidance branch.
 
 Smoke-level only (output validity, not numeric goldens). The checkpoint + its
 tokenizers download from the HF Hub on first run and are reused afterward.
@@ -49,6 +61,45 @@ _INPUTS = [
     "inputs/omni/action_policy_robot.json",
     "inputs/omni/action_forward_dynamics_camera.json",
 ]
+
+# Transfer (video2video, edge control) input, written to a temp file at run time
+# rather than committed under inputs/. Mirrors the cookbook
+# ``cookbooks/cosmos3/generator/transfer/specs/edge.json`` behavior — the edge
+# control hint with guidance=3.0 + control_guidance=1.5, which selects the
+# control-CFG path — but downscaled (480p / 10 steps / single 29-frame chunk)
+# for a fast smoke run. The control video is the exact same file the cookbook
+# uses, pulled from the public NVIDIA/cosmos GitHub raw URL; the prompt is a
+# compact caption of that clip (the dense cookbook caption is not needed to
+# exercise the path).
+_TRANSFER_CONTROL_URL = (
+    "https://github.com/NVIDIA/cosmos/raw/main/"
+    "cookbooks/cosmos3/generator/transfer/assets/edge/control_edge.mp4"
+)
+_TRANSFER_SPEC = {
+    "name": "transfer_edge",
+    "model_mode": "video2video",
+    "resolution": "480",
+    "aspect_ratio": "16,9",
+    "num_frames": 29,
+    "fps": 30,
+    "shift": 10.0,
+    "num_steps": 10,
+    "seed": 2026,
+    "num_video_frames_per_chunk": 29,
+    "max_frames": 29,
+    "num_conditional_frames": 1,
+    "num_first_chunk_conditional_frames": 0,
+    "share_vision_temporal_positions": True,
+    "guidance": 3.0,
+    "control_guidance": 1.5,
+    "prompt": (
+        "A woman with blonde hair in a low ponytail, wearing a black sleeveless top and black "
+        "leggings, practices a dance routine in a brightly lit rehearsal studio with light wood "
+        "floors, a large red-framed window, and a black curtain."
+    ),
+    "negative_prompt": "blurry, distorted, deformed, low quality, flickering, artifacts",
+    "edge": {"control_path": _TRANSFER_CONTROL_URL, "preset_edge_threshold": "medium"},
+}
 
 # Audio sanity thresholds for the muxed sound track.
 _RMS_SILENCE_FLOOR = 1e-4  # below this the track is effectively silence
@@ -145,6 +196,29 @@ def _assert_valid_video(mp4_path: Path) -> None:
     assert frames >= 1 and width > 0 and height > 0, f"no decodable video frame in {mp4_path}"
 
 
+def _assert_video_has_content(mp4_path: Path, *, min_frames: int = 16) -> None:
+    """Assert ``mp4_path`` decodes to enough non-degenerate frames.
+
+    Stronger than ``_assert_valid_video`` (which only inspects the first frame):
+    decodes the whole clip and checks the frame count plus real pixel variation,
+    so a run that produced a well-formed container but collapsed to a constant /
+    blank video (e.g. a broken control-CFG path) fails instead of passing.
+    """
+    import av
+    import numpy as np
+
+    with av.open(str(mp4_path)) as container:
+        vstreams = container.streams.video
+        assert vstreams, f"no video stream in {mp4_path}"
+        frames = [frame.to_ndarray(format="rgb24") for frame in container.decode(vstreams[0])]
+    assert len(frames) >= min_frames, f"{mp4_path}: expected >= {min_frames} frames, got {len(frames)}"
+    arr = np.stack(frames).astype(np.float64)
+    assert np.all(np.isfinite(arr)), f"{mp4_path}: decoded video has non-finite pixels"
+    # Both spatial and temporal flatness collapse global std toward 0; a real
+    # generated clip sits well above this floor (typically tens on a 0-255 scale).
+    assert arr.std() > 3.0, f"{mp4_path}: degenerate/near-constant video (pixel std={arr.std():.3f})"
+
+
 def _assert_valid_action(content: dict, where: str) -> None:
     """Assert a policy sample's predicted ``action`` is a non-empty, all-finite array."""
     import numpy as np
@@ -177,7 +251,8 @@ if MAX_GPUS == 8:
     @pytest.mark.level(2)
     @pytest.mark.gpus(8)
     def test_nano_inference_omni(tmp_path: Path) -> None:
-        """One Cosmos3-Nano inference call over t2vs + policy + forward_dynamics; check each output."""
+        """Throughput run over t2vs + policy + forward_dynamics, plus a separate latency transfer run."""
+        # --- 1) Throughput run: t2vs + policy + forward_dynamics ----------------
         out_dir = tmp_path / "out"
         cmd = [
             "torchrun",
@@ -222,7 +297,61 @@ if MAX_GPUS == 8:
                 n_action += 1
 
         # Every sample produces a valid video (t2vs, forward_dynamics, policy);
-        # the policy sample additionally yields an action, t2vs an audio track.
+        # the policy sample additionally yields an action and t2vs an audio track.
         assert n_video == len(_INPUTS), f"expected every sample to produce a valid video, got {n_video}/{len(_INPUTS)}"
         assert n_sound >= 1, f"expected the t2vs sample's audio to be checked, got {n_sound}"
         assert n_action >= 1, f"expected the policy sample's action to be checked, got {n_action}"
+
+        # --- 2) Transfer run (separate, latency preset) -------------------------
+        # Control-CFG (control_guidance > 1.0) runs an extra control-dropped forward
+        # each step. Under the throughput preset (data-parallel over samples, FSDP-
+        # sharded) that extra forward executes on only the transfer rank and
+        # deadlocks the cross-rank allgather, so transfer cannot share the call
+        # above; it needs the latency preset (context/CFG parallel -- every rank
+        # runs the same sample together), matching the cookbook multi-GPU transfer
+        # recipe. The spec is generated here (not committed under inputs/) and the
+        # control video is pulled from the public NVIDIA/cosmos GitHub raw URL.
+        # 4 ranks -> cfgp=2, cp=2 (the cookbook Cosmos3-Super transfer layout).
+        transfer_spec = tmp_path / "transfer_edge.json"
+        transfer_spec.write_text(json.dumps(_TRANSFER_SPEC))
+        transfer_out = tmp_path / "out_transfer"
+        transfer_cmd = [
+            "torchrun",
+            "--nproc_per_node=4",
+            f"--master_port={_free_port()}",
+            "-m",
+            "cosmos_framework.scripts.inference",
+            "--parallelism-preset=latency",
+            "-i",
+            str(transfer_spec),
+            "-o",
+            str(transfer_out),
+            "--checkpoint-path",
+            "Cosmos3-Nano",
+            "--seed=0",
+        ]
+        _run(transfer_cmd, tmp_path / "inference_transfer.log")
+
+        transfer_results = sorted(transfer_out.rglob("sample_outputs.json"))
+        assert len(transfer_results) == 1, (
+            f"expected 1 transfer sample_outputs.json, found {[str(p) for p in transfer_results]}"
+        )
+        so = transfer_results[0]
+        args = json.loads(so.read_text()).get("args", {})
+        # Transfer-specific input attributes: the edge control hint + the CFG knobs
+        # that select the control-CFG path.
+        edge = args.get("edge") or {}
+        assert edge.get("control_path"), f"transfer sample missing edge control_path ({so}); args keys={list(args)}"
+        assert args.get("control_guidance", 1.0) > 1.0, (
+            f"expected control-CFG (control_guidance > 1.0), got {args.get('control_guidance')} ({so})"
+        )
+        assert (args.get("guidance") or 1.0) > 1.0, (
+            f"expected text-CFG (guidance > 1.0), got {args.get('guidance')} ({so})"
+        )
+        # A valid, non-degenerate clip produced under control_guidance > 1.0 means the
+        # control-CFG branch ran to completion: a broken postprocess would raise
+        # mid-sampling, and a numerically broken one would collapse the output (caught
+        # by _assert_video_has_content).
+        transfer_video = so.parent / "vision.mp4"
+        assert transfer_video.is_file(), f"transfer run produced no vision.mp4 ({so})"
+        _assert_video_has_content(transfer_video)

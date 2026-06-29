@@ -27,13 +27,6 @@ from cosmos_framework.model.vfm.algorithm.loss.flow_matching import compute_flow
 from cosmos_framework.model.vfm.algorithm.loss.load_balancing import compute_load_balancing_loss
 from cosmos_framework.configs.base.defaults.model_config import OmniMoTModelConfig
 from cosmos_framework.data.vfm.action.action_processing import ActionProcessor, get_action_processing_records
-from cosmos_framework.data.vfm.sequence_packing import (
-    PackedSequence,
-    SequencePlan,
-    add_special_tokens,
-    build_sequence_plans_from_data_batch,
-    pack_input_sequence,
-)
 from cosmos_framework.data.vfm.utils import IMAGE_RES_SIZE_INFO, VIDEO_RES_SIZE_INFO
 from cosmos_framework.model.vfm.diffusion.rectified_flow import RectifiedFlow
 from cosmos_framework.model.vfm.diffusion.samplers.edm import EDMSampler
@@ -53,6 +46,13 @@ from cosmos_framework.model.vfm.utils.data_and_condition import (
 from cosmos_framework.model.vfm.utils.memory import MemoryState
 from cosmos_framework.model.vfm.utils.safetensors_loader import load_language_model as load_language_model_safetensors
 from cosmos_framework.model.vfm.vlm.qwen3_vl.utils import tokenize_caption
+from cosmos_framework.data.vfm.sequence_packing import (
+    PackedSequence,
+    SequencePlan,
+    build_sequence_plans_from_data_batch,
+    pack_input_sequence,
+)
+from cosmos_framework.data.vfm.sequence_packing.modalities import add_special_tokens
 from cosmos_framework.model.vfm.tokenizers.interface import VideoTokenizerInterface
 from cosmos_framework.model.vfm.upsampler.prompts import build_messages, clean_response
 from cosmos_framework.utils.vfm.data_utils import get_vision_data_resolution
@@ -237,6 +237,7 @@ class OmniMoTModel(ImaginaireModel):
             parallel_dims=self.parallel_dims,
             compile_config=self.config.compile,
             ac_config=self.config.activation_checkpointing,
+            attention_io_layout=self.config.parallelism.attention_io_layout,
         )
 
         with misc.timer("meta to cuda and broadcast model states"):
@@ -509,10 +510,10 @@ class OmniMoTModel(ImaginaireModel):
 
     def _derive_include_end_of_generation_token(self) -> bool:
         impl = self.config.joint_attn_implementation
-        assert impl in ("flex", "two_way", "three_way"), (
-            f"Invalid joint_attn_implementation: {impl}. Must be 'flex', 'two_way', or 'three_way'."
+        assert impl in ("two_way", "three_way"), (
+            f"Invalid joint_attn_implementation: {impl}. Must be 'two_way' or 'three_way'."
         )
-        return impl == "flex"
+        return False
 
     # ------------------------ training hooks ------------------------
     def on_before_zero_grad(
@@ -761,8 +762,8 @@ class OmniMoTModel(ImaginaireModel):
         )  # [B, T_vis] each
 
         # Optional independent action schedule (sampled from rectified_flow_action with
-        # action-specific shift/high-sigma overrides). Only active when the config opts in and
-        # the batch contains action data.
+        # action-specific shift). Only active when the config opts in and the batch contains
+        # action data.
         #
         # Mixed-batch indexing: gen_data_clean.x0_tokens_action (and every packed_sequence.action.*
         # field) is *dense* — one entry per sample with has_action=True, in the original batch order
@@ -975,7 +976,6 @@ class OmniMoTModel(ImaginaireModel):
         timesteps: torch.Tensor,
         has_valid_tokens: bool,
         rectified_flow: RectifiedFlow,
-        loss_scale: float | None = None,
         raw_action_dim: list[torch.Tensor] | None = None,
         normalize_by_active: bool = False,
     ) -> torch.Tensor:
@@ -993,8 +993,6 @@ class OmniMoTModel(ImaginaireModel):
                 are handled correctly.
             has_valid_tokens: Whether this modality has valid noisy tokens.
             rectified_flow: The rectified flow object for time weighting.
-            loss_scale: Optional per-modality loss scale. Falls back to the global
-                ``rectified_flow_training_config.loss_scale`` when *None*.
             normalize_by_active: When True, normalize per-instance loss by the count of
                 active (noisy) elements rather than all elements. Preserves the
                 ``sum / active_count`` semantics needed for distillation critics where
@@ -1014,7 +1012,6 @@ class OmniMoTModel(ImaginaireModel):
             has_valid_tokens=has_valid_tokens,
             rectified_flow=rectified_flow,
             tensor_kwargs_fp32=self.tensor_kwargs_fp32,
-            loss_scale=loss_scale,
             raw_action_dim=raw_action_dim,
             normalize_by_active=normalize_by_active,
         )
@@ -1198,8 +1195,8 @@ class OmniMoTModel(ImaginaireModel):
         iteration: int | None = None,
     ) -> tuple[torch.Tensor, torch.Tensor]:
         """
-        Sample the rectified flow interpolation coefficient (timesteps), optionally adjust the sampled
-        timesteps with high sigma strategy, and obtain the corresponding normalized timestep.
+        Sample the rectified flow interpolation coefficient (timesteps) and obtain the corresponding
+        normalized timestep.
 
         Args:
             batch_size: Batch size for sampling timesteps.
@@ -1271,56 +1268,22 @@ class OmniMoTModel(ImaginaireModel):
             # T_max = max(num_vision_latent_frames) across the batch; trailing entries for shorter
             # sequences are unused (sliced away in _add_noise_to_input).
             T_max = max(num_vision_latent_frames)
-            t_raw = (
-                rectified_flow.sample_train_time(batch_size * T_max, iteration=iteration)
+            sigmas = (
+                rectified_flow.sample_train_time(
+                    batch_size * T_max, iteration=iteration, shifts=shifts.repeat_interleave(T_max)
+                )
                 .to(**self.tensor_kwargs_fp32)
                 .reshape(batch_size, T_max)
             )  # [B,T_max]
         else:
-            t_raw = (
-                rectified_flow.sample_train_time(batch_size, iteration=iteration)
+            sigmas = (
+                rectified_flow.sample_train_time(batch_size, iteration=iteration, shifts=shifts)
                 .to(**self.tensor_kwargs_fp32)
                 .unsqueeze(1)
             )  # [B,1]
 
-        # Apply shift and scale: t_raw ∈ [0,1] → timesteps ∈ [0,max_timestep]
-        # shifts.unsqueeze(1) → [B,1], broadcasts with both [B,1] (base/TF) and [B,T_max] (DF)
-        t = 1 - t_raw  # [B,1] or [B,T_max]
-        shifts_2d = shifts.unsqueeze(1).to(t_raw.device)  # [B,1], broadcasts with [B,1] and [B,T_max]
-        timesteps = shifts_2d * t / (1 + (shifts_2d - 1) * t) * max_timestep  # [B,1] or [B,T_max]
-
-        if self.config.rectified_flow_training_config.use_high_sigma_strategy:
-            timesteps = self._apply_high_noise_strategy(timesteps, max_timestep)  # [B,1] or [B,T_max]
-
-        sigmas = timesteps / max_timestep  # [B,1] for base/TF, [B,T_max] for DF
+        timesteps = sigmas * max_timestep  # [B,1] or [B,T_max]
         return timesteps, sigmas
-
-    def _apply_high_noise_strategy(self, timesteps: torch.Tensor, max_timestep: int) -> torch.Tensor:
-        """
-        Update the sampled RF timesteps to shift the distribution towards higher noise levels (high sigmas).
-
-        Args:
-            timesteps (torch.Tensor): Input timesteps. Shape [B,1] for base/TF or [B,T_max] for DF.
-            max_timestep (int): The maximum timestep value.
-
-        Returns:
-            torch.Tensor: Timesteps with the same shape as input — [B,1] or [B,T_max].
-        """
-        mask = (
-            torch.rand(timesteps.shape, device=timesteps.device)
-            < self.config.rectified_flow_training_config.high_sigma_ratio
-        )
-        new_timesteps = (
-            torch.rand(timesteps.shape, device=timesteps.device).type_as(timesteps)
-            * (
-                self.config.rectified_flow_training_config.high_sigma_timesteps_max
-                - self.config.rectified_flow_training_config.high_sigma_timesteps_min
-            )
-            + self.config.rectified_flow_training_config.high_sigma_timesteps_min
-        )
-        timesteps = torch.where(mask, new_timesteps, timesteps)
-
-        return timesteps
 
     def _get_train_noise_level_action(
         self, batch_size: int, iteration: int | None = None
@@ -1328,17 +1291,15 @@ class OmniMoTModel(ImaginaireModel):
         """Sample ``(timesteps, sigmas)`` of shape ``[batch_size, 1]`` from ``rectified_flow_action``.
 
         This helper is locally-scoped: it just draws ``batch_size`` independent σ values and
-        applies action-specific shift / high-sigma config. The caller decides what ``batch_size``
-        means semantically — ``training_step`` passes the full batch size and then reindexes to
+        applies action-specific shift config. The caller decides what ``batch_size`` means
+        semantically — ``training_step`` passes the full batch size and then reindexes to
         the dense action-bearing subset with ``action_sample_indices``.
 
         ``shift_action`` must be an int (or ``None`` to inherit ``shift``). Dict-keyed
         per-resolution shifts are vision-only — multi-resolution action training would need
         per-sample lookup, which this helper does not implement; if the global ``shift`` is a
         dict and ``shift_action`` is None, this raises so the user sets shift_action explicitly.
-        ``use_high_sigma_strategy_action`` toggles the high-σ strategy for action; when on, the
-        global ``high_sigma_ratio`` / ``_min`` / ``_max`` apply. σ is a shared scalar per input
-        slot (no per-frame σ for action).
+        σ is a shared scalar per input slot (no per-frame σ for action).
         """
         rf_cfg = self.config.rectified_flow_training_config
         rf = self.rectified_flow_action
@@ -1361,17 +1322,13 @@ class OmniMoTModel(ImaginaireModel):
                 f"Got shift={rf_cfg.shift!r}."
             )
 
-        t_raw = (
-            rf.sample_train_time(batch_size, iteration=iteration).to(**self.tensor_kwargs_fp32).unsqueeze(1)
+        shifts = torch.full((batch_size,), shift_val, dtype=torch.float32)
+        sigmas = (
+            rf.sample_train_time(batch_size, iteration=iteration, shifts=shifts)
+            .to(**self.tensor_kwargs_fp32)
+            .unsqueeze(1)
         )  # [B,1]
-        t = 1 - t_raw  # [B,1]
-        shifts_2d = torch.full((batch_size, 1), shift_val, dtype=torch.float32, device=t_raw.device)  # [B,1]
-        timesteps = shifts_2d * t / (1 + (shifts_2d - 1) * t) * max_timestep  # [B,1]
-
-        if rf_cfg.use_high_sigma_strategy_action:
-            timesteps = self._apply_high_noise_strategy(timesteps, max_timestep)  # [B,1]
-
-        sigmas = timesteps / max_timestep  # [B,1]
+        timesteps = sigmas * max_timestep  # [B,1]
         return timesteps, sigmas
 
     def _get_train_noise_level_sound(self, batch_size: int) -> tuple[torch.Tensor, torch.Tensor]:
@@ -1401,15 +1358,9 @@ class OmniMoTModel(ImaginaireModel):
                 f"Got shift={rf_cfg.shift!r}."
             )
 
-        t_raw = rf.sample_train_time(batch_size).to(**self.tensor_kwargs_fp32).unsqueeze(1)  # [B,1]
-        t = 1 - t_raw  # [B,1]
-        shifts_2d = torch.full((batch_size, 1), shift_val, dtype=torch.float32, device=t_raw.device)  # [B,1]
-        timesteps = shifts_2d * t / (1 + (shifts_2d - 1) * t) * max_timestep  # [B,1]
-
-        if rf_cfg.use_high_sigma_strategy_sound:
-            timesteps = self._apply_high_noise_strategy(timesteps, max_timestep)  # [B,1]
-
-        sigmas = timesteps / max_timestep  # [B,1]
+        shifts = torch.full((batch_size,), shift_val, dtype=torch.float32)
+        sigmas = rf.sample_train_time(batch_size, shifts=shifts).to(**self.tensor_kwargs_fp32).unsqueeze(1)  # [B,1]
+        timesteps = sigmas * max_timestep  # [B,1]
         return timesteps, sigmas
 
     def _add_noise_to_input(
@@ -1759,18 +1710,21 @@ class OmniMoTModel(ImaginaireModel):
             seed_dict["action"].append(seed[sample_idx])
             seed_dict["sound"].append(seed[sample_idx])
 
-        # Generate noise and apply conditioning per vision item (supports variable shapes)
+        # Generate noise and apply conditioning per vision item (supports variable shapes).
+        # Noise and the conditioning blend are kept in fp32 so the sampler accumulates
+        # in full precision. x0_token is already fp32 (forced by .float() in
+        # get_data_and_condition). The cast to model dtype happens inside velocity_fn.
         noise_vision_list: list[torch.Tensor] = []
         for i, (x0_token, cond_mask) in enumerate(
             zip(gen_data_clean.x0_tokens_vision, packed_sequence.vision.condition_mask, strict=True)
         ):
             pure_noise_i = misc.arch_invariant_rand(
                 tuple(x0_token.shape),
-                self.tensor_kwargs["dtype"],
-                self.tensor_kwargs["device"],
+                self.tensor_kwargs_fp32["dtype"],
+                self.tensor_kwargs_fp32["device"],
                 seed_dict["vision"][i],  # Different seed per sample for diversity
             )  # [C,T,H,W]
-            noise_i = cond_mask * x0_token.to(**self.tensor_kwargs) + (1.0 - cond_mask) * pure_noise_i  # [C,T,H,W]
+            noise_i = cond_mask * x0_token + (1.0 - cond_mask) * pure_noise_i  # [C,T,H,W]
             noise_vision_list.append(noise_i)
 
         # 6. Initialize action noise if action_gen is True
@@ -2209,6 +2163,11 @@ class OmniMoTModel(ImaginaireModel):
         sampler: Any | None = None,
         guidance: float = 1.5,
         guidance_interval: Optional[list[float]] = None,
+        velocity_postprocess_builder: Optional[
+            Callable[
+                ..., Optional[Callable[[list[torch.Tensor], list[torch.Tensor], torch.Tensor], list[torch.Tensor]]]
+            ]
+        ] = None,
         seed: list[int] | int = 1,
         n_sample: int | None = None,
         has_negative_prompt: bool = False,
@@ -2362,6 +2321,24 @@ class OmniMoTModel(ImaginaireModel):
 
         assert n_sample == len(seed), f"Number of samples {n_sample} must match number of seeds {len(seed)}"
 
+        # Optional per-step velocity postprocess hook. Built once via a builder
+        # that receives the prepared inference state. The returned callable (if
+        # any) is invoked after the conditional forward on every step and can
+        # modify the conditional velocity (e.g. inject control-CFG, attention
+        # weighting, etc.). The model itself stays agnostic of what the hook
+        # does — all transfer/edit-specific logic lives in the caller.
+        velocity_postprocess: Optional[
+            Callable[[list[torch.Tensor], list[torch.Tensor], torch.Tensor], list[torch.Tensor]]
+        ] = None
+        if velocity_postprocess_builder is not None:
+            velocity_postprocess = velocity_postprocess_builder(
+                model=self,
+                net=net,
+                cond_tokens=cond_tokens,
+                sequence_plans=sequence_plans,
+                gen_data_clean=gen_data_clean,
+            )
+
         # Create a velocity function for a single sample (for use with self.sampler).
         # FSDP collective-sequence alignment (throughput-preset inference).
         #
@@ -2422,41 +2399,56 @@ class OmniMoTModel(ImaginaireModel):
                     skip_text_tokens=skip_text_tokens,
                 )
 
-            # Skip unconditional branch when outside the guidance interval
-            needs_cfg = guidance != 1.0
-            if needs_cfg and guidance_interval is not None:
+            needs_text_cfg = guidance != 1.0
+            if needs_text_cfg and guidance_interval is not None:
                 assert len(guidance_interval) == 2, f"guidance_interval must be [lo, hi], got {guidance_interval}"
                 t_lo, t_hi = guidance_interval
-                needs_cfg = t_lo < timestep[0].item() < t_hi
+                needs_text_cfg = t_lo < timestep[0].item() < t_hi
 
-            # FSDP alignment: if ANY rank in the shard group needs CFG this
-            # call, every rank computes both forwards. Cheap 1-element
-            # all_reduce per velocity_fn call; the alternative (forcing CFG
-            # always-on globally) would silently ignore the per-timestep
-            # ``guidance_interval`` gate.
+            # FSDP alignment: if ANY rank in the shard group needs text-CFG
+            # this call, every rank must take the CFG path so the allgather
+            # sequence stays aligned across ranks.
             if _dp_shard_group is not None:
-                _cfg_t = torch.tensor([1 if needs_cfg else 0], device=_align_device, dtype=torch.int32)
+                _cfg_t = torch.tensor([1 if needs_text_cfg else 0], device=_align_device, dtype=torch.int32)
                 torch.distributed.all_reduce(_cfg_t, op=torch.distributed.ReduceOp.MAX, group=_dp_shard_group)
-                _any_needs_cfg = bool(_cfg_t.item())
+                _any_needs_text_cfg = bool(_cfg_t.item())
             else:
-                _any_needs_cfg = needs_cfg
+                _any_needs_text_cfg = needs_text_cfg
 
-            if not _any_needs_cfg:
+            # Fast path: no text-CFG anywhere and no postprocess hook — single forward.
+            if not _any_needs_text_cfg and velocity_postprocess is None:
                 return _single_velocity_fn(cond_tokens, skip_text_tokens=False)
 
-            cond_v, uncond_v = self._run_classifier_free_guidance(
-                cond_tokens=cond_tokens,
-                uncond_tokens=uncond_tokens,
-                skip_text_tokens_for_cfg=skip_text_tokens_for_cfg,
-                single_velocity_fn=_single_velocity_fn,
-            )
+            # Fast path: only text-CFG and no postprocess — preserve the
+            # cfgp-parallel branch so two-rank CFG parallelism stays available.
+            if velocity_postprocess is None:
+                cond_v, uncond_v = self._run_classifier_free_guidance(
+                    cond_tokens=cond_tokens,
+                    uncond_tokens=uncond_tokens,
+                    skip_text_tokens_for_cfg=skip_text_tokens_for_cfg,
+                    single_velocity_fn=_single_velocity_fn,
+                )
+                if not needs_text_cfg:
+                    # Peers needed CFG so we ran the uncond forward to keep
+                    # FSDP allgather aligned; locally we still return cond.
+                    return cond_v
 
-            if not needs_cfg:
-                # This rank doesn't actually need CFG (guidance==1.0 or sigma
-                # outside guidance_interval). Return cond_v directly so the
-                # output is bit-identical to the original no-CFG path; the
-                # uncond_v forward was only run to keep the FSDP allgather
-                # sequence aligned with peers.
+                v_pred = [u_i + guidance * (c_i - u_i) for c_i, u_i in zip(cond_v, uncond_v)]
+                if normalize_cfg:
+                    v_pred = [
+                        v_i * (torch.norm(c_i) / (torch.norm(v_i) + 1e-8)).clamp(min=0.0, max=1.0)
+                        for v_i, c_i in zip(v_pred, cond_v)
+                    ]
+                return v_pred
+
+            # Conditional forward, then per-step postprocess hook. Hook runs
+            # sequentially; cfgp parallelism not used on this path.
+            cond_v_full = _single_velocity_fn(cond_tokens, skip_text_tokens=False)
+            cond_v = velocity_postprocess(cond_v_full, noise_x, timestep)
+
+            uncond_v = _single_velocity_fn(uncond_tokens, skip_text_tokens=skip_text_tokens_for_cfg)
+            if not needs_text_cfg:
+                # Same alignment story as above for the postprocess branch.
                 return cond_v
 
             v_pred = [u_i + guidance * (c_i - u_i) for c_i, u_i in zip(cond_v, uncond_v)]
@@ -2485,12 +2477,14 @@ class OmniMoTModel(ImaginaireModel):
         # Run sampler for all samples at once.
         sampler = sampler or self.sampler
         scheduler_type = self.config.rectified_flow_inference_config.scheduler_type
-        if scheduler_type == "unipc":
+        if isinstance(sampler, FixedStepSampler):
+            log.info(f"Using sampler: FixedStep (t_list={sampler.t_list}, sample_type={sampler.sample_type})")
+        elif scheduler_type == "unipc":
             log.info(f"Using sampler: UniPC (shift={shift}, num_steps={num_steps})")
         else:
             log.info(f"Using sampler: EDM (sigma_max={sigma_max}, num_steps={num_steps})")
 
-        if scheduler_type == "unipc":
+        if isinstance(sampler, FixedStepSampler) or scheduler_type == "unipc":
             latents = sampler(
                 velocity_fn,
                 initial_noise,
@@ -2979,7 +2973,7 @@ class OmniMoTModel(ImaginaireModel):
                     if isinstance(item, torch.Tensor):
                         item = [item]
                     assert item[0].dtype == torch.uint8, "Video data is not in uint8 format."
-                    data_batch[input_key][i] = torch.stack(item).to(**self.tensor_kwargs) / 127.5 - 1.0
+                    data_batch[input_key][i] = torch.stack(item).to(**self.tensor_kwargs_fp32) / 127.5 - 1.0
                 data_batch[IS_PREPROCESSED_KEY] = True
 
     def _normalize_action_databatch(
@@ -3119,6 +3113,10 @@ class OmniMoTModel(ImaginaireModel):
                     assert data_batch[input_key][i].shape[2] == 1, (
                         f"Image data is claimed be augmented while its shape is {data_batch[input_key][i].shape} for sample {i}"
                     )
+                    assert torch.is_floating_point(data_batch[input_key][i]), "Image data is not in float format."
+                    assert torch.all((data_batch[input_key][i] >= -1.0001) & (data_batch[input_key][i] <= 1.0001)), (
+                        f"Image data is not in the range [-1, 1]. get data range [{data_batch[input_key][i].min()}, {data_batch[input_key][i].max()}]"
+                    )
                 return
             else:
                 new_image_tensor_list = []
@@ -3126,7 +3124,7 @@ class OmniMoTModel(ImaginaireModel):
                     for img_tensor in data_batch[input_key][i]:
                         img_tensor = rearrange(img_tensor, "c h w -> 1 c 1 h w").contiguous()
                         if img_tensor.dtype == torch.uint8:
-                            img_tensor = img_tensor.to(**self.tensor_kwargs) / 127.5 - 1.0
+                            img_tensor = img_tensor.to(**self.tensor_kwargs_fp32) / 127.5 - 1.0
                         new_image_tensor_list.append(img_tensor)
                 data_batch[input_key] = new_image_tensor_list
                 data_batch[IS_PREPROCESSED_KEY] = True

@@ -81,10 +81,6 @@ class RectifiedFlowTrainingConfig:
     loss_scale: float = 1.0  # Loss scale
     image_loss_scale: float | None = None  # If set, overrides loss_scale for images
     sound_loss_scale: float | None = None  # If set, overrides loss_scale for sound
-    use_high_sigma_strategy: bool = False  # Whether to use high sigma strategy
-    high_sigma_ratio: float = 0.05  # Ratio of using high sigmas
-    high_sigma_timesteps_min: int = 995  # Minimum timestep for high sigma
-    high_sigma_timesteps_max: int = 1000  # Maximum timestep for high sigma
     use_discrete_rf: bool = False  # Whether to use discrete formulation of rectified flow
 
     # user: please adjust this value according to loss_scale to balance the action loss with the video loss.
@@ -93,21 +89,16 @@ class RectifiedFlowTrainingConfig:
 
     # Independent noise schedule for action. When False (default), action shares the sigma
     # sampled from the vision RF on every step — legacy behavior. When True, action samples
-    # its own sigma from `rectified_flow_action` using `shift_action` and
-    # `use_high_sigma_strategy_action`. Action always uses a shared scalar sigma per sample
-    # ([B,1]), independent of vision's DF mode. If action opts in to the high-sigma strategy,
-    # it reuses the global ratio / min / max.
+    # its own sigma from `rectified_flow_action` using `shift_action`. Action always uses a
+    # shared scalar sigma per sample ([B,1]), independent of vision's DF mode.
     independent_action_schedule: bool = False
     shift_action: int | None = None  # must be int; None → inherit `shift` (which must also be int)
-    use_high_sigma_strategy_action: bool = False
 
     # Independent noise schedule for sound. When False (default), sound shares the vision
     # sigma schedule, reindexed to the dense audio-bearing subset. When True, sound samples
-    # its own scalar sigma per sample ([B,1]) from `rectified_flow_sound` using `shift_sound`
-    # and `use_high_sigma_strategy_sound`.
+    # its own scalar sigma per sample ([B,1]) from `rectified_flow_sound` using `shift_sound`.
     independent_sound_schedule: bool = False
     shift_sound: int | None = None  # must be int; None → inherit `shift` (which must also be int)
-    use_high_sigma_strategy_sound: bool = False
 
     # When True, per-instance flow-matching loss is normalized by the count of
     # active (noisy) elements rather than all elements — preserves sum/active_count
@@ -204,9 +195,7 @@ class OmniMoTModelConfig:
     # Attention implementation for joint understanding + generation
     # Note "two_way" and "three_way" disallow and remove "End-of-Vision" or other text token in the generation tower.
     # "three_way" must only be used when introducing sparsity
-    joint_attn_implementation: str = (
-        "two_way"  # "two_way", "three_way" or "flex" (NOTICE: We are planning to remove "flex" soon)
-    )
+    joint_attn_implementation: str = "two_way"  # "two_way" or "three_way"
 
     # Per-layer NATTEN parameters
     # Must use "three_way" attention if used.

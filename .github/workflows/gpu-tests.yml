@@ -3,14 +3,15 @@
 
 # Cosmos3-Nano GPU test suite on a self-hosted 8×H200 runner.
 #
-# A single ``pre-commit`` (lint) job runs first; the four GPU jobs all
+# A single ``pre-commit`` (lint) job runs first; the five GPU jobs all
 # ``needs:`` it, so they wait on ONE pre-commit run and are skipped if lint
 # fails — the single self-hosted runner is never spent on a lint-failing commit.
-# The four GPU jobs then run (one at a time on the single runner):
-#   * training-smoke       — Nano SFT pipeline (convert -> train 5 -> export -> t2i)
-#   * generator-regression — vision_sft_nano loss vs goldens (4-GPU subset)
-#   * inference-smoke      — Nano multi-modality inference (t2vs + policy + forward_dynamics)
-#   * reasoner-regression  — llava_ov loss vs goldens (4-GPU subset)
+# The five GPU jobs then run (one at a time on the single runner):
+#   * training-smoke                — Nano SFT pipeline (convert -> train 5 -> export -> t2i)
+#   * generator-training-regression — vision_sft_nano loss vs goldens (4-GPU subset)
+#   * generator-inference-smoke     — Nano multi-modality inference (t2vs + policy + forward_dynamics)
+#   * reasoner-inference-smoke      — Nano reasoner inference first-token logits vs golden (image-conditioned, 4-GPU)
+#   * reasoner-training-regression  — llava_ov loss vs goldens (4-GPU subset)
 #
 # Requires:
 #   * a self-hosted runner labelled [self-hosted, gpu, h200] with 8 GPUs,
@@ -72,7 +73,7 @@ jobs:
           rm -rf examples/checkpoints || true
           rm -rf "${TMPDIR:-/tmp}"/pytest-of-* /tmp/pytest-of-* || true
 
-  generator-regression:
+  generator-training-regression:
     needs: pre-commit
     runs-on: [self-hosted, gpu, h200]
     timeout-minutes: 60
@@ -104,7 +105,7 @@ jobs:
         run: |
           rm -rf "${TMPDIR:-/tmp}"/pytest-of-* /tmp/pytest-of-* || true
 
-  inference-smoke:
+  generator-inference-smoke:
     needs: pre-commit
     runs-on: [self-hosted, gpu, h200]
     timeout-minutes: 60
@@ -136,7 +137,46 @@ jobs:
         run: |
           rm -rf "${TMPDIR:-/tmp}"/pytest-of-* /tmp/pytest-of-* || true
 
-  reasoner-regression:
+  reasoner-inference-smoke:
+    needs: pre-commit
+    runs-on: [self-hosted, gpu, h200]
+    timeout-minutes: 60
+    env:
+      HF_TOKEN: ${{ secrets.HF_TOKEN }}
+      HF_HUB_DISABLE_XET: "1"
+      # 4-GPU reasoner inference test (uses 4 of the 8 GPUs); the gpus(4) marker
+      # requires MAX_GPUS == 4.
+      TEST_MAX_GPUS: "4"
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: astral-sh/setup-uv@v7
+
+      - name: Sync environment (cu128-train)
+        run: uv sync --all-extras --group=cu128-train
+
+      # Image-conditioned Cosmos3-Nano reasoner inference: compare the first
+      # decoded token's logits against a committed golden (exact argmax +
+      # allclose rtol/atol=1e-3). -s streams the live process log. The text-only
+      # variant lives in the same file but is not exercised in CI. Cache the
+      # downloaded image asset (reasoner_image.json's remote vision_path) in the
+      # persistent input-asset dir shared with the generator-inference-smoke job.
+      - name: Nano reasoner inference (image-conditioned first-token logits golden, 4 GPU)
+        run: |
+          export LD_LIBRARY_PATH=
+          export COSMOS_DOWNLOAD_CACHE_DIR="$RUNNER_WORKSPACE/cosmos_input_cache"
+          uv run --all-extras --group=cu128-train python -m pytest -v -s \
+            tests/nano_reasoner_inference_smoke_test.py::test_nano_reasoner_image_first_token_logits \
+            --num-gpus=4 --levels=2 -o addopts=
+
+      # Reasoner inference writes only the pytest tmp dir (generated text + logs);
+      # the checkpoint download stays in the HF cache (kept).
+      - name: Clean up run outputs
+        if: always()
+        run: |
+          rm -rf "${TMPDIR:-/tmp}"/pytest-of-* /tmp/pytest-of-* || true
+
+  reasoner-training-regression:
     needs: pre-commit
     runs-on: [self-hosted, gpu, h200]
     timeout-minutes: 60
@@ -170,7 +210,7 @@ jobs:
 
   # Co-located unit tests: every *_test.py under cosmos_framework/ (CPU and GPU
   # together) in one pytest invocation, plus two torchrun steps for the
-  # distributed tests that hardcode their world size. Runs parallel to the four
+  # distributed tests that hardcode their world size. Runs parallel to the five
   # jobs above (all gated on the single pre-commit lint).
   unittest:
     needs: pre-commit

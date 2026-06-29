@@ -190,3 +190,23 @@ python -m cosmos_framework.scripts.inference_prompts_to_json \
 ```
 
 This reads `val/captions/<episode>/caption.json` and replaces the (dense) `prompt` with the serialized structured JSON, preserving `resolution`, `aspect_ratio`, `num_frames`, `fps`, and `vision_path`. Pass `--dry-run` to preview.
+
+### Create Dataset from a Cosmos-Curator output directory
+
+If your training videos came from the [Cosmos-Curator](https://github.com/nvidia/cosmos-curator) splitting pipeline, you can build the SFT JSONL directly from curator's per-clip metadata — no separate captioning step, no `ffprobe` re-read, and multi-window captions are preserved.
+
+**Prerequisite.** Curator must be invoked with `--upload-clip-info-in-chunks` so that `<curator_output>/metas_jsonl/v0/*.jsonl` is written. Without this flag the converter has no input.
+
+```shell
+python -m cosmos_framework.scripts.curator_to_sft_jsonl \
+    --curator-output outputs/curator_split/ \
+    -o outputs/curator_split/cosmos3_sft.jsonl
+```
+
+By default the converter resolves each window's caption to the first non-empty `*_enhanced_caption` value, falling back to `*_caption`. Use `--caption-model` / `--enhanced-caption-model` to pin a specific captioner (e.g. `--caption-model qwen --enhanced-caption-model qwen_lm`). Pass `--min-short-edge N` to drop low-resolution clips, or `--min-window-frames N` / `--max-duration-s S` to tune the loader-matching filters.
+
+The converter mirrors `sft_dataset.py`'s silent filters (duration > 61.0 s, per-window frames < 61) so dataset counts match what training will actually consume. A sibling `cosmos3_sft.jsonl.summary.json` records the kept count and per-reason drop counts.
+
+Emitted `vision_path` values are rewritten relative to the output JSONL's directory (so the loader's relative-path branch resolves them). URIs like `s3://...` pass through unchanged.
+
+> This path emits only the dense `caption` string per window (not the structured `caption_json`). The loader trains on it via its dense-caption fallback (see [Format](#format)). To train on structured-JSON captions instead, use the captioning workflow above.
