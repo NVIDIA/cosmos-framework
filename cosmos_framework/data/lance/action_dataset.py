@@ -14,6 +14,7 @@ import lancedb
 import numpy as np
 import torch
 import torch.nn.functional as F
+import torchvision.transforms as T
 from lancedb.permutation import Permutation
 from torchcodec.decoders import VideoDecoder
 
@@ -137,7 +138,6 @@ class LanceDROIDDataset(_FreeBaseRowsMixin, DROIDLeRobotDataset):
     def _concat_views(self, wrist: torch.Tensor, left: torch.Tensor, right: torch.Tensor) -> torch.Tensor:
         if self._use_image_augmentation:
             if self._image_augmentor is None:
-                import torchvision.transforms as T
                 _, _, h, w = wrist.shape
                 self._image_augmentor = T.Compose([
                     T.RandomCrop((int(h * 0.95), int(w * 0.95))),

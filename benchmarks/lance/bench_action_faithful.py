@@ -14,9 +14,15 @@ Pure dataloader throughput (no model). Stressful config: many episodes (decoder 
 from __future__ import annotations
 
 import argparse
+import multiprocessing as mp
+import os
 import time
 
 import torch
+
+from base_standins import S3DROIDLeRobotDataset
+from cosmos_framework.data.lance import LanceDROIDComposedDataset
+from cosmos_framework.data.vfm.action.datasets.droid_lerobot_dataset import DROIDLeRobotDataset
 
 _KW = dict(action_space="joint_pos", use_state=True, mode="policy", chunk_length=16)
 
@@ -57,16 +63,11 @@ class _EpisodeShuffle(torch.utils.data.IterableDataset):
 
 
 def _build(mode, root, uri, region, cache, s3_bucket=None, s3_prefix=None):
-    from cosmos_framework.data.lance import LanceDROIDComposedDataset
-    from cosmos_framework.data.vfm.action.datasets.droid_lerobot_dataset import DROIDLeRobotDataset
-
     so = {"region": region} if region else None
 
     def _base():
         # genuine DROIDLeRobotDataset; for S3 the standin materializes the mega-mp4s first.
         if s3_bucket and s3_prefix:
-            from base_standins import S3DROIDLeRobotDataset
-
             return S3DROIDLeRobotDataset(root=root, s3_bucket=s3_bucket, s3_prefix=s3_prefix,
                                          region=region, **_KW)
         return DROIDLeRobotDataset(root=root, **_KW)
@@ -106,8 +107,6 @@ def _measure(ds, sampler_kind, *, batch_size, num_workers, num_batches, warmup):
 def _mode_entry(mode, a, q):
     """Subprocess entrypoint: build+measure one mode, return its samples/s. Each mode runs
     in its own process so the torchcodec/lance C++ teardown can't SIGABRT a later mode."""
-    import os
-
     ds, sk = _build(mode, a["root"], a["uri"], a["region"], a["cache_size"],
                     s3_bucket=a["s3_bucket"], s3_prefix=a["s3_prefix"])
     sps = _measure(ds, sk, batch_size=a["batch_size"], num_workers=a["num_workers"],
@@ -132,9 +131,6 @@ def main():
     ap.add_argument("--warmup", type=int, default=10)
     ap.add_argument("--modes", nargs="+", default=["base-episode", "lance-episode", "lance-random"])
     args = ap.parse_args()
-
-    import multiprocessing as mp
-    import os
 
     a = vars(args)
     print(f"batch={args.batch_size} workers={args.num_workers} cache={args.cache_size} "

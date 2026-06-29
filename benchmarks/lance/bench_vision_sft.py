@@ -19,9 +19,14 @@ video I/O, not the storage-independent tokenize compute). Token-ids are otherwis
 from __future__ import annotations
 
 import argparse
+import multiprocessing as mp
+import os
 import time
 
 import torch
+
+from base_standins import BenchSFTDataset
+from cosmos_framework.data.lance import LanceVisionSFTDataset
 
 _KW = dict(num_video_frames=16, frame_selection_mode="first", temporal_interval_mode="entire_chunk")
 
@@ -42,16 +47,11 @@ def _collate(samples):
 
 def build_base(jsonl, tokenize, *, s3_bucket=None, s3_prefix=None):
     """Genuine SFTDataset (iterable) over local or s3:// vision paths."""
-    from base_standins import BenchSFTDataset
-
-    ds = BenchSFTDataset.from_jsonl(jsonl, s3_bucket=s3_bucket, s3_prefix=s3_prefix,
-                                    skip_tokenize=not tokenize, **_KW)
-    return ds
+    return BenchSFTDataset.from_jsonl(jsonl, s3_bucket=s3_bucket, s3_prefix=s3_prefix,
+                                      skip_tokenize=not tokenize, **_KW)
 
 
 def build_lance(uri, tokenize, *, region=None, table="vision_sft"):
-    from cosmos_framework.data.lance import LanceVisionSFTDataset
-
     so = {"region": region} if (region and str(uri).startswith("s3://")) else None
     ds = LanceVisionSFTDataset(uri, table=table, decode_device="cpu", storage_options=so, **_KW)
     ds.skip_tokenize = not tokenize
@@ -100,8 +100,6 @@ def _measure_map(ds, *, batch_size, num_workers, num_batches, warmup):
 def _side_entry(side, workers, a, q):
     """Subprocess entrypoint: build+measure one (side, workers) cell. Isolated per process
     so the ffmpeg/torchcodec/lance teardown can't SIGABRT a later cell."""
-    import os
-
     tokenize = a["mode"] == "e2e"
     if side == "base":
         ds = build_base(a["jsonl"], tokenize, s3_bucket=a["s3_bucket"], s3_prefix=a["s3_prefix"])
@@ -133,8 +131,6 @@ def main():
     ap.add_argument("--s3-bucket", default=None, help="if set, base reads each sample's mp4 from s3://bucket/<prefix>/<vision_path>")
     ap.add_argument("--s3-prefix", default=None, help="key prefix the jsonl-relative vision_path lives under")
     args = ap.parse_args()
-
-    import multiprocessing as mp
 
     a = vars(args)
     regime = "S3" if (args.s3_bucket and args.s3_prefix) else "LOCAL"

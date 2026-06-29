@@ -19,10 +19,15 @@ from __future__ import annotations
 
 import argparse
 import io
+import os
 import time
 
 import torch
 from PIL import Image
+from transformers import AutoProcessor
+
+from cosmos_framework.configs.base.vlm.experiment.llava_ov_vlm import get_llava_ov_streaming
+from cosmos_framework.data.lance.vlm_dataset import LanceVLMDataset, LanceVLMShuffleScan
 
 
 def _decode_image(image):
@@ -47,8 +52,6 @@ def _sharegpt_to_messages(conversations, image):
 
 
 def make_processor():
-    from transformers import AutoProcessor
-
     return AutoProcessor.from_pretrained("Qwen/Qwen2.5-VL-7B-Instruct")
 
 
@@ -85,8 +88,6 @@ class GenuineVLMBase(torch.utils.data.IterableDataset):
         self.subset = subset
 
     def __iter__(self):
-        from cosmos_framework.configs.base.vlm.experiment.llava_ov_vlm import get_llava_ov_streaming
-
         yield from get_llava_ov_streaming(subset=self.subset)
 
 
@@ -125,12 +126,8 @@ def _build_loader(side, a):
             GenuineVLMBase(a["subset"]), multiprocessing_context="spawn" if a["num_workers"] > 0 else None, **kw
         ), "hf-stream"
     if a["lance_scan"]:
-        from cosmos_framework.data.lance.vlm_dataset import LanceVLMShuffleScan
-
         ds = LanceVLMShuffleScan(a["lance_uri"], a["lance_table"], storage_options=so, buffer_size=1000)
         return torch.utils.data.DataLoader(ds, **kw), "lance-scan"
-    from cosmos_framework.data.lance.vlm_dataset import LanceVLMDataset
-
     ds = LanceVLMDataset(a["lance_uri"], a["lance_table"], storage_options=so)
     g = torch.Generator().manual_seed(42)
     sampler = torch.utils.data.RandomSampler(ds, generator=g)
@@ -166,6 +163,4 @@ def main():
 
 if __name__ == "__main__":
     main()
-    import os
-
     os._exit(0)  # skip the HF/lance C++ teardown SIGABRT (result already printed)

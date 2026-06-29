@@ -24,10 +24,15 @@ from __future__ import annotations
 import argparse
 import gc
 import os
+import pickle
 import time
 
 import psutil
 import torch
+
+from base_standins import S3DROIDLeRobotDataset
+from cosmos_framework.data.lance import LanceDROIDComposedDataset
+from cosmos_framework.data.vfm.action.datasets.droid_lerobot_dataset import DROIDLeRobotDataset
 
 _KW = dict(action_space="joint_pos", use_state=True, mode="policy", chunk_length=16)
 _MB = 1024 * 1024
@@ -40,14 +45,8 @@ def _collate(items):
 def _build(side, root, uri, cache, s3_bucket=None, s3_prefix=None, region=None):
     if side == "base":
         if s3_bucket and s3_prefix:
-            from base_standins import S3DROIDLeRobotDataset
-
             return S3DROIDLeRobotDataset(root=root, s3_bucket=s3_bucket, s3_prefix=s3_prefix, region=region, **_KW)
-        from cosmos_framework.data.vfm.action.datasets.droid_lerobot_dataset import DROIDLeRobotDataset
-
         return DROIDLeRobotDataset(root=root, **_KW)
-    from cosmos_framework.data.lance import LanceDROIDComposedDataset
-
     so = {"region": region} if (region and str(uri).startswith("s3://")) else None
     return LanceDROIDComposedDataset(root=root, lance_uri=uri, decode_device="cpu",
                                      decoder_cache_size=cache, storage_options=so, **_KW)
@@ -123,8 +122,6 @@ def main():
     # spawn per-worker payload: the bytes each spawn worker receives (pickle applies the
     # loader's __getstate__, so this is exactly what is shipped). With spawn this duplicates
     # into every worker; with fork the parent's pages are COW-shared instead.
-    import pickle
-
     spawn_payload_mb = len(pickle.dumps(ds, protocol=pickle.HIGHEST_PROTOCOL)) / _MB
 
     if args.skip_iterate:

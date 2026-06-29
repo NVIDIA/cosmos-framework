@@ -1,29 +1,30 @@
 # SPDX-License-Identifier: OpenMDW-1.1
-"""Equivalence tests for Vision-SFT loaders."""
+"""Equivalence test for the Vision-SFT loader vs the genuine SFTDataset."""
 from __future__ import annotations
 
-import os
 import json
+import os
 from types import SimpleNamespace
+
 import pytest
 import torch
+from transformers import AutoTokenizer
+
+from cosmos_framework.data.lance import LanceVisionSFTDataset
+from cosmos_framework.data.vfm.local_datasets.helper import get_aspect_ratio
+from cosmos_framework.data.vfm.local_datasets.sft_dataset import SFTDataset
 
 JSONL = os.environ.get("BRIDGE_JSONL")
 URI = os.environ.get("VISION_SFT_LANCE_URI")
 
 pytestmark = pytest.mark.skipif(
-    not (JSONL and URI and os.path.isfile(JSONL)),
-    reason="set BRIDGE_JSONL and VISION_SFT_LANCE_URI"
-)
+    not (JSONL and URI and os.path.isfile(JSONL)), reason="set BRIDGE_JSONL and VISION_SFT_LANCE_URI")
 
 _VKW = dict(num_video_frames=16, frame_selection_mode="first", temporal_interval_mode="entire_chunk")
 
+
 @pytest.fixture(scope="module")
 def base_and_metas():
-    from transformers import AutoTokenizer
-    from cosmos_framework.data.vfm.local_datasets.helper import get_aspect_ratio
-    from cosmos_framework.data.vfm.local_datasets.sft_dataset import SFTDataset
-
     base_dir = os.path.dirname(os.path.abspath(JSONL))
     metas = []
     with open(JSONL) as f:
@@ -45,15 +46,13 @@ def base_and_metas():
     ds.s3_client = None
     return ds, metas
 
+
 def test_vision_sft(base_and_metas):
-    from cosmos_framework.data.lance import LanceVisionSFTDataset
     base, metas = base_and_metas
     lance = LanceVisionSFTDataset(URI, table="vision_sft", decode_device="cpu", **_VKW)
     assert len(metas) == len(lance)
-
     idxs = [i for i in [0, 1, 17, 50, 123] if i < len(lance)]
     batch = lance.__getitems__(idxs)
-
     for j, i in enumerate(idxs):
         ref, l = base.process_one_sample(metas[i]), batch[j]
         assert torch.equal(ref["text_token_ids"], l["text_token_ids"])

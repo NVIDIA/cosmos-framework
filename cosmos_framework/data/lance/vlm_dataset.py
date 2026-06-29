@@ -6,7 +6,9 @@ Drop-in replacement for HF streaming or WebDataset sources.
 """
 from __future__ import annotations
 
+import io
 import json
+import random
 from typing import Any
 
 import lance
@@ -19,7 +21,6 @@ _COLS = ["sample_id", "image_bytes", "conversations"]
 
 
 def _record_batches(hf_dataset, batch_rows: int = 512):
-    import io
     schema = pa.schema([
         pa.field("sample_id", pa.string()),
         pa.field("image_bytes", pa.large_binary()),
@@ -136,12 +137,11 @@ class LanceVLMShuffleScan(torch.utils.data.IterableDataset):
         return lance.dataset(f"{self.uri}/{self.table_name}.lance", storage_options=self.storage_options)
 
     def __iter__(self):
-        import random as _random
         info = torch.utils.data.get_worker_info()
         wid, nw = (info.id, info.num_workers) if info else (0, 1)
         ds = self._dataset()
         frags = ds.get_fragments()
-        rng = _random.Random(self.seed)
+        rng = random.Random(self.seed)
         rng.shuffle(frags)
         my_frags = frags[wid::nw]
         buf = []

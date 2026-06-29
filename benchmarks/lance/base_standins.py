@@ -8,9 +8,12 @@ from __future__ import annotations
 
 import os
 import tempfile
-import time
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
+
+import boto3
+from transformers import AutoTokenizer
 
 from cosmos_framework.data.vfm.action.datasets.base_dataset import _MODE_CHOICES  # noqa: F401
 from cosmos_framework.data.vfm.action.datasets.droid_lerobot_dataset import (
@@ -64,7 +67,6 @@ class S3DROIDLeRobotDataset(DROIDLeRobotDataset):
         )
 
     def _materialize_from_s3(self) -> None:
-        import boto3
         rels = set()
         for episode in self._episodes.values():
             for video_key in _IMAGE_FEATURES.values():
@@ -92,8 +94,6 @@ class S3DROIDLeRobotDataset(DROIDLeRobotDataset):
 
 
 def _qwen_tokenizer_config():
-    from types import SimpleNamespace
-    from transformers import AutoTokenizer
     return SimpleNamespace(tokenizer=AutoTokenizer.from_pretrained(_QWEN_TOKENIZER))
 
 

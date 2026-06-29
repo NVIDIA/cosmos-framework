@@ -7,14 +7,20 @@ Reuses the base's caption selection and tokenization logic.
 from __future__ import annotations
 
 import json
+import random
 from typing import Any, Optional
 
 import lance
 import numpy as np
 import torch
 from torchcodec.decoders import VideoDecoder
+from transformers import AutoTokenizer
 
+from cosmos_framework.data.vfm.local_datasets.helper import get_aspect_ratio
 from cosmos_framework.data.vfm.local_datasets.sft_dataset import _select_caption
+from cosmos_framework.data.vfm.sequence_packing import add_special_tokens
+from cosmos_framework.data.vfm.utils import VIDEO_RES_SIZE_INFO
+from cosmos_framework.model.vfm.vlm.qwen3_vl.utils import tokenize_caption
 
 _MAX_CAPTION_TOKENS = 1024
 _META_COLS = [
@@ -123,8 +129,6 @@ class LanceVisionSFTDataset(torch.utils.data.Dataset):
 
     def _ensure_tokenizer(self):
         if self._tokenizer is None:
-            from transformers import AutoTokenizer
-            from cosmos_framework.data.vfm.sequence_packing import add_special_tokens
             tok = AutoTokenizer.from_pretrained(self.tokenizer_name)
             tok, _ = add_special_tokens(tok)
             self._tokenizer = tok
@@ -147,7 +151,6 @@ class LanceVisionSFTDataset(torch.utils.data.Dataset):
     def _tokenize(self, caption: str) -> list[int]:
         if self.skip_tokenize:
             return []
-        from cosmos_framework.model.vfm.vlm.qwen3_vl.utils import tokenize_caption
         ids = tokenize_caption(
             caption, self._ensure_tokenizer(), is_video=True, use_system_prompt=self.use_system_prompt
         )
@@ -176,7 +179,6 @@ class LanceVisionSFTDataset(torch.utils.data.Dataset):
         elif self.frame_selection_mode == "center":
             start_frame = window_start + (frames_in_window - num_before) // 2
         else:
-            import random
             start_frame = window_start + random.randint(0, max(0, frames_in_window - num_before))
         return start_frame, start_frame + num_before - 1, temporal_interval
 
@@ -243,8 +245,6 @@ class LanceVisionSFTDataset(torch.utils.data.Dataset):
         return results
 
     def _target_size(self, r: dict) -> tuple[int, int]:
-        from cosmos_framework.data.vfm.local_datasets.helper import get_aspect_ratio
-        from cosmos_framework.data.vfm.utils import VIDEO_RES_SIZE_INFO
         ar = get_aspect_ratio(r["width"], r["height"])
         return VIDEO_RES_SIZE_INFO[self._resolution()][ar]
 

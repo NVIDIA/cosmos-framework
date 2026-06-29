@@ -15,12 +15,16 @@ The composition is byte-for-byte the base's; only the H.264 re-encode is lossy.
 from __future__ import annotations
 
 import argparse
+import os
 import subprocess
+import tempfile
 
 import lancedb
 import numpy as np
 import pyarrow as pa
 import torch
+
+from cosmos_framework.data.vfm.action.datasets.droid_lerobot_dataset import DROIDLeRobotDataset
 
 _BLOB = {b"lance-encoding:blob": b"true"}
 
@@ -29,9 +33,6 @@ def _encode(frames_thwc_u8: np.ndarray, fps: int, gop: int) -> bytes:
     """Raw RGB frames -> H.264 mp4 bytes via ffmpeg (short GOP, faststart).
 
     mp4+faststart needs seekable output, so encode to a temp file then read."""
-    import os
-    import tempfile
-
     t, h, w, _ = frames_thwc_u8.shape
     fd, path = tempfile.mkstemp(suffix=".mp4")
     os.close(fd)
@@ -63,8 +64,6 @@ def main() -> None:
         "Per-episode clips are <2MB, so plain is the default.",
     )
     args = ap.parse_args()
-
-    from cosmos_framework.data.vfm.action.datasets.droid_lerobot_dataset import DROIDLeRobotDataset
 
     base = DROIDLeRobotDataset(
         root=args.root, action_space="joint_pos", use_state=True, mode="policy", chunk_length=16
