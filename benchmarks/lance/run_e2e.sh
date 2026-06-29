@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # E2E training compute-sweep over the combined mixer: base vs lance, traces the
 # data-bound -> compute-bound crossover by sweeping the per-step transformer size (--layers).
-# Env (defaults match the dev box; override for another machine — see RUN_BENCHMARKS_H100.md):
+# Env (defaults match the dev box; override for another machine):
 #   REPO, DATA, S, BUCKET, REGION  (as in run_matrix.sh)
 #   REGIME   local | s3 | mixed     (default: mixed — the realistic regime)
 #   LAYERS   space-separated layer counts to sweep (default: "1 2 4 8 16")
@@ -12,7 +12,6 @@ REPO="${REPO:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)}"
 cd "$REPO"
 export LD_LIBRARY_PATH="${LD_LIBRARY_PATH:-}"
 source .venv-gpu/bin/activate
-[ -f benchmarks/lance/.creds.env ] && source benchmarks/lance/.creds.env
 export PYTHONPATH="$REPO" AWS_PROFILE="${AWS_PROFILE:-cosmosbench}" LANCE_IO_THREADS="${LANCE_IO_THREADS:-256}"
 
 REGIME="${REGIME:-mixed}"

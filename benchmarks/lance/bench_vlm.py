@@ -1,16 +1,19 @@
 # SPDX-License-Identifier: OpenMDW-1.1
-"""VLM dataloader throughput: HF streaming IterableDataset vs LanceDB map-style.
+"""VLM dataloader throughput: the GENUINE cosmos VLM base vs the LanceDB loader.
 
-Both paths feed the SAME tokenize + image-process step (a faithful stand-in for
-cosmos ``VLMProcessor``), so only the data-access layer differs:
+The base is the shipped source factory ``get_llava_ov_streaming`` (imported, not
+reconstructed) — ``lmms-lab/LLaVA-OneVision-Data`` streamed from the HuggingFace Hub
+(``streaming=True`` + the same image/conversation filter), which is cosmos's actual
+default VLM read pattern (sequential shard reads + a bounded shuffle buffer, no random
+access). Cosmos has no local/S3 VLM base, so this is the base in every regime.
 
-  base-iterable  — datasets ``IterableDataset`` (sequential shards + shuffle
-                   buffer, no random access) — the cosmos VLM read pattern
-  lance          — LanceVLMDataset (Permutation API: O(1) random access + true
-                   global shuffle, columnar batched reads)
+  base   — get_llava_ov_streaming(subset): HF-Hub streaming IterableDataset
+  lance  — LanceVLMDataset (Permutation API: O(1) random access + true global shuffle)
+           or LanceVLMShuffleScan (chunked-shuffle columnar scan — the S3 pattern)
 
-Two measurements: raw access (no processing — isolates the access bottleneck)
-and end-to-end (with tokenize+image-process — realistic training).
+Both paths feed the SAME tokenize+image-process step (a faithful stand-in for cosmos
+``VLMProcessor``), so only the data-access layer differs. Two measurements: raw access
+(no processing — isolates the access bottleneck) and end-to-end (with processing).
 """
 from __future__ import annotations
 
@@ -72,42 +75,19 @@ def _measure(loader, *, num_batches, warmup, batch_size):
     return seen * batch_size / dt
 
 
-def _wds_to_item(sample):
-    import json as _json
+# ── base: the genuine cosmos VLM source (HF-Hub streaming) ──────────────
+class GenuineVLMBase(torch.utils.data.IterableDataset):
+    """Cosmos's actual default VLM base: ``get_llava_ov_streaming`` from the shipped
+    config module. Built fresh in __iter__ (the HF filter lambda isn't picklable for
+    spawn workers), yielding the raw ``{id, image(PIL), conversations}`` dict."""
 
-    return {
-        "id": sample["__key__"],
-        "image": {"bytes": sample["png"]},
-        "conversations": _json.loads(sample["json"]),
-    }
+    def __init__(self, subset: str):
+        self.subset = subset
 
+    def __iter__(self):
+        from cosmos_framework.configs.base.vlm.experiment.llava_ov_vlm import get_llava_ov_streaming
 
-def build_base_wds(shard_urls):
-    """Canonical cosmos VLM base: webdataset tar shards (sequential reads +
-    shuffle buffer). ``shard_urls`` is a brace pattern of local paths or a
-    ``pipe:aws s3 cp ... -`` expression for S3."""
-    import webdataset as wds
-
-    return (
-        wds.WebDataset(shard_urls, shardshuffle=True, empty_check=False)
-        .shuffle(1000)
-        .map(_wds_to_item)
-    )
-
-
-# ── base: HF IterableDataset (local cache OR S3 parquet, streaming) ─────
-def build_base(name, num_workers, base_parquet=None):
-    from datasets import load_dataset
-
-    if base_parquet:
-        # stream parquet shards straight from S3 (sequential shard reads, the
-        # real webdataset/IterableDataset access pattern at scale)
-        ds = load_dataset(
-            "parquet", data_files={"train": base_parquet}, split="train", streaming=True
-        )
-        return ds.shuffle(seed=42, buffer_size=1000)
-    ds = load_dataset("lmms-lab/LLaVA-OneVision-Data", name=name, split="train")
-    return ds.to_iterable_dataset(num_shards=max(1, num_workers)).shuffle(seed=42, buffer_size=1000)
+        yield from get_llava_ov_streaming(subset=self.subset)
 
 
 _PROC = None
@@ -133,17 +113,44 @@ class Collate:
         return [process(it, proc) for it in items]
 
 
+def _build_loader(side, a):
+    """Build the (loader, label) for one side from a plain args-dict ``a``."""
+    collate = Collate(a["mode"])
+    kw = dict(batch_size=a["batch_size"], num_workers=a["num_workers"], collate_fn=collate,
+              persistent_workers=a["num_workers"] > 0,
+              prefetch_factor=4 if a["num_workers"] > 0 else None)
+    so = {"region": a["region"]} if a["region"] else None
+    if side == "base":
+        return torch.utils.data.DataLoader(
+            GenuineVLMBase(a["subset"]), multiprocessing_context="spawn" if a["num_workers"] > 0 else None, **kw
+        ), "hf-stream"
+    if a["lance_scan"]:
+        from cosmos_framework.data.lance.vlm_dataset import LanceVLMShuffleScan
+
+        ds = LanceVLMShuffleScan(a["lance_uri"], a["lance_table"], storage_options=so, buffer_size=1000)
+        return torch.utils.data.DataLoader(ds, **kw), "lance-scan"
+    from cosmos_framework.data.lance.vlm_dataset import LanceVLMDataset
+
+    ds = LanceVLMDataset(a["lance_uri"], a["lance_table"], storage_options=so)
+    g = torch.Generator().manual_seed(42)
+    sampler = torch.utils.data.RandomSampler(ds, generator=g)
+    return torch.utils.data.DataLoader(
+        ds, sampler=sampler, multiprocessing_context="spawn" if a["num_workers"] > 0 else None, **kw
+    ), "lance-random"
+
+
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--subset", default="figureqa(cauldron,llava_format)")
+    ap.add_argument("--subset", default="figureqa(cauldron,llava_format)",
+                    help="lmms-lab/LLaVA-OneVision-Data subset for the genuine HF-streaming base")
     ap.add_argument("--lance-uri", required=True)
-    ap.add_argument("--base-parquet", nargs="+", default=None,
-                    help="parquet shard paths/globs (e.g. s3://...) to stream as the base; else HF hub")
-    ap.add_argument("--wds-shards", default=None,
-                    help="webdataset base: brace pattern of local tar paths or a 'pipe:aws s3 cp ...' expr")
+    ap.add_argument("--lance-table", default="llava")
     ap.add_argument("--region", default=None, help="storage_options region for an s3:// lance-uri")
     ap.add_argument("--lance-scan", action="store_true",
                     help="use chunked-shuffle sequential scan (right for S3) instead of random point-lookups")
+    ap.add_argument("--side", choices=["base", "lance"], required=True,
+                    help="measure ONE side per process (run twice + divide) — each backend torn down in "
+                    "its own process avoids the HF/lance C++ finalization crashes of an in-process compare")
     ap.add_argument("--batch-size", type=int, default=8)
     ap.add_argument("--num-workers", type=int, default=4)
     ap.add_argument("--num-batches", type=int, default=40)
@@ -151,53 +158,14 @@ def main():
     ap.add_argument("--mode", choices=["raw", "e2e"], default="raw")
     args = ap.parse_args()
 
-    from cosmos_framework.data.lance.vlm_dataset import LanceVLMDataset
-
-    collate = Collate(args.mode)
-
-    base_label = "wds-tar" if args.wds_shards else ("parquet-stream" if args.base_parquet else "hf-iterable")
-    print(f"mode={args.mode} batch={args.batch_size} workers={args.num_workers} base={base_label}\n")
-    print(f"{'loader':<16}{'samples/s':>12}{'speedup':>10}")
-
-    # base: webdataset tar (canonical) | parquet stream | hf iterable
-    if args.wds_shards:
-        base_it = build_base_wds(args.wds_shards)
-    else:
-        base_it = build_base(args.subset, args.num_workers, args.base_parquet)
-    base_loader = torch.utils.data.DataLoader(
-        base_it, batch_size=args.batch_size, num_workers=args.num_workers,
-        collate_fn=collate, persistent_workers=args.num_workers > 0,
-        prefetch_factor=4 if args.num_workers > 0 else None,
-    )
-    base_sps = _measure(base_loader, num_batches=args.num_batches, warmup=args.warmup, batch_size=args.batch_size)
-    print(f"{base_label:<16}{base_sps:>12.1f}{'1.00x':>10}")
-
-    # lance: chunked-shuffle scan (IterableDataset) OR random point-lookup
-    so = {"region": args.region} if args.region else None
-    if args.lance_scan:
-        from cosmos_framework.data.lance.vlm_dataset import LanceVLMShuffleScan
-
-        lance_ds = LanceVLMShuffleScan(args.lance_uri, "llava", storage_options=so, buffer_size=1000)
-        lance_loader = torch.utils.data.DataLoader(
-            lance_ds, batch_size=args.batch_size, num_workers=args.num_workers,
-            collate_fn=collate, persistent_workers=args.num_workers > 0,
-            prefetch_factor=4 if args.num_workers > 0 else None,
-        )
-        label = "lance-scan"
-    else:
-        lance_ds = LanceVLMDataset(args.lance_uri, "llava", storage_options=so)
-        g = torch.Generator().manual_seed(42)
-        sampler = torch.utils.data.RandomSampler(lance_ds, generator=g)
-        lance_loader = torch.utils.data.DataLoader(
-            lance_ds, batch_size=args.batch_size, sampler=sampler, num_workers=args.num_workers,
-            collate_fn=collate, persistent_workers=args.num_workers > 0,
-            prefetch_factor=4 if args.num_workers > 0 else None,
-            multiprocessing_context="spawn" if args.num_workers > 0 else None,
-        )
-        label = "lance-random"
-    lance_sps = _measure(lance_loader, num_batches=args.num_batches, warmup=args.warmup, batch_size=args.batch_size)
-    print(f"{label:<16}{lance_sps:>12.1f}{lance_sps / base_sps:>9.2f}x")
+    a = vars(args)
+    loader, label = _build_loader(args.side, a)
+    sps = _measure(loader, num_batches=args.num_batches, warmup=args.warmup, batch_size=args.batch_size)
+    print(f"VLM_RESULT side={args.side} label={label} mode={args.mode} workers={args.num_workers} samples_per_s={sps:.1f}", flush=True)
 
 
 if __name__ == "__main__":
     main()
+    import os
+
+    os._exit(0)  # skip the HF/lance C++ teardown SIGABRT (result already printed)

@@ -41,7 +41,7 @@ import numpy as np
 import pyarrow as pa
 
 from cosmos_framework.data.vfm.local_datasets.helper import ffmpeg_decode_video, get_video_metadata
-from cosmos_framework.data.vfm.local_datasets.sft_local_dataset import _get_aspect_ratio
+from cosmos_framework.data.vfm.local_datasets.helper import get_aspect_ratio
 from cosmos_framework.data.vfm.utils import VIDEO_RES_SIZE_INFO
 from cosmos_framework.inference.structured_caption import CAPTION_JSON_KEY
 
@@ -118,7 +118,7 @@ def main() -> None:
             vp = rec["vision_path"]
             vp = vp if ("://" in vp or vp.startswith("/")) else os.path.join(base_dir, vp)
             input_w, input_h = rec["width"], rec["height"]
-            aspect_ratio = _get_aspect_ratio(input_w, input_h)
+            aspect_ratio = get_aspect_ratio(input_w, input_h)
             target_w, target_h = output_sizes[aspect_ratio]
             resize_ratio = max(target_w / input_w, target_h / input_h)
             resize_h, resize_w = (round(input_h * resize_ratio), round(input_w * resize_ratio))
