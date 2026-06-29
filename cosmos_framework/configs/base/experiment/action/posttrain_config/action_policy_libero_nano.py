@@ -215,6 +215,7 @@ action_policy_libero_nano = LazyDict(
                             resolution=None,
                             max_action_dim="${model.config.max_action_dim}",
                             cfg_dropout_rate=0.1,
+                            format_prompt_as_json=True,  # structured JSON prompts (set False for plain-text)
                             tokenizer_config="${model.config.vlm_config.tokenizer}",
                         ),
                     ),

@@ -166,6 +166,7 @@ def get_action_libero_sft_dataset(
     append_duration_fps_timestamps: bool = True,
     append_resolution_info: bool = True,
     append_idle_frames: bool = True,
+    format_prompt_as_json: bool = False,
     iterable_shuffle: bool = False,
     episode_shuffle_seed: int = 42,
 ) -> Dataset:
@@ -204,6 +205,7 @@ def get_action_libero_sft_dataset(
         append_duration_fps_timestamps=append_duration_fps_timestamps,
         append_resolution_info=append_resolution_info,
         append_idle_frames=append_idle_frames,
+        format_prompt_as_json=format_prompt_as_json,
     )
     sft = ActionSFTDataset(dataset, transform, resolution)
     if iterable_shuffle:
