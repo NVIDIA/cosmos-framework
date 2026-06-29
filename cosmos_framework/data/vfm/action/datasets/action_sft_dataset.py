@@ -12,6 +12,7 @@ wrapper composes the two so the experiment can hand a single map-style dataset
 to ``RankPartitionedDataLoader`` (mirroring how the vision recipe uses
 ``get_sft_dataset``).
 """
+
 from __future__ import annotations
 
 from typing import Any
@@ -41,7 +42,6 @@ class ActionSFTDataset(Dataset):
     def get_shuffle_blocks(self):
         """Delegate to the inner DROIDLeRobotDataset (per-episode/segment flat-index blocks)."""
         return self._dataset.get_shuffle_blocks()
-
 
 
 class ActionIterableShuffleDataset(IterableDataset):

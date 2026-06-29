@@ -937,9 +937,7 @@ class ActionModelService:
             raise ValueError("'items' must be a non-empty list of policy requests")
         preps = [self._prep_policy_item(r) for r in reqs]
         n = len(preps)
-        action_t_d = torch.zeros(
-            (self.cfg.action_chunk_size, self.cfg.max_action_dim), dtype=torch.float32
-        )
+        action_t_d = torch.zeros((self.cfg.action_chunk_size, self.cfg.max_action_dim), dtype=torch.float32)
         input_video_key = self._input_video_key()
         batch: dict[str, Any] = {
             input_video_key: [[p["video_padded"]] for p in preps],
