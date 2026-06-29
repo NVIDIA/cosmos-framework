@@ -63,6 +63,55 @@ from cosmos_framework.utils.generator.model_weights_stats import WeightTrainingS
 from cosmos_framework.utils.generator.parallelism import ParallelDims
 
 
+def _can_encode_frame_zero_policy_batch(
+    data_batch: dict[str, Any],
+    batch_size: int,
+    *,
+    model_training: bool,
+    has_multiple_vision_items: bool,
+    tokenizer_is_causal: bool,
+) -> bool:
+    """Return whether a batch can use frame-zero-only vision encoding."""
+    modes = data_batch.get("mode")
+    sequence_plans = data_batch.get("sequence_plan")
+    return (
+        not model_training
+        and not has_multiple_vision_items
+        and tokenizer_is_causal
+        and isinstance(modes, list)
+        and len(modes) == batch_size
+        and all(mode == "policy" for mode in modes)
+        and isinstance(sequence_plans, list)
+        and len(sequence_plans) == batch_size
+        and all(list(getattr(plan, "condition_frame_indexes_vision", ())) == [0] for plan in sequence_plans)
+    )
+
+
+def _encode_frame_zero_conditioned_video(
+    tokenizer: VideoTokenizerInterface,
+    state: torch.Tensor,
+) -> torch.Tensor:
+    """Encode causal frame zero and retain the full temporal latent shape.
+
+    Policy mode conditions only latent frame zero. Later clean latents are
+    replaced by diffusion noise, so zero placeholders preserve sequence shape
+    without changing the conditioned prefix.
+    """
+    if state.ndim != 5 or state.shape[2] <= 1:
+        return tokenizer.encode(state)
+
+    first_latent = tokenizer.encode(state[:, :, :1].contiguous())
+    if first_latent.ndim != 5 or first_latent.shape[2] != 1:
+        return tokenizer.encode(state)
+
+    latent_frames = tokenizer.get_latent_num_frames(int(state.shape[2]))
+    full_shape = list(first_latent.shape)
+    full_shape[2] = latent_frames
+    full_latent = first_latent.new_zeros(full_shape)
+    full_latent[:, :, :1].copy_(first_latent)
+    return full_latent
+
+
 class OmniMoTModel(ImaginaireModel):
     """
     Mixture of Transformers (MoT) model to be trained with the flow matching objective
@@ -2835,9 +2884,22 @@ class OmniMoTModel(ImaginaireModel):
         self._normalize_video_databatch_inplace(data_batch)
         self._augment_image_dim_inplace(data_batch)  # converts each image tensor to (1, C, 1, H, W)
         raw_state_vision = data_batch[self.input_image_key if is_image_batch else self.input_video_key]
-        x0_tokens_vision = [
-            self.encode(raw_state_vision_i).contiguous().float() for raw_state_vision_i in raw_state_vision
-        ]
+        use_frame_zero_encode = _can_encode_frame_zero_policy_batch(
+            data_batch,
+            batch_size,
+            model_training=self.training,
+            has_multiple_vision_items=num_vision_items_per_sample is not None,
+            tokenizer_is_causal=self.tokenizer_vision_gen.is_causal,
+        )
+        if use_frame_zero_encode:
+            x0_tokens_vision = [
+                _encode_frame_zero_conditioned_video(self.tokenizer_vision_gen, state).contiguous().float()
+                for state in raw_state_vision
+            ]
+        else:
+            x0_tokens_vision = [
+                self.encode(raw_state_vision_i).contiguous().float() for raw_state_vision_i in raw_state_vision
+            ]
 
         frame_size = data_batch.get("image_size", None)
         if frame_size is not None:
