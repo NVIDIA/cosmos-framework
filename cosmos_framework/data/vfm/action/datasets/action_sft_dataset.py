@@ -12,6 +12,7 @@ wrapper composes the two so the experiment can hand a single map-style dataset
 to ``RankPartitionedDataLoader`` (mirroring how the vision recipe uses
 ``get_sft_dataset``).
 """
+
 from __future__ import annotations
 
 from typing import Any
@@ -42,7 +43,6 @@ class ActionSFTDataset(Dataset):
         return self._dataset.get_shuffle_blocks()
 
 
-
 class ActionIterableShuffleDataset(IterableDataset):
     """Streaming view of a map-style ``ActionSFTDataset``.
 
@@ -70,6 +70,8 @@ class ActionIterableShuffleDataset(IterableDataset):
         import torch
 
         blocks = self._dataset.get_shuffle_blocks()
+        if not blocks:
+            raise ValueError("No shuffle blocks found")
         wi = get_worker_info()
         wid = wi.id if wi is not None else 0
         nw = wi.num_workers if wi is not None else 1
