@@ -5,14 +5,14 @@ This directory contains LanceDB-backed implementations of the three main dataloa
 - **Vision-SFT (Local clips)**: `LanceVisionSFTDataset`
 - **VLM (LLaVA-OneVision)**: `LanceVLMDataset`
 
-These loaders are designed for higher throughput, better memory scaling, and native object-store (S3) access while maintaining bit-exact or token-exact equivalence with the original loaders.
+These loaders are designed for higher throughput, better memory scaling, and native object-store (S3) access while maintaining verified equivalence with the original loaders (exact labels/tokens; video within one offline H.264 re-encode).
 
 ## Key Features
 
 - **Higher Throughput**: Up to 3.3x speedup locally and 4.9x on S3 when tuned.
 - **Memory Efficiency**: Reduces per-worker memory footprint by up to 3x at scale by eliminating redundant per-frame indices.
 - **Native S3 Support**: Uses LanceDB's native object-store integration for parallel, selective reads without FUSE or full downloads.
-- **Verified Equivalence**: Output matches the original loaders (bit-exact for actions/VLM, token-ids exact for vision-SFT).
+- **Verified Equivalence**: VLM records byte-identical, vision-SFT token-ids exact, action labels (action/pose/caption) bit-exact with video within H.264 re-encode tolerance (~1.5%).
 
 ## Performance Summary
 
