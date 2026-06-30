@@ -38,14 +38,7 @@ def _resolve_device(device: str | None) -> torch.device | None:
     return torch.device(device)
 
 
-class _FreeBaseRowsMixin:
-    """Frees ActionBaseDataset._rows to reduce memory footprint when using many workers."""
-
-    def _free_base_rows(self) -> None:
-        self._rows = None
-
-
-class LanceDROIDComposedDataset(_FreeBaseRowsMixin, DROIDLeRobotDataset):
+class LanceDROIDComposedDataset(DROIDLeRobotDataset):
     """Action loader using pre-composed, pre-resized episodes stored in LanceDB.
 
     Decodes a single video stream per episode instead of 3 views.
@@ -63,7 +56,9 @@ class LanceDROIDComposedDataset(_FreeBaseRowsMixin, DROIDLeRobotDataset):
         **kwargs: Any,
     ) -> None:
         super().__init__(root=root, **kwargs)
-        self._free_base_rows()
+        # The parent's per-frame dict list (_rows) is unused here — we index via the
+        # compact column arrays — so drop it to keep the spawn-worker payload small.
+        self._rows = None
         self._lance_uri = lance_uri
         self._table = table
         self._decode_device = _resolve_device(decode_device)
