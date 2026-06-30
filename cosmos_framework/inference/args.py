@@ -249,6 +249,14 @@ class TransferArgs(ArgsBase):
     weight: float = 1.0
     """Strength of this control signal in the weighted multi-control attention aggregation."""
 
+    @pydantic.field_validator("weight", mode="before")
+    @classmethod
+    def _coerce_none_weight(cls, v: float | None) -> float:
+        # ``TransferOverrides.weight`` defaults to None ("unset") and is resolved into
+        # this required float via ``_build`` (which does not strip None). An unset weight
+        # resolves to the neutral 1.0 → equal weighting / single-control parity.
+        return 1.0 if v is None else v
+
 
 class EdgeTransferArgs(TransferArgs):
     preset_edge_threshold: PresetEdgeThreshold = PresetEdgeThreshold.MEDIUM
