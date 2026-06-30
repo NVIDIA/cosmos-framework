@@ -4,7 +4,7 @@
 For each episode, compose the 3 camera views EXACTLY as the base loader does
 (wrist on top; the two exteriors resized to half and concatenated on the
 bottom -> 270x320), then re-encode that single composed clip with a tiny GOP
-(all-intra by default) and store it as one per-episode blob-v2 row.
+(all-intra by default) and store it as one per-episode large_binary row.
 
 Why: the base loader decodes 3 full-resolution views + resizes + concatenates
 *per sample*. Decoding one pre-composed, pre-resized, short-GOP clip is far less
@@ -26,7 +26,6 @@ import torch
 
 from cosmos_framework.data.vfm.action.datasets.droid_lerobot_dataset import DROIDLeRobotDataset
 
-_BLOB = {b"lance-encoding:blob": b"true"}
 
 
 def _encode(frames_thwc_u8: np.ndarray, fps: int, gop: int) -> bytes:
@@ -56,26 +55,21 @@ def main() -> None:
     ap.add_argument("--uri", required=True, help="output LanceDB dir")
     ap.add_argument("--table", default="droid_composed")
     ap.add_argument("--gop", type=int, default=1, help="keyframe interval (1=all-intra)")
-    ap.add_argument(
-        "--storage", choices=["plain", "blob"], default="plain",
-        help="video_bytes column encoding. 'plain' large_binary reads ~6x faster on S3 "
-        "via a columnar take (the IO thread pool parallelizes the GETs); 'blob' (lance "
-        "blob-v2) only pays off for multi-GB payloads and serializes take_blobs reads. "
-        "Per-episode clips are <2MB, so plain is the default.",
-    )
     args = ap.parse_args()
 
     base = DROIDLeRobotDataset(
         root=args.root, action_space="joint_pos", use_state=True, mode="policy", chunk_length=16
     )
     fps = int(round(base._fps))
-    vb_meta = _BLOB if args.storage == "blob" else None
+    # video_bytes is plain large_binary, read via the Permutation API — fastest for our small
+    # (<~2MB) clips. TODO: blob-v2 is faster for larger per-row payloads (>=~8-16MB) when read
+    # in parallel; switch the storage + loader together if clip sizes grow.
     schema = pa.schema(
         [
             pa.field("episode_index", pa.int64()),
             pa.field("ep_start", pa.int64()),
             pa.field("length", pa.int64()),
-            pa.field("video_bytes", pa.large_binary(), metadata=vb_meta),
+            pa.field("video_bytes", pa.large_binary()),
         ]
     )
 

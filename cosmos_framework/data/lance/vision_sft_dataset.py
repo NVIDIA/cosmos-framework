@@ -10,9 +10,10 @@ import json
 import random
 from typing import Any, Optional
 
-import lance
+import lancedb
 import numpy as np
 import torch
+from lancedb.permutation import Permutation
 from torchcodec.decoders import VideoDecoder
 from transformers import AutoTokenizer
 
@@ -77,37 +78,37 @@ class LanceVisionSFTDataset(torch.utils.data.Dataset):
         self._storage_options = storage_options
         self._tokenizer = tokenizer
 
-        self._ds = None
+        self._perm = None
         self._rows: list[dict] | None = None
         self._decoders: dict[int, VideoDecoder] | None = None
 
-        ds = lance.dataset(f"{lance_uri}/{table}.lance", storage_options=storage_options)
-        self._length = ds.count_rows()
+        db = (lancedb.connect(lance_uri, storage_options=storage_options)
+              if storage_options else lancedb.connect(lance_uri))
+        self._length = db.open_table(table).count_rows()
 
     def __getstate__(self) -> dict:
         state = self.__dict__.copy()
-        for k in ("_ds", "_rows", "_decoders", "_tokenizer"):
+        for k in ("_perm", "_rows", "_decoders", "_tokenizer"):
             state[k] = None
         return state
 
     def _ensure_open(self) -> None:
         if self._decoders is not None:
             return
-        self._ds = lance.dataset(f"{self._lance_uri}/{self._table}.lance", storage_options=self._storage_options)
-        self._rows = self._ds.to_table(columns=_META_COLS).to_pylist()
-        meta = self._ds.schema.field("video_bytes").metadata or {}
-        self._is_blob = meta.get(b"lance-encoding:blob") == b"true"
+        db = (lancedb.connect(self._lance_uri, storage_options=self._storage_options)
+              if self._storage_options else lancedb.connect(self._lance_uri))
+        tbl = db.open_table(self._table)
+        meta_perm = Permutation.identity(tbl).select_columns(_META_COLS).with_format("arrow")
+        self._rows = meta_perm.__getitems__(list(range(tbl.count_rows()))).to_pylist()
+        self._perm = Permutation.identity(tbl).select_columns(["video_bytes"]).with_format("arrow")
         self._decoders = {}
 
     def _read_clip_bytes(self, rows: list[int]) -> list[bytes]:
-        if self._is_blob:
-            out = []
-            for blob in self._ds.take_blobs(blob_column="video_bytes", indices=rows):
-                out.append(blob.readall())
-                blob.close()
-            return out
-        col = self._ds.take(rows, columns=["video_bytes"]).column("video_bytes")
-        return [v.as_py() for v in col]
+        # Plain large_binary via the Permutation API. Clips are small (<~2MB) where this is
+        # fastest on S3. TODO: move to blob-v2 — for larger per-row payloads (>=~8-16MB) a
+        # parallel blob-v2 read beats plain (read concurrently, not a serial take_blobs loop).
+        batch = self._perm.__getitems__([int(r) for r in rows])
+        return [batch.column("video_bytes")[i].as_py() for i in range(batch.num_rows)]
 
     def _build_decoder(self, data: bytes) -> VideoDecoder:
         device = str(self._decode_device) if self._decode_device else None

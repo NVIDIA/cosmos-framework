@@ -7,7 +7,7 @@ training resolution** exactly as ``SFTDataset.process_one_sample`` does (the
 resize-ratio that ``VIDEO_RES_SIZE_INFO`` implies — the spatial center-crop is
 left to decode time so the stored clip stays a clean rectangle), re-encode the
 resized clip with a tiny GOP (all-intra by default) and store it as one per-clip
-blob-v2 row alongside the clip's caption + sizing metadata.
+large_binary row alongside the clip's caption + sizing metadata.
 
 Why (mirrors ``build_composed_droid.py`` for the action loader):
   * the base loader decodes each source clip at its native size, then resizes
@@ -26,7 +26,7 @@ Schema (one row per clip):
   clip_id (str), width/height (orig int64), start_frame/end_frame/temporal_interval
   (int64), enc_h/enc_w (resized stored size int64), fps (float64),
   caption_json (str, JSON or ""), caption (str dense backup),
-  video_bytes (large_binary, blob-v2).
+  video_bytes (large_binary).
 """
 from __future__ import annotations
 
@@ -40,12 +40,14 @@ import lancedb
 import numpy as np
 import pyarrow as pa
 
-from cosmos_framework.data.vfm.local_datasets.helper import ffmpeg_decode_video, get_video_metadata
-from cosmos_framework.data.vfm.local_datasets.helper import get_aspect_ratio
+from cosmos_framework.data.vfm.local_datasets.helper import (
+    ffmpeg_decode_video,
+    get_aspect_ratio,
+    get_video_metadata,
+)
 from cosmos_framework.data.vfm.utils import VIDEO_RES_SIZE_INFO
 from cosmos_framework.inference.structured_caption import CAPTION_JSON_KEY
 
-_BLOB = {b"lance-encoding:blob": b"true"}
 
 
 def _encode(frames_thwc_u8: np.ndarray, fps: int, gop: int) -> bytes:
@@ -77,18 +79,14 @@ def main() -> None:
     ap.add_argument("--table", default="vision_sft")
     ap.add_argument("--resolution", default="256")
     ap.add_argument("--gop", type=int, default=1, help="keyframe interval (1=all-intra)")
-    ap.add_argument(
-        "--storage", choices=["plain", "blob"], default="plain",
-        help="video_bytes encoding. 'plain' large_binary reads ~6x faster on S3 via a "
-        "columnar take; 'blob' (lance blob-v2) only helps for multi-GB payloads. Clips "
-        "are small, so plain is the default. The loader auto-detects either.",
-    )
     args = ap.parse_args()
 
     base_dir = os.path.dirname(os.path.abspath(args.jsonl))
     output_sizes = VIDEO_RES_SIZE_INFO[args.resolution]
-    vb_meta = _BLOB if args.storage == "blob" else None
 
+    # video_bytes is plain large_binary, read via the Permutation API — fastest for our small
+    # (<~2MB) clips. TODO: blob-v2 is faster for larger per-row payloads (>=~8-16MB) when read
+    # in parallel; switch the storage + loader together if clip sizes grow.
     schema = pa.schema(
         [
             pa.field("clip_id", pa.string()),
@@ -102,7 +100,7 @@ def main() -> None:
             pa.field("fps", pa.float64()),
             pa.field("caption_json", pa.string()),
             pa.field("caption", pa.string()),
-            pa.field("video_bytes", pa.large_binary(), metadata=vb_meta),
+            pa.field("video_bytes", pa.large_binary()),
         ]
     )
 

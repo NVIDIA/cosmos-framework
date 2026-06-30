@@ -35,9 +35,15 @@ Per-worker PSS memory at scale:
 ## Mechanisms
 
 1. **Pre-composed Clips**: For Action and Vision-SFT, frames are resized and composed offline once. The loader decodes a single optimized stream instead of multiple full-resolution views.
-2. **Columnar Random Access**: Provides O(1) random access and true global shuffle for VLM datasets.
+2. **Columnar Random Access**: Provides O(1) random access and true global shuffle via the LanceDB **Permutation API**.
 3. **Batched I/O**: `__getitems__` performs batched reads and decodes per file/clip, maximizing I/O efficiency.
-4. **Parallel S3 Reads**: Uses plain binary storage to leverage Lance's IO thread pool for concurrent GET requests.
+4. **Parallel S3 Reads**: Media is stored as plain `large_binary` and read via the Permutation API (columnar take across Lance's IO thread pool) — fastest for our small (<~2 MB) clips.
+
+> **Note — storage will eventually move to blob-v2.** Media columns use plain `large_binary`
+> today because it's fastest for our small clips. Benchmarked on S3, **blob-v2 overtakes plain
+> for larger per-row payloads (≥~8–16 MB)** — *when read in parallel* (a serial `take_blobs`
+> loop is latency-bound and much slower). If per-row clip sizes grow, switch the converters to
+> blob-v2 and add a parallel `take_blobs` read path in the loaders.
 
 ## Usage
 
