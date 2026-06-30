@@ -46,6 +46,11 @@ class GenerationDataClean:
     action_domain_id: list[torch.Tensor] | None = None  # per-sample domain IDs, None when no action samples
     raw_action_dim: list[torch.Tensor] | None = None  # raw action dimension, used adding masks to loss calculation
 
+    # Multi-control transfer: per-sample list of per-control weights.
+    # Shape: [num_samples], each element is a list of floats (one per control stream).
+    # None for non-transfer or single-control samples.
+    control_weights: list[list[float]] | None = None
+
 
 @dataclass(slots=True)
 class GenerationDataNoised:

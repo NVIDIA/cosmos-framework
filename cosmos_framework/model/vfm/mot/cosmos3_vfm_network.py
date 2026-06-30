@@ -9,7 +9,7 @@ from torch import nn
 from transformers.configuration_utils import PretrainedConfig
 from transformers.modeling_utils import PreTrainedModel
 
-from cosmos_framework.model.vfm.mot.attention import build_packed_sequence
+from cosmos_framework.model.vfm.mot.attention import SplitInfo, build_packed_sequence
 from cosmos_framework.model.vfm.mot.context_parallel_utils import (
     get_context_parallel_last_hidden_state,
     get_context_parallel_sharded_sequence,
@@ -1084,6 +1084,55 @@ class Cosmos3VFMNetwork(PreTrainedModel):
             null_action_supertokens=packed_seq.null_action_supertokens,
             pad_for_cuda_graphs=self.pad_for_cuda_graphs,
         )
+
+        # ── Multi-control transfer: annotate SplitInfo with per-item ranges ──────
+        # Activated only when packed_seq carries control_weights, i.e. the caller
+        # has set up a multi-control batch via build_transfer_batch.
+        #
+        # multi_control_two_way_attention runs N independent maskless SDPA passes,
+        # one per control.  For each pass i, KV = [text | ctrl_i | noisy].
+        # The final noisy output is the weighted sum of the N pass outputs:
+        #   noisy_out = w_1 * noisy_out_1 + ... + w_N * noisy_out_N
+        # All SDPA calls are maskless → Flash Attention always active.
+        # N=1, w=1.0 → identical to two_way_attention.
+        #
+        # CP compatibility: control_stream_token_ranges are gen-relative global
+        # offsets computed here, before CP sharding.  Ulysses CP restores the full
+        # sequence on every rank (via all-to-all) before calling dispatch_attention,
+        # so the global ranges are valid indices inside multi_control_two_way_attention.
+        if (
+            isinstance(attention_meta, SplitInfo)
+            and packed_seq.control_weights is not None
+            and packed_seq.vision_item_split_lens
+        ):
+            # For multi-control, each sample must have N controls + 1 noisy item
+            # (items 0..N-2 are controls, item N-1 is the noisy target).
+            # Only batch_size=1 is supported; assert to catch misuse early.
+            assert len(packed_seq.vision_item_split_lens) == 1, (
+                f"Multi-control transfer requires batch_size=1, got {len(packed_seq.vision_item_split_lens)} samples."
+            )
+            item_lens = packed_seq.vision_item_split_lens[0]  # [L_ctrl0, L_ctrl1, ..., L_noisy]
+            weights = packed_seq.control_weights[0]  # [w_ctrl0, w_ctrl1, ...]
+            assert len(item_lens) > 1, (
+                f"Multi-control requires at least 1 control + 1 noisy item; got vision_item_split_lens={item_lens}."
+            )
+            assert len(weights) == len(item_lens) - 1, (
+                f"control_weights length ({len(weights)}) must equal number of control items ({len(item_lens) - 1})."
+            )
+            ctrl_ranges: list[tuple[int, int]] = []
+            cursor = 0
+            for lens in item_lens[:-1]:  # all but last = control streams
+                ctrl_ranges.append((cursor, cursor + lens))
+                cursor += lens
+            noisy_range = (cursor, cursor + item_lens[-1])
+            n_gen = int(vision_sequence_indexes.shape[0]) if vision_sequence_indexes is not None else 0
+            assert noisy_range[1] == n_gen, (
+                f"vision_item_split_lens sums to {noisy_range[1]} gen tokens but packed tensor has "
+                f"{n_gen}; packing inconsistency detected."
+            )
+            attention_meta.control_stream_token_ranges = ctrl_ranges
+            attention_meta.noisy_token_range = noisy_range
+            attention_meta.control_weights = weights
 
         input_pack, packed_position_ids = get_context_parallel_sharded_sequence(
             attn_implementation=self.config.joint_attn_implementation,

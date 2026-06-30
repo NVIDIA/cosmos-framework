@@ -257,6 +257,11 @@ def pack_input_sequence(
                 )
 
                 vision_split_len = 0
+                # Per-item split lengths for multi-control attention routing.
+                # Only tracked when control_weights are present (inference-only);
+                # skipped during training to avoid unnecessary side effects.
+                track_item_split_lens = gen_data_clean.control_weights is not None
+                sample_item_split_lens: list[int] = []
                 # Controlnet-style transfer: when set, all vision items share the same
                 # temporal mRoPE grid. We snapshot the offset before the loop and
                 # rewind to it before each item, so every item produces identical
@@ -359,6 +364,10 @@ def pack_input_sequence(
                         vision_temporal_positions=vision_temporal_positions,
                     )
                     vision_split_len += item_split_len
+                    if track_item_split_lens:
+                        sample_item_split_lens.append(item_split_len)
+                if track_item_split_lens:
+                    packed_seq.vision_item_split_lens.append(sample_item_split_lens)
                 sample_len += vision_split_len
 
             else:

@@ -155,6 +155,18 @@ class PackedSequence:
     action: ModalityData | None = None
     sound: ModalityData | None = None
 
+    # Multi-control transfer: per-sample list of per-vision-item token counts.
+    # For a multi-control transfer sample with N controls + 1 noisy target,
+    # vision_item_split_lens[i] = [L_ctrl0, L_ctrl1, ..., L_ctrlN-1, L_noisy].
+    # Used by cosmos3_vfm_network.py to derive gen-relative control/noisy ranges
+    # for multi_control_two_way_attention.
+    vision_item_split_lens: list[list[int]] = field(default_factory=list)
+
+    # Per-sample per-control weights for multi-control weighted V-scaling.
+    # Parallel to vision_item_split_lens[i][:-1] (excludes noisy item).
+    # None for non-transfer or standard single-control samples.
+    control_weights: list[list[float]] | None = None
+
     def finalize(
         self,
         gen_data_clean: GenerationDataClean,
@@ -262,6 +274,9 @@ class PackedSequence:
             # Temporal causal
             null_action_supertokens=self.null_action_supertokens,
             num_action_tokens_per_supertoken=self.num_action_tokens_per_supertoken,
+            # Multi-control transfer
+            vision_item_split_lens=list(self.vision_item_split_lens),
+            control_weights=gen_data_clean.control_weights,
         )
 
     def to_cuda(self) -> None:
