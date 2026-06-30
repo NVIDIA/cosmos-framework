@@ -2915,6 +2915,7 @@ class OmniMoTModel(ImaginaireModel):
                 },
                 step=iteration,
             )
+        control_weights: list[list[float]] | None = data_batch.get("control_weights", None)
         return GenerationDataClean(
             batch_size=batch_size,
             is_image_batch=is_image_batch,
@@ -2931,6 +2932,7 @@ class OmniMoTModel(ImaginaireModel):
             action_domain_id=action_domain_id,
             num_vision_items_per_sample=num_vision_items_per_sample,
             raw_action_dim=raw_action_dim,
+            control_weights=control_weights,
         )
 
     def _normalize_video_databatch_inplace(

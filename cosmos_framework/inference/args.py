@@ -246,6 +246,8 @@ class TransferArgs(ArgsBase):
     """Resolved transfer inference arguments for a single control hint."""
 
     control_path: ResolvedFilePathOrUrl | None = None
+    weight: float = 1.0
+    """Strength of this control signal in the weighted multi-control attention aggregation."""
 
 
 class EdgeTransferArgs(TransferArgs):
@@ -261,6 +263,9 @@ class TransferOverrides(OverridesBase):
 
     control_path: ResolvedFilePathOrUrl | None = None
     """Path or URL to pre-computed control input."""
+
+    weight: float | None = None
+    """Override the control weight for multi-control weighted attention aggregation."""
 
     def download(self, output_dir: Path):
         if self.control_path is not None:

@@ -155,8 +155,21 @@ def build_transfer_batch(
     prompt: str,
     negative_prompt: str | None,
     share_vision_temporal_positions: bool,
+    control_weights: list[float] | None = None,
 ) -> dict[str, object]:
-    """Build the ``[ctrl_1, ..., ctrl_N, target]`` batch for transfer inference."""
+    """Build the ``[ctrl_1, ..., ctrl_N, target]`` batch for transfer inference.
+
+    ``control_weights`` is a per-control scalar (default 1.0 each).  Weights are
+    normalised to sum to 1 before use.  In ``multi_control_two_way_attention`` N
+    independent maskless SDPA passes are computed (one per control), each with
+    KV = [text | ctrl_i | noisy].  The final noisy output is the weighted sum:
+
+        noisy_out = w_1 * noisy_out_1 + ... + w_N * noisy_out_N
+
+    All SDPA calls are maskless so Flash Attention is always active.
+    When ``N=1`` the single weight normalises to 1.0, reproducing the original
+    ``two_way_attention`` behaviour exactly.
+    """
     control_5ds = [cv.unsqueeze(0).cuda().to(dtype=torch.bfloat16) for cv in control_videos]
     target_5d = target_video.unsqueeze(0).cuda().to(dtype=torch.bfloat16)
     num_vision_items = len(control_5ds) + 1
@@ -164,6 +177,16 @@ def build_transfer_batch(
         condition_frame_indexes = list(range((num_conditional_frames - 1) // temporal_compression_factor + 1))
     else:
         condition_frame_indexes = []
+
+    if control_weights is None:
+        control_weights = [1.0] * len(control_5ds)
+    assert len(control_weights) == len(control_5ds), (
+        f"control_weights length {len(control_weights)} must match number of controls {len(control_5ds)}"
+    )
+    assert all(w >= 0 for w in control_weights), f"control_weights must all be non-negative, got {control_weights}"
+    total = sum(control_weights)
+    assert total > 0, f"control_weights must have a positive sum, got {control_weights}"
+    control_weights = [w / total for w in control_weights]
 
     size = torch.tensor([[height, width, height, width]], dtype=torch.float32).cuda()
     batch: dict[str, object] = {
@@ -174,6 +197,9 @@ def build_transfer_batch(
         "padding_mask": torch.zeros(1, 1, height, width).cuda(),
         "num_frames": torch.tensor([num_frames]).cuda(),
         "num_vision_items_per_sample": [num_vision_items],
+        # Per-control weights for multi-control weighted attention aggregation.
+        # Shape: [num_samples], each element is a list of floats (one per control).
+        "control_weights": [control_weights],
         "is_preprocessed": True,
         # share_vision_temporal_positions must match the trained checkpoint's
         # SequencePlan regime; mismatched flag → frame-drift between control and
@@ -512,6 +538,7 @@ def generate_transfer_sample(
             prompt=prompt,
             negative_prompt=negative_prompt,
             share_vision_temporal_positions=share_temporal,
+            control_weights=[h.weight for h in hints.values()],
         )
         outputs = model.generate_samples_from_batch(
             data_batch,

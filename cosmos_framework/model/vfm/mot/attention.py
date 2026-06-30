@@ -56,6 +56,14 @@ class SplitInfo:
         self.num_action_tokens_per_supertoken = num_action_tokens_per_supertoken
         self.null_action_supertokens = null_action_supertokens
 
+        # Multi-control transfer fields (set post-construction in cosmos3_vfm_network.py).
+        # Gen-relative token ranges for each control stream, one tuple (start, end) per control.
+        self.control_stream_token_ranges: list[tuple[int, int]] | None = None
+        # Gen-relative token range (start, end) for the noisy target tokens.
+        self.noisy_token_range: tuple[int, int] | None = None
+        # Per-control scalar weights; parallel to control_stream_token_ranges.
+        self.control_weights: list[float] | None = None
+
 
 AttentionMaskType = SplitInfo
 
@@ -233,6 +241,139 @@ def three_way_attention(
     return out_all
 
 
+def multi_control_two_way_attention(
+    packed_query_states: SequencePack,
+    packed_key_states: SequencePack,
+    packed_value_states: SequencePack,
+    split_info: SplitInfo,
+) -> SequencePack:
+    """Two-way attention for multi-control transfer inference.
+
+    N independent single-control attention passes; noisy output = weighted sum.
+
+    Layout of the "full/gen" segment (mirrors the packed batch built by ``build_transfer_batch``):
+
+        full = [ctrl_1 | ctrl_2 | ... | ctrl_N | noisy]
+
+    For each control i, one independent maskless SDPA is computed:
+
+        ctrl_i and noisy both attend to KV = [text | ctrl_i | noisy]
+
+    The final outputs are:
+      - ctrl_i output: from pass i only
+      - noisy output:  w_1 * noisy_out_1 + ... + w_N * noisy_out_N  (weighted sum)
+
+    All SDPA calls are maskless → Flash Attention is always active.
+    N=1, w=1.0 → identical to ``two_way_attention``.
+
+    Padding safety:
+      Both ``get_causal_seq`` and ``get_full_only_seq`` can return padded rows.
+      We unpad to valid token counts before each SDPA so that padded rows
+      never enter the softmax denominator.
+
+    Args:
+        packed_query/key/value_states: SequencePack for a single sample.
+        split_info: SplitInfo carrying ``control_stream_token_ranges``,
+            ``noisy_token_range``, and ``control_weights`` (all must be non-None).
+    """
+    assert split_info.control_stream_token_ranges is not None
+    assert split_info.noisy_token_range is not None
+    assert split_info.control_weights is not None
+
+    ctrl_ranges = split_info.control_stream_token_ranges
+    noisy_s, noisy_e = split_info.noisy_token_range
+    weights = split_info.control_weights
+
+    # ── 1. Text self-attention (causal, unchanged) ───────────────────────────
+    causal_q, causal_q_offsets = get_causal_seq(packed_query_states)
+    causal_k, causal_k_offsets = get_causal_seq(packed_key_states)
+    causal_v, _ = get_causal_seq(packed_value_states)
+
+    use_dont_care_mask = causal_q_offsets is causal_k_offsets
+    causal_res = attention(
+        causal_q.unsqueeze(0),
+        causal_k.unsqueeze(0),
+        causal_v.unsqueeze(0),
+        cumulative_seqlen_Q=causal_q_offsets,
+        cumulative_seqlen_KV=causal_k_offsets,
+        max_seqlen_Q=packed_query_states["max_causal_len"],
+        max_seqlen_KV=packed_query_states["max_causal_len"],
+        is_causal=True,
+        causal_type=CausalType.DontCare if use_dont_care_mask else CausalType.TopLeft,
+    )
+    causal_out = causal_res.squeeze(0).flatten(-2, -1)  # [N_text, Hq*D]
+
+    # ── 2. Extract unpadded full/gen tokens ──────────────────────────────────
+    full_q, full_q_offsets = get_full_only_seq(packed_query_states)
+    full_k, _ = get_full_only_seq(packed_key_states)
+    full_v, _ = get_full_only_seq(packed_value_states)
+
+    n_text = int(causal_k_offsets[-1])
+    n_full = int(full_q_offsets[-1])
+
+    # Unpad to avoid padded rows entering the softmax denominator.
+    causal_k_v = causal_k[:n_text]  # [N_text, Hkv, D]
+    causal_v_v = causal_v[:n_text]  # [N_text, Hkv, D]
+    full_q_v = full_q[:n_full]  # [N_full, Hq,  D]
+    full_k_v = full_k[:n_full]  # [N_full, Hkv, D]
+    full_v_v = full_v[:n_full]  # [N_full, Hkv, D]
+
+    noisy_q = full_q_v[noisy_s:noisy_e]  # [N_noisy, Hq,  D]
+    noisy_k = full_k_v[noisy_s:noisy_e]  # [N_noisy, Hkv, D]
+    noisy_v = full_v_v[noisy_s:noisy_e]  # [N_noisy, Hkv, D]
+
+    def _sdpa(q: torch.Tensor, k: torch.Tensor, v: torch.Tensor) -> torch.Tensor:
+        """Maskless attention using cosmos_framework attention() → [N_q, Hq*D]."""
+        n_q, n_kv = q.shape[0], k.shape[0]
+        seqlens_q = torch.tensor([n_q], dtype=torch.int32, device=q.device)
+        seqlens_kv = torch.tensor([n_kv], dtype=torch.int32, device=k.device)
+        res = attention(
+            q.unsqueeze(0),  # [1, N_q,  Hq,  D]
+            k.unsqueeze(0),  # [1, N_kv, Hkv, D]
+            v.unsqueeze(0),  # [1, N_kv, Hkv, D]
+            seqlens_Q=seqlens_q,
+            seqlens_KV=seqlens_kv,
+            max_seqlen_Q=n_q,
+            max_seqlen_KV=n_kv,
+        )  # [1, N_q, Hq, D]
+        return res.squeeze(0).flatten(-2, -1)  # [N_q, Hq*D]
+
+    # ── 3. N independent single-control passes ────────────────────────────────
+    # For each control i: KV = [text | ctrl_i | noisy] — maskless SDPA.
+    # ctrl_i attends to [text, ctrl_i, noisy] → stored directly in full_out.
+    # noisy  attends to [text, ctrl_i, noisy] → accumulated as weighted sum.
+    full_out_v = full_q_v.new_zeros(n_full, causal_out.shape[-1])
+    noisy_out_acc: torch.Tensor | None = None
+
+    for i, (cs, ce) in enumerate(ctrl_ranges):
+        ctrl_k_i = full_k_v[cs:ce]
+        ctrl_v_i = full_v_v[cs:ce]
+        ctrl_q_i = full_q_v[cs:ce]
+
+        # KV context for this pass: [text | ctrl_i | noisy]
+        kv_k_i = torch.cat([causal_k_v, ctrl_k_i, noisy_k], dim=0)
+        kv_v_i = torch.cat([causal_v_v, ctrl_v_i, noisy_v], dim=0)
+
+        # ctrl_i output — stored directly
+        full_out_v[cs:ce] = _sdpa(ctrl_q_i, kv_k_i, kv_v_i)
+
+        # noisy output for pass i — accumulate weighted sum
+        noisy_out_i = _sdpa(noisy_q, kv_k_i, kv_v_i)
+        if noisy_out_acc is None:
+            noisy_out_acc = weights[i] * noisy_out_i
+        else:
+            noisy_out_acc = noisy_out_acc + weights[i] * noisy_out_i
+
+    assert noisy_out_acc is not None
+    full_out_v[noisy_s:noisy_e] = noisy_out_acc
+
+    # Re-pad to original shape so downstream layers see consistent tensor sizes.
+    full_out = full_q.new_zeros(full_q.shape[0], full_out_v.shape[-1])
+    full_out[:n_full] = full_out_v
+
+    return from_mode_splits(causal_out, full_out, packed_query_states)
+
+
 def dispatch_attention(
     packed_query_states: SequencePack,
     packed_key_states: SequencePack,
@@ -242,7 +383,14 @@ def dispatch_attention(
     memory_value: MemoryValue | None = None,
 ) -> tuple[SequencePack, KVToStore | None]:
     assert memory_value is None, "Base dispatch_attention does not handle MemoryValue"
-    if isinstance(attention_mask, SplitInfo) and attention_mask.is_three_way:
+    if isinstance(attention_mask, SplitInfo) and attention_mask.control_stream_token_ranges is not None:
+        output = multi_control_two_way_attention(
+            packed_query_states,
+            packed_key_states,
+            packed_value_states,
+            attention_mask,
+        )
+    elif isinstance(attention_mask, SplitInfo) and attention_mask.is_three_way:
         output = three_way_attention(
             packed_query_states,
             packed_key_states,
