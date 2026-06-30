@@ -4,6 +4,7 @@
 Subclasses genuine Cosmos loaders to measure performance in storage regimes
 not natively supported by the base classes.
 """
+
 from __future__ import annotations
 
 import os
@@ -50,20 +51,20 @@ class S3DROIDLeRobotDataset(DROIDLeRobotDataset):
         self._materialize_from_s3()
 
     def _rel_for(self, episode: dict[str, Any], video_key: str) -> str:
-        ci = int(episode.get(
-            f"videos/{video_key}/chunk_index",
-            episode.get(f"videos/{video_key}/episode_chunk", episode.get("data/chunk_index", 0))
-        ))
-        fi = int(episode.get(
-            f"videos/{video_key}/file_index",
-            episode.get(f"videos/{video_key}/episode_file", episode.get("data/file_index", 0))
-        ))
+        ci = int(
+            episode.get(
+                f"videos/{video_key}/chunk_index",
+                episode.get(f"videos/{video_key}/episode_chunk", episode.get("data/chunk_index", 0)),
+            )
+        )
+        fi = int(
+            episode.get(
+                f"videos/{video_key}/file_index",
+                episode.get(f"videos/{video_key}/episode_file", episode.get("data/file_index", 0)),
+            )
+        )
         return self._info["video_path"].format(
-            video_key=video_key,
-            chunk_index=ci,
-            file_index=fi,
-            episode_chunk=ci,
-            episode_file=fi
+            video_key=video_key, chunk_index=ci, file_index=fi, episode_chunk=ci, episode_file=fi
         )
 
     def _materialize_from_s3(self) -> None:
@@ -83,9 +84,7 @@ class S3DROIDLeRobotDataset(DROIDLeRobotDataset):
                 continue
             dst.parent.mkdir(parents=True, exist_ok=True)
             s3.download_file(
-                self._s3_bucket,
-                f"{self._s3_prefix}/{rel}",
-                str(dst.with_suffix(dst.suffix + f".part{os.getpid()}"))
+                self._s3_bucket, f"{self._s3_prefix}/{rel}", str(dst.with_suffix(dst.suffix + f".part{os.getpid()}"))
             )
             os.replace(dst.with_suffix(dst.suffix + f".part{os.getpid()}"), dst)
 
@@ -98,11 +97,7 @@ def _qwen_tokenizer_config():
 
 
 def load_sft_metadata(
-    jsonl_path: str,
-    *,
-    s3_bucket: str | None = None,
-    s3_prefix: str | None = None,
-    min_frames: int = 61
+    jsonl_path: str, *, s3_bucket: str | None = None, s3_prefix: str | None = None, min_frames: int = 61
 ) -> list[dict]:
     meta = _load_sft_metadata_from_s3(None, jsonl_path, min_frames=min_frames)
     if s3_bucket and s3_prefix:
@@ -120,6 +115,7 @@ def load_sft_metadata(
 
 class BenchSFTDataset(SFTDataset):
     """SFTDataset driver for throughput benchmarks."""
+
     def __init__(
         self,
         metadata: list[dict],
@@ -129,7 +125,7 @@ class BenchSFTDataset(SFTDataset):
         temporal_interval_mode: str = "entire_chunk",
         frame_selection_mode: str = "first",
         temporal_compression_factor: int = 4,
-        skip_tokenize: bool = False
+        skip_tokenize: bool = False,
     ) -> None:
         super().__init__(
             metadata=metadata,
@@ -140,7 +136,7 @@ class BenchSFTDataset(SFTDataset):
             frame_selection_mode=frame_selection_mode,
             tokenizer_config=_qwen_tokenizer_config(),
             cfg_dropout_rate=0.0,
-            temporal_compression_factor=temporal_compression_factor
+            temporal_compression_factor=temporal_compression_factor,
         )
         self.skip_tokenize = bool(skip_tokenize)
         self.shard_world_size = 1
@@ -161,12 +157,7 @@ class BenchSFTDataset(SFTDataset):
 
     @classmethod
     def from_jsonl(
-        cls,
-        jsonl_path: str,
-        *,
-        s3_bucket: str | None = None,
-        s3_prefix: str | None = None,
-        **kw
+        cls, jsonl_path: str, *, s3_bucket: str | None = None, s3_prefix: str | None = None, **kw
     ) -> "BenchSFTDataset":
         return cls(load_sft_metadata(jsonl_path, s3_bucket=s3_bucket, s3_prefix=s3_prefix), **kw)
 

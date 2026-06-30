@@ -11,6 +11,7 @@ so the base and the LanceDB loader run on byte-identical inputs.
 The (large, concatenated) source mp4s are symlinked, not copied — episode
 ``from_timestamp`` offsets index into them unchanged.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -102,9 +103,7 @@ def main() -> None:
     # ---- tasks: normalize to Cosmos schema (columns: task_index, task) ----
     tasks = pq.read_table(src / "meta" / "tasks.parquet")
     task_col = "task" if "task" in tasks.column_names else "__index_level_0__"
-    tasks = pa.table(
-        {"task_index": tasks["task_index"], "task": tasks[task_col].cast(pa.string())}
-    )
+    tasks = pa.table({"task_index": tasks["task_index"], "task": tasks[task_col].cast(pa.string())})
     pq.write_table(tasks, out / "meta" / "tasks.parquet")
     info = _rename_info(info)
     info["total_episodes"] = n

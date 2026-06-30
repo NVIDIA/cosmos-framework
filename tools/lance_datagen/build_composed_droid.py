@@ -12,6 +12,7 @@ work — fewer pixels, one stream, no resize/concat, and short-GOP makes random
 window seeks cheap. Still fully video-encoded (no per-frame JPEG / disk blowup).
 The composition is byte-for-byte the base's; only the H.264 re-encode is lossy.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -27,7 +28,6 @@ import torch
 from cosmos_framework.data.vfm.action.datasets.droid_lerobot_dataset import DROIDLeRobotDataset
 
 
-
 def _encode(frames_thwc_u8: np.ndarray, fps: int, gop: int) -> bytes:
     """Raw RGB frames -> H.264 mp4 bytes via ffmpeg (short GOP, faststart).
 
@@ -37,10 +37,33 @@ def _encode(frames_thwc_u8: np.ndarray, fps: int, gop: int) -> bytes:
     os.close(fd)
     try:
         cmd = [
-            "ffmpeg", "-y", "-loglevel", "error",
-            "-f", "rawvideo", "-pix_fmt", "rgb24", "-s", f"{w}x{h}", "-r", str(fps), "-i", "pipe:0",
-            "-c:v", "libx264", "-preset", "veryfast", "-g", str(gop), "-keyint_min", str(gop),
-            "-pix_fmt", "yuv420p", "-movflags", "+faststart", path,
+            "ffmpeg",
+            "-y",
+            "-loglevel",
+            "error",
+            "-f",
+            "rawvideo",
+            "-pix_fmt",
+            "rgb24",
+            "-s",
+            f"{w}x{h}",
+            "-r",
+            str(fps),
+            "-i",
+            "pipe:0",
+            "-c:v",
+            "libx264",
+            "-preset",
+            "veryfast",
+            "-g",
+            str(gop),
+            "-keyint_min",
+            str(gop),
+            "-pix_fmt",
+            "yuv420p",
+            "-movflags",
+            "+faststart",
+            path,
         ]
         subprocess.run(cmd, input=frames_thwc_u8.tobytes(), stdout=subprocess.DEVNULL, check=True)
         with open(path, "rb") as fh:
@@ -57,13 +80,9 @@ def main() -> None:
     ap.add_argument("--gop", type=int, default=1, help="keyframe interval (1=all-intra)")
     args = ap.parse_args()
 
-    base = DROIDLeRobotDataset(
-        root=args.root, action_space="joint_pos", use_state=True, mode="policy", chunk_length=16
-    )
+    base = DROIDLeRobotDataset(root=args.root, action_space="joint_pos", use_state=True, mode="policy", chunk_length=16)
     fps = int(round(base._fps))
-    # video_bytes is plain large_binary, read via the Permutation API — fastest for our small
-    # (<~2MB) clips. TODO: blob-v2 is faster for larger per-row payloads (>=~8-16MB) when read
-    # in parallel; switch the storage + loader together if clip sizes grow.
+    # video_bytes is plain large_binary. TODO: move to blob-v2 after optimizations.
     schema = pa.schema(
         [
             pa.field("episode_index", pa.int64()),

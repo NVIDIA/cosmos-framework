@@ -21,6 +21,7 @@ Then ``ln -s <orig>/videos <out_root>/videos`` so the base can decode. Usage:
     python bench_memory.py --side base  --root /tmp/x16 --uri /tmp/lance_x16 --random
     python bench_memory.py --side lance --root /tmp/x16 --uri /tmp/lance_x16 --random
 """
+
 from __future__ import annotations
 
 import argparse
@@ -46,8 +47,7 @@ def _replicate_data(table, n, n_ep, n_rows):
                 parts.append(table.column(name).to_numpy() + k * n_ep)
             else:
                 parts.append(table.column(name).combine_chunks())
-        cols.append(pa.array(np.concatenate(parts)) if name in ("index", "episode_index")
-                    else pa.concat_arrays(parts))
+        cols.append(pa.array(np.concatenate(parts)) if name in ("index", "episode_index") else pa.concat_arrays(parts))
     return pa.table(cols, names=names)
 
 
@@ -61,8 +61,10 @@ def _scale_root(src, out, n):
     ep = pa.concat_tables([pq.read_table(f) for f in sorted(glob.glob(f"{src}/meta/episodes/chunk-*/file-*.parquet"))])
     ep_cols = []
     for name in ep.column_names:
-        parts = [(ep.column(name).to_numpy() + k * n_ep) if name == "episode_index" else ep.column(name).combine_chunks()
-                 for k in range(n)]
+        parts = [
+            (ep.column(name).to_numpy() + k * n_ep) if name == "episode_index" else ep.column(name).combine_chunks()
+            for k in range(n)
+        ]
         ep_cols.append(pa.array(np.concatenate(parts)) if name == "episode_index" else pa.concat_arrays(parts))
     os.makedirs(f"{out}/meta/episodes/chunk-000", exist_ok=True)
     pq.write_table(pa.table(ep_cols, names=ep.column_names), f"{out}/meta/episodes/chunk-000/file-000.parquet")
@@ -77,8 +79,10 @@ def _scale_lance(src, out, table, n):
 
     def batches():
         for k in range(n):
-            cols = [pa.array(t.column(nm).to_numpy() + k * n_ep) if nm == "episode_index"
-                    else t.column(nm).combine_chunks() for nm in t.column_names]
+            cols = [
+                pa.array(t.column(nm).to_numpy() + k * n_ep) if nm == "episode_index" else t.column(nm).combine_chunks()
+                for nm in t.column_names
+            ]
             yield pa.RecordBatch.from_arrays(cols, names=t.column_names)
 
     db = lancedb.connect(out)

@@ -4,6 +4,7 @@
 Replaces DROIDLeRobotDataset with a version that reads from LanceDB for improved I/O.
 Inherits indexing, pose math, and action assembly from the base loader.
 """
+
 from __future__ import annotations
 
 import random
@@ -15,7 +16,12 @@ import torch
 from lancedb.permutation import Permutation
 from torchcodec.decoders import VideoDecoder
 
+from cosmos_framework.data.vfm.action.datasets.action_sft_dataset import (
+    ActionIterableShuffleDataset,
+    ActionSFTDataset,
+)
 from cosmos_framework.data.vfm.action.datasets.droid_lerobot_dataset import DROIDLeRobotDataset
+from cosmos_framework.data.vfm.action.transforms import ActionTransformPipeline
 
 _ADDITIONAL_VIEW_DESC = (
     "The top row is from the wrist-mounted camera. "
@@ -44,6 +50,7 @@ class LanceDROIDComposedDataset(_FreeBaseRowsMixin, DROIDLeRobotDataset):
 
     Decodes a single video stream per episode instead of 3 views.
     """
+
     def __init__(
         self,
         root: str,
@@ -75,21 +82,19 @@ class LanceDROIDComposedDataset(_FreeBaseRowsMixin, DROIDLeRobotDataset):
     def _ensure_open(self) -> None:
         if self._decoders is not None:
             return
-        db = (lancedb.connect(self._lance_uri, storage_options=self._storage_options)
-              if self._storage_options else lancedb.connect(self._lance_uri))
-        tbl = db.open_table(self._table)
+        tbl = lancedb.connect(self._lance_uri, storage_options=self._storage_options).open_table(self._table)
         ep = Permutation.identity(tbl).select_columns(["episode_index"]).with_format("arrow")
         rows = ep.__getitems__(list(range(tbl.count_rows())))
         self._ep_row = {int(rows.column("episode_index")[i].as_py()): i for i in range(rows.num_rows)}
         self._perm = Permutation.identity(tbl).select_columns(["video_bytes"]).with_format("arrow")
         self._decoders = {}
 
-    def _read_clip_bytes(self, rows: list[int]) -> list[bytes]:
-        # Plain large_binary via the Permutation API. Composed clips are small (<~2MB) where this
-        # is fastest on S3. TODO: move to blob-v2 — for larger per-row payloads (>=~8-16MB) a
-        # parallel blob-v2 read beats plain (read concurrently, not a serial take_blobs loop).
-        batch = self._perm.__getitems__([int(r) for r in rows])
-        return [batch.column("video_bytes")[i].as_py() for i in range(batch.num_rows)]
+    def _read_clip_bytes(self, rows: list[int]) -> dict[int, bytes]:
+        # Plain large_binary via the Permutation API. TODO: move to blob-v2 after optimizations.
+        # take returns rows sorted by offset, so key by row instead of relying on order.
+        rows = sorted({int(r) for r in rows})
+        col = self._perm.__getitems__(rows).column("video_bytes")
+        return {r: col[i].as_py() for i, r in enumerate(rows)}
 
     def _build_decoder(self, data: bytes) -> VideoDecoder:
         device = str(self._decode_device) if self._decode_device else None
@@ -101,14 +106,14 @@ class LanceDROIDComposedDataset(_FreeBaseRowsMixin, DROIDLeRobotDataset):
         missing = [e for e in needed if e not in self._decoders]
         if not missing:
             return
-        datas = self._read_clip_bytes([self._ep_row[e] for e in missing])
-        for e, data in zip(missing, datas):
+        clips = self._read_clip_bytes([self._ep_row[e] for e in missing])
+        for e in missing:
             while len(self._decoders) >= self._cache_size:
                 victim = next((k for k in self._decoders if k not in needed_set), None)
                 if victim is None:
                     break
                 self._decoders.pop(victim)
-            self._decoders[e] = self._build_decoder(data)
+            self._decoders[e] = self._build_decoder(clips[self._ep_row[e]])
 
     def __getitem__(self, idx: int) -> dict[str, Any]:
         return self.__getitems__([int(idx)])[0]
@@ -133,12 +138,9 @@ class LanceDROIDComposedDataset(_FreeBaseRowsMixin, DROIDLeRobotDataset):
                 action, initial_pose = self._build_raw_action(obs, obs[: self._chunk_length])
                 extras = {"initial_pose": initial_pose}
             task = self._tasks[int(obs[0]["task_index"])]
-            specs.append({
-                "mode": mode,
-                "action": action,
-                "extras": extras,
-                "ai_caption": random.choice(task.split(" | "))
-            })
+            specs.append(
+                {"mode": mode, "action": action, "extras": extras, "ai_caption": random.choice(task.split(" | "))}
+            )
             clip_idx = [offset + k for k in range(self._chunk_length + 1)]
             e = plan.setdefault(ep_index, {"frames": [], "owners": []})
             lo = len(e["frames"])
@@ -156,15 +158,22 @@ class LanceDROIDComposedDataset(_FreeBaseRowsMixin, DROIDLeRobotDataset):
         results = []
         for sp in range(n):
             s = specs[sp]
-            results.append(self._build_result(
-                mode=s["mode"], video=decoded[sp], action=s["action"], ai_caption=s["ai_caption"],
-                additional_view_description=_ADDITIONAL_VIEW_DESC, **s["extras"],
-            ))
+            results.append(
+                self._build_result(
+                    mode=s["mode"],
+                    video=decoded[sp],
+                    action=s["action"],
+                    ai_caption=s["ai_caption"],
+                    additional_view_description=_ADDITIONAL_VIEW_DESC,
+                    **s["extras"],
+                )
+            )
         return results
 
 
 class LanceDROIDComposedIterable(torch.utils.data.IterableDataset):
     """Streams windows from LanceDROIDComposedDataset with episode-level shuffling."""
+
     def __init__(self, composed: LanceDROIDComposedDataset, seed: int = 42):
         super().__init__()
         self._ds = composed
@@ -193,4 +202,67 @@ class LanceDROIDComposedIterable(torch.utils.data.IterableDataset):
             epoch += 1
 
 
-__all__ = ["LanceDROIDComposedDataset", "LanceDROIDComposedIterable"]
+def get_lance_action_droid_sft_dataset(
+    *,
+    root: str,
+    lance_uri: str,
+    table: str = "droid_composed",
+    decode_device: str | None = "cpu",
+    fps: float = 15.0,
+    chunk_length: int = 32,
+    action_space: str = "joint_pos",
+    mode: str = "policy",
+    use_state: bool = True,
+    action_normalization: str | None = None,
+    viewpoint: str = "concat_view",
+    use_image_augmentation: bool = False,
+    use_filter_dict: bool = False,
+    filter_dict_path: str | None = None,
+    resolution: str | int = "256",
+    max_action_dim: int = 64,
+    tokenizer_config: Any = None,
+    cfg_dropout_rate: float = 0.1,
+    append_viewpoint_info: bool = True,
+    append_duration_fps_timestamps: bool = True,
+    append_resolution_info: bool = True,
+    append_idle_frames: bool = False,
+    iterable_shuffle: bool = False,
+    episode_shuffle_seed: int = 42,
+):
+    """Lance drop-in for ``get_action_droid_sft_dataset``: same DROID action SFT
+    stack (``ActionTransformPipeline`` + ``ActionSFTDataset``), reading the
+    pre-composed episodes from LanceDB instead of the raw LeRobot tree."""
+    dataset = LanceDROIDComposedDataset(
+        root=root,
+        lance_uri=lance_uri,
+        table=table,
+        decode_device=decode_device,
+        fps=fps,
+        chunk_length=chunk_length,
+        viewpoint=viewpoint,
+        action_space=action_space,
+        mode=mode,
+        use_state=use_state,
+        action_normalization=action_normalization,
+        use_image_augmentation=use_image_augmentation,
+        use_filter_dict=use_filter_dict,
+        filter_dict_path=filter_dict_path,
+    )
+    transform = ActionTransformPipeline(
+        tokenizer_config=tokenizer_config,
+        cfg_dropout_rate=cfg_dropout_rate,
+        max_action_dim=max_action_dim,
+        append_viewpoint_info=append_viewpoint_info,
+        append_duration_fps_timestamps=append_duration_fps_timestamps,
+        append_resolution_info=append_resolution_info,
+        append_idle_frames=append_idle_frames,
+    )
+    sft = ActionSFTDataset(dataset, transform, resolution)
+    return ActionIterableShuffleDataset(sft, seed=episode_shuffle_seed) if iterable_shuffle else sft
+
+
+__all__ = [
+    "LanceDROIDComposedDataset",
+    "LanceDROIDComposedIterable",
+    "get_lance_action_droid_sft_dataset",
+]

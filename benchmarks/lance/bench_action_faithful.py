@@ -11,6 +11,7 @@ Pure dataloader throughput (no model). Stressful config: many episodes (decoder 
 
   modes: base-episode | lance-episode | lance-random
 """
+
 from __future__ import annotations
 
 import argparse
@@ -19,8 +20,8 @@ import os
 import time
 
 import torch
-
 from base_standins import S3DROIDLeRobotDataset
+
 from cosmos_framework.data.lance import LanceDROIDComposedDataset
 from cosmos_framework.data.vfm.action.datasets.droid_lerobot_dataset import DROIDLeRobotDataset
 
@@ -68,25 +69,30 @@ def _build(mode, root, uri, region, cache, s3_bucket=None, s3_prefix=None):
     def _base():
         # genuine DROIDLeRobotDataset; for S3 the standin materializes the mega-mp4s first.
         if s3_bucket and s3_prefix:
-            return S3DROIDLeRobotDataset(root=root, s3_bucket=s3_bucket, s3_prefix=s3_prefix,
-                                         region=region, **_KW)
+            return S3DROIDLeRobotDataset(root=root, s3_bucket=s3_bucket, s3_prefix=s3_prefix, region=region, **_KW)
         return DROIDLeRobotDataset(root=root, **_KW)
 
     if mode == "base-random":
         return _base(), "random"
     if mode == "base-episode":
         return _EpisodeShuffle(_base()), None
-    comp = LanceDROIDComposedDataset(root=root, lance_uri=uri, decode_device="cpu",
-                                     decoder_cache_size=cache, storage_options=so, **_KW)
+    comp = LanceDROIDComposedDataset(
+        root=root, lance_uri=uri, decode_device="cpu", decoder_cache_size=cache, storage_options=so, **_KW
+    )
     if mode == "lance-episode":
         return _EpisodeShuffle(comp), None
     return comp, "random"  # lance-random -> RandomSampler
 
 
 def _measure(ds, sampler_kind, *, batch_size, num_workers, num_batches, warmup):
-    kw = dict(batch_size=batch_size, num_workers=num_workers, collate_fn=_collate,
-              persistent_workers=num_workers > 0, prefetch_factor=4 if num_workers > 0 else None,
-              multiprocessing_context="spawn" if num_workers > 0 else None)
+    kw = dict(
+        batch_size=batch_size,
+        num_workers=num_workers,
+        collate_fn=_collate,
+        persistent_workers=num_workers > 0,
+        prefetch_factor=4 if num_workers > 0 else None,
+        multiprocessing_context="spawn" if num_workers > 0 else None,
+    )
     if sampler_kind == "random":
         g = torch.Generator()
         g.manual_seed(0)
@@ -107,10 +113,17 @@ def _measure(ds, sampler_kind, *, batch_size, num_workers, num_batches, warmup):
 def _mode_entry(mode, a, q):
     """Subprocess entrypoint: build+measure one mode, return its samples/s. Each mode runs
     in its own process so the torchcodec/lance C++ teardown can't SIGABRT a later mode."""
-    ds, sk = _build(mode, a["root"], a["uri"], a["region"], a["cache_size"],
-                    s3_bucket=a["s3_bucket"], s3_prefix=a["s3_prefix"])
-    sps = _measure(ds, sk, batch_size=a["batch_size"], num_workers=a["num_workers"],
-                   num_batches=a["num_batches"], warmup=a["warmup"])
+    ds, sk = _build(
+        mode, a["root"], a["uri"], a["region"], a["cache_size"], s3_bucket=a["s3_bucket"], s3_prefix=a["s3_prefix"]
+    )
+    sps = _measure(
+        ds,
+        sk,
+        batch_size=a["batch_size"],
+        num_workers=a["num_workers"],
+        num_batches=a["num_batches"],
+        warmup=a["warmup"],
+    )
     q.put(sps)
     q.close()
     q.join_thread()
@@ -122,7 +135,9 @@ def main():
     ap.add_argument("--root", required=True)
     ap.add_argument("--uri", required=True)
     ap.add_argument("--region", default=None)
-    ap.add_argument("--s3-bucket", default=None, help="if set, base materializes mega-mp4s from this bucket (S3 regime)")
+    ap.add_argument(
+        "--s3-bucket", default=None, help="if set, base materializes mega-mp4s from this bucket (S3 regime)"
+    )
     ap.add_argument("--s3-prefix", default=None, help="key prefix the DROID videos/ tree lives under")
     ap.add_argument("--cache-size", type=int, default=16)
     ap.add_argument("--batch-size", type=int, default=16)
@@ -133,8 +148,10 @@ def main():
     args = ap.parse_args()
 
     a = vars(args)
-    print(f"batch={args.batch_size} workers={args.num_workers} cache={args.cache_size} "
-          f"num_batches={args.num_batches} LANCE_IO_THREADS={os.environ.get('LANCE_IO_THREADS','default')}\n")
+    print(
+        f"batch={args.batch_size} workers={args.num_workers} cache={args.cache_size} "
+        f"num_batches={args.num_batches} LANCE_IO_THREADS={os.environ.get('LANCE_IO_THREADS', 'default')}\n"
+    )
     print(f"{'mode':<16}{'samples/s':>12}{'vs base':>10}")
     ctx = mp.get_context("spawn")
     base = None
@@ -146,7 +163,7 @@ def main():
         p.join()
         if mode == "base-episode":
             base = sps
-        spd = f"{sps/base:.2f}x" if base else "-"
+        spd = f"{sps / base:.2f}x" if base else "-"
         print(f"{mode:<16}{sps:>12.1f}{spd:>10}", flush=True)
 
 

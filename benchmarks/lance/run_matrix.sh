@@ -11,12 +11,13 @@
 #   ALLOCS  worker allocations to sweep, "a v s" per entry, ';'-separated
 #           (default: "4 4 4;18 4 18" — RE-TUNE the 2nd for this machine's core count)
 #   RES     output file                       (default: ./matrix_results.txt)
-# Requires: .venv-gpu active deps + AWS creds (profile "cosmosbench" or the default chain).
+# Requires: .venv (uv sync --extra train --group cu130-train) + AWS creds (profile "cosmosbench" or the default chain).
 set +u
 REPO="${REPO:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)}"
 cd "$REPO"
 export LD_LIBRARY_PATH="${LD_LIBRARY_PATH:-}"
-source .venv-gpu/bin/activate
+source .venv/bin/activate
+export LD_LIBRARY_PATH="$(python -c "import glob;print(':'.join(sorted(glob.glob('$REPO/.venv/lib/python3.13/site-packages/nvidia/*/lib'))))"):${LD_LIBRARY_PATH}"
 export PYTHONPATH="$REPO" AWS_PROFILE="${AWS_PROFILE:-cosmosbench}" LANCE_IO_THREADS="${LANCE_IO_THREADS:-256}"
 
 DATA="${DATA:-/home/ubuntu/work/data}"

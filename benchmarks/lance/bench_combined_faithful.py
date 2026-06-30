@@ -24,6 +24,7 @@ the per-loader breakdown, never as a bare multiple. Run ``--trios base`` and
 ``--trios lance`` in SEPARATE processes (one process hits the torchcodec/lance teardown
 SIGABRT between trios).
 """
+
 from __future__ import annotations
 
 import argparse
@@ -41,6 +42,7 @@ import bench_vision_sft  # noqa: E402  (kept loader benches)
 import bench_vlm  # noqa: E402
 from base_standins import S3DROIDLeRobotDataset  # noqa: E402
 from bench_action_faithful import _EpisodeShuffle  # noqa: E402
+
 from cosmos_framework.data.lance import (  # noqa: E402
     LanceDROIDComposedDataset,
     LanceVisionSFTDataset,
@@ -123,22 +125,32 @@ def _so(region, uri):
 
 
 # ── per-loader builders (genuine bases) ──
-def build_action_loader(which, root, uri, region, cache, batch_size, num_workers,
-                        s3_bucket=None, s3_prefix=None):
+def build_action_loader(which, root, uri, region, cache, batch_size, num_workers, s3_bucket=None, s3_prefix=None):
     if which == "base":
         if s3_bucket and s3_prefix:  # genuine base + S3 materialization standin
-            base = S3DROIDLeRobotDataset(root=root, s3_bucket=s3_bucket, s3_prefix=s3_prefix,
-                                         region=region, **_ACTION_KW)
+            base = S3DROIDLeRobotDataset(
+                root=root, s3_bucket=s3_bucket, s3_prefix=s3_prefix, region=region, **_ACTION_KW
+            )
         else:
             base = DROIDLeRobotDataset(root=root, **_ACTION_KW)
         ds = _EpisodeShuffle(base)
     else:
-        comp = LanceDROIDComposedDataset(root=root, lance_uri=uri, decode_device="cpu",
-                                         decoder_cache_size=cache, storage_options=_so(region, uri), **_ACTION_KW)
+        comp = LanceDROIDComposedDataset(
+            root=root,
+            lance_uri=uri,
+            decode_device="cpu",
+            decoder_cache_size=cache,
+            storage_options=_so(region, uri),
+            **_ACTION_KW,
+        )
         ds = _EpisodeShuffle(comp)
     return torch.utils.data.DataLoader(
-        ds, batch_size=batch_size, num_workers=num_workers, collate_fn=_action_collate,
-        drop_last=True, persistent_workers=num_workers > 0,
+        ds,
+        batch_size=batch_size,
+        num_workers=num_workers,
+        collate_fn=_action_collate,
+        drop_last=True,
+        persistent_workers=num_workers > 0,
         prefetch_factor=4 if num_workers > 0 else None,
         multiprocessing_context="spawn" if num_workers > 0 else None,
     )
@@ -148,50 +160,101 @@ def build_vlm_loader(which, uri, region, batch_size, num_workers, hf_subset):
     collate = bench_vlm.Collate("raw")
     if which == "base":
         return torch.utils.data.DataLoader(
-            bench_vlm.GenuineVLMBase(hf_subset), batch_size=batch_size, num_workers=num_workers,
-            collate_fn=collate, persistent_workers=num_workers > 0,
+            bench_vlm.GenuineVLMBase(hf_subset),
+            batch_size=batch_size,
+            num_workers=num_workers,
+            collate_fn=collate,
+            persistent_workers=num_workers > 0,
             prefetch_factor=4 if num_workers > 0 else None,
-            multiprocessing_context="spawn" if num_workers > 0 else None)
+            multiprocessing_context="spawn" if num_workers > 0 else None,
+        )
     ds = LanceVLMShuffleScan(uri, "llava", buffer_size=1000, storage_options=_so(region, uri))
     return torch.utils.data.DataLoader(
-        ds, batch_size=batch_size, num_workers=num_workers, collate_fn=collate,
-        persistent_workers=num_workers > 0, prefetch_factor=4 if num_workers > 0 else None,
-        multiprocessing_context="spawn" if num_workers > 0 else None)  # lance not fork-safe
+        ds,
+        batch_size=batch_size,
+        num_workers=num_workers,
+        collate_fn=collate,
+        persistent_workers=num_workers > 0,
+        prefetch_factor=4 if num_workers > 0 else None,
+        multiprocessing_context="spawn" if num_workers > 0 else None,
+    )  # lance not fork-safe
 
 
-def build_vsft_loader(which, jsonl, uri, region, batch_size, num_workers, n_total,
-                      s3_bucket, s3_prefix):
+def build_vsft_loader(which, jsonl, uri, region, batch_size, num_workers, n_total, s3_bucket, s3_prefix):
     if which == "base":
         # genuine SFTDataset (iterable): local mp4s, or boto3 per-sample for s3://
         ds = bench_vision_sft.build_base(jsonl, tokenize=False, s3_bucket=s3_bucket, s3_prefix=s3_prefix)
         return torch.utils.data.DataLoader(
-            ds, batch_size=batch_size, num_workers=num_workers, collate_fn=bench_vision_sft._collate,
-            drop_last=True, persistent_workers=num_workers > 0,
+            ds,
+            batch_size=batch_size,
+            num_workers=num_workers,
+            collate_fn=bench_vision_sft._collate,
+            drop_last=True,
+            persistent_workers=num_workers > 0,
             prefetch_factor=4 if num_workers > 0 else None,
-            multiprocessing_context="spawn" if num_workers > 0 else None)
-    ds = LanceVisionSFTDataset(uri, table="vision_sft", decode_device="cpu",
-                               storage_options=_so(region, uri), **_VSFT_KW)
+            multiprocessing_context="spawn" if num_workers > 0 else None,
+        )
+    ds = LanceVisionSFTDataset(
+        uri, table="vision_sft", decode_device="cpu", storage_options=_so(region, uri), **_VSFT_KW
+    )
     ds.skip_tokenize = True
     g = torch.Generator().manual_seed(42)
     sampler = torch.utils.data.RandomSampler(ds, replacement=True, num_samples=n_total, generator=g)
     return torch.utils.data.DataLoader(
-        ds, batch_size=batch_size, sampler=sampler, num_workers=num_workers,
-        collate_fn=bench_vision_sft._collate, drop_last=True,
-        persistent_workers=num_workers > 0, prefetch_factor=4 if num_workers > 0 else None,
-        multiprocessing_context="spawn" if num_workers > 0 else None)
+        ds,
+        batch_size=batch_size,
+        sampler=sampler,
+        num_workers=num_workers,
+        collate_fn=bench_vision_sft._collate,
+        drop_last=True,
+        persistent_workers=num_workers > 0,
+        prefetch_factor=4 if num_workers > 0 else None,
+        multiprocessing_context="spawn" if num_workers > 0 else None,
+    )
 
 
-def run_trio(which, paths, *, region, cache, batch_size, workers, rounds, warmup, vsft_n_total,
-             action_s3_bucket, action_s3_prefix, vsft_s3_bucket, vsft_s3_prefix, vlm_hf_subset):
+def run_trio(
+    which,
+    paths,
+    *,
+    region,
+    cache,
+    batch_size,
+    workers,
+    rounds,
+    warmup,
+    vsft_n_total,
+    action_s3_bucket,
+    action_s3_prefix,
+    vsft_s3_bucket,
+    vsft_s3_prefix,
+    vlm_hf_subset,
+):
     aw, vw, sw = workers["action"], workers["vlm"], workers["vision-sft"]
     print(f"\n========== {which.upper()}-TRIO (faithful) workers a={aw}/v={vw}/s={sw} ==========", flush=True)
-    a = build_action_loader(which, paths["action_root"], paths["action_uri"], region, cache, batch_size, aw,
-                            s3_bucket=action_s3_bucket if which == "base" else None,
-                            s3_prefix=action_s3_prefix if which == "base" else None)
+    a = build_action_loader(
+        which,
+        paths["action_root"],
+        paths["action_uri"],
+        region,
+        cache,
+        batch_size,
+        aw,
+        s3_bucket=action_s3_bucket if which == "base" else None,
+        s3_prefix=action_s3_prefix if which == "base" else None,
+    )
     v = build_vlm_loader(which, paths["vlm_uri"], region, batch_size, vw, vlm_hf_subset)
-    s = build_vsft_loader(which, paths["vsft_jsonl"], paths["vsft_uri"], region, batch_size, sw,
-                          vsft_n_total, vsft_s3_bucket if which == "base" else None,
-                          vsft_s3_prefix if which == "base" else None)
+    s = build_vsft_loader(
+        which,
+        paths["vsft_jsonl"],
+        paths["vsft_uri"],
+        region,
+        batch_size,
+        sw,
+        vsft_n_total,
+        vsft_s3_bucket if which == "base" else None,
+        vsft_s3_prefix if which == "base" else None,
+    )
     loaders, names = [a, v, s], ["action", "vlm", "vision-sft"]
     standalone = {}
     for ld, nm in zip(loaders, names):
@@ -204,16 +267,27 @@ def run_trio(which, paths, *, region, cache, batch_size, workers, rounds, warmup
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--action-root", required=True, help="local DROID root (parquet/meta index; videos local or via S3 standin)")
+    ap.add_argument(
+        "--action-root", required=True, help="local DROID root (parquet/meta index; videos local or via S3 standin)"
+    )
     ap.add_argument("--action-uri", required=True)
-    ap.add_argument("--action-s3-bucket", default=None, help="if set, base action materializes mega-mp4s from this bucket (S3 regime)")
+    ap.add_argument(
+        "--action-s3-bucket",
+        default=None,
+        help="if set, base action materializes mega-mp4s from this bucket (S3 regime)",
+    )
     ap.add_argument("--action-s3-prefix", default=None, help="key prefix the DROID videos/ tree lives under")
     ap.add_argument("--vlm-uri", required=True)
-    ap.add_argument("--vlm-hf-subset", default="figureqa(cauldron,llava_format)",
-                    help="lmms-lab/LLaVA-OneVision-Data subset the base streams from HF (cosmos default)")
+    ap.add_argument(
+        "--vlm-hf-subset",
+        default="figureqa(cauldron,llava_format)",
+        help="lmms-lab/LLaVA-OneVision-Data subset the base streams from HF (cosmos default)",
+    )
     ap.add_argument("--vsft-jsonl", required=True)
     ap.add_argument("--vsft-uri", required=True)
-    ap.add_argument("--vsft-s3-bucket", default=None, help="if set, base vsft downloads each mp4 via boto3 (genuine S3 path)")
+    ap.add_argument(
+        "--vsft-s3-bucket", default=None, help="if set, base vsft downloads each mp4 via boto3 (genuine S3 path)"
+    )
     ap.add_argument("--vsft-s3-prefix", default=None, help="key prefix the jsonl-relative vision_path lives under")
     ap.add_argument("--region", default=None)
     ap.add_argument("--cache-size", type=int, default=16)
@@ -227,13 +301,21 @@ def main():
     ap.add_argument("--trios", nargs="+", default=["base", "lance"])
     args = ap.parse_args()
 
-    paths = dict(action_root=args.action_root, action_uri=args.action_uri,
-                 vlm_uri=args.vlm_uri, vsft_jsonl=args.vsft_jsonl, vsft_uri=args.vsft_uri)
+    paths = dict(
+        action_root=args.action_root,
+        action_uri=args.action_uri,
+        vlm_uri=args.vlm_uri,
+        vsft_jsonl=args.vsft_jsonl,
+        vsft_uri=args.vsft_uri,
+    )
     vsft_n_total = (args.rounds + args.warmup + 8) * args.batch_size
     regime = "S3" if args.region else "LOCAL"
-    print(f"FAITHFUL COMBINED RAW [{regime}] — genuine bases; action=EPISODE-SHUFFLE both sides\n"
-          f"batch={args.batch_size} workers={args.num_workers}/loader rounds={args.rounds} "
-          f"LANCE_IO_THREADS={os.environ.get('LANCE_IO_THREADS','default')}", flush=True)
+    print(
+        f"FAITHFUL COMBINED RAW [{regime}] — genuine bases; action=EPISODE-SHUFFLE both sides\n"
+        f"batch={args.batch_size} workers={args.num_workers}/loader rounds={args.rounds} "
+        f"LANCE_IO_THREADS={os.environ.get('LANCE_IO_THREADS', 'default')}",
+        flush=True,
+    )
 
     workers = {
         "action": args.action_workers or args.num_workers,
@@ -242,21 +324,31 @@ def main():
     }
     results = {}
     for which in args.trios:
-        results[which] = run_trio(which, paths, region=args.region, cache=args.cache_size,
-                                  batch_size=args.batch_size, workers=workers,
-                                  rounds=args.rounds, warmup=args.warmup, vsft_n_total=vsft_n_total,
-                                  action_s3_bucket=args.action_s3_bucket, action_s3_prefix=args.action_s3_prefix,
-                                  vsft_s3_bucket=args.vsft_s3_bucket, vsft_s3_prefix=args.vsft_s3_prefix,
-                                  vlm_hf_subset=args.vlm_hf_subset)
+        results[which] = run_trio(
+            which,
+            paths,
+            region=args.region,
+            cache=args.cache_size,
+            batch_size=args.batch_size,
+            workers=workers,
+            rounds=args.rounds,
+            warmup=args.warmup,
+            vsft_n_total=vsft_n_total,
+            action_s3_bucket=args.action_s3_bucket,
+            action_s3_prefix=args.action_s3_prefix,
+            vsft_s3_bucket=args.vsft_s3_bucket,
+            vsft_s3_prefix=args.vsft_s3_prefix,
+            vlm_hf_subset=args.vlm_hf_subset,
+        )
 
     if "base" in results and "lance" in results:
         print("\n--- per-loader RAW samples/s ---")
         print(f"{'loader':<14}{'base':>12}{'lance':>12}{'speedup':>10}")
         for nm in ["action", "vlm", "vision-sft"]:
             b, l = results["base"][0].get(nm), results["lance"][0].get(nm)
-            print(f"{nm:<14}{b:>12.1f}{l:>12.1f}{l/b:>9.2f}x")
+            print(f"{nm:<14}{b:>12.1f}{l:>12.1f}{l / b:>9.2f}x")
         ba, la = results["base"][1], results["lance"][1]
-        print(f"\ncombined (1:1:1)  base={ba:.1f}  lance={la:.1f}  speedup={la/ba:.2f}x")
+        print(f"\ncombined (1:1:1)  base={ba:.1f}  lance={la:.1f}  speedup={la / ba:.2f}x")
 
 
 if __name__ == "__main__":

@@ -4,6 +4,7 @@
 Alternative to SFTDataset that decodes pre-resized, short-GOP per-clip mp4s from LanceDB.
 Reuses the base's caption selection and tokenization logic.
 """
+
 from __future__ import annotations
 
 import json
@@ -11,7 +12,6 @@ import random
 from typing import Any, Optional
 
 import lancedb
-import numpy as np
 import torch
 from lancedb.permutation import Permutation
 from torchcodec.decoders import VideoDecoder
@@ -25,8 +25,17 @@ from cosmos_framework.model.vfm.vlm.qwen3_vl.utils import tokenize_caption
 
 _MAX_CAPTION_TOKENS = 1024
 _META_COLS = [
-    "clip_id", "width", "height", "start_frame", "end_frame",
-    "temporal_interval", "enc_h", "enc_w", "fps", "caption_json", "caption",
+    "clip_id",
+    "width",
+    "height",
+    "start_frame",
+    "end_frame",
+    "temporal_interval",
+    "enc_h",
+    "enc_w",
+    "fps",
+    "caption_json",
+    "caption",
 ]
 
 
@@ -43,6 +52,7 @@ class LanceVisionSFTDataset(torch.utils.data.Dataset):
 
     Decodes pre-resized clips in-process, avoiding ffmpeg subprocess overhead.
     """
+
     def __init__(
         self,
         lance_uri: str,
@@ -82,9 +92,7 @@ class LanceVisionSFTDataset(torch.utils.data.Dataset):
         self._rows: list[dict] | None = None
         self._decoders: dict[int, VideoDecoder] | None = None
 
-        db = (lancedb.connect(lance_uri, storage_options=storage_options)
-              if storage_options else lancedb.connect(lance_uri))
-        self._length = db.open_table(table).count_rows()
+        self._length = lancedb.connect(lance_uri, storage_options=storage_options).open_table(table).count_rows()
 
     def __getstate__(self) -> dict:
         state = self.__dict__.copy()
@@ -95,20 +103,18 @@ class LanceVisionSFTDataset(torch.utils.data.Dataset):
     def _ensure_open(self) -> None:
         if self._decoders is not None:
             return
-        db = (lancedb.connect(self._lance_uri, storage_options=self._storage_options)
-              if self._storage_options else lancedb.connect(self._lance_uri))
-        tbl = db.open_table(self._table)
+        tbl = lancedb.connect(self._lance_uri, storage_options=self._storage_options).open_table(self._table)
         meta_perm = Permutation.identity(tbl).select_columns(_META_COLS).with_format("arrow")
         self._rows = meta_perm.__getitems__(list(range(tbl.count_rows()))).to_pylist()
         self._perm = Permutation.identity(tbl).select_columns(["video_bytes"]).with_format("arrow")
         self._decoders = {}
 
-    def _read_clip_bytes(self, rows: list[int]) -> list[bytes]:
-        # Plain large_binary via the Permutation API. Clips are small (<~2MB) where this is
-        # fastest on S3. TODO: move to blob-v2 — for larger per-row payloads (>=~8-16MB) a
-        # parallel blob-v2 read beats plain (read concurrently, not a serial take_blobs loop).
-        batch = self._perm.__getitems__([int(r) for r in rows])
-        return [batch.column("video_bytes")[i].as_py() for i in range(batch.num_rows)]
+    def _read_clip_bytes(self, rows: list[int]) -> dict[int, bytes]:
+        # Plain large_binary via the Permutation API. TODO: move to blob-v2 after optimizations.
+        # take returns rows sorted by offset, so key by row instead of relying on order.
+        rows = sorted({int(r) for r in rows})
+        col = self._perm.__getitems__(rows).column("video_bytes")
+        return {r: col[i].as_py() for i, r in enumerate(rows)}
 
     def _build_decoder(self, data: bytes) -> VideoDecoder:
         device = str(self._decode_device) if self._decode_device else None
@@ -120,13 +126,14 @@ class LanceVisionSFTDataset(torch.utils.data.Dataset):
         missing = [r for r in needed if r not in self._decoders]
         if not missing:
             return
-        for r, data in zip(missing, self._read_clip_bytes(missing)):
+        clips = self._read_clip_bytes(missing)
+        for r in missing:
             while len(self._decoders) >= self._cache_size:
                 victim = next((k for k in self._decoders if k not in needed_set), None)
                 if victim is None:
                     break
                 self._decoders.pop(victim)
-            self._decoders[r] = self._build_decoder(data)
+            self._decoders[r] = self._build_decoder(clips[r])
 
     def _ensure_tokenizer(self):
         if self._tokenizer is None:
@@ -138,7 +145,7 @@ class LanceVisionSFTDataset(torch.utils.data.Dataset):
     def _decoder(self, row: int) -> VideoDecoder:
         d = self._decoders.get(row)
         if d is None:
-            d = self._build_decoder(self._read_clip_bytes([row])[0])
+            d = self._build_decoder(self._read_clip_bytes([row])[row])
             if len(self._decoders) >= self._cache_size:
                 self._decoders.pop(next(iter(self._decoders)))
             self._decoders[row] = d
@@ -206,11 +213,21 @@ class LanceVisionSFTDataset(torch.utils.data.Dataset):
             crop_x = round((r["enc_w"] - target_w) / 2)
             sel = _select_caption(self._window_dict(r)) or ("caption", "", False)
             caption_key, caption, _ = sel
-            specs.append({
-                "row": row, "clip_id": r["clip_id"], "fps": r["fps"], "clip_total": clip_total, "win_idx": 0,
-                "temporal_interval": ti, "start_frame": start_frame, "end_frame": end_frame,
-                "crop": (crop_y, crop_x, target_h, target_w), "caption": caption, "caption_key": caption_key,
-            })
+            specs.append(
+                {
+                    "row": row,
+                    "clip_id": r["clip_id"],
+                    "fps": r["fps"],
+                    "clip_total": clip_total,
+                    "win_idx": 0,
+                    "temporal_interval": ti,
+                    "start_frame": start_frame,
+                    "end_frame": end_frame,
+                    "crop": (crop_y, crop_x, target_h, target_w),
+                    "caption": caption,
+                    "caption_key": caption_key,
+                }
+            )
             e = plan.setdefault(row, {"frames": [], "owners": []})
             lo = len(e["frames"])
             e["frames"].extend(frame_idx)
@@ -236,13 +253,25 @@ class LanceVisionSFTDataset(torch.utils.data.Dataset):
             text_ids = self._tokenize(s["caption"])
             image_size = torch.tensor([th, tw, th, tw], dtype=torch.float32)
             padding_mask = torch.zeros((1, th, tw), dtype=torch.float32)
-            results.append(dict(
-                __key__=s["clip_id"], __url__=s["clip_id"], fps=s["fps"], n_orig_video_frames=s["clip_total"],
-                chunk_index=s["win_idx"], frame_start=s["start_frame"], frame_end=s["end_frame"],
-                num_frames=video.shape[1], video=video, num_multiplier=s["temporal_interval"],
-                padding_mask=padding_mask, image_size=image_size, ai_caption=s["caption"],
-                sampled_caption_style=s["caption_key"], text_token_ids=torch.tensor(text_ids, dtype=torch.long),
-            ))
+            results.append(
+                dict(
+                    __key__=s["clip_id"],
+                    __url__=s["clip_id"],
+                    fps=s["fps"],
+                    n_orig_video_frames=s["clip_total"],
+                    chunk_index=s["win_idx"],
+                    frame_start=s["start_frame"],
+                    frame_end=s["end_frame"],
+                    num_frames=video.shape[1],
+                    video=video,
+                    num_multiplier=s["temporal_interval"],
+                    padding_mask=padding_mask,
+                    image_size=image_size,
+                    ai_caption=s["caption"],
+                    sampled_caption_style=s["caption_key"],
+                    text_token_ids=torch.tensor(text_ids, dtype=torch.long),
+                )
+            )
         return results
 
     def _target_size(self, r: dict) -> tuple[int, int]:
@@ -261,4 +290,67 @@ class LanceVisionSFTDataset(torch.utils.data.Dataset):
         return w
 
 
-__all__ = ["LanceVisionSFTDataset"]
+class LanceVisionSFTIterable(torch.utils.data.IterableDataset):
+    """Streams clip-windows from LanceVisionSFTDataset with per-(rank, worker) shuffle.
+
+    Mirrors SFTDataset's iterable/self-sharding contract so it drops into the
+    training packing stack; adds conditioning_fps to match the SFTDataset sample.
+    """
+
+    def __init__(self, dataset: LanceVisionSFTDataset, conditioning_fps: float = 24.0, seed: int = 42):
+        super().__init__()
+        self._ds = dataset
+        self._cond_fps = float(conditioning_fps)
+        self._seed = int(seed)
+        self.shard_world_size = 1
+        self.shard_rank = 0
+
+    def __len__(self) -> int:
+        return len(self._ds)
+
+    def __iter__(self):
+        info = torch.utils.data.get_worker_info()
+        wid = info.id if info is not None else 0
+        nw = info.num_workers if info is not None else 1
+        shard = int(self.shard_rank) * nw + wid
+        total = max(1, int(self.shard_world_size) * nw)
+        n = len(self._ds)
+        epoch = 0
+        while True:
+            g = torch.Generator().manual_seed(self._seed + epoch)
+            for i in torch.randperm(n, generator=g).tolist()[shard::total]:
+                s = self._ds[i]
+                s["conditioning_fps"] = self._cond_fps
+                yield s
+            epoch += 1
+
+
+def get_lance_vision_sft_dataset(
+    *,
+    lance_uri: str,
+    table: str = "vision_sft",
+    resolution: str = "256",
+    num_video_frames: int = 16,
+    frame_selection_mode: str = "first",
+    temporal_interval_mode: str = "entire_chunk",
+    tokenizer_config: Any = None,
+    conditioning_fps: float = 24.0,
+    decode_device: str | None = "cpu",
+    seed: int = 42,
+) -> LanceVisionSFTIterable:
+    """Build the iterable Lance vision-SFT dataset for the training packing stack."""
+    tok = getattr(tokenizer_config, "tokenizer", None) if tokenizer_config is not None else None
+    ds = LanceVisionSFTDataset(
+        lance_uri,
+        table=table,
+        resolution=resolution,
+        num_video_frames=num_video_frames,
+        frame_selection_mode=frame_selection_mode,
+        temporal_interval_mode=temporal_interval_mode,
+        tokenizer=tok,
+        decode_device=decode_device,
+    )
+    return LanceVisionSFTIterable(ds, conditioning_fps=conditioning_fps, seed=seed)
+
+
+__all__ = ["LanceVisionSFTDataset", "LanceVisionSFTIterable", "get_lance_vision_sft_dataset"]

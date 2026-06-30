@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: OpenMDW-1.1
 """Equivalence test for the VLM (LLaVA-OneVision) loader vs the base HF stream."""
+
 from __future__ import annotations
 
 import io
@@ -12,7 +13,8 @@ from datasets import load_dataset
 from cosmos_framework.data.lance.vlm_dataset import LanceVLMDataset, convert_llava_to_lance
 
 pytestmark = pytest.mark.skipif(
-    not (os.environ.get("HF_TOKEN") or os.environ.get("HUGGING_FACE_HUB_TOKEN")), reason="set HF_TOKEN")
+    not (os.environ.get("HF_TOKEN") or os.environ.get("HUGGING_FACE_HUB_TOKEN")), reason="set HF_TOKEN"
+)
 
 
 def _norm_image_bytes(rec):

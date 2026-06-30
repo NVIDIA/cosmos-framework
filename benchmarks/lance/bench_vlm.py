@@ -15,6 +15,7 @@ Both paths feed the SAME tokenize+image-process step (a faithful stand-in for co
 ``VLMProcessor``), so only the data-access layer differs. Two measurements: raw access
 (no processing — isolates the access bottleneck) and end-to-end (with processing).
 """
+
 from __future__ import annotations
 
 import argparse
@@ -117,9 +118,13 @@ class Collate:
 def _build_loader(side, a):
     """Build the (loader, label) for one side from a plain args-dict ``a``."""
     collate = Collate(a["mode"])
-    kw = dict(batch_size=a["batch_size"], num_workers=a["num_workers"], collate_fn=collate,
-              persistent_workers=a["num_workers"] > 0,
-              prefetch_factor=4 if a["num_workers"] > 0 else None)
+    kw = dict(
+        batch_size=a["batch_size"],
+        num_workers=a["num_workers"],
+        collate_fn=collate,
+        persistent_workers=a["num_workers"] > 0,
+        prefetch_factor=4 if a["num_workers"] > 0 else None,
+    )
     so = {"region": a["region"]} if a["region"] else None
     if side == "base":
         return torch.utils.data.DataLoader(
@@ -138,16 +143,26 @@ def _build_loader(side, a):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--subset", default="figureqa(cauldron,llava_format)",
-                    help="lmms-lab/LLaVA-OneVision-Data subset for the genuine HF-streaming base")
+    ap.add_argument(
+        "--subset",
+        default="figureqa(cauldron,llava_format)",
+        help="lmms-lab/LLaVA-OneVision-Data subset for the genuine HF-streaming base",
+    )
     ap.add_argument("--lance-uri", required=True)
     ap.add_argument("--lance-table", default="llava")
     ap.add_argument("--region", default=None, help="storage_options region for an s3:// lance-uri")
-    ap.add_argument("--lance-scan", action="store_true",
-                    help="use chunked-shuffle sequential scan (right for S3) instead of random point-lookups")
-    ap.add_argument("--side", choices=["base", "lance"], required=True,
-                    help="measure ONE side per process (run twice + divide) — each backend torn down in "
-                    "its own process avoids the HF/lance C++ finalization crashes of an in-process compare")
+    ap.add_argument(
+        "--lance-scan",
+        action="store_true",
+        help="use chunked-shuffle sequential scan (right for S3) instead of random point-lookups",
+    )
+    ap.add_argument(
+        "--side",
+        choices=["base", "lance"],
+        required=True,
+        help="measure ONE side per process (run twice + divide) — each backend torn down in "
+        "its own process avoids the HF/lance C++ finalization crashes of an in-process compare",
+    )
     ap.add_argument("--batch-size", type=int, default=8)
     ap.add_argument("--num-workers", type=int, default=4)
     ap.add_argument("--num-batches", type=int, default=40)
@@ -158,7 +173,10 @@ def main():
     a = vars(args)
     loader, label = _build_loader(args.side, a)
     sps = _measure(loader, num_batches=args.num_batches, warmup=args.warmup, batch_size=args.batch_size)
-    print(f"VLM_RESULT side={args.side} label={label} mode={args.mode} workers={args.num_workers} samples_per_s={sps:.1f}", flush=True)
+    print(
+        f"VLM_RESULT side={args.side} label={label} mode={args.mode} workers={args.num_workers} samples_per_s={sps:.1f}",
+        flush=True,
+    )
 
 
 if __name__ == "__main__":

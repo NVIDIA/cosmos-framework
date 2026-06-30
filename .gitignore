@@ -218,3 +218,9 @@ cython_debug/
 #  refer to https://docs.cursor.com/context/ignore-files
 .cursorignore
 .cursorindexingignore
+
+# Lance dataloader: local run artifacts (generated, not for commit)
+logs/
+benchmarks/lance/train_out/
+tests/vision_sft_nano_5iter_4gpu.toml
+benchmarks/lance/matrix_results.txt

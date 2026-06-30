@@ -4,6 +4,7 @@
 Provides O(1) random access and global shuffle for VLM datasets.
 Drop-in replacement for HF streaming or WebDataset sources.
 """
+
 from __future__ import annotations
 
 import io
@@ -11,7 +12,6 @@ import json
 import random
 from typing import Any
 
-import lance
 import lancedb
 import pyarrow as pa
 import torch
@@ -21,11 +21,13 @@ _COLS = ["sample_id", "image_bytes", "conversations"]
 
 
 def _record_batches(hf_dataset, batch_rows: int = 512):
-    schema = pa.schema([
-        pa.field("sample_id", pa.string()),
-        pa.field("image_bytes", pa.large_binary()),
-        pa.field("conversations", pa.string()),
-    ])
+    schema = pa.schema(
+        [
+            pa.field("sample_id", pa.string()),
+            pa.field("image_bytes", pa.large_binary()),
+            pa.field("conversations", pa.string()),
+        ]
+    )
     ids, imgs, convs = [], [], []
     for i, rec in enumerate(hf_dataset):
         img = rec.get("image")
@@ -41,26 +43,25 @@ def _record_batches(hf_dataset, batch_rows: int = 512):
         imgs.append(raw)
         convs.append(json.dumps(rec.get("conversations") or []))
         if len(ids) >= batch_rows:
-            yield pa.RecordBatch.from_arrays([
-                pa.array(ids, pa.string()),
-                pa.array(imgs, pa.large_binary()),
-                pa.array(convs, pa.string())
-            ], schema=schema)
+            yield pa.RecordBatch.from_arrays(
+                [pa.array(ids, pa.string()), pa.array(imgs, pa.large_binary()), pa.array(convs, pa.string())],
+                schema=schema,
+            )
             ids, imgs, convs = [], [], []
     if ids:
-        yield pa.RecordBatch.from_arrays([
-            pa.array(ids, pa.string()),
-            pa.array(imgs, pa.large_binary()),
-            pa.array(convs, pa.string())
-        ], schema=schema)
+        yield pa.RecordBatch.from_arrays(
+            [pa.array(ids, pa.string()), pa.array(imgs, pa.large_binary()), pa.array(convs, pa.string())], schema=schema
+        )
 
 
 def convert_llava_to_lance(hf_dataset, uri: str, table_name: str = "llava") -> str:
-    schema = pa.schema([
-        pa.field("sample_id", pa.string()),
-        pa.field("image_bytes", pa.large_binary()),
-        pa.field("conversations", pa.string()),
-    ])
+    schema = pa.schema(
+        [
+            pa.field("sample_id", pa.string()),
+            pa.field("image_bytes", pa.large_binary()),
+            pa.field("conversations", pa.string()),
+        ]
+    )
     reader = pa.RecordBatchReader.from_batches(schema, _record_batches(hf_dataset))
     db = lancedb.connect(uri)
     if table_name in db.table_names():
@@ -71,18 +72,16 @@ def convert_llava_to_lance(hf_dataset, uri: str, table_name: str = "llava") -> s
 
 class LanceVLMDataset(torch.utils.data.Dataset):
     """Map-style LLaVA-OneVision source backed by LanceDB."""
+
     def __init__(self, uri: str, table_name: str = "llava", storage_options: dict | None = None):
         self.uri = uri
         self.table_name = table_name
         self.storage_options = storage_options
         self._perm = None
-        db = self._connect()
-        self.length = db.open_table(table_name).count_rows()
+        self.length = self._connect().open_table(table_name).count_rows()
 
     def _connect(self):
-        if self.storage_options:
-            return lancedb.connect(self.uri, storage_options=self.storage_options)
-        return lancedb.connect(self.uri)
+        return lancedb.connect(self.uri, storage_options=self.storage_options)
 
     def __len__(self) -> int:
         return self.length
@@ -116,10 +115,21 @@ class LanceVLMDataset(torch.utils.data.Dataset):
 
 
 class LanceVLMShuffleScan(torch.utils.data.IterableDataset):
-    """Chunked-shuffle scan over a Lance table for efficient S3 training."""
+    """Chunked-shuffle scan over a Lance table for efficient S3 training.
+
+    Permutation API only (no pylance): shuffle the order of contiguous row-chunks,
+    read each chunk as a columnar range (sequential -> S3-friendly), and emit
+    through a local shuffle buffer.
+    """
+
     def __init__(
-        self, uri: str, table_name: str = "llava", storage_options: dict | None = None,
-        buffer_size: int = 1000, batch_size: int = 256, seed: int = 42
+        self,
+        uri: str,
+        table_name: str = "llava",
+        storage_options: dict | None = None,
+        buffer_size: int = 1000,
+        batch_size: int = 256,
+        seed: int = 42,
     ):
         self.uri = uri
         self.table_name = table_name
@@ -127,39 +137,64 @@ class LanceVLMShuffleScan(torch.utils.data.IterableDataset):
         self.buffer_size = buffer_size
         self.batch_size = batch_size
         self.seed = seed
-        db = lancedb.connect(uri, storage_options=storage_options) if storage_options else lancedb.connect(uri)
-        self.length = db.open_table(table_name).count_rows()
+        self._perm = None
+        self.length = self._open_table().count_rows()
+
+    def _open_table(self):
+        return lancedb.connect(self.uri, storage_options=self.storage_options).open_table(self.table_name)
+
+    def __getstate__(self) -> dict:
+        state = self.__dict__.copy()
+        state["_perm"] = None
+        return state
+
+    def _ensure_perm(self):
+        if self._perm is None:
+            self._perm = Permutation.identity(self._open_table()).select_columns(_COLS).with_format("arrow")
+        return self._perm
 
     def __len__(self) -> int:
         return self.length
 
-    def _dataset(self):
-        return lance.dataset(f"{self.uri}/{self.table_name}.lance", storage_options=self.storage_options)
-
     def __iter__(self):
         info = torch.utils.data.get_worker_info()
         wid, nw = (info.id, info.num_workers) if info else (0, 1)
-        ds = self._dataset()
-        frags = ds.get_fragments()
+        perm = self._ensure_perm()
+        chunks = [(s, min(s + self.batch_size, self.length)) for s in range(0, self.length, self.batch_size)]
         rng = random.Random(self.seed)
-        rng.shuffle(frags)
-        my_frags = frags[wid::nw]
+        rng.shuffle(chunks)
         buf = []
-        for frag in my_frags:
-            try:
-                batches = frag.to_batches(columns=_COLS, batch_size=self.batch_size, batch_readahead=8)
-            except TypeError:
-                batches = frag.to_batches(columns=_COLS, batch_size=self.batch_size)
-            for batch in batches:
-                ids = batch.column("sample_id").to_pylist()
-                imgs = batch.column("image_bytes").to_pylist()
-                convs = batch.column("conversations").to_pylist()
-                for sid, raw, cv in zip(ids, imgs, convs):
-                    buf.append({"id": sid, "image": {"bytes": raw}, "conversations": json.loads(cv)})
-                    if len(buf) >= self.buffer_size:
-                        yield buf.pop(rng.randrange(len(buf)))
+        for start, end in chunks[wid::nw]:
+            batch = perm.__getitems__(list(range(start, end)))
+            ids = batch.column("sample_id").to_pylist()
+            imgs = batch.column("image_bytes").to_pylist()
+            convs = batch.column("conversations").to_pylist()
+            for sid, raw, cv in zip(ids, imgs, convs):
+                buf.append({"id": sid, "image": {"bytes": raw}, "conversations": json.loads(cv)})
+                if len(buf) >= self.buffer_size:
+                    yield buf.pop(rng.randrange(len(buf)))
         rng.shuffle(buf)
         yield from buf
 
 
-__all__ = ["LanceVLMDataset", "LanceVLMShuffleScan", "convert_llava_to_lance"]
+def get_lance_vlm_dataset(
+    *,
+    uri: str,
+    table_name: str = "llava",
+    storage_options: dict | None = None,
+    subset: str | None = None,
+    split: str | None = None,
+    n: int | None = None,
+):
+    """Lance drop-in for ``get_llava_ov_map``: the same map-style image+conversation
+    records, read from LanceDB. ``subset``/``split``/``n`` are accepted for
+    signature-compatibility (the table is prebuilt) and ignored."""
+    return LanceVLMDataset(uri, table_name=table_name, storage_options=storage_options)
+
+
+__all__ = [
+    "LanceVLMDataset",
+    "LanceVLMShuffleScan",
+    "convert_llava_to_lance",
+    "get_lance_vlm_dataset",
+]

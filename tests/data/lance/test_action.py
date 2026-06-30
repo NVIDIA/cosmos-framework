@@ -3,6 +3,7 @@
 
 Labels (action/pose/caption) are bit-exact; video is within one offline H.264 re-encode.
 """
+
 from __future__ import annotations
 
 import os
@@ -17,11 +18,11 @@ AROOT = os.environ.get("DROID_COSMOS_ROOT")
 ACOMP = os.environ.get("DROID_COMPOSED_LANCE_URI")
 
 pytestmark = pytest.mark.skipif(
-    not (AROOT and ACOMP and os.path.isdir(AROOT)),
-    reason="set DROID_COSMOS_ROOT and DROID_COMPOSED_LANCE_URI")
+    not (AROOT and ACOMP and os.path.isdir(AROOT)), reason="set DROID_COSMOS_ROOT and DROID_COMPOSED_LANCE_URI"
+)
 
 _AKW = dict(action_space="joint_pos", use_state=True, mode="policy", chunk_length=16)
-_IDXS = [0, 1, 123, 5000, 17000, 26000]
+_IDXS = [17000, 1, 26000, 0, 123, 5000]  # unsorted: batched take must map back to the right episode
 
 
 def test_action_composed():

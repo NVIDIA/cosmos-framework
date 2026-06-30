@@ -19,18 +19,18 @@ Reports per-worker RSS too — that is what multiplies by ``num_workers`` and de
 many workers fit in RAM (the real scaling limit). Extrapolate index memory linearly in
 frame count for full-dataset estimates.
 """
+
 from __future__ import annotations
 
 import argparse
 import gc
 import os
 import pickle
-import time
 
 import psutil
 import torch
-
 from base_standins import S3DROIDLeRobotDataset
+
 from cosmos_framework.data.lance import LanceDROIDComposedDataset
 from cosmos_framework.data.vfm.action.datasets.droid_lerobot_dataset import DROIDLeRobotDataset
 
@@ -48,8 +48,9 @@ def _build(side, root, uri, cache, s3_bucket=None, s3_prefix=None, region=None):
             return S3DROIDLeRobotDataset(root=root, s3_bucket=s3_bucket, s3_prefix=s3_prefix, region=region, **_KW)
         return DROIDLeRobotDataset(root=root, **_KW)
     so = {"region": region} if (region and str(uri).startswith("s3://")) else None
-    return LanceDROIDComposedDataset(root=root, lance_uri=uri, decode_device="cpu",
-                                     decoder_cache_size=cache, storage_options=so, **_KW)
+    return LanceDROIDComposedDataset(
+        root=root, lance_uri=uri, decode_device="cpu", decoder_cache_size=cache, storage_options=so, **_KW
+    )
 
 
 def _mem_tree(proc):
@@ -58,6 +59,7 @@ def _mem_tree(proc):
     PSS (proportional set size) splits each shared page across the procs mapping it, so it
     is the fair physical-RAM metric when fork shares pages copy-on-write; RSS double-counts
     those shared pages."""
+
     def _pss(p):
         try:
             return p.memory_full_info().pss
@@ -87,17 +89,29 @@ def main():
     ap.add_argument("--s3-bucket", default=None)
     ap.add_argument("--s3-prefix", default=None)
     ap.add_argument("--cache-size", type=int, default=16)
-    ap.add_argument("--mp-context", choices=["spawn", "fork"], default="spawn",
-                    help="DataLoader worker start method. fork shares the parent's index via copy-on-write "
-                    "(measure with PSS); lance fork support is experimental.")
-    ap.add_argument("--free-base-rows", action="store_true",
-                    help="(base only) free self._rows before iterating — isolates the per-worker _rows cost")
-    ap.add_argument("--random", action="store_true",
-                    help="iterate with a RandomSampler (touches all episodes across a scaled table) "
-                    "instead of sequentially")
-    ap.add_argument("--skip-iterate", action="store_true",
-                    help="measure index/__init__ + spawn-payload memory only (no decode) — for scaled "
-                    "parquet roots without matching video; the index is the term that scales/OOMs")
+    ap.add_argument(
+        "--mp-context",
+        choices=["spawn", "fork"],
+        default="spawn",
+        help="DataLoader worker start method. fork shares the parent's index via copy-on-write "
+        "(measure with PSS); lance fork support is experimental.",
+    )
+    ap.add_argument(
+        "--free-base-rows",
+        action="store_true",
+        help="(base only) free self._rows before iterating — isolates the per-worker _rows cost",
+    )
+    ap.add_argument(
+        "--random",
+        action="store_true",
+        help="iterate with a RandomSampler (touches all episodes across a scaled table) instead of sequentially",
+    )
+    ap.add_argument(
+        "--skip-iterate",
+        action="store_true",
+        help="measure index/__init__ + spawn-payload memory only (no decode) — for scaled "
+        "parquet roots without matching video; the index is the term that scales/OOMs",
+    )
     ap.add_argument("--batch-size", type=int, default=16)
     ap.add_argument("--num-workers", type=int, default=8)
     ap.add_argument("--num-batches", type=int, default=40)
@@ -108,8 +122,15 @@ def main():
     gc.collect()
     rss_before = proc.memory_info().rss
 
-    ds = _build(args.side, args.root, args.uri, args.cache_size,
-                s3_bucket=args.s3_bucket, s3_prefix=args.s3_prefix, region=args.region)
+    ds = _build(
+        args.side,
+        args.root,
+        args.uri,
+        args.cache_size,
+        s3_bucket=args.s3_bucket,
+        s3_prefix=args.s3_prefix,
+        region=args.region,
+    )
     gc.collect()
     rss_after_init = proc.memory_info().rss
     n_frames = len(ds._row_episode)
@@ -147,10 +168,16 @@ def main():
     if args.random:
         g = torch.Generator().manual_seed(0)
         sampler = torch.utils.data.RandomSampler(
-            ds, replacement=True, num_samples=(args.num_batches + args.warmup + 4) * args.batch_size, generator=g)
+            ds, replacement=True, num_samples=(args.num_batches + args.warmup + 4) * args.batch_size, generator=g
+        )
     loader = torch.utils.data.DataLoader(
-        ds, batch_size=args.batch_size, sampler=sampler, num_workers=args.num_workers, collate_fn=_collate,
-        persistent_workers=args.num_workers > 0, prefetch_factor=4 if args.num_workers > 0 else None,
+        ds,
+        batch_size=args.batch_size,
+        sampler=sampler,
+        num_workers=args.num_workers,
+        collate_fn=_collate,
+        persistent_workers=args.num_workers > 0,
+        prefetch_factor=4 if args.num_workers > 0 else None,
         multiprocessing_context=args.mp_context if args.num_workers > 0 else None,
     )
     peak_rss, peak_pss, rss_s, pss_s = 0, 0, [], []

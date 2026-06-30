@@ -1,33 +1,17 @@
 # SPDX-License-Identifier: OpenMDW-1.1
-"""Build a training-optimized vision-SFT video representation for LanceDB.
+"""Build a training-optimized vision-SFT representation for LanceDB.
 
-For each clip in an SFT ``video_dataset_file.jsonl`` (the official
-``captions_to_sft_jsonl`` output), decode the clip once, **resize it to the
-training resolution** exactly as ``SFTDataset.process_one_sample`` does (the
-resize-ratio that ``VIDEO_RES_SIZE_INFO`` implies — the spatial center-crop is
-left to decode time so the stored clip stays a clean rectangle), re-encode the
-resized clip with a tiny GOP (all-intra by default) and store it as one per-clip
-large_binary row alongside the clip's caption + sizing metadata.
+One row per SFT clip: decode once, resize to the training resolution exactly as
+SFTDataset.process_one_sample does (crop left to decode time), re-encode with a
+short GOP (all-intra by default, so window seeks are exact), and store the mp4
+plus caption/sizing metadata. This moves the per-epoch resize offline; only the
+H.264 re-encode is lossy, and captions are stored verbatim so tokenization stays
+byte-identical to the base loader.
 
-Why (mirrors ``build_composed_droid.py`` for the action loader):
-  * the base loader decodes each source clip at its native size, then resizes
-    *per sample, every epoch*. Storing the clip already at training resolution
-    moves that resize offline (do it once), so the hot path decodes fewer pixels.
-  * a short GOP (``gop=1``) makes the random window seek the Lance loader does
-    cheap (every frame is a keyframe -> ``seek_mode="approximate"`` is exact).
-  * still fully video-encoded — no per-frame JPEG / disk blowup.
-
-The resize is the base loader's exact op (same ``scale_hw``); only the H.264
-re-encode is lossy, so the decoded frames match the base within re-encode
-tolerance. The caption + window metadata are stored verbatim so tokenization on
-the Lance side is byte-identical.
-
-Schema (one row per clip):
-  clip_id (str), width/height (orig int64), start_frame/end_frame/temporal_interval
-  (int64), enc_h/enc_w (resized stored size int64), fps (float64),
-  caption_json (str, JSON or ""), caption (str dense backup),
-  video_bytes (large_binary).
+Schema: clip_id, width/height (orig), start_frame/end_frame/temporal_interval,
+enc_h/enc_w (stored size), fps, caption_json, caption, video_bytes (large_binary).
 """
+
 from __future__ import annotations
 
 import argparse
@@ -49,7 +33,6 @@ from cosmos_framework.data.vfm.utils import VIDEO_RES_SIZE_INFO
 from cosmos_framework.inference.structured_caption import CAPTION_JSON_KEY
 
 
-
 def _encode(frames_thwc_u8: np.ndarray, fps: int, gop: int) -> bytes:
     """Raw RGB frames -> H.264 mp4 bytes via ffmpeg (short GOP, faststart).
 
@@ -60,10 +43,33 @@ def _encode(frames_thwc_u8: np.ndarray, fps: int, gop: int) -> bytes:
     os.close(fd)
     try:
         cmd = [
-            "ffmpeg", "-y", "-loglevel", "error",
-            "-f", "rawvideo", "-pix_fmt", "rgb24", "-s", f"{w}x{h}", "-r", str(fps), "-i", "pipe:0",
-            "-c:v", "libx264", "-preset", "veryfast", "-g", str(gop), "-keyint_min", str(gop),
-            "-pix_fmt", "yuv420p", "-movflags", "+faststart", path,
+            "ffmpeg",
+            "-y",
+            "-loglevel",
+            "error",
+            "-f",
+            "rawvideo",
+            "-pix_fmt",
+            "rgb24",
+            "-s",
+            f"{w}x{h}",
+            "-r",
+            str(fps),
+            "-i",
+            "pipe:0",
+            "-c:v",
+            "libx264",
+            "-preset",
+            "veryfast",
+            "-g",
+            str(gop),
+            "-keyint_min",
+            str(gop),
+            "-pix_fmt",
+            "yuv420p",
+            "-movflags",
+            "+faststart",
+            path,
         ]
         subprocess.run(cmd, input=frames_thwc_u8.tobytes(), stdout=subprocess.DEVNULL, check=True)
         with open(path, "rb") as fh:
@@ -84,9 +90,7 @@ def main() -> None:
     base_dir = os.path.dirname(os.path.abspath(args.jsonl))
     output_sizes = VIDEO_RES_SIZE_INFO[args.resolution]
 
-    # video_bytes is plain large_binary, read via the Permutation API — fastest for our small
-    # (<~2MB) clips. TODO: blob-v2 is faster for larger per-row payloads (>=~8-16MB) when read
-    # in parallel; switch the storage + loader together if clip sizes grow.
+    # video_bytes is plain large_binary. TODO: move to blob-v2 after optimizations.
     schema = pa.schema(
         [
             pa.field("clip_id", pa.string()),
