@@ -111,14 +111,20 @@ Shared mechanisms:
 ## Usage
 
 ### 1. Build Tables
-Use the provided tools to convert your datasets to Lance format:
+The conversion scripts live in [`tools/lance_datagen/`](../../../../tools/lance_datagen) (VLM uses
+`convert_llava_to_lance` in [`vlm_dataset.py`](./vlm_dataset.py)):
 ```bash
-# Action
+# Action      — tools/lance_datagen/build_composed_droid.py
 python tools/lance_datagen/build_composed_droid.py --root <droid_root> --uri <lance_uri> --gop 1
 
-# Vision-SFT
+# Vision-SFT  — tools/lance_datagen/build_vision_sft.py
 python tools/lance_datagen/build_vision_sft.py --jsonl <metadata.jsonl> --uri <lance_uri>
+
+# VLM         — convert_llava_to_lance() in cosmos_framework/data/lance/vlm_dataset.py
+python -c "from datasets import load_dataset; from cosmos_framework.data.lance.vlm_dataset import convert_llava_to_lance; \
+convert_llava_to_lance(load_dataset('lmms-lab/LLaVA-OneVision-Data', name='<subset>', split='train', streaming=True), '<lance_uri>')"
 ```
+`tools/lance_datagen/prepare_droid_subset.py` materializes a Cosmos-canonical DROID subset from the public LeRobot release.
 
 ### 2. Integration
 Replace the standard datasets with their Lance counterparts in your configuration.
