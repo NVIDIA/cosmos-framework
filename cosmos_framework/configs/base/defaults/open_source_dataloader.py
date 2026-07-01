@@ -26,7 +26,7 @@ tree the same modules live under ``cosmos_framework.data.vfm.*``.
 
 from hydra.core.config_store import ConfigStore
 
-from cosmos_framework.configs.base.defaults.vlm import create_qwen2_tokenizer_with_download
+from cosmos_framework.configs.base.defaults.reasoner import create_qwen2_tokenizer_with_download
 from cosmos_framework.data.vfm.joint_dataloader import (
     PackingDataLoader,
     RankPartitionedDataLoader,

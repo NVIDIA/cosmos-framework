@@ -8,7 +8,7 @@ mirrors ``vision_sft_nano`` (HF-cluster deployment with empty tokenizer/vlm
 paths, video-style loss scales, ``load_weights_from_pretrained=True``).
 """
 
-from cosmos_framework.configs.base.defaults.vlm import (
+from cosmos_framework.configs.base.defaults.reasoner import (
     create_qwen2_tokenizer_with_download,
     create_vlm_config,
 )

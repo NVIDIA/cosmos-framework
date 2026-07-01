@@ -26,7 +26,7 @@ Two differences from a literal extraction of the legacy inline block:
 
 from cosmos_framework.utils.lazy_config import LazyCall as L
 
-from cosmos_framework.configs.base.defaults.vlm import (
+from cosmos_framework.configs.base.defaults.reasoner import (
     create_qwen2_tokenizer_with_download,
     create_vlm_config,
 )

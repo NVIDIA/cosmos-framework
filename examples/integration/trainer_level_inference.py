@@ -34,7 +34,7 @@ What we USE from cosmos_framework:
     cosmos_framework.inference.{args,inference}                → OmniSampleOverrides +
                                                        get_sample_data (T2I/T2V only)
     cosmos_framework.data.vfm.{action,sequence_packing}        → SequencePlan helpers (action/sound)
-    cosmos_framework.model.vfm.vlm.qwen3_vl.utils.tokenize_caption
+    cosmos_framework.model.vfm.reasoner.qwen3_vl.utils.tokenize_caption
     model.generate_samples_from_batch(batch, seed)   → THE inference call (CFG + sampler)
     model.decode(latent)                             → VAE decode
 
@@ -71,7 +71,7 @@ from cosmos_framework.data.vfm.sequence_packing import SequencePlan
 from cosmos_framework.inference.args import DEFAULT_CHECKPOINT, OmniSampleOverrides
 from cosmos_framework.inference.inference import get_sample_data
 from cosmos_framework.inference.model import Cosmos3OmniConfig, Cosmos3OmniModel
-from cosmos_framework.model.vfm.vlm.qwen3_vl.utils import tokenize_caption
+from cosmos_framework.model.vfm.reasoner.qwen3_vl.utils import tokenize_caption
 from cosmos_framework.tools.visualize.video import save_img_or_video
 
 
