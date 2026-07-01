@@ -23,6 +23,76 @@ from cosmos_framework.data.generator.action.pose_utils import (
     pose_abs_to_rel,
 )
 
+
+# --- Fast video decode: LRU cache of torchcodec decoders with APPROXIMATE seek ---
+# LeRobot's default _default_decoder_cache opens VideoDecoder with exact seek
+# (keyframe scan per fetch -> slow). i4 (cosmos3_action_lerobot.py) patches it with
+# an LRU + approximate-seek cache; porting that here gives decode_video_frames the
+# same per-sample speed. Patched at import so it applies in every dataloader worker.
+import importlib as _importlib  # noqa: E402
+from collections import OrderedDict as _OrderedDict  # noqa: E402
+from threading import Lock as _Lock  # noqa: E402
+
+_OSS_DECODER_CACHE_MAX = 64
+_oss_decoder_cache_patched = False
+
+
+class _LRUVideoDecoderCache:
+    def __init__(self, max_size: int = _OSS_DECODER_CACHE_MAX) -> None:
+        self._max_size = max_size
+        self._cache: "_OrderedDict[str, tuple]" = _OrderedDict()
+        self._lock = _Lock()
+
+    def get_decoder(self, video_path):
+        if _importlib.util.find_spec("torchcodec"):
+            from torchcodec.decoders import VideoDecoder
+        else:
+            raise ImportError("torchcodec is required but not available.")
+        import fsspec
+        video_path = str(video_path)
+        with self._lock:
+            if video_path in self._cache:
+                self._cache.move_to_end(video_path)
+                return self._cache[video_path][0]
+            file_handle = fsspec.open(video_path).__enter__()
+            decoder = VideoDecoder(file_handle, seek_mode="approximate")
+            self._cache[video_path] = (decoder, file_handle)
+            while len(self._cache) > self._max_size:
+                _, (_, old_fh) = self._cache.popitem(last=False)
+                try:
+                    old_fh.close()
+                except Exception:
+                    pass
+            return decoder
+
+    def clear(self):
+        with self._lock:
+            for _, fh in self._cache.values():
+                try:
+                    fh.close()
+                except Exception:
+                    pass
+            self._cache.clear()
+
+
+def _patch_decoder_cache(max_size: int = _OSS_DECODER_CACHE_MAX) -> None:
+    global _oss_decoder_cache_patched
+    if _oss_decoder_cache_patched:
+        return
+    import lerobot.datasets.video_utils as _vu
+    _vu._default_decoder_cache = _LRUVideoDecoderCache(max_size=max_size)
+    _oss_decoder_cache_patched = True
+
+
+_patch_decoder_cache()
+try:
+    from lerobot.datasets.video_utils import get_safe_default_codec as _gsdc
+    import os as _o
+    if _o.environ.get("OSS_DL_DIAG") == "1":
+        print(f"[OSS_DL] default codec = {_gsdc()!r}; cache = {type(__import__('lerobot.datasets.video_utils', fromlist=['x'])._default_decoder_cache).__name__}", flush=True)
+except Exception as _e:
+    pass
+
 PoseConvention = Literal["backward_framewise"]
 Viewpoint = Literal["concat_view"]
 
@@ -303,6 +373,7 @@ class DROIDLeRobotDataset(ActionBaseDataset):
                 self._video_path(episode, video_key),
                 [float(episode.get(f"videos/{video_key}/from_timestamp", 0.0)) + ts for ts in timestamps],
                 self._tolerance_s,
+                backend="torchcodec",  # force torchcodec (uses the LRU approximate-seek cache); default falls back to slow pyav
             )
             for name, video_key in _IMAGE_FEATURES.items()
         }
@@ -373,4 +444,104 @@ class DROIDLeRobotDataset(ActionBaseDataset):
             if c > prev:
                 blocks.append((prev, c - prev))
             prev = c
+        return blocks
+
+
+class ShardedDROIDLeRobotDataset:
+    """Concatenation of per-lab :class:`DROIDLeRobotDataset` shards.
+
+    The internal DROID success split is published in two layouts of the *same*
+    episodes: a single flat LeRobot (``<root>/{data,meta,videos}``) and a
+    *sharded* layout partitioned by source lab
+    (``<root>/success/{AUTOLab,CLVR,...,WEIRD}/{data,meta,videos}``). The internal
+    ``DROIDLeRobotDataset`` consumes the sharded layout by building a per-shard
+    sample index and concatenating them (mirroring i4's ``LEROBOT_ROOTS[version]``
+    -> ``_all_shard_roots`` + per-shard ``_append_index_records``); the flat layout
+    builds one index over all episodes. Although both cover the identical episodes,
+    the per-shard index construction (per-shard train/val split + per-shard window
+    filtering) yields a different effective sampling distribution and a measurably
+    different (lower) training-loss level. This class reproduces the sharded path:
+    one ``DROIDLeRobotDataset`` per lab sub-root, concatenated into a single flat
+    sample index with uniform sampling (no per-shard reweighting), matching the
+    internal sharded run.
+
+    ``root`` is the sharded dataset dir; lab sub-roots are auto-discovered as
+    ``<root>/success/*`` (when ``use_success_only``) or supplied explicitly via
+    ``lerobot_roots`` (paths relative to ``root``). All other kwargs are forwarded
+    verbatim to each per-shard :class:`DROIDLeRobotDataset`.
+    """
+
+    def __init__(
+        self,
+        root: str,
+        *,
+        lerobot_roots: list[str] | None = None,
+        use_success_only: bool = True,
+        **kwargs: Any,
+    ) -> None:
+        root_path = Path(root)
+        if lerobot_roots is not None:
+            sub_roots = [root_path / r for r in lerobot_roots]
+        elif (root_path / "meta" / "info.json").exists():
+            # ``root`` is itself a single flat LeRobot dataset -> one shard.
+            sub_roots = [root_path]
+        else:
+            split = "success" if use_success_only else "*"
+            sub_roots = sorted(
+                p for p in root_path.glob(f"{split}/*") if (p / "meta" / "info.json").exists()
+            )
+        if not sub_roots:
+            raise FileNotFoundError(
+                f"ShardedDROIDLeRobotDataset: no LeRobot shards (meta/info.json) found under {root_path}"
+            )
+
+        self._shards: list[DROIDLeRobotDataset] = [
+            DROIDLeRobotDataset(root=str(p), **kwargs) for p in sub_roots
+        ]
+        lens = [len(s) for s in self._shards]
+        # offsets[k] = global start index of shard k; offsets[-1] = total length.
+        self._offsets = np.concatenate([[0], np.cumsum(lens)]).astype(np.int64)
+        self._total = int(self._offsets[-1])
+
+    def __getattr__(self, name: str) -> Any:
+        # Forward any non-overridden attribute/method (action_dim, _action_spec,
+        # action_normalization, domain_id, fps, chunk_length, load_action_stats,
+        # viewpoint, ...) to a representative shard; all shards share the same config.
+        shards = self.__dict__.get("_shards")
+        if not shards:
+            raise AttributeError(name)
+        return getattr(shards[0], name)
+
+    @property
+    def mode(self) -> str:
+        return self._shards[0].mode
+
+    @mode.setter
+    def mode(self, value: str) -> None:
+        for shard in self._shards:
+            shard.mode = value
+
+    def __len__(self) -> int:
+        return self._total
+
+    def _route(self, idx: int) -> tuple[DROIDLeRobotDataset, int]:
+        idx = int(idx)
+        k = int(np.searchsorted(self._offsets, idx, side="right")) - 1
+        return self._shards[k], idx - int(self._offsets[k])
+
+    def __getitem__(self, idx: int) -> dict[str, Any]:
+        shard, local = self._route(idx)
+        return shard[local]
+
+    def get_shuffle_blocks(self) -> list[tuple[int, int]]:
+        """Per-shard ``(start, length)`` blocks lifted into the concatenated index
+        space (each shard's blocks offset by its global start). The iterable shuffle
+        then permutes blocks across ALL shards and shards them across ranks/workers,
+        so sampling is uniform over the concatenated index — i.e. all 13 labs pooled,
+        matching the internal sharded run's per-sample-uniform draw."""
+        blocks: list[tuple[int, int]] = []
+        for k, shard in enumerate(self._shards):
+            base = int(self._offsets[k])
+            for start, length in shard.get_shuffle_blocks():
+                blocks.append((base + start, length))
         return blocks
