@@ -39,7 +39,7 @@ permissions:
 
 jobs:
   runtime-image:
-    runs-on: [self-hosted, gpu, h200]
+    runs-on: [self-hosted, docker-build, h200, cosmos-framework]
     timeout-minutes: 120
     env:
       DOCKER_BUILDKIT: "1"
