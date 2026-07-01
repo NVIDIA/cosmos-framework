@@ -114,10 +114,10 @@ are token-exact.
 ### VLM — `LanceVLMDataset`
 
 The base streams LLaVA-OneVision from the HuggingFace Hub (sequential shards + a bounded shuffle
-buffer). The Lance table stores each sample's image bytes and conversation, which the Permutation
-API addresses in O(1) for a full random-access global shuffle; `LanceVLMShuffleScan` instead reads
-contiguous row-chunks in shuffled order for S3-friendly sequential access. Records are byte-identical
-to the base, so downstream image decoding and tokenization are unchanged.
+buffer). The Lance table stores each sample's image bytes and conversation; the Permutation API
+reads them by row, so a global shuffle is just a shuffled list of row indices. `LanceVLMShuffleScan`
+instead reads contiguous row-chunks in shuffled order for S3-friendly sequential access. Records are
+byte-identical to the base, so downstream image decoding and tokenization are unchanged.
 
 | column          | type         | description                     |
 | --------------- | ------------ | ------------------------------- |
