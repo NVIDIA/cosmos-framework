@@ -24,17 +24,17 @@ Combined 3-loader throughput, 327 DROID episodes, batch 16:
 ### Per-Loader Throughput (samples/s)
 Each loader standalone, tuned workers (Action/VSFT 18, VLM 4):
 
-| Loader         | Base (Local) | Lance (Local) | Base (S3) | Lance (S3)  |
-| -------------- | ------------ | ------------- | --------- | ----------- |
-| Action (DROID) | 154.0        | 288.7 (1.9x)  | 146.7     | 307.2 (2.1x)|
-| Vision-SFT     | 119.1        | 1017.9 (8.5x) | 100.4     | 959.5 (9.6x)|
-| VLM (LLaVA)    | 190.0        | — (see note)  | 179.6     | — (see note)|
+| Loader         | Base (Local) | Lance (Local) | Base (S3)  | Lance (S3)  |
+| -------------- | ------------ | ------------- | ---------- | ----------- |
+| Action (DROID) | 154.0        | 288.7 (1.9x)  | 146.7      | 307.2 (2.1x)|
+| Vision-SFT     | 119.1        | 1017.9 (8.5x) | 100.4      | 959.5 (9.6x)|
+| VLM (LLaVA)    | 118.1 (hf)   | 392.3 (3.3x)  | 118.1 (hf) | 328.6 (2.8x)|
 
-Action decodes 1 composed clip vs 3 runtime views (~2x); Vision-SFT decodes a pre-resized
-short-GOP clip in-process vs the base's per-sample ffmpeg resize (~8x). **VLM is not a decode
-comparison**: both loaders emit *raw* records (image bytes + conversation) and decode/tokenize
-downstream in the processor, so loader-level throughput mainly reflects the source (base streams
-from the HF Hub; Lance is local/S3 random access). The fair VLM measure is the Combined table.
+Action decodes one composed clip instead of three runtime views; Vision-SFT decodes a pre-resized
+short-GOP clip in-process instead of the base's per-sample ffmpeg resize. The VLM base has no
+local/S3 form — it streams from the HuggingFace Hub (marked `hf`, so the same number appears in
+both columns) — and the VLM row is measured end-to-end (image decode + tokenize) to be comparable
+to the video-decoding loaders.
 
 ## Memory: a note on the per-frame index (not a Lance advantage)
 

@@ -47,7 +47,7 @@ def _sharegpt_to_messages(conversations, image):
             content = [{"type": "image", "image": image}, {"type": "text", "text": text}]
             inserted = True
         else:
-            content = text
+            content = [{"type": "text", "text": text}]
         msgs.append({"role": role, "content": content})
     return msgs
 
