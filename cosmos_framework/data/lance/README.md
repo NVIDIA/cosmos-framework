@@ -5,13 +5,11 @@ This directory contains LanceDB-backed implementations of the three main dataloa
 - **Vision-SFT (Local clips)**: `LanceVisionSFTDataset`
 - **VLM (LLaVA-OneVision)**: `LanceVLMDataset`
 
-These loaders are designed for higher throughput and native object-store (S3) access while maintaining verified equivalence with the original loaders (exact labels/tokens; video within one offline H.264 re-encode).
-
-## Key Features
-
-- **Higher Throughput**: Up to 3.8x speedup locally and 4.4x on S3 when tuned.
-- **Native S3 Support**: Uses LanceDB's native object-store integration for parallel, selective reads without FUSE or full downloads.
-- **Verified Equivalence**: VLM records byte-identical, vision-SFT token-ids exact, action labels (action/pose/caption) bit-exact with video within H.264 re-encode tolerance (~1.5%).
+Each is a drop-in for the corresponding base loader, reading from a converted LanceDB table
+instead of the original source (LeRobot tree / local clips / HuggingFace stream). Output is
+equivalent to the base — VLM records byte-identical, vision-SFT token-ids exact, action labels
+(action/pose/caption) bit-exact, and video within one offline H.264 re-encode (~1.5%) — and the
+table can be read directly from object storage (S3) without FUSE or full downloads.
 
 ## Performance Summary
 
@@ -66,47 +64,66 @@ keeps `_rows` reaches a ~12 GB resident index at 64× (OOM territory at full-DRO
 
 ## How it works
 
-Two phases. An offline **build** (`tools/lance_datagen/`) writes one LanceDB table per modality;
-at train time the **loader** reads columns and decodes clips in-process. The win is moving
-per-epoch work (multi-view compose, resize, subprocess decode) offline into the table, so the
-hot path just does a columnar read + one in-process decode.
+There are two phases: an offline conversion (`tools/lance_datagen/`) writes one LanceDB table per
+modality, and the training-time loader reads that table and decodes clips in-process. Tables are
+read through the lancedb Permutation API, and media is stored one clip/image per row in a plain
+`large_binary` column. Loaders null their DB/decoder handles in `__getstate__`, so each spawn
+worker reopens them lazily (lancedb is not fork-safe).
 
-Shared mechanisms:
-- **Permutation API** (lancedb, no pylance): columnar `take` for O(1) random access + true global
-  shuffle. `take` returns rows sorted by offset, so `_read_clip_bytes` keys results by row rather
-  than relying on input order.
-- **Media as plain `large_binary`**: one mp4 clip (or image) per row. _TODO: move to blob-v2 for
-  larger per-row payloads read in parallel._
-- **torchcodec** decodes the mp4 bytes **in-process** (no ffmpeg subprocess) with
-  `seek_mode="approximate"` — which is exact because clips are encoded **all-intra (`gop=1`, every
-  frame a keyframe)**, making random window seeks cheap. Each worker keeps an LRU decoder cache.
-- **Worker-safe**: `__getstate__` nulls the DB/decoder handles (lancedb isn't fork-safe), so each
-  spawn worker reopens them lazily.
+> Note: video is currently stored as plain `large_binary`. It will move to blob encoding
+> (blob-v2) once the lancedb-level blob API is available.
 
 ### Action — `LanceDROIDComposedDataset`
-- **Current base**: decodes 3 camera views per sample from the LeRobot tree, resizes, and
-  concatenates them at runtime (→ 270×320).
-- **Lance**: stores that composed 270×320 clip **once per episode**, so the loader decodes a single
-  stream. It **subclasses `DROIDLeRobotDataset`** — inheriting the frame indexing and action/pose
-  assembly — and overrides only where the video comes from (labels stay bit-exact).
-- **Schema**: `episode_index (int64)`, `video_bytes (large_binary)`.
+
+The base loader reads three camera views per sample from the LeRobot tree and resizes +
+concatenates them into one 270×320 frame at runtime. The Lance table stores that composed frame
+once per episode, so the loader decodes a single mp4 stream instead. It subclasses
+`DROIDLeRobotDataset` and reuses its frame indexing and action/pose assembly unchanged — only the
+video source is overridden, so the labels stay bit-exact. Clips are encoded all-intra (`gop=1`),
+so torchcodec's `seek_mode="approximate"` lands on each window exactly; a per-worker LRU cache
+keeps recently used episode decoders open. `take` returns rows sorted by offset, so the byte read
+keys results by row rather than relying on the requested order.
+
+| column          | type           | description                              |
+| --------------- | -------------- | ---------------------------------------- |
+| `episode_index` | int64          | episode id                               |
+| `ep_start`      | int64          | first global frame index of the episode  |
+| `length`        | int64          | number of frames                         |
+| `video_bytes`   | large_binary   | composed 270×320 mp4 for the episode     |
 
 ### Vision-SFT — `LanceVisionSFTDataset`
-- **Current base**: `SFTDataset` fetches each source clip, decodes at native size, and resizes it
-  **per sample every epoch** via an ffmpeg subprocess.
-- **Lance**: stores each clip **pre-resized to training resolution** with a short GOP, so the hot
-  path decodes fewer pixels in-process with cheap seeks. Reuses the base's caption selection and
-  tokenization, so `text_token_ids` are token-exact.
-- **Schema**: `clip_id`, `width/height`, `start_frame/end_frame/temporal_interval`, `enc_h/enc_w`,
-  `fps`, `caption_json`, `caption`, `video_bytes (large_binary)`.
+
+The base `SFTDataset` fetches each source clip, decodes it at native size, and resizes it per
+sample every epoch through an ffmpeg subprocess. The Lance table stores each clip already resized
+to the training resolution with a short GOP, so the loader decodes fewer pixels in-process and
+seeks windows cheaply. Caption selection and tokenization reuse the base code, so `text_token_ids`
+are token-exact.
+
+| column                | type         | description                          |
+| --------------------- | ------------ | ------------------------------------ |
+| `clip_id`             | string       | `{uuid}_w{window}`                   |
+| `width`, `height`     | int64        | original resolution                  |
+| `start_frame`, `end_frame` | int64   | window bounds                        |
+| `temporal_interval`   | int64        | frame stride                         |
+| `enc_h`, `enc_w`      | int64        | stored (resized) resolution          |
+| `fps`                 | float64      | source fps                           |
+| `caption_json`        | string       | structured caption (JSON) or `""`    |
+| `caption`             | string       | dense caption fallback               |
+| `video_bytes`         | large_binary | pre-resized clip mp4                  |
 
 ### VLM — `LanceVLMDataset`
-- **Current base**: LLaVA-OneVision streamed from the HuggingFace Hub (sequential shards + a bounded
-  shuffle buffer).
-- **Lance**: image bytes + conversation per row → O(1) random access and true global shuffle via the
-  Permutation API; `LanceVLMShuffleScan` does a chunked-shuffle columnar scan for S3-friendly
-  sequential reads. Records are byte-identical to the base.
-- **Schema**: `sample_id (str)`, `image_bytes (large_binary)`, `conversations (JSON str)`.
+
+The base streams LLaVA-OneVision from the HuggingFace Hub (sequential shards + a bounded shuffle
+buffer). The Lance table stores each sample's image bytes and conversation, which the Permutation
+API addresses in O(1) for a full random-access global shuffle; `LanceVLMShuffleScan` instead reads
+contiguous row-chunks in shuffled order for S3-friendly sequential access. Records are byte-identical
+to the base, so downstream image decoding and tokenization are unchanged.
+
+| column          | type         | description                     |
+| --------------- | ------------ | ------------------------------- |
+| `sample_id`     | string       | sample id                       |
+| `image_bytes`   | large_binary | raw image (PNG/JPEG)            |
+| `conversations` | string       | conversation turns (JSON)       |
 
 ## Usage
 
