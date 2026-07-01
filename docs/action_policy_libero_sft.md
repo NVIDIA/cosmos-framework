@@ -3,6 +3,18 @@
 Full SFT of the public `nvidia/Cosmos3-Nano` base into a LIBERO-10 action
 policy: vision + language in, action chunks out.
 
+To match the LIBERO-10 SR reported in Cosmos3, we provide **two presets** (both
+lr 5e-5, warmup 500, cycle 16000, gbs 2048):
+
+- **(A) libero_10-only** — trains on `libero_10` alone; peaks by ~iter 1500
+  (max_iter 2000). Fast.
+  `action_policy_libero_nano` + `action_policy_libero_repro.toml` +
+  `launch_sft_action_policy_libero.sh`.
+- **(B) libero-all** — equal mix of all 4 LIBERO suites; needs longer training
+  (max_iter 5000).
+  `action_policy_libero_all_nano` + `action_policy_libero_all_repro.toml` +
+  `launch_sft_action_policy_libero_all.sh`.
+
 | Piece            | Path                                                                                            |
 | ---------------- | ----------------------------------------------------------------------------------------------- |
 | Dataset          | `cosmos_framework/data/vfm/action/datasets/libero_lerobot_dataset.py` (`LIBEROLeRobotDataset`)  |
@@ -16,15 +28,23 @@ policy: vision + language in, action chunks out.
 
 ## 1. Data
 
-`LIBEROLeRobotDataset` reads a local LeRobot dir (`LIBERO_ROOT`). Use the 20 FPS
+`LIBEROLeRobotDataset` reads a local LeRobot dir. Use the 20 FPS
 [`nvidia/LIBERO_LeRobot_v3`](https://huggingface.co/datasets/nvidia/LIBERO_LeRobot_v3),
-which the bundled `quantile_rot` stats and the 20 Hz eval assume. Train on
-`libero_10` alone:
+which the bundled `quantile_rot` stats and the 20 Hz eval assume.
+
+**Preset A (libero_10-only)** — `LIBERO_ROOT` points at the `libero_10` suite dir:
 
 ```bash
 hf download nvidia/LIBERO_LeRobot_v3 --repo-type dataset \
   --include 'libero_10/**' --local-dir <nfs>/LIBERO_LeRobot_v3
 export LIBERO_ROOT=<nfs>/LIBERO_LeRobot_v3/libero_10
+```
+
+**Preset B (libero-all)** — download all 4 suites; `LIBERO_ROOT` is the **parent** dir:
+
+```bash
+hf download nvidia/LIBERO_LeRobot_v3 --repo-type dataset --local-dir <nfs>/LIBERO_LeRobot_v3
+export LIBERO_ROOT=<nfs>/LIBERO_LeRobot_v3          # parent of libero_spatial/object/goal/10
 ```
 
 Actions are `frame_wise_relative` rot6d (10D = pos 3 + rot6d 6 + gripper 1),
@@ -34,24 +54,34 @@ eval server reproduces the same snap (§4).
 
 ## 2. Train
 
+Common env, then pick a preset launcher:
+
 ```bash
 export LD_LIBRARY_PATH=''                      # NGC container: avoid torch._C import error
-export LIBERO_ROOT=/path/to/libero_10_lerobot
 export BASE_CHECKPOINT_PATH=<Cosmos3-Nano DCP dir>
 export WAN_VAE_PATH=<Wan2.2_VAE.pth>
 export IMAGINAIRE_OUTPUT_ROOT=/path/to/output_root
 
-bash examples/launch_sft_action_policy_libero.sh   # HSDP 2x8; set NNODES/NODE_RANK/MASTER_ADDR per node
+# Preset A — libero_10-only (LIBERO_ROOT = the libero_10 suite dir):
+export LIBERO_ROOT=<nfs>/LIBERO_LeRobot_v3/libero_10
+bash examples/launch_sft_action_policy_libero.sh        # HSDP 2x8; set NNODES/NODE_RANK/MASTER_ADDR per node
+
+# Preset B — libero-all 4-suite (LIBERO_ROOT = the LIBERO_LeRobot_v3 parent dir):
+export LIBERO_ROOT=<nfs>/LIBERO_LeRobot_v3
+bash examples/launch_sft_action_policy_libero_all.sh    # HSDP 2x8; needs ~4500 iters to converge
 ```
 
-Recipe knobs live in `action_policy_libero_nano`; the TOML sets run-level scalars
-(lr 5e-5, warmup 500, cycle 16000, `save_iter=500`, HSDP 2x8). Global batch is
-2048 = `max_samples_per_batch` 128 × 16 ranks × grad_accum 1.
+Both recipes set lr 5e-5, warmup 500, cycle 16000, `save_iter=500`, HSDP 2x8 (global
+batch 2048 = `max_samples_per_batch` 128 × 16 ranks × grad_accum 1). They differ only in
+`max_iter`: **2000** for libero_10-only (peaks ~iter 1500), **5000** for libero-all
+(the 4-suite mix takes longer to converge on libero_10, ~iter 4500).
 
 ## 3. Closed-loop eval
 
 Start the policy server on a **trained** checkpoint (the base DCP has no action
-heads), then run the LIBERO simulator client against it.
+heads), then run the LIBERO simulator client against it. Same for both presets —
+`action_policy_libero_nano` supplies the model config for either run's
+checkpoint; just point `--checkpoint-path` at the one you trained.
 
 ```bash
 python -m cosmos_framework.scripts.action_policy_server_libero \
