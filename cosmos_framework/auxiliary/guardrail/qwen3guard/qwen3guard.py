@@ -53,9 +53,12 @@ class Qwen3Guard(ContentSafetyGuardrail):
         output_ids = generated_ids[0][len(model_inputs.input_ids[0]) :].tolist()
         content = self.tokenizer.decode(output_ids, skip_special_tokens=True)
 
-        safe_label_match = re.search(safe_pattern, content)
+        safe_label_match = re.search(safe_pattern, content, flags=re.IGNORECASE)
         label = safe_label_match.group(1) if safe_label_match else None
         categories = re.findall(category_pattern, content)
+        if label is None:
+            log.warning("Unable to parse safety label from Qwen3Guard output; treating prompt as unsafe")
+            return False, "Prompt blocked by Qwen3Guard. Unable to determine safety label from moderation output."
         if label.lower() == "unsafe":
             return False, f"Prompt blocked by Qwen3Guard. Safety: {label}, Categories: {categories}"
         else:
@@ -67,7 +70,7 @@ class Qwen3Guard(ContentSafetyGuardrail):
             return self.extract_label_and_categories(prompt)
         except Exception as e:
             log.error(f"Unexpected error occurred when running Qwen3Guard guardrail: {e}")
-            return True, "Unexpected error occurred when running Qwen3Guard guardrail."
+            return False, "Prompt blocked by Qwen3Guard because the guardrail could not complete safety evaluation."
 
 
 def parse_args():
