@@ -23,6 +23,21 @@ Combined 3-loader throughput, 327 DROID episodes, batch 16:
 | 4/4/4 (Default)           | 86.5         | 249.4 (2.9x)  | 67.7      | 246.9 (3.6x)|
 | 18/4/18 (Tuned)           | 253.7        | 961.9 (3.8x)  | 232.0     | 1016.9 (4.4x)|
 
+### Per-Loader Throughput (samples/s)
+Each loader standalone, Local, tuned workers (Action/VSFT 18, VLM 4):
+
+| Loader                | Base  | Lance  | Speedup |
+| --------------------- | ----- | ------ | ------- |
+| Action (DROID)        | 154.0 | 288.7  | 1.9x    |
+| Vision-SFT            | 119.1 | 1017.9 | 8.5x    |
+| VLM (LLaVA)           | 190.0 | —      | see note |
+
+Action decodes 1 composed clip vs 3 runtime views (~2x); Vision-SFT decodes a pre-resized
+short-GOP clip in-process vs the base's per-sample ffmpeg resize (~8x). **VLM is not a decode
+comparison**: both loaders emit *raw* records (image bytes + conversation) and decode/tokenize
+downstream in the processor, so loader-level throughput mainly reflects the source (base streams
+from the HF Hub; Lance is local/S3 random access). The fair VLM measure is the Combined table.
+
 ## Memory: a note on the per-frame index (not a Lance advantage)
 
 `ActionBaseDataset.__init__` builds a per-frame index (`self._rows`, a list of row dicts) and
@@ -49,12 +64,49 @@ What `_rows` costs — per-worker spawn payload (327-episode DROID subset replic
 `_rows` ≈ 270 B/frame; the remaining ~85 B/frame is the compact arrays both keep. A base that
 keeps `_rows` reaches a ~12 GB resident index at 64× (OOM territory at full-DROID scale).
 
-## Mechanisms
+## How it works
 
-1. **Pre-composed Clips**: For Action and Vision-SFT, frames are resized and composed offline once. The loader decodes a single optimized stream instead of multiple full-resolution views.
-2. **Columnar Random Access**: Provides O(1) random access and true global shuffle via the LanceDB **Permutation API**.
-3. **Batched I/O**: `__getitems__` performs batched reads and decodes per file/clip, maximizing I/O efficiency.
-4. **S3 Reads**: Media is stored as plain `large_binary` and read via the Permutation API (columnar take across Lance's IO thread pool). _TODO: move to blob-v2 after optimizations — it's faster for larger per-row payloads when read in parallel._
+Two phases. An offline **build** (`tools/lance_datagen/`) writes one LanceDB table per modality;
+at train time the **loader** reads columns and decodes clips in-process. The win is moving
+per-epoch work (multi-view compose, resize, subprocess decode) offline into the table, so the
+hot path just does a columnar read + one in-process decode.
+
+Shared mechanisms:
+- **Permutation API** (lancedb, no pylance): columnar `take` for O(1) random access + true global
+  shuffle. `take` returns rows sorted by offset, so `_read_clip_bytes` keys results by row rather
+  than relying on input order.
+- **Media as plain `large_binary`**: one mp4 clip (or image) per row. _TODO: move to blob-v2 for
+  larger per-row payloads read in parallel._
+- **torchcodec** decodes the mp4 bytes **in-process** (no ffmpeg subprocess) with
+  `seek_mode="approximate"` — which is exact because clips are encoded **all-intra (`gop=1`, every
+  frame a keyframe)**, making random window seeks cheap. Each worker keeps an LRU decoder cache.
+- **Worker-safe**: `__getstate__` nulls the DB/decoder handles (lancedb isn't fork-safe), so each
+  spawn worker reopens them lazily.
+
+### Action — `LanceDROIDComposedDataset`
+- **Current base**: decodes 3 camera views per sample from the LeRobot tree, resizes, and
+  concatenates them at runtime (→ 270×320).
+- **Lance**: stores that composed 270×320 clip **once per episode**, so the loader decodes a single
+  stream. It **subclasses `DROIDLeRobotDataset`** — inheriting the frame indexing and action/pose
+  assembly — and overrides only where the video comes from (labels stay bit-exact).
+- **Schema**: `episode_index (int64)`, `video_bytes (large_binary)`.
+
+### Vision-SFT — `LanceVisionSFTDataset`
+- **Current base**: `SFTDataset` fetches each source clip, decodes at native size, and resizes it
+  **per sample every epoch** via an ffmpeg subprocess.
+- **Lance**: stores each clip **pre-resized to training resolution** with a short GOP, so the hot
+  path decodes fewer pixels in-process with cheap seeks. Reuses the base's caption selection and
+  tokenization, so `text_token_ids` are token-exact.
+- **Schema**: `clip_id`, `width/height`, `start_frame/end_frame/temporal_interval`, `enc_h/enc_w`,
+  `fps`, `caption_json`, `caption`, `video_bytes (large_binary)`.
+
+### VLM — `LanceVLMDataset`
+- **Current base**: LLaVA-OneVision streamed from the HuggingFace Hub (sequential shards + a bounded
+  shuffle buffer).
+- **Lance**: image bytes + conversation per row → O(1) random access and true global shuffle via the
+  Permutation API; `LanceVLMShuffleScan` does a chunked-shuffle columnar scan for S3-friendly
+  sequential reads. Records are byte-identical to the base.
+- **Schema**: `sample_id (str)`, `image_bytes (large_binary)`, `conversations (JSON str)`.
 
 ## Usage
 
