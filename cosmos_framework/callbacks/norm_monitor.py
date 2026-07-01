@@ -212,8 +212,8 @@ class NormMonitor(Callback):
 
     def _should_track_param(self, param_name: str) -> bool:
         """Check if parameter should be tracked based on naming conventions."""
-        # Track only generation tower params, exclude EMA params
-        return "moe_gen" in param_name and "net_ema" not in param_name
+        # Track generation tower params and und→gen cross-attention norms; exclude EMA params
+        return ("moe_gen" in param_name or "k_norm_und_for_gen" in param_name) and "net_ema" not in param_name
 
     def _compute_l2_stats(self, tensor: torch.Tensor, detach: bool = True) -> dict[str, torch.Tensor]:
         """Compute statistics (squared sum and max) for a tensor.

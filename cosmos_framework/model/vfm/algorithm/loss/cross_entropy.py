@@ -28,21 +28,19 @@ Two reduction paths — determined by cp_group presence:
 
 from __future__ import annotations
 
-from typing import Optional
-
 import torch
 import torch.distributed as dist
 import torch.nn.functional as F
 
-from cosmos_framework.utils.vfm.vlm.constant import IGNORE_INDEX
+from cosmos_framework.utils.vfm.reasoner.constant import IGNORE_INDEX
 
 
 def cross_entropy_loss(
     logits: torch.Tensor,
     labels: torch.Tensor,
     loss_scaling_factor: float = 1.0,
-    dp_group: Optional[dist.ProcessGroup] = None,
-    cp_group: Optional[dist.ProcessGroup] = None,
+    dp_group: dist.ProcessGroup | None = None,
+    cp_group: dist.ProcessGroup | None = None,
     ignore_index: int = IGNORE_INDEX,
 ) -> torch.Tensor:
     """Next-token-prediction CE loss with DP/CP group reduction.
@@ -98,4 +96,64 @@ def cross_entropy_loss(
         num_dp_workers = dist.get_world_size(group=dp_group)
 
     loss = per_token_loss.sum() / (n_valid_tokens + 1e-8) * (num_dp_workers * loss_scaling_factor)
+    return loss
+
+
+def weighted_cross_entropy_loss(
+    logits: torch.Tensor,
+    labels: torch.Tensor,
+    exponent: float,
+    loss_scaling_factor: float = 1.0,
+    dp_group: dist.ProcessGroup | None = None,
+    cp_group: dist.ProcessGroup | None = None,
+    ignore_index: int = IGNORE_INDEX,
+) -> torch.Tensor:
+    """Next-token-prediction CE loss interpolated between per-token and per-sample reductions.
+
+    Matches ``cosmos_rl.policy.trainer.llm_trainer.sft_trainer.async_safe_weighted_ce``
+    for the non-packed, non-CP VLM path.
+
+    Args:
+        logits: [B,T,V] float tensor, raw model output before softmax.
+        labels: [B,T] long tensor, ground-truth token ids.
+        exponent: 0 gives per-token loss, 1 gives per-sample loss, values in
+            between interpolate by valid-token-count weight.
+        loss_scaling_factor: scalar multiplied into the returned loss.
+        dp_group: Ignored for weighted CE. Kept for call-site parity with
+            ``cross_entropy_loss``; normalization uses the default process group
+            to match cosmos-rl.
+        cp_group: Context-parallel group. Weighted CE does not support CP.
+        ignore_index: label value to exclude.
+
+    Returns:
+        Scalar loss tensor.
+    """
+    if cp_group is not None and cp_group.size() > 1:
+        raise AssertionError("weighted_cross_entropy_loss does not support CP")
+    del dp_group
+
+    batch_size = labels.shape[0]
+    shifted_logits = logits[:, :-1].contiguous().view(-1, logits.size(-1))  # [B*(T-1),V]
+    shifted_labels = labels[:, 1:].contiguous().view(-1)  # [B*(T-1)]
+
+    per_token_loss = F.cross_entropy(
+        shifted_logits.float(),  # [B*(T-1),V]
+        shifted_labels,  # [B*(T-1)]
+        ignore_index=ignore_index,
+        reduction="none",
+    ).view(batch_size, -1)  # [B,T-1]
+    valid_mask = (shifted_labels.view(batch_size, -1) != ignore_index).float()  # [B,T-1]
+    valid_counts = valid_mask.sum(dim=1)  # [B]
+    has_valid = (valid_counts > 0).float()  # [B]
+
+    sample_losses = (per_token_loss * valid_mask).sum(dim=1) / valid_counts.clamp(min=1).pow(exponent)  # [B]
+    local_loss_sum = (sample_losses * has_valid).sum()  # []
+    local_exp_weight_sum = (valid_counts.pow(1 - exponent) * has_valid).sum()  # []
+
+    num_dp_workers = 1
+    if dist.is_available() and dist.is_initialized():
+        dist.all_reduce(local_exp_weight_sum, op=dist.ReduceOp.SUM)
+        num_dp_workers = dist.get_world_size()
+
+    loss = local_loss_sum / local_exp_weight_sum.clamp(min=1) * (num_dp_workers * loss_scaling_factor)  # []
     return loss

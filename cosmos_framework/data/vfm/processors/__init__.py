@@ -14,7 +14,7 @@ from cosmos_framework.data.vfm.processors.nemotron3densevl_processor import Nemo
 from cosmos_framework.data.vfm.processors.nemotronvl_processor import NemotronVLProcessor
 from cosmos_framework.data.vfm.processors.qwen3vl_processor import Qwen3VLProcessor
 from cosmos_framework.model.vfm.tokenizers.tokenization_qwen2 import Qwen2Tokenizer
-from cosmos_framework.utils.vfm.vlm.pretrained_models_downloader import maybe_download_hf_model_from_s3
+from cosmos_framework.utils.vfm.reasoner.pretrained_models_downloader import maybe_download_hf_model_from_s3
 
 _VARIANT_TO_CREDENTIALS = {
     "s3": ("credentials/s3_training.secret", "bucket4"),

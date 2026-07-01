@@ -43,7 +43,7 @@ def _tensor_names_to_skip_for(model_type: str) -> list[str]:
     matched model keys absent from the checkpoint).
 
     Registered VLMs (see
-    cosmos_framework/configs/base/vlm/defaults/vlm_policy.py):
+    cosmos_framework/configs/base/reasoner/defaults/vlm_policy.py):
     - Qwen3-VL dense (2B/4B/8B/32B): no skips needed.
     - NemotronH_Nano_VL_V2 (nvidia/NVIDIA-Nemotron-Nano-12B-v2-VL-BF16):
       RADIO backbone buffers — initialized by the module, not from ckpt.
@@ -314,6 +314,17 @@ class HFModel(nn.Module):
             "pad_token_id",
             "ignore_index",
             "collated",
+            # content_tokens: non-pad token count emitted by custom_collate for the
+            # VLMTokensPerSec throughput callback; telemetry only, not a forward arg.
+            "content_tokens",
+            # Extended packing telemetry emitted by custom_collate (supervision density,
+            # l_max, attention-quadratic waste) for VLMTokensPerSec; telemetry only.
+            "supervised_tokens",
+            "seq_max_len",
+            "sum_len_sq",
+            # predicted_runtime_ms: the FLOP packer's per-step runtime estimate, surfaced by
+            # custom_collate for the VLMTokensPerSec realized-vs-predicted calibration; telemetry only.
+            "predicted_runtime_ms",
             "raw_image",
             "raw_video",
             # image_sizes is collected by collate_fn but is NOT a Qwen3-VL forward arg

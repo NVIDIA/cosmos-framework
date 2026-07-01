@@ -24,8 +24,6 @@ import torch
 from cosmos_framework.utils import log
 from cosmos_framework.utils.distributed import get_rank, sync_model_states
 from cosmos_framework.utils.easy_io import easy_io
-from cosmos_framework.model.tokenizer.models.dense_runtime import DenseAutoencoderRuntime
-from cosmos_framework.model.tokenizer.models.sparse_autoencoder import AutoencoderKL
 from cosmos_framework.model.vfm.tokenizers.interface import VideoTokenizerInterface
 from cosmos_framework.model.vfm.tokenizers.uniae.frame_math import (
     get_uniae_latent_num_frames,
@@ -34,6 +32,8 @@ from cosmos_framework.model.vfm.tokenizers.uniae.frame_math import (
     normalize_resolution_int_mapping,
 )
 from cosmos_framework.utils.vfm.data_utils import get_vision_data_resolution
+from cosmos_framework.model.tokenizer.models.dense_runtime import DenseAutoencoderRuntime
+from cosmos_framework.model.tokenizer.models.sparse_autoencoder import AutoencoderKL
 
 # S3 architecture config (avoids importing configs/base which pulls in loss deps)
 _S3_ARCH = dict(

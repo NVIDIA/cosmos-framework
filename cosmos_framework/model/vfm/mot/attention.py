@@ -89,10 +89,22 @@ def two_way_attention(
     packed_query_states: SequencePack,
     packed_key_states: SequencePack,
     packed_value_states: SequencePack,
-) -> SequencePack:
+    packed_key_states_normalized: SequencePack | None = None,
+):
     """
     Performs two-way attention with causal and full attention.
+
+    ``packed_key_states_normalized``: optional alternative K pack used for the generator's
+    full attention (gen→all).  When provided, the generator attends to these keys
+    instead of ``packed_key_states``, allowing the und K tokens to be normalised for
+    the gen cross-attention path while keeping raw K tokens for the reasoner's own
+    causal self-attention.  If ``None``, ``packed_key_states`` is used for both paths.
     """
+    # For gen full-attention, use normed keys when provided,
+    # otherwise fall back to the standard packed keys.
+    packed_key_normalized = (
+        packed_key_states_normalized if packed_key_states_normalized is not None else packed_key_states
+    )
 
     causal_q, causal_q_offsets = get_causal_seq(packed_query_states)
     causal_k, causal_k_offsets = get_causal_seq(packed_key_states)
@@ -121,7 +133,7 @@ def two_way_attention(
 
     full_res = attention(
         full_q.unsqueeze(0),  # [1,N_full,heads,head_dim]
-        get_all_seq(packed_key_states).unsqueeze(0),  # [1,N_all,heads,head_dim]
+        get_all_seq(packed_key_normalized).unsqueeze(0),  # [1,N_all,heads,head_dim]  normed und K for gen
         get_all_seq(packed_value_states).unsqueeze(0),  # [1,N_all,heads,head_dim]
         cumulative_seqlen_Q=full_q_offsets,
         cumulative_seqlen_KV=sample_offsets,
@@ -142,7 +154,8 @@ def three_way_attention(
     packed_value_states: SequencePack,
     natten_metadata: dict | None,
     attention_meta: SplitInfo | None = None,
-) -> SequencePack:
+    packed_key_states_normalized: SequencePack | None = None,
+):
     """
     Performs three-way attention, with understanding and generations attentions fully decomposed,
     and allows sparsity / multi-dimensional masking in the generation tower.
@@ -155,10 +168,23 @@ def three_way_attention(
     NOTE: the three-way decomposition is only done so we can handle sparsity in the gen tower,
     but a KEY assumption is that the "full" tokens all correspond to the same modality!
     We should be careful when extending this to beyond t2i and t2v.
+
+    ``packed_key_states_normalized``: optional alternative K pack for the gen→und cross-attention
+    (``full_ca``).  When provided, ``get_causal_seq(packed_key_states_normalized)`` supplies the und
+    K tokens seen by the generator, while ``get_causal_seq(packed_key_states)`` (raw und K) is
+    still used for the reasoner's own causal self-attention.  If ``None``, both paths share
+    ``packed_key_states``.
     """
 
     causal_q, causal_q_offsets = get_causal_seq(packed_query_states)
     causal_k, causal_k_offsets = get_causal_seq(packed_key_states)
+
+    # For gen→und cross-attention use normed keys when provided,
+    # otherwise fall back to the standard causal keys.
+    if packed_key_states_normalized is not None:
+        causal_k_normalized, causal_k_normalized_offsets = get_causal_seq(packed_key_states_normalized)
+    else:
+        causal_k_normalized, causal_k_normalized_offsets = causal_k, causal_k_offsets
     causal_v, _ = get_causal_seq(packed_value_states)
     full_q, full_q_offsets = get_full_only_seq(packed_query_states)
     full_k, full_k_offsets = get_full_only_seq(packed_key_states)
@@ -220,10 +246,10 @@ def three_way_attention(
 
     full_ca, full_ca_lse = attention(
         full_q.unsqueeze(0),  # [1,N_full,heads,head_dim]
-        causal_k.unsqueeze(0),  # [1,N_und,heads,head_dim]
+        causal_k_normalized.unsqueeze(0),  # [1,N_und,heads,head_dim]  normed und K for gen→und
         causal_v.unsqueeze(0),  # [1,N_und,heads,head_dim]
         cumulative_seqlen_Q=full_q_offsets,
-        cumulative_seqlen_KV=causal_k_offsets,
+        cumulative_seqlen_KV=causal_k_normalized_offsets,
         max_seqlen_Q=packed_query_states["max_full_len"],
         max_seqlen_KV=packed_query_states["max_causal_len"],
         return_lse=True,
@@ -323,7 +349,7 @@ def multi_control_two_way_attention(
     noisy_v = full_v_v[noisy_s:noisy_e]  # [N_noisy, Hkv, D]
 
     def _sdpa(q: torch.Tensor, k: torch.Tensor, v: torch.Tensor) -> torch.Tensor:
-        """Maskless attention using cosmos_framework attention() → [N_q, Hq*D]."""
+        """Maskless attention using cosmos_framework.model.attention() → [N_q, Hq*D]."""
         n_q, n_kv = q.shape[0], k.shape[0]
         seqlens_q = torch.tensor([n_q], dtype=torch.int32, device=q.device)
         seqlens_kv = torch.tensor([n_kv], dtype=torch.int32, device=k.device)
@@ -381,6 +407,7 @@ def dispatch_attention(
     attention_mask: SplitInfo,
     natten_metadata: dict | None = None,
     memory_value: MemoryValue | None = None,
+    packed_key_states_normalized: SequencePack | None = None,
 ) -> tuple[SequencePack, KVToStore | None]:
     assert memory_value is None, "Base dispatch_attention does not handle MemoryValue"
     if isinstance(attention_mask, SplitInfo) and attention_mask.control_stream_token_ranges is not None:
@@ -397,9 +424,15 @@ def dispatch_attention(
             packed_value_states,
             natten_metadata=natten_metadata,
             attention_meta=attention_mask,
+            packed_key_states_normalized=packed_key_states_normalized,
         )
     elif isinstance(attention_mask, SplitInfo):
-        output = two_way_attention(packed_query_states, packed_key_states, packed_value_states)
+        output = two_way_attention(
+            packed_query_states,
+            packed_key_states,
+            packed_value_states,
+            packed_key_states_normalized=packed_key_states_normalized,
+        )
     else:
         raise TypeError(f"Unsupported attention metadata: {type(attention_mask)}")
     return output, None

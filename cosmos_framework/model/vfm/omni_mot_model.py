@@ -36,6 +36,7 @@ from cosmos_framework.model.vfm.mot.context_parallel_utils import context_parall
 from cosmos_framework.model.vfm.mot.cosmos3_vfm_network import Cosmos3VFMNetwork, Cosmos3VFMNetworkConfig
 from cosmos_framework.model.vfm.mot.modeling_utils import has_noisy_tokens
 from cosmos_framework.model.vfm.mot.parallelize_vfm_network import parallelize_vfm_network
+from cosmos_framework.model.vfm.reasoner.qwen3_vl.utils import tokenize_caption
 from cosmos_framework.model.vfm.utils.data_and_condition import (
     GenerationDataClean,
     GenerationDataNoised,
@@ -44,8 +45,9 @@ from cosmos_framework.model.vfm.utils.data_and_condition import (
     unwrap_and_densify,
 )
 from cosmos_framework.model.vfm.utils.memory import MemoryState
-from cosmos_framework.model.vfm.utils.safetensors_loader import load_language_model as load_language_model_safetensors
-from cosmos_framework.model.vfm.vlm.qwen3_vl.utils import tokenize_caption
+from cosmos_framework.model.vfm.utils.safetensors_loader import (
+    load_language_model as load_language_model_safetensors,
+)
 from cosmos_framework.data.vfm.sequence_packing import (
     PackedSequence,
     SequencePlan,
@@ -171,11 +173,11 @@ class OmniMoTModel(ImaginaireModel):
             self.tokenizer_sound_gen = None
 
 
-    def build_net(self, dtype: torch.dtype):
+    def build_net(self, dtype: torch.dtype, *, lora_enabled: bool | None = None) -> torch.nn.Module:
         # Build model network and parallelize it.
+        lora_enabled = self.config.lora_enabled if lora_enabled is None else lora_enabled
         with torch.device("meta"):
             assert self.vlm_config.model_instance is not None, "Model instance should be specified"
-
             language_model = lazy_instantiate(self.vlm_config.model_instance)
 
             # NOTE: We pass "RF timesteps" to the network in the same scale as the scheduler
@@ -191,15 +193,11 @@ class OmniMoTModel(ImaginaireModel):
                 max_latent_h=self.config.diffusion_expert_config.max_vae_latent_side_after_patchify,
                 max_latent_w=self.config.diffusion_expert_config.max_vae_latent_side_after_patchify,
                 max_latent_t=self.config.state_t,
-                rope_h_extrapolation_ratio=self.config.diffusion_expert_config.rope_h_extrapolation_ratio,
-                rope_w_extrapolation_ratio=self.config.diffusion_expert_config.rope_w_extrapolation_ratio,
-                rope_t_extrapolation_ratio=self.config.diffusion_expert_config.rope_t_extrapolation_ratio,
                 enable_fps_modulation=self.config.diffusion_expert_config.enable_fps_modulation,
                 base_fps=self.config.diffusion_expert_config.base_fps,
                 vision_gen=self.config.vision_gen,
                 action_gen=self.config.action_gen,
                 sound_gen=self.config.sound_gen,
-                position_embedding_type=self.config.diffusion_expert_config.position_embedding_type,
                 joint_attn_implementation=self.config.joint_attn_implementation,
                 timestep_scale=1.0 / float(num_train_timesteps) * self.config.diffusion_expert_config.timestep_range,
                 action_dim=self.config.max_action_dim,
@@ -222,7 +220,7 @@ class OmniMoTModel(ImaginaireModel):
             # injector must see unsharded Linear shapes; injecting post-FSDP causes
             # lora_B to be created at the per-rank shard size and crashes at
             # forward time. See `OmniMoTModel.add_lora` for details.
-            if getattr(self.config, "lora_enabled", False):
+            if lora_enabled:
                 net = self.add_lora(
                     net,
                     lora_rank=self.config.lora_rank,
@@ -248,7 +246,7 @@ class OmniMoTModel(ImaginaireModel):
                 # meta), since they are only for checkpoint conversion and smoke
                 # tests.
                 net.init_weights(buffer_device=DEVICE)
-                if getattr(self.config, "lora_enabled", False):
+                if lora_enabled:
                     self._init_lora_weights_post_materialization(net)
 
         return net
@@ -543,7 +541,7 @@ class OmniMoTModel(ImaginaireModel):
     ) -> PackedSequence:
         """Wrap ``pack_input_sequence`` with all config-derived args pre-filled.
 
-        Centralises the 10 config-derived positional/embedding args so callers only
+        Centralises the config-derived positional/embedding args so callers only
         supply the four per-call arguments (sequence_plans, text tokens, data, timesteps)
         plus three optional flags.
         """
@@ -557,7 +555,6 @@ class OmniMoTModel(ImaginaireModel):
             latent_patch_size=self.config.diffusion_expert_config.patch_spatial,
             skip_text_tokens=skip_text_tokens,
             include_end_of_generation_token=include_end_of_generation_token,
-            position_embedding_type=self.config.diffusion_expert_config.position_embedding_type,
             unified_3d_mrope_reset_spatial_ids=self.config.diffusion_expert_config.unified_3d_mrope_reset_spatial_ids,
             unified_3d_mrope_temporal_modality_margin=self.config.diffusion_expert_config.unified_3d_mrope_temporal_modality_margin,
             enable_fps_modulation=self.config.diffusion_expert_config.enable_fps_modulation,
@@ -907,9 +904,6 @@ class OmniMoTModel(ImaginaireModel):
         memory = self.build_memory_state(packed_sequence, memory_info)  # pylint: disable=assignment-from-none
         out_net = self.denoise(
             data_batch_packed=packed_sequence,
-            fps_vision=gen_data_clean.fps_vision,
-            fps_action=gen_data_clean.fps_action,
-            fps_sound=gen_data_clean.fps_sound,
             memory=memory,
         )
 
@@ -1948,14 +1942,9 @@ class OmniMoTModel(ImaginaireModel):
         packed_sequence.to_cuda()
 
         # --- Network forward ---
-        fps_action = gen_data_clean.fps_action if has_action else None
-        fps_sound = gen_data_clean.fps_sound if has_sound else None
         out = self.denoise(
             net=net,
             data_batch_packed=packed_sequence,
-            fps_vision=gen_data_clean.fps_vision,
-            fps_action=fps_action,
-            fps_sound=fps_sound,
         )
 
         # --- Apply velocity masks ---
@@ -2432,7 +2421,6 @@ class OmniMoTModel(ImaginaireModel):
                     # Peers needed CFG so we ran the uncond forward to keep
                     # FSDP allgather aligned; locally we still return cond.
                     return cond_v
-
                 v_pred = [u_i + guidance * (c_i - u_i) for c_i, u_i in zip(cond_v, uncond_v)]
                 if normalize_cfg:
                     v_pred = [
@@ -2874,10 +2862,8 @@ class OmniMoTModel(ImaginaireModel):
         else:
             x0_tokens_sound = None
 
-        # We pass the conditioning FPS along to the denoising function
-        # It will not be used for RoPE FPS modulation unless enabled in the training config
-        # Note: conditioning_fps from data is converted to TPS via temporal_compression_factor
-        # in VideoRopePosition3DEmb.
+        # FPS metadata is used by the sequence packer for mRoPE temporal IDs when
+        # FPS modulation is enabled in the training config.
         fps_raw = data_batch.get("conditioning_fps", None)
         if isinstance(fps_raw, list):
             fps_raw = torch.stack(fps_raw).flatten()  # list of scalar tensors -> (B,)
@@ -3609,9 +3595,6 @@ class OmniMoTModel(ImaginaireModel):
         self,
         net: torch.nn.Module | None = None,
         data_batch_packed: PackedSequence | None = None,
-        fps_vision: torch.Tensor | None = None,
-        fps_action: torch.Tensor | None = None,
-        fps_sound: torch.Tensor | None = None,
         memory: MemoryState | None = None,
     ) -> dict:
         """
@@ -3619,9 +3602,6 @@ class OmniMoTModel(ImaginaireModel):
 
         Args:
             data_batch_packed: PackedSequence from `pack_input_sequence(...)`.
-            fps_vision: Optional FPS tensor used for RoPE FPS modulation (if enabled in config).
-            fps_action: Optional FPS tensor used for action RoPE FPS modulation (if enabled in config).
-            fps_sound: Optional FPS tensor for sound RoPE modulation (e.g., sound_latent_fps=25).
             memory: Optional pre-built MemoryState for autoregressive generation
                 or KV-cache training.
 
@@ -3636,9 +3616,6 @@ class OmniMoTModel(ImaginaireModel):
         net = net or self.net
         out_net = net(
             packed_seq=data_batch_packed,
-            fps_vision=fps_vision,
-            fps_action=fps_action,
-            fps_sound=fps_sound,
             memory=memory,
         )
         output_dict = dict()
@@ -3855,6 +3832,7 @@ class OmniMoTModel(ImaginaireModel):
         max_new_tokens: int,
         *,
         images: list[Any] | None = None,
+        videos: list[Any] | None = None,
         prompt_builder: Callable[[str], list[dict[str, Any]]] | None = None,
         do_sample: bool = False,
         temperature: float | None = 1.0,
@@ -3871,8 +3849,10 @@ class OmniMoTModel(ImaginaireModel):
         (or wraps the prompt as a single user message when no callback is
         given), (b) tokenizes it — text-only via :meth:`tokenize_text`, or
         multimodal via ``self.vlm_processor.apply_chat_template`` when
-        ``images`` is supplied (which lowers the chat into ``input_ids``,
-        ``attention_mask``, ``pixel_values``, and ``image_grid_thw``), (c)
+        ``images`` or ``videos`` is supplied (the image path lowers the chat
+        into ``input_ids``, ``attention_mask``, ``pixel_values``, and
+        ``image_grid_thw``; the video path yields ``pixel_values_videos`` and
+        ``video_grid_thw`` instead), (c)
         runs the reasoner-only AR decode loop through
         ``self.net.generate_reasoner_text`` (the lower-level token-driven
         pass-through that delegates to ``unified_mot._impl_generate_reasoner_text``),
@@ -3927,6 +3907,14 @@ class OmniMoTModel(ImaginaireModel):
                 ``processor.apply_chat_template``, so any input it
                 accepts works (file path ``str``, ``PIL.Image.Image``,
                 ``np.ndarray``, or a CHW / HWC tensor).
+            videos: Optional per-prompt conditioning videos (mutually
+                exclusive with ``images``). Each entry must be a
+                ``{"frames": [...PIL...], "fps": float}`` payload
+                (pre-decoded by the caller, e.g. via
+                ``_decode_reasoner_video``). The frames list and fps are
+                forwarded into the ``{"type": "video", "video": frames,
+                "fps": fps}`` chat block so the processor produces
+                ``pixel_values_videos`` / ``video_grid_thw``.
             prompt_builder: Optional callback that maps a raw prompt
                 string to a chat-style messages list (e.g.
                 :func:`cosmos_framework.model.vfm.upsampler.prompts.build_messages`
@@ -3987,32 +3975,42 @@ class OmniMoTModel(ImaginaireModel):
 
         Raises:
             ValueError: If ``images`` length does not match ``inputs``
-                length.
-            RuntimeError: If ``images`` is supplied but the live VLM
-                processor does not implement ``apply_chat_template``
-                (i.e., the VLM is configured as text-only).
+                length, or if ``videos`` length does not match ``inputs``
+                length.  Also raised if both ``images`` and ``videos`` are
+                supplied simultaneously (only one medium is allowed per
+                call).
+            RuntimeError: If ``images`` or ``videos`` is supplied but the
+                live VLM processor does not implement
+                ``apply_chat_template`` (i.e., the VLM is configured as
+                text-only).
         """
         # Decide whether the multimodal flow is in play, and validate the
         # image-list contract here so the failure happens before any
         # decoding work — far easier to debug than a downstream
         # ``apply_chat_template`` error.
-        use_multimodal = images is not None
+        if images is not None and videos is not None:
+            raise ValueError(
+                "generate_reasoner_text conditions on one medium at a time: pass `images` OR `videos`, not both."
+            )
+        use_image = images is not None
+        use_video = videos is not None
+        use_multimodal = use_image or use_video
+        media = images if use_image else videos
         if use_multimodal:
-            assert images is not None  # narrowed by `use_multimodal`
-            if len(images) != len(inputs):
+            assert media is not None  # narrowed by `use_multimodal`
+            if len(media) != len(inputs):
                 raise ValueError(
-                    f"generate_reasoner_text: `images` length ({len(images)}) "
+                    f"generate_reasoner_text: media length ({len(media)}) "
                     f"must equal `inputs` length ({len(inputs)}) for the "
-                    "image-conditioned flow."
+                    "vision-conditioned flow."
                 )
             if not callable(getattr(self.vlm_processor, "apply_chat_template", None)):
                 raise RuntimeError(
-                    "generate_reasoner_text(images=...) requires a multimodal "
+                    "generate_reasoner_text(images=... / videos=...) requires a multimodal "
                     "VLM processor (e.g. Qwen3VLProcessor) but the live processor "
                     f"{type(self.vlm_processor).__name__!r} does not implement "
                     "apply_chat_template — the live VLM is configured as text-only."
                 )
-
         # Resolve EOS / pad ids internally so callers don't have to know
         # about VLM-specific id wiring.  EOS comes from the cached VLM
         # special-tokens dict (set in ``set_up_tokenizers``); pad mirrors
@@ -4049,22 +4047,22 @@ class OmniMoTModel(ImaginaireModel):
                 messages = [{"role": "user", "content": prompt}]
 
             if use_multimodal:
-                assert images is not None  # narrowed by `use_multimodal`
-                # Replace the LAST user message's content with a Qwen3-VL
-                # multimodal block (image + text).  Earlier messages
-                # (system, prior turns) are kept verbatim so any chat
-                # scaffolding the callback added still governs the
-                # assistant response.
+                assert media is not None  # narrowed by `use_multimodal`
                 last_user = messages[-1]
                 last_text = last_user["content"] if isinstance(last_user.get("content"), str) else ""
+                if use_video:
+                    media_item: dict[str, Any] = {
+                        "type": "video",
+                        "video": media[idx]["frames"],
+                        "fps": media[idx]["fps"],
+                    }
+                else:
+                    media_item = {"type": "image", "image": media[idx]}
                 multimodal_messages = list(messages[:-1])
                 multimodal_messages.append(
                     {
                         "role": "user",
-                        "content": [
-                            {"type": "image", "image": images[idx]},
-                            {"type": "text", "text": last_text},
-                        ],
+                        "content": [media_item, {"type": "text", "text": last_text}],
                     }
                 )
                 processor_inputs = self.vlm_processor.apply_chat_template(
@@ -4073,31 +4071,48 @@ class OmniMoTModel(ImaginaireModel):
                     add_generation_prompt=True,
                     return_tensors="pt",
                 )
-                # ``Qwen3VLProcessor.apply_chat_template`` strips the
-                # leading batch dim from ``input_ids`` / ``attention_mask``
-                # (see its inline comment); restore it so the inner
-                # token-level call sees ``[B=1, T_prompt]``.
                 inner_input_ids = processor_inputs["input_ids"].to(device).unsqueeze(0)
                 inner_attention_mask = processor_inputs["attention_mask"].to(device).unsqueeze(0)
-                inner_pixel_values = processor_inputs["pixel_values"].to(device)  # [N_patches,C,H,W]
-                inner_image_grid_thw = processor_inputs["image_grid_thw"].to(device)  # [num_images,3]
-                out_ids = self.net.generate_reasoner_text(
-                    input_ids=inner_input_ids,
-                    max_new_tokens=max_new_tokens,
-                    pixel_values=inner_pixel_values,
-                    image_grid_thw=inner_image_grid_thw,
-                    attention_mask=inner_attention_mask,
-                    eos_token_id=eos_id,
-                    pad_token_id=pad_id,
-                    do_sample=do_sample,
-                    temperature=temperature if temperature is not None else 1.0,
-                    top_k=top_k,
-                    top_p=top_p,
-                    repetition_penalty=repetition_penalty,
-                    presence_penalty=presence_penalty,
-                    seed=seed,
-                    return_only_new_tokens=True,
-                )
+                if use_video:
+                    inner_pixel_values_videos = processor_inputs["pixel_values_videos"].to(device)
+                    inner_video_grid_thw = processor_inputs["video_grid_thw"].to(device)
+                    out_ids = self.net.generate_reasoner_text(
+                        input_ids=inner_input_ids,
+                        max_new_tokens=max_new_tokens,
+                        pixel_values_videos=inner_pixel_values_videos,
+                        video_grid_thw=inner_video_grid_thw,
+                        attention_mask=inner_attention_mask,
+                        eos_token_id=eos_id,
+                        pad_token_id=pad_id,
+                        do_sample=do_sample,
+                        temperature=temperature if temperature is not None else 1.0,
+                        top_k=top_k,
+                        top_p=top_p,
+                        repetition_penalty=repetition_penalty,
+                        presence_penalty=presence_penalty,
+                        seed=seed,
+                        return_only_new_tokens=True,
+                    )
+                else:
+                    inner_pixel_values = processor_inputs["pixel_values"].to(device)  # [N_patches,C,H,W]
+                    inner_image_grid_thw = processor_inputs["image_grid_thw"].to(device)  # [num_images,3]
+                    out_ids = self.net.generate_reasoner_text(
+                        input_ids=inner_input_ids,
+                        max_new_tokens=max_new_tokens,
+                        pixel_values=inner_pixel_values,
+                        image_grid_thw=inner_image_grid_thw,
+                        attention_mask=inner_attention_mask,
+                        eos_token_id=eos_id,
+                        pad_token_id=pad_id,
+                        do_sample=do_sample,
+                        temperature=temperature if temperature is not None else 1.0,
+                        top_k=top_k,
+                        top_p=top_p,
+                        repetition_penalty=repetition_penalty,
+                        presence_penalty=presence_penalty,
+                        seed=seed,
+                        return_only_new_tokens=True,
+                    )
             else:
                 # Text-only path.  Pull the system prompt (if any) and
                 # the last user message text out of the messages list,
