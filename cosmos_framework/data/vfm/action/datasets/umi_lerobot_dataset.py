@@ -36,7 +36,7 @@ _DEFAULT_EEF_IN_CAMERA_FRAME_XYZ_WXYZ: tuple[float, ...] = (0.0, 0.086, 0.09, 1.
 FORWARD_EEF_IN_CAMERA_FRAME_XYZ_WXYZ: tuple[float, ...] = (0.0, 0.086, 0.056, 1.0, 0.0, 0.0, 0.0)
 """EEF offset for touch_in_the_wild / FastUMI rigs (camera mounted slightly forward)."""
 
-_NORMALIZER_PATH = Path(__file__).parent / "stats/umi_lerobot_stats.json"
+_NORMALIZER_PATH = Path(__file__).parent.parent / "normalizer_stats/umi_lerobot_stats.json"
 
 # Action layout: single-arm is the first 10D of the 20D bimanual stats file
 # (right_eef_poses(9) + right_eef_commands(1)).

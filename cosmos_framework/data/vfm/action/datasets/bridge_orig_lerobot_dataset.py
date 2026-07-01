@@ -51,7 +51,7 @@ _TCP_TO_FLANGE = np.array(
     dtype=np.float32,
 )
 
-_NORMALIZER_PATH = Path(__file__).parent / "stats/bridge_orig_lerobot_stats.json"
+_NORMALIZER_PATH = Path(__file__).parent.parent / "normalizer_stats/bridge_orig_lerobot_stats.json"
 
 
 class BridgeOrigLeRobotDataset(ActionBaseDataset):

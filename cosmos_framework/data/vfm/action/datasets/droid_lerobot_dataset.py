@@ -52,7 +52,7 @@ _DROID_TO_OPENCV: np.ndarray = np.array(
     dtype=np.float32,
 )
 
-_NORMALIZER_PATH = Path(__file__).parent / "stats/droid_lerobot_stats.json"
+_NORMALIZER_PATH = Path(__file__).parent.parent / "normalizer_stats/droid_lerobot_stats.json"
 
 
 class DROIDLeRobotDataset(ActionBaseDataset):
