@@ -24,13 +24,13 @@ Combined 3-loader throughput, 327 DROID episodes, batch 16:
 | 18/4/18 (Tuned)           | 253.7        | 961.9 (3.8x)  | 232.0     | 1016.9 (4.4x)|
 
 ### Per-Loader Throughput (samples/s)
-Each loader standalone, Local, tuned workers (Action/VSFT 18, VLM 4):
+Each loader standalone, tuned workers (Action/VSFT 18, VLM 4):
 
-| Loader                | Base  | Lance  | Speedup |
-| --------------------- | ----- | ------ | ------- |
-| Action (DROID)        | 154.0 | 288.7  | 1.9x    |
-| Vision-SFT            | 119.1 | 1017.9 | 8.5x    |
-| VLM (LLaVA)           | 190.0 | —      | see note |
+| Loader         | Base (Local) | Lance (Local) | Base (S3) | Lance (S3)  |
+| -------------- | ------------ | ------------- | --------- | ----------- |
+| Action (DROID) | 154.0        | 288.7 (1.9x)  | 146.7     | 307.2 (2.1x)|
+| Vision-SFT     | 119.1        | 1017.9 (8.5x) | 100.4     | 959.5 (9.6x)|
+| VLM (LLaVA)    | 190.0        | — (see note)  | 179.6     | — (see note)|
 
 Action decodes 1 composed clip vs 3 runtime views (~2x); Vision-SFT decodes a pre-resized
 short-GOP clip in-process vs the base's per-sample ffmpeg resize (~8x). **VLM is not a decode
