@@ -249,6 +249,15 @@ def _to_public_string(value: str) -> str:
 
 def _public_string_from_runtime_file_prefix(value: str, *, package: str) -> str | None:
     replacements = (
+        # reasoner → vlm (inverse of the upstream rename). MUST precede the
+        # general vfm rules so the reasoner subtree isn't shadowed by them.
+        # Mirrors the module-path rules in ``_canonicalize_module_path``.
+        (f"{package}/configs/base/defaults/reasoner/", "configs/base/defaults/vlm/"),
+        (f"{package}/configs/base/reasoner/", "configs/base/vlm/"),
+        (f"{package}/model/generator/reasoner/", "models/vlm/"),
+        (f"{package}/data/generator/augmentors/reasoner/", "datasets/augmentors/vlm/"),
+        (f"{package}/data/generator/reasoner/", "datasets/vlm/"),
+        (f"{package}/utils/generator/reasoner/", "utils/vlm/"),
         (f"{package}/configs/base/", "configs/base/"),
         (f"{package}/model/generator/tokenizers/", "tokenizers/"),
         (f"{package}/model/generator/diffusion/", "diffusion/"),
@@ -279,6 +288,15 @@ def _from_public_string(value: str) -> str:
 
 def _replace_vfm_file_prefix(suffix: str, *, package: str) -> str:
     replacements = (
+        # vlm → reasoner (upstream rename). MUST precede the general vfm rules
+        # so the specific vlm→reasoner subtree isn't shadowed by them. Mirrors
+        # the module-path rules in ``_replace_vfm_module_prefix``.
+        ("configs/base/defaults/vlm/", f"{package}/configs/base/defaults/reasoner/"),
+        ("configs/base/vlm/", f"{package}/configs/base/reasoner/"),
+        ("models/vlm/", f"{package}/model/generator/reasoner/"),
+        ("datasets/augmentors/vlm/", f"{package}/data/generator/augmentors/reasoner/"),
+        ("datasets/vlm/", f"{package}/data/generator/reasoner/"),
+        ("utils/vlm/", f"{package}/utils/generator/reasoner/"),
         ("configs/base/", f"{package}/configs/base/"),
         ("models/", f"{package}/model/generator/"),
         ("tokenizers/", f"{package}/model/generator/tokenizers/"),
