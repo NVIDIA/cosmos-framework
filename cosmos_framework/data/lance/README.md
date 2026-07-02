@@ -13,6 +13,10 @@ table can be read directly from object storage (S3) without FUSE or full downloa
 
 ## Performance Summary
 
+Numbers below use a **327-episode subset of the public [`lerobot/droid_1.0.1`](https://huggingface.co/datasets/lerobot/droid_1.0.1)**
+dataset (LeRobot v3.0; materialized via `tools/lance_datagen/prepare_droid_subset.py`), whose camera
+views are 320×180 → 270×320 composed. Production DROID uses 640×360 views → 540×640 (see Dataset Size).
+
 ### Combined Throughput (samples/s)
 Combined 3-loader throughput, 327 DROID episodes, batch 16:
 
@@ -39,11 +43,15 @@ to the video-decoding loaders.
 ### Dataset Size (Action)
 327 DROID episodes — original three views vs the composed Lance table:
 
-| metric     | Original (3 views)     | Composed (Lance)              |
-| ---------- | ---------------------- | ----------------------------- |
-| encoding   | AV1, long-GOP          | H.264, all-intra (`gop=1`)    |
-| resolution | 3 × 320×180            | 1 × 270×320                   |
-| size       | 1.47 GB                | 0.55 GB (0.37×)               |
+| metric   | Original (3 views)     | Composed (Lance)               |
+| -------- | ---------------------- | ------------------------------ |
+| encoding | AV1, long-GOP          | H.264, all-intra (`gop=1`)     |
+| streams  | 3 views @ 320×180 RGB  | 1 composed view @ 270×320 RGB  |
+| size     | 1.47 GB                | 0.55 GB (0.37×)                |
+
+The `3`/`1` are the number of video **streams** (three camera views vs one composed view), not
+channels — every frame is RGB. The composed 270×320 frame is the wrist view on top of the two
+half-size exterior views.
 
 The composed table is ~2.7× smaller even though all-intra `gop=1` H.264 is *less* space-efficient
 per pixel than the source's AV1 long-GOP: it stores one stream at reduced resolution (the two
