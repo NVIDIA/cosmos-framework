@@ -1016,7 +1016,11 @@ def load_language_model(
     # `tie_word_embeddings` being set to True in the configs. For the 0.6B LLM, 8B and 32B dense
     # VLMs, and the 30B and 235B MoE VLMs, the `lm_head.weight` key is present in the
     # checkpoint.
-    real_keys_missing = {k for k in keys_missing if "_moe_gen" not in k}
+    # Keys that are expected to be absent from the HF backbone checkpoint:
+    # - "_moe_gen": generation-pathway parameters, initialised by init_moe()
+    # - "k_norm_und_for_gen": new und-K normalisation for gen cross-attention,
+    #   only present when use_und_k_norm_for_gen=True; always init'd from scratch
+    real_keys_missing = {k for k in keys_missing if "_moe_gen" not in k and "k_norm_und_for_gen" not in k}
     if real_keys_missing:
         raise ValueError(
             f"load_language_model: {len(real_keys_missing)} required model "
@@ -1209,9 +1213,8 @@ def load_vfm_model(
       (``language_model.lm_head.*``) and — for Qwen3-VL-based variants —
       the visual encoder (ViT) under ``language_model.visual.*``;
     - the VFM-specific top-level parameters: ``time_embedder.*``,
-      ``vae2llm.*`` / ``llm2vae.*``, ``latent_pos_embed.*`` (when present),
-      plus the optional ``action2llm.*`` / ``llm2action.*`` /
-      ``action_pos_embed.*`` / ``action_modality_embed`` and
+      ``vae2llm.*`` / ``llm2vae.*``, plus the optional
+      ``action2llm.*`` / ``llm2action.*`` / ``action_modality_embed`` and
       ``sound2llm.*`` / ``llm2sound.*`` / ``sound_modality_embed`` heads.
 
     Checkpoint keys are interpreted in the **native VFM state-dict
@@ -1269,7 +1272,7 @@ def load_vfm_model(
       partial checkpoint, e.g. when warm-starting from a checkpoint
       that has only the language tower and you want to keep the
       freshly-init'd VFM heads (pass ``r"^(time_embedder|vae2llm|llm2vae|"``
-      ``r"latent_pos_embed|action[^.]*|llm2action|sound[^.]*|llm2sound)\..*"``).
+      ``r"action[^.]*|llm2action|sound[^.]*|llm2sound)\..*"``).
     - Missing model keys whose name contains ``_moe_gen`` are silently
       tolerated regardless of ``skip_patterns`` — they are populated
       downstream by

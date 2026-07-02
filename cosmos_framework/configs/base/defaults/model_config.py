@@ -10,7 +10,7 @@ from cosmos_framework.configs.base.defaults.activation_checkpointing import Acti
 from cosmos_framework.configs.base.defaults.compile import CompileConfig
 from cosmos_framework.configs.base.defaults.ema import EMAConfig
 from cosmos_framework.configs.base.defaults.parallelism import ParallelismConfig
-from cosmos_framework.configs.base.defaults.vlm import VLMConfig
+from cosmos_framework.configs.base.defaults.reasoner import VLMConfig
 
 
 @attrs.define(slots=False)
@@ -24,21 +24,8 @@ class DiffusionExpertConfig:
     max_vae_latent_side_after_patchify: int = (
         20  # Max dimension (h or w) of the VAE latent after patchification (320/(8*2))
     )
-    # Position embedding type for vision tokens:
-    #   - "3d_rope": Additive 3D RoPE embeddings (VideoRopePosition3DEmb) + 1D position IDs for attention
-    #   - "flattened_sin_cos": Additive flattened sin/cos embeddings + 1D position IDs for attention
-    #   - "unified_3d_mrope": No additive embedding + 3D position IDs for Qwen3VL-style mRoPE attention
-    position_embedding_type: str = "3d_rope"
-    # When finetuning from lower resolution to higher resolution, the spatial resolution of videos increase.
-    # So, we need to adjust the position embedding.
-    # We use NTK based RoPE extrapolation to adjust the position embedding.
-    # Reference: (https://www.reddit.com/r/LocalLLaMA/comments/14lz7j5/ntkaware_scaled_rope_allows_llama_models_to_have/)
-    # Design adapted from Cosmos2.5 (https://arxiv.org/pdf/2511.00062)
-    # extrapolation_ratio here is how the base of the RoPE is scaled
-    # b' = b * extrapolation_ratio^(dim / (dim - 2))
-    rope_h_extrapolation_ratio: float = 1.0
-    rope_w_extrapolation_ratio: float = 1.0
-    rope_t_extrapolation_ratio: float = 1.0
+    # Vision/action/sound position information is always provided through
+    # Qwen3VL-style 3D mRoPE attention IDs.
     enable_fps_modulation: bool = False
     base_fps: int = 24
     # Base temporal compression factor for SOUND m-RoPE. None = current behavior

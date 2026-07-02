@@ -5,7 +5,6 @@ import json
 import time
 from collections.abc import Mapping
 from dataclasses import dataclass
-from pathlib import Path
 from typing import Any
 
 import torch
@@ -19,13 +18,12 @@ from cosmos_framework.model.vfm.mot.attention import (
     AttentionMaskType,
     dispatch_attention,
 )
-from cosmos_framework.model.vfm.utils.memory import KVToStore, MemoryState, MemoryValue
 
 # Nemotron 3 Dense VL imports
-from cosmos_framework.model.vfm.vlm.nemotron_3_dense_vl.configuration_nemotron_3_dense_vl import (
+from cosmos_framework.model.vfm.reasoner.nemotron_3_dense_vl.configuration_nemotron_3_dense_vl import (
     Nemotron3DenseVLTextConfig,
 )
-from cosmos_framework.model.vfm.vlm.nemotron_3_dense_vl.nemotron_3_dense_vl import (
+from cosmos_framework.model.vfm.reasoner.nemotron_3_dense_vl.nemotron_3_dense_vl import (
     MultiModalRotaryEmbedding,
     Nemotron3DenseVLMLP,
     Nemotron3DenseVLPreTrainedModel,
@@ -34,32 +32,32 @@ from cosmos_framework.model.vfm.vlm.nemotron_3_dense_vl.nemotron_3_dense_vl impo
 )
 
 # Qwen3-VL imports
-from cosmos_framework.model.vfm.vlm.qwen3_vl.configuration_qwen3_vl import (
+from cosmos_framework.model.vfm.reasoner.qwen3_vl.configuration_qwen3_vl import (
     Qwen3VLConfig,
     Qwen3VLTextConfig,
     Qwen3VLVisionConfig,
 )
-from cosmos_framework.model.vfm.vlm.qwen3_vl.qwen3_vl import (
+from cosmos_framework.model.vfm.reasoner.qwen3_vl.qwen3_vl import (
     Qwen3VLPreTrainedModel,
     Qwen3VLTextMLP,
     Qwen3VLTextRMSNorm,
     Qwen3VLTextRotaryEmbedding,
     Qwen3VLVisionModel,
 )
-from cosmos_framework.model.vfm.vlm.qwen3_vl.qwen3_vl import (
+from cosmos_framework.model.vfm.reasoner.qwen3_vl.qwen3_vl import (
     apply_rotary_pos_emb as qwen3_vl_apply_rotary_pos_emb,
 )
-from cosmos_framework.model.vfm.vlm.qwen3_vl.utils import (
+from cosmos_framework.model.vfm.reasoner.qwen3_vl.utils import (
     prepare_multimodal_reasoner_inputs,
 )
 
 # Qwen3-VL-MoE imports
-from cosmos_framework.model.vfm.vlm.qwen3_vl_moe.configuration_qwen3_vl_moe import (
+from cosmos_framework.model.vfm.reasoner.qwen3_vl_moe.configuration_qwen3_vl_moe import (
     Qwen3VLMoeConfig,
     Qwen3VLMoeTextConfig,
     Qwen3VLMoeVisionConfig,
 )
-from cosmos_framework.model.vfm.vlm.qwen3_vl_moe.qwen3_vl_moe import (
+from cosmos_framework.model.vfm.reasoner.qwen3_vl_moe.qwen3_vl_moe import (
     LBLMetadata,
     Qwen3VLMoePreTrainedModel,
     Qwen3VLMoeTextMLP,
@@ -68,6 +66,7 @@ from cosmos_framework.model.vfm.vlm.qwen3_vl_moe.qwen3_vl_moe import (
     Qwen3VLMoeTextSparseMoeBlock,
     Qwen3VLMoeVisionModel,
 )
+from cosmos_framework.model.vfm.utils.memory import KVToStore, MemoryState, MemoryValue
 from cosmos_framework.data.vfm.sequence_packing.runtime import (
     SequencePack,
     from_all_seq,
@@ -141,27 +140,6 @@ class LayerTypes:
 # MoT wrapper configs — one per architecture family
 # -----------------------------------------------------------------------------
 
-# Package root = parent of the top-level package directory; the shipped
-# model-config JSONs live under it (cosmos_framework/model/... in releases;
-# cosmos_framework/model/vfm/... in i4 source).
-_PACKAGE_ROOT = Path(__file__).resolve().parents[4]
-
-
-def _resolve_packaged_config_path(json_file: str) -> str:
-    """Resolve a model-config JSON path so it loads regardless of CWD.
-
-    Absolute paths and paths that already exist relative to the CWD are returned
-    unchanged (preserving existing behavior when launched from the repo root).
-    A relative path that does not exist against the CWD is resolved against the
-    installed package root. If that candidate is missing too, the original path
-    is returned so ``open()`` raises the familiar ``FileNotFoundError``.
-    """
-    path = Path(json_file)
-    if path.is_absolute() or path.exists():
-        return json_file
-    candidate = _PACKAGE_ROOT / json_file
-    return str(candidate) if candidate.exists() else json_file
-
 
 class _MoTConfigBase(object):
     """Shared MoT wrapper logic for all three architecture families.
@@ -212,7 +190,7 @@ class _MoTConfigBase(object):
       ``text_config`` access picks it up.
 
     Post-construction overrides via plain ``setattr`` (the
-    ``create_vlm_config`` flow in ``configs/base/defaults/vlm.py``)
+    ``create_vlm_config`` flow in ``configs/base/defaults/reasoner.py``)
     just update the same plain attributes, so the next property access
     picks up the latest values.  No cache, no ``__setattr__``
     interception, no override bucket — the property rebuild is cheap
@@ -389,7 +367,7 @@ class _MoTConfigBase(object):
         :pyattr:`vision_config` and by HF downstream consumers reading
         the dict directly.
         """
-        with open(_resolve_packaged_config_path(json_file), encoding="utf-8") as reader:
+        with open(json_file, encoding="utf-8") as reader:
             config_dict = json.load(reader)
         return cls(config_dict=config_dict)
 
@@ -488,6 +466,7 @@ class PackedAttentionMoT(nn.Module):
         layer_types: LayerTypes,
         qk_norm_for_text: bool,
         qk_norm_for_diffusion: bool,
+        use_und_k_norm_for_gen: bool = False,
     ):
         super().__init__()
         self.config = config
@@ -523,6 +502,19 @@ class PackedAttentionMoT(nn.Module):
         else:
             self.q_norm_moe_gen = nn.Identity()
             self.k_norm_moe_gen = nn.Identity()
+
+        # Cross-attention K norm: normalises und K tokens seen by the generator in the
+        # gen→und cross-attention path.  Only needed when the generation pathway has QK
+        # norm (qk_norm_for_diffusion=True) but the understanding pathway does not
+        # (qk_norm_for_text=False), i.e. the Nemotron-3 configuration.  Without this,
+        # the joint softmax computes norm(Q_gen) · K_und_raw^T where K_und_raw has large
+        # uncontrolled magnitude and dominates attention over the gen self-attention path.
+        # When both pathways share the same QK norm (or neither has one) k_norm_und_for_gen
+        # is None and the standard packed K tensor is used for all paths unchanged.
+        if use_und_k_norm_for_gen and qk_norm_for_diffusion and not qk_norm_for_text:
+            self.k_norm_und_for_gen: nn.Module | None = layer_types.rms_norm(self.head_dim, eps=eps)
+        else:
+            self.k_norm_und_for_gen = None
 
         # Generation pathway linear projections
         self.q_proj_moe_gen = nn.Linear(
@@ -644,6 +636,23 @@ class PackedAttentionMoT(nn.Module):
         packed_key_states_ = from_und_gen_splits(k_und_, k_gen_, pack)  # [N_und+N_gen,num_kv_heads,head_dim]
         packed_value_states_ = from_und_gen_splits(v_und, v_gen, pack)  # [N_und+N_gen,num_kv_heads,head_dim]
 
+        # Build a separate K pack where the und tokens are normalised for gen→und
+        # cross-attention (fixes scale mismatch when qk_norm_for_diffusion=True but
+        # qk_norm_for_text=False, i.e. the Nemotron-3 config).  The raw k_und_ is kept
+        # in packed_key_states_ for the reasoner's own causal self-attention.
+        if self.k_norm_und_for_gen is not None:
+            k_und_normalized = self.k_norm_und_for_gen(k_und)  # RMSNorm before RoPE
+            _, k_und_for_gen_ = self._apply_rotary_pos_emb(
+                q_und_,  # dummy q — already RoPE-applied, output discarded; only k is used
+                k_und_normalized,
+                get_und_seq(packed_cos),
+                get_und_seq(packed_sin),
+                unsqueeze_dim=1,
+            )  # k_und_for_gen_: [N_und,num_kv_heads,head_dim]
+            packed_key_states_normalized_: SequencePack | None = from_und_gen_splits(k_und_for_gen_, k_gen_, pack)
+        else:
+            packed_key_states_normalized_ = None
+
         packed_attn_output, kv_to_store = self.dispatch_attention_fn(
             packed_query_states_,
             packed_key_states_,
@@ -651,6 +660,7 @@ class PackedAttentionMoT(nn.Module):
             attention_mask,
             natten_metadata=natten_metadata,
             memory_value=memory_value,
+            packed_key_states_normalized=packed_key_states_normalized_,
         )
 
         # Produce kv_to_store for MemoryState.write_for_layer() when the
@@ -664,10 +674,15 @@ class PackedAttentionMoT(nn.Module):
         if memory_value is not None and kv_to_store is None:
             und_len = pack["_num_causal_tokens"]
             gen_len = pack["_num_full_tokens"]
+            # When und K-norm is active, AR frame 1+ gen→und cross-attention uses
+            # the normalised K, so cache k_und_for_gen_ (RMSNorm+RoPE applied) instead
+            # of raw k_und_.  Without the norm, k_und_for_gen_ is not defined, so
+            # fall back to k_und_.
+            k_und_to_store = k_und_for_gen_ if self.k_norm_und_for_gen is not None else k_und_
             kv_to_store = (
                 k_gen_[:gen_len].unsqueeze(0),
                 v_gen[:gen_len].unsqueeze(0),
-                k_und_[:und_len].unsqueeze(0),
+                k_und_to_store[:und_len].unsqueeze(0),
                 v_und[:und_len].unsqueeze(0),
             )
 
@@ -787,6 +802,7 @@ def _impl_init(
     qk_norm_for_text: bool,
     qk_norm_for_diffusion: bool,
     gen_noisy_gating: bool = False,
+    use_und_k_norm_for_gen: bool = False,
 ):
     """Shared ``__init__`` body for the three MoT text-model variants.
 
@@ -809,6 +825,7 @@ def _impl_init(
                 qk_norm_for_text=qk_norm_for_text,
                 qk_norm_for_diffusion=qk_norm_for_diffusion,
                 gen_noisy_gating=gen_noisy_gating,
+                use_und_k_norm_for_gen=use_und_k_norm_for_gen,
             )
         )
 
@@ -986,6 +1003,7 @@ class MoTDecoderLayer(nn.Module):
         qk_norm_for_text: bool,
         qk_norm_for_diffusion: bool,
         gen_noisy_gating: bool = False,
+        use_und_k_norm_for_gen: bool = False,
     ):
         super().__init__()
         self.hidden_size = config.hidden_size
@@ -995,6 +1013,7 @@ class MoTDecoderLayer(nn.Module):
             layer_idx=layer_idx,
             qk_norm_for_text=qk_norm_for_text,
             qk_norm_for_diffusion=qk_norm_for_diffusion,
+            use_und_k_norm_for_gen=use_und_k_norm_for_gen,
         )
 
         if (
@@ -1220,6 +1239,7 @@ class Qwen3VLTextModel(Qwen3VLPreTrainedModel):
         *,
         qk_norm_for_text: bool,
         qk_norm_for_diffusion: bool,
+        use_und_k_norm_for_gen: bool,
     ):
         super().__init__(config)
         _impl_init(
@@ -1228,6 +1248,7 @@ class Qwen3VLTextModel(Qwen3VLPreTrainedModel):
             layer_types=LayerTypes("qwen3_vl_dense"),
             qk_norm_for_text=qk_norm_for_text,
             qk_norm_for_diffusion=qk_norm_for_diffusion,
+            use_und_k_norm_for_gen=use_und_k_norm_for_gen,
         )
 
     def init_taylorseer(self, cache_dic=None, current=None):
@@ -1254,6 +1275,7 @@ class Qwen3VLMoeTextModel(Qwen3VLMoePreTrainedModel):
         qk_norm_for_text: bool,
         qk_norm_for_diffusion: bool,
         gen_noisy_gating: bool = False,
+        use_und_k_norm_for_gen: bool,
     ):
         super().__init__(config)
         _impl_init(
@@ -1263,6 +1285,7 @@ class Qwen3VLMoeTextModel(Qwen3VLMoePreTrainedModel):
             qk_norm_for_text=qk_norm_for_text,
             qk_norm_for_diffusion=qk_norm_for_diffusion,
             gen_noisy_gating=gen_noisy_gating,
+            use_und_k_norm_for_gen=use_und_k_norm_for_gen,
         )
 
     def init_taylorseer(self, cache_dic=None, current=None):
@@ -1288,6 +1311,7 @@ class Nemotron3DenseVLTextModel(Nemotron3DenseVLPreTrainedModel):
         *,
         qk_norm_for_text: bool,
         qk_norm_for_diffusion: bool,
+        use_und_k_norm_for_gen: bool,
     ):
         super().__init__(config)
         _impl_init(
@@ -1296,6 +1320,7 @@ class Nemotron3DenseVLTextModel(Nemotron3DenseVLPreTrainedModel):
             layer_types=LayerTypes("nemotron_dense"),
             qk_norm_for_text=qk_norm_for_text,
             qk_norm_for_diffusion=qk_norm_for_diffusion,
+            use_und_k_norm_for_gen=use_und_k_norm_for_gen,
         )
 
     def init_taylorseer(self, cache_dic=None, current=None) -> None:
@@ -1596,6 +1621,8 @@ def _impl_generate_reasoner_text(
     *,
     pixel_values: torch.Tensor | None = None,
     image_grid_thw: torch.Tensor | None = None,
+    pixel_values_videos: torch.Tensor | None = None,
+    video_grid_thw: torch.Tensor | None = None,
     attention_mask: torch.Tensor | None = None,
     eos_token_id: int | list[int] | None = None,
     pad_token_id: int | None = None,
@@ -1652,10 +1679,9 @@ def _impl_generate_reasoner_text(
             ``Qwen3VLProcessor`` emits — pass it through unchanged.
             Moved to the prompt's device internally.  ``None`` (default)
             means text-only prompt; in that case the multimodal prefill
-            path is skipped entirely.  Videos are *not* supported here —
-            this function has no ``pixel_values_videos`` / ``video_grid_thw``
-            parameters; for I2V conditioning, frames must be passed as
-            images.
+            path is skipped entirely.  For video conditioning, pass ``pixel_values_videos`` +
+            ``video_grid_thw`` instead (mutually exclusive with the image
+            pair).
         image_grid_thw: Optional ``[num_images, 3]`` long tensor giving
             ``(t, h, w)`` — the temporal / height / width feature-grid
             size per image as produced by ``Qwen3VLProcessor`` (``t`` is
@@ -1747,11 +1773,15 @@ def _impl_generate_reasoner_text(
 
     if (pixel_values is None) != (image_grid_thw is None):
         raise ValueError("pixel_values and image_grid_thw must be provided together.")
+    if (pixel_values_videos is None) != (video_grid_thw is None):
+        raise ValueError("pixel_values_videos and video_grid_thw must be provided together.")
+    if pixel_values is not None and pixel_values_videos is not None:
+        raise ValueError("Reasoner conditions on one medium at a time: pass image OR video, not both.")
 
     _prefill_start = time.time()
 
     mrope_position_deltas: torch.Tensor | None = None
-    if pixel_values is None:
+    if pixel_values is None and pixel_values_videos is None:
         hidden = model.reasoner_forward(input_ids, cache=cache)  # [B,T_prompt,hidden_size]
     else:
         if not hasattr(causal_lm, "visual"):
@@ -1767,6 +1797,8 @@ def _impl_generate_reasoner_text(
             input_ids=input_ids,
             pixel_values=pixel_values,
             image_grid_thw=image_grid_thw,
+            pixel_values_videos=pixel_values_videos,
+            video_grid_thw=video_grid_thw,
             attention_mask=attention_mask,
         )
         hidden = model.reasoner_forward(
@@ -1942,7 +1974,8 @@ class Qwen3VLTextForCausalLM(Qwen3VLPreTrainedModel):
     This variant is used for dense-only MLP models.
     """
 
-    _tied_weights_keys = ["lm_head.weight"]
+    # lm_head.weight is tied to model.embed_tokens.weight
+    _tied_weights_keys: list[str] = ["lm_head.weight"]
 
     def __init__(self, config: Qwen3VLMoTConfig):
         # Materialize a fresh HF ``Qwen3VLTextConfig`` from the wrapper.
@@ -1961,6 +1994,7 @@ class Qwen3VLTextForCausalLM(Qwen3VLPreTrainedModel):
             text_config,
             qk_norm_for_text=config.qk_norm_for_text,
             qk_norm_for_diffusion=config.qk_norm_for_diffusion,
+            use_und_k_norm_for_gen=getattr(config, "use_und_k_norm_for_gen", False),
         )
         self.vocab_size = text_config.vocab_size
         self.lm_head = nn.Linear(text_config.hidden_size, text_config.vocab_size, bias=False)
@@ -2033,6 +2067,8 @@ class Qwen3VLTextForCausalLM(Qwen3VLPreTrainedModel):
         *,
         pixel_values: torch.Tensor | None = None,
         image_grid_thw: torch.Tensor | None = None,
+        pixel_values_videos: torch.Tensor | None = None,
+        video_grid_thw: torch.Tensor | None = None,
         attention_mask: torch.Tensor | None = None,
         eos_token_id: int | list[int] | None = None,
         pad_token_id: int | None = None,
@@ -2053,6 +2089,8 @@ class Qwen3VLTextForCausalLM(Qwen3VLPreTrainedModel):
         the Qwen3-VL visual encoder; omit them for text-only prefill.  The
         two arguments are mutually required: passing exactly one raises
         ``ValueError`` inside :func:`_impl_generate_reasoner_text`.
+        Video conditioning is also supported via ``pixel_values_videos`` +
+        ``video_grid_thw``; the image and video pairs are mutually exclusive.
 
         Uses the und-pathway weights (those WITHOUT the ``_moe_gen`` suffix)
         plus the model-level ``embed_tokens`` / ``norm`` / ``lm_head``, and —
@@ -2067,6 +2105,8 @@ class Qwen3VLTextForCausalLM(Qwen3VLPreTrainedModel):
             max_new_tokens=max_new_tokens,
             pixel_values=pixel_values,
             image_grid_thw=image_grid_thw,
+            pixel_values_videos=pixel_values_videos,
+            video_grid_thw=video_grid_thw,
             attention_mask=attention_mask,
             eos_token_id=eos_token_id,
             pad_token_id=pad_token_id,
@@ -2087,7 +2127,8 @@ class Qwen3VLMoeTextForCausalLM(Qwen3VLMoePreTrainedModel):
     This variant is used for MoE MLP models.
     """
 
-    _tied_weights_keys = ["lm_head.weight"]
+    # lm_head.weight is tied to model.embed_tokens.weight
+    _tied_weights_keys: list[str] = ["lm_head.weight"]
 
     def __init__(self, config: Qwen3VLMoeMoTConfig):
         super().__init__(config.full_config)
@@ -2098,6 +2139,7 @@ class Qwen3VLMoeTextForCausalLM(Qwen3VLMoePreTrainedModel):
             qk_norm_for_text=config.qk_norm_for_text,
             qk_norm_for_diffusion=config.qk_norm_for_diffusion,
             gen_noisy_gating=config.gen_noisy_gating,
+            use_und_k_norm_for_gen=getattr(config, "use_und_k_norm_for_gen", False),
         )
         self.vocab_size = text_config.vocab_size
         self.lm_head = nn.Linear(text_config.hidden_size, text_config.vocab_size, bias=False)
@@ -2166,6 +2208,8 @@ class Qwen3VLMoeTextForCausalLM(Qwen3VLMoePreTrainedModel):
         *,
         pixel_values: torch.Tensor | None = None,
         image_grid_thw: torch.Tensor | None = None,
+        pixel_values_videos: torch.Tensor | None = None,
+        video_grid_thw: torch.Tensor | None = None,
         attention_mask: torch.Tensor | None = None,
         eos_token_id: int | list[int] | None = None,
         pad_token_id: int | None = None,
@@ -2186,6 +2230,8 @@ class Qwen3VLMoeTextForCausalLM(Qwen3VLMoePreTrainedModel):
         the Qwen3-VL visual encoder; omit them for text-only prefill.  The
         two arguments are mutually required: passing exactly one raises
         ``ValueError`` inside :func:`_impl_generate_reasoner_text`.
+        Video conditioning is also supported via ``pixel_values_videos`` +
+        ``video_grid_thw``; the image and video pairs are mutually exclusive.
 
         Uses the und-pathway weights (those WITHOUT the ``_moe_gen`` suffix)
         plus the model-level ``embed_tokens`` / ``norm`` / ``lm_head``, and —
@@ -2201,6 +2247,8 @@ class Qwen3VLMoeTextForCausalLM(Qwen3VLMoePreTrainedModel):
             max_new_tokens=max_new_tokens,
             pixel_values=pixel_values,
             image_grid_thw=image_grid_thw,
+            pixel_values_videos=pixel_values_videos,
+            video_grid_thw=video_grid_thw,
             attention_mask=attention_mask,
             eos_token_id=eos_token_id,
             pad_token_id=pad_token_id,
@@ -2236,6 +2284,7 @@ class Nemotron3DenseVLTextForCausalLM(Nemotron3DenseVLPreTrainedModel):
             text_config,
             qk_norm_for_text=config.qk_norm_for_text,
             qk_norm_for_diffusion=config.qk_norm_for_diffusion,
+            use_und_k_norm_for_gen=getattr(config, "use_und_k_norm_for_gen", False),
         )
         self.vocab_size = text_config.vocab_size
         self.lm_head = nn.Linear(text_config.hidden_size, text_config.vocab_size, bias=False)

@@ -10,7 +10,7 @@ from cosmos_framework.callbacks.every_n import EveryN
 from cosmos_framework.model._base import ImaginaireModel
 from cosmos_framework.trainer import ImaginaireTrainer
 from cosmos_framework.utils import distributed
-from cosmos_framework.model.vfm.vlm.qwen3_vl_moe.qwen3_vl_moe import Qwen3VLMoeTextSparseMoeBlock
+from cosmos_framework.model.vfm.reasoner.qwen3_vl_moe.qwen3_vl_moe import Qwen3VLMoeTextSparseMoeBlock
 
 
 def compute_expert_heatmap(vfm: torch.nn.Module) -> dict[str, torch.Tensor]:

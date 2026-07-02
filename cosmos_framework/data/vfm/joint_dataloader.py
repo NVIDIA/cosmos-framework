@@ -923,7 +923,8 @@ class PackingDataLoader(JointDataLoader):
 
                 current_sequence_length += num_tokens_in_current_sample
                 num_samples += 1
-                output["dataset_name"] = ds_name
+                # Allows the dataset name to be overridden by the sample itself.
+                output["dataset_name"] = output.get("dataset_name", ds_name)
                 self._update_output_batch(output_batch, output)
 
             for sample in reversed(skipped_samples):

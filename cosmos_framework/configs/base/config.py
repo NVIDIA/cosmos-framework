@@ -77,7 +77,7 @@ def make_config() -> Config:
     from cosmos_framework.configs.base.defaults.model import register_model
     from cosmos_framework.configs.base.defaults.optimizer import register_optimizer, register_scheduler
     from cosmos_framework.configs.base.defaults.tokenizer import register_sound_tokenizer, register_tokenizer
-    from cosmos_framework.configs.base.defaults.vlm import register_vlm
+    from cosmos_framework.configs.base.defaults.reasoner import register_vlm
 
     # Call this function to register config groups for advanced overriding. the order follows the default config groups
     # register_data()

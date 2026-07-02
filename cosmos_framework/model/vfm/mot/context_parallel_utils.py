@@ -276,6 +276,7 @@ def context_parallel_attention(
     attention_function: Callable,
     natten_metadata: dict | None = None,
     memory_value: MemoryValue | None = None,
+    packed_key_states_normalized: SequencePack | None = None,
 ) -> tuple[SequencePack, KVToStore | None]:
     """Ulysses-style context parallel attention for packed und+gen sequences.
 
@@ -300,6 +301,12 @@ def context_parallel_attention(
         attention_function: Callable implementing the actual attention kernel.
         natten_metadata: Optional neighborhood attention metadata.
         memory_value: Optional memory value for KV-cache training / AR inference.
+        packed_key_states_normalized: Optional seq-sharded normed K pack (und tokens RMSNorm-ed
+            before RoPE) used for the gen→und cross-attention path.  When provided, the
+            und portion is gathered/scattered through the same all-to-all as the regular K
+            and forwarded to ``attention_function`` as ``packed_key_states_normalized``.
+            The gen portion is shared with ``packed_key_states`` (no separate all-to-all
+            needed).  Pass ``None`` (default) to skip and use raw K for all paths.
 
     Returns:
         (output_pack, kv_to_store):
@@ -392,6 +399,19 @@ def context_parallel_attention(
     packed_key_states_ = from_mode_splits(k_und_seq, k_gen_seq, meta, is_sharded=False)
     packed_value_states_ = from_mode_splits(v_und_seq, v_gen_seq, meta, is_sharded=False)
 
+    # If a normed K pack is provided (und K-norm for gen→und cross-attn), apply the same
+    # all-to-all to the und portion.  The gen portion is identical to k_gen_seq (already
+    # gathered above), so no second all-to-all is needed for it.
+    packed_key_states_normalized_: SequencePack | None = None
+    if packed_key_states_normalized is not None:
+        k_und_normalized_seq, _ = get_causal_seq(packed_key_states_normalized)  # [text_shard_len,H_kv,head_dim]
+        if kv_head_repeats > 1:
+            k_und_normalized_seq = _repeat_kv_heads_for_cp(k_und_normalized_seq, kv_head_repeats)
+        k_und_normalized_seq = gather_seq_scatter_heads(
+            k_und_normalized_seq, seq_dim=0, head_dim=1, cp_mesh=cp_mesh
+        )  # [text_len,H_kv_local,head_dim]
+        packed_key_states_normalized_ = from_mode_splits(k_und_normalized_seq, k_gen_seq, meta, is_sharded=False)
+
     # dispatch_attention returns (output, kv_to_store | None)
     attn_output_pack_hp, _inner_kv_to_store = attention_function(
         packed_query_states_,
@@ -400,6 +420,7 @@ def context_parallel_attention(
         attention_mask,
         natten_metadata=natten_metadata,
         memory_value=memory_value,
+        packed_key_states_normalized=packed_key_states_normalized_,
     )
 
     attn_output_und_hp = get_und_seq(attn_output_pack_hp)  # [text_len,H_local,head_dim]

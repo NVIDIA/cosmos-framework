@@ -25,7 +25,7 @@ pdx_object_store = config.ObjectStoreConfig(
 
 s3_object_store = config.ObjectStoreConfig(
     enabled=True,
-    credentials="credentials/s3_training.secret",
+    credentials="credentials/s3_checkpoint.secret",
     bucket="bucket4",
 )
 
@@ -33,6 +33,12 @@ s3_eu_object_store = config.ObjectStoreConfig(
     enabled=True,
     credentials="credentials/s3_training_eu.secret",
     bucket="checkpoints-eu-west-3",
+)
+
+s3_east2_object_store = config.ObjectStoreConfig(
+    enabled=True,
+    credentials="credentials/s3_east2_checkpoint.secret",
+    bucket="bucket",
 )
 
 gcp_object_store = config.ObjectStoreConfig(
@@ -53,6 +59,7 @@ CHECKPOINT_LOCAL = CheckpointConfig(
     save_iter=5000,
     broadcast_via_filesystem=True,
     dcp_async_mode_enabled=True,
+    dcp_load_dedup=True,
 )
 
 CHECKPOINT_PDX = CheckpointConfig(
@@ -61,6 +68,7 @@ CHECKPOINT_PDX = CheckpointConfig(
     save_iter=5000,
     broadcast_via_filesystem=True,
     dcp_async_mode_enabled=True,
+    dcp_load_dedup=True,
 )
 
 CHECKPOINT_S3 = CheckpointConfig(
@@ -69,6 +77,7 @@ CHECKPOINT_S3 = CheckpointConfig(
     save_iter=5000,
     broadcast_via_filesystem=True,
     dcp_async_mode_enabled=True,
+    dcp_load_dedup=True,
 )
 
 CHECKPOINT_S3_EU = CheckpointConfig(
@@ -77,6 +86,7 @@ CHECKPOINT_S3_EU = CheckpointConfig(
     save_iter=5000,
     broadcast_via_filesystem=True,
     dcp_async_mode_enabled=True,
+    dcp_load_dedup=True,
 )
 
 CHECKPOINT_GCP = CheckpointConfig(
@@ -90,11 +100,25 @@ CHECKPOINT_GCP = CheckpointConfig(
     dcp_async_mode_enabled=True,
 )
 
+CHECKPOINT_S3_EAST2 = CheckpointConfig(
+    save_to_object_store=s3_east2_object_store,
+    save_iter=1000,
+    load_from_object_store=s3_east2_object_store,
+    load_path="",
+    load_training_state=False,
+    strict_resume=True,
+    enable_gcs_patch_in_boto3=False,
+    dcp_async_mode_enabled=True,
+    dcp_load_dedup=True,
+)
+
 CHECKPOINT_NEB_EU = CheckpointConfig(
     save_to_object_store=neb_eu_object_store,
     load_from_object_store=neb_eu_object_store,
     save_iter=2000,
     broadcast_via_filesystem=True,
+    dcp_async_mode_enabled=True,
+    dcp_load_dedup=True,
 )
 
 
@@ -106,6 +130,7 @@ def register_checkpoint():
     cs.store(group="checkpoint", package="checkpoint", name="s3_eu", node=CHECKPOINT_S3_EU)
     cs.store(group="checkpoint", package="checkpoint", name="gcp", node=CHECKPOINT_GCP)
     cs.store(group="checkpoint", package="checkpoint", name="neb_eu", node=CHECKPOINT_NEB_EU)
+    cs.store(group="checkpoint", package="checkpoint", name="s3_east2", node=CHECKPOINT_S3_EAST2)
 
 
 DUMMY_CHECKPOINTER: Dict[str, str] = L(DummyCheckpointer)()

@@ -176,6 +176,14 @@ def _is_type_alias(value: Any) -> bool:
 
 def _canonicalize_module_path(path: str) -> str:
     replacements = (
+        # vlm → reasoner rename (upstream i4). Longer/more-specific rules first
+        # so the reasoner subtree isn't shadowed by the general vfm rules below.
+        ("cosmos_framework.configs.base.defaults.reasoner.", "projects.cosmos3.vfm.configs.base.defaults.vlm."),
+        ("cosmos_framework.configs.base.reasoner.", "projects.cosmos3.vfm.configs.base.vlm."),
+        ("cosmos_framework.model.vfm.reasoner.", "projects.cosmos3.vfm.models.vlm."),
+        ("cosmos_framework.data.vfm.reasoner.", "projects.cosmos3.vfm.datasets.vlm."),
+        ("cosmos_framework.data.vfm.augmentors.reasoner.", "projects.cosmos3.vfm.datasets.augmentors.vlm."),
+        ("cosmos_framework.utils.vfm.reasoner.", "projects.cosmos3.vfm.utils.vlm."),
         ("cosmos3._src.vfm.", "projects.cosmos3.vfm."),
         ("cosmos_framework.configs.base.", "projects.cosmos3.vfm.configs.base."),
         ("cosmos_framework.model.vfm.tokenizers.", "projects.cosmos3.vfm.tokenizers."),
@@ -205,6 +213,14 @@ def _runtime_module_path(canonical_path: str) -> str:
 
 def _replace_vfm_module_prefix(canonical_path: str, *, package: str) -> str:
     replacements = (
+        # vlm → reasoner (upstream rename). MUST precede the general vfm rules
+        # so the specific vlm→reasoner subtree isn't shadowed by them.
+        ("projects.cosmos3.vfm.configs.base.defaults.vlm.", f"{package}.configs.base.defaults.reasoner."),
+        ("projects.cosmos3.vfm.configs.base.vlm.", f"{package}.configs.base.reasoner."),
+        ("projects.cosmos3.vfm.models.vlm.", f"{package}.model.vfm.reasoner."),
+        ("projects.cosmos3.vfm.datasets.vlm.", f"{package}.data.vfm.reasoner."),
+        ("projects.cosmos3.vfm.datasets.augmentors.vlm.", f"{package}.data.vfm.augmentors.reasoner."),
+        ("projects.cosmos3.vfm.utils.vlm.", f"{package}.utils.vfm.reasoner."),
         ("projects.cosmos3.vfm.configs.base.", f"{package}.configs.base."),
         ("projects.cosmos3.vfm.models.", f"{package}.model.vfm."),
         ("projects.cosmos3.vfm.tokenizers.", f"{package}.model.vfm.tokenizers."),
