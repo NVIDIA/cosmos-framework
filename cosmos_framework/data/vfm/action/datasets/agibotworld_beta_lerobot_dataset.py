@@ -11,7 +11,6 @@ from typing import Any, Literal
 import numpy as np
 import torch
 import torch.nn.functional as F
-from lerobot.datasets.video_utils import decode_video_frames
 
 from cosmos_framework.data.vfm.action.agibot_fk import (
     AGIBOT_WORLD_GRIPPER_TO_OPENCV_BY_WRIST,
@@ -232,6 +231,9 @@ class AgiBotWorldBetaLeRobotDataset(ActionBaseDataset):
         return self._compose_multi_view(top, left, right)
 
     def _load_video_key(self, episode: dict[str, Any], observation_rows: list[dict[str, Any]], key: str) -> torch.Tensor:
+        # lerobot is a heavy, optional ("train" extra) dependency; import lazily.
+        from lerobot.datasets.video_utils import decode_video_frames
+
         timestamps = [float(row["timestamp"]) for row in observation_rows]
         return decode_video_frames(
             self._video_path(episode, key),

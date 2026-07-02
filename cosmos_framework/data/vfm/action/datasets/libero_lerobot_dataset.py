@@ -31,7 +31,6 @@ import numpy as np
 import pyarrow.parquet as pq
 import torch
 import torch.nn.functional as F
-from lerobot.datasets.video_utils import decode_video_frames
 
 from cosmos_framework.data.vfm.action.action_spec import ActionSpec, Gripper, Pos, Rot, build_action_spec
 from cosmos_framework.data.vfm.action.datasets.base_dataset import ActionBaseDataset
@@ -307,6 +306,9 @@ class LIBEROLeRobotDataset(ActionBaseDataset):
         return torch.cat([translation, rotation, gripper], dim=-1)  # [chunk, action_dim]
 
     def _load_video(self, episode: dict[str, Any], timestamps: list[float]) -> torch.Tensor:
+        # lerobot is a heavy, optional ("train" extra) dependency; import lazily.
+        from lerobot.datasets.video_utils import decode_video_frames
+
         frames_by_view = {}
         for key in self._video_keys:
             from_ts = float(episode.get(f"videos/{key}/from_timestamp", 0.0))

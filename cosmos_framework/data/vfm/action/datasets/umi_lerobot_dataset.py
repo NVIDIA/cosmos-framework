@@ -11,7 +11,6 @@ from typing import Any, Literal
 
 import numpy as np
 import torch
-from lerobot.datasets.video_utils import decode_video_frames
 
 from cosmos_framework.data.vfm.action.action_normalization import load_action_stats
 from cosmos_framework.data.vfm.action.action_spec import ActionSpec, Gripper, Pos, Rot, build_action_spec
@@ -140,6 +139,9 @@ class UMILeRobotDataset(ActionBaseDataset):
         )
 
     def _load_video(self, episode: dict[str, Any], observation_rows: list[dict[str, Any]]) -> torch.Tensor:
+        # lerobot is a heavy, optional ("train" extra) dependency; import lazily.
+        from lerobot.datasets.video_utils import decode_video_frames
+
         timestamps = [float(row["timestamp"]) for row in observation_rows]
         return decode_video_frames(
             self._video_path(episode, self._image_key),
