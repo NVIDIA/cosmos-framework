@@ -1,0 +1,71 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: OpenMDW-1.1
+
+name: Docker Build
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - .github/workflows/docker-build.yml
+      - Dockerfile
+      - .dockerignore
+      - .python-version
+      - pyproject.toml
+      - uv.lock
+      - docker/**
+      - packages/*/pyproject.toml
+      - packages/*/uv.lock
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/docker-build.yml
+      - Dockerfile
+      - .dockerignore
+      - .python-version
+      - pyproject.toml
+      - uv.lock
+      - docker/**
+      - packages/*/pyproject.toml
+      - packages/*/uv.lock
+  workflow_dispatch:
+
+concurrency:
+  group: docker-build-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  runtime-image:
+    runs-on: [self-hosted, docker-build, h200, cosmos-framework]
+    timeout-minutes: 120
+    env:
+      DOCKER_BUILDKIT: "1"
+      BUILDER_NAME: cosmos-docker-build-${{ github.run_id }}-${{ github.run_attempt }}
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Show Docker disk usage before build
+        run: |
+          docker system df
+          df -h "$(docker info --format '{{ .DockerRootDir }}')"
+
+      - name: Create temporary BuildKit builder
+        run: |
+          docker buildx rm -f "$BUILDER_NAME" >/dev/null 2>&1 || true
+          docker buildx create --driver docker-container --name "$BUILDER_NAME" --use
+
+      - name: Build Docker image
+        run: docker buildx build --builder "$BUILDER_NAME" --progress=plain .
+
+      - name: Remove temporary BuildKit builder
+        if: always()
+        run: docker buildx rm -f "$BUILDER_NAME" || true
+
+      - name: Show Docker disk usage after cleanup
+        if: always()
+        run: |
+          docker system df
+          df -h "$(docker info --format '{{ .DockerRootDir }}')"
