@@ -4,7 +4,6 @@
 """Modality-specific append helpers for VFM sequence packing."""
 
 import math
-from typing import Dict, List, Tuple
 
 import torch
 
@@ -118,7 +117,7 @@ def add_special_tokens(tokenizer):
 
 def compute_text_split_length(
     num_caption_tokens: int,
-    special_tokens: Dict[str, int],
+    special_tokens: dict[str, int],
     has_generation: bool = True,
 ) -> int:
     """Compute the total text split length without mutating any state.
@@ -145,25 +144,23 @@ def compute_text_split_length(
 
 def pack_text_tokens(
     packed_seq: PackedSequence,
-    text_ids: List[int],
-    special_tokens: Dict[str, int],
-    curr_rope_id: int,
+    text_ids: list[int],
+    special_tokens: dict[str, int],
     has_generation: bool,
     use_float_positions: bool = False,
-) -> Tuple[int, int, int]:
+) -> int:
     """Pack text tokens into the sequence.
 
     Args:
         packed_seq: PackedSequence instance to accumulate data into.
         text_ids: List of text token IDs (integers).
         special_tokens: Dictionary of special token IDs.
-        curr_rope_id: Current RoPE position ID.
         has_generation: Whether there's media/action after text.
         use_float_positions: If True, generate float position IDs for 3D mRoPE
             (for consistency with FPS-modulated vision tokens).
 
     Returns:
-        Tuple of (updated curr_rope_id, split_length, sample_length).
+        Text sample length.
     """
     # Ensure we're in build mode (fields are lists, not tensors)
     assert isinstance(packed_seq.text_ids, list), "PackedSequence must be in build mode"
@@ -212,20 +209,17 @@ def pack_text_tokens(
     assert split_len == compute_text_split_length(len(text_ids), special_tokens, has_generation)
 
     # Update position IDs and attention mode for text split
-    if packed_seq._use_mrope:
-        text_mrope_ids, packed_seq._mrope_temporal_offset = get_3d_mrope_ids_text_tokens(
-            num_tokens=split_len,
-            temporal_offset=packed_seq._mrope_temporal_offset,
-            use_float_positions=use_float_positions,
-        )  # text_mrope_ids: [3,split_len]
-        packed_seq.position_ids.append(text_mrope_ids)
-    else:
-        packed_seq.position_ids.extend(range(curr_rope_id, curr_rope_id + split_len))
+    text_mrope_ids, packed_seq._mrope_temporal_offset = get_3d_mrope_ids_text_tokens(
+        num_tokens=split_len,
+        temporal_offset=packed_seq._mrope_temporal_offset,
+        use_float_positions=use_float_positions,
+    )  # text_mrope_ids: [3,split_len]
+    packed_seq.position_ids.append(text_mrope_ids)
     packed_seq.attn_modes.append("causal")
     packed_seq.split_lens.append(split_len)
 
     packed_seq.curr = curr
-    return curr_rope_id + split_len, split_len, split_len
+    return split_len
 
 
 def pack_vision_tokens(
@@ -233,7 +227,6 @@ def pack_vision_tokens(
     input_vision_tokens: torch.Tensor,
     condition_frame_indexes_vision: list[int],
     input_timestep: float | torch.Tensor,
-    curr_rope_id: int,
     latent_patch_size: int = 1,
     vision_fps: float | None = None,
     enable_fps_modulation: bool = False,
@@ -250,7 +243,6 @@ def pack_vision_tokens(
         input_timestep: Diffusion timestep. Either a float (teacher_forcing/none — all frames
             share the same sigma) or a Tensor(T_max,) (diffusion_forcing — per-frame sigma;
             indexed as input_timestep[frame_idx] for each noisy frame).
-        curr_rope_id: Current RoPE position ID.
         latent_patch_size: Patch size for latent patchification.
         vision_fps: Frames per second of the video. Used when enable_fps_modulation=True.
         enable_fps_modulation: If True, scale temporal position IDs based on video FPS.
@@ -326,29 +318,24 @@ def pack_vision_tokens(
     curr += num_vision_tokens
     vision_split_len += num_vision_tokens
 
-    # Update position IDs for image split
-    if packed_seq._use_mrope:
-        # Determine FPS for this vision segment (None disables FPS modulation)
-        effective_fps = vision_fps if enable_fps_modulation else None
-        if vision_temporal_positions is not None:
-            vision_temporal_positions = vision_temporal_positions.to(device="cpu", dtype=torch.float32)  # [T]
+    # Update position IDs for image split.
+    effective_fps = vision_fps if enable_fps_modulation else None
+    if vision_temporal_positions is not None:
+        vision_temporal_positions = vision_temporal_positions.to(device="cpu", dtype=torch.float32)  # [T]
 
-        vision_mrope_ids, packed_seq._mrope_temporal_offset = get_3d_mrope_ids_vae_tokens(
-            grid_t=latent_t,
-            grid_h=patch_h,
-            grid_w=patch_w,
-            temporal_offset=packed_seq._mrope_temporal_offset,
-            reset_spatial_indices=packed_seq._mrope_reset_spatial,
-            fps=effective_fps,
-            base_fps=base_fps,
-            temporal_compression_factor=temporal_compression_factor,
-            temporal_positions=vision_temporal_positions,
-            actual_temporal_compression_factor=temporal_compression_factor,
-        )  # vision_mrope_ids: [3,N_vision_tokens]
-        packed_seq.position_ids.append(vision_mrope_ids)
-    else:
-        # All image tokens share the same RoPE position ID
-        packed_seq.position_ids.extend([curr_rope_id] * vision_split_len)
+    vision_mrope_ids, packed_seq._mrope_temporal_offset = get_3d_mrope_ids_vae_tokens(
+        grid_t=latent_t,
+        grid_h=patch_h,
+        grid_w=patch_w,
+        temporal_offset=packed_seq._mrope_temporal_offset,
+        reset_spatial_indices=packed_seq._mrope_reset_spatial,
+        fps=effective_fps,
+        base_fps=base_fps,
+        temporal_compression_factor=temporal_compression_factor,
+        temporal_positions=vision_temporal_positions,
+        actual_temporal_compression_factor=temporal_compression_factor,
+    )  # vision_mrope_ids: [3,N_vision_tokens]
+    packed_seq.position_ids.append(vision_mrope_ids)
 
     packed_seq.curr = curr
     return vision_split_len
@@ -359,7 +346,6 @@ def pack_action_tokens(
     input_action_tokens: torch.Tensor,
     condition_frame_indexes_action: list[int],
     input_timestep: float,
-    curr_rope_id: int,
     action_temporal_offset: int | float = 0,
     enable_fps_modulation: bool = False,
     base_fps: float = 24.0,
@@ -374,7 +360,6 @@ def pack_action_tokens(
         input_action_tokens: Action latent tokens (T, D).
         condition_frame_indexes_action: Indexes of conditioning action steps.
         input_timestep: Diffusion timestep.
-        curr_rope_id: Current RoPE position ID.
         action_temporal_offset: Temporal offset for action mRoPE IDs (typically
             the vision start offset so action aligns temporally with vision).
         enable_fps_modulation: If True, scale temporal position IDs based on FPS.
@@ -438,30 +423,25 @@ def pack_action_tokens(
         packed_seq.action.mse_loss_indexes.extend(range(frame_start, frame_end))
         packed_seq.action.timesteps.extend([input_timestep] * frame_token_stride)
 
-    # Update RoPE position IDs for action tokens.
-    if packed_seq._use_mrope:
-        # 3D mRoPE: action tokens use a 1x1 spatial grid with start_frame_offset=1
-        # so action[0] (null token) aligns with vision frame 1, not frame 0.
-        effective_fps = action_fps if enable_fps_modulation else None
+    # Action tokens use a 1x1 spatial grid with start_frame_offset=1 by default,
+    # so action[0] (null token) aligns with vision frame 1, not frame 0.
+    effective_fps = action_fps if enable_fps_modulation else None
 
-        action_mrope_ids, _ = get_3d_mrope_ids_vae_tokens(
-            grid_t=action_split_len,
-            grid_h=1,
-            grid_w=1,
-            temporal_offset=action_temporal_offset,
-            reset_spatial_indices=packed_seq._mrope_reset_spatial,
-            fps=effective_fps,
-            base_fps=base_fps,
-            temporal_compression_factor=1,  # Action is at frame rate (no temporal compression)
-            base_temporal_compression_factor=base_temporal_compression_factor,
-            start_frame_offset=action_start_frame_offset,  # Align action[0] with vision frame action_start_frame_offset
-        )  # action_mrope_ids: [3,N_action_tokens]
-        packed_seq.position_ids.append(action_mrope_ids)
-        # Note: we don't update _mrope_temporal_offset here because action tokens
-        # share the temporal space with vision tokens (they run in parallel).
-    else:
-        # All action tokens share the SAME RoPE position as vision tokens (see docs/sequence_packing.md).
-        packed_seq.position_ids.extend([curr_rope_id] * action_split_len)
+    action_mrope_ids, _ = get_3d_mrope_ids_vae_tokens(
+        grid_t=action_split_len,
+        grid_h=1,
+        grid_w=1,
+        temporal_offset=action_temporal_offset,
+        reset_spatial_indices=packed_seq._mrope_reset_spatial,
+        fps=effective_fps,
+        base_fps=base_fps,
+        temporal_compression_factor=1,  # Action is at frame rate (no temporal compression)
+        base_temporal_compression_factor=base_temporal_compression_factor,
+        start_frame_offset=action_start_frame_offset,  # Align action[0] with vision frame action_start_frame_offset
+    )  # action_mrope_ids: [3,N_action_tokens]
+    packed_seq.position_ids.append(action_mrope_ids)
+    # Note: we don't update _mrope_temporal_offset here because action tokens
+    # share the temporal space with vision tokens (they run in parallel).
 
     packed_seq.curr = curr + action_split_len
     return action_split_len
@@ -472,7 +452,6 @@ def pack_sound_tokens(
     input_sound_tokens: torch.Tensor,
     condition_frame_indexes_sound: list[int],
     input_timestep: float,
-    curr_rope_id: int,
     sound_temporal_offset: int | float = 0,
     enable_fps_modulation: bool = False,
     base_fps: float = 24.0,
@@ -492,7 +471,6 @@ def pack_sound_tokens(
             [] means all frames are noised/supervised.
             All frames specified means all frames are clean (no MSE supervision).
         input_timestep: Diffusion timestep.
-        curr_rope_id: Current RoPE position ID.
         sound_temporal_offset: Temporal offset for m-RoPE position IDs (aligned with vision start).
         enable_fps_modulation: If True, scale temporal positions by FPS ratio.
         base_fps: Base FPS for normalization (default 24.0).
@@ -556,30 +534,25 @@ def pack_sound_tokens(
         packed_seq.sound.mse_loss_indexes.extend(range(frame_start, frame_end))
         packed_seq.sound.timesteps.extend([input_timestep])
 
-    # Update RoPE position IDs for sound tokens.
-    if packed_seq._use_mrope:
-        # 3D mRoPE: sound tokens use a 1x1 spatial grid, aligned with vision temporal positions.
-        # sound[0] aligns with vision frame 0 (start_frame_offset=0, unlike action which offsets by 1).
-        effective_fps = sound_fps if enable_fps_modulation else None
+    # Sound tokens use a 1x1 spatial grid, aligned with vision temporal positions.
+    # sound[0] aligns with vision frame 0 (start_frame_offset=0, unlike action which offsets by 1).
+    effective_fps = sound_fps if enable_fps_modulation else None
 
-        sound_mrope_ids, _ = get_3d_mrope_ids_vae_tokens(
-            grid_t=sound_split_len,
-            grid_h=1,
-            grid_w=1,
-            temporal_offset=sound_temporal_offset,
-            reset_spatial_indices=packed_seq._mrope_reset_spatial,
-            fps=effective_fps,
-            base_fps=base_fps,
-            temporal_compression_factor=1,  # Sound latent is already at sound_latent_fps (no further compression)
-            base_temporal_compression_factor=sound_base_temporal_compression_factor,
-            start_frame_offset=0,  # Sound[0] aligns with vision frame 0
-        )  # sound_mrope_ids: [3,N_sound_tokens]
-        packed_seq.position_ids.append(sound_mrope_ids)
-        # Note: we don't update _mrope_temporal_offset here because sound tokens
-        # share the temporal space with vision tokens (they run in parallel).
-    else:
-        # All sound tokens share the SAME RoPE position as vision/action tokens (unified generation split).
-        packed_seq.position_ids.extend([curr_rope_id] * sound_split_len)
+    sound_mrope_ids, _ = get_3d_mrope_ids_vae_tokens(
+        grid_t=sound_split_len,
+        grid_h=1,
+        grid_w=1,
+        temporal_offset=sound_temporal_offset,
+        reset_spatial_indices=packed_seq._mrope_reset_spatial,
+        fps=effective_fps,
+        base_fps=base_fps,
+        temporal_compression_factor=1,  # Sound latent is already at sound_latent_fps (no further compression)
+        base_temporal_compression_factor=sound_base_temporal_compression_factor,
+        start_frame_offset=0,  # Sound[0] aligns with vision frame 0
+    )  # sound_mrope_ids: [3,N_sound_tokens]
+    packed_seq.position_ids.append(sound_mrope_ids)
+    # Note: we don't update _mrope_temporal_offset here because sound tokens
+    # share the temporal space with vision tokens (they run in parallel).
 
     packed_seq.curr = curr + sound_split_len
     return sound_split_len

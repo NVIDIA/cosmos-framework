@@ -119,17 +119,16 @@ class PackedSequence:
     # Text modality (list during build, tensor after finalize)
     text_ids: list[int] | torch.Tensor = field(default_factory=list)
     text_indexes: list[int] | torch.Tensor = field(default_factory=list)
-    position_ids: list[int] | torch.Tensor = field(default_factory=list)
+    position_ids: list[torch.Tensor] | torch.Tensor = field(default_factory=list)
 
     # Loss computation - Cross Entropy (text)
     label_ids: list[int] | torch.Tensor | None = field(default_factory=list)
     ce_loss_indexes: list[int] | torch.Tensor | None = field(default_factory=list)
     ce_loss_weights: list[float] | torch.Tensor | None = field(default_factory=list)
 
-    # Build-time mRoPE tracking (used during packing, not after finalize)
-    # When _use_mrope=True, position_ids accumulates (3, N) tensors instead of ints,
-    # and finalize() produces a (3, total_seq_len) tensor instead of (total_seq_len,).
-    _use_mrope: bool = False
+    # Build-time mRoPE tracking (used during packing, not after finalize).
+    # position_ids accumulates (3, N) tensors and finalize() produces a
+    # (3, total_seq_len) tensor.
     # Running temporal index for mRoPE position ID generation within a single sample.
     # Reset to 0 at the start of each sample, then advanced by text and vision helpers
     # as segments are packed. Action reuses the pre-vision snapshot (parallel temporal
@@ -154,6 +153,18 @@ class PackedSequence:
     vision: ModalityData | None = None
     action: ModalityData | None = None
     sound: ModalityData | None = None
+
+    # Multi-control transfer: per-sample list of per-vision-item token counts.
+    # For a multi-control transfer sample with N controls + 1 noisy target,
+    # vision_item_split_lens[i] = [L_ctrl0, L_ctrl1, ..., L_ctrlN-1, L_noisy].
+    # Used by cosmos3_vfm_network.py to derive gen-relative control/noisy ranges
+    # for multi_control_two_way_attention.
+    vision_item_split_lens: list[list[int]] = field(default_factory=list)
+
+    # Per-sample per-control weights for multi-control weighted V-scaling.
+    # Parallel to vision_item_split_lens[i][:-1] (excludes noisy item).
+    # None for non-transfer or standard single-control samples.
+    control_weights: list[list[float]] | None = None
 
     def finalize(
         self,
@@ -189,7 +200,7 @@ class PackedSequence:
         if self.vision is not None and len(self.vision.sequence_indexes) > 0:
             vision = ModalityData(
                 sequence_indexes=torch.tensor(self.vision.sequence_indexes, dtype=torch.long),  # [N_vision_tokens]
-                timesteps=torch.tensor(self.vision.timesteps),  # [N_vision_noisy_tokens]
+                timesteps=torch.tensor(self.vision.timesteps, dtype=torch.float32),  # [N_vision_noisy_tokens]
                 mse_loss_indexes=torch.tensor(
                     self.vision.mse_loss_indexes, dtype=torch.long
                 ),  # [N_vision_noisy_tokens]
@@ -204,7 +215,7 @@ class PackedSequence:
         if self.action is not None and len(self.action.sequence_indexes) > 0:
             action = ModalityData(
                 sequence_indexes=torch.tensor(self.action.sequence_indexes, dtype=torch.long),  # [N_action_tokens]
-                timesteps=torch.tensor(self.action.timesteps),  # [N_action_noisy_tokens]
+                timesteps=torch.tensor(self.action.timesteps, dtype=torch.float32),  # [N_action_noisy_tokens]
                 mse_loss_indexes=torch.tensor(
                     self.action.mse_loss_indexes, dtype=torch.long
                 ),  # [N_action_noisy_tokens]
@@ -225,7 +236,7 @@ class PackedSequence:
         if self.sound is not None and len(self.sound.sequence_indexes) > 0:
             sound = ModalityData(
                 sequence_indexes=torch.tensor(self.sound.sequence_indexes, dtype=torch.long),  # [N_sound_tokens]
-                timesteps=torch.tensor(self.sound.timesteps),  # [N_sound_noisy_tokens]
+                timesteps=torch.tensor(self.sound.timesteps, dtype=torch.float32),  # [N_sound_noisy_tokens]
                 mse_loss_indexes=torch.tensor(self.sound.mse_loss_indexes, dtype=torch.long),  # [N_sound_noisy_tokens]
                 token_shapes=list(self.sound.token_shapes),
                 tokens=self.sound.tokens,
@@ -233,12 +244,12 @@ class PackedSequence:
                 noisy_frame_indexes=list(self.sound.noisy_frame_indexes),
             )
 
-        # Finalize position IDs: 3D mRoPE (3, seq_len) or 1D RoPE (seq_len,)
-        if self._use_mrope and len(self.position_ids) > 0 and isinstance(self.position_ids[0], torch.Tensor):
-            mrope_tensors: list[torch.Tensor] = self.position_ids  # type: ignore[assignment]
-            position_ids = torch.cat(mrope_tensors, dim=1)  # [3,actual_seq_len]
-        else:  # Original 1D RoPE from Bagel, where all the media tokens share the same 1D position ID
-            position_ids = torch.tensor(self.position_ids)  # [seq_len]
+        # Finalize position IDs.
+        assert isinstance(self.position_ids, list)
+        if len(self.position_ids) > 0:
+            position_ids = torch.cat(self.position_ids, dim=1)  # [3,actual_seq_len]
+        else:
+            position_ids = torch.empty((3, 0), dtype=torch.long)  # [3,0]
 
         return PackedSequence(
             # Sequence structure
@@ -250,7 +261,7 @@ class PackedSequence:
             # Text modality (converted to tensors)
             text_ids=torch.tensor(self.text_ids, dtype=torch.long),  # [N_text_tokens]
             text_indexes=torch.tensor(self.text_indexes, dtype=torch.long),  # [N_text_tokens]
-            position_ids=position_ids,  # [seq_len] or [3,seq_len]
+            position_ids=position_ids,  # [3,seq_len]
             # Loss computation - Cross Entropy
             label_ids=label_ids,
             ce_loss_indexes=ce_loss_indexes,
@@ -262,6 +273,9 @@ class PackedSequence:
             # Temporal causal
             null_action_supertokens=self.null_action_supertokens,
             num_action_tokens_per_supertoken=self.num_action_tokens_per_supertoken,
+            # Multi-control transfer
+            vision_item_split_lens=list(self.vision_item_split_lens),
+            control_weights=gen_data_clean.control_weights,
         )
 
     def to_cuda(self) -> None:

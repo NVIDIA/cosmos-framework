@@ -22,7 +22,7 @@ from typing import Any
 # Maps ``job.task`` to the base Hydra config that ``make_config()`` lives in.
 TASK_TO_BASE_CONFIG: dict[str, str] = {
     "vfm": "cosmos_framework/configs/base/config.py",
-    "vlm": "cosmos_framework/configs/base/vlm/config.py",
+    "vlm": "cosmos_framework/configs/base/reasoner/config.py",
 }
 
 
@@ -138,6 +138,9 @@ def build_hydra_overrides(toml_dict: dict) -> list[str]:
 
     overlay = dict(toml_dict)
     overlay["job"] = job
+    # [custom] lands verbatim on config.custom (see load_experiment_from_toml),
+    # so it must not be per-leaf-remapped into Hydra overrides here.
+    overlay.pop("custom", None)
 
     for top_key, val in overlay.items():
         _emit_with_remap(overrides, [top_key], val, rules)

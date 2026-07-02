@@ -19,15 +19,21 @@ pdx_object_store = config.ObjectStoreConfig(
 
 s3_object_store = config.ObjectStoreConfig(
     enabled=True,
-    credentials="credentials/s3_training.secret",
+    credentials="credentials/s3_checkpoint.secret",
     bucket="bucket4",
+)
+
+s3_east2_object_store = config.ObjectStoreConfig(
+    enabled=True,
+    credentials="credentials/s3_east2_checkpoint.secret",
+    bucket="bucket",
 )
 
 # Permanent store for initial HF model weights on AWS (different bucket from training checkpoints).
 # Used by train.py to download pretrained weights; NOT used by the checkpointer for auto-resume.
 aws_load_from_object_store_permanent = config.ObjectStoreConfig(
     enabled=True,
-    credentials="credentials/s3_training.secret",
+    credentials="credentials/s3_checkpoint.secret",
     bucket="nv-cosmos-vlm",
 )
 
@@ -45,7 +51,7 @@ neb_eu_object_store = config.ObjectStoreConfig(
 
 gcp_object_store = config.ObjectStoreConfig(
     enabled=True,
-    credentials="credentials/gcp_training.secret",
+    credentials="credentials/gcp_checkpoint.secret",
     bucket="bucket1",
 )
 
@@ -53,7 +59,7 @@ gcp_object_store = config.ObjectStoreConfig(
 # Used by train.py to download pretrained weights; NOT used by the checkpointer for auto-resume.
 gcp_load_from_object_store_permanent = config.ObjectStoreConfig(
     enabled=True,
-    credentials="credentials/gcp_training.secret",
+    credentials="credentials/gcp_checkpoint.secret",
     bucket="bucket0",
 )
 
@@ -68,6 +74,13 @@ CHECKPOINT_S3 = CheckpointConfig(
     save_to_object_store=s3_object_store,
     load_from_object_store=s3_object_store,
     save_iter=5000,
+    broadcast_via_filesystem=True,
+)
+
+CHECKPOINT_S3_EAST2 = CheckpointConfig(
+    save_to_object_store=s3_east2_object_store,
+    load_from_object_store=s3_east2_object_store,
+    save_iter=2000,
     broadcast_via_filesystem=True,
 )
 
@@ -90,6 +103,7 @@ def register_checkpoint():
     cs = ConfigStore.instance()
     cs.store(group="checkpoint", package="checkpoint", name="pdx", node=CHECKPOINT_PDX)
     cs.store(group="checkpoint", package="checkpoint", name="s3", node=CHECKPOINT_S3)
+    cs.store(group="checkpoint", package="checkpoint", name="s3_east2", node=CHECKPOINT_S3_EAST2)
     cs.store(group="checkpoint", package="checkpoint", name="neb_eu", node=CHECKPOINT_NEB_EU)
     cs.store(group="checkpoint", package="checkpoint", name="gcp", node=CHECKPOINT_GCP)
 

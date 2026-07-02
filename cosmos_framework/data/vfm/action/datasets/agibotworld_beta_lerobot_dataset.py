@@ -39,7 +39,7 @@ _WAIST_KEY = "observation.states.waist.position"
 _ROBOT_POSITION_KEY = "observation.states.robot.position"
 _ROBOT_ORIENTATION_KEY = "observation.states.robot.orientation"
 
-_NORMALIZER_PATH = Path(__file__).parent / "stats/agibotworld_beta_lerobot_stats.json"
+_NORMALIZER_PATH = Path(__file__).parent.parent / "normalizer_stats/agibotworld_beta_lerobot_stats.json"
 
 
 def _split_task_for_caption(task: str) -> tuple[str, str]:

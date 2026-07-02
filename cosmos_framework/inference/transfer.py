@@ -7,6 +7,7 @@ import math
 import random
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Callable, Optional
 
 import torch
 
@@ -27,7 +28,8 @@ from cosmos_framework.inference.vision import (
 from cosmos_framework.utils import log
 from cosmos_framework.data.vfm.sequence_packing import SequencePlan
 from cosmos_framework.model.vfm.omni_mot_model import OmniMoTModel
-from cosmos_framework.model.vfm.vlm.qwen3_vl.utils import _SYSTEM_PROMPT_TRANSFER
+from cosmos_framework.model.vfm.utils.data_and_condition import GenerationDataClean
+from cosmos_framework.model.vfm.reasoner.qwen3_vl.utils import _SYSTEM_PROMPT_TRANSFER
 
 
 @dataclass
@@ -153,8 +155,21 @@ def build_transfer_batch(
     prompt: str,
     negative_prompt: str | None,
     share_vision_temporal_positions: bool,
+    control_weights: list[float] | None = None,
 ) -> dict[str, object]:
-    """Build the ``[ctrl_1, ..., ctrl_N, target]`` batch for transfer inference."""
+    """Build the ``[ctrl_1, ..., ctrl_N, target]`` batch for transfer inference.
+
+    ``control_weights`` is a per-control scalar (default 1.0 each).  Weights are
+    normalised to sum to 1 before use.  In ``multi_control_two_way_attention`` N
+    independent maskless SDPA passes are computed (one per control), each with
+    KV = [text | ctrl_i | noisy].  The final noisy output is the weighted sum:
+
+        noisy_out = w_1 * noisy_out_1 + ... + w_N * noisy_out_N
+
+    All SDPA calls are maskless so Flash Attention is always active.
+    When ``N=1`` the single weight normalises to 1.0, reproducing the original
+    ``two_way_attention`` behaviour exactly.
+    """
     control_5ds = [cv.unsqueeze(0).cuda().to(dtype=torch.bfloat16) for cv in control_videos]
     target_5d = target_video.unsqueeze(0).cuda().to(dtype=torch.bfloat16)
     num_vision_items = len(control_5ds) + 1
@@ -162,6 +177,16 @@ def build_transfer_batch(
         condition_frame_indexes = list(range((num_conditional_frames - 1) // temporal_compression_factor + 1))
     else:
         condition_frame_indexes = []
+
+    if control_weights is None:
+        control_weights = [1.0] * len(control_5ds)
+    assert len(control_weights) == len(control_5ds), (
+        f"control_weights length {len(control_weights)} must match number of controls {len(control_5ds)}"
+    )
+    assert all(w >= 0 for w in control_weights), f"control_weights must all be non-negative, got {control_weights}"
+    total = sum(control_weights)
+    assert total > 0, f"control_weights must have a positive sum, got {control_weights}"
+    control_weights = [w / total for w in control_weights]
 
     size = torch.tensor([[height, width, height, width]], dtype=torch.float32).cuda()
     batch: dict[str, object] = {
@@ -172,6 +197,9 @@ def build_transfer_batch(
         "padding_mask": torch.zeros(1, 1, height, width).cuda(),
         "num_frames": torch.tensor([num_frames]).cuda(),
         "num_vision_items_per_sample": [num_vision_items],
+        # Per-control weights for multi-control weighted attention aggregation.
+        # Shape: [num_samples], each element is a list of floats (one per control).
+        "control_weights": [control_weights],
         "is_preprocessed": True,
         # share_vision_temporal_positions must match the trained checkpoint's
         # SequencePlan regime; mismatched flag → frame-drift between control and
@@ -191,6 +219,159 @@ def build_transfer_batch(
     if negative_prompt:
         batch[f"neg_{prompt_key}"] = [negative_prompt]
     return batch
+
+
+def _build_no_control_inference_state(
+    sequence_plans: list[SequencePlan],
+    gen_data_clean: GenerationDataClean,
+) -> tuple[list[SequencePlan], GenerationDataClean, list[int]] | None:
+    """Build a target-only counterpart of ``(sequence_plans, gen_data_clean)`` for
+    control-CFG. Drops all but the last vision item per sample (the target).
+
+    Returns ``None`` when no sample has multiple vision items (nothing to drop).
+
+    Also returns ``ctrl_dims_per_sample`` — the flattened control-token dimension
+    per sample, used to slice ``noise_x`` and mix velocities.
+    """
+    num_items_per_sample = gen_data_clean.num_vision_items_per_sample
+    if num_items_per_sample is None or all(n <= 1 for n in num_items_per_sample):
+        return None
+
+    assert gen_data_clean.x0_tokens_vision is not None
+
+    new_x0_tokens_vision: list[torch.Tensor] = []
+    new_raw_state_vision: list[torch.Tensor] | None = [] if gen_data_clean.raw_state_vision is not None else None
+    ctrl_dims_per_sample: list[int] = []
+    vis_offset = 0
+    for n_vis in num_items_per_sample:
+        ctrl_dim_i = 0
+        for j in range(n_vis - 1):
+            sh = gen_data_clean.x0_tokens_vision[vis_offset + j].shape
+            ctrl_dim_i += math.prod(sh)
+        ctrl_dims_per_sample.append(ctrl_dim_i)
+        tgt_idx = vis_offset + n_vis - 1
+        new_x0_tokens_vision.append(gen_data_clean.x0_tokens_vision[tgt_idx])
+        if new_raw_state_vision is not None:
+            new_raw_state_vision.append(gen_data_clean.raw_state_vision[tgt_idx])  # type: ignore[index]
+        vis_offset += n_vis
+
+    gdc_nc = GenerationDataClean(
+        batch_size=gen_data_clean.batch_size,
+        is_image_batch=gen_data_clean.is_image_batch,
+        raw_state_vision=new_raw_state_vision,
+        x0_tokens_vision=new_x0_tokens_vision,
+        fps_vision=gen_data_clean.fps_vision,
+        num_vision_items_per_sample=None,
+        raw_state_action=gen_data_clean.raw_state_action,
+        x0_tokens_action=gen_data_clean.x0_tokens_action,
+        action_domain_id=gen_data_clean.action_domain_id,
+        fps_action=gen_data_clean.fps_action,
+        raw_action_dim=gen_data_clean.raw_action_dim,
+        raw_state_sound=gen_data_clean.raw_state_sound,
+        x0_tokens_sound=gen_data_clean.x0_tokens_sound,
+        fps_sound=gen_data_clean.fps_sound,
+    )
+
+    sp_nc = [
+        SequencePlan(
+            has_text=sp.has_text,
+            has_vision=sp.has_vision,
+            condition_frame_indexes_vision=sp.condition_frame_indexes_vision,
+            share_vision_temporal_positions=False,
+            has_action=sp.has_action,
+            condition_frame_indexes_action=sp.condition_frame_indexes_action,
+            action_start_frame_offset=sp.action_start_frame_offset,
+            has_sound=sp.has_sound,
+            condition_frame_indexes_sound=sp.condition_frame_indexes_sound,
+        )
+        for sp in sequence_plans
+    ]
+
+    return sp_nc, gdc_nc, ctrl_dims_per_sample
+
+
+def build_control_cfg_postprocess(
+    *,
+    control_guidance: float,
+    control_guidance_interval: Optional[list[float]] = None,
+) -> Optional[
+    Callable[..., Optional[Callable[[list[torch.Tensor], list[torch.Tensor], torch.Tensor], list[torch.Tensor]]]]
+]:
+    """Return a ``velocity_postprocess_builder`` that injects control-CFG.
+
+    Pass the returned builder to ``OmniMoTModel.generate_samples_from_batch``.
+    The builder is invoked once at the start of sampling with the prepared
+    inference state; it builds the alternate (target-only) state and returns a
+    per-step closure that mixes the conditional velocity with an extra forward
+    pass that has all control items dropped.
+
+    Returns ``None`` when control-CFG is a no-op (``control_guidance == 1.0``),
+    so the model takes its fast single-forward path.
+    """
+    if control_guidance == 1.0:
+        return None
+
+    def builder(
+        *,
+        model: OmniMoTModel,
+        net: torch.nn.Module | None = None,
+        cond_tokens: list[list[int]],
+        sequence_plans: list[SequencePlan],
+        gen_data_clean: GenerationDataClean,
+    ) -> Optional[Callable[[list[torch.Tensor], list[torch.Tensor], torch.Tensor], list[torch.Tensor]]]:
+        nc_state = _build_no_control_inference_state(sequence_plans, gen_data_clean)
+        if nc_state is None:
+            log.warning(
+                "control_guidance != 1.0 but no multi-vision sample found; falling back to single-branch inference."
+            )
+            return None
+
+        if any(sp.has_action or sp.has_sound for sp in sequence_plans):
+            raise ValueError("control_guidance currently supports video transfer only, not action/sound generation.")
+
+        sp_nc, gdc_nc, ctrl_dims = nc_state
+        control_guidance_bounds: tuple[float, float] | None = None
+        if control_guidance_interval is not None:
+            if len(control_guidance_interval) != 2:
+                raise ValueError(f"control_guidance_interval must be [lo, hi], got {control_guidance_interval}")
+            control_guidance_bounds = (control_guidance_interval[0], control_guidance_interval[1])
+
+        def postprocess(
+            cond_v_full: list[torch.Tensor],
+            noise_x: list[torch.Tensor],
+            timestep: torch.Tensor,
+        ) -> list[torch.Tensor]:
+            if control_guidance_bounds is not None:
+                if not (control_guidance_bounds[0] < timestep[0].item() < control_guidance_bounds[1]):
+                    return cond_v_full
+
+            noise_x_nc = [nx[c:] for nx, c in zip(noise_x, ctrl_dims, strict=True)]  # [[N_target],...]
+            cond_v_nc = model._get_velocity(
+                net=net,
+                noise_x=noise_x_nc,
+                timestep=timestep,
+                text_tokens=cond_tokens,
+                sequence_plans=sp_nc,
+                gen_data_clean=gdc_nc,
+                skip_text_tokens=False,
+            )
+
+            # Mix only the suffix (target vision). The control-token portion
+            # of cond_v_full is already zeroed by the model's velocity mask
+            # (control items are fully conditioned), so leave it untouched.
+            mixed: list[torch.Tensor] = []
+            for v_full_i, v_nc_i, c in zip(cond_v_full, cond_v_nc, ctrl_dims, strict=True):
+                suffix_full = v_full_i[c:]  # [N_target]
+                assert suffix_full.shape == v_nc_i.shape, (
+                    f"shape mismatch in control-CFG mix: full suffix {suffix_full.shape} vs no-control {v_nc_i.shape}"
+                )
+                mixed_suffix = v_nc_i + control_guidance * (suffix_full - v_nc_i)  # [N_target]
+                mixed.append(torch.cat([v_full_i[:c], mixed_suffix], dim=0))  # [N_full]
+            return mixed
+
+        return postprocess
+
+    return builder
 
 
 def generate_transfer_sample(
@@ -282,6 +463,18 @@ def generate_transfer_sample(
     prompt = chunk_prompt_data[model.input_caption_key][0]
     negative_prompt = chunk_prompt_data.get("neg_" + model.input_caption_key, [None])[0]
 
+    # Optionally append a one-sentence control-adherence directive to the user prompt.
+    # Names the active hint modality (e.g. "edge", "depth, seg") so the VLM gets the
+    # exact control type. System prompt is untouched (training-distribution safe).
+    if sample_args.emphasize_control_in_prompt:
+        hint_names = ", ".join(k.value for k in hints.keys())
+        prompt = (
+            prompt.rstrip() + f" Follow the {hint_names} control video precisely: shape, contour, silhouette,"
+            f" position, and motion of every visible structure must align with the {hint_names}"
+            f" signal at every frame."
+        )
+    log.info(f"[transfer] final user prompt: {prompt}")
+
     model.eval()
     seed = sample_args.seed if sample_args.seed is not None else random.randint(0, 10000)
     for chunk_id in range(num_chunks):
@@ -345,14 +538,17 @@ def generate_transfer_sample(
             prompt=prompt,
             negative_prompt=negative_prompt,
             share_vision_temporal_positions=share_temporal,
+            control_weights=[h.weight for h in hints.values()],
         )
         outputs = model.generate_samples_from_batch(
             data_batch,
             sampler=sampler,
             guidance=guidance,
             guidance_interval=sample_args.guidance_interval,
-            control_guidance=sample_args.control_guidance,
-            control_guidance_interval=sample_args.control_guidance_interval,
+            velocity_postprocess_builder=build_control_cfg_postprocess(
+                control_guidance=sample_args.control_guidance,
+                control_guidance_interval=sample_args.control_guidance_interval,
+            ),
             seed=[seed + chunk_id],
             n_sample=1,
             has_negative_prompt=negative_prompt is not None,

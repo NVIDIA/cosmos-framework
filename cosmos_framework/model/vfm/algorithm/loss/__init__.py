@@ -5,9 +5,9 @@
 
 __all__: list[str] = []
 
-from cosmos_framework.model.vfm.algorithm.loss.cross_entropy import cross_entropy_loss
+from cosmos_framework.model.vfm.algorithm.loss.cross_entropy import cross_entropy_loss, weighted_cross_entropy_loss
 
-__all__ += ["cross_entropy_loss"]
+__all__ += ["cross_entropy_loss", "weighted_cross_entropy_loss"]
 
 from cosmos_framework.model.vfm.algorithm.loss.load_balancing import compute_load_balancing_loss
 

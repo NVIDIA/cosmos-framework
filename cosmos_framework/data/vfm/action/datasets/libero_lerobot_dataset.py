@@ -47,7 +47,7 @@ _ACTION_FEATURE = "action"
 _IMAGE_FEATURE = "observation.images.image"
 _WRIST_FEATURE = "observation.images.wrist_image"
 _STAT_KEYS = ("mean", "std", "min", "max", "q01", "q99")
-_NORMALIZERS_DIR = Path(__file__).parent / "stats"
+_NORMALIZERS_DIR = Path(__file__).parent.parent / "normalizer_stats"
 
 _VIEWPOINT_BY_CAMERA = {
     "image": "third_person_view",

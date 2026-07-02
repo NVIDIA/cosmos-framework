@@ -246,6 +246,16 @@ class TransferArgs(ArgsBase):
     """Resolved transfer inference arguments for a single control hint."""
 
     control_path: ResolvedFilePathOrUrl | None = None
+    weight: float = 1.0
+    """Strength of this control signal in the weighted multi-control attention aggregation."""
+
+    @pydantic.field_validator("weight", mode="before")
+    @classmethod
+    def _coerce_none_weight(cls, v: float | None) -> float:
+        # ``TransferOverrides.weight`` defaults to None ("unset") and is resolved into
+        # this required float via ``_build`` (which does not strip None). An unset weight
+        # resolves to the neutral 1.0 → equal weighting / single-control parity.
+        return 1.0 if v is None else v
 
 
 class EdgeTransferArgs(TransferArgs):
@@ -261,6 +271,9 @@ class TransferOverrides(OverridesBase):
 
     control_path: ResolvedFilePathOrUrl | None = None
     """Path or URL to pre-computed control input."""
+
+    weight: float | None = None
+    """Override the control weight for multi-control weighted attention aggregation."""
 
     def download(self, output_dir: Path):
         if self.control_path is not None:
@@ -688,6 +701,7 @@ class TransferDataArgs(ArgsBase, _TransferDataBase):
     show_input: bool | None = None
     num_first_chunk_conditional_frames: pydantic.NonNegativeInt | None = None
     share_vision_temporal_positions: bool | None = None
+    emphasize_control_in_prompt: bool | None = None
 
 
 class TransferDataOverrides(OverridesBase, _TransferDataBase):
@@ -726,6 +740,10 @@ class TransferDataOverrides(OverridesBase, _TransferDataBase):
     """Number of conditioning frames for the first chunk (defaults to ``num_conditional_frames``)."""
     share_vision_temporal_positions: bool | None = None
     """Share vision temporal position ids across autoregressive chunks."""
+    emphasize_control_in_prompt: bool | None = None
+    """If True (default), auto-append a one-sentence directive to the user prompt that
+    names the active control modality (e.g. "Follow the edge control video precisely.
+    ..."). Set False for clean baselines / ablations. The system prompt is unchanged."""
 
     @pydantic.model_validator(mode="after")
     def _validate_transfer_hints(self) -> Self:
@@ -765,6 +783,7 @@ class TransferDataOverrides(OverridesBase, _TransferDataBase):
         "show_input": False,
         "num_first_chunk_conditional_frames": 0,
         "share_vision_temporal_positions": True,
+        "emphasize_control_in_prompt": True,
     }
     _TRANSFER_HINT_DEFAULTS: ClassVar[dict[TransferHintKey, dict[str, Any]]] = {
         TransferHintKey.EDGE: {"preset_edge_threshold": PresetEdgeThreshold.MEDIUM},

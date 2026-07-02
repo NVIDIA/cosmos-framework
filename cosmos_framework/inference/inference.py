@@ -51,7 +51,7 @@ from cosmos_framework.tools.visualize.video import save_img_or_video
 from cosmos_framework.configs.base.defaults.compile import CompileConfig
 from cosmos_framework.configs.base.defaults.parallelism import ParallelismConfig
 from cosmos_framework.model.vfm.omni_mot_model import OmniMoTModel
-from cosmos_framework.model.vfm.vlm.qwen3_vl.utils import _SYSTEM_PROMPT_IMAGE_EDITING
+from cosmos_framework.model.vfm.reasoner.qwen3_vl.utils import _SYSTEM_PROMPT_IMAGE_EDITING
 from cosmos_framework.model.vfm.upsampler.prompts import is_upsampled_prompt
 
 if TYPE_CHECKING:

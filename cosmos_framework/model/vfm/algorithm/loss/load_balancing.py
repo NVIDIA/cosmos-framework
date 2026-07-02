@@ -5,7 +5,7 @@ import torch
 from torch.distributed.tensor import DTensor, Partial
 from torch.distributed.tensor.device_mesh import DeviceMesh
 
-from cosmos_framework.model.vfm.vlm.qwen3_vl_moe.qwen3_vl_moe import LBLMetadata
+from cosmos_framework.model.vfm.reasoner.qwen3_vl_moe.qwen3_vl_moe import LBLMetadata
 
 
 def compute_load_balancing_loss(

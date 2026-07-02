@@ -177,7 +177,12 @@ class FusedAdam(torch.optim.Optimizer):
             for p, p_master in zip(group["params"], group_master["params"]):
                 if p.grad is None:
                     continue
-                if p.grad.data.is_sparse:
+                # Unwrap DTensor grads to their local shard before checking
+                # sparsity. Touching ``p.grad.data`` directly on a DTensor
+                # dispatches ``aten.detach`` through ``__torch_dispatch__``,
+                # which operates on a partially-built DTensor shell and raises
+                # ``'DTensor' object has no attribute '_local_tensor'``.
+                if get_local_tensor_if_DTensor(p.grad).is_sparse:
                     raise RuntimeError(
                         "FusedAdam does not support sparse gradients, please consider SparseAdam instead"
                     )
