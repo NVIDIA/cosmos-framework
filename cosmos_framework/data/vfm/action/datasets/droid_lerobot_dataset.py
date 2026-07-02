@@ -15,7 +15,6 @@ import pyarrow.parquet as pq
 import torch
 import torch.nn.functional as F
 import torchvision.transforms as T
-from lerobot.datasets.video_utils import decode_video_frames
 
 from cosmos_framework.data.vfm.action.action_spec import ActionSpec, Gripper, Joint, Pos, Rot, build_action_spec
 from cosmos_framework.data.vfm.action.datasets.base_dataset import ActionBaseDataset
@@ -290,6 +289,9 @@ class DROIDLeRobotDataset(ActionBaseDataset):
         episode: dict[str, Any],
         observation_rows: list[dict[str, Any]],
     ) -> torch.Tensor:
+        # lerobot is a heavy, optional ("train" extra) dependency; import lazily.
+        from lerobot.datasets.video_utils import decode_video_frames
+
         timestamps = [float(row["timestamp"]) for row in observation_rows]
         frames_by_view = {
             name: decode_video_frames(
