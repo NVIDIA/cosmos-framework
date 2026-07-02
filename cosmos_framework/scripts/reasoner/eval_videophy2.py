@@ -20,12 +20,12 @@ env vars set, the script runs single-process on ``cuda:0``.
 
 Single-GPU example::
 
-    python -m cosmos_framework.scripts.vlm.eval_videophy2 \\
+    python -m cosmos_framework.scripts.reasoner.eval_videophy2 \\
         --hf_ckpt $HF_CKPT --val_root $VAL_ROOT --results_dir $OUT
 
 8-GPU data-parallel example::
 
-    torchrun --nproc_per_node=8 -m cosmos_framework.scripts.vlm.eval_videophy2 \\
+    torchrun --nproc_per_node=8 -m cosmos_framework.scripts.reasoner.eval_videophy2 \\
         --hf_ckpt $HF_CKPT --val_root $VAL_ROOT --results_dir $OUT --batch_size 2
 
 The inference path here is intentionally lightweight — it is expected to be

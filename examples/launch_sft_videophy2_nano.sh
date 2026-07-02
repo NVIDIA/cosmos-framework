@@ -11,7 +11,7 @@
 # Required env:
 #   VIDEOPHYSICS_ROOT  dir containing videophy2_train/ and videophy2_val/
 #                      (each with meta.json + media/ + text/). Populate via
-#                      `python -m cosmos_framework.scripts.vlm.prepare_videophy2_from_hf`.
+#                      `python -m cosmos_framework.scripts.reasoner.prepare_videophy2_from_hf`.
 #
 # Optional env:
 #   HF_TOKEN               for gated Qwen3-VL-8B-Instruct downloads.
