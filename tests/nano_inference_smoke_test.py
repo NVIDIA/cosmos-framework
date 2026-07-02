@@ -101,6 +101,54 @@ _TRANSFER_SPEC = {
     "edge": {"control_path": _TRANSFER_CONTROL_URL, "preset_edge_threshold": "medium"},
 }
 
+# Multi-control transfer (video2video, edge + blur) input, written to a temp file
+# at run time. Mirrors the cookbook
+# ``cookbooks/cosmos3/generator/transfer/specs/multi_control.json`` — two control
+# hints (edge + blur) computed on the fly from a single source video (``vision_path``)
+# and blended by ``multi_control_two_way_attention`` (N independent maskless SDPA
+# passes, one per control, summed by the per-hint ``weight``) — but downscaled
+# (480p / 10 steps / single 29-frame chunk) for a fast smoke run. The source clip is
+# the exact one the cookbook uses (a robot arm pouring into a glass), pinned to a
+# public raw URL; the prompt is a compact caption of it. Unlike ``_TRANSFER_SPEC``
+# (a single pre-computed ``control_path``), both controls here are derived on the
+# fly, so this exercises the transfer control augmentor in addition to the weighted
+# multi-control aggregation. ``guidance`` + ``control_guidance`` > 1.0 also keep the
+# text-CFG and control-CFG branches active.
+_MULTI_CONTROL_VISION_URL = (
+    "https://github.com/nvidia-cosmos/cosmos-dependencies/raw/"
+    "2b17a2413bd86b2cf9b03823637108851e4ddf2d/inputs/vision/robot_pouring.mp4"
+)
+_MULTI_CONTROL_SPEC = {
+    "name": "transfer_multi_control",
+    "model_mode": "video2video",
+    "resolution": "480",
+    "aspect_ratio": "16,9",
+    "num_frames": 29,
+    "fps": 30,
+    "shift": 10.0,
+    "num_steps": 10,
+    "seed": 2026,
+    "num_video_frames_per_chunk": 29,
+    "max_frames": 29,
+    "num_conditional_frames": 1,
+    "num_first_chunk_conditional_frames": 0,
+    "share_vision_temporal_positions": True,
+    "guidance": 3.0,
+    "control_guidance": 1.5,
+    "vision_path": _MULTI_CONTROL_VISION_URL,
+    "prompt": (
+        "A white robotic arm with black joints and cables carefully pours a clear liquid from a "
+        "small light-green pitcher into a glass on a white tabletop, in a clean, brightly lit "
+        "modern indoor setting."
+    ),
+    "negative_prompt": "blurry, distorted, deformed, low quality, flickering, artifacts",
+    # Two hints, no control_path -> both derived on the fly from vision_path; the
+    # per-hint weights drive the weighted multi-control attention aggregation.
+    "edge": {"weight": 0.5, "preset_edge_threshold": "medium"},
+    "blur": {"weight": 0.5, "preset_blur_strength": "medium"},
+    "emphasize_control_in_prompt": False,
+}
+
 # Audio sanity thresholds for the muxed sound track.
 _RMS_SILENCE_FLOOR = 1e-4  # below this the track is effectively silence
 _PEAK_SANITY_CEIL = 1.5    # decoded float audio should sit within ~[-1, 1]
@@ -355,3 +403,70 @@ if MAX_GPUS == 8:
         transfer_video = so.parent / "vision.mp4"
         assert transfer_video.is_file(), f"transfer run produced no vision.mp4 ({so})"
         _assert_video_has_content(transfer_video)
+
+    @pytest.mark.level(2)
+    @pytest.mark.gpus(8)
+    def test_nano_inference_multi_control_transfer(tmp_path: Path) -> None:
+        """Multi-control transfer: edge + blur derived on the fly from ONE source
+        video, blended by ``multi_control_two_way_attention``.
+
+        Mirrors ``test_nano_inference_omni``'s single-control transfer run (same
+        ``latency`` preset, 4 ranks -> cfgp=2, cp=2 -- the cookbook Cosmos3-Super
+        transfer layout), but the generated spec sets TWO control hints (edge +
+        blur) each with a per-hint ``weight`` and no ``control_path``, so both
+        controls are computed on the fly from ``vision_path`` and aggregated by the
+        weighted multi-control attention path (``multi_control_two_way_attention``:
+        N maskless SDPA passes summed by weight). A non-degenerate clip confirms
+        that path ran end to end -- a broken multi-control route would raise
+        mid-sampling, and a numerically broken one would collapse the output
+        (caught by ``_assert_video_has_content``). The on-the-fly derivation also
+        exercises the transfer control augmentor (opencv), unlike the single-control
+        run above which loads a pre-computed control_path."""
+        spec_file = tmp_path / "transfer_multi_control.json"
+        spec_file.write_text(json.dumps(_MULTI_CONTROL_SPEC))
+        out_dir = tmp_path / "out_multi_control"
+        cmd = [
+            "torchrun",
+            "--nproc_per_node=4",
+            f"--master_port={_free_port()}",
+            "-m",
+            "cosmos_framework.scripts.inference",
+            "--parallelism-preset=latency",
+            "-i",
+            str(spec_file),
+            "-o",
+            str(out_dir),
+            "--checkpoint-path",
+            "Cosmos3-Nano",
+            "--seed=0",
+        ]
+        _run(cmd, tmp_path / "inference_multi_control.log")
+
+        results = sorted(out_dir.rglob("sample_outputs.json"))
+        assert len(results) == 1, (
+            f"expected 1 multi-control sample_outputs.json, found {[str(p) for p in results]}"
+        )
+        so = results[0]
+        args = json.loads(so.read_text()).get("args", {})
+        # Multi-control-specific: BOTH edge and blur hints are active (2 controls ->
+        # the weighted multi_control_two_way_attention path), each carries a weight,
+        # and neither has a control_path (both derived on the fly from vision_path).
+        edge = args.get("edge") or {}
+        blur = args.get("blur") or {}
+        assert edge and blur, f"expected both edge and blur hints active ({so}); edge={edge} blur={blur}"
+        assert edge.get("weight") is not None and blur.get("weight") is not None, (
+            f"expected a per-hint weight on both controls ({so}); edge={edge} blur={blur}"
+        )
+        assert not edge.get("control_path") and not blur.get("control_path"), (
+            f"expected on-the-fly controls (no control_path) ({so}); edge={edge} blur={blur}"
+        )
+        assert args.get("vision_path"), f"multi-control run missing vision_path ({so})"
+        assert args.get("control_guidance", 1.0) > 1.0, (
+            f"expected control-CFG (control_guidance > 1.0), got {args.get('control_guidance')} ({so})"
+        )
+        assert (args.get("guidance") or 1.0) > 1.0, (
+            f"expected text-CFG (guidance > 1.0), got {args.get('guidance')} ({so})"
+        )
+        video = so.parent / "vision.mp4"
+        assert video.is_file(), f"multi-control run produced no vision.mp4 ({so})"
+        _assert_video_has_content(video)
