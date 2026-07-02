@@ -27,6 +27,7 @@ EMBODIMENT_TO_DOMAIN_ID: dict[str, int] = {
 EMBODIMENT_TO_RAW_ACTION_DIM: dict[str, int] = {
     "av": 9,
     "camera_pose": 9,
+    "hand_pose": 57,
     "pusht": 2,
     "umi": 10,
     "bridge_orig_lerobot": 10,
@@ -39,11 +40,9 @@ EMBODIMENT_TO_RAW_ACTION_DIM: dict[str, int] = {
     "embodiment_c_gripper": 29,
     "embodiment_c_gripper_ext": 29,
     "fractal": 10,
-    # NOTE: ``libero`` (7/10/13 depending on ``rotation_space``) and ``hand_pose``
-    # (variable with ``keypoint_option`` and ``rotation_format``) are absent
-    # because their raw width is set per-dataset at construction time. Inference
-    # in inverse_dynamics/policy modes is not supported for these domains until
-    # canonical widths are added here.
+    # NOTE: ``libero`` (7/10/13 depending on ``rotation_space``) is absent because
+    # its raw width is selected per dataset at construction time. ``hand_pose``
+    # uses the released 57D wrist-plus-fingertips rot6d representation.
 }
 
 
