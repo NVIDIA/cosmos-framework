@@ -33,12 +33,11 @@ import torch
 import torch.nn.functional as F
 from lerobot.datasets.video_utils import decode_video_frames
 
-from cosmos_framework.utils import log
-from cosmos_framework.data.vfm.action.action_normalization import normalize_action
 from cosmos_framework.data.vfm.action.action_spec import ActionSpec, Gripper, Pos, Rot, build_action_spec
 from cosmos_framework.data.vfm.action.datasets.base_dataset import ActionBaseDataset
 from cosmos_framework.data.vfm.action.libero_pose_utils import libero_action_dim, libero_rotation_format
 from cosmos_framework.data.vfm.action.pose_utils import convert_rotation
+from cosmos_framework.utils import log
 
 CameraMode = Literal["image", "wrist_image", "concat_view"]
 RotationSpace = Literal["3d", "6d", "9d"]
@@ -220,9 +219,7 @@ class LIBEROLeRobotDataset(ActionBaseDataset):
     def _load_norm_stats(self) -> dict[str, torch.Tensor]:
         if self._norm_stats is None:
             raw = json.loads(self._stats_file.read_text())[self._stats_key]
-            self._norm_stats = {
-                k: torch.tensor(v, dtype=torch.float32) for k, v in raw.items() if k in _STAT_KEYS
-            }
+            self._norm_stats = {k: torch.tensor(v, dtype=torch.float32) for k, v in raw.items() if k in _STAT_KEYS}
         return self._norm_stats
 
     # ---- index helpers -----------------------------------------------------
@@ -328,6 +325,4 @@ class LIBEROLeRobotDataset(ActionBaseDataset):
     def _resize(self, frames: torch.Tensor) -> torch.Tensor:
         if frames.shape[-1] == self._image_size and frames.shape[-2] == self._image_size:
             return frames
-        return F.interpolate(
-            frames, size=(self._image_size, self._image_size), mode="bilinear", align_corners=False
-        )
+        return F.interpolate(frames, size=(self._image_size, self._image_size), mode="bilinear", align_corners=False)
