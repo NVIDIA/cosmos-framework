@@ -53,9 +53,9 @@ All paths below are relative to the cosmos3 package root (`../../../` from this 
 
 ## Related skills
 
-| Skill                                  | When to use                                    |
-| -------------------------------------- | ---------------------------------------------- |
-| `../cosmos3-setup/SKILL.md`            | Installation and environment setup             |
-| `../cosmos3-codebase-nav/SKILL.md`     | Finding files, parameters, and configs in code |
-| `../cosmos3-env-troubleshoot/SKILL.md` | Debugging environment and runtime errors       |
-| `../cosmos3-transfer-inference/SKILL.md` | Transfer and multi-transfer control inference |
+| Skill                                    | When to use                                    |
+| ---------------------------------------- | ---------------------------------------------- |
+| `../cosmos3-setup/SKILL.md`              | Installation and environment setup             |
+| `../cosmos3-codebase-nav/SKILL.md`       | Finding files, parameters, and configs in code |
+| `../cosmos3-env-troubleshoot/SKILL.md`   | Debugging environment and runtime errors       |
+| `../cosmos3-transfer-inference/SKILL.md` | Transfer and multi-transfer control inference  |
