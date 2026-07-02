@@ -36,6 +36,26 @@ local/S3 form — it streams from the HuggingFace Hub (marked `hf`, so the same 
 both columns) — and the VLM row is measured end-to-end (image decode + tokenize) to be comparable
 to the video-decoding loaders.
 
+### Dataset Size (Action)
+327 DROID episodes — original three views vs the composed Lance table:
+
+| metric     | Original (3 views)     | Composed (Lance)              |
+| ---------- | ---------------------- | ----------------------------- |
+| encoding   | AV1, long-GOP          | H.264, all-intra (`gop=1`)    |
+| resolution | 3 × 320×180            | 1 × 270×320                   |
+| size       | 1.47 GB                | 0.55 GB (0.37×)               |
+
+The composed table is ~2.7× smaller even though all-intra `gop=1` H.264 is *less* space-efficient
+per pixel than the source's AV1 long-GOP: it stores one stream at reduced resolution (the two
+exterior views are downscaled to half) rather than three full views, which outweighs the codec/GOP
+cost. `gop=1` is a deliberate trade — exact, cheap random-window seeks in exchange for size (a
+larger GOP would shrink the table further at some seek cost).
+
+The composed resolution is derived from the source (`1.5×h × w`), not fixed: this public subset has
+320×180 views → 270×320, whereas production DROID (640×360 views) composes to 540×640. Sizes and
+per-loader throughput scale with pixel count, so the numbers above are for the 320×180 subset;
+re-measure on the 640×360 data for production figures.
+
 ## Memory: a note on the per-frame index (not a Lance advantage)
 
 `ActionBaseDataset.__init__` builds a per-frame index (`self._rows`, a list of row dicts) and
