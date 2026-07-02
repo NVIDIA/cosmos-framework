@@ -71,6 +71,8 @@ class ActionIterableShuffleDataset(IterableDataset):
         import torch
 
         blocks = self._dataset.get_shuffle_blocks()
+        if not blocks:
+            raise ValueError("No shuffle blocks found")
         wi = get_worker_info()
         wid = wi.id if wi is not None else 0
         nw = wi.num_workers if wi is not None else 1
