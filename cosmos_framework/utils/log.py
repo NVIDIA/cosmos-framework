@@ -108,36 +108,65 @@ def _rank0_only_filter(record: Any) -> bool:
     return not is_rank0
 
 
-def trace(message: str, rank0_only: bool = True) -> None:
-    logger.opt(depth=1).bind(rank0_only=rank0_only).trace(message)
+def _prepare_log_message(
+    message: str, args: tuple[Any, ...], kwargs: dict[str, Any]
+) -> tuple[str, tuple[Any, ...], dict[str, Any]]:
+    if args:
+        try:
+            return message % args, (), kwargs
+        except (TypeError, ValueError):
+            pass
+    if kwargs:
+        try:
+            return message % kwargs, (), {}
+        except (KeyError, TypeError, ValueError):
+            pass
+    return message, args, kwargs
 
 
-def debug(message: str, rank0_only: bool = True) -> None:
-    logger.opt(depth=1).bind(rank0_only=rank0_only).debug(message)
+def _log_with_rank(
+    level: str,
+    message: str,
+    *args: Any,
+    rank0_only: bool = True,
+    exc_info: Any = None,
+    **kwargs: Any,
+) -> None:
+    message, args, kwargs = _prepare_log_message(message, args, kwargs)
+    bound_logger = logger.opt(depth=1, exception=exc_info).bind(rank0_only=rank0_only)
+    getattr(bound_logger, level)(message, *args, **kwargs)
 
 
-def info(message: str, rank0_only: bool = True) -> None:
-    logger.opt(depth=1).bind(rank0_only=rank0_only).info(message)
+def trace(message: str, *args: Any, rank0_only: bool = True, exc_info: Any = None, **kwargs: Any) -> None:
+    _log_with_rank("trace", message, *args, rank0_only=rank0_only, exc_info=exc_info, **kwargs)
 
 
-def success(message: str, rank0_only: bool = True) -> None:
-    logger.opt(depth=1).bind(rank0_only=rank0_only).success(message)
+def debug(message: str, *args: Any, rank0_only: bool = True, exc_info: Any = None, **kwargs: Any) -> None:
+    _log_with_rank("debug", message, *args, rank0_only=rank0_only, exc_info=exc_info, **kwargs)
 
 
-def warning(message: str, rank0_only: bool = True) -> None:
-    logger.opt(depth=1).bind(rank0_only=rank0_only).warning(message)
+def info(message: str, *args: Any, rank0_only: bool = True, exc_info: Any = None, **kwargs: Any) -> None:
+    _log_with_rank("info", message, *args, rank0_only=rank0_only, exc_info=exc_info, **kwargs)
 
 
-def error(message: str, rank0_only: bool = True) -> None:
-    logger.opt(depth=1).bind(rank0_only=rank0_only).error(message)
+def success(message: str, *args: Any, rank0_only: bool = True, exc_info: Any = None, **kwargs: Any) -> None:
+    _log_with_rank("success", message, *args, rank0_only=rank0_only, exc_info=exc_info, **kwargs)
 
 
-def critical(message: str, rank0_only: bool = True) -> None:
-    logger.opt(depth=1).bind(rank0_only=rank0_only).critical(message)
+def warning(message: str, *args: Any, rank0_only: bool = True, exc_info: Any = None, **kwargs: Any) -> None:
+    _log_with_rank("warning", message, *args, rank0_only=rank0_only, exc_info=exc_info, **kwargs)
 
 
-def exception(message: str, rank0_only: bool = True) -> None:
-    logger.opt(depth=1).bind(rank0_only=rank0_only).exception(message)
+def error(message: str, *args: Any, rank0_only: bool = True, exc_info: Any = None, **kwargs: Any) -> None:
+    _log_with_rank("error", message, *args, rank0_only=rank0_only, exc_info=exc_info, **kwargs)
+
+
+def critical(message: str, *args: Any, rank0_only: bool = True, exc_info: Any = None, **kwargs: Any) -> None:
+    _log_with_rank("critical", message, *args, rank0_only=rank0_only, exc_info=exc_info, **kwargs)
+
+
+def exception(message: str, *args: Any, rank0_only: bool = True, exc_info: Any = True, **kwargs: Any) -> None:
+    _log_with_rank("exception", message, *args, rank0_only=rank0_only, exc_info=exc_info, **kwargs)
 
 
 # Execute at import time.
