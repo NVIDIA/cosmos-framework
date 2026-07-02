@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: OpenMDW-1.1
 
-"""Fractal (fractal20220817_data) LeRobot dataset — Google Robot RT-1.
+"""Fractal LeRobot dataset — Google Robot RT-1.
 
 Robot: google_robot
 87,212 episodes, 3,786,400 frames, 599 tasks, fps=3
