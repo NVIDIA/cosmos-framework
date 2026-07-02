@@ -4,7 +4,7 @@
 """
 Abstract base class for pool-based token-budget bin-packing over multiple datasets.
 
-Extracted from ``cosmos_framework.data.vfm.vlm.joint_dataset_dynamic_batch_webloader``
+Extracted from ``cosmos_framework.data.vfm.reasoner.joint_dataset_dynamic_batch_webloader``
 so that both the VLM and VFM internal dataloaders can share a single packing implementation.
 
 Usage

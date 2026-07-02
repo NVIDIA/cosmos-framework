@@ -17,7 +17,6 @@ def pack_supertokens_temporal_causal(
     input_action_tokens: torch.Tensor | None,
     condition_frame_indexes_vision: list[int],
     input_timestep: float | torch.Tensor,
-    curr_rope_id: int,
     latent_patch_size: int,
     temporal_compression_factor: int,
     action_dim: int,
@@ -167,96 +166,95 @@ def pack_supertokens_temporal_causal(
     curr = packed_seq.curr
     total_split_len = 0
 
-    # mRoPE: snapshot offset before this sample, compute IDs
-    if packed_seq._use_mrope:
-        temporal_offset = packed_seq._mrope_temporal_offset
-        effective_vision_fps = vision_fps if enable_fps_modulation else None
+    # Snapshot the offset before this sample and compute mRoPE IDs.
+    temporal_offset = packed_seq._mrope_temporal_offset
+    effective_vision_fps = vision_fps if enable_fps_modulation else None
 
-        # AR generation (single frame OR chunk) is detected by every frame carrying a
-        # real action (``real_actions`` has ``latent_t*tcf`` rows). There, vision AND
-        # action both use start_frame_offset=1 so the last action in each group
-        # co-locates with its vision frame, mirroring whole-clip training; the caller
-        # (pack_input_sequence_autoregressive) seeds temporal_offset one frame-stride
-        # back to compensate. Whole-clip training (frame 0 is the null conditioning
-        # frame, ``real_actions`` has ``(T-1)*tcf`` rows) keeps vision start_frame_offset=0.
-        all_frames_have_real_action = (
-            pack_action_tokens and input_action_tokens is not None and real_actions.shape[0] == latent_t * tcf
-        )
-        vision_sfo = 1 if all_frames_have_real_action else 0
+    # AR generation (single frame OR chunk) is detected by every frame carrying a
+    # real action (``real_actions`` has ``latent_t*tcf`` rows). There, vision AND
+    # action both use start_frame_offset=1 so the last action in each group
+    # co-locates with its vision frame, mirroring whole-clip training; the caller
+    # (pack_input_sequence_autoregressive) seeds temporal_offset one frame-stride
+    # back to compensate. Whole-clip training (frame 0 is the null conditioning
+    # frame, ``real_actions`` has ``(T-1)*tcf`` rows) keeps vision start_frame_offset=0.
+    all_frames_have_real_action = (
+        pack_action_tokens and input_action_tokens is not None and real_actions.shape[0] == latent_t * tcf
+    )
+    vision_sfo = 1 if all_frames_have_real_action else 0
 
-        vision_ids_flat, new_offset = get_3d_mrope_ids_vae_tokens(
-            grid_t=latent_t,
-            grid_h=patch_h,
-            grid_w=patch_w,
-            temporal_offset=temporal_offset,
-            reset_spatial_indices=packed_seq._mrope_reset_spatial,
-            fps=effective_vision_fps,
-            base_fps=base_fps,
-            temporal_compression_factor=tcf,
-            start_frame_offset=vision_sfo,
-        )  # vision_ids_flat: [3,T*patch_h*patch_w]
+    vision_ids_flat, new_offset = get_3d_mrope_ids_vae_tokens(
+        grid_t=latent_t,
+        grid_h=patch_h,
+        grid_w=patch_w,
+        temporal_offset=temporal_offset,
+        reset_spatial_indices=packed_seq._mrope_reset_spatial,
+        fps=effective_vision_fps,
+        base_fps=base_fps,
+        temporal_compression_factor=tcf,
+        start_frame_offset=vision_sfo,
+    )  # vision_ids_flat: [3,T*patch_h*patch_w]
 
-        if pack_action_tokens:
-            effective_action_fps = action_fps if enable_fps_modulation else None
+    if pack_action_tokens:
+        effective_action_fps = action_fps if enable_fps_modulation else None
 
-            # Action IDs. Real action tokens use start_frame_offset=1 so the last
-            # sub-token of a group co-locates with its vision frame. Whole-clip training
-            # has a null action at frame 0 (the conditioning frame); AR units have a real
-            # action for every frame.
-            fps_active = effective_action_fps is not None
-            t_dtype = torch.float32 if fps_active else torch.long
-            t_offset = float(temporal_offset) if fps_active else int(temporal_offset)
-            null_t = torch.full((tcf,), t_offset, dtype=t_dtype)  # [tcf]
-            null_hw = torch.zeros(tcf, dtype=t_dtype)  # [tcf]
-            null_ids = torch.stack([null_t, null_hw, null_hw])  # [3,tcf]
+        # Action IDs. Real action tokens use start_frame_offset=1 so the last
+        # sub-token of a group co-locates with its vision frame. Whole-clip training
+        # has a null action at frame 0 (the conditioning frame); AR units have a real
+        # action for every frame.
+        fps_active = effective_action_fps is not None
+        t_dtype = torch.float32 if fps_active else torch.long
+        t_offset = float(temporal_offset) if fps_active else int(temporal_offset)
+        null_t = torch.full((tcf,), t_offset, dtype=t_dtype)  # [tcf]
+        null_hw = torch.zeros(tcf, dtype=t_dtype)  # [tcf]
+        null_ids = torch.stack([null_t, null_hw, null_hw])  # [3,tcf]
 
-            def _real_action_ids(n_frames: int, start_frame_offset: int) -> torch.Tensor:
-                flat, _ = get_3d_mrope_ids_vae_tokens(
-                    grid_t=n_frames * tcf,
-                    grid_h=1,
-                    grid_w=1,
-                    temporal_offset=temporal_offset,
-                    reset_spatial_indices=packed_seq._mrope_reset_spatial,
-                    fps=effective_action_fps,
-                    base_fps=base_fps,
-                    temporal_compression_factor=1,
-                    base_temporal_compression_factor=tcf,
-                    start_frame_offset=start_frame_offset,
-                )
-                return flat.reshape(3, n_frames, tcf)  # [3,n_frames,tcf]
+        def _real_action_ids(n_frames: int, start_frame_offset: int) -> torch.Tensor:
+            flat, _ = get_3d_mrope_ids_vae_tokens(
+                grid_t=n_frames * tcf,
+                grid_h=1,
+                grid_w=1,
+                temporal_offset=temporal_offset,
+                reset_spatial_indices=packed_seq._mrope_reset_spatial,
+                fps=effective_action_fps,
+                base_fps=base_fps,
+                temporal_compression_factor=1,
+                base_temporal_compression_factor=tcf,
+                start_frame_offset=start_frame_offset,
+            )
+            return flat.reshape(3, n_frames, tcf)  # [3,n_frames,tcf]
 
-            if all_frames_have_real_action:
-                # AR generation (single frame: tcf == 1*tcf, or chunk: latent_t*tcf):
-                # every supertoken carries a real action. start_frame_offset=1 puts
-                # a_{j-1}'s last sub-token on vision frame j -- the whole-clip TF
-                # training layout. The caller seeds temporal_offset (N-1) frame-strides
-                # back to compensate.
-                action_ids_3d = _real_action_ids(latent_t, start_frame_offset=1)  # [3,T,tcf]
-            elif latent_t > 1:
-                # Whole-clip training: supertoken 0 = null (conditioning frame), frames
-                # 1..T-1 = real with start_frame_offset=1. Covers real-action training
-                # (real_actions has (T-1)*tcf rows) and the architectural all-null layout
-                # (input_action_tokens is None); the tokens differ but the IDs match.
-                null_ids_3d = null_ids.reshape(3, 1, tcf)  # [3,1,tcf]
-                real_ids_3d = _real_action_ids(latent_t - 1, start_frame_offset=1)  # [3,T-1,tcf]
-                action_ids_3d = torch.cat([null_ids_3d, real_ids_3d], dim=1)  # [3,T,tcf]
-            else:
-                # AR frame 0 / image2video (latent_t == 1, no action): only null.
-                action_ids_3d = null_ids.reshape(3, 1, tcf)  # [3,1,tcf]
-
-            # (3, T*H*W) → (3, T, H*W)
-            vision_ids_3d = vision_ids_flat.reshape(3, latent_t, patches_per_frame)  # [3,T,patch_h*patch_w]
-
-            # Interleave per frame: (3, T, tcf+H*W) → (3, T*S)
-            interleaved_ids = torch.cat([action_ids_3d, vision_ids_3d], dim=2).reshape(
-                3, latent_t * supertoken_len
-            )  # [3,T*S]
-            packed_seq.position_ids.append(interleaved_ids)
+        if all_frames_have_real_action:
+            # AR generation (single frame: tcf == 1*tcf, or chunk: latent_t*tcf):
+            # every supertoken carries a real action. start_frame_offset=1 puts
+            # a_{j-1}'s last sub-token on vision frame j -- the whole-clip TF
+            # training layout. The caller seeds temporal_offset (N-1) frame-strides
+            # back to compensate.
+            action_ids_3d = _real_action_ids(latent_t, start_frame_offset=1)  # [3,T,tcf]
+        elif latent_t > 1:
+            # Whole-clip training: supertoken 0 = null (conditioning frame), frames
+            # 1..T-1 = real with start_frame_offset=1. Covers real-action training
+            # (real_actions has (T-1)*tcf rows) and the architectural all-null layout
+            # (input_action_tokens is None); the tokens differ but the IDs match.
+            null_ids_3d = null_ids.reshape(3, 1, tcf)  # [3,1,tcf]
+            real_ids_3d = _real_action_ids(latent_t - 1, start_frame_offset=1)  # [3,T-1,tcf]
+            action_ids_3d = torch.cat([null_ids_3d, real_ids_3d], dim=1)  # [3,T,tcf]
         else:
-            # No action tokens: just vision IDs, already in (3, T*H*W) order.
-            packed_seq.position_ids.append(vision_ids_flat)
+            # AR frame 0 / image2video (latent_t == 1, no action): only null.
+            action_ids_3d = null_ids.reshape(3, 1, tcf)  # [3,1,tcf]
 
-        packed_seq._mrope_temporal_offset = new_offset
+        # (3, T*H*W) -> (3, T, H*W)
+        vision_ids_3d = vision_ids_flat.reshape(3, latent_t, patches_per_frame)  # [3,T,patch_h*patch_w]
+
+        # Interleave per frame: (3, T, tcf+H*W) -> (3, T*S)
+        interleaved_ids = torch.cat([action_ids_3d, vision_ids_3d], dim=2).reshape(
+            3, latent_t * supertoken_len
+        )  # [3,T*S]
+        packed_seq.position_ids.append(interleaved_ids)
+    else:
+        # No action tokens: just vision IDs, already in (3, T*H*W) order.
+        packed_seq.position_ids.append(vision_ids_flat)
+
+    packed_seq._mrope_temporal_offset = new_offset
 
     for frame_t in range(latent_t):
         if pack_action_tokens:
@@ -267,17 +265,11 @@ def pack_supertokens_temporal_causal(
             curr += tcf
             total_split_len += tcf
 
-            if not packed_seq._use_mrope:
-                packed_seq.position_ids.extend([curr_rope_id] * tcf)
-
         # Pack vision tokens for this frame
         frame_indexes = list(range(curr, curr + patches_per_frame))
         packed_seq.vision.sequence_indexes.extend(frame_indexes)
         curr += patches_per_frame
         total_split_len += patches_per_frame
-
-        if not packed_seq._use_mrope:
-            packed_seq.position_ids.extend([curr_rope_id] * patches_per_frame)
 
         # Vision MSE loss: supervise non-conditioning frames
         if frame_t not in condition_set_vision:

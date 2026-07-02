@@ -126,4 +126,4 @@ def get_agibot_world_kind(embodiment_type: str) -> AgibotWorldKind:
 def get_agibot_world_urdf_path() -> Path:
     """Return the committed AgiBot G1 omnipicker URDF path."""
 
-    return Path(__file__).resolve().parent / "urdf_visualizer" / AGIBOT_WORLD_URDF_FILENAME
+    return Path(__file__).resolve().parent / "robot_assets" / AGIBOT_WORLD_URDF_FILENAME

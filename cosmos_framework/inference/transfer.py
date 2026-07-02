@@ -29,7 +29,7 @@ from cosmos_framework.utils import log
 from cosmos_framework.data.vfm.sequence_packing import SequencePlan
 from cosmos_framework.model.vfm.omni_mot_model import OmniMoTModel
 from cosmos_framework.model.vfm.utils.data_and_condition import GenerationDataClean
-from cosmos_framework.model.vfm.vlm.qwen3_vl.utils import _SYSTEM_PROMPT_TRANSFER
+from cosmos_framework.model.vfm.reasoner.qwen3_vl.utils import _SYSTEM_PROMPT_TRANSFER
 
 
 @dataclass

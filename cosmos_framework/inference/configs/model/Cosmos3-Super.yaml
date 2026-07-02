@@ -36,10 +36,6 @@ model:
       load_weights_from_pretrained: false
       max_vae_latent_side_after_patchify: 20
       patch_spatial: 2
-      position_embedding_type: unified_3d_mrope
-      rope_h_extrapolation_ratio: 1.0
-      rope_t_extrapolation_ratio: 1.0
-      rope_w_extrapolation_ratio: 1.0
       timestep_range: 1.0
       unified_3d_mrope_reset_spatial_ids: true
       unified_3d_mrope_temporal_modality_margin: 15000

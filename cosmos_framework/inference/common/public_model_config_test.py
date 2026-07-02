@@ -33,14 +33,14 @@ def test_public_model_config_round_trip_removes_internal_metadata():
                 "vae_path": "pretrained/tokenizers/video/wan2pt2/Wan2.2_VAE.pth",
             },
             "vlm_config": {
-                "_type": "cosmos_framework.configs.base.defaults.vlm.VLMConfig",
+                "_type": "cosmos_framework.configs.base.defaults.reasoner.VLMConfig",
                 "model_instance": {
                     "_target_": "cosmos_framework.model.vfm.mot.unified_mot.Qwen3VLTextForCausalLM",
                     "config": {
-                        "_target_": "cosmos_framework.configs.base.defaults.vlm.create_vlm_config",
+                        "_target_": "cosmos_framework.configs.base.defaults.reasoner.create_vlm_config",
                         "base_config": {
                             "_target_": "cosmos_framework.model.vfm.mot.unified_mot.Qwen3VLMoTConfig.from_json_file",
-                            "json_file": "cosmos_framework/model/vfm/vlm/qwen3_vl/configs/Qwen3-VL-32B-Instruct.json",
+                            "json_file": "cosmos_framework/model/vfm/reasoner/qwen3_vl/configs/Qwen3-VL-32B-Instruct.json",
                         },
                     },
                 },

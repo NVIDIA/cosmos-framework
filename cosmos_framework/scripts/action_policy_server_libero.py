@@ -63,7 +63,12 @@ from PIL import Image
 # Action-specific helpers live in the in-tree project tree. Imports stay as
 # `projects.cosmos3.vfm.*` and are auto-rewritten to `cosmos3._src.vfm.*` by the
 # cosmos-framework release script.
+from cosmos_framework.data.vfm.action.action_processing import (
+    ActionProcessingRecord,
+    make_batched_action_processing_fields,
+)
 from cosmos_framework.data.vfm.action.domain_utils import get_domain_id
+from cosmos_framework.data.vfm.action.json_formatter import ActionPromptJsonFormatter
 from cosmos_framework.data.vfm.action.transforms import (
     build_sequence_plan_from_mode,
     find_closest_target_size,
@@ -91,6 +96,11 @@ ResolvedActionNormalization = Literal["meanstd", "minmax", "quantile", "quantile
 
 _DURATION_FPS_TEMPLATE = "The video is {duration:.1f} seconds long and is of {fps:.0f} FPS."
 _RESOLUTION_TEMPLATE = "This video is of {height}x{width} resolution."
+
+# Viewpoint tag for the concat_view (third-person + wrist) eval the LIBERO client runs;
+# matches LIBEROLeRobotDataset's _VIEWPOINT_BY_CAMERA["concat_view"]. Used only when the
+# experiment trains with JSON-structured prompts (format_prompt_as_json=True).
+_LIBERO_JSON_VIEWPOINT = "concat_view"
 
 
 # ---------------------------------------------------------------------------
@@ -431,7 +441,8 @@ class ActionServerArgs(pydantic.BaseModel):
     # ``OmniSetupOverrides`` programmatically in ``build_setup_overrides``.
 
     checkpoint: tyro.conf.OmitArgPrefixes[CheckpointOverrides] = CheckpointOverrides.model_construct()
-    """Checkpoint and config loading configuration."""
+    """Checkpoint and config loading configuration. ``use_ema_weights`` lives here and
+    defaults True at inference (suppressed from CLI) -> evals load net_ema by default."""
 
     output_dir: Path | None = None
     """Output directory for ``OmniInference`` (saved config.yaml, benchmarks).
@@ -468,6 +479,12 @@ class ActionServerArgs(pydantic.BaseModel):
     action_normalization: ActionNormalization = "auto"
     """Action normalization to invert. ``auto`` reads ``action_normalization``
     from the experiment config (default ``minmax`` if unspecified)."""
+
+    # ----- prompt format ------------------------------------------------------
+    format_prompt_as_json: bool | None = None
+    """Serve prompts as structured JSON (matching training ``format_prompt_as_json``).
+    ``None`` reads the flag from the experiment config; set explicitly to override when
+    the eval experiment differs from the checkpoint's training prompt format."""
 
     # ----- debug dumps --------------------------------------------------------
     dump_dir: Path | None = None
@@ -642,9 +659,23 @@ class ActionModelService:
         self.append_resolution_info = _extract_bool_from_config(
             self.experiment_config, "append_resolution_info", default=True
         )
+        # When the experiment trains with format_prompt_as_json=True, the caption is a
+        # structured JSON dict (ActionPromptJsonFormatter) and the legacy string appenders
+        # are skipped. Mirror that at serve time so the prompt format matches training. The
+        # CLI flag overrides the config when the eval experiment differs from the checkpoint.
+        if args.format_prompt_as_json is not None:
+            self.format_prompt_as_json = bool(args.format_prompt_as_json)
+        else:
+            self.format_prompt_as_json = _extract_bool_from_config(
+                self.experiment_config, "format_prompt_as_json", default=False
+            )
+        self._prompt_json_formatter = (
+            ActionPromptJsonFormatter(caption_key="ai_caption") if self.format_prompt_as_json else None
+        )
         log.info(
             f"[action-server] prompt augmentation: "
-            f"append_duration_fps={self.append_duration_fps}, append_resolution_info={self.append_resolution_info}"
+            f"append_duration_fps={self.append_duration_fps}, append_resolution_info={self.append_resolution_info}, "
+            f"format_prompt_as_json={self.format_prompt_as_json}"
         )
 
         # Action denormalization stats.
@@ -804,6 +835,147 @@ class ActionModelService:
     # Predict
     # ------------------------------------------------------------------
 
+    def _input_video_key(self) -> str:
+        input_video_key = getattr(self.model, "input_video_key", None)
+        if input_video_key is None:
+            input_video_key = getattr(self.model, "config", None).input_video_key  # type: ignore[union-attr]
+        return input_video_key
+
+    def _build_json_prompt(self, prompt: str, *, video: torch.Tensor, image_size: torch.Tensor) -> str:
+        """Reproduce the training-time JSON prompt for format_prompt_as_json=True runs.
+
+        Runs the same ``ActionPromptJsonFormatter`` the training pipeline uses (after
+        spatial resize/pad), then ``json.dumps`` the dict exactly as
+        ``TextTokenizerTransform`` does before tokenization. ``idle_frames=0`` matches the
+        modal active-manipulation chunk (the policy should keep moving); ``viewpoint`` and
+        the zero ``action`` (total-frame count) mirror the LIBERO concat_view dataset."""
+        data_dict: dict[str, Any] = {
+            "ai_caption": prompt,
+            "viewpoint": _LIBERO_JSON_VIEWPOINT,
+            "video": video,  # post-pad [C,T,H,W]; formatter reads T for duration
+            "image_size": image_size,  # post-pad [H,W]; formatter reads resolution
+            "conditioning_fps": torch.tensor(self.cfg.fps, dtype=torch.long),
+            "mode": "policy",
+            # Zero action chunk: only its frame count (chunk length) is read, for "<idle> out of <N>".
+            "action": torch.zeros((self.cfg.action_chunk_size, self.cfg.max_action_dim), dtype=torch.float32),
+            "idle_frames": torch.tensor(0, dtype=torch.long),
+        }
+        formatted = self._prompt_json_formatter(data_dict)["ai_caption"]
+        return json.dumps(formatted) if isinstance(formatted, dict) else str(formatted)
+
+    def _prep_policy_item(self, req: dict[str, Any]) -> dict[str, Any]:
+        """Validate one request and build the per-sample model inputs (video pad,
+        prompt augmentation, sequence_plan). Shared by predict_policy (batch=1) and
+        predict_policy_batch (batch=N) so the two paths stay byte-identical per item."""
+        image_b64 = req.get("image")
+        if not isinstance(image_b64, str):
+            raise ValueError("'image' must be a base64 string")
+        prompt = req.get("prompt")
+        if not isinstance(prompt, str):
+            raise ValueError("'prompt' must be a string")
+        domain_name = req.get("domain_name")
+        if not isinstance(domain_name, str):
+            raise ValueError("'domain_name' must be a string")
+        image_size = req.get("image_size")
+        if not isinstance(image_size, int) or image_size <= 0:
+            raise ValueError("'image_size' must be a positive integer")
+
+        img_chw_uint8 = _decode_base64_png_to_rgb_uint8(image_b64)
+        img_h, img_w = img_chw_uint8.shape[-2:]
+        # Multi-view (non-square) images: scale proportionally, matching height to image_size.
+        if img_h != image_size:
+            scale = image_size / img_h
+            new_w = int(round(img_w * scale))
+            hwc = img_chw_uint8.permute(1, 2, 0).cpu().numpy()
+            resized = Image.fromarray(hwc).resize((new_w, image_size), resample=Image.Resampling.BILINEAR)
+            arr = np.asarray(resized, dtype=np.uint8).copy()
+            img_chw_uint8 = torch.from_numpy(arr).permute(2, 0, 1).contiguous()
+
+        t_frames = self.cfg.action_chunk_size + 1
+        _, final_h, final_w = img_chw_uint8.shape
+        video_c_t_h_w_uint8 = img_chw_uint8.unsqueeze(1).repeat(1, t_frames, 1, 1)  # [3,T,H,W]
+        resolution = get_vision_data_resolution((final_h, final_w))
+        target_w, target_h = find_closest_target_size(final_h, final_w, resolution)
+        pad_dict: dict[str, Any] = {"video": video_c_t_h_w_uint8}
+        reflection_pad_to_target(pad_dict, ["video"], True, target_w, target_h)
+        sequence_plan = build_sequence_plan_from_mode(
+            mode="policy",
+            video_length=self.cfg.action_chunk_size + 1,
+            action_length=self.cfg.action_chunk_size,
+            has_text=True,
+        )
+        if self._prompt_json_formatter is not None:
+            augmented_prompt = self._build_json_prompt(
+                prompt, video=pad_dict["video"], image_size=pad_dict["image_size"]
+            )
+        else:
+            augmented_prompt = _augment_prompt_with_metadata(
+                prompt,
+                t_frames=t_frames,
+                fps=self.cfg.fps,
+                height=final_h,
+                width=final_w,
+                append_duration_fps=self.append_duration_fps,
+                append_resolution_info=self.append_resolution_info,
+            )
+        return {
+            "img_chw_uint8": img_chw_uint8,
+            "video_padded": pad_dict["video"],
+            "padded_image_size": pad_dict["image_size"],
+            "augmented_prompt": augmented_prompt,
+            "sequence_plan": sequence_plan,
+            "domain_name": domain_name,
+            "image_size": image_size,
+        }
+
+    def predict_policy_batch(self, reqs: list[dict[str, Any]]) -> dict[str, Any]:
+        """Batched policy inference: N requests -> ONE diffusion forward (batch_size=N)
+        -> N denormalized action chunks. Skips vision decode (the vectorized eval client
+        only needs actions), so it is ~N x faster than N serial /predict calls."""
+        t0 = time.monotonic()
+        if not isinstance(reqs, list) or not reqs:
+            raise ValueError("'items' must be a non-empty list of policy requests")
+        preps = [self._prep_policy_item(r) for r in reqs]
+        n = len(preps)
+        action_t_d = torch.zeros((self.cfg.action_chunk_size, self.cfg.max_action_dim), dtype=torch.float32)
+        input_video_key = self._input_video_key()
+        batch: dict[str, Any] = {
+            input_video_key: [[p["video_padded"]] for p in preps],
+            **make_batched_action_processing_fields(
+                ActionProcessingRecord(raw_action_dim=self.raw_action_dim, action_normalizer=None),
+                batch_size=n,
+            ),
+            "action": [[action_t_d] for _ in preps],
+            "mode": ["policy"] * n,
+            "ai_caption": [p["augmented_prompt"] for p in preps],
+            "prompt": [p["augmented_prompt"] for p in preps],
+            "conditioning_fps": [torch.tensor(self.cfg.fps, dtype=torch.long) for _ in preps],
+            "image_size": torch.stack([p["padded_image_size"] for p in preps]).to(device="cuda"),
+            "domain_id": [torch.tensor(get_domain_id(p["domain_name"]), dtype=torch.long) for p in preps],
+            "sequence_plan": [p["sequence_plan"] for p in preps],
+        }
+        t_inf0 = time.monotonic()
+        with self._lock:
+            with torch.inference_mode():
+                samples = self.model.generate_samples_from_batch(
+                    batch,
+                    guidance=self.cfg.guidance,
+                    seed=[self.cfg.seed] * n,
+                    num_steps=self.cfg.num_steps,
+                    has_negative_prompt=False,
+                )
+        t_inf1 = time.monotonic()
+        actions: list[list[list[float]]] = []
+        for i in range(n):
+            pred = samples["action"][i].float().squeeze(0)  # [T,D]
+            pred = self._denormalize_action(pred)
+            actions.append(pred.detach().cpu().numpy().tolist())
+        log.info(
+            f"[action-server] predict_batch n={n} steps={self.cfg.num_steps} "
+            f"ms_total={(time.monotonic() - t0) * 1000.0:.1f} ms_infer={(t_inf1 - t_inf0) * 1000.0:.1f}"
+        )
+        return {"actions": actions}
+
     def predict_policy(self, req: dict[str, Any]) -> dict[str, Any]:
         """
         Run policy inference: given an observation image and prompt, predict actions.
@@ -835,52 +1007,17 @@ class ActionModelService:
                 self._req_id += 1
                 request_id = int(self._req_id)
 
-        # Validate request
-        image_b64 = req.get("image")
-        if not isinstance(image_b64, str):
-            raise ValueError("'image' must be a base64 string")
-
-        prompt = req.get("prompt")
-        if not isinstance(prompt, str):
-            raise ValueError("'prompt' must be a string")
-
-        domain_name = req.get("domain_name")
-        if not isinstance(domain_name, str):
-            raise ValueError("'domain_name' must be a string")
-
-        image_size = req.get("image_size")
-        if not isinstance(image_size, int) or image_size <= 0:
-            raise ValueError("'image_size' must be a positive integer")
-
-        # Decode image
+        # Per-item preprocessing (validation, decode/resize/pad, prompt, sequence_plan).
         t_decode0 = time.monotonic()
-        img_chw_uint8 = _decode_base64_png_to_rgb_uint8(image_b64)
-        img_h, img_w = img_chw_uint8.shape[-2:]
-
-        # Handle resizing: for multi-view (non-square) images, scale proportionally
-        # to maintain aspect ratio while matching height to image_size
-        if img_h != image_size:
-            # Calculate new width to maintain aspect ratio
-            scale = image_size / img_h
-            new_w = int(round(img_w * scale))
-            hwc = img_chw_uint8.permute(1, 2, 0).cpu().numpy()  # [H,W,3]
-            resized = Image.fromarray(hwc).resize((new_w, image_size), resample=Image.Resampling.BILINEAR)
-            arr = np.asarray(resized, dtype=np.uint8).copy()
-            img_chw_uint8 = torch.from_numpy(arr).permute(2, 0, 1).contiguous()  # [3,H,W]  # [3,H,W]
+        prep = self._prep_policy_item(req)
         t_decode1 = time.monotonic()
-
-        # Construct batch in IterativeJointDataLoader format (list-of-lists for multi-item keys)
-        t_frames = self.cfg.action_chunk_size + 1
-        _, final_h, final_w = img_chw_uint8.shape
-        video_c_t_h_w_uint8 = img_chw_uint8.unsqueeze(1).repeat(1, t_frames, 1, 1)  # [3,T,H,W]
-
-        # Apply reflection padding to match closest predefined resolution
-        resolution = get_vision_data_resolution((final_h, final_w))
-        target_w, target_h = find_closest_target_size(final_h, final_w, resolution)
-        pad_dict: dict[str, Any] = {"video": video_c_t_h_w_uint8}
-        reflection_pad_to_target(pad_dict, ["video"], True, target_w, target_h)
-        video_padded = pad_dict["video"]  # (C, T, target_h, target_w)
-        padded_image_size = pad_dict["image_size"]  # (4,)
+        img_chw_uint8 = prep["img_chw_uint8"]
+        video_padded = prep["video_padded"]
+        padded_image_size = prep["padded_image_size"]
+        augmented_prompt = prep["augmented_prompt"]
+        sequence_plan = prep["sequence_plan"]
+        domain_name = prep["domain_name"]
+        image_size = prep["image_size"]
 
         # Action: zeros tensor as noise starting point for policy mode
         action_t_d = torch.zeros(
@@ -888,30 +1025,17 @@ class ActionModelService:
             dtype=torch.float32,
         )  # [T,action_dim]
 
-        input_video_key = getattr(self.model, "input_video_key", None)
-        if input_video_key is None:
-            input_video_key = getattr(self.model, "config", None).input_video_key  # type: ignore[union-attr]
-
-        sequence_plan = build_sequence_plan_from_mode(
-            mode="policy",
-            video_length=self.cfg.action_chunk_size + 1,
-            action_length=self.cfg.action_chunk_size,
-            has_text=True,
-        )
-
-        augmented_prompt = _augment_prompt_with_metadata(
-            prompt,
-            t_frames=t_frames,
-            fps=self.cfg.fps,
-            height=final_h,
-            width=final_w,
-            append_duration_fps=self.append_duration_fps,
-            append_resolution_info=self.append_resolution_info,
-        )
+        input_video_key = self._input_video_key()
 
         batch: dict[str, Any] = {
             input_video_key: [[video_padded]],
-            "raw_action_dim": [torch.tensor(self.raw_action_dim, dtype=torch.long)],
+            # Provide BOTH raw_action_dim and the action_processing_record the model
+            # needs to externalize (invert) the generated action; building the batch
+            # by hand previously omitted the record -> "cannot be externalized".
+            **make_batched_action_processing_fields(
+                ActionProcessingRecord(raw_action_dim=self.raw_action_dim, action_normalizer=None),
+                batch_size=1,
+            ),
             "action": [[action_t_d]],
             "mode": ["policy"],
             "ai_caption": [augmented_prompt],
@@ -1103,7 +1227,7 @@ class _ActionHandler(BaseHTTPRequestHandler):
             self._send_json(404, {"error": "Not found"})
 
     def do_POST(self) -> None:  # noqa: N802
-        if self.path not in ("/", "/predict"):
+        if self.path not in ("/", "/predict", "/predict_batch"):
             self._send_json(404, {"error": "Not found"})
             return
 
@@ -1147,13 +1271,21 @@ class _ActionHandler(BaseHTTPRequestHandler):
             f"path={self.path} bytes={length}"
         )
 
+        is_batch = self.path == "/predict_batch"
         try:
-            out = service.predict_policy(req)
+            if is_batch:
+                out = service.predict_policy_batch(req.get("items", []))
+            else:
+                out = service.predict_policy(req)
         except Exception as e:
             err = str(e)
             traceback.print_exc()
 
-            payload = {"action": [], "error": err, "request_id": req.get("request_id")}
+            payload = (
+                {"actions": [], "error": err}
+                if is_batch
+                else {"action": [], "error": err, "request_id": req.get("request_id")}
+            )
             log.error(f"[action-server] request_id={req.get('request_id')} ERROR: {err}")
 
             # Dump failed request for offline debugging if enabled.

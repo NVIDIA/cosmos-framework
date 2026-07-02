@@ -12,6 +12,7 @@ wrapper composes the two so the experiment can hand a single map-style dataset
 to ``RankPartitionedDataLoader`` (mirroring how the vision recipe uses
 ``get_sft_dataset``).
 """
+
 from __future__ import annotations
 
 from typing import Any
@@ -19,6 +20,7 @@ from typing import Any
 from torch.utils.data import Dataset, IterableDataset, get_worker_info
 
 from cosmos_framework.data.vfm.action.datasets.droid_lerobot_dataset import DROIDLeRobotDataset
+from cosmos_framework.data.vfm.action.datasets.libero_lerobot_dataset import LIBEROLeRobotDataset
 from cosmos_framework.data.vfm.action.transforms import ActionTransformPipeline
 
 
@@ -40,7 +42,6 @@ class ActionSFTDataset(Dataset):
     def get_shuffle_blocks(self):
         """Delegate to the inner DROIDLeRobotDataset (per-episode/segment flat-index blocks)."""
         return self._dataset.get_shuffle_blocks()
-
 
 
 class ActionIterableShuffleDataset(IterableDataset):
@@ -134,6 +135,77 @@ def get_action_droid_sft_dataset(
         append_duration_fps_timestamps=append_duration_fps_timestamps,
         append_resolution_info=append_resolution_info,
         append_idle_frames=append_idle_frames,
+    )
+    sft = ActionSFTDataset(dataset, transform, resolution)
+    if iterable_shuffle:
+        return ActionIterableShuffleDataset(sft, seed=episode_shuffle_seed)
+    return sft
+
+
+def get_action_libero_sft_dataset(
+    *,
+    root: str,
+    fps: float = 20.0,
+    chunk_length: int = 16,
+    image_size: int = 256,
+    mode: str = "policy",
+    camera_mode: str = "concat_view",
+    action_space: str = "frame_wise_relative",
+    rotation_space: str = "6d",
+    pose_coordinate_frame: str = "native",
+    action_normalization: str | None = "quantile_rot",
+    action_stats_path: str | None = None,
+    split: str = "train",
+    val_ratio: float = 0.01,
+    seed: int = 0,
+    resolution: str | int | None = None,
+    max_action_dim: int = 64,
+    tokenizer_config: dict | None = None,
+    cfg_dropout_rate: float = 0.1,
+    append_viewpoint_info: bool = True,
+    append_duration_fps_timestamps: bool = True,
+    append_resolution_info: bool = True,
+    append_idle_frames: bool = True,
+    format_prompt_as_json: bool = False,
+    iterable_shuffle: bool = False,
+    episode_shuffle_seed: int = 42,
+) -> Dataset:
+    """Build the LIBERO action-policy SFT dataset (GA reproduction defaults).
+
+    Feeds ``LIBEROLeRobotDataset`` (frame-wise-relative rot6d actions,
+    ``quantile_rot``-normalized, concat_view third-person + wrist at 256x256 each
+    → 256x512) through ``ActionTransformPipeline``. ``root`` is a LOCAL LeRobot dir
+    (read parquet + video directly); pre-sync the HF dataset once, e.g.
+    ``hf download lerobot/libero_10 --repo-type dataset --local-dir <root>``. Point
+    ``root`` at libero_10 alone. The
+    dataset is FPS-agnostic (decodes at real frame timestamps); ``fps`` is metadata
+    for ``conditioning_fps`` / prompt duration.
+    """
+    dataset = LIBEROLeRobotDataset(
+        root=root,
+        image_size=image_size,
+        chunk_length=chunk_length,
+        fps=fps,
+        mode=mode,
+        split=split,
+        val_ratio=val_ratio,
+        seed=seed,
+        camera_mode=camera_mode,
+        action_space=action_space,
+        rotation_space=rotation_space,
+        pose_coordinate_frame=pose_coordinate_frame,
+        action_normalization=action_normalization,
+        action_stats_path=action_stats_path,
+    )
+    transform = ActionTransformPipeline(
+        tokenizer_config=tokenizer_config,
+        cfg_dropout_rate=cfg_dropout_rate,
+        max_action_dim=max_action_dim,
+        append_viewpoint_info=append_viewpoint_info,
+        append_duration_fps_timestamps=append_duration_fps_timestamps,
+        append_resolution_info=append_resolution_info,
+        append_idle_frames=append_idle_frames,
+        format_prompt_as_json=format_prompt_as_json,
     )
     sft = ActionSFTDataset(dataset, transform, resolution)
     if iterable_shuffle:

@@ -38,6 +38,7 @@ from cosmos_framework.model.tokenizer.utils.hf import (
     prepare_nemotron_tokenizer_snapshot,
     resolve_hf_snapshot_path,
 )
+from cosmos_framework.model.tokenizer.utils.vlm_prompt_format import densevl_add_vision_id_text
 
 QWEN3_PAD_TOKEN_ID = 151643
 QWEN3_IM_START_TOKEN_ID = 151644
@@ -57,6 +58,34 @@ NEMOTRON_2B_IM_END_TOKEN = "<|im_end|>"
 NEMOTRON_2B_THINK_START_TOKEN = "<think>"
 NEMOTRON_2B_THINK_END_TOKEN = "</think>"
 TEXT_DECODER_ATTN_IMPLEMENTATION_ENV = "TOKENIZER_TEXT_DECODER_ATTN_IMPLEMENTATION"
+VQA_THINKING_MODE_OFF = "off"
+VQA_THINKING_MODE_ON = "on"
+VQA_THINKING_MODE_RAW = "raw"
+VQA_THINKING_MODES = frozenset({VQA_THINKING_MODE_OFF, VQA_THINKING_MODE_ON, VQA_THINKING_MODE_RAW})
+VQA_REASONING_SUFFIX = (
+    "\nAnswer the question using the following format:\n\n"
+    "<think>\nYour reasoning.\n</think>\n\n"
+    "Write your final answer immediately after the </think> tag."
+)
+
+
+def normalize_vqa_thinking_mode(thinking_mode: str | None) -> str:
+    """Normalize the VQA generation thinking-mode knob."""
+    normalized = VQA_THINKING_MODE_OFF if thinking_mode is None else str(thinking_mode).strip().lower()
+    if normalized not in VQA_THINKING_MODES:
+        raise ValueError(
+            f"Unsupported VQA thinking_mode={thinking_mode!r}; expected one of {sorted(VQA_THINKING_MODES)}."
+        )
+    return normalized
+
+
+def _append_vqa_reasoning_suffix(question: str, reasoning_suffix: str) -> str:
+    """Append the training-compatible reasoning-format suffix once."""
+    if not reasoning_suffix:
+        return question
+    if reasoning_suffix.strip() in question:
+        return question
+    return f"{question.rstrip()}{reasoning_suffix}"
 
 
 @dataclass(frozen=True)
@@ -744,87 +773,89 @@ class TextDecoderWrapper(nn.Module):
         num_image_tokens: int,
     ) -> tuple[list[int], int]:
         """Build one multimodal user turn and return the image-pad start offset."""
+        user_turn, image_pad_offsets = self._build_vqa_user_turn_with_visual_blocks(
+            tokenizer=tokenizer,
+            question=question,
+            image_token_counts_by_visual=[int(num_image_tokens)],
+        )
+        return user_turn, image_pad_offsets[0]
+
+    def _build_vqa_user_turn_with_visual_blocks(
+        self,
+        tokenizer: Any,
+        question: str,
+        image_token_counts_by_visual: list[int],
+    ) -> tuple[list[int], list[int]]:
+        """Build one multimodal user turn and return image-pad offsets per visual."""
+        if not image_token_counts_by_visual:
+            raise ValueError("VQA prompt construction requires at least one visual token block.")
+        if any(int(token_count) <= 0 for token_count in image_token_counts_by_visual):
+            raise ValueError(f"Visual token counts must be positive, got {image_token_counts_by_visual!r}.")
 
         def _encode(text: str) -> list[int]:
             return tokenizer.encode(text, add_special_tokens=False)
 
         image_placeholder = "<image>"
-        normalized_question = _keep_only_first_image_placeholder(str(question).strip(), image_placeholder)
-        if self.spec.family == QWEN3_SPEC.family:
-            user_prefix = [QWEN3_IM_START_TOKEN_ID] + _encode("user\n")
-
-            if image_placeholder in normalized_question:
-                placeholder_index = normalized_question.find(image_placeholder)
-                before_text = normalized_question[:placeholder_index]
-                after_text = normalized_question[placeholder_index + len(image_placeholder) :]
-                before_ids = _encode(before_text)
-                after_ids = _encode(after_text)
-                image_pad_offset = len(user_prefix) + len(before_ids) + 1
-                user_turn = (
-                    user_prefix
-                    + before_ids
-                    + [QWEN3_VISION_START_TOKEN_ID]
-                    + [QWEN3_VISION_PAD_TOKEN_ID] * num_image_tokens
-                    + [QWEN3_VISION_END_TOKEN_ID]
-                    + after_ids
-                    + [QWEN3_IM_END_TOKEN_ID]
-                    + _encode("\n")
+        num_visuals = len(image_token_counts_by_visual)
+        normalized_question = str(question).strip()
+        if num_visuals == 1:
+            normalized_question = _keep_only_first_image_placeholder(normalized_question, image_placeholder)
+        else:
+            placeholder_count = normalized_question.count(image_placeholder)
+            if placeholder_count == 0:
+                visual_placeholders = "\n".join(image_placeholder for _ in image_token_counts_by_visual)
+                normalized_question = f"{visual_placeholders}\n{normalized_question}".strip()
+            elif placeholder_count != num_visuals:
+                raise ValueError(
+                    f"VQA prompt has {placeholder_count} image placeholders for {num_visuals} visual inputs."
                 )
-                return user_turn, image_pad_offset
 
-            image_pad_offset = len(user_prefix) + 1
-            user_turn = (
-                user_prefix
-                + [QWEN3_VISION_START_TOKEN_ID]
-                + [QWEN3_VISION_PAD_TOKEN_ID] * num_image_tokens
-                + [QWEN3_VISION_END_TOKEN_ID]
-                + _encode("\n")
-                + _encode(normalized_question)
-                + [QWEN3_IM_END_TOKEN_ID]
-                + _encode("\n")
-            )
-            return user_turn, image_pad_offset
-
-        if self.spec.family == NEMOTRON_2B_SPEC.family:
+        if self.spec.family == QWEN3_SPEC.family:
+            im_start_id = QWEN3_IM_START_TOKEN_ID
+            im_end_id = QWEN3_IM_END_TOKEN_ID
+            vision_start_id = QWEN3_VISION_START_TOKEN_ID
+            vision_pad_id = QWEN3_VISION_PAD_TOKEN_ID
+            vision_end_id = QWEN3_VISION_END_TOKEN_ID
+        elif self.spec.family == NEMOTRON_2B_SPEC.family:
             im_start_id = _get_required_token_id(tokenizer, NEMOTRON_2B_IM_START_TOKEN)
             im_end_id = _get_required_token_id(tokenizer, NEMOTRON_2B_IM_END_TOKEN)
-            user_prefix = [im_start_id] + _encode("user\n")
-
-            if image_placeholder in normalized_question:
-                placeholder_index = normalized_question.find(image_placeholder)
-                before_text = normalized_question[:placeholder_index]
-                after_text = normalized_question[placeholder_index + len(image_placeholder) :]
-                before_ids = _encode(before_text)
-                after_ids = _encode(after_text)
-                image_pad_offset = len(user_prefix) + len(before_ids) + 1
-                user_turn = (
-                    user_prefix
-                    + before_ids
-                    + [self.spec.vision_start_token_id]
-                    + [self.spec.vision_pad_token_id] * num_image_tokens
-                    + [self.spec.vision_end_token_id]
-                    + after_ids
-                    + [im_end_id]
-                    + _encode("\n")
-                )
-                return user_turn, image_pad_offset
-
-            image_pad_offset = len(user_prefix) + 1
-            user_turn = (
-                user_prefix
-                + [self.spec.vision_start_token_id]
-                + [self.spec.vision_pad_token_id] * num_image_tokens
-                + [self.spec.vision_end_token_id]
-                + _encode("\n")
-                + _encode(normalized_question)
-                + [im_end_id]
-                + _encode("\n")
+            vision_start_id = self.spec.vision_start_token_id
+            vision_pad_id = self.spec.vision_pad_token_id
+            vision_end_id = self.spec.vision_end_token_id
+        else:
+            raise NotImplementedError(
+                f"VQA prompt construction is not implemented for text decoder family {self.spec.family!r}."
             )
-            return user_turn, image_pad_offset
 
-        raise NotImplementedError(
-            f"VQA prompt construction is not implemented for text decoder family {self.spec.family!r}."
-        )
+        user_turn = [im_start_id] + _encode("user\n")
+        image_pad_offsets: list[int] = []
+        remaining_text = normalized_question
+        visual_index = 0
+        while image_placeholder in remaining_text:
+            placeholder_index = remaining_text.find(image_placeholder)
+            before_text = remaining_text[:placeholder_index]
+            remaining_text = remaining_text[placeholder_index + len(image_placeholder) :]
+            user_turn.extend(_encode(before_text))
+            if num_visuals > 1:
+                user_turn.extend(_encode(densevl_add_vision_id_text("image", visual_index + 1)))
+            image_pad_offsets.append(len(user_turn) + 1)
+            user_turn.extend([vision_start_id])
+            user_turn.extend([vision_pad_id] * int(image_token_counts_by_visual[visual_index]))
+            user_turn.extend([vision_end_id])
+            visual_index += 1
+        if image_pad_offsets:
+            user_turn.extend(_encode(remaining_text))
+        else:
+            image_pad_offsets.append(len(user_turn) + 1)
+            user_turn.extend([vision_start_id])
+            user_turn.extend([vision_pad_id] * int(image_token_counts_by_visual[0]))
+            user_turn.extend([vision_end_id])
+            user_turn.extend(_encode("\n"))
+            user_turn.extend(_encode(normalized_question))
+
+        user_turn.extend([im_end_id])
+        user_turn.extend(_encode("\n"))
+        return user_turn, image_pad_offsets
 
     def forward(
         self,
@@ -1056,13 +1087,18 @@ class TextDecoderWrapper(nn.Module):
         tokenizer: Any,
         max_new_tokens: int,
         eos_token_ids: tuple[int, ...],
+        skip_special_tokens: bool = True,
+        decode_prefix_ids: list[int] | None = None,
     ) -> tuple[str, dict[str, bool | int]]:
         """Decode generated token IDs and expose basic generation metadata."""
-        generated_only = generated_ids[0, input_len:]
+        generated_only = generated_ids[0, input_len:]  # [T_gen]
         generated_token_count = int(generated_only.shape[0])
         finished_with_eos = generated_token_count > 0 and int(generated_only[-1].item()) in eos_token_ids
         truncated = generated_token_count >= max_new_tokens and not finished_with_eos
-        text = tokenizer.decode(generated_only, skip_special_tokens=True)
+        decode_ids: torch.Tensor | list[int] = generated_only
+        if decode_prefix_ids is not None:
+            decode_ids = list(decode_prefix_ids) + generated_only.tolist()
+        text = tokenizer.decode(decode_ids, skip_special_tokens=skip_special_tokens)
         metadata: dict[str, bool | int] = {
             "generated_tokens": generated_token_count,
             "finished_with_eos": finished_with_eos,
@@ -1079,8 +1115,10 @@ class TextDecoderWrapper(nn.Module):
         do_sample: bool,
         temperature: float,
         eos_token_ids: tuple[int, ...],
+        suppress_token_ids: tuple[int, ...] | None = None,
     ) -> torch.Tensor:
         """Autoregressively generate from a caller-provided embedding prefix."""
+        resolved_suppress_token_ids = self.spec.suppress_token_ids if suppress_token_ids is None else suppress_token_ids
         if self.spec.supports_inputs_embeds_generate:
             eos_token_id: int | list[int] = eos_token_ids[0] if len(eos_token_ids) == 1 else list(eos_token_ids)
             generate_kwargs = dict(
@@ -1092,8 +1130,8 @@ class TextDecoderWrapper(nn.Module):
                 pad_token_id=self.spec.pad_token_id,
                 eos_token_id=eos_token_id,
             )
-            if self.spec.suppress_token_ids:
-                generate_kwargs["suppress_tokens"] = list(self.spec.suppress_token_ids)
+            if resolved_suppress_token_ids:
+                generate_kwargs["suppress_tokens"] = list(resolved_suppress_token_ids)
             if do_sample:
                 generate_kwargs["temperature"] = temperature
                 generate_kwargs["top_p"] = 0.8
@@ -1128,7 +1166,7 @@ class TextDecoderWrapper(nn.Module):
                 temperature=temperature,
                 top_p=0.8 if do_sample else 1.0,
                 top_k=20 if do_sample else 0,
-                suppress_token_ids=self.spec.suppress_token_ids,
+                suppress_token_ids=resolved_suppress_token_ids,
             )
             generated_tokens.append(next_token.unsqueeze(1))
 
@@ -1250,13 +1288,17 @@ class TextDecoderWrapper(nn.Module):
         max_new_tokens: int = 512,
         do_sample: bool = True,
         temperature: float = 0.7,
+        image_token_counts_by_visual: list[int] | None = None,
+        thinking_mode: str = VQA_THINKING_MODE_OFF,
+        reasoning_suffix: str = VQA_REASONING_SUFFIX,
+        decode_skip_special_tokens: bool | None = None,
         return_metadata: bool = False,
     ) -> str | tuple[str, dict[str, bool | int]]:
         """Generate an answer to a question about an image.
 
         Qwen3 uses its native chat template. Nemotron uses its own native
-        chat template with ``<|im_start|>``, ``<|im_end|>``, and the
-        ``</think>\n`` no-thinking prefix.
+        chat template with ``<|im_start|>``, ``<|im_end|>``, and an empty
+        ``<think></think>`` no-thinking prefix.
 
         Args:
             image_feats_tensor: [N, encoder_dim] features for ONE image.
@@ -1265,11 +1307,30 @@ class TextDecoderWrapper(nn.Module):
             max_new_tokens: Maximum tokens to generate.
             do_sample: Whether to sample.
             temperature: Sampling temperature if do_sample=True.
+            image_token_counts_by_visual: Merged visual-token counts for each visual block.
+            thinking_mode: ``off`` forces direct-answer mode, ``on`` requests a
+                visible thinking block, and ``raw`` leaves the assistant turn unconstrained.
+            reasoning_suffix: User-turn suffix appended in Qwen ``on`` mode. Nemotron
+                follows Dense VL generation and uses only the assistant think prefix.
+            decode_skip_special_tokens: Whether tokenizer special tokens are hidden
+                in the returned answer text. When unset, ``off`` keeps the
+                legacy skip-special decode and ``on``/``raw`` preserve tags for
+                answer postprocessing.
             return_metadata: Whether to also return generation metadata.
 
         Returns:
             Generated answer string, or ``(answer, metadata)`` when requested.
         """
+        resolved_thinking_mode = normalize_vqa_thinking_mode(thinking_mode)
+        resolved_decode_skip_special_tokens = (
+            resolved_thinking_mode == VQA_THINKING_MODE_OFF
+            if decode_skip_special_tokens is None
+            else bool(decode_skip_special_tokens)
+        )
+        prompt_question = question
+        if resolved_thinking_mode == VQA_THINKING_MODE_ON and self.spec.family != NEMOTRON_2B_SPEC.family:
+            prompt_question = _append_vqa_reasoning_suffix(question, reasoning_suffix)
+
         # Spatial merge + position embeddings (same as generate_caption)
         if self.spatial_merger is not None:
             image_features, coords, _ = self.spatial_merger(image_feats_tensor, image_coords)
@@ -1287,14 +1348,24 @@ class TextDecoderWrapper(nn.Module):
         image_features = self.image_pos_embed(image_features, coords_2d)
 
         num_image_tokens = len(image_features)
+        if image_token_counts_by_visual is None:
+            visual_token_counts = [num_image_tokens]
+        else:
+            visual_token_counts = [int(token_count) for token_count in image_token_counts_by_visual]
+            if sum(visual_token_counts) != num_image_tokens:
+                raise ValueError(
+                    f"Visual token counts {visual_token_counts!r} do not sum to merged feature count "
+                    f"{num_image_tokens}."
+                )
         device = image_features.device
 
         # Lazy-load tokenizer
         tok = self._ensure_caption_tokenizer()
 
-        def _encode(s):
+        def _encode(s: str) -> list[int]:
             return tok.encode(s, add_special_tokens=False)
 
+        answer_decode_prefix_ids: list[int] | None = None
         if self.spec.family == QWEN3_SPEC.family:
             system_turn = (
                 [QWEN3_IM_START_TOKEN_ID]
@@ -1302,26 +1373,34 @@ class TextDecoderWrapper(nn.Module):
                 + [QWEN3_IM_END_TOKEN_ID]
                 + _encode("\n")
             )
-            user_turn, user_image_pad_offset = self._build_vqa_user_turn(
+            user_turn, user_image_pad_offsets = self._build_vqa_user_turn_with_visual_blocks(
                 tokenizer=tok,
-                question=question,
-                num_image_tokens=num_image_tokens,
+                question=prompt_question,
+                image_token_counts_by_visual=visual_token_counts,
             )
-            # Empty think block signals Qwen3 non-thinking mode
-            no_think = [QWEN3_THINK_START_TOKEN_ID] + _encode("\n\n") + [QWEN3_THINK_END_TOKEN_ID] + _encode("\n\n")
-            asst_prefix = [QWEN3_IM_START_TOKEN_ID] + _encode("assistant\n") + no_think
+            asst_prefix = [QWEN3_IM_START_TOKEN_ID] + _encode("assistant\n")
+            if resolved_thinking_mode == VQA_THINKING_MODE_OFF:
+                # Empty think block signals Qwen3 non-thinking mode.
+                no_think = [QWEN3_THINK_START_TOKEN_ID] + _encode("\n\n") + [QWEN3_THINK_END_TOKEN_ID] + _encode("\n\n")
+                asst_prefix += no_think
             eos_token_ids = self._get_eos_token_ids()
         elif self.spec.family == NEMOTRON_2B_SPEC.family:
             im_start_id = _get_required_token_id(tok, NEMOTRON_2B_IM_START_TOKEN)
             im_end_id = _get_required_token_id(tok, NEMOTRON_2B_IM_END_TOKEN)
+            think_id = _get_required_token_id(tok, NEMOTRON_2B_THINK_START_TOKEN)
             end_think_id = _get_required_token_id(tok, NEMOTRON_2B_THINK_END_TOKEN)
             system_turn = [im_start_id] + _encode("system\nYou are a helpful assistant.") + [im_end_id] + _encode("\n")
-            user_turn, user_image_pad_offset = self._build_vqa_user_turn(
+            user_turn, user_image_pad_offsets = self._build_vqa_user_turn_with_visual_blocks(
                 tokenizer=tok,
-                question=question,
-                num_image_tokens=num_image_tokens,
+                question=prompt_question,
+                image_token_counts_by_visual=visual_token_counts,
             )
-            asst_prefix = [im_start_id] + _encode("assistant\n") + [end_think_id] + _encode("\n")
+            asst_prefix = [im_start_id] + _encode("assistant\n")
+            if resolved_thinking_mode == VQA_THINKING_MODE_OFF:
+                asst_prefix += [think_id, end_think_id]
+            elif resolved_thinking_mode == VQA_THINKING_MODE_ON:
+                answer_decode_prefix_ids = [think_id] + _encode("\n")
+                asst_prefix += answer_decode_prefix_ids
             eos_token_ids = self._get_eos_token_ids()
         else:
             raise NotImplementedError(
@@ -1336,9 +1415,15 @@ class TextDecoderWrapper(nn.Module):
         vision_mask = (input_ids != self.spec.vision_pad_token_id).to(dtype=text_embeds.dtype)
         text_embeds = text_embeds * vision_mask[:, :, None]
 
-        # Image features start inside the multimodal user turn at the first image_pad token.
-        ip_start = len(system_turn) + user_image_pad_offset
-        text_embeds[0, ip_start : ip_start + num_image_tokens] = image_features.to(text_embeds.dtype)
+        # Image features start inside each multimodal user-turn image_pad block.
+        feature_start = 0
+        for user_image_pad_offset, visual_token_count in zip(user_image_pad_offsets, visual_token_counts, strict=True):
+            ip_start = len(system_turn) + user_image_pad_offset
+            feature_end = feature_start + visual_token_count
+            text_embeds[0, ip_start : ip_start + visual_token_count] = image_features[feature_start:feature_end].to(
+                text_embeds.dtype
+            )
+            feature_start = feature_end
 
         # Generate
         # Qwen3 best practice: do NOT use greedy decoding — causes repetitions.
@@ -1351,6 +1436,9 @@ class TextDecoderWrapper(nn.Module):
             text_embeds=text_embeds,
             temperature=temperature,
             eos_token_ids=eos_token_ids,
+            suppress_token_ids=(
+                self.spec.suppress_token_ids if resolved_thinking_mode == VQA_THINKING_MODE_OFF else ()
+            ),
         )
 
         answer, metadata = self._decode_generation_result(
@@ -1359,6 +1447,8 @@ class TextDecoderWrapper(nn.Module):
             tokenizer=tok,
             max_new_tokens=max_new_tokens,
             eos_token_ids=eos_token_ids,
+            skip_special_tokens=resolved_decode_skip_special_tokens,
+            decode_prefix_ids=answer_decode_prefix_ids,
         )
         if return_metadata:
             return answer, metadata

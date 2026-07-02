@@ -442,6 +442,20 @@ try:
     import cosmos_framework.model.vfm  # noqa: F401
 
     CONFIG_REPLACEMENTS_INVERSE = [
+        # vlm → reasoner (upstream rename in i4). MUST precede the general vfm rules
+        # so the specific vlm→reasoner subtree isn't shadowed by them.
+        (r"(?<!/)\bcosmos3/_src/vfm/configs/base/defaults/vlm/", r"cosmos_framework/configs/base/defaults/reasoner/"),
+        (r"(?<!/)\bcosmos3/_src/vfm/configs/base/vlm/", r"cosmos_framework/configs/base/reasoner/"),
+        (r"(?<!/)\bcosmos3/_src/vfm/models/vlm/", r"cosmos_framework/model/vfm/reasoner/"),
+        (r"(?<!/)\bcosmos3/_src/vfm/datasets/vlm/", r"cosmos_framework/data/vfm/reasoner/"),
+        (r"(?<!/)\bcosmos3/_src/vfm/datasets/augmentors/vlm/", r"cosmos_framework/data/vfm/augmentors/reasoner/"),
+        (r"(?<!/)\bcosmos3/_src/vfm/utils/vlm/", r"cosmos_framework/utils/vfm/reasoner/"),
+        (r"(?<!\.)\bcosmos3\._src\.vfm\.configs\.base\.defaults\.vlm\.", r"cosmos_framework.configs.base.defaults.reasoner."),
+        (r"(?<!\.)\bcosmos3\._src\.vfm\.configs\.base\.vlm\.", r"cosmos_framework.configs.base.reasoner."),
+        (r"(?<!\.)\bcosmos3\._src\.vfm\.models\.vlm\.", r"cosmos_framework.model.vfm.reasoner."),
+        (r"(?<!\.)\bcosmos3\._src\.vfm\.datasets\.vlm\.", r"cosmos_framework.data.vfm.reasoner."),
+        (r"(?<!\.)\bcosmos3\._src\.vfm\.datasets\.augmentors\.vlm\.", r"cosmos_framework.data.vfm.augmentors.reasoner."),
+        (r"(?<!\.)\bcosmos3\._src\.vfm\.utils\.vlm\.", r"cosmos_framework.utils.vfm.reasoner."),
         # File-path entries first (longer-match wins so vfm-prefixed names
         # don't get short-circuited by the bare imaginaire rule).
         (r"(?<!/)\bcosmos3/_src/vfm/configs/base/", r"cosmos_framework/configs/base/"),

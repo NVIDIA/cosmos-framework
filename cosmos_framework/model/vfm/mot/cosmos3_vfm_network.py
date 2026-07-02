@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: OpenMDW-1.1
 
 import math
-from typing import List, Optional, Tuple
+from typing import List, Tuple
 
 import torch
 from torch import nn
@@ -15,11 +15,7 @@ from cosmos_framework.model.vfm.mot.context_parallel_utils import (
     get_context_parallel_sharded_sequence,
 )
 from cosmos_framework.model.vfm.mot.domain_aware_linear import DomainAwareLinear
-from cosmos_framework.model.vfm.mot.modeling_utils import (
-    FlattenedSinCosPositionEmbedding,
-    TimestepEmbedder,
-    VideoRopePosition3DEmb,
-)
+from cosmos_framework.model.vfm.mot.modeling_utils import TimestepEmbedder
 from cosmos_framework.model.vfm.utils.memory import MemoryState
 from cosmos_framework.data.vfm.sequence_packing import ModalityData, PackedSequence
 from cosmos_framework.data.vfm.sequence_packing.natten import verify_natten_parameter_list
@@ -35,13 +31,9 @@ class Cosmos3VFMNetworkConfig(PretrainedConfig):
         latent_patch_size=2,
         latent_downsample_factor=8,
         latent_channel_size=16,
-        position_embedding_type="3d_rope",
         max_latent_h=32,
         max_latent_w=32,
         max_latent_t=32,
-        rope_h_extrapolation_ratio=1.0,
-        rope_w_extrapolation_ratio=1.0,
-        rope_t_extrapolation_ratio=1.0,
         enable_fps_modulation=False,
         base_fps=24,
         vit_max_num_patch_per_side=70,
@@ -69,13 +61,9 @@ class Cosmos3VFMNetworkConfig(PretrainedConfig):
         self.latent_patch_size = latent_patch_size
         self.latent_downsample_factor = latent_downsample_factor
         self.latent_channel_size = latent_channel_size
-        self.position_embedding_type = position_embedding_type
         self.max_latent_h = max_latent_h
         self.max_latent_w = max_latent_w
         self.max_latent_t = max_latent_t
-        self.rope_h_extrapolation_ratio = rope_h_extrapolation_ratio
-        self.rope_w_extrapolation_ratio = rope_w_extrapolation_ratio
-        self.rope_t_extrapolation_ratio = rope_t_extrapolation_ratio
         self.enable_fps_modulation = enable_fps_modulation
         self.base_fps = base_fps
         self.vit_max_num_patch_per_side = vit_max_num_patch_per_side
@@ -160,56 +148,11 @@ class Cosmos3VFMNetwork(PreTrainedModel):
             self.vae2llm = nn.Linear(self.patch_latent_dim, self.hidden_size)
             self.llm2vae = nn.Linear(self.hidden_size, self.patch_latent_dim)
 
-            assert config.position_embedding_type in ["3d_rope", "flattened_sin_cos", "unified_3d_mrope"]
-            if config.position_embedding_type == "3d_rope":
-                self.latent_pos_embed = VideoRopePosition3DEmb(
-                    head_dim=self.hidden_size,
-                    len_h=self.max_latent_h,
-                    len_w=self.max_latent_w,
-                    len_t=self.max_latent_t,
-                    h_extrapolation_ratio=config.rope_h_extrapolation_ratio,
-                    w_extrapolation_ratio=config.rope_w_extrapolation_ratio,
-                    t_extrapolation_ratio=config.rope_t_extrapolation_ratio,
-                    enable_fps_modulation=config.enable_fps_modulation,  # fps_modulation scales RoPE by fps. By default, disable FPS RoPE modulation.
-                    base_fps=config.base_fps,
-                    base_temporal_compression_factor=config.temporal_compression_factor_vision,
-                    temporal_compression_factor=config.temporal_compression_factor_vision,
-                )
-            elif config.position_embedding_type == "flattened_sin_cos":
-                self.latent_pos_embed = FlattenedSinCosPositionEmbedding(
-                    max_latent_h=self.max_latent_h, max_latent_w=self.max_latent_w, hidden_size=self.hidden_size
-                )
-            elif config.position_embedding_type == "unified_3d_mrope":
-                # No additive position embedding - position info is in 3D position IDs for attention
-                self.latent_pos_embed = None
-            else:
-                raise ValueError(f"Unknown position_embedding_type: {config.position_embedding_type!r}")
-
         if config.action_gen:
             self.action_dim = config.action_dim
             self.num_embodiment_domains = config.num_embodiment_domains
             self.action2llm = DomainAwareLinear(self.action_dim, self.hidden_size, self.num_embodiment_domains)
             self.llm2action = DomainAwareLinear(self.hidden_size, self.action_dim, self.num_embodiment_domains)
-
-            if config.position_embedding_type == "3d_rope":
-                self.action_pos_embed = VideoRopePosition3DEmb(
-                    head_dim=self.hidden_size,
-                    len_h=1,
-                    len_w=1,
-                    len_t=self.max_latent_t * config.temporal_compression_factor_vision,
-                    h_extrapolation_ratio=config.rope_h_extrapolation_ratio,
-                    w_extrapolation_ratio=config.rope_w_extrapolation_ratio,
-                    t_extrapolation_ratio=config.rope_t_extrapolation_ratio,
-                    enable_fps_modulation=config.enable_fps_modulation,
-                    base_fps=config.base_fps,
-                    base_temporal_compression_factor=config.temporal_compression_factor_vision,  # vision compression factor is used for base tps
-                    temporal_compression_factor=config.temporal_compression_factor_action,  # Action is at frame rate (no temporal compression)
-                )
-            elif config.position_embedding_type == "unified_3d_mrope":
-                # No additive position embedding - position info is in 3D position IDs for attention
-                self.action_pos_embed = None
-            else:
-                raise ValueError(f"Unknown position_embedding_type: {config.position_embedding_type!r}")
 
             self.action_modality_embed = nn.Parameter(torch.zeros(self.hidden_size))
 
@@ -235,9 +178,6 @@ class Cosmos3VFMNetwork(PreTrainedModel):
             torch.nn.init.trunc_normal_(self.llm2vae.weight, std=std, a=-3 * std, b=3 * std)
             torch.nn.init.zeros_(self.llm2vae.bias)
 
-            if self.latent_pos_embed is not None:
-                self.latent_pos_embed._init_weights()
-
         if self.config.action_gen:
             # DomainAwareLinear uses embeddings for weights, so we initialize them differently
             # action2llm: input_size=action_dim, output_size=hidden_size
@@ -252,9 +192,6 @@ class Cosmos3VFMNetwork(PreTrainedModel):
 
             std = 1.0 / math.sqrt(self.hidden_size)
             torch.nn.init.trunc_normal_(self.action_modality_embed, std=std, a=-3 * std, b=3 * std)
-
-            if self.action_pos_embed is not None:
-                self.action_pos_embed._init_weights()
 
         if self.config.sound_gen:
             # sound2llm: input_size=sound_dim, output_size=hidden_size
@@ -279,6 +216,8 @@ class Cosmos3VFMNetwork(PreTrainedModel):
         *,
         pixel_values: torch.Tensor | None = None,
         image_grid_thw: torch.Tensor | None = None,
+        pixel_values_videos: torch.Tensor | None = None,
+        video_grid_thw: torch.Tensor | None = None,
         attention_mask: torch.Tensor | None = None,
         eos_token_id: int | list[int] | None = None,
         pad_token_id: int | None = None,
@@ -299,9 +238,11 @@ class Cosmos3VFMNetwork(PreTrainedModel):
         prompts through this single entry point: pass
         ``pixel_values`` + ``image_grid_thw`` (and optionally
         ``attention_mask``) for image-conditioned prefill via the Qwen3-VL
-        visual encoder, or omit them for text-only prefill.  Uses the
-        und-pathway weights (those WITHOUT the ``_moe_gen`` suffix) plus
-        ``embed_tokens`` / ``norm`` / ``lm_head``; the generation pathway
+        visual encoder, or omit them for text-only prefill.  Video
+        conditioning is also supported via ``pixel_values_videos`` +
+        ``video_grid_thw``; the image and video pairs are mutually exclusive.
+        Uses the und-pathway weights (those WITHOUT the ``_moe_gen`` suffix)
+        plus ``embed_tokens`` / ``norm`` / ``lm_head``; the generation pathway
         and all VFM-level multimodal embedders / heads (``vae2llm``,
         ``llm2vae``, ``sound2llm``, etc.) are bypassed.
 
@@ -330,6 +271,8 @@ class Cosmos3VFMNetwork(PreTrainedModel):
             max_new_tokens=max_new_tokens,
             pixel_values=pixel_values,
             image_grid_thw=image_grid_thw,
+            pixel_values_videos=pixel_values_videos,
+            video_grid_thw=video_grid_thw,
             attention_mask=attention_mask,
             eos_token_id=eos_token_id,
             pad_token_id=pad_token_id,
@@ -608,7 +551,6 @@ class Cosmos3VFMNetwork(PreTrainedModel):
         packed_seq: PackedSequence,
         packed_sequence: torch.Tensor,
         target_dtype: torch.dtype,
-        fps: Optional[torch.Tensor] = None,
     ) -> List[Tuple[int, int, int]] | None:
         """Project vision tokens and fill into packed_sequence.
 
@@ -616,7 +558,6 @@ class Cosmos3VFMNetwork(PreTrainedModel):
             packed_seq: PackedSequence containing vision tokens and metadata.
             packed_sequence: The packed sequence tensor to fill vision embeddings into (modified in-place).
             target_dtype: Target dtype for embeddings (typically from text embedding).
-            fps: Optional FPS tensor for RoPE modulation.
 
         Returns:
             Original latent shapes before padding (for unpadding during decode), or None if no vision tokens.
@@ -641,14 +582,6 @@ class Cosmos3VFMNetwork(PreTrainedModel):
             vision.tokens, vision.token_shapes
         )  # packed_tokens_vision: [total_vision_patches,patch_latent_dim]
         packed_tokens_vision = self.vae2llm(packed_tokens_vision.to(target_dtype))  # [total_vision_patches,hidden_size]
-
-        # Add absolute position embedding only when NOT using unified 3D mRoPE
-        # (3D mRoPE provides positional information via rotary embeddings instead)
-        if self.latent_pos_embed is not None:
-            latent_token_pos_emb = self.latent_pos_embed(vision.token_shapes, fps=fps).to(
-                target_dtype
-            )  # [total_vision_patches,hidden_size]
-            packed_tokens_vision = packed_tokens_vision + latent_token_pos_emb  # [total_vision_patches,hidden_size]
 
         has_noisy_vision = vision.mse_loss_indexes.numel() > 0
 
@@ -742,7 +675,6 @@ class Cosmos3VFMNetwork(PreTrainedModel):
         packed_seq: PackedSequence,
         packed_sequence: torch.Tensor,
         target_dtype: torch.dtype,
-        fps_action: Optional[torch.Tensor] = None,
     ) -> None:
         """Encode action tokens and fill into packed_sequence."""
         if packed_seq.action is None or packed_seq.action.tokens is None:
@@ -760,17 +692,6 @@ class Cosmos3VFMNetwork(PreTrainedModel):
             action.tokens, action.token_shapes, action.domain_id
         )
         packed_tokens_action = self.action2llm(packed_tokens_action, per_token_domain_id)
-
-        # Add additive position embedding only if not using unified_3d_mrope
-        if self.action_pos_embed is not None:
-            # VideoRopePosition3DEmb expects shapes as (t, h, w). For actions we use a 1x1 spatial grid.
-            action_shapes_3d = [(ts[0], 1, 1) for ts in action.token_shapes]
-            action_token_pos_emb = self.action_pos_embed(
-                action_shapes_3d,
-                fps=fps_action,
-                start_frame_offset=1,
-            ).to(target_dtype)  # [B_action*T_action,hidden_size]
-            packed_tokens_action = packed_tokens_action + action_token_pos_emb  # [B_action*T_action,hidden_size]
 
         packed_tokens_action = packed_tokens_action + self.action_modality_embed.view(
             1, -1
@@ -862,7 +783,6 @@ class Cosmos3VFMNetwork(PreTrainedModel):
         packed_seq: PackedSequence,
         packed_sequence: torch.Tensor,
         target_dtype: torch.dtype,
-        fps_sound: Optional[torch.Tensor] = None,
     ) -> None:
         """Encode sound tokens and fill into packed_sequence.
 
@@ -870,7 +790,6 @@ class Cosmos3VFMNetwork(PreTrainedModel):
             packed_seq: PackedSequence containing sound tokens and metadata.
             packed_sequence: The packed sequence tensor to fill sound embeddings into (modified in-place).
             target_dtype: Target dtype for embeddings (typically from text embedding).
-            fps_sound: FPS tensor for RoPE modulation. Should be the sound latent rate (e.g., 25 Hz).
         """
         if packed_seq.sound is None or packed_seq.sound.tokens is None:
             # No sound tokens in this batch
@@ -888,9 +807,8 @@ class Cosmos3VFMNetwork(PreTrainedModel):
         )  # [total_sound_tokens,sound_dim]
         packed_tokens_sound = packed_tokens_sound.to(target_dtype)  # [total_sound_tokens,sound_dim]
 
-        # Project sound tokens + modality embedding
-        # NOTE: Sound position info comes from m-RoPE position IDs in the attention layers.
-        # No additive position embedding is used (unlike legacy video which keeps one for backward compat).
+        # Project sound tokens + modality embedding. Position info comes from
+        # mRoPE position IDs in the attention layers.
         packed_tokens_sound = (
             self.sound2llm(packed_tokens_sound) + self.sound_modality_embed
         )  # [total_sound_tokens,hidden_size]
@@ -964,9 +882,6 @@ class Cosmos3VFMNetwork(PreTrainedModel):
     def forward(
         self,
         packed_seq: PackedSequence,
-        fps_vision: Optional[torch.Tensor] = None,
-        fps_action: Optional[torch.Tensor] = None,
-        fps_sound: Optional[torch.Tensor] = None,
         memory: MemoryState | None = None,
     ) -> dict:
         """
@@ -975,9 +890,6 @@ class Cosmos3VFMNetwork(PreTrainedModel):
         Args:
             packed_seq: PackedSequence containing all packed tensors and metadata.
                 See PackedSequence dataclass for field details.
-            fps_vision: Optional FPS tensor for vision RoPE modulation.
-            fps_action: Optional FPS tensor for action RoPE modulation.
-            fps_sound: Optional FPS tensor for sound RoPE modulation (e.g., sound_latent_fps=25).
             memory: Optional MemoryState for persistent KV-cache memory
                 (AR inference or rolling-KV-cache training).  Built by
                 ``OmniMoTModel.build_memory_state()``.
@@ -1000,15 +912,15 @@ class Cosmos3VFMNetwork(PreTrainedModel):
         # encode vision tokens
         original_latent_shapes: List[Tuple[int, int, int]] | None = None
         if self.config.vision_gen:
-            original_latent_shapes = self._encode_vision(packed_seq, packed_sequence, target_dtype, fps_vision)
+            original_latent_shapes = self._encode_vision(packed_seq, packed_sequence, target_dtype)
 
         # encode action tokens
         if self.config.action_gen:
-            self._encode_action(packed_seq, packed_sequence, target_dtype, fps_action)
+            self._encode_action(packed_seq, packed_sequence, target_dtype)
 
         # encode sound tokens
         if self.config.sound_gen:
-            self._encode_sound(packed_seq, packed_sequence, target_dtype, fps_sound)
+            self._encode_sound(packed_seq, packed_sequence, target_dtype)
 
         assert packed_seq.attn_modes is not None
         assert packed_seq.split_lens is not None

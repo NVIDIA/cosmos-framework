@@ -22,7 +22,7 @@ from typing import Any
 # Maps ``job.task`` to the base Hydra config that ``make_config()`` lives in.
 TASK_TO_BASE_CONFIG: dict[str, str] = {
     "vfm": "cosmos_framework/configs/base/config.py",
-    "vlm": "cosmos_framework/configs/base/vlm/config.py",
+    "vlm": "cosmos_framework/configs/base/reasoner/config.py",
 }
 
 

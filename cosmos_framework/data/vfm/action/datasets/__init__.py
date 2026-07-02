@@ -12,7 +12,10 @@ from cosmos_framework.data.vfm.action.datasets.agibotworld_beta_lerobot_dataset 
 from cosmos_framework.data.vfm.action.datasets.base_dataset import ActionBaseDataset
 from cosmos_framework.data.vfm.action.datasets.bridge_orig_lerobot_dataset import BridgeOrigLeRobotDataset
 from cosmos_framework.data.vfm.action.datasets.droid_lerobot_dataset import DROIDLeRobotDataset
+from cosmos_framework.data.vfm.action.datasets.fractal_lerobot_dataset import FractalLeRobotDataset
+from cosmos_framework.data.vfm.action.datasets.libero_lerobot_dataset import LIBEROLeRobotDataset
 from cosmos_framework.data.vfm.action.datasets.robomind_franka_dataset import RoboMINDFrankaDataset
+from cosmos_framework.data.vfm.action.datasets.robomind_ur_dataset import RoboMINDURDataset
 from cosmos_framework.data.vfm.action.datasets.umi_lerobot_dataset import UMILeRobotDataset
 
 __all__ = [
@@ -20,6 +23,9 @@ __all__ = [
     "AgiBotWorldBetaLeRobotDataset",
     "BridgeOrigLeRobotDataset",
     "DROIDLeRobotDataset",
+    "FractalLeRobotDataset",
+    "LIBEROLeRobotDataset",
     "RoboMINDFrankaDataset",
+    "RoboMINDURDataset",
     "UMILeRobotDataset",
 ]

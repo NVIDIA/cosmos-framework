@@ -1354,9 +1354,13 @@ class AutoencoderKL(ModelMixin, ConfigMixin, FromOriginalModelMixin):
         self._logged_decoder_temporal_plan = False
 
         # Load SigLIP2 pretrained model (text encoder always needed for text alignment)
-        # Use HF_HUB_CACHE (set by configure_hf_cache_env to HF_HOME/hub) so the cache_dir
-        # matches the actual hub layout where models are stored.
-        hf_cache_dir = os.environ.get("HF_HUB_CACHE") or os.environ.get("HF_HOME")
+        # Prefer HF_HUB_CACHE (set by configure_hf_cache_env to HF_HOME/hub), then fall back to
+        # HF_HOME/hub (where transformers stores models), then HF_HOME itself. This handles jobs
+        # that set HF_HOME but not HF_HUB_CACHE (e.g. VFM training via submit_helper).
+        _hf_home = os.environ.get("HF_HOME")
+        hf_cache_dir = (
+            os.environ.get("HF_HUB_CACHE") or (os.path.join(_hf_home, "hub") if _hf_home else None) or _hf_home
+        )
         local_files_only = hf_cache_dir is not None
         pretrained_model = None
         pretrained_vision_model = None

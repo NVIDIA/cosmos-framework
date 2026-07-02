@@ -7,8 +7,8 @@ Distributed checkpoint (DCP) directory structure and storage backends.
 The checkpointer saves model state in a sharded format across multiple processes:
 
 self.save_dirname/
-├── iter_000000005/                    # Checkpoint at iteration 5
-│   ├── model/                         # Model state shards
+├── iter_000000005/                   # Checkpoint at iteration 5
+│   ├── model/                        # Model state shards
 │   │   ├── __0_0.distcp              # Shard 0 from rank 0
 │   │   └── __1_0.distcp              # Shard 1 from rank 1
 │   ├── optim/                        # Optimizer state shards
@@ -39,30 +39,34 @@ The sharded format enables efficient distributed saving/loading by:
 3. Supporting both local and cloud storage backends
 """
 
+import dataclasses
 import enum
 import multiprocessing
 import os
 import re
 import time
 from multiprocessing import get_context
-from typing import Any, Dict, List, Optional, Protocol, Tuple, Union, runtime_checkable
+from typing import Any, Dict, Optional, Protocol, Tuple, Union, runtime_checkable
 
 import torch
 import torch.distributed as dist
 import torch.distributed.checkpoint as dcp
 from torch import nn
+from torch.distributed.checkpoint.default_planner import create_default_local_load_plan
 from torch.distributed.checkpoint.filesystem import FileSystemReader, FileSystemWriter
 from torch.distributed.checkpoint.metadata import (
     STATE_DICT_TYPE,
     Metadata,
     StorageMeta,
 )
+from torch.distributed.checkpoint.planner import LoadPlan
 from torch.distributed.checkpoint.state_dict import (
     StateDictOptions,
     get_model_state_dict,
     set_model_state_dict,
 )
 from torch.distributed.checkpoint.stateful import Stateful
+from torch.distributed.tensor import DTensor, Replicate
 from torch.nn.modules.module import _IncompatibleKeys
 
 from cosmos_framework.checkpoint.base import AbstractCheckpointer
@@ -269,6 +273,62 @@ class CustomLoadPlanner(dcp.DefaultLoadPlanner):
     CustomLoadPlanner that supports ignoring keys during checkpoint load.
     This is useful when the checkpoint is saved with a different component
     architecture, e.g. different RoPE embeddings than the current model.
+
+    Setting ``keys_to_skip_loading``: do not construct this planner directly. Set the experiment's
+    checkpoint config field ``checkpoint.keys_to_skip_loading`` (a ``list[str]``; see
+    :class:`cosmos_framework.utils.config.CheckpointConfig`) and the checkpointer forwards it here. Each entry is
+    matched as a *substring* against every flattened fully-qualified name in the model/optimizer state
+    dict, and any leaf whose fqn contains one of the entries is skipped. The list is only honored on a
+    warm start (loading from a *different* run via ``checkpoint.load_path``); when resuming the latest
+    checkpoint of the same run it is forced to ``[]``, since there is nothing to skip. Examples:
+
+    1. Skip a reshaped positional embedding (different sequence length) for reg + EMA copies.
+       checkpoint.keys_to_skip_loading=["net.latent_pos_embed.seq", "net_ema.latent_pos_embed.seq"]
+    2. Skip action-head layers when warm-starting an action model from a non-action checkpoint.
+       checkpoint.keys_to_skip_loading=["action2llm", "llm2action", "action_modality_embed", "action_pos_embed"]
+
+    When ``dedup=True`` it additionally elects a single reader per replicated leaf to kill
+    redundant storage reads. Two replication patterns waste reads at large world sizes:
+
+    1. Fully-replicated leaves (e.g. optimizer scalar ``step`` tensors, replicated buffers) are
+       saved on global rank 0 but appear in *every* rank's state dict, so all ``world_size`` ranks
+       read the same object — a single-object hotspot.
+    2. HSDP shards are identical across the ``dp_replicate`` dim, so each shard file is read by
+       ``dp_replicate`` ranks.
+
+    With ``dedup=True``, ``create_local_plan`` drops, from the read plan it builds, the items this
+    rank is *not* the designated reader for, so each leaf is fetched from storage exactly once.
+
+    ``create_local_plan`` always builds the read plan by calling ``create_default_local_load_plan``
+    directly on ``self._skip_keys_if_found(self.state_dict)`` rather than delegating to
+    ``super().create_local_plan()``. This serves two ends:
+
+    1. It drops ``keys_to_skip_loading`` *before* plan construction, so skipped keys never reach the
+       base helper's strict missing-key validation or its *unconditional* size-mismatch check.
+       Skipping therefore works with ``strict_resume=True``, with a skipped key absent from the
+       checkpoint, and with a skipped key present-but-reshaped (e.g. different RoPE embeddings).
+    2. It avoids the base ``create_local_plan``'s pre-2.4 "missing keys" fallback, which would
+       re-derive ``self.state_dict`` from the full ``original_state_dict`` and reinstate any skipped
+       key still present in the checkpoint. Dropping that fallback is acceptable -- this repo does
+       not load pre-2.4 checkpoints.
+
+    ``self.state_dict`` is never mutated (``_skip_keys_if_found`` returns a pruned *copy*, or the dict
+    unchanged when nothing matches), so the loader still writes non-tensor leaves back into the caller's
+    state dict in place.
+
+    Dedup removes reads at a different point: ``create_local_plan`` filters the already-built plan's
+    read items via ``_drop_non_reader_items``, looking each leaf up in the full ``self.state_dict``.
+
+    - ``DTensor`` leaf -> reader is local rank 0 along the tensor's replicate mesh dim (one reader
+      per replicate group; a fully-sharded tensor has none, so every rank reads its own shard);
+    - non-``DTensor`` leaf (plain tensor / python scalar) -> fully replicated across the world, so
+      the reader is global rank 0.
+
+    Reading the replicate dim from each tensor's *own* mesh (rather than one global ``dp_replicate``
+    group) generalizes to tensors on different meshes, e.g. MoE expert weights under expert
+    parallelism. The dropped data is filled in afterwards by :func:`_broadcast_state_dict`.
+    Because each rank then reads a disjoint subset, dedup requires ``no_dist=True`` (there is no
+    global plan to coordinate).
     """
 
     def __init__(
@@ -276,18 +336,26 @@ class CustomLoadPlanner(dcp.DefaultLoadPlanner):
         flatten_state_dict: bool = True,
         flatten_sharded_tensors: bool = True,
         allow_partial_load: bool = False,
-        keys_to_skip_loading: List[str] = [],
+        keys_to_skip_loading: list[str] | None = None,
         load_ema_to_reg: bool = False,
+        dedup: bool = False,
+        global_rank: int = 0,
     ) -> None:
         super().__init__(
             flatten_state_dict=flatten_state_dict,
             flatten_sharded_tensors=flatten_sharded_tensors,
             allow_partial_load=allow_partial_load,
         )
-        self.keys_to_skip_loading = keys_to_skip_loading
+
+        # Default to [] without a mutable default argument (which would be shared across instances).
+        self.keys_to_skip_loading = keys_to_skip_loading or []
         self.load_ema_to_reg = load_ema_to_reg
-        if len(keys_to_skip_loading) > 0:
-            log.info(f"Skipping loading of keys that match the following patterns: {keys_to_skip_loading}")
+        # When set, prune non-reader leaves so each replicated leaf is read by exactly one rank.
+        self.dedup = dedup
+        self._global_rank = global_rank
+
+        if len(self.keys_to_skip_loading) > 0:
+            log.info(f"Skipping loading of keys that match the following patterns: {self.keys_to_skip_loading}")
 
     def set_up_planner(
         self,
@@ -295,8 +363,6 @@ class CustomLoadPlanner(dcp.DefaultLoadPlanner):
         metadata: Metadata | None = None,
         is_coordinator: bool = False,
     ) -> None:
-        state_dict = self._skip_keys_if_found(state_dict)
-
         if self.load_ema_to_reg:
             state_dict = _replace_keys_with_ema_keys(state_dict)
 
@@ -306,24 +372,251 @@ class CustomLoadPlanner(dcp.DefaultLoadPlanner):
             is_coordinator=is_coordinator,
         )
 
-    def _skip_keys_if_found(
-        self,
-        state_dict: STATE_DICT_TYPE,
-    ) -> Dict[str, Any]:
+    def create_local_plan(self) -> LoadPlan:
+        # Build the read plan from a pruned *copy* of self.state_dict so skipped keys never
+        # reach create_default_local_load_plan, which would otherwise (a) raise a missing-key
+        # error for a skipped key absent from the checkpoint under strict load
+        # (allow_partial_load=False), and (b) raise an *unconditional* size-mismatch ValueError
+        # for a skipped key that is present in the checkpoint but reshaped.
+        if self.metadata is None:
+            raise AssertionError("metadata must be set (via set_up_planner) before create_local_plan")
+
+        plan = create_default_local_load_plan(
+            state_dict=self._skip_keys_if_found(self.state_dict),
+            metadata=self.metadata,
+            strict=not self.allow_partial_load,
+        )
+
+        return self._drop_non_reader_items(plan)
+
+    def _drop_non_reader_items(self, plan: LoadPlan) -> LoadPlan:
+        """Under dedup load, drop the read items this rank is not the elected reader for.
+
+        ``self.state_dict`` is the full flattened fqn -> leaf mapping at this point, so we look
+        each item's leaf up by fqn to decide readership. The dropped reads are filled afterward by
+        :func:`_broadcast_state_dict`. No-op unless ``self.dedup`` is set.
         """
-        While loading the checkpoint, skip the weight loading for the keys
-        that contain any element of `self.keys_to_skip_loading` as a substring.
+        if not self.dedup:
+            return plan
+
+        kept_items = [
+            item
+            for item in plan.items
+            if _is_assigned_reader(self.state_dict.get(item.dest_index.fqn), self._global_rank)
+        ]
+        dropped = len(plan.items) - len(kept_items)
+        log.info(
+            f"[DCP-LOAD-DEDUP] kept_read_items={len(kept_items)} dropped_read_items={dropped}",
+            rank0_only=False,
+        )
+        return dataclasses.replace(plan, items=kept_items)
+
+    def _skip_keys_if_found(self, state_dict: STATE_DICT_TYPE) -> STATE_DICT_TYPE:
+        """Return a *copy* of ``state_dict`` without keys whose fqn contains any ``keys_to_skip_loading`` substring.
+
+        ``create_local_plan`` feeds this pruned copy to ``create_default_local_load_plan`` so skipped
+        keys are kept out of the read plan, the base planner's strict missing-key validation, and its
+        unconditional size-mismatch check (skipping therefore works with ``strict_resume=True``, with a
+        skipped key absent from the checkpoint, and with a skipped key present-but-reshaped). The caller
+        never mutates ``self.state_dict`` with this result, so the loader still writes non-tensor leaves
+        back into the caller's state dict in place. No-op when no skip patterns are configured.
         """
         if len(self.keys_to_skip_loading) == 0:
             return state_dict
 
-        new_state_dict = {}
+        kept = {}
         for fqn, obj in state_dict.items():
             if any(skip_key in fqn for skip_key in self.keys_to_skip_loading):
                 log.warning(f"Skipping loading of key: {fqn}")
                 continue
-            new_state_dict[fqn] = obj
-        return new_state_dict
+            kept[fqn] = obj
+        log.info(
+            f"[DCP-LOAD-SKIP-KEYS] kept_keys={len(kept)} dropped_keys={len(state_dict) - len(kept)}",
+            rank0_only=False,
+        )
+        return kept
+
+
+def _is_assigned_reader(value: Any, global_rank: int) -> bool:
+    """Whether this rank is the single elected reader for ``value`` under dedup load.
+
+    Used by :meth:`CustomLoadPlanner.create_local_plan` to drop the read items a rank is not
+    responsible for, and mirrored by :func:`_broadcast_state_dict` to fill those dropped leaves back
+    in. The election rule depends on how the leaf is replicated:
+
+    - ``DTensor`` -> reader iff this rank sits at local rank 0 along EVERY (size>1) replicate mesh
+      dim (see :func:`_replicate_mesh_dims`). A fully-sharded tensor has no replicate dims, so the
+      ``all(...)`` over an empty list is ``True`` and every rank reads its own (unique) shard. A
+      fully-replicated leaf (e.g. an optimizer ``step`` with ``[Replicate(), Replicate()]``) elects
+      exactly one reader instead of a whole ``dp_shard`` line.
+    - any other leaf (plain replicated tensor or python scalar) -> fully replicated across the world,
+      so global rank 0 is the sole reader.
+    """
+    if isinstance(value, DTensor):
+        dims = _replicate_mesh_dims(value)
+        return all(value.device_mesh.get_local_rank(dim) == 0 for dim in dims)
+    return global_rank == 0
+
+
+def _replicate_mesh_dims(value: DTensor) -> list[int]:
+    """Mesh-dim indices (ascending) along which a ``DTensor``'s local shard is replicated.
+
+    A ``DTensor``'s local shard is byte-identical across every mesh dim whose placement is
+    ``Replicate()``; it differs along ``Shard``/``Partial`` dims. Reading those dims' data once and
+    broadcasting along them is therefore lossless. Deriving this from the tensor's *own* mesh (not a
+    single global ``dp_replicate`` group) is what lets the dedup generalize to tensors on other
+    meshes — e.g. MoE expert weights on a future expert-parallel mesh whose replicate dim differs.
+
+    Mesh dims of **size 1** are excluded: they carry no replication, and — critically — every rank
+    is local rank 0 along a size-1 dim, so treating one as a replicate dim would make the
+    single-reader election (see :func:`_is_assigned_reader`) pass on *every* rank
+    and silently disable dedup along the real replicate dim. This is exactly the failure for a
+    fully-replicated leaf (e.g. an optimizer ``step`` with ``[Replicate(), Replicate()]``) on the
+    2-D ``(dp_replicate=1, dp_shard=N)`` FSDP mesh: without this filter the size-1 ``dp_replicate``
+    dim is picked, so all ``N`` ranks read the single object in ``__0_0.distcp`` instead of just
+    global rank 0.
+
+    Returns multiple dims for a leaf replicated across several mesh dims (e.g. a fully-replicated
+    tensor on an HSDP ``(dp_replicate>1, dp_shard)`` mesh); empty when the tensor is fully sharded
+    (no replication, so every rank legitimately reads its own shard).
+    """
+    mesh = value.device_mesh
+    return [i for i, placement in enumerate(value.placements) if isinstance(placement, Replicate) and mesh.size(i) > 1]
+
+
+def _broadcast_tensor_leaf(value: torch.Tensor) -> None:
+    """Broadcast a tensor leaf from its single reader to the ranks that share it.
+
+    Handles the two tensor leaf kinds the dedup planner drops (see
+    :func:`_is_assigned_reader`):
+
+    - ``DTensor`` -> broadcast the local shard across the tensor's replicate mesh dims. The reader
+      is the rank at local rank 0 along every (size>1) replicate dim; the local shard is
+      byte-identical across those dims, so broadcasting from that rank is lossless. Groups are taken
+      from the tensor's *own* mesh so this works regardless of which mesh the tensor lives on (e.g. a
+      future expert-parallel mesh). Dims are broadcast in ascending order so each step's source
+      already holds valid data: after broadcasting along dim ``d``, every rank that is local rank 0
+      along the remaining (higher) replicate dims is populated, which is exactly the source set the
+      next broadcast needs. A fully-sharded ``DTensor`` (no replicate dims) needs no broadcast — every
+      rank already read its own shard.
+    - plain (non-``DTensor``) tensor -> fully replicated across the world and read by global rank 0
+      only, so broadcast it over the default (world) group with ``src=0``. This covers replicated
+      ``param_groups`` tensors such as a capturable optimizer ``step``.
+    """
+    if not torch.is_tensor(value):
+        raise ValueError(f"Unsupported type: {type(value)}")
+    if isinstance(value, DTensor):
+        dims = _replicate_mesh_dims(value)
+        if not dims:
+            # Fully sharded across its mesh: every rank already read its own shard.
+            return
+        local = value.to_local()
+        for dim in dims:
+            group = value.device_mesh.get_group(dim)
+            dist.broadcast(local, group=group, group_src=0)
+    else:
+        dist.broadcast(value, src=0)
+
+
+def _broadcast_state_dict(
+    state_dict: STATE_DICT_TYPE,
+    global_rank: int,
+) -> None:
+    """Broadcast every leaf from its single reader (see :class:`CustomLoadPlanner` dedup mode) to
+    the ranks that share it, filling in the reads that the planner dropped.
+
+    Must be called by ALL ranks in lockstep, *after* a dedup ``dcp.load`` and *before* the
+    ``load_state_dict`` that consumes ``state_dict``. Each leaf's replication is a
+    structural property (identical on every rank), so all ranks walk the (identically ordered) tree
+    and issue the same sequence of collectives:
+
+    - ``DTensor`` leaf -> broadcast along its mesh's replicate dims (src = local rank 0 there); a
+      fully-sharded tensor needs no broadcast;
+    - non-``DTensor`` tensor leaf (e.g. a replicated ``param_groups`` ``step`` tensor) -> replicated
+      across the world, broadcast (src = global rank 0);
+    - non-tensor leaf (python scalars, e.g. optimizer ``param_groups`` ``lr``/``betas``/``eps``/
+      ``step``) -> a single world ``broadcast_object_list`` of the tensor-stripped skeleton, merged
+      back in.
+
+    Reader election here mirrors :func:`_is_assigned_reader` exactly so that the
+    set of leaves broadcast is precisely the set the planner dropped: DTensors elect a per-mesh
+    reader; every other leaf (plain tensor or scalar) is read by global rank 0 only.
+    """
+
+    # 1) Broadcast tensor leaves in place. Keys are sorted by repr() so the traversal order is
+    #    identical across ranks regardless of key type (int param ids vs str fqns). DTensors go over
+    #    their own mesh's replicate dims; plain (non-DTensor) tensors are world-replicated and read by
+    #    global rank 0 only, so they broadcast from global src 0. Non-tensor leaves are skipped here
+    #    and handled by the object broadcast in step 2.
+    def _walk_tensors(obj: Any) -> None:
+        if torch.is_tensor(obj):
+            _broadcast_tensor_leaf(obj)
+        elif isinstance(obj, dict):
+            for k in sorted(obj.keys(), key=repr):
+                _walk_tensors(obj[k])
+        elif isinstance(obj, (list, tuple)):
+            for v in obj:
+                _walk_tensors(v)
+        # else: non-tensor scalar leaf -> handled in step 2.
+
+    start_time_tensor_broadcast = time.monotonic()
+    _walk_tensors(state_dict)
+    end_time_tensor_broadcast = time.monotonic()
+
+    # 2) Broadcast all non-tensor leaves as one tensor-stripped skeleton (world, src = rank 0).
+    #    Tensors (already broadcast in step 1) are stripped to None so they are not pickled; every
+    #    other value (python scalars, lists, None, ...) rides along in the object broadcast.
+    def _strip(obj: Any) -> Any:
+        if torch.is_tensor(obj):
+            return None
+        if isinstance(obj, dict):
+            return {k: _strip(v) for k, v in obj.items()}
+        if isinstance(obj, (list, tuple)):
+            return type(obj)(_strip(v) for v in obj)
+        return obj
+
+    start_time_object_broadcast = time.monotonic()
+    box = [_strip(state_dict) if global_rank == 0 else None]
+    dist.broadcast_object_list(box, src=0)
+    skeleton = box[0]
+    end_time_object_broadcast = time.monotonic()
+
+    # 3) Rebuild: keep the (already-broadcast) tensors in place, take non-tensors from rank 0.
+    def _rebuild(local_obj: Any, skeleton_obj: Any) -> Any:
+        if torch.is_tensor(local_obj):
+            return local_obj
+        if isinstance(local_obj, dict):
+            return {k: _rebuild(local_obj[k], skeleton_obj[k]) for k in local_obj}
+        if isinstance(local_obj, list):
+            return [_rebuild(lv, sv) for lv, sv in zip(local_obj, skeleton_obj)]
+        if isinstance(local_obj, tuple):
+            return tuple(_rebuild(lv, sv) for lv, sv in zip(local_obj, skeleton_obj))
+        return skeleton_obj
+
+    start_time_rebuild = time.monotonic()
+    rebuilt = _rebuild(state_dict, skeleton)
+    state_dict.clear()
+    state_dict.update(rebuilt)
+    end_time_rebuild = time.monotonic()
+
+    log.info(
+        "[DCP-LOAD-TIMING] broadcast: "
+        f"tensors={end_time_tensor_broadcast - start_time_tensor_broadcast:.1f}s, "
+        f"objects={end_time_object_broadcast - start_time_object_broadcast:.1f}s, "
+        f"rebuild={end_time_rebuild - start_time_rebuild:.1f}s",
+        rank0_only=False,
+    )
+
+
+def _copy_ema_weights_to_reg(state_dict: STATE_DICT_TYPE) -> None:
+    """Copy EMA weights to regular weights."""
+    for sd_key in list(state_dict.keys()):
+        if sd_key.startswith("net."):
+            key_ema = "net_ema." + sd_key.removeprefix("net.")
+            assert key_ema in state_dict, (
+                f"EMA key {key_ema} not found in state_dict. Ensure the model has net_ema submodule."
+            )
+            state_dict[sd_key] = state_dict[key_ema]
 
 
 class CustomSavePlanner(dcp.DefaultSavePlanner):
@@ -383,6 +676,13 @@ class DistributedCheckpointer(AbstractCheckpointer):
     ):
         super().__init__(config_checkpoint, config_job, callbacks)
         self.config_checkpoint = config_checkpoint
+        if config_checkpoint.load_ema_to_reg and config_checkpoint.load_training_state:
+            raise ValueError(
+                "load_ema_to_reg=True requires load_training_state=False. "
+                "Loading optimizer/EMA state after copying EMA->reg weights produces an "
+                "inconsistent checkpoint: the optimizer moments would track the original "
+                "reg-weight trajectory, not the EMA weights just copied in."
+            )
         if config_checkpoint.dcp_async_mode_enabled and not disable_async:
             self.async_mode = AsyncMode.ASYNC_WITH_PINNED_MEM
         else:
@@ -497,6 +797,7 @@ class DistributedCheckpointer(AbstractCheckpointer):
         log.critical(f"Resuming ckpt {checkpoint_path} with keys: {resume_keys}")
 
         iteration = 0
+        global_rank = dist.get_rank() if dist.is_initialized() else 0
 
         if checkpoint_path is not None:
             self._check_checkpoint_exists(checkpoint_path)
@@ -514,10 +815,21 @@ class DistributedCheckpointer(AbstractCheckpointer):
                 # the latest checkpoint of the same model, then we don't need to skip any keys.
                 keys_to_skip_loading = self.config_checkpoint.keys_to_skip_loading if warm_start else []
 
-                load_planner = CustomLoadPlanner(
-                    allow_partial_load=not strict_resume,
-                    keys_to_skip_loading=keys_to_skip_loading,
-                )
+                # Dedup-load context: when enabled, replicated state is read by a single rank and
+                # broadcast over the device mesh instead of being read redundantly by every rank. The
+                # per-tensor replicate group is derived from each DTensor's own mesh (see
+                # _broadcast_state_dict). Applied only to the "model" and "optim" components
+                # (the bulk of the data); the per-rank-unique "dataloader" state and
+                # "trainer" RNG and the tiny "scheduler" state stay on the normal read-everywhere path.
+                if key in ("model", "optim"):
+                    load_planner = CustomLoadPlanner(
+                        allow_partial_load=not strict_resume,
+                        keys_to_skip_loading=keys_to_skip_loading,
+                        dedup=self.config_checkpoint.dcp_load_dedup,
+                        global_rank=global_rank,
+                    )
+                else:
+                    load_planner = dcp.DefaultLoadPlanner(allow_partial_load=not strict_resume)
 
                 if key == "model":
                     log.info("- Loading the model...")
@@ -527,19 +839,26 @@ class DistributedCheckpointer(AbstractCheckpointer):
                         _state_dict,
                         storage_reader=storage_reader,
                         planner=load_planner,
+                        no_dist=True,
                     )
-                    if self.config_checkpoint.load_ema_to_reg:
+                    if self.config_checkpoint.dcp_load_dedup:
+                        # Fill in the reads the planner dropped by broadcasting from each leaf's
+                        # single reader. Must run before the EMA copy and load_state_dict below.
+                        _broadcast_state_dict(_state_dict, global_rank)
+                    if self.config_checkpoint.load_ema_to_reg and warm_start:
                         # The model has both net.* and net_ema.* submodules, so _state_dict
                         # contains both sets of keys after dcp.load(). Copy EMA weights into
-                        # regular model weights so we can resume from EMA and reset EMA.
-                        for sd_key in list(_state_dict.keys()):
-                            if sd_key.startswith("net."):
-                                key_ema = "net_ema." + sd_key.removeprefix("net.")
-                                assert key_ema in _state_dict, (
-                                    f"EMA key {key_ema} not found in state_dict. "
-                                    "Ensure the model has net_ema submodule."
-                                )
-                                _state_dict[sd_key] = _state_dict[key_ema]
+                        # regular model weights so we can warm-start from EMA (and reset EMA
+                        # when load_training_state=False).
+                        #
+                        # This must only run on warm start. During regular auto-resume
+                        # (warm_start=False) the full training state is always reloaded, so
+                        # copying EMA->reg here would silently overwrite the resumed regular
+                        # weights with the (lagging) EMA snapshot on every restart while the
+                        # optimizer state still tracks the pre-copy trajectory -- corrupting
+                        # training in a way that depends on how often the job is preempted.
+                        _copy_ema_weights_to_reg(_state_dict)
+
                     results = _model_wrapper.load_state_dict(_state_dict)
                     if len(results.missing_keys) > 0:
                         raise ValueError(f"Missing keys (not found in checkpoint): {results.missing_keys}")
@@ -555,7 +874,12 @@ class DistributedCheckpointer(AbstractCheckpointer):
                         _state_dict,
                         storage_reader=storage_reader,
                         planner=load_planner,
+                        no_dist=True,
                     )
+                    if self.config_checkpoint.dcp_load_dedup:
+                        # Fill in the reads the planner dropped by broadcasting from each leaf's
+                        # single reader. Must run before load_state_dict below.
+                        _broadcast_state_dict(_state_dict, global_rank)
                     optimizer.load_state_dict(_state_dict)
 
                 elif key == "scheduler":
@@ -565,6 +889,7 @@ class DistributedCheckpointer(AbstractCheckpointer):
                         _state_dict,
                         storage_reader=storage_reader,
                         planner=load_planner,
+                        no_dist=True,
                     )
                     scheduler.load_state_dict(_state_dict)
 
@@ -590,6 +915,7 @@ class DistributedCheckpointer(AbstractCheckpointer):
                         _state_dict,
                         storage_reader=storage_reader,
                         planner=load_planner,
+                        no_dist=True,
                     )
                     grad_scaler.load_state_dict(_state_dict["grad_scaler"])
                     iteration = _state_dict["iteration"]

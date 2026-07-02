@@ -252,10 +252,17 @@ def _load_model(
         keys_to_skip_loading=keys_to_skip_loading or [],
     )
 
+    # Single-rank load (e.g. the action-policy inference server): force no_dist so
+    # ``dcp.load`` skips the collective ``gather_object`` over the load plan, which
+    # pickles the plan and can fail on training/EMA DCPs. Multi-rank loads keep the
+    # default distributed path.
+    no_dist = not (dist.is_available() and dist.is_initialized() and dist.get_world_size() > 1)
+
     dcp.load(
         state_dict=state_dict,
         storage_reader=storage_reader,
         planner=load_planner,
+        no_dist=no_dist,
     )
 
     log.info(f"Successfully loaded model from {checkpoint_path}")
@@ -397,6 +404,9 @@ def load_model_from_checkpoint(
     if hasattr(config.model.config, "load_teacher_weights"):
         log.info("Setting load_teacher_weights=False for inference to skip teacher checkpoint download.")
         config.model.config.load_teacher_weights = False
+    if getattr(config.model.config, "student_load_from", None) is not None:
+        log.info("Setting student_load_from=None for inference to skip train-time student warm-start download.")
+        config.model.config.student_load_from = None
 
     if (
         config.model.config.exclude_reasoner_weights_from_checkpoint
