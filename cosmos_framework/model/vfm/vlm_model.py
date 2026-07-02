@@ -28,14 +28,14 @@ import torch.nn as nn
 from cosmos_framework.utils.lazy_config import instantiate
 from cosmos_framework.model._base import ImaginaireModel
 from cosmos_framework.utils import log
-from cosmos_framework.model.vfm.algorithm.loss.cross_entropy import cross_entropy_loss
+from cosmos_framework.model.vfm.algorithm.loss.cross_entropy import cross_entropy_loss, weighted_cross_entropy_loss
 from cosmos_framework.configs.base.defaults.parallelism import PRECISION_TO_TORCH_DTYPE
-from cosmos_framework.configs.base.vlm.defaults.policy_config import VLMModelConfig
+from cosmos_framework.configs.base.reasoner.defaults.policy_config import VLMModelConfig
 from cosmos_framework.model.vfm.hf_model import HFModel
 from cosmos_framework.model.vfm.parallelize_vlm import parallelize
 from cosmos_framework.utils.vfm.parallelism import ParallelDims
-from cosmos_framework.utils.vfm.vlm.constant import IGNORE_INDEX
-from cosmos_framework.utils.vfm.vlm.create_position_ids import get_position_ids
+from cosmos_framework.utils.vfm.reasoner.constant import IGNORE_INDEX
+from cosmos_framework.utils.vfm.reasoner.create_position_ids import get_position_ids
 
 # Model-type dispatch sets. Using hf_config.model_type (stable HF-defined string)
 # rather than backbone.model_name avoids the brittleness of substring-matching a local
@@ -271,13 +271,24 @@ class VLMModel(ImaginaireModel):
             if self.parallel_dims.cp_enabled:
                 cp_group = self.parallel_dims.cp_mesh.get_group()
 
-        self._loss_fn = partial(
-            cross_entropy_loss,
-            loss_scaling_factor=1.0,
-            dp_group=dp_group,
-            cp_group=cp_group,
-            ignore_index=IGNORE_INDEX,
-        )
+        if config.policy.use_weighted_ce:
+            log.info(f"Using weighted CE loss with exponent={config.policy.weighted_ce_exponent}")
+            self._loss_fn = partial(
+                weighted_cross_entropy_loss,
+                exponent=config.policy.weighted_ce_exponent,
+                loss_scaling_factor=1.0,
+                dp_group=dp_group,
+                cp_group=cp_group,
+                ignore_index=IGNORE_INDEX,
+            )
+        else:
+            self._loss_fn = partial(
+                cross_entropy_loss,
+                loss_scaling_factor=1.0,
+                dp_group=dp_group,
+                cp_group=cp_group,
+                ignore_index=IGNORE_INDEX,
+            )
 
     def _init_vlm(self, config: VLMModelConfig, checkpoint) -> None:
         """Initialize VLM without the legacy ModelRegistry (Phase 2+).
@@ -292,7 +303,7 @@ class VLMModel(ImaginaireModel):
           g. Load pretrain weights into sharded CUDA tensors.
           h. Apply gradient checkpointing if configured.
         """
-        from cosmos_framework.utils.vfm.vlm.pretrained_models_downloader import (
+        from cosmos_framework.utils.vfm.reasoner.pretrained_models_downloader import (
             maybe_download_hf_model_from_s3,
         )
 
@@ -372,13 +383,17 @@ class VLMModel(ImaginaireModel):
                 "Use dp_shard > 1 for FSDP2. DDP support is planned for Phase 3."
             )
 
-        # ── d. Apply FSDP2 ──
+        # ── d. Apply FSDP2 (+ optional torch.compile of the repeated blocks) ──
+        # config.compile is threaded through so model.config.compile.enabled=True
+        # actually compiles each block in place (was previously a dead config on
+        # the VLM path — only the MoT path consumed it). See parallelize_vlm.
         if torch.distributed.is_initialized():
             parallelize(
                 hf_model,
                 parallel_dims,
                 config.parallelism,
                 config.precision,
+                compile_config=config.compile,
             )
 
         # ── e. Materialize meta tensors on CUDA ──

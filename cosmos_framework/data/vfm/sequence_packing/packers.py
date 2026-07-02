@@ -32,7 +32,6 @@ def pack_input_sequence(
     latent_patch_size: int = 1,
     skip_text_tokens: bool = False,
     include_end_of_generation_token: bool = False,
-    position_embedding_type: str = "3d_rope",
     unified_3d_mrope_reset_spatial_ids: bool = True,
     unified_3d_mrope_temporal_modality_margin: int = 0,
     enable_fps_modulation: bool = False,
@@ -65,13 +64,9 @@ def pack_input_sequence(
         latent_patch_size: Patch size used by the network to pack latents
         skip_text_tokens: If True, skip packing text tokens
         include_end_of_generation_token: If True, append end-of-generation token
-        position_embedding_type: Position embedding type for vision tokens:
-            - "3d_rope": Additive 3D RoPE embeddings + 1D position IDs for attention
-            - "flattened_sin_cos": Additive flattened sin/cos embeddings + 1D position IDs
-            - "unified_3d_mrope": No additive embedding + 3D position IDs for Qwen3VL-style mRoPE
         unified_3d_mrope_reset_spatial_ids: If True (default), spatial (H, W) indices
             start from 0 for each vision segment. If False, spatial indices are offset
-            by the temporal offset (Qwen2VL-style). Only used when position_embedding_type="unified_3d_mrope".
+            by the temporal offset (Qwen2VL-style).
         enable_fps_modulation: If True, scale temporal position IDs based on video FPS
             to reflect real time. Requires fps_vision in gen_data_clean.
             Uses the same flag as diffusion_expert_config.enable_fps_modulation.
@@ -105,10 +100,6 @@ def pack_input_sequence(
     has_any_vision = any(plan.has_vision for plan in sequence_plans)
     explicit_vision_temporal_positions_active = vision_temporal_position_mode != "latent_index" and has_any_vision
     if explicit_vision_temporal_positions_active:
-        if position_embedding_type != "unified_3d_mrope":
-            raise NotImplementedError(
-                "Explicit vision temporal positions are only supported with position_embedding_type='unified_3d_mrope'."
-            )
         if gen_data_clean.temporal_positions_vision is None:
             raise ValueError(
                 f"vision_temporal_position_mode={vision_temporal_position_mode} requires "
@@ -137,8 +128,7 @@ def pack_input_sequence(
     # Initialize packed sequence (acts as builder during packing)
     packed_seq = PackedSequence()
 
-    # Configure 3D mRoPE on the builder (enabled when position_embedding_type is unified_3d_mrope)
-    packed_seq._use_mrope = position_embedding_type == "unified_3d_mrope"
+    # Configure 3D mRoPE on the builder.
     packed_seq._mrope_reset_spatial = unified_3d_mrope_reset_spatial_ids
 
     # Maintain separate indices for each modality
@@ -156,7 +146,6 @@ def pack_input_sequence(
 
     # Pack each sample based on its sequence plan
     for sample_idx, sequence_plan in enumerate(sequence_plans):
-        curr_rope_id = 0
         sample_len = 0
 
         # mRoPE temporal offset resets per sample.
@@ -172,11 +161,10 @@ def pack_input_sequence(
             idx_text += 1
 
             has_generation_for_sample = sequence_plan.has_vision or sequence_plan.has_action or sequence_plan.has_sound
-            curr_rope_id, _, text_sample_len = pack_text_tokens(
+            text_sample_len = pack_text_tokens(
                 packed_seq,
                 text_ids,
                 special_tokens,
-                curr_rope_id,
                 has_generation=has_generation_for_sample,
                 use_float_positions=use_float_mrope_positions,
             )
@@ -192,9 +180,6 @@ def pack_input_sequence(
         if video_temporal_causal and sequence_plan.has_vision:
             # Temporal causal path: when sequence_plan.has_action=True, interleaved supertokens
             # [action_t, vision_t]; when False, supertokens are just vision patches.
-            assert position_embedding_type == "unified_3d_mrope", (
-                "video_temporal_causal=True requires position_embedding_type='unified_3d_mrope'"
-            )
             input_vision_tokens = gen_data_clean.x0_tokens_vision[idx_vision]
             idx_vision += 1
 
@@ -224,7 +209,6 @@ def pack_input_sequence(
                 input_action_tokens=input_action_tokens_tc,
                 condition_frame_indexes_vision=sequence_plan.condition_frame_indexes_vision,
                 input_timestep=input_timestep,
-                curr_rope_id=curr_rope_id,
                 latent_patch_size=latent_patch_size,
                 temporal_compression_factor=temporal_compression_factor,
                 action_dim=action_dim,
@@ -355,7 +339,6 @@ def pack_input_sequence(
                         input_vision_tokens=input_vision_tokens,
                         condition_frame_indexes_vision=item_condition_frames,
                         input_timestep=input_timestep,
-                        curr_rope_id=curr_rope_id,
                         latent_patch_size=latent_patch_size,
                         vision_fps=vision_fps,
                         enable_fps_modulation=enable_fps_modulation,
@@ -393,7 +376,6 @@ def pack_input_sequence(
                     input_action_tokens=input_action_tokens,
                     condition_frame_indexes_action=sequence_plan.condition_frame_indexes_action,
                     input_timestep=input_timestep,
-                    curr_rope_id=curr_rope_id,
                     action_temporal_offset=vision_start_temporal_offset,
                     enable_fps_modulation=enable_fps_modulation,
                     base_fps=base_fps,
@@ -425,7 +407,6 @@ def pack_input_sequence(
                 input_sound_tokens=input_sound_tokens,
                 condition_frame_indexes_sound=sequence_plan.condition_frame_indexes_sound,
                 input_timestep=input_timestep,
-                curr_rope_id=curr_rope_id,
                 sound_temporal_offset=vision_start_temporal_offset,
                 enable_fps_modulation=enable_fps_modulation,
                 base_fps=base_fps,
@@ -448,15 +429,11 @@ def pack_input_sequence(
             packed_seq.text_ids.append(special_tokens["end_of_generation"])
             packed_seq.text_indexes.append(packed_seq.curr)
 
-            # EOV position IDs: 3D mRoPE or 1D RoPE
-            if packed_seq._use_mrope:
-                # Use float dtype when any vision mRoPE positions are fractional.
-                eov_dtype = torch.float32 if use_float_mrope_positions else torch.long
-                eov_mrope_ids = torch.full((3, 1), packed_seq._mrope_temporal_offset, dtype=eov_dtype)  # [3,1]
-                packed_seq.position_ids.append(eov_mrope_ids)  # type: ignore[arg-type]
-                packed_seq._mrope_temporal_offset += 1
-            else:
-                packed_seq.position_ids.append(curr_rope_id)  # type: ignore[arg-type]
+            # Use float dtype when any vision mRoPE positions are fractional.
+            eov_dtype = torch.float32 if use_float_mrope_positions else torch.long
+            eov_mrope_ids = torch.full((3, 1), packed_seq._mrope_temporal_offset, dtype=eov_dtype)  # [3,1]
+            packed_seq.position_ids.append(eov_mrope_ids)  # type: ignore[arg-type]
+            packed_seq._mrope_temporal_offset += 1
 
             packed_seq.curr += 1
             eov_len = 1

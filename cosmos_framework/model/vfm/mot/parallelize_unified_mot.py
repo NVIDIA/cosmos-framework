@@ -75,6 +75,7 @@ class ContextParallelDispatch(nn.Module):
         attention_mask: SplitInfo,
         natten_metadata: dict | None = None,
         memory_value: MemoryValue | None = None,
+        packed_key_states_normalized: SequencePack | None = None,
     ) -> tuple[SequencePack, KVToStore | None]:
         if memory_value is not None and not memory_value.supports_context_parallel_attention:
             raise ValueError("Context-parallel doesn't work when training with a KV-cache.")
@@ -88,6 +89,7 @@ class ContextParallelDispatch(nn.Module):
             attention_function=self.wrapped_dispatch,
             natten_metadata=natten_metadata,
             memory_value=memory_value,
+            packed_key_states_normalized=packed_key_states_normalized,
         )
 
 
@@ -183,6 +185,7 @@ class ARReplicatedIODispatch(nn.Module):
         attention_mask: SplitInfo,
         natten_metadata: dict | None = None,
         memory_value: MemoryValue | None = None,
+        packed_key_states_normalized: SequencePack | None = None,
     ) -> tuple[SequencePack, KVToStore | None]:
         if memory_value is None or getattr(memory_value, "frame_idx", 0) <= 0:
             return self.wrapped_dispatch(
@@ -192,6 +195,7 @@ class ARReplicatedIODispatch(nn.Module):
                 attention_mask,
                 natten_metadata=natten_metadata,
                 memory_value=memory_value,
+                packed_key_states_normalized=packed_key_states_normalized,
             )
         if getattr(memory_value, "for_cuda_graphs", False):
             raise ValueError("replicated attention_io_layout does not support ARMemoryState(for_cuda_graphs=True)")
@@ -201,6 +205,13 @@ class ARReplicatedIODispatch(nn.Module):
             packed_key_states,
             packed_value_states,
         )
+        local_key_pack_normalized: SequencePack | None = None
+        if packed_key_states_normalized is not None:
+            _, local_key_pack_normalized, _ = self._slice_local_heads(
+                packed_query_states,
+                packed_key_states_normalized,
+                packed_value_states,
+            )
         local_output_pack, kv_to_store = self.wrapped_dispatch(
             local_query_pack,
             local_key_pack,
@@ -208,6 +219,7 @@ class ARReplicatedIODispatch(nn.Module):
             attention_mask,
             natten_metadata=natten_metadata,
             memory_value=memory_value,
+            packed_key_states_normalized=local_key_pack_normalized,
         )
         return local_output_pack, kv_to_store
 

@@ -28,7 +28,7 @@ from cosmos_framework.data.vfm.sequence_packing import SequencePlan
 from cosmos_framework.data.vfm.sequence_packing.modalities import add_special_tokens
 from cosmos_framework.data.vfm.utils import VIDEO_RES_SIZE_INFO
 from cosmos_framework.inference.structured_caption import CAPTION_JSON_KEY, caption_json_to_prompt
-from cosmos_framework.model.vfm.vlm.qwen3_vl.utils import tokenize_caption
+from cosmos_framework.model.vfm.reasoner.qwen3_vl.utils import tokenize_caption
 from cosmos_framework.utils import log
 from cosmos_framework.utils.flags import INTERNAL
 from cosmos_framework.utils.lazy_config import instantiate as lazy_instantiate

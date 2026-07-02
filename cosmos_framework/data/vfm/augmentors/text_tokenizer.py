@@ -79,6 +79,9 @@ class TextTokenizerTransformForEditing(Augmentor):
 
     def __call__(self, data_dict: dict) -> dict | None:
         input_caption = data_dict.get(self.input_keys[0], "")
+        if isinstance(input_caption, dict):
+            input_caption = json.dumps(input_caption)
+            data_dict[self.input_keys[0]] = input_caption
         if self.cfg_dropout_rate > 0 and random.random() < self.cfg_dropout_rate:
             input_caption = ""
             data_dict[self.input_keys[0]] = input_caption

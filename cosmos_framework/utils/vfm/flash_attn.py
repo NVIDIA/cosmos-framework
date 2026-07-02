@@ -4,7 +4,7 @@
 """Flash attention initialization for the vfm/ unified VLM training path.
 
 This module replaces `cosmos_rl.policy.kernel.modeling_utils.init_flash_attn_meta`
-in VLMModel.__init__, removing the last cosmos_rl import from projects/cosmos3/vfm/.
+in VLMModel.__init__, removing the last cosmos_rl import from projects/cosmos3/cosmos3/.
 
 Why a stub for the FlashAttnMeta singleton part?
   HFModel uses HuggingFace's flash_attention_2 implementation

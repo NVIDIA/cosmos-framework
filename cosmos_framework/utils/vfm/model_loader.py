@@ -397,6 +397,9 @@ def load_model_from_checkpoint(
     if hasattr(config.model.config, "load_teacher_weights"):
         log.info("Setting load_teacher_weights=False for inference to skip teacher checkpoint download.")
         config.model.config.load_teacher_weights = False
+    if getattr(config.model.config, "student_load_from", None) is not None:
+        log.info("Setting student_load_from=None for inference to skip train-time student warm-start download.")
+        config.model.config.student_load_from = None
 
     if (
         config.model.config.exclude_reasoner_weights_from_checkpoint

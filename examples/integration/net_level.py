@@ -112,7 +112,7 @@ from cosmos_framework.data.vfm.action.transforms import build_sequence_plan_from
 from cosmos_framework.data.vfm.sequence_packing import SequencePlan, build_sequence_plans_from_data_batch
 from cosmos_framework.inference.args import DEFAULT_CHECKPOINT
 from cosmos_framework.inference.model import Cosmos3OmniConfig, Cosmos3OmniModel
-from cosmos_framework.model.vfm.vlm.qwen3_vl.utils import tokenize_caption
+from cosmos_framework.model.vfm.reasoner.qwen3_vl.utils import tokenize_caption
 
 
 def _load_omni_model(*, config_dir_arg: str | None):

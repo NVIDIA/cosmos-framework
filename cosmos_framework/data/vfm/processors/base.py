@@ -22,8 +22,8 @@ from typing import Dict, List, Optional
 from transformers.models.auto.processing_auto import AutoProcessor
 
 from cosmos_framework.utils import log
-from cosmos_framework.model.vfm.vlm.qwen3_vl.utils import tokenize_caption
-from cosmos_framework.utils.vfm.vlm.pretrained_models_downloader import maybe_download_hf_model_from_s3
+from cosmos_framework.model.vfm.reasoner.qwen3_vl.utils import tokenize_caption
+from cosmos_framework.utils.vfm.reasoner.pretrained_models_downloader import maybe_download_hf_model_from_s3
 
 
 def convert_string_content_to_list_content(messages: List[Dict]) -> List[Dict]:

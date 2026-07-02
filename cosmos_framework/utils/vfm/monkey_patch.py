@@ -18,12 +18,13 @@ _EXPECTED_TRANSFORMERS_VERSION_PREFIX = "4.57."
 
 def patch_qwen3_vl_forward(model):
     """Monkey-patch a ``Qwen3VLModel`` **instance's** forward:
-       **Dummy visual forward for pure-text batches**: Under FSDP, every rank
-       must call ``self.visual(...)`` each forward step so that collective
-       all-gather operations stay in sync.  When a batch contains only text,
-       a lightweight dummy image (16x16 zeros) is pushed through the full
-       ViT -> merger -> deepstack pipeline, then outputs are sliced to ``[0:0]``
-       so they carry ``grad_fn`` but contribute no features.
+       **Single visual forward per batch**: Under FSDP, every rank must call
+       ``self.visual(...)`` the same number of times each forward step so that
+       collective all-gather operations stay in sync. Image and video inputs are
+       encoded together in one visual call. When a batch contains only text, a
+       lightweight dummy image (16x16 zeros) is pushed through the full ViT ->
+       merger -> deepstack pipeline, then outputs are sliced to ``[0:0]`` so
+       they carry ``grad_fn`` but contribute no features.
     Args:
         model: The ``Qwen3VLModel`` instance (i.e. ``model.model.model`` when
             the outer model is ``HFModel``).
@@ -68,49 +69,80 @@ def patch_qwen3_vl_forward(model):
 
         image_mask = None
         video_mask = None
+        deepstack_image_embeds = None
+        deepstack_video_embeds = None
 
-        if pixel_values is not None:
-            image_embeds, deepstack_image_embeds = self.get_image_features(
-                pixel_values, image_grid_thw
-            )  # list of (T, C) tensors per batch element
-            image_embeds = torch.cat(image_embeds, dim=0).to(
-                inputs_embeds.device, inputs_embeds.dtype
-            )  # concat along token dim across the batch
-            image_mask, _ = self.get_placeholder_mask(
-                input_ids, inputs_embeds=inputs_embeds, image_features=image_embeds
-            )
-            inputs_embeds = inputs_embeds.masked_scatter(image_mask, image_embeds)
+        visual_pixel_values_list: list[torch.Tensor] = []
+        visual_grid_thw_list: list[torch.Tensor] = []
+        image_embed_len = 0
+        video_embed_len = 0
+        has_image = pixel_values is not None
+        has_video = pixel_values_videos is not None
 
-        if pixel_values_videos is not None:
-            video_embeds, deepstack_video_embeds = self.get_video_features(pixel_values_videos, video_grid_thw)
-            video_embeds = torch.cat(video_embeds, dim=0).to(inputs_embeds.device, inputs_embeds.dtype)
-            _, video_mask = self.get_placeholder_mask(
-                input_ids, inputs_embeds=inputs_embeds, video_features=video_embeds
-            )
-            inputs_embeds = inputs_embeds.masked_scatter(video_mask, video_embeds)
+        if has_image:
+            if image_grid_thw is None:
+                raise ValueError("image_grid_thw must be provided when pixel_values is provided")
+            visual_pixel_values_list.append(pixel_values)
+            visual_grid_thw_list.append(image_grid_thw)
+            image_embed_len = int((image_grid_thw.prod(-1) // self.visual.spatial_merge_size**2).sum().item())
+
+        if has_video:
+            if video_grid_thw is None:
+                raise ValueError("video_grid_thw must be provided when pixel_values_videos is provided")
+            visual_pixel_values_list.append(pixel_values_videos)
+            visual_grid_thw_list.append(video_grid_thw)
+            video_embed_len = int((video_grid_thw.prod(-1) // self.visual.spatial_merge_size**2).sum().item())
+
+        if has_image or has_video:
+            visual_pixel_values = torch.cat(visual_pixel_values_list, dim=0).type(self.visual.dtype)  # [N_patch,D]
+            visual_grid_thw = torch.cat(visual_grid_thw_list, dim=0)  # [N_media,3]
+            visual_embeds, deepstack_visual_feature_lists = self.visual(
+                visual_pixel_values, grid_thw=visual_grid_thw
+            )  # visual_embeds: [N_visual,C]
+            image_embeds = visual_embeds[:image_embed_len]  # [N_image_visual,C]
+            video_embeds = visual_embeds[image_embed_len : image_embed_len + video_embed_len]  # [N_video_visual,C]
+            deepstack_image_embeds = [
+                deepstack_visual_embeds[:image_embed_len] for deepstack_visual_embeds in deepstack_visual_feature_lists
+            ]  # each: [N_image_visual,C]
+            deepstack_video_embeds = [
+                deepstack_visual_embeds[image_embed_len : image_embed_len + video_embed_len]
+                for deepstack_visual_embeds in deepstack_visual_feature_lists
+            ]  # each: [N_video_visual,C]
+
+            if has_image:
+                image_embeds = image_embeds.to(inputs_embeds.device, inputs_embeds.dtype)  # [N_image_visual,C]
+                image_mask, _ = self.get_placeholder_mask(
+                    input_ids, inputs_embeds=inputs_embeds, image_features=image_embeds
+                )
+                inputs_embeds = inputs_embeds.masked_scatter(image_mask, image_embeds)  # [B,N_token,C]
+
+            if has_video:
+                video_embeds = video_embeds.to(inputs_embeds.device, inputs_embeds.dtype)  # [N_video_visual,C]
+                _, video_mask = self.get_placeholder_mask(
+                    input_ids, inputs_embeds=inputs_embeds, video_features=video_embeds
+                )
+                inputs_embeds = inputs_embeds.masked_scatter(video_mask, video_embeds)  # [B,N_token,C]
 
         # Dummy visual forward for text-only data
-        if pixel_values is None and pixel_values_videos is None:
+        else:
             dummy_h, dummy_w = 16, 16
             dummy_pixels = torch.zeros(
                 dummy_h * dummy_w,
                 self.visual.config.temporal_patch_size * self.visual.config.patch_size**2 * 3,
                 device=inputs_embeds.device,
                 dtype=self.visual.dtype,
-            )
-            dummy_thw = torch.tensor([[1, dummy_h, dummy_w]], device=inputs_embeds.device)
-            image_embeds, deepstack_image_embeds = self.get_image_features(dummy_pixels, dummy_thw)
-            image_embeds = [e[0:0] for e in image_embeds]
-            deepstack_image_embeds = [e[0:0] for e in deepstack_image_embeds]
+            )  # [N_dummy_patch,D]
+            dummy_thw = torch.tensor([[1, dummy_h, dummy_w]], device=inputs_embeds.device)  # [1,3]
+            image_embeds, deepstack_image_embeds = self.visual(dummy_pixels, grid_thw=dummy_thw)
+            image_embeds = image_embeds[0:0]  # [0,C]
+            deepstack_image_embeds = [e[0:0] for e in deepstack_image_embeds]  # each: [0,C]
 
             # no-op to mask scatter empty embeddings into inputs to preserve computation graph
-            image_embeds = torch.cat(image_embeds, dim=0).to(
-                inputs_embeds.device, inputs_embeds.dtype
-            )  # concat along token dim across the batch
+            image_embeds = image_embeds.to(inputs_embeds.device, inputs_embeds.dtype)  # [0,C]
             image_mask, _ = self.get_placeholder_mask(
                 input_ids, inputs_embeds=inputs_embeds, image_features=image_embeds
             )
-            inputs_embeds = inputs_embeds.masked_scatter(image_mask, image_embeds)
+            inputs_embeds = inputs_embeds.masked_scatter(image_mask, image_embeds)  # [B,N_token,C]
 
         visual_pos_masks = None
         deepstack_visual_embeds = None
@@ -200,4 +232,4 @@ def patch_qwen3_vl_forward(model):
 
     # Replace the forward method
     model.forward = patched_forward.__get__(model, type(model))
-    log.critical(f"Patched {type(model).__name__} instance forward with pure-text dummy forward")
+    log.critical(f"Patched {type(model).__name__} instance forward with one visual call per forward")

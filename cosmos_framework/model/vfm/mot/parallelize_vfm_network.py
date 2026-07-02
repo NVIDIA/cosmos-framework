@@ -83,8 +83,6 @@ def parallelize_vfm_network(
     if parallel_dims is not None and parallel_dims.dp_enabled:
         # Collect parameters to ignore during FSDP wrapping
         ignored_params = set()
-        if model.latent_pos_embed is not None:
-            ignored_params.update(model.latent_pos_embed.parameters())
 
         model = fully_shard(
             module=model,

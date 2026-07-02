@@ -35,7 +35,7 @@ What we USE from cosmos_framework:
     cosmos_framework.inference.model.Cosmos3OmniModel          → model class (random-init in this demo;
                                                        use `.from_pretrained_dcp(...)` for real weights)
     cosmos_framework.inference.common.init.init_script         → 1-line torch.distributed init
-    cosmos_framework.model.vfm.vlm.qwen3_vl.utils.tokenize_caption
+    cosmos_framework.model.vfm.reasoner.qwen3_vl.utils.tokenize_caption
                                                      → text tokenizer (modelling pkg)
     model.training_step(batch, iteration)            → THE training step (flow-matching loss)
     model.config.{action_gen,sound_gen,vision_gen,…} → modality flags
@@ -126,7 +126,7 @@ from cosmos_framework.data.vfm.action.transforms import build_sequence_plan_from
 from cosmos_framework.data.vfm.sequence_packing import SequencePlan
 from cosmos_framework.inference.args import DEFAULT_CHECKPOINT
 from cosmos_framework.inference.model import Cosmos3OmniConfig, Cosmos3OmniModel
-from cosmos_framework.model.vfm.vlm.qwen3_vl.utils import tokenize_caption
+from cosmos_framework.model.vfm.reasoner.qwen3_vl.utils import tokenize_caption
 
 
 def _load_omni_model(*, config_dir_arg: str | None):

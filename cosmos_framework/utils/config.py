@@ -271,6 +271,17 @@ class CheckpointConfig:
     # for dcp, whether to use async mode
     dcp_async_mode_enabled: bool = False
 
+    # For dcp load, whether to deduplicate redundant storage reads of replicated state and
+    # broadcast the data over the (NCCL) device mesh instead. Two replication patterns waste
+    # reads at large world sizes: (1) fully-replicated entries (e.g. optimizer scalar `step`
+    # tensors) are saved on global rank 0 yet read by *every* rank — a single-object S3 hotspot;
+    # (2) sharded DTensors are byte-identical across their mesh's replicate dims (e.g. HSDP's
+    # `dp_replicate`), so each shard file is read by `dp_replicate` ranks. When enabled, each leaf
+    # is read by exactly one rank — global rank 0 for fully-replicated non-DTensor leaves, and
+    # local rank 0 along the DTensor's own replicate mesh dims otherwise — then broadcast to the
+    # rest, cutting reads from O(world_size) to O(dp_shard).
+    dcp_load_dedup: bool = False
+
     # Configs for saving the checkpoints to object store.
     save_to_object_store: ObjectStoreConfig = attrs.field(factory=ObjectStoreConfig)
 
@@ -517,12 +528,7 @@ class Config:
         assert self.job.name != ""
 
 
-def load_config(
-    config_path: str,
-    opts: list[str],
-    enable_one_logger: bool = False,
-) -> Config:
-    """Load a config from a ``.yaml`` or ``.py`` path and apply ``opts``."""
+def load_config(config_path: str, opts: list[str], enable_one_logger: bool = False) -> Config:
     from cosmos_framework.utils.serialization import from_yaml, load_callable
 
     t1 = time.monotonic_ns()
@@ -554,11 +560,7 @@ def load_config(
     return config
 
 
-def _load_py_config(
-    config_path: str,
-    opts: list[str],
-    validate: bool = True,
-) -> Config:
+def _load_py_config(config_path: str, opts: list[str], validate: bool = True) -> Config:
     # NOTE: circular dependency
     from cosmos_framework.utils.config_helper import get_config_module, override
 
