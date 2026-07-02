@@ -2,6 +2,8 @@
 # SPDX-License-Identifier: OpenMDW-1.1
 
 import torch
+import torch.nn.functional as F
+from torch.nn.attention import SDPBackend, sdpa_kernel
 
 from cosmos_framework.model.attention import (
     attention,
@@ -24,6 +26,7 @@ class SplitInfo:
         action_token_shapes: list[tuple[int, ...]] | None = None,
         num_action_tokens_per_supertoken: int = 0,
         null_action_supertokens: bool = False,
+        attention_backend: str | None = None,
     ):
         """
         Actual len is the actual non-padded length of the packed sequence.
@@ -55,6 +58,7 @@ class SplitInfo:
         self.action_token_shapes = action_token_shapes
         self.num_action_tokens_per_supertoken = num_action_tokens_per_supertoken
         self.null_action_supertokens = null_action_supertokens
+        self.attention_backend = attention_backend
 
         # Multi-control transfer fields (set post-construction in cosmos3_vfm_network.py).
         # Gen-relative token ranges for each control stream, one tuple (start, end) per control.
@@ -69,6 +73,108 @@ AttentionMaskType = SplitInfo
 
 
 _dotproduct_attention_cache = {}
+
+
+def _can_use_pytorch_sdpa_cudnn(
+    query: torch.Tensor,
+    key: torch.Tensor,
+    value: torch.Tensor,
+    *,
+    cumulative_seqlen_Q: torch.Tensor | None,
+    cumulative_seqlen_KV: torch.Tensor | None,
+    max_seqlen_Q: int | None,
+    max_seqlen_KV: int | None,
+    is_causal: bool,
+    causal_type: CausalType | None,
+    return_lse: bool,
+) -> bool:
+    """Whether a Cosmos dense-attention call maps exactly to PyTorch SDPA.
+
+    PyTorch SDPA has no packed-varlen or LSE API. A packed batch containing one
+    sequence is a regular dense sequence when both cumulative-offset tensors
+    have one interval and their maximum lengths span the input tensors.
+    """
+
+    tensors = (query, key, value)
+    if any(not tensor.is_cuda or tensor.requires_grad for tensor in tensors):
+        return False
+    if return_lse or query.dtype not in (torch.float16, torch.bfloat16):
+        return False
+    if any(tensor.dtype != query.dtype or tensor.device != query.device for tensor in tensors[1:]):
+        return False
+    if any(tensor.ndim != 4 or tensor.shape[0] != 1 for tensor in tensors):
+        return False
+    if key.shape[1] != value.shape[1] or key.shape[-2:] != value.shape[-2:]:
+        return False
+    if query.shape[-1] != key.shape[-1] or query.shape[-2] % key.shape[-2] != 0:
+        return False
+    if is_causal and causal_type not in (CausalType.TopLeft, CausalType.DontCare):
+        return False
+    if causal_type == CausalType.DontCare and query.shape[1] != key.shape[1]:
+        return False
+    if cumulative_seqlen_Q is None and cumulative_seqlen_KV is None:
+        return True
+    return (
+        cumulative_seqlen_Q is not None
+        and cumulative_seqlen_KV is not None
+        and cumulative_seqlen_Q.numel() == cumulative_seqlen_KV.numel() == 2
+        and max_seqlen_Q == query.shape[1]
+        and max_seqlen_KV == key.shape[1]
+    )
+
+
+def _dense_attention(
+    query: torch.Tensor,
+    key: torch.Tensor,
+    value: torch.Tensor,
+    *,
+    attention_backend: str | None,
+    is_causal: bool = False,
+    causal_type: CausalType | None = None,
+    scale: float | None = None,
+    cumulative_seqlen_Q: torch.Tensor | None = None,
+    cumulative_seqlen_KV: torch.Tensor | None = None,
+    max_seqlen_Q: int | None = None,
+    max_seqlen_KV: int | None = None,
+    return_lse: bool = False,
+) -> torch.Tensor | tuple[torch.Tensor, torch.Tensor]:
+    """Run an explicit dense backend when compatible, otherwise use Cosmos."""
+
+    if attention_backend == "pytorch_sdpa_cudnn" and _can_use_pytorch_sdpa_cudnn(
+        query,
+        key,
+        value,
+        cumulative_seqlen_Q=cumulative_seqlen_Q,
+        cumulative_seqlen_KV=cumulative_seqlen_KV,
+        max_seqlen_Q=max_seqlen_Q,
+        max_seqlen_KV=max_seqlen_KV,
+        is_causal=is_causal,
+        causal_type=causal_type,
+        return_lse=return_lse,
+    ):
+        with sdpa_kernel(SDPBackend.CUDNN_ATTENTION):
+            return F.scaled_dot_product_attention(
+                query.transpose(1, 2),
+                key.transpose(1, 2),
+                value.transpose(1, 2),
+                is_causal=is_causal,
+                scale=scale,
+                enable_gqa=query.shape[-2] != key.shape[-2],
+            ).transpose(1, 2)
+
+    return attention(
+        query,
+        key,
+        value,
+        is_causal=is_causal,
+        causal_type=causal_type,
+        scale=scale,
+        cumulative_seqlen_Q=cumulative_seqlen_Q,
+        cumulative_seqlen_KV=cumulative_seqlen_KV,
+        max_seqlen_Q=max_seqlen_Q,
+        max_seqlen_KV=max_seqlen_KV,
+        return_lse=return_lse,
+    )
 
 
 from cosmos_framework.data.generator.sequence_packing.natten import (
@@ -90,7 +196,8 @@ def two_way_attention(
     packed_key_states: SequencePack,
     packed_value_states: SequencePack,
     packed_key_states_normalized: SequencePack | None = None,
-):
+    attention_backend: str | None = None,
+) -> SequencePack:
     """
     Performs two-way attention with causal and full attention.
 
@@ -116,10 +223,11 @@ def two_way_attention(
     use_dont_care_mask = causal_q_offsets is causal_k_offsets
 
     # NOTE: cosmos_framework attention is BSHD in, BSHD out
-    causal_res = attention(
+    causal_res = _dense_attention(
         causal_q.unsqueeze(0),  # [1,N_und,heads,head_dim]
         causal_k.unsqueeze(0),  # [1,N_und,heads,head_dim]
         causal_v.unsqueeze(0),  # [1,N_und,heads,head_dim]
+        attention_backend=attention_backend,
         cumulative_seqlen_Q=causal_q_offsets,
         cumulative_seqlen_KV=causal_k_offsets,
         max_seqlen_Q=packed_query_states["max_causal_len"],
@@ -131,10 +239,11 @@ def two_way_attention(
     # [1,N_und,heads,head_dim] -> [N_und,heads,head_dim] -> [N_und,heads*head_dim]
     causal_out = causal_res.squeeze(0).flatten(-2, -1)  # type: ignore  # [N_und,heads*head_dim]
 
-    full_res = attention(
+    full_res = _dense_attention(
         full_q.unsqueeze(0),  # [1,N_full,heads,head_dim]
         get_all_seq(packed_key_normalized).unsqueeze(0),  # [1,N_all,heads,head_dim]  normed und K for gen
         get_all_seq(packed_value_states).unsqueeze(0),  # [1,N_all,heads,head_dim]
+        attention_backend=attention_backend,
         cumulative_seqlen_Q=full_q_offsets,
         cumulative_seqlen_KV=sample_offsets,
         max_seqlen_Q=packed_query_states["max_full_len"],
@@ -208,10 +317,11 @@ def three_way_attention(
     use_dont_care_mask = causal_q_offsets is causal_k_offsets
 
     # NOTE: cosmos_framework attention is BSHD in, BSHD out
-    causal_res = attention(
+    causal_res = _dense_attention(
         causal_q.unsqueeze(0),  # [1,N_und,heads,head_dim]
         causal_k.unsqueeze(0),  # [1,N_und,heads,head_dim]
         causal_v.unsqueeze(0),  # [1,N_und,heads,head_dim]
+        attention_backend=attention_meta.attention_backend if attention_meta is not None else None,
         cumulative_seqlen_Q=causal_q_offsets,
         cumulative_seqlen_KV=causal_k_offsets,
         max_seqlen_Q=packed_query_states["max_causal_len"],
@@ -224,10 +334,11 @@ def three_way_attention(
 
     # If there's no metadata, it's a dense layer
     if natten_metadata is None:
-        full_sa, full_sa_lse = attention(
+        full_sa, full_sa_lse = _dense_attention(
             full_q.unsqueeze(0),  # [1,N_full,heads,head_dim]
             full_k.unsqueeze(0),  # [1,N_full,heads,head_dim]
             full_v.unsqueeze(0),  # [1,N_full,heads,head_dim]
+            attention_backend=attention_meta.attention_backend if attention_meta is not None else None,
             cumulative_seqlen_Q=full_q_offsets,
             cumulative_seqlen_KV=full_k_offsets,
             max_seqlen_Q=packed_query_states["max_full_len"],
@@ -244,10 +355,11 @@ def three_way_attention(
             return_lse=True,
         )  # full_sa: [1,N_full,heads,head_dim], full_sa_lse: [1,N_full,heads]
 
-    full_ca, full_ca_lse = attention(
+    full_ca, full_ca_lse = _dense_attention(
         full_q.unsqueeze(0),  # [1,N_full,heads,head_dim]
         causal_k_normalized.unsqueeze(0),  # [1,N_und,heads,head_dim]  normed und K for gen→und
         causal_v.unsqueeze(0),  # [1,N_und,heads,head_dim]
+        attention_backend=attention_meta.attention_backend if attention_meta is not None else None,
         cumulative_seqlen_Q=full_q_offsets,
         cumulative_seqlen_KV=causal_k_normalized_offsets,
         max_seqlen_Q=packed_query_states["max_full_len"],
@@ -432,6 +544,7 @@ def dispatch_attention(
             packed_key_states,
             packed_value_states,
             packed_key_states_normalized=packed_key_states_normalized,
+            attention_backend=attention_mask.attention_backend,
         )
     else:
         raise TypeError(f"Unsupported attention metadata: {type(attention_mask)}")
@@ -441,6 +554,7 @@ def dispatch_attention(
 def build_packed_sequence(
     joint_attn_implementation: str,
     *,
+    attention_backend: str | None = None,
     packed_sequence: torch.Tensor,
     attn_modes: list[str],
     split_lens: list[int],
@@ -475,6 +589,7 @@ def build_packed_sequence(
             attn_modes=attn_modes,
             sample_lens=sample_lens,
             actual_len=int(packed_sequence.shape[0]),
+            attention_backend=attention_backend,
         )
         make_pack = sequence_pack_from_packed_sequence
     elif joint_attn_implementation == "three_way":
@@ -488,6 +603,7 @@ def build_packed_sequence(
             action_token_shapes=action_token_shapes,
             num_action_tokens_per_supertoken=num_action_tokens_per_supertoken,
             null_action_supertokens=null_action_supertokens,
+            attention_backend=attention_backend,
         )
         make_pack = sequence_pack_from_packed_sequence
         # Some memory-driven attention paths implement temporal visibility in

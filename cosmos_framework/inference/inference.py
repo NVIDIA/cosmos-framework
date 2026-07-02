@@ -19,6 +19,8 @@ from torch.utils._pytree import tree_map_only
 from torch.utils.data import Dataset
 from typing_extensions import Self
 
+from cosmos_framework.configs.base.defaults.compile import CompileConfig
+from cosmos_framework.configs.base.defaults.parallelism import ParallelismConfig
 from cosmos_framework.inference.args import (
     ModelMode,
     NegativeMetadataMode,
@@ -46,13 +48,11 @@ from cosmos_framework.inference.vision import (
     pil_to_conditioning_frames,
     resize_pil_image,
 )
-from cosmos_framework.utils import log
-from cosmos_framework.tools.visualize.video import save_img_or_video
-from cosmos_framework.configs.base.defaults.compile import CompileConfig
-from cosmos_framework.configs.base.defaults.parallelism import ParallelismConfig
 from cosmos_framework.model.generator.omni_mot_model import OmniMoTModel
 from cosmos_framework.model.generator.reasoner.qwen3_vl.utils import _SYSTEM_PROMPT_IMAGE_EDITING
 from cosmos_framework.model.generator.upsampler.prompts import is_upsampled_prompt
+from cosmos_framework.tools.visualize.video import save_img_or_video
+from cosmos_framework.utils import log
 
 if TYPE_CHECKING:
     from cosmos_framework.configs.base.defaults.model_config import OmniMoTModelConfig
@@ -193,7 +193,6 @@ def _compute_num_tokens_for_sample(sample_args: OmniSampleArgs, model: OmniMoTMo
     latent_w = w // vae_spatial_downsample
     latent_t = 1 + (T - 1) // vae_temporal_downsample
     num_vision_tokens = latent_h * latent_w * latent_t
-
 
     # small compared to vision tokens, so we can ignore them for now.
 
@@ -529,7 +528,6 @@ def get_sample_data(
             fps=sample_args.fps,
             device=device,
         )
-
 
     if sample_args.model_mode == ModelMode.IMAGE2IMAGE:
         return _get_image_edit_sample_data(sample_args, model, device=device)
@@ -1049,6 +1047,7 @@ class OmniInference(Inference):
                 parallelism_config=attrs.asdict(parallelism_config),
                 compile_config=attrs.asdict(compile_config),
                 load_ema_to_reg=setup_args.use_ema_weights,
+                keys_to_skip_loading=setup_args.keys_to_skip_loading,
                 experiment_opts=[
                     *setup_args.experiment_overrides,
                     f"model.config.rectified_flow_inference_config.scheduler_type={sampler_override}",
@@ -1393,7 +1392,6 @@ class OmniInference(Inference):
         seed = [sa.seed if sa.seed is not None else _fallback_seed(cast(OmniSampleArgs, sa)) for sa in sample_args_list]
         outputs: dict[str, Any] | None = None
 
-
         if outputs is None:
             assert all(sa.num_outputs == 1 for sa in sample_args_list), "num_outputs must be 1"
             n_sample = sum(cast(OmniSampleArgs, sa).num_outputs for sa in sample_args_list)
@@ -1472,9 +1470,7 @@ class OmniInference(Inference):
                         "(one must divide the other). Non-nesting CP/CFGP overlays "
                         "with divergent per-sample num_steps are unsupported."
                     )
-                _steps_t = torch.tensor(
-                    [local_num_steps], device=self.model.tensor_kwargs["device"], dtype=torch.int32
-                )
+                _steps_t = torch.tensor([local_num_steps], device=self.model.tensor_kwargs["device"], dtype=torch.int32)
                 torch.distributed.all_reduce(
                     _steps_t, op=torch.distributed.ReduceOp.MAX, group=parallel_dims.dp_shard_mesh.get_group()
                 )

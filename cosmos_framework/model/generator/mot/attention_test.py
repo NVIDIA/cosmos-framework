@@ -2,16 +2,13 @@
 # SPDX-License-Identifier: OpenMDW-1.1
 
 import random
+from contextlib import nullcontext
 from typing import cast
 
 import pytest
 import torch
 
 import cosmos_framework.model.generator.mot.attention as attention
-from cosmos_framework.model.attention.natten import NATTEN_SUPPORTED
-from cosmos_framework.model.generator.mot.attention import (
-    build_packed_sequence,
-)
 from cosmos_framework.data.generator.sequence_packing.runtime import (
     get_all_seq,
     get_gen_seq,
@@ -20,9 +17,103 @@ from cosmos_framework.data.generator.sequence_packing.runtime import (
     set_und_seq,
     zeros_like,
 )
+from cosmos_framework.model.attention.natten import NATTEN_SUPPORTED
+from cosmos_framework.model.generator.mot.attention import (
+    build_packed_sequence,
+)
 
 MAX_SEQ_LEN = 24
 SEQS_PER_BATCH = 4
+
+
+def test_pytorch_sdpa_cudnn_requires_one_full_sequence() -> None:
+    class TensorSpec:
+        def __init__(self, shape: tuple[int, ...]) -> None:
+            self.is_cuda = True
+            self.requires_grad = False
+            self.dtype = torch.bfloat16
+            self.device = torch.device("cuda")
+            self.ndim = len(shape)
+            self.shape = shape
+
+    class Offsets:
+        @staticmethod
+        def numel() -> int:
+            return 2
+
+    query = TensorSpec((1, 3, 4, 8))
+    key = TensorSpec((1, 5, 2, 8))
+    value = TensorSpec((1, 5, 2, 8))
+    compatible = {
+        "cumulative_seqlen_Q": Offsets(),
+        "cumulative_seqlen_KV": Offsets(),
+        "max_seqlen_Q": 3,
+        "max_seqlen_KV": 5,
+        "is_causal": False,
+        "causal_type": None,
+        "return_lse": False,
+    }
+
+    assert attention._can_use_pytorch_sdpa_cudnn(query, key, value, **compatible)
+    assert not attention._can_use_pytorch_sdpa_cudnn(query, key, value, **(compatible | {"max_seqlen_Q": 2}))
+    assert not attention._can_use_pytorch_sdpa_cudnn(TensorSpec((2, 3, 4, 8)), key, value, **compatible)
+
+
+def test_pytorch_sdpa_cudnn_falls_back_for_cpu(monkeypatch: pytest.MonkeyPatch) -> None:
+    expected = torch.full((1, 3, 2, 4), 9.0)
+    calls = []
+
+    def fake_attention(*args, **kwargs):
+        calls.append((args, kwargs))
+        return expected
+
+    monkeypatch.setattr(attention, "attention", fake_attention)
+    query = torch.zeros((1, 3, 2, 4), dtype=torch.bfloat16)
+
+    actual = attention._dense_attention(
+        query,
+        query,
+        query,
+        attention_backend="pytorch_sdpa_cudnn",
+    )
+
+    assert actual is expected
+    assert len(calls) == 1
+
+
+def test_pytorch_sdpa_cudnn_transposes_bshd_and_enables_gqa(monkeypatch: pytest.MonkeyPatch) -> None:
+    query = torch.zeros((1, 3, 4, 8), dtype=torch.bfloat16)
+    key = torch.zeros((1, 3, 2, 8), dtype=torch.bfloat16)
+    value = torch.zeros_like(key)
+    calls = []
+
+    monkeypatch.setattr(attention, "_can_use_pytorch_sdpa_cudnn", lambda *args, **kwargs: True)
+    monkeypatch.setattr(attention, "sdpa_kernel", lambda *args, **kwargs: nullcontext())
+
+    def fake_sdpa(q, k, v, **kwargs):
+        calls.append((q.shape, k.shape, v.shape, kwargs))
+        return q
+
+    monkeypatch.setattr(attention.F, "scaled_dot_product_attention", fake_sdpa)
+
+    actual = attention._dense_attention(
+        query,
+        key,
+        value,
+        attention_backend="pytorch_sdpa_cudnn",
+        is_causal=False,
+        scale=0.125,
+    )
+
+    assert actual.shape == query.shape
+    assert calls == [
+        (
+            torch.Size((1, 4, 3, 8)),
+            torch.Size((1, 2, 3, 8)),
+            torch.Size((1, 2, 3, 8)),
+            {"is_causal": False, "scale": 0.125, "enable_gqa": True},
+        )
+    ]
 
 
 def unwrap(fn):

@@ -5,12 +5,12 @@ from typing import Any
 
 import attrs
 
-from cosmos_framework.utils.lazy_config import LazyDict
 from cosmos_framework.configs.base.defaults.activation_checkpointing import ActivationCheckpointingConfig
 from cosmos_framework.configs.base.defaults.compile import CompileConfig
 from cosmos_framework.configs.base.defaults.ema import EMAConfig
 from cosmos_framework.configs.base.defaults.parallelism import ParallelismConfig
 from cosmos_framework.configs.base.defaults.reasoner import VLMConfig
+from cosmos_framework.utils.lazy_config import LazyDict
 
 
 @attrs.define(slots=False)
@@ -183,6 +183,10 @@ class OmniMoTModelConfig:
     # Note "two_way" and "three_way" disallow and remove "End-of-Vision" or other text token in the generation tower.
     # "three_way" must only be used when introducing sparsity
     joint_attn_implementation: str = "two_way"  # "two_way" or "three_way"
+    # Optional dense-attention backend override. ``pytorch_sdpa_cudnn`` uses
+    # PyTorch's cuDNN SDPA only for compatible single-sequence inference calls
+    # and preserves the normal Cosmos backend selection for every other call.
+    attention_backend: str | None = None
 
     # Per-layer NATTEN parameters
     # Must use "three_way" attention if used.

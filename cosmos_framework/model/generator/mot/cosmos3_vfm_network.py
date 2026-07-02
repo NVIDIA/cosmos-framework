@@ -9,6 +9,8 @@ from torch import nn
 from transformers.configuration_utils import PretrainedConfig
 from transformers.modeling_utils import PreTrainedModel
 
+from cosmos_framework.data.generator.sequence_packing import ModalityData, PackedSequence
+from cosmos_framework.data.generator.sequence_packing.natten import verify_natten_parameter_list
 from cosmos_framework.model.generator.mot.attention import SplitInfo, build_packed_sequence
 from cosmos_framework.model.generator.mot.context_parallel_utils import (
     get_context_parallel_last_hidden_state,
@@ -17,8 +19,6 @@ from cosmos_framework.model.generator.mot.context_parallel_utils import (
 from cosmos_framework.model.generator.mot.domain_aware_linear import DomainAwareLinear
 from cosmos_framework.model.generator.mot.modeling_utils import TimestepEmbedder
 from cosmos_framework.model.generator.utils.memory import MemoryState
-from cosmos_framework.data.generator.sequence_packing import ModalityData, PackedSequence
-from cosmos_framework.data.generator.sequence_packing.natten import verify_natten_parameter_list
 
 
 class Cosmos3VFMNetworkConfig(PretrainedConfig):
@@ -43,6 +43,7 @@ class Cosmos3VFMNetworkConfig(PretrainedConfig):
         timestep_scale=0.001,
         predict_text_tokens=False,
         joint_attn_implementation="two_way",
+        attention_backend=None,
         action_dim=32,
         num_embodiment_domains=32,
         temporal_compression_factor_vision=4,
@@ -73,6 +74,9 @@ class Cosmos3VFMNetworkConfig(PretrainedConfig):
         self.timestep_scale = timestep_scale
         self.predict_text_tokens = predict_text_tokens
         self.joint_attn_implementation = joint_attn_implementation
+        if attention_backend not in (None, "pytorch_sdpa_cudnn"):
+            raise ValueError(f"Unsupported attention backend override: {attention_backend!r}")
+        self.attention_backend = attention_backend
         self.temporal_compression_factor_vision = temporal_compression_factor_vision
         self.natten_parameter_list = natten_parameter_list
         self.video_temporal_causal = video_temporal_causal
@@ -975,6 +979,7 @@ class Cosmos3VFMNetwork(PreTrainedModel):
 
         input_pack, attention_meta, natten_metadata_list = build_packed_sequence(
             self.config.joint_attn_implementation,
+            attention_backend=self.config.attention_backend,
             packed_sequence=packed_sequence,
             attn_modes=packed_seq.attn_modes,
             split_lens=packed_seq.split_lens,

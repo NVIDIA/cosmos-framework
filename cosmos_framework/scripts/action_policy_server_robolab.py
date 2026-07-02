@@ -5,7 +5,7 @@
 
 The server uses OpenPI's WebsocketPolicyServer and speaks its msgpack+NumPy protocol:
 
-- on connection, it sends an empty metadata dict;
+- on connection, it sends action-head provenance metadata;
 - each client message is an observation dict;
 - each response is a dict with ``action`` and, when enabled, ``video``.
 
@@ -25,8 +25,10 @@ from cosmos_framework.inference.common.init import init_script
 
 init_script()
 
+import hashlib
 import socket
 import threading
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal
@@ -47,7 +49,7 @@ from cosmos_framework.data.generator.action.pose_utils import (
 from cosmos_framework.data.generator.action.transforms import ActionTransformPipeline
 from cosmos_framework.data.generator.joint_dataloader import IterativeJointDataLoader
 from cosmos_framework.inference.args import OmniSetupArgs, OmniSetupOverrides
-from cosmos_framework.inference.common.args import ConfigFileType, ConfigOverrides, tyro_cli
+from cosmos_framework.inference.common.args import CheckpointType, ConfigFileType, ConfigOverrides, tyro_cli
 from cosmos_framework.inference.common.config import deserialize_config, deserialize_config_dict, load_config
 from cosmos_framework.inference.common.init import init_output_dir
 from cosmos_framework.inference.inference import OmniInference
@@ -78,8 +80,83 @@ _ROBOLAB_POLICY_HF_REPOSITORIES = {
     "Cosmos3-Nano-Policy-DROID": "nvidia/Cosmos3-Nano-Policy-DROID",
     "nvidia/Cosmos3-Nano-Policy-DROID": "nvidia/Cosmos3-Nano-Policy-DROID",
 }
+_ACTION_HEAD_PREFIXES = ("action2llm", "llm2action", "action_modality_embed", "action_pos_embed")
 
 ActionSpace = Literal["joint_pos", "midtrain"]
+AttentionBackend = Literal["default", "pytorch_sdpa_cudnn"]
+
+
+def _is_action_head_key(key: str) -> bool:
+    return any(prefix in key for prefix in _ACTION_HEAD_PREFIXES)
+
+
+def _get_action_head_state(model: torch.nn.Module) -> dict[str, torch.Tensor]:
+    network = getattr(model, "net", model)
+    state = {
+        key: value.detach().cpu().clone() for key, value in network.state_dict().items() if _is_action_head_key(key)
+    }
+    if not state:
+        raise RuntimeError("Model has no action-head tensors")
+    return state
+
+
+def _action_head_digest(state: dict[str, torch.Tensor]) -> str:
+    digest = hashlib.sha256()
+    for key in sorted(state):
+        raw_value = state[key]
+        if not isinstance(raw_value, torch.Tensor):
+            raise ValueError(f"Action-head state value {key!r} is not a tensor")
+        value = raw_value.detach().cpu().contiguous()
+        digest.update(key.encode("utf-8"))
+        digest.update(b"\0")
+        digest.update(str(value.dtype).encode("ascii"))
+        digest.update(b"\0")
+        digest.update(str(tuple(value.shape)).encode("ascii"))
+        digest.update(b"\0")
+        digest.update(value.view(torch.uint8).numpy().tobytes())
+    return digest.hexdigest()
+
+
+def _load_action_head_state(model: torch.nn.Module, path: Path) -> str:
+    loaded = torch.load(path, map_location="cpu", weights_only=True)
+    if not isinstance(loaded, dict) or not all(isinstance(key, str) for key in loaded):
+        raise ValueError(f"Invalid action-head state file: {path}")
+    current = _get_action_head_state(model)
+    if set(loaded) != set(current):
+        missing = sorted(set(current) - set(loaded))
+        unexpected = sorted(set(loaded) - set(current))
+        raise ValueError(f"Action-head state mismatch: missing={missing} unexpected={unexpected}")
+
+    network = getattr(model, "net", model)
+    network_state = network.state_dict()
+    for key, value in loaded.items():
+        if not isinstance(value, torch.Tensor):
+            raise ValueError(f"Action-head state value {key!r} is not a tensor")
+        destination = network_state[key]
+        if value.shape != destination.shape or value.dtype != destination.dtype:
+            raise ValueError(
+                f"Action-head tensor mismatch for {key!r}: "
+                f"file={value.shape}/{value.dtype} model={destination.shape}/{destination.dtype}"
+            )
+
+    incompatible = network.load_state_dict(loaded, strict=False)
+    if incompatible.unexpected_keys:
+        raise RuntimeError(f"Unexpected action-head keys while loading: {incompatible.unexpected_keys}")
+    return _action_head_digest(_get_action_head_state(model))
+
+
+def _save_action_head_state(state: dict[str, torch.Tensor], path: Path) -> str:
+    digest = _action_head_digest(state)
+    path = path.expanduser().absolute()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if path.exists():
+        existing = torch.load(path, map_location="cpu", weights_only=True)
+        if not isinstance(existing, dict) or _action_head_digest(existing) != digest:
+            raise FileExistsError(f"Refusing to overwrite a different action-head state: {path}")
+    else:
+        torch.save(state, path)
+    path.with_suffix(path.suffix + ".sha256").write_text(f"{digest}  {path.name}\n", encoding="utf-8")
+    return digest
 
 
 def _load_checkpoint_metadata(checkpoint_path: str) -> dict[str, Any] | None:
@@ -171,8 +248,10 @@ def _validate_checkpoint(checkpoint_path: str, *, allow_dcp_checkpoint: bool) ->
     has_config = (checkpoint_dir / "config.json").exists()
     has_consolidated_safetensors = any(checkpoint_dir.glob("*.safetensors"))
     has_diffusers_safetensors_index = (checkpoint_dir / "model.safetensors.index.json").exists()
-    if not checkpoint_dir.is_dir() or not has_config or not (
-        has_consolidated_safetensors or has_diffusers_safetensors_index
+    if (
+        not checkpoint_dir.is_dir()
+        or not has_config
+        or not (has_consolidated_safetensors or has_diffusers_safetensors_index)
     ):
         raise ValueError(f"Invalid safetensors checkpoint directory: {checkpoint_dir}")
 
@@ -291,6 +370,7 @@ class RobolabPolicyConfig:
     action_space: ActionSpace = "joint_pos"
     use_state: bool = True
     history_length: int = 1
+    attention_backend: AttentionBackend = "default"
 
 
 class RobolabServerArgs(pydantic.BaseModel):
@@ -302,12 +382,24 @@ class RobolabServerArgs(pydantic.BaseModel):
     """Hugging Face revision used when --checkpoint-path is a supported public RoboLab policy repository."""
     allow_dcp_checkpoint: bool = False
     """If set, allow direct DCP/S3 checkpoint loading instead of requiring a consolidated safetensors export."""
+    config_file: str = "cosmos_framework/configs/base/config.py"
+    """Hydra config module used to instantiate a DCP checkpoint."""
     experiment: str | None = None
     """Experiment name for DCP checkpoints using module configs, e.g. droid_lerobot_8b_policy."""
     experiment_overrides: list[str] = pydantic.Field(default_factory=list)
     """Hydra experiment overrides forwarded to OmniSetup for DCP checkpoint loading."""
     credential_path: str | None = None
     """Optional checkpoint object-store credential path for DCP/S3 loading."""
+    use_ema_weights: bool = True
+    """Load DCP EMA weights into the regular inference network."""
+    allow_missing_action_heads: bool = False
+    """Keep only the four action modules initialized when the DCP has no action-head tensors."""
+    action_head_init_seed: int = 0
+    """Seed used before constructing initialized action heads for a missing-head DCP."""
+    action_head_state_path: Path | None = None
+    """Optional saved action-head state to load after the model checkpoint."""
+    save_action_head_state_path: Path | None = None
+    """Optional path at which to persist and checksum the initialized or loaded action heads."""
 
     port: int = 8000
     """WebSocket port to bind."""
@@ -322,6 +414,20 @@ class RobolabServerArgs(pydantic.BaseModel):
     """Output directory for OmniInference. Defaults to /tmp/cosmos3_action_server/robolab."""
     sampler: Literal["unipc", "edm"] = "unipc"
     """Diffusion sampler used by OmniInference."""
+    use_torch_compile: bool = True
+    """Compile the configured model region with torch.compile."""
+    compiled_region: Literal["all", "language"] = "all"
+    """Model region passed to torch.compile."""
+    compile_dynamic: bool = False
+    """Compile dynamic shapes. Fixed RoboLab request shapes should leave this disabled."""
+    use_cuda_graphs: bool = False
+    """Enable CUDA graphs. Keep disabled for the initial Edge comparison."""
+    attention_backend: AttentionBackend = "default"
+    """Dense-attention backend override; unsupported calls retain normal Cosmos dispatch."""
+    startup_warmup_requests: pydantic.NonNegativeInt = 0
+    """Synthetic requests to run before accepting socket connections."""
+    startup_warmup_prompt: str = "Pick up the banana and place it in the bowl"
+    """Prompt used for startup warmups; match this to the first evaluation task to avoid recompilation."""
 
     seed: int = 0
     """Base generation seed used to initialize the request RNG."""
@@ -364,6 +470,9 @@ class RobolabPolicyService:
         maybe_init_distributed()
 
         setup_args = self._build_setup_args(args)
+        if args.allow_missing_action_heads:
+            torch.manual_seed(int(args.action_head_init_seed))
+            torch.cuda.manual_seed_all(int(args.action_head_init_seed))
         log.info(
             f"[robolab-policy-server] loading model: checkpoint_path={setup_args.checkpoint_path!r} "
             f"config_file={setup_args.config_file!r} experiment={setup_args.experiment!r}"
@@ -374,6 +483,28 @@ class RobolabPolicyService:
         self.model.eval()
         assert isinstance(pipe.setup_args, OmniSetupArgs)
         self.setup_args: OmniSetupArgs = pipe.setup_args
+
+        self.action_head_sha256: str | None = None
+        if args.action_head_state_path is not None:
+            self.action_head_sha256 = _load_action_head_state(self.model, args.action_head_state_path)
+            log.info(
+                f"[robolab-policy-server] loaded action heads path={args.action_head_state_path} "
+                f"sha256={self.action_head_sha256}"
+            )
+        elif args.allow_missing_action_heads:
+            self.action_head_sha256 = _action_head_digest(_get_action_head_state(self.model))
+            log.warning(
+                "[robolab-policy-server] serving initialized action heads; policy quality is not meaningful "
+                f"sha256={self.action_head_sha256}"
+            )
+        if args.save_action_head_state_path is not None:
+            saved_digest = _save_action_head_state(
+                _get_action_head_state(self.model),
+                args.save_action_head_state_path,
+            )
+            if self.action_head_sha256 is not None and saved_digest != self.action_head_sha256:
+                raise RuntimeError("Saved action-head checksum changed unexpectedly")
+            self.action_head_sha256 = saved_digest
 
         training_config = _load_training_config(self.setup_args, args.checkpoint_path)
         self._transform, inferred = self._build_transform(training_config, args)
@@ -399,6 +530,7 @@ class RobolabPolicyService:
             action_space=args.action_space,
             use_state=bool(args.use_state),
             history_length=int(args.history_length),
+            attention_backend=args.attention_backend,
         )
         if self.cfg.history_length < (1 if self.cfg.use_state else 0):
             raise ValueError("--history-length must be >= 1 when --use-state is true")
@@ -414,22 +546,35 @@ class RobolabPolicyService:
             f"image={self.cfg.image_height}x{self.cfg.image_width} fps={self.cfg.conditioning_fps} "
             f"guidance={self.cfg.guidance} num_steps={self.cfg.num_steps} shift={self.cfg.shift} "
             f"seed={self.cfg.seed} deterministic_seed={self.cfg.deterministic_seed}"
+            f" attention_backend={self.cfg.attention_backend}"
         )
 
     def _build_setup_args(self, args: RobolabServerArgs) -> OmniSetupArgs:
+        experiment_overrides = list(args.experiment_overrides)
+        if args.attention_backend != "default":
+            experiment_overrides.append(f"model.config.attention_backend={args.attention_backend}")
         setup_overrides: dict[str, Any] = {
             "checkpoint_path": args.checkpoint_path,
+            "config_file": args.config_file,
             "output_dir": args.output_dir or _DEFAULT_ROBOLAB_OUTPUT_DIR,
             "sampler": args.sampler,
+            "guardrails": False,
+            "use_ema_weights": args.use_ema_weights,
+            "keys_to_skip_loading": list(_ACTION_HEAD_PREFIXES) if args.allow_missing_action_heads else [],
+            "use_torch_compile": args.use_torch_compile,
+            "compiled_region": args.compiled_region,
+            "compile_dynamic": args.compile_dynamic,
+            "use_cuda_graphs": args.use_cuda_graphs,
+            "experiment_overrides": experiment_overrides,
         }
         if args.experiment is not None:
             setup_overrides["experiment"] = args.experiment
-        if args.experiment_overrides:
-            setup_overrides["experiment_overrides"] = list(args.experiment_overrides)
         if args.credential_path is not None:
             setup_overrides["credential_path"] = args.credential_path
         overrides = OmniSetupOverrides.model_validate(setup_overrides)
         setup_args = overrides.build_setup()
+        if args.allow_missing_action_heads and setup_args.checkpoint_type != CheckpointType.DCP:
+            raise ValueError("--allow-missing-action-heads is only valid for an explicitly allowed DCP checkpoint")
         init_output_dir(setup_args.output_dir)
         return disable_runtime_ema_for_frozen_config(setup_args)
 
@@ -555,13 +700,17 @@ class RobolabPolicyService:
         return self._transform(sample, self.cfg.resolution)
 
     def infer(self, obs: dict[str, Any]) -> dict[str, Any]:
+        request_start = time.perf_counter()
         sample = self._build_sample(obs)
         data_batch = _build_data_batch_from_sample(sample)
+        preprocess_ms = (time.perf_counter() - request_start) * 1000.0
         seed = self._next_seed()
         log.info(f"[robolab-policy-server] prompt={data_batch['ai_caption'][0]!r} seed={seed}")
 
         with self._lock:
             with torch.inference_mode():
+                torch.cuda.synchronize()
+                inference_start = time.perf_counter()
                 samples = self.model.generate_samples_from_batch(
                     data_batch,
                     guidance=self.cfg.guidance,
@@ -569,7 +718,10 @@ class RobolabPolicyService:
                     num_steps=self.cfg.num_steps,
                     shift=self.cfg.shift,
                 )
+                torch.cuda.synchronize()
+                inference_ms = (time.perf_counter() - inference_start) * 1000.0
 
+        postprocess_start = time.perf_counter()
         action = samples["action"][0][:, : self.cfg.action_dim]  # [T,D]
         action = action[self.cfg.history_length :]  # [T2,D]
         action_np = action.detach().cpu().numpy()  # [T2,D]
@@ -591,24 +743,68 @@ class RobolabPolicyService:
             quat_xyzw = convert_rotation(abs_pose[1:, :3, :3], "matrix", "quat_xyzw")
             action_np = np.concatenate([position, quat_xyzw, action_np[:, 9:]], axis=-1)
 
+        expected_dim = self.cfg.action_dim if self.cfg.action_space == "joint_pos" else 8
+        expected_shape = (self.cfg.action_chunk_size, expected_dim)
+        if action_np.shape != expected_shape or not np.isfinite(action_np).all():
+            raise RuntimeError(f"Invalid action output: shape={action_np.shape} finite={np.isfinite(action_np).all()}")
+
         outputs: dict[str, Any] = {"action": action_np}
         if self.cfg.decode_video:
             pred_vision_latent = samples["vision"][0]  # [C,T,H,W]
             video = self.model.decode(pred_vision_latent)  # [1,C,T,H,W]
             video = ((video[0].clamp(-1.0, 1.0) + 1.0) * 127.5).to(torch.uint8).permute(1, 2, 3, 0)  # [T,H,W,3]
             outputs["video"] = video.detach().cpu().numpy()
+        postprocess_ms = (time.perf_counter() - postprocess_start) * 1000.0
+        total_ms = (time.perf_counter() - request_start) * 1000.0
+        outputs["timing"] = {
+            "server_preprocess_ms": preprocess_ms,
+            "server_policy_inference_ms": inference_ms,
+            "server_postprocess_ms": postprocess_ms,
+            "server_total_ms": total_ms,
+        }
+        log.info(
+            f"[robolab-policy-server] timing preprocess_ms={preprocess_ms:.2f} "
+            f"policy_inference_ms={inference_ms:.2f} postprocess_ms={postprocess_ms:.2f} total_ms={total_ms:.2f}"
+        )
         return outputs
+
+    def warmup(self, requests: int, prompt: str) -> None:
+        if requests <= 0:
+            return
+        observation = {
+            "prompt": prompt,
+            "observation/image": np.zeros(
+                (self.cfg.image_height, self.cfg.image_width, 3),
+                dtype=np.uint8,
+            ),
+            "observation/joint_position": np.zeros((1, 7), dtype=np.float32),
+            "observation/gripper_position": np.zeros((1, 1), dtype=np.float32),
+        }
+        if self.cfg.action_space == "midtrain":
+            observation["observation/eef_pos"] = np.zeros((1, 3), dtype=np.float32)
+            observation["observation/eef_quat"] = np.array([[0.0, 0.0, 0.0, 1.0]], dtype=np.float32)
+        for index in range(requests):
+            result = self.infer(observation)
+            log.info(
+                f"[robolab-policy-server] startup warmup {index + 1}/{requests} "
+                f"total_ms={result['timing']['server_total_ms']:.2f}"
+            )
 
 
 def serve(args: RobolabServerArgs) -> None:
     hostname = socket.gethostname()
     log.info(f"[robolab-policy-server] starting host={hostname} bind={args.host}:{int(args.port)}")
     service = RobolabPolicyService(args)
+    service.warmup(int(args.startup_warmup_requests), args.startup_warmup_prompt)
     local_ip = get_local_ip()
     log.info(f"[robolab-policy-server] Server accessible at: ws://{local_ip}:{int(args.port)}/")
     log.info(f"[robolab-policy-server] Health check: http://{local_ip}:{int(args.port)}/healthz")
     server_cls = _load_openpi_websocket_policy_server()
-    server_cls(policy=service, host=args.host, port=int(args.port), metadata={}).serve_forever()
+    metadata = {
+        "action_head_sha256": service.action_head_sha256,
+        "random_action_heads": bool(args.allow_missing_action_heads),
+    }
+    server_cls(policy=service, host=args.host, port=int(args.port), metadata=metadata).serve_forever()
 
 
 def main() -> None:

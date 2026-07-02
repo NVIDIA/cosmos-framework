@@ -489,6 +489,7 @@ class CheckpointArgs(ConfigArgs):
     credential_path: str
     use_ema_weights: bool
     checkpoint_cache_dir: Path | None
+    keys_to_skip_loading: list[str]
 
     def download_checkpoint(self) -> Path:
         if self.checkpoint_hf is not None:
@@ -533,6 +534,8 @@ class CheckpointOverrides(ConfigOverrides):
     """If True, use EMA weights. Otherwise, use regular weights."""
     checkpoint_cache_dir: Training[Path | None] = None
     """Directory for caching S3 checkpoints."""
+    keys_to_skip_loading: Training[list[str]] = pydantic.Field(default_factory=list)
+    """Checkpoint key substrings to leave at their initialized values."""
 
     def _build_checkpoint(self, checkpoints: dict[str, CheckpointConfig]):
         # Detect checkpoint type

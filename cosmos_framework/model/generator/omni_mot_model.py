@@ -16,18 +16,19 @@ from einops import rearrange
 from torch.distributed._composable.fsdp import FSDPModule
 from torch.nn.modules.module import _IncompatibleKeys
 
-from cosmos_framework.utils.flags import DEVICE, TRAINING, Device
-from cosmos_framework.utils.lazy_config import LazyDict
-from cosmos_framework.utils.lazy_config import instantiate as lazy_instantiate
-from cosmos_framework.model._base import ImaginaireModel
-from cosmos_framework.utils import log, misc
-from cosmos_framework.utils.count_params import count_params
-from cosmos_framework.utils.timer import Timer
-from cosmos_framework.model.generator.algorithm.loss.flow_matching import compute_flow_matching_loss
-from cosmos_framework.model.generator.algorithm.loss.load_balancing import compute_load_balancing_loss
 from cosmos_framework.configs.base.defaults.model_config import OmniMoTModelConfig
 from cosmos_framework.data.generator.action.action_processing import ActionProcessor, get_action_processing_records
+from cosmos_framework.data.generator.sequence_packing import (
+    PackedSequence,
+    SequencePlan,
+    build_sequence_plans_from_data_batch,
+    pack_input_sequence,
+)
+from cosmos_framework.data.generator.sequence_packing.modalities import add_special_tokens
 from cosmos_framework.data.generator.utils import IMAGE_RES_SIZE_INFO, VIDEO_RES_SIZE_INFO
+from cosmos_framework.model._base import ImaginaireModel
+from cosmos_framework.model.generator.algorithm.loss.flow_matching import compute_flow_matching_loss
+from cosmos_framework.model.generator.algorithm.loss.load_balancing import compute_load_balancing_loss
 from cosmos_framework.model.generator.diffusion.rectified_flow import RectifiedFlow
 from cosmos_framework.model.generator.diffusion.samplers.edm import EDMSampler
 from cosmos_framework.model.generator.diffusion.samplers.fixed_step import FixedStepSampler
@@ -37,6 +38,8 @@ from cosmos_framework.model.generator.mot.cosmos3_vfm_network import Cosmos3VFMN
 from cosmos_framework.model.generator.mot.modeling_utils import has_noisy_tokens
 from cosmos_framework.model.generator.mot.parallelize_vfm_network import parallelize_vfm_network
 from cosmos_framework.model.generator.reasoner.qwen3_vl.utils import tokenize_caption
+from cosmos_framework.model.generator.tokenizers.interface import VideoTokenizerInterface
+from cosmos_framework.model.generator.upsampler.prompts import build_messages, clean_response
 from cosmos_framework.model.generator.utils.data_and_condition import (
     GenerationDataClean,
     GenerationDataNoised,
@@ -48,19 +51,16 @@ from cosmos_framework.model.generator.utils.memory import MemoryState
 from cosmos_framework.model.generator.utils.safetensors_loader import (
     load_language_model as load_language_model_safetensors,
 )
-from cosmos_framework.data.generator.sequence_packing import (
-    PackedSequence,
-    SequencePlan,
-    build_sequence_plans_from_data_batch,
-    pack_input_sequence,
-)
-from cosmos_framework.data.generator.sequence_packing.modalities import add_special_tokens
-from cosmos_framework.model.generator.tokenizers.interface import VideoTokenizerInterface
-from cosmos_framework.model.generator.upsampler.prompts import build_messages, clean_response
+from cosmos_framework.utils import log, misc
+from cosmos_framework.utils.count_params import count_params
+from cosmos_framework.utils.flags import DEVICE, TRAINING, Device
 from cosmos_framework.utils.generator.data_utils import get_vision_data_resolution
 from cosmos_framework.utils.generator.dtensor_helper import DTensorFastEmaModelUpdater
 from cosmos_framework.utils.generator.model_weights_stats import WeightTrainingStat
 from cosmos_framework.utils.generator.parallelism import ParallelDims
+from cosmos_framework.utils.lazy_config import LazyDict
+from cosmos_framework.utils.lazy_config import instantiate as lazy_instantiate
+from cosmos_framework.utils.timer import Timer
 
 
 def _can_encode_frame_zero_policy_batch(
@@ -221,7 +221,6 @@ class OmniMoTModel(ImaginaireModel):
         else:
             self.tokenizer_sound_gen = None
 
-
     def build_net(self, dtype: torch.dtype, *, lora_enabled: bool | None = None) -> torch.nn.Module:
         # Build model network and parallelize it.
         lora_enabled = self.config.lora_enabled if lora_enabled is None else lora_enabled
@@ -248,6 +247,7 @@ class OmniMoTModel(ImaginaireModel):
                 action_gen=self.config.action_gen,
                 sound_gen=self.config.sound_gen,
                 joint_attn_implementation=self.config.joint_attn_implementation,
+                attention_backend=self.config.attention_backend,
                 timestep_scale=1.0 / float(num_train_timesteps) * self.config.diffusion_expert_config.timestep_range,
                 action_dim=self.config.max_action_dim,
                 num_embodiment_domains=self.config.num_embodiment_domains,
