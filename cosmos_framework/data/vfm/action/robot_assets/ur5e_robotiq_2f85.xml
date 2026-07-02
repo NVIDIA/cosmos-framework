@@ -1,3 +1,5 @@
+<!-- SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved. -->
+<!-- SPDX-License-Identifier: OpenMDW-1.1 -->
 <!-- UR5e + Robotiq 2F-85 gripper composite MJCF.
      Created for RoboMIND UR visualization.
      Arm (UR5e): qpos[0:6] — shoulder_pan, shoulder_lift, elbow, wrist_1, wrist_2, wrist_3
