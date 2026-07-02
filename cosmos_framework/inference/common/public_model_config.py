@@ -180,16 +180,16 @@ def _canonicalize_module_path(path: str) -> str:
         # so the reasoner subtree isn't shadowed by the general vfm rules below.
         ("cosmos_framework.configs.base.defaults.reasoner.", "projects.cosmos3.vfm.configs.base.defaults.vlm."),
         ("cosmos_framework.configs.base.reasoner.", "projects.cosmos3.vfm.configs.base.vlm."),
-        ("cosmos_framework.model.vfm.reasoner.", "projects.cosmos3.vfm.models.vlm."),
-        ("cosmos_framework.data.vfm.reasoner.", "projects.cosmos3.vfm.datasets.vlm."),
-        ("cosmos_framework.data.vfm.augmentors.reasoner.", "projects.cosmos3.vfm.datasets.augmentors.vlm."),
-        ("cosmos_framework.utils.vfm.reasoner.", "projects.cosmos3.vfm.utils.vlm."),
+        ("cosmos_framework.model.generator.reasoner.", "projects.cosmos3.vfm.models.vlm."),
+        ("cosmos_framework.data.generator.reasoner.", "projects.cosmos3.vfm.datasets.vlm."),
+        ("cosmos_framework.data.generator.augmentors.reasoner.", "projects.cosmos3.vfm.datasets.augmentors.vlm."),
+        ("cosmos_framework.utils.generator.reasoner.", "projects.cosmos3.vfm.utils.vlm."),
         ("cosmos3._src.vfm.", "projects.cosmos3.vfm."),
         ("cosmos_framework.configs.base.", "projects.cosmos3.vfm.configs.base."),
-        ("cosmos_framework.model.vfm.tokenizers.", "projects.cosmos3.vfm.tokenizers."),
-        ("cosmos_framework.model.vfm.diffusion.", "projects.cosmos3.vfm.diffusion."),
-        ("cosmos_framework.model.vfm.", "projects.cosmos3.vfm.models."),
-        ("cosmos_framework.data.vfm.processors.", "projects.cosmos3.vfm.processors."),
+        ("cosmos_framework.model.generator.tokenizers.", "projects.cosmos3.vfm.tokenizers."),
+        ("cosmos_framework.model.generator.diffusion.", "projects.cosmos3.vfm.diffusion."),
+        ("cosmos_framework.model.generator.", "projects.cosmos3.vfm.models."),
+        ("cosmos_framework.data.generator.processors.", "projects.cosmos3.vfm.processors."),
         ("cosmos.model.vfm.tokenizers.", "projects.cosmos3.vfm.tokenizers."),
         ("cosmos.model.vfm.diffusion.", "projects.cosmos3.vfm.diffusion."),
         ("cosmos.model.vfm.", "projects.cosmos3.vfm.models."),
@@ -202,7 +202,7 @@ def _canonicalize_module_path(path: str) -> str:
 
 
 def _runtime_module_path(canonical_path: str) -> str:
-    if _module_exists("cosmos_framework.model.vfm"):
+    if _module_exists("cosmos_framework.model.generator"):
         return _replace_vfm_module_prefix(canonical_path, package="cosmos_framework")
     if _module_exists("cosmos.model.vfm"):
         return _replace_vfm_module_prefix(canonical_path, package="cosmos")
@@ -217,18 +217,18 @@ def _replace_vfm_module_prefix(canonical_path: str, *, package: str) -> str:
         # so the specific vlm→reasoner subtree isn't shadowed by them.
         ("projects.cosmos3.vfm.configs.base.defaults.vlm.", f"{package}.configs.base.defaults.reasoner."),
         ("projects.cosmos3.vfm.configs.base.vlm.", f"{package}.configs.base.reasoner."),
-        ("projects.cosmos3.vfm.models.vlm.", f"{package}.model.vfm.reasoner."),
-        ("projects.cosmos3.vfm.datasets.vlm.", f"{package}.data.vfm.reasoner."),
-        ("projects.cosmos3.vfm.datasets.augmentors.vlm.", f"{package}.data.vfm.augmentors.reasoner."),
-        ("projects.cosmos3.vfm.utils.vlm.", f"{package}.utils.vfm.reasoner."),
+        ("projects.cosmos3.vfm.models.vlm.", f"{package}.model.generator.reasoner."),
+        ("projects.cosmos3.vfm.datasets.vlm.", f"{package}.data.generator.reasoner."),
+        ("projects.cosmos3.vfm.datasets.augmentors.vlm.", f"{package}.data.generator.augmentors.reasoner."),
+        ("projects.cosmos3.vfm.utils.vlm.", f"{package}.utils.generator.reasoner."),
         ("projects.cosmos3.vfm.configs.base.", f"{package}.configs.base."),
-        ("projects.cosmos3.vfm.models.", f"{package}.model.vfm."),
-        ("projects.cosmos3.vfm.tokenizers.", f"{package}.model.vfm.tokenizers."),
-        ("projects.cosmos3.vfm.diffusion.", f"{package}.model.vfm.diffusion."),
-        ("projects.cosmos3.vfm.processors.", f"{package}.data.vfm.processors."),
-        ("projects.cosmos3.vfm.datasets.", f"{package}.data.vfm."),
-        ("projects.cosmos3.vfm.scripts.action.", f"{package}.data.vfm.action_scripts."),
-        ("projects.cosmos3.vfm.utils.", f"{package}.utils.vfm."),
+        ("projects.cosmos3.vfm.models.", f"{package}.model.generator."),
+        ("projects.cosmos3.vfm.tokenizers.", f"{package}.model.generator.tokenizers."),
+        ("projects.cosmos3.vfm.diffusion.", f"{package}.model.generator.diffusion."),
+        ("projects.cosmos3.vfm.processors.", f"{package}.data.generator.processors."),
+        ("projects.cosmos3.vfm.datasets.", f"{package}.data.generator."),
+        ("projects.cosmos3.vfm.scripts.action.", f"{package}.data.generator.action_scripts."),
+        ("projects.cosmos3.vfm.utils.", f"{package}.utils.generator."),
     )
     for old, new in replacements:
         if canonical_path.startswith(old):
@@ -250,13 +250,13 @@ def _to_public_string(value: str) -> str:
 def _public_string_from_runtime_file_prefix(value: str, *, package: str) -> str | None:
     replacements = (
         (f"{package}/configs/base/", "configs/base/"),
-        (f"{package}/model/vfm/tokenizers/", "tokenizers/"),
-        (f"{package}/model/vfm/diffusion/", "diffusion/"),
-        (f"{package}/model/vfm/", "models/"),
-        (f"{package}/data/vfm/processors/", "processors/"),
-        (f"{package}/data/vfm/action_scripts/", "scripts/action/"),
-        (f"{package}/data/vfm/", "datasets/"),
-        (f"{package}/utils/vfm/", "utils/"),
+        (f"{package}/model/generator/tokenizers/", "tokenizers/"),
+        (f"{package}/model/generator/diffusion/", "diffusion/"),
+        (f"{package}/model/generator/", "models/"),
+        (f"{package}/data/generator/processors/", "processors/"),
+        (f"{package}/data/generator/action_scripts/", "scripts/action/"),
+        (f"{package}/data/generator/", "datasets/"),
+        (f"{package}/utils/generator/", "utils/"),
     )
     for old, new in replacements:
         if value.startswith(old):
@@ -268,7 +268,7 @@ def _from_public_string(value: str) -> str:
     if not value.startswith(_PUBLIC_VFM_URI_PREFIX):
         return value
     suffix = value[len(_PUBLIC_VFM_URI_PREFIX) :]
-    if _module_exists("cosmos_framework.model.vfm"):
+    if _module_exists("cosmos_framework.model.generator"):
         return _replace_vfm_file_prefix(suffix, package="cosmos_framework")
     if _module_exists("cosmos.model.vfm"):
         return _replace_vfm_file_prefix(suffix, package="cosmos")
@@ -280,13 +280,13 @@ def _from_public_string(value: str) -> str:
 def _replace_vfm_file_prefix(suffix: str, *, package: str) -> str:
     replacements = (
         ("configs/base/", f"{package}/configs/base/"),
-        ("models/", f"{package}/model/vfm/"),
-        ("tokenizers/", f"{package}/model/vfm/tokenizers/"),
-        ("diffusion/", f"{package}/model/vfm/diffusion/"),
-        ("processors/", f"{package}/data/vfm/processors/"),
-        ("datasets/", f"{package}/data/vfm/"),
-        ("scripts/action/", f"{package}/data/vfm/action_scripts/"),
-        ("utils/", f"{package}/utils/vfm/"),
+        ("models/", f"{package}/model/generator/"),
+        ("tokenizers/", f"{package}/model/generator/tokenizers/"),
+        ("diffusion/", f"{package}/model/generator/diffusion/"),
+        ("processors/", f"{package}/data/generator/processors/"),
+        ("datasets/", f"{package}/data/generator/"),
+        ("scripts/action/", f"{package}/data/generator/action_scripts/"),
+        ("utils/", f"{package}/utils/generator/"),
     )
     for old, new in replacements:
         if suffix.startswith(old):

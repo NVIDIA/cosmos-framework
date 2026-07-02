@@ -9,21 +9,21 @@ from typing import Any
 
 import torch
 
-from cosmos_framework.data.vfm.action.action_processing import (
+from cosmos_framework.data.generator.action.action_processing import (
     ActionProcessingRecord,
     make_batched_action_processing_fields,
     pad_action_to_max_dim,
 )
-from cosmos_framework.data.vfm.action.domain_utils import EMBODIMENT_TO_RAW_ACTION_DIM, get_domain_id
-from cosmos_framework.data.vfm.action.json_formatter import ActionPromptJsonFormatter
-from cosmos_framework.data.vfm.action.transforms import (
+from cosmos_framework.data.generator.action.domain_utils import EMBODIMENT_TO_RAW_ACTION_DIM, get_domain_id
+from cosmos_framework.data.generator.action.json_formatter import ActionPromptJsonFormatter
+from cosmos_framework.data.generator.action.transforms import (
     build_sequence_plan_from_mode,
     find_closest_target_size,
     reflection_pad_to_target,
 )
 from cosmos_framework.inference.args import ModelMode
 from cosmos_framework.inference.vision import read_media_frames
-from cosmos_framework.utils.vfm.data_utils import get_vision_data_resolution
+from cosmos_framework.utils.generator.data_utils import get_vision_data_resolution
 
 
 def _load_actions(

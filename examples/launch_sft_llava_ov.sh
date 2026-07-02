@@ -7,7 +7,7 @@
 # cosmos_framework.scripts.train against
 # examples/toml/sft_config/llava_ov.toml.
 #
-# [job].task = "vlm" — picks cosmos_framework/configs/base/vlm/config.py as the base config.
+# [job].task = "vlm" — picks cosmos_framework/configs/base/reasoner/config.py as the base config.
 #
 # The dataset streams from the HuggingFace Hub, so DATASET_PATH /
 # WAN_VAE_PATH / BASE_CHECKPOINT_PATH are NOT required.

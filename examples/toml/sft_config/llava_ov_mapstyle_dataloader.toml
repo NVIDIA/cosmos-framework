@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: OpenMDW-1.1
 
 # pre_exp012_llava_ov_mapstyle_dataloader — map-style resumable VLM recipe
-# Base config = cosmos_framework/configs/base/vlm/config.py (task="vlm").
+# Base config = cosmos_framework/configs/base/reasoner/config.py (task="vlm").
 #
 # Loads LLaVA-OneVision-Data ai2d(gpt4v) as a real map-style Dataset
 # (load_dataset(streaming=False)), filters + caps to 4000 rows, and shards it

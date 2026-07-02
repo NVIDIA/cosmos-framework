@@ -75,7 +75,7 @@ from cosmos_framework.utils.config import CheckpointConfig, JobConfig
 from cosmos_framework.model._base import ImaginaireModel
 from cosmos_framework.utils import callback, distributed, log, misc
 from cosmos_framework.utils.easy_io import easy_io
-from cosmos_framework.utils.vfm.rand_state import get_rand_state_dict, set_rand_state_dict
+from cosmos_framework.utils.generator.rand_state import get_rand_state_dict, set_rand_state_dict
 
 
 class ModelWrapper(Stateful):

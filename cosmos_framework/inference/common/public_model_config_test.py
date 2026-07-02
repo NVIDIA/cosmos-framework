@@ -21,7 +21,7 @@ def _has_key(obj, key: str) -> bool:
 def test_public_model_config_round_trip_removes_internal_metadata():
     model_config = {
         "_recursive_": False,
-        "_target_": "cosmos_framework.model.vfm.omni_mot_model.OmniMoTModel",
+        "_target_": "cosmos_framework.model.generator.omni_mot_model.OmniMoTModel",
         "config": {
             "_type": "cosmos_framework.configs.base.defaults.model_config.OmniMoTModelConfig",
             "activation_checkpointing": {
@@ -29,18 +29,18 @@ def test_public_model_config_round_trip_removes_internal_metadata():
                 "mode": "full",
             },
             "tokenizer": {
-                "_target_": "cosmos_framework.model.vfm.tokenizers.wan2pt2_vae_4x16x16.Wan2pt2VAEInterface",
+                "_target_": "cosmos_framework.model.generator.tokenizers.wan2pt2_vae_4x16x16.Wan2pt2VAEInterface",
                 "vae_path": "pretrained/tokenizers/video/wan2pt2/Wan2.2_VAE.pth",
             },
             "vlm_config": {
                 "_type": "cosmos_framework.configs.base.defaults.reasoner.VLMConfig",
                 "model_instance": {
-                    "_target_": "cosmos_framework.model.vfm.mot.unified_mot.Qwen3VLTextForCausalLM",
+                    "_target_": "cosmos_framework.model.generator.mot.unified_mot.Qwen3VLTextForCausalLM",
                     "config": {
                         "_target_": "cosmos_framework.configs.base.defaults.reasoner.create_vlm_config",
                         "base_config": {
-                            "_target_": "cosmos_framework.model.vfm.mot.unified_mot.Qwen3VLMoTConfig.from_json_file",
-                            "json_file": "cosmos_framework/model/vfm/reasoner/qwen3_vl/configs/Qwen3-VL-32B-Instruct.json",
+                            "_target_": "cosmos_framework.model.generator.mot.unified_mot.Qwen3VLMoTConfig.from_json_file",
+                            "json_file": "cosmos_framework/model/generator/reasoner/qwen3_vl/configs/Qwen3-VL-32B-Instruct.json",
                         },
                     },
                 },

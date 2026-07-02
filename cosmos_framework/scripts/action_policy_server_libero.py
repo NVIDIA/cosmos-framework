@@ -63,13 +63,13 @@ from PIL import Image
 # Action-specific helpers live in the in-tree project tree. Imports stay as
 # `projects.cosmos3.vfm.*` and are auto-rewritten to `cosmos3._src.vfm.*` by the
 # cosmos-framework release script.
-from cosmos_framework.data.vfm.action.action_processing import (
+from cosmos_framework.data.generator.action.action_processing import (
     ActionProcessingRecord,
     make_batched_action_processing_fields,
 )
-from cosmos_framework.data.vfm.action.domain_utils import get_domain_id
-from cosmos_framework.data.vfm.action.json_formatter import ActionPromptJsonFormatter
-from cosmos_framework.data.vfm.action.transforms import (
+from cosmos_framework.data.generator.action.domain_utils import get_domain_id
+from cosmos_framework.data.generator.action.json_formatter import ActionPromptJsonFormatter
+from cosmos_framework.data.generator.action.transforms import (
     build_sequence_plan_from_mode,
     find_closest_target_size,
     reflection_pad_to_target,
@@ -88,7 +88,7 @@ from cosmos_framework.scripts.action_policy_server_utils import (
 )
 from cosmos_framework.utils import log
 from cosmos_framework.utils.lazy_config import instantiate
-from cosmos_framework.utils.vfm.data_utils import get_vision_data_resolution
+from cosmos_framework.utils.generator.data_utils import get_vision_data_resolution
 
 _DEFAULT_ACTION_CHUNK_SIZE = 16
 ActionNormalization = Literal["auto", "meanstd", "minmax", "quantile", "quantile_rot"]

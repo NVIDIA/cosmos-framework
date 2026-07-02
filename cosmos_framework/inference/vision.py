@@ -11,8 +11,8 @@ import torchvision.io
 import torchvision.transforms.functional as TF
 from PIL import Image
 
-from cosmos_framework.data.vfm.sequence_packing import SequencePlan
-from cosmos_framework.data.vfm.utils import VIDEO_RES_SIZE_INFO
+from cosmos_framework.data.generator.sequence_packing import SequencePlan
+from cosmos_framework.data.generator.utils import VIDEO_RES_SIZE_INFO
 
 
 def resize_pil_image(image: Image.Image, max_size: int, padding_constant: int) -> Image.Image:

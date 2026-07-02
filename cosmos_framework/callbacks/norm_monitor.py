@@ -14,7 +14,7 @@ from cosmos_framework.model._base import ImaginaireModel
 from cosmos_framework.utils import distributed, log, misc
 from cosmos_framework.utils.callback import Callback
 from cosmos_framework.utils.easy_io import easy_io
-from cosmos_framework.data.vfm.sequence_packing.runtime import get_gen_seq
+from cosmos_framework.data.generator.sequence_packing.runtime import get_gen_seq
 
 try:
     from apex.contrib.layer_norm import FastLayerNorm

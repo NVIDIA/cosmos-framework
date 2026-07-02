@@ -50,9 +50,9 @@ from cosmos_framework.utils import log
 from cosmos_framework.tools.visualize.video import save_img_or_video
 from cosmos_framework.configs.base.defaults.compile import CompileConfig
 from cosmos_framework.configs.base.defaults.parallelism import ParallelismConfig
-from cosmos_framework.model.vfm.omni_mot_model import OmniMoTModel
-from cosmos_framework.model.vfm.reasoner.qwen3_vl.utils import _SYSTEM_PROMPT_IMAGE_EDITING
-from cosmos_framework.model.vfm.upsampler.prompts import is_upsampled_prompt
+from cosmos_framework.model.generator.omni_mot_model import OmniMoTModel
+from cosmos_framework.model.generator.reasoner.qwen3_vl.utils import _SYSTEM_PROMPT_IMAGE_EDITING
+from cosmos_framework.model.generator.upsampler.prompts import is_upsampled_prompt
 
 if TYPE_CHECKING:
     from cosmos_framework.configs.base.defaults.model_config import OmniMoTModelConfig
@@ -1033,7 +1033,7 @@ class OmniInference(Inference):
         compile_config = cls._get_compile_config(setup_args)
         if setup_args.checkpoint_type == CheckpointType.DCP and setup_args.config_file_type == ConfigFileType.MODULE:
             from cosmos_framework.inference.common.config import save_config
-            from cosmos_framework.utils.vfm.model_loader import load_model_from_checkpoint
+            from cosmos_framework.utils.generator.model_loader import load_model_from_checkpoint
 
             if not setup_args.experiment:
                 raise ValueError("'experiment' is required")

@@ -11,7 +11,7 @@ Why this exists instead of ``MFUCallback`` (``cosmos_framework/callbacks/mfu.py`
 ``MFUCallback`` is written for the OmniMoT/VFM network -- it reads
 ``model.net.language_model.config`` and per-modality token counts
 (``output_batch["und_token_length"]`` etc.). ``VLMModel``
-(``cosmos_framework/model/vfm/vlm_model.py``) is a plain HF wrapper: it exposes
+(``cosmos_framework/model/generator/vlm_model.py``) is a plain HF wrapper: it exposes
 ``self.model`` (no ``.net``) and its ``training_step`` returns only
 ``{"loss", "loss_avg", "labels"}``. ``MFUCallback`` would therefore silently
 no-op (token length is ``None``) or fail on ``model.net``. This callback instead

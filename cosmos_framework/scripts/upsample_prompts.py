@@ -16,7 +16,7 @@ import tyro
 from tqdm import tqdm
 
 from cosmos_framework.inference.args import ModelMode, OmniSampleArgs, OmniSampleOverrides, OmniSetupOverrides
-from cosmos_framework.model.vfm.upsampler.prompts import build_messages, clean_response
+from cosmos_framework.model.generator.upsampler.prompts import build_messages, clean_response
 from cosmos_framework.utils import log
 
 if TYPE_CHECKING:

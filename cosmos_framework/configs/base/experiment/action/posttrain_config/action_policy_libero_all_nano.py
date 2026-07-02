@@ -14,8 +14,8 @@ import copy
 from hydra.core.config_store import ConfigStore
 
 from cosmos_framework.configs.base.experiment.sft.models.nano_model_config import NANO_MODEL_CONFIG
-from cosmos_framework.data.vfm.action.datasets.action_sft_dataset import get_action_libero_sft_dataset
-from cosmos_framework.data.vfm.joint_dataloader import (
+from cosmos_framework.data.generator.action.datasets.action_sft_dataset import get_action_libero_sft_dataset
+from cosmos_framework.data.generator.joint_dataloader import (
     PackingDataLoader,
     RankPartitionedDataLoader,
 )

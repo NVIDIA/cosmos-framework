@@ -16,7 +16,7 @@ from cosmos_framework.utils.lazy_config import instantiate as lazy_instantiate
 from cosmos_framework.utils import log
 from cosmos_framework.utils.config_helper import ConfigStore
 from cosmos_framework.utils.easy_io import easy_io
-from cosmos_framework.model.vfm.mot.unified_mot import (
+from cosmos_framework.model.generator.mot.unified_mot import (
     Nemotron3DenseVLMoTConfig,
     Nemotron3DenseVLTextForCausalLM,
     Qwen3MoTConfig,
@@ -25,8 +25,8 @@ from cosmos_framework.model.vfm.mot.unified_mot import (
     Qwen3VLMoTConfig,
     Qwen3VLTextForCausalLM,
 )
-from cosmos_framework.data.vfm.processors import LLMTokenizerProcessor, build_processor_lazy
-from cosmos_framework.model.vfm.tokenizers.tokenization_qwen2 import Qwen2Tokenizer
+from cosmos_framework.data.generator.processors import LLMTokenizerProcessor, build_processor_lazy
+from cosmos_framework.model.generator.tokenizers.tokenization_qwen2 import Qwen2Tokenizer
 
 
 def create_vlm_config(base_config: LazyDict, **overrides):
@@ -177,7 +177,7 @@ Qwen3MoT_LLM_0p6b_Config: VLMConfig = VLMConfig(
     model_instance=L(Qwen3VLTextForCausalLM)(
         config=L(create_vlm_config)(
             base_config=L(Qwen3MoTConfig.from_json_file)(
-                json_file="cosmos_framework/model/vfm/llm/qwen3/configs/Qwen3-0.6B.json"
+                json_file="cosmos_framework/model/generator/llm/qwen3/configs/Qwen3-0.6B.json"
             ),
             qk_norm_for_text=True,
         ),
@@ -197,7 +197,7 @@ Qwen3MoT_LLM_0p6b_GCP_Config: VLMConfig = VLMConfig(
     model_instance=L(Qwen3VLTextForCausalLM)(
         config=L(create_vlm_config)(
             base_config=L(Qwen3MoTConfig.from_json_file)(
-                json_file="cosmos_framework/model/vfm/llm/qwen3/configs/Qwen3-0.6B.json"
+                json_file="cosmos_framework/model/generator/llm/qwen3/configs/Qwen3-0.6B.json"
             ),
             qk_norm_for_text=True,
         ),
@@ -217,7 +217,7 @@ Nemotron3_LLM_2b_GCP_Config: VLMConfig = VLMConfig(
     model_instance=L(Nemotron3DenseVLTextForCausalLM)(
         config=L(create_vlm_config)(
             base_config=L(Nemotron3DenseVLMoTConfig.from_json_file)(
-                json_file="cosmos_framework/model/vfm/reasoner/nemotron_3_dense_vl/configs/Nemotron-2B-Dense-VL.json"
+                json_file="cosmos_framework/model/generator/reasoner/nemotron_3_dense_vl/configs/Nemotron-2B-Dense-VL.json"
             ),
             qk_norm_for_text=False,
         ),
@@ -243,7 +243,7 @@ Qwen3VLMoT_VLM_30b_a3b_Instruct_Config: VLMConfig = VLMConfig(
     model_instance=L(Qwen3VLMoeTextForCausalLM)(
         config=L(create_vlm_config)(
             base_config=L(Qwen3VLMoeMoTConfig.from_json_file)(
-                json_file="cosmos_framework/model/vfm/reasoner/qwen3_vl_moe/configs/Qwen3-VL-30B-A3B-Instruct.json"
+                json_file="cosmos_framework/model/generator/reasoner/qwen3_vl_moe/configs/Qwen3-VL-30B-A3B-Instruct.json"
             ),
             layer_module="Qwen3VLMoeTextMoTDecoderLayer",
             qk_norm_for_text=True,
@@ -266,7 +266,7 @@ Qwen3VLMoT_VLM_30b_a3b_Instruct_GCP_Config: VLMConfig = VLMConfig(
     model_instance=L(Qwen3VLMoeTextForCausalLM)(
         config=L(create_vlm_config)(
             base_config=L(Qwen3VLMoeMoTConfig.from_json_file)(
-                json_file="cosmos_framework/model/vfm/reasoner/qwen3_vl_moe/configs/Qwen3-VL-30B-A3B-Instruct.json"
+                json_file="cosmos_framework/model/generator/reasoner/qwen3_vl_moe/configs/Qwen3-VL-30B-A3B-Instruct.json"
             ),
             layer_module="Qwen3VLMoeTextMoTDecoderLayer",
             qk_norm_for_text=True,
@@ -291,7 +291,7 @@ Qwen3VLMoT_VLM_235b_a22b_Instruct_GCP_Config: VLMConfig = VLMConfig(
     model_instance=L(Qwen3VLMoeTextForCausalLM)(
         config=L(create_vlm_config)(
             base_config=L(Qwen3VLMoeMoTConfig.from_json_file)(
-                json_file="cosmos_framework/model/vfm/reasoner/qwen3_vl_moe/configs/Qwen3-VL-235B-A22B-Instruct.json"
+                json_file="cosmos_framework/model/generator/reasoner/qwen3_vl_moe/configs/Qwen3-VL-235B-A22B-Instruct.json"
             ),
             layer_module="Qwen3VLMoeTextMoTDecoderLayer",
             qk_norm_for_text=True,
@@ -317,7 +317,7 @@ Qwen3VLMoT_VLM_2b_Instruct_Config: VLMConfig = VLMConfig(
     model_instance=L(Qwen3VLTextForCausalLM)(
         config=L(create_vlm_config)(
             base_config=L(Qwen3VLMoTConfig.from_json_file)(
-                json_file="cosmos_framework/model/vfm/reasoner/qwen3_vl/configs/Qwen3-VL-2B-Instruct.json"
+                json_file="cosmos_framework/model/generator/reasoner/qwen3_vl/configs/Qwen3-VL-2B-Instruct.json"
             ),
             qk_norm_for_text=True,
         ),
@@ -337,7 +337,7 @@ Qwen3VLMoT_VLM_2b_Instruct_GCP_Config: VLMConfig = VLMConfig(
     model_instance=L(Qwen3VLTextForCausalLM)(
         config=L(create_vlm_config)(
             base_config=L(Qwen3VLMoTConfig.from_json_file)(
-                json_file="cosmos_framework/model/vfm/reasoner/qwen3_vl/configs/Qwen3-VL-2B-Instruct.json"
+                json_file="cosmos_framework/model/generator/reasoner/qwen3_vl/configs/Qwen3-VL-2B-Instruct.json"
             ),
             qk_norm_for_text=True,
         ),
@@ -358,7 +358,7 @@ Qwen3VLMoT_VLM_2b_Instruct_HF_Config: VLMConfig = VLMConfig(
     model_instance=L(Qwen3VLTextForCausalLM)(
         config=L(create_vlm_config)(
             base_config=L(Qwen3VLMoTConfig.from_json_file)(
-                json_file="cosmos_framework/model/vfm/reasoner/qwen3_vl/configs/Qwen3-VL-2B-Instruct.json"
+                json_file="cosmos_framework/model/generator/reasoner/qwen3_vl/configs/Qwen3-VL-2B-Instruct.json"
             ),
             qk_norm_for_text=True,
         ),
@@ -374,7 +374,7 @@ Nemotron3DenseVL_VLM_2b_GCP_Config: VLMConfig = VLMConfig(
     model_instance=L(Nemotron3DenseVLTextForCausalLM)(
         config=L(create_vlm_config)(
             base_config=L(Nemotron3DenseVLMoTConfig.from_json_file)(
-                json_file="cosmos_framework/model/vfm/reasoner/nemotron_3_dense_vl/configs/Nemotron-2B-Dense-VL.json"
+                json_file="cosmos_framework/model/generator/reasoner/nemotron_3_dense_vl/configs/Nemotron-2B-Dense-VL.json"
             ),
             qk_norm_for_text=False,
         ),
@@ -396,7 +396,7 @@ Cosmos3Reasoner_Nemotron_VLM_2b_Private_GCP_Config: VLMConfig = VLMConfig(
     model_instance=L(Nemotron3DenseVLTextForCausalLM)(
         config=L(create_vlm_config)(
             base_config=L(Nemotron3DenseVLMoTConfig.from_json_file)(
-                json_file="cosmos_framework/model/vfm/reasoner/nemotron_3_dense_vl/configs/Nemotron-2B-Dense-VL.json"
+                json_file="cosmos_framework/model/generator/reasoner/nemotron_3_dense_vl/configs/Nemotron-2B-Dense-VL.json"
             ),
             qk_norm_for_text=False,
         ),
@@ -418,7 +418,7 @@ CosmosReason2_VLM_2b_GCP_Config: VLMConfig = VLMConfig(
     model_instance=L(Qwen3VLTextForCausalLM)(
         config=L(create_vlm_config)(
             base_config=L(Qwen3VLMoTConfig.from_json_file)(
-                json_file="cosmos_framework/model/vfm/reasoner/qwen3_vl/configs/Qwen3-VL-2B-Instruct.json"
+                json_file="cosmos_framework/model/generator/reasoner/qwen3_vl/configs/Qwen3-VL-2B-Instruct.json"
             ),
             qk_norm_for_text=True,
         ),
@@ -441,7 +441,7 @@ Qwen3VLMoT_VLM_4b_Instruct_Config: VLMConfig = VLMConfig(
     model_instance=L(Qwen3VLTextForCausalLM)(
         config=L(create_vlm_config)(
             base_config=L(Qwen3VLMoTConfig.from_json_file)(
-                json_file="cosmos_framework/model/vfm/reasoner/qwen3_vl/configs/Qwen3-VL-4B-Instruct.json"
+                json_file="cosmos_framework/model/generator/reasoner/qwen3_vl/configs/Qwen3-VL-4B-Instruct.json"
             ),
             qk_norm_for_text=True,
         ),
@@ -461,7 +461,7 @@ Qwen3VLMoT_VLM_4b_Instruct_GCP_Config: VLMConfig = VLMConfig(
     model_instance=L(Qwen3VLTextForCausalLM)(
         config=L(create_vlm_config)(
             base_config=L(Qwen3VLMoTConfig.from_json_file)(
-                json_file="cosmos_framework/model/vfm/reasoner/qwen3_vl/configs/Qwen3-VL-4B-Instruct.json"
+                json_file="cosmos_framework/model/generator/reasoner/qwen3_vl/configs/Qwen3-VL-4B-Instruct.json"
             ),
             qk_norm_for_text=True,
         ),
@@ -484,7 +484,7 @@ Qwen3VLMoT_VLM_8b_Instruct_Config: VLMConfig = VLMConfig(
     model_instance=L(Qwen3VLTextForCausalLM)(
         config=L(create_vlm_config)(
             base_config=L(Qwen3VLMoTConfig.from_json_file)(
-                json_file="cosmos_framework/model/vfm/reasoner/qwen3_vl/configs/Qwen3-VL-8B-Instruct.json"
+                json_file="cosmos_framework/model/generator/reasoner/qwen3_vl/configs/Qwen3-VL-8B-Instruct.json"
             ),
             qk_norm_for_text=True,
         ),
@@ -504,7 +504,7 @@ Qwen3VLMoT_VLM_8b_Instruct_GCP_Config: VLMConfig = VLMConfig(
     model_instance=L(Qwen3VLTextForCausalLM)(
         config=L(create_vlm_config)(
             base_config=L(Qwen3VLMoTConfig.from_json_file)(
-                json_file="cosmos_framework/model/vfm/reasoner/qwen3_vl/configs/Qwen3-VL-8B-Instruct.json"
+                json_file="cosmos_framework/model/generator/reasoner/qwen3_vl/configs/Qwen3-VL-8B-Instruct.json"
             ),
             qk_norm_for_text=True,
         ),
@@ -525,7 +525,7 @@ Cosmos3Reasoner_VLM_8b_Private_GCP_Config: VLMConfig = VLMConfig(
     model_instance=L(Qwen3VLTextForCausalLM)(
         config=L(create_vlm_config)(
             base_config=L(Qwen3VLMoTConfig.from_json_file)(
-                json_file="cosmos_framework/model/vfm/reasoner/qwen3_vl/configs/Qwen3-VL-8B-Instruct.json"
+                json_file="cosmos_framework/model/generator/reasoner/qwen3_vl/configs/Qwen3-VL-8B-Instruct.json"
             ),
             qk_norm_for_text=True,
         ),
@@ -546,7 +546,7 @@ Cosmos3NanoReasoner_VLM_GCP_Config: VLMConfig = VLMConfig(
     model_instance=L(Qwen3VLTextForCausalLM)(
         config=L(create_vlm_config)(
             base_config=L(Qwen3VLMoTConfig.from_json_file)(
-                json_file="cosmos_framework/model/vfm/reasoner/qwen3_vl/configs/Qwen3-VL-8B-Instruct.json"
+                json_file="cosmos_framework/model/generator/reasoner/qwen3_vl/configs/Qwen3-VL-8B-Instruct.json"
             ),
             qk_norm_for_text=True,
         ),
@@ -567,7 +567,7 @@ Cosmos3NanoReasoner_VLM_GCP_Config_0517: VLMConfig = VLMConfig(
     model_instance=L(Qwen3VLTextForCausalLM)(
         config=L(create_vlm_config)(
             base_config=L(Qwen3VLMoTConfig.from_json_file)(
-                json_file="cosmos_framework/model/vfm/reasoner/qwen3_vl/configs/Qwen3-VL-8B-Instruct.json"
+                json_file="cosmos_framework/model/generator/reasoner/qwen3_vl/configs/Qwen3-VL-8B-Instruct.json"
             ),
             qk_norm_for_text=True,
         ),
@@ -588,7 +588,7 @@ Cosmos3NanoReasoner_VLM_S3_EAST2_Config_0517: VLMConfig = VLMConfig(
     model_instance=L(Qwen3VLTextForCausalLM)(
         config=L(create_vlm_config)(
             base_config=L(Qwen3VLMoTConfig.from_json_file)(
-                json_file="cosmos_framework/model/vfm/reasoner/qwen3_vl/configs/Qwen3-VL-8B-Instruct.json"
+                json_file="cosmos_framework/model/generator/reasoner/qwen3_vl/configs/Qwen3-VL-8B-Instruct.json"
             ),
             qk_norm_for_text=True,
         ),
@@ -610,7 +610,7 @@ Qwen3VLMoT_VLM_32b_Instruct_Config: VLMConfig = VLMConfig(
     model_instance=L(Qwen3VLTextForCausalLM)(
         config=L(create_vlm_config)(
             base_config=L(Qwen3VLMoTConfig.from_json_file)(
-                json_file="cosmos_framework/model/vfm/reasoner/qwen3_vl/configs/Qwen3-VL-32B-Instruct.json"
+                json_file="cosmos_framework/model/generator/reasoner/qwen3_vl/configs/Qwen3-VL-32B-Instruct.json"
             ),
             qk_norm_for_text=True,
         ),
@@ -630,7 +630,7 @@ Qwen3VLMoT_VLM_32b_Instruct_GCP_Config: VLMConfig = VLMConfig(
     model_instance=L(Qwen3VLTextForCausalLM)(
         config=L(create_vlm_config)(
             base_config=L(Qwen3VLMoTConfig.from_json_file)(
-                json_file="cosmos_framework/model/vfm/reasoner/qwen3_vl/configs/Qwen3-VL-32B-Instruct.json"
+                json_file="cosmos_framework/model/generator/reasoner/qwen3_vl/configs/Qwen3-VL-32B-Instruct.json"
             ),
             qk_norm_for_text=True,
         ),
@@ -651,7 +651,7 @@ Cosmos3Reasoner_VLM_32b_Private_GCP_Config: VLMConfig = VLMConfig(
     model_instance=L(Qwen3VLTextForCausalLM)(
         config=L(create_vlm_config)(
             base_config=L(Qwen3VLMoTConfig.from_json_file)(
-                json_file="cosmos_framework/model/vfm/reasoner/qwen3_vl/configs/Qwen3-VL-32B-Instruct.json"
+                json_file="cosmos_framework/model/generator/reasoner/qwen3_vl/configs/Qwen3-VL-32B-Instruct.json"
             ),
             qk_norm_for_text=True,
         ),
@@ -672,7 +672,7 @@ Cosmos3SuperReasoner_VLM_GCP_Config: VLMConfig = VLMConfig(
     model_instance=L(Qwen3VLTextForCausalLM)(
         config=L(create_vlm_config)(
             base_config=L(Qwen3VLMoTConfig.from_json_file)(
-                json_file="cosmos_framework/model/vfm/reasoner/qwen3_vl/configs/Qwen3-VL-32B-Instruct.json"
+                json_file="cosmos_framework/model/generator/reasoner/qwen3_vl/configs/Qwen3-VL-32B-Instruct.json"
             ),
             qk_norm_for_text=True,
         ),
@@ -693,7 +693,7 @@ Cosmos3SuperReasoner_VLM_GCP_Config_0517: VLMConfig = VLMConfig(
     model_instance=L(Qwen3VLTextForCausalLM)(
         config=L(create_vlm_config)(
             base_config=L(Qwen3VLMoTConfig.from_json_file)(
-                json_file="cosmos_framework/model/vfm/reasoner/qwen3_vl/configs/Qwen3-VL-32B-Instruct.json"
+                json_file="cosmos_framework/model/generator/reasoner/qwen3_vl/configs/Qwen3-VL-32B-Instruct.json"
             ),
             qk_norm_for_text=True,
         ),
@@ -720,7 +720,7 @@ Cosmos3EdgeReasoner_VLM_GCP_Config_4acb717: VLMConfig = VLMConfig(
     model_instance=L(Nemotron3DenseVLTextForCausalLM)(
         config=L(create_vlm_config)(
             base_config=L(Nemotron3DenseVLMoTConfig.from_json_file)(
-                json_file="cosmos_framework/model/vfm/reasoner/nemotron_3_dense_vl/configs/Nemotron-2B-Dense-VL.json"
+                json_file="cosmos_framework/model/generator/reasoner/nemotron_3_dense_vl/configs/Nemotron-2B-Dense-VL.json"
             ),
             qk_norm_for_text=False,
         ),
@@ -744,7 +744,7 @@ Cosmos3EdgeReasoner_VLM_GCP_Config_9b4c028: VLMConfig = VLMConfig(
     model_instance=L(Nemotron3DenseVLTextForCausalLM)(
         config=L(create_vlm_config)(
             base_config=L(Nemotron3DenseVLMoTConfig.from_json_file)(
-                json_file="cosmos_framework/model/vfm/reasoner/nemotron_3_dense_vl/configs/Nemotron-2B-Dense-VL.json"
+                json_file="cosmos_framework/model/generator/reasoner/nemotron_3_dense_vl/configs/Nemotron-2B-Dense-VL.json"
             ),
             qk_norm_for_text=False,
         ),
@@ -768,7 +768,7 @@ Cosmos3EdgeReasoner_VLM_GCP_Config_590c1c0: VLMConfig = VLMConfig(
     model_instance=L(Nemotron3DenseVLTextForCausalLM)(
         config=L(create_vlm_config)(
             base_config=L(Nemotron3DenseVLMoTConfig.from_json_file)(
-                json_file="cosmos_framework/model/vfm/reasoner/nemotron_3_dense_vl/configs/Nemotron-2B-Dense-VL.json"
+                json_file="cosmos_framework/model/generator/reasoner/nemotron_3_dense_vl/configs/Nemotron-2B-Dense-VL.json"
             ),
             qk_norm_for_text=False,
         ),
@@ -792,7 +792,7 @@ Cosmos3EdgeReasoner_VLM_GCP_Config_9b4c028_UndKNorm: VLMConfig = VLMConfig(
     model_instance=L(Nemotron3DenseVLTextForCausalLM)(
         config=L(create_vlm_config)(
             base_config=L(Nemotron3DenseVLMoTConfig.from_json_file)(
-                json_file="cosmos_framework/model/vfm/reasoner/nemotron_3_dense_vl/configs/Nemotron-2B-Dense-VL.json"
+                json_file="cosmos_framework/model/generator/reasoner/nemotron_3_dense_vl/configs/Nemotron-2B-Dense-VL.json"
             ),
             qk_norm_for_text=False,
             use_und_k_norm_for_gen=True,

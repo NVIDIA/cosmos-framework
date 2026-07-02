@@ -15,16 +15,16 @@ lr 5e-5, warmup 500, cycle 16000, gbs 2048):
   `action_policy_libero_all_nano` + `action_policy_libero_all_repro.toml` +
   `launch_sft_action_policy_libero_all.sh`.
 
-| Piece            | Path                                                                                            |
-| ---------------- | ----------------------------------------------------------------------------------------------- |
-| Dataset          | `cosmos_framework/data/vfm/action/datasets/libero_lerobot_dataset.py` (`LIBEROLeRobotDataset`)  |
-| SFT wrapper      | `get_action_libero_sft_dataset` in `.../datasets/action_sft_dataset.py`                         |
-| Norm stats       | `.../normalizer_stats/libero_native_frame_wise_relative_rot6d.json`                             |
-| Experiment       | `cosmos_framework/configs/base/experiment/action/posttrain_config/action_policy_libero_nano.py` |
-| Run TOML         | `examples/toml/sft_config/action_policy_libero_repro.toml`                                      |
-| Launch           | `examples/launch_sft_action_policy_libero.sh`                                                   |
-| Inference server | `cosmos_framework/scripts/action_policy_server_libero.py`                                       |
-| Closed-loop eval | `cosmos_framework/simulation/libero/closed_loop_eval.py`                                        |
+| Piece            | Path                                                                                                 |
+| ---------------- | ---------------------------------------------------------------------------------------------------- |
+| Dataset          | `cosmos_framework/data/generator/action/datasets/libero_lerobot_dataset.py` (`LIBEROLeRobotDataset`) |
+| SFT wrapper      | `get_action_libero_sft_dataset` in `.../datasets/action_sft_dataset.py`                              |
+| Norm stats       | `.../normalizer_stats/libero_native_frame_wise_relative_rot6d.json`                                  |
+| Experiment       | `cosmos_framework/configs/base/experiment/action/posttrain_config/action_policy_libero_nano.py`      |
+| Run TOML         | `examples/toml/sft_config/action_policy_libero_repro.toml`                                           |
+| Launch           | `examples/launch_sft_action_policy_libero.sh`                                                        |
+| Inference server | `cosmos_framework/scripts/action_policy_server_libero.py`                                            |
+| Closed-loop eval | `cosmos_framework/simulation/libero/closed_loop_eval.py`                                             |
 
 ## 1. Data
 
@@ -89,7 +89,7 @@ python -m cosmos_framework.scripts.action_policy_server_libero \
   --experiment-overrides "model.config.tokenizer.vae_path=$WAN_VAE_PATH" \
   --checkpoint-path <trained DCP dir>/checkpoints/iter_000001500 \
   --action-normalization quantile_rot \
-  --action-stats-path cosmos_framework/data/vfm/action/normalizer_stats/libero_native_frame_wise_relative_rot6d.json \
+  --action-stats-path cosmos_framework/data/generator/action/normalizer_stats/libero_native_frame_wise_relative_rot6d.json \
   --raw-action-dim 10 --fps 20 --port 8000
 ```
 
