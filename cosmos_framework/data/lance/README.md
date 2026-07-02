@@ -60,9 +60,7 @@ cost. `gop=1` is a deliberate trade — exact, cheap random-window seeks in exch
 larger GOP would shrink the table further at some seek cost).
 
 The composed resolution is derived from the source (`1.5×h × w`), not fixed: this public subset has
-320×180 views → 270×320, whereas production DROID (640×360 views) composes to 540×640. Sizes and
-per-loader throughput scale with pixel count, so the numbers above are for the 320×180 subset;
-re-measure on the 640×360 data for production figures.
+320×180 views → 270×320.
 
 ## Memory: a note on the per-frame index (not a Lance advantage)
 
