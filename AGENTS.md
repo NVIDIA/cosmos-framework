@@ -7,7 +7,7 @@ Read this file first — it is the canonical map for navigating the Cosmos repos
 - **Training infrastructure** — top-level subpackages under `cosmos_framework/` (data, model, trainer, callbacks, checkpoint, …).
 - **Inference infrastructure** — `cosmos_framework/inference/` (Diffusers / Transformers / vLLM-friendly inference core, online serving via Ray + Gradio).
 - **Backend packages** — `packages/{diffusers,transformers,vllm}-cosmos3/` provide library-style shims that load Cosmos3 checkpoints into the respective ecosystems.
-- **Entry-point scripts** — `cosmos_framework/scripts/` (`train.py`, `inference.py`, `eval.py`, `export_model.py`, …) invoked as `python -m cosmos_framework.scripts.<name>`. Primary training entry point: `cosmos_framework.scripts.train` driven by a structured, pydantic-validated TOML interface (`--sft-toml=<recipe-toml>`); the schema lives at [`cosmos_framework/configs/toml_config/sft_config.py`](./cosmos_framework/configs/toml_config/sft_config.py) and the canonical recipe pattern is documented in [`examples/README.md`](./examples/README.md).
+- **Entry-point scripts** — `cosmos_framework/scripts/` (`train.py`, `inference.py`, `export_model.py`, …) invoked as `python -m cosmos_framework.scripts.<name>`. Primary training entry point: `cosmos_framework.scripts.train` driven by a structured, pydantic-validated TOML interface (`--sft-toml=<recipe-toml>`); the schema lives at [`cosmos_framework/configs/toml_config/sft_config.py`](./cosmos_framework/configs/toml_config/sft_config.py) and the canonical recipe pattern is documented in [`examples/README.md`](./examples/README.md).
 
 > All paths below are relative to the repository root (the directory containing `pyproject.toml`, the `cosmos_framework/` Python package, and `packages/`).
 

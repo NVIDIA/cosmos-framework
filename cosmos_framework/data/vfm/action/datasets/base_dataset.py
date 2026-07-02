@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
+import pandas as pd
 import pyarrow.parquet as pq
 import torch
 from torch.utils.data import Dataset
@@ -69,9 +70,13 @@ class ActionBaseDataset(ABC, Dataset):
             for path in sorted((self._root / "meta" / "episodes").glob("chunk-*/file-*.parquet"))
             for row in pq.read_table(path).to_pylist()
         }
+        tasks_df = pd.read_parquet(self._root / "meta" / "tasks.parquet")
+        # LeRobot v2.x stores task text in a "task" column; v3.0 stores it as the
+        # (unnamed) DataFrame index and keeps only "task_index" as a column.
+        task_texts = tasks_df["task"] if "task" in tasks_df.columns else tasks_df.index
         self._tasks = {
-            int(row["task_index"]): str(row["task"])
-            for row in pq.read_table(self._root / "meta" / "tasks.parquet").to_pylist()
+            int(task_index): str(task)
+            for task, task_index in zip(task_texts, tasks_df["task_index"])
         }
         self._rows = sorted(
             (
