@@ -336,6 +336,14 @@ def multi_control_two_way_attention(
 
     n_text = int(causal_k_offsets[-1])
     n_full = int(full_q_offsets[-1])
+    # `n_full` comes from int(full_q_offsets[-1]) → an unbacked symint under
+    # torch.compile. The control ranges + noisy range partition the full/gen
+    # segment with noisy last, so `noisy_e` (a concrete int from SplitInfo) is
+    # exactly the number of valid gen tokens == n_full. Binding them lets Dynamo
+    # treat the per-segment `full_*_v[cs:ce]` slices below as concrete-length, so
+    # the in-place writes `full_out_v[cs:ce] = _sdpa(...)` don't raise
+    # data-dependent `Eq(slice_len, out_len)` guards.
+    torch._check(n_full == noisy_e)
 
     # Unpad to avoid padded rows entering the softmax denominator.
     causal_k_v = causal_k[:n_text]  # [N_text, Hkv, D]
@@ -350,15 +358,38 @@ def multi_control_two_way_attention(
 
     def _sdpa(q: torch.Tensor, k: torch.Tensor, v: torch.Tensor) -> torch.Tensor:
         """Maskless attention using cosmos_framework.model.attention() → [N_q, Hq*D]."""
+        # K and V are built by concatenating the SAME [text | ctrl_i | noisy]
+        # slices, so their sequence lengths are always equal. Under
+        # torch.compile (fullgraph=True) those lengths are unbacked symints
+        # (from data-dependent unpadding), and the attention frontend's
+        # `if key_shape[1] != value_shape[1]` guard (attention/checks.py) cannot
+        # be resolved symbolically. Assert the invariant so Dynamo can discharge
+        # the guard statically instead of raising a data-dependent error.
+        torch._check(k.shape[0] == v.shape[0])
         n_q, n_kv = q.shape[0], k.shape[0]
-        seqlens_q = torch.tensor([n_q], dtype=torch.int32, device=q.device)
-        seqlens_kv = torch.tensor([n_kv], dtype=torch.int32, device=k.device)
+        # These lengths come from data-dependent unpadding, so they are unbacked
+        # symints under torch.compile. The selected attention backend (NATTEN)
+        # validates varlen inputs with `max_seqlen == 0` / `max_seqlen < 1`
+        # guards; without a positivity fact Dynamo cannot discharge `Eq(n, 0)`.
+        # Every control/noisy segment always has at least one token, so assert it.
+        torch._check(n_q > 0)
+        torch._check(n_kv > 0)
+        # Pass cumulative_seqlen_{Q,KV} + max_seqlen_{Q,KV} directly instead of
+        # seqlens_{Q,KV}. The frontend derives cumulative offsets from seqlens via
+        # `generate_varlen_parameters`, which calls `.max().item()` (a device-host
+        # sync) and is explicitly disallowed inside a torch.compile region. Each
+        # pass here is a single (batch=1) packed sequence, so the cumulative
+        # offsets are simply [0, n]. Building them ourselves keeps the whole path
+        # inside the compiled graph.
+        zero = torch.zeros(1, dtype=torch.int32, device=q.device)
+        cu_seqlens_q = torch.cat([zero, torch.tensor([n_q], dtype=torch.int32, device=q.device)])
+        cu_seqlens_kv = torch.cat([zero, torch.tensor([n_kv], dtype=torch.int32, device=q.device)])
         res = attention(
             q.unsqueeze(0),  # [1, N_q,  Hq,  D]
             k.unsqueeze(0),  # [1, N_kv, Hkv, D]
             v.unsqueeze(0),  # [1, N_kv, Hkv, D]
-            seqlens_Q=seqlens_q,
-            seqlens_KV=seqlens_kv,
+            cumulative_seqlen_Q=cu_seqlens_q,
+            cumulative_seqlen_KV=cu_seqlens_kv,
             max_seqlen_Q=n_q,
             max_seqlen_KV=n_kv,
         )  # [1, N_q, Hq, D]

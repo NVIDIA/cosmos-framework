@@ -1915,6 +1915,11 @@ class OmniMoTModel(ImaginaireModel):
             x0_tokens_sound=noise_x_sound if has_sound else None,
             fps_sound=gen_data_clean.fps_sound if has_sound else None,
             num_vision_items_per_sample=num_items,
+            # Multi-control transfer: carry per-control weights so the packer can
+            # populate vision_item_split_lens / control_weights on the packed
+            # sequence. Without this, multi_control_two_way_attention never runs
+            # and all controls are blended equally (weights ignored).
+            control_weights=gen_data_clean.control_weights,
         )
 
         packed_sequence = self._pack_input_sequence(
