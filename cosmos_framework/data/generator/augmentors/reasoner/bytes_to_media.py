@@ -19,6 +19,7 @@ from cosmos_framework.utils import log
 from cosmos_framework.data.generator.reasoner.video_decoder_qwen import _video_decoder_qwen_func
 from cosmos_framework.data.generator.processors.qwen3vl_processor import Qwen3VLProcessor
 from cosmos_framework.utils.generator.video_preprocess import tensor_to_pil_images
+from cosmos_framework.utils.generator.torchcodec_video import probe_video
 
 
 class BytesToMedia(Augmentor):
@@ -104,21 +105,16 @@ class BytesToMedia(Augmentor):
     ) -> float | None:
         """Probe the effective video duration in seconds used for proportional budget allocation."""
         try:
-            import decord
-
-            with io.BytesIO(video_bytes) as stream:
-                video_reader = decord.VideoReader(stream, num_threads=self.video_decoder_params["num_threads"])
-                frame_count = (
-                    max(end_frame - start_frame, 0)
-                    if start_frame is not None and end_frame is not None
-                    else len(video_reader)
-                )
-                video_fps = video_reader.get_avg_fps()
-                video_reader.seek(0)
-                del video_reader
-                if frame_count <= 0 or video_fps <= 0:
-                    return None
-                return frame_count / video_fps
+            metadata = probe_video(video_bytes, num_threads=self.video_decoder_params["num_threads"])
+            frame_count = (
+                max(end_frame - start_frame, 0)
+                if start_frame is not None and end_frame is not None
+                else metadata.num_frames
+            )
+            video_fps = metadata.average_fps
+            if frame_count <= 0 or video_fps <= 0:
+                return None
+            return frame_count / video_fps
         except Exception as e:
             log.warning(f"Could not probe video duration for '{identifier}': {e}")
             return None

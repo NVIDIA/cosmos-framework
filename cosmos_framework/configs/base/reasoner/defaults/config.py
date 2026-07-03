@@ -52,6 +52,7 @@ class DataSetting:
     num_data_workers: int = 8
     data_prefetch_factor: int = 1
     val_split_ratio: float = 0.0
+    recipe_name: str | None = None
 
 
 @attrs.define(slots=False)

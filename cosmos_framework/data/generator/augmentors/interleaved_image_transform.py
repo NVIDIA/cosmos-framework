@@ -15,6 +15,8 @@ from PIL import Image
 from cosmos_framework.data.imaginaire.webdataset.augmentors.augmentor import Augmentor
 from cosmos_framework.data.imaginaire.webdataset.augmentors.image.misc import obtain_image_size
 
+Image.MAX_IMAGE_PIXELS = 933120000
+
 
 class ResizeToPaddingDivisor(Augmentor):
     """Resize images so that both width and height are multiples of padding_divisor."""
@@ -264,3 +266,76 @@ class InterleavedMediaResize(Augmentor):
                 resized_image = resized_image.resize((final_width, final_height), Image.Resampling.LANCZOS)
 
         return resized_image
+
+
+class InterleavedMediaResizeByMaxPixels(Augmentor):
+    """Resize interleaved media by constraining total pixel area (max_pixels), preserving aspect ratio.
+
+    Unlike :class:`InterleavedMediaResize` (which caps the longest side), this augmentor scales
+    each image so its total pixel area does not exceed ``max_pixels`` while keeping the aspect
+    ratio, then aligns both dimensions down to multiples of ``padding_divisor`` (default 16).
+    Images are only scaled down, never up.
+
+    Mirrors the FLUX2 max-pixel resize behavior. Produces ``diffusion_media_list`` keyed the same
+    way as the input ``media_list`` dict, compatible with the downstream
+    ``ExtractMultiReferenceConversation`` / ``ExtractImageEditingConversation`` augmentors.
+
+    Args:
+        input_keys: List with the single key holding the media dict. Defaults to ``["media_list"]``.
+        max_pixels: Maximum total pixel area per image after resize.
+        padding_divisor: Dimension alignment divisor (both width and height become multiples of it).
+        args: Additional arguments passed to the parent class.
+    """
+
+    def __init__(
+        self,
+        input_keys: Optional[List] = None,
+        max_pixels: int = 1048576,
+        padding_divisor: int = 16,
+        args: Optional[dict] = None,
+    ) -> None:
+        input_keys = input_keys or ["media_list"]
+        super().__init__(input_keys, None, args)
+        self.max_pixels = max_pixels
+        self.padding_divisor = padding_divisor
+
+    def _compute_target_size(self, width: int, height: int) -> tuple[int, int]:
+        """Scale to fit within max_pixels, then align down to padding_divisor."""
+        total_pixels = width * height
+        if total_pixels > self.max_pixels:
+            scale = math.sqrt(self.max_pixels / total_pixels)
+            width = int(width * scale)
+            height = int(height * scale)
+
+        width = max(self.padding_divisor, (width // self.padding_divisor) * self.padding_divisor)
+        height = max(self.padding_divisor, (height // self.padding_divisor) * self.padding_divisor)
+        return width, height
+
+    def _resize_image(self, img: Image.Image) -> Image.Image:
+        w, h = img.size
+        target_w, target_h = self._compute_target_size(w, h)
+        if (target_w, target_h) != (w, h):
+            img = img.resize((target_w, target_h), Image.Resampling.LANCZOS)
+        return img
+
+    def _process_media(self, media) -> Image.Image | list:
+        if isinstance(media, list):
+            return [self._resize_image(frame) for frame in media]
+        return self._resize_image(media)
+
+    def __call__(self, data_dict: Dict) -> Optional[Dict]:
+        assert len(self.input_keys) == 1, (
+            "This transform only supports one input key. Try to organize all the media contents under one key."
+        )
+        media_key = self.input_keys[0]
+        media_list = data_dict.get(media_key)
+        if media_list is None:
+            print(f"Input key {media_key} not found in data_dict: {data_dict.get('__key__', 'unknown')}")
+            return None
+
+        diffusion_media_content = {}
+        for key, media in media_list.items():
+            diffusion_media_content[key] = self._process_media(media)
+
+        data_dict["diffusion_media_list"] = diffusion_media_content
+        return data_dict

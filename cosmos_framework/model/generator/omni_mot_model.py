@@ -1625,6 +1625,8 @@ class OmniMoTModel(ImaginaireModel):
         list[list[int]],
         list[list[int]],
         list[torch.Tensor],
+        list[torch.Tensor],
+        list[torch.Tensor],
     ]:
         """
         Prepare all data needed for inference sampling.
@@ -1651,6 +1653,10 @@ class OmniMoTModel(ImaginaireModel):
                 - uncond_text_tokens: Unconditional text tokens (for CFG)
                 - initial_noise: List of noise tensors (one per sample), each containing
                   flattened vision (and optionally action) noise concatenated
+                - condition_reference: List of clean reference tensors flattened
+                  in the same order as initial_noise
+                - condition_mask: List of masks flattened in the same order as
+                  initial_noise, where 1 keeps condition_reference values fixed
         """
         # 1. Build sequence plans (same as training)
         sequence_plans = build_sequence_plans_from_data_batch(
@@ -1786,28 +1792,67 @@ class OmniMoTModel(ImaginaireModel):
         # noise_action_list and noise_sound_list are dense (only modality-having samples),
         # so we use separate indexes.
         initial_noise: list[torch.Tensor] = []
+        condition_reference: list[torch.Tensor] = []
+        condition_mask: list[torch.Tensor] = []
         idx_vision = 0
         idx_action = 0
         idx_sound = 0
 
         for i in range(n_sample):
             parts = []
+            condition_reference_parts = []
+            condition_mask_parts = []
 
             # Flatten and concatenate all vision items for this sample
             num_vis = num_items_per_sample[i] if num_items_per_sample is not None else 1
             for _ in range(num_vis):
                 parts.append(noise_vision_list[idx_vision].reshape(-1))
+                x0_vision = gen_data_clean.x0_tokens_vision[idx_vision]  # [C,T,H,W]
+                mask_vision = packed_sequence.vision.condition_mask[idx_vision].to(  # [T,1,1]
+                    dtype=x0_vision.dtype, device=x0_vision.device
+                )
+                condition_reference_parts.append(x0_vision.reshape(-1))  # [N_vision]
+                condition_mask_parts.append((mask_vision * torch.ones_like(x0_vision)).reshape(-1))  # [N_vision]
                 idx_vision += 1
 
             if noise_action_list is not None and sequence_plans[i].has_action:
+                assert packed_sequence.action is not None
+                assert packed_sequence.action.condition_mask is not None
+                assert gen_data_clean.x0_tokens_action is not None
                 parts.append(noise_action_list[idx_action].reshape(-1))
+                x0_action = gen_data_clean.x0_tokens_action[idx_action].to(  # [T,D]
+                    dtype=noise_action_list[idx_action].dtype,
+                    device=noise_action_list[idx_action].device,
+                )
+                if gen_data_clean.raw_action_dim is not None and gen_data_clean.raw_action_dim[idx_action] is not None:
+                    x0_action = x0_action.clone()  # [T,D]
+                    x0_action[:, gen_data_clean.raw_action_dim[idx_action] :] = 0  # [T,D]
+                mask_action = packed_sequence.action.condition_mask[idx_action].to(  # [T,1]
+                    dtype=x0_action.dtype, device=x0_action.device
+                )
+                condition_reference_parts.append(x0_action.reshape(-1))  # [N_action]
+                condition_mask_parts.append((mask_action * torch.ones_like(x0_action)).reshape(-1))  # [N_action]
                 idx_action += 1
 
             if noise_sound_list is not None and sequence_plans[i].has_sound:
+                assert packed_sequence.sound is not None
+                assert packed_sequence.sound.condition_mask is not None
+                assert gen_data_clean.x0_tokens_sound is not None
                 parts.append(noise_sound_list[idx_sound].reshape(-1))
+                x0_sound = gen_data_clean.x0_tokens_sound[idx_sound].to(  # [C_sound,T_sound]
+                    dtype=noise_sound_list[idx_sound].dtype,
+                    device=noise_sound_list[idx_sound].device,
+                )
+                mask_sound = packed_sequence.sound.condition_mask[idx_sound].T.to(  # [1,T_sound]
+                    dtype=x0_sound.dtype, device=x0_sound.device
+                )
+                condition_reference_parts.append(x0_sound.reshape(-1))  # [N_sound]
+                condition_mask_parts.append((mask_sound * torch.ones_like(x0_sound)).reshape(-1))  # [N_sound]
                 idx_sound += 1
 
             initial_noise.append(torch.cat(parts, dim=0))  # [N_tokens_flat]
+            condition_reference.append(torch.cat(condition_reference_parts, dim=0))  # [N_tokens_flat]
+            condition_mask.append(torch.cat(condition_mask_parts, dim=0))  # [N_tokens_flat]
 
         return (
             sequence_plans,
@@ -1815,6 +1860,8 @@ class OmniMoTModel(ImaginaireModel):
             cond_text_tokens,
             uncond_text_tokens,
             initial_noise,
+            condition_reference,
+            condition_mask,
         )
 
     def _get_velocity(
@@ -2299,6 +2346,8 @@ class OmniMoTModel(ImaginaireModel):
             cond_tokens,
             uncond_tokens,
             initial_noise,
+            condition_reference,
+            condition_mask,
         ) = self._prepare_inference_data(data_batch, seed, has_negative_prompt)
 
         if n_sample is not None:
@@ -2472,6 +2521,13 @@ class OmniMoTModel(ImaginaireModel):
         else:
             log.info(f"Using sampler: EDM (sigma_max={sigma_max}, num_steps={num_steps})")
 
+        fixed_step_sampler_kwargs = {}
+        if isinstance(sampler, FixedStepSampler):
+            fixed_step_sampler_kwargs = {
+                "condition_reference": condition_reference,
+                "condition_mask": condition_mask,
+            }
+
         if isinstance(sampler, FixedStepSampler) or scheduler_type == "unipc":
             latents = sampler(
                 velocity_fn,
@@ -2479,6 +2535,7 @@ class OmniMoTModel(ImaginaireModel):
                 num_steps=num_steps,
                 shift=shift,
                 seed=seed,
+                **fixed_step_sampler_kwargs,
             )
             if _extra_num_steps > 0:
                 # Dummy sampler call to issue (_extra_num_steps × per-step)
@@ -2496,6 +2553,7 @@ class OmniMoTModel(ImaginaireModel):
                     num_steps=_extra_num_steps,
                     shift=shift,
                     seed=seed,
+                    **fixed_step_sampler_kwargs,
                 )
         else:
             # EDM Sampler
@@ -2529,7 +2587,7 @@ class OmniMoTModel(ImaginaireModel):
                 # run. Avoids two EDM-specific footguns:
                 #   (1) ``EDMSampler._forward_impl`` always runs an extra
                 #       ``sample_clean`` denoiser forward (see
-                #       ``cosmos_framework/model/generator/diffusion/samplers/edm.py``).
+                #       ``cosmos_framework/model/vfm/diffusion/samplers/edm.py``).
                 #       A nested sampler call would add one too many
                 #       forwards on fast ranks, since the slow rank's
                 #       single call also pays the ``sample_clean`` cost.

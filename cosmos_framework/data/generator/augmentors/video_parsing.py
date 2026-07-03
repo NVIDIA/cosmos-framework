@@ -35,7 +35,7 @@ class VideoParsing(Augmentor):
     This augmentor is used to parse the video bytes and get the video frames.
     the return dict is back-compatible with old datasets, which video decoding happens in the decoder stage.
 
-    Now uses torchcodec instead of decord for video decoding, with optional audio extraction.
+    Uses TorchCodec for video decoding, with optional audio extraction.
     """
 
     def __init__(self, input_keys: list, output_keys: Optional[list] = None, args: Optional[dict] = None) -> None:
