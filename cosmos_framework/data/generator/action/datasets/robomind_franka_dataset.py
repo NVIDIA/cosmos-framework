@@ -119,15 +119,27 @@ class RoboMINDFrankaDataset(ActionBaseDataset):
 
     @classmethod
     def _stats_path(cls) -> Path:
+        # Class-level default (no instance to branch on) — matches the
+        # constructor's default embodiment_type ("robomind-franka-dual").
         return _NORMALIZER_PATH_DUAL
+
+    def load_action_stats(self) -> dict[str, torch.Tensor]:
+        """Instance-aware override: respects ``self._embodiment_type``.
+
+        The inherited classmethod always resolves via ``_stats_path()``, which
+        has no instance to branch on and is hardcoded to the dual-arm file. A
+        single-arm instance calling ``load_action_stats()`` would otherwise
+        silently get 20D dual-arm stats instead of its own 10D stats.
+        """
+        path = _NORMALIZER_PATH_DUAL if self._embodiment_type == "robomind-franka-dual" else _NORMALIZER_PATH_SINGLE
+        return {
+            key: torch.from_numpy(value).float()
+            for key, value in load_action_stats(str(path)).items()
+        }
 
     def _load_norm_stats(self) -> dict[str, torch.Tensor]:
         if self._norm_stats is None:
-            path = _NORMALIZER_PATH_SINGLE if self._embodiment_type == "robomind-franka" else _NORMALIZER_PATH_DUAL
-            self._norm_stats = {
-                key: torch.from_numpy(value).float()
-                for key, value in load_action_stats(str(path)).items()
-            }
+            self._norm_stats = self.load_action_stats()
         return self._norm_stats
 
     def __getitem__(self, idx: int) -> dict[str, Any]:
