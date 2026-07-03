@@ -203,9 +203,9 @@ cu128-train = [
 cu130 = [
   "flash-attn-3-nv==1.0.3+cu130.torch210; platform_machine == 'x86_64'",
   "flash-attn==2.7.4.post1+cu130.torch210; platform_machine == 'x86_64'",
-  # aarch64 (GB300/sm_103a): use the custom build that includes sm_103a kernels.
+  # GB300/B300 (sm_103a): use the custom build that includes sm_103a kernels (both arches).
   "natten==0.21.6.dev6+cu130.torch210.gb300; platform_machine == 'aarch64'",
-  "natten==0.21.6.dev6+cu130.torch210; platform_machine == 'x86_64'",
+  "natten==0.21.6.dev6+cu130.torch210.gb300; platform_machine == 'x86_64'",
   "torch==2.10.0+cu130",
   "torchcodec==0.10.0+cu130", # https://github.com/meta-pytorch/torchcodec/releases
   "torchvision==0.25.0+cu130", # https://github.com/pytorch/vision/releases
