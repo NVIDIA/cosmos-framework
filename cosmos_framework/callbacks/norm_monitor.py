@@ -229,6 +229,12 @@ class NormMonitor(Callback):
         if isinstance(data, DTensor):
             data = data.to_local()
 
+        if data.numel() == 0:
+            return {
+                "sq_sum": torch.zeros((), device=data.device, dtype=torch.float32),  # []
+                "max": torch.zeros((), device=data.device, dtype=data.dtype),  # []
+            }
+
         return {
             "sq_sum": (data.float() ** 2).sum(),
             "max": data.abs().max(),

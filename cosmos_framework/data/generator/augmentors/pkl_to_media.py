@@ -18,6 +18,7 @@ from torchvision.transforms import InterpolationMode
 from cosmos_framework.data.imaginaire.webdataset.augmentors.augmentor import Augmentor
 from cosmos_framework.utils import log
 from cosmos_framework.utils.generator.video_preprocess import tensor_to_pil_images
+from cosmos_framework.utils.generator.torchcodec_video import decode_frames_tchw_uint8, probe_video
 
 Image.MAX_IMAGE_PIXELS = 933120000
 _VIDEO_EXTENSIONS = "mp4 avi webm mov".split()
@@ -64,7 +65,7 @@ def _video_decoder_qwen_func(
         target_fps (float, optional): Target FPS. Defaults to 2.0.
         min_video_token_length (int, optional): Minimum token length. Defaults to 16.
         max_video_token_length (int, optional): Maximum token length. Defaults to 8192.
-        num_threads (int, optional): Number of threads for decord. Defaults to 0.
+        num_threads (int, optional): Number of video decoding threads. Defaults to 0.
         random_augmentation (bool, optional): Whether to randomize the FPS and max_video_token_length. Defaults to False.
         fps_random_range (list[float], optional): Random FPS range. Defaults to [10.0, 24.0].
         max_video_token_length_random_range (list[float], optional): Random max_video_token_length range. Defaults to [0.75, 1.25].
@@ -80,17 +81,14 @@ def _video_decoder_qwen_func(
     Returns:
         dict | None: Dictionary with video frames tensor and target FPS
     """
-    import decord
-
     # Check video extension
     extension = re.sub(r".*[.]", "", key)
     if extension.lower() not in _VIDEO_EXTENSIONS:
         return None
 
     # Read video
-    video_buffer = io.BytesIO(data)
-    video_reader = decord.VideoReader(video_buffer, num_threads=num_threads)
-    total_frames, video_fps = len(video_reader), video_reader.get_avg_fps()
+    metadata = probe_video(data, num_threads=num_threads)
+    total_frames, video_fps = metadata.num_frames, metadata.average_fps
 
     if start_frame is not None and end_frame is not None:
         total_frames = end_frame - start_frame
@@ -138,8 +136,7 @@ def _video_decoder_qwen_func(
         idx = torch.linspace(start_frame, end_frame - 1, nframes).round().long().tolist()  # [nframes]
     else:
         idx = torch.linspace(0, total_frames - 1, nframes).round().long().tolist()  # [nframes]
-    video_frames = video_reader.get_batch(idx).asnumpy()
-    video_frames = torch.tensor(video_frames).permute(0, 3, 1, 2)  # [T,C,H,W]
+    video_frames, _ = decode_frames_tchw_uint8(data, idx, num_threads=num_threads)  # [T,C,H,W]
     sample_fps = nframes / max(total_frames, 1e-6) * video_fps
 
     # recompute max_pixels based on number of sampled frames
@@ -156,12 +153,8 @@ def _video_decoder_qwen_func(
         [resized_height, resized_width],
         interpolation=InterpolationMode.BICUBIC,
         antialias=True,
-    ).float()
+    ).float()  # [T,C,H,W]
     video_frames = video_frames.permute(1, 0, 2, 3)  # [C,T,H,W]
-
-    # Clean up
-    video_reader.seek(0)  # set video reader point back to 0 to clean up cache
-    del video_reader  # delete the reader to avoid memory leak
 
     return dict(videos=video_frames, fps=sample_fps)
 

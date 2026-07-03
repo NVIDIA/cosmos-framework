@@ -91,6 +91,45 @@ def test_sde_reproducible_with_seed():
 
 
 @pytest.mark.L0
+def test_sde_preserves_conditioned_entries():
+    sampler = FixedStepSampler(t_list=[1.0, 0.5, 0.0], sample_type="sde")
+    noise = [torch.tensor([5.0, 1.0])]  # [N]
+    condition_reference = [torch.tensor([5.0, 0.0])]  # [N]
+    condition_mask = [torch.tensor([1.0, 0.0])]  # [N]
+
+    def velocity_fn(x, _t):
+        return [torch.zeros_like(x_i) for x_i in x]
+
+    result = sampler(
+        velocity_fn,
+        noise,
+        seed=[123],
+        condition_reference=condition_reference,
+        condition_mask=condition_mask,
+    )
+    assert torch.allclose(result[0][0], condition_reference[0][0])
+
+
+@pytest.mark.L0
+def test_ode_preserves_conditioned_entries():
+    sampler = FixedStepSampler(t_list=[1.0, 0.5, 0.0], sample_type="ode")
+    noise = torch.tensor([5.0, 1.0])  # [N]
+    condition_reference = torch.tensor([5.0, 0.0])  # [N]
+    condition_mask = torch.tensor([1.0, 0.0])  # [N]
+
+    def velocity_fn(x, _t):
+        return torch.ones_like(x)  # [N]
+
+    result = sampler(
+        velocity_fn,
+        noise,
+        condition_reference=condition_reference,
+        condition_mask=condition_mask,
+    )
+    assert torch.allclose(result[0], condition_reference[0])
+
+
+@pytest.mark.L0
 def test_output_shape_preserved():
     sampler = FixedStepSampler(t_list=[1.0, 0.5, 0.25, 0.0])
     noise = torch.randn(1, 32)

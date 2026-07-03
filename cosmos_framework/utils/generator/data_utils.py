@@ -45,6 +45,11 @@ def get_vision_data_resolution(spatial_shape: tuple[int, int]) -> str:
         return "480"
     elif min_dim <= 960:
         return "720"
+    elif min_dim <= 2048:
+        # Free-form inputs above the 720 tier (e.g. multi-reference generation
+        # producing shapes like (992, 1024)) that are not a canonical 768 shape:
+        # route to the closest defined higher tier "768".
+        return "768"
     else:
         raise ValueError(f"Unsupported resolution: {spatial_shape}")
 

@@ -53,6 +53,8 @@ class FixedStepSampler:
         num_steps: int | None = None,
         shift: float | None = None,
         seed: int | list[int] | None = None,
+        condition_reference: torch.Tensor | list[torch.Tensor] | None = None,
+        condition_mask: torch.Tensor | list[torch.Tensor] | None = None,
     ) -> torch.Tensor | list[torch.Tensor]:
         """Run the fixed-step sampling loop.
 
@@ -77,15 +79,37 @@ class FixedStepSampler:
                 ``len(t_list) - 1`` when provided).
             shift: When set, derive the sigma schedule dynamically using the
                 flow-matching shift formula instead of ``self.t_list``.
+            condition_reference: Optional clean reference tensor(s) to preserve
+                where ``condition_mask`` is 1.
+            condition_mask: Optional mask tensor(s), same shape as ``noise``,
+                where 1 marks clean conditioning values and 0 marks generated
+                values.
 
         Returns:
             Denoised sample(s).  A single ``torch.Tensor`` when ``noise`` is a
             tensor, or a ``list[torch.Tensor]`` when ``noise`` is a list.
         """
+        assert (condition_reference is None) == (condition_mask is None), (
+            "condition_reference and condition_mask must be both set or both None"
+        )
         if isinstance(noise, list):
             device = noise[0].device
+            if seed is None:
+                seed = [None] * len(noise)
+            assert isinstance(seed, list), "seed must be a list when noise is a list"
+            if condition_reference is None:
+                condition_reference = [None] * len(noise)
+                condition_mask = [None] * len(noise)
+            else:
+                assert isinstance(condition_reference, list), "condition_reference must be a list when noise is a list"
+                assert isinstance(condition_mask, list), "condition_mask must be a list when noise is a list"
         else:
             device = noise.device
+            assert not isinstance(seed, list), "seed must not be a list when noise is a tensor"
+            assert not isinstance(condition_reference, list), (
+                "condition_reference must not be a list when noise is a tensor"
+            )
+            assert not isinstance(condition_mask, list), "condition_mask must not be a list when noise is a tensor"
 
         if shift is not None:
             assert num_steps is not None, "num_steps is required when shift is provided"
@@ -105,27 +129,43 @@ class FixedStepSampler:
             timestep = torch.tensor(sigma_cur * self.num_train_timesteps, device=device)
             v_pred = velocity_fn(latent, timestep.reshape(1, 1))
 
-            def _sde_step(seed: int | None, latent: torch.Tensor, v_pred: torch.Tensor) -> torch.Tensor:
-                x0_pred = latent - sigma_cur * v_pred
+            def _sde_step(
+                seed: int | None,
+                latent: torch.Tensor,
+                v_pred: torch.Tensor,
+                condition_reference: torch.Tensor | None,
+                condition_mask: torch.Tensor | None,
+            ) -> torch.Tensor:
+                x0_pred = latent - sigma_cur * v_pred  # [...,D]
 
                 if sigma_next > 0:
                     if self.sample_type == "ode":
                         # Euler ODE step
-                        latent = latent + (sigma_next - sigma_cur) * v_pred
+                        latent_next = latent + (sigma_next - sigma_cur) * v_pred  # [...,D]
                     else:
                         if seed is not None:
                             torch.manual_seed(seed + step_idx)
-                        eps_fresh = torch.randn_like(x0_pred)
-                        latent = (1.0 - sigma_next) * x0_pred + sigma_next * eps_fresh
+                        eps_fresh = torch.randn_like(x0_pred)  # [...,D]
+                        latent_next = (1.0 - sigma_next) * x0_pred + sigma_next * eps_fresh  # [...,D]
                 else:
-                    latent = x0_pred
-                return latent
+                    latent_next = x0_pred  # [...,D]
+
+                if condition_reference is not None:
+                    assert condition_mask is not None, "condition_mask is required when condition_reference is set"
+                    condition_reference = condition_reference.to(
+                        dtype=latent_next.dtype, device=latent_next.device
+                    )  # [...,D]
+                    condition_mask = condition_mask.to(dtype=latent_next.dtype, device=latent_next.device)  # [...,D]
+                    latent_next = condition_mask * condition_reference + (1.0 - condition_mask) * latent_next  # [...,D]
+                return latent_next
 
             latent = run_multiseed(
                 _sde_step,
                 seed=seed,
                 latent=latent,
                 v_pred=v_pred,
+                condition_reference=condition_reference,
+                condition_mask=condition_mask,
             )
 
         return latent

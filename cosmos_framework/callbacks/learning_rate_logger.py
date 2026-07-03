@@ -4,21 +4,21 @@
 import torch
 import wandb
 
+from cosmos_framework.utils import distributed
 from cosmos_framework.utils.callback import Callback
 
 
 class LearningRateLogger(Callback):
-    """Logs per-model-part learning rate every ``every_n × logging_iter`` steps.
+    """Log reasoner default and LR-multiplier groups.
 
-    Designed for VLM training where the optimizer is an
-    ``OptimizersContainer`` exposing ``.optimizers`` (list of single-element
-    optimizer lists) paired with ``.model_part_names``. Silently no-ops when
-    those attributes are absent so it can be registered alongside plain
-    ``torch.optim.Optimizer`` setups without harm.
+    Parameters that do not match a configured ``optimizer.lr_multipliers`` key
+    are logged as ``optim/lr_default``. Named multiplier groups, such as
+    ``model.visual``, are logged as ``optim/lr_model.visual`` every
+    ``every_n × logging_iter`` steps.
     """
 
-    def __init__(self, every_n: int = 10):
-        self.every_n = every_n
+    def __init__(self, every_n: int = 10) -> None:
+        self.every_n: int = every_n
 
     def on_before_optimizer_step(
         self,
@@ -32,16 +32,30 @@ class LearningRateLogger(Callback):
         gate = self.config.trainer.logging_iter * self.every_n
         if not (iteration == 1 or (gate > 0 and iteration % gate == 0)):
             return
-        if not wandb.run:
+        if not distributed.is_rank0() or not wandb.run:
             return
-        if not (hasattr(optimizer, "optimizers") and hasattr(optimizer, "model_part_names")):
+        if not (hasattr(optimizer, "optimizers") and hasattr(optimizer, "model")):
             return
-        unique_lr: dict[str, float] = {}
-        for optim_per_model, name in zip(optimizer.optimizers, optimizer.model_part_names):
-            if not optim_per_model:
-                continue
-            for pg in optim_per_model[0].param_groups:
-                unique_lr[f"optim/lr_{name}"] = pg["lr"]
+
+        lr_multiplier_keys = list(self.config.optimizer.get("lr_multipliers", {}))
+        optimizer_net = getattr(optimizer.model, "net", None)
+        if optimizer_net is None:
+            return
+
+        lr_key_by_param_id: dict[int, str] = {}
+        for param_name, param in optimizer_net.named_parameters():
+            lr_key_by_param_id[id(param)] = next(
+                (lr_key for lr_key in lr_multiplier_keys if lr_key in param_name),
+                "default",
+            )
+
+        unique_lr: dict[str, float | torch.Tensor] = {}
+        for inner_optimizer in optimizer.optimizers:
+            for param_group in inner_optimizer.param_groups:
+                for param in param_group["params"]:
+                    lr_key = lr_key_by_param_id.get(id(param))
+                    if lr_key is not None:
+                        unique_lr[f"optim/lr_{lr_key}"] = param_group["lr"]
         if not unique_lr:
             return
         wandb.log(unique_lr, step=iteration)

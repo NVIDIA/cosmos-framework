@@ -375,13 +375,19 @@ class ImageEditingToTrainingFormat(Augmentor):
     (e.g. ``OmniInterleavedMediaResize``).  This augmentor only normalises the
     PIL images to tensors and assembles the remaining metadata fields.
 
+    Supports both single-source image editing and multi-reference generation:
+    ``source_image`` may be a single ``PIL.Image`` (one reference) or a
+    ``list[PIL.Image]`` (N references). The output ``images`` always places the
+    target last, so the resulting layout is ``[ref_1, ..., ref_N, target]`` with
+    ``num_frames = N + 1``.
+
     Input (from data_dict):
-        - source_image: PIL.Image (already resized by upstream augmentor)
+        - source_image: PIL.Image | list[PIL.Image] (already resized by upstream augmentor)
         - target_image: PIL.Image (already resized by upstream augmentor)
         - editing_instruction: str
 
     Output (added to data_dict):
-        - images: list[torch.Tensor]  — ``[source (C,H_s,W_s), target (C,H_t,W_t)]``
+        - images: list[torch.Tensor]  — ``[ref_1, ..., ref_N, target]`` (each C,H,W)
         - ai_caption: str
         - selected_caption_type: str
         - fps: float
@@ -415,21 +421,28 @@ class ImageEditingToTrainingFormat(Augmentor):
         Returns:
             Updated data_dict with training-compatible fields, or None on error.
         """
-        source_image: Image.Image = data_dict.get("source_image")
+        source_image = data_dict.get("source_image")
         target_image: Image.Image = data_dict.get("target_image")
         editing_instruction: str = data_dict.get("editing_instruction", "")
 
         if source_image is None or target_image is None:
             return None
 
+        # Support both single-source editing (one PIL image) and multi-reference
+        # generation (a list of PIL images). Normalise to a list of references.
+        source_images = [source_image] if isinstance(source_image, Image.Image) else list(source_image)
+        if not source_images:
+            return None
+
         try:
-            # Normalize PIL images to tensors (upstream augmentor already handled resizing)
-            source_tensor = self._normalize_image(source_image)  # [C,H_s,W_s]
-            target_tensor = self._normalize_image(target_image)  # [C,H_t,W_t]
+            # Normalize PIL images to tensors (upstream augmentor already handled resizing).
+            # Each image keeps its own spatial size; the model encodes them separately.
+            # The target is placed last: [ref_1, ..., ref_N, target].
+            images = [self._normalize_image(src) for src in source_images]  # each [C,H_s,W_s]
+            images.append(self._normalize_image(target_image))  # [C,H_t,W_t]
 
             # Store as list of tensors for the batch collation.
-            # Each image keeps its own spatial size; the model encodes them separately.
-            data_dict["images"] = [source_tensor, target_tensor]
+            data_dict["images"] = images
 
             # Set text fields
             data_dict["ai_caption"] = editing_instruction
@@ -437,16 +450,13 @@ class ImageEditingToTrainingFormat(Augmentor):
 
             # Set metadata
             data_dict["fps"] = 30.0  # Same as standard image training
-            data_dict["num_frames"] = 2  # Source + target = 2 frames
+            data_dict["num_frames"] = len(images)  # N references + target
             data_dict["image_size"] = [
                 torch.tensor(
-                    [source_image.height, source_image.width, source_image.height, source_image.width],
+                    [img.height, img.width, img.height, img.width],
                     dtype=torch.float,
-                ),  # [4]
-                torch.tensor(
-                    [target_image.height, target_image.width, target_image.height, target_image.width],
-                    dtype=torch.float,
-                ),  # [4]
+                )  # [4]
+                for img in (*source_images, target_image)
             ]
             # Set the dataset name if not already present
             if "dataset_name" not in data_dict:
