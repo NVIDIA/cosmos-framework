@@ -74,10 +74,7 @@ class ActionBaseDataset(ABC, Dataset):
         # LeRobot v2.x stores task text in a "task" column; v3.0 stores it as the
         # (unnamed) DataFrame index and keeps only "task_index" as a column.
         task_texts = tasks_df["task"] if "task" in tasks_df.columns else tasks_df.index
-        self._tasks = {
-            int(task_index): str(task)
-            for task, task_index in zip(task_texts, tasks_df["task_index"])
-        }
+        self._tasks = {int(task_index): str(task) for task, task_index in zip(task_texts, tasks_df["task_index"])}
         # ``self._rows`` (the flat, index-sorted list of every frame dict) is built
         # lazily on first access — see the ``_rows`` property. Materializing all
         # ~18M frames as Python dicts plus a full sort costs ~13 min and tens of GB;
@@ -138,8 +135,7 @@ class ActionBaseDataset(ABC, Dataset):
     def load_action_stats(cls) -> dict[str, torch.Tensor]:
         """Return action normalization stats for this dataset as torch tensors."""
         return {
-            key: torch.from_numpy(value).float()
-            for key, value in load_action_stats(str(cls._stats_path())).items()
+            key: torch.from_numpy(value).float() for key, value in load_action_stats(str(cls._stats_path())).items()
         }
 
     @abstractmethod

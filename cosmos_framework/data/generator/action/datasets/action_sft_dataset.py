@@ -21,7 +21,6 @@ from torch.utils.data import Dataset, IterableDataset, get_worker_info
 
 from cosmos_framework.data.generator.action.datasets.droid_lerobot_dataset import (
     DROIDLeRobotDataset,
-    ShardedDROIDLeRobotDataset,
 )
 from cosmos_framework.data.generator.action.datasets.libero_lerobot_dataset import LIBEROLeRobotDataset
 from cosmos_framework.data.generator.action.transforms import ActionTransformPipeline
@@ -140,20 +139,19 @@ def get_action_droid_sft_dataset(
         mode=mode,
         use_state=use_state,
         action_normalization=action_normalization,
-        use_image_augmentation=use_image_augmentation,
-        apply_color_jitter=apply_color_jitter,
+        use_image_augmentation=use_image_augmentation,  # i4: bundles random-crop+resize+ColorJitter
         use_filter_dict=use_filter_dict,
         filter_dict_path=filter_dict_path,
+        use_success_only=use_success_only,
     )
     if sharded:
-        dataset: Dataset = ShardedDROIDLeRobotDataset(
-            root=root,
-            lerobot_roots=lerobot_roots,
-            use_success_only=use_success_only,
-            **shard_kwargs,
+        raise NotImplementedError(
+            "The ported i4 DROIDLeRobotDataset reads the merged/versioned root natively "
+            "(basename(root) must be a LEROBOT_ROOTS version key, e.g. "
+            "'droid_plus_lerobot_640x360_20260412'); use_success_only=True filters to success/. "
+            "Per-lab ShardedDROIDLeRobotDataset is not part of the i4 dataset."
         )
-    else:
-        dataset = DROIDLeRobotDataset(root=root, **shard_kwargs)
+    dataset: Dataset = DROIDLeRobotDataset(root=root, **shard_kwargs)
     transform = ActionTransformPipeline(
         tokenizer_config=tokenizer_config,
         cfg_dropout_rate=cfg_dropout_rate,
