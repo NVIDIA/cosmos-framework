@@ -5,17 +5,17 @@ It trains Cosmos3-DROID forward dynamics in `cosmos_framework`.
 
 ## Overview
 
-| Piece | Value |
-| --- | --- |
-| Experiment | `action_fd_droid_posttrain` |
-| TOML | `examples/toml/sft_config/action_fd_droid_posttrain.toml` |
-| Launch shell | `examples/launch_sft_action_fd_droid_posttrain.sh` |
-| Config module | `cosmos_framework/configs/base/experiment/action/posttrain_config/action_fd_droid_posttrain.py` |
-| Dataset wrapper | `cosmos_framework/data/generator/action/datasets/droid_merged_lerobot_dataset.py` |
-| Dataset root | [Cosmos3-DROID](https://huggingface.co/datasets/nvidia/Cosmos3-DROID) parent root containing `success/` and `failure/` |
-| Task mode | `forward_dynamics` |
-| Action space | `midtrain` alias for 10-D ee-pose `[pos_delta, rot6d_delta, gripper]` |
-| Chunk length / resolution | `16` frames at `480` |
+| Piece                     | Value                                                                                                                  |
+| ------------------------- | ---------------------------------------------------------------------------------------------------------------------- |
+| Experiment                | `action_fd_droid_posttrain`                                                                                            |
+| TOML                      | `examples/toml/sft_config/action_fd_droid_posttrain.toml`                                                              |
+| Launch shell              | `examples/launch_sft_action_fd_droid_posttrain.sh`                                                                     |
+| Config module             | `cosmos_framework/configs/base/experiment/action/posttrain_config/action_fd_droid_posttrain.py`                        |
+| Dataset wrapper           | `cosmos_framework/data/generator/action/datasets/droid_merged_lerobot_dataset.py`                                      |
+| Dataset root              | [Cosmos3-DROID](https://huggingface.co/datasets/nvidia/Cosmos3-DROID) parent root containing `success/` and `failure/` |
+| Task mode                 | `forward_dynamics`                                                                                                     |
+| Action space              | `midtrain` alias for 10-D ee-pose `[pos_delta, rot6d_delta, gripper]`                                                  |
+| Chunk length / resolution | `16` frames at `480`                                                                                                   |
 
 ## Prerequisites
 
