@@ -21,6 +21,7 @@ from bisect import bisect_right
 from collections import OrderedDict, defaultdict
 from collections.abc import Callable, Sequence
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import contextmanager
 from pathlib import Path
 from threading import Lock
 from typing import Any, ClassVar
@@ -75,23 +76,35 @@ from cosmos_framework.data.generator.action.action_spec import (  # noqa: F401  
     Rot,
     build_action_spec,
 )
-from cosmos_framework.data.generator.action.datasets.memprofile import (
-    deep_size as _deep_size,
-)
-from cosmos_framework.data.generator.action.datasets.memprofile import (
-    fmt_mb as _fmt_mb,
-)
-from cosmos_framework.data.generator.action.datasets.memprofile import (
-    log_worker_memory_breakdown,
-    rss_tracker,
-)
-from cosmos_framework.data.generator.action.datasets.memprofile import (
-    memprofile_enabled as _memprofile_enabled,
-)
 from cosmos_framework.data.generator.action.domain_utils import get_domain_id
 from cosmos_framework.data.generator.action.pose_utils import compute_idle_frames
 from cosmos_framework.data.generator.action.viewpoint_utils import Viewpoint
 from cosmos_framework.utils import log
+
+
+# No-op memory-profiling shims. Profiling is disabled in cosmos-framework, so these
+# keep the ported dataset's optional RSS-tracking call sites cheap and side-effect-free
+# (formerly a separate memprofile stub module).
+def _memprofile_enabled() -> bool:
+    return False
+
+
+def _deep_size(obj, *args, **kwargs) -> int:
+    return 0
+
+
+def _fmt_mb(n, *args, **kwargs) -> str:
+    return "n/a"
+
+
+def log_worker_memory_breakdown(*args, **kwargs) -> None:
+    return None
+
+
+@contextmanager
+def rss_tracker(*args, **kwargs):
+    yield
+
 
 # ---------------------------------------------------------------------------
 # LRU-capped VideoDecoderCache
