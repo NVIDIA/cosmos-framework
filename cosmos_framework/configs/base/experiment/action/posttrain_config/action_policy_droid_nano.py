@@ -201,22 +201,14 @@ action_policy_droid_nano = LazyDict(
                             use_state=True,
                             iterable_shuffle=True,  # rank x worker episode-shuffle stream
                             episode_shuffle_seed=42,
-                            use_image_augmentation=True,  # SR boost (random crop+rescale + color jitter)
-                            # ColorJitter applied CPU-side in the dataloader augmentor, matching
-                            # i4's pipeline stage exactly (model.config.train_color_jitter is None
-                            # below). Slower (~14x rgb<->hsv on 1 core/worker) but eliminates the
-                            # last structural OSS-vs-i4 training-path difference.
-                            apply_color_jitter=True,
+                            # SR boost: random crop+rescale + ColorJitter, applied CPU-side in the
+                            # DROIDLeRobotDataset image augmentor (matches i4's pipeline stage).
+                            use_image_augmentation=True,
                             # keep_ranges_1_0_1.json window filter (drops idle/non-task frames). Off by default;
                             # set use_filter_dict=True + filter_dict_path to enable.
                             use_filter_dict=False,
                             filter_dict_path=None,
                             action_normalization=None,
-                            # Sharded (per-lab) dataset layout. False -> read DROID_ROOT as a
-                            # single flat LeRobot (prior behavior). Override to True (and point
-                            # DROID_ROOT at the <...>_sharded dir, which holds success/<lab>/...)
-                            # to reproduce the internal sharded run's per-shard index build.
-                            sharded=False,
                             viewpoint="concat_view",  # wrist 480p (top) + L/R shoulder 320x180 (bottom)
                             resolution="480",  # 640x360 data @ 480p
                             max_action_dim="${model.config.max_action_dim}",
@@ -253,14 +245,6 @@ action_policy_droid_nano["model"]["config"]["max_num_tokens_after_packing"] = -1
 # loss_scale multiplies only the vision term, balancing it against the action loss
 # (action_loss_weight=10) so both heads train at comparable gradient magnitude.
 action_policy_droid_nano["model"]["config"]["rectified_flow_training_config"]["loss_scale"] = 10.0
-
-
-# GPU-side photometric augmentation DISABLED. ColorJitter now runs CPU-side in the
-# dataloader (apply_color_jitter=True above), matching i4's exact pipeline stage so the
-# OSS and i4 training forward paths are structurally identical. (To restore the faster
-# GPU-side jitter, set this back to dict(brightness=0.3,contrast=0.4,saturation=0.5,hue=0.08)
-# and flip the dataset's apply_color_jitter back to False.)
-action_policy_droid_nano["model"]["config"]["train_color_jitter"] = None
 
 
 for _item in [action_policy_droid_nano]:

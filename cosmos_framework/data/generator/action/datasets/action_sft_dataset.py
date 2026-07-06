@@ -101,7 +101,6 @@ def get_action_droid_sft_dataset(
     action_normalization: str | None = None,
     viewpoint: str = "concat_view",
     use_image_augmentation: bool = False,
-    apply_color_jitter: bool = True,
     use_filter_dict: bool = False,
     filter_dict_path: str | None = None,
     resolution: str | int = "256",
@@ -115,22 +114,13 @@ def get_action_droid_sft_dataset(
     format_prompt_as_json: bool = False,
     iterable_shuffle: bool = False,
     episode_shuffle_seed: int = 42,
-    sharded: bool = False,
-    lerobot_roots: list[str] | None = None,
     use_success_only: bool = True,
 ) -> Dataset:
     """Build the DROID action SFT dataset: ``action_space='joint_pos'`` (8D) +
     ``use_state`` (raw/un-normalized), concat_view, chunk_length 32.
 
-    ``sharded=True`` consumes the per-lab sharded layout (``<root>/success/<lab>``)
-    via :class:`ShardedDROIDLeRobotDataset` — one ``DROIDLeRobotDataset`` per lab
-    concatenated into one flat index — reproducing the internal sharded run's
-    per-shard index construction. ``sharded=False`` (default) reads ``root`` as a
-    single flat LeRobot dataset (the prior behavior). ``lerobot_roots`` optionally
-    pins the shard sub-paths (relative to ``root``); otherwise they are
-    auto-discovered."""
-    if isinstance(sharded, str):
-        sharded = sharded.strip().lower() in ("1", "true", "yes", "on")
+    Reads ``root`` (a merged/versioned DROID LeRobot root) as a single flat
+    dataset; ``use_success_only=True`` filters to the ``success/`` split."""
     shard_kwargs = dict(
         fps=fps,
         chunk_length=chunk_length,
@@ -144,13 +134,6 @@ def get_action_droid_sft_dataset(
         filter_dict_path=filter_dict_path,
         use_success_only=use_success_only,
     )
-    if sharded:
-        raise NotImplementedError(
-            "The ported i4 DROIDLeRobotDataset reads the merged/versioned root natively "
-            "(basename(root) must be a LEROBOT_ROOTS version key, e.g. "
-            "'droid_plus_lerobot_640x360_20260412'); use_success_only=True filters to success/. "
-            "Per-lab ShardedDROIDLeRobotDataset is not part of the i4 dataset."
-        )
     dataset: Dataset = DROIDLeRobotDataset(root=root, **shard_kwargs)
     transform = ActionTransformPipeline(
         tokenizer_config=tokenizer_config,
