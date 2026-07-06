@@ -24,10 +24,13 @@ Specs
   (small LeRobot dir), cached across runs. Collapses the recipe's HSDP replicate
   2 -> 1 to fit one 4-GPU node.
 * ``action_policy_droid`` — ``examples/toml/sft_config/action_policy_droid_repro.toml``.
-  The full ``nvidia/Cosmos3-DROID`` split is far too large to auto-download in
-  CI, so this spec requires a pre-staged LOCAL copy via ``DROID_ROOT`` (a
-  LeRobot dir with ``meta/info.json``, e.g. ``…/Cosmos3-DROID/success``) and
-  SKIPS when it is unset/missing.
+  The full DROID split is far too large to auto-download in CI, so this spec
+  requires a pre-staged LOCAL copy via ``DROID_ROOT`` and SKIPS when unset.
+  ``DROID_ROOT`` is the **versioned merged root** whose basename is a
+  ``LEROBOT_ROOTS`` version key (e.g. ``…/droid_plus_lerobot_640x360_20260412``),
+  NOT its ``success/`` subdir — the recipe's i4 lazy dataset appends ``success/``
+  itself (``use_success_only``). The skip-check looks for
+  ``<DROID_ROOT>/success/meta/info.json``.
 
 Determinism notes
 -----------------
@@ -351,10 +354,14 @@ def _assert_spec_matches_goldens(spec_key: str, tmp_path: Path) -> None:
     spec = _SPECS[spec_key]
     if spec.requires_droid_root:
         droid_root = os.environ.get("DROID_ROOT", "")
-        if not droid_root or not (Path(droid_root) / "meta" / "info.json").is_file():
+        # DROID_ROOT is the versioned merged root (basename is a LEROBOT_ROOTS key);
+        # the i4 lazy dataset appends success/ (use_success_only), so meta/info.json
+        # lives under <DROID_ROOT>/success, not at the root.
+        if not droid_root or not (Path(droid_root) / "success" / "meta" / "info.json").is_file():
             pytest.skip(
-                f"{spec.key}: set DROID_ROOT to a local Cosmos3-DROID LeRobot split "
-                "(dir with meta/info.json) to run this spec"
+                f"{spec.key}: set DROID_ROOT to a local versioned DROID LeRobot root "
+                "(basename a LEROBOT_ROOTS key, e.g. droid_plus_lerobot_640x360_20260412, "
+                "containing success/meta/info.json) to run this spec"
             )
 
     arch = _detect_arch()
@@ -421,13 +428,19 @@ if MAX_GPUS == 4:
 # Goldens keyed by GPU arch then ``LaunchSpec.key``. ``loss`` is the rank-0
 # per-step series over the 10 deterministic iters. Refresh on the target arch
 # with ``COSMOS_ACTION_REGRESSION_UPDATE_GOLDENS=1`` (see the module docstring).
-# Empty until captured on hardware — the test skips (not fails) for any arch/spec
-# without an entry.
+# The test skips (not fails) for any arch/spec without an entry, so goldens can
+# land incrementally as they are captured on each arch.
+#
+# gb200 ``action_policy_libero`` captured 2026-07-05 on 4 × NVIDIA GB200
+# (single-node, shard=4, ``--deterministic``, seed 42): reproduced bit-exact
+# across two independent jobs, so the default 1e-3 tolerance holds. ``h100``
+# (H200 CI arch) and ``action_policy_droid`` goldens are captured separately.
 _GOLDENS: dict[str, dict[str, dict[str, list[float]]]] = {
-    # "gb200": {
-    #     "action_policy_libero": {"loss": [...10 values...]},
-    #     "action_policy_droid":  {"loss": [...10 values...]},
-    # },
+    "gb200": {
+        "action_policy_libero": {
+            "loss": [15.3917, 15.1919, 15.9920, 16.4426, 14.2616, 15.7732, 16.1083, 14.4169, 15.2281, 15.7870],
+        },
+    },
 }
 
 
