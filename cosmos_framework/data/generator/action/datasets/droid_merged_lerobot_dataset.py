@@ -46,7 +46,7 @@ class DROIDMergedLeRobotDataset(DROIDLeRobotDataset):
         pose_convention: str = "backward_framewise",
         tolerance_s: float = 2e-4,
         viewpoint: str = "concat_view",
-        action_space: str = "midtrain",
+        action_space: str = "ee_pose",
         use_state: bool = False,
         action_normalization: str | None = None,
         use_image_augmentation: bool = False,
@@ -55,11 +55,10 @@ class DROIDMergedLeRobotDataset(DROIDLeRobotDataset):
         split: str = "train",
         use_success_only: bool = False,
     ) -> None:
-        action_space = "ee_pose" if action_space == "midtrain" else action_space
         if viewpoint != "concat_view":
             raise NotImplementedError("DROIDMergedLeRobotDataset only supports concat_view.")
         if action_space not in ("ee_pose", "joint_pos"):
-            raise NotImplementedError("action_space must be 'midtrain', 'ee_pose', or 'joint_pos'.")
+            raise NotImplementedError("action_space must be 'ee_pose' or 'joint_pos'.")
         if use_state and action_space != "joint_pos":
             raise NotImplementedError("use_state is only supported with action_space='joint_pos'.")
         if use_filter_dict and not filter_dict_path:

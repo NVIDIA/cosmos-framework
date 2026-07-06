@@ -25,12 +25,12 @@
 # ============================================================================
 
 TOML_FILE="examples/toml/sft_config/action_fd_droid_posttrain.toml"
-: "${DATASET_PATH:=${DROID_MERGED_LEROBOT_ROOT:-examples/data/Cosmos3-DROID}}"
+: "${DATASET_PATH:=examples/data/Cosmos3-DROID}"
 : "${BASE_CHECKPOINT_PATH:=examples/checkpoints/Cosmos3-Nano}"
 
 WAN_VAE_PATH="${WAN_VAE_PATH:-examples/checkpoints/wan22_vae/Wan2.2_VAE.pth}"
 
-EXTRA_DATASET_CHECK='DROID_MERGED_LEROBOT_ROOT="${DROID_MERGED_LEROBOT_ROOT:-$DATASET_PATH}"; [[ "$DROID_MERGED_LEROBOT_ROOT" = /* ]] || DROID_MERGED_LEROBOT_ROOT="$WORKDIR/$DROID_MERGED_LEROBOT_ROOT"; [[ "$WAN_VAE_PATH" = /* ]] || WAN_VAE_PATH="$WORKDIR/$WAN_VAE_PATH"; export DROID_MERGED_LEROBOT_ROOT WAN_VAE_PATH; [[ -f "$DROID_MERGED_LEROBOT_ROOT/success/meta/info.json" || -n "$(compgen -G "$DROID_MERGED_LEROBOT_ROOT/success/*/meta/info.json")" ]] || { echo "ERROR: missing Cosmos3-DROID success split under $DROID_MERGED_LEROBOT_ROOT (expected success/meta/info.json or success/*/meta/info.json; see docs/action_fd_droid_posttrain.md)" >&2; exit 1; }; [[ -f "$DROID_MERGED_LEROBOT_ROOT/failure/meta/info.json" || -n "$(compgen -G "$DROID_MERGED_LEROBOT_ROOT/failure/*/meta/info.json")" ]] || { echo "ERROR: missing Cosmos3-DROID failure split under $DROID_MERGED_LEROBOT_ROOT (expected failure/meta/info.json or failure/*/meta/info.json; see docs/action_fd_droid_posttrain.md)" >&2; exit 1; }; [[ -f "$WAN_VAE_PATH" ]] || { echo "ERROR: WAN_VAE_PATH not found: $WAN_VAE_PATH" >&2; exit 1; }'
+EXTRA_DATASET_CHECK='[[ "$WAN_VAE_PATH" = /* ]] || WAN_VAE_PATH="$WORKDIR/$WAN_VAE_PATH"; export WAN_VAE_PATH; [[ -f "$DATASET_PATH/success/meta/info.json" || -n "$(compgen -G "$DATASET_PATH/success/*/meta/info.json")" ]] || { echo "ERROR: missing Cosmos3-DROID success split under $DATASET_PATH (expected success/meta/info.json or success/*/meta/info.json; see docs/action_fd_droid_posttrain.md)" >&2; exit 1; }; [[ -f "$DATASET_PATH/failure/meta/info.json" || -n "$(compgen -G "$DATASET_PATH/failure/*/meta/info.json")" ]] || { echo "ERROR: missing Cosmos3-DROID failure split under $DATASET_PATH (expected failure/meta/info.json or failure/*/meta/info.json; see docs/action_fd_droid_posttrain.md)" >&2; exit 1; }; [[ -f "$WAN_VAE_PATH" ]] || { echo "ERROR: WAN_VAE_PATH not found: $WAN_VAE_PATH" >&2; exit 1; }'
 
 TAIL_OVERRIDES=(
     ${EXTRA_TAIL_OVERRIDES:-}

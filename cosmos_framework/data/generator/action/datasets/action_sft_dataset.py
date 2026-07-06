@@ -148,7 +148,7 @@ def get_action_droid_merged_lerobot_sft_dataset(
     root: str,
     fps: float = 15.0,
     chunk_length: int = 16,
-    action_space: str = "midtrain",
+    action_space: str = "ee_pose",
     mode: str = "forward_dynamics",
     use_state: bool = False,
     action_normalization: str | None = None,

@@ -5,13 +5,13 @@
 # DROID-Merged LeRobot forward-dynamics post-training.
 #
 # Env required:
-#   DROID_MERGED_LEROBOT_ROOT=/path/to/droid_merged_lerobot_640x360_20260412
+#   DATASET_PATH=/path/to/Cosmos3-DROID
 #   BASE_CHECKPOINT_PATH=<base DCP dir or object-store path>
 #   WAN_VAE_PATH=<Wan2.2_VAE.pth>
 #   IMAGINAIRE_OUTPUT_ROOT=/path/to/output_root
 #
 # The registered experiment owns dataset mode/action-space wiring:
-#   mode="forward_dynamics", action_space="midtrain", chunk_length=16, res480.
+#   mode="forward_dynamics", action_space="ee_pose", chunk_length=16, res480.
 # ============================================================================
 
 [job]

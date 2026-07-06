@@ -59,7 +59,7 @@ class DROIDLeRobotDataset(ActionBaseDataset):
 
     Two action layouts:
       * ``action_space="ee_pose"`` (default): 10D ``[pos_delta(3), rot6d_delta(6),
-        gripper(1)]``, quantile-normalized (the v1.2 midtrain default).
+        gripper(1)]``, quantile-normalized.
       * ``action_space="joint_pos"``: 8D ``[joint(7), gripper(1)]`` absolute joint
         commands, NOT normalized, with ``use_state=True`` prepending the initial
         observed joint+gripper state → ``(chunk+1, 8)`` — matching the internal

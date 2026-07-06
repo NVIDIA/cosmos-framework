@@ -14,7 +14,7 @@ It trains Cosmos3-DROID forward dynamics in `cosmos_framework`.
 | Dataset wrapper           | `cosmos_framework/data/generator/action/datasets/droid_merged_lerobot_dataset.py`                                      |
 | Dataset root              | [Cosmos3-DROID](https://huggingface.co/datasets/nvidia/Cosmos3-DROID) parent root containing `success/` and `failure/` |
 | Task mode                 | `forward_dynamics`                                                                                                     |
-| Action space              | `midtrain` alias for 10-D ee-pose `[pos_delta, rot6d_delta, gripper]`                                                  |
+| Action space              | `ee_pose`: 10-D `[pos_delta, rot6d_delta, gripper]`                                                                    |
 | Chunk length / resolution | `16` frames at `480`                                                                                                   |
 
 ## Prerequisites
@@ -30,7 +30,7 @@ experiment, the dataset class, and the paired TOML/launch shell. Three inputs
 are external and must be provided per environment:
 
 1. **[Cosmos3-DROID](https://huggingface.co/datasets/nvidia/Cosmos3-DROID) dataset (in LeRobotDataset v3.0 format)** — pre-download the
-   dataset and point `DATASET_PATH` or `DROID_MERGED_LEROBOT_ROOT` at the
+   dataset and point `DATASET_PATH` at the
    resulting `.../Cosmos3-DROID` parent directory. This experiment trains on both
    `success/` and `failure/` subsets.
 2. **DCP base checkpoint** — prepare a base DCP checkpoint and point
@@ -39,8 +39,7 @@ are external and must be provided per environment:
 
 ## Data Layout
 
-Set `DATASET_PATH` or `DROID_MERGED_LEROBOT_ROOT` to the Cosmos3-DROID parent
-directory:
+Set `DATASET_PATH` to the Cosmos3-DROID parent directory:
 
 ```shell
 export DATASET_PATH=/path/to/Cosmos3-DROID
@@ -64,7 +63,7 @@ $DATASET_PATH/
 └── failure/<institution>/meta/info.json
 ```
 
-The launch shell bridges `DATASET_PATH` to `DROID_MERGED_LEROBOT_ROOT`.
+The launch shell passes `DATASET_PATH` through to the training config.
 
 ## Full Reproduction
 
@@ -156,5 +155,5 @@ The run is resumable by relaunching with the same output directory and job name.
 
 - This recipe uses `mode="forward_dynamics"`, so actions are conditioning and the
   model trains video prediction from the first frame plus action sequence.
-- `DROIDMergedLeRobotDataset` accepts `action_space="midtrain"` as an
-  i4-compatible alias for the 10-D ee-pose path.
+- `DROIDMergedLeRobotDataset` uses `action_space="ee_pose"` for the 10-D
+  end-effector pose action path.
