@@ -236,12 +236,15 @@ def _ensure_libero(log_dir: Path) -> None:
 
 
 # Overrides shared by both action specs: cap the run to a deterministic 10-iter
-# single-node capture. ``compile_tokenizer`` off so the all-rank reduction is
-# bit-exact (grad-norm goldens stay None regardless); shard 4 x replicate 1 fits
-# one 4-GPU node so the FSDP reduce-scatter/all-gather stays intra-node (NVLink)
-# and reproduces bit-exact — matching launch_regression_test.py's 4-GPU nano
-# spec (multi-node NCCL reductions are not bit-exact). A small packed batch
-# keeps the 10 iters quick + within memory.
+# single-node capture. Runs EAGER (``model.config.compile.enabled=false`` +
+# ``compile_tokenizer`` off): torch.compile is a determinism hazard (the vision
+# regression pins its grad-norm to None for this reason) and its compiled Triton
+# kernel outright fails on the DROID res480 sequence ("CUDA driver error:
+# invalid argument" from static_triton_launcher) — eager avoids both and makes
+# the loss bit-exact. shard 4 x replicate 1 fits one 4-GPU node so the FSDP
+# reduce-scatter/all-gather stays intra-node (NVLink) and reproduces bit-exact
+# (matching launch_regression_test.py's 4-GPU nano spec; multi-node NCCL
+# reductions are not bit-exact). A small packed batch keeps the 10 iters quick.
 _COMMON_OVERRIDES: tuple[str, ...] = (
     "trainer.max_iter=10",
     "trainer.logging_iter=1",
@@ -250,6 +253,7 @@ _COMMON_OVERRIDES: tuple[str, ...] = (
     "upload_reproducible_setup=false",
     "checkpoint.save_iter=999999",  # no checkpoint writes during the capture
     "trainer.callbacks.compile_tokenizer.enabled=false",
+    "model.config.compile.enabled=false",  # eager: determinism + avoids DROID Triton launch failure
     "model.config.parallelism.data_parallel_shard_degree=4",
     "model.config.parallelism.data_parallel_replicate_degree=1",
     "dataloader_train.max_samples_per_batch=8",
@@ -431,16 +435,13 @@ if MAX_GPUS == 4:
 # The test skips (not fails) for any arch/spec without an entry, so goldens can
 # land incrementally as they are captured on each arch.
 #
-# gb200 ``action_policy_libero`` captured 2026-07-05 on 4 × NVIDIA GB200
-# (single-node, shard=4, ``--deterministic``, seed 42): reproduced bit-exact
-# across two independent jobs, so the default 1e-3 tolerance holds. ``h100``
-# (H200 CI arch) and ``action_policy_droid`` goldens are captured separately.
+# Captured eager (compile disabled) on the target arch. The test skips (not
+# fails) for any arch/spec without an entry, so goldens land incrementally.
+# (An earlier gb200 LIBERO golden captured *with* torch.compile is superseded:
+# the test now runs eager, so goldens are re-captured eager.)
 _GOLDENS: dict[str, dict[str, dict[str, list[float]]]] = {
-    "gb200": {
-        "action_policy_libero": {
-            "loss": [15.3917, 15.1919, 15.9920, 16.4426, 14.2616, 15.7732, 16.1083, 14.4169, 15.2281, 15.7870],
-        },
-    },
+    # "gb200": {"action_policy_libero": {"loss": [...]}, "action_policy_droid": {"loss": [...]}},
+    # "h100":  {"action_policy_libero": {"loss": [...]}},
 }
 
 
