@@ -448,8 +448,18 @@ if MAX_GPUS == 4:
 # (An earlier gb200 LIBERO golden captured *with* torch.compile is superseded:
 # the test now runs eager, so goldens are re-captured eager.)
 _GOLDENS: dict[str, dict[str, dict[str, list[float]]]] = {
-    # "gb200": {"action_policy_libero": {"loss": [...]}, "action_policy_droid": {"loss": [...]}},
-    # "h100":  {"action_policy_libero": {"loss": [...]}},
+    # 4 × NVIDIA GB200, single-node shard=4, --deterministic seed 42, fully eager.
+    # LIBERO reproduced bit-exact across independent jobs; DROID matches its one
+    # compiled run bit-exact (loss is compile-invariant), so 1e-3 tolerance holds.
+    "gb200": {
+        "action_policy_libero": {
+            "loss": [15.3917, 15.1919, 15.9920, 16.4426, 14.2616, 15.7732, 16.1083, 14.4169, 15.2281, 15.7870],
+        },
+        "action_policy_droid": {
+            "loss": [26.3858, 17.3959, 12.2484, 10.2817, 8.2284, 8.3660, 9.2132, 6.0455, 6.9442, 4.7246],
+        },
+    },
+    # "h100": {"action_policy_libero": {"loss": [...]}},  # H200/Lepton — capture pending
 }
 
 
