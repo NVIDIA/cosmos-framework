@@ -438,16 +438,27 @@ if MAX_GPUS == 4:
 # The test skips (not fails) for any arch/spec without an entry, so goldens can
 # land incrementally as they are captured on each arch.
 #
-# Captured eager (compile disabled) on the target arch. The test skips (not
-# fails) for any arch/spec without an entry, so goldens land incrementally.
-# (An earlier gb200 LIBERO golden captured *with* torch.compile is superseded:
-# the test now runs eager, so goldens are re-captured eager.)
+# Captured with torch.compile ON, --deterministic, seed 42, single-node
+# data_parallel_shard_degree=4 (intra-node NVLink FSDP reduction is bit-exact).
 _GOLDENS: dict[str, dict[str, dict[str, list[float]]]] = {
-    # Captured on the H200 CI arch (compile on, --deterministic, seed 42). The
-    # test skips (not fails) for any arch/spec without an entry, so goldens land
-    # incrementally. LIBERO is the primary numerical golden here; the DROID spec
-    # needs its (gb200-only) dataset, so it skips unless DROID_ROOT is provided.
-    # "h100": {"action_policy_libero": {"loss": [...]}},  # H200 capture pending
+    # H200 (Hopper) CI arch. LIBERO is the primary numerical golden; the DROID
+    # spec needs its dataset (DROID_ROOT), so it skips unless one is provided.
+    "h100": {
+        "action_policy_libero": {
+            "loss": [
+                15.8107,
+                15.2467,
+                15.9856,
+                16.5306,
+                14.3738,
+                16.1460,
+                16.6093,
+                14.8846,
+                16.0632,
+                16.6449,
+            ],
+        },
+    },
 }
 
 
