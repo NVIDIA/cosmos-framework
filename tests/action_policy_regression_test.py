@@ -312,6 +312,14 @@ def _run_torchrun(spec: LaunchSpec, run_dir: Path) -> str:
         run_dir / "training.log",
         extra_env={
             "PYTHONHASHSEED": "42",
+            # Force fully-eager execution. model.config.compile.enabled=false only
+            # disables the config-gated compile; the model/data path also has a
+            # hardcoded @torch.compile whose inductor/Triton kernel fails to launch
+            # on the DROID res480 sequence ("CUDA driver error: invalid argument").
+            # Disabling dynamo makes every @torch.compile a no-op -> eager, which
+            # runs cleanly and is bit-exact (LIBERO loss is unchanged eager-vs-compiled).
+            "TORCHDYNAMO_DISABLE": "1",
+            "TORCH_COMPILE_DISABLE": "1",
             "IMAGINAIRE_OUTPUT_ROOT": str(run_dir / "output"),
             "WAN_VAE_PATH": str(_WAN_VAE),
             "BASE_CHECKPOINT_PATH": str(_DCP_DIR),
