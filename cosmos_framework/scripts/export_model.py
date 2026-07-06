@@ -37,7 +37,7 @@ from cosmos_framework.inference.common.config import serialize_config_dict
 from cosmos_framework.inference.common.init import is_rank0
 from cosmos_framework.inference.common.public_model_config import build_public_model_config
 from cosmos_framework.inference.model import Cosmos3OmniConfig, Cosmos3OmniModel
-from cosmos_framework.model.vfm.omni_mot_model import OmniMoTModel
+from cosmos_framework.model.generator.omni_mot_model import OmniMoTModel
 from cosmos_framework.utils import log
 from cosmos_framework.utils.checkpoint_db import CheckpointConfig, sanitize_uri
 from cosmos_framework.utils.lazy_config.registry import convert_target_to_string

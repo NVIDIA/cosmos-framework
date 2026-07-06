@@ -6,7 +6,7 @@ from hydra.core.config_store import ConfigStore
 from cosmos_framework.utils.lazy_config import LazyCall as L
 from cosmos_framework.configs.base.defaults.parallelism import ParallelismConfig
 from cosmos_framework.configs.base.reasoner.defaults.policy_config import VLMModelConfig
-from cosmos_framework.model.vfm.vlm_model import VLMModel
+from cosmos_framework.model.generator.vlm_model import VLMModel
 
 VLM_FSDP_CONFIG = dict(
     trainer=dict(

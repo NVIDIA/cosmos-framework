@@ -26,10 +26,10 @@ from cosmos_framework.inference.vision import (
     uint8_to_normalized_float,
 )
 from cosmos_framework.utils import log
-from cosmos_framework.data.vfm.sequence_packing import SequencePlan
-from cosmos_framework.model.vfm.omni_mot_model import OmniMoTModel
-from cosmos_framework.model.vfm.utils.data_and_condition import GenerationDataClean
-from cosmos_framework.model.vfm.reasoner.qwen3_vl.utils import _SYSTEM_PROMPT_TRANSFER
+from cosmos_framework.data.generator.sequence_packing import SequencePlan
+from cosmos_framework.model.generator.omni_mot_model import OmniMoTModel
+from cosmos_framework.model.generator.utils.data_and_condition import GenerationDataClean
+from cosmos_framework.model.generator.reasoner.qwen3_vl.utils import _SYSTEM_PROMPT_TRANSFER
 
 
 @dataclass
@@ -62,7 +62,7 @@ def apply_transfer_control_augmentor(
     preset_blur_strength: PresetBlurStrength,
 ) -> torch.Tensor:
     """Compute edge/blur transfer controls on the fly from uint8 input frames."""
-    from cosmos_framework.data.vfm.augmentors.transfer_control_input.control_input import (
+    from cosmos_framework.data.generator.augmentors.transfer_control_input.control_input import (
         AddControlInputBlur,
         AddControlInputEdge,
     )

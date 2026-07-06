@@ -35,7 +35,7 @@ dataset (``load_dataset(..., streaming=False)``).
 Usage (smoke test)::
 
     torchrun --nproc_per_node=4 --master_port=12344 -m cosmos_framework.scripts.train \\
-        --config=cosmos_framework/configs/base/vlm/config.py -- \\
+        --config=cosmos_framework/configs/base/reasoner/config.py -- \\
         experiment=pre_exp012_llava_ov \\
         "model.config.policy.backbone.model_name=/path/to/Siglip2-Qwen3-1.7B-BF16-Alignment" \\
         trainer.max_iter=10 trainer.logging_iter=1 \\
@@ -53,14 +53,14 @@ from hydra.core.config_store import ConfigStore
 
 from cosmos_framework.utils.lazy_config import LazyCall as L
 from cosmos_framework.utils.lazy_config import LazyDict
-from cosmos_framework.data.vfm.dataflow import (
+from cosmos_framework.data.generator.dataflow import (
     CosmosDataLoader,
     IterableDistributor,
     MapDistributor,
     PoolPackingBatcher,
 )
-from cosmos_framework.data.vfm.processors import build_processor
-from cosmos_framework.utils.vlm.constant import IGNORE_INDEX
+from cosmos_framework.data.generator.processors import build_processor
+from cosmos_framework.utils.reasoner.constant import IGNORE_INDEX
 from cosmos_framework.configs.base.reasoner.experiment.dataflow_roles import VLMProcessor, VLMCollator
 from cosmos_framework.callbacks.cosmos_dataloader_state import CosmosDataLoaderStateCallback
 

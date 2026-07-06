@@ -70,14 +70,14 @@ The full pipeline (dataloader class, dataset wiring, model_instance LazyCall, et
 
 Run identity + meta-fields that pick the Hydra config tree to load.
 
-| field        | default      | description                                                                                                                                                                                                                          |
-| ------------ | ------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `task`       | `"vfm"`      | **META** — chooses which `make_config()` to call: `"vfm"` → `cosmos_framework/configs/base/config.py`, `"vlm"` → `cosmos_framework/configs/base/vlm/config.py`. Also picks the path-remap rules in `toml_config_helper.PATH_REMAPS`. |
-| `experiment` | `""`         | **META** — names the Hydra experiment LazyDict registered in `ConfigStore` under `experiment/<name>`. Resolved at load time via `experiment=<name>` (e.g. `vision_sft_nano`).                                                        |
-| `project`    | `""`         | W&B project (team-level bucket). Flows to `config.job.project`.                                                                                                                                                                      |
-| `group`      | `""`         | W&B sub-label for clustering related runs (e.g. `"sft"`). Flows to `config.job.group`.                                                                                                                                               |
-| `name`       | `""`         | W&B run name; forms part of the output dir `$IMAGINAIRE_OUTPUT_ROOT/<project>/<group>/<name>/`. Leave empty (or use `${now:%Y-%m-%d}_${now:%H-%M-%S}`) for auto-timestamped subdir.                                                  |
-| `wandb_mode` | `"disabled"` | `"online"` (real-time, needs `WANDB_API_KEY`), `"offline"` (log locally, sync later via `wandb sync`), or `"disabled"`.                                                                                                              |
+| field        | default      | description                                                                                                                                                                                                                               |
+| ------------ | ------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `task`       | `"vfm"`      | **META** — chooses which `make_config()` to call: `"vfm"` → `cosmos_framework/configs/base/config.py`, `"vlm"` → `cosmos_framework/configs/base/reasoner/config.py`. Also picks the path-remap rules in `toml_config_helper.PATH_REMAPS`. |
+| `experiment` | `""`         | **META** — names the Hydra experiment LazyDict registered in `ConfigStore` under `experiment/<name>`. Resolved at load time via `experiment=<name>` (e.g. `vision_sft_nano`).                                                             |
+| `project`    | `""`         | W&B project (team-level bucket). Flows to `config.job.project`.                                                                                                                                                                           |
+| `group`      | `""`         | W&B sub-label for clustering related runs (e.g. `"sft"`). Flows to `config.job.group`.                                                                                                                                                    |
+| `name`       | `""`         | W&B run name; forms part of the output dir `$IMAGINAIRE_OUTPUT_ROOT/<project>/<group>/<name>/`. Leave empty (or use `${now:%Y-%m-%d}_${now:%H-%M-%S}`) for auto-timestamped subdir.                                                       |
+| `wandb_mode` | `"disabled"` | `"online"` (real-time, needs `WANDB_API_KEY`), `"offline"` (log locally, sync later via `wandb sync`), or `"disabled"`.                                                                                                                   |
 
 ## `[model]`
 

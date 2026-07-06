@@ -133,7 +133,7 @@ class HFExportCallback(Callback):
             return
 
         # Deferred import to avoid circular dependency at module load time.
-        from cosmos_framework.model.vfm.vlm_model import VLMModel
+        from cosmos_framework.model.generator.vlm_model import VLMModel
 
         if not isinstance(model, VLMModel):
             # The legacy vlm/train.py path passes model_parts: list[nn.Module] (raw HF

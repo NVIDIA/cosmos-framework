@@ -22,7 +22,7 @@ from cosmos_framework.inference.args import (
 from cosmos_framework.inference.common.config import structure_config
 
 if TYPE_CHECKING:
-    from cosmos_framework.model.vfm.omni_mot_model import OmniMoTModel
+    from cosmos_framework.model.generator.omni_mot_model import OmniMoTModel
 
 _H100_MEMORY_BYTES = 80 * 1024**3
 # Reserved for future use (paired with the reserved memory-based `_get_dp_shard_size`

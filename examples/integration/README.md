@@ -189,7 +189,7 @@ loss.backward()                                                      # ← Your 
 
 A pure level-A extraction (zero `import cosmos_framework`) is **not feasible without
 re-vendoring** — `Cosmos3VFMNetwork.forward` takes a `PackedSequence`, which
-~2400 lines of `cosmos_framework/data/vfm/sequence_packing.py` build. These demos show
+~2400 lines of `cosmos_framework/data/generator/sequence_packing.py` build. These demos show
 the realistic options:
 
 | Cosmos surface you keep                                     | Trainer-level |     Net-level     |
@@ -290,12 +290,12 @@ at a directory containing that model's `config.json`.
 
 | Topic                           | File                                                                           |
 | ------------------------------- | ------------------------------------------------------------------------------ |
-| OmniMoTModel definition         | `cosmos_framework/model/vfm/omni_mot_model.py`                                 |
-| Cosmos3VFMNetwork (`model.net`) | `cosmos_framework/model/vfm/mot/cosmos3_vfm_network.py`                        |
-| PackedSequence + packer         | `cosmos_framework/data/vfm/sequence_packing.py`                                |
-| Rectified-flow loss             | `cosmos_framework/model/vfm/algorithm/loss/flow_matching.py`                   |
-| UniPC / EDM samplers            | `cosmos_framework/model/vfm/diffusion/samplers/`                               |
+| OmniMoTModel definition         | `cosmos_framework/model/generator/omni_mot_model.py`                           |
+| Cosmos3VFMNetwork (`model.net`) | `cosmos_framework/model/generator/mot/cosmos3_vfm_network.py`                  |
+| PackedSequence + packer         | `cosmos_framework/data/generator/sequence_packing.py`                          |
+| Rectified-flow loss             | `cosmos_framework/model/generator/algorithm/loss/flow_matching.py`             |
+| UniPC / EDM samplers            | `cosmos_framework/model/generator/diffusion/samplers/`                         |
 | Checkpoint loader               | `cosmos_framework/inference/model.py` (`Cosmos3OmniModel.from_pretrained_dcp`) |
 | Default sample args             | `cosmos_framework/inference/defaults/<mode>/sample_args.json`                  |
-| FSDP / parallelism wrapping     | `cosmos_framework/utils/vfm/parallelism.py` (`ParallelDims`)                   |
+| FSDP / parallelism wrapping     | `cosmos_framework/utils/generator/parallelism.py` (`ParallelDims`)             |
 | Production trainer (skipped)    | `cosmos_framework/scripts/train.py`, `examples/toml/*.toml`                    |

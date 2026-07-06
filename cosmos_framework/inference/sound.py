@@ -9,8 +9,8 @@ from typing import Any
 
 import torch
 
-from cosmos_framework.data.vfm.sequence_packing import SequencePlan
-from cosmos_framework.data.vfm.sound_data_utils import build_sequence_plan_for_sound
+from cosmos_framework.data.generator.sequence_packing import SequencePlan
+from cosmos_framework.data.generator.sound_data_utils import build_sequence_plan_for_sound
 
 
 @dataclass

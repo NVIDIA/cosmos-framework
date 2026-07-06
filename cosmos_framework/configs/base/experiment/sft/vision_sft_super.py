@@ -51,11 +51,11 @@ import copy
 from hydra.core.config_store import ConfigStore
 
 from cosmos_framework.configs.base.experiment.sft.models.super_model_config import SUPER_MODEL_CONFIG
-from cosmos_framework.data.vfm.joint_dataloader import (
+from cosmos_framework.data.generator.joint_dataloader import (
     PackingDataLoader,
     RankPartitionedDataLoader,
 )
-from cosmos_framework.data.vfm.local_datasets.sft_dataset import get_sft_dataset
+from cosmos_framework.data.generator.local_datasets.sft_dataset import get_sft_dataset
 from cosmos_framework.utils.lazy_config import LazyCall as L
 from cosmos_framework.utils.lazy_config import LazyDict
 
@@ -70,7 +70,7 @@ vision_sft_super = LazyDict(
             {"override /data_val": None},
             {"override /optimizer": "adamw"},
             # YAML used `scheduler: warmup_cosine_lr` but that group is only
-            # registered in cosmos_framework/configs/base/vlm/defaults/optimizer.py
+            # registered in cosmos_framework/configs/base/reasoner/defaults/optimizer.py
             # (reachable from the vlm config tree). The base vfm config path
             # only knows `lambdacosine`, which also sets
             # lr_scheduler_type="LambdaCosine" — behaviorally identical.

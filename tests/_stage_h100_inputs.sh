@@ -33,7 +33,7 @@ mkdir -p "$HF_HOME"
 echo ">>> $(date '+%H:%M:%S') HF_HOME=$HF_HOME STAGE_DIR=$STAGE_DIR REPO_ROOT=$REPO_ROOT"
 
 # ----------------------------------------------------------------------------
-# 0. Python env: uv sync + pinned transformers. cosmos_framework/utils/vfm/monkey_patch.py
+# 0. Python env: uv sync + pinned transformers. cosmos_framework/utils/generator/monkey_patch.py
 #    hard-rejects every transformers version except 4.57.1 (pyproject's
 #    `>=4.57.1,<5.0` is looser than what actually works at runtime).
 # ----------------------------------------------------------------------------
@@ -71,7 +71,7 @@ echo "WAN_VAE_PATH=$WAN_VAE_PATH"
 # ----------------------------------------------------------------------------
 # 3. VLM backbone for launch_vlm_llava_ov (Qwen3-VL-8B-Instruct). Cosmos's
 #    tokenizer dispatcher checks for the substring `Qwen/Qwen3-VL` in the path
-#    (cosmos_framework/data/vfm/processors/__init__.py); HF's cache uses
+#    (cosmos_framework/data/generator/processors/__init__.py); HF's cache uses
 #    `models--Qwen--Qwen3-VL-8B-Instruct/snapshots/...` which doesn't match. We
 #    add a `$STAGE_DIR/Qwen/Qwen3-VL-8B-Instruct` symlink so the dispatched
 #    substring is present, and point `MODEL_PATH` at the symlink.

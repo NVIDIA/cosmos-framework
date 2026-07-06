@@ -21,7 +21,7 @@ from cosmos_framework.model._base import ImaginaireModel
 from cosmos_framework.utils import distributed, log, misc
 from cosmos_framework.utils.easy_io import easy_io
 from cosmos_framework.tools.visualize.video import save_img_or_video
-from cosmos_framework.utils.vfm.data_utils import slice_data_batch
+from cosmos_framework.utils.generator.data_utils import slice_data_batch
 
 
 def resize_image(image: torch.Tensor, size: int = 1024) -> torch.Tensor:

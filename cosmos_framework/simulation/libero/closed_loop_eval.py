@@ -51,12 +51,12 @@ import requests
 from PIL import Image
 from scipy.spatial.transform import Rotation as R
 
-from cosmos_framework.data.vfm.action.libero_pose_utils import (
+from cosmos_framework.data.generator.action.libero_pose_utils import (
     libero_rotation_format,
     libero_rotation_space_from_action_dim,
 )
-from cosmos_framework.data.vfm.action.pose_utils import convert_rotation
-from cosmos_framework.data.vfm.action.viewpoint_utils import DEFAULT_VIEWPOINT_TEMPLATES
+from cosmos_framework.data.generator.action.pose_utils import convert_rotation
+from cosmos_framework.data.generator.action.viewpoint_utils import DEFAULT_VIEWPOINT_TEMPLATES
 
 benchmark: Any
 get_libero_path: Any

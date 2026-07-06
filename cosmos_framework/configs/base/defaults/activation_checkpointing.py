@@ -35,9 +35,9 @@ class ActivationCheckpointingConfig:
     Read sites:
 
     - MoT path consumes every field — see
-      cosmos_framework/model/vfm/mot/parallelize_unified_mot.py.
+      cosmos_framework/model/generator/mot/parallelize_unified_mot.py.
     - VLM path consumes only ``mode`` (and only ``"full"`` enables
-      checkpointing) — see cosmos_framework/model/vfm/vlm_model.py.
+      checkpointing) — see cosmos_framework/model/generator/vlm_model.py.
     """
 
     # AC mode:

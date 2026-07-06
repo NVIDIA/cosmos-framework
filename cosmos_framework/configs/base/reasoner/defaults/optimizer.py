@@ -20,7 +20,7 @@ VLM_OPTIMIZER_KWARGS: dict[str, Any] = dict(
     betas=(0.9, 0.95),
     fused=True,
     keys_to_select=[],
-    lr_multipliers={"vision_encoder": 0.1},
+    lr_multipliers={"model.visual": 0.1},
 )
 
 # ``f_start`` / ``f_min`` are ratios of the optimizer's base ``lr``:
@@ -32,7 +32,7 @@ VLM_LAMBDACOSINE_KWARGS: dict[str, Any] = dict(
     cycle_lengths=["${trainer.max_iter}"],
     f_start=[0.01],
     f_max=[1.0],
-    f_min=[0.5],
+    f_min=[0.1],
 )
 
 

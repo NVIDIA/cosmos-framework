@@ -39,7 +39,7 @@ class JobConfig(BaseModel):
         description=(
             "META — chooses which make_config() to call: "
             "'vfm' → cosmos_framework/configs/base/config.py (video foundation model), "
-            "'vlm' → cosmos_framework/configs/base/vlm/config.py (vision-language model). "
+            "'vlm' → cosmos_framework/configs/base/reasoner/config.py (vision-language model). "
             "Also picks the path-remap rules in toml_config_helper.PATH_REMAPS."
         ),
     )
@@ -692,7 +692,7 @@ def load_experiment_from_toml(
     The base config module is picked from ``[job].task`` in the TOML:
 
     - ``task = "vfm"`` → ``cosmos_framework/configs/base/config.py``
-    - ``task = "vlm"`` → ``cosmos_framework/configs/base/vlm/config.py``
+    - ``task = "vlm"`` → ``cosmos_framework/configs/base/reasoner/config.py``
 
     ``extra_overrides`` is appended after the TOML-derived Hydra overrides, so
     command-line entries take precedence over TOML values. Each entry must be

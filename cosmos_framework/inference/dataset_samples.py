@@ -15,7 +15,7 @@ from torch.utils.data.dataloader import default_collate
 
 from cosmos_framework.inference.args import OmniSampleOverrides
 from cosmos_framework.scripts.dataset_utils import set_dataset_mode
-from cosmos_framework.utils.vfm.data_utils import get_vision_data_resolution
+from cosmos_framework.utils.generator.data_utils import get_vision_data_resolution
 
 Sample = tuple[OmniSampleOverrides, dict[str, Any]]
 

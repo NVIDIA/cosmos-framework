@@ -262,7 +262,7 @@ Knobs are in the recipe TOML under `[model]`, `[model.parallelism]`, and `[datal
    - `mode = "full"` — checkpoint every transformer block (largest memory savings, trades extra recompute for memory).
    - `mode = "selective"` — per-op SAC, MoT only (smaller savings, smaller overhead). Falls back to no checkpointing on the VLM path.
 
-3. **Raise `[model.parallelism].data_parallel_shard_degree`** to shard weights/optimizer state across more ranks via FSDP. Runtime invariant (from `cosmos_framework/utils/vfm/parallelism.py:50-52`): `data_parallel_replicate_degree × data_parallel_shard_degree == WORLD_SIZE` always holds — `context_parallel_shard_degree` and `cfg_parallel_shard_degree` are *overlay* axes that share dp rank slots, not separate mesh dims. Use `-1` to let `data_parallel_shard_degree` auto-fill from `torchrun` world size.
+3. **Raise `[model.parallelism].data_parallel_shard_degree`** to shard weights/optimizer state across more ranks via FSDP. Runtime invariant (from `cosmos_framework/utils/generator/parallelism.py:50-52`): `data_parallel_replicate_degree × data_parallel_shard_degree == WORLD_SIZE` always holds — `context_parallel_shard_degree` and `cfg_parallel_shard_degree` are *overlay* axes that share dp rank slots, not separate mesh dims. Use `-1` to let `data_parallel_shard_degree` auto-fill from `torchrun` world size.
 
 4. **Raise `[model.parallelism].context_parallel_shard_degree`** to split the sequence dimension across ranks. Helpful when activations (not weights) drive the OOM — long videos, high resolution.
 

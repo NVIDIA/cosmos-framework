@@ -11,7 +11,7 @@ from cosmos_framework.model._base import ImaginaireModel
 from cosmos_framework.utils import distributed
 from cosmos_framework.utils.callback import Callback
 from cosmos_framework.callbacks.wandb_log import _LossRecord
-from cosmos_framework.data.vfm.action.domain_utils import EMBODIMENT_TO_DOMAIN_ID
+from cosmos_framework.data.generator.action.domain_utils import EMBODIMENT_TO_DOMAIN_ID
 
 # Build inverse mapping: domain_id -> embodiment_type. First occurrence wins when multiple embodiment names share the
 # same domain id.

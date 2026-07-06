@@ -12,7 +12,7 @@ from cosmos_framework.configs.base.defaults.reasoner import (
     create_qwen2_tokenizer_with_download,
     create_vlm_config,
 )
-from cosmos_framework.model.vfm.mot.unified_mot import Qwen3VLMoTConfig, Qwen3VLTextForCausalLM
+from cosmos_framework.model.generator.mot.unified_mot import Qwen3VLMoTConfig, Qwen3VLTextForCausalLM
 from cosmos_framework.utils.lazy_config import LazyCall as L
 
 NANO_MODEL_CONFIG = dict(
@@ -124,7 +124,7 @@ NANO_MODEL_CONFIG = dict(
             config=L(create_vlm_config)(
                 base_config=L(Qwen3VLMoTConfig.from_json_file)(
                     json_file=(
-                        "cosmos_framework/model/vfm/reasoner/qwen3_vl/configs/"
+                        "cosmos_framework/model/generator/reasoner/qwen3_vl/configs/"
                         "Qwen3-VL-8B-Instruct.json"
                     ),
                 ),

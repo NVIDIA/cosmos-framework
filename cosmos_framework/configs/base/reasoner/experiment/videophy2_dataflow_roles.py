@@ -8,8 +8,8 @@ from __future__ import annotations
 import io
 from typing import Any
 
-from cosmos_framework.data.vfm.dataflow.base import RawItemProcessor
-from cosmos_framework.utils.vlm.constant import IGNORE_INDEX, PROCESSOR_KEYS_TO_ADD
+from cosmos_framework.data.generator.dataflow.base import RawItemProcessor
+from cosmos_framework.utils.reasoner.constant import IGNORE_INDEX, PROCESSOR_KEYS_TO_ADD
 
 _MAX_VIDEO_FRAMES = 32
 _TARGET_VIDEO_FPS = 2.0

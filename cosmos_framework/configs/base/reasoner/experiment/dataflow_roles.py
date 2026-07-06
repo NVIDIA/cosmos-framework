@@ -11,8 +11,8 @@ from typing import Any
 import torch
 from torch.utils.data._utils.collate import default_collate
 
-from cosmos_framework.data.vfm.dataflow.base import BatchCollator, RawItemProcessor
-from cosmos_framework.utils.vlm.constant import IGNORE_INDEX, PROCESSOR_KEYS_TO_ADD
+from cosmos_framework.data.generator.dataflow.base import BatchCollator, RawItemProcessor
+from cosmos_framework.utils.reasoner.constant import IGNORE_INDEX, PROCESSOR_KEYS_TO_ADD
 
 
 class VLMProcessor(RawItemProcessor):

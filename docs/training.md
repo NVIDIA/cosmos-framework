@@ -109,7 +109,7 @@ Launch shell: `examples/launch_sft_videophy2_nano.sh`
 ```shell
 # Step 1 (data): materialize the public HF dataset into the canonical local layout
 # (videophy2_{train,val}/{meta.json, media/, text/}).
-python -m cosmos_framework.scripts.vlm.prepare_videophy2_from_hf \
+python -m cosmos_framework.scripts.reasoner.prepare_videophy2_from_hf \
     --out_root examples/data/videophysics --split both
 ```
 

@@ -19,12 +19,12 @@ from hydra.core.config_store import ConfigStore
 
 from cosmos_framework.utils.lazy_config import LazyCall as L
 from cosmos_framework.utils.lazy_config import LazyDict
-from cosmos_framework.data.vfm.dataflow import CosmosDataLoader, IterableDistributor, PoolPackingBatcher
-from cosmos_framework.data.vfm.processors import build_processor
-from cosmos_framework.data.vlm.local_sft_dataset import LocalSFTDataset
-from cosmos_framework.data.vlm.data_sources_videophy2.videophy2 import DATAINFO
+from cosmos_framework.data.generator.dataflow import CosmosDataLoader, IterableDistributor, PoolPackingBatcher
+from cosmos_framework.data.generator.processors import build_processor
+from cosmos_framework.data.reasoner.local_sft_dataset import LocalSFTDataset
+from cosmos_framework.data.reasoner.data_sources_videophy2.videophy2 import DATAINFO
 from cosmos_framework.utils import log
-from cosmos_framework.utils.vlm.constant import IGNORE_INDEX, PROCESSOR_KEYS_TO_ADD
+from cosmos_framework.utils.reasoner.constant import IGNORE_INDEX, PROCESSOR_KEYS_TO_ADD
 from cosmos_framework.configs.base.reasoner.experiment.dataflow_roles import VLMCollator
 from cosmos_framework.configs.base.reasoner.experiment.videophy2_dataflow_roles import VideoPhy2Processor
 

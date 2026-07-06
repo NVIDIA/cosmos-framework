@@ -21,17 +21,17 @@ or as a base to override in their own experiment configs::
 
 Original YAML reference target paths use the ``cosmos3._src.vfm.*`` namespace
 (the OSS-release form of ``projects.cosmos3.vfm.*``); inside this released
-tree the same modules live under ``cosmos_framework.data.vfm.*``.
+tree the same modules live under ``cosmos_framework.data.generator.*``.
 """
 
 from hydra.core.config_store import ConfigStore
 
 from cosmos_framework.configs.base.defaults.reasoner import create_qwen2_tokenizer_with_download
-from cosmos_framework.data.vfm.joint_dataloader import (
+from cosmos_framework.data.generator.joint_dataloader import (
     PackingDataLoader,
     RankPartitionedDataLoader,
 )
-from cosmos_framework.data.vfm.local_datasets.sft_dataset import get_sft_dataset
+from cosmos_framework.data.generator.local_datasets.sft_dataset import get_sft_dataset
 from cosmos_framework.utils.lazy_config import LazyCall as L
 
 # ---------------------------------------------------------------------------

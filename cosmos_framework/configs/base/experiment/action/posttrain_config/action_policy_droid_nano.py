@@ -25,11 +25,11 @@ from cosmos_framework.utils.lazy_config import LazyCall as L
 from cosmos_framework.utils.lazy_config import LazyDict
 
 from cosmos_framework.configs.base.experiment.sft.models.nano_model_config import NANO_MODEL_CONFIG
-from cosmos_framework.data.vfm.joint_dataloader import (
+from cosmos_framework.data.generator.joint_dataloader import (
     PackingDataLoader,
     RankPartitionedDataLoader,
 )
-from cosmos_framework.data.vfm.action.datasets.action_sft_dataset import get_action_droid_sft_dataset
+from cosmos_framework.data.generator.action.datasets.action_sft_dataset import get_action_droid_sft_dataset
 
 cs = ConfigStore.instance()
 

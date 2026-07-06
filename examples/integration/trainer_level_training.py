@@ -35,15 +35,15 @@ What we USE from cosmos_framework:
     cosmos_framework.inference.model.Cosmos3OmniModel          → model class (random-init in this demo;
                                                        use `.from_pretrained_dcp(...)` for real weights)
     cosmos_framework.inference.common.init.init_script         → 1-line torch.distributed init
-    cosmos_framework.model.vfm.reasoner.qwen3_vl.utils.tokenize_caption
+    cosmos_framework.model.generator.reasoner.qwen3_vl.utils.tokenize_caption
                                                      → text tokenizer (modelling pkg)
     model.training_step(batch, iteration)            → THE training step (flow-matching loss)
     model.config.{action_gen,sound_gen,vision_gen,…} → modality flags
 
 What we DO NOT use:
     cosmos_framework.scripts.train, cosmos_framework.trainer.*           → CLI + Trainer class
-    cosmos_framework.data.vfm.joint_dataloader.*               → iterative joint dataloader
-    cosmos_framework.data.vfm.augmentor_provider.*             → text/video augmentor pipeline
+    cosmos_framework.data.generator.joint_dataloader.*               → iterative joint dataloader
+    cosmos_framework.data.generator.augmentor_provider.*             → text/video augmentor pipeline
     cosmos_framework.inference.inference.OmniInference          → inference pipeline
 
 ================================================================================
@@ -97,7 +97,7 @@ AdamW (param + grad + Adam moments ≈ 96 GB). For a single-GPU demo we use SGD
 ≥ 8 GPUs and/or LoRA — see `cosmos_framework.scripts.train` and `examples/toml/*.toml`.
 
 To make full-fine-tuning fit on real hardware, you would either:
-    - shard with FSDP (`cosmos_framework.utils.vfm.parallelism.ParallelDims` + FSDP wrap),
+    - shard with FSDP (`cosmos_framework.utils.generator.parallelism.ParallelDims` + FSDP wrap),
     - inject LoRA (`model.add_lora(...)`), or
     - swap the optimizer for one with lower state (Adafactor, 8-bit AdamW).
 
@@ -121,12 +121,12 @@ import torch
 
 from cosmos_framework.configs.base.defaults.compile import CompileConfig
 from cosmos_framework.configs.base.defaults.parallelism import ParallelismConfig
-from cosmos_framework.data.vfm.action.domain_utils import get_domain_id
-from cosmos_framework.data.vfm.action.transforms import build_sequence_plan_from_mode
-from cosmos_framework.data.vfm.sequence_packing import SequencePlan
+from cosmos_framework.data.generator.action.domain_utils import get_domain_id
+from cosmos_framework.data.generator.action.transforms import build_sequence_plan_from_mode
+from cosmos_framework.data.generator.sequence_packing import SequencePlan
 from cosmos_framework.inference.args import DEFAULT_CHECKPOINT
 from cosmos_framework.inference.model import Cosmos3OmniConfig, Cosmos3OmniModel
-from cosmos_framework.model.vfm.reasoner.qwen3_vl.utils import tokenize_caption
+from cosmos_framework.model.generator.reasoner.qwen3_vl.utils import tokenize_caption
 
 
 def _load_omni_model(*, config_dir_arg: str | None):
@@ -162,8 +162,8 @@ def _load_omni_model(*, config_dir_arg: str | None):
     config_text = (config_dir / "config.json").read_text()
     for _old, _new in [
         ("cosmos3._src.vfm.configs.base.", "cosmos_framework.configs.base."),
-        ("cosmos3._src.vfm.models.", "cosmos_framework.model.vfm."),
-        ("cosmos3._src.vfm.tokenizers.", "cosmos_framework.model.vfm.tokenizers."),
+        ("cosmos3._src.vfm.models.", "cosmos_framework.model.generator."),
+        ("cosmos3._src.vfm.tokenizers.", "cosmos_framework.model.generator.tokenizers."),
         ("cosmos3._src.imaginaire.", "cosmos_framework."),
     ]:
         config_text = config_text.replace(_old, _new)
@@ -187,7 +187,7 @@ def _tokenize(model, caption: str, device) -> torch.Tensor:
         is_video=False,
         use_system_prompt=model.vlm_config.use_system_prompt,
     )
-    # Shape [1, N_tok]. The collate format in cosmos_framework.data.vfm.joint_dataloader
+    # Shape [1, N_tok]. The collate format in cosmos_framework.data.generator.joint_dataloader
     # keeps text_token_ids as a list of [1, N] tensors (one per sample) because
     # token counts vary across the batch.
     return torch.tensor(ids, dtype=torch.long, device=device).unsqueeze(0)
@@ -277,7 +277,7 @@ def make_action_fdm_batch(model, *, caption: str, num_video_frames: int = 5,
     See `cosmos_framework/inference/action.py: build_action_batch` for the canonical impl.
 
     `domain_name` selects the cross-embodiment routing; see
-    `cosmos_framework/data/vfm/action/domain_utils.py` for the full list of supported
+    `cosmos_framework/data/generator/action/domain_utils.py` for the full list of supported
     embodiments.
     """
     # First frame is the conditioning anchor; remaining frames are predicted.
