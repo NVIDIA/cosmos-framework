@@ -9,7 +9,6 @@ from cosmos_framework.data.imaginaire.webdataset.augmentors.v3_text_transforms i
 from cosmos_framework.data.imaginaire.webdataset.augmentors.augmentor import Augmentor
 from cosmos_framework.utils import log
 
-# COSMOS-RELEASE-END-IGNORE
 
 # For the qwen captions, we have 3 variants: short, medium, long
 # In addition, for synthetic data, we create prompt embeddings as well.
