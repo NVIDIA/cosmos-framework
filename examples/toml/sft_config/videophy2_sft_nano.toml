@@ -20,6 +20,7 @@ project      = "cosmos3"
 group        = "vlm_videophy2_sft"
 name         = "videophy2_sft_nano"
 wandb_mode   = "disabled"
+upload_reproducible_setup = false                       # → config.upload_reproducible_setup. OSS: no S3 upload; set true only with S3 configured.
 
 [model]
 attn_implementation = "cosmos"

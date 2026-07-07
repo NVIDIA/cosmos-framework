@@ -78,6 +78,7 @@ Run identity + meta-fields that pick the Hydra config tree to load.
 | `group`      | `""`         | W&B sub-label for clustering related runs (e.g. `"sft"`). Flows to `config.job.group`.                                                                                                                                                    |
 | `name`       | `""`         | W&B run name; forms part of the output dir `$IMAGINAIRE_OUTPUT_ROOT/<project>/<group>/<name>/`. Leave empty (or use `${now:%Y-%m-%d}_${now:%H-%M-%S}`) for auto-timestamped subdir.                                                       |
 | `wandb_mode` | `"disabled"` | `"online"` (real-time, needs `WANDB_API_KEY`), `"offline"` (log locally, sync later via `wandb sync`), or `"disabled"`.                                                                                                                   |
+| `upload_reproducible_setup` | `false` | Upload the reproducible-setup bundle + wandb `save_s3` artifacts to S3. **Defaults `false`** (OSS: no S3 access); set `true` only when S3 upload is configured. Remapped out of `[job]` to the top-level `config.upload_reproducible_setup`, overriding the base config value (the VLM base defaults it `true`). Always emitted by `load_experiment_from_toml`, so omitting it forces `false`. |
 
 ## `[model]`
 
@@ -280,6 +281,7 @@ The same TOML key lands at different Hydra paths depending on `[job].task`:
 
 | TOML path                                                                                | VFM (`task="vfm"`) Hydra path             | VLM (`task="vlm"`) Hydra path             |
 | ---------------------------------------------------------------------------------------- | ----------------------------------------- | ----------------------------------------- |
+| `job.upload_reproducible_setup`                                                          | `upload_reproducible_setup`               | `upload_reproducible_setup`               |
 | `model.<X>`                                                                              | `model.config.<X>`                        | `model.config.<X>`                        |
 | `model.parallelism.*`                                                                    | `model.config.parallelism.*`              | `model.config.parallelism.*`              |
 | `model.compile.*`                                                                        | `model.config.compile.*`                  | `model.config.compile.*`                  |
@@ -310,7 +312,7 @@ A few useful knobs aren't currently modeled by `SFTExperimentConfig` because the
 `load_experiment_from_toml(toml_path, extra_overrides)` (in `sft_config.py`) is the end-to-end loader. It:
 
 1. Reads the TOML with `tomllib`.
-2. Validates the parsed dict against `SFTExperimentConfig` (raises `ValidationError` on unknown keys).
+2. Validates the parsed dict against `SFTExperimentConfig` (raises `ValidationError` on unknown keys), then injects the pydantic-resolved `job.upload_reproducible_setup` back into the raw dict so it is always emitted (defaulting to `false`) even when the TOML omits it.
 3. Picks the base config from `[job].task`: `TASK_TO_BASE_CONFIG["vfm"|"vlm"]`.
 4. Calls `build_hydra_overrides(raw)` to produce a `["--", "experiment=<name>", "k.p=v", …]` list with per-task remaps applied and MISSING values filtered. `[custom]` is skipped here (it is injected verbatim in step 7, not per-leaf-remapped).
 5. Appends `extra_overrides` (CLI tail) so they take precedence over the TOML.

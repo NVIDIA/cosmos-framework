@@ -23,6 +23,7 @@ project      = "cosmos3_action"
 group        = "action_sft"
 name         = "action_policy_droid_repro"
 wandb_mode   = "online"
+upload_reproducible_setup = false                       # → config.upload_reproducible_setup. OSS: no S3 upload; set true only with S3 configured.
 
 [model]
 precision = "bfloat16"
