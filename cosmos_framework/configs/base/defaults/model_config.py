@@ -118,8 +118,8 @@ class FixedStepSamplerConfig:
     # Convention: exclude the final 0.0 step — FixedStepSampler appends it automatically.
     # Values must be descending. Using 0.999 instead of 1.0 avoids numeric edge cases at sigma=1.
     t_list: list[float] = [0.999, 0.75, 0.5, 0.25]
-    # Integrator type: "ode" (deterministic Euler) or "sde" (stochastic re-noising at each step).
-    sample_type: str = "ode"
+    # Distilled fixed-step sampling uses stochastic re-noising at each step.
+    sample_type: str = "sde"
 
 
 # Don't have any defaults and init only in config file.

@@ -495,6 +495,5 @@ __all__ = [
     "SSIMMetric",
     "LPIPSMetric",
     "Rank0FIDMetric",
-    "FVDMetric",
     "calculate_psnr",
 ]

@@ -84,15 +84,15 @@ nemotron_chat_template = """
         {{- ', ' if not loop.last else '' -}}
     {%- endfor -%}
     {{- ']</AVAILABLE_TOOLS>\n\n' -}}
-    
+
     {{- 'If you decide to call any tool(s), use the following format:\n' -}}
     {{- '<TOOLCALL>[{"name": "tool_name1", "arguments": "tool_args1"}, ' -}}
     {{- '{"name": "tool_name2", "arguments": "tool_args2"}]</TOOLCALL>\n\n' -}}
-    
+
     {{- 'The user will execute tool-calls and return responses from tool(s) in this format:\n' -}}
     {{- '<TOOL_RESPONSE>[{"response": "tool_response1"}, ' -}}
     {{- '{"response": "tool_response2"}]</TOOL_RESPONSE>\n\n' -}}
-    
+
     {{- 'Based on the tool responses, you can call additional tools if needed, ' -}}
     {{- 'correct tool calls if any errors are found, or just respond to the user.' -}}
 {%- endif -%}

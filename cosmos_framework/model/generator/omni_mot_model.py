@@ -2503,6 +2503,13 @@ class OmniMoTModel(ImaginaireModel):
 
             return v_pred
 
+        # Run sampler for all samples at once.
+        sampler = sampler or self.sampler
+        scheduler_type = self.config.rectified_flow_inference_config.scheduler_type
+        if isinstance(sampler, FixedStepSampler):
+            num_steps = len(sampler.t_list) - 1
+            shift = 0.0
+
         # FSDP collective-sequence alignment (sampler outer loop). See the
         # large block above the velocity_fn definition for the full
         # rationale. all_reduce on the local num_steps so every rank knows
@@ -2516,9 +2523,6 @@ class OmniMoTModel(ImaginaireModel):
             _max_num_steps = num_steps
         _extra_num_steps = _max_num_steps - num_steps
 
-        # Run sampler for all samples at once.
-        sampler = sampler or self.sampler
-        scheduler_type = self.config.rectified_flow_inference_config.scheduler_type
         if isinstance(sampler, FixedStepSampler):
             log.info(f"Using sampler: FixedStep (t_list={sampler.t_list}, sample_type={sampler.sample_type})")
         elif scheduler_type == "unipc":

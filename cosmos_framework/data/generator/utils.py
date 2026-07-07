@@ -1,6 +1,7 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: OpenMDW-1.1
 
+import math
 import re
 from typing import List, Tuple
 
@@ -89,12 +90,12 @@ def get_wdinfos_w_aspect_ratio(wdinfos: list[str]) -> List[Tuple[str, str]]:
     return [(wdinfo, aspect_ratio.replace("_", ",")) for wdinfo, aspect_ratio in zip(wdinfos, aspect_ratios)]
 
 
-def parse_frame_range_from_wdinfo(wdinfo: str) -> tuple[int, int] | None:
+def parse_frame_range_from_wdinfo(wdinfo: str) -> tuple[int, int | float] | None:
     """
     Parse frame range from wdinfo path.
 
     Args:
-        wdinfo: wdinfo path string containing frames_X_Y pattern
+        wdinfo: wdinfo path string containing a frames_X_Y pattern, where Y may be ``inf``
 
     Returns:
         Tuple of (min_frames, max_frames) if found, None otherwise
@@ -102,25 +103,29 @@ def parse_frame_range_from_wdinfo(wdinfo: str) -> tuple[int, int] | None:
     Example:
         >>> parse_frame_range_from_wdinfo("wdinfo/v4/tv_drama/resolution_720/aspect_ratio_16_9/frames_300_400/wdinfo.json")
         (300, 400)
+        >>> parse_frame_range_from_wdinfo("wdinfo/v4/tv_drama/resolution_720/aspect_ratio_16_9/frames_3700_inf/wdinfo.json")
+        (3700, inf)
     """
-    match = re.search(r"frames_(\d+)_(\d+)", wdinfo)
+    match = re.search(r"frames_(\d+)_(\d+|inf)(?!\w)", wdinfo)
     if match:
-        return (int(match.group(1)), int(match.group(2)))
+        max_frames = math.inf if match.group(2) == "inf" else int(match.group(2))
+        return (int(match.group(1)), max_frames)
     return None
 
 
 def _normalize_skip_frame_ranges(
     skip_frame_range: str | list[str] | None,
-) -> set[tuple[int, int]]:
+) -> set[tuple[int, int | float]]:
     """Normalize ``skip_frame_range`` into a set of (min_frames, max_frames) buckets.
 
     Args:
-        skip_frame_range: A single bucket string like ``"300_400"``, a list of such
-            strings, or None. Each string identifies the frame-range bucket
-            (e.g. ``frames_300_400``) that should be skipped.
+        skip_frame_range: A single bucket string like ``"300_400"`` or ``"3700_inf"``,
+            a list of such strings, or None. Each string identifies the frame-range
+            bucket (e.g. ``frames_300_400``) that should be skipped.
 
     Returns:
-        Set of (min_frames, max_frames) tuples to skip. Empty if ``skip_frame_range`` is None.
+        Set of (min_frames, max_frames) tuples to skip. An ``inf`` upper bound is
+        represented by ``math.inf``. Empty if ``skip_frame_range`` is None.
     """
     if skip_frame_range is None:
         return set()
@@ -128,14 +133,16 @@ def _normalize_skip_frame_ranges(
     if isinstance(skip_frame_range, str):
         skip_frame_range = [skip_frame_range]
 
-    skip_buckets: set[tuple[int, int]] = set()
+    skip_buckets: set[tuple[int, int | float]] = set()
     for bucket in skip_frame_range:
-        match = re.fullmatch(r"(\d+)_(\d+)", bucket.strip())
+        match = re.fullmatch(r"(\d+)_(\d+|inf)", bucket.strip())
         if match is None:
             raise ValueError(
-                f"Invalid skip_frame_range entry {bucket!r}. Expected the form '<min>_<max>', e.g. '300_400'."
+                f"Invalid skip_frame_range entry {bucket!r}. "
+                "Expected the form '<min>_<max>', e.g. '300_400' or '3700_inf'."
             )
-        skip_buckets.add((int(match.group(1)), int(match.group(2))))
+        max_frames = math.inf if match.group(2) == "inf" else int(match.group(2))
+        skip_buckets.add((int(match.group(1)), max_frames))
 
     return skip_buckets
 
@@ -154,6 +161,7 @@ def filter_wdinfos_by_frame_range(
     based on the wdinfo's upper bound (wdinfo_max):
     - min_frames is EXCLUSIVE: wdinfo_max must be > min_frames
     - max_frames is INCLUSIVE: wdinfo_max must be <= max_frames
+    - an ``inf`` upper bound is treated as infinity and excluded by any finite max_frames
 
     Additionally, any wdinfo whose frame-range bucket matches an entry in
     ``skip_frame_range`` is excluded.
@@ -163,8 +171,9 @@ def filter_wdinfos_by_frame_range(
         min_frames: Minimum number of frames (exclusive). If None, no lower bound.
         max_frames: Maximum number of frames (inclusive). If None, no upper bound.
         skip_frame_range: Frame-range bucket(s) to exclude, e.g. ``"300_400"`` to
-            drop the ``frames_300_400`` bucket. Accepts a single string or a list
-            of strings. If None, no bucket is skipped.
+            drop the ``frames_300_400`` bucket or ``"3700_inf"`` to drop the
+            ``frames_3700_inf`` bucket. Accepts a single string or a list of strings.
+            If None, no bucket is skipped.
 
     Returns:
         Filtered list of wdinfo paths
