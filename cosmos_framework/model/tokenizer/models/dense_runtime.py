@@ -50,55 +50,6 @@ class DenseGridMetadata:
 DenseGridMetadataKey = tuple[str, int, int, int, int, str, str]
 
 
-class DenseDiagonalGaussianDistribution:
-    """Diagonal Gaussian posterior for dense channels-last latent tensors."""
-
-    def __init__(self, parameters: torch.Tensor, deterministic: bool = False) -> None:
-        """Initialize the dense posterior from `[mean, logvar]` moments."""
-        if parameters.ndim not in (4, 5):
-            raise ValueError(
-                "DenseDiagonalGaussianDistribution expects 4D/5D channels-last moments, "
-                f"got shape {tuple(parameters.shape)}."
-            )
-        self.original_dtype = parameters.dtype
-        self.parameters = parameters.to(torch.float32)
-        self.mean, self.logvar = torch.chunk(self.parameters, 2, dim=-1)
-        self.deterministic = deterministic
-        self.std = torch.exp(0.5 * self.logvar)
-        self.var = torch.exp(self.logvar)
-
-        if self.deterministic:
-            self.var = self.std = torch.zeros_like(
-                self.mean,
-                device=self.parameters.device,
-                dtype=self.parameters.dtype,
-            )
-
-    def sample(self) -> torch.Tensor:
-        """Sample a dense channels-last latent tensor."""
-        sample = torch.randn_like(self.mean)
-        return (self.mean + self.std * sample).to(self.original_dtype)
-
-    def kl(self, other: "DenseDiagonalGaussianDistribution" | None = None) -> torch.Tensor:
-        """Compute KL divergence per latent token, matching sparse scaling."""
-        reduce_dims = (-1,)
-        if self.deterministic:
-            num_tokens = math.prod(self.mean.shape[:-1])
-            return torch.zeros(num_tokens, device=self.parameters.device, dtype=self.parameters.dtype)
-        if other is None:
-            kl = 0.5 * torch.sum(torch.pow(self.mean, 2) + self.var - 1.0 - self.logvar, dim=reduce_dims)
-        else:
-            kl = 0.5 * torch.sum(
-                torch.pow(self.mean - other.mean, 2) / other.var
-                + self.var / other.var
-                - 1.0
-                - self.logvar
-                + other.logvar,
-                dim=reduce_dims,
-            )
-        return kl.reshape(-1)
-
-
 class DenseAutoencoderRuntime(nn.Module):
     """Dense frozen-runtime wrapper around an existing sparse autoencoder.
 
