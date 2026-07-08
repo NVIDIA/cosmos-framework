@@ -14,7 +14,6 @@ from __future__ import annotations
 
 import importlib
 import os
-from typing import Literal
 
 from loguru import logger as logging
 
@@ -49,31 +48,6 @@ def _init_from_env() -> None:
 
 
 _init_from_env()
-
-
-def set_backend(backend: Literal["pytorch", "spconv", "torchsparse"]) -> None:
-    """Set the sparse tensor backend.
-
-    Args:
-        backend: Backend to use.
-            - "pytorch": Pure PyTorch implementation (default, no external dependencies)
-            - "spconv": Uses spconv.pytorch.SparseConvTensor
-            - "torchsparse": Uses torchsparse.SparseTensor
-    """
-    global BACKEND
-    if backend not in _VALID_BACKENDS:
-        raise ValueError(f"Invalid backend: {backend}. Must be one of {_VALID_BACKENDS}")
-    BACKEND = backend
-
-
-def set_debug(debug: bool) -> None:
-    """Enable or disable debug mode.
-
-    Args:
-        debug: Whether to enable debug mode.
-    """
-    global DEBUG
-    DEBUG = debug
 
 
 # Lazy loading attribute mapping
