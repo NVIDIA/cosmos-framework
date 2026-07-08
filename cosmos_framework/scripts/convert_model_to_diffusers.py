@@ -40,18 +40,6 @@ class Args(pydantic.BaseModel):
     config_only: bool = False
     """If True, only save config."""
 
-    remap_sound_tokenizer_keys: bool = True
-    """If True, remap the legacy AVAE sound tokenizer state dict into the
-    diffusers OobleckDecoder layout (and save the result as
-    `diffusion_pytorch_model.safetensors`). Off by default — the sound
-    tokenizer is written verbatim under `model.safetensors`."""
-
-    remap_time_embedder_keys: bool = True
-    """If True, remap the transformer's `time_embedder` state dict from the
-    legacy `nn.Sequential` layout (`mlp.0.*` / `mlp.2.*`) to the diffusers
-    `TimestepEmbedding` layout (`linear_1.*` / `linear_2.*`). Off by default —
-    keys are forwarded verbatim."""
-
 
 class SafetensorsIndexMetadata(pydantic.BaseModel):
     total_size: int = 0
@@ -116,8 +104,6 @@ def convert_model_to_diffusers(args: Args):
             sound_tokenizer_path=str(sound_tokenizer_path),
             sound_tokenizer_config_path=str(sound_tokenizer_config_path),
             include_sound_tokenizer=True,
-            remap_sound_tokenizer_keys=args.remap_sound_tokenizer_keys,
-            remap_time_embedder_keys=args.remap_time_embedder_keys,
             vision_encoder_model=vision_encoder_model,
             skip_vision_encoder=False,
         )
