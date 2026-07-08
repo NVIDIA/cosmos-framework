@@ -112,6 +112,7 @@ _TIME_EMBEDDER_KEY_REMAP = {
 
 DEFAULT_VISION_ENCODER_MODEL = "Qwen/Qwen3-VL-8B-Instruct"
 VISION_ENCODER_CHECKPOINT_PREFIX = "model.visual."
+VISION_ENCODER_CHECKPOINT_SUBFOLDER = "vision_encoder"
 
 
 def _get_config_value(*configs, name, default=None):
@@ -389,6 +390,20 @@ def _checkpoint_has_weight_prefix(checkpoint_path: pathlib.Path, prefix: str) ->
     return any(key.startswith(prefix) for key in _checkpoint_weight_map(checkpoint_path))
 
 
+def _checkpoint_vision_subfolder_files(checkpoint_path: pathlib.Path) -> dict[str, list[str]]:
+    """Group root-index keys stored under vision_encoder/ by shard file.
+
+    Diffusers-layout source checkpoints keep bare Qwen3VLVisionModel keys
+    (`blocks.*`, `patch_embed.*`, …) in the root weight map, mapped to files
+    under the vision_encoder/ subfolder.
+    """
+    files_to_keys: dict[str, list[str]] = {}
+    for key, filename in _checkpoint_weight_map(checkpoint_path).items():
+        if filename.replace("\\", "/").startswith(f"{VISION_ENCODER_CHECKPOINT_SUBFOLDER}/"):
+            files_to_keys.setdefault(filename, []).append(key)
+    return files_to_keys
+
+
 def _load_prefixed_safetensors_state_dict(checkpoint_path: pathlib.Path, prefix: str) -> dict[str, torch.Tensor]:
     try:
         from safetensors import safe_open
@@ -465,6 +480,25 @@ def _build_vision_encoder(
     return vision_encoder.to(dtype=dtype)
 
 
+def _load_vision_subfolder_state_dict(checkpoint_path: pathlib.Path) -> dict[str, torch.Tensor]:
+    try:
+        from safetensors import safe_open
+    except ImportError as exc:
+        raise ImportError("Loading sharded safetensors vision weights requires safetensors.") from exc
+
+    files_to_keys = _checkpoint_vision_subfolder_files(checkpoint_path)
+    state_dict: dict[str, torch.Tensor] = {}
+    for filename, keys in sorted(files_to_keys.items()):
+        shard_path = checkpoint_path / filename
+        with safe_open(str(shard_path), framework="pt", device="cpu") as shard:
+            for key in sorted(keys):
+                state_dict[key] = shard.get_tensor(key).detach().cpu().contiguous()
+
+    if not state_dict:
+        raise RuntimeError(f"No vision encoder tensors found under {VISION_ENCODER_CHECKPOINT_SUBFOLDER}/.")
+    return state_dict
+
+
 def _load_vision_encoder(
     checkpoint_path: pathlib.Path,
     source_model,
@@ -472,11 +506,14 @@ def _load_vision_encoder(
     dtype: torch.dtype,
 ):
     state_dict = _get_source_vision_state_dict(source_model)
-    if state_dict is None:
+    if state_dict is not None:
+        log.info("Extracting Qwen3-VL vision encoder weights from loaded source model …")
+    elif _checkpoint_has_weight_prefix(checkpoint_path, VISION_ENCODER_CHECKPOINT_PREFIX):
         log.info(f"Loading Qwen3-VL vision encoder weights from {checkpoint_path} …")
         state_dict = _load_prefixed_safetensors_state_dict(checkpoint_path, VISION_ENCODER_CHECKPOINT_PREFIX)
     else:
-        log.info("Extracting Qwen3-VL vision encoder weights from loaded source model …")
+        log.info(f"Loading Qwen3-VL vision encoder weights from {checkpoint_path}/vision_encoder …")
+        state_dict = _load_vision_subfolder_state_dict(checkpoint_path)
     log.info(f"Building Qwen3-VL vision encoder from {model_name_or_path} …")
     return _build_vision_encoder(state_dict, model_name_or_path, dtype)
 
@@ -553,7 +590,9 @@ def convert_model_to_diffusers(args: Args) -> None:
     vae2llm = _tmp.net.vae2llm
     llm2vae = _tmp.net.llm2vae
     time_embedder = _tmp.net.time_embedder
-    lm_cfg = _tmp.net.language_model.config
+    # The language model may carry a nested VL config (e.g. Qwen3VLConfig);
+    # the text-model fields read below live on its text config.
+    lm_cfg = _tmp.net.language_model.config.get_text_config()
     net_cfg = _tmp.net.config
     model_cfg = _tmp.config
     patch_latent_dim = _tmp.net.patch_latent_dim
@@ -631,7 +670,9 @@ def convert_model_to_diffusers(args: Args) -> None:
                 f"action projection weights: {missing_action_modules}."
             )
 
-    has_vision_encoder_weights = _checkpoint_has_weight_prefix(checkpoint_path, VISION_ENCODER_CHECKPOINT_PREFIX)
+    has_vision_encoder_weights = _checkpoint_has_weight_prefix(
+        checkpoint_path, VISION_ENCODER_CHECKPOINT_PREFIX
+    ) or bool(_checkpoint_vision_subfolder_files(checkpoint_path))
     vision_gen = bool(
         _get_config_value(net_cfg, model_cfg, name="vision_gen", default=False) or has_vision_encoder_weights
     )

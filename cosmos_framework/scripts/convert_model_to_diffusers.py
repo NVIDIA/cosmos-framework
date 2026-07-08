@@ -81,9 +81,17 @@ def convert_model_to_diffusers(args: Args):
     sound_tokenizer_dir, sound_tokenizer_name = model_dict["config"]["sound_tokenizer"]["avae_path"].rsplit("/", 1)
     sound_tokenizer_checkpoint = CheckpointConfig.maybe_from_uri(f"s3://bucket/{sound_tokenizer_dir}")
     assert sound_tokenizer_checkpoint is not None
-    sound_tokenizer_path = Path(sound_tokenizer_checkpoint.hf.download()) / sound_tokenizer_name
+    sound_tokenizer_local = Path(sound_tokenizer_checkpoint.hf.download())
+    # HF-published checkpoints ship sound_tokenizer/ in the diffusers layout
+    # (config.json + diffusion_pytorch_model.safetensors), which the converter
+    # consumes directly; fall back to the legacy AVAE file pair named by the
+    # model config's avae_path.
+    sound_tokenizer_path = sound_tokenizer_local / "diffusion_pytorch_model.safetensors"
+    sound_tokenizer_config_path = sound_tokenizer_local / "config.json"
+    if not sound_tokenizer_path.is_file():
+        sound_tokenizer_path = sound_tokenizer_local / sound_tokenizer_name
+        sound_tokenizer_config_path = sound_tokenizer_path.with_suffix(".json")
     assert sound_tokenizer_path.is_file(), f"Sound tokenizer checkpoint not found: {sound_tokenizer_path}"
-    sound_tokenizer_config_path = sound_tokenizer_path.with_suffix(".json")
     assert sound_tokenizer_config_path.is_file(), f"Sound tokenizer config not found: {sound_tokenizer_config_path}"
 
     vision_encoder_model = model_dict["config"]["vlm_config"]["tokenizer"]["pretrained_model_name"]
