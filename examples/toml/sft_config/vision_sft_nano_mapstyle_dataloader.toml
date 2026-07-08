@@ -20,7 +20,6 @@ project      = "cosmos3"
 group        = "sft"
 name         = "vision_sft_nano_mapstyle_dataloader"
 wandb_mode   = "disabled"
-upload_reproducible_setup = false                       # → config.upload_reproducible_setup. OSS: no S3 upload; set true only with S3 configured.
 
 [model]
 max_num_tokens_after_packing = 45056

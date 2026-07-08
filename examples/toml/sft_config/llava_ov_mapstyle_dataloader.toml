@@ -46,7 +46,6 @@ project      = "cosmos_oss_alignment"
 group        = "vlm_llava_ov_demo"
 name         = "pre_exp012_llava_ov_mapstyle_dataloader"
 wandb_mode   = "online"
-upload_reproducible_setup = false                       # → config.upload_reproducible_setup. OSS: no S3 upload; set true only with S3 configured.
 
 [model]
 attn_implementation = "cosmos"

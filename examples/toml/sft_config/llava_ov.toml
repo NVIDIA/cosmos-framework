@@ -35,7 +35,6 @@ project      = "cosmos3"                                 # matches legacy
 group        = "vlm_llava_ov_demo"
 name         = "pre_exp012_llava_ov"
 wandb_mode   = "disabled"
-upload_reproducible_setup = false                       # → config.upload_reproducible_setup. OSS: no S3 upload; set true only with S3 configured.
 
 [model]
 # VLM-only attention impl (PolicyConfig.attn_implementation).
