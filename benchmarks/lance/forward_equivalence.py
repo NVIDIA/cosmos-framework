@@ -31,10 +31,12 @@ need the recipe's own collation.
         dataloader_train.dataloader.datasets.droid.dataset.iterable_shuffle=false \
         dataloader_train.dataloader.datasets.droid.dataset.resolution=256 \
         dataloader_train.dataloader.datasets.droid.dataset._target_=cosmos_framework.data.lance.action_dataset.get_lance_action_droid_sft_dataset \
+        ~dataloader_train.dataloader.datasets.droid.dataset.root \
         +dataloader_train.dataloader.datasets.droid.dataset.lance_uri=<uri> \
         +dataloader_train.dataloader.datasets.droid.dataset.table=droid_composed \
         +dataloader_train.dataloader.datasets.droid.dataset.decode_device=cpu
-      (drop the last three '+' lines for the base arm.)
+      (drop the '~'/'+' lines for the base arm — the Lance loader reads labels + video
+       from LanceDB, so the base 'root' arg is removed rather than passed through.)
 
   * VLM -- byte-identical records, so the loss matches EXACTLY (measured: base 0.8149 ==
     Lance 0.8149, 0.00%):

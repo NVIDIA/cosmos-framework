@@ -22,16 +22,16 @@ Combined 3-loader throughput, 327 DROID episodes, batch 16:
 
 | Workers (Action/VLM/VSFT) | Base (Local) | Lance (Local) | Base (S3) | Lance (S3) |
 | ------------------------- | ------------ | ------------- | --------- | ---------- |
-| 4/4/4 (Default)           | 86.5         | 249.4 (2.9x)  | 67.7      | 246.9 (3.6x)|
-| 18/4/18 (Tuned)           | 253.7        | 961.9 (3.8x)  | 232.0     | 1016.9 (4.4x)|
+| 4/4/4 (Default)           | 87.4         | 265.7 (3.0x)  | 68.6      | 253.8 (3.7x)|
+| 18/4/18 (Tuned)           | 255.4        | 1021.6 (4.0x) | 235.4     | 976.2 (4.1x)|
 
 ### Per-Loader Throughput (samples/s)
 Each loader standalone, tuned workers (Action/VSFT 18, VLM 4):
 
 | Loader         | Base (Local) | Lance (Local) | Base (S3)  | Lance (S3)  |
 | -------------- | ------------ | ------------- | ---------- | ----------- |
-| Action (DROID) | 154.0        | 288.7 (1.9x)  | 146.7      | 307.2 (2.1x)|
-| Vision-SFT     | 119.1        | 1017.9 (8.5x) | 100.4      | 959.5 (9.6x)|
+| Action (DROID) | 149.9        | 297.6 (2.0x)  | 156.0      | 299.1 (1.9x)|
+| Vision-SFT     | 120.9        | 969.4 (8.0x)  | 102.3      | 884.8 (8.6x)|
 | VLM (LLaVA)    | 118.1 (hf)   | 392.3 (3.3x)  | 118.1 (hf) | 328.6 (2.8x)|
 
 Action decodes one composed clip instead of three runtime views; Vision-SFT decodes a pre-resized
@@ -69,12 +69,15 @@ ships it to every DataLoader worker. `DROIDLeRobotDataset` **never reads it** �
 compact column arrays and reconstructs window rows on demand — so the Lance loader drops it
 (`self._rows = None`), which we verified is **output-neutral (bit-identical batches)**.
 
-That accounts for most of the per-worker memory gap vs the *shipped* base (~2.7× at 1.5M
-frames). **It is not a fundamental Lance advantage, though** — `_rows` is a freeable redundancy
-the base could drop too. Once it does, memory is at parity (a `_rows`-freed base is ~0.70 GB vs
-Lance ~0.98 GB per worker at 16×; Lance carries the torchcodec decoder cache). The genuine Lance
-wins are **throughput and S3**, not memory. _(We've raised this upstream to confirm `_rows` is
-safe to drop for `DROIDLeRobotDataset`.)_
+That accounts for most of the per-worker memory gap vs the *shipped* base (~2.9× at 1.5M
+frames: 2.65 GB vs 0.92 GB per worker). **It is not a fundamental Lance advantage, though** —
+`_rows` is a freeable redundancy the base could drop too. Once it does, per-worker memory is at
+parity (a `_rows`-freed base is ~0.70 GB vs Lance ~0.92 GB at 16×; Lance carries the torchcodec
+decoder cache). One structural difference does remain: the base builds `_rows` *transiently at
+init even when freeing it after* (~3.2 GB resident during construction at 16×), while the Lance
+loader reads pre-compacted label columns and peaks at ~0.6 GB. The main Lance wins are still
+**throughput and S3**. _(We've raised this upstream to confirm `_rows` is safe to drop for
+`DROIDLeRobotDataset`.)_
 
 What `_rows` costs — per-worker spawn payload (327-episode DROID subset replicated N×):
 
@@ -101,24 +104,21 @@ worker reopens them lazily (lancedb is not fork-safe).
 
 ### Action — `LanceDROIDComposedDataset`
 
-This loader is a **hybrid**: it takes both `root` (the LeRobot tree) and `lance_uri`, and reads
-the two halves of a sample from different places:
-- **action/state/task labels + frame indexing** — from the **base LeRobot parquet** (`root/data/`,
-  `root/meta/`), via the inherited `DROIDLeRobotDataset` (`_window_rows` → `_build_joint_action`).
-  These columns are small and correctness-critical, so they stay in the parquet and the base's exact
-  assembly is reused — labels are bit-exact.
-- **composed video** — from the **Lance table**. The base otherwise decodes three camera views per
-  sample and resizes + concatenates them into one 270×320 frame at runtime; the table stores that
-  composed frame once per episode, so the loader decodes a single mp4 stream instead.
+Fully Lance-backed: labels **and** video come from LanceDB, so the loader takes only a
+`lance_uri` — no LeRobot tree at train time. The base loader decodes three camera views per
+sample and resizes + concatenates them into one 270×320 frame at runtime; the converter stores
+that composed frame once per episode, plus the per-frame labels dumped verbatim from the base
+loader's arrays. `LanceDROIDComposedDataset` subclasses `DROIDLeRobotDataset` and rebuilds the
+same compact label arrays from the frames table, so frame indexing and action/pose assembly run
+the base's exact code — labels are bit-exact; only the H.264 re-encode of the video is lossy.
 
-`LanceDROIDComposedDataset` subclasses `DROIDLeRobotDataset` and overrides only the video source.
 Clips are encoded all-intra (`gop=1`), so torchcodec's `seek_mode="approximate"` lands on each
 window exactly; a per-worker LRU cache keeps recently used episode decoders open. `take` returns
 rows sorted by offset, so the byte read keys results by row rather than the requested order.
 
-The loader reads only `episode_index` (to locate a clip) and `video_bytes`; `ep_start`/`length` are
-episode metadata written at build time. (Vision-SFT and VLM tables, below, are self-contained —
-their captions/conversations live in the table, so those loaders are not hybrids.)
+Four tables (one video + three label tables, named `{table}` / `{table}_*`):
+
+`droid_composed` — one row per episode:
 
 | column          | type           | description                              |
 | --------------- | -------------- | ---------------------------------------- |
@@ -126,6 +126,22 @@ their captions/conversations live in the table, so those loaders are not hybrids
 | `ep_start`      | int64          | first global frame index (build metadata) |
 | `length`        | int64          | number of frames (build metadata)        |
 | `video_bytes`   | large_binary   | composed 270×320 mp4 for the episode     |
+
+`droid_composed_frames` — one row per frame (feature names store `.` as `__`):
+
+| column | type | description |
+| --- | --- | --- |
+| `episode_index`, `task_index` | int64 | frame → episode/task |
+| `timestamp` | float64 | frame timestamp |
+| `action__joint_position` | fixed_list<float32>[7] | commanded joints |
+| `action__gripper_position` | float32 | commanded gripper |
+| `observation__state__joint_positions` | fixed_list<float32>[7] | observed joints |
+| `observation__state__gripper_position` | float32 | observed gripper |
+| `observation__state__cartesian_position` | fixed_list<float32>[6] | EE pose (ee_pose space) |
+
+`droid_composed_tasks` (`task_index` int64, `task` string) and
+`droid_composed_episodes` (`episode_index` int64, `episode_id` string — for keep-ranges
+filtering) complete the label set.
 
 ### Vision-SFT — `LanceVisionSFTDataset`
 

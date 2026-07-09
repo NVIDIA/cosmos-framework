@@ -29,7 +29,6 @@ import glob
 import os
 import shutil
 
-import lance
 import lancedb
 import numpy as np
 import pyarrow as pa
@@ -74,22 +73,27 @@ def _scale_root(src, out, n):
 
 
 def _scale_lance(src, out, table, n):
-    t = lance.dataset(f"{src}/{table}.lance").to_table()
-    n_ep = int(t.column("episode_index").to_numpy().max()) + 1
+    """Replicate the composed + label tables N× with shifted episode_index (tasks copy as-is)."""
+    db_src, db_out = lancedb.connect(src), lancedb.connect(out)
+    n_ep = int(db_src.open_table(table).to_arrow().column("episode_index").to_numpy().max()) + 1
+    for name in (table, f"{table}_frames", f"{table}_episodes", f"{table}_tasks"):
+        t = db_src.open_table(name).to_arrow()
+        reps = 1 if name.endswith("_tasks") else n  # task_index references are shift-invariant
 
-    def batches():
-        for k in range(n):
-            cols = [
-                pa.array(t.column(nm).to_numpy() + k * n_ep) if nm == "episode_index" else t.column(nm).combine_chunks()
-                for nm in t.column_names
-            ]
-            yield pa.RecordBatch.from_arrays(cols, names=t.column_names)
+        def batches(t=t, reps=reps):
+            for k in range(reps):
+                cols = [
+                    pa.array(t.column(nm).to_numpy() + k * n_ep)
+                    if nm == "episode_index"
+                    else t.column(nm).combine_chunks()
+                    for nm in t.column_names
+                ]
+                yield pa.RecordBatch.from_arrays(cols, names=t.column_names)
 
-    db = lancedb.connect(out)
-    if table in db.table_names():
-        db.drop_table(table)
-    db.create_table(table, data=pa.RecordBatchReader.from_batches(t.schema, batches()), schema=t.schema)
-    print(f"lance {out}/{table}.lance: {db.open_table(table).count_rows()} clips ({n}x {t.num_rows})")
+        if name in db_out.table_names():
+            db_out.drop_table(name)
+        db_out.create_table(name, data=pa.RecordBatchReader.from_batches(t.schema, batches()), schema=t.schema)
+        print(f"lance {out}/{name}.lance: {db_out.open_table(name).count_rows()} rows ({reps}x {t.num_rows})")
 
 
 def main():

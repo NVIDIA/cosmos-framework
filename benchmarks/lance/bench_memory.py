@@ -48,9 +48,7 @@ def _build(side, root, uri, cache, s3_bucket=None, s3_prefix=None, region=None):
             return S3DROIDLeRobotDataset(root=root, s3_bucket=s3_bucket, s3_prefix=s3_prefix, region=region, **_KW)
         return DROIDLeRobotDataset(root=root, **_KW)
     so = {"region": region} if (region and str(uri).startswith("s3://")) else None
-    return LanceDROIDComposedDataset(
-        root=root, lance_uri=uri, decode_device="cpu", decoder_cache_size=cache, storage_options=so, **_KW
-    )
+    return LanceDROIDComposedDataset(uri, decode_device="cpu", decoder_cache_size=cache, storage_options=so, **_KW)
 
 
 def _mem_tree(proc):

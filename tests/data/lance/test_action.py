@@ -27,7 +27,7 @@ _IDXS = [17000, 1, 26000, 0, 123, 5000]  # unsorted: batched take must map back 
 
 def test_action_composed():
     base = DROIDLeRobotDataset(root=AROOT, **_AKW)
-    lance = LanceDROIDComposedDataset(root=AROOT, lance_uri=ACOMP, decode_device="cpu", **_AKW)
+    lance = LanceDROIDComposedDataset(ACOMP, decode_device="cpu", **_AKW)
     idxs = [i for i in _IDXS if i < len(base)]
     batch = lance.__getitems__(idxs)
     for j, i in enumerate(idxs):

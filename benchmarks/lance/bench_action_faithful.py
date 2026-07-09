@@ -76,9 +76,7 @@ def _build(mode, root, uri, region, cache, s3_bucket=None, s3_prefix=None):
         return _base(), "random"
     if mode == "base-episode":
         return _EpisodeShuffle(_base()), None
-    comp = LanceDROIDComposedDataset(
-        root=root, lance_uri=uri, decode_device="cpu", decoder_cache_size=cache, storage_options=so, **_KW
-    )
+    comp = LanceDROIDComposedDataset(uri, decode_device="cpu", decoder_cache_size=cache, storage_options=so, **_KW)
     if mode == "lance-episode":
         return _EpisodeShuffle(comp), None
     return comp, "random"  # lance-random -> RandomSampler

@@ -136,8 +136,7 @@ def build_action_loader(which, root, uri, region, cache, batch_size, num_workers
         ds = _EpisodeShuffle(base)
     else:
         comp = LanceDROIDComposedDataset(
-            root=root,
-            lance_uri=uri,
+            uri,
             decode_device="cpu",
             decoder_cache_size=cache,
             storage_options=_so(region, uri),
