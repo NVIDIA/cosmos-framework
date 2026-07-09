@@ -24,12 +24,12 @@ import lancedb
 import numpy as np
 import pyarrow as pa
 
-from cosmos_framework.data.vfm.local_datasets.helper import (
+from cosmos_framework.data.generator.local_datasets.helper import (
     ffmpeg_decode_video,
     get_aspect_ratio,
     get_video_metadata,
 )
-from cosmos_framework.data.vfm.utils import VIDEO_RES_SIZE_INFO
+from cosmos_framework.data.generator.utils import VIDEO_RES_SIZE_INFO
 from cosmos_framework.inference.structured_caption import CAPTION_JSON_KEY
 
 

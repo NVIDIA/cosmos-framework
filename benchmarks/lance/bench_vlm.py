@@ -27,7 +27,7 @@ import torch
 from PIL import Image
 from transformers import AutoProcessor
 
-from cosmos_framework.configs.base.vlm.experiment.llava_ov_vlm import get_llava_ov_streaming
+from cosmos_framework.configs.base.reasoner.experiment.llava_ov_vlm import get_llava_ov_streaming
 from cosmos_framework.data.lance.vlm_dataset import LanceVLMDataset, LanceVLMShuffleScan
 
 

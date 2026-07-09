@@ -22,8 +22,8 @@ import time
 import torch
 from base_standins import S3DROIDLeRobotDataset
 
+from cosmos_framework.data.generator.action.datasets.droid_lerobot_dataset import DROIDLeRobotDataset
 from cosmos_framework.data.lance import LanceDROIDComposedDataset
-from cosmos_framework.data.vfm.action.datasets.droid_lerobot_dataset import DROIDLeRobotDataset
 
 _KW = dict(action_space="joint_pos", use_state=True, mode="policy", chunk_length=16)
 
@@ -69,8 +69,10 @@ def _build(mode, root, uri, region, cache, s3_bucket=None, s3_prefix=None):
     def _base():
         # genuine DROIDLeRobotDataset; for S3 the standin materializes the mega-mp4s first.
         if s3_bucket and s3_prefix:
-            return S3DROIDLeRobotDataset(root=root, s3_bucket=s3_bucket, s3_prefix=s3_prefix, region=region, **_KW)
-        return DROIDLeRobotDataset(root=root, **_KW)
+            return S3DROIDLeRobotDataset(
+                root=root, s3_bucket=s3_bucket, s3_prefix=s3_prefix, region=region, use_success_only=True, **_KW
+            )
+        return DROIDLeRobotDataset(root=root, use_success_only=True, **_KW)
 
     if mode == "base-random":
         return _base(), "random"

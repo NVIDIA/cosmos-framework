@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import os
 import tempfile
+from contextlib import contextmanager
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -16,12 +17,8 @@ from typing import Any
 import boto3
 from transformers import AutoTokenizer
 
-from cosmos_framework.data.vfm.action.datasets.base_dataset import _MODE_CHOICES  # noqa: F401
-from cosmos_framework.data.vfm.action.datasets.droid_lerobot_dataset import (
-    _IMAGE_FEATURES,
-    DROIDLeRobotDataset,
-)
-from cosmos_framework.data.vfm.local_datasets.sft_dataset import (
+from cosmos_framework.data.generator.action.datasets.droid_lerobot_dataset import DROIDLeRobotDataset
+from cosmos_framework.data.generator.local_datasets.sft_dataset import (
     SFTDataset,
     _load_sft_metadata_from_s3,
 )
@@ -29,8 +26,30 @@ from cosmos_framework.data.vfm.local_datasets.sft_dataset import (
 _QWEN_TOKENIZER = "Qwen/Qwen2.5-7B"
 
 
+@contextmanager
+def hf_online_preserved():
+    """Constructing the action base flips HF Hub offline process-wide (env + constant);
+    restore both so HF-dependent loaders (tokenizers, streaming) keep working."""
+    import huggingface_hub.constants as hfc
+
+    prev_const, prev_env = hfc.HF_HUB_OFFLINE, os.environ.get("HF_HUB_OFFLINE")
+    try:
+        yield
+    finally:
+        hfc.HF_HUB_OFFLINE = prev_const
+        if prev_env is None:
+            os.environ.pop("HF_HUB_OFFLINE", None)
+        else:
+            os.environ["HF_HUB_OFFLINE"] = prev_env
+
+
 class S3DROIDLeRobotDataset(DROIDLeRobotDataset):
-    """DROIDLeRobotDataset that materializes mega-mp4s from S3 to local cache."""
+    """DROIDLeRobotDataset that materializes the S3-hosted videos, then runs the genuine base.
+
+    Builds a shadow root (same versioned dir name, so the base's version registry
+    resolves): metadata/labels are symlinked from the local tree, the mega-mp4s
+    under ``videos/`` are downloaded from ``s3://{bucket}/{prefix}/videos/...``.
+    """
 
     def __init__(
         self,
@@ -42,54 +61,31 @@ class S3DROIDLeRobotDataset(DROIDLeRobotDataset):
         cache_dir: str | None = None,
         **kwargs: Any,
     ) -> None:
-        super().__init__(root=root, **kwargs)
-        self._s3_bucket = s3_bucket
-        self._s3_prefix = s3_prefix.strip("/")
-        self._region = region
-        key = self._s3_prefix.replace("/", "_")
-        self._cache_root = Path(cache_dir or os.path.join(tempfile.gettempdir(), "_s3base_droid", key))
-        self._materialize_from_s3()
+        src = Path(root)
+        key = s3_prefix.strip("/").replace("/", "_")
+        cache = Path(cache_dir or os.path.join(tempfile.gettempdir(), "_s3base_droid", key)) / src.name
+        success = cache / "success"
+        success.mkdir(parents=True, exist_ok=True)
+        for sub in ("meta", "data"):
+            link = success / sub
+            if not (link.exists() or link.is_symlink()):
+                link.symlink_to((src / "success" / sub).resolve())
 
-    def _rel_for(self, episode: dict[str, Any], video_key: str) -> str:
-        ci = int(
-            episode.get(
-                f"videos/{video_key}/chunk_index",
-                episode.get(f"videos/{video_key}/episode_chunk", episode.get("data/chunk_index", 0)),
-            )
-        )
-        fi = int(
-            episode.get(
-                f"videos/{video_key}/file_index",
-                episode.get(f"videos/{video_key}/episode_file", episode.get("data/file_index", 0)),
-            )
-        )
-        return self._info["video_path"].format(
-            video_key=video_key, chunk_index=ci, file_index=fi, episode_chunk=ci, episode_file=fi
-        )
+        s3 = boto3.client("s3", region_name=region) if region else boto3.client("s3")
+        pref = s3_prefix.strip("/") + "/videos/"
+        paginator = s3.get_paginator("list_objects_v2")
+        for page in paginator.paginate(Bucket=s3_bucket, Prefix=pref):
+            for obj in page.get("Contents", []):
+                rel = obj["Key"][len(pref) - len("videos/") :]  # keep the videos/ prefix
+                dst = success / rel
+                if dst.exists():
+                    continue
+                dst.parent.mkdir(parents=True, exist_ok=True)
+                tmp = str(dst) + f".part{os.getpid()}"
+                s3.download_file(s3_bucket, obj["Key"], tmp)
+                os.replace(tmp, dst)
 
-    def _materialize_from_s3(self) -> None:
-        rels = set()
-        for episode in self._episodes.values():
-            for video_key in _IMAGE_FEATURES.values():
-                rels.add(self._rel_for(episode, video_key))
-
-        if self._region:
-            s3 = boto3.client("s3", region_name=self._region)
-        else:
-            s3 = boto3.client("s3")
-
-        for rel in sorted(rels):
-            dst = self._cache_root / rel
-            if dst.exists():
-                continue
-            dst.parent.mkdir(parents=True, exist_ok=True)
-            s3.download_file(
-                self._s3_bucket, f"{self._s3_prefix}/{rel}", str(dst.with_suffix(dst.suffix + f".part{os.getpid()}"))
-            )
-            os.replace(dst.with_suffix(dst.suffix + f".part{os.getpid()}"), dst)
-
-    def _video_path(self, episode: dict[str, Any], video_key: str) -> Path:
-        return self._cache_root / self._rel_for(episode, video_key)
+        super().__init__(root=str(cache), **kwargs)
 
 
 def _qwen_tokenizer_config():
@@ -162,4 +158,4 @@ class BenchSFTDataset(SFTDataset):
         return cls(load_sft_metadata(jsonl_path, s3_bucket=s3_bucket, s3_prefix=s3_prefix), **kw)
 
 
-__all__ = ["S3DROIDLeRobotDataset", "BenchSFTDataset", "load_sft_metadata"]
+__all__ = ["S3DROIDLeRobotDataset", "BenchSFTDataset", "load_sft_metadata", "hf_online_preserved"]

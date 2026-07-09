@@ -4,14 +4,15 @@
 Drop-in for DROIDLeRobotDataset that reads everything from LanceDB — per-frame
 labels from ``{table}_frames`` / ``{table}_tasks`` / ``{table}_episodes`` and the
 pre-composed video from ``{table}`` (see tools/lance_datagen/build_composed_droid.py).
-Inherits the base loader's indexing, pose math, and action assembly, so labels
-stay bit-exact; only the H.264 re-encode of the video is lossy.
+The split/span index is built with the base's own helpers and the sample dict is
+assembled to match what the lazy LeRobot readers return, so the inherited
+``__getitem__`` (pose math, gripper handling, action assembly) runs unchanged —
+labels stay bit-exact; only the H.264 re-encode of the video is lossy.
 """
 
 from __future__ import annotations
 
 import json
-import random
 from typing import Any
 
 import lancedb
@@ -21,26 +22,25 @@ import torch
 from lancedb.permutation import Permutation
 from torchcodec.decoders import VideoDecoder
 
-from cosmos_framework.data.vfm.action.datasets.action_sft_dataset import (
+from cosmos_framework.data.generator.action.action_processing import resolve_action_normalization
+from cosmos_framework.data.generator.action.datasets import droid_lerobot_dataset_config as _cfg
+from cosmos_framework.data.generator.action.datasets.action_sft_dataset import (
     ActionIterableShuffleDataset,
     ActionSFTDataset,
 )
-from cosmos_framework.data.vfm.action.datasets.droid_lerobot_dataset import (
-    _ACTION_GRIPPER_FEATURE,
-    _GRIPPER_STATE_FEATURE,
-    _JOINT_ACTION_FEATURE,
-    _JOINT_STATE_FEATURE,
-    _STATE_FEATURE,
+from cosmos_framework.data.generator.action.datasets.cosmos3_action_lerobot import (
+    _normalize_split,
+    build_episode_spans,
+    split_episode_ids,
+)
+from cosmos_framework.data.generator.action.datasets.droid_lerobot_dataset import (
+    _DROID_TO_OPENCV,
     DROIDLeRobotDataset,
 )
-from cosmos_framework.data.vfm.action.domain_utils import get_domain_id
-from cosmos_framework.data.vfm.action.transforms import ActionTransformPipeline
+from cosmos_framework.data.generator.action.domain_utils import get_domain_id
+from cosmos_framework.data.generator.action.transforms import ActionTransformPipeline
 
-_ADDITIONAL_VIEW_DESC = (
-    "The top row is from the wrist-mounted camera. "
-    "The bottom row contains two horizontally concatenated third-person perspective "
-    "views of the scene from opposite sides, with the robot visible."
-)
+_DEFAULT_VERSION = "droid_plus_lerobot_320x180_20260406"
 
 
 def _resolve_device(device: str | None) -> torch.device | None:
@@ -68,115 +68,166 @@ class LanceDROIDComposedDataset(DROIDLeRobotDataset):
         lance_uri: str,
         *,
         table: str = "droid_composed",
+        version: str = _DEFAULT_VERSION,
         fps: float = 15.0,
         chunk_length: int = 16,
-        mode: str = "joint",
+        split_seed: int = 42,
+        split_val_ratio: float = 0.03,
+        split: str = "train",
+        mode: str = "policy",
         viewpoint: str = "concat_view",
-        action_space: str = "ee_pose",
+        action_space: str = "midtrain",
         use_state: bool = False,
-        action_normalization: str | None = "quantile",
+        action_normalization: str | None = None,
         use_filter_dict: bool = False,
         filter_dict_path: str | None = None,
+        sample_stride: int = 1,
         decode_device: str | None = "cpu",
         decoder_cache_size: int = 32,
         storage_options: dict | None = None,
     ) -> None:
-        # Same validations as the base loader (whose parquet-reading __init__ we bypass).
+        # Same argument surface as the base loader, minus what only applies to
+        # raw-LeRobot reading (root/video_mode/history/augmentation/temp-seg).
         if viewpoint != "concat_view":
             raise NotImplementedError("LanceDROIDComposedDataset only supports concat_view.")
-        if action_space not in ("ee_pose", "joint_pos"):
-            raise NotImplementedError(f"action_space must be 'ee_pose' or 'joint_pos', got {action_space!r}.")
         if use_state and action_space != "joint_pos":
             raise NotImplementedError("use_state is only supported with action_space='joint_pos'.")
         if use_filter_dict and not filter_dict_path:
             raise ValueError("use_filter_dict=True requires filter_dict_path")
+        if split.lower() == "val_temp_seg":
+            raise NotImplementedError("val_temp_seg is not supported by the Lance loader.")
 
-        # Config attributes the inherited label/indexing code reads.
+        # -- config attributes the inherited code reads (base + DROID init, sans LeRobot IO) --
+        self._memprofile = False
         self._fps = float(fps)
         self._dt = 1.0 / self._fps
         self._chunk_length = int(chunk_length)
-        self._sample_stride = 1
+        self._split_seed = split_seed
+        self._split_val_ratio = split_val_ratio
+        self._split = _normalize_split(split)
         self._mode = mode
-        self._pose_convention = "backward_framewise"
+        self._embodiment_type = "droid_lerobot"
         self._viewpoint = viewpoint
-        self._domain_name = "droid_lerobot"
-        self._domain_id = get_domain_id(self._domain_name)
-        self._action_normalization = None if action_space == "joint_pos" else action_normalization
-        self._norm_stats = None
-        self._rows = None  # base per-frame dict list is never built here
+        self._pose_convention = "backward_framewise"
+        self._rotation_format = "rot6d"
+        self._action_normalizer = None
+        if action_normalization is not None:
+            self._action_normalizer = resolve_action_normalization(
+                action_normalization, self._load_norm_stats(action_normalization)
+            )
+        self._tolerance_s = 2e-4
+        self._skip_video_loading = False
+        self._sample_stride = int(sample_stride)
+        self._min_episode_length_frames = None
+        self._domain_id = get_domain_id(self._embodiment_type)
+        self._to_opencv = _DROID_TO_OPENCV
+
+        self._use_success_only = True  # subset selection happened at convert time
+        self._video_mode = None
         self._action_space = action_space
-        self._use_state = bool(use_state)
+        self._use_state = use_state
+        self._use_filter_dict = use_filter_dict
+        self._filter_dict_path = filter_dict_path
+        self._max_num_history_actions = 0
         self._use_image_augmentation = False
         self._image_augmentor = None
-        self._use_filter_dict = bool(use_filter_dict)
-        self._filter_dict_path = filter_dict_path
+        self._is_val_temp_seg = False
 
-        # Labels: build the same compact arrays the base builds from parquet.
+        self._image_features = _cfg.IMAGE_FEATURES[version]
+        self._state_features = _cfg.STATE_FEATURES[version]
+        self._action_features = _cfg.ACTION_FEATURES[version]
+        self._is_flat_action = _cfg.IS_FLAT_ACTION[version]
+        self._has_multi_language_annotations = _cfg.HAS_MULTI_LANGUAGE_ANNOTATIONS[version]
+        self._is_gripper_action_flipped = _cfg.IS_GRIPPER_ACTION_FLIPPED[version]
+
+        # Label-window plan: feature -> window length, mirroring the base's
+        # delta_timestamps ([0..k]*dt lists; our frames are contiguous per episode,
+        # so a window is a plain row slice of that length).
+        obs_len, act_len = self._chunk_length + 1, self._chunk_length
+        self._label_windows: dict[str, int] = {
+            self._state_features: obs_len,
+            self._action_features: act_len,
+        }
+        if action_space == "joint_pos":
+            self._label_windows[_cfg._JOINT_ACTION_FEATURE] = act_len
+            if use_state:
+                self._label_windows[_cfg._JOINT_STATE_FEATURE] = obs_len
+                self._label_windows[_cfg._GRIPPER_STATE_FEATURE] = obs_len
+
+        # -- labels from Lance: same per-frame arrays the LeRobot parquets hold --
         db = lancedb.connect(lance_uri, storage_options=storage_options)
-        feature_cols = (
-            [_JOINT_ACTION_FEATURE, _ACTION_GRIPPER_FEATURE, _JOINT_STATE_FEATURE, _GRIPPER_STATE_FEATURE]
-            if action_space == "joint_pos"
-            else [_STATE_FEATURE, _ACTION_GRIPPER_FEATURE]
-        )
         frames = _read_all(
             db,
             f"{table}_frames",
-            ["episode_index", "task_index", "timestamp", *[c.replace(".", "__") for c in feature_cols]],
+            ["episode_index", "task_index", *[c.replace(".", "__") for c in self._label_windows]],
         )
-        self._row_episode = frames.column("episode_index").to_numpy(zero_copy_only=False).astype(np.int64)
         self._row_task = frames.column("task_index").to_numpy(zero_copy_only=False).astype(np.int64)
-        self._row_timestamp = frames.column("timestamp").to_numpy(zero_copy_only=False).astype(np.float64)
-        self._feat = {}
-        for c in feature_cols:
+        row_episode = frames.column("episode_index").to_numpy(zero_copy_only=False).astype(np.int64)
+        self._feat: dict[str, np.ndarray] = {}
+        for c in self._label_windows:
             arr = frames.column(c.replace(".", "__"))
             if pa.types.is_fixed_size_list(arr.type):
                 self._feat[c] = np.asarray(arr.values).reshape(len(arr), arr.type.list_size)
             else:
                 self._feat[c] = arr.to_numpy(zero_copy_only=False)
 
-        assert np.all(np.diff(self._row_episode) >= 0), "episode_index is not contiguous in the frames table"
-        ep_vals, ep_starts, ep_counts = np.unique(self._row_episode, return_index=True, return_counts=True)
-        self._ep_vals = ep_vals.astype(np.int64)
-        self._ep_starts = ep_starts.astype(np.int64)
-        self._valid_cum = np.cumsum(np.maximum(0, ep_counts - self._chunk_length)).astype(np.int64)
+        assert np.all(np.diff(row_episode) >= 0), "episode_index is not contiguous in the frames table"
+        ep_vals, ep_starts, ep_counts = np.unique(row_episode, return_index=True, return_counts=True)
+        self._ep_row_start = {int(v): int(s) for v, s in zip(ep_vals, ep_starts)}
+        # episode_id in span records is positional (0..N-1) — map to the table's episode_index.
+        self._ep_index_of = {i: int(v) for i, v in enumerate(ep_vals)}
 
         tasks = _read_all(db, f"{table}_tasks", ["task_index", "task"])
         self._tasks = dict(zip(tasks.column("task_index").to_pylist(), tasks.column("task").to_pylist()))
         eps = _read_all(db, f"{table}_episodes", ["episode_index", "episode_id"])
-        self._episodes = {
-            int(i): {"episode_index": int(i), "episode_id": s}
-            for i, s in zip(eps.column("episode_index").to_pylist(), eps.column("episode_id").to_pylist())
-        }
+        ep_id_str = dict(zip(eps.column("episode_index").to_pylist(), eps.column("episode_id").to_pylist()))
 
-        # Keep-ranges window filter — same construction as the base loader.
-        if self._use_filter_dict:
-            with open(self._filter_dict_path) as f:
+        # -- split + span index via the base's own helpers (identical semantics) --
+        episodes_meta = {
+            "dataset_from_index": [int(s) for s in ep_starts],
+            "dataset_to_index": [int(s + c) for s, c in zip(ep_starts, ep_counts)],
+            "length": [int(c) for c in ep_counts],
+        }
+        episode_ids = split_episode_ids(
+            total_episodes=len(ep_vals), seed=self._split_seed, val_ratio=self._split_val_ratio, split=self._split
+        )
+        episode_spans, _, _ = build_episode_spans(
+            episodes=episodes_meta,
+            episode_ids=episode_ids,
+            chunk_length=self._chunk_length,
+            sample_stride=self._sample_stride,
+        )
+        self._episode_records: list[tuple[int, int, int, int]] = []
+        self._episode_cum_ends: list[int] = []
+        self._num_valid_indices = 0
+        if not use_filter_dict:
+            for episode_id, sample_start, valid_len in episode_spans:
+                self._episode_records.append((0, sample_start, valid_len, episode_id))
+                self._num_valid_indices += valid_len
+                self._episode_cum_ends.append(self._num_valid_indices)
+        else:
+            # Keep-ranges filter — same construction as the base loader.
+            with open(filter_dict_path) as f:
                 filter_dict = json.load(f)
-            seg_ep_pos, seg_win_start, seg_len = [], [], []
-            for pos in range(len(self._ep_vals)):
-                valid = int(max(0, ep_counts[pos] - self._chunk_length))
-                if valid <= 0:
-                    continue
-                ep_id = str(self._episodes[int(self._ep_vals[pos])]["episode_id"])
+            for episode_id, sample_start, valid_len in episode_spans:
+                eid = str(ep_id_str.get(self._ep_index_of[episode_id], ""))
                 key = (
-                    f"gs://xembodiment_data/r2d2/r2d2-data-full/{ep_id}/recordings/"
-                    f"MP4--gs://xembodiment_data/r2d2/r2d2-data-full/{ep_id}/trajectory.h5"
+                    f"gs://xembodiment_data/r2d2/r2d2-data-full/{eid}/recordings/"
+                    f"MP4--gs://xembodiment_data/r2d2/r2d2-data-full/{eid}/trajectory.h5"
                 )
                 ranges = filter_dict.get(key)
                 if ranges is None:
                     continue
                 for s, e in ranges:
-                    ws = max(int(s), 0)
-                    we = min(int(e) - self._chunk_length, valid)
-                    if we - ws > 0:
-                        seg_ep_pos.append(pos)
-                        seg_win_start.append(ws)
-                        seg_len.append(we - ws)
-            self._seg_ep_pos = np.asarray(seg_ep_pos, dtype=np.int64)
-            self._seg_win_start = np.asarray(seg_win_start, dtype=np.int64)
-            self._seg_cum = np.cumsum(seg_len).astype(np.int64) if seg_len else np.zeros(0, dtype=np.int64)
+                    sub_start = max(s, 0)
+                    sub_end = min(e - self._chunk_length, valid_len)
+                    sub_valid_len = max(0, sub_end - sub_start)
+                    if sub_valid_len > 0:
+                        self._episode_records.append((0, sample_start + sub_start, sub_valid_len, episode_id))
+                        self._num_valid_indices += sub_valid_len
+                        self._episode_cum_ends.append(self._num_valid_indices)
 
-        # Video: lazy per-worker handles into the composed table.
+        # -- video: lazy per-worker handles into the composed table --
         self._lance_uri = lance_uri
         self._table = table
         self._decode_device = _resolve_device(decode_device)
@@ -185,12 +236,37 @@ class LanceDROIDComposedDataset(DROIDLeRobotDataset):
         self._perm = None
         self._ep_row: dict[int, int] | None = None
         self._decoders: dict[int, VideoDecoder] | None = None
+        self._pending_window: tuple[int, int] | None = None
 
     def __getstate__(self) -> dict:
         state = self.__dict__.copy()
         for k in ("_perm", "_ep_row", "_decoders"):
             state[k] = None
         return state
+
+    # -- labels: assemble the LeRobot-shaped sample dict from the Lance arrays --
+
+    def _fetch_sample(self, idx: int) -> tuple[str, int, int, dict[str, Any]]:
+        mode = self._choose_mode()
+        dataset_idx, row_idx, episode_id, _ = self._resolve_index(idx)
+        sample: dict[str, Any] = {
+            c: torch.from_numpy(self._feat[c][row_idx : row_idx + n].copy()).float()
+            for c, n in self._label_windows.items()
+        }
+        sample["task"] = self._tasks[int(self._row_task[row_idx])]
+        ep_index = self._ep_index_of[episode_id]
+        self._pending_window = (ep_index, row_idx - self._ep_row_start[ep_index])
+        return mode, dataset_idx, row_idx, sample
+
+    # -- video: decode the composed clip window instead of composing 3 views --
+
+    def _compose_multi_view(self, sample: dict[str, Any]) -> torch.Tensor:
+        self._ensure_open()
+        ep_index, offset = self._pending_window
+        self._ensure_decoders([ep_index])
+        idxs = [offset + k for k in range(self._chunk_length + 1)]
+        frames = self._decoders[ep_index].get_frames_at(indices=idxs).data  # (T,C,H,W) uint8
+        return frames.to(torch.float32) / 255.0  # [0,1] float, as the base expects
 
     def _ensure_open(self) -> None:
         if self._decoders is not None:
@@ -228,60 +304,13 @@ class LanceDROIDComposedDataset(DROIDLeRobotDataset):
                 self._decoders.pop(victim)
             self._decoders[e] = self._build_decoder(clips[self._ep_row[e]])
 
-    def __getitem__(self, idx: int) -> dict[str, Any]:
-        return self.__getitems__([int(idx)])[0]
-
     def __getitems__(self, indices: list[int]) -> list[dict[str, Any]]:
+        # Warm the decoder cache for the whole batch (one batched byte read), then
+        # let the inherited per-sample path assemble each result.
         self._ensure_open()
-        n = len(indices)
-        specs, plan = [], {}
-        for sp, idx in enumerate(indices):
-            idx = int(idx)
-            mode = self._choose_mode()
-            ep = int(np.searchsorted(self._valid_cum, idx, side="right"))
-            prev = int(self._valid_cum[ep - 1]) if ep > 0 else 0
-            offset = idx - prev
-            start = int(self._ep_starts[ep]) + offset
-            ep_index = int(self._ep_vals[ep])
-            obs = self._window_rows(start, start + self._chunk_length + 1, ep_index)
-            if self._action_space == "joint_pos":
-                action = self._build_joint_action(obs)
-                extras = {}
-            else:
-                action, initial_pose = self._build_raw_action(obs, obs[: self._chunk_length])
-                extras = {"initial_pose": initial_pose}
-            task = self._tasks[int(obs[0]["task_index"])]
-            specs.append(
-                {"mode": mode, "action": action, "extras": extras, "ai_caption": random.choice(task.split(" | "))}
-            )
-            clip_idx = [offset + k for k in range(self._chunk_length + 1)]
-            e = plan.setdefault(ep_index, {"frames": [], "owners": []})
-            lo = len(e["frames"])
-            e["frames"].extend(clip_idx)
-            e["owners"].append((sp, lo, lo + len(clip_idx)))
-
-        self._ensure_decoders(list(plan.keys()))
-        decoded: list[torch.Tensor | None] = [None] * n
-        for ep_index, e in plan.items():
-            dec = self._decoders[ep_index]
-            frames = dec.get_frames_at(indices=e["frames"]).data
-            for sp, lo, hi in e["owners"]:
-                decoded[sp] = frames[lo:hi].to(torch.float32) / 255.0
-
-        results = []
-        for sp in range(n):
-            s = specs[sp]
-            results.append(
-                self._build_result(
-                    mode=s["mode"],
-                    video=decoded[sp],
-                    action=s["action"],
-                    ai_caption=s["ai_caption"],
-                    additional_view_description=_ADDITIONAL_VIEW_DESC,
-                    **s["extras"],
-                )
-            )
-        return results
+        eps = {self._ep_index_of[self._resolve_index(int(i))[2]] for i in indices}
+        self._ensure_decoders(list(eps))
+        return [self[int(i)] for i in indices]
 
 
 class LanceDROIDComposedIterable(torch.utils.data.IterableDataset):
@@ -319,6 +348,7 @@ def get_lance_action_droid_sft_dataset(
     *,
     lance_uri: str,
     table: str = "droid_composed",
+    version: str = _DEFAULT_VERSION,
     decode_device: str | None = "cpu",
     storage_options: dict | None = None,
     fps: float = 15.0,
@@ -338,6 +368,7 @@ def get_lance_action_droid_sft_dataset(
     append_duration_fps_timestamps: bool = True,
     append_resolution_info: bool = True,
     append_idle_frames: bool = False,
+    format_prompt_as_json: bool = False,
     iterable_shuffle: bool = False,
     episode_shuffle_seed: int = 42,
 ):
@@ -347,6 +378,7 @@ def get_lance_action_droid_sft_dataset(
     dataset = LanceDROIDComposedDataset(
         lance_uri,
         table=table,
+        version=version,
         decode_device=decode_device,
         storage_options=storage_options,
         fps=fps,
@@ -367,6 +399,7 @@ def get_lance_action_droid_sft_dataset(
         append_duration_fps_timestamps=append_duration_fps_timestamps,
         append_resolution_info=append_resolution_info,
         append_idle_frames=append_idle_frames,
+        format_prompt_as_json=format_prompt_as_json,
     )
     sft = ActionSFTDataset(dataset, transform, resolution)
     return ActionIterableShuffleDataset(sft, seed=episode_shuffle_seed) if iterable_shuffle else sft

@@ -3,13 +3,17 @@
 ``lerobot/droid_1.0.1`` LeRobot v3.0 dataset.
 
 The public release names a few features differently from what
-``cosmos_framework.data.vfm.action.datasets.DROIDLeRobotDataset`` expects.
+``cosmos_framework.data.generator.action.datasets.DROIDLeRobotDataset`` expects.
 This script renames them and writes a self-contained ``<out>/success`` tree
 (``meta/``, ``data/``, ``videos/``) that the base Cosmos loader reads as-is,
 so the base and the LanceDB loader run on byte-identical inputs.
 
 The (large, concatenated) source mp4s are symlinked, not copied — episode
 ``from_timestamp`` offsets index into them unchanged.
+
+Name ``--out`` after a supported version key (see droid_lerobot_dataset_config
+LEROBOT_ROOTS, e.g. ``droid_plus_lerobot_320x180_20260406``) so the base loader's
+version registry resolves it; pass ``use_success_only=True`` when loading.
 """
 
 from __future__ import annotations
@@ -100,11 +104,13 @@ def main() -> None:
     (out / "meta" / "episodes" / "chunk-000").mkdir(parents=True, exist_ok=True)
     pq.write_table(ep, out / "meta" / "episodes" / "chunk-000" / "file-000.parquet")
 
-    # ---- tasks: normalize to Cosmos schema (columns: task_index, task) ----
-    tasks = pq.read_table(src / "meta" / "tasks.parquet")
-    task_col = "task" if "task" in tasks.column_names else "__index_level_0__"
-    tasks = pa.table({"task_index": tasks["task_index"], "task": tasks[task_col].cast(pa.string())})
-    pq.write_table(tasks, out / "meta" / "tasks.parquet")
+    # ---- tasks: LeRobot v3 format (DataFrame indexed by task string, task_index column) ----
+
+    tasks = pq.read_table(src / "meta" / "tasks.parquet").to_pandas()
+    if tasks.index.name != "task":
+        task_col = "task" if "task" in tasks.columns else "__index_level_0__"
+        tasks = tasks.rename(columns={task_col: "task"}).set_index("task")[["task_index"]]
+    tasks.to_parquet(out / "meta" / "tasks.parquet")
     info = _rename_info(info)
     info["total_episodes"] = n
     info["total_frames"] = n_frames

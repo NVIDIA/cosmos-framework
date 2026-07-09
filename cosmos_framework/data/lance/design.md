@@ -65,25 +65,30 @@ training-irrelevant by the real-model forward-equivalence runs.
 
 ### What the base does
 
-`DROIDLeRobotDataset` (the base) reads a LeRobot-format tree: per-frame labels from
-`data/*.parquet`, episode/task metadata from `meta/`, and three camera views from
-concatenated mp4s under `videos/`. Per **sample** it decodes a window from all three
-views, resizes the two exteriors to half size, and stacks them under the wrist view into
-one `1.5·h × w` frame (`_load_concat_video`). Labels are assembled by `_window_rows` →
-`_build_joint_action` / `_build_raw_action` from compact numpy arrays built at init.
+`DROIDLeRobotDataset` (built on `BaseActionLeRobotDataset`) registers LeRobot sources
+metadata-only at init, derives a deterministic train/val episode split
+(`split_episode_ids`) and per-episode span index (`build_episode_spans`), and keeps the
+heavy per-shard `LeRobotDataset` readers lazy behind an LRU. Per **sample**,
+`_fetch_sample` maps the flat index to (dataset, row, episode, offset) and asks the
+LeRobot reader for the windowed label features *and* the three camera-view windows
+(`delta_timestamps`); `__getitem__` then composes the views into one `1.5·h × w` frame
+(`_compose_multi_view`) and assembles the action for the chosen action space (midtrain
+pose deltas / joint_pos / ee_pose_delta, including per-version gripper flipping).
+Per-dataset feature names and flags resolve from a version registry keyed by the root's
+directory name (`droid_lerobot_dataset_config`).
 
 ### What the converter stores
 
 `tools/lance_datagen/build_composed_droid.py` writes four tables:
 
 - **`{table}`** — one row per episode: `episode_index`, `ep_start`, `length`,
-  `video_bytes`. The video is the base's exact composition (`_load_concat_video` output,
-  byte-for-byte the same pixels) re-encoded once with `gop=1`.
+  `video_bytes`. The video is the base's exact composition (`_compose_multi_view` over the
+  full episode's views) re-encoded once with `gop=1`.
 - **`{table}_frames`** — one row per frame: `episode_index`, `task_index`, `timestamp`,
-  plus every feature column either action space reads (joint/gripper actions and states,
+  plus every feature column any action space reads (joint/gripper actions and states,
   cartesian state), stored as `float32` / `fixed_size_list<float32>`. These are dumped
-  **verbatim from the base loader's own arrays** (`_row_*`, `_feat`), so they roundtrip
-  bit-exact. Feature names store `.` as `__` (Lance treats dots as nested-field paths).
+  **verbatim from the base's LeRobot table**, so they roundtrip bit-exact. Feature names
+  store `.` as `__` (Lance treats dots as nested-field paths).
 - **`{table}_tasks`** — `task_index → task` string.
 - **`{table}_episodes`** — `episode_index → episode_id` (needed only by the keep-ranges
   window filter).
@@ -93,34 +98,33 @@ migrations without re-encoding video).
 
 ### How the loader works
 
-The loader subclasses `DROIDLeRobotDataset` but **bypasses its parquet-reading
-`__init__`** entirely: it takes only `lance_uri` (+ `storage_options` for S3), sets the
-same config attributes the base would, and rebuilds the base's compact label arrays from
-`{table}_frames` (a single full-column Permutation read at init — ~10 MB for 96k frames).
-From that point on, the *inherited* base code runs unchanged:
+The loader subclasses `DROIDLeRobotDataset` but **bypasses its LeRobot-reading
+`__init__`**: it takes only `lance_uri` (+ `storage_options` for S3) and a `version`
+(same registry the base resolves from its root name), sets the same config attributes the
+base would, and loads the per-frame label columns from `{table}_frames` in a single
+full-column Permutation read (~10 MB for 96k frames). The split/span index is then built
+with the base's **own helpers** (`split_episode_ids` + `build_episode_spans`), so
+`split`, `split_seed`, `split_val_ratio`, `sample_stride`, and the keep-ranges filter
+behave identically. From there the *inherited* base code runs unchanged:
 
-- flat-index → (episode, offset) mapping via `_valid_cum` / `_ep_starts` / `_ep_vals`
-  (same `np.unique` construction as the base);
-- `_window_rows` reconstructs per-frame dicts from the arrays on demand;
-- `_build_joint_action` / `_build_raw_action` / `_build_result` produce the labels,
-  captions, idle-frame counts, and normalization exactly as the base does;
-- the keep-ranges filter (`use_filter_dict`) builds the same per-segment index, using
-  `{table}_episodes` for the episode ids;
+- `_resolve_index` maps a flat index over the same `_episode_records` /
+  `_episode_cum_ends` structures;
+- our `_fetch_sample` override returns the same windowed sample dict the LeRobot readers
+  would (contiguous row slices of each feature, per the base's `delta_timestamps` plan,
+  plus the task string) — so the inherited `__getitem__` assembles actions, captions,
+  gripper flips, idle frames, and normalization exactly as the base does;
+- our `_compose_multi_view` override decodes the requested window straight from the
+  stored composed clip (uint8 → the `[0,1]` float layout the base expects), instead of
+  decoding and composing three views;
 - `get_shuffle_blocks` / `ActionIterableShuffleDataset` give the production
-  episode-shuffle stream.
+  episode-shuffle stream; `__getitems__` pre-warms the decoder cache for a whole batch
+  with one batched byte read.
 
-Only the video source is different: `__getitems__` groups the batch's windows by
-episode, fetches the missing episodes' `video_bytes` in one batched take, and decodes a
-single composed stream per episode instead of three views. Both action spaces
-(`joint_pos`, `ee_pose`) are supported; labels are bit-exact against the base for both.
-
-The base's `_rows` (a per-frame list of dicts the DROID subclass never reads — it is
-built by the shared `ActionBaseDataset.__init__` for sibling datasets that do use it) is
-never constructed here. Note this is a freeable redundancy in the base too, not a
-structural Lance advantage; see the README's memory note.
-
-Image augmentation (`use_image_augmentation`) is not supported: the base applies it to
-the three raw views *before* composition, and the table stores the composed result.
+All action spaces route through the inherited assembly; labels are bit-exact against the
+base for the same split parameters (verified for `joint_pos` and `midtrain`). Video is
+within one offline H.264 re-encode plus the base's decoder-backend difference (< 2.5%
+pixel MAD). Not supported: image augmentation (applied to raw views before composition),
+`max_num_history_actions` (needs pre-window history rows), and the `val_temp_seg` split.
 
 `get_lance_action_droid_sft_dataset` mirrors `get_action_droid_sft_dataset` (the base
 factory), building the same `ActionSFTDataset` + `ActionTransformPipeline` stack around
@@ -212,6 +216,8 @@ Two layers, both in-repo:
    within the re-encode tolerance (action ≤1.4%, vision ≤2.1%, VLM exact), while
    different samples differ by ~10× more — i.e. the metric is sensitive and the residual
    is the re-encode, not variance (verified by a base-vs-base control at 0.000%).
+   (The action run predates the upstream loader rewrite; data-level bit-exactness has
+   been re-verified against the rewritten base.)
 
 ## Benchmark methodology
 

@@ -17,11 +17,11 @@ from lancedb.permutation import Permutation
 from torchcodec.decoders import VideoDecoder
 from transformers import AutoTokenizer
 
-from cosmos_framework.data.vfm.local_datasets.helper import get_aspect_ratio
-from cosmos_framework.data.vfm.local_datasets.sft_dataset import _select_caption
-from cosmos_framework.data.vfm.sequence_packing.modalities import add_special_tokens
-from cosmos_framework.data.vfm.utils import VIDEO_RES_SIZE_INFO
-from cosmos_framework.model.vfm.vlm.qwen3_vl.utils import tokenize_caption
+from cosmos_framework.data.generator.local_datasets.helper import get_aspect_ratio
+from cosmos_framework.data.generator.local_datasets.sft_dataset import _select_caption
+from cosmos_framework.data.generator.sequence_packing.modalities import add_special_tokens
+from cosmos_framework.data.generator.utils import VIDEO_RES_SIZE_INFO
+from cosmos_framework.model.generator.reasoner.qwen3_vl.utils import tokenize_caption
 
 _MAX_CAPTION_TOKENS = 1024
 _META_COLS = [

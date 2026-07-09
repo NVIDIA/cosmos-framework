@@ -11,9 +11,9 @@ import pytest
 import torch
 from transformers import AutoTokenizer
 
+from cosmos_framework.data.generator.local_datasets.helper import get_aspect_ratio
+from cosmos_framework.data.generator.local_datasets.sft_dataset import SFTDataset
 from cosmos_framework.data.lance import LanceVisionSFTDataset
-from cosmos_framework.data.vfm.local_datasets.helper import get_aspect_ratio
-from cosmos_framework.data.vfm.local_datasets.sft_dataset import SFTDataset
 
 JSONL = os.environ.get("BRIDGE_JSONL")
 URI = os.environ.get("VISION_SFT_LANCE_URI")
@@ -23,6 +23,18 @@ pytestmark = pytest.mark.skipif(
 )
 
 _VKW = dict(num_video_frames=16, frame_selection_mode="first", temporal_interval_mode="entire_chunk")
+
+
+@pytest.fixture(scope="module", autouse=True)
+def _hf_online():
+    # the action base flips HF Hub offline process-wide; this module loads a tokenizer from the hub cache
+    import huggingface_hub.constants as hfc
+
+    mp = pytest.MonkeyPatch()
+    mp.setattr(hfc, "HF_HUB_OFFLINE", False)
+    mp.delenv("HF_HUB_OFFLINE", raising=False)
+    yield
+    mp.undo()
 
 
 @pytest.fixture(scope="module")

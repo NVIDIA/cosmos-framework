@@ -22,7 +22,9 @@ else in the recipe changes -- that one-line swap IS the drop-in. The trainer is 
 (not this standalone batcher) because action's ``ActionProcessingRecord`` / VLM's records
 need the recipe's own collation.
 
-  * ACTION -- per-step base-vs-Lance loss within ~1.4% (see docs/action_policy_droid_posttrain.md):
+  * ACTION -- per-step base-vs-Lance loss within ~1.4% (measured against the pre-2026-07
+    base; labels re-verified bit-exact against the rewritten lazy-LeRobot base — see
+    tests/data/lance/test_action.py):
       torchrun --nproc_per_node=4 -m cosmos_framework.scripts.train \
         --sft-toml=examples/toml/sft_config/action_policy_droid_repro.toml --deterministic -- \
         optimizer.lr=0.0 trainer.max_iter=5 model.parallelism.data_parallel_shard_degree=4 \
@@ -32,11 +34,13 @@ need the recipe's own collation.
         dataloader_train.dataloader.datasets.droid.dataset.resolution=256 \
         dataloader_train.dataloader.datasets.droid.dataset._target_=cosmos_framework.data.lance.action_dataset.get_lance_action_droid_sft_dataset \
         ~dataloader_train.dataloader.datasets.droid.dataset.root \
+        ~dataloader_train.dataloader.datasets.droid.dataset.use_success_only \
         +dataloader_train.dataloader.datasets.droid.dataset.lance_uri=<uri> \
         +dataloader_train.dataloader.datasets.droid.dataset.table=droid_composed \
         +dataloader_train.dataloader.datasets.droid.dataset.decode_device=cpu
       (drop the '~'/'+' lines for the base arm — the Lance loader reads labels + video
-       from LanceDB, so the base 'root' arg is removed rather than passed through.)
+       from LanceDB, so the base 'root'/'use_success_only' args are removed rather than
+       passed through.)
 
   * VLM -- byte-identical records, so the loss matches EXACTLY (measured: base 0.8149 ==
     Lance 0.8149, 0.00%):
@@ -68,8 +72,8 @@ init_script(env={"COSMOS_DEVICE": "cuda"})
 import torch
 from transformers import AutoTokenizer
 
-from cosmos_framework.data.vfm.dataflow.batchers import SequentialPackingBatcher
-from cosmos_framework.data.vfm.dataflow.collators import VFMListCollator
+from cosmos_framework.data.generator.dataflow.batchers import SequentialPackingBatcher
+from cosmos_framework.data.generator.dataflow.collators import VFMListCollator
 from cosmos_framework.inference.args import OmniSetupOverrides
 from cosmos_framework.inference.common.args import CheckpointOverrides
 from cosmos_framework.inference.common.public_model_config import build_public_model_config
@@ -127,9 +131,9 @@ def _loss(model, sample: dict) -> float:
 
 
 def _vision_pair(tok):
+    from cosmos_framework.data.generator.local_datasets.helper import get_aspect_ratio
+    from cosmos_framework.data.generator.local_datasets.sft_dataset import SFTDataset
     from cosmos_framework.data.lance import LanceVisionSFTDataset
-    from cosmos_framework.data.vfm.local_datasets.helper import get_aspect_ratio
-    from cosmos_framework.data.vfm.local_datasets.sft_dataset import SFTDataset
 
     jsonl = f"{_D}/bridge_src/sft_dataset_bridge/train/video_dataset_file.jsonl"
     base_dir = os.path.dirname(jsonl)

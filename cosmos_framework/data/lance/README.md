@@ -14,24 +14,25 @@ table can be read directly from object storage (S3) without FUSE or full downloa
 ## Performance Summary
 
 Numbers below use a **327-episode subset of the public [`lerobot/droid_1.0.1`](https://huggingface.co/datasets/lerobot/droid_1.0.1)**
-dataset (LeRobot v3.0; materialized via `tools/lance_datagen/prepare_droid_subset.py`), whose camera
-views are 320×180 → 270×320 composed. Production DROID uses 640×360 views → 540×640 (see Dataset Size).
+dataset (LeRobot v3.0; materialized via `tools/lance_datagen/prepare_droid_subset.py` into a
+version-named root the base loader's registry resolves), whose camera views are 320×180 →
+270×320 composed. Production DROID uses 640×360 views → 540×640 (see Dataset Size).
 
 ### Combined Throughput (samples/s)
 Combined 3-loader throughput, 327 DROID episodes, batch 16:
 
 | Workers (Action/VLM/VSFT) | Base (Local) | Lance (Local) | Base (S3) | Lance (S3) |
 | ------------------------- | ------------ | ------------- | --------- | ---------- |
-| 4/4/4 (Default)           | 87.4         | 265.7 (3.0x)  | 68.6      | 253.8 (3.7x)|
-| 18/4/18 (Tuned)           | 255.4        | 1021.6 (4.0x) | 235.4     | 976.2 (4.1x)|
+| 4/4/4 (Default)           | 87.4         | 225.7 (2.6x)  | 69.1      | 228.2 (3.3x)|
+| 18/4/18 (Tuned)           | 251.2        | 947.5 (3.8x)  | 232.4     | 970.5 (4.2x)|
 
 ### Per-Loader Throughput (samples/s)
 Each loader standalone, tuned workers (Action/VSFT 18, VLM 4):
 
 | Loader         | Base (Local) | Lance (Local) | Base (S3)  | Lance (S3)  |
 | -------------- | ------------ | ------------- | ---------- | ----------- |
-| Action (DROID) | 149.9        | 297.6 (2.0x)  | 156.0      | 299.1 (1.9x)|
-| Vision-SFT     | 120.9        | 969.4 (8.0x)  | 102.3      | 884.8 (8.6x)|
+| Action (DROID) | 143.2        | 269.1 (1.9x)  | 131.9      | 268.7 (2.0x)|
+| Vision-SFT     | 120.7        | 1016.4 (8.4x) | 102.4      | 875.8 (8.6x)|
 | VLM (LLaVA)    | 118.1 (hf)   | 392.3 (3.3x)  | 118.1 (hf) | 328.6 (2.8x)|
 
 Action decodes one composed clip instead of three runtime views; Vision-SFT decodes a pre-resized
@@ -62,34 +63,18 @@ larger GOP would shrink the table further at some seek cost).
 The composed resolution is derived from the source (`1.5×h × w`), not fixed: this public subset has
 320×180 views → 270×320.
 
-## Memory: a note on the per-frame index (not a Lance advantage)
+## Memory
 
-`ActionBaseDataset.__init__` builds a per-frame index (`self._rows`, a list of row dicts) and
-ships it to every DataLoader worker. `DROIDLeRobotDataset` **never reads it** — it indexes via
-compact column arrays and reconstructs window rows on demand — so the Lance loader drops it
-(`self._rows = None`), which we verified is **output-neutral (bit-identical batches)**.
+Memory is not a differentiator in either direction. The current base loader is index-light —
+lazy per-shard LeRobot readers behind an LRU, metadata-only init, near-zero spawn payload — and
+the Lance loader is comparable: at 1× (87.6k samples, 8 spawn workers) per-worker PSS is
+~0.60 GB (base) vs ~0.71 GB (Lance; it holds the compact label arrays in memory plus the
+torchcodec decoder cache, trading a little RSS for not touching the LeRobot tree at all).
+The Lance wins are **throughput and native S3**, not memory.
 
-That accounts for most of the per-worker memory gap vs the *shipped* base (~2.9× at 1.5M
-frames: 2.65 GB vs 0.92 GB per worker). **It is not a fundamental Lance advantage, though** —
-`_rows` is a freeable redundancy the base could drop too. Once it does, per-worker memory is at
-parity (a `_rows`-freed base is ~0.70 GB vs Lance ~0.92 GB at 16×; Lance carries the torchcodec
-decoder cache). One structural difference does remain: the base builds `_rows` *transiently at
-init even when freeing it after* (~3.2 GB resident during construction at 16×), while the Lance
-loader reads pre-compacted label columns and peaks at ~0.6 GB. The main Lance wins are still
-**throughput and S3**. _(We've raised this upstream to confirm `_rows` is safe to drop for
-`DROIDLeRobotDataset`.)_
-
-What `_rows` costs — per-worker spawn payload (327-episode DROID subset replicated N×):
-
-| Dataset Size       | base keeps `_rows` | base drops `_rows` |
-| ------------------ | ------------------ | ------------------ |
-| 96k frames (1×)    | 37 MB              | 11 MB              |
-| 1.54M frames (16×) | 552 MB             | 133 MB             |
-| 3.08M frames (32×) | 1.1 GB             | 263 MB             |
-| 6.16M frames (64×) | 2.2 GB             | 524 MB             |
-
-`_rows` ≈ 270 B/frame; the remaining ~85 B/frame is the compact arrays both keep. A base that
-keeps `_rows` reaches a ~12 GB resident index at 64× (OOM territory at full-DROID scale).
+(Historical note: the pre-2026-07 base materialized a per-frame dict index that scaled to a
+~12 GB resident index at DROID scale; the upstream rewrite to lazy LeRobot readers fixed that
+wholesale, so earlier memory-scaling comparisons against it are obsolete.)
 
 ## How it works
 
@@ -105,12 +90,17 @@ worker reopens them lazily (lancedb is not fork-safe).
 ### Action — `LanceDROIDComposedDataset`
 
 Fully Lance-backed: labels **and** video come from LanceDB, so the loader takes only a
-`lance_uri` — no LeRobot tree at train time. The base loader decodes three camera views per
-sample and resizes + concatenates them into one 270×320 frame at runtime; the converter stores
-that composed frame once per episode, plus the per-frame labels dumped verbatim from the base
-loader's arrays. `LanceDROIDComposedDataset` subclasses `DROIDLeRobotDataset` and rebuilds the
-same compact label arrays from the frames table, so frame indexing and action/pose assembly run
-the base's exact code — labels are bit-exact; only the H.264 re-encode of the video is lossy.
+`lance_uri` — no LeRobot tree at train time. The base loader queries lazy per-shard LeRobot
+readers for each sample's label windows and three camera-view windows, then resizes + concatenates
+the views into one composed frame at runtime; the converter stores that composed frame once per
+episode, plus the per-frame labels dumped verbatim from the base's LeRobot table.
+`LanceDROIDComposedDataset` subclasses `DROIDLeRobotDataset`: the train/val split and episode-span
+index are built with the base's own helpers (`split_episode_ids` / `build_episode_spans`), and
+`_fetch_sample` assembles the same windowed sample dict the LeRobot readers would return — so the
+inherited `__getitem__` (pose math, gripper handling, action assembly for every action space) runs
+unchanged. Labels are bit-exact for the same split parameters; video is within one offline H.264
+re-encode plus the base's own decoder-backend difference (< 2.5% pixel MAD). A `version` parameter
+selects the same per-dataset feature config the base resolves from its root name.
 
 Clips are encoded all-intra (`gop=1`), so torchcodec's `seek_mode="approximate"` lands on each
 window exactly; a per-worker LRU cache keeps recently used episode decoders open. `take` returns

@@ -6,7 +6,8 @@ that is what caps worker count (and OOMs) at full-DROID scale. This measures thr
 one side per process (``--side base|lance``) so RSS is clean:
 
   1. INDEX memory — RSS after constructing the dataset (before any iteration). The base
-     ``ActionBaseDataset.__init__`` materializes ``self._rows`` = one Python dict PER FRAME
+     (Historical note: the pre-2026-07 base materialized ``self._rows`` = one dict PER FRAME;
+     the rewritten base reads labels lazily via LeRobot, so both sides are now index-light.)
      (~18M frames at full DROID = tens of GB, per its own code comment). For the DROID
      loader this is dead weight (it reads windows from compact numpy arrays via
      ``_window_rows`` and overrides ``__len__``), so the Lance loader frees it.
@@ -31,8 +32,8 @@ import psutil
 import torch
 from base_standins import S3DROIDLeRobotDataset
 
+from cosmos_framework.data.generator.action.datasets.droid_lerobot_dataset import DROIDLeRobotDataset
 from cosmos_framework.data.lance import LanceDROIDComposedDataset
-from cosmos_framework.data.vfm.action.datasets.droid_lerobot_dataset import DROIDLeRobotDataset
 
 _KW = dict(action_space="joint_pos", use_state=True, mode="policy", chunk_length=16)
 _MB = 1024 * 1024
@@ -45,8 +46,10 @@ def _collate(items):
 def _build(side, root, uri, cache, s3_bucket=None, s3_prefix=None, region=None):
     if side == "base":
         if s3_bucket and s3_prefix:
-            return S3DROIDLeRobotDataset(root=root, s3_bucket=s3_bucket, s3_prefix=s3_prefix, region=region, **_KW)
-        return DROIDLeRobotDataset(root=root, **_KW)
+            return S3DROIDLeRobotDataset(
+                root=root, s3_bucket=s3_bucket, s3_prefix=s3_prefix, region=region, use_success_only=True, **_KW
+            )
+        return DROIDLeRobotDataset(root=root, use_success_only=True, **_KW)
     so = {"region": region} if (region and str(uri).startswith("s3://")) else None
     return LanceDROIDComposedDataset(uri, decode_device="cpu", decoder_cache_size=cache, storage_options=so, **_KW)
 
@@ -131,7 +134,7 @@ def main():
     )
     gc.collect()
     rss_after_init = proc.memory_info().rss
-    n_frames = len(ds._row_episode)
+    n_frames = int(getattr(ds, "_num_valid_indices", 0)) or len(ds)  # valid samples
     n_samples = len(ds)
 
     if args.free_base_rows and getattr(ds, "_rows", None) is not None:

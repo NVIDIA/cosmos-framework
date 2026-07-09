@@ -40,15 +40,15 @@ if _HERE not in sys.path:
 
 import bench_vision_sft  # noqa: E402  (kept loader benches)
 import bench_vlm  # noqa: E402
-from base_standins import S3DROIDLeRobotDataset  # noqa: E402
+from base_standins import S3DROIDLeRobotDataset, hf_online_preserved  # noqa: E402
 from bench_action_faithful import _EpisodeShuffle  # noqa: E402
 
+from cosmos_framework.data.generator.action.datasets.droid_lerobot_dataset import DROIDLeRobotDataset  # noqa: E402
 from cosmos_framework.data.lance import (  # noqa: E402
     LanceDROIDComposedDataset,
     LanceVisionSFTDataset,
 )
 from cosmos_framework.data.lance.vlm_dataset import LanceVLMShuffleScan  # noqa: E402
-from cosmos_framework.data.vfm.action.datasets.droid_lerobot_dataset import DROIDLeRobotDataset  # noqa: E402
 
 _ACTION_KW = dict(action_space="joint_pos", use_state=True, mode="policy", chunk_length=16)
 _VSFT_KW = dict(num_video_frames=16, frame_selection_mode="first", temporal_interval_mode="entire_chunk")
@@ -127,12 +127,18 @@ def _so(region, uri):
 # ── per-loader builders (genuine bases) ──
 def build_action_loader(which, root, uri, region, cache, batch_size, num_workers, s3_bucket=None, s3_prefix=None):
     if which == "base":
-        if s3_bucket and s3_prefix:  # genuine base + S3 materialization standin
-            base = S3DROIDLeRobotDataset(
-                root=root, s3_bucket=s3_bucket, s3_prefix=s3_prefix, region=region, **_ACTION_KW
-            )
-        else:
-            base = DROIDLeRobotDataset(root=root, **_ACTION_KW)
+        with hf_online_preserved():
+            if s3_bucket and s3_prefix:  # genuine base + S3 materialization standin
+                base = S3DROIDLeRobotDataset(
+                    root=root,
+                    s3_bucket=s3_bucket,
+                    s3_prefix=s3_prefix,
+                    region=region,
+                    use_success_only=True,
+                    **_ACTION_KW,
+                )
+            else:
+                base = DROIDLeRobotDataset(root=root, use_success_only=True, **_ACTION_KW)
         ds = _EpisodeShuffle(base)
     else:
         comp = LanceDROIDComposedDataset(

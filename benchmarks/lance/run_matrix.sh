@@ -43,15 +43,15 @@ run() {  # label trio aw vw sw  <regime args...>
 # The VLM base is HF-Hub streaming (--vlm-hf-subset) in every regime — cosmos has no
 # local/S3 VLM base.
 HF_SUBSET="figureqa(cauldron,llava_format)"
-LOCAL_ARGS=(--action-root $DATA/droid327/success --action-uri $DATA/lance/droid_composed327_plain
+LOCAL_ARGS=(--action-root $DATA/droid_plus_lerobot_320x180_20260406 --action-uri $DATA/lance/droid_composed327_plain
             --vlm-uri $DATA/lance/llava_figureqa --vlm-hf-subset "$HF_SUBSET"
             --vsft-jsonl $JSONL --vsft-uri $DATA/lance/vision_sft_plain)
-S3_ARGS=(--action-root $DATA/droid327/success --action-uri $S/droid327/lance/droid_composed327_plain
+S3_ARGS=(--action-root $DATA/droid_plus_lerobot_320x180_20260406 --action-uri $S/droid327/lance/droid_composed327_plain
          --action-s3-bucket $BUCKET --action-s3-prefix cosmos/droid327/base/success
          --vlm-uri $S/llava/lance/llava_figureqa --vlm-hf-subset "$HF_SUBSET"
          --vsft-jsonl $JSONL --vsft-uri $S/vision_sft/lance/vision_sft_plain
          --vsft-s3-bucket $BUCKET --vsft-s3-prefix cosmos/vision_sft/base/sft_dataset_bridge/train --region $REGION)
-MIXED_ARGS=(--action-root $DATA/droid327/success --action-uri $DATA/lance/droid_composed327_plain
+MIXED_ARGS=(--action-root $DATA/droid_plus_lerobot_320x180_20260406 --action-uri $DATA/lance/droid_composed327_plain
             --vlm-uri $S/llava/lance/llava_figureqa --vlm-hf-subset "$HF_SUBSET"
             --vsft-jsonl $JSONL --vsft-uri $S/vision_sft/lance/vision_sft_plain
             --vsft-s3-bucket $BUCKET --vsft-s3-prefix cosmos/vision_sft/base/sft_dataset_bridge/train

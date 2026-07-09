@@ -17,6 +17,18 @@ pytestmark = pytest.mark.skipif(
 )
 
 
+@pytest.fixture(scope="module", autouse=True)
+def _hf_online():
+    # the action base flips HF Hub offline process-wide; this module streams from the hub
+    import huggingface_hub.constants as hfc
+
+    mp = pytest.MonkeyPatch()
+    mp.setattr(hfc, "HF_HUB_OFFLINE", False)
+    mp.delenv("HF_HUB_OFFLINE", raising=False)
+    yield
+    mp.undo()
+
+
 def _norm_image_bytes(rec):
     img = rec.get("image")
     if isinstance(img, dict):
