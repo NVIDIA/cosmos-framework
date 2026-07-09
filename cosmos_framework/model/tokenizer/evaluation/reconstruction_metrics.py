@@ -398,95 +398,6 @@ def calculate_psnr(
     return psnr.mean()
 
 
-class Rank0FIDMetric(nn.Module):
-    """FID metric that runs only on rank 0 to avoid distributed sync issues.
-
-    Uses torchmetrics FrechetInceptionDistance internally but only computes
-    on rank 0's data to avoid NCCL collective operation mismatches caused by
-    torchmetrics/torch-fidelity's internal distributed synchronization.
-
-    Note: FID is computed only on rank 0's portion of the data (1/world_size),
-    which may be less representative than full dataset FID, but avoids
-    distributed synchronization issues.
-
-    Usage:
-        fid = Rank0FIDMetric(rank=rank).to(device)
-
-        # During evaluation loop (only rank 0 updates)
-        for batch in dataloader:
-            fid.update(real_images, fake_images)
-
-        # Compute FID (only rank 0 has valid result)
-        if rank == 0:
-            fid_value = fid.compute()
-    """
-
-    def __init__(self, rank: int = 0, feature_dim: int = 2048) -> None:
-        super().__init__()
-        self.rank = rank
-        self.feature_dim = feature_dim
-        self._fid_metric = None
-
-        # Only initialize FID metric on rank 0
-        if self.rank == 0:
-            try:
-                from torchmetrics.image.fid import FrechetInceptionDistance
-
-                # normalize=True means input is [0, 1] float, not uint8
-                self._fid_metric = FrechetInceptionDistance(
-                    feature=feature_dim,
-                    normalize=True,
-                    sync_on_compute=False,
-                    dist_sync_on_step=False,
-                )
-            except ImportError:
-                pass
-
-    @torch.no_grad()
-    def update(self, real_images: torch.Tensor, fake_images: torch.Tensor) -> None:
-        """Update FID statistics with a batch of real and fake images.
-
-        Only updates on rank 0.
-
-        Args:
-            real_images: Real images in [0, 1] range, shape (B, C, H, W) or (B, T, C, H, W)
-            fake_images: Fake/reconstructed images in [0, 1] range
-        """
-        if self.rank != 0 or self._fid_metric is None:
-            return
-
-        # Handle video format by flattening batch and time dimensions
-        if real_images.dim() == 5:  # (B, T, C, H, W)
-            real_images = real_images.reshape(-1, *real_images.shape[2:])
-            fake_images = fake_images.reshape(-1, *fake_images.shape[2:])
-
-        # Move metric to same device as images
-        device = real_images.device
-        self._fid_metric = self._fid_metric.to(device)
-
-        # torchmetrics FID update
-        self._fid_metric.update(real_images, real=True)
-        self._fid_metric.update(fake_images, real=False)
-
-    def compute(self) -> torch.Tensor:
-        """Compute FID from accumulated statistics.
-
-        Only valid on rank 0.
-
-        Returns:
-            FID value as a scalar tensor (inf if not rank 0 or metric unavailable)
-        """
-        if self.rank != 0 or self._fid_metric is None:
-            return torch.tensor(float("inf"))
-
-        return self._fid_metric.compute()
-
-    def reset(self) -> None:
-        """Reset accumulated statistics."""
-        if self._fid_metric is not None:
-            self._fid_metric.reset()
-
-
 
 
 __all__ = [
@@ -494,6 +405,5 @@ __all__ = [
     "PSNRMetric",
     "SSIMMetric",
     "LPIPSMetric",
-    "Rank0FIDMetric",
     "calculate_psnr",
 ]

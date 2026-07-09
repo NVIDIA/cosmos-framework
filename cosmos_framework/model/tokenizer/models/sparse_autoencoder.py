@@ -1208,6 +1208,7 @@ class AutoencoderKLConfig:
     text_decoder_model_name: str | None = None  # e.g., "Qwen/Qwen3-0.6B" or local path
     text_decoder_family: str = "qwen3"
     text_decoder_gradient_checkpointing: bool = True
+    text_decoder_packed_attention_backend: Literal["sdpa", "natten"] = "sdpa"
     encoder_use_checkpoint: bool | None = None
     decoder_use_checkpoint: bool | None = None
     encoder_dense_train_backend: Literal["disabled", "varlen", "batched", "auto"] = "disabled"
@@ -1291,6 +1292,7 @@ class AutoencoderKL(ModelMixin, ConfigMixin, FromOriginalModelMixin):
         text_decoder_model_name: str | None = None,
         text_decoder_family: str = "qwen3",
         text_decoder_gradient_checkpointing: bool = True,
+        text_decoder_packed_attention_backend: Literal["sdpa", "natten"] = "sdpa",
         encoder_use_checkpoint: bool | None = None,
         decoder_use_checkpoint: bool | None = None,
         encoder_dense_train_backend: Literal["disabled", "varlen", "batched", "auto"] = "disabled",
@@ -1311,7 +1313,7 @@ class AutoencoderKL(ModelMixin, ConfigMixin, FromOriginalModelMixin):
         task_random_num_sample_frames_batch_sizes: dict[str, list[int]] | None = None,
         use_dual_latent: bool = False,
         use_checkpoint: bool = True,
-    ):
+    ) -> None:
         super().__init__()
         self.use_checkpoint = use_checkpoint
         self.encoder_use_checkpoint = use_checkpoint if encoder_use_checkpoint is None else encoder_use_checkpoint
@@ -1325,6 +1327,7 @@ class AutoencoderKL(ModelMixin, ConfigMixin, FromOriginalModelMixin):
         self.use_post_text_decoder = use_post_text_decoder
         self.spatial_pool_size = spatial_pool_size
         self.text_decoder_family = text_decoder_family
+        self.text_decoder_packed_attention_backend: Literal["sdpa", "natten"] = text_decoder_packed_attention_backend
         self.decoder_temporal_mode = decoder_temporal_mode
         self.decoder_temporal_query_latent_steps = decoder_temporal_query_latent_steps
         self.decoder_temporal_cache_latent_steps = decoder_temporal_cache_latent_steps
@@ -1435,7 +1438,7 @@ class AutoencoderKL(ModelMixin, ConfigMixin, FromOriginalModelMixin):
             elif self.quantizer_type == "rq":
                 self.quantizer = RQBottleneck(
                     latent_shape=(16, 16, latent_channels),
-                    code_shape=(16, 16, 4),
+                    code_shape=(16, 16, self.quantizer_num_codebooks),
                     n_embed=self.quantizer_codebook_size,
                     decay=0.99,
                     shared_codebook=True,
@@ -1534,6 +1537,7 @@ class AutoencoderKL(ModelMixin, ConfigMixin, FromOriginalModelMixin):
                 image_hidden_size=encoder_model_channels,
                 spatial_pool_size=spatial_pool_size,
                 gradient_checkpointing=text_decoder_gradient_checkpointing,
+                packed_attention_backend=text_decoder_packed_attention_backend,
                 family_spec=get_text_decoder_family_spec(
                     family=text_decoder_family,
                     model_name=text_decoder_model_name,
@@ -1548,7 +1552,7 @@ class AutoencoderKL(ModelMixin, ConfigMixin, FromOriginalModelMixin):
         image_feats: "SparseTensor",
         image_patch_indices: torch.Tensor,
         segment_ids: torch.Tensor | None = None,
-    ):
+    ) -> tuple[Any, int]:
         """Decode text from image features using the configured text decoder.
 
         Passes encoder output (x_no_proj) through spatial merger + causal LM.
