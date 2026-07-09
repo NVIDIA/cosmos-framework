@@ -41,7 +41,7 @@ def _install_determinism() -> None:
 def _install_logits_probe(dump_path: str) -> None:
     import torch
 
-    import cosmos_framework.model.vfm.mot.unified_mot as unified_mot
+    import cosmos_framework.model.generator.mot.unified_mot as unified_mot
 
     original = unified_mot._sample_next_token
     state = {"saved": False}

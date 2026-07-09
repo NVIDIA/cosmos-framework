@@ -1922,8 +1922,7 @@ cu128-train = [
 cu130 = [
     { name = "flash-attn", version = "2.7.4.post1+cu130.torch210", source = { registry = "https://nvidia-cosmos.github.io/cosmos-dependencies/v1.5.0" }, marker = "platform_machine == 'x86_64'" },
     { name = "flash-attn-3-nv", version = "1.0.3+cu130.torch210", source = { registry = "https://nvidia-cosmos.github.io/cosmos-dependencies/v1.5.0" }, marker = "platform_machine == 'x86_64'" },
-    { name = "natten", version = "0.21.6.dev6+cu130.torch210", source = { registry = "https://nvidia-cosmos.github.io/cosmos-dependencies/v1.5.0" }, marker = "(platform_machine == 'x86_64' and extra == 'group-16-cosmos-framework-cu130') or (extra == 'group-16-cosmos-framework-cu130' and extra == 'group-16-cosmos-framework-cu130-train') or (extra == 'group-16-cosmos-framework-cu130' and extra == 'group-16-cosmos-framework-vllm') or (extra == 'group-16-cosmos-framework-cu128' and extra == 'group-16-cosmos-framework-cu128-train') or (extra == 'group-16-cosmos-framework-cu128' and extra == 'group-16-cosmos-framework-cu130') or (extra == 'group-16-cosmos-framework-cu128' and extra == 'group-16-cosmos-framework-cu130-train') or (extra == 'group-16-cosmos-framework-cu128' and extra == 'group-16-cosmos-framework-vllm') or (extra == 'group-16-cosmos-framework-cu128-train' and extra == 'group-16-cosmos-framework-cu130') or (extra == 'group-16-cosmos-framework-cu128-train' and extra == 'group-16-cosmos-framework-cu130-train') or (extra == 'group-16-cosmos-framework-cu128-train' and extra == 'group-16-cosmos-framework-vllm') or (extra == 'group-16-cosmos-framework-cu130-train' and extra == 'group-16-cosmos-framework-vllm')" },
-    { name = "natten", version = "0.21.6.dev6+cu130.torch210.gb300", source = { registry = "https://nvidia-cosmos.github.io/cosmos-dependencies/v1.5.0" }, marker = "(platform_machine == 'aarch64' and extra == 'group-16-cosmos-framework-cu130') or (extra == 'group-16-cosmos-framework-cu130' and extra == 'group-16-cosmos-framework-cu130-train') or (extra == 'group-16-cosmos-framework-cu130' and extra == 'group-16-cosmos-framework-vllm') or (extra == 'group-16-cosmos-framework-cu128' and extra == 'group-16-cosmos-framework-cu128-train') or (extra == 'group-16-cosmos-framework-cu128' and extra == 'group-16-cosmos-framework-cu130') or (extra == 'group-16-cosmos-framework-cu128' and extra == 'group-16-cosmos-framework-cu130-train') or (extra == 'group-16-cosmos-framework-cu128' and extra == 'group-16-cosmos-framework-vllm') or (extra == 'group-16-cosmos-framework-cu128-train' and extra == 'group-16-cosmos-framework-cu130') or (extra == 'group-16-cosmos-framework-cu128-train' and extra == 'group-16-cosmos-framework-cu130-train') or (extra == 'group-16-cosmos-framework-cu128-train' and extra == 'group-16-cosmos-framework-vllm') or (extra == 'group-16-cosmos-framework-cu130-train' and extra == 'group-16-cosmos-framework-vllm')" },
+    { name = "natten", version = "0.21.6.dev6+cu130.torch210.gb300", source = { registry = "https://nvidia-cosmos.github.io/cosmos-dependencies/v1.5.0" }, marker = "platform_machine == 'aarch64' or platform_machine == 'x86_64'" },
     { name = "nvidia-cublas" },
     { name = "nvidia-cuda-cupti" },
     { name = "nvidia-cuda-nvrtc" },
@@ -1947,8 +1946,7 @@ cu130 = [
 cu130-train = [
     { name = "flash-attn", version = "2.7.4.post1+cu130.torch210", source = { registry = "https://nvidia-cosmos.github.io/cosmos-dependencies/v1.5.0" }, marker = "platform_machine == 'x86_64'" },
     { name = "flash-attn-3-nv", version = "1.0.3+cu130.torch210", source = { registry = "https://nvidia-cosmos.github.io/cosmos-dependencies/v1.5.0" }, marker = "platform_machine == 'x86_64'" },
-    { name = "natten", version = "0.21.6.dev6+cu130.torch210", source = { registry = "https://nvidia-cosmos.github.io/cosmos-dependencies/v1.5.0" }, marker = "(platform_machine == 'x86_64' and extra == 'group-16-cosmos-framework-cu130-train') or (extra == 'group-16-cosmos-framework-cu130-train' and extra == 'group-16-cosmos-framework-vllm') or (extra == 'group-16-cosmos-framework-cu128' and extra == 'group-16-cosmos-framework-cu128-train') or (extra == 'group-16-cosmos-framework-cu128' and extra == 'group-16-cosmos-framework-cu130') or (extra == 'group-16-cosmos-framework-cu128' and extra == 'group-16-cosmos-framework-cu130-train') or (extra == 'group-16-cosmos-framework-cu128' and extra == 'group-16-cosmos-framework-vllm') or (extra == 'group-16-cosmos-framework-cu128-train' and extra == 'group-16-cosmos-framework-cu130') or (extra == 'group-16-cosmos-framework-cu128-train' and extra == 'group-16-cosmos-framework-cu130-train') or (extra == 'group-16-cosmos-framework-cu128-train' and extra == 'group-16-cosmos-framework-vllm') or (extra == 'group-16-cosmos-framework-cu130' and extra == 'group-16-cosmos-framework-cu130-train') or (extra == 'group-16-cosmos-framework-cu130' and extra == 'group-16-cosmos-framework-vllm')" },
-    { name = "natten", version = "0.21.6.dev6+cu130.torch210.gb300", source = { registry = "https://nvidia-cosmos.github.io/cosmos-dependencies/v1.5.0" }, marker = "(platform_machine == 'aarch64' and extra == 'group-16-cosmos-framework-cu130-train') or (extra == 'group-16-cosmos-framework-cu130-train' and extra == 'group-16-cosmos-framework-vllm') or (extra == 'group-16-cosmos-framework-cu128' and extra == 'group-16-cosmos-framework-cu128-train') or (extra == 'group-16-cosmos-framework-cu128' and extra == 'group-16-cosmos-framework-cu130') or (extra == 'group-16-cosmos-framework-cu128' and extra == 'group-16-cosmos-framework-cu130-train') or (extra == 'group-16-cosmos-framework-cu128' and extra == 'group-16-cosmos-framework-vllm') or (extra == 'group-16-cosmos-framework-cu128-train' and extra == 'group-16-cosmos-framework-cu130') or (extra == 'group-16-cosmos-framework-cu128-train' and extra == 'group-16-cosmos-framework-cu130-train') or (extra == 'group-16-cosmos-framework-cu128-train' and extra == 'group-16-cosmos-framework-vllm') or (extra == 'group-16-cosmos-framework-cu130' and extra == 'group-16-cosmos-framework-cu130-train') or (extra == 'group-16-cosmos-framework-cu130' and extra == 'group-16-cosmos-framework-vllm')" },
+    { name = "natten", version = "0.21.6.dev6+cu130.torch210.gb300", source = { registry = "https://nvidia-cosmos.github.io/cosmos-dependencies/v1.5.0" }, marker = "platform_machine == 'aarch64' or platform_machine == 'x86_64'" },
     { name = "nvidia-cublas" },
     { name = "nvidia-cuda-cupti" },
     { name = "nvidia-cuda-nvrtc" },
@@ -2178,7 +2176,7 @@ cu130 = [
     { name = "flash-attn", marker = "platform_machine == 'x86_64'", specifier = "==2.7.4.post1+cu130.torch210", index = "https://nvidia-cosmos.github.io/cosmos-dependencies/v1.5.0" },
     { name = "flash-attn-3-nv", marker = "platform_machine == 'x86_64'", specifier = "==1.0.3+cu130.torch210", index = "https://nvidia-cosmos.github.io/cosmos-dependencies/v1.5.0" },
     { name = "natten", marker = "platform_machine == 'aarch64'", specifier = "==0.21.6.dev6+cu130.torch210.gb300", index = "https://nvidia-cosmos.github.io/cosmos-dependencies/v1.5.0" },
-    { name = "natten", marker = "platform_machine == 'x86_64'", specifier = "==0.21.6.dev6+cu130.torch210", index = "https://nvidia-cosmos.github.io/cosmos-dependencies/v1.5.0" },
+    { name = "natten", marker = "platform_machine == 'x86_64'", specifier = "==0.21.6.dev6+cu130.torch210.gb300", index = "https://nvidia-cosmos.github.io/cosmos-dependencies/v1.5.0" },
     { name = "nvidia-cublas", specifier = "==13.1.0.3" },
     { name = "nvidia-cuda-cupti", specifier = "==13.0.85" },
     { name = "nvidia-cuda-nvrtc", specifier = "==13.0.88" },
@@ -2203,7 +2201,7 @@ cu130-train = [
     { name = "flash-attn", marker = "platform_machine == 'x86_64'", specifier = "==2.7.4.post1+cu130.torch210", index = "https://nvidia-cosmos.github.io/cosmos-dependencies/v1.5.0" },
     { name = "flash-attn-3-nv", marker = "platform_machine == 'x86_64'", specifier = "==1.0.3+cu130.torch210", index = "https://nvidia-cosmos.github.io/cosmos-dependencies/v1.5.0" },
     { name = "natten", marker = "platform_machine == 'aarch64'", specifier = "==0.21.6.dev6+cu130.torch210.gb300", index = "https://nvidia-cosmos.github.io/cosmos-dependencies/v1.5.0" },
-    { name = "natten", marker = "platform_machine == 'x86_64'", specifier = "==0.21.6.dev6+cu130.torch210", index = "https://nvidia-cosmos.github.io/cosmos-dependencies/v1.5.0" },
+    { name = "natten", marker = "platform_machine == 'x86_64'", specifier = "==0.21.6.dev6+cu130.torch210.gb300", index = "https://nvidia-cosmos.github.io/cosmos-dependencies/v1.5.0" },
     { name = "nvidia-cublas", specifier = "==13.1.0.3" },
     { name = "nvidia-cuda-cupti", specifier = "==13.0.85" },
     { name = "nvidia-cuda-nvrtc", specifier = "==13.0.88" },
@@ -7120,43 +7118,33 @@ wheels = [
 
 [[package]]
 name = "natten"
-version = "0.21.6.dev6+cu130.torch210"
-source = { registry = "https://nvidia-cosmos.github.io/cosmos-dependencies/v1.5.0" }
-resolution-markers = [
-    "python_full_version >= '3.14' and platform_machine == 'x86_64' and sys_platform == 'linux'",
-    "python_full_version == '3.13.*' and platform_machine == 'x86_64' and sys_platform == 'linux'",
-    "python_full_version >= '3.14' and platform_machine == 'x86_64' and sys_platform != 'linux'",
-    "python_full_version == '3.13.*' and platform_machine == 'x86_64' and sys_platform != 'linux'",
-    "python_full_version == '3.12.*' and platform_machine == 'x86_64' and sys_platform == 'linux'",
-    "python_full_version == '3.12.*' and platform_machine == 'x86_64' and sys_platform != 'linux'",
-    "python_full_version == '3.11.*' and platform_machine == 'x86_64' and sys_platform == 'linux'",
-    "python_full_version == '3.11.*' and platform_machine == 'x86_64' and sys_platform != 'linux'",
-    "python_full_version < '3.11' and platform_machine == 'x86_64' and sys_platform == 'linux'",
-    "python_full_version < '3.11' and platform_machine == 'x86_64' and sys_platform != 'linux'",
-]
-wheels = [
-    { url = "https://github.com/nvidia-cosmos/cosmos-dependencies/releases/download/v1.5.0/natten-0.21.6.dev6%2Bcu130.torch210-cp313-cp313-linux_aarch64.whl", hash = "sha256:d157abf86d3f01aa683ef6637abce4f1fdf2b7aa86b5af52736e5d53e9c42da5" },
-    { url = "https://github.com/nvidia-cosmos/cosmos-dependencies/releases/download/v1.5.0/natten-0.21.6.dev6%2Bcu130.torch210-cp313-cp313-linux_x86_64.whl", hash = "sha256:13d81645a33e58500c33f4c8840c992cab1bf43b2f476b96e7a70c3864906511" },
-]
-
-[[package]]
-name = "natten"
 version = "0.21.6.dev6+cu130.torch210.gb300"
 source = { registry = "https://nvidia-cosmos.github.io/cosmos-dependencies/v1.5.0" }
 resolution-markers = [
+    "python_full_version >= '3.14' and platform_machine == 'x86_64' and sys_platform == 'linux'",
     "python_full_version >= '3.14' and platform_machine == 'aarch64' and sys_platform == 'linux'",
+    "python_full_version == '3.13.*' and platform_machine == 'x86_64' and sys_platform == 'linux'",
     "python_full_version == '3.13.*' and platform_machine == 'aarch64' and sys_platform == 'linux'",
+    "python_full_version >= '3.14' and platform_machine == 'x86_64' and sys_platform != 'linux'",
     "python_full_version >= '3.14' and platform_machine == 'aarch64' and sys_platform != 'linux'",
+    "python_full_version == '3.13.*' and platform_machine == 'x86_64' and sys_platform != 'linux'",
     "python_full_version == '3.13.*' and platform_machine == 'aarch64' and sys_platform != 'linux'",
+    "python_full_version == '3.12.*' and platform_machine == 'x86_64' and sys_platform == 'linux'",
     "python_full_version == '3.12.*' and platform_machine == 'aarch64' and sys_platform == 'linux'",
+    "python_full_version == '3.12.*' and platform_machine == 'x86_64' and sys_platform != 'linux'",
     "python_full_version == '3.12.*' and platform_machine == 'aarch64' and sys_platform != 'linux'",
+    "python_full_version == '3.11.*' and platform_machine == 'x86_64' and sys_platform == 'linux'",
     "python_full_version == '3.11.*' and platform_machine == 'aarch64' and sys_platform == 'linux'",
+    "python_full_version == '3.11.*' and platform_machine == 'x86_64' and sys_platform != 'linux'",
     "python_full_version == '3.11.*' and platform_machine == 'aarch64' and sys_platform != 'linux'",
+    "python_full_version < '3.11' and platform_machine == 'x86_64' and sys_platform == 'linux'",
     "python_full_version < '3.11' and platform_machine == 'aarch64' and sys_platform == 'linux'",
+    "python_full_version < '3.11' and platform_machine == 'x86_64' and sys_platform != 'linux'",
     "python_full_version < '3.11' and platform_machine == 'aarch64' and sys_platform != 'linux'",
 ]
 wheels = [
     { url = "https://github.com/nvidia-cosmos/cosmos-dependencies/releases/download/v1.5.0/natten-0.21.6.dev6%2Bcu130.torch210.gb300-cp313-cp313-linux_aarch64.whl", hash = "sha256:cd63a31be0ea73c3f5d8bded442508e02a74fc9827f56f92b89314498a2fde9b" },
+    { url = "https://github.com/nvidia-cosmos/cosmos-dependencies/releases/download/v1.5.0/natten-0.21.6.dev6%2Bcu130.torch210.gb300-cp313-cp313-linux_x86_64.whl", hash = "sha256:04ace5d591b2775149d7a9adc8f3e6099b18fedad364c48e70b4a998ee598b9c" },
 ]
 
 [[package]]

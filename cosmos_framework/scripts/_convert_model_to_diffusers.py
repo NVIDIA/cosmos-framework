@@ -17,7 +17,7 @@ from transformers import AutoConfig, AutoTokenizer
 
 from cosmos_framework.inference.model import Cosmos3OmniModel
 from cosmos_framework.utils import log
-from cosmos_framework.model.vfm.omni_mot_model import OmniMoTModel
+from cosmos_framework.model.generator.omni_mot_model import OmniMoTModel
 
 DEFAULT_SOUND_TOKENIZER_CONFIG = {
     "model_type": "autoencoder_v2",

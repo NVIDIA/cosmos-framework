@@ -7,7 +7,7 @@ import wandb
 from cosmos_framework.callbacks.every_n import EveryN
 from cosmos_framework.model._base import ImaginaireModel
 from cosmos_framework.trainer import ImaginaireTrainer
-from cosmos_framework.data.vfm.sequence_packing.runtime import get_padding_stats
+from cosmos_framework.data.generator.sequence_packing.runtime import get_padding_stats
 
 
 class SequencePackingPadding(EveryN):

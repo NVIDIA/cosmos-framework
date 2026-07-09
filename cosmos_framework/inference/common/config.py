@@ -434,35 +434,49 @@ CONFIG_REPLACEMENTS = [
     (r"(?<!/)\bprojects/cosmos3/vfm/", r"cosmos3/_src/vfm/"),
 ]
 # Runtime layout detection — picks inverse rules based on which python path
-# our shipped modules live at. `cosmos_framework.model.vfm` is unique to the
+# our shipped modules live at. `cosmos_framework.model.generator` is unique to the
 # cosmos_training release; if it imports, we're in that tree and rewrite
 # cosmos3._src.* → cosmos.* / configs.* . Otherwise fall back to the
 # internal-dev paths (imaginaire.* / projects.cosmos3.vfm.*).
 try:
-    import cosmos_framework.model.vfm  # noqa: F401
+    import cosmos_framework.model.generator  # noqa: F401
 
     CONFIG_REPLACEMENTS_INVERSE = [
+        # vlm → reasoner (upstream rename in i4). MUST precede the general vfm rules
+        # so the specific vlm→reasoner subtree isn't shadowed by them.
+        (r"(?<!/)\bcosmos3/_src/vfm/configs/base/defaults/vlm/", r"cosmos_framework/configs/base/defaults/reasoner/"),
+        (r"(?<!/)\bcosmos3/_src/vfm/configs/base/vlm/", r"cosmos_framework/configs/base/reasoner/"),
+        (r"(?<!/)\bcosmos3/_src/vfm/models/vlm/", r"cosmos_framework/model/generator/reasoner/"),
+        (r"(?<!/)\bcosmos3/_src/vfm/datasets/vlm/", r"cosmos_framework/data/generator/reasoner/"),
+        (r"(?<!/)\bcosmos3/_src/vfm/datasets/augmentors/vlm/", r"cosmos_framework/data/generator/augmentors/reasoner/"),
+        (r"(?<!/)\bcosmos3/_src/vfm/utils/vlm/", r"cosmos_framework/utils/generator/reasoner/"),
+        (r"(?<!\.)\bcosmos3\._src\.vfm\.configs\.base\.defaults\.vlm\.", r"cosmos_framework.configs.base.defaults.reasoner."),
+        (r"(?<!\.)\bcosmos3\._src\.vfm\.configs\.base\.vlm\.", r"cosmos_framework.configs.base.reasoner."),
+        (r"(?<!\.)\bcosmos3\._src\.vfm\.models\.vlm\.", r"cosmos_framework.model.generator.reasoner."),
+        (r"(?<!\.)\bcosmos3\._src\.vfm\.datasets\.vlm\.", r"cosmos_framework.data.generator.reasoner."),
+        (r"(?<!\.)\bcosmos3\._src\.vfm\.datasets\.augmentors\.vlm\.", r"cosmos_framework.data.generator.augmentors.reasoner."),
+        (r"(?<!\.)\bcosmos3\._src\.vfm\.utils\.vlm\.", r"cosmos_framework.utils.generator.reasoner."),
         # File-path entries first (longer-match wins so vfm-prefixed names
         # don't get short-circuited by the bare imaginaire rule).
         (r"(?<!/)\bcosmos3/_src/vfm/configs/base/", r"cosmos_framework/configs/base/"),
-        (r"(?<!/)\bcosmos3/_src/vfm/algorithm/", r"cosmos_framework/model/vfm/algorithm/"),
-        (r"(?<!/)\bcosmos3/_src/vfm/diffusion/", r"cosmos_framework/model/vfm/diffusion/"),
-        (r"(?<!/)\bcosmos3/_src/vfm/models/", r"cosmos_framework/model/vfm/"),
-        (r"(?<!/)\bcosmos3/_src/vfm/tokenizers/", r"cosmos_framework/model/vfm/tokenizers/"),
-        (r"(?<!/)\bcosmos3/_src/vfm/processors/", r"cosmos_framework/data/vfm/processors/"),
-        (r"(?<!/)\bcosmos3/_src/vfm/datasets/", r"cosmos_framework/data/vfm/"),
-        (r"(?<!/)\bcosmos3/_src/vfm/utils/", r"cosmos_framework/utils/vfm/"),
+        (r"(?<!/)\bcosmos3/_src/vfm/algorithm/", r"cosmos_framework/model/generator/algorithm/"),
+        (r"(?<!/)\bcosmos3/_src/vfm/diffusion/", r"cosmos_framework/model/generator/diffusion/"),
+        (r"(?<!/)\bcosmos3/_src/vfm/models/", r"cosmos_framework/model/generator/"),
+        (r"(?<!/)\bcosmos3/_src/vfm/tokenizers/", r"cosmos_framework/model/generator/tokenizers/"),
+        (r"(?<!/)\bcosmos3/_src/vfm/processors/", r"cosmos_framework/data/generator/processors/"),
+        (r"(?<!/)\bcosmos3/_src/vfm/datasets/", r"cosmos_framework/data/generator/"),
+        (r"(?<!/)\bcosmos3/_src/vfm/utils/", r"cosmos_framework/utils/generator/"),
         (r"(?<!/)\bcosmos3/_src/vfm/", r"cosmos_framework/_vfm_unmapped/"),
         (r"(?<!/)\bcosmos3/_src/imaginaire/", r"cosmos_framework/"),
         # Module-path entries — same order.
         (r"(?<!\.)\bcosmos3\._src\.vfm\.configs\.base\.", r"cosmos_framework.configs.base."),
-        (r"(?<!\.)\bcosmos3\._src\.vfm\.algorithm\.", r"cosmos_framework.model.vfm.algorithm."),
-        (r"(?<!\.)\bcosmos3\._src\.vfm\.diffusion\.", r"cosmos_framework.model.vfm.diffusion."),
-        (r"(?<!\.)\bcosmos3\._src\.vfm\.models\.", r"cosmos_framework.model.vfm."),
-        (r"(?<!\.)\bcosmos3\._src\.vfm\.tokenizers\.", r"cosmos_framework.model.vfm.tokenizers."),
-        (r"(?<!\.)\bcosmos3\._src\.vfm\.processors\.", r"cosmos_framework.data.vfm.processors."),
-        (r"(?<!\.)\bcosmos3\._src\.vfm\.datasets\.", r"cosmos_framework.data.vfm."),
-        (r"(?<!\.)\bcosmos3\._src\.vfm\.utils\.", r"cosmos_framework.utils.vfm."),
+        (r"(?<!\.)\bcosmos3\._src\.vfm\.algorithm\.", r"cosmos_framework.model.generator.algorithm."),
+        (r"(?<!\.)\bcosmos3\._src\.vfm\.diffusion\.", r"cosmos_framework.model.generator.diffusion."),
+        (r"(?<!\.)\bcosmos3\._src\.vfm\.models\.", r"cosmos_framework.model.generator."),
+        (r"(?<!\.)\bcosmos3\._src\.vfm\.tokenizers\.", r"cosmos_framework.model.generator.tokenizers."),
+        (r"(?<!\.)\bcosmos3\._src\.vfm\.processors\.", r"cosmos_framework.data.generator.processors."),
+        (r"(?<!\.)\bcosmos3\._src\.vfm\.datasets\.", r"cosmos_framework.data.generator."),
+        (r"(?<!\.)\bcosmos3\._src\.vfm\.utils\.", r"cosmos_framework.utils.generator."),
         (r"(?<!\.)\bcosmos3\._src\.vfm\.", r"cosmos_framework._vfm_unmapped."),
         (r"(?<!\.)\bcosmos3\._src\.imaginaire\.", r"cosmos_framework."),
     ]

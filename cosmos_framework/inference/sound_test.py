@@ -38,7 +38,7 @@ def test_load_conditioning_audio_trims(tmp_path: Path):
 
 import types
 
-from cosmos_framework.data.vfm.sequence_packing import SequencePlan
+from cosmos_framework.data.generator.sequence_packing import SequencePlan
 from cosmos_framework.inference.sound import inject_sound_into_batch
 
 

@@ -38,7 +38,7 @@ if TYPE_CHECKING:
     from torch.utils.data import DataLoader
 
     from cosmos_framework.utils.config import Config
-    from cosmos_framework.model.vfm.omni_mot_model import OmniMoTModel
+    from cosmos_framework.model.generator.omni_mot_model import OmniMoTModel
 
 
 def _validate_config_file(v: Path) -> Path:

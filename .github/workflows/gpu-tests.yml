@@ -256,13 +256,13 @@ jobs:
         run: |
           export LD_LIBRARY_PATH=
           uv run --all-extras --group=cu128-train torchrun --nproc_per_node=2 -m pytest -v \
-            cosmos_framework/model/vfm/mot/cfgp_ar_test.py -o addopts=
+            cosmos_framework/model/generator/mot/cfgp_ar_test.py -o addopts=
 
       - name: Distributed unit tests - context_parallel (torchrun, 4 ranks)
         run: |
           export LD_LIBRARY_PATH=
           uv run --all-extras --group=cu128-train torchrun --nproc_per_node=4 -m pytest -v \
-            cosmos_framework/model/vfm/mot/context_parallel_test.py -o addopts=
+            cosmos_framework/model/generator/mot/context_parallel_test.py -o addopts=
 
       # Clear everything the suite writes into the working tree (all gitignored
       # scratch): pytest tmp dirs (DCP checkpoint, logs), the script-test

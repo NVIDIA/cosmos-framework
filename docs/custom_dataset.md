@@ -24,7 +24,7 @@ DataDistributor   →   RawItemProcessor   →   SampleBatcher   →   BatchColl
   together in a batch (fixed size, token-budget packing, …).
 - **`BatchCollator`** turns a chosen group of samples into one batch dict.
 
-Everything lives in `cosmos_framework.data.vfm.dataflow`. The loader is a
+Everything lives in `cosmos_framework.data.generator.dataflow`. The loader is a
 `torch.utils.data.DataLoader` subclass, so it drops into existing training loops.
 
 ---
@@ -49,7 +49,7 @@ Everything lives in `cosmos_framework.data.vfm.dataflow`. The loader is a
 "I have a map-style dataset and just want normal, shuffled, resumable batches":
 
 ```python
-from cosmos_framework.data.vfm.dataflow import (
+from cosmos_framework.data.generator.dataflow import (
     CosmosDataLoader, MapDistributor, IdentityProcessor,
 )
 
@@ -72,7 +72,7 @@ fancier. (Passing both `batch_size=` and `batcher=` is an error.)
 
 ## 2. The four roles
 
-Each role is a tiny ABC in `cosmos_framework.data.vfm.dataflow.base`. Implement
+Each role is a tiny ABC in `cosmos_framework.data.generator.dataflow.base`. Implement
 the one method (plus, for distributors, optional resume hooks).
 
 ```python
@@ -196,7 +196,7 @@ processor/batcher/collator (homogeneous join).
 ### Interleave heterogeneous pipelines (different processors/collators)
 
 ```python
-from cosmos_framework.data.vfm.dataflow import JointCosmosDataLoader
+from cosmos_framework.data.generator.dataflow import JointCosmosDataLoader
 
 joint = JointCosmosDataLoader(
     dataloaders={
@@ -327,7 +327,7 @@ A local image-caption folder, fully custom processor, normal batching:
 
 ```python
 import torch
-from cosmos_framework.data.vfm.dataflow import (
+from cosmos_framework.data.generator.dataflow import (
     CosmosDataLoader, MapDistributor, RawItemProcessor, DefaultBatchCollator, SimpleBatcher,
 )
 
@@ -368,7 +368,7 @@ collator that pads/stacks accordingly — nothing else changes.
 
 ### Reasoner (VLM) — HuggingFace image-text dataset, streaming
 
-**File**: `cosmos_framework/configs/base/vlm/experiment/llava_ov_vlm.py`
+**File**: `cosmos_framework/configs/base/reasoner/experiment/llava_ov_vlm.py`
 (`pre_exp012_llava_ov`)
 
 ```
@@ -385,7 +385,7 @@ wraps it in a `MapDistributor`, so checkpoint/resume works (see §5).
 
 ### Reasoner (VLM) — local video dialog dataset
 
-**File**: `cosmos_framework/configs/base/vlm/experiment/videophy2_sft_nano.py`
+**File**: `cosmos_framework/configs/base/reasoner/experiment/videophy2_sft_nano.py`
 (`videophy2_sft_nano`)
 
 ```
@@ -447,8 +447,8 @@ collator:    VFMListCollator                                   # media kept as p
 
 ## Reference: where things live
 
-- ABCs + built-ins: `cosmos_framework/data/vfm/dataflow/` (`base.py`,
+- ABCs + built-ins: `cosmos_framework/data/generator/dataflow/` (`base.py`,
   `distributors.py`, `batchers.py`, `collators.py`, `processors.py`, `loader.py`).
-- Public symbols are re-exported from `cosmos_framework.data.vfm.dataflow`.
+- Public symbols are re-exported from `cosmos_framework.data.generator.dataflow`.
 - Live recipes using the loader: `pre_exp012_llava_ov`,
   `pre_exp012_llava_ov_mapstyle_dataloader`, `videophy2_sft_nano`, and `vision_sft_nano_mapstyle_dataloader`.

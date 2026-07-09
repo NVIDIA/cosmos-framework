@@ -71,7 +71,7 @@ def _materialize_avae_ckpt(local_dir: str) -> None:
     The new HF layout ships ``sound_tokenizer/{config.json,
     diffusion_pytorch_model.safetensors}`` in the diffusers OobleckDecoder layout
     (``decoder.block.*`` keys, Snake1d ``alpha``/``beta`` shaped ``[1, C, 1]``). The
-    native loader in ``cosmos_framework/model/vfm/tokenizers/audio/avae.py`` builds an
+    native loader in ``cosmos_framework/model/generator/tokenizers/audio/avae.py`` builds an
     ``nn.Sequential`` decoder keyed ``decoder.layers.*`` with Snake params shaped
     ``[C]`` and loads via ``load_state_dict(strict=False)`` — so without remapping
     the keys, none match and every decoder weight is silently left at init (noise).
@@ -131,7 +131,7 @@ def register_checkpoints():
         for s3_prefix in [
             # 'cosmos_framework.configs.base.defaults.vlm.download_tokenizer_files'
             "cosmos3/pretrained/huggingface",
-            # 'cosmos_framework.utils.vfm.vlm.pretrained_models_downloader.maybe_download_hf_model_from_s3'
+            # 'cosmos_framework.utils.generator.vlm.pretrained_models_downloader.maybe_download_hf_model_from_s3'
             "cosmos_reason2/hf_models",
         ]:
             register_checkpoint(
