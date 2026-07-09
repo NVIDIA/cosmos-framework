@@ -374,15 +374,16 @@ class Cosmos3OmniConfig(transformers.PretrainedConfig):
     model_type = "cosmos3_omni"
 
     def __init__(self, model: dict | None = None, **kwargs):
-        self._use_public_model_config = False
-        if model is not None and model_config_uses_public_aliases(model):
+        kwargs.pop("_use_public_model_config", None)
+        use_public_model_config = model is not None and model_config_uses_public_aliases(model)
+        if use_public_model_config:
             model = restore_model_config_from_public_model_config(model)
-            self._use_public_model_config = True
         if model is not None:
             model = undo_config_dict_replacements(model)
         self.model = model or {}
 
         super().__init__(**kwargs)
+        self._use_public_model_config = use_public_model_config
 
         self.auto_map = {
             "AutoConfig": "cosmos3.model.Cosmos3OmniConfig",

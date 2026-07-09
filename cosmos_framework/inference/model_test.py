@@ -15,6 +15,7 @@ from cosmos_framework.configs.base.defaults.parallelism import ParallelismConfig
 from cosmos_framework.inference.args import _CHECKPOINTS, DEFAULT_CHECKPOINT
 from cosmos_framework.inference.common.args import CheckpointType
 from cosmos_framework.inference.common.config import structure_config
+from cosmos_framework.inference.common.public_model_config import build_public_model_config
 from cosmos_framework.inference.model import (
     Cosmos3OmniConfig,
     _diffusers_to_net_key,
@@ -24,6 +25,30 @@ from cosmos_framework.inference.model import (
     _is_diffusers_checkpoint,
     _normalize_diffusers_target_key,
 )
+
+
+def test_public_config_serialization_ignores_internal_flag_override():
+    model_config = {
+        "_target_": "cosmos_framework.model.generator.omni_mot_model.OmniMoTModel",
+        "config": {
+            "_type": "cosmos_framework.configs.base.defaults.model_config.OmniMoTModelConfig",
+            "compile": {
+                "_target_": "cosmos_framework.configs.base.defaults.compile.CompileConfig",
+                "enabled": False,
+            },
+        },
+    }
+    public_config = build_public_model_config(model_config)
+
+    config = Cosmos3OmniConfig(model=public_config, _use_public_model_config=False)
+
+    assert config.model == model_config
+    assert config._use_public_model_config
+    assert config.to_dict()["model"] == public_config
+    assert "_use_public_model_config" not in config.to_dict()
+
+    internal_config = Cosmos3OmniConfig(model=model_config, _use_public_model_config=True)
+    assert not internal_config._use_public_model_config
 
 
 def test_config():
