@@ -83,6 +83,17 @@ class JobConfig(BaseModel):
             "'disabled' (no wandb at all)."
         ),
     )
+    upload_reproducible_setup: bool = Field(
+        default=False,
+        description=(
+            "Upload the reproducible-setup bundle and wandb save_s3 artifacts "
+            "to S3. Defaults False (OSS: no S3 access). Set True only when S3 "
+            "upload is configured. Remapped out of [job] to the top-level "
+            "config.upload_reproducible_setup, overriding the base config value "
+            "(the VLM base defaults it True). Always emitted by "
+            "load_experiment_from_toml, so omitting it forces False."
+        ),
+    )
 
 
 # ---------------------------------------------------------------- model
@@ -721,7 +732,14 @@ def load_experiment_from_toml(
 
     # Validate structure against the pydantic schema (raises ValidationError on
     # unknown keys because of ``extra="forbid"``).
-    SFTExperimentConfig.model_validate(raw)
+    cfg = SFTExperimentConfig.model_validate(raw)
+
+    # ``build_hydra_overrides`` walks the *raw* dict, so an omitted field emits
+    # no override and the base config's value wins. ``upload_reproducible_setup``
+    # must instead default to False (OSS: no S3), overriding the VLM base's True.
+    # Inject the pydantic-resolved value back into raw so the override is always
+    # emitted — the default lives in exactly one place (JobConfig.Field).
+    raw.setdefault("job", {})["upload_reproducible_setup"] = cfg.job.upload_reproducible_setup
 
     task = raw.get("job", {}).get("task", "vfm")
     try:

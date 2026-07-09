@@ -12,15 +12,17 @@ from cosmos_framework.utils import log
 from cosmos_framework.utils.callback import Callback
 
 
-@torch.compile
 def _fused_nan_to_num(grads: list[torch.Tensor]) -> None:
     """Replace NaN/Inf entries with 0.0 in every floating-point grad in-place.
 
-    The Python-level loop over ``grads`` is wrapped in ``@torch.compile`` so
-    Inductor can fuse the per-tensor ``nan_to_num`` ops into a single CUDA
-    kernel.  This is NOT the ``torch._foreach_*`` API; it is fusion-via-compile
-    and depends on the grad list structure (length, dtypes, shapes) staying
-    stable across iterations so Dynamo can reuse its specialized graph.
+    Runs eager, NOT ``@torch.compile``. Compiling this generates a GPU-only Triton
+    ``nan_to_num`` kernel, which crashes whenever any grad in the list is a CPU tensor (some
+    parameters carry a small CPU grad): the static CUDA launcher launches it with ``stream=0``
+    -> ``CUDA driver error: invalid argument``, and the standard launcher raises ``Pointer
+    argument cannot be accessed from Triton (cpu tensor?)``. Both were observed at 720 under
+    replay-TF + torch.compile (grad-clip runs at the optimizer step, after the large compiled
+    graphs are cached). Eager ``torch.nan_to_num`` handles CPU and CUDA grads alike; the fusion win
+    from compiling a handful of per-tensor ops once per step is negligible next to that fragility.
     """
     grads = [g for g in grads if torch.is_floating_point(g)]
     for g in grads:

@@ -1,316 +1,306 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: OpenMDW-1.1
 
-"""Minimal DROID LeRobot dataset for Cosmos Action v1.2 defaults."""
-
-from __future__ import annotations
-
 import json
+import os
 import random
-from pathlib import Path
-from typing import Any, Literal
+from typing import Any, cast
 
 import numpy as np
-import pyarrow.parquet as pq
 import torch
 import torch.nn.functional as F
-import torchvision.transforms as T
+import torchvision.transforms.v2 as T
+from scipy.spatial.transform import Rotation as R
 
-from cosmos_framework.data.generator.action.action_spec import ActionSpec, Gripper, Joint, Pos, Rot, build_action_spec
-from cosmos_framework.data.generator.action.datasets.base_dataset import ActionBaseDataset
+from cosmos_framework.data.generator.action.datasets.cosmos3_action_lerobot import (
+    ActionNormalization,
+    ActionSpec,
+    BaseActionLeRobotDataset,
+    Gripper,
+    Joint,
+    Pos,
+    Rot,
+    build_action_spec,
+    build_episode_spans,
+    split_episode_ids,
+)
+from cosmos_framework.data.generator.action.datasets.droid_lerobot_dataset_config import (
+    _GRIPPER_STATE_FEATURE,
+    _JOINT_ACTION_FEATURE,
+    _JOINT_STATE_FEATURE,
+    ACTION_FEATURES,
+    HAS_MULTI_LANGUAGE_ANNOTATIONS,
+    IMAGE_FEATURES,
+    IS_FLAT_ACTION,
+    IS_GRIPPER_ACTION_FLIPPED,
+    LEROBOT_ROOTS,
+    STATE_FEATURES,
+)
 from cosmos_framework.data.generator.action.pose_utils import (
+    PoseConvention,
     build_abs_pose_from_components,
+    convert_rotation,
     pose_abs_to_rel,
 )
+from cosmos_framework.data.generator.action.viewpoint_utils import Viewpoint
+from cosmos_framework.utils import log
 
-PoseConvention = Literal["backward_framewise"]
-Viewpoint = Literal["concat_view"]
+_FILTER_DICT_PATH = "/scratch/fsw/portfolios/cosmos/projects/cosmos_base_training/users/haolia/workspace/droid_oss_inputs/keep_ranges_1_0_1.json"
 
-_IMAGE_FEATURES = {
-    "wrist": "observation.image.wrist_image_left",
-    "left": "observation.image.exterior_image_1_left",
-    "right": "observation.image.exterior_image_2_left",
-}
-_STATE_FEATURE = "observation.state.cartesian_position"
-# joint_pos (8D = 7 arm joints + gripper) features, matching the internal
-# DROIDLeRobotDataset(action_space="joint_pos", use_state=...). These are
-# absolute joint commands/states (no normalization is applied for joint_pos,
-# matching the internal canonical run which leaves action_normalization=None).
-_JOINT_ACTION_FEATURE = "action.joint_position"          # [7] commanded joints
-_ACTION_GRIPPER_FEATURE = "action.gripper_position"      # [1] commanded gripper
-_JOINT_STATE_FEATURE = "observation.state.joint_positions"   # [7] observed joints
-_GRIPPER_STATE_FEATURE = "observation.state.gripper_position"  # [1] observed gripper
-# Columns whose parquet dtype is a list<float> (need to_pylist -> stacked array).
-_LIST_COLUMNS = {_STATE_FEATURE, _JOINT_ACTION_FEATURE, _JOINT_STATE_FEATURE}
-_ACTION_SPACES = ("ee_pose", "joint_pos")
-
-# 90-degree clockwise rotation about the Z axis in the local frame. This matches
-# the production DROID wrapper conversion from Franka panda_link8 to OpenCV.
+# 90-degree clockwise rotation about the Z axis (in local frame), converting
+# DROID Franka panda_link8 orientation to the OpenCV camera convention.
 _DROID_TO_OPENCV: np.ndarray = np.array(
-    [[0.0, -1.0, 0.0], [1.0, 0.0, 0.0], [0.0, 0.0, 1.0]],
+    [
+        [0.0, -1.0, 0.0],
+        [1.0, 0.0, 0.0],
+        [0.0, 0.0, 1.0],
+    ],
     dtype=np.float32,
 )
 
-_NORMALIZER_PATH = Path(__file__).parent.parent / "normalizer_stats/droid_lerobot_stats.json"
 
-
-class DROIDLeRobotDataset(ActionBaseDataset):
-    """DROID Action dataset.
-
-    Two action layouts:
-      * ``action_space="ee_pose"`` (default): 10D ``[pos_delta(3), rot6d_delta(6),
-        gripper(1)]``, quantile-normalized (the v1.2 midtrain default).
-      * ``action_space="joint_pos"``: 8D ``[joint(7), gripper(1)]`` absolute joint
-        commands, NOT normalized, with ``use_state=True`` prepending the initial
-        observed joint+gripper state → ``(chunk+1, 8)`` — matching the internal
-        ``Cosmos3-Nano-Policy-DROID`` post-training run.
-    Filter dictionaries, temporal-segment validation, and image augmentation from
-    the production wrapper are intentionally omitted.
-    """
+class DROIDLeRobotDataset(BaseActionLeRobotDataset):
+    """ """
 
     def __init__(
         self,
-        root: str,
+        root: str = "/lustre/fsw/portfolios/cosmos/projects/cosmos_base_training/cosmos3_action_datasets/droid_plus_lerobot_640x360_20260412",
         fps: float = 15.0,
         chunk_length: int = 16,
-        mode: str = "joint",
+        split_seed: int = 42,
+        split_val_ratio: float = 0.03,
+        split: str = "train",
+        mode: str = "policy",
         pose_convention: PoseConvention = "backward_framewise",
-        tolerance_s: float = 2e-4,
+        action_normalization: ActionNormalization | None = None,
+        tolerance_s=2e-4,
         viewpoint: Viewpoint = "concat_view",
-        action_space: str = "ee_pose",
+        use_success_only: bool = False,
+        video_mode: str | None = None,  # TODO (ychao): remove
+        action_space: str = "midtrain",  # TODO (ychao): remove
         use_state: bool = False,
-        action_normalization: str | None = "quantile",
-        use_image_augmentation: bool = False,
         use_filter_dict: bool = False,
         filter_dict_path: str | None = None,
+        enable_fast_init: bool = False,
+        max_num_history_actions: int = 0,
+        use_image_augmentation: bool = False,
     ) -> None:
-        if viewpoint != "concat_view":
-            raise NotImplementedError("This minimal DROID dataset only supports concat_view.")
-        if action_space not in _ACTION_SPACES:
-            raise NotImplementedError(f"action_space must be one of {_ACTION_SPACES}, got {action_space!r}.")
-        if use_state and action_space != "joint_pos":
-            raise NotImplementedError("use_state is only supported with action_space='joint_pos'.")
-        if use_filter_dict and not filter_dict_path:
-            raise ValueError("use_filter_dict=True requires filter_dict_path")
-
-        # joint_pos uses raw joint values — disable normalization at the base level.
+        """ """
         super().__init__(
-            root=root,
-            domain_name="droid_lerobot",
             fps=fps,
             chunk_length=chunk_length,
+            split_seed=split_seed,
+            split_val_ratio=split_val_ratio,
+            split=split,
             mode=mode,
-            pose_convention=pose_convention,
-            tolerance_s=tolerance_s,
+            embodiment_type="droid_lerobot",
             viewpoint=viewpoint,
-            action_normalization=None if action_space == "joint_pos" else action_normalization,
+            pose_convention=pose_convention,
+            rotation_format="rot6d",
+            action_normalization=action_normalization,
+            tolerance_s=tolerance_s,
+            enable_fast_init=enable_fast_init,
         )
-
+        self._use_success_only = use_success_only
+        self._video_mode = video_mode
         self._action_space = action_space
-        self._use_state = bool(use_state)
-        # Per-sample image augmentation (random crop+rescale + color jitter), applied
-        # to all views with shared params (temporally + cross-view consistent). Lazy-built.
-        self._use_image_augmentation = bool(use_image_augmentation)
-        self._image_augmentor: T.Compose | None = None
-        # Keep-ranges window filter (internal use_filter_dict): restrict training windows
-        # to curated active segments, dropping idle/non-task frames. Off by default; the
-        # keep-ranges JSON is supplied via filter_dict_path (an internal data artifact).
-        self._use_filter_dict = bool(use_filter_dict)
-        self._filter_dict_path = filter_dict_path
+        self._use_state = use_state
+        self._use_filter_dict = use_filter_dict
+        self._filter_dict_path = filter_dict_path or _FILTER_DICT_PATH
+        self._max_num_history_actions = max_num_history_actions
+        self._use_image_augmentation = use_image_augmentation
+        if max_num_history_actions > 0 and action_space not in ("midtrain", "joint_pos"):
+            raise ValueError(
+                f"max_num_history_actions is only supported with action_space='midtrain' or 'joint_pos', got {action_space!r}"
+            )
 
-        # Compact, lazy frame index. Materializing every frame as a Python dict
-        # (``sorted(... pq.read_table(path).to_pylist() ...)``) does not scale:
-        # the full DROID success shard is ~18M frames, which is tens of GB of
-        # dicts plus an 18M-element Python sort at construction, and each
-        # DataLoader worker faults in its own copy. Instead we read only the
-        # columns the sample builder needs into contiguous numpy arrays
-        # (~1 GB total) -- read-only after init, so worker forks share them
-        # copy-on-write.
-        if action_space == "joint_pos":
-            feature_cols = [_JOINT_ACTION_FEATURE, _ACTION_GRIPPER_FEATURE, _JOINT_STATE_FEATURE, _GRIPPER_STATE_FEATURE]
+        self._is_val_temp_seg = split == "val_temp_seg"
+        self._to_opencv = _DROID_TO_OPENCV
+
+        version = os.path.basename(root)
+        try:
+            lerobot_roots = LEROBOT_ROOTS[version]
+            self._image_features = IMAGE_FEATURES[version]
+            self._state_features = STATE_FEATURES[version]
+            self._action_features = ACTION_FEATURES[version]
+            self._is_flat_action = IS_FLAT_ACTION[version]
+            self._has_multi_language_annotations = HAS_MULTI_LANGUAGE_ANNOTATIONS[version]
+            self._is_gripper_action_flipped = IS_GRIPPER_ACTION_FLIPPED[version]
+        except KeyError as e:
+            raise ValueError(f"Unknown version: {version!r}. Supported: {list(LEROBOT_ROOTS.keys())}") from e
+
+        if self._use_success_only and lerobot_roots:
+            lerobot_roots = [x for x in lerobot_roots if x.split("/", 1)[0] == "success"]
+
+        self._all_shard_roots = [os.path.join(root, x) for x in lerobot_roots] if lerobot_roots else [root]
+
+        observation_ts = [i * self._dt for i in range(0, self._chunk_length + 1)]
+        action_ts = [i * self._dt for i in range(0, self._chunk_length)]
+        if self._max_num_history_actions > 0 and self._action_space in ("midtrain", "joint_pos"):
+            observation_ts_ext = [i * self._dt for i in range(-self._max_num_history_actions, self._chunk_length + 1)]
+            action_ts_ext = [i * self._dt for i in range(-self._max_num_history_actions, self._chunk_length)]
         else:
-            feature_cols = [_STATE_FEATURE, _ACTION_GRIPPER_FEATURE]
-        columns = ["index", "episode_index", "task_index", "timestamp", *feature_cols]
-        index_parts, episode_parts, task_parts, ts_parts = [], [], [], []
-        feature_parts: dict[str, list] = {c: [] for c in feature_cols}
-        for path in sorted((self._root / "data").glob("chunk-*/file-*.parquet")):
-            table = pq.read_table(path, columns=columns)
-            index_parts.append(table["index"].to_numpy())
-            episode_parts.append(table["episode_index"].to_numpy())
-            task_parts.append(table["task_index"].to_numpy())
-            ts_parts.append(table["timestamp"].to_numpy())
-            for c in feature_cols:
-                if c in _LIST_COLUMNS:
-                    feature_parts[c].append(np.asarray(table[c].to_pylist(), dtype=np.float32))
-                else:
-                    feature_parts[c].append(np.asarray(table[c].to_numpy(), dtype=np.float32))
-        order = np.argsort(np.concatenate(index_parts).astype(np.int64), kind="stable")
-        self._row_episode = np.concatenate(episode_parts).astype(np.int64)[order]
-        self._row_task = np.concatenate(task_parts).astype(np.int64)[order]
-        self._row_timestamp = np.concatenate(ts_parts).astype(np.float64)[order]
-        # Per-feature arrays keyed by parquet column name (read-only after init).
-        self._feat = {
-            c: np.concatenate(feature_parts[c], axis=0).astype(np.float32)[order] for c in feature_cols
+            observation_ts_ext = observation_ts
+            action_ts_ext = action_ts
+        self._delta_timestamps: dict[str, list[float]] = {
+            self._state_features: observation_ts_ext,
+            self._action_features: action_ts_ext,
         }
+        if self._viewpoint in ("wrist_view", "concat_view"):
+            self._delta_timestamps[self._image_features["wrist"]] = observation_ts
+        if self._viewpoint in ("third_person_view", "concat_view"):
+            self._delta_timestamps[self._image_features["left"]] = observation_ts
+            self._delta_timestamps[self._image_features["right"]] = observation_ts
+        if self._action_space == "joint_pos":
+            self._delta_timestamps[_JOINT_ACTION_FEATURE] = action_ts
+            if self._use_state or self._max_num_history_actions > 0:
+                self._delta_timestamps[_JOINT_STATE_FEATURE] = observation_ts_ext
+                self._delta_timestamps[_GRIPPER_STATE_FEATURE] = observation_ts_ext
+        if self._use_state and self._action_space != "joint_pos":
+            self._delta_timestamps[_GRIPPER_STATE_FEATURE] = observation_ts
 
-        # Group frames into episodes and keep only within-episode chunk windows.
-        # The global frame index is ordered by episode in LeRobot v3, so episodes
-        # are contiguous blocks once sorted by ``index``. The previous code sliced
-        # the flat row list (``rows[idx : idx + chunk + 1]``) with no boundary
-        # guard, so ~one chunk of samples per episode silently mixed two episodes;
-        # restricting to in-episode windows yields ``total - n_episodes * chunk``
-        # valid samples (matching the production dataset).
-        assert np.all(np.diff(self._row_episode) >= 0), "episode_index is not contiguous after sorting by frame index"
-        ep_vals, ep_starts, ep_counts = np.unique(self._row_episode, return_index=True, return_counts=True)
-        self._ep_vals = ep_vals.astype(np.int64)
-        self._ep_starts = ep_starts.astype(np.int64)
-        self._valid_cum = np.cumsum(np.maximum(0, ep_counts - self._chunk_length)).astype(np.int64)
-
-        # Keep-ranges filter: build a per-segment index over only the kept windows.
-        # Mirrors internal _append_index_records (use_filter_dict): the filter dict maps a
-        # gs:// trajectory key -> list of [start, end] frame ranges; keep windows whose start
-        # is in [max(start,0), min(end-chunk, valid)). Episodes absent from the dict are dropped.
         if self._use_filter_dict:
             with open(self._filter_dict_path) as f:
-                filter_dict = json.load(f)
-            seg_ep_pos, seg_win_start, seg_len = [], [], []
-            for pos in range(len(self._ep_vals)):
-                valid = int(max(0, ep_counts[pos] - self._chunk_length))
-                if valid <= 0:
-                    continue
-                ep_id = str(self._episodes[int(self._ep_vals[pos])]["episode_id"])
-                key = (
-                    f"gs://xembodiment_data/r2d2/r2d2-data-full/{ep_id}/recordings/"
-                    f"MP4--gs://xembodiment_data/r2d2/r2d2-data-full/{ep_id}/trajectory.h5"
-                )
-                ranges = filter_dict.get(key)
-                if ranges is None:
-                    continue
-                for s, e in ranges:
-                    ws = max(int(s), 0)
-                    we = min(int(e) - self._chunk_length, valid)
-                    if we - ws > 0:
-                        seg_ep_pos.append(pos)
-                        seg_win_start.append(ws)
-                        seg_len.append(we - ws)
-            self._seg_ep_pos = np.asarray(seg_ep_pos, dtype=np.int64)
-            self._seg_win_start = np.asarray(seg_win_start, dtype=np.int64)
-            self._seg_cum = np.cumsum(seg_len).astype(np.int64) if seg_len else np.zeros(0, dtype=np.int64)
+                self._filter_dict = json.load(f)
 
-    @property
-    def action_dim(self) -> int:
-        return 8 if self._action_space == "joint_pos" else 10
+        self._image_augmentor: T.Compose | None = None
 
-    def _action_spec(self) -> ActionSpec:
-        if self._action_space == "joint_pos":
-            return build_action_spec(Joint(n=7, label="joint"), Gripper())
-        return build_action_spec(Pos(), Rot("rot6d"), Gripper())
+        # Eager source registration. i4 defers this to its own dataloader's
+        # ActionUnifiedIterableDataset.assign_worker(); cosmos-framework instead
+        # drives the dataset through ActionIterableShuffleDataset (block-striding,
+        # which needs the full flat index present in every worker), so we build
+        # the index at construction time here. Metadata-only (LeRobotDatasetMetadata:
+        # info.json + episodes.parquet + tasks.parquet); the heavy per-shard
+        # LeRobotDataset video readers stay lazy behind the LRU in _get_dataset.
+        self._register_sources()
 
-    @classmethod
-    def _stats_path(cls) -> Path:
-        return _NORMALIZER_PATH
+    def _append_index_records(self, *, meta, ds_idx: int, dataset_label: str | None = None) -> None:
+        """ """
+        if not self._use_filter_dict:
+            super()._append_index_records(meta=meta, ds_idx=ds_idx, dataset_label=dataset_label)
+            return
 
-    def _window_rows(self, start: int, stop: int, episode_index: int) -> list[dict[str, Any]]:
-        """Reconstruct the per-frame dicts the sample builder consumes for the
-        half-open frame window ``[start, stop)`` from the compact column arrays.
-        ``start``/``stop`` are guaranteed to lie within a single episode."""
-        return [
-            {
-                "episode_index": episode_index,
-                "task_index": int(self._row_task[j]),
-                "timestamp": float(self._row_timestamp[j]),
-                **{c: self._feat[c][j] for c in self._feat},
-            }
-            for j in range(start, stop)
-        ]
-
-    def __getitem__(self, idx: int) -> dict[str, Any]:
-        mode = self._choose_mode()
-        idx = int(idx)
-        # Map the flat sample index to a within-episode frame window.
-        if self._use_filter_dict:
-            seg = int(np.searchsorted(self._seg_cum, idx, side="right"))
-            base = int(self._seg_cum[seg - 1]) if seg > 0 else 0
-            ep = int(self._seg_ep_pos[seg])
-            start = int(self._ep_starts[ep]) + int(self._seg_win_start[seg]) + (idx - base)
-        else:
-            ep = int(np.searchsorted(self._valid_cum, idx, side="right"))
-            prev = int(self._valid_cum[ep - 1]) if ep > 0 else 0
-            start = int(self._ep_starts[ep]) + (idx - prev)
-        episode_index = int(self._ep_vals[ep])
-        episode = self._episodes[episode_index]
-
-        observation_rows = self._window_rows(start, start + self._chunk_length + 1, episode_index)
-
-        video = self._load_concat_video(episode, observation_rows)
-        if self._action_space == "joint_pos":
-            raw_action = self._build_joint_action(observation_rows)
-            extras: dict[str, Any] = {}
-        else:
-            action_rows = observation_rows[: self._chunk_length]
-            raw_action, initial_pose = self._build_raw_action(observation_rows, action_rows)
-            extras = {"initial_pose": initial_pose}
-        task = self._tasks[int(observation_rows[0]["task_index"])]
-        ai_caption = random.choice(task.split(" | "))
-
-        return self._build_result(
-            mode=mode,
-            video=video,
-            action=raw_action,
-            ai_caption=ai_caption,
-            additional_view_description=(
-                "The top row is from the wrist-mounted camera. "
-                "The bottom row contains two horizontally concatenated third-person perspective views of the scene from opposite sides, with the robot visible."
-            ),
-            **extras,
+        episode_ids = split_episode_ids(
+            total_episodes=meta.total_episodes,
+            seed=self._split_seed,
+            val_ratio=self._split_val_ratio,
+            split=self._split,
+        )
+        episode_spans, _, sample_count = build_episode_spans(
+            meta.episodes, episode_ids, self._chunk_length, sample_stride=self._sample_stride
         )
 
-    def _build_joint_action(self, observation_rows: list[dict[str, Any]]) -> torch.Tensor:
-        """8D joint-position action ``[joint(7), gripper(1)]`` over the chunk, matching
-        the internal ``action_space='joint_pos'``. The window is ``chunk+1`` frames:
-        ``row[0]`` is the initial observed state (prepended when ``use_state``), and
-        ``rows[1:]`` are the ``chunk`` commanded actions. Gripper is flipped (1 - g).
-        No normalization is applied (internal canonical run uses raw joint values)."""
-        action_rows = observation_rows[1:]
-        joints = np.asarray([r[_JOINT_ACTION_FEATURE] for r in action_rows], dtype=np.float32)  # [chunk, 7]
-        gripper = np.asarray([r[_ACTION_GRIPPER_FEATURE] for r in action_rows], dtype=np.float32).reshape(-1, 1)
-        gripper = 1.0 - gripper
-        action = np.concatenate([joints, gripper], axis=-1)  # [chunk, 8]
-        if self._use_state:
-            init = observation_rows[0]
-            init_joint = np.asarray(init[_JOINT_STATE_FEATURE], dtype=np.float32)  # [7]
-            init_gripper = np.asarray([1.0 - float(init[_GRIPPER_STATE_FEATURE])], dtype=np.float32)  # [1]
-            initial_state = np.concatenate([init_joint, init_gripper])[None, :]  # [1, 8]
-            action = np.concatenate([initial_state, action], axis=0)  # [chunk + 1, 8]
-        return torch.from_numpy(action).float()
+        class_name = self.__class__.__name__
+        label = f" [{dataset_label}]"
 
-    def _load_concat_video(
-        self,
-        episode: dict[str, Any],
-        observation_rows: list[dict[str, Any]],
-    ) -> torch.Tensor:
-        # lerobot is a heavy, optional ("train" extra) dependency; import lazily.
-        from lerobot.datasets.video_utils import decode_video_frames
+        log.info(f"{class_name}{label}: split={self._split}, num episodes={len(episode_ids)}")
 
-        timestamps = [float(row["timestamp"]) for row in observation_rows]
-        frames_by_view = {
-            name: decode_video_frames(
-                self._video_path(episode, video_key),
-                [float(episode.get(f"videos/{video_key}/from_timestamp", 0.0)) + ts for ts in timestamps],
-                self._tolerance_s,
+        filtered_count = 0
+        for episode_id, sample_start, valid_len in episode_spans:
+            ep_id_str = meta.episodes[episode_id]["episode_id"]
+            episode_key = f"gs://xembodiment_data/r2d2/r2d2-data-full/{ep_id_str}/recordings/MP4--gs://xembodiment_data/r2d2/r2d2-data-full/{ep_id_str}/trajectory.h5"
+            ranges = self._filter_dict.get(episode_key)
+            if ranges is None:
+                continue
+            for s, e in ranges:
+                sub_start = max(s, 0)
+                sub_end = min(e - self._chunk_length, valid_len)
+                sub_valid_len = max(0, sub_end - sub_start)
+                if sub_valid_len > 0:
+                    self._episode_records.append((ds_idx, sample_start + sub_start, sub_valid_len, episode_id))
+                    self._num_valid_indices += sub_valid_len
+                    self._episode_cum_ends.append(self._num_valid_indices)
+                    filtered_count += sub_valid_len
+
+        if sample_count > 0:
+            log.info(
+                f"{class_name}{label}: kept {filtered_count} / {sample_count} ({100.0 * filtered_count / sample_count:.2f} %) samples"
             )
-            for name, video_key in _IMAGE_FEATURES.items()
-        }
 
-        wrist = frames_by_view["wrist"]
-        left = frames_by_view["left"]
-        right = frames_by_view["right"]
+    def _register_sources(self, indices: list[int] | None = None) -> None:
+        """ """
+        super()._register_sources(indices)
+        if self._is_val_temp_seg:
+            self._apply_temp_seg_filter()
+
+    def _apply_temp_seg_filter(self) -> None:
+        """Replace index records with one high-scoring segment per episode.
+
+        A segment is interesting if either:
+        - The gripper action changes significantly (open/close transition), or
+        - The gripper is closed and the end-effector position is moving.
+        Among qualifying segments the one with the highest score is kept.
+        """
+        ds = self._get_dataset(0)
+        chunk_size = self._chunk_length + 1
+        gripper_change_threshold = 0.5
+        ee_movement_threshold = 0.01
+
+        new_records: list[tuple[int, int, int, int]] = []
+        num_episodes = len(self._episode_records)
+
+        for ds_idx, sample_start, valid_len, episode_id in self._episode_records:
+            end = sample_start + valid_len + self._chunk_length
+            num_candidates = valid_len
+            if num_candidates <= 0:
+                continue
+
+            episode_data = ds.hf_dataset[sample_start:end]
+            actions = torch.tensor(np.array(episode_data[self._action_features]))  # [N,action_dim]
+            states = torch.tensor(np.array(episode_data[self._state_features]))  # [N,state_dim]
+
+            gripper_action = actions[:, 6] if self._is_flat_action else actions  # [N]
+            ee_pos = states[:, :3]  # [N,3]
+            ee_disp = (ee_pos[1:] - ee_pos[:-1]).norm(dim=-1)  # [N-1]
+
+            ee_disp_windows = ee_disp.unfold(0, self._chunk_length, 1)  # [num_candidates,chunk_length]
+            gripper_windows = gripper_action.unfold(0, chunk_size, 1)  # [num_candidates,chunk_size]
+
+            gripper_range = gripper_windows.max(dim=1).values - gripper_windows.min(dim=1).values  # [num_candidates]
+            total_ee_movement = ee_disp_windows.sum(dim=1)  # [num_candidates]
+            gripper_closed_ratio = (gripper_windows < 0.5).float().mean(dim=1)  # [num_candidates]
+
+            has_gripper_change = gripper_range > gripper_change_threshold
+            gripper_closed = gripper_closed_ratio > 0.5
+            has_ee_movement = total_ee_movement > ee_movement_threshold
+
+            scores = torch.zeros(num_candidates)  # [num_candidates]
+            scores[has_gripper_change] = 0.5 + gripper_range[has_gripper_change] + total_ee_movement[has_gripper_change]
+
+            closed_and_moving = gripper_closed & ~has_gripper_change & has_ee_movement
+            scores[closed_and_moving] = 1.0 + total_ee_movement[closed_and_moving]
+
+            if scores.max().item() > 0:
+                best_offset = int(scores.argmax().item())
+                new_records.append((ds_idx, sample_start + best_offset, 1, episode_id))
+
+        self._episode_records = new_records
+        self._num_valid_indices = len(new_records)
+        self._episode_cum_ends = list(range(1, len(new_records) + 1))
+
+        log.info(f"DROIDLeRobotDataset: val_temp_seg kept {len(new_records)} segments from {num_episodes} episodes")
+
+    def _compose_multi_view(self, sample: dict[str, Any]) -> torch.Tensor:
+        """Compose wrist, left, and right views into a single frame.
+
+        Layout (per frame):
+            ┌──────────────┐
+            │    wrist     │   (H, W)
+            ├───────┬──────┤
+            │ left  │ right│   (H/2, W/2) each
+            └───────┴──────┘
+
+        Left and right exterior cameras are downscaled by 2x so that they
+        tile to the same width as the wrist view. The output height is 3H/2.
+
+        Returns:
+            Composited raw video tensor in ``(T,C,H_out,W)`` float format.
+        """
+        wrist = sample[self._image_features["wrist"]]  # [T,C,H,W]
+        left = sample[self._image_features["left"]]  # [T,C,H_l,W_l]
+        right = sample[self._image_features["right"]]  # [T,C,H_r,W_r]
 
         if self._use_image_augmentation:
-            # Random crop+rescale (spatial jitter) + color jitter, BEFORE the concat.
-            # All three views are stacked so one sampled set of params is applied
-            # uniformly across every frame and view (temporally + cross-view consistent),
-            # while each __getitem__ resamples. Matches the internal DROID recipe.
             if self._image_augmentor is None:
                 _, _, h, w = wrist.shape
                 self._image_augmentor = T.Compose(
@@ -326,46 +316,182 @@ class DROIDLeRobotDataset(ActionBaseDataset):
 
         _, _, h_w, w_w = wrist.shape
         half_h, half_w = h_w // 2, w_w // 2
-        left = F.interpolate(left, size=(half_h, half_w), mode="bilinear", align_corners=False)
-        right = F.interpolate(right, size=(half_h, half_w), mode="bilinear", align_corners=False)
-        bottom = torch.cat([left, right], dim=-1)
-        return torch.cat([wrist, bottom], dim=-2)
 
-    def _build_raw_action(
-        self,
-        observation_rows: list[dict[str, Any]],
-        action_rows: list[dict[str, Any]],
-    ) -> tuple[torch.Tensor, torch.Tensor]:
-        state = np.asarray([row[_STATE_FEATURE] for row in observation_rows], dtype=np.float32)
-        poses_abs = build_abs_pose_from_components(state[:, 0:3], state[:, 3:6], "euler_xyz")
-        poses_abs[:, :3, :3] = poses_abs[:, :3, :3] @ _DROID_TO_OPENCV
+        left = F.interpolate(left, size=(half_h, half_w), mode="bilinear", align_corners=False)  # [T,C,H/2,W/2]
+        right = F.interpolate(right, size=(half_h, half_w), mode="bilinear", align_corners=False)  # [T,C,H/2,W/2]
+        bottom = torch.cat([left, right], dim=-1)  # [T,C,H/2,W]
 
-        initial_pose = torch.from_numpy(poses_abs[0].copy()).float()
-        poses_rel = pose_abs_to_rel(poses_abs, rotation_format="rot6d", pose_convention=self._pose_convention)
-        gripper = np.asarray(
-            [row[_ACTION_GRIPPER_FEATURE] for row in action_rows], dtype=np.float32
-        ).reshape(-1, 1)
-        gripper = 1.0 - gripper
-        action = np.concatenate([poses_rel[-self._chunk_length :], gripper[-self._chunk_length :]], axis=-1)
-        return torch.from_numpy(action).float(), initial_pose
+        composite = torch.cat([wrist, bottom], dim=-2)  # [T,C,3H/2,W]
+        return composite  # [T,C,3H/2,W]
 
-    def __len__(self) -> int:
-        if self._use_filter_dict:
-            return int(self._seg_cum[-1]) if self._seg_cum.size else 0
-        return int(self._valid_cum[-1]) if self._valid_cum.size else 0
+    def _build_action_spec(self) -> ActionSpec:
+        """DROID: 10D ``[Pos, Rot6d, Gripper]`` for ``ee_pose``,
+        8D ``[Joint(7), Gripper]`` for ``joint_pos``.
+        """
+        if self._action_space == "joint_pos":
+            return build_action_spec(Joint(n=7, label="joint"), Gripper())
+        return build_action_spec(Pos(), Rot("rot6d"), Gripper())
 
-    def get_shuffle_blocks(self) -> list[tuple[int, int]]:
-        """Per-episode (or per kept-segment, when ``use_filter_dict``) flat-index blocks
-        ``(start, length)``. ``ActionIterableShuffleDataset`` shuffles the ORDER of these
-        blocks and shards them disjointly across ranks, while keeping windows *within* a
-        block sequential -> decorrelates batches across ranks without random-access I/O
-        (preserves locality + copy-on-write memory sharing across workers)."""
-        cum = self._seg_cum if self._use_filter_dict else self._valid_cum
-        blocks: list[tuple[int, int]] = []
-        prev = 0
-        for c in np.asarray(cum).tolist():
-            c = int(c)
-            if c > prev:
-                blocks.append((prev, c - prev))
-            prev = c
-        return blocks
+    def __getitem__(self, idx: int) -> dict[str, Any]:
+        """ """
+        mode, _, _, sample = self._fetch_sample(idx)
+
+        if self._has_multi_language_annotations:
+            tasks = sample["task"].split(" | ")
+            ai_caption = random.choice(tasks)
+        else:
+            ai_caption = sample["task"]
+
+        if self._skip_video_loading:
+            video = None
+        elif self._video_mode is None:
+            if self._viewpoint == "concat_view":
+                video = self._compose_multi_view(sample)
+            else:
+                video = sample[self._image_features["wrist"]]  # [T,C,H,W]
+        else:
+            if self._video_mode == "wrist":
+                video = sample[self._image_features["wrist"]]
+            if self._video_mode in ("rand_exterior", "wrist_rand_exterior"):
+                exterior_key = random.choice([self._image_features["left"], self._image_features["right"]])
+                if self._video_mode == "rand_exterior":
+                    video = sample[exterior_key]
+                else:
+                    video = torch.cat([sample[self._image_features["wrist"]], sample[exterior_key]], dim=2)
+            if self._video_mode in ("wrist_left_exterior", "wrist_both_exterior"):
+                wrist = sample[self._image_features["wrist"]]
+                half_h, half_w = wrist.shape[2] // 2, wrist.shape[3] // 2
+                left = F.interpolate(
+                    sample[self._image_features["left"]], size=(half_h, half_w), mode="bilinear", align_corners=False
+                )
+                if self._video_mode == "wrist_left_exterior":
+                    right = torch.zeros_like(left)
+                if self._video_mode == "wrist_both_exterior":
+                    right = F.interpolate(
+                        sample[self._image_features["right"]],
+                        size=(half_h, half_w),
+                        mode="bilinear",
+                        align_corners=False,
+                    )
+                video = torch.cat([wrist, torch.cat([left, right], dim=-1)], dim=-2)
+
+        extras: dict[str, Any] = {}
+
+        if self._action_space == "midtrain":
+            pose_convention = cast(PoseConvention, self._pose_convention)
+            state = sample[self._state_features]  # [T+1, state_dim] or [H+T+1, state_dim]
+            poses_abs = build_abs_pose_from_components(state[:, 0:3], state[:, 3:6], "euler_xyz")
+            poses_abs[:, :3, :3] = poses_abs[:, :3, :3] @ self._to_opencv
+            initial_pose = torch.from_numpy(poses_abs[-self._chunk_length - 1].copy()).float()
+            poses_rel = pose_abs_to_rel(poses_abs, rotation_format="rot6d", pose_convention=pose_convention)
+            gripper = (
+                sample[self._action_features][:, [6]]
+                if self._is_flat_action
+                else sample[self._action_features].unsqueeze(-1)
+            )
+            if self._is_gripper_action_flipped:
+                gripper = 1.0 - gripper
+            action = torch.from_numpy(
+                np.concatenate([poses_rel[-self._chunk_length :], gripper[-self._chunk_length :]], axis=-1)
+            ).float()  # [T,10]
+            extras["initial_pose"] = initial_pose
+            if self._max_num_history_actions > 0:
+                _, _, _, frame_offset = self._resolve_index(int(idx))
+                num_available = min(self._max_num_history_actions, frame_offset * self._sample_stride)
+                actual_h = num_available
+                # with 0.5 probability, randomly sample the number of history frames
+                if random.random() < 0.5:
+                    actual_h = random.randint(0, num_available)
+                if actual_h > 0:
+                    hist_action_raw = torch.from_numpy(
+                        np.concatenate(
+                            [
+                                poses_rel[-self._chunk_length - actual_h : -self._chunk_length],
+                                gripper[-self._chunk_length - actual_h : -self._chunk_length],
+                            ],
+                            axis=-1,
+                        )
+                    ).float()  # [H,D]
+                    extras["history_action"] = hist_action_raw
+            if self._use_state:
+                initial_gripper = sample[_GRIPPER_STATE_FEATURE][0].unsqueeze(-1)
+                if self._is_gripper_action_flipped:
+                    initial_gripper = 1.0 - initial_gripper
+                initial_rot6d = convert_rotation(poses_abs[-self._chunk_length - 1, :3, :3], "matrix", "rot6d")
+                initial_state = torch.from_numpy(
+                    np.concatenate((poses_abs[-self._chunk_length - 1, :3, 3], initial_rot6d, initial_gripper), axis=-1)
+                ).float()
+                action = torch.cat([initial_state.unsqueeze(0), action], dim=0)
+        if self._action_space == "ee_pose_delta":
+            state = sample[self._state_features]
+            pose = np.tile(np.eye(4), (state.shape[0], 1, 1))
+            pose[:, :3, :3] = R.from_euler("xyz", state[:, 3:6]).as_matrix()
+            pose[:, :3, 3] = state[:, 0:3]
+            pose_delta = np.linalg.inv(pose[0]) @ pose[1:]
+            gripper = sample[self._action_features].unsqueeze(-1)
+            if self._is_gripper_action_flipped:
+                gripper = 1.0 - gripper
+            action = torch.from_numpy(
+                np.concatenate((pose_delta[:, :3, 3], pose_delta[:, :3, 0], pose_delta[:, :3, 1], gripper), axis=-1)
+            ).float()
+            if self._use_state:
+                initial_gripper = sample[_GRIPPER_STATE_FEATURE][0].unsqueeze(-1)
+                if self._is_gripper_action_flipped:
+                    initial_gripper = 1.0 - initial_gripper
+                initial_state = torch.from_numpy(
+                    np.concatenate((pose[0, :3, 3], pose[0, :3, 0], pose[0, :3, 1], initial_gripper), axis=-1)
+                ).float()
+                action = torch.cat([initial_state.unsqueeze(0), action], dim=0)
+        if self._action_space == "joint_pos":
+            gripper = sample[self._action_features][-self._chunk_length :].unsqueeze(-1)
+            if self._is_gripper_action_flipped:
+                gripper = 1.0 - gripper
+            action = torch.cat((sample[_JOINT_ACTION_FEATURE], gripper), dim=-1).float()
+            if self._max_num_history_actions > 0:
+                _, _, _, frame_offset = self._resolve_index(int(idx))
+                num_available = min(self._max_num_history_actions, frame_offset * self._sample_stride)
+                actual_h = num_available
+                if random.random() < 0.5:
+                    actual_h = random.randint(0, num_available)
+                if actual_h > 0:
+                    hist_joint = sample[_JOINT_STATE_FEATURE][
+                        -self._chunk_length - 1 - actual_h : -self._chunk_length - 1
+                    ]
+                    hist_gripper = sample[_GRIPPER_STATE_FEATURE][
+                        -self._chunk_length - 1 - actual_h : -self._chunk_length - 1
+                    ].unsqueeze(-1)
+                    if self._is_gripper_action_flipped:
+                        hist_gripper = 1.0 - hist_gripper
+                    hist_action_raw = torch.cat((hist_joint, hist_gripper), dim=-1).float()
+                    extras["history_action"] = hist_action_raw  # [H,D]
+            if self._use_state:
+                initial_gripper = sample[_GRIPPER_STATE_FEATURE][-self._chunk_length - 1].unsqueeze(-1)
+                if self._is_gripper_action_flipped:
+                    initial_gripper = 1.0 - initial_gripper
+                initial_state = torch.cat(
+                    (sample[_JOINT_STATE_FEATURE][-self._chunk_length - 1], initial_gripper), dim=-1
+                ).float()
+                action = torch.cat([initial_state.unsqueeze(0), action], dim=0)
+
+        if self._viewpoint == "concat_view" and self._video_mode in (
+            None,
+            "wrist_left_exterior",
+            "wrist_both_exterior",
+        ):
+            extras["additional_view_description"] = (
+                "The top row is from the wrist-mounted camera. "
+                "The bottom row contains two horizontally concatenated third-person perspective views of the scene from opposite sides, with the robot visible."
+            )
+
+        return self._build_result(
+            mode=mode,
+            video=video,
+            action=action,
+            ai_caption=ai_caption,
+            **extras,
+        )
+
+    @property
+    def action_dim(self) -> int:
+        """ """
+        return 8 if self._action_space == "joint_pos" else 10

@@ -5,12 +5,12 @@ from typing import Any
 
 import attrs
 
-from cosmos_framework.utils.lazy_config import LazyDict
 from cosmos_framework.configs.base.defaults.activation_checkpointing import ActivationCheckpointingConfig
 from cosmos_framework.configs.base.defaults.compile import CompileConfig
 from cosmos_framework.configs.base.defaults.ema import EMAConfig
 from cosmos_framework.configs.base.defaults.parallelism import ParallelismConfig
 from cosmos_framework.configs.base.defaults.reasoner import VLMConfig
+from cosmos_framework.utils.lazy_config import LazyDict
 
 
 @attrs.define(slots=False)
@@ -118,8 +118,8 @@ class FixedStepSamplerConfig:
     # Convention: exclude the final 0.0 step — FixedStepSampler appends it automatically.
     # Values must be descending. Using 0.999 instead of 1.0 avoids numeric edge cases at sigma=1.
     t_list: list[float] = [0.999, 0.75, 0.5, 0.25]
-    # Integrator type: "ode" (deterministic Euler) or "sde" (stochastic re-noising at each step).
-    sample_type: str = "ode"
+    # Distilled fixed-step sampling uses stochastic re-noising at each step.
+    sample_type: str = "sde"
 
 
 # Don't have any defaults and init only in config file.
