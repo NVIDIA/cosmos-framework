@@ -495,7 +495,11 @@ def _load_vision_subfolder_state_dict(checkpoint_path: pathlib.Path) -> dict[str
                 state_dict[key] = shard.get_tensor(key).detach().cpu().contiguous()
 
     if not state_dict:
-        raise RuntimeError(f"No vision encoder tensors found under {VISION_ENCODER_CHECKPOINT_SUBFOLDER}/.")
+        raise RuntimeError(
+            f"No vision encoder tensors found under {VISION_ENCODER_CHECKPOINT_SUBFOLDER}/. "
+            "If the source checkpoint has no Qwen3-VL visual weights (e.g. a vision-generation-only "
+            "post-training checkpoint), pass --skip-vision-encoder to export without vision_encoder/."
+        )
     return state_dict
 
 
