@@ -10,6 +10,7 @@ ______________________________________________________________________
 
 - [Quick Start](#quick-start)
   - [Single-GPU](#single-gpu)
+    - [Cosmos3-Edge](#cosmos3-edge)
   - [Multi-GPU](#multi-gpu)
     - [Cosmos3-Nano](#cosmos3-nano)
     - [Cosmos3-Super](#cosmos3-super)
@@ -73,6 +74,30 @@ python -m cosmos_framework.scripts.inference \
 
 **Note:** Cosmos3-Super (32B) does not fit on a single 80 GB H100 — see [Cosmos3-Super](#cosmos3-super) for the multi-GPU recipes.
 
+#### Cosmos3-Edge
+
+Cosmos3-Edge is a compact 2B omni model. It fits comfortably on a single GPU and is the recommended starting point for single-GPU inference. It supports every mode **except audio** (`enable_sound`), since the checkpoint ships without a sound tokenizer — the audio-enabled examples (`inputs/omni/t2vs.json`, `inputs/omni/i2vs.json`) are therefore not supported.
+
+```shell
+python -m cosmos_framework.scripts.inference \
+    --parallelism-preset=latency \
+    -i "inputs/omni/t2i.json" \
+    -o outputs/omni_edge \
+    --checkpoint-path Cosmos3-Edge \
+    --seed=0
+```
+
+To run every supported example in one batch (the `action_*.json` glob covers the action modes; the audio-enabled `t2vs.json` / `i2vs.json` are intentionally excluded):
+
+```shell
+python -m cosmos_framework.scripts.inference \
+    --parallelism-preset=latency \
+    -i inputs/omni/t2i.json inputs/omni/t2v.json inputs/omni/i2v.json inputs/omni/v2v.json inputs/omni/action_*.json \
+    -o outputs/omni_edge \
+    --checkpoint-path Cosmos3-Edge \
+    --seed=0
+```
+
 ### Multi-GPU
 
 Use `torchrun --nproc-per-node=N` when launching across multiple GPUs (N > 1). By default the model weights are sharded (FSDP) across all N GPUs, so any model fits. The `throughput` preset runs that single sharded replica over a batch; the `latency` preset additionally needs `--dp-shard-size=1` on multiple GPUs so the ranks are free for context parallelism (see [Parallelism Arguments](#parallelism-arguments)).
@@ -129,6 +154,7 @@ The four `--{dp,cp,cfgp}-*-size` flags override the auto-selected values from `-
 | Model         | Arguments                         | Modes                                          |
 | ------------- | --------------------------------- | ---------------------------------------------- |
 | Cosmos3-Nano  | `--checkpoint-path=Cosmos3-Nano`  | All                                            |
+| Cosmos3-Edge  | `--checkpoint-path=Cosmos3-Edge`  | All except audio (`enable_sound`)              |
 | Cosmos3-Super | `--checkpoint-path=Cosmos3-Super` | `text2image`, `text2video`, `image2video`      |
 
 ## Modes

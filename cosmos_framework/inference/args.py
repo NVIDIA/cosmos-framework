@@ -1102,6 +1102,15 @@ _CHECKPOINTS: dict[str, CheckpointConfig] = {
             revision="main",
         ),
     ),
+    "Cosmos3-Edge": CheckpointConfig(
+        model_memory_bytes=MODEL_MEMORY_BYTES_BY_SIZE["2B"],
+        config_file=str(CONFIG_DIR / "model/Cosmos3-Edge.yaml"),
+        s3_uri="s3://bucket1/cosmos3_vfm/cosmos3_ga_midtraining/cosmos3_ga_4bm2b_v1_midtrain_0630a/checkpoints/iter_000028000/",
+        hf=CheckpointDirHf(
+            repository="nvidia/Cosmos3-Edge",
+            revision="main",
+        ),
+    ),
     "Cosmos3-Super": CheckpointConfig(
         model_memory_bytes=MODEL_MEMORY_BYTES_BY_SIZE["32B"],
         config_file=str(CONFIG_DIR / "model/Cosmos3-Super.yaml"),
