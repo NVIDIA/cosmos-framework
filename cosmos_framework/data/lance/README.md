@@ -41,14 +41,22 @@ local/S3 form — it streams from the HuggingFace Hub (marked `hf`, so the same 
 both columns) — and the VLM row is measured end-to-end (image decode + tokenize) to be comparable
 to the video-decoding loaders.
 
-### Dataset Size (Action)
-327 DROID episodes — original three views vs the composed Lance table:
+### Dataset Size
+Source video files the base loader reads vs the full converted Lance table (video +
+label tables). Reproduce with `benchmarks/lance/table_sizes.py`:
+
+| modality   | Source                          | Lance table                        | ratio |
+| ---------- | ------------------------------- | ---------------------------------- | ----- |
+| Action     | 1.54 GB (3 views, AV1 long-GOP) | 0.59 GB (1 composed view, `gop=1`) | 0.38× |
+| Vision-SFT | 0.10 GB (200 clips, native res) | 0.11 GB (pre-resized 256, `gop=1`) | 1.13× |
+
+Action — 327 DROID episodes, original three views vs the composed table:
 
 | metric   | Original (3 views)     | Composed (Lance)               |
 | -------- | ---------------------- | ------------------------------ |
 | encoding | AV1, long-GOP          | H.264, all-intra (`gop=1`)     |
 | streams  | 3 views @ 320×180 RGB  | 1 composed view @ 270×320 RGB  |
-| size     | 1.47 GB                | 0.55 GB (0.37×)                |
+| size     | 1.54 GB                | 0.59 GB (0.38×)                |
 
 The `3`/`1` are the number of video **streams** (three camera views vs one composed view), not
 channels — every frame is RGB. The composed 270×320 frame is the wrist view on top of the two
@@ -62,6 +70,10 @@ larger GOP would shrink the table further at some seek cost).
 
 The composed resolution is derived from the source (`1.5×h × w`), not fixed: this public subset has
 320×180 views → 270×320.
+
+Vision-SFT comes out near parity (~1.1×): the pre-resize to the training resolution roughly
+offsets the all-intra cost at this source resolution. A larger `--gop` shrinks either table
+below source size at some seek cost.
 
 ## Memory
 

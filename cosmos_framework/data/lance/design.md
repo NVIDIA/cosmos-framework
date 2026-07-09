@@ -52,12 +52,41 @@ names/flags resolve from a version registry keyed by the root's directory name.
 
 ### Tables (`tools/lance_datagen/build_composed_droid.py`)
 
-| table | one row per | columns |
+Four tables. `{table}` — one row per **episode** (the video):
+
+| column | type | description |
 | --- | --- | --- |
-| `{table}` | episode | `episode_index` int64, `ep_start` int64, `length` int64, `video_bytes` large_binary — the base's exact composition over the full episode, re-encoded `gop=1` |
-| `{table}_frames` | frame | `episode_index` int64, `task_index` int64, `timestamp` float64, + every feature column any action space reads, as `float32` / `fixed_size_list<float32>` (`.` stored as `__`) — dumped verbatim from the base's LeRobot table, bit-exact roundtrip |
-| `{table}_tasks` | task | `task_index` int64, `task` string |
-| `{table}_episodes` | episode | `episode_index` int64, `episode_id` string (keep-ranges filter only) |
+| `episode_index` | int64 | episode id |
+| `ep_start` | int64 | first global frame index (build metadata) |
+| `length` | int64 | number of frames (build metadata) |
+| `video_bytes` | large_binary | the base's exact composition over the full episode, re-encoded `gop=1` |
+
+`{table}_frames` — one row per **frame**, dumped verbatim from the base's LeRobot table
+(bit-exact roundtrip; feature names store `.` as `__`):
+
+| column | type | description |
+| --- | --- | --- |
+| `episode_index`, `task_index` | int64 | frame → episode / task |
+| `timestamp` | float64 | frame timestamp |
+| `action__joint_position` | fixed_size_list\<float32\>[7] | commanded joints |
+| `action__gripper_position` | float32 | commanded gripper |
+| `observation__state__joint_positions` | fixed_size_list\<float32\>[7] | observed joints |
+| `observation__state__gripper_position` | float32 | observed gripper |
+| `observation__state__cartesian_position` | fixed_size_list\<float32\>[6] | EE pose |
+
+`{table}_tasks` — one row per **task**:
+
+| column | type | description |
+| --- | --- | --- |
+| `task_index` | int64 | task id |
+| `task` | string | task/caption text |
+
+`{table}_episodes` — one row per **episode** (keep-ranges filter only):
+
+| column | type | description |
+| --- | --- | --- |
+| `episode_index` | int64 | episode id |
+| `episode_id` | string | source episode-id string the filter dict keys on |
 
 `--labels-only` rewrites the label tables against an existing video table. The converter
 raises on multi-shard roots (one frames table = one shard).
