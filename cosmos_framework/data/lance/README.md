@@ -101,20 +101,30 @@ worker reopens them lazily (lancedb is not fork-safe).
 
 ### Action — `LanceDROIDComposedDataset`
 
-The base loader reads three camera views per sample from the LeRobot tree and resizes +
-concatenates them into one 270×320 frame at runtime. The Lance table stores that composed frame
-once per episode, so the loader decodes a single mp4 stream instead. It subclasses
-`DROIDLeRobotDataset` and reuses its frame indexing and action/pose assembly unchanged — only the
-video source is overridden, so the labels stay bit-exact. Clips are encoded all-intra (`gop=1`),
-so torchcodec's `seek_mode="approximate"` lands on each window exactly; a per-worker LRU cache
-keeps recently used episode decoders open. `take` returns rows sorted by offset, so the byte read
-keys results by row rather than relying on the requested order.
+This loader is a **hybrid**: it takes both `root` (the LeRobot tree) and `lance_uri`, and reads
+the two halves of a sample from different places:
+- **action/state/task labels + frame indexing** — from the **base LeRobot parquet** (`root/data/`,
+  `root/meta/`), via the inherited `DROIDLeRobotDataset` (`_window_rows` → `_build_joint_action`).
+  These columns are small and correctness-critical, so they stay in the parquet and the base's exact
+  assembly is reused — labels are bit-exact.
+- **composed video** — from the **Lance table**. The base otherwise decodes three camera views per
+  sample and resizes + concatenates them into one 270×320 frame at runtime; the table stores that
+  composed frame once per episode, so the loader decodes a single mp4 stream instead.
+
+`LanceDROIDComposedDataset` subclasses `DROIDLeRobotDataset` and overrides only the video source.
+Clips are encoded all-intra (`gop=1`), so torchcodec's `seek_mode="approximate"` lands on each
+window exactly; a per-worker LRU cache keeps recently used episode decoders open. `take` returns
+rows sorted by offset, so the byte read keys results by row rather than the requested order.
+
+The loader reads only `episode_index` (to locate a clip) and `video_bytes`; `ep_start`/`length` are
+episode metadata written at build time. (Vision-SFT and VLM tables, below, are self-contained —
+their captions/conversations live in the table, so those loaders are not hybrids.)
 
 | column          | type           | description                              |
 | --------------- | -------------- | ---------------------------------------- |
-| `episode_index` | int64          | episode id                               |
-| `ep_start`      | int64          | first global frame index of the episode  |
-| `length`        | int64          | number of frames                         |
+| `episode_index` | int64          | episode id (used to locate the clip)     |
+| `ep_start`      | int64          | first global frame index (build metadata) |
+| `length`        | int64          | number of frames (build metadata)        |
 | `video_bytes`   | large_binary   | composed 270×320 mp4 for the episode     |
 
 ### Vision-SFT — `LanceVisionSFTDataset`
