@@ -647,11 +647,12 @@ class ReasonerDataArgs(ArgsBase):
     top_p: _ReasonerTopP | None = None
     repetition_penalty: _ReasonerRepetitionPenalty | None = None
     presence_penalty: float | None = None
+    video_fps: pydantic.PositiveFloat | None = None
 
 
 class ReasonerDataOverrides(OverridesBase):
     """Reasoner overrides for ``model_mode='reasoner'``. ``vision_path`` (if set) is
-    used as the conditioning image; the VLM processor handles preprocessing."""
+    used as the conditioning image or video; the VLM processor handles preprocessing."""
 
     max_new_tokens: pydantic.PositiveInt | None = None
     """Maximum number of new tokens to generate per prompt."""
@@ -667,6 +668,8 @@ class ReasonerDataOverrides(OverridesBase):
     """CTRL/HF-style multiplicative repetition penalty (>0). ``1.0`` is identity."""
     presence_penalty: float | None = None
     """Additive presence penalty (any sign). ``0.0`` is identity."""
+    video_fps: pydantic.PositiveFloat | None = None
+    """Frames per second to sample from a video vision_path. None -> decoder default (2.0)."""
 
     def _build_reasoner_data(self, model_config: "OmniMoTModelConfig", sample_meta: SampleMeta):
         if not sample_meta.model_mode.is_reasoner:

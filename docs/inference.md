@@ -20,6 +20,7 @@ ______________________________________________________________________
   - [Text](#text)
   - [Vision (Image/Video)](#vision-imagevideo)
   - [Action](#action)
+  - [Reasoner](#reasoner)
   - [Custom Defaults](#custom-defaults)
 - [Guardrails](#guardrails)
 - [Troubleshooting](#troubleshooting)
@@ -212,6 +213,14 @@ Condition arguments:
 The action output is written to `sample_outputs.json`.
 
 See the [Modes](#modes) table above for the action mode inputs/outputs and example files.
+
+### Reasoner
+
+`model_mode=reasoner` generates text (written to `reasoner_text.txt`) from a prompt and an optional `vision_path`. The `vision_path` may point to an **image** (`.jpg`/`.png`/…) or a **video** (`.mp4`): a video is decoded and uniformly sampled into frames that condition the reasoner.
+
+- `video_fps`: frames per second to sample from the video (default: the decoder's default of 2.0).
+
+Examples: [`inputs/reasoner/reasoner.json`](../inputs/reasoner/reasoner.json) (text), [`inputs/reasoner/reasoner_image.json`](../inputs/reasoner/reasoner_image.json) (image), [`inputs/reasoner/reasoner_video.json`](../inputs/reasoner/reasoner_video.json) (video).
 
 ### Custom Defaults
 
