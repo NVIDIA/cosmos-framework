@@ -26,7 +26,7 @@ dependencies = [
   "accelerate",
   "av",
   "cattrs",
-  "diffusers",
+  "diffusers>=0.39.0",
   "einops",
   "hydra-core",
   "imageio-ffmpeg",
@@ -72,7 +72,6 @@ train = [
   "boto3",
   "botocore",
   "datasets",
-  "diffusers-cosmos3",
   "dists-pytorch",
   "einx",
   "fastparquet",
@@ -298,7 +297,6 @@ required-environments = [
 ]
 
 [tool.uv.sources]
-diffusers-cosmos3 = { path = "packages/diffusers-cosmos3", editable = true }
 flash-attn = { index = "cosmos"}
 flash-attn-3-nv = { index = "cosmos" }
 lerobot = { git = "https://github.com/mli0603/lerobot.git" }
@@ -336,10 +334,6 @@ ignore = [
   "PYSEC-2025-217",
   # flash-attn: flash-attn deserialization isn't used in cosmos3 package
   "GHSA-7g5w-pq96-8c5w",
-  # Need diffusers 0.38
-  "GHSA-7wx4-6vff-v64p",
-  "GHSA-98h9-4798-4q5v",
-  "PYSEC-2026-41",
   # torch, no fix
   "PYSEC-2026-139",
   # Need vllm 0.20
