@@ -193,7 +193,17 @@ def _diffusers_weight_map(checkpoint_path: Path) -> dict[str, str]:
     index_path = checkpoint_path / _DIFFUSERS_ROOT_INDEX
     if not index_path.exists():
         raise FileNotFoundError(f"Diffusers safetensors index not found: {index_path}")
-    return _read_safetensors_index(index_path)
+    weight_map = _read_safetensors_index(index_path)
+    # The root index may be a reasoner manifest (e.g. Cosmos3-Edge) that lists only the
+    # shared understanding-pathway weights and the vision tower. The transformer
+    # component's own index holds the complete DiT state — including the
+    # generation-pathway tensors (`*_moe_gen`, `add_*`) absent from such a root index.
+    # Merge it (root entries win) so the full generator can be loaded.
+    transformer_index_path = checkpoint_path / "transformer" / "diffusion_pytorch_model.safetensors.index.json"
+    if transformer_index_path.exists():
+        for key, rel_path in _read_safetensors_index(transformer_index_path).items():
+            weight_map.setdefault(key, f"transformer/{rel_path}")
+    return weight_map
 
 
 def _diffusers_files_to_keys(weight_map: dict[str, str]) -> dict[str, list[str]]:
@@ -354,10 +364,17 @@ class _DiffusersLoadPlanner(dcp.DefaultLoadPlanner):
     def _build_remapped_state_dict(self, target_state_dict: dict[str, Any]) -> tuple[dict[str, Any], set[str]]:
         remapped_state_dict: dict[str, Any] = {}
         loaded_keys: set[str] = set()
+        # When the model is built without a visual tower (e.g. Cosmos3-Edge t2i with
+        # include_visual disabled), its state dict has no `language_model.visual.*`
+        # targets, so the checkpoint's vision_encoder weights have nowhere to go — skip
+        # them rather than erroring on unmapped projector/visual keys.
+        has_visual_target = any(key.startswith("language_model.visual.") for key in target_state_dict)
         for diff_key, rel_path in sorted(self.weight_map.items()):
             net_key = _diffusers_to_net_key(diff_key, rel_path)
             if net_key is None:
                 if _is_diffusers_model_weight_path(rel_path):
+                    if rel_path.startswith("vision_encoder/") and not has_visual_target:
+                        continue
                     raise KeyError(f"Diffusers model key {diff_key!r} from {rel_path!r} has no Cosmos3 mapping.")
                 continue
             target_tensor = target_state_dict.get(net_key)
