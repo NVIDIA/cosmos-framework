@@ -41,8 +41,10 @@ if _HERE not in sys.path:
 import bench_vision_sft  # noqa: E402  (kept loader benches)
 import bench_vlm  # noqa: E402
 from base_standins import S3DROIDLeRobotDataset, hf_online_preserved  # noqa: E402
-from bench_action_faithful import _EpisodeShuffle  # noqa: E402
 
+from cosmos_framework.data.generator.action.datasets.action_sft_dataset import (  # noqa: E402
+    ActionIterableShuffleDataset,
+)
 from cosmos_framework.data.generator.action.datasets.droid_lerobot_dataset import DROIDLeRobotDataset  # noqa: E402
 from cosmos_framework.data.lance import (  # noqa: E402
     LanceDROIDComposedDataset,
@@ -139,7 +141,7 @@ def build_action_loader(which, root, uri, region, cache, batch_size, num_workers
                 )
             else:
                 base = DROIDLeRobotDataset(root=root, use_success_only=True, **_ACTION_KW)
-        ds = _EpisodeShuffle(base)
+        ds = ActionIterableShuffleDataset(base)  # the genuine production shuffle
     else:
         comp = LanceDROIDComposedDataset(
             uri,
@@ -148,7 +150,7 @@ def build_action_loader(which, root, uri, region, cache, batch_size, num_workers
             storage_options=_so(region, uri),
             **_ACTION_KW,
         )
-        ds = _EpisodeShuffle(comp)
+        ds = ActionIterableShuffleDataset(comp)
     return torch.utils.data.DataLoader(
         ds,
         batch_size=batch_size,

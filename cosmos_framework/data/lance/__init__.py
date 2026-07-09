@@ -1,14 +1,20 @@
 # SPDX-License-Identifier: OpenMDW-1.1
-"""LanceDB-powered Cosmos dataloaders (Permutation API + blob-v2 video)."""
+"""LanceDB-powered Cosmos dataloaders (Permutation API reads, plain-binary media)."""
 
-from cosmos_framework.data.lance.action_dataset import (
-    LanceDROIDComposedDataset,
-    LanceDROIDComposedIterable,
+from cosmos_framework.data.lance.action_dataset import LanceDROIDComposedDataset
+from cosmos_framework.data.lance.vision_sft_dataset import (
+    LanceVisionSFTDataset,
+    LanceVisionSFTIterable,
 )
-from cosmos_framework.data.lance.vision_sft_dataset import LanceVisionSFTDataset
+from cosmos_framework.data.lance.vlm_dataset import (
+    LanceVLMDataset,
+    LanceVLMShuffleScan,
+)
 
 __all__ = [
     "LanceDROIDComposedDataset",
-    "LanceDROIDComposedIterable",
+    "LanceVLMDataset",
+    "LanceVLMShuffleScan",
     "LanceVisionSFTDataset",
+    "LanceVisionSFTIterable",
 ]

@@ -30,7 +30,7 @@ def _hf_offline(monkeypatch):
     monkeypatch.setenv("HF_HUB_OFFLINE", "1")
 
 
-@pytest.mark.parametrize("action_space,use_state", [("joint_pos", True), ("midtrain", False)])
+@pytest.mark.parametrize("action_space,use_state", [("joint_pos", True), ("midtrain", False), ("midtrain", True)])
 def test_action_composed(action_space, use_state):
     kw = dict(action_space=action_space, use_state=use_state, mode="policy", chunk_length=16)
     base = DROIDLeRobotDataset(root=AROOT, use_success_only=True, **kw)

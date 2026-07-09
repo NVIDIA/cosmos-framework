@@ -219,8 +219,6 @@ cython_debug/
 .cursorignore
 .cursorindexingignore
 
-# Lance dataloader: local run artifacts (generated, not for commit)
-logs/
+# Lance dataloader benchmarks: generated run artifacts
 benchmarks/lance/train_out/
-tests/vision_sft_nano_5iter_4gpu.toml
 benchmarks/lance/matrix_results.txt

@@ -87,7 +87,7 @@ def _replace(db: lancedb.DBConnection, name: str, data, schema: pa.Schema) -> No
 
 def _build_base(root: str) -> DROIDLeRobotDataset:
     # split="full" + joint_pos/use_state registers every episode and label column.
-    return DROIDLeRobotDataset(
+    base = DROIDLeRobotDataset(
         root=root,
         split="full",
         use_success_only=True,
@@ -96,6 +96,12 @@ def _build_base(root: str) -> DROIDLeRobotDataset:
         mode="policy",
         chunk_length=16,
     )
+    if len(base._datasets) != 1:
+        raise NotImplementedError(
+            f"root registered {len(base._datasets)} LeRobot shards; this converter (and the "
+            "Lance loader's single frames table) currently supports single-shard roots only."
+        )
+    return base
 
 
 def write_label_tables(db: lancedb.DBConnection, table: str, base: DROIDLeRobotDataset) -> None:
@@ -124,6 +130,8 @@ def write_label_tables(db: lancedb.DBConnection, table: str, base: DROIDLeRobotD
 
     eps_meta = lr.meta.episodes
     n_eps = len(eps_meta)
+    if "episode_id" not in eps_meta.column_names:
+        print("WARNING: source has no episode_id strings; the loader's keep-ranges filter (use_filter_dict) needs them")
     ep_ids = eps_meta["episode_id"] if "episode_id" in eps_meta.column_names else [""] * n_eps
     episodes = pa.table(
         [pa.array(list(range(n_eps)), pa.int64()), pa.array([str(e) for e in ep_ids], pa.string())],

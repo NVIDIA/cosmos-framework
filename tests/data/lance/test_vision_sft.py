@@ -3,7 +3,6 @@
 
 from __future__ import annotations
 
-import json
 import os
 from types import SimpleNamespace
 
@@ -11,8 +10,11 @@ import pytest
 import torch
 from transformers import AutoTokenizer
 
-from cosmos_framework.data.generator.local_datasets.helper import get_aspect_ratio
-from cosmos_framework.data.generator.local_datasets.sft_dataset import SFTDataset
+from cosmos_framework.data.generator.local_datasets.sft_dataset import (
+    SFTDataset,
+    _flatten_metadata_by_window,
+    _load_sft_metadata_from_s3,
+)
 from cosmos_framework.data.lance import LanceVisionSFTDataset
 
 JSONL = os.environ.get("BRIDGE_JSONL")
@@ -39,24 +41,12 @@ def _hf_online():
 
 @pytest.fixture(scope="module")
 def base_and_metas():
+    # the same metadata load + per-window flattening the converter uses (min_frames=61)
+    metas = _flatten_metadata_by_window(_load_sft_metadata_from_s3(None, JSONL, min_frames=61))
     base_dir = os.path.dirname(os.path.abspath(JSONL))
-    metas = []
-    with open(JSONL) as f:
-        for line in f:
-            rec = json.loads(line)
-            vp = rec["vision_path"]
-            vp = vp if ("://" in vp or vp.startswith("/")) else os.path.join(base_dir, vp)
-            for wi, w in enumerate(rec["t2w_windows"]):
-                metas.append(
-                    {
-                        "uuid": f"{rec['uuid']}_w{wi}",
-                        "vision_path": vp,
-                        "width": rec["width"],
-                        "height": rec["height"],
-                        "aspect_ratio": get_aspect_ratio(rec["width"], rec["height"]),
-                        "t2w_windows": [w],
-                    }
-                )
+    for m in metas:
+        vp = m["vision_path"]
+        m["vision_path"] = vp if ("://" in vp or vp.startswith("/")) else os.path.join(base_dir, vp)
     tok_cfg = SimpleNamespace(tokenizer=AutoTokenizer.from_pretrained("Qwen/Qwen2.5-7B"))
     ds = SFTDataset(
         metadata=metas,
@@ -84,3 +74,20 @@ def test_vision_sft(base_and_metas):
         assert ref["ai_caption"] == l["ai_caption"]
         mad = (ref["video"].float() - l["video"].float()).abs().mean().item() / 255.0
         assert mad < 0.02
+
+
+def test_vision_sft_dense_caption(base_and_metas):
+    """Dense (non-structured) captions get the base's duration/resolution suffixes."""
+    base, metas = base_and_metas
+    lance = LanceVisionSFTDataset(URI, table="vision_sft", decode_device="cpu", **_VKW)
+    lance._ensure_open()
+    for i in [0, 7]:
+        meta = {
+            **metas[i],
+            "t2w_windows": [{k: v for k, v in metas[i]["t2w_windows"][0].items() if k != "caption_json"}],
+        }
+        lance._rows[i] = {**lance._rows[i], "caption_json": ""}
+        ref, l = base.process_one_sample(meta), lance[i]
+        assert "seconds long" in ref["ai_caption"]  # the dense path really appends the suffixes
+        assert ref["ai_caption"] == l["ai_caption"]
+        assert torch.equal(ref["text_token_ids"], l["text_token_ids"])

@@ -90,15 +90,12 @@ class LanceDROIDComposedDataset(DROIDLeRobotDataset):
         # raw-LeRobot reading (root/video_mode/history/augmentation/temp-seg).
         if viewpoint != "concat_view":
             raise NotImplementedError("LanceDROIDComposedDataset only supports concat_view.")
-        if use_state and action_space != "joint_pos":
-            raise NotImplementedError("use_state is only supported with action_space='joint_pos'.")
         if use_filter_dict and not filter_dict_path:
             raise ValueError("use_filter_dict=True requires filter_dict_path")
         if split.lower() == "val_temp_seg":
             raise NotImplementedError("val_temp_seg is not supported by the Lance loader.")
 
         # -- config attributes the inherited code reads (base + DROID init, sans LeRobot IO) --
-        self._memprofile = False
         self._fps = float(fps)
         self._dt = 1.0 / self._fps
         self._chunk_length = int(chunk_length)
@@ -115,7 +112,6 @@ class LanceDROIDComposedDataset(DROIDLeRobotDataset):
             self._action_normalizer = resolve_action_normalization(
                 action_normalization, self._load_norm_stats(action_normalization)
             )
-        self._tolerance_s = 2e-4
         self._skip_video_loading = False
         self._sample_stride = int(sample_stride)
         self._min_episode_length_frames = None
@@ -153,6 +149,8 @@ class LanceDROIDComposedDataset(DROIDLeRobotDataset):
             if use_state:
                 self._label_windows[_cfg._JOINT_STATE_FEATURE] = obs_len
                 self._label_windows[_cfg._GRIPPER_STATE_FEATURE] = obs_len
+        elif use_state:
+            self._label_windows[_cfg._GRIPPER_STATE_FEATURE] = obs_len
 
         # -- labels from Lance: same per-frame arrays the LeRobot parquets hold --
         db = lancedb.connect(lance_uri, storage_options=storage_options)
@@ -226,6 +224,13 @@ class LanceDROIDComposedDataset(DROIDLeRobotDataset):
                         self._episode_records.append((0, sample_start + sub_start, sub_valid_len, episode_id))
                         self._num_valid_indices += sub_valid_len
                         self._episode_cum_ends.append(self._num_valid_indices)
+            if self._num_valid_indices == 0:
+                # Fail here (like the base) rather than as an opaque empty-sampler error:
+                # the usual cause is a table whose episodes have no episode_id strings.
+                raise ValueError(
+                    "filter_dict matched no episodes — the composed table's episode_id "
+                    "strings are empty or do not correspond to the filter keys."
+                )
 
         # -- video: lazy per-worker handles into the composed table --
         self._lance_uri = lance_uri
@@ -313,37 +318,6 @@ class LanceDROIDComposedDataset(DROIDLeRobotDataset):
         return [self[int(i)] for i in indices]
 
 
-class LanceDROIDComposedIterable(torch.utils.data.IterableDataset):
-    """Streams windows from LanceDROIDComposedDataset with episode-level shuffling."""
-
-    def __init__(self, composed: LanceDROIDComposedDataset, seed: int = 42):
-        super().__init__()
-        self._ds = composed
-        self._seed = int(seed)
-        self.shard_world_size = 1
-        self.shard_rank = 0
-
-    def __len__(self) -> int:
-        return len(self._ds)
-
-    def __iter__(self):
-        blocks = self._ds.get_shuffle_blocks()
-        info = torch.utils.data.get_worker_info()
-        wid = info.id if info is not None else 0
-        nw = info.num_workers if info is not None else 1
-        shard = int(self.shard_rank) * nw + wid
-        total = max(1, int(self.shard_world_size) * nw)
-        epoch = 0
-        while True:
-            g = torch.Generator().manual_seed(self._seed + epoch)
-            order = torch.randperm(len(blocks), generator=g).tolist()
-            for b in order[shard::total]:
-                start, length = blocks[b]
-                for idx in range(start, start + length):
-                    yield self._ds[idx]
-            epoch += 1
-
-
 def get_lance_action_droid_sft_dataset(
     *,
     lance_uri: str,
@@ -407,6 +381,5 @@ def get_lance_action_droid_sft_dataset(
 
 __all__ = [
     "LanceDROIDComposedDataset",
-    "LanceDROIDComposedIterable",
     "get_lance_action_droid_sft_dataset",
 ]

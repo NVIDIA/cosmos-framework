@@ -4,7 +4,7 @@
 The production base loader uses EPISODE-SHUFFLE (`ActionIterableShuffleDataset`,
 `iterable_shuffle=True`), not RandomSampler. So the apples-to-apples comparison is
 episode-shuffle on BOTH sides. We also include lance-random to show that batched
-take_blobs + concurrency (LANCE_IO_THREADS) makes random S3 reads competitive too.
+takes + concurrency (LANCE_IO_THREADS) make random S3 reads competitive too.
 
 Pure dataloader throughput (no model). Stressful config: many episodes (decoder cache
 << episodes), 8+ workers, batch 16, long steady-state. Set LANCE_IO_THREADS=256 for S3.
@@ -22,6 +22,7 @@ import time
 import torch
 from base_standins import S3DROIDLeRobotDataset
 
+from cosmos_framework.data.generator.action.datasets.action_sft_dataset import ActionIterableShuffleDataset
 from cosmos_framework.data.generator.action.datasets.droid_lerobot_dataset import DROIDLeRobotDataset
 from cosmos_framework.data.lance import LanceDROIDComposedDataset
 
@@ -30,37 +31,6 @@ _KW = dict(action_space="joint_pos", use_state=True, mode="policy", chunk_length
 
 def _collate(items):
     return torch.stack([s["video"] for s in items])
-
-
-class _EpisodeShuffle(torch.utils.data.IterableDataset):
-    """Generic episode-shuffle stream (mirrors base ActionIterableShuffleDataset):
-    shuffle per-episode block order, stream windows within a block sequentially,
-    shard disjointly across (rank, worker). Works on any dataset exposing
-    get_shuffle_blocks() + __getitem__ (base DROIDLeRobotDataset and lance composed)."""
-
-    def __init__(self, ds, seed: int = 42):
-        self.ds = ds
-        self.seed = seed
-        self.shard_rank = 0
-        self.shard_world_size = 1
-
-    def __iter__(self):
-        blocks = self.ds.get_shuffle_blocks()
-        info = torch.utils.data.get_worker_info()
-        wid = info.id if info else 0
-        nw = info.num_workers if info else 1
-        shard = self.shard_rank * nw + wid
-        total = max(1, self.shard_world_size * nw)
-        ep = 0
-        while True:
-            g = torch.Generator()
-            g.manual_seed(self.seed + ep)
-            order = torch.randperm(len(blocks), generator=g).tolist()
-            for b in order[shard::total]:
-                s, length = blocks[b]
-                for i in range(s, s + length):
-                    yield self.ds[i]
-            ep += 1
 
 
 def _build(mode, root, uri, region, cache, s3_bucket=None, s3_prefix=None):
@@ -77,10 +47,10 @@ def _build(mode, root, uri, region, cache, s3_bucket=None, s3_prefix=None):
     if mode == "base-random":
         return _base(), "random"
     if mode == "base-episode":
-        return _EpisodeShuffle(_base()), None
+        return ActionIterableShuffleDataset(_base()), None  # the genuine production shuffle
     comp = LanceDROIDComposedDataset(uri, decode_device="cpu", decoder_cache_size=cache, storage_options=so, **_KW)
     if mode == "lance-episode":
-        return _EpisodeShuffle(comp), None
+        return ActionIterableShuffleDataset(comp), None
     return comp, "random"  # lance-random -> RandomSampler
 
 

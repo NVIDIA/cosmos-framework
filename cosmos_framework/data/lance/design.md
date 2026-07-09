@@ -56,7 +56,8 @@ clip cost one decode.
 **Storage/compression tradeoffs.** All-intra H.264 at the source resolution costs more
 bits per pixel than the source's long-GOP encoding, but the composed/pre-resized clips
 store fewer pixels, so tables come out smaller in practice (see README "Dataset Size").
-The re-encode is the single source of lossiness (~1–2% pixel MAD), verified to be
+The re-encode is the single source of lossiness (~1–2% pixel MAD; the action gate is
+2.5% because the base's decoder backend also differs), verified to be
 training-irrelevant by the real-model forward-equivalence runs.
 
 ---
@@ -121,10 +122,13 @@ behave identically. From there the *inherited* base code runs unchanged:
   with one batched byte read.
 
 All action spaces route through the inherited assembly; labels are bit-exact against the
-base for the same split parameters (verified for `joint_pos` and `midtrain`). Video is
+base for the same split parameters (verified for `joint_pos` and `midtrain`, with and
+without `use_state`). Video is
 within one offline H.264 re-encode plus the base's decoder-backend difference (< 2.5%
 pixel MAD). Not supported: image augmentation (applied to raw views before composition),
-`max_num_history_actions` (needs pre-window history rows), and the `val_temp_seg` split.
+`max_num_history_actions` (needs pre-window history rows), the `val_temp_seg` split, and
+multi-shard roots (the converter dumps one LeRobot shard into one frames table and
+raises otherwise; the `*_sharded` registry versions would need per-shard tables).
 
 `get_lance_action_droid_sft_dataset` mirrors `get_action_droid_sft_dataset` (the base
 factory), building the same `ActionSFTDataset` + `ActionTransformPipeline` stack around
@@ -149,7 +153,12 @@ decoded once and resized to the training resolution **with the base's exact resi
 stays a clean rectangle), re-encoded `gop=1`, plus everything needed to reproduce the
 base's window/caption logic: original `width`/`height`, `start_frame`/`end_frame`/
 `temporal_interval`, stored `enc_h`/`enc_w`, `fps`, and the caption fields
-(`caption_json` verbatim JSON, `caption` dense fallback).
+(`caption_json` verbatim JSON, `caption` dense fallback). The metadata pass is the
+base's **own loader** (`_load_sft_metadata_from_s3` + `_flatten_metadata_by_window`),
+so the duration and `min_frames` window filters match the base pipeline's population
+exactly; windows carrying caption keys the schema does not persist (the
+`CAPTION_TYPES` styles / `qwen3_32b_rewrite-dense`) are rejected at build time rather
+than silently losing captions.
 
 ### How the loader works
 
@@ -157,11 +166,17 @@ Map-style; two Permutation handles per worker — all metadata columns are read 
 `_rows` at init (they're tiny), `video_bytes` is fetched per clip through the batched
 take + LRU decoder cache. Per sample it recomputes the base's window plan
 (`_window_plan`: same `temporal_interval_mode` / `frame_selection_mode` /
-`num_video_frames` arithmetic), decodes the frames in-process, applies the center crop
-(`enc_h/enc_w` → target size from `VIDEO_RES_SIZE_INFO`, the base's `get_aspect_ratio`),
-and reuses the base's caption selection (`_select_caption`) and tokenization
-(`tokenize_caption` + `add_special_tokens`) — which is why `text_token_ids` are
-token-exact.
+`num_video_frames` arithmetic, frame indices clamped to the stored clip the way the
+base's sequential decode naturally clamps), decodes the frames in-process, applies the
+center crop (`enc_h/enc_w` → target size from `VIDEO_RES_SIZE_INFO`, the base's
+`get_aspect_ratio`; a table built at a smaller `--resolution` than requested raises),
+and reuses the base's caption pipeline: selection (`_select_caption`), the same
+post-processing (`caption_suffix`, CFG dropout, duration/FPS and resolution
+conditioning suffixes for non-structured captions, in the base's order), and
+tokenization (`tokenize_caption` + `add_special_tokens`) — which is why
+`text_token_ids` are token-exact for structured *and* dense captions. Samples the base
+would skip (short window, no usable caption) come back as `None` — the same contract
+as `process_one_sample` — and the iterable filters them.
 
 `LanceVisionSFTIterable` + `get_lance_vision_sft_dataset` adapt the map-style dataset to
 the training packing stack's iterable/self-sharding contract (per-(rank, worker) shard of
@@ -192,12 +207,14 @@ downstream (processor, tokenizer) is unchanged by construction.
   local training and resumable map-style recipes.
 - **`LanceVLMShuffleScan`** (iterable): for S3, random point-lookups are
   latency-bound, so this reads contiguous row-chunks (`batch_size` rows per take) in
-  seeded-shuffled chunk order, sharded across workers, and pushes rows through a local
-  shuffle buffer — sequential I/O with decorrelated output, the same access pattern the
-  HF base gets from shard streaming.
+  seeded-shuffled chunk order (reshuffled each pass), sharded per (rank, worker) —
+  with a `torch.distributed` fallback when the dataloader doesn't set the shard
+  attributes — and pushes rows through a local shuffle buffer: sequential I/O with
+  decorrelated output, the same access pattern the HF base gets from shard streaming.
 
 `get_lance_vlm_dataset` mirrors the base `get_llava_ov_map` factory signature so the VLM
-recipe swap is also a one-line `_target_` change.
+recipe swap is also a one-line `_target_` change; `n` caps the dataset like the base's
+`.select(range(n))`.
 
 ---
 

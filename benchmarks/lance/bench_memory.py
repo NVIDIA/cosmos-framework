@@ -1,24 +1,15 @@
 # SPDX-License-Identifier: OpenMDW-1.1
 """Memory-footprint benchmark for the action / DROID loader: base vs LanceDB.
 
-Throughput is only half the scaling story — the base loaders are also memory-heavy, and
-that is what caps worker count (and OOMs) at full-DROID scale. This measures three axes,
-one side per process (``--side base|lance``) so RSS is clean:
+Measures two axes, one side per process (``--side base|lance``) so RSS is clean:
 
-  1. INDEX memory — RSS after constructing the dataset (before any iteration). The base
-     (Historical note: the pre-2026-07 base materialized ``self._rows`` = one dict PER FRAME;
-     the rewritten base reads labels lazily via LeRobot, so both sides are now index-light.)
-     (~18M frames at full DROID = tens of GB, per its own code comment). For the DROID
-     loader this is dead weight (it reads windows from compact numpy arrays via
-     ``_window_rows`` and overrides ``__len__``), so the Lance loader frees it.
-  2. ``_rows`` size — measured directly via del + gc (the redundant index materialization).
-  3. RUNTIME memory — peak total RSS (main + all DataLoader workers) during steady-state
-     iteration. The base decodes 3 full-resolution mega-mp4 views/sample; Lance decodes one
-     small pre-composed 270x320 clip with a bounded per-worker decoder cache.
+  1. INDEX memory — RSS after constructing the dataset (before any iteration), plus the
+     spawn payload (the pickled bytes each spawn worker receives).
+  2. RUNTIME memory — peak total RSS (main + all DataLoader workers) during steady-state
+     iteration, and the per-worker average — that is what multiplies by ``num_workers``
+     and decides how many workers fit in RAM.
 
-Reports per-worker RSS too — that is what multiplies by ``num_workers`` and decides how
-many workers fit in RAM (the real scaling limit). Extrapolate index memory linearly in
-frame count for full-dataset estimates.
+PSS (proportional set size) is reported alongside RSS for fork/COW fairness.
 """
 
 from __future__ import annotations
@@ -97,22 +88,6 @@ def main():
         help="DataLoader worker start method. fork shares the parent's index via copy-on-write "
         "(measure with PSS); lance fork support is experimental.",
     )
-    ap.add_argument(
-        "--free-base-rows",
-        action="store_true",
-        help="(base only) free self._rows before iterating — isolates the per-worker _rows cost",
-    )
-    ap.add_argument(
-        "--random",
-        action="store_true",
-        help="iterate with a RandomSampler (touches all episodes across a scaled table) instead of sequentially",
-    )
-    ap.add_argument(
-        "--skip-iterate",
-        action="store_true",
-        help="measure index/__init__ + spawn-payload memory only (no decode) — for scaled "
-        "parquet roots without matching video; the index is the term that scales/OOMs",
-    )
     ap.add_argument("--batch-size", type=int, default=16)
     ap.add_argument("--num-workers", type=int, default=8)
     ap.add_argument("--num-batches", type=int, default=40)
@@ -135,46 +110,16 @@ def main():
     gc.collect()
     rss_after_init = proc.memory_info().rss
     n_frames = int(getattr(ds, "_num_valid_indices", 0)) or len(ds)  # valid samples
-    n_samples = len(ds)
-
-    if args.free_base_rows and getattr(ds, "_rows", None) is not None:
-        ds._rows = None
-        gc.collect()
 
     # spawn per-worker payload: the bytes each spawn worker receives (pickle applies the
     # loader's __getstate__, so this is exactly what is shipped). With spawn this duplicates
     # into every worker; with fork the parent's pages are COW-shared instead.
     spawn_payload_mb = len(pickle.dumps(ds, protocol=pickle.HIGHEST_PROTOCOL)) / _MB
 
-    if args.skip_iterate:
-        rows_mb = float("nan")
-        if getattr(ds, "_rows", None) is not None:
-            gc.collect()
-            before = proc.memory_info().rss
-            ds._rows = None
-            gc.collect()
-            rows_mb = (before - proc.memory_info().rss) / _MB
-        print(
-            f"MEM_RESULT side={args.side} ctx=index-only workers=0 frames={n_frames} "
-            f"init_index_mb={(rss_after_init - rss_before) / _MB:.0f} dead_rows_mb={rows_mb:.0f} "
-            f"spawn_payload_mb={spawn_payload_mb:.1f} per_frame_payload_bytes={spawn_payload_mb * _MB / max(1, n_frames):.0f}",
-            flush=True,
-        )
-        return
-
-    # steady-state runtime RSS (main + workers) — measured with the dataset AS IT RUNS
-    # (base keeps self._rows unless --free-base-rows; the Lance loaders free it in __init__),
-    # so spawn workers carry exactly what the real loader would pickle to them.
-    sampler = None
-    if args.random:
-        g = torch.Generator().manual_seed(0)
-        sampler = torch.utils.data.RandomSampler(
-            ds, replacement=True, num_samples=(args.num_batches + args.warmup + 4) * args.batch_size, generator=g
-        )
+    # steady-state runtime RSS (main + workers)
     loader = torch.utils.data.DataLoader(
         ds,
         batch_size=args.batch_size,
-        sampler=sampler,
         num_workers=args.num_workers,
         collate_fn=_collate,
         persistent_workers=args.num_workers > 0,
@@ -194,22 +139,10 @@ def main():
             break
     per_worker_mb = (sum(rss_s) / len(rss_s) / _MB) if rss_s else float("nan")
     per_worker_pss_mb = (sum(pss_s) / len(pss_s) / _MB) if pss_s else float("nan")
-    peak_total = peak_rss
-
-    # AFTER the runtime measurement, probe the size of self._rows (the per-frame dict list
-    # the base ships to every spawn worker; the Lance loaders free it). Doing this last so it
-    # can't perturb the runtime numbers above.
-    rows_mb = float("nan")
-    if getattr(ds, "_rows", None) is not None:
-        gc.collect()
-        before = proc.memory_info().rss
-        ds._rows = None
-        gc.collect()
-        rows_mb = (before - proc.memory_info().rss) / _MB
 
     print(
         f"MEM_RESULT side={args.side} ctx={args.mp_context} workers={args.num_workers} frames={n_frames} "
-        f"init_index_mb={(rss_after_init - rss_before) / _MB:.0f} dead_rows_mb={rows_mb:.0f} "
+        f"init_index_mb={(rss_after_init - rss_before) / _MB:.0f} "
         f"peak_rss_mb={peak_rss / _MB:.0f} peak_pss_mb={peak_pss / _MB:.0f} "
         f"per_worker_rss_mb={per_worker_mb:.0f} per_worker_pss_mb={per_worker_pss_mb:.0f} "
         f"spawn_payload_mb={spawn_payload_mb:.1f}",

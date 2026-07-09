@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: OpenMDW-1.1
 """LanceDB-backed VLM (LLaVA-OneVision) dataset.
 
-Provides O(1) random access and global shuffle for VLM datasets.
+Row-level random access and global shuffle for VLM datasets.
 Drop-in replacement for HF streaming or WebDataset sources.
 """
 
@@ -18,16 +18,17 @@ import torch
 from lancedb.permutation import Permutation
 
 _COLS = ["sample_id", "image_bytes", "conversations"]
+_SCHEMA = pa.schema(
+    [
+        pa.field("sample_id", pa.string()),
+        pa.field("image_bytes", pa.large_binary()),
+        pa.field("conversations", pa.string()),
+    ]
+)
 
 
 def _record_batches(hf_dataset, batch_rows: int = 512):
-    schema = pa.schema(
-        [
-            pa.field("sample_id", pa.string()),
-            pa.field("image_bytes", pa.large_binary()),
-            pa.field("conversations", pa.string()),
-        ]
-    )
+    schema = _SCHEMA
     ids, imgs, convs = [], [], []
     for i, rec in enumerate(hf_dataset):
         img = rec.get("image")
@@ -55,18 +56,11 @@ def _record_batches(hf_dataset, batch_rows: int = 512):
 
 
 def convert_llava_to_lance(hf_dataset, uri: str, table_name: str = "llava") -> str:
-    schema = pa.schema(
-        [
-            pa.field("sample_id", pa.string()),
-            pa.field("image_bytes", pa.large_binary()),
-            pa.field("conversations", pa.string()),
-        ]
-    )
-    reader = pa.RecordBatchReader.from_batches(schema, _record_batches(hf_dataset))
+    reader = pa.RecordBatchReader.from_batches(_SCHEMA, _record_batches(hf_dataset))
     db = lancedb.connect(uri)
     if table_name in db.table_names():
         db.drop_table(table_name)
-    db.create_table(table_name, data=reader, schema=schema)
+    db.create_table(table_name, data=reader, schema=_SCHEMA)
     return table_name
 
 
@@ -110,8 +104,12 @@ class LanceVLMDataset(torch.utils.data.Dataset):
 
     def __getitems__(self, indices: list[int]) -> list[dict[str, Any]]:
         self._ensure_open()
-        batch = self._perm.__getitems__([int(i) for i in indices])
-        return [self._row_to_item(batch, i) for i in range(batch.num_rows)]
+        # take returns rows sorted by offset (and deduplicated), so key results by
+        # row and map back to the requested order — never zip positionally.
+        rows = sorted({int(i) for i in indices})
+        batch = self._perm.__getitems__(rows)
+        by_row = {r: self._row_to_item(batch, i) for i, r in enumerate(rows)}
+        return [dict(by_row[int(i)]) for i in indices]
 
 
 class LanceVLMShuffleScan(torch.utils.data.IterableDataset):
@@ -138,6 +136,10 @@ class LanceVLMShuffleScan(torch.utils.data.IterableDataset):
         self.batch_size = batch_size
         self.seed = seed
         self._perm = None
+        self._epoch = 0
+        # Set by RankPartitionedDataLoader; None falls back to torch.distributed.
+        self.shard_world_size = None
+        self.shard_rank = None
         self.length = self._open_table().count_rows()
 
     def _open_table(self):
@@ -159,12 +161,21 @@ class LanceVLMShuffleScan(torch.utils.data.IterableDataset):
     def __iter__(self):
         info = torch.utils.data.get_worker_info()
         wid, nw = (info.id, info.num_workers) if info else (0, 1)
+        ws, rk = self.shard_world_size, self.shard_rank
+        if ws is None or rk is None:
+            if torch.distributed.is_available() and torch.distributed.is_initialized():
+                ws, rk = torch.distributed.get_world_size(), torch.distributed.get_rank()
+            else:
+                ws, rk = 1, 0
+        shard = int(rk) * nw + wid
+        total = max(1, int(ws) * nw)
         perm = self._ensure_perm()
         chunks = [(s, min(s + self.batch_size, self.length)) for s in range(0, self.length, self.batch_size)]
-        rng = random.Random(self.seed)
+        epoch, self._epoch = self._epoch, self._epoch + 1  # reshuffle each pass
+        rng = random.Random(self.seed + epoch)
         rng.shuffle(chunks)
         buf = []
-        for start, end in chunks[wid::nw]:
+        for start, end in chunks[shard::total]:
             batch = perm.__getitems__(list(range(start, end)))
             ids = batch.column("sample_id").to_pylist()
             imgs = batch.column("image_bytes").to_pylist()
@@ -187,9 +198,14 @@ def get_lance_vlm_dataset(
     n: int | None = None,
 ):
     """Lance drop-in for ``get_llava_ov_map``: the same map-style image+conversation
-    records, read from LanceDB. ``subset``/``split``/``n`` are accepted for
-    signature-compatibility (the table is prebuilt) and ignored."""
-    return LanceVLMDataset(uri, table_name=table_name, storage_options=storage_options)
+    records, read from LanceDB. ``n`` caps the dataset to the first ``n`` rows like
+    the base's ``.select(range(n))``; ``subset``/``split`` are accepted for
+    signature-compatibility but must match what the table was built from (the
+    conversion bakes them in)."""
+    ds = LanceVLMDataset(uri, table_name=table_name, storage_options=storage_options)
+    if n is not None:
+        ds.length = min(ds.length, int(n))
+    return ds
 
 
 __all__ = [

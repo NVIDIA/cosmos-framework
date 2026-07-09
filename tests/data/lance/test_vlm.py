@@ -53,7 +53,10 @@ def test_vlm():
         convert_llava_to_lance(iter(base), tmp, table_name="llava")
         lance = LanceVLMDataset(tmp, table_name="llava")
         assert len(lance) == len(base)
-        batch = lance.__getitems__(list(range(len(base))))
-        for i, l in enumerate(batch):
+        # unsorted + duplicate indices: batched take must map back to the requested order
+        idxs = [5, 1, 5, 0, 7, 3]
+        batch = lance.__getitems__(idxs)
+        assert len(batch) == len(idxs)
+        for i, l in zip(idxs, batch):
             assert l["conversations"] == (base[i].get("conversations") or [])
             assert l["image"]["bytes"] == _norm_image_bytes(base[i])

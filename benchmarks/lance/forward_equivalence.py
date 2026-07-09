@@ -61,7 +61,6 @@ torchcodec). Requires the converted Cosmos3-Nano + Wan VAE (see docs/training.md
 from __future__ import annotations
 
 import argparse
-import json
 import os
 from types import SimpleNamespace
 
@@ -131,28 +130,19 @@ def _loss(model, sample: dict) -> float:
 
 
 def _vision_pair(tok):
-    from cosmos_framework.data.generator.local_datasets.helper import get_aspect_ratio
-    from cosmos_framework.data.generator.local_datasets.sft_dataset import SFTDataset
+    from cosmos_framework.data.generator.local_datasets.sft_dataset import (
+        SFTDataset,
+        _flatten_metadata_by_window,
+        _load_sft_metadata_from_s3,
+    )
     from cosmos_framework.data.lance import LanceVisionSFTDataset
 
     jsonl = f"{_D}/bridge_src/sft_dataset_bridge/train/video_dataset_file.jsonl"
     base_dir = os.path.dirname(jsonl)
-    metas = []
-    for line in open(jsonl):
-        rec = json.loads(line)
-        vp = rec["vision_path"]
-        vp = vp if ("://" in vp or vp.startswith("/")) else os.path.join(base_dir, vp)
-        for wi, w in enumerate(rec["t2w_windows"]):
-            metas.append(
-                {
-                    "uuid": f"{rec['uuid']}_w{wi}",
-                    "vision_path": vp,
-                    "width": rec["width"],
-                    "height": rec["height"],
-                    "aspect_ratio": get_aspect_ratio(rec["width"], rec["height"]),
-                    "t2w_windows": [w],
-                }
-            )
+    metas = _flatten_metadata_by_window(_load_sft_metadata_from_s3(None, jsonl, min_frames=61))
+    for m in metas:
+        vp = m["vision_path"]
+        m["vision_path"] = vp if ("://" in vp or vp.startswith("/")) else os.path.join(base_dir, vp)
     vkw = dict(num_video_frames=16, frame_selection_mode="first", temporal_interval_mode="entire_chunk")
     base = SFTDataset(
         metadata=metas, resolution="256", s3_credentials={}, tokenizer_config=tok, cfg_dropout_rate=0.0, **vkw

@@ -8,7 +8,7 @@ This directory contains LanceDB-backed implementations of the three main dataloa
 Each is a drop-in for the corresponding base loader, reading from a converted LanceDB table
 instead of the original source (LeRobot tree / local clips / HuggingFace stream). Output is
 equivalent to the base — VLM records byte-identical, vision-SFT token-ids exact, action labels
-(action/pose/caption) bit-exact, and video within one offline H.264 re-encode (~1.5%) — and the
+(action/pose/caption) bit-exact, and video within one offline H.264 re-encode (< 2.5% pixel MAD) — and the
 table can be read directly from object storage (S3) without FUSE or full downloads.
 
 ## Performance Summary
@@ -138,8 +138,9 @@ filtering) complete the label set.
 The base `SFTDataset` fetches each source clip, decodes it at native size, and resizes it per
 sample every epoch through an ffmpeg subprocess. The Lance table stores each clip already resized
 to the training resolution with a short GOP, so the loader decodes fewer pixels in-process and
-seeks windows cheaply. Caption selection and tokenization reuse the base code, so `text_token_ids`
-are token-exact.
+seeks windows cheaply. Caption selection, post-processing (CFG dropout, duration/resolution
+conditioning suffixes), and tokenization reuse the base code, so `text_token_ids` are token-exact;
+the converter uses the base's own metadata load (same duration/min-frames filters).
 
 | column                | type         | description                          |
 | --------------------- | ------------ | ------------------------------------ |

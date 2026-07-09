@@ -79,9 +79,9 @@ def main() -> None:
 
     info = json.loads((src / "meta" / "info.json").read_text())
 
-    # ---- data: keep episodes [0, n); keep all columns (rename only) so the
+    # ---- data: keep episodes [0, n); rename, then prune to DATA_COLS so the
     # data parquet and info.json features stay consistent for downstream
-    # converters (lerobot-lancedb iterates every declared feature). ----
+    # converters (they iterate every declared feature). ----
     data = pq.read_table(src / "data" / "chunk-000" / "file-000.parquet")
     data = _rename_table(data, COLUMN_MAP)
     data = data.select(DATA_COLS)
