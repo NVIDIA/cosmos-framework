@@ -22,7 +22,7 @@ All paths below are relative to this file's location (`.agents/skills/cosmos3-co
 
 - `cosmos_framework/` — main training package (data, model, trainer, callbacks, checkpoint, utils, …).
 - `cosmos_framework/configs/base/experiment/` — vfm (generator) experiment SKUs referenced by `[train.train_policy].experiment` in the recipe TOMLs.
-- `cosmos_framework/configs/base/vlm/experiment/` — vlm (reasoner) experiment SKUs.
+- `cosmos_framework/configs/base/reasoner/experiment/` — vlm (reasoner) experiment SKUs.
 - `cosmos_framework/inference/` — inference subpackage (args, model, inference engine, defaults, Ray serving, common helpers).
 - `cosmos_framework/scripts/` — top-level entry-point scripts (train, inference, eval, export_model, convert_model_to_dcp, upsample_prompts, caption_from_video, captions_to_sft_jsonl, action_policy_server, …). Invoked as `python -m cosmos_framework.scripts.<name>`.
 - `examples/toml/sft_config/<recipe>.toml` + `examples/launch_sft_<recipe>.sh` — paired SFT recipes (training entry-point input). The shell sources `examples/_sft_launcher_common.sh`, which forwards into `cosmos_framework.scripts.train --sft-toml=...`.
@@ -45,7 +45,7 @@ All paths below are relative to this file's location (`.agents/skills/cosmos3-co
 | SFT recipe TOMLs (paired with `examples/launch_sft_*.sh`) | `../../../examples/toml/sft_config/<recipe>.toml`                                                                                 |
 | SFT pydantic schema (validates the recipe TOML)           | `../../../cosmos_framework/configs/toml_config/sft_config.py`                                                                     |
 | Training experiment SKUs (vfm)                            | `../../../cosmos_framework/configs/base/experiment/`                                                                              |
-| Training experiment SKUs (vlm / reasoner)                 | `../../../cosmos_framework/configs/base/vlm/experiment/`                                                                          |
+| Training experiment SKUs (vlm / reasoner)                 | `../../../cosmos_framework/configs/base/reasoner/experiment/`                                                                     |
 | Example inputs                                            | `../../../inputs/omni/t2i.json`, `../../../inputs/omni/t2v.json`, `../../../inputs/omni/i2v.json`, …                              |
 
 Available modality modes for defaults: `text2image`, `text2video`, `image2video`, `image2image`, `video2video`, `forward_dynamics`, `inverse_dynamics`, `policy`.
@@ -95,7 +95,6 @@ Users can also supply a custom defaults file per-request via the `defaults_file`
 | ---------------------------------- | -------------------------------------------------------------------------------------------- |
 | Batch inference                    | `python -m cosmos_framework.scripts.inference`                                               |
 | Training                           | `python -m cosmos_framework.scripts.train --sft-toml=examples/toml/sft_config/<recipe>.toml` |
-| Action evaluation                  | `python -m cosmos_framework.scripts.eval`                                                    |
 | Online serving (Ray)               | `python -m cosmos_framework.inference.ray.serve`                                             |
 | Submit to Ray server               | `python -m cosmos_framework.inference.ray.submit`                                            |
 | Gradio UI                          | `python -m cosmos_framework.inference.ray.gradio`                                            |

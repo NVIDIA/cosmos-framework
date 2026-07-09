@@ -8,7 +8,7 @@ from typing import Any
 from cosmos_framework.utils.lazy_config import PLACEHOLDER
 from cosmos_framework.utils.lazy_config import LazyCall as L
 from cosmos_framework.utils.config_helper import ConfigStore
-from cosmos_framework.utils.vfm.optimizer import build_lr_scheduler, build_optimizer
+from cosmos_framework.utils.generator.optimizer import build_lr_scheduler, build_optimizer
 
 OPTIMIZER_KWARGS: dict[str, Any] = dict(
     # Learning rate for the optimizer.

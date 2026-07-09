@@ -19,12 +19,12 @@ Concretely, this demo deliberately simplifies four things:
        Real training samples σ from a logit-normal (image) / waver (video)
        distribution per `OmniMoTModel._get_train_noise_level_vision`.
     3. LOSS — plain MSE on velocity.
-       Real training uses `cosmos_framework.model.vfm.algorithm.loss.flow_matching
+       Real training uses `cosmos_framework.model.generator.algorithm.loss.flow_matching
        .compute_flow_matching_loss`, which adds per-sample weighting,
        condition-mask zeroing, and `loss_scale=10` (with separate image/video
        scaling).
     4. SAMPLER — plain Euler, no CFG, ~8 steps.
-       Real inference uses UniPC (`cosmos_framework.model.vfm.diffusion.samplers.unipc`)
+       Real inference uses UniPC (`cosmos_framework.model.generator.diffusion.samplers.unipc`)
        with `guidance=1.5` and 35 steps.
 
 If you train or sample with the demo's simplifications you will diverge from
@@ -84,7 +84,7 @@ to do that — they are unavoidable unless you re-implement the packer:
                                                     (just packs + calls net)
 
 If you wanted ZERO cosmos_framework imports at runtime, you would re-vendor
-`cosmos_framework/data/vfm/sequence_packing.py` and the VAE into your own framework.
+`cosmos_framework/data/generator/sequence_packing.py` and the VAE into your own framework.
 
 ================================================================================
 RUN
@@ -107,12 +107,12 @@ import torch.nn.functional as F
 
 from cosmos_framework.configs.base.defaults.compile import CompileConfig
 from cosmos_framework.configs.base.defaults.parallelism import ParallelismConfig
-from cosmos_framework.data.vfm.action.domain_utils import get_domain_id
-from cosmos_framework.data.vfm.action.transforms import build_sequence_plan_from_mode
-from cosmos_framework.data.vfm.sequence_packing import SequencePlan, build_sequence_plans_from_data_batch
+from cosmos_framework.data.generator.action.domain_utils import get_domain_id
+from cosmos_framework.data.generator.action.transforms import build_sequence_plan_from_mode
+from cosmos_framework.data.generator.sequence_packing import SequencePlan, build_sequence_plans_from_data_batch
 from cosmos_framework.inference.args import DEFAULT_CHECKPOINT
 from cosmos_framework.inference.model import Cosmos3OmniConfig, Cosmos3OmniModel
-from cosmos_framework.model.vfm.vlm.qwen3_vl.utils import tokenize_caption
+from cosmos_framework.model.generator.reasoner.qwen3_vl.utils import tokenize_caption
 
 
 def _load_omni_model(*, config_dir_arg: str | None):
@@ -147,8 +147,8 @@ def _load_omni_model(*, config_dir_arg: str | None):
     config_text = (config_dir / "config.json").read_text()
     for _old, _new in [
         ("cosmos3._src.vfm.configs.base.", "cosmos_framework.configs.base."),
-        ("cosmos3._src.vfm.models.", "cosmos_framework.model.vfm."),
-        ("cosmos3._src.vfm.tokenizers.", "cosmos_framework.model.vfm.tokenizers."),
+        ("cosmos3._src.vfm.models.", "cosmos_framework.model.generator."),
+        ("cosmos3._src.vfm.tokenizers.", "cosmos_framework.model.generator.tokenizers."),
         ("cosmos3._src.imaginaire.", "cosmos_framework."),
     ]:
         config_text = config_text.replace(_old, _new)
@@ -271,7 +271,7 @@ def train_one_step(model, net, batch, *, iteration: int) -> torch.Tensor:
     gen_data_clean = model.get_data_and_condition(batch, iteration=iteration)
 
     # Pick a mid-range noise level for the demo (real training samples sigma
-    # from a per-modality distribution; see cosmos_framework.model.vfm.omni_mot_model
+    # from a per-modality distribution; see cosmos_framework.model.generator.omni_mot_model
     # `_get_train_noise_level_vision`).
     B = gen_data_clean.batch_size
     # tensor_kwargs_fp32 = {"dtype": float32, "device": ...} — keeps demo
@@ -294,7 +294,7 @@ def train_one_step(model, net, batch, *, iteration: int) -> torch.Tensor:
     v_pred = out["preds_vision"]                                        # list of [C, T, H, W]
 
     # ── 3. Custom flow-matching loss (MSE on velocity). This is what
-    #       `cosmos_framework.model.vfm.algorithm.loss.flow_matching.compute_flow_matching_loss`
+    #       `cosmos_framework.model.generator.algorithm.loss.flow_matching.compute_flow_matching_loss`
     #       computes, minus the per-sample weighting & condition masking.
     v_target = gen_data_noised.vt_target_vision                         # list of [C, T, H, W]
     loss = sum(F.mse_loss(p.float(), t.float()) for p, t in zip(v_pred, v_target))
@@ -313,7 +313,7 @@ def train_one_step(model, net, batch, *, iteration: int) -> torch.Tensor:
 def sample(model, net, batch, *, num_steps: int = 12) -> dict:
     """N-step Euler integration of dx/dt = v(x,t) — no cosmos_framework sampler involved.
 
-    Production cosmos_framework uses UniPC/EDM (cosmos_framework.model.vfm.diffusion.samplers.*).
+    Production cosmos_framework uses UniPC/EDM (cosmos_framework.model.generator.diffusion.samplers.*).
     Plain Euler keeps the loop on one screen and surfaces where `net` is called.
 
     Returns a dict:

@@ -11,13 +11,18 @@ import re
 import pydantic
 import torch
 from accelerate import init_empty_weights
-from diffusers import AutoencoderKLWan, UniPCMultistepScheduler
-from diffusers_cosmos3 import Cosmos3OmniDiffusersPipeline, Cosmos3OmniTransformer
+from diffusers import (
+    AutoencoderKLWan,
+    Cosmos3AVAEAudioTokenizer,
+    Cosmos3OmniPipeline,
+    Cosmos3OmniTransformer,
+    UniPCMultistepScheduler,
+)
 from transformers import AutoConfig, AutoTokenizer
 
 from cosmos_framework.inference.model import Cosmos3OmniModel
+from cosmos_framework.model.generator.omni_mot_model import OmniMoTModel
 from cosmos_framework.utils import log
-from cosmos_framework.model.vfm.omni_mot_model import OmniMoTModel
 
 DEFAULT_SOUND_TOKENIZER_CONFIG = {
     "model_type": "autoencoder_v2",
@@ -62,14 +67,6 @@ DEFAULT_SOUND_TOKENIZER_CONFIG = {
     "latent_std": None,
 }
 
-SOUND_TOKENIZER_MODEL_INDEX_ENTRY = [
-    "diffusers",
-    "Cosmos3AVAEAudioTokenizer",
-]
-
-LEGACY_SOUND_TOKENIZER_CHECKPOINT_NAME = "model.safetensors"
-DIFFUSERS_SOUND_TOKENIZER_CHECKPOINT_NAME = "diffusion_pytorch_model.safetensors"
-
 # Wrapper prefixes that may appear on every key of a legacy AVAE state dict
 # (DDP wrappers, full-model saves, training exports). Stripped iteratively
 # until each key reaches a recognised target prefix.
@@ -79,6 +76,28 @@ _SOUND_TOKENIZER_TARGET_PREFIXES = ("decoder.", "encoder.", "bottleneck.")
 # Inside a residual unit the legacy `nn.Sequential` layout was
 # [snake1, conv1, snake2, conv2]; map sub-index → named attribute.
 _SOUND_TOKENIZER_RES_UNIT_INNER_NAMES = {0: "snake1", 1: "conv1", 2: "snake2", 3: "conv2"}
+
+# The source language_model nests its transformer stack under a `model.`
+# attribute (HF Qwen-style); the diffusers `Cosmos3OmniTransformer` holds
+# those layers flat, so the leading `model.` prefix is stripped. The
+# PackedAttentionMoT projections are renamed from the source Qwen-style
+# names (`q_proj`/… plus cosmos-specific `*_moe_gen`) to the diffusers
+# AttentionModuleMixin canonical names. Order matters: the `*_moe_gen`
+# substrings must be substituted before the plain ones.
+_ATTN_KEY_REMAP = (
+    (".q_proj_moe_gen.", ".add_q_proj."),
+    (".k_proj_moe_gen.", ".add_k_proj."),
+    (".v_proj_moe_gen.", ".add_v_proj."),
+    (".o_proj_moe_gen.", ".to_add_out."),
+    (".q_norm_moe_gen.", ".norm_added_q."),
+    (".k_norm_moe_gen.", ".norm_added_k."),
+    (".q_proj.", ".to_q."),
+    (".k_proj.", ".to_k."),
+    (".v_proj.", ".to_v."),
+    (".o_proj.", ".to_out."),
+    (".q_norm.", ".norm_q."),
+    (".k_norm.", ".norm_k."),
+)
 
 # Legacy TimestepEmbedder stored its MLP as `nn.Sequential([Linear, SiLU, Linear])`,
 # so state-dict keys were `mlp.0.*` / `mlp.2.*`. The diffusers `TimestepEmbedding`
@@ -93,6 +112,7 @@ _TIME_EMBEDDER_KEY_REMAP = {
 
 DEFAULT_VISION_ENCODER_MODEL = "Qwen/Qwen3-VL-8B-Instruct"
 VISION_ENCODER_CHECKPOINT_PREFIX = "model.visual."
+VISION_ENCODER_CHECKPOINT_SUBFOLDER = "vision_encoder"
 
 
 def _get_config_value(*configs, name, default=None):
@@ -106,6 +126,19 @@ def _get_config_value(*configs, name, default=None):
         if isinstance(config, dict) and config.get(name) is not None:
             return config[name]
     return default
+
+
+def _remap_language_model_key(key: str) -> str:
+    """Rename a source language-model state-dict key to the diffusers
+    `Cosmos3OmniTransformer` layout: strip the leading `model.` prefix and
+    apply the attention-projection renames from `_ATTN_KEY_REMAP`.
+    """
+    key = key.removeprefix("model.")
+    for old, new in _ATTN_KEY_REMAP:
+        if old in key:
+            key = key.replace(old, new)
+            break
+    return key
 
 
 def _load_sound_tokenizer_state_dict(checkpoint_path: pathlib.Path) -> dict[str, torch.Tensor]:
@@ -154,13 +187,15 @@ def _sound_tokenizer_strip_per_key_prefixes(state_dict: dict[str, torch.Tensor])
     return out
 
 
-def _sound_tokenizer_filter_decoder(state_dict: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
-    """Drop encoder and bottleneck keys — only the decoder is used at inference."""
-    return {k: v for k, v in state_dict.items() if k.startswith("decoder.")}
+def _sound_tokenizer_filter_supported_modules(state_dict: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
+    """Keep only encoder/decoder keys — `Cosmos3AVAEAudioTokenizer` supports
+    the parameter-free `vae` bottleneck only, so bottleneck keys are dropped.
+    """
+    return {k: v for k, v in state_dict.items() if k.startswith(("encoder.", "decoder."))}
 
 
 def _sound_tokenizer_infer_num_blocks(state_dict: dict[str, torch.Tensor]) -> int:
-    """Count the OobleckDecoderBlocks present in a flat-`Sequential` legacy
+    """Count the decoder blocks present in a flat-`Sequential` legacy
     decoder state dict by spotting `decoder.layers.{N}.layers.{M}.*` keys.
     """
     block_indices: set[int] = set()
@@ -173,7 +208,7 @@ def _sound_tokenizer_infer_num_blocks(state_dict: dict[str, torch.Tensor]) -> in
 
 def _sound_tokenizer_remap_flat_layout(state_dict: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
     """Rewrite a legacy `decoder.layers.{N}.*` flat-`Sequential` layout to the
-    diffusers OobleckDecoder named-attribute layout.
+    diffusers Cosmos3AudioDecoder named-attribute layout.
 
     The legacy decoder is
         Sequential([conv1, block_0, ..., block_{N-1}, snake1, conv2])
@@ -243,7 +278,11 @@ def _sound_tokenizer_reshape_snake_params(state_dict: dict[str, torch.Tensor]) -
     """
     out: dict[str, torch.Tensor] = {}
     for key, value in state_dict.items():
-        if (key.endswith(".alpha") or key.endswith(".beta")) and value.ndim == 1:
+        if (
+            key.startswith(("encoder.", "decoder."))
+            and (key.endswith(".alpha") or key.endswith(".beta"))
+            and value.ndim == 1
+        ):
             value = value.unsqueeze(0).unsqueeze(-1).contiguous()
         out[key] = value
     return out
@@ -252,7 +291,7 @@ def _sound_tokenizer_reshape_snake_params(state_dict: dict[str, torch.Tensor]) -
 def _sound_tokenizer_reapply_weight_norm(state_dict: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
     """If a Conv layer has the folded `.weight` tensor but neither `.weight_g`
     nor `.weight_v`, reconstruct the pair so the resulting checkpoint can be
-    loaded into the weight-norm-wrapped diffusers OobleckDecoder.
+    loaded into the weight-norm-wrapped diffusers Cosmos3AudioDecoder.
 
     `weight_norm` with `dim=0` parameterises `weight = g * v / ||v||`. Setting
     `v = weight` and `g = ||weight||` along all non-zero axes is an exact
@@ -262,7 +301,11 @@ def _sound_tokenizer_reapply_weight_norm(state_dict: dict[str, torch.Tensor]) ->
     candidate_keys = [
         key
         for key in state_dict
-        if key.endswith(".weight") and any(f".{layer}." in key for layer in ("conv1", "conv2", "conv_t1"))
+        if key.endswith(".weight")
+        and (
+            any(f".{layer}." in key for layer in ("conv1", "conv2", "conv_t1"))
+            or re.fullmatch(r"encoder\.layers\.\d+\.weight", key)
+        )
     ]
     for key in candidate_keys:
         stem = key[: -len(".weight")]
@@ -279,24 +322,17 @@ def _sound_tokenizer_reapply_weight_norm(state_dict: dict[str, torch.Tensor]) ->
     return out
 
 
-def _remap_time_embedder_state_dict(state_dict: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
-    """Remap a legacy `TimestepEmbedder` state dict (with `nn.Sequential`-style
-    `mlp.0` / `mlp.2` keys) to the diffusers `TimestepEmbedding` layout
-    (`linear_1` / `linear_2`). Keys not in `_TIME_EMBEDDER_KEY_REMAP` pass
-    through unchanged.
-    """
-    return {_TIME_EMBEDDER_KEY_REMAP.get(key, key): value for key, value in state_dict.items()}
-
-
 def _remap_sound_tokenizer_state_dict(state_dict: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
     """Apply the full legacy → diffusers conversion pipeline to a sound
-    tokenizer state dict: strip prefixes, drop non-decoder keys, remap the
-    flat `nn.Sequential` layout to named attributes, reshape Snake1d params,
-    and reconstruct `weight_g` / `weight_v` for any folded conv weights.
+    tokenizer state dict: strip prefixes, drop unsupported (bottleneck) keys,
+    remap the flat `nn.Sequential` layout to named attributes, reshape Snake1d
+    params, and reconstruct `weight_g` / `weight_v` for any folded conv weights.
     """
     state_dict = _sound_tokenizer_strip_per_key_prefixes(state_dict)
-    state_dict = _sound_tokenizer_filter_decoder(state_dict)
+    state_dict = _sound_tokenizer_filter_supported_modules(state_dict)
     if not state_dict:
+        raise RuntimeError("Sound tokenizer state dict has no `encoder.*`/`decoder.*` keys after prefix stripping.")
+    if not any(key.startswith("decoder.") for key in state_dict):
         raise RuntimeError("Sound tokenizer state dict has no `decoder.*` keys after prefix stripping.")
     state_dict = _sound_tokenizer_remap_flat_layout(state_dict)
     state_dict = _sound_tokenizer_reshape_snake_params(state_dict)
@@ -306,57 +342,39 @@ def _remap_sound_tokenizer_state_dict(state_dict: dict[str, torch.Tensor]) -> di
     return state_dict
 
 
-def _load_sound_tokenizer_config(config_path: pathlib.Path | None, fallback_config_path: pathlib.Path) -> dict:
-    selected_config_path = config_path
-    if selected_config_path is None and fallback_config_path.exists():
-        selected_config_path = fallback_config_path
-    if selected_config_path is None:
+def _load_sound_tokenizer_config(config_path: pathlib.Path | None) -> dict:
+    if config_path is None:
         return dict(DEFAULT_SOUND_TOKENIZER_CONFIG)
-    with open(selected_config_path, encoding="utf-8") as f:
+    with open(config_path, encoding="utf-8") as f:
         return json.load(f)
 
 
-def _save_sound_tokenizer(
-    output_dir: pathlib.Path,
+def _build_sound_tokenizer(
     checkpoint_path: pathlib.Path,
     config_path: pathlib.Path | None,
-    remap_keys: bool = False,
-) -> None:
-    try:
-        from safetensors.torch import save_file
-    except ImportError as exc:
-        raise ImportError("Saving AVAE tokenizer weights requires safetensors.") from exc
-
-    sound_tokenizer_dir = output_dir / "sound_tokenizer"
-    sound_tokenizer_dir.mkdir(parents=True, exist_ok=True)
-
-    config = _load_sound_tokenizer_config(config_path, sound_tokenizer_dir / "config.json")
-    with open(sound_tokenizer_dir / "config.json", "w", encoding="utf-8") as f:
-        json.dump(config, f, indent=4)
-        f.write("\n")
+) -> Cosmos3AVAEAudioTokenizer:
+    config = _load_sound_tokenizer_config(config_path)
 
     log.info(f"Loading AVAE sound tokenizer weights from {checkpoint_path} …")
-    state_dict = _load_sound_tokenizer_state_dict(checkpoint_path)
-    if remap_keys:
-        log.info("Remapping AVAE sound tokenizer state dict to diffusers OobleckDecoder layout …")
-        state_dict = _remap_sound_tokenizer_state_dict(state_dict)
-    output_filename = (
-        DIFFUSERS_SOUND_TOKENIZER_CHECKPOINT_NAME if remap_keys else LEGACY_SOUND_TOKENIZER_CHECKPOINT_NAME
+    raw_state_dict = _load_sound_tokenizer_state_dict(checkpoint_path)
+    state_dict = _remap_sound_tokenizer_state_dict(raw_state_dict)
+    has_encoder = any(key.startswith("encoder.") for key in state_dict)
+    log.info(
+        f"Remapped {len(raw_state_dict)} → {len(state_dict)} tokenizer keys "
+        f"({'encoder+decoder' if has_encoder else 'decoder-only'})."
     )
-    log.info(f"Saving AVAE sound tokenizer to {sound_tokenizer_dir / output_filename} …")
-    save_file(state_dict, str(sound_tokenizer_dir / output_filename), metadata={"format": "pt"})
 
-
-def _add_sound_tokenizer_to_model_index(output_dir: pathlib.Path) -> None:
-    model_index_path = output_dir / "model_index.json"
-    if not model_index_path.exists():
-        return
-    with open(model_index_path, encoding="utf-8") as f:
-        model_index = json.load(f)
-    model_index["sound_tokenizer"] = SOUND_TOKENIZER_MODEL_INDEX_ENTRY
-    with open(model_index_path, "w", encoding="utf-8") as f:
-        json.dump(model_index, f, indent=2)
-        f.write("\n")
+    # `Cosmos3AVAEAudioTokenizer` accepts exactly the keys of the default
+    # config; unknown keys in a source config JSON are ignored.
+    tokenizer_kwargs = {name: config.get(name, default) for name, default in DEFAULT_SOUND_TOKENIZER_CONFIG.items()}
+    sound_tokenizer = Cosmos3AVAEAudioTokenizer(**tokenizer_kwargs, encoder_enabled=has_encoder)
+    load_result = sound_tokenizer.load_state_dict(state_dict, strict=True)
+    if load_result.missing_keys or load_result.unexpected_keys:
+        raise RuntimeError(
+            "Cosmos3 AVAE sound tokenizer load did not match strictly: "
+            f"missing={load_result.missing_keys}, unexpected={load_result.unexpected_keys}."
+        )
+    return sound_tokenizer
 
 
 def _checkpoint_weight_map(checkpoint_path: pathlib.Path) -> dict[str, str]:
@@ -370,6 +388,20 @@ def _checkpoint_weight_map(checkpoint_path: pathlib.Path) -> dict[str, str]:
 
 def _checkpoint_has_weight_prefix(checkpoint_path: pathlib.Path, prefix: str) -> bool:
     return any(key.startswith(prefix) for key in _checkpoint_weight_map(checkpoint_path))
+
+
+def _checkpoint_vision_subfolder_files(checkpoint_path: pathlib.Path) -> dict[str, list[str]]:
+    """Group root-index keys stored under vision_encoder/ by shard file.
+
+    Diffusers-layout source checkpoints keep bare Qwen3VLVisionModel keys
+    (`blocks.*`, `patch_embed.*`, …) in the root weight map, mapped to files
+    under the vision_encoder/ subfolder.
+    """
+    files_to_keys: dict[str, list[str]] = {}
+    for key, filename in _checkpoint_weight_map(checkpoint_path).items():
+        if filename.replace("\\", "/").startswith(f"{VISION_ENCODER_CHECKPOINT_SUBFOLDER}/"):
+            files_to_keys.setdefault(filename, []).append(key)
+    return files_to_keys
 
 
 def _load_prefixed_safetensors_state_dict(checkpoint_path: pathlib.Path, prefix: str) -> dict[str, torch.Tensor]:
@@ -448,6 +480,29 @@ def _build_vision_encoder(
     return vision_encoder.to(dtype=dtype)
 
 
+def _load_vision_subfolder_state_dict(checkpoint_path: pathlib.Path) -> dict[str, torch.Tensor]:
+    try:
+        from safetensors import safe_open
+    except ImportError as exc:
+        raise ImportError("Loading sharded safetensors vision weights requires safetensors.") from exc
+
+    files_to_keys = _checkpoint_vision_subfolder_files(checkpoint_path)
+    state_dict: dict[str, torch.Tensor] = {}
+    for filename, keys in sorted(files_to_keys.items()):
+        shard_path = checkpoint_path / filename
+        with safe_open(str(shard_path), framework="pt", device="cpu") as shard:
+            for key in sorted(keys):
+                state_dict[key] = shard.get_tensor(key).detach().cpu().contiguous()
+
+    if not state_dict:
+        raise RuntimeError(
+            f"No vision encoder tensors found under {VISION_ENCODER_CHECKPOINT_SUBFOLDER}/. "
+            "If the source checkpoint has no Qwen3-VL visual weights (e.g. a vision-generation-only "
+            "post-training checkpoint), pass --skip-vision-encoder to export without vision_encoder/."
+        )
+    return state_dict
+
+
 def _load_vision_encoder(
     checkpoint_path: pathlib.Path,
     source_model,
@@ -455,11 +510,14 @@ def _load_vision_encoder(
     dtype: torch.dtype,
 ):
     state_dict = _get_source_vision_state_dict(source_model)
-    if state_dict is None:
+    if state_dict is not None:
+        log.info("Extracting Qwen3-VL vision encoder weights from loaded source model …")
+    elif _checkpoint_has_weight_prefix(checkpoint_path, VISION_ENCODER_CHECKPOINT_PREFIX):
         log.info(f"Loading Qwen3-VL vision encoder weights from {checkpoint_path} …")
         state_dict = _load_prefixed_safetensors_state_dict(checkpoint_path, VISION_ENCODER_CHECKPOINT_PREFIX)
     else:
-        log.info("Extracting Qwen3-VL vision encoder weights from loaded source model …")
+        log.info(f"Loading Qwen3-VL vision encoder weights from {checkpoint_path}/vision_encoder …")
+        state_dict = _load_vision_subfolder_state_dict(checkpoint_path)
     log.info(f"Building Qwen3-VL vision encoder from {model_name_or_path} …")
     return _build_vision_encoder(state_dict, model_name_or_path, dtype)
 
@@ -498,21 +556,9 @@ class Args(pydantic.BaseModel):
     sound_tokenizer_path: str | None = None
     """Optional AVAE sound tokenizer checkpoint to save under sound_tokenizer/."""
     sound_tokenizer_config_path: str | None = None
-    """Optional AVAE config JSON to save under sound_tokenizer/config.json."""
+    """Optional AVAE config JSON describing the sound tokenizer architecture."""
     include_sound_tokenizer: bool = False
     """Require saving sound_tokenizer/ even if the source transformer is video-only."""
-    remap_sound_tokenizer_keys: bool = False
-    """Convert the legacy AVAE state dict into the diffusers OobleckDecoder
-    layout (strips wrapper prefixes, drops encoder/bottleneck keys, remaps the
-    flat `nn.Sequential` decoder to named attributes, reshapes Snake1d
-    alpha/beta, and reconstructs `weight_g` / `weight_v` for folded conv
-    weights). When enabled, the saved file is `diffusion_pytorch_model.safetensors`
-    instead of `model.safetensors`."""
-    remap_time_embedder_keys: bool = False
-    """Remap the transformer's `time_embedder` state dict from the legacy
-    `nn.Sequential` layout (`mlp.0.*` / `mlp.2.*`) to the diffusers
-    `TimestepEmbedding` layout (`linear_1.*` / `linear_2.*`). Off by default —
-    keys are forwarded verbatim."""
     vision_encoder_model: str = DEFAULT_VISION_ENCODER_MODEL
     """Qwen3-VL model/config to instantiate model.visual.* weights."""
     skip_vision_encoder: bool = False
@@ -548,10 +594,11 @@ def convert_model_to_diffusers(args: Args) -> None:
     vae2llm = _tmp.net.vae2llm
     llm2vae = _tmp.net.llm2vae
     time_embedder = _tmp.net.time_embedder
-    lm_cfg = _tmp.net.language_model.config
+    # The language model may carry a nested VL config (e.g. Qwen3VLConfig);
+    # the text-model fields read below live on its text config.
+    lm_cfg = _tmp.net.language_model.config.get_text_config()
     net_cfg = _tmp.net.config
     model_cfg = _tmp.config
-    vlm_cfg = _tmp.net.config.vlm_config
     patch_latent_dim = _tmp.net.patch_latent_dim
     hidden_size = _tmp.net.hidden_size
     num_attention_heads = _tmp.net.num_heads
@@ -561,17 +608,13 @@ def convert_model_to_diffusers(args: Args) -> None:
     latent_patch_size = _tmp.net.latent_patch_size
     latent_channel = _tmp.net.latent_channel
     timestep_scale = _tmp.net.timestep_scale
-    use_moe = _tmp.net.use_moe
-    joint_attn_implementation = net_cfg.joint_attn_implementation
     base_fps = int(net_cfg.base_fps)
     enable_fps_modulation = net_cfg.enable_fps_modulation
     max_action_dim = _tmp.config.max_action_dim
-    position_embedding_type = net_cfg.position_embedding_type
     unified_3d_mrope_reset_spatial_ids = _tmp.config.diffusion_expert_config.unified_3d_mrope_reset_spatial_ids
     unified_3d_mrope_temporal_modality_margin = (
         _tmp.config.diffusion_expert_config.unified_3d_mrope_temporal_modality_margin
     )
-    video_temporal_causal = net_cfg.video_temporal_causal
     action2llm = getattr(_tmp.net, "action2llm", None)
     llm2action = getattr(_tmp.net, "llm2action", None)
     action_modality_embed = getattr(_tmp.net, "action_modality_embed", None)
@@ -598,9 +641,6 @@ def convert_model_to_diffusers(args: Args) -> None:
     if sound_dim is None and sound2llm is not None:
         sound_dim = sound2llm.in_features
     sound_latent_fps = _get_config_value(net_cfg, model_cfg, name="sound_latent_fps", default=25.0)
-    temporal_compression_factor_sound = _get_config_value(
-        net_cfg, model_cfg, name="temporal_compression_factor_sound", default=1
-    )
     if sound_gen:
         missing_sound_modules = [
             name
@@ -634,7 +674,9 @@ def convert_model_to_diffusers(args: Args) -> None:
                 f"action projection weights: {missing_action_modules}."
             )
 
-    has_vision_encoder_weights = _checkpoint_has_weight_prefix(checkpoint_path, VISION_ENCODER_CHECKPOINT_PREFIX)
+    has_vision_encoder_weights = _checkpoint_has_weight_prefix(
+        checkpoint_path, VISION_ENCODER_CHECKPOINT_PREFIX
+    ) or bool(_checkpoint_vision_subfolder_files(checkpoint_path))
     vision_gen = bool(
         _get_config_value(net_cfg, model_cfg, name="vision_gen", default=False) or has_vision_encoder_weights
     )
@@ -653,66 +695,48 @@ def convert_model_to_diffusers(args: Args) -> None:
             attention_dropout=lm_cfg.attention_dropout,
             base_fps=base_fps,
             enable_fps_modulation=enable_fps_modulation,
-            freeze_und=vlm_cfg.freeze_und,
             head_dim=head_dim,
-            hidden_act=lm_cfg.hidden_act,
             hidden_size=hidden_size,
-            initializer_range=lm_cfg.initializer_range,
             intermediate_size=lm_cfg.intermediate_size,
-            joint_attn_implementation=joint_attn_implementation,
             latent_channel=latent_channel,
             latent_patch_size=latent_patch_size,
             action_dim=action_dim,
             action_gen=action_gen,
-            max_action_dim=max_action_dim,
-            max_position_embeddings=lm_cfg.max_position_embeddings,
-            model_type=lm_cfg.model_type,
             num_embodiment_domains=num_embodiment_domains,
             num_attention_heads=num_attention_heads,
             num_hidden_layers=num_hidden_layers,
             num_key_value_heads=num_key_value_heads,
             patch_latent_dim=patch_latent_dim,
-            position_embedding_type=position_embedding_type,
-            qk_norm_for_diffusion=True,
-            qk_norm_for_text=vlm_cfg.qk_norm_for_text,
             rms_norm_eps=lm_cfg.rms_norm_eps,
             rope_scaling=lm_cfg.rope_scaling,
             rope_theta=lm_cfg.rope_theta,
             sound_dim=sound_dim,
             sound_gen=sound_gen,
             sound_latent_fps=sound_latent_fps,
-            temporal_compression_factor_sound=temporal_compression_factor_sound,
             timestep_scale=timestep_scale,
             unified_3d_mrope_reset_spatial_ids=unified_3d_mrope_reset_spatial_ids,
             unified_3d_mrope_temporal_modality_margin=unified_3d_mrope_temporal_modality_margin,
-            use_cache=lm_cfg.use_cache,
-            use_moe=use_moe,
-            video_temporal_causal=video_temporal_causal,
             vocab_size=lm_cfg.vocab_size,
         )
-    state_dict = language_model.state_dict()
+    state_dict = {_remap_language_model_key(k): v for k, v in language_model.state_dict().items()}
     for k, v in vae2llm.state_dict().items():
-        state_dict[f"vae2llm.{k}"] = v
+        state_dict[f"proj_in.{k}"] = v
     for k, v in llm2vae.state_dict().items():
-        state_dict[f"llm2vae.{k}"] = v
-    time_embedder_state = time_embedder.state_dict()
-    if args.remap_time_embedder_keys:
-        log.info("Remapping transformer time_embedder state dict to diffusers TimestepEmbedding layout …")
-        time_embedder_state = _remap_time_embedder_state_dict(time_embedder_state)
-    for k, v in time_embedder_state.items():
-        state_dict[f"time_embedder.{k}"] = v
+        state_dict[f"proj_out.{k}"] = v
+    for k, v in time_embedder.state_dict().items():
+        state_dict[f"time_embedder.{_TIME_EMBEDDER_KEY_REMAP[k]}"] = v
     if action_gen:
         for k, v in action2llm.state_dict().items():
-            state_dict[f"action2llm.{k}"] = v
+            state_dict[f"action_proj_in.{k}"] = v
         for k, v in llm2action.state_dict().items():
-            state_dict[f"llm2action.{k}"] = v
+            state_dict[f"action_proj_out.{k}"] = v
         state_dict["action_modality_embed"] = action_modality_embed
     if sound_gen:
         for k, v in sound2llm.state_dict().items():
-            state_dict[f"sound2llm.{k}"] = v
+            state_dict[f"audio_proj_in.{k}"] = v
         for k, v in llm2sound.state_dict().items():
-            state_dict[f"llm2sound.{k}"] = v
-        state_dict["sound_modality_embed"] = sound_modality_embed
+            state_dict[f"audio_proj_out.{k}"] = v
+        state_dict["audio_modality_embed"] = sound_modality_embed
     transformer.load_state_dict(state_dict, strict=True, assign=True)
     del (
         language_model,
@@ -748,6 +772,10 @@ def convert_model_to_diffusers(args: Args) -> None:
             "Wan-AI/Wan2.2-TI2V-5B-Diffusers", subfolder="vae", torch_dtype=torch.bfloat16
         )
 
+        sound_tokenizer = None
+        if include_sound_tokenizer:
+            sound_tokenizer = _build_sound_tokenizer(sound_tokenizer_path, sound_tokenizer_config_path)
+
         # Karras schedule approximating FlowUniPCMultistepScheduler with shift=5, 35 steps.
         # Measured from that schedule: first flow-sigma=0.9998, last flow-sigma=0.1281.
         # EDM sigma = flow_sigma / (1 - flow_sigma), so:
@@ -762,23 +790,25 @@ def convert_model_to_diffusers(args: Args) -> None:
             sigma_min=0.147,
         )
 
-        pipeline = Cosmos3OmniDiffusersPipeline(
+        # enable_safety_checker=False: constructing the checker imports
+        # cosmos_guardrail, which the converter environment does not ship.
+        # Consumers can opt back in at load time via
+        # `Cosmos3OmniPipeline.from_pretrained(..., enable_safety_checker=True)`.
+        pipeline = Cosmos3OmniPipeline(
             transformer=transformer,
             text_tokenizer=text_tokenizer,
             vae=diffusers_vae,
             scheduler=scheduler,
-            vision_encoder=vision_encoder,
+            sound_tokenizer=sound_tokenizer,
+            enable_safety_checker=False,
         )
         log.info(f"Saving full pipeline to {output_dir} …")
         pipeline.save_pretrained(str(output_dir), safe_serialization=True, max_shard_size="5GB")
-        if include_sound_tokenizer:
-            _save_sound_tokenizer(
-                output_dir,
-                sound_tokenizer_path,
-                sound_tokenizer_config_path,
-                remap_keys=args.remap_sound_tokenizer_keys,
-            )
-            _add_sound_tokenizer_to_model_index(output_dir)
+        if vision_encoder is not None:
+            # Not a Cosmos3OmniPipeline component — saved as a sidecar folder for
+            # the transformers/vLLM consumers of the exported repository.
+            log.info(f"Saving Qwen3-VL vision encoder to {output_dir / 'vision_encoder'} …")
+            vision_encoder.save_pretrained(str(output_dir / "vision_encoder"), safe_serialization=True)
     else:
         log.info(f"Saving transformer to {output_dir} …")
         transformer.save_pretrained(str(output_dir), safe_serialization=True, max_shard_size="5GB")

@@ -15,7 +15,7 @@ The TOML is loaded via ``SFTExperimentConfig.from_toml`` (structural validation,
 raises on unknown keys), then
 ``cosmos_framework.configs.toml_config.sft_config.load_experiment_from_toml`` picks the
 base ``config.py`` from ``[job].task`` (``vfm`` → ``cosmos_framework/configs/base/config.py``,
-``vlm`` → ``cosmos_framework/configs/base/vlm/config.py``), resolves ``[job].experiment``
+``vlm`` → ``cosmos_framework/configs/base/reasoner/config.py``), resolves ``[job].experiment``
 against the Hydra ``ConfigStore``, and overlays every other TOML key as a Hydra
 override. Trailing ``key.path=value`` positionals are applied last (so they
 win over TOML).

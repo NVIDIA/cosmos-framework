@@ -548,7 +548,7 @@ class CheckpointOverrides(ConfigOverrides):
             self.checkpoint_path = self.checkpoint_path.rstrip("/")
             # Strip '/model' suffix, since it isn't included in checkpoint_db.
             # Automatically added during checkpoint load by
-            # 'cosmos_framework.utils.vfm.model_loader.load_model_from_checkpoint'.
+            # 'cosmos_framework.utils.generator.model_loader.load_model_from_checkpoint'.
             if not self.checkpoint_path.endswith("/model"):
                 self.checkpoint_path = self.checkpoint_path + "/model"
         else:

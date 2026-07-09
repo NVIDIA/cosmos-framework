@@ -33,8 +33,8 @@ What we USE from cosmos_framework:
     cosmos_framework.inference.common.init.init_script         → 1-line torch.distributed init
     cosmos_framework.inference.{args,inference}                → OmniSampleOverrides +
                                                        get_sample_data (T2I/T2V only)
-    cosmos_framework.data.vfm.{action,sequence_packing}        → SequencePlan helpers (action/sound)
-    cosmos_framework.model.vfm.vlm.qwen3_vl.utils.tokenize_caption
+    cosmos_framework.data.generator.{action,sequence_packing}        → SequencePlan helpers (action/sound)
+    cosmos_framework.model.generator.reasoner.qwen3_vl.utils.tokenize_caption
     model.generate_samples_from_batch(batch, seed)   → THE inference call (CFG + sampler)
     model.decode(latent)                             → VAE decode
 
@@ -65,13 +65,13 @@ import torch
 
 from cosmos_framework.configs.base.defaults.compile import CompileConfig
 from cosmos_framework.configs.base.defaults.parallelism import ParallelismConfig
-from cosmos_framework.data.vfm.action.domain_utils import get_domain_id
-from cosmos_framework.data.vfm.action.transforms import build_sequence_plan_from_mode
-from cosmos_framework.data.vfm.sequence_packing import SequencePlan
+from cosmos_framework.data.generator.action.domain_utils import get_domain_id
+from cosmos_framework.data.generator.action.transforms import build_sequence_plan_from_mode
+from cosmos_framework.data.generator.sequence_packing import SequencePlan
 from cosmos_framework.inference.args import DEFAULT_CHECKPOINT, OmniSampleOverrides
 from cosmos_framework.inference.inference import get_sample_data
 from cosmos_framework.inference.model import Cosmos3OmniConfig, Cosmos3OmniModel
-from cosmos_framework.model.vfm.vlm.qwen3_vl.utils import tokenize_caption
+from cosmos_framework.model.generator.reasoner.qwen3_vl.utils import tokenize_caption
 from cosmos_framework.tools.visualize.video import save_img_or_video
 
 
@@ -108,8 +108,8 @@ def _load_omni_model(*, config_dir_arg: str | None):
     config_text = (config_dir / "config.json").read_text()
     for _old, _new in [
         ("cosmos3._src.vfm.configs.base.", "cosmos_framework.configs.base."),
-        ("cosmos3._src.vfm.models.", "cosmos_framework.model.vfm."),
-        ("cosmos3._src.vfm.tokenizers.", "cosmos_framework.model.vfm.tokenizers."),
+        ("cosmos3._src.vfm.models.", "cosmos_framework.model.generator."),
+        ("cosmos3._src.vfm.tokenizers.", "cosmos_framework.model.generator.tokenizers."),
         ("cosmos3._src.imaginaire.", "cosmos_framework."),
     ]:
         config_text = config_text.replace(_old, _new)

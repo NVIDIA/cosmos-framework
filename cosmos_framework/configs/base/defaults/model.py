@@ -6,7 +6,7 @@ from hydra.core.config_store import ConfigStore
 from cosmos_framework.utils.lazy_config import LazyCall as L
 from cosmos_framework.configs.base.defaults.model_config import OmniMoTModelConfig
 from cosmos_framework.configs.base.defaults.parallelism import ParallelismConfig
-from cosmos_framework.model.vfm.omni_mot_model import OmniMoTModel
+from cosmos_framework.model.generator.omni_mot_model import OmniMoTModel
 
 MOT_DDP_CONFIG = dict(
     trainer=dict(

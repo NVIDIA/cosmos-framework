@@ -37,8 +37,8 @@ Cosmos/
 ├── cosmos_framework/             # Main package (training infra + inference subpackage)
 │   ├── inference/      # Inference subpackage (model, args, defaults, Ray serving, common helpers, SFT experiment configs)
 │   └── ...             # Training-infra subpackages: data, model, trainer, callbacks, checkpoint, …
-│   └── scripts/        # CLI entry-point scripts: train.py, _train.py, inference.py, eval.py, export_model.py, …
-├── packages/           # Backend shim packages: diffusers-cosmos3, transformers-cosmos3, vllm-cosmos3
+│   └── scripts/        # CLI entry-point scripts: train.py, _train.py, inference.py, export_model.py, …
+├── packages/           # Backend shim packages: transformers-cosmos3, vllm-cosmos3
 ├── docs/               # User documentation (you are here)
 ├── docker/             # Dockerfiles for reproducible environments
 ├── examples/           # Runnable training / fine-tuning / inference examples
@@ -49,7 +49,7 @@ Cosmos/
 └── .python-version     # Python version pin (used by uv)
 ```
 
-`cosmos_framework/` is the single Python package. Training infrastructure (data, model, trainer, callbacks, checkpoint, utils, …) lives in top-level subpackages; inference (Diffusers / Transformers / vLLM-friendly inference core, Ray serving, per-modality defaults, training-side experiment YAMLs) lives under `cosmos_framework/inference/`. The library-style backend shims that load Cosmos3 checkpoints into upstream ecosystems live under `packages/{diffusers,transformers,vllm}-cosmos3/`.
+`cosmos_framework/` is the single Python package. Training infrastructure (data, model, trainer, callbacks, checkpoint, utils, …) lives in top-level subpackages; inference (Diffusers / Transformers / vLLM-friendly inference core, Ray serving, per-modality defaults, training-side experiment YAMLs) lives under `cosmos_framework/inference/`. The library-style backend shims that load Cosmos3 checkpoints into upstream ecosystems live under `packages/{transformers,vllm}-cosmos3/` (Diffusers needs no shim: diffusers ≥ 0.39 ships `Cosmos3OmniPipeline` natively).
 
 ## The `cosmos_framework/` Package
 
@@ -154,7 +154,7 @@ The full inference subpackage:
 
 Training-side experiment SKUs live separately at `cosmos_framework/configs/base/experiment/sft/*.py` (see [`cosmos_framework/configs/`](#cosmos_frameworkconfigs)) — not under `inference/`.
 
-Library-style backend shims that adapt Cosmos3 checkpoints to the Diffusers / Transformers / vLLM ecosystems live separately under `packages/{diffusers,transformers,vllm}-cosmos3/`.
+Library-style backend shims that adapt Cosmos3 checkpoints to the Transformers / vLLM ecosystems live separately under `packages/{transformers,vllm}-cosmos3/`. Diffusers needs no shim: diffusers ≥ 0.39 ships `Cosmos3OmniPipeline` / `Cosmos3OmniTransformer` natively.
 
 ### `cosmos_framework/launcher/`
 
@@ -196,8 +196,8 @@ Add new worker types as sibling subpackages — each owns its own startup, messa
 - `tests/` — pytest tests, mirroring the `cosmos_framework/` package layout.
 - `examples/` — runnable end-to-end examples; see `examples/README.md`.
 - `docker/` — Dockerfiles and image build helpers; see `docker/README.md`.
-- `cosmos_framework/scripts/` — CLI entry-point scripts (`train.py`, `inference.py`, `eval.py`, `export_model.py`, …); invoke as `python -m cosmos_framework.scripts.<name>`. Primary training entry point: `cosmos_framework.scripts.train` driven by a structured, pydantic-validated TOML interface (`--sft-toml=<recipe-toml>`); recipe TOMLs live under [`examples/toml/sft_config/`](../examples/toml/sft_config/) and the schema is defined in [`cosmos_framework/configs/toml_config/sft_config.py`](../cosmos_framework/configs/toml_config/sft_config.py) — see [`examples/README.md`](../examples/README.md) and [`docs/training.md`](./training.md).
-- `packages/` — library-style backend shims: `packages/{diffusers,transformers,vllm}-cosmos3/`, each installable independently.
+- `cosmos_framework/scripts/` — CLI entry-point scripts (`train.py`, `inference.py`, `export_model.py`, …); invoke as `python -m cosmos_framework.scripts.<name>`. Primary training entry point: `cosmos_framework.scripts.train` driven by a structured, pydantic-validated TOML interface (`--sft-toml=<recipe-toml>`); recipe TOMLs live under [`examples/toml/sft_config/`](../examples/toml/sft_config/) and the schema is defined in [`cosmos_framework/configs/toml_config/sft_config.py`](../cosmos_framework/configs/toml_config/sft_config.py) — see [`examples/README.md`](../examples/README.md) and [`docs/training.md`](./training.md).
+- `packages/` — library-style backend shims: `packages/{transformers,vllm}-cosmos3/`, each installable independently.
 
 ## Where to Add New Code
 

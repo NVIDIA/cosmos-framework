@@ -4,7 +4,7 @@
 """Training callback that defers AOT compilation of the VAE tokenizer.
 
 The actual compilation logic lives in
-:meth:`~cosmos_framework.model.vfm.tokenizers.wan2pt2_vae_4x16x16.Wan2pt2VAEInterface.compile_encode`.
+:meth:`~cosmos_framework.model.generator.tokenizers.wan2pt2_vae_4x16x16.Wan2pt2VAEInterface.compile_encode`.
 This module provides a :class:`CompileTokenizer` callback that invokes it
 at the right point during training (after ``compile_after_iterations``
 steps, to avoid NCCL timeouts during CUDA/cuDNN warm-up).
@@ -27,7 +27,7 @@ import torch
 
 from cosmos_framework.utils import log
 from cosmos_framework.utils.callback import Callback
-from cosmos_framework.model.vfm.omni_mot_model import OmniMoTModel
+from cosmos_framework.model.generator.omni_mot_model import OmniMoTModel
 
 
 class CompileTokenizer(Callback):

@@ -46,17 +46,17 @@ from cosmos_framework.utils import misc
 from cosmos_framework.utils.flags import SMOKE
 
 if TYPE_CHECKING:
-    from cosmos_framework.model.vfm.omni_mot_model import OmniMoTModel
+    from cosmos_framework.model.generator.omni_mot_model import OmniMoTModel
 
 
 # Resolve to the release-tree root so relative-path checkpoint config entries
-# (e.g. `cosmos_framework/model/vfm/vlm/qwen3_vl/configs/Qwen3-VL-8B-Instruct.json`) load
+# (e.g. `cosmos_framework/model/generator/vlm/qwen3_vl/configs/Qwen3-VL-8B-Instruct.json`) load
 # correctly under contextlib.chdir(_ROOT_DIR) in __init__. In the original
 # cosmos3 release the cosmos3 package lives at the tree root, so parents[1] is
 # the release root. In the cosmos_training release the package lives at
 # cosmos_framework/inference/, so the release root is one level higher (parents[2]).
 try:
-    import cosmos_framework.model.vfm  # noqa: F401
+    import cosmos_framework.model.generator  # noqa: F401
 
     _ROOT_DIR = Path(__file__).parents[2].absolute()
 except ImportError:

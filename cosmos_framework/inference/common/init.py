@@ -56,7 +56,7 @@ _LOGGER_INCLUDE = [
     "cosmos_framework.model.attention",
     "cosmos_framework.utils.checkpoint_db",
     "imaginaire.trainer",
-    "cosmos_framework.utils.vfm.model_loader",
+    "cosmos_framework.utils.generator.model_loader",
     "*.callbacks.*",
 ]
 _LOGGER_EXCLUDE = [

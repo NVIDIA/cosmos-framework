@@ -419,7 +419,7 @@ class VisionDataArgs(ArgsBase, _VisionDataBase):
         autodetect via cosmos_framework.inference.vision.read_and_resize_media before reaching
         this property and never observe the fallback.
         """
-        from cosmos_framework.data.vfm.utils import IMAGE_RES_SIZE_INFO, VIDEO_RES_SIZE_INFO
+        from cosmos_framework.data.generator.utils import IMAGE_RES_SIZE_INFO, VIDEO_RES_SIZE_INFO
 
         assert self.resolution
         aspect_ratio: AspectRatio = self.aspect_ratio or "16,9"

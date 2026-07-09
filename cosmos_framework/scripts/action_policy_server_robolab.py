@@ -37,15 +37,15 @@ import torch
 import torch.nn.functional as F
 import tyro
 
-from cosmos_framework.data.vfm.action.domain_utils import get_domain_id
-from cosmos_framework.data.vfm.action.pose_utils import (
+from cosmos_framework.data.generator.action.domain_utils import get_domain_id
+from cosmos_framework.data.generator.action.pose_utils import (
     build_abs_pose_from_components,
     convert_rotation,
     pose_abs_to_rel,
     pose_rel_to_abs,
 )
-from cosmos_framework.data.vfm.action.transforms import ActionTransformPipeline
-from cosmos_framework.data.vfm.joint_dataloader import IterativeJointDataLoader
+from cosmos_framework.data.generator.action.transforms import ActionTransformPipeline
+from cosmos_framework.data.generator.joint_dataloader import IterativeJointDataLoader
 from cosmos_framework.inference.args import OmniSetupArgs, OmniSetupOverrides
 from cosmos_framework.inference.common.args import ConfigFileType, ConfigOverrides, tyro_cli
 from cosmos_framework.inference.common.config import deserialize_config, deserialize_config_dict, load_config
