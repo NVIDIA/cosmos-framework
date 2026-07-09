@@ -14,43 +14,50 @@ _CONFIG_NAME_KEY = "config_name"
 _TYPE_KEY = "_type"
 _TARGET_KEY = "_target_"
 
-_PUBLIC_VFM_URI_PREFIX = "cosmos3://vfm/"
+_PUBLIC_URI_PREFIX = "cosmos3://"
+_LEGACY_PUBLIC_URI_PREFIX = "cosmos3://vfm/"
 _I4_MODULE_PREFIX = "projects." + "cosmos3." + "cosmos3."
 _I4_FILE_PREFIX = "projects/" + "cosmos3/" + "cosmos3/"
 
-_TARGET_ALIASES = {
-    "projects.cosmos3.vfm.configs.base.defaults.vlm.create_qwen2_tokenizer_with_download": "create_qwen2_tokenizer_with_download",
-    "projects.cosmos3.vfm.configs.base.defaults.vlm.create_vlm_config": "create_vlm_config",
-    "projects.cosmos3.vfm.models.mot.unified_mot.Nemotron3DenseVLMoTConfig.from_json_file": "nemotron3_dense_vl_mot_config_from_json_file",
-    "projects.cosmos3.vfm.models.mot.unified_mot.Nemotron3DenseVLTextForCausalLM": "nemotron3_dense_vl_text_for_causal_lm",
-    "projects.cosmos3.vfm.models.mot.unified_mot.Qwen3VLMoTConfig.from_json_file": "qwen3_vl_mot_config_from_json_file",
-    "projects.cosmos3.vfm.models.mot.unified_mot.Qwen3VLTextForCausalLM": "qwen3_vl_text_for_causal_lm",
-    "projects.cosmos3.vfm.models.omni_mot_model.OmniMoTModel": "omni_mot_model",
-    "projects.cosmos3.vfm.processors.build_processor_lazy": "build_processor_lazy",
-    "projects.cosmos3.vfm.tokenizers.audio.avae.AVAEInterface": "avae_interface",
-    "projects.cosmos3.vfm.tokenizers.wan2pt2_vae_4x16x16.Wan2pt2VAEInterface": "wan2pt2_vae_interface",
+_TARGET_PATHS_BY_ALIAS = {
+    "create_qwen2_tokenizer_with_download": _I4_MODULE_PREFIX
+    + "configs.base.defaults.reasoner.create_qwen2_tokenizer_with_download",
+    "create_vlm_config": _I4_MODULE_PREFIX + "configs.base.defaults.reasoner.create_vlm_config",
+    "nemotron3_dense_vl_mot_config_from_json_file": _I4_MODULE_PREFIX
+    + "models.mot.unified_mot.Nemotron3DenseVLMoTConfig.from_json_file",
+    "nemotron3_dense_vl_text_for_causal_lm": _I4_MODULE_PREFIX
+    + "models.mot.unified_mot.Nemotron3DenseVLTextForCausalLM",
+    "qwen3_vl_mot_config_from_json_file": _I4_MODULE_PREFIX + "models.mot.unified_mot.Qwen3VLMoTConfig.from_json_file",
+    "qwen3_vl_text_for_causal_lm": _I4_MODULE_PREFIX + "models.mot.unified_mot.Qwen3VLTextForCausalLM",
+    "omni_mot_model": _I4_MODULE_PREFIX + "models.omni_mot_model.OmniMoTModel",
+    "build_processor_lazy": _I4_MODULE_PREFIX + "processors.build_processor_lazy",
+    "avae_interface": _I4_MODULE_PREFIX + "tokenizers.audio.avae.AVAEInterface",
+    "wan2pt2_vae_interface": _I4_MODULE_PREFIX + "tokenizers.wan2pt2_vae_4x16x16.Wan2pt2VAEInterface",
 }
 
-_TYPE_ALIASES = {
-    "projects.cosmos3.vfm.configs.base.defaults.activation_checkpointing.ActivationCheckpointingConfig": "activation_checkpointing_config",
-    "projects.cosmos3.vfm.configs.base.defaults.compile.CompileConfig": "compile_config",
-    "projects.cosmos3.vfm.configs.base.defaults.ema.EMAConfig": "ema_config",
-    "projects.cosmos3.vfm.configs.base.defaults.model_config.DiffusionExpertConfig": "diffusion_expert_config",
-    "projects.cosmos3.vfm.configs.base.defaults.model_config.LBLConfig": "lbl_config",
-    "projects.cosmos3.vfm.configs.base.defaults.model_config.OmniMoTModelConfig": "omni_mot_model_config",
-    "projects.cosmos3.vfm.configs.base.defaults.model_config.RectifiedFlowInferenceConfig": "rectified_flow_inference_config",
-    "projects.cosmos3.vfm.configs.base.defaults.model_config.RectifiedFlowTrainingConfig": "rectified_flow_training_config",
-    "projects.cosmos3.vfm.configs.base.defaults.parallelism.ParallelismConfig": "parallelism_config",
-    "projects.cosmos3.vfm.configs.base.defaults.vlm.PretrainedWeightsConfig": "pretrained_weights_config",
-    "projects.cosmos3.vfm.configs.base.defaults.vlm.VLMConfig": "vlm_config",
+_TYPE_PATHS_BY_ALIAS = {
+    "activation_checkpointing_config": _I4_MODULE_PREFIX
+    + "configs.base.defaults.activation_checkpointing.ActivationCheckpointingConfig",
+    "compile_config": _I4_MODULE_PREFIX + "configs.base.defaults.compile.CompileConfig",
+    "ema_config": _I4_MODULE_PREFIX + "configs.base.defaults.ema.EMAConfig",
+    "diffusion_expert_config": _I4_MODULE_PREFIX + "configs.base.defaults.model_config.DiffusionExpertConfig",
+    "lbl_config": _I4_MODULE_PREFIX + "configs.base.defaults.model_config.LBLConfig",
+    "omni_mot_model_config": _I4_MODULE_PREFIX + "configs.base.defaults.model_config.OmniMoTModelConfig",
+    "rectified_flow_inference_config": _I4_MODULE_PREFIX
+    + "configs.base.defaults.model_config.RectifiedFlowInferenceConfig",
+    "rectified_flow_training_config": _I4_MODULE_PREFIX
+    + "configs.base.defaults.model_config.RectifiedFlowTrainingConfig",
+    "parallelism_config": _I4_MODULE_PREFIX + "configs.base.defaults.parallelism.ParallelismConfig",
+    "pretrained_weights_config": _I4_MODULE_PREFIX + "configs.base.defaults.reasoner.PretrainedWeightsConfig",
+    "vlm_config": _I4_MODULE_PREFIX + "configs.base.defaults.reasoner.VLMConfig",
 }
 
 # Config objects can be serialized as either `_type` or `_target_` depending on
 # whether they came from structured config metadata or LazyCall construction.
-_TARGET_ALIASES.update(_TYPE_ALIASES)
+_TARGET_PATHS_BY_ALIAS.update(_TYPE_PATHS_BY_ALIAS)
 
-_ALIAS_TARGETS = {alias: target for target, alias in _TARGET_ALIASES.items()}
-_ALIAS_TYPES = {alias: target for target, alias in _TYPE_ALIASES.items()}
+_CURRENT_TARGET_ALIASES = {path: alias for alias, path in _TARGET_PATHS_BY_ALIAS.items()}
+_CURRENT_TYPE_ALIASES = {path: alias for alias, path in _TYPE_PATHS_BY_ALIAS.items()}
 
 
 def build_public_model_config(model_config: dict[str, Any]) -> dict[str, Any]:
@@ -145,215 +152,202 @@ def _from_public_model_config(obj: Any) -> Any:
 def _target_to_alias(target: Any) -> str:
     if not isinstance(target, str):
         raise TypeError(f"Expected target path string, got {type(target)}")
-    canonical = _canonicalize_module_path(target)
-    try:
-        return _TARGET_ALIASES[canonical]
-    except KeyError as exc:
-        raise ValueError(f"No public alias registered for target path: {target}") from exc
+    return _module_path_to_alias(target, _CURRENT_TARGET_ALIASES, kind="target")
 
 
 def _type_to_alias(tp: Any) -> str:
     if not isinstance(tp, str):
         raise TypeError(f"Expected type path string, got {type(tp)}")
-    canonical = _canonicalize_module_path(tp)
-    try:
-        return _TYPE_ALIASES[canonical]
-    except KeyError as exc:
-        raise ValueError(f"No public alias registered for type path: {tp}") from exc
+    return _module_path_to_alias(tp, _CURRENT_TYPE_ALIASES, kind="type")
+
+
+def _module_path_to_alias(path: str, aliases: dict[str, str], *, kind: str) -> str:
+    current_path = _current_module_path_to_i4(path)
+    alias = aliases.get(current_path)
+    if alias is None:
+        alias = aliases.get(_legacy_module_path_to_i4(path))
+    if alias is None:
+        raise ValueError(f"No public alias registered for {kind} path: {path}")
+    return alias
 
 
 def _alias_to_runtime_target(alias: Any) -> str:
     if not isinstance(alias, str):
         raise TypeError(f"Expected target alias string, got {type(alias)}")
     try:
-        return _runtime_module_path(_ALIAS_TARGETS[alias])
+        current_path = _TARGET_PATHS_BY_ALIAS[alias]
     except KeyError as exc:
         raise ValueError(f"Unknown Cosmos target alias: {alias}") from exc
+    return _runtime_module_path(current_path)
 
 
 def _alias_to_runtime_type(alias: Any) -> str:
     if not isinstance(alias, str):
         raise TypeError(f"Expected type alias string, got {type(alias)}")
     try:
-        return _runtime_module_path(_ALIAS_TYPES[alias])
+        current_path = _TYPE_PATHS_BY_ALIAS[alias]
     except KeyError as exc:
         raise ValueError(f"Unknown Cosmos type alias: {alias}") from exc
+    return _runtime_module_path(current_path)
 
 
 def _is_type_alias(value: Any) -> bool:
-    return isinstance(value, str) and value in _ALIAS_TYPES
+    return isinstance(value, str) and value in _TYPE_PATHS_BY_ALIAS
 
 
 def _is_target_alias(value: Any) -> bool:
-    return isinstance(value, str) and value in _ALIAS_TARGETS
+    return isinstance(value, str) and value in _TARGET_PATHS_BY_ALIAS
 
 
-def _canonicalize_module_path(path: str) -> str:
+def _current_module_path_to_i4(path: str) -> str:
     replacements = (
-        # Current i4 layout. Keep the legacy vfm namespace only as a stable,
-        # private lookup key; it is never written to the public config.
-        (
-            _I4_MODULE_PREFIX + "configs.base.defaults.reasoner.",
-            "projects.cosmos3.vfm.configs.base.defaults.vlm.",
-        ),
-        (_I4_MODULE_PREFIX + "configs.base.reasoner.", "projects.cosmos3.vfm.configs.base.vlm."),
-        (_I4_MODULE_PREFIX + "models.reasoner.", "projects.cosmos3.vfm.models.vlm."),
-        (
-            _I4_MODULE_PREFIX + "datasets.augmentors.reasoner.",
-            "projects.cosmos3.vfm.datasets.augmentors.vlm.",
-        ),
-        (_I4_MODULE_PREFIX + "datasets.reasoner.", "projects.cosmos3.vfm.datasets.vlm."),
-        (_I4_MODULE_PREFIX + "utils.reasoner.", "projects.cosmos3.vfm.utils.vlm."),
-        (_I4_MODULE_PREFIX, "projects.cosmos3.vfm."),
-        # Current cosmos-framework layout. Specific reasoner rules must come
-        # before the general generator rules.
         (
             "cosmos_framework.configs.base.defaults.reasoner.",
-            "projects.cosmos3.vfm.configs.base.defaults.vlm.",
-        ),
-        ("cosmos_framework.configs.base.reasoner.", "projects.cosmos3.vfm.configs.base.vlm."),
-        ("cosmos_framework.model.generator.reasoner.", "projects.cosmos3.vfm.models.vlm."),
-        (
-            "cosmos_framework.data.generator.augmentors.reasoner.",
-            "projects.cosmos3.vfm.datasets.augmentors.vlm.",
-        ),
-        ("cosmos_framework.data.generator.reasoner.", "projects.cosmos3.vfm.datasets.vlm."),
-        ("cosmos_framework.utils.generator.reasoner.", "projects.cosmos3.vfm.utils.vlm."),
-        ("cosmos3._src.vfm.", "projects.cosmos3.vfm."),
-        ("cosmos_framework.configs.base.", "projects.cosmos3.vfm.configs.base."),
-        ("cosmos_framework.model.generator.tokenizers.", "projects.cosmos3.vfm.tokenizers."),
-        ("cosmos_framework.model.generator.diffusion.", "projects.cosmos3.vfm.diffusion."),
-        ("cosmos_framework.model.generator.", "projects.cosmos3.vfm.models."),
-        ("cosmos_framework.data.generator.processors.", "projects.cosmos3.vfm.processors."),
-        ("cosmos_framework.model.vfm.tokenizers.", "projects.cosmos3.vfm.tokenizers."),
-        ("cosmos_framework.model.vfm.diffusion.", "projects.cosmos3.vfm.diffusion."),
-        ("cosmos_framework.model.vfm.", "projects.cosmos3.vfm.models."),
-        ("cosmos_framework.data.vfm.processors.", "projects.cosmos3.vfm.processors."),
-        ("cosmos.model.vfm.tokenizers.", "projects.cosmos3.vfm.tokenizers."),
-        ("cosmos.model.vfm.diffusion.", "projects.cosmos3.vfm.diffusion."),
-        ("cosmos.model.vfm.", "projects.cosmos3.vfm.models."),
-        ("cosmos.configs.base.", "projects.cosmos3.vfm.configs.base."),
-    )
-    for old, new in replacements:
-        if path.startswith(old):
-            return new + path[len(old) :]
-    return path
-
-
-def _runtime_module_path(canonical_path: str) -> str:
-    if _module_exists("cosmos_framework.model.generator"):
-        return _replace_vfm_module_prefix(canonical_path, package="cosmos_framework")
-    if _module_exists("cosmos_framework.model.vfm"):
-        return _replace_legacy_vfm_module_prefix(canonical_path, package="cosmos_framework")
-    if _module_exists("cosmos.model.vfm"):
-        return _replace_legacy_vfm_module_prefix(canonical_path, package="cosmos")
-    if _module_exists("cosmos3._src.vfm"):
-        return canonical_path.replace("projects.cosmos3.vfm.", "cosmos3._src.vfm.", 1)
-    return _replace_vfm_module_prefix_for_i4(canonical_path)
-
-
-def _replace_vfm_module_prefix(canonical_path: str, *, package: str) -> str:
-    replacements = (
-        ("projects.cosmos3.vfm.configs.base.defaults.vlm.", f"{package}.configs.base.defaults.reasoner."),
-        ("projects.cosmos3.vfm.configs.base.vlm.", f"{package}.configs.base.reasoner."),
-        ("projects.cosmos3.vfm.models.vlm.", f"{package}.model.generator.reasoner."),
-        ("projects.cosmos3.vfm.datasets.augmentors.vlm.", f"{package}.data.generator.augmentors.reasoner."),
-        ("projects.cosmos3.vfm.datasets.vlm.", f"{package}.data.generator.reasoner."),
-        ("projects.cosmos3.vfm.utils.vlm.", f"{package}.utils.generator.reasoner."),
-        ("projects.cosmos3.vfm.configs.base.", f"{package}.configs.base."),
-        ("projects.cosmos3.vfm.models.", f"{package}.model.generator."),
-        ("projects.cosmos3.vfm.tokenizers.", f"{package}.model.generator.tokenizers."),
-        ("projects.cosmos3.vfm.diffusion.", f"{package}.model.generator.diffusion."),
-        ("projects.cosmos3.vfm.processors.", f"{package}.data.generator.processors."),
-        ("projects.cosmos3.vfm.datasets.", f"{package}.data.generator."),
-        ("projects.cosmos3.vfm.scripts.action.", f"{package}.data.generator.action_scripts."),
-        ("projects.cosmos3.vfm.utils.", f"{package}.utils.generator."),
-    )
-    for old, new in replacements:
-        if canonical_path.startswith(old):
-            return new + canonical_path[len(old) :]
-    return canonical_path
-
-
-def _replace_vfm_module_prefix_for_i4(canonical_path: str) -> str:
-    replacements = (
-        (
-            "projects.cosmos3.vfm.configs.base.defaults.vlm.",
             _I4_MODULE_PREFIX + "configs.base.defaults.reasoner.",
         ),
-        ("projects.cosmos3.vfm.configs.base.vlm.", _I4_MODULE_PREFIX + "configs.base.reasoner."),
-        ("projects.cosmos3.vfm.models.vlm.", _I4_MODULE_PREFIX + "models.reasoner."),
+        ("cosmos_framework.configs.base.reasoner.", _I4_MODULE_PREFIX + "configs.base.reasoner."),
+        ("cosmos_framework.model.generator.reasoner.", _I4_MODULE_PREFIX + "models.reasoner."),
         (
-            "projects.cosmos3.vfm.datasets.augmentors.vlm.",
+            "cosmos_framework.data.generator.augmentors.reasoner.",
             _I4_MODULE_PREFIX + "datasets.augmentors.reasoner.",
         ),
-        ("projects.cosmos3.vfm.datasets.vlm.", _I4_MODULE_PREFIX + "datasets.reasoner."),
-        ("projects.cosmos3.vfm.utils.vlm.", _I4_MODULE_PREFIX + "utils.reasoner."),
-        ("projects.cosmos3.vfm.", _I4_MODULE_PREFIX),
+        ("cosmos_framework.data.generator.reasoner.", _I4_MODULE_PREFIX + "datasets.reasoner."),
+        ("cosmos_framework.utils.generator.reasoner.", _I4_MODULE_PREFIX + "utils.reasoner."),
+        ("cosmos_framework.configs.base.", _I4_MODULE_PREFIX + "configs.base."),
+        ("cosmos_framework.model.generator.tokenizers.", _I4_MODULE_PREFIX + "tokenizers."),
+        ("cosmos_framework.model.generator.diffusion.", _I4_MODULE_PREFIX + "diffusion."),
+        ("cosmos_framework.model.generator.", _I4_MODULE_PREFIX + "models."),
+        ("cosmos_framework.data.generator.processors.", _I4_MODULE_PREFIX + "processors."),
+        ("cosmos_framework.data.generator.", _I4_MODULE_PREFIX + "datasets."),
+        ("cosmos_framework.utils.generator.", _I4_MODULE_PREFIX + "utils."),
     )
-    for old, new in replacements:
-        if canonical_path.startswith(old):
-            return new + canonical_path[len(old) :]
-    return canonical_path
+    return _replace_prefix(path, replacements)
 
 
-def _replace_legacy_vfm_module_prefix(canonical_path: str, *, package: str) -> str:
+def _legacy_module_path_to_i4(path: str) -> str:
+    """Translate pre-alias module paths for backward-compatible reads only."""
+
+    legacy_i4_path = _replace_prefix(
+        path,
+        (
+            ("cosmos3._src.vfm.", "projects.cosmos3.vfm."),
+            ("cosmos_framework.model.vfm.tokenizers.", "projects.cosmos3.vfm.tokenizers."),
+            ("cosmos_framework.model.vfm.diffusion.", "projects.cosmos3.vfm.diffusion."),
+            ("cosmos_framework.model.vfm.", "projects.cosmos3.vfm.models."),
+            ("cosmos_framework.data.vfm.processors.", "projects.cosmos3.vfm.processors."),
+            ("cosmos_framework.data.vfm.", "projects.cosmos3.vfm.datasets."),
+            ("cosmos_framework.utils.vfm.", "projects.cosmos3.vfm.utils."),
+            ("cosmos_framework.configs.base.", "projects.cosmos3.vfm.configs.base."),
+            ("cosmos.model.vfm.tokenizers.", "projects.cosmos3.vfm.tokenizers."),
+            ("cosmos.model.vfm.diffusion.", "projects.cosmos3.vfm.diffusion."),
+            ("cosmos.model.vfm.", "projects.cosmos3.vfm.models."),
+            ("cosmos.data.vfm.processors.", "projects.cosmos3.vfm.processors."),
+            ("cosmos.data.vfm.", "projects.cosmos3.vfm.datasets."),
+            ("cosmos.utils.vfm.", "projects.cosmos3.vfm.utils."),
+            ("cosmos.configs.base.", "projects.cosmos3.vfm.configs.base."),
+        ),
+    )
+    return _replace_prefix(
+        legacy_i4_path,
+        (
+            (
+                "projects.cosmos3.vfm.configs.base.defaults.vlm.",
+                _I4_MODULE_PREFIX + "configs.base.defaults.reasoner.",
+            ),
+            ("projects.cosmos3.vfm.configs.base.vlm.", _I4_MODULE_PREFIX + "configs.base.reasoner."),
+            ("projects.cosmos3.vfm.models.vlm.", _I4_MODULE_PREFIX + "models.reasoner."),
+            (
+                "projects.cosmos3.vfm.datasets.augmentors.vlm.",
+                _I4_MODULE_PREFIX + "datasets.augmentors.reasoner.",
+            ),
+            ("projects.cosmos3.vfm.datasets.vlm.", _I4_MODULE_PREFIX + "datasets.reasoner."),
+            ("projects.cosmos3.vfm.utils.vlm.", _I4_MODULE_PREFIX + "utils.reasoner."),
+            ("projects.cosmos3.vfm.", _I4_MODULE_PREFIX),
+        ),
+    )
+
+
+def _runtime_module_path(current_i4_path: str) -> str:
+    if _module_exists("cosmos_framework.model.generator"):
+        return _current_i4_module_path_to_framework(current_i4_path, package="cosmos_framework")
+    if _module_exists("cosmos_framework.model.vfm"):
+        return _current_i4_module_path_to_legacy_runtime(current_i4_path, package="cosmos_framework")
+    if _module_exists("cosmos.model.vfm"):
+        return _current_i4_module_path_to_legacy_runtime(current_i4_path, package="cosmos")
+    if _module_exists("cosmos3._src.vfm"):
+        suffix = current_i4_path.removeprefix(_I4_MODULE_PREFIX)
+        return "cosmos3._src.vfm." + _current_suffix_to_legacy_vfm(suffix, separator=".")
+    return current_i4_path
+
+
+def _current_i4_module_path_to_framework(current_i4_path: str, *, package: str) -> str:
+    if not current_i4_path.startswith(_I4_MODULE_PREFIX):
+        return current_i4_path
+    suffix = current_i4_path[len(_I4_MODULE_PREFIX) :]
     replacements = (
-        ("projects.cosmos3.vfm.configs.base.", f"{package}.configs.base."),
-        ("projects.cosmos3.vfm.models.", f"{package}.model.vfm."),
-        ("projects.cosmos3.vfm.tokenizers.", f"{package}.model.vfm.tokenizers."),
-        ("projects.cosmos3.vfm.diffusion.", f"{package}.model.vfm.diffusion."),
-        ("projects.cosmos3.vfm.processors.", f"{package}.data.vfm.processors."),
-        ("projects.cosmos3.vfm.datasets.", f"{package}.data.vfm."),
-        ("projects.cosmos3.vfm.scripts.action.", f"{package}.data.vfm.action_scripts."),
-        ("projects.cosmos3.vfm.utils.", f"{package}.utils.vfm."),
+        ("configs.base.defaults.reasoner.", f"{package}.configs.base.defaults.reasoner."),
+        ("configs.base.reasoner.", f"{package}.configs.base.reasoner."),
+        ("models.reasoner.", f"{package}.model.generator.reasoner."),
+        ("datasets.augmentors.reasoner.", f"{package}.data.generator.augmentors.reasoner."),
+        ("datasets.reasoner.", f"{package}.data.generator.reasoner."),
+        ("utils.reasoner.", f"{package}.utils.generator.reasoner."),
+        ("configs.base.", f"{package}.configs.base."),
+        ("tokenizers.", f"{package}.model.generator.tokenizers."),
+        ("diffusion.", f"{package}.model.generator.diffusion."),
+        ("models.", f"{package}.model.generator."),
+        ("processors.", f"{package}.data.generator.processors."),
+        ("datasets.", f"{package}.data.generator."),
+        ("scripts.action.", f"{package}.data.generator.action_scripts."),
+        ("utils.", f"{package}.utils.generator."),
     )
-    for old, new in replacements:
-        if canonical_path.startswith(old):
-            return new + canonical_path[len(old) :]
-    return canonical_path
+    return _replace_prefix(suffix, replacements)
+
+
+def _current_i4_module_path_to_legacy_runtime(current_i4_path: str, *, package: str) -> str:
+    """Restore aliases into a legacy installed package layout when detected."""
+
+    if not current_i4_path.startswith(_I4_MODULE_PREFIX):
+        return current_i4_path
+    suffix = _current_suffix_to_legacy_vfm(current_i4_path[len(_I4_MODULE_PREFIX) :], separator=".")
+    replacements = (
+        ("configs.base.", f"{package}.configs.base."),
+        ("tokenizers.", f"{package}.model.vfm.tokenizers."),
+        ("diffusion.", f"{package}.model.vfm.diffusion."),
+        ("models.", f"{package}.model.vfm."),
+        ("processors.", f"{package}.data.vfm.processors."),
+        ("datasets.", f"{package}.data.vfm."),
+        ("scripts.action.", f"{package}.data.vfm.action_scripts."),
+        ("utils.", f"{package}.utils.vfm."),
+    )
+    return _replace_prefix(suffix, replacements)
 
 
 def _to_public_string(value: str) -> str:
-    for prefix in ("projects/cosmos3/vfm/", "cosmos3/_src/vfm/"):
-        if value.startswith(prefix):
-            return _PUBLIC_VFM_URI_PREFIX + value[len(prefix) :]
+    if value.startswith(_LEGACY_PUBLIC_URI_PREFIX):
+        suffix = _legacy_vfm_suffix_to_current(value[len(_LEGACY_PUBLIC_URI_PREFIX) :], separator="/")
+        return _PUBLIC_URI_PREFIX + suffix
+    if value.startswith(_PUBLIC_URI_PREFIX):
+        return value
     if value.startswith(_I4_FILE_PREFIX):
-        suffix = _public_suffix_from_current_layout(value[len(_I4_FILE_PREFIX) :])
-        return _PUBLIC_VFM_URI_PREFIX + suffix
+        return _PUBLIC_URI_PREFIX + value[len(_I4_FILE_PREFIX) :]
     for package in ("cosmos_framework", "cosmos"):
-        public_value = _public_string_from_runtime_file_prefix(value, package=package)
-        if public_value is not None:
-            return public_value
-        public_value = _public_string_from_legacy_runtime_file_prefix(value, package=package)
-        if public_value is not None:
-            return public_value
+        suffix = _current_runtime_file_path_to_public_suffix(value, package=package)
+        if suffix is not None:
+            return _PUBLIC_URI_PREFIX + _legacy_vfm_suffix_to_current(suffix, separator="/")
+    legacy_suffix = _legacy_file_path_to_current_suffix(value)
+    if legacy_suffix is not None:
+        return _PUBLIC_URI_PREFIX + legacy_suffix
     return value
 
 
-def _public_suffix_from_current_layout(suffix: str) -> str:
+def _current_runtime_file_path_to_public_suffix(value: str, *, package: str) -> str | None:
     replacements = (
-        ("configs/base/defaults/reasoner/", "configs/base/defaults/vlm/"),
-        ("configs/base/reasoner/", "configs/base/vlm/"),
-        ("models/reasoner/", "models/vlm/"),
-        ("datasets/augmentors/reasoner/", "datasets/augmentors/vlm/"),
-        ("datasets/reasoner/", "datasets/vlm/"),
-        ("utils/reasoner/", "utils/vlm/"),
-    )
-    for old, new in replacements:
-        if suffix.startswith(old):
-            return new + suffix[len(old) :]
-    return suffix
-
-
-def _public_string_from_runtime_file_prefix(value: str, *, package: str) -> str | None:
-    replacements = (
-        (f"{package}/configs/base/defaults/reasoner/", "configs/base/defaults/vlm/"),
-        (f"{package}/configs/base/reasoner/", "configs/base/vlm/"),
-        (f"{package}/model/generator/reasoner/", "models/vlm/"),
-        (f"{package}/data/generator/augmentors/reasoner/", "datasets/augmentors/vlm/"),
-        (f"{package}/data/generator/reasoner/", "datasets/vlm/"),
-        (f"{package}/utils/generator/reasoner/", "utils/vlm/"),
+        (f"{package}/configs/base/defaults/reasoner/", "configs/base/defaults/reasoner/"),
+        (f"{package}/configs/base/reasoner/", "configs/base/reasoner/"),
+        (f"{package}/model/generator/reasoner/", "models/reasoner/"),
+        (f"{package}/data/generator/augmentors/reasoner/", "datasets/augmentors/reasoner/"),
+        (f"{package}/data/generator/reasoner/", "datasets/reasoner/"),
+        (f"{package}/utils/generator/reasoner/", "utils/reasoner/"),
         (f"{package}/configs/base/", "configs/base/"),
         (f"{package}/model/generator/tokenizers/", "tokenizers/"),
         (f"{package}/model/generator/diffusion/", "diffusion/"),
@@ -365,95 +359,134 @@ def _public_string_from_runtime_file_prefix(value: str, *, package: str) -> str 
     )
     for old, new in replacements:
         if value.startswith(old):
-            return _PUBLIC_VFM_URI_PREFIX + new + value[len(old) :]
+            return new + value[len(old) :]
     return None
 
 
-def _public_string_from_legacy_runtime_file_prefix(value: str, *, package: str) -> str | None:
-    replacements = (
-        (f"{package}/configs/base/", "configs/base/"),
-        (f"{package}/model/vfm/tokenizers/", "tokenizers/"),
-        (f"{package}/model/vfm/diffusion/", "diffusion/"),
-        (f"{package}/model/vfm/", "models/"),
-        (f"{package}/data/vfm/processors/", "processors/"),
-        (f"{package}/data/vfm/action_scripts/", "scripts/action/"),
-        (f"{package}/data/vfm/", "datasets/"),
-        (f"{package}/utils/vfm/", "utils/"),
-    )
-    for old, new in replacements:
-        if value.startswith(old):
-            return _PUBLIC_VFM_URI_PREFIX + new + value[len(old) :]
+def _legacy_file_path_to_current_suffix(value: str) -> str | None:
+    """Translate pre-alias resource paths for backward-compatible reads only."""
+
+    for prefix in ("projects/cosmos3/vfm/", "cosmos3/_src/vfm/"):
+        if value.startswith(prefix):
+            return _legacy_vfm_suffix_to_current(value[len(prefix) :], separator="/")
+    for package in ("cosmos_framework", "cosmos"):
+        legacy_suffix = _replace_prefix(
+            value,
+            (
+                (f"{package}/configs/base/", "configs/base/"),
+                (f"{package}/model/vfm/tokenizers/", "tokenizers/"),
+                (f"{package}/model/vfm/diffusion/", "diffusion/"),
+                (f"{package}/model/vfm/", "models/"),
+                (f"{package}/data/vfm/processors/", "processors/"),
+                (f"{package}/data/vfm/action_scripts/", "scripts/action/"),
+                (f"{package}/data/vfm/", "datasets/"),
+                (f"{package}/utils/vfm/", "utils/"),
+            ),
+        )
+        if legacy_suffix != value:
+            return _legacy_vfm_suffix_to_current(legacy_suffix, separator="/")
     return None
 
 
 def _from_public_string(value: str) -> str:
-    if not value.startswith(_PUBLIC_VFM_URI_PREFIX):
+    if value.startswith(_LEGACY_PUBLIC_URI_PREFIX):
+        suffix = _legacy_vfm_suffix_to_current(value[len(_LEGACY_PUBLIC_URI_PREFIX) :], separator="/")
+    elif value.startswith(_PUBLIC_URI_PREFIX):
+        suffix = value[len(_PUBLIC_URI_PREFIX) :]
+    else:
         return value
-    suffix = value[len(_PUBLIC_VFM_URI_PREFIX) :]
     if _module_exists("cosmos_framework.model.generator"):
-        return _replace_vfm_file_prefix(suffix, package="cosmos_framework")
+        return _public_suffix_to_framework_file_path(suffix, package="cosmos_framework")
     if _module_exists("cosmos_framework.model.vfm"):
-        return _replace_legacy_vfm_file_prefix(suffix, package="cosmos_framework")
+        return _public_suffix_to_legacy_runtime_file_path(suffix, package="cosmos_framework")
     if _module_exists("cosmos.model.vfm"):
-        return _replace_legacy_vfm_file_prefix(suffix, package="cosmos")
+        return _public_suffix_to_legacy_runtime_file_path(suffix, package="cosmos")
     if _module_exists("cosmos3._src.vfm"):
-        return f"cosmos3/_src/vfm/{suffix}"
-    return _replace_vfm_file_prefix_for_i4(suffix)
-
-
-def _replace_vfm_file_prefix(suffix: str, *, package: str) -> str:
-    replacements = (
-        ("configs/base/defaults/vlm/", f"{package}/configs/base/defaults/reasoner/"),
-        ("configs/base/vlm/", f"{package}/configs/base/reasoner/"),
-        ("models/vlm/", f"{package}/model/generator/reasoner/"),
-        ("datasets/augmentors/vlm/", f"{package}/data/generator/augmentors/reasoner/"),
-        ("datasets/vlm/", f"{package}/data/generator/reasoner/"),
-        ("utils/vlm/", f"{package}/utils/generator/reasoner/"),
-        ("configs/base/", f"{package}/configs/base/"),
-        ("models/", f"{package}/model/generator/"),
-        ("tokenizers/", f"{package}/model/generator/tokenizers/"),
-        ("diffusion/", f"{package}/model/generator/diffusion/"),
-        ("processors/", f"{package}/data/generator/processors/"),
-        ("datasets/", f"{package}/data/generator/"),
-        ("scripts/action/", f"{package}/data/generator/action_scripts/"),
-        ("utils/", f"{package}/utils/generator/"),
-    )
-    for old, new in replacements:
-        if suffix.startswith(old):
-            return new + suffix[len(old) :]
-    return f"{package}/_vfm_unmapped/{suffix}"
-
-
-def _replace_vfm_file_prefix_for_i4(suffix: str) -> str:
-    replacements = (
-        ("configs/base/defaults/vlm/", _I4_FILE_PREFIX + "configs/base/defaults/reasoner/"),
-        ("configs/base/vlm/", _I4_FILE_PREFIX + "configs/base/reasoner/"),
-        ("models/vlm/", _I4_FILE_PREFIX + "models/reasoner/"),
-        ("datasets/augmentors/vlm/", _I4_FILE_PREFIX + "datasets/augmentors/reasoner/"),
-        ("datasets/vlm/", _I4_FILE_PREFIX + "datasets/reasoner/"),
-        ("utils/vlm/", _I4_FILE_PREFIX + "utils/reasoner/"),
-    )
-    suffix = _replace_prefix(suffix, replacements)
-    if suffix.startswith(_I4_FILE_PREFIX):
-        return suffix
+        return "cosmos3/_src/vfm/" + _current_suffix_to_legacy_vfm(suffix, separator="/")
     return _I4_FILE_PREFIX + suffix
 
 
-def _replace_legacy_vfm_file_prefix(suffix: str, *, package: str) -> str:
+def _public_suffix_to_framework_file_path(suffix: str, *, package: str) -> str:
     replacements = (
+        ("configs/base/defaults/reasoner/", f"{package}/configs/base/defaults/reasoner/"),
+        ("configs/base/reasoner/", f"{package}/configs/base/reasoner/"),
+        ("models/reasoner/", f"{package}/model/generator/reasoner/"),
+        ("datasets/augmentors/reasoner/", f"{package}/data/generator/augmentors/reasoner/"),
+        ("datasets/reasoner/", f"{package}/data/generator/reasoner/"),
+        ("utils/reasoner/", f"{package}/utils/generator/reasoner/"),
         ("configs/base/", f"{package}/configs/base/"),
-        ("models/", f"{package}/model/vfm/"),
-        ("tokenizers/", f"{package}/model/vfm/tokenizers/"),
-        ("diffusion/", f"{package}/model/vfm/diffusion/"),
-        ("processors/", f"{package}/data/vfm/processors/"),
-        ("datasets/", f"{package}/data/vfm/"),
-        ("scripts/action/", f"{package}/data/vfm/action_scripts/"),
-        ("utils/", f"{package}/utils/vfm/"),
+        ("tokenizers/", f"{package}/model/generator/tokenizers/"),
+        ("diffusion/", f"{package}/model/generator/diffusion/"),
+        ("models/", f"{package}/model/generator/"),
+        ("processors/", f"{package}/data/generator/processors/"),
+        ("scripts/action/", f"{package}/data/generator/action_scripts/"),
+        ("datasets/", f"{package}/data/generator/"),
+        ("utils/", f"{package}/utils/generator/"),
     )
     replaced = _replace_prefix(suffix, replacements)
     if replaced != suffix:
         return replaced
-    return f"{package}/_vfm_unmapped/{suffix}"
+    return f"{package}/_cosmos3_unmapped/{suffix}"
+
+
+def _public_suffix_to_legacy_runtime_file_path(suffix: str, *, package: str) -> str:
+    legacy_suffix = _current_suffix_to_legacy_vfm(suffix, separator="/")
+    replacements = (
+        ("configs/base/", f"{package}/configs/base/"),
+        ("tokenizers/", f"{package}/model/vfm/tokenizers/"),
+        ("diffusion/", f"{package}/model/vfm/diffusion/"),
+        ("models/", f"{package}/model/vfm/"),
+        ("processors/", f"{package}/data/vfm/processors/"),
+        ("scripts/action/", f"{package}/data/vfm/action_scripts/"),
+        ("datasets/", f"{package}/data/vfm/"),
+        ("utils/", f"{package}/utils/vfm/"),
+    )
+    replaced = _replace_prefix(legacy_suffix, replacements)
+    if replaced != legacy_suffix:
+        return replaced
+    return f"{package}/_vfm_unmapped/{legacy_suffix}"
+
+
+def _legacy_vfm_suffix_to_current(suffix: str, *, separator: str) -> str:
+    replacements = (
+        (
+            separator.join(("configs", "base", "defaults", "vlm", "")),
+            separator.join(("configs", "base", "defaults", "reasoner", "")),
+        ),
+        (
+            separator.join(("configs", "base", "vlm", "")),
+            separator.join(("configs", "base", "reasoner", "")),
+        ),
+        (separator.join(("models", "vlm", "")), separator.join(("models", "reasoner", ""))),
+        (
+            separator.join(("datasets", "augmentors", "vlm", "")),
+            separator.join(("datasets", "augmentors", "reasoner", "")),
+        ),
+        (separator.join(("datasets", "vlm", "")), separator.join(("datasets", "reasoner", ""))),
+        (separator.join(("utils", "vlm", "")), separator.join(("utils", "reasoner", ""))),
+    )
+    return _replace_prefix(suffix, replacements)
+
+
+def _current_suffix_to_legacy_vfm(suffix: str, *, separator: str) -> str:
+    replacements = (
+        (
+            separator.join(("configs", "base", "defaults", "reasoner", "")),
+            separator.join(("configs", "base", "defaults", "vlm", "")),
+        ),
+        (
+            separator.join(("configs", "base", "reasoner", "")),
+            separator.join(("configs", "base", "vlm", "")),
+        ),
+        (separator.join(("models", "reasoner", "")), separator.join(("models", "vlm", ""))),
+        (
+            separator.join(("datasets", "augmentors", "reasoner", "")),
+            separator.join(("datasets", "augmentors", "vlm", "")),
+        ),
+        (separator.join(("datasets", "reasoner", "")), separator.join(("datasets", "vlm", ""))),
+        (separator.join(("utils", "reasoner", "")), separator.join(("utils", "vlm", ""))),
+    )
+    return _replace_prefix(suffix, replacements)
 
 
 def _replace_prefix(value: str, replacements: tuple[tuple[str, str], ...]) -> str:

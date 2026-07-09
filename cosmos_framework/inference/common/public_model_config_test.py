@@ -154,6 +154,20 @@ def _assert_public_config(public_config: dict) -> None:
     assert "projects/cosmos3" not in text
     assert "cosmos3._src" not in text
     assert "cosmos_framework" not in text
+    assert "vfm" not in text
+    json_file = public_config["config"]["vlm_config"]["model_instance"]["config"]["base_config"]["json_file"]
+    assert json_file.startswith("cosmos3://models/reasoner/")
+
+
+def test_active_alias_registry_uses_current_i4_paths():
+    paths = {
+        *public_model_config._TARGET_PATHS_BY_ALIAS.values(),
+        *public_model_config._TYPE_PATHS_BY_ALIAS.values(),
+    }
+
+    assert paths
+    assert all(path.startswith(_I4_MODULE_PREFIX) for path in paths)
+    assert all(".vfm." not in path for path in paths)
 
 
 def test_qwen_public_model_config_round_trip():
@@ -161,6 +175,10 @@ def test_qwen_public_model_config_round_trip():
     public_config = public_model_config.build_public_model_config(model_config)
 
     _assert_public_config(public_config)
+    assert (
+        public_config["config"]["vlm_config"]["model_instance"]["config"]["base_config"]["json_file"]
+        == "cosmos3://models/reasoner/qwen3_vl/configs/Qwen3-VL-32B-Instruct.json"
+    )
     assert public_model_config.restore_model_config_from_public_model_config(public_config) == model_config
     assert public_model_config.load_model_config_from_hf_config({"model": public_config}) == model_config
     assert public_model_config.load_model_config_from_hf_config({"model": model_config}) == model_config
@@ -173,6 +191,17 @@ def test_legacy_model_config_produces_same_public_config():
     assert public_model_config.build_public_model_config(
         legacy_config
     ) == public_model_config.build_public_model_config(model_config)
+
+
+def test_legacy_public_uri_restores_current_layout():
+    public_config = public_model_config.build_public_model_config(_runtime_model_config(_qwen_model_config()))
+    public_config["config"]["vlm_config"]["model_instance"]["config"]["base_config"]["json_file"] = (
+        "cosmos3://vfm/models/vlm/qwen3_vl/configs/Qwen3-VL-32B-Instruct.json"
+    )
+
+    restored = public_model_config.restore_model_config_from_public_model_config(public_config)
+
+    assert restored == _runtime_model_config(_qwen_model_config())
 
 
 def test_legacy_alias_keys_do_not_consume_regular_metadata():
