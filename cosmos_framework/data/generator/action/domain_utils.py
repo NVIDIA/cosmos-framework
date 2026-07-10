@@ -20,6 +20,7 @@ EMBODIMENT_TO_DOMAIN_ID: dict[str, int] = {
     "agibotworld": 15,
     "embodiment_c_gripper": 15,
     "embodiment_c_gripper_ext": 15,
+    "xdof_yam": 16,
     "fractal": 20,
 }
 
@@ -38,6 +39,7 @@ EMBODIMENT_TO_RAW_ACTION_DIM: dict[str, int] = {
     "agibotworld": 29,
     "embodiment_c_gripper": 29,
     "embodiment_c_gripper_ext": 29,
+    "xdof_yam": 20,
     "fractal": 10,
     # NOTE: ``libero`` (7/10/13 depending on ``rotation_space``) and ``hand_pose``
     # (variable with ``keypoint_option`` and ``rotation_format``) are absent

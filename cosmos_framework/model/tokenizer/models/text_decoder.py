@@ -23,7 +23,6 @@ Label alignment (next-token prediction):
 """
 
 import os
-import re
 from dataclasses import dataclass
 from types import SimpleNamespace
 from typing import Any
@@ -33,11 +32,15 @@ import torch.nn as nn
 import torch.nn.functional as F
 from loguru import logger as logging
 
+from cosmos_framework.model.attention import attention as i4_attention
+from cosmos_framework.model.attention.masks import CausalType
+from cosmos_framework.model.attention.natten import NATTEN_SUPPORTED, get_natten_version
 from cosmos_framework.model.tokenizer.utils.hf import (
     load_auto_tokenizer_from_cache,
     prepare_nemotron_tokenizer_snapshot,
     resolve_hf_snapshot_path,
 )
+from cosmos_framework.model.tokenizer.utils.tensors import cat_with_bounded_inputs, stack_with_bounded_inputs
 from cosmos_framework.model.tokenizer.utils.vlm_prompt_format import densevl_add_vision_id_text
 
 QWEN3_PAD_TOKEN_ID = 151643
@@ -58,6 +61,9 @@ NEMOTRON_2B_IM_END_TOKEN = "<|im_end|>"
 NEMOTRON_2B_THINK_START_TOKEN = "<think>"
 NEMOTRON_2B_THINK_END_TOKEN = "</think>"
 TEXT_DECODER_ATTN_IMPLEMENTATION_ENV = "TOKENIZER_TEXT_DECODER_ATTN_IMPLEMENTATION"
+PACKED_ATTENTION_BACKEND_SDPA = "sdpa"
+PACKED_ATTENTION_BACKEND_NATTEN = "natten"
+PACKED_ATTENTION_BACKENDS = frozenset({PACKED_ATTENTION_BACKEND_SDPA, PACKED_ATTENTION_BACKEND_NATTEN})
 VQA_THINKING_MODE_OFF = "off"
 VQA_THINKING_MODE_ON = "on"
 VQA_THINKING_MODE_RAW = "raw"
@@ -86,6 +92,128 @@ def _append_vqa_reasoning_suffix(question: str, reasoning_suffix: str) -> str:
     if reasoning_suffix.strip() in question:
         return question
     return f"{question.rstrip()}{reasoning_suffix}"
+
+
+def _rotate_half_for_nemotron(hidden_states: torch.Tensor) -> torch.Tensor:
+    """Rotate the two RoPE feature halves using Nemotron's convention."""
+    midpoint = hidden_states.shape[-1] // 2
+    first_half = hidden_states[..., :midpoint]  # [B,H,T,D/2]
+    second_half = hidden_states[..., midpoint:]  # [B,H,T,D/2]
+    rotated = torch.cat((-second_half, first_half), dim=-1)  # [B,H,T,D]
+    return rotated
+
+
+def _apply_nemotron_rotary_embeddings(
+    query_states: torch.Tensor,
+    key_states: torch.Tensor,
+    cosine: torch.Tensor,
+    sine: torch.Tensor,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Apply the remote Nemotron model's RoPE formulation to Q and K."""
+    rotated_query = _rotate_half_for_nemotron(query_states)  # [B,Hq,T,D]
+    rotated_key = _rotate_half_for_nemotron(key_states)  # [B,Hkv,T,D]
+    query_states_ = query_states * cosine + rotated_query * sine  # [B,Hq,T,D]
+    key_states_ = key_states * cosine + rotated_key * sine  # [B,Hkv,T,D]
+    return query_states_, key_states_
+
+
+def _forward_nemotron_natten_attention(
+    attention_module: nn.Module,
+    hidden_states: torch.Tensor,
+    position_ids: torch.Tensor,
+    cumulative_seqlen: torch.Tensor,
+    max_seqlen: int,
+    rotary_embeddings: tuple[torch.Tensor, torch.Tensor] | None = None,
+) -> torch.Tensor:
+    """Run one Nemotron self-attention block with NATTEN causal varlen attention."""
+    batch_size, sequence_length, _ = hidden_states.shape
+    if batch_size != 1:
+        raise ValueError(f"NATTEN varlen requires packed batch size 1, got {batch_size}.")
+
+    query_states = attention_module.q_proj(hidden_states)  # [1,T,Hq*D]
+    query_states = query_states.view(
+        batch_size,
+        sequence_length,
+        attention_module.num_heads,
+        attention_module.head_dim,
+    ).transpose(1, 2)  # [1,Hq,T,D]
+    key_states = attention_module.k_proj(hidden_states)  # [1,T,Hkv*D]
+    key_states = key_states.view(
+        batch_size,
+        sequence_length,
+        attention_module.num_key_value_heads,
+        attention_module.head_dim,
+    ).transpose(1, 2)  # [1,Hkv,T,D]
+    value_states = attention_module.v_proj(hidden_states)  # [1,T,Hkv*D]
+    value_states = value_states.view(
+        batch_size,
+        sequence_length,
+        attention_module.num_key_value_heads,
+        attention_module.head_dim,
+    ).transpose(1, 2)  # [1,Hkv,T,D]
+
+    if rotary_embeddings is None:
+        normalized_position_ids = position_ids.reshape(batch_size, sequence_length).long()  # [1,T]
+        cosine, sine = attention_module.rotary_emb(
+            value_states,
+            normalized_position_ids,
+        )  # each [1,1,T,D]
+    else:
+        cosine, sine = rotary_embeddings
+    query_states_, key_states_ = _apply_nemotron_rotary_embeddings(
+        query_states,
+        key_states,
+        cosine,
+        sine,
+    )  # [1,Hq,T,D], [1,Hkv,T,D]
+
+    query_states_ = query_states_.transpose(1, 2).contiguous()  # [1,T,Hq,D]
+    key_states_ = key_states_.transpose(1, 2).contiguous()  # [1,T,Hkv,D]
+    value_states = value_states.transpose(1, 2).contiguous()  # [1,T,Hkv,D]
+    attention_output = i4_attention(
+        query=query_states_,
+        key=key_states_,
+        value=value_states,
+        is_causal=True,
+        causal_type=CausalType.DontCare,
+        cumulative_seqlen_Q=cumulative_seqlen,
+        cumulative_seqlen_KV=cumulative_seqlen,
+        max_seqlen_Q=max_seqlen,
+        max_seqlen_KV=max_seqlen,
+        backend=PACKED_ATTENTION_BACKEND_NATTEN,
+    )
+    if not isinstance(attention_output, torch.Tensor):
+        raise TypeError("NATTEN attention unexpectedly returned log-sum-exp output.")
+    attention_output = attention_output.reshape(batch_size, sequence_length, attention_module.hidden_size)  # [1,T,D]
+    projected_output = attention_module.o_proj(attention_output)  # [1,T,D]
+    return projected_output
+
+
+def _forward_nemotron_natten_decoder_layer(
+    decoder_layer: nn.Module,
+    hidden_states: torch.Tensor,
+    position_ids: torch.Tensor,
+    cumulative_seqlen: torch.Tensor,
+    max_seqlen: int,
+    rotary_embeddings: tuple[torch.Tensor, torch.Tensor] | None = None,
+) -> torch.Tensor:
+    """Run one remote-code Nemotron layer while replacing only self-attention."""
+    residual = hidden_states  # [1,T,D]
+    normalized_hidden_states = decoder_layer.input_layernorm(hidden_states)  # [1,T,D]
+    attention_output = _forward_nemotron_natten_attention(
+        decoder_layer.self_attn,
+        normalized_hidden_states,
+        position_ids,
+        cumulative_seqlen,
+        max_seqlen,
+        rotary_embeddings,
+    )  # [1,T,D]
+    hidden_states = residual + attention_output  # [1,T,D]
+
+    residual = hidden_states  # [1,T,D]
+    normalized_hidden_states = decoder_layer.post_attention_layernorm(hidden_states)  # [1,T,D]
+    mlp_output = decoder_layer.mlp(normalized_hidden_states)  # [1,T,D]
+    return residual + mlp_output  # [1,T,D]
 
 
 @dataclass(frozen=True)
@@ -177,22 +305,6 @@ def _repair_nemotron_rotary_buffers(module: nn.Module) -> int:
         child_module.register_buffer("inv_freq", inv_freq, persistent=False)
         repaired_count += 1
     return repaired_count
-
-
-def _keep_only_first_image_placeholder(
-    text: str,
-    image_placeholder: str = "<image>",
-) -> str:
-    """Keep only the first image placeholder occurrence in a prompt string."""
-    first_index = text.find(image_placeholder)
-    if first_index == -1:
-        return text
-
-    before_first = text[:first_index]
-    after_first = text[first_index + len(image_placeholder) :]
-    escaped_placeholder = re.escape(image_placeholder)
-    after_first_cleaned = re.sub(escaped_placeholder + r"\s*", "", after_first)
-    return before_first + image_placeholder + after_first_cleaned
 
 
 def infer_text_decoder_family(model_name: str) -> str:
@@ -437,8 +549,8 @@ class SpatialPatchMerger(nn.Module):
                 new_layout.append(slice(current_offset, current_offset + num_merged))
                 current_offset += num_merged
 
-        merged_feats = torch.cat(merged_feats_list, dim=0)
-        merged_coords = torch.cat(merged_coords_list, dim=0)
+        merged_feats = cat_with_bounded_inputs(merged_feats_list, dim=0)
+        merged_coords = cat_with_bounded_inputs(merged_coords_list, dim=0)
 
         # MLP projection: merged_hidden_size -> out_hidden_size
         merged_feats = self.linear_fc2(self.act_fn(self.linear_fc1(merged_feats)))
@@ -463,7 +575,8 @@ class TextDecoderWrapper(nn.Module):
         dtype: torch.dtype | None = None,
         attn_implementation: str = "flash_attention_2",
         family_spec: TextDecoderFamilySpec | None = None,
-    ):
+        packed_attention_backend: str = PACKED_ATTENTION_BACKEND_SDPA,
+    ) -> None:
         super().__init__()
 
         if dtype is None:
@@ -472,8 +585,28 @@ class TextDecoderWrapper(nn.Module):
         from transformers import AutoModelForCausalLM
 
         self.spec = family_spec or get_text_decoder_family_spec(model_name=model_name)
+        if packed_attention_backend not in PACKED_ATTENTION_BACKENDS:
+            raise ValueError(
+                f"Unsupported packed_attention_backend={packed_attention_backend!r}; "
+                f"expected one of {sorted(PACKED_ATTENTION_BACKENDS)}."
+            )
+        if packed_attention_backend == PACKED_ATTENTION_BACKEND_NATTEN and self.spec.family != NEMOTRON_2B_SPEC.family:
+            raise ValueError("NATTEN packed attention currently supports only the Nemotron 2B text decoder.")
+        if (
+            packed_attention_backend == PACKED_ATTENTION_BACKEND_NATTEN
+            and torch.cuda.is_available()
+            and not NATTEN_SUPPORTED
+        ):
+            raise RuntimeError("NATTEN packed attention was requested but NATTEN is unavailable or unsupported.")
+        self.packed_attention_backend: str = packed_attention_backend
         self._model_name: str = model_name or self.spec.default_model_name
         resolved_attn_implementation = _resolve_attn_implementation(attn_implementation)
+        if packed_attention_backend == PACKED_ATTENTION_BACKEND_NATTEN:
+            # Packed training bypasses the remote decoder attention. Keep all
+            # non-packed calls on the explicit dependency-free fallback.
+            resolved_attn_implementation = "eager"
+            if NATTEN_SUPPORTED:
+                logging.info(f"Using NATTEN {get_natten_version()} for packed text decoder attention")
         logging.info(f"Loading text decoder: {self._model_name}")
         logging.info(f"Using text decoder attention backend: {resolved_attn_implementation}")
         hf_cache_dir = os.environ.get("HF_HOME")
@@ -592,7 +725,8 @@ class TextDecoderWrapper(nn.Module):
         logging.info(
             f"TextDecoderWrapper ready: family={self.spec.family}, hidden_size={hidden_size}, "
             f"layers={len(self.text_decoder.model.layers)}, "
-            f"gradient_checkpointing={gradient_checkpointing_enabled}, use_cache=False"
+            f"gradient_checkpointing={gradient_checkpointing_enabled}, "
+            f"packed_attention_backend={self.packed_attention_backend}, use_cache=False"
         )
 
     def _get_eos_token_ids(self) -> tuple[int, ...]:
@@ -636,6 +770,77 @@ class TextDecoderWrapper(nn.Module):
         """Embed token IDs using the model's input embedding module."""
         return self.text_decoder.get_input_embeddings()(input_ids)
 
+    def _forward_nemotron_natten_from_embeddings(
+        self,
+        text_embeds: torch.Tensor,
+        position_ids: torch.Tensor,
+        cumulative_seqlen: torch.Tensor,
+        max_seqlen: int,
+    ) -> SimpleNamespace:
+        """Run packed Nemotron layers with NATTEN varlen self-attention."""
+        if self.spec.family != NEMOTRON_2B_SPEC.family:
+            raise ValueError("NATTEN packed attention currently supports only the Nemotron 2B text decoder.")
+        if text_embeds.shape[0] != 1:
+            raise ValueError(f"NATTEN varlen requires packed batch size 1, got {text_embeds.shape[0]}.")
+        if cumulative_seqlen.dtype != torch.int32:
+            raise ValueError(f"NATTEN cumulative sequence lengths must be int32, got {cumulative_seqlen.dtype}.")
+
+        hidden_states = text_embeds  # [1,T,D]
+        decoder_layers = self.text_decoder.model.layers
+        if not decoder_layers:
+            raise ValueError("NATTEN packed attention requires at least one Nemotron decoder layer.")
+        first_attention = decoder_layers[0].self_attn
+        normalized_position_ids = position_ids.reshape(hidden_states.shape[0], hidden_states.shape[1]).long()  # [1,T]
+        rotary_reference = hidden_states.new_empty(
+            (
+                hidden_states.shape[0],
+                first_attention.num_key_value_heads,
+                0,
+                first_attention.head_dim,
+            )
+        )  # [1,Hkv,0,D]
+        rotary_embeddings = first_attention.rotary_emb(
+            rotary_reference,
+            normalized_position_ids,
+        )  # each [1,1,T,D]
+        use_manual_gradient_checkpointing = (
+            self._manual_gradient_checkpointing_enabled and self.training and hidden_states.requires_grad
+        )
+        for decoder_layer in decoder_layers:
+            if use_manual_gradient_checkpointing:
+
+                def _layer_forward(
+                    layer_hidden_states: torch.Tensor,
+                    layer_module: nn.Module = decoder_layer,
+                ) -> torch.Tensor:
+                    return _forward_nemotron_natten_decoder_layer(
+                        layer_module,
+                        layer_hidden_states,
+                        position_ids,
+                        cumulative_seqlen,
+                        max_seqlen,
+                        rotary_embeddings,
+                    )
+
+                hidden_states = torch.utils.checkpoint.checkpoint(
+                    _layer_forward,
+                    hidden_states,
+                    preserve_rng_state=True,
+                    use_reentrant=False,
+                )  # [1,T,D]
+            else:
+                hidden_states = _forward_nemotron_natten_decoder_layer(
+                    decoder_layer,
+                    hidden_states,
+                    position_ids,
+                    cumulative_seqlen,
+                    max_seqlen,
+                    rotary_embeddings,
+                )  # [1,T,D]
+
+        hidden_states = self.text_decoder.model.norm(hidden_states)  # [1,T,D]
+        return SimpleNamespace(last_hidden_state=hidden_states, past_key_values=None)
+
     def _forward_from_embeddings(
         self,
         text_embeds: torch.Tensor,
@@ -644,8 +849,30 @@ class TextDecoderWrapper(nn.Module):
         cache_position: torch.Tensor | None = None,
         use_cache: bool = False,
         past_key_values: Any | None = None,
+        packed_cumulative_seqlen: torch.Tensor | None = None,
+        packed_max_seqlen: int | None = None,
     ) -> SimpleNamespace:
         """Run the LM from caller-provided token embeddings."""
+        has_packed_cumulative_seqlen = packed_cumulative_seqlen is not None
+        has_packed_max_seqlen = packed_max_seqlen is not None
+        if has_packed_cumulative_seqlen != has_packed_max_seqlen:
+            raise ValueError("packed_cumulative_seqlen and packed_max_seqlen must be provided together.")
+        if has_packed_cumulative_seqlen:
+            if self.packed_attention_backend != PACKED_ATTENTION_BACKEND_NATTEN:
+                raise ValueError("Packed varlen metadata was provided without the NATTEN packed attention backend.")
+            if attention_mask is not None or use_cache or past_key_values is not None:
+                raise ValueError("NATTEN packed training does not support masks or KV-cache inputs.")
+            if position_ids is None:
+                raise ValueError("NATTEN packed attention requires per-token position IDs.")
+            assert packed_cumulative_seqlen is not None
+            assert packed_max_seqlen is not None
+            return self._forward_nemotron_natten_from_embeddings(
+                text_embeds=text_embeds,
+                position_ids=position_ids,
+                cumulative_seqlen=packed_cumulative_seqlen,
+                max_seqlen=packed_max_seqlen,
+            )
+
         if self.spec.supports_inputs_embeds_forward:
             model_kwargs: dict[str, Any] = {
                 "inputs_embeds": text_embeds,
@@ -798,10 +1025,11 @@ class TextDecoderWrapper(nn.Module):
         image_placeholder = "<image>"
         num_visuals = len(image_token_counts_by_visual)
         normalized_question = str(question).strip()
+        placeholder_count = normalized_question.count(image_placeholder)
         if num_visuals == 1:
-            normalized_question = _keep_only_first_image_placeholder(normalized_question, image_placeholder)
+            if placeholder_count > 1:
+                raise ValueError(f"VQA prompt has {placeholder_count} image placeholders for one visual input.")
         else:
-            placeholder_count = normalized_question.count(image_placeholder)
             if placeholder_count == 0:
                 visual_placeholders = "\n".join(image_placeholder for _ in image_token_counts_by_visual)
                 normalized_question = f"{visual_placeholders}\n{normalized_question}".strip()
@@ -868,10 +1096,9 @@ class TextDecoderWrapper(nn.Module):
     ) -> tuple[torch.Tensor, int]:
         """Forward pass: inject image features into text and run causal LM.
 
-        When segment_ids are provided (packed sequences), the packed [1, S] sequence
-        is split into per-segment batch elements [num_segments, max_seg_len].
-        HuggingFace flash attention with unpadding then produces cu_seqlens per batch
-        element, giving segment-isolated causal attention.
+        When segment_ids are provided, SDPA reshapes the packed sequence into a
+        padded per-segment batch, while NATTEN retains the packed layout and uses
+        cumulative sequence offsets. Both paths provide segment-isolated causal attention.
         Position IDs reset per segment for correct RoPE.
 
         Args:
@@ -879,14 +1106,15 @@ class TextDecoderWrapper(nn.Module):
             image_feats_tensor: [N, encoder_dim] raw encoder output features.
             image_coords: [N, 4 or 5] spatial coordinates.
             image_patch_indices: [N_pooled] flat indices into [B*S] sequence where
-                merged image features should be inserted. Padded entries are -1.
+                merged image features should be inserted. The host collator validates
+                and removes padding sentinels before device transfer.
             image_layout: Optional batch layout slices for the image features.
             segment_ids: [B, S] segment IDs for packed sequences. Values >= 0 indicate
                 valid segments, -1 indicates padding. When provided, enables
                 segment-isolated attention and per-segment position IDs.
 
         Returns:
-            lm_logits: [B, S, vocab_size] next-token prediction logits.
+            Dense [B, S, vocab_size] logits.
             num_pooled_tokens: Number of image tokens after spatial merging.
         """
         image_features = image_feats_tensor
@@ -917,27 +1145,46 @@ class TextDecoderWrapper(nn.Module):
         text_embeds = self._embed_input_ids(input_ids)  # [B, S, d]
         B, S, d = text_embeds.shape
 
-        # Zero out vision placeholder positions, then insert real image features
-        vision_mask = (input_ids != self.vision_token_id).to(dtype=text_embeds.dtype)
-        text_embeds = text_embeds * vision_mask[:, :, None]
+        # The host collator validates exact placeholder/index coverage and removes
+        # padding sentinels before tensors move to the accelerator.
+        # Zero out vision placeholder positions, then insert real image features.
+        vision_mask = (input_ids != self.vision_token_id).to(dtype=text_embeds.dtype)  # [B,S]
+        text_embeds = text_embeds * vision_mask[:, :, None]  # [B,S,d]
 
-        if num_pooled_tokens > 0 and len(image_patch_indices) > 0:
-            valid_indices = image_patch_indices[image_patch_indices >= 0]
-            max_idx = B * S - 1
-            valid_indices = valid_indices[valid_indices <= max_idx]
-            num_to_insert = min(len(valid_indices), num_pooled_tokens)
-
-            if num_to_insert > 0:
-                text_embeds_flat = text_embeds.reshape(B * S, d)
-                insert_idx = valid_indices[:num_to_insert].to(device=text_embeds.device, dtype=torch.long)
-                text_embeds_flat[insert_idx] = image_features[:num_to_insert].to(text_embeds.dtype)
-                text_embeds = text_embeds_flat.reshape(B, S, d)
+        if image_patch_indices.ndim != 1:
+            raise ValueError(
+                f"Image patch indices must be one-dimensional, got shape {tuple(image_patch_indices.shape)}."
+            )
+        if (
+            image_patch_indices.dtype == torch.bool
+            or image_patch_indices.is_floating_point()
+            or image_patch_indices.is_complex()
+        ):
+            raise TypeError(f"Image patch indices must use an integer dtype, got {image_patch_indices.dtype}.")
+        if image_patch_indices.numel() != num_pooled_tokens:
+            raise ValueError(
+                "Image feature/index count mismatch: "
+                f"got {num_pooled_tokens} pooled features and {image_patch_indices.numel()} indices."
+            )
+        if image_patch_indices.numel() > 0:
+            insert_idx = image_patch_indices.to(device=input_ids.device, dtype=torch.long)  # [N]
+            text_embeds_flat = text_embeds.reshape(B * S, d)  # [B*S,d]
+            text_insert_idx = insert_idx.to(device=text_embeds.device)  # [N]
+            text_embeds_flat[text_insert_idx] = image_features.to(text_embeds.dtype)  # [N,d]
+            text_embeds = text_embeds_flat.reshape(B, S, d)  # [B,S,d]
 
         # Segment-aware forward pass for packed sequences
         if segment_ids is not None:
-            lm_logits = self._forward_packed(text_embeds, input_ids, segment_ids)
+            lm_logits = self._forward_packed(
+                text_embeds,
+                input_ids,
+                segment_ids,
+            )
         else:
-            lm_logits = self._forward_standard(text_embeds, input_ids=input_ids)
+            lm_logits = self._forward_standard(
+                text_embeds,
+                input_ids=input_ids,
+            )
 
         return lm_logits, num_pooled_tokens
 
@@ -992,9 +1239,9 @@ class TextDecoderWrapper(nn.Module):
     ) -> torch.Tensor:
         """Segment-isolated forward pass for packed sequences.
 
-        Splits packed [B, S] into per-segment batch [num_segments, max_seg_len].
-        Flash attention with unpadding naturally isolates batch elements via cu_seqlens.
-        Position IDs reset per segment for correct RoPE.
+        SDPA reshapes packed [B, S] into padded per-segment batches. NATTEN keeps
+        valid tokens contiguous and uses cumulative sequence offsets. Position IDs
+        reset per segment for correct RoPE in both paths.
 
         Args:
             text_embeds: [B, S, d] embeddings with image features already injected.
@@ -1002,14 +1249,14 @@ class TextDecoderWrapper(nn.Module):
             segment_ids: [B, S] segment IDs (>=0 for valid, -1 for padding).
 
         Returns:
-            lm_logits: [B, S, vocab_size] reassembled in original packed layout.
+            Dense [B, S, vocab_size] logits.
         """
         B, S, d = text_embeds.shape
         device = text_embeds.device
         dtype = text_embeds.dtype
 
         # Process each batch element (typically B=1 for packed sequences)
-        all_logits = []
+        all_logits: list[torch.Tensor] = []
         for b in range(B):
             seg_ids = segment_ids[b]  # [S]
             embeds = text_embeds[b]  # [S, d]
@@ -1035,42 +1282,54 @@ class TextDecoderWrapper(nn.Module):
                     "Segment IDs must be contiguous within packed text decoder inputs"
                 )
             num_segments = seg_lengths.numel()
-            max_seg_len = int(seg_lengths.max().item())
+
+            segment_starts = torch.cumsum(seg_lengths, dim=0) - seg_lengths  # [R]
+            segment_positions = torch.arange(valid_indices.numel(), device=device, dtype=torch.long)  # [V]
+            segment_positions = segment_positions - torch.repeat_interleave(segment_starts, seg_lengths)  # [V]
+
+            if self.packed_attention_backend == PACKED_ATTENTION_BACKEND_NATTEN:
+                segment_lengths_int32 = seg_lengths.to(dtype=torch.int32)  # [R]
+                zero_offset = torch.zeros(1, device=device, dtype=torch.int32)  # [1]
+                cumulative_lengths = segment_lengths_int32.cumsum(dim=0, dtype=torch.int32)  # [R]
+                cumulative_seqlen = torch.cat([zero_offset, cumulative_lengths], dim=0)  # [R+1]
+                max_seqlen = int(seg_lengths.max().item())
+                packed_embeds = valid_embeds.unsqueeze(0)  # [1,V,D]
+                packed_position_ids = segment_positions.unsqueeze(0)  # [1,V]
+                outputs = self._forward_from_embeddings(
+                    text_embeds=packed_embeds,
+                    attention_mask=None,
+                    position_ids=packed_position_ids,
+                    use_cache=False,
+                    packed_cumulative_seqlen=cumulative_seqlen,
+                    packed_max_seqlen=max_seqlen,
+                )
+                valid_logits = self._lm_head(outputs.last_hidden_state)  # [1,V,Vocab]
+                packed_logits = valid_logits.new_zeros((S, valid_logits.shape[-1]))  # [S,Vocab]
+                packed_logits[valid_indices] = valid_logits[0]  # [V,Vocab]
+                all_logits.append(packed_logits)
+                continue
 
             segment_rows = torch.repeat_interleave(
                 torch.arange(num_segments, device=device, dtype=torch.long),
                 seg_lengths,
-            )
-            segment_starts = torch.cumsum(seg_lengths, dim=0) - seg_lengths
-            segment_positions = torch.arange(valid_indices.numel(), device=device, dtype=torch.long)
-            segment_positions = segment_positions - torch.repeat_interleave(segment_starts, seg_lengths)
+            )  # [V]
+            max_seg_len = int(seg_lengths.max().item())
+            batch_embeds = torch.zeros(num_segments, max_seg_len, d, device=device, dtype=dtype)  # [R,T,D]
+            batch_embeds[segment_rows, segment_positions] = valid_embeds  # [V,D]
 
-            # Build per-segment batch: [num_segments, max_seg_len, d]
-            batch_embeds = torch.zeros(num_segments, max_seg_len, d, device=device, dtype=dtype)
-            batch_embeds[segment_rows, segment_positions] = valid_embeds
-
-            position_template = torch.arange(max_seg_len, device=device, dtype=torch.long)
-            batch_mask = (position_template.unsqueeze(0) < seg_lengths.unsqueeze(1)).to(dtype=torch.long)
-            batch_pos = position_template.unsqueeze(0).expand(num_segments, -1) * batch_mask
-
-            # Forward through the text decoder with one batch element per segment,
-            # which isolates attention across packed examples.
-            cache_position = position_template
+            position_template = torch.arange(max_seg_len, device=device, dtype=torch.long)  # [T]
+            batch_mask = (position_template.unsqueeze(0) < seg_lengths.unsqueeze(1)).to(dtype=torch.long)  # [R,T]
+            batch_pos = position_template.unsqueeze(0).expand(num_segments, -1) * batch_mask  # [R,T]
             outputs = self._forward_from_embeddings(
                 text_embeds=batch_embeds,
                 attention_mask=batch_mask,
                 position_ids=batch_pos,
-                cache_position=cache_position,
+                cache_position=position_template,
                 use_cache=False,
             )
-            seg_logits = self._lm_head(outputs.last_hidden_state)
-            # seg_logits: [num_segments, max_seg_len, vocab_size]
-
-            # Reassemble into original packed layout [S, vocab_size]
-            V = seg_logits.shape[-1]
-            packed_logits = torch.zeros(S, V, device=device, dtype=seg_logits.dtype)
-            packed_logits[valid_indices] = seg_logits[segment_rows, segment_positions]
-
+            seg_logits = self._lm_head(outputs.last_hidden_state)  # [R,T,Vocab]
+            packed_logits = seg_logits.new_zeros((S, seg_logits.shape[-1]))  # [S,Vocab]
+            packed_logits[valid_indices] = seg_logits[segment_rows, segment_positions]  # [V,Vocab]
             all_logits.append(packed_logits)
 
         # Guard: empty batch (all samples skipped by collate) -> empty logits tensor.
@@ -1078,7 +1337,7 @@ class TextDecoderWrapper(nn.Module):
             V = self.lm_config.vocab_size
             return torch.zeros(0, S, V, device=device, dtype=dtype)
         # Stack batch: [B, S, vocab_size]
-        return torch.stack(all_logits, dim=0)
+        return stack_with_bounded_inputs(all_logits, dim=0)  # [B,S,Vocab]
 
     def _decode_generation_result(
         self,
@@ -1197,7 +1456,8 @@ class TextDecoderWrapper(nn.Module):
         if len(generated_tokens) == 0:
             return input_ids
 
-        return torch.cat([input_ids, torch.cat(generated_tokens, dim=1)], dim=1)
+        generated_ids = cat_with_bounded_inputs(generated_tokens, dim=1)  # [B,T_generated]
+        return torch.cat([input_ids, generated_ids], dim=1)
 
     @torch.no_grad()
     def generate_caption(
@@ -1366,6 +1626,7 @@ class TextDecoderWrapper(nn.Module):
             return tok.encode(s, add_special_tokens=False)
 
         answer_decode_prefix_ids: list[int] | None = None
+        answer_suppress_token_ids: tuple[int, ...] = ()
         if self.spec.family == QWEN3_SPEC.family:
             system_turn = (
                 [QWEN3_IM_START_TOKEN_ID]
@@ -1383,6 +1644,7 @@ class TextDecoderWrapper(nn.Module):
                 # Empty think block signals Qwen3 non-thinking mode.
                 no_think = [QWEN3_THINK_START_TOKEN_ID] + _encode("\n\n") + [QWEN3_THINK_END_TOKEN_ID] + _encode("\n\n")
                 asst_prefix += no_think
+                answer_suppress_token_ids = self.spec.suppress_token_ids
             eos_token_ids = self._get_eos_token_ids()
         elif self.spec.family == NEMOTRON_2B_SPEC.family:
             im_start_id = _get_required_token_id(tok, NEMOTRON_2B_IM_START_TOKEN)
@@ -1398,6 +1660,7 @@ class TextDecoderWrapper(nn.Module):
             asst_prefix = [im_start_id] + _encode("assistant\n")
             if resolved_thinking_mode == VQA_THINKING_MODE_OFF:
                 asst_prefix += [think_id, end_think_id]
+                answer_suppress_token_ids = (think_id, end_think_id)
             elif resolved_thinking_mode == VQA_THINKING_MODE_ON:
                 answer_decode_prefix_ids = [think_id] + _encode("\n")
                 asst_prefix += answer_decode_prefix_ids
@@ -1436,9 +1699,7 @@ class TextDecoderWrapper(nn.Module):
             text_embeds=text_embeds,
             temperature=temperature,
             eos_token_ids=eos_token_ids,
-            suppress_token_ids=(
-                self.spec.suppress_token_ids if resolved_thinking_mode == VQA_THINKING_MODE_OFF else ()
-            ),
+            suppress_token_ids=answer_suppress_token_ids,
         )
 
         answer, metadata = self._decode_generation_result(

@@ -65,6 +65,7 @@ def compute_attention_flops(
     num_kv_heads: int,
     head_dim: int | None = None,
     is_causal: bool = False,
+    has_bias: bool = True,
 ) -> int:
     """Compute FLOPs for attention mechanism.
 
@@ -81,6 +82,7 @@ def compute_attention_flops(
             count and the kernel work for the causal case. Defaults to False
             for bidirectional attention (e.g. the vision encoder); set True
             for causal decoders.
+        has_bias: Whether Q/K/V/O projections include bias terms.
 
     Returns:
         Total FLOPs for attention
@@ -89,9 +91,9 @@ def compute_attention_flops(
         head_dim = hidden_size // num_heads
 
     # QKV projection: 3 linear layers (but KV uses num_kv_heads)
-    q_proj_flops = compute_linear_flops(hidden_size, num_heads * head_dim, seq_len, has_bias=True)
-    k_proj_flops = compute_linear_flops(hidden_size, num_kv_heads * head_dim, seq_len, has_bias=True)
-    v_proj_flops = compute_linear_flops(hidden_size, num_kv_heads * head_dim, seq_len, has_bias=True)
+    q_proj_flops = compute_linear_flops(hidden_size, num_heads * head_dim, seq_len, has_bias=has_bias)
+    k_proj_flops = compute_linear_flops(hidden_size, num_kv_heads * head_dim, seq_len, has_bias=has_bias)
+    v_proj_flops = compute_linear_flops(hidden_size, num_kv_heads * head_dim, seq_len, has_bias=has_bias)
 
     # Causal masking halves the work that scales with S^2 (QK^T, softmax,
     # attn @ V). The QKV / output projections are not affected.
@@ -109,7 +111,7 @@ def compute_attention_flops(
     attn_v_matmul_flops = int(2 * num_heads * seq_len * seq_len * head_dim * causal_factor)
 
     # Output projection
-    o_proj_flops = compute_linear_flops(num_heads * head_dim, hidden_size, seq_len, has_bias=True)
+    o_proj_flops = compute_linear_flops(num_heads * head_dim, hidden_size, seq_len, has_bias=has_bias)
 
     total_flops = (
         q_proj_flops
@@ -335,6 +337,7 @@ def compute_text_decoder_flops(
     num_text_layers: int,
     head_dim: int = 128,
     is_causal: bool = True,
+    attention_bias: bool = False,
     # MoE parameters
     num_experts: int = 0,
     num_experts_per_tok: int = 0,
@@ -357,6 +360,7 @@ def compute_text_decoder_flops(
             causal, so this defaults to True; set to False to recover the
             bidirectional upper bound (e.g. when comparing against a fitted
             runtime curve calibrated against the upper bound).
+        attention_bias: Whether Q/K/V/O attention projections include bias.
         num_experts: Total number of experts in MoE (0 means no MoE)
         num_experts_per_tok: Number of experts activated per token (top-k)
         moe_intermediate_size: Intermediate dimension for each MoE expert
@@ -387,6 +391,7 @@ def compute_text_decoder_flops(
             num_key_value_heads,
             head_dim,
             is_causal=is_causal,
+            has_bias=attention_bias,
         )
 
         # MLP or MoE (Qwen uses SwiGLU)
@@ -409,7 +414,7 @@ def compute_text_decoder_flops(
         ln_flops = 2 * compute_layernorm_flops(total_tokens, hidden_size)
 
         # RMSNorm for Q and K (applied to each head dimension)
-        qk_norm_flops = 2 * compute_layernorm_flops(total_tokens * num_attention_heads, head_dim)
+        qk_norm_flops = compute_layernorm_flops(total_tokens * (num_attention_heads + num_key_value_heads), head_dim)
 
         decoder_flops += attn_flops + mlp_flops + ln_flops + qk_norm_flops
 
@@ -435,6 +440,7 @@ def compute_qwen3vl_flops(
     include_lm_head: bool = True,
     spatial_merge_size: int = 2,
     is_causal: bool = True,
+    attention_bias: bool = False,
     # MoE parameters
     num_experts: int = 0,
     num_experts_per_tok: int = 0,
@@ -466,6 +472,8 @@ def compute_qwen3vl_flops(
         is_causal: If True (default), apply the causal-attention factor of 0.5
             to the text decoder's S^2 attention terms. The vision encoder is
             always treated as bidirectional.
+        attention_bias: Whether text-decoder Q/K/V/O attention projections
+            include bias.
         num_experts: Total number of experts in MoE (0 means no MoE)
         num_experts_per_tok: Number of experts activated per token (top-k)
         moe_intermediate_size: Intermediate dimension for each MoE expert
@@ -540,6 +548,7 @@ def compute_qwen3vl_flops(
         num_text_layers=num_text_layers,
         head_dim=head_dim,
         is_causal=is_causal,
+        attention_bias=attention_bias,
         # MoE parameters
         num_experts=num_experts,
         num_experts_per_tok=num_experts_per_tok,
@@ -612,6 +621,7 @@ def compute_qwen3vl_flops_from_config(
     """
     # Extract MoE parameters if available (MoE models)
     text_config = config.text_config
+    attention_bias = getattr(text_config, "attention_bias", False)
     num_experts = getattr(text_config, "num_experts", 0)
     num_experts_per_tok = getattr(text_config, "num_experts_per_tok", 0)
     moe_intermediate_size = getattr(text_config, "moe_intermediate_size", None)
@@ -635,6 +645,7 @@ def compute_qwen3vl_flops_from_config(
         head_dim=text_config.head_dim,
         spatial_merge_size=config.vision_config.spatial_merge_size,
         is_causal=is_causal,
+        attention_bias=attention_bias,
         # MoE parameters
         num_experts=num_experts,
         num_experts_per_tok=num_experts_per_tok,

@@ -392,13 +392,9 @@ class OmniMoTModel(ImaginaireModel):
 
     def set_up_parallelism(self) -> None:
         """Set up the fsdp for the model."""
-        if not torch.distributed.is_initialized():
-            self.parallel_dims = None
-            return
-
         self.parallel_dims = ParallelDims(
             enable_inference_mode=self.config.parallelism.enable_inference_mode,
-            world_size=torch.distributed.get_world_size(),
+            world_size=torch.distributed.get_world_size() if torch.distributed.is_initialized() else 1,
             dp_shard=self.config.parallelism.data_parallel_shard_degree,
             cfgp=self.config.parallelism.cfg_parallel_shard_degree,
             cp=self.config.parallelism.context_parallel_shard_degree,
@@ -1666,8 +1662,13 @@ class OmniMoTModel(ImaginaireModel):
         )
 
         # 2. Get data and condition (same as training)
-        # This encodes vision to x0_tokens
-        gen_data_clean = self.get_data_and_condition(data_batch)
+        # This encodes vision to x0_tokens. Pass each sample's vision conditioning
+        # frame indexes so a causal tokenizer can skip encoding pixel frames that only
+        # feed generated (non-conditioned) latent positions (e.g. policy /
+        # forward-dynamics condition latent frame 0 only, so only the first pixel frame
+        # is encoded instead of the whole clip).
+        vision_condition_indexes = [plan.condition_frame_indexes_vision for plan in sequence_plans]
+        gen_data_clean = self.get_data_and_condition(data_batch, vision_condition_indexes=vision_condition_indexes)
 
         num_items_per_sample = gen_data_clean.num_vision_items_per_sample  # None for standard T2I/T2V
 
@@ -2846,11 +2847,139 @@ class OmniMoTModel(ImaginaireModel):
     def forward(self, xt, t):
         pass
 
-    def get_data_and_condition(self, data_batch: dict[str, torch.Tensor], iteration: int = 1) -> GenerationDataClean:
+    def _encode_vision_x0_tokens(
+        self,
+        raw_state_vision: list[torch.Tensor],
+        num_vision_items_per_sample: list[int] | None,
+        vision_condition_indexes: list[list[int]] | None,
+    ) -> list[torch.Tensor]:
+        """Encode vision items into x0 latent tokens, optionally skipping unused frames.
+
+        Default behavior (``vision_condition_indexes is None``) encodes every pixel
+        frame of every vision item. This is the path used during training and by any
+        caller that does not opt in, and it is byte-for-byte the original encode loop.
+
+        Inference optimization: when ``vision_condition_indexes`` is provided (one
+        conditioning-frame-index list per sample, from each ``SequencePlan``) and the
+        vision tokenizer is temporally causal, only the pixel-frame prefix required to
+        reconstruct the highest conditioned latent frame is encoded. The remaining
+        latent frames are generated (pure-noise) positions that the ``condition_mask``
+        blend discards, so they are zero-filled instead of encoded. Under a causal VAE
+        the kept latents are identical to the corresponding frames of a full-clip
+        encode, while the encode processes far fewer frames (e.g. 1 pixel frame instead
+        of the full clip for policy / forward-dynamics modes that only condition latent
+        frame 0). Inverse-dynamics conditions every latent frame, so it keeps the full
+        encode automatically.
+
+        The optimization falls back to a full encode for multi-vision samples,
+        non-causal tokenizers, samples with no conditioning frames, and any item whose
+        full clip is already the minimal prefix.
+        """
+
+        def _full_encode(state: torch.Tensor) -> torch.Tensor:
+            return self.encode(state).contiguous().float()
+
+        # Only opt in when a caller supplied per-sample conditioning indexes, the
+        # samples map 1:1 to vision items (no multi-vision flattening), and the
+        # tokenizer is causal (so a pixel prefix reproduces the leading latents).
+        optimization_applicable = (
+            vision_condition_indexes is not None
+            and num_vision_items_per_sample is None
+            and self.tokenizer_vision_gen is not None
+            and self.tokenizer_vision_gen.is_causal
+            and len(vision_condition_indexes) == len(raw_state_vision)
+        )
+        if not optimization_applicable:
+            return [_full_encode(raw_state_vision_i) for raw_state_vision_i in raw_state_vision]
+
+        # The prefix-encode optimization zero-fills the generated (pure-noise) latent
+        # frames that the condition_mask blend later discards. That is only valid when
+        # no gradient is required: torch.is_grad_enabled() is False under both
+        # torch.inference_mode() and torch.no_grad(), so this asserts we are on an
+        # inference path and never silently corrupts a training forward.
+        if torch.is_grad_enabled():
+            raise ValueError(
+                "prefix-encode optimization is inference-only, but grad is enabled "
+                "(expected torch.inference_mode()/torch.no_grad())"
+            )
+
+        tokenizer = self.tokenizer_vision_gen
+        assert vision_condition_indexes is not None  # narrowed by optimization_applicable above
+        x0_tokens_vision: list[torch.Tensor] = []
+        for raw_state_vision_i, condition_indexes in zip(raw_state_vision, vision_condition_indexes, strict=True):
+            # The temporal axis is the first of the trailing (T, H, W) dims for both the
+            # [B, C, T, H, W] and [C, T, H, W] layouts the tokenizer accepts, and encode
+            # preserves rank so the same index locates T in the latent output.
+            temporal_dim = raw_state_vision_i.ndim - 3
+            num_pixel_frames = int(raw_state_vision_i.shape[temporal_dim])
+            num_latent_frames = tokenizer.get_latent_num_frames(num_pixel_frames)
+
+            valid_condition = [idx for idx in condition_indexes if 0 <= idx < num_latent_frames]
+            if not valid_condition:
+                # No conditioning frames to preserve (e.g. fully generated T2V item):
+                # keep the full encode so behavior is unchanged for non-action items.
+                x0_tokens_vision.append(_full_encode(raw_state_vision_i))
+                continue
+
+            needed_latent_frames = max(valid_condition) + 1
+            needed_pixel_frames = tokenizer.get_pixel_num_frames(needed_latent_frames)
+            assert needed_pixel_frames <= num_pixel_frames, (
+                f"needed_pixel_frames ({needed_pixel_frames}) cannot be greater than "
+                f"num_pixel_frames ({num_pixel_frames})"
+            )
+            if needed_pixel_frames == num_pixel_frames:
+                # The conditioning already spans (nearly) the whole clip; no work saved.
+                x0_tokens_vision.append(_full_encode(raw_state_vision_i))
+                continue
+
+            prefix = raw_state_vision_i.narrow(temporal_dim, 0, needed_pixel_frames)
+            prefix_latent = _full_encode(prefix)  # leading latent frames, causally exact
+
+            # The scatter below assumes the pixel->latent round trip is exact, i.e. that
+            # encoding ``needed_pixel_frames`` yields exactly ``needed_latent_frames``
+            # latents. All current causal tokenizers satisfy this, but guard it: an
+            # overshoot would make the narrow below request more frames than full_latent
+            # holds (confusing runtime error), and an undershoot would silently zero-fill
+            # the highest conditioning frame and corrupt the condition_mask blend with no
+            # error at all.
+            num_prefix_latent_frames = prefix_latent.shape[temporal_dim]
+            assert num_prefix_latent_frames == needed_latent_frames, (
+                f"causal tokenizer pixel<->latent round trip is not exact: encoding "
+                f"{needed_pixel_frames} pixel frames (from get_pixel_num_frames({needed_latent_frames})) "
+                f"produced {num_prefix_latent_frames} latent frames, expected {needed_latent_frames}"
+            )
+
+            # Scatter the encoded prefix into a full-length latent; the unconditioned
+            # tail frames stay zero since the condition_mask blend replaces them with noise.
+            full_shape = list(prefix_latent.shape)
+            full_shape[temporal_dim] = num_latent_frames
+            full_latent = prefix_latent.new_zeros(full_shape)
+            full_latent.narrow(temporal_dim, 0, prefix_latent.shape[temporal_dim]).copy_(prefix_latent)
+            x0_tokens_vision.append(full_latent)
+
+        return x0_tokens_vision
+
+    def get_data_and_condition(
+        self,
+        data_batch: dict[str, torch.Tensor],
+        iteration: int = 1,
+        vision_condition_indexes: list[list[int]] | None = None,
+    ) -> GenerationDataClean:
         """
         - Get raw data of different modalities from databatch
         - Tokenize into corresponding latents
         - Load other conditioning information if any (fps, etc.)
+
+        Args:
+            data_batch: Raw data batch from the dataloader.
+            iteration: Current iteration (only used for time-based logging during training).
+            vision_condition_indexes: Optional per-sample list of conditioning latent
+                frame indexes (one list per sample, taken from each ``SequencePlan``).
+                When provided (inference only), it enables the causal-VAE prefix-encode
+                optimization in ``_encode_vision_x0_tokens`` that skips encoding pixel
+                frames which only feed generated (non-conditioned) latent positions.
+                Leaving it ``None`` (the default, used during training) encodes every
+                frame — the original behavior.
         """
         # Detect whether any sample has multiple vision items (e.g. image editing).
         # If so, track the count per sample before all vision items from this batch are flattened into a list.
@@ -2898,13 +3027,16 @@ class OmniMoTModel(ImaginaireModel):
             if log_enc_time:
                 timer = Timer(unit="s")
                 timer.start()
+
         # Vision (image/video) raw state and tokenized latent state
         self._normalize_video_databatch_inplace(data_batch)
         self._augment_image_dim_inplace(data_batch)  # converts each image tensor to (1, C, 1, H, W)
         raw_state_vision = data_batch[self.input_image_key if is_image_batch else self.input_video_key]
-        x0_tokens_vision = [
-            self.encode(raw_state_vision_i).contiguous().float() for raw_state_vision_i in raw_state_vision
-        ]
+        x0_tokens_vision = self._encode_vision_x0_tokens(
+            raw_state_vision,
+            num_vision_items_per_sample,
+            vision_condition_indexes,
+        )
 
         frame_size = data_batch.get("image_size", None)
         if frame_size is not None:

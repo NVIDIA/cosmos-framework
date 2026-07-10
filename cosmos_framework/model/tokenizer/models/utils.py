@@ -203,18 +203,23 @@ def batch_tensor_to_sparse(batch_tensor: torch.Tensor, patch_size: tuple[int, in
     """Convert a batch tensor to SparseTensor.
 
     Args:
-        batch_tensor: Input tensor of shape [B, C, H, W] or [B, T, H, W, C].
+        batch_tensor: Input tensor of shape [B, C, H, W], [B, H, W, C], or [B, T, H, W, C].
         patch_size: Patch size (Pt, Ph, Pw).
 
     Returns:
         SparseTensor with patches as features.
     """
+    Pt, Ph, Pw = patch_size
     if batch_tensor.dim() == 4:
         if batch_tensor.shape[1] == 3:
-            batch_tensor = rearrange(batch_tensor, "b c h w -> b h w c")
-        batch_tensor = batch_tensor.unsqueeze(1)
+            batch_tensor = rearrange(batch_tensor, "b c h w -> b h w c")  # [B,H,W,C]
+        batch_tensor = batch_tensor.unsqueeze(1)  # [B,1,H,W,C]
+        if Pt > 1:
+            temporal_padding = batch_tensor.new_zeros(
+                (batch_tensor.shape[0], Pt - 1, *batch_tensor.shape[2:])
+            )  # [B,Pt-1,H,W,C]
+            batch_tensor = torch.cat((batch_tensor, temporal_padding), dim=1)  # [B,Pt,H,W,C]
     batch, T, H, W, _ = batch_tensor.shape
-    Pt, Ph, Pw = patch_size
     assert T % Pt == 0 and H % Ph == 0 and W % Pw == 0
     num_temporal_patches = T // Pt
     num_height_patches = H // Ph

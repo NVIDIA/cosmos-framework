@@ -785,6 +785,32 @@ Cosmos3EdgeReasoner_VLM_GCP_Config_590c1c0: VLMConfig = VLMConfig(
     ),
 )
 
+# Same as 590c1c0 but with use_und_k_norm_for_gen=True: normalises K_und before
+# it is used as a key in the gen→und cross-attention path (the qk-norm fix for the
+# generator). Adds a freshly-initialised k_norm_und_for_gen RMSNorm.
+Cosmos3EdgeReasoner_VLM_GCP_Config_590c1c0_UndKNorm: VLMConfig = VLMConfig(
+    model_name="nvidia/Cosmos3-Edge-Reasoner",
+    model_instance=L(Nemotron3DenseVLTextForCausalLM)(
+        config=L(create_vlm_config)(
+            base_config=L(Nemotron3DenseVLMoTConfig.from_json_file)(
+                json_file="cosmos_framework/model/generator/reasoner/nemotron_3_dense_vl/configs/Nemotron-2B-Dense-VL.json"
+            ),
+            qk_norm_for_text=False,
+            use_und_k_norm_for_gen=True,
+        ),
+    ),
+    tokenizer=L(build_processor_lazy)(
+        tokenizer_type="nvidia/Cosmos3-Edge-Reasoner",
+        config_variant="gcp",
+    ),
+    pretrained_weights=PretrainedWeightsConfig(
+        backbone_path="s3://bucket0/cosmos3/pretrained/huggingface/nvidia/Cosmos3-Edge-Reasoner-590c1c0/",
+        credentials_path="credentials/gcp_checkpoint.secret",
+        enable_gcs_patch_in_boto3=True,
+        checkpoint_format="nemotron_3_dense_vl",
+    ),
+)
+
 # Same as 9b4c028 but with use_und_k_norm_for_gen=True: normalises K_und before
 # it is used as a key in the gen→und cross-attention path.
 Cosmos3EdgeReasoner_VLM_GCP_Config_9b4c028_UndKNorm: VLMConfig = VLMConfig(
@@ -986,4 +1012,10 @@ def register_vlm():
         package="model.config.vlm_config",
         name="cosmos3_edge_reasoner_vlm_gcp_590c1c0",
         node=Cosmos3EdgeReasoner_VLM_GCP_Config_590c1c0,
+    )
+    cs.store(
+        group="vlm_config",
+        package="model.config.vlm_config",
+        name="cosmos3_edge_reasoner_vlm_gcp_590c1c0_und_k_norm",
+        node=Cosmos3EdgeReasoner_VLM_GCP_Config_590c1c0_UndKNorm,
     )

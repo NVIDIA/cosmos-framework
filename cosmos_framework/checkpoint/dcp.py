@@ -71,9 +71,9 @@ from torch.nn.modules.module import _IncompatibleKeys
 
 from cosmos_framework.checkpoint.base import AbstractCheckpointer
 from cosmos_framework.checkpoint.s3_filesystem import S3StorageReader, S3StorageWriter
+from cosmos_framework.utils.config import CheckpointConfig, JobConfig
 from cosmos_framework.model._base import ImaginaireModel
 from cosmos_framework.utils import callback, distributed, log, misc
-from cosmos_framework.utils.config import CheckpointConfig, JobConfig
 from cosmos_framework.utils.easy_io import easy_io
 from cosmos_framework.utils.generator.rand_state import get_rand_state_dict, set_rand_state_dict
 
@@ -866,16 +866,6 @@ class DistributedCheckpointer(AbstractCheckpointer):
                         raise ValueError(
                             f"Unexpected keys (found in checkpoint but not in model): {results.unexpected_keys}"
                         )
-                    # Warm start that skipped net_ema (e.g. loading an EMA-only HF export
-                    # with no net_ema.* keys): the EMA shadow would otherwise keep its random
-                    # build-time generation pathway (init_moe is skipped when a checkpoint is
-                    # present). Seed net_ema from the freshly loaded net so the EMA starts equal
-                    # to net ("EMA warm-starts from net") instead of from random weights.
-                    if warm_start and any("net_ema" in skip_key for skip_key in keys_to_skip_loading):
-                        ema_worker = getattr(model, "net_ema_worker", None)
-                        if ema_worker is not None and getattr(model, "net_ema", None) is not None:
-                            ema_worker.copy_to(src_model=model.net, tgt_model=model.net_ema)
-                            log.info("Warm start: re-seeded net_ema from net (net_ema was skipped on load).")
 
                 elif key == "optim":
                     log.info("- Loading the optimizer...")
