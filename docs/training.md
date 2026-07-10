@@ -115,6 +115,21 @@ python -m cosmos_framework.scripts.reasoner.prepare_videophy2_from_hf \
 
 </details>
 
+<details><summary><b>Reasoner Alignment SFT with VideoPhy-2 (Cosmos3-Super)</b></summary>
+
+Super-tier counterpart of the VideoPhy-2 recipe above: same 1–5 physical-plausibility scoring on [videophysics/videophy2_train](https://huggingface.co/datasets/videophysics/videophy2_train), but a full fine-tune of the 32B backbone. `[job].task = "vlm"`. Bootstraps from `Cosmos3-Super`'s language-model weights merged onto the public Qwen3-VL-32B-Instruct visual tower; the merged HF directory is consumed via `[model.backbone].safetensors_path` (plumbed by `VLM_SAFETENSORS_PATH`). Full-shard FSDP across all ranks, so it runs on a 4-GPU (e.g. GB200x4) or 8-GPU allocation.
+
+Launch shell: `examples/launch_sft_videophy2_super.sh`
+
+```shell
+# Step 1 (data): same as the nano recipe — materialize the public HF dataset into
+# the canonical local layout (videophy2_{train,val}/{meta.json, media/, text/}).
+python -m cosmos_framework.scripts.reasoner.prepare_videophy2_from_hf \
+    --out_root examples/data/videophysics --split both
+```
+
+</details>
+
 ## Step 2 — Prepare checkpoint
 
 Convert the base checkpoint to [PyTorch Distributed Checkpoint (DCP)](https://pytorch.org/docs/stable/distributed.checkpoint.html) format. `cosmos_framework.scripts.convert_model_to_dcp` ships in the unified `cosmos_framework/` package, so this step runs from the repo root (with the environment activated per [Setup](./setup.md)).
@@ -144,6 +159,16 @@ python -m cosmos_framework.scripts.convert_model_to_vlm_safetensors \
     -o examples/checkpoints/Cosmos3-Nano-VLM
 ```
 
+**Reasoner Alignment SFT with VideoPhy-2 (Cosmos3-Super):** Same converter, but merge the `Cosmos3-Super` LM onto the **32B** Qwen3-VL visual tower via `--vlm-model-name Qwen/Qwen3-VL-32B-Instruct`.
+
+```shell
+# Step 2 (Super VLM checkpoint): merge Cosmos3-Super LM onto the Qwen3-VL-32B visual tower.
+python -m cosmos_framework.scripts.convert_model_to_vlm_safetensors \
+    --checkpoint-path Cosmos3-Super \
+    --vlm-model-name Qwen/Qwen3-VL-32B-Instruct \
+    -o examples/checkpoints/Cosmos3-Super-VLM
+```
+
 ## Step 3 — Run training
 
 **Weights & Biases (optional):** every recipe TOML defaults to `job.wandb_mode = "disabled"`. To log a run to W&B, flip that field to `"online"` in the TOML and export `WANDB_API_KEY` in your environment before launching.
@@ -165,6 +190,7 @@ Each launcher's default paths come from the `DATASET_PATH` + `BASE_CHECKPOINT_PA
 | `launch_sft_vision_super.sh`   | Generator SFT      | `BridgeData2-Subset-Synthetic-Captions/sft_dataset_bridge` | `Cosmos3-Super`                                                    |
 | `launch_sft_llava_ov.sh`       | Reasoner SFT       | (none; dataset streams from HF Hub)                        | (none; backbone fetched at startup, or set `VLM_SAFETENSORS_PATH`) |
 | `launch_sft_videophy2_nano.sh` | Reasoner SFT       | (none; set `VIDEOPHYSICS_ROOT` env)                        | (none; set `VLM_SAFETENSORS_PATH` env)                             |
+| `launch_sft_videophy2_super.sh`| Reasoner SFT       | (none; set `VIDEOPHYSICS_ROOT` env)                        | (none; set `VLM_SAFETENSORS_PATH` env — Cosmos3-Super-VLM merge)   |
 
 `WAN_VAE_PATH` defaults to `examples/checkpoints/wan22_vae/Wan2.2_VAE.pth` for every non-reasoner recipe.
 
@@ -175,6 +201,16 @@ Each launcher's default paths come from the `DATASET_PATH` + `BASE_CHECKPOINT_PA
 export VIDEOPHYSICS_ROOT=$PWD/examples/data/videophysics
 export VLM_SAFETENSORS_PATH=$PWD/examples/checkpoints/Cosmos3-Nano-VLM
 bash examples/launch_sft_videophy2_nano.sh
+```
+
+**Reasoner Alignment SFT with VideoPhy-2 (Cosmos3-Super):**
+
+```shell
+# Same as the nano recipe, but point VLM_SAFETENSORS_PATH at the Cosmos3-Super
+# merge from Step 2. On a 4-GPU node (e.g. GB200x4) also set NPROC_PER_NODE=4.
+export VIDEOPHYSICS_ROOT=$PWD/examples/data/videophysics
+export VLM_SAFETENSORS_PATH=$PWD/examples/checkpoints/Cosmos3-Super-VLM
+bash examples/launch_sft_videophy2_super.sh
 ```
 
 #### Overriding the defaults
