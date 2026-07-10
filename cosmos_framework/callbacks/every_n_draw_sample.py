@@ -217,6 +217,91 @@ def _add_wandb_image_paths(
     info[key_prefix] = wandb.Image(image_paths, caption=caption)
 
 
+def _pixel_tensor_to_5d(t: torch.Tensor) -> torch.Tensor:
+    """Ensure a pixel tensor has shape (B, C, T, H, W) for the visualization grid.
+
+    Handles (C, H, W), (B, C, H, W), and (B, C, T, H, W) inputs.
+    """
+    if t.ndim == 3:
+        return t.unsqueeze(0).unsqueeze(2)  # (C,H,W) -> (1,C,1,H,W)
+    if t.ndim == 4:
+        return t.unsqueeze(2)  # (B,C,H,W) -> (B,C,1,H,W)
+    return t
+
+
+def _resize_5d_to_width(img5d: torch.Tensor, target_width: int) -> torch.Tensor:
+    """Resize a single-frame (1, C, 1, H, W) tensor so its width is exactly ``target_width``.
+
+    Height is scaled proportionally to preserve the overall aspect ratio. Assumes a
+    single temporal frame (T == 1).
+    """
+    h, w = img5d.shape[-2], img5d.shape[-1]
+    if w == target_width:
+        return img5d
+    new_h = max(1, round(h * target_width / w))
+    chw = img5d[0, :, 0]  # (C,H,W)
+    resized = torchvision_F.resize(chw, [new_h, target_width], antialias=True)  # (C,new_h,target_width)
+    return resized.unsqueeze(0).unsqueeze(2)  # (1,C,1,new_h,target_width)
+
+
+def _resize_pad_to_square(img5d: torch.Tensor, cell: int) -> torch.Tensor:
+    """Resize a single-frame (1, C, 1, H, W) tensor to fit inside a ``cell`` x ``cell`` square.
+
+    Aspect ratio is preserved (the image is scaled so its longer side equals ``cell``), then
+    the result is center-padded with zeros to exactly ``cell`` x ``cell``. Assumes T == 1.
+    """
+    h, w = img5d.shape[-2], img5d.shape[-1]
+    scale = cell / max(h, w)
+    new_h = max(1, round(h * scale))
+    new_w = max(1, round(w * scale))
+    chw = img5d[0, :, 0]  # (C,H,W)
+    resized = torchvision_F.resize(chw, [new_h, new_w], antialias=True)  # (C,new_h,new_w)
+    pad_h = cell - new_h
+    pad_w = cell - new_w
+    top = pad_h // 2
+    left = pad_w // 2
+    padded = torch.nn.functional.pad(resized, (left, pad_w - left, top, pad_h - top))  # (C,cell,cell)
+    return padded.unsqueeze(0).unsqueeze(2)  # (1,C,1,cell,cell)
+
+
+def _build_reference_grid(references: list[torch.Tensor], target_width: int) -> torch.Tensor:
+    """Tile reference images into a compact near-square grid sized to ``target_width``.
+
+    All references are arranged in a ``rows`` x ``cols`` grid (``cols = ceil(sqrt(n))``), each in
+    an aspect-preserved square cell, then the whole grid is resized so its width equals
+    ``target_width``. This keeps the condition montage aligned with the generated-image column
+    width (better space utilization) instead of one overly-long row.
+
+    Args:
+        references: list of single-frame pixel tensors (each (1,C,1,H,W) or (C,H,W)), in [-1, 1].
+        target_width: width of the generated/target image for this sample.
+
+    Returns:
+        A (1, C, 1, H_grid, target_width) tensor.
+    """
+    if not references:
+        raise ValueError("Expected at least one reference image to build the condition grid.")
+
+    refs = [_pixel_tensor_to_5d(r) for r in references]  # list[(1,C,1,H,W)]
+    n = len(refs)
+    cols = math.ceil(math.sqrt(n))
+    rows = math.ceil(n / cols)
+    cell = max(1, target_width // cols)
+
+    cells = [_resize_pad_to_square(r, cell) for r in refs]  # list[(1,C,1,cell,cell)]
+    blank = torch.zeros_like(cells[0])
+    while len(cells) < rows * cols:
+        cells.append(blank)
+
+    row_imgs = []
+    for r in range(rows):
+        row = torch.cat(cells[r * cols : (r + 1) * cols], dim=-1)  # (1,C,1,cell,cols*cell)
+        row_imgs.append(row)
+    grid = torch.cat(row_imgs, dim=-2)  # (1,C,1,rows*cell,cols*cell)
+
+    return _resize_5d_to_width(grid, target_width)  # (1,C,1,H_grid,target_width)
+
+
 class EveryNDrawSample(EveryN):
     """
     This callback sample condition inputs from training data, run inference and save the results to wandb and s3.
@@ -531,11 +616,20 @@ class EveryNDrawSample(EveryN):
             vis_offset = 0
             for sample_idx in range(data_clean.batch_size):
                 n_vis = num_items[sample_idx]
-                # First item(s) are condition, last item is generation target
-                # but we need to support multiple conditions per sample in the future. Current code
-                # can handle this without throwing an error.
-                condition_images.append(raw_data[vis_offset])  # source image (1, C, 1, H, W)
-                gt_target_images.append(raw_data[vis_offset + n_vis - 1])  # target image (1, C, 1, H, W)
+                # First item(s) are condition references, last item is the generation target.
+                refs = raw_data[vis_offset : vis_offset + n_vis - 1]  # all condition items
+                target = raw_data[vis_offset + n_vis - 1]  # target image (1, C, 1, H, W)
+                # Multi-reference generation (>1 single-frame image references): tile every
+                # reference into a compact grid resized to the target width, so all references
+                # are visible without blowing up the row width. For video editing/transfer
+                # (T > 1) keep the existing behavior (first item = condition) so those tasks
+                # render exactly as before and stay consistent with the t_crop frame cropping.
+                refs_are_images = all(r.shape[-3] == 1 for r in refs) and target.shape[-3] == 1
+                if refs_are_images and len(refs) > 1:
+                    condition_images.append(_build_reference_grid(refs, target.shape[-1]))
+                else:
+                    condition_images.append(raw_data[vis_offset])  # source image (1, C, 1, H, W) / video clip
+                gt_target_images.append(target)
                 vis_offset += n_vis
 
             # Use target images for max_w/max_h/t_crop (generated samples match target size)

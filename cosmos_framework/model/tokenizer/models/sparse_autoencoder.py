@@ -58,6 +58,7 @@ from cosmos_framework.model.tokenizer.models.utils import (
     sparse_to_batched_tensor,
     sparse_to_img_list,
 )
+from cosmos_framework.model.tokenizer.utils.tensors import cat_with_bounded_inputs, stack_with_bounded_inputs
 
 # =============================================================================
 # Helper Functions
@@ -146,7 +147,9 @@ def _sparse_tensor_to_dense_batch_tokens(sparse_tensor: SparseTensor) -> tuple[t
         dense_feats = sparse_tensor.feats.reshape(batch_size, seq_len, *feature_shape)
         return dense_feats, True
 
-    dense_feats = torch.stack([sparse_tensor.feats[batch_slice] for batch_slice in sparse_tensor.layout], dim=0)
+    dense_feats = stack_with_bounded_inputs(
+        [sparse_tensor.feats[batch_slice] for batch_slice in sparse_tensor.layout], dim=0
+    )  # [B,S,*F]
     return dense_feats, False
 
 
@@ -154,7 +157,7 @@ def _dense_batch_tokens_to_flat_features(dense_feats: torch.Tensor, used_reshape
     """Restore dense `[B, S, D]` features to the sparse flat token order."""
     if used_reshape_fast_path:
         return dense_feats.reshape(-1, *dense_feats.shape[2:])
-    return torch.cat(list(dense_feats.unbind(dim=0)), dim=0)
+    return cat_with_bounded_inputs(dense_feats.unbind(dim=0), dim=0)
 
 
 def _crop_temporal_slices_to_ownership(
@@ -1208,6 +1211,7 @@ class AutoencoderKLConfig:
     text_decoder_model_name: str | None = None  # e.g., "Qwen/Qwen3-0.6B" or local path
     text_decoder_family: str = "qwen3"
     text_decoder_gradient_checkpointing: bool = True
+    text_decoder_packed_attention_backend: Literal["sdpa", "natten"] = "sdpa"
     encoder_use_checkpoint: bool | None = None
     decoder_use_checkpoint: bool | None = None
     encoder_dense_train_backend: Literal["disabled", "varlen", "batched", "auto"] = "disabled"
@@ -1291,6 +1295,7 @@ class AutoencoderKL(ModelMixin, ConfigMixin, FromOriginalModelMixin):
         text_decoder_model_name: str | None = None,
         text_decoder_family: str = "qwen3",
         text_decoder_gradient_checkpointing: bool = True,
+        text_decoder_packed_attention_backend: Literal["sdpa", "natten"] = "sdpa",
         encoder_use_checkpoint: bool | None = None,
         decoder_use_checkpoint: bool | None = None,
         encoder_dense_train_backend: Literal["disabled", "varlen", "batched", "auto"] = "disabled",
@@ -1311,7 +1316,7 @@ class AutoencoderKL(ModelMixin, ConfigMixin, FromOriginalModelMixin):
         task_random_num_sample_frames_batch_sizes: dict[str, list[int]] | None = None,
         use_dual_latent: bool = False,
         use_checkpoint: bool = True,
-    ):
+    ) -> None:
         super().__init__()
         self.use_checkpoint = use_checkpoint
         self.encoder_use_checkpoint = use_checkpoint if encoder_use_checkpoint is None else encoder_use_checkpoint
@@ -1325,6 +1330,7 @@ class AutoencoderKL(ModelMixin, ConfigMixin, FromOriginalModelMixin):
         self.use_post_text_decoder = use_post_text_decoder
         self.spatial_pool_size = spatial_pool_size
         self.text_decoder_family = text_decoder_family
+        self.text_decoder_packed_attention_backend: Literal["sdpa", "natten"] = text_decoder_packed_attention_backend
         self.decoder_temporal_mode = decoder_temporal_mode
         self.decoder_temporal_query_latent_steps = decoder_temporal_query_latent_steps
         self.decoder_temporal_cache_latent_steps = decoder_temporal_cache_latent_steps
@@ -1435,7 +1441,7 @@ class AutoencoderKL(ModelMixin, ConfigMixin, FromOriginalModelMixin):
             elif self.quantizer_type == "rq":
                 self.quantizer = RQBottleneck(
                     latent_shape=(16, 16, latent_channels),
-                    code_shape=(16, 16, 4),
+                    code_shape=(16, 16, self.quantizer_num_codebooks),
                     n_embed=self.quantizer_codebook_size,
                     decay=0.99,
                     shared_codebook=True,
@@ -1534,6 +1540,7 @@ class AutoencoderKL(ModelMixin, ConfigMixin, FromOriginalModelMixin):
                 image_hidden_size=encoder_model_channels,
                 spatial_pool_size=spatial_pool_size,
                 gradient_checkpointing=text_decoder_gradient_checkpointing,
+                packed_attention_backend=text_decoder_packed_attention_backend,
                 family_spec=get_text_decoder_family_spec(
                     family=text_decoder_family,
                     model_name=text_decoder_model_name,
@@ -1548,7 +1555,7 @@ class AutoencoderKL(ModelMixin, ConfigMixin, FromOriginalModelMixin):
         image_feats: "SparseTensor",
         image_patch_indices: torch.Tensor,
         segment_ids: torch.Tensor | None = None,
-    ):
+    ) -> tuple[Any, int]:
         """Decode text from image features using the configured text decoder.
 
         Passes encoder output (x_no_proj) through spatial merger + causal LM.
@@ -1921,7 +1928,7 @@ class AutoencoderKL(ModelMixin, ConfigMixin, FromOriginalModelMixin):
                     logging.warning(f"Decoded shapes are not the same: {[x.shape for x in decoded_list]}")
                     decoded = decoded_list
                 else:
-                    decoded = torch.stack(decoded_list, dim=0)
+                    decoded = stack_with_bounded_inputs(decoded_list, dim=0)  # [B,T,C,H,W]
                     decoded = rearrange(decoded, "b t c h w -> b t h w c")
                     if decoded.shape[1] == 1:
                         decoded = decoded.squeeze(1)

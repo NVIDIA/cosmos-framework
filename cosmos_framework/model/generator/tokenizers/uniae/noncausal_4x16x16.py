@@ -17,7 +17,10 @@ Usage:
     recon = vae.decode(latents)   # [B, 48, T_p, H//16, W//16] -> [B, 3, 4*T_p, H, W]
 """
 
+import os
 from collections.abc import Mapping, Sequence
+from numbers import Real
+from typing import Any
 
 import torch
 
@@ -32,51 +35,173 @@ from cosmos_framework.model.generator.tokenizers.uniae.frame_math import (
     normalize_resolution_int_mapping,
 )
 from cosmos_framework.utils.generator.data_utils import get_vision_data_resolution
+from cosmos_framework.model.tokenizer.checkpoint_io import (
+    DCP_MODEL_LOAD_INFO_KEY,
+    DCPModelLoadInfo,
+    load_dcp_model_checkpoint,
+    load_torch_checkpoint,
+)
+from cosmos_framework.model.tokenizer.models.architecture import get_siglip2_so400m_common_arch
 from cosmos_framework.model.tokenizer.models.dense_runtime import DenseAutoencoderRuntime
 from cosmos_framework.model.tokenizer.models.sparse_autoencoder import AutoencoderKL
 
-# S3 architecture config (avoids importing configs/base which pulls in loss deps)
 _S3_ARCH = dict(
-    patch_size=(4, 16, 16),
-    in_channels=3072,
-    out_channels=3072,
-    # Encoder
-    encoder_model_channels=1152,
-    encoder_num_blocks=27,
-    encoder_num_heads=16,
-    encoder_mlp_channels=4304,
-    encoder_pe_mode="joint",
-    encoder_qk_rms_norm=False,
-    encoder_use_bias=True,
-    encoder_use_rms_norm=False,
-    # Decoder
-    decoder_model_channels=1152,
-    decoder_num_blocks=27,
-    decoder_num_heads=16,
-    decoder_mlp_channels=4304,
-    decoder_pe_mode="joint",
-    decoder_qk_rms_norm=True,
-    decoder_use_bias=False,
-    decoder_use_rms_norm=True,
-    # Common settings
-    use_decoder=True,
-    quantizer_type="rq",
-    quantizer_codebook_size=65536,
-    quantizer_num_codebooks=1,
-    quantizer_chunk_size=1,
-    use_vf_loss=False,
-    freeze_encoder=False,
-    pretrained_model_name="google/siglip2-so400m-patch16-naflex",
-    concat_latent=None,
-    random_num_sample_frames_batch_sizes=[8, 12, 16, 20, 24],
-    inference_num_sample_frames_batch_size=16,
-    inference_num_sample_frames_stride=16,
-    inference_kv_cache_size=0,
+    **get_siglip2_so400m_common_arch(),
     use_quantizer=False,
     use_dual_latent=False,
     use_text_alignment=False,
     use_post_text_alignment=False,
 )
+
+_IGNORED_LEGACY_CHECKPOINT_PREFIXES = (
+    "ema.",
+    "loss_fn.",
+    "text_decoder_wrapper.",
+    "tokenizer.",
+)
+_LEGACY_CHECKPOINT_SUFFIXES = (".pt", ".pth", ".ckpt")
+
+
+def _is_legacy_checkpoint_file(checkpoint_path: str) -> bool:
+    """Distinguish torch checkpoint files from DCP component directories."""
+    is_remote = checkpoint_path.startswith("s3://")
+    if not is_remote and os.path.isdir(checkpoint_path):
+        return False
+    return checkpoint_path.lower().endswith(_LEGACY_CHECKPOINT_SUFFIXES) or (
+        not is_remote and os.path.isfile(checkpoint_path)
+    )
+
+
+def _derive_legacy_latent_norm_path(checkpoint_path: str) -> str:
+    """Derive the latent-stat sidecar for a legacy checkpoint file."""
+    checkpoint_stem, checkpoint_suffix = os.path.splitext(checkpoint_path)
+    if checkpoint_suffix.lower() in _LEGACY_CHECKPOINT_SUFFIXES:
+        return checkpoint_stem + "_latent_norm.pt"
+    return checkpoint_path + "_latent_norm.pt"
+
+
+def _coerce_latent_norm_vector(
+    values: object,
+    *,
+    field_name: str,
+    z_dim: int,
+    source: str,
+    strictly_positive: bool = False,
+) -> torch.Tensor:
+    """Convert one tensor/JSON vector to validated CPU float64 statistics."""
+    if isinstance(values, torch.Tensor):
+        if values.dtype == torch.bool:
+            raise ValueError(f"Latent-normalization {field_name} in {source} must contain real numbers, not booleans.")
+        if values.is_complex():
+            raise ValueError(
+                f"Latent-normalization {field_name} in {source} must contain real numbers, not complex values."
+            )
+        vector = values.detach().to(device="cpu", dtype=torch.float64)  # [C_candidate]
+    elif isinstance(values, Sequence) and not isinstance(values, (str, bytes)):
+        if any(isinstance(value, bool) or not isinstance(value, Real) for value in values):
+            raise ValueError(f"Latent-normalization {field_name} in {source} must contain only real numbers.")
+        vector = torch.tensor(list(values), dtype=torch.float64)  # [C_candidate]
+    else:
+        raise TypeError(
+            f"Latent-normalization {field_name} in {source} must be a tensor or numeric sequence, "
+            f"got {type(values).__name__}."
+        )
+
+    if vector.ndim != 1 or vector.shape[0] != z_dim:
+        raise ValueError(
+            f"Latent-normalization {field_name} in {source} must have shape ({z_dim},), got {tuple(vector.shape)}."
+        )
+    finite_mask = torch.isfinite(vector)  # [C]
+    if not bool(finite_mask.all().item()):
+        raise ValueError(f"Latent-normalization {field_name} in {source} contains non-finite values.")
+    if strictly_positive:
+        positive_mask = vector > 0  # [C]
+        if not bool(positive_mask.all().item()):
+            raise ValueError(f"Latent-normalization {field_name} in {source} must be strictly positive.")
+    return vector
+
+
+def _load_latent_norm_stats(
+    norm_path: str,
+    *,
+    backend_args: dict[str, str] | None,
+    z_dim: int,
+    dtype: torch.dtype,
+    device: str,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Load latent statistics and return validated runtime mean and inverse standard deviation."""
+    if norm_path.lower().endswith(".json"):
+        norm_stats = easy_io.load(norm_path, backend_args=backend_args)
+    else:
+        norm_stats = easy_io.load(norm_path, backend_args=backend_args, map_location="cpu", weights_only=True)
+    if not isinstance(norm_stats, Mapping):
+        raise TypeError(
+            f"Latent-normalization sidecar {norm_path} must contain a mapping, got {type(norm_stats).__name__}."
+        )
+
+    stats_z_dim = norm_stats.get("z_dim")
+    if stats_z_dim is not None and (isinstance(stats_z_dim, bool) or not isinstance(stats_z_dim, int)):
+        raise ValueError(f"Latent-normalization z_dim in {norm_path} must be an integer, got {stats_z_dim!r}.")
+    if isinstance(stats_z_dim, int) and stats_z_dim != z_dim:
+        raise ValueError(f"Latent-normalization z_dim in {norm_path} is {stats_z_dim}, expected {z_dim}.")
+    if "mean" not in norm_stats or "std" not in norm_stats:
+        raise ValueError(f"Latent-normalization sidecar {norm_path} must contain mean and std entries.")
+
+    mean_cpu = _coerce_latent_norm_vector(
+        norm_stats["mean"],
+        field_name="mean",
+        z_dim=z_dim,
+        source=norm_path,
+    )  # [C]
+    std_cpu = _coerce_latent_norm_vector(
+        norm_stats["std"],
+        field_name="std",
+        z_dim=z_dim,
+        source=norm_path,
+        strictly_positive=True,
+    )  # [C]
+    mean = mean_cpu.to(dtype=dtype, device=device)  # [C]
+    std = std_cpu.to(dtype=dtype, device=device)  # [C]
+    mean_finite_mask = torch.isfinite(mean)  # [C]
+    std_finite_positive_mask = torch.isfinite(std) & (std > 0)  # [C]
+    if not bool(mean_finite_mask.all().item()):
+        raise ValueError(f"Latent-normalization mean in {norm_path} is non-finite after conversion to {dtype}.")
+    if not bool(std_finite_positive_mask.all().item()):
+        raise ValueError(
+            f"Latent-normalization std in {norm_path} must remain finite and positive after conversion to {dtype}."
+        )
+    inv_std = std.reciprocal()  # [C]
+    inv_std_finite_mask = torch.isfinite(inv_std)  # [C]
+    if not bool(inv_std_finite_mask.all().item()):
+        raise ValueError(f"Latent-normalization inverse std in {norm_path} is non-finite after conversion to {dtype}.")
+    return mean, inv_std
+
+
+def _extract_visual_tokenizer_state_dict(model_state: Mapping[str, Any]) -> dict[str, Any]:
+    """Extract bare AutoencoderKL state from a full TokenizerModel checkpoint."""
+    network_state = {
+        key.removeprefix("network."): value for key, value in model_state.items() if key.startswith("network.")
+    }
+    return network_state if network_state else dict(model_state)
+
+
+def _get_dcp_unexpected_visual_keys(load_info: DCPModelLoadInfo) -> list[str]:
+    """Return unexpected keys owned by the tokenizer network from a DCP report."""
+    return [key.removeprefix("network.") for key in load_info.unexpected_checkpoint_keys if key.startswith("network.")]
+
+
+def _validate_uniae_checkpoint_keys(missing: list[str], unexpected: list[str], checkpoint_path: str) -> None:
+    """Reject promoted checkpoints that do not fully cover the visual tokenizer."""
+    if missing:
+        raise RuntimeError(
+            f"UniAE checkpoint {checkpoint_path} is missing {len(missing)} visual model keys (sample: {missing[:5]})."
+        )
+    invalid_unexpected = [key for key in unexpected if not key.startswith(_IGNORED_LEGACY_CHECKPOINT_PREFIXES)]
+    if invalid_unexpected:
+        raise RuntimeError(
+            f"UniAE checkpoint {checkpoint_path} has {len(invalid_unexpected)} unexpected visual model keys "
+            f"(sample: {invalid_unexpected[:5]})."
+        )
 
 
 class UniAEVAE:
@@ -95,6 +220,7 @@ class UniAEVAE:
         z_dim: int = 48,
         vae_pth: str = "",
         object_store_credential_path_pretrained: str = "",
+        latent_norm_path: str = "",
         dtype: torch.dtype = torch.bfloat16,
         device: str = "cuda",
         backend: str = "batched",
@@ -102,7 +228,9 @@ class UniAEVAE:
         pixel_trim: bool = True,
         chunk_size: int | Mapping[str, int] = 16,
         encode_chunk_batch_size: int | Mapping[str, int] = 1,
-    ):
+    ) -> None:
+        if torch.device(device).type == "meta":
+            raise ValueError("UniAEVAE requires a concrete CPU or CUDA device; device='meta' is not supported.")
         chunk_size = normalize_resolution_int_mapping(chunk_size, name="chunk_size")
         if any(chunk_frames % 4 != 0 for chunk_frames in chunk_size.values()):
             raise ValueError("chunk_size values must be multiples of 4.")
@@ -135,11 +263,14 @@ class UniAEVAE:
         if not vae_pth:
             raise ValueError("vae_pth must be provided to load latent normalization stats")
         vae_pth_str = str(vae_pth)
-        # Derive stats path: strip .pt suffix, append _latent_norm.pt
-        if vae_pth_str.endswith(".pt"):
-            norm_pth = vae_pth_str[:-3] + "_latent_norm.pt"
+        is_legacy_checkpoint = _is_legacy_checkpoint_file(vae_pth_str)
+        # Legacy files use a paired <checkpoint_stem>_latent_norm.pt sidecar.
+        if latent_norm_path:
+            norm_pth = latent_norm_path
+        elif is_legacy_checkpoint:
+            norm_pth = _derive_legacy_latent_norm_path(vae_pth_str)
         else:
-            norm_pth = vae_pth_str + "_latent_norm.pt"
+            raise ValueError("latent_norm_path is required when vae_pth points to a DCP checkpoint directory.")
         if norm_pth.startswith("s3://"):
             norm_backend_args = {
                 "backend": "s3",
@@ -147,13 +278,17 @@ class UniAEVAE:
             }
         else:
             norm_backend_args = None
-        norm_stats = easy_io.load(norm_pth, backend_args=norm_backend_args, map_location="cpu", weights_only=False)
-        mean = norm_stats["mean"].to(dtype=dtype, device=device)
-        std = norm_stats["std"].to(dtype=dtype, device=device)
-        self._latent_mean = mean.view(1, z_dim, 1, 1, 1)
-        self._latent_inv_std = (1.0 / std).view(1, z_dim, 1, 1, 1)
+        mean, inv_std = _load_latent_norm_stats(
+            norm_pth,
+            backend_args=norm_backend_args,
+            z_dim=z_dim,
+            dtype=dtype,
+            device=device,
+        )  # [C],[C]
+        self._latent_mean = mean.view(1, z_dim, 1, 1, 1)  # [1,C,1,1,1]
+        self._latent_inv_std = inv_std.view(1, z_dim, 1, 1, 1)  # [1,C,1,1,1]
 
-        # make compatible with meta device
+        # Construct the autoencoder on the requested concrete device.
         autoencoder = AutoencoderKL(
             **_S3_ARCH,
             latent_channels=z_dim,
@@ -164,27 +299,44 @@ class UniAEVAE:
 
         # Load checkpoint
         if vae_pth and get_rank() == 0:
-            if str(vae_pth).startswith("s3://"):
-                backend_args = {"backend": "s3", "s3_credential_path": object_store_credential_path_pretrained}
+            dcp_unexpected_keys: list[str] = []
+            if is_legacy_checkpoint:
+                if str(vae_pth).startswith("s3://"):
+                    backend_args = {
+                        "backend": "s3",
+                        "s3_credential_path": object_store_credential_path_pretrained,
+                    }
+                else:
+                    backend_args = None
+                state_dict = load_torch_checkpoint(
+                    vae_pth,
+                    backend_args=backend_args,
+                    map_location="cpu",
+                )
+                if "model" in state_dict:
+                    model_state = state_dict["model"]
+                elif "state_dict" in state_dict:
+                    model_state = state_dict["state_dict"]
+                else:
+                    model_state = state_dict
+                model_state = _extract_visual_tokenizer_state_dict(model_state)
             else:
-                backend_args = None
-            state_dict = easy_io.load(vae_pth, backend_args=backend_args, map_location="cpu", weights_only=False)
-            if "model" in state_dict:
+                state_dict = load_dcp_model_checkpoint(
+                    autoencoder,
+                    vae_pth,
+                    checkpoint_key_prefix="network.",
+                    s3_credential=object_store_credential_path_pretrained,
+                )
                 model_state = state_dict["model"]
-            elif "state_dict" in state_dict:
-                model_state = state_dict["state_dict"]
-            else:
-                model_state = state_dict
-            # Checkpoint may be saved from a wrapper with a 'network.' prefix — strip it.
-            if any(k.startswith("network.") for k in model_state):
-                model_state = {
-                    k[len("network.") :] if k.startswith("network.") else k: v for k, v in model_state.items()
-                }
+                dcp_load_info = state_dict[DCP_MODEL_LOAD_INFO_KEY]
+                if not isinstance(dcp_load_info, DCPModelLoadInfo):
+                    raise TypeError(f"Invalid DCP model load info: {type(dcp_load_info).__name__}")
+                dcp_unexpected_keys = _get_dcp_unexpected_visual_keys(dcp_load_info)
             missing, unexpected = autoencoder.load_state_dict(model_state, strict=False)
-            if missing:
-                log.warning(f"Missing keys: {len(missing)} (e.g., {missing[:3]})")
-            if unexpected:
-                log.warning(f"Unexpected keys: {len(unexpected)} (e.g., {unexpected[:3]})")
+            all_unexpected = [*unexpected, *dcp_unexpected_keys]
+            _validate_uniae_checkpoint_keys(missing, all_unexpected, str(vae_pth))
+            if all_unexpected:
+                log.info(f"Ignored {len(all_unexpected)} non-visual checkpoint keys (e.g., {all_unexpected[:3]}).")
             log.info(f"Loaded checkpoint from {vae_pth}")
         elif vae_pth:
             autoencoder.to_empty(device=device)
@@ -364,16 +516,25 @@ class UniAEVAEInterface(VideoTokenizerInterface):
         bucket_name: str = "",
         object_store_credential_path_pretrained: str = "",
         vae_path: str = "",
+        latent_norm_path: str = "",
         encode_chunk_frames: int | Mapping[str, int] = 16,
         encode_chunk_batch_size: int | Mapping[str, int] = 1,
         spatial_compression_factor: int = 16,
         temporal_compression_factor: int = 4,
-        pad_frames: int = 0,
+        pad_frames: int = 1,
         pixel_trim: bool = True,
         backend: str = "batched_with_padding",
         causal: bool = False,
-    ):
-        super().__init__(object_store_credential_path_pretrained)
+    ) -> None:
+        if spatial_compression_factor != 16:
+            raise ValueError(
+                f"UniAEVAEInterface requires spatial_compression_factor=16, got {spatial_compression_factor}."
+            )
+        if temporal_compression_factor != 4:
+            raise ValueError(
+                f"UniAEVAEInterface requires temporal_compression_factor=4, got {temporal_compression_factor}."
+            )
+        super().__init__(object_store_credential_path_pretrained or None)
         self._causal = causal
         assert not self._causal, "UniAEVAEInterface is a non-causal tokenizer; causal must be False."
         self._spatial_compression_factor = spatial_compression_factor
@@ -400,12 +561,16 @@ class UniAEVAEInterface(VideoTokenizerInterface):
         self.use_streaming_encode = False
 
         vae_full_path = vae_path
+        latent_norm_full_path = latent_norm_path
         if bucket_name and not vae_path.startswith("s3://"):
             vae_full_path = f"s3://{bucket_name}/{vae_path}"
+        if bucket_name and latent_norm_path and not latent_norm_path.startswith("s3://"):
+            latent_norm_full_path = f"s3://{bucket_name}/{latent_norm_path}"
 
         self.vae = UniAEVAE(
             vae_pth=vae_full_path,
             object_store_credential_path_pretrained=object_store_credential_path_pretrained,
+            latent_norm_path=latent_norm_full_path,
             pad_frames=pad_frames,
             pixel_trim=pixel_trim,
             backend=backend,
@@ -414,7 +579,7 @@ class UniAEVAEInterface(VideoTokenizerInterface):
         )
         self.is_compiled = False
 
-    def reset_dtype(self):
+    def reset_dtype(self) -> None:
         pass
 
     def encode(self, state: torch.Tensor) -> torch.Tensor:
@@ -483,11 +648,11 @@ class UniAEVAEInterface(VideoTokenizerInterface):
         )
 
     @property
-    def spatial_compression_factor(self):
+    def spatial_compression_factor(self) -> int:
         return self._spatial_compression_factor
 
     @property
-    def temporal_compression_factor(self):
+    def temporal_compression_factor(self) -> int:
         return self._temporal_compression_factor
 
     @property
