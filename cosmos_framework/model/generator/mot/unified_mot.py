@@ -50,6 +50,9 @@ from cosmos_framework.model.generator.reasoner.qwen3_vl.qwen3_vl import (
 from cosmos_framework.model.generator.reasoner.qwen3_vl.utils import (
     prepare_multimodal_reasoner_inputs,
 )
+from cosmos_framework.model.generator.reasoner.nemotron_3_dense_vl.reasoner_multimodal_utils import (
+    prepare_multimodal_reasoner_inputs as _nemotron_prepare_multimodal_reasoner_inputs,
+)
 
 # Qwen3-VL-MoE imports
 from cosmos_framework.model.generator.reasoner.qwen3_vl_moe.configuration_qwen3_vl_moe import (
@@ -1634,8 +1637,14 @@ def _impl_generate_reasoner_text(
     presence_penalty: float = 0.0,
     seed: int | None = None,
     return_only_new_tokens: bool = False,
+    prepare_multimodal_fn: Any = prepare_multimodal_reasoner_inputs,
 ) -> torch.Tensor:
     """Run a reasoner-tower autoregressive decode loop with a per-layer KV cache.
+
+    ``prepare_multimodal_fn`` builds the image/video-conditioned prefill inputs
+    (embeds + mrope positions). Defaults to the Qwen3-VL implementation; the
+    Nemotron 3 Dense VL reasoner injects its own SigLIP2 variant so the same
+    decode loop serves both families.
 
     The loop has two phases:
         1. Prefill — process the prompt in one forward pass. For I2V, this
@@ -1792,7 +1801,7 @@ def _impl_generate_reasoner_text(
             deepstack_visual_embeds,
             position_ids,
             mrope_position_deltas,
-        ) = prepare_multimodal_reasoner_inputs(
+        ) = prepare_multimodal_fn(
             causal_lm,
             input_ids=input_ids,
             pixel_values=pixel_values,
@@ -2337,6 +2346,11 @@ class Nemotron3DenseVLTextForCausalLM(Nemotron3DenseVLPreTrainedModel):
         input_ids: torch.Tensor,
         max_new_tokens: int,
         *,
+        pixel_values: torch.Tensor | None = None,
+        image_grid_thw: torch.Tensor | None = None,
+        pixel_values_videos: torch.Tensor | None = None,
+        video_grid_thw: torch.Tensor | None = None,
+        attention_mask: torch.Tensor | None = None,
         eos_token_id: int | list[int] | None = None,
         pad_token_id: int | None = None,
         do_sample: bool = False,
@@ -2348,4 +2362,110 @@ class Nemotron3DenseVLTextForCausalLM(Nemotron3DenseVLPreTrainedModel):
         seed: int | None = None,
         return_only_new_tokens: bool = False,
     ) -> torch.Tensor:
-        raise NotImplementedError("This method is not implemented for Nemotron 3 Dense VL.")
+        """Autoregressively generate text tokens using only the reasoner tower.
+
+        Mirrors :meth:`Qwen3VLTextForCausalLM.generate_reasoner_text` for the
+        **text-only** path: the reasoner-tower decode loop is shared —
+        ``Nemotron3DenseVLTextModel.reasoner_forward`` delegates to the same
+        ``_impl_reasoner_forward`` the Qwen text models use — so a text prompt
+        simply flows through :func:`_impl_generate_reasoner_text`.
+
+        The keyword arguments mirror the Qwen signature because
+        ``Cosmos3VFMNetwork.generate_reasoner_text`` forwards the multimodal
+        kwargs unconditionally; accepting them (rather than omitting them) is
+        what lets text-only prompts reach this method instead of raising a
+        ``TypeError`` on an unexpected ``pixel_values`` kwarg.
+
+        **Image conditioning** is supported via a SigLIP2 vision tower. Unlike
+        Qwen3-VL (whose ViT ships in the DCP checkpoint), Edge's understanding
+        vision encoder is a self-contained SigLIP2 + projector stack published in
+        the HF repo under ``vision_encoder/``; :meth:`_ensure_vision_tower` loads
+        it lazily on the first image prompt (directly from HF, no DCP remap) and
+        caches it as ``self.visual``. The image-conditioned prefill then runs
+        through :func:`_impl_generate_reasoner_text` with the Nemotron variant of
+        ``prepare_multimodal_reasoner_inputs`` (SigLIP2 encode → masked_scatter →
+        multimodal rope, no deepstack). Video conditioning is not implemented.
+        """
+        if pixel_values_videos is not None or video_grid_thw is not None:
+            raise NotImplementedError(
+                "Video-conditioned reasoner generation is not implemented for Nemotron 3 Dense VL."
+            )
+        # Image-conditioned prefill uses a SigLIP2 vision tower loaded lazily from
+        # the HF checkpoint (see _ensure_vision_tower). Text-only prompts skip it.
+        if pixel_values is not None or image_grid_thw is not None:
+            self._ensure_vision_tower()
+        return _impl_generate_reasoner_text(
+            self,
+            input_ids=input_ids,
+            max_new_tokens=max_new_tokens,
+            pixel_values=pixel_values,
+            image_grid_thw=image_grid_thw,
+            attention_mask=attention_mask,
+            eos_token_id=eos_token_id,
+            pad_token_id=pad_token_id,
+            do_sample=do_sample,
+            temperature=temperature,
+            top_k=top_k,
+            top_p=top_p,
+            repetition_penalty=repetition_penalty,
+            presence_penalty=presence_penalty,
+            seed=seed,
+            return_only_new_tokens=return_only_new_tokens,
+            prepare_multimodal_fn=_nemotron_prepare_multimodal_reasoner_inputs,
+        )
+
+    def _ensure_vision_tower(self, hf_repo: str = "nvidia/Cosmos3-Edge") -> None:
+        """Lazily build the SigLIP2 vision tower and load its weights from HF.
+
+        Edge's reasoner LM ships without a vision tower in the DCP/diffusers
+        checkpoint (the generation-pathway tensors live there); the understanding
+        vision encoder is a self-contained SigLIP2 + projector stack published in
+        the HF repo under ``vision_encoder/``. We load it directly from HF (no DCP
+        remap) the first time an image prompt is seen, then cache it as
+        ``self.visual``. Also plumbs the multimodal token ids onto ``self.config``
+        for the shared ``get_rope_index`` / ``get_placeholder_mask`` helpers.
+        """
+        if getattr(self, "visual", None) is not None:
+            return
+        import json
+        from types import SimpleNamespace
+
+        from huggingface_hub import hf_hub_download
+        from safetensors.torch import load_file
+        from transformers.models.siglip2.configuration_siglip2 import Siglip2VisionConfig
+
+        from cosmos_framework.model.generator.reasoner.nemotron_3_dense_vl.vision_siglip2 import (
+            NemotronSiglip2VisionEncoder,
+        )
+
+        ve_cfg = json.load(open(hf_hub_download(hf_repo, "vision_encoder/config.json")))
+        top_cfg = json.load(open(hf_hub_download(hf_repo, "config.json")))
+        vdict = dict(ve_cfg["vision_config"])
+        for k in ("model_type", "transformers_version", "spatial_merge_size"):
+            vdict.pop(k, None)
+        vcfg = Siglip2VisionConfig(**vdict)
+        vcfg._attn_implementation = "eager"
+        pc = ve_cfg["projector_config"]
+        pcfg = SimpleNamespace(
+            spatial_merge_size=pc["spatial_merge_size"],
+            input_hidden_size=pc["input_hidden_size"],
+            merger_intermedia=pc["merger_intermedia"],
+            out_hidden_size=pc["out_hidden_size"],
+        )
+        ref = self.model.embed_tokens.weight
+        encoder = NemotronSiglip2VisionEncoder(vcfg, pcfg).to(device=ref.device, dtype=ref.dtype).eval()
+        state = load_file(hf_hub_download(hf_repo, "vision_encoder/model.safetensors"))
+        # Weights are prefixed ``model.visual.*`` / ``model.projector.*``; strip
+        # the ``model.`` prefix to match the encoder's ``visual.*`` / ``projector.*``.
+        state = {k[len("model.") :]: v for k, v in state.items()}
+        missing, unexpected = encoder.load_state_dict(state, strict=False)
+        if missing or unexpected:
+            raise RuntimeError(
+                f"Vision tower weight load mismatch: missing={missing[:3]} unexpected={unexpected[:3]}"
+            )
+        self.visual = encoder
+        # Plumb multimodal token ids for get_rope_index / get_placeholder_mask.
+        self.config.image_token_id = top_cfg["image_token_id"]
+        self.config.video_token_id = top_cfg["video_token_id"]
+        self.config.vision_start_token_id = top_cfg["vision_start_token_id"]
+        self.config.vision_config = SimpleNamespace(spatial_merge_size=pc["spatial_merge_size"])

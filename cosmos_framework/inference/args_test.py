@@ -126,11 +126,13 @@ def test_checkpoints():
         assert ckpt.hf.repository.split("/")[0] == "nvidia"
 
         # Download a file to ensure that the repository/revision is valid.
-        # (The published checkpoint.json no longer encodes the source S3 URI —
-        # it is empty for most checkpoints and a stale local path for the rest —
-        # so we only validate that the repo/revision resolves and parses.)
-        ckpt_hf = ckpt.hf.model_copy(update=dict(include=("checkpoint.json",)))
-        json.loads((Path(ckpt_hf.download()) / "checkpoint.json").read_text())
+        # We validate ``config.json`` rather than ``checkpoint.json``: the latter
+        # is only published by DCP-backed checkpoints, whereas diffusers-backed
+        # HF checkpoints (e.g. Cosmos3-Edge) omit it. ``config.json`` is present
+        # in every checkpoint repo, so we use it to confirm the repo/revision
+        # resolves and parses.
+        ckpt_hf = ckpt.hf.model_copy(update=dict(include=("config.json",)))
+        json.loads((Path(ckpt_hf.download()) / "config.json").read_text())
 
 
 def test_setup_args(tmp_path: Path):
