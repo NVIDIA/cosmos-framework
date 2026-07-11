@@ -130,6 +130,12 @@ def build_processor(
         or "Qwen3-2B-ViT" in tokenizer_type
         or "nvidia/Cosmos3-Reasoner-2B-Private" in tokenizer_type
         or "nvidia/Cosmos3-Edge-Reasoner" in tokenizer_type
+        # The public omni release nvidia/Cosmos3-Edge bundles the same
+        # nemotron_siglip2 processor (processing.py); the videophy2_sft_edge
+        # reasoner recipe uses it as model_name (weights come from a converted
+        # reasoner snapshot via VLM_SAFETENSORS_PATH). Substring also covers
+        # the "-Reasoner" line above.
+        or "nvidia/Cosmos3-Edge" in tokenizer_type
     ):
         return Nemotron3DenseVLProcessor(tokenizer_type, credentials=credentials, bucket=bucket, cache_dir=cache_dir)
     elif "Qwen/Qwen3-0.6B" in tokenizer_type:

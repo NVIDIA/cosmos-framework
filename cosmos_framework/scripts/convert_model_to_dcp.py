@@ -75,7 +75,11 @@ def convert_model_to_dcp(args: Args):
     print("Saving model...")
     storage_writer = FileSystemWriter(args.output_path / "model", thread_count=thread_count)
     dcp.save(state_dict=state_dict, storage_writer=storage_writer, planner=CustomSavePlanner())
-    shutil.copy(hf_path / "checkpoint.json", args.output_path / "checkpoint.json")
+    # ``checkpoint.json`` only exists for DCP-format source repos (e.g. Cosmos3-Nano);
+    # safetensors/diffusers-layout repos (e.g. Cosmos3-Edge) don't ship it. Copy when present.
+    source_checkpoint_json = hf_path / "checkpoint.json"
+    if source_checkpoint_json.exists():
+        shutil.copy(source_checkpoint_json, args.output_path / "checkpoint.json")
     hf_config.save_pretrained(args.output_path / "model")
     print(f"Saved checkpoint to {args.output_path}")
 

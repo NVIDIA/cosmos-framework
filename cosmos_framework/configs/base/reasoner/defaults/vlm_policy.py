@@ -54,6 +54,15 @@ qwen3_vl_32b_instruct = PolicyConfig(backbone=VLMConfig(model_name="Qwen/Qwen3-V
 
 nemotron_nano_12b_v2_vl_bf16 = PolicyConfig(backbone=VLMConfig(model_name="nvidia/NVIDIA-Nemotron-Nano-12B-v2-VL-BF16"))
 
+# Cosmos3-Edge reasoner (Nemotron-2B-Dense-VL LM + nemotron_siglip2_h vision tower).
+# model_name is the PUBLIC omni release nvidia/Cosmos3-Edge, which supplies the
+# reasoner architecture/config/tokenizer (its AutoModel Cosmos3EdgeForConditionCausalLM
+# is a NemotronSiglip2ForConditionCausalLM subclass). Its raw weights are in
+# Diffusers-shard layout, so the recipe loads canonical weights from a converted
+# snapshot via VLM_SAFETENSORS_PATH (-> backbone.safetensors_path); see
+# cosmos_framework.scripts.convert_edge_reasoner_to_vlm_safetensors.
+cosmos3_edge_reasoner = PolicyConfig(backbone=VLMConfig(model_name="nvidia/Cosmos3-Edge"))
+
 
 def register_vlm_policy():
     cs = ConfigStore.instance()
@@ -152,4 +161,10 @@ def register_vlm_policy():
         package="model.config.policy",
         name="nemotron_nano_12b_v2_vl_bf16",
         node=nemotron_nano_12b_v2_vl_bf16,
+    )
+    cs.store(
+        group="vlm_policy",
+        package="model.config.policy",
+        name="cosmos3_edge_reasoner",
+        node=cosmos3_edge_reasoner,
     )
