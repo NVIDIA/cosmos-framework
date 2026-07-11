@@ -98,6 +98,7 @@ CHECKPOINT_GCP = CheckpointConfig(
     strict_resume=True,
     enable_gcs_patch_in_boto3=True,
     dcp_async_mode_enabled=True,
+    dcp_load_dedup=True,
 )
 
 CHECKPOINT_S3_EAST2 = CheckpointConfig(

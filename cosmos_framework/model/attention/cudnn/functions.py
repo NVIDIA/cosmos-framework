@@ -7,147 +7,57 @@ Unified implementation for all Attention implementations.
 
 cuDNN Backend: intermediate APIs
 Only safe to import when CUDNN_SUPPORTED is True.
-"""
 
-import time
-from functools import partial
+This backend runs cuDNN attention through PyTorch's *own* cuDNN SDPA dispatch rather than the
+standalone cuDNN Python frontend (``import cudnn`` + ``cudnn.pygraph``). It always uses
+``torch.ops.aten._scaled_dot_product_cudnn_attention`` -- the exact ATen op that
+``torch.nn.functional.scaled_dot_product_attention`` lowers to for the cuDNN backend -- and simply
+discards the logsumexp when ``return_lse=False``. Unlike SDPA's public API, this op also exposes the
+logsumexp statistics needed for the ``return_lse=True`` path.
+
+It is a first-class, meta-registered PyTorch op, so it traces cleanly under
+``torch.compile(fullgraph=True)``. This deliberately replaces the previous cuDNN-frontend graph
+builder, which had to be hidden behind an opaque custom op (Dynamo cannot trace the frontend's
+sourceless enum objects) and required a special TorchInductor flag to run on Thor -- a flag that
+regressed other GPUs.
+"""
 
 import torch
 from torch import Tensor
-from torch.amp import custom_bwd, custom_fwd
-from torch.autograd import Function
 
 from cosmos_framework.model.attention.checks import assert_universal_tensor_checks
 from cosmos_framework.model.attention.cudnn.checks import cudnn_attention_check
-from cosmos_framework.model.attention.cudnn.cudnn_forward import (
-    cudnn_sdpa_fwd_generate_op,
-    cudnn_sdpa_fwd_generate_operands,
-    cudnn_sdpa_fwd_post_process,
-)
 from cosmos_framework.model.attention.masks import CausalType
-from cosmos_framework.model.attention.utils.safe_ops import log
-
-amp_fwd = partial(custom_fwd, device_type="cuda")
-amp_bwd = partial(custom_bwd, device_type="cuda")
 
 
-CUDNN_PADDING_REQUIRED = False
+def _cudnn_sdpa_with_lse(q: Tensor, k: Tensor, v: Tensor, is_causal: bool, scale: float) -> tuple[Tensor, Tensor]:
+    """cuDNN SDPA returning logsumexp, via torch's native cuDNN ATen op.
 
+    ``torch.ops.aten._scaled_dot_product_cudnn_attention`` is the op ``F.scaled_dot_product_attention``
+    dispatches to for the cuDNN backend; unlike the public API it exposes the logsumexp statistics. The
+    op is autograd-aware, so backward is provided automatically (no explicit autograd wrapper here).
+    The op requires equal Q/KV head counts, so the caller must expand K/V heads to match Q beforehand
+    (GQA/MQA). Inputs are heads-first ``[B, H, S, D]``; returns output ``[B, H, S, Dv]`` and logsumexp
+    ``[B, H, S]`` (float32). Note some torch versions return logsumexp with a trailing singleton
+    dim (``[B, H, S, 1]``); callers must normalize the rank.
 
-class CudnnAttentionAutogradFn(Function):
-    @staticmethod
-    @amp_fwd
-    def forward(
-        ctx,
-        query: Tensor,
-        key: Tensor,
-        value: Tensor,
-        num_heads: int,
-        is_causal: bool,
-        scale: float,
-    ) -> tuple[Tensor, Tensor]:
-        query = query.contiguous()
-        key = key.contiguous()
-        value = value.contiguous()
-
-        seqlen_Q = None
-        seqlen_KV = None
-        padding_Q = 0
-        padding_KV = 0
-
-        if CUDNN_PADDING_REQUIRED:
-            Q_multiplier = 256
-            KV_multiplier = 256
-
-            if query.shape[1] % Q_multiplier != 0:
-                seqlen_Q = query.shape[1]
-                padding_Q = Q_multiplier - (seqlen_Q % Q_multiplier)
-
-                old_shape = query.shape
-                query = torch.nn.functional.pad(query, (0, 0, 0, 0, 0, padding_Q), "constant", 0)
-                log.debug(f"cuDNN Attention: padded query from {old_shape} to {query.shape}.")
-
-            if key.shape[1] % KV_multiplier != 0:
-                seqlen_KV = key.shape[1]
-                padding_KV = KV_multiplier - (seqlen_KV % KV_multiplier)
-
-                old_shape = key.shape
-                key = torch.nn.functional.pad(key, (0, 0, 0, 0, 0, padding_KV), "constant", 0)
-                value = torch.nn.functional.pad(value, (0, 0, 0, 0, 0, padding_KV), "constant", 0)
-                log.debug(f"cuDNN Attention: padded KV from {old_shape} to {key.shape}.")
-
-        # Transform operands to cuDNN-compatible layouts, make output tensors
-        (q_cudnn_layout, k_cudnn_layout, v_cudnn_layout, output_cudnn_layout, lse_cudnn_layout) = (
-            cudnn_sdpa_fwd_generate_operands(q=query, k=key, v=value, num_heads=num_heads, return_lse=True)
-        )
-
-        # Construct graph
-        assert q_cudnn_layout.device == k_cudnn_layout.device == v_cudnn_layout.device == output_cudnn_layout.device
-        assert q_cudnn_layout.dtype == k_cudnn_layout.dtype == v_cudnn_layout.dtype == output_cudnn_layout.dtype
-        cudnn_graph_gen_start = time.time() * 1e3
-        cudnn_sdpa = cudnn_sdpa_fwd_generate_op(
-            dtype=q_cudnn_layout.dtype,
-            device=q_cudnn_layout.device,
-            q_shape=q_cudnn_layout.shape,
-            q_stride=q_cudnn_layout.stride(),
-            k_shape=k_cudnn_layout.shape,
-            k_stride=k_cudnn_layout.stride(),
-            v_shape=v_cudnn_layout.shape,
-            v_stride=v_cudnn_layout.stride(),
-            output_shape=output_cudnn_layout.shape,
-            output_stride=output_cudnn_layout.stride(),
-            lse_shape=None if lse_cudnn_layout is None else lse_cudnn_layout.shape,
-            lse_stride=None if lse_cudnn_layout is None else lse_cudnn_layout.stride(),
-            is_causal=is_causal,
-            attn_scale=scale,
-            seqlen_Q=seqlen_Q,
-            seqlen_KV=seqlen_KV,
-        )
-        cudnn_graph_gen_time = time.time() * 1e3 - cudnn_graph_gen_start
-        log.debug(f"cuDNN Attention forward graph generation took {cudnn_graph_gen_time:.1f} ms.")
-
-        # Execute graph
-        cudnn_sdpa(
-            q=q_cudnn_layout,
-            k=k_cudnn_layout,
-            v=v_cudnn_layout,
-            output=output_cudnn_layout,
-            lse=lse_cudnn_layout,
-        )
-
-        # Transform outputs back to torch contiguous layouts
-        output, logsumexp = cudnn_sdpa_fwd_post_process(
-            output_cudnn_layout=output_cudnn_layout,
-            lse_cudnn_layout=lse_cudnn_layout,
-        )
-
-        ctx.save_for_backward(q_cudnn_layout, k_cudnn_layout, v_cudnn_layout, lse_cudnn_layout, output_cudnn_layout)
-        ctx.num_heads = num_heads
-        ctx.scale = scale
-
-        if padding_Q > 0:
-            old_shape = output.shape
-            output = output[:, :seqlen_Q, :, :]
-            logsumexp = logsumexp[:, :seqlen_Q, :, :]
-            assert output.shape[1] == seqlen_Q
-            assert logsumexp.shape[1] == seqlen_Q
-            log.debug(f"cuDNN Attention: unpadded output from {old_shape} to {output.shape}.")
-
-        return output, logsumexp
-
-    @staticmethod
-    @amp_bwd
-    def backward(
-        ctx, grad_out: Tensor, grad_lse: Tensor
-    ) -> tuple[
-        Tensor,
-        Tensor,
-        Tensor,
-        None,
-        None,
-        None,
-    ]:
-        raise NotImplementedError()
+    Only positional args ``(query, key, value, attn_bias, compute_log_sumexp, dropout_p, is_causal,
+    return_debug_mask)`` plus the keyword-only ``scale`` are used; these indices/names have been
+    stable across torch versions, and only the first two outputs (output, logsumexp) are consumed.
+    """
+    results = torch.ops.aten._scaled_dot_product_cudnn_attention(
+        q,
+        k,
+        v,
+        None,  # attn_bias
+        True,  # compute_log_sumexp
+        0.0,  # dropout_p
+        is_causal,
+        False,  # return_debug_mask
+        scale=scale,
+    )
+    output, logsumexp = results[0], results[1]  # [B,H,S,Dv], [B,H,S] or [B,H,S,1]
+    return output, logsumexp
 
 
 def cudnn_attention(
@@ -167,7 +77,7 @@ def cudnn_attention(
 ) -> Tensor | tuple[Tensor, Tensor]:
     """
     Runs cuDNN Attention on given operands (Q, K, V) with the heads-last contiguous layout
-        (`[batch, seqlen, heads, head_dim]`).
+        (`[batch, seqlen, heads, head_dim]`), dispatched through PyTorch's built-in cuDNN SDPA.
 
     Parameters:
         query (Tensor): 4-D query tensor, with the heads-last contiguous layout
@@ -182,46 +92,46 @@ def cudnn_attention(
         is_causal (bool): whether or not causal masking is enabled. Default is False.
 
         causal_type (CausalType): causal masking mode. Choices: `CausalType.TopLeft`,
-            `CausalType.BottomRight`. Required when `is_causal = True`.
+            `CausalType.DontCare`. Required when `is_causal = True`. cuDNN SDPA's causal masking is
+            top-left aligned.
 
         scale (float | None): Dot product scale (attention scale). Defaults to head_dim ** -0.5.
 
-        cumulative_seqlen_Q (Tensor | None): (varlen) Optional 1-D tensor with size `batch + 1`
-            indicating the cumulative sum of number of query tokens in each batch, with an
-            additional 0 element in the beginning. Must be passed together with
-            `cumulative_seqlen_KV` and `max_seqlen_{Q,KV}`.
+        cumulative_seqlen_Q (Tensor | None): (varlen) Not supported by this backend.
 
-        cumulative_seqlen_KV (Tensor | None): (varlen) Optional 1-D tensor with size `batch + 1`
-            indicating the cumulative sum of number of key/value tokens in each batch, with an
-            additional 0 element in the beginning. Must be passed together with
-            `cumulative_seqlen_Q` and `max_seqlen_{Q,KV}`.
+        cumulative_seqlen_KV (Tensor | None): (varlen) Not supported by this backend.
 
-        max_seqlen_Q (int | None): (varlen) Optional integer indicating the maximum query
-            sequence length in all batches. Must be passed together with `cumulative_seqlen_{Q,KV}`
-            and `max_seqlen_KV`.
+        max_seqlen_Q (int | None): (varlen) Not supported by this backend.
 
-        max_seqlen_KV (int | None): (varlen) Optional integer indicating the maximum key/value
-            sequence length in all batches. Must be passed together with `cumulative_seqlen_{Q,KV}`
-            and `max_seqlen_Q`.
+        max_seqlen_KV (int | None): (varlen) Not supported by this backend.
 
     Other Parameters:
         return_lse (bool): Whether to return the logsumexp values. Default is False.
 
-        backend_kwargs (dict | None): Key-value pair for passing arguments specific to cuDNN's
-            attention operator, if any.
+        backend_kwargs (dict | None): Key-value pair for passing backend-specific arguments. Only
+            ``deterministic`` is recognized (and must be False); any other key raises an error.
 
-        deterministic (bool): Deterministic backward pass required.
+        deterministic (bool): Deterministic backward pass required. Not supported by this backend.
 
     Returns:
         output (Tensor): 4-D output tensor, with the heads-last contiguous layout
             (`[batch, seqlen, heads, head_dim_v]`).
 
-        logsumexp (Tensor): logsumexp tensor, with the heads-last contiguous layout
-            (`[batch, seqlen, heads, 1]`). Only returned when return_lse is True.
+        logsumexp (Tensor): logsumexp tensor, with the heads-last layout
+            (`[batch, seqlen, heads]`). Only returned when return_lse is True.
+            NOTE: not guaranteed to be contiguous (it is a transposed view) and must not be
+            made contiguous, so its results stay correct when merged via `merge_attentions`.
     """
 
     is_varlen = cumulative_seqlen_Q is not None
     assert_universal_tensor_checks(query, key, value)
+
+    backend_kwargs = backend_kwargs.copy() if backend_kwargs is not None else {}
+    # Determinism in backend_kwargs supersedes primary flag, if set to True
+    if "deterministic" in backend_kwargs:
+        deterministic = deterministic or backend_kwargs["deterministic"]
+        del backend_kwargs["deterministic"]
+
     assert cudnn_attention_check(
         query_shape=query.shape,
         key_shape=key.shape,
@@ -236,21 +146,52 @@ def cudnn_attention(
         raise_error=True,
     )
 
-    assert not is_varlen  # cudnn_attention_check should prevent this assertion failing
+    # cudnn_attention_check should prevent this assertion failing (varlen is not integrated).
+    assert not is_varlen
 
-    num_heads = query.shape[-2]
+    # cuDNN SDPA takes no extra operator arguments; reject anything unrecognized instead of silently
+    # ignoring it.
+    if backend_kwargs:
+        raise ValueError(f"cuDNN Attention backend received unsupported backend_kwargs: {sorted(backend_kwargs)}.")
+
     scale = scale if scale is not None else query.shape[-1] ** -0.5
 
-    output, lse = CudnnAttentionAutogradFn.apply(
-        query,
-        key,
-        value,
-        num_heads,
-        is_causal,
-        scale,
-    )
+    heads = query.shape[-2]
+    heads_kv = key.shape[-2]
+    assert heads % heads_kv == 0
+    group_size = heads // heads_kv
 
-    if return_lse:
-        return output, lse
+    # The cuDNN ATen op expects the heads-first layout: [B,H,S,D].
+    q = query.transpose(1, 2)  # [B,H,S_q,D]
+    k = key.transpose(1, 2)  # [B,H_kv,S_kv,D]
+    v = value.transpose(1, 2)  # [B,H_kv,S_kv,D_v]
 
-    return output
+    # Always take the LSE-capable ATen path (the same op SDPA lowers to for cuDNN) and simply drop
+    # the logsumexp when it isn't requested. This keeps a single code path for both cases. Tradeoff:
+    # the raw ATen op requires equal Q/KV head counts, so GQA/MQA must materialize expanded K/V here,
+    # whereas the public SDPA API (enable_gqa=True) can handle grouped heads without materializing.
+    if group_size > 1:
+        k = k.repeat_interleave(group_size, dim=1, output_size=heads)  # [B,H,S_kv,D]
+        v = v.repeat_interleave(group_size, dim=1, output_size=heads)  # [B,H,S_kv,D_v]
+
+    output, logsumexp = _cudnn_sdpa_with_lse(q, k, v, is_causal, scale)  # [B,H,S_q,D_v], [B,H,S_q(,1)]
+
+    assert output.dim() == 4
+    output = output.transpose(1, 2).contiguous()  # [B,S_q,H,D_v]
+
+    if not return_lse:
+        return output
+
+    # The cuDNN ATen op returns logsumexp with a trailing singleton dim on some torch
+    # versions ([B,H,S_q,1]); drop it so LSE is rank-3, matching every other backend and
+    # what `merge_attentions` requires. Guarded on rank so we neither crash on torch builds
+    # that already return [B,H,S_q] nor squeeze the heads dim when S_q/H is 1.
+    if logsumexp.dim() == 4:
+        logsumexp = logsumexp.squeeze(-1)  # [B,H,S_q]
+
+    # NOTE: Do NOT call .contiguous() on LSE. Attention merging's backward pass requires the
+    # output and LSE tensors passed into `merge_attentions` to share the same (transposed)
+    # data layout; forcing contiguity here makes that backward pass incorrect (see flash2).
+    logsumexp = logsumexp.transpose(1, 2)  # [B,S_q,H]
+    assert logsumexp.dim() == 3
+    return output, logsumexp

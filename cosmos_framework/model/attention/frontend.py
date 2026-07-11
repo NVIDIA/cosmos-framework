@@ -21,6 +21,7 @@ from cosmos_framework.model.attention.checks import (
     universal_tensor_checks,
     varlen_tensor_checks,
 )
+from cosmos_framework.model.attention.cudnn import cudnn_attention
 from cosmos_framework.model.attention.flash2 import flash2_attention
 from cosmos_framework.model.attention.flash3 import flash3_attention
 from cosmos_framework.model.attention.masks import CausalType
@@ -28,9 +29,9 @@ from cosmos_framework.model.attention.natten import natten_attention, natten_mul
 from cosmos_framework.model.attention.utils.environment import filter_attention_merge_backends
 from cosmos_framework.model.attention.utils.safe_ops import log
 
-
 # Map backend names to their frontend attention API
 BACKEND_MAP = {
+    "cudnn": cudnn_attention,
     "natten": natten_attention,
     "flash2": flash2_attention,
     "flash3": flash3_attention,

@@ -31,6 +31,57 @@ OPTIMIZER_KWARGS: dict[str, Any] = dict(
     disable_weight_decay_for_1d_params=False,
 )
 
+# Muon / Dion2 share the standard factory knobs (keys_to_select, lr_multipliers,
+# disable_weight_decay_for_1d_params) plus their own orthogonalization
+# hyperparameters. ``fused`` is required by the factory; the AdamW side is fused
+# by construction and ``capturable`` / ``master_weights`` are forced on.
+MUON_OPTIMIZER_KWARGS: dict[str, Any] = dict(
+    # Base learning rate. Muon scales matrix params by muon_lr_scale*sqrt(max(A,B));
+    # the AdamW side and the per-param-group lr_multipliers use it directly.
+    lr=1e-4,
+    weight_decay=0.1,
+    adam_betas=[0.9, 0.99],
+    eps=1e-8,
+    fused=True,
+    keys_to_select=[],
+    lr_multipliers={},
+    disable_weight_decay_for_1d_params=False,
+    # Name substrings for stacked MoE expert params ([E, M, N]) to orthogonalize
+    # per expert slice. Empty = experts stay on AdamW (no behavior change).
+    # e.g. ["gate_up_proj", "down_proj"] for grouped-MM MoE experts.
+    expert_param_keywords=[],
+    # Muon-specific.
+    muon_momentum=0.95,
+    muon_lr_scale=0.2,
+    ns_steps=5,
+    nesterov=True,
+    use_distributed=True,
+)
+
+DION2_OPTIMIZER_KWARGS: dict[str, Any] = dict(
+    lr=1e-4,
+    weight_decay=0.1,
+    adam_betas=[0.9, 0.99],
+    eps=1e-8,
+    fused=True,
+    keys_to_select=[],
+    lr_multipliers={},
+    disable_weight_decay_for_1d_params=False,
+    # Name substrings for stacked MoE expert params ([E, M, N]) to orthogonalize
+    # per expert slice. Empty = experts stay on AdamW (no behavior change).
+    # e.g. ["gate_up_proj", "down_proj"] for grouped-MM MoE experts.
+    expert_param_keywords=[],
+    # Muon/Dion2-specific.
+    muon_momentum=0.95,
+    muon_lr_scale=0.2,
+    ns_steps=5,
+    nesterov=True,
+    use_distributed=True,
+    # Dion2-specific: submatrix selection fraction and error-feedback decay.
+    fraction=1.0,
+    ef_decay=0.95,
+)
+
 LAMBDACOSINE_KWARGS: dict[str, Any] = dict(
     warm_up_steps=[2000],
     cycle_lengths=[100000],
@@ -62,6 +113,26 @@ def register_optimizers(optimizer_kwargs: dict[str, Any]) -> None:
             model=PLACEHOLDER,
             optimizer_type="AdamW",
             **optimizer_kwargs,
+        ),
+    )
+    cs.store(
+        group="optimizer",
+        package="optimizer",
+        name="muonwithauxadamw",
+        node=L(build_optimizer)(
+            model=PLACEHOLDER,
+            optimizer_type="MuonWithAuxAdamW",
+            **MUON_OPTIMIZER_KWARGS,
+        ),
+    )
+    cs.store(
+        group="optimizer",
+        package="optimizer",
+        name="dion2withauxadamw",
+        node=L(build_optimizer)(
+            model=PLACEHOLDER,
+            optimizer_type="Dion2WithAuxAdamW",
+            **DION2_OPTIMIZER_KWARGS,
         ),
     )
 
