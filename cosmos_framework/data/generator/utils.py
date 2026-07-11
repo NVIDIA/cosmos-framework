@@ -98,7 +98,10 @@ def parse_frame_range_from_wdinfo(wdinfo: str) -> tuple[int, int | float] | None
         wdinfo: wdinfo path string containing a frames_X_Y pattern, where Y may be ``inf``
 
     Returns:
-        Tuple of (min_frames, max_frames) if found, None otherwise
+        Tuple of (min_frames, max_frames) if found, where max_frames is
+        ``math.inf`` for unbounded ``frames_X_inf`` and ``frames_gt_X`` buckets.
+        ``frames_gt_X`` is treated as starting at X. Returns None if no frame
+        range is present.
 
     Example:
         >>> parse_frame_range_from_wdinfo("wdinfo/v4/tv_drama/resolution_720/aspect_ratio_16_9/frames_300_400/wdinfo.json")
@@ -110,6 +113,10 @@ def parse_frame_range_from_wdinfo(wdinfo: str) -> tuple[int, int | float] | None
     if match:
         max_frames = math.inf if match.group(2) == "inf" else int(match.group(2))
         return (int(match.group(1)), max_frames)
+    match = re.search(r"frames_gt_(\d+)", wdinfo)
+    if match:
+        # Wdinfo generation uses frames_gt_X for the bucket that starts at X, so treat it as >= X.
+        return (int(match.group(1)), math.inf)
     return None
 
 

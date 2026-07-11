@@ -10,6 +10,7 @@ Frontend APIs
 
 import torch
 
+from cosmos_framework.model.attention.cudnn.checks import cudnn_attention_check
 from cosmos_framework.model.attention.flash2.checks import flash2_attention_check
 from cosmos_framework.model.attention.flash3.checks import flash3_attention_check
 from cosmos_framework.model.attention.masks import CausalType
@@ -22,8 +23,8 @@ from cosmos_framework.model.attention.utils.environment import (
 from cosmos_framework.model.attention.utils.safe_ops import log
 from cosmos_framework.model.attention.utils.safe_ops.functools import lru_cache
 
-
 BACKEND_CHECK_MAP = {
+    "cudnn": cudnn_attention_check,
     "natten": natten_attention_check,
     "flash2": flash2_attention_check,
     "flash3": flash3_attention_check,
@@ -131,17 +132,25 @@ def get_backend_list(arch_tag: int) -> list[str]:
     if arch_tag == 90:
         default_backends = [
             "flash3",
+            "cudnn",
             "natten",
             "flash2",
         ]
     elif arch_tag in [100, 103]:
         default_backends = [
+            "cudnn",
             "natten",
             "flash2",
+        ]
+    elif arch_tag in [110, 120, 121]:
+        default_backends = [
+            "cudnn",
+            "natten",
         ]
     elif arch_tag >= 80:
         default_backends = [
             "flash2",
+            "cudnn",
             "natten",
         ]
     else:

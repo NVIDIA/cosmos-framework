@@ -17,6 +17,7 @@ import numpy as np
 import torch
 
 from cosmos_framework.model.tokenizer.models.modules import BACKEND, DEBUG
+from cosmos_framework.model.tokenizer.utils.tensors import cat_with_bounded_inputs
 
 SparseTensorData = None  # Lazy import
 
@@ -472,8 +473,8 @@ class SparseTensor:
             )
 
         return SparseTensor(
-            feats=torch.cat(selected_feats_parts, dim=0),
-            coords=torch.cat(selected_coords_parts, dim=0),
+            feats=cat_with_bounded_inputs(selected_feats_parts, dim=0),
+            coords=cat_with_bounded_inputs(selected_coords_parts, dim=0),
             shape=torch.Size([self.shape[0]] + list(self.feats.shape[1:])),
             layout=new_layout,
             has_special_tokens=has_special_tokens,
@@ -906,8 +907,8 @@ class SparseTensor:
 
         # Concatenate all coordinates and features (including empty ones)
         if len(coords) > 0:
-            coords = torch.cat(coords, dim=0).contiguous()
-            feats = torch.cat(feats, dim=0).contiguous()
+            coords = cat_with_bounded_inputs(coords, dim=0).contiguous()
+            feats = cat_with_bounded_inputs(feats, dim=0).contiguous()
         else:
             # Handle case where idx is empty
             coords = torch.empty(
@@ -1431,8 +1432,8 @@ class SparseTensor:
             if not has_cached_tokens:
                 return self
 
-            combined_coords = torch.cat(combined_coords_parts, dim=0)
-            combined_feats = torch.cat(combined_feats_parts, dim=0)
+            combined_coords = cat_with_bounded_inputs(combined_coords_parts, dim=0)
+            combined_feats = cat_with_bounded_inputs(combined_feats_parts, dim=0)
             new_shape = torch.Size([current_batch_size] + list(self.feats.shape[1:]))
             result = SparseTensor(
                 feats=combined_feats,
@@ -1499,8 +1500,8 @@ class SparseTensor:
         if not has_cached_tokens:
             return self
 
-        combined_coords = torch.cat(combined_coords_parts, dim=0)
-        combined_feats = torch.cat(combined_feats_parts, dim=0)
+        combined_coords = cat_with_bounded_inputs(combined_coords_parts, dim=0)
+        combined_feats = cat_with_bounded_inputs(combined_feats_parts, dim=0)
         new_shape = torch.Size([current_batch_size] + list(self.feats.shape[1:]))
         result = SparseTensor(
             feats=combined_feats,
@@ -1631,14 +1632,14 @@ def sparse_cat(inputs: list[SparseTensor], dim: int = 0) -> SparseTensor:
             coords.append(input.coords.clone())
             coords[-1][:, 0] += start
             start += input.shape[0]
-        coords = torch.cat(coords, dim=0)
-        feats = torch.cat([input.feats for input in inputs], dim=0)
+        coords = cat_with_bounded_inputs(coords, dim=0)
+        feats = cat_with_bounded_inputs([input.feats for input in inputs], dim=0)
         output = SparseTensor(
             coords=coords,
             feats=feats,
         )
     else:
-        feats = torch.cat([input.feats for input in inputs], dim=dim)
+        feats = cat_with_bounded_inputs([input.feats for input in inputs], dim=dim)
         output = inputs[0].replace(feats)
 
     return output
@@ -1735,9 +1736,6 @@ def reconstruct_from_temporal_slices(
         all_coords.append(restored_slice.coords)
         all_feats.append(restored_slice.feats)
 
-    combined_coords = torch.cat(all_coords, dim=0)
-    combined_feats = torch.cat(all_feats, dim=0)
-
     if target_coords is not None:
         fast_path = _reconstruct_in_target_batch_order(
             restored_slices,
@@ -1746,6 +1744,8 @@ def reconstruct_from_temporal_slices(
         )
         if fast_path is not None:
             return fast_path
+        combined_coords = cat_with_bounded_inputs(all_coords, dim=0)  # [N_available, 5]
+        combined_feats = cat_with_bounded_inputs(all_feats, dim=0)  # [N_available, *F]
         return _match_target_coordinates(
             combined_coords,
             combined_feats,
@@ -1753,6 +1753,8 @@ def reconstruct_from_temporal_slices(
             has_special_tokens=has_special_tokens,
         )
     else:
+        combined_coords = cat_with_bounded_inputs(all_coords, dim=0)  # [N_available, 5]
+        combined_feats = cat_with_bounded_inputs(all_feats, dim=0)  # [N_available, *F]
         sort_key = (combined_coords[:, 0].long() << 20) + combined_coords[:, 1].long()
         sorted_indices = torch.argsort(sort_key)
 
@@ -1852,12 +1854,12 @@ def _reconstruct_in_target_batch_order(
             has_special_tokens=False,
         )
 
-    combined_coords = torch.cat(combined_coords_parts, dim=0)
+    combined_coords = cat_with_bounded_inputs(combined_coords_parts, dim=0)  # [N_target, 5]
     if combined_coords.shape != target_coords.shape or not torch.equal(combined_coords, target_coords):
         return None
 
     return SparseTensor(
-        feats=torch.cat(combined_feats_parts, dim=0),
+        feats=cat_with_bounded_inputs(combined_feats_parts, dim=0),  # [N_target, *F]
         coords=target_coords,
         shape=torch.Size([batch_size] + list(restored_slices[0].feats.shape[1:])),
         layout=new_layout,

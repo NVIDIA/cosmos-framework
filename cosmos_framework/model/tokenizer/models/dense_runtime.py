@@ -22,6 +22,7 @@ from cosmos_framework.model.tokenizer.models.dense_backends import (
 )
 from cosmos_framework.model.tokenizer.models.modules.transformer.blocks import LearnedPositionEmbedder
 from cosmos_framework.model.tokenizer.models.sparse_autoencoder import AutoencoderKL, SparseTransformerBase
+from cosmos_framework.model.tokenizer.utils.tensors import cat_with_bounded_inputs
 
 
 @dataclass(frozen=True)
@@ -48,55 +49,6 @@ class DenseGridMetadata:
 
 
 DenseGridMetadataKey = tuple[str, int, int, int, int, str, str]
-
-
-class DenseDiagonalGaussianDistribution:
-    """Diagonal Gaussian posterior for dense channels-last latent tensors."""
-
-    def __init__(self, parameters: torch.Tensor, deterministic: bool = False) -> None:
-        """Initialize the dense posterior from `[mean, logvar]` moments."""
-        if parameters.ndim not in (4, 5):
-            raise ValueError(
-                "DenseDiagonalGaussianDistribution expects 4D/5D channels-last moments, "
-                f"got shape {tuple(parameters.shape)}."
-            )
-        self.original_dtype = parameters.dtype
-        self.parameters = parameters.to(torch.float32)
-        self.mean, self.logvar = torch.chunk(self.parameters, 2, dim=-1)
-        self.deterministic = deterministic
-        self.std = torch.exp(0.5 * self.logvar)
-        self.var = torch.exp(self.logvar)
-
-        if self.deterministic:
-            self.var = self.std = torch.zeros_like(
-                self.mean,
-                device=self.parameters.device,
-                dtype=self.parameters.dtype,
-            )
-
-    def sample(self) -> torch.Tensor:
-        """Sample a dense channels-last latent tensor."""
-        sample = torch.randn_like(self.mean)
-        return (self.mean + self.std * sample).to(self.original_dtype)
-
-    def kl(self, other: "DenseDiagonalGaussianDistribution" | None = None) -> torch.Tensor:
-        """Compute KL divergence per latent token, matching sparse scaling."""
-        reduce_dims = (-1,)
-        if self.deterministic:
-            num_tokens = math.prod(self.mean.shape[:-1])
-            return torch.zeros(num_tokens, device=self.parameters.device, dtype=self.parameters.dtype)
-        if other is None:
-            kl = 0.5 * torch.sum(torch.pow(self.mean, 2) + self.var - 1.0 - self.logvar, dim=reduce_dims)
-        else:
-            kl = 0.5 * torch.sum(
-                torch.pow(self.mean - other.mean, 2) / other.var
-                + self.var / other.var
-                - 1.0
-                - self.logvar
-                + other.logvar,
-                dim=reduce_dims,
-            )
-        return kl.reshape(-1)
 
 
 class DenseAutoencoderRuntime(nn.Module):
@@ -406,7 +358,7 @@ class DenseAutoencoderRuntime(nn.Module):
                 encoded = self._encode_video_chunk(padded_chunks[0], pad_to=pad_to)
                 return [_trim_boundary_latents(encoded)]
 
-            batched_video = torch.cat(padded_chunks, dim=0)  # [B*G,t_pad,H,W,3]
+            batched_video = cat_with_bounded_inputs(padded_chunks, dim=0)  # [B*G,t_pad,H,W,3]
             encoded = self._encode_video_chunk(batched_video, pad_to=pad_to)  # [B*G,T_lat,Hp,Wp,2C]
             per_video_batch = padded_chunks[0].shape[0]
             return list(_trim_boundary_latents(encoded).split(per_video_batch, dim=0))
@@ -449,7 +401,7 @@ class DenseAutoencoderRuntime(nn.Module):
         if pending_full_chunks:
             encoded_chunks.extend(_encode_padded_chunks(pending_full_chunks))
 
-        return torch.cat(encoded_chunks, dim=1)
+        return cat_with_bounded_inputs(encoded_chunks, dim=1)
 
     def decode(
         self,
@@ -511,7 +463,7 @@ class DenseAutoencoderRuntime(nn.Module):
             if trim_pixel and not is_image:
                 decoded_chunk = decoded_chunk[:, pad_frames:-pad_frames]
             decoded_chunks.append(decoded_chunk)
-        return torch.cat(decoded_chunks, dim=1)
+        return cat_with_bounded_inputs(decoded_chunks, dim=1)
 
     def _metadata_cache_key(
         self,
