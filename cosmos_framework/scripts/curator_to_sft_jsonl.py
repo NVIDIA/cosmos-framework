@@ -14,19 +14,35 @@ rows into the loader's format, applies the same hard filters the loader applies
 silently at train time (so dataset counts match), and writes a sidecar
 ``<output>.summary.json`` with per-reason drop counts.
 
+Transfer (control-conditioned) training
+----------------------------------------
+Pass ``--control-type`` to produce a JSONL suitable for ``TransferSFTDataset``
+(``transfer_sft_dataset.py``) in addition to the standard fields above.  Two
+extra fields are written per row:
+
+- ``control_type`` — the control signal to use (``edge``, ``blur``, ``depth``, ``seg``).
+- ``control_path`` — path to the precomputed control video; only present for
+  ``depth`` and ``seg`` (edge/blur are computed on-the-fly from ``vision_path``).
+
 Usage
 -----
-    python -m cosmos_framework.scripts.curator_to_sft_jsonl \\
-        --curator-output outputs/curator_split/ \\
-        -o outputs/curator_split/cosmos3_sft.jsonl
-
-    # With explicit caption-model preference (e.g. when curator ran with
-    # both qwen captioning and qwen_lm enhancement):
+    # Standard T2V/I2V/V2V SFT
     python -m cosmos_framework.scripts.curator_to_sft_jsonl \\
         --curator-output outputs/curator_split/ \\
         -o outputs/curator_split/cosmos3_sft.jsonl \\
-        --caption-model qwen \\
-        --enhanced-caption-model qwen_lm
+        --caption-model qwen --enhanced-caption-model qwen_lm
+
+    # Transfer SFT — edge control (no precomputed files needed)
+    python -m cosmos_framework.scripts.curator_to_sft_jsonl \\
+        --curator-output outputs/curator_split/ \\
+        -o outputs/curator_split/cosmos3_transfer_sft.jsonl \\
+        --control-type edge
+
+    # Transfer SFT — depth control (requires precomputed depth videos)
+    python -m cosmos_framework.scripts.curator_to_sft_jsonl \\
+        --curator-output outputs/curator_split/ \\
+        -o outputs/curator_split/cosmos3_transfer_sft.jsonl \\
+        --control-type depth --control-path-root outputs/depth_maps/
 
 Curator must have been run with ``--upload-clip-info-in-chunks`` so that
 ``metas_jsonl/v0/`` is populated; otherwise the converter has no input.
@@ -38,7 +54,7 @@ import sys
 from collections import Counter
 from collections.abc import Iterator
 from pathlib import Path
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal
 
 import tyro
 
@@ -51,6 +67,11 @@ DEFAULT_TEMPORAL_INTERVAL: int = 1
 # Suffixes curator writes for captions / enhanced captions in metas_jsonl rows.
 _CAPTION_SUFFIX = "_caption"
 _ENHANCED_SUFFIX = "_enhanced_caption"
+
+# Control types for transfer training.
+_ON_THE_FLY_CONTROL_TYPES = frozenset({"edge", "blur"})  # computed from vision_path at train time
+_PRECOMPUTED_CONTROL_TYPES = frozenset({"depth", "seg"})  # require a separate control video
+_ALL_CONTROL_TYPES = _ON_THE_FLY_CONTROL_TYPES | _PRECOMPUTED_CONTROL_TYPES
 
 
 def _relativize_vision_path(vision_path: str, output_jsonl: Path) -> str:
@@ -133,6 +154,39 @@ def _resolve_window_caption(
     return None
 
 
+def _find_control_path(
+    clip_uuid: str,
+    clip_location: str,
+    control_type: str,
+    control_path_root: Path | None,
+) -> str | None:
+    """Locate a precomputed control video for a clip.
+
+    Search order:
+    1. ``{control_path_root}/{uuid}.mp4``
+    2. ``{control_path_root}/{uuid}/{uuid}.mp4``
+    3. ``{control_path_root}/{uuid}_{control_type}.mp4``
+    4. ``{clip_dir}/{uuid}_{control_type}.mp4`` (sibling convention)
+    5. ``{clip_dir}/{uuid}_{control_type}.mkv``
+    """
+    if control_path_root is not None:
+        for candidate in [
+            control_path_root / f"{clip_uuid}.mp4",
+            control_path_root / clip_uuid / f"{clip_uuid}.mp4",
+            control_path_root / f"{clip_uuid}_{control_type}.mp4",
+        ]:
+            if candidate.is_file():
+                return str(candidate)
+
+    clip_dir = Path(clip_location).parent
+    for suffix in (f"_{control_type}.mp4", f"_{control_type}.mkv"):
+        sibling = clip_dir / f"{clip_uuid}{suffix}"
+        if sibling.is_file():
+            return str(sibling)
+
+    return None
+
+
 def _compute_duration(record: dict[str, Any]) -> float | None:
     """Derive clip duration in seconds from a curator row.
 
@@ -162,10 +216,17 @@ def _build_sft_row(
     min_window_frames: int,
     max_duration_s: float,
     temporal_interval: int,
+    control_type: str | None = None,
+    control_path_root: Path | None = None,
 ) -> tuple[dict[str, Any] | None, str | None]:
     """Translate a curator metas_jsonl row into an SFT row, or report a drop reason.
 
     Returns ``(row, None)`` for kept records and ``(None, reason)`` for drops.
+
+    When ``control_type`` is set, two extra fields are written:
+    - ``control_type`` — always present.
+    - ``control_path`` — only for ``depth``/``seg``; clips without a matching
+      precomputed file are dropped with reason ``missing_control_path``.
     """
     clip_uuid = record.get("span_uuid")
     clip_location = record.get("clip_location")
@@ -183,6 +244,13 @@ def _build_sft_row(
         return None, "duration_too_long"
     if min_short_edge > 0 and min(int(width), int(height)) < min_short_edge:
         return None, "short_edge_too_small"
+
+    # For precomputed control types, require a matching control video.
+    control_path: str | None = None
+    if control_type in _PRECOMPUTED_CONTROL_TYPES:
+        control_path = _find_control_path(str(clip_uuid), str(clip_location), control_type, control_path_root)
+        if control_path is None:
+            return None, "missing_control_path"
 
     windows = record.get("windows") or []
     t2w_windows: list[dict[str, Any]] = []
@@ -223,6 +291,10 @@ def _build_sft_row(
         "vision_path": str(clip_location),
         "t2w_windows": t2w_windows,
     }
+    if control_type is not None:
+        row["control_type"] = control_type
+    if control_path is not None:
+        row["control_path"] = control_path
     return row, None
 
 
@@ -266,8 +338,38 @@ def main(  # noqa: PLR0913
         int,
         tyro.conf.arg(help="temporal_interval to record on every t2w_window."),
     ] = DEFAULT_TEMPORAL_INTERVAL,
+    control_type: Annotated[
+        Literal["edge", "blur", "depth", "seg"] | None,
+        tyro.conf.arg(
+            help=(
+                "Produce a transfer SFT JSONL by adding 'control_type' (and optionally "
+                "'control_path') to each row. 'edge' and 'blur' are computed on-the-fly "
+                "at train time — no precomputed files needed. 'depth' and 'seg' require "
+                "precomputed control videos; pass --control-path-root to locate them. "
+                "Omit to produce a standard T2V/I2V/V2V SFT JSONL (default behaviour)."
+            ),
+        ),
+    ] = None,
+    control_path_root: Annotated[
+        Path | None,
+        tyro.conf.arg(
+            help=(
+                "Directory containing precomputed control videos for --control-type depth/seg. "
+                "Searched as {root}/{uuid}.mp4 or {root}/{uuid}/{uuid}.mp4. "
+                "Not needed for edge or blur."
+            ),
+        ),
+    ] = None,
 ) -> None:
     """Build an SFT JSONL from a curator splitting-pipeline output directory."""
+    if control_type in _PRECOMPUTED_CONTROL_TYPES and control_path_root is None:
+        print(
+            f"WARNING: --control-type={control_type!r} requires precomputed control files. "
+            "Pass --control-path-root to locate them; clips without a matching file will be "
+            "dropped with reason 'missing_control_path'.",
+            file=sys.stderr,
+        )
+
     jsonl_files = list(_iter_metas_jsonl_files(curator_output))
     if not jsonl_files:
         print(
@@ -302,11 +404,15 @@ def main(  # noqa: PLR0913
                     min_window_frames=min_window_frames,
                     max_duration_s=max_duration_s,
                     temporal_interval=temporal_interval,
+                    control_type=control_type,
+                    control_path_root=control_path_root,
                 )
                 if row is None:
                     drops[reason or "unknown"] += 1
                     continue
                 row["vision_path"] = _relativize_vision_path(row["vision_path"], output)
+                if "control_path" in row:
+                    row["control_path"] = _relativize_vision_path(row["control_path"], output)
                 kept_rows.append(row)
 
     output.parent.mkdir(parents=True, exist_ok=True)
@@ -330,6 +436,8 @@ def main(  # noqa: PLR0913
         "caption_model": caption_model,
         "enhanced_caption_model": enhanced_caption_model,
         "temporal_interval": temporal_interval,
+        "control_type": control_type,
+        "control_path_root": str(control_path_root) if control_path_root else None,
     }
     summary_path = output.with_suffix(output.suffix + ".summary.json")
     summary_path.write_text(json.dumps(summary, indent=2) + "\n")
