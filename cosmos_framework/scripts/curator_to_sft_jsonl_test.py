@@ -13,6 +13,7 @@ from cosmos_framework.scripts.curator_to_sft_jsonl import (
     MAX_VIDEO_DURATION_S,
     MIN_WINDOW_FRAMES,
     _build_sft_row,
+    _find_control_path,
     _relativize_vision_path,
     _resolve_window_caption,
     main,
@@ -581,3 +582,143 @@ def test_main_exits_when_no_metas_jsonl_found(tmp_path: Path) -> None:
             temporal_interval=DEFAULT_TEMPORAL_INTERVAL,
         )
     assert exc_info.value.code == 1
+
+
+# ---------------------------------------------------------------------------
+# Transfer (control-conditioned) tests
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.L0
+def test_build_sft_row_edge_control_adds_control_type_no_control_path() -> None:
+    """edge is computed on-the-fly: row gets control_type but no control_path."""
+    record = _make_record()
+    row, reason = _build_sft_row(record, **_default_kwargs(), control_type="edge")
+    assert reason is None
+    assert row is not None
+    assert row["control_type"] == "edge"
+    assert "control_path" not in row
+
+
+@pytest.mark.L0
+def test_build_sft_row_blur_control_adds_control_type_no_control_path() -> None:
+    """blur is computed on-the-fly: row gets control_type but no control_path."""
+    record = _make_record()
+    row, reason = _build_sft_row(record, **_default_kwargs(), control_type="blur")
+    assert reason is None
+    assert row is not None
+    assert row["control_type"] == "blur"
+    assert "control_path" not in row
+
+
+@pytest.mark.L0
+def test_build_sft_row_depth_without_control_path_root_drops_missing_control_path() -> None:
+    """depth requires a precomputed file; clip is dropped when none can be found."""
+    record = _make_record(clip_location="/out/clips/clip-uuid-0.mp4")
+    row, reason = _build_sft_row(record, **_default_kwargs(), control_type="depth")
+    assert row is None
+    assert reason == "missing_control_path"
+
+
+@pytest.mark.L0
+def test_build_sft_row_depth_with_existing_control_file_emits_control_path(tmp_path: Path) -> None:
+    """depth with a matching {root}/{uuid}.mp4 is kept and carries control_path."""
+    control_root = tmp_path / "depth_maps"
+    control_root.mkdir()
+    uuid = "clip-uuid-0"
+    control_file = control_root / f"{uuid}.mp4"
+    control_file.touch()
+
+    record = _make_record(span_uuid=uuid, clip_location=str(tmp_path / "clips" / f"{uuid}.mp4"))
+    row, reason = _build_sft_row(record, **_default_kwargs(), control_type="depth", control_path_root=control_root)
+    assert reason is None
+    assert row is not None
+    assert row["control_type"] == "depth"
+    assert row["control_path"] == str(control_file)
+
+
+@pytest.mark.L0
+def test_find_control_path_finds_flat_uuid_mp4_at_root(tmp_path: Path) -> None:
+    uuid = "abc-123"
+    control_root = tmp_path / "depth"
+    control_root.mkdir()
+    expected = control_root / f"{uuid}.mp4"
+    expected.touch()
+    result = _find_control_path(uuid, str(tmp_path / "clips" / f"{uuid}.mp4"), "depth", control_root)
+    assert result == str(expected)
+
+
+@pytest.mark.L0
+def test_find_control_path_finds_sibling_when_no_root(tmp_path: Path) -> None:
+    uuid = "abc-123"
+    clip_dir = tmp_path / "clips"
+    clip_dir.mkdir()
+    sibling = clip_dir / f"{uuid}_depth.mp4"
+    sibling.touch()
+    result = _find_control_path(uuid, str(clip_dir / f"{uuid}.mp4"), "depth", None)
+    assert result == str(sibling)
+
+
+@pytest.mark.L0
+def test_find_control_path_returns_none_when_no_file_exists(tmp_path: Path) -> None:
+    result = _find_control_path("no-such-uuid", str(tmp_path / "clips" / "no-such-uuid.mp4"), "depth", None)
+    assert result is None
+
+
+@pytest.mark.L0
+def test_main_edge_control_emits_control_type_field(tmp_path: Path) -> None:
+    """End-to-end: --control-type edge adds 'control_type' to every output row."""
+    curator_output = tmp_path / "curator_out"
+    metas_dir = curator_output / "metas_jsonl" / "v0"
+    metas_dir.mkdir(parents=True)
+    (metas_dir / "shard_0.jsonl").write_text(json.dumps(_make_record()) + "\n")
+
+    output = curator_output / "cosmos3_transfer_sft.jsonl"
+    main(
+        curator_output=curator_output,
+        output=output,
+        caption_model="qwen",
+        enhanced_caption_model=None,
+        min_short_edge=0,
+        min_window_frames=MIN_WINDOW_FRAMES,
+        max_duration_s=MAX_VIDEO_DURATION_S,
+        temporal_interval=DEFAULT_TEMPORAL_INTERVAL,
+        control_type="edge",
+    )
+
+    rows = [json.loads(line) for line in output.read_text().splitlines() if line]
+    assert len(rows) == 1
+    assert rows[0]["control_type"] == "edge"
+    assert "control_path" not in rows[0]
+
+    summary = json.loads(output.with_suffix(output.suffix + ".summary.json").read_text())
+    assert summary["control_type"] == "edge"
+    assert summary["control_path_root"] is None
+
+
+@pytest.mark.L0
+def test_main_depth_control_drops_clips_without_precomputed_files(tmp_path: Path) -> None:
+    """--control-type depth drops clips for which no precomputed file can be found."""
+    curator_output = tmp_path / "curator_out"
+    metas_dir = curator_output / "metas_jsonl" / "v0"
+    metas_dir.mkdir(parents=True)
+    record = _make_record(clip_location=str(tmp_path / "clips" / "clip-uuid-0.mp4"))
+    (metas_dir / "shard_0.jsonl").write_text(json.dumps(record) + "\n")
+
+    output = curator_output / "cosmos3_transfer_sft.jsonl"
+    with pytest.raises(SystemExit) as exc_info:
+        main(
+            curator_output=curator_output,
+            output=output,
+            caption_model=None,
+            enhanced_caption_model=None,
+            min_short_edge=0,
+            min_window_frames=MIN_WINDOW_FRAMES,
+            max_duration_s=MAX_VIDEO_DURATION_S,
+            temporal_interval=DEFAULT_TEMPORAL_INTERVAL,
+            control_type="depth",
+        )
+    assert exc_info.value.code == 1
+
+    summary = json.loads(output.with_suffix(output.suffix + ".summary.json").read_text())
+    assert summary["drops_by_reason"].get("missing_control_path", 0) == 1
