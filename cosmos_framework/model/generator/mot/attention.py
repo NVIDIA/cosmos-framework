@@ -111,34 +111,74 @@ def two_way_attention(
     causal_v, _ = get_causal_seq(packed_value_states)
     full_q, full_q_offsets = get_full_only_seq(packed_query_states)
 
+    # NOTE: we can only use the don't care causal mask when we know seqlen_Q == seqlen_KV.
+    # Since this is a varlen use case, we would need to statically check all Q and KV offsets
+    # are the same.
+    # We don't want to launch a kernel just to perform this check and slow down our model, and
+    # we definitely don't want to complicate the sequence_packing code so that it performs a
+    # static check when creating the packed sequence and metadata. Instead, we just rely
+    # on causal_q_offsets and causal_k_offsets being the same tensor.
+    use_dont_care_mask = causal_q_offsets is causal_k_offsets
+
     sample_offsets = packed_query_states["sample_offsets"]
 
-    use_dont_care_mask = causal_q_offsets is causal_k_offsets
+    # Number of packed samples. sample_offsets has shape [num_samples + 1], so this is a static
+    # (metadata) shape read: it does not launch a kernel or force a device sync.
+    num_samples = sample_offsets.shape[0] - 1
+
+    # With a single sample there is exactly one sequence in the pack, so the varlen (sequence-packed)
+    # metadata is redundant and we can call the dense attention API instead (no cumulative/max seqlen
+    # args). This remains correct in the presence of trailing padding: for causal self-attention the
+    # mask never lets a real query attend to padded keys (padding is appended after all real tokens),
+    # get_all_seq returns unpadded KV for the full path, and any padded query rows are independent of
+    # the real rows and simply discarded downstream.
+    #
+    # The dense path is gated to forward-only (inference) execution via
+    # torch.is_grad_enabled(), which is False under torch.no_grad()/torch.inference_mode()
+    # and True during training. This avoids branching on the sample count during training,
+    # where batch composition varies between single- and multi-sample packs; keeping a single
+    # code path there prevents torch.compile from specializing on both shapes and incurring
+    # the associated recompilation overhead.
+    use_dense = num_samples == 1 and not torch.is_grad_enabled()
+
+    if use_dense:
+        causal_varlen_kwargs = {}
+    else:
+        causal_varlen_kwargs = dict(
+            cumulative_seqlen_Q=causal_q_offsets,
+            cumulative_seqlen_KV=causal_k_offsets,
+            max_seqlen_Q=packed_query_states["max_causal_len"],
+            max_seqlen_KV=packed_query_states["max_causal_len"],
+        )
 
     # NOTE: cosmos_framework attention is BSHD in, BSHD out
     causal_res = attention(
         causal_q.unsqueeze(0),  # [1,N_und,heads,head_dim]
         causal_k.unsqueeze(0),  # [1,N_und,heads,head_dim]
         causal_v.unsqueeze(0),  # [1,N_und,heads,head_dim]
-        cumulative_seqlen_Q=causal_q_offsets,
-        cumulative_seqlen_KV=causal_k_offsets,
-        max_seqlen_Q=packed_query_states["max_causal_len"],
-        max_seqlen_KV=packed_query_states["max_causal_len"],
         is_causal=True,
         causal_type=CausalType.DontCare if use_dont_care_mask else CausalType.TopLeft,
+        **causal_varlen_kwargs,
     )  # [1,N_und,heads,head_dim]
 
     # [1,N_und,heads,head_dim] -> [N_und,heads,head_dim] -> [N_und,heads*head_dim]
     causal_out = causal_res.squeeze(0).flatten(-2, -1)  # type: ignore  # [N_und,heads*head_dim]
 
+    if use_dense:
+        full_varlen_kwargs = {}
+    else:
+        full_varlen_kwargs = dict(
+            cumulative_seqlen_Q=full_q_offsets,
+            cumulative_seqlen_KV=sample_offsets,
+            max_seqlen_Q=packed_query_states["max_full_len"],
+            max_seqlen_KV=packed_query_states["max_sample_len"],
+        )
+
     full_res = attention(
         full_q.unsqueeze(0),  # [1,N_full,heads,head_dim]
         get_all_seq(packed_key_normalized).unsqueeze(0),  # [1,N_all,heads,head_dim]  normed und K for gen
         get_all_seq(packed_value_states).unsqueeze(0),  # [1,N_all,heads,head_dim]
-        cumulative_seqlen_Q=full_q_offsets,
-        cumulative_seqlen_KV=sample_offsets,
-        max_seqlen_Q=packed_query_states["max_full_len"],
-        max_seqlen_KV=packed_query_states["max_sample_len"],
+        **full_varlen_kwargs,
     )  # [1,N_full,heads,head_dim]
 
     # [1,N_full,heads,head_dim] -> [N_full,heads,head_dim] -> [N_full,heads*head_dim]

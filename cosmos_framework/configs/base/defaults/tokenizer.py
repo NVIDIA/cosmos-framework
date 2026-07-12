@@ -128,6 +128,7 @@ UniAE4x16x16C48T16to160MixpFpsMixEncoderNoncausalDecoderNoncausalNoganS3Nemotron
     vae_path=PRETRAINED_TOKENIZER_UNIAE_4X16X16_C48_T16TO160_MIXP_FPS_MIX_ENCODER_NONCAUSAL_DECODER_NONCAUSAL_NOGAN_S3_NEMOTRON2B_VAE_PTH,
     spatial_compression_factor=16,
     temporal_compression_factor=4,
+    pad_frames=1,
     pixel_trim=True,
     causal=False,
 )

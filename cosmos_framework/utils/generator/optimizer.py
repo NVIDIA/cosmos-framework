@@ -15,6 +15,12 @@ from torch.optim.lr_scheduler import LambdaLR, LRScheduler
 from cosmos_framework.utils.functional.lr_scheduler import LambdaLinearScheduler, LambdaWarmUpCosineScheduler, WSDScheduler
 from cosmos_framework.utils import log
 
+# Hybrid orthogonalizing optimizers (Muon / Dion2) that own their parameter
+# categorization and run their own collective communication. They must be built
+# as a single optimizer instance over all selected params (no per-device-mesh
+# split) and need ``categorize_params`` called after construction.
+_AUX_ADAMW_OPTIMIZERS = ("muonwithauxadamw", "dion2withauxadamw")
+
 
 class ParamMetadata(NamedTuple):
     lr: float
@@ -68,6 +74,23 @@ def _optimizer_cls(
         optimizer_kwargs["capturable"] = True
         optimizer_kwargs["master_weights"] = True
         optimizer = FusedAdam(params, **optimizer_kwargs)
+    elif optimizer_type.lower() == "muonwithauxadamw":
+        from cosmos_framework.utils.generator.muon_with_aux_adamw import MuonWithAuxAdamW
+
+        # Muon's AdamW side is the TE-fused kernel; it is fused by construction and
+        # absorbs ``fused`` via **kwargs, but we pop it here to be explicit. We force
+        # capturable + master_weights to match FusedAdam's mixed-precision setup.
+        optimizer_kwargs.pop("fused", None)
+        optimizer_kwargs["capturable"] = True
+        optimizer_kwargs["master_weights"] = True
+        optimizer = MuonWithAuxAdamW(params, **optimizer_kwargs)
+    elif optimizer_type.lower() == "dion2withauxadamw":
+        from cosmos_framework.utils.generator.dion2_with_aux_adamw import Dion2WithAuxAdamW
+
+        optimizer_kwargs.pop("fused", None)
+        optimizer_kwargs["capturable"] = True
+        optimizer_kwargs["master_weights"] = True
+        optimizer = Dion2WithAuxAdamW(params, **optimizer_kwargs)
     else:
         raise NotImplementedError(f"Optimizer {optimizer_type} not found.")
     return optimizer
@@ -292,27 +315,49 @@ class OptimizersContainer(Stateful):
             disable_weight_decay_for_1d_params=disable_weight_decay_for_1d_params,
         )
 
-        # Sub-group by device mesh so fused optimizers operate on same-mesh params.
-        mesh_groups: dict[str, list[tuple[nn.Parameter, ParamMetadata]]] = collections.defaultdict(list)
-        for param, metadata in params_with_metadata:
-            if hasattr(param, "device_mesh"):
-                # ``mesh_dim_names`` is ``tuple[str, ...] | None`` on DeviceMesh —
-                # fall back to ``default`` when names weren't assigned.
-                names = param.device_mesh.mesh_dim_names
-                mesh_key = "-".join(names) if names else "default"
-            else:
-                mesh_key = "default"
-            mesh_groups[mesh_key].append((param, metadata))
-
-        # Create one optimizer per mesh, each with per-LR,weight-decay param groups.
-        for mesh_key, mesh_params in mesh_groups.items():
-            log.info(f"Building optimizer for mesh '{mesh_key}'")
+        if optimizer_type.lower() in _AUX_ADAMW_OPTIMIZERS:
+            # Muon / Dion2 categorize parameters into an orthogonalized-matrix group
+            # and an auxiliary AdamW group internally, and run their own collective
+            # communication across the FULL device mesh. They must therefore be a
+            # single optimizer instance over all selected params (no per-mesh split).
+            #
+            # The factory's param grouping is preserved: ``_build_optimizer_internal``
+            # still produces the same (lr, weight_decay) param groups (from
+            # ``lr_multipliers`` / ``disable_weight_decay_for_1d_params``), and
+            # Muon/Dion2 read lr/weight_decay per group — degenerating to a single
+            # global lr/wd when there is only one group (the reference behavior).
             optimizer = _build_optimizer_internal(
-                mesh_params,
+                params_with_metadata,
                 optimizer_type,
                 **optimizer_kwargs,
             )
+            # Categorize against the trainable network only, mirroring
+            # ``_build_params_with_metadata`` which optimizes the ``net`` subtree
+            # and skips ``net_ema``.
+            optimizer.categorize_params(model.net)
             self.optimizers.append(optimizer)
+        else:
+            # Sub-group by device mesh so fused optimizers operate on same-mesh params.
+            mesh_groups: dict[str, list[tuple[nn.Parameter, ParamMetadata]]] = collections.defaultdict(list)
+            for param, metadata in params_with_metadata:
+                if hasattr(param, "device_mesh"):
+                    # ``mesh_dim_names`` is ``tuple[str, ...] | None`` on DeviceMesh —
+                    # fall back to ``default`` when names weren't assigned.
+                    names = param.device_mesh.mesh_dim_names
+                    mesh_key = "-".join(names) if names else "default"
+                else:
+                    mesh_key = "default"
+                mesh_groups[mesh_key].append((param, metadata))
+
+            # Create one optimizer per mesh, each with per-LR,weight-decay param groups.
+            for mesh_key, mesh_params in mesh_groups.items():
+                log.info(f"Building optimizer for mesh '{mesh_key}'")
+                optimizer = _build_optimizer_internal(
+                    mesh_params,
+                    optimizer_type,
+                    **optimizer_kwargs,
+                )
+                self.optimizers.append(optimizer)
 
         log.info(f"Created {len(self.optimizers)} optimizers")
 
@@ -323,6 +368,14 @@ class OptimizersContainer(Stateful):
         return len(self.optimizers)
 
     def step(self) -> None:
+        # NOTE: This container does not forward a ``torch.amp.GradScaler`` to the
+        # inner optimizers, and training here is bf16 with the scaler disabled
+        # (``grad_scaler_args={"enabled": False}``), so step() always runs unscaled.
+        # MuonWithAuxAdamW / Dion2WithAuxAdamW are intentionally bf16-only (their
+        # AMP grad-scaler support was removed to keep the Newton-Schulz path simple);
+        # only FusedAdam still carries a scaler hook. Enabling fp16 + dynamic loss
+        # scaling end-to-end would require re-adding scaler passthrough here and in
+        # the Muon/Dion2 step paths, which is deliberately not supported.
         for optimizer in self.optimizers:
             optimizer.step()
 
