@@ -2376,23 +2376,28 @@ class Nemotron3DenseVLTextForCausalLM(Nemotron3DenseVLPreTrainedModel):
         what lets text-only prompts reach this method instead of raising a
         ``TypeError`` on an unexpected ``pixel_values`` kwarg.
 
-        **Image conditioning** is supported via a SigLIP2 vision tower. Unlike
-        Qwen3-VL (whose ViT ships in the DCP checkpoint), Edge's understanding
-        vision encoder is a self-contained SigLIP2 + projector stack published in
-        the HF repo under ``vision_encoder/``; :meth:`_ensure_vision_tower` loads
-        it lazily on the first image prompt (directly from HF, no DCP remap) and
-        caches it as ``self.visual``. The image-conditioned prefill then runs
-        through :func:`_impl_generate_reasoner_text` with the Nemotron variant of
+        **Image and video conditioning** are supported via a SigLIP2 vision
+        tower. Unlike Qwen3-VL (whose ViT ships in the DCP checkpoint), Edge's
+        understanding vision encoder is a self-contained SigLIP2 + projector
+        stack published in the HF repo under ``vision_encoder/``;
+        :meth:`_ensure_vision_tower` loads it lazily on the first vision prompt
+        (directly from HF, no DCP remap) and caches it as ``self.visual``. The
+        vision-conditioned prefill then runs through
+        :func:`_impl_generate_reasoner_text` with the Nemotron variant of
         ``prepare_multimodal_reasoner_inputs`` (SigLIP2 encode → masked_scatter →
-        multimodal rope, no deepstack). Video conditioning is not implemented.
+        multimodal rope, no deepstack). SigLIP2 has no temporal attention, so a
+        video is encoded as its frames stacked along the ``video_grid_thw``
+        temporal axis; the image and video pairs are mutually exclusive.
         """
-        if pixel_values_videos is not None or video_grid_thw is not None:
-            raise NotImplementedError(
-                "Video-conditioned reasoner generation is not implemented for Nemotron 3 Dense VL."
-            )
-        # Image-conditioned prefill uses a SigLIP2 vision tower loaded lazily from
+        # Vision-conditioned prefill uses a SigLIP2 vision tower loaded lazily from
         # the HF checkpoint (see _ensure_vision_tower). Text-only prompts skip it.
-        if pixel_values is not None or image_grid_thw is not None:
+        use_vision = (
+            pixel_values is not None
+            or image_grid_thw is not None
+            or pixel_values_videos is not None
+            or video_grid_thw is not None
+        )
+        if use_vision:
             self._ensure_vision_tower()
         return _impl_generate_reasoner_text(
             self,
@@ -2400,6 +2405,8 @@ class Nemotron3DenseVLTextForCausalLM(Nemotron3DenseVLPreTrainedModel):
             max_new_tokens=max_new_tokens,
             pixel_values=pixel_values,
             image_grid_thw=image_grid_thw,
+            pixel_values_videos=pixel_values_videos,
+            video_grid_thw=video_grid_thw,
             attention_mask=attention_mask,
             eos_token_id=eos_token_id,
             pad_token_id=pad_token_id,
