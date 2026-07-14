@@ -49,7 +49,7 @@ RUN --mount=type=cache,target=/root/.cache/uv \
     --mount=type=bind,source=pyproject.toml,target=pyproject.toml \
     --mount=type=bind,source=.python-version,target=.python-version \
     --mount=type=bind,source=packages,target=packages \
-    uv sync --locked --no-install-project --no-editable --all-extras --group=$(cat /root/.cuda-name)
+    uv sync --locked --no-install-project --no-editable --all-extras --group=$(cat /root/.cuda-name) --group=vllm
 ENV PATH="/workspace/.venv/bin:$PATH"
 
 # Triton bundled ptxas doesn't support latest GPU architectures
