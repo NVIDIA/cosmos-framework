@@ -11,11 +11,12 @@ init_script(
     }
 )
 
+import copy
 import json
 import shutil
 import struct
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, Any
 
 import pydantic
 import tyro
@@ -69,6 +70,25 @@ class SafetensorsIndex(pydantic.BaseModel):
     def update_dir(self, safetensors_dir: Path, rel_path: str):
         for safetensors_path in safetensors_dir.glob("*.safetensors"):
             self.update(safetensors_path, f"{rel_path}/{safetensors_path.name}")
+
+
+def _build_public_export_model_config(model_dict: dict[str, Any]) -> dict[str, Any]:
+    """Remove unsupported internal-only settings before building the public config."""
+    public_model_dict = copy.deepcopy(model_dict)
+    quantization = public_model_dict.get("config", {}).pop("quantization", None)
+    if quantization is not None:
+        quantization_values = {key: value for key, value in quantization.items() if key not in {"_type", "_target_"}}
+        disabled_quantization = {
+            "exclude_regex": [],
+            "include_regex": [],
+            "method": None,
+        }
+        if quantization_values != disabled_quantization:
+            raise ValueError(
+                "Cannot export an enabled or non-default internal quantization config to the public Cosmos3 schema: "
+                f"{quantization_values}"
+            )
+    return build_public_model_config(public_model_dict)
 
 
 def convert_model_to_diffusers(args: Args) -> None:
@@ -162,7 +182,7 @@ def convert_model_to_diffusers(args: Args) -> None:
     # collapse to a single glob spanning both component subdirs. The unified
     # `model.safetensors.index.json` written below dedupes the consolidated shard.
     config_dict["allow_patterns_overrides"] = ["*/*.safetensors"]
-    config_dict["model"] = build_public_model_config(model_dict)
+    config_dict["model"] = _build_public_export_model_config(model_dict)
     serialize_config_dict(config_dict, args.output_path / "config.json")
 
     if not args.config_only:
