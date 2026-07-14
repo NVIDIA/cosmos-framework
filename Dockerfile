@@ -24,7 +24,7 @@ RUN --mount=type=cache,target=/var/cache/apt \
 
 # Install uv: https://docs.astral.sh/uv/getting-started/installation/
 # https://github.com/astral-sh/uv-docker-example/blob/main/Dockerfile
-COPY --from=ghcr.io/astral-sh/uv:0.10.8 /uv /uvx /usr/local/bin/
+COPY --from=ghcr.io/astral-sh/uv:0.11.28 /uv /uvx /usr/local/bin/
 # Copy from the cache instead of linking since it's a mounted volume
 ENV UV_LINK_MODE=copy
 # Cache python downloads
