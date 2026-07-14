@@ -540,7 +540,10 @@ def _assert_diffusers_export_complete(model_dir: Path, reference_dir: Path) -> N
 
     pipeline_config = json.loads((model_dir / "model_index.json").read_text())
     assert pipeline_config["_class_name"] == "Cosmos3OmniPipeline"
-    for component in ("scheduler", "sound_tokenizer", "transformer", "vae", "vision_encoder"):
+    # The public Diffusers pipeline does not register the Qwen vision encoder as
+    # a pipeline component; it is saved as a sidecar for transformers/vLLM and
+    # validated below through its required files, weight index, and tensor header.
+    for component in ("scheduler", "sound_tokenizer", "transformer", "vae"):
         assert component in pipeline_config, f"Diffusers model_index.json is missing component {component!r}"
 
     model_config = json.loads((model_dir / "config.json").read_text())
