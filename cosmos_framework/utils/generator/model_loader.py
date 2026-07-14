@@ -41,7 +41,9 @@ from cosmos_framework.utils import log, misc
 from cosmos_framework.utils.config_helper import get_config_module, override
 from cosmos_framework.utils.easy_io import easy_io
 from cosmos_framework.checkpoint.dcp import CustomLoadPlanner, CustomSavePlanner, ModelWrapper
+from cosmos_framework.configs.base.defaults.quantization import QuantizationConfig
 from cosmos_framework.model.generator.utils.safetensors_loader import load_vfm_model
+from cosmos_framework.utils.generator.quantization import apply_quantization_inplace
 
 ###################################################
 # below are the load_model function for inference #
@@ -303,6 +305,7 @@ def load_model_from_checkpoint(
     load_ema_to_reg: bool = False,
     parallelism_config: dict[str, Any] = {},
     compile_config: dict[str, Any] = {},
+    quantization_config: dict[str, Any] = {},
     seed: int = 0,
     experiment_opts: list[str] = [],
     use_cache_checkpoint: bool = False,
@@ -338,6 +341,12 @@ def load_model_from_checkpoint(
             ``config.model.config.parallelism``.
         compile_config: Dictionary of torch.compile configuration options. Keys are applied to
             ``config.model.config.compile``.
+        quantization_config: Post training quantization (PTQ) config for inference. Dictionary
+            of quantization options (e.g. ``method``, ``include_regex``, ``exclude_regex``).
+            Quantization is applied in-place on the model parameters. Only works when model
+            sharding (FSDP) is disabled. When ``method`` resolves to ``None``,
+            quantization is disabled. Only Blackwell architectures are supported. Valid
+            quantization methods are ``nvfp4`` and ``mxfp8``.
         seed: Random seed used for initialization (if applicable).
         experiment_opts: Extra experiment/config override options.
         use_cache_checkpoint: If True, locally save & read remote checkpoints to speed up repeated loads.
@@ -388,6 +397,14 @@ def load_model_from_checkpoint(
                 setattr(config.model.config.compile, key, value)
             else:
                 raise ValueError(f"Key {key} not found in config.model.config.compile")
+
+    quantization_config_obj = QuantizationConfig(**quantization_config)
+    quantization_method = quantization_config_obj.method
+
+    if quantization_method is not None:
+        dp_shard_degree = config.model.config.parallelism.data_parallel_shard_degree
+        if dp_shard_degree > 1:
+            raise ValueError("Quantization is not supported for DP sharded models.")
 
     # Disable activation checkpointing for inference.
     config.model.config.activation_checkpointing.mode = "none"
@@ -463,43 +480,47 @@ def load_model_from_checkpoint(
             f"Successfully loaded safetensors VFM checkpoint from {checkpoint_path}; "
             f"time taken: {time.time() - start_time:.2f} seconds"
         )
-        return model, config
 
-    # DCP path with optional local cache reshard.
-    def load_model(checkpoint_load_path: str) -> None:
-        _load_model(
-            model,
-            checkpoint_path=checkpoint_load_path,
-            credential_path=credential_path,
-            enable_gcs_patch_in_boto3=enable_gcs_patch_in_boto3,
-            load_ema_to_reg=load_ema_to_reg,
-            keys_to_skip_loading=keys_to_skip_loading,
-        )
-
-    checkpoint_cache_path = None
-    if use_cache_checkpoint:
-        checkpoint_cache_path = checkpoint_path_to_cached_path(checkpoint_path, cache_checkpoint_rootdir)
-
-    if checkpoint_cache_path is None:
-        load_model(checkpoint_path)
-        _reload_pretrained_reasoner_after_checkpoint_load(model)
-        return model, config
-
-    cache_lock_path = f"{checkpoint_cache_path}.lock"
-    cache_action = _CheckpointCacheAction.ERROR
-    log.info(f"Acquiring checkpoint cache write lock: {cache_lock_path}")
-    with _checkpoint_cache_group_lock(checkpoint_cache_path, cache_lock_path) as cache_action:
-        if cache_action == _CheckpointCacheAction.POPULATE_CACHE:
-            load_model(checkpoint_path)
-            _save_model(
+    else:
+        # DCP path with optional local cache reshard.
+        def load_model(checkpoint_load_path: str) -> None:
+            _load_model(
                 model,
-                checkpoint_path=checkpoint_cache_path,
-                save_reg_to_ema=load_ema_to_reg,
+                checkpoint_path=checkpoint_load_path,
+                credential_path=credential_path,
+                enable_gcs_patch_in_boto3=enable_gcs_patch_in_boto3,
+                load_ema_to_reg=load_ema_to_reg,
+                keys_to_skip_loading=keys_to_skip_loading,
             )
 
-    if cache_action == _CheckpointCacheAction.LOAD_CACHE:
-        load_model(checkpoint_cache_path)
+        checkpoint_cache_path = None
+        if use_cache_checkpoint:
+            checkpoint_cache_path = checkpoint_path_to_cached_path(checkpoint_path, cache_checkpoint_rootdir)
 
-    _reload_pretrained_reasoner_after_checkpoint_load(model)
+        if checkpoint_cache_path is None:
+            load_model(checkpoint_path)
+
+        else:
+            cache_lock_path = f"{checkpoint_cache_path}.lock"
+            cache_action = _CheckpointCacheAction.ERROR
+            log.info(f"Acquiring checkpoint cache write lock: {cache_lock_path}")
+            with _checkpoint_cache_group_lock(checkpoint_cache_path, cache_lock_path) as cache_action:
+                if cache_action == _CheckpointCacheAction.POPULATE_CACHE:
+                    load_model(checkpoint_path)
+                    _save_model(
+                        model,
+                        checkpoint_path=checkpoint_cache_path,
+                        save_reg_to_ema=load_ema_to_reg,
+                    )
+
+            if cache_action == _CheckpointCacheAction.LOAD_CACHE:
+                load_model(checkpoint_cache_path)
+
+        _reload_pretrained_reasoner_after_checkpoint_load(model)
+
+    if quantization_method is not None:
+        # Replicated path: apply the (config-resident) recipe in place on the
+        # unsharded (plain-tensor) params.
+        apply_quantization_inplace(model, quantization_config_obj)
 
     return model, config
