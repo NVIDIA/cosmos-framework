@@ -54,7 +54,7 @@ from cosmos_framework.data.generator.sequence_packing import (
     build_sequence_plans_from_data_batch,
     pack_input_sequence,
 )
-from cosmos_framework.data.generator.sequence_packing.modalities import add_special_tokens
+from cosmos_framework.data.generator.sequence_packing.modality import add_special_tokens
 from cosmos_framework.model.generator.tokenizers.interface import VideoTokenizerInterface
 from cosmos_framework.model.generator.upsampler.prompts import build_messages, clean_response
 from cosmos_framework.utils.generator.data_utils import get_vision_data_resolution
@@ -3068,6 +3068,13 @@ class OmniMoTModel(ImaginaireModel):
             fps_raw = torch.stack(fps_raw).flatten()  # list of scalar tensors -> (B,)
         fps_vision = fps_raw.to(**self.tensor_kwargs) if fps_raw is not None else None
         fps_action = fps_raw.to(**self.tensor_kwargs) if fps_raw is not None else None
+        if "conditioning_fps_action" in data_batch:
+            fps_action_raw = data_batch["conditioning_fps_action"]
+            if isinstance(fps_action_raw, list):
+                # serve_policy.py wraps every tensor in a list; align with the conditioning_fps
+                # branch above so inference paths don't hit AttributeError on .to().
+                fps_action_raw = torch.stack(fps_action_raw).flatten()
+            fps_action = fps_action_raw.to(**self.tensor_kwargs)
 
         # Sound FPS for RoPE alignment (constant, from config)
         if x0_tokens_sound is not None:
