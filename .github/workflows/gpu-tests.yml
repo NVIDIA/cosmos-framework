@@ -10,7 +10,7 @@
 #   * training-smoke                — Nano SFT pipeline (convert -> train 5 -> export -> t2i)
 #   * generator-training-regression — vision_sft_nano loss vs goldens (4-GPU subset)
 #   * generator-inference-smoke     — Nano multi-modality inference (t2vs + policy + forward_dynamics)
-#   * reasoner-inference-smoke      — Nano reasoner inference first-token logits vs golden (image-conditioned, 4-GPU)
+#   * reasoner-inference-smoke      — Nano reasoner inference golden + Qwen conversion coverage (4-GPU)
 #   * reasoner-training-regression  — llava_ov loss vs goldens (4-GPU subset)
 #
 # Requires:
@@ -76,7 +76,7 @@ jobs:
   generator-training-regression:
     needs: pre-commit
     runs-on: [self-hosted, gpu, h200]
-    timeout-minutes: 60
+    timeout-minutes: 75
     env:
       HF_TOKEN: ${{ secrets.HF_TOKEN }}
       HF_HUB_DISABLE_XET: "1"
@@ -90,12 +90,14 @@ jobs:
       - name: Sync environment (cu128-train)
         run: uv sync --all-extras --group=cu128-train
 
-      # Generator (vision_sft_nano) loss vs the h100 goldens. -s streams the live log.
-      - name: Generator regression (vision_sft_nano, 4-GPU subset)
+      # Generator (vision_sft_nano) loss vs the h100 goldens, plus a Nano DCP ->
+      # Diffusers conversion that validates the exported component files and indexes.
+      # Both tests share the module-scoped staged Nano DCP. -s streams the live log.
+      - name: Generator regression and Nano Diffusers export (4-GPU subset)
         run: |
           export LD_LIBRARY_PATH=
           uv run --all-extras --group=cu128-train python -m pytest -v -s \
-            tests/launch_regression_test.py -k vision_sft_nano \
+            tests/launch_regression_test.py -k 'vision_sft_nano or convert_model_to_diffusers' \
             --num-gpus=4 --levels=2 -o addopts=
 
       # The h100_inputs fixture removes its DCP stage on teardown; clear the
@@ -169,8 +171,20 @@ jobs:
             tests/nano_reasoner_inference_smoke_test.py::test_nano_reasoner_image_first_token_logits \
             --num-gpus=4 --levels=2 -o addopts=
 
-      # Reasoner inference writes only the pytest tmp dir (generated text + logs);
-      # the checkpoint download stays in the HF cache (kept).
+      # Merge Cosmos3-Nano into the public Qwen3-VL shell and verify that every
+      # Qwen tensor is present and both the vision and language towers come from
+      # Cosmos3-Nano. The exact node ID avoids collecting the training regressions
+      # in the same file.
+      - name: Nano reasoner Qwen tensor conversion coverage (4 GPU collection)
+        run: |
+          export LD_LIBRARY_PATH=
+          uv run --all-extras --group=cu128-train python -m pytest -v -s \
+            tests/launch_regression_test.py::test_convert_reasoner_converts_all_qwen_tensors \
+            --num-gpus=4 --levels=2 -o addopts=
+
+      # Reasoner inference and conversion write to pytest tmp dirs (generated
+      # text, logs, and the merged checkpoint); downloaded checkpoints stay in
+      # the HF cache (kept).
       - name: Clean up run outputs
         if: always()
         run: |
