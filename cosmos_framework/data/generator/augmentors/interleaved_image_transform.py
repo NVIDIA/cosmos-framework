@@ -14,6 +14,7 @@ from PIL import Image
 
 from cosmos_framework.data.imaginaire.webdataset.augmentors.augmentor import Augmentor
 from cosmos_framework.data.imaginaire.webdataset.augmentors.image.misc import obtain_image_size
+from cosmos_framework.utils.generator.image_resize import DEFAULT_MAX_PIXELS, get_max_pixels_resized_size
 
 Image.MAX_IMAGE_PIXELS = 933120000
 
@@ -290,7 +291,7 @@ class InterleavedMediaResizeByMaxPixels(Augmentor):
     def __init__(
         self,
         input_keys: Optional[List] = None,
-        max_pixels: int = 1048576,
+        max_pixels: int = DEFAULT_MAX_PIXELS,
         padding_divisor: int = 16,
         args: Optional[dict] = None,
     ) -> None:
@@ -301,15 +302,12 @@ class InterleavedMediaResizeByMaxPixels(Augmentor):
 
     def _compute_target_size(self, width: int, height: int) -> tuple[int, int]:
         """Scale to fit within max_pixels, then align down to padding_divisor."""
-        total_pixels = width * height
-        if total_pixels > self.max_pixels:
-            scale = math.sqrt(self.max_pixels / total_pixels)
-            width = int(width * scale)
-            height = int(height * scale)
-
-        width = max(self.padding_divisor, (width // self.padding_divisor) * self.padding_divisor)
-        height = max(self.padding_divisor, (height // self.padding_divisor) * self.padding_divisor)
-        return width, height
+        return get_max_pixels_resized_size(
+            width=width,
+            height=height,
+            max_pixels=self.max_pixels,
+            padding_constant=self.padding_divisor,
+        )
 
     def _resize_image(self, img: Image.Image) -> Image.Image:
         w, h = img.size

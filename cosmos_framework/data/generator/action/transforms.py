@@ -301,20 +301,58 @@ def build_sequence_plan_from_mode(
     # forward_dynamics: all action steps are clean (conditioning)
     # inverse_dynamics/policy: action is supervised (predicted)
     # History frames (prepended) are always conditioning.
+    #
+    # `base_action_length` is the number of *predicted* action steps, i.e.
+    # `action_length` minus the prepended history block. There are three
+    # supported alignments between the action stream and the video stream
+    # (`video_length` counts the leading conditioning frame at index 0):
+    #
+    #   Case A (dense video, action = video_length - 1)
+    #       Standard forward-dynamics / policy layout: one action per gap
+    #       between consecutive video frames, no explicit initial-state
+    #       action. Conditioning actions are only the prepended history.
+    #
+    #   Case B (dense video, action = video_length)
+    #       `use_state=True` layout: one extra action is prepended to
+    #       encode the initial state, so history + one initial-state
+    #       action are conditioning.
+    #
+    #   Case C (subsampled video, general action_length > video_length)
+    #       Video is subsampled by an integer factor while the action
+    #       stream stays dense. `has_initial_state` mirrors Case B: it is
+    #       True iff `(base_action_length - 1)` divides evenly by
+    #       `(video_length - 1)`, i.e. the extra initial-state action is
+    #       present.
     base_action_length = action_length - num_history_actions
+    has_initial_state = video_length > 1 and (base_action_length - 1) % (video_length - 1) == 0
     if mode == "forward_dynamics":
         condition_frame_indexes_action = list(range(action_length))
-    # This currently assumes that the action length is the same as the video length - 1
-    # and if action length is the same as the video length, then the first action is the conditioning action
     elif base_action_length == video_length - 1:
+        # Case A: only the history block is conditioning.
         condition_frame_indexes_action = list(range(num_history_actions))
     elif base_action_length == video_length:
+        # Case B: history block + one initial-state action.
         condition_frame_indexes_action = list(range(num_history_actions + 1))
+    else:
+        # Case C: same rule as A/B based on whether an initial-state action exists.
+        condition_frame_indexes_action = list(
+            range(num_history_actions + 1 if has_initial_state else num_history_actions)
+        )
 
+    # `action_start_frame_offset` shifts the action stream so that the first
+    # non-conditioning action aligns with video frame index 1 (the first
+    # frame the model must predict). The `-num_history_actions` term
+    # reserves room for the history block; the additional `+1` (i.e.
+    # `1 - num_history_actions`) is applied only when there is no
+    # initial-state action, so the offset skips past the first action
+    # slot that is instead consumed by the initial state.
     if base_action_length == video_length - 1:
-        action_start_frame_offset = 1 - num_history_actions
-    if base_action_length == video_length:
-        action_start_frame_offset = -num_history_actions
+        action_start_frame_offset = 1 - num_history_actions  # Case A
+    elif base_action_length == video_length:
+        action_start_frame_offset = -num_history_actions  # Case B
+    else:
+        # Case C: same rule as A/B based on whether an initial-state action exists.
+        action_start_frame_offset = -num_history_actions if has_initial_state else 1 - num_history_actions
 
     return SequencePlan(
         has_text=has_text,

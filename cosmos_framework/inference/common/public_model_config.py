@@ -37,6 +37,7 @@ _TYPE_ALIASES = {
     "projects.cosmos3.vfm.configs.base.defaults.model_config.RectifiedFlowInferenceConfig": "rectified_flow_inference_config",
     "projects.cosmos3.vfm.configs.base.defaults.model_config.RectifiedFlowTrainingConfig": "rectified_flow_training_config",
     "projects.cosmos3.vfm.configs.base.defaults.parallelism.ParallelismConfig": "parallelism_config",
+    "projects.cosmos3.vfm.configs.base.defaults.quantization.QuantizationConfig": "quantization_config",
     "projects.cosmos3.vfm.configs.base.defaults.vlm.PretrainedWeightsConfig": "pretrained_weights_config",
     "projects.cosmos3.vfm.configs.base.defaults.vlm.VLMConfig": "vlm_config",
 }

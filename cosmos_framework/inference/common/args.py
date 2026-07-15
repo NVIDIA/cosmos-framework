@@ -603,6 +603,38 @@ ParallelismPreset = Literal["throughput", "latency"]
 CfgpSize = Annotated[int, pydantic.Field(ge=1, le=2)]
 CompiledRegion = Literal["all", "language"]
 
+# Low-precision quantization method to apply to the model at load time.
+# One of ``mxfp8`` / ``nvfp4``, or ``None`` (default) to disable.
+# Routed to the VFM model loader, which selects an FSDP-compatible
+# (module-swap) path when sharded (``dp_shard_size > 1``) and an in-place
+# path when replicated (``dp_shard_size == 1``). Note ``mxfp8`` / ``nvfp4``
+# are only supported on the replicated path.
+QuantizationMethod = Literal["mxfp8", "nvfp4"]
+
+
+class QuantizationArgs(ArgsBase):
+    """Low-precision quantization arguments applied to the model at load time."""
+
+    quantization_method: QuantizationMethod | None
+    quantization_include_regex: list[str]
+    quantization_exclude_regex: list[str]
+
+
+class QuantizationOverrides(OverridesBase):
+    quantization_method: QuantizationMethod | None = None
+    """Quantization method (``mxfp8`` / ``nvfp4``), or ``None`` to disable.
+
+    Post-training quantization (PTQ) is applied in-place to the model at load
+    time. Only supported on Blackwell architectures and when FSDP sharding is disabled.
+    """
+    quantization_include_regex: list[str] = ["language_model.model.layers"]
+    """Regexes matched against module FQNs; a Linear is quantized only if it matches one (empty = all)."""
+    quantization_exclude_regex: list[str] = pydantic.Field(default_factory=list)
+    """Regexes matched against module FQNs; a Linear is skipped if it matches any."""
+
+    def build_quantization(self) -> QuantizationArgs:
+        return self._build(QuantizationArgs)
+
 
 class ParallelismArgs(ArgsBase):
     """Parallelism arguments."""
@@ -702,7 +734,7 @@ class GuardrailOverrides(OverridesBase):
     """Offload guardrail models to CPU."""
 
 
-class SetupArgs(ABC, CheckpointArgs, ParallelismArgs, GuardrailArgs):
+class SetupArgs(ABC, CheckpointArgs, ParallelismArgs, QuantizationArgs, GuardrailArgs):
     output_dir: ResolvedPath
     keep_going: bool
     skip_invalid_samples: bool
@@ -737,7 +769,7 @@ class SetupArgs(ABC, CheckpointArgs, ParallelismArgs, GuardrailArgs):
         return cls.model_fields["variant"].default
 
 
-class SetupOverrides(ABC, CheckpointOverrides, ParallelismOverrides, GuardrailOverrides):
+class SetupOverrides(ABC, CheckpointOverrides, ParallelismOverrides, QuantizationOverrides, GuardrailOverrides):
     """Inference setup arguments."""
 
     output_dir: Annotated[ResolvedPath | None, tyro.conf.arg(aliases=("-o",))] = None
