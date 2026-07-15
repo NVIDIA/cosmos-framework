@@ -99,6 +99,8 @@ _ATTN_KEY_REMAP = (
     (".k_norm.", ".norm_k."),
 )
 
+_LANGUAGE_MODEL_VISION_PREFIXES = ("model.visual.", "visual.")
+
 # Legacy TimestepEmbedder stored its MLP as `nn.Sequential([Linear, SiLU, Linear])`,
 # so state-dict keys were `mlp.0.*` / `mlp.2.*`. The diffusers `TimestepEmbedding`
 # stores them as named attributes `linear_1` / `linear_2`. Index 1 (SiLU) has no
@@ -139,6 +141,22 @@ def _remap_language_model_key(key: str) -> str:
             key = key.replace(old, new)
             break
     return key
+
+
+def _remap_language_model_state_dict(state_dict: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
+    """Remap language-model keys and reject ambiguous source layouts."""
+    remapped_state_dict: dict[str, torch.Tensor] = {}
+    for key, value in state_dict.items():
+        if key.startswith(_LANGUAGE_MODEL_VISION_PREFIXES):
+            continue
+        remapped_key = _remap_language_model_key(key)
+        if remapped_key in remapped_state_dict:
+            raise RuntimeError(
+                "Language-model key remap collision while applying diffusers key remap: "
+                f"{key!r} maps to existing key {remapped_key!r}."
+            )
+        remapped_state_dict[remapped_key] = value
+    return remapped_state_dict
 
 
 def _load_sound_tokenizer_state_dict(checkpoint_path: pathlib.Path) -> dict[str, torch.Tensor]:
@@ -615,18 +633,22 @@ def convert_model_to_diffusers(args: Args) -> None:
     unified_3d_mrope_temporal_modality_margin = (
         _tmp.config.diffusion_expert_config.unified_3d_mrope_temporal_modality_margin
     )
-    action2llm = getattr(_tmp.net, "action2llm", None)
-    llm2action = getattr(_tmp.net, "llm2action", None)
+    action_proj_in = getattr(_tmp.net, "action2llm", None)
+    if action_proj_in is None:
+        action_proj_in = getattr(_tmp.net, "action_proj_in", None)
+    action_proj_out = getattr(_tmp.net, "llm2action", None)
+    if action_proj_out is None:
+        action_proj_out = getattr(_tmp.net, "action_proj_out", None)
     action_modality_embed = getattr(_tmp.net, "action_modality_embed", None)
     has_action_projection_weights = any(
-        module is not None for module in (action2llm, llm2action, action_modality_embed)
+        module is not None for module in (action_proj_in, action_proj_out, action_modality_embed)
     )
     action_gen = bool(
         _get_config_value(net_cfg, model_cfg, name="action_gen", default=False) or has_action_projection_weights
     )
     action_dim = _get_config_value(net_cfg, model_cfg, name="action_dim", default=None)
-    if action_dim is None and action2llm is not None:
-        action_dim = getattr(action2llm, "input_size", None)
+    if action_dim is None and action_proj_in is not None:
+        action_dim = getattr(action_proj_in, "input_size", None)
     if action_dim is None:
         action_dim = max_action_dim
     num_embodiment_domains = int(_get_config_value(net_cfg, model_cfg, name="num_embodiment_domains", default=32))
@@ -662,8 +684,8 @@ def convert_model_to_diffusers(args: Args) -> None:
         missing_action_modules = [
             name
             for name, module in (
-                ("action2llm", action2llm),
-                ("llm2action", llm2action),
+                ("action_proj_in/action2llm", action_proj_in),
+                ("action_proj_out/llm2action", action_proj_out),
                 ("action_modality_embed", action_modality_embed),
             )
             if module is None
@@ -718,7 +740,7 @@ def convert_model_to_diffusers(args: Args) -> None:
             unified_3d_mrope_temporal_modality_margin=unified_3d_mrope_temporal_modality_margin,
             vocab_size=lm_cfg.vocab_size,
         )
-    state_dict = {_remap_language_model_key(k): v for k, v in language_model.state_dict().items()}
+    state_dict = _remap_language_model_state_dict(language_model.state_dict())
     for k, v in vae2llm.state_dict().items():
         state_dict[f"proj_in.{k}"] = v
     for k, v in llm2vae.state_dict().items():
@@ -726,9 +748,9 @@ def convert_model_to_diffusers(args: Args) -> None:
     for k, v in time_embedder.state_dict().items():
         state_dict[f"time_embedder.{_TIME_EMBEDDER_KEY_REMAP[k]}"] = v
     if action_gen:
-        for k, v in action2llm.state_dict().items():
+        for k, v in action_proj_in.state_dict().items():
             state_dict[f"action_proj_in.{k}"] = v
-        for k, v in llm2action.state_dict().items():
+        for k, v in action_proj_out.state_dict().items():
             state_dict[f"action_proj_out.{k}"] = v
         state_dict["action_modality_embed"] = action_modality_embed
     if sound_gen:
@@ -743,8 +765,8 @@ def convert_model_to_diffusers(args: Args) -> None:
         vae2llm,
         llm2vae,
         time_embedder,
-        action2llm,
-        llm2action,
+        action_proj_in,
+        action_proj_out,
         action_modality_embed,
         sound2llm,
         llm2sound,
