@@ -9,17 +9,32 @@ from typing import TYPE_CHECKING
 
 import torch
 
-from cosmos_framework.data.generator.sequence_packing.modalities import (
-    pack_action_tokens,
-    pack_sound_tokens,
-    pack_text_tokens,
-    pack_vision_tokens,
-)
+from cosmos_framework.data.generator.sequence_packing.sequence import PackedSequence, PackedSequenceBuilder, SequencePlan
 from cosmos_framework.data.generator.sequence_packing.temporal_causal import pack_supertokens_temporal_causal
-from cosmos_framework.data.generator.sequence_packing.types import PackedSequence, SequencePlan
 
 if TYPE_CHECKING:
     from cosmos_framework.model.generator.utils.data_and_condition import GenerationDataClean
+
+
+def _get_optional_fps(
+    fps_values: torch.Tensor | list[torch.Tensor | float] | None,
+    index: int,
+) -> float | None:
+    """Return an optional FPS value as a float.
+
+    Args:
+        fps_values: Optional tensor/list of per-sample or per-item FPS values.
+        index: Entry to read from ``fps_values``.
+
+    Returns:
+        FPS value as ``float`` when present, otherwise ``None``.
+    """
+    if fps_values is None or index >= len(fps_values):
+        return None
+    fps_value = fps_values[index]  # []
+    if isinstance(fps_value, torch.Tensor):
+        return float(fps_value.item())
+    return float(fps_value)
 
 
 def pack_input_sequence(
@@ -67,6 +82,8 @@ def pack_input_sequence(
         unified_3d_mrope_reset_spatial_ids: If True (default), spatial (H, W) indices
             start from 0 for each vision segment. If False, spatial indices are offset
             by the temporal offset (Qwen2VL-style).
+        unified_3d_mrope_temporal_modality_margin: Extra temporal offset inserted between
+            text and generation modalities.
         enable_fps_modulation: If True, scale temporal position IDs based on video FPS
             to reflect real time. Requires fps_vision in gen_data_clean.
             Uses the same flag as diffusion_expert_config.enable_fps_modulation.
@@ -79,6 +96,13 @@ def pack_input_sequence(
         vision_temporal_position_mode: Temporal coordinates used for unified_3d_mrope vision tokens.
             "latent_index" keeps legacy positions; "uniae_source_right_edge" uses
             per-latent positions from gen_data_clean.temporal_positions_vision.
+        video_temporal_causal: If True, pack vision and optional action as temporal-causal
+            supertokens instead of separate modality blocks.
+        action_dim: Action feature dimension used when temporal-causal packing creates
+            null action tokens.
+        initial_mrope_temporal_offset: Initial temporal cursor for each sample, used by
+            autoregressive inference to seed mRoPE positions.
+
     Returns:
         PackedSequence containing all packed tensors and metadata. See PackedSequence for field details.
     """
@@ -125,11 +149,11 @@ def pack_input_sequence(
             )
     use_float_mrope_positions = enable_fps_modulation or explicit_vision_temporal_positions_active
 
-    # Initialize packed sequence (acts as builder during packing)
-    packed_seq = PackedSequence()
+    # Initialize mutable builder state for sequence construction.
+    seq_builder = PackedSequenceBuilder()
 
     # Configure 3D mRoPE on the builder.
-    packed_seq._mrope_reset_spatial = unified_3d_mrope_reset_spatial_ids
+    seq_builder._mrope_reset_spatial = unified_3d_mrope_reset_spatial_ids
 
     # Maintain separate indices for each modality
     idx_text = 0
@@ -150,7 +174,7 @@ def pack_input_sequence(
 
         # mRoPE temporal offset resets per sample.
         # initial_mrope_temporal_offset is non-zero only for AR inference (frame N seeds at N*tcf).
-        packed_seq._mrope_temporal_offset = initial_mrope_temporal_offset
+        seq_builder.begin_sample(initial_mrope_temporal_offset)
 
         _ts = input_timesteps[sample_idx]
         input_timestep = _ts.item() if _ts.numel() == 1 else _ts  # float (TF) or Tensor(T_max,) (DF)
@@ -161,8 +185,7 @@ def pack_input_sequence(
             idx_text += 1
 
             has_generation_for_sample = sequence_plan.has_vision or sequence_plan.has_action or sequence_plan.has_sound
-            text_sample_len = pack_text_tokens(
-                packed_seq,
+            text_sample_len = seq_builder.pack_text_tokens(
                 text_ids,
                 special_tokens,
                 has_generation=has_generation_for_sample,
@@ -171,10 +194,10 @@ def pack_input_sequence(
             sample_len += text_sample_len
 
             # End of text modality, add an offset as the boundary between text and vision.
-            packed_seq._mrope_temporal_offset += unified_3d_mrope_temporal_modality_margin
+            seq_builder.advance_mrope_temporal_offset(unified_3d_mrope_temporal_modality_margin)
 
         # Save temporal offset before vision for action tokens (action uses same offset as vision start)
-        vision_start_temporal_offset = packed_seq._mrope_temporal_offset
+        vision_start_temporal_offset = seq_builder.mrope_temporal_offset
 
         # Pack vision (and optionally action) tokens
         if video_temporal_causal and sequence_plan.has_vision:
@@ -183,28 +206,17 @@ def pack_input_sequence(
             input_vision_tokens = gen_data_clean.x0_tokens_vision[idx_vision]
             idx_vision += 1
 
-            vision_fps = None
-            if (
-                enable_fps_modulation
-                and gen_data_clean.fps_vision is not None
-                and idx_vision - 1 < len(gen_data_clean.fps_vision)
-            ):
-                vision_fps = float(gen_data_clean.fps_vision[idx_vision - 1].item())
+            vision_fps = _get_optional_fps(gen_data_clean.fps_vision, idx_vision - 1)
 
             input_action_tokens_tc: torch.Tensor | None = None
-            action_fps_tc: float | None = None
+            action_fps_tc = None
             if sequence_plan.has_action:
                 input_action_tokens_tc = gen_data_clean.x0_tokens_action[idx_action]
-                if (
-                    enable_fps_modulation
-                    and gen_data_clean.fps_action is not None
-                    and idx_action < len(gen_data_clean.fps_action)
-                ):
-                    action_fps_tc = float(gen_data_clean.fps_action[idx_action].item())
+                action_fps_tc = _get_optional_fps(gen_data_clean.fps_action, idx_action)
                 idx_action += 1
 
             supertoken_split_len, null_flag = pack_supertokens_temporal_causal(
-                packed_seq=packed_seq,
+                seq_builder=seq_builder,
                 input_vision_tokens=input_vision_tokens,
                 input_action_tokens=input_action_tokens_tc,
                 condition_frame_indexes_vision=sequence_plan.condition_frame_indexes_vision,
@@ -223,7 +235,9 @@ def pack_input_sequence(
             # stamp the supertoken layout constant directly here. This is the
             # single source of truth read by downstream attention / KV-cache
             # code (no recomputation in the network).
-            packed_seq.num_action_tokens_per_supertoken = temporal_compression_factor if sequence_plan.has_action else 0
+            seq_builder.num_action_tokens_per_supertoken = (
+                temporal_compression_factor if sequence_plan.has_action else 0
+            )
             sample_len += supertoken_split_len
             vision_split_len = supertoken_split_len
             action_split_len = 0  # Already absorbed into supertoken_split_len
@@ -254,7 +268,7 @@ def pack_input_sequence(
                 # offset equals snapshot + latent_t (single-clip semantics for
                 # downstream EOV / next-modality tokens).
                 shared_grid = sequence_plan.share_vision_temporal_positions and num_vis > 1
-                items_temporal_offset_snapshot = packed_seq._mrope_temporal_offset
+                items_temporal_offset_snapshot = seq_builder.mrope_temporal_offset
                 shared_latent_t: int | None = None
                 shared_patch_h: int | None = None
                 shared_patch_w: int | None = None
@@ -264,28 +278,21 @@ def pack_input_sequence(
                 # the same conditioning FPS, so we read by sample_idx, not by the
                 # flat idx_vision counter (which would alias to a neighbor sample's
                 # fps and corrupt RoPE FPS modulation).
-                sample_vision_fps: float | None = None
-                if (
-                    enable_fps_modulation
-                    and gen_data_clean.fps_vision is not None
-                    and sample_idx < len(gen_data_clean.fps_vision)
-                ):
-                    sample_vision_fps = float(gen_data_clean.fps_vision[sample_idx].item())
+                sample_vision_fps = _get_optional_fps(gen_data_clean.fps_vision, sample_idx)
 
                 for item_idx in range(num_vis):
                     flat_vision_idx = idx_vision
-                    input_vision_tokens = gen_data_clean.x0_tokens_vision[flat_vision_idx]
+                    input_vision_tokens = gen_data_clean.x0_tokens_vision[flat_vision_idx]  # [1,C,T,H,W]
                     vision_temporal_positions: torch.Tensor | None = None
                     if explicit_vision_temporal_positions_active:
                         assert gen_data_clean.temporal_positions_vision is not None
-                        vision_temporal_positions = gen_data_clean.temporal_positions_vision[flat_vision_idx]
+                        vision_temporal_positions = gen_data_clean.temporal_positions_vision[flat_vision_idx]  # [T]
                         if vision_temporal_positions.shape[0] != input_vision_tokens.shape[2]:
                             raise ValueError(
                                 "vision_temporal_positions must match latent_t for each vision item, "
                                 f"got {vision_temporal_positions.shape[0]} positions and "
                                 f"latent_t={input_vision_tokens.shape[2]} for item {flat_vision_idx}."
                             )
-                    vision_fps = sample_vision_fps
                     idx_vision += 1
 
                     # Determine conditioning for this vision item.
@@ -332,15 +339,14 @@ def pack_input_sequence(
                                     f"{shared_temporal_positions.tolist()}."
                                 )
                         # Rewind so this item starts at the same temporal offset as item 0.
-                        packed_seq._mrope_temporal_offset = items_temporal_offset_snapshot
+                        seq_builder.set_mrope_temporal_offset(items_temporal_offset_snapshot)
 
-                    item_split_len = pack_vision_tokens(
-                        packed_seq=packed_seq,
+                    item_split_len = seq_builder.pack_vision_tokens(
                         input_vision_tokens=input_vision_tokens,
                         condition_frame_indexes_vision=item_condition_frames,
                         input_timestep=input_timestep,
                         latent_patch_size=latent_patch_size,
-                        vision_fps=vision_fps,
+                        vision_fps=sample_vision_fps,
                         enable_fps_modulation=enable_fps_modulation,
                         base_fps=base_fps,
                         temporal_compression_factor=temporal_compression_factor,
@@ -349,8 +355,9 @@ def pack_input_sequence(
                     vision_split_len += item_split_len
                     if track_item_split_lens:
                         sample_item_split_lens.append(item_split_len)
+
                 if track_item_split_lens:
-                    packed_seq.vision_item_split_lens.append(sample_item_split_lens)
+                    seq_builder.vision_item_split_lens.append(sample_item_split_lens)
                 sample_len += vision_split_len
 
             else:
@@ -359,20 +366,10 @@ def pack_input_sequence(
             # Pack action tokens if has_action=True
             if sequence_plan.has_action:
                 input_action_tokens = gen_data_clean.x0_tokens_action[idx_action]
-
-                # Get FPS for action (action may have its own FPS independent of vision)
-                action_fps: float | None = None
-                if (
-                    enable_fps_modulation
-                    and gen_data_clean.fps_action is not None
-                    and idx_action < len(gen_data_clean.fps_action)
-                ):
-                    action_fps = float(gen_data_clean.fps_action[idx_action].item())
-
+                action_fps = _get_optional_fps(gen_data_clean.fps_action, idx_action)
                 idx_action += 1
 
-                action_split_len = pack_action_tokens(
-                    packed_seq=packed_seq,
+                action_split_len = seq_builder.pack_action_tokens(
                     input_action_tokens=input_action_tokens,
                     condition_frame_indexes_action=sequence_plan.condition_frame_indexes_action,
                     input_timestep=input_timestep,
@@ -390,20 +387,10 @@ def pack_input_sequence(
         # Pack sound tokens if has_sound=True
         if sequence_plan.has_sound:
             input_sound_tokens = gen_data_clean.x0_tokens_sound[idx_sound]
-
-            # Get FPS for sound (from gen_data_clean, like vision and action)
-            sound_fps: float | None = None
-            if (
-                enable_fps_modulation
-                and gen_data_clean.fps_sound is not None
-                and idx_sound < len(gen_data_clean.fps_sound)
-            ):
-                sound_fps = float(gen_data_clean.fps_sound[idx_sound].item())
-
+            sound_fps = _get_optional_fps(gen_data_clean.fps_sound, idx_sound)
             idx_sound += 1
 
-            sound_split_len = pack_sound_tokens(
-                packed_seq=packed_seq,
+            sound_split_len = seq_builder.pack_sound_tokens(
                 input_sound_tokens=input_sound_tokens,
                 condition_frame_indexes_sound=sequence_plan.condition_frame_indexes_sound,
                 input_timestep=input_timestep,
@@ -421,28 +408,14 @@ def pack_input_sequence(
         eov_len = 0
         has_any_generation = sequence_plan.has_vision or sequence_plan.has_action or sequence_plan.has_sound
         if include_end_of_generation_token and has_any_generation:
-            # Type narrowing: we're in build mode, fields are lists
-            assert isinstance(packed_seq.text_ids, list)
-            assert isinstance(packed_seq.text_indexes, list)
-            assert isinstance(packed_seq.position_ids, list)
-
-            packed_seq.text_ids.append(special_tokens["end_of_generation"])
-            packed_seq.text_indexes.append(packed_seq.curr)
-
-            # Use float dtype when any vision mRoPE positions are fractional.
-            eov_dtype = torch.float32 if use_float_mrope_positions else torch.long
-            eov_mrope_ids = torch.full((3, 1), packed_seq._mrope_temporal_offset, dtype=eov_dtype)  # [3,1]
-            packed_seq.position_ids.append(eov_mrope_ids)  # type: ignore[arg-type]
-            packed_seq._mrope_temporal_offset += 1
-
-            packed_seq.curr += 1
-            eov_len = 1
-            sample_len += 1
+            eov_len = seq_builder.append_end_of_generation_token(
+                token_id=special_tokens["end_of_generation"],
+                use_float_mrope_positions=use_float_mrope_positions,
+            )
+            sample_len += eov_len
 
         combined_split_len = vision_split_len + action_split_len + sound_split_len + eov_len
-        packed_seq.attn_modes.append("full")
-        packed_seq.split_lens.append(combined_split_len)
-        packed_seq.sample_lens.append(sample_len)
+        seq_builder.finish_sample(combined_split_len, sample_len)
 
     # Assert consistent null_action_supertokens across all TC samples, then set once
     if null_action_flags:
@@ -450,9 +423,9 @@ def pack_input_sequence(
             f"Inconsistent null_action_supertokens across samples: {null_action_flags}. "
             "All samples in a batch must have the same structure (all training or all AR inference)."
         )
-        packed_seq.null_action_supertokens = null_action_flags[0]
+        seq_builder.null_action_supertokens = null_action_flags[0]
 
     # Finalize and return packed data
-    return packed_seq.finalize(
+    return seq_builder.finalize(
         gen_data_clean=gen_data_clean,
     )
