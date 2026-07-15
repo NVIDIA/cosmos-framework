@@ -41,6 +41,8 @@ class VQEmbedding(nn.Embedding):
         decay: EMA decay rate.
         restart_unused_codes: Whether to restart unused codebook entries.
         eps: Small epsilon for numerical stability.
+        distance_chunk_size: Maximum number of input and codebook rows in one
+            distance tile. ``None`` computes the full distance matrix.
     """
 
     def __init__(
@@ -51,15 +53,20 @@ class VQEmbedding(nn.Embedding):
         decay: float = 0.99,
         restart_unused_codes: bool = True,
         eps: float = 1e-5,
-    ):
+        distance_chunk_size: int | None = 4096,
+    ) -> None:
         """Initialize VQEmbedding."""
         super().__init__(n_embed + 1, embed_dim, padding_idx=n_embed)
+
+        if distance_chunk_size is not None and distance_chunk_size <= 0:
+            raise ValueError(f"distance_chunk_size must be positive when set, got {distance_chunk_size}.")
 
         self.ema = ema
         self.decay = decay
         self.eps = eps
         self.restart_unused_codes = restart_unused_codes
         self.n_embed = n_embed
+        self.distance_chunk_size: int | None = distance_chunk_size
 
         if self.ema:
             _ = [p.requires_grad_(False) for p in self.parameters()]
@@ -78,22 +85,22 @@ class VQEmbedding(nn.Embedding):
         Returns:
             Distance tensor of shape (..., n_embed).
         """
-        codebook_t = self.weight[:-1, :].t()
+        codebook_t = self.weight[:-1, :].t()  # [E,K]
         (embed_dim, _) = codebook_t.shape
         inputs_shape = inputs.shape
         assert inputs_shape[-1] == embed_dim
 
-        inputs_flat = inputs.reshape(-1, embed_dim)
+        inputs_flat = inputs.reshape(-1, embed_dim).to(dtype=codebook_t.dtype)  # [N,E]
 
-        inputs_norm_sq = inputs_flat.pow(2.0).sum(dim=1, keepdim=True)
-        codebook_t_norm_sq = codebook_t.pow(2.0).sum(dim=0, keepdim=True)
+        inputs_norm_sq = inputs_flat.pow(2.0).sum(dim=1, keepdim=True)  # [N,1]
+        codebook_t_norm_sq = codebook_t.pow(2.0).sum(dim=0, keepdim=True)  # [1,K]
         distances = torch.addmm(
             inputs_norm_sq + codebook_t_norm_sq,
             inputs_flat,
             codebook_t,
             alpha=-2.0,
-        )
-        distances = distances.reshape(*inputs_shape[:-1], -1)
+        )  # [N,K]
+        distances = distances.reshape(*inputs_shape[:-1], -1)  # [...,K]
         return distances
 
     @torch.no_grad()
@@ -106,9 +113,47 @@ class VQEmbedding(nn.Embedding):
         Returns:
             Index tensor of shape (...,).
         """
-        distances = self.compute_distances(inputs)
-        embed_idxs = distances.argmin(dim=-1)
-        return embed_idxs
+        input_shape = inputs.shape
+        embed_dim = input_shape[-1]
+        inputs_flat = inputs.reshape(-1, embed_dim).to(dtype=self.weight.dtype)  # [N,E]
+        codebook = self.weight[:-1, :]  # [K,E]
+        chunk_size = self.distance_chunk_size
+        if chunk_size is None:
+            distances = self.compute_distances(inputs)  # [...,K]
+            return distances.argmin(dim=-1)  # [...]
+
+        best_indices = torch.zeros(inputs_flat.shape[0], dtype=torch.long, device=inputs.device)  # [N]
+        for input_start in range(0, inputs_flat.shape[0], chunk_size):
+            input_end = min(input_start + chunk_size, inputs_flat.shape[0])
+            input_chunk = inputs_flat[input_start:input_end]  # [Nc,E]
+            input_norm_sq = input_chunk.pow(2.0).sum(dim=1, keepdim=True)  # [Nc,1]
+            input_best_distances = input_chunk.new_full((input_chunk.shape[0],), float("inf"))  # [Nc]
+            input_best_indices = torch.zeros(input_chunk.shape[0], dtype=torch.long, device=inputs.device)  # [Nc]
+            for codebook_start in range(0, codebook.shape[0], chunk_size):
+                codebook_end = min(codebook_start + chunk_size, codebook.shape[0])
+                codebook_chunk = codebook[codebook_start:codebook_end]  # [Kc,E]
+                codebook_norm_sq = codebook_chunk.pow(2.0).sum(dim=1).unsqueeze(0)  # [1,Kc]
+                chunk_distances = torch.addmm(
+                    input_norm_sq + codebook_norm_sq,
+                    input_chunk,
+                    codebook_chunk.t(),
+                    alpha=-2.0,
+                )  # [Nc,Kc]
+                chunk_best_distances, chunk_best_indices = chunk_distances.min(dim=1)  # [Nc], [Nc]
+                use_chunk = chunk_best_distances < input_best_distances  # [Nc]
+                input_best_distances = torch.where(  # [Nc]
+                    use_chunk,
+                    chunk_best_distances,
+                    input_best_distances,
+                )
+                input_best_indices = torch.where(  # [Nc]
+                    use_chunk,
+                    chunk_best_indices + codebook_start,
+                    input_best_indices,
+                )
+            best_indices[input_start:input_end] = input_best_indices  # [Nc]
+
+        return best_indices.reshape(input_shape[:-1])  # [...]
 
     @torch.no_grad()
     def _tile_with_noise(self, x: torch.Tensor, target_n: int) -> torch.Tensor:
@@ -138,19 +183,19 @@ class VQEmbedding(nn.Embedding):
         """
         n_embed, embed_dim = self.weight.shape[0] - 1, self.weight.shape[-1]
 
-        vectors = vectors.reshape(-1, embed_dim)
-        idxs = idxs.reshape(-1)
+        vectors = vectors.reshape(-1, embed_dim).to(dtype=self.embed_ema.dtype)  # [N,E]
+        idxs = idxs.reshape(-1).long()  # [N]
 
         n_vectors = vectors.shape[0]
-        n_total_embed = n_embed
+        cluster_size = torch.bincount(idxs, minlength=n_embed).to(dtype=self.cluster_size_ema.dtype)  # [K]
+        vectors_sum_per_cluster = torch.zeros_like(self.embed_ema)  # [K,E]
+        # PyTorch selects its deterministic CUDA implementation here when deterministic algorithms are enabled.
+        vectors_sum_per_cluster.index_add_(0, idxs, vectors)  # [K,E]
 
-        one_hot_idxs = vectors.new_zeros(n_total_embed, n_vectors)
-        one_hot_idxs.scatter_(dim=0, index=idxs.unsqueeze(0), src=vectors.new_ones(1, n_vectors))
-
-        cluster_size = one_hot_idxs.sum(dim=1)
-        vectors_sum_per_cluster = one_hot_idxs @ vectors
-
-        if dist.is_initialized():
+        # Collectives are no-ops at world size one. Skipping them also avoids
+        # backend/device mismatches such as CPU tensors with an NCCL group.
+        is_multi_rank: bool = dist.is_initialized() and dist.get_world_size() > 1
+        if is_multi_rank:
             dist.all_reduce(vectors_sum_per_cluster, op=dist.ReduceOp.SUM)
             dist.all_reduce(cluster_size, op=dist.ReduceOp.SUM)
 
@@ -163,7 +208,7 @@ class VQEmbedding(nn.Embedding):
             n_vectors = vectors.shape[0]
             _vectors_random = vectors[torch.randperm(n_vectors, device=vectors.device)][:n_embed]
 
-            if dist.is_initialized():
+            if is_multi_rank:
                 dist.broadcast(_vectors_random, 0)
 
             usage = (self.cluster_size_ema.view(-1, 1) >= 1).float()
@@ -194,7 +239,7 @@ class VQEmbedding(nn.Embedding):
             if self.ema:
                 self._update_buffers(inputs, embed_idxs)
 
-        embeds = self.embed(embed_idxs)
+        embeds = self.embed(embed_idxs).to(dtype=inputs.dtype)  # [...,E]
 
         if self.ema and self.training:
             self._update_embedding()
@@ -229,6 +274,7 @@ class RQBottleneck(nn.Module):
         shared_codebook: Whether to share codebook across depth.
         restart_unused_codes: Whether to restart unused codes.
         commitment_loss: Type of commitment loss ("cumsum").
+        distance_chunk_size: Maximum input/codebook rows in each distance tile.
     """
 
     def __init__(
@@ -240,7 +286,8 @@ class RQBottleneck(nn.Module):
         shared_codebook: bool = False,
         restart_unused_codes: bool = True,
         commitment_loss: str = "cumsum",
-    ):
+        distance_chunk_size: int | None = 4096,
+    ) -> None:
         """Initialize RQBottleneck."""
         super().__init__()
 
@@ -275,6 +322,7 @@ class RQBottleneck(nn.Module):
                 embed_dim,
                 decay=self.decay[0],
                 restart_unused_codes=restart_unused_codes,
+                distance_chunk_size=distance_chunk_size,
             )
             self.codebooks = nn.ModuleList([codebook0 for _ in range(self.code_shape[-1])])
         else:
@@ -284,6 +332,7 @@ class RQBottleneck(nn.Module):
                     embed_dim,
                     decay=self.decay[idx],
                     restart_unused_codes=restart_unused_codes,
+                    distance_chunk_size=distance_chunk_size,
                 )
                 for idx in range(self.code_shape[-1])
             ]

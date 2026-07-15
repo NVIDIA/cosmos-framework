@@ -25,6 +25,7 @@ from cosmos_framework.callbacks.moe_stability_callback import MoEStabilityCallba
 from cosmos_framework.callbacks.norm_monitor import NormMonitor
 from cosmos_framework.callbacks.ofu import OFUCallback
 from cosmos_framework.callbacks.param_count import ParamCount
+from cosmos_framework.callbacks.sampled_media_recorder import SampledMediaRecorder
 from cosmos_framework.callbacks.sequence_packing_padding import SequencePackingPadding
 from cosmos_framework.callbacks.sigma_loss_analysis import SigmaLossAnalysis
 from cosmos_framework.callbacks.skip_nan_step import SkipNaNStep
@@ -70,6 +71,15 @@ BASIC_CALLBACKS = dict(
         save_s3="${upload_reproducible_setup}",
     ),
     sequence_packing_padding=L(SequencePackingPadding)(every_n="${trainer.logging_iter}"),
+    sampled_media=L(SampledMediaRecorder)(
+        enabled=False,
+        output_uri=(
+            "${oc.env:IMAGINAIRE_OUTPUT_ROOT,/tmp/imaginaire4-output}/"
+            "${job.project}/${job.group}/${job.name}/sampled_media.lance"
+        ),
+        creds_path=None,
+        flush_every_n_batches=100,
+    ),
     mfu=L(MFUCallback)(every_n="${trainer.logging_iter}", grad_accum_iter="${trainer.grad_accum_iter}"),
     ofu=L(OFUCallback)(every_n="${trainer.logging_iter}"),
 )
