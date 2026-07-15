@@ -94,6 +94,18 @@ class ImaginaireModel(torch.nn.Module):
         """
         pass
 
+    def on_before_optimizer_step(
+        self, optimizer: torch.optim.Optimizer, scheduler: torch.optim.lr_scheduler.LRScheduler, iteration: int
+    ) -> None:
+        """Hook before optimizer.step() is called.
+
+        Args:
+            optimizer (torch.optim.Optimizer): The model optimizer.
+            scheduler (torch.optim.lr_scheduler.LRScheduler): The optimization scheduler.
+            iteration (int): Current iteration number.
+        """
+        pass
+
     def on_before_zero_grad(
         self, optimizer: torch.optim.Optimizer, scheduler: torch.optim.lr_scheduler.LRScheduler, iteration: int
     ) -> None:

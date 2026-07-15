@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: OpenMDW-1.1
 
 import functools
+import math
 from dataclasses import dataclass
 from typing import Any, Callable, NamedTuple, Optional, Union
 
@@ -72,6 +73,189 @@ class LBLMetadata(NamedTuple):
     mean_router_prob_per_expert: torch.Tensor
 
 
+@dataclass(frozen=True)
+class AuxLossFreeLoadBalancingConfig:
+    """Configuration for generation-tower aux-loss-free load balancing.
+
+    Attributes:
+        enabled: Enable the gradient-free expert-bias controller.
+        update_speed: Per-step bias nudge applied via
+            ``sign(average_load - expert_load)``.
+        max_bias: Symmetric bias-magnitude limit. ``None`` disables clamping.
+    """
+
+    enabled: bool = False
+    update_speed: float = 0.001
+    max_bias: float | None = 0.5
+
+
+@dataclass(frozen=True)
+class CosineRouterConfig:
+    """Configuration for routing in a sparse MoE block.
+
+    Attributes:
+        enabled: Use cosine-similarity logits instead of the standard dot-product
+            gate. Activation selection applies regardless of this setting.
+        activation: Function applied to router logits. ``"softmax"`` produces a
+            distribution across experts; ``"sigmoid"`` produces independent
+            expert affinities.
+        input_centering: Center cosine-router inputs using the current batch
+            mean (``"batch_mean"``), a running EMA mean (``"ema"``), or no
+            centering (``"none"``).
+        ema_momentum: Momentum used to update the input-centering EMA.
+        clamp_temperature: Prevent the learned cosine-router temperature from
+            exceeding its initialization value.
+    """
+
+    enabled: bool = False
+    activation: str = "softmax"
+    input_centering: str = "batch_mean"
+    ema_momentum: float = 0.99
+    clamp_temperature: bool = True
+
+
+class CosineRouter(nn.Module):
+    """Cosine-router behavior and state."""
+
+    def __init__(self, config: CosineRouterConfig, hidden_size: int) -> None:
+        super().__init__()
+        self.config: CosineRouterConfig = config
+        self.enabled: bool = config.enabled
+        self.activation: str = config.activation
+        if self.activation not in {"softmax", "sigmoid"}:
+            raise ValueError(f"Unsupported router activation: {self.activation!r}")
+        self.input_centering: str = config.input_centering
+        if self.input_centering not in {"batch_mean", "ema", "none"}:
+            raise ValueError(f"Unsupported router input centering: {self.input_centering!r}")
+        self.ema_momentum: float = config.ema_momentum
+        self.clamp_temperature: bool = config.clamp_temperature
+        self.hidden_size: int = hidden_size
+        self.initial_log_temperature: float = self.log_temperature_init(hidden_size)
+
+        if self.enabled:
+            self.log_temperature = nn.Parameter(
+                torch.full((hidden_size,), self.initial_log_temperature, dtype=torch.float32)
+            )  # [D]
+            self._init_input_centering_buffers()
+
+    @staticmethod
+    def log_temperature_init(hidden_size: int) -> float:
+        """Return ``log(sqrt(hidden_size))`` for pretrained-router warm starts."""
+        return 0.5 * math.log(hidden_size)
+
+    def _init_input_centering_buffers(self, buffer_device: torch.device | None = None) -> None:
+        """Initialize persistent and per-step EMA input-centering buffers."""
+        if self.input_centering != "ema":
+            return
+
+        # Persistent EMA estimate restored from checkpoints.
+        self.register_buffer(
+            "router_bias",
+            torch.zeros(self.hidden_size, dtype=torch.float32, device=buffer_device),  # [D]
+        )
+        # Per-step accumulators are temporary and intentionally omitted from checkpoints.
+        self.register_buffer(
+            "router_bias_sum",
+            torch.zeros(self.hidden_size, dtype=torch.float32, device=buffer_device),  # [D]
+            persistent=False,
+        )
+        self.register_buffer(
+            "router_bias_count",
+            torch.zeros(1, dtype=torch.float32, device=buffer_device),  # [1]
+            persistent=False,
+        )
+
+    def forward(self, hidden_states: torch.Tensor, gate: nn.Linear) -> torch.Tensor:
+        """Compute standard or cosine router logits.  [N,D] -> [N,E]"""
+        if not self.enabled:
+            return gate(hidden_states)  # [N,E]
+
+        x = hidden_states.to(torch.float32)  # [N,D]
+        if self.input_centering == "ema":
+            if self.training:
+                with torch.no_grad():
+                    router_bias_delta = x.detach().sum(dim=0)  # [D]
+                    self.router_bias_sum.add_(router_bias_delta)  # [D]
+                    self.router_bias_count.add_(x.shape[0])  # [1]
+            x = x - self.router_bias  # [N,D]
+        elif self.input_centering == "batch_mean" and x.shape[0] > 1:
+            x = x - x.mean(dim=0, keepdim=True)  # [N,D]
+
+        x = F.normalize(x, dim=-1)  # [N,D]
+        log_temperature = self.log_temperature  # [D]
+        if self.clamp_temperature:
+            log_temperature = log_temperature.clamp(max=self.initial_log_temperature)  # [D]
+        temperature = log_temperature.exp().to(torch.float32)  # [D]
+        gate_weight = F.normalize(gate.weight.to(torch.float32), dim=-1)  # [E,D]
+        x = x * temperature  # [N,D]
+        router_logits = F.linear(x, gate_weight)  # [N,E]
+        return router_logits.to(hidden_states.dtype)  # [N,E]
+
+    def get_scores(self, router_logits: torch.Tensor) -> torch.Tensor:
+        """Apply the configured activation to router logits.  [N,E] -> [N,E]"""
+        if self.activation == "sigmoid":
+            return torch.sigmoid(router_logits.to(torch.float32))  # [N,E]
+        return F.softmax(router_logits, dim=-1, dtype=torch.float32)  # [N,E]
+
+    @staticmethod
+    def normalize_scores(scores: torch.Tensor) -> torch.Tensor:
+        """Normalize independent router scores into a probability distribution.  [N,E] -> [N,E]"""
+        score_sums = scores.sum(dim=-1, keepdim=True)  # [N,1]
+        normalized_scores = scores / score_sums.clamp_min(torch.finfo(scores.dtype).tiny)  # [N,E]
+        uniform_scores = torch.full_like(scores, 1.0 / scores.shape[-1])  # [N,E]
+        return torch.where(score_sums > 0, normalized_scores, uniform_scores)  # [N,E]
+
+    def apply_selection_bias(
+        self,
+        router_logits: torch.Tensor,
+        router_scores: torch.Tensor,
+        expert_bias: torch.Tensor,
+    ) -> torch.Tensor:
+        """Add loss-free expert bias in the activation-appropriate selection space."""
+        if self.activation == "sigmoid":
+            return router_scores + expert_bias.unsqueeze(0)  # [N,E]
+        return router_logits + expert_bias.unsqueeze(0)  # [N,E]
+
+    def update_ema_bias(
+        self,
+        device_mesh: "torch.distributed.device_mesh.DeviceMesh | None" = None,
+    ) -> None:
+        """Update the token-constant EMA bias from accumulated per-step statistics."""
+        if self.input_centering != "ema":
+            return
+
+        with torch.no_grad():
+            total_sum = self.router_bias_sum.clone()  # [D]
+            total_count = self.router_bias_count.clone()  # [1]
+            if device_mesh is not None:
+                from torch.distributed.tensor import DTensor, Partial
+
+                total_sum = DTensor.from_local(
+                    total_sum,
+                    device_mesh=device_mesh,
+                    placements=[Partial()] * device_mesh.ndim,
+                ).full_tensor()  # [D]
+                total_count = DTensor.from_local(
+                    total_count,
+                    device_mesh=device_mesh,
+                    placements=[Partial()] * device_mesh.ndim,
+                ).full_tensor()  # [1]
+            if total_count.item() > 0:
+                batch_mean = total_sum / total_count  # [D]
+                self.router_bias.mul_(self.ema_momentum).add_(batch_mean * (1.0 - self.ema_momentum))  # [D]
+            self.router_bias_sum.zero_()  # [D]
+            self.router_bias_count.zero_()  # [1]
+
+    def init_weights(self, buffer_device: torch.device | None) -> None:
+        """Reset router parameters and buffers."""
+        if not self.enabled:
+            return
+
+        with torch.no_grad():
+            self.log_temperature.fill_(self.initial_log_temperature)  # [D]
+        self._init_input_centering_buffers(buffer_device=buffer_device)
+
+
 @use_kernel_forward_from_hub("RMSNorm")
 class Qwen3VLMoeTextRMSNorm(nn.Module):
     def __init__(self, hidden_size, eps=1e-6):
@@ -94,13 +278,37 @@ class Qwen3VLMoeTextRMSNorm(nn.Module):
 
 
 class Qwen3VLMoeTextSparseMoeBlock(nn.Module):
-    def __init__(self, config, noisy_gating: bool = False):
+    def __init__(
+        self,
+        config: Qwen3VLMoeTextConfig,
+        noisy_gating: bool = False,
+        cosine_router_config: CosineRouterConfig | None = None,
+        aux_loss_free_load_balancing_config: AuxLossFreeLoadBalancingConfig | None = None,
+    ) -> None:
+        load_balancing_config = aux_loss_free_load_balancing_config or AuxLossFreeLoadBalancingConfig()
         super().__init__()
+        assert not (noisy_gating and load_balancing_config.enabled), (
+            "Noisy gating and aux-loss-free load balancing cannot be enabled at the same time."
+        )
         self.config = config
         self.hidden_size = config.hidden_size
         self.num_experts = config.num_experts
         self.top_k = config.num_experts_per_tok
         self.gate = nn.Linear(config.hidden_size, config.num_experts, bias=False)
+        # Aux-loss-free load balancing (gen tower only). A
+        # gradient-free per-expert bias is added to the top-k SELECTION score. It is
+        # updated by a sign-based controller in update_bias() driven from the
+        # trainer's on_before_optimizer_step hook. ``expert_bias`` is persistent
+        # so it is saved to / restored from checkpoints; ``tokens_per_expert`` is
+        # a transient per-step accumulator and is not persisted.
+        self.aux_loss_free_load_balancing_config: AuxLossFreeLoadBalancingConfig = load_balancing_config
+        if self.aux_loss_free_load_balancing_config.enabled:
+            self.register_buffer("expert_bias", torch.zeros(self.num_experts))
+            self.register_buffer(
+                "tokens_per_expert",
+                torch.zeros(self.num_experts),
+                persistent=False,
+            )
         # Noisy top-k gating (Shazeer 2017): a second projection produces a
         # per-token, per-expert noise magnitude. During training the top-k
         # selection is made on clean_logits + N(0,1) * softplus(gate_noise(x)),
@@ -110,6 +318,23 @@ class Qwen3VLMoeTextSparseMoeBlock(nn.Module):
         self.noisy_gating = noisy_gating
         if noisy_gating:
             self.gate_noise = nn.Linear(config.hidden_size, config.num_experts, bias=False)
+
+        # Cosine router (gen-tower only). Replaces the raw dot-product logits
+        # x·W_e with a cosine similarity between the (token-mean-centered,
+        # L2-normalized) router input and the L2-normalized gate rows, scaled by
+        # a learnable temperature. This targets three pathologies measured in the
+        # gen tower's router:
+        #   1. token-constant component of the router input — removed by
+        #      per-batch mean-centering over the token axis;
+        #   2. low / inconsistent logit magnitude (gate-gain erosion under weight
+        #      decay) — removed by normalizing the input to unit norm and folding
+        #      all scale into the learnable temperature;
+        #   3. gate-row-norm dominance — removed by normalizing each
+        #      gate row, so selection depends on direction only.
+        self.cosine_router: CosineRouter = CosineRouter(
+            config=cosine_router_config or CosineRouterConfig(),
+            hidden_size=config.hidden_size,
+        )
         self.experts = create_text_experts(config, implementation_type="grouped_mm")
 
         # ── Heatmap tracking ──────────────────────────────────────────────────────
@@ -184,7 +409,7 @@ class Qwen3VLMoeTextSparseMoeBlock(nn.Module):
         self,
         num_tokens_per_expert: torch.Tensor,
         num_tokens: torch.Tensor,
-        routing_weights: torch.Tensor,
+        routing_probabilities: torch.Tensor,
         expert_indices: torch.Tensor,
     ) -> None:
         # ── Heatmap + stability buffers ──────────────────────────────────────
@@ -198,7 +423,7 @@ class Qwen3VLMoeTextSparseMoeBlock(nn.Module):
         # Summed (not meaned) so the callback can normalize by any window length.
         # 1e-9 prevents log(0) for near-zero probabilities.
         token_entropy = -torch.sum(
-            routing_weights * torch.log(routing_weights + ENTROPY_EPSILON), dim=-1
+            routing_probabilities * torch.log(routing_probabilities + ENTROPY_EPSILON), dim=-1
         )  # [num_tokens]
         self.sum_token_entropy.add_(token_entropy.sum().to(torch.float64))
         # Per-token soft effective experts = exp(H(p_t)), bounded in [1, N].
@@ -244,29 +469,59 @@ class Qwen3VLMoeTextSparseMoeBlock(nn.Module):
         assert hidden_states.ndim == 2, "hidden_states must be of shape (num_tokens, hidden_size)"
         num_tokens = hidden_states.shape[0]
 
-        router_logits = self.gate(hidden_states)  # [num_tokens,num_experts]
-        # Clean router distribution. Always used for monitoring (entropy/stability
-        # buffers) and the load-balancing-loss probability term so those stay
-        # comparable regardless of whether noisy gating is enabled.
-        routing_weights = torch.nn.functional.softmax(
-            router_logits, dim=-1, dtype=torch.float32
-        )  # [num_tokens,num_experts]
+        router_logits = self.cosine_router(hidden_states, self.gate)  # [num_tokens,num_experts]
+        # Clean router scores. For sigmoid routing these are independent expert
+        # affinities, while softmax routing produces a probability distribution.
+        routing_scores = self.cosine_router.get_scores(router_logits)  # [num_tokens,num_experts]
+        # Monitoring and LBL require a probability distribution. Normalizing sigmoid scores
+        # softmax takes the existing path unchanged for backward compatibility.
+        if self.cosine_router.activation == "sigmoid":
+            routing_probabilities = self.cosine_router.normalize_scores(routing_scores)  # [num_tokens,num_experts]
+        else:
+            routing_probabilities = routing_scores  # [num_tokens,num_experts]
 
         # Noisy top-k gating: only the expert *selection* (and the combine
-        # weights over the selected experts) sees the noise. When noise is off
-        # or at eval time, selection_weights == routing_weights, so behavior is
-        # identical to plain top-k gating.
+        # weights over the selected experts) sees the noise. Monitoring and LBL
+        # always use the clean routing_probabilities above.
         if self.noisy_gating and self.training:
             noise_std = torch.nn.functional.softplus(self.gate_noise(hidden_states))  # [num_tokens,num_experts]
-            noisy_logits = router_logits + torch.randn_like(router_logits) * noise_std
-            selection_weights = torch.nn.functional.softmax(noisy_logits, dim=-1, dtype=torch.float32)
+            selection_logits = router_logits + torch.randn_like(router_logits) * noise_std  # [num_tokens,num_experts]
+            selection_scores = self.cosine_router.get_scores(selection_logits)  # [num_tokens,num_experts]
         else:
-            selection_weights = routing_weights
+            selection_logits = router_logits  # [num_tokens,num_experts]
+            selection_scores = routing_scores  # [num_tokens,num_experts]
 
-        expert_weights, expert_indices = torch.topk(selection_weights, self.top_k, dim=-1)
-        # expert_weights: [num_tokens,top_k], expert_indices: [num_tokens,top_k]
+        # Gate-natural top-k: the selection the gate makes on its own. It is the
+        # dispatch selection when bias correction is off, and is always used as
+        # the load-balancing-loss count (LBL must see the natural distribution it
+        # is trying to push toward uniform, not the bias-balanced one).
+        natural_weights, natural_indices = torch.topk(
+            selection_scores, self.top_k, dim=-1
+        )  # [num_tokens,top_k], [num_tokens,top_k]
 
-        expert_weights = expert_weights / expert_weights.sum(dim=-1, keepdim=True)  # [num_tokens,top_k]
+        if self.aux_loss_free_load_balancing_config.enabled:
+            # Aux-loss-free load balancing changes selection only. DeepSeek-style
+            # Sigmoid routing adds bias to independent activated scores. Softmax
+            # scores are compressed and coupled by sum-to-one normalization, so
+            # bias is applied in logit space  to avoid disproportionate rank
+            # jumps.
+            biased_selection_scores = self.cosine_router.apply_selection_bias(
+                router_logits=selection_logits,
+                router_scores=selection_scores,
+                expert_bias=self.expert_bias.detach(),
+            )  # [num_tokens,num_experts]
+            _, expert_indices = torch.topk(
+                biased_selection_scores, self.top_k, dim=-1
+            )  # [num_tokens,top_k], [num_tokens,top_k]
+            expert_weights = selection_scores.gather(1, expert_indices)  # [num_tokens,top_k]
+        else:
+            expert_indices = natural_indices  # [num_tokens,top_k]
+            expert_weights = natural_weights  # [num_tokens,top_k]
+
+        if self.cosine_router.activation == "sigmoid":
+            expert_weights = self.cosine_router.normalize_scores(expert_weights)  # [num_tokens,top_k]
+        else:
+            expert_weights = expert_weights / expert_weights.sum(dim=-1, keepdim=True)  # [num_tokens,top_k]
         expert_weights = expert_weights.to(hidden_states.dtype)  # [num_tokens,top_k]
 
         num_tokens_per_expert = torch.histc(
@@ -290,12 +545,26 @@ class Qwen3VLMoeTextSparseMoeBlock(nn.Module):
             device=num_tokens_per_expert.device,
         )  # [1]
 
-        # Compute the average probability of routing to these experts.
-        # Summing over all experts should be equal to 1.
-        mean_router_prob_per_expert = torch.mean(routing_weights, dim=0)  # [num_experts]
+        # Compute the average normalized routing probability per expert.
+        # Sigmoid affinities are normalized across experts for this LBL term.
+        mean_router_prob_per_expert = torch.mean(routing_probabilities, dim=0)  # [num_experts]
+
+        # LBL count: when bias correction is on, ``num_tokens_per_expert`` reflects
+        # the bias-balanced dispatch, which would artificially satisfy LBL while
+        # the unbiased routing mass stays concentrated. Feed LBL the gate-natural counts
+        # instead. With bias off this is bit-identical to ``num_tokens_per_expert``.
+        if self.aux_loss_free_load_balancing_config.enabled:
+            num_tokens_per_expert_lbl = torch.histc(
+                natural_indices.to(dtype=torch.int32).view(-1),
+                bins=self.num_experts,
+                min=0,
+                max=self.num_experts - 1,
+            ).to(dtype=torch.int64)  # [num_experts]
+        else:
+            num_tokens_per_expert_lbl = num_tokens_per_expert
 
         lbl_metadata = LBLMetadata(
-            num_tokens_per_expert=num_tokens_per_expert,
+            num_tokens_per_expert=num_tokens_per_expert_lbl,
             num_tokens=num_tokens,
             mean_router_prob_per_expert=mean_router_prob_per_expert,
         )
@@ -304,9 +573,13 @@ class Qwen3VLMoeTextSparseMoeBlock(nn.Module):
             self._update_moe_callback_stats(
                 num_tokens_per_expert=num_tokens_per_expert,
                 num_tokens=num_tokens,
-                routing_weights=routing_weights,
+                routing_probabilities=routing_probabilities,
                 expert_indices=expert_indices,
             )
+            # Accumulate the actual (bias-balanced) dispatch counts that drive
+            # the bias controller toward an even load.
+            if self.aux_loss_free_load_balancing_config.enabled and self.training:
+                self.tokens_per_expert.add_(num_tokens_per_expert.to(self.tokens_per_expert.dtype))
 
         return routed_out, lbl_metadata
 
@@ -359,6 +632,57 @@ class Qwen3VLMoeTextSparseMoeBlock(nn.Module):
                 self.coactivation_counts.zero_()
             return val
 
+    def update_bias(
+        self,
+        device_mesh: "torch.distributed.device_mesh.DeviceMesh | None" = None,
+    ) -> None:
+        """Routing bias correction: nudge by ``speed * sign(avg - count)``.
+
+        Every expert receives a ``±update_speed`` nudge each step from the sign
+        of the rank-error between its accumulated dispatch count and the
+        per-expert average. The bias is recentered to zero mean every step and
+        clamped symmetrically by ``max_bias``. Gradient-free.
+        """
+        if not self.aux_loss_free_load_balancing_config.enabled:
+            return
+        with torch.no_grad():
+            counts = self.tokens_per_expert.clone()
+            if device_mesh is not None:
+                from torch.distributed.tensor import DTensor, Partial
+
+                # Counts are accumulated per local rank; reduce them across the
+                # data-parallel mesh so every rank applies an identical update
+                # (keeping the replicated expert_bias buffer in sync).
+                counts = DTensor.from_local(
+                    counts,
+                    device_mesh=device_mesh,
+                    placements=[Partial()] * device_mesh.ndim,
+                ).full_tensor()
+            avg = counts.mean()
+            error = avg - counts
+            update = self.aux_loss_free_load_balancing_config.update_speed * torch.sign(error)
+            self.expert_bias.add_(update)
+            # Recenter so the running mean stays at zero (right-skewed counts
+            # otherwise cause monotonic drift that saturates the clamp).
+            self.expert_bias.sub_(self.expert_bias.mean())
+            max_bias = self.aux_loss_free_load_balancing_config.max_bias
+            if max_bias is not None:
+                self.expert_bias.clamp_(min=-max_bias, max=max_bias)
+            self.tokens_per_expert.zero_()
+
+    def update_router_bias(
+        self,
+        device_mesh: "torch.distributed.device_mesh.DeviceMesh | None" = None,
+    ) -> None:
+        """EMA-update the token-constant  buffer ``router_bias``.
+
+        ``forward`` accumulates the per-step token sum + count locally on each rank; this
+        reduces them across the data-parallel mesh (so every rank computes the same global
+        batch mean ``m = sum_t(x) / count``), then applies the EMA
+        ``router_bias ← momentum·router_bias + (1-momentum)·m`` and resets the accumulators.
+        Called from the trainer's optimizer-step hook. Gradient-free;"""
+        self.cosine_router.update_ema_bias(device_mesh=device_mesh)
+
     def init_weights(self, buffer_device: torch.device | None = None):
         self.register_buffer(
             "total_tokens_per_expert",
@@ -400,6 +724,16 @@ class Qwen3VLMoeTextSparseMoeBlock(nn.Module):
             _make_coactivation_pairs(self.top_k, device=buffer_device),
             persistent=False,
         )
+        if self.aux_loss_free_load_balancing_config.enabled:
+            self.register_buffer(
+                "expert_bias",
+                torch.zeros(self.num_experts, device=buffer_device),
+            )
+            self.register_buffer(
+                "tokens_per_expert",
+                torch.zeros(self.num_experts, device=buffer_device),
+                persistent=False,
+            )
 
         if hasattr(self.config, "initializer_range"):
             std = self.config.initializer_range
@@ -413,6 +747,7 @@ class Qwen3VLMoeTextSparseMoeBlock(nn.Module):
             # Zero-init so the initial per-expert noise std is softplus(0)=ln(2)
             # uniformly, giving symmetric exploration before gate_noise learns.
             nn.init.zeros_(self.gate_noise.weight)
+        self.cosine_router.init_weights(buffer_device=buffer_device)
 
 
 def rotate_half(x):
@@ -1574,9 +1909,11 @@ def load_balancing_loss_func(
         concatenated_gate_logits = torch.cat([layer_gate.to(compute_device) for layer_gate in gate_logits], dim=0)
         # concatenated_gate_logits: [num_layers*B*N,num_experts]
 
-    routing_weights = torch.nn.functional.softmax(concatenated_gate_logits, dim=-1)  # [num_layers*B*N,num_experts]
+    routing_probabilities = torch.nn.functional.softmax(
+        concatenated_gate_logits, dim=-1
+    )  # [num_layers*B*N,num_experts]
 
-    _, selected_experts = torch.topk(routing_weights, top_k, dim=-1)  # [num_layers*B*N,top_k]
+    _, selected_experts = torch.topk(routing_probabilities, top_k, dim=-1)  # [num_layers*B*N,top_k]
 
     expert_mask = torch.nn.functional.one_hot(selected_experts, num_experts)  # [num_layers*B*N,top_k,num_experts]
 
@@ -1585,7 +1922,7 @@ def load_balancing_loss_func(
         tokens_per_expert = torch.mean(expert_mask.float(), dim=0)  # [top_k,num_experts]
 
         # Compute the average probability of routing to these experts
-        router_prob_per_expert = torch.mean(routing_weights, dim=0)  # [num_experts]
+        router_prob_per_expert = torch.mean(routing_probabilities, dim=0)  # [num_experts]
     else:
         batch_size, sequence_length = attention_mask.shape
         num_hidden_layers = concatenated_gate_logits.shape[0] // (batch_size * sequence_length)
@@ -1612,7 +1949,7 @@ def load_balancing_loss_func(
         )  # [num_layers*B*N,num_experts]
 
         # Compute the average probability of routing to these experts
-        router_prob_per_expert = torch.sum(routing_weights * router_per_expert_attention_mask, dim=0) / torch.sum(
+        router_prob_per_expert = torch.sum(routing_probabilities * router_per_expert_attention_mask, dim=0) / torch.sum(
             router_per_expert_attention_mask, dim=0
         )  # [num_experts]
 

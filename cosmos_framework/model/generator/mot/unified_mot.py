@@ -58,6 +58,8 @@ from cosmos_framework.model.generator.reasoner.qwen3_vl_moe.configuration_qwen3_
     Qwen3VLMoeVisionConfig,
 )
 from cosmos_framework.model.generator.reasoner.qwen3_vl_moe.qwen3_vl_moe import (
+    AuxLossFreeLoadBalancingConfig,
+    CosineRouterConfig,
     LBLMetadata,
     Qwen3VLMoePreTrainedModel,
     Qwen3VLMoeTextMLP,
@@ -231,8 +233,10 @@ class _MoTConfigBase(object):
         qk_norm_for_diffusion: bool = True,
         include_visual: bool = False,
         gen_noisy_gating: bool = False,
+        gen_cosine_router_config: CosineRouterConfig | None = None,
+        gen_aux_loss_free_load_balancing_config: AuxLossFreeLoadBalancingConfig | None = None,
         text_config_overrides: Mapping[str, Any] | None = None,
-    ):
+    ) -> None:
         # Defensive copy so downstream materialization can't mutate the
         # caller's input.
         self.config_dict = dict(config_dict)
@@ -242,6 +246,16 @@ class _MoTConfigBase(object):
         # Noisy top-k gating on the generation-tower MoE blocks (Shazeer 2017).
         # Gen-tower only; the understanding tower never receives this flag.
         self.gen_noisy_gating = gen_noisy_gating
+        # Cosine router on the generation-tower MoE blocks: token-mean-centered,
+        # L2-normalized input × L2-normalized gate rows, scaled by a learnable
+        # temperature. Gen-tower only; the understanding tower keeps the standard
+        # dot-product router.
+        self.gen_cosine_router_config: CosineRouterConfig = gen_cosine_router_config or CosineRouterConfig()
+        # Aux-loss-free load balancing on the gen-tower MoE blocks.
+        # Gen-tower only; the understanding tower uses the disabled default.
+        self.gen_aux_loss_free_load_balancing_config: AuxLossFreeLoadBalancingConfig = (
+            gen_aux_loss_free_load_balancing_config or AuxLossFreeLoadBalancingConfig()
+        )
         # Plain attribute (not a property) so the ``create_vlm_config``
         # post-construction ``setattr`` flow can replace the whole
         # mapping in one shot; default to ``{}`` so the merge in
@@ -801,9 +815,11 @@ def _impl_init(
     layer_types: LayerTypes,
     qk_norm_for_text: bool,
     qk_norm_for_diffusion: bool,
-    gen_noisy_gating: bool = False,
     use_und_k_norm_for_gen: bool = False,
-):
+    gen_noisy_gating: bool = False,
+    gen_cosine_router_config: CosineRouterConfig | None = None,
+    gen_aux_loss_free_load_balancing_config: AuxLossFreeLoadBalancingConfig | None = None,
+) -> None:
     """Shared ``__init__`` body for the three MoT text-model variants.
 
     Used by ``Qwen3VLTextModel``, ``Qwen3VLMoeTextModel``, and
@@ -824,8 +840,10 @@ def _impl_init(
                 layer_idx=layer_idx,
                 qk_norm_for_text=qk_norm_for_text,
                 qk_norm_for_diffusion=qk_norm_for_diffusion,
-                gen_noisy_gating=gen_noisy_gating,
                 use_und_k_norm_for_gen=use_und_k_norm_for_gen,
+                gen_noisy_gating=gen_noisy_gating,
+                gen_cosine_router_config=gen_cosine_router_config,
+                gen_aux_loss_free_load_balancing_config=gen_aux_loss_free_load_balancing_config,
             )
         )
 
@@ -1002,9 +1020,11 @@ class MoTDecoderLayer(nn.Module):
         layer_types: LayerTypes,
         qk_norm_for_text: bool,
         qk_norm_for_diffusion: bool,
-        gen_noisy_gating: bool = False,
         use_und_k_norm_for_gen: bool = False,
-    ):
+        gen_noisy_gating: bool = False,
+        gen_cosine_router_config: CosineRouterConfig | None = None,
+        gen_aux_loss_free_load_balancing_config: AuxLossFreeLoadBalancingConfig | None = None,
+    ) -> None:
         super().__init__()
         self.hidden_size = config.hidden_size
         self.self_attn = PackedAttentionMoT(
@@ -1022,8 +1042,14 @@ class MoTDecoderLayer(nn.Module):
             and (config.num_experts > 0 and (layer_idx + 1) % config.decoder_sparse_step == 0)
         ):
             self.mlp = Qwen3VLMoeTextSparseMoeBlock(config)
-            # Noisy gating is gen-tower only.
-            self.mlp_moe_gen = Qwen3VLMoeTextSparseMoeBlock(config, noisy_gating=gen_noisy_gating)
+            # Noisy gating, the cosine router, and aux-loss-free load balancing
+            # are gen-tower only.
+            self.mlp_moe_gen = Qwen3VLMoeTextSparseMoeBlock(
+                config,
+                noisy_gating=gen_noisy_gating,
+                cosine_router_config=gen_cosine_router_config,
+                aux_loss_free_load_balancing_config=gen_aux_loss_free_load_balancing_config,
+            )
         else:
             self.mlp = layer_types.mlp(config)
             self.mlp_moe_gen = layer_types.mlp(config)
@@ -1274,9 +1300,11 @@ class Qwen3VLMoeTextModel(Qwen3VLMoePreTrainedModel):
         *,
         qk_norm_for_text: bool,
         qk_norm_for_diffusion: bool,
-        gen_noisy_gating: bool = False,
         use_und_k_norm_for_gen: bool,
-    ):
+        gen_noisy_gating: bool = False,
+        gen_cosine_router_config: CosineRouterConfig | None = None,
+        gen_aux_loss_free_load_balancing_config: AuxLossFreeLoadBalancingConfig | None = None,
+    ) -> None:
         super().__init__(config)
         _impl_init(
             self,
@@ -1284,8 +1312,10 @@ class Qwen3VLMoeTextModel(Qwen3VLMoePreTrainedModel):
             layer_types=LayerTypes("qwen3_vl_moe"),
             qk_norm_for_text=qk_norm_for_text,
             qk_norm_for_diffusion=qk_norm_for_diffusion,
-            gen_noisy_gating=gen_noisy_gating,
             use_und_k_norm_for_gen=use_und_k_norm_for_gen,
+            gen_noisy_gating=gen_noisy_gating,
+            gen_cosine_router_config=gen_cosine_router_config,
+            gen_aux_loss_free_load_balancing_config=gen_aux_loss_free_load_balancing_config,
         )
 
     def init_taylorseer(self, cache_dic=None, current=None):
@@ -2138,8 +2168,10 @@ class Qwen3VLMoeTextForCausalLM(Qwen3VLMoePreTrainedModel):
             text_config,
             qk_norm_for_text=config.qk_norm_for_text,
             qk_norm_for_diffusion=config.qk_norm_for_diffusion,
-            gen_noisy_gating=config.gen_noisy_gating,
             use_und_k_norm_for_gen=getattr(config, "use_und_k_norm_for_gen", False),
+            gen_noisy_gating=config.gen_noisy_gating,
+            gen_cosine_router_config=getattr(config, "gen_cosine_router_config", None),
+            gen_aux_loss_free_load_balancing_config=config.gen_aux_loss_free_load_balancing_config,
         )
         self.vocab_size = text_config.vocab_size
         self.lm_head = nn.Linear(text_config.hidden_size, text_config.vocab_size, bias=False)
@@ -2170,6 +2202,14 @@ class Qwen3VLMoeTextForCausalLM(Qwen3VLMoePreTrainedModel):
             elif "gate_noise" in original_name:
                 # Noisy-gating projection is gen-tower only (the und tower has no
                 # gate_noise counterpart), so keep its zero-init rather than copy.
+                pass
+            elif "log_temperature" in original_name:
+                # Cosine-router temperature is gen-tower only (the und tower has
+                # no log_temperature counterpart), so keep its init value.
+                pass
+            elif "router_bias" in original_name:
+                # Learned cosine-router de-sink bias is gen-tower only (the und tower
+                # has no router_bias counterpart), so keep its zero-init.
                 pass
             else:
                 raise ValueError(f"Could not find {original_name} in state_dict for initialization of {name}")

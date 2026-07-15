@@ -18,8 +18,6 @@ from typing import Any
 import torch
 from loguru import logger as logging
 
-from cosmos_framework.model.tokenizer.utils.tensors import cat_with_bounded_inputs
-
 
 def compute_psnr(
     original: torch.Tensor,
@@ -127,42 +125,26 @@ def compute_codebook_usage(
     Returns:
         Dictionary with usage statistics.
     """
-    # Flatten indices
-    flat_indices = indices.flatten().long()
+    if num_codes <= 0:
+        raise ValueError(f"num_codes must be positive, got {num_codes}.")
 
-    # Handle empty indices
-    if flat_indices.numel() == 0:
-        return {
-            "perplexity": 0.0,
-            "active_codes": 0,
-            "active_ratio": 0.0,
-        }
-
-    # Gather indices across all GPUs for accurate codebook usage
+    flat_indices = indices.flatten().long()  # [N]
+    invalid_mask = (flat_indices < 0) | (flat_indices >= num_codes)  # [N]
+    safe_indices = flat_indices.masked_fill(invalid_mask, num_codes)  # [N]
+    histogram_with_invalid = torch.bincount(safe_indices, minlength=num_codes + 1)  # [K+1]
     if torch.distributed.is_initialized():
-        world_size = torch.distributed.get_world_size()
-        # Gather sizes first (indices may have different lengths per GPU)
-        local_size = torch.tensor([flat_indices.numel()], device=flat_indices.device)
-        sizes = [torch.zeros(1, dtype=torch.long, device=flat_indices.device) for _ in range(world_size)]
-        torch.distributed.all_gather(sizes, local_size)
-        max_size = max(s.item() for s in sizes)
+        # Reducing a fixed-size histogram avoids gathering every token index and
+        # keeps collective participation valid for empty or invalid local ranks.
+        torch.distributed.all_reduce(histogram_with_invalid, op=torch.distributed.ReduceOp.SUM)
 
-        # Pad indices to max_size for gathering
-        padded = torch.zeros(max_size, dtype=flat_indices.dtype, device=flat_indices.device)
-        padded[: flat_indices.numel()] = flat_indices
-        gathered = [
-            torch.zeros(max_size, dtype=flat_indices.dtype, device=flat_indices.device) for _ in range(world_size)
-        ]
-        torch.distributed.all_gather(gathered, padded)
+    invalid_count = int(histogram_with_invalid[-1].item())
+    if invalid_count > 0:
+        raise ValueError(
+            f"Code indices must be in [0, {num_codes}); found {invalid_count} out-of-range value(s) globally."
+        )
 
-        # Concatenate only valid indices from each GPU
-        all_indices = []
-        for i, g in enumerate(gathered):
-            all_indices.append(g[: sizes[i].item()])
-        flat_indices = cat_with_bounded_inputs(all_indices, dim=0)
-
-    # Compute code histogram
-    histogram = torch.bincount(flat_indices, minlength=num_codes).float()
+    histogram_counts = histogram_with_invalid[:-1]  # [K]
+    histogram = histogram_counts.to(dtype=torch.float32)  # [K]
     total = histogram.sum()
     if total == 0:
         return {
