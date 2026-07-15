@@ -617,11 +617,12 @@ class ActionTransformPipeline:
            sample is in inverse dynamics mode (if enabled).
         7. Tokenize caption text (if enabled).
         8. Build a ``SequencePlan`` from the ``"mode"`` key (if present).
-        9. If action is needed by the plan, normalize real channels, pad
-           ``"action"`` to ``max_action_dim``, and attach
+        9. If action is needed by the plan, preserve the canonical unnormalized
+           and unpadded action as ``"action_raw"``, normalize real channels,
+           pad ``"action"`` to ``max_action_dim``, and attach
            ``"action_processing_record"``.
-        10. Otherwise, nullify ``"action"`` and ``"domain_id"`` (e.g. in
-           ``"image2video"`` mode).
+        10. Otherwise, nullify ``"action_raw"``, ``"action"``, and
+            ``"domain_id"`` (e.g. in ``"image2video"`` mode).
 
         Args:
             data_dict: A sample dictionary as returned by a Action dataset.
@@ -709,6 +710,7 @@ class ActionTransformPipeline:
             # Nullify action-related fields when action is not needed so the
             # collate function can simply stack all non-None actions.
             data_dict["raw_action_dim"] = None
+            data_dict["action_raw"] = None
             data_dict["action"] = None
             data_dict["domain_id"] = None
             data_dict["action_processing_record"] = None
