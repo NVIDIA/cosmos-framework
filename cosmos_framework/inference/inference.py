@@ -23,6 +23,7 @@ from typing_extensions import Self
 
 from cosmos_framework.configs.base.defaults.compile import CompileConfig
 from cosmos_framework.configs.base.defaults.parallelism import ParallelismConfig
+from cosmos_framework.configs.base.defaults.quantization import QuantizationConfig
 from cosmos_framework.inference.args import (
     ModelMode,
     NegativeMetadataMode,
@@ -1055,6 +1056,14 @@ class OmniInference(Inference):
             compile_dynamic=setup_args.compile_dynamic,
         )
 
+    @classmethod
+    def _get_quantization_config(cls, setup_args: SetupArgs) -> QuantizationConfig:
+        return QuantizationConfig(
+            method=setup_args.quantization_method,
+            include_regex=list(setup_args.quantization_include_regex),
+            exclude_regex=list(setup_args.quantization_exclude_regex),
+        )
+
     @override
     @classmethod
     def _create(cls, setup_args: SetupArgs, **kwargs: Any) -> Self:
@@ -1064,6 +1073,7 @@ class OmniInference(Inference):
         sampler_override = setup_args.sampler
         parallelism_config = cls._get_parallelism_config(setup_args)
         compile_config = cls._get_compile_config(setup_args)
+        quantization_config = cls._get_quantization_config(setup_args)
         if setup_args.checkpoint_type == CheckpointType.DCP and setup_args.config_file_type == ConfigFileType.MODULE:
             from cosmos_framework.inference.common.config import save_config
             from cosmos_framework.utils.generator.model_loader import load_model_from_checkpoint
@@ -1081,6 +1091,7 @@ class OmniInference(Inference):
                 credential_path=setup_args.credential_path or None,
                 parallelism_config=attrs.asdict(parallelism_config),
                 compile_config=attrs.asdict(compile_config),
+                quantization_config=attrs.asdict(quantization_config),
                 load_ema_to_reg=setup_args.use_ema_weights,
                 experiment_opts=[
                     *setup_args.experiment_overrides,
@@ -1130,6 +1141,7 @@ class OmniInference(Inference):
                 config=config,
                 parallelism_config=parallelism_config,
                 compile_config=compile_config,
+                quantization_config=quantization_config,
             ).model
             if model.config.rectified_flow_inference_config.scheduler_type != sampler_override:
                 model.config.rectified_flow_inference_config.scheduler_type = sampler_override
