@@ -582,7 +582,7 @@ def get_video_augmentor_v3(
                 "use_dynamic_fps": use_dynamic_fps,
                 "max_stride": max_stride,
                 "min_stride": min_stride,
-                "seek_mode": "exact",  # Change to "approximate"?
+                "seek_mode": "exact",
                 "dataset_resolution_type": dataset_resolution_type,
                 "resolution": resolution,
                 "causal_vae": causal_vae,
