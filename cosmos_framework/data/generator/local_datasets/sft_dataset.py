@@ -34,6 +34,8 @@ from cosmos_framework.utils.flags import INTERNAL
 from cosmos_framework.utils.lazy_config import instantiate as lazy_instantiate
 
 _MAX_CAPTION_TOKENS = 1024
+_MAX_VIDEO_DURATION_S = 61.0
+_MIN_WINDOW_FRAMES = 61
 _DURATION_TEMPLATE = "The video is {duration:.1f} seconds long and is of {fps:.0f} FPS."
 _RESOLUTION_TEMPLATE = "This video is of {height}x{width} resolution."
 
@@ -478,19 +480,24 @@ def _flatten_metadata_by_window(metadata_list: list[dict]) -> list[dict]:
 def _load_sft_metadata_from_s3(
     s3_client,
     jsonl_url: str,
-    min_frames: int,
+    min_frames: int | None,
+    max_duration_s: float | None = _MAX_VIDEO_DURATION_S,
     uuid_prefix: str = "",
     min_short_edge: int = 0,
 ) -> list[dict]:
     """Load SFT metadata from a single JSONL file on S3.
 
     Returns one entry per video.  Each entry keeps only the windows whose frame
-    span is at least *min_frames*; videos with no qualifying windows are dropped.
+    span is at least *min_frames* when that filter is enabled; videos with no
+    qualifying windows are dropped.
 
     Args:
         s3_client: Boto3 S3 client
         jsonl_url: S3 URL to the JSONL metadata file
-        min_frames: Minimum number of frames required per window
+        min_frames: Minimum number of frames required per window.  None disables
+            the metadata window-length filter.
+        max_duration_s: Drop videos whose duration exceeds this value.  None
+            disables the metadata duration filter.
         uuid_prefix: Prefix prepended to each uuid for disambiguation when
             multiple JSONL files are loaded
         min_short_edge: Drop videos whose shortest spatial edge (min of width,
@@ -520,8 +527,8 @@ def _load_sft_metadata_from_s3(
             num_raw_records += 1
             record = json.loads(line.decode("utf-8"))
             uuid = f"{uuid_prefix}{record['uuid']}" if uuid_prefix else record["uuid"]
-            if record["duration"] > 61.0:
-                print(f"Skipping video with too long duration: {uuid}, {record['duration']} > 61.0")
+            if max_duration_s is not None and record["duration"] > max_duration_s:
+                print(f"Skipping video with too long duration: {uuid}, {record['duration']} > {max_duration_s}")
                 num_filtered_duration += 1
                 continue
             if min_short_edge > 0 and min(record["width"], record["height"]) < min_short_edge:
@@ -536,7 +543,7 @@ def _load_sft_metadata_from_s3(
             for window in windows:
                 num_raw_windows += 1
                 frames_in_window = window["end_frame"] - window["start_frame"] + 1
-                if frames_in_window < min_frames:
+                if min_frames is not None and frames_in_window < min_frames:
                     num_filtered_windows += 1
                 else:
                     kept_windows.append(window)
@@ -563,12 +570,14 @@ def _load_sft_metadata_from_s3(
                 }
             )
 
+    duration_filter = f"> {max_duration_s}s" if max_duration_s is not None else "disabled"
+    window_filter = f"< {min_frames}f" if min_frames is not None else "disabled"
     log.info(
         f"Finished decoding SFT metadata from {jsonl_url}. "
         f"Records: {num_raw_records}, "
-        f"Duration > 61s: {num_filtered_duration}, "
+        f"Duration filter {duration_filter}: {num_filtered_duration}, "
         f"Short edge < {min_short_edge}: {num_filtered_short_edge}, "
-        f"Windows: {num_raw_windows}, Windows < {min_frames}f: {num_filtered_windows}, "
+        f"Windows: {num_raw_windows}, Window filter {window_filter}: {num_filtered_windows}, "
         f"Videos kept: {len(metadata_list)}"
     )
     return metadata_list
@@ -589,6 +598,8 @@ def get_sft_dataset(
     cfg_dropout_keep_metadata: bool = False,
     sample_by_window: bool = False,
     min_short_edge: int = 0,
+    min_window_frames: int | None = _MIN_WINDOW_FRAMES,
+    max_duration_s: float | None = _MAX_VIDEO_DURATION_S,
     caption_suffix: str = "",
     conditioning_fps: float = 24,
     conditioning_fps_noise_std: float = 0.0,
@@ -629,6 +640,12 @@ def get_sft_dataset(
             window is chosen on every access.
         min_short_edge: Drop videos whose shortest spatial edge (min of width,
             height) is below this value.  0 (default) disables the filter.
+        min_window_frames: Metadata pre-filter for t2w_window length.  Default
+            61 matches the historical loader behavior.  Set to None for
+            short-task datasets whose valid samples may be shorter.
+        max_duration_s: Metadata pre-filter for video duration.  Default 61.0
+            matches the historical loader behavior.  Set to None for short-task
+            datasets.
         caption_suffix: Text appended to every caption before the
             duration/FPS/resolution templates, e.g.
             ``"Overall, the video is of poor quality."``.  Empty string
@@ -671,7 +688,8 @@ def get_sft_dataset(
             _load_sft_metadata_from_s3(
                 s3_client,
                 jsonl_url,
-                min_frames=61,
+                min_frames=min_window_frames,
+                max_duration_s=max_duration_s,
                 uuid_prefix=prefix,
                 min_short_edge=min_short_edge,
             )
