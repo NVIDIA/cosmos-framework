@@ -951,6 +951,11 @@ class TextDecoderWrapper(nn.Module):
         """Project decoder hidden states to token logits."""
         return self.text_decoder.lm_head(hidden_states)
 
+    @property
+    def output_projection(self) -> nn.Module:
+        """Return the LM head used by the chunked training loss."""
+        return self.text_decoder.lm_head
+
     def _sample_next_token(
         self,
         logits: torch.Tensor,
@@ -1093,6 +1098,7 @@ class TextDecoderWrapper(nn.Module):
         image_patch_indices: torch.Tensor,
         image_layout: list[slice] | None = None,
         segment_ids: torch.Tensor | None = None,
+        return_hidden_states: bool = False,
     ) -> tuple[torch.Tensor, int]:
         """Forward pass: inject image features into text and run causal LM.
 
@@ -1112,9 +1118,13 @@ class TextDecoderWrapper(nn.Module):
             segment_ids: [B, S] segment IDs for packed sequences. Values >= 0 indicate
                 valid segments, -1 indicates padding. When provided, enables
                 segment-isolated attention and per-segment position IDs.
+            return_hidden_states: Return decoder hidden states instead of projecting
+                the complete sequence to vocabulary logits. This is used by the
+                chunked training loss to bound LM-head memory.
 
         Returns:
-            Dense [B, S, vocab_size] logits.
+            Dense [B, S, vocab_size] logits, or [B, S, hidden_size] hidden
+            states when ``return_hidden_states=True``.
             num_pooled_tokens: Number of image tokens after spatial merging.
         """
         image_features = image_feats_tensor
@@ -1175,23 +1185,39 @@ class TextDecoderWrapper(nn.Module):
 
         # Segment-aware forward pass for packed sequences
         if segment_ids is not None:
-            lm_logits = self._forward_packed(
-                text_embeds,
-                input_ids,
-                segment_ids,
-            )
+            if return_hidden_states:
+                decoder_output = self._forward_packed(  # [B,S,D]
+                    text_embeds,
+                    input_ids,
+                    segment_ids,
+                    return_hidden_states=True,
+                )
+            else:
+                decoder_output = self._forward_packed(  # [B,S,Vocab]
+                    text_embeds,
+                    input_ids,
+                    segment_ids,
+                )
         else:
-            lm_logits = self._forward_standard(
-                text_embeds,
-                input_ids=input_ids,
-            )
+            if return_hidden_states:
+                decoder_output = self._forward_standard(  # [B,S,D]
+                    text_embeds,
+                    input_ids=input_ids,
+                    return_hidden_states=True,
+                )
+            else:
+                decoder_output = self._forward_standard(  # [B,S,Vocab]
+                    text_embeds,
+                    input_ids=input_ids,
+                )
 
-        return lm_logits, num_pooled_tokens
+        return decoder_output, num_pooled_tokens
 
     def _forward_standard(
         self,
         text_embeds: torch.Tensor,
         input_ids: torch.Tensor | None = None,
+        return_hidden_states: bool = False,
     ) -> torch.Tensor:
         """Standard forward pass without segment isolation."""
         effective_text_embeds = text_embeds
@@ -1223,19 +1249,27 @@ class TextDecoderWrapper(nn.Module):
             cache_position=cache_position,
             use_cache=False,
         )
-        lm_logits = self._lm_head(outputs.last_hidden_state)
+        decoder_hidden_states = outputs.last_hidden_state  # [B,T,D]
+        decoder_output = (
+            decoder_hidden_states if return_hidden_states else self._lm_head(decoder_hidden_states)
+        )  # [B,T,D|Vocab]
         if effective_seq_len == original_seq_len:
-            return lm_logits
+            return decoder_output
 
         pad_len = original_seq_len - effective_seq_len
-        padded_logits = lm_logits.new_zeros(lm_logits.shape[0], pad_len, lm_logits.shape[-1])
-        return torch.cat([lm_logits, padded_logits], dim=1)
+        padded_output = decoder_output.new_zeros(  # [B,S-T,D|Vocab]
+            decoder_output.shape[0],
+            pad_len,
+            decoder_output.shape[-1],
+        )
+        return torch.cat([decoder_output, padded_output], dim=1)  # [B,S,D|Vocab]
 
     def _forward_packed(
         self,
         text_embeds: torch.Tensor,
         input_ids: torch.Tensor,
         segment_ids: torch.Tensor,
+        return_hidden_states: bool = False,
     ) -> torch.Tensor:
         """Segment-isolated forward pass for packed sequences.
 
@@ -1249,14 +1283,15 @@ class TextDecoderWrapper(nn.Module):
             segment_ids: [B, S] segment IDs (>=0 for valid, -1 for padding).
 
         Returns:
-            Dense [B, S, vocab_size] logits.
+            Dense [B, S, vocab_size] logits, or [B, S, hidden_size] hidden
+            states when ``return_hidden_states=True``.
         """
         B, S, d = text_embeds.shape
         device = text_embeds.device
         dtype = text_embeds.dtype
 
         # Process each batch element (typically B=1 for packed sequences)
-        all_logits: list[torch.Tensor] = []
+        all_outputs: list[torch.Tensor] = []
         for b in range(B):
             seg_ids = segment_ids[b]  # [S]
             embeds = text_embeds[b]  # [S, d]
@@ -1265,8 +1300,8 @@ class TextDecoderWrapper(nn.Module):
             valid_indices = (seg_ids >= 0).nonzero(as_tuple=True)[0]
             if valid_indices.numel() == 0:
                 # All padding — return zeros
-                V = self.lm_config.vocab_size
-                all_logits.append(torch.zeros(S, V, device=device, dtype=dtype))
+                output_size = self.lm_config.hidden_size if return_hidden_states else self.lm_config.vocab_size
+                all_outputs.append(torch.zeros(S, output_size, device=device, dtype=dtype))  # [S,D|Vocab]
                 continue
 
             valid_seg_ids = seg_ids.index_select(0, valid_indices)
@@ -1303,10 +1338,13 @@ class TextDecoderWrapper(nn.Module):
                     packed_cumulative_seqlen=cumulative_seqlen,
                     packed_max_seqlen=max_seqlen,
                 )
-                valid_logits = self._lm_head(outputs.last_hidden_state)  # [1,V,Vocab]
-                packed_logits = valid_logits.new_zeros((S, valid_logits.shape[-1]))  # [S,Vocab]
-                packed_logits[valid_indices] = valid_logits[0]  # [V,Vocab]
-                all_logits.append(packed_logits)
+                valid_hidden_states = outputs.last_hidden_state  # [1,V,D]
+                valid_output = (
+                    valid_hidden_states if return_hidden_states else self._lm_head(valid_hidden_states)
+                )  # [1,V,D|Vocab]
+                packed_output = valid_output.new_zeros((S, valid_output.shape[-1]))  # [S,D|Vocab]
+                packed_output[valid_indices] = valid_output[0]  # [V,D|Vocab]
+                all_outputs.append(packed_output)
                 continue
 
             segment_rows = torch.repeat_interleave(
@@ -1327,17 +1365,19 @@ class TextDecoderWrapper(nn.Module):
                 cache_position=position_template,
                 use_cache=False,
             )
-            seg_logits = self._lm_head(outputs.last_hidden_state)  # [R,T,Vocab]
-            packed_logits = seg_logits.new_zeros((S, seg_logits.shape[-1]))  # [S,Vocab]
-            packed_logits[valid_indices] = seg_logits[segment_rows, segment_positions]  # [V,Vocab]
-            all_logits.append(packed_logits)
+            segment_hidden_states = outputs.last_hidden_state  # [R,T,D]
+            segment_output = (
+                segment_hidden_states if return_hidden_states else self._lm_head(segment_hidden_states)
+            )  # [R,T,D|Vocab]
+            packed_output = segment_output.new_zeros((S, segment_output.shape[-1]))  # [S,D|Vocab]
+            packed_output[valid_indices] = segment_output[segment_rows, segment_positions]  # [V,D|Vocab]
+            all_outputs.append(packed_output)
 
-        # Guard: empty batch (all samples skipped by collate) -> empty logits tensor.
-        if len(all_logits) == 0:
-            V = self.lm_config.vocab_size
-            return torch.zeros(0, S, V, device=device, dtype=dtype)
-        # Stack batch: [B, S, vocab_size]
-        return stack_with_bounded_inputs(all_logits, dim=0)  # [B,S,Vocab]
+        # Guard: empty batch (all samples skipped by collate) -> empty output tensor.
+        if len(all_outputs) == 0:
+            output_size = self.lm_config.hidden_size if return_hidden_states else self.lm_config.vocab_size
+            return torch.zeros(0, S, output_size, device=device, dtype=dtype)  # [0,S,D|Vocab]
+        return stack_with_bounded_inputs(all_outputs, dim=0)  # [B,S,D|Vocab]
 
     def _decode_generation_result(
         self,

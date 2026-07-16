@@ -196,7 +196,7 @@ def make_batched_action_processing_fields(
 
 
 class ActionProcessor:
-    """Forward and inverse Action tensor processing for a single sample."""
+    """Build model-space actions and decode model outputs for a single sample."""
 
     def __init__(self, max_action_dim: int, action_channel_masking: bool = True) -> None:
         self.max_action_dim = int(max_action_dim)
@@ -209,9 +209,17 @@ class ActionProcessor:
         *,
         action_normalizer: ActionNormalizer | None,
     ) -> dict[str, Any]:
-        """Return a sample with normalized, padded action fields and the inverse record."""
+        """Return a sample with canonical raw and model-space action fields.
+
+        ``action_raw`` is the exact unnormalized, unpadded action accepted by
+        this method. It is the canonical external-space target for evaluation.
+        ``action`` is the normalized and padded model-space representation.
+        """
 
         raw_action_dim = int(action.shape[-1])
+        if "action_raw" in data_dict:
+            raise ValueError("action_raw is reserved for the canonical ActionProcessor input")
+        action_raw = action.clone()  # [T,D]
         if action_normalizer is not None:
             action = action_normalizer.normalize_action(action)  # [T,D]
             if int(action.shape[-1]) != raw_action_dim:
@@ -220,6 +228,7 @@ class ActionProcessor:
                 )
 
         processed_data_dict = dict(data_dict)
+        processed_data_dict["action_raw"] = action_raw
         processed_data_dict["action"] = pad_action_to_max_dim(action, self.max_action_dim)  # [T,D_model]
         record = ActionProcessingRecord(
             raw_action_dim=raw_action_dim,
@@ -243,7 +252,7 @@ class ActionProcessor:
         action: torch.Tensor,
         record: ActionProcessingRecord,
     ) -> torch.Tensor:
-        """Unpad and denormalize a model-space action tensor."""
+        """Unpad and denormalize a generated model-space action tensor."""
         action = ActionProcessor._unpad_action(action, record.raw_action_dim)  # [...,D_raw]
         if record.action_normalizer is not None:
             action = record.action_normalizer.denormalize_action(action)  # [...,D_raw]

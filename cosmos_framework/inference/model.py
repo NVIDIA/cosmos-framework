@@ -34,6 +34,7 @@ from typing_extensions import TYPE_CHECKING, assert_never
 
 from cosmos_framework.configs.base.defaults.compile import CompileConfig
 from cosmos_framework.configs.base.defaults.parallelism import ParallelismConfig
+from cosmos_framework.configs.base.defaults.quantization import QuantizationConfig
 from cosmos_framework.inference.common.args import CheckpointType
 from cosmos_framework.inference.common.checkpoints import register_checkpoints
 from cosmos_framework.inference.common.config import structure_config, undo_config_dict_replacements, unstructure_config
@@ -416,6 +417,16 @@ class Cosmos3OmniConfig(transformers.PretrainedConfig):
             return
         self.model.setdefault("config", {})["compile"] = unstructure_config(CompileConfig(**value))
 
+    @property
+    def quantization(self) -> dict:
+        return self.model.get("config", {}).get("quantization", {})
+
+    @quantization.setter
+    def quantization(self, value: dict | None):
+        if value is None:
+            return
+        self.model.setdefault("config", {})["quantization"] = unstructure_config(QuantizationConfig(**value))
+
 
 class Cosmos3OmniModel(transformers.PreTrainedModel):
     config_class = Cosmos3OmniConfig  # type: ignore
@@ -448,6 +459,7 @@ class Cosmos3OmniModel(transformers.PreTrainedModel):
         config: Cosmos3OmniConfig | None = None,
         parallelism_config: ParallelismConfig | None = None,
         compile_config: CompileConfig | None = None,
+        quantization_config: QuantizationConfig | None = None,
     ):
         if config is None:
             config = Cosmos3OmniConfig.from_pretrained(checkpoint_path)
@@ -455,8 +467,11 @@ class Cosmos3OmniModel(transformers.PreTrainedModel):
             parallelism_config = ParallelismConfig()
         if compile_config is None:
             compile_config = CompileConfig()
+        if quantization_config is None:
+            quantization_config = QuantizationConfig()
         config.parallelism = attrs.asdict(parallelism_config)
         config.compile = attrs.asdict(compile_config)
+        config.quantization = attrs.asdict(quantization_config)
         model = cls(config)
         checkpoint_type = CheckpointType.from_path(checkpoint_path)
         match checkpoint_type:

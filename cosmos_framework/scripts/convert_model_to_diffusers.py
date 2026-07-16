@@ -11,11 +11,12 @@ init_script(
     }
 )
 
+import copy
 import json
 import shutil
 import struct
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, Any
 
 import pydantic
 import tyro
@@ -28,6 +29,7 @@ from cosmos_framework.inference.common.public_model_config import (
     build_public_model_config,
     load_model_config_from_hf_config,
 )
+from cosmos_framework.utils import log
 from cosmos_framework.utils.checkpoint_db import CheckpointConfig, CheckpointDirHf
 
 
@@ -39,6 +41,9 @@ class Args(pydantic.BaseModel):
 
     config_only: bool = False
     """If True, only save config."""
+
+    skip_vision_encoder: bool = False
+    """Do not save the vision encoder sidecar in the Diffusers checkpoint."""
 
 
 class SafetensorsIndexMetadata(pydantic.BaseModel):
@@ -67,7 +72,26 @@ class SafetensorsIndex(pydantic.BaseModel):
             self.update(safetensors_path, f"{rel_path}/{safetensors_path.name}")
 
 
-def convert_model_to_diffusers(args: Args):
+def _build_public_export_model_config(model_dict: dict[str, Any]) -> dict[str, Any]:
+    """Remove unsupported internal-only settings before building the public config."""
+    public_model_dict = copy.deepcopy(model_dict)
+    quantization = public_model_dict.get("config", {}).pop("quantization", None)
+    if quantization is not None:
+        quantization_values = {key: value for key, value in quantization.items() if key not in {"_type", "_target_"}}
+        disabled_quantization = {
+            "exclude_regex": [],
+            "include_regex": [],
+            "method": None,
+        }
+        if quantization_values != disabled_quantization:
+            raise ValueError(
+                "Cannot export an enabled or non-default internal quantization config to the public Cosmos3 schema: "
+                f"{quantization_values}"
+            )
+    return build_public_model_config(public_model_dict)
+
+
+def convert_model_to_diffusers(args: Args) -> None:
     args.output_path.mkdir(parents=True, exist_ok=True)
 
     register_checkpoints()
@@ -75,26 +99,45 @@ def convert_model_to_diffusers(args: Args):
     checkpoint_path = checkpoint_config.download_checkpoint()
     model_dict = load_model_config_from_hf_config(deserialize_config_dict(checkpoint_path / "config.json"))
 
-    assert model_dict["config"]["action_gen"]
-    assert model_dict["config"]["sound_gen"]
+    supports_action = model_dict["config"]["action_gen"]
+    supports_sound = model_dict["config"]["sound_gen"]
+    if not supports_action:
+        log.warning(
+            "The checkpoint does not support action generation. For some checkpoints, like "
+            "'Cosmos3-Super-Image2Video' it's fine, but make sure it's expected."
+        )
+    if not supports_sound:
+        log.warning(
+            "The checkpoint does not support sound generation. For some checkpoints, like "
+            "'Cosmos3-Nano-Policy-DROID' it's fine, but make sure it's expected."
+        )
 
-    sound_tokenizer_dir, sound_tokenizer_name = model_dict["config"]["sound_tokenizer"]["avae_path"].rsplit("/", 1)
-    sound_tokenizer_checkpoint = CheckpointConfig.maybe_from_uri(f"s3://bucket/{sound_tokenizer_dir}")
-    assert sound_tokenizer_checkpoint is not None
-    sound_tokenizer_local = Path(sound_tokenizer_checkpoint.hf.download())
-    # HF-published checkpoints ship sound_tokenizer/ in the diffusers layout
-    # (config.json + diffusion_pytorch_model.safetensors), which the converter
-    # consumes directly; fall back to the legacy AVAE file pair named by the
-    # model config's avae_path.
-    sound_tokenizer_path = sound_tokenizer_local / "diffusion_pytorch_model.safetensors"
-    sound_tokenizer_config_path = sound_tokenizer_local / "config.json"
-    if not sound_tokenizer_path.is_file():
-        sound_tokenizer_path = sound_tokenizer_local / sound_tokenizer_name
-        sound_tokenizer_config_path = sound_tokenizer_path.with_suffix(".json")
-    assert sound_tokenizer_path.is_file(), f"Sound tokenizer checkpoint not found: {sound_tokenizer_path}"
-    assert sound_tokenizer_config_path.is_file(), f"Sound tokenizer config not found: {sound_tokenizer_config_path}"
+    sound_tokenizer_path: Path | None = None
+    sound_tokenizer_config_path: Path | None = None
+    if supports_sound and not args.config_only:
+        sound_tokenizer_dir, sound_tokenizer_name = model_dict["config"]["sound_tokenizer"]["avae_path"].rsplit("/", 1)
+        sound_tokenizer_checkpoint = CheckpointConfig.maybe_from_uri(f"s3://bucket/{sound_tokenizer_dir}")
+        assert sound_tokenizer_checkpoint is not None
+        sound_tokenizer_local = Path(sound_tokenizer_checkpoint.hf.download())
+        # HF-published checkpoints ship sound_tokenizer/ in the diffusers layout
+        # (config.json + diffusion_pytorch_model.safetensors), which the converter
+        # consumes directly; fall back to the legacy AVAE file pair named by the
+        # model config's avae_path.
+        sound_tokenizer_path = sound_tokenizer_local / "diffusion_pytorch_model.safetensors"
+        sound_tokenizer_config_path = sound_tokenizer_local / "config.json"
+        if not sound_tokenizer_path.is_file():
+            sound_tokenizer_path = sound_tokenizer_local / sound_tokenizer_name
+            sound_tokenizer_config_path = sound_tokenizer_path.with_suffix(".json")
+        assert sound_tokenizer_path.is_file(), f"Sound tokenizer checkpoint not found: {sound_tokenizer_path}"
+        assert sound_tokenizer_config_path.is_file(), f"Sound tokenizer config not found: {sound_tokenizer_config_path}"
 
-    vision_encoder_model = model_dict["config"]["vlm_config"]["tokenizer"]["pretrained_model_name"]
+    vlm_config = model_dict["config"]["vlm_config"]
+    tokenizer_config = vlm_config["tokenizer"]
+    vision_encoder_model = (
+        tokenizer_config.get("pretrained_model_name")
+        or tokenizer_config.get("tokenizer_type")
+        or vlm_config["model_name"]
+    )
 
     if not args.config_only:
         from cosmos_framework.scripts._convert_model_to_diffusers import (
@@ -109,11 +152,11 @@ def convert_model_to_diffusers(args: Args):
             output=str(args.output_path),
             save_pipeline=True,
             dtype="bf16",
-            sound_tokenizer_path=str(sound_tokenizer_path),
-            sound_tokenizer_config_path=str(sound_tokenizer_config_path),
-            include_sound_tokenizer=True,
+            sound_tokenizer_path=str(sound_tokenizer_path) if sound_tokenizer_path else None,
+            sound_tokenizer_config_path=str(sound_tokenizer_config_path) if sound_tokenizer_config_path else None,
+            include_sound_tokenizer=supports_sound,
             vision_encoder_model=vision_encoder_model,
-            skip_vision_encoder=False,
+            skip_vision_encoder=args.skip_vision_encoder,
         )
         _convert_model_to_diffusers(_args)
 
@@ -127,26 +170,34 @@ def convert_model_to_diffusers(args: Args):
     vlm_checkpoint_path = vlm_checkpoint.download()
     for pattern in vlm_checkpoint.include:
         for p in Path(vlm_checkpoint_path).glob(pattern):
+            if p.name == "model.safetensors.index.json":
+                continue
             shutil.copy(p, args.output_path / p.name)
 
     # Add top-level config
     config_dict = deserialize_config_dict(args.output_path / "config.json")
     config_dict["architectures"] = ["Cosmos3ForConditionalGeneration"]
+    config_dict["model_type"] = "cosmos3_omni"
     # vLLM's `_prepare_weights` breaks after the first pattern with any match, so
     # collapse to a single glob spanning both component subdirs. The unified
     # `model.safetensors.index.json` written below dedupes the consolidated shard.
     config_dict["allow_patterns_overrides"] = ["*/*.safetensors"]
-    config_dict["model"] = build_public_model_config(model_dict)
+    config_dict["model"] = _build_public_export_model_config(model_dict)
     serialize_config_dict(config_dict, args.output_path / "config.json")
 
-    # Add top-level index
-    index = SafetensorsIndex()
-    index.update_dir(args.output_path / "transformer", "transformer")
-    vision_encoder_rel = "vision_encoder/model.safetensors"
-    index.update(args.output_path / vision_encoder_rel, vision_encoder_rel)
-    (args.output_path / "model.safetensors.index.json").write_text(index.model_dump_json(indent=2))
+    if not args.config_only:
+        # Add top-level index
+        index = SafetensorsIndex()
+        index.update_dir(args.output_path / "transformer", "transformer")
+        vision_encoder_rel = "vision_encoder/model.safetensors"
+        if (args.output_path / vision_encoder_rel).is_file():
+            index.update(args.output_path / vision_encoder_rel, vision_encoder_rel)
+        (args.output_path / "model.safetensors.index.json").write_text(index.model_dump_json(indent=2))
 
-    shutil.copy(checkpoint_path / "checkpoint.json", args.output_path / "checkpoint.json")
+    checkpoint_metadata_path = checkpoint_path / "checkpoint.json"
+    if not checkpoint_metadata_path.is_file():
+        checkpoint_metadata_path = checkpoint_path.parent / "checkpoint.json"
+    shutil.copy(checkpoint_metadata_path, args.output_path / "checkpoint.json")
 
     print(f"Saved diffusers checkpoint to {args.output_path}")
 

@@ -1555,6 +1555,7 @@ class AutoencoderKL(ModelMixin, ConfigMixin, FromOriginalModelMixin):
         image_feats: "SparseTensor",
         image_patch_indices: torch.Tensor,
         segment_ids: torch.Tensor | None = None,
+        return_hidden_states: bool = False,
     ) -> tuple[Any, int]:
         """Decode text from image features using the configured text decoder.
 
@@ -1566,9 +1567,11 @@ class AutoencoderKL(ModelMixin, ConfigMixin, FromOriginalModelMixin):
             image_patch_indices: [N_pooled] flat indices into [B*S].
             segment_ids: [B, S] segment IDs for packed sequences. Enables
                 segment-isolated attention with per-segment position reset.
+            return_hidden_states: Return decoder hidden states instead of full
+                vocabulary logits for chunked training loss projection.
 
         Returns:
-            Tuple of (lm_logits [B, S, vocab_size], num_pooled_tokens int).
+            Tuple of decoder output [B,S,Vocab] or [B,S,D] and pooled-token count.
         """
         if self.text_decoder_wrapper is None:
             raise RuntimeError("Text decoder not initialized. Set use_text_decoder=True and text_decoder_model_name.")
@@ -1579,6 +1582,7 @@ class AutoencoderKL(ModelMixin, ConfigMixin, FromOriginalModelMixin):
             image_patch_indices=image_patch_indices,
             image_layout=image_feats.layout if hasattr(image_feats, "layout") else None,
             segment_ids=segment_ids,
+            return_hidden_states=return_hidden_states,
         )
 
     def encode_text(self, text: torch.Tensor, normalize: bool = False) -> torch.Tensor:

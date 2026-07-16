@@ -169,6 +169,7 @@ def test_action_transform_pipeline_json_prompt_toggle() -> None:
     assert prompt["resolution"] == {"H": 192, "W": 320}
     assert prompt["aspect_ratio"] == "16,9"
     assert result["action"].shape == (16, 4)
+    torch.testing.assert_close(result["action_raw"], action)
 
 
 @pytest.mark.L0
