@@ -24,18 +24,15 @@ name         = "videophy2_sft_edge"
 wandb_mode   = "disabled"
 
 [model]
-# Edge delta vs nano: the "cosmos" attention adapter is Qwen3-VL-specific (it
-# requires attention_mask=None + is_causal=True). The nemotron_siglip2 modeling
-# passes an explicit packed mask, which the cosmos adapter rejects
-# (NotImplementedError). Use "sdpa" — portable (no flash-attn wheel needed on
-# aarch64/Blackwell) and it accepts the packed 4-D mask.
-attn_implementation = "sdpa"
+# Edge delta vs nano: the "cosmos" adapter is Qwen3-VL-only and rejects the
+# nemotron_siglip2 mask. flash_attention_2 is ~14% faster than sdpa with matching
+# loss curves; set "sdpa" where flash-attn is not installed (portable fallback).
+attn_implementation = "flash_attention_2"
 precision           = "bfloat16"                         # was [model.parallelism].precision
 
-# Public omni release; supplies the reasoner arch/config/tokenizer. Canonical
-# reasoner weights come from a converted snapshot via VLM_SAFETENSORS_PATH
-# (required — see cosmos_framework.scripts.convert_edge_reasoner_to_vlm_safetensors),
-# because Cosmos3-Edge's own weights are in Diffusers-shard layout.
+# Supplies arch/config/tokenizer only — Cosmos3-Edge's own weights ship in
+# Diffusers-shard layout, so reasoner weights must come from a converted snapshot
+# via VLM_SAFETENSORS_PATH (see convert_edge_reasoner_to_vlm_safetensors).
 [model.backbone]
 model_name = "nvidia/Cosmos3-Edge"
 
@@ -95,8 +92,7 @@ load_path            = "???"
 save_iter            = 100
 
 [dataloader_train]
-# Routed by PATH_REMAPS["vlm"] onto the CosmosDataLoader's nested PoolPackingBatcher:
-#   max_samples_per_batch -> dataloader_train.batcher.max_batch_size
-#   max_sequence_length   -> dataloader_train.batcher.max_tokens
+# PATH_REMAPS["vlm"] routes these onto the CosmosDataLoader batcher
+# (max_batch_size / max_tokens).
 max_samples_per_batch = 1
 max_sequence_length   = 16000

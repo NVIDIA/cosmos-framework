@@ -28,6 +28,10 @@
 #                          the converter + tokenizer/arch discovery.
 #   NPROC_PER_NODE         torchrun GPUs per node; default 8. Set 4 on a GB200x4
 #                          node — Edge is only 2B and fits a 4-GPU allocation.
+#   EXTRA_TAIL_OVERRIDES   extra Hydra-style overrides. On nodes without a
+#                          flash-attn wheel (e.g. aarch64/GB200) fall back to
+#                          the portable attention impl:
+#                          EXTRA_TAIL_OVERRIDES='model.config.policy.attn_implementation=sdpa'
 #
 # Usage (8-GPU allocation, inside the training container, from the repo root):
 #   VIDEOPHYSICS_ROOT=/path/to/videophysics bash examples/launch_sft_videophy2_edge.sh

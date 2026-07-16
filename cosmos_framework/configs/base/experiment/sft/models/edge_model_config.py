@@ -5,7 +5,9 @@
 
 Consumers must ``copy.deepcopy`` this constant before mutating it. Baseline
 mirrors ``vision_sft_edge`` (HF-cluster deployment with empty tokenizer/vlm
-paths, video-style loss scales, ``load_weights_from_pretrained=True``).
+paths, video-style loss scales, ``load_weights_from_pretrained=True``), except
+``action_gen``: the baseline keeps the Cosmos3-Edge.yaml value (``True``) and
+``vision_sft_edge`` overrides it to ``False`` (no action tokens in vision SFT).
 
 Derived from ``nano_model_config.NANO_MODEL_CONFIG``; every field is identical to
 the Nano baseline except the Cosmos3-Edge deltas sourced verbatim from
@@ -30,6 +32,12 @@ from cosmos_framework.model.generator.mot.unified_mot import (
 from cosmos_framework.utils.lazy_config import LazyCall as L
 
 EDGE_MODEL_CONFIG = dict(
+    # Mirrors Cosmos3-Edge.yaml (action_gen: true), same as the nano baseline. WARNING:
+    # the Cosmos3-Edge checkpoint ships no action weights (action2llm/llm2action/
+    # action_modality_embed), so a recipe that keeps action_gen=True builds a frozen
+    # action head that the DCP converter leaves as uninitialized garbage — the
+    # graph-consistency dummy forward then yields 0.0 * NaN = NaN loss from iter 1.
+    # Recipes that don't train action data must override to False (vision_sft_edge does).
     action_gen=True,
     causal_training_strategy="none",
     input_caption_key="ai_caption",
