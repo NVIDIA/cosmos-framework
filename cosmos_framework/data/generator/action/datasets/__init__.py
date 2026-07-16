@@ -8,7 +8,9 @@ All concrete datasets inherit from :class:`ActionBaseDataset` and expose a
 statistics without instantiating the dataset.
 """
 
-from cosmos_framework.data.generator.action.datasets.agibotworld_beta_lerobot_dataset import AgiBotWorldBetaLeRobotDataset
+from cosmos_framework.data.generator.action.datasets.agibotworld_beta_lerobot_dataset import (
+    AgiBotWorldBetaLeRobotDataset,
+)
 from cosmos_framework.data.generator.action.datasets.base_dataset import ActionBaseDataset
 from cosmos_framework.data.generator.action.datasets.bridge_orig_lerobot_dataset import BridgeOrigLeRobotDataset
 from cosmos_framework.data.generator.action.datasets.droid_lerobot_dataset import DROIDLeRobotDataset
