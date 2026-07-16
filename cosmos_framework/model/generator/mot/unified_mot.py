@@ -2445,8 +2445,10 @@ class Nemotron3DenseVLTextForCausalLM(Nemotron3DenseVLPreTrainedModel):
             NemotronSiglip2VisionEncoder,
         )
 
-        ve_cfg = json.load(open(hf_hub_download(hf_repo, "vision_encoder/config.json")))
-        top_cfg = json.load(open(hf_hub_download(hf_repo, "config.json")))
+        with open(hf_hub_download(hf_repo, "vision_encoder/config.json")) as f:
+            ve_cfg = json.load(f)
+        with open(hf_hub_download(hf_repo, "config.json")) as f:
+            top_cfg = json.load(f)
         vdict = dict(ve_cfg["vision_config"])
         for k in ("model_type", "transformers_version", "spatial_merge_size"):
             vdict.pop(k, None)
