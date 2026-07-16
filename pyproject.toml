@@ -274,7 +274,6 @@ repository = "https://github.com/NVIDIA/cosmos-framework"
 required-version = ">=0.11.3"
 conflicts = [
   [
-    {group = "vllm"},
     {group = "cu128"},
     {group = "cu128-train"},
     {group = "cu130"},
