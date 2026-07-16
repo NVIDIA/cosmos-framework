@@ -314,67 +314,6 @@ class Siglip2VisionTransformer(PreTrainedModel):
         assert offset == resized_positional_embeddings.shape[0]
         return resized_positional_embeddings
 
-    def get_position_embedding_fast_interpolation(self, grid_thw):
-        print("wrong fast interpolation")
-        grid_ts, grid_hs, grid_ws = grid_thw[:, 0], grid_thw[:, 1], grid_thw[:, 2]
-        device = grid_thw.device
-
-        idx_list = [[] for _ in range(4)]
-        weight_list = [[] for _ in range(4)]
-
-        for t, h, w in zip(grid_ts, grid_hs, grid_ws):
-            h_idxs = torch.linspace(0, self.num_grid_per_side - 1, h)
-            w_idxs = torch.linspace(0, self.num_grid_per_side - 1, w)
-
-            h_idxs_floor = h_idxs.int()
-            w_idxs_floor = w_idxs.int()
-            h_idxs_ceil = (h_idxs.int() + 1).clip(max=self.num_grid_per_side - 1)
-            w_idxs_ceil = (w_idxs.int() + 1).clip(max=self.num_grid_per_side - 1)
-
-            dh = h_idxs - h_idxs_floor
-            dw = w_idxs - w_idxs_floor
-
-            base_h = h_idxs_floor * self.num_grid_per_side
-            base_h_ceil = h_idxs_ceil * self.num_grid_per_side
-
-            indices = [
-                (base_h[None].T + w_idxs_floor[None]).flatten(),
-                (base_h[None].T + w_idxs_ceil[None]).flatten(),
-                (base_h_ceil[None].T + w_idxs_floor[None]).flatten(),
-                (base_h_ceil[None].T + w_idxs_ceil[None]).flatten(),
-            ]
-
-            weights = [
-                ((1 - dh)[None].T * (1 - dw)[None]).flatten(),
-                ((1 - dh)[None].T * dw[None]).flatten(),
-                (dh[None].T * (1 - dw)[None]).flatten(),
-                (dh[None].T * dw[None]).flatten(),
-            ]
-
-            for i in range(4):
-                idx_list[i].extend(indices[i].tolist())
-                weight_list[i].extend(weights[i].tolist())
-
-        idx_tensor = torch.tensor(idx_list, dtype=torch.long, device=device)
-        weight_tensor = torch.tensor(weight_list, dtype=self.embeddings.position_embedding.weight.dtype, device=device)
-        pos_embeds = self.embeddings.position_embedding(idx_tensor).to(device) * weight_tensor[:, :, None]
-        patch_pos_embeds = pos_embeds[0] + pos_embeds[1] + pos_embeds[2] + pos_embeds[3]
-
-        patch_pos_embeds = patch_pos_embeds.split([h * w for h, w in zip(grid_hs, grid_ws)])
-
-        patch_pos_embeds_permute = []
-        merge_size = self.config.spatial_merge_size
-        for pos_embed, t, h, w in zip(patch_pos_embeds, grid_ts, grid_hs, grid_ws):
-            pos_embed = pos_embed.repeat(t, 1)
-            pos_embed = (
-                pos_embed.view(t, h // merge_size, merge_size, w // merge_size, merge_size, -1)
-                .permute(0, 1, 3, 2, 4, 5)
-                .flatten(0, 4)
-            )
-            patch_pos_embeds_permute.append(pos_embed)
-        patch_pos_embeds = torch.cat(patch_pos_embeds_permute)
-        return patch_pos_embeds
-
     def forward(
         self,
         pixel_values: torch.FloatTensor,
@@ -395,7 +334,7 @@ class Siglip2VisionTransformer(PreTrainedModel):
         positional_embeddings = self.get_position_embedding(grid_thw)
         hidden_states = hidden_states + positional_embeddings
 
-        # View pixel_value as packed multi-visual input, generate cu_seqlen her （migrate from qwen3-vl)
+        # View pixel_values as packed multi-visual input and build cu_seqlens (migrated from qwen3-vl).
         cu_seqlens = torch.repeat_interleave(grid_thw[:, 1] * grid_thw[:, 2], grid_thw[:, 0]).cumsum(
             dim=0,
             # Select dtype based on the following factors:
@@ -450,9 +389,9 @@ class PatchMerger(nn.Module):
 
 def patch_merging_by_param(image_embeds, image_grid_thw, merge_size=2):
     """
-    image_embeds: [Total_Patches, C] -> 你的数据 [2008, 1152]
-    image_grid_thw: [Num_Media, 3] -> 你的数据 [[1, 26, 38], [1, 34, 30]]
-    merge_size: 来自 config 的参数，例如 2
+    image_embeds: [Total_Patches, C] -> e.g. [2008, 1152]
+    image_grid_thw: [Num_Media, 3] -> e.g. [[1, 26, 38], [1, 34, 30]]
+    merge_size: the spatial merge factor from config, e.g. 2
     """
     new_embeds_list = []
     new_grid_thw_list = []
@@ -461,22 +400,22 @@ def patch_merging_by_param(image_embeds, image_grid_thw, merge_size=2):
     C = image_embeds.shape[-1]
 
     for i in range(image_grid_thw.shape[0]):
-        # 获取当前媒体的 T, H, W (这里的 H, W 是 patch 数量)
+        # Current media's T, H, W (here H, W are patch counts).
         t, h, w = image_grid_thw[i].tolist()
         num_patches = t * h * w
 
-        # 1. 提取当前媒体特征 [T*H*W, C]
+        # 1. Slice out this media's features [T*H*W, C].
         media_seq = image_embeds[curr_idx : curr_idx + num_patches]
         curr_idx += num_patches
 
-        # 2. 还原 3D 结构 [T, H, W, C]
+        # 2. Restore the 3D structure [T, H, W, C].
         x = media_seq.view(t, h, w, C)
 
-        # 3. 使用 einops 进行空间合并 (2x2 空间块合并)
-        # 维度变换逻辑：
+        # 3. Spatially merge (2x2 blocks) with einops.
+        # Dimension transform:
         # b=t, h=(h'/ms * ms), w=(w'/ms * ms)
         # -> [t, h/ms, ms, w/ms, ms, c] -> [t, h/ms, w/ms, (ms*ms*c)]
-        # 注意：这里我们遵循 Qwen2-VL 的顺序：h1 w1 拼接在 C 之前
+        # Note: we follow the Qwen2-VL order — h1 w1 come before C.
         x = rearrange(
             x, 
             't (h h1) (w w1) c -> t h w (h1 w1 c)', 
@@ -484,13 +423,13 @@ def patch_merging_by_param(image_embeds, image_grid_thw, merge_size=2):
             w1=merge_size
         )
 
-        # 4. 展平回序列 [T * (H/ms) * (W/ms), C * ms^2]
+        # 4. Flatten back to a sequence [T * (H/ms) * (W/ms), C * ms^2].
         new_embeds_list.append(x.reshape(-1, x.shape[-1]))
 
-        # 5. 更新 grid 信息: T 不变, H 和 W 缩减
+        # 5. Update grid info: T unchanged, H and W shrink.
         new_grid_thw_list.append([t, h // merge_size, w // merge_size])
 
-    # 重新拼接所有媒体数据
+    # Concatenate all media back together.
     image_embeds_merged = torch.cat(new_embeds_list, dim=0)
     image_grid_thw_merged = torch.tensor(new_grid_thw_list, device=image_grid_thw.device)
 
