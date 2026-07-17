@@ -41,6 +41,7 @@ from cosmos_framework.data.generator.sequence_packing.runtime import (
 from cosmos_framework.utils.generator.parallelism import ParallelDims
 
 
+
 def _broadcast_test_object(data: Any, parallel_dims: ParallelDims, iteration: int) -> Any:
     rank = parallel_dims.cp_rank
     cp_world_size = parallel_dims.cp_mesh.size()

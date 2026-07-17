@@ -47,6 +47,9 @@ PATH_REMAPS: dict[str, dict[tuple[str, ...], "tuple[str, ...] | None"]] = {
     # ``model.config.<X>`` in the Hydra tree. ``attn_implementation`` is a
     # VLM-only knob — skip it on VFM. Other sections pass through.
     "vfm": {
+        # [job].upload_reproducible_setup lives at the top-level config field,
+        # not config.job.* — hoist it out of the job section.
+        ("job", "upload_reproducible_setup"): ("upload_reproducible_setup",),
         ("model", "attn_implementation"): None,
         ("model", "backbone"): None,                                           # VLM-only — VFM has no model.config.backbone
         # Per-caption token cap lives on the nested SFT dataset, not a top-level
@@ -63,6 +66,9 @@ PATH_REMAPS: dict[str, dict[tuple[str, ...], "tuple[str, ...] | None"]] = {
     # tasks — so the catch-all ``("model",) -> ("model", "config")`` rule
     # routes them uniformly. Fields with no VLM analog map to ``None`` (skip).
     "vlm": {
+        # [job].upload_reproducible_setup lives at the top-level config field,
+        # not config.job.* — hoist it out of the job section.
+        ("job", "upload_reproducible_setup"): ("upload_reproducible_setup",),
         # No VLM analog — skip these leaves
         ("model", "max_num_tokens_after_packing"): None,
         ("model", "joint_attn_implementation"): None,

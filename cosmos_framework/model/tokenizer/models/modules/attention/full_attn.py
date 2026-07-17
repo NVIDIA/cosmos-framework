@@ -17,6 +17,7 @@ import torch
 
 from cosmos_framework.model.attention.frontend import attention as i4_attention
 from cosmos_framework.model.attention.varlen import generate_varlen_parameters
+from cosmos_framework.model.tokenizer.utils.tensors import cat_with_bounded_inputs
 
 if TYPE_CHECKING:
     from cosmos_framework.model.tokenizer.models.modules.sparse_tensor import SparseTensor
@@ -191,12 +192,12 @@ def _pack_sparse_temporal_causal_qkv(
         return empty_q, empty_k, empty_v, [], [], empty_idx
 
     return (
-        torch.cat(q_feat_chunks, dim=0),
-        torch.cat(k_feat_chunks, dim=0),
-        torch.cat(v_feat_chunks, dim=0),
+        cat_with_bounded_inputs(q_feat_chunks, dim=0),
+        cat_with_bounded_inputs(k_feat_chunks, dim=0),
+        cat_with_bounded_inputs(v_feat_chunks, dim=0),
         q_seqlen,
         kv_seqlen,
-        torch.cat(q_index_chunks, dim=0),
+        cat_with_bounded_inputs(q_index_chunks, dim=0),
     )
 
 

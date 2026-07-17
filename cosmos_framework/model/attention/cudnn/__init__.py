@@ -11,12 +11,10 @@ cuDNN Backend
 import torch
 
 from cosmos_framework.model.attention.utils.safe_ops import log
-from cosmos_framework.model.attention.utils.version import version_at_least
 
-CUDNN_DISALLOWED = True
-
-CUDNN_MIN_BACKEND_VERSION = 91300
-CUDNN_MIN_FRONTEND_VERSION = "1.14.0"
+# Minimum cuDNN runtime version, in ``torch.backends.cudnn.version()`` encoding
+# (major * 10000 + minor * 100 + patch). 92200 == cuDNN 9.22.0.
+CUDNN_MIN_BACKEND_VERSION = 92200
 
 
 def cudnn_supported() -> bool:
@@ -24,36 +22,34 @@ def cudnn_supported() -> bool:
     Returns whether cuDNN Attention is supported in this environment.
     Requirements are:
         * Presence of CUDA Runtime (via PyTorch)
-        * Presence of cuDNN and its Python frontend, meeting minimum version requirements
+        * Presence of the cuDNN runtime that ships with / is linked by PyTorch, meeting the minimum
+          version requirement
 
-    This check guards imports / dependencies on the cuDNN package.
+    The backend runs cuDNN attention through PyTorch's own SDPA cuDNN dispatch
+    (``F.scaled_dot_product_attention`` / ``aten._scaled_dot_product_cudnn_attention``), so it no
+    longer depends on the standalone cuDNN Python frontend package -- only on the cuDNN that PyTorch
+    itself uses.
     """
     if not torch.cuda.is_available():
         log.debug("cuDNN Attention is not supported because PyTorch did not detect CUDA runtime.")
         return False
 
-    try:
-        import cudnn
-
-    except ImportError:
-        log.debug("cuDNN Attention is not supported because the frontend Python package was not found.")
-        return False
-    except Exception as e:
-        log.debug(f"cuDNN Attention is not supported because importing the frontend Python package failed: {e}")
+    if not torch.backends.cudnn.is_available():
+        log.debug("cuDNN Attention is not supported because PyTorch reports cuDNN is unavailable.")
         return False
 
-    if cudnn.backend_version() < CUDNN_MIN_BACKEND_VERSION:
+    backend_version = torch.backends.cudnn.version()
+    if backend_version is None or backend_version < CUDNN_MIN_BACKEND_VERSION:
         log.debug(
-            "cuDNN Attention is not supported due to insufficient cuDNN backend version "
-            f"{cudnn.backend_version()=}, expected at least {CUDNN_MIN_BACKEND_VERSION=}."
+            "cuDNN Attention is not supported due to insufficient cuDNN runtime version "
+            f"{backend_version=}, expected at least {CUDNN_MIN_BACKEND_VERSION=}."
         )
         return False
 
-    if not version_at_least(cudnn.__version__, CUDNN_MIN_FRONTEND_VERSION):
-        log.debug(
-            "cuDNN Attention is not supported due to insufficient cuDNN frontend version "
-            f"{cudnn.__version__}, expected at least {CUDNN_MIN_FRONTEND_VERSION}."
-        )
+    # The cuDNN SDPA ATen op is the mechanism this backend relies on; if it is missing (unexpected on
+    # a CUDA build), decline rather than fail later at call time.
+    if not hasattr(torch.ops.aten, "_scaled_dot_product_cudnn_attention"):
+        log.debug("cuDNN Attention is not supported because torch lacks the cuDNN SDPA ATen op.")
         return False
 
     return True

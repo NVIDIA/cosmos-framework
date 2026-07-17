@@ -37,9 +37,14 @@ _TYPE_ALIASES = {
     "projects.cosmos3.vfm.configs.base.defaults.model_config.RectifiedFlowInferenceConfig": "rectified_flow_inference_config",
     "projects.cosmos3.vfm.configs.base.defaults.model_config.RectifiedFlowTrainingConfig": "rectified_flow_training_config",
     "projects.cosmos3.vfm.configs.base.defaults.parallelism.ParallelismConfig": "parallelism_config",
+    "projects.cosmos3.vfm.configs.base.defaults.quantization.QuantizationConfig": "quantization_config",
     "projects.cosmos3.vfm.configs.base.defaults.vlm.PretrainedWeightsConfig": "pretrained_weights_config",
     "projects.cosmos3.vfm.configs.base.defaults.vlm.VLMConfig": "vlm_config",
 }
+
+# Config objects can be serialized as either `_type` or `_target_` depending on
+# whether they came from structured config metadata or LazyCall construction.
+_TARGET_ALIASES.update(_TYPE_ALIASES)
 
 _ALIAS_TARGETS = {alias: target for target, alias in _TARGET_ALIASES.items()}
 _ALIAS_TYPES = {alias: target for target, alias in _TYPE_ALIASES.items()}

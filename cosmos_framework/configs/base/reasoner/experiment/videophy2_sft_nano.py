@@ -160,11 +160,33 @@ videophy2_sft_nano = LazyDict(
             grad_accum_iter=8,
         ),
         optimizer=dict(
+            # Uniform 1e-6 across both tiers. Nano is stable at 1e-5 too, but the 32B
+            # super run spikes transiently (loss->6.6 @ iter 23) at 1e-5 before
+            # recovering to the same endpoint; 1e-6 reaches the identical final loss
+            # with no instability, so both tiers ship at 1e-6. (Super deepcopies this
+            # block, so setting it here covers both.)
             lr=1e-6,
             fused=True,
             weight_decay=0.05,
             betas=[0.9, 0.999],
-            lr_multipliers={"mm_projector": 20.0, "merger": 20.0},
+            # NOTE: the ViT is FROZEN (freeze_vision_encoder=True below), so the only
+            # trainable "model.visual.*" params are the projector (model.visual.merger
+            # + deepstack_merger_list). This key therefore sets the PROJECTOR LR only,
+            # to 1.0x optimizer.lr -- giving a uniform LR across projector + LLM +
+            # lm_head. It is NOT touching the frozen ViT backbone.
+            #
+            # Why the key is "model.visual" (broad) and not "model.visual.merger":
+            # the reasoner default optimizer (configs/base/reasoner/defaults/optimizer.py)
+            # ships lr_multipliers={"model.visual": 0.1}. Hydra merges dicts base-first
+            # (so that key stays PINNED FIRST) and _build_params_with_metadata
+            # (utils/generator/optimizer.py) is first-substring-match-wins -- so a
+            # narrower "model.visual.merger" key is shadowed by "model.visual" and never
+            # matches (verified: the merger still resolves to 0.1x). Overriding the SAME
+            # "model.visual" key to 1.0 is the only way to cancel the 0.1x default; with
+            # the ViT frozen that reaches only the merger. (To give an UNFROZEN ViT its
+            # own LR you'd likewise override this "model.visual" value -- a narrower key
+            # can't out-prioritize it.)
+            lr_multipliers={"model.visual": 1.0},
         ),
         scheduler=dict(
             warm_up_steps=[5],

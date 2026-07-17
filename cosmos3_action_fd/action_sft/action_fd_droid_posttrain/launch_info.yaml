@@ -1,0 +1,15 @@
+cmd: /lustre/fsw/portfolios/cosmos/projects/cosmos_base_training/users/weichengt/cosmos-framework/cosmos_framework/scripts/train.py
+  --sft-toml=/root/cosmos/cosmos-framework/examples/toml/sft_config/action_fd_droid_posttrain.toml
+  -- model.config.parallelism.data_parallel_shard_degree=4 model.config.parallelism.data_parallel_replicate_degree=1
+  trainer.max_iter=10 checkpoint.save_iter=10 checkpoint.load_from_object_store.enabled=false
+  checkpoint.save_to_object_store.enabled=false checkpoint.strict_resume=false
+args_cfg_path: /root/cosmos/cosmos-framework/examples/toml/sft_config/action_fd_droid_posttrain.toml
+args_override:
+- --
+- model.config.parallelism.data_parallel_shard_degree=4
+- model.config.parallelism.data_parallel_replicate_degree=1
+- trainer.max_iter=10
+- checkpoint.save_iter=10
+- checkpoint.load_from_object_store.enabled=false
+- checkpoint.save_to_object_store.enabled=false
+- checkpoint.strict_resume=false

@@ -74,18 +74,13 @@ class ActionBaseDataset(ABC, Dataset):
         # LeRobot v2.x stores task text in a "task" column; v3.0 stores it as the
         # (unnamed) DataFrame index and keeps only "task_index" as a column.
         task_texts = tasks_df["task"] if "task" in tasks_df.columns else tasks_df.index
-        self._tasks = {
-            int(task_index): str(task)
-            for task, task_index in zip(task_texts, tasks_df["task_index"])
-        }
-        self._rows = sorted(
-            (
-                row
-                for path in sorted((self._root / "data").glob("chunk-*/file-*.parquet"))
-                for row in pq.read_table(path).to_pylist()
-            ),
-            key=lambda row: int(row["index"]),
-        )
+        self._tasks = {int(task_index): str(task) for task, task_index in zip(task_texts, tasks_df["task_index"])}
+        # ``self._rows`` (the flat, index-sorted list of every frame dict) is built
+        # lazily on first access — see the ``_rows`` property. Materializing all
+        # ~18M frames as Python dicts plus a full sort costs ~13 min and tens of GB;
+        # subclasses that build their own compact index (e.g. DROIDLeRobotDataset)
+        # never touch it, so they must not pay for it at construction.
+        self._rows_cache: list[dict[str, Any]] | None = None
 
     @property
     def fps(self) -> float:
@@ -140,8 +135,7 @@ class ActionBaseDataset(ABC, Dataset):
     def load_action_stats(cls) -> dict[str, torch.Tensor]:
         """Return action normalization stats for this dataset as torch tensors."""
         return {
-            key: torch.from_numpy(value).float()
-            for key, value in load_action_stats(str(cls._stats_path())).items()
+            key: torch.from_numpy(value).float() for key, value in load_action_stats(str(cls._stats_path())).items()
         }
 
     @abstractmethod
@@ -217,6 +211,26 @@ class ActionBaseDataset(ABC, Dataset):
             "idle_frames": torch.tensor(idle_frames, dtype=torch.long),
             **extras,
         }
+
+    @property
+    def _rows(self) -> list[dict[str, Any]]:
+        """Flat, index-sorted list of every frame dict, built lazily on first access.
+
+        Only datasets that don't build their own compact index (bridge / agibot /
+        robomind) touch this; for them it materializes once and caches. Datasets with
+        a bespoke index (e.g. DROIDLeRobotDataset) never read it, so they skip the
+        ~13 min / tens-of-GB construction entirely.
+        """
+        if self._rows_cache is None:
+            self._rows_cache = sorted(
+                (
+                    row
+                    for path in sorted((self._root / "data").glob("chunk-*/file-*.parquet"))
+                    for row in pq.read_table(path).to_pylist()
+                ),
+                key=lambda row: int(row["index"]),
+            )
+        return self._rows_cache
 
     def __len__(self) -> int:
         return max(0, (len(self._rows) - self._chunk_length + self._sample_stride - 1) // self._sample_stride)

@@ -8,11 +8,11 @@ import math
 import torch
 
 from cosmos_framework.data.generator.sequence_packing.mrope import get_3d_mrope_ids_vae_tokens
-from cosmos_framework.data.generator.sequence_packing.types import ModalityData, PackedSequence
+from cosmos_framework.data.generator.sequence_packing.sequence import PackedSequenceBuilder
 
 
 def pack_supertokens_temporal_causal(
-    packed_seq: "PackedSequence",
+    seq_builder: PackedSequenceBuilder,
     input_vision_tokens: torch.Tensor,
     input_action_tokens: torch.Tensor | None,
     condition_frame_indexes_vision: list[int],
@@ -53,35 +53,37 @@ def pack_supertokens_temporal_causal(
     ``input_timestep`` is float (TF/none) or Tensor(T_max,) (DF, per-frame sigma).
     Conditioning frames are excluded from mse_loss_indexes either way.
 
-    Returns (total_split_len, null_action_flag); null_action_flag is False when
-    pack_action_tokens=False.
-    """
-    assert isinstance(packed_seq.position_ids, list), "PackedSequence must be in build mode"
+    Args:
+        seq_builder: Mutable sequence builder receiving packed spans and metadata.
+        input_vision_tokens: Vision latent tokens with shape ``[1, C, T, H, W]``.
+        input_action_tokens: Optional action tokens. Whole-clip training uses
+            ``(T - 1) * temporal_compression_factor`` rows; AR chunks use
+            ``T * temporal_compression_factor`` rows.
+        condition_frame_indexes_vision: Vision frame indexes treated as clean conditioning.
+        input_timestep: Diffusion timestep as a scalar float or per-frame tensor.
+        latent_patch_size: Spatial patch size used to derive the vision patch grid.
+        temporal_compression_factor: Number of frame-rate action tokens per latent
+            vision frame.
+        action_dim: Action feature dimension used when null action tokens are created.
+        vision_fps: Optional video FPS for FPS-modulated vision mRoPE positions.
+        action_fps: Optional action FPS for FPS-modulated action mRoPE positions.
+        enable_fps_modulation: If True, scale temporal position IDs using FPS values.
+        base_fps: Base FPS for temporal position normalization.
+        pack_action_tokens: If True, append action tokens before each vision supertoken.
+            If False, append only vision tokens and report no null-action supertokens.
 
+    Returns:
+        Tuple of ``(total_split_len, null_action_flag)``. ``null_action_flag`` is False
+        when ``pack_action_tokens=False``.
+    """
     _, _, latent_t, latent_h, latent_w = input_vision_tokens.shape
     patch_h = math.ceil(latent_h / latent_patch_size)
     patch_w = math.ceil(latent_w / latent_patch_size)
     tcf = temporal_compression_factor
     patches_per_frame = patch_h * patch_w
-    supertoken_len = tcf + patches_per_frame if pack_action_tokens else patches_per_frame  # S
 
-    # Initialize modalities if needed
-    if packed_seq.vision is None:
-        packed_seq.vision = ModalityData()
-    if pack_action_tokens and packed_seq.action is None:
-        packed_seq.action = ModalityData()
-
-    assert isinstance(packed_seq.vision.sequence_indexes, list)
-    assert isinstance(packed_seq.vision.mse_loss_indexes, list)
-    assert isinstance(packed_seq.vision.timesteps, list)
-    assert isinstance(packed_seq.vision.tokens, list)
-    assert isinstance(packed_seq.vision.condition_mask, list)
-    if pack_action_tokens:
-        assert isinstance(packed_seq.action.sequence_indexes, list)
-        assert isinstance(packed_seq.action.mse_loss_indexes, list)
-        assert isinstance(packed_seq.action.timesteps, list)
-        assert isinstance(packed_seq.action.tokens, list)
-        assert isinstance(packed_seq.action.condition_mask, list)
+    vision = seq_builder.ensure_vision()
+    action = seq_builder.ensure_action() if pack_action_tokens else None
 
     device = input_vision_tokens.device
     dtype = input_vision_tokens.dtype
@@ -134,40 +136,42 @@ def pack_supertokens_temporal_causal(
         null_action_flag = False
 
     # Record vision token shapes and tokens
-    packed_seq.vision.token_shapes.append((latent_t, patch_h, patch_w))
-    packed_seq.vision.tokens.append(input_vision_tokens)
+    vision.token_shapes.append((latent_t, patch_h, patch_w))
+    vision.tokens.append(input_vision_tokens)
+    vision_payload_index = len(vision.tokens) - 1
 
     # Vision conditioning mask: (T, 1, 1)
     condition_set_vision = {idx for idx in condition_frame_indexes_vision if 0 <= idx < latent_t}
     vision_condition_mask = torch.zeros((latent_t, 1, 1), device=device, dtype=dtype)  # [T,1,1]
     for fidx in condition_set_vision:
         vision_condition_mask[fidx, 0, 0] = 1.0
-    packed_seq.vision.condition_mask.append(vision_condition_mask)
+    vision.condition_mask.append(vision_condition_mask)
 
     vision_noisy_frame_indexes = torch.tensor(
         [idx for idx in range(latent_t) if idx not in condition_set_vision],
         device=device,
         dtype=torch.long,
     )  # [N_noisy_frames]
-    packed_seq.vision.noisy_frame_indexes.append(vision_noisy_frame_indexes)
+    vision.noisy_frame_indexes.append(vision_noisy_frame_indexes)
 
     if pack_action_tokens:
+        assert action is not None
         # Action token shapes: latent_t * tcf total (including null tokens)
-        packed_seq.action.token_shapes.append((latent_t * tcf,))
-        packed_seq.action.tokens.append(all_action_tokens)
+        action.token_shapes.append((latent_t * tcf,))
+        action.tokens.append(all_action_tokens)
+        action_payload_index = len(action.tokens) - 1
 
         # Action conditioning mask: all action tokens are conditioning (not supervised)
         # Null tokens are always conditioning; real actions are conditioning too (they are inputs)
         action_condition_mask = torch.ones((latent_t * tcf, 1), device=device, dtype=dtype)  # [T*tcf,1]
-        packed_seq.action.condition_mask.append(action_condition_mask)
+        action.condition_mask.append(action_condition_mask)
 
     # Pack in interleaved supertoken order: [action_t, vision_t] for each frame t
     # (or just [vision_t] per frame when pack_action_tokens=False)
-    curr = packed_seq.curr
     total_split_len = 0
 
     # Snapshot the offset before this sample and compute mRoPE IDs.
-    temporal_offset = packed_seq._mrope_temporal_offset
+    temporal_offset = seq_builder._mrope_temporal_offset
     effective_vision_fps = vision_fps if enable_fps_modulation else None
 
     # AR generation (single frame OR chunk) is detected by every frame carrying a
@@ -187,13 +191,15 @@ def pack_supertokens_temporal_causal(
         grid_h=patch_h,
         grid_w=patch_w,
         temporal_offset=temporal_offset,
-        reset_spatial_indices=packed_seq._mrope_reset_spatial,
+        reset_spatial_indices=seq_builder._mrope_reset_spatial,
         fps=effective_vision_fps,
         base_fps=base_fps,
         temporal_compression_factor=tcf,
         start_frame_offset=vision_sfo,
     )  # vision_ids_flat: [3,T*patch_h*patch_w]
+    vision_ids_3d = vision_ids_flat.reshape(3, latent_t, patches_per_frame)  # [3,T,patch_h*patch_w]
 
+    action_ids_3d: torch.Tensor | None = None
     if pack_action_tokens:
         effective_action_fps = action_fps if enable_fps_modulation else None
 
@@ -214,7 +220,7 @@ def pack_supertokens_temporal_causal(
                 grid_h=1,
                 grid_w=1,
                 temporal_offset=temporal_offset,
-                reset_spatial_indices=packed_seq._mrope_reset_spatial,
+                reset_spatial_indices=seq_builder._mrope_reset_spatial,
                 fps=effective_action_fps,
                 base_fps=base_fps,
                 temporal_compression_factor=1,
@@ -242,40 +248,39 @@ def pack_supertokens_temporal_causal(
             # AR frame 0 / image2video (latent_t == 1, no action): only null.
             action_ids_3d = null_ids.reshape(3, 1, tcf)  # [3,1,tcf]
 
-        # (3, T*H*W) -> (3, T, H*W)
-        vision_ids_3d = vision_ids_flat.reshape(3, latent_t, patches_per_frame)  # [3,T,patch_h*patch_w]
-
-        # Interleave per frame: (3, T, tcf+H*W) -> (3, T*S)
-        interleaved_ids = torch.cat([action_ids_3d, vision_ids_3d], dim=2).reshape(
-            3, latent_t * supertoken_len
-        )  # [3,T*S]
-        packed_seq.position_ids.append(interleaved_ids)
-    else:
-        # No action tokens: just vision IDs, already in (3, T*H*W) order.
-        packed_seq.position_ids.append(vision_ids_flat)
-
-    packed_seq._mrope_temporal_offset = new_offset
+    seq_builder._mrope_temporal_offset = new_offset
 
     for frame_t in range(latent_t):
         if pack_action_tokens:
-            # Pack action tokens for this frame (indexes only; tokens already stored in packed_seq.action.tokens)
-            action_indexes = list(range(curr, curr + tcf))
-            packed_seq.action.sequence_indexes.extend(action_indexes)
+            assert action is not None
+            assert action_ids_3d is not None
+            # Pack action tokens for this frame (indexes only; tokens already stored in seq_builder.action.tokens)
+            action_position_ids = action_ids_3d[:, frame_t, :]  # [3,tcf]
+            seq_builder.append_action_span(
+                tcf,
+                action_position_ids,
+                payload_index=action_payload_index,
+                payload_start=frame_t * tcf,
+                payload_shape=(tcf,),
+            )
             # Action tokens are never in MSE loss (always conditioning)
-            curr += tcf
             total_split_len += tcf
 
         # Pack vision tokens for this frame
-        frame_indexes = list(range(curr, curr + patches_per_frame))
-        packed_seq.vision.sequence_indexes.extend(frame_indexes)
-        curr += patches_per_frame
+        vision_position_ids = vision_ids_3d[:, frame_t, :]  # [3,patch_h*patch_w]
+        frame_indexes = seq_builder.append_vision_span(
+            patches_per_frame,
+            vision_position_ids,
+            payload_index=vision_payload_index,
+            payload_start=frame_t * patches_per_frame,
+            payload_shape=(1, patch_h, patch_w),
+        )
         total_split_len += patches_per_frame
 
         # Vision MSE loss: supervise non-conditioning frames
         if frame_t not in condition_set_vision:
-            packed_seq.vision.mse_loss_indexes.extend(frame_indexes)
+            vision.mse_loss_indexes.extend(frame_indexes)
             frame_ts = input_timestep[frame_t].item() if isinstance(input_timestep, torch.Tensor) else input_timestep
-            packed_seq.vision.timesteps.extend([frame_ts] * patches_per_frame)
+            vision.timesteps.extend([frame_ts] * patches_per_frame)
 
-    packed_seq.curr = curr
     return total_split_len, null_action_flag

@@ -21,15 +21,14 @@ import copy
 
 from hydra.core.config_store import ConfigStore
 
-from cosmos_framework.utils.lazy_config import LazyCall as L
-from cosmos_framework.utils.lazy_config import LazyDict
-
 from cosmos_framework.configs.base.experiment.sft.models.nano_model_config import NANO_MODEL_CONFIG
+from cosmos_framework.data.generator.action.datasets.action_sft_dataset import get_action_droid_sft_dataset
 from cosmos_framework.data.generator.joint_dataloader import (
     PackingDataLoader,
     RankPartitionedDataLoader,
 )
-from cosmos_framework.data.generator.action.datasets.action_sft_dataset import get_action_droid_sft_dataset
+from cosmos_framework.utils.lazy_config import LazyCall as L
+from cosmos_framework.utils.lazy_config import LazyDict
 
 cs = ConfigStore.instance()
 
@@ -202,7 +201,9 @@ action_policy_droid_nano = LazyDict(
                             use_state=True,
                             iterable_shuffle=True,  # rank x worker episode-shuffle stream
                             episode_shuffle_seed=42,
-                            use_image_augmentation=True,  # SR boost (random crop+rescale + color jitter)
+                            # SR boost: random crop+rescale + ColorJitter, applied CPU-side in the
+                            # DROIDLeRobotDataset image augmentor (matches i4's pipeline stage).
+                            use_image_augmentation=True,
                             # keep_ranges_1_0_1.json window filter (drops idle/non-task frames). Off by default;
                             # set use_filter_dict=True + filter_dict_path to enable.
                             use_filter_dict=False,
@@ -213,6 +214,9 @@ action_policy_droid_nano = LazyDict(
                             max_action_dim="${model.config.max_action_dim}",
                             cfg_dropout_rate=0.1,
                             tokenizer_config="${model.config.vlm_config.tokenizer}",
+                            # Match i4 GA (droid_lerobot_8b_ga / MR #9995): format the action
+                            # prompt as JSON via ActionPromptJsonFormatter instead of plain text.
+                            format_prompt_as_json=True,
                         ),
                     ),
                 ),

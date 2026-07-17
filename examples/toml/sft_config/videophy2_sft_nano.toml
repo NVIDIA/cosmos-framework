@@ -55,6 +55,9 @@ eps           = 1.0e-8
 fused         = true
 lr            = 1.0e-6
 weight_decay  = 0.1
+# NOTE: per-part LR multipliers live in the experiment (videophy2_sft_nano.py),
+# NOT here -- the toml->hydra override path parses a dict key's "." as nesting,
+# so a dotted key like "model.visual" can't be set from toml. Edit the experiment.
 
 [scheduler]
 cycle_lengths      = [50]

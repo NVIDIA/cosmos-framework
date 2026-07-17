@@ -1285,7 +1285,10 @@ def _collect_warmup_shapes(
                 raise ValueError(f"Aspect ratio {aspect_ratio} not found in resolution {res_key}")
             res_dict = {aspect_ratio: res_dict[aspect_ratio]}
 
-        for H, W in res_dict.values():
+        # ``VIDEO_RES_SIZE_INFO`` stores each bucket as ``(W, H)`` (e.g. the
+        # landscape ``"4,3": (736, 544)``), so unpack width-first to match the
+        # runtime encode key, which is derived from the actual ``(H, W)`` tensor.
+        for W, H in res_dict.values():
             if isinstance(tokenizer.encode_chunk_frames, Mapping):
                 chunk_frames = tokenizer.encode_chunk_frames[res_key]
             else:
