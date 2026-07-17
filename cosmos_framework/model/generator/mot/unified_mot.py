@@ -2478,6 +2478,7 @@ class Nemotron3DenseVLTextForCausalLM(Nemotron3DenseVLPreTrainedModel):
         from types import SimpleNamespace
 
         from huggingface_hub import hf_hub_download
+        from huggingface_hub.errors import EntryNotFoundError
         from safetensors.torch import load_file
         from transformers.models.siglip2.configuration_siglip2 import Siglip2VisionConfig
 
@@ -2485,10 +2486,18 @@ class Nemotron3DenseVLTextForCausalLM(Nemotron3DenseVLPreTrainedModel):
             NemotronSiglip2VisionEncoder,
         )
 
-        with open(hf_hub_download(hf_repo, "vision_encoder/config.json")) as f:
-            ve_cfg = json.load(f)
         with open(hf_hub_download(hf_repo, "config.json")) as f:
             top_cfg = json.load(f)
+        # The SigLIP2 + projector spec normally lives in a standalone
+        # ``vision_encoder/config.json``, but the public ``nvidia/Cosmos3-Edge``
+        # repo ships only the weights under ``vision_encoder/`` and folds the
+        # spec into the top-level ``config.json``. Prefer the standalone file
+        # when present, else fall back to the top-level config.
+        try:
+            with open(hf_hub_download(hf_repo, "vision_encoder/config.json")) as f:
+                ve_cfg = json.load(f)
+        except EntryNotFoundError:
+            ve_cfg = top_cfg
         vdict = dict(ve_cfg["vision_config"])
         for k in ("model_type", "transformers_version", "spatial_merge_size"):
             vdict.pop(k, None)
@@ -2498,7 +2507,9 @@ class Nemotron3DenseVLTextForCausalLM(Nemotron3DenseVLPreTrainedModel):
         pcfg = SimpleNamespace(
             spatial_merge_size=pc["spatial_merge_size"],
             input_hidden_size=pc["input_hidden_size"],
-            merger_intermedia=pc["merger_intermedia"],
+            # Older standalone configs name this ``merger_intermedia``; the
+            # top-level config names it ``merger_intermediate_size``.
+            merger_intermedia=pc.get("merger_intermedia", pc.get("merger_intermediate_size")),
             out_hidden_size=pc["out_hidden_size"],
         )
         ref = self.model.embed_tokens.weight
