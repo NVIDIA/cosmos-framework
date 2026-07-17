@@ -1150,6 +1150,47 @@ _CHECKPOINTS: dict[str, CheckpointConfig] = {
         # downloading the base Cosmos3-Super repo just for the tokenizer.
         vlm_processor_from_checkpoint=True,
     ),
+    "Cosmos3-Super-Text2Image-4Step": CheckpointConfig(
+        model_memory_bytes=MODEL_MEMORY_BYTES_BY_SIZE["32B"],
+        config_file=str(CONFIG_DIR / "model/Cosmos3-Super.yaml"),
+        s3_uri="s3://bucket1/cosmos3_vfm/cosmos3_ga_text2image_4step/",
+        hf=CheckpointDirHf(
+            repository="nvidia/Cosmos3-Super-Text2Image-4Step",
+            revision="1ba94110bc118f479bbd5e461e79d685d74b2554",
+        ),
+        experiment_overrides=(
+            "model.config.resolution='768'",
+            "model.config.action_gen=false",
+            "model.config.sound_gen=false",
+            "model.config.sound_dim=null",
+            "model.config.sound_tokenizer=null",
+            "model.config.rectified_flow_training_config.shift.720=5",
+            "model.config.rectified_flow_training_config.shift.768=5",
+            "model.config.tokenizer.encode_chunk_frames.768=12",
+            "model.config.tokenizer.encode_exact_durations=null",
+            "model.config.fixed_step_sampler_config.t_list=[1.0,0.9375,0.8333333333333334,0.625]",
+            "model.config.fixed_step_sampler_config.sample_type=sde",
+        ),
+    ),
+    "Cosmos3-Super-Image2Video-4Step": CheckpointConfig(
+        model_memory_bytes=MODEL_MEMORY_BYTES_BY_SIZE["32B"],
+        config_file=str(CONFIG_DIR / "model/Cosmos3-Super.yaml"),
+        s3_uri="s3://bucket1/cosmos3_vfm/cosmos3_ga_image2video_4step/",
+        hf=CheckpointDirHf(
+            repository="nvidia/Cosmos3-Super-Image2Video-4Step",
+            revision="f85d3335d2ad8b352462cecbd637aa980cec9688",
+        ),
+        experiment_overrides=(
+            "model.config.resolution='480'",
+            "model.config.action_gen=false",
+            "model.config.sound_gen=false",
+            "model.config.sound_dim=null",
+            "model.config.sound_tokenizer=null",
+            "model.config.diffusion_expert_config.base_fps=16",
+            "model.config.fixed_step_sampler_config.t_list=[1.0,0.9375,0.8333333333333334,0.625]",
+            "model.config.fixed_step_sampler_config.sample_type=sde",
+        ),
+    ),
 }
 DEFAULT_CHECKPOINT_NAME = "Cosmos3-Nano"
 DEFAULT_CHECKPOINT = _CHECKPOINTS[DEFAULT_CHECKPOINT_NAME]

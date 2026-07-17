@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: OpenMDW-1.1
 
 import json
+import os
 import types
 from pathlib import Path
 
@@ -125,14 +126,80 @@ def test_checkpoints():
     for name, ckpt in OmniSetupOverrides.CHECKPOINTS.items():
         assert ckpt.hf.repository.split("/")[0] == "nvidia"
 
+        # The released 4-step repositories are gated. Their pinned registry
+        # metadata is covered below without requiring CI to hold an HF token.
+        if ckpt.hf.repository.endswith("-4Step") and not os.environ.get("HF_TOKEN"):
+            continue
+
         # Download a file to ensure that the repository/revision is valid.
-        # We validate ``config.json`` rather than ``checkpoint.json``: the latter
-        # is only published by DCP-backed checkpoints, whereas diffusers-backed
-        # HF checkpoints (e.g. Cosmos3-Edge) omit it. ``config.json`` is present
-        # in every checkpoint repo, so we use it to confirm the repo/revision
-        # resolves and parses.
-        ckpt_hf = ckpt.hf.model_copy(update=dict(include=("config.json",)))
-        json.loads((Path(ckpt_hf.download()) / "config.json").read_text())
+        # Native checkpoints store ``config.json`` at the root; Diffusers
+        # checkpoints store the transformer config in ``transformer/``.
+        ckpt_hf = ckpt.hf.model_copy(update=dict(include=("config.json", "transformer/config.json")))
+        checkpoint_dir = Path(ckpt_hf.download())
+        config_paths = [
+            path
+            for path in (checkpoint_dir / "config.json", checkpoint_dir / "transformer/config.json")
+            if path.is_file()
+        ]
+        assert config_paths, f"No model config found for {name}"
+        json.loads(config_paths[0].read_text())
+
+
+@pytest.mark.parametrize(
+    ("checkpoint_name", "repository", "revision", "expected_resolution", "expected_base_fps"),
+    [
+        (
+            "Cosmos3-Super-Text2Image-4Step",
+            "nvidia/Cosmos3-Super-Text2Image-4Step",
+            "1ba94110bc118f479bbd5e461e79d685d74b2554",
+            "768",
+            24,
+        ),
+        (
+            "Cosmos3-Super-Image2Video-4Step",
+            "nvidia/Cosmos3-Super-Image2Video-4Step",
+            "f85d3335d2ad8b352462cecbd637aa980cec9688",
+            "480",
+            16,
+        ),
+    ],
+)
+def test_distilled_checkpoint_uses_published_fixed_step_schedule(
+    tmp_path: Path,
+    checkpoint_name: str,
+    repository: str,
+    revision: str,
+    expected_resolution: str,
+    expected_base_fps: int,
+) -> None:
+    args = OmniSetupOverrides(
+        checkpoint_path=checkpoint_name,
+        output_dir=tmp_path / "outputs",
+    ).build_setup(world_size=4, local_world_size=4, device_memory_bytes=_H100_MEMORY_BYTES)
+
+    assert args.checkpoint_hf is not None
+    assert args.checkpoint_hf.repository == repository
+    assert args.checkpoint_hf.revision == revision
+    assert args.vlm_processor_from_checkpoint is False
+
+    model_config = args.load_model_config_dict()["config"]
+    assert model_config["action_gen"] is False
+    assert model_config["sound_gen"] is False
+    assert model_config["sound_dim"] is None
+    assert model_config["sound_tokenizer"] is None
+    assert model_config["resolution"] == expected_resolution
+    assert model_config["diffusion_expert_config"]["base_fps"] == expected_base_fps
+
+    if checkpoint_name == "Cosmos3-Super-Text2Image-4Step":
+        assert model_config["rectified_flow_training_config"]["shift"]["720"] == 5
+        assert model_config["rectified_flow_training_config"]["shift"]["768"] == 5
+        assert model_config["tokenizer"]["encode_chunk_frames"]["768"] == 12
+        assert model_config["tokenizer"]["encode_exact_durations"] is None
+
+    fixed_step_sampler_config = model_config["fixed_step_sampler_config"]
+    assert fixed_step_sampler_config is not None
+    assert fixed_step_sampler_config["t_list"] == [1.0, 0.9375, 0.8333333333333334, 0.625]
+    assert fixed_step_sampler_config["sample_type"] == "sde"
 
 
 def test_setup_args(tmp_path: Path):

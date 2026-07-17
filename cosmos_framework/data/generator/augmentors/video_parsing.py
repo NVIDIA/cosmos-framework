@@ -416,6 +416,24 @@ class VideoParsingWithFullFrames(Augmentor):
         assert self.max_stride >= self.min_stride, (
             f"max_stride ({self.max_stride}) must be >= min_stride ({self.min_stride})"
         )
+        # Optional explicit categorical stride distribution: {stride_int: probability_float}.
+        # When set (e.g. {1: 0.5, 2: 0.5}), _sample_stride_with_bias samples the per-video
+        # stride from this map instead of the exp-decay scheme (used for FPS-mixing ablations).
+        # Default None => unchanged exp-decay behavior (no effect on any existing config).
+        _stride_config_raw = args.get("stride_config", None)
+        if _stride_config_raw is not None:
+            # Coerce to {int: float}. OmegaConf/YAML round-trip serializes int keys as strings
+            # (e.g. {"2": 1.0}) and may hand us a DictConfig; normalize both so downstream
+            # sampling always sees int strides + float probabilities.
+            self.stride_config = {int(k): float(v) for k, v in dict(_stride_config_raw).items()}
+            assert len(self.stride_config) > 0, "stride_config must be a non-empty mapping"
+            assert all(k >= 1 for k in self.stride_config), (
+                f"stride_config keys must be strides >= 1, got {list(self.stride_config)!r}"
+            )
+            _prob_sum = float(sum(self.stride_config.values()))
+            assert abs(_prob_sum - 1.0) < 1e-6, f"stride_config probabilities must sum to 1.0, got {_prob_sum}"
+        else:
+            self.stride_config = None
         self.min_fps = args.get("min_fps", _MIN_FPS)
         self.max_fps = args.get("max_fps", _MAX_FPS)
         if self.use_dynamic_fps:
@@ -494,6 +512,12 @@ class VideoParsingWithFullFrames(Augmentor):
             These values are chosen to approximately match our old ablations.
             TODO @pchattopadhy: Do ablations with this scheme
         """
+        # FPS-mixing ablation: when an explicit categorical stride distribution is configured,
+        # sample the per-video stride from it directly (ignores the exp-decay scheme below).
+        if self.stride_config is not None:
+            _strides = list(self.stride_config.keys())
+            _probs = list(self.stride_config.values())
+            return int(np.random.choice(_strides, p=_probs))
         assert max_stride >= min_stride, f"max_stride ({max_stride}) must be >= min_stride ({min_stride})"
         if max_stride == min_stride:
             return min_stride

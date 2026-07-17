@@ -45,6 +45,14 @@ from cosmos_framework.model.generator.utils.data_and_condition import (
     unwrap_and_densify,
 )
 from cosmos_framework.model.generator.utils.memory import MemoryState
+from cosmos_framework.model.generator.utils.moe_utils import (
+    sync_expert_biases_to_ema,
+    sync_router_biases_to_ema,
+    update_expert_biases,
+    update_router_biases,
+    uses_aux_loss_free_load_balancing,
+    uses_ema_router_bias,
+)
 from cosmos_framework.model.generator.utils.safetensors_loader import (
     load_language_model as load_language_model_safetensors,
 )
@@ -178,6 +186,7 @@ class OmniMoTModel(ImaginaireModel):
         lora_enabled = self.config.lora_enabled if lora_enabled is None else lora_enabled
         with torch.device("meta"):
             assert self.vlm_config.model_instance is not None, "Model instance should be specified"
+
             language_model = lazy_instantiate(self.vlm_config.model_instance)
 
             # NOTE: We pass "RF timesteps" to the network in the same scale as the scheduler
@@ -208,6 +217,7 @@ class OmniMoTModel(ImaginaireModel):
                 # Sound generation parameters
                 sound_dim=self.config.sound_dim,
                 sound_latent_fps=self.config.sound_latent_fps,
+                enable_input_bias=self.config.enable_input_bias,
             )
             network_config._attn_implementation_internal = "eager"
             net = Cosmos3VFMNetwork(
@@ -356,6 +366,8 @@ class OmniMoTModel(ImaginaireModel):
         with misc.timer("Creating PyTorch model and ema if enabled"):
             self.net = self.build_net(dtype=self.precision)
             self._param_count = count_params(self.net, verbose=False)
+            self._uses_aux_loss_free_load_balancing: bool = uses_aux_loss_free_load_balancing(self.net)
+            self._uses_ema_router_bias: bool = uses_ema_router_bias(self.net)
 
             if config.ema.enabled:
                 self.net_ema = self.build_net(dtype=torch.float32)
@@ -510,6 +522,36 @@ class OmniMoTModel(ImaginaireModel):
         return False
 
     # ------------------------ training hooks ------------------------
+    def on_before_optimizer_step(
+        self, optimizer: torch.optim.Optimizer, scheduler: torch.optim.lr_scheduler.LRScheduler, iteration: int
+    ) -> None:
+        """Run aux-loss-free load balancing + EMA router de-sink on the gen-tower MoE blocks."""
+        del scheduler, optimizer
+
+        dp_mesh = self.parallel_dims.dp_mesh if self.parallel_dims else None
+
+        # Aux-loss-free load balancing (only when enabled).
+        if self._uses_aux_loss_free_load_balancing:
+            update_expert_biases(
+                net=self.net,
+                device_mesh=dp_mesh,
+            )
+            # expert_bias is a buffer, but the DTensor EMA worker copies parameters
+            # only, so mirror it into net_ema manually (else the persisted net_ema.*
+            # keeps zero and drops the trained bias at checkpoint save). update_bias
+            # already cross-rank-reduced, so net.expert_bias matches on every rank.
+            if self.config.ema.enabled:
+                sync_expert_biases_to_ema(net=self.net, net_ema=self.net_ema)
+
+        # EMA-tracked token-constant de-sink bias (a checkpointed buffer). Independent of
+        # expert-load bias correction; the update reduces the per-step token stats across the DP mesh so
+        # the buffer is identical on every rank. Like expert_bias it is a buffer, so it must
+        # be mirrored into net_ema (the model-EMA worker copies parameters only).
+        if self._uses_ema_router_bias:
+            update_router_biases(net=self.net, device_mesh=dp_mesh)
+            if self.config.ema.enabled:
+                sync_router_biases_to_ema(net=self.net, net_ema=self.net_ema)
+
     def on_before_zero_grad(
         self, optimizer: torch.optim.Optimizer, scheduler: torch.optim.lr_scheduler.LRScheduler, iteration: int
     ) -> None:

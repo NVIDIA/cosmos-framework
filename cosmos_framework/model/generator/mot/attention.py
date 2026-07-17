@@ -68,6 +68,30 @@ class SplitInfo:
 AttentionMaskType = SplitInfo
 
 
+_SPLIT_INFO_ATTRIBUTES = (
+    "max_causal_len",
+    "max_full_len",
+    "max_sample_len",
+    "split_lens",
+    "attn_modes",
+    "sample_lens",
+    "is_three_way",
+    "vision_token_shapes",
+    "action_token_shapes",
+    "num_action_tokens_per_supertoken",
+    "null_action_supertokens",
+    "control_stream_token_ranges",
+    "noisy_token_range",
+    "control_weights",
+)
+
+
+def _is_split_info_compatible(attention_mask: object) -> bool:
+    return isinstance(attention_mask, SplitInfo) or all(
+        hasattr(attention_mask, attribute) for attribute in _SPLIT_INFO_ATTRIBUTES
+    )
+
+
 _dotproduct_attention_cache = {}
 
 
@@ -481,14 +505,16 @@ def dispatch_attention(
     packed_key_states_normalized: SequencePack | None = None,
 ) -> tuple[SequencePack, KVToStore | None]:
     assert memory_value is None, "Base dispatch_attention does not handle MemoryValue"
-    if isinstance(attention_mask, SplitInfo) and attention_mask.control_stream_token_ranges is not None:
+    if not _is_split_info_compatible(attention_mask):
+        raise TypeError(f"Unsupported attention metadata: {type(attention_mask)}")
+    if attention_mask.control_stream_token_ranges is not None:
         output = multi_control_two_way_attention(
             packed_query_states,
             packed_key_states,
             packed_value_states,
             attention_mask,
         )
-    elif isinstance(attention_mask, SplitInfo) and attention_mask.is_three_way:
+    elif attention_mask.is_three_way:
         output = three_way_attention(
             packed_query_states,
             packed_key_states,
@@ -497,15 +523,13 @@ def dispatch_attention(
             attention_meta=attention_mask,
             packed_key_states_normalized=packed_key_states_normalized,
         )
-    elif isinstance(attention_mask, SplitInfo):
+    else:
         output = two_way_attention(
             packed_query_states,
             packed_key_states,
             packed_value_states,
             packed_key_states_normalized=packed_key_states_normalized,
         )
-    else:
-        raise TypeError(f"Unsupported attention metadata: {type(attention_mask)}")
     return output, None
 
 

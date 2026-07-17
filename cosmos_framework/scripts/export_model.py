@@ -34,6 +34,12 @@ from cosmos_framework.inference.common.args import (
 )
 from cosmos_framework.inference.common.checkpoints import register_checkpoints
 from cosmos_framework.inference.common.config import serialize_config_dict
+from cosmos_framework.inference.common.distillation_export import (
+    build_student_checkpoint_metadata,
+    resolve_vision_checkpoint_path,
+    sanitize_student_model_config,
+    sanitize_student_public_model_config,
+)
 from cosmos_framework.inference.common.init import is_rank0
 from cosmos_framework.inference.common.public_model_config import build_public_model_config
 from cosmos_framework.inference.model import Cosmos3OmniConfig, Cosmos3OmniModel
@@ -50,21 +56,16 @@ def _coerce_to_base_model(model_dict: dict[str, Any]) -> None:
     """For distillation training configs, rewrite the target to the base
     OmniMoTModel so the exported checkpoint only contains the student network."""
     target = model_dict.get("_target_", "")
-    if "OmniMoTModel" in target:
-        return
+    base_model_target = convert_target_to_string(OmniMoTModel)
+    if target != base_model_target:
+        log.info(f"Overriding model target from {target} to OmniMoTModel for export")
 
-    log.info(f"Overriding model target from {target} to OmniMoTModel for export")
-    model_dict["_target_"] = convert_target_to_string(OmniMoTModel)
-
-    config = model_dict["config"]
-    base_field_names = {f.name for f in attrs.fields(OmniMoTModelConfig)}
-    extra_keys = [k for k in config if k not in base_field_names and not k.startswith("_")]
-    for k in extra_keys:
-        del config[k]
-
-    metadata = config.get("_metadata", {})
-    metadata["object_type"] = convert_target_to_string(OmniMoTModelConfig)
-    config["_metadata"] = metadata
+    sanitize_student_model_config(
+        model_dict,
+        base_model_target=base_model_target,
+        base_config_type=convert_target_to_string(OmniMoTModelConfig),
+        base_config_field_names={field.name for field in attrs.fields(OmniMoTModelConfig)},
+    )
 
 
 class Args(ParallelismOverrides):
@@ -73,11 +74,15 @@ class Args(ParallelismOverrides):
     """Output model directory."""
     config_only: bool = False
     """If True, only export config."""
+    student_only_checkpoint_metadata: bool = False
+    """If True, omit source checkpoint and credential paths from checkpoint metadata."""
     vit: bool = True
     """If True, export ViT weights."""
+    vit_checkpoint_path: ResolvedPath | None = None
+    """Optional local Hugging Face checkpoint directory containing ViT weights."""
 
 
-def _load_safetensor_weights(model_dir: Path, predicate: Callable[[str], bool]) -> dict:
+def _load_safetensor_weights(model_dir: Path, predicate: Callable[[str], bool]) -> dict[str, Any]:
     """Load weights from a safetensors file."""
     index_path = model_dir / "model.safetensors.index.json"
     if index_path.exists():
@@ -104,7 +109,7 @@ def _rewrite_visual_fqns_for_vfm(state_dict: dict[str, Any]) -> dict[str, Any]:
     return remapped_state_dict
 
 
-def export_model(args: Args):
+def export_model(args: Args) -> None:
     register_checkpoints()
     checkpoint_args = args.checkpoint.build_checkpoint(checkpoints={})
     args.output_dir.mkdir(parents=True, exist_ok=True)
@@ -118,12 +123,20 @@ def export_model(args: Args):
 
     # Download VLM checkpoint
     if args.vit:
-        vlm_checkpoint_path = model_dict["config"]["vlm_config"]["pretrained_weights"]["backbone_path"]
-        vlm_checkpoint_path = sanitize_uri(vlm_checkpoint_path)
-        checkpoint: CheckpointConfig | None = CheckpointConfig.maybe_from_uri(vlm_checkpoint_path)
-        if checkpoint is None:
-            raise ValueError(f"Invalid checkpoint path: {vlm_checkpoint_path}")
-        vlm_checkpoint_path = checkpoint.hf.download()
+        configured_vlm_checkpoint = model_dict["config"]["vlm_config"]["pretrained_weights"]["backbone_path"]
+
+        def download_vlm_checkpoint(configured_uri: str) -> str:
+            sanitized_uri = sanitize_uri(configured_uri)
+            checkpoint: CheckpointConfig | None = CheckpointConfig.maybe_from_uri(sanitized_uri)
+            if checkpoint is None:
+                raise ValueError(f"Invalid checkpoint path: {configured_uri}")
+            return checkpoint.hf.download()
+
+        vlm_checkpoint_path = resolve_vision_checkpoint_path(
+            local_path=str(args.vit_checkpoint_path) if args.vit_checkpoint_path is not None else None,
+            configured_uri=configured_vlm_checkpoint,
+            download_checkpoint=download_vlm_checkpoint,
+        )
     else:
         vlm_checkpoint_path = None
 
@@ -181,16 +194,23 @@ def export_model(args: Args):
     # Re-write 'config.json' to apply replacements.
     hf_config_file = args.output_dir / "config.json"
     hf_config_json = json.loads(hf_config_file.read_text())
+    if args.student_only_checkpoint_metadata:
+        sanitize_student_public_model_config(hf_config_json["model"])
     hf_config_json["model_type"] = "cosmos3_omni"
     serialize_config_dict(hf_config_json, hf_config_file)
 
     # Write 'checkpoint.json' last to indicate that the model is complete.
-    serialize_config_dict(checkpoint_args.model_dump(mode="json"), args.output_dir / "checkpoint.json")
+    checkpoint_metadata = (
+        build_student_checkpoint_metadata(use_ema_weights=checkpoint_args.use_ema_weights)
+        if args.student_only_checkpoint_metadata
+        else checkpoint_args.model_dump(mode="json")
+    )
+    serialize_config_dict(checkpoint_metadata, args.output_dir / "checkpoint.json")
 
     print(f"Saved model to {args.output_dir}")
 
 
-def main():
+def main() -> None:
     args = tyro_cli(Args, description=__doc__, config=(tyro.conf.OmitArgPrefixes,))
     export_model(args)
 

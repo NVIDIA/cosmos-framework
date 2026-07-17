@@ -382,7 +382,11 @@ class ConfigArgs(ArgsBase):
             case ConfigFileType.MODULE:
                 return unstructure_config(self.load_config().model)
             case ConfigFileType.YAML | ConfigFileType.JSON:
-                return load_model_config_from_hf_config(deserialize_config_dict(Path(self.config_file)))
+                config_dict = deserialize_config_dict(Path(self.config_file))
+                overrides_omegaconf = OmegaConf.from_dotlist(self.experiment_overrides)
+                config_dict = OmegaConf.to_container(OmegaConf.merge(config_dict, overrides_omegaconf), resolve=False)
+                assert isinstance(config_dict, dict)
+                return load_model_config_from_hf_config(config_dict)
             case _:
                 assert_never(self.config_file_type)
 
@@ -424,9 +428,18 @@ class CheckpointType(StrEnum):
 
     @classmethod
     def from_path(cls, path: Path) -> Self:
-        has_hf_weights = any(path.glob("*.safetensors")) or any(path.glob("*.safetensors.index.json"))
+        transformer_path = path / "transformer"
+        has_root_hf_weights = any(path.glob("*.safetensors")) or any(path.glob("*.safetensors.index.json"))
+        has_diffusers_hf_weights = (path / "model_index.json").is_file() and (
+            any(transformer_path.glob("*.safetensors"))
+            or any(transformer_path.glob("*.safetensors.index.json"))
+        )
+        has_hf_weights = has_root_hf_weights or has_diffusers_hf_weights
         if has_hf_weights:
-            if not (path / "config.json").exists():
+            has_hf_config = (path / "config.json").is_file() or (
+                has_diffusers_hf_weights and (transformer_path / "config.json").is_file()
+            )
+            if not has_hf_config:
                 raise ValueError(f"Invalid Hugging Face checkpoint: {path}")
             return cls("hf")
         if any(path.glob("*.distcp")):
@@ -463,6 +476,13 @@ class CheckpointConfig(pydantic.BaseModel):
     at the repository root (e.g. the task-specialized Text2Image / Image2Video
     diffusers checkpoints). Avoids a redundant download of the base model repo
     just to obtain the tokenizer.
+    """
+
+    experiment_overrides: tuple[str, ...] = ()
+    """Config defaults required by this checkpoint.
+
+    These are applied before command-line experiment overrides so callers can
+    still override a checkpoint default explicitly.
     """
 
     def download(self) -> str:
@@ -543,6 +563,9 @@ class CheckpointOverrides(ConfigOverrides):
             self.config_file = checkpoint.config_file
             self.checkpoint_hf = checkpoint.hf
             self.vlm_processor_from_checkpoint = checkpoint.vlm_processor_from_checkpoint
+            for value in reversed(checkpoint.experiment_overrides):
+                if value not in self.experiment_overrides:
+                    self.experiment_overrides.insert(0, value)
         elif self.checkpoint_path.startswith("s3://"):
             self.checkpoint_type = CheckpointType.DCP
             self.checkpoint_path = self.checkpoint_path.rstrip("/")

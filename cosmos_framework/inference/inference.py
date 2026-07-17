@@ -40,7 +40,7 @@ from cosmos_framework.inference.common.args import (
     SampleOutputs,
     SetupArgs,
 )
-from cosmos_framework.inference.common.inference import Inference, sync_distributed_errors
+from cosmos_framework.inference.common.inference import Inference, _download_on_rank0, sync_distributed_errors
 from cosmos_framework.inference.common.init import get_rank, get_world_size
 from cosmos_framework.inference.model import Cosmos3OmniConfig, Cosmos3OmniModel
 from cosmos_framework.inference.vision import (
@@ -57,6 +57,7 @@ from cosmos_framework.model.generator.reasoner.qwen3_vl.utils import _SYSTEM_PRO
 from cosmos_framework.model.generator.upsampler.prompts import is_upsampled_prompt
 from cosmos_framework.tools.visualize.video import save_img_or_video
 from cosmos_framework.utils import log
+from cosmos_framework.utils.checkpoint_db import CheckpointDirHf
 
 if TYPE_CHECKING:
     from cosmos_framework.configs.base.defaults.model_config import OmniMoTModelConfig
@@ -65,6 +66,13 @@ UpsampleTask = Literal["t2i", "t2v", "i2v"]
 
 
 _BatchItem = TypeVar("_BatchItem")
+
+_PROCESSOR_HF_INCLUDE = (
+    "*.json",
+    "*.jinja",
+    "merges.txt",
+    "vocab.json",
+)
 
 
 def _iter_packed_batches(
@@ -1104,20 +1112,36 @@ class OmniInference(Inference):
             Cosmos3OmniModel.after_load_model(model)
             save_config(config, setup_args.output_dir)
         else:
-            checkpoint_path = setup_args.download_checkpoint()
+            checkpoint_path = _download_on_rank0(setup_args.download_checkpoint)
             if setup_args.config_file_type == ConfigFileType.MODULE:
                 config = None
             else:
                 model_dict = setup_args.load_model_config_dict()
+                tokenizer_cfg = model_dict["config"]["vlm_config"]["tokenizer"]
                 if setup_args.vlm_processor_from_checkpoint:
                     # Source the VLM processor from the loaded checkpoint's own
                     # bundled files instead of the repository hardcoded in the
                     # model config. Drops the redundant base-model download.
-                    tokenizer_cfg = model_dict["config"]["vlm_config"]["tokenizer"]
+                    processor_path = checkpoint_path
+                elif repository := tokenizer_cfg.get("repository"):
+                    revision = tokenizer_cfg.get("revision")
+                    if revision is None:
+                        raise ValueError("VLM processor 'revision' is required when 'repository' is set")
+                    processor_path = _download_on_rank0(
+                        CheckpointDirHf(
+                            repository=repository,
+                            revision=revision,
+                            subdirectory=tokenizer_cfg.get("subdir", ""),
+                            include=_PROCESSOR_HF_INCLUDE,
+                        ).download
+                    )
+                else:
+                    processor_path = None
+                if processor_path is not None:
                     tokenizer_cfg.pop("repository", None)
                     tokenizer_cfg.pop("revision", None)
                     tokenizer_cfg.pop("subdir", None)
-                    tokenizer_cfg["tokenizer_type"] = str(checkpoint_path)
+                    tokenizer_cfg["tokenizer_type"] = str(processor_path)
                 # AVAE source: the configured ``avae_path`` when set, else the loaded
                 # checkpoint's bundled ``sound_tokenizer/``. The inference-only
                 # ``from_checkpoint`` key (default False) forces bundled; pop it so it

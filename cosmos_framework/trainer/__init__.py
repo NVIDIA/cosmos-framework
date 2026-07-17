@@ -386,6 +386,7 @@ class ImaginaireTrainer:
                     self.callbacks.on_before_optimizer_step(
                         model, optimizer, scheduler, grad_scaler, iteration=iteration
                     )
+                    model.on_before_optimizer_step(optimizer, scheduler, iteration=iteration)
                     self._optimizer_step(model, optimizer, scheduler, grad_scaler, iteration=iteration)
                     self.callbacks.on_before_zero_grad(model, optimizer, scheduler, iteration=iteration)
                     model.on_before_zero_grad(optimizer, scheduler, iteration=iteration)

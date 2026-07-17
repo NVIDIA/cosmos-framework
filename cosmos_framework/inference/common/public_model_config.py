@@ -34,6 +34,7 @@ _TYPE_ALIASES = {
     "projects.cosmos3.vfm.configs.base.defaults.compile.CompileConfig": "compile_config",
     "projects.cosmos3.vfm.configs.base.defaults.ema.EMAConfig": "ema_config",
     "projects.cosmos3.vfm.configs.base.defaults.model_config.DiffusionExpertConfig": "diffusion_expert_config",
+    "projects.cosmos3.vfm.configs.base.defaults.model_config.FixedStepSamplerConfig": "fixed_step_sampler_config",
     "projects.cosmos3.vfm.configs.base.defaults.model_config.LBLConfig": "lbl_config",
     "projects.cosmos3.vfm.configs.base.defaults.model_config.OmniMoTModelConfig": "omni_mot_model_config",
     "projects.cosmos3.vfm.configs.base.defaults.model_config.RectifiedFlowInferenceConfig": "rectified_flow_inference_config",

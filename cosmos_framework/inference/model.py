@@ -192,9 +192,7 @@ def _read_safetensors_index(index_path: Path) -> dict[str, str]:
 
 def _diffusers_weight_map(checkpoint_path: Path) -> dict[str, str]:
     index_path = checkpoint_path / _DIFFUSERS_ROOT_INDEX
-    if not index_path.exists():
-        raise FileNotFoundError(f"Diffusers safetensors index not found: {index_path}")
-    weight_map = _read_safetensors_index(index_path)
+    weight_map = _read_safetensors_index(index_path) if index_path.exists() else {}
     # The root index may be a reasoner manifest (e.g. Cosmos3-Edge) that lists only the
     # shared understanding-pathway weights and the vision tower. The transformer
     # component's own index holds the complete DiT state — including the
@@ -204,6 +202,10 @@ def _diffusers_weight_map(checkpoint_path: Path) -> dict[str, str]:
     if transformer_index_path.exists():
         for key, rel_path in _read_safetensors_index(transformer_index_path).items():
             weight_map.setdefault(key, f"transformer/{rel_path}")
+    if not weight_map:
+        raise FileNotFoundError(
+            f"Diffusers safetensors index not found at {index_path} or {transformer_index_path}"
+        )
     return weight_map
 
 
@@ -218,10 +220,11 @@ def _diffusers_files_to_keys(weight_map: dict[str, str]) -> dict[str, list[str]]
 
 def _is_diffusers_checkpoint(checkpoint_path: Path) -> bool:
     index_path = checkpoint_path / _DIFFUSERS_ROOT_INDEX
+    transformer_index_path = checkpoint_path / "transformer" / "diffusion_pytorch_model.safetensors.index.json"
+    if (checkpoint_path / _DIFFUSERS_MODEL_INDEX).exists() and (index_path.exists() or transformer_index_path.exists()):
+        return True
     if not index_path.exists():
         return False
-    if (checkpoint_path / _DIFFUSERS_MODEL_INDEX).exists():
-        return True
     return any(_is_diffusers_model_weight_path(path) for path in _read_safetensors_index(index_path).values())
 
 
