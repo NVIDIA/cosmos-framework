@@ -165,15 +165,21 @@ def _run(cmd: list[str], log_file: Path, extra_env: dict | None = None) -> tuple
 # --- input staging (shared with tests/nano_training_smoke_test.py) -----------
 
 
+def _hf_download(args: list[str], log_path: Path) -> tuple[int, str]:
+    """``uvx hf@latest download <args>``, retrying once with ``--refresh``
+    (``@latest`` doesn't refresh dependency index metadata)."""
+    rc, out = _run(["uvx", "hf@latest", "download", *args], log_path)
+    if rc != 0:
+        rc, out = _run(["uvx", "--refresh", "hf@latest", "download", *args], log_path)
+    return rc, out
+
+
 def _ensure_wan_vae(log_dir: Path) -> None:
     """Download the Wan2.2 VAE if not already present."""
     if _WAN_VAE.is_file():
         return
-    rc, out = _run(
+    rc, out = _hf_download(
         [
-            "uvx",
-            "hf@latest",
-            "download",
             "Wan-AI/Wan2.2-TI2V-5B",
             "Wan2.2_VAE.pth",
             "--local-dir",
@@ -210,11 +216,8 @@ def _ensure_libero(log_dir: Path) -> None:
     """Download the ``libero_10`` suite of ``nvidia/LIBERO_LeRobot_v3`` if absent."""
     if (_LIBERO_ROOT / "meta" / "info.json").is_file():
         return
-    rc, out = _run(
+    rc, out = _hf_download(
         [
-            "uvx",
-            "hf@latest",
-            "download",
             "--repo-type",
             "dataset",
             "nvidia/LIBERO_LeRobot_v3",

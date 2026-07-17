@@ -109,13 +109,19 @@ def _free_port() -> int:
 
 
 def _hf_download(args: list[str]) -> str:
-    """``uvx hf download <args> --quiet`` -> the local path it prints (from the HF cache)."""
-    result = subprocess.run(
-        ["uvx", "hf@latest", "download", *args, "--quiet"],
-        cwd=str(REPO_ROOT),
-        capture_output=True,
-        text=True,
-    )
+    """``uvx hf download <args> --quiet`` -> the local path it prints (from the HF cache).
+
+    Retries once with ``--refresh``: ``@latest`` doesn't refresh dependency index metadata.
+    """
+    for uvx in (["uvx"], ["uvx", "--refresh"]):
+        result = subprocess.run(
+            [*uvx, "hf@latest", "download", *args, "--quiet"],
+            cwd=str(REPO_ROOT),
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode == 0:
+            break
     if result.returncode != 0:
         pytest.fail(f"hf download failed for {args} (exit {result.returncode}):\n{result.stdout}\n{result.stderr}")
     lines = [ln.strip() for ln in result.stdout.splitlines() if ln.strip()]

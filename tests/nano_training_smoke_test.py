@@ -99,12 +99,21 @@ def _run(cmd: list[str], log_file: Path, extra_env: dict | None = None) -> tuple
     return returncode, "".join(captured)
 
 
+def _hf_download(args: list[str], log_path: Path) -> tuple[int, str]:
+    """``uvx hf@latest download <args>``, retrying once with ``--refresh``
+    (``@latest`` doesn't refresh dependency index metadata)."""
+    rc, out = _run(["uvx", "hf@latest", "download", *args], log_path)
+    if rc != 0:
+        rc, out = _run(["uvx", "--refresh", "hf@latest", "download", *args], log_path)
+    return rc, out
+
+
 def _ensure_inputs(log_dir: Path) -> None:
     """Step 1: download the dataset + Wan2.2 VAE if not already present."""
     if not (_DATASET_PATH / "train" / "video_dataset_file.jsonl").is_file():
-        rc, out = _run(
+        rc, out = _hf_download(
             [
-                "uvx", "hf@latest", "download", "--repo-type", "dataset",
+                "--repo-type", "dataset",
                 "nvidia/bridge-v2-subset-synthetic-captions",
                 "--revision", _DATASET_REVISION,
                 "--local-dir", str(_DATA_DIR), "--quiet",
@@ -117,9 +126,9 @@ def _ensure_inputs(log_dir: Path) -> None:
     )
 
     if not _WAN_VAE.is_file():
-        rc, out = _run(
+        rc, out = _hf_download(
             [
-                "uvx", "hf@latest", "download", "Wan-AI/Wan2.2-TI2V-5B", "Wan2.2_VAE.pth",
+                "Wan-AI/Wan2.2-TI2V-5B", "Wan2.2_VAE.pth",
                 "--local-dir", str(_WAN_VAE.parent), "--quiet",
             ],
             log_dir / "download_wan_vae.log",
