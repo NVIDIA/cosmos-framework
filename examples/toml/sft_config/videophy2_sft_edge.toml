@@ -2,8 +2,9 @@
 # SPDX-License-Identifier: OpenMDW-1.1
 
 # videophy2_sft_edge — VLM dialog SFT on VideoPhy-2 via CosmosDataLoader, on the
-# Cosmos3-Edge reasoner backbone (public nvidia/Cosmos3-Edge, model_type
-# nemotron_siglip2). Base config = cosmos_framework/configs/base/reasoner/config.py
+# Cosmos3-Edge reasoner backbone (public, ungated nvidia/Cosmos3-Edge, model_type
+# cosmos3_edge — native HF metadata; the classes are registered in-framework).
+# Base config = cosmos_framework/configs/base/reasoner/config.py
 # (selected by [job].task="vlm").
 #
 # Dataset prep:
@@ -24,15 +25,16 @@ name         = "videophy2_sft_edge"
 wandb_mode   = "disabled"
 
 [model]
-# Edge delta vs nano: the "cosmos" adapter is Qwen3-VL-only and rejects the
-# nemotron_siglip2 mask. flash_attention_2 is ~14% faster than sdpa with matching
-# loss curves; set "sdpa" where flash-attn is not installed (portable fallback).
+# Edge delta vs nano: the "cosmos" adapter is Qwen3-VL-only and rejects the Edge
+# reasoner's (cosmos3_edge) mask. flash_attention_2 is ~14% faster than sdpa with
+# matching loss curves; set "sdpa" where flash-attn is not installed (portable fallback).
 attn_implementation = "flash_attention_2"
 precision           = "bfloat16"                         # was [model.parallelism].precision
 
-# Supplies arch/config/tokenizer only — Cosmos3-Edge's own weights ship in
-# Diffusers-shard layout, so reasoner weights must come from a converted snapshot
-# via VLM_SAFETENSORS_PATH (see convert_edge_reasoner_to_vlm_safetensors).
+# Supplies arch/config/tokenizer AND weights: the training loader follows the
+# snapshot's root safetensors index into its weight shards, so reasoner weights
+# load directly from the (ungated) download — no converter step needed.
+# (VLM_SAFETENSORS_PATH remains an optional local-weights override in the launcher.)
 [model.backbone]
 model_name = "nvidia/Cosmos3-Edge"
 

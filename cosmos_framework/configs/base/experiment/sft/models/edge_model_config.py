@@ -32,12 +32,10 @@ from cosmos_framework.model.generator.mot.unified_mot import (
 from cosmos_framework.utils.lazy_config import LazyCall as L
 
 EDGE_MODEL_CONFIG = dict(
-    # Mirrors Cosmos3-Edge.yaml (action_gen: true), same as the nano baseline. WARNING:
-    # the Cosmos3-Edge checkpoint ships no action weights (action2llm/llm2action/
-    # action_modality_embed), so a recipe that keeps action_gen=True builds a frozen
-    # action head that the DCP converter leaves as uninitialized garbage — the
-    # graph-consistency dummy forward then yields 0.0 * NaN = NaN loss from iter 1.
-    # Recipes that don't train action data must override to False (vision_sft_edge does).
+    # Mirrors Cosmos3-Edge.yaml (action_gen: true), same as the nano baseline.
+    # Safe since the renewed (2026-07-16) checkpoint ships trained action-head
+    # weights (pre-renewal ones lacked them and NaN'd — see vision_sft_edge.py);
+    # recipes that don't train action data still override to False.
     action_gen=True,
     causal_training_strategy="none",
     input_caption_key="ai_caption",

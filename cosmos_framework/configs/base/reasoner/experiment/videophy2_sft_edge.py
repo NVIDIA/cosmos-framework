@@ -4,29 +4,28 @@
 """VideoPhy-2 SFT recipe on the Cosmos3-Edge reasoner.
 
 Mirrors ``videophy2_sft_nano`` but targets the Cosmos3-Edge reasoner
-(Nemotron-2B-Dense-VL LM + nemotron_siglip2_h vision tower,
-``model_type="nemotron_siglip2"``) instead of Qwen3-VL-8B. ``model_name`` is the
-PUBLIC omni release ``nvidia/Cosmos3-Edge`` (arch/config/tokenizer); its own
-weights are in Diffusers-shard layout, so canonical reasoner weights are supplied
-via ``VLM_SAFETENSORS_PATH`` from a converted snapshot
-(``cosmos_framework.scripts.convert_edge_reasoner_to_vlm_safetensors``) — the
-direct parallel to nano's ``convert_model_to_vlm_safetensors`` -> ``Cosmos3-Nano-VLM``.
-``VLM_SAFETENSORS_PATH`` is REQUIRED here (unlike nano, whose public Qwen
-``model_name`` doubles as a valid weight fallback).
+(Nemotron-2B-Dense-VL LM + SigLIP2 vision tower, ``model_type="cosmos3_edge"``)
+instead of Qwen3-VL-8B. ``model_name`` is the public omni release
+``nvidia/Cosmos3-Edge`` and supplies arch/config/tokenizer AND the reasoner
+weights: the training loader follows the snapshot's root safetensors index, so
+weights load directly from the download — no converter step.
+``VLM_SAFETENSORS_PATH`` is an OPTIONAL launcher override for loading from a
+local safetensors directory instead (same mechanism as nano/super).
 
 Deltas vs ``videophy2_sft_nano`` (everything else is identical):
     * ``override /vlm_policy``: ``qwen3_vl_8b_instruct`` -> ``cosmos3_edge_reasoner``.
     * ``optimizer.lr_multipliers``: nano sets ``{"model.visual": 1.0}`` to lift its
       projector (which sits UNDER ``model.visual`` in Qwen) off the inherited default
       ``0.1x``; edge OMITS the override. Edge's projector is a top-level
-      ``model.projector`` (nemotron_siglip2 PatchMerger), so the default
+      ``model.projector`` (the Edge reasoner's PatchMerger), so the default
       ``{"model.visual": 0.1}`` only matches the frozen SigLIP2 tower and the
       projector already trains at the uniform ``1.0x`` -- same net effect as fixed
       nano (projector + LM + lm_head all at ``1e-6``), no key needed.
-    * ``model.config.freeze``: ``freeze_vision_encoder=True`` raises for
-      ``model_type="nemotron_siglip2"`` (vlm_model.py ``_get_vision_encoder_modules``),
-      so freeze the SigLIP2 tower via the regex ``frozen_params=[r"model\\.visual\\."]``
-      instead — same intent (vision frozen, projector + LM trainable).
+    * ``model.config.freeze``: ``freeze_vision_encoder=True`` only supports the
+      known Qwen/Intern towers (vlm_model.py ``_get_vision_encoder_modules``), not
+      the Edge (``cosmos3_edge``) tower, so freeze the SigLIP2 tower via the regex
+      ``frozen_params=[r"model\\.visual\\."]`` instead — same intent (vision
+      frozen, projector + LM trainable).
 
 The dataflow helpers below are duplicated from ``videophy2_sft_nano`` on purpose
 (NOT imported): the reasoner config loader reloads experiment modules with
@@ -164,7 +163,7 @@ videophy2_sft_edge = LazyDict(
             # projector lives UNDER model.visual (Qwen model.visual.merger) and would
             # otherwise inherit the reasoner default {"model.visual": 0.1}. Edge needs
             # NO override: its projector is a top-level model.projector
-            # (nemotron_siglip2 PatchMerger), not under model.visual, so the inherited
+            # (the Edge reasoner's PatchMerger), not under model.visual, so the inherited
             # default {"model.visual": 0.1} only matches the frozen (optimizer-
             # excluded) SigLIP2 tower and never reaches the projector -- which thus
             # already trains at the default 1.0x = 1e-6. So lr_multipliers is omitted.
@@ -185,10 +184,9 @@ videophy2_sft_edge = LazyDict(
         ),
         model=dict(
             config=dict(
-                # Edge delta: freeze the SigLIP2 vision tower via regex; the
-                # freeze_vision_encoder=True path raises ValueError for
-                # model_type="nemotron_siglip2". Leaves projector + LM trainable,
-                # matching nano's intent.
+                # Edge delta: freeze the SigLIP2 tower via regex —
+                # freeze_vision_encoder=True only supports Qwen/Intern towers.
+                # Projector + LM stay trainable, matching nano's intent.
                 freeze=dict(
                     frozen_params=[r"model\.visual\."],
                 ),

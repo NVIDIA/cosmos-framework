@@ -3,34 +3,38 @@
 # SPDX-License-Identifier: OpenMDW-1.1
 
 # Structured-TOML launch for videophy2_sft_edge (VLM dialog SFT on VideoPhy-2 via
-# CosmosDataLoader) targeting the Cosmos3-Edge reasoner backbone
-# (public nvidia/Cosmos3-Edge, model_type nemotron_siglip2). Drives
+# CosmosDataLoader) targeting the Cosmos3-Edge reasoner backbone (public,
+# ungated nvidia/Cosmos3-Edge, model_type cosmos3_edge — native HF metadata,
+# no remote code; the classes are registered in-framework). Drives
 # cosmos_framework.scripts.train against
 # examples/toml/sft_config/videophy2_sft_edge.toml.
 #
 # [job].task = "vlm" — picks cosmos_framework/configs/base/reasoner/config.py as the base config.
 #
+# Reasoner weights load DIRECTLY from the nvidia/Cosmos3-Edge snapshot resolved
+# via model_name: the training loader follows the repo's root safetensors index
+# into its weight shards. No converter step and no required weights env var.
+#
 # Required env:
 #   VIDEOPHYSICS_ROOT      dir containing videophy2_train/ and videophy2_val/
 #                          (each with meta.json + media/ + text/). Populate via
 #                          `python -m cosmos_framework.scripts.reasoner.prepare_videophy2_from_hf`.
-#   VLM_SAFETENSORS_PATH   canonical Edge-reasoner weights snapshot, built with
-#                          `python -m cosmos_framework.scripts.convert_edge_reasoner_to_vlm_safetensors
-#                          --checkpoint-path Cosmos3-Edge -o examples/checkpoints/Cosmos3-Edge-Reasoner-VLM`.
-#                          Plumbed to backbone.safetensors_path; model_name
-#                          (nvidia/Cosmos3-Edge) still drives arch/tokenizer.
-#                          REQUIRED — Cosmos3-Edge's own weights are in
-#                          Diffusers-shard layout, so unlike the nano recipe the
-#                          public model_name is NOT a valid weight fallback.
 #
 # Optional env:
-#   HF_TOKEN               for the (gated) nvidia/Cosmos3-Edge download used by
-#                          the converter + tokenizer/arch discovery.
+#   VLM_SAFETENSORS_PATH   local directory of reasoner safetensors to load
+#                          INSTEAD of the nvidia/Cosmos3-Edge snapshot (same
+#                          optional override as the nano/super launchers).
+#                          When set, plumbed to backbone.safetensors_path via a
+#                          tail override; model_name still drives
+#                          tokenizer/architecture discovery.
+#   HF_TOKEN               NOT needed for nvidia/Cosmos3-Edge (the repo is
+#                          ungated); set it only if other downloads in your
+#                          environment require authentication.
 #   NPROC_PER_NODE         torchrun GPUs per node; default 8. Set 4 on a GB200x4
 #                          node — Edge is only 2B and fits a 4-GPU allocation.
 #   EXTRA_TAIL_OVERRIDES   extra Hydra-style overrides. On nodes without a
-#                          flash-attn wheel (e.g. aarch64/GB200) fall back to
-#                          the portable attention impl:
+#                          flash-attn wheel fall back to the portable attention
+#                          impl:
 #                          EXTRA_TAIL_OVERRIDES='model.config.policy.attn_implementation=sdpa'
 #
 # Usage (8-GPU allocation, inside the training container, from the repo root):
@@ -40,19 +44,17 @@
 
 TOML_FILE="examples/toml/sft_config/videophy2_sft_edge.toml"
 
-# VLM_SAFETENSORS_PATH is REQUIRED for edge (unlike nano/super, whose public Qwen
-# model_name is a valid weight fallback): Cosmos3-Edge ships its own weights in a
-# Diffusers-shard layout, so model_name alone cannot supply reasoner weights. Fail
-# fast with a clear message rather than deep inside weight loading.
-: "${VLM_SAFETENSORS_PATH:?required for the edge recipe — build it via convert_edge_reasoner_to_vlm_safetensors (see docs/training.md Step 2)}"
-
 TAIL_OVERRIDES=(
     ${EXTRA_TAIL_OVERRIDES:-}
 )
 
-# Plumb the required snapshot to backbone.safetensors_path so the framework loads
-# reasoner weights from it while the public HF model_name still drives
-# tokenizer/architecture discovery.
-TAIL_OVERRIDES+=("model.config.policy.backbone.safetensors_path=$VLM_SAFETENSORS_PATH")
+# Optional: when VLM_SAFETENSORS_PATH is set, plumb it to backbone.safetensors_path
+# so the framework loads reasoner weights from the local directory instead of the
+# nvidia/Cosmos3-Edge snapshot (the public HF model_name still drives
+# tokenizer/architecture discovery). When unset, nothing is added and weights come
+# directly from the snapshot.
+if [[ -n "${VLM_SAFETENSORS_PATH:-}" ]]; then
+    TAIL_OVERRIDES+=("model.config.policy.backbone.safetensors_path=$VLM_SAFETENSORS_PATH")
+fi
 
 source "$(dirname "${BASH_SOURCE[0]}")/_sft_launcher_common.sh"

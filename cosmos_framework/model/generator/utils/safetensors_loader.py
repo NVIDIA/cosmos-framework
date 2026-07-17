@@ -31,7 +31,9 @@ Three layers of functionality, lowest first:
      language model.  Auto-detects the checkpoint format
      (:func:`detect_vlm_checkpoint_format`).
    - :func:`load_vlm_model` — generic loader for HF VLM checkpoints into an
-     FSDP-wrapped ``HFModel``; honors a skip-pattern overlay.
+     FSDP-wrapped ``HFModel``; honors a skip-pattern overlay.  Also handles
+     the ``nvidia/Cosmos3-Edge`` indexed-snapshot layout — see
+     :func:`_detect_indexed_snapshot`.
 
 Borrowed from cosmos_rl's ``MultiRankWeightLoader`` (renamed to
 ``MultiRankCheckpointLoader`` here) with modifications for loading from
@@ -39,10 +41,13 @@ S3 / GCS and support for Cosmos3 VFM models.
 https://github.com/nvidia-cosmos/cosmos-rl/blob/main/cosmos_rl/utils/multi_rank_weight_loader.py
 """
 
+import hashlib
+import json
 import os
 import re
 import time
 from collections.abc import Callable, Iterator
+from typing import NamedTuple
 
 import torch
 import torch.distributed as dist
@@ -135,6 +140,172 @@ def _list_safetensors_files(
             backend_args=backend_args,
         )
     )
+
+
+# ── Indexed-snapshot support (nvidia/Cosmos3-Edge layout) ────────────────────
+#
+# The nvidia/Cosmos3-Edge repo ships no top-level *.safetensors; a root
+# ``model.safetensors.index.json`` maps the reasoner keys into subdirectory
+# shard files that also carry DiT-generation tensors absent from the index.
+# Only the indexed keys are read (remapped to canonical model keys); everything
+# else in those shard files is left untouched.
+
+_ROOT_INDEX_FILENAME = "model.safetensors.index.json"
+
+# Known-good sha256 of ``vision_encoder/model.safetensors`` (be935d6) — see
+# :func:`_verify_edge_vision_shard_hash` for why loading must be pinned to it.
+_EDGE_VISION_SHARD_RELPATH = "vision_encoder/model.safetensors"
+_EDGE_VISION_SHARD_SHA256 = "2180ad739ecc96b5c1e9386892d3c5c08bfa42b9cdab9aabc53b028671db89b3"
+
+
+def convert_key_from_cosmos3_edge_index(name: str) -> str | None:
+    """Map a nvidia/Cosmos3-Edge root-index reasoner key to the canonical
+    ``Cosmos3EdgeForConditionalGeneration`` state-dict key.
+
+    The root index uses the public Edge reasoner manifest layout (28
+    ``layers.{N}`` blocks, each carrying attention + MLP), while the model
+    uses the 28-paired / 56-block ``model.language_model.layers.*`` layout:
+    block ``2N`` is attention (``mixer.{q,k,v,o}_proj``), block ``2N+1`` is
+    MLP (``mixer.{up,down}_proj``).
+
+    Key mapping (index → model)::
+
+        layers.{N}.self_attn.to_{q,k,v}.weight → model.language_model.layers.{2N}.mixer.{q,k,v}_proj.weight
+        layers.{N}.self_attn.to_out.weight     → model.language_model.layers.{2N}.mixer.o_proj.weight
+        layers.{N}.input_layernorm.weight      → model.language_model.layers.{2N}.norm.weight
+        layers.{N}.mlp.{up,down}_proj.weight   → model.language_model.layers.{2N+1}.mixer.{up,down}_proj.weight
+        layers.{N}.post_attention_layernorm.weight → model.language_model.layers.{2N+1}.norm.weight
+        embed_tokens.weight → model.language_model.embeddings.weight
+        norm.weight         → model.language_model.norm_f.weight
+        lm_head.weight      → lm_head.weight
+        model.visual.* / model.projector.* → unchanged
+
+    Returns:
+        The canonical model key, or None for keys outside the known reasoner
+        manifest (callers fail loudly on None — see :func:`_detect_indexed_snapshot`).
+    """
+    if name.startswith(("model.visual.", "model.projector.")):
+        return name
+    flat = {
+        "embed_tokens.weight": "model.language_model.embeddings.weight",
+        "norm.weight": "model.language_model.norm_f.weight",
+        "lm_head.weight": "lm_head.weight",
+    }
+    if name in flat:
+        return flat[name]
+    m = re.match(r"layers\.(\d+)\.(.+)$", name)
+    if m is None:
+        return None
+    n, rest = int(m.group(1)), m.group(2)
+    # (paired-block offset, model tail): even block = attention, odd block = MLP.
+    table = {
+        "self_attn.to_q.weight": (0, "mixer.q_proj.weight"),
+        "self_attn.to_k.weight": (0, "mixer.k_proj.weight"),
+        "self_attn.to_v.weight": (0, "mixer.v_proj.weight"),
+        "self_attn.to_out.weight": (0, "mixer.o_proj.weight"),
+        "input_layernorm.weight": (0, "norm.weight"),
+        "mlp.up_proj.weight": (1, "mixer.up_proj.weight"),
+        "mlp.down_proj.weight": (1, "mixer.down_proj.weight"),
+        "post_attention_layernorm.weight": (1, "norm.weight"),
+    }
+    if rest not in table:
+        return None
+    offset, tail = table[rest]
+    return f"model.language_model.layers.{2 * n + offset}.{tail}"
+
+
+class _IndexedSnapshot(NamedTuple):
+    """Parsed root-index manifest of an indexed snapshot."""
+
+    files: list[str]  # unique subdir-relative shard paths, sorted
+    key_map: dict[str, str]  # raw root-index key -> canonical model state-dict key
+
+
+def _detect_indexed_snapshot(checkpoint_path: str) -> _IndexedSnapshot | None:
+    """Detect the indexed-snapshot layout; None keeps the existing flat path.
+
+    Triggers only when ALL of the following hold (every other layout —
+    nano/super/llava flat snapshots, S3 URIs, bare HF repo ids — returns None
+    and flows through the unchanged top-level-glob path):
+
+    - ``checkpoint_path`` is a local directory,
+    - it contains NO top-level ``*.safetensors``,
+    - it has a root ``model.safetensors.index.json`` whose ``weight_map``
+      references shard files in subdirectories.
+
+    Once the layout matches, any inconsistency is a hard error (unmappable
+    index keys, two index keys colliding onto one model key, missing shard
+    files) — half-loading a checkpoint must never pass silently.
+    """
+    if not os.path.isdir(checkpoint_path):
+        return None
+    with os.scandir(checkpoint_path) as entries:
+        if any(entry.name.endswith(".safetensors") and entry.is_file() for entry in entries):
+            return None
+    index_path = os.path.join(checkpoint_path, _ROOT_INDEX_FILENAME)
+    if not os.path.isfile(index_path):
+        return None
+    with open(index_path) as f:
+        weight_map: dict[str, str] = json.load(f).get("weight_map") or {}
+    if not weight_map or not any("/" in rel_path for rel_path in weight_map.values()):
+        return None
+
+    key_map: dict[str, str] = {}
+    unmapped: list[str] = []
+    for raw_key in weight_map:
+        dest_key = convert_key_from_cosmos3_edge_index(raw_key)
+        if dest_key is None:
+            unmapped.append(raw_key)
+        else:
+            key_map[raw_key] = dest_key
+    if unmapped:
+        raise ValueError(
+            f"Indexed snapshot at '{checkpoint_path}': {len(unmapped)} root-index "
+            f"key(s) have no canonical model-key mapping. First up to 10: {sorted(unmapped)[:10]}"
+        )
+    if len(set(key_map.values())) != len(key_map):
+        by_dest: dict[str, list[str]] = {}
+        for raw_key, dest_key in key_map.items():
+            by_dest.setdefault(dest_key, []).append(raw_key)
+        collisions = {d: sorted(raws) for d, raws in sorted(by_dest.items()) if len(raws) > 1}
+        raise ValueError(
+            f"Indexed snapshot at '{checkpoint_path}': multiple root-index keys "
+            f"map to the same model key (first up to 5): {dict(list(collisions.items())[:5])}"
+        )
+
+    files = sorted(set(weight_map.values()))
+    missing_files = [f for f in files if not os.path.isfile(os.path.join(checkpoint_path, f))]
+    if missing_files:
+        raise FileNotFoundError(
+            f"Indexed snapshot at '{checkpoint_path}': shard file(s) referenced by "
+            f"{_ROOT_INDEX_FILENAME} not found: {missing_files}"
+        )
+    return _IndexedSnapshot(files=files, key_map=key_map)
+
+
+def _verify_edge_vision_shard_hash(checkpoint_path: str, files: list[str]) -> None:
+    """G2 guard: refuse to load a changed ``vision_encoder/model.safetensors``.
+
+    This pipeline keeps the OLD patch-embedding weight-layout convention; an
+    upstream re-export in a different convention (e.g. transformers-main's
+    native layout) would load without error and silently corrupt vision
+    features — see outputs/audit/cosmos3_edge_native_vision_layout_bug.md.
+    Runs on every rank: a rank-0-only raise would hang the peers at the next
+    collective (shared-storage page cache makes the repeat reads cheap).
+    """
+    if _EDGE_VISION_SHARD_RELPATH not in files:
+        return
+    shard_path = os.path.join(checkpoint_path, _EDGE_VISION_SHARD_RELPATH)
+    with open(shard_path, "rb") as f:
+        actual = hashlib.file_digest(f, "sha256").hexdigest()
+    if actual != _EDGE_VISION_SHARD_SHA256:
+        raise ValueError(
+            f"{shard_path}: sha256 mismatch (expected {_EDGE_VISION_SHARD_SHA256}, "
+            f"got {actual}): upstream vision weights changed — re-verify the "
+            "patch-embedding layout convention (see "
+            "outputs/audit/cosmos3_edge_native_vision_layout_bug.md) before training"
+        )
+    log.info(f"G2 guard: {_EDGE_VISION_SHARD_RELPATH} sha256 verified ({actual[:16]}…)")
 
 
 def _get_local_rank_and_size(device_mesh: DeviceMesh) -> tuple[int, int]:
@@ -327,6 +498,7 @@ class MultiRankCheckpointLoader:
         checkpoint_path: str,
         credential_path: str | None,
         loading_device: torch.device,
+        index: _IndexedSnapshot | None = None,
     ) -> tuple[
         dict[str, torch.Tensor],
         dict[str, tuple[list, int]],
@@ -342,6 +514,15 @@ class MultiRankCheckpointLoader:
                 fall back to Hugging Face.
             credential_path: Path to the credential file for S3/GCS.
             loading_device: Device to load tensors on.
+            index: Optional indexed-snapshot manifest (from
+                :func:`_detect_indexed_snapshot`).  When set: the shard list
+                comes from the root index (no top-level listing, no HF
+                fallback); only tensors named in ``index.key_map`` are kept
+                (the shard files also carry DiT tensors that must NOT be
+                loaded); kept tensors are renamed to canonical model keys at
+                read time, BEFORE the cross-rank name gather, so all ranks
+                collectivize on canonical names.  ``None`` (the default)
+                preserves the existing behavior exactly.
 
         Returns:
             Tuple of (rank_tensors, rank_tensor_metadata, weights_of_ckpt_names):
@@ -358,7 +539,10 @@ class MultiRankCheckpointLoader:
         log.info(f"Loading safetensors files from: {checkpoint_path}", rank0_only=False)
         log.info(f"Credential path: {credential_path}", rank0_only=False)
         list_error: Exception | None = None
-        if checkpoint_path.startswith(_HF_URI_PREFIX):
+        if index is not None:
+            # Indexed snapshot: shard list comes from the root-index manifest.
+            safetensors_files = list(index.files)
+        elif checkpoint_path.startswith(_HF_URI_PREFIX):
             safetensors_files: list[str] = []
         else:
             try:
@@ -421,7 +605,14 @@ class MultiRankCheckpointLoader:
                 weights_data = easy_io.get(full_path, backend_args=backend_args)
                 state_dict = load_safetensors(weights_data)
                 for name, tensor in state_dict.items():
-                    # Names are stored RAW here; per-checkpoint name
+                    if index is not None:
+                        canonical_name = index.key_map.get(name)
+                        if canonical_name is None:
+                            # Not in the root index (e.g. DiT weights sharing
+                            # the shard file) — never load it.
+                            continue
+                        name = canonical_name
+                    # Otherwise names are stored RAW here; per-checkpoint name
                     # conversion (see _make_name_converter / the
                     # convert_weight_from_*_hf functions) is applied later
                     # by the caller after broadcast.
@@ -1048,6 +1239,13 @@ def load_vlm_model(
     explicit ``hf://org/model`` Hub URIs and bare ``org/model`` repo IDs fall
     back to Hugging Face.
 
+    Local directories in the indexed-snapshot layout (see
+    :func:`_detect_indexed_snapshot`) take a dedicated branch: only the
+    root-index keys are read from the subdir shard files, remapped to canonical
+    model keys (:func:`convert_key_from_cosmos3_edge_index`), and verified for
+    completeness in both directions; the vision-shard content hash is checked
+    first (:func:`_verify_edge_vision_shard_hash`).
+
     Both ``tensor_names_to_skip`` and ``extra_skip_patterns`` are lists of
     regex patterns applied to the RESOLVED model key (post-name_converter).
     Phase-5 skips any model key matched by either list; Phase-6's
@@ -1107,6 +1305,16 @@ def load_vlm_model(
             "handling. Use a dense VLM checkpoint (2B, 4B, 8B, 32B) until then."
         )
 
+    # Indexed-snapshot detection (nvidia/Cosmos3-Edge layout).  Every other
+    # layout returns None and takes the existing flat-glob path unchanged.
+    indexed = _detect_indexed_snapshot(checkpoint_path)
+    if indexed is not None:
+        log.info(
+            f"load_vlm_model: indexed snapshot detected at {checkpoint_path} "
+            f"({len(indexed.key_map)} root-index keys in {len(indexed.files)} subdir shard files)"
+        )
+        _verify_edge_vision_shard_hash(checkpoint_path, indexed.files)
+
     # FUTURE: to re-enable FSDP-2 CPU offload, detect CPU local_views via
     # ``sample.device.type == "cpu"``, force the loader to single-rank (None
     # instead of _get_dp_shard_mesh), and pin ``target_device`` to ``"cpu"``.
@@ -1115,6 +1323,7 @@ def load_vlm_model(
         checkpoint_path=checkpoint_path,
         credential_path=credential_path if credential_path else "",
         loading_device="cpu",
+        index=indexed,
     )
     all_tensor_names, tensor_to_rank = loader.gather_tensor_names_and_build_mapping(
         ckpt_names,
@@ -1128,6 +1337,7 @@ def load_vlm_model(
     compiled_skip_patterns = [re.compile(p) for p in (skip_patterns or [])]
     keys_loaded: set[str] = set()
     skipped_model_keys: set[str] = set()
+    unexpected_index_keys: set[str] = set()
 
     target_device = "cuda" if torch.cuda.is_available() else "cpu"
 
@@ -1147,14 +1357,19 @@ def load_vlm_model(
         rank_tensor_meta,
         device=target_device,
     ):
-        dest_name = name_converter(ckpt_name)
+        # Indexed snapshots arrive pre-remapped to canonical model keys (see
+        # load_files_parallel) — the suffix converter must not touch them.
+        dest_name = ckpt_name if indexed is not None else name_converter(ckpt_name)
 
         if any(p.fullmatch(dest_name) for p in compiled_skip_patterns):
             skipped_model_keys.add(dest_name)
             continue
 
         if dest_name not in vlm_state_dict:
-            continue  # extra checkpoint key — ignore
+            if indexed is not None:
+                # Root-index keys must land on model keys — fail loudly below.
+                unexpected_index_keys.add(dest_name)
+            continue  # extra checkpoint key — ignore (flat layouts only)
 
         target = vlm_state_dict[dest_name]
         is_dtensor = isinstance(target, DTensor)
@@ -1172,6 +1387,29 @@ def load_vlm_model(
         with torch.no_grad():
             local_view.data.copy_(shard)
         keys_loaded.add(dest_name)
+
+    # Indexed snapshots: every root-index key must have been consumed — loaded
+    # or intentionally skipped; anything else means the remap and the model
+    # disagree.
+    if indexed is not None:
+        if unexpected_index_keys:
+            raise ValueError(
+                f"load_vlm_model: {len(unexpected_index_keys)} root-index key(s) "
+                f"mapped to model keys that do not exist in the model state dict "
+                f"for '{checkpoint_path}'. First up to 10: {sorted(unexpected_index_keys)[:10]}"
+            )
+        unconsumed = {
+            raw_key
+            for raw_key, dest_key in indexed.key_map.items()
+            if dest_key not in keys_loaded and dest_key not in skipped_model_keys
+        }
+        if unconsumed:
+            # weight_map named a shard file that doesn't actually contain the key.
+            raise ValueError(
+                f"load_vlm_model: {len(unconsumed)} root-index key(s) never found "
+                f"in their shard files for '{checkpoint_path}'. First up to 10: "
+                f"{sorted(unconsumed)[:10]}"
+            )
 
     # Phase 6: completeness check with tied-embedding AND skip-list tolerance.
     missing = set(vlm_state_dict) - keys_loaded - skipped_model_keys

@@ -51,10 +51,10 @@ from cosmos_framework.utils.lazy_config import LazyDict
 
 cs = ConfigStore.instance()
 
-# Vision SFT trains no action tokens, so drop the action head entirely. This also
-# sidesteps the NaN trap: the Cosmos3-Edge checkpoint ships no action weights, and
-# with action_gen=True the frozen head would be left as uninitialized DCP garbage,
-# turning the graph-consistency dummy forward's 0.0 * preds_action into NaN.
+# Vision SFT trains no action tokens, so drop the action head (recipe semantics).
+# Historical: pre-renewal (< 2026-07-16) Edge checkpoints shipped no action weights,
+# so action_gen=True NaN'd (uninitialized frozen head made the graph-consistency
+# dummy forward's 0.0 * preds_action NaN).
 _EDGE_VISION_MODEL_CONFIG = copy.deepcopy(EDGE_MODEL_CONFIG)
 _EDGE_VISION_MODEL_CONFIG["action_gen"] = False
 

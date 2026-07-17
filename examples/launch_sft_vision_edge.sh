@@ -12,7 +12,8 @@
 #                         (must contain train/video_dataset_file.jsonl)
 #   BASE_CHECKPOINT_PATH  default: examples/checkpoints/Cosmos3-Edge
 #   WAN_VAE_PATH          default: examples/checkpoints/wan22_vae/Wan2.2_VAE.pth
-#   HF_TOKEN              if any tokenizer download requires gated HF access
+#   HF_TOKEN              not needed for nvidia/Cosmos3-Edge (the repo is
+#                         ungated); set only if another download requires it
 #   OUTPUT_ROOT           default: outputs/train
 #
 # Usage (8-GPU allocation, inside the training container, from the repo root):
