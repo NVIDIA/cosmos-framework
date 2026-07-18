@@ -104,6 +104,14 @@ def build_processor(
     bucket: Optional[str] = None,
     cache_dir: Optional[str] = None,
 ):
+    # The Edge policy checkpoint bundles a custom Cosmos3EdgeProcessor with no
+    # loadable processor code (no auto_map / remote code), so it cannot be built
+    # via AutoProcessor. Source the identical processor from the Edge reasoner
+    # repo it was post-trained from -- this matches how internal training sources
+    # the Nemotron-3-Dense-VL processor (never from the policy checkpoint).
+    if "Cosmos3-Edge-Policy-DROID" in tokenizer_type:
+        tokenizer_type = "nvidia/Cosmos3-Edge-Reasoner"
+
     # Local artifact path: source the processor from a bundled directory
     # (e.g. the top level of nvidia/Cosmos3-Nano, which ships its own
     # preprocessor_config.json, tokenizer.json, etc). Avoids the redundant
