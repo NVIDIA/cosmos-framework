@@ -635,6 +635,35 @@ _ReasonerTopP = Annotated[float, pydantic.Field(gt=0, le=1)]
 _ReasonerRepetitionPenalty = Annotated[float, pydantic.Field(gt=0)]
 
 
+def _mapping_get(node: Any, key: str) -> Any:
+    """``.get`` that tolerates None and non-mapping nodes (dict / DictConfig / LazyDict)."""
+    getter = getattr(node, "get", None)
+    return getter(key) if callable(getter) else None
+
+
+def _reasoner_vision_capable(model_config: "OmniMoTModelConfig") -> bool:
+    """Whether the checkpoint's reasoner LM can encode image/video prompts.
+
+    Qwen-family reasoners carry the ViT inside the checkpoint, gated by
+    ``include_visual``; a falsy value (e.g. an old ``--no-vit`` export, or a
+    text-only LLM backbone) means the tower was never built, so a vision
+    prompt would only fail mid-batch at the ``hasattr(causal_lm, "visual")``
+    gate. Edge's Nemotron reasoner sets ``include_visual=None`` by design and
+    loads its SigLIP2 tower lazily (``_ensure_vision_tower``), so it is always
+    vision-capable. Unknown families are treated as capable (never block).
+    """
+    vlm_config = model_config.vlm_config
+    model_instance = getattr(vlm_config, "model_instance", None)
+    target = str(_mapping_get(model_instance, "_target_") or "")
+    model_name = getattr(vlm_config, "model_name", "") or ""
+    if "Nemotron3DenseVLTextForCausalLM" in target or "Cosmos3-Edge" in model_name:
+        return True
+    if "Qwen" not in target and not model_name.startswith("Qwen/"):
+        return True
+    include_visual = _mapping_get(_mapping_get(model_instance, "config"), "include_visual")
+    return bool(include_visual)
+
+
 class ReasonerDataArgs(ArgsBase):
     """Resolved reasoner (VLM) text-generation arguments. All fields are ``| None`` so
     non-reasoner samples (which never populate these) pass ``OmniSampleArgs`` validation;
@@ -677,6 +706,14 @@ class ReasonerDataOverrides(OverridesBase):
         self = cast("SampleDataOverrides", self)
         if not self.prompt.strip():
             raise ValueError("Reasoner inference requires a non-empty 'prompt'.")
+        if self.vision_path is not None and not _reasoner_vision_capable(model_config):
+            raise ValueError(
+                f"Reasoner sample {getattr(self, 'name', None)!r} conditions on vision input "
+                f"'{self.vision_path}', but the loaded checkpoint's reasoner LM has no visual tower "
+                "(model config include_visual is false — e.g. a --no-vit export or a text-only LLM "
+                "backbone). Use a text-only prompt, or re-export the checkpoint with the default "
+                "--vit / use a full checkpoint for image/video reasoner prompts."
+            )
 
 
 class _TransferDataBase:
@@ -1005,9 +1042,15 @@ class OmniSampleOverrides(
         "Qwen/Qwen3-VL-32B-Instruct": "32B",
         "Qwen/Qwen3-VL-30B-A3B-Instruct": "30B-A3B",
         "Qwen/Qwen3-VL-235B-A22B-Instruct": "235B-A22B",
+        "nvidia/Cosmos3-Edge-Reasoner": "2B",
     }
 
     _RESOLUTION_SHIFT_DEFAULTS: ClassVar[dict[(ModelSize, Resolution), float]] = {
+        # 2B rows mirror Cosmos3-Edge's training shift (Cosmos3-Edge.yaml
+        # rectified_flow_training_config.shift: 256->3, 480->5, 720->10).
+        ("2B", "256"): 3.0,
+        ("2B", "480"): 5.0,
+        ("2B", "720"): 10.0,
         ("8B", "256"): 3.0,
         ("8B", "480"): 5.0,
         ("8B", "720"): 10.0,
@@ -1057,7 +1100,9 @@ class OmniSampleOverrides(
         )
 
         if not shift_configured and not sample_meta.model_mode.is_reasoner:
-            model_size = self._VLM_MODEL_SIZE[model_config.vlm_config.model_name]
+            # Unregistered backbone names (custom fine-tunes) simply skip shift
+            # defaulting rather than KeyError-ing.
+            model_size = self._VLM_MODEL_SIZE.get(model_config.vlm_config.model_name)
             key = (model_size, self.resolution)
             if key in self._RESOLUTION_SHIFT_DEFAULTS:
                 self.shift = self._RESOLUTION_SHIFT_DEFAULTS[key]

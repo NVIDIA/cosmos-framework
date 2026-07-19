@@ -228,6 +228,36 @@ def _is_diffusers_checkpoint(checkpoint_path: Path) -> bool:
     return any(_is_diffusers_model_weight_path(path) for path in _read_safetensors_index(index_path).values())
 
 
+_LM_VISUAL_KEY_MARKER = "language_model.visual."
+
+
+def _raise_on_missing_vision_keys(checkpoint_path: Path, state_dict: dict[str, Any]) -> None:
+    """Curated error for root-safetensors checkpoints that lack the reasoner vision tower.
+
+    Mirrors ``_DiffusersLoadPlanner``'s tolerant/curated missing-keys handling for
+    the plain ``HuggingFaceStorageReader`` path: a model built with a visual tower
+    (``include_visual=True``) cannot load from a checkpoint exported with
+    ``--no-vit``; without this pre-check, ``dcp.load`` dies mid-load with a raw
+    ``Missing key in checkpoint state_dict: model.net.language_model.visual...``.
+    """
+    wanted = sorted(key for key in state_dict if _LM_VISUAL_KEY_MARKER in key)
+    if not wanted:
+        return
+    # Root index shares its filename with the diffusers layout ("model.safetensors.index.json").
+    index_path = checkpoint_path / _DIFFUSERS_ROOT_INDEX
+    if not index_path.exists():
+        return
+    if any(_LM_VISUAL_KEY_MARKER in key for key in _read_safetensors_index(index_path)):
+        return
+    raise ValueError(
+        f"Checkpoint at {checkpoint_path} provides none of the {len(wanted)} reasoner vision-tower "
+        f"tensor(s) the model config requires (first: {wanted[0]!r}). It was likely exported with "
+        "--no-vit while its config still enables the visual tower. Fix: re-export with the default "
+        "--vit (or use a full checkpoint); for generation-only use, re-export with --no-vit — new "
+        "--no-vit exports write include_visual=false so the model loads without the tower."
+    )
+
+
 def _normalize_diffusers_target_key(name: str) -> str:
     return name.removeprefix("model.net.").replace("_orig_mod.", "").replace("_checkpoint_wrapped_module.", "")
 
@@ -493,6 +523,13 @@ class Cosmos3OmniModel(transformers.PreTrainedModel):
         config.compile = attrs.asdict(compile_config)
         config.quantization = attrs.asdict(quantization_config)
         model = cls(config)
+        # Thread the local checkpoint dir to the reasoner LM (consumed by Edge's
+        # lazy ``_ensure_vision_tower``): checkpoints that bundle a
+        # ``vision_encoder/`` next to the weights then load it without any hub
+        # access. Harmless when the dir has no bundle (hub fallback applies).
+        language_model = getattr(getattr(model.model, "net", None), "language_model", None)
+        if language_model is not None:
+            language_model._local_checkpoint_dir = str(checkpoint_path)
         checkpoint_type = CheckpointType.from_path(checkpoint_path)
         match checkpoint_type:
             case CheckpointType.DCP:
@@ -508,6 +545,7 @@ class Cosmos3OmniModel(transformers.PreTrainedModel):
                     )
                     return model
                 state_dict = get_model_state_dict(model)
+                _raise_on_missing_vision_keys(checkpoint_path, state_dict)
                 storage_reader = HuggingFaceStorageReader(str(checkpoint_path))
             case _:
                 assert_never(checkpoint_type)

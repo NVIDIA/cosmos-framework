@@ -248,6 +248,8 @@ See the [Modes](#modes) table above for the action mode inputs/outputs and examp
 
 Examples: [`inputs/reasoner/reasoner.json`](../inputs/reasoner/reasoner.json) (text), [`inputs/reasoner/reasoner_image.json`](../inputs/reasoner/reasoner_image.json) (image), [`inputs/reasoner/reasoner_video.json`](../inputs/reasoner/reasoner_video.json) (video).
 
+**Cosmos3-Edge vision tower:** with a local `--checkpoint-path`, the vision tower and processor load from the checkpoint itself (`vision_encoder/` + processor files, bundled by default by [`export_model`](./training.md#vit--vision-tower-cosmos3-edge)) — such exports run fully offline (add `--no-guardrails`, since [guardrails](#guardrails) download their own models). If the checkpoint has no bundle (e.g. a `--no-vit` export), the tower is fetched from `nvidia/Cosmos3-Edge` on the Hub instead; when that fails (offline, missing `HF_TOKEN`), the error says so and suggests re-exporting with the default `--vit`. Nano/Super checkpoints without a vision tower (`include_visual=false`) reject reasoner image/video samples up front with a clear error.
+
 ### Custom Defaults
 
 To use your own default values instead of the built-in presets, pass a JSON file via the `defaults_file` field in your sample arguments:

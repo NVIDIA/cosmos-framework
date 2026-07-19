@@ -5,6 +5,7 @@ import json
 import time
 from collections.abc import Mapping
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 import torch
@@ -2312,6 +2313,41 @@ class Qwen3VLMoeTextForCausalLM(Qwen3VLMoePreTrainedModel):
         )
 
 
+def _load_bundled_vision_tower(local_dir: str | None) -> tuple[str, dict, dict] | None:
+    """Locate a checkpoint-local Edge vision tower bundle.
+
+    Returns ``(weights_file, ve_cfg, top_cfg)`` when ``local_dir`` contains
+    ``vision_encoder/model.safetensors``, else ``None``. Config resolution
+    mirrors the hub branch's standalone-first convention:
+
+    * ``vision_encoder/config.json`` when present — ``export_model --vit``
+      writes a self-describing one (``vision_config`` + ``projector_config``
+      + the multimodal token ids), so ``top_cfg`` is the same dict.
+    * else the dir's top-level ``config.json`` (a raw hub snapshot, which
+      folds the spec and token ids into the top-level config).
+    * a standalone file without token ids (older layout) still sources the
+      ids from the top-level config.
+    """
+    if not local_dir:
+        return None
+    weights = Path(local_dir) / "vision_encoder" / "model.safetensors"
+    if not weights.is_file():
+        return None
+    standalone = weights.parent / "config.json"
+    if standalone.is_file():
+        with open(standalone) as f:
+            ve_cfg = json.load(f)
+    else:
+        with open(Path(local_dir) / "config.json") as f:
+            ve_cfg = json.load(f)
+    if "image_token_id" in ve_cfg:
+        top_cfg = ve_cfg
+    else:
+        with open(Path(local_dir) / "config.json") as f:
+            top_cfg = json.load(f)
+    return str(weights), ve_cfg, top_cfg
+
+
 class Nemotron3DenseVLTextForCausalLM(Nemotron3DenseVLPreTrainedModel):
     """Causal LM head on top of the Nemotron 3 Dense VL MoT text model."""
 
@@ -2462,23 +2498,18 @@ class Nemotron3DenseVLTextForCausalLM(Nemotron3DenseVLPreTrainedModel):
         )
 
     def _ensure_vision_tower(self, hf_repo: str = "nvidia/Cosmos3-Edge") -> None:
-        """Lazily build the SigLIP2 vision tower and load its weights from HF.
+        """Lazily build the SigLIP2 vision tower on the first vision prompt.
 
-        Edge's reasoner LM ships without a vision tower in the DCP/diffusers
-        checkpoint (the generation-pathway tensors live there); the understanding
-        vision encoder is a self-contained SigLIP2 + projector stack published in
-        the HF repo under ``vision_encoder/``. We load it directly from HF (no DCP
-        remap) the first time an image prompt is seen, then cache it as
-        ``self.visual``. Also plumbs the multimodal token ids onto ``self.config``
-        for the shared ``get_rope_index`` / ``get_placeholder_mask`` helpers.
+        The tower is not in the DCP checkpoint; it ships under ``vision_encoder/``.
+        Prefer the copy bundled in the local checkpoint dir (threaded here via
+        ``_local_checkpoint_dir`` — loads fully offline), else download from the
+        hub. Cached as ``self.visual``; also plumbs the multimodal token ids onto
+        ``self.config`` for ``get_rope_index`` / ``get_placeholder_mask``.
         """
         if getattr(self, "visual", None) is not None:
             return
-        import json
         from types import SimpleNamespace
 
-        from huggingface_hub import hf_hub_download
-        from huggingface_hub.errors import EntryNotFoundError
         from safetensors.torch import load_file
         from transformers.models.siglip2.configuration_siglip2 import Siglip2VisionConfig
 
@@ -2486,18 +2517,53 @@ class Nemotron3DenseVLTextForCausalLM(Nemotron3DenseVLPreTrainedModel):
             NemotronSiglip2VisionEncoder,
         )
 
-        with open(hf_hub_download(hf_repo, "config.json")) as f:
-            top_cfg = json.load(f)
-        # The SigLIP2 + projector spec normally lives in a standalone
-        # ``vision_encoder/config.json``, but the public ``nvidia/Cosmos3-Edge``
-        # repo ships only the weights under ``vision_encoder/`` and folds the
-        # spec into the top-level ``config.json``. Prefer the standalone file
-        # when present, else fall back to the top-level config.
-        try:
-            with open(hf_hub_download(hf_repo, "vision_encoder/config.json")) as f:
-                ve_cfg = json.load(f)
-        except EntryNotFoundError:
-            ve_cfg = top_cfg
+        # Local-first: prefer a checkpoint-bundled ``vision_encoder/`` (written
+        # by ``export_model`` with the default ``--vit``, or present in a full
+        # hub snapshot dir) over a live hub download.
+        bundled = _load_bundled_vision_tower(getattr(self, "_local_checkpoint_dir", None))
+        if bundled is not None:
+            weights_file, ve_cfg, top_cfg = bundled
+            log.info(f"Edge vision tower: loading from checkpoint-local bundle {Path(weights_file).parent}")
+        else:
+            from huggingface_hub import hf_hub_download
+            from huggingface_hub.errors import EntryNotFoundError
+
+            def _hub_error(filename: str) -> RuntimeError:
+                return RuntimeError(
+                    f"Failed to download '{filename}' from Hugging Face repo '{hf_repo}' "
+                    "(required to build the Cosmos3-Edge vision tower for image/video prompts). "
+                    "Likely causes: offline environment or cold HF cache, the repo is private or "
+                    "gated, or HF_TOKEN is missing/expired. Re-exporting the checkpoint with the "
+                    "default --vit bundles vision_encoder/ into it, making inference "
+                    "self-contained (no hub access needed)."
+                )
+
+            log.info(f"Edge vision tower: no checkpoint-local bundle; downloading from HF repo '{hf_repo}'")
+            try:
+                config_file = hf_hub_download(hf_repo, "config.json")
+            except Exception as e:
+                raise _hub_error("config.json") from e
+            with open(config_file) as f:
+                top_cfg = json.load(f)
+            # The SigLIP2 + projector spec normally lives in a standalone
+            # ``vision_encoder/config.json``, but the public ``nvidia/Cosmos3-Edge``
+            # repo ships only the weights under ``vision_encoder/`` and folds the
+            # spec into the top-level ``config.json``. Prefer the standalone file
+            # when present, else fall back to the top-level config.
+            try:
+                with open(hf_hub_download(hf_repo, "vision_encoder/config.json")) as f:
+                    ve_cfg = json.load(f)
+            except EntryNotFoundError:
+                # Also covers LocalEntryNotFoundError: with a warm offline cache
+                # the (nonexistent) standalone file is never cached, so keep
+                # falling back to the top-level config instead of hard-failing.
+                ve_cfg = top_cfg
+            except Exception as e:
+                raise _hub_error("vision_encoder/config.json") from e
+            try:
+                weights_file = hf_hub_download(hf_repo, "vision_encoder/model.safetensors")
+            except Exception as e:
+                raise _hub_error("vision_encoder/model.safetensors") from e
         vdict = dict(ve_cfg["vision_config"])
         for k in ("model_type", "transformers_version", "spatial_merge_size"):
             vdict.pop(k, None)
@@ -2514,7 +2580,7 @@ class Nemotron3DenseVLTextForCausalLM(Nemotron3DenseVLPreTrainedModel):
         )
         ref = self.model.embed_tokens.weight
         encoder = NemotronSiglip2VisionEncoder(vcfg, pcfg).to(device=ref.device, dtype=ref.dtype).eval()
-        state = load_file(hf_hub_download(hf_repo, "vision_encoder/model.safetensors"))
+        state = load_file(weights_file)
         # Weights are prefixed ``model.visual.*`` / ``model.projector.*``; strip
         # the ``model.`` prefix to match the encoder's ``visual.*`` / ``projector.*``.
         state = {k[len("model.") :]: v for k, v in state.items()}

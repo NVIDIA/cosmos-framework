@@ -4,9 +4,11 @@
 """Framework-native Cosmos3-Edge VLM modeling.
 
 Vendored/ported from the HF remote code ``modeling_nemotron_siglip2_h.py`` (old
-``nvidia/Cosmos3-Edge``), byte-faithful for the dense path; Mamba/MoE, hybrid-cache
-and generation paths are dropped (the shipped config is pure dense; training runs
-with ``use_cache=False``). Logits are cast to fp32 to match the reference.
+``nvidia/Cosmos3-Edge``), byte-faithful for the dense path; Mamba/MoE and
+hybrid-cache paths are dropped (the shipped config is pure dense; training runs
+with ``use_cache=False``). Text generation uses ``GenerationMixin`` with
+cache-free full-context recompute (see ``prepare_inputs_for_generation``).
+Logits are cast to fp32 to match the reference.
 
 State-dict keys are contractual (safetensors loader, freeze regex
 ``model\\.visual\\.``, lr multipliers, HF export): ``model.visual.*``,
@@ -26,6 +28,7 @@ from torch import nn
 from torch.nn import CrossEntropyLoss
 from torch.nn.utils.rnn import pad_sequence
 from transformers.activations import ACT2FN
+from transformers.generation import GenerationMixin
 from transformers.modeling_attn_mask_utils import AttentionMaskConverter
 from transformers.modeling_utils import ALL_ATTENTION_FUNCTIONS, PreTrainedModel
 from transformers.utils import ModelOutput, logging
@@ -695,8 +698,14 @@ class Cosmos3EdgeModel(Cosmos3EdgePreTrainedModel):
         )
 
 
-class Cosmos3EdgeForConditionalGeneration(Cosmos3EdgePreTrainedModel):
-    """Port of NemotronSiglip2ForConditionCausalLM, training/eval forward only."""
+class Cosmos3EdgeForConditionalGeneration(Cosmos3EdgePreTrainedModel, GenerationMixin):
+    """Port of NemotronSiglip2ForConditionCausalLM: training/eval forward + cache-free generate.
+
+    ``GenerationMixin`` supplies ``generate()``; since the port has no KV-cache path
+    (attention takes no ``past_key_values`` and the forward output carries none),
+    ``prepare_inputs_for_generation`` below pins every decode step to a full-context
+    recompute. Correct but O(steps × context) — fine for eval, not for serving.
+    """
 
     _tied_weights_keys = ["lm_head.weight"]
     config_class = Cosmos3EdgeConfig
@@ -814,6 +823,37 @@ class Cosmos3EdgeForConditionalGeneration(Cosmos3EdgePreTrainedModel):
             hidden_states=outputs.hidden_states,
             attentions=outputs.attentions,
         )
+
+    def prepare_inputs_for_generation(
+        self,
+        input_ids: torch.LongTensor,
+        past_key_values: Optional[Any] = None,
+        attention_mask: Optional[torch.Tensor] = None,
+        inputs_embeds: Optional[torch.FloatTensor] = None,
+        cache_position: Optional[torch.LongTensor] = None,
+        use_cache: Optional[bool] = None,
+        **kwargs: Any,
+    ) -> dict[str, Any]:
+        """Cache-free generation: every decode step is a full-context recompute.
+
+        The port has no KV-cache path, so the full ``input_ids`` (and vision
+        tensors) are re-fed each step. ``cache_position`` must be reset to
+        ``None``: the single-index decode value ``generate()`` maintains assumes
+        a cache and would zero out the mask in ``_update_causal_mask``.
+        """
+        if inputs_embeds is not None:
+            raise ValueError(
+                "Cosmos3EdgeForConditionalGeneration.generate() only supports input_ids "
+                "(mRoPE position ids and vision placeholders are derived from token ids)"
+            )
+        kwargs.pop("position_ids", None)  # mRoPE position ids are recomputed in forward
+        return {
+            "input_ids": input_ids,
+            "attention_mask": attention_mask,
+            "use_cache": False,
+            "cache_position": None,
+            **{k: v for k, v in kwargs.items() if v is not None},
+        }
 
 
 __all__ = [

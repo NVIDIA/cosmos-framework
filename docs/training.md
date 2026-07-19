@@ -14,6 +14,7 @@ ______________________________________________________________________
   - [Option B: raw `torchrun`](#option-b-raw-torchrun)
 - [Outputs](#outputs)
 - [Export checkpoint to Hugging Face safetensors](#export-checkpoint-to-hugging-face-safetensors)
+  - [ViT / vision tower (Cosmos3-Edge)](#vit--vision-tower-cosmos3-edge)
 - [Config](#config)
   - [Common Hydra tail overrides](#common-hydra-tail-overrides)
 
@@ -151,7 +152,7 @@ python -m cosmos_framework.scripts.reasoner.prepare_videophy2_from_hf \
 
 <details><summary><b>Reasoner Alignment SFT with VideoPhy-2 (Cosmos3-Edge)</b></summary>
 
-Edge-tier counterpart of the VideoPhy-2 recipe above: same 1–5 physical-plausibility scoring on [videophysics/videophy2_train](https://huggingface.co/datasets/videophysics/videophy2_train), but on the compact **Nemotron-2B-Dense-VL** reasoner (SigLIP2 vision tower, `model_type = "cosmos3_edge"` — native HF metadata, no remote code; the model classes are registered in-framework) instead of Qwen3-VL. `[job].task = "vlm"`. The vision tower is frozen; the projector + LM train at a uniform LR. `[model.backbone].model_name` is the **public, ungated** omni release `nvidia/Cosmos3-Edge`, which supplies the arch/config/tokenizer **and** the reasoner weights: the training loader follows the snapshot's root safetensors index into its weight shards, so weights load directly from the download — no conversion step and no required weights env var. Like the nano/super recipes, `VLM_SAFETENSORS_PATH` is an optional override for loading from a local safetensors directory instead. The reasoner tower shipped inside `nvidia/Cosmos3-Edge` is bit-identical to the standalone `nvidia/Cosmos3-Edge-Reasoner` release. Only 2B, so it runs on a 4-GPU (e.g. GB200x4) or 8-GPU allocation.
+Edge-tier counterpart of the VideoPhy-2 recipe above: same 1–5 physical-plausibility scoring on [videophysics/videophy2_train](https://huggingface.co/datasets/videophysics/videophy2_train), but on the compact **Nemotron-2B-Dense-VL** reasoner (SigLIP2 vision tower, `model_type = "cosmos3_edge"` — native HF metadata, no remote code; the model classes are registered in-framework) instead of Qwen3-VL. `[job].task = "vlm"`. The vision tower is frozen; the projector + LM train at a uniform LR. `[model.backbone].model_name` is the **public, ungated** omni release `nvidia/Cosmos3-Edge`, which supplies the arch/config/tokenizer **and** the reasoner weights: the training loader follows the snapshot's root safetensors index into its weight shards, so weights load directly from the download — no conversion step and no required weights env var. Like the nano/super recipes, `VLM_SAFETENSORS_PATH` is an optional override for loading from a local safetensors directory instead. The reasoner weights shipped inside `nvidia/Cosmos3-Edge` are the canonical Edge reasoner weights — there is no separate reasoner repo to download. Only 2B, so it runs on a 4-GPU (e.g. GB200x4) or 8-GPU allocation.
 
 Launch shell: `examples/launch_sft_videophy2_edge.sh`
 
@@ -345,6 +346,38 @@ python -m cosmos_framework.scripts.export_model \
 ```
 
 The exported safetensors land at `$RUN_DIR/model` and can be used in [Inference](../README.md#inference) commands by passing `--checkpoint-path $RUN_DIR/model`.
+
+### ViT / vision tower (Cosmos3-Edge)
+
+The plain export above is all any recipe needs — Edge included. For Cosmos3-Edge, `export_model` bundles the SigLIP2 vision tower into `$RUN_DIR/model/vision_encoder/` and the processor/tokenizer files into the export root, so the exported directory is **self-contained**: inference runs from it offline, with no Hub download (see [Inference → Reasoner](./inference.md#reasoner)). `export_manifest.json` records where the tower and processor came from. Nano/Super exports bundle their processor files the same way.
+
+Optional flags:
+
+```shell
+# --no-vit: generation-only export (T2V / I2V / V2V / T2I), ~1 GB smaller.
+#     Writes include_visual=false so the checkpoint loads cleanly everywhere.
+python -m cosmos_framework.scripts.export_model \
+  --checkpoint-path $CHECKPOINT_PATH \
+  --config-file $RUN_DIR/config.yaml \
+  --no-vit \
+  -o $RUN_DIR/model
+
+# --vit-checkpoint-path: use a custom tower from a local directory
+#     (a snapshot root or a vision_encoder/ directory).
+python -m cosmos_framework.scripts.export_model \
+  --checkpoint-path $CHECKPOINT_PATH \
+  --config-file $RUN_DIR/config.yaml \
+  --vit-checkpoint-path /path/to/snapshot \
+  -o $RUN_DIR/model
+
+# --verify: smoke-test the export on this node's GPU (tiny reasoner query +
+#     tiny generation). A failure exits non-zero but keeps the export.
+python -m cosmos_framework.scripts.export_model \
+  --checkpoint-path $CHECKPOINT_PATH \
+  --config-file $RUN_DIR/config.yaml \
+  --verify \
+  -o $RUN_DIR/model
+```
 
 ## Config
 

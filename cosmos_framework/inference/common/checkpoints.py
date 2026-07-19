@@ -207,6 +207,25 @@ def register_checkpoints():
         )
     )
 
+    # The backbone URI Edge SFT recipes pin (edge_model_config), mapped to the
+    # public nvidia/Cosmos3-Edge repo. Deliberately NO 'include' filter:
+    # training's backbone seeding needs the full repo (the root safetensors
+    # index points into transformer/*); export_model narrows its own download
+    # to EDGE_VIT_BUNDLE_HF_INCLUDE at the call site.
+    register_checkpoint(
+        CheckpointConfig(
+            uuid=uuid4().hex,
+            name="Cosmos3-Edge-Reasoner-590c1c0",
+            s3=CheckpointDirS3(
+                uri="s3://bucket/cosmos3/pretrained/huggingface/nvidia/Cosmos3-Edge-Reasoner-590c1c0",
+            ),
+            hf=CheckpointDirHf(
+                repository="nvidia/Cosmos3-Edge",
+                revision="main",
+            ),
+        ),
+    )
+
     register_checkpoint(
         CheckpointConfig(
             uuid=uuid4().hex,
