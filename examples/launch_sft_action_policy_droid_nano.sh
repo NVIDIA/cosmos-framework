@@ -5,7 +5,7 @@
 # ============================================================================
 # Structured-TOML launch for DROID action-policy SFT on Cosmos3-Nano (8B MoT).
 # Drives cosmos_framework.scripts.train against
-# examples/toml/sft_config/action_policy_droid_repro.toml (selects the
+# examples/toml/sft_config/action_policy_droid_nano.toml (selects the
 # registered `action_policy_droid_nano` experiment; res480, joint_pos 8D +
 # use_state, trains the generation + action heads). See
 # docs/action_policy_droid_posttrain.md.
@@ -21,14 +21,14 @@
 # Single-node smoke (config/data sanity, a few iters):
 #   export EXTRA_TAIL_OVERRIDES="trainer.max_iter=10 checkpoint.save_iter=10 \
 #                                dataloader_train.max_samples_per_batch=32"
-#   bash examples/launch_sft_action_policy_droid.sh
+#   bash examples/launch_sft_action_policy_droid_nano.sh
 #
 # Multi-node: launch on every worker; the trainer reads torchrun's
 # --nnodes/--node_rank. For HSDP set
 # model.parallelism.data_parallel_replicate_degree = <num_nodes> (shard stays 8).
 # ============================================================================
 
-TOML_FILE="examples/toml/sft_config/action_policy_droid_repro.toml"
+TOML_FILE="examples/toml/sft_config/action_policy_droid_nano.toml"
 : "${DATASET_PATH:=examples/data/lerobot_v30/droid_lerobot/success}"
 : "${BASE_CHECKPOINT_PATH:=examples/checkpoints/Cosmos3-Nano}"
 

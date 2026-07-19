@@ -1,0 +1,71 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: OpenMDW-1.1
+
+# ============================================================================
+# DROID action-policy post-training — run config for the `action_policy_droid_edge`
+# experiment. Reproduces the Cosmos3-Edge DROID policy reference run
+# (droid_lerobot_2b_ga_midtrain_policy, gbs 8192, lr 5e-4 with linear decay to
+# 0.4x, loss_scale 10, 100000 iters) at the GB200 256-rank reference shape. The
+# remaining recipe knobs (grad_clip, count-based batch, action-head
+# skip-on-load, qk-norm-fix loading, dataset knobs) live in the registered
+# experiment; this file pins the run-level scalars that define the reference
+# reproduction.
+#
+# Env required:
+#   DROID_ROOT=/path/to/droid_lerobot_640x360   # merged root (success/ + failure/)
+#   BASE_CHECKPOINT_PATH=<Cosmos3-Edge DCP dir>   # convert_model_to_dcp output
+#   WAN_VAE_PATH=<Wan2.2_VAE.pth>
+#   IMAGINAIRE_OUTPUT_ROOT=/path/to/output_root   # persist checkpoints
+# ============================================================================
+
+[job]
+task         = "vfm"
+experiment   = "action_policy_droid_edge"
+project      = "cosmos3_action"
+group        = "action_sft"
+name         = "action_policy_droid_edge"
+wandb_mode   = "online"
+
+[model]
+precision = "bfloat16"
+
+[model.parallelism]
+data_parallel_shard_degree     = 8     # 8-GPU model shard
+data_parallel_replicate_degree = 32    # HSDP 32x8 = 256 ranks (GB200 reference: 64 nodes x 4)
+
+[model.activation_checkpointing]
+mode           = "full"
+save_ops_regex = ["fmha"]
+
+[model.tokenizer]
+vae_path = "${oc.env:WAN_VAE_PATH}"
+
+[optimizer]
+lr = 5.0e-04
+
+[scheduler]
+cycle_lengths = [100000]   # linear decay spans the full 100000-iter run (f_max 0.4 in the experiment)
+
+[dataloader_train]
+max_samples_per_batch = 8    # samples per rank (res480)
+# Worker/fetch shape (num_workers=16, batch_size=16, prefetch_factor=2) lives in the
+# experiment; the TOML schema only models dataloader scalars. Override at launch via
+# CLI tail args if the host needs fewer decode workers.
+
+[trainer]
+max_iter        = 100000
+logging_iter    = 50
+grad_accum_iter = 4       # global batch = max_samples 8 x (shard 8 x replicate 32) x 4 = 8192
+
+[trainer.callbacks.compile_tokenizer]
+enabled            = true      # torch.compile the Wan VAE tokenizer (speed); warms up at res480
+warmup_resolutions = ["480"]
+
+[checkpoint]
+load_path = "${oc.env:BASE_CHECKPOINT_PATH}"
+save_iter = 1000
+
+# Global batch 8192 = the internal reference. To fit fewer GPUs while keeping
+# global batch 8192, lower data_parallel_replicate_degree and raise
+# grad_accum_iter at launch — e.g. one 8-GPU node:
+#   --opts model.config.parallelism.data_parallel_replicate_degree=1 trainer.grad_accum_iter=128

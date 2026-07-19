@@ -19,11 +19,11 @@ capture.
 
 Specs
 -----
-* ``action_policy_libero`` — ``examples/toml/sft_config/action_policy_libero_repro.toml``.
+* ``action_policy_libero`` — ``examples/toml/sft_config/action_policy_libero_10_nano.toml``.
   Data auto-downloads: the ``libero_10`` suite of ``nvidia/LIBERO_LeRobot_v3``
   (small LeRobot dir), cached across runs. Collapses the recipe's HSDP replicate
   2 -> 1 to fit one 4-GPU node.
-* ``action_policy_droid`` — ``examples/toml/sft_config/action_policy_droid_repro.toml``.
+* ``action_policy_droid`` — ``examples/toml/sft_config/action_policy_droid_nano.toml``.
   The full DROID split is far too large to auto-download in CI, so this spec
   requires a pre-staged LOCAL copy via ``DROID_ROOT`` and SKIPS when unset.
   ``DROID_ROOT`` is the **versioned merged root** whose basename is a
@@ -286,12 +286,12 @@ class LaunchSpec:
 _SPECS: dict[str, LaunchSpec] = {
     "action_policy_libero": LaunchSpec(
         key="action_policy_libero",
-        sft_toml="examples/toml/sft_config/action_policy_libero_repro.toml",
+        sft_toml="examples/toml/sft_config/action_policy_libero_10_nano.toml",
         extra_hydra_args=_COMMON_OVERRIDES,
     ),
     "action_policy_droid": LaunchSpec(
         key="action_policy_droid",
-        sft_toml="examples/toml/sft_config/action_policy_droid_repro.toml",
+        sft_toml="examples/toml/sft_config/action_policy_droid_nano.toml",
         extra_hydra_args=_COMMON_OVERRIDES,
         requires_droid_root=True,
     ),
