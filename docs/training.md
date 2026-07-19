@@ -165,6 +165,20 @@ python -m cosmos_framework.scripts.reasoner.prepare_videophy2_from_hf \
 
 </details>
 
+<details><summary><b>Action-Policy Post-Training (DROID / LIBERO)</b></summary>
+
+Robot action-policy recipes: DROID (`joint_pos` 8-D actions + proprioceptive state, from
+Cosmos3-Nano or Cosmos3-Edge) and LIBERO (`frame_wise_relative` rot6d 10-D actions, from
+Cosmos3-Nano). They follow the same Step 2/Step 3 flow below, with their own data staging
+(DROID keep-ranges window filter, LIBERO suite selection), and are documented separately:
+
+- [DROID action policy](./action_policy_droid_posttrain.md) —
+  `examples/launch_sft_action_policy_droid_nano.sh` / `examples/launch_sft_action_policy_droid_edge.sh`
+- [LIBERO action policy](./action_policy_libero_posttrain.md) —
+  `examples/launch_sft_action_policy_libero_10_nano.sh` / `examples/launch_sft_action_policy_libero_all_nano.sh`
+
+</details>
+
 ## Step 2 — Prepare checkpoint
 
 Convert the base checkpoint to [PyTorch Distributed Checkpoint (DCP)](https://pytorch.org/docs/stable/distributed.checkpoint.html) format. `cosmos_framework.scripts.convert_model_to_dcp` ships in the unified `cosmos_framework/` package, so this step runs from the repo root (with the environment activated per [Setup](./setup.md)).

@@ -11,7 +11,7 @@
 # docs/action_policy_droid_posttrain.md.
 #
 # Env vars (override for your filesystem):
-#   DATASET_PATH          Cosmos3-DROID success split (…/Cosmos3-DROID/success)
+#   DATASET_PATH          Cosmos3-DROID download dir; must be named droid_plus_lerobot_640x360_20260412
 #   BASE_CHECKPOINT_PATH  DCP of nvidia/Cosmos3-Edge (convert_model_to_dcp; see docs)
 #   WAN_VAE_PATH          Wan2.2 VAE .pth (Wan-AI/Wan2.2-TI2V-5B)
 #   WANDB_API_KEY         for online logging (TOML wandb_mode="online")
@@ -29,13 +29,13 @@
 # ============================================================================
 
 TOML_FILE="examples/toml/sft_config/action_policy_droid_edge.toml"
-: "${DATASET_PATH:=examples/data/lerobot_v30/droid_lerobot/success}"
+: "${DATASET_PATH:=examples/data/droid_plus_lerobot_640x360_20260412}"
 : "${BASE_CHECKPOINT_PATH:=examples/checkpoints/Cosmos3-Edge}"
 
 # The experiment reads ${oc.env:DROID_ROOT}; bridge the launcher's DATASET_PATH to it.
 export DROID_ROOT="${DROID_ROOT:-$DATASET_PATH}"
 
-EXTRA_DATASET_CHECK='[[ -f "$DROID_ROOT/meta/info.json" ]] || { echo "ERROR: missing $DROID_ROOT/meta/info.json (prepare Cosmos3-DROID — see docs/action_policy_droid_posttrain.md)" >&2; exit 1; }'
+EXTRA_DATASET_CHECK='[[ -f "$DROID_ROOT/success/meta/info.json" ]] || { echo "ERROR: missing $DROID_ROOT/success/meta/info.json (prepare Cosmos3-DROID — see docs/action_policy_droid_posttrain.md)" >&2; exit 1; }'
 
 # Extra Hydra overrides from the environment: a space-separated string word-split into
 # the TAIL_OVERRIDES array. An exported string survives `bash <wrapper>` (a child

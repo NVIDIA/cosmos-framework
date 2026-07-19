@@ -1,6 +1,7 @@
 # Cosmos3-Policy-DROID Server
 
 Cosmos 3 offers two post-trained policy models for DROID:
+
 1. [Cosmos3-Nano-Policy-DROID](https://huggingface.co/nvidia/Cosmos3-Nano-Policy-DROID)
 2. [Cosmos3-Edge-Policy-DROID](https://huggingface.co/nvidia/Cosmos3-Edge-Policy-DROID)
 

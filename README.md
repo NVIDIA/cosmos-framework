@@ -95,5 +95,5 @@ See [Policy Server](./docs/action_policy_droid_server.md) for the full guide.
 | [Code Structure](./docs/code_structure.md)                   | Repository layout and a per-subpackage tour of `cosmos_framework/` — where each concern lives and where to add new code. |
 | [Training](./docs/training.md)                               | Launching multi-GPU and multi-node runs; parallelism strategies; mixed precision; resuming.                              |
 | [Inference (from a trained checkpoint)](./docs/inference.md) | Loading a trained checkpoint into one of the inference backends.                                                         |
-| [Policy Server](./docs/action_policy_droid_server.md)        | Running the server-client pipeline for Cosmos3-Policy-DROID.                                                        |
+| [Policy Server](./docs/action_policy_droid_server.md)        | Running the server-client pipeline for Cosmos3-Policy-DROID.                                                             |
 | [FAQ](./docs/faq.md)                                         | Troubleshooting (OOM, NCCL hangs, slow training), environment variables, and common pitfalls.                            |
