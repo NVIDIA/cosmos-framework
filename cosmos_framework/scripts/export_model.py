@@ -12,6 +12,7 @@ init_script(
     }
 )
 
+import inspect
 import json
 import os
 import shlex
@@ -72,6 +73,94 @@ from cosmos_framework.utils.lazy_config.registry import convert_target_to_string
 
 _INTERNAL_VISUAL_PREFIX = "model.net.language_model.visual."
 _EXPORTED_VISUAL_PREFIX = "model.visual."
+
+
+def _config_value(config: Any, key: str) -> Any:
+    if isinstance(config, dict):
+        return config.get(key)
+    return getattr(config, key, None)
+
+
+def _dataset_config_value(dataset_config: Any, key: str) -> Any:
+    value = _config_value(dataset_config, key)
+    if value is not None:
+        return value
+
+    target = _config_value(dataset_config, "_target_") or _config_value(dataset_config, "_target")
+    if target is None:
+        return None
+    try:
+        parameter = inspect.signature(target).parameters.get(key)
+    except (TypeError, ValueError):
+        return None
+    if parameter is None or parameter.default is inspect.Parameter.empty:
+        return None
+    return parameter.default
+
+
+def _build_edge_policy_metadata(training_config: Any) -> dict[str, Any]:
+    """Resolve policy manifest fields from the action experiment config."""
+    try:
+        dataset_config = training_config.dataloader_train.dataloaders.action_data.dataloader.dataset
+    except AttributeError as exc:
+        raise ValueError(
+            "Cosmos3 Edge export requires an action dataset config at "
+            "dataloader_train.dataloaders.action_data.dataloader.dataset."
+        ) from exc
+
+    dataset_entries = _config_value(dataset_config, "list_of_datasets")
+    if not dataset_entries:
+        raise ValueError("Cosmos3 Edge export requires at least one action dataset entry.")
+
+    metadata_by_dataset: list[dict[str, Any]] = []
+    for entry in dataset_entries:
+        action_dataset_config = _config_value(entry, "dataset")
+        if action_dataset_config is None:
+            raise ValueError("Cosmos3 Edge action dataset entries must define a dataset config.")
+
+        target = _config_value(action_dataset_config, "_target_") or _config_value(action_dataset_config, "_target")
+        action_chunk_size = _dataset_config_value(action_dataset_config, "chunk_length")
+        conditioning_fps = _dataset_config_value(action_dataset_config, "fps")
+        domain_name = _config_value(action_dataset_config, "embodiment_type")
+        if domain_name is None and target is not None:
+            domain_name = getattr(target, "EMBODIMENT_TYPE", None)
+
+        if not isinstance(action_chunk_size, int) or isinstance(action_chunk_size, bool) or action_chunk_size <= 0:
+            raise ValueError(
+                "Cosmos3 Edge action dataset config must define a positive integer `chunk_length`, "
+                f"got {action_chunk_size!r}."
+            )
+        if (
+            not isinstance(conditioning_fps, (int, float))
+            or isinstance(conditioning_fps, bool)
+            or conditioning_fps <= 0
+        ):
+            raise ValueError(
+                f"Cosmos3 Edge action dataset config must define a positive numeric `fps`, got {conditioning_fps!r}."
+            )
+        if not isinstance(domain_name, str) or not domain_name.strip():
+            target_name = getattr(target, "__name__", repr(target))
+            raise ValueError(
+                "Cosmos3 Edge action dataset config must define `embodiment_type` or expose "
+                f"`EMBODIMENT_TYPE`; dataset target is {target_name}."
+            )
+
+        metadata_by_dataset.append(
+            {
+                "action_chunk_size": action_chunk_size,
+                "conditioning_fps": float(conditioning_fps),
+                "domain_name": domain_name.strip(),
+            }
+        )
+
+    metadata = metadata_by_dataset[0]
+    for field in metadata:
+        if any(dataset_metadata[field] != metadata[field] for dataset_metadata in metadata_by_dataset[1:]):
+            raise ValueError(
+                "Cosmos3 Edge checkpoint.json can represent only one action policy metadata value per field; "
+                f"the configured datasets disagree on `{field}`."
+            )
+    return metadata
 
 
 def _coerce_to_base_model(model_dict: dict[str, Any]) -> None:
@@ -294,6 +383,15 @@ def export_model(args: Args) -> None:
     model_dict["config"]["ema"]["enabled"] = False
 
     is_edge = is_edge_model(model_dict)
+    # Cosmos3 Edge action policies need the diffusers converter's `policy` block
+    # (action_chunk_size / conditioning_fps / domain_name) in checkpoint.json.
+    # Only action Edge models carry an action dataloader; non-action Edge exports
+    # (e.g. Edge SFT video recipes) skip this and stay unaffected.
+    edge_policy_metadata = (
+        _build_edge_policy_metadata(checkpoint_args.load_config())
+        if is_edge and model_dict["config"].get("action_gen")
+        else None
+    )
     if not args.vit:
         # Text/gen-only export: write include_visual=False into the exported model
         # config so inference skips visual-tower construction instead of dying on
@@ -473,6 +571,8 @@ def export_model(args: Args) -> None:
         if args.student_only_checkpoint_metadata
         else checkpoint_args.model_dump(mode="json")
     )
+    if edge_policy_metadata is not None:
+        checkpoint_metadata["policy"] = edge_policy_metadata
     serialize_config_dict(checkpoint_metadata, args.output_dir / "checkpoint.json")
 
     print(f"Saved model to {args.output_dir}")

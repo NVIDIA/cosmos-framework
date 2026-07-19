@@ -15,6 +15,7 @@ ______________________________________________________________________
 - [Outputs](#outputs)
 - [Export checkpoint to Hugging Face safetensors](#export-checkpoint-to-hugging-face-safetensors)
   - [ViT / vision tower (Cosmos3-Edge)](#vit--vision-tower-cosmos3-edge)
+- [Convert to Diffusers](#convert-to-diffusers)
 - [Config](#config)
   - [Common Hydra tail overrides](#common-hydra-tail-overrides)
 
@@ -392,6 +393,20 @@ python -m cosmos_framework.scripts.export_model \
   --verify \
   -o $RUN_DIR/model
 ```
+
+## Convert to Diffusers
+
+Convert the Hugging Face export from the previous step into a Diffusers pipeline (`transformer/`, `vae/`, `scheduler/`, `text_tokenizer/`, `model_index.json`, …):
+
+```shell
+python -m cosmos_framework.scripts.convert_model_to_diffusers \
+  --checkpoint-path $RUN_DIR/model \
+  -o $RUN_DIR/diffusers
+```
+
+The input is the Hugging Face safetensors directory produced by `export_model` above — not a raw DCP checkpoint, so run the export first. The result at `$RUN_DIR/diffusers` can be loaded with `diffusers` or passed to [Inference](../README.md#inference) via `--checkpoint-path $RUN_DIR/diffusers`.
+
+A generation-only checkpoint with no reasoner vision tower (`include_visual` unset) is converted without a `vision_encoder/` sidecar automatically; pass `--skip-vision-encoder` to force-skip it even when a tower is present.
 
 ## Config
 
