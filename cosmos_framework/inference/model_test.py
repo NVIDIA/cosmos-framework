@@ -6,6 +6,7 @@ from pathlib import Path
 
 import attrs
 import hydra
+import pytest
 import safetensors.torch
 import torch
 import torch.distributed.checkpoint as dcp
@@ -144,6 +145,28 @@ def test_diffusers_dcp_load_remaps_nested_safetensors(tmp_path: Path):
     )
 
     torch.testing.assert_close(target["model.net._orig_mod.vae2llm.weight"], source)
+
+
+def test_diffusers_load_missing_k_norm_gets_revision_hint(tmp_path: Path):
+    """A flag-ON model loading a pre-K-norm-restoration snapshot must fail with
+    the nvidia/Cosmos3-Edge revision hint, not just a bare missing-tensor error."""
+    shard_rel_path = "transformer/diffusion_pytorch_model.safetensors"
+    shard_path = tmp_path / shard_rel_path
+    shard_path.parent.mkdir(parents=True)
+
+    source = torch.arange(6, dtype=torch.float32).reshape(2, 3)
+    safetensors.torch.save_file({"proj_in.weight": source}, shard_path)
+    (tmp_path / "model.safetensors.index.json").write_text(
+        json.dumps({"metadata": {}, "weight_map": {"proj_in.weight": shard_rel_path}}),
+        encoding="utf-8",
+    )
+
+    target = {
+        "model.net.vae2llm.weight": torch.empty_like(source),
+        "model.net.language_model.model.layers.0.self_attn.k_norm_und_for_gen.weight": torch.empty(4),
+    }
+    with pytest.raises(ValueError, match="f7f180c2"):
+        _DiffusersLoadPlanner(tmp_path).set_up_planner(state_dict=target, metadata=None)
 
 
 def test_diffusers_weight_map_registered_checkpoint():

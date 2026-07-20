@@ -147,8 +147,7 @@ EDGE_MODEL_CONFIG = dict(
         pretrained_weights=dict(
             enabled=False,  # SFT loads from the DCP, not the HF backbone
             backbone_path=(
-                "s3://bucket/cosmos3/pretrained/huggingface/"
-                "nvidia/Cosmos3-Edge-Reasoner-590c1c0/"
+                "s3://bucket/cosmos3/pretrained/huggingface/nvidia/Cosmos3-Edge-Reasoner-590c1c0/"
             ),  # kept for parity, unused while enabled=False
             credentials_path="",
             enable_gcs_patch_in_boto3=True,
@@ -164,6 +163,11 @@ EDGE_MODEL_CONFIG = dict(
                 freeze_und=False,
                 layer_module="MoTDecoderLayer",
                 qk_norm_for_text=False,  # Edge delta (nano=True); Edge.yaml create_vlm_config.qk_norm_for_text: false
+                # nvidia/Cosmos3-Edge >= f7f180c2 (HF PR #30) ships trained k_norm_und_for_gen
+                # weights; without this flag the DCP warm start silently drops them and gen->und
+                # cross-attention runs un-normalized. Matches Edge.yaml (PR #32). Base DCPs
+                # converted from older snapshots fail the strict load — re-convert them.
+                use_und_k_norm_for_gen=True,
                 include_visual=None,  # Edge delta (nano omits -> default); Edge.yaml create_vlm_config.include_visual: null
                 tie_word_embeddings=True,
             ),

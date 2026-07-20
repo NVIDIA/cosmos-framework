@@ -71,9 +71,9 @@ from torch.nn.modules.module import _IncompatibleKeys
 
 from cosmos_framework.checkpoint.base import AbstractCheckpointer
 from cosmos_framework.checkpoint.s3_filesystem import S3StorageReader, S3StorageWriter
-from cosmos_framework.utils.config import CheckpointConfig, JobConfig
 from cosmos_framework.model._base import ImaginaireModel
 from cosmos_framework.utils import callback, distributed, log, misc
+from cosmos_framework.utils.config import CheckpointConfig, JobConfig
 from cosmos_framework.utils.easy_io import easy_io
 from cosmos_framework.utils.generator.rand_state import get_rand_state_dict, set_rand_state_dict
 
@@ -381,11 +381,22 @@ class CustomLoadPlanner(dcp.DefaultLoadPlanner):
         if self.metadata is None:
             raise AssertionError("metadata must be set (via set_up_planner) before create_local_plan")
 
-        plan = create_default_local_load_plan(
-            state_dict=self._skip_keys_if_found(self.state_dict),
-            metadata=self.metadata,
-            strict=not self.allow_partial_load,
-        )
+        try:
+            plan = create_default_local_load_plan(
+                state_dict=self._skip_keys_if_found(self.state_dict),
+                metadata=self.metadata,
+                strict=not self.allow_partial_load,
+            )
+        except RuntimeError as e:
+            if "k_norm_und_for_gen" in str(e):
+                raise RuntimeError(
+                    f"{e}\nThe model expects k_norm_und_for_gen weights (use_und_k_norm_for_gen=True) "
+                    "that this checkpoint predates. If this is a base checkpoint, re-run "
+                    "convert_model_to_dcp against nvidia/Cosmos3-Edge at revision f7f180c2 or later "
+                    "(docs/training.md Step 2). If resuming an SFT run started before the flag was "
+                    "enabled, restart training from a re-converted base checkpoint instead."
+                ) from e
+            raise
 
         return self._drop_non_reader_items(plan)
 

@@ -21,6 +21,7 @@ from safetensors.torch import save_file
 
 import cosmos_framework.model.generator.utils.safetensors_loader as safetensors_loader
 from cosmos_framework.model.generator.utils.safetensors_loader import (
+    _EDGE_INDEX_GEN_ONLY_KEY_RE,
     _detect_indexed_snapshot,
     _verify_edge_vision_shard_hash,
     convert_key_from_cosmos3_edge_index,
@@ -155,8 +156,12 @@ def test_edge_index_remap_miniature_manifest_bijection():
 @pytest.mark.L0
 @pytest.mark.CPU
 def test_edge_index_remap_full_root_index_bijection_onto_canonical():
-    """Map ALL 670 root-index keys of the real snapshot and assert an exact
-    bijection onto the canonical Cosmos3-Edge-Reasoner-VLM key list."""
+    """Map ALL reasoner root-index keys of the real snapshot and assert an exact
+    bijection onto the canonical Cosmos3-Edge-Reasoner-VLM key list.
+
+    Pre-K-norm-restoration snapshots carry exactly the 670 reasoner keys;
+    post-restoration snapshots (HF PR #30, >= f7f180c2) add 28 gen-only
+    k_norm_und_for_gen keys that detection skips."""
     snapshot = _find_local_edge_snapshot()
     if snapshot is None:
         pytest.skip("no local nvidia/Cosmos3-Edge indexed snapshot in the HF cache")
@@ -168,7 +173,11 @@ def test_edge_index_remap_full_root_index_bijection_onto_canonical():
     with safe_open(str(_CANONICAL_VLM_FILE), framework="pt") as f:
         canonical_keys = set(f.keys())
 
-    mapped = {k: convert_key_from_cosmos3_edge_index(k) for k in raw_keys}
+    gen_only = [k for k in raw_keys if _EDGE_INDEX_GEN_ONLY_KEY_RE.match(k)]
+    assert len(gen_only) in (0, 28), gen_only  # pre-#30 vs post-#30 snapshot
+    reasoner_keys = [k for k in raw_keys if not _EDGE_INDEX_GEN_ONLY_KEY_RE.match(k)]
+
+    mapped = {k: convert_key_from_cosmos3_edge_index(k) for k in reasoner_keys}
     assert None not in mapped.values(), sorted(k for k, v in mapped.items() if v is None)
     assert len(set(mapped.values())) == len(mapped)  # injective
     assert set(mapped.values()) == canonical_keys  # onto the authoritative target set
@@ -214,6 +223,27 @@ def test_detect_raises_on_unmappable_index_key(tmp_path):
     )
     with pytest.raises(ValueError, match="no canonical model-key mapping"):
         _detect_indexed_snapshot(str(tmp_path))
+
+
+@pytest.mark.L0
+@pytest.mark.CPU
+def test_detect_skips_gen_only_k_norm_keys(tmp_path):
+    """Post-K-norm-restoration indexes (HF PR #30) list gen-only
+    k_norm_und_for_gen tensors: recognized and skipped, not an error — while
+    genuinely unknown keys keep failing loudly."""
+    _write_indexed_snapshot(
+        tmp_path,
+        {
+            "transformer/part-00001.safetensors": {
+                "layers.0.self_attn.to_q.weight": torch.zeros(2, 2),
+                "layers.0.self_attn.k_norm_und_for_gen.weight": torch.zeros(2),
+            }
+        },
+    )
+    snapshot = _detect_indexed_snapshot(str(tmp_path))
+    assert snapshot is not None
+    assert "layers.0.self_attn.k_norm_und_for_gen.weight" not in snapshot.key_map
+    assert snapshot.key_map == {"layers.0.self_attn.to_q.weight": "model.language_model.layers.0.mixer.q_proj.weight"}
 
 
 @pytest.mark.L0

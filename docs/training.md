@@ -196,6 +196,8 @@ python -m cosmos_framework.scripts.convert_model_to_dcp \
 
 `$BASE_CHECKPOINT_NAME` (e.g. `Cosmos3-Nano`, `Cosmos3-Super`, `Cosmos3-Edge`) is a registered name in the checkpoint catalog; the converter downloads the matching repo from the Hugging Face Hub and writes the DCP into `examples/checkpoints/$BASE_CHECKPOINT_NAME`.
 
+> **Cosmos3-Edge — generator K-norm restoration:** `nvidia/Cosmos3-Edge` revisions from `f7f180c2` onward ship 28 trained `k_norm_und_for_gen` tensors, and the Edge SFT recipe requires them (`use_und_k_norm_for_gen=True`). If your `examples/checkpoints/Cosmos3-Edge` DCP was converted before that revision, training fails at load with `Missing key in checkpoint state_dict: …k_norm_und_for_gen…` — re-run the conversion above to fix it. Two framework minimums apply: the *conversion* step needs the K-norm-aware conversion config (commit `8cf08b4`; older checkouts silently drop these tensors even from new snapshots), and *training* with the Edge SFT recipe needs the K-norm adoption fix that ships together with this note — pinning to bare `8cf08b4` re-converts correctly but still trains without the norm, silently.
+
 **Reasoner Alignment SFT with LLaVA-OneVision (vfm-vlm):** Skip this step — the Reasoner alignment SFT loads `Qwen/Qwen3-VL-8B-Instruct` from the HF Hub at startup (no DCP conversion required). To start from a merged Cosmos3 reasoner snapshot instead, build one with `convert_model_to_vlm_safetensors` (see the VideoPhy-2 note below) and pass it via `VLM_SAFETENSORS_PATH`.
 
 **Reasoner Alignment SFT with VideoPhy-2 (Cosmos3-Nano):** Use `cosmos_framework.scripts.convert_model_to_vlm_safetensors` instead.
@@ -218,7 +220,7 @@ python -m cosmos_framework.scripts.convert_model_to_vlm_safetensors \
     -o examples/checkpoints/Cosmos3-Super-VLM
 ```
 
-**Reasoner Alignment SFT with VideoPhy-2 (Cosmos3-Edge):** Skip this step — the recipe loads the reasoner weights directly from the (ungated) `nvidia/Cosmos3-Edge` snapshot at startup: the training loader follows the repo's root safetensors index into its weight shards, so no conversion or extraction is required. To start from a local safetensors directory instead, point `VLM_SAFETENSORS_PATH` at it (optional, same mechanism as the nano recipe).
+**Reasoner Alignment SFT with VideoPhy-2 (Cosmos3-Edge):** Skip this step — the recipe loads the reasoner weights directly from the (ungated) `nvidia/Cosmos3-Edge` snapshot at startup: the training loader follows the repo's root safetensors index into its weight shards, so no conversion or extraction is required. To start from a local safetensors directory instead, point `VLM_SAFETENSORS_PATH` at it (optional, same mechanism as the nano recipe). Snapshots from revision `f7f180c2` onward also list the generator-only `k_norm_und_for_gen` tensors in the root index; the loader recognizes and skips them (they have no module in the reasoner), which requires the K-norm adoption fix that ships together with this note — checkouts without it (including `8cf08b4`) reject such snapshots at startup with a "no canonical model-key mapping" error.
 
 ## Step 3 — Run training
 

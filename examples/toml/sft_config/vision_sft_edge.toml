@@ -49,6 +49,7 @@ keys_to_select = [
     "time_embedder",
     "vae2llm",
     "llm2vae",
+    "k_norm_und_for_gen",  # und-K norm trains with the gen pathway upstream (imaginaire4 !10218)
 ]
 lr            = 1.0e-4                                 # tuned via LR sweep: full fine-tune converges faster at 1e-4 than 2e-5 (LoRA super stays 5e-4)
 weight_decay  = 0                                        # int matches legacy YAML repr

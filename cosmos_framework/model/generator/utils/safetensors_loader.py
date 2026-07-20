@@ -55,9 +55,9 @@ from safetensors.torch import load as load_safetensors
 from torch.distributed.device_mesh import DeviceMesh
 from torch.distributed.tensor import DTensor
 
-from cosmos_framework.utils.flags import INTERNAL
 from cosmos_framework.utils import log
 from cosmos_framework.utils.easy_io import easy_io
+from cosmos_framework.utils.flags import INTERNAL
 from cosmos_framework.utils.generator.parallelism import ParallelDims
 
 # Prefixes stripped when matching checkpoint keys to model state-dict keys.
@@ -158,6 +158,13 @@ _EDGE_VISION_SHARD_RELPATH = "vision_encoder/model.safetensors"
 _EDGE_VISION_SHARD_SHA256 = "2180ad739ecc96b5c1e9386892d3c5c08bfa42b9cdab9aabc53b028671db89b3"
 
 
+# Gen-pathway-only tensors listed in the nvidia/Cosmos3-Edge root index since the
+# K-norm restoration (HF PR #30, revision f7f180c2): the reasoner model has no
+# module for them, so indexed-snapshot detection recognizes and skips them instead
+# of failing. Keys outside this explicit allowlist still fail loudly.
+_EDGE_INDEX_GEN_ONLY_KEY_RE = re.compile(r"^layers\.\d+\.self_attn\.k_norm_und_for_gen\.weight$")
+
+
 def convert_key_from_cosmos3_edge_index(name: str) -> str | None:
     """Map a nvidia/Cosmos3-Edge root-index reasoner key to the canonical
     ``Cosmos3EdgeForConditionalGeneration`` state-dict key.
@@ -235,7 +242,10 @@ def _detect_indexed_snapshot(checkpoint_path: str) -> _IndexedSnapshot | None:
 
     Once the layout matches, any inconsistency is a hard error (unmappable
     index keys, two index keys colliding onto one model key, missing shard
-    files) — half-loading a checkpoint must never pass silently.
+    files) — half-loading a checkpoint must never pass silently. The one
+    exception is the explicit gen-only allowlist
+    (:data:`_EDGE_INDEX_GEN_ONLY_KEY_RE`): tensors the reasoner model has no
+    module for are recognized and skipped.
     """
     if not os.path.isdir(checkpoint_path):
         return None
@@ -253,6 +263,8 @@ def _detect_indexed_snapshot(checkpoint_path: str) -> _IndexedSnapshot | None:
     key_map: dict[str, str] = {}
     unmapped: list[str] = []
     for raw_key in weight_map:
+        if _EDGE_INDEX_GEN_ONLY_KEY_RE.match(raw_key):
+            continue  # known gen-pathway tensor with no reasoner module — skip, not an error
         dest_key = convert_key_from_cosmos3_edge_index(raw_key)
         if dest_key is None:
             unmapped.append(raw_key)
