@@ -106,10 +106,7 @@ vision_sft_edge = LazyDict(
                 "time_embedder",
                 "vae2llm",
                 "llm2vae",
-                # The und-K norm is a gen-pathway param trained alongside moe_gen upstream
-                # (imaginaire4 !10218 adds it to keys_to_select); without this entry it is the
-                # only gen-side norm left frozen (k_norm_moe_gen matches "moe_gen" and trains).
-                "k_norm_und_for_gen",
+                "k_norm_und_for_gen",  # und-K norm trains with the gen pathway
             ],
             lr=5.0e-04,
             lr_multipliers={},

@@ -158,10 +158,8 @@ _EDGE_VISION_SHARD_RELPATH = "vision_encoder/model.safetensors"
 _EDGE_VISION_SHARD_SHA256 = "2180ad739ecc96b5c1e9386892d3c5c08bfa42b9cdab9aabc53b028671db89b3"
 
 
-# Gen-pathway-only tensors listed in the nvidia/Cosmos3-Edge root index since the
-# K-norm restoration (HF PR #30, revision f7f180c2): the reasoner model has no
-# module for them, so indexed-snapshot detection recognizes and skips them instead
-# of failing. Keys outside this explicit allowlist still fail loudly.
+# Gen-pathway-only tensors in the nvidia/Cosmos3-Edge root index: the reasoner has
+# no module for them, so detection skips them (unknown keys still fail loudly).
 _EDGE_INDEX_GEN_ONLY_KEY_RE = re.compile(r"^layers\.\d+\.self_attn\.k_norm_und_for_gen\.weight$")
 
 
@@ -242,10 +240,8 @@ def _detect_indexed_snapshot(checkpoint_path: str) -> _IndexedSnapshot | None:
 
     Once the layout matches, any inconsistency is a hard error (unmappable
     index keys, two index keys colliding onto one model key, missing shard
-    files) — half-loading a checkpoint must never pass silently. The one
-    exception is the explicit gen-only allowlist
-    (:data:`_EDGE_INDEX_GEN_ONLY_KEY_RE`): tensors the reasoner model has no
-    module for are recognized and skipped.
+    files) — half-loading a checkpoint must never pass silently. Sole exception:
+    the gen-only allowlist (:data:`_EDGE_INDEX_GEN_ONLY_KEY_RE`) is skipped.
     """
     if not os.path.isdir(checkpoint_path):
         return None

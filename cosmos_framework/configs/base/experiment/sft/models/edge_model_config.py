@@ -163,11 +163,7 @@ EDGE_MODEL_CONFIG = dict(
                 freeze_und=False,
                 layer_module="MoTDecoderLayer",
                 qk_norm_for_text=False,  # Edge delta (nano=True); Edge.yaml create_vlm_config.qk_norm_for_text: false
-                # nvidia/Cosmos3-Edge >= f7f180c2 (HF PR #30) ships trained k_norm_und_for_gen
-                # weights; without this flag the DCP warm start silently drops them and gen->und
-                # cross-attention runs un-normalized. Matches Edge.yaml (PR #32). Base DCPs
-                # converted from older snapshots fail the strict load — re-convert them.
-                use_und_k_norm_for_gen=True,
+                use_und_k_norm_for_gen=True,  # und-K norm on gen→und cross-attention; Edge.yaml parity
                 include_visual=None,  # Edge delta (nano omits -> default); Edge.yaml create_vlm_config.include_visual: null
                 tie_word_embeddings=True,
             ),

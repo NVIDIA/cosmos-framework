@@ -382,16 +382,9 @@ class _DiffusersLoadPlanner(dcp.DefaultLoadPlanner):
                 missing_keys = {key for key in missing_keys if not key.startswith(modality_prefixes)}
         if missing_keys:
             sample = sorted(missing_keys)[:10]
-            hint = ""
-            if any("k_norm_und_for_gen" in key for key in missing_keys):
-                hint = (
-                    " The model was built with use_und_k_norm_for_gen=True but this snapshot "
-                    "predates the K-norm restoration (nvidia/Cosmos3-Edge PR #30); use revision "
-                    "f7f180c2 or later."
-                )
             raise ValueError(
                 f"Diffusers checkpoint at {self.checkpoint_path} did not provide {len(missing_keys)} "
-                f"required model tensor(s). First up to 10: {sample}{hint}"
+                f"required model tensor(s). First up to 10: {sample}"
             )
 
         super().set_up_planner(

@@ -381,22 +381,11 @@ class CustomLoadPlanner(dcp.DefaultLoadPlanner):
         if self.metadata is None:
             raise AssertionError("metadata must be set (via set_up_planner) before create_local_plan")
 
-        try:
-            plan = create_default_local_load_plan(
-                state_dict=self._skip_keys_if_found(self.state_dict),
-                metadata=self.metadata,
-                strict=not self.allow_partial_load,
-            )
-        except RuntimeError as e:
-            if "k_norm_und_for_gen" in str(e):
-                raise RuntimeError(
-                    f"{e}\nThe model expects k_norm_und_for_gen weights (use_und_k_norm_for_gen=True) "
-                    "that this checkpoint predates. If this is a base checkpoint, re-run "
-                    "convert_model_to_dcp against nvidia/Cosmos3-Edge at revision f7f180c2 or later "
-                    "(docs/training.md Step 2). If resuming an SFT run started before the flag was "
-                    "enabled, restart training from a re-converted base checkpoint instead."
-                ) from e
-            raise
+        plan = create_default_local_load_plan(
+            state_dict=self._skip_keys_if_found(self.state_dict),
+            metadata=self.metadata,
+            strict=not self.allow_partial_load,
+        )
 
         return self._drop_non_reader_items(plan)
 
