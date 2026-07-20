@@ -27,10 +27,9 @@ from cosmos_framework.data.generator.processors.cosmos3_edge_processing import (
 )
 
 # Renewed (native-metadata, no remote code) snapshot of nvidia/Cosmos3-Edge.
-_SNAPSHOT_DIR = (
-    "/lustre/fsw/portfolios/cosmos/projects/cosmos_base_training/users/simonz/work/dev/20260709/hf_cache/hub/"
-    "models--nvidia--Cosmos3-Edge/snapshots/be935d6931e4e176d7353abad41ca529d7b33b12"
-)
+# Point COSMOS3_EDGE_SNAPSHOT_DIR at a local snapshot dir to run these checks;
+# unset (the default) auto-skips them.
+_SNAPSHOT_DIR = os.environ.get("COSMOS3_EDGE_SNAPSHOT_DIR", "")
 
 requires_snapshot = pytest.mark.skipif(
     not os.path.isdir(_SNAPSHOT_DIR),

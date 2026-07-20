@@ -22,11 +22,9 @@ from cosmos_framework.scripts.reasoner.eval_videophy2 import (
 )
 
 # Existing Edge HF export (model_type="cosmos3_edge", bundled processor files).
-_EDGE_EXPORT_DIR = (
-    "/lustre/fsw/portfolios/cosmos/projects/cosmos_base_training/users/simonz/work/dev/20260709/"
-    "cosmos-framework-private/outputs/renewal2_videophy2/cosmos3/vlm_videophy2_sft/videophy2_sft_edge/"
-    "hf_exports/iter_000000050"
-)
+# Point COSMOS3_EDGE_EXPORT_DIR at a local ``videophy2_sft_edge`` HF export to
+# run these read-only checks; unset (the default) auto-skips them.
+_EDGE_EXPORT_DIR = os.environ.get("COSMOS3_EDGE_EXPORT_DIR", "")
 
 requires_edge_export = pytest.mark.skipif(
     not os.path.isdir(_EDGE_EXPORT_DIR),
