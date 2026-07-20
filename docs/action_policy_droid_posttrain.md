@@ -1,9 +1,6 @@
 # Cosmos3 DROID Action-Policy Post-Training
 
-This example post-trains a Cosmos3 base model into a DROID action policy on the [Cosmos3-DROID](https://huggingface.co/datasets/nvidia/Cosmos3-DROID) dataset. The model predicts absolute joint-position actions conditioned on proprioceptive state and video observations at a resolution of 480p (`640×360`). Two base-model tiers are covered:
-
-- **Nano** — reproduces [Cosmos3-Nano-Policy-DROID](https://huggingface.co/nvidia/Cosmos3-Nano-Policy-DROID), post-trained from [Cosmos3-Nano](https://huggingface.co/nvidia/Cosmos3-Nano) (16B Mixture-of-Transformers). Experiment `action_policy_droid_nano`, launcher `launch_sft_action_policy_droid_nano.sh`, lr 2e-4.
-- **Edge** — post-trained from [Cosmos3-Edge](https://huggingface.co/nvidia/Cosmos3-Edge) (4B Mixture-of-Transformers with a Nemotron-2B-Dense-VL reasoner). Experiment `action_policy_droid_edge`, launcher `launch_sft_action_policy_droid_edge.sh`, lr 5e-4 (linear decay to 0.4x), idle-frame prompt conditioning, and the generator qk-norm fix (`k_norm_und_for_gen`) kept training.
+This example post-trains [Cosmos3-Nano](https://huggingface.co/nvidia/Cosmos3-Nano) into a DROID action policy on the [Cosmos3-DROID](https://huggingface.co/datasets/nvidia/Cosmos3-DROID) dataset, reproducing [Cosmos3-Nano-Policy-DROID](https://huggingface.co/nvidia/Cosmos3-Nano-Policy-DROID). The model predicts absolute joint-position actions conditioned on proprioceptive state and video observations at a resolution of 480p (`640×360`). Experiment `action_policy_droid_nano`, launcher `launch_sft_action_policy_droid_nano.sh`.
 
 Two external inputs are required: (1) a pre-downloaded Cosmos3-DROID dataset in LeRobotDataset v3.0 format, and (2) a DCP base checkpoint converted from the chosen base model (Cosmos3-Nano or Cosmos3-Edge).
 
@@ -35,8 +32,8 @@ The runnable artifacts (TOML recipe, paired launch shell) live in [`examples/`](
 
 ## Inputs You Provide
 
-This package ships the training stack — the registered `action_policy_droid_nano` and
-`action_policy_droid_edge` experiments, the DROID action dataset class with the recipe knobs
+This package ships the training stack — the registered `action_policy_droid_nano`
+experiment, the DROID action dataset class with the recipe knobs
 (`action_space=joint_pos`, `use_state`, `concat_view`), and the EMA warm-start in
 `checkpoint/dcp.py`. Two inputs are external and must be provided per environment:
 
@@ -44,9 +41,7 @@ This package ships the training stack — the registered `action_policy_droid_na
    dataset into a directory named `droid_plus_lerobot_640x360_20260412` (the loader resolves the
    dataset schema from the directory name) and point `DROID_ROOT` at that directory — the parent
    containing `success/`, not `.../success` itself.
-2. **DCP base checkpoint** — convert the chosen base model
-   ([Cosmos3-Nano](https://huggingface.co/nvidia/Cosmos3-Nano) or
-   [Cosmos3-Edge](https://huggingface.co/nvidia/Cosmos3-Edge)) to DCP and point
+2. **DCP base checkpoint** — convert [Cosmos3-Nano](https://huggingface.co/nvidia/Cosmos3-Nano) to DCP and point
    `BASE_CHECKPOINT_PATH` at it (see [Full Reproduction](#full-reproduction)). Action heads are
    not loaded from it (they init fresh).
 
@@ -54,7 +49,7 @@ This package ships the training stack — the registered `action_policy_droid_na
 
 | knob              | value                                                                                                                                              |
 | ----------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- |
-| init              | `Cosmos3-Nano` or `Cosmos3-Edge` (public Hugging Face repos)                                                                                       |
+| init              | `Cosmos3-Nano` (public Hugging Face repo)                                                                                                          |
 | action space      | `joint_pos` (absolute joint position, 8-D incl. gripper)                                                                                           |
 | state             | `use_state=true` (proprioception; valid only with `joint_pos`)                                                                                     |
 | task mode         | `policy` (single-task; the `joint` multi-task default is avoided)                                                                                  |
@@ -64,7 +59,7 @@ This package ships the training stack — the registered `action_policy_droid_na
 | sequence packing  | `max_num_tokens_after_packing=-1` (full vision sequence per step)                                                                                  |
 | shuffle           | episode-shuffle stream (decorrelates the per-step global batch)                                                                                    |
 | window filter     | [keep_ranges_1_0_1.json](https://huggingface.co/KarlP/droid/blob/main/keep_ranges_1_0_1.json) (`KarlP/droid`) — trains the curated ≈74% window set |
-| lr                | `2e-4` (Nano); `5e-4`, linear decay to 0.4x (Edge)                                                                                                 |
+| lr                | `2e-4`                                                                                                                                             |
 | global batch      | `8192` = `max_samples_per_batch` × world size × `grad_accum_iter` (reduce the first / raise the last to fit GPU memory)                            |
 | eval              | disabled for the reproduction run                                                                                                                  |
 
@@ -84,7 +79,6 @@ export DATASET_PATH=/path/to/droid_plus_lerobot_640x360_20260412
 python -m cosmos_framework.scripts.convert_model_to_dcp \
   --checkpoint-path Cosmos3-Nano \
   -o $BASE_CHECKPOINT_PATH
-# (Edge: --checkpoint-path Cosmos3-Edge)
 
 # Step 3: download the keep_ranges_1_0_1.json window filter (drops idle/non-task frames -> trains
 # the curated ~74% window set, matching the released model).
@@ -106,14 +100,12 @@ export EXTRA_TAIL_OVERRIDES=" \
   dataloader_train.dataloader.datasets.droid.dataset.filter_dict_path=$FILTER_DIR/keep_ranges_1_0_1.json \
 "
 bash examples/launch_sft_action_policy_droid_nano.sh
-# (Edge: bash examples/launch_sft_action_policy_droid_edge.sh)
 ```
 
-The recipe TOMLs ([`action_policy_droid_nano.toml`](../examples/toml/sft_config/action_policy_droid_nano.toml),
-[`action_policy_droid_edge.toml`](../examples/toml/sft_config/action_policy_droid_edge.toml)) set the scalar
+The recipe TOML ([`action_policy_droid_nano.toml`](../examples/toml/sft_config/action_policy_droid_nano.toml)) sets the scalar
 knobs (`max_iter`, `save_iter`, `grad_clip`, parallelism, wandb); the dataset/action knobs
 (`joint_pos`, `use_state`, `concat_view`, 480p, chunk 32, count-based batch) live in the
-registered experiments per the schema's design. For multi-node HSDP,
+registered `action_policy_droid_nano` experiment per the schema's design. For multi-node HSDP,
 set `model.config.parallelism.data_parallel_replicate_degree = <num_nodes>` (intra-node shard stays 8).
 
 The **keep_ranges_1_0_1.json filter** maps each DROID trajectory key to a list of `[start, end]` frame
