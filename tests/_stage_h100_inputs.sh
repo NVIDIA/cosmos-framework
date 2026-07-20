@@ -50,14 +50,19 @@ if [[ "$(python -c 'import transformers; print(transformers.__version__)')" != "
 fi
 echo ">>> $(date '+%H:%M:%S') transformers=$(python -c 'import transformers; print(transformers.__version__)')"
 
+# retry once with --refresh: `hf@latest` doesn't refresh dependency index metadata
+_hf_download() {
+    uvx hf@latest download "$@" --quiet \
+        || uvx --refresh hf@latest download "$@" --quiet
+}
+
 # ----------------------------------------------------------------------------
 # 1. Mixed-modality SFT dataset (BridgeData2-Subset-Synthetic-Captions).
 # ----------------------------------------------------------------------------
 echo ">>> $(date '+%H:%M:%S') downloading BridgeData2-Subset-Synthetic-Captions ..."
-BRIDGE_ROOT=$(uvx hf@latest download --repo-type dataset \
+BRIDGE_ROOT=$(_hf_download --repo-type dataset \
     nvidia/BridgeData2-Subset-Synthetic-Captions \
-    --revision 40d018ac1c1a2a4b9734f17fdb21f3d933c49a01 \
-    --quiet)
+    --revision 40d018ac1c1a2a4b9734f17fdb21f3d933c49a01)
 DATASET_PATH="$BRIDGE_ROOT/sft_dataset_bridge"
 echo "DATASET_PATH=$DATASET_PATH"
 
@@ -65,7 +70,7 @@ echo "DATASET_PATH=$DATASET_PATH"
 # 2. Wan2.2 VAE checkpoint.
 # ----------------------------------------------------------------------------
 echo ">>> $(date '+%H:%M:%S') downloading Wan2.2_VAE.pth ..."
-WAN_VAE_PATH=$(uvx hf@latest download Wan-AI/Wan2.2-TI2V-5B Wan2.2_VAE.pth --quiet)
+WAN_VAE_PATH=$(_hf_download Wan-AI/Wan2.2-TI2V-5B Wan2.2_VAE.pth)
 echo "WAN_VAE_PATH=$WAN_VAE_PATH"
 
 # ----------------------------------------------------------------------------
@@ -77,9 +82,8 @@ echo "WAN_VAE_PATH=$WAN_VAE_PATH"
 #    substring is present, and point `MODEL_PATH` at the symlink.
 # ----------------------------------------------------------------------------
 echo ">>> $(date '+%H:%M:%S') downloading Qwen3-VL-8B-Instruct ..."
-_HF_SNAP=$(uvx hf@latest download Qwen/Qwen3-VL-8B-Instruct \
-    --revision 0c351dd01ed87e9c1b53cbc748cba10e6187ff3b \
-    --quiet)
+_HF_SNAP=$(_hf_download Qwen/Qwen3-VL-8B-Instruct \
+    --revision 0c351dd01ed87e9c1b53cbc748cba10e6187ff3b)
 mkdir -p "$STAGE_DIR/Qwen"
 ln -sfn "$_HF_SNAP" "$STAGE_DIR/Qwen/Qwen3-VL-8B-Instruct"
 MODEL_PATH="$STAGE_DIR/Qwen/Qwen3-VL-8B-Instruct"

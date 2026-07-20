@@ -5,6 +5,7 @@ import json
 import time
 from collections.abc import Mapping
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 import torch
@@ -50,6 +51,9 @@ from cosmos_framework.model.generator.reasoner.qwen3_vl.qwen3_vl import (
 from cosmos_framework.model.generator.reasoner.qwen3_vl.utils import (
     prepare_multimodal_reasoner_inputs,
 )
+from cosmos_framework.model.generator.reasoner.nemotron_3_dense_vl.reasoner_multimodal_utils import (
+    prepare_multimodal_reasoner_inputs as _nemotron_prepare_multimodal_reasoner_inputs,
+)
 
 # Qwen3-VL-MoE imports
 from cosmos_framework.model.generator.reasoner.qwen3_vl_moe.configuration_qwen3_vl_moe import (
@@ -58,6 +62,8 @@ from cosmos_framework.model.generator.reasoner.qwen3_vl_moe.configuration_qwen3_
     Qwen3VLMoeVisionConfig,
 )
 from cosmos_framework.model.generator.reasoner.qwen3_vl_moe.qwen3_vl_moe import (
+    AuxLossFreeLoadBalancingConfig,
+    CosineRouterConfig,
     LBLMetadata,
     Qwen3VLMoePreTrainedModel,
     Qwen3VLMoeTextMLP,
@@ -231,8 +237,10 @@ class _MoTConfigBase(object):
         qk_norm_for_diffusion: bool = True,
         include_visual: bool = False,
         gen_noisy_gating: bool = False,
+        gen_cosine_router_config: CosineRouterConfig | None = None,
+        gen_aux_loss_free_load_balancing_config: AuxLossFreeLoadBalancingConfig | None = None,
         text_config_overrides: Mapping[str, Any] | None = None,
-    ):
+    ) -> None:
         # Defensive copy so downstream materialization can't mutate the
         # caller's input.
         self.config_dict = dict(config_dict)
@@ -242,6 +250,16 @@ class _MoTConfigBase(object):
         # Noisy top-k gating on the generation-tower MoE blocks (Shazeer 2017).
         # Gen-tower only; the understanding tower never receives this flag.
         self.gen_noisy_gating = gen_noisy_gating
+        # Cosine router on the generation-tower MoE blocks: token-mean-centered,
+        # L2-normalized input × L2-normalized gate rows, scaled by a learnable
+        # temperature. Gen-tower only; the understanding tower keeps the standard
+        # dot-product router.
+        self.gen_cosine_router_config: CosineRouterConfig = gen_cosine_router_config or CosineRouterConfig()
+        # Aux-loss-free load balancing on the gen-tower MoE blocks.
+        # Gen-tower only; the understanding tower uses the disabled default.
+        self.gen_aux_loss_free_load_balancing_config: AuxLossFreeLoadBalancingConfig = (
+            gen_aux_loss_free_load_balancing_config or AuxLossFreeLoadBalancingConfig()
+        )
         # Plain attribute (not a property) so the ``create_vlm_config``
         # post-construction ``setattr`` flow can replace the whole
         # mapping in one shot; default to ``{}`` so the merge in
@@ -801,9 +819,11 @@ def _impl_init(
     layer_types: LayerTypes,
     qk_norm_for_text: bool,
     qk_norm_for_diffusion: bool,
-    gen_noisy_gating: bool = False,
     use_und_k_norm_for_gen: bool = False,
-):
+    gen_noisy_gating: bool = False,
+    gen_cosine_router_config: CosineRouterConfig | None = None,
+    gen_aux_loss_free_load_balancing_config: AuxLossFreeLoadBalancingConfig | None = None,
+) -> None:
     """Shared ``__init__`` body for the three MoT text-model variants.
 
     Used by ``Qwen3VLTextModel``, ``Qwen3VLMoeTextModel``, and
@@ -824,8 +844,10 @@ def _impl_init(
                 layer_idx=layer_idx,
                 qk_norm_for_text=qk_norm_for_text,
                 qk_norm_for_diffusion=qk_norm_for_diffusion,
-                gen_noisy_gating=gen_noisy_gating,
                 use_und_k_norm_for_gen=use_und_k_norm_for_gen,
+                gen_noisy_gating=gen_noisy_gating,
+                gen_cosine_router_config=gen_cosine_router_config,
+                gen_aux_loss_free_load_balancing_config=gen_aux_loss_free_load_balancing_config,
             )
         )
 
@@ -1002,9 +1024,11 @@ class MoTDecoderLayer(nn.Module):
         layer_types: LayerTypes,
         qk_norm_for_text: bool,
         qk_norm_for_diffusion: bool,
-        gen_noisy_gating: bool = False,
         use_und_k_norm_for_gen: bool = False,
-    ):
+        gen_noisy_gating: bool = False,
+        gen_cosine_router_config: CosineRouterConfig | None = None,
+        gen_aux_loss_free_load_balancing_config: AuxLossFreeLoadBalancingConfig | None = None,
+    ) -> None:
         super().__init__()
         self.hidden_size = config.hidden_size
         self.self_attn = PackedAttentionMoT(
@@ -1022,8 +1046,14 @@ class MoTDecoderLayer(nn.Module):
             and (config.num_experts > 0 and (layer_idx + 1) % config.decoder_sparse_step == 0)
         ):
             self.mlp = Qwen3VLMoeTextSparseMoeBlock(config)
-            # Noisy gating is gen-tower only.
-            self.mlp_moe_gen = Qwen3VLMoeTextSparseMoeBlock(config, noisy_gating=gen_noisy_gating)
+            # Noisy gating, the cosine router, and aux-loss-free load balancing
+            # are gen-tower only.
+            self.mlp_moe_gen = Qwen3VLMoeTextSparseMoeBlock(
+                config,
+                noisy_gating=gen_noisy_gating,
+                cosine_router_config=gen_cosine_router_config,
+                aux_loss_free_load_balancing_config=gen_aux_loss_free_load_balancing_config,
+            )
         else:
             self.mlp = layer_types.mlp(config)
             self.mlp_moe_gen = layer_types.mlp(config)
@@ -1274,9 +1304,11 @@ class Qwen3VLMoeTextModel(Qwen3VLMoePreTrainedModel):
         *,
         qk_norm_for_text: bool,
         qk_norm_for_diffusion: bool,
-        gen_noisy_gating: bool = False,
         use_und_k_norm_for_gen: bool,
-    ):
+        gen_noisy_gating: bool = False,
+        gen_cosine_router_config: CosineRouterConfig | None = None,
+        gen_aux_loss_free_load_balancing_config: AuxLossFreeLoadBalancingConfig | None = None,
+    ) -> None:
         super().__init__(config)
         _impl_init(
             self,
@@ -1284,8 +1316,10 @@ class Qwen3VLMoeTextModel(Qwen3VLMoePreTrainedModel):
             layer_types=LayerTypes("qwen3_vl_moe"),
             qk_norm_for_text=qk_norm_for_text,
             qk_norm_for_diffusion=qk_norm_for_diffusion,
-            gen_noisy_gating=gen_noisy_gating,
             use_und_k_norm_for_gen=use_und_k_norm_for_gen,
+            gen_noisy_gating=gen_noisy_gating,
+            gen_cosine_router_config=gen_cosine_router_config,
+            gen_aux_loss_free_load_balancing_config=gen_aux_loss_free_load_balancing_config,
         )
 
     def init_taylorseer(self, cache_dic=None, current=None):
@@ -1634,8 +1668,14 @@ def _impl_generate_reasoner_text(
     presence_penalty: float = 0.0,
     seed: int | None = None,
     return_only_new_tokens: bool = False,
+    prepare_multimodal_fn: Any = prepare_multimodal_reasoner_inputs,
 ) -> torch.Tensor:
     """Run a reasoner-tower autoregressive decode loop with a per-layer KV cache.
+
+    ``prepare_multimodal_fn`` builds the image/video-conditioned prefill inputs
+    (embeds + mrope positions). Defaults to the Qwen3-VL implementation; the
+    Nemotron 3 Dense VL reasoner injects its own SigLIP2 variant so the same
+    decode loop serves both families.
 
     The loop has two phases:
         1. Prefill — process the prompt in one forward pass. For I2V, this
@@ -1792,7 +1832,7 @@ def _impl_generate_reasoner_text(
             deepstack_visual_embeds,
             position_ids,
             mrope_position_deltas,
-        ) = prepare_multimodal_reasoner_inputs(
+        ) = prepare_multimodal_fn(
             causal_lm,
             input_ids=input_ids,
             pixel_values=pixel_values,
@@ -2138,8 +2178,10 @@ class Qwen3VLMoeTextForCausalLM(Qwen3VLMoePreTrainedModel):
             text_config,
             qk_norm_for_text=config.qk_norm_for_text,
             qk_norm_for_diffusion=config.qk_norm_for_diffusion,
-            gen_noisy_gating=config.gen_noisy_gating,
             use_und_k_norm_for_gen=getattr(config, "use_und_k_norm_for_gen", False),
+            gen_noisy_gating=config.gen_noisy_gating,
+            gen_cosine_router_config=getattr(config, "gen_cosine_router_config", None),
+            gen_aux_loss_free_load_balancing_config=config.gen_aux_loss_free_load_balancing_config,
         )
         self.vocab_size = text_config.vocab_size
         self.lm_head = nn.Linear(text_config.hidden_size, text_config.vocab_size, bias=False)
@@ -2170,6 +2212,14 @@ class Qwen3VLMoeTextForCausalLM(Qwen3VLMoePreTrainedModel):
             elif "gate_noise" in original_name:
                 # Noisy-gating projection is gen-tower only (the und tower has no
                 # gate_noise counterpart), so keep its zero-init rather than copy.
+                pass
+            elif "log_temperature" in original_name:
+                # Cosine-router temperature is gen-tower only (the und tower has
+                # no log_temperature counterpart), so keep its init value.
+                pass
+            elif "router_bias" in original_name:
+                # Learned cosine-router de-sink bias is gen-tower only (the und tower
+                # has no router_bias counterpart), so keep its zero-init.
                 pass
             else:
                 raise ValueError(f"Could not find {original_name} in state_dict for initialization of {name}")
@@ -2263,6 +2313,41 @@ class Qwen3VLMoeTextForCausalLM(Qwen3VLMoePreTrainedModel):
         )
 
 
+def _load_bundled_vision_tower(local_dir: str | None) -> tuple[str, dict, dict] | None:
+    """Locate a checkpoint-local Edge vision tower bundle.
+
+    Returns ``(weights_file, ve_cfg, top_cfg)`` when ``local_dir`` contains
+    ``vision_encoder/model.safetensors``, else ``None``. Config resolution
+    mirrors the hub branch's standalone-first convention:
+
+    * ``vision_encoder/config.json`` when present — ``export_model --vit``
+      writes a self-describing one (``vision_config`` + ``projector_config``
+      + the multimodal token ids), so ``top_cfg`` is the same dict.
+    * else the dir's top-level ``config.json`` (a raw hub snapshot, which
+      folds the spec and token ids into the top-level config).
+    * a standalone file without token ids (older layout) still sources the
+      ids from the top-level config.
+    """
+    if not local_dir:
+        return None
+    weights = Path(local_dir) / "vision_encoder" / "model.safetensors"
+    if not weights.is_file():
+        return None
+    standalone = weights.parent / "config.json"
+    if standalone.is_file():
+        with open(standalone) as f:
+            ve_cfg = json.load(f)
+    else:
+        with open(Path(local_dir) / "config.json") as f:
+            ve_cfg = json.load(f)
+    if "image_token_id" in ve_cfg:
+        top_cfg = ve_cfg
+    else:
+        with open(Path(local_dir) / "config.json") as f:
+            top_cfg = json.load(f)
+    return str(weights), ve_cfg, top_cfg
+
+
 class Nemotron3DenseVLTextForCausalLM(Nemotron3DenseVLPreTrainedModel):
     """Causal LM head on top of the Nemotron 3 Dense VL MoT text model."""
 
@@ -2337,6 +2422,11 @@ class Nemotron3DenseVLTextForCausalLM(Nemotron3DenseVLPreTrainedModel):
         input_ids: torch.Tensor,
         max_new_tokens: int,
         *,
+        pixel_values: torch.Tensor | None = None,
+        image_grid_thw: torch.Tensor | None = None,
+        pixel_values_videos: torch.Tensor | None = None,
+        video_grid_thw: torch.Tensor | None = None,
+        attention_mask: torch.Tensor | None = None,
         eos_token_id: int | list[int] | None = None,
         pad_token_id: int | None = None,
         do_sample: bool = False,
@@ -2348,4 +2438,160 @@ class Nemotron3DenseVLTextForCausalLM(Nemotron3DenseVLPreTrainedModel):
         seed: int | None = None,
         return_only_new_tokens: bool = False,
     ) -> torch.Tensor:
-        raise NotImplementedError("This method is not implemented for Nemotron 3 Dense VL.")
+        """Autoregressively generate text tokens using only the reasoner tower.
+
+        Mirrors :meth:`Qwen3VLTextForCausalLM.generate_reasoner_text` for the
+        **text-only** path: the reasoner-tower decode loop is shared —
+        ``Nemotron3DenseVLTextModel.reasoner_forward`` delegates to the same
+        ``_impl_reasoner_forward`` the Qwen text models use — so a text prompt
+        simply flows through :func:`_impl_generate_reasoner_text`.
+
+        The keyword arguments mirror the Qwen signature because
+        ``Cosmos3VFMNetwork.generate_reasoner_text`` forwards the multimodal
+        kwargs unconditionally; accepting them (rather than omitting them) is
+        what lets text-only prompts reach this method instead of raising a
+        ``TypeError`` on an unexpected ``pixel_values`` kwarg.
+
+        **Image and video conditioning** are supported via a SigLIP2 vision
+        tower. Unlike Qwen3-VL (whose ViT ships in the DCP checkpoint), Edge's
+        understanding vision encoder is a self-contained SigLIP2 + projector
+        stack published in the HF repo under ``vision_encoder/``;
+        :meth:`_ensure_vision_tower` loads it lazily on the first vision prompt
+        (directly from HF, no DCP remap) and caches it as ``self.visual``. The
+        vision-conditioned prefill then runs through
+        :func:`_impl_generate_reasoner_text` with the Nemotron variant of
+        ``prepare_multimodal_reasoner_inputs`` (SigLIP2 encode → masked_scatter →
+        multimodal rope, no deepstack). SigLIP2 has no temporal attention, so a
+        video is encoded as its frames stacked along the ``video_grid_thw``
+        temporal axis; the image and video pairs are mutually exclusive.
+        """
+        # Vision-conditioned prefill uses a SigLIP2 vision tower loaded lazily from
+        # the HF checkpoint (see _ensure_vision_tower). Text-only prompts skip it.
+        use_vision = (
+            pixel_values is not None
+            or image_grid_thw is not None
+            or pixel_values_videos is not None
+            or video_grid_thw is not None
+        )
+        if use_vision:
+            self._ensure_vision_tower()
+        return _impl_generate_reasoner_text(
+            self,
+            input_ids=input_ids,
+            max_new_tokens=max_new_tokens,
+            pixel_values=pixel_values,
+            image_grid_thw=image_grid_thw,
+            pixel_values_videos=pixel_values_videos,
+            video_grid_thw=video_grid_thw,
+            attention_mask=attention_mask,
+            eos_token_id=eos_token_id,
+            pad_token_id=pad_token_id,
+            do_sample=do_sample,
+            temperature=temperature,
+            top_k=top_k,
+            top_p=top_p,
+            repetition_penalty=repetition_penalty,
+            presence_penalty=presence_penalty,
+            seed=seed,
+            return_only_new_tokens=return_only_new_tokens,
+            prepare_multimodal_fn=_nemotron_prepare_multimodal_reasoner_inputs,
+        )
+
+    def _ensure_vision_tower(self, hf_repo: str = "nvidia/Cosmos3-Edge") -> None:
+        """Lazily build the SigLIP2 vision tower on the first vision prompt.
+
+        The tower is not in the DCP checkpoint; it ships under ``vision_encoder/``.
+        Prefer the copy bundled in the local checkpoint dir (threaded here via
+        ``_local_checkpoint_dir`` — loads fully offline), else download from the
+        hub. Cached as ``self.visual``; also plumbs the multimodal token ids onto
+        ``self.config`` for ``get_rope_index`` / ``get_placeholder_mask``.
+        """
+        if getattr(self, "visual", None) is not None:
+            return
+        from types import SimpleNamespace
+
+        from safetensors.torch import load_file
+        from transformers.models.siglip2.configuration_siglip2 import Siglip2VisionConfig
+
+        from cosmos_framework.model.generator.reasoner.nemotron_3_dense_vl.vision_siglip2 import (
+            NemotronSiglip2VisionEncoder,
+        )
+
+        # Local-first: prefer a checkpoint-bundled ``vision_encoder/`` (written
+        # by ``export_model`` with the default ``--vit``, or present in a full
+        # hub snapshot dir) over a live hub download.
+        bundled = _load_bundled_vision_tower(getattr(self, "_local_checkpoint_dir", None))
+        if bundled is not None:
+            weights_file, ve_cfg, top_cfg = bundled
+            log.info(f"Edge vision tower: loading from checkpoint-local bundle {Path(weights_file).parent}")
+        else:
+            from huggingface_hub import hf_hub_download
+            from huggingface_hub.errors import EntryNotFoundError
+
+            def _hub_error(filename: str) -> RuntimeError:
+                return RuntimeError(
+                    f"Failed to download '{filename}' from Hugging Face repo '{hf_repo}' "
+                    "(required to build the Cosmos3-Edge vision tower for image/video prompts). "
+                    "Likely causes: offline environment or cold HF cache, the repo is private or "
+                    "gated, or HF_TOKEN is missing/expired. Re-exporting the checkpoint with the "
+                    "default --vit bundles vision_encoder/ into it, making inference "
+                    "self-contained (no hub access needed)."
+                )
+
+            log.info(f"Edge vision tower: no checkpoint-local bundle; downloading from HF repo '{hf_repo}'")
+            try:
+                config_file = hf_hub_download(hf_repo, "config.json")
+            except Exception as e:
+                raise _hub_error("config.json") from e
+            with open(config_file) as f:
+                top_cfg = json.load(f)
+            # The SigLIP2 + projector spec normally lives in a standalone
+            # ``vision_encoder/config.json``, but the public ``nvidia/Cosmos3-Edge``
+            # repo ships only the weights under ``vision_encoder/`` and folds the
+            # spec into the top-level ``config.json``. Prefer the standalone file
+            # when present, else fall back to the top-level config.
+            try:
+                with open(hf_hub_download(hf_repo, "vision_encoder/config.json")) as f:
+                    ve_cfg = json.load(f)
+            except EntryNotFoundError:
+                # Also covers LocalEntryNotFoundError: with a warm offline cache
+                # the (nonexistent) standalone file is never cached, so keep
+                # falling back to the top-level config instead of hard-failing.
+                ve_cfg = top_cfg
+            except Exception as e:
+                raise _hub_error("vision_encoder/config.json") from e
+            try:
+                weights_file = hf_hub_download(hf_repo, "vision_encoder/model.safetensors")
+            except Exception as e:
+                raise _hub_error("vision_encoder/model.safetensors") from e
+        vdict = dict(ve_cfg["vision_config"])
+        for k in ("model_type", "transformers_version", "spatial_merge_size"):
+            vdict.pop(k, None)
+        vcfg = Siglip2VisionConfig(**vdict)
+        vcfg._attn_implementation = "eager"
+        pc = ve_cfg["projector_config"]
+        pcfg = SimpleNamespace(
+            spatial_merge_size=pc["spatial_merge_size"],
+            input_hidden_size=pc["input_hidden_size"],
+            # Older standalone configs name this ``merger_intermedia``; the
+            # top-level config names it ``merger_intermediate_size``.
+            merger_intermedia=pc.get("merger_intermedia", pc.get("merger_intermediate_size")),
+            out_hidden_size=pc["out_hidden_size"],
+        )
+        ref = self.model.embed_tokens.weight
+        encoder = NemotronSiglip2VisionEncoder(vcfg, pcfg).to(device=ref.device, dtype=ref.dtype).eval()
+        state = load_file(weights_file)
+        # Weights are prefixed ``model.visual.*`` / ``model.projector.*``; strip
+        # the ``model.`` prefix to match the encoder's ``visual.*`` / ``projector.*``.
+        state = {k[len("model.") :]: v for k, v in state.items()}
+        missing, unexpected = encoder.load_state_dict(state, strict=False)
+        if missing or unexpected:
+            raise RuntimeError(
+                f"Vision tower weight load mismatch: missing={missing[:3]} unexpected={unexpected[:3]}"
+            )
+        self.visual = encoder
+        # Plumb multimodal token ids for get_rope_index / get_placeholder_mask.
+        self.config.image_token_id = top_cfg["image_token_id"]
+        self.config.video_token_id = top_cfg["video_token_id"]
+        self.config.vision_start_token_id = top_cfg["vision_start_token_id"]
+        self.config.vision_config = SimpleNamespace(spatial_merge_size=pc["spatial_merge_size"])

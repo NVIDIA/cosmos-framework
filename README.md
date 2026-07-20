@@ -117,6 +117,6 @@ first; the skills above are referenced from there.
 | [Code Structure](./docs/code_structure.md)                   | Repository layout and a per-subpackage tour of `cosmos_framework/` — where each concern lives and where to add new code.                  |
 | [Training](./docs/training.md)                               | Launching multi-GPU and multi-node runs; parallelism strategies; mixed precision; resuming.                                               |
 | [Inference (from a trained checkpoint)](./docs/inference.md) | Loading a trained checkpoint into one of the inference backends.                                                                          |
-| [Policy Server](./docs/action_policy_droid_server.md)        | Running the server-client pipeline for Cosmos3-Nano-Policy-DROID.                                                                         |
+| [Policy Server](./docs/action_policy_droid_server.md)        | Running the server-client pipeline for Cosmos3-Policy-DROID.                                                                              |
 | [FAQ](./docs/faq.md)                                         | Troubleshooting (OOM, NCCL hangs, slow training), environment variables, and common pitfalls.                                             |
 | [AGENTS.md](./AGENTS.md) + [Agent Skills](#agent-skills)     | Repo map and task-specific `SKILL.md` files loaded automatically by AGENTS.md-aware coding agents (Claude Code, Codex CLI, Cursor, etc.). |

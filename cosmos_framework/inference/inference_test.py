@@ -246,7 +246,7 @@ def test_reasoner_defaults_json_round_trip() -> None:
 
     defaults = _load_modality_defaults("reasoner")
     assert defaults["model_mode"] == "reasoner"
-    assert defaults["max_new_tokens"] == 64
+    assert defaults["max_new_tokens"] == 1024
     on_disk = _json.loads((PACKAGE_DIR / "defaults/reasoner/sample_args.json").read_text())
     assert defaults == on_disk
 

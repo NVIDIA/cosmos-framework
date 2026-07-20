@@ -62,6 +62,8 @@ _DROID_TO_OPENCV: np.ndarray = np.array(
 class DROIDLeRobotDataset(BaseActionLeRobotDataset):
     """ """
 
+    EMBODIMENT_TYPE: str = "droid_lerobot"
+
     def __init__(
         self,
         root: str = "/lustre/fsw/portfolios/cosmos/projects/cosmos_base_training/cosmos3_action_datasets/droid_plus_lerobot_640x360_20260412",

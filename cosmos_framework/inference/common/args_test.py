@@ -8,11 +8,21 @@ from pathlib import Path
 import pytest
 
 from cosmos_framework.inference.args import DEFAULT_CHECKPOINT, DEFAULT_CHECKPOINT_NAME
-from cosmos_framework.inference.common.args import CheckpointConfig, CheckpointOverrides, download_file
+from cosmos_framework.inference.common.args import CheckpointConfig, CheckpointOverrides, CheckpointType, download_file
 
 CHECKPOINTS: dict[str, CheckpointConfig] = {
     DEFAULT_CHECKPOINT_NAME: DEFAULT_CHECKPOINT,
 }
+
+
+def test_checkpoint_type_from_diffusers_layout(tmp_path: Path) -> None:
+    transformer_path = tmp_path / "transformer"
+    transformer_path.mkdir()
+    (tmp_path / "model_index.json").write_text("{}", encoding="utf-8")
+    (transformer_path / "config.json").write_text("{}", encoding="utf-8")
+    (transformer_path / "diffusion_pytorch_model.safetensors.index.json").write_text("{}", encoding="utf-8")
+
+    assert CheckpointType.from_path(tmp_path) == CheckpointType.HF
 
 
 def test_download_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):

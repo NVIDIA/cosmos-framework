@@ -71,9 +71,9 @@ from torch.nn.modules.module import _IncompatibleKeys
 
 from cosmos_framework.checkpoint.base import AbstractCheckpointer
 from cosmos_framework.checkpoint.s3_filesystem import S3StorageReader, S3StorageWriter
-from cosmos_framework.utils.config import CheckpointConfig, JobConfig
 from cosmos_framework.model._base import ImaginaireModel
 from cosmos_framework.utils import callback, distributed, log, misc
+from cosmos_framework.utils.config import CheckpointConfig, JobConfig
 from cosmos_framework.utils.easy_io import easy_io
 from cosmos_framework.utils.generator.rand_state import get_rand_state_dict, set_rand_state_dict
 

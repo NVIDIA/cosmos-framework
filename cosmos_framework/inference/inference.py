@@ -4,7 +4,7 @@
 import hashlib
 import json
 import pickle
-from collections.abc import Callable, Generator, Iterable
+from collections.abc import Callable, Generator, Iterable, MutableMapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, Sequence, TypeVar, cast, override
@@ -40,7 +40,7 @@ from cosmos_framework.inference.common.args import (
     SampleOutputs,
     SetupArgs,
 )
-from cosmos_framework.inference.common.inference import Inference, sync_distributed_errors
+from cosmos_framework.inference.common.inference import Inference, _download_on_rank0, sync_distributed_errors
 from cosmos_framework.inference.common.init import get_rank, get_world_size
 from cosmos_framework.inference.model import Cosmos3OmniConfig, Cosmos3OmniModel
 from cosmos_framework.inference.vision import (
@@ -57,6 +57,7 @@ from cosmos_framework.model.generator.reasoner.qwen3_vl.utils import _SYSTEM_PRO
 from cosmos_framework.model.generator.upsampler.prompts import is_upsampled_prompt
 from cosmos_framework.tools.visualize.video import save_img_or_video
 from cosmos_framework.utils import log
+from cosmos_framework.utils.checkpoint_db import CheckpointDirHf
 
 if TYPE_CHECKING:
     from cosmos_framework.configs.base.defaults.model_config import OmniMoTModelConfig
@@ -65,6 +66,110 @@ UpsampleTask = Literal["t2i", "t2v", "i2v"]
 
 
 _BatchItem = TypeVar("_BatchItem")
+
+_PROCESSOR_HF_INCLUDE = (
+    "*.json",
+    "*.jinja",
+    "merges.txt",
+    "vocab.json",
+)
+
+
+def _checkpoint_has_processor_files(checkpoint_path: Path) -> bool:
+    """True when the checkpoint dir bundles VLM processor/tokenizer files at its root."""
+    return any((checkpoint_path / name).is_file() for name in ("tokenizer_config.json", "preprocessor_config.json"))
+
+
+# Files ``Qwen2Tokenizer.from_pretrained`` reads from a local directory: its
+# ``vocab_files_names`` (vocab.json + merges.txt, both opened unconditionally in
+# ``__init__``) plus tokenizer_config.json, which carries the added special
+# tokens (<|vision_start|> etc.) the SFT data pipeline depends on.
+_QWEN2_TOKENIZER_FILES = ("tokenizer_config.json", "vocab.json", "merges.txt")
+
+# ``tokenizer_type`` substrings that ``build_processor`` maps to Qwen3VLProcessor
+# in hub mode — the same processor its local-directory mode defaults to, so a
+# rewrite to a bundled dir preserves the dispatch for these nodes.
+_QWEN3VL_TOKENIZER_TYPES = ("Qwen/Qwen3-VL", "Siglip2-Qwen3-1.7B")
+
+# Repos served by the native Cosmos3-Edge (Nemotron bridge) processor; covers
+# nvidia/Cosmos3-Edge and nvidia/Cosmos3-Edge-Reasoner (mirrors the substring
+# dispatch in ``build_processor``).
+_EDGE_REPO_SUBSTRING = "nvidia/Cosmos3-Edge"
+
+
+def _tokenizer_node_target(tokenizer_cfg: MutableMapping[str, Any]) -> str:
+    """Last component of the node's ``_target_`` (e.g. ``build_processor_lazy``)."""
+    return str(tokenizer_cfg.get("_target_", "")).rsplit(".", 1)[-1]
+
+
+def _dir_serves_qwen3vl_autoprocessor(path: Path) -> bool:
+    """True when ``path`` holds the files Qwen3VLProcessor's AutoProcessor load needs.
+
+    That is the image/video preprocessor params, the tokenizer config, and the
+    tokenizer data (fast ``tokenizer.json`` or the slow vocab/merges pair).
+    """
+    if not all((path / name).is_file() for name in ("preprocessor_config.json", "tokenizer_config.json")):
+        return False
+    return (path / "tokenizer.json").is_file() or all((path / name).is_file() for name in ("vocab.json", "merges.txt"))
+
+
+def _bundled_processor_serves_node(tokenizer_cfg: MutableMapping[str, Any], checkpoint_path: Path) -> bool:
+    """True when checkpoint-bundled processor files can serve this ``vlm_config.tokenizer`` node.
+
+    Gates the local-first override (``_point_tokenizer_node_at_dir``) on the
+    bundle being dispatchable for the node's shape: Edge-family nodes need the
+    native-snapshot markers, Qwen3-VL-family nodes the AutoProcessor file set,
+    and Qwen2 nodes take a local dir only with ``config_variant="hf"``. Unknown
+    shapes return False (keep the configured hub behavior).
+    """
+    if not isinstance(tokenizer_cfg, MutableMapping):
+        return False
+    target = _tokenizer_node_target(tokenizer_cfg)
+    if target == "build_processor_lazy":
+        from cosmos_framework.data.generator.processors.cosmos3_edge_processing import is_cosmos3_edge_native_snapshot
+
+        repository = tokenizer_cfg.get("repository")
+        name = repository or tokenizer_cfg.get("tokenizer_type")
+        if not isinstance(name, str) or not name:
+            return False
+        if _EDGE_REPO_SUBSTRING in name:
+            return is_cosmos3_edge_native_snapshot(str(checkpoint_path))
+        if repository or any(qwen_type in name for qwen_type in _QWEN3VL_TOKENIZER_TYPES):
+            # Local-artifact (repository) nodes and Qwen3-VL tokenizer types both
+            # dispatch to Qwen3VLProcessor in dir mode; an edge-native bundle
+            # would instead route to the Nemotron bridge, so reject it.
+            return _dir_serves_qwen3vl_autoprocessor(checkpoint_path) and not is_cosmos3_edge_native_snapshot(
+                str(checkpoint_path)
+            )
+        return False
+    if target == "create_qwen2_tokenizer_with_download":
+        if tokenizer_cfg.get("config_variant") != "hf" or not tokenizer_cfg.get("pretrained_model_name"):
+            return False
+        return all((checkpoint_path / name).is_file() for name in _QWEN2_TOKENIZER_FILES)
+    return False
+
+
+def _point_tokenizer_node_at_dir(tokenizer_cfg: MutableMapping[str, Any], processor_path: Path | str) -> bool:
+    """Rewrite ``vlm_config.tokenizer`` in place to source its processor from a local dir.
+
+    Dispatches on the node's shape so the mutated kwargs match the target's
+    signature (``build_processor_lazy`` takes ``tokenizer_type``; the Qwen2 node
+    takes ``pretrained_model_name``). Returns False — node left completely
+    untouched — for any other shape, so callers keep the configured hub behavior.
+    """
+    if not isinstance(tokenizer_cfg, MutableMapping):
+        return False
+    target = _tokenizer_node_target(tokenizer_cfg)
+    if target == "build_processor_lazy" and (tokenizer_cfg.get("repository") or tokenizer_cfg.get("tokenizer_type")):
+        tokenizer_cfg.pop("repository", None)
+        tokenizer_cfg.pop("revision", None)
+        tokenizer_cfg.pop("subdir", None)
+        tokenizer_cfg["tokenizer_type"] = str(processor_path)
+        return True
+    if target == "create_qwen2_tokenizer_with_download" and tokenizer_cfg.get("config_variant") == "hf":
+        tokenizer_cfg["pretrained_model_name"] = str(processor_path)
+        return True
+    return False
 
 
 def _iter_packed_batches(
@@ -197,7 +302,6 @@ def _compute_num_tokens_for_sample(sample_args: OmniSampleArgs, model: OmniMoTMo
     latent_w = w // vae_spatial_downsample
     latent_t = 1 + (T - 1) // vae_temporal_downsample
     num_vision_tokens = latent_h * latent_w * latent_t
-
 
     # small compared to vision tokens, so we can ignore them for now.
 
@@ -563,7 +667,6 @@ def get_sample_data(
             fps=sample_args.fps,
             device=device,
         )
-
 
     if sample_args.model_mode == ModelMode.IMAGE2IMAGE:
         return _get_image_edit_sample_data(sample_args, model, device=device)
@@ -1102,22 +1205,61 @@ class OmniInference(Inference):
             )
             model = cast("OmniMoTModel", model)
             Cosmos3OmniModel.after_load_model(model)
+            # Thread a local checkpoint dir to the reasoner LM (consumed by
+            # Edge's lazy ``_ensure_vision_tower``) so a checkpoint-bundled
+            # ``vision_encoder/`` is preferred over a hub download. s3 DCP
+            # loads have no local dir to offer — skip them.
+            if "://" not in str(setup_args.checkpoint_path) and Path(setup_args.checkpoint_path).is_dir():
+                language_model = getattr(getattr(model, "net", None), "language_model", None)
+                if language_model is not None:
+                    language_model._local_checkpoint_dir = str(setup_args.checkpoint_path)
             save_config(config, setup_args.output_dir)
         else:
-            checkpoint_path = setup_args.download_checkpoint()
+            checkpoint_path = _download_on_rank0(setup_args.download_checkpoint)
             if setup_args.config_file_type == ConfigFileType.MODULE:
                 config = None
             else:
                 model_dict = setup_args.load_model_config_dict()
+                tokenizer_cfg = model_dict["config"]["vlm_config"]["tokenizer"]
+                has_bundled_processor = _checkpoint_has_processor_files(checkpoint_path)
                 if setup_args.vlm_processor_from_checkpoint:
                     # Source the VLM processor from the loaded checkpoint's own
                     # bundled files instead of the repository hardcoded in the
                     # model config. Drops the redundant base-model download.
-                    tokenizer_cfg = model_dict["config"]["vlm_config"]["tokenizer"]
-                    tokenizer_cfg.pop("repository", None)
-                    tokenizer_cfg.pop("revision", None)
-                    tokenizer_cfg.pop("subdir", None)
-                    tokenizer_cfg["tokenizer_type"] = str(checkpoint_path)
+                    processor_path = checkpoint_path
+                elif has_bundled_processor and _bundled_processor_serves_node(tokenizer_cfg, checkpoint_path):
+                    # Local-first: exported checkpoints bundle processor/tokenizer
+                    # files at their root (export_model); prefer them over the
+                    # repository hardcoded in the model config so exported dirs
+                    # stay offline-capable. Gated on the bundle actually being
+                    # dispatchable for this tokenizer node.
+                    log.info(f"VLM processor: using checkpoint-bundled processor files at {checkpoint_path}")
+                    processor_path = checkpoint_path
+                else:
+                    if has_bundled_processor:
+                        log.info(
+                            f"VLM processor: checkpoint-bundled files at {checkpoint_path} cannot serve this "
+                            "tokenizer config; falling back to the configured source"
+                        )
+                    if repository := tokenizer_cfg.get("repository"):
+                        revision = tokenizer_cfg.get("revision")
+                        if revision is None:
+                            raise ValueError("VLM processor 'revision' is required when 'repository' is set")
+                        processor_path = _download_on_rank0(
+                            CheckpointDirHf(
+                                repository=repository,
+                                revision=revision,
+                                subdirectory=tokenizer_cfg.get("subdir", ""),
+                                include=_PROCESSOR_HF_INCLUDE,
+                            ).download
+                        )
+                    else:
+                        processor_path = None
+                if processor_path is not None and not _point_tokenizer_node_at_dir(tokenizer_cfg, processor_path):
+                    log.info(
+                        "VLM processor: unrecognized 'vlm_config.tokenizer' node shape; leaving the configured "
+                        "tokenizer source untouched"
+                    )
                 # AVAE source: the configured ``avae_path`` when set, else the loaded
                 # checkpoint's bundled ``sound_tokenizer/``. The inference-only
                 # ``from_checkpoint`` key (default False) forces bundled; pop it so it
@@ -1438,7 +1580,6 @@ class OmniInference(Inference):
         seed = [sa.seed if sa.seed is not None else _fallback_seed(cast(OmniSampleArgs, sa)) for sa in sample_args_list]
         outputs: dict[str, Any] | None = None
 
-
         if outputs is None:
             assert all(sa.num_outputs == 1 for sa in sample_args_list), "num_outputs must be 1"
             n_sample = sum(cast(OmniSampleArgs, sa).num_outputs for sa in sample_args_list)
@@ -1517,9 +1658,7 @@ class OmniInference(Inference):
                         "(one must divide the other). Non-nesting CP/CFGP overlays "
                         "with divergent per-sample num_steps are unsupported."
                     )
-                _steps_t = torch.tensor(
-                    [local_num_steps], device=self.model.tensor_kwargs["device"], dtype=torch.int32
-                )
+                _steps_t = torch.tensor([local_num_steps], device=self.model.tensor_kwargs["device"], dtype=torch.int32)
                 torch.distributed.all_reduce(
                     _steps_t, op=torch.distributed.ReduceOp.MAX, group=parallel_dims.dp_shard_mesh.get_group()
                 )
@@ -1734,9 +1873,7 @@ class OmniInference(Inference):
         n_img = sum(img is not None for img in raw_images)
         n_vid = sum(v is not None for v in (raw_videos or []))
         if n_img and n_vid:
-            raise ValueError(
-                "Reasoner batch mixes image- and video-conditioned samples. Split into separate batches."
-            )
+            raise ValueError("Reasoner batch mixes image- and video-conditioned samples. Split into separate batches.")
         if 0 < n_img < len(raw_images):
             raise ValueError(
                 "Reasoner batch mixes image-conditioned and text-only samples "
