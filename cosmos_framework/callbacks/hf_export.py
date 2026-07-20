@@ -356,9 +356,6 @@ class HFExportCallback(Callback):
         #    hf_config.save_pretrained) are never overwritten.
         #    HARD failure: a broken copy leaves the checkpoint unloadable, so any I/O error
         #    propagates to the background-worker wrapper (same as shard writes).
-        #    Native-format snapshots (e.g. nvidia/Cosmos3-Edge, model_type
-        #    "cosmos3_edge") ship no remote-code .py files — nothing to copy is
-        #    normal; the export loads through the framework-registered classes.
         if model_name_or_path and os.path.isdir(model_name_or_path):
             real_src = os.path.realpath(model_name_or_path)
             real_out = os.path.realpath(output_dir)
@@ -392,11 +389,6 @@ class HFExportCallback(Callback):
                         copied.append(os.path.join(rel_dir, fname) if rel_dir != "." else fname)
             if copied:
                 log.info(f"[HFExportCallback] Copied missing files from source model: {copied}")
-            else:
-                log.info(
-                    "[HFExportCallback] No missing .py/.json files to copy from source model "
-                    "(expected for native-format snapshots, which ship no remote code)."
-                )
 
         # 5. Tokenizer (best-effort — may fail for custom / gated models).
         if AutoTokenizer is not None and model_name_or_path:

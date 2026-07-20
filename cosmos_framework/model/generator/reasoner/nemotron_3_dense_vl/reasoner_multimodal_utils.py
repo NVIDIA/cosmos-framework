@@ -22,6 +22,7 @@ Image and video are mutually exclusive: exactly one of the
 (``pixel_values``, ``image_grid_thw``) / (``pixel_values_videos``,
 ``video_grid_thw``) pairs is consumed per call.
 """
+
 from __future__ import annotations
 
 from typing import Any, Optional

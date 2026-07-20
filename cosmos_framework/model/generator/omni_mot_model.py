@@ -16,27 +16,37 @@ from einops import rearrange
 from torch.distributed._composable.fsdp import FSDPModule
 from torch.nn.modules.module import _IncompatibleKeys
 
-from cosmos_framework.utils.flags import DEVICE, TRAINING, Device
-from cosmos_framework.utils.lazy_config import LazyDict
-from cosmos_framework.utils.lazy_config import instantiate as lazy_instantiate
-from cosmos_framework.model._base import ImaginaireModel
-from cosmos_framework.utils import log, misc
-from cosmos_framework.utils.count_params import count_params
-from cosmos_framework.utils.timer import Timer
-from cosmos_framework.model.generator.algorithm.loss.flow_matching import compute_flow_matching_loss
-from cosmos_framework.model.generator.algorithm.loss.load_balancing import compute_load_balancing_loss
 from cosmos_framework.configs.base.defaults.model_config import OmniMoTModelConfig
 from cosmos_framework.data.generator.action.action_processing import ActionProcessor, get_action_processing_records
+from cosmos_framework.data.generator.sequence_packing import (
+    PackedSequence,
+    SequencePlan,
+    build_sequence_plans_from_data_batch,
+    pack_input_sequence,
+)
+from cosmos_framework.data.generator.sequence_packing.modality import add_special_tokens
 from cosmos_framework.data.generator.utils import IMAGE_RES_SIZE_INFO, VIDEO_RES_SIZE_INFO
+from cosmos_framework.model._base import ImaginaireModel
+from cosmos_framework.model.generator.algorithm.loss.flow_matching import compute_flow_matching_loss
+from cosmos_framework.model.generator.algorithm.loss.load_balancing import compute_load_balancing_loss
 from cosmos_framework.model.generator.diffusion.rectified_flow import RectifiedFlow
 from cosmos_framework.model.generator.diffusion.samplers.edm import EDMSampler
 from cosmos_framework.model.generator.diffusion.samplers.fixed_step import FixedStepSampler
 from cosmos_framework.model.generator.diffusion.samplers.unipc import UniPCSampler, UniPCSamplerConfig
 from cosmos_framework.model.generator.mot.context_parallel_utils import context_parallel_broadcast_tensor_list
 from cosmos_framework.model.generator.mot.cosmos3_vfm_network import Cosmos3VFMNetwork, Cosmos3VFMNetworkConfig
+from cosmos_framework.model.generator.mot.inference_text_kv_memory import (
+    InferenceTextKVMemoryState,
+    UndKVCache,
+    install_inference_memory_attention_dispatch,
+    make_inference_text_kv_cache,
+    restore_inference_attention_dispatch,
+)
 from cosmos_framework.model.generator.mot.modeling_utils import has_noisy_tokens
 from cosmos_framework.model.generator.mot.parallelize_vfm_network import parallelize_vfm_network
 from cosmos_framework.model.generator.reasoner.qwen3_vl.utils import tokenize_caption
+from cosmos_framework.model.generator.tokenizers.interface import VideoTokenizerInterface
+from cosmos_framework.model.generator.upsampler.prompts import build_messages, clean_response
 from cosmos_framework.model.generator.utils.data_and_condition import (
     GenerationDataClean,
     GenerationDataNoised,
@@ -56,19 +66,16 @@ from cosmos_framework.model.generator.utils.moe_utils import (
 from cosmos_framework.model.generator.utils.safetensors_loader import (
     load_language_model as load_language_model_safetensors,
 )
-from cosmos_framework.data.generator.sequence_packing import (
-    PackedSequence,
-    SequencePlan,
-    build_sequence_plans_from_data_batch,
-    pack_input_sequence,
-)
-from cosmos_framework.data.generator.sequence_packing.modality import add_special_tokens
-from cosmos_framework.model.generator.tokenizers.interface import VideoTokenizerInterface
-from cosmos_framework.model.generator.upsampler.prompts import build_messages, clean_response
+from cosmos_framework.utils import log, misc
+from cosmos_framework.utils.count_params import count_params
+from cosmos_framework.utils.flags import DEVICE, TRAINING, Device
 from cosmos_framework.utils.generator.data_utils import get_vision_data_resolution
 from cosmos_framework.utils.generator.dtensor_helper import DTensorFastEmaModelUpdater
 from cosmos_framework.utils.generator.model_weights_stats import WeightTrainingStat
 from cosmos_framework.utils.generator.parallelism import ParallelDims
+from cosmos_framework.utils.lazy_config import LazyDict
+from cosmos_framework.utils.lazy_config import instantiate as lazy_instantiate
+from cosmos_framework.utils.timer import Timer
 
 
 class OmniMoTModel(ImaginaireModel):
@@ -179,7 +186,6 @@ class OmniMoTModel(ImaginaireModel):
             log.info(f"Sound tokenizer initialized: {type(self.tokenizer_sound_gen).__name__}")
         else:
             self.tokenizer_sound_gen = None
-
 
     def build_net(self, dtype: torch.dtype, *, lora_enabled: bool | None = None) -> torch.nn.Module:
         # Build model network and parallelize it.
@@ -1907,6 +1913,85 @@ class OmniMoTModel(ImaginaireModel):
             condition_mask,
         )
 
+    def _can_reuse_inference_pack_templates(
+        self,
+        sequence_plans: list[SequencePlan],
+        gen_data_clean: GenerationDataClean,
+    ) -> bool:
+        """Return whether denoising can reuse request-local packed metadata templates."""
+        if gen_data_clean.num_vision_items_per_sample is not None:
+            return False
+        if self.config.video_temporal_causal:
+            return False
+        if self.config.sound_gen and any(plan.has_sound for plan in sequence_plans):
+            return False
+        return True
+
+    def _can_reuse_inference_text_kv(
+        self,
+        sequence_plans: list[SequencePlan],
+        gen_data_clean: GenerationDataClean,
+        *,
+        reuse_pack_templates: bool,
+        has_velocity_postprocess: bool,
+    ) -> bool:
+        """Return whether text K/V can be cached within a single diffusion request."""
+        if has_velocity_postprocess or not reuse_pack_templates:
+            return False
+        if self.parallel_dims is not None and (
+            self.parallel_dims.cp_enabled or self.parallel_dims.cfgp_enabled or self.parallel_dims.dp_shard_enabled
+        ):
+            return False
+        if self.config.joint_attn_implementation != "two_way":
+            return False
+        if self.config.video_temporal_causal:
+            return False
+        if self.config.sound_gen and any(plan.has_sound for plan in sequence_plans):
+            return False
+        if gen_data_clean.batch_size != 1 or len(sequence_plans) != 1:
+            return False
+        if gen_data_clean.num_vision_items_per_sample is not None:
+            return False
+        return True
+
+    def _make_inference_text_kv_cache(self, net: torch.nn.Module | None = None) -> list[UndKVCache]:
+        """Create per-layer request-local text K/V caches for one CFG branch."""
+        target_net = net or self.net
+        return make_inference_text_kv_cache(len(target_net.language_model.model.layers))
+
+    def _copy_timestep_to_template(self, timesteps: torch.Tensor | None, timestep: torch.Tensor) -> None:
+        """Copy the sampler timestep into a packed template without a device-to-host round trip."""
+        if timesteps is None or timesteps.numel() == 0:
+            return
+        timestep_values = timestep.reshape(-1).to(device=timesteps.device, dtype=timesteps.dtype)  # [B_or_1]
+        timestep_value = timestep_values[0]  # []
+        timesteps.copy_(timestep_value.expand_as(timesteps))  # [N_noisy_tokens]
+
+    def _update_inference_pack_template(
+        self,
+        packed_sequence: PackedSequence,
+        noise_x_vision: list[torch.Tensor],
+        noise_x_action: list[torch.Tensor] | None,
+        noise_x_sound: list[torch.Tensor] | None,
+        timestep: torch.Tensor,
+    ) -> PackedSequence:
+        """Refresh noisy tokens and timesteps in a request-local packed sequence template."""
+        if packed_sequence.vision is not None:
+            packed_sequence.vision.tokens = [x.to(**self.tensor_kwargs) for x in noise_x_vision]  # list[[C,T,H,W]]
+            self._copy_timestep_to_template(packed_sequence.vision.timesteps, timestep)
+
+        if noise_x_action is not None:
+            assert packed_sequence.action is not None, "packed_sequence.action must exist when action noise is present"
+            packed_sequence.action.tokens = [x.to(**self.tensor_kwargs) for x in noise_x_action]  # list[[T,D]]
+            self._copy_timestep_to_template(packed_sequence.action.timesteps, timestep)
+
+        if noise_x_sound is not None:
+            assert packed_sequence.sound is not None, "packed_sequence.sound must exist when sound noise is present"
+            packed_sequence.sound.tokens = [x.to(**self.tensor_kwargs) for x in noise_x_sound]  # list[[C_sound,T]]
+            self._copy_timestep_to_template(packed_sequence.sound.timesteps, timestep)
+
+        return packed_sequence
+
     def _get_velocity(
         self,
         *,
@@ -1917,6 +2002,8 @@ class OmniMoTModel(ImaginaireModel):
         sequence_plans: list[SequencePlan],
         gen_data_clean: GenerationDataClean,
         skip_text_tokens: bool = False,
+        packed_sequence_template: PackedSequence | None = None,
+        memory: MemoryState | None = None,
     ) -> list[torch.Tensor]:
         """
         Compute velocity prediction for a single sampling step.
@@ -1937,6 +2024,8 @@ class OmniMoTModel(ImaginaireModel):
             sequence_plans: Pre-computed sequence plans (from _prepare_inference_data)
             gen_data_clean: Pre-computed clean data (from _prepare_inference_data)
             skip_text_tokens: If True, skip text tokens (for CFG unconditional branch)
+            packed_sequence_template: Optional request-local packed metadata template.
+            memory: Optional request-local text K/V cache state for this CFG branch.
 
         Returns:
             Stacked flattened velocity tensors (one per sample), each containing
@@ -2012,34 +2101,44 @@ class OmniMoTModel(ImaginaireModel):
             control_weights=gen_data_clean.control_weights,
         )
 
-        packed_sequence = self._pack_input_sequence(
-            sequence_plans,
-            text_tokens,
-            gen_data_for_packing,
-            timestep.cpu(),
-            include_end_of_generation_token=self._derive_include_end_of_generation_token(),
-            skip_text_tokens=skip_text_tokens,
-        )
+        if packed_sequence_template is None:
+            packed_sequence = self._pack_input_sequence(
+                sequence_plans,
+                text_tokens,
+                gen_data_for_packing,
+                timestep.cpu(),
+                include_end_of_generation_token=self._derive_include_end_of_generation_token(),
+                skip_text_tokens=skip_text_tokens,
+            )
 
-        # Set the actual noisy latents (as lists)
-        if packed_sequence.vision is not None:
-            packed_sequence.vision.tokens = [x.to(**self.tensor_kwargs) for x in noise_x_vision]
+            # Set the actual noisy latents (as lists)
+            if packed_sequence.vision is not None:
+                packed_sequence.vision.tokens = [x.to(**self.tensor_kwargs) for x in noise_x_vision]  # list[[C,T,H,W]]
 
-        if has_action and noise_x_action is not None:
-            assert packed_sequence.action is not None, "packed_sequence.action must exist when has_action is True"
-            packed_sequence.action.tokens = [x.to(**self.tensor_kwargs) for x in noise_x_action]
-            packed_sequence.action.domain_id = gen_data_clean.action_domain_id
+            if has_action and noise_x_action is not None:
+                assert packed_sequence.action is not None, "packed_sequence.action must exist when has_action is True"
+                packed_sequence.action.tokens = [x.to(**self.tensor_kwargs) for x in noise_x_action]  # list[[T,D]]
+                packed_sequence.action.domain_id = gen_data_clean.action_domain_id
 
-        if has_sound and noise_x_sound is not None:
-            assert packed_sequence.sound is not None, "packed_sequence.sound must exist when has_sound is True"
-            packed_sequence.sound.tokens = [x.to(**self.tensor_kwargs) for x in noise_x_sound]
+            if has_sound and noise_x_sound is not None:
+                assert packed_sequence.sound is not None, "packed_sequence.sound must exist when has_sound is True"
+                packed_sequence.sound.tokens = [x.to(**self.tensor_kwargs) for x in noise_x_sound]  # list[[C_sound,T]]
 
-        packed_sequence.to_cuda()
+            packed_sequence.to_cuda()
+        else:
+            packed_sequence = self._update_inference_pack_template(
+                packed_sequence_template,
+                noise_x_vision,
+                noise_x_action,
+                noise_x_sound,
+                timestep,
+            )
 
         # --- Network forward ---
         out = self.denoise(
             net=net,
             data_batch_packed=packed_sequence,
+            memory=memory,
         )
 
         # --- Apply velocity masks ---
@@ -2407,6 +2506,32 @@ class OmniMoTModel(ImaginaireModel):
 
         assert n_sample == len(seed), f"Number of samples {n_sample} must match number of seeds {len(seed)}"
 
+        reuse_pack_templates = self._can_reuse_inference_pack_templates(sequence_plans, gen_data_clean)
+        cond_packed_sequence_template: PackedSequence | None = None
+        uncond_packed_sequence_template: PackedSequence | None = None
+        if reuse_pack_templates:
+            include_end_of_generation_token = self._derive_include_end_of_generation_token()
+            zero_timesteps = torch.zeros((gen_data_clean.batch_size,), dtype=torch.float32)  # [B]
+            cond_packed_sequence_template = self._pack_input_sequence(
+                sequence_plans,
+                cond_tokens,
+                gen_data_clean,
+                zero_timesteps,
+                include_end_of_generation_token=include_end_of_generation_token,
+                skip_text_tokens=False,
+            )
+            cond_packed_sequence_template.to_cuda()
+            if guidance != 1.0 or velocity_postprocess_builder is not None:
+                uncond_packed_sequence_template = self._pack_input_sequence(
+                    sequence_plans,
+                    uncond_tokens,
+                    gen_data_clean,
+                    zero_timesteps,
+                    include_end_of_generation_token=include_end_of_generation_token,
+                    skip_text_tokens=skip_text_tokens_for_cfg,
+                )
+                uncond_packed_sequence_template.to_cuda()
+
         # Optional per-step velocity postprocess hook. Built once via a builder
         # that receives the prepared inference state. The returned callable (if
         # any) is invoked after the conditional forward on every step and can
@@ -2463,273 +2588,317 @@ class OmniMoTModel(ImaginaireModel):
             _dp_shard_group = None
             _align_device = None
 
-        def velocity_fn(noise_x: list[torch.Tensor], timestep: torch.Tensor) -> list[torch.Tensor]:
-            # len(noise_x) == B, noise_x[i] is shape (D)
-            # timestep is shape (B, 1)
-            torch.compiler.cudagraph_mark_step_begin()
+        reuse_text_kv = self._can_reuse_inference_text_kv(
+            sequence_plans,
+            gen_data_clean,
+            reuse_pack_templates=reuse_pack_templates,
+            has_velocity_postprocess=velocity_postprocess is not None,
+        )
+        cond_text_kv_cache: list[UndKVCache] | None = None
+        uncond_text_kv_cache: list[UndKVCache] | None = None
+        # Request-scoped: install only for this generate call and restore afterward so we
+        # never permanently shadow another dispatch_attention_fn on the model.
+        previous_attention_dispatch = None
+        try:
+            if reuse_text_kv:
+                target_net = net or self.net
+                if target_net is None:
+                    raise RuntimeError(
+                        "Cannot install memory-aware attention dispatch: net is None "
+                        "(pass net= or ensure self.net is built)."
+                    )
+                previous_attention_dispatch = install_inference_memory_attention_dispatch(target_net)
+                cond_text_kv_cache = self._make_inference_text_kv_cache(target_net)
+                if guidance != 1.0 or velocity_postprocess_builder is not None:
+                    uncond_text_kv_cache = self._make_inference_text_kv_cache(target_net)
 
-            assert timestep.ndim == 2, f"timestep must be 2D, got {timestep.shape}"
-            assert timestep.shape == (1, 1), f"timestep must be (1, 1), got {timestep.shape}"
+            def velocity_fn(noise_x: list[torch.Tensor], timestep: torch.Tensor) -> list[torch.Tensor]:
+                # len(noise_x) == B, noise_x[i] is shape (D)
+                # timestep is shape (B, 1)
+                torch.compiler.cudagraph_mark_step_begin()
 
-            # Expand timestep to (B, 1)
-            timestep = timestep.repeat(len(noise_x), 1)
+                assert timestep.ndim == 2, f"timestep must be 2D, got {timestep.shape}"
+                assert timestep.shape == (1, 1), f"timestep must be (1, 1), got {timestep.shape}"
 
-            def _single_velocity_fn(tokens: list[list[int]], skip_text_tokens: bool):
-                return self._get_velocity(
-                    net=net,
-                    noise_x=noise_x,
-                    timestep=timestep,
-                    text_tokens=tokens,
-                    sequence_plans=sequence_plans,
-                    gen_data_clean=gen_data_clean,
-                    skip_text_tokens=skip_text_tokens,
-                )
+                # Expand timestep to (B, 1)
+                timestep = timestep.repeat(len(noise_x), 1)  # [B,1]
 
-            needs_text_cfg = guidance != 1.0
-            if needs_text_cfg and guidance_interval is not None:
-                assert len(guidance_interval) == 2, f"guidance_interval must be [lo, hi], got {guidance_interval}"
-                t_lo, t_hi = guidance_interval
-                needs_text_cfg = t_lo < timestep[0].item() < t_hi
+                def _single_velocity_fn(tokens: list[list[int]], skip_text_tokens: bool) -> list[torch.Tensor]:
+                    nonlocal uncond_text_kv_cache
+                    packed_sequence_template = None
+                    text_kv_cache: list[UndKVCache] | None = None
+                    if reuse_pack_templates:
+                        if tokens is cond_tokens and not skip_text_tokens:
+                            packed_sequence_template = cond_packed_sequence_template
+                            text_kv_cache = cond_text_kv_cache
+                        elif tokens is uncond_tokens and skip_text_tokens == skip_text_tokens_for_cfg:
+                            packed_sequence_template = uncond_packed_sequence_template
+                            if reuse_text_kv and uncond_text_kv_cache is None:
+                                uncond_text_kv_cache = self._make_inference_text_kv_cache(net)
+                            text_kv_cache = uncond_text_kv_cache
+                    memory: MemoryState | None = (
+                        InferenceTextKVMemoryState(text_kv_cache) if text_kv_cache is not None else None
+                    )
+                    return self._get_velocity(
+                        net=net,
+                        noise_x=noise_x,
+                        timestep=timestep,
+                        text_tokens=tokens,
+                        sequence_plans=sequence_plans,
+                        gen_data_clean=gen_data_clean,
+                        skip_text_tokens=skip_text_tokens,
+                        packed_sequence_template=packed_sequence_template,
+                        memory=memory,
+                    )
 
-            # FSDP alignment: if ANY rank in the shard group needs text-CFG
-            # this call, every rank must take the CFG path so the allgather
-            # sequence stays aligned across ranks.
-            if _dp_shard_group is not None:
-                _cfg_t = torch.tensor([1 if needs_text_cfg else 0], device=_align_device, dtype=torch.int32)
-                torch.distributed.all_reduce(_cfg_t, op=torch.distributed.ReduceOp.MAX, group=_dp_shard_group)
-                _any_needs_text_cfg = bool(_cfg_t.item())
-            else:
-                _any_needs_text_cfg = needs_text_cfg
+                needs_text_cfg = guidance != 1.0
+                if needs_text_cfg and guidance_interval is not None:
+                    assert len(guidance_interval) == 2, f"guidance_interval must be [lo, hi], got {guidance_interval}"
+                    t_lo, t_hi = guidance_interval
+                    needs_text_cfg = t_lo < timestep[0].item() < t_hi
 
-            # Fast path: no text-CFG anywhere and no postprocess hook — single forward.
-            if not _any_needs_text_cfg and velocity_postprocess is None:
-                return _single_velocity_fn(cond_tokens, skip_text_tokens=False)
+                # FSDP alignment: if ANY rank in the shard group needs text-CFG
+                # this call, every rank must take the CFG path so the allgather
+                # sequence stays aligned across ranks.
+                if _dp_shard_group is not None:
+                    _cfg_t = torch.tensor([1 if needs_text_cfg else 0], device=_align_device, dtype=torch.int32)
+                    torch.distributed.all_reduce(_cfg_t, op=torch.distributed.ReduceOp.MAX, group=_dp_shard_group)
+                    _any_needs_text_cfg = bool(_cfg_t.item())
+                else:
+                    _any_needs_text_cfg = needs_text_cfg
 
-            # Fast path: only text-CFG and no postprocess — preserve the
-            # cfgp-parallel branch so two-rank CFG parallelism stays available.
-            if velocity_postprocess is None:
-                cond_v, uncond_v = self._run_classifier_free_guidance(
-                    cond_tokens=cond_tokens,
-                    uncond_tokens=uncond_tokens,
-                    skip_text_tokens_for_cfg=skip_text_tokens_for_cfg,
-                    single_velocity_fn=_single_velocity_fn,
-                )
+                # Fast path: no text-CFG anywhere and no postprocess hook — single forward.
+                if not _any_needs_text_cfg and velocity_postprocess is None:
+                    return _single_velocity_fn(cond_tokens, skip_text_tokens=False)
+
+                # Fast path: only text-CFG and no postprocess — preserve the
+                # cfgp-parallel branch so two-rank CFG parallelism stays available.
+                if velocity_postprocess is None:
+                    cond_v, uncond_v = self._run_classifier_free_guidance(
+                        cond_tokens=cond_tokens,
+                        uncond_tokens=uncond_tokens,
+                        skip_text_tokens_for_cfg=skip_text_tokens_for_cfg,
+                        single_velocity_fn=_single_velocity_fn,
+                    )
+                    if not needs_text_cfg:
+                        # Peers needed CFG so we ran the uncond forward to keep
+                        # FSDP allgather aligned; locally we still return cond.
+                        return cond_v
+                    v_pred = [u_i + guidance * (c_i - u_i) for c_i, u_i in zip(cond_v, uncond_v)]
+                    if normalize_cfg:
+                        v_pred = [
+                            v_i * (torch.norm(c_i) / (torch.norm(v_i) + 1e-8)).clamp(min=0.0, max=1.0)
+                            for v_i, c_i in zip(v_pred, cond_v)
+                        ]
+                    return v_pred
+
+                # Conditional forward, then per-step postprocess hook. Hook runs
+                # sequentially; cfgp parallelism not used on this path.
+                cond_v_full = _single_velocity_fn(cond_tokens, skip_text_tokens=False)
+                cond_v = velocity_postprocess(cond_v_full, noise_x, timestep)
+
+                uncond_v = _single_velocity_fn(uncond_tokens, skip_text_tokens=skip_text_tokens_for_cfg)
                 if not needs_text_cfg:
-                    # Peers needed CFG so we ran the uncond forward to keep
-                    # FSDP allgather aligned; locally we still return cond.
+                    # Same alignment story as above for the postprocess branch.
                     return cond_v
+
                 v_pred = [u_i + guidance * (c_i - u_i) for c_i, u_i in zip(cond_v, uncond_v)]
+
                 if normalize_cfg:
                     v_pred = [
                         v_i * (torch.norm(c_i) / (torch.norm(v_i) + 1e-8)).clamp(min=0.0, max=1.0)
                         for v_i, c_i in zip(v_pred, cond_v)
                     ]
+
                 return v_pred
 
-            # Conditional forward, then per-step postprocess hook. Hook runs
-            # sequentially; cfgp parallelism not used on this path.
-            cond_v_full = _single_velocity_fn(cond_tokens, skip_text_tokens=False)
-            cond_v = velocity_postprocess(cond_v_full, noise_x, timestep)
+            # Run sampler for all samples at once.
+            sampler = sampler or self.sampler
+            scheduler_type = self.config.rectified_flow_inference_config.scheduler_type
+            if isinstance(sampler, FixedStepSampler):
+                num_steps = len(sampler.t_list) - 1
+                shift = 0.0
 
-            uncond_v = _single_velocity_fn(uncond_tokens, skip_text_tokens=skip_text_tokens_for_cfg)
-            if not needs_text_cfg:
-                # Same alignment story as above for the postprocess branch.
-                return cond_v
+            # FSDP collective-sequence alignment (sampler outer loop). See the
+            # large block above the velocity_fn definition for the full
+            # rationale. all_reduce on the local num_steps so every rank knows
+            # the max; below, ranks with local < max issue a dummy sampler call
+            # to pad their FSDP allgather sequence.
+            if _dp_shard_group is not None:
+                _local_steps_t = torch.tensor([num_steps], device=_align_device, dtype=torch.int32)
+                torch.distributed.all_reduce(_local_steps_t, op=torch.distributed.ReduceOp.MAX, group=_dp_shard_group)
+                _max_num_steps = int(_local_steps_t.item())
+            else:
+                _max_num_steps = num_steps
+            _extra_num_steps = _max_num_steps - num_steps
 
-            v_pred = [u_i + guidance * (c_i - u_i) for c_i, u_i in zip(cond_v, uncond_v)]
+            if isinstance(sampler, FixedStepSampler):
+                log.info(f"Using sampler: FixedStep (t_list={sampler.t_list}, sample_type={sampler.sample_type})")
+            elif scheduler_type == "unipc":
+                log.info(f"Using sampler: UniPC (shift={shift}, num_steps={num_steps})")
+            else:
+                log.info(f"Using sampler: EDM (sigma_max={sigma_max}, num_steps={num_steps})")
 
-            if normalize_cfg:
-                v_pred = [
-                    v_i * (torch.norm(c_i) / (torch.norm(v_i) + 1e-8)).clamp(min=0.0, max=1.0)
-                    for v_i, c_i in zip(v_pred, cond_v)
-                ]
+            fixed_step_sampler_kwargs = {}
+            if isinstance(sampler, FixedStepSampler):
+                fixed_step_sampler_kwargs = {
+                    "condition_reference": condition_reference,
+                    "condition_mask": condition_mask,
+                }
 
-            return v_pred
-
-        # Run sampler for all samples at once.
-        sampler = sampler or self.sampler
-        scheduler_type = self.config.rectified_flow_inference_config.scheduler_type
-        if isinstance(sampler, FixedStepSampler):
-            num_steps = len(sampler.t_list) - 1
-            shift = 0.0
-
-        # FSDP collective-sequence alignment (sampler outer loop). See the
-        # large block above the velocity_fn definition for the full
-        # rationale. all_reduce on the local num_steps so every rank knows
-        # the max; below, ranks with local < max issue a dummy sampler call
-        # to pad their FSDP allgather sequence.
-        if _dp_shard_group is not None:
-            _local_steps_t = torch.tensor([num_steps], device=_align_device, dtype=torch.int32)
-            torch.distributed.all_reduce(_local_steps_t, op=torch.distributed.ReduceOp.MAX, group=_dp_shard_group)
-            _max_num_steps = int(_local_steps_t.item())
-        else:
-            _max_num_steps = num_steps
-        _extra_num_steps = _max_num_steps - num_steps
-
-        if isinstance(sampler, FixedStepSampler):
-            log.info(f"Using sampler: FixedStep (t_list={sampler.t_list}, sample_type={sampler.sample_type})")
-        elif scheduler_type == "unipc":
-            log.info(f"Using sampler: UniPC (shift={shift}, num_steps={num_steps})")
-        else:
-            log.info(f"Using sampler: EDM (sigma_max={sigma_max}, num_steps={num_steps})")
-
-        fixed_step_sampler_kwargs = {}
-        if isinstance(sampler, FixedStepSampler):
-            fixed_step_sampler_kwargs = {
-                "condition_reference": condition_reference,
-                "condition_mask": condition_mask,
-            }
-
-        if isinstance(sampler, FixedStepSampler) or scheduler_type == "unipc":
-            latents = sampler(
-                velocity_fn,
-                initial_noise,
-                num_steps=num_steps,
-                shift=shift,
-                seed=seed,
-                **fixed_step_sampler_kwargs,
-            )
-            if _extra_num_steps > 0:
-                # Dummy sampler call to issue (_extra_num_steps × per-step)
-                # FSDP allgathers; output discarded so `latents` keeps the
-                # real result captured above. Slow ranks have _extra_num_steps==0
-                # here, but they're issuing the SAME number of in-sampler
-                # collectives via their longer real call.
-                log.debug(
-                    f"FSDP alignment: dummy sampler run with {_extra_num_steps} "
-                    f"extra steps (local={num_steps}, max={_max_num_steps})"
-                )
-                _ = sampler(
+            if isinstance(sampler, FixedStepSampler) or scheduler_type == "unipc":
+                latents = sampler(
                     velocity_fn,
-                    latents,
-                    num_steps=_extra_num_steps,
+                    initial_noise,
+                    num_steps=num_steps,
                     shift=shift,
                     seed=seed,
                     **fixed_step_sampler_kwargs,
                 )
-        else:
-            # EDM Sampler
-            chunk_sizes = [_x.shape[0] for _x in initial_noise]
-            initial_noise = torch.cat(initial_noise, dim=0)
-
-            def x0_fn(noise_x: torch.Tensor, sigma: torch.Tensor) -> torch.Tensor:
-                assert sigma.ndim == 0, f"sigma must be 0D, got {sigma.shape}"
-                timestep_rf = sigma * float(self.config.rectified_flow_inference_config.num_train_timesteps)
-
-                # Convert noise_x to list of tensors for velocity_fn, and then
-                # concatenate the results back into a single tensor.
-                _noise_x = list(torch.split(noise_x, chunk_sizes, dim=0))
-                _velocity_pred = velocity_fn(_noise_x, timestep_rf.reshape(1, 1))
-                velocity_pred = torch.cat(_velocity_pred, dim=0)
-
-                x0_pred = noise_x - sigma * velocity_pred
-                return x0_pred
-
-            latents = sampler(
-                x0_fn,
-                initial_noise,
-                num_steps=num_steps,
-                sigma_max=sigma_max,
-                sigma_min=0.002,
-                solver_option="2ab",
-            )
-            if _extra_num_steps > 0:
-                # Pad the FSDP allgather sequence with ``_extra_num_steps``
-                # direct ``x0_fn`` calls instead of a second EDM sampler
-                # run. Avoids two EDM-specific footguns:
-                #   (1) ``EDMSampler._forward_impl`` always runs an extra
-                #       ``sample_clean`` denoiser forward (see
-                #       ``cosmos_framework/model/vfm/diffusion/samplers/edm.py``).
-                #       A nested sampler call would add one too many
-                #       forwards on fast ranks, since the slow rank's
-                #       single call also pays the ``sample_clean`` cost.
-                #   (2) ``get_rev_ts(..., num_steps=0)`` divides by zero,
-                #       producing NaN sigmas. The fix's ``extra==1`` edge
-                #       case would need num_steps=0 to balance the count.
-                # Direct ``x0_fn`` calls bypass both: each call routes
-                # through the same ``velocity_fn`` closure (so the
-                # per-call CFG all_reduce still aligns ranks), issues
-                # exactly one model forward, and discards its return.
-                # ``latents`` is the catted single tensor at this point;
-                # the dummy sigma value is irrelevant for collective
-                # alignment because the model's allgather sequence is
-                # determined by tensor shapes, not sigma.
-                log.debug(
-                    f"FSDP alignment: padding {_extra_num_steps} dummy x0_fn calls "
-                    f"(local={num_steps}, max={_max_num_steps})"
-                )
-                # ``x0_fn`` expects a sigma in the RF domain (the real EDM
-                # loop converts raw sigmas via ``sigmas_L / (1 + sigmas_L)``
-                # at edm.py:174, landing them in ``(0, 1)``). Mirror that
-                # transform here so the dummy call's timestep stays in the
-                # same numerical domain as a real sampler step. The exact
-                # value doesn't matter for collective alignment, only the
-                # domain.
-                _dummy_sigma = latents.new_tensor(sigma_max / (1.0 + sigma_max))
-                for _ in range(_extra_num_steps):
-                    _ = x0_fn(latents, _dummy_sigma)
-            latents = list(torch.split(latents, chunk_sizes, dim=0))
-
-        # Split flattened latents back into vision latents, external actions, and sound latents
-        # Mirror the per-sample logic from _prepare_inference_data:
-        # Order: [vision | action (if present) | sound (if present)]
-        # action/sound lists are dense (only modality-having samples), so use separate indexes.
-        result_vision: list[torch.Tensor] = []
-        result_action: list[torch.Tensor] = []
-        result_sound: list[torch.Tensor] = []
-        action_processing_records = get_action_processing_records(data_batch)
-        idx_vision = 0
-        idx_action = 0
-        idx_sound = 0
-        num_vision_items = gen_data_clean.num_vision_items_per_sample
-
-        for i in range(n_sample):
-            offset = 0
-
-            # Extract vision
-            n_vis = num_vision_items[i] if num_vision_items is not None else 1
-            for j in range(n_vis):
-                vision_shape = gen_data_clean.x0_tokens_vision[idx_vision + j].shape
-                vision_dim = int(torch.prod(torch.tensor(vision_shape)))
-                if j == n_vis - 1:  # the last vision item is the only target for each sample.
-                    result_vision.append(latents[i][offset : offset + vision_dim].reshape(vision_shape))
-                else:  # the other vision items are the condition inputs that we don't need to return
-                    pass
-                offset += vision_dim
-            idx_vision += n_vis
-
-            # Extract action if present
-            if self.config.action_gen and sequence_plans[i].has_action:
-                assert gen_data_clean.x0_tokens_action is not None
-                action_shape = gen_data_clean.x0_tokens_action[idx_action].shape
-                action_dim = int(torch.prod(torch.tensor(action_shape)))
-                action_model = latents[i][offset : offset + action_dim].reshape(action_shape)  # [T,D_model]
-                action_record = action_processing_records[i] if i < len(action_processing_records) else None
-                if action_record is None:
-                    raise ValueError(
-                        f"Generated action output for sample {i} cannot be externalized without "
-                        "action_processing_record"
+                if _extra_num_steps > 0:
+                    # Dummy sampler call to issue (_extra_num_steps × per-step)
+                    # FSDP allgathers; output discarded so `latents` keeps the
+                    # real result captured above. Slow ranks have _extra_num_steps==0
+                    # here, but they're issuing the SAME number of in-sampler
+                    # collectives via their longer real call.
+                    log.debug(
+                        f"FSDP alignment: dummy sampler run with {_extra_num_steps} "
+                        f"extra steps (local={num_steps}, max={_max_num_steps})"
                     )
-                action_external = ActionProcessor.postprocess_action(action_model, action_record)  # [T,D_raw]
-                result_action.append(action_external)
-                offset += action_dim
-                idx_action += 1
+                    _ = sampler(
+                        velocity_fn,
+                        latents,
+                        num_steps=_extra_num_steps,
+                        shift=shift,
+                        seed=seed,
+                        **fixed_step_sampler_kwargs,
+                    )
+            else:
+                # EDM Sampler
+                chunk_sizes = [_x.shape[0] for _x in initial_noise]
+                initial_noise = torch.cat(initial_noise, dim=0)
 
-            # Extract sound if present
-            if self.config.sound_gen and sequence_plans[i].has_sound:
-                assert gen_data_clean.x0_tokens_sound is not None
-                sound_shape = gen_data_clean.x0_tokens_sound[idx_sound].shape
-                sound_dim = int(torch.prod(torch.tensor(sound_shape)))
-                result_sound.append(latents[i][offset : offset + sound_dim].reshape(sound_shape))
-                offset += sound_dim
-                idx_sound += 1
+                def x0_fn(noise_x: torch.Tensor, sigma: torch.Tensor) -> torch.Tensor:
+                    assert sigma.ndim == 0, f"sigma must be 0D, got {sigma.shape}"
+                    timestep_rf = sigma * float(self.config.rectified_flow_inference_config.num_train_timesteps)
 
-        result: dict[str, list[torch.Tensor]] = {"vision": result_vision}
-        if self.config.action_gen and len(result_action) > 0:
-            result["action"] = result_action
-        if self.config.sound_gen and len(result_sound) > 0:
-            result["sound"] = result_sound
-        return result
+                    # Convert noise_x to list of tensors for velocity_fn, and then
+                    # concatenate the results back into a single tensor.
+                    _noise_x = list(torch.split(noise_x, chunk_sizes, dim=0))
+                    _velocity_pred = velocity_fn(_noise_x, timestep_rf.reshape(1, 1))
+                    velocity_pred = torch.cat(_velocity_pred, dim=0)
+
+                    x0_pred = noise_x - sigma * velocity_pred
+                    return x0_pred
+
+                latents = sampler(
+                    x0_fn,
+                    initial_noise,
+                    num_steps=num_steps,
+                    sigma_max=sigma_max,
+                    sigma_min=0.002,
+                    solver_option="2ab",
+                )
+                if _extra_num_steps > 0:
+                    # Pad the FSDP allgather sequence with ``_extra_num_steps``
+                    # direct ``x0_fn`` calls instead of a second EDM sampler
+                    # run. Avoids two EDM-specific footguns:
+                    #   (1) ``EDMSampler._forward_impl`` always runs an extra
+                    #       ``sample_clean`` denoiser forward (see
+                    #       ``cosmos_framework/model/vfm/diffusion/samplers/edm.py``).
+                    #       A nested sampler call would add one too many
+                    #       forwards on fast ranks, since the slow rank's
+                    #       single call also pays the ``sample_clean`` cost.
+                    #   (2) ``get_rev_ts(..., num_steps=0)`` divides by zero,
+                    #       producing NaN sigmas. The fix's ``extra==1`` edge
+                    #       case would need num_steps=0 to balance the count.
+                    # Direct ``x0_fn`` calls bypass both: each call routes
+                    # through the same ``velocity_fn`` closure (so the
+                    # per-call CFG all_reduce still aligns ranks), issues
+                    # exactly one model forward, and discards its return.
+                    # ``latents`` is the catted single tensor at this point;
+                    # the dummy sigma value is irrelevant for collective
+                    # alignment because the model's allgather sequence is
+                    # determined by tensor shapes, not sigma.
+                    log.debug(
+                        f"FSDP alignment: padding {_extra_num_steps} dummy x0_fn calls "
+                        f"(local={num_steps}, max={_max_num_steps})"
+                    )
+                    # ``x0_fn`` expects a sigma in the RF domain (the real EDM
+                    # loop converts raw sigmas via ``sigmas_L / (1 + sigmas_L)``
+                    # at edm.py:174, landing them in ``(0, 1)``). Mirror that
+                    # transform here so the dummy call's timestep stays in the
+                    # same numerical domain as a real sampler step. The exact
+                    # value doesn't matter for collective alignment, only the
+                    # domain.
+                    _dummy_sigma = latents.new_tensor(sigma_max / (1.0 + sigma_max))
+                    for _ in range(_extra_num_steps):
+                        _ = x0_fn(latents, _dummy_sigma)
+                latents = list(torch.split(latents, chunk_sizes, dim=0))
+
+            # Split flattened latents back into vision latents, external actions, and sound latents
+            # Mirror the per-sample logic from _prepare_inference_data:
+            # Order: [vision | action (if present) | sound (if present)]
+            # action/sound lists are dense (only modality-having samples), so use separate indexes.
+            result_vision: list[torch.Tensor] = []
+            result_action: list[torch.Tensor] = []
+            result_sound: list[torch.Tensor] = []
+            action_processing_records = get_action_processing_records(data_batch)
+            idx_vision = 0
+            idx_action = 0
+            idx_sound = 0
+            num_vision_items = gen_data_clean.num_vision_items_per_sample
+
+            for i in range(n_sample):
+                offset = 0
+
+                # Extract vision
+                n_vis = num_vision_items[i] if num_vision_items is not None else 1
+                for j in range(n_vis):
+                    vision_shape = gen_data_clean.x0_tokens_vision[idx_vision + j].shape
+                    vision_dim = int(torch.prod(torch.tensor(vision_shape)))
+                    if j == n_vis - 1:  # the last vision item is the only target for each sample.
+                        result_vision.append(latents[i][offset : offset + vision_dim].reshape(vision_shape))
+                    else:  # the other vision items are the condition inputs that we don't need to return
+                        pass
+                    offset += vision_dim
+                idx_vision += n_vis
+
+                # Extract action if present
+                if self.config.action_gen and sequence_plans[i].has_action:
+                    assert gen_data_clean.x0_tokens_action is not None
+                    action_shape = gen_data_clean.x0_tokens_action[idx_action].shape
+                    action_dim = int(torch.prod(torch.tensor(action_shape)))
+                    action_model = latents[i][offset : offset + action_dim].reshape(action_shape)  # [T,D_model]
+                    action_record = action_processing_records[i] if i < len(action_processing_records) else None
+                    if action_record is None:
+                        raise ValueError(
+                            f"Generated action output for sample {i} cannot be externalized without "
+                            "action_processing_record"
+                        )
+                    action_external = ActionProcessor.postprocess_action(action_model, action_record)  # [T,D_raw]
+                    result_action.append(action_external)
+                    offset += action_dim
+                    idx_action += 1
+
+                # Extract sound if present
+                if self.config.sound_gen and sequence_plans[i].has_sound:
+                    assert gen_data_clean.x0_tokens_sound is not None
+                    sound_shape = gen_data_clean.x0_tokens_sound[idx_sound].shape
+                    sound_dim = int(torch.prod(torch.tensor(sound_shape)))
+                    result_sound.append(latents[i][offset : offset + sound_dim].reshape(sound_shape))
+                    offset += sound_dim
+                    idx_sound += 1
+
+            result: dict[str, list[torch.Tensor]] = {"vision": result_vision}
+            if self.config.action_gen and len(result_action) > 0:
+                result["action"] = result_action
+            if self.config.sound_gen and len(result_sound) > 0:
+                result["sound"] = result_sound
+            return result
+        finally:
+            if previous_attention_dispatch is not None:
+                restore_inference_attention_dispatch(previous_attention_dispatch)
 
     def _extract_condition_images_for_visualization(
         self,
@@ -3204,12 +3373,22 @@ class OmniMoTModel(ImaginaireModel):
                         f"[{data_batch[input_key][i].min()}, {data_batch[input_key][i].max()}]"
                     )
             else:
+                # Worker-normalized batches take the preprocessed branch above.
                 for i in range(len(data_batch[input_key])):
                     item = data_batch[input_key][i]
                     if isinstance(item, torch.Tensor):
-                        item = [item]
-                    assert item[0].dtype == torch.uint8, "Video data is not in uint8 format."
-                    data_batch[input_key][i] = torch.stack(item).to(**self.tensor_kwargs_fp32) / 127.5 - 1.0
+                        assert item.dtype == torch.uint8, "Video data is not in uint8 format."
+                        # Flattened multiview items already include B; preserve the original stacking behavior otherwise.
+                        if item.ndim != 5:
+                            item = torch.stack([item])  # [1,C,T,H,W]
+                        normalized_item = item.to(**self.tensor_kwargs_fp32) / 127.5 - 1.0  # [B,C,T,H,W]
+                    else:
+                        # Non-flattened batches may still provide one [C,T,H,W] tensor per sample.
+                        assert item[0].dtype == torch.uint8, "Video data is not in uint8 format."
+                        normalized_item = (  # [B,C,T,H,W]
+                            torch.stack(item).to(**self.tensor_kwargs_fp32) / 127.5 - 1.0
+                        )
+                    data_batch[input_key][i] = normalized_item  # [B,C,T,H,W]
                 data_batch[IS_PREPROCESSED_KEY] = True
 
     def _normalize_action_databatch(

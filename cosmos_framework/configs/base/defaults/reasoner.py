@@ -9,13 +9,7 @@ from typing import Any
 import attrs
 import torch.distributed as dist
 
-from cosmos_framework.utils.flags import INTERNAL
-from cosmos_framework.utils.lazy_config import LazyCall as L
-from cosmos_framework.utils.lazy_config import LazyDict
-from cosmos_framework.utils.lazy_config import instantiate as lazy_instantiate
-from cosmos_framework.utils import log
-from cosmos_framework.utils.config_helper import ConfigStore
-from cosmos_framework.utils.easy_io import easy_io
+from cosmos_framework.data.generator.processors import LLMTokenizerProcessor, build_processor_lazy
 from cosmos_framework.model.generator.mot.unified_mot import (
     Nemotron3DenseVLMoTConfig,
     Nemotron3DenseVLTextForCausalLM,
@@ -25,8 +19,14 @@ from cosmos_framework.model.generator.mot.unified_mot import (
     Qwen3VLMoTConfig,
     Qwen3VLTextForCausalLM,
 )
-from cosmos_framework.data.generator.processors import LLMTokenizerProcessor, build_processor_lazy
 from cosmos_framework.model.generator.tokenizers.tokenization_qwen2 import Qwen2Tokenizer
+from cosmos_framework.utils import log
+from cosmos_framework.utils.config_helper import ConfigStore
+from cosmos_framework.utils.easy_io import easy_io
+from cosmos_framework.utils.flags import INTERNAL
+from cosmos_framework.utils.lazy_config import LazyCall as L
+from cosmos_framework.utils.lazy_config import LazyDict
+from cosmos_framework.utils.lazy_config import instantiate as lazy_instantiate
 
 
 def create_vlm_config(base_config: LazyDict, **overrides):
@@ -710,9 +710,7 @@ Cosmos3SuperReasoner_VLM_GCP_Config_0517: VLMConfig = VLMConfig(
 )
 
 # Cosmos3-Edge-Reasoner at commit 4acb717.
-# Edge reasoner architecture (model_type "cosmos3_edge" in the public
-# nvidia/Cosmos3-Edge; historically remote-code "nemotron_siglip2"):
-# Nemotron text backbone (56-block hybrid layout, 2048 hidden)
+# nemotron_siglip2 architecture: Nemotron text backbone (56-block hybrid layout, 2048 hidden)
 # + SigLIP2 vision encoder.  The text transformer is identical in shape to
 # Nemotron-3-Dense-VL-2B (hidden_size=2048, 56 alternating attn/MLP blocks → 28
 # effective MoT layers after _transform_text_dict).  Uses the same
@@ -740,7 +738,7 @@ Cosmos3EdgeReasoner_VLM_GCP_Config_4acb717: VLMConfig = VLMConfig(
 )
 
 # Cosmos3-Edge-Reasoner at commit 9b4c028 (2026-05-29).
-# Same Edge reasoner (cosmos3_edge) architecture as 4acb717; new weights uploaded 2026-05-29.
+# Same nemotron_siglip2 architecture as 4acb717; new weights uploaded 2026-05-29.
 Cosmos3EdgeReasoner_VLM_GCP_Config_9b4c028: VLMConfig = VLMConfig(
     model_name="nvidia/Cosmos3-Edge-Reasoner",
     model_instance=L(Nemotron3DenseVLTextForCausalLM)(
@@ -764,8 +762,7 @@ Cosmos3EdgeReasoner_VLM_GCP_Config_9b4c028: VLMConfig = VLMConfig(
 )
 
 # Cosmos3-Edge-Reasoner at commit 590c1c0 (2026-06-28).
-# Updated weights uploaded 2026-06-28; bit-identical to the reasoner tower
-# shipped inside the public nvidia/Cosmos3-Edge release.
+# Updated weights uploaded 2026-06-28.
 Cosmos3EdgeReasoner_VLM_GCP_Config_590c1c0: VLMConfig = VLMConfig(
     model_name="nvidia/Cosmos3-Edge-Reasoner",
     model_instance=L(Nemotron3DenseVLTextForCausalLM)(

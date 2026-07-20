@@ -132,6 +132,7 @@ def _build_public_export_model_config(model_dict: dict[str, Any]) -> dict[str, A
         quantization_values = {key: value for key, value in quantization.items() if key not in {"_type", "_target_"}}
         disabled_quantization = {
             "exclude_regex": [],
+            "fp8_granularity": "per_row",
             "include_regex": [],
             "method": None,
         }

@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import math
 from collections import OrderedDict
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Literal
 
 import torch
@@ -50,7 +50,7 @@ class DenseGridMetadata:
     max_seq_len: int
 
 
-DenseGridMetadataKey = tuple[str, int, int, int, int, str, str, int]
+DenseGridMetadataKey = tuple[str, int, int, int, int, str, str]
 DenseImageTemporalPadding = Literal["repeat", "zero"]
 
 
@@ -525,10 +525,6 @@ class DenseAutoencoderRuntime(nn.Module):
         dtype: torch.dtype,
     ) -> DenseGridMetadataKey:
         """Build a stable metadata-cache key for one dense grid shape."""
-        if isinstance(module.pos_embedder, LearnedPositionEmbedder):
-            position_embedding_pointer = module.pos_embedder.position_embedding.weight.data_ptr()
-        else:
-            position_embedding_pointer = -1
         return (
             module_name,
             int(batch_size),
@@ -537,7 +533,6 @@ class DenseAutoencoderRuntime(nn.Module):
             int(width_patches),
             str(device),
             str(dtype),
-            position_embedding_pointer,
         )
 
     def train(self, mode: bool = True) -> "DenseAutoencoderRuntime":
@@ -887,14 +882,18 @@ class DenseAutoencoderRuntime(nn.Module):
             device,
             dtype,
         )
+        has_learned_position = bool(
+            module.pe_mode in {"joint", "learned"} and isinstance(module.pos_embedder, LearnedPositionEmbedder)
+        )
         learned_position_requires_grad = bool(
-            module.pe_mode in {"joint", "learned"}
+            has_learned_position
             and isinstance(module.pos_embedder, LearnedPositionEmbedder)
             and module.pos_embedder.position_embedding.weight.requires_grad
         )
         # Trainable learned positions are cacheable only during eval without
-        # gradients. Entering either train or eval mode clears prior metadata,
-        # while the storage pointer above detects parameter replacement.
+        # gradients. Even there, cache only weight-independent metadata: public
+        # tensor APIs do not expose a mutation generation that can reliably
+        # detect in-place updates to a learned position table.
         cache_enabled = self.metadata_cache_max_entries > 0 and not (
             learned_position_requires_grad and (self.training or torch.is_grad_enabled())
         )
@@ -911,6 +910,17 @@ class DenseAutoencoderRuntime(nn.Module):
         cached = self._metadata_cache.get(key)
         if cached is not None:
             self._metadata_cache.move_to_end(key)
+            if has_learned_position:
+                return replace(
+                    cached,
+                    learned_pe=self._build_learned_position_embeddings(
+                        module,
+                        temporal_patches=temporal_patches,
+                        height_patches=height_patches,
+                        width_patches=width_patches,
+                        device=device,
+                    ),
+                )
             return cached
 
         metadata = self._build_grid_metadata(
@@ -921,7 +931,7 @@ class DenseAutoencoderRuntime(nn.Module):
             width_patches=width_patches,
             device=device,
         )
-        self._metadata_cache[key] = metadata
+        self._metadata_cache[key] = replace(metadata, learned_pe=None) if has_learned_position else metadata
         if len(self._metadata_cache) > self.metadata_cache_max_entries:
             self._metadata_cache.popitem(last=False)
         return metadata

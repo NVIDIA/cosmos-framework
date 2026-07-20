@@ -40,6 +40,8 @@ __all__ = [
     "SparseMultiheadAttentionPoolingHead",
 ]
 
+_FAST_POSITION_EMBEDDING_BACKWARD_MIN_TARGET_PATCHES = 4096
+
 
 class AbsolutePositionEmbedder(nn.Module):
     """Embeds spatial positions into vector representations using sinusoidal embeddings."""
@@ -268,6 +270,18 @@ class SparseTransformerBlock(nn.Module):
         x = x + h
         return x
 
+    def _forward_no_cache_checkpoint(
+        self,
+        x: SparseTensor,
+        rng_device_tensor: torch.Tensor,  # [T,C]
+        temporal_causal_mask: bool = False,
+    ) -> SparseTensor:
+        """Expose sparse feature placement so checkpoint preserves device RNG."""
+        # SparseTensor is opaque to checkpoint's device-state inference. The
+        # tensor argument is otherwise redundant and must not change semantics.
+        del rng_device_tensor
+        return self._forward_no_cache(x, temporal_causal_mask)
+
     def forward(
         self,
         x: SparseTensor,
@@ -302,13 +316,21 @@ class SparseTransformerBlock(nn.Module):
         else:
             return self._forward(x, kv_cache, kv_cache_size, kv_cache_detach, temporal_causal_mask)
 
-    def forward_no_cache(self, x: SparseTensor, temporal_causal_mask: bool = False) -> SparseTensor:
-        """Forward pass without KV-cache plumbing."""
-        if self.training and self.use_checkpoint:
+    def forward_no_cache(
+        self,
+        x: SparseTensor,
+        temporal_causal_mask: bool = False,
+        checkpoint_override: bool | None = None,
+    ) -> SparseTensor:
+        """Forward without KV-cache plumbing and with optional checkpoint control."""
+        use_checkpoint = self.use_checkpoint if checkpoint_override is None else checkpoint_override
+        if self.training and use_checkpoint:
             return torch.utils.checkpoint.checkpoint(
-                self._forward_no_cache,
+                self._forward_no_cache_checkpoint,
                 x,
+                x.feats,
                 temporal_causal_mask,
+                preserve_rng_state=True,
                 use_reentrant=False,
             )
         return self._forward_no_cache(x, temporal_causal_mask)
@@ -320,9 +342,11 @@ class SparseTransformerBlock(nn.Module):
         cu_seqlens_q: torch.Tensor,
         max_q_seqlen: int,
         q_freqs_cis: torch.Tensor | None = None,
+        checkpoint_override: bool | None = None,
     ) -> torch.Tensor:
-        """Forward pass directly on flat token features for the eval fast path."""
-        if self.training and self.use_checkpoint:
+        """Forward directly on flat tokens and optionally override checkpointing."""
+        use_checkpoint = self.use_checkpoint if checkpoint_override is None else checkpoint_override
+        if self.training and use_checkpoint:
             return torch.utils.checkpoint.checkpoint(
                 lambda input_feats: self._forward_tensor_no_cache(
                     input_feats,
@@ -332,6 +356,7 @@ class SparseTransformerBlock(nn.Module):
                     q_freqs_cis=q_freqs_cis,
                 ),
                 feats,
+                preserve_rng_state=True,
                 use_reentrant=False,
             )
         return self._forward_tensor_no_cache(
@@ -401,10 +426,58 @@ class SparseTransformerBlock(nn.Module):
         return feats + h, {} if kv_cache is None else kv_cache
 
 
+class _AntialiasedBilinearUpsampleWithFastBackward(torch.autograd.Function):
+    """Keep the antialiased forward while using the equivalent upsample-only adjoint."""
+
+    @staticmethod
+    def forward(
+        ctx: Any,
+        input_tensor: torch.Tensor,
+        target_height: int,
+        target_width: int,
+    ) -> torch.Tensor:
+        """Run the native antialiased forward and retain only shape metadata."""
+        input_height, input_width = input_tensor.shape[-2:]
+        if target_height < input_height or target_width < input_width:
+            raise ValueError("The fast position-embedding adjoint is only valid for pure bilinear upsampling.")
+        ctx.input_size = tuple(input_tensor.shape)
+        ctx.output_size = (target_height, target_width)
+        return F.interpolate(
+            input_tensor,
+            size=ctx.output_size,
+            mode="bilinear",
+            align_corners=False,
+            antialias=True,
+        )
+
+    @staticmethod
+    def backward(
+        ctx: Any,
+        grad_output: torch.Tensor,
+    ) -> tuple[torch.Tensor, None, None]:
+        """Apply the non-antialiased pure-upsample adjoint."""
+        grad_input = torch.ops.aten.upsample_bilinear2d_backward.default(
+            grad_output,
+            ctx.output_size,
+            ctx.input_size,
+            False,
+            None,
+            None,
+        )
+        return grad_input, None, None
+
+
 class LearnedPositionEmbedder(nn.Module):
     """Learned 2D position embeddings for sparse tensors."""
 
-    def __init__(self, hidden_size: int, num_patches: int = 256, max_t: int = 32, max_z: int = 16):
+    def __init__(
+        self,
+        hidden_size: int,
+        num_patches: int = 256,
+        max_t: int = 32,
+        max_z: int = 16,
+        fast_upsample_backward: bool = False,
+    ) -> None:
         """Initialize LearnedPositionEmbedder.
 
         Args:
@@ -412,18 +485,16 @@ class LearnedPositionEmbedder(nn.Module):
             num_patches: Number of 2D patches (assumes square grid).
             max_t: Maximum temporal dimension (unused, for API compatibility).
             max_z: Maximum depth dimension (unused, for API compatibility).
+            fast_upsample_backward: Whether qualifying CUDA BF16 pure spatial
+                upsampling keeps the antialiased forward and uses the faster
+                non-antialiased adjoint.
         """
         super().__init__()
         self.embed_dim = hidden_size
         self.num_patches = num_patches
         self.position_embedding_size = int(self.num_patches**0.5)
         self.position_embedding = nn.Embedding(self.num_patches, self.embed_dim)
-        self._resized_position_embedding_cache: dict[tuple[int, int, str, torch.dtype, int, int], torch.Tensor] = {}
-
-    def train(self, mode: bool = True) -> "LearnedPositionEmbedder":
-        """Switch training mode and clear eval-only interpolation cache."""
-        self._resized_position_embedding_cache.clear()
-        return super().train(mode)
+        self.fast_upsample_backward: bool = fast_upsample_backward
 
     def _get_interpolated_position_embedding(
         self,
@@ -437,19 +508,6 @@ class LearnedPositionEmbedder(nn.Module):
         if positional_embeddings.device.type == "cpu":
             compute_dtype = torch.float32
 
-        cache_key = (
-            target_height,
-            target_width,
-            str(target_device),
-            compute_dtype,
-            self.position_embedding.weight.data_ptr(),
-            self.position_embedding.weight._version,
-        )
-        if not self.training:
-            cached = self._resized_position_embedding_cache.get(cache_key)
-            if cached is not None:
-                return cached
-
         if target_height == self.position_embedding_size and target_width == self.position_embedding_size:
             interpolated = positional_embeddings
             if interpolated.device != target_device or interpolated.dtype != compute_dtype:
@@ -458,20 +516,31 @@ class LearnedPositionEmbedder(nn.Module):
             pos_emb = positional_embeddings.permute(2, 0, 1).unsqueeze(0)
             if pos_emb.device != target_device or pos_emb.dtype != compute_dtype:
                 pos_emb = pos_emb.to(device=target_device, dtype=compute_dtype)
-            interpolated = (
-                F.interpolate(
+            use_fast_backward = bool(
+                self.fast_upsample_backward
+                and pos_emb.is_cuda
+                and pos_emb.dtype == torch.bfloat16
+                and pos_emb.requires_grad
+                and torch.is_grad_enabled()
+                and target_height >= self.position_embedding_size
+                and target_width >= self.position_embedding_size
+                and target_height * target_width >= _FAST_POSITION_EMBEDDING_BACKWARD_MIN_TARGET_PATCHES
+            )
+            if use_fast_backward:
+                resized_pos_emb = _AntialiasedBilinearUpsampleWithFastBackward.apply(
+                    pos_emb,
+                    target_height,
+                    target_width,
+                )
+            else:
+                resized_pos_emb = F.interpolate(
                     pos_emb,
                     size=(target_height, target_width),
                     mode="bilinear",
                     align_corners=False,
                     antialias=True,
                 )
-                .squeeze(0)
-                .permute(1, 2, 0)
-            )
-
-        if not self.training:
-            self._resized_position_embedding_cache[cache_key] = interpolated
+            interpolated = resized_pos_emb.squeeze(0).permute(1, 2, 0)
         return interpolated
 
     def infer_spatial_shapes(self, sparse_patches: SparseTensor) -> torch.LongTensor:

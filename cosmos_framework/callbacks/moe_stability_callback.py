@@ -8,7 +8,7 @@ Monitors whether the MoE router is staying healthy over the course of training.
 A healthy router distributes tokens reasonably evenly, keeps all experts alive,
 and remains uncertain enough (high entropy) that it is still learning to route.
 
-Five metrics are tracked per layer, per tower (und / gen):
+The following metrics are tracked per layer, per tower (und / gen):
 
   Dead Expert Rate
   ----------------
@@ -82,11 +82,47 @@ Five metrics are tracked per layer, per tower (und / gen):
         different tokens choose different experts. Per-token confidence with
         buffer-wide diversity.
 
+  Honest Effective Experts (N_eff) and Effective Parameters
+  ---------------------------------------------------------
+  Uses the soft clean gate g[t, e] (the pre-dispatch softmax over experts, summing
+  to 1 per token) to estimate how many experts a layer *honestly* uses, discounting
+  coverage that isn't actually token-driven.
+
+      P[e]      = mean_t g[t, e]                      # marginal usage distribution
+      H_marg    = -sum_e P[e] ln P[e]                 # entropy of overall usage (nats)
+      H_within  = mean_t ( -sum_e g[t,e] ln g[t,e] )  # avg per-token entropy (nats)
+      N_cov     = exp(H_marg)                          # coverage, in [1, N]
+      rho       = (H_marg - H_within) / H_marg         # conditionality, in [0, 1]
+      N_eff     = k + (N_cov - k) * rho                # honest experts, in [~k, N]
+
+  N_eff is logged normalized as honest_eff_normalized = N_eff / N (a fraction in
+  [~k/N, 1]), sitting on the same axis as soft_eff_normalized / hard_eff_normalized.
+
+  rho (logged as router_token_mi_normalized) is the normalized mutual information between
+  token identity and expert routing:
+  rho -> 1 when routing is genuinely token-dependent, rho -> 0 when every token routes
+  the same way (so wide coverage that is not input-driven is not rewarded). By concavity
+  of entropy H_marg >= H_within, so rho >= 0; rho is defined as 0 when H_marg = 0. N_eff
+  can fall below k if usage collapses onto fewer than k experts (N_cov < k).
+
+  Effective Parameters (per tower) summarizes N_eff at the model level:
+
+      Effective Parameters = Shared Parameters + sum_l ( N_eff[l] * Per-Expert Parameters )
+
+  where Shared Parameters is the non-expert LLM backbone (token embeddings, lm_head,
+  final norm, and per-layer attention + norms + router gate), derived analytically from
+  the generator text config; the vision tower and diffusion adapters are excluded, so the
+  number reflects the effective LLM size. Per-Expert Parameters is one expert's gate_up +
+  down projection size, and the sum runs over this tower's MoE layers. It interpolates
+  between the active size (all N_eff == k, e.g. ~A3B / ~A22B) and the full size (all
+  N_eff == N, e.g. 30B / 235B).
+
 Buffer ownership
 ----------------
   This callback is fully self-contained: it reads and resets its own dedicated
   buffers (stability_tokens_per_expert, stability_total_tokens, sum_token_entropy,
-  sum_per_token_soft_eff). It does not depend on ExpertHeatmap's reset cycle.
+  sum_per_token_soft_eff, sum_router_prob_per_expert). It does not depend on
+  ExpertHeatmap's reset cycle.
 """
 
 import math
@@ -105,9 +141,9 @@ from torch.distributed.tensor import DTensor, Partial
 
 from cosmos_framework.callbacks.every_n import EveryN
 from cosmos_framework.model._base import ImaginaireModel
+from cosmos_framework.model.generator.reasoner.qwen3_vl_moe.qwen3_vl_moe import Qwen3VLMoeTextSparseMoeBlock
 from cosmos_framework.trainer import ImaginaireTrainer
 from cosmos_framework.utils import distributed
-from cosmos_framework.model.generator.reasoner.qwen3_vl_moe.qwen3_vl_moe import Qwen3VLMoeTextSparseMoeBlock
 
 
 def _effective_experts(
@@ -154,6 +190,72 @@ def _effective_experts(
     return soft_eff, hard_eff
 
 
+def _load_imbalance_factor(tokens_per_expert: torch.Tensor, total_tokens: torch.Tensor, n: int, k: int) -> torch.Tensor:
+    """Load Imbalance Factor = N * max(f_i) / K, where f_i = tokens_per_expert / total_tokens.
+
+    1.0 = perfectly balanced (every expert gets its K/N fair share); >3 = severe imbalance.
+    Pure-tensor helper so the training callback and offline measurement share one definition.
+    """
+    total = total_tokens.float().clamp(min=1)
+    f_i = tokens_per_expert.float() / total
+    return f_i.max() * n / k
+
+
+def _router_entropy_normalized(sum_token_entropy: torch.Tensor, total_tokens: torch.Tensor, n: int) -> torch.Tensor:
+    """Mean per-token router entropy normalized to [0, 1] by log(N)."""
+    total = total_tokens.float().clamp(min=1)
+    return (sum_token_entropy.float() / total / math.log(n)).squeeze()
+
+
+def _honest_effective_experts(
+    sum_router_prob_per_expert: torch.Tensor,
+    sum_token_entropy: torch.Tensor,
+    total_tokens: torch.Tensor,
+    k: int,
+    n: int,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    """Compute (n_eff, rho, n_cov) honest effective experts from already-reduced buffers.
+
+    Extracted as a pure-tensor function so the same formula is shared by the
+    training callback and any offline measurement (no drift), and is unit-testable
+    without instantiating an MoE module or distributed state.
+
+    N_eff = k + (N_cov - k) * rho, where N_cov = exp(H_marg) is the marginal
+    coverage and rho in [0, 1] is the routing conditionality (the normalized
+    mutual information between token identity and expert routing). Uses the SOFT
+    marginal P[e] = mean_t g[t, e] and the soft per-token entropy H_within, both
+    in nats, so rho >= 0 holds by concavity of entropy (H_marg >= H_within).
+
+    Args:
+        sum_router_prob_per_expert: [N] tensor holding sum_t g[t, e] over the window.
+        sum_token_entropy: 0-d or [1] tensor holding sum_t H(p_t) in nats.
+        total_tokens: 0-d or [1] tensor holding the number of tokens since reset.
+        k: top-k experts dispatched per token.
+        n: total number of experts.
+
+    Returns:
+        n_eff: scalar tensor, honest effective experts clamped to [0, N]. Can dip
+            below k when usage collapses onto fewer than k experts (N_cov < k);
+            that is itself a meaningful signal, not an error.
+        rho: scalar tensor, routing conditionality in [0, 1] (defined as 0 when
+            H_marg = 0).
+        n_cov: scalar tensor, marginal coverage exp(H_marg) in [1, N] — how many
+            experts are used in aggregate, before discounting by conditionality.
+    """
+    total_d = total_tokens.double().clamp(min=1.0)
+    p_marg = (sum_router_prob_per_expert.double() / total_d).clamp(min=ENTROPY_EPSILON)  # [N], ~sums to 1
+    h_marg = -(p_marg * p_marg.log()).sum()  # marginal entropy (nats)
+    h_within = sum_token_entropy.double().squeeze() / total_d.squeeze()  # mean per-token entropy (nats)
+    n_cov = h_marg.exp()  # coverage in [1, N]
+    rho = torch.where(
+        h_marg > ENTROPY_EPSILON,
+        ((h_marg - h_within) / h_marg).clamp(0.0, 1.0),
+        torch.zeros_like(h_marg),
+    )
+    n_eff = (k + (n_cov - k) * rho).clamp(min=0.0, max=float(n))
+    return n_eff, rho, n_cov
+
+
 def compute_moe_stability_metrics(vfm: torch.nn.Module) -> dict[str, dict]:
     """
     Compute per-layer MoE stability metrics for both towers.
@@ -170,6 +272,8 @@ def compute_moe_stability_metrics(vfm: torch.nn.Module) -> dict[str, dict]:
         "router_entropy_normalized": Tensor[num_moe_layers]
         "soft_eff_normalized":       Tensor[num_moe_layers]   — mean_t exp(H(p_t)) / N,  in [1/N, 1]
         "hard_eff_normalized":       Tensor[num_moe_layers]   — exp(H(f)) / N,           in [1/N, 1]
+        "router_token_mi_normalized": Tensor[num_moe_layers]  — normalized token-routing MI in [0, 1]
+        "honest_eff_normalized":     Tensor[num_moe_layers]   — N_eff / N, fraction in [~k/N, 1]
     }
     """
     with torch.no_grad():
@@ -196,6 +300,8 @@ def compute_moe_stability_metrics(vfm: torch.nn.Module) -> dict[str, dict]:
             entropies: list[torch.Tensor] = []
             soft_effs_norm: list[torch.Tensor] = []
             hard_effs_norm: list[torch.Tensor] = []
+            router_token_mi_norms: list[torch.Tensor] = []
+            honest_effs_norm: list[torch.Tensor] = []
 
             for layer_idx in range(num_layers):
                 layer_module = vfm.language_model.model.layers[layer_idx]
@@ -210,6 +316,7 @@ def compute_moe_stability_metrics(vfm: torch.nn.Module) -> dict[str, dict]:
                 total_tokens = _allreduce(mlp_module.get_stability_total_tokens(reset=True))
                 sum_token_entropy = _allreduce(mlp_module.get_sum_token_entropy(reset=True))
                 sum_per_token_soft_eff = _allreduce(mlp_module.get_sum_per_token_soft_eff(reset=True))
+                sum_router_prob_per_expert = _allreduce(mlp_module.get_sum_router_prob_per_expert(reset=True))
 
                 n = mlp_module.num_experts
                 total = total_tokens.float().clamp(min=1)
@@ -224,10 +331,9 @@ def compute_moe_stability_metrics(vfm: torch.nn.Module) -> dict[str, dict]:
                 #   1.0 = perfectly balanced (every expert gets its fair share)
                 #   2.0 = busiest expert handles 2x its fair share
                 #   >3.0 = severe imbalance, consider tuning load-balancing loss
-                lifs.append(f_i.max() * n / k)
+                lifs.append(_load_imbalance_factor(total_tokens_per_expert, total_tokens, n, k))
                 # Mean per-token entropy, normalized to [0, 1] by log(N).
-                # squeeze() collapses the [1] buffer shape to a 0-d scalar.
-                entropies.append((sum_token_entropy.float() / total / math.log(n)).squeeze())
+                entropies.append(_router_entropy_normalized(sum_token_entropy, total_tokens, n))
 
                 soft_eff, hard_eff = _effective_experts(
                     sum_per_token_soft_eff=sum_per_token_soft_eff,
@@ -237,6 +343,20 @@ def compute_moe_stability_metrics(vfm: torch.nn.Module) -> dict[str, dict]:
                 soft_effs_norm.append(soft_eff / n)
                 hard_effs_norm.append(hard_eff / n)
 
+                # Honest effective experts N_eff and routing conditionality rho.
+                # See _honest_effective_experts for the full derivation; it uses the
+                # SOFT marginal P[e] = mean_t g[t, e] and the soft per-token entropy.
+                n_eff, rho, _n_cov = _honest_effective_experts(
+                    sum_router_prob_per_expert=sum_router_prob_per_expert,
+                    sum_token_entropy=sum_token_entropy,
+                    total_tokens=total_tokens,
+                    k=k,
+                    n=n,
+                )
+                router_token_mi_norms.append(rho)
+                # Normalized to a fraction of total experts, in [~k/N, 1].
+                honest_effs_norm.append(n_eff / n)
+
             if layer_indices:
                 results[tower] = {
                     "layer_indices": layer_indices,
@@ -245,9 +365,68 @@ def compute_moe_stability_metrics(vfm: torch.nn.Module) -> dict[str, dict]:
                     "router_entropy_normalized": torch.stack(entropies),
                     "soft_eff_normalized": torch.stack(soft_effs_norm),
                     "hard_eff_normalized": torch.stack(hard_effs_norm),
+                    "router_token_mi_normalized": torch.stack(router_token_mi_norms),
+                    "honest_eff_normalized": torch.stack(honest_effs_norm),
                 }
 
     return results
+
+
+def compute_moe_param_counts(text_config) -> tuple[int, int, int]:
+    """Analytically derive ``(per_expert_params, shared_params, num_experts)`` for the
+    Effective Parameters metric, purely from the LLM (generator) text config.
+
+    Counts a standard single-tower Qwen3-VL-MoE *LLM* — token embeddings, the LM head,
+    the final norm, and per-layer attention (q/k/v/o + per-head q/k RMSNorm), the two
+    layernorms, and the router gate, plus a dense MLP on any ``mlp_only_layers``. The
+    vision tower and the diffusion adapters (vae2llm / llm2vae / time embedders) are
+    deliberately excluded; the result is the *effective LLM size* the MoT generator pulls
+    from. Effective Parameters then interpolates between the active size (all N_eff == k)
+    and the full size (all N_eff == N), matching the published A{active}B / {total}B
+    figures.
+
+    per_expert_params: one expert's gate_up (H x 2I) + down (I x H) = 3 * H * I.
+    num_experts: experts per MoE layer (N), used to turn honest_eff_normalized back into
+        a raw effective-expert count.
+
+    Static for a given model, so callers should cache the result.
+    """
+    h = text_config.hidden_size
+    moe_inter = text_config.moe_intermediate_size
+    num_experts = int(text_config.num_experts)
+    num_layers = text_config.num_hidden_layers
+    n_heads = text_config.num_attention_heads
+    n_kv_heads = text_config.num_key_value_heads
+    head_dim = getattr(text_config, "head_dim", None) or (h // n_heads)
+    vocab = text_config.vocab_size
+    attn_bias = bool(getattr(text_config, "attention_bias", False))
+
+    per_expert_params = 3 * h * moe_inter
+
+    # Identify MoE vs dense (mlp_only) layers exactly as the decoder layer does.
+    mlp_only = set(getattr(text_config, "mlp_only_layers", []) or [])
+    sparse_step = getattr(text_config, "decoder_sparse_step", 1)
+    num_moe_layers = sum(
+        1 for i in range(num_layers) if i not in mlp_only and num_experts > 0 and (i + 1) % sparse_step == 0
+    )
+    num_dense_layers = num_layers - num_moe_layers
+
+    # Per-layer attention: q/o projections (n_heads), k/v projections (n_kv_heads), and
+    # the per-head q/k RMSNorms. All bias-free unless attention_bias is set.
+    attn = 2 * n_heads * head_dim * h + 2 * n_kv_heads * head_dim * h + 2 * head_dim
+    if attn_bias:
+        attn += (n_heads + 2 * n_kv_heads) * head_dim + h  # q/k/v + o projection biases
+    layer_norms = 2 * h  # input_layernorm + post_attention_layernorm
+
+    shared_params = vocab * h  # token embeddings
+    if not bool(getattr(text_config, "tie_word_embeddings", False)):
+        shared_params += vocab * h  # lm_head
+    shared_params += h  # final norm
+    shared_params += num_layers * (attn + layer_norms)
+    shared_params += num_moe_layers * (h * num_experts)  # router gate per MoE layer
+    shared_params += num_dense_layers * (3 * h * text_config.intermediate_size)  # dense MLP layers
+
+    return per_expert_params, int(shared_params), num_experts
 
 
 class MoEStabilityCallback(EveryN):
@@ -265,12 +444,16 @@ class MoEStabilityCallback(EveryN):
 
     W&B layout
     ----------
-    For each metric and each tower, two kinds of series are logged:
+    For each per-layer metric and each tower, two kinds of series are logged:
       - moe_stability/<metric>/<tower>/layer_NNN  — per model layer time series
       - moe_stability/<metric>/<tower>/mean|max   — summary across all MoE layers
+    Plus per-tower scalars:
+      - moe_stability/n_eff_total/<tower>             — sum of N_eff over MoE layers
+      - moe_stability/effective_params_billions/<tower> — (Shared + n_eff_total * per-expert
+        params) / 1e9, i.e. in billions so a log-scale axis reads 1B, 2B, ...
 
-    Metrics logged: dead_expert_rate, lif, router_entropy_normalized,
-    soft_eff_normalized, hard_eff_normalized.
+    Per-layer metrics logged: dead_expert_rate, lif, router_entropy_normalized,
+    soft_eff_normalized, hard_eff_normalized, router_token_mi_normalized, honest_eff_normalized.
 
     Typical healthy ranges:
       dead_expert_rate  → 0 (any sustained non-zero value is a concern)
@@ -278,6 +461,9 @@ class MoEStabilityCallback(EveryN):
       router_entropy_normalized → > 0.7 (collapse if it drops sharply)
       soft_eff_normalized, hard_eff_normalized → high; a large gap between
         them (e.g. soft high, hard low) indicates hidden top-k concentration
+      router_token_mi_normalized → higher means routing is genuinely token-conditional
+      honest_eff_normalized → higher (toward 1) means more experts honestly used;
+        a falling value / effective_params indicates the router is collapsing toward k/N
 
     Args:
         every_n (int): Logging interval in training steps.
@@ -285,6 +471,11 @@ class MoEStabilityCallback(EveryN):
 
     def __init__(self, every_n: int = 100):
         super().__init__(every_n=every_n)
+        # Static parameter counts for the Effective Parameters metric, computed lazily
+        # on the first logging step (on rank 0) and cached thereafter.
+        self._per_expert_params: int | None = None
+        self._shared_params: int | None = None
+        self._num_experts: int | None = None
 
     def every_n_impl(
         self,
@@ -300,9 +491,29 @@ class MoEStabilityCallback(EveryN):
         if not (distributed.is_rank0() and wandb.run):
             return
 
+        if metrics and self._per_expert_params is None:
+            # The MoE block holds the LLM (generator) text config we derive counts from.
+            text_config = next(
+                (m.config for m in model.net.modules() if isinstance(m, Qwen3VLMoeTextSparseMoeBlock)),
+                None,
+            )
+            if text_config is not None:
+                self._per_expert_params, self._shared_params, self._num_experts = compute_moe_param_counts(text_config)
+
         log_dict: dict[str, float] = {}
         for tower, tower_metrics in metrics.items():
             layer_indices = tower_metrics.pop("layer_indices")
+
+            # Effective Parameters (per tower) = shared LLM backbone + effective experts.
+            # honest_eff_normalized is a per-layer fraction in [0, 1]; multiply by the
+            # expert count N to recover raw effective experts, then sum over MoE layers.
+            if self._per_expert_params is not None:
+                n_eff_total = float((tower_metrics["honest_eff_normalized"].sum() * self._num_experts).item())
+                log_dict[f"moe_stability/n_eff_total/{tower}"] = n_eff_total
+                # Reported in billions so a log-scale W&B axis reads 1B, 2B, 5B, ...
+                effective_params = self._shared_params + n_eff_total * self._per_expert_params
+                log_dict[f"moe_stability/effective_params_billions/{tower}"] = effective_params / 1e9
+
             for metric_name, values in tower_metrics.items():
                 for layer_idx, val in zip(layer_indices, values):
                     log_dict[f"moe_stability/{metric_name}/{tower}/layer_{layer_idx:03d}"] = val.item()

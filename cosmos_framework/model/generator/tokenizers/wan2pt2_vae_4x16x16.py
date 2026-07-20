@@ -11,12 +11,12 @@ import torch.nn as nn
 import torch.nn.functional as F
 from einops import rearrange
 
-from cosmos_framework.utils.flags import DEVICE, INTERNAL, TRAINING
+from cosmos_framework.data.generator.utils import VIDEO_RES_SIZE_INFO
+from cosmos_framework.model.generator.tokenizers.interface import VideoTokenizerInterface
 from cosmos_framework.utils import log
 from cosmos_framework.utils.distributed import get_rank, sync_model_states
 from cosmos_framework.utils.easy_io import easy_io
-from cosmos_framework.data.generator.utils import VIDEO_RES_SIZE_INFO
-from cosmos_framework.model.generator.tokenizers.interface import VideoTokenizerInterface
+from cosmos_framework.utils.flags import DEVICE, INTERNAL, TRAINING
 from cosmos_framework.utils.generator.data_utils import get_vision_data_resolution
 
 # For sequential decoding, CACHE_T is the number of frames to cache.
@@ -991,7 +991,16 @@ def _video_vae(
         model.to_empty(device=device)
     else:
         if get_rank() == 0:
-            if not INTERNAL:
+            if pretrained_path.startswith("hf://"):
+                # easy_io has no 'hf' backend, so an hf:// URI must be resolved to a
+                # local file first. Do this regardless of INTERNAL (unlike s3:// paths,
+                # which are loaded directly from the object store in INTERNAL mode) so
+                # that HF-only checkpoints (e.g. Cosmos3-Edge) work without setting
+                # COSMOS_INTERNAL=0.
+                from cosmos_framework.utils.checkpoint_db import _download_hf_checkpoint
+
+                pretrained_path = _download_hf_checkpoint(pretrained_path)
+            elif not INTERNAL:
                 from cosmos_framework.utils.checkpoint_db import download_checkpoint_v2
 
                 pretrained_path = download_checkpoint_v2(pretrained_path)

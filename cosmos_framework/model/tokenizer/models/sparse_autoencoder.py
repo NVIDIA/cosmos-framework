@@ -14,6 +14,7 @@ This module provides:
 
 import os
 from dataclasses import dataclass
+from functools import partial
 from typing import Any, Literal
 
 import numpy as np
@@ -63,6 +64,29 @@ from cosmos_framework.model.tokenizer.utils.tensors import cat_with_bounded_inpu
 # =============================================================================
 # Helper Functions
 # =============================================================================
+
+
+def _validate_vision_checkpoint_group_size(*, name: str | None, group_size: int) -> None:
+    """Validate one default-off vision grouped-checkpointing request."""
+    if isinstance(group_size, bool) or not isinstance(group_size, int) or group_size < 1:
+        prefix = "" if name is None else f"{name}_"
+        raise ValueError(f"{prefix}checkpoint_group_size must be a positive integer, got {group_size!r}.")
+
+
+def _run_sparse_checkpoint_group(
+    hidden_states: SparseTensor,
+    rng_device_tensor: torch.Tensor,  # [T,C]
+    *,
+    blocks: tuple[nn.Module, ...],
+) -> SparseTensor:
+    """Run consecutive sparse blocks with their inner checkpoints disabled."""
+    # Expose a CUDA tensor to checkpoint's device-state inference. SparseTensor
+    # is intentionally opaque to PyTorch's argument traversal.
+    del rng_device_tensor
+    output = hidden_states  # [B,*S,C]
+    for block in blocks:
+        output = block.forward_no_cache(output, checkpoint_override=False)  # [B,*S,C]
+    return output  # [B,*S,C]
 
 
 def multiply_all_factors(config: dict[int, dict[str, Any]]) -> list[int]:
@@ -398,7 +422,9 @@ class SparseTransformerBase(nn.Module):
         ln_affine: bool = True,
         multiscale: dict[int, dict[str, Any]] | None = None,
         dense_train_backend: Literal["disabled", "varlen", "batched", "auto"] = "disabled",
-    ):
+        checkpoint_group_size: int = 1,
+        fast_position_embedding_upsample_backward: bool = False,
+    ) -> None:
         """Initialize SparseTransformerBase.
 
         Args:
@@ -417,8 +443,14 @@ class SparseTransformerBase(nn.Module):
             multiscale: Multiscale configuration.
             dense_train_backend: Optional dense tensor backend to use for the
                 supported fixed-shape train-time subset.
+            checkpoint_group_size: Number of consecutive fully checkpointed
+                blocks to place under one outer checkpoint. One preserves the
+                established per-block behavior.
+            fast_position_embedding_upsample_backward: Whether qualifying
+                learned 2D position upsampling uses the faster adjoint.
         """
         super().__init__()
+        _validate_vision_checkpoint_group_size(name=None, group_size=checkpoint_group_size)
         self.in_channels = in_channels
         self.model_channels = model_channels
         self.num_blocks = num_blocks
@@ -430,13 +462,17 @@ class SparseTransformerBase(nn.Module):
         self.use_bias = use_bias
         self.use_rms_norm = use_rms_norm
         self.dense_train_backend = dense_train_backend
+        self.checkpoint_group_size: int = checkpoint_group_size
 
         if pe_mode == "ape":
             self.pos_embedder = AbsolutePositionEmbedder(model_channels)
         elif pe_mode == "learned4d":
             self.pos_embedder = LearnedPositionEmbedder4D(model_channels)
         elif pe_mode in ["joint", "learned"]:
-            self.pos_embedder = LearnedPositionEmbedder(model_channels)
+            self.pos_embedder = LearnedPositionEmbedder(
+                model_channels,
+                fast_upsample_backward=fast_position_embedding_upsample_backward,
+            )
 
         self.input_layer = SparseLinear(in_channels, model_channels, bias=use_bias)
 
@@ -480,6 +516,31 @@ class SparseTransformerBase(nn.Module):
             use_compile=torch.compiler.is_compiling(),
         )
 
+    def _can_use_grouped_checkpointing(
+        self,
+        *,
+        hidden_states: list[SparseTensor] | None,
+        kv_cache_size: int | None,
+        temporal_causal_mask: bool,
+    ) -> bool:
+        """Return whether this execution can safely group all block checkpoints."""
+        if (
+            not self.training
+            or hidden_states is not None
+            or kv_cache_size is not None
+            or temporal_causal_mask
+            or self.checkpoint_group_size <= 1
+            or len(self.blocks) == 0
+        ):
+            return False
+        return all(
+            block.training
+            and getattr(block, "use_checkpoint", False)
+            and callable(getattr(block, "forward_no_cache", None))
+            and getattr(block, "multiscale", None) is None
+            for block in self.blocks
+        )
+
     def forward(
         self,
         x: SparseTensor,
@@ -520,6 +581,12 @@ class SparseTransformerBase(nn.Module):
         block_dtype = next(self.blocks.parameters()).dtype
         if h.dtype != block_dtype:
             h = h.to(block_dtype)
+        use_grouped_checkpointing = self._can_use_grouped_checkpointing(
+            hidden_states=hs,
+            kv_cache_size=kv_cache_size,
+            temporal_causal_mask=temporal_causal_mask,
+        )
+        checkpoint_group_size = self.checkpoint_group_size if use_grouped_checkpointing else 1
 
         if hs is not None:
             hs.append(h)
@@ -568,12 +635,14 @@ class SparseTransformerBase(nn.Module):
                         cu_seqlens_q=cu_seqlens_q,
                         max_q_seqlen=max_q_seqlen,
                         q_freqs_cis=q_freqs_cis,
+                        checkpoint_group_size=checkpoint_group_size,
                     )
                 else:
                     dense_feats = run_batched_block_stack(
                         self.blocks,
                         dense_feats,
                         q_freqs_cis=q_freqs_cis,
+                        checkpoint_group_size=checkpoint_group_size,
                     )
                 h = h.replace(_dense_batch_tokens_to_flat_features(dense_feats, used_reshape_fast_path))
                 empty_kv_cache: dict[str, SparseTensor]
@@ -705,21 +774,33 @@ class SparseTransformerBase(nn.Module):
                 return h, hs, kv_cache
 
         if kv_cache_size is None and not temporal_causal_mask:
-            for block in self.blocks:
-                forward_no_cache = getattr(block, "forward_no_cache", None)
-                if callable(forward_no_cache):
-                    h = forward_no_cache(h)
-                else:
-                    h, _ = block(
+            if use_grouped_checkpointing:
+                assert hs is None, "Grouped checkpointing cannot collect intermediate hidden states."
+                for group_start in range(0, len(self.blocks), checkpoint_group_size):
+                    checkpoint_blocks = tuple(self.blocks[group_start : group_start + checkpoint_group_size])
+                    h = torch.utils.checkpoint.checkpoint(  # [B,*S,C]
+                        partial(_run_sparse_checkpoint_group, blocks=checkpoint_blocks),
                         h,
-                        kv_cache=None,
-                        kv_cache_size=None,
-                        kv_cache_detach=kv_cache_detach,
-                        temporal_causal_mask=False,
+                        h.feats,
+                        preserve_rng_state=True,
+                        use_reentrant=False,
                     )
+            else:
+                for block in self.blocks:
+                    forward_no_cache = getattr(block, "forward_no_cache", None)
+                    if callable(forward_no_cache):
+                        h = forward_no_cache(h)
+                    else:
+                        h, _ = block(
+                            h,
+                            kv_cache=None,
+                            kv_cache_size=None,
+                            kv_cache_detach=kv_cache_detach,
+                            temporal_causal_mask=False,
+                        )
 
-                if hs is not None:
-                    hs.append(h)
+                    if hs is not None:
+                        hs.append(h)
 
             empty_kv_cache: dict[str, SparseTensor]
             if kv_cache is None:
@@ -775,7 +856,9 @@ class Encoder(SparseTransformerBase):
         concat_latent: list[int] | None = None,
         use_head: bool = False,
         dense_train_backend: Literal["disabled", "varlen", "batched", "auto"] = "disabled",
-    ):
+        checkpoint_group_size: int = 1,
+        fast_position_embedding_upsample_backward: bool = False,
+    ) -> None:
         """Initialize Encoder.
 
         Args:
@@ -795,6 +878,10 @@ class Encoder(SparseTransformerBase):
             use_head: Whether to apply pooling head for image features.
             dense_train_backend: Optional dense tensor backend for the
                 supported fixed-shape train-time subset.
+            checkpoint_group_size: Number of consecutive blocks per activation
+                checkpoint. One preserves per-block checkpointing.
+            fast_position_embedding_upsample_backward: Whether qualifying
+                learned 2D position upsampling uses the faster adjoint.
         """
         super().__init__(
             in_channels,
@@ -809,6 +896,8 @@ class Encoder(SparseTransformerBase):
             use_bias=use_bias,
             use_rms_norm=use_rms_norm,
             dense_train_backend=dense_train_backend,
+            checkpoint_group_size=checkpoint_group_size,
+            fast_position_embedding_upsample_backward=fast_position_embedding_upsample_backward,
         )
         self.concat_latent = concat_latent
         self.use_head = use_head
@@ -1027,7 +1116,9 @@ class Decoder(SparseTransformerBase):
         multiscale: dict[int, dict[str, Any]] | None = None,
         multiscale_outputs: dict[int, dict[str, Any]] | None = None,
         dense_train_backend: Literal["disabled", "varlen", "batched", "auto"] = "disabled",
-    ):
+        checkpoint_group_size: int = 1,
+        fast_position_embedding_upsample_backward: bool = False,
+    ) -> None:
         """Initialize Decoder.
 
         Args:
@@ -1047,6 +1138,10 @@ class Decoder(SparseTransformerBase):
             multiscale_outputs: Multiscale output layer configuration.
             dense_train_backend: Optional dense tensor backend for the
                 supported fixed-shape train-time subset.
+            checkpoint_group_size: Number of consecutive blocks per activation
+                checkpoint. One preserves per-block checkpointing.
+            fast_position_embedding_upsample_backward: Whether qualifying
+                learned 2D position upsampling uses the faster adjoint.
         """
         super().__init__(
             in_channels,
@@ -1062,6 +1157,8 @@ class Decoder(SparseTransformerBase):
             use_rms_norm=use_rms_norm,
             multiscale=multiscale,
             dense_train_backend=dense_train_backend,
+            checkpoint_group_size=checkpoint_group_size,
+            fast_position_embedding_upsample_backward=fast_position_embedding_upsample_backward,
         )
         self.multiscale = multiscale
         self.multiscale_outputs = multiscale_outputs
@@ -1212,8 +1309,12 @@ class AutoencoderKLConfig:
     text_decoder_family: str = "qwen3"
     text_decoder_gradient_checkpointing: bool = True
     text_decoder_packed_attention_backend: Literal["sdpa", "natten"] = "sdpa"
+    text_decoder_natten_native_rms_norm: bool = False
     encoder_use_checkpoint: bool | None = None
     decoder_use_checkpoint: bool | None = None
+    encoder_checkpoint_group_size: int = 1
+    decoder_checkpoint_group_size: int = 1
+    fast_position_embedding_upsample_backward: bool = False
     encoder_dense_train_backend: Literal["disabled", "varlen", "batched", "auto"] = "disabled"
     decoder_dense_train_backend: Literal["disabled", "varlen", "batched", "auto"] = "disabled"
     decoder_temporal_mode: Literal["bidirectional", "causal_mask", "causal"] = "bidirectional"
@@ -1230,6 +1331,8 @@ class AutoencoderKLConfig:
     concat_latent: list | None = None
     random_num_sample_frames_batch_sizes: list[int] | None = None
     task_random_num_sample_frames_batch_sizes: dict[str, list[int]] | None = None
+    fuse_encoder_temporal_batches: bool = False
+    fuse_decoder_temporal_batches: bool = False
     use_dual_latent: bool = False
 
 
@@ -1296,8 +1399,12 @@ class AutoencoderKL(ModelMixin, ConfigMixin, FromOriginalModelMixin):
         text_decoder_family: str = "qwen3",
         text_decoder_gradient_checkpointing: bool = True,
         text_decoder_packed_attention_backend: Literal["sdpa", "natten"] = "sdpa",
+        text_decoder_natten_native_rms_norm: bool = False,
         encoder_use_checkpoint: bool | None = None,
         decoder_use_checkpoint: bool | None = None,
+        encoder_checkpoint_group_size: int = 1,
+        decoder_checkpoint_group_size: int = 1,
+        fast_position_embedding_upsample_backward: bool = False,
         encoder_dense_train_backend: Literal["disabled", "varlen", "batched", "auto"] = "disabled",
         decoder_dense_train_backend: Literal["disabled", "varlen", "batched", "auto"] = "disabled",
         decoder_temporal_mode: Literal["bidirectional", "causal_mask", "causal"] = "bidirectional",
@@ -1314,6 +1421,8 @@ class AutoencoderKL(ModelMixin, ConfigMixin, FromOriginalModelMixin):
         concat_latent: list | None = None,
         random_num_sample_frames_batch_sizes: list[int] | None = None,
         task_random_num_sample_frames_batch_sizes: dict[str, list[int]] | None = None,
+        fuse_encoder_temporal_batches: bool = False,
+        fuse_decoder_temporal_batches: bool = False,
         use_dual_latent: bool = False,
         use_checkpoint: bool = True,
     ) -> None:
@@ -1321,6 +1430,11 @@ class AutoencoderKL(ModelMixin, ConfigMixin, FromOriginalModelMixin):
         self.use_checkpoint = use_checkpoint
         self.encoder_use_checkpoint = use_checkpoint if encoder_use_checkpoint is None else encoder_use_checkpoint
         self.decoder_use_checkpoint = use_checkpoint if decoder_use_checkpoint is None else decoder_use_checkpoint
+        _validate_vision_checkpoint_group_size(name="encoder", group_size=encoder_checkpoint_group_size)
+        _validate_vision_checkpoint_group_size(name="decoder", group_size=decoder_checkpoint_group_size)
+        self.encoder_checkpoint_group_size: int = encoder_checkpoint_group_size
+        self.decoder_checkpoint_group_size: int = decoder_checkpoint_group_size
+        self.fast_position_embedding_upsample_backward: bool = fast_position_embedding_upsample_backward
         self.encoder_dense_train_backend = encoder_dense_train_backend
         self.decoder_dense_train_backend = decoder_dense_train_backend
         self.patch_size = patch_size
@@ -1331,6 +1445,7 @@ class AutoencoderKL(ModelMixin, ConfigMixin, FromOriginalModelMixin):
         self.spatial_pool_size = spatial_pool_size
         self.text_decoder_family = text_decoder_family
         self.text_decoder_packed_attention_backend: Literal["sdpa", "natten"] = text_decoder_packed_attention_backend
+        self.text_decoder_natten_native_rms_norm: bool = text_decoder_natten_native_rms_norm
         self.decoder_temporal_mode = decoder_temporal_mode
         self.decoder_temporal_query_latent_steps = decoder_temporal_query_latent_steps
         self.decoder_temporal_cache_latent_steps = decoder_temporal_cache_latent_steps
@@ -1354,6 +1469,8 @@ class AutoencoderKL(ModelMixin, ConfigMixin, FromOriginalModelMixin):
         self.out_channels = out_channels
         self.random_num_sample_frames_batch_sizes = random_num_sample_frames_batch_sizes
         self.task_random_num_sample_frames_batch_sizes = task_random_num_sample_frames_batch_sizes
+        self.fuse_encoder_temporal_batches: bool = fuse_encoder_temporal_batches
+        self.fuse_decoder_temporal_batches: bool = fuse_decoder_temporal_batches
         self.num_sample_frames_batch_size = 16
         self.num_sample_frames_stride = 12
         self.kv_cache_size = 4
@@ -1396,6 +1513,8 @@ class AutoencoderKL(ModelMixin, ConfigMixin, FromOriginalModelMixin):
             concat_latent=concat_latent,
             use_checkpoint=self.encoder_use_checkpoint,
             dense_train_backend=self.encoder_dense_train_backend,
+            checkpoint_group_size=self.encoder_checkpoint_group_size,
+            fast_position_embedding_upsample_backward=self.fast_position_embedding_upsample_backward,
         )
 
         # Initialize teacher encoder (frozen) — only needed for ITD loss
@@ -1472,6 +1591,8 @@ class AutoencoderKL(ModelMixin, ConfigMixin, FromOriginalModelMixin):
                 multiscale=decoder_multiscale,
                 multiscale_outputs=decoder_multiscale_outputs,
                 dense_train_backend=self.decoder_dense_train_backend,
+                checkpoint_group_size=self.decoder_checkpoint_group_size,
+                fast_position_embedding_upsample_backward=self.fast_position_embedding_upsample_backward,
             )
 
         if use_decoder and use_dual_latent:
@@ -1490,6 +1611,8 @@ class AutoencoderKL(ModelMixin, ConfigMixin, FromOriginalModelMixin):
                 multiscale=decoder_multiscale,
                 multiscale_outputs=decoder_multiscale_outputs,
                 dense_train_backend=self.decoder_dense_train_backend,
+                checkpoint_group_size=self.decoder_checkpoint_group_size,
+                fast_position_embedding_upsample_backward=self.fast_position_embedding_upsample_backward,
             )
 
         self.use_slicing = False
@@ -1541,6 +1664,7 @@ class AutoencoderKL(ModelMixin, ConfigMixin, FromOriginalModelMixin):
                 spatial_pool_size=spatial_pool_size,
                 gradient_checkpointing=text_decoder_gradient_checkpointing,
                 packed_attention_backend=text_decoder_packed_attention_backend,
+                natten_native_rms_norm=text_decoder_natten_native_rms_norm,
                 family_spec=get_text_decoder_family_spec(
                     family=text_decoder_family,
                     model_name=text_decoder_model_name,
@@ -1627,6 +1751,130 @@ class AutoencoderKL(ModelMixin, ConfigMixin, FromOriginalModelMixin):
             raise ValueError(f"{name} must be divisible by patch_size[0]={temporal_patch_size}, got {frame_count}.")
         return frame_count // temporal_patch_size
 
+    def _can_fuse_encoder_temporal_batches(self, x: SparseTensor) -> bool:
+        """Return whether temporal chunks can be encoded as independent packed segments."""
+        return bool(
+            self.fuse_encoder_temporal_batches
+            and x.coords.shape[0] > 0
+            and not x.has_special_tokens()
+            and all(getattr(block, "multiscale", None) is None for block in self.encoder.blocks)
+        )
+
+    @staticmethod
+    def _pack_independent_temporal_batches(x: SparseTensor, frame_batch_size: int) -> SparseTensor:
+        """Remap ordered ``[B,T,...]`` rows to independent temporal segments without reordering."""
+        if frame_batch_size <= 0:
+            raise ValueError(f"frame_batch_size must be positive, got {frame_batch_size}.")
+        if x.coords.shape[0] == 0:
+            return x
+
+        temporal_coords = x.coords[:, 1].long()  # [N]
+        min_frame = int(temporal_coords.min().item())
+        max_frame = int(temporal_coords.max().item())
+        relative_temporal_coords = temporal_coords - min_frame  # [N]
+        temporal_order_span = max_frame - min_frame + 1
+        temporal_order_keys = x.coords[:, 0].long() * temporal_order_span + relative_temporal_coords  # [N]
+        if bool((temporal_order_keys[1:] < temporal_order_keys[:-1]).any().item()):
+            raise ValueError(
+                "Fused temporal batching requires rows ordered by batch and nondecreasing temporal coordinate."
+            )
+
+        num_chunks = (max_frame - min_frame) // frame_batch_size + 1
+        chunk_indices = torch.div(relative_temporal_coords, frame_batch_size, rounding_mode="floor")  # [N]
+        segment_keys = x.coords[:, 0].long() * num_chunks + chunk_indices  # [N]
+        unique_segment_keys, packed_batch_indices = torch.unique_consecutive(
+            segment_keys,
+            return_inverse=True,
+        )  # [M], [N]
+
+        packed_coords = x.coords.clone()  # [N,D]
+        packed_coords[:, 0] = packed_batch_indices.to(dtype=packed_coords.dtype)
+        packed_coords[:, 1] = torch.remainder(relative_temporal_coords, frame_batch_size).to(dtype=packed_coords.dtype)
+        packed_shape = torch.Size([unique_segment_keys.numel(), *x.feats.shape[1:]])
+        return SparseTensor(
+            feats=x.feats,
+            coords=packed_coords,
+            shape=packed_shape,
+            scale=x._scale,
+            has_special_tokens=False,
+        )
+
+    def _encode_fused_temporal_batches(self, x: SparseTensor, frame_batch_size: int) -> SparseTensor:
+        """Encode independent temporal chunks once and restore the original sparse metadata."""
+        packed_x = self._pack_independent_temporal_batches(x, frame_batch_size)
+        if self.freeze_encoder:
+            with torch.no_grad():
+                packed_encoded, _ = self.encoder(packed_x)
+        else:
+            packed_encoded, _ = self.encoder(packed_x)
+        if packed_encoded.feats.shape[0] != x.feats.shape[0]:
+            raise RuntimeError(
+                "Fused temporal encoder must preserve sparse row count, got "
+                f"{packed_encoded.feats.shape[0]} rows for {x.feats.shape[0]} inputs."
+            )
+        if (
+            packed_encoded.coords.data_ptr() != packed_x.coords.data_ptr()
+            or packed_encoded.layout is not packed_x.layout
+        ):
+            raise RuntimeError("Fused temporal encoder must preserve packed coordinate and row-layout identity.")
+        return x.replace(packed_encoded.feats)
+
+    def _can_fuse_decoder_temporal_batches(
+        self,
+        z: SparseTensor,
+        decoder_module: Decoder,
+        *,
+        training: bool,
+        frame_batch_size: int,
+        frame_batch_strides: int,
+        kv_cache_size: int,
+        discrete_decoder: bool,
+    ) -> bool:
+        """Return whether decoder chunks are independent and safe to pack."""
+        return bool(
+            self.fuse_decoder_temporal_batches
+            and self.training
+            and training
+            and self.decoder_temporal_mode == "bidirectional"
+            and frame_batch_strides == frame_batch_size
+            and kv_cache_size == 0
+            and z.coords.shape[0] > 0
+            and not z.has_special_tokens()
+            and not self.use_dual_latent
+            and not discrete_decoder
+            and getattr(decoder_module, "multiscale", None) is None
+            and getattr(decoder_module, "multiscale_outputs", None) is None
+            and all(getattr(block, "multiscale", None) is None for block in decoder_module.blocks)
+        )
+
+    def _decode_fused_temporal_batches(
+        self,
+        z: SparseTensor,
+        decoder_module: Decoder,
+        frame_batch_size: int,
+        kv_cache_detach: bool,
+    ) -> SparseTensor:
+        """Decode independent temporal chunks once and restore the original sparse metadata."""
+        packed_z = self._pack_independent_temporal_batches(z, frame_batch_size)
+        packed_decoded, _ = decoder_module(
+            packed_z,
+            kv_cache=None,
+            kv_cache_size=None,
+            kv_cache_detach=kv_cache_detach,
+            temporal_causal_mask=False,
+        )
+        if packed_decoded.feats.shape[0] != z.feats.shape[0]:
+            raise RuntimeError(
+                "Fused temporal decoder must preserve sparse row count, got "
+                f"{packed_decoded.feats.shape[0]} rows for {z.feats.shape[0]} inputs."
+            )
+        if (
+            packed_decoded.coords.data_ptr() != packed_z.coords.data_ptr()
+            or packed_decoded.layout is not packed_z.layout
+        ):
+            raise RuntimeError("Fused temporal decoder must preserve packed coordinate and row-layout identity.")
+        return z.replace(packed_decoded.feats)
+
     def _encode(
         self,
         x: SparseTensor,
@@ -1654,21 +1902,28 @@ class AutoencoderKL(ModelMixin, ConfigMixin, FromOriginalModelMixin):
             "num_sample_frames_batch_size",
         )
 
-        temporal_slices = x.split_by_temporal_batches(frame_batch_size, adjust_temporal=True)
-        processed_slices = []
+        if self.training and self._can_fuse_encoder_temporal_batches(x):
+            enc_full = self._encode_fused_temporal_batches(x, frame_batch_size)
+        else:
+            temporal_slices = x.split_by_temporal_batches(frame_batch_size, adjust_temporal=True)
+            processed_slices = []
 
-        for x_slice in temporal_slices:
-            if x_slice.coords.shape[0] > 0:
-                if self.freeze_encoder:
-                    with torch.no_grad():
+            for x_slice in temporal_slices:
+                if x_slice.coords.shape[0] > 0:
+                    if self.freeze_encoder:
+                        with torch.no_grad():
+                            enc_slice, _ = self.encoder(x_slice)
+                    else:
                         enc_slice, _ = self.encoder(x_slice)
+                    processed_slices.append(enc_slice)
                 else:
-                    enc_slice, _ = self.encoder(x_slice)
-                processed_slices.append(enc_slice)
-            else:
-                processed_slices.append(x_slice)
+                    processed_slices.append(x_slice)
 
-        enc_full = reconstruct_from_temporal_slices(processed_slices, target_coords=x.coords, use_cached_offsets=True)
+            enc_full = reconstruct_from_temporal_slices(
+                processed_slices,
+                target_coords=x.coords,
+                use_cached_offsets=True,
+            )
 
         # Only compute image features if needed (e.g., for image-text alignment tasks)
         # Skip for reconstruction-only tasks to save computation
@@ -1731,6 +1986,7 @@ class AutoencoderKL(ModelMixin, ConfigMixin, FromOriginalModelMixin):
             Decoded output.
         """
         decoder_temporal_mode = "causal_mask" if self.decoder_temporal_mode == "causal" else self.decoder_temporal_mode
+        decoder_module = self.discrete_decoder if discrete_decoder else self.decoder
 
         if decoder_temporal_mode == "causal_mask" and training:
             if not self._logged_decoder_temporal_plan:
@@ -1739,7 +1995,6 @@ class AutoencoderKL(ModelMixin, ConfigMixin, FromOriginalModelMixin):
                 )
                 self._logged_decoder_temporal_plan = True
 
-            decoder_module = self.discrete_decoder if discrete_decoder else self.decoder
             dec, _ = decoder_module(
                 z,
                 kv_cache=None,
@@ -1758,49 +2013,60 @@ class AutoencoderKL(ModelMixin, ConfigMixin, FromOriginalModelMixin):
             training=training,
         )
 
-        decoder_kv_cache_size: int | None = None if kv_cache_size == 0 else kv_cache_size
-        kv_cache = None
+        if self._can_fuse_decoder_temporal_batches(
+            z,
+            decoder_module,
+            training=training,
+            frame_batch_size=frame_batch_size,
+            frame_batch_strides=frame_batch_strides,
+            kv_cache_size=kv_cache_size,
+            discrete_decoder=discrete_decoder,
+        ):
+            dec = self._decode_fused_temporal_batches(
+                z,
+                decoder_module,
+                frame_batch_size,
+                kv_cache_detach,
+            )
+        else:
+            decoder_kv_cache_size: int | None = None if kv_cache_size == 0 else kv_cache_size
+            kv_cache = None
 
-        temporal_slices = z.split_by_temporal_batches(
-            frame_batch_size,
-            frame_batch_strides,
-            adjust_temporal=True,
-            offset=kv_cache_size,
-        )
-
-        processed_slices = []
-        for z_slice in temporal_slices:
-            if z_slice.coords.shape[0] > 0:
-                if discrete_decoder:
-                    dec_slice, updated_kv_cache = self.discrete_decoder(
-                        z_slice,
-                        kv_cache if decoder_kv_cache_size is not None else None,
-                        decoder_kv_cache_size,
-                        kv_cache_detach=kv_cache_detach,
-                        temporal_causal_mask=False,
-                    )
-                else:
-                    dec_slice, updated_kv_cache = self.decoder(
-                        z_slice,
-                        kv_cache if decoder_kv_cache_size is not None else None,
-                        decoder_kv_cache_size,
-                        kv_cache_detach=kv_cache_detach,
-                        temporal_causal_mask=False,
-                    )
-                if decoder_kv_cache_size is not None:
-                    kv_cache = updated_kv_cache
-                processed_slices.append(dec_slice)
-            else:
-                processed_slices.append(z_slice)
-
-        if not training and frame_batch_size > frame_batch_strides:
-            processed_slices = _crop_temporal_slices_to_ownership(
-                processed_slices,
-                frame_batch_size=frame_batch_size,
-                frame_batch_strides=frame_batch_strides,
+            temporal_slices = z.split_by_temporal_batches(
+                frame_batch_size,
+                frame_batch_strides,
+                adjust_temporal=True,
+                offset=kv_cache_size,
             )
 
-        dec = reconstruct_from_temporal_slices(processed_slices, target_coords=z.coords, use_cached_offsets=True)
+            processed_slices = []
+            for z_slice in temporal_slices:
+                if z_slice.coords.shape[0] > 0:
+                    dec_slice, updated_kv_cache = decoder_module(
+                        z_slice,
+                        kv_cache if decoder_kv_cache_size is not None else None,
+                        decoder_kv_cache_size,
+                        kv_cache_detach=kv_cache_detach,
+                        temporal_causal_mask=False,
+                    )
+                    if decoder_kv_cache_size is not None:
+                        kv_cache = updated_kv_cache
+                    processed_slices.append(dec_slice)
+                else:
+                    processed_slices.append(z_slice)
+
+            if not training and frame_batch_size > frame_batch_strides:
+                processed_slices = _crop_temporal_slices_to_ownership(
+                    processed_slices,
+                    frame_batch_size=frame_batch_size,
+                    frame_batch_strides=frame_batch_strides,
+                )
+
+            dec = reconstruct_from_temporal_slices(
+                processed_slices,
+                target_coords=z.coords,
+                use_cached_offsets=True,
+            )
 
         if not return_dict:
             return (dec,)
