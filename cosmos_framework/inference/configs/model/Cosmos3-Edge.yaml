@@ -149,6 +149,7 @@ model:
             json_file: cosmos3/_src/vfm/models/vlm/nemotron_3_dense_vl/configs/Nemotron-2B-Dense-VL.json
           include_visual: null
           qk_norm_for_text: false
+          use_und_k_norm_for_gen: true
       model_name: nvidia/Cosmos3-Edge-Reasoner
       pretrained_weights:
         _type: cosmos3._src.vfm.configs.base.defaults.vlm.PretrainedWeightsConfig
