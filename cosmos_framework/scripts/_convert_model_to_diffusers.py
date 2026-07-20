@@ -229,12 +229,6 @@ def _remap_language_model_state_dict(state_dict: dict[str, torch.Tensor]) -> dic
     for key, value in state_dict.items():
         if key.startswith(_LANGUAGE_MODEL_VISION_PREFIXES):
             continue
-        # Nemotron's optional generator-only K normalization belongs to the
-        # reasoner artifact. Diffusers' shared transformer intentionally does
-        # not own this auxiliary tensor; it is excluded from the root shared
-        # weight index instead of being silently treated as a shared weight.
-        if ".k_norm_und_for_gen." in key:
-            continue
         remapped_key = _remap_language_model_key(key)
         if remapped_key in remapped_state_dict:
             raise RuntimeError(
@@ -1410,9 +1404,13 @@ def convert_model_to_diffusers(args: Args) -> None:
     if hidden_act is None:
         hidden_act = _get_config_value(lm_cfg, name="mlp_hidden_act", default="silu")
     qk_norm_for_text = bool(_get_config_value(source_vlm_instance_config, name="qk_norm_for_text", default=True))
+    use_und_k_norm_for_gen = bool(
+        _get_config_value(source_vlm_instance_config, name="use_und_k_norm_for_gen", default=False)
+    )
     log.info(
         "Building Diffusers transformer from exported config: "
-        f"hidden_act={hidden_act!r}, qk_norm_for_text={qk_norm_for_text}, action_gen={action_gen}"
+        f"hidden_act={hidden_act!r}, qk_norm_for_text={qk_norm_for_text}, "
+        f"use_und_k_norm_for_gen={use_und_k_norm_for_gen}, action_gen={action_gen}"
     )
 
     # Build Diffusers Cosmos3OmniTransformer from the exported HF architecture config.
@@ -1454,6 +1452,7 @@ def convert_model_to_diffusers(args: Args) -> None:
     optional_transformer_kwargs = {
         "hidden_act": hidden_act,
         "qk_norm_for_text": qk_norm_for_text,
+        "use_und_k_norm_for_gen": use_und_k_norm_for_gen,
         "rope_axes_dim": _get_config_value(lm_cfg.rope_scaling, name="mrope_section", default=None),
     }
     transformer_params = inspect.signature(Cosmos3OmniTransformer.__init__).parameters
