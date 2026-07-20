@@ -145,6 +145,18 @@ class ImageioVideoHandler(BaseFileHandler):
             obj = obj.cpu().numpy()
         h, w = obj.shape[1:-1]
 
+        # H.264 + yuv420p requires both dimensions to be even. Some eval videos
+        # keep the raw camera aspect ratio (for example 569x640), and ffmpeg
+        # fails with "width not divisible by 2" unless we pad before encoding.
+        # Pad minimally on the bottom/right edge so content coordinates remain
+        # unchanged and update ffmpeg's raw input size to match the padded array.
+        pad_h = h % 2
+        pad_w = w % 2
+        if pad_h or pad_w:
+            log.debug(f"Padding video from {w}x{h} to {w + pad_w}x{h + pad_h} for MP4 encoding")
+            obj = np.pad(obj, ((0, 0), (0, pad_h), (0, pad_w), (0, 0)), mode="edge")
+            h, w = obj.shape[1:-1]
+
         # Default ffmpeg params that ensure width and height are set
         default_ffmpeg_params = ["-s", f"{w}x{h}"]
 
@@ -160,13 +172,13 @@ class ImageioVideoHandler(BaseFileHandler):
                 "output_params": ["-f", "mp4"],
             }
         else:
-            # Use provided ffmpeg_params if any, otherwise use defaults
-            final_ffmpeg_params = ffmpeg_params if ffmpeg_params is not None else default_ffmpeg_params
+            # Preserve caller-provided ffmpeg params, but always append the post-padding
+            # input size so custom params cannot leave ffmpeg seeing stale odd dimensions.
             mimsave_kwargs = {
                 "fps": fps,
                 "quality": quality,
                 "macro_block_size": 1,
-                "ffmpeg_params": final_ffmpeg_params,
+                "ffmpeg_params": (ffmpeg_params or []) + default_ffmpeg_params,
                 "output_params": ["-f", "mp4"],
             }
         # Update with any other kwargs

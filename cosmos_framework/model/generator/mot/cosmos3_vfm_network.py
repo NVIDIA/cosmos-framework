@@ -53,6 +53,7 @@ class Cosmos3VFMNetworkConfig(PretrainedConfig):
         sound_dim: int | None = None,
         temporal_compression_factor_sound=1,
         sound_latent_fps: int = 25,
+        enable_input_bias: bool = True,
         **kwargs,
     ):
         self.vision_gen = vision_gen
@@ -76,6 +77,7 @@ class Cosmos3VFMNetworkConfig(PretrainedConfig):
         self.temporal_compression_factor_vision = temporal_compression_factor_vision
         self.natten_parameter_list = natten_parameter_list
         self.video_temporal_causal = video_temporal_causal
+        self.enable_input_bias = enable_input_bias
 
         # action related parameters
         self.action_gen = action_gen  # whether to generate action tokens
@@ -144,8 +146,9 @@ class Cosmos3VFMNetwork(PreTrainedModel):
             self.latent_channel = config.latent_channel_size
             self.patch_latent_dim = self.latent_patch_size**2 * self.latent_channel
 
-            self.time_embedder = TimestepEmbedder(self.hidden_size)
-            self.vae2llm = nn.Linear(self.patch_latent_dim, self.hidden_size)
+            _input_bias = config.enable_input_bias
+            self.time_embedder = TimestepEmbedder(self.hidden_size, bias=_input_bias)
+            self.vae2llm = nn.Linear(self.patch_latent_dim, self.hidden_size, bias=_input_bias)
             self.llm2vae = nn.Linear(self.hidden_size, self.patch_latent_dim)
 
         if config.action_gen:
@@ -158,7 +161,7 @@ class Cosmos3VFMNetwork(PreTrainedModel):
 
         if config.sound_gen:
             self.sound_dim = config.sound_dim
-            self.sound2llm = nn.Linear(config.sound_dim, self.hidden_size)
+            self.sound2llm = nn.Linear(config.sound_dim, self.hidden_size, bias=config.enable_input_bias)
             self.llm2sound = nn.Linear(self.hidden_size, config.sound_dim)
             self.sound_modality_embed = nn.Parameter(torch.zeros(self.hidden_size))
 
@@ -172,7 +175,8 @@ class Cosmos3VFMNetwork(PreTrainedModel):
         if self.config.vision_gen:
             std = 1.0 / math.sqrt(self.patch_latent_dim)
             torch.nn.init.trunc_normal_(self.vae2llm.weight, std=std, a=-3 * std, b=3 * std)
-            torch.nn.init.zeros_(self.vae2llm.bias)
+            if self.config.enable_input_bias:
+                torch.nn.init.zeros_(self.vae2llm.bias)
 
             std = 1.0 / math.sqrt(self.hidden_size)
             torch.nn.init.trunc_normal_(self.llm2vae.weight, std=std, a=-3 * std, b=3 * std)
@@ -197,7 +201,8 @@ class Cosmos3VFMNetwork(PreTrainedModel):
             # sound2llm: input_size=sound_dim, output_size=hidden_size
             std = 1.0 / math.sqrt(self.sound_dim)
             torch.nn.init.trunc_normal_(self.sound2llm.weight, std=std, a=-3 * std, b=3 * std)
-            torch.nn.init.zeros_(self.sound2llm.bias)
+            if self.config.enable_input_bias:
+                torch.nn.init.zeros_(self.sound2llm.bias)
 
             # llm2sound: input_size=hidden_size, output_size=sound_dim
             std = 1.0 / math.sqrt(self.hidden_size)

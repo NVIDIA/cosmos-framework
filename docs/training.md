@@ -14,6 +14,8 @@ ______________________________________________________________________
   - [Option B: raw `torchrun`](#option-b-raw-torchrun)
 - [Outputs](#outputs)
 - [Export checkpoint to Hugging Face safetensors](#export-checkpoint-to-hugging-face-safetensors)
+  - [ViT / vision tower (Cosmos3-Edge)](#vit--vision-tower-cosmos3-edge)
+- [Convert to Diffusers](#convert-to-diffusers)
 - [Config](#config)
   - [Common Hydra tail overrides](#common-hydra-tail-overrides)
 
@@ -77,6 +79,25 @@ uvx hf@latest download Wan-AI/Wan2.2-TI2V-5B Wan2.2_VAE.pth \
 
 </details>
 
+<details><summary><b>Vision SFT (Cosmos3-Edge)</b></summary>
+
+Full fine-tune of the Nemotron-2B-Dense-VL backbone (Cosmos3-Edge), on the same Bridge dataset as **Vision SFT (Cosmos3-Nano)**. Step 2 must convert the Cosmos3-Edge checkpoint, not Cosmos3-Nano.
+
+Launch shell: `examples/launch_sft_vision_edge.sh`
+
+```shell
+BASE_CHECKPOINT_NAME=Cosmos3-Edge
+
+# Defaults match the launcher (see Step 3 → Option A to override).
+uvx hf@latest download --repo-type dataset nvidia/BridgeData2-Subset-Synthetic-Captions \
+    --revision 40d018ac1c1a2a4b9734f17fdb21f3d933c49a01 \
+    --local-dir examples/data/BridgeData2-Subset-Synthetic-Captions --quiet
+uvx hf@latest download Wan-AI/Wan2.2-TI2V-5B Wan2.2_VAE.pth \
+    --local-dir examples/checkpoints/wan22_vae --quiet
+```
+
+</details>
+
 <details><summary><b>Reasoner Alignment SFT with LLaVA-OneVision (vfm-vlm)</b></summary>
 
 Alignment SFT for the Reasoner variant on the [lmms-lab/LLaVA-OneVision-Data](https://huggingface.co/datasets/lmms-lab/LLaVA-OneVision-Data) dataset (streamed from HF Hub). Skips Step 2: by default the backbone `Qwen/Qwen3-VL-8B-Instruct` is fetched from the HF Hub by the model downloader at startup — no DCP conversion needed and no required env vars. To instead start from a merged Cosmos3 reasoner snapshot (Cosmos3-Nano LM merged onto the Qwen3-VL visual tower), build it with `convert_model_to_vlm_safetensors` (see [Step 2](#step-2--prepare-checkpoint)) and point `VLM_SAFETENSORS_PATH` at it — same mechanism as the VideoPhy-2 recipe below.
@@ -115,14 +136,57 @@ python -m cosmos_framework.scripts.reasoner.prepare_videophy2_from_hf \
 
 </details>
 
+<details><summary><b>Reasoner Alignment SFT with VideoPhy-2 (Cosmos3-Super)</b></summary>
+
+Super-tier counterpart of the VideoPhy-2 recipe above: same 1–5 physical-plausibility scoring on [videophysics/videophy2_train](https://huggingface.co/datasets/videophysics/videophy2_train), but a full fine-tune of the 32B backbone. `[job].task = "vlm"`. Bootstraps from `Cosmos3-Super`'s language-model weights merged onto the public Qwen3-VL-32B-Instruct visual tower; the merged HF directory is consumed via `[model.backbone].safetensors_path` (plumbed by `VLM_SAFETENSORS_PATH`). Full-shard FSDP across all ranks, so it runs on a 4-GPU (e.g. GB200x4) or 8-GPU allocation.
+
+Launch shell: `examples/launch_sft_videophy2_super.sh`
+
+```shell
+# Step 1 (data): same as the nano recipe — materialize the public HF dataset into
+# the canonical local layout (videophy2_{train,val}/{meta.json, media/, text/}).
+python -m cosmos_framework.scripts.reasoner.prepare_videophy2_from_hf \
+    --out_root examples/data/videophysics --split both
+```
+
+</details>
+
+<details><summary><b>Reasoner Alignment SFT with VideoPhy-2 (Cosmos3-Edge)</b></summary>
+
+Edge-tier counterpart of the VideoPhy-2 recipe above: same 1–5 physical-plausibility scoring on [videophysics/videophy2_train](https://huggingface.co/datasets/videophysics/videophy2_train), but on the compact **Nemotron-2B-Dense-VL** reasoner (SigLIP2 vision tower, `model_type = "cosmos3_edge"` — native HF metadata, no remote code; the model classes are registered in-framework) instead of Qwen3-VL. `[job].task = "vlm"`. The vision tower is frozen; the projector + LM train at a uniform LR. `[model.backbone].model_name` is the **public, ungated** omni release `nvidia/Cosmos3-Edge`, which supplies the arch/config/tokenizer **and** the reasoner weights: the training loader follows the snapshot's root safetensors index into its weight shards, so weights load directly from the download — no conversion step and no required weights env var. Like the nano/super recipes, `VLM_SAFETENSORS_PATH` is an optional override for loading from a local safetensors directory instead. The reasoner weights shipped inside `nvidia/Cosmos3-Edge` are the canonical Edge reasoner weights — there is no separate reasoner repo to download. Only 2B, so it runs on a 4-GPU (e.g. GB200x4) or 8-GPU allocation.
+
+Launch shell: `examples/launch_sft_videophy2_edge.sh`
+
+```shell
+# Step 1 (data): same as the nano recipe — materialize the public HF dataset into
+# the canonical local layout (videophy2_{train,val}/{meta.json, media/, text/}).
+python -m cosmos_framework.scripts.reasoner.prepare_videophy2_from_hf \
+    --out_root examples/data/videophysics --split both
+```
+
+</details>
+
+<details><summary><b>Action-Policy Post-Training (DROID / LIBERO)</b></summary>
+
+Robot action-policy recipes: DROID (`joint_pos` 8-D actions + proprioceptive state) and
+LIBERO (`frame_wise_relative` rot6d 10-D actions), both from Cosmos3-Nano. They follow the same Step 2/Step 3 flow below, with their own data staging
+(DROID keep-ranges window filter, LIBERO suite selection), and are documented separately:
+
+- [DROID action policy](./action_policy_droid_posttrain.md) —
+  `examples/launch_sft_action_policy_droid_nano.sh`
+- [LIBERO action policy](./action_policy_libero_posttrain.md) —
+  `examples/launch_sft_action_policy_libero_10_nano.sh` / `examples/launch_sft_action_policy_libero_all_nano.sh`
+
+</details>
+
 ## Step 2 — Prepare checkpoint
 
 Convert the base checkpoint to [PyTorch Distributed Checkpoint (DCP)](https://pytorch.org/docs/stable/distributed.checkpoint.html) format. `cosmos_framework.scripts.convert_model_to_dcp` ships in the unified `cosmos_framework/` package, so this step runs from the repo root (with the environment activated per [Setup](./setup.md)).
 
-Set `BASE_CHECKPOINT_NAME` to the value from the recipe block you picked in Step 1 (`Cosmos3-Nano` or `Cosmos3-Super`):
+Set `BASE_CHECKPOINT_NAME` to the value from the recipe block you picked in Step 1 (`Cosmos3-Nano`, `Cosmos3-Super`, or `Cosmos3-Edge`):
 
 ```shell
-BASE_CHECKPOINT_NAME=Cosmos3-Nano   # or Cosmos3-Super — match the recipe in Step 1
+BASE_CHECKPOINT_NAME=Cosmos3-Nano   # or Cosmos3-Super / Cosmos3-Edge — match the recipe in Step 1
 
 # Default output dir matches the launcher (see Step 3 → Option A to override).
 python -m cosmos_framework.scripts.convert_model_to_dcp \
@@ -130,7 +194,7 @@ python -m cosmos_framework.scripts.convert_model_to_dcp \
   --checkpoint-path $BASE_CHECKPOINT_NAME
 ```
 
-`$BASE_CHECKPOINT_NAME` (e.g. `Cosmos3-Nano`, `Cosmos3-Super`) is a registered name in the checkpoint catalog; the converter downloads the matching repo from the Hugging Face Hub and writes the DCP into `examples/checkpoints/$BASE_CHECKPOINT_NAME`.
+`$BASE_CHECKPOINT_NAME` (e.g. `Cosmos3-Nano`, `Cosmos3-Super`, `Cosmos3-Edge`) is a registered name in the checkpoint catalog; the converter downloads the matching repo from the Hugging Face Hub and writes the DCP into `examples/checkpoints/$BASE_CHECKPOINT_NAME`.
 
 **Reasoner Alignment SFT with LLaVA-OneVision (vfm-vlm):** Skip this step — the Reasoner alignment SFT loads `Qwen/Qwen3-VL-8B-Instruct` from the HF Hub at startup (no DCP conversion required). To start from a merged Cosmos3 reasoner snapshot instead, build one with `convert_model_to_vlm_safetensors` (see the VideoPhy-2 note below) and pass it via `VLM_SAFETENSORS_PATH`.
 
@@ -143,6 +207,18 @@ python -m cosmos_framework.scripts.convert_model_to_vlm_safetensors \
     --checkpoint-path Cosmos3-Nano \
     -o examples/checkpoints/Cosmos3-Nano-VLM
 ```
+
+**Reasoner Alignment SFT with VideoPhy-2 (Cosmos3-Super):** Same converter, but merge the `Cosmos3-Super` LM onto the **32B** Qwen3-VL visual tower via `--vlm-model-name Qwen/Qwen3-VL-32B-Instruct`.
+
+```shell
+# Step 2 (Super VLM checkpoint): merge Cosmos3-Super LM onto the Qwen3-VL-32B visual tower.
+python -m cosmos_framework.scripts.convert_model_to_vlm_safetensors \
+    --checkpoint-path Cosmos3-Super \
+    --vlm-model-name Qwen/Qwen3-VL-32B-Instruct \
+    -o examples/checkpoints/Cosmos3-Super-VLM
+```
+
+**Reasoner Alignment SFT with VideoPhy-2 (Cosmos3-Edge):** Skip this step — the recipe loads the reasoner weights directly from the (ungated) `nvidia/Cosmos3-Edge` snapshot at startup: the training loader follows the repo's root safetensors index into its weight shards, so no conversion or extraction is required. To start from a local safetensors directory instead, point `VLM_SAFETENSORS_PATH` at it (optional, same mechanism as the nano recipe).
 
 ## Step 3 — Run training
 
@@ -163,10 +239,15 @@ Each launcher's default paths come from the `DATASET_PATH` + `BASE_CHECKPOINT_PA
 | ------------------------------ | ------------------ | ---------------------------------------------------------- | ------------------------------------------------------------------ |
 | `launch_sft_vision_nano.sh`    | Generator SFT      | `BridgeData2-Subset-Synthetic-Captions/sft_dataset_bridge` | `Cosmos3-Nano`                                                     |
 | `launch_sft_vision_super.sh`   | Generator SFT      | `BridgeData2-Subset-Synthetic-Captions/sft_dataset_bridge` | `Cosmos3-Super`                                                    |
+| `launch_sft_vision_edge.sh`    | Generator SFT      | `BridgeData2-Subset-Synthetic-Captions/sft_dataset_bridge` | `Cosmos3-Edge`                                                     |
 | `launch_sft_llava_ov.sh`       | Reasoner SFT       | (none; dataset streams from HF Hub)                        | (none; backbone fetched at startup, or set `VLM_SAFETENSORS_PATH`) |
 | `launch_sft_videophy2_nano.sh` | Reasoner SFT       | (none; set `VIDEOPHYSICS_ROOT` env)                        | (none; set `VLM_SAFETENSORS_PATH` env)                             |
+| `launch_sft_videophy2_super.sh`| Reasoner SFT       | (none; set `VIDEOPHYSICS_ROOT` env)                        | (none; set `VLM_SAFETENSORS_PATH` env — Cosmos3-Super-VLM merge)   |
+| `launch_sft_videophy2_edge.sh` | Reasoner SFT       | (none; set `VIDEOPHYSICS_ROOT` env)                        | (none; weights load directly from `nvidia/Cosmos3-Edge`)           |
 
 `WAN_VAE_PATH` defaults to `examples/checkpoints/wan22_vae/Wan2.2_VAE.pth` for every non-reasoner recipe.
+
+Cosmos3-Edge is only 2B and also fits a 4-GPU node — e.g. `NPROC_PER_NODE=4 bash examples/launch_sft_vision_edge.sh` (tested on 4×GB200).
 
 **Reasoner Alignment SFT with VideoPhy-2 (Cosmos3-Nano):**
 
@@ -175,6 +256,26 @@ Each launcher's default paths come from the `DATASET_PATH` + `BASE_CHECKPOINT_PA
 export VIDEOPHYSICS_ROOT=$PWD/examples/data/videophysics
 export VLM_SAFETENSORS_PATH=$PWD/examples/checkpoints/Cosmos3-Nano-VLM
 bash examples/launch_sft_videophy2_nano.sh
+```
+
+**Reasoner Alignment SFT with VideoPhy-2 (Cosmos3-Super):**
+
+```shell
+# Same as the nano recipe, but point VLM_SAFETENSORS_PATH at the Cosmos3-Super
+# merge from Step 2. On a 4-GPU node (e.g. GB200x4) also set NPROC_PER_NODE=4.
+export VIDEOPHYSICS_ROOT=$PWD/examples/data/videophysics
+export VLM_SAFETENSORS_PATH=$PWD/examples/checkpoints/Cosmos3-Super-VLM
+bash examples/launch_sft_videophy2_super.sh
+```
+
+**Reasoner Alignment SFT with VideoPhy-2 (Cosmos3-Edge):**
+
+```shell
+# Same as the nano recipe, but no VLM_SAFETENSORS_PATH is needed: the reasoner
+# weights load directly from the (ungated) nvidia/Cosmos3-Edge snapshot.
+# Only 2B — on a 4-GPU node set NPROC_PER_NODE=4.
+export VIDEOPHYSICS_ROOT=$PWD/examples/data/videophysics
+bash examples/launch_sft_videophy2_edge.sh
 ```
 
 #### Overriding the defaults
@@ -259,6 +360,52 @@ python -m cosmos_framework.scripts.export_model \
 ```
 
 The exported safetensors land at `$RUN_DIR/model` and can be used in [Inference](../README.md#inference) commands by passing `--checkpoint-path $RUN_DIR/model`.
+
+### ViT / vision tower (Cosmos3-Edge)
+
+The plain export above is all any recipe needs — Edge included. For Cosmos3-Edge, `export_model` bundles the SigLIP2 vision tower into `$RUN_DIR/model/vision_encoder/` and the processor/tokenizer files into the export root, so the exported directory is **self-contained**: inference runs from it offline, with no Hub download (see [Inference → Reasoner](./inference.md#reasoner)). `export_manifest.json` records where the tower and processor came from. Nano/Super exports bundle their processor files the same way.
+
+Optional flags:
+
+```shell
+# --no-vit: generation-only export (T2V / I2V / V2V / T2I), ~1 GB smaller.
+#     Writes include_visual=false so the checkpoint loads cleanly everywhere.
+python -m cosmos_framework.scripts.export_model \
+  --checkpoint-path $CHECKPOINT_PATH \
+  --config-file $RUN_DIR/config.yaml \
+  --no-vit \
+  -o $RUN_DIR/model
+
+# --vit-checkpoint-path: use a custom tower from a local directory
+#     (a snapshot root or a vision_encoder/ directory).
+python -m cosmos_framework.scripts.export_model \
+  --checkpoint-path $CHECKPOINT_PATH \
+  --config-file $RUN_DIR/config.yaml \
+  --vit-checkpoint-path /path/to/snapshot \
+  -o $RUN_DIR/model
+
+# --verify: smoke-test the export on this node's GPU (tiny reasoner query +
+#     tiny generation). A failure exits non-zero but keeps the export.
+python -m cosmos_framework.scripts.export_model \
+  --checkpoint-path $CHECKPOINT_PATH \
+  --config-file $RUN_DIR/config.yaml \
+  --verify \
+  -o $RUN_DIR/model
+```
+
+## Convert to Diffusers
+
+Convert the Hugging Face export from the previous step into a Diffusers pipeline (`transformer/`, `vae/`, `scheduler/`, `text_tokenizer/`, `model_index.json`, …):
+
+```shell
+python -m cosmos_framework.scripts.convert_model_to_diffusers \
+  --checkpoint-path $RUN_DIR/model \
+  -o $RUN_DIR/diffusers
+```
+
+The input is the Hugging Face safetensors directory produced by `export_model` above — not a raw DCP checkpoint, so run the export first. The result at `$RUN_DIR/diffusers` can be loaded with `diffusers` or passed to [Inference](../README.md#inference) via `--checkpoint-path $RUN_DIR/diffusers`.
+
+A generation-only checkpoint with no reasoner vision tower (`include_visual` unset) is converted without a `vision_encoder/` sidecar automatically; pass `--skip-vision-encoder` to force-skip it even when a tower is present.
 
 ## Config
 

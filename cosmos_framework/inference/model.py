@@ -34,6 +34,7 @@ from typing_extensions import TYPE_CHECKING, assert_never
 
 from cosmos_framework.configs.base.defaults.compile import CompileConfig
 from cosmos_framework.configs.base.defaults.parallelism import ParallelismConfig
+from cosmos_framework.configs.base.defaults.quantization import QuantizationConfig
 from cosmos_framework.inference.common.args import CheckpointType
 from cosmos_framework.inference.common.checkpoints import register_checkpoints
 from cosmos_framework.inference.common.config import structure_config, undo_config_dict_replacements, unstructure_config
@@ -191,9 +192,29 @@ def _read_safetensors_index(index_path: Path) -> dict[str, str]:
 
 def _diffusers_weight_map(checkpoint_path: Path) -> dict[str, str]:
     index_path = checkpoint_path / _DIFFUSERS_ROOT_INDEX
-    if not index_path.exists():
-        raise FileNotFoundError(f"Diffusers safetensors index not found: {index_path}")
-    return _read_safetensors_index(index_path)
+    weight_map = _read_safetensors_index(index_path) if index_path.exists() else {}
+    # The generator-only K norm (`k_norm_und_for_gen`) belongs to the transformer
+    # component and must be sourced from its own index under the diffusers name
+    # (`layers.N...`). The converter is supposed to exclude it from the root index
+    # (see _convert_model_to_diffusers._remap_language_model_state_dict), but
+    # checkpoints exported before that fix (e.g. nvidia/Cosmos3-Edge-Policy-DROID)
+    # leak it into the root index under the raw model-internal name
+    # (`layers.layers.N...`), which points at tensors absent from the shards and
+    # breaks loading. Drop any root-index k-norm entries and let the transformer
+    # index below supply the correctly named ones.
+    weight_map = {k: v for k, v in weight_map.items() if ".k_norm_und_for_gen." not in k}
+    # The root index may be a reasoner manifest (e.g. Cosmos3-Edge) that lists only the
+    # shared understanding-pathway weights and the vision tower. The transformer
+    # component's own index holds the complete DiT state — including the
+    # generation-pathway tensors (`*_moe_gen`, `add_*`) absent from such a root index.
+    # Merge it (root entries win) so the full generator can be loaded.
+    transformer_index_path = checkpoint_path / "transformer" / "diffusion_pytorch_model.safetensors.index.json"
+    if transformer_index_path.exists():
+        for key, rel_path in _read_safetensors_index(transformer_index_path).items():
+            weight_map.setdefault(key, f"transformer/{rel_path}")
+    if not weight_map:
+        raise FileNotFoundError(f"Diffusers safetensors index not found at {index_path} or {transformer_index_path}")
+    return weight_map
 
 
 def _diffusers_files_to_keys(weight_map: dict[str, str]) -> dict[str, list[str]]:
@@ -207,11 +228,42 @@ def _diffusers_files_to_keys(weight_map: dict[str, str]) -> dict[str, list[str]]
 
 def _is_diffusers_checkpoint(checkpoint_path: Path) -> bool:
     index_path = checkpoint_path / _DIFFUSERS_ROOT_INDEX
+    transformer_index_path = checkpoint_path / "transformer" / "diffusion_pytorch_model.safetensors.index.json"
+    if (checkpoint_path / _DIFFUSERS_MODEL_INDEX).exists() and (index_path.exists() or transformer_index_path.exists()):
+        return True
     if not index_path.exists():
         return False
-    if (checkpoint_path / _DIFFUSERS_MODEL_INDEX).exists():
-        return True
     return any(_is_diffusers_model_weight_path(path) for path in _read_safetensors_index(index_path).values())
+
+
+_LM_VISUAL_KEY_MARKER = "language_model.visual."
+
+
+def _raise_on_missing_vision_keys(checkpoint_path: Path, state_dict: dict[str, Any]) -> None:
+    """Curated error for root-safetensors checkpoints that lack the reasoner vision tower.
+
+    Mirrors ``_DiffusersLoadPlanner``'s tolerant/curated missing-keys handling for
+    the plain ``HuggingFaceStorageReader`` path: a model built with a visual tower
+    (``include_visual=True``) cannot load from a checkpoint exported with
+    ``--no-vit``; without this pre-check, ``dcp.load`` dies mid-load with a raw
+    ``Missing key in checkpoint state_dict: model.net.language_model.visual...``.
+    """
+    wanted = sorted(key for key in state_dict if _LM_VISUAL_KEY_MARKER in key)
+    if not wanted:
+        return
+    # Root index shares its filename with the diffusers layout ("model.safetensors.index.json").
+    index_path = checkpoint_path / _DIFFUSERS_ROOT_INDEX
+    if not index_path.exists():
+        return
+    if any(_LM_VISUAL_KEY_MARKER in key for key in _read_safetensors_index(index_path)):
+        return
+    raise ValueError(
+        f"Checkpoint at {checkpoint_path} provides none of the {len(wanted)} reasoner vision-tower "
+        f"tensor(s) the model config requires (first: {wanted[0]!r}). It was likely exported with "
+        "--no-vit while its config still enables the visual tower. Fix: re-export with the default "
+        "--vit (or use a full checkpoint); for generation-only use, re-export with --no-vit — new "
+        "--no-vit exports write include_visual=false so the model loads without the tower."
+    )
 
 
 def _normalize_diffusers_target_key(name: str) -> str:
@@ -354,10 +406,17 @@ class _DiffusersLoadPlanner(dcp.DefaultLoadPlanner):
     def _build_remapped_state_dict(self, target_state_dict: dict[str, Any]) -> tuple[dict[str, Any], set[str]]:
         remapped_state_dict: dict[str, Any] = {}
         loaded_keys: set[str] = set()
+        # When the model is built without a visual tower (e.g. Cosmos3-Edge t2i with
+        # include_visual disabled), its state dict has no `language_model.visual.*`
+        # targets, so the checkpoint's vision_encoder weights have nowhere to go — skip
+        # them rather than erroring on unmapped projector/visual keys.
+        has_visual_target = any(key.startswith("language_model.visual.") for key in target_state_dict)
         for diff_key, rel_path in sorted(self.weight_map.items()):
             net_key = _diffusers_to_net_key(diff_key, rel_path)
             if net_key is None:
                 if _is_diffusers_model_weight_path(rel_path):
+                    if rel_path.startswith("vision_encoder/") and not has_visual_target:
+                        continue
                     raise KeyError(f"Diffusers model key {diff_key!r} from {rel_path!r} has no Cosmos3 mapping.")
                 continue
             target_tensor = target_state_dict.get(net_key)
@@ -416,6 +475,16 @@ class Cosmos3OmniConfig(transformers.PretrainedConfig):
             return
         self.model.setdefault("config", {})["compile"] = unstructure_config(CompileConfig(**value))
 
+    @property
+    def quantization(self) -> dict:
+        return self.model.get("config", {}).get("quantization", {})
+
+    @quantization.setter
+    def quantization(self, value: dict | None):
+        if value is None:
+            return
+        self.model.setdefault("config", {})["quantization"] = unstructure_config(QuantizationConfig(**value))
+
 
 class Cosmos3OmniModel(transformers.PreTrainedModel):
     config_class = Cosmos3OmniConfig  # type: ignore
@@ -448,6 +517,7 @@ class Cosmos3OmniModel(transformers.PreTrainedModel):
         config: Cosmos3OmniConfig | None = None,
         parallelism_config: ParallelismConfig | None = None,
         compile_config: CompileConfig | None = None,
+        quantization_config: QuantizationConfig | None = None,
     ):
         if config is None:
             config = Cosmos3OmniConfig.from_pretrained(checkpoint_path)
@@ -455,9 +525,19 @@ class Cosmos3OmniModel(transformers.PreTrainedModel):
             parallelism_config = ParallelismConfig()
         if compile_config is None:
             compile_config = CompileConfig()
+        if quantization_config is None:
+            quantization_config = QuantizationConfig()
         config.parallelism = attrs.asdict(parallelism_config)
         config.compile = attrs.asdict(compile_config)
+        config.quantization = attrs.asdict(quantization_config)
         model = cls(config)
+        # Thread the local checkpoint dir to the reasoner LM (consumed by Edge's
+        # lazy ``_ensure_vision_tower``): checkpoints that bundle a
+        # ``vision_encoder/`` next to the weights then load it without any hub
+        # access. Harmless when the dir has no bundle (hub fallback applies).
+        language_model = getattr(getattr(model.model, "net", None), "language_model", None)
+        if language_model is not None:
+            language_model._local_checkpoint_dir = str(checkpoint_path)
         checkpoint_type = CheckpointType.from_path(checkpoint_path)
         match checkpoint_type:
             case CheckpointType.DCP:
@@ -466,13 +546,21 @@ class Cosmos3OmniModel(transformers.PreTrainedModel):
             case CheckpointType.HF:
                 if _is_diffusers_checkpoint(checkpoint_path):
                     state_dict = get_model_state_dict(model.model.net)
+                    # Single-rank load must skip DCP's collective path: it gathers
+                    # (pickles) the load plan across ranks, and _DiffusersLoadPlanner
+                    # carries code objects that cannot be pickled ("cannot pickle
+                    # code objects"). no_dist loads locally without collectives.
+                    _dist = torch.distributed
+                    no_dist = not (_dist.is_available() and _dist.is_initialized() and _dist.get_world_size() > 1)
                     dcp.load(
                         state_dict=state_dict,
                         storage_reader=_DiffusersHuggingFaceStorageReader(checkpoint_path),
                         planner=_DiffusersLoadPlanner(checkpoint_path),
+                        no_dist=no_dist,
                     )
                     return model
                 state_dict = get_model_state_dict(model)
+                _raise_on_missing_vision_keys(checkpoint_path, state_dict)
                 storage_reader = HuggingFaceStorageReader(str(checkpoint_path))
             case _:
                 assert_never(checkpoint_type)

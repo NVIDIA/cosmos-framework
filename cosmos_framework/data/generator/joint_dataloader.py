@@ -40,6 +40,7 @@ def custom_collate_fn(batch):
         "images",
         "video",
         "action",
+        "action_raw",
         "domain_id",
         "sequence_plan",
         "sound",
@@ -473,7 +474,7 @@ class JointDataLoader(webdataset.WebLoader):
     # Keys where each sample may hold multiple tensors (e.g. multiple video
     # clips in a packed sequence).  Kept as single-element lists per sample
     # via v[i:i+1] so that _update_output_batch yields list[list[Tensor]].
-    _MULTI_ITEM_KEYS = {"text_token_ids", "images", "video", "action", "sound"}
+    _MULTI_ITEM_KEYS = {"text_token_ids", "images", "video", "action", "action_raw", "sound"}
 
     def _get_next_sample(self, index_id: int) -> dict:
         """Pop the next single-sample dict from the buffer for the given dataloader.
@@ -494,8 +495,8 @@ class JointDataLoader(webdataset.WebLoader):
         After ``_update_output_batch`` accumulates samples, the packed output
         batch has the following shapes:
             - Multi-item keys (``text_token_ids``, ``video``, ``images``,
-              ``action``): ``list[list[Tensor]]`` — each inner list has one
-              element from one sub-sample.
+              ``action_raw``, ``action``): ``list[list[Tensor]]`` — each inner
+              list has one element from one sub-sample.
             - Per-sequence metadata keys (``sequence_plan``, ``domain_id``,
               ``dataset_name``, etc.): ``list[element]`` — flat list.
             - Tensor-origin keys: ``list[Tensor(1, ...)]``.

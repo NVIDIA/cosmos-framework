@@ -278,9 +278,7 @@ class NemotronVLProcessor:
         else:
             self.video_token_id = None
         self.eos_id = self.processor.tokenizer.eos_token_id
-        self.pad_id = self.processor.tokenizer.convert_tokens_to_ids(
-            "<SPECIAL_999>"
-        )
+        self.pad_id = self.processor.tokenizer.convert_tokens_to_ids("<SPECIAL_999>")
         self.vision_end_id = self.processor.tokenizer.convert_tokens_to_ids("</img>")
 
         # Helper attributes for the dataloader video decoding function

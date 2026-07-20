@@ -60,6 +60,14 @@ def is_blackwell_dc(device: torch.device | None = None) -> bool:
     return get_arch_tag(device) in [100, 103]
 
 
+def is_blackwell(device: torch.device | None = None) -> bool:
+    """True for any Blackwell GPU: data-center (sm_100/103), Thor (sm_110, DRIVE/Jetson Thor),
+    or workstation/consumer (sm_120/121, e.g. RTX PRO 6000 / RTX 50-series). This matches the
+    non-data-center grouping ``[110, 120, 121]`` in ``get_backend_list``. Use ``is_blackwell_dc``
+    when a check must be restricted to the data-center parts (e.g. kernels only qualified there)."""
+    return get_arch_tag(device) in [100, 103, 110, 120, 121]
+
+
 __all__ = [
     "get_arch_tag",
     "log_or_raise_error",
@@ -68,6 +76,7 @@ __all__ = [
     "is_fp8",
     "is_hopper",
     "is_blackwell_dc",
+    "is_blackwell",
     "is_torch_compiling",
     "torch_deterministic_mode",
 ]

@@ -73,6 +73,7 @@ That prints the captured series for each spec; copy them into the matching
 
 from __future__ import annotations
 
+import json
 import os
 import re
 import shutil
@@ -108,13 +109,19 @@ def _free_port() -> int:
 
 
 def _hf_download(args: list[str]) -> str:
-    """``uvx hf download <args> --quiet`` -> the local path it prints (from the HF cache)."""
-    result = subprocess.run(
-        ["uvx", "hf@latest", "download", *args, "--quiet"],
-        cwd=str(REPO_ROOT),
-        capture_output=True,
-        text=True,
-    )
+    """``uvx hf download <args> --quiet`` -> the local path it prints (from the HF cache).
+
+    Retries once with ``--refresh``: ``@latest`` doesn't refresh dependency index metadata.
+    """
+    for uvx in (["uvx"], ["uvx", "--refresh"]):
+        result = subprocess.run(
+            [*uvx, "hf@latest", "download", *args, "--quiet"],
+            cwd=str(REPO_ROOT),
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode == 0:
+            break
     if result.returncode != 0:
         pytest.fail(f"hf download failed for {args} (exit {result.returncode}):\n{result.stdout}\n{result.stderr}")
     lines = [ln.strip() for ln in result.stdout.splitlines() if ln.strip()]
@@ -287,6 +294,17 @@ def _build_specs(paths: dict[str, str]) -> dict[str, LaunchSpec]:
             key="vision_sft_nano",
             sft_toml="examples/toml/sft_config/vision_sft_nano.toml",
             extra_hydra_args=(
+                # Pin the learning rate to the value the goldens below were
+                # captured at (2e-5). The shipped recipe (vision_sft_nano.toml)
+                # was retuned to 1e-4, which changes the loss trajectory from
+                # iter 1 on (iter-0 is lr-independent). This override keeps the
+                # numerical-regression guard decoupled from recipe-lr tuning, so
+                # the committed h100 AND gb200 goldens stay valid without a GPU
+                # recapture. Trailing overrides win over the TOML value (see
+                # sft_config.load_experiment_from_toml). If you intentionally
+                # want CI to guard the 1e-4 trajectory instead, drop this line
+                # and refresh the goldens with COSMOS_REGRESSION_UPDATE_GOLDENS=1.
+                "optimizer.lr=2.0e-5",
                 "model.config.parallelism.data_parallel_shard_degree=4",
                 "model.config.compile.enabled=true",
                 "trainer.max_iter=10",
@@ -506,6 +524,101 @@ def _load_st_tensor(directory: Path, key: str, weight_map: dict[str, str]):
         return f.get_tensor(key)
 
 
+def _safetensors_keys(path: Path) -> set[str]:
+    """Read tensor names from a safetensors header without materializing weights."""
+    from safetensors import safe_open
+
+    assert path.is_file() and path.stat().st_size > 8, f"safetensors file missing or empty: {path}"
+    with safe_open(str(path), framework="pt") as f:
+        return set(f.keys())
+
+
+def _assert_diffusers_export_complete(model_dir: Path, reference_dir: Path) -> None:
+    """Validate the component files and safetensors indexes of a Nano Diffusers export."""
+    required_files = (
+        "checkpoint.json",
+        "config.json",
+        "model_index.json",
+        "model.safetensors.index.json",
+        "scheduler/scheduler_config.json",
+        "sound_tokenizer/config.json",
+        "sound_tokenizer/diffusion_pytorch_model.safetensors",
+        "tokenizer_config.json",
+        "transformer/config.json",
+        "transformer/diffusion_pytorch_model.safetensors.index.json",
+        "vae/config.json",
+        "vae/diffusion_pytorch_model.safetensors",
+        "vision_encoder/config.json",
+        "vision_encoder/model.safetensors",
+    )
+    for rel_path in required_files:
+        path = model_dir / rel_path
+        assert path.is_file() and path.stat().st_size > 0, f"Diffusers export missing or empty: {path}"
+
+    pipeline_config = json.loads((model_dir / "model_index.json").read_text())
+    assert pipeline_config["_class_name"] == "Cosmos3OmniPipeline"
+    # The public Diffusers pipeline does not register the Qwen vision encoder as
+    # a pipeline component; it is saved as a sidecar for transformers/vLLM and
+    # validated below through its required files, weight index, and tensor header.
+    for component in ("scheduler", "sound_tokenizer", "transformer", "vae"):
+        assert component in pipeline_config, f"Diffusers model_index.json is missing component {component!r}"
+
+    model_config = json.loads((model_dir / "config.json").read_text())
+    assert model_config["architectures"] == ["Cosmos3ForConditionalGeneration"]
+    assert model_config["model_type"] == "cosmos3_omni"
+    assert isinstance(model_config.get("model"), dict) and model_config["model"]
+
+    top_index = json.loads((model_dir / "model.safetensors.index.json").read_text())
+    top_weight_map: dict[str, str] = top_index["weight_map"]
+    assert top_weight_map, "top-level Diffusers safetensors index has no tensors"
+    assert top_index.get("metadata", {}).get("total_size", 0) > 0
+
+    reference_index = json.loads((reference_dir / "model.safetensors.index.json").read_text())
+    assert top_weight_map == reference_index["weight_map"]
+    assert {str(path.relative_to(model_dir)) for path in model_dir.rglob("*.safetensors")} == {
+        str(path.relative_to(reference_dir)) for path in reference_dir.rglob("*.safetensors")
+    }
+
+    indexed_files = set(top_weight_map.values())
+    assert indexed_files, "top-level Diffusers safetensors index references no files"
+    expected_indexed_files = {
+        f"transformer/{path.name}" for path in (model_dir / "transformer").glob("*.safetensors")
+    }
+    expected_indexed_files.add("vision_encoder/model.safetensors")
+    assert indexed_files == expected_indexed_files
+    indexed_tensor_names: set[str] = set()
+    for rel_path in sorted(indexed_files):
+        path = model_dir / rel_path
+        expected_names = {name for name, filename in top_weight_map.items() if filename == rel_path}
+        actual_names = _safetensors_keys(path)
+        assert actual_names == expected_names, (
+            f"top-level index/header mismatch for {rel_path}: "
+            f"missing={sorted(expected_names - actual_names)[:10]}, "
+            f"extra={sorted(actual_names - expected_names)[:10]}"
+        )
+        indexed_tensor_names.update(actual_names)
+    assert indexed_tensor_names == set(top_weight_map)
+
+    transformer_index = json.loads(
+        (model_dir / "transformer/diffusion_pytorch_model.safetensors.index.json").read_text()
+    )
+    transformer_weight_map: dict[str, str] = transformer_index["weight_map"]
+    top_transformer_weight_map = {
+        name: filename.removeprefix("transformer/")
+        for name, filename in top_weight_map.items()
+        if filename.startswith("transformer/")
+    }
+    assert transformer_weight_map == top_transformer_weight_map
+    assert set(transformer_weight_map.values()) == {
+        path.name for path in (model_dir / "transformer").glob("*.safetensors")
+    }
+
+    assert _safetensors_keys(model_dir / "vision_encoder/model.safetensors")
+    assert _safetensors_keys(model_dir / "vae/diffusion_pytorch_model.safetensors")
+    assert _safetensors_keys(model_dir / "sound_tokenizer/diffusion_pytorch_model.safetensors")
+    assert not list(model_dir.rglob("*.distcp")), "Diffusers export unexpectedly contains DCP shards"
+
+
 # --- tests -------------------------------------------------------------------
 
 
@@ -667,9 +780,10 @@ if MAX_GPUS == 4:
         # ``vision_encoder/`` source bit-for-bit, and a non-trivial subset differs
         # from stock Qwen3-VL (so (2) actually distinguishes a converted tower
         # from a stock one — the vision-drop regression).
+        from safetensors import safe_open
+
         from cosmos_framework.inference.args import OmniSetupOverrides
         from cosmos_framework.inference.common.args import CheckpointOverrides
-        from safetensors import safe_open
 
         nano_dir = Path(
             CheckpointOverrides(checkpoint_path="Cosmos3-Nano")
@@ -720,6 +834,47 @@ if MAX_GPUS == 4:
                 f"LM tensor {k} still equals stock Qwen3-VL (not converted from Cosmos3-Nano)"
             )
 
+    @pytest.mark.level(2)
+    @pytest.mark.gpus(4)
+    def test_convert_model_to_diffusers_exports_complete_nano(
+        tmp_path: Path, h100_inputs: dict[str, str], request: pytest.FixtureRequest
+    ) -> None:
+        """Convert the staged Nano DCP and validate the complete Diffusers output layout and indexes."""
+        del h100_inputs  # The fixture stages and exports BASE_CHECKPOINT_PATH for the subprocess.
+        checkpoint_path = Path(os.environ["BASE_CHECKPOINT_PATH"])
+        config_path = checkpoint_path / "model/config.json"
+        assert config_path.is_file(), f"Nano DCP config is missing: {config_path}"
+        reference_dir = Path(_hf_download(["nvidia/Cosmos3-Nano"]))
+
+        out_dir = tmp_path / "Cosmos3-Nano-Diffusers"
+
+        def cleanup_output() -> None:
+            shutil.rmtree(out_dir, ignore_errors=True)
+            assert not out_dir.exists(), f"failed to clean Diffusers test output: {out_dir}"
+
+        request.addfinalizer(cleanup_output)
+
+        env = os.environ.copy()
+        env["PYTHONPATH"] = f".:{env.get('PYTHONPATH', '')}"
+        result = subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "cosmos_framework.scripts.convert_model_to_diffusers",
+                "--checkpoint-path",
+                str(checkpoint_path),
+                "--config-file",
+                str(config_path),
+                "--no-use-ema-weights",
+                "-o",
+                str(out_dir),
+            ],
+            cwd=str(REPO_ROOT),
+            env=env,
+        )
+        assert result.returncode == 0, f"convert_model_to_diffusers failed with exit code {result.returncode}"
+        _assert_diffusers_export_complete(out_dir, reference_dir)
+
 
 if MAX_GPUS == 8:
 
@@ -757,7 +912,10 @@ _GOLDENS: dict[str, dict[str, dict[str, list[float] | None]]] = {
         # across all 10 iters. grad_norm is deterministic here (compile.enabled=false
         # in nano_model_config under the new release branch), so values are pinned;
         # flip to None if a future change re-enables compile and reintroduces
-        # non-determinism in the all-rank reduction.
+        # non-determinism in the all-rank reduction. Captured at lr=2e-5; the
+        # ``vision_sft_nano`` spec pins ``optimizer.lr=2.0e-5`` (see the pin
+        # comment in _build_specs) so this stays valid despite the shipped
+        # recipe now using 1e-4.
         "vision_sft_nano": {
             "loss": [0.2243, 0.2133, 0.2437, 0.2255, 0.2616, 0.2552, 0.3313, 0.2247, 0.2036, 0.2621],
             "grad_norm": [0.42188, 0.30469, 0.30078, 0.26953, 0.30273, 0.41406, 0.42773, 0.38477, 0.27344, 0.27344],
@@ -780,7 +938,9 @@ _GOLDENS: dict[str, dict[str, dict[str, list[float] | None]]] = {
         # defaults. Runs under ``--deterministic`` so loss reproduces bit-exact
         # across all 10 iters, but grad_norm is non-det because
         # ``compile.enabled=true`` makes the all-rank reduction not bit-exact
-        # on H100.
+        # on H100. Captured at lr=2e-5; the ``vision_sft_nano`` spec pins
+        # ``optimizer.lr=2.0e-5`` so these stay valid even though the shipped
+        # recipe now uses 1e-4 (see the pin comment in _build_specs).
         "vision_sft_nano": {
             "loss": [0.2242, 0.2141, 0.2429, 0.2259, 0.2608, 0.2555, 0.332, 0.2256, 0.2041, 0.2621],
             "grad_norm": None,

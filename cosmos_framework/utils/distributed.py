@@ -43,7 +43,8 @@ def init() -> int | None:
         os.sched_setaffinity(0, device.get_cpu_affinity())
     except pynvml.NVMLError as e:
         log.warning(f"Failed to set device affinity: {e}")
-    # Set up NCCL communication.
+    # Set up distributed communication. CPU checkpoint conversion needs Gloo
+    # because NCCL cannot synchronize CPU-resident tokenizer or model tensors.
     os.environ["TORCH_NCCL_BLOCKING_WAIT"] = "0"
     os.environ["TORCH_NCCL_ASYNC_ERROR_HANDLING"] = "1"
     if dist.is_available():
@@ -52,9 +53,10 @@ def init() -> int | None:
         timeout_seconds = os.getenv("TORCH_NCCL_HEARTBEAT_TIMEOUT_SEC", 1800)
         # Convert the timeout to an integer (if it isn't already) and then to a timedelta
         timeout_timedelta = timedelta(seconds=int(timeout_seconds))
-        dist.init_process_group(backend="nccl", init_method="env://", timeout=timeout_timedelta)
+        backend = "nccl" if os.environ.get("COSMOS_DEVICE", "cuda").lower() == "cuda" else "gloo"
+        dist.init_process_group(backend=backend, init_method="env://", timeout=timeout_timedelta)
         log.critical(
-            f"Initialized distributed training with local rank {local_rank} with timeout {timeout_seconds}",
+            f"Initialized distributed training with local rank {local_rank} using {backend} with timeout {timeout_seconds}",
             rank0_only=False,
         )
     # Increase the L2 fetch granularity for faster speed.

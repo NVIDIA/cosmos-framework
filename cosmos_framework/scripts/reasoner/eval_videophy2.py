@@ -1,7 +1,12 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: OpenMDW-1.1
 
-"""Inference + accuracy/Pearson metrics for a VideoPhy-2-SFT'd Qwen3-VL ckpt.
+"""Inference + accuracy/Pearson metrics for a VideoPhy-2-SFT'd VLM ckpt.
+
+The model class is dispatched on the export's ``config.json`` ``model_type``:
+``"cosmos3_edge"`` loads the framework-registered
+``Cosmos3EdgeForConditionalGeneration`` + native Edge processor (no remote
+code); anything else keeps the original Qwen3-VL path.
 
 Two modes share one CLI:
 
@@ -108,6 +113,39 @@ def _barrier():
 
 
 # ---------------------------------------------------------------------------
+# Model-type dispatch
+# ---------------------------------------------------------------------------
+
+# Files build_cosmos3_edge_processor() reads from a snapshot dir. HFExportCallback
+# bundles all of them into Edge exports (tokenizer save + source-snapshot .json
+# copy); absence means an older/partial export, handled via the recipe fallback.
+_EDGE_PROCESSOR_FILES = (
+    "tokenizer.json",
+    "chat_template.jinja",
+    "preprocessor_config.json",
+    "video_preprocessor_config.json",
+)
+# Processor source of the videophy2_sft_edge recipe (policy.backbone.model_name).
+_EDGE_PROCESSOR_FALLBACK_REPO = "nvidia/Cosmos3-Edge"
+
+
+def _read_model_type(hf_ckpt):
+    """Return ``model_type`` from ``<hf_ckpt>/config.json``, or ``None`` when the
+    file is missing or unreadable (hub ids, legacy exports)."""
+    try:
+        return json.loads((Path(hf_ckpt) / "config.json").read_text()).get("model_type")
+    except (OSError, ValueError):
+        return None
+
+
+def _edge_processor_source(hf_ckpt):
+    """Return ``hf_ckpt`` when the export bundles every file the Edge processor
+    build needs, else ``None`` (caller falls back to the recipe's snapshot)."""
+    root = Path(hf_ckpt)
+    return str(root) if all((root / name).is_file() for name in _EDGE_PROCESSOR_FILES) else None
+
+
+# ---------------------------------------------------------------------------
 # Inference
 # ---------------------------------------------------------------------------
 
@@ -166,11 +204,44 @@ def _run_inference(args, rank, world_size, local_rank):
     device = f"cuda:{local_rank}"
     if rank == 0:
         print(f"[infer] loading model from {args.hf_ckpt} on {device} ...", flush=True)
-    model = Qwen3VLForConditionalGeneration.from_pretrained(
-        args.hf_ckpt, torch_dtype=torch.bfloat16, device_map=device,
-    )
-    model.eval()
-    processor = AutoProcessor.from_pretrained(args.hf_ckpt)
+    if _read_model_type(args.hf_ckpt) == "cosmos3_edge":
+        from transformers import AutoModelForImageTextToText
+
+        # Importing the package registers model_type="cosmos3_edge" with the
+        # transformers Auto classes (framework-native classes, no remote code).
+        import cosmos_framework.model.generator.reasoner.cosmos3_edge  # noqa: F401
+        from cosmos_framework.data.generator.processors.cosmos3_edge_processing import build_cosmos3_edge_processor
+
+        model = AutoModelForImageTextToText.from_pretrained(
+            args.hf_ckpt, torch_dtype=torch.bfloat16, device_map=device,
+        )
+        model.eval()
+        # AutoProcessor silently degrades to a bare tokenizer on native Edge
+        # snapshots; build the framework port instead — from the export's bundled
+        # processor files, else from the recipe's processor source (HF-cache-first,
+        # mirroring how training resolves it).
+        processor_src = _edge_processor_source(args.hf_ckpt)
+        if processor_src is None:
+            from cosmos_framework.utils.generator.reasoner.pretrained_models_downloader import (
+                maybe_download_hf_model_from_s3,
+            )
+
+            if rank == 0:
+                print(
+                    f"[infer] export lacks bundled processor files; "
+                    f"falling back to {_EDGE_PROCESSOR_FALLBACK_REPO}",
+                    flush=True,
+                )
+            processor_src = maybe_download_hf_model_from_s3(
+                _EDGE_PROCESSOR_FALLBACK_REPO, credentials="", bucket="", include_model_weights=False
+            )
+        processor = build_cosmos3_edge_processor(processor_src)
+    else:
+        model = Qwen3VLForConditionalGeneration.from_pretrained(
+            args.hf_ckpt, torch_dtype=torch.bfloat16, device_map=device,
+        )
+        model.eval()
+        processor = AutoProcessor.from_pretrained(args.hf_ckpt)
     # Left-pad so newly generated tokens land at the actual sequence end.
     if hasattr(processor, "tokenizer") and processor.tokenizer is not None:
         processor.tokenizer.padding_side = "left"

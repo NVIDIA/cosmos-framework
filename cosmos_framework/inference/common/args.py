@@ -382,7 +382,11 @@ class ConfigArgs(ArgsBase):
             case ConfigFileType.MODULE:
                 return unstructure_config(self.load_config().model)
             case ConfigFileType.YAML | ConfigFileType.JSON:
-                return load_model_config_from_hf_config(deserialize_config_dict(Path(self.config_file)))
+                config_dict = deserialize_config_dict(Path(self.config_file))
+                overrides_omegaconf = OmegaConf.from_dotlist(self.experiment_overrides)
+                config_dict = OmegaConf.to_container(OmegaConf.merge(config_dict, overrides_omegaconf), resolve=False)
+                assert isinstance(config_dict, dict)
+                return load_model_config_from_hf_config(config_dict)
             case _:
                 assert_never(self.config_file_type)
 
@@ -424,9 +428,18 @@ class CheckpointType(StrEnum):
 
     @classmethod
     def from_path(cls, path: Path) -> Self:
-        has_hf_weights = any(path.glob("*.safetensors")) or any(path.glob("*.safetensors.index.json"))
+        transformer_path = path / "transformer"
+        has_root_hf_weights = any(path.glob("*.safetensors")) or any(path.glob("*.safetensors.index.json"))
+        has_diffusers_hf_weights = (path / "model_index.json").is_file() and (
+            any(transformer_path.glob("*.safetensors"))
+            or any(transformer_path.glob("*.safetensors.index.json"))
+        )
+        has_hf_weights = has_root_hf_weights or has_diffusers_hf_weights
         if has_hf_weights:
-            if not (path / "config.json").exists():
+            has_hf_config = (path / "config.json").is_file() or (
+                has_diffusers_hf_weights and (transformer_path / "config.json").is_file()
+            )
+            if not has_hf_config:
                 raise ValueError(f"Invalid Hugging Face checkpoint: {path}")
             return cls("hf")
         if any(path.glob("*.distcp")):
@@ -463,6 +476,13 @@ class CheckpointConfig(pydantic.BaseModel):
     at the repository root (e.g. the task-specialized Text2Image / Image2Video
     diffusers checkpoints). Avoids a redundant download of the base model repo
     just to obtain the tokenizer.
+    """
+
+    experiment_overrides: tuple[str, ...] = ()
+    """Config defaults required by this checkpoint.
+
+    These are applied before command-line experiment overrides so callers can
+    still override a checkpoint default explicitly.
     """
 
     def download(self) -> str:
@@ -543,6 +563,9 @@ class CheckpointOverrides(ConfigOverrides):
             self.config_file = checkpoint.config_file
             self.checkpoint_hf = checkpoint.hf
             self.vlm_processor_from_checkpoint = checkpoint.vlm_processor_from_checkpoint
+            for value in reversed(checkpoint.experiment_overrides):
+                if value not in self.experiment_overrides:
+                    self.experiment_overrides.insert(0, value)
         elif self.checkpoint_path.startswith("s3://"):
             self.checkpoint_type = CheckpointType.DCP
             self.checkpoint_path = self.checkpoint_path.rstrip("/")
@@ -602,6 +625,38 @@ class CheckpointOverrides(ConfigOverrides):
 ParallelismPreset = Literal["throughput", "latency"]
 CfgpSize = Annotated[int, pydantic.Field(ge=1, le=2)]
 CompiledRegion = Literal["all", "language"]
+
+# Low-precision quantization method to apply to the model at load time.
+# One of ``mxfp8`` / ``nvfp4``, or ``None`` (default) to disable.
+# Routed to the VFM model loader, which selects an FSDP-compatible
+# (module-swap) path when sharded (``dp_shard_size > 1``) and an in-place
+# path when replicated (``dp_shard_size == 1``). Note ``mxfp8`` / ``nvfp4``
+# are only supported on the replicated path.
+QuantizationMethod = Literal["mxfp8", "nvfp4"]
+
+
+class QuantizationArgs(ArgsBase):
+    """Low-precision quantization arguments applied to the model at load time."""
+
+    quantization_method: QuantizationMethod | None
+    quantization_include_regex: list[str]
+    quantization_exclude_regex: list[str]
+
+
+class QuantizationOverrides(OverridesBase):
+    quantization_method: QuantizationMethod | None = None
+    """Quantization method (``mxfp8`` / ``nvfp4``), or ``None`` to disable.
+
+    Post-training quantization (PTQ) is applied in-place to the model at load
+    time. Only supported on Blackwell architectures and when FSDP sharding is disabled.
+    """
+    quantization_include_regex: list[str] = ["language_model.model.layers"]
+    """Regexes matched against module FQNs; a Linear is quantized only if it matches one (empty = all)."""
+    quantization_exclude_regex: list[str] = pydantic.Field(default_factory=list)
+    """Regexes matched against module FQNs; a Linear is skipped if it matches any."""
+
+    def build_quantization(self) -> QuantizationArgs:
+        return self._build(QuantizationArgs)
 
 
 class ParallelismArgs(ArgsBase):
@@ -702,7 +757,7 @@ class GuardrailOverrides(OverridesBase):
     """Offload guardrail models to CPU."""
 
 
-class SetupArgs(ABC, CheckpointArgs, ParallelismArgs, GuardrailArgs):
+class SetupArgs(ABC, CheckpointArgs, ParallelismArgs, QuantizationArgs, GuardrailArgs):
     output_dir: ResolvedPath
     keep_going: bool
     skip_invalid_samples: bool
@@ -737,7 +792,7 @@ class SetupArgs(ABC, CheckpointArgs, ParallelismArgs, GuardrailArgs):
         return cls.model_fields["variant"].default
 
 
-class SetupOverrides(ABC, CheckpointOverrides, ParallelismOverrides, GuardrailOverrides):
+class SetupOverrides(ABC, CheckpointOverrides, ParallelismOverrides, QuantizationOverrides, GuardrailOverrides):
     """Inference setup arguments."""
 
     output_dir: Annotated[ResolvedPath | None, tyro.conf.arg(aliases=("-o",))] = None

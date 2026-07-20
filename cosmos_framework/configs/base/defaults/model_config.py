@@ -5,12 +5,12 @@ from typing import Any
 
 import attrs
 
+from cosmos_framework.utils.lazy_config import LazyDict
 from cosmos_framework.configs.base.defaults.activation_checkpointing import ActivationCheckpointingConfig
 from cosmos_framework.configs.base.defaults.compile import CompileConfig
 from cosmos_framework.configs.base.defaults.ema import EMAConfig
 from cosmos_framework.configs.base.defaults.parallelism import ParallelismConfig
 from cosmos_framework.configs.base.defaults.reasoner import VLMConfig
-from cosmos_framework.utils.lazy_config import LazyDict
 
 
 @attrs.define(slots=False)
@@ -254,6 +254,12 @@ class OmniMoTModelConfig:
     sound_tokenizer: LazyDict | None = None  # Sound tokenizer config (e.g., AVAE)
     sound_dim: int | None = None  # Sound latent channel size (e.g., 64 for AVAE 48kHz)
     sound_latent_fps: int = 25  # Sound tokenizer's latent rate (e.g., 48kHz / 1920 hop = 25 Hz)
+
+    # When False, removes bias from vae2llm, sound2llm, and the two Linear layers inside
+    # time_embedder.  These biases seem to inject token-constant DC offsets that dominate
+    # the MoE router input and create prompt invariant routing.  This is observed empirically
+    # in the 30B-A3B checkpoint.
+    enable_input_bias: bool = True
 
     log_enc_time_every_n: int = 100  # Frequency of logging encoding time to W&B
 

@@ -4,12 +4,12 @@
 
 # Structured-TOML launch for action_policy_libero_nano — Cosmos3-Nano LIBERO
 # action-policy SFT (HSDP, full SFT). Drives cosmos_framework.scripts.train
-# against examples/toml/sft_config/action_policy_libero_repro.toml.
+# against examples/toml/sft_config/action_policy_libero_10_nano.toml.
 #
 # Point LIBERO_ROOT at the libero_10 suite ONLY. Use the 20 FPS
 # nvidia/LIBERO_LeRobot_v3. The default recipe is HSDP 2x8 (global batch 2048);
 # set NNODES/NODE_RANK/MASTER_ADDR per node.
-# See docs/action_policy_libero_sft.md.
+# See docs/action_policy_libero_posttrain.md.
 #
 # Required env vars:
 #   LIBERO_ROOT           local LIBERO-10 LeRobot dataset dir, e.g. <dir>/libero_10 (no default)
@@ -24,16 +24,16 @@
 #   export LIBERO_ROOT=<dir>/libero_10
 #
 # Usage (HSDP 2x8; set NNODES/NODE_RANK/MASTER_ADDR per node):
-#   LIBERO_ROOT=<dir>/libero_10 bash examples/launch_sft_action_policy_libero.sh
+#   LIBERO_ROOT=<dir>/libero_10 bash examples/launch_sft_action_policy_libero_10_nano.sh
 
-TOML_FILE="examples/toml/sft_config/action_policy_libero_repro.toml"
+TOML_FILE="examples/toml/sft_config/action_policy_libero_10_nano.toml"
 : "${BASE_CHECKPOINT_PATH:=examples/checkpoints/Cosmos3-Nano}"
 
 # LIBEROLeRobotDataset reads ${oc.env:LIBERO_ROOT} directly (a LOCAL LeRobot dir);
 # export it so torchrun (launched in this shell) inherits it.
 export LIBERO_ROOT="${LIBERO_ROOT:-}"
 
-EXTRA_DATASET_CHECK='[[ -f "$LIBERO_ROOT/meta/info.json" ]] || { echo "ERROR: LIBERO_ROOT must be a local LeRobot dir containing meta/info.json (got: '\''$LIBERO_ROOT'\''). Pre-sync: hf download nvidia/LIBERO_LeRobot_v3 --repo-type dataset --include '\''libero_10/**'\'' --local-dir <dir> (then LIBERO_ROOT=<dir>/libero_10). See docs/action_policy_libero_sft.md" >&2; exit 1; }'
+EXTRA_DATASET_CHECK='[[ -f "$LIBERO_ROOT/meta/info.json" ]] || { echo "ERROR: LIBERO_ROOT must be a local LeRobot dir containing meta/info.json (got: '\''$LIBERO_ROOT'\''). Pre-sync: hf download nvidia/LIBERO_LeRobot_v3 --repo-type dataset --include '\''libero_10/**'\'' --local-dir <dir> (then LIBERO_ROOT=<dir>/libero_10). See docs/action_policy_libero_posttrain.md" >&2; exit 1; }'
 
 # Extra Hydra overrides from the environment: a space-separated string word-split into
 # the TAIL_OVERRIDES array. An exported string survives `bash <wrapper>` (a child

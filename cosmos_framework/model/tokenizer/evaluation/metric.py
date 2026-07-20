@@ -125,42 +125,26 @@ def compute_codebook_usage(
     Returns:
         Dictionary with usage statistics.
     """
-    # Flatten indices
-    flat_indices = indices.flatten().long()
+    if num_codes <= 0:
+        raise ValueError(f"num_codes must be positive, got {num_codes}.")
 
-    # Handle empty indices
-    if flat_indices.numel() == 0:
-        return {
-            "perplexity": 0.0,
-            "active_codes": 0,
-            "active_ratio": 0.0,
-        }
-
-    # Gather indices across all GPUs for accurate codebook usage
+    flat_indices = indices.flatten().long()  # [N]
+    invalid_mask = (flat_indices < 0) | (flat_indices >= num_codes)  # [N]
+    safe_indices = flat_indices.masked_fill(invalid_mask, num_codes)  # [N]
+    histogram_with_invalid = torch.bincount(safe_indices, minlength=num_codes + 1)  # [K+1]
     if torch.distributed.is_initialized():
-        world_size = torch.distributed.get_world_size()
-        # Gather sizes first (indices may have different lengths per GPU)
-        local_size = torch.tensor([flat_indices.numel()], device=flat_indices.device)
-        sizes = [torch.zeros(1, dtype=torch.long, device=flat_indices.device) for _ in range(world_size)]
-        torch.distributed.all_gather(sizes, local_size)
-        max_size = max(s.item() for s in sizes)
+        # Reducing a fixed-size histogram avoids gathering every token index and
+        # keeps collective participation valid for empty or invalid local ranks.
+        torch.distributed.all_reduce(histogram_with_invalid, op=torch.distributed.ReduceOp.SUM)
 
-        # Pad indices to max_size for gathering
-        padded = torch.zeros(max_size, dtype=flat_indices.dtype, device=flat_indices.device)
-        padded[: flat_indices.numel()] = flat_indices
-        gathered = [
-            torch.zeros(max_size, dtype=flat_indices.dtype, device=flat_indices.device) for _ in range(world_size)
-        ]
-        torch.distributed.all_gather(gathered, padded)
+    invalid_count = int(histogram_with_invalid[-1].item())
+    if invalid_count > 0:
+        raise ValueError(
+            f"Code indices must be in [0, {num_codes}); found {invalid_count} out-of-range value(s) globally."
+        )
 
-        # Concatenate only valid indices from each GPU
-        all_indices = []
-        for i, g in enumerate(gathered):
-            all_indices.append(g[: sizes[i].item()])
-        flat_indices = torch.cat(all_indices)
-
-    # Compute code histogram
-    histogram = torch.bincount(flat_indices, minlength=num_codes).float()
+    histogram_counts = histogram_with_invalid[:-1]  # [K]
+    histogram = histogram_counts.to(dtype=torch.float32)  # [K]
     total = histogram.sum()
     if total == 0:
         return {
@@ -318,34 +302,70 @@ class FIDComputer:
         if self._metric is not None:
             self._metric.reset()
 
+    @staticmethod
+    def _flatten_video_batch(images: torch.Tensor, layout: str = "auto") -> torch.Tensor:
+        """Flatten image/video tensors into a 4D image batch.
+
+        Args:
+            images: Tensor shaped [B, C, H, W], [B, C, T, H, W], or [B, T, C, H, W].
+            layout: Layout for 5D tensors. Use "bcthw", "btchw", or "auto".
+
+        Returns:
+            Tensor shaped [B*, C, H, W].
+        """
+        if images.ndim == 4:
+            return images
+        if images.ndim != 5:
+            raise ValueError(f"FIDComputer.update expected a 4D or 5D tensor, got shape {tuple(images.shape)}")
+
+        normalized_layout = layout.lower()
+        if normalized_layout == "auto":
+            channels_at_dim1 = images.shape[1] in (1, 3)
+            channels_at_dim2 = images.shape[2] in (1, 3)
+            if channels_at_dim1 == channels_at_dim2:
+                raise ValueError(
+                    "Ambiguous 5D FID image layout. Pass layout='bcthw' for [B, C, T, H, W] "
+                    "or layout='btchw' for [B, T, C, H, W]."
+                )
+            normalized_layout = "bcthw" if channels_at_dim1 else "btchw"
+
+        if normalized_layout == "bcthw":
+            images = images.permute(0, 2, 1, 3, 4).contiguous()  # [B, T, C, H, W]
+        elif normalized_layout == "btchw":
+            images = images.contiguous()  # [B, T, C, H, W]
+        else:
+            raise ValueError(f"Unsupported FID video layout '{layout}'. Expected 'auto', 'bcthw', or 'btchw'.")
+
+        return images.reshape(-1, *images.shape[2:])  # [B*T, C, H, W]
+
     @torch.no_grad()
     def update(
         self,
         images: torch.Tensor,
         real: bool = True,
+        layout: str = "auto",
     ) -> None:
         """Update with a batch of images.
 
         Separate calls for real and fake images.
 
         Args:
-            images: Images in [0, 1] range, shape (B, C, H, W).
+            images: Images in [0, 1] range, shaped [B, C, H, W], [B, C, T, H, W], or [B, T, C, H, W].
             real: Whether these are real images (True) or fake/reconstructed (False).
+            layout: Layout for 5D tensors. Use "bcthw", "btchw", or "auto".
         """
         if not self._ensure_initialized():
             return
 
-        # Handle video tensors (B, C, T, H, W) -> (B*T, C, H, W)
-        if images.ndim == 5:
-            images = images.reshape(-1, *images.shape[-3:])
+        images = self._flatten_video_batch(images, layout=layout)  # [B*, C, H, W]
 
         if self._normalize and images.dtype == torch.uint8:
-            images = images.float() / 255.0
+            images = images.float() / 255.0  # [B*, C, H, W]
 
         if self._normalize:
-            images = images.float().to(self.device)
+            images = images.float().to(self.device)  # [B*, C, H, W]
         else:
-            images = images.to(self.device)
+            images = images.to(self.device)  # [B*, C, H, W]
 
         # Update with autocast disabled for numerical stability
         with self._autocast_context():

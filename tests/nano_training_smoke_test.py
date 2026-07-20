@@ -99,12 +99,21 @@ def _run(cmd: list[str], log_file: Path, extra_env: dict | None = None) -> tuple
     return returncode, "".join(captured)
 
 
+def _hf_download(args: list[str], log_path: Path) -> tuple[int, str]:
+    """``uvx hf@latest download <args>``, retrying once with ``--refresh``
+    (``@latest`` doesn't refresh dependency index metadata)."""
+    rc, out = _run(["uvx", "hf@latest", "download", *args], log_path)
+    if rc != 0:
+        rc, out = _run(["uvx", "--refresh", "hf@latest", "download", *args], log_path)
+    return rc, out
+
+
 def _ensure_inputs(log_dir: Path) -> None:
     """Step 1: download the dataset + Wan2.2 VAE if not already present."""
     if not (_DATASET_PATH / "train" / "video_dataset_file.jsonl").is_file():
-        rc, out = _run(
+        rc, out = _hf_download(
             [
-                "uvx", "hf@latest", "download", "--repo-type", "dataset",
+                "--repo-type", "dataset",
                 "nvidia/bridge-v2-subset-synthetic-captions",
                 "--revision", _DATASET_REVISION,
                 "--local-dir", str(_DATA_DIR), "--quiet",
@@ -117,9 +126,9 @@ def _ensure_inputs(log_dir: Path) -> None:
     )
 
     if not _WAN_VAE.is_file():
-        rc, out = _run(
+        rc, out = _hf_download(
             [
-                "uvx", "hf@latest", "download", "Wan-AI/Wan2.2-TI2V-5B", "Wan2.2_VAE.pth",
+                "Wan-AI/Wan2.2-TI2V-5B", "Wan2.2_VAE.pth",
                 "--local-dir", str(_WAN_VAE.parent), "--quiet",
             ],
             log_dir / "download_wan_vae.log",
@@ -255,6 +264,107 @@ def _assert_export_complete(model_dir: Path) -> None:
         assert names, f"export {model_dir}: model.safetensors holds no tensors"
 
 
+def _assert_diffusers_complete(model_dir: Path, reference_dir: Path) -> None:
+    """Structural + index completeness of a Diffusers pipeline converted from the HF export,
+    and a tensor-level comparison against the published ``nvidia/Cosmos3-Nano`` diffusers.
+
+    The ``vision_sft_nano`` export has no sound tokenizer (``sound_gen=False``) and no
+    standalone reasoner ViT (``include_visual`` unset), so the ``sound_tokenizer/`` and
+    ``vision_encoder/`` components — and the sound-only ``audio_*`` transformer tensors —
+    are absent; the golden comparison ignores exactly those. Every component that *is*
+    present is validated as thoroughly as the HF export: required files, pipeline class,
+    per-shard/per-tensor self-consistency of both the transformer index and the aggregated
+    root weight index, and (against the golden) the transformer tensor set + config
+    ``architectures`` / ``model_type``.
+    """
+    assert model_dir.is_dir(), f"diffusers dir missing: {model_dir}"
+    required = (
+        "config.json",
+        "model_index.json",
+        "modular_model_index.json",
+        "model.safetensors.index.json",
+        "scheduler/scheduler_config.json",
+        "transformer/config.json",
+        "transformer/diffusion_pytorch_model.safetensors.index.json",
+        "vae/config.json",
+        "vae/diffusion_pytorch_model.safetensors",
+    )
+    for rel in required:
+        p = model_dir / rel
+        assert p.is_file() and p.stat().st_size > 0, f"diffusers export missing/empty: {p}"
+
+    model_index = json.loads((model_dir / "model_index.json").read_text())
+    assert model_index.get("_class_name") == "Cosmos3OmniPipeline", (
+        f"unexpected diffusers pipeline class: {model_index.get('_class_name')!r}"
+    )
+    for component in ("scheduler", "transformer", "vae"):
+        assert component in model_index, f"model_index.json missing component {component!r}"
+
+    # Root weight index: references existing shards and every declared tensor is
+    # actually stored across them (no omitted/extra param).
+    root_index = json.loads((model_dir / "model.safetensors.index.json").read_text())
+    root_weight_map: dict[str, str] = root_index["weight_map"]
+    assert root_weight_map, "root Diffusers safetensors index has no tensors"
+    assert root_index.get("metadata", {}).get("total_size", 0) > 0
+    root_shards = sorted(set(root_weight_map.values()))
+    missing_shards = [s for s in root_shards if not (model_dir / s).is_file()]
+    assert not missing_shards, f"root index references missing shards: {missing_shards}"
+    stored: set[str] = set()
+    for shard in root_shards:
+        stored |= _safetensors_tensor_names(model_dir / shard)
+    assert set(root_weight_map) == stored, (
+        f"root index declares {len(root_weight_map)} tensors but shards hold {len(stored)} "
+        f"(missing from shards: {sorted(set(root_weight_map) - stored)[:10]}; "
+        f"not in index: {sorted(stored - set(root_weight_map))[:10]})"
+    )
+
+    # Transformer index: its weight_map is the transformer-scoped slice of the root
+    # index and points at exactly the transformer shards on disk.
+    transformer_index = json.loads(
+        (model_dir / "transformer/diffusion_pytorch_model.safetensors.index.json").read_text()
+    )
+    transformer_weight_map: dict[str, str] = transformer_index["weight_map"]
+    expected_transformer = {
+        name: filename.removeprefix("transformer/")
+        for name, filename in root_weight_map.items()
+        if filename.startswith("transformer/")
+    }
+    assert transformer_weight_map == expected_transformer, "transformer index inconsistent with root index"
+    assert set(transformer_weight_map.values()) == {
+        p.name for p in (model_dir / "transformer").glob("*.safetensors")
+    }
+
+    # VAE weights hold tensors; no raw DCP shards leak into the Diffusers export.
+    assert _safetensors_tensor_names(model_dir / "vae/diffusion_pytorch_model.safetensors")
+    assert not list(model_dir.rglob("*.distcp")), "Diffusers export unexpectedly contains DCP shards"
+
+    # Golden comparison against nvidia/Cosmos3-Nano: the transformer tensor set must equal
+    # the reference's, ignoring the sound-only ``audio_*`` tensors (this export has
+    # sound_gen=False) and the reference's vision_encoder/ shards (include_visual unset
+    # here). config architectures/model_type must match exactly.
+    reference_weight_map = json.loads((reference_dir / "model.safetensors.index.json").read_text())["weight_map"]
+    reference_transformer = {
+        name
+        for name, filename in reference_weight_map.items()
+        if filename.startswith("transformer/") and not name.startswith("audio_")
+    }
+    out_transformer = {name for name, filename in root_weight_map.items() if filename.startswith("transformer/")}
+    assert out_transformer == reference_transformer, (
+        "transformer tensor set differs from nvidia/Cosmos3-Nano (ignoring sound/vision): "
+        f"missing={sorted(reference_transformer - out_transformer)[:8]}, "
+        f"extra={sorted(out_transformer - reference_transformer)[:8]}"
+    )
+    reference_config = json.loads((reference_dir / "config.json").read_text())
+    out_config = json.loads((model_dir / "config.json").read_text())
+    assert out_config.get("architectures") == reference_config.get("architectures"), (
+        f"config architectures differ from golden: {out_config.get('architectures')} vs "
+        f"{reference_config.get('architectures')}"
+    )
+    assert out_config.get("model_type") == reference_config.get("model_type"), (
+        f"config model_type differs from golden: {out_config.get('model_type')} vs {reference_config.get('model_type')}"
+    )
+
+
 def _assert_valid_image(path: Path) -> None:
     """Assert ``path`` is a valid, non-degenerate image."""
     assert path.is_file() and path.stat().st_size > 1024, f"output image missing/too small: {path}"
@@ -341,6 +451,30 @@ if MAX_GPUS == 8:
         )
         assert rc == 0, f"export_model failed (exit {rc}):\nLog tail:\n{out[-4000:]}"
         _assert_export_complete(export_dir)
+
+        # 4b. Convert the exported HF checkpoint to a Diffusers pipeline; check layout.
+        diffusers_dir = run_dir / "diffusers"
+        rc, out = _run(
+            [
+                "python", "-m", "cosmos_framework.scripts.convert_model_to_diffusers",
+                "--checkpoint-path", str(export_dir),
+                "-o", str(diffusers_dir),
+            ],
+            tmp_path / "convert.log",
+        )
+        assert rc == 0, f"convert_model_to_diffusers failed (exit {rc}):\nLog tail:\n{out[-4000:]}"
+        # Compare against the published Cosmos3-Nano diffusers (index + config only),
+        # ignoring the sound_tokenizer/ and vision_encoder/ components this export lacks.
+        golden_dir = tmp_path / "Cosmos3-Nano-ref"
+        rc, out = _hf_download(
+            [
+                "nvidia/Cosmos3-Nano", "model.safetensors.index.json", "config.json",
+                "--local-dir", str(golden_dir), "--quiet",
+            ],
+            tmp_path / "download_golden.log",
+        )
+        assert rc == 0, f"Cosmos3-Nano reference download failed (exit {rc}):\n{out[-2000:]}"
+        _assert_diffusers_complete(diffusers_dir, golden_dir)
 
         # 5. t2i inference from the exported model; check the image is valid.
         infer_out = tmp_path / "exported_out"

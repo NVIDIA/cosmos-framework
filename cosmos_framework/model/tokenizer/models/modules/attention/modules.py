@@ -24,6 +24,7 @@ from cosmos_framework.model.tokenizer.models.modules.attention.full_attn import 
     sparse_scaled_dot_product_attention,
     tensor_varlen_scaled_dot_product_attention,
 )
+from cosmos_framework.model.tokenizer.utils.tensors import cat_with_bounded_inputs
 
 if TYPE_CHECKING:
     from cosmos_framework.model.tokenizer.models.modules.sparse_tensor import SparseTensor
@@ -89,7 +90,7 @@ def _manual_segmented_scaled_dot_product_attention(
         )
 
     if out_chunks:
-        output = torch.cat(out_chunks, dim=0)  # [Tq,H,D]
+        output = cat_with_bounded_inputs(out_chunks, dim=0)  # [Tq,H,D]
     else:
         output = q.new_empty((0, q.shape[1], v.shape[-1]))  # [0,H,D]
     captured_attn = attn_chunks if store_attn else None
@@ -927,7 +928,7 @@ class SparseMultiHeadAttention(nn.Module):
 
             if not combined_parts:
                 return current_freqs_cis.new_empty((0,) + current_freqs_cis.shape[1:])
-            return torch.cat(combined_parts, dim=0)
+            return cat_with_bounded_inputs(combined_parts, dim=0)
 
         combined_parts = []
         current_batch_size = current.shape[0]
@@ -966,7 +967,7 @@ class SparseMultiHeadAttention(nn.Module):
 
         if not combined_parts:
             return current_freqs_cis.new_empty((0,) + current_freqs_cis.shape[1:])
-        return torch.cat(combined_parts, dim=0)
+        return cat_with_bounded_inputs(combined_parts, dim=0)
 
     def _concat_temporal_sparse(self, cached: "SparseTensor", current: "SparseTensor") -> "SparseTensor":
         """Concatenate cached and current sparse tensors along temporal dimension.
@@ -1044,9 +1045,9 @@ class SparseMultiHeadAttention(nn.Module):
                     offset += batch_len
 
                 if cached_coords_parts:
-                    selected_coords = torch.cat(cached_coords_parts, dim=0)
-                    cached_k_feats = torch.cat(cached_k_parts, dim=0)
-                    cached_v_feats = torch.cat(cached_v_parts, dim=0)
+                    selected_coords = cat_with_bounded_inputs(cached_coords_parts, dim=0)
+                    cached_k_feats = cat_with_bounded_inputs(cached_k_parts, dim=0)
+                    cached_v_feats = cat_with_bounded_inputs(cached_v_parts, dim=0)
                 else:
                     selected_coords = torch.empty(
                         (0, k.coords.shape[1]),
@@ -1087,7 +1088,7 @@ class SparseMultiHeadAttention(nn.Module):
                 kv_cache["cached_v"] = cached_v
                 if k_freqs_cis is not None:
                     if cached_freq_parts:
-                        cached_k_freqs_cis = torch.cat(cached_freq_parts, dim=0)
+                        cached_k_freqs_cis = cat_with_bounded_inputs(cached_freq_parts, dim=0)
                     else:
                         cached_k_freqs_cis = k_freqs_cis.new_empty((0,) + k_freqs_cis.shape[1:])
                     if kv_cache_detach:

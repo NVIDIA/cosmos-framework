@@ -10,6 +10,7 @@ from typing import Optional
 from transformers import PreTrainedTokenizerFast
 
 from cosmos_framework.data.generator.processors.base import BaseVLMProcessor
+from cosmos_framework.data.generator.processors.cosmos3_edge_processing import is_cosmos3_edge_native_snapshot
 from cosmos_framework.data.generator.processors.nemotron3densevl_processor import Nemotron3DenseVLProcessor
 from cosmos_framework.data.generator.processors.nemotronvl_processor import NemotronVLProcessor
 from cosmos_framework.data.generator.processors.qwen3vl_processor import Qwen3VLProcessor
@@ -108,8 +109,11 @@ def build_processor(
     # (e.g. the top level of nvidia/Cosmos3-Nano, which ships its own
     # preprocessor_config.json, tokenizer.json, etc). Avoids the redundant
     # upstream Qwen/Qwen3-VL-*-Instruct fetch. Cosmos3-Nano/Super both ship
-    # a Qwen3VL-compatible processor, so dispatch to Qwen3VLProcessor.
+    # a Qwen3VL-compatible processor, so dispatch to Qwen3VLProcessor —
+    # except renewed Cosmos3-Edge snapshots, which need the Nemotron bridge.
     if os.path.isdir(tokenizer_type):
+        if is_cosmos3_edge_native_snapshot(tokenizer_type):
+            return Nemotron3DenseVLProcessor(tokenizer_type, cache_dir=cache_dir)
         return Qwen3VLProcessor(tokenizer_type, cache_dir=cache_dir)
     if credentials is None or bucket is None:
         if config_variant is None:
@@ -129,7 +133,9 @@ def build_processor(
         "NVIDIA-Nemotron-3-Dense-VL" in tokenizer_type
         or "Qwen3-2B-ViT" in tokenizer_type
         or "nvidia/Cosmos3-Reasoner-2B-Private" in tokenizer_type
-        or "nvidia/Cosmos3-Edge-Reasoner" in tokenizer_type
+        # nvidia/Cosmos3-Edge ships the same Nemotron bridge processor; the
+        # substring also covers nvidia/Cosmos3-Edge-Reasoner.
+        or "nvidia/Cosmos3-Edge" in tokenizer_type
     ):
         return Nemotron3DenseVLProcessor(tokenizer_type, credentials=credentials, bucket=bucket, cache_dir=cache_dir)
     elif "Qwen/Qwen3-0.6B" in tokenizer_type:

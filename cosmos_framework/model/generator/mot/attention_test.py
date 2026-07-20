@@ -1,7 +1,8 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: OpenMDW-1.1
 
-import random
+import random  # noqa: I001 - release import rewriting changes the package sort order.
+from types import SimpleNamespace
 from typing import cast
 
 import pytest
@@ -23,6 +24,27 @@ from cosmos_framework.data.generator.sequence_packing.runtime import (
 
 MAX_SEQ_LEN = 24
 SEQS_PER_BATCH = 4
+
+
+def _foreign_split_info(**overrides: object) -> SimpleNamespace:
+    fields: dict[str, object] = {
+        "max_causal_len": 1,
+        "max_full_len": 1,
+        "max_sample_len": 2,
+        "split_lens": [1, 1],
+        "attn_modes": ["causal", "full"],
+        "sample_lens": [2],
+        "is_three_way": False,
+        "vision_token_shapes": None,
+        "action_token_shapes": None,
+        "num_action_tokens_per_supertoken": 0,
+        "null_action_supertokens": False,
+        "control_stream_token_ranges": None,
+        "noisy_token_range": None,
+        "control_weights": None,
+    }
+    fields.update(overrides)
+    return SimpleNamespace(**fields)
 
 
 def unwrap(fn):
@@ -354,6 +376,41 @@ def test_build_packed_sequence_rejects_flex():
             num_heads=1,
             head_dim=8,
             num_layers=1,
+        )
+
+
+@pytest.mark.L0
+def test_dispatch_attention_accepts_structurally_compatible_split_info(monkeypatch: pytest.MonkeyPatch) -> None:
+    expected_output = object()
+
+    def fake_two_way_attention(*args: object, **kwargs: object) -> object:
+        return expected_output
+
+    monkeypatch.setattr(attention, "two_way_attention", fake_two_way_attention)
+    foreign_split_info = _foreign_split_info()
+
+    output, kv_to_store = attention.dispatch_attention(
+        object(),
+        object(),
+        object(),
+        foreign_split_info,
+    )
+
+    assert output is expected_output
+    assert kv_to_store is None
+
+
+@pytest.mark.L0
+def test_dispatch_attention_rejects_incomplete_split_info() -> None:
+    foreign_split_info = _foreign_split_info()
+    del foreign_split_info.control_weights
+
+    with pytest.raises(TypeError, match="Unsupported attention metadata"):
+        attention.dispatch_attention(
+            object(),
+            object(),
+            object(),
+            foreign_split_info,
         )
 
 

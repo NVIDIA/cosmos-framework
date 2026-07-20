@@ -5,9 +5,10 @@ import contextlib
 import dataclasses
 import traceback
 from abc import ABC, abstractmethod
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager, nullcontext
 from dataclasses import dataclass
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, ContextManager, Self, Sequence, final
 
 import torch
@@ -20,6 +21,31 @@ from cosmos_framework.utils.misc import TrainingTimer
 
 if TYPE_CHECKING:
     from cosmos_framework.auxiliary.guardrail.common.core import GuardrailRunner
+
+
+def _download_on_rank0(download: Callable[[], str | Path]) -> Path:
+    """Download once and share the resulting path across distributed ranks."""
+    if not torch.distributed.is_available() or not torch.distributed.is_initialized():
+        return Path(download())
+
+    payload: list[str | None] = [None, None]
+    local_error: Exception | None = None
+    if torch.distributed.get_rank() == 0:
+        try:
+            payload[0] = str(download())
+        except Exception as error:
+            local_error = error
+            payload[1] = f"{type(error).__name__}: {error}"
+
+    torch.distributed.broadcast_object_list(payload, src=0)
+    path, error_message = payload
+    if error_message is not None:
+        if local_error is not None:
+            raise local_error
+        raise RuntimeError(f"Rank 0 download failed: {error_message}")
+    if path is None:
+        raise RuntimeError("Rank 0 download returned no path")
+    return Path(path)
 
 
 @contextlib.contextmanager

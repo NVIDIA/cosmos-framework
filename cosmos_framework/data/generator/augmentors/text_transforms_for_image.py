@@ -8,7 +8,9 @@ from typing import Optional
 from cosmos_framework.data.imaginaire.webdataset.augmentors.v3_text_transforms import pad_and_resize
 from cosmos_framework.data.imaginaire.webdataset.augmentors.augmentor import Augmentor
 from cosmos_framework.utils import log
-
+from cosmos_framework.data.generator.augmentors.caption_embedding_keys import (
+    _CAPTION_EMBEDDING_KEY_MAPPING_IMAGES,
+)
 
 # For the qwen captions, we have 3 variants: short, medium, long
 # In addition, for synthetic data, we create prompt embeddings as well.

@@ -635,6 +635,35 @@ _ReasonerTopP = Annotated[float, pydantic.Field(gt=0, le=1)]
 _ReasonerRepetitionPenalty = Annotated[float, pydantic.Field(gt=0)]
 
 
+def _mapping_get(node: Any, key: str) -> Any:
+    """``.get`` that tolerates None and non-mapping nodes (dict / DictConfig / LazyDict)."""
+    getter = getattr(node, "get", None)
+    return getter(key) if callable(getter) else None
+
+
+def _reasoner_vision_capable(model_config: "OmniMoTModelConfig") -> bool:
+    """Whether the checkpoint's reasoner LM can encode image/video prompts.
+
+    Qwen-family reasoners carry the ViT inside the checkpoint, gated by
+    ``include_visual``; a falsy value (e.g. an old ``--no-vit`` export, or a
+    text-only LLM backbone) means the tower was never built, so a vision
+    prompt would only fail mid-batch at the ``hasattr(causal_lm, "visual")``
+    gate. Edge's Nemotron reasoner sets ``include_visual=None`` by design and
+    loads its SigLIP2 tower lazily (``_ensure_vision_tower``), so it is always
+    vision-capable. Unknown families are treated as capable (never block).
+    """
+    vlm_config = model_config.vlm_config
+    model_instance = getattr(vlm_config, "model_instance", None)
+    target = str(_mapping_get(model_instance, "_target_") or "")
+    model_name = getattr(vlm_config, "model_name", "") or ""
+    if "Nemotron3DenseVLTextForCausalLM" in target or "Cosmos3-Edge" in model_name:
+        return True
+    if "Qwen" not in target and not model_name.startswith("Qwen/"):
+        return True
+    include_visual = _mapping_get(_mapping_get(model_instance, "config"), "include_visual")
+    return bool(include_visual)
+
+
 class ReasonerDataArgs(ArgsBase):
     """Resolved reasoner (VLM) text-generation arguments. All fields are ``| None`` so
     non-reasoner samples (which never populate these) pass ``OmniSampleArgs`` validation;
@@ -677,6 +706,14 @@ class ReasonerDataOverrides(OverridesBase):
         self = cast("SampleDataOverrides", self)
         if not self.prompt.strip():
             raise ValueError("Reasoner inference requires a non-empty 'prompt'.")
+        if self.vision_path is not None and not _reasoner_vision_capable(model_config):
+            raise ValueError(
+                f"Reasoner sample {getattr(self, 'name', None)!r} conditions on vision input "
+                f"'{self.vision_path}', but the loaded checkpoint's reasoner LM has no visual tower "
+                "(model config include_visual is false — e.g. a --no-vit export or a text-only LLM "
+                "backbone). Use a text-only prompt, or re-export the checkpoint with the default "
+                "--vit / use a full checkpoint for image/video reasoner prompts."
+            )
 
 
 class _TransferDataBase:
@@ -1005,9 +1042,15 @@ class OmniSampleOverrides(
         "Qwen/Qwen3-VL-32B-Instruct": "32B",
         "Qwen/Qwen3-VL-30B-A3B-Instruct": "30B-A3B",
         "Qwen/Qwen3-VL-235B-A22B-Instruct": "235B-A22B",
+        "nvidia/Cosmos3-Edge-Reasoner": "2B",
     }
 
     _RESOLUTION_SHIFT_DEFAULTS: ClassVar[dict[(ModelSize, Resolution), float]] = {
+        # 2B rows mirror Cosmos3-Edge's training shift (Cosmos3-Edge.yaml
+        # rectified_flow_training_config.shift: 256->3, 480->5, 720->10).
+        ("2B", "256"): 3.0,
+        ("2B", "480"): 5.0,
+        ("2B", "720"): 10.0,
         ("8B", "256"): 3.0,
         ("8B", "480"): 5.0,
         ("8B", "720"): 10.0,
@@ -1057,7 +1100,9 @@ class OmniSampleOverrides(
         )
 
         if not shift_configured and not sample_meta.model_mode.is_reasoner:
-            model_size = self._VLM_MODEL_SIZE[model_config.vlm_config.model_name]
+            # Unregistered backbone names (custom fine-tunes) simply skip shift
+            # defaulting rather than KeyError-ing.
+            model_size = self._VLM_MODEL_SIZE.get(model_config.vlm_config.model_name)
             key = (model_size, self.resolution)
             if key in self._RESOLUTION_SHIFT_DEFAULTS:
                 self.shift = self._RESOLUTION_SHIFT_DEFAULTS[key]
@@ -1105,6 +1150,15 @@ _CHECKPOINTS: dict[str, CheckpointConfig] = {
             revision="main",
         ),
     ),
+    "Cosmos3-Edge": CheckpointConfig(
+        model_memory_bytes=MODEL_MEMORY_BYTES_BY_SIZE["2B"],
+        config_file=str(CONFIG_DIR / "model/Cosmos3-Edge.yaml"),
+        s3_uri="s3://bucket1/cosmos3_vfm/cosmos3_ga_midtraining/cosmos3_ga_4bm2b_v1_midtrain_0630a/checkpoints/iter_000028000/",
+        hf=CheckpointDirHf(
+            repository="nvidia/Cosmos3-Edge",
+            revision="main",
+        ),
+    ),
     "Cosmos3-Super": CheckpointConfig(
         model_memory_bytes=MODEL_MEMORY_BYTES_BY_SIZE["32B"],
         config_file=str(CONFIG_DIR / "model/Cosmos3-Super.yaml"),
@@ -1140,6 +1194,47 @@ _CHECKPOINTS: dict[str, CheckpointConfig] = {
         # Self-contained checkpoint: use its bundled processor instead of
         # downloading the base Cosmos3-Super repo just for the tokenizer.
         vlm_processor_from_checkpoint=True,
+    ),
+    "Cosmos3-Super-Text2Image-4Step": CheckpointConfig(
+        model_memory_bytes=MODEL_MEMORY_BYTES_BY_SIZE["32B"],
+        config_file=str(CONFIG_DIR / "model/Cosmos3-Super.yaml"),
+        s3_uri="s3://bucket1/cosmos3_vfm/cosmos3_ga_text2image_4step/",
+        hf=CheckpointDirHf(
+            repository="nvidia/Cosmos3-Super-Text2Image-4Step",
+            revision="1ba94110bc118f479bbd5e461e79d685d74b2554",
+        ),
+        experiment_overrides=(
+            "model.config.resolution='768'",
+            "model.config.action_gen=false",
+            "model.config.sound_gen=false",
+            "model.config.sound_dim=null",
+            "model.config.sound_tokenizer=null",
+            "model.config.rectified_flow_training_config.shift.720=5",
+            "model.config.rectified_flow_training_config.shift.768=5",
+            "model.config.tokenizer.encode_chunk_frames.768=12",
+            "model.config.tokenizer.encode_exact_durations=null",
+            "model.config.fixed_step_sampler_config.t_list=[1.0,0.9375,0.8333333333333334,0.625]",
+            "model.config.fixed_step_sampler_config.sample_type=sde",
+        ),
+    ),
+    "Cosmos3-Super-Image2Video-4Step": CheckpointConfig(
+        model_memory_bytes=MODEL_MEMORY_BYTES_BY_SIZE["32B"],
+        config_file=str(CONFIG_DIR / "model/Cosmos3-Super.yaml"),
+        s3_uri="s3://bucket1/cosmos3_vfm/cosmos3_ga_image2video_4step/",
+        hf=CheckpointDirHf(
+            repository="nvidia/Cosmos3-Super-Image2Video-4Step",
+            revision="f85d3335d2ad8b352462cecbd637aa980cec9688",
+        ),
+        experiment_overrides=(
+            "model.config.resolution='480'",
+            "model.config.action_gen=false",
+            "model.config.sound_gen=false",
+            "model.config.sound_dim=null",
+            "model.config.sound_tokenizer=null",
+            "model.config.diffusion_expert_config.base_fps=16",
+            "model.config.fixed_step_sampler_config.t_list=[1.0,0.9375,0.8333333333333334,0.625]",
+            "model.config.fixed_step_sampler_config.sample_type=sde",
+        ),
     ),
 }
 DEFAULT_CHECKPOINT_NAME = "Cosmos3-Nano"
