@@ -5,12 +5,11 @@
 
 Supports two student simulation modes (``simulation_mode`` config field):
 
-- ``"forward"`` (default): single-denoising simulation. Clean data examples are noised to a
-  randomly sampled level, and the student predicts the clean example (via RF velocity) from this
-  noised example in one denoising operation. The VSD / fake-score losses are computed on re-noised
+- ``"forward"`` (default): fastgen-style DMD2. The student generates x0 via a single forward pass
+  from a randomly sampled noise level, and the VSD / fake-score losses are computed on re-noised
   student outputs.
 
-- ``"backward"``: multi-step rollout. The student always denoises from a pure-noise start
+- ``"backward"``: rcm-style multi-step rollout. The student always denoises from a pure-noise start
   (``t_list[0]`` must be 1.0) toward 0, over an iteration-cycled number of ``t_list`` steps (schedule
   prefix). No clean data is blended into the start state. Gradients flow through the last
   ``backward_grad_steps`` student forward passes (1 = last step only, −1 = full BPTT through all steps).
@@ -33,13 +32,26 @@ from torch.nn.modules.module import _IncompatibleKeys
 from torch.nn.utils.clip_grad import clip_grad_norm_
 
 from cosmos_framework.checkpoint.s3_filesystem import S3StorageReader  # noqa: F401 - used after OSS release transform
-from cosmos_framework.configs.base.experiment.distillation.dmd2_config import DMD2OptimizerConfig, DMD2RFConfig
+from cosmos_framework.utils.lazy_config import LazyDict
+from cosmos_framework.utils.lazy_config import instantiate as lazy_instantiate
+from cosmos_framework.utils import log, misc
+from cosmos_framework.utils.misc import get_local_tensor_if_DTensor
+from cosmos_framework.model.generator.diffusion.samplers.fixed_step import FixedStepSampler
+from cosmos_framework.model.generator.mot.context_parallel_utils import context_parallel_broadcast_tensor_list
+from cosmos_framework.model.generator.omni_mot_model import OmniMoTModel
+from cosmos_framework.model.generator.reasoner.qwen3_vl.utils import tokenize_caption
+from cosmos_framework.model.generator.utils.data_and_condition import (
+    GenerationDataClean,
+    GenerationDataNoised,
+    build_dense_sound_schedule,
+)
 from cosmos_framework.data.generator.sequence_packing import (
     PackedSequence,
     SequencePlan,
     build_sequence_plans_from_data_batch,
 )
-from cosmos_framework.model.generator.diffusion.samplers.fixed_step import FixedStepSampler
+from cosmos_framework.utils.generator.data_utils import get_vision_data_resolution
+from cosmos_framework.configs.base.experiment.distillation.dmd2_config import DMD2OptimizerConfig, DMD2RFConfig
 from cosmos_framework.model.generator.distillation.common_loss import (
     variational_score_distillation_loss,
     variational_score_distillation_loss_from_gradient,
@@ -50,18 +62,6 @@ from cosmos_framework.model.generator.distillation.optimizer import (
     PhaseScheduler,
     iter_torch_optimizers,
 )
-from cosmos_framework.model.generator.mot.context_parallel_utils import context_parallel_broadcast_tensor_list
-from cosmos_framework.model.generator.omni_mot_model import OmniMoTModel
-from cosmos_framework.model.generator.reasoner.qwen3_vl.utils import tokenize_caption
-from cosmos_framework.model.generator.utils.data_and_condition import (
-    GenerationDataClean,
-    GenerationDataNoised,
-)
-from cosmos_framework.utils import log, misc
-from cosmos_framework.utils.generator.data_utils import get_vision_data_resolution
-from cosmos_framework.utils.lazy_config import LazyDict
-from cosmos_framework.utils.lazy_config import instantiate as lazy_instantiate
-from cosmos_framework.utils.misc import get_local_tensor_if_DTensor
 
 __all__: tuple[str, ...] = ("DMD2RFModel",)
 
@@ -87,6 +87,9 @@ class DMD2RFModel(OmniMoTModel):
         config.vlm_config.pretrained_weights.enabled = False
         super().__init__(config)
         self.config: DMD2RFConfig = config
+        assert config.noise_level_parameterization.lower() == "rectified_flow", (
+            "DMD2RF requires rectified_flow parameterization."
+        )
 
     @property
     def net_teacher(self) -> torch.nn.Module:
@@ -127,6 +130,7 @@ class DMD2RFModel(OmniMoTModel):
         is_inference_mode = bool(getattr(self.config.parallelism, "enable_inference_mode", False))
         if is_inference_mode:
             log.info("[DMD2RF] set_up_model: inference mode; skipping teacher and fake-score nets.")
+            self.net_discriminator_head = None
             self.denoiser_nets = {"student": self.net}
             self._set_up_fixed_step_sampler()
             torch.cuda.empty_cache()
@@ -193,6 +197,9 @@ class DMD2RFModel(OmniMoTModel):
             )
             if self.config.ema.enabled:
                 self.net_ema_worker.copy_to(src_model=self.net, tgt_model=self.net_ema)
+
+        # Discriminator support not implemented yet for cosmos3.
+        self.net_discriminator_head = None
 
         # Freeze the teacher — it is used only for inference during training.
         # Set eval() so dropout / norm running stats stay in inference mode even
@@ -336,7 +343,7 @@ class DMD2RFModel(OmniMoTModel):
             return self.config.warmup_student_steps + steps_after_warmup
 
     def get_critic_iteration(self, iteration: int) -> int:
-        """Effective critic (fake-score) update index after removing student updates."""
+        """Effective critic (fake-score) update index (mirrors rcm ``get_effective_iteration_fake``)."""
         return iteration - self.get_student_iteration(iteration) - 1
 
     # ------------------------ training hooks ------------------------
@@ -348,8 +355,10 @@ class DMD2RFModel(OmniMoTModel):
             # Critic phase: for BF16 optimizers that maintain FP32 master weights, copy the master params
             # back into the model params before zeroing gradients. This keeps the low-precision model weights
             # in sync with the authoritative FP32 copy.
-            opt = optimizer.get("fake_score")
-            if opt is not None:
+            for net, opt_key in ((self.net_fake_score, "fake_score"), (self.net_discriminator_head, "discriminator")):
+                opt = None if net is None else optimizer.get(opt_key)
+                if opt is None:
+                    continue
                 params, master_params = [], []
                 for inner_opt in iter_torch_optimizers(opt):
                     param_groups_master = getattr(inner_opt, "param_groups_master", None)
@@ -372,6 +381,8 @@ class DMD2RFModel(OmniMoTModel):
             self.net.zero_grad(set_to_none=True)
         else:
             self.net_fake_score.zero_grad(set_to_none=True)
+            if self.net_discriminator_head is not None:
+                self.net_discriminator_head.zero_grad(set_to_none=True)
 
     # ------------------------ Helper methods and utils for callbacks ------------------------
 
@@ -393,6 +404,14 @@ class DMD2RFModel(OmniMoTModel):
             error_if_nonfinite=error_if_nonfinite,
             foreach=foreach,
         )
+        if self.net_discriminator_head is not None:
+            clip_grad_norm_(
+                self.net_discriminator_head.parameters(),
+                max_norm,
+                norm_type=norm_type,
+                error_if_nonfinite=error_if_nonfinite,
+                foreach=foreach,
+            )
         return clip_grad_norm_(
             self.net.parameters(),
             max_norm,
@@ -402,13 +421,81 @@ class DMD2RFModel(OmniMoTModel):
         )
 
     @staticmethod
-    def _flow_matching_per_instance_sum_loss(
+    def _action_sample_indices(sequence_plans: list[SequencePlan]) -> list[int]:
+        """Original batch positions of samples that carry action data.
+
+        ``packed_sequence.action.*`` and ``gen_data_*.x0_tokens_action`` are dense over
+        action-bearing samples. Mapping a dense action entry back to the original batch
+        position is required to align action-side sigmas with the full-batch sigma tensor.
+        """
+        return [i for i, plan in enumerate(sequence_plans) if plan.has_action]
+
+    def _action_sigmas_from_full(
+        self,
+        sigmas_full: torch.Tensor,
+        sequence_plans: list[SequencePlan],
+    ) -> torch.Tensor | None:
+        """Reindex full-batch sigmas to dense action positions.
+
+        Returns ``None`` when action_gen is off or the batch contains no action samples,
+        so callers can pass the result straight to ``_add_noise_to_input(..., sigmas_action=...)``
+        and fall back to legacy vision-σ behaviour automatically.
+        """
+        if not self.config.action_gen:
+            return None
+        indices = self._action_sample_indices(sequence_plans)
+        if not indices:
+            return None
+        idx = torch.tensor(indices, dtype=torch.long, device=sigmas_full.device)
+        return sigmas_full[idx]  # [n_action, *sigmas_full.shape[1:]]
+
+    def _sound_sigmas_from_full(
+        self,
+        sigmas_full: torch.Tensor,
+        sequence_plans: list[SequencePlan],
+        x0_tokens_sound: list[torch.Tensor] | None,
+    ) -> torch.Tensor | None:
+        """Reindex full-batch sigmas to dense sound positions.
+
+        Sound tokens are dense over samples with ``has_sound=True``. Passing a full-batch
+        sigma tensor directly to ``_add_noise_to_input`` misaligns mixed sound/no-sound
+        batches; this mirrors the base Omni helper path.
+        """
+        if not self.config.sound_gen:
+            return None
+        _, sigmas_sound = build_dense_sound_schedule(
+            sequence_plans, x0_tokens_sound, sigmas_full, sigmas_full
+        )  # None or [n_sound,*sigmas_full.shape[1:]]
+        return sigmas_sound
+
+    @staticmethod
+    def _has_any_noisy_action(packed_action: object) -> bool:
+        """Whether any action-bearing sample has at least one noisy (non-conditioning) frame.
+
+        DMD2 action loss paths multiply by ``(1 - condition_mask)`` so all-conditioning
+        samples already contribute zero gradient, but the forward pass is still launched
+        and the adaptive VSD weight ``1/(|g - t| + ε)`` can spike to 1/ε on a fully-masked
+        batch. Skipping the loss explicitly avoids both the wasted compute and the numerical
+        edge case.
+        """
+        if packed_action is None:
+            return False
+        condition_masks = getattr(packed_action, "condition_mask", None)
+        if condition_masks is None:
+            return False
+        for cm in condition_masks:
+            if (1.0 - cm).any():
+                return True
+        return False
+
+    @staticmethod
+    def _flow_matching_sum_rcm_loss(
         pred: list[torch.Tensor],
         target: list[torch.Tensor],
         condition_mask: list[torch.Tensor],
         has_valid_tokens: bool,
     ) -> tuple[torch.Tensor, torch.Tensor]:
-        """Compute fake-score FM loss as per-instance active-element sum."""
+        """Compute RCM-style fake-score FM loss: per-instance active-element sum."""
         if not has_valid_tokens:
             dummy_loss = 0.0 * sum(p.sum() for p in pred)  # scalar
             return dummy_loss, dummy_loss.unsqueeze(0)  # scalar, [1]
@@ -447,15 +534,18 @@ class DMD2RFModel(OmniMoTModel):
     # ------------------------ Checkpointing helpers ------------------------
 
     def model_dict(self) -> dict[str, torch.nn.Module]:
-        return {
+        model_dict: dict[str, torch.nn.Module] = {
             "net": self.net,
             "fake_score": self.net_fake_score,
         }
+        if self.net_discriminator_head:
+            model_dict["discriminator"] = self.net_discriminator_head
+        return model_dict
 
     def load_state_dict(
         self, state_dict: Mapping[str, Any], strict: bool = True, assign: bool = False
     ) -> _IncompatibleKeys:
-        """Load weights for student/EMA (via base class) and for fake_score.
+        """Load weights for student/EMA (via base class) and for fake_score/discriminator heads.
 
         ``net_fake_score`` is held outside the module registry, so route its keys
         to the fake-score net explicitly and keep them out of the base model load.
@@ -464,19 +554,24 @@ class DMD2RFModel(OmniMoTModel):
         """
         strict_requested = strict
         main_state_dict = collections.OrderedDict(
-            (key, value) for key, value in state_dict.items() if not key.startswith("net_fake_score.")
+            (key, value)
+            for key, value in state_dict.items()
+            if not key.startswith(("net_fake_score.", "net_discriminator_head."))
         )
         base_results: _IncompatibleKeys = super().load_state_dict(main_state_dict, strict=False, assign=assign)
 
-        # Partition the flat state dict by prefix, stripping the fake-score prefix
-        # so fake_score.load_state_dict sees bare keys.
+        # Partition the flat state dict by prefix into per-head sub-dicts,
+        # stripping the prefix so each head's load_state_dict sees bare keys.
         fake_score_state_dict = collections.OrderedDict()
+        discriminator_state_dict = collections.OrderedDict()
 
         for k, v in state_dict.items():
             if k.startswith("net_fake_score."):
                 fake_score_state_dict[k.replace("net_fake_score.", "")] = v
+            elif k.startswith("net_discriminator_head."):
+                discriminator_state_dict[k.replace("net_discriminator_head.", "")] = v
 
-        # Accumulate missing/unexpected keys from fake_score so the caller gets a
+        # Accumulate missing/unexpected keys from all heads so the caller gets a
         # unified report matching the contract of nn.Module.load_state_dict.
         missing_keys: list[str] = list(base_results.missing_keys)
         unexpected_keys: list[str] = list(base_results.unexpected_keys)
@@ -493,6 +588,13 @@ class DMD2RFModel(OmniMoTModel):
             log.info("[DMD2RF] load_state_dict: ignoring net_fake_score.* keys in inference mode.")
         elif fake_score_state_dict:
             unexpected_keys += [f"net_fake_score.{key}" for key in fake_score_state_dict]
+
+        if self.net_discriminator_head and discriminator_state_dict:
+            discriminator_results: _IncompatibleKeys = self.net_discriminator_head.load_state_dict(
+                discriminator_state_dict, strict=False, assign=assign
+            )
+            missing_keys += [f"net_discriminator_head.{key}" for key in discriminator_results.missing_keys]
+            unexpected_keys += [f"net_discriminator_head.{key}" for key in discriminator_results.unexpected_keys]
 
         if strict_requested and (missing_keys or unexpected_keys):
             log.warning(
@@ -535,7 +637,7 @@ class DMD2RFModel(OmniMoTModel):
     ) -> torch.Tensor:
         """Sample a noise level for the student from the discrete sigma schedule.
 
-        Randomly picks one of the predefined sigma values
+        Mirrors ``sample_from_t_list`` in fastgen: randomly picks one of the predefined sigma values
         that define the student's multi-step schedule.
 
         Returns:
@@ -604,6 +706,10 @@ class DMD2RFModel(OmniMoTModel):
         # Overwrite packed tokens with the actual noised values (already on CUDA)
         assert packed_sequence.vision is not None, "Packed vision data is required"
         packed_sequence.vision.tokens = gen_data_noised.xt_tokens_vision
+        if packed_sequence.action is not None and gen_data_noised.xt_tokens_action is not None:
+            packed_sequence.action.tokens = gen_data_noised.xt_tokens_action
+        if packed_sequence.sound is not None and gen_data_noised.xt_tokens_sound is not None:
+            packed_sequence.sound.tokens = gen_data_noised.xt_tokens_sound
 
         packed_sequence.to_cuda()
 
@@ -622,7 +728,7 @@ class DMD2RFModel(OmniMoTModel):
         """Generate x0 from the student network.
 
         Dispatches to :meth:`_forward_simulation` or :meth:`_backward_simulation` based on
-        ``config.simulation_mode``. ``iteration`` drives the rollout-length cycle in
+        ``config.simulation_mode``. ``iteration`` drives the rcm-style rollout-length cycle in
         backward simulation (ignored by forward simulation).
 
         Returns:
@@ -648,11 +754,14 @@ class DMD2RFModel(OmniMoTModel):
         sequence_plans: list[SequencePlan],
         gen_data_clean: GenerationDataClean,
     ) -> tuple[GenerationDataClean, PackedSequence, torch.Tensor, dict]:
-        """Generate x0 via a single denoising operation from noised clean data.
+        """Generate x0 via a single student forward pass (fastgen-style DMD2).
 
         Samples one sigma from the fixed-step schedule, adds noise to clean data, runs the
-        student once, and converts the velocity prediction to x0. No gradient flows through
-        any re-noising step; all gradient signal is carried by this denoising operation.
+        student once, and converts the velocity prediction to x0.  No gradient flows through
+        any re-noising step — all gradient signal is carried by this single forward pass.
+
+        For single-step distillation the student sees near-pure noise (``sigma = t_list[0]``).
+        For multi-step distillation it sees real data noised to a randomly sampled sigma from ``t_list``.
         """
         B = gen_data_clean.batch_size
 
@@ -665,8 +774,10 @@ class DMD2RFModel(OmniMoTModel):
         packed_sequence = self._pack_input_sequence(
             sequence_plans, input_text_indexes, gen_data_clean, timesteps_student.cpu()
         )
-        sigmas_action_dense = None
-        sigmas_sound_dense = None
+        sigmas_action_dense = self._action_sigmas_from_full(sigma_student, sequence_plans)
+        sigmas_sound_dense = self._sound_sigmas_from_full(
+            sigma_student, sequence_plans, cast(list[torch.Tensor] | None, gen_data_clean.x0_tokens_sound)
+        )  # None or [n_sound,1]
         gen_data_noised = self._add_noise_to_input(
             gen_data_clean,
             packed_sequence,
@@ -754,10 +865,10 @@ class DMD2RFModel(OmniMoTModel):
         return result
 
     def _backward_n_steps(self, max_n_steps: int, iteration: int) -> int:
-        """Rollout length: cycle deterministically by per-net update index modulo max.
+        """rcm-style rollout length: cycle deterministically by per-net update index modulo max.
 
-        Uses ``effective_iteration % max_simulation_steps + 1`` (not iid sampling), so every
-        rollout length in ``[1, max_n_steps]`` is visited in a fixed cycle. Cycling on the
+        Matches rcm's ``effective_iteration % max_simulation_steps + 1`` (not iid sampling), so
+        every rollout length in ``[1, max_n_steps]`` is visited in a fixed cycle. Cycling on the
         per-net update counter (rather than the global iteration) keeps the cycle complete even
         when ``student_update_freq`` shares a common factor with ``max_n_steps``. Deterministic in
         ``iteration``, hence identical across ranks without a broadcast.
@@ -766,8 +877,8 @@ class DMD2RFModel(OmniMoTModel):
         update_idx = (
             self.get_student_iteration(iteration) if phase == "student" else self.get_critic_iteration(iteration)
         )
-        # get_critic_iteration is -1 at iteration 0 during critic-only warmup; clamp so the
-        # cycle starts at n_steps=1 rather than wrapping to max.
+        # get_critic_iteration is -1 at iteration 0 during critic-only warmup (rcm-faithful but a
+        # negative-modulo quirk); clamp so the cycle starts at n_steps=1 rather than wrapping to max.
         update_idx = max(update_idx, 0)
         return update_idx % max_n_steps + 1
 
@@ -778,7 +889,7 @@ class DMD2RFModel(OmniMoTModel):
         gen_data_clean: GenerationDataClean,
         iteration: int,
     ) -> tuple[GenerationDataClean, PackedSequence, torch.Tensor, dict]:
-        """Generate x0 via a multi-step denoising rollout from pure noise.
+        """Generate x0 via an rcm-style multi-step denoising rollout from pure noise.
 
         The rollout always starts from pure noise (``t_list[0]`` must be 1.0, so the RF seed
         ``(1 - sigma) * x0 + sigma * eps`` reduces to ``eps`` with zero clean-data leakage) and a
@@ -804,7 +915,7 @@ class DMD2RFModel(OmniMoTModel):
         full_t_list = t_list if t_list[-1] == 0.0 else t_list + [0.0]
         assert len(full_t_list) > 1, "fixed_step_sampler_config.t_list must contain a nonzero sigma"
 
-        # Pure-noise start contract: the schedule must begin at
+        # Pure-noise start contract (rcm / self-forcing style): the schedule must begin at
         # sigma=1.0 so the rollout seed is pure noise. Under RF interpolation the seed is
         # (1 - sigma) * x0 + sigma * eps; at sigma=1.0 the clean term vanishes (seed == eps),
         # so no clean-data signal leaks into the student generation. t_list[0] < 1.0 would
@@ -813,14 +924,14 @@ class DMD2RFModel(OmniMoTModel):
             f"backward simulation requires t_list[0] == 1.0 for a pure-noise start, got {full_t_list[0]}"
         )
 
-        # Iteration-cycled trajectory length: keep the pure-noise start (schedule prefix) and
-        # cycle how many denoising steps to run (by per-net update index) before descending to
-        # sigma=0. Fewer steps = a shorter rollout from the same pure-noise start, never a
+        # rcm-style iteration-cycled trajectory length: keep the pure-noise start (schedule prefix)
+        # and cycle how many denoising steps to run (by per-net update index) before descending to
+        # sigma=0. Fewer steps = a shorter rollout from the SAME pure-noise start, never a
         # half-noised real-data start.
         nonzero_levels = full_t_list[:-1]  # descending sigmas; nonzero_levels[0] == 1.0
         n_steps = self._backward_n_steps(len(nonzero_levels), iteration)
         full_t_list = nonzero_levels[:n_steps] + [0.0]
-        log.debug(f"[DMD2RF] backward_simulation: n_steps={n_steps}, t_list={full_t_list}")
+        log.info(f"[DMD2RF] backward_simulation: n_steps={n_steps}, t_list={full_t_list}")
         grad_steps = n_steps if backward_grad_steps == -1 else backward_grad_steps
 
         # Pack once at sigma_max to obtain condition masks (fixed throughout the rollout)
@@ -830,8 +941,10 @@ class DMD2RFModel(OmniMoTModel):
             sequence_plans, input_text_indexes, gen_data_clean, timesteps_max.cpu()
         )
         # Initialize noised data: generation frames ≈ pure noise, conditioned frames = x0_clean
-        sigmas_action_dense_init = None
-        sigmas_sound_dense_init = None
+        sigmas_action_dense_init = self._action_sigmas_from_full(sigma_max, sequence_plans)
+        sigmas_sound_dense_init = self._sound_sigmas_from_full(
+            sigma_max, sequence_plans, cast(list[torch.Tensor] | None, gen_data_clean.x0_tokens_sound)
+        )  # None or [n_sound,1]
         gen_data_noised = self._add_noise_to_input(
             gen_data_clean,
             packed_sequence,
@@ -845,13 +958,36 @@ class DMD2RFModel(OmniMoTModel):
         assert isinstance(condition_mask_vision, list)
         noisy_mask_vision = [1.0 - cm for cm in condition_mask_vision]  # list of [T_i,1,1]
 
-        condition_mask_action = None
-        condition_mask_sound = None
-        noisy_mask_action = None
-        cond_mask_sound = None
-        noisy_mask_sound = None
-        has_action = False
-        has_sound = False
+        # Condition masks for action / sound — pre-computed once, fixed throughout the rollout
+        condition_mask_action = (
+            packed_sequence.action.condition_mask if packed_sequence.action is not None else None
+        )  # list of [T_i,1] or None
+        condition_mask_sound = (
+            packed_sequence.sound.condition_mask if packed_sequence.sound is not None else None
+        )  # list of [T_i,1] or None
+        noisy_mask_action = (
+            [1.0 - cm for cm in condition_mask_action] if condition_mask_action is not None else None
+        )  # list of [T_i,1] or None
+        cond_mask_sound = (
+            [cm.T for cm in condition_mask_sound] if condition_mask_sound is not None else None
+        )  # list of [1,T_i] or None (transposed for [C_sound,T_sound] broadcasting)
+        noisy_mask_sound = (
+            [1.0 - cm for cm in cond_mask_sound] if cond_mask_sound is not None else None
+        )  # list of [1,T_i] or None
+        has_action = (
+            self.config.action_gen
+            and packed_sequence.action is not None
+            and gen_data_noised.xt_tokens_action is not None
+            and condition_mask_action is not None
+        )
+        has_sound = (
+            self.config.sound_gen
+            and packed_sequence.sound is not None
+            and gen_data_noised.xt_tokens_sound is not None
+            and condition_mask_sound is not None
+            and cond_mask_sound is not None
+            and noisy_mask_sound is not None
+        )
 
         out_student: dict = {}
         x0_pred_vision: list[torch.Tensor] = []
@@ -919,6 +1055,20 @@ class DMD2RFModel(OmniMoTModel):
                     sigma_next_tensor[i].view(1, 1, 1) * noisy_mask_vision[i] for i in range(B)
                 ]  # list of [T_i,1,1]
                 sigmas_sound_next = None
+                if has_sound:
+                    assert condition_mask_sound is not None
+                    assert gen_data_noised.xt_tokens_sound is not None
+                    sigmas_sound_dense_next = self._sound_sigmas_from_full(
+                        sigma_next_tensor,
+                        sequence_plans,
+                        cast(list[torch.Tensor] | None, gen_data_clean.x0_tokens_sound),
+                    )  # [n_sound,1]
+                    assert sigmas_sound_dense_next is not None
+                    sigmas_sound_next = [
+                        sigmas_sound_dense_next[i].view(-1, 1)[: gen_data_noised.xt_tokens_sound[i].shape[1]].T
+                        * (1.0 - condition_mask_sound[i].T)
+                        for i in range(len(gen_data_noised.xt_tokens_sound))
+                    ]  # list of [1,T_i]
                 gen_data_noised = GenerationDataNoised(
                     batch_size=B,
                     epsilon_vision=gen_data_noised.epsilon_vision,
@@ -1041,9 +1191,9 @@ class DMD2RFModel(OmniMoTModel):
         num_vision_tokens_per_sample: list[int],
         iteration: int,
     ) -> tuple[dict[str, torch.Tensor], torch.Tensor]:
-        """Student update step following the DMD2 algorithm.
+        """Student update step following the fastgen DMD2 algorithm.
 
-        1. Student generates x0 (forward simulation: noised clean data; backward simulation: multi-step rollout).
+        1. Student generates x0 (forward simulation: single pass; backward simulation: multi-step rollout).
         2. Student x0 is re-noised at a random sigma for the critic networks.
         3. Teacher and fake-score predict x0 on the re-noised data.
         4. VSD loss drives the student.
@@ -1078,8 +1228,10 @@ class DMD2RFModel(OmniMoTModel):
             torch.distributed.broadcast(timesteps_critic, src=global_src_rank, group=cp_group)
             torch.distributed.broadcast(sigmas_critic, src=global_src_rank, group=cp_group)
 
-        sigmas_action_critic = None
-        sigmas_sound_critic = None
+        sigmas_action_critic = self._action_sigmas_from_full(sigmas_critic, sequence_plans)
+        sigmas_sound_critic = self._sound_sigmas_from_full(
+            sigmas_critic, sequence_plans, cast(list[torch.Tensor] | None, gen_data_student.x0_tokens_sound)
+        )  # None or [n_sound,1]
         gen_data_noised_critic = self._add_noise_to_input(
             gen_data_student,
             packed_student,
@@ -1122,7 +1274,11 @@ class DMD2RFModel(OmniMoTModel):
                 teacher_v,
                 gen_data_noised_critic.sigmas_vision,  # type: ignore[arg-type]
             )
-            log.debug(f"student phase, after pack_and_denoise teacher, teacher_x0: {teacher_x0[0].shape}")
+            log.info(f"student phase, after pack_and_denoise teacher, teacher_x0: {teacher_x0[0].shape}")
+            # Snapshot the pre-CFG conditional x0. teacher_x0 below is overwritten with the
+            # CFG-extrapolated target; keeping the conditional view lets the diagnostics separate
+            # critic weight-drift (fake vs teacher-conditional) from the CFG term (guided vs conditional).
+            teacher_x0_cond = teacher_x0  # list of [C,T_i,H_i,W_i]
             # Optional classifier-free guidance for teacher
             if self.config.teacher_guidance > 1.0:
                 # Tokenize the uncond prompt with the SAME modality formatting as the batch
@@ -1191,17 +1347,330 @@ class DMD2RFModel(OmniMoTModel):
             raise ValueError(f"Unknown vsd_gradient_space={self.config.vsd_gradient_space}")
         total_loss = self.config.loss_scale_sid * vsd_loss
 
-        log.debug(
+
+        # VSD loss — sound (when configured)
+        if self.config.sound_gen:
+            if gen_data_student.x0_tokens_sound is None:
+                # FSDP dummy: keep student/teacher/fake_score sound params in backward graph
+                total_loss = (
+                    total_loss
+                    + 0.0 * sum(p.sum() for p in out_student["preds_sound"])  # type: ignore[union-attr]
+                    + 0.0 * sum(p.sum() for p in out_fake["preds_sound"])  # type: ignore[union-attr]
+                    + 0.0 * sum(p.sum() for p in out_teacher["preds_sound"])  # type: ignore[union-attr]
+                )
+
+        log.info(
             f"Iteration {iteration}, student phase, after vsd_loss, "
             f"vsd loss: {vsd_loss.item():.6f}, total loss: {total_loss.item():.6f}"
         )
+
+        # Diagnostic: track the VSD gradient signal components
+        with torch.no_grad():
+            fake_teacher_diff = torch.stack(
+                [(fake_x0[i] - teacher_x0[i]).abs().mean() for i in range(B)]
+            ).mean()  # scalar
+            gen_x0_vision = gen_data_student.x0_tokens_vision
+            gen_teacher_diff = torch.stack(
+                [(gen_x0_vision[i].detach() - teacher_x0[i]).abs().mean() for i in range(B)]
+            ).mean()  # scalar
+            fake_student_diff = torch.stack(
+                [(fake_x0[i] - gen_x0_vision[i].detach()).abs().mean() for i in range(B)]
+            ).mean()  # scalar
+            # Clean critic-vs-teacher-weight drift: compares fake (conditional, no CFG) against the
+            # teacher's conditional x0, so it is not confounded by the CFG term the way fake_teacher_diff is.
+            fake_teacher_cond_diff = torch.stack(
+                [(fake_x0[i] - teacher_x0_cond[i]).abs().mean() for i in range(B)]
+            ).mean()  # scalar
+            # Magnitude of the CFG extrapolation in x0 space, |teacher_guided - teacher_conditional|.
+            teacher_cfg_term = torch.stack(
+                [(teacher_x0[i] - teacher_x0_cond[i]).abs().mean() for i in range(B)]
+            ).mean()  # scalar
+            diff_ratio_den = gen_teacher_diff.clamp(min=1e-6)  # scalar
+            fake_student_to_gen_teacher_ratio = fake_student_diff / diff_ratio_den  # scalar
+            fake_teacher_to_gen_teacher_ratio = fake_teacher_diff / diff_ratio_den  # scalar
+            dmd_weighted_diag_keys = (
+                "dmd_gen_teacher_diff_masked",
+                "dmd_gen_teacher_diff_masked_image",
+                "dmd_gen_teacher_diff_masked_video",
+                "dmd_gen_teacher_diff_masked_sigma_000_025",
+                "dmd_gen_teacher_diff_masked_sigma_025_050",
+                "dmd_gen_teacher_diff_masked_sigma_050_075",
+                "dmd_gen_teacher_diff_masked_sigma_075_100",
+                "dmd_fake_student_diff_masked",
+                "dmd_fake_student_diff_masked_image",
+                "dmd_fake_student_diff_masked_video",
+                "dmd_fake_student_diff_masked_sigma_000_025",
+                "dmd_fake_student_diff_masked_sigma_025_050",
+                "dmd_fake_student_diff_masked_sigma_050_075",
+                "dmd_fake_student_diff_masked_sigma_075_100",
+                "dmd_fake_teacher_diff_masked_sigma_000_025",
+                "dmd_fake_teacher_diff_masked_sigma_025_050",
+                "dmd_fake_teacher_diff_masked_sigma_050_075",
+                "dmd_fake_teacher_diff_masked_sigma_075_100",
+                "dmd_fake_teacher_cond_diff_masked_sigma_000_025",
+                "dmd_fake_teacher_cond_diff_masked_sigma_025_050",
+                "dmd_fake_teacher_cond_diff_masked_sigma_050_075",
+                "dmd_fake_teacher_cond_diff_masked_sigma_075_100",
+                "dmd_teacher_cfg_term_masked_sigma_000_025",
+                "dmd_teacher_cfg_term_masked_sigma_025_050",
+                "dmd_teacher_cfg_term_masked_sigma_050_075",
+                "dmd_teacher_cfg_term_masked_sigma_075_100",
+                "dmd_fake_student_to_gen_teacher_ratio_masked",
+                "dmd_fake_student_to_gen_teacher_ratio_masked_image",
+                "dmd_fake_student_to_gen_teacher_ratio_masked_video",
+                "dmd_fake_student_to_gen_teacher_ratio_masked_sigma_000_025",
+                "dmd_fake_student_to_gen_teacher_ratio_masked_sigma_025_050",
+                "dmd_fake_student_to_gen_teacher_ratio_masked_sigma_050_075",
+                "dmd_fake_student_to_gen_teacher_ratio_masked_sigma_075_100",
+                "dmd_fake_teacher_to_gen_teacher_ratio_masked",
+                "dmd_fake_teacher_to_gen_teacher_ratio_masked_image",
+                "dmd_fake_teacher_to_gen_teacher_ratio_masked_video",
+                "dmd_fake_teacher_to_gen_teacher_ratio_masked_sigma_000_025",
+                "dmd_fake_teacher_to_gen_teacher_ratio_masked_sigma_025_050",
+                "dmd_fake_teacher_to_gen_teacher_ratio_masked_sigma_050_075",
+                "dmd_fake_teacher_to_gen_teacher_ratio_masked_sigma_075_100",
+                "dmd_vsd_teacher_pull_cosine_masked",
+                "dmd_vsd_teacher_pull_cosine_masked_image",
+                "dmd_vsd_teacher_pull_cosine_masked_video",
+                "dmd_vsd_teacher_pull_cosine_masked_sigma_000_025",
+                "dmd_vsd_teacher_pull_cosine_masked_sigma_025_050",
+                "dmd_vsd_teacher_pull_cosine_masked_sigma_050_075",
+                "dmd_vsd_teacher_pull_cosine_masked_sigma_075_100",
+            )
+            dmd_weighted_diag = {
+                f"dmd_weighted_{key}_{suffix}": torch.zeros((), **self.tensor_kwargs_fp32)  # scalar
+                for key in dmd_weighted_diag_keys
+                for suffix in ("sum", "count")
+            }
+            assert gen_data_noised_critic.sigmas_vision is not None
+            # VSD gradient vector norm: ||(f - t) * w|| per sample, averaged
+            vsd_grad_norms = []
+            for i in range(B):
+                g_fp32 = gen_x0_vision[i].detach().float()  # [C,T,H,W]
+                t_fp32 = teacher_x0[i].float()  # [C,T,H,W]
+                f_fp32 = fake_x0[i].float()  # [C,T,H,W]
+                diff_abs_i = (g_fp32 - t_fp32).abs()  # [C,T,H,W]
+                fake_teacher_diff_abs_i = (f_fp32 - t_fp32).abs()  # [C,T,H,W]
+                fake_student_diff_abs_i = (f_fp32 - g_fp32).abs()  # [C,T,H,W]
+                tc_fp32 = teacher_x0_cond[i].float()  # [C,T,H,W]
+                fake_teacher_cond_diff_abs_i = (f_fp32 - tc_fp32).abs()  # [C,T,H,W]
+                teacher_cfg_term_abs_i = (t_fp32 - tc_fp32).abs()  # [C,T,H,W]
+                mask_i = noisy_mask_vision[i].float().expand_as(diff_abs_i)  # [C,T,H,W]
+                mask_count_i = mask_i.sum()  # scalar
+                sample_count_i = (mask_count_i > 0).float()  # scalar
+                masked_diff_i = (diff_abs_i * mask_i).sum() / mask_count_i.clamp(min=1.0)  # scalar
+                weighted_diff_i = masked_diff_i * sample_count_i  # scalar
+                masked_fake_teacher_diff_i = (fake_teacher_diff_abs_i * mask_i).sum() / mask_count_i.clamp(
+                    min=1.0
+                )  # scalar
+                masked_fake_student_diff_i = (fake_student_diff_abs_i * mask_i).sum() / mask_count_i.clamp(
+                    min=1.0
+                )  # scalar
+                weighted_fake_student_diff_i = masked_fake_student_diff_i * sample_count_i  # scalar
+                masked_fake_teacher_cond_diff_i = (fake_teacher_cond_diff_abs_i * mask_i).sum() / mask_count_i.clamp(
+                    min=1.0
+                )  # scalar
+                masked_teacher_cfg_term_i = (teacher_cfg_term_abs_i * mask_i).sum() / mask_count_i.clamp(
+                    min=1.0
+                )  # scalar
+                masked_diff_ratio_den_i = masked_diff_i.clamp(min=1e-6)  # scalar
+                masked_fake_student_to_gen_teacher_ratio_i = (
+                    masked_fake_student_diff_i / masked_diff_ratio_den_i
+                )  # scalar
+                masked_fake_teacher_to_gen_teacher_ratio_i = (
+                    masked_fake_teacher_diff_i / masked_diff_ratio_den_i
+                )  # scalar
+                weighted_fake_student_to_gen_teacher_ratio_i = (
+                    masked_fake_student_to_gen_teacher_ratio_i * sample_count_i
+                )  # scalar
+                weighted_fake_teacher_to_gen_teacher_ratio_i = (
+                    masked_fake_teacher_to_gen_teacher_ratio_i * sample_count_i
+                )  # scalar
+                teacher_pull_i = (t_fp32 - g_fp32) * mask_i  # [C,T,H,W]
+                sigma_mask_i = noisy_mask_vision[i].float()  # [T,1,1]
+                sigma_count_i = sigma_mask_i.sum()  # scalar
+                sigma_vision_i = gen_data_noised_critic.sigmas_vision[i].detach().float()  # [T,1,1]
+                sigma_i = (sigma_vision_i * sigma_mask_i).sum() / sigma_count_i.clamp(min=1.0)  # scalar
+                if self.config.vsd_gradient_space == "velocity":
+                    teacher_v_fp32 = teacher_v_guided[i].float()  # [C,T,H,W]
+                    fake_v_fp32 = fake_v[i].float()  # [C,T,H,W]
+                    # Convert the velocity-space update to x0-space so this cosine compares like vectors:
+                    # teacher_x0 - fake_x0 = sigma * (fake_v - teacher_v).
+                    vsd_update_i = sigma_vision_i * (fake_v_fp32 - teacher_v_fp32) * mask_i  # [C,T,H,W]
+                    raw_vsd_grad_i = teacher_v_guided[i] - fake_v[i]  # [C,T,H,W]
+                else:
+                    vsd_update_i = (t_fp32 - f_fp32) * mask_i  # [C,T,H,W]
+                    raw_vsd_grad_i = fake_x0[i] - teacher_x0[i]  # [C,T,H,W]
+                cosine_den_i = teacher_pull_i.norm() * vsd_update_i.norm()  # scalar
+                cosine_valid_i = sample_count_i * (cosine_den_i > 1e-12).float()  # scalar
+                cosine_i = (teacher_pull_i * vsd_update_i).sum() / cosine_den_i.clamp(min=1e-12)  # scalar
+                weighted_cosine_i = cosine_i * cosine_valid_i  # scalar
+
+                dmd_weighted_diag["dmd_weighted_dmd_gen_teacher_diff_masked_sum"] += weighted_diff_i
+                dmd_weighted_diag["dmd_weighted_dmd_gen_teacher_diff_masked_count"] += sample_count_i
+                dmd_weighted_diag["dmd_weighted_dmd_fake_student_diff_masked_sum"] += weighted_fake_student_diff_i
+                dmd_weighted_diag["dmd_weighted_dmd_fake_student_diff_masked_count"] += sample_count_i
+                dmd_weighted_diag["dmd_weighted_dmd_fake_student_to_gen_teacher_ratio_masked_sum"] += (
+                    weighted_fake_student_to_gen_teacher_ratio_i
+                )
+                dmd_weighted_diag["dmd_weighted_dmd_fake_student_to_gen_teacher_ratio_masked_count"] += sample_count_i
+                dmd_weighted_diag["dmd_weighted_dmd_fake_teacher_to_gen_teacher_ratio_masked_sum"] += (
+                    weighted_fake_teacher_to_gen_teacher_ratio_i
+                )
+                dmd_weighted_diag["dmd_weighted_dmd_fake_teacher_to_gen_teacher_ratio_masked_count"] += sample_count_i
+                dmd_weighted_diag["dmd_weighted_dmd_vsd_teacher_pull_cosine_masked_sum"] += weighted_cosine_i
+                dmd_weighted_diag["dmd_weighted_dmd_vsd_teacher_pull_cosine_masked_count"] += cosine_valid_i
+                if gen_x0_vision[i].shape[2] == 1:
+                    dmd_weighted_diag["dmd_weighted_dmd_gen_teacher_diff_masked_image_sum"] += weighted_diff_i
+                    dmd_weighted_diag["dmd_weighted_dmd_gen_teacher_diff_masked_image_count"] += sample_count_i
+                    dmd_weighted_diag["dmd_weighted_dmd_fake_student_diff_masked_image_sum"] += (
+                        weighted_fake_student_diff_i
+                    )
+                    dmd_weighted_diag["dmd_weighted_dmd_fake_student_diff_masked_image_count"] += sample_count_i
+                    dmd_weighted_diag["dmd_weighted_dmd_fake_student_to_gen_teacher_ratio_masked_image_sum"] += (
+                        weighted_fake_student_to_gen_teacher_ratio_i
+                    )
+                    dmd_weighted_diag["dmd_weighted_dmd_fake_student_to_gen_teacher_ratio_masked_image_count"] += (
+                        sample_count_i
+                    )
+                    dmd_weighted_diag["dmd_weighted_dmd_fake_teacher_to_gen_teacher_ratio_masked_image_sum"] += (
+                        weighted_fake_teacher_to_gen_teacher_ratio_i
+                    )
+                    dmd_weighted_diag["dmd_weighted_dmd_fake_teacher_to_gen_teacher_ratio_masked_image_count"] += (
+                        sample_count_i
+                    )
+                    dmd_weighted_diag["dmd_weighted_dmd_vsd_teacher_pull_cosine_masked_image_sum"] += weighted_cosine_i
+                    dmd_weighted_diag["dmd_weighted_dmd_vsd_teacher_pull_cosine_masked_image_count"] += cosine_valid_i
+                else:
+                    dmd_weighted_diag["dmd_weighted_dmd_gen_teacher_diff_masked_video_sum"] += weighted_diff_i
+                    dmd_weighted_diag["dmd_weighted_dmd_gen_teacher_diff_masked_video_count"] += sample_count_i
+                    dmd_weighted_diag["dmd_weighted_dmd_fake_student_diff_masked_video_sum"] += (
+                        weighted_fake_student_diff_i
+                    )
+                    dmd_weighted_diag["dmd_weighted_dmd_fake_student_diff_masked_video_count"] += sample_count_i
+                    dmd_weighted_diag["dmd_weighted_dmd_fake_student_to_gen_teacher_ratio_masked_video_sum"] += (
+                        weighted_fake_student_to_gen_teacher_ratio_i
+                    )
+                    dmd_weighted_diag["dmd_weighted_dmd_fake_student_to_gen_teacher_ratio_masked_video_count"] += (
+                        sample_count_i
+                    )
+                    dmd_weighted_diag["dmd_weighted_dmd_fake_teacher_to_gen_teacher_ratio_masked_video_sum"] += (
+                        weighted_fake_teacher_to_gen_teacher_ratio_i
+                    )
+                    dmd_weighted_diag["dmd_weighted_dmd_fake_teacher_to_gen_teacher_ratio_masked_video_count"] += (
+                        sample_count_i
+                    )
+                    dmd_weighted_diag["dmd_weighted_dmd_vsd_teacher_pull_cosine_masked_video_sum"] += weighted_cosine_i
+                    dmd_weighted_diag["dmd_weighted_dmd_vsd_teacher_pull_cosine_masked_video_count"] += cosine_valid_i
+
+                sigma_bin_count_000_025 = sample_count_i * (sigma_i < 0.25).float()  # scalar
+                sigma_bin_count_025_050 = sample_count_i * ((sigma_i >= 0.25) & (sigma_i < 0.50)).float()  # scalar
+                sigma_bin_count_050_075 = sample_count_i * ((sigma_i >= 0.50) & (sigma_i < 0.75)).float()  # scalar
+                sigma_bin_count_075_100 = sample_count_i * (sigma_i >= 0.75).float()  # scalar
+                for sigma_bin_key, sigma_bin_count_i in (
+                    ("dmd_gen_teacher_diff_masked_sigma_000_025", sigma_bin_count_000_025),
+                    ("dmd_gen_teacher_diff_masked_sigma_025_050", sigma_bin_count_025_050),
+                    ("dmd_gen_teacher_diff_masked_sigma_050_075", sigma_bin_count_050_075),
+                    ("dmd_gen_teacher_diff_masked_sigma_075_100", sigma_bin_count_075_100),
+                ):
+                    dmd_weighted_diag[f"dmd_weighted_{sigma_bin_key}_sum"] += masked_diff_i * sigma_bin_count_i
+                    dmd_weighted_diag[f"dmd_weighted_{sigma_bin_key}_count"] += sigma_bin_count_i
+                for sigma_bin_key, sigma_bin_count_i in (
+                    ("dmd_fake_student_diff_masked_sigma_000_025", sigma_bin_count_000_025),
+                    ("dmd_fake_student_diff_masked_sigma_025_050", sigma_bin_count_025_050),
+                    ("dmd_fake_student_diff_masked_sigma_050_075", sigma_bin_count_050_075),
+                    ("dmd_fake_student_diff_masked_sigma_075_100", sigma_bin_count_075_100),
+                ):
+                    dmd_weighted_diag[f"dmd_weighted_{sigma_bin_key}_sum"] += (
+                        masked_fake_student_diff_i * sigma_bin_count_i
+                    )
+                    dmd_weighted_diag[f"dmd_weighted_{sigma_bin_key}_count"] += sigma_bin_count_i
+                for sigma_bin_key, sigma_bin_count_i in (
+                    ("dmd_fake_teacher_diff_masked_sigma_000_025", sigma_bin_count_000_025),
+                    ("dmd_fake_teacher_diff_masked_sigma_025_050", sigma_bin_count_025_050),
+                    ("dmd_fake_teacher_diff_masked_sigma_050_075", sigma_bin_count_050_075),
+                    ("dmd_fake_teacher_diff_masked_sigma_075_100", sigma_bin_count_075_100),
+                ):
+                    dmd_weighted_diag[f"dmd_weighted_{sigma_bin_key}_sum"] += (
+                        masked_fake_teacher_diff_i * sigma_bin_count_i
+                    )
+                    dmd_weighted_diag[f"dmd_weighted_{sigma_bin_key}_count"] += sigma_bin_count_i
+                for sigma_bin_key, sigma_bin_count_i in (
+                    ("dmd_fake_teacher_cond_diff_masked_sigma_000_025", sigma_bin_count_000_025),
+                    ("dmd_fake_teacher_cond_diff_masked_sigma_025_050", sigma_bin_count_025_050),
+                    ("dmd_fake_teacher_cond_diff_masked_sigma_050_075", sigma_bin_count_050_075),
+                    ("dmd_fake_teacher_cond_diff_masked_sigma_075_100", sigma_bin_count_075_100),
+                ):
+                    dmd_weighted_diag[f"dmd_weighted_{sigma_bin_key}_sum"] += (
+                        masked_fake_teacher_cond_diff_i * sigma_bin_count_i
+                    )
+                    dmd_weighted_diag[f"dmd_weighted_{sigma_bin_key}_count"] += sigma_bin_count_i
+                for sigma_bin_key, sigma_bin_count_i in (
+                    ("dmd_teacher_cfg_term_masked_sigma_000_025", sigma_bin_count_000_025),
+                    ("dmd_teacher_cfg_term_masked_sigma_025_050", sigma_bin_count_025_050),
+                    ("dmd_teacher_cfg_term_masked_sigma_050_075", sigma_bin_count_050_075),
+                    ("dmd_teacher_cfg_term_masked_sigma_075_100", sigma_bin_count_075_100),
+                ):
+                    dmd_weighted_diag[f"dmd_weighted_{sigma_bin_key}_sum"] += (
+                        masked_teacher_cfg_term_i * sigma_bin_count_i
+                    )
+                    dmd_weighted_diag[f"dmd_weighted_{sigma_bin_key}_count"] += sigma_bin_count_i
+                for sigma_bin_key, sigma_bin_count_i in (
+                    ("dmd_fake_student_to_gen_teacher_ratio_masked_sigma_000_025", sigma_bin_count_000_025),
+                    ("dmd_fake_student_to_gen_teacher_ratio_masked_sigma_025_050", sigma_bin_count_025_050),
+                    ("dmd_fake_student_to_gen_teacher_ratio_masked_sigma_050_075", sigma_bin_count_050_075),
+                    ("dmd_fake_student_to_gen_teacher_ratio_masked_sigma_075_100", sigma_bin_count_075_100),
+                ):
+                    dmd_weighted_diag[f"dmd_weighted_{sigma_bin_key}_sum"] += (
+                        masked_fake_student_to_gen_teacher_ratio_i * sigma_bin_count_i
+                    )
+                    dmd_weighted_diag[f"dmd_weighted_{sigma_bin_key}_count"] += sigma_bin_count_i
+                for sigma_bin_key, sigma_bin_count_i in (
+                    ("dmd_fake_teacher_to_gen_teacher_ratio_masked_sigma_000_025", sigma_bin_count_000_025),
+                    ("dmd_fake_teacher_to_gen_teacher_ratio_masked_sigma_025_050", sigma_bin_count_025_050),
+                    ("dmd_fake_teacher_to_gen_teacher_ratio_masked_sigma_050_075", sigma_bin_count_050_075),
+                    ("dmd_fake_teacher_to_gen_teacher_ratio_masked_sigma_075_100", sigma_bin_count_075_100),
+                ):
+                    dmd_weighted_diag[f"dmd_weighted_{sigma_bin_key}_sum"] += (
+                        masked_fake_teacher_to_gen_teacher_ratio_i * sigma_bin_count_i
+                    )
+                    dmd_weighted_diag[f"dmd_weighted_{sigma_bin_key}_count"] += sigma_bin_count_i
+                for sigma_bin_key, sigma_bin_count_i in (
+                    ("dmd_vsd_teacher_pull_cosine_masked_sigma_000_025", sigma_bin_count_000_025),
+                    ("dmd_vsd_teacher_pull_cosine_masked_sigma_025_050", sigma_bin_count_025_050),
+                    ("dmd_vsd_teacher_pull_cosine_masked_sigma_050_075", sigma_bin_count_050_075),
+                    ("dmd_vsd_teacher_pull_cosine_masked_sigma_075_100", sigma_bin_count_075_100),
+                ):
+                    cosine_sigma_bin_count_i = cosine_valid_i * sigma_bin_count_i  # scalar
+                    dmd_weighted_diag[f"dmd_weighted_{sigma_bin_key}_sum"] += cosine_i * cosine_sigma_bin_count_i
+                    dmd_weighted_diag[f"dmd_weighted_{sigma_bin_key}_count"] += cosine_sigma_bin_count_i
+
+                # DMD normalization uses the x0-space teacher pull in both modes. In velocity mode
+                # raw_vsd_grad_i remains velocity-space, so this norm is useful as a trend metric
+                # within that mode but should not be compared directly against x0-mode norms.
+                w_i = 1.0 / ((g_fp32 - t_fp32).abs().mean() + 1e-6)  # scalar
+                vsd_grad_i = raw_vsd_grad_i * w_i  # [C,T,H,W]
+                vsd_grad_norms.append(vsd_grad_i.norm())  # scalar
+            vsd_grad_norm = torch.stack(vsd_grad_norms).mean()  # scalar
 
         output_batch: dict[str, torch.Tensor] = {
             "vsd_loss": vsd_loss.detach(),
             "total_generator_loss": total_loss.detach(),
             "sigma": sigmas_critic.detach(),
             "flow_matching_loss_vision_per_instance": vsd_loss.detach().expand(B),  # [B]
+            # Aliases for the WandB callback.
             "dmd_loss_generator": total_loss.detach(),
+            "dmd_loss": vsd_loss.detach(),
+            # VSD diagnostic metrics
+            "dmd_fake_teacher_diff": fake_teacher_diff.detach(),
+            "dmd_fake_teacher_cond_diff": fake_teacher_cond_diff.detach(),
+            "dmd_teacher_cfg_term": teacher_cfg_term.detach(),
+            "dmd_gen_teacher_diff": gen_teacher_diff.detach(),
+            "dmd_fake_student_diff": fake_student_diff.detach(),
+            "dmd_fake_student_to_gen_teacher_ratio": fake_student_to_gen_teacher_ratio.detach(),
+            "dmd_fake_teacher_to_gen_teacher_ratio": fake_teacher_to_gen_teacher_ratio.detach(),
+            "dmd_vsd_grad_norm": vsd_grad_norm.detach(),
+            **{key: value.detach() for key, value in dmd_weighted_diag.items()},
         }
         return output_batch, total_loss
 
@@ -1216,9 +1685,9 @@ class DMD2RFModel(OmniMoTModel):
         num_vision_tokens_per_sample: list[int],
         iteration: int,
     ) -> tuple[dict[str, torch.Tensor], torch.Tensor]:
-        """Fake-score update step following the DMD2 algorithm.
+        """Fake-score update step following the fastgen DMD2 algorithm.
 
-        1. Student generates x0 with gradients stopped.
+        1. Student generates x0 (no grad -- stop gradient).
         2. Student x0 is re-noised at a random sigma.
         3. Fake-score learns to denoise the student's distribution via flow-matching loss.
 
@@ -1227,7 +1696,7 @@ class DMD2RFModel(OmniMoTModel):
         """
         B = gen_data_clean.batch_size
 
-        # 1. Student generates x0 with no gradient for the critic update.
+        # 1. Student generates x0 (no gradient for critic update)
         with torch.no_grad():
             gen_data_student, packed_student, _, _ = self._gen_data_from_student(
                 input_text_indexes, sequence_plans, gen_data_clean, iteration
@@ -1254,8 +1723,10 @@ class DMD2RFModel(OmniMoTModel):
             torch.distributed.broadcast(sigmas_critic, src=global_src_rank, group=cp_group)
 
         with torch.no_grad():
-            sigmas_action_critic = None
-            sigmas_sound_critic = None
+            sigmas_action_critic = self._action_sigmas_from_full(sigmas_critic, sequence_plans)
+            sigmas_sound_critic = self._sound_sigmas_from_full(
+                sigmas_critic, sequence_plans, cast(list[torch.Tensor] | None, gen_data_student.x0_tokens_sound)
+            )  # None or [n_sound,1]
             gen_data_noised_critic = self._add_noise_to_input(
                 gen_data_student,
                 packed_student,
@@ -1275,7 +1746,7 @@ class DMD2RFModel(OmniMoTModel):
         )
 
         # 4. Flow-matching loss — vision. active_mean preserves sum/active_count
-        # over generated frames; per_instance_sum uses per-instance active-element sum.
+        # over generated frames; sum_rcm uses RCM's per-instance active-element sum.
         rectified_flow = self.rectified_flow_image if gen_data_student.is_image_batch else self.rectified_flow_video
         fake_score_loss_reduction = self.config.fake_score_loss_reduction
         if fake_score_loss_reduction == "active_mean":
@@ -1289,8 +1760,8 @@ class DMD2RFModel(OmniMoTModel):
                 rectified_flow=rectified_flow,
                 normalize_by_active=True,
             )
-        elif fake_score_loss_reduction == "per_instance_sum":
-            _, loss_per_instance = self._flow_matching_per_instance_sum_loss(
+        elif fake_score_loss_reduction == "sum_rcm":
+            _, loss_per_instance = self._flow_matching_sum_rcm_loss(
                 pred=out_fake["preds_vision"],  # type: ignore[arg-type]
                 target=gen_data_noised_critic.vt_target_vision,  # type: ignore[arg-type]
                 condition_mask=packed_student.vision.condition_mask,  # type: ignore[union-attr]
@@ -1301,7 +1772,18 @@ class DMD2RFModel(OmniMoTModel):
         loss_fake_score = loss_per_instance.mean() * self.config.loss_scale_fake_score
         total_loss = loss_fake_score
 
-        log.debug(
+
+        # Flow-matching loss — sound (when configured)
+        if self.config.sound_gen:
+            if not (
+                gen_data_student.x0_tokens_sound is not None
+                and gen_data_noised_critic.xt_tokens_sound is not None
+                and packed_student.sound is not None
+            ):
+                # FSDP dummy: keep fake-score sound params in backward graph
+                total_loss = total_loss + 0.0 * sum(p.sum() for p in out_fake["preds_sound"])  # type: ignore[union-attr]
+
+        log.info(
             f"Iteration {iteration}, critic phase, after flow_matching_loss, "
             f"fake_score_loss: {loss_fake_score.item():.6f}, total_loss: {total_loss.item():.6f}"
         )
@@ -1311,6 +1793,8 @@ class DMD2RFModel(OmniMoTModel):
             "total_critic_loss": total_loss.detach(),
             "sigma": sigmas_critic.detach(),
             "flow_matching_loss_vision_per_instance": loss_per_instance.detach(),  # [B]
+            # Aliases for the WandB callback (wandb_log_rcm.py).
             "dmd_loss_critic": total_loss.detach(),
+            "dmd_loss": loss_fake_score.detach(),
         }
         return output_batch, total_loss

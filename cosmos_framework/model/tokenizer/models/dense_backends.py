@@ -20,67 +20,6 @@ DenseRuntimeBackend = Literal["varlen", "batched", "batched_with_padding", "auto
 DenseResolvedBackend = Literal["varlen", "batched", "batched_with_padding"]
 
 
-def _validate_checkpoint_group_size(checkpoint_group_size: int) -> None:
-    """Validate one dense-stack grouped-checkpointing request."""
-    if (
-        isinstance(checkpoint_group_size, bool)
-        or not isinstance(checkpoint_group_size, int)
-        or checkpoint_group_size < 1
-    ):
-        raise ValueError(f"checkpoint_group_size must be a positive integer, got {checkpoint_group_size!r}.")
-
-
-def _can_group_checkpoint_blocks(blocks: nn.ModuleList, checkpoint_group_size: int) -> bool:
-    """Return whether every block can move under one checkpoint per group."""
-    if checkpoint_group_size <= 1 or len(blocks) == 0:
-        return False
-    return all(block.training and getattr(block, "use_checkpoint", False) for block in blocks)
-
-
-def _run_varlen_checkpoint_group(
-    feats: torch.Tensor,
-    *,
-    blocks: tuple[nn.Module, ...],
-    q_seqlen: list[int],
-    cu_seqlens_q: torch.Tensor,
-    max_q_seqlen: int,
-    q_freqs_cis: torch.Tensor | None,
-) -> torch.Tensor:
-    """Run consecutive varlen blocks with their inner checkpoints disabled."""
-    output = feats  # [T,D]
-    for block in blocks:
-        output = block.forward_tensor_no_cache(  # [T,D]
-            output,
-            q_seqlen=q_seqlen,
-            cu_seqlens_q=cu_seqlens_q,
-            max_q_seqlen=max_q_seqlen,
-            q_freqs_cis=q_freqs_cis,
-            checkpoint_override=False,
-        )
-    return output  # [T,D]
-
-
-def _run_batched_checkpoint_group(
-    feats: torch.Tensor,
-    *,
-    blocks: tuple[nn.Module, ...],
-    cu_seqlens_q: torch.Tensor | None,
-    max_q_seqlen: int | None,
-    q_freqs_cis: torch.Tensor | None,
-) -> torch.Tensor:
-    """Run consecutive batched blocks inside one outer checkpoint."""
-    output = feats  # [B,S,D]
-    for block in blocks:
-        output = run_batched_block(
-            block,
-            output,
-            cu_seqlens_q=cu_seqlens_q,
-            max_q_seqlen=max_q_seqlen,
-            q_freqs_cis=q_freqs_cis,
-        )  # [B,S,D]
-    return output  # [B,S,D]
-
-
 def resolve_dense_backend(backend: DenseRuntimeBackend, use_compile: bool) -> DenseResolvedBackend:
     """Resolve the dense-runtime backend for the current execution mode.
 
@@ -108,10 +47,8 @@ def run_varlen_block_stack(
     cu_seqlens_q: torch.Tensor,
     max_q_seqlen: int,
     q_freqs_cis: torch.Tensor | None = None,
-    checkpoint_group_size: int = 1,
 ) -> torch.Tensor:
     """Run the existing tensor no-cache block path over dense `[B, S, D]` chunks."""
-    _validate_checkpoint_group_size(checkpoint_group_size)
     if feats.ndim != 3:
         raise ValueError(f"Varlen dense backend expects [B, S, D] features, got shape {tuple(feats.shape)}.")
 
@@ -120,24 +57,6 @@ def run_varlen_block_stack(
 
     batch_size, seq_len, hidden_size = feats.shape
     flat_feats = feats.reshape(batch_size * seq_len, hidden_size)
-    if _can_group_checkpoint_blocks(blocks, checkpoint_group_size):
-        for group_start in range(0, len(blocks), checkpoint_group_size):
-            checkpoint_blocks = tuple(blocks[group_start : group_start + checkpoint_group_size])
-            flat_feats = torch.utils.checkpoint.checkpoint(  # [T,D]
-                partial(
-                    _run_varlen_checkpoint_group,
-                    blocks=checkpoint_blocks,
-                    q_seqlen=q_seqlen,
-                    cu_seqlens_q=cu_seqlens_q,
-                    max_q_seqlen=max_q_seqlen,
-                    q_freqs_cis=q_freqs_cis,
-                ),
-                flat_feats,
-                preserve_rng_state=True,
-                use_reentrant=False,
-            )
-        return flat_feats.reshape(batch_size, seq_len, hidden_size)
-
     for block in blocks:
         flat_feats = block.forward_tensor_no_cache(
             flat_feats,
@@ -155,31 +74,12 @@ def run_batched_block_stack(
     cu_seqlens_q: torch.Tensor | None = None,
     max_q_seqlen: int | None = None,
     q_freqs_cis: torch.Tensor | None = None,
-    checkpoint_group_size: int = 1,
 ) -> torch.Tensor:
     """Run the dense batched block path over uniform `[B, S, D]` chunks."""
-    _validate_checkpoint_group_size(checkpoint_group_size)
     if feats.ndim != 3:
         raise ValueError(f"Batched dense backend expects [B, S, D] features, got shape {tuple(feats.shape)}.")
 
     output = feats
-    if _can_group_checkpoint_blocks(blocks, checkpoint_group_size):
-        for group_start in range(0, len(blocks), checkpoint_group_size):
-            checkpoint_blocks = tuple(blocks[group_start : group_start + checkpoint_group_size])
-            output = torch.utils.checkpoint.checkpoint(  # [B,S,D]
-                partial(
-                    _run_batched_checkpoint_group,
-                    blocks=checkpoint_blocks,
-                    cu_seqlens_q=cu_seqlens_q,
-                    max_q_seqlen=max_q_seqlen,
-                    q_freqs_cis=q_freqs_cis,
-                ),
-                output,
-                preserve_rng_state=True,
-                use_reentrant=False,
-            )
-        return output
-
     for block in blocks:
         if block.training and getattr(block, "use_checkpoint", False):
             output = torch.utils.checkpoint.checkpoint(
@@ -191,7 +91,6 @@ def run_batched_block_stack(
                     q_freqs_cis=q_freqs_cis,
                 ),
                 output,
-                preserve_rng_state=True,
                 use_reentrant=False,
             )
         else:

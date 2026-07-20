@@ -26,6 +26,7 @@ import torch.nn as nn
 from accelerate import init_on_device
 from transformers import AutoConfig, AutoModel, AutoModelForCausalLM, AutoModelForImageTextToText
 
+import cosmos_framework.model.generator.reasoner.cosmos3_edge  # noqa: F401  registers cosmos3_edge with transformers Auto classes
 from cosmos_framework.model.generator.utils.safetensors_loader import load_language_model, load_vlm_model
 from cosmos_framework.utils import log
 from cosmos_framework.utils.generator.parallelism import ParallelDims

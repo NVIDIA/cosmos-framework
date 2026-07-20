@@ -3,7 +3,6 @@
 
 import collections
 import copy
-import re
 from typing import Any, Iterator, NamedTuple
 
 import torch
@@ -13,12 +12,8 @@ from torch.distributed.checkpoint.state_dict import StateDictOptions, get_optimi
 from torch.distributed.checkpoint.stateful import Stateful
 from torch.optim.lr_scheduler import LambdaLR, LRScheduler
 
+from cosmos_framework.utils.functional.lr_scheduler import LambdaLinearScheduler, LambdaWarmUpCosineScheduler, WSDScheduler
 from cosmos_framework.utils import log
-from cosmos_framework.utils.functional.lr_scheduler import (
-    LambdaLinearScheduler,
-    LambdaWarmUpCosineScheduler,
-    WSDScheduler,
-)
 
 # Hybrid orthogonalizing optimizers (Muon / Dion2) that own their parameter
 # categorization and run their own collective communication. They must be built
@@ -107,7 +102,6 @@ def _build_params_with_metadata(
     lr_multipliers: dict[str, float],
     base_lr: float,
     disable_weight_decay_for_1d_params: bool,
-    weight_decay_skip_patterns: tuple[str, ...] = (),
 ) -> list[tuple[nn.Parameter, ParamMetadata]]:
     """Filter trainable parameters and tag each with its effective LR and weight-decay flag.
 
@@ -150,13 +144,6 @@ def _build_params_with_metadata(
             ``base_lr * matched_multiplier``.
         disable_weight_decay_for_1d_params: When ``True``, 1-D parameters are
             tagged ``enable_weight_decay=False``.
-        weight_decay_skip_patterns: Regex patterns matched (``re.search``) against
-            each parameter's dotted name. Any parameter whose name matches is tagged
-            ``enable_weight_decay=False`` (its group gets ``weight_decay=0.0``). This
-            is the general, name-based way to exclude specific weights from weight
-            decay -- e.g. ``r"\\.gate\\.weight$"`` for MoE router/gate weights. Empty
-            (default) skips nothing. Applied in addition to the shape-based
-            ``disable_weight_decay_for_1d_params`` rule.
 
     Returns:
         List of ``(nn.Parameter, ParamMetadata)`` pairs covering every kept
@@ -167,9 +154,6 @@ def _build_params_with_metadata(
     # the total below -- ``named_parameters()`` is a generator.
     net_params = dict(model.net.named_parameters())
     param_dict = {pn: p for pn, p in net_params.items() if p.requires_grad}
-
-    # Precompile the weight-decay-skip regexes once.
-    skip_res = [re.compile(pat) for pat in weight_decay_skip_patterns]
 
     params_with_metadata: list[tuple[nn.Parameter, ParamMetadata]] = []
 
@@ -185,14 +169,7 @@ def _build_params_with_metadata(
                 matched_mult = mult
                 break
 
-        # Weight-decay enablement: disabled for 1-D params (norms/biases) via the
-        # shape-based rule, and for any parameter whose name matches one of
-        # ``weight_decay_skip_patterns`` (general, name-based -- e.g. MoE router/gate
-        # weights via r"\.gate\.weight$"). The ``weight_decay=0.0`` override this
-        # produces is honored by AdamW and Muon/Dion2 alike.
         if disable_weight_decay_for_1d_params and p.dim() < 2:
-            enable_weight_decay = False
-        elif any(r.search(pn) for r in skip_res):
             enable_weight_decay = False
         else:
             enable_weight_decay = True
@@ -310,12 +287,6 @@ class OptimizersContainer(Stateful):
                   ``False``): When true, parameters with ``dim() < 2`` (norm
                   weights, biases, etc.) get ``weight_decay=0.0`` in their
                   param group regardless of the optimizer-wide ``weight_decay``.
-                - ``weight_decay_skip_patterns`` (optional, default ``[]``): List of
-                  regexes matched against parameter names; matching params get
-                  ``weight_decay=0.0`` in their param group (honored by AdamW and
-                  Muon/Dion2 alike). General, name-based way to exclude specific
-                  weights from weight decay -- e.g. ``r"\\.gate\\.weight$"`` for MoE
-                  router/gate weights. Independent of the router-to-AdamW routing.
         """
         self.model = model
         self.optimizers: list[torch.optim.Optimizer] = []
@@ -329,14 +300,6 @@ class OptimizersContainer(Stateful):
         keys_to_select = optimizer_kwargs.pop("keys_to_select", [])
         lr_multipliers: dict[str, float] = optimizer_kwargs.pop("lr_multipliers", {})
         disable_weight_decay_for_1d_params = optimizer_kwargs.pop("disable_weight_decay_for_1d_params", False)
-        # General, name-based weight-decay exclusion (regexes matched against param
-        # names). Factory-only, so a plain pop. Normalize to a tuple of str.
-        weight_decay_skip_patterns = tuple(optimizer_kwargs.pop("weight_decay_skip_patterns", None) or ())
-        # Orthogonalization-skip regexes (force matching 2D Linear weights to AdamW).
-        # POP (not read) so it never leaks into a plain Adam/AdamW/FusedAdam constructor
-        # (fixed signatures -> TypeError); re-inserted below only for the Muon/Dion2
-        # (aux) optimizers, which accept it as a named arg. Normalize to a tuple of str.
-        orthogonalize_skip_patterns = tuple(optimizer_kwargs.pop("orthogonalize_skip_patterns", None) or ())
 
         if not optimizer_kwargs.get("fused", False):
             raise ValueError("Optimizers with fused=False are not supported; pass fused=True in optimizer_kwargs.")
@@ -350,7 +313,6 @@ class OptimizersContainer(Stateful):
             lr_multipliers=lr_multipliers,
             base_lr=base_lr,
             disable_weight_decay_for_1d_params=disable_weight_decay_for_1d_params,
-            weight_decay_skip_patterns=weight_decay_skip_patterns,
         )
 
         if optimizer_type.lower() in _AUX_ADAMW_OPTIMIZERS:
@@ -364,13 +326,9 @@ class OptimizersContainer(Stateful):
             # ``lr_multipliers`` / ``disable_weight_decay_for_1d_params``), and
             # Muon/Dion2 read lr/weight_decay per group — degenerating to a single
             # global lr/wd when there is only one group (the reference behavior).
-            # Re-insert orthogonalize_skip_patterns here (popped above): only Muon/Dion2
-            # accept it, and it drives the AdamW-vs-orthogonalize categorization inside
-            # categorize_params.
             optimizer = _build_optimizer_internal(
                 params_with_metadata,
                 optimizer_type,
-                orthogonalize_skip_patterns=orthogonalize_skip_patterns,
                 **optimizer_kwargs,
             )
             # Categorize against the trainable network only, mirroring

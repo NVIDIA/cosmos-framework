@@ -21,6 +21,10 @@ from typing import Dict, List, Optional
 
 from transformers.models.auto.processing_auto import AutoProcessor
 
+from cosmos_framework.data.generator.processors.cosmos3_edge_processing import (
+    build_cosmos3_edge_processor,
+    is_cosmos3_edge_native_snapshot,
+)
 from cosmos_framework.model.generator.reasoner.qwen3_vl.utils import tokenize_caption
 from cosmos_framework.utils import log
 from cosmos_framework.utils.generator.reasoner.pretrained_models_downloader import maybe_download_hf_model_from_s3
@@ -118,7 +122,12 @@ class BaseVLMProcessor:
                 name, credentials, bucket, include_model_weights=False, cache_dir=cache_dir
             )
 
-        self.processor = AutoProcessor.from_pretrained(model_name_or_path_local, trust_remote_code=True)
+        if is_cosmos3_edge_native_snapshot(model_name_or_path_local):
+            # AutoProcessor on transformers 4.x silently degrades to a bare tokenizer
+            # for renewed (no remote code) Cosmos3-Edge snapshots; use the native port.
+            self.processor = build_cosmos3_edge_processor(model_name_or_path_local)
+        else:
+            self.processor = AutoProcessor.from_pretrained(model_name_or_path_local, trust_remote_code=True)
         log.info("Successfully loaded processor from local cache")
 
         self.image_token_id = (

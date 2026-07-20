@@ -19,9 +19,9 @@ from einops import rearrange
 
 from cosmos_framework.callbacks.every_n import EveryN
 from cosmos_framework.model._base import ImaginaireModel
-from cosmos_framework.tools.visualize.video import save_img_or_video
 from cosmos_framework.utils import distributed, log, misc
 from cosmos_framework.utils.easy_io import easy_io
+from cosmos_framework.tools.visualize.video import save_img_or_video
 from cosmos_framework.utils.generator.data_utils import slice_data_batch
 
 WandbImagePaths = str | dict[str, str]
@@ -510,7 +510,6 @@ class EveryNDrawSample(EveryN):
         model: Any,
         data_batch: dict[str, Any],
         raw_data: list[torch.Tensor] | None,
-        x0: list[torch.Tensor] | None,
         metadata: MultiviewTransferMetadata,
         iteration: int,
         tag: str,
@@ -525,16 +524,6 @@ class EveryNDrawSample(EveryN):
             gt_target_video.float().cpu(),  # [V,C,F,H,W]
         ]
 
-        # IMPORTANT: run diffusion generation BEFORE any auxiliary VAE decode.
-        # generate_samples_from_batch drives the compiled net under
-        # torch.compiler.cudagraph_mark_step_begin(); interposing a large VAE
-        # decode (e.g. the clean-x0 reconstruction row below) between the
-        # previous cudagraph step and the sampler perturbs the captured cudagraph
-        # memory pool and collapses the generated latents to ~undenoised noise.
-        # Decoding the clean x0 AFTER sampling (matching the standard single-item
-        # sample() path ordering) keeps generation bit-for-bit as in the runs that
-        # produced good zero-shot output.
-        generated_rows: list[torch.Tensor] = []
         generation_batch = slice_data_batch(data_batch, start=0, limit=1)
         for guidance in self.guidance:
             sample = model.generate_samples_from_batch(
@@ -557,25 +546,7 @@ class EveryNDrawSample(EveryN):
             )  # [V,C,F,H,W] or None
             if generated_by_view is None:
                 return MultiviewTransferSampleResult(handled=True)
-            generated_rows.append(generated_by_view.float().cpu())  # [V,C,F,H,W]
-
-        # VAE reconstruction of the clean target latent (decode of the x0 tokens). This is the
-        # tokenizer reconstruction ceiling — the best the model could produce if generation were
-        # perfect — so it isolates VAE loss from diffusion generation quality. Decoded only after
-        # generation completes (see note above). Kept as row 3 (before the generated rows) so the
-        # display order stays [control, GT, clean recon, generated].
-        if x0 is not None and len(x0) >= metadata.num_vision_items:
-            assert hasattr(model, "decode")
-            clean_target_decoded = model.decode(x0[metadata.num_vision_items - 1])  # [1,C,V*F,H,W] or [C,V*F,H,W]
-            clean_target_by_view = _split_multiview_tensor_by_view(
-                clean_target_decoded,
-                metadata.sample_n_views,
-                metadata.num_video_frames_per_view,
-            )  # [V,C,F,H,W] or None
-            if clean_target_by_view is not None:
-                to_show.append(clean_target_by_view.float().cpu())
-
-        to_show.extend(generated_rows)
+            to_show.append(generated_by_view.float().cpu())  # [V,C,F,H,W]
 
         if any(row.shape != to_show[0].shape for row in to_show):
             return MultiviewTransferSampleResult(handled=True)
@@ -630,7 +601,6 @@ class EveryNDrawSample(EveryN):
                 model,
                 data_batch,
                 raw_data,
-                x0,
                 multiview_metadata,
                 iteration,
                 tag,
@@ -643,7 +613,6 @@ class EveryNDrawSample(EveryN):
             # Split into per-sample condition (source) and GT target images.
             condition_images: list[torch.Tensor] = []
             gt_target_images: list[torch.Tensor] = []
-            gt_target_latents: list[torch.Tensor] = []
             vis_offset = 0
             for sample_idx in range(data_clean.batch_size):
                 n_vis = num_items[sample_idx]
@@ -661,10 +630,6 @@ class EveryNDrawSample(EveryN):
                 else:
                     condition_images.append(raw_data[vis_offset])  # source image (1, C, 1, H, W) / video clip
                 gt_target_images.append(target)
-                # x0 (clean vision latents) can be None when the model/training setup does not
-                # populate x0_tokens_vision; only collect target latents when they are available.
-                if x0 is not None:
-                    gt_target_latents.append(x0[vis_offset + n_vis - 1])  # target latent (1, C, 1, H, W)
                 vis_offset += n_vis
 
             # Use target images for max_w/max_h/t_crop (generated samples match target size)
@@ -696,19 +661,6 @@ class EveryNDrawSample(EveryN):
             sample_vision_decoded = [model.decode(sample_vision_i) for sample_vision_i in sample_vision]
             assert len(sample_vision_decoded) == n_viz_sample
             to_show.append(pad_images_and_cat(sample_vision_decoded, max_w, max_h, t_crop).float().cpu())
-
-        # Penultimate row: VAE reconstruction of the clean latents (decode of the x0 tokens).
-        # This is the tokenizer reconstruction ceiling — how much detail is lost by encode+decode
-        # alone — so it separates VAE loss from the diffusion model's generation quality.
-        # x0 (clean vision latents) can be None when the model/training setup does not populate
-        # x0_tokens_vision; skip the clean-recon row entirely in that case.
-        if x0 is not None:
-            assert hasattr(model, "decode")
-            if is_multi_item:
-                clean_token_decoded = [model.decode(latent) for latent in gt_target_latents]
-            else:
-                clean_token_decoded = [model.decode(latent) for latent in x0[:n_viz_sample]]
-            to_show.append(pad_images_and_cat(clean_token_decoded, max_w, max_h, t_crop).float().cpu())
 
         # Last row: ground truth
         if is_multi_item:

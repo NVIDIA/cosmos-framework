@@ -62,8 +62,8 @@ from typing import Annotated, Callable, TypeAlias
 import pydantic
 from typing_extensions import Self, override
 
-from cosmos_framework.utils import log
 from cosmos_framework.utils.flags import EXPERIMENTAL_CHECKPOINTS, INTERNAL, StrEnum
+from cosmos_framework.utils import log
 
 HF_VERSION = "1.16.4"
 
@@ -455,6 +455,16 @@ def download_checkpoint_v2(checkpoint_uri: str, *, check_exists: bool = True) ->
         return checkpoint_uri
     if checkpoint_uri.startswith("hf://"):
         return _download_hf_checkpoint(checkpoint_uri)
+    # Bare relative registry path produced by Cosmos3-Edge-Policy-DROID. Its checkpoint
+    # conversion exports the Wan2.2 VAE tokenizer with an empty ``bucket_name`` (Nano
+    # exports ``bucket_name="bucket"``), so ``Wan2pt2VAEInterface`` forwards the raw relative
+    # ``vae_path`` ("pretrained/tokenizers/video/wan2pt2/Wan2.2_VAE.pth") here instead of the
+    # ``s3://bucket/...`` key. Re-form that key so it resolves through the registry and
+    # auto-downloads from HF, matching Nano's path. Local files still take precedence (below).
+    if "://" not in checkpoint_uri and not os.path.exists(checkpoint_uri):
+        registered = CheckpointConfig.maybe_from_uri(sanitize_uri(f"s3://bucket/{checkpoint_uri}"))
+        if registered is not None:
+            return registered.download()
     if check_exists and not os.path.exists(checkpoint_uri):
         raise ValueError(f"Checkpoint path {checkpoint_uri} does not exist.")
     return checkpoint_uri

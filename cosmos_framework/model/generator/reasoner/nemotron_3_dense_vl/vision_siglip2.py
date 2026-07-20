@@ -8,11 +8,10 @@ vision transformer (naflex-style packed patches) and the Qwen3-style
 `PatchMerger` projector, plus `patch_merging_by_param`. Kept byte-faithful so
 outputs match the HF reference numerically.
 """
-
 from __future__ import annotations
 
 import math
-from typing import Any, Callable, Optional
+from typing import Callable, Optional
 
 import torch
 import torch.nn as nn
@@ -21,7 +20,6 @@ from einops import rearrange
 from transformers.activations import ACT2FN
 from transformers.modeling_utils import ALL_ATTENTION_FUNCTIONS, PreTrainedModel
 from transformers.models.siglip2.configuration_siglip2 import Siglip2VisionConfig
-
 
 def repeat_kv(hidden_states: torch.Tensor, n_rep: int) -> torch.Tensor:
     """
@@ -89,7 +87,6 @@ class Siglip2VisionEmbeddings(nn.Module):
 
         return patch_embeds
 
-
 class Siglip2Attention(nn.Module):
     """Multi-headed attention from 'Attention Is All You Need' paper"""
 
@@ -154,7 +151,9 @@ class Siglip2Attention(nn.Module):
         else:
             # Other implementations: Process each chunk separately
             lengths = cu_seqlens[1:] - cu_seqlens[:-1]
-            splits = [torch.split(tensor, lengths.tolist(), dim=2) for tensor in (queries, keys, values)]
+            splits = [
+                torch.split(tensor, lengths.tolist(), dim=2) for tensor in (queries, keys, values)
+            ]
 
             attn_outputs = [
                 attention_interface(
@@ -176,7 +175,6 @@ class Siglip2Attention(nn.Module):
         attn_output = self.out_proj(attn_output)
 
         return attn_output
-
 
 class Siglip2MLP(nn.Module):
     def __init__(self, config):
@@ -225,7 +223,6 @@ class Siglip2EncoderLayer(nn.Module):
 
         return hidden_states
 
-
 class Siglip2Encoder(nn.Module):
     """
     Transformer encoder consisting of `config.num_hidden_layers` self attention layers. Each layer is a
@@ -258,7 +255,6 @@ class Siglip2Encoder(nn.Module):
 
         return hidden_states
 
-
 class Siglip2VisionTransformer(PreTrainedModel):
     config: Siglip2VisionConfig
     main_input_name = "pixel_values"
@@ -279,7 +275,6 @@ class Siglip2VisionTransformer(PreTrainedModel):
         "hidden_states": Siglip2EncoderLayer,
         "attentions": Siglip2Attention,
     }
-
     def __init__(self, config: Siglip2VisionConfig):
         super().__init__(config)
         self.config = config
@@ -289,38 +284,32 @@ class Siglip2VisionTransformer(PreTrainedModel):
         self.encoder = Siglip2Encoder(config)
         self.post_layernorm = nn.LayerNorm(embed_dim, eps=config.layer_norm_eps)
         self.num_grid_per_side = self.embeddings.position_embedding_size
-
+    
     def get_position_embedding(self, grid_thw: torch.Tensor) -> torch.Tensor:
         # prepare for interpolation
-        positional_embedding = (
-            self.embeddings.position_embedding.weight.reshape(
-                self.embeddings.position_embedding_size, self.embeddings.position_embedding_size, -1
-            )
-            .permute(2, 0, 1)
-            .unsqueeze(0)
-        )
+        positional_embedding = self.embeddings.position_embedding.weight.reshape(
+            self.embeddings.position_embedding_size, self.embeddings.position_embedding_size, -1
+        ).permute(2, 0, 1).unsqueeze(0)
 
         total_tokens = int(torch.prod(grid_thw, dim=1).sum().item())
         embed_dim = self.embeddings.embed_dim
         # create a resized positional embedding of size (total_tokens, embed_size) to hold positional_embedding for all visual inputs
-        resized_positional_embeddings = torch.empty(
-            (total_tokens, embed_dim), dtype=positional_embedding.dtype, device=grid_thw.device
-        )
+        resized_positional_embeddings = torch.empty((total_tokens, embed_dim), dtype=positional_embedding.dtype, device=grid_thw.device)
         offset = 0
         for t, height, width in grid_thw:
             resized_embeddings = F.interpolate(
                 positional_embedding,
                 size=(height.cpu().item(), width.cpu().item()),
-                mode="bilinear",
+                mode='bilinear',
                 align_corners=False,
-                antialias=True,
+                antialias=True
             )
             resized_embeddings = resized_embeddings.reshape(embed_dim, -1).transpose(0, 1)
-
+            
             num_spatial_tokens = height * width
             total_block_tokens = t * num_spatial_tokens
 
-            resized_positional_embeddings[offset : offset + total_block_tokens] = resized_embeddings.repeat(t, 1)
+            resized_positional_embeddings[offset: offset + total_block_tokens] = resized_embeddings.repeat(t, 1)
             offset += total_block_tokens
         assert offset == resized_positional_embeddings.shape[0]
         return resized_positional_embeddings
@@ -340,7 +329,7 @@ class Siglip2VisionTransformer(PreTrainedModel):
         output_hidden_states = (
             output_hidden_states if output_hidden_states is not None else self.config.output_hidden_states
         )
-
+        
         hidden_states = self.embeddings(pixel_values)
         positional_embeddings = self.get_position_embedding(grid_thw)
         hidden_states = hidden_states + positional_embeddings
@@ -368,7 +357,8 @@ class Siglip2VisionTransformer(PreTrainedModel):
 
 
 class PatchMerger(nn.Module):
-    def __init__(self, config: Any, use_postshuffle_norm=False) -> None:
+
+    def __init__(self, config: "ProjectorConfig", use_postshuffle_norm=False) -> None:
         super().__init__()
         self.spatial_merge_size = config.spatial_merge_size
         self.hidden_size = config.input_hidden_size * (self.spatial_merge_size**2)
@@ -394,6 +384,7 @@ class PatchMerger(nn.Module):
         nn.init.zeros_(self.linear_fc1.bias)
         nn.init.zeros_(self.linear_fc2.bias)
         self.norm.reset_parameters()
+
 
 
 def patch_merging_by_param(image_embeds, image_grid_thw, merge_size=2):
@@ -425,7 +416,12 @@ def patch_merging_by_param(image_embeds, image_grid_thw, merge_size=2):
         # b=t, h=(h'/ms * ms), w=(w'/ms * ms)
         # -> [t, h/ms, ms, w/ms, ms, c] -> [t, h/ms, w/ms, (ms*ms*c)]
         # Note: we follow the Qwen2-VL order — h1 w1 come before C.
-        x = rearrange(x, "t (h h1) (w w1) c -> t h w (h1 w1 c)", h1=merge_size, w1=merge_size)
+        x = rearrange(
+            x, 
+            't (h h1) (w w1) c -> t h w (h1 w1 c)', 
+            h1=merge_size, 
+            w1=merge_size
+        )
 
         # 4. Flatten back to a sequence [T * (H/ms) * (W/ms), C * ms^2].
         new_embeds_list.append(x.reshape(-1, x.shape[-1]))
@@ -442,7 +438,6 @@ def patch_merging_by_param(image_embeds, image_grid_thw, merge_size=2):
 
 class NemotronSiglip2VisionEncoder(nn.Module):
     """Vision tower: SigLIP2 transformer + PatchMerger. Mirrors HF get_image_features."""
-
     def __init__(self, vision_config: Siglip2VisionConfig, projector_config):
         super().__init__()
         self.spatial_merge_size = projector_config.spatial_merge_size
@@ -458,8 +453,7 @@ class NemotronSiglip2VisionEncoder(nn.Module):
         pixel_values = pixel_values.type(self.visual.dtype)
         image_embeds = self.visual(pixel_values, grid_thw=image_grid_thw)
         image_embeds, image_grid_thw = patch_merging_by_param(
-            image_embeds, image_grid_thw, merge_size=self.projector.spatial_merge_size
-        )
+            image_embeds, image_grid_thw, merge_size=self.projector.spatial_merge_size)
         image_embeds = image_embeds.view(-1, self.projector.spatial_merge_size**2, self.projector.input_hidden_size)
         projected = self.projector(image_embeds)
         return projected

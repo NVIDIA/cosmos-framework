@@ -6,9 +6,9 @@ from unittest.mock import MagicMock, call
 import pytest
 import torch
 
+from cosmos_framework.utils.generator.optimizer import OptimizersContainer
 from cosmos_framework.model.generator.distillation import optimizer as optimizer_module
 from cosmos_framework.model.generator.distillation.optimizer import OptimizerModelView, PhaseOptimizer, PhaseScheduler
-from cosmos_framework.utils.generator.optimizer import OptimizersContainer
 
 
 def _make_optimizer() -> MagicMock:
@@ -173,7 +173,7 @@ def test_get_existing_key() -> None:
 @pytest.mark.L0
 def test_get_missing_key_returns_none() -> None:
     po = PhaseOptimizer({"net": _make_optimizer()})
-    assert po.get("missing") is None
+    assert po.get("discriminator") is None
 
 
 # -------------------------------------------------------------------------
@@ -224,7 +224,7 @@ def test_scheduler_get_existing_key() -> None:
 @pytest.mark.L0
 def test_scheduler_get_missing_key_returns_none() -> None:
     ps = PhaseScheduler({"net": _make_scheduler()})
-    assert ps.get("missing") is None
+    assert ps.get("discriminator") is None
 
 
 # -------------------------------------------------------------------------

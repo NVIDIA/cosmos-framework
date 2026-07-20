@@ -3,6 +3,9 @@
 
 """Loss functions for distribution matching distillation.
 
+Adapted from fastgen/methods/common_loss.py for the Cosmos3 codebase.
+Reference: https://github.com/NVlabs/FastGen/blob/main/fastgen/methods/common_loss.py
+
 All loss functions accept per-sample lists of tensors (variable shapes across
 samples) to stay consistent with the MoT pipeline convention.
 """
@@ -19,7 +22,7 @@ __all__: tuple[str, ...] = (
 )
 
 VSDLossReduction = str
-_VSD_LOSS_REDUCTIONS: set[str] = {"mean", "sum", "per_instance_sum"}
+_VSD_LOSS_REDUCTIONS: set[str] = {"mean", "sum", "sum_rcm"}
 
 
 def variational_score_distillation_loss(
@@ -36,9 +39,9 @@ def variational_score_distillation_loss(
     weight normalises the per-sample gradient magnitude. With ``reduction="mean"``,
     the gradient is divided by the active element count. With ``reduction="sum"``,
     the legacy half-MSE sum keeps the gradient independent of the active element
-    count. With ``reduction="per_instance_sum"``, the pseudo-target loss uses a
-    no-half-factor per-sample sum and normalizer clamp. Teacher and fake-score are
-    treated as constants in all modes.
+    count. With ``reduction="sum_rcm"``, the pseudo-target loss follows RCM's
+    no-half-factor sum and normalizer clamp. Teacher and fake-score are treated
+    as constants in all modes.
 
     All inputs are per-sample lists to support variable shapes across samples.
 
@@ -54,7 +57,7 @@ def variational_score_distillation_loss(
         additional_scale: Optional per-sample scaling tensor of shape ``(B,)``.
         reduction: ``"mean"`` preserves the existing active-element mean loss.
             ``"sum"`` preserves the existing half-MSE per-sample sum.
-            ``"per_instance_sum"`` uses the no-half-factor per-sample sum.
+            ``"sum_rcm"`` uses the RCM-style no-half-factor per-sample sum.
 
     Returns:
         Scalar VSD loss averaged over samples.
@@ -85,9 +88,8 @@ def variational_score_distillation_loss_from_gradient(
     same per-sample adaptive normalisation as :func:`variational_score_distillation_loss`,
     using ``weight_reference`` as the teacher-distance reference, and constructs a
     detached pseudo-target. With ``reduction="sum"``, ``d loss / d gen_data``
-    is ``vsd_grad * weight``; with ``reduction="per_instance_sum"``, it is
-    ``2 * vsd_grad * weight`` because the pseudo-target loss omits the half-MSE
-    factor.
+    is ``vsd_grad * weight``; with ``reduction="sum_rcm"``, it is
+    ``2 * vsd_grad * weight`` to match RCM's no-half-factor pseudo-target loss.
     With ``reduction="mean"``, it is additionally divided by the active element
     count.
 
@@ -101,7 +103,7 @@ def variational_score_distillation_loss_from_gradient(
         additional_scale: Optional per-sample scaling tensor of shape ``(B,)``.
         reduction: ``"mean"`` divides each per-sample pseudo-target loss by
             active element count. ``"sum"`` preserves the existing half-MSE sum.
-            ``"per_instance_sum"`` uses the no-half-factor pseudo-target reduction.
+            ``"sum_rcm"`` matches the RCM DMD pseudo-target reduction.
 
     Returns:
         Scalar VSD loss averaged over samples.
@@ -126,7 +128,7 @@ def variational_score_distillation_loss_from_gradient(
                 diff_abs_mean = ((g_fp32 - ref_fp32).abs() * mask_i).sum() / mask_i.sum().clamp(min=1)  # scalar
             else:
                 diff_abs_mean = (g_fp32 - ref_fp32).abs().mean()  # scalar
-            if reduction == "per_instance_sum":
+            if reduction == "sum_rcm":
                 w = 1.0 / diff_abs_mean.clamp(min=1e-5)  # scalar
             else:
                 w = 1.0 / (diff_abs_mean + 1e-6)  # scalar
@@ -137,7 +139,7 @@ def variational_score_distillation_loss_from_gradient(
             w = w.to(dtype=g_i.dtype)  # scalar
 
             weighted_grad = grad_i * w  # [C,T_i,H_i,W_i]
-            if reduction == "per_instance_sum":
+            if reduction == "sum_rcm":
                 has_nonfinite_weighted_grad = ~torch.isfinite(weighted_grad).all()  # scalar
                 weighted_grad = torch.where(
                     has_nonfinite_weighted_grad,
@@ -152,14 +154,14 @@ def variational_score_distillation_loss_from_gradient(
             loss_sum = loss_sq.sum()  # scalar
             if reduction == "mean":
                 loss_i = 0.5 * loss_sum / mask_i.sum().clamp(min=1)  # scalar
-            elif reduction == "per_instance_sum":
+            elif reduction == "sum_rcm":
                 loss_i = loss_sum  # scalar
             else:
                 loss_i = 0.5 * loss_sum  # scalar
         else:
             if reduction == "mean":
                 loss_i = 0.5 * F.mse_loss(g_i, pseudo_target, reduction="mean")  # scalar
-            elif reduction == "per_instance_sum":
+            elif reduction == "sum_rcm":
                 loss_sq = (g_i - pseudo_target) ** 2  # [C,T_i,H_i,W_i]
                 loss_sum = loss_sq.sum()  # scalar
                 loss_i = loss_sum  # scalar

@@ -13,11 +13,13 @@ from unittest.mock import MagicMock, patch
 import pytest
 import torch
 
-from cosmos_framework.model.generator.distillation import dmd2_rf as dmd2_rf_module
-from cosmos_framework.model.generator.distillation.common_loss import variational_score_distillation_loss
-from cosmos_framework.model.generator.distillation.dmd2_rf import DMD2RFModel
-from cosmos_framework.model.generator.omni_mot_model import OmniMoTModel
 from cosmos_framework.utils.flags import Device
+from cosmos_framework.model.generator.omni_mot_model import OmniMoTModel
+from cosmos_framework.model.generator.distillation.common_loss import variational_score_distillation_loss
+from cosmos_framework.model.generator.distillation import dmd2_rf as dmd2_rf_module
+from cosmos_framework.model.generator.distillation.dmd2_rf import DMD2RFModel
+
+
 
 
 @pytest.mark.L0
@@ -114,6 +116,7 @@ def test_clip_grad_norm_skips_empty_params():
     model.net = MagicMock()
     model.net_fake_score = MagicMock()
     model.net_fake_score.parameters.return_value = iter([])
+    model.net_discriminator_head = None
 
     # A param with no grad attached
     param = torch.nn.Parameter(torch.randn(4))
@@ -158,6 +161,7 @@ def test_on_before_zero_grad_critic_phase_skips_ema():
     model = MagicMock()
     model.get_phase.return_value = "critic"
     model.net_fake_score = None
+    model.net_discriminator_head = None
 
     optimizer = MagicMock()
     optimizer.get.return_value = None
@@ -173,6 +177,7 @@ def test_model_dict_includes_fake_score():
     model = MagicMock(spec=DMD2RFModel)
     model.net = MagicMock()
     model.net_fake_score = MagicMock()
+    model.net_discriminator_head = None
 
     result = DMD2RFModel.model_dict(model)
 
@@ -180,6 +185,7 @@ def test_model_dict_includes_fake_score():
     assert result["net"] is model.net
     assert "fake_score" in result
     assert result["fake_score"] is model.net_fake_score
+    assert "discriminator" not in result
 
 
 @pytest.mark.L0
@@ -187,6 +193,19 @@ def test_dmd2_rf_needs_fake_score_by_default():
     model = MagicMock(spec=DMD2RFModel)
 
     assert DMD2RFModel._needs_fake_score(model) is True
+
+
+@pytest.mark.L0
+def test_model_dict_includes_discriminator_when_set():
+    model = MagicMock(spec=DMD2RFModel)
+    model.net = MagicMock()
+    model.net_fake_score = MagicMock()
+    model.net_discriminator_head = MagicMock()  # truthy
+
+    result = DMD2RFModel.model_dict(model)
+
+    assert "discriminator" in result
+    assert result["discriminator"] is model.net_discriminator_head
 
 
 @pytest.mark.L0
@@ -486,6 +505,8 @@ def _make_packed_sequence(*, with_action: bool = False) -> MagicMock:
     return packed
 
 
+
+
 @pytest.mark.L0
 def test_pack_and_denoise_returns_dict():
     """_pack_and_denoise must return a plain dict, not a tuple."""
@@ -507,6 +528,8 @@ def test_pack_and_denoise_returns_dict():
     )
 
     assert isinstance(result, dict), f"Expected dict, got {type(result)}"
+
+
 
 
 @pytest.mark.L0
@@ -532,6 +555,10 @@ def test_pack_and_denoise_forwards_num_vision_items():
     _, call_kwargs = model._pack_input_sequence.call_args
     proxy = call_kwargs.get("gen_data_clean") or model._pack_input_sequence.call_args.args[2]
     assert proxy.num_vision_items_per_sample == [2, 2]
+
+
+
+
 
 
 @pytest.mark.L0
@@ -591,6 +618,10 @@ def _make_student_model(*, action_gen: bool = False, sound_gen: bool = False) ->
     model.config.action_gen = action_gen
     model.config.sound_gen = sound_gen
     model._sample_student_sigma.return_value = torch.full((2, 1), 0.5)
+    model._action_sample_indices.side_effect = DMD2RFModel._action_sample_indices
+    model._action_sigmas_from_full.side_effect = (
+        lambda sigmas_full, sequence_plans: DMD2RFModel._action_sigmas_from_full(model, sigmas_full, sequence_plans)
+    )
 
     packed = _make_packed_sequence(with_action=action_gen)
     if action_gen:
@@ -656,6 +687,8 @@ def test_gen_data_from_student_returns_4_tuple():
     assert isinstance(out, dict)
 
 
+
+
 # ---------------------------------------------------------------------------
 # training_step_critic: normalize_by_active and FSDP dummy
 # ---------------------------------------------------------------------------
@@ -711,9 +744,11 @@ def test_training_step_critic_calls_compute_flow_matching_loss_with_normalize_by
     assert call_kwargs.get("normalize_by_active") is True
 
 
+
+
 @pytest.mark.L0
-def test_flow_matching_per_instance_sum_loss_sums_active_elements_per_instance() -> None:
-    """per_instance_sum should sum generated elements per instance, then average the batch."""
+def test_flow_matching_sum_rcm_loss_sums_active_elements_per_instance() -> None:
+    """sum_rcm should sum generated elements per instance, then average the batch."""
     pred = [torch.ones(1, 2, 1, 1), torch.full((1, 2, 1, 1), 2.0)]  # list of [C,T,H,W]
     target = [torch.zeros_like(pred[0]), torch.ones_like(pred[1])]  # list of [C,T,H,W]
     condition_mask = [
@@ -721,7 +756,7 @@ def test_flow_matching_per_instance_sum_loss_sums_active_elements_per_instance()
         torch.tensor([[[0.0]], [[0.0]]]),
     ]  # list of [T,1,1]
 
-    loss, per_instance = DMD2RFModel._flow_matching_per_instance_sum_loss(
+    loss, per_instance = DMD2RFModel._flow_matching_sum_rcm_loss(
         pred=pred,
         target=target,
         condition_mask=condition_mask,
@@ -1071,6 +1106,8 @@ def test_backward_simulation_vision_output_shape():
     assert len(gen_data_student.x0_tokens_vision) == B
     assert gen_data_student.x0_tokens_vision[0].shape == (4, 1, 2, 2)  # [C,T,H,W]
     assert sigma.shape == (B, 1)  # [B,1]
+
+
 
 
 @pytest.mark.L0

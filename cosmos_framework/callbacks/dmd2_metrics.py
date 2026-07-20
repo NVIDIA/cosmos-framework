@@ -24,8 +24,11 @@ __all__: tuple[str, ...] = ("DMD2Metrics", "DMD2ParityLedger", "PARITY_KEYS")
 PARITY_KEYS: tuple[str, ...] = (
     "vsd_loss",
     "total_generator_loss",
+    "dmd_loss_generator",
+    "dmd_vsd_grad_norm",
     "fake_score_loss",
     "total_critic_loss",
+    "dmd_loss_critic",
     "clip_grad_norm/net_selected_preclip",
     "clip_grad_norm/net_selected_clip_scale",
     "clip_grad_norm/net_selected_clip_norm",

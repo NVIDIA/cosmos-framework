@@ -9,8 +9,6 @@ from torch import nn
 from transformers.configuration_utils import PretrainedConfig
 from transformers.modeling_utils import PreTrainedModel
 
-from cosmos_framework.data.generator.sequence_packing import ModalityData, PackedSequence
-from cosmos_framework.data.generator.sequence_packing.natten import verify_natten_parameter_list
 from cosmos_framework.model.generator.mot.attention import SplitInfo, build_packed_sequence
 from cosmos_framework.model.generator.mot.context_parallel_utils import (
     get_context_parallel_last_hidden_state,
@@ -19,6 +17,8 @@ from cosmos_framework.model.generator.mot.context_parallel_utils import (
 from cosmos_framework.model.generator.mot.domain_aware_linear import DomainAwareLinear
 from cosmos_framework.model.generator.mot.modeling_utils import TimestepEmbedder
 from cosmos_framework.model.generator.utils.memory import MemoryState
+from cosmos_framework.data.generator.sequence_packing import ModalityData, PackedSequence
+from cosmos_framework.data.generator.sequence_packing.natten import verify_natten_parameter_list
 
 
 class Cosmos3VFMNetworkConfig(PretrainedConfig):
@@ -551,19 +551,6 @@ class Cosmos3VFMNetwork(PreTrainedModel):
         )
         return packed_sequence, packed_text_embedding.dtype
 
-    def _embed_packed_timesteps(self, timesteps: torch.Tensor, packed_seq: PackedSequence) -> torch.Tensor:
-        """Embed noised-token timesteps, reusing work when packing proves they share one scalar."""
-        if packed_seq.uses_single_timestep and timesteps.numel() > 1:
-            timestep = timesteps[:1]  # [1]
-            with torch.autocast("cuda", enabled=True, dtype=torch.float32):
-                timestep_embed = self.time_embedder(timestep)  # [1,hidden_size]
-            # Materialize: expand() aliases storage; in-place ops on a float32 no-op .to() would corrupt all rows.
-            return timestep_embed.expand(timesteps.shape[0], -1).contiguous()  # [N_noisy_frames,hidden_size]
-
-        # Timesteps are computed in FP32 for numerical stability.
-        with torch.autocast("cuda", enabled=True, dtype=torch.float32):
-            return self.time_embedder(timesteps)  # [N_noisy_frames,hidden_size]
-
     def _encode_vision(
         self,
         packed_seq: PackedSequence,
@@ -606,9 +593,11 @@ class Cosmos3VFMNetwork(PreTrainedModel):
         if has_noisy_vision:
             timesteps_vision = vision.timesteps.to(dtype=torch.float32) * self.timestep_scale  # [N_noisy_frames_vision]
 
-            packed_timestep_embeds_vision = self._embed_packed_timesteps(
-                timesteps_vision, packed_seq
-            )  # [N_noisy_frames_vision,hidden_size]
+            # Timesteps are computed in FP32 for numerical stability.
+            with torch.autocast("cuda", enabled=True, dtype=torch.float32):
+                packed_timestep_embeds_vision = self.time_embedder(
+                    timesteps_vision
+                )  # [N_noisy_frames_vision,hidden_size]
             packed_timestep_embeds_vision = packed_timestep_embeds_vision.to(
                 target_dtype
             )  # [N_noisy_frames_vision,hidden_size]
@@ -716,9 +705,10 @@ class Cosmos3VFMNetwork(PreTrainedModel):
         has_noisy_actions = action.mse_loss_indexes.numel() > 0
         if has_noisy_actions:
             timesteps_action = action.timesteps * self.timestep_scale  # [N_noisy_frames_action]
-            packed_timestep_embeds_action = self._embed_packed_timesteps(
-                timesteps_action, packed_seq
-            )  # [N_noisy_frames_action,hidden_size]
+            with torch.autocast("cuda", enabled=True, dtype=torch.float32):
+                packed_timestep_embeds_action = self.time_embedder(
+                    timesteps_action
+                )  # [N_noisy_frames_action,hidden_size]
             packed_timestep_embeds_action = packed_timestep_embeds_action.to(
                 target_dtype
             )  # [N_noisy_frames_action,hidden_size]
@@ -831,9 +821,8 @@ class Cosmos3VFMNetwork(PreTrainedModel):
         has_noisy_sound = sound.mse_loss_indexes.numel() > 0
         if has_noisy_sound:
             timesteps_sound = sound.timesteps * self.timestep_scale  # [N_noisy_frames_sound]
-            packed_timestep_embeds_sound = self._embed_packed_timesteps(
-                timesteps_sound, packed_seq
-            )  # [N_noisy_frames_sound,hidden_size]
+            with torch.autocast("cuda", enabled=True, dtype=torch.float32):
+                packed_timestep_embeds_sound = self.time_embedder(timesteps_sound)  # [N_noisy_frames_sound,hidden_size]
             packed_timestep_embeds_sound = packed_timestep_embeds_sound.to(
                 target_dtype
             )  # [N_noisy_frames_sound,hidden_size]

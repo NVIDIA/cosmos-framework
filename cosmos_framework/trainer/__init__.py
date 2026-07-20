@@ -5,19 +5,14 @@ import functools
 import inspect
 import os
 import signal
-from typing import Any
 
 import torch
 import torch.distributed as dist
 import torch.utils.data
 
-from cosmos_framework.utils.context_managers import distributed_init
 from cosmos_framework.utils.flags import INTERNAL
-from cosmos_framework.utils.profiling import (
-    maybe_enable_memory_snapshot,
-    maybe_enable_nsys_profiling,
-    maybe_enable_profiling,
-)
+from cosmos_framework.utils.context_managers import distributed_init
+from cosmos_framework.utils.profiling import maybe_enable_memory_snapshot, maybe_enable_nsys_profiling, maybe_enable_profiling
 
 try:
     from megatron.core import parallel_state
@@ -27,11 +22,12 @@ except ImportError:
     USE_MEGATRON = False
 
 
+from cosmos_framework.utils.lazy_config import LazyConfig, instantiate
 from cosmos_framework.model._base import ImaginaireModel
 from cosmos_framework.utils import callback, distributed, ema, log, misc
 from cosmos_framework.utils.checkpointer import Checkpointer
-from cosmos_framework.utils.lazy_config import LazyConfig, instantiate
 from cosmos_framework.utils.misc import StragglerDetectorV2
+
 
 
 class ImaginaireTrainer:
@@ -143,9 +139,9 @@ class ImaginaireTrainer:
     def _fetch_and_broadcast_data(
         self,
         model: ImaginaireModel,
-        dataloader_iter: Any,
+        dataloader_iter,
         iteration: int,
-    ) -> tuple[Any, bool]:
+    ):
         """
         Fetches data from the dataloader on the batch owner rank and broadcasts it to all other ranks in the Context Parallel group if CP is enabled.
         When CP is disabled, data is fetched from the dataloader on the current rank and no broadcasting is needed.
@@ -180,20 +176,18 @@ class ImaginaireTrainer:
                 stop_signal = True
                 data_batch = None
 
-        # Calculate the global rank of the batch owner within the CP group
-        cp_group = parallel_dims.cp_mesh.get_group()
-        global_src_rank = dist.get_global_rank(cp_group, batch_owner_rank)
-
         objs = [data_batch, stop_signal]
-        distributed.broadcast_object_list_optimized(
+
+        # Calculate the global rank of the batch owner within the CP group
+        global_src_rank = dist.get_global_rank(parallel_dims.cp_mesh.get_group(), batch_owner_rank)
+
+        dist.broadcast_object_list(
             objs,
             src=global_src_rank,
-            group=cp_group,
-            min_tensor_bytes=self.config.trainer.cp_input_direct_broadcast_min_bytes,
+            group=parallel_dims.cp_mesh.get_group(),
         )
-        data_batch, stop_signal = objs
 
-        return data_batch, stop_signal
+        return objs[0], objs[1]
 
     def train(
         self,

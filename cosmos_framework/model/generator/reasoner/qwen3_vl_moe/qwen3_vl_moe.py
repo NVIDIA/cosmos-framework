@@ -94,35 +94,33 @@ class CosineRouterConfig:
     """Configuration for routing in a sparse MoE block.
 
     Attributes:
-        use_cosine_similarity: Use cosine-similarity logits instead of standard
-            dot-product logits. Activation selection applies regardless of this
-            setting.
+        enabled: Use cosine-similarity logits instead of the standard dot-product
+            gate. Activation selection applies regardless of this setting.
         activation: Function applied to router logits. ``"softmax"`` produces a
             distribution across experts; ``"sigmoid"`` produces independent
             expert affinities.
-        input_centering: Center router inputs using the current batch mean
-            (``"batch_mean"``), a running EMA mean (``"ema"``), or no
-            centering (``"none"``). Applies to both dot-product and cosine
-            similarity.
+        input_centering: Center cosine-router inputs using the current batch
+            mean (``"batch_mean"``), a running EMA mean (``"ema"``), or no
+            centering (``"none"``).
         ema_momentum: Momentum used to update the input-centering EMA.
         clamp_temperature: Prevent the learned cosine-router temperature from
             exceeding its initialization value.
     """
 
-    use_cosine_similarity: bool = False
+    enabled: bool = False
     activation: str = "softmax"
-    input_centering: str = "none"
+    input_centering: str = "batch_mean"
     ema_momentum: float = 0.99
     clamp_temperature: bool = True
 
 
 class CosineRouter(nn.Module):
-    """Router activation, input-centering, and optional cosine-similarity behavior."""
+    """Cosine-router behavior and state."""
 
     def __init__(self, config: CosineRouterConfig, hidden_size: int) -> None:
         super().__init__()
         self.config: CosineRouterConfig = config
-        self.use_cosine_similarity: bool = config.use_cosine_similarity
+        self.enabled: bool = config.enabled
         self.activation: str = config.activation
         if self.activation not in {"softmax", "sigmoid"}:
             raise ValueError(f"Unsupported router activation: {self.activation!r}")
@@ -134,11 +132,11 @@ class CosineRouter(nn.Module):
         self.hidden_size: int = hidden_size
         self.initial_log_temperature: float = self.log_temperature_init(hidden_size)
 
-        if self.use_cosine_similarity:
+        if self.enabled:
             self.log_temperature = nn.Parameter(
                 torch.full((hidden_size,), self.initial_log_temperature, dtype=torch.float32)
             )  # [D]
-        self._init_input_centering_buffers()
+            self._init_input_centering_buffers()
 
     @staticmethod
     def log_temperature_init(hidden_size: int) -> float:
@@ -169,6 +167,9 @@ class CosineRouter(nn.Module):
 
     def forward(self, hidden_states: torch.Tensor, gate: nn.Linear) -> torch.Tensor:
         """Compute standard or cosine router logits.  [N,D] -> [N,E]"""
+        if not self.enabled:
+            return gate(hidden_states)  # [N,E]
+
         x = hidden_states.to(torch.float32)  # [N,D]
         if self.input_centering == "ema":
             if self.training:
@@ -179,9 +180,6 @@ class CosineRouter(nn.Module):
             x = x - self.router_bias  # [N,D]
         elif self.input_centering == "batch_mean" and x.shape[0] > 1:
             x = x - x.mean(dim=0, keepdim=True)  # [N,D]
-
-        if not self.use_cosine_similarity:
-            return gate(x.to(hidden_states.dtype))  # [N,E]
 
         x = F.normalize(x, dim=-1)  # [N,D]
         log_temperature = self.log_temperature  # [D]
@@ -250,9 +248,11 @@ class CosineRouter(nn.Module):
 
     def init_weights(self, buffer_device: torch.device | None) -> None:
         """Reset router parameters and buffers."""
-        if self.use_cosine_similarity:
-            with torch.no_grad():
-                self.log_temperature.fill_(self.initial_log_temperature)  # [D]
+        if not self.enabled:
+            return
+
+        with torch.no_grad():
+            self.log_temperature.fill_(self.initial_log_temperature)  # [D]
         self._init_input_centering_buffers(buffer_device=buffer_device)
 
 
@@ -319,13 +319,13 @@ class Qwen3VLMoeTextSparseMoeBlock(nn.Module):
         if noisy_gating:
             self.gate_noise = nn.Linear(config.hidden_size, config.num_experts, bias=False)
 
-        # Cosine similarity (gen-tower only). Replaces the raw dot-product logits
-        # x·W_e with a cosine similarity between the optionally centered,
-        # L2-normalized router input and the L2-normalized gate rows, scaled by a
-        # learnable temperature. This targets three pathologies measured in the
+        # Cosine router (gen-tower only). Replaces the raw dot-product logits
+        # x·W_e with a cosine similarity between the (token-mean-centered,
+        # L2-normalized) router input and the L2-normalized gate rows, scaled by
+        # a learnable temperature. This targets three pathologies measured in the
         # gen tower's router:
-        #   1. token-constant component of the router input — removed when input
-        #      centering is configured;
+        #   1. token-constant component of the router input — removed by
+        #      per-batch mean-centering over the token axis;
         #   2. low / inconsistent logit magnitude (gate-gain erosion under weight
         #      decay) — removed by normalizing the input to unit norm and folding
         #      all scale into the learnable temperature;
@@ -386,13 +386,6 @@ class Qwen3VLMoeTextSparseMoeBlock(nn.Module):
             torch.zeros(1, dtype=torch.float64),
             persistent=False,
         )
-        # Soft marginal usage P[e] = mean_t g[t, e], consumed and reset by
-        # MoEStabilityCallback. Keep this separate from hard top-k dispatch counts.
-        self.register_buffer(
-            "sum_router_prob_per_expert",
-            torch.zeros(config.num_experts, dtype=torch.float64),
-            persistent=False,
-        )
 
         # ── Specialization tracking ───────────────────────────────────────────────
         # N×N symmetric matrix counting how often each expert pair (i, j) appears
@@ -438,7 +431,6 @@ class Qwen3VLMoeTextSparseMoeBlock(nn.Module):
         # mean_t exp(H_t) over any reset window. Kept separate from
         # sum_token_entropy because exp(mean H) != mean exp(H) in general.
         self.sum_per_token_soft_eff.add_(token_entropy.exp().sum().to(torch.float64))
-        self.sum_router_prob_per_expert.add_(routing_probabilities.sum(dim=0).to(torch.float64))
 
         # ── Co-activation counting ────────────────────────────────────────────
         # For every ordered pair (k1, k2) of top-K slots with k1 < k2, find the
@@ -633,13 +625,6 @@ class Qwen3VLMoeTextSparseMoeBlock(nn.Module):
                 self.sum_per_token_soft_eff.zero_()
             return val
 
-    def get_sum_router_prob_per_expert(self, reset: bool = True) -> torch.Tensor:
-        with torch.no_grad():
-            val = self.sum_router_prob_per_expert.detach().clone()
-            if reset:
-                self.sum_router_prob_per_expert.zero_()
-            return val
-
     def get_coactivation_counts(self, reset: bool = True) -> torch.Tensor:
         with torch.no_grad():
             val = self.coactivation_counts.detach().clone()
@@ -727,11 +712,6 @@ class Qwen3VLMoeTextSparseMoeBlock(nn.Module):
         self.register_buffer(
             "sum_per_token_soft_eff",
             torch.zeros(1, dtype=torch.float64, device=buffer_device),
-            persistent=False,
-        )
-        self.register_buffer(
-            "sum_router_prob_per_expert",
-            torch.zeros(self.num_experts, dtype=torch.float64, device=buffer_device),
             persistent=False,
         )
         self.register_buffer(

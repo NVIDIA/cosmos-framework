@@ -5,7 +5,7 @@
 Distillation-tailored DCP for Cosmos3.
 
 Extends the Cosmos3 VFM DistributedCheckpointer to support multi-model /
-multi-optimizer training (student + fake-score).
+multi-optimizer training (e.g., student + fake-score + discriminator).
 """
 
 import functools
@@ -26,6 +26,9 @@ from torch.distributed.checkpoint.state_dict import (
 from torch.distributed.checkpoint.stateful import Stateful
 from torch.nn.modules.module import _IncompatibleKeys
 
+from cosmos_framework.model._base import ImaginaireModel
+from cosmos_framework.utils import log, misc
+from cosmos_framework.utils.easy_io import easy_io
 from cosmos_framework.checkpoint.dcp import (
     AsyncMode,
     CustomLoadPlanner,
@@ -35,11 +38,8 @@ from cosmos_framework.checkpoint.dcp import (
     DistributedCheckpointer as _DistributedCheckpointer,
 )
 from cosmos_framework.checkpoint.dcp import ModelWrapper as VFMModelWrapper
-from cosmos_framework.model._base import ImaginaireModel
-from cosmos_framework.model.generator.distillation.optimizer import OptimizerContainerLike, is_optimizer_container
-from cosmos_framework.utils import log, misc
-from cosmos_framework.utils.easy_io import easy_io
 from cosmos_framework.utils.generator.rand_state import get_rand_state_dict, set_rand_state_dict
+from cosmos_framework.model.generator.distillation.optimizer import OptimizerContainerLike, is_optimizer_container
 
 __all__: tuple[str, ...] = (
     "DistributedCheckpointer",
