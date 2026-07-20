@@ -78,7 +78,7 @@ export DATASET_PATH=examples/data/Cosmos3-DROID
 
 # Step 2: point to the base DCP checkpoint and Wan2.2 VAE.
 export BASE_CHECKPOINT_PATH=examples/checkpoints/Cosmos3-Nano
-export WAN_VAE_PATH=/lustre/fsw/portfolios/cosmos/projects/cosmos_base_training/users/weichengt/.cache/huggingface/hub/models--Wan-AI--Wan2.2-TI2V-5B/snapshots/921dbaf3f1674a56f47e83fb80a34bac8a8f203e/Wan2.2_VAE.pth
+export WAN_VAE_PATH=/path/to/Wan2.2_VAE.pth
 
 # Step 3: choose the output root and launch.
 export IMAGINAIRE_OUTPUT_ROOT=/path/to/output_root
