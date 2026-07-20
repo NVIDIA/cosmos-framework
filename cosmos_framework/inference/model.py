@@ -193,6 +193,16 @@ def _read_safetensors_index(index_path: Path) -> dict[str, str]:
 def _diffusers_weight_map(checkpoint_path: Path) -> dict[str, str]:
     index_path = checkpoint_path / _DIFFUSERS_ROOT_INDEX
     weight_map = _read_safetensors_index(index_path) if index_path.exists() else {}
+    # The generator-only K norm (`k_norm_und_for_gen`) belongs to the transformer
+    # component and must be sourced from its own index under the diffusers name
+    # (`layers.N...`). The converter is supposed to exclude it from the root index
+    # (see _convert_model_to_diffusers._remap_language_model_state_dict), but
+    # checkpoints exported before that fix (e.g. nvidia/Cosmos3-Edge-Policy-DROID)
+    # leak it into the root index under the raw model-internal name
+    # (`layers.layers.N...`), which points at tensors absent from the shards and
+    # breaks loading. Drop any root-index k-norm entries and let the transformer
+    # index below supply the correctly named ones.
+    weight_map = {k: v for k, v in weight_map.items() if ".k_norm_und_for_gen." not in k}
     # The root index may be a reasoner manifest (e.g. Cosmos3-Edge) that lists only the
     # shared understanding-pathway weights and the vision tower. The transformer
     # component's own index holds the complete DiT state — including the
@@ -538,10 +548,17 @@ class Cosmos3OmniModel(transformers.PreTrainedModel):
             case CheckpointType.HF:
                 if _is_diffusers_checkpoint(checkpoint_path):
                     state_dict = get_model_state_dict(model.model.net)
+                    # Single-rank load must skip DCP's collective path: it gathers
+                    # (pickles) the load plan across ranks, and _DiffusersLoadPlanner
+                    # carries code objects that cannot be pickled ("cannot pickle
+                    # code objects"). no_dist loads locally without collectives.
+                    _dist = torch.distributed
+                    no_dist = not (_dist.is_available() and _dist.is_initialized() and _dist.get_world_size() > 1)
                     dcp.load(
                         state_dict=state_dict,
                         storage_reader=_DiffusersHuggingFaceStorageReader(checkpoint_path),
                         planner=_DiffusersLoadPlanner(checkpoint_path),
+                        no_dist=no_dist,
                     )
                     return model
                 state_dict = get_model_state_dict(model)
