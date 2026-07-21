@@ -6,10 +6,11 @@
 The Edge counterpart of ``nano_reasoner_inference_smoke_test.py``, but at
 smoke level: instead of comparing first-token logits against a committed golden
 (the Nano suite's tight regression), it validates the generated ``reasoner_text``
-directly -- non-empty, coherent (min length + lexical diversity), and on-topic
-for the input image (references the robotic subject that dominates the frame).
-This keeps the Edge case runnable in CI without a per-checkpoint golden bootstrap
-while still checking the generated content, not just that something was emitted.
+directly -- non-empty, coherent (min length + lexical diversity), and a complete
+description of the input image (references BOTH the robotic subject that dominates
+the frame AND the table/lab setting it sits in). This keeps the Edge case runnable
+in CI without a per-checkpoint golden bootstrap while still checking the generated
+content, not just that something was emitted.
 
 One case, image-conditioned reasoner inference (matching what the Nano CI job
 actually runs): a single ``cosmos_framework.scripts.inference`` torchrun over
@@ -51,11 +52,21 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 # an ego-view of two robotic hands/arms reaching over a table (red apple + lab
 # equipment + a person in the background). Decoding is greedy (``do_sample: false``
 # in ``defaults/reasoner/sample_args.json``), so a correct description reliably
-# references that dominant robotic subject. The stems below are broad enough to
-# survive phrasing ("robotic hands", "mechanical arms", "grippers", ...) yet fail
-# on garbage, an empty/degenerate reply, or a description of some other scene.
+# references both the dominant robotic subject and the table/lab setting.
+#
+# A complete description must hit BOTH anchors below: the robotic subject AND a
+# scene/surface word. Each stem set is broad enough to survive phrasing ("robotic
+# hands"/"mechanical arms"/"grippers"; "table"/"desk"/"wooden surface"/"lab") yet
+# both together fail on garbage, an empty/degenerate reply, or a description of an
+# unrelated scene. A verified Edge run hit each set many times (robotic arms +
+# mechanical hands; table x4, wooden, lab, environment, background).
 _SUBJECT_PATTERN = re.compile(
     r"\b(robot\w*|mechanical|gripper\w*|prosthetic|arm\w*|hand\w*|finger\w*)\b",
+    re.IGNORECASE,
+)
+_SCENE_PATTERN = re.compile(
+    r"\b(table\w*|desk\w*|surface\w*|counter\w*|platform\w*|wood\w*|floor\w*|"
+    r"lab|labs|laboratory|room\w*|workshop\w*|office\w*|environment\w*|setting\w*|background\w*)\b",
     re.IGNORECASE,
 )
 # A real one-sentence description clears these easily; the floors only catch a
@@ -102,8 +113,9 @@ def _assert_reasoner_text(out_dir: Path) -> None:
 
     Three gates: (1) a non-empty string was generated; (2) it is coherent, not a
     collapsed/degenerate reply (min length + lexical diversity); (3) its content
-    is correct for the input image -- it references the robotic subject that
-    dominates ``robot_153.jpg`` (see ``_SUBJECT_PATTERN``).
+    is a complete description of the input image -- it references BOTH the robotic
+    subject that dominates ``robot_153.jpg`` (``_SUBJECT_PATTERN``) AND the
+    table/lab setting it sits in (``_SCENE_PATTERN``).
     """
     results = sorted(out_dir.rglob("sample_outputs.json"))
     assert len(results) == 1, f"expected one sample_outputs.json, found {[str(p) for p in results]}"
@@ -123,11 +135,15 @@ def _assert_reasoner_text(out_dir: Path) -> None:
         f"reasoner_text is degenerate/repetitive ({len(set(words))} unique words): {stripped!r}"
     )
 
-    # (3) content correctness: the reply describes the actual image -- it must
-    # reference the robotic hands/arms that dominate the frame.
+    # (3) content correctness: a complete description references BOTH the robotic
+    # subject that dominates the frame AND the table/lab setting it sits in.
     assert _SUBJECT_PATTERN.search(stripped), (
         f"reasoner_text does not describe the image's robotic subject "
         f"(expected a term like robot/robotic/arm/hand/gripper): {stripped!r}"
+    )
+    assert _SCENE_PATTERN.search(stripped), (
+        f"reasoner_text does not describe the image's setting "
+        f"(expected a term like table/desk/surface/wood/lab/room): {stripped!r}"
     )
 
 
