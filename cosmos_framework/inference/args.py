@@ -1091,12 +1091,14 @@ class OmniSampleOverrides(
 
         # Model-specific num_frames default for video generation (e.g.
         # Cosmos3-Edge -> 121). Applies only when the user did not request a
-        # frame count and the mode produces a plain video; image and action
-        # modes keep their own num_frames handling.
+        # frame count and the mode produces a plain video; image, action, and
+        # reasoner modes keep their own num_frames handling (reasoner reports
+        # VIDEO vision_mode but uses num_frames as an inert 1).
         if (
             "num_frames" not in user_fields
             and sample_meta.vision_mode == VisionMode.VIDEO
             and not sample_meta.model_mode.is_action
+            and not sample_meta.model_mode.is_reasoner
         ):
             num_frames_default = self._NUM_FRAMES_DEFAULTS.get(model_config.vlm_config.model_name)
             if num_frames_default is not None:
