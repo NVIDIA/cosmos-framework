@@ -255,6 +255,45 @@ def test_sample_args(tmp_path: Path):
     assert text2image_args.shift == 3.0
 
 
+def test_edge_num_frames_default(tmp_path: Path):
+    def _num_frames(
+        checkpoint: str,
+        label: str,
+        model_mode: ModelMode = ModelMode.TEXT2VIDEO,
+        **overrides: object,
+    ) -> int:
+        setup_args = OmniSetupOverrides(
+            checkpoint_path=checkpoint,
+            output_dir=tmp_path / f"outputs_{label}",
+        ).build_setup()
+        model_dict: "OmniMoTModel" = structure_config(
+            setup_args.load_model_config_dict(),
+            omegaconf.DictConfig,
+        )
+        args = OmniSampleOverrides(
+            name=label,
+            output_dir=tmp_path / label,
+            model_mode=model_mode,
+            **overrides,
+        ).build_sample(model_config=model_dict.config)
+        return args.num_frames
+
+    # Video generation: Cosmos3-Edge defaults to a shorter 121-frame clip.
+    assert _num_frames("Cosmos3-Edge", "edge_default") == 121
+    # Other models keep the per-modality JSON default (189).
+    assert _num_frames("Cosmos3-Nano", "nano_default") == 189
+    # An explicit user value always wins over the model-specific default.
+    assert _num_frames("Cosmos3-Edge", "edge_override", num_frames=189) == 189
+
+    # Regression: the Edge 121 default is scoped to plain video generation only.
+    # Image modes stay single-frame; action modes keep their own default (189);
+    # the reasoner (which reports VIDEO vision_mode) keeps its inert 1 -- none of
+    # these should be rewritten to 121.
+    assert _num_frames("Cosmos3-Edge", "edge_t2i", model_mode=ModelMode.TEXT2IMAGE) == 1
+    assert _num_frames("Cosmos3-Edge", "edge_policy", model_mode=ModelMode.POLICY) == 189
+    assert _num_frames("Cosmos3-Edge", "edge_reasoner", model_mode=ModelMode.REASONER, prompt="Describe.") == 1
+
+
 def test_build_sound_data_requires_sound_path_for_a2v():
     model_config = types.SimpleNamespace(sound_gen=True)
     sample_meta = types.SimpleNamespace(model_mode=ModelMode.AUDIO_IMAGE2VIDEO)
