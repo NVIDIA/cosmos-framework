@@ -380,9 +380,67 @@ class OmniMoTModel(ImaginaireModel):
 
                 self.net_ema_worker.copy_to(src_model=self.net, tgt_model=self.net_ema)
 
+        # Compile VAE 3D-Conv encoder/decoder when compiled_region="all".
+        # Unlike apply_compile (which wraps _encode_vision post-processing),
+        # this directly compiles the CausalConv3d layers inside WanVAE_.
+        if config.compile.enabled and config.compile.compiled_region == "all":
+            self._compile_vae()
+
         self.set_up_memory()
 
         torch.cuda.empty_cache()
+
+    def _compile_vae(self) -> None:
+        """Apply torch.compile to the VAE 3D-Conv encoder and decoder.
+
+        The existing ``apply_compile`` in ``parallelize_vfm_network`` wraps
+        ``_encode_vision`` / ``_decode_vision`` — which are post-processing
+        functions (patchify + Linear + pos_embed) that contain **no** 3D Conv.
+        The real VAE encoder/decoder (``WanVAE_.encoder`` / ``WanVAE_.decoder``)
+        with ``CausalConv3d`` layers is never touched by that path.
+
+        This method directly wraps ``Encoder3d`` and ``Decoder3d`` with
+        ``torch.compile``.
+
+        Key differences from ``apply_compile``:
+        - ``fullgraph=False`` (default): the causal-conv caching logic uses
+          Python list mutation (``feat_cache[idx] = cache_x``) which creates
+          graph breaks; ``fullgraph=False`` allows dynamo to compile the
+          sub-graphs between breaks.
+        - ``dynamic=None`` (default, automatic dynamic shapes): the first
+          call compiles a static-shape kernel; when a different temporal
+          size shows up, dynamo recompiles once with dynamic shapes. Chunk
+          temporal sizes here only take two values (1 frame for prime,
+          ``temporal_window`` frames for steady state), so compilation
+          stabilizes after at most a couple of recompiles — no need to
+          force ``dynamic=True``.
+        - VAE is ``@torch.no_grad()`` and ``requires_grad_(False)``, so no
+          backward graph is involved.
+        """
+        vae = self.tokenizer_vision_gen            # Wan2pt2VAEInterface
+        wan_vae = getattr(vae, "model", None)    # WanVAE (plain class)
+        if wan_vae is None:
+            log.warning("VAE tokenizer has no .model attribute, skipping VAE compile")
+            return
+        inner = getattr(wan_vae, "model", None)  # WanVAE_ (nn.Module)
+        if inner is None:
+            log.warning("WanVAE has no .model (WanVAE_) attribute, skipping VAE compile")
+            return
+
+        compiled_parts = []
+        if hasattr(inner, "encoder"):
+            log.info("Applying torch.compile to VAE encoder (Encoder3d)")
+            inner.encoder = torch.compile(inner.encoder)
+            compiled_parts.append("encoder")
+        if hasattr(inner, "decoder"):
+            log.info("Applying torch.compile to VAE decoder (Decoder3d)")
+            inner.decoder = torch.compile(inner.decoder)
+            compiled_parts.append("decoder")
+
+        if compiled_parts:
+            log.info(f"VAE torch.compile applied to: {', '.join(compiled_parts)}")
+        else:
+            log.warning("VAE model has no .encoder/.decoder, skipping VAE compile")
 
     def install_attention_dispatch(self, net: torch.nn.Module) -> None:
         """Install a custom attention dispatch function on the network.
