@@ -1045,6 +1045,13 @@ class OmniSampleOverrides(
         "nvidia/Cosmos3-Edge-Reasoner": "2B",
     }
 
+    _NUM_FRAMES_DEFAULTS: ClassVar[dict[str, int]] = {
+        # Cosmos3-Edge defaults to a shorter 121-frame clip for video
+        # generation; every other model keeps the per-modality JSON default
+        # (189). Keyed by ``vlm_config.model_name`` so only Edge is affected.
+        "nvidia/Cosmos3-Edge-Reasoner": 121,
+    }
+
     _RESOLUTION_SHIFT_DEFAULTS: ClassVar[dict[(ModelSize, Resolution), float]] = {
         # 2B rows mirror Cosmos3-Edge's training shift (Cosmos3-Edge.yaml
         # rectified_flow_training_config.shift: 256->3, 480->5, 720->10).
@@ -1081,6 +1088,21 @@ class OmniSampleOverrides(
 
         self.__dict__.update(merged.__dict__)
         self.model_mode = sample_meta.model_mode
+
+        # Model-specific num_frames default for video generation (e.g.
+        # Cosmos3-Edge -> 121). Applies only when the user did not request a
+        # frame count and the mode produces a plain video; image, action, and
+        # reasoner modes keep their own num_frames handling (reasoner reports
+        # VIDEO vision_mode but uses num_frames as an inert 1).
+        if (
+            "num_frames" not in user_fields
+            and sample_meta.vision_mode == VisionMode.VIDEO
+            and not sample_meta.model_mode.is_action
+            and not sample_meta.model_mode.is_reasoner
+        ):
+            num_frames_default = self._NUM_FRAMES_DEFAULTS.get(model_config.vlm_config.model_name)
+            if num_frames_default is not None:
+                self.num_frames = num_frames_default
 
         self._build_sample()
         self._build_sampling(model_config=model_config, sample_meta=sample_meta)
