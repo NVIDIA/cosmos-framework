@@ -255,6 +255,32 @@ def test_sample_args(tmp_path: Path):
     assert text2image_args.shift == 3.0
 
 
+def test_edge_num_frames_default(tmp_path: Path):
+    def _t2v_num_frames(checkpoint: str, label: str, **overrides: object) -> int:
+        setup_args = OmniSetupOverrides(
+            checkpoint_path=checkpoint,
+            output_dir=tmp_path / f"outputs_{label}",
+        ).build_setup()
+        model_dict: "OmniMoTModel" = structure_config(
+            setup_args.load_model_config_dict(),
+            omegaconf.DictConfig,
+        )
+        args = OmniSampleOverrides(
+            name=label,
+            output_dir=tmp_path / label,
+            model_mode=ModelMode.TEXT2VIDEO,
+            **overrides,
+        ).build_sample(model_config=model_dict.config)
+        return args.num_frames
+
+    # Cosmos3-Edge defaults to a shorter 121-frame clip for video generation.
+    assert _t2v_num_frames("Cosmos3-Edge", "edge_default") == 121
+    # Other models keep the per-modality JSON default (189).
+    assert _t2v_num_frames("Cosmos3-Nano", "nano_default") == 189
+    # An explicit user value always wins over the model-specific default.
+    assert _t2v_num_frames("Cosmos3-Edge", "edge_override", num_frames=189) == 189
+
+
 def test_build_sound_data_requires_sound_path_for_a2v():
     model_config = types.SimpleNamespace(sound_gen=True)
     sample_meta = types.SimpleNamespace(model_mode=ModelMode.AUDIO_IMAGE2VIDEO)

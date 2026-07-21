@@ -219,7 +219,7 @@ Condition arguments:
 
 Generation arguments:
 
-- `num_frames`: Number of output frames. `1` = image; `≥24` = video. Default 189; resolution-dependent max — see [FAQ § How many frames can I generate?](./faq.md#q-how-many-frames-can-i-generate).
+- `num_frames`: Number of output frames. `1` = image; `≥24` = video. Default 189 (Cosmos3-Edge defaults to 121); resolution-dependent max — see [FAQ § How many frames can I generate?](./faq.md#q-how-many-frames-can-i-generate).
 
 Outputs `vision.jpg` or `vision.mp4` depending on `num_frames`.
 
