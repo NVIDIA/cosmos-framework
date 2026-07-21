@@ -5,7 +5,9 @@
 
 Consumers must ``copy.deepcopy`` this constant before mutating it. Baseline
 mirrors ``vision_sft_nano`` (HF-cluster deployment with empty tokenizer/vlm
-paths, video-style loss scales, ``load_weights_from_pretrained=True``).
+paths, video-style loss scales, ``load_weights_from_pretrained=True``), except
+``action_gen``: the baseline keeps the released-checkpoint value (``True``) and
+``vision_sft_nano`` overrides it to ``False`` (no action tokens in vision SFT).
 """
 
 from cosmos_framework.configs.base.defaults.reasoner import (
@@ -16,6 +18,9 @@ from cosmos_framework.model.generator.mot.unified_mot import Qwen3VLMoTConfig, Q
 from cosmos_framework.utils.lazy_config import LazyCall as L
 
 NANO_MODEL_CONFIG = dict(
+    # Mirrors the released Cosmos3-Nano checkpoint, which ships real (DROID-trained)
+    # action-head weights; the action-policy recipes rely on this default. Recipes
+    # that don't train action data override to False (see vision_sft_nano.py).
     action_gen=True,
     causal_training_strategy="none",
     input_caption_key="ai_caption",

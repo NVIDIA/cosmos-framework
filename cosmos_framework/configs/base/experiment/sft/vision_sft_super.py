@@ -11,7 +11,7 @@ bucket-C deviations. Key model-side differences vs nano:
   * LoRA-only fine-tune: ``lora_enabled=True``, ``lora_rank=16``,
     ``lora_alpha=32``, target modules
     ``q_proj_moe_gen,k_proj_moe_gen,v_proj_moe_gen,o_proj_moe_gen``.
-  * EMA disabled; ``action_gen=False``.
+  * EMA disabled.
   * Parallelism: ``data_parallel_shard_degree=4``,
     ``context_parallel_shard_degree=2``, ``compile.enabled=False``.
   * Optimizer trains only ``lora_`` keys at ``lr=5e-4``.
