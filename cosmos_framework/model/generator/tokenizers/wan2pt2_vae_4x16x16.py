@@ -1340,7 +1340,7 @@ class Wan2pt2VAEInterface(VideoTokenizerInterface):
         # HuggingFace checkpoint has been updated to use a dictionary of chunk frames,
         # one for each resolution.
         if isinstance(encode_chunk_frames, int):
-            encode_chunk_frames = {"256": 68, "480": 24, "720": 12}
+            encode_chunk_frames = {"256": 68, "480": 24, "720": 8}
         assert isinstance(encode_chunk_frames, Mapping)
 
         assert all(c % 4 == 0 for c in encode_chunk_frames.values()), "encode_chunk_frames must be a multiple of 4"

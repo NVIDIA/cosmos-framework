@@ -193,7 +193,7 @@ def test_distilled_checkpoint_uses_published_fixed_step_schedule(
     if checkpoint_name == "Cosmos3-Super-Text2Image-4Step":
         assert model_config["rectified_flow_training_config"]["shift"]["720"] == 5
         assert model_config["rectified_flow_training_config"]["shift"]["768"] == 5
-        assert model_config["tokenizer"]["encode_chunk_frames"]["768"] == 12
+        assert model_config["tokenizer"]["encode_chunk_frames"]["768"] == 8
         assert model_config["tokenizer"]["encode_exact_durations"] is None
 
     fixed_step_sampler_config = model_config["fixed_step_sampler_config"]
