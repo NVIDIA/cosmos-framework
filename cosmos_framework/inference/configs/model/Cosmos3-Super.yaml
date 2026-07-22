@@ -139,8 +139,8 @@ model:
       encode_chunk_frames:
         '256': 68
         '480': 24
-        '720': 12
-        '768': 12
+        '720': 8
+        '768': 8
       encode_exact_durations:
       - 17
       - 61
