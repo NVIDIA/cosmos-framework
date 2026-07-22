@@ -1035,18 +1035,17 @@ def create_batches_from_dataset(
 def _finalize_data_batch(data_batch: dict[str, Any], batch_size: int, model: OmniMoTModel) -> dict[str, Any]:
     """Return a finalized + validated copy of *data_batch*.
 
-    All mutations (key renames, tensor → list unbind) are applied to a fresh
-    shallow copy so the caller's input dict is never modified.  This keeps
+    All mutations (key renames, tensor → list unbind, or list-item replacement)
+    are applied to a fresh copy so the caller's input dict is never modified. This keeps
     the "no aliasing" responsibility localized at the single place where the
     mutation happens, instead of forcing every producer of a data dict (e.g.
     seed-expansion fan-out in ``create_batches_from_dataset``, dummy padding
     batches in ``create_batches``) to defensively copy before handing the
     dict to ``generate_batch``.
 
-    Only the top-level dict structure is copied; tensor / list values inside
-    are shared with the input (which is safe because every mutation here is a
-    top-level key rename or value reassignment, never an in-place op on the
-    value itself).
+    The top-level dict and list containers are copied; tensors and other values
+    inside those lists remain shared. Copying each list is necessary because
+    downstream preprocessing replaces video-list items with normalized tensors.
 
     Args:
         data_batch: Input data dict.  Not modified.
@@ -1062,7 +1061,7 @@ def _finalize_data_batch(data_batch: dict[str, Any], batch_size: int, model: Omn
             present, or if the post-finalize caption-list length doesn't
             match ``batch_size``.
     """
-    data_batch = dict(data_batch)
+    data_batch = {key: list(value) if isinstance(value, list) else value for key, value in data_batch.items()}
 
     for old_key, new_key in [
         ("video", model.input_video_key),
