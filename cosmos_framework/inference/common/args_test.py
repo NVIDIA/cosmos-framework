@@ -7,12 +7,19 @@ from pathlib import Path
 
 import pytest
 
-from cosmos_framework.inference.args import DEFAULT_CHECKPOINT, DEFAULT_CHECKPOINT_NAME
+from cosmos_framework.inference.args import DEFAULT_CHECKPOINT, DEFAULT_CHECKPOINT_NAME, OmniSetupOverrides
 from cosmos_framework.inference.common.args import CheckpointConfig, CheckpointOverrides, CheckpointType, download_file
 
 CHECKPOINTS: dict[str, CheckpointConfig] = {
     DEFAULT_CHECKPOINT_NAME: DEFAULT_CHECKPOINT,
 }
+
+
+def test_num_iterations_requires_benchmark() -> None:
+    overrides = OmniSetupOverrides.model_construct(benchmark=False, num_iterations=2)
+
+    with pytest.raises(ValueError, match="num_iterations > 1 requires benchmark=True"):
+        overrides._build_setup()
 
 
 def test_checkpoint_type_from_diffusers_layout(tmp_path: Path) -> None:
