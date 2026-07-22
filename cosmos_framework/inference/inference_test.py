@@ -323,7 +323,7 @@ def test_generate_reasoner_batch_writes_outputs(tmp_path: Path) -> None:
     pipe._get_timer = lambda *_a, **_kw: nullcontext()  # type: ignore[attr-defined]
 
     data_batch = {"caption": ["Describe a robotic arm."], "reasoner_images": [None]}
-    results = pipe._generate_reasoner_batch([sample_args], data_batch, warmup=False)
+    results = pipe._generate_reasoner_batch([sample_args], data_batch)
 
     assert len(results) == 1
     so = results[0]
@@ -352,7 +352,7 @@ def test_generate_reasoner_batch_rejects_mixed_image_text_only(tmp_path: Path) -
         "reasoner_images": [PIL.new("RGB", (8, 8)), None],
     }
     with pytest.raises(ValueError, match="mixes image-conditioned and text-only"):
-        pipe._generate_reasoner_batch([sa1, sa2], data_batch, warmup=False)
+        pipe._generate_reasoner_batch([sa1, sa2], data_batch)
 
 
 @pytest.mark.L0
