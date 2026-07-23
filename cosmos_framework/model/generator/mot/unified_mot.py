@@ -31,6 +31,9 @@ from cosmos_framework.model.generator.reasoner.nemotron_3_dense_vl.nemotron_3_de
     Nemotron3DenseVLRMSNorm,
     apply_rotary_pos_emb_partial,
 )
+from cosmos_framework.model.generator.reasoner.nemotron_3_dense_vl.reasoner_multimodal_utils import (
+    prepare_multimodal_reasoner_inputs as _nemotron_prepare_multimodal_reasoner_inputs,
+)
 
 # Qwen3-VL imports
 from cosmos_framework.model.generator.reasoner.qwen3_vl.configuration_qwen3_vl import (
@@ -50,9 +53,6 @@ from cosmos_framework.model.generator.reasoner.qwen3_vl.qwen3_vl import (
 )
 from cosmos_framework.model.generator.reasoner.qwen3_vl.utils import (
     prepare_multimodal_reasoner_inputs,
-)
-from cosmos_framework.model.generator.reasoner.nemotron_3_dense_vl.reasoner_multimodal_utils import (
-    prepare_multimodal_reasoner_inputs as _nemotron_prepare_multimodal_reasoner_inputs,
 )
 
 # Qwen3-VL-MoE imports
@@ -250,10 +250,10 @@ class _MoTConfigBase(object):
         # Noisy top-k gating on the generation-tower MoE blocks (Shazeer 2017).
         # Gen-tower only; the understanding tower never receives this flag.
         self.gen_noisy_gating = gen_noisy_gating
-        # Cosine router on the generation-tower MoE blocks: token-mean-centered,
-        # L2-normalized input × L2-normalized gate rows, scaled by a learnable
-        # temperature. Gen-tower only; the understanding tower keeps the standard
-        # dot-product router.
+        # Cosine similarity on the generation-tower MoE blocks: optionally
+        # centered, L2-normalized input × L2-normalized gate rows, scaled by a
+        # learnable temperature. Gen-tower only; the understanding tower keeps
+        # the standard dot-product router.
         self.gen_cosine_router_config: CosineRouterConfig = gen_cosine_router_config or CosineRouterConfig()
         # Aux-loss-free load balancing on the gen-tower MoE blocks.
         # Gen-tower only; the understanding tower uses the disabled default.
@@ -971,10 +971,12 @@ def _impl_forward(
             mean_router_prob_per_expert = torch.stack(
                 [lbl_metadata.mean_router_prob_per_expert for lbl_metadata in lbl_metadata_list]
             )  # [num_layers,num_experts]
+            top_k = torch.stack([lbl_metadata.top_k for lbl_metadata in lbl_metadata_list])  # [num_layers,1]
             final_lbl_metadata[pathway] = LBLMetadata(
                 num_tokens_per_expert=num_tokens_per_expert,
                 num_tokens=num_tokens,
                 mean_router_prob_per_expert=mean_router_prob_per_expert,
+                top_k=top_k,
             )
 
     hidden_states_out = zeros_like(hidden_states)
@@ -2586,9 +2588,7 @@ class Nemotron3DenseVLTextForCausalLM(Nemotron3DenseVLPreTrainedModel):
         state = {k[len("model.") :]: v for k, v in state.items()}
         missing, unexpected = encoder.load_state_dict(state, strict=False)
         if missing or unexpected:
-            raise RuntimeError(
-                f"Vision tower weight load mismatch: missing={missing[:3]} unexpected={unexpected[:3]}"
-            )
+            raise RuntimeError(f"Vision tower weight load mismatch: missing={missing[:3]} unexpected={unexpected[:3]}")
         self.visual = encoder
         # Plumb multimodal token ids for get_rope_index / get_placeholder_mask.
         self.config.image_token_id = top_cfg["image_token_id"]

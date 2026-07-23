@@ -15,10 +15,14 @@ support. Module selection is delegated to the filter built by
 :func:`_get_filter_fn`.
 """
 
+import gc
 import re
+from collections.abc import Callable
 
+import torch
 from torch import nn
 
+from cosmos_framework.utils import log
 from cosmos_framework.configs.base.defaults.quantization import QuantizationConfig
 
 # NOTE: ``torchao`` is imported lazily inside the functions below rather than at
@@ -29,7 +33,7 @@ from cosmos_framework.configs.base.defaults.quantization import QuantizationConf
 # quantization is actually requested.
 
 
-def _get_filter_fn(quantization_config: QuantizationConfig):
+def _get_filter_fn(quantization_config: QuantizationConfig) -> Callable[[nn.Module, str], bool]:
     """Build a module-selection predicate from the quantization config.
 
     The returned closure captures ``include_regex`` / ``exclude_regex`` and
@@ -47,11 +51,25 @@ def _get_filter_fn(quantization_config: QuantizationConfig):
         A predicate suitable for torchao's ``filter_fn`` / ``module_filter_fn``.
     """
 
+    include_patterns: list[re.Pattern[str]] = []
+    for pattern in quantization_config.include_regex:
+        try:
+            include_patterns.append(re.compile(pattern))
+        except re.error as error:
+            raise ValueError(f"Invalid include_regex pattern {pattern!r}: {error}") from error
+
+    exclude_patterns: list[re.Pattern[str]] = []
+    for pattern in quantization_config.exclude_regex:
+        try:
+            exclude_patterns.append(re.compile(pattern))
+        except re.error as error:
+            raise ValueError(f"Invalid exclude_regex pattern {pattern!r}: {error}") from error
+
     def _filter_fn(mod: nn.Module, name: str) -> bool:
         """Decide whether a single module should be quantized.
 
-        Called once per module as torchao walks the model recursively. A module
-        is selected only when ALL of the following hold:
+        Used by preflight and torchao as each walks the model recursively. A
+        module is selected only when ALL of the following hold:
 
         1. It is an ``nn.Linear`` (the only layer type these recipes support).
         2. ``include_regex`` is empty (include everything) OR the module's FQN
@@ -75,18 +93,33 @@ def _get_filter_fn(quantization_config: QuantizationConfig):
         Return:
             True if the module should be quantized, False otherwise.
         """
-        include_keys = quantization_config.include_regex
-        exclude_keys = quantization_config.exclude_regex
+        # torch.compile inserts `_orig_mod` into FQNs; hide it from user-facing regex matching.
+        canonical_name = ".".join(part for part in name.split(".") if part != "_orig_mod")
         return (
             isinstance(mod, nn.Linear)
-            and (len(include_keys) == 0 or any(re.search(key, name) for key in include_keys))
-            and not any(re.search(key, name) for key in exclude_keys)
+            and (not include_patterns or any(pattern.search(canonical_name) for pattern in include_patterns))
+            and not any(pattern.search(canonical_name) for pattern in exclude_patterns)
         )
 
     return _filter_fn
 
 
-def apply_quantization_inplace(model: nn.Module, quantization_config: QuantizationConfig):
+def _get_validated_quantization_fqns(model: nn.Module, filter_fn: Callable[[nn.Module, str], bool]) -> list[str]:
+    """Validate the selected modules and return their sorted FQNs."""
+    matched_modules = sorted(
+        ((name, module) for name, module in model.named_modules() if filter_fn(module, name)),
+        key=lambda item: item[0],
+    )
+    if not matched_modules:
+        raise ValueError("No nn.Linear modules matched the quantization selection")
+    matched_fqns = [name for name, _ in matched_modules]
+    already_quantized_fqns = [name for name, module in matched_modules if type(module.weight) is not nn.Parameter]
+    if already_quantized_fqns:
+        raise ValueError(f"Quantization targets are already quantized: {', '.join(already_quantized_fqns)}")
+    return matched_fqns
+
+
+def apply_quantization_inplace(model: nn.Module, quantization_config: QuantizationConfig) -> list[str]:
     """Apply quantization in place via ``quantize_`` (replaces weights with quantized tensors).
 
     This is the replication path. ``quantize_`` replaces each weight with a
@@ -96,30 +129,56 @@ def apply_quantization_inplace(model: nn.Module, quantization_config: Quantizati
     to replicated inference (``data_parallel_shard_degree == 1``).
 
     These configs (``MXDynamicActivationMXWeightConfig`` /
-    ``NVFP4DynamicActivationNVFP4WeightConfig``) are inference-only (PTQ) and
+    ``NVFP4DynamicActivationNVFP4WeightConfig`` /
+    ``Float8DynamicActivationFloat8WeightConfig``) are inference-only (PTQ) and
     have no backward support. For the sharded case use ``apply_quantization``
     (the module-swap path) instead; both functions are currently inference
     paths, selected by whether FSDP is sharding the model.
+
+    Returns:
+        Sorted fully qualified names of the matched modules.
     """
     # No-op when quantization is disabled.
     if quantization_config.method is None:
-        return
+        return []
+
+    filter_fn = _get_filter_fn(quantization_config)
+    matched_fqns = _get_validated_quantization_fqns(model, filter_fn)
 
     from torchao.prototype.mx_formats import (
         MXDynamicActivationMXWeightConfig,
         NVFP4DynamicActivationNVFP4WeightConfig,
     )
     from torchao.quantization import (
+        Float8DynamicActivationFloat8WeightConfig,
+        PerRow,
+        PerTensor,
         quantize_,
     )
 
+    def _reclaim_and_log_gpu_memory(tag: str) -> None:
+        # synchronize() + gc.collect() + empty_cache() are load-bearing, not passive
+        # observability: torch.mem_get_info reports memory free at the CUDA-driver level.
+        # synchronize() first drains any in-flight device work (e.g. async copies from the
+        # checkpoint load path) so their allocations retire before we measure; otherwise the
+        # baseline could over-report free memory. PyTorch's caching allocator then holds
+        # freed blocks in its own pool without returning them to the driver, so empty_cache()
+        # flushes that pool back to the driver.
+        torch.cuda.synchronize()
+        gc.collect()
+        torch.cuda.empty_cache()
+        free, total = torch.cuda.mem_get_info(torch.device("cuda", torch.cuda.current_device()))
+        log.info(f"GPU memory ({tag}): {free / 2**30:.2f} GiB free / {total / 2**30:.2f} GiB total")
+
+    _reclaim_and_log_gpu_memory("before quantization")
+
     if quantization_config.method == "mxfp8":
-        # mxfp8 / nvfp4 use fixed block scales.
         quantize_(
             model,
             config=MXDynamicActivationMXWeightConfig(),
-            filter_fn=_get_filter_fn(quantization_config),
+            filter_fn=filter_fn,
         )
+
     elif quantization_config.method == "nvfp4":
         # use_triton_kernel=False avoids torchao's fused NVFP4 Triton kernel, which
         # requires the external `mslk` package. Prebuilt mslk wheels are linked
@@ -129,7 +188,28 @@ def apply_quantization_inplace(model: nn.Module, quantization_config: Quantizati
         quantize_(
             model,
             config=NVFP4DynamicActivationNVFP4WeightConfig(use_triton_kernel=False),
-            filter_fn=_get_filter_fn(quantization_config),
+            filter_fn=filter_fn,
         )
+
+    elif quantization_config.method == "fp8":
+        # Hopper-compatible FP8. Unlike mxfp8 / nvfp4 (block-scaled MX / NVFP4
+        # formats whose accelerated kernels require Blackwell sm_100 tensor
+        # cores), this is plain e4m3 dynamic-activation + fp8-weight quantization
+        # executed via torch._scaled_mm, which is supported on Hopper (sm_90) and
+        # Ada (sm_89). Scaling granularity is user-selectable: PerRow (rowwise,
+        # better accuracy) or PerTensor (single scale, slightly faster); both are
+        # supported on Hopper.
+        granularity = PerRow() if quantization_config.fp8_granularity == "per_row" else PerTensor()
+        quantize_(
+            model,
+            config=Float8DynamicActivationFloat8WeightConfig(granularity=granularity),
+            filter_fn=filter_fn,
+        )
+
     else:
         raise ValueError(f"Unsupported quantization method: {quantization_config.method}")
+
+    _reclaim_and_log_gpu_memory("after quantization")
+    log.info(f"Applied runtime PTQ method={quantization_config.method}, matched_count={len(matched_fqns)}")
+    log.debug(f"Runtime PTQ matched_fqns={matched_fqns}")
+    return matched_fqns

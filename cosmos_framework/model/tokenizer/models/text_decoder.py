@@ -22,8 +22,10 @@ Label alignment (next-token prediction):
     The shift (logits[:-1] vs labels[1:]) happens in the loss function.
 """
 
+import math
 import os
 from dataclasses import dataclass
+from functools import partial
 from types import SimpleNamespace
 from typing import Any
 
@@ -64,6 +66,11 @@ TEXT_DECODER_ATTN_IMPLEMENTATION_ENV = "TOKENIZER_TEXT_DECODER_ATTN_IMPLEMENTATI
 PACKED_ATTENTION_BACKEND_SDPA = "sdpa"
 PACKED_ATTENTION_BACKEND_NATTEN = "natten"
 PACKED_ATTENTION_BACKENDS = frozenset({PACKED_ATTENTION_BACKEND_SDPA, PACKED_ATTENTION_BACKEND_NATTEN})
+TEXT_DECODER_CHECKPOINT_SCOPE_FULL_LAYER = "full_layer"
+TEXT_DECODER_CHECKPOINT_SCOPE_MLP_ONLY = "mlp_only"
+TEXT_DECODER_CHECKPOINT_SCOPES = frozenset(
+    {TEXT_DECODER_CHECKPOINT_SCOPE_FULL_LAYER, TEXT_DECODER_CHECKPOINT_SCOPE_MLP_ONLY}
+)
 VQA_THINKING_MODE_OFF = "off"
 VQA_THINKING_MODE_ON = "on"
 VQA_THINKING_MODE_RAW = "raw"
@@ -189,7 +196,7 @@ def _forward_nemotron_natten_attention(
     return projected_output
 
 
-def _forward_nemotron_natten_decoder_layer(
+def _forward_nemotron_natten_attention_sublayer(
     decoder_layer: nn.Module,
     hidden_states: torch.Tensor,
     position_ids: torch.Tensor,
@@ -197,7 +204,7 @@ def _forward_nemotron_natten_decoder_layer(
     max_seqlen: int,
     rotary_embeddings: tuple[torch.Tensor, torch.Tensor] | None = None,
 ) -> torch.Tensor:
-    """Run one remote-code Nemotron layer while replacing only self-attention."""
+    """Run the residual NATTEN attention sublayer of one Nemotron decoder layer."""
     residual = hidden_states  # [1,T,D]
     normalized_hidden_states = decoder_layer.input_layernorm(hidden_states)  # [1,T,D]
     attention_output = _forward_nemotron_natten_attention(
@@ -208,12 +215,39 @@ def _forward_nemotron_natten_decoder_layer(
         max_seqlen,
         rotary_embeddings,
     )  # [1,T,D]
-    hidden_states = residual + attention_output  # [1,T,D]
+    return residual + attention_output  # [1,T,D]
 
+
+def _forward_nemotron_mlp_sublayer(
+    decoder_layer: nn.Module,
+    hidden_states: torch.Tensor,
+) -> torch.Tensor:
+    """Run the residual MLP sublayer of one Nemotron decoder layer."""
     residual = hidden_states  # [1,T,D]
     normalized_hidden_states = decoder_layer.post_attention_layernorm(hidden_states)  # [1,T,D]
     mlp_output = decoder_layer.mlp(normalized_hidden_states)  # [1,T,D]
     return residual + mlp_output  # [1,T,D]
+
+
+def _forward_nemotron_natten_decoder_layer(
+    decoder_layer: nn.Module,
+    hidden_states: torch.Tensor,
+    position_ids: torch.Tensor,
+    cumulative_seqlen: torch.Tensor,
+    max_seqlen: int,
+    rotary_embeddings: tuple[torch.Tensor, torch.Tensor] | None = None,
+) -> torch.Tensor:
+    """Run one remote-code Nemotron layer while replacing only self-attention."""
+    hidden_states = _forward_nemotron_natten_attention_sublayer(
+        decoder_layer,
+        hidden_states,
+        position_ids,
+        cumulative_seqlen,
+        max_seqlen,
+        rotary_embeddings,
+    )  # [1,T,D]
+
+    return _forward_nemotron_mlp_sublayer(decoder_layer, hidden_states)  # [1,T,D]
 
 
 @dataclass(frozen=True)
@@ -307,6 +341,134 @@ def _repair_nemotron_rotary_buffers(module: nn.Module) -> int:
     return repaired_count
 
 
+def _forward_nemotron_native_rms_norm(
+    rms_norm: nn.Module,
+    hidden_states: torch.Tensor,
+) -> torch.Tensor:  # hidden_states: [B,T,D], returns: [B,T,D]
+    """Run native RMSNorm while retaining Nemotron's cast-before-affine ordering."""
+    normalized_shape = tuple(rms_norm.weight.shape)  # type: ignore[attr-defined]
+    normalized_hidden_states = F.rms_norm(
+        hidden_states,
+        normalized_shape=normalized_shape,
+        weight=None,
+        eps=float(rms_norm.variance_epsilon),  # type: ignore[attr-defined]
+    )  # [B,T,D]
+    return rms_norm.weight * normalized_hidden_states  # type: ignore[attr-defined]  # [B,T,D]
+
+
+def _install_nemotron_native_rms_norm(text_decoder: nn.Module) -> int:
+    """Validate the pinned remote RMSNorm contract and replace only instance forwards."""
+    config = getattr(text_decoder, "config", None)
+    model_type = getattr(config, "model_type", None)
+    architectures = tuple(getattr(config, "architectures", ()) or ())
+    hidden_size = getattr(config, "hidden_size", None)
+    config_epsilon = getattr(config, "rms_norm_eps", None)
+    if model_type != "cosmos_nemotron" or architectures != ("CosmosNemotronForCausalLM",):
+        raise ValueError(
+            "natten_native_rms_norm requires the pinned CosmosNemotronForCausalLM architecture, "
+            f"got model_type={model_type!r}, architectures={architectures!r}."
+        )
+    if isinstance(hidden_size, bool) or not isinstance(hidden_size, int) or hidden_size <= 0:
+        raise ValueError(f"Nemotron hidden_size must be a positive integer, got {hidden_size!r}.")
+    if (
+        isinstance(config_epsilon, bool)
+        or not isinstance(config_epsilon, (float, int))
+        or not math.isfinite(float(config_epsilon))
+        or float(config_epsilon) <= 0.0
+    ):
+        raise ValueError(f"Nemotron rms_norm_eps must be finite and positive, got {config_epsilon!r}.")
+
+    model = getattr(text_decoder, "model", None)
+    decoder_layers = getattr(model, "layers", None)
+    final_norm = getattr(model, "norm", None)
+    if not isinstance(decoder_layers, nn.ModuleList) or len(decoder_layers) == 0:
+        raise ValueError("natten_native_rms_norm requires a non-empty Nemotron decoder ModuleList.")
+    if not isinstance(final_norm, nn.Module):
+        raise ValueError("natten_native_rms_norm requires a final Nemotron RMSNorm module.")
+
+    norm_modules: list[nn.Module] = []
+    for layer_index, decoder_layer in enumerate(decoder_layers):
+        for norm_name in ("input_layernorm", "post_attention_layernorm"):
+            norm_module = getattr(decoder_layer, norm_name, None)
+            if not isinstance(norm_module, nn.Module):
+                raise ValueError(f"Nemotron decoder layer {layer_index} has no nn.Module {norm_name}.")
+            norm_modules.append(norm_module)
+    norm_modules.append(final_norm)
+
+    expected_norm_type = type(norm_modules[0])
+    expected_forward = expected_norm_type.forward
+    if expected_norm_type.__name__ != "CosmosNemotronRMSNorm":
+        raise ValueError(
+            f"natten_native_rms_norm requires CosmosNemotronRMSNorm modules, got {expected_norm_type.__name__}."
+        )
+
+    incompatible_norms: list[str] = []
+    for norm_index, norm_module in enumerate(norm_modules):
+        direct_parameter_names = {name for name, _ in norm_module.named_parameters(recurse=False)}
+        norm_weight = getattr(norm_module, "weight", None)
+        norm_epsilon = getattr(norm_module, "variance_epsilon", None)
+        has_expected_epsilon = (
+            not isinstance(norm_epsilon, bool)
+            and isinstance(norm_epsilon, (float, int))
+            and math.isfinite(float(norm_epsilon))
+            and float(norm_epsilon) == float(config_epsilon)
+        )
+        is_compatible = (
+            type(norm_module) is expected_norm_type
+            and type(norm_module).forward is expected_forward
+            and "forward" not in norm_module.__dict__
+            and direct_parameter_names == {"weight"}
+            and not list(norm_module.named_buffers(recurse=False))
+            and not list(norm_module.named_children())
+            and isinstance(norm_weight, nn.Parameter)
+            and tuple(norm_weight.shape) == (hidden_size,)
+            and norm_weight.device.type != "meta"
+            and norm_weight.dtype in (torch.float16, torch.bfloat16, torch.float32)
+            and has_expected_epsilon
+        )
+        if not is_compatible:
+            incompatible_norms.append(str(norm_index))
+    if incompatible_norms:
+        raise ValueError(
+            "natten_native_rms_norm requires homogeneous, state-free CosmosNemotronRMSNorm modules with "
+            f"one [{hidden_size}] weight and eps={float(config_epsilon)}; incompatible norm indices: "
+            f"{incompatible_norms}."
+        )
+
+    reference_norm = norm_modules[0]
+    reference_weight = reference_norm.weight  # type: ignore[attr-defined]
+    probe = torch.linspace(
+        -0.5,
+        0.5,
+        hidden_size,
+        device=reference_weight.device,
+        dtype=reference_weight.dtype,
+    ).reshape(1, 1, hidden_size)  # [1,1,D]
+    with torch.inference_mode():
+        reference_output = reference_norm(probe)  # [1,1,D]
+        probe_float = probe.float()  # [1,1,D]
+        probe_variance = probe_float.pow(2).mean(dim=-1, keepdim=True)  # [1,1,1]
+        normalized_probe = probe_float * torch.rsqrt(probe_variance + float(config_epsilon))  # [1,1,D]
+        expected_output = reference_weight * normalized_probe.to(dtype=probe.dtype)  # [1,1,D]
+    if not torch.equal(reference_output, expected_output):
+        raise ValueError(
+            "CosmosNemotronRMSNorm forward no longer matches the validated FP32-normalize, cast-before-weight contract."
+        )
+
+    state_dict_keys_before = tuple(text_decoder.state_dict())
+    parameter_ids_before = {name: id(parameter) for name, parameter in text_decoder.named_parameters()}
+    for norm_module in norm_modules:
+        # A top-level partial keeps the override instance-local while remaining
+        # round-trippable through deepcopy, pickle, and full-object torch.save.
+        norm_module.forward = partial(_forward_nemotron_native_rms_norm, norm_module)
+    if (
+        tuple(text_decoder.state_dict()) != state_dict_keys_before
+        or {name: id(parameter) for name, parameter in text_decoder.named_parameters()} != parameter_ids_before
+    ):
+        raise RuntimeError("Installing native Nemotron RMSNorm unexpectedly changed model state.")
+    return len(norm_modules)
+
+
 def infer_text_decoder_family(model_name: str) -> str:
     """Infer the decoder family from a HuggingFace model name."""
     model_name_lower = model_name.lower()
@@ -350,7 +512,7 @@ class ImagePositionEmbeddings(nn.Module):
         coord_dim: Number of coordinate dimensions (default 2 for H, W).
     """
 
-    def __init__(self, hidden_size: int, max_position: int = 128, coord_dim: int = 2):
+    def __init__(self, hidden_size: int, max_position: int = 128, coord_dim: int = 2) -> None:
         super().__init__()
         self.hidden_size = hidden_size
         self.max_position = max_position
@@ -403,7 +565,7 @@ class SpatialPatchMerger(nn.Module):
         input_hidden_size: int = 1152,
         out_hidden_size: int = 896,
         spatial_merge_size: int = 2,
-    ):
+    ) -> None:
         super().__init__()
         self.input_hidden_size = input_hidden_size
         self.out_hidden_size = out_hidden_size
@@ -576,6 +738,8 @@ class TextDecoderWrapper(nn.Module):
         attn_implementation: str = "flash_attention_2",
         family_spec: TextDecoderFamilySpec | None = None,
         packed_attention_backend: str = PACKED_ATTENTION_BACKEND_SDPA,
+        natten_native_rms_norm: bool = False,
+        gradient_checkpoint_scope: str = TEXT_DECODER_CHECKPOINT_SCOPE_FULL_LAYER,
     ) -> None:
         super().__init__()
 
@@ -592,6 +756,20 @@ class TextDecoderWrapper(nn.Module):
             )
         if packed_attention_backend == PACKED_ATTENTION_BACKEND_NATTEN and self.spec.family != NEMOTRON_2B_SPEC.family:
             raise ValueError("NATTEN packed attention currently supports only the Nemotron 2B text decoder.")
+        if natten_native_rms_norm and packed_attention_backend != PACKED_ATTENTION_BACKEND_NATTEN:
+            raise ValueError("natten_native_rms_norm requires the NATTEN packed attention backend.")
+        if gradient_checkpoint_scope not in TEXT_DECODER_CHECKPOINT_SCOPES:
+            raise ValueError(
+                f"Unsupported gradient_checkpoint_scope={gradient_checkpoint_scope!r}; "
+                f"expected one of {sorted(TEXT_DECODER_CHECKPOINT_SCOPES)}."
+            )
+        if (
+            gradient_checkpoint_scope == TEXT_DECODER_CHECKPOINT_SCOPE_MLP_ONLY
+            and packed_attention_backend != PACKED_ATTENTION_BACKEND_NATTEN
+        ):
+            raise ValueError("MLP-only text checkpointing requires the NATTEN packed attention backend.")
+        if gradient_checkpoint_scope == TEXT_DECODER_CHECKPOINT_SCOPE_MLP_ONLY and not gradient_checkpointing:
+            raise ValueError("MLP-only text checkpointing requires gradient_checkpointing=True.")
         if (
             packed_attention_backend == PACKED_ATTENTION_BACKEND_NATTEN
             and torch.cuda.is_available()
@@ -599,6 +777,8 @@ class TextDecoderWrapper(nn.Module):
         ):
             raise RuntimeError("NATTEN packed attention was requested but NATTEN is unavailable or unsupported.")
         self.packed_attention_backend: str = packed_attention_backend
+        self.natten_native_rms_norm: bool = natten_native_rms_norm
+        self.gradient_checkpoint_scope: str = gradient_checkpoint_scope
         self._model_name: str = model_name or self.spec.default_model_name
         resolved_attn_implementation = _resolve_attn_implementation(attn_implementation)
         if packed_attention_backend == PACKED_ATTENTION_BACKEND_NATTEN:
@@ -652,6 +832,10 @@ class TextDecoderWrapper(nn.Module):
                 )
             else:
                 logging.info(f"Reinitialized {repaired_rotary_buffers} Nemotron rotary embedding buffers")
+
+        if self.natten_native_rms_norm:
+            native_rms_norm_count = _install_nemotron_native_rms_norm(self.text_decoder)
+            logging.info(f"Installed native RMSNorm forwards on {native_rms_norm_count} Nemotron modules")
 
         self.lm_config = self.text_decoder.config
         self.lm_config.pad_token_id = self.spec.pad_token_id
@@ -722,11 +906,19 @@ class TextDecoderWrapper(nn.Module):
         elif hasattr(self.text_decoder, "gradient_checkpointing_disable"):
             self.text_decoder.gradient_checkpointing_disable()
 
+        if (
+            self.gradient_checkpoint_scope == TEXT_DECODER_CHECKPOINT_SCOPE_MLP_ONLY
+            and not self._manual_gradient_checkpointing_enabled
+        ):
+            raise RuntimeError("MLP-only text checkpointing requires the manual decoder-layer checkpoint path.")
+
         logging.info(
             f"TextDecoderWrapper ready: family={self.spec.family}, hidden_size={hidden_size}, "
             f"layers={len(self.text_decoder.model.layers)}, "
             f"gradient_checkpointing={gradient_checkpointing_enabled}, "
-            f"packed_attention_backend={self.packed_attention_backend}, use_cache=False"
+            f"packed_attention_backend={self.packed_attention_backend}, "
+            f"natten_native_rms_norm={self.natten_native_rms_norm}, "
+            f"gradient_checkpoint_scope={self.gradient_checkpoint_scope}, use_cache=False"
         )
 
     def _get_eos_token_ids(self) -> tuple[int, ...]:
@@ -808,26 +1000,49 @@ class TextDecoderWrapper(nn.Module):
         )
         for decoder_layer in decoder_layers:
             if use_manual_gradient_checkpointing:
-
-                def _layer_forward(
-                    layer_hidden_states: torch.Tensor,
-                    layer_module: nn.Module = decoder_layer,
-                ) -> torch.Tensor:
-                    return _forward_nemotron_natten_decoder_layer(
-                        layer_module,
-                        layer_hidden_states,
+                if self.gradient_checkpoint_scope == TEXT_DECODER_CHECKPOINT_SCOPE_MLP_ONLY:
+                    hidden_states = _forward_nemotron_natten_attention_sublayer(
+                        decoder_layer,
+                        hidden_states,
                         position_ids,
                         cumulative_seqlen,
                         max_seqlen,
                         rotary_embeddings,
-                    )
+                    )  # [1,T,D]
 
-                hidden_states = torch.utils.checkpoint.checkpoint(
-                    _layer_forward,
-                    hidden_states,
-                    preserve_rng_state=True,
-                    use_reentrant=False,
-                )  # [1,T,D]
+                    def _mlp_forward(
+                        layer_hidden_states: torch.Tensor,
+                        layer_module: nn.Module = decoder_layer,
+                    ) -> torch.Tensor:
+                        return _forward_nemotron_mlp_sublayer(layer_module, layer_hidden_states)  # [1,T,D]
+
+                    hidden_states = torch.utils.checkpoint.checkpoint(
+                        _mlp_forward,
+                        hidden_states,
+                        preserve_rng_state=True,
+                        use_reentrant=False,
+                    )  # [1,T,D]
+                else:
+
+                    def _layer_forward(
+                        layer_hidden_states: torch.Tensor,
+                        layer_module: nn.Module = decoder_layer,
+                    ) -> torch.Tensor:
+                        return _forward_nemotron_natten_decoder_layer(
+                            layer_module,
+                            layer_hidden_states,
+                            position_ids,
+                            cumulative_seqlen,
+                            max_seqlen,
+                            rotary_embeddings,
+                        )  # [1,T,D]
+
+                    hidden_states = torch.utils.checkpoint.checkpoint(
+                        _layer_forward,
+                        hidden_states,
+                        preserve_rng_state=True,
+                        use_reentrant=False,
+                    )  # [1,T,D]
             else:
                 hidden_states = _forward_nemotron_natten_decoder_layer(
                     decoder_layer,
@@ -906,6 +1121,11 @@ class TextDecoderWrapper(nn.Module):
             and not use_cache
             and hidden_states.requires_grad
         )
+        if (
+            use_manual_gradient_checkpointing
+            and self.gradient_checkpoint_scope == TEXT_DECODER_CHECKPOINT_SCOPE_MLP_ONLY
+        ):
+            raise RuntimeError("MLP-only text checkpointing requires packed NATTEN training metadata.")
         for idx, decoder_layer in enumerate(self.text_decoder.model.layers):
             layer_past = past_key_values[idx] if past_key_values is not None else None
             if use_manual_gradient_checkpointing:
@@ -926,6 +1146,7 @@ class TextDecoderWrapper(nn.Module):
                 hidden_states = torch.utils.checkpoint.checkpoint(
                     _layer_forward,
                     hidden_states,
+                    preserve_rng_state=True,
                     use_reentrant=False,
                 )
                 if hidden_padding_mask is not None:
@@ -997,20 +1218,6 @@ class TextDecoderWrapper(nn.Module):
 
         next_token_probs = torch.softmax(next_token_logits, dim=-1)
         return torch.multinomial(next_token_probs, num_samples=1).squeeze(-1)
-
-    def _build_vqa_user_turn(
-        self,
-        tokenizer: Any,
-        question: str,
-        num_image_tokens: int,
-    ) -> tuple[list[int], int]:
-        """Build one multimodal user turn and return the image-pad start offset."""
-        user_turn, image_pad_offsets = self._build_vqa_user_turn_with_visual_blocks(
-            tokenizer=tokenizer,
-            question=question,
-            image_token_counts_by_visual=[int(num_image_tokens)],
-        )
-        return user_turn, image_pad_offsets[0]
 
     def _build_vqa_user_turn_with_visual_blocks(
         self,
@@ -1188,14 +1395,12 @@ class TextDecoderWrapper(nn.Module):
             if return_hidden_states:
                 decoder_output = self._forward_packed(  # [B,S,D]
                     text_embeds,
-                    input_ids,
                     segment_ids,
                     return_hidden_states=True,
                 )
             else:
                 decoder_output = self._forward_packed(  # [B,S,Vocab]
                     text_embeds,
-                    input_ids,
                     segment_ids,
                 )
         else:
@@ -1267,7 +1472,6 @@ class TextDecoderWrapper(nn.Module):
     def _forward_packed(
         self,
         text_embeds: torch.Tensor,
-        input_ids: torch.Tensor,
         segment_ids: torch.Tensor,
         return_hidden_states: bool = False,
     ) -> torch.Tensor:
@@ -1279,7 +1483,6 @@ class TextDecoderWrapper(nn.Module):
 
         Args:
             text_embeds: [B, S, d] embeddings with image features already injected.
-            input_ids: [B, S] original token IDs (for reconstructing output shape).
             segment_ids: [B, S] segment IDs (>=0 for valid, -1 for padding).
 
         Returns:

@@ -10,6 +10,7 @@ Code adapted from Jax version in Appendix A.1
 from __future__ import annotations
 
 import math
+from typing import Any
 
 import torch
 import torch.nn as nn
@@ -91,12 +92,12 @@ def levels_from_codebook_size(codebook_size: int) -> tuple[list[int], int]:
 # Helper functions
 
 
-def exists(v):
+def exists(v: Any) -> bool:
     """Check if value exists (is not None)."""
     return v is not None
 
 
-def default(*args):
+def default(*args: Any) -> Any:
     """Return first non-None value from args."""
     for arg in args:
         if exists(arg):
@@ -132,7 +133,7 @@ class FSQ(Module):
         keep_num_codebooks_dim: bool | None = None,
         scale: float | None = None,
         allowed_dtypes: tuple[torch.dtype, ...] = (torch.float32, torch.float64),
-    ):
+    ) -> None:
         """Initialize FSQ.
 
         Args:

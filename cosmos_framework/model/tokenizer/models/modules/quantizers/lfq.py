@@ -17,7 +17,7 @@ from __future__ import annotations
 
 from collections import namedtuple
 from math import ceil, log2
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import torch
 import torch.nn as nn
@@ -45,12 +45,12 @@ _MAX_DIM_ONLY_CODEBOOK_BITS = 20
 # Helper functions
 
 
-def exists(v):
+def exists(v: Any) -> bool:
     """Check if value exists (is not None)."""
     return v is not None
 
 
-def default(*args):
+def default(*args: Any) -> Any:
     """Return first non-None value from args (calling if callable)."""
     for arg in args:
         if exists(arg):
