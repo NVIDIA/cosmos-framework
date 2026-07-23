@@ -17,6 +17,7 @@ import torch
 from accelerate import init_empty_weights
 from diffusers import (
     AutoencoderKLWan,
+    Cosmos3EdgeUniPCMultistepScheduler,
     Cosmos3OmniTransformer,
     FlowMatchEulerDiscreteScheduler,
     UniPCMultistepScheduler,
@@ -1151,10 +1152,19 @@ def _write_edge_transformer_config(output_dir: pathlib.Path, model_cfg: Any) -> 
 def _normalize_edge_model_index(output_dir: pathlib.Path) -> None:
     """Keep Edge pipeline metadata consistent with the existing Hub export."""
     model_index_path = output_dir / "model_index.json"
+    scheduler_config_path = output_dir / "scheduler" / "scheduler_config.json"
     model_index = _load_json(model_index_path)
+    scheduler_config = _load_json(scheduler_config_path)
+    try:
+        native_flow_shift = float(scheduler_config["flow_shift"])
+    except (KeyError, TypeError, ValueError) as error:
+        raise ValueError(
+            f"Cosmos3 Edge scheduler config must define a numeric flow_shift: {scheduler_config_path}"
+        ) from error
     model_index.update(
         {
             "default_use_system_prompt": False,
+            "native_flow_shift": native_flow_shift,
             "text_tokenizer": ["transformers", "PreTrainedTokenizerFast"],
             "use_native_flow_schedule": True,
         }
@@ -1591,6 +1601,13 @@ def convert_model_to_diffusers(args: Args) -> None:
                     "sample_type": fixed_step_sampler_cfg["sample_type"],
                 },
                 fixed_step_requires_explicit_sigmas=True,
+            )
+        elif is_edge_model:
+            scheduler = Cosmos3EdgeUniPCMultistepScheduler(
+                use_karras_sigmas=False,
+                use_flow_sigmas=True,
+                prediction_type="flow_prediction",
+                flow_shift=3.0,
             )
         else:
             # Karras schedule approximating FlowUniPCMultistepScheduler with shift=5, 35 steps.
