@@ -17,7 +17,6 @@ import torch
 from accelerate import init_empty_weights
 from diffusers import (
     AutoencoderKLWan,
-    Cosmos3EdgeUniPCMultistepScheduler,
     Cosmos3OmniTransformer,
     FlowMatchEulerDiscreteScheduler,
     UniPCMultistepScheduler,
@@ -28,6 +27,14 @@ try:
 except ImportError:
     # Some intermediate main-branch revisions used this renamed export.
     from diffusers import Cosmos3OmniDiffusersPipeline as Cosmos3OmniPipeline
+
+try:
+    from diffusers import Cosmos3EdgeUniPCMultistepScheduler
+except ImportError:
+    # Older Diffusers builds predate the Edge scheduler. Keep the import optional
+    # so non-Edge conversions still work; Edge conversions raise a clear error at
+    # use time (see the is_edge_model scheduler branch below).
+    Cosmos3EdgeUniPCMultistepScheduler = None
 from transformers import AutoConfig, AutoTokenizer
 
 from cosmos_framework.inference.model import Cosmos3OmniModel
@@ -1603,6 +1610,12 @@ def convert_model_to_diffusers(args: Args) -> None:
                 fixed_step_requires_explicit_sigmas=True,
             )
         elif is_edge_model:
+            if Cosmos3EdgeUniPCMultistepScheduler is None:
+                raise ImportError(
+                    "Converting a Cosmos3 Edge checkpoint requires a Diffusers build that exports "
+                    "Cosmos3EdgeUniPCMultistepScheduler; the installed build does not. Upgrade Diffusers "
+                    "to a revision that ships the Edge scheduler."
+                )
             scheduler = Cosmos3EdgeUniPCMultistepScheduler(
                 use_karras_sigmas=False,
                 use_flow_sigmas=True,
