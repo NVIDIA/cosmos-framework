@@ -153,6 +153,26 @@ def load_torch_checkpoint_from_bytes(
             return torch.load(checkpoint_buffer, map_location=map_location, weights_only=True)
 
 
+def load_local_torch_checkpoint(
+    checkpoint_path: str | Path,
+    *,
+    map_location: TorchMapLocation = "cpu",
+    mmap: bool = False,
+) -> Any:
+    """Load a local checkpoint with safe tensor-only unpickling.
+
+    Older PyTorch releases may not support ``mmap``. In that case the load is
+    retried without memory mapping while retaining ``weights_only=True``.
+    """
+    with torch.serialization.safe_globals(_safe_checkpoint_globals()):
+        if not mmap:
+            return torch.load(checkpoint_path, map_location=map_location, weights_only=True)
+        try:
+            return torch.load(checkpoint_path, map_location=map_location, weights_only=True, mmap=True)
+        except TypeError:
+            return torch.load(checkpoint_path, map_location=map_location, weights_only=True)
+
+
 def load_torch_checkpoint_from_easy_io_backend(
     backend: Any,
     checkpoint_path: str,

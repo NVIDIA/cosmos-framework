@@ -30,6 +30,7 @@ def compute_load_balancing_loss(
               batch for each layer.
             - mean_router_prob_per_expert: [num_layers, num_experts] - The average
               probability of routing to each expert for this rank for each layer.
+            - top_k: [num_layers, 1] - Experts selected per token for each layer.
         coeff: The coefficient for the load balancing loss.
         method: The method for the load balancing loss. Can be "local" or "global".
         device_mesh: The device mesh. Only needed if method is "global".
@@ -41,10 +42,11 @@ def compute_load_balancing_loss(
         return None
     assert method in ["local", "global"], "Invalid method"
 
-    num_tokens_per_expert = lbl_metadata.num_tokens_per_expert
+    num_tokens_per_expert = lbl_metadata.num_tokens_per_expert  # [num_layers,num_experts]
     num_experts = num_tokens_per_expert.shape[-1]
-    num_tokens = lbl_metadata.num_tokens
-    mean_router_prob_per_expert = lbl_metadata.mean_router_prob_per_expert
+    num_tokens = lbl_metadata.num_tokens  # [num_layers,1]
+    mean_router_prob_per_expert = lbl_metadata.mean_router_prob_per_expert  # [num_layers,num_experts]
+    top_k = lbl_metadata.top_k  # [num_layers,1]
 
     if method == "global":
         # Note that these collectives must be executed outside a torch compiled region
@@ -55,16 +57,17 @@ def compute_load_balancing_loss(
             num_tokens_per_expert,
             device_mesh=device_mesh,
             placements=[Partial()] * device_mesh.ndim,
-        ).full_tensor()
+        ).full_tensor()  # [num_layers,num_experts]
         num_tokens = DTensor.from_local(
             num_tokens,
             device_mesh=device_mesh,
             placements=[Partial()] * device_mesh.ndim,
-        ).full_tensor()
+        ).full_tensor()  # [num_layers,1]
 
-    # Compute the fraction of tokens routed to each experts.
-    # Summing over all experts should be equal to self.top_k.
-    mean_tokens_per_expert = num_tokens_per_expert.float() / num_tokens.float()
+    # Normalize by per-layer top_k so sum_i f_i = 1 (each token routes to top_k experts).
+    mean_tokens_per_expert = num_tokens_per_expert.float() / (
+        num_tokens.float() * top_k.float()
+    )  # [num_layers,num_experts]
 
-    lbl = torch.mean(torch.sum(mean_tokens_per_expert * mean_router_prob_per_expert, dim=-1) * num_experts)
+    lbl = torch.mean(torch.sum(mean_tokens_per_expert * mean_router_prob_per_expert, dim=-1) * num_experts)  # []
     return lbl * coeff

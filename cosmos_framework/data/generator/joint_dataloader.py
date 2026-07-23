@@ -19,6 +19,7 @@ from cosmos_framework.model.generator.tokenizers.uniae.frame_math import (
     get_uniae_latent_num_frames,
     normalize_uniae_chunk_frames,
 )
+from cosmos_framework.utils.generator.data_utils import read_positive_int_metadata
 
 _TIMING_KEYS = {"_sample_time", "_aug_time", "_pre_aug_time", "_aug_step_times"}
 _BATCH_TIMING_KEYS = {
@@ -403,6 +404,22 @@ class JointDataLoader(webdataset.WebLoader):
         # Vision part
         is_image_batch = "images" in data_batch
         input_images_or_videos = data_batch["images" if is_image_batch else "video"]
+        if "enable_per_camera_vae_encoding" in data_batch:
+            sample_n_views_values = read_positive_int_metadata(data_batch, "sample_n_views", expected_count=1)
+            frames_per_view_values = read_positive_int_metadata(
+                data_batch,
+                "num_video_frames_per_view",
+                expected_count=1,
+            )
+            if sample_n_views_values is None or frames_per_view_values is None:
+                raise ValueError(
+                    "sample_n_views and num_video_frames_per_view are required when per-camera VAE encoding is enabled."
+                )
+            sample_n_views = sample_n_views_values[0]
+            frames_per_view = frames_per_view_values[0]
+        else:
+            sample_n_views = None
+            frames_per_view = None
 
         # iterate over all the media in the batch
         for media in input_images_or_videos if isinstance(input_images_or_videos, list) else [input_images_or_videos]:
@@ -416,7 +433,19 @@ class JointDataLoader(webdataset.WebLoader):
             latent_w_shape = W // self.tokenizer_spatial_compression_factor
             patch_h_shape = math.ceil(latent_h_shape / self.patch_spatial)
             patch_w_shape = math.ceil(latent_w_shape / self.patch_spatial)
-            latent_t_shape = self._compute_vision_latent_t_shape(T, H, W)
+            if sample_n_views is not None and frames_per_view is not None and not is_image_batch:
+                # The multiview dataset resizes every camera to the same H/W and
+                # selects the same synchronized frame count before concatenating
+                # the camera-major clips along T.
+                expected_frames = sample_n_views * frames_per_view
+                if T != expected_frames:
+                    raise ValueError(
+                        "Multiview vision length must equal sample_n_views * num_video_frames_per_view: "
+                        f"got T={T}, sample_n_views={sample_n_views}, num_video_frames_per_view={frames_per_view}."
+                    )
+                latent_t_shape = sample_n_views * self._compute_vision_latent_t_shape(frames_per_view, H, W)
+            else:
+                latent_t_shape = self._compute_vision_latent_t_shape(T, H, W)
 
             num_vision_tokens = patch_h_shape * patch_w_shape * latent_t_shape
             if has_text_tokens:

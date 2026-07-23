@@ -30,37 +30,24 @@ mode of the heuristics is conservative: a misclassified weight falls back to
 AdamW (always safe) rather than being orthogonalized.
 """
 
+import re
+
 import torch
 import torch.nn as nn
 
-# Substrings (matched against the dotted module name) that force an ``nn.Linear``
-# onto the AdamW side. Every LLM in the repo names its head ``lm_head``; the extra
-# entries cover common alternative names used elsewhere.
-DEFAULT_ADAMW_MODULE_KEYWORDS: tuple[str, ...] = ("lm_head", "embed_out", "output_layer")
-
-
-def is_output_head_linear(
-    module_name: str,
-    *,
-    adamw_module_keywords: tuple[str, ...],
-) -> bool:
-    """Whether an ``nn.Linear`` is an output head (and must use AdamW, not Muon).
-
-    Name-based: every LLM backbone in the repo names its head with an
-    ``adamw_module_keywords`` substring (default ``lm_head``). Embeddings are
-    excluded separately by module type in :func:`split_orthogonalizable_params`
-    (``nn.Embedding`` never reaches this function), and a tied head shares its
-    weight object with an embedding, so it is caught there too -- hence the name
-    check alone is sufficient for every current model.
-    """
-    return any(keyword in module_name for keyword in adamw_module_keywords)
+# Default regex patterns (matched with ``re.search`` against the dotted parameter
+# name) that force an ``nn.Linear`` weight onto the AdamW side -- i.e. output heads.
+# Every LLM in the repo names its head ``lm_head``; the extra entries cover common
+# alternative names used elsewhere. Users add more (e.g. MoE routers) via
+# ``orthogonalize_skip_patterns``; the two are concatenated into a single check.
+DEFAULT_ORTHOGONALIZE_SKIP_PATTERNS: tuple[str, ...] = (r"lm_head", r"embed_out", r"output_layer")
 
 
 def split_orthogonalizable_params(
     model: nn.Module,
     optimizer_param_ids: set[int],
-    adamw_module_keywords: tuple[str, ...] = DEFAULT_ADAMW_MODULE_KEYWORDS,
     expert_param_keywords: tuple[str, ...] = (),
+    orthogonalize_skip_patterns: tuple[str, ...] = (),
 ) -> tuple[list[nn.Parameter], list[nn.Parameter], dict[nn.Parameter, str]]:
     """Split ``model``'s trainable params by whether they can be orthogonalized.
 
@@ -70,8 +57,6 @@ def split_orthogonalizable_params(
             optimizer's param groups. Only these are categorized, so that
             ``keys_to_select`` filtering is respected and ``state_dict`` stays
             consistent.
-        adamw_module_keywords: Name substrings that force an ``nn.Linear`` onto the
-            unorthogonalizable (AdamW) side (output heads).
         expert_param_keywords: Name substrings that mark **stacked MoE expert**
             parameters -- raw ``nn.Parameter`` tensors of shape ``[num_experts, M,
             N]`` (e.g. ``gate_up_proj`` / ``down_proj``). When a 3-D+ param matches,
@@ -97,6 +82,18 @@ def split_orthogonalizable_params(
             expert matrices are local), so it would need to reconstruct each expert
             matrix across the FSDP axis (an all-gather along dim 1, like the dense
             2-D path) before running Newton-Schulz. Doable, but needs changes.
+        orthogonalize_skip_patterns: Extra regex patterns matched (``re.search``)
+            against each 2-D ``nn.Linear`` weight's parameter name. Concatenated with
+            the built-in ``DEFAULT_ORTHOGONALIZE_SKIP_PATTERNS`` (output heads) into a
+            single check: any match forces that weight onto the auxiliary AdamW side
+            (skips orthogonalization). The embedding-by-type / tied-weight (``id()``
+            dedup) / stacked-expert rules are separate and still apply. This is the
+            general, name-based way to keep specific Linear weights off Muon/Dion2 --
+            e.g.
+            ``r"\\.gate\\.weight$"`` for MoE router/gate weights (matches
+            ``...mlp.gate.weight`` / ``...mlp_moe_gen.gate.weight`` but not
+            ``gate_proj`` / ``gate_noise``). Empty (default) skips nothing extra
+            (no behavior change).
 
     Returns:
         ``(orthogonalizable, unorthogonalizable, param_to_name)`` where
@@ -110,6 +107,12 @@ def split_orthogonalizable_params(
     unorthogonalizable: list[nn.Parameter] = []
     param_to_name: dict[nn.Parameter, str] = {}
     categorized: set[int] = set()
+
+    # Precompile the orthogonalization-skip regexes once (matched against param names):
+    # the built-in defaults (output heads) plus any user-specified extra patterns.
+    ortho_skip_res = [
+        re.compile(pat) for pat in DEFAULT_ORTHOGONALIZE_SKIP_PATTERNS + tuple(orthogonalize_skip_patterns)
+    ]
 
     for name, param in model.named_parameters():
         if param.requires_grad:
@@ -126,12 +129,15 @@ def split_orthogonalizable_params(
 
     for module_name, module in model.named_modules():
         if isinstance(module, nn.Linear):
-            is_head = is_output_head_linear(
-                module_name,
-                adamw_module_keywords=adamw_module_keywords,
-            )
+            # A Linear weight goes to AdamW if its parameter name matches any skip
+            # pattern (built-in output-head defaults + user-specified extras such as
+            # r"\.gate\.weight$" for MoE routers); otherwise it is orthogonalized.
             if _eligible(module.weight):
-                (unorthogonalizable if is_head else orthogonalizable).append(module.weight)
+                skip_ortho = any(r.search(param_to_name[module.weight]) for r in ortho_skip_res)
+                if skip_ortho:
+                    unorthogonalizable.append(module.weight)
+                else:
+                    orthogonalizable.append(module.weight)
                 categorized.add(id(module.weight))
             if module.bias is not None and _eligible(module.bias):
                 unorthogonalizable.append(module.bias)

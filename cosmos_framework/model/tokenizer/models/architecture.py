@@ -34,7 +34,6 @@ _SIGLIP2_SO400M_COMMON_ARCH: dict[str, Any] = {
     # Production checkpoints use four residual-quantization stages.
     "quantizer_num_codebooks": 4,
     "quantizer_chunk_size": 1,
-    "use_vf_loss": False,
     "freeze_encoder": False,
     "pretrained_model_name": "google/siglip2-so400m-patch16-naflex",
     "concat_latent": None,

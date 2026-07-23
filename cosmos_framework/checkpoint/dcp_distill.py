@@ -5,7 +5,7 @@
 Distillation-tailored DCP for Cosmos3.
 
 Extends the Cosmos3 VFM DistributedCheckpointer to support multi-model /
-multi-optimizer training (e.g., student + fake-score + discriminator).
+multi-optimizer training (student + fake-score).
 """
 
 import functools

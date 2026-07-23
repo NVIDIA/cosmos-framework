@@ -63,7 +63,6 @@ from torch.distributed.tensor import DTensor, Replicate
 from cosmos_framework.utils import log
 from cosmos_framework.utils.misc import get_local_tensor_if_DTensor
 from cosmos_framework.utils.generator.aux_optimizer_utils import (
-    DEFAULT_ADAMW_MODULE_KEYWORDS,
     compute_pre_ns_update,
     compute_pre_ns_update_moe_expert,
     split_orthogonalizable_params,
@@ -108,8 +107,8 @@ class MuonWithAuxAdamW(torch.optim.Optimizer):
         use_distributed: bool = True,
         capturable: bool = False,
         master_weights: bool = False,
-        adamw_module_keywords: tuple[str, ...] | None = None,
         expert_param_keywords: tuple[str, ...] | None = None,
+        orthogonalize_skip_patterns: tuple[str, ...] | None = None,
         **kwargs,  # Absorb VFM-specific args (fused, keys_to_select, etc.)
     ):
         # Log any ignored kwargs for debugging
@@ -138,15 +137,15 @@ class MuonWithAuxAdamW(torch.optim.Optimizer):
         self.ns_steps = ns_steps
         self.nesterov = nesterov
 
-        # Name substrings that route an nn.Linear to AdamW (output heads). Used by
-        # categorize_params alongside tied-weight / vocab-shape detection.
-        self.adamw_module_keywords = (
-            tuple(adamw_module_keywords) if adamw_module_keywords else DEFAULT_ADAMW_MODULE_KEYWORDS
-        )
         # Name substrings that route stacked MoE expert params ([E, M, N]) to the
         # Muon side (each expert slice orthogonalized). Empty = experts stay on
         # AdamW (no behavior change).
         self.expert_param_keywords = tuple(expert_param_keywords) if expert_param_keywords else ()
+        # Regex patterns (matched against param names) that force matching 2D Linear
+        # weights onto the auxiliary AdamW side (skip Muon orthogonalization), in
+        # addition to the default head detection. E.g. r"\.gate\.weight$" for MoE
+        # routers. Empty = nothing extra skipped (no behavior change).
+        self.orthogonalize_skip_patterns = tuple(orthogonalize_skip_patterns) if orthogonalize_skip_patterns else ()
 
         # Store AdamW-specific hyperparameters
         self.adam_betas = tuple(adam_betas) if isinstance(adam_betas, list) else adam_betas
@@ -231,8 +230,8 @@ class MuonWithAuxAdamW(torch.optim.Optimizer):
         orthogonalizable, self.adamw_params, self.param_to_name = split_orthogonalizable_params(
             model,
             optimizer_param_ids,
-            adamw_module_keywords=self.adamw_module_keywords,
             expert_param_keywords=self.expert_param_keywords,
+            orthogonalize_skip_patterns=self.orthogonalize_skip_patterns,
         )
 
         # Split orthogonalizable params into 2-D (regular Linear weights -> Muon) and

@@ -21,12 +21,12 @@ from typing import Dict, List, Optional
 
 from transformers.models.auto.processing_auto import AutoProcessor
 
+from cosmos_framework.utils import log
+from cosmos_framework.model.generator.reasoner.qwen3_vl.utils import tokenize_caption
 from cosmos_framework.data.generator.processors.cosmos3_edge_processing import (
     build_cosmos3_edge_processor,
     is_cosmos3_edge_native_snapshot,
 )
-from cosmos_framework.model.generator.reasoner.qwen3_vl.utils import tokenize_caption
-from cosmos_framework.utils import log
 from cosmos_framework.utils.generator.reasoner.pretrained_models_downloader import maybe_download_hf_model_from_s3
 
 
