@@ -6,7 +6,7 @@ import math
 import os
 from functools import cache
 from pathlib import Path
-from typing import TYPE_CHECKING, Annotated, Any, ClassVar, Literal, Self, cast, override
+from typing import TYPE_CHECKING, Annotated, Any, ClassVar, Literal, Self, Sequence, cast, override
 
 import pydantic
 import pynvml
@@ -195,6 +195,11 @@ REASONER_MODEL_MODES: frozenset[ModelMode] = frozenset({ModelMode.REASONER})
 # Modes that condition generation on a real input audio clip (require a model
 # with ``sound_gen=True`` and a ``sound_path``).
 SOUND_CONDITION_MODEL_MODES: frozenset[ModelMode] = frozenset({ModelMode.AUDIO_IMAGE2VIDEO})
+
+
+def is_reasoner_only(sample_overrides: Sequence["OmniSampleOverrides"]) -> bool:
+    """Return whether every requested sample uses the reasoner-only path."""
+    return bool(sample_overrides) and all(sample.sample_meta.model_mode.is_reasoner for sample in sample_overrides)
 
 
 class VisionMode(StrEnum):

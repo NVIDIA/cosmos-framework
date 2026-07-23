@@ -19,6 +19,7 @@ from cosmos_framework.inference.args import (
     OmniSetupOverrides,
     SoundDataOverrides,
     _get_nvml_device_memory_info,
+    is_reasoner_only,
 )
 from cosmos_framework.inference.common.config import structure_config
 
@@ -29,6 +30,31 @@ _H100_MEMORY_BYTES = 80 * 1024**3
 # Reserved for future use (paired with the reserved memory-based `_get_dp_shard_size`
 # heuristic in args.py); not currently exercised.
 _GB200_MEMORY_BYTES = 192 * 1024**3
+
+
+def test_reasoner_only_detection() -> None:
+    reasoner = OmniSampleOverrides(model_mode=ModelMode.REASONER)
+    generator = OmniSampleOverrides(model_mode=ModelMode.TEXT2VIDEO)
+
+    assert is_reasoner_only([reasoner])
+    assert is_reasoner_only([reasoner, reasoner])
+    assert not is_reasoner_only([reasoner, generator])
+    assert not is_reasoner_only([])
+
+
+def test_reasoner_only_override_disables_vision_tokenizer_in_model_config(tmp_path: Path) -> None:
+    setup_args = OmniSetupOverrides(
+        checkpoint_path=DEFAULT_CHECKPOINT_NAME,
+        output_dir=tmp_path / "outputs",
+    ).build_setup(world_size=1, local_world_size=1, device_memory_bytes=_H100_MEMORY_BYTES)
+
+    model_dict = structure_config(setup_args.load_model_config_dict(), omegaconf.DictConfig)
+    assert model_dict.config.load_vision_tokenizer is True
+
+    setup_args.experiment_overrides.append("model.config.load_vision_tokenizer=false")
+
+    model_dict = structure_config(setup_args.load_model_config_dict(), omegaconf.DictConfig)
+    assert model_dict.config.load_vision_tokenizer is False
 
 
 def test_build_parallelism(monkeypatch: pytest.MonkeyPatch):

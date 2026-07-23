@@ -130,6 +130,11 @@ class OmniMoTModelConfig:
     """
 
     tokenizer: LazyDict = None
+    load_vision_tokenizer: bool = True
+    """Instantiate the vision tokenizer.
+
+    Reasoner-only inference disables this to avoid loading the generation VAE.
+    """
     net: LazyDict = None
     ema: EMAConfig = EMAConfig()
 
