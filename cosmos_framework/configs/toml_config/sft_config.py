@@ -11,7 +11,7 @@ override list, ``PATH_REMAPS``, etc.) lives in ``toml_config_helper.py``.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Literal, Optional
 
 import tomllib
 from pydantic import BaseModel, ConfigDict, Field
@@ -199,6 +199,14 @@ class CompileConfig(BaseModel):
             "When enabled=True, recompile per-shape rather than specializing "
             "for one static shape. Required for the compile_tokenizer "
             "callback's progressive warmup."
+        ),
+    )
+    compiled_region: Literal["language", "all"] = Field(
+        default="language",
+        description=(
+            "Which part of the network to torch.compile. "
+            "'language' compiles only the MoT TransformerBlocks; "
+            "'all' also compiles the VAE encoder/decoder heads (VFM only)."
         ),
     )
 
