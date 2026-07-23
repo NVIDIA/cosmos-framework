@@ -12,7 +12,7 @@ from typing import Annotated
 import pydantic
 import tyro
 
-from cosmos_framework.inference.args import OmniSetupOverrides
+from cosmos_framework.inference.args import OmniSetupOverrides, is_reasoner_only
 from cosmos_framework.inference.common.args import SampleOutputs, SetupOverrides, tyro_cli
 from cosmos_framework.inference.common.init import init_output_dir
 from cosmos_framework.utils import log
@@ -44,6 +44,9 @@ def inference(args: InferenceArgs):
             args.input_files, overrides=setup_args.sample_overrides
         )
         log.info(f"Loaded {len(sample_overrides_list)} samples")
+        if is_reasoner_only(sample_overrides_list):
+            setup_args.experiment_overrides.append("model.config.load_vision_tokenizer=false")
+            log.info("Reasoner-only inputs detected; generation vision tokenizer will not be loaded")
         for sample_overrides in sample_overrides_list:
             assert sample_overrides.name
             sample_overrides.output_dir = setup_args.output_dir / sample_overrides.name

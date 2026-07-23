@@ -158,13 +158,19 @@ class OmniMoTModel(ImaginaireModel):
         self.llm_special_tokens = special_tokens
         self.llm_special_tokens["eos_token_id"] = vlm_tokenizer.eos_token_id
 
-        # 2. Vision tokenizer (images/videos) for generation.
-        self.tokenizer_vision_gen: VideoTokenizerInterface = lazy_instantiate(self.config.tokenizer)
-        assert self.tokenizer_vision_gen.latent_ch == self.config.state_ch, (
-            f"vision tokenizer latent_ch {self.tokenizer_vision_gen.latent_ch} != state_shape {self.config.state_ch}"
-        )
-        if hasattr(self.tokenizer_vision_gen, "reset_dtype"):
-            self.tokenizer_vision_gen.reset_dtype()
+        # 2. Vision tokenizer (images/videos) for generation. Reasoner-only
+        # inference does not encode or decode generation latents, so it can
+        # leave the VAE unloaded.
+        self.tokenizer_vision_gen: VideoTokenizerInterface | None = None
+        if self.config.load_vision_tokenizer:
+            self.tokenizer_vision_gen = lazy_instantiate(self.config.tokenizer)
+            assert self.tokenizer_vision_gen.latent_ch == self.config.state_ch, (
+                f"vision tokenizer latent_ch {self.tokenizer_vision_gen.latent_ch} != state_shape {self.config.state_ch}"
+            )
+            if hasattr(self.tokenizer_vision_gen, "reset_dtype"):
+                self.tokenizer_vision_gen.reset_dtype()
+        else:
+            log.info("Vision tokenizer initialization skipped")
 
         # 3. Sound/audio tokenizer (optional)
         if self.config.sound_gen:
@@ -211,7 +217,11 @@ class OmniMoTModel(ImaginaireModel):
                 timestep_scale=1.0 / float(num_train_timesteps) * self.config.diffusion_expert_config.timestep_range,
                 action_dim=self.config.max_action_dim,
                 num_embodiment_domains=self.config.num_embodiment_domains,
-                temporal_compression_factor_vision=self.tokenizer_vision_gen.temporal_compression_factor,
+                temporal_compression_factor_vision=(
+                    self.tokenizer_vision_gen.temporal_compression_factor
+                    if self.tokenizer_vision_gen is not None
+                    else self.config.tokenizer.temporal_compression_factor
+                ),
                 natten_parameter_list=self.config.natten_parameter_list,
                 video_temporal_causal=self.config.video_temporal_causal,
                 # Sound generation parameters

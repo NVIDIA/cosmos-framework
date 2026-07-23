@@ -291,8 +291,13 @@ def _compute_num_tokens_for_sample(sample_args: OmniSampleArgs, model: OmniMoTMo
     w, h = sample_args.vision_size
     T = sample_args.num_frames
 
-    spatial_cf = cast(int, model.tokenizer_vision_gen.spatial_compression_factor)
-    temporal_cf = cast(int, model.tokenizer_vision_gen.temporal_compression_factor)
+    vision_tokenizer = model.tokenizer_vision_gen
+    if vision_tokenizer is None:
+        spatial_cf = cast(int, model.config.tokenizer.spatial_compression_factor)
+        temporal_cf = cast(int, model.config.tokenizer.temporal_compression_factor)
+    else:
+        spatial_cf = vision_tokenizer.spatial_compression_factor
+        temporal_cf = vision_tokenizer.temporal_compression_factor
     patch_spatial: int = model.config.diffusion_expert_config.patch_spatial
 
     vae_spatial_downsample = spatial_cf * patch_spatial
@@ -1290,7 +1295,10 @@ class OmniInference(Inference):
                 log.debug(f"Sampler overridden to: {sampler_override}")
 
         vae_decode_stream: torch.cuda.Stream | None = None
-        if setup_args.use_separate_pipeline_vision_decode_gpu:
+        vision_tokenizer = model.tokenizer_vision_gen
+        if setup_args.use_separate_pipeline_vision_decode_gpu and vision_tokenizer is None:
+            log.info("Separate vision decode GPU setup skipped because the generation vision tokenizer is not loaded")
+        elif setup_args.use_separate_pipeline_vision_decode_gpu:
             # The CP/CFGP ranks are partitioned into replica-local groups of size
             # cp_size * cfgp_size. Only the first rank in each group owns separate-VAE
             # decode work. For example, with cp_size=2 and cfgp_size=1, ranks [0,1]
@@ -1310,7 +1318,7 @@ class OmniInference(Inference):
                 vae_device = torch.device("cuda", vae_device_index)
                 inference_device = torch.device("cuda", torch.cuda.current_device())
                 vae_decode_stream = torch.cuda.Stream(device=vae_device)
-                vae = model.tokenizer_vision_gen.model
+                vae = vision_tokenizer.model
                 vae.device = str(vae_device)
                 vae.model = vae.model.to(device=vae_device)
                 vae.scale = tree_map_only(torch.Tensor, lambda tensor: tensor.to(device=vae_device), vae.scale)
