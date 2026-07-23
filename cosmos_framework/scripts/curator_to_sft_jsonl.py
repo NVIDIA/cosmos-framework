@@ -10,8 +10,8 @@ where ``t2w_windows`` is a list of ``{start_frame, end_frame, temporal_interval,
 
 Curator writes a richer schema per clip at
 ``<curator_output>/metas_jsonl/v0/*.jsonl``. This script renames and trims those
-rows into the loader's format, applies the same hard filters the loader applies
-silently at train time (so dataset counts match), and writes a sidecar
+rows into the loader's format, applies the same default filters the loader applies
+at train time (so dataset counts match), and writes a sidecar
 ``<output>.summary.json`` with per-reason drop counts.
 
 Transfer (control-conditioned) training
@@ -58,8 +58,9 @@ from typing import Annotated, Any, Literal
 
 import tyro
 
-# Hard filters mirror sft_dataset.py defaults so the converter drops the same
-# rows the loader would silently drop at train time.
+# Default filters mirror sft_dataset.py defaults so the converter drops the same
+# rows the loader would drop at train time. Pass None through the CLI/config to
+# disable a filter for short-task datasets.
 MAX_VIDEO_DURATION_S: float = 61.0
 MIN_WINDOW_FRAMES: int = 61
 DEFAULT_TEMPORAL_INTERVAL: int = 1
@@ -213,8 +214,8 @@ def _build_sft_row(
     caption_model: str | None,
     enhanced_caption_model: str | None,
     min_short_edge: int,
-    min_window_frames: int,
-    max_duration_s: float,
+    min_window_frames: int | None,
+    max_duration_s: float | None,
     temporal_interval: int,
     control_type: str | None = None,
     control_path_root: Path | None = None,
@@ -240,7 +241,7 @@ def _build_sft_row(
         return None, "missing_identity"
     if width is None or height is None or num_frames is None or framerate is None or duration_s is None:
         return None, "missing_clip_metadata"
-    if duration_s > max_duration_s:
+    if max_duration_s is not None and duration_s > max_duration_s:
         return None, "duration_too_long"
     if min_short_edge > 0 and min(int(width), int(height)) < min_short_edge:
         return None, "short_edge_too_small"
@@ -260,7 +261,7 @@ def _build_sft_row(
         if not isinstance(start_frame, int) or not isinstance(end_frame, int):
             continue
         frames_in_window = end_frame - start_frame + 1
-        if frames_in_window < min_window_frames:
+        if min_window_frames is not None and frames_in_window < min_window_frames:
             continue
         caption_text = _resolve_window_caption(
             window,
@@ -323,15 +324,21 @@ def main(  # noqa: PLR0913
         tyro.conf.arg(help="Drop clips whose shortest spatial edge is below this value. 0 disables."),
     ] = 0,
     min_window_frames: Annotated[
-        int,
+        int | None,
         tyro.conf.arg(
-            help=f"Drop windows shorter than this. Default {MIN_WINDOW_FRAMES} matches sft_dataset.py.",
+            help=(
+                f"Drop windows shorter than this. Default {MIN_WINDOW_FRAMES} matches sft_dataset.py. "
+                "Set to None for short-task datasets."
+            ),
         ),
     ] = MIN_WINDOW_FRAMES,
     max_duration_s: Annotated[
-        float,
+        float | None,
         tyro.conf.arg(
-            help=f"Drop clips longer than this. Default {MAX_VIDEO_DURATION_S} matches sft_dataset.py.",
+            help=(
+                f"Drop clips longer than this. Default {MAX_VIDEO_DURATION_S} matches sft_dataset.py. "
+                "Set to None for short-task datasets."
+            ),
         ),
     ] = MAX_VIDEO_DURATION_S,
     temporal_interval: Annotated[

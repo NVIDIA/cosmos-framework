@@ -66,6 +66,8 @@ from cosmos_framework.utils.flags import INTERNAL
 
 _ON_THE_FLY_CONTROLS = frozenset({"edge", "blur"})
 _PRECOMPUTED_CONTROLS = frozenset({"depth", "seg"})
+_MAX_VIDEO_DURATION_S = 61.0
+_MIN_WINDOW_FRAMES = 61
 
 # Canny threshold presets matching AddControlInputEdge.
 _EDGE_THRESHOLDS = [
@@ -235,7 +237,8 @@ class TransferSFTDataset(SFTDataset):
 def _load_transfer_metadata(
     s3_client: Any,
     jsonl_url: str,
-    min_frames: int,
+    min_frames: int | None,
+    max_duration_s: float | None = _MAX_VIDEO_DURATION_S,
     uuid_prefix: str = "",
     min_short_edge: int = 0,
     control_type: str = "edge",
@@ -261,7 +264,7 @@ def _load_transfer_metadata(
             record = json.loads(line.decode("utf-8"))
             uuid = f"{uuid_prefix}{record['uuid']}" if uuid_prefix else record["uuid"]
 
-            if record["duration"] > 61.0:
+            if max_duration_s is not None and record["duration"] > max_duration_s:
                 continue
             if min_short_edge > 0 and min(record["width"], record["height"]) < min_short_edge:
                 continue
@@ -269,7 +272,9 @@ def _load_transfer_metadata(
                 continue
 
             kept_windows = [
-                w for w in (record.get("t2w_windows") or []) if w["end_frame"] - w["start_frame"] + 1 >= min_frames
+                w
+                for w in (record.get("t2w_windows") or [])
+                if min_frames is None or w["end_frame"] - w["start_frame"] + 1 >= min_frames
             ]
             if not kept_windows:
                 continue
@@ -315,6 +320,8 @@ def get_transfer_sft_dataset(
     append_duration_fps_timestamps: bool = True,
     append_resolution_info: bool = True,
     min_short_edge: int = 0,
+    min_window_frames: int | None = _MIN_WINDOW_FRAMES,
+    max_duration_s: float | None = _MAX_VIDEO_DURATION_S,
     conditioning_config: dict[int, float] | None = None,
     temporal_compression_factor: int = 4,
     **kwargs,
@@ -338,6 +345,10 @@ def get_transfer_sft_dataset(
         append_duration_fps_timestamps: Append duration/FPS text to captions.
         append_resolution_info: Append resolution text to captions.
         min_short_edge: Drop videos whose shortest edge is below this value.
+        min_window_frames: Metadata pre-filter for t2w_window length.  Default
+            61 matches historical behavior.  Set to None for short-task datasets.
+        max_duration_s: Metadata pre-filter for video duration.  Default 61.0
+            matches historical behavior.  Set to None for short-task datasets.
         conditioning_config: I2V conditioning frame distribution, e.g.
             ``{0: 0.7, 1: 0.2, 2: 0.1}`` (70% unconditioned).
         temporal_compression_factor: VAE temporal compression factor (default 4).
@@ -363,7 +374,8 @@ def get_transfer_sft_dataset(
             _load_transfer_metadata(
                 s3_client,
                 jsonl_url,
-                min_frames=61,
+                min_frames=min_window_frames,
+                max_duration_s=max_duration_s,
                 uuid_prefix=prefix,
                 min_short_edge=min_short_edge,
                 control_type=control_type,
