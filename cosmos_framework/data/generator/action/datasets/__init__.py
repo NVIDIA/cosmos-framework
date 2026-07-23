@@ -13,6 +13,7 @@ from cosmos_framework.data.generator.action.datasets.agibotworld_beta_lerobot_da
 )
 from cosmos_framework.data.generator.action.datasets.base_dataset import ActionBaseDataset
 from cosmos_framework.data.generator.action.datasets.bridge_orig_lerobot_dataset import BridgeOrigLeRobotDataset
+from cosmos_framework.data.generator.action.datasets.droid_merged_lerobot_dataset import DROIDMergedLeRobotDataset
 from cosmos_framework.data.generator.action.datasets.droid_lerobot_dataset import DROIDLeRobotDataset
 from cosmos_framework.data.generator.action.datasets.fractal_lerobot_dataset import FractalLeRobotDataset
 from cosmos_framework.data.generator.action.datasets.human_hand_pose_lerobot_dataset import HumanHandPoseLeRobotDataset
@@ -26,6 +27,7 @@ __all__ = [
     "AgiBotWorldBetaLeRobotDataset",
     "BridgeOrigLeRobotDataset",
     "DROIDLeRobotDataset",
+    "DROIDMergedLeRobotDataset",
     "FractalLeRobotDataset",
     "HumanHandPoseLeRobotDataset",
     "LIBEROLeRobotDataset",
