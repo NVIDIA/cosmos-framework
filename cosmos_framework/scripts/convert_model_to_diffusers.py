@@ -188,6 +188,13 @@ MODULAR_PIPELINE_CLASSES = {
     True: ("Cosmos3DistilledModularPipeline", "Cosmos3DistilledBlocks"),
 }
 
+PIPELINE_BEHAVIOR_FIELDS = (
+    "default_use_system_prompt",
+    "enable_safety_checker",
+    "use_native_flow_schedule",
+    "native_flow_shift",
+)
+
 
 def _write_modular_model_index(output_path: Path, repo_id: str) -> None:
     """Write modular_model_index.json next to the task-based model_index.json.
@@ -230,6 +237,10 @@ def _write_modular_model_index(output_path: Path, repo_id: str) -> None:
         # than off the scheduler; `scheduler_config.json` keeps `fixed_step_sampler_config` for non-modular
         # consumers (e.g. vllm-omni).
         modular_index["distilled_sigmas"] = distilled_sigmas
+
+    for name in PIPELINE_BEHAVIOR_FIELDS:
+        if name in model_index:
+            modular_index[name] = model_index[name]
 
     for name, value in model_index.items():
         # Keep only saved components: [library, class] pairs with non-null entries.
