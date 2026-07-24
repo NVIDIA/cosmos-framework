@@ -401,6 +401,62 @@ def test_dispatch_attention_accepts_structurally_compatible_split_info(monkeypat
 
 
 @pytest.mark.L0
+@pytest.mark.CPU
+def test_multi_control_matches_two_way_dense_inference_convention(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Single-sample inference is dense; grad-enabled execution remains varlen."""
+
+    def make_pack(x: torch.Tensor):
+        return build_packed_sequence(
+            "two_way",
+            packed_sequence=x,
+            attn_modes=["causal", "full"],
+            split_lens=[2, 4],
+            sample_lens=[6],
+            packed_und_token_indexes=torch.tensor([0, 1], dtype=torch.long),
+            packed_gen_token_indexes=torch.tensor([2, 3, 4, 5], dtype=torch.long),
+            num_heads=1,
+            head_dim=8,
+            num_layers=1,
+        )
+
+    q_pack, split_info, _ = make_pack(torch.arange(48, dtype=torch.float32).reshape(6, 1, 8))
+    raw_k_pack, _, _ = make_pack(torch.zeros(6, 1, 8))
+    v_pack, _, _ = make_pack(torch.ones(6, 1, 8))
+    split_info.control_stream_token_ranges = [(0, 2)]
+    split_info.noisy_token_range = (2, 4)
+    split_info.control_weights = [1.0]
+
+    calls: list[dict[str, object]] = []
+
+    def fake_attention(q: torch.Tensor, k: torch.Tensor, v: torch.Tensor, **kwargs: object) -> torch.Tensor:
+        calls.append(kwargs)
+        return q
+
+    monkeypatch.setattr(attention, "attention", fake_attention)
+
+    with torch.no_grad():
+        attention.multi_control_two_way_attention(
+            q_pack,
+            raw_k_pack,
+            v_pack,
+            split_info,
+        )
+
+    assert len(calls) == 3  # causal text, control, noisy
+    assert all("cumulative_seqlen_Q" not in call for call in calls)
+
+    calls.clear()
+    attention.multi_control_two_way_attention(
+        q_pack,
+        raw_k_pack,
+        v_pack,
+        split_info,
+    )
+    assert len(calls) == 3
+    assert all("cumulative_seqlen_Q" in call for call in calls)
+
+
+@pytest.mark.L0
 def test_dispatch_attention_rejects_incomplete_split_info() -> None:
     foreign_split_info = _foreign_split_info()
     del foreign_split_info.control_weights

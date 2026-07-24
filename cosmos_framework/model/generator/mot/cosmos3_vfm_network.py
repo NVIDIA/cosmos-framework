@@ -1010,8 +1010,8 @@ class Cosmos3VFMNetwork(PreTrainedModel):
         # one per control.  For each pass i, KV = [text | ctrl_i | noisy].
         # The final noisy output is the weighted sum of the N pass outputs:
         #   noisy_out = w_1 * noisy_out_1 + ... + w_N * noisy_out_N
-        # All SDPA calls are maskless → Flash Attention always active.
-        # N=1, w=1.0 → identical to two_way_attention.
+        # Single-sample inference uses dense FMHA (cuDNN-eligible on sm_120);
+        # see multi_control_two_way_attention. N=1, w=1.0 → identical to two_way_attention.
         #
         # CP compatibility: control_stream_token_ranges are gen-relative global
         # offsets computed here, before CP sharding.  Ulysses CP restores the full
