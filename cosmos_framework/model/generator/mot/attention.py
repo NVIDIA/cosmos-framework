@@ -353,8 +353,15 @@ def multi_control_two_way_attention(
       - ctrl_i output: from pass i only
       - noisy output:  w_1 * noisy_out_1 + ... + w_N * noisy_out_N  (weighted sum)
 
-    All SDPA calls are maskless → Flash Attention is always active.
-    N=1, w=1.0 → identical to ``two_way_attention``.
+    All SDPA calls are maskless. N=1, w=1.0 → identical to ``two_way_attention``.
+
+    Dense vs varlen:
+      Single-sample inference uses the dense attention API (no cumulative/max
+      seqlen args), matching ``two_way_attention``. That lets the chooser keep
+      cuDNN on sm_120 (workstation Blackwell), where Cosmos prefers cuDNN but
+      the current cuDNN integration rejects varlen and would otherwise fall back
+      to NATTEN kernels that lack sm_120 images. Training / multi-sample packs
+      keep the varlen path.
 
     Padding safety:
       Both ``get_causal_seq`` and ``get_full_only_seq`` can return padded rows.
@@ -374,22 +381,34 @@ def multi_control_two_way_attention(
     noisy_s, noisy_e = split_info.noisy_token_range
     weights = split_info.control_weights
 
-    # ── 1. Text self-attention (causal, unchanged) ───────────────────────────
+    # ── 1. Text self-attention (causal) ──────────────────────────────────────
     causal_q, causal_q_offsets = get_causal_seq(packed_query_states)
     causal_k, causal_k_offsets = get_causal_seq(packed_key_states)
     causal_v, _ = get_causal_seq(packed_value_states)
 
+    # Mirror two_way_attention: dense FMHA for single-sample inference so cuDNN
+    # remains eligible on sm_120; varlen only when training / multi-sample.
+    sample_offsets = packed_query_states["sample_offsets"]
+    num_samples = sample_offsets.shape[0] - 1
+    use_dense = num_samples == 1 and not torch.is_grad_enabled()
+
     use_dont_care_mask = causal_q_offsets is causal_k_offsets
+    if use_dense:
+        causal_varlen_kwargs = {}
+    else:
+        causal_varlen_kwargs = dict(
+            cumulative_seqlen_Q=causal_q_offsets,
+            cumulative_seqlen_KV=causal_k_offsets,
+            max_seqlen_Q=packed_query_states["max_causal_len"],
+            max_seqlen_KV=packed_query_states["max_causal_len"],
+        )
     causal_res = attention(
         causal_q.unsqueeze(0),
         causal_k.unsqueeze(0),
         causal_v.unsqueeze(0),
-        cumulative_seqlen_Q=causal_q_offsets,
-        cumulative_seqlen_KV=causal_k_offsets,
-        max_seqlen_Q=packed_query_states["max_causal_len"],
-        max_seqlen_KV=packed_query_states["max_causal_len"],
         is_causal=True,
         causal_type=CausalType.DontCare if use_dont_care_mask else CausalType.TopLeft,
+        **causal_varlen_kwargs,
     )
     causal_out = causal_res.squeeze(0).flatten(-2, -1)  # [N_text, Hq*D]
 
@@ -432,30 +451,37 @@ def multi_control_two_way_attention(
         torch._check(k.shape[0] == v.shape[0])
         n_q, n_kv = q.shape[0], k.shape[0]
         # These lengths come from data-dependent unpadding, so they are unbacked
-        # symints under torch.compile. The selected attention backend (NATTEN)
-        # validates varlen inputs with `max_seqlen == 0` / `max_seqlen < 1`
-        # guards; without a positivity fact Dynamo cannot discharge `Eq(n, 0)`.
-        # Every control/noisy segment always has at least one token, so assert it.
+        # symints under torch.compile. Varlen backends validate with
+        # `max_seqlen == 0` / `max_seqlen < 1` guards; without a positivity fact
+        # Dynamo cannot discharge `Eq(n, 0)`. Every control/noisy segment always
+        # has at least one token, so assert it (needed for the varlen path).
         torch._check(n_q > 0)
         torch._check(n_kv > 0)
-        # Pass cumulative_seqlen_{Q,KV} + max_seqlen_{Q,KV} directly instead of
+        # Dense (inference, single sample): omit varlen args so cuDNN stays
+        # eligible on sm_120. Varlen (training / multi-sample): pass
+        # cumulative_seqlen_{Q,KV} + max_seqlen_{Q,KV} directly instead of
         # seqlens_{Q,KV}. The frontend derives cumulative offsets from seqlens via
         # `generate_varlen_parameters`, which calls `.max().item()` (a device-host
         # sync) and is explicitly disallowed inside a torch.compile region. Each
-        # pass here is a single (batch=1) packed sequence, so the cumulative
-        # offsets are simply [0, n]. Building them ourselves keeps the whole path
-        # inside the compiled graph.
-        zero = torch.zeros(1, dtype=torch.int32, device=q.device)
-        cu_seqlens_q = torch.cat([zero, torch.tensor([n_q], dtype=torch.int32, device=q.device)])
-        cu_seqlens_kv = torch.cat([zero, torch.tensor([n_kv], dtype=torch.int32, device=q.device)])
+        # pass here is a single packed sequence, so the cumulative offsets are
+        # simply [0, n]. Building them ourselves keeps the path compiled.
+        if use_dense:
+            varlen_kwargs = {}
+        else:
+            zero = torch.zeros(1, dtype=torch.int32, device=q.device)
+            cu_seqlens_q = torch.cat([zero, torch.tensor([n_q], dtype=torch.int32, device=q.device)])
+            cu_seqlens_kv = torch.cat([zero, torch.tensor([n_kv], dtype=torch.int32, device=q.device)])
+            varlen_kwargs = dict(
+                cumulative_seqlen_Q=cu_seqlens_q,
+                cumulative_seqlen_KV=cu_seqlens_kv,
+                max_seqlen_Q=n_q,
+                max_seqlen_KV=n_kv,
+            )
         res = attention(
             q.unsqueeze(0),  # [1, N_q,  Hq,  D]
             k.unsqueeze(0),  # [1, N_kv, Hkv, D]
             v.unsqueeze(0),  # [1, N_kv, Hkv, D]
-            cumulative_seqlen_Q=cu_seqlens_q,
-            cumulative_seqlen_KV=cu_seqlens_kv,
-            max_seqlen_Q=n_q,
-            max_seqlen_KV=n_kv,
+            **varlen_kwargs,
         )  # [1, N_q, Hq, D]
         return res.squeeze(0).flatten(-2, -1)  # [N_q, Hq*D]
 
