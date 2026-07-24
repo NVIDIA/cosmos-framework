@@ -1035,18 +1035,17 @@ def create_batches_from_dataset(
 def _finalize_data_batch(data_batch: dict[str, Any], batch_size: int, model: OmniMoTModel) -> dict[str, Any]:
     """Return a finalized + validated copy of *data_batch*.
 
-    All mutations (key renames, tensor → list unbind) are applied to a fresh
-    shallow copy so the caller's input dict is never modified.  This keeps
+    All mutations (key renames, tensor → list unbind, or list-item replacement)
+    are applied to a fresh copy so the caller's input dict is never modified. This keeps
     the "no aliasing" responsibility localized at the single place where the
     mutation happens, instead of forcing every producer of a data dict (e.g.
     seed-expansion fan-out in ``create_batches_from_dataset``, dummy padding
     batches in ``create_batches``) to defensively copy before handing the
     dict to ``generate_batch``.
 
-    Only the top-level dict structure is copied; tensor / list values inside
-    are shared with the input (which is safe because every mutation here is a
-    top-level key rename or value reassignment, never an in-place op on the
-    value itself).
+    The top-level dict and list containers are copied; tensors and other values
+    inside those lists remain shared. Copying each list is necessary because
+    downstream preprocessing replaces video-list items with normalized tensors.
 
     Args:
         data_batch: Input data dict.  Not modified.
@@ -1062,7 +1061,7 @@ def _finalize_data_batch(data_batch: dict[str, Any], batch_size: int, model: Omn
             present, or if the post-finalize caption-list length doesn't
             match ``batch_size``.
     """
-    data_batch = dict(data_batch)
+    data_batch = {key: list(value) if isinstance(value, list) else value for key, value in data_batch.items()}
 
     for old_key, new_key in [
         ("video", model.input_video_key),
@@ -1482,7 +1481,11 @@ class OmniInference(Inference):
     @torch.no_grad()
     @override
     def generate_batch(
-        self, sample_args_list: Sequence[SampleArgs], data_batch: dict[str, Any], *, warmup: bool = False
+        self,
+        sample_args_list: Sequence[SampleArgs],
+        data_batch: dict[str, Any],
+        *,
+        save_outputs: bool = True,
     ) -> list[SampleOutputs]:
         assert all(isinstance(sa, OmniSampleArgs) for sa in sample_args_list)
 
@@ -1490,18 +1493,18 @@ class OmniInference(Inference):
         if any(transfer_flags):
             assert all(transfer_flags), "Cannot mix transfer and non-transfer samples in a batch"
             assert len(sample_args_list) == 1, "Batching is not supported for transfer inference"
-            return self._generate_transfer_batch(sample_args_list[0], warmup=warmup)
+            return self._generate_transfer_batch(sample_args_list[0], save_outputs=save_outputs)
 
         reasoner_flags = [cast(OmniSampleArgs, sa).model_mode.is_reasoner for sa in sample_args_list]
         if any(reasoner_flags):
             assert all(reasoner_flags), "Cannot mix reasoner and non-reasoner samples in a batch"
-            return self._generate_reasoner_batch(sample_args_list, data_batch, warmup=warmup)
+            return self._generate_reasoner_batch(sample_args_list, data_batch, save_outputs=save_outputs)
 
         # Process inputs
         try:
-            with sync_distributed_errors():
+            with self._get_timer(f"{self.__class__.__name__}.prepare_inputs"), sync_distributed_errors():
                 for sample_args in sample_args_list:
-                    if self.should_process_sample(sample_args) and not warmup:
+                    if self.should_process_sample(sample_args) and save_outputs:
                         log.debug(f"{sample_args.__class__.__name__}({sample_args})")
                         assert sample_args.output_dir is not None
                         sample_args.output_dir.mkdir(parents=True, exist_ok=True)
@@ -1514,10 +1517,10 @@ class OmniInference(Inference):
                     data_batch=data_batch, batch_size=len(sample_args_list), model=self.model
                 )
         except Exception as e:
+            # Apply the same error policy to warmup and measured passes:
+            # fail fast unless keep_going is enabled.
             return [
-                self._handle_sample_exception(args, e)
-                for args in sample_args_list
-                if self.should_process_sample(args) and not warmup
+                self._handle_sample_exception(args, e) for args in sample_args_list if self.should_process_sample(args)
             ]
 
         # Generate samples
@@ -1703,7 +1706,7 @@ class OmniInference(Inference):
             with self._get_timer(f"{self.model.__class__.__name__}.decode_sound"):
                 outputs["sound"] = [self.model.decode_sound(sound) for sound in outputs.pop("sound")]
 
-        if warmup:
+        if not save_outputs:
             return []
 
         # Save outputs
@@ -1786,13 +1789,18 @@ class OmniInference(Inference):
         return sample_outputs
 
     @torch.no_grad()
-    def _generate_transfer_batch(self, sample_args: OmniSampleArgs, *, warmup: bool = False) -> list[SampleOutputs]:
+    def _generate_transfer_batch(
+        self,
+        sample_args: OmniSampleArgs,
+        *,
+        save_outputs: bool = True,
+    ) -> list[SampleOutputs]:
         """Handle transfer inference using the autoregressive generate_transfer_sample path."""
         from cosmos_framework.inference.transfer import generate_transfer_sample
 
         try:
             with sync_distributed_errors():
-                if self.should_process_sample(sample_args) and not warmup:
+                if self.should_process_sample(sample_args) and save_outputs:
                     log.debug(f"{sample_args.__class__.__name__}({sample_args})")
                     assert sample_args.output_dir is not None
                     sample_args.output_dir.mkdir(parents=True, exist_ok=True)
@@ -1800,13 +1808,13 @@ class OmniInference(Inference):
                     sample_args_file.write_text(sample_args.model_dump_json())
                     log.info(f"Saved sample args to '{sample_args_file}'", rank0_only=False)
         except Exception as e:
-            if self.should_process_sample(sample_args) and not warmup:
+            if self.should_process_sample(sample_args):
                 return [self._handle_sample_exception(sample_args, e)]
             return []
 
         transfer_output = generate_transfer_sample(sample_args=sample_args, model=self.model)
 
-        if warmup:
+        if not save_outputs:
             return []
 
         sample_outputs: list[SampleOutputs] = []
@@ -1859,7 +1867,7 @@ class OmniInference(Inference):
         sample_args_list: Sequence[SampleArgs],
         data_batch: dict[str, Any],
         *,
-        warmup: bool = False,
+        save_outputs: bool = True,
     ) -> list[SampleOutputs]:
         """Reasoner AR text generation. Each prompt writes ``reasoner_text.txt`` and
         ``SampleOutput.content["reasoner_text"]``. Mixing image-conditioned and
@@ -1892,18 +1900,14 @@ class OmniInference(Inference):
         try:
             with sync_distributed_errors():
                 for sa, prompt in zip(sample_args_list, prompts):
-                    if self.should_process_sample(sa) and not warmup:
+                    if self.should_process_sample(sa) and save_outputs:
                         log.debug(f"{sa.__class__.__name__}({sa})")
                         assert sa.output_dir is not None
                         sa.output_dir.mkdir(parents=True, exist_ok=True)
                         (sa.output_dir / "sample_args.json").write_text(sa.model_dump_json())
                         self._run_text_guardrail(str(sa.output_dir), prompt)
         except Exception as e:
-            return [
-                self._handle_sample_exception(sa, e)
-                for sa in sample_args_list
-                if self.should_process_sample(sa) and not warmup
-            ]
+            return [self._handle_sample_exception(sa, e) for sa in sample_args_list if self.should_process_sample(sa)]
 
         # Collective call: every rank must enter so FSDP unshard/reshard and the
         # cross-rank early-exit reduction stay in lockstep. Not wrapped in try/except.
@@ -1922,7 +1926,7 @@ class OmniInference(Inference):
                 seed=sample_args_list[0].seed,
             )
 
-        if warmup:
+        if not save_outputs:
             return []
 
         sample_outputs: list[SampleOutputs] = []

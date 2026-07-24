@@ -765,6 +765,7 @@ class SetupArgs(ABC, CheckpointArgs, ParallelismArgs, QuantizationArgs, Guardrai
     profile: bool
     benchmark: bool
     warmup: pydantic.NonNegativeInt
+    num_iterations: pydantic.PositiveInt
     max_model_len: pydantic.PositiveInt | None
     max_num_seqs: pydantic.PositiveInt | None
 
@@ -811,6 +812,8 @@ class SetupOverrides(ABC, CheckpointOverrides, ParallelismOverrides, Quantizatio
     """If set, measures and reports inference runtime (disables tqdm)."""
     warmup: pydantic.NonNegativeInt = 0
     """Number of warmup generations before each sample."""
+    num_iterations: pydantic.PositiveInt = 1
+    """Number of benchmark generations to run after warmup."""
     max_model_len: pydantic.PositiveInt | None = None
     """Maximum total tokens per batch.  When set, samples are packed into
     batches by token count."""
@@ -819,7 +822,8 @@ class SetupOverrides(ABC, CheckpointOverrides, ParallelismOverrides, Quantizatio
     batches by number of sequences."""
 
     def _build_setup(self):
-        pass
+        if self.num_iterations > 1 and not self.benchmark:
+            raise ValueError("num_iterations > 1 requires benchmark=True")
 
     @abstractmethod
     def build_setup(self) -> SetupArgs:

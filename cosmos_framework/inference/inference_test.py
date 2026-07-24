@@ -10,6 +10,27 @@ from unittest.mock import Mock
 import pytest
 
 
+def test_finalize_data_batch_does_not_mutate_reusable_video_list() -> None:
+    torch = pytest.importorskip("torch")
+
+    from cosmos_framework.inference.inference import _finalize_data_batch
+
+    model = SimpleNamespace(input_video_key="video", input_image_key="images", input_caption_key="caption")
+    original_video = torch.zeros(3, 2, 4, 4, dtype=torch.uint8)
+    source_batch = {"video": [original_video], "caption": ["prompt"]}
+
+    first_pass = _finalize_data_batch(source_batch, batch_size=1, model=model)
+    first_pass["video"][0] = first_pass["video"][0].float() / 127.5 - 1.0
+    first_pass["is_preprocessed"] = True
+    second_pass = _finalize_data_batch(source_batch, batch_size=1, model=model)
+
+    assert first_pass["video"] is not source_batch["video"]
+    assert second_pass["video"] is not source_batch["video"]
+    assert source_batch["video"][0] is original_video
+    assert source_batch["video"][0].dtype == torch.uint8
+    assert "is_preprocessed" not in source_batch
+
+
 def _make_v2v_sample_args(**overrides: Any) -> SimpleNamespace:
     """v2v ``OmniSampleArgs`` stand-in for ``get_sample_data`` tests."""
     from cosmos_framework.inference.args import ModelMode, NegativeMetadataMode
@@ -323,7 +344,7 @@ def test_generate_reasoner_batch_writes_outputs(tmp_path: Path) -> None:
     pipe._get_timer = lambda *_a, **_kw: nullcontext()  # type: ignore[attr-defined]
 
     data_batch = {"caption": ["Describe a robotic arm."], "reasoner_images": [None]}
-    results = pipe._generate_reasoner_batch([sample_args], data_batch, warmup=False)
+    results = pipe._generate_reasoner_batch([sample_args], data_batch)
 
     assert len(results) == 1
     so = results[0]
@@ -352,7 +373,7 @@ def test_generate_reasoner_batch_rejects_mixed_image_text_only(tmp_path: Path) -
         "reasoner_images": [PIL.new("RGB", (8, 8)), None],
     }
     with pytest.raises(ValueError, match="mixes image-conditioned and text-only"):
-        pipe._generate_reasoner_batch([sa1, sa2], data_batch, warmup=False)
+        pipe._generate_reasoner_batch([sa1, sa2], data_batch)
 
 
 @pytest.mark.L0
