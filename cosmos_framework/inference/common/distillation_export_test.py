@@ -1,13 +1,15 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: OpenMDW-1.1
 
+import copy
+
+import pytest
 
 from cosmos_framework.inference.common import distillation_export
 from cosmos_framework.inference.common.distillation_export import (
     build_student_checkpoint_metadata,
     sanitize_student_model_config,
 )
-
 
 
 def test_sanitize_student_model_config_removes_distillation_state() -> None:
@@ -75,7 +77,7 @@ def test_sanitize_student_public_model_config_removes_internal_loaders() -> None
             "tokenizer": {
                 "bucket_name": "internal-checkpoint-bucket",
                 "object_store_credential_path_pretrained": "/path/to/source.secret",
-                "vae_path": "pretrained/tokenizers/video/wan2pt2/Wan2.2_VAE.pth",
+                "vae_path": "/lustre/training/checkpoints/wan22_vae/Wan2.2_VAE.pth",
             },
             "sound_tokenizer": {
                 "bucket_name": "internal-checkpoint-bucket",
@@ -96,6 +98,16 @@ def test_sanitize_student_public_model_config_removes_internal_loaders() -> None
                     ),
                     "config_variant": "gcp",
                     "pretrained_model_name": "Qwen/Qwen3-VL-32B-Instruct",
+                },
+                "model_instance": {
+                    "config": {
+                        "base_config": {
+                            "json_file": (
+                                "/checkout/cosmos-framework/cosmos_framework/model/generator/"
+                                "reasoner/qwen3_vl/configs/Qwen3-VL-32B-Instruct.json"
+                            )
+                        }
+                    }
                 },
             },
         }
@@ -134,9 +146,140 @@ def test_sanitize_student_public_model_config_removes_internal_loaders() -> None
                     "config_variant": "hf",
                     "pretrained_model_name": "Qwen/Qwen3-VL-32B-Instruct",
                 },
+                "model_instance": {
+                    "config": {
+                        "base_config": {
+                            "json_file": (
+                                "cosmos_framework/model/generator/reasoner/qwen3_vl/configs/Qwen3-VL-32B-Instruct.json"
+                            )
+                        }
+                    }
+                },
             },
         }
     }
+
+
+@pytest.mark.parametrize("model_size", ("2B", "4B", "8B", "32B"))
+def test_sanitize_student_public_model_config_preserves_qwen_variant(model_size: str) -> None:
+    filename = f"Qwen3-VL-{model_size}-Instruct.json"
+    model_dict = {
+        "config": {
+            "vlm_config": {
+                "model_instance": {
+                    "config": {"base_config": {"json_file": f"/checkout/private/qwen3_vl/configs/{filename}"}}
+                }
+            }
+        }
+    }
+
+    distillation_export.sanitize_student_public_model_config(model_dict)
+
+    assert (
+        model_dict["config"]["vlm_config"]["model_instance"]["config"]["base_config"]["json_file"]
+        == f"cosmos_framework/model/generator/reasoner/qwen3_vl/configs/{filename}"
+    )
+
+
+def test_sanitize_student_public_model_config_is_idempotent() -> None:
+    model_dict = {
+        "config": {
+            "tokenizer": {
+                "bucket_name": "bucket",
+                "vae_path": "pretrained/tokenizers/video/wan2pt2/Wan2.2_VAE.pth",
+            },
+            "vlm_config": {
+                "model_instance": {
+                    "config": {
+                        "base_config": {
+                            "json_file": (
+                                "cosmos_framework/model/generator/reasoner/qwen3_vl/configs/Qwen3-VL-32B-Instruct.json"
+                            )
+                        }
+                    }
+                }
+            },
+        }
+    }
+
+    distillation_export.sanitize_student_public_model_config(model_dict)
+    first_result = copy.deepcopy(model_dict)
+    distillation_export.sanitize_student_public_model_config(model_dict)
+
+    assert model_dict == first_result
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("vae_path", "/custom/tokenizers/CustomVAE.pth"),
+        ("json_file", "/custom/reasoners/CustomReasoner.json"),
+    ],
+)
+def test_sanitize_student_public_model_config_warns_for_unknown_absolute_paths(
+    field: str,
+    value: str,
+) -> None:
+    model_dict = {
+        "config": {
+            "tokenizer": {"vae_path": "relative/custom-vae.pth"},
+            "vlm_config": {
+                "model_instance": {"config": {"base_config": {"json_file": "relative/custom-reasoner.json"}}}
+            },
+        }
+    }
+    if field == "vae_path":
+        model_dict["config"]["tokenizer"]["vae_path"] = value
+    else:
+        model_dict["config"]["vlm_config"]["model_instance"]["config"]["base_config"]["json_file"] = value
+
+    with pytest.warns(UserWarning, match="may not be portable") as warning_records:
+        distillation_export.sanitize_student_public_model_config(model_dict)
+
+    assert warning_records[0].filename == __file__
+    if field == "vae_path":
+        assert model_dict["config"]["tokenizer"]["vae_path"] == value
+    else:
+        assert model_dict["config"]["vlm_config"]["model_instance"]["config"]["base_config"]["json_file"] == value
+
+
+def test_sanitize_student_public_model_config_preserves_unknown_relative_paths() -> None:
+    model_dict = {
+        "config": {
+            "tokenizer": {"vae_path": "relative/custom-vae.pth"},
+            "vlm_config": {
+                "model_instance": {"config": {"base_config": {"json_file": "relative/custom-reasoner.json"}}}
+            },
+        }
+    }
+
+    distillation_export.sanitize_student_public_model_config(model_dict)
+
+    assert model_dict["config"]["tokenizer"]["vae_path"] == "relative/custom-vae.pth"
+    assert (
+        model_dict["config"]["vlm_config"]["model_instance"]["config"]["base_config"]["json_file"]
+        == "relative/custom-reasoner.json"
+    )
+
+
+@pytest.mark.parametrize(
+    ("model_dict", "field_name"),
+    [
+        ({"config": {"tokenizer": {"vae_path": None}}}, "tokenizer.vae_path"),
+        (
+            {"config": {"vlm_config": {"model_instance": {"config": {"base_config": {"json_file": None}}}}}},
+            "vlm_config.model_instance.config.base_config.json_file",
+        ),
+    ],
+)
+def test_sanitize_student_public_model_config_rejects_non_string_dependency_path(
+    model_dict: dict,
+    field_name: str,
+) -> None:
+    with pytest.raises(TypeError) as error:
+        distillation_export.sanitize_student_public_model_config(model_dict)
+
+    assert str(error.value) == f"Expected {field_name} to be a string."
 
 
 def test_resolve_vision_checkpoint_path_prefers_local_override() -> None:

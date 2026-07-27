@@ -150,10 +150,11 @@ class Timer(ContextDecorator):
         @wraps(func)
         def wrapper(*args, **kwargs):  # noqa: ANN202
             self.start()
-            result = func(*args, **kwargs)
-            self.end()
-            self.report()
-            return result
+            try:
+                return func(*args, **kwargs)
+            finally:
+                self.end()
+                self.report()
 
         return wrapper  # type: ignore
 

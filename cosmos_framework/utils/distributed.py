@@ -19,8 +19,8 @@ import torch
 import torch.distributed as dist
 from torch.distributed import get_process_group_ranks
 
-from cosmos_framework.utils.flags import INTERNAL
 from cosmos_framework.utils.device import Device
+from cosmos_framework.utils.flags import INTERNAL
 
 if dist.is_available():
     from torch.distributed.distributed_c10d import _get_default_group
@@ -481,6 +481,7 @@ def broadcast_object_list(object_list, *args, **kwargs):
 class _TensorBroadcastMetadata:
     """Small placeholder used while broadcasting a nested object containing tensors."""
 
+    tensor_index: int
     shape: tuple[int, ...]
     dtype: torch.dtype
 
@@ -488,16 +489,17 @@ class _TensorBroadcastMetadata:
 def _extract_tensor_leaves(value: Any, min_tensor_bytes: int) -> tuple[Any, list[torch.Tensor]]:
     """Replace sufficiently large tensor leaves while preserving the surrounding containers."""
     tensor_leaves: list[torch.Tensor] = []
-    seen_direct_ids: set[int] = set()
+    tensor_metadata_by_id: dict[int, _TensorBroadcastMetadata] = {}
+    seen_container_ids: set[int] = set()
 
-    def _require_unique(current_value: Any) -> None:
+    def _require_unique_container(current_value: Any) -> None:
         object_id = id(current_value)
-        if object_id in seen_direct_ids:
+        if object_id in seen_container_ids:
             raise ValueError(
-                "Optimized object broadcast requires an acyclic tree without shared container or tensor references; "
+                "Optimized object broadcast requires an acyclic tree without shared container references; "
                 f"encountered {type(current_value).__name__} more than once."
             )
-        seen_direct_ids.add(object_id)
+        seen_container_ids.add(object_id)
 
     def _extract(current_value: Any) -> Any:
         if isinstance(current_value, torch.Tensor):
@@ -512,16 +514,25 @@ def _extract_tensor_leaves(value: Any, min_tensor_bytes: int) -> tuple[Any, list
                     "Optimized object broadcast only supports plain torch.Tensor leaves, "
                     f"got {type(current_value).__name__}."
                 )
-            _require_unique(current_value)
+            object_id = id(current_value)
+            existing_metadata = tensor_metadata_by_id.get(object_id)
+            if existing_metadata is not None:
+                return existing_metadata
+            metadata = _TensorBroadcastMetadata(
+                tensor_index=len(tensor_leaves),
+                shape=tuple(current_value.shape),
+                dtype=current_value.dtype,
+            )
+            tensor_metadata_by_id[object_id] = metadata
             tensor_leaves.append(current_value)
-            return _TensorBroadcastMetadata(shape=tuple(current_value.shape), dtype=current_value.dtype)
+            return metadata
         if isinstance(current_value, dict):
             if type(current_value) is not dict:
                 raise TypeError(
                     "Optimized object broadcast only supports plain dict containers, "
                     f"got {type(current_value).__name__}."
                 )
-            _require_unique(current_value)
+            _require_unique_container(current_value)
             return {key: _extract(item) for key, item in current_value.items()}
         if isinstance(current_value, list):
             if type(current_value) is not list:
@@ -529,7 +540,7 @@ def _extract_tensor_leaves(value: Any, min_tensor_bytes: int) -> tuple[Any, list
                     "Optimized object broadcast only supports plain list containers, "
                     f"got {type(current_value).__name__}."
                 )
-            _require_unique(current_value)
+            _require_unique_container(current_value)
             return [_extract(item) for item in current_value]
         if isinstance(current_value, tuple):
             is_namedtuple = hasattr(current_value, "_fields")
@@ -538,7 +549,7 @@ def _extract_tensor_leaves(value: Any, min_tensor_bytes: int) -> tuple[Any, list
                     "Optimized object broadcast only supports plain tuple or namedtuple containers, "
                     f"got {type(current_value).__name__}."
                 )
-            _require_unique(current_value)
+            _require_unique_container(current_value)
             extracted_items = tuple(_extract(item) for item in current_value)
             # Namedtuples are tuple subclasses whose constructors expect each field as a positional argument.
             if is_namedtuple:
@@ -570,11 +581,12 @@ def broadcast_object_list_optimized(
     collective directly.
 
     Direct tensor extraction requires an acyclic tree of plain ``dict``, ``list``,
-    and ``tuple`` containers; namedtuples are also supported. The source raises
-    before entering the collective when it encounters a container subclass,
-    a tensor subclass selected for direct broadcast, a shared container/tensor
-    reference that would be rebuilt, or a cycle. Use the default threshold for
-    arbitrary picklable object graphs.
+    and ``tuple`` containers; namedtuples are also supported. Repeated references
+    to the same tensor are broadcast once and preserved in the rebuilt object
+    graph. The source raises before entering the collective when it encounters a
+    container subclass, a tensor subclass selected for direct broadcast, a shared
+    container reference, or a cycle. Use the default threshold for arbitrary
+    picklable object graphs.
 
     Args:
         object_list: List of objects to broadcast. Updated in place on every participating rank.
@@ -621,12 +633,23 @@ def broadcast_object_list_optimized(
         collective_device = device or torch.device("cuda", torch.cuda.current_device())
     else:
         collective_device = torch.device("cpu")
-    tensor_index = 0
+    rebuilt_tensors: list[torch.Tensor] = []
 
     def _rebuild(current_value: Any) -> Any:
-        nonlocal tensor_index
         if isinstance(current_value, _TensorBroadcastMetadata):
+            tensor_index = current_value.tensor_index
+            if 0 <= tensor_index < len(rebuilt_tensors):
+                return rebuilt_tensors[tensor_index]
+            if tensor_index != len(rebuilt_tensors):
+                raise RuntimeError(
+                    "Broadcast object-list skeleton contains an out-of-order tensor index: "
+                    f"expected {len(rebuilt_tensors)}, got {tensor_index}."
+                )
             if is_source:
+                if tensor_index >= len(tensor_leaves):
+                    raise RuntimeError(
+                        f"Broadcast object-list skeleton references missing source tensor index {tensor_index}."
+                    )
                 source_tensor = tensor_leaves[tensor_index]  # [*shape]
                 if (
                     source_tensor.device.type == "cuda"
@@ -647,8 +670,8 @@ def broadcast_object_list_optimized(
                     dtype=current_value.dtype,
                     device=collective_device,
                 )
-            tensor_index += 1
             dist.broadcast(tensor, src=src, group=group, group_src=group_src)
+            rebuilt_tensors.append(tensor)
             return tensor
         if isinstance(current_value, dict):
             return {key: _rebuild(item) for key, item in current_value.items()}
@@ -663,8 +686,10 @@ def broadcast_object_list_optimized(
         return current_value
 
     rebuilt_object_list = _rebuild(skeleton)
-    if is_source and tensor_index != len(tensor_leaves):
-        raise RuntimeError(f"Broadcast rebuilt {tensor_index} tensors but source provided {len(tensor_leaves)}.")
+    if is_source and len(rebuilt_tensors) != len(tensor_leaves):
+        raise RuntimeError(
+            f"Broadcast rebuilt {len(rebuilt_tensors)} tensors but source provided {len(tensor_leaves)}."
+        )
     if not isinstance(rebuilt_object_list, list):
         raise RuntimeError(f"Broadcast object-list skeleton must be a list, got {type(rebuilt_object_list).__name__}.")
     object_list[:] = rebuilt_object_list

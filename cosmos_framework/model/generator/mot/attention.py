@@ -107,6 +107,7 @@ from cosmos_framework.data.generator.sequence_packing.runtime import (
     get_full_only_seq,
     sequence_pack_from_packed_sequence,
 )
+from cosmos_framework.model.generator.mot.flex_attention import FlexMetadata, flex_attention_varlen
 
 
 def two_way_attention(
@@ -219,10 +220,16 @@ def three_way_attention(
     natten_metadata: dict | None,
     attention_meta: SplitInfo | None = None,
     packed_key_states_normalized: SequencePack | None = None,
+    flex_metadata: FlexMetadata | None = None,
 ):
     """
     Performs three-way attention, with understanding and generations attentions fully decomposed,
     and allows sparsity / multi-dimensional masking in the generation tower.
+
+    The generation-tower self-attention (``full_sa``) is computed by one of three
+    mutually exclusive paths: FlexAttention when ``flex_metadata`` is provided,
+    NATTEN when ``natten_metadata`` is provided, or dense self-attention when
+    neither is set. ``flex_metadata`` and ``natten_metadata`` must not both be set.
 
     When attention_meta is provided with null_action_supertokens=True, zeros V for the first
     num_action_tokens_per_supertoken tokens of each sample's GEN sequence (null action
@@ -251,10 +258,8 @@ def three_way_attention(
         causal_k_normalized, causal_k_normalized_offsets = causal_k, causal_k_offsets
     causal_v, _ = get_causal_seq(packed_value_states)
     full_q, full_q_offsets = get_full_only_seq(packed_query_states)
-    full_k, full_k_offsets = get_full_only_seq(packed_key_states)
+    full_k, _ = get_full_only_seq(packed_key_states)
     full_v, _ = get_full_only_seq(packed_value_states)
-
-    sample_offsets = packed_query_states["sample_offsets"]
 
     if attention_meta is not None and attention_meta.null_action_supertokens:
         # Zero V for the first num_action_tokens_per_supertoken tokens of each
@@ -286,25 +291,42 @@ def three_way_attention(
     # [1,N_und,heads,head_dim] -> [N_und,heads,head_dim] -> [N_und,heads*head_dim]
     causal_out = causal_res.squeeze(0).flatten(-2, -1)  # type: ignore  # [N_und,heads*head_dim]
 
-    # If there's no metadata, it's a dense layer
-    if natten_metadata is None:
-        full_sa, full_sa_lse = attention(
+    # GEN-tower self-attention (full_sa) via one of three mutually exclusive
+    # paths. flex_metadata and natten_metadata cannot both be set.
+    assert not (flex_metadata is not None and natten_metadata is not None), (
+        "flex_metadata and natten_metadata are mutually exclusive; at most one may be set."
+    )
+    if flex_metadata is not None:
+        # FlexAttention: the multiview supertoken mask encoded in flex_metadata.
+        # Returns the heads-last (out, lse) that merge_attentions expects,
+        # matching the cosmos_framework.model.attention convention.
+        full_sa, full_sa_lse = flex_attention_varlen(
             full_q.unsqueeze(0),  # [1,N_full,heads,head_dim]
             full_k.unsqueeze(0),  # [1,N_full,heads,head_dim]
             full_v.unsqueeze(0),  # [1,N_full,heads,head_dim]
-            cumulative_seqlen_Q=full_q_offsets,
-            cumulative_seqlen_KV=full_k_offsets,
-            max_seqlen_Q=packed_query_states["max_full_len"],
-            max_seqlen_KV=packed_query_states["max_full_len"],
+            flex_metadata,
             return_lse=True,
         )  # full_sa: [1,N_full,heads,head_dim], full_sa_lse: [1,N_full,heads]
-    else:
-        assert natten_metadata is not None
+    elif natten_metadata is not None:
         full_sa, full_sa_lse = multi_dimensional_attention_varlen(
             full_q.unsqueeze(0),  # [1,N_full,heads,head_dim]
             full_k.unsqueeze(0),  # [1,N_full,heads,head_dim]
             full_v.unsqueeze(0),  # [1,N_full,heads,head_dim]
             metadata=natten_metadata,
+            return_lse=True,
+        )  # full_sa: [1,N_full,heads,head_dim], full_sa_lse: [1,N_full,heads]
+    else:
+        # Dense layer: each GEN token attends to every GEN token within its own
+        # packed sample (block-diagonal, bidirectional). Self-attention, so the
+        # KV offsets equal the Q offsets.
+        full_sa, full_sa_lse = attention(
+            full_q.unsqueeze(0),  # [1,N_full,heads,head_dim]
+            full_k.unsqueeze(0),  # [1,N_full,heads,head_dim]
+            full_v.unsqueeze(0),  # [1,N_full,heads,head_dim]
+            cumulative_seqlen_Q=full_q_offsets,
+            cumulative_seqlen_KV=full_q_offsets,
+            max_seqlen_Q=packed_query_states["max_full_len"],
+            max_seqlen_KV=packed_query_states["max_full_len"],
             return_lse=True,
         )  # full_sa: [1,N_full,heads,head_dim], full_sa_lse: [1,N_full,heads]
 
@@ -547,7 +569,6 @@ def build_packed_sequence(
     num_layers: int,
     token_shapes: list[tuple[int, int, int]] | None = None,
     natten_parameter_list: list | None = None,
-    block_size: int = 128,
     is_image_batch: bool = False,
     cp_world_size: int = 1,
     video_temporal_causal: bool = False,

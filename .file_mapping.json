@@ -1,7 +1,7 @@
 {
-  "_source_commit": "97901d395925c227163a7370ec2763b4057783d5",
-  "_dest_commit": "058c8c046877f087e07b3472a76cac214f3ad39c",
-  "_generated_at": "2026-07-23T11:16:20Z",
+  "_source_commit": "a64e2735cce69f9fd388c3e19e4e04d22db7859b",
+  "_dest_commit": "2190a72a5799ab1bc8e4ddc19ae09cd1f14d7cbc",
+  "_generated_at": "2026-07-27T06:08:57Z",
   "files": {
     "imaginaire/__init__.py": "cosmos_framework/__init__.py",
     "imaginaire/attention/__init__.py": "cosmos_framework/model/attention/__init__.py",
@@ -334,6 +334,8 @@
     "projects/cosmos3/cosmos3/models/mot/cosmos3_vfm_network.py": "cosmos_framework/model/generator/mot/cosmos3_vfm_network.py",
     "projects/cosmos3/cosmos3/models/mot/domain_aware_linear.py": "cosmos_framework/model/generator/mot/domain_aware_linear.py",
     "projects/cosmos3/cosmos3/models/mot/dot_product_attention.py": "cosmos_framework/model/generator/mot/dot_product_attention.py",
+    "projects/cosmos3/cosmos3/models/mot/flex_attention.py": "cosmos_framework/model/generator/mot/flex_attention.py",
+    "projects/cosmos3/cosmos3/models/mot/flex_attention_test.py": "cosmos_framework/model/generator/mot/flex_attention_test.py",
     "projects/cosmos3/cosmos3/models/mot/inference_text_kv_memory.py": "cosmos_framework/model/generator/mot/inference_text_kv_memory.py",
     "projects/cosmos3/cosmos3/models/mot/modeling_utils.py": "cosmos_framework/model/generator/mot/modeling_utils.py",
     "projects/cosmos3/cosmos3/models/mot/parallelize_unified_mot.py": "cosmos_framework/model/generator/mot/parallelize_unified_mot.py",
