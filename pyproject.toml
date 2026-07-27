@@ -233,6 +233,48 @@ cu130-train = [
   "transformer-engine==2.12.0+cu130.torch210",
   "triton==3.6.0",
 ]
+# torch 2.13 on CUDA 13.0. Same layout as cu130 but pinned to torch 2.13.
+cu130-torch213 = [
+  #"flash-attn-3-nv==1.0.3+cu130.torch210; platform_machine == 'x86_64'", # TODO: torch213 build (cu130.torch210 wheels are cp313-only + torch210 ABI)
+  #"flash-attn==2.7.4.post1+cu130.torch210; platform_machine == 'x86_64'", # TODO: torch213 build (cu130.torch210 wheels are cp313-only + torch210 ABI)
+  # aarch64: torch2.13 build (natten 0.21.6, sm 80/86/89/90/100/103/110/120/121) — matches this group's torch/ABI.
+  # x86_64: no torch2.13 wheel yet; still the torch2.10 gb300 build (won't load on torch 2.13). TODO: build x86_64 torch213.
+  "natten==0.21.6+cu130.torch213; platform_machine == 'aarch64'",
+  # TODO X86
+  "natten==0.21.6.dev6+cu130.torch210.gb300; platform_machine == 'x86_64'",
+  "torch==2.13.0+cu130",
+  "torchcodec==0.14.0+cu130", # https://github.com/meta-pytorch/torchcodec/releases
+  "torchvision==0.28.0+cu130", # TODO: release matching torch 2.13 — https://github.com/pytorch/vision/releases
+  # Dependencies determined from 'uv pip compile --group cu130-torch213' — these are the exact
+  # ==-pins that torch==2.13.0+cu130 (download.pytorch.org) declares. NOTE: this is the CUDA 13.0/13.1
+  # line the public wheel ships, NOT the CUDA 13.3 libs in nvcr.io/nvidia/pytorch:26.06.
+  # Issue: https://github.com/astral-sh/uv/issues/14237
+  "nvidia-cublas==13.1.1.3",
+  "nvidia-cuda-cupti==13.0.85",
+  "nvidia-cuda-nvrtc==13.0.88",
+  "nvidia-cuda-runtime==13.0.96",
+  # NOTE: torch 2.13.0+cu130 hard-pins this to ==9.20.0.48. The framework's cuDNN attention backend
+  # needs >= 9.22 (else it falls back to NATTEN, which is fine). To use the cuDNN backend, override at
+  # runtime: `uv pip install nvidia-cudnn-cu13==9.25.0.15` (can't pin here without a global override).
+  "nvidia-cudnn-cu13==9.20.0.48",
+  "nvidia-cufft==12.0.0.61",
+  "nvidia-cufile==1.15.1.6",
+  "nvidia-curand==10.4.0.35",
+  "nvidia-cusolver==12.0.4.66",
+  "nvidia-cusparse==12.6.3.3",
+  "nvidia-cusparselt-cu13==0.8.1",
+  "nvidia-nccl-cu13==2.29.7",
+  "nvidia-npp==13.0.0.50",
+  "nvidia-nvjitlink==13.3.33",
+  "nvidia-nvshmem-cu13==3.4.5",
+  "nvidia-nvtx==13.0.85",
+]
+cu130-torch213-train = [
+  {include-group = "cu130-torch213"},
+  "torchao==0.17.0+cu130; platform_machine == 'x86_64'", # 0.18.0+cu130 not published; no aarch64 build; https://github.com/pytorch/ao/issues/2919
+  "transformer-engine==2.12.0+cu130.torch210", # TODO: torch213 build
+  "triton==3.7.1", # torch==2.13.0+cu130 pins triton==3.7.1
+]
 # LIBERO simulator dependencies for the closed-loop eval client.
 # Mirrors packages/cosmos-policy
 # `libero` group; `libero` from PyPI declares `robosuite` transitively so we
@@ -274,10 +316,13 @@ repository = "https://github.com/NVIDIA/cosmos-framework"
 required-version = ">=0.11.3"
 conflicts = [
   [
+    {group = "vllm"},
     {group = "cu128"},
     {group = "cu128-train"},
     {group = "cu130"},
     {group = "cu130-train"},
+    {group = "cu130-torch213"},
+    {group = "cu130-torch213-train"},
   ],
 ]
 override-dependencies = [
