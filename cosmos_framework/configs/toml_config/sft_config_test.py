@@ -192,3 +192,39 @@ class TestEndToEndLoader:
         config = _load_or_skip(toml_path)
 
         assert config.custom == {}
+
+
+# --------------------------------------------------------------------------- #
+# 4. Every shipped example TOML validates + builds overrides                   #
+# --------------------------------------------------------------------------- #
+_EXAMPLE_TOML_DIR = Path(__file__).parents[3] / "examples" / "toml" / "sft_config"
+_EXAMPLE_TOMLS = sorted(_EXAMPLE_TOML_DIR.glob("*.toml"))
+
+
+class TestExampleTomlConfigs:
+    """Every TOML shipped under ``examples/toml/sft_config/`` must both validate
+    against ``SFTExperimentConfig`` (``extra="forbid"`` rejects any block the
+    schema does not register) and produce a Hydra override list. Catches, e.g., a
+    recipe TOML carrying a ``[model.*]`` / ``[dataloader_train.*]`` sub-block the
+    schema never modelled, which would raise ``ValidationError`` at load time.
+    """
+
+    def test_examples_dir_is_nonempty(self) -> None:
+        assert _EXAMPLE_TOMLS, f"no example TOMLs found under {_EXAMPLE_TOML_DIR}"
+
+    @pytest.mark.parametrize("toml_path", _EXAMPLE_TOMLS, ids=lambda p: p.name)
+    def test_example_toml_validates_and_builds_overrides(self, toml_path: Path) -> None:
+        import tomllib
+
+        raw = tomllib.loads(toml_path.read_text())
+
+        # 1. Schema validation — extra="forbid" flags un-registered TOML blocks.
+        try:
+            SFTExperimentConfig.model_validate(raw)
+        except ValidationError as exc:  # pragma: no cover - failure detail
+            pytest.fail(f"{toml_path.name} failed schema validation:\n{exc}")
+
+        # 2. Override construction — every leaf must route through PATH_REMAPS.
+        overrides = build_hydra_overrides(raw)
+        assert overrides[0] == "--"
+        assert any(o.startswith("experiment=") for o in overrides), overrides
