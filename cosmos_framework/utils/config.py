@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import importlib
 import os
+import sys
 import time
 from typing import Any, Dict, Optional, Type, TypeVar, Union
 
@@ -435,6 +436,11 @@ class TrainerConfig:
 
     # distributed parallelism strategy
     distributed_parallelism: str = "ddp"
+    # For large tensors in the input training data, when broadcasting to CP peer ranks, it is better
+    # to broadcast them directly to avoid the memory explosion with pickling, which happens when
+    # calling torch.distributed.broadcast_object_list.
+    # Setting a threshold value lower than `sys.maxsize` will enable this optimization.
+    cp_input_direct_broadcast_min_bytes: int = sys.maxsize
     # Distributed data parallel configs.
     ddp: DDPConfig = attrs.field(factory=DDPConfig)
     # cuDNN configs.

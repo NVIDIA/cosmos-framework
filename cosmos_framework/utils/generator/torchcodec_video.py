@@ -12,6 +12,7 @@ from typing import Any, BinaryIO
 
 import numpy as np
 import torch
+from torchcodec.decoders import VideoDecoder
 
 VideoSource = str | Path | bytes | io.BytesIO | BinaryIO
 
@@ -32,14 +33,6 @@ def _normalize_source(source: VideoSource) -> VideoSource:
     return source
 
 
-def _get_video_decoder_cls() -> Any:
-    try:
-        from torchcodec.decoders import VideoDecoder
-    except ImportError as e:
-        raise ImportError("TorchCodec is required for Cosmos3 video decoding. Install the torchcodec package.") from e
-    return VideoDecoder
-
-
 def _build_decoder(
     source: VideoSource,
     *,
@@ -58,8 +51,7 @@ def _build_decoder(
         kwargs["custom_frame_mappings"] = custom_frame_mappings
     if device != "cpu":
         kwargs["device"] = device
-    video_decoder_cls = _get_video_decoder_cls()
-    return video_decoder_cls(normalized_source, **kwargs)
+    return VideoDecoder(normalized_source, **kwargs)
 
 
 def _read_basic_metadata(decoder: Any) -> tuple[int, float]:

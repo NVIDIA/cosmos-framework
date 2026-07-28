@@ -5,14 +5,14 @@
 # Structured-TOML launch for action_policy_libero_all_nano — Cosmos3-Nano
 # LIBERO-all (4-suite) action-policy SFT (HSDP, full SFT). Drives
 # cosmos_framework.scripts.train against
-# examples/toml/sft_config/action_policy_libero_all_repro.toml.
+# examples/toml/sft_config/action_policy_libero_all_nano.toml.
 #
 # Trains on all 4 LIBERO suites (equal mix). Point LIBERO_ROOT at the
 # LIBERO_LeRobot_v3 PARENT dir (containing libero_spatial/object/goal/10), NOT a
 # single suite. Use the 20 FPS nvidia/LIBERO_LeRobot_v3. Default recipe is
 # HSDP 2x8 (global batch 2048); set NNODES/NODE_RANK/MASTER_ADDR per node.
 # The 4-suite mix is coverage-limited — it needs ~4500 iters to reach ~95% on
-# libero_10 (max_iter defaults to 5000). See docs/action_policy_libero_sft.md.
+# libero_10 (max_iter defaults to 5000). See docs/action_policy_libero_posttrain.md.
 #
 # Required env vars:
 #   LIBERO_ROOT           local LIBERO_LeRobot_v3 PARENT dir (no default)
@@ -27,16 +27,16 @@
 #   export LIBERO_ROOT=<dir>
 #
 # Usage (HSDP 2x8; set NNODES/NODE_RANK/MASTER_ADDR per node):
-#   LIBERO_ROOT=<dir> bash examples/launch_sft_action_policy_libero_all.sh
+#   LIBERO_ROOT=<dir> bash examples/launch_sft_action_policy_libero_all_nano.sh
 
-TOML_FILE="examples/toml/sft_config/action_policy_libero_all_repro.toml"
+TOML_FILE="examples/toml/sft_config/action_policy_libero_all_nano.toml"
 : "${BASE_CHECKPOINT_PATH:=examples/checkpoints/Cosmos3-Nano}"
 
 # The libero-all experiment reads ${oc.env:LIBERO_ROOT}/<suite> for each of the 4
 # suites; export the PARENT dir so torchrun (launched in this shell) inherits it.
 export LIBERO_ROOT="${LIBERO_ROOT:-}"
 
-EXTRA_DATASET_CHECK='for _s in libero_spatial libero_object libero_goal libero_10; do [[ -f "$LIBERO_ROOT/$_s/meta/info.json" ]] || { echo "ERROR: LIBERO_ROOT must be the LIBERO_LeRobot_v3 parent dir containing all 4 suites (missing $_s; got: '\''$LIBERO_ROOT'\''). Pre-sync: hf download nvidia/LIBERO_LeRobot_v3 --repo-type dataset --local-dir <dir> (then LIBERO_ROOT=<dir>). See docs/action_policy_libero_sft.md" >&2; exit 1; }; done'
+EXTRA_DATASET_CHECK='for _s in libero_spatial libero_object libero_goal libero_10; do [[ -f "$LIBERO_ROOT/$_s/meta/info.json" ]] || { echo "ERROR: LIBERO_ROOT must be the LIBERO_LeRobot_v3 parent dir containing all 4 suites (missing $_s; got: '\''$LIBERO_ROOT'\''). Pre-sync: hf download nvidia/LIBERO_LeRobot_v3 --repo-type dataset --local-dir <dir> (then LIBERO_ROOT=<dir>). See docs/action_policy_libero_posttrain.md" >&2; exit 1; }; done'
 
 # Extra Hydra overrides from the environment: a space-separated string word-split into
 # the TAIL_OVERRIDES array. An exported string survives `bash <wrapper>` (a child

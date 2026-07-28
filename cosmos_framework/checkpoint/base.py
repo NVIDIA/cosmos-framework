@@ -43,7 +43,7 @@ class AbstractCheckpointer(ABC):
         if not INTERNAL:
             from cosmos_framework.utils.checkpoint_db import download_checkpoint_v2
 
-            if load_path:
+            if load_path and not self.load_from_object_store:
                 load_path = download_checkpoint_v2(load_path)
         self.load_path = load_path
         self.load_training_state = config_checkpoint.load_training_state

@@ -109,13 +109,19 @@ def _free_port() -> int:
 
 
 def _hf_download(args: list[str]) -> str:
-    """``uvx hf download <args> --quiet`` -> the local path it prints (from the HF cache)."""
-    result = subprocess.run(
-        ["uvx", "hf@latest", "download", *args, "--quiet"],
-        cwd=str(REPO_ROOT),
-        capture_output=True,
-        text=True,
-    )
+    """``uvx hf download <args> --quiet`` -> the local path it prints (from the HF cache).
+
+    Retries once with ``--refresh``: ``@latest`` doesn't refresh dependency index metadata.
+    """
+    for uvx in (["uvx"], ["uvx", "--refresh"]):
+        result = subprocess.run(
+            [*uvx, "hf@latest", "download", *args, "--quiet"],
+            cwd=str(REPO_ROOT),
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode == 0:
+            break
     if result.returncode != 0:
         pytest.fail(f"hf download failed for {args} (exit {result.returncode}):\n{result.stdout}\n{result.stderr}")
     lines = [ln.strip() for ln in result.stdout.splitlines() if ln.strip()]
@@ -288,6 +294,17 @@ def _build_specs(paths: dict[str, str]) -> dict[str, LaunchSpec]:
             key="vision_sft_nano",
             sft_toml="examples/toml/sft_config/vision_sft_nano.toml",
             extra_hydra_args=(
+                # Pin the learning rate to the value the goldens below were
+                # captured at (2e-5). The shipped recipe (vision_sft_nano.toml)
+                # was retuned to 1e-4, which changes the loss trajectory from
+                # iter 1 on (iter-0 is lr-independent). This override keeps the
+                # numerical-regression guard decoupled from recipe-lr tuning, so
+                # the committed h100 AND gb200 goldens stay valid without a GPU
+                # recapture. Trailing overrides win over the TOML value (see
+                # sft_config.load_experiment_from_toml). If you intentionally
+                # want CI to guard the 1e-4 trajectory instead, drop this line
+                # and refresh the goldens with COSMOS_REGRESSION_UPDATE_GOLDENS=1.
+                "optimizer.lr=2.0e-5",
                 "model.config.parallelism.data_parallel_shard_degree=4",
                 "model.config.compile.enabled=true",
                 "trainer.max_iter=10",
@@ -895,7 +912,10 @@ _GOLDENS: dict[str, dict[str, dict[str, list[float] | None]]] = {
         # across all 10 iters. grad_norm is deterministic here (compile.enabled=false
         # in nano_model_config under the new release branch), so values are pinned;
         # flip to None if a future change re-enables compile and reintroduces
-        # non-determinism in the all-rank reduction.
+        # non-determinism in the all-rank reduction. Captured at lr=2e-5; the
+        # ``vision_sft_nano`` spec pins ``optimizer.lr=2.0e-5`` (see the pin
+        # comment in _build_specs) so this stays valid despite the shipped
+        # recipe now using 1e-4.
         "vision_sft_nano": {
             "loss": [0.2243, 0.2133, 0.2437, 0.2255, 0.2616, 0.2552, 0.3313, 0.2247, 0.2036, 0.2621],
             "grad_norm": [0.42188, 0.30469, 0.30078, 0.26953, 0.30273, 0.41406, 0.42773, 0.38477, 0.27344, 0.27344],
@@ -918,7 +938,9 @@ _GOLDENS: dict[str, dict[str, dict[str, list[float] | None]]] = {
         # defaults. Runs under ``--deterministic`` so loss reproduces bit-exact
         # across all 10 iters, but grad_norm is non-det because
         # ``compile.enabled=true`` makes the all-rank reduction not bit-exact
-        # on H100.
+        # on H100. Captured at lr=2e-5; the ``vision_sft_nano`` spec pins
+        # ``optimizer.lr=2.0e-5`` so these stay valid even though the shipped
+        # recipe now uses 1e-4 (see the pin comment in _build_specs).
         "vision_sft_nano": {
             "loss": [0.2242, 0.2141, 0.2429, 0.2259, 0.2608, 0.2555, 0.332, 0.2256, 0.2041, 0.2621],
             "grad_norm": None,

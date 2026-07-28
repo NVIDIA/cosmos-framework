@@ -30,24 +30,27 @@ class TimestepEmbedder(nn.Module):
     Embeds scalar timesteps into vector representations.
     """
 
-    def __init__(self, hidden_size, frequency_embedding_size=256):
+    def __init__(self, hidden_size, frequency_embedding_size=256, bias: bool = True):
         super().__init__()
         self.mlp = nn.Sequential(
-            nn.Linear(frequency_embedding_size, hidden_size, bias=True),
+            nn.Linear(frequency_embedding_size, hidden_size, bias=bias),
             nn.SiLU(),
-            nn.Linear(hidden_size, hidden_size, bias=True),
+            nn.Linear(hidden_size, hidden_size, bias=bias),
         )
         self.frequency_embedding_size = frequency_embedding_size
         self.hidden_size = hidden_size
+        self._has_bias = bias
 
     def _init_weights(self):
         std = 1.0 / math.sqrt(self.frequency_embedding_size)
         torch.nn.init.trunc_normal_(self.mlp[0].weight, std=std, a=-3 * std, b=3 * std)
-        torch.nn.init.zeros_(self.mlp[0].bias)
+        if self._has_bias:
+            torch.nn.init.zeros_(self.mlp[0].bias)
 
         std = 1.0 / math.sqrt(self.hidden_size)
         torch.nn.init.trunc_normal_(self.mlp[2].weight, std=std, a=-3 * std, b=3 * std)
-        torch.nn.init.zeros_(self.mlp[2].bias)
+        if self._has_bias:
+            torch.nn.init.zeros_(self.mlp[2].bias)
 
     @staticmethod
     def timestep_embedding(t, dim, max_period=10000):

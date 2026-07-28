@@ -255,6 +255,12 @@ class OmniMoTModelConfig:
     sound_dim: int | None = None  # Sound latent channel size (e.g., 64 for AVAE 48kHz)
     sound_latent_fps: int = 25  # Sound tokenizer's latent rate (e.g., 48kHz / 1920 hop = 25 Hz)
 
+    # When False, removes bias from vae2llm, sound2llm, and the two Linear layers inside
+    # time_embedder.  These biases seem to inject token-constant DC offsets that dominate
+    # the MoE router input and create prompt invariant routing.  This is observed empirically
+    # in the 30B-A3B checkpoint.
+    enable_input_bias: bool = True
+
     log_enc_time_every_n: int = 100  # Frequency of logging encoding time to W&B
 
     # When True, ``OmniMoTModel.state_dict`` / ``load_state_dict`` skip the

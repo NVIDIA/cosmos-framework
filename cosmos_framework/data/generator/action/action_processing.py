@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import json
+import math
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal, Protocol
@@ -15,7 +16,16 @@ import torch
 
 from cosmos_framework.utils import log
 
-ActionNormalizationMethod = Literal["quantile", "quantile_rot", "meanstd", "minmax"]
+ActionNormalizationMethod = Literal[
+    "quantile",
+    "quantile_rot",
+    "quantile_rot_scale_floor",
+    "asinh_rot",
+    "piecewise_asinh_rot",
+    "meanstd",
+    "minmax",
+]
+QUANTILE_ROT_SCALE_FLOOR_TARGET_MAX = 5.0
 
 
 class ActionNormalizer(Protocol):
@@ -70,6 +80,90 @@ class ActionAffineNormalization:
         return action * scale + offset  # [...,D]
 
 
+@dataclass(frozen=True)
+class ActionAsinhNormalization:
+    """Invertible heavy-tail action normalizer.
+
+    The forward transform first applies the same quantile affine transform used
+    by ``quantile_rot`` and then compresses large-but-valid tails with
+    ``asinh``:
+
+    ``y = asinh((raw - offset) / scale) / asinh(1)``.
+
+    The ``asinh(1)`` factor keeps q01/q99-style unit deviations near ±1 while
+    mapping 100-250× outliers to single-digit targets instead of exploding the
+    flow-matching loss.  The inverse uses ``sinh`` and is exact up to floating
+    point precision; unlike clamp, no labels are censored.
+    """
+
+    offset: torch.Tensor
+    scale: torch.Tensor
+    unit: float = math.asinh(1.0)
+
+    def normalize_action(self, action: torch.Tensor) -> torch.Tensor:  # action: [...,D], returns [...,D]
+        """Normalize raw action values with an invertible asinh transform."""
+        offset = self.offset.to(device=action.device, dtype=action.dtype)  # [D]
+        scale = self.scale.to(device=action.device, dtype=action.dtype)  # [D]
+        unit = torch.as_tensor(self.unit, device=action.device, dtype=action.dtype)  # []
+        return torch.asinh((action - offset) / scale) / unit  # [...,D]
+
+    def denormalize_action(self, action: torch.Tensor) -> torch.Tensor:  # action: [...,D], returns [...,D]
+        """Invert asinh action normalization."""
+        offset = self.offset.to(device=action.device, dtype=action.dtype)  # [D]
+        scale = self.scale.to(device=action.device, dtype=action.dtype)  # [D]
+        unit = torch.as_tensor(self.unit, device=action.device, dtype=action.dtype)  # []
+        return torch.sinh(action * unit) * scale + offset  # [...,D]
+
+
+@dataclass(frozen=True)
+class ActionPiecewiseAsinhNormalization:
+    """Invertible tail-only asinh action normalizer.
+
+    This uses the same affine ``z = (raw - offset) / scale`` coordinates as
+    ``quantile_rot`` and keeps the common range exactly linear:
+
+    ``y = z`` when ``|z| <= 1``.
+
+    Outside that range it grows sublinearly while preserving magnitude order:
+
+    ``y = sign(z) * (1 + asinh(beta * (|z| - 1)) / beta)``.
+
+    With the default ``beta=1``, the transform is continuous and has matching
+    derivative at ±1, so in-range samples match the linear/clamped normalizer
+    exactly while out-of-range labels remain recoverable instead of censored.
+    """
+
+    offset: torch.Tensor
+    scale: torch.Tensor
+    beta: float = 1.0
+
+    def _beta_tensor(self, reference: torch.Tensor) -> torch.Tensor:
+        beta = torch.as_tensor(self.beta, device=reference.device, dtype=reference.dtype)  # []
+        if bool((beta <= 0).item()):
+            raise ValueError(f"piecewise asinh beta must be positive, got {self.beta}")
+        return beta
+
+    def normalize_action(self, action: torch.Tensor) -> torch.Tensor:  # action: [...,D], returns [...,D]
+        """Normalize raw action values, keeping affine-normalized [-1, 1] exactly unchanged."""
+        offset = self.offset.to(device=action.device, dtype=action.dtype)  # [D]
+        scale = self.scale.to(device=action.device, dtype=action.dtype)  # [D]
+        beta = self._beta_tensor(action)  # []
+        z = (action - offset) / scale  # [...,D]
+        abs_z = z.abs()  # [...,D]
+        tail = 1.0 + torch.asinh(beta * (abs_z - 1.0)) / beta  # [...,D]
+        return torch.where(abs_z <= 1.0, z, z.sign() * tail)  # [...,D]
+
+    def denormalize_action(self, action: torch.Tensor) -> torch.Tensor:  # action: [...,D], returns [...,D]
+        """Invert piecewise-asinh action normalization."""
+        offset = self.offset.to(device=action.device, dtype=action.dtype)  # [D]
+        scale = self.scale.to(device=action.device, dtype=action.dtype)  # [D]
+        beta = self._beta_tensor(action)  # []
+        abs_y = action.abs()  # [...,D]
+        tail = 1.0 + torch.sinh(beta * (abs_y - 1.0)) / beta  # [...,D]
+        z = torch.where(abs_y <= 1.0, action, action.sign() * tail)  # [...,D]
+        return z * scale + offset  # [...,D]
+
+
 def load_action_stats(stats_path: str, stats_key: str = "global") -> dict[str, np.ndarray]:
     """Load pre-computed action normalization stats from a JSON file."""
     path = Path(stats_path)
@@ -92,8 +186,8 @@ def resolve_action_normalization(
     method: ActionNormalizationMethod,
     stats: dict[str, torch.Tensor],
     apply_forward_clamp: bool = False,
-) -> ActionAffineNormalization:
-    """Resolve configured action stats into affine forward/inverse parameters."""
+) -> ActionNormalizer:
+    """Resolve configured action stats into forward/inverse normalization parameters."""
     if method == "meanstd":
         offset = stats["mean"]  # [D]
         scale = stats["std"].clamp(min=1e-8)  # [D]
@@ -102,7 +196,7 @@ def resolve_action_normalization(
     if method == "minmax":
         lo = stats["min"]  # [D]
         hi = stats["max"]  # [D]
-    elif method in ("quantile", "quantile_rot"):
+    elif method in ("quantile", "quantile_rot", "quantile_rot_scale_floor", "asinh_rot", "piecewise_asinh_rot"):
         lo = stats["q01"]  # [D]
         hi = stats["q99"]  # [D]
     else:
@@ -110,6 +204,16 @@ def resolve_action_normalization(
 
     offset = (hi + lo) / 2.0  # [D]
     scale = (hi - lo).clamp(min=1e-8) / 2.0  # [D]
+    if method == "quantile_rot_scale_floor":
+        min_dev = (stats["min"] - offset).abs()  # [D]
+        max_dev = (stats["max"] - offset).abs()  # [D]
+        scale_floor = torch.maximum(min_dev, max_dev) / QUANTILE_ROT_SCALE_FLOOR_TARGET_MAX  # [D]
+        scale = torch.maximum(scale, scale_floor.clamp(min=1e-8))  # [D]
+
+    if method == "asinh_rot":
+        return ActionAsinhNormalization(offset=offset, scale=scale)
+    if method == "piecewise_asinh_rot":
+        return ActionPiecewiseAsinhNormalization(offset=offset, scale=scale)
 
     if apply_forward_clamp:
         # Ideally this hardcode should be removed, but for now we keep it so we can be aligned with mid-training checkpoints.

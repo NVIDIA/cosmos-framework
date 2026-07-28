@@ -19,8 +19,7 @@ from cosmos_framework.model.generator.mot.context_parallel_utils import (
     context_parallel_attention,
     get_context_parallel_sharded_sequence,
 )
-from cosmos_framework.model.generator.mot.parallelize_unified_mot import ARReplicatedIODispatch
-from cosmos_framework.model.generator.mot.unified_mot import _apply_head_sharded_o_proj
+
 from cosmos_framework.model.generator.utils.data_and_condition import GenerationDataClean
 from cosmos_framework.data.generator.sequence_packing import (
     PackedSequence,

@@ -8,12 +8,12 @@ lr 5e-5, warmup 500, cycle 16000, gbs 2048):
 
 - **(A) libero_10-only** — trains on `libero_10` alone; peaks by ~iter 1500
   (max_iter 2000). Fast.
-  `action_policy_libero_nano` + `action_policy_libero_repro.toml` +
-  `launch_sft_action_policy_libero.sh`.
+  `action_policy_libero_nano` + `action_policy_libero_10_nano.toml` +
+  `launch_sft_action_policy_libero_10_nano.sh`.
 - **(B) libero-all** — equal mix of all 4 LIBERO suites; needs longer training
   (max_iter 5000).
-  `action_policy_libero_all_nano` + `action_policy_libero_all_repro.toml` +
-  `launch_sft_action_policy_libero_all.sh`.
+  `action_policy_libero_all_nano` + `action_policy_libero_all_nano.toml` +
+  `launch_sft_action_policy_libero_all_nano.sh`.
 
 | Piece            | Path                                                                                                 |
 | ---------------- | ---------------------------------------------------------------------------------------------------- |
@@ -21,8 +21,8 @@ lr 5e-5, warmup 500, cycle 16000, gbs 2048):
 | SFT wrapper      | `get_action_libero_sft_dataset` in `.../datasets/action_sft_dataset.py`                              |
 | Norm stats       | `.../normalizer_stats/libero_native_frame_wise_relative_rot6d.json`                                  |
 | Experiment       | `cosmos_framework/configs/base/experiment/action/posttrain_config/action_policy_libero_nano.py`      |
-| Run TOML         | `examples/toml/sft_config/action_policy_libero_repro.toml`                                           |
-| Launch           | `examples/launch_sft_action_policy_libero.sh`                                                        |
+| Run TOML         | `examples/toml/sft_config/action_policy_libero_10_nano.toml`                                         |
+| Launch           | `examples/launch_sft_action_policy_libero_10_nano.sh`                                                |
 | Inference server | `cosmos_framework/scripts/action_policy_server_libero.py`                                            |
 | Closed-loop eval | `cosmos_framework/simulation/libero/closed_loop_eval.py`                                             |
 
@@ -54,21 +54,30 @@ eval server reproduces the same snap (§4).
 
 ## 2. Train
 
+Convert the base checkpoint to DCP once (registered catalog name; downloads
+`nvidia/Cosmos3-Nano` from the HF Hub — see [docs/training.md](./training.md) Step 2):
+
+```bash
+python -m cosmos_framework.scripts.convert_model_to_dcp \
+  -o examples/checkpoints/Cosmos3-Nano \
+  --checkpoint-path Cosmos3-Nano
+```
+
 Common env, then pick a preset launcher:
 
 ```bash
 export LD_LIBRARY_PATH=''                      # NGC container: avoid torch._C import error
-export BASE_CHECKPOINT_PATH=<Cosmos3-Nano DCP dir>
+export BASE_CHECKPOINT_PATH=examples/checkpoints/Cosmos3-Nano   # the DCP dir from the convert step
 export WAN_VAE_PATH=<Wan2.2_VAE.pth>
 export IMAGINAIRE_OUTPUT_ROOT=/path/to/output_root
 
 # Preset A — libero_10-only (LIBERO_ROOT = the libero_10 suite dir):
 export LIBERO_ROOT=<nfs>/LIBERO_LeRobot_v3/libero_10
-bash examples/launch_sft_action_policy_libero.sh        # HSDP 2x8; set NNODES/NODE_RANK/MASTER_ADDR per node
+bash examples/launch_sft_action_policy_libero_10_nano.sh        # HSDP 2x8; set NNODES/NODE_RANK/MASTER_ADDR per node
 
 # Preset B — libero-all 4-suite (LIBERO_ROOT = the LIBERO_LeRobot_v3 parent dir):
 export LIBERO_ROOT=<nfs>/LIBERO_LeRobot_v3
-bash examples/launch_sft_action_policy_libero_all.sh    # HSDP 2x8; needs ~4500 iters to converge
+bash examples/launch_sft_action_policy_libero_all_nano.sh    # HSDP 2x8; needs ~4500 iters to converge
 ```
 
 Both recipes set lr 5e-5, warmup 500, cycle 16000, `save_iter=500`, HSDP 2x8 (global

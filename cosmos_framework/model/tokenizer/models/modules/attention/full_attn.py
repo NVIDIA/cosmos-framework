@@ -11,9 +11,12 @@ This module provides full attention implementations supporting:
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, overload
+from dataclasses import dataclass
+from typing import TYPE_CHECKING, Any, overload
 
 import torch
+import torch.nn.functional as F
+from torch.nn.attention import SDPBackend, sdpa_kernel
 
 from cosmos_framework.model.attention.frontend import attention as i4_attention
 from cosmos_framework.model.attention.varlen import generate_varlen_parameters
@@ -111,94 +114,170 @@ def tensor_dense_scaled_dot_product_attention(
     )
 
 
-def _pack_sparse_temporal_causal_qkv(
-    q: "SparseTensor",
-    k: "SparseTensor",
-    v: "SparseTensor",
-) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, list[int], list[int], torch.Tensor]:
-    """Pack sparse Q/K/V into timestep-prefix attention segments.
+def _cacheable_tensor_version(tensor: torch.Tensor) -> int:
+    """Return a tensor version suitable for a coordinate-derived cache key."""
+    try:
+        return tensor._version
+    except RuntimeError:
+        # Inference-mode tensors do not expose version counters. Sparse coordinates
+        # are treated as immutable, matching the other coordinate caches.
+        return -1
 
-    Each timestep becomes one query segment. Its matching KV segment contains all
-    tokens from the same batch with temporal index less than or equal to that
-    timestep, plus any special tokens with negative temporal indices. This is
-    equivalent to a temporal causal mask with full visibility inside the current
-    timestep.
+
+TemporalCausalAttentionGroup = tuple[int, int, int, int]
+
+
+@dataclass(frozen=True)
+class SparseTemporalCausalAttentionPlan:
+    """Linear-size execution plan for temporal block-causal self-attention."""
+
+    groups: tuple[TemporalCausalAttentionGroup, ...]
+    token_order: torch.Tensor | None
+    inverse_token_order: torch.Tensor | None
+
+
+def _sparse_coordinates_are_aligned(lhs: "SparseTensor", rhs: "SparseTensor") -> bool:
+    """Return whether two sparse tensors use the same coordinate rows and layout."""
+    if lhs.coords.shape != rhs.coords.shape or lhs.layout != rhs.layout or lhs.coords.device != rhs.coords.device:
+        return False
+    if lhs.coords.data_ptr() == rhs.coords.data_ptr():
+        return True
+    return torch.equal(lhs.coords, rhs.coords)
+
+
+def _build_sparse_temporal_causal_plan(q: "SparseTensor") -> SparseTemporalCausalAttentionPlan:
+    """Build timestep query slices and their inclusive K/V prefixes.
+
+    The normal decoder layout is already batch/time ordered and therefore needs
+    only ``O(batch * timesteps)`` Python slice metadata. A non-canonical but
+    batch-contiguous input is stable-sorted once with cached ``O(tokens)``
+    permutations; it never falls back to a token-square mask.
     """
-    if q.shape[0] != k.shape[0] or q.shape[0] != v.shape[0]:
-        raise ValueError(
-            f"Batch size mismatch for temporal causal attention: q={q.shape[0]}, k={k.shape[0]}, v={v.shape[0]}"
+    groups: list[TemporalCausalAttentionGroup] = []
+    batch_orders: list[torch.Tensor | None] = []
+    requires_reordering = False
+
+    for batch_idx, batch_slice in enumerate(q.layout):
+        if batch_slice.start == batch_slice.stop:
+            batch_orders.append(None)
+            continue
+
+        batch_times = q.coords[batch_slice, 1].contiguous()  # [Tb]
+        canonical_times = torch.where(batch_times < 0, -1, batch_times)  # [Tb]
+        if canonical_times.numel() > 1:
+            nondecreasing = torch.all(canonical_times[1:] >= canonical_times[:-1])  # []
+            batch_is_sorted = bool(nondecreasing.item())
+        else:
+            batch_is_sorted = True
+
+        if batch_is_sorted:
+            sorted_times = canonical_times  # [Tb]
+            batch_orders.append(None)
+        else:
+            relative_order = torch.argsort(canonical_times, stable=True)  # [Tb]
+            sorted_times = canonical_times.index_select(0, relative_order)  # [Tb]
+            absolute_order = relative_order + batch_slice.start  # [Tb]
+            batch_orders.append(absolute_order)
+            requires_reordering = True
+
+        run_times_tensor, run_counts_tensor = torch.unique_consecutive(  # run_times_tensor: [G], run_counts_tensor: [G]
+            sorted_times,
+            return_counts=True,
         )
+        run_times = [int(value) for value in run_times_tensor.tolist()]
+        run_counts = [int(value) for value in run_counts_tensor.tolist()]
+        if any(current_time <= previous_time for previous_time, current_time in zip(run_times, run_times[1:])):
+            raise ValueError(f"Temporal coordinates could not be ordered for causal attention batch {batch_idx}.")
 
-    q_index_chunks: list[torch.Tensor] = []
-    q_feat_chunks: list[torch.Tensor] = []
-    k_feat_chunks: list[torch.Tensor] = []
-    v_feat_chunks: list[torch.Tensor] = []
-    q_seqlen: list[int] = []
-    kv_seqlen: list[int] = []
+        run_start = batch_slice.start
+        special_end = batch_slice.start
+        regular_started = False
+        for run_time, run_count in zip(run_times, run_counts, strict=True):
+            run_end = run_start + run_count
+            if run_time < 0:
+                if regular_started:
+                    raise ValueError(f"Special tokens must precede regular timesteps in batch {batch_idx}.")
+                special_end = run_end
+            else:
+                if not regular_started and special_end > batch_slice.start:
+                    groups.append((batch_slice.start, special_end, batch_slice.start, special_end))
+                regular_started = True
+                groups.append((run_start, run_end, batch_slice.start, run_end))
+            run_start = run_end
 
-    for batch_idx in range(q.shape[0]):
-        q_slice = q.layout[batch_idx]
-        k_slice = k.layout[batch_idx]
+        if not regular_started and special_end > batch_slice.start:
+            groups.append((batch_slice.start, special_end, batch_slice.start, special_end))
+        if run_start != batch_slice.stop:
+            raise RuntimeError(
+                f"Temporal causal plan did not cover batch {batch_idx}: end={run_start}, expected={batch_slice.stop}."
+            )
 
-        if q_slice.start == q_slice.stop:
-            continue
+    token_order: torch.Tensor | None = None
+    inverse_token_order: torch.Tensor | None = None
+    if requires_reordering:
+        order_parts: list[torch.Tensor] = []
+        for batch_slice, batch_order in zip(q.layout, batch_orders, strict=True):
+            if batch_order is None:
+                batch_order = torch.arange(batch_slice.start, batch_slice.stop, device=q.device)  # [Tb]
+            order_parts.append(batch_order)
+        token_order = cat_with_bounded_inputs(order_parts, dim=0)  # [Tq]
+        canonical_indices = torch.arange(token_order.shape[0], device=q.device)  # [Tq]
+        inverse_token_order = torch.empty_like(token_order)  # [Tq]
+        inverse_token_order[token_order] = canonical_indices  # [Tq]
 
-        q_batch_coords = q.coords[q_slice]
-        k_batch_coords = k.coords[k_slice]
-
-        if k_batch_coords.shape[0] == 0:
-            raise ValueError(f"Temporal causal attention requires non-empty KV for batch {batch_idx}.")
-
-        q_batch_times = q_batch_coords[:, 1]
-        k_batch_times = k_batch_coords[:, 1]
-
-        q_special_mask = q_batch_times < 0
-        if q_special_mask.any():
-            q_idx = q_special_mask.nonzero(as_tuple=True)[0] + q_slice.start
-            kv_idx = (k_batch_times < 0).nonzero(as_tuple=True)[0] + k_slice.start
-            if kv_idx.numel() == 0:
-                kv_idx = q_idx
-
-            q_index_chunks.append(q_idx)
-            q_feat_chunks.append(q.feats.index_select(0, q_idx))
-            k_feat_chunks.append(k.feats.index_select(0, kv_idx))
-            v_feat_chunks.append(v.feats.index_select(0, kv_idx))
-            q_seqlen.append(int(q_idx.numel()))
-            kv_seqlen.append(int(kv_idx.numel()))
-
-        valid_q_times = q_batch_times[q_batch_times >= 0]
-        if valid_q_times.numel() == 0:
-            continue
-
-        for timestep in torch.unique(valid_q_times, sorted=True).tolist():
-            q_local_idx = (q_batch_times == timestep).nonzero(as_tuple=True)[0]
-            kv_local_idx = ((k_batch_times < 0) | (k_batch_times <= timestep)).nonzero(as_tuple=True)[0]
-
-            q_idx = q_local_idx + q_slice.start
-            kv_idx = kv_local_idx + k_slice.start
-
-            q_index_chunks.append(q_idx)
-            q_feat_chunks.append(q.feats.index_select(0, q_idx))
-            k_feat_chunks.append(k.feats.index_select(0, kv_idx))
-            v_feat_chunks.append(v.feats.index_select(0, kv_idx))
-            q_seqlen.append(int(q_idx.numel()))
-            kv_seqlen.append(int(kv_idx.numel()))
-
-    if not q_index_chunks:
-        empty_q = q.feats.new_empty((0,) + q.feats.shape[1:])
-        empty_k = k.feats.new_empty((0,) + k.feats.shape[1:])
-        empty_v = v.feats.new_empty((0,) + v.feats.shape[1:])
-        empty_idx = torch.empty(0, dtype=torch.long, device=q.device)
-        return empty_q, empty_k, empty_v, [], [], empty_idx
-
-    return (
-        cat_with_bounded_inputs(q_feat_chunks, dim=0),
-        cat_with_bounded_inputs(k_feat_chunks, dim=0),
-        cat_with_bounded_inputs(v_feat_chunks, dim=0),
-        q_seqlen,
-        kv_seqlen,
-        cat_with_bounded_inputs(q_index_chunks, dim=0),
+    return SparseTemporalCausalAttentionPlan(
+        groups=tuple(groups),
+        token_order=token_order,
+        inverse_token_order=inverse_token_order,
     )
+
+
+def _get_sparse_temporal_causal_plan(q: "SparseTensor") -> SparseTemporalCausalAttentionPlan:
+    """Return a cached linear-size temporal-causal execution plan."""
+    cache_key = (
+        "temporal_causal_attention_plan",
+        q.coords.data_ptr(),
+        _cacheable_tensor_version(q.coords),
+        tuple(q.coords.shape),
+    )
+    cached_plan = q.get_spatial_cache(cache_key)
+    if cached_plan is None:
+        cached_plan = _build_sparse_temporal_causal_plan(q)
+        q.register_spatial_cache(cache_key, cached_plan)
+    if not isinstance(cached_plan, SparseTemporalCausalAttentionPlan):
+        raise TypeError(f"Temporal causal plan cache has unexpected type {type(cached_plan).__name__}.")
+    return cached_plan
+
+
+def _unmasked_group_scaled_dot_product_attention(
+    q: torch.Tensor,  # [Tq,H,D]
+    k: torch.Tensor,  # [Tkv,H,D]
+    v: torch.Tensor,  # [Tkv,H,Dv]
+) -> torch.Tensor:  # returns [Tq,H,Dv]
+    """Run one unmasked group through native fused SDPA when available."""
+    q_heads_first = q.permute(1, 0, 2).unsqueeze(0)  # [1,H,Tq,D]
+    k_heads_first = k.permute(1, 0, 2).unsqueeze(0)  # [1,H,Tkv,D]
+    v_heads_first = v.permute(1, 0, 2).unsqueeze(0)  # [1,H,Tkv,Dv]
+    if q.is_cuda:
+        # A math fallback would retain token-square attention state for backward.
+        # Require a fused CUDA implementation so this path stays linear-memory.
+        with sdpa_kernel([SDPBackend.CUDNN_ATTENTION, SDPBackend.FLASH_ATTENTION, SDPBackend.EFFICIENT_ATTENTION]):
+            output_heads_first = F.scaled_dot_product_attention(
+                q_heads_first,
+                k_heads_first,
+                v_heads_first,
+                dropout_p=0.0,
+                is_causal=False,
+            )  # [1,H,Tq,Dv]
+    else:
+        output_heads_first = F.scaled_dot_product_attention(
+            q_heads_first,
+            k_heads_first,
+            v_heads_first,
+            dropout_p=0.0,
+            is_causal=False,
+        )  # [1,H,Tq,Dv]
+    return output_heads_first.squeeze(0).permute(1, 0, 2).contiguous()  # [Tq,H,Dv]
 
 
 def _sparse_temporal_causal_scaled_dot_product_attention(
@@ -206,31 +285,60 @@ def _sparse_temporal_causal_scaled_dot_product_attention(
     k: "SparseTensor",
     v: "SparseTensor",
 ) -> "SparseTensor":
-    """Apply temporal-causal attention with full visibility inside each timestep."""
-    q_pack, k_pack, v_pack, q_seqlen, kv_seqlen, q_indices = _pack_sparse_temporal_causal_qkv(q, k, v)
+    """Apply linear-memory temporal-causal attention one timestep group at a time."""
+    if q.shape[0] != k.shape[0] or q.shape[0] != v.shape[0]:
+        raise ValueError(
+            f"Batch size mismatch for temporal causal attention: q={q.shape[0]}, k={k.shape[0]}, v={v.shape[0]}"
+        )
+    if q.feats.ndim != 3 or k.feats.ndim != 3 or v.feats.ndim != 3:
+        raise ValueError(
+            "Temporal causal attention expects [tokens, heads, channels] features, "
+            f"got q={tuple(q.feats.shape)}, k={tuple(k.feats.shape)}, v={tuple(v.feats.shape)}."
+        )
+    if k.feats.shape[0] != v.feats.shape[0]:
+        raise ValueError(
+            "Temporal causal attention requires matching K/V token counts, "
+            f"got k={k.feats.shape[0]} and v={v.feats.shape[0]}."
+        )
+    if not _sparse_coordinates_are_aligned(q, k) or not _sparse_coordinates_are_aligned(q, v):
+        raise ValueError("Temporal causal attention requires aligned self-attention Q/K/V coordinates and layouts.")
+    if q.device != k.device or q.device != v.device:
+        raise ValueError(
+            f"Temporal causal attention requires Q/K/V on one device, got {q.device}, {k.device}, and {v.device}."
+        )
 
-    if q_indices.numel() == 0:
-        return q.replace(q.feats.clone())
+    if q.feats.shape[0] == 0:
+        return q.replace(q.feats.clone())  # [0,H,D]
 
-    cu_seqlens_q, cu_seqlens_kv, max_q_seqlen, max_kv_seqlen = _generate_varlen_metadata(
-        q=q_pack,
-        k=k_pack,
-        v=v_pack,
-        q_seqlen=q_seqlen,
-        kv_seqlen=kv_seqlen,
-    )
-    out = tensor_varlen_scaled_dot_product_attention(
-        q=q_pack,
-        k=k_pack,
-        v=v_pack,
-        cu_seqlens_q=cu_seqlens_q,
-        cu_seqlens_kv=cu_seqlens_kv,
-        max_q_seqlen=max_q_seqlen,
-        max_kv_seqlen=max_kv_seqlen,
-    )
+    plan = _get_sparse_temporal_causal_plan(q)
+    if plan.token_order is None:
+        q_feats = q.feats.contiguous()  # [Tq,H,D]
+        k_feats = k.feats.contiguous()  # [Tkv,H,D]
+        v_feats = v.feats.contiguous()  # [Tkv,H,Dv]
+    else:
+        q_feats = q.feats.index_select(0, plan.token_order)  # [Tq,H,D]
+        k_feats = k.feats.index_select(0, plan.token_order)  # [Tkv,H,D]
+        v_feats = v.feats.index_select(0, plan.token_order)  # [Tkv,H,Dv]
 
-    out_feats = torch.empty_like(q.feats)
-    out_feats[q_indices] = out
+    output_groups: list[torch.Tensor] = []
+    for q_start, q_end, kv_start, kv_end in plan.groups:
+        q_group = q_feats[q_start:q_end]  # [Tq_group,H,D]
+        k_prefix = k_feats[kv_start:kv_end]  # [Tkv_prefix,H,D]
+        v_prefix = v_feats[kv_start:kv_end]  # [Tkv_prefix,H,Dv]
+        group_output = _unmasked_group_scaled_dot_product_attention(q_group, k_prefix, v_prefix)  # [Tq_group,H,Dv]
+        output_groups.append(group_output)
+
+    if not output_groups:
+        raise RuntimeError("Temporal causal plan produced no attention groups for a non-empty query tensor.")
+    canonical_out_feats = cat_with_bounded_inputs(output_groups, dim=0)  # [Tq,H,Dv]
+    if canonical_out_feats.shape[0] != q.feats.shape[0]:
+        raise RuntimeError(
+            f"Temporal causal plan produced {canonical_out_feats.shape[0]} outputs for {q.feats.shape[0]} queries."
+        )
+    if plan.inverse_token_order is None:
+        out_feats = canonical_out_feats  # [Tq,H,Dv]
+    else:
+        out_feats = canonical_out_feats.index_select(0, plan.inverse_token_order)  # [Tq,H,Dv]
     return q.replace(out_feats)
 
 
@@ -246,7 +354,7 @@ def sparse_scaled_dot_product_attention(q: torch.Tensor, k: "SparseTensor", v: "
     ...
 
 
-def sparse_scaled_dot_product_attention(*args, **kwargs):
+def sparse_scaled_dot_product_attention(*args: Any, **kwargs: Any) -> "SparseTensor" | torch.Tensor:
     """Flexible scaled dot-product attention for sparse tensors.
 
     Supports three calling conventions:

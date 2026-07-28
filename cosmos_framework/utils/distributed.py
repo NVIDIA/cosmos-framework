@@ -8,7 +8,9 @@ import collections.abc
 import ctypes
 import functools
 import os
+import sys
 from contextlib import contextmanager
+from dataclasses import dataclass
 from datetime import timedelta
 from typing import TYPE_CHECKING, Any, Callable, Container, Optional
 
@@ -17,8 +19,8 @@ import torch
 import torch.distributed as dist
 from torch.distributed import get_process_group_ranks
 
-from cosmos_framework.utils.flags import INTERNAL
 from cosmos_framework.utils.device import Device
+from cosmos_framework.utils.flags import INTERNAL
 
 if dist.is_available():
     from torch.distributed.distributed_c10d import _get_default_group
@@ -43,7 +45,8 @@ def init() -> int | None:
         os.sched_setaffinity(0, device.get_cpu_affinity())
     except pynvml.NVMLError as e:
         log.warning(f"Failed to set device affinity: {e}")
-    # Set up NCCL communication.
+    # Set up distributed communication. CPU checkpoint conversion needs Gloo
+    # because NCCL cannot synchronize CPU-resident tokenizer or model tensors.
     os.environ["TORCH_NCCL_BLOCKING_WAIT"] = "0"
     os.environ["TORCH_NCCL_ASYNC_ERROR_HANDLING"] = "1"
     if dist.is_available():
@@ -52,9 +55,10 @@ def init() -> int | None:
         timeout_seconds = os.getenv("TORCH_NCCL_HEARTBEAT_TIMEOUT_SEC", 1800)
         # Convert the timeout to an integer (if it isn't already) and then to a timedelta
         timeout_timedelta = timedelta(seconds=int(timeout_seconds))
-        dist.init_process_group(backend="nccl", init_method="env://", timeout=timeout_timedelta)
+        backend = "nccl" if os.environ.get("COSMOS_DEVICE", "cuda").lower() == "cuda" else "gloo"
+        dist.init_process_group(backend=backend, init_method="env://", timeout=timeout_timedelta)
         log.critical(
-            f"Initialized distributed training with local rank {local_rank} with timeout {timeout_seconds}",
+            f"Initialized distributed training with local rank {local_rank} using {backend} with timeout {timeout_seconds}",
             rank0_only=False,
         )
     # Increase the L2 fetch granularity for faster speed.
@@ -471,6 +475,224 @@ def broadcast_object_list(object_list, *args, **kwargs):
         return None
     else:
         dist.broadcast_object_list(object_list, *args, **kwargs)
+
+
+@dataclass(frozen=True)
+class _TensorBroadcastMetadata:
+    """Small placeholder used while broadcasting a nested object containing tensors."""
+
+    tensor_index: int
+    shape: tuple[int, ...]
+    dtype: torch.dtype
+
+
+def _extract_tensor_leaves(value: Any, min_tensor_bytes: int) -> tuple[Any, list[torch.Tensor]]:
+    """Replace sufficiently large tensor leaves while preserving the surrounding containers."""
+    tensor_leaves: list[torch.Tensor] = []
+    tensor_metadata_by_id: dict[int, _TensorBroadcastMetadata] = {}
+    seen_container_ids: set[int] = set()
+
+    def _require_unique_container(current_value: Any) -> None:
+        object_id = id(current_value)
+        if object_id in seen_container_ids:
+            raise ValueError(
+                "Optimized object broadcast requires an acyclic tree without shared container references; "
+                f"encountered {type(current_value).__name__} more than once."
+            )
+        seen_container_ids.add(object_id)
+
+    def _extract(current_value: Any) -> Any:
+        if isinstance(current_value, torch.Tensor):
+            tensor_bytes = current_value.numel() * current_value.element_size()
+            if tensor_bytes < min_tensor_bytes:
+                return current_value
+            if current_value.layout != torch.strided:
+                log.warning(f"Only strided tensors can be broadcast; skip layout={current_value.layout}.")
+                return current_value
+            if type(current_value) is not torch.Tensor:
+                raise TypeError(
+                    "Optimized object broadcast only supports plain torch.Tensor leaves, "
+                    f"got {type(current_value).__name__}."
+                )
+            object_id = id(current_value)
+            existing_metadata = tensor_metadata_by_id.get(object_id)
+            if existing_metadata is not None:
+                return existing_metadata
+            metadata = _TensorBroadcastMetadata(
+                tensor_index=len(tensor_leaves),
+                shape=tuple(current_value.shape),
+                dtype=current_value.dtype,
+            )
+            tensor_metadata_by_id[object_id] = metadata
+            tensor_leaves.append(current_value)
+            return metadata
+        if isinstance(current_value, dict):
+            if type(current_value) is not dict:
+                raise TypeError(
+                    "Optimized object broadcast only supports plain dict containers, "
+                    f"got {type(current_value).__name__}."
+                )
+            _require_unique_container(current_value)
+            return {key: _extract(item) for key, item in current_value.items()}
+        if isinstance(current_value, list):
+            if type(current_value) is not list:
+                raise TypeError(
+                    "Optimized object broadcast only supports plain list containers, "
+                    f"got {type(current_value).__name__}."
+                )
+            _require_unique_container(current_value)
+            return [_extract(item) for item in current_value]
+        if isinstance(current_value, tuple):
+            is_namedtuple = hasattr(current_value, "_fields")
+            if type(current_value) is not tuple and not is_namedtuple:
+                raise TypeError(
+                    "Optimized object broadcast only supports plain tuple or namedtuple containers, "
+                    f"got {type(current_value).__name__}."
+                )
+            _require_unique_container(current_value)
+            extracted_items = tuple(_extract(item) for item in current_value)
+            # Namedtuples are tuple subclasses whose constructors expect each field as a positional argument.
+            if is_namedtuple:
+                return type(current_value)(*extracted_items)
+            return extracted_items
+        return current_value
+
+    return _extract(value), tensor_leaves
+
+
+def broadcast_object_list_optimized(
+    object_list: list[Any],
+    src: int | None = None,
+    group: dist.ProcessGroup | None = None,
+    device: torch.device | None = None,
+    group_src: int | None = None,
+    *,
+    min_tensor_bytes: int = sys.maxsize,
+) -> None:
+    """Broadcast objects in place, sending sufficiently large tensor leaves directly.
+
+    This is a signature-compatible alternative to :func:`torch.distributed.broadcast_object_list`.
+    The source broadcasts an object-list skeleton first. Tensor leaves at least
+    ``min_tensor_bytes`` bytes large are replaced by metadata, broadcast
+    directly, and inserted back into the skeleton in traversal order. Smaller
+    tensors remain in the object payload. NCCL groups place directly broadcast
+    tensors on ``device`` or the current CUDA device; other backends use CPU
+    tensors. The default ``sys.maxsize`` threshold calls the original PyTorch
+    collective directly.
+
+    Direct tensor extraction requires an acyclic tree of plain ``dict``, ``list``,
+    and ``tuple`` containers; namedtuples are also supported. Repeated references
+    to the same tensor are broadcast once and preserved in the rebuilt object
+    graph. The source raises before entering the collective when it encounters a
+    container subclass, a tensor subclass selected for direct broadcast, a shared
+    container reference, or a cycle. Use the default threshold for arbitrary
+    picklable object graphs.
+
+    Args:
+        object_list: List of objects to broadcast. Updated in place on every participating rank.
+        src: Global source rank. Mutually exclusive with ``group_src``. Defaults to rank 0 when both are omitted.
+        group: Process group whose ranks receive the value.
+        device: Device used by the object collective and by direct NCCL tensor broadcasts.
+        group_src: Source rank relative to ``group``. Mutually exclusive with ``src``.
+        min_tensor_bytes: Minimum tensor payload size to broadcast directly.
+    """
+    if min_tensor_bytes < 0:
+        raise ValueError(f"min_tensor_bytes must be non-negative, got {min_tensor_bytes}.")
+    if min_tensor_bytes == sys.maxsize or group == dist.GroupMember.NON_GROUP_MEMBER:
+        dist.broadcast_object_list(
+            object_list,
+            src=src,
+            group=group,
+            device=device,
+            group_src=group_src,
+        )
+        return
+    if src is None and group_src is None:
+        src = 0
+    elif src is not None and group_src is not None:
+        raise ValueError("src and group_src cannot both be specified.")
+
+    is_source = dist.get_rank() == src if src is not None else dist.get_rank(group) == group_src
+    if is_source:
+        skeleton, tensor_leaves = _extract_tensor_leaves(object_list, min_tensor_bytes)
+    else:
+        skeleton, tensor_leaves = None, []
+
+    skeleton_box = [skeleton]
+    dist.broadcast_object_list(
+        skeleton_box,
+        src=src,
+        group=group,
+        device=device,
+        group_src=group_src,
+    )
+    skeleton = skeleton_box[0]
+
+    backend = dist.get_backend(group)
+    if backend == dist.Backend.NCCL:
+        collective_device = device or torch.device("cuda", torch.cuda.current_device())
+    else:
+        collective_device = torch.device("cpu")
+    rebuilt_tensors: list[torch.Tensor] = []
+
+    def _rebuild(current_value: Any) -> Any:
+        if isinstance(current_value, _TensorBroadcastMetadata):
+            tensor_index = current_value.tensor_index
+            if 0 <= tensor_index < len(rebuilt_tensors):
+                return rebuilt_tensors[tensor_index]
+            if tensor_index != len(rebuilt_tensors):
+                raise RuntimeError(
+                    "Broadcast object-list skeleton contains an out-of-order tensor index: "
+                    f"expected {len(rebuilt_tensors)}, got {tensor_index}."
+                )
+            if is_source:
+                if tensor_index >= len(tensor_leaves):
+                    raise RuntimeError(
+                        f"Broadcast object-list skeleton references missing source tensor index {tensor_index}."
+                    )
+                source_tensor = tensor_leaves[tensor_index]  # [*shape]
+                if (
+                    source_tensor.device.type == "cuda"
+                    and collective_device.type == "cuda"
+                    and source_tensor.device != collective_device
+                ):
+                    log.warning(
+                        "Direct tensor broadcast moves a tensor between CUDA devices: "
+                        f"index={tensor_index}, source_device={source_tensor.device}, "
+                        f"collective_device={collective_device}, src={src}",
+                        rank0_only=False,
+                    )
+                tensor = source_tensor.to(device=collective_device)  # [*shape]
+                tensor = tensor.contiguous()  # [*shape]
+            else:
+                tensor = torch.empty(  # [*shape]
+                    current_value.shape,
+                    dtype=current_value.dtype,
+                    device=collective_device,
+                )
+            dist.broadcast(tensor, src=src, group=group, group_src=group_src)
+            rebuilt_tensors.append(tensor)
+            return tensor
+        if isinstance(current_value, dict):
+            return {key: _rebuild(item) for key, item in current_value.items()}
+        if isinstance(current_value, list):
+            return [_rebuild(item) for item in current_value]
+        if isinstance(current_value, tuple):
+            rebuilt_items = tuple(_rebuild(item) for item in current_value)
+            # Namedtuples are tuple subclasses whose constructors expect each field as a positional argument.
+            if hasattr(current_value, "_fields"):
+                return type(current_value)(*rebuilt_items)
+            return rebuilt_items
+        return current_value
+
+    rebuilt_object_list = _rebuild(skeleton)
+    if is_source and len(rebuilt_tensors) != len(tensor_leaves):
+        raise RuntimeError(
+            f"Broadcast rebuilt {len(rebuilt_tensors)} tensors but source provided {len(tensor_leaves)}."
+        )
+    if not isinstance(rebuilt_object_list, list):
+        raise RuntimeError(f"Broadcast object-list skeleton must be a list, got {type(rebuilt_object_list).__name__}.")
+    object_list[:] = rebuilt_object_list
 
 
 def destroy_process_group():

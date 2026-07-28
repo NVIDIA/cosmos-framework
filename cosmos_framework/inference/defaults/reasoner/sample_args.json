@@ -1,6 +1,6 @@
 {
     "model_mode": "reasoner",
-    "max_new_tokens": 64,
+    "max_new_tokens": 1024,
     "do_sample": false,
     "temperature": 1.0,
     "top_k": null,

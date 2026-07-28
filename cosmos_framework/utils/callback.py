@@ -69,9 +69,21 @@ class CallBackGroup:
                     continue
                 log.critical(f"Instantiating callback {callback_name}: {current_callback_cfg}")
                 _callback = instantiate(current_callback_cfg)
-                assert isinstance(_callback, Callback), f"{current_callback_cfg} is not a valid callback."
-                _callback.config = config
-                _callback.trainer = trainer
+                if not isinstance(_callback, Callback):
+                    missing_hooks = _missing_callback_hooks(_callback)
+                    if missing_hooks:
+                        raise TypeError(
+                            f"{current_callback_cfg} is not a valid callback; "
+                            f"missing required callback hooks: {', '.join(missing_hooks)}"
+                        )
+                try:
+                    _callback.config = config
+                    _callback.trainer = trainer
+                except (AttributeError, TypeError) as error:
+                    raise TypeError(
+                        f"{current_callback_cfg} is not a valid callback; "
+                        "cannot assign required callback metadata 'config' and 'trainer'"
+                    ) from error
                 self._callbacks.append(_callback)
 
     def __getattr__(self, method_name: str) -> Callable:
@@ -292,6 +304,15 @@ class Callback:
 
     def on_app_end(self) -> None:
         pass
+
+
+def _missing_callback_hooks(callback: object) -> list[str]:
+    """Return required callback hooks that are absent or non-callable."""
+    return sorted(
+        name
+        for name, member in vars(Callback).items()
+        if name.startswith("on_") and callable(member) and not callable(getattr(callback, name, None))
+    )
 
 
 class EMAModelCallback(Callback):
@@ -600,3 +621,4 @@ class NVTXCallback(Callback):
         torch.cuda.nvtx.range_pop()
 
 
+# End of callback definitions.

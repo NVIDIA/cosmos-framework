@@ -54,6 +54,13 @@ qwen3_vl_32b_instruct = PolicyConfig(backbone=VLMConfig(model_name="Qwen/Qwen3-V
 
 nemotron_nano_12b_v2_vl_bf16 = PolicyConfig(backbone=VLMConfig(model_name="nvidia/NVIDIA-Nemotron-Nano-12B-v2-VL-BF16"))
 
+# Cosmos3-Edge reasoner (Nemotron-2B-Dense-VL LM + SigLIP2 vision tower).
+# model_name is the public (ungated) omni release nvidia/Cosmos3-Edge,
+# model_type "cosmos3_edge" (native HF metadata, no remote code; classes are
+# registered in-framework). Reasoner weights load directly from the snapshot —
+# the training loader follows its root safetensors index; no converter step.
+cosmos3_edge_reasoner = PolicyConfig(backbone=VLMConfig(model_name="nvidia/Cosmos3-Edge"))
+
 
 def register_vlm_policy():
     cs = ConfigStore.instance()
@@ -152,4 +159,10 @@ def register_vlm_policy():
         package="model.config.policy",
         name="nemotron_nano_12b_v2_vl_bf16",
         node=nemotron_nano_12b_v2_vl_bf16,
+    )
+    cs.store(
+        group="vlm_policy",
+        package="model.config.policy",
+        name="cosmos3_edge_reasoner",
+        node=cosmos3_edge_reasoner,
     )

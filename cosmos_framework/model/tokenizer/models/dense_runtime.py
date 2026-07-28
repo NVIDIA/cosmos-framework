@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import math
 from collections import OrderedDict
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Literal
 
 import torch
@@ -50,8 +50,9 @@ class DenseGridMetadata:
     max_seq_len: int
 
 
-DenseGridMetadataKey = tuple[str, int, int, int, int, str, str, int]
+DenseGridMetadataKey = tuple[str, int, int, int, int, str, str]
 DenseImageTemporalPadding = Literal["repeat", "zero"]
+DenseVideoTemporalMode = Literal["native", "standalone_first_frame"]
 
 
 class DenseAutoencoderRuntime(nn.Module):
@@ -65,6 +66,7 @@ class DenseAutoencoderRuntime(nn.Module):
     autoencoder: AutoencoderKL
     backend: DenseRuntimeBackend
     image_temporal_padding: DenseImageTemporalPadding
+    video_temporal_mode: DenseVideoTemporalMode
     metadata_cache_max_entries: int
     _metadata_cache: OrderedDict[DenseGridMetadataKey, DenseGridMetadata]
 
@@ -76,6 +78,7 @@ class DenseAutoencoderRuntime(nn.Module):
         pixel_trim: bool = True,
         chunk_size: int = 16,
         image_temporal_padding: DenseImageTemporalPadding = "zero",
+        video_temporal_mode: DenseVideoTemporalMode = "standalone_first_frame",
         metadata_cache_max_entries: int = 32,
     ) -> None:
         """Initialize the dense runtime wrapper.
@@ -84,11 +87,11 @@ class DenseAutoencoderRuntime(nn.Module):
             autoencoder: The sparse autoencoder to wrap.
             backend: Backend selection for block-stack execution.
             pad_frames: Number of boundary frames to replicate at each end of
-                every temporal chunk before encoding.  Must be divisible by
-                ``patch_size[0]``.  Set ``0`` to disable boundary padding;
-                set ``>0`` (typically one temporal patch, e.g. ``4``) to give
-                the non-causal encoder additional context across chunk edges,
-                eliminating the per-chunk-boundary PSNR dip.
+                every regular temporal chunk before encoding. The padded chunk,
+                rather than this value alone, must be divisible by
+                ``patch_size[0]``. Set ``0`` to disable boundary padding;
+                set ``>0`` to give the non-causal encoder additional context
+                across chunk edges, eliminating the per-chunk-boundary PSNR dip.
             pixel_trim: When ``True`` and ``pad_frames > 0``, boundary latents
                 are kept in the encoded output and trimmed in pixel space after
                 decoding.  When ``False``, boundary latents are trimmed
@@ -104,6 +107,12 @@ class DenseAutoencoderRuntime(nn.Module):
                 canonical sparse path and keeps the first decoded frame.
                 ``"repeat"`` preserves the legacy deployed dense-runtime
                 contract and keeps the last decoded frame.
+            video_temporal_mode: Temporal contract for videos. ``"native"``
+                encodes and decodes every temporal patch uniformly starting at
+                frame or latent zero. ``"standalone_first_frame"`` repeats the
+                first source frame into its own temporal patch and decodes that
+                first latent separately, preserving the VFM/I2V contract and
+                the historical dense-runtime default.
             metadata_cache_max_entries: Maximum number of device-resident
                 dense-grid metadata entries retained by the runtime. Set to
                 ``0`` to disable caching.
@@ -112,22 +121,35 @@ class DenseAutoencoderRuntime(nn.Module):
         self._validate_autoencoder(autoencoder)
         self.autoencoder = autoencoder
         self.backend = backend
-        autoencoder.num_sample_frames_batch_size = chunk_size
+        if chunk_size <= 0:
+            raise ValueError(f"chunk_size must be positive, got {chunk_size}.")
         if pad_frames < 0:
             raise ValueError(f"pad_frames must be non-negative, got {pad_frames}.")
         if 2 * pad_frames >= chunk_size:
             raise ValueError(f"pad_frames must be less than chunk_size / 2, got {pad_frames=}, {chunk_size=}.")
+        temporal_patch_size = int(autoencoder.patch_size[0])
+        if pad_frames > 0 and not pixel_trim and pad_frames % temporal_patch_size != 0:
+            raise ValueError(
+                "pad_frames must be divisible by the temporal patch size when pixel_trim=False; "
+                f"got {pad_frames=}, {temporal_patch_size=}."
+            )
         if image_temporal_padding not in {"repeat", "zero"}:
             raise ValueError(
                 f"image_temporal_padding must be either 'repeat' or 'zero', got {image_temporal_padding!r}."
+            )
+        if video_temporal_mode not in {"native", "standalone_first_frame"}:
+            raise ValueError(
+                f"video_temporal_mode must be either 'native' or 'standalone_first_frame', got {video_temporal_mode!r}."
             )
         if metadata_cache_max_entries < 0:
             raise ValueError(f"metadata_cache_max_entries must be non-negative, got {metadata_cache_max_entries}.")
         self.pad_frames = pad_frames
         self.pixel_trim = pixel_trim
         self.image_temporal_padding = image_temporal_padding
+        self.video_temporal_mode = video_temporal_mode
         self.metadata_cache_max_entries = metadata_cache_max_entries
         self._metadata_cache: OrderedDict[DenseGridMetadataKey, DenseGridMetadata] = OrderedDict()
+        autoencoder.num_sample_frames_batch_size = chunk_size
         self.cg_compiled = False
 
     @classmethod
@@ -137,18 +159,21 @@ class DenseAutoencoderRuntime(nn.Module):
         backend: DenseRuntimeBackend = "auto",
         pad_frames: int = 0,
         pixel_trim: bool = True,
-        chunk_size: int = 16,
+        chunk_size: int | None = None,
         image_temporal_padding: DenseImageTemporalPadding = "zero",
+        video_temporal_mode: DenseVideoTemporalMode = "standalone_first_frame",
         metadata_cache_max_entries: int = 32,
     ) -> "DenseAutoencoderRuntime":
-        """Build a dense runtime from a supported sparse autoencoder."""
+        """Build a dense runtime while preserving the autoencoder's configured encoder window by default."""
+        resolved_chunk_size = int(autoencoder.num_sample_frames_batch_size) if chunk_size is None else chunk_size
         return cls(
             autoencoder=autoencoder,
             backend=backend,
             pad_frames=pad_frames,
             pixel_trim=pixel_trim,
-            chunk_size=chunk_size,
+            chunk_size=resolved_chunk_size,
             image_temporal_padding=image_temporal_padding,
+            video_temporal_mode=video_temporal_mode,
             metadata_cache_max_entries=metadata_cache_max_entries,
         )
 
@@ -274,7 +299,8 @@ class DenseAutoencoderRuntime(nn.Module):
                 to ``1`` (sequential encoding).
 
         Shapes (example):
-            Config: ``patch_size = (1, 16, 16)``, ``chunk_size = 16``,
+            Config: ``video_temporal_mode = "native"``,
+            ``patch_size = (1, 16, 16)``, ``chunk_size = 16``,
             ``pad_frames = 1`` (1 raw frame replicated on each chunk edge).
             Whole-video input: ``[B=1, T=28, H=480, W=832, 3]``.
 
@@ -345,14 +371,16 @@ class DenseAutoencoderRuntime(nn.Module):
             )
 
         if not is_image:
-            # Noncausal scheme: first frame is its own chunk; remaining must fill complete regular chunks.
-            remaining_frames = raw_frames - 1
-            remainder = remaining_frames % chunk_raw_frames
+            # The VFM/I2V contract reserves frame zero for its standalone latent;
+            # native tokenizer evaluation treats every source frame uniformly.
+            first_regular_frame = 1 if self.video_temporal_mode == "standalone_first_frame" else 0
+            regular_frames = raw_frames - first_regular_frame
+            remainder = regular_frames % chunk_raw_frames
             if remainder != 0 and (remainder + 2 * self.pad_frames) % patch_time != 0:
                 raise ValueError(
-                    f"Dense runtime requires (frame_count - 1) equal to "
-                    f"chunk_raw_frames * N + patch_time - 2 * pad_frames, "
-                    f"got {raw_frames=}, {chunk_raw_frames=}, {self.pad_frames=}, {patch_time=}."
+                    "Dense runtime requires each regular temporal chunk, including the tail, to become divisible "
+                    f"by patch_size[0] after boundary padding, got {raw_frames=}, {chunk_raw_frames=}, "
+                    f"{self.pad_frames=}, {patch_time=}, {self.video_temporal_mode=}."
                 )
         if height % patch_height != 0 or width % patch_width != 0:
             raise ValueError(
@@ -383,7 +411,7 @@ class DenseAutoencoderRuntime(nn.Module):
                 # because the non-causal encoder lacks context beyond the chunk edges.
                 # Padding each chunk with pad_frames replicated boundary frames on both
                 # sides gives the encoder that context, eliminating the boundary dip.
-                # In practice pad_frames=4 (one temporal patch) is used.
+                # In practice the VFM wrapper uses one replicated frame per side.
                 # The corresponding boundary latents are trimmed after decoding
                 # (see pixel_trim / latents_per_boundary below).
                 pre = video_chunk[:, 0:1].expand(-1, pad_frames, -1, -1, -1)  # [B,pad,H,W,3]
@@ -409,13 +437,13 @@ class DenseAutoencoderRuntime(nn.Module):
 
         encoded_chunks: list[torch.Tensor] = []
 
-        if not is_image:
+        if not is_image and self.video_temporal_mode == "standalone_first_frame":
             # Noncausal first chunk: encode frame 0 alone, padded to patch_time copies
             # at the head so the encoder sees exactly patch_time frames → 1 latent L₁.
             # pad_to=None: this chunk has 1 temporal patch, not the regular chunk shape.
-            first_frame = video[:, 0:1]
-            first_chunk = first_frame.expand(-1, patch_time, -1, -1, -1).contiguous()
-            encoded_chunks.append(self._encode_video_chunk(first_chunk, pad_to=None))
+            first_frame = video[:, 0:1]  # [B,1,H,W,3]
+            first_chunk = first_frame.expand(-1, patch_time, -1, -1, -1).contiguous()  # [B,Pt,H,W,3]
+            encoded_chunks.append(self._encode_video_chunk(first_chunk, pad_to=None))  # [B,1,Hp,Wp,2C]
 
         chunk_specs = [
             (
@@ -423,7 +451,11 @@ class DenseAutoencoderRuntime(nn.Module):
                 end_frame := min(start_frame + chunk_raw_frames, raw_frames),
                 end_frame - start_frame == chunk_raw_frames,
             )
-            for start_frame in range(0 if is_image else 1, raw_frames, chunk_raw_frames)
+            for start_frame in range(
+                1 if not is_image and self.video_temporal_mode == "standalone_first_frame" else 0,
+                raw_frames,
+                chunk_raw_frames,
+            )
         ]
 
         pending_full_chunks: list[torch.Tensor] = []
@@ -445,12 +477,13 @@ class DenseAutoencoderRuntime(nn.Module):
         if pending_full_chunks:
             encoded_chunks.extend(_encode_padded_chunks(pending_full_chunks))
 
-        return cat_with_bounded_inputs(encoded_chunks, dim=1)
+        return cat_with_bounded_inputs(encoded_chunks, dim=1)  # [B,Tp,Hp,Wp,2C]
 
     def decode(
         self,
         dense_latent: torch.Tensor,
         chunk_raw_frames: int | None = None,
+        is_image: bool | None = None,
     ) -> torch.Tensor:
         """Decode a dense latent grid into a dense channels-last video tensor.
 
@@ -458,10 +491,20 @@ class DenseAutoencoderRuntime(nn.Module):
         contains boundary tokens from encoding.  After decoding, the
         corresponding boundary pixel frames are trimmed from each chunk.
 
+        Args:
+            dense_latent: Dense latent grid in channels-first or channels-last
+                format.
+            chunk_raw_frames: Raw-frame decoder window override. It must be
+                divisible by the temporal patch size.
+            is_image: Whether the latent represents a one-frame image. None
+                infers the media type when unambiguous. Native single-latent
+                inputs must pass True for an image or False for a one-patch
+                video.
+
         **Output shape contract**:
-        - Video (``temporal_patches > 1``): ``[B, T, H, W, C]`` where T is the
-          total number of decoded pixel frames across all chunks (after trim).
-        - Image (``temporal_patches == 1``): ``[B, 1, H, W, C]``. The image
+        - Video: ``[B, T, H, W, C]`` where T is the total number of decoded
+          pixel frames across all chunks (after trim).
+        - Image: ``[B, 1, H, W, C]``. The image
           latent decodes to ``patch_time`` frames. Sparse-compatible zero
           padding keeps the first frame; legacy repeat padding keeps the last.
           This differs from pre-``dense_runtime`` behavior where the full
@@ -470,7 +513,7 @@ class DenseAutoencoderRuntime(nn.Module):
         if self.decoder_cache_spec.patch_frames != 0:
             raise NotImplementedError("Dense runtime decoder V1 does not support KV cache.")
 
-        latent = self._canonicalize_dense_latent(dense_latent)
+        latent = self._canonicalize_dense_latent(dense_latent)  # [B,Tp,Hp,Wp,C]
         temporal_patches = latent.shape[1]
         if chunk_raw_frames is None:
             chunk_patch_frames = self.decoder_window_spec.patch_frames
@@ -486,37 +529,49 @@ class DenseAutoencoderRuntime(nn.Module):
         pad_frames = self.pad_frames
         trim_pixel = self.pixel_trim and pad_frames > 0
 
-        # Images were encoded as a single latent (no noncausal first chunk).
-        # Videos have temporal_patches > 1: latent[0] is the noncausal first frame.
-        is_image = temporal_patches == 1
+        # A single native temporal latent is ambiguous between an image and one
+        # video patch, so require callers to state which contract produced it.
+        if is_image is None:
+            if temporal_patches == 1 and self.video_temporal_mode == "native":
+                raise ValueError(
+                    "Native decode with one temporal latent is ambiguous; pass is_image=True for an image "
+                    "or is_image=False for a one-patch video."
+                )
+            is_image = temporal_patches == 1
+        if is_image and temporal_patches != 1:
+            raise ValueError(f"Image decode requires exactly one temporal latent, got {temporal_patches}.")
 
-        # Patch 0 is always a single-latent chunk — either the noncausal first
-        # frame (video) or the sole image latent. The first video frame was
-        # repeated across one temporal patch, so keep the last decoded frame.
-        # Images keep either the last frame for the deployed repeat contract or
-        # the first frame for sparse-compatible zero padding. For images
-        # temporal_patches == 1, so the loop below is empty.
         decoded_chunks: list[torch.Tensor] = []
-        decoded_first = self._decode_latent_chunk(latent[:, 0:1])  # [B, patch_time, H, W, C]
-        if is_image and self.image_temporal_padding == "zero":
-            decoded_chunks.append(decoded_first[:, :1])  # [B,1,H,W,C]
-        else:
+        first_regular_patch = 0
+        if is_image:
+            # Images keep either the last frame for the deployed repeat contract
+            # or the first frame for sparse-compatible zero padding.
+            decoded_first = self._decode_latent_chunk(latent[:, 0:1])  # [B,patch_time,H,W,C]
+            if self.image_temporal_padding == "zero":
+                decoded_chunks.append(decoded_first[:, :1])  # [B,1,H,W,C]
+            else:
+                decoded_chunks.append(decoded_first[:, -1:])  # [B,1,H,W,C]
+            first_regular_patch = 1
+        elif self.video_temporal_mode == "standalone_first_frame":
+            # The standalone source frame was repeated across one temporal
+            # patch, so retain one decoded frame before regular chunk decoding.
+            decoded_first = self._decode_latent_chunk(latent[:, 0:1])  # [B,patch_time,H,W,C]
             decoded_chunks.append(decoded_first[:, -1:])  # [B,1,H,W,C]
+            first_regular_patch = 1
 
-        for start_patch in range(1, temporal_patches, chunk_patch_frames):
+        for start_patch in range(first_regular_patch, temporal_patches, chunk_patch_frames):
             end_patch = min(start_patch + chunk_patch_frames, temporal_patches)
-            latent_chunk = latent[:, start_patch:end_patch]
-            decoded_chunk = self._decode_latent_chunk(latent_chunk)
+            latent_chunk = latent[:, start_patch:end_patch]  # [B,t_lat,Hp,Wp,C]
+            decoded_chunk = self._decode_latent_chunk(latent_chunk)  # [B,t_px,H,W,C]
             # Images have no boundary padding, so pixel trim only applies to video chunks.
             if trim_pixel and not is_image:
-                decoded_chunk = decoded_chunk[:, pad_frames:-pad_frames]
+                decoded_chunk = decoded_chunk[:, pad_frames:-pad_frames]  # [B,t_px-2*pad,H,W,C]
             decoded_chunks.append(decoded_chunk)
-        return cat_with_bounded_inputs(decoded_chunks, dim=1)
+        return cat_with_bounded_inputs(decoded_chunks, dim=1)  # [B,T,H,W,C]
 
     def _metadata_cache_key(
         self,
         module_name: str,
-        module: SparseTransformerBase,
         batch_size: int,
         temporal_patches: int,
         height_patches: int,
@@ -525,10 +580,6 @@ class DenseAutoencoderRuntime(nn.Module):
         dtype: torch.dtype,
     ) -> DenseGridMetadataKey:
         """Build a stable metadata-cache key for one dense grid shape."""
-        if isinstance(module.pos_embedder, LearnedPositionEmbedder):
-            position_embedding_pointer = module.pos_embedder.position_embedding.weight.data_ptr()
-        else:
-            position_embedding_pointer = -1
         return (
             module_name,
             int(batch_size),
@@ -537,7 +588,6 @@ class DenseAutoencoderRuntime(nn.Module):
             int(width_patches),
             str(device),
             str(dtype),
-            position_embedding_pointer,
         )
 
     def train(self, mode: bool = True) -> "DenseAutoencoderRuntime":
@@ -879,7 +929,6 @@ class DenseAutoencoderRuntime(nn.Module):
         """Fetch or create dense-grid metadata for one uniform chunk shape."""
         key = self._metadata_cache_key(
             module_name,
-            module,
             batch_size,
             temporal_patches,
             height_patches,
@@ -887,14 +936,18 @@ class DenseAutoencoderRuntime(nn.Module):
             device,
             dtype,
         )
+        has_learned_position = bool(
+            module.pe_mode in {"joint", "learned"} and isinstance(module.pos_embedder, LearnedPositionEmbedder)
+        )
         learned_position_requires_grad = bool(
-            module.pe_mode in {"joint", "learned"}
+            has_learned_position
             and isinstance(module.pos_embedder, LearnedPositionEmbedder)
             and module.pos_embedder.position_embedding.weight.requires_grad
         )
         # Trainable learned positions are cacheable only during eval without
-        # gradients. Entering either train or eval mode clears prior metadata,
-        # while the storage pointer above detects parameter replacement.
+        # gradients. Even there, cache only weight-independent metadata: public
+        # tensor APIs do not expose a mutation generation that can reliably
+        # detect in-place updates to a learned position table.
         cache_enabled = self.metadata_cache_max_entries > 0 and not (
             learned_position_requires_grad and (self.training or torch.is_grad_enabled())
         )
@@ -911,6 +964,17 @@ class DenseAutoencoderRuntime(nn.Module):
         cached = self._metadata_cache.get(key)
         if cached is not None:
             self._metadata_cache.move_to_end(key)
+            if has_learned_position:
+                return replace(
+                    cached,
+                    learned_pe=self._build_learned_position_embeddings(
+                        module,
+                        temporal_patches=temporal_patches,
+                        height_patches=height_patches,
+                        width_patches=width_patches,
+                        device=device,
+                    ),
+                )
             return cached
 
         metadata = self._build_grid_metadata(
@@ -921,7 +985,7 @@ class DenseAutoencoderRuntime(nn.Module):
             width_patches=width_patches,
             device=device,
         )
-        self._metadata_cache[key] = metadata
+        self._metadata_cache[key] = replace(metadata, learned_pe=None) if has_learned_position else metadata
         if len(self._metadata_cache) > self.metadata_cache_max_entries:
             self._metadata_cache.popitem(last=False)
         return metadata

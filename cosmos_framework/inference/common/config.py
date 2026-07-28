@@ -266,6 +266,16 @@ def _unstructure(obj: Any, prefix: tuple[Any, ...], options: _UnstructureOptions
 config_converter = cattrs.preconf.json.make_converter()
 
 
+# NoneType
+def _structure_none(data: Any, _cls: Any) -> None:
+    if data is not None:
+        raise TypeError(f"Expected None, got {type(data).__name__}")
+    return None
+
+
+config_converter.register_structure_hook(type(None), _structure_none)
+
+
 # type
 def _is_type_cls(cls: Any) -> bool:
     return cls in [type, abc.ABCMeta] or typing.get_origin(cls) is type

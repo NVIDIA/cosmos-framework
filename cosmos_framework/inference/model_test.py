@@ -50,6 +50,30 @@ def test_checkpoint_type_from_path_hf_index(tmp_path: Path):
     assert CheckpointType.from_path(tmp_path) == CheckpointType.HF
 
 
+def test_diffusers_weight_map_transformer_only(tmp_path: Path) -> None:
+    transformer_path = tmp_path / "transformer"
+    transformer_path.mkdir()
+    (tmp_path / "model_index.json").write_text("{}", encoding="utf-8")
+    (transformer_path / "config.json").write_text("{}", encoding="utf-8")
+    (transformer_path / "diffusion_pytorch_model.safetensors.index.json").write_text(
+        json.dumps(
+            {
+                "metadata": {},
+                "weight_map": {
+                    "proj_in.weight": "diffusion_pytorch_model-00001-of-00002.safetensors",
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    assert CheckpointType.from_path(tmp_path) == CheckpointType.HF
+    assert _is_diffusers_checkpoint(tmp_path)
+    assert _diffusers_weight_map(tmp_path) == {
+        "proj_in.weight": "transformer/diffusion_pytorch_model-00001-of-00002.safetensors",
+    }
+
+
 def test_normalize_diffusers_target_key():
     assert (
         _normalize_diffusers_target_key(

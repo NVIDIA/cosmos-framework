@@ -13,13 +13,11 @@ import torch
 from cosmos_framework.inference.common.args import DEFAULT_CONFIG_FILE
 from cosmos_framework.inference.common.config import (
     _is_type_cls,
-    apply_config_replacements,
     config_converter,
     deserialize_config,
     load_config,
     serialize_config,
     structure_config,
-    undo_config_replacements,
     unstructure_config,
 )
 from cosmos_framework.utils.flags import TRAINING
@@ -112,6 +110,11 @@ def test_config_converter():
         structured_config.list_config[i].x = 5
     assert structure_config(config_dict, Config) == structured_config
 
+
+def test_config_converter_handles_explicit_none_type() -> None:
+    assert config_converter.structure(None, type(None)) is None
+    with pytest.raises(TypeError, match="Expected None"):
+        config_converter.structure("not-none", type(None))
 
 
 if TRAINING:

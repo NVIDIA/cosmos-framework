@@ -104,7 +104,7 @@ class RotaryPositionEmbedder(nn.Module):
     Uses all 4 position dimensions (t, h, w, z) for proper 4D position encoding.
     """
 
-    def __init__(self, head_dim: int, pos_cls_token: int = 0):
+    def __init__(self, head_dim: int, pos_cls_token: int = 0) -> None:
         """Initialize RotaryPositionEmbedder.
 
         Args:
@@ -307,7 +307,7 @@ class SparseMultiHeadRMSNorm(nn.Module):
     Applies RMS normalization with per-head learnable scale parameters.
     """
 
-    def __init__(self, dim: int, heads: int):
+    def __init__(self, dim: int, heads: int) -> None:
         """Initialize SparseMultiHeadRMSNorm.
 
         Args:
@@ -373,7 +373,7 @@ class SparseMultiHeadAttention(nn.Module):
         qk_rms_norm: bool = False,
         out_channels: int | None = None,
         pos_cls_token: int = 0,
-    ):
+    ) -> None:
         """Initialize SparseMultiHeadAttention.
 
         Args:
@@ -526,14 +526,6 @@ class SparseMultiHeadAttention(nn.Module):
             x_feats = x
         x_feats = x_feats.reshape(*x_feats.shape[:2], num_fused, self.num_heads, -1)
         return x.replace(x_feats.squeeze(0)) if isinstance(x, SparseTensor) else x_feats
-
-    def _qkv_rope(self, qkv: "SparseTensor") -> "SparseTensor":
-        """Apply RoPE to packed QKV tensor."""
-        q, k, v = qkv.feats.unbind(dim=1)
-        freqs_cis = self.rope.get_cached_freqs_cis(qkv, qkv.coords[:, 1:])
-        q, k = self.rope.apply_rotary_emb(q, k, freqs_cis=freqs_cis, xk_freqs_cis=freqs_cis)
-        qkv = qkv.replace(torch.stack([q, k, v], dim=1))
-        return qkv
 
     def _q_kv_rope(
         self,

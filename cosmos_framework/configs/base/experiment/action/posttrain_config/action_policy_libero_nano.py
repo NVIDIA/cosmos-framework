@@ -6,7 +6,7 @@
 Feeds ``LIBEROLeRobotDataset`` (frame-wise-relative rot6d, ``quantile_rot``,
 concat_view third-person + wrist) and trains the generation + action heads from
 the public ``nvidia/Cosmos3-Nano`` base. Train on ``libero_10`` alone
-(``LIBERO_ROOT``). See docs/action_policy_libero_sft.md.
+(``LIBERO_ROOT``). See docs/action_policy_libero_posttrain.md.
 """
 
 import copy

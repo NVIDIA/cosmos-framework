@@ -35,10 +35,6 @@ import copy
 from hydra.core.config_store import ConfigStore
 
 from cosmos_framework.configs.base.experiment.sft.models.nano_model_config import NANO_MODEL_CONFIG
-from cosmos_framework.data.generator.joint_dataloader import (
-    PackingDataLoader,
-    RankPartitionedDataLoader,
-)
 from cosmos_framework.data.generator.dataflow import (
     CosmosDataLoader,
     IdentityProcessor,
@@ -46,11 +42,23 @@ from cosmos_framework.data.generator.dataflow import (
     SequentialPackingBatcher,
     VFMListCollator,
 )
+from cosmos_framework.data.generator.joint_dataloader import (
+    PackingDataLoader,
+    RankPartitionedDataLoader,
+)
 from cosmos_framework.data.generator.local_datasets.sft_dataset import get_sft_dataset
 from cosmos_framework.utils.lazy_config import LazyCall as L
 from cosmos_framework.utils.lazy_config import LazyDict
 
 cs = ConfigStore.instance()
+
+# Vision SFT trains no action tokens, so drop the action head (recipe semantics,
+# matching vision_sft_edge). Unlike Edge, the Nano checkpoint ships real
+# (DROID-trained) action weights; with action_gen=False they are no longer carried
+# through vision-SFT'd checkpoints or exports — start from the base checkpoint /
+# action-policy recipes if you need them.
+_NANO_VISION_MODEL_CONFIG = copy.deepcopy(NANO_MODEL_CONFIG)
+_NANO_VISION_MODEL_CONFIG["action_gen"] = False
 
 
 vision_sft_nano = LazyDict(
@@ -89,7 +97,7 @@ vision_sft_nano = LazyDict(
             wandb_mode="disabled",
         ),
         model=dict(
-            config=copy.deepcopy(NANO_MODEL_CONFIG),
+            config=copy.deepcopy(_NANO_VISION_MODEL_CONFIG),
         ),
         optimizer=dict(
             betas=[0.9, 0.95],

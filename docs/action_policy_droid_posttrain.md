@@ -1,8 +1,8 @@
-# Cosmos3-Nano-Policy-DROID Post-Training
+# Cosmos3 DROID Action-Policy Post-Training
 
-[Cosmos3-Nano-Policy-DROID](https://huggingface.co/nvidia/Cosmos3-Nano-Policy-DROID) is an action policy model post-trained from [Cosmos3-Nano](https://huggingface.co/nvidia/Cosmos3-Nano), a 16B Mixture-of-Transformers model, on the [Cosmos3-DROID](https://huggingface.co/datasets/nvidia/Cosmos3-DROID) dataset. The model predicts absolute joint-position actions conditioned on proprioceptive state and video observations at a resolution of 480p (`640×360`). This example reproduces the post-training procedure used to train the model.
+This example post-trains [Cosmos3-Nano](https://huggingface.co/nvidia/Cosmos3-Nano) into a DROID action policy on the [Cosmos3-DROID](https://huggingface.co/datasets/nvidia/Cosmos3-DROID) dataset, reproducing [Cosmos3-Nano-Policy-DROID](https://huggingface.co/nvidia/Cosmos3-Nano-Policy-DROID). The model predicts absolute joint-position actions conditioned on proprioceptive state and video observations at a resolution of 480p (`640×360`). Experiment `action_policy_droid_nano`, launcher `launch_sft_action_policy_droid_nano.sh`.
 
-Two external inputs are required: (1) a pre-downloaded Cosmos3-DROID dataset in LeRobotDataset v3.0 format, and (2) a DCP base checkpoint converted from Cosmos3-Nano.
+Two external inputs are required: (1) a pre-downloaded Cosmos3-DROID dataset in LeRobotDataset v3.0 format, and (2) a DCP base checkpoint converted from the chosen base model (Cosmos3-Nano or Cosmos3-Edge).
 
 The recipe runs multi-node via HSDP (single node / 8 GPUs and beyond).
 
@@ -32,14 +32,15 @@ The runnable artifacts (TOML recipe, paired launch shell) live in [`examples/`](
 
 ## Inputs You Provide
 
-This package ships the training stack — the registered `action_policy_droid_nano` experiment,
-the DROID action dataset class with the recipe knobs (`action_space=joint_pos`, `use_state`,
-`concat_view`), and the EMA warm-start in `checkpoint/dcp.py`. Two inputs are external and must
-be provided per environment:
+This package ships the training stack — the registered `action_policy_droid_nano`
+experiment, the DROID action dataset class with the recipe knobs
+(`action_space=joint_pos`, `use_state`, `concat_view`), and the EMA warm-start in
+`checkpoint/dcp.py`. Two inputs are external and must be provided per environment:
 
 1. **[Cosmos3-DROID](https://huggingface.co/datasets/nvidia/Cosmos3-DROID) dataset (in LeRobotDataset v3.0 format)** — pre-download the
-   dataset and point `DROID_ROOT` at the resulting `…/Cosmos3-DROID/success` directory (must
-   contain `meta/info.json`).
+   dataset into a directory named `droid_plus_lerobot_640x360_20260412` (the loader resolves the
+   dataset schema from the directory name) and point `DROID_ROOT` at that directory — the parent
+   containing `success/`, not `.../success` itself.
 2. **DCP base checkpoint** — convert [Cosmos3-Nano](https://huggingface.co/nvidia/Cosmos3-Nano) to DCP and point
    `BASE_CHECKPOINT_PATH` at it (see [Full Reproduction](#full-reproduction)). Action heads are
    not loaded from it (they init fresh).
@@ -67,7 +68,12 @@ be provided per environment:
 The OSS flow mirrors the other recipes (see [docs/training.md](./training.md)):
 
 ```shell
-# Step 1: prepare Cosmos3-DROID success split -> $DATASET_PATH (see "Inputs You Provide")
+# Step 1: download Cosmos3-DROID into a directory named droid_plus_lerobot_640x360_20260412
+# (the loader resolves the dataset schema from the directory name), then point
+# DATASET_PATH at that parent directory — the one containing success/, not .../success.
+hf download nvidia/Cosmos3-DROID --repo-type dataset \
+  --local-dir /path/to/droid_plus_lerobot_640x360_20260412
+export DATASET_PATH=/path/to/droid_plus_lerobot_640x360_20260412
 
 # Step 2: convert the base checkpoint -> $BASE_CHECKPOINT_PATH
 python -m cosmos_framework.scripts.convert_model_to_dcp \
@@ -76,24 +82,27 @@ python -m cosmos_framework.scripts.convert_model_to_dcp \
 
 # Step 3: download the keep_ranges_1_0_1.json window filter (drops idle/non-task frames -> trains
 # the curated ~74% window set, matching the released model).
+export FILTER_DIR=/path/to/droid_filters
 hf download KarlP/droid keep_ranges_1_0_1.json --local-dir $FILTER_DIR
 
 # Step 4: launch. The TOML selects the experiment + scalars; the dataset/action
 # knobs come from the registered experiment.
-export DATASET_PATH=/path/to/dataset/success
 export BASE_CHECKPOINT_PATH=/path/to/base_checkpoint
 export WAN_VAE_PATH=/path/to/Wan2.2_VAE.pth
 export NPROC_PER_NODE=8
 # Enable the keep_ranges_1_0_1.json filter via EXTRA_TAIL_OVERRIDES (space-separated Hydra
-# overrides; an exported string survives `bash <wrapper>`).
+# overrides; an exported string survives `bash <wrapper>`). $FILTER_DIR is expanded HERE,
+# at export time — it must already be set in this shell, or filter_dict_path silently
+# becomes /keep_ranges_1_0_1.json and the dataset fails with FileNotFoundError.
+: "${FILTER_DIR:?set FILTER_DIR (Step 3) before composing EXTRA_TAIL_OVERRIDES}"
 export EXTRA_TAIL_OVERRIDES=" \
   dataloader_train.dataloader.datasets.droid.dataset.use_filter_dict=True \
   dataloader_train.dataloader.datasets.droid.dataset.filter_dict_path=$FILTER_DIR/keep_ranges_1_0_1.json \
 "
-bash examples/launch_sft_action_policy_droid.sh
+bash examples/launch_sft_action_policy_droid_nano.sh
 ```
 
-The recipe TOML ([`examples/toml/sft_config/action_policy_droid_repro.toml`](../examples/toml/sft_config/action_policy_droid_repro.toml)) sets the scalar
+The recipe TOML ([`action_policy_droid_nano.toml`](../examples/toml/sft_config/action_policy_droid_nano.toml)) sets the scalar
 knobs (`max_iter`, `save_iter`, `grad_clip`, parallelism, wandb); the dataset/action knobs
 (`joint_pos`, `use_state`, `concat_view`, 480p, chunk 32, count-based batch) live in the
 registered `action_policy_droid_nano` experiment per the schema's design. For multi-node HSDP,

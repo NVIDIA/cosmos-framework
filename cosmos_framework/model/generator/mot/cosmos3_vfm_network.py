@@ -15,7 +15,7 @@ from cosmos_framework.model.generator.mot.context_parallel_utils import (
     get_context_parallel_sharded_sequence,
 )
 from cosmos_framework.model.generator.mot.domain_aware_linear import DomainAwareLinear
-from cosmos_framework.model.generator.mot.modeling_utils import TimestepEmbedder
+from cosmos_framework.model.generator.mot.modeling_utils import TimestepEmbedder, has_noisy_tokens
 from cosmos_framework.model.generator.utils.memory import MemoryState
 from cosmos_framework.data.generator.sequence_packing import ModalityData, PackedSequence
 from cosmos_framework.data.generator.sequence_packing.natten import verify_natten_parameter_list
@@ -53,6 +53,7 @@ class Cosmos3VFMNetworkConfig(PretrainedConfig):
         sound_dim: int | None = None,
         temporal_compression_factor_sound=1,
         sound_latent_fps: int = 25,
+        enable_input_bias: bool = True,
         **kwargs,
     ):
         self.vision_gen = vision_gen
@@ -76,6 +77,7 @@ class Cosmos3VFMNetworkConfig(PretrainedConfig):
         self.temporal_compression_factor_vision = temporal_compression_factor_vision
         self.natten_parameter_list = natten_parameter_list
         self.video_temporal_causal = video_temporal_causal
+        self.enable_input_bias = enable_input_bias
 
         # action related parameters
         self.action_gen = action_gen  # whether to generate action tokens
@@ -144,8 +146,9 @@ class Cosmos3VFMNetwork(PreTrainedModel):
             self.latent_channel = config.latent_channel_size
             self.patch_latent_dim = self.latent_patch_size**2 * self.latent_channel
 
-            self.time_embedder = TimestepEmbedder(self.hidden_size)
-            self.vae2llm = nn.Linear(self.patch_latent_dim, self.hidden_size)
+            _input_bias = config.enable_input_bias
+            self.time_embedder = TimestepEmbedder(self.hidden_size, bias=_input_bias)
+            self.vae2llm = nn.Linear(self.patch_latent_dim, self.hidden_size, bias=_input_bias)
             self.llm2vae = nn.Linear(self.hidden_size, self.patch_latent_dim)
 
         if config.action_gen:
@@ -158,7 +161,7 @@ class Cosmos3VFMNetwork(PreTrainedModel):
 
         if config.sound_gen:
             self.sound_dim = config.sound_dim
-            self.sound2llm = nn.Linear(config.sound_dim, self.hidden_size)
+            self.sound2llm = nn.Linear(config.sound_dim, self.hidden_size, bias=config.enable_input_bias)
             self.llm2sound = nn.Linear(self.hidden_size, config.sound_dim)
             self.sound_modality_embed = nn.Parameter(torch.zeros(self.hidden_size))
 
@@ -172,7 +175,8 @@ class Cosmos3VFMNetwork(PreTrainedModel):
         if self.config.vision_gen:
             std = 1.0 / math.sqrt(self.patch_latent_dim)
             torch.nn.init.trunc_normal_(self.vae2llm.weight, std=std, a=-3 * std, b=3 * std)
-            torch.nn.init.zeros_(self.vae2llm.bias)
+            if self.config.enable_input_bias:
+                torch.nn.init.zeros_(self.vae2llm.bias)
 
             std = 1.0 / math.sqrt(self.hidden_size)
             torch.nn.init.trunc_normal_(self.llm2vae.weight, std=std, a=-3 * std, b=3 * std)
@@ -197,7 +201,8 @@ class Cosmos3VFMNetwork(PreTrainedModel):
             # sound2llm: input_size=sound_dim, output_size=hidden_size
             std = 1.0 / math.sqrt(self.sound_dim)
             torch.nn.init.trunc_normal_(self.sound2llm.weight, std=std, a=-3 * std, b=3 * std)
-            torch.nn.init.zeros_(self.sound2llm.bias)
+            if self.config.enable_input_bias:
+                torch.nn.init.zeros_(self.sound2llm.bias)
 
             # llm2sound: input_size=hidden_size, output_size=sound_dim
             std = 1.0 / math.sqrt(self.hidden_size)
@@ -546,6 +551,19 @@ class Cosmos3VFMNetwork(PreTrainedModel):
         )
         return packed_sequence, packed_text_embedding.dtype
 
+    def _embed_packed_timesteps(self, timesteps: torch.Tensor, packed_seq: PackedSequence) -> torch.Tensor:
+        """Embed noised-token timesteps, reusing work when packing proves they share one scalar."""
+        if packed_seq.uses_single_timestep and timesteps.numel() > 1:
+            timestep = timesteps[:1]  # [1]
+            with torch.autocast("cuda", enabled=True, dtype=torch.float32):
+                timestep_embed = self.time_embedder(timestep)  # [1,hidden_size]
+            # Materialize: expand() aliases storage; in-place ops on a float32 no-op .to() would corrupt all rows.
+            return timestep_embed.expand(timesteps.shape[0], -1).contiguous()  # [N_noisy_frames,hidden_size]
+
+        # Timesteps are computed in FP32 for numerical stability.
+        with torch.autocast("cuda", enabled=True, dtype=torch.float32):
+            return self.time_embedder(timesteps)  # [N_noisy_frames,hidden_size]
+
     def _encode_vision(
         self,
         packed_seq: PackedSequence,
@@ -588,11 +606,9 @@ class Cosmos3VFMNetwork(PreTrainedModel):
         if has_noisy_vision:
             timesteps_vision = vision.timesteps.to(dtype=torch.float32) * self.timestep_scale  # [N_noisy_frames_vision]
 
-            # Timesteps are computed in FP32 for numerical stability.
-            with torch.autocast("cuda", enabled=True, dtype=torch.float32):
-                packed_timestep_embeds_vision = self.time_embedder(
-                    timesteps_vision
-                )  # [N_noisy_frames_vision,hidden_size]
+            packed_timestep_embeds_vision = self._embed_packed_timesteps(
+                timesteps_vision, packed_seq
+            )  # [N_noisy_frames_vision,hidden_size]
             packed_timestep_embeds_vision = packed_timestep_embeds_vision.to(
                 target_dtype
             )  # [N_noisy_frames_vision,hidden_size]
@@ -697,13 +713,12 @@ class Cosmos3VFMNetwork(PreTrainedModel):
             1, -1
         )  # [B_action*T_action,hidden_size]
 
-        has_noisy_actions = action.mse_loss_indexes.numel() > 0
+        has_noisy_actions = has_noisy_tokens(action)
         if has_noisy_actions:
             timesteps_action = action.timesteps * self.timestep_scale  # [N_noisy_frames_action]
-            with torch.autocast("cuda", enabled=True, dtype=torch.float32):
-                packed_timestep_embeds_action = self.time_embedder(
-                    timesteps_action
-                )  # [N_noisy_frames_action,hidden_size]
+            packed_timestep_embeds_action = self._embed_packed_timesteps(
+                timesteps_action, packed_seq
+            )  # [N_noisy_frames_action,hidden_size]
             packed_timestep_embeds_action = packed_timestep_embeds_action.to(
                 target_dtype
             )  # [N_noisy_frames_action,hidden_size]
@@ -727,13 +742,9 @@ class Cosmos3VFMNetwork(PreTrainedModel):
     ) -> None:
         """Decode action tokens from hidden states and update output_dict."""
         action = packed_seq.action
-        # Check if no action or no noisy action tokens
-        has_noisy_action = (
-            action is not None
-            and action.tokens is not None
-            and isinstance(action.mse_loss_indexes, torch.Tensor)
-            and action.mse_loss_indexes.numel() > 0
-        )
+        # Shared predicate with OmniMoTModel's has_noisy_actions gating: actions
+        # are decodable targets only when the packer marked action tokens noisy.
+        has_noisy_action = has_noisy_tokens(action)
         if not has_noisy_action:
             # dummy forward to maintain computation graph consistency across ranks
             preds_action = torch.zeros(
@@ -816,8 +827,9 @@ class Cosmos3VFMNetwork(PreTrainedModel):
         has_noisy_sound = sound.mse_loss_indexes.numel() > 0
         if has_noisy_sound:
             timesteps_sound = sound.timesteps * self.timestep_scale  # [N_noisy_frames_sound]
-            with torch.autocast("cuda", enabled=True, dtype=torch.float32):
-                packed_timestep_embeds_sound = self.time_embedder(timesteps_sound)  # [N_noisy_frames_sound,hidden_size]
+            packed_timestep_embeds_sound = self._embed_packed_timesteps(
+                timesteps_sound, packed_seq
+            )  # [N_noisy_frames_sound,hidden_size]
             packed_timestep_embeds_sound = packed_timestep_embeds_sound.to(
                 target_dtype
             )  # [N_noisy_frames_sound,hidden_size]
@@ -883,6 +895,7 @@ class Cosmos3VFMNetwork(PreTrainedModel):
         self,
         packed_seq: PackedSequence,
         memory: MemoryState | None = None,
+        video_temporal_causal: bool | None = None,
     ) -> dict:
         """
         Forward pass for Cosmos3VFMNetwork.
@@ -893,6 +906,8 @@ class Cosmos3VFMNetwork(PreTrainedModel):
             memory: Optional MemoryState for persistent KV-cache memory
                 (AR inference or rolling-KV-cache training).  Built by
                 ``OmniMoTModel.build_memory_state()``.
+            video_temporal_causal: Per-call attention-mode override; ``None``
+                (default) uses the config-selected ``self.video_temporal_causal``.
 
         Returns:
             dict with keys:
@@ -924,6 +939,9 @@ class Cosmos3VFMNetwork(PreTrainedModel):
 
         assert packed_seq.attn_modes is not None
         assert packed_seq.split_lens is not None
+        use_video_temporal_causal = (
+            self.video_temporal_causal if video_temporal_causal is None else video_temporal_causal
+        )
 
         # Get all generation sequence indexes for MoE routing
         # IMPORTANT: Include ALL latent tokens (video + action + sound), not just generation targets.
@@ -988,7 +1006,7 @@ class Cosmos3VFMNetwork(PreTrainedModel):
             token_shapes=packed_seq.vision.token_shapes,
             natten_parameter_list=self.natten_parameter_list,
             cp_world_size=sequence_shard_world_size,
-            video_temporal_causal=self.video_temporal_causal,
+            video_temporal_causal=use_video_temporal_causal,
             skip_natten_metadata=memory is not None and not memory.requires_natten_metadata(),
             vision_token_shapes=vision_token_shapes,
             action_token_shapes=packed_seq.action.token_shapes if packed_seq.action else None,

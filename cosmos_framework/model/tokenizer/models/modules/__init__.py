@@ -14,8 +14,40 @@ from __future__ import annotations
 
 import importlib
 import os
+from typing import TYPE_CHECKING, Any
 
 from loguru import logger as logging
+
+if TYPE_CHECKING:
+    from cosmos_framework.model.tokenizer.models.modules.quantizers.fsq import FSQ as FSQ
+    from cosmos_framework.model.tokenizer.models.modules.quantizers.fsq import (
+        levels_from_codebook_size as levels_from_codebook_size,
+    )
+    from cosmos_framework.model.tokenizer.models.modules.quantizers.lfq import LFQ as LFQ
+    from cosmos_framework.model.tokenizer.models.modules.quantizers.lfq import LossBreakdown as LossBreakdown
+    from cosmos_framework.model.tokenizer.models.modules.quantizers.residual_vq import RQBottleneck as RQBottleneck
+    from cosmos_framework.model.tokenizer.models.modules.quantizers.residual_vq import VQEmbedding as VQEmbedding
+    from cosmos_framework.model.tokenizer.models.modules.sparse_ops import LayerNorm32 as LayerNorm32
+    from cosmos_framework.model.tokenizer.models.modules.sparse_ops import RMSNorm32 as RMSNorm32
+    from cosmos_framework.model.tokenizer.models.modules.sparse_ops import SparseLinear as SparseLinear
+    from cosmos_framework.model.tokenizer.models.modules.sparse_tensor import SparseTensor as SparseTensor
+    from cosmos_framework.model.tokenizer.models.modules.sparse_tensor import sparse_cat as sparse_cat
+    from cosmos_framework.model.tokenizer.models.modules.sparse_tensor import sparse_unbind as sparse_unbind
+    from cosmos_framework.model.tokenizer.models.modules.transformer.blocks import (
+        AbsolutePositionEmbedder as AbsolutePositionEmbedder,
+    )
+    from cosmos_framework.model.tokenizer.models.modules.transformer.blocks import (
+        LearnedPositionEmbedder as LearnedPositionEmbedder,
+    )
+    from cosmos_framework.model.tokenizer.models.modules.transformer.blocks import (
+        LearnedPositionEmbedder4D as LearnedPositionEmbedder4D,
+    )
+    from cosmos_framework.model.tokenizer.models.modules.transformer.blocks import (
+        SparseMultiheadAttentionPoolingHead as SparseMultiheadAttentionPoolingHead,
+    )
+    from cosmos_framework.model.tokenizer.models.modules.transformer.blocks import (
+        SparseTransformerBlock as SparseTransformerBlock,
+    )
 
 # Backend configuration
 BACKEND: str = "pytorch"
@@ -104,6 +136,9 @@ _ATTRIBUTES = {
     "SparseFeedForwardNet": "transformer.blocks",
     "SparseMultiheadAttentionPoolingHead": "transformer.blocks",
     "SparseTransformerBlock": "transformer.blocks",
+    "SPARSE_TRANSFORMER_CHECKPOINT_SCOPE_FULL_LAYER": "transformer.blocks",
+    "SPARSE_TRANSFORMER_CHECKPOINT_SCOPE_MLP_ONLY": "transformer.blocks",
+    "SPARSE_TRANSFORMER_CHECKPOINT_SCOPES": "transformer.blocks",
     "ModulatedSparseTransformerBlock": "transformer.modulated",
     "ModulatedSparseTransformerCrossBlock": "transformer.modulated",
 }
@@ -111,7 +146,7 @@ _ATTRIBUTES = {
 __all__ = list(_ATTRIBUTES.keys())
 
 
-def __getattr__(name: str):
+def __getattr__(name: str) -> Any:
     """Lazy import of module attributes."""
     if name not in globals():
         if name in _ATTRIBUTES:
