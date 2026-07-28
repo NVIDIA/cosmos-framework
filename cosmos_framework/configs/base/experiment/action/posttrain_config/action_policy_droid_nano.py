@@ -172,12 +172,12 @@ action_policy_droid_nano = LazyDict(
             tokenizer_spatial_compression_factor=16,
             tokenizer_temporal_compression_factor=4,
             dataloader=L(RankPartitionedDataLoader)(
-                batch_size=1,
+                batch_size=16,
                 in_order=False,
-                num_workers=4,
+                num_workers=16,  # host-CPU-bound; lower via CLI on smaller hosts
                 persistent_workers=True,
                 pin_memory=True,
-                prefetch_factor=4,
+                prefetch_factor=2,
                 sampler=None,
                 # Shuffling is handled by the dataset (iterable_shuffle=True below):
                 # ActionIterableShuffleDataset streams rank x worker-sharded, episode-order-
