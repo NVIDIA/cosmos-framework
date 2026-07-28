@@ -741,7 +741,7 @@ class BaseActionLeRobotDataset(Dataset):
     def _choose_mode(self) -> str:
         """Resolve the active mode for one sample request."""
         if self._mode == "joint":
-            return random.choice(("forward_dynamics", "inverse_dynamics", "policy"))
+            return random.choice(("forward_dynamics", "inverse_dynamics", "wam"))
         return self._mode
 
     def _fetch_sample(self, idx: int) -> tuple[str, int, int, dict[str, Any]]:

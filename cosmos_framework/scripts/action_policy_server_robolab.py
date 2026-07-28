@@ -561,7 +561,7 @@ class RobolabPolicyService:
             "video": video,
             "action": action,
             "conditioning_fps": torch.tensor(self.cfg.conditioning_fps, dtype=torch.long),  # []
-            "mode": "policy",
+            "mode": "wam",
             "domain_id": torch.tensor(get_domain_id(self.cfg.domain_name), dtype=torch.long),  # []
             "viewpoint": "concat_view",
             "additional_view_description": _CONCAT_VIEW_DESCRIPTION,

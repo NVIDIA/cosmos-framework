@@ -165,7 +165,7 @@ class ModelMode(StrEnum):
     # Action
     FORWARD_DYNAMICS = "forward_dynamics"
     INVERSE_DYNAMICS = "inverse_dynamics"
-    POLICY = "policy"
+    WAM = "wam"
 
     REASONER = "reasoner"
 
@@ -187,7 +187,7 @@ _IMAGE_OUTPUT_MODES: frozenset[ModelMode] = frozenset({ModelMode.TEXT2IMAGE, Mod
 
 # Modes that produce action tensors and require a model with ``action_gen=True``.
 ACTION_MODEL_MODES: frozenset[ModelMode] = frozenset(
-    {ModelMode.FORWARD_DYNAMICS, ModelMode.INVERSE_DYNAMICS, ModelMode.POLICY}
+    {ModelMode.FORWARD_DYNAMICS, ModelMode.INVERSE_DYNAMICS, ModelMode.WAM}
 )
 
 REASONER_MODEL_MODES: frozenset[ModelMode] = frozenset({ModelMode.REASONER})
@@ -621,7 +621,7 @@ class ActionDataOverrides(OverridesBase):
             case ModelMode.FORWARD_DYNAMICS:
                 if self.action_path is None:
                     raise ValueError(f"'action_path' is required for model_mode={mode.value!r}")
-            case ModelMode.INVERSE_DYNAMICS | ModelMode.POLICY:
+            case ModelMode.INVERSE_DYNAMICS | ModelMode.WAM:
                 pass
             case _:
                 assert_never(mode)

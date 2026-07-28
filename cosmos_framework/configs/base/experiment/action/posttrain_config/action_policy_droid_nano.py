@@ -197,7 +197,7 @@ action_policy_droid_nano = LazyDict(
                             # Policy-only task mode. "joint" would randomly pick
                             # forward_dynamics/inverse_dynamics/policy per sample (multi-task),
                             # which dilutes each per-task loss by ~1/3.
-                            mode="policy",
+                            mode="wam",
                             use_state=True,
                             iterable_shuffle=True,  # rank x worker episode-shuffle stream
                             episode_shuffle_seed=42,
