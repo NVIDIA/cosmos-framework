@@ -150,6 +150,8 @@ def _hf_download(cmd_args: list[str]) -> str:
         "uvx",
         "--with",
         "click",
+        "--with",
+        "tqdm<4.70",
         f"hf@{HF_VERSION}",
         "download",
         "--format=json",
