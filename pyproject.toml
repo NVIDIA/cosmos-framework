@@ -237,11 +237,9 @@ cu130-train = [
 cu130-torch213 = [
   #"flash-attn-3-nv==1.0.3+cu130.torch210; platform_machine == 'x86_64'", # TODO: torch213 build (cu130.torch210 wheels are cp313-only + torch210 ABI)
   #"flash-attn==2.7.4.post1+cu130.torch210; platform_machine == 'x86_64'", # TODO: torch213 build (cu130.torch210 wheels are cp313-only + torch210 ABI)
-  # aarch64: torch2.13 build (natten 0.21.6, sm 80/86/89/90/100/103/110/120/121) — matches this group's torch/ABI.
-  # x86_64: no torch2.13 wheel yet; still the torch2.10 gb300 build (won't load on torch 2.13). TODO: build x86_64 torch213.
-  "natten==0.21.6+cu130.torch213; platform_machine == 'aarch64'",
-  # TODO X86
-  "natten==0.21.6.dev6+cu130.torch210.gb300; platform_machine == 'x86_64'",
+  # torch2.13 build (natten 0.21.6, sm 80/86/89/90/100/103/110/120/121) — matches this group's torch/ABI.
+  # Both arches now ship a torch213 wheel, so no platform split is needed.
+  "natten==0.21.6+cu130.torch213",
   "torch==2.13.0+cu130",
   "torchcodec==0.14.0+cu130", # https://github.com/meta-pytorch/torchcodec/releases
   "torchvision==0.28.0+cu130", # TODO: release matching torch 2.13 — https://github.com/pytorch/vision/releases
