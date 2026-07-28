@@ -393,8 +393,10 @@ class Profiling:
     enable_memory_snapshot: bool = False
     save_s3: bool = False
     profile_freq: int = 1
-    # Number of warmup iterations before the active profile iteration.
+    # Number of warmup iterations before the active profile iterations.
     profile_warmup: int = 3
+    # Number of consecutive active iterations to capture in one trace.
+    profile_active: int = 1
     # Target ranks for profiling, each entry must be >=0 and < world_size.
     target_ranks: list[int] = list(range(8))
     # The options below apply only to the torch profiler (enable_profiling).

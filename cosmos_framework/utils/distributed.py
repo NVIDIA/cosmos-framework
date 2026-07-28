@@ -19,8 +19,8 @@ import torch
 import torch.distributed as dist
 from torch.distributed import get_process_group_ranks
 
-from cosmos_framework.utils.device import Device
 from cosmos_framework.utils.flags import INTERNAL
+from cosmos_framework.utils.device import Device
 
 if dist.is_available():
     from torch.distributed.distributed_c10d import _get_default_group

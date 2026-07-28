@@ -12,6 +12,7 @@ from cosmos_framework.inference.common.distillation_export import (
 )
 
 
+
 def test_sanitize_student_model_config_removes_distillation_state() -> None:
     fixed_step_sampler_config = {
         "sample_type": "ode",
@@ -93,7 +94,7 @@ def test_sanitize_student_public_model_config_removes_internal_loaders() -> None
                 },
                 "tokenizer": {
                     "_target_": (
-                        "cosmos_framework.configs.base.experiment.distillation_implementation."
+                        "projects.cosmos3.interactive.configs.distillation_implementation."
                         "_create_oss_tokenizer_with_internal_download"
                     ),
                     "config_variant": "gcp",

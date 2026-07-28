@@ -990,7 +990,7 @@ class OmniMoTModel(ImaginaireModel):
 
         # For image editing (multi-item vision), expand per-sample timesteps/sigmas to
         # per-vision-item so downstream noise/loss indexing matches the flat x0_tokens_vision
-        # list. No-op when num_vision_items_per_sample is None (standard T2I/T2V/policy cases).
+        # list. No-op when num_vision_items_per_sample is None (standard T2I/T2V/WAM cases).
         # Conditioning items get sigma=0 via their condition_mask, so the actual timestep value
         # for them does not matter.
         timesteps_vision = _expand_per_sample_to_per_vision_item(
@@ -1790,7 +1790,7 @@ class OmniMoTModel(ImaginaireModel):
         # 2. Get data and condition (same as training)
         # This encodes vision to x0_tokens. Pass each sample's vision conditioning
         # frame indexes so a causal tokenizer can skip encoding pixel frames that only
-        # feed generated (non-conditioned) latent positions (e.g. policy /
+        # feed generated (non-conditioned) latent positions (e.g. WAM /
         # forward-dynamics condition latent frame 0 only, so only the first pixel frame
         # is encoded instead of the whole clip).
         vision_condition_indexes = [plan.condition_frame_indexes_vision for plan in sequence_plans]
@@ -1857,7 +1857,7 @@ class OmniMoTModel(ImaginaireModel):
         # 6. Initialize action noise if action_gen is True
         has_action = self.config.action_gen and any(plan.has_action for plan in sequence_plans)
         # Actions are denoising targets only when the packer marked action tokens
-        # as noisy/supervised (policy / inverse dynamics leave predicted steps
+        # as noisy/supervised (WAM / inverse dynamics leave predicted steps
         # un-conditioned). Forward-dynamics plans and the temporal-causal packer
         # emit all-conditioning action tokens (actions are pure inputs), so there
         # is nothing to denoise — the network's _decode_action returns dummy zero
@@ -2544,7 +2544,7 @@ class OmniMoTModel(ImaginaireModel):
                 - "vision": List of vision latent tensors (one per sample, variable shapes)
                 - "action": List of external-space action tensors
                   (only present when the packed sequence marks action tokens as
-                  denoising targets, i.e. policy / inverse dynamics. Plans whose
+                  denoising targets, i.e. WAM / inverse dynamics. Plans whose
                   actions are pure conditioning — forward dynamics, temporal-causal
                   action conditioning — generate no actions and return no key)
 
@@ -3074,7 +3074,7 @@ class OmniMoTModel(ImaginaireModel):
         Returns:
             Sliced GenerationDataClean.
         """
-        # x0_tokens_action can be an empty list (e.g. image2video mode), not just None
+        # x0_tokens_action can be an empty list for general-video samples, not just None.
         has_action = bool(gen_data_clean.x0_tokens_action)
         has_sound = bool(gen_data_clean.x0_tokens_sound)
 
@@ -3266,7 +3266,7 @@ class OmniMoTModel(ImaginaireModel):
         blend discards, so they are zero-filled instead of encoded. Under a causal VAE
         the kept latents are identical to the corresponding frames of a full-clip
         encode, while the encode processes far fewer frames (e.g. 1 pixel frame instead
-        of the full clip for policy / forward-dynamics modes that only condition latent
+        of the full clip for WAM / forward-dynamics modes that only condition latent
         frame 0). Inverse-dynamics conditions every latent frame, so it keeps the full
         encode automatically.
 
