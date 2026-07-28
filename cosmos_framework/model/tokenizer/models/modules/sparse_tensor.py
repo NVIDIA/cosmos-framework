@@ -11,7 +11,8 @@ with support for both torchsparse and spconv backends.
 # pylint: skip-file
 from __future__ import annotations
 
-from typing import overload
+from collections.abc import Callable
+from typing import Any, overload
 
 import numpy as np
 import torch
@@ -48,18 +49,15 @@ class PureTorchSparseTensor:
         self,
         feats: torch.Tensor,
         coords: torch.Tensor,
-        spatial_shape=None,
-        batch_size=None,
-        **kwargs,
-    ):
+        spatial_shape: list[int] | tuple[int, ...] | None = None,
+        batch_size: int | None = None,
+        **_kwargs: object,
+    ) -> None:
         # Store features and coordinates directly
         self._feats = feats
         self._coords = coords
         self._spatial_shape = spatial_shape
         self._batch_size = batch_size
-
-        # Store any extra kwargs for compatibility
-        self._kwargs = kwargs
 
     # torchsparse-style accessors
     @property
@@ -68,7 +66,7 @@ class PureTorchSparseTensor:
         return self._feats
 
     @F.setter
-    def F(self, value: torch.Tensor):
+    def F(self, value: torch.Tensor) -> None:
         self._feats = value
 
     @property
@@ -77,7 +75,7 @@ class PureTorchSparseTensor:
         return self._coords
 
     @C.setter
-    def C(self, value: torch.Tensor):
+    def C(self, value: torch.Tensor) -> None:
         self._coords = value
 
     # spconv-style accessors
@@ -87,7 +85,7 @@ class PureTorchSparseTensor:
         return self._feats
 
     @features.setter
-    def features(self, value: torch.Tensor):
+    def features(self, value: torch.Tensor) -> None:
         self._feats = value
 
     @property
@@ -96,16 +94,16 @@ class PureTorchSparseTensor:
         return self._coords
 
     @indices.setter
-    def indices(self, value: torch.Tensor):
+    def indices(self, value: torch.Tensor) -> None:
         self._coords = value
 
     @property
-    def spatial_shape(self):
+    def spatial_shape(self) -> list[int] | tuple[int, ...] | None:
         """Spatial shape (spconv compatibility)."""
         return self._spatial_shape
 
     @property
-    def batch_size(self):
+    def batch_size(self) -> int | None:
         """Batch size (spconv compatibility)."""
         return self._batch_size
 
@@ -188,19 +186,19 @@ class SparseTensor:
         coords: torch.Tensor,
         shape: torch.Size | None = None,
         layout: list[slice] | None = None,
-        **kwargs,
-    ): ...
+        **kwargs: Any,
+    ) -> None: ...
 
     @overload
     def __init__(
         self,
-        data,
+        data: Any,
         shape: torch.Size | None = None,
         layout: list[slice] | None = None,
-        **kwargs,
-    ): ...
+        **kwargs: Any,
+    ) -> None: ...
 
-    def __init__(self, *args, **kwargs):
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
         # Lazy import of sparse tensor backend
         global SparseTensorData
         if SparseTensorData is None:
@@ -357,7 +355,7 @@ class SparseTensor:
                 print(f"- Feats shape: {self.feats.shape}")
                 raise e
 
-    def __cal_shape(self, feats, coords):
+    def __cal_shape(self, feats: torch.Tensor, coords: torch.Tensor) -> torch.Size:
         shape = []
 
         # Handle empty tensor case
@@ -370,7 +368,7 @@ class SparseTensor:
         shape.extend([*feats.shape[1:]])
         return torch.Size(shape)
 
-    def __cal_layout(self, coords, batch_size):
+    def __cal_layout(self, coords: torch.Tensor, batch_size: int) -> list[slice]:
         # Handle empty tensor case
         if coords.shape[0] == 0:
             return [slice(0, 0) for _ in range(batch_size)]
@@ -512,7 +510,7 @@ class SparseTensor:
             return self.data.features
 
     @feats.setter
-    def feats(self, value: torch.Tensor):
+    def feats(self, value: torch.Tensor) -> None:
         if BACKEND == "pytorch":
             self.data.F = value
         elif BACKEND == "torchsparse":
@@ -530,7 +528,7 @@ class SparseTensor:
             return self.data.indices
 
     @coords.setter
-    def coords(self, value: torch.Tensor):
+    def coords(self, value: torch.Tensor) -> None:
         if BACKEND == "pytorch":
             self.data.C = value
         elif BACKEND == "torchsparse":
@@ -539,11 +537,11 @@ class SparseTensor:
             self.data.indices = value
 
     @property
-    def dtype(self):
+    def dtype(self) -> torch.dtype:
         return self.feats.dtype
 
     @property
-    def device(self):
+    def device(self) -> torch.device:
         return self.feats.device
 
     @overload
@@ -556,7 +554,7 @@ class SparseTensor:
         dtype: torch.dtype | None = None,
     ) -> "SparseTensor": ...
 
-    def to(self, *args, **kwargs) -> "SparseTensor":
+    def to(self, *args: Any, **kwargs: Any) -> "SparseTensor":
         device = None
         dtype = None
         if len(args) == 2:
@@ -602,7 +600,7 @@ class SparseTensor:
             has_special_tokens=self._has_special_tokens,
         )
 
-    def type(self, dtype):
+    def type(self, dtype: torch.dtype) -> "SparseTensor":
         new_feats = self.feats.type(dtype)
         return self.replace(new_feats)
 
@@ -632,19 +630,19 @@ class SparseTensor:
         elif BACKEND == "spconv":
             return self.data.dense()
 
-    def reshape(self, *shape) -> "SparseTensor":
+    def reshape(self, *shape: int | tuple[int, ...]) -> "SparseTensor":
         new_feats = self.feats.reshape(self.feats.shape[0], *shape)
         return self.replace(new_feats)
 
     def unbind(self, dim: int) -> list["SparseTensor"]:
         return sparse_unbind(self, dim)
 
-    def add_first_token_(self, feats):
+    def add_first_token_(self, feats: torch.Tensor) -> None:
         """Add features to the first token of each batch in-place."""
         indices = [layout_slice.start for layout_slice in self.layout]
         self.feats[indices] += feats
 
-    def extract_first_n_tokens(self, n=1) -> tuple["SparseTensor", "SparseTensor"]:
+    def extract_first_n_tokens(self, n: int = 1) -> tuple["SparseTensor", "SparseTensor"]:
         """Extract the first n tokens from each batch and remove from tensor.
 
         Args:
@@ -677,16 +675,14 @@ class SparseTensor:
         remaining_coords = self.coords[~extract_mask]
 
         # Create new sparse tensors with proper metadata
-        extracted = SparseTensor(
-            feats=extracted_feats, coords=extracted_coords, has_special_tokens=self.has_special_tokens()
-        )
+        extracted = SparseTensor(feats=extracted_feats, coords=extracted_coords)
         remaining = SparseTensor(
             feats=remaining_feats,
             coords=remaining_coords,
-            has_special_tokens=self._has_special_tokens,
         )
         remaining._scale = self._scale
-        remaining._spatial_cache = self._spatial_cache
+
+        # The remaining tensor has a different layout, so its spatial metadata must be recomputed.
 
         return extracted, remaining
 
@@ -774,7 +770,13 @@ class SparseTensor:
         return new_tensor
 
     @staticmethod
-    def full(aabb, dim, value, dtype=torch.float32, device=None) -> "SparseTensor":
+    def full(
+        aabb: tuple[int, int, int, int, int, int] | list[int],
+        dim: tuple[int, int],
+        value: float,
+        dtype: torch.dtype = torch.float32,
+        device: str | torch.device | None = None,
+    ) -> "SparseTensor":
         N, C = dim
         x = torch.arange(aabb[0], aabb[3] + 1)
         y = torch.arange(aabb[1], aabb[4] + 1)
@@ -790,7 +792,7 @@ class SparseTensor:
         feats = torch.full((coords.shape[0], C), value, dtype=dtype, device=device)
         return SparseTensor(feats=feats, coords=coords, has_special_tokens=False)
 
-    def __merge_sparse_cache(self, other: "SparseTensor") -> dict:
+    def __merge_sparse_cache(self, other: "SparseTensor") -> dict[Any, Any]:
         new_cache = {}
         for k in set(list(self._spatial_cache.keys()) + list(other._spatial_cache.keys())):
             if k in self._spatial_cache:
@@ -805,7 +807,11 @@ class SparseTensor:
     def __neg__(self) -> "SparseTensor":
         return self.replace(-self.feats)
 
-    def __elemwise__(self, other: torch.Tensor | "SparseTensor", op: callable) -> "SparseTensor":
+    def __elemwise__(
+        self,
+        other: torch.Tensor | "SparseTensor" | float,
+        op: Callable[[Any, Any], torch.Tensor],
+    ) -> "SparseTensor":
         other_tensor = other
         if isinstance(other, torch.Tensor):
             try:
@@ -846,7 +852,7 @@ class SparseTensor:
     def __rtruediv__(self, other: torch.Tensor | "SparseTensor" | float) -> "SparseTensor":
         return self.__elemwise__(other, lambda x, y: torch.div(y, x))
 
-    def __getitem__(self, idx):
+    def __getitem__(self, idx: int | slice | torch.Tensor) -> "SparseTensor":
         if isinstance(idx, int):
             idx = [idx]
         elif isinstance(idx, slice):
@@ -924,7 +930,7 @@ class SparseTensor:
 
         return SparseTensor(feats=feats, coords=coords)
 
-    def register_spatial_cache(self, key, value) -> None:
+    def register_spatial_cache(self, key: Any, value: Any) -> None:
         """Register a spatial cache.
 
         The spatial cache can be any value you want to cache.
@@ -935,7 +941,7 @@ class SparseTensor:
             self._spatial_cache[scale_key] = {}
         self._spatial_cache[scale_key][key] = value
 
-    def get_spatial_cache(self, key=None):
+    def get_spatial_cache(self, key: Any = None) -> Any:
         """Get a spatial cache."""
         scale_key = str(self._scale)
         cur_scale_cache = self._spatial_cache.get(scale_key, {})
@@ -1022,7 +1028,11 @@ class SparseTensor:
 
         return SparseTensor(feats=batch_means, coords=coords)
 
-    def expand_by_factors(self, factors, channel_duplicate=1):
+    def expand_by_factors(
+        self,
+        factors: tuple[int, ...] | list[int],
+        channel_duplicate: int = 1,
+    ) -> "SparseTensor":
         """Convert sparse representation to original locations.
 
         Args:
@@ -1052,13 +1062,13 @@ class SparseTensor:
         feats_reshaped = self.feats.reshape(N, T, X, Y, Z, channels)
 
         # Create mesh grids for offsets within each patch dimension
-        t_offsets, y_offsets, x_offsets, z_offsets = torch.meshgrid(
+        t_offsets, x_offsets, y_offsets, z_offsets = torch.meshgrid(
             torch.arange(T, device=self.device),
             torch.arange(X, device=self.device),
             torch.arange(Y, device=self.device),
             torch.arange(Z, device=self.device),
             indexing="ij",
-        )
+        )  # [T,X,Y,Z]
 
         # Flatten the offsets
         t_offsets = t_offsets.reshape(-1)
@@ -1097,7 +1107,11 @@ class SparseTensor:
 
         return SparseTensor(feats=expanded_feats, coords=expanded_coords)
 
-    def shrink_by_factors(self, factors, channel_average=1):
+    def shrink_by_factors(
+        self,
+        factors: tuple[int, ...] | list[int],
+        channel_average: int = 1,
+    ) -> "SparseTensor":
         """Convert sparse representation to coarser resolution.
 
         This method is the inverse of expand_by_factors, converting from smaller patches
@@ -1191,7 +1205,8 @@ class SparseTensor:
 
         result = SparseTensor(feats=merged_feats, coords=merged_coords, shape=new_shape, layout=new_layout)
         result._scale = self._scale
-        result._spatial_cache = self._spatial_cache
+
+        # Shrinking changes both coordinates and layout, so cached spatial metadata is no longer valid.
 
         return result
 

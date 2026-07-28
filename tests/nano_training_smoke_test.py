@@ -268,10 +268,12 @@ def _assert_diffusers_complete(model_dir: Path, reference_dir: Path) -> None:
     """Structural + index completeness of a Diffusers pipeline converted from the HF export,
     and a tensor-level comparison against the published ``nvidia/Cosmos3-Nano`` diffusers.
 
-    The ``vision_sft_nano`` export has no sound tokenizer (``sound_gen=False``) and no
-    standalone reasoner ViT (``include_visual`` unset), so the ``sound_tokenizer/`` and
-    ``vision_encoder/`` components — and the sound-only ``audio_*`` transformer tensors —
-    are absent; the golden comparison ignores exactly those. Every component that *is*
+    The ``vision_sft_nano`` export has no sound tokenizer (``sound_gen=False``), no
+    standalone reasoner ViT (``include_visual`` unset), and no action heads
+    (``action_gen=False`` — vision SFT trains no action tokens), so the
+    ``sound_tokenizer/`` and ``vision_encoder/`` components — and the sound-only
+    ``audio_*`` / action-only ``action_*`` transformer tensors — are absent; the
+    golden comparison ignores exactly those. Every component that *is*
     present is validated as thoroughly as the HF export: required files, pipeline class,
     per-shard/per-tensor self-consistency of both the transformer index and the aggregated
     root weight index, and (against the golden) the transformer tensor set + config
@@ -340,17 +342,18 @@ def _assert_diffusers_complete(model_dir: Path, reference_dir: Path) -> None:
 
     # Golden comparison against nvidia/Cosmos3-Nano: the transformer tensor set must equal
     # the reference's, ignoring the sound-only ``audio_*`` tensors (this export has
-    # sound_gen=False) and the reference's vision_encoder/ shards (include_visual unset
-    # here). config architectures/model_type must match exactly.
+    # sound_gen=False), the action-only ``action_*`` tensors (action_gen=False), and the
+    # reference's vision_encoder/ shards (include_visual unset here). config
+    # architectures/model_type must match exactly.
     reference_weight_map = json.loads((reference_dir / "model.safetensors.index.json").read_text())["weight_map"]
     reference_transformer = {
         name
         for name, filename in reference_weight_map.items()
-        if filename.startswith("transformer/") and not name.startswith("audio_")
+        if filename.startswith("transformer/") and not name.startswith(("audio_", "action_"))
     }
     out_transformer = {name for name, filename in root_weight_map.items() if filename.startswith("transformer/")}
     assert out_transformer == reference_transformer, (
-        "transformer tensor set differs from nvidia/Cosmos3-Nano (ignoring sound/vision): "
+        "transformer tensor set differs from nvidia/Cosmos3-Nano (ignoring sound/action/vision): "
         f"missing={sorted(reference_transformer - out_transformer)[:8]}, "
         f"extra={sorted(out_transformer - reference_transformer)[:8]}"
     )

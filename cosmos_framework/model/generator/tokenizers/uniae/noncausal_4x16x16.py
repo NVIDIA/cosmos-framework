@@ -25,7 +25,7 @@ from typing import Any
 import torch
 
 from cosmos_framework.utils import log
-from cosmos_framework.utils.distributed import get_rank, sync_model_states
+from cosmos_framework.utils.distributed import broadcast_object, get_rank, sync_model_states
 from cosmos_framework.utils.easy_io import easy_io
 from cosmos_framework.model.generator.tokenizers.interface import VideoTokenizerInterface
 from cosmos_framework.model.generator.tokenizers.uniae.frame_math import (
@@ -35,6 +35,7 @@ from cosmos_framework.model.generator.tokenizers.uniae.frame_math import (
     normalize_resolution_int_mapping,
 )
 from cosmos_framework.utils.generator.data_utils import get_vision_data_resolution
+from cosmos_framework.model.tokenizer.checkpoint_identity import extract_checkpoint_provenance, resolve_checkpoint_identity
 from cosmos_framework.model.tokenizer.checkpoint_io import (
     DCP_MODEL_LOAD_INFO_KEY,
     DCPModelLoadInfo,
@@ -128,8 +129,10 @@ def _load_latent_norm_stats(
     z_dim: int,
     dtype: torch.dtype,
     device: str,
-) -> tuple[torch.Tensor, torch.Tensor]:
-    """Load latent statistics and return validated runtime mean and inverse standard deviation."""
+    expected_checkpoint_path: str | None = None,
+    require_checkpoint_identity: bool = False,
+) -> tuple[torch.Tensor, torch.Tensor, dict[str, object] | None]:
+    """Load latent statistics, inverse standard deviation, and checkpoint identity."""
     if norm_path.lower().endswith(".json"):
         norm_stats = easy_io.load(norm_path, backend_args=backend_args)
     else:
@@ -146,6 +149,21 @@ def _load_latent_norm_stats(
         raise ValueError(f"Latent-normalization z_dim in {norm_path} is {stats_z_dim}, expected {z_dim}.")
     if "mean" not in norm_stats or "std" not in norm_stats:
         raise ValueError(f"Latent-normalization sidecar {norm_path} must contain mean and std entries.")
+    source_checkpoint, normalized_checkpoint_identity = extract_checkpoint_provenance(
+        norm_stats,
+        source=norm_path,
+    )
+    if normalized_checkpoint_identity is not None or require_checkpoint_identity:
+        if source_checkpoint != expected_checkpoint_path:
+            raise ValueError(
+                f"Latent-normalization sidecar {norm_path} was computed for checkpoint "
+                f"{source_checkpoint!r}, expected {expected_checkpoint_path!r}."
+            )
+        if not normalized_checkpoint_identity:
+            raise ValueError(
+                f"Latent-normalization sidecar {norm_path} must contain source_checkpoint_identity "
+                "when checkpoint/statistics matching is required."
+            )
 
     mean_cpu = _coerce_latent_norm_vector(
         norm_stats["mean"],
@@ -174,7 +192,34 @@ def _load_latent_norm_stats(
     inv_std_finite_mask = torch.isfinite(inv_std)  # [C]
     if not bool(inv_std_finite_mask.all().item()):
         raise ValueError(f"Latent-normalization inverse std in {norm_path} is non-finite after conversion to {dtype}.")
-    return mean, inv_std
+    return mean, inv_std, normalized_checkpoint_identity
+
+
+def _resolve_checkpoint_identity_distributed(
+    checkpoint_path: str,
+    credentials_path: str,
+) -> dict[str, object]:
+    """Resolve checkpoint identity once and propagate success or failure to every rank."""
+    result: object = None
+    if get_rank() == 0:
+        try:
+            result = {
+                "identity": resolve_checkpoint_identity(checkpoint_path, credentials_path),
+            }
+        except Exception as exc:
+            result = {
+                "error": f"{type(exc).__name__}: {exc}",
+            }
+    result = broadcast_object(result, src=0)
+    if not isinstance(result, Mapping):
+        raise RuntimeError(f"Failed to resolve checkpoint identity for {checkpoint_path}: invalid broadcast result.")
+    error = result.get("error")
+    if error is not None:
+        raise RuntimeError(f"Failed to resolve checkpoint identity for {checkpoint_path}: {error}")
+    identity = result.get("identity")
+    if not isinstance(identity, Mapping) or not identity:
+        raise RuntimeError(f"Failed to resolve checkpoint identity for {checkpoint_path}: missing identity.")
+    return dict(identity)
 
 
 def _extract_visual_tokenizer_state_dict(model_state: Mapping[str, Any]) -> dict[str, Any]:
@@ -221,6 +266,7 @@ class UniAEVAE:
         vae_pth: str = "",
         object_store_credential_path_pretrained: str = "",
         latent_norm_path: str = "",
+        require_latent_norm_checkpoint_match: bool = False,
         dtype: torch.dtype = torch.bfloat16,
         device: str = "cuda",
         backend: str = "batched",
@@ -278,13 +324,25 @@ class UniAEVAE:
             }
         else:
             norm_backend_args = None
-        mean, inv_std = _load_latent_norm_stats(
+        mean, inv_std, source_checkpoint_identity = _load_latent_norm_stats(
             norm_pth,
             backend_args=norm_backend_args,
             z_dim=z_dim,
             dtype=dtype,
             device=device,
-        )  # [C],[C]
+            expected_checkpoint_path=vae_pth_str,
+            require_checkpoint_identity=require_latent_norm_checkpoint_match,
+        )  # [C],[C],checkpoint identity
+        if source_checkpoint_identity is not None:
+            current_checkpoint_identity = _resolve_checkpoint_identity_distributed(
+                vae_pth_str,
+                object_store_credential_path_pretrained,
+            )
+            if current_checkpoint_identity != source_checkpoint_identity:
+                raise ValueError(
+                    f"Latent-normalization sidecar {norm_pth} checkpoint identity does not match the current "
+                    f"checkpoint at {vae_pth_str}; regenerate statistics from the exact checkpoint being promoted."
+                )
         self._latent_mean = mean.view(1, z_dim, 1, 1, 1)  # [1,C,1,1,1]
         self._latent_inv_std = inv_std.view(1, z_dim, 1, 1, 1)  # [1,C,1,1,1]
 
@@ -517,6 +575,7 @@ class UniAEVAEInterface(VideoTokenizerInterface):
         object_store_credential_path_pretrained: str = "",
         vae_path: str = "",
         latent_norm_path: str = "",
+        require_latent_norm_checkpoint_match: bool = False,
         encode_chunk_frames: int | Mapping[str, int] = 16,
         encode_chunk_batch_size: int | Mapping[str, int] = 1,
         spatial_compression_factor: int = 16,
@@ -571,6 +630,7 @@ class UniAEVAEInterface(VideoTokenizerInterface):
             vae_pth=vae_full_path,
             object_store_credential_path_pretrained=object_store_credential_path_pretrained,
             latent_norm_path=latent_norm_full_path,
+            require_latent_norm_checkpoint_match=require_latent_norm_checkpoint_match,
             pad_frames=pad_frames,
             pixel_trim=pixel_trim,
             backend=backend,

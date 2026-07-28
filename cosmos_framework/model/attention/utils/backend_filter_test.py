@@ -214,5 +214,73 @@ class TestBackendListIntegration(unittest.TestCase):
         assert backends == []
 
 
+@pytest.mark.L0
+class TestBackendListOrdering(unittest.TestCase):
+    """Pin the per-arch default backend ordering in get_backend_list.
+
+    Ordering encodes known relative performance, so a silent reorder is a
+    regression. These tests lock the exact list (with no env-var filtering) for
+    each architecture branch, including the SM11x/12x block and its ordering
+    difference vs SM100/103.
+    """
+
+    def setUp(self):
+        """Save and clear backend env vars so defaults are exercised unmodified."""
+        self.saved_env = {}
+        for var in ["I4_ATTN_BACKENDS", "I4_ATTN_BACKENDS_MULTIDIM", "I4_ATTN_BACKENDS_MERGE"]:
+            self.saved_env[var] = os.environ.get(var)
+            if var in os.environ:
+                del os.environ[var]
+
+    def tearDown(self):
+        """Restore environment variables after each test."""
+        for var, value in self.saved_env.items():
+            if value is not None:
+                os.environ[var] = value
+            elif var in os.environ:
+                del os.environ[var]
+
+    def test_default_ordering_per_arch(self):
+        """Exact default ordering for every get_backend_list branch."""
+        from cosmos_framework.model.attention.backends import get_backend_list
+
+        # Below minimum supported arch -> empty.
+        assert get_backend_list(74) == []
+
+        # 75 <= arch < 80 -> NATTEN only.
+        assert get_backend_list(75) == ["natten"]
+        assert get_backend_list(79) == ["natten"]
+
+        # Generic Ampere/Ada (>=80, not a special-cased arch) -> flash2 leads.
+        assert get_backend_list(80) == ["flash2", "cudnn", "natten"]
+        assert get_backend_list(89) == ["flash2", "cudnn", "natten"]
+
+        # H100 (SM90) -> flash3 leads.
+        assert get_backend_list(90) == ["flash3", "cudnn", "natten", "flash2"]
+
+        # SM100/103 -> cudnn, natten, flash2 (flash2 trails natten).
+        for arch in (100, 103):
+            assert get_backend_list(arch) == ["cudnn", "natten", "flash2"], arch
+
+        # SM110/120/121 -> cudnn, flash2, natten (flash2 ahead of natten).
+        for arch in (110, 120, 121):
+            assert get_backend_list(arch) == ["cudnn", "flash2", "natten"], arch
+
+    def test_sm11x_12x_vs_sm100_ordering_difference(self):
+        """Guard the specific flash2/natten ordering difference between blocks.
+
+        SM100/103 place flash2 *after* natten; SM110/120/121 place flash2
+        *before* natten. Assert the relative order explicitly so a future edit to
+        either block that accidentally unifies them is caught.
+        """
+        from cosmos_framework.model.attention.backends import get_backend_list
+
+        sm100 = get_backend_list(100)
+        assert sm100.index("natten") < sm100.index("flash2")
+
+        sm120 = get_backend_list(120)
+        assert sm120.index("flash2") < sm120.index("natten")
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -124,41 +124,41 @@ def test_vsd_sum_reduction_avoids_active_element_averaging() -> None:
 
 
 @pytest.mark.L0
-def test_vsd_sum_rcm_reduction_matches_rcm_no_half_factor() -> None:
-    """sum_rcm should use RCM's no-half-factor pseudo-target reduction."""
+def test_vsd_per_instance_sum_reduction_uses_no_half_factor() -> None:
+    """per_instance_sum should use no-half-factor pseudo-target reduction."""
     raw_grad = [torch.full((1, 1, 1, 2), 2.0)]  # [C,T,H,W]
     weight_reference = [torch.zeros(1, 1, 1, 2)]  # [C,T,H,W]
 
-    gen_sum_rcm = [torch.ones(1, 1, 1, 2, requires_grad=True)]  # [C,T,H,W]
-    loss_sum_rcm = variational_score_distillation_loss_from_gradient(
-        gen_sum_rcm, raw_grad, weight_reference, reduction="sum_rcm"
+    gen_per_instance_sum = [torch.ones(1, 1, 1, 2, requires_grad=True)]  # [C,T,H,W]
+    loss_per_instance_sum = variational_score_distillation_loss_from_gradient(
+        gen_per_instance_sum, raw_grad, weight_reference, reduction="per_instance_sum"
     )
-    loss_sum_rcm.backward()
+    loss_per_instance_sum.backward()
 
-    expected_rcm_grad = torch.full((1, 1, 1, 2), 4.0)  # [C,T,H,W]
-    assert torch.allclose(gen_sum_rcm[0].grad, expected_rcm_grad)
+    expected_grad = torch.full((1, 1, 1, 2), 4.0)  # [C,T,H,W]
+    assert torch.allclose(gen_per_instance_sum[0].grad, expected_grad)
 
 
 @pytest.mark.L0
 @pytest.mark.parametrize("use_loss_mask", [False, True])
-def test_vsd_sum_rcm_zeroes_nan_sample_loss_and_grad(use_loss_mask: bool) -> None:
-    """sum_rcm should zero loss and grad when a sample's pseudo-target gradient is NaN."""
-    gen_sum_rcm = [torch.ones(1, 1, 1, 1, requires_grad=True)]  # [C,T,H,W]
+def test_vsd_per_instance_sum_zeroes_nan_sample_loss_and_grad(use_loss_mask: bool) -> None:
+    """per_instance_sum should zero loss and grad when a sample's pseudo-target gradient is NaN."""
+    gen_per_instance_sum = [torch.ones(1, 1, 1, 1, requires_grad=True)]  # [C,T,H,W]
     raw_grad = [torch.full((1, 1, 1, 1), float("nan"))]  # [C,T,H,W]
     weight_reference = [torch.zeros(1, 1, 1, 1)]  # [C,T,H,W]
     loss_mask = [torch.ones(1, 1, 1)] if use_loss_mask else None  # [T,H,W]
 
-    loss_sum_rcm = variational_score_distillation_loss_from_gradient(
-        gen_sum_rcm,
+    loss_per_instance_sum = variational_score_distillation_loss_from_gradient(
+        gen_per_instance_sum,
         raw_grad,
         weight_reference,
         loss_mask=loss_mask,
-        reduction="sum_rcm",
+        reduction="per_instance_sum",
     )
-    loss_sum_rcm.backward()
+    loss_per_instance_sum.backward()
 
-    assert loss_sum_rcm.item() == pytest.approx(0.0)
-    assert torch.allclose(gen_sum_rcm[0].grad, torch.zeros_like(gen_sum_rcm[0]))  # [C,T,H,W]
+    assert loss_per_instance_sum.item() == pytest.approx(0.0)
+    assert torch.allclose(gen_per_instance_sum[0].grad, torch.zeros_like(gen_per_instance_sum[0]))  # [C,T,H,W]
 
 
 @pytest.mark.L0

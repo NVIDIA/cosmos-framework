@@ -3,14 +3,15 @@
 
 # Cosmos3-Nano GPU test suite on a self-hosted 8×H200 runner.
 #
-# A single ``pre-commit`` (lint) job runs first; the five GPU jobs all
+# A single ``pre-commit`` (lint) job runs first; the six GPU jobs all
 # ``needs:`` it, so they wait on ONE pre-commit run and are skipped if lint
 # fails — the single self-hosted runner is never spent on a lint-failing commit.
-# The five GPU jobs then run (one at a time on the single runner):
+# The six GPU jobs then run (one at a time on the single runner):
 #   * training-smoke                — Nano SFT pipeline (convert -> train 5 -> export -> t2i)
 #   * generator-training-regression — vision_sft_nano loss vs goldens (4-GPU subset)
-#   * generator-inference-smoke     — Nano multi-modality inference (t2vs + policy + forward_dynamics)
-#   * reasoner-inference-smoke      — Nano reasoner inference golden + Qwen conversion coverage (4-GPU)
+#   * generator-inference-smoke     — Nano + Edge multi-modality inference (t2vs/t2v + policy + forward_dynamics)
+#   * distilled-inference-smoke     — Super 4-step T2I + I2V inference (4-GPU subset)
+#   * reasoner-inference-smoke      — Nano reasoner golden + Edge reasoner smoke + Qwen conversion coverage (4-GPU)
 #   * reasoner-training-regression  — llava_ov loss vs goldens (4-GPU subset)
 #
 # Requires:
@@ -132,8 +133,54 @@ jobs:
           uv run --all-extras --group=cu128-train python -m pytest -v -s \
             tests/nano_inference_smoke_test.py --num-gpus=8 --levels=2 -o addopts=
 
+      # Same three-modality smoke on the smaller Cosmos3-Edge checkpoint: a plain
+      # t2v (Edge has no sound, so t2vs is swapped for t2v and its 480/121/24
+      # generation defaults are asserted) plus action policy + forward_dynamics.
+      # Reuses the same input-asset cache dir; the Edge checkpoint downloads once
+      # and is reused afterward.
+      - name: Edge inference smoke (t2v + action policy + forward_dynamics, 8 GPU)
+        run: |
+          export LD_LIBRARY_PATH=
+          export COSMOS_DOWNLOAD_CACHE_DIR="$RUNNER_WORKSPACE/cosmos_input_cache"
+          uv run --all-extras --group=cu128-train python -m pytest -v -s \
+            tests/edge_inference_smoke_test.py --num-gpus=8 --levels=2 -o addopts=
+
       # Inference writes only the pytest tmp dir (the t2vs video + logs); the
       # checkpoint download stays in the HF cache (kept). No examples/ artifacts.
+      - name: Clean up run outputs
+        if: always()
+        run: |
+          rm -rf "${TMPDIR:-/tmp}"/pytest-of-* /tmp/pytest-of-* || true
+
+  distilled-inference-smoke:
+    needs: pre-commit
+    runs-on: [self-hosted, gpu, h200]
+    timeout-minutes: 120
+    env:
+      HF_TOKEN: ${{ secrets.HF_TOKEN }}
+      HF_HUB_DISABLE_XET: "1"
+      # The distilled Super checkpoints use a four-way data-parallel shard.
+      TEST_MAX_GPUS: "4"
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: astral-sh/setup-uv@v7
+
+      - name: Sync environment (cu128-train)
+        run: uv sync --all-extras --group=cu128-train
+
+      # Launch both pinned public four-step checkpoints through the real CLI.
+      # Validate FixedStep selection and decoded image/video content.
+      - name: Distilled Super inference smoke (T2I + I2V, 4 GPU)
+        run: |
+          export LD_LIBRARY_PATH=
+          export COSMOS_DOWNLOAD_CACHE_DIR="$RUNNER_WORKSPACE/cosmos_input_cache"
+          uv run --all-extras --group=cu128-train python -m pytest -v -s \
+            tests/distilled_inference_smoke_test.py \
+            --num-gpus=4 --levels=2 -o addopts=
+
+      # Keep downloaded model artifacts in the persistent HF cache, but remove
+      # generated media and logs even when an inference case fails.
       - name: Clean up run outputs
         if: always()
         run: |
@@ -169,6 +216,18 @@ jobs:
           export COSMOS_DOWNLOAD_CACHE_DIR="$RUNNER_WORKSPACE/cosmos_input_cache"
           uv run --all-extras --group=cu128-train python -m pytest -v -s \
             tests/nano_reasoner_inference_smoke_test.py::test_nano_reasoner_image_first_token_logits \
+            --num-gpus=4 --levels=2 -o addopts=
+
+      # Image-conditioned Cosmos3-Edge reasoner inference at smoke level: assert a
+      # non-empty reasoner_text (no per-checkpoint logits golden, unlike the Nano
+      # case above). Edge's Nemotron reasoner is vision-capable. Reuse the shared
+      # input-asset cache dir for reasoner_image.json's remote vision_path.
+      - name: Edge reasoner inference smoke (image-conditioned reasoner_text, 4 GPU)
+        run: |
+          export LD_LIBRARY_PATH=
+          export COSMOS_DOWNLOAD_CACHE_DIR="$RUNNER_WORKSPACE/cosmos_input_cache"
+          uv run --all-extras --group=cu128-train python -m pytest -v -s \
+            tests/edge_reasoner_inference_smoke_test.py::test_edge_reasoner_image_reasoner_text \
             --num-gpus=4 --levels=2 -o addopts=
 
       # Merge Cosmos3-Nano into the public Qwen3-VL shell and verify that every

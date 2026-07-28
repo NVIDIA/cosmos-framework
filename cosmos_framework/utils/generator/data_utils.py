@@ -15,6 +15,71 @@ _RESOLUTION_768_SHAPES: tuple[tuple[int, int], ...] = (
 )
 
 
+def read_positive_int_metadata(
+    data_batch: dict[str, Any],
+    key: str,
+    expected_count: int,
+) -> list[int] | None:
+    """Normalize positive integer metadata from common dataloader representations.
+
+    Metadata produced by the dataset can reach consumers in several equivalent
+    forms: a tensor containing one value per sample after ``default_collate``, a
+    Python integer for an unbatched sample, or a list of scalar integers/tensors.
+    Iterative and joint dataloaders may additionally wrap each scalar entry in
+    one or more single-element lists. This helper normalizes all of those forms
+    into one integer per expected sample while validating the metadata contract.
+
+    Args:
+        data_batch: Batch containing the metadata.
+        key: Metadata key to read.
+        expected_count: Required number of scalar values after normalization.
+
+    Returns:
+        A list of positive integers, or ``None`` when ``key`` is absent.
+
+    Raises:
+        TypeError: If the metadata contains an unsupported value type.
+        ValueError: If a list wrapper is not a singleton, the number of values
+            differs from ``expected_count``, or any value is not positive.
+    """
+    raw_value = data_batch.get(key)
+    if raw_value is None:
+        return None
+
+    if isinstance(raw_value, torch.Tensor):
+        flattened = raw_value.reshape(-1)  # [N]
+        entries: list[Any] = list(flattened)
+    elif isinstance(raw_value, list):
+        entries = raw_value
+    elif isinstance(raw_value, int):
+        entries = [raw_value]
+    else:
+        raise TypeError(f"{key} must be a tensor, integer, or list, got {type(raw_value).__name__}.")
+
+    values: list[int] = []
+    for entry in entries:
+        while isinstance(entry, list):
+            if len(entry) != 1:
+                raise ValueError(f"{key} entries must contain one value, got {entry}.")
+            entry = entry[0]
+        if isinstance(entry, torch.Tensor):
+            try:
+                value = int(entry.item())
+            except RuntimeError as error:
+                raise ValueError(f"{key} entries must be scalar, got shape {tuple(entry.shape)}.") from error
+        elif isinstance(entry, int):
+            value = entry
+        else:
+            raise TypeError(f"{key} entries must be tensors or integers, got {type(entry).__name__}.")
+        values.append(value)
+
+    if len(values) != expected_count:
+        raise ValueError(f"{key} must have {expected_count} values, got {len(values)}.")
+    if any(value <= 0 for value in values):
+        raise ValueError(f"{key} values must be positive, got {values}.")
+    return values
+
+
 def get_vision_data_resolution(spatial_shape: tuple[int, int]) -> str:
     """Determine the resolution string from spatial dimensions.
 

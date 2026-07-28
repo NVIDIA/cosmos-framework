@@ -61,7 +61,7 @@ class SparseLinear(nn.Linear):
     while preserving coordinates and layout.
     """
 
-    def __init__(self, in_features: int, out_features: int, bias: bool = False):
+    def __init__(self, in_features: int, out_features: int, bias: bool = False) -> None:
         """Initialize SparseLinear.
 
         Args:
@@ -100,7 +100,7 @@ class SparseGroupNorm(nn.GroupNorm):
         num_channels: int,
         eps: float = 1e-5,
         affine: bool = True,
-    ):
+    ) -> None:
         """Initialize SparseGroupNorm.
 
         Args:
@@ -149,7 +149,7 @@ class SparseLayerNorm(nn.LayerNorm):
         normalized_shape: int,
         eps: float = 1e-5,
         elementwise_affine: bool = True,
-    ):
+    ) -> None:
         """Initialize SparseLayerNorm.
 
         Args:
@@ -267,7 +267,7 @@ class ChannelLayerNorm32(LayerNorm32):
 class RMSNorm(nn.Module):
     """Root Mean Square Layer Normalization."""
 
-    def __init__(self, hidden_size: int, eps: float = 1e-6):
+    def __init__(self, hidden_size: int, eps: float = 1e-6) -> None:
         """Initialize RMSNorm.
 
         Args:
@@ -402,7 +402,7 @@ class SparseGELU(nn.GELU):
 class SparseActivation(nn.Module):
     """Wrapper to apply any activation function to SparseTensor inputs."""
 
-    def __init__(self, activation: nn.Module):
+    def __init__(self, activation: nn.Module) -> None:
         """Initialize SparseActivation.
 
         Args:
@@ -435,7 +435,7 @@ class SparseDownsample(nn.Module):
         self,
         factor: int | tuple[int, ...] | list[int],
         identifier: str = "",
-    ):
+    ) -> None:
         """Initialize SparseDownsample.
 
         Args:
@@ -567,7 +567,7 @@ class SparseDownsampleKeepCoords(nn.Module):
         factor: int | tuple[int, ...] | list[int],
         mode: str = "index",
         identifier: str = "",
-    ):
+    ) -> None:
         """Initialize SparseDownsampleKeepCoords.
 
         Args:
@@ -742,7 +742,7 @@ class SparseUpsample(nn.Module):
         self,
         factor: int | tuple[int, int, int] | list[int],
         identifier: str = "",
-    ):
+    ) -> None:
         """Initialize SparseUpsample.
 
         Args:
@@ -788,7 +788,7 @@ class SparseUpsampleTokenSplit(nn.Module):
         factor: int | tuple[int, int, int] | list[int],
         input_dim: int,
         identifier: str = "",
-    ):
+    ) -> None:
         """Initialize SparseUpsampleTokenSplit.
 
         Args:
@@ -855,7 +855,7 @@ class SparseUpsampleTokenSplit(nn.Module):
 class SparseSubdivide(nn.Module):
     """Upsample sparse tensor by subdividing each point into a grid."""
 
-    def __init__(self, factor: tuple[int, ...] | list[int]):
+    def __init__(self, factor: tuple[int, ...] | list[int]) -> None:
         """Initialize SparseSubdivide.
 
         Args:
@@ -906,7 +906,7 @@ class SparseUpsampleNoCache(nn.Module):
         self,
         factor: int | tuple[int, ...] | list[int],
         identifier: str = "",
-    ):
+    ) -> None:
         """Initialize SparseUpsampleNoCache.
 
         Args:

@@ -69,7 +69,7 @@ class LIBEROLeRobotDataset(ActionBaseDataset):
         root: str,
         fps: float = 20.0,
         chunk_length: int = 16,
-        mode: str = "policy",
+        mode: str = "wam",
         tolerance_s: float = 1e-4,
         camera_mode: CameraMode = "concat_view",
         image_size: int = 256,

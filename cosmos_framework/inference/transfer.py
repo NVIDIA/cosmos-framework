@@ -354,6 +354,7 @@ def build_control_cfg_postprocess(
                 sequence_plans=sp_nc,
                 gen_data_clean=gdc_nc,
                 skip_text_tokens=False,
+                has_noisy_actions=False,  # control-CFG is video-only (action/sound rejected above)
             )
 
             # Mix only the suffix (target vision). The control-token portion

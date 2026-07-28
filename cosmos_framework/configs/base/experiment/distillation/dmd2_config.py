@@ -20,8 +20,6 @@ __all__: tuple[str, ...] = (
     "register_dmd2_optimizer",
 )
 
-IS_PREPROCESSED_KEY: str = "is_preprocessed"
-
 _STANDARD_KEYS_TO_SELECT: list[str] = [
     "moe_gen",
     "q_norm",
@@ -95,32 +93,29 @@ class DMD2RFConfig(OmniMoTModelConfig):
     # ---------------- Distillation / loss scheduling ----------------
     loss_scale_fake_score: float = 1.0
     loss_scale_sid: float = 1.0
-    noise_level_parameterization: Literal["rectified_flow"] = "rectified_flow"
-    # "x0" uses FastGen's original clean-data VSD direction.
+    # "x0" uses the clean-data VSD direction.
     # "velocity" applies the raw RF velocity direction to the generated x0 tensor.
     vsd_gradient_space: Literal["x0", "velocity"] = "x0"
-    # "mean" preserves the existing active-element mean loss. "sum" preserves
-    # the existing half-MSE sum. "sum_rcm" matches RCM's no-half-factor
-    # pseudo-target reduction and normalizer clamp.
-    vsd_loss_reduction: Literal["mean", "sum", "sum_rcm"] = "mean"
-    # "active_mean" preserves the existing fake-score FM loss: sum over generated
-    # elements divided by active element count. "sum_rcm" matches RCM's
-    # non-causal DMD critic loss by summing generated elements per instance.
-    fake_score_loss_reduction: Literal["active_mean", "sum_rcm"] = "active_mean"
+    # "mean" uses active-element mean loss. "sum" uses half-MSE sum.
+    # "per_instance_sum" uses per-instance active-element sum without the half-MSE factor.
+    vsd_loss_reduction: Literal["mean", "sum", "per_instance_sum"] = "mean"
+    # "active_mean" uses fake-score FM loss summed over generated elements and
+    # divided by active element count. "per_instance_sum" sums generated elements per instance.
+    fake_score_loss_reduction: Literal["active_mean", "per_instance_sum"] = "active_mean"
     student_update_freq: int = 5
     teacher_guidance: float = 1.0
     # Prompt used for the teacher CFG unconditional / negative branch. The empty
     # default preserves the existing classifier-free guidance behavior.
     teacher_negative_prompt: str = ""
     # Preserve existing DMD2 clipping behavior by default; experiments can set
-    # this False to match RCM-style no-clipping runs.
+    # this False for no-clipping runs.
     grad_clip: bool = True
     warmup_student_steps: int = 0  # Number of iterations of student-only phase before alternating with critic updates
     warmup_critic_steps: int = 0  # Number of iterations of critic-only phase before alternating with student updates
 
     # ---------------- Student simulation mode ----------------
-    # "forward": fastgen-style — single pass from a randomly sampled sigma (current default).
-    # "backward": rcm-style multi-step rollout from a pure-noise start (t_list[0] must be 1.0)
+    # "forward": single pass from a randomly sampled sigma (current default).
+    # "backward": multi-step rollout from a pure-noise start (t_list[0] must be 1.0)
     # over an iteration-cycled number of t_list steps, descending to sigma=0.
     simulation_mode: Literal["forward", "backward"] = "forward"
     # Number of trailing denoising steps in backward simulation that receive gradients.
@@ -136,20 +131,9 @@ class DMD2RFConfig(OmniMoTModelConfig):
     # Load teacher ckpt and copy weights into student/fake-score nets (train-time only)
     load_teacher_weights: bool = True
 
-    # ---------------- misc ----------------
-    vis_debug: bool = False  # Flag for visualizing intermediate results during training
-
     # ---------------- Enforcing value of certain fields upon creation of the config ----------------
     def __attrs_post_init__(self) -> None:
         assert not (self.warmup_student_steps > 0 and self.warmup_critic_steps > 0), (
             "Only one of warmup_student_steps and warmup_critic_steps can be nonzero, "
             f"got warmup_student_steps={self.warmup_student_steps}, warmup_critic_steps={self.warmup_critic_steps}"
         )
-        # force-disabling discriminator for Cosmos3 for now.
-        # Discriminator relies on intermediate features of the transformer, which is
-        # not yet implemented in Cosmos3.
-        object.__setattr__(self, "loss_scale_GAN_discriminator", 0.0)
-        object.__setattr__(self, "loss_scale_GAN_generator", 0.0)
-        object.__setattr__(self, "net_discriminator_head", None)
-        object.__setattr__(self, "intermediate_feature_ids", None)
-        object.__setattr__(self, "optimizer_discriminator_config", None)

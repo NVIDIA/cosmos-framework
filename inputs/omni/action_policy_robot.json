@@ -9,7 +9,7 @@
   "fps": 5,
   "image_size": 480,
   "view_point": "ego_view",
-  "model_mode": "policy",
+  "model_mode": "wam",
   "name": "action_policy_robot",
   "prompt": "Put the pot to the left of the purple item.",
   "seed": 0,

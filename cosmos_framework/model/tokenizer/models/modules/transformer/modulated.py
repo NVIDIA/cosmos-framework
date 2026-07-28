@@ -45,7 +45,7 @@ class ModulatedSparseTransformerBlock(nn.Module):
         qkv_bias: bool = True,
         share_mod: bool = False,
         pos_cls_token: int = 0,
-    ):
+    ) -> None:
         """Initialize ModulatedSparseTransformerBlock.
 
         Args:
@@ -150,7 +150,7 @@ class ModulatedSparseTransformerCrossBlock(nn.Module):
         qk_rms_norm_cross: bool = False,
         qkv_bias: bool = True,
         share_mod: bool = False,
-    ):
+    ) -> None:
         """Initialize ModulatedSparseTransformerCrossBlock.
 
         Args:

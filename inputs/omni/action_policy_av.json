@@ -9,7 +9,7 @@
   "fps": 10,
   "image_size": 480,
   "view_point": "ego_view",
-  "model_mode": "policy",
+  "model_mode": "wam",
   "name": "action_policy_av",
   "prompt": "You are an autonomous vehicle planning system.",
   "seed": 0,

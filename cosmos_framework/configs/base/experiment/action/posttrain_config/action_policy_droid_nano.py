@@ -172,12 +172,12 @@ action_policy_droid_nano = LazyDict(
             tokenizer_spatial_compression_factor=16,
             tokenizer_temporal_compression_factor=4,
             dataloader=L(RankPartitionedDataLoader)(
-                batch_size=1,
+                batch_size=16,
                 in_order=False,
-                num_workers=4,
+                num_workers=16,  # host-CPU-bound; lower via CLI on smaller hosts
                 persistent_workers=True,
                 pin_memory=True,
-                prefetch_factor=4,
+                prefetch_factor=2,
                 sampler=None,
                 # Shuffling is handled by the dataset (iterable_shuffle=True below):
                 # ActionIterableShuffleDataset streams rank x worker-sharded, episode-order-
@@ -197,7 +197,7 @@ action_policy_droid_nano = LazyDict(
                             # Policy-only task mode. "joint" would randomly pick
                             # forward_dynamics/inverse_dynamics/policy per sample (multi-task),
                             # which dilutes each per-task loss by ~1/3.
-                            mode="policy",
+                            mode="wam",
                             use_state=True,
                             iterable_shuffle=True,  # rank x worker episode-shuffle stream
                             episode_shuffle_seed=42,

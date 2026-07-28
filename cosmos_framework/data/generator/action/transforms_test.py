@@ -142,7 +142,7 @@ def test_action_transform_pipeline_json_prompt_toggle() -> None:
         "video": video,
         "action": action,
         "conditioning_fps": torch.tensor(8),  # []
-        "mode": "policy",
+        "mode": "wam",
         "domain_id": torch.tensor(0),  # []
         "viewpoint": "third_person_view",
         "idle_frames": torch.tensor(3),  # []
@@ -187,7 +187,7 @@ def test_action_transform_pipeline_keeps_ai_caption_string_path() -> None:
         "video": video,
         "action": action,
         "conditioning_fps": torch.tensor(8),  # []
-        "mode": "policy",
+        "mode": "wam",
         "domain_id": torch.tensor(0),  # []
         "viewpoint": "third_person_view",
         "idle_frames": torch.tensor(3),  # []
