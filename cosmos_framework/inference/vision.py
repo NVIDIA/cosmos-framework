@@ -78,8 +78,11 @@ def load_conditioning_image(image_path: Path, target_h: int, target_w: int) -> t
 def decode_video_thwc_uint8(path: Path) -> tuple[torch.Tensor, float]:
     """Read all frames of a video as a uint8 [T, H, W, C] tensor plus fps.
 
-    TorchCodec replacement for ``torchvision.io.read_video`` (removed in
-    torchvision 0.28+); mirrors its frame layout so callers are unchanged.
+    TorchCodec replacement for ``torchvision.io.read_video``; mirrors its frame layout so
+    callers are unchanged. As of torchvision 0.28 the public wheel no longer binds that
+    symbol — ``torchvision/io/__init__.py`` imports it from the Meta-internal
+    ``pytorch.vision.fb.io.video`` under ``except ImportError: pass``, so ``import
+    torchvision.io`` still succeeds but calling ``read_video`` raises ``AttributeError``.
     """
     from cosmos_framework.utils.generator.torchcodec_video import decode_frames_nhwc_uint8, probe_video
 
