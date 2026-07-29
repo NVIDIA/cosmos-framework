@@ -151,14 +151,14 @@ def test_checkpoints():
         (
             "Cosmos3-Super-Text2Image-4Step",
             "nvidia/Cosmos3-Super-Text2Image-4Step",
-            "1ba94110bc118f479bbd5e461e79d685d74b2554",
+            "main",
             "768",
             24,
         ),
         (
             "Cosmos3-Super-Image2Video-4Step",
             "nvidia/Cosmos3-Super-Image2Video-4Step",
-            "f85d3335d2ad8b352462cecbd637aa980cec9688",
+            "main",
             "480",
             16,
         ),
