@@ -173,7 +173,7 @@ def test_get_existing_key() -> None:
 @pytest.mark.L0
 def test_get_missing_key_returns_none() -> None:
     po = PhaseOptimizer({"net": _make_optimizer()})
-    assert po.get("discriminator") is None
+    assert po.get("missing") is None
 
 
 # -------------------------------------------------------------------------
@@ -224,7 +224,7 @@ def test_scheduler_get_existing_key() -> None:
 @pytest.mark.L0
 def test_scheduler_get_missing_key_returns_none() -> None:
     ps = PhaseScheduler({"net": _make_scheduler()})
-    assert ps.get("discriminator") is None
+    assert ps.get("missing") is None
 
 
 # -------------------------------------------------------------------------

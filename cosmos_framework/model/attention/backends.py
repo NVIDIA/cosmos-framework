@@ -145,6 +145,7 @@ def get_backend_list(arch_tag: int) -> list[str]:
     elif arch_tag in [110, 120, 121]:
         default_backends = [
             "cudnn",
+            "flash2",
             "natten",
         ]
     elif arch_tag >= 80:

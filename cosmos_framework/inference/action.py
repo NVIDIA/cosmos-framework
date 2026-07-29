@@ -44,7 +44,7 @@ def _load_actions(
                 f"Raw action dimension from file ({raw_dim}) does not match expected dimension ({raw_action_dim})"
             )
             return pad_action_to_max_dim(raw, max_action_dim)
-        case ModelMode.POLICY | ModelMode.INVERSE_DYNAMICS:
+        case ModelMode.WAM | ModelMode.INVERSE_DYNAMICS:
             assert raw_action_dim is not None, "raw_action_dim is required for policy and inverse_dynamics modes"
             return torch.zeros(action_chunk_size, max_action_dim, dtype=torch.float32)
         case _:

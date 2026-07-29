@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: OpenMDW-1.1
 
 from collections.abc import Sequence
+from typing import Optional
 
 import torch
 
@@ -34,9 +35,11 @@ class DCAE4x32x32Interface(VideoTokenizerInterface):
         device: str = "cuda",
         compilable: bool = True,
         causal: bool = True,
+        encode_exact_durations: Optional[list[int]] = None,
     ):
         self._causal = causal
         assert self._causal, "DCAE4x32x32Interface is a causal tokenizer; causal must be True."
+        assert encode_exact_durations is None, "DCAE4x32x32Interface does not support encode_exact_durations."
         vae_path_full = f"s3://{bucket_name}/{vae_path}"
         self._spatial_compression_factor = spatial_compression_factor
         self._temporal_compression_factor = temporal_compression_factor

@@ -48,7 +48,7 @@ All paths below are relative to this file's location (`.claude/skills/cosmos3-co
 | Training experiment SKUs (vlm / reasoner)                 | `../../../cosmos_framework/configs/base/reasoner/experiment/`                                                                     |
 | Example inputs                                            | `../../../inputs/omni/t2i.json`, `../../../inputs/omni/t2v.json`, `../../../inputs/omni/i2v.json`, …                              |
 
-Available modality modes for defaults: `text2image`, `text2video`, `image2video`, `image2image`, `video2video`, `forward_dynamics`, `inverse_dynamics`, `policy`.
+Available modality modes for defaults: `text2image`, `text2video`, `image2video`, `image2image`, `video2video`, `forward_dynamics`, `inverse_dynamics`, `wam`.
 
 ### Config defaults resolution chain
 

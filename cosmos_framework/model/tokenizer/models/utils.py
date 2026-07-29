@@ -565,7 +565,7 @@ def resize_and_crop(
 class SampleLogger:
     """Logger for visualizing samples during training."""
 
-    def __init__(self, log_every_n: int = 10, max_samples: int = 1):
+    def __init__(self, log_every_n: int = 10, max_samples: int = 1) -> None:
         """Initialize sample logger.
 
         Args:

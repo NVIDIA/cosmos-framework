@@ -3,8 +3,44 @@
 
 """Portable student-only checkpoint export helpers."""
 
+import warnings
 from collections.abc import Callable
+from pathlib import Path, PurePath
 from typing import Any
+
+_PUBLIC_WAN_VAE_PATHS = {
+    "Wan2.2_VAE.pth": "pretrained/tokenizers/video/wan2pt2/Wan2.2_VAE.pth",
+}
+_PUBLIC_QWEN3_VL_CONFIG_PATHS = {
+    filename: f"cosmos_framework/model/generator/reasoner/qwen3_vl/configs/{filename}"
+    for filename in (
+        "Qwen3-VL-2B-Instruct.json",
+        "Qwen3-VL-4B-Instruct.json",
+        "Qwen3-VL-8B-Instruct.json",
+        "Qwen3-VL-32B-Instruct.json",
+    )
+}
+
+
+def _normalize_public_dependency_path(
+    value: Any,
+    *,
+    field_name: str,
+    public_paths: dict[str, str],
+) -> str:
+    if not isinstance(value, str):
+        raise TypeError(f"Expected {field_name} to be a string.")
+    filename = PurePath(value).name
+    if filename in public_paths:
+        return public_paths[filename]
+    if Path(value).is_absolute():
+        warnings.warn(
+            f"{field_name} contains an unrecognized absolute path and the exported artifact may not be portable: "
+            f"{value}",
+            UserWarning,
+            stacklevel=3,
+        )
+    return value
 
 
 def build_student_checkpoint_metadata(*, use_ema_weights: bool) -> dict[str, str | bool]:
@@ -59,10 +95,28 @@ def sanitize_student_public_model_config(
             tokenizer_config["bucket_name"] = "bucket"
         if "object_store_credential_path_pretrained" in tokenizer_config:
             tokenizer_config["object_store_credential_path_pretrained"] = ""
+        if tokenizer_key == "tokenizer" and "vae_path" in tokenizer_config:
+            tokenizer_config["vae_path"] = _normalize_public_dependency_path(
+                tokenizer_config["vae_path"],
+                field_name="tokenizer.vae_path",
+                public_paths=_PUBLIC_WAN_VAE_PATHS,
+            )
 
     vlm_config = config.get("vlm_config")
     if not isinstance(vlm_config, dict):
         return
+
+    model_instance = vlm_config.get("model_instance")
+    if isinstance(model_instance, dict):
+        model_instance_config = model_instance.get("config")
+        if isinstance(model_instance_config, dict):
+            base_config = model_instance_config.get("base_config")
+            if isinstance(base_config, dict) and "json_file" in base_config:
+                base_config["json_file"] = _normalize_public_dependency_path(
+                    base_config["json_file"],
+                    field_name="vlm_config.model_instance.config.base_config.json_file",
+                    public_paths=_PUBLIC_QWEN3_VL_CONFIG_PATHS,
+                )
 
     pretrained_weights = vlm_config.get("pretrained_weights")
     if isinstance(pretrained_weights, dict):

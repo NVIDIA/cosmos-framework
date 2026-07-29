@@ -17,6 +17,8 @@ from typing import Any
 import torch
 import torch.nn as nn
 
+from cosmos_framework.model.tokenizer.evaluation.lpips_cache import construct_with_shared_cache_warmup
+
 # Import torchmetrics for SSIM and LPIPS
 try:
     from torchmetrics.image import StructuralSimilarityIndexMeasure
@@ -31,6 +33,11 @@ INPUT_KEY = "inputs"  # [0, 1] range for PSNR/SSIM
 RECON_KEY = "reconstructions"  # [0, 1] range for PSNR/SSIM
 INPUT_RAW_KEY = "inputs_raw"  # [-1, 1] range for LPIPS
 RECON_RAW_KEY = "reconstructions_raw"  # [-1, 1] range for LPIPS
+_LPIPS_BACKBONE_CACHE_FILENAMES = {
+    "alex": "alexnet-owt-7be5be79.pth",
+    "squeeze": "squeezenet1_1-b8a52dc0.pth",
+    "vgg": "vgg16-397923af.pth",
+}
 
 
 class TokenizerMetric(nn.Module):
@@ -268,11 +275,18 @@ class LPIPSMetric(nn.Module):
     def __init__(self, net_type: str = "vgg") -> None:
         super().__init__()
         if HAS_TORCHMETRICS:
+            cache_filename = _LPIPS_BACKBONE_CACHE_FILENAMES.get(net_type)
+            if cache_filename is None:
+                raise ValueError(f"Unsupported LPIPS backbone: {net_type!r}.")
             # LPIPS expects inputs in [-1, 1] range
-            self._lpips_metric = LearnedPerceptualImagePatchSimilarity(
-                net_type=net_type,
-                sync_on_compute=False,
-                dist_sync_on_step=False,
+            self._lpips_metric = construct_with_shared_cache_warmup(
+                f"torchmetrics_lpips_{net_type}_v1",
+                lambda: LearnedPerceptualImagePatchSimilarity(
+                    net_type=net_type,
+                    sync_on_compute=False,
+                    dist_sync_on_step=False,
+                ),
+                required_cache_filenames=(cache_filename,),
             )
         else:
             self._lpips_metric = None

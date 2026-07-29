@@ -35,6 +35,7 @@ class PackedSequenceBuilder:
             text split and a full generation split.
         attn_modes: Attention mode for each split, such as ``"causal"`` or ``"full"``.
         is_image_batch: Whether this batch contains images rather than videos.
+        uses_single_timestep: Whether all noised tokens share one input timestep scalar.
         sequence_length: Total packed sequence length. Filled during finalization.
         current_seq_index: Next global packed-sequence index to append.
         text_ids: Text token IDs accumulated during packing, including special tokens.
@@ -62,6 +63,7 @@ class PackedSequenceBuilder:
     split_lens: list[int] = field(default_factory=list)
     attn_modes: list[str] = field(default_factory=list)
     is_image_batch: bool = False
+    uses_single_timestep: bool = False
     sequence_length: int = 0
 
     # Build-time tracking (used during packing, not after finalize)
@@ -832,6 +834,7 @@ class PackedSequenceBuilder:
             split_lens=split_lens,
             attn_modes=attn_modes,
             is_image_batch=gen_data_clean.is_image_batch,
+            uses_single_timestep=self.uses_single_timestep,
             # Text modality (converted to tensors)
             text_ids=torch.tensor(self.text_ids, dtype=torch.long),  # [N_text_tokens]
             text_indexes=torch.tensor(self.text_indexes, dtype=torch.long),  # [N_text_tokens]
@@ -867,6 +870,7 @@ class PackedSequence:
             text split and a full generation split.
         attn_modes: Attention mode for each split, such as ``"causal"`` or ``"full"``.
         is_image_batch: Whether this batch contains images rather than videos.
+        uses_single_timestep: Whether all noised tokens share one input timestep scalar.
         sequence_length: Total length of the packed sequence.
         text_ids: Tensor of all text token IDs, including special tokens.
         text_indexes: Tensor of global packed-sequence indexes for text tokens.
@@ -893,6 +897,7 @@ class PackedSequence:
     split_lens: list[int] = field(default_factory=list)
     attn_modes: list[str] = field(default_factory=list)
     is_image_batch: bool = False
+    uses_single_timestep: bool = False
     sequence_length: int = 0
 
     # Text modality

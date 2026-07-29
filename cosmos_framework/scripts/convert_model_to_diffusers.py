@@ -135,7 +135,10 @@ def _build_public_export_model_config(model_dict: dict[str, Any]) -> dict[str, A
             "include_regex": [],
             "method": None,
         }
-        if quantization_values != disabled_quantization:
+        # ``fp8_granularity`` is inert when quantization is disabled (method=None);
+        # ignore it so a disabled config still matches the expected default.
+        comparable = {key: value for key, value in quantization_values.items() if key != "fp8_granularity"}
+        if comparable != disabled_quantization:
             raise ValueError(
                 "Cannot export an enabled or non-default internal quantization config to the public Cosmos3 schema: "
                 f"{quantization_values}"

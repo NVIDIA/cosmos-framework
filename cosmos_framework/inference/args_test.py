@@ -316,7 +316,7 @@ def test_edge_num_frames_default(tmp_path: Path):
     # the reasoner (which reports VIDEO vision_mode) keeps its inert 1 -- none of
     # these should be rewritten to 121.
     assert _num_frames("Cosmos3-Edge", "edge_t2i", model_mode=ModelMode.TEXT2IMAGE) == 1
-    assert _num_frames("Cosmos3-Edge", "edge_policy", model_mode=ModelMode.POLICY) == 189
+    assert _num_frames("Cosmos3-Edge", "edge_policy", model_mode=ModelMode.WAM) == 189
     assert _num_frames("Cosmos3-Edge", "edge_reasoner", model_mode=ModelMode.REASONER, prompt="Describe.") == 1
 
 

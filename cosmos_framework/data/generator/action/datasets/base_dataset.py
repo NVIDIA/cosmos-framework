@@ -22,7 +22,7 @@ from cosmos_framework.data.generator.action.action_spec import ActionSpec
 from cosmos_framework.data.generator.action.domain_utils import get_domain_id
 from cosmos_framework.data.generator.action.pose_utils import compute_idle_frames
 
-_MODE_CHOICES = ("forward_dynamics", "inverse_dynamics", "policy")
+_MODE_CHOICES = ("forward_dynamics", "inverse_dynamics", "wam")
 
 
 class ActionBaseDataset(ABC, Dataset):
