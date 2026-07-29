@@ -898,7 +898,6 @@ class DistributedCheckpointer(AbstractCheckpointer):
 
                     # Use rank-specific key for RNG state to support correct per-rank restoration
                     rng_key = f"rng_state_{dist.get_rank()}"
-                    current_rng_state = get_rand_state_dict()
                     _state_dict = {
                         "grad_scaler": grad_scaler.state_dict(),
                         "iteration": iteration,
@@ -909,7 +908,7 @@ class DistributedCheckpointer(AbstractCheckpointer):
                         k.startswith(f"{rng_key}.") or k == rng_key for k in metadata.state_dict_metadata.keys()
                     )
                     if rng_key_exists:
-                        _state_dict[rng_key] = current_rng_state
+                        _state_dict[rng_key] = get_rand_state_dict()
 
                     dcp.load(
                         _state_dict,
@@ -919,7 +918,8 @@ class DistributedCheckpointer(AbstractCheckpointer):
                     )
                     grad_scaler.load_state_dict(_state_dict["grad_scaler"])
                     iteration = _state_dict["iteration"]
-                    set_rand_state_dict(_state_dict.get(rng_key, current_rng_state))
+                    if rng_key_exists:
+                        set_rand_state_dict(_state_dict[rng_key])
 
                 elif key == "dataloader":
                     if not easy_io.exists(cur_key_ckpt_full_path, backend_key=self.load_s3_backend_key):

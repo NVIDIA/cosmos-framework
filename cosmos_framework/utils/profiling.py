@@ -17,6 +17,15 @@ from cosmos_framework.utils.easy_io import easy_io
 MEMORY_SNAPSHOT_MAX_ENTRIES = 100000
 
 
+def _validate_profile_schedule(*, profile_freq: int, warmup: int, active: int) -> None:
+    if active <= 0:
+        raise ValueError("profile_active must be positive")
+    if warmup < 0:
+        raise ValueError("profile_warmup must be non-negative")
+    if profile_freq < warmup + active:
+        raise ValueError("profile_freq must be greater than or equal to profile_warmup + profile_active")
+
+
 @contextlib.contextmanager
 def maybe_enable_profiling(config, *, global_step: int = 0):
     # get user defined profiler settings
@@ -47,9 +56,10 @@ def maybe_enable_profiling(config, *, global_step: int = 0):
         if not os.path.exists(trace_dir):
             os.makedirs(trace_dir, exist_ok=True)
 
-        warmup, active = config.trainer.profiling.profile_warmup, 1
+        warmup = config.trainer.profiling.profile_warmup
+        active = config.trainer.profiling.profile_active
+        _validate_profile_schedule(profile_freq=profile_freq, warmup=warmup, active=active)
         wait = profile_freq - (active + warmup)
-        assert wait >= 0, "profile_freq must be greater than or equal to warmup + active"
 
         with torch.profiler.profile(
             activities=[
@@ -132,9 +142,9 @@ def maybe_enable_nsys_profiling(config, *, global_step: int = 0):
         nsys profile --capture-range=cudaProfilerApi --capture-range-end=stop python ...
     and set trainer.profiling.enable_nsys=true, profile_freq=<iter>.
 
-    Reuses the torch-profile flags (profile_freq, target_ranks, profile_warmup).
-    The profiler is started `profile_warmup` iterations before the target and
-    stopped right after it.
+    Reuses the torch-profile flags (profile_freq, target_ranks, profile_warmup,
+    profile_active). The profiler is started `profile_warmup` iterations before
+    the active range and stopped immediately after it.
     """
     enable_nsys = config.trainer.profiling.enable_nsys
     if not enable_nsys:
@@ -145,29 +155,41 @@ def maybe_enable_nsys_profiling(config, *, global_step: int = 0):
     target_ranks = config.trainer.profiling.target_ranks
     freq = config.trainer.profiling.profile_freq
     warmup = config.trainer.profiling.profile_warmup
+    active = config.trainer.profiling.profile_active
+    _validate_profile_schedule(profile_freq=freq, warmup=warmup, active=active)
 
-    active_iter = freq - 1  # profile_freq=5001 profiles iter 5000
-    start_iter = max(0, active_iter - warmup)
+    active_start_iter = freq - active
+    active_end_iter = freq - 1
+    start_iter = max(0, active_start_iter - warmup)
 
     class NsysProfiler:
         def __init__(self, step_num: int):
             self.step_num = step_num
             self._profiling = False
+            self._start_if_needed()
 
-        def step(self):
-            self.step_num += 1
+        def _start_if_needed(self) -> None:
             if rank not in target_ranks:
                 return
             if self.step_num == start_iter and not self._profiling:
-                log.info(f"[Nsys] Starting CUDA profiler at iter {self.step_num} (active iter: {active_iter})")
+                log.info(
+                    f"[Nsys] Starting CUDA profiler at iter {self.step_num} "
+                    f"(active iterations: {active_start_iter}-{active_end_iter})"
+                )
                 torch.cuda.cudart().cudaProfilerStart()
                 self._profiling = True
-            if self.step_num == active_iter + 1 and self._profiling:
+
+        def step(self) -> None:
+            self.step_num += 1
+            self._start_if_needed()
+            if rank not in target_ranks:
+                return
+            if self.step_num == active_end_iter + 1 and self._profiling:
                 torch.cuda.cudart().cudaProfilerStop()
                 self._profiling = False
                 log.info(f"[Nsys] Stopped CUDA profiler at iter {self.step_num}")
 
-    log.info(f"[Nsys] Profiling enabled. Will capture iter {start_iter}-{active_iter} on ranks {target_ranks}")
+    log.info(f"[Nsys] Profiling enabled. Will capture iter {start_iter}-{active_end_iter} on ranks {target_ranks}")
     profiler = NsysProfiler(global_step)
     try:
         yield profiler

@@ -96,7 +96,14 @@ def test_broadcast_object_list_optimized_broadcasts_only_large_tensor_leaves_dir
 
     video = torch.arange(24, dtype=torch.float32).reshape(2, 3, 4)  # [2,3,4]
     frame_count = torch.tensor(197, dtype=torch.int64)  # []
-    source_objects = [{"video": [[video]], "metadata": (frame_count, "mads")}, False]
+    source_objects = [
+        {
+            "video": [[video]],
+            "video_alias": video,
+            "metadata": (frame_count, "mads"),
+        },
+        False,
+    ]
     result = distributed.broadcast_object_list_optimized(
         source_objects,
         src=0,
@@ -122,8 +129,10 @@ def test_broadcast_object_list_optimized_broadcasts_only_large_tensor_leaves_dir
     assert receiver_objects[1] is False
     assert receiver_objects[0]["metadata"][1] == "mads"
     torch.testing.assert_close(receiver_objects[0]["video"][0][0], video)
+    assert receiver_objects[0]["video_alias"] is receiver_objects[0]["video"][0][0]
     torch.testing.assert_close(receiver_objects[0]["metadata"][0], frame_count)
     torch.testing.assert_close(source_objects[0]["video"][0][0], video)
+    assert source_objects[0]["video_alias"] is source_objects[0]["video"][0][0]
     assert not tensor_payloads
 
 
@@ -288,7 +297,7 @@ def test_broadcast_object_list_optimized_rejects_shared_containers_before_collec
     monkeypatch.setattr(distributed.dist, "get_rank", _get_rank)
     monkeypatch.setattr(distributed.dist, "broadcast_object_list", object_broadcast)
 
-    with pytest.raises(ValueError, match="without shared container or tensor references"):
+    with pytest.raises(ValueError, match="without shared container references"):
         distributed.broadcast_object_list_optimized(
             [shared, shared],
             src=0,

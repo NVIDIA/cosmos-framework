@@ -2,8 +2,10 @@
 # SPDX-License-Identifier: OpenMDW-1.1
 
 import math
+import queue
+import threading
 from collections import deque
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
 from dataclasses import dataclass
 from typing import Any, ClassVar, Dict, Union
 
@@ -155,6 +157,121 @@ class _PackingMetrics:
         output_batch["_from_workers"] = self.from_workers
         output_batch["_buffer_size"] = buffer_size
         output_batch["_dropped_count"] = self.dropped_count
+
+
+@dataclass
+class _AsyncBatchBuildResult:
+    """The outcome of building one packed batch."""
+
+    sequence_id: int
+    batch: dict[str, Any] | None = None
+    error: BaseException | None = None
+    end_of_stream: bool = False
+
+
+class _AsyncBatchBuilder:
+    """Build one requested batch at a time on a persistent daemon thread.
+
+    The caller submits one sequence ID, the daemon advances the existing
+    packing iterator once, and the caller receives that exact batch object
+    from the result queue. A second request is rejected until the first result
+    is consumed, so at most one future batch is built at a time.
+    """
+
+    def __init__(self, batch_iterator: Iterator[dict[str, Any]], timeout_s: float) -> None:
+        self._batch_iterator: Iterator[dict[str, Any]] = batch_iterator
+        self._timeout_s: float = timeout_s
+        self._requests: queue.Queue[int | None] = queue.Queue()
+        self._results: queue.Queue[_AsyncBatchBuildResult | None] = queue.Queue()
+        self._outstanding_sequence_id: int | None = None
+        self._closed: bool = False
+        self._thread: threading.Thread = threading.Thread(target=self._run, name="async-batch-builder", daemon=True)
+        self._thread.start()
+
+    @property
+    def is_alive(self) -> bool:
+        return self._thread.is_alive()
+
+    def request_batch(self, sequence_id: int) -> None:
+        """Ask the daemon thread to build exactly one batch."""
+        if self._closed:
+            raise RuntimeError("Cannot request a batch after the async batch builder is closed.")
+        if self._outstanding_sequence_id is not None:
+            raise RuntimeError(
+                "Cannot request another batch while async batch building is already in progress "
+                f"for sequence_id={self._outstanding_sequence_id}."
+            )
+        self._outstanding_sequence_id = sequence_id
+        self._requests.put(sequence_id)
+
+    def get_batch(self) -> dict[str, Any]:
+        """Wait for and return the exact batch object produced for the outstanding request."""
+        sequence_id = self._outstanding_sequence_id
+        if sequence_id is None:
+            raise RuntimeError("No async batch building request is outstanding.")
+        if self._closed:
+            raise RuntimeError("Async batch builder was closed while waiting for a batch.")
+
+        try:
+            result = self._results.get(timeout=self._timeout_s)
+        except queue.Empty as error:
+            producer_alive = self.is_alive
+            # A timed-out request may still be running in the daemon thread, so it cannot be
+            # safely abandoned or retried. Close the builder and make the timeout terminal.
+            self.close()
+            raise TimeoutError(
+                f"Timed out waiting for async batch building sequence_id={sequence_id}; "
+                f"producer_alive={producer_alive}."
+            ) from error
+
+        if self._closed or result is None:
+            raise RuntimeError("Async batch builder was closed while waiting for a batch.")
+        if result.sequence_id != sequence_id:
+            raise RuntimeError(
+                "Async batch builder returned an unexpected result: "
+                f"expected sequence_id={sequence_id}, got sequence_id={result.sequence_id}."
+            )
+        self._outstanding_sequence_id = None
+
+        if result.error is not None:
+            raise RuntimeError(f"Async batch building failed for sequence_id={sequence_id}.") from result.error
+        if result.end_of_stream:
+            raise StopIteration
+        if result.batch is None:
+            raise RuntimeError(f"Async batch builder returned no batch for sequence_id={sequence_id}.")
+        return result.batch
+
+    def _run(self) -> None:
+        """Build one batch for each request and publish its result by reference."""
+        while True:
+            sequence_id = self._requests.get()
+            if sequence_id is None or self._closed:
+                return
+
+            result = _AsyncBatchBuildResult(sequence_id=sequence_id)
+            try:
+                result.batch = next(self._batch_iterator)
+            except StopIteration:
+                result.end_of_stream = True
+            except BaseException as error:
+                result.error = error
+
+            if self._closed:
+                return
+            # queue.Queue stores object references within this process. The batch is neither
+            # copied nor serialized here; the consumer receives the exact dictionary above.
+            self._results.put(result)
+            if result.end_of_stream or result.error is not None:
+                return
+
+    def close(self) -> None:
+        """Permanently close the builder and perform a bounded join of its daemon thread."""
+        if not self._closed:
+            self._closed = True
+            self._requests.put(None)
+            self._results.put(None)
+        if self._thread is not threading.current_thread():
+            self._thread.join(timeout=min(1.0, self._timeout_s))
 
 
 class JointDataLoader(webdataset.WebLoader):
@@ -598,6 +715,10 @@ class IterativeJointDataLoader(JointDataLoader):
         - Iteration 2: all ranks process videos
         - ... and so on.
       This also ensures all ranks process the same modality at the same iteration.
+
+    ``enable_async_batch_building=True`` advances this same batch iterator on
+    one daemon thread and builds exactly one future batch. The default keeps
+    the original calling-thread behavior.
     """
 
     def __init__(
@@ -616,7 +737,16 @@ class IterativeJointDataLoader(JointDataLoader):
         lookahead_limits: Dict[str, int] | None = None,
         uniae_chunk_frames: int | Mapping[str, int] | None = None,
         uniae_pad_frames: int | None = None,
-    ):
+        enable_async_batch_building: bool = False,
+        async_batch_building_timeout_s: float = 1200.0,
+    ) -> None:
+        if async_batch_building_timeout_s <= 0:
+            raise ValueError(f"async_batch_building_timeout_s must be positive, got {async_batch_building_timeout_s}.")
+        # Keep PyTorch/WebDataset/Lance worker creation on the main thread.
+        # The packer thread starts only after constructor prewarm has completed.
+        if enable_async_batch_building and not prewarm:
+            raise ValueError("enable_async_batch_building=True requires prewarm=True.")
+
         super().__init__(
             dataloaders,
             tokenizer_spatial_compression_factor,
@@ -636,8 +766,18 @@ class IterativeJointDataLoader(JointDataLoader):
         # Calculate probabilities for random sampling
         total_ratio = sum(self.data_ratios)
         self.data_probs = np.array([ratio / total_ratio for ratio in self.data_ratios])
+        # Async batch builder state
+        self.enable_async_batch_building: bool = enable_async_batch_building
+        self.async_batch_building_timeout_s: float = float(async_batch_building_timeout_s)
+        self._async_batch_builder: _AsyncBatchBuilder | None = None
 
-    def __iter__(self):
+    def __iter__(self) -> Iterator[dict[str, Any]]:
+        if not self.enable_async_batch_building:
+            return self._iter_synchronous()
+        return self._iter_asynchronous()
+
+    def _iter_synchronous(self) -> Iterator[dict[str, Any]]:
+        """Run the existing packing path on the calling thread."""
         while True:
             if self.seed is not None:
                 rng = np.random.RandomState(self.seed + self.global_id)
@@ -712,7 +852,49 @@ class IterativeJointDataLoader(JointDataLoader):
             self.global_id += 1
             yield output_batch
 
-    def _get_dataloader_index(self, data_id):
+    def _start_async_batch_builder(self) -> _AsyncBatchBuilder:
+        """Create the async builder and request its first batch."""
+        if self._async_batch_builder is not None:
+            raise RuntimeError("Async batch building has already started.")
+        async_batch_builder = _AsyncBatchBuilder(
+            self._iter_synchronous(),
+            timeout_s=self.async_batch_building_timeout_s,
+        )
+        self._async_batch_builder = async_batch_builder
+        async_batch_builder.request_batch(self.global_id)
+        return async_batch_builder
+
+    def _iter_asynchronous(self) -> Iterator[dict[str, Any]]:
+        """Yield each completed batch while the async builder builds its replacement."""
+        async_batch_builder = self._async_batch_builder or self._start_async_batch_builder()
+
+        while True:
+            try:
+                batch = async_batch_builder.get_batch()
+            except StopIteration:
+                break
+
+            # Request one replacement before yielding. The request queue contains only a
+            # sequence ID, and the result queue returns this exact batch object by reference.
+            async_batch_builder.request_batch(self.global_id)
+            yield batch
+
+    def set_start_iteration(self, iteration: int) -> None:
+        """Set the batch sequence and eagerly request the first async batch."""
+        if self._async_batch_builder is not None:
+            raise RuntimeError("set_start_iteration must be called before async batch building starts.")
+        self.global_id = iteration
+        if self.enable_async_batch_building:
+            self._start_async_batch_builder()
+
+    def close(self) -> None:
+        """Permanently stop the optional async batch builder."""
+        if self._async_batch_builder is not None:
+            # Keep the closed builder reference: its bounded join may return while the daemon
+            # is still blocked in data loading, so starting a replacement could race with it.
+            self._async_batch_builder.close()
+
+    def _get_dataloader_index(self, data_id: float) -> int:
         """Maps global id to the corresponding dataloader index based on ratio."""
         for i, r in enumerate(self.data_ratios):
             if data_id < r:

@@ -17,6 +17,17 @@ def _should_append_idle_frame_info(mode: object) -> bool:
     return mode != "inverse_dynamics"
 
 
+def _is_inverse_dynamics(mode: object) -> bool:
+    """Return whether this sample predicts actions from video.
+
+    Deliberately separate from :func:`_should_append_idle_frame_info`: the two
+    suppressions happen to coincide today but are independent decisions, and
+    extending the idle-frame rule to further modes must not silently change
+    which modes see the relabeling.
+    """
+    return mode == "inverse_dynamics"
+
+
 class ActionPromptJsonFormatter:
     """Format action prompts into a structured JSON-compatible dictionary.
 
@@ -26,6 +37,13 @@ class ActionPromptJsonFormatter:
     integer-second string such as ``"2s"``, and aspect ratio is stored as a
     comma-separated string such as ``"16,9"``. If ``data_dict["mode"]`` is
     ``"inverse_dynamics"``, idle-frame metadata is omitted from the prompt.
+
+    A dataset may additionally supply ``data_dict["relabel_prompt"]`` -- the
+    per-keyframe relabeling active at this chunk, as ``task_state`` and/or
+    ``situation`` (see :mod:`~.relabel_annotations`).  Its keys are merged into
+    the action entry *after* the existing ones, so prompts built without
+    relabeling are unchanged.  Like idle-frame metadata it is suppressed for
+    ``"inverse_dynamics"``.
     """
 
     def __init__(
@@ -55,6 +73,9 @@ class ActionPromptJsonFormatter:
     def __call__(self, data_dict: dict) -> dict:
         """Replace the caption with the action JSON prompt structure."""
         additional_view_description = data_dict.pop("additional_view_description", None)
+        # Popped unconditionally -- including on the early-return paths below --
+        # so the optional field never survives into collation.
+        relabel_prompt = data_dict.pop("relabel_prompt", None)
         caption = data_dict.get(self.caption_key)
         if not isinstance(caption, str) or caption == "":
             return data_dict
@@ -74,17 +95,20 @@ class ActionPromptJsonFormatter:
         duration = self._truncate_seconds(duration_seconds)
         action_end_time = self._round_time_seconds(duration_seconds)
 
+        action_entry = {
+            "time": f"0:00-{self._format_time_mss(action_end_time)}",
+            "description": self._ensure_sentence(caption),
+            "idle_frame": self._get_idle_frame_info(data_dict),
+        }
+        # Appended after the existing keys so prompts without relabeling are
+        # byte-identical to before this field existed.
+        action_entry.update(self._get_relabel_prompt(data_dict, relabel_prompt))
+
         prompt = {
             "cinematography": {
                 "framing": self._get_viewpoint_caption(data_dict, additional_view_description),
             },
-            "actions": [
-                {
-                    "time": f"0:00-{self._format_time_mss(action_end_time)}",
-                    "description": self._ensure_sentence(caption),
-                    "idle_frame": self._get_idle_frame_info(data_dict),
-                }
-            ],
+            "actions": [action_entry],
             "duration": f"{duration}s",
             "fps": float(fps),
             "resolution": {"H": height, "W": width},
@@ -236,6 +260,20 @@ class ActionPromptJsonFormatter:
             return len(action) if action is not None else None
         except TypeError:
             return None
+
+    def _get_relabel_prompt(self, data_dict: dict, relabel_prompt: object | None) -> dict:
+        """Return the relabeling fragment to merge into the action entry.
+
+        Suppressed for ``inverse_dynamics`` for the same reason idle-frame
+        metadata is: that mode predicts the action from the video, and the
+        relabeling's ``grip`` / ``next`` fields describe the action itself, so
+        conditioning on them would leak the target.
+        """
+        if not isinstance(relabel_prompt, dict) or not relabel_prompt:
+            return {}
+        if _is_inverse_dynamics(data_dict.get("mode")):
+            return {}
+        return relabel_prompt
 
     def _get_idle_frame_info(self, data_dict: dict) -> str | None:
         """Build the idle-frame string for the action object."""

@@ -72,7 +72,7 @@ class DROIDLeRobotDataset(BaseActionLeRobotDataset):
         split_seed: int = 42,
         split_val_ratio: float = 0.03,
         split: str = "train",
-        mode: str = "policy",
+        mode: str = "wam",
         pose_convention: PoseConvention = "backward_framewise",
         action_normalization: ActionNormalization | None = None,
         tolerance_s=2e-4,

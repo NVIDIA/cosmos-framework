@@ -75,7 +75,7 @@ def load_conditioning_image(image_path: Path, target_h: int, target_w: int) -> t
     return img_tensor.unsqueeze(1)  # [3,1,target_h,target_w]
 
 
-def _decode_video_thwc_uint8(path: Path) -> tuple[torch.Tensor, float]:
+def decode_video_thwc_uint8(path: Path) -> tuple[torch.Tensor, float]:
     """Read all frames of a video as a uint8 [T, H, W, C] tensor plus fps.
 
     TorchCodec replacement for ``torchvision.io.read_video`` (removed in
@@ -104,7 +104,7 @@ def load_conditioning_video(
 
     ``keep`` selects which ``max_frames`` to take when the input is longer.
     """
-    frames, _ = _decode_video_thwc_uint8(video_path)
+    frames, _ = decode_video_thwc_uint8(video_path)
     frames = frames[-max_frames:] if keep == "last" else frames[:max_frames]  # [T,H,W,3]
     frames_tchw = frames.permute(0, 3, 1, 2).float()  # [T,3,H,W]
     frames_resized = _resize_and_center_crop(frames_tchw, target_h, target_w)  # [T,3,target_h,target_w]
@@ -201,7 +201,7 @@ def read_media_frames(path: Path, max_frames: int) -> tuple[torch.Tensor, float]
         return frames, 1.0
     if ext not in _VIDEO_EXTENSIONS:
         raise ValueError(f"Unsupported media extension: {ext}")
-    frames, fps = _decode_video_thwc_uint8(path)
+    frames, fps = decode_video_thwc_uint8(path)
     frames = frames[:max_frames].permute(0, 3, 1, 2).permute(1, 0, 2, 3)
     return frames, fps
 

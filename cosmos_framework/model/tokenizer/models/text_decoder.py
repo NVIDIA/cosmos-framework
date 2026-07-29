@@ -1794,6 +1794,7 @@ class TextDecoderWrapper(nn.Module):
         image_token_counts_by_visual: list[int] | None = None,
         thinking_mode: str = VQA_THINKING_MODE_OFF,
         reasoning_suffix: str = VQA_REASONING_SUFFIX,
+        system_prompt: str = "You are a helpful assistant.",
         decode_skip_special_tokens: bool | None = None,
         return_metadata: bool = False,
     ) -> str | tuple[str, dict[str, bool | int]]:
@@ -1815,6 +1816,7 @@ class TextDecoderWrapper(nn.Module):
                 visible thinking block, and ``raw`` leaves the assistant turn unconstrained.
             reasoning_suffix: User-turn suffix appended in Qwen ``on`` mode. Nemotron
                 follows Dense VL generation and uses only the assistant think prefix.
+            system_prompt: System prompt included before the VQA user turn.
             decode_skip_special_tokens: Whether tokenizer special tokens are hidden
                 in the returned answer text. When unset, ``off`` keeps the
                 legacy skip-special decode and ``on``/``raw`` preserve tags for
@@ -1873,7 +1875,7 @@ class TextDecoderWrapper(nn.Module):
         if self.spec.family == QWEN3_SPEC.family:
             system_turn = (
                 [QWEN3_IM_START_TOKEN_ID]
-                + _encode("system\nYou are a helpful assistant.")
+                + _encode("system\n" + system_prompt)
                 + [QWEN3_IM_END_TOKEN_ID]
                 + _encode("\n")
             )
@@ -1894,7 +1896,7 @@ class TextDecoderWrapper(nn.Module):
             im_end_id = _get_required_token_id(tok, NEMOTRON_2B_IM_END_TOKEN)
             think_id = _get_required_token_id(tok, NEMOTRON_2B_THINK_START_TOKEN)
             end_think_id = _get_required_token_id(tok, NEMOTRON_2B_THINK_END_TOKEN)
-            system_turn = [im_start_id] + _encode("system\nYou are a helpful assistant.") + [im_end_id] + _encode("\n")
+            system_turn = [im_start_id] + _encode("system\n" + system_prompt) + [im_end_id] + _encode("\n")
             user_turn, user_image_pad_offsets = self._build_vqa_user_turn_with_visual_blocks(
                 tokenizer=tok,
                 question=prompt_question,

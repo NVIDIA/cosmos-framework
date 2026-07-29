@@ -147,7 +147,7 @@ The full inference subpackage:
 - `args.py` — sampling/setup args (`SamplingArgs`, `SamplingOverrides`, `OmniSetupArgs`, `OmniSetupOverrides`, `OmniSampleOverrides`), plus the modality-defaults loader and the `_RESOLUTION_SHIFT_DEFAULTS` table.
 - `model.py`, `inference.py` — model + inference engine entry points used by `cosmos_framework/scripts/inference.py`.
 - `common/` — shared helpers for args, init, config, checkpoints (used by both training and inference scripts).
-- `defaults/<mode>/sample_args.json` — per-modality default sample arguments (text2image, text2video, image2video, image2image, video2video, forward_dynamics, inverse_dynamics, policy, reasoner) plus `prompt_upsampler.txt` and `video_captioner.txt` system prompts.
+- `defaults/<mode>/sample_args.json` — per-modality default sample arguments (text2image, text2video, image2video, image2image, video2video, forward_dynamics, inverse_dynamics, wam, reasoner) plus `prompt_upsampler.txt` and `video_captioner.txt` system prompts.
 - `ray/` — Ray Serve / Submit / Gradio entry points (`cosmos_framework.inference.ray.serve`, `cosmos_framework.inference.ray.submit`, `cosmos_framework.inference.ray.gradio`) and their YAML configs under `ray/configs/`.
 - `configs/{checkpoint,model}/` — per-checkpoint and per-model inference configs.
 - Modality entry points: `vision.py`, `action.py`, `sound.py`, `transfer.py`, `interactive.py`, `prompt_upsampling.py`, `dataset.py`.

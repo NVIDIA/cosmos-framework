@@ -14,7 +14,6 @@ import cattrs
 import cattrs.preconf.json
 import safetensors.torch
 import torch
-import torchvision.io
 from PIL import Image
 from qwen_vl_utils.vision_process import smart_nframes
 from torch.utils._pytree import tree_map_only
@@ -46,6 +45,7 @@ from cosmos_framework.inference.model import Cosmos3OmniConfig, Cosmos3OmniModel
 from cosmos_framework.inference.vision import (
     build_conditioned_video_batch,
     build_image_edit_batch,
+    decode_video_thwc_uint8,
     load_conditioning_image,
     load_conditioning_video,
     load_prompt_upsampling_image,
@@ -574,17 +574,16 @@ def _get_prompt_sample_data(sample_args: OmniSampleArgs, model: OmniMoTModel, *,
 def _decode_reasoner_video(vision_path: str, video_fps: float | None) -> dict[str, Any]:
     """Decode a local video file into the frame-list payload the Qwen3-VL processor expects.
 
-    Returns ``{"frames": [PIL.Image, ...], "fps": float}``. Uses the same
-    ``torchvision.io.read_video`` decode the rest of the inference path relies on
-    (no ``decord`` dependency), then uniformly samples frames toward ``video_fps``
-    (default 2.0) via Qwen's ``smart_nframes``. The repo ``Qwen3VLProcessor`` runs
-    with ``do_sample_frames=False``, so it consumes this pre-sampled frame list
-    as-is and handles its own per-frame resize."""
-    frames, _, info = torchvision.io.read_video(str(vision_path), pts_unit="sec")  # [T,H,W,C] uint8
+    Returns ``{"frames": [PIL.Image, ...], "fps": float}``. Uses the same TorchCodec
+    decode the rest of the inference path relies on (no ``decord`` dependency), then
+    uniformly samples frames toward ``video_fps`` (default 2.0) via Qwen's
+    ``smart_nframes``. The repo ``Qwen3VLProcessor`` runs with ``do_sample_frames=False``,
+    so it consumes this pre-sampled frame list as-is and handles its own per-frame resize."""
+    frames, src_fps = decode_video_thwc_uint8(Path(vision_path))  # [T,H,W,C] uint8
     total_frames = int(frames.shape[0])
     if total_frames == 0:
         raise ValueError(f"Decoded zero frames from reasoner video: {vision_path}")
-    src_fps = float(info.get("video_fps") or 0.0) or 1.0
+    src_fps = src_fps or 1.0
     target_fps = video_fps if video_fps is not None else 2.0
     nframes = smart_nframes({"fps": target_fps}, total_frames=total_frames, video_fps=src_fps)
     idx = torch.linspace(0, total_frames - 1, nframes).round().long().tolist()

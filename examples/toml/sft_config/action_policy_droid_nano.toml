@@ -38,9 +38,6 @@ save_ops_regex = ["fmha"]
 [model.tokenizer]
 vae_path = "${oc.env:WAN_VAE_PATH}"
 
-[model.rectified_flow_training_config]
-loss_scale = 10.0    # generator (diffusion) loss weight, reference value
-
 [optimizer]
 lr = 2.0e-04
 
@@ -49,11 +46,6 @@ cycle_lengths = [100000]   # long cosine cycle: lr decays slowly across the 1000
 
 [dataloader_train]
 max_samples_per_batch = 32   # samples packed into each per-rank batch (res480)
-
-[dataloader_train.dataloader]
-num_workers     = 16   # decode-worker throughput tuning; adjust to host CPU count
-batch_size      = 16
-prefetch_factor = 2
 
 [trainer]
 max_iter        = 10000
