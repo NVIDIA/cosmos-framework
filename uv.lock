@@ -146,13 +146,6 @@ conflicts = [[
     { package = "cosmos-framework", group = "cu130-train" },
     { package = "cosmos-framework", group = "vllm" },
 ], [
-    { package = "cosmos-framework", group = "cu128-train" },
-    { package = "cosmos-framework", group = "cu130" },
-    { package = "cosmos-framework", group = "cu130-torch213" },
-    { package = "cosmos-framework", group = "cu130-torch213-train" },
-    { package = "cosmos-framework", group = "cu130-train" },
-    { package = "cosmos-framework", group = "vllm" },
-], [
     { package = "cosmos-framework", group = "cu128" },
     { package = "cosmos-framework", group = "cu128-train" },
     { package = "cosmos-framework", group = "cu130" },
@@ -160,19 +153,9 @@ conflicts = [[
     { package = "cosmos-framework", group = "cu130-train" },
     { package = "cosmos-framework", group = "vllm" },
 ], [
-    { package = "cosmos-framework", group = "cu128" },
     { package = "cosmos-framework", group = "cu128-train" },
-    { package = "cosmos-framework", group = "cu130-torch213-train" },
-    { package = "cosmos-framework", group = "cu130-train" },
-    { package = "cosmos-framework", group = "vllm" },
-], [
-    { package = "cosmos-framework", group = "cu128-train" },
+    { package = "cosmos-framework", group = "cu130" },
     { package = "cosmos-framework", group = "cu130-torch213" },
-    { package = "cosmos-framework", group = "cu130-torch213-train" },
-    { package = "cosmos-framework", group = "cu130-train" },
-    { package = "cosmos-framework", group = "vllm" },
-], [
-    { package = "cosmos-framework", group = "cu128-train" },
     { package = "cosmos-framework", group = "cu130-torch213-train" },
     { package = "cosmos-framework", group = "cu130-train" },
     { package = "cosmos-framework", group = "vllm" },
@@ -183,9 +166,26 @@ conflicts = [[
     { package = "cosmos-framework", group = "cu130-train" },
     { package = "cosmos-framework", group = "vllm" },
 ], [
+    { package = "cosmos-framework", group = "cu128-train" },
+    { package = "cosmos-framework", group = "cu130-torch213" },
+    { package = "cosmos-framework", group = "cu130-torch213-train" },
+    { package = "cosmos-framework", group = "cu130-train" },
+    { package = "cosmos-framework", group = "vllm" },
+], [
+    { package = "cosmos-framework", group = "cu128-train" },
+    { package = "cosmos-framework", group = "cu130-torch213-train" },
+    { package = "cosmos-framework", group = "cu130-train" },
+    { package = "cosmos-framework", group = "vllm" },
+], [
     { package = "cosmos-framework", group = "cu128" },
     { package = "cosmos-framework", group = "cu128-train" },
     { package = "cosmos-framework", group = "cu130-torch213" },
+    { package = "cosmos-framework", group = "cu130-torch213-train" },
+    { package = "cosmos-framework", group = "cu130-train" },
+    { package = "cosmos-framework", group = "vllm" },
+], [
+    { package = "cosmos-framework", group = "cu128" },
+    { package = "cosmos-framework", group = "cu128-train" },
     { package = "cosmos-framework", group = "cu130-torch213-train" },
     { package = "cosmos-framework", group = "cu130-train" },
     { package = "cosmos-framework", group = "vllm" },
