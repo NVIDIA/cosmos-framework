@@ -1228,7 +1228,7 @@ _CHECKPOINTS: dict[str, CheckpointConfig] = {
         s3_uri="s3://bucket1/cosmos3_vfm/cosmos3_ga_text2image_4step/",
         hf=CheckpointDirHf(
             repository="nvidia/Cosmos3-Super-Text2Image-4Step",
-            revision="1ba94110bc118f479bbd5e461e79d685d74b2554",
+            revision="main",
         ),
         experiment_overrides=(
             "model.config.resolution='768'",
@@ -1250,7 +1250,7 @@ _CHECKPOINTS: dict[str, CheckpointConfig] = {
         s3_uri="s3://bucket1/cosmos3_vfm/cosmos3_ga_image2video_4step/",
         hf=CheckpointDirHf(
             repository="nvidia/Cosmos3-Super-Image2Video-4Step",
-            revision="f85d3335d2ad8b352462cecbd637aa980cec9688",
+            revision="main",
         ),
         experiment_overrides=(
             "model.config.resolution='480'",

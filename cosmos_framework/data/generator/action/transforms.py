@@ -636,6 +636,12 @@ class ActionTransformPipeline:
         if self.prompt_json_formatter is not None:
             data_dict = self.prompt_json_formatter(data_dict)
         else:
+            # The relabeling is only rendered by the JSON formatter.  Drop it
+            # here so that enabling ``annotation_mode`` without
+            # ``format_prompt_as_json`` degrades to the plain caption instead of
+            # leaking a dict into the collate function.
+            data_dict.pop("relabel_prompt", None)
+
             # 3. Append viewpoint type metadata to caption (if enabled).
             if self.viewpoint_augmentor is not None:
                 result = self.viewpoint_augmentor(data_dict)
