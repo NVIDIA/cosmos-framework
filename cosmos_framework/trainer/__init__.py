@@ -5,6 +5,7 @@ import functools
 import inspect
 import os
 import signal
+from typing import Any
 
 import torch
 import torch.distributed as dist
@@ -139,9 +140,9 @@ class ImaginaireTrainer:
     def _fetch_and_broadcast_data(
         self,
         model: ImaginaireModel,
-        dataloader_iter,
+        dataloader_iter: Any,
         iteration: int,
-    ):
+    ) -> tuple[Any, bool]:
         """
         Fetches data from the dataloader on the batch owner rank and broadcasts it to all other ranks in the Context Parallel group if CP is enabled.
         When CP is disabled, data is fetched from the dataloader on the current rank and no broadcasting is needed.
@@ -176,18 +177,20 @@ class ImaginaireTrainer:
                 stop_signal = True
                 data_batch = None
 
-        objs = [data_batch, stop_signal]
-
         # Calculate the global rank of the batch owner within the CP group
-        global_src_rank = dist.get_global_rank(parallel_dims.cp_mesh.get_group(), batch_owner_rank)
+        cp_group = parallel_dims.cp_mesh.get_group()
+        global_src_rank = dist.get_global_rank(cp_group, batch_owner_rank)
 
-        dist.broadcast_object_list(
+        objs = [data_batch, stop_signal]
+        distributed.broadcast_object_list_optimized(
             objs,
             src=global_src_rank,
-            group=parallel_dims.cp_mesh.get_group(),
+            group=cp_group,
+            min_tensor_bytes=self.config.trainer.cp_input_direct_broadcast_min_bytes,
         )
+        data_batch, stop_signal = objs
 
-        return objs[0], objs[1]
+        return data_batch, stop_signal
 
     def train(
         self,

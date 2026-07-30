@@ -855,7 +855,7 @@ class ActionModelService:
             "video": video,  # post-pad [C,T,H,W]; formatter reads T for duration
             "image_size": image_size,  # post-pad [H,W]; formatter reads resolution
             "conditioning_fps": torch.tensor(self.cfg.fps, dtype=torch.long),
-            "mode": "policy",
+            "mode": "wam",
             # Zero action chunk: only its frame count (chunk length) is read, for "<idle> out of <N>".
             "action": torch.zeros((self.cfg.action_chunk_size, self.cfg.max_action_dim), dtype=torch.float32),
             "idle_frames": torch.tensor(0, dtype=torch.long),
@@ -899,7 +899,7 @@ class ActionModelService:
         pad_dict: dict[str, Any] = {"video": video_c_t_h_w_uint8}
         reflection_pad_to_target(pad_dict, ["video"], True, target_w, target_h)
         sequence_plan = build_sequence_plan_from_mode(
-            mode="policy",
+            mode="wam",
             video_length=self.cfg.action_chunk_size + 1,
             action_length=self.cfg.action_chunk_size,
             has_text=True,
@@ -946,7 +946,7 @@ class ActionModelService:
                 batch_size=n,
             ),
             "action": [[action_t_d] for _ in preps],
-            "mode": ["policy"] * n,
+            "mode": ["wam"] * n,
             "ai_caption": [p["augmented_prompt"] for p in preps],
             "prompt": [p["augmented_prompt"] for p in preps],
             "conditioning_fps": [torch.tensor(self.cfg.fps, dtype=torch.long) for _ in preps],
@@ -1037,7 +1037,7 @@ class ActionModelService:
                 batch_size=1,
             ),
             "action": [[action_t_d]],
-            "mode": ["policy"],
+            "mode": ["wam"],
             "ai_caption": [augmented_prompt],
             "prompt": [augmented_prompt],
             "conditioning_fps": [torch.tensor(self.cfg.fps, dtype=torch.long)],

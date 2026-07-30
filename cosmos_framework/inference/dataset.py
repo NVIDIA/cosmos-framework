@@ -33,7 +33,7 @@ from cosmos_framework.scripts.dataset_utils import (
 )
 
 Split = Literal["train", "val", "full"]
-ModelMode = Literal["forward_dynamics", "inverse_dynamics", "policy"]
+ModelMode = Literal["forward_dynamics", "inverse_dynamics", "wam"]
 ALL_MODEL_MODES: list[str] = list(get_args(ModelMode))
 
 

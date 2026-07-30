@@ -11,9 +11,17 @@ Only safe to import when FLASH3_SUPPORTED is True.
 
 import inspect
 
+import torch
+
 # pyrefly: ignore  # missing-import
 from flash_attn_3_nv.flash_attn_interface import flash_attn_func, flash_attn_varlen_func
 from torch import Tensor
+
+# Treat the Flash-Attn entrypoints as opaque leaves for TorchDynamo. They wrap a Python
+# ``autograd.Function`` (``FlashAttnVarlenFunc``/``FlashAttnFunc``); when Dynamo tries to
+# trace into ``.apply``.
+torch._dynamo.allow_in_graph(flash_attn_func)
+torch._dynamo.allow_in_graph(flash_attn_varlen_func)
 
 # NOTE: older commits didn't have `return_attn_probs` as an argument, and there is no
 # reflection of the commit hash in the version, so we have to manually inspect the signatures

@@ -7,7 +7,6 @@ from typing import Literal
 
 import numpy as np
 import torch
-import torchvision.io
 import torchvision.transforms.functional as TF
 from PIL import Image
 
@@ -76,6 +75,26 @@ def load_conditioning_image(image_path: Path, target_h: int, target_w: int) -> t
     return img_tensor.unsqueeze(1)  # [3,1,target_h,target_w]
 
 
+def decode_video_thwc_uint8(path: Path) -> tuple[torch.Tensor, float]:
+    """Read all frames of a video as a uint8 [T, H, W, C] tensor plus fps.
+
+    TorchCodec replacement for ``torchvision.io.read_video``; mirrors its frame layout so
+    callers are unchanged. As of torchvision 0.28 the public wheel no longer binds that
+    symbol — ``torchvision/io/__init__.py`` imports it from the Meta-internal
+    ``pytorch.vision.fb.io.video`` under ``except ImportError: pass``, so ``import
+    torchvision.io`` still succeeds but calling ``read_video`` raises ``AttributeError``.
+    """
+    from cosmos_framework.utils.generator.torchcodec_video import decode_frames_nhwc_uint8, probe_video
+
+    # torchcodec's core ops are CPU-only. Force CPU tensor creation so an active default-CUDA
+    # device context (torch.set_default_device during generation) doesn't route torchcodec's
+    # internal frame-index tensor to CUDA and raise NotImplementedError.
+    with torch.device("cpu"):
+        num_frames = probe_video(path).num_frames
+        frames_nhwc, meta = decode_frames_nhwc_uint8(path, list(range(num_frames)))
+    return torch.from_numpy(frames_nhwc), float(meta.average_fps)
+
+
 def load_conditioning_video(
     video_path: Path,
     target_h: int,
@@ -88,7 +107,7 @@ def load_conditioning_video(
 
     ``keep`` selects which ``max_frames`` to take when the input is longer.
     """
-    frames, _, _ = torchvision.io.read_video(str(video_path), pts_unit="sec")
+    frames, _ = decode_video_thwc_uint8(video_path)
     frames = frames[-max_frames:] if keep == "last" else frames[:max_frames]  # [T,H,W,3]
     frames_tchw = frames.permute(0, 3, 1, 2).float()  # [T,3,H,W]
     frames_resized = _resize_and_center_crop(frames_tchw, target_h, target_w)  # [T,3,target_h,target_w]
@@ -185,9 +204,8 @@ def read_media_frames(path: Path, max_frames: int) -> tuple[torch.Tensor, float]
         return frames, 1.0
     if ext not in _VIDEO_EXTENSIONS:
         raise ValueError(f"Unsupported media extension: {ext}")
-    frames, _, info = torchvision.io.read_video(str(path), pts_unit="sec")
+    frames, fps = decode_video_thwc_uint8(path)
     frames = frames[:max_frames].permute(0, 3, 1, 2).permute(1, 0, 2, 3)
-    fps = float(info.get("video_fps", 24.0))
     return frames, fps
 
 

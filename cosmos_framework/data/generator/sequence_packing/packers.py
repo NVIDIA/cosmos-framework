@@ -150,7 +150,7 @@ def pack_input_sequence(
     use_float_mrope_positions = enable_fps_modulation or explicit_vision_temporal_positions_active
 
     # Initialize mutable builder state for sequence construction.
-    seq_builder = PackedSequenceBuilder()
+    seq_builder = PackedSequenceBuilder(uses_single_timestep=input_timesteps.numel() == 1)
 
     # Configure 3D mRoPE on the builder.
     seq_builder._mrope_reset_spatial = unified_3d_mrope_reset_spatial_ids

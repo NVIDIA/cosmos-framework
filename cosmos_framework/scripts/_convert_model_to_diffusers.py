@@ -27,6 +27,14 @@ try:
 except ImportError:
     # Some intermediate main-branch revisions used this renamed export.
     from diffusers import Cosmos3OmniDiffusersPipeline as Cosmos3OmniPipeline
+
+try:
+    from diffusers import Cosmos3EdgeUniPCMultistepScheduler
+except ImportError:
+    # Older Diffusers builds predate the Edge scheduler. Keep the import optional
+    # so non-Edge conversions still work; Edge conversions raise a clear error at
+    # use time (see the is_edge_model scheduler branch below).
+    Cosmos3EdgeUniPCMultistepScheduler = None
 from transformers import AutoConfig, AutoTokenizer
 
 from cosmos_framework.inference.model import Cosmos3OmniModel
@@ -1151,10 +1159,19 @@ def _write_edge_transformer_config(output_dir: pathlib.Path, model_cfg: Any) -> 
 def _normalize_edge_model_index(output_dir: pathlib.Path) -> None:
     """Keep Edge pipeline metadata consistent with the existing Hub export."""
     model_index_path = output_dir / "model_index.json"
+    scheduler_config_path = output_dir / "scheduler" / "scheduler_config.json"
     model_index = _load_json(model_index_path)
+    scheduler_config = _load_json(scheduler_config_path)
+    try:
+        native_flow_shift = float(scheduler_config["flow_shift"])
+    except (KeyError, TypeError, ValueError) as error:
+        raise ValueError(
+            f"Cosmos3 Edge scheduler config must define a numeric flow_shift: {scheduler_config_path}"
+        ) from error
     model_index.update(
         {
             "default_use_system_prompt": False,
+            "native_flow_shift": native_flow_shift,
             "text_tokenizer": ["transformers", "PreTrainedTokenizerFast"],
             "use_native_flow_schedule": True,
         }
@@ -1591,6 +1608,19 @@ def convert_model_to_diffusers(args: Args) -> None:
                     "sample_type": fixed_step_sampler_cfg["sample_type"],
                 },
                 fixed_step_requires_explicit_sigmas=True,
+            )
+        elif is_edge_model:
+            if Cosmos3EdgeUniPCMultistepScheduler is None:
+                raise ImportError(
+                    "Converting a Cosmos3 Edge checkpoint requires a Diffusers build that exports "
+                    "Cosmos3EdgeUniPCMultistepScheduler; the installed build does not. Upgrade Diffusers "
+                    "to a revision that ships the Edge scheduler."
+                )
+            scheduler = Cosmos3EdgeUniPCMultistepScheduler(
+                use_karras_sigmas=False,
+                use_flow_sigmas=True,
+                prediction_type="flow_prediction",
+                flow_shift=3.0,
             )
         else:
             # Karras schedule approximating FlowUniPCMultistepScheduler with shift=5, 35 steps.

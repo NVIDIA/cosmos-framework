@@ -247,10 +247,9 @@ def build_sequence_plan_from_mode(
 
     Args:
         mode: Training mode. One of:
-            - "image2video": Image-to-video generation (no action)
             - "forward_dynamics": Predict video given first frame and all actions
             - "inverse_dynamics": Predict actions given all video frames
-            - "policy": Predict both actions and video given first frame
+            - "wam": Jointly denoise video and actions given the first frame
         video_length: Number of video frames (including the conditioning frame).
         action_length: Number of action steps (typically video_length - 1).
         has_text: Whether text conditioning is available. Defaults to True.
@@ -267,7 +266,7 @@ def build_sequence_plan_from_mode(
 
     Example:
         >>> sequence_plan = build_sequence_plan_from_mode(
-        ...     mode="policy",
+        ...     mode="wam",
         ...     video_length=5,
         ...     action_length=4,
         ... )
@@ -277,19 +276,14 @@ def build_sequence_plan_from_mode(
         {'has_text': True, 'has_vision': True, 'has_action': True,
          'condition_frame_indexes_vision': [0], 'condition_frame_indexes_action': []}
     """
-    valid_modes = ["image2video", "forward_dynamics", "inverse_dynamics", "policy"]
+    valid_modes = ["forward_dynamics", "inverse_dynamics", "wam"]
     if mode not in valid_modes:
         raise ValueError(f"Invalid mode: {mode!r}. Must be one of {valid_modes}")
 
-    # Determine if action should be included based on mode
-    # image2video mode: no action (pure image-to-video generation)
-    # forward_dynamics, inverse_dynamics, policy: action is needed
-    has_action = mode != "image2video"
-
     # Determine condition frame indexes based on mode
-    # image2video/forward_dynamics/policy: first frame is clean (conditioning)
+    # forward_dynamics/wam: first frame is clean (conditioning)
     # inverse_dynamics: all frames are provided as context
-    if mode in ["image2video", "forward_dynamics", "policy"]:
+    if mode in ["forward_dynamics", "wam"]:
         condition_frame_indexes_vision = [0]
     elif mode == "inverse_dynamics":
         # All frames are observed for inverse dynamics
@@ -299,7 +293,7 @@ def build_sequence_plan_from_mode(
 
     # For action conditioning indexes:
     # forward_dynamics: all action steps are clean (conditioning)
-    # inverse_dynamics/policy: action is supervised (predicted)
+    # inverse_dynamics/wam: action is supervised (predicted)
     # History frames (prepended) are always conditioning.
     #
     # `base_action_length` is the number of *predicted* action steps, i.e.
@@ -308,7 +302,7 @@ def build_sequence_plan_from_mode(
     # (`video_length` counts the leading conditioning frame at index 0):
     #
     #   Case A (dense video, action = video_length - 1)
-    #       Standard forward-dynamics / policy layout: one action per gap
+    #       Standard forward-dynamics / WAM layout: one action per gap
     #       between consecutive video frames, no explicit initial-state
     #       action. Conditioning actions are only the prepended history.
     #
@@ -357,7 +351,7 @@ def build_sequence_plan_from_mode(
     return SequencePlan(
         has_text=has_text,
         has_vision=True,
-        has_action=has_action,
+        has_action=True,
         condition_frame_indexes_vision=condition_frame_indexes_vision,
         condition_frame_indexes_action=condition_frame_indexes_action,
         action_start_frame_offset=action_start_frame_offset,
@@ -442,9 +436,7 @@ class ActionTransformPipeline:
 
     When the data dictionary contains a ``"mode"`` key, the pipeline automatically
     builds a ``SequencePlan`` via :func:`build_sequence_plan_from_mode` and attaches
-    it as ``data_dict["sequence_plan"]``.  For modes where action is not needed
-    (e.g. ``"image2video"``), the ``"action"`` and ``"domain_id"`` keys are set to
-    ``None``.
+    it as ``data_dict["sequence_plan"]``.
 
     Args:
         pad_keys: Data-dict keys whose values should be resized and padded. Pass
@@ -617,12 +609,9 @@ class ActionTransformPipeline:
            sample is in inverse dynamics mode (if enabled).
         7. Tokenize caption text (if enabled).
         8. Build a ``SequencePlan`` from the ``"mode"`` key (if present).
-        9. If action is needed by the plan, preserve the canonical unnormalized
-           and unpadded action as ``"action_raw"``, normalize real channels,
-           pad ``"action"`` to ``max_action_dim``, and attach
-           ``"action_processing_record"``.
-        10. Otherwise, nullify ``"action_raw"``, ``"action"``, and
-            ``"domain_id"`` (e.g. in ``"image2video"`` mode).
+        9. Preserve the canonical unnormalized and unpadded action as
+           ``"action_raw"``, normalize real channels, pad ``"action"`` to
+           ``max_action_dim``, and attach ``"action_processing_record"``.
 
         Args:
             data_dict: A sample dictionary as returned by a Action dataset.
@@ -647,6 +636,12 @@ class ActionTransformPipeline:
         if self.prompt_json_formatter is not None:
             data_dict = self.prompt_json_formatter(data_dict)
         else:
+            # The relabeling is only rendered by the JSON formatter.  Drop it
+            # here so that enabling ``annotation_mode`` without
+            # ``format_prompt_as_json`` degrades to the plain caption instead of
+            # leaking a dict into the collate function.
+            data_dict.pop("relabel_prompt", None)
+
             # 3. Append viewpoint type metadata to caption (if enabled).
             if self.viewpoint_augmentor is not None:
                 result = self.viewpoint_augmentor(data_dict)
@@ -699,20 +694,11 @@ class ActionTransformPipeline:
         )
         data_dict["sequence_plan"] = sequence_plan
 
-        if sequence_plan.has_action:
-            assert isinstance(action, torch.Tensor), "action tensor is required when sequence plan has action"
-            data_dict = self.action_processor.preprocess_action(
-                data_dict,
-                action,
-                action_normalizer=action_normalizer,
-            )
-        else:
-            # Nullify action-related fields when action is not needed so the
-            # collate function can simply stack all non-None actions.
-            data_dict["raw_action_dim"] = None
-            data_dict["action_raw"] = None
-            data_dict["action"] = None
-            data_dict["domain_id"] = None
-            data_dict["action_processing_record"] = None
+        assert isinstance(action, torch.Tensor), "action tensor is required for action modes"
+        data_dict = self.action_processor.preprocess_action(
+            data_dict,
+            action,
+            action_normalizer=action_normalizer,
+        )
 
         return data_dict
