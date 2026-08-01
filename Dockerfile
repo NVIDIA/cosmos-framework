@@ -40,7 +40,8 @@ WORKDIR /workspace
 # Install python
 RUN --mount=type=cache,target=/root/.cache/uv \
     --mount=type=bind,source=.python-version,target=.python-version \
-    uv python install
+    uv python install && \
+    chmod 0711 /root
 
 # Install into virtual environment
 RUN echo "$CUDA_VERSION" | sed -E 's/^([0-9]+)\.([0-9]+).*/cu\1\2/' > /root/.cuda-name
