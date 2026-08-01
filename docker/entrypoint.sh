@@ -7,6 +7,8 @@
 
 set -e
 
-uv pip install --no-deps -e . || true
+if [[ -w /workspace/.venv ]]; then
+    uv pip install --no-deps -e . || true
+fi
 
 exec "$@"
