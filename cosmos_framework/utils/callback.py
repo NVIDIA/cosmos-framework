@@ -15,10 +15,9 @@ import torch.utils.data
 import tqdm
 import wandb
 
-from cosmos_framework.utils.lazy_config import instantiate
 from cosmos_framework.utils import distributed, log, misc, wandb_util
+from cosmos_framework.utils.lazy_config import instantiate
 from cosmos_framework.utils.misc import get_local_tensor_if_DTensor
-
 
 try:
     from megatron.core import parallel_state
@@ -27,9 +26,9 @@ except ImportError:
 
 
 if TYPE_CHECKING:
-    from cosmos_framework.utils.config import Config
     from cosmos_framework.model._base import ImaginaireModel
     from cosmos_framework.trainer import ImaginaireTrainer
+    from cosmos_framework.utils.config import Config
 
 
 class CallBackGroup:
@@ -303,6 +302,10 @@ class Callback:
         pass
 
     def on_app_end(self) -> None:
+        pass
+
+    def on_exception(self, error: BaseException) -> None:
+        """Called when the application exits because of an uncaught exception."""
         pass
 
 

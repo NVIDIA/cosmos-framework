@@ -55,8 +55,8 @@ from torch.distributed.checkpoint.default_planner import DefaultSavePlanner
 
 from cosmos_framework.checkpoint.base import AbstractCheckpointer
 from cosmos_framework.checkpoint.s3_filesystem import S3StorageReader, S3StorageWriter
-from cosmos_framework.utils.config import CheckpointConfig, JobConfig
 from cosmos_framework.utils import callback, distributed, log, misc
+from cosmos_framework.utils.config import CheckpointConfig, JobConfig
 from cosmos_framework.utils.easy_io import easy_io
 from cosmos_framework.utils.reasoner.model_wrapper import ModelWrapper
 from cosmos_framework.utils.reasoner.optimizer import OptimizersContainer
@@ -458,6 +458,7 @@ class DistributedCheckpointer(AbstractCheckpointer):
         scheduler: torch.optim.lr_scheduler.LRScheduler,
         grad_scaler: torch.amp.GradScaler,
         iteration: int,
+        epoch: int | None = None,
     ) -> None:
         """Save network weights, optimizer parameters, scheduler parameters to a checkpoint.
 
@@ -471,7 +472,7 @@ class DistributedCheckpointer(AbstractCheckpointer):
         del grad_scaler
         self.callbacks.on_save_checkpoint_start(model_parts, iteration)
 
-        checkpoint_file = f"iter_{iteration:09}"
+        checkpoint_file = f"epoch_{epoch}" if epoch is not None else f"iter_{iteration:09}"
         to_save_dict = {
             "model": ModelWrapper(model_parts).state_dict(),
             "optim": optimizer.state_dict(),
@@ -482,7 +483,7 @@ class DistributedCheckpointer(AbstractCheckpointer):
         self.callbacks.on_save_checkpoint(model_parts, state_dict=to_save_dict)
 
         for k in to_save_dict.keys():
-            output_dirname = os.path.join(self.save_dirname, f"iter_{iteration:09}/{k}")
+            output_dirname = os.path.join(self.save_dirname, checkpoint_file, k)
             to_save_dict[k] = (to_save_dict[k], output_dirname)
 
         if self.async_mode == AsyncMode.ASYNC_WITH_PINNED_MEM:

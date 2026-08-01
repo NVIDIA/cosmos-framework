@@ -71,9 +71,9 @@ from torch.nn.modules.module import _IncompatibleKeys
 
 from cosmos_framework.checkpoint.base import AbstractCheckpointer
 from cosmos_framework.checkpoint.s3_filesystem import S3StorageReader, S3StorageWriter
-from cosmos_framework.utils.config import CheckpointConfig, JobConfig
 from cosmos_framework.model._base import ImaginaireModel
 from cosmos_framework.utils import callback, distributed, log, misc
+from cosmos_framework.utils.config import CheckpointConfig, JobConfig
 from cosmos_framework.utils.easy_io import easy_io
 from cosmos_framework.utils.generator.rand_state import get_rand_state_dict, set_rand_state_dict
 
@@ -748,7 +748,7 @@ class DistributedCheckpointer(AbstractCheckpointer):
 
                     # If the path doesn't end with specific checkpoint, read the latest
                     # checkpoint file to determine the most recent checkpoint iteration.
-                    if not re.search(r"/checkpoints/iter_\d{9}/?$", checkpoint_path):
+                    if not re.search(r"/checkpoints/(?:iter_\d{9}|epoch_\d+)/?$", checkpoint_path):
                         old_ckpt_path = checkpoint_path
                         latest_ckpt_path = os.path.join(checkpoint_path, "checkpoints/latest_checkpoint.txt")
 
@@ -1090,6 +1090,7 @@ class DistributedCheckpointer(AbstractCheckpointer):
         scheduler: torch.optim.lr_scheduler.LRScheduler,
         grad_scaler: torch.amp.GradScaler,
         iteration: int,
+        epoch: int | None = None,
     ) -> None:
         """Save network weights, optimizer parameters, scheduler parameters to a checkpoint.
 
@@ -1106,7 +1107,7 @@ class DistributedCheckpointer(AbstractCheckpointer):
         if self.callbacks is not None:
             self.callbacks.on_save_checkpoint_start(model, iteration)
 
-        checkpoint_file = f"iter_{iteration:09}"
+        checkpoint_file = f"epoch_{epoch}" if epoch is not None else f"iter_{iteration:09}"
 
         # Use rank-specific key for RNG state to ensure each rank saves its own state
         rng_key = f"rng_state_{dist.get_rank()}"
@@ -1129,7 +1130,7 @@ class DistributedCheckpointer(AbstractCheckpointer):
             self.callbacks.on_save_checkpoint(model, state_dict=to_save_dict)
 
         for k in to_save_dict.keys():
-            output_dirname = os.path.join(self.save_dirname, f"iter_{iteration:09}/{k}")
+            output_dirname = os.path.join(self.save_dirname, checkpoint_file, k)
             to_save_dict[k] = (to_save_dict[k], output_dirname)
 
         if self.async_mode == AsyncMode.ASYNC_WITH_PINNED_MEM:

@@ -76,6 +76,24 @@ class TestSchemaValidation:
                 }
             )
 
+    def test_native_epoch_schedule_fields_validate(self) -> None:
+        cfg = SFTExperimentConfig.model_validate(
+            {
+                "job": {"task": "vlm", "experiment": "wts_vlm"},
+                "trainer": {
+                    "num_epochs": 2,
+                    "steps_per_epoch": 108,
+                    "validation_freq_in_epoch": 1,
+                },
+                "checkpoint": {"save_freq_in_epoch": 2},
+            }
+        )
+
+        assert cfg.trainer.num_epochs == 2
+        assert cfg.trainer.steps_per_epoch == 108
+        assert cfg.trainer.validation_freq_in_epoch == 1
+        assert cfg.checkpoint.save_freq_in_epoch == 2
+
 
 # --------------------------------------------------------------------------- #
 # 2. build_hydra_overrides must NOT emit [custom] as per-leaf overrides        #
