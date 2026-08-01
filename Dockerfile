@@ -49,8 +49,14 @@ RUN --mount=type=cache,target=/root/.cache/uv \
     --mount=type=bind,source=pyproject.toml,target=pyproject.toml \
     --mount=type=bind,source=.python-version,target=.python-version \
     --mount=type=bind,source=packages,target=packages \
-    uv sync --locked --no-install-project --no-editable --all-extras --group=$(cat /root/.cuda-name) --group=vllm
+    uv sync --locked --no-install-project --no-editable --all-extras --group=$(cat /root/.cuda-name)-train
 ENV PATH="/workspace/.venv/bin:$PATH"
+
+# Package the exact source state into the image so it can run on managed
+# platforms without a host bind mount.
+COPY . /workspace
+RUN --mount=type=cache,target=/root/.cache/uv \
+    uv pip install --no-deps .
 
 # Triton bundled ptxas doesn't support latest GPU architectures
 ENV TRITON_PTXAS_PATH="/usr/local/cuda/bin/ptxas"

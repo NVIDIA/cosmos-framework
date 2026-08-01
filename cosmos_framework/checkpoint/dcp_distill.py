@@ -26,9 +26,6 @@ from torch.distributed.checkpoint.state_dict import (
 from torch.distributed.checkpoint.stateful import Stateful
 from torch.nn.modules.module import _IncompatibleKeys
 
-from cosmos_framework.model._base import ImaginaireModel
-from cosmos_framework.utils import log, misc
-from cosmos_framework.utils.easy_io import easy_io
 from cosmos_framework.checkpoint.dcp import (
     AsyncMode,
     CustomLoadPlanner,
@@ -38,8 +35,11 @@ from cosmos_framework.checkpoint.dcp import (
     DistributedCheckpointer as _DistributedCheckpointer,
 )
 from cosmos_framework.checkpoint.dcp import ModelWrapper as VFMModelWrapper
-from cosmos_framework.utils.generator.rand_state import get_rand_state_dict, set_rand_state_dict
+from cosmos_framework.model._base import ImaginaireModel
 from cosmos_framework.model.generator.distillation.optimizer import OptimizerContainerLike, is_optimizer_container
+from cosmos_framework.utils import log, misc
+from cosmos_framework.utils.easy_io import easy_io
+from cosmos_framework.utils.generator.rand_state import get_rand_state_dict, set_rand_state_dict
 
 __all__: tuple[str, ...] = (
     "DistributedCheckpointer",
@@ -324,6 +324,7 @@ class DistributedCheckpointer(_DistributedCheckpointer):
         scheduler: Any = None,
         grad_scaler: torch.amp.GradScaler | None = None,
         iteration: int = 0,
+        epoch: int | None = None,
     ) -> None:
         if self.async_mode == AsyncMode.ASYNC_WITH_PINNED_MEM:
             self._wait_for_previous_async_checkpoint()
@@ -332,7 +333,7 @@ class DistributedCheckpointer(_DistributedCheckpointer):
             self.callbacks.on_save_checkpoint_start(model, iteration)
 
         model_dict = model.model_dict()
-        checkpoint_file = f"iter_{iteration:09}"
+        checkpoint_file = f"epoch_{epoch}" if epoch is not None else f"iter_{iteration:09}"
 
         rng_key = f"rng_state_{dist.get_rank()}"
         to_save_dict: dict[str, Any] = {
@@ -360,7 +361,7 @@ class DistributedCheckpointer(_DistributedCheckpointer):
             to_save_dict["dataloader"] = dataloader_wrapper.state_dict()
 
         for key in list(to_save_dict.keys()):
-            output_dirname = os.path.join(self.save_dirname, f"iter_{iteration:09}/{key}")
+            output_dirname = os.path.join(self.save_dirname, checkpoint_file, key)
             to_save_dict[key] = (to_save_dict[key], output_dirname)
 
         if self.callbacks is not None:
