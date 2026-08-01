@@ -162,7 +162,7 @@ def split_orthogonalizable_params(
 # -----------------------------------------------------------------------------
 
 
-@torch.compile
+@torch.compile(fullgraph=True)
 def zeropower_via_newtonschulz5(G: torch.Tensor, steps: int = 5) -> torch.Tensor:
     """
     Newton-Schulz iteration to compute the zeroth power / orthogonalization of G.
@@ -202,7 +202,7 @@ def zeropower_via_newtonschulz5(G: torch.Tensor, steps: int = 5) -> torch.Tensor
     return X
 
 
-@torch.compile
+@torch.compile(fullgraph=True)
 def zeropower_via_newtonschulz5_batched(G: torch.Tensor, steps: int = 5) -> torch.Tensor:
     """Batched Newton-Schulz over a stack of matrices.
 
@@ -234,12 +234,35 @@ def zeropower_via_newtonschulz5_batched(G: torch.Tensor, steps: int = 5) -> torc
     return X
 
 
+def _compute_pre_ns_update_impl(
+    grad: torch.Tensor,
+    momentum_buffer: torch.Tensor,
+    momentum: float,
+    nesterov: bool,
+    output_dtype: torch.dtype | None,
+) -> torch.Tensor:  # grad/momentum_buffer: [M,N], returns [M,N]
+    """Tensor implementation shared by the single- and multi-parameter compiled entry points."""
+    # SGD-style momentum: buf = momentum * buf + grad (matching Moonlight)
+    momentum_buffer.mul_(momentum).add_(grad)  # [M,N]
+
+    # Nesterov: g = g + momentum * buf, else just use buf
+    if nesterov:
+        pre_ns = grad.add(momentum_buffer, alpha=momentum)  # [M,N]
+    else:
+        pre_ns = momentum_buffer.clone()  # [M,N]
+    if output_dtype is not None:
+        pre_ns = pre_ns.to(output_dtype)  # [M,N]
+    return pre_ns
+
+
+@torch.compile(fullgraph=True)
 def compute_pre_ns_update(
     grad: torch.Tensor,
     momentum_buffer: torch.Tensor,
     momentum: float = 0.95,
     nesterov: bool = True,
-) -> torch.Tensor:
+    output_dtype: torch.dtype | None = None,
+) -> torch.Tensor:  # grad/momentum_buffer: [M,N], returns [M,N]
     """
     Compute the pre-Newton-Schulz update (momentum + optional Nesterov).
 
@@ -251,18 +274,41 @@ def compute_pre_ns_update(
         momentum_buffer: Momentum buffer (modified in-place).
         momentum: Momentum coefficient.
         nesterov: Whether to use Nesterov momentum.
+        output_dtype: Optional dtype conversion fused into the compiled update.
 
     Returns:
         Pre-NS update tensor (same shape as grad).
     """
-    # SGD-style momentum: buf = momentum * buf + grad (matching Moonlight)
-    momentum_buffer.mul_(momentum).add_(grad)
+    return _compute_pre_ns_update_impl(grad, momentum_buffer, momentum, nesterov, output_dtype)  # [M,N]
 
-    # Nesterov: g = g + momentum * buf, else just use buf
-    if nesterov:
-        return grad.add(momentum_buffer, alpha=momentum)
-    else:
-        return momentum_buffer.clone()
+
+_PRE_NS_COMPILE_OPTIONS: dict[str, bool | int] = {
+    name: value
+    for name, value in {
+        "combo_kernels": True,
+        "benchmark_combo_kernel": False,
+        "combo_kernel_max_num_nodes": 64,
+        "combo_kernel_max_num_args": 250,
+        "aggressive_fusion": True,
+    }.items()
+    if hasattr(torch._inductor.config, name)
+}
+
+
+@torch.compile(fullgraph=True, options=_PRE_NS_COMPILE_OPTIONS)
+def compute_pre_ns_updates(
+    grads: list[torch.Tensor],
+    momentum_buffers: list[torch.Tensor],
+    momentum: float = 0.95,
+    nesterov: bool = True,
+    output_dtype: torch.dtype | None = None,
+) -> list[torch.Tensor]:  # grads/momentum_buffers: [M,N] each, returns [M,N] each
+    """Compute momentum/Nesterov updates for one same-shape parameter batch in one graph."""
+    pre_ns_updates = [
+        _compute_pre_ns_update_impl(grad, momentum_buffer, momentum, nesterov, output_dtype)
+        for grad, momentum_buffer in zip(grads, momentum_buffers)
+    ]  # [M,N] each
+    return pre_ns_updates
 
 
 def compute_pre_ns_update_moe_expert(

@@ -3,15 +3,46 @@
 
 import os
 from abc import ABC, abstractmethod
+from dataclasses import dataclass
 from typing import Optional
 
 import torch
 
-from cosmos_framework.utils.config import CheckpointConfig, JobConfig
+from cosmos_framework.utils.config import CheckpointConfig, JobConfig, ObjectStoreConfig
 from cosmos_framework.utils.flags import INTERNAL
 from cosmos_framework.model._base import ImaginaireModel
 from cosmos_framework.utils import callback
 from cosmos_framework.utils.easy_io import easy_io
+
+
+@dataclass(frozen=True, slots=True)
+class CheckpointLoadSource:
+    """Resolved checkpoint location and the object-store access needed to read it.
+
+    Same-job resume uses the save object store (where this job writes checkpoints).
+    Warm-start uses the load object store (where ``load_path`` lives). Bundling them
+    avoids threading a boolean through every load helper.
+    """
+
+    path: str
+    backend_key: str | None
+    object_store: ObjectStoreConfig
+    warm_start: bool
+
+    @property
+    def same_job_resume(self) -> bool:
+        return not self.warm_start
+
+    @property
+    def uses_object_store(self) -> bool:
+        """Whether this source should be read through its configured object store."""
+        return self.backend_key is not None
+
+    def __str__(self) -> str:
+        kind = "warm-start" if self.warm_start else "same-job"
+        if self.uses_object_store:
+            return f"{self.path} ({kind}, bucket={self.object_store.bucket})"
+        return f"{self.path} ({kind}, local)"
 
 
 class AbstractCheckpointer(ABC):
@@ -136,21 +167,40 @@ class AbstractCheckpointer(ABC):
         if self.save_thread:
             self.save_thread.join()
 
+    def _same_job_load_source(self, path: str) -> CheckpointLoadSource:
+        """Build a load source for checkpoints written by this job (save object store)."""
+        return CheckpointLoadSource(
+            path=path,
+            backend_key=self.save_s3_backend_key if self.save_to_object_store else None,
+            object_store=self.config_checkpoint.save_to_object_store,
+            warm_start=False,
+        )
+
+    def _warm_start_load_source(self, path: str) -> CheckpointLoadSource:
+        """Build a load source for ``load_path`` warm-start (load object store)."""
+        return CheckpointLoadSource(
+            path=path,
+            backend_key=self.load_s3_backend_key,
+            object_store=self.config_checkpoint.load_from_object_store,
+            warm_start=True,
+        )
+
     def _read_latest_checkpoint_file(self) -> str | None:
         """Get the file name of the latest saved checkpoint. If it doesn't exist, return None.
+
+        Reads from ``save_dirname`` (where ``_write_latest_checkpoint_file`` writes), so
+        same-job auto-resume works even when load and save buckets differ.
 
         Returns:
             checkpoint_file (str | None): file name of the latest saved checkpoint.
         """
-        checkpoint_file = None
-        checkpoint_path = os.path.join(self.load_dirname, "latest_checkpoint.txt")
-        if easy_io.exists(f"{checkpoint_path}", backend_key=self.load_s3_backend_key):
-            checkpoint_file = easy_io.load(f"{checkpoint_path}", backend_key=self.load_s3_backend_key).strip()
-
-        return checkpoint_file
+        source = self._same_job_load_source(os.path.join(self.save_dirname, "latest_checkpoint.txt"))
+        if easy_io.exists(source.path, backend_key=source.backend_key):
+            return easy_io.load(source.path, backend_key=source.backend_key).strip()
+        return None
 
     def has_resumable_checkpoint(self) -> bool:
-        """True iff a ``latest_checkpoint.txt`` exists in the load directory."""
+        """True iff a ``latest_checkpoint.txt`` exists in the save directory."""
         return self._read_latest_checkpoint_file() is not None
 
     def _write_latest_checkpoint_file(self, checkpoint_file: str) -> None:
@@ -167,11 +217,7 @@ class AbstractCheckpointer(ABC):
             backend_key=self.save_s3_backend_key,
         )
 
-    def _check_checkpoint_exists(self, checkpoint_path: str) -> None:
-        """If the file checkpoint_path does not exist, raise an error.
-
-        Args:
-            checkpoint_path (str): full path to the checkpoint.
-        """
-        if not easy_io.exists(f"{checkpoint_path}", backend_key=self.load_s3_backend_key):
-            raise FileNotFoundError(f"File not found (object store): {checkpoint_path}")
+    def _check_checkpoint_exists(self, source: CheckpointLoadSource) -> None:
+        """If the checkpoint at ``source.path`` does not exist, raise an error."""
+        if not easy_io.exists(source.path, backend_key=source.backend_key):
+            raise FileNotFoundError(f"File not found (object store): {source.path}")

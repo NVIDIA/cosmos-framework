@@ -232,7 +232,7 @@ def verify_natten_parameter_list(
 
 
 def generate_natten_metadata(
-    token_shapes: list[tuple[int, int, int]],
+    token_shapes: Sequence[tuple[int, ...]],
     head_dim: int,
     num_layers: int,
     device: torch.device,

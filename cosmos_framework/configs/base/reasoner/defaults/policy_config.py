@@ -9,7 +9,7 @@ from cosmos_framework.configs.base.defaults.activation_checkpointing import Acti
 from cosmos_framework.configs.base.defaults.compile import CompileConfig
 from cosmos_framework.configs.base.defaults.ema import EMAConfig
 from cosmos_framework.configs.base.defaults.parallelism import ParallelismConfig
-from cosmos_framework.configs.base.defaults.reasoner import VLMConfig
+from cosmos_framework.configs.base.defaults.reasoner import SoundUnderstandingConfig, VLMConfig
 from cosmos_framework.configs.base.reasoner.freeze_config import VLMFreezeConfig
 
 
@@ -55,6 +55,9 @@ class VLMModelConfig:
     precision: str = "bfloat16"
 
     policy: PolicyConfig = PolicyConfig()
+    # Optional Parakeet inputs for standalone Reasoner CE/SFT, disabled by default.
+    sound_und: bool = False
+    sound_und_config: SoundUnderstandingConfig = SoundUnderstandingConfig()
     # Applied at model construction, before the optimizer is built.
     freeze: VLMFreezeConfig = VLMFreezeConfig()
     ema: EMAConfig = EMAConfig(enabled=False)

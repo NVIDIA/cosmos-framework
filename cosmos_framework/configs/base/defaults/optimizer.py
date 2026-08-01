@@ -5,10 +5,25 @@
 
 from typing import Any
 
+import torch
+from packaging.version import InvalidVersion, Version
+
 from cosmos_framework.utils.lazy_config import PLACEHOLDER
 from cosmos_framework.utils.lazy_config import LazyCall as L
 from cosmos_framework.utils.config_helper import ConfigStore
 from cosmos_framework.utils.generator.optimizer import build_lr_scheduler, build_optimizer
+
+
+def _supports_dion2_compile_batched_pre_ns(torch_version: str) -> bool:
+    """Return whether a Torch release supports compiled batched Dion2 pre-NS updates."""
+    try:
+        release = Version(torch_version).release
+    except InvalidVersion:
+        return False
+    # Compare release components so 2.13 prereleases, including NVIDIA alpha builds,
+    # are enabled without treating them as older than the final 2.13.0 release.
+    return release[:2] >= (2, 13)
+
 
 OPTIMIZER_KWARGS: dict[str, Any] = dict(
     # Learning rate for the optimizer.
@@ -80,6 +95,13 @@ DION2_OPTIMIZER_KWARGS: dict[str, Any] = dict(
     # Dion2-specific: submatrix selection fraction and error-feedback decay.
     fraction=1.0,
     ef_decay=0.95,
+    # Maximum same-shape matrix count processed per rank in one redistribution.
+    # Each shape group independently uses the smaller of this cap and ceil(group_size / FSDP size).
+    max_dion2_megabatch_width=25,
+    # Compile all active same-shape pre-NS momentum updates on supported Torch releases.
+    dion2_compile_batched_pre_ns=_supports_dion2_compile_batched_pre_ns(torch.__version__),
+    # Opt-in Torch/NVTX annotations for forward/NS/reverse/apply phases.
+    dion2_profile_phases=False,
 )
 
 LAMBDACOSINE_KWARGS: dict[str, Any] = dict(

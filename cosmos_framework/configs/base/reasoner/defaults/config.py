@@ -63,6 +63,7 @@ class Config(config.Config):
         factory=lambda: [
             "_self_",
             {"model": "vlm_fsdp"},
+            {"sound_und_config": None},
             {"vlm_policy": None},
             {"data_train": None},
             {"data_val": None},

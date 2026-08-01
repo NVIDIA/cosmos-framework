@@ -37,6 +37,42 @@ def _get_optional_fps(
     return float(fps_value)
 
 
+def expand_multiview_condition_frame_indexes(
+    condition_frame_indexes_vision: list[int],
+    *,
+    num_views: int,
+    latent_t: int,
+) -> list[int]:
+    """Map per-view-local latent frame indexes to camera-major flat indexes.
+
+    Per-camera VAE encoding concatenates view latents as
+    ``[view0 frames | view1 frames | ...]``. ``SequencePlan.condition_frame_indexes_vision``
+    stores the same per-view-local indexes used for single-view transfer (e.g. ``[0]`` for
+    one conditioning frame). When ``num_views > 1``, expand so each listed local frame is
+    conditioned for every selected camera.
+    """
+    if num_views <= 1 or not condition_frame_indexes_vision:
+        return condition_frame_indexes_vision
+    if latent_t % num_views != 0:
+        raise ValueError(
+            "Multiview vision conditioning requires latent_t divisible by num_views: "
+            f"got latent_t={latent_t}, num_views={num_views}."
+        )
+
+    frames_per_view = latent_t // num_views
+    expanded: list[int] = []
+    seen: set[int] = set()
+    for local_frame_idx in condition_frame_indexes_vision:
+        if not (0 <= local_frame_idx < frames_per_view):
+            continue
+        for view_idx in range(num_views):
+            flat_idx = view_idx * frames_per_view + local_frame_idx
+            if flat_idx not in seen:
+                seen.add(flat_idx)
+                expanded.append(flat_idx)
+    return sorted(expanded)
+
+
 def pack_input_sequence(
     sequence_plans: list[SequencePlan],
     input_text_indexes: list[list[int]],
@@ -268,7 +304,29 @@ def pack_input_sequence(
                 # offset equals snapshot + latent_t (single-clip semantics for
                 # downstream EOV / next-modality tokens).
                 shared_grid = sequence_plan.share_vision_temporal_positions and num_vis > 1
+                temporal_groups = sequence_plan.vision_temporal_position_groups
+                if temporal_groups is not None:
+                    if shared_grid:
+                        raise ValueError(
+                            "Use either share_vision_temporal_positions or vision_temporal_position_groups, not both."
+                        )
+                    if len(temporal_groups) != num_vis:
+                        raise ValueError(
+                            "vision_temporal_position_groups must have one entry per vision item, "
+                            f"got {len(temporal_groups)} groups for {num_vis} items."
+                        )
                 items_temporal_offset_snapshot = seq_builder.mrope_temporal_offset
+                # State for selectively shared temporal grids:
+                # - group_offsets records each group's starting mRoPE offset, which
+                #   later members rewind to before packing.
+                # - group_shapes and group_temporal_positions validate that members
+                #   of a shared group use compatible latent grids and explicit IDs.
+                # - grouped_end_offset tracks the furthest offset reached by either
+                #   grouped or independent items, so downstream tokens follow all of them.
+                group_offsets: dict[int, int | float] = {}
+                grouped_end_offset: int | float = items_temporal_offset_snapshot
+                group_shapes: dict[int, tuple[int, int, int]] = {}
+                group_temporal_positions: dict[int, torch.Tensor] = {}
                 shared_latent_t: int | None = None
                 shared_patch_h: int | None = None
                 shared_patch_w: int | None = None
@@ -306,6 +364,46 @@ def pack_input_sequence(
                     else:
                         # Generation item (single-item mode or last item in multi-item)
                         item_condition_frames = sequence_plan.condition_frame_indexes_vision
+
+                    num_views = 1
+                    if gen_data_clean.num_views_per_vision_item is not None:
+                        num_views = gen_data_clean.num_views_per_vision_item[flat_vision_idx]
+                    latent_t = input_vision_tokens.shape[2]
+                    item_condition_frames = expand_multiview_condition_frame_indexes(
+                        item_condition_frames,
+                        num_views=num_views,
+                        latent_t=latent_t,
+                    )
+
+                    item_group = temporal_groups[item_idx] if temporal_groups is not None else None
+                    if item_group is not None:
+                        item_shape = (
+                            input_vision_tokens.shape[2],
+                            input_vision_tokens.shape[3],
+                            input_vision_tokens.shape[4],
+                        )
+                        if item_group in group_shapes and item_shape != group_shapes[item_group]:
+                            raise ValueError(
+                                "Vision items sharing a temporal-position group must have equal latent shapes, "
+                                f"got {item_shape} and {group_shapes[item_group]} for group {item_group}."
+                            )
+                        group_shapes.setdefault(item_group, item_shape)
+                        if vision_temporal_positions is not None:
+                            if item_group in group_temporal_positions:
+                                expected_positions = group_temporal_positions[item_group]
+                                if not torch.allclose(
+                                    vision_temporal_positions.to(device=expected_positions.device), expected_positions
+                                ):
+                                    raise ValueError(
+                                        "Vision items sharing a temporal-position group must have equal explicit "
+                                        f"temporal positions for group {item_group}."
+                                    )
+                            else:
+                                group_temporal_positions[item_group] = vision_temporal_positions
+                        if item_group in group_offsets:
+                            seq_builder.set_mrope_temporal_offset(group_offsets[item_group])
+                        else:
+                            group_offsets[item_group] = seq_builder.mrope_temporal_offset
 
                     if shared_grid:
                         item_latent_t = input_vision_tokens.shape[2]
@@ -352,10 +450,14 @@ def pack_input_sequence(
                         temporal_compression_factor=temporal_compression_factor,
                         vision_temporal_positions=vision_temporal_positions,
                     )
+                    if temporal_groups is not None:
+                        grouped_end_offset = max(grouped_end_offset, seq_builder.mrope_temporal_offset)
                     vision_split_len += item_split_len
                     if track_item_split_lens:
                         sample_item_split_lens.append(item_split_len)
 
+                if temporal_groups is not None:
+                    seq_builder.set_mrope_temporal_offset(max(grouped_end_offset, seq_builder.mrope_temporal_offset))
                 if track_item_split_lens:
                     seq_builder.vision_item_split_lens.append(sample_item_split_lens)
                 sample_len += vision_split_len

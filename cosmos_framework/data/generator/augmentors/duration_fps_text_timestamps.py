@@ -38,6 +38,9 @@ class DurationFPSTextTimeStamps(Augmentor):
             - enabled (bool): Whether augmentation is enabled. Default: True
             - skip_on_error (bool): If True, skip on errors and return original data_dict. If False, return None. Default: True
             - num_multiplier_key (str): Key for num_multiplier value in data_dict. Default: "num_multiplier"
+            - num_frames_key (str): Key holding the frame count to derive duration from. Required for
+              multiview samples, whose video tensor concatenates views along the temporal axis so that
+              ``video.shape[1]`` is num_views * frames_per_view. Default: None (use the video tensor).
     """
 
     def __init__(
@@ -54,6 +57,7 @@ class DurationFPSTextTimeStamps(Augmentor):
         self.enabled = args.get("enabled", True) if args else True
         self.skip_on_error = args.get("skip_on_error", True) if args else True
         self.num_multiplier_key = args.get("num_multiplier_key", "num_multiplier") if args else "num_multiplier"
+        self.num_frames_key = args.get("num_frames_key", None) if args else None
 
     def __call__(self, data_dict: dict) -> dict | None:
         """
@@ -92,12 +96,20 @@ class DurationFPSTextTimeStamps(Augmentor):
         else:
             fps = float(fps_value)
 
-        # Extract ACTUAL number of frames from the video tensor shape
-        # This is critical - we need the final frame count after all processing
-        video = data_dict[self.video_key]
-
-        # Video shape is (C, T, H, W)
-        num_frames = video.shape[1]
+        # Extract ACTUAL number of frames after all video processing.
+        # Prefer an explicit count when the caller supplies one: a multiview video
+        # tensor concatenates its views along the temporal axis, so shape[1] would
+        # overstate the clip length by a factor of num_views.
+        num_frames = None
+        if self.num_frames_key is not None and self.num_frames_key in data_dict:
+            num_frames_value = data_dict[self.num_frames_key]
+            if isinstance(num_frames_value, torch.Tensor):
+                num_frames = int(num_frames_value.reshape(-1)[0].item())
+            else:
+                num_frames = int(num_frames_value)
+        if not num_frames:
+            # Video shape is (C, T, H, W)
+            num_frames = data_dict[self.video_key].shape[1]
 
         # Compute duration and append to caption
         if fps > 0:
