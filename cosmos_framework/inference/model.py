@@ -278,6 +278,41 @@ class _DiffusersHuggingFaceStorageReader(HuggingFaceStorageReader):
         self.checkpoint_path = checkpoint_path
         self.files_to_keys = _diffusers_files_to_keys(_diffusers_weight_map(checkpoint_path))
 
+    def _process_read_request(self, f, req, planner) -> None:  # noqa: D102
+        slices = tuple(
+            slice(offset, offset + length)
+            for offset, length in zip(req.storage_offsets, req.lengths)
+        )
+        tensor = f.get_slice(req.storage_index.fqn)[slices]
+        target_tensor = planner.resolve_tensor(req).detach()
+
+        if target_tensor.size() != tensor.size():
+            raise AssertionError(
+                f"req {req.storage_index} mismatch sizes "
+                f"{target_tensor.size()} vs {tensor.size()}"
+            )
+
+        if target_tensor.is_cuda:
+            # Materialise into anonymous host memory before the H2D copy.
+            #
+            # The base implementation copies straight from mmap-backed safetensors
+            # storage into a CUDA tensor, so the transfer handles a page fault per
+            # tensor. On Grace this dominates load time (Cosmos3-Super: 1184s -> 67s
+            # with this change, zero disk I/O either way -- the data is already in
+            # page cache).
+            #
+            # Pre-faulting in place is not sufficient: measured on a 4.61 GiB shard,
+            # an mmap source still costs 9.00 ms/tensor after faults are pre-paid,
+            # versus 1.61 ms/tensor from the heap. Pinning the staging buffer is not
+            # necessary either -- with a heap source, pageable (1.61) and pinned
+            # (1.69) are equivalent. A single clone() does both jobs: the memcpy
+            # faults the pages sequentially and leaves the data resident and
+            # anonymous. It is freed as soon as the H2D copy completes.
+            tensor = tensor.contiguous().clone()
+
+        target_tensor.copy_(tensor)
+        planner.commit_tensor(req, target_tensor)
+
     def read_metadata(self) -> Metadata:
         from safetensors import safe_open
         from safetensors.torch import _getdtype
