@@ -21,15 +21,20 @@ FSDP wrapping lives in ``vfm/models/parallelize_vlm.py::parallelize()``,
 NOT here.
 """
 
+from typing import TYPE_CHECKING
+
 import torch
 import torch.nn as nn
 from accelerate import init_on_device
-from transformers import AutoConfig, AutoModel, AutoModelForCausalLM, AutoModelForImageTextToText
+from transformers import AutoConfig, AutoModel, AutoModelForCausalLM, AutoModelForImageTextToText, AutoTokenizer
 
 import cosmos_framework.model.generator.reasoner.cosmos3_edge  # noqa: F401  registers cosmos3_edge with transformers Auto classes
 from cosmos_framework.utils import log
 from cosmos_framework.model.generator.utils.safetensors_loader import load_language_model, load_vlm_model
 from cosmos_framework.utils.generator.parallelism import ParallelDims
+
+if TYPE_CHECKING:
+    from cosmos_framework.configs.base.defaults.reasoner import SoundUnderstandingConfig
 
 
 def _tensor_names_to_skip_for(model_type: str) -> list[str]:
@@ -93,9 +98,20 @@ class HFModel(nn.Module):
         dtype: torch.dtype = torch.bfloat16,
         attn_implementation: str = "cosmos",
         trust_remote_code: bool = True,
+        sound_und: bool = False,
+        sound_und_config: "SoundUnderstandingConfig | None" = None,
+        configured_model_name_or_path: str | None = None,
     ):
         super().__init__()
         self.model_name_or_path = model_name_or_path
+        self.configured_model_name_or_path = configured_model_name_or_path or model_name_or_path
+        self.sound_und = sound_und
+        self.sound_und_config = sound_und_config
+        self.sound_und_token_id: int | None = None
+        if not isinstance(sound_und, bool):
+            raise TypeError(f"sound_und must be a bool, got {type(sound_und).__name__}")
+        if sound_und and sound_und_config is None:
+            raise ValueError("sound_und_config is required when sound_und=True")
         hf_config = AutoConfig.from_pretrained(model_name_or_path, trust_remote_code=trust_remote_code)
         self.hf_config = hf_config
 
@@ -137,6 +153,63 @@ class HFModel(nn.Module):
                 torch_dtype=dtype,
                 trust_remote_code=trust_remote_code,
             )
+
+        if sound_und:
+            from cosmos_framework.model.generator.reasoner.parakeet.configuration_parakeet import ParakeetAudioConfig
+            from cosmos_framework.model.generator.reasoner.parakeet.parakeet import ParakeetAudioModel
+            from cosmos_framework.model.generator.reasoner.parakeet.utils import patch_reasoner_audio_forward
+            from cosmos_framework.data.generator.processors.parakeet_audio_processor import (
+                add_reasoner_audio_special_tokens,
+            )
+
+            input_embeddings = self.model.get_input_embeddings()
+            if input_embeddings is None or not hasattr(input_embeddings, "weight"):
+                raise ValueError("Audio understanding requires a Reasoner input embedding table")
+            embedding_rows, reasoner_hidden_size = input_embeddings.weight.shape
+            if embedding_rows <= 0 or reasoner_hidden_size <= 0:
+                raise ValueError(
+                    "Reasoner input embeddings must have positive vocabulary and hidden dimensions, got "
+                    f"{tuple(input_embeddings.weight.shape)}"
+                )
+
+            tokenizer = AutoTokenizer.from_pretrained(model_name_or_path, trust_remote_code=trust_remote_code)
+            special_tokens = add_reasoner_audio_special_tokens(
+                tokenizer,
+                model_name_or_path=self.configured_model_name_or_path,
+                audio_start_token=sound_und_config.audio_start_token,
+                audio_pad_token=sound_und_config.audio_pad_token,
+                audio_end_token=sound_und_config.audio_end_token,
+            )
+            invalid_ids = [token_id for token_id in special_tokens.token_ids if not 0 <= token_id < embedding_rows]
+            if invalid_ids:
+                raise ValueError(
+                    f"Audio token IDs {invalid_ids} fall outside the Reasoner embedding table with "
+                    f"{embedding_rows} rows; embedding resize is intentionally unsupported"
+                )
+
+            audio_config = ParakeetAudioConfig(
+                projection_hidden_size=sound_und_config.projection_hidden_size,
+                out_hidden_size=reasoner_hidden_size,
+            )
+            with init_on_device("meta", include_buffers=False):
+                self.model.sound_und_model = ParakeetAudioModel(audio_config)
+            self.model.sound_und_model.encoder.requires_grad_(False)
+            self.model.sound_und_model.encoder.eval()
+            if sound_und_config.freeze_projector:
+                self.model.sound_und_model.projector.requires_grad_(False)
+                self.model.sound_und_model.projector.eval()
+
+            self.sound_und_token_id = special_tokens.token_ids[1]
+            patch_reasoner_audio_forward(
+                self.model,
+                audio_token_id=self.sound_und_token_id,
+                model_type=hf_config.model_type,
+                trainable_token_ids=(
+                    (special_tokens.token_ids[0], special_tokens.token_ids[2])
+                    if sound_und_config.train_boundary_token_embeddings_only
+                    else None
+                ),
+            )
         log.info(f"HFModel: {hf_config.model_type} ({'VLM' if is_vlm else 'LLM'}), dtype={dtype}")
 
         # Normalize floating-point *parameter* dtypes to ``dtype``. HF's
@@ -168,6 +241,15 @@ class HFModel(nn.Module):
 
             patch_qwen3_vl_forward(self.model.model)
             log.info("HFModel: applied patch_qwen3_vl_forward for text-only batch support")
+
+    def train(self, mode: bool = True) -> "HFModel":
+        """Keep immutable audio modules in eval mode while training the Reasoner."""
+        super().train(mode)
+        if self.sound_und:
+            self.model.sound_und_model.encoder.eval()
+            if self.sound_und_config.freeze_projector:
+                self.model.sound_und_model.projector.eval()
+        return self
 
     @property
     def net(self) -> nn.Module:
@@ -287,12 +369,21 @@ class HFModel(nn.Module):
         is_vlm = getattr(self.hf_config, "vision_config", None) is not None
         if is_vlm:
             merged_skip_patterns = _tensor_names_to_skip_for(self.hf_config.model_type) + (extra_skip_patterns or [])
+            loader_kwargs = {}
+            if self.sound_und:
+                # The standalone artifact is authoritative for the encoder, so
+                # a bundled copy must never overwrite it. Projector weights do
+                # resume when present, while legacy/base VLM checkpoints that
+                # predate the audio pathway remain valid.
+                merged_skip_patterns.append(r"^sound_und_model\.encoder\..+$")
+                loader_kwargs["optional_missing_patterns"] = [r"^sound_und_model\.projector\..+$"]
             keys_loaded = load_vlm_model(
                 model=self.model,
                 checkpoint_path=checkpoint_path,
                 credential_path=credential_path,
                 parallel_dims=parallel_dims,
                 skip_patterns=merged_skip_patterns,
+                **loader_kwargs,
             )
         else:
             keys_loaded = load_language_model(

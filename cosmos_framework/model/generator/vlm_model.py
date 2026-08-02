@@ -19,20 +19,25 @@ Phase 3 — init_flash_attn_meta ported to vfm/utils/flash_attn.py;
 
 import os
 import re
-from collections.abc import Callable
+from collections import OrderedDict
+from collections.abc import Callable, Mapping
 from functools import partial
+from typing import Any
 
 import torch
 import torch.nn as nn
+from torch.nn.modules.module import _IncompatibleKeys
 
 from cosmos_framework.utils.lazy_config import instantiate
 from cosmos_framework.model._base import ImaginaireModel
 from cosmos_framework.utils import log
 from cosmos_framework.model.generator.algorithm.loss.cross_entropy import cross_entropy_loss, weighted_cross_entropy_loss
 from cosmos_framework.configs.base.defaults.parallelism import PRECISION_TO_TORCH_DTYPE
+from cosmos_framework.configs.base.defaults.reasoner import validate_sound_understanding_config
 from cosmos_framework.configs.base.reasoner.defaults.policy_config import VLMModelConfig
 from cosmos_framework.model.generator.hf_model import HFModel
 from cosmos_framework.model.generator.parallelize_vlm import parallelize
+from cosmos_framework.model.generator.utils.safetensors_loader import load_vlm_model
 from cosmos_framework.utils.generator.parallelism import ParallelDims
 from cosmos_framework.utils.generator.reasoner.constant import IGNORE_INDEX
 from cosmos_framework.utils.generator.reasoner.create_position_ids import get_position_ids
@@ -52,6 +57,31 @@ _QWEN_VL_TYPES = {"qwen2_5_vl", "qwen3_vl", "qwen3_vl_moe"}
 # InternVL variants register both "internvl" and "internvl_chat" as model_type
 # in the upstream InternVL HF policy registry.
 _INTERNVL_TYPES = {"internvl", "internvl_chat"}
+
+_SOUND_UND_ENCODER_STATE_PREFIX = "model.model.sound_und_model.encoder."
+
+
+def _is_sound_und_encoder_state_dict_key(key: str) -> bool:
+    """Match only the standalone VLM's Parakeet encoder state namespace."""
+    canonical_key = key.replace("_orig_mod.", "").replace("_checkpoint_wrapped_module.", "")
+    return canonical_key.startswith(_SOUND_UND_ENCODER_STATE_PREFIX)
+
+
+def _set_sound_und_encoder_dtype_for_fsdp(
+    hf_model: HFModel,
+    *,
+    precision: str,
+    fsdp_enabled: bool,
+) -> None:
+    """Store the replicated encoder in forward dtype only with FSDP MP.
+
+    Without FSDP, the projector stays in the model's master dtype, so the
+    encoder must stay there too. With FSDP mixed precision, the raw root casts
+    its projector to the forward dtype while the ignored encoder is not cast;
+    explicitly matching the encoder avoids an encoder→projector dtype mismatch.
+    """
+    if hf_model.sound_und and fsdp_enabled:
+        hf_model.model.sound_und_model.encoder.to(dtype=PRECISION_TO_TORCH_DTYPE[precision])
 
 
 def _get_overlay_config(model_type: str) -> tuple[list[str], Callable[[str], bool]]:
@@ -251,6 +281,7 @@ class VLMModel(ImaginaireModel):
         from cosmos_framework.utils.generator.flash_attn import init_flash_attn_meta
 
         self.config = config
+        validate_sound_understanding_config(config.sound_und_config, sound_und=config.sound_und)
         # Expose model.precision so LowPrecisionCallback can read it (mirrors OmniMoTModel).
         self.precision = getattr(torch, config.precision)
         init_flash_attn_meta(config.deterministic)
@@ -259,6 +290,17 @@ class VLMModel(ImaginaireModel):
         # Apply freeze before the optimizer is built — ``build_optimizer`` reads
         # ``requires_grad`` off ``named_parameters``.
         n_trainable = _apply_freeze_config(self.model.model, self.hf_config.model_type, self.config.freeze)
+        if config.sound_und:
+            # The standalone artifact is the sole source of encoder weights.
+            # Keep it immutable even when a broad trainable_params expression
+            # (or a full-finetune config) would otherwise re-enable it.
+            self.model.model.sound_und_model.encoder.requires_grad_(False)
+            self.model.model.sound_und_model.encoder.eval()
+            if config.sound_und_config.freeze_projector:
+                self.model.model.sound_und_model.projector.requires_grad_(False)
+                self.model.model.sound_und_model.projector.eval()
+            n_trainable = sum(parameter.requires_grad for parameter in self.model.model.parameters())
+            assert n_trainable > 0, "audio freeze policy left 0 trainable parameters — check freeze patterns"
         log.info(
             f"freeze config applied (model_type={self.hf_config.model_type}): {n_trainable} trainable parameter tensors"
         )
@@ -333,8 +375,12 @@ class VLMModel(ImaginaireModel):
             # Default "cosmos" → cosmos_framework.model.attention (NATTEN/blackwell-fmha);
             # set policy.attn_implementation=flash_attention_2 to fall back.
             attn_implementation=policy.attn_implementation,
+            sound_und=config.sound_und,
+            sound_und_config=config.sound_und_config,
+            # Token policy needs the configured identity because local_path is
+            # a cache directory and no longer identifies the Edge Reasoner.
+            configured_model_name_or_path=policy.backbone.model_name,
         )
-
         # ── b.1. Early family-gate for backbone.pretrained_weights ──
         # Fail-fast on unsupported VLM families BEFORE any expensive work
         # (parallelize, materialize, base-weight load, overlay download).
@@ -373,6 +419,12 @@ class VLMModel(ImaginaireModel):
         if torch.distributed.is_initialized():
             parallel_dims.build_meshes(device_type="cuda")
 
+        _set_sound_und_encoder_dtype_for_fsdp(
+            hf_model,
+            precision=config.precision,
+            fsdp_enabled=parallel_dims.dp_shard_enabled,
+        )
+
         # Replicate-only (DDP) is not implemented in Phase 2's parallelize().
         # Raise early rather than running with no gradient synchronization and
         # silently producing wrong training results.
@@ -405,6 +457,12 @@ class VLMModel(ImaginaireModel):
             lambda t: torch.empty_like(t, device="cuda") if t.device.type == "meta" else t.to("cuda"),
             recurse=True,
         )
+        if config.sound_und:
+            # ``to_empty`` deliberately discards meta initialization. Encoder
+            # tensors are populated by the authoritative artifact below; only
+            # the projector needs a fresh initialization here. A VLM/DCP
+            # checkpoint may overwrite it later.
+            hf_model.model.sound_und_model.projector.reset_parameters()
 
         # ── f. Tie embeddings (replaces the legacy post_to_empty_hook) ──
         hf_model.tie_embeddings()
@@ -462,6 +520,23 @@ class VLMModel(ImaginaireModel):
                     )
                 log.info(f"VLMModel: overlaid {len(lm_loaded)} language-model params from {llm_path}")
 
+        # ── h. Load the immutable standalone Parakeet artifact ──
+        # This runs for both fresh starts and DCP resumes. On resume, DCP may
+        # subsequently restore the same encoder when it was checkpointed; when
+        # exclusion is enabled, these artifact weights remain authoritative.
+        if config.sound_und:
+            audio_config = config.sound_und_config
+            loaded_audio_keys = load_vlm_model(
+                model=hf_model.model.sound_und_model.encoder,
+                checkpoint_path=audio_config.encoder_checkpoint_path,
+                credential_path=audio_config.encoder_checkpoint_credentials_path or None,
+                parallel_dims=parallel_dims if torch.distributed.is_initialized() else None,
+            )
+            log.info(
+                f"VLMModel: loaded {len(loaded_audio_keys)} Parakeet encoder tensors from "
+                f"{audio_config.encoder_checkpoint_path}"
+            )
+
         # ── i. Gradient checkpointing ──
         # HF backbone supports only binary on/off via gradient_checkpointing_enable,
         # so VLMActivationCheckpointingConfig.mode is restricted to {"full", "none"}.
@@ -478,6 +553,59 @@ class VLMModel(ImaginaireModel):
 
     def on_after_backward(self, iteration: int = 0) -> None:
         """No-op — FSDP handles gradient synchronization internally."""
+
+    def state_dict(
+        self,
+        destination: dict[str, Any] | None = None,
+        prefix: str = "",
+        keep_vars: bool = False,
+    ) -> dict[str, Any]:
+        """Optionally omit the immutable artifact-backed Parakeet encoder."""
+        state_dict = super().state_dict(destination=destination, prefix=prefix, keep_vars=keep_vars)
+        exclude_encoder = (
+            self.config.sound_und and self.config.sound_und_config.exclude_frozen_encoder_from_training_checkpoint
+        )
+        if not exclude_encoder:
+            return state_dict
+
+        for key in tuple(state_dict):
+            if (not prefix or key.startswith(prefix)) and _is_sound_und_encoder_state_dict_key(
+                key.removeprefix(prefix)
+            ):
+                del state_dict[key]
+        return state_dict
+
+    def load_state_dict(
+        self,
+        state_dict: Mapping[str, Any],
+        strict: bool = True,
+        assign: bool = False,
+    ) -> _IncompatibleKeys:
+        """Restore trainable state while preserving an excluded encoder artifact."""
+        exclude_encoder = (
+            self.config.sound_und and self.config.sound_und_config.exclude_frozen_encoder_from_training_checkpoint
+        )
+        if not exclude_encoder:
+            return super().load_state_dict(state_dict, strict=strict, assign=assign)
+
+        filtered_state_dict = OrderedDict(
+            (key, value) for key, value in state_dict.items() if not _is_sound_und_encoder_state_dict_key(key)
+        )
+        metadata = getattr(state_dict, "_metadata", None)
+        if metadata is not None:
+            filtered_state_dict._metadata = metadata  # type: ignore[attr-defined]
+
+        incompatible = super().load_state_dict(filtered_state_dict, strict=False, assign=assign)
+        missing_keys = [key for key in incompatible.missing_keys if not _is_sound_und_encoder_state_dict_key(key)]
+        unexpected_keys = list(incompatible.unexpected_keys)
+        if strict and (missing_keys or unexpected_keys):
+            errors = []
+            if missing_keys:
+                errors.append(f"Missing key(s): {', '.join(repr(key) for key in missing_keys)}")
+            if unexpected_keys:
+                errors.append(f"Unexpected key(s): {', '.join(repr(key) for key in unexpected_keys)}")
+            raise RuntimeError(f"Error(s) in loading state_dict for {type(self).__name__}: " + "; ".join(errors))
+        return _IncompatibleKeys(missing_keys, unexpected_keys)
 
     def init_optimizer_scheduler(self, optimizer_config, scheduler_config):
         """Build optimizer + scheduler from hydra-instantiated configs.

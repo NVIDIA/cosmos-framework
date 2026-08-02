@@ -5,6 +5,7 @@ import functools
 import inspect
 import os
 import signal
+from dataclasses import dataclass
 from typing import Any
 
 import torch
@@ -29,6 +30,49 @@ from cosmos_framework.utils import callback, distributed, ema, log, misc
 from cosmos_framework.utils.checkpointer import Checkpointer
 from cosmos_framework.utils.misc import StragglerDetectorV2
 
+
+
+@dataclass
+class ContextParallelDataWindow:
+    """Caches one dataloader batch across a ``cp_size``-step CP data window.
+
+    Each slot is one training step within the window; CP rank ``s`` owns slot ``s``.
+    The cached batch is cleared after the final slot.
+    """
+
+    batch: dict[str, Any] | None = None
+    offset: int = 0
+
+    @property
+    def active(self) -> bool:
+        return self.batch is not None
+
+    def clear(self) -> None:
+        self.batch = None
+        self.offset = 0
+
+    def advance(self, cp_size: int) -> None:
+        self.offset += 1
+        if self.offset == cp_size:
+            self.clear()
+
+    def store_device_batch(self, data_batch: dict[str, Any]) -> None:
+        """Replace the cached batch with a device copy while the window is active."""
+        if self.active:
+            self.batch = data_batch
+
+    def assert_synced_with_model(self, model: Any) -> None:
+        """Raise if the model's CP window slot has drifted from this window's offset.
+
+        The trainer offset and model slot are advanced by different components but must
+        track the same position within a window. Catch drift early — e.g. if a prior
+        training step aborted mid-window and left the model slot behind.
+        """
+        model_window_slot = getattr(model, "_cp_window_slot", None)
+        if model_window_slot is not None and model_window_slot != self.offset:
+            raise RuntimeError(
+                f"CP data-window desync: trainer offset {self.offset} != model window slot {model_window_slot}."
+            )
 
 
 class ImaginaireTrainer:
@@ -134,27 +178,29 @@ class ImaginaireTrainer:
             self.config.trainer.compile_config.recompile_limit, self.config.trainer.compile_config.use_duck_shape
         )
         self.straggler_detector.initialize()
+        # One fetched batch reused for cp_size consecutive steps when CP is enabled.
+        self._cp_data_window = ContextParallelDataWindow()
         # Send a TimeoutError if a training step takes over timeout_period seconds.
         signal.signal(signal.SIGALRM, functools.partial(misc.timeout_handler, config.trainer.timeout_period))  # type: ignore
 
-    def _fetch_and_broadcast_data(
+    def _fetch_data_batch(
         self,
         model: ImaginaireModel,
         dataloader_iter: Any,
-        iteration: int,
     ) -> tuple[Any, bool]:
         """
-        Fetches data from the dataloader on the batch owner rank and broadcasts it to all other ranks in the Context Parallel group if CP is enabled.
-        When CP is disabled, data is fetched from the dataloader on the current rank and no broadcasting is needed.
+        Fetch the next training batch.
 
-        Args:
-            model (ImaginaireModel): The model containing parallel dimensions info.
-            dataloader_iter: Iterator for the dataloader.
-            iteration (int): Current iteration number to determine the batch owner.
+        Without CP, every rank fetches a new batch for each step. With CP, each rank
+        fetches one independent local batch at the start of a ``cp_size``-step data
+        window. ``self._cp_data_window`` returns that same batch for every slot
+        (each slot is one training step within the window; CP rank ``s`` owns slot
+        ``s``) and is cleared after the final slot. The model separately tokenizes,
+        caches, and rotates the rank-local payloads across the CP group.
 
         Returns:
             tuple: (data_batch, stop_signal)
-                - data_batch: The fetched data batch (or None if stopped/not owner).
+                - data_batch: The fetched data batch (or None if stopped).
                 - stop_signal (bool): True if StopIteration was encountered.
         """
         parallel_dims = getattr(model, "parallel_dims", None)
@@ -164,33 +210,37 @@ class ImaginaireTrainer:
             except StopIteration:
                 return None, True
 
-        # To prevent redundant data loading among the Context Parallel ranks,
-        # one of the Context Parallel ranks (round-robin) broadcasts the data to all other cp ranks.
-        batch_owner_rank = iteration % parallel_dims.cp_mesh.size()
-        stop_signal = False
-        data_batch = None
-
-        if parallel_dims.cp_rank == batch_owner_rank:
+        cp_size = parallel_dims.cp_mesh.size()
+        self._cp_data_window.assert_synced_with_model(model)
+        if not self._cp_data_window.active:
             try:
-                data_batch = next(dataloader_iter)
+                self._cp_data_window.batch = next(dataloader_iter)
+                local_stop = False
             except StopIteration:
-                stop_signal = True
-                data_batch = None
+                self._cp_data_window.clear()
+                local_stop = True
 
-        # Calculate the global rank of the batch owner within the CP group
-        cp_group = parallel_dims.cp_mesh.get_group()
-        global_src_rank = dist.get_global_rank(cp_group, batch_owner_rank)
+            cp_group = parallel_dims.cp_mesh.get_group()
+            collective_device = (
+                torch.device("cuda", torch.cuda.current_device())
+                if dist.get_backend(cp_group) == dist.Backend.NCCL
+                else torch.device("cpu")
+            )
+            stop_tensor = torch.tensor([local_stop], dtype=torch.uint8, device=collective_device)  # [1]
+            dist.all_reduce(stop_tensor, op=dist.ReduceOp.MAX, group=cp_group)
+            if bool(stop_tensor.item()):
+                self._cp_data_window.clear()
+                return None, True
 
-        objs = [data_batch, stop_signal]
-        distributed.broadcast_object_list_optimized(
-            objs,
-            src=global_src_rank,
-            group=cp_group,
-            min_tensor_bytes=self.config.trainer.cp_input_direct_broadcast_min_bytes,
-        )
-        data_batch, stop_signal = objs
+        if not isinstance(self._cp_data_window.batch, dict):
+            raise TypeError(
+                "Context-parallel data windows require dictionary batches, "
+                f"got {type(self._cp_data_window.batch).__name__}."
+            )
 
-        return data_batch, stop_signal
+        data_batch = self._cp_data_window.batch
+        self._cp_data_window.advance(cp_size)
+        return data_batch, False
 
     def train(
         self,
@@ -264,10 +314,9 @@ class ImaginaireTrainer:
                                 profile_cuda=False,
                             ),
                         ):
-                            data_batch, stop_signal = self._fetch_and_broadcast_data(
+                            data_batch, stop_signal = self._fetch_data_batch(
                                 model,
                                 dataloader_train_iter,
-                                iteration,
                             )
                             if stop_signal:
                                 raise StopIteration
@@ -281,6 +330,8 @@ class ImaginaireTrainer:
                         break
                     # Move all tensors in the data batch to GPU device.
                     data_batch = misc.to(data_batch, device="cuda")
+                    # Keep the CUDA copy for later slots in the CP data window.
+                    self._cp_data_window.store_device_batch(data_batch)
                     # The actual training step.
                     self.callbacks.on_training_step_start(model, data_batch, iteration=iteration)
                     self.callbacks.on_training_step_batch_start(model, data_batch, iteration=iteration)

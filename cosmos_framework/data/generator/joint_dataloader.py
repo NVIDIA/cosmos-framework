@@ -6,6 +6,7 @@ import queue
 import threading
 from collections import deque
 from collections.abc import Iterator, Mapping
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from typing import Any, ClassVar, Dict, Union
 
@@ -292,6 +293,7 @@ class JointDataLoader(webdataset.WebLoader):
         sound_latent_fps: float = 0,
         audio_sample_rate: int = 48000,
         prewarm: bool = True,
+        prewarm_concurrency: int = 1,
         default_lookahead_limit: int = _DEFAULT_LOOKAHEAD_LIMIT,
         lookahead_limits: Dict[str, int] | None = None,
         uniae_chunk_frames: int | Mapping[str, int] | None = None,
@@ -314,6 +316,8 @@ class JointDataLoader(webdataset.WebLoader):
             sound_latent_fps: Sound tokenizer latent rate in Hz (e.g. 25). If 0, sound tokens are not counted.
             audio_sample_rate: Audio sample rate in Hz (e.g. 48000). Used with sound_latent_fps to estimate
                 sound token count.
+            prewarm_concurrency: Number of independent dataloaders to prewarm at
+                once. Keep this bounded to avoid an object-store request burst.
             default_lookahead_limit: Packing-loop look-ahead fallback for dataloaders not in
                 ``lookahead_limits``.
             lookahead_limits: Optional ``{dataset_name: int}`` per-dataloader override.
@@ -343,6 +347,9 @@ class JointDataLoader(webdataset.WebLoader):
         self.max_samples_per_batch = max_samples_per_batch
         self.sound_latent_fps = sound_latent_fps
         self.audio_sample_rate = audio_sample_rate
+        if prewarm_concurrency < 1:
+            raise ValueError(f"prewarm_concurrency must be at least 1, got {prewarm_concurrency}.")
+        self.prewarm_concurrency = prewarm_concurrency
         self.default_lookahead_limit = int(default_lookahead_limit)
         self.uniae_pad_frames = int(uniae_pad_frames) if uniae_pad_frames is not None else None
         self.uniae_chunk_frames = self._normalize_uniae_chunk_frames(uniae_chunk_frames)
@@ -421,6 +428,49 @@ class JointDataLoader(webdataset.WebLoader):
             spatial_shape=(H, W),
         )
 
+    def _prewarm_dataloader(self, index: int, name: str, dl_iter: Any) -> None:
+        """Produce and buffer one batch from a single dataloader."""
+        import time
+
+        started_at = time.monotonic()
+        try:
+            batch = next(dl_iter)
+        except StopIteration:
+            log.warning(f"Pre-warm: dataloader {name!r} is empty, skipping")
+            return
+        elapsed = time.monotonic() - started_at
+
+        is_image_batch = "images" in batch
+        input_images_or_videos = batch["images" if is_image_batch else "video"]
+        batch_size = len(input_images_or_videos)
+
+        # Split the collated batch into individual samples and push them
+        # into the buffer — identical to the splitting logic in
+        # _get_next_sample — so the samples are not wasted.
+        for sample_index in range(batch_size):
+            sample = {}
+            for key, value in batch.items():
+                if key in _BATCH_TIMING_KEYS:
+                    sample[key] = value
+                elif isinstance(value, list) and key in self._MULTI_ITEM_KEYS:
+                    elem = value[sample_index]
+                    if isinstance(elem, list):
+                        sample[key] = elem
+                    else:
+                        sample[key] = value[sample_index : sample_index + 1]
+                elif isinstance(value, list):
+                    sample[key] = value[sample_index]
+                elif isinstance(value, torch.Tensor) and value.dim() > 0:
+                    sample[key] = value[sample_index : sample_index + 1]
+                else:
+                    sample[key] = value[sample_index : sample_index + 1]
+            self.buffers[index].append(sample)
+
+        log.info(
+            f"Pre-warm: dataloader {name!r} ready — {batch_size} samples buffered in {elapsed:.1f}s",
+            rank0_only=False,
+        )
+
     def _prewarm_dataloaders(self) -> None:
         """Force all dataloader iterators to spawn workers and produce one batch.
 
@@ -440,47 +490,23 @@ class JointDataLoader(webdataset.WebLoader):
         A ``dist.barrier()`` at the end synchronises all ranks so that training
         only begins once every rank has finished pre-warming.
         """
-        import time
-
-        for i, (name, dl_iter) in enumerate(zip(self.dataset_name_list, self.dataloaders)):
-            t0 = time.monotonic()
-            try:
-                batch = next(dl_iter)
-            except StopIteration:
-                log.warning(f"Pre-warm: dataloader {name!r} is empty, skipping")
-                continue
-            elapsed = time.monotonic() - t0
-
-            # Split the collated batch into individual samples and push them
-            # into the buffer — identical to the splitting logic in
-            # _get_next_sample — so the samples are not wasted.
-            is_image_batch = "images" in batch
-            input_images_or_videos = batch["images" if is_image_batch else "video"]
-            batch_size = len(input_images_or_videos)
-
-            for j in range(batch_size):
-                sample = {}
-                for k, v in batch.items():
-                    if k in _BATCH_TIMING_KEYS:
-                        sample[k] = v
-                    elif isinstance(v, list) and k in self._MULTI_ITEM_KEYS:
-                        elem = v[j]
-                        if isinstance(elem, list):
-                            sample[k] = elem
-                        else:
-                            sample[k] = v[j : j + 1]
-                    elif isinstance(v, list):
-                        sample[k] = v[j]
-                    elif isinstance(v, torch.Tensor) and v.dim() > 0:
-                        sample[k] = v[j : j + 1]
-                    else:
-                        sample[k] = v[j : j + 1]
-                self.buffers[i].append(sample)
-
+        prewarm_items = list(enumerate(zip(self.dataset_name_list, self.dataloaders)))
+        if self.prewarm_concurrency == 1 or len(prewarm_items) < 2:
+            for index, (name, dl_iter) in prewarm_items:
+                self._prewarm_dataloader(index, name, dl_iter)
+        else:
+            worker_count = min(self.prewarm_concurrency, len(prewarm_items))
             log.info(
-                f"Pre-warm: dataloader {name!r} ready — {batch_size} samples buffered in {elapsed:.1f}s",
+                f"Pre-warm: starting {len(prewarm_items)} dataloaders with concurrency={worker_count}",
                 rank0_only=False,
             )
+            with ThreadPoolExecutor(max_workers=worker_count, thread_name_prefix="dataloader-prewarm") as executor:
+                futures = [
+                    executor.submit(self._prewarm_dataloader, index, name, dl_iter)
+                    for index, (name, dl_iter) in prewarm_items
+                ]
+                for future in futures:
+                    future.result()
 
         # Synchronise so training only starts once every rank is warmed up.
         if torch.distributed.is_initialized():
@@ -733,6 +759,7 @@ class IterativeJointDataLoader(JointDataLoader):
         audio_sample_rate: int = 48000,
         seed: int | None = 42,
         prewarm: bool = True,
+        prewarm_concurrency: int = 1,
         default_lookahead_limit: int = JointDataLoader._DEFAULT_LOOKAHEAD_LIMIT,
         lookahead_limits: Dict[str, int] | None = None,
         uniae_chunk_frames: int | Mapping[str, int] | None = None,
@@ -757,6 +784,7 @@ class IterativeJointDataLoader(JointDataLoader):
             sound_latent_fps=sound_latent_fps,
             audio_sample_rate=audio_sample_rate,
             prewarm=prewarm,
+            prewarm_concurrency=prewarm_concurrency,
             default_lookahead_limit=default_lookahead_limit,
             lookahead_limits=lookahead_limits,
             uniae_chunk_frames=uniae_chunk_frames,
