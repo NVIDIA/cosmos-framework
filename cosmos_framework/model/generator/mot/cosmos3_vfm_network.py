@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: OpenMDW-1.1
 
 import math
+from collections.abc import Sequence
 from typing import List, Tuple
 
 import torch
@@ -15,10 +16,15 @@ from cosmos_framework.model.generator.mot.context_parallel_utils import (
     get_context_parallel_sharded_sequence,
 )
 from cosmos_framework.model.generator.mot.domain_aware_linear import DomainAwareLinear
+from cosmos_framework.model.generator.mot.flex_attention import (
+    FLEX_BLOCK_SIZE,
+    build_multiview_block_mask,
+)
 from cosmos_framework.model.generator.mot.modeling_utils import TimestepEmbedder, has_noisy_tokens
 from cosmos_framework.model.generator.utils.memory import MemoryState
 from cosmos_framework.data.generator.sequence_packing import ModalityData, PackedSequence
 from cosmos_framework.data.generator.sequence_packing.natten import verify_natten_parameter_list
+from cosmos_framework.data.generator.sequence_packing.runtime import get_full_only_seq
 
 
 class Cosmos3VFMNetworkConfig(PretrainedConfig):
@@ -43,6 +49,7 @@ class Cosmos3VFMNetworkConfig(PretrainedConfig):
         timestep_scale=0.001,
         predict_text_tokens=False,
         joint_attn_implementation="two_way",
+        use_multiview_flex_attention: bool = False,
         action_dim=32,
         num_embodiment_domains=32,
         temporal_compression_factor_vision=4,
@@ -74,6 +81,7 @@ class Cosmos3VFMNetworkConfig(PretrainedConfig):
         self.timestep_scale = timestep_scale
         self.predict_text_tokens = predict_text_tokens
         self.joint_attn_implementation = joint_attn_implementation
+        self.use_multiview_flex_attention = use_multiview_flex_attention
         self.temporal_compression_factor_vision = temporal_compression_factor_vision
         self.natten_parameter_list = natten_parameter_list
         self.video_temporal_causal = video_temporal_causal
@@ -170,7 +178,7 @@ class Cosmos3VFMNetwork(PreTrainedModel):
 
     def init_weights(self, buffer_device: torch.device | None):
         if self.config.vision_gen or self.config.action_gen or self.config.sound_gen:
-            self.time_embedder._init_weights()
+            self.time_embedder._init_weights(buffer_device=buffer_device)
 
         if self.config.vision_gen:
             std = 1.0 / math.sqrt(self.patch_latent_dim)
@@ -292,7 +300,7 @@ class Cosmos3VFMNetwork(PreTrainedModel):
         )
 
     def patchify_and_pack_latents(
-        self, tokens_vision: torch.Tensor, token_shapes_vision: List[Tuple[int, int, int]]
+        self, tokens_vision: torch.Tensor, token_shapes_vision: Sequence[tuple[int, ...]]
     ) -> tuple[torch.Tensor, List[Tuple[int, int, int]]]:
         p = self.latent_patch_size
         # Patchify and pack the latents
@@ -965,7 +973,11 @@ class Cosmos3VFMNetwork(PreTrainedModel):
             if vision_sequence_indexes is not None:
                 vision_sequence_indexes = vision_sequence_indexes.sort().values  # [N_gen_tokens]
 
-        vision_token_shapes = packed_seq.vision.token_shapes if packed_seq.vision else None
+        # ModalityData.token_shapes is arity-agnostic to cover action and sound as well, but the
+        # temporal-causal metadata downstream reads these as (T, H, W); unpacking pins that here.
+        vision_token_shapes: list[tuple[int, int, int]] | None = (
+            [(t, h, w) for t, h, w in packed_seq.vision.token_shapes] if packed_seq.vision else None
+        )
 
         # The packer is the single source of truth for the supertoken layout.
         # ``num_action_tokens_per_supertoken`` is stamped onto ``packed_seq`` by
@@ -990,6 +1002,7 @@ class Cosmos3VFMNetwork(PreTrainedModel):
         sequence_shard_world_size = (
             1 if replicated_attention_io_cp else (self.parallel_dims.cp_size if self.parallel_dims else 1)
         )
+        prepared_sequence_pack_metadata = packed_seq.get_sequence_pack_metadata()
 
         input_pack, attention_meta, natten_metadata_list = build_packed_sequence(
             self.config.joint_attn_implementation,
@@ -1013,7 +1026,39 @@ class Cosmos3VFMNetwork(PreTrainedModel):
             num_action_tokens_per_supertoken=num_action_tokens_per_supertoken,
             null_action_supertokens=packed_seq.null_action_supertokens,
             pad_for_cuda_graphs=self.pad_for_cuda_graphs,
+            full_seq_alignment=FLEX_BLOCK_SIZE if self.config.use_multiview_flex_attention else 1,
+            prepared_metadata=prepared_sequence_pack_metadata,
         )
+
+        if self.config.use_multiview_flex_attention:
+            if self.config.joint_attn_implementation != "three_way":
+                raise ValueError("Multiview FlexAttention requires joint_attn_implementation='three_way'.")
+            if natten_metadata_list is not None:
+                raise ValueError("Multiview FlexAttention and NATTEN cannot be enabled together.")
+            if packed_seq.vision is None or packed_seq.action is not None or packed_seq.sound is not None:
+                raise ValueError("Multiview FlexAttention currently supports vision-only generation batches.")
+            if packed_seq.num_views_per_vision_item is None:
+                raise ValueError(
+                    "Multiview FlexAttention requires per-camera VAE metadata; "
+                    "enable enable_per_camera_vae_encoding on the dataset."
+                )
+            # None means every sample owns exactly one vision item (standard T2V/I2V);
+            # multi-item samples (image editing, transfer) carry explicit counts.
+            num_vision_items_per_sample = packed_seq.num_vision_items_per_sample or [1] * len(packed_seq.sample_lens)
+            full_only_seq, full_q_offsets = get_full_only_seq(input_pack)
+            # The mask is built here, outside the compiled and activation-checkpointed
+            # decoder layers, because create_block_mask enters a TorchFunctionMode that
+            # Dynamo cannot trace inside the checkpoint HOP. All layers then share the
+            # one mask, which is the only thing the attention path needs.
+            attention_meta.flex_block_mask = build_multiview_block_mask(
+                seq_len=full_only_seq.shape[0],
+                full_q_offsets=full_q_offsets,
+                token_shapes=packed_seq.vision.token_shapes,
+                condition_masks=packed_seq.vision.condition_mask,
+                num_vision_items_per_sample=num_vision_items_per_sample,
+                num_views_per_vision_item=packed_seq.num_views_per_vision_item,
+                device=full_only_seq.device,
+            )
 
         # ── Multi-control transfer: annotate SplitInfo with per-item ranges ──────
         # Activated only when packed_seq carries control_weights, i.e. the caller

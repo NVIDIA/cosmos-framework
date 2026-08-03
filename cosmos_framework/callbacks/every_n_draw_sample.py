@@ -22,6 +22,7 @@ from cosmos_framework.model._base import ImaginaireModel
 from cosmos_framework.utils import distributed, log, misc
 from cosmos_framework.utils.easy_io import easy_io
 from cosmos_framework.tools.visualize.video import save_img_or_video
+from cosmos_framework.model.generator.mot.context_parallel_utils import broadcast_context_parallel_object
 from cosmos_framework.utils.generator.data_utils import slice_data_batch
 
 WandbImagePaths = str | dict[str, str]
@@ -231,12 +232,12 @@ def _get_first_multiview_transfer_rows(
     if raw_data is None or len(raw_data) < metadata.num_vision_items:
         return None
 
-    control_video = _split_multiview_tensor_by_view(
+    control_video = _prepare_multiview_video_for_visualization(
         raw_data[0],
         metadata.sample_n_views,
         metadata.num_video_frames_per_view,
     )  # [V,C,F,H,W] or None
-    gt_target_video = _split_multiview_tensor_by_view(
+    gt_target_video = _prepare_multiview_video_for_visualization(
         raw_data[metadata.num_vision_items - 1],
         metadata.sample_n_views,
         metadata.num_video_frames_per_view,
@@ -244,6 +245,50 @@ def _get_first_multiview_transfer_rows(
     if control_video is None or gt_target_video is None:
         return None
     return control_video, gt_target_video
+
+
+def _has_first_multiview_transfer_rows(
+    raw_data: list[torch.Tensor] | None,
+    metadata: MultiviewTransferMetadata,
+) -> bool:
+    """Check whether the first multiview sample can be split without materializing its rows."""
+    if raw_data is None or len(raw_data) < metadata.num_vision_items:
+        return False
+
+    expected_num_frames = metadata.sample_n_views * metadata.num_video_frames_per_view
+    for vision_item_idx in (0, metadata.num_vision_items - 1):
+        vision_item = raw_data[vision_item_idx]  # [B,C,V*F,H,W] or [C,V*F,H,W]
+        if vision_item.dim() == 5:
+            if vision_item.shape[0] != 1 or vision_item.shape[2] != expected_num_frames:
+                return False
+        elif vision_item.dim() == 4:
+            if vision_item.shape[1] != expected_num_frames:
+                return False
+        else:
+            return False
+    return True
+
+
+def _prepare_multiview_video_for_visualization(
+    tensor: torch.Tensor,
+    sample_n_views: int,
+    num_video_frames_per_view: int,
+) -> torch.Tensor | None:  # tensor: [B,C,V*F,H,W] or [C,V*F,H,W], returns [V,C,F,H,W]
+    """Prepare camera-major pixels for visualization without expanding uint8 inputs on GPU."""
+    is_uint8 = tensor.dtype == torch.uint8
+    if is_uint8:
+        tensor = tensor.cpu()  # [B,C,V*F,H,W] or [C,V*F,H,W]
+    video_by_view = _split_multiview_tensor_by_view(
+        tensor,
+        sample_n_views,
+        num_video_frames_per_view,
+    )  # [V,C,F,H,W] or None
+    if video_by_view is None:
+        return None
+    video_by_view = video_by_view.float().cpu()  # [V,C,F,H,W]
+    if is_uint8:
+        video_by_view.div_(127.5).sub_(1.0)  # [V,C,F,H,W]
+    return video_by_view
 
 
 def _add_wandb_image_paths(
@@ -346,6 +391,49 @@ def _build_reference_grid(references: list[torch.Tensor], target_width: int) -> 
     return _resize_5d_to_width(grid, target_width)  # (1,C,1,H_grid,target_width)
 
 
+def _synchronize_context_parallel_sampling_batch(
+    model: Any,
+    data_batch: dict[str, Any],
+    n_viz_sample: int,
+) -> dict[str, Any]:
+    """Give every CP rank the same raw batch slice for sampling.
+
+    CP-windowed training keeps a different raw batch on every rank and
+    broadcasts only the current owner's post-tokenizer training payload. The
+    sampling callback consumes the raw batch directly, so it must synchronize
+    that input before any rank tokenizes or enters CP attention collectives.
+
+    The model advances ``_cp_window_slot`` during the training step, before this
+    callback runs. Therefore, the batch used by the just-finished step belongs
+    to the preceding slot. Models without CP-window rotation use CP rank 0 as a
+    stable source, matching the legacy synchronized-batch behavior.
+    """
+    sampling_batch = slice_data_batch(data_batch, start=0, limit=n_viz_sample)
+    parallel_dims = getattr(model, "parallel_dims", None)
+    if parallel_dims is None or not parallel_dims.cp_enabled:
+        return sampling_batch
+
+    cp_size = parallel_dims.cp_mesh.size()
+    cp_window_slot = getattr(model, "_cp_window_slot", None)
+    if cp_window_slot is None:
+        owner_rank = 0
+    else:
+        if not isinstance(cp_window_slot, int):
+            raise TypeError(f"CP data window slot must be an integer, got {type(cp_window_slot).__name__}.")
+        if not 0 <= cp_window_slot < cp_size:
+            raise ValueError(f"CP data window slot must be in [0, {cp_size}), got {cp_window_slot}.")
+        owner_rank = (cp_window_slot - 1) % cp_size
+
+    synchronized_batch = broadcast_context_parallel_object(
+        sampling_batch,
+        parallel_dims,
+        owner_rank=owner_rank,
+    )
+    if not isinstance(synchronized_batch, dict):
+        raise TypeError(f"Expected a dictionary CP sampling batch, got {type(synchronized_batch).__name__}.")
+    return synchronized_batch
+
+
 class EveryNDrawSample(EveryN):
     """
     This callback sample condition inputs from training data, run inference and save the results to wandb and s3.
@@ -411,6 +499,10 @@ class EveryNDrawSample(EveryN):
 
         self.data_parallel_id = self.rank
 
+    def _should_materialize_sample(self) -> bool:
+        """Return whether this rank needs decoded pixels for saving or W&B."""
+        return self.rank == 0 or ((self.save_s3 or self.save_local) and self.data_parallel_id < self.n_sample_to_save)
+
     @misc.timer("EveryNDrawSample: x0")
     @torch.no_grad()
     def x0_pred(self, trainer, model, data_batch, output_batch, loss, iteration):
@@ -474,6 +566,8 @@ class EveryNDrawSample(EveryN):
             context = partial(model.ema_scope, "every_n_sampling")
         else:
             context = nullcontext
+
+        data_batch = _synchronize_context_parallel_sampling_batch(model, data_batch, self.n_viz_sample)
 
         tag = "ema" if self.is_ema else "reg"
         sample_counter = getattr(trainer, "sample_counter", iteration)
@@ -559,15 +653,8 @@ class EveryNDrawSample(EveryN):
         iteration: int,
         tag: str,
     ) -> MultiviewTransferSampleResult:
-        first_sample_rows = _get_first_multiview_transfer_rows(raw_data, metadata)
-        if first_sample_rows is None:
+        if not _has_first_multiview_transfer_rows(raw_data, metadata):
             return MultiviewTransferSampleResult(handled=False)
-
-        control_video, gt_target_video = first_sample_rows
-        to_show = [
-            control_video.float().cpu(),  # [V,C,F,H,W]
-            gt_target_video.float().cpu(),  # [V,C,F,H,W]
-        ]
 
         # IMPORTANT: run diffusion generation BEFORE any auxiliary VAE decode.
         # generate_samples_from_batch drives the compiled net under
@@ -578,7 +665,8 @@ class EveryNDrawSample(EveryN):
         # Decoding the clean x0 AFTER sampling (matching the standard single-item
         # sample() path ordering) keeps generation bit-for-bit as in the runs that
         # produced good zero-shot output.
-        generated_rows: list[torch.Tensor] = []
+        should_materialize_sample = self._should_materialize_sample()
+        generated_latents: list[torch.Tensor] = []
         generation_batch = slice_data_batch(data_batch, start=0, limit=1)
         for guidance in self.guidance:
             sample = model.generate_samples_from_batch(
@@ -592,16 +680,37 @@ class EveryNDrawSample(EveryN):
             sample_vision = sample["vision"]
             if len(sample_vision) != 1:
                 return MultiviewTransferSampleResult(handled=True)
-            assert hasattr(model, "decode")
+            if should_materialize_sample:
+                generated_latents.append(
+                    sample_vision[0].clone()  # [1,C,V*T_latent,H,W] or [C,V*T_latent,H,W]
+                )
+
+        # Sampling drives CP/FSDP collectives, so every rank must finish every
+        # guidance call above. Pixel decoding and visualization are local work;
+        # ranks that will neither save nor log can wait at the callback barrier.
+        if not should_materialize_sample:
+            return MultiviewTransferSampleResult(handled=True)
+
+        first_sample_rows = _get_first_multiview_transfer_rows(raw_data, metadata)
+        assert first_sample_rows is not None
+        control_video, gt_target_video = first_sample_rows
+        to_show = [
+            control_video,  # [V,C,F,H,W]
+            gt_target_video,  # [V,C,F,H,W]
+        ]
+
+        assert hasattr(model, "decode")
+        generated_rows: list[torch.Tensor] = []
+        for generated_latent in generated_latents:
             if "enable_per_camera_vae_encoding" in data_batch:
                 generated_video = _decode_multiview_latent_per_view(  # [1,C,V*F,H,W] or [C,V*F,H,W]
                     model,
-                    sample_vision[0],
+                    generated_latent,
                     metadata.sample_n_views,
                     metadata.num_video_frames_per_view,
                 )
             else:
-                generated_video = model.decode(sample_vision[0])  # [1,C,V*F,H,W] or [C,V*F,H,W]
+                generated_video = model.decode(generated_latent)  # [1,C,V*F,H,W] or [C,V*F,H,W]
             generated_by_view = _split_multiview_tensor_by_view(
                 generated_video,
                 metadata.sample_n_views,
@@ -677,7 +786,11 @@ class EveryNDrawSample(EveryN):
                 text_embeddings.shape[0], text_embeddings.shape[1], device="cuda"
             )  # [B,N_tokens]  (all tokens valid)
 
-        data_clean = model.get_data_and_condition(data_batch)
+        per_camera_vae_encoding = "enable_per_camera_vae_encoding" in data_batch
+        data_clean = model.get_data_and_condition(
+            data_batch,
+            retain_raw_state_vision=not per_camera_vae_encoding,
+        )
         raw_data = data_clean.raw_state_vision
         x0 = data_clean.x0_tokens_vision
 

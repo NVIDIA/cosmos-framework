@@ -4,7 +4,9 @@
 import importlib
 import os
 import os.path as osp
+import pathlib
 import re
+import sys
 import time
 from collections.abc import Iterator
 from contextlib import ExitStack, contextmanager
@@ -98,6 +100,11 @@ def _is_safetensors_checkpoint(checkpoint_path: str, credential_path: str | None
 def _is_checkpoint_cache_ready(checkpoint_path: str) -> bool:
     """Return True when FileSystemWriter has published its completion metadata."""
     return osp.isfile(osp.join(checkpoint_path, ".metadata"))
+
+
+def _install_pathlib_pickle_compat() -> None:
+    """Load DCP metadata written by Python versions that use ``pathlib._local``."""
+    sys.modules.setdefault("pathlib._local", pathlib)
 
 
 class _CheckpointCacheAction(IntEnum):
@@ -240,6 +247,7 @@ def _load_model(
         log.info("Dropping net_teacher.* keys from inference load target; distillation checkpoints do not save them.")
         state_dict = {key: value for key, value in state_dict.items() if not key.startswith("net_teacher.")}
 
+    _install_pathlib_pickle_compat()
     if checkpoint_path.startswith("s3://"):
         storage_reader = S3StorageReader(
             credential_path=credential_path or "",

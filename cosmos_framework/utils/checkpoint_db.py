@@ -65,7 +65,7 @@ from typing_extensions import Self, override
 from cosmos_framework.utils.flags import EXPERIMENTAL_CHECKPOINTS, INTERNAL, StrEnum
 from cosmos_framework.utils import log
 
-HF_VERSION = "1.16.4"
+_HF_CLI_PROJECT = Path(__file__).resolve().with_name("hf_cli")
 
 
 def _is_uuid(checkpoint_uri: str) -> bool:
@@ -142,28 +142,43 @@ CheckpointS3: TypeAlias = CheckpointFileS3 | CheckpointDirS3
 def _hf_download(cmd_args: list[str]) -> str:
     """Run Hugging Face CLI download command and return the local path.
 
-    Uses a newer Hugging Face CLI version to download checkpoint. The dependency
-    version is very old and not robust.
+    Uses a separately locked Hugging Face CLI because the dependency in the
+    application environment is too old and not robust. By default, each call
+    uses an isolated environment so this also works from read-only installs.
+    Callers that make repeated downloads can set
+    ``IMAGINAIRE_HF_CLI_ENVIRONMENT`` to reuse a dedicated environment.
     """
     is_rank0 = os.environ.get("RANK", "0") == "0"
+    hf_cli_environment = os.environ.get("IMAGINAIRE_HF_CLI_ENVIRONMENT")
     cmd = [
-        "uvx",
-        "--with",
-        "click",
-        "--with",
-        "tqdm<4.70",
-        f"hf@{HF_VERSION}",
-        "download",
-        "--format=json",
-        *cmd_args,
+        "uv",
+        "run",
     ]
+    if hf_cli_environment is None:
+        cmd.append("--isolated")
+    cmd.extend(
+        [
+            "--project",
+            str(_HF_CLI_PROJECT),
+            "--locked",
+            "--no-default-groups",
+            "hf",
+            "download",
+            "--format=json",
+            *cmd_args,
+        ]
+    )
     log.info(f"{shlex.join(cmd)}")
+    env = None
+    if hf_cli_environment is not None:
+        env = os.environ | {"UV_PROJECT_ENVIRONMENT": hf_cli_environment}
     output = subprocess.run(
         cmd,
         stdout=subprocess.PIPE,
         stderr=None if is_rank0 else subprocess.PIPE,
         text=True,
         check=True,
+        env=env,
     )
     return json.loads(output.stdout)["path"]
 

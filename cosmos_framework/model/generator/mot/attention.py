@@ -1,7 +1,12 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: OpenMDW-1.1
 
+from __future__ import annotations
+
+from collections.abc import Sequence
+
 import torch
+from torch.nn.attention.flex_attention import BlockMask
 
 from cosmos_framework.model.attention import (
     attention,
@@ -63,6 +68,12 @@ class SplitInfo:
         self.noisy_token_range: tuple[int, int] | None = None
         # Per-control scalar weights; parallel to control_stream_token_ranges.
         self.control_weights: list[float] | None = None
+        # Multiview GEN-token mask, set post-construction in cosmos3_vfm_network.py when
+        # use_multiview_flex_attention is on. When populated, three_way_attention computes the
+        # GEN-tower self-attention with FlexAttention and the multiview supertoken mask. Only
+        # the mask is carried here; the per-token fields it was derived from are an
+        # implementation detail of flex_attention.build_multiview_block_mask.
+        self.flex_block_mask: BlockMask | None = None
 
 
 AttentionMaskType = SplitInfo
@@ -95,13 +106,14 @@ def _is_split_info_compatible(attention_mask: object) -> bool:
 _dotproduct_attention_cache = {}
 
 
-from cosmos_framework.model.generator.mot.flex_attention import FlexMetadata, flex_attention_varlen
+from cosmos_framework.model.generator.mot.flex_attention import flex_attention_varlen
 from cosmos_framework.data.generator.sequence_packing.natten import (
     generate_natten_metadata,
     generate_temporal_causal_natten_metadata,
 )
 from cosmos_framework.data.generator.sequence_packing.runtime import (
     SequencePack,
+    SequencePackMetadata,
     from_mode_splits,
     get_all_seq,
     get_causal_seq,
@@ -220,16 +232,16 @@ def three_way_attention(
     natten_metadata: dict | None,
     attention_meta: SplitInfo | None = None,
     packed_key_states_normalized: SequencePack | None = None,
-    flex_metadata: FlexMetadata | None = None,
+    flex_block_mask: BlockMask | None = None,
 ):
     """
     Performs three-way attention, with understanding and generations attentions fully decomposed,
     and allows sparsity / multi-dimensional masking in the generation tower.
 
     The generation-tower self-attention (``full_sa``) is computed by one of three
-    mutually exclusive paths: FlexAttention when ``flex_metadata`` is provided,
+    mutually exclusive paths: FlexAttention when ``flex_block_mask`` is provided,
     NATTEN when ``natten_metadata`` is provided, or dense self-attention when
-    neither is set. ``flex_metadata`` and ``natten_metadata`` must not both be set.
+    neither is set. ``flex_block_mask`` and ``natten_metadata`` must not both be set.
 
     When attention_meta is provided with null_action_supertokens=True, zeros V for the first
     num_action_tokens_per_supertoken tokens of each sample's GEN sequence (null action
@@ -274,6 +286,41 @@ def three_way_attention(
         ).reshape(-1)
         full_v[null_positions] = 0
 
+    # Trailing padding rows belong to no sample, and varlen attention leaves rows outside its
+    # cumulative ranges unwritten in both directions: the forward output rows keep whatever was in
+    # the buffer, and the backward skips the matching dq/dk/dv rows, which then reach the
+    # projection weight gradients with no zero factor to cancel them. When the pack carries
+    # padding it describes it as one extra trailing segment per stream, so switching every pass
+    # over to those offsets makes padding attend only to padding while each real query keeps its
+    # exact range. Both streams gain the same extra segment, which is what keeps the query and key
+    # segment counts equal for the gen->und pass below.
+    # The two invariants below are asserted rather than folded into the condition: falling back to
+    # the plain offsets is exactly the unwritten-gradient case this branch exists to avoid, so it
+    # has to fail loudly instead of quietly.
+    use_pad_segment = "_full_only_seq_offsets_pad_segment" in packed_query_states
+    if use_pad_segment:
+        # The offsets index the whole padded stream, so they only fit a pack that holds it whole.
+        # Context parallel gathers the sequence back with an all-to-all before dispatching here, so
+        # this holds today; a scheme that kept the sequence sharded through attention would have to
+        # rebase every segment boundary onto the shard.
+        assert not packed_query_states["is_sharded"], (
+            "Pad-segment offsets describe the unsharded stream, so a context parallel local shard "
+            "needs offsets rebased onto the shard."
+        )
+        causal_q_offsets = packed_query_states["_causal_seq_offsets_pad_segment"]
+        causal_k_offsets = packed_key_states["_causal_seq_offsets_pad_segment"]
+        causal_k_normalized_offsets = (
+            packed_key_states_normalized["_causal_seq_offsets_pad_segment"]
+            if packed_key_states_normalized is not None
+            else causal_k_offsets
+        )
+        full_q_offsets = packed_query_states["_full_only_seq_offsets_pad_segment"]
+        max_causal_len = packed_query_states["max_causal_len_pad_segment"]
+        max_full_len = packed_query_states["max_full_len_pad_segment"]
+    else:
+        max_causal_len = packed_query_states["max_causal_len"]
+        max_full_len = packed_query_states["max_full_len"]
+
     use_dont_care_mask = causal_q_offsets is causal_k_offsets
 
     # NOTE: cosmos_framework attention is BSHD in, BSHD out
@@ -283,8 +330,8 @@ def three_way_attention(
         causal_v.unsqueeze(0),  # [1,N_und,heads,head_dim]
         cumulative_seqlen_Q=causal_q_offsets,
         cumulative_seqlen_KV=causal_k_offsets,
-        max_seqlen_Q=packed_query_states["max_causal_len"],
-        max_seqlen_KV=packed_query_states["max_causal_len"],
+        max_seqlen_Q=max_causal_len,
+        max_seqlen_KV=max_causal_len,
         is_causal=True,
         causal_type=CausalType.DontCare if use_dont_care_mask else CausalType.TopLeft,
     )  # [1,N_und,heads,head_dim]
@@ -292,19 +339,21 @@ def three_way_attention(
     causal_out = causal_res.squeeze(0).flatten(-2, -1)  # type: ignore  # [N_und,heads*head_dim]
 
     # GEN-tower self-attention (full_sa) via one of three mutually exclusive
-    # paths. flex_metadata and natten_metadata cannot both be set.
-    assert not (flex_metadata is not None and natten_metadata is not None), (
-        "flex_metadata and natten_metadata are mutually exclusive; at most one may be set."
+    # paths. flex_block_mask and natten_metadata cannot both be set.
+    assert not (flex_block_mask is not None and natten_metadata is not None), (
+        "flex_block_mask and natten_metadata are mutually exclusive; at most one may be set."
     )
-    if flex_metadata is not None:
-        # FlexAttention: the multiview supertoken mask encoded in flex_metadata.
+    if flex_block_mask is not None:
+        # FlexAttention: the multiview supertoken mask encoded in flex_block_mask.
         # Returns the heads-last (out, lse) that merge_attentions expects,
-        # matching the cosmos_framework.model.attention convention.
+        # matching the cosmos_framework.model.attention convention. This path needs no padded
+        # offsets: the mask marks padding with the -1 sentinel, so the kernel
+        # writes every row and only padding attends to padding.
         full_sa, full_sa_lse = flex_attention_varlen(
             full_q.unsqueeze(0),  # [1,N_full,heads,head_dim]
             full_k.unsqueeze(0),  # [1,N_full,heads,head_dim]
             full_v.unsqueeze(0),  # [1,N_full,heads,head_dim]
-            flex_metadata,
+            flex_block_mask,
             return_lse=True,
         )  # full_sa: [1,N_full,heads,head_dim], full_sa_lse: [1,N_full,heads]
     elif natten_metadata is not None:
@@ -325,8 +374,8 @@ def three_way_attention(
             full_v.unsqueeze(0),  # [1,N_full,heads,head_dim]
             cumulative_seqlen_Q=full_q_offsets,
             cumulative_seqlen_KV=full_q_offsets,
-            max_seqlen_Q=packed_query_states["max_full_len"],
-            max_seqlen_KV=packed_query_states["max_full_len"],
+            max_seqlen_Q=max_full_len,
+            max_seqlen_KV=max_full_len,
             return_lse=True,
         )  # full_sa: [1,N_full,heads,head_dim], full_sa_lse: [1,N_full,heads]
 
@@ -336,8 +385,8 @@ def three_way_attention(
         causal_v.unsqueeze(0),  # [1,N_und,heads,head_dim]
         cumulative_seqlen_Q=full_q_offsets,
         cumulative_seqlen_KV=causal_k_normalized_offsets,
-        max_seqlen_Q=packed_query_states["max_full_len"],
-        max_seqlen_KV=packed_query_states["max_causal_len"],
+        max_seqlen_Q=max_full_len,
+        max_seqlen_KV=max_causal_len,
         return_lse=True,
     )  # full_ca: [1,N_full,heads,head_dim], full_ca_lse: [1,N_full,heads]
 
@@ -544,6 +593,9 @@ def dispatch_attention(
             natten_metadata=natten_metadata,
             attention_meta=attention_mask,
             packed_key_states_normalized=packed_key_states_normalized,
+            # getattr because _is_split_info_compatible also accepts duck-typed metadata that
+            # predates this field.
+            flex_block_mask=getattr(attention_mask, "flex_block_mask", None),
         )
     else:
         output = two_way_attention(
@@ -567,7 +619,7 @@ def build_packed_sequence(
     num_heads: int,
     head_dim: int,
     num_layers: int,
-    token_shapes: list[tuple[int, int, int]] | None = None,
+    token_shapes: Sequence[tuple[int, ...]] | None = None,
     natten_parameter_list: list | None = None,
     is_image_batch: bool = False,
     cp_world_size: int = 1,
@@ -578,10 +630,16 @@ def build_packed_sequence(
     num_action_tokens_per_supertoken: int = 0,
     null_action_supertokens: bool = False,
     pad_for_cuda_graphs: bool = False,
+    full_seq_alignment: int = 1,
+    prepared_metadata: SequencePackMetadata | None = None,
 ) -> tuple[SequencePack, AttentionMaskType, list | None]:
     """
     Build the model input pack and attention meta for joint attention.
-    Returns a tuple: (input_pack, attention_meta).
+    Returns a tuple: (input_pack, attention_meta, natten_metadata_list).
+
+    ``full_seq_alignment`` pads the full (GEN) stream up to a multiple of itself; pass
+    ``FLEX_BLOCK_SIZE`` when the GEN tower runs FlexAttention so the attention path
+    receives an already block-aligned sequence.
     """
     device = packed_sequence.device
     natten_metadata_list = None
@@ -592,7 +650,6 @@ def build_packed_sequence(
             sample_lens=sample_lens,
             actual_len=int(packed_sequence.shape[0]),
         )
-        make_pack = sequence_pack_from_packed_sequence
     elif joint_attn_implementation == "three_way":
         attention_meta = SplitInfo(
             split_lens=split_lens,
@@ -605,12 +662,16 @@ def build_packed_sequence(
             num_action_tokens_per_supertoken=num_action_tokens_per_supertoken,
             null_action_supertokens=null_action_supertokens,
         )
-        make_pack = sequence_pack_from_packed_sequence
         # Some memory-driven attention paths implement temporal visibility in
         # their own attention kernels; skip NATTEN metadata for those paths.
         if not skip_natten_metadata:
             # Temporal causal: encode (T, S) supertoken layout; spatial NATTEN: encode (H, W) layout.
             if video_temporal_causal:
+                if vision_token_shapes is None:
+                    raise ValueError(
+                        "video_temporal_causal needs vision_token_shapes: the (T, H, W) layout per vision "
+                        "item is what defines the supertoken boundaries the temporal mask is built from."
+                    )
                 natten_metadata_list = generate_temporal_causal_natten_metadata(
                     vision_token_shapes=vision_token_shapes,
                     num_action_tokens_per_supertoken=num_action_tokens_per_supertoken,
@@ -635,7 +696,7 @@ def build_packed_sequence(
             f"Invalid joint_attn_implementation: {joint_attn_implementation}. Must be 'two_way' or 'three_way'."
         )
 
-    input_pack = make_pack(
+    input_pack = sequence_pack_from_packed_sequence(
         packed_sequence=packed_sequence,
         attn_modes=attn_modes,
         split_lens=split_lens,
@@ -645,6 +706,8 @@ def build_packed_sequence(
         is_image_batch=is_image_batch,
         cp_world_size=cp_world_size,
         pad_for_cuda_graphs=pad_for_cuda_graphs,
+        full_seq_alignment=full_seq_alignment,
+        prepared_metadata=prepared_metadata,
     )
     # Not needed anymore, can cause recompilations.
     input_pack.pop("split_lens", None)

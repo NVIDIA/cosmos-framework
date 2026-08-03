@@ -3,7 +3,9 @@
 
 # Configs for VLM / LLM models
 
+import math
 import os
+from numbers import Integral, Real
 from typing import Any
 
 import attrs
@@ -27,6 +29,12 @@ from cosmos_framework.model.generator.mot.unified_mot import (
 )
 from cosmos_framework.data.generator.processors import LLMTokenizerProcessor, build_processor_lazy
 from cosmos_framework.model.generator.tokenizers.tokenization_qwen2 import Qwen2Tokenizer
+
+_AUDIO_LAYOUTS = (
+    "separate_no_timestamps",
+    "separate_with_timestamps",
+    "interleaved_av",
+)
 
 
 def create_vlm_config(base_config: LazyDict, **overrides):
@@ -169,6 +177,84 @@ class VLMConfig:
     # Prepend a system prompt during text tokenization. Checkpoints trained with
     # system prompt enabled require this set true at inference time.
     use_system_prompt: bool = False
+
+
+@attrs.define(slots=False)
+class SoundUnderstandingConfig:
+    """Optional audio-understanding pathway for standalone Reasoner/VLM models.
+
+    The encoder artifact initializes the frozen modality encoder independently
+    of the Reasoner checkpoint. The audio projector is trainable by default and
+    may be frozen explicitly after alignment.
+    """
+
+    # These strings are registered in the target tokenizer only when the
+    # standalone Reasoner ``sound_und`` gate is enabled. The model embedding
+    # table is not resized; the resolved IDs must fit its reserved capacity.
+    # Qwen-based Nano/Super have spare preallocated rows for the defaults below.
+    # Edge's 131072-row vocabulary is full, so model setup reuses its existing
+    # <SPECIAL_23>/<SPECIAL_24>/<SPECIAL_25> reserved slots.
+    audio_start_token: str = "<audio_start>"
+    audio_pad_token: str = "<audio_pad>"
+    audio_end_token: str = "<audio_end>"
+    projection_hidden_size: int = 4096
+    # Virtual video FPS used only to synthesize timestamp anchors for audio-only
+    # samples. This is neither the waveform sample rate nor the audio-token rate.
+    # Paired audio/video samples ignore this value and reuse the video timestamps.
+    audio_timestamp_fps: float = 4.0
+    # Keep the separate timestamped sequence as the compatibility default.
+    # ``separate_no_timestamps`` omits only audio-side timestamps, while
+    # ``interleaved_av`` inserts each audio segment after its native video chunk.
+    audio_layout: str = "separate_with_timestamps"
+    freeze_projector: bool = False
+    # Keep the full input embedding table as an optimizer parameter while
+    # allowing gradients only through the audio start/end token positions.
+    train_boundary_token_embeddings_only: bool = False
+
+    encoder_checkpoint_enabled: bool = False
+    encoder_checkpoint_path: str = ""
+    encoder_checkpoint_credentials_path: str = ""
+    exclude_frozen_encoder_from_training_checkpoint: bool = False
+
+
+def validate_sound_understanding_config(config: Any, *, sound_und: bool) -> None:
+    """Validate the optional standalone Reasoner audio configuration."""
+    if not isinstance(sound_und, bool):
+        raise TypeError(f"sound_und must be a bool, got {type(sound_und).__name__}")
+    audio_tokens = (config.audio_start_token, config.audio_pad_token, config.audio_end_token)
+    if sound_und and any(not isinstance(token, str) or not token for token in audio_tokens):
+        raise ValueError("Audio start, pad, and end tokens must be non-empty strings")
+    if sound_und and len(set(audio_tokens)) != 3:
+        raise ValueError("Audio start, pad, and end tokens must be distinct")
+    if (
+        isinstance(config.projection_hidden_size, bool)
+        or not isinstance(config.projection_hidden_size, Integral)
+        or config.projection_hidden_size <= 0
+    ):
+        raise ValueError("sound_und_config.projection_hidden_size must be positive")
+    if (
+        isinstance(config.audio_timestamp_fps, bool)
+        or not isinstance(config.audio_timestamp_fps, Real)
+        or not math.isfinite(float(config.audio_timestamp_fps))
+        or config.audio_timestamp_fps <= 0
+    ):
+        raise ValueError("sound_und_config.audio_timestamp_fps must be positive and finite")
+    if config.audio_layout not in _AUDIO_LAYOUTS:
+        raise ValueError(f"sound_und_config.audio_layout must be one of {_AUDIO_LAYOUTS}, got {config.audio_layout!r}")
+    for name, value in (
+        ("freeze_projector", config.freeze_projector),
+        ("train_boundary_token_embeddings_only", config.train_boundary_token_embeddings_only),
+        ("encoder_checkpoint_enabled", config.encoder_checkpoint_enabled),
+        ("exclude_frozen_encoder_from_training_checkpoint", config.exclude_frozen_encoder_from_training_checkpoint),
+    ):
+        if not isinstance(value, bool):
+            raise TypeError(f"sound_und_config.{name} must be a bool, got {type(value).__name__}")
+    if sound_und and not config.encoder_checkpoint_enabled:
+        raise ValueError("Audio understanding requires an enabled standalone encoder checkpoint")
+    if config.encoder_checkpoint_enabled and not config.encoder_checkpoint_path.strip():
+        raise ValueError("An enabled audio encoder checkpoint requires a non-empty path")
+    if config.exclude_frozen_encoder_from_training_checkpoint and not config.encoder_checkpoint_enabled:
+        raise ValueError("Excluding the frozen audio encoder from training checkpoints requires checkpoint loading")
 
 
 # Configs for LLM models
@@ -1021,4 +1107,21 @@ def register_vlm():
         package="model.config.vlm_config",
         name="cosmos3_edge_reasoner_vlm_gcp_590c1c0_und_k_norm",
         node=Cosmos3EdgeReasoner_VLM_GCP_Config_590c1c0_UndKNorm,
+    )
+
+
+def register_sound_understanding() -> None:
+    """Register opt-in sound-understanding presets for standalone Reasoner models."""
+    ConfigStore.instance().store(
+        group="sound_und_config",
+        package="model.config.sound_und_config",
+        name="nemotron_3_nano_omni_parakeet_encoder_gcp",
+        node=SoundUnderstandingConfig(
+            encoder_checkpoint_enabled=True,
+            encoder_checkpoint_path=(
+                "s3://bucket0/cosmos3/pretrained/huggingface/"
+                "Nemotron/Nemotron-3-Nano-Omni-Parakeet-Encoder-BF16/"
+            ),
+            encoder_checkpoint_credentials_path="credentials/gcp_checkpoint.secret",
+        ),
     )

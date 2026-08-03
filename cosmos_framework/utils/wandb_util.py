@@ -121,6 +121,9 @@ def init_wandb(config: Config, model: ImaginaireModel) -> None:
 def _read_wandb_id(config_job: JobConfig, config_checkpoint: CheckpointConfig) -> str | None:
     """Read the W&B job ID. If it doesn't exist, return None.
 
+    Reads from the same location as ``_write_wandb_id`` (save object store / local),
+    so resume works when load and save buckets differ.
+
     Args:
         config_wandb (JobConfig): The config object for the W&B logger.
         config_checkpoint (CheckpointConfig): The config object for the checkpointer.
@@ -129,8 +132,8 @@ def _read_wandb_id(config_job: JobConfig, config_checkpoint: CheckpointConfig) -
         wandb_id (str | None): W&B job ID.
     """
     wandb_id = None
-    if config_checkpoint.load_from_object_store.enabled:
-        object_store_loader = object_store.ObjectStore(config_checkpoint.load_from_object_store)
+    if config_checkpoint.save_to_object_store.enabled:
+        object_store_loader = object_store.ObjectStore(config_checkpoint.save_to_object_store)
         wandb_id_path = f"{config_job.path}/wandb_id.txt"
         if object_store_loader.object_exists(key=wandb_id_path):
             wandb_id = object_store_loader.load_object(key=wandb_id_path, type="text").strip()

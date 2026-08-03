@@ -77,8 +77,8 @@ from cosmos_framework.data.generator.sequence_packing.runtime import (
     SequencePack,
     from_all_seq,
     from_und_gen_splits,
-    get_device_and_dtype,
     get_gen_seq,
+    get_num_real_tokens,
     get_und_seq,
     set_gen_seq,
     set_und_seq,
@@ -626,6 +626,18 @@ class PackedAttentionMoT(nn.Module):
         k_gen = k_gen_in.view(-1, self.num_key_value_heads, self.head_dim)  # [N_gen,num_kv_heads,head_dim]
         v_gen = v_gen_in.view(-1, self.num_key_value_heads, self.head_dim)  # [N_gen,num_kv_heads,head_dim]
 
+        # The sequence length is the only size that varies between steps, but Dynamo lifts the int
+        # attributes of a module into SymInts, so the head counts reach the views above as symbols.
+        # That breaks FlexAttention's Inductor lowering, which tests the Q:KV head ratio for a power
+        # of two with ``ratio & (ratio - 1)`` and raises a TypeError on a symbolic ratio, and it
+        # leaves the head count inside every index expression downstream instead of folding it away.
+        # Specialise here, where the size is still a bare symbol: after the CP all-to-all it is
+        # ``FloorDiv(head, cp_world_size)``, and marking a compound expression only guards its value
+        # instead of folding the symbol away.
+        if torch.compiler.is_compiling():
+            for head_split in (q_und, k_und, v_und, q_gen, k_gen, v_gen):
+                torch._dynamo.mark_static(head_split, 1)
+
         q_und = self.q_norm(q_und)  # [N_und,num_heads,head_dim]
         k_und = self.k_norm(k_und)  # [N_und,num_kv_heads,head_dim]
 
@@ -909,8 +921,8 @@ def _impl_forward(
 
     # Create position embeddings (Qwen3 style) - squeeze once at model level
     # tensor below is only used for its dtype and device
-    device, dtype = get_device_and_dtype(pack)
-    _meta_tensor = torch.tensor([], dtype=dtype, device=device)
+    _meta_tensor = get_gen_seq(pack)  # [S_gen,D]
+    device = _meta_tensor.device
     cos, sin = self.rotary_emb(
         _meta_tensor, position_ids=position_ids.unsqueeze(0) if position_ids.ndim == 1 else position_ids.unsqueeze(1)
     )  # if ndim == 2, the mrope position_ids is (3, seq_len); inject the batch dim in the
@@ -1158,7 +1170,7 @@ class MoTDecoderLayer(nn.Module):
             ln_out_gen = self.post_attention_layernorm_moe_gen(residual_gen)
 
             # UNPAD MLP INPUT (gen only)
-            gen_len = pack_attn_out["_num_full_tokens"]
+            _, gen_len = get_num_real_tokens(pack_attn_out)
             ln_out_gen_unpadded = ln_out_gen[:gen_len]  # [N_gen_unpadded,hidden_size]
 
             # Run MLP (gen only)
@@ -1183,8 +1195,7 @@ class MoTDecoderLayer(nn.Module):
             # UNPAD MLP INPUT ===============
             # NOTE: This is only need for the MoE auxiliary loss computation and to avoid
             #       artificial expert inbalance due to routing padding tokens.
-            gen_len = pack_attn_out["_num_full_tokens"]
-            und_len = pack_attn_out["_num_causal_tokens"]
+            und_len, gen_len = get_num_real_tokens(pack_attn_out)
             ln_out_und_unpadded = ln_out_und[:und_len]  # [N_und_unpadded,hidden_size]
             ln_out_gen_unpadded = ln_out_gen[:gen_len]  # [N_gen_unpadded,hidden_size]
 

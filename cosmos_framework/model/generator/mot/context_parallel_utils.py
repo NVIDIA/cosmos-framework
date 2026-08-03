@@ -31,13 +31,14 @@ Integration Guide:
    loss or post-processing.
 """
 
-from typing import Callable
+from typing import Any, Callable
 
 import torch
 import torch.distributed as dist
 from torch.distributed.device_mesh import DeviceMesh
 from torch.distributed.tensor import DTensor, Replicate, Shard
 
+from cosmos_framework.utils import distributed
 from cosmos_framework.model.generator.mot.attention import SplitInfo
 from cosmos_framework.model.generator.utils.memory import KVToStore, MemoryValue
 from cosmos_framework.data.generator.sequence_packing.runtime import (
@@ -50,6 +51,7 @@ from cosmos_framework.data.generator.sequence_packing.runtime import (
     get_gen_seq,
     get_und_position_ids,
     get_und_seq,
+    num_local_real_tokens,
 )
 from cosmos_framework.utils.generator.parallelism import ParallelDims
 
@@ -90,6 +92,33 @@ def context_parallel_broadcast_tensor_list(
     global_src_rank = dist.get_global_rank(cp_group, 0)
     for tensor in tensors:
         dist.broadcast(tensor, src=global_src_rank, group=cp_group)
+
+
+def broadcast_context_parallel_object(
+    local_value: Any,
+    parallel_dims: ParallelDims,
+    owner_rank: int,
+    *,
+    min_tensor_bytes: int = 0,
+) -> Any:
+    """Broadcast one CP owner's object tree to every rank in the CP group.
+
+    Non-owner ranks pass a local placeholder that is ignored; after the collective,
+    every rank receives a copy of the owner's value.
+    """
+    if not parallel_dims.cp_enabled:
+        raise ValueError("broadcast_context_parallel_object requires context parallelism to be enabled.")
+
+    cp_group = parallel_dims.cp_mesh.get_group()
+    global_owner_rank = dist.get_global_rank(cp_group, owner_rank)
+    payload_box = [local_value if parallel_dims.cp_rank == owner_rank else None]
+    distributed.broadcast_object_list_optimized(
+        payload_box,
+        src=global_owner_rank,
+        group=cp_group,
+        min_tensor_bytes=min_tensor_bytes,
+    )
+    return payload_box[0]
 
 
 def get_context_parallel_sharded_sequence(
@@ -144,6 +173,13 @@ def get_context_parallel_sharded_sequence(
 
     # create local pack
     local_pack = from_mode_splits(text_shard, gen_shard, input_pack, is_sharded=True)
+    # Padding sits at the end of each stream, so only the last shards hold any of it. Record the
+    # per-shard real token counts: the counts in the metadata describe the whole batch and would
+    # silently over-count against these shards (see get_num_real_tokens).
+    local_pack["_num_causal_tokens_local"] = num_local_real_tokens(
+        input_pack["_num_causal_tokens"], rank, text_shard_len
+    )
+    local_pack["_num_full_tokens_local"] = num_local_real_tokens(input_pack["_num_full_tokens"], rank, gen_shard_len)
     local_position_ids = torch.cat(
         [text_position_ids_shard, gen_position_ids_shard], dim=0
     )  # [text_shard_len+gen_shard_len] or [text_shard_len+gen_shard_len,3]
@@ -324,18 +360,25 @@ def context_parallel_attention(
     v_und_seq, _ = get_causal_seq(packed_value_states)  # [text_shard_len,H,head_dim]
     v_gen_seq, _ = get_full_only_seq(packed_value_states)  # [gen_shard_len,H,head_dim]
 
-    # Check that number of Q heads is divisible by CP world size. K/V heads may be repeated below for GQA.
-    q_heads = q_und_seq.shape[1]
-    kv_heads = k_und_seq.shape[1]
-    assert q_und_seq.shape[1] % cp_world_size == 0, (
-        f"Query heads ({q_und_seq.shape[1]}) must be divisible by context parallel world size ({cp_world_size})"
-    )
+    # The head counts are fixed by the model config, and PackedAttentionMoT is marked static so they
+    # stay concrete under torch.compile with dynamic shapes. That matters here because the all-to-all
+    # below derives the local head count as ``global // cp_world_size``, which has to stay a number:
+    # Inductor's flex-decoding heuristic evaluates ``ratio & (ratio - 1)`` on the head counts and
+    # raises a TypeError on a symbolic ratio.
+    q_heads = int(q_und_seq.shape[1])
+    kv_heads = int(k_und_seq.shape[1])
+
     assert q_gen_seq.shape[1] == q_heads, (
         f"Understanding query heads ({q_heads}) and generation query heads ({q_gen_seq.shape[1]}) must match"
     )
     assert kv_heads == k_gen_seq.shape[1] == v_und_seq.shape[1] == v_gen_seq.shape[1], (
         f"Key/value heads must match across und/gen K/V tensors, got "
         f"k_und={kv_heads}, k_gen={k_gen_seq.shape[1]}, v_und={v_und_seq.shape[1]}, v_gen={v_gen_seq.shape[1]}"
+    )
+
+    # Check that number of Q heads is divisible by CP world size. K/V heads may be repeated below for GQA.
+    assert q_heads % cp_world_size == 0, (
+        f"Query heads ({q_heads}) must be divisible by context parallel world size ({cp_world_size})"
     )
     assert q_heads % kv_heads == 0, f"Query heads ({q_heads}) must be divisible by KV heads ({kv_heads})"
 

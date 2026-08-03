@@ -52,11 +52,13 @@ class TextTokenizerTransform(Augmentor):
 
 
 _SYSTEM_PROMPT_IMAGE_EDITING = "You are a helpful assistant who will edit images based on the user's instructions."
+_SYSTEM_PROMPT_VIDEO_EDITING = "You are a helpful assistant who will edit videos based on the user's instructions."
 
 _SYSTEM_PROMPT_TRANSFER = "You are a helpful assistant that generates images or videos following the user's instructions and control signals (edge maps, blur, depth, or segmentation)."
 
 _SYSTEM_PROMPTS = {
     "editing": _SYSTEM_PROMPT_IMAGE_EDITING,
+    "video_editing": _SYSTEM_PROMPT_VIDEO_EDITING,
     "transfer": _SYSTEM_PROMPT_TRANSFER,
 }
 

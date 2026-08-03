@@ -4,18 +4,22 @@
 import os
 from functools import partial
 from itertools import cycle
+from types import SimpleNamespace
 from typing import Any, cast
 
 import pytest
 import torch
 import torch.distributed as dist
 
+from cosmos_framework.trainer import ContextParallelDataWindow, ImaginaireTrainer
+from cosmos_framework.utils import distributed
 from cosmos_framework.data.generator.joint_dataloader import IterativeJointDataLoader
 from cosmos_framework.model.generator.mot.attention import (
     SplitInfo,
     dispatch_attention,
 )
 from cosmos_framework.model.generator.mot.context_parallel_utils import (
+    broadcast_context_parallel_object,
     context_parallel_attention,
     get_context_parallel_sharded_sequence,
 )
@@ -39,6 +43,143 @@ from cosmos_framework.data.generator.sequence_packing.runtime import (
 )
 from cosmos_framework.utils.generator.parallelism import ParallelDims
 
+
+
+class _CountingIterator:
+    def __init__(self, values: list[dict[str, Any]]) -> None:
+        self._iterator = iter(values)
+        self.fetch_count = 0
+
+    def __iter__(self) -> "_CountingIterator":
+        return self
+
+    def __next__(self) -> dict[str, Any]:
+        self.fetch_count += 1
+        return next(self._iterator)
+
+
+def _make_window_trainer(cp_size: int = 2) -> tuple[ImaginaireTrainer, Any]:
+    trainer = object.__new__(ImaginaireTrainer)
+    trainer._cp_data_window = ContextParallelDataWindow()
+    cp_mesh = SimpleNamespace(size=lambda: cp_size, get_group=lambda: object())
+    parallel_dims = SimpleNamespace(cp_enabled=True, cp_mesh=cp_mesh)
+    # Mirror the model's window slot so the trainer's desync guard sees them in sync.
+    model = SimpleNamespace(parallel_dims=parallel_dims, _cp_window_slot=0)
+    return trainer, model
+
+
+@pytest.mark.L0
+@pytest.mark.CPU
+def test_context_parallel_window_fetches_once_per_cp_size(monkeypatch: pytest.MonkeyPatch) -> None:
+    trainer, model = _make_window_trainer(cp_size=2)
+    dataloader_iter = _CountingIterator([{"batch_id": 10}, {"batch_id": 20}])
+    monkeypatch.setattr(dist, "get_backend", lambda group: dist.Backend.GLOO)
+    monkeypatch.setattr(dist, "all_reduce", lambda tensor, op, group: None)
+
+    observed: list[int] = []
+    for _ in range(4):
+        data_batch, stop = trainer._fetch_data_batch(model, dataloader_iter)
+        assert not stop
+        observed.append(data_batch["batch_id"])
+        # Emulate the model's per-step slot advance so the trainer's desync guard
+        # stays satisfied across the window.
+        model._cp_window_slot = (model._cp_window_slot + 1) % 2
+
+    assert observed == [10, 10, 20, 20]
+    assert dataloader_iter.fetch_count == 2
+
+
+@pytest.mark.L0
+@pytest.mark.CPU
+def test_context_parallel_window_synchronizes_stop(monkeypatch: pytest.MonkeyPatch) -> None:
+    trainer, model = _make_window_trainer(cp_size=2)
+    dataloader_iter = _CountingIterator([])
+    monkeypatch.setattr(dist, "get_backend", lambda group: dist.Backend.GLOO)
+    monkeypatch.setattr(dist, "all_reduce", lambda tensor, op, group: None)
+
+    data_batch, stop = trainer._fetch_data_batch(model, dataloader_iter)
+
+    assert data_batch is None
+    assert stop
+    assert trainer._cp_data_window.batch is None
+    assert trainer._cp_data_window.offset == 0
+
+
+@pytest.mark.L0
+@pytest.mark.CPU
+def test_context_parallel_window_stops_on_remote_exhaustion(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Local iterator still has data, but a remote CP rank is exhausted: the all_reduce
+    # (MAX) forces the stop tensor to 1 on every rank. This exercises the symmetric
+    # branch where local_stop is False but the window must still stop.
+    trainer, model = _make_window_trainer(cp_size=2)
+    dataloader_iter = _CountingIterator([{"batch_id": 10}, {"batch_id": 20}])
+    monkeypatch.setattr(dist, "get_backend", lambda group: dist.Backend.GLOO)
+
+    def _remote_stop(tensor: torch.Tensor, op: Any, group: Any) -> None:
+        tensor.fill_(1)
+
+    monkeypatch.setattr(dist, "all_reduce", _remote_stop)
+
+    data_batch, stop = trainer._fetch_data_batch(model, dataloader_iter)
+
+    assert data_batch is None
+    assert stop
+    assert trainer._cp_data_window.batch is None
+    assert trainer._cp_data_window.offset == 0
+
+
+@pytest.mark.L0
+@pytest.mark.CPU
+def test_context_parallel_window_detects_slot_desync(monkeypatch: pytest.MonkeyPatch) -> None:
+    # If the model's window slot falls behind the trainer's offset (e.g. a training step
+    # aborted mid-window), the next fetch must fail loudly rather than silently reusing
+    # the wrong cached batch.
+    trainer, model = _make_window_trainer(cp_size=2)
+    dataloader_iter = _CountingIterator([{"batch_id": 10}, {"batch_id": 20}])
+    monkeypatch.setattr(dist, "get_backend", lambda group: dist.Backend.GLOO)
+    monkeypatch.setattr(dist, "all_reduce", lambda tensor, op, group: None)
+
+    trainer._fetch_data_batch(model, dataloader_iter)
+    # Trainer advanced its offset to 1, but the model slot never advanced past 0.
+    with pytest.raises(RuntimeError, match="CP data-window desync"):
+        trainer._fetch_data_batch(model, dataloader_iter)
+
+
+@pytest.mark.L0
+@pytest.mark.CPU
+def test_broadcast_context_parallel_object_uses_round_robin_owner(monkeypatch: pytest.MonkeyPatch) -> None:
+    cp_group = object()
+    parallel_dims = SimpleNamespace(
+        cp_enabled=True,
+        cp_rank=1,
+        cp_mesh=SimpleNamespace(get_group=lambda: cp_group),
+    )
+    owner_payload = {"gen_data_clean": {"batch_size": 2}}
+
+    monkeypatch.setattr(dist, "get_global_rank", lambda group, group_rank: 17)
+
+    def _fake_broadcast(
+        payload_box: list,
+        src: int,
+        group: object,
+        *,
+        min_tensor_bytes: int,
+    ) -> None:
+        assert payload_box == [None]
+        assert src == 17
+        assert group is cp_group
+        assert min_tensor_bytes == 0
+        payload_box[0] = owner_payload
+
+    monkeypatch.setattr(distributed, "broadcast_object_list_optimized", _fake_broadcast)
+
+    shared_payload = broadcast_context_parallel_object(
+        local_value={"rank": 1},
+        parallel_dims=parallel_dims,
+        owner_rank=0,
+    )
+
+    assert shared_payload == owner_payload
 
 
 def _broadcast_test_object(data: Any, parallel_dims: ParallelDims, iteration: int) -> Any:
