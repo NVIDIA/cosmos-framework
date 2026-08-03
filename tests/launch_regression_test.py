@@ -274,6 +274,15 @@ def _build_specs(paths: dict[str, str]) -> dict[str, LaunchSpec]:
                 "checkpoint.save_to_object_store.enabled=false",
                 "upload_reproducible_setup=false",
             ),
+            # The streaming HuggingFace dataloader leaves a native thread alive
+            # past training. Interpreter finalization then either faults
+            # ("PyGILState_Release: thread state ... must be current when
+            # releasing") or blocks forever -- both *after* "Done with training."
+            # and every asserted value has been produced. Nothing reachable from
+            # Python owns that thread, so exiting without finalizing is what makes
+            # shutdown deterministic here (a map-style dataset shuts down cleanly,
+            # but uses a different subset and would invalidate the goldens).
+            extra_env={"COSMOS_EXIT_WITHOUT_FINALIZE": "1"},
             loss_re=_VLM_LOSS_RE,
             deterministic_iters=10,
             deterministic=False,
