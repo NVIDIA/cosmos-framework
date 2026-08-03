@@ -77,7 +77,6 @@ from cosmos_framework.data.generator.sequence_packing.runtime import (
     SequencePack,
     from_all_seq,
     from_und_gen_splits,
-    get_device_and_dtype,
     get_gen_seq,
     get_und_seq,
     set_gen_seq,
@@ -909,8 +908,8 @@ def _impl_forward(
 
     # Create position embeddings (Qwen3 style) - squeeze once at model level
     # tensor below is only used for its dtype and device
-    device, dtype = get_device_and_dtype(pack)
-    _meta_tensor = torch.tensor([], dtype=dtype, device=device)
+    _meta_tensor = get_gen_seq(pack)  # [S_gen,D]
+    device = _meta_tensor.device
     cos, sin = self.rotary_emb(
         _meta_tensor, position_ids=position_ids.unsqueeze(0) if position_ids.ndim == 1 else position_ids.unsqueeze(1)
     )  # if ndim == 2, the mrope position_ids is (3, seq_len); inject the batch dim in the

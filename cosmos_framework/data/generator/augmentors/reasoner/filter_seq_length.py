@@ -7,6 +7,12 @@ from typing import Dict, List, Optional
 
 from cosmos_framework.data.imaginaire.webdataset.augmentors.augmentor import Augmentor
 from cosmos_framework.utils import log
+from cosmos_framework.data.generator.processors.parakeet_audio_processor import (
+    AUDIO_END_TOKEN,
+    AUDIO_PAD_TOKEN,
+    AUDIO_START_TOKEN,
+    add_reasoner_audio_special_tokens,
+)
 from cosmos_framework.data.generator.processors.qwen3vl_processor import Qwen3VLProcessor
 
 
@@ -21,9 +27,22 @@ class FilterSeqLength(Augmentor):
         output_keys: Optional[list] = ["input_ids"],
         max_token_length: int = 24000,
         processor: Qwen3VLProcessor = None,
+        sound_und: bool = False,
+        audio_start_token: str = AUDIO_START_TOKEN,
+        audio_pad_token: str = AUDIO_PAD_TOKEN,
+        audio_end_token: str = AUDIO_END_TOKEN,
     ) -> None:
         self.max_token_length = max_token_length
         self.processor = processor
+        self.audio_pad_token_id: int | None = None
+        if sound_und:
+            self.audio_pad_token_id = add_reasoner_audio_special_tokens(
+                processor.tokenizer,
+                model_name_or_path=processor.name,
+                audio_start_token=audio_start_token,
+                audio_pad_token=audio_pad_token,
+                audio_end_token=audio_end_token,
+            ).token_ids[1]
 
     def __call__(self, data_dict: Dict) -> Dict:
         input_ids = data_dict["input_ids"]
@@ -32,9 +51,12 @@ class FilterSeqLength(Augmentor):
             input_ids_extra = input_ids[self.max_token_length :]
             has_video_tokens = sum(input_ids_extra == self.processor.video_token_id) > 0
             has_image_tokens = sum(input_ids_extra == self.processor.image_token_id) > 0
-            if not has_video_tokens and not has_image_tokens:
+            has_audio_tokens = (
+                self.audio_pad_token_id is not None and sum(input_ids_extra == self.audio_pad_token_id) > 0
+            )
+            if not has_video_tokens and not has_image_tokens and not has_audio_tokens:
                 log.debug(
-                    f"Truncating input_ids from {input_ids.shape[-1]} to {self.max_token_length} because there are no video or image tokens in the remaining tokens | __url__: path={data_dict['__url__'].path} root={data_dict['__url__'].root} | __key__: {data_dict['__key__']} | dialog_str: {data_dict.get('dialog_str', '')}"
+                    f"Truncating input_ids from {input_ids.shape[-1]} to {self.max_token_length} because there are no video, image, or audio tokens in the remaining tokens | __url__: path={data_dict['__url__'].path} root={data_dict['__url__'].root} | __key__: {data_dict['__key__']} | dialog_str: {data_dict.get('dialog_str', '')}"
                 )
                 data_dict["input_ids"] = data_dict["input_ids"][: self.max_token_length]
                 data_dict["token_mask"] = data_dict["token_mask"][: self.max_token_length]

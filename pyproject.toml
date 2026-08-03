@@ -90,6 +90,7 @@ train = [
   "jupyterlab",
   "kornia",
   "lerobot",
+  "librosa",
   "lpips",
   "lz4",
   "matplotlib",

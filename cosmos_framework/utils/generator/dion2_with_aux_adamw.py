@@ -27,7 +27,7 @@ This implementation combines elements from:
 
 Key differences from MuonWithAuxAdamW:
 - Uses all-to-all instead of all-gather (no redundant NS computation)
-- Batches params in groups of world_size for efficient distribution
+- Megabatches params in groups of world_size * K for efficient distribution
 - Supports submatrix selection (fraction parameter) for sparse orthogonalization
 - Each rank computes NS for exactly one param per batch (truly parallel)
 
@@ -68,8 +68,8 @@ redundant compute:
       --- all_to_all #2 (transpose back) --->  each GPU gets its own
           orthogonalized slice of every matrix, then applies the update.
 
-Matrices are grouped by local shard shape into batches of world_size so the
-all-to-all tensors are uniform (see ``_create_dion2_batches``). With
+Matrices are grouped by global shape and dtype into batches of ``world_size * K``
+so the all-to-all tensors are uniform (see ``_create_dion2_batches``). With
 ``fraction < 1.0`` only the top-k rows/cols (by L1 norm) are sent through this
 dance, and the unselected part is carried forward via error feedback.
 
@@ -90,23 +90,70 @@ the optimizer step becomes a step-time bottleneck.
 """
 
 import math
+from collections.abc import Callable, Iterable
+from typing import ParamSpec, TypeVar
 
 import torch
 import torch.distributed as dist
 import torch.nn as nn
 import transformer_engine as te
 import transformer_engine_torch as tex
-from torch.distributed.tensor import DTensor, Shard
+from torch.distributed.device_mesh import DeviceMesh
+from torch.distributed.tensor import DTensor, Placement, Shard
 
 from cosmos_framework.utils import log
 from cosmos_framework.utils.misc import get_local_tensor_if_DTensor
 from cosmos_framework.utils.generator.aux_optimizer_utils import (
     compute_pre_ns_update,
     compute_pre_ns_update_moe_expert,
+    compute_pre_ns_updates,
     split_orthogonalizable_params,
     zeropower_via_newtonschulz5,
     zeropower_via_newtonschulz5_batched,
 )
+
+_Dion2PhaseArgs = ParamSpec("_Dion2PhaseArgs")
+_Dion2PhaseResult = TypeVar("_Dion2PhaseResult")
+
+
+@torch.compile(fullgraph=True)
+def _apply_dion2_distributed_updates_with_master(
+    local_params: list[torch.Tensor],
+    back_local: torch.Tensor,
+    active_indices: list[int],
+    masters: list[torch.Tensor],
+    base_lrs: list[float | torch.Tensor],
+    weight_decays: list[float],
+    adjusted_lr_ratios: list[float],
+) -> None:  # local_params: [M,N] each, back_local: [S,...], returns None
+    """Apply one active distributed DION2 batch through FP32 master weights."""
+    for local_param, active_index, master, base_lr, weight_decay, adjusted_lr_ratio in zip(
+        local_params, active_indices, masters, base_lrs, weight_decays, adjusted_lr_ratios
+    ):
+        update_local = back_local[active_index]  # matching local update shard
+        master.mul_(1 - base_lr * weight_decay)  # local FP32 master shard
+        master.add_(update_local.float() * base_lr, alpha=-adjusted_lr_ratio)  # local FP32 master shard
+        local_param.copy_(master)  # local parameter shard
+
+
+@torch.compile(fullgraph=True)
+def _apply_dion2_distributed_updates_without_master(
+    local_params: list[torch.Tensor],
+    back_local: torch.Tensor,
+    active_indices: list[int],
+    base_lrs: list[float | torch.Tensor],
+    weight_decays: list[float],
+    adjusted_lr_ratios: list[float],
+) -> None:  # local_params: [M,N] each, back_local: [S,...], returns None
+    """Apply one active distributed DION2 batch directly to model weights."""
+    for local_param, active_index, base_lr, weight_decay, adjusted_lr_ratio in zip(
+        local_params, active_indices, base_lrs, weight_decays, adjusted_lr_ratios
+    ):
+        update_local = back_local[active_index]  # matching local update shard
+        local_param.mul_(1 - base_lr * weight_decay)  # local parameter shard
+        local_param.add_(
+            update_local.to(local_param.dtype) * base_lr, alpha=-adjusted_lr_ratio
+        )  # local parameter shard
 
 
 class Dion2WithAuxAdamW(torch.optim.Optimizer):
@@ -120,7 +167,7 @@ class Dion2WithAuxAdamW(torch.optim.Optimizer):
     - All-to-all communication for efficient distributed NS (no redundant compute)
     - Submatrix selection: only orthogonalize top-k rows/columns
     - Error feedback: maintains momentum for unselected parts
-    - Batched processing: handles world_size params per batch
+    - Megabatched processing: handles world_size * K same-shape params per redistribution
 
     Args:
         params: Iterable of parameters to optimize.
@@ -135,11 +182,14 @@ class Dion2WithAuxAdamW(torch.optim.Optimizer):
         adam_betas: Beta coefficients for the auxiliary AdamW side.
         eps: Epsilon for AdamW numerical stability.
         use_distributed: Whether to use distributed operations.
+        max_dion2_megabatch_width: Maximum number of same-shape matrices processed per rank.
+        dion2_compile_batched_pre_ns: Whether to compile all active pre-NS updates in a round as one graph.
+        dion2_profile_phases: Whether to emit Torch Profiler and NVTX phase ranges.
     """
 
     def __init__(
         self,
-        params,
+        params: Iterable[nn.Parameter | dict[str, object]],
         lr: float = 1e-4,
         muon_momentum: float = 0.95,
         muon_lr_scale: float = 0.2,
@@ -155,8 +205,13 @@ class Dion2WithAuxAdamW(torch.optim.Optimizer):
         master_weights: bool = False,
         expert_param_keywords: tuple[str, ...] | None = None,
         orthogonalize_skip_patterns: tuple[str, ...] | None = None,
-        **kwargs,
-    ):
+        max_dion2_megabatch_width: int = 25,
+        dion2_compile_batched_pre_ns: bool = False,
+        dion2_profile_phases: bool = False,
+        **kwargs: object,
+    ) -> None:
+        if "dion2_megabatch_width" in kwargs:
+            raise TypeError("dion2_megabatch_width has been removed; use max_dion2_megabatch_width instead")
         if kwargs:
             ignored_keys = list(kwargs.keys())
             expected_ignored = {"fused", "keys_to_select", "adamw_betas", "adamw_eps"}
@@ -168,6 +223,16 @@ class Dion2WithAuxAdamW(torch.optim.Optimizer):
 
         if not (0.0 < fraction <= 1.0):
             raise ValueError(f"fraction must be in (0, 1], got {fraction}")
+        if isinstance(max_dion2_megabatch_width, bool) or not isinstance(max_dion2_megabatch_width, int):
+            raise TypeError(
+                f"max_dion2_megabatch_width must be a positive non-boolean integer, got {max_dion2_megabatch_width!r}"
+            )
+        if max_dion2_megabatch_width < 1:
+            raise ValueError(f"max_dion2_megabatch_width must be at least 1, got {max_dion2_megabatch_width}")
+        if not isinstance(dion2_compile_batched_pre_ns, bool):
+            raise TypeError(f"dion2_compile_batched_pre_ns must be a bool, got {dion2_compile_batched_pre_ns!r}")
+        if not isinstance(dion2_profile_phases, bool):
+            raise TypeError(f"dion2_profile_phases must be a bool, got {dion2_profile_phases!r}")
 
         # Master weights requires capturable mode
         if master_weights and not capturable:
@@ -185,6 +250,9 @@ class Dion2WithAuxAdamW(torch.optim.Optimizer):
         self.ef_decay = ef_decay
         self.adam_betas = tuple(adam_betas) if isinstance(adam_betas, list) else adam_betas
         self.eps = eps
+        self.max_dion2_megabatch_width: int = max_dion2_megabatch_width
+        self.dion2_compile_batched_pre_ns: bool = dion2_compile_batched_pre_ns
+        self.dion2_profile_phases = dion2_profile_phases
 
         # Name substrings that route stacked MoE expert params ([E, M, N]) to the
         # DION2 side (each expert slice orthogonalized). Empty = experts stay on
@@ -201,7 +269,7 @@ class Dion2WithAuxAdamW(torch.optim.Optimizer):
         self._world_size = 1
         self._device_rank = 0
         self._process_group = None
-        self._device_mesh = None
+        self._device_mesh: DeviceMesh | None = None
 
         # Master weights settings (for mixed-precision training stability)
         self.capturable = capturable
@@ -295,7 +363,7 @@ class Dion2WithAuxAdamW(torch.optim.Optimizer):
         # Setup distributed from first DTensor param
         self._setup_distributed_from_params()
 
-        # Create batches of world_size params
+        # Create same-shape batches using a per-group width capped by max_dion2_megabatch_width.
         self._create_dion2_batches()
 
         dion2_numel = sum(p.numel() for p in self.dion2_params)
@@ -306,7 +374,8 @@ class Dion2WithAuxAdamW(torch.optim.Optimizer):
             f"Dion2WithAuxAdamW: {len(self.dion2_params)} Muon params ({dion2_numel:,} elements), "
             f"{len(self.stacked_dion2_params)} stacked-expert params ({stacked_dion2_numel:,} elements), "
             f"{len(self.adamw_params)} AdamW params ({adamw_numel:,} elements), "
-            f"world_size={self._world_size}, {len(self._dion2_batches)} batches"
+            f"world_size={self._world_size}, max_megabatch_width={self.max_dion2_megabatch_width}, "
+            f"{len(self._dion2_batches)} redistribution rounds"
         )
 
         # Log Muon param details
@@ -388,30 +457,34 @@ class Dion2WithAuxAdamW(torch.optim.Optimizer):
 
     def _create_dion2_batches(self) -> None:
         """
-        Group Muon params by GLOBAL shape, then batch within each shape group.
+        Group Muon params by GLOBAL shape and dtype, then batch within each group.
 
         The distributed step (``_process_dion2_batch_distributed``) stacks a batch of
         params into a single DTensor and redistributes it, so the batches must be
         identical ACROSS ranks. Group by the *global* shape (same on every rank), NOT
         the local shard shape -- under uneven sharding the local shard shape differs
-        per rank and would make ranks build inconsistent batches. ``batch_size =
-        world_size`` ensures each rank orthogonalizes exactly one param per batch.
+        per rank and would make ranks build inconsistent batches. Each group uses
+        ``min(ceil(group_size / world_size),
+        max_dion2_megabatch_width)`` matrices per rank. A partial tail uses the
+        smallest effective width that fits it, so its capacity is the nearest
+        multiple of ``world_size`` and each rank still receives complete matrices.
         """
         self._dion2_batches = []
-        batch_size = self._world_size
 
-        # Step 1: Group params by global shape (identical on all ranks).
-        shape_groups: dict[tuple, list[nn.Parameter]] = {}
+        # Step 1: Group params by global shape and dtype (identical on all ranks).
+        shape_groups: dict[tuple[tuple[int, ...], torch.dtype], list[nn.Parameter]] = {}
         for p in self.dion2_params:
-            shape = tuple(p.shape)
-            if shape not in shape_groups:
-                shape_groups[shape] = []
-            shape_groups[shape].append(p)
+            group_key = (tuple(p.shape), p.dtype)
+            if group_key not in shape_groups:
+                shape_groups[group_key] = []
+            shape_groups[group_key].append(p)
 
-        # Step 2: Create batches within each shape group
-        for shape, params in shape_groups.items():
-            for i in range(0, len(params), batch_size):
-                batch = params[i : i + batch_size]
+        # Step 2: Create batches using the independently capped width of each shape group.
+        for params in shape_groups.values():
+            effective_width = self._dion2_group_megabatch_width(len(params))
+            group_capacity = self._world_size * effective_width
+            for i in range(0, len(params), group_capacity):
+                batch = params[i : i + group_capacity]
                 self._dion2_batches.append(batch)
 
         # Log batch info
@@ -419,14 +492,38 @@ class Dion2WithAuxAdamW(torch.optim.Optimizer):
         num_batches = len(self._dion2_batches)
         if self._dion2_batches:
             # Count batches that need padding
-            padded_batches = sum(1 for b in self._dion2_batches if len(b) < batch_size)
+            padded_batches = sum(1 for batch in self._dion2_batches if len(batch) % self._world_size != 0)
             log.info(
                 f"DION2: {len(self.dion2_params)} params grouped into {num_shape_groups} shape groups, "
-                f"{num_batches} batches (world_size={batch_size}, {padded_batches} need padding)"
+                f"{num_batches} redistribution rounds (world_size={self._world_size}, "
+                f"max_megabatch_width={self.max_dion2_megabatch_width}, "
+                f"{padded_batches} need padding)"
             )
             # Log shape group details
-            for shape, params in shape_groups.items():
-                log.info(f"  Shape {shape}: {len(params)} params")
+            for (shape, dtype), params in shape_groups.items():
+                natural_width = math.ceil(len(params) / self._world_size)
+                effective_width = self._dion2_group_megabatch_width(len(params))
+                group_capacity = self._world_size * effective_width
+                rounds = math.ceil(len(params) / group_capacity)
+                padded_slots = (-len(params)) % self._world_size
+                log.info(
+                    f"  Shape {shape}, dtype={dtype}: {len(params)} params, "
+                    f"natural_width={natural_width}, effective_width={effective_width}, "
+                    f"capacity={group_capacity}, {rounds} rounds, {padded_slots} padded slots"
+                )
+
+    def _dion2_group_megabatch_width(self, group_size: int) -> int:
+        """Return the independently capped per-rank width for one shape group."""
+        if group_size < 1:
+            raise ValueError(f"DION2 shape group size must be positive, got {group_size}")
+        return min(math.ceil(group_size / self._world_size), self.max_dion2_megabatch_width)
+
+    def _effective_dion2_batch_width(self, actual_batch_size: int) -> int:
+        """Return the smallest per-rank matrix count that can fit a dense batch."""
+        max_batch_size = self._world_size * self.max_dion2_megabatch_width
+        if actual_batch_size < 1 or actual_batch_size > max_batch_size:
+            raise ValueError(f"DION2 batch size must be in [1, {max_batch_size}], got {actual_batch_size}")
+        return math.ceil(actual_batch_size / self._world_size)
 
     def _base_lr_for(self, p: nn.Parameter) -> float | torch.Tensor:
         """Per-group base learning rate for ``p`` (honors lr_multipliers)."""
@@ -439,9 +536,12 @@ class Dion2WithAuxAdamW(torch.optim.Optimizer):
     def _get_adjusted_lr(self, param_shape: tuple[int, ...], base_lr: float | torch.Tensor) -> float | torch.Tensor:
         """Compute adjusted learning rate based on parameter matrix size and the
         owning param-group's base lr."""
+        return base_lr * self._get_adjusted_lr_ratio(param_shape)  # [] when base_lr is a tensor
+
+    def _get_adjusted_lr_ratio(self, param_shape: tuple[int, ...]) -> float:
+        """Compute the shape-dependent scalar applied to the base learning rate."""
         A, B = param_shape[:2]
-        adjusted_ratio = self.muon_lr_scale * math.sqrt(max(A, B))
-        return base_lr * adjusted_ratio
+        return self.muon_lr_scale * math.sqrt(max(A, B))
 
     def _maybe_init_master_weights(self) -> None:
         """Create FP32 master weights on first use (FusedAdam-style lazy init)."""
@@ -477,11 +577,16 @@ class Dion2WithAuxAdamW(torch.optim.Optimizer):
         self._dion2_masters = [self._param_to_master[id(p)] for p in self.dion2_params]
         self._adamw_masters = [self._param_to_master[id(p)] for p in self.adamw_params]
 
-        muon_master_numel = sum(m.numel() for m in self._dion2_masters)
+        dense_dion2_master_numel = sum(m.numel() for m in self._dion2_masters)
+        stacked_dion2_master_numel = sum(self._param_to_master[id(p)].numel() for p in self.stacked_dion2_params)
+        dion2_master_numel = dense_dion2_master_numel + stacked_dion2_master_numel
+        dion2_master_count = len(self._dion2_masters) + len(self.stacked_dion2_params)
         adamw_master_numel = sum(m.numel() for m in self._adamw_masters)
         log.info(
-            f"Created FP32 master weights: {len(self._dion2_masters)} DION2 ({muon_master_numel:,} elements), "
-            f"{len(self._adamw_masters)} AdamW ({adamw_master_numel:,} elements)"
+            f"Created FP32 master weights: {dion2_master_count} DION2 params ({dion2_master_numel:,} elements: "
+            f"{len(self._dion2_masters)} dense/{dense_dion2_master_numel:,} + "
+            f"{len(self.stacked_dion2_params)} stacked-expert/{stacked_dion2_master_numel:,}), "
+            f"{len(self._adamw_masters)} AdamW params ({adamw_master_numel:,} elements)"
         )
         self._masters_initialized = True
 
@@ -602,10 +707,10 @@ class Dion2WithAuxAdamW(torch.optim.Optimizer):
         """
         DION2 step with all-to-all distributed Newton-Schulz.
 
-        For each batch of world_size params:
+        For each batch of world_size * K params:
         1. Compute momentum + select submatrix on local shards
         2. All-to-all to redistribute shards (each rank gets full submatrix for its param)
-        3. Newton-Schulz on full submatrix (each rank does different param)
+        3. Newton-Schulz on K full submatrices per rank (2-D specialization for K=1)
         4. All-to-all to scatter results back
         5. Apply weight decay and update (to FP32 master if enabled)
         """
@@ -615,16 +720,126 @@ class Dion2WithAuxAdamW(torch.optim.Optimizer):
         for batch in self._dion2_batches:
             self._process_dion2_batch(batch)
 
+    def _run_dion2_phase(
+        self,
+        name: str,
+        callback: Callable[_Dion2PhaseArgs, _Dion2PhaseResult],
+        *args: _Dion2PhaseArgs.args,
+        **kwargs: _Dion2PhaseArgs.kwargs,
+    ) -> _Dion2PhaseResult:
+        """Run one optimizer phase, adding profiler and NVTX ranges only when requested."""
+        if not self.dion2_profile_phases:
+            return callback(*args, **kwargs)
+        with torch.profiler.record_function(name), torch.cuda.nvtx.range(name):
+            return callback(*args, **kwargs)
+
+    def _dion2_orthogonalize(self, matrices: torch.Tensor) -> torch.Tensor:  # matrices/returns: [K,M,N]
+        if matrices.shape[0] == 1:
+            ortho = zeropower_via_newtonschulz5(matrices[0], steps=self.ns_steps)  # [M,N]
+            return ortho.unsqueeze(0)  # [1,M,N]
+        return zeropower_via_newtonschulz5_batched(matrices, steps=self.ns_steps)  # [K,M,N]
+
+    def _dion2_pre_ns_updates(
+        self,
+        grads: list[torch.Tensor],
+        momentum_buffers: list[torch.Tensor],
+    ) -> list[torch.Tensor]:  # grads/momentum_buffers: [M,N] each, returns [M,N] each
+        """Run pre-NS tensor updates through one batch graph or one graph per parameter."""
+        if self.dion2_compile_batched_pre_ns:
+            return compute_pre_ns_updates(
+                grads,
+                momentum_buffers,
+                momentum=self.muon_momentum,
+                nesterov=self.nesterov,
+                output_dtype=torch.bfloat16,
+            )  # [M,N] each
+        return [
+            compute_pre_ns_update(
+                grad,
+                momentum_buffer,
+                momentum=self.muon_momentum,
+                nesterov=self.nesterov,
+                output_dtype=torch.bfloat16,
+            )
+            for grad, momentum_buffer in zip(grads, momentum_buffers)
+        ]  # [M,N] each
+
+    def _dion2_reverse_redistribute(
+        self,
+        ortho_local: torch.Tensor,
+        fwd_placements: list[Placement],
+        back_placements: list[Placement],
+    ) -> DTensor:  # ortho_local: [K,M,N], returns [S,...]
+        if self._device_mesh is None:
+            raise RuntimeError("DION2 distributed processing requires an initialized device mesh")
+        ortho_dt = DTensor.from_local(  # [S,M,N]
+            ortho_local,
+            self._device_mesh,
+            fwd_placements,
+            run_check=False,
+        )
+        return ortho_dt.redistribute(self._device_mesh, back_placements)  # [S,...]
+
+    def _apply_dion2_distributed_updates(
+        self,
+        batch: list[nn.Parameter],
+        actual_batch_size: int,
+        active: list[bool],
+        back_local: torch.Tensor,
+    ) -> None:  # back_local: [S,...]
+        local_params: list[torch.Tensor] = []
+        active_indices: list[int] = []
+        masters: list[torch.Tensor] = []
+        base_lrs: list[float | torch.Tensor] = []
+        weight_decays: list[float] = []
+        adjusted_lr_ratios: list[float] = []
+        for i in range(actual_batch_size):
+            if not active[i]:
+                # No gradient this step: momentum was frozen above; skip weight
+                # decay and the update entirely (matches the reference, which
+                # leaves a None-grad param completely untouched).
+                continue
+            p = batch[i]
+            local_param = p._local_tensor  # local parameter shard
+            base_lr = self._base_lr_for(p)
+            wd = self._wd_for(p)
+            adjusted_lr_ratio = self._get_adjusted_lr_ratio(tuple(p.shape))
+            local_params.append(local_param)
+            active_indices.append(i)
+            base_lrs.append(base_lr)
+            weight_decays.append(wd)
+            adjusted_lr_ratios.append(adjusted_lr_ratio)
+            if self.master_weights:
+                master = get_local_tensor_if_DTensor(self._param_to_master[id(p)])  # local FP32 master shard
+                masters.append(master)
+
+        if not local_params:
+            return
+        if self.master_weights:
+            _apply_dion2_distributed_updates_with_master(
+                local_params,
+                back_local,
+                active_indices,
+                masters,
+                base_lrs,
+                weight_decays,
+                adjusted_lr_ratios,
+            )
+        else:
+            _apply_dion2_distributed_updates_without_master(
+                local_params,
+                back_local,
+                active_indices,
+                base_lrs,
+                weight_decays,
+                adjusted_lr_ratios,
+            )
+
     def _process_dion2_batch(self, batch: list[nn.Parameter]) -> None:
         """Process a single batch of params using DION2 all-to-all pattern."""
         world_size = self._world_size
 
-        # Pad batch if needed
         actual_batch_size = len(batch)
-        if actual_batch_size < world_size:
-            # Pad with the last param (will be masked out)
-            padding = [batch[-1]] * (world_size - actual_batch_size)
-            batch = batch + padding
 
         # Check if using DTensor (FSDP)
         is_dtensor = isinstance(batch[0], DTensor)
@@ -632,7 +847,7 @@ class Dion2WithAuxAdamW(torch.optim.Optimizer):
         if is_dtensor and world_size > 1:
             self._process_dion2_batch_distributed(batch, actual_batch_size)
         else:
-            self._process_dion2_batch_single(batch, actual_batch_size)
+            self._process_dion2_batch_single(batch)
 
     def _process_dion2_batch_distributed(self, batch: list[nn.Parameter], actual_batch_size: int) -> None:
         """Process a batch via DTensor collectives (the "each rank orthogonalizes one
@@ -644,22 +859,19 @@ class Dion2WithAuxAdamW(torch.optim.Optimizer):
 
           1. Momentum + Nesterov per param, kept as a DTensor so its shard metadata
              (including uneven, unpadded local sizes) is preserved.
-          2. ``torch.stack`` the world_size params -> a ``[W, ...]`` DTensor; the shard
-             tensor dim shifts to ``shard_dim + 1``.
+          2. ``torch.stack`` the world_size*K params -> a ``[W*K, ...]`` DTensor;
+             the shard tensor dim shifts to ``shard_dim + 1``.
           3. ``redistribute`` so the PARAM axis is sharded on the FSDP shard mesh dim
-             -> each rank owns one whole param (forward all-to-all).
-          4. Newton-Schulz on that whole param (each rank a different one).
+             -> each rank owns K whole params (forward all-to-all).
+          4. Newton-Schulz on those K whole params (2-D specialization for K=1).
           5. ``redistribute`` back to shard the data axis (backward all-to-all),
              unstack, and apply the update to each local shard.
 
         DTensor owns the (possibly uneven) per-rank size bookkeeping, so this is
-        correct regardless of divisibility. This transpose has been validated across
-        even/uneven/partial/bf16/shard-dim configs by the standalone multi-GPU script
-        ``unit_tests/dion2_uneven_shard_dtensor_check.py``.
-
-        TODO(dion2-optionb-unittest): provide a standalone torchrun script into a
-        committed, CI-run multi-GPU unit test (it currently must be launched manually
-        via ``torchrun`` and is not part of the automated suite).
+        correct regardless of divisibility. The four-rank transpose, uneven-shard,
+        padded-batch, BF16, shard-dimension, and empty-local-shard cases are covered
+        by ``dion2_with_aux_adamw_distributed_test.py``. The test owns its
+        worker-process launch so ordinary pytest runs the distributed path.
 
         Submatrix selection (``fraction < 1``) is not supported on this path -- it is
         unused (every config runs fraction=1.0) -- and is rejected up front.
@@ -680,17 +892,20 @@ class Dion2WithAuxAdamW(torch.optim.Optimizer):
             )
 
         world_size = self._world_size
-        mesh = self._device_mesh
+        effective_width = self._effective_dion2_batch_width(actual_batch_size)
+        batch_capacity = world_size * effective_width
+        if self._device_mesh is None:
+            raise RuntimeError("DION2 distributed processing requires an initialized device mesh")
         shard_mesh_dim = self._shard_mesh_dim
         shard_dim = self._shard_tensor_dim
         stack_axis = shard_dim + 1  # torch.stack adds a leading param axis
 
         # Step 1: momentum + Nesterov, kept in DTensor space (metadata preserved).
-        # compute_pre_ns_update does not mutate the gradient, so p.grad is passed
-        # directly; it mutates the (sharded DTensor) momentum buffer in place.
+        # _dion2_pre_ns_updates does not mutate gradients, so p.grad is passed
+        # directly; it mutates each active (sharded DTensor) momentum buffer in place.
         #
         # None-grad handling: a param with no gradient this step is sat out --
-        # momentum frozen (compute_pre_ns_update NOT called, so no mu-decay) and no
+        # momentum frozen (excluded from _dion2_pre_ns_updates, so no mu-decay) and no
         # update applied (skipped in the apply loop via ``active``). We cannot just
         # drop the slot: the stack + redistribute all-to-alls are a fixed-size
         # collective every rank must enter identically, so an inactive slot instead
@@ -699,34 +914,50 @@ class Dion2WithAuxAdamW(torch.optim.Optimizer):
         # and the result is discarded on apply. This relies on ``p.grad is None``
         # being identical across ranks -- true for dense params, where a missing grad
         # is structural (an unused param is None on every rank), not data-dependent.
-        pre_ns_list = []
-        active = []
+        pre_ns_slots: list[torch.Tensor | None] = [None] * actual_batch_size
+        active_grads: list[torch.Tensor] = []
+        active_momentum_buffers: list[torch.Tensor] = []
+        active_indices: list[int] = []
+        active: list[bool] = []
         for i in range(actual_batch_size):
             p = batch[i]
             state = self.state[p]
             if len(state) == 0:
-                state["momentum_buffer"] = torch.zeros_like(p).float()
+                state["momentum_buffer"] = torch.zeros_like(p).float()  # [M,N]
             if p.grad is None:
                 active.append(False)
-                pre_ns_list.append(torch.zeros_like(state["momentum_buffer"]).to(torch.bfloat16))
+                placeholder = torch.zeros_like(state["momentum_buffer"]).to(torch.bfloat16)  # [M,N]
+                pre_ns_slots[i] = placeholder
                 continue
             active.append(True)
-            pre_ns = compute_pre_ns_update(
-                p.grad, state["momentum_buffer"], momentum=self.muon_momentum, nesterov=self.nesterov
+            active_grads.append(p.grad)
+            active_momentum_buffers.append(state["momentum_buffer"])
+            active_indices.append(i)
+
+        if active_grads:
+            active_pre_ns = self._run_dion2_phase(  # [M,N] each
+                "dion2.megabatch.pre_ns",
+                self._dion2_pre_ns_updates,
+                active_grads,
+                active_momentum_buffers,
             )
-            # Cast to bf16 BEFORE the transpose so the two all-to-alls move bf16 (not
-            # fp32) -- matching the previous path's communication volume. This is
-            # numerically identical: Newton-Schulz casts to bf16 anyway, and bf16
-            # rounding commutes with the reconstruction (round-then-gather ==
-            # gather-then-round elementwise).
-            pre_ns_list.append(pre_ns.to(torch.bfloat16))
+            for i, pre_ns in zip(active_indices, active_pre_ns, strict=True):
+                pre_ns_slots[i] = pre_ns
 
-        # Pad the param axis up to world_size (mirrors batch padding); the dummy
-        # entries' Newton-Schulz results are discarded on apply.
-        padded = pre_ns_list + [pre_ns_list[-1]] * (world_size - actual_batch_size)
+        pre_ns_list: list[DTensor] = []
+        for pre_ns in pre_ns_slots:
+            if not isinstance(pre_ns, DTensor):
+                raise RuntimeError("DION2 pre-NS update did not preserve DTensor metadata")
+            pre_ns_list.append(pre_ns)
 
-        # Step 2: stack -> [W, ...]; the shard tensor dim moves to stack_axis.
-        stacked = torch.stack(padded, dim=0)
+        # Padding slots use independent zero placeholders whose NS results are discarded.
+        zero_padding = [
+            torch.zeros_like(pre_ns_list[0]) for _ in range(batch_capacity - actual_batch_size)
+        ]  # [M,N] each
+        padded = pre_ns_list + zero_padding  # [M,N] each
+
+        # Step 2: stack -> [W*K, ...]; the shard tensor dim moves to stack_axis.
+        stacked = torch.stack(padded, dim=0)  # [S,M,N]
         expected = Shard(stack_axis)
         if stacked.placements[shard_mesh_dim] != expected:
             raise RuntimeError(
@@ -740,45 +971,51 @@ class Dion2WithAuxAdamW(torch.optim.Optimizer):
         # then owns one whole param.
         fwd_placements = list(stacked.placements)
         fwd_placements[shard_mesh_dim] = Shard(0)
-        per_matrix = stacked.redistribute(mesh, fwd_placements)
-        full_p = per_matrix.to_local()[0]  # this rank's whole param
+        if self._device_mesh is None:
+            raise RuntimeError("DION2 distributed processing requires an initialized device mesh")
+        per_matrix = self._run_dion2_phase(  # [S,M,N]
+            "dion2.megabatch.forward",
+            stacked.redistribute,
+            self._device_mesh,
+            fwd_placements,
+        )
+        local_matrices = per_matrix.to_local()  # [K,M,N]
+        if local_matrices.shape[0] != effective_width:
+            raise RuntimeError(
+                f"DION2 expected {effective_width} full matrices per rank after redistribution, "
+                f"got local shape {tuple(local_matrices.shape)}"
+            )
 
-        # Step 4: Newton-Schulz on the whole param.
-        ortho_p = zeropower_via_newtonschulz5(full_p, steps=self.ns_steps)
+        # Step 4: Newton-Schulz keeps a unified [K,M,N] interface. The helper
+        # selects the specialized 2-D kernel internally when K=1.
+        ortho_p = self._run_dion2_phase(  # [K,M,N]
+            "dion2.megabatch.ns",
+            self._dion2_orthogonalize,
+            local_matrices,
+        )
 
         # Step 5: backward all-to-all -- re-shard the data axis, then unstack.
-        ortho_dt = DTensor.from_local(ortho_p.unsqueeze(0), mesh, fwd_placements, run_check=False)
-        back = ortho_dt.redistribute(mesh, list(stacked.placements))
-        back_local = back.to_local()  # [W, <local shard on shard_dim>, ...]
+        back = self._run_dion2_phase(  # [S,M,N]
+            "dion2.megabatch.reverse",
+            self._dion2_reverse_redistribute,
+            ortho_p,
+            fwd_placements,
+            list(stacked.placements),
+        )
+        back_local = back.to_local()  # [S,<local shard on shard_dim>,...]
 
-        # Apply the orthogonalized update to each real param's local shard.
-        for i in range(actual_batch_size):
-            if not active[i]:
-                # No gradient this step: momentum was frozen above; skip weight
-                # decay and the update entirely (matches the reference, which
-                # leaves a None-grad param completely untouched).
-                continue
-            p = batch[i]
-            local_param = p._local_tensor
-            update_local = back_local[i]
-            base_lr = self._base_lr_for(p)
-            wd = self._wd_for(p)
-            adjusted_lr = self._get_adjusted_lr(tuple(p.shape), base_lr)
-            if self.master_weights:
-                master = get_local_tensor_if_DTensor(self._param_to_master[id(p)])
-                master.mul_(1 - base_lr * wd)
-                master.add_(update_local.float() * (-adjusted_lr))
-                local_param.copy_(master)
-            else:
-                local_param.mul_(1 - base_lr * wd)
-                local_param.add_(update_local.to(local_param.dtype) * (-adjusted_lr))
+        self._run_dion2_phase(
+            "dion2.megabatch.apply",
+            self._apply_dion2_distributed_updates,
+            batch,
+            actual_batch_size,
+            active,
+            back_local,
+        )
 
-    def _process_dion2_batch_single(self, batch: list[nn.Parameter], actual_batch_size: int) -> None:
+    def _process_dion2_batch_single(self, batch: list[nn.Parameter]) -> None:
         """Process batch on single device (no distribution)."""
-        for i, p in enumerate(batch):
-            if i >= actual_batch_size:
-                continue
-
+        for p in batch:
             # No gradient this step -> sit the param out entirely: momentum buffer
             # stays frozen (not created/decayed) and no update is applied. Newton-
             # Schulz renormalizes any nonzero input back to unit norm, so feeding a

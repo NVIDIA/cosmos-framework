@@ -96,6 +96,23 @@ class RectifiedFlowTrainingConfig:
     # False by default to preserve legacy loss magnitudes; enable for AR/DF training.
     normalize_loss_by_active: bool = False
 
+    # Sample-level (vs rank-level) loss averaging for the vision modality.
+    #
+    # By default the vision loss on each rank is a mean over that rank's samples, and
+    # FSDP/DDP averages gradients across ranks — so every *rank* contributes equally
+    # regardless of how many image/video samples it holds ("rank-level averaging").
+    # When ranks carry different sample counts this over-weights samples on sparse ranks.
+    #
+    # When True, the loss is renormalized so every *sample* contributes equally across
+    # the whole data-parallel group: each iteration all-reduces the total number of image
+    # and video samples over the DP group, and image and video losses are each normalized
+    # by their own global sample count and then summed. This counteracts the framework's
+    # rank-level gradient averaging so the effective objective is a true per-sample mean.
+    # The two independently normalized terms are weighted by the existing `image_loss_scale`
+    # (images; falls back to `loss_scale` when None) and `loss_scale` (videos), so their
+    # balance is tuned with the same knobs as the legacy rank-level path.
+    sample_level_loss_averaging: bool = False
+
 
 @attrs.define(slots=False)
 class RectifiedFlowInferenceConfig:

@@ -102,6 +102,7 @@ from cosmos_framework.data.generator.sequence_packing.natten import (
 )
 from cosmos_framework.data.generator.sequence_packing.runtime import (
     SequencePack,
+    SequencePackMetadata,
     from_mode_splits,
     get_all_seq,
     get_causal_seq,
@@ -578,6 +579,7 @@ def build_packed_sequence(
     num_action_tokens_per_supertoken: int = 0,
     null_action_supertokens: bool = False,
     pad_for_cuda_graphs: bool = False,
+    prepared_metadata: SequencePackMetadata | None = None,
 ) -> tuple[SequencePack, AttentionMaskType, list | None]:
     """
     Build the model input pack and attention meta for joint attention.
@@ -645,6 +647,7 @@ def build_packed_sequence(
         is_image_batch=is_image_batch,
         cp_world_size=cp_world_size,
         pad_for_cuda_graphs=pad_for_cuda_graphs,
+        prepared_metadata=prepared_metadata,
     )
     # Not needed anymore, can cause recompilations.
     input_pack.pop("split_lens", None)
