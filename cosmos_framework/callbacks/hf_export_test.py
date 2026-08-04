@@ -174,6 +174,48 @@ def test_gather_weights_leaves_a_full_finetune_untouched():
         torch.testing.assert_close(tensor, reference[name])
 
 
+def test_gather_weights_raises_when_a_wrapper_desyncs_the_paths():
+    """The guard against the failure mode this code is most exposed to.
+
+    _lora_merge_plan keys off named_modules() paths and the loop off
+    named_parameters() paths. Simulate an unknown wrapper by stripping a segment
+    the plan does not strip: the merge would silently no-op and export the base
+    model, so it must abort instead.
+    """
+    lora = _lora_linear(8, 6, rank=4, alpha=16)
+    net = nn.Module()
+    net.layer = _CheckpointWrapper(lora)
+
+    callback = HFExportCallback(dtype="float32")
+    # A wrapper the plan does not strip leaves its segment in the plan's keys
+    # while the loop's parameter names have it stripped — the two never meet.
+    # (This is the real bug an earlier revision of this code shipped.)
+    wrapped = "layer._checkpoint_wrapped_module"
+    callback._lora_merge_plan = lambda root: (
+        {f"{wrapped}.weight": lora},
+        {f"{wrapped}.lora_A.weight", f"{wrapped}.lora_B.weight"},
+    )
+
+    # The count check fires before the leak check, naming the actual cause.
+    with pytest.raises(RuntimeError, match="LoRA merge incomplete"):
+        callback._gather_weights(_fake_vlm(net))
+
+
+def test_gather_weights_raises_when_adapter_keys_would_leak():
+    """Belt-and-braces on the invariant itself, independent of the count check."""
+    net = nn.Module()
+    net.q_proj = _lora_linear(8, 6, rank=4, alpha=16)
+
+    callback = HFExportCallback(dtype="float32")
+    real_plan = callback._lora_merge_plan
+    # Keep merge_targets intact (so the count check passes) but forget to exclude
+    # the adapter parameters.
+    callback._lora_merge_plan = lambda root: (real_plan(root)[0], set())
+
+    with pytest.raises(RuntimeError, match="Adapter tensors leaked"):
+        callback._gather_weights(_fake_vlm(net))
+
+
 def test_gather_weights_casts_to_the_export_dtype():
     net = nn.Module()
     net.q_proj = _lora_linear(8, 6, rank=4, alpha=16)
