@@ -39,7 +39,16 @@ TOML_FILE="examples/toml/sft_config/videophy2_lora_super.toml"
 # which dlopen()s the CUDA NPP + FFmpeg libs off LD_LIBRARY_PATH.)
 export PYTORCH_ALLOC_CONF="${PYTORCH_ALLOC_CONF:-expandable_segments:True}"
 
+# The base recipe enables hf_export so eval_videophy2 can read each save as HF
+# safetensors. The export is correct for a LoRA run -- HFExportCallback merges
+# the adapter into the base weights -- but it gathers a 32B backbone (~64 GB) onto
+# rank 0 and writes it out, which is wasted on a convergence smoke run. Drop
+# this line when the run's output is actually meant to be evaluated.
+#
+# This is the ONE knob the structured TOML cannot express (no [checkpoint]
+# hf_export field in the schema); everything else lives in the TOML.
 TAIL_OVERRIDES=(
+    checkpoint.hf_export.enabled=false
     ${EXTRA_TAIL_OVERRIDES:-}
 )
 

@@ -25,7 +25,7 @@
 
 [job]
 task         = "vlm"
-experiment   = "videophy2_lora_edge"
+experiment   = "videophy2_sft_edge"       # the full-FT recipe; LoRA is switched on below
 project      = "cosmos3"
 group        = "vlm_videophy2_lora"
 name         = "videophy2_lora_edge"
