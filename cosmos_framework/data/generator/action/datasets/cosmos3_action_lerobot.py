@@ -438,6 +438,21 @@ class BaseActionLeRobotDataset(Dataset):
     def domain_id(self) -> int:
         return self._domain_id
 
+    @property
+    def domain_name(self) -> str:
+        """Embodiment this dataset represents (e.g. ``"droid_lerobot"``).
+
+        Mirrors :attr:`ActionBaseDataset.domain_name` so callers can treat both
+        dataset hierarchies uniformly. Here the embodiment type *is* the domain
+        name, which is why ``domain_id`` is derived from it.
+        """
+        return self._embodiment_type
+
+    @property
+    def viewpoint(self) -> str:
+        """Camera composition of the returned video (e.g. ``"concat_view"``)."""
+        return self._viewpoint
+
     # -- source registration -------------------------------------------------
 
     def _register_source(
