@@ -176,9 +176,9 @@ backbone-sized, which is what lets the 32B Super tier sit comfortably on a 4-GPU
 Both select the **full-fine-tune** experiment (`[job].experiment = "videophy2_sft_{super,edge}"`) and switch
 LoRA on through TOML overrides — there is no separate LoRA experiment to register.
 
-| Launch shell | Tier | Notes |
-| ------------ | ---- | ----- |
-| `examples/launch_sft_videophy2_lora_super.sh` | Qwen3-VL-32B | Public snapshot resolved from `model_name`; no converter step. |
+| Launch shell                                  | Tier                 | Notes                                                                                                                                                                                    |
+| --------------------------------------------- | -------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `examples/launch_sft_videophy2_lora_super.sh` | Qwen3-VL-32B         | Public snapshot resolved from `model_name`; no converter step.                                                                                                                           |
 | `examples/launch_sft_videophy2_lora_edge.sh`  | Nemotron-2B-Dense-VL | Needs `lora_exclude_path_regex = "^model\\.visual\\."` — its LLM and SigLIP2 tower share three of four projection names, so name matching alone would adapt the frozen vision tower too. |
 
 For the 8B tier, point `[job].experiment` at `videophy2_sft_nano` and `[model.backbone].model_name` at
@@ -266,17 +266,17 @@ bash examples/launch_sft_vision_nano.sh
 
 Each launcher's default paths come from the `DATASET_PATH` + `BASE_CHECKPOINT_PATH` defaults declared at the top of its `.sh` (each uses `: "${VAR:=…}"` so any value you `export` in the shell before launching wins over the default):
 
-| Launch shell                   | Post-Training Task | Default $DATASET_PATH (under examples/data/)               | Default $BASE_CHECKPOINT_PATH (under examples/checkpoints/)        |
-| ------------------------------ | ------------------ | ---------------------------------------------------------- | ------------------------------------------------------------------ |
-| `launch_sft_vision_nano.sh`    | Generator SFT      | `BridgeData2-Subset-Synthetic-Captions/sft_dataset_bridge` | `Cosmos3-Nano`                                                     |
-| `launch_sft_vision_super.sh`   | Generator SFT      | `BridgeData2-Subset-Synthetic-Captions/sft_dataset_bridge` | `Cosmos3-Super`                                                    |
-| `launch_sft_vision_edge.sh`    | Generator SFT      | `BridgeData2-Subset-Synthetic-Captions/sft_dataset_bridge` | `Cosmos3-Edge`                                                     |
-| `launch_sft_llava_ov.sh`       | Reasoner SFT       | (none; dataset streams from HF Hub)                        | (none; backbone fetched at startup, or set `VLM_SAFETENSORS_PATH`) |
-| `launch_sft_videophy2_nano.sh` | Reasoner SFT       | (none; set `VIDEOPHYSICS_ROOT` env)                        | (none; set `VLM_SAFETENSORS_PATH` env)                             |
-| `launch_sft_videophy2_super.sh`| Reasoner SFT       | (none; set `VIDEOPHYSICS_ROOT` env)                        | (none; set `VLM_SAFETENSORS_PATH` env — Cosmos3-Super-VLM merge)   |
-| `launch_sft_videophy2_edge.sh` | Reasoner SFT       | (none; set `VIDEOPHYSICS_ROOT` env)                        | (none; weights load directly from `nvidia/Cosmos3-Edge`)           |
-| `launch_sft_videophy2_lora_super.sh` | Reasoner SFT (LoRA) | (none; set `VIDEOPHYSICS_ROOT` env)                  | (none; public `Qwen/Qwen3-VL-32B-Instruct`, or set `VLM_SAFETENSORS_PATH`) |
-| `launch_sft_videophy2_lora_edge.sh`  | Reasoner SFT (LoRA) | (none; set `VIDEOPHYSICS_ROOT` env)                  | (none; weights load directly from `nvidia/Cosmos3-Edge`)           |
+| Launch shell                         | Post-Training Task  | Default $DATASET_PATH (under examples/data/)               | Default $BASE_CHECKPOINT_PATH (under examples/checkpoints/)                |
+| ------------------------------------ | ------------------- | ---------------------------------------------------------- | -------------------------------------------------------------------------- |
+| `launch_sft_vision_nano.sh`          | Generator SFT       | `BridgeData2-Subset-Synthetic-Captions/sft_dataset_bridge` | `Cosmos3-Nano`                                                             |
+| `launch_sft_vision_super.sh`         | Generator SFT       | `BridgeData2-Subset-Synthetic-Captions/sft_dataset_bridge` | `Cosmos3-Super`                                                            |
+| `launch_sft_vision_edge.sh`          | Generator SFT       | `BridgeData2-Subset-Synthetic-Captions/sft_dataset_bridge` | `Cosmos3-Edge`                                                             |
+| `launch_sft_llava_ov.sh`             | Reasoner SFT        | (none; dataset streams from HF Hub)                        | (none; backbone fetched at startup, or set `VLM_SAFETENSORS_PATH`)         |
+| `launch_sft_videophy2_nano.sh`       | Reasoner SFT        | (none; set `VIDEOPHYSICS_ROOT` env)                        | (none; set `VLM_SAFETENSORS_PATH` env)                                     |
+| `launch_sft_videophy2_super.sh`      | Reasoner SFT        | (none; set `VIDEOPHYSICS_ROOT` env)                        | (none; set `VLM_SAFETENSORS_PATH` env — Cosmos3-Super-VLM merge)           |
+| `launch_sft_videophy2_edge.sh`       | Reasoner SFT        | (none; set `VIDEOPHYSICS_ROOT` env)                        | (none; weights load directly from `nvidia/Cosmos3-Edge`)                   |
+| `launch_sft_videophy2_lora_super.sh` | Reasoner SFT (LoRA) | (none; set `VIDEOPHYSICS_ROOT` env)                        | (none; public `Qwen/Qwen3-VL-32B-Instruct`, or set `VLM_SAFETENSORS_PATH`) |
+| `launch_sft_videophy2_lora_edge.sh`  | Reasoner SFT (LoRA) | (none; set `VIDEOPHYSICS_ROOT` env)                        | (none; weights load directly from `nvidia/Cosmos3-Edge`)                   |
 
 `WAN_VAE_PATH` defaults to `examples/checkpoints/wan22_vae/Wan2.2_VAE.pth` for every non-reasoner recipe.
 
