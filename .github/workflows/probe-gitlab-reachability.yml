@@ -1,0 +1,101 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: OpenMDW-1.1
+
+#
+# Step 0 of the PR-wise sync design: can a self-hosted runner reach the
+# internal GitLab?
+#
+# The answer forks the whole design:
+#   reachable     -> the sync job runs here, triggered instantly by a PR
+#                    comment, and the blocking check can verify i4 state
+#                    itself (so a lost merge-notification self-heals).
+#   not reachable -> the sync job runs as a scheduled i4 pipeline that polls
+#                    GitHub for a label, and the merge notification becomes
+#                    the only path to green (needs a maintainer override).
+#
+# Throwaway: delete this workflow once the question is answered. It takes no
+# secrets, checks out no code, and always exits 0 so every matrix row reports
+# rather than the first failure masking the rest.
+#
+# Triggered on pull_request rather than workflow_dispatch on purpose: dispatch
+# only works for workflows already on the default branch, whereas a
+# pull_request workflow runs the PR's own copy of this file. So this can be
+# exercised from a throwaway branch and never merged.
+#
+# The paths filter means it fires only on a PR that touches this file, so it
+# adds nothing to any other PR while it exists.
+#
+#   git checkout -b probe/gitlab-reachability
+#   # add this file at .github/workflows/probe-gitlab-reachability.yml
+#   git push -u origin probe/gitlab-reachability
+#   gh pr create --draft --title "probe: GitLab reachability from self-hosted runners"
+#   # read the job logs, then:
+#   gh pr close --delete-branch
+
+name: Probe GitLab reachability
+
+on:
+  pull_request:
+    paths:
+      - .github/workflows/probe-gitlab-reachability.yml
+
+jobs:
+  probe:
+    strategy:
+      fail-fast: false
+      matrix:
+        # Both self-hosted classes in use today. The sync job needs no GPU, so
+        # if the docker-build class works that is the better long-term home.
+        runner:
+          - [self-hosted, gpu, h200]
+          - [self-hosted, docker-build, h200, cosmos-framework]
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 5
+    steps:
+      - name: Probe gitlab-master.nvidia.com
+        shell: bash
+        run: |
+          HOST=gitlab-master.nvidia.com
+          echo "runner labels : ${{ join(matrix.runner, ', ') }}"
+          echo "hostname      : $(hostname)"
+          echo
+
+          echo "== DNS =="
+          getent hosts "$HOST" || echo "DNS: FAILED (no resolution)"
+          echo
+
+          # /dev/tcp avoids depending on curl/nc being present in the job image.
+          echo "== TCP 443 (HTTPS / GitLab API) =="
+          if timeout 10 bash -c "cat < /dev/null > /dev/tcp/$HOST/443" 2>/dev/null; then
+            echo "443: OPEN"
+          else
+            echo "443: CLOSED or UNREACHABLE"
+          fi
+          echo
+
+          echo "== TCP 12051 (git over SSH, per i4's origin URL) =="
+          if timeout 10 bash -c "cat < /dev/null > /dev/tcp/$HOST/12051" 2>/dev/null; then
+            echo "12051: OPEN"
+          else
+            echo "12051: CLOSED or UNREACHABLE"
+          fi
+          echo
+
+          echo "== HTTPS API =="
+          if command -v curl >/dev/null 2>&1; then
+            code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 "https://$HOST/api/v4/version" || echo "000")
+            echo "GET /api/v4/version -> HTTP $code"
+            echo "  401 = reachable but unauthenticated -> SUCCESS for our purposes"
+            echo "  000 = no connection (DNS, firewall, or TLS interception)"
+          else
+            echo "curl not present in this job image; rely on the TCP results above."
+          fi
+          echo
+
+          echo "== VERDICT =="
+          echo "Branch A (sync runs on GitHub self-hosted runners) is viable if"
+          echo "443 is OPEN and the API returns any HTTP status. Port 12051 only"
+          echo "matters if we clone i4 over SSH rather than HTTPS."
+
+          # Always succeed: this job reports, it does not gate.
+          exit 0
