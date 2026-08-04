@@ -20,6 +20,10 @@ from torch.utils.data import Dataset
 from cosmos_framework.callbacks.cosmos_dataloader_state import CosmosDataLoaderStateCallback
 from cosmos_framework.configs.base.reasoner.experiment.dataflow_roles import VLMCollator, VLMProcessor
 from cosmos_framework.data.generator.dataflow import CosmosDataLoader, MapDistributor, PoolPackingBatcher
+from cosmos_framework.data.generator.local_datasets.tao_vl_reason import (
+    TaoVlReasonDaftDataset,
+    apply_daft_chat_template,
+)
 from cosmos_framework.data.generator.processors import build_processor
 from cosmos_framework.utils.generator.torchcodec_video import TorchCodecVideoReader
 from cosmos_framework.utils.lazy_config import LazyCall as L
@@ -84,6 +88,7 @@ class WTSProcessor(VLMProcessor):
         num_video_frames: int = 8,
         video_cache_size: int = 8,
         system_prompt: str = "",
+        use_daft_chat_template: bool = False,
     ) -> None:
         super().__init__(processor=processor, ignore_index=ignore_index)
         if num_video_frames < 1:
@@ -93,6 +98,9 @@ class WTSProcessor(VLMProcessor):
         self.num_video_frames = num_video_frames
         self.video_cache_size = video_cache_size
         self.system_prompt = system_prompt
+        self.use_daft_chat_template = use_daft_chat_template
+        if self.use_daft_chat_template:
+            apply_daft_chat_template(processor)
         self._video_cache: OrderedDict[str, tuple[list[Image.Image], float]] = OrderedDict()
 
     def _decode_video(self, video_path: str) -> tuple[list[Image.Image], float]:
@@ -125,6 +133,23 @@ class WTSProcessor(VLMProcessor):
         return decoded
 
     def _sharegpt_to_openai(self, item: dict) -> list[dict]:
+        if "messages" in item:
+            messages = deepcopy(item["messages"])
+            for message in messages:
+                content = message.get("content")
+                if not isinstance(content, list):
+                    continue
+                for part in content:
+                    if part.get("type") != "video":
+                        continue
+                    video_path = part.get("video")
+                    if not isinstance(video_path, str):
+                        raise TypeError("DAFT video content must contain a string path")
+                    frames, fps = self._decode_video(video_path)
+                    part["video"] = frames
+                    part["fps"] = fps
+            return messages
+
         conversations = item.get("conversations", [])
         video_path = item.get("video")
         frames, fps = self._decode_video(video_path)
@@ -175,6 +200,49 @@ def _wts_dataloader(
             num_video_frames=8,
             video_cache_size=8,
             system_prompt=("You are a helpful assistant that can answer questions about a street-view CCTV footage."),
+        ),
+        batcher=L(PoolPackingBatcher)(
+            max_tokens="${data_setting.max_tokens}",
+            pool_size=16 if shuffle else 1,
+            max_batch_size=1,
+            long_threshold=6400,
+        ),
+        collator=L(VLMCollator)(),
+        num_workers=0,
+        prefetch_factor=None,
+        persistent_workers=False,
+        pin_memory=False,
+    )
+
+
+def _aetc_daft_dataloader(*, split: str, shuffle: bool) -> LazyDict:
+    annotation_env = f"AETC_{split.upper()}_ANNOTATIONS"
+    media_env = f"AETC_{split.upper()}_MEDIA"
+    limit_env = f"AETC_{split.upper()}_LIMIT"
+    return L(CosmosDataLoader)(
+        distributor=L(MapDistributor)(
+            dataset=L(TaoVlReasonDaftDataset)(
+                annotation_paths=f"${{oc.env:{annotation_env}}}",
+                media_root=f"${{oc.env:{media_env}}}",
+                response_mode="hybrid" if split == "train" else "answer",
+                system_prompt="${oc.env:AETC_SYSTEM_PROMPT,''}",
+                vision_kwargs={},
+                max_samples=f"${{oc.env:{limit_env},''}}",
+            ),
+            shuffle=shuffle,
+            seed=42,
+            name=split,
+        ),
+        processor=L(WTSProcessor)(
+            processor=L(build_processor)(
+                tokenizer_type="${model.config.policy.backbone.model_name}",
+                config_variant="hf",
+            ),
+            ignore_index=IGNORE_INDEX,
+            num_video_frames=8,
+            video_cache_size=8,
+            system_prompt="",
+            use_daft_chat_template=True,
         ),
         batcher=L(PoolPackingBatcher)(
             max_tokens="${data_setting.max_tokens}",
@@ -274,6 +342,21 @@ ConfigStore.instance().store(
     package="_global_",
     name="wts_vlm",
     node=wts_vlm,
+)
+
+
+# Internal TAO AETC path: keep Framework's trainer/model implementation while
+# consuming the same DAFT dataset and Qwen chat-template contract as Cosmos-RL.
+aetc_daft_vlm = deepcopy(wts_vlm)
+aetc_daft_vlm["job"]["group"] = "aetc_daft_sft"
+aetc_daft_vlm["dataloader_train"] = _aetc_daft_dataloader(split="train", shuffle=True)
+aetc_daft_vlm["dataloader_val"] = _aetc_daft_dataloader(split="val", shuffle=False)
+
+ConfigStore.instance().store(
+    group="experiment",
+    package="_global_",
+    name="aetc_daft_vlm",
+    node=aetc_daft_vlm,
 )
 
 
