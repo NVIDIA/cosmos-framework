@@ -292,6 +292,7 @@ class HFExportCallback(Callback):
         current_chunk_bytes: int = 0
         total_size: int = 0
         file_idx: int = 0
+        merged: set[str] = set()
 
         for name, param in model.model.model.named_parameters():
             # Phase 2+: HFModel initialises _model via AutoModelForImageTextToText /
@@ -331,6 +332,7 @@ class HFExportCallback(Callback):
                     self._gather_full(lora_module.lora_A.weight),
                     self._gather_full(lora_module.lora_B.weight),
                 )
+                merged.add(name)
 
             # Cast after the merge: merged_weight accumulates in float32, and
             # casting first would round the delta away before it is added.
@@ -359,6 +361,37 @@ class HFExportCallback(Callback):
         # Flush the final (possibly partial) chunk.
         if current_chunk_bytes > 0 and is_rank0() and current_chunk:
             cpu_chunks.append(current_chunk)
+
+        # Every adapter the plan found must actually have been folded in. The plan
+        # keys off named_modules() paths and the loop off named_parameters() paths;
+        # if a wrapper this code does not know about ever desynchronizes the two,
+        # the merge silently no-ops and the export is the untuned base model.
+        #
+        # `merged` is tracked on every rank (the loop is rank-independent), so this
+        # aborts everywhere at the same point rather than on rank 0 alone. Both
+        # checks sit after the last collective, so raising cannot strand a peer
+        # mid-all-gather.
+        if len(merged) != len(merge_targets):
+            missed = sorted(set(merge_targets) - merged)
+            raise RuntimeError(
+                f"[HFExportCallback] LoRA merge incomplete: {len(merged)} of "
+                f"{len(merge_targets)} adapters folded in. Unmerged base weights: "
+                f"{missed[:8]}{' ...' if len(missed) > 8 else ''}. The module paths from "
+                "named_modules() no longer line up with the parameter paths from "
+                "named_parameters() — check _WRAPPER_SEGMENTS for a wrapper this code "
+                "does not strip."
+            )
+        # The invariant the export must actually satisfy, asserted directly.
+        # manifest is rank-0-only, so this is a rank-0 check; the count above is
+        # what catches the desync case on every rank.
+        leaked = sorted(k for k in manifest if "lora_" in k)
+        if leaked:
+            raise RuntimeError(
+                f"[HFExportCallback] Adapter tensors leaked into the export: {leaked[:8]}"
+                f"{' ...' if len(leaked) > 8 else ''}. An HF checkpoint must carry merged "
+                "weights only; from_pretrained() would drop these and hand back the "
+                "untuned base model."
+            )
 
         return cpu_chunks, manifest, total_size
 
