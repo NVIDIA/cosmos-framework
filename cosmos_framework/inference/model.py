@@ -270,36 +270,65 @@ def _normalize_diffusers_target_key(name: str) -> str:
     return name.removeprefix("model.net.").replace("_orig_mod.", "").replace("_checkpoint_wrapped_module.", "")
 
 
-class _DiffusersHuggingFaceStorageReader(HuggingFaceStorageReader):
-    """Hugging Face safetensors reader that follows diffusers' root weight map."""
+class _MmapSafeReadMixin:
+    """Materialize each safetensors slice into anonymous RAM before the H2D copy.
 
-    def __init__(self, checkpoint_path: Path) -> None:
-        super().__init__(str(checkpoint_path))
-        self.checkpoint_path = checkpoint_path
-        self.files_to_keys = _diffusers_files_to_keys(_diffusers_weight_map(checkpoint_path))
+    ``HuggingFaceStorageReader._process_read_request`` copies tensors straight from the
+    ``mmap``-backed safetensors slice onto the GPU, so the transfer handles a page fault
+    per tensor. On Grace that dominates checkpoint load: a Cosmos3-Super reasoner load
+    spends ~1200s here with zero disk I/O, the data already resident in page cache.
+
+    The copy is applied conditionally -- see ``_materialize_enabled`` for why.
+    """
+
+    _materialize_cache = None
+
+    @classmethod
+    def _materialize_enabled(cls) -> bool:
+        """Whether to stage tensors through anonymous host memory before the H2D copy.
+
+        Defaults on for aarch64 and off elsewhere, overridable in either direction with
+        COSMOS_MATERIALIZE_CHECKPOINT=1/0.
+
+        The staging copy removes a slow file-backed mmap H2D path on Grace, but where that
+        path is already fast the copy is pure overhead: on 8x A100 (Cosmos3-Super, 8 ranks)
+        applying it unconditionally measured ~13.2% slower, because concurrent ranks contend
+        for host memory bandwidth. The architecture is only a proxy for "is the mmap H2D path
+        slow here", so it is used as a default rather than as a hard condition.
+        """
+        if cls._materialize_cache is None:
+            import os
+            import platform
+
+            override = os.environ.get("COSMOS_MATERIALIZE_CHECKPOINT")
+            if override is not None:
+                cls._materialize_cache = override.strip().lower() not in (
+                    "0",
+                    "false",
+                    "no",
+                    "off",
+                    "",
+                )
+            else:
+                cls._materialize_cache = platform.machine().lower() in ("aarch64", "arm64")
+        return cls._materialize_cache
 
     def _process_read_request(self, f, req, planner) -> None:  # noqa: D102
-        slices = tuple(
-            slice(offset, offset + length)
-            for offset, length in zip(req.storage_offsets, req.lengths)
-        )
+        slices = tuple(slice(offset, offset + length) for offset, length in zip(req.storage_offsets, req.lengths))
         tensor = f.get_slice(req.storage_index.fqn)[slices]
         target_tensor = planner.resolve_tensor(req).detach()
 
         if target_tensor.size() != tensor.size():
-            raise AssertionError(
-                f"req {req.storage_index} mismatch sizes "
-                f"{target_tensor.size()} vs {tensor.size()}"
-            )
+            raise AssertionError(f"req {req.storage_index} mismatch sizes {target_tensor.size()} vs {tensor.size()}")
 
-        if target_tensor.is_cuda:
+        if target_tensor.is_cuda and self._materialize_enabled():
             # Materialise into anonymous host memory before the H2D copy.
             #
             # The base implementation copies straight from mmap-backed safetensors
             # storage into a CUDA tensor, so the transfer handles a page fault per
-            # tensor. On Grace this dominates load time (Cosmos3-Super: 1184s -> 67s
-            # with this change, zero disk I/O either way -- the data is already in
-            # page cache).
+            # tensor. On Grace this dominates load time (Cosmos3-Super load: ~1200s
+            # down to ~70-85s with this change, measured across two boots; zero disk
+            # I/O either way -- the data is already in page cache).
             #
             # Pre-faulting in place is not sufficient: measured on a 4.61 GiB shard,
             # an mmap source still costs 9.00 ms/tensor after faults are pre-paid,
@@ -312,6 +341,19 @@ class _DiffusersHuggingFaceStorageReader(HuggingFaceStorageReader):
 
         target_tensor.copy_(tensor)
         planner.commit_tensor(req, target_tensor)
+
+
+class _MmapSafeHuggingFaceStorageReader(_MmapSafeReadMixin, HuggingFaceStorageReader):
+    """Plain HF safetensors reader with the mmap-H2D staging copy."""
+
+
+class _DiffusersHuggingFaceStorageReader(_MmapSafeReadMixin, HuggingFaceStorageReader):
+    """Hugging Face safetensors reader that follows diffusers' root weight map."""
+
+    def __init__(self, checkpoint_path: Path) -> None:
+        super().__init__(str(checkpoint_path))
+        self.checkpoint_path = checkpoint_path
+        self.files_to_keys = _diffusers_files_to_keys(_diffusers_weight_map(checkpoint_path))
 
     def read_metadata(self) -> Metadata:
         from safetensors import safe_open
@@ -596,7 +638,7 @@ class Cosmos3OmniModel(transformers.PreTrainedModel):
                     return model
                 state_dict = get_model_state_dict(model)
                 _raise_on_missing_vision_keys(checkpoint_path, state_dict)
-                storage_reader = HuggingFaceStorageReader(str(checkpoint_path))
+                storage_reader = _MmapSafeHuggingFaceStorageReader(str(checkpoint_path))
             case _:
                 assert_never(checkpoint_type)
         dcp.load(state_dict=state_dict, storage_reader=storage_reader)
