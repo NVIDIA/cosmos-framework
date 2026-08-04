@@ -177,6 +177,14 @@ def test_multiview_extract_frames_resizes_torchcodec_frames(monkeypatch: pytest.
     assert original_hw == (4, 6)
 
 
+def test_multiview_augmentations_defer_normalization_to_model() -> None:
+    module = _import_or_skip("cosmos_framework.data.generator.multiview.multiview_dataset")
+
+    augmentations, _ = module.make_augmentations(module.MultiviewAugmentationConfig())
+
+    assert "normalize" not in augmentations
+
+
 def test_sekai_frame_count_uses_probe_video(monkeypatch: pytest.MonkeyPatch) -> None:
     module = _import_or_skip("projects.cosmos3.sil.omnidreams.datasets.sekai")
     seen: list[bytes] = []

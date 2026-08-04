@@ -44,6 +44,19 @@ def _collect_repeated_blocks(inner: nn.Module) -> tuple[list[nn.Module], set[str
     return blocks, no_split_names
 
 
+def _collect_ignored_audio_params(model: HFModel) -> set[nn.Parameter]:
+    """Return immutable audio parameters that must stay outside FSDP.
+
+    The Parakeet encoder is always a frozen, artifact-backed feature extractor.
+    The projector remains part of the raw HF root (and therefore FSDP-managed)
+    even when it is frozen, matching the existing vision merger/projector
+    lifecycle and keeping checkpoint tensor layouts uniform.
+    """
+    if not model.sound_und:
+        return set()
+    return set(model.model.sound_und_model.encoder.parameters())
+
+
 def apply_compile(model: HFModel, compile_config: CompileConfig | None) -> None:
     """In-place ``torch.compile`` each repeated transformer block, if enabled.
 
@@ -195,7 +208,12 @@ def apply_fsdp(
     # wired through to any active recipe and the path was untested; see the
     # comment in vlm_model._init_vlm meta-materialize block (search for
     # "FSDP-2 CPU offload") for how to re-enable it.
-    fully_shard(inner, **fsdp_kwargs)
+    ignored_audio_params = _collect_ignored_audio_params(model)
+    if ignored_audio_params:
+        fully_shard(inner, ignored_params=ignored_audio_params, **fsdp_kwargs)
+    else:
+        # Preserve the pre-audio call surface exactly when sound_und=False.
+        fully_shard(inner, **fsdp_kwargs)
     log.info("parallelize: FSDP2 applied to HFModel.model")
 
 

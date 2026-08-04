@@ -23,7 +23,6 @@ import pytest
 from cosmos_framework.inference.common.args import MEDIA_EXTENSIONS, ResolvedFilePath
 from cosmos_framework.inference.common.init import get_free_port
 from cosmos_framework.inference.fixtures.args import Level, NumGpus
-from cosmos_framework.utils.checkpoint_db import HF_VERSION
 from cosmos_framework.utils.easy_io import easy_io
 
 INPUT_DIR = Path("inputs").absolute()
@@ -139,7 +138,6 @@ class ScriptRunner:
             "OUTPUT_DIR": f"{self.output_dir}",
             "TMP_DIR": f"{self.tmp_path}/tmp",
             "MASTER_PORT": str(master_port),
-            "HF_VERSION": HF_VERSION,
             "TORCHRUN_ARGS": " ".join(
                 [
                     f"--nproc_per_node={num_gpus}",

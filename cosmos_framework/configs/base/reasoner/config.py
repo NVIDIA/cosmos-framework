@@ -5,6 +5,7 @@ from cosmos_framework.trainer import ImaginaireTrainer
 from cosmos_framework.utils import log
 from cosmos_framework.utils.config_helper import import_all_modules_from_package
 from cosmos_framework.configs.base.defaults.checkpointer import register_checkpoint, register_ckpt_type
+from cosmos_framework.configs.base.defaults.reasoner import register_sound_understanding
 from cosmos_framework.configs.base.reasoner.defaults.callbacks import register_callbacks
 from cosmos_framework.configs.base.reasoner.defaults.config import Config
 
@@ -40,6 +41,7 @@ def make_config() -> Config:
 
     # Call this function to register config groups for advanced overriding. the order follows the default config groups
     register_model()
+    register_sound_understanding()
     register_vlm_policy()
     # Register dataloader configs
     log.info("Registering optimizer, scheduler, checkpoint, ckpt type, and callbacks")

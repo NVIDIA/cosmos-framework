@@ -65,7 +65,7 @@ from typing_extensions import Self, override
 from cosmos_framework.utils.flags import EXPERIMENTAL_CHECKPOINTS, INTERNAL, StrEnum
 from cosmos_framework.utils import log
 
-HF_VERSION = "1.16.4"
+_HF_CLI_PROJECT = Path(__file__).resolve().with_name("hf_cli")
 
 
 def _is_uuid(checkpoint_uri: str) -> bool:
@@ -142,17 +142,19 @@ CheckpointS3: TypeAlias = CheckpointFileS3 | CheckpointDirS3
 def _hf_download(cmd_args: list[str]) -> str:
     """Run Hugging Face CLI download command and return the local path.
 
-    Uses a newer Hugging Face CLI version to download checkpoint. The dependency
-    version is very old and not robust.
+    Uses a separately locked Hugging Face CLI because the dependency in the
+    application environment is too old and not robust.
     """
     is_rank0 = os.environ.get("RANK", "0") == "0"
     cmd = [
-        "uvx",
-        "--with",
-        "click",
-        "--with",
-        "tqdm<4.70",
-        f"hf@{HF_VERSION}",
+        "uv",
+        "run",
+        "--isolated",
+        "--project",
+        str(_HF_CLI_PROJECT),
+        "--locked",
+        "--no-default-groups",
+        "hf",
         "download",
         "--format=json",
         *cmd_args,

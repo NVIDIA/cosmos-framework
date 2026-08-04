@@ -16,6 +16,10 @@ from cosmos_framework.data.generator.sequence_packing.mrope import (
     get_3d_mrope_ids_text_tokens,
     get_3d_mrope_ids_vae_tokens,
 )
+from cosmos_framework.data.generator.sequence_packing.runtime import (
+    SequencePackMetadata,
+    prepare_sequence_pack_metadata,
+)
 
 if TYPE_CHECKING:
     from cosmos_framework.model.generator.utils.data_and_condition import GenerationDataClean
@@ -940,6 +944,7 @@ class PackedSequence:
     control_weights: list[list[float]] | None = None
 
     def __post_init__(self) -> None:
+        self._sequence_pack_metadata: SequencePackMetadata | None = None
         assert isinstance(self.text_ids, torch.Tensor), "PackedSequence.text_ids must be finalized"
         assert isinstance(self.text_indexes, torch.Tensor), "PackedSequence.text_indexes must be finalized"
         assert isinstance(self.position_ids, torch.Tensor), "PackedSequence.position_ids must be finalized"
@@ -971,6 +976,21 @@ class PackedSequence:
             self.action.to_cuda()
         if self.sound is not None:
             self.sound.to_cuda()
+        self.prepare_sequence_pack_metadata()
+
+    def prepare_sequence_pack_metadata(self) -> None:
+        """Validate and prepare device-specific metadata for this layout."""
+        self._sequence_pack_metadata = prepare_sequence_pack_metadata(
+            sample_lens=self.sample_lens,
+            split_lens=self.split_lens,
+            attn_modes=self.attn_modes,
+            packed_und_token_indexes=self.text_indexes,
+            device=self.text_indexes.device,
+        )
+
+    def get_sequence_pack_metadata(self) -> SequencePackMetadata | None:
+        """Return metadata prepared after the packed input reached its device."""
+        return self._sequence_pack_metadata
 
 
 @dataclass

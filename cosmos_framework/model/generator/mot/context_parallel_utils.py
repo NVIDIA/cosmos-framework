@@ -31,13 +31,14 @@ Integration Guide:
    loss or post-processing.
 """
 
-from typing import Callable
+from typing import Any, Callable
 
 import torch
 import torch.distributed as dist
 from torch.distributed.device_mesh import DeviceMesh
 from torch.distributed.tensor import DTensor, Replicate, Shard
 
+from cosmos_framework.utils import distributed
 from cosmos_framework.model.generator.mot.attention import SplitInfo
 from cosmos_framework.model.generator.utils.memory import KVToStore, MemoryValue
 from cosmos_framework.data.generator.sequence_packing.runtime import (
@@ -90,6 +91,33 @@ def context_parallel_broadcast_tensor_list(
     global_src_rank = dist.get_global_rank(cp_group, 0)
     for tensor in tensors:
         dist.broadcast(tensor, src=global_src_rank, group=cp_group)
+
+
+def broadcast_context_parallel_object(
+    local_value: Any,
+    parallel_dims: ParallelDims,
+    owner_rank: int,
+    *,
+    min_tensor_bytes: int = 0,
+) -> Any:
+    """Broadcast one CP owner's object tree to every rank in the CP group.
+
+    Non-owner ranks pass a local placeholder that is ignored; after the collective,
+    every rank receives a copy of the owner's value.
+    """
+    if not parallel_dims.cp_enabled:
+        raise ValueError("broadcast_context_parallel_object requires context parallelism to be enabled.")
+
+    cp_group = parallel_dims.cp_mesh.get_group()
+    global_owner_rank = dist.get_global_rank(cp_group, owner_rank)
+    payload_box = [local_value if parallel_dims.cp_rank == owner_rank else None]
+    distributed.broadcast_object_list_optimized(
+        payload_box,
+        src=global_owner_rank,
+        group=cp_group,
+        min_tensor_bytes=min_tensor_bytes,
+    )
+    return payload_box[0]
 
 
 def get_context_parallel_sharded_sequence(

@@ -90,6 +90,7 @@ train = [
   "jupyterlab",
   "kornia",
   "lerobot",
+  "librosa",
   "lpips",
   "lz4",
   "matplotlib",
@@ -251,9 +252,10 @@ cu130-torch213 = [
   "nvidia-cuda-cupti==13.0.85",
   "nvidia-cuda-nvrtc==13.0.88",
   "nvidia-cuda-runtime==13.0.96",
-  # NOTE: torch 2.13.0+cu130 hard-pins this to ==9.20.0.48. The framework's cuDNN attention backend
-  # needs >= 9.22 (else it falls back to NATTEN, which is fine). To use the cuDNN backend, override at
-  # runtime: `uv pip install nvidia-cudnn-cu13==9.25.0.15` (can't pin here without a global override).
+  # NOTE: torch 2.13.0+cu130 hard-pins this to ==9.20.0.48, so it cannot be raised from here (a
+  # different version needs a global override, not a group-scoped pin). CUDNN_MIN_BACKEND_VERSION in
+  # cosmos_framework/model/attention/cudnn/__init__.py is 92000 to match, so the cuDNN attention
+  # backend stays enabled on this pin instead of falling back to NATTEN.
   "nvidia-cudnn-cu13==9.20.0.48",
   "nvidia-cufft==12.0.0.61",
   "nvidia-cufile==1.15.1.6",

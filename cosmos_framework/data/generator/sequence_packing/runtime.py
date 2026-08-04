@@ -3,6 +3,7 @@
 
 """Runtime SequencePack helpers used by attention and context parallel paths."""
 
+from dataclasses import dataclass
 from typing import Any, List, Tuple
 
 import torch
@@ -26,6 +27,59 @@ def get_padding_stats() -> dict[str, int]:
 
 
 SequencePack = dict[str, Any]
+
+
+@dataclass(frozen=True)
+class SequencePackMetadata:
+    """Validated, device-specific metadata for one packed-sequence layout."""
+
+    sample_lens: tuple[int, ...]
+    split_lens: tuple[int, ...]
+    attn_modes: tuple[str, ...]
+    device: torch.device
+    sample_offsets: torch.Tensor
+    max_sample_len: int
+    max_causal_len: int
+    max_full_len: int
+    causal_indices: torch.Tensor
+    full_indices: torch.Tensor
+    causal_seq_offsets: torch.Tensor
+    full_only_seq_offsets: torch.Tensor
+    num_causal_tokens: int
+    num_full_tokens: int
+
+    def matches_layout(
+        self,
+        sample_lens: list[int],
+        split_lens: list[int],
+        attn_modes: list[str],
+        device: torch.device,
+    ) -> bool:
+        """Return whether this metadata describes the supplied layout."""
+        return (
+            self.sample_lens == tuple(sample_lens)
+            and self.split_lens == tuple(split_lens)
+            and self.attn_modes == tuple(attn_modes)
+            and self.device == device
+        )
+
+    def as_sequence_pack_fields(self) -> dict[str, Any]:
+        """Return the legacy SequencePack mapping backed by these tensors."""
+        return {
+            "sample_offsets": self.sample_offsets,
+            "max_sample_len": self.max_sample_len,
+            "max_causal_len": self.max_causal_len,
+            "max_full_len": self.max_full_len,
+            "_causal_indices": self.causal_indices,
+            "_full_indices": self.full_indices,
+            "_causal_seq_offsets": self.causal_seq_offsets,
+            "_full_only_seq_offsets": self.full_only_seq_offsets,
+            "_num_causal_tokens": self.num_causal_tokens,
+            "_num_full_tokens": self.num_full_tokens,
+            "split_lens": list(self.split_lens),
+            "attn_modes": list(self.attn_modes),
+        }
+
 
 # ------------------------------------
 # SequencePack: internal helpers
@@ -140,12 +194,13 @@ def _ensure_core_metadata(pack: SequencePack) -> None:
             raise KeyError(f"Missing required pack field: {key}")
 
 
-def init_sequence_pack(
-    sample_lens: List[int],
-    split_lens: List[int],
-    attn_modes: List[str],
+def _build_sequence_pack_metadata(
+    sample_lens: list[int],
+    split_lens: list[int],
+    attn_modes: list[str],
     device: torch.device,
-) -> dict[str, Any]:
+) -> SequencePackMetadata:
+    """Build device tensors and scalar metadata for one sequence layout."""
     _max_sample_len = max(sample_lens)
     _max_causal_len = max((split_lens[i] for i in range(len(split_lens)) if attn_modes[i] == "causal"), default=0)
     _max_full_len = max((split_lens[i] for i in range(len(split_lens)) if attn_modes[i] == "full"), default=0)
@@ -156,20 +211,39 @@ def init_sequence_pack(
     _causal_indices, _causal_seq_offsets = _compute_mode_indices_and_offsets(split_lens, attn_modes, "causal", device)
     _full_indices, _full_only_seq_offsets = _compute_mode_indices_and_offsets(split_lens, attn_modes, "full", device)
 
-    return dict(
+    return SequencePackMetadata(
+        sample_lens=tuple(sample_lens),
+        split_lens=tuple(split_lens),
+        attn_modes=tuple(attn_modes),
+        device=device,
         sample_offsets=_sample_offsets,
         max_sample_len=_max_sample_len,
         max_causal_len=_max_causal_len,
         max_full_len=_max_full_len,
-        _causal_indices=_causal_indices,
-        _full_indices=_full_indices,
-        _causal_seq_offsets=_causal_seq_offsets,
-        _full_only_seq_offsets=_full_only_seq_offsets,
-        _num_causal_tokens=len(_causal_indices),
-        _num_full_tokens=len(_full_indices),
-        split_lens=split_lens,
-        attn_modes=attn_modes,
+        causal_indices=_causal_indices,
+        full_indices=_full_indices,
+        causal_seq_offsets=_causal_seq_offsets,
+        full_only_seq_offsets=_full_only_seq_offsets,
+        num_causal_tokens=len(_causal_indices),
+        num_full_tokens=len(_full_indices),
     )
+
+
+def prepare_sequence_pack_metadata(
+    sample_lens: list[int],
+    split_lens: list[int],
+    attn_modes: list[str],
+    packed_und_token_indexes: torch.Tensor,
+    device: torch.device,
+) -> SequencePackMetadata:
+    """Validate and prepare reusable metadata for one packed-sequence layout."""
+    non_causal_text_idxs = _find_non_causal_text_token_idx(
+        attn_modes,
+        split_lens,
+        packed_und_token_indexes.tolist(),
+    )
+    assert len(non_causal_text_idxs) == 0, "non_causal_text_idxs should be empty"
+    return _build_sequence_pack_metadata(sample_lens, split_lens, attn_modes, device)
 
 
 # ------------------------------------
@@ -233,6 +307,7 @@ def sequence_pack_from_packed_sequence(
     is_image_batch: bool = False,
     cp_world_size: int = 1,
     pad_for_cuda_graphs: bool = False,
+    prepared_metadata: SequencePackMetadata | None = None,
 ) -> SequencePack:
     """
     Create a sequence pack from a packed sequence and metadata.
@@ -250,14 +325,22 @@ def sequence_pack_from_packed_sequence(
     """
     del packed_gen_token_indexes
 
-    non_causal_text_idxs = _find_non_causal_text_token_idx(attn_modes, split_lens, packed_und_token_indexes.tolist())
-    assert len(non_causal_text_idxs) == 0, "non_causal_text_idxs should be empty"
+    if prepared_metadata is None:
+        prepared_metadata = prepare_sequence_pack_metadata(
+            sample_lens=sample_lens,
+            split_lens=split_lens,
+            attn_modes=attn_modes,
+            packed_und_token_indexes=packed_und_token_indexes,
+            device=packed_sequence.device,
+        )
+    elif not prepared_metadata.matches_layout(sample_lens, split_lens, attn_modes, packed_sequence.device):
+        raise ValueError("Prepared sequence-pack metadata does not match the current packed-sequence layout")
 
     assert sum(sample_lens) == packed_sequence.shape[0], (
         "sum(sample_lens) must be equal to the length of the packed sequence"
     )
 
-    meta = init_sequence_pack(sample_lens, split_lens, attn_modes, packed_sequence.device)
+    meta = prepared_metadata.as_sequence_pack_fields()
     causal_seq = packed_sequence[meta["_causal_indices"]]  # [N_causal_tokens,D]
     full_only_seq = packed_sequence[meta["_full_indices"]]  # [N_full_tokens,D]
 

@@ -31,6 +31,10 @@ class FilterOutputKey(Augmentor):
             "pixel_values",
             "image_grid_thw",
             "raw_image",  # for debugging
+            # TokenizeData has already converted raw waveforms into model-ready log-mel inputs.
+            "audio_features",
+            "audio_feature_lengths",
+            "audio_token_lengths",
             # For collate_fn
             "pad_token_id",
             "ignore_index",
@@ -45,12 +49,14 @@ class FilterOutputKey(Augmentor):
     def __call__(self, data_dict: Dict) -> Dict:
         data_dict = {k: data_dict[k] for k in self.output_keys if k in data_dict}
 
-        has_media = "pixel_values" in data_dict or "pixel_values_videos" in data_dict
+        has_media = "pixel_values" in data_dict or "pixel_values_videos" in data_dict or "audio_features" in data_dict
         has_text = "input_ids" in data_dict and "labels" in data_dict
         is_valid_data = has_media or has_text
         if not self.text_only and not is_valid_data:
             log.critical(
-                f"No media input in data_dict: {data_dict.keys()} | __url__: {data_dict['__url__']} | __key__: {data_dict['__key__']} | dialog_str: {data_dict.get('dialog_str', '')} | does not contain pixel_values or pixel_values_videos",
+                f"No media input in data_dict: {data_dict.keys()} | __url__: {data_dict['__url__']} | "
+                f"__key__: {data_dict['__key__']} | dialog_str: {data_dict.get('dialog_str', '')} | "
+                "does not contain vision or audio processor inputs",
                 rank0_only=False,
             )
             return None

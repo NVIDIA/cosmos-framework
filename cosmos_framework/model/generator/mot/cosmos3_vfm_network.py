@@ -170,7 +170,7 @@ class Cosmos3VFMNetwork(PreTrainedModel):
 
     def init_weights(self, buffer_device: torch.device | None):
         if self.config.vision_gen or self.config.action_gen or self.config.sound_gen:
-            self.time_embedder._init_weights()
+            self.time_embedder._init_weights(buffer_device=buffer_device)
 
         if self.config.vision_gen:
             std = 1.0 / math.sqrt(self.patch_latent_dim)
@@ -990,6 +990,7 @@ class Cosmos3VFMNetwork(PreTrainedModel):
         sequence_shard_world_size = (
             1 if replicated_attention_io_cp else (self.parallel_dims.cp_size if self.parallel_dims else 1)
         )
+        prepared_sequence_pack_metadata = packed_seq.get_sequence_pack_metadata()
 
         input_pack, attention_meta, natten_metadata_list = build_packed_sequence(
             self.config.joint_attn_implementation,
@@ -1013,6 +1014,7 @@ class Cosmos3VFMNetwork(PreTrainedModel):
             num_action_tokens_per_supertoken=num_action_tokens_per_supertoken,
             null_action_supertokens=packed_seq.null_action_supertokens,
             pad_for_cuda_graphs=self.pad_for_cuda_graphs,
+            prepared_metadata=prepared_sequence_pack_metadata,
         )
 
         # ── Multi-control transfer: annotate SplitInfo with per-item ranges ──────

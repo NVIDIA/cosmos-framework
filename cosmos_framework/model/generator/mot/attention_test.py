@@ -17,6 +17,8 @@ from cosmos_framework.data.generator.sequence_packing.runtime import (
     get_all_seq,
     get_gen_seq,
     get_und_seq,
+    prepare_sequence_pack_metadata,
+    sequence_pack_from_packed_sequence,
     set_gen_seq,
     set_und_seq,
     zeros_like,
@@ -376,6 +378,70 @@ def test_build_packed_sequence_rejects_flex():
             num_heads=1,
             head_dim=8,
             num_layers=1,
+        )
+
+
+@pytest.mark.L0
+def test_prepared_sequence_pack_metadata_is_reused() -> None:
+    device = torch.device("cpu")
+    packed_sequence = torch.randn(4, 8, device=device)  # [N,D]
+    packed_und_token_indexes = torch.tensor([0, 1], device=device, dtype=torch.long)  # [N_und]
+    packed_gen_token_indexes = torch.tensor([2, 3], device=device, dtype=torch.long)  # [N_gen]
+    metadata = prepare_sequence_pack_metadata(
+        sample_lens=[4],
+        split_lens=[2, 2],
+        attn_modes=["causal", "full"],
+        packed_und_token_indexes=packed_und_token_indexes,
+        device=device,
+    )
+
+    first_pack = sequence_pack_from_packed_sequence(
+        packed_sequence=packed_sequence,
+        attn_modes=["causal", "full"],
+        split_lens=[2, 2],
+        sample_lens=[4],
+        packed_und_token_indexes=packed_und_token_indexes,
+        packed_gen_token_indexes=packed_gen_token_indexes,
+        prepared_metadata=metadata,
+    )
+    second_pack = sequence_pack_from_packed_sequence(
+        packed_sequence=packed_sequence,
+        attn_modes=["causal", "full"],
+        split_lens=[2, 2],
+        sample_lens=[4],
+        packed_und_token_indexes=packed_und_token_indexes,
+        packed_gen_token_indexes=packed_gen_token_indexes,
+        prepared_metadata=metadata,
+    )
+
+    assert first_pack["_causal_indices"] is metadata.causal_indices
+    assert second_pack["_causal_indices"] is metadata.causal_indices
+    torch.testing.assert_close(get_all_seq(first_pack), get_all_seq(second_pack))
+
+
+@pytest.mark.L0
+def test_prepared_sequence_pack_metadata_rejects_another_layout() -> None:
+    device = torch.device("cpu")
+    packed_sequence = torch.randn(4, 8, device=device)  # [N,D]
+    packed_und_token_indexes = torch.tensor([0, 1], device=device, dtype=torch.long)  # [N_und]
+    packed_gen_token_indexes = torch.tensor([2, 3], device=device, dtype=torch.long)  # [N_gen]
+    metadata = prepare_sequence_pack_metadata(
+        sample_lens=[4],
+        split_lens=[2, 2],
+        attn_modes=["causal", "full"],
+        packed_und_token_indexes=packed_und_token_indexes,
+        device=device,
+    )
+
+    with pytest.raises(ValueError, match="does not match"):
+        sequence_pack_from_packed_sequence(
+            packed_sequence=packed_sequence,
+            attn_modes=["causal", "full"],
+            split_lens=[1, 3],
+            sample_lens=[4],
+            packed_und_token_indexes=packed_und_token_indexes[:1],
+            packed_gen_token_indexes=packed_gen_token_indexes,
+            prepared_metadata=metadata,
         )
 
 
