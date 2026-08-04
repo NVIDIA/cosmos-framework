@@ -237,6 +237,96 @@ def _apply_freeze_config(model: nn.Module, model_type: str, cfg) -> int:
     return n
 
 
+def _assert_lora_initialized(model: nn.Module) -> None:
+    """Fail loudly if adapter init left garbage behind.
+
+    ``init_lora_weights_post_materialization`` runs on FSDP2-sharded params, so
+    every write goes through DTensor. A silent no-op there would leave whatever
+    ``torch.empty_like`` allocated and produce NaN losses several minutes into
+    the run. Check the local shard of the first adapter pair instead:
+    ``lora_A`` must be finite and non-zero, ``lora_B`` must be exactly zero.
+
+    Ranks whose shard of a tensor is empty (uneven FSDP split) are skipped.
+    """
+    from cosmos_framework.utils.generator.lora import LoraInjectedLinear
+
+    def _local(t: torch.Tensor) -> torch.Tensor:
+        return t.to_local() if hasattr(t, "to_local") else t
+
+    for name, module in model.named_modules():
+        if not isinstance(module, LoraInjectedLinear):
+            continue
+        a = _local(module.lora_A.weight.detach())
+        b = _local(module.lora_B.weight.detach())
+        if a.numel() == 0:
+            continue
+        if not torch.isfinite(a).all():
+            raise RuntimeError(f"LoRA init failed: {name}.lora_A contains non-finite values after init.")
+        if not a.any():
+            raise RuntimeError(
+                f"LoRA init failed: {name}.lora_A is all-zero after init. "
+                "kaiming_uniform_ did not reach the sharded tensor — the adapter would never learn."
+            )
+        if b.any():
+            raise RuntimeError(f"LoRA init failed: {name}.lora_B is not zero-initialized.")
+        log.info(f"LoRA init verified on {name} (lora_A std={a.float().std().item():.4g}, lora_B all-zero)")
+        return
+
+
+def _enforce_lora_only_trainable(model: nn.Module) -> None:
+    """Freeze everything except LoRA adapters, in-place.
+
+    ``inject_lora_pre_fsdp`` already does this at injection time, but
+    ``_apply_freeze_config`` runs later and can flip base params back to
+    trainable. This re-asserts LoRA-only and logs loudly when it had to undo
+    something, so a mis-specified freeze config is visible rather than silently
+    producing a partial full fine-tune.
+    """
+    reverted = [n for n, p in model.named_parameters() if p.requires_grad and "lora_" not in n]
+    if reverted:
+        log.warning(
+            f"LoRA: freeze config left {len(reverted)} non-adapter parameter tensor(s) trainable "
+            f"(first up to 5: {reverted[:5]}); re-freezing them. Remove `trainable_params` from the "
+            "freeze config if you did not intend this."
+        )
+
+    lora_numel = 0
+    frozen_numel = 0
+    for name, param in model.named_parameters():
+        is_lora = "lora_" in name
+        param.requires_grad_(is_lora)
+        if is_lora:
+            lora_numel += param.numel()
+        else:
+            frozen_numel += param.numel()
+
+    assert lora_numel > 0, (
+        "LoRA is enabled but 0 adapter parameters are trainable — check "
+        "model.config.policy.lora_target_modules against the backbone's module names."
+    )
+    log.info(
+        f"LoRA-only training: {lora_numel:,} trainable adapter params, "
+        f"{frozen_numel:,} frozen base params "
+        f"({100 * lora_numel / max(1, lora_numel + frozen_numel):.3f}% trainable)"
+    )
+
+    # Where the adapters actually landed. A non-zero adapter count is NOT enough
+    # to conclude the targets were right: naming differs across model families
+    # (Qwen3-VL puts q_proj/k_proj/v_proj/o_proj in the LLM, cosmos3_edge puts
+    # those same names in the SigLIP2 vision tower and uses to_q/to_k/to_v/to_out
+    # for the LLM). Mistargeting produces a healthy-looking run that trains the
+    # wrong subnetwork, so print the placement and let the reader judge.
+    placement: dict[str, int] = {}
+    for name, _ in model.named_parameters():
+        if "lora_" not in name:
+            continue
+        # Collapse layer indices so 28 layers report as one bucket.
+        bucket = re.sub(r"\.\d+\.", ".*.", name.rsplit(".lora_", 1)[0])
+        placement[bucket] = placement.get(bucket, 0) + 1
+    for bucket, count in sorted(placement.items(), key=lambda kv: -kv[1]):
+        log.info(f"LoRA placement: {count:4d} adapter tensors under {bucket}")
+
+
 class VLMModel(ImaginaireModel):
     """Config-instantiable ImaginaireModel for VLM training.
 
@@ -262,6 +352,14 @@ class VLMModel(ImaginaireModel):
         log.info(
             f"freeze config applied (model_type={self.hf_config.model_type}): {n_trainable} trainable parameter tensors"
         )
+
+        # LoRA-only is authoritative over the freeze config. ``_apply_freeze_config``
+        # runs AFTER ``_init_vlm`` (where the adapters were injected and every base
+        # param frozen), and its ``trainable_params`` branch unfreezes by regex —
+        # which would silently un-freeze base weights and turn a "LoRA run" into a
+        # partial full fine-tune. Re-assert here.
+        if config.policy.lora_enabled:
+            _enforce_lora_only_trainable(self.model.model)
 
         dp_group = None
         cp_group = None
@@ -344,6 +442,23 @@ class VLMModel(ImaginaireModel):
         if policy.backbone.pretrained_weights.backbone_path:
             _get_overlay_config(hf_model.hf_config.model_type)
 
+        # ── b.2. Inject LoRA adapters (still on meta, still pre-FSDP) ──
+        # Ordering is load-bearing: the injector must see UNSHARDED nn.Linear
+        # shapes. Injecting after ``parallelize()`` builds ``lora_B`` at the
+        # per-rank shard size (e.g. 8192/4=2048) and crashes at forward time.
+        # ``lora_A``/``lora_B`` stay uninitialized on meta here; step g.3
+        # initializes them once the tensors are real.
+        if policy.lora_enabled:
+            from cosmos_framework.utils.generator.lora import inject_lora_pre_fsdp
+
+            inject_lora_pre_fsdp(
+                hf_model.model,
+                lora_rank=policy.lora_rank,
+                lora_alpha=policy.lora_alpha,
+                lora_target_modules=policy.lora_target_modules,
+                lora_exclude_path_regex=policy.lora_exclude_path_regex or None,
+            )
+
         # ── c. Build ParallelDims + device mesh ──
         # Overlay-mesh design (see vfm/utils/parallelism.py): cp/cfgp do NOT
         # consume FSDP rank slots, so dp_replicate * dp_shard == world_size
@@ -410,6 +525,13 @@ class VLMModel(ImaginaireModel):
         hf_model.tie_embeddings()
 
         # ── g. Load pretrain weights ──
+        # LoRA adapters exist on the model but never in a pretrained checkpoint.
+        # ``load_vlm_model``'s Phase-6 completeness check raises on any model key
+        # the checkpoint lacks, so the adapter keys must be tolerated explicitly.
+        # Patterns are applied with ``re.fullmatch`` against the resolved model
+        # key, hence the leading ``.*``.
+        lora_skip_patterns = [r".*\.lora_[AB]\.weight"] if policy.lora_enabled else []
+
         if load_pretrain_weights:
             if policy.backbone.safetensors_path:
                 safetensors_local_path = maybe_download_hf_model_from_s3(
@@ -425,6 +547,7 @@ class VLMModel(ImaginaireModel):
                 checkpoint_path=safetensors_local_path,
                 credential_path=None,  # local path after download
                 parallel_dims=parallel_dims if torch.distributed.is_initialized() else None,
+                extra_skip_patterns=lora_skip_patterns or None,
             )
 
             # ── g.2. Optional LLM overlay (backbone.pretrained_weights) ──
@@ -450,7 +573,7 @@ class VLMModel(ImaginaireModel):
                     checkpoint_path=llm_local_path,
                     credential_path=None,
                     parallel_dims=parallel_dims if torch.distributed.is_initialized() else None,
-                    extra_skip_patterns=overlay_skip_patterns,
+                    extra_skip_patterns=overlay_skip_patterns + lora_skip_patterns,
                 )
                 lm_loaded = {k for k in keys_loaded if is_lm_key(k)}
                 if not lm_loaded:
@@ -461,6 +584,18 @@ class VLMModel(ImaginaireModel):
                         "VLM; check model-family / layer-count compatibility."
                     )
                 log.info(f"VLMModel: overlaid {len(lm_loaded)} language-model params from {llm_path}")
+
+        # ── g.3. Initialize LoRA adapters ──
+        # Must run AFTER step e (meta -> real CUDA storage) and after every
+        # load_weights (which skips these keys, leaving whatever ``empty_like``
+        # allocated). ``lora_A ~ kaiming_uniform_``, ``lora_B = 0`` — so the
+        # adapter contributes exactly zero on the first forward and the run starts
+        # from the pretrained model's loss.
+        if policy.lora_enabled:
+            from cosmos_framework.utils.generator.lora import init_lora_weights_post_materialization
+
+            init_lora_weights_post_materialization(hf_model.model)
+            _assert_lora_initialized(hf_model.model)
 
         # ── i. Gradient checkpointing ──
         # HF backbone supports only binary on/off via gradient_checkpointing_enable,

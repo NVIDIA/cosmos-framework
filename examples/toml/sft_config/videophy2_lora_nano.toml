@@ -1,0 +1,119 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: OpenMDW-1.1
+
+# videophy2_lora_nano — LoRA SFT on VideoPhy-2, Cosmos3-Nano (Qwen3-VL-8B).
+# Base config = cosmos_framework/configs/base/reasoner/config.py (selected by [job].task="vlm").
+#
+# This recipe is deliberately IDENTICAL to videophy2_sft_nano.toml except that
+# LoRA is switched on: same lr (1e-6), weight_decay (0.1), betas, scheduler
+# (cycle=50, warmup=5), max_iter (50), grad_accum (8), sequence length, and the
+# same 32-sample example dataset. The only training-relevant deltas are the four
+# lora_* keys plus optimizer.keys_to_select=["lora_"]. This makes the run an
+# apples-to-apples counterpart to the full-fine-tune baseline in
+# outputs/train/logs/videophy2_sft_nano_sft.log — the ONLY variable is LoRA
+# on/off, so the two curves are directly comparable.
+#
+# (The separate videophy2_lora_nano recipe geared for a longer, higher-LR sweep
+# is not this file; this one exists to answer "does LoRA behave like full-FT
+# under matched settings".)
+#
+# Dataset prep:
+#   python -m cosmos_framework.scripts.reasoner.prepare_videophy2_from_hf \
+#       --out_root $VIDEOPHYSICS_ROOT --split train  # and again with --split val
+#
+# Required env at launch: VIDEOPHYSICS_ROOT.
+#
+# Example launch:
+#   bash examples/launch_sft_videophy2_lora_nano.sh
+
+[job]
+task         = "vlm"
+experiment   = "videophy2_lora_nano"
+project      = "cosmos3"
+group        = "vlm_videophy2_lora"
+name         = "videophy2_lora_nano"
+wandb_mode   = "online"
+
+[model]
+attn_implementation = "cosmos"
+precision           = "bfloat16"                         # was [model.parallelism].precision
+
+# LoRA — the only training-relevant delta vs videophy2_sft_nano.toml. Targets are
+# matched by EXACT child-module name, so the four Qwen3-VL LLM projections are
+# hit and the vision tower (qkv/proj/linear_fc1/linear_fc2) is not.
+lora_enabled        = true
+lora_rank           = 16
+lora_alpha          = 32
+lora_target_modules = "q_proj,k_proj,v_proj,o_proj"
+
+[model.backbone]
+model_name = "Qwen/Qwen3-VL-8B-Instruct"
+
+[model.ema]
+enabled         = false
+rate            = 0.1
+iteration_shift = 0
+
+[model.parallelism]
+# Original toml ships dp_shard=8 (an 8-GPU recipe). The full-FT baseline this
+# compares against actually ran on a 4-GPU node with dp_shard=4 (see its
+# launch_info.yaml), giving effective batch = 4 x 1 x grad_accum(8) = 32. Match
+# that as-run baseline: shard across the 4 available GPUs.
+data_parallel_shard_degree      = 4
+data_parallel_replicate_degree  = 1
+context_parallel_shard_degree   = 1
+cfg_parallel_shard_degree       = 1
+
+[model.compile]
+enabled                         = false                  # was [model.parallelism].use_torch_compile
+compile_dynamic                 = true
+
+[model.activation_checkpointing]
+mode                = "full"
+save_ops_regex      = ["fmha"]
+preserve_rng_state  = true
+determinism_check   = "default"
+
+[optimizer]
+betas          = [0.9, 0.95]
+eps            = 1.0e-8
+fused          = true
+# Train adapters only. This is the second half of the LoRA delta; every other
+# optimizer field below matches videophy2_sft_nano.toml.
+keys_to_select = ["lora_"]
+# 5x the full-FT baseline's 1e-6. LoRA adapters start from lora_B=0 and only ~0.2%
+# of params carry gradient, so a modestly higher LR is warranted; everything else
+# stays at the baseline values.
+lr             = 5.0e-6
+weight_decay   = 0.1
+
+[scheduler]
+cycle_lengths      = [300]                                # tracks max_iter (else LR floors at step 50)
+f_max              = [1.0]
+f_min              = [0.1]
+f_start            = [0.05]
+verbosity_interval = 0
+warm_up_steps      = [5]
+
+[trainer]
+distributed_parallelism = "fsdp"
+grad_accum_iter         = 8
+logging_iter            = 1
+max_iter                = 300                             # longer run to see the full LoRA trajectory
+
+[trainer.callbacks.compile_tokenizer]
+compile_after_iterations = 3
+enabled                  = false
+
+[trainer.callbacks.grad_clip]
+clip_norm    = 1.0
+force_finite = false
+
+[checkpoint]
+keys_to_skip_loading = []
+load_path            = "???"
+save_iter            = 1000                              # past max_iter: skip mid-run 8B DCP writes
+
+[dataloader_train]
+max_samples_per_batch = 1
+max_sequence_length   = 16000
