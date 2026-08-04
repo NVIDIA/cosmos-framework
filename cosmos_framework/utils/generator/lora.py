@@ -14,6 +14,7 @@ the state-dict keys ``<path>.lora_A.weight`` and ``<path>.lora_B.weight``.
 from __future__ import annotations
 
 import math
+import re
 
 import torch
 import torch.nn as nn
@@ -91,6 +92,7 @@ def _inject_lora_inplace(
     target_modules: list[str],
     rank: int,
     alpha: int,
+    exclude_path_regex: str | None = None,
 ) -> int:
     """Replace each targeted ``nn.Linear`` child in-place with ``LoraInjectedLinear``.
 
@@ -101,16 +103,29 @@ def _inject_lora_inplace(
 
     Snapshots ``named_modules()`` before mutating the tree so newly-inserted
     LoRA submodules are not re-visited.
+
+    ``exclude_path_regex`` skips any module whose dotted path matches (searched,
+    not fullmatch). Name matching alone cannot always separate two towers of a
+    VLM: Cosmos3-Edge names its LLM projections ``q_proj``/``k_proj``/``v_proj``/
+    ``o_proj`` and its SigLIP2 vision projections ``q_proj``/``k_proj``/
+    ``v_proj``/``out_proj`` — three of the four names collide. Passing
+    ``r"^model\\.visual\\."`` keeps the adapters out of the vision tower.
     """
+    exclude = re.compile(exclude_path_regex) if exclude_path_regex else None
     replaced = 0
     for parent_name, parent in list(network.named_modules()):
         for child_name, child in list(parent.named_children()):
             if not isinstance(child, nn.Linear):
                 continue
             full_child_path = f"{parent_name}.{child_name}" if parent_name else child_name
-            if any(_target_matches(full_child_path, child_name, t) for t in target_modules):
-                setattr(parent, child_name, LoraInjectedLinear(child, rank, alpha))
-                replaced += 1
+            if not any(_target_matches(full_child_path, child_name, target) for target in target_modules):
+                continue
+            # Selection and exclusion are orthogonal: first select by exact leaf
+            # name or path-qualified suffix, then carve excluded subtrees out.
+            if exclude is not None and exclude.search(full_child_path):
+                continue
+            setattr(parent, child_name, LoraInjectedLinear(child, rank, alpha))
+            replaced += 1
     return replaced
 
 
@@ -120,6 +135,7 @@ def inject_lora_pre_fsdp(
     lora_rank: int,
     lora_alpha: int,
     lora_target_modules: str,
+    lora_exclude_path_regex: str | None = None,
 ) -> torch.nn.Module:
     """Inject LoRA adapters into ``network`` BEFORE FSDP wrap on meta device.
 
@@ -161,10 +177,15 @@ def inject_lora_pre_fsdp(
     if invalid_modules:
         log.warning(f"LoRA target modules not found in model: {invalid_modules}")
 
-    log.info(f"Injecting LoRA on meta device: rank={lora_rank}, alpha={lora_alpha}, targets={target_modules_list}")
+    log.info(
+        f"Injecting LoRA on meta device: rank={lora_rank}, alpha={lora_alpha}, "
+        f"targets={target_modules_list}, exclude_path_regex={lora_exclude_path_regex!r}"
+    )
 
     try:
-        replaced = _inject_lora_inplace(network, target_modules_list, lora_rank, lora_alpha)
+        replaced = _inject_lora_inplace(
+            network, target_modules_list, lora_rank, lora_alpha, exclude_path_regex=lora_exclude_path_regex
+        )
     except Exception as e:
         raise RuntimeError(f"Failed to inject LoRA adapters into model: {e}") from e
 

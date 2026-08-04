@@ -346,12 +346,13 @@ class ModelConfig(BaseModel):
     lora_enabled: bool = Field(
         default=False,
         description=(
-            "Inject LoRA adapters into the generation pathway BEFORE FSDP "
-            "wraps the network. Pair with optimizer.keys_to_select=['lora_'] "
-            "(train only adapters) and checkpoint.keys_to_skip_loading=["
-            "..., 'lora_'] (don't load missing adapter tensors). Used by "
-            "SUPER-tier configs (e.g. vision_sft_super); NANO-tier leaves "
-            "it off. Skipped on VLM."
+            "Inject LoRA adapters BEFORE FSDP wraps the network. Pair with "
+            "optimizer.keys_to_select=['lora_'] (train only adapters) and "
+            "checkpoint.keys_to_skip_loading=[..., 'lora_'] (don't load "
+            "missing adapter tensors). On VFM this targets the generation "
+            "pathway (e.g. vision_sft_super); on VLM it targets the HF "
+            "backbone via model.config.policy.lora_* (e.g. "
+            "videophy2_lora_nano)."
         ),
     )
     lora_rank: int = Field(
@@ -371,8 +372,22 @@ class ModelConfig(BaseModel):
     lora_target_modules: str = Field(
         default="q_proj_moe_gen,k_proj_moe_gen,v_proj_moe_gen,o_proj_moe_gen",
         description=(
-            "Comma-separated substrings of param names that get a LoRA "
-            "adapter. Defaults target the four MoE-gen projection matrices."
+            "Comma-separated EXACT child-module names that get a LoRA "
+            "adapter (matched by name, not substring). The default targets "
+            "the four MoE-gen projection matrices, which is the VFM layout; "
+            "VLM recipes override it (Qwen3-VL: "
+            "'q_proj,k_proj,v_proj,o_proj')."
+        ),
+    )
+    lora_exclude_path_regex: str = Field(
+        default="",
+        description=(
+            "Regex searched against each candidate module's dotted path; "
+            "matches are skipped. Use when the two towers of a VLM share "
+            "projection names — Cosmos3-Edge names its LLM projections "
+            "q/k/v/o_proj and its SigLIP2 vision projections q/k/v/out_proj, "
+            "so name matching alone would also adapt the (frozen) vision "
+            "tower. Empty = no exclusion. **VLM only.**"
         ),
     )
 
