@@ -10,10 +10,16 @@
 # LLM attention projections — which is what makes the 32B tier comfortable on a
 # 4-GPU (GB200x4) allocation: only the adapters carry optimizer state.
 #
-# Weights: unlike the nano recipe there is no converter step required. With
-# VLM_SAFETENSORS_PATH unset the framework loads the public
-# Qwen/Qwen3-VL-32B-Instruct snapshot resolved from model_name (~64 GB download
-# on first run). Set VLM_SAFETENSORS_PATH to use a local/merged snapshot instead.
+# Weights: no converter step required. With VLM_SAFETENSORS_PATH unset the
+# framework loads the public Qwen/Qwen3-VL-32B-Instruct snapshot resolved from
+# model_name (~64 GB download on first run). Set VLM_SAFETENSORS_PATH to use a
+# local/merged snapshot instead.
+#
+# Want the 8B tier instead (much smaller download, good for a first run)? There
+# is no separate nano LoRA recipe because it would differ from this file in two
+# values only — point [job].experiment at videophy2_sft_nano and
+# [model.backbone].model_name at Qwen/Qwen3-VL-8B-Instruct. Every LoRA and
+# training setting below carries over unchanged.
 #
 # Dataset prep:
 #   python -m cosmos_framework.scripts.reasoner.prepare_videophy2_from_hf \

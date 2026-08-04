@@ -352,7 +352,7 @@ class ModelConfig(BaseModel):
             "missing adapter tensors). On VFM this targets the generation "
             "pathway (e.g. vision_sft_super); on VLM it targets the HF "
             "backbone via model.config.policy.lora_* (e.g. "
-            "examples/toml/sft_config/videophy2_lora_nano.toml)."
+            "examples/toml/sft_config/videophy2_lora_super.toml)."
         ),
     )
     lora_rank: int = Field(
