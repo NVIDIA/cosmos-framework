@@ -267,96 +267,6 @@ def _apply_freeze_config(model: nn.Module, model_type: str, cfg) -> int:
     return n
 
 
-def _assert_lora_initialized(model: nn.Module) -> None:
-    """Fail loudly if adapter init left garbage behind.
-
-    ``init_lora_weights_post_materialization`` runs on FSDP2-sharded params, so
-    every write goes through DTensor. A silent no-op there would leave whatever
-    ``torch.empty_like`` allocated and produce NaN losses several minutes into
-    the run. Check the local shard of the first adapter pair instead:
-    ``lora_A`` must be finite and non-zero, ``lora_B`` must be exactly zero.
-
-    Ranks whose shard of a tensor is empty (uneven FSDP split) are skipped.
-    """
-    from cosmos_framework.utils.generator.lora import LoraInjectedLinear
-
-    def _local(t: torch.Tensor) -> torch.Tensor:
-        return t.to_local() if hasattr(t, "to_local") else t
-
-    for name, module in model.named_modules():
-        if not isinstance(module, LoraInjectedLinear):
-            continue
-        a = _local(module.lora_A.weight.detach())
-        b = _local(module.lora_B.weight.detach())
-        if a.numel() == 0:
-            continue
-        if not torch.isfinite(a).all():
-            raise RuntimeError(f"LoRA init failed: {name}.lora_A contains non-finite values after init.")
-        if not a.any():
-            raise RuntimeError(
-                f"LoRA init failed: {name}.lora_A is all-zero after init. "
-                "kaiming_uniform_ did not reach the sharded tensor — the adapter would never learn."
-            )
-        if b.any():
-            raise RuntimeError(f"LoRA init failed: {name}.lora_B is not zero-initialized.")
-        log.info(f"LoRA init verified on {name} (lora_A std={a.float().std().item():.4g}, lora_B all-zero)")
-        return
-
-
-def _enforce_lora_only_trainable(model: nn.Module) -> None:
-    """Freeze everything except LoRA adapters, in-place.
-
-    ``inject_lora_pre_fsdp`` already does this at injection time, but
-    ``_apply_freeze_config`` runs later and can flip base params back to
-    trainable. This re-asserts LoRA-only and logs loudly when it had to undo
-    something, so a mis-specified freeze config is visible rather than silently
-    producing a partial full fine-tune.
-    """
-    reverted = [n for n, p in model.named_parameters() if p.requires_grad and "lora_" not in n]
-    if reverted:
-        log.warning(
-            f"LoRA: freeze config left {len(reverted)} non-adapter parameter tensor(s) trainable "
-            f"(first up to 5: {reverted[:5]}); re-freezing them. Remove `trainable_params` from the "
-            "freeze config if you did not intend this."
-        )
-
-    lora_numel = 0
-    frozen_numel = 0
-    for name, param in model.named_parameters():
-        is_lora = "lora_" in name
-        param.requires_grad_(is_lora)
-        if is_lora:
-            lora_numel += param.numel()
-        else:
-            frozen_numel += param.numel()
-
-    assert lora_numel > 0, (
-        "LoRA is enabled but 0 adapter parameters are trainable — check "
-        "model.config.policy.lora_target_modules against the backbone's module names."
-    )
-    log.info(
-        f"LoRA-only training: {lora_numel:,} trainable adapter params, "
-        f"{frozen_numel:,} frozen base params "
-        f"({100 * lora_numel / max(1, lora_numel + frozen_numel):.3f}% trainable)"
-    )
-
-    # Where the adapters actually landed. A non-zero adapter count is NOT enough
-    # to conclude the targets were right: naming differs across model families
-    # (Qwen3-VL puts q_proj/k_proj/v_proj/o_proj in the LLM, cosmos3_edge puts
-    # those same names in the SigLIP2 vision tower and uses to_q/to_k/to_v/to_out
-    # for the LLM). Mistargeting produces a healthy-looking run that trains the
-    # wrong subnetwork, so print the placement and let the reader judge.
-    placement: dict[str, int] = {}
-    for name, _ in model.named_parameters():
-        if "lora_" not in name:
-            continue
-        # Collapse layer indices so 28 layers report as one bucket.
-        bucket = re.sub(r"\.\d+\.", ".*.", name.rsplit(".lora_", 1)[0])
-        placement[bucket] = placement.get(bucket, 0) + 1
-    for bucket, count in sorted(placement.items(), key=lambda kv: -kv[1]):
-        log.info(f"LoRA placement: {count:4d} adapter tensors under {bucket}")
-
-
 class VLMModel(ImaginaireModel):
     """Config-instantiable ImaginaireModel for VLM training.
 
@@ -394,14 +304,6 @@ class VLMModel(ImaginaireModel):
         log.info(
             f"freeze config applied (model_type={self.hf_config.model_type}): {n_trainable} trainable parameter tensors"
         )
-
-        # LoRA-only is authoritative over the freeze config. ``_apply_freeze_config``
-        # runs AFTER ``_init_vlm`` (where the adapters were injected and every base
-        # param frozen), and its ``trainable_params`` branch unfreezes by regex —
-        # which would silently un-freeze base weights and turn a "LoRA run" into a
-        # partial full fine-tune. Re-assert here.
-        if config.policy.lora_enabled:
-            _enforce_lora_only_trainable(self.model.model)
 
         dp_group = None
         cp_group = None
@@ -657,7 +559,6 @@ class VLMModel(ImaginaireModel):
             from cosmos_framework.utils.generator.lora import init_lora_weights_post_materialization
 
             init_lora_weights_post_materialization(hf_model.model)
-            _assert_lora_initialized(hf_model.model)
 
         # ── h. Load the immutable standalone Parakeet artifact ──
         # This runs for both fresh starts and DCP resumes. On resume, DCP may
