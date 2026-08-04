@@ -18,9 +18,15 @@ The delta, and why each piece is needed:
 * ``optimizer.keys_to_select=["lora_"]`` — belt-and-braces with the
   ``requires_grad`` enforcement in ``VLMModel.__init__``; keeps the optimizer
   state at adapter size rather than allocating for the frozen backbone.
-* ``checkpoint.hf_export.enabled=False`` + a save_iter past ``max_iter`` — these
-  are convergence smoke runs; exporting a 32B HF snapshot per save would
-  dominate the wall clock and fill the disk.
+* ``checkpoint.hf_export.enabled=False`` — a cost decision, not a correctness
+  one: ``HFExportCallback`` merges the adapter into the base weights, so a LoRA
+  export is a plain HF checkpoint just like a full fine-tune's. But these are
+  convergence smoke runs, and gathering a 32B backbone onto rank 0 to write a
+  full snapshot would cost ~64 GB of host RAM and disk for a result nobody
+  reads. Flip it back on per tier when a run's output is meant to be evaluated.
+  Note this is not the same as skipping the checkpoint: a save_iter past
+  ``max_iter`` only skips the mid-run writes, since the trainer force-saves once
+  at train end.
 * short cosine schedule matched to ``max_iter`` — the base recipes' 50-step
   cycle would leave the LR mid-decay at iteration 100.
 
@@ -110,7 +116,8 @@ def _lora_variant(base, *, lora_target_modules: str, exclude_path_regex: str = "
 
     item.optimizer.keys_to_select = ["lora_"]
 
-    # Adapters, not a full HF snapshot — don't export (esp. the 32B tier).
+    # Skip the full HF snapshot on smoke runs (esp. the 32B tier). The export
+    # would be correct — HFExportCallback merges the adapter in — just expensive.
     # This is a callback toggle; it does not touch the optimization.
     item.checkpoint.hf_export.enabled = False
 

@@ -66,6 +66,23 @@ class LoraInjectedLinear(nn.Linear):
         lora_out = self.lora_B(self.lora_A(x))
         return base_out + self._lora_scale * lora_out
 
+    def merged_weight(self, base: torch.Tensor, lora_a: torch.Tensor, lora_b: torch.Tensor) -> torch.Tensor:
+        """Fold the adapter into the base weight: ``W + (alpha / r) * B @ A``.
+
+        The three tensors are passed in rather than read off ``self`` because the
+        only caller (``HFExportCallback``) has already all-gathered them out of
+        their FSDP shards — ``self.weight`` is still a per-rank ``DTensor`` at
+        that point. Only ``_lora_scale`` comes from the module, so the merge
+        stays in lockstep with :meth:`forward` if the scaling convention changes.
+
+        The accumulation runs in float32 even when the export dtype is bfloat16:
+        the delta is typically orders of magnitude smaller than the base weight,
+        so adding it in bfloat16 rounds much of it away. The result is cast back
+        to ``base``'s dtype.
+        """
+        delta = torch.mm(lora_b.to(torch.float32), lora_a.to(torch.float32))
+        return (base.to(torch.float32) + self._lora_scale * delta).to(base.dtype)
+
 
 def _inject_lora_inplace(
     network: nn.Module,
