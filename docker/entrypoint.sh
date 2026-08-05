@@ -5,10 +5,6 @@
 
 # Docker entrypoint script.
 
-set -e
-
-if [[ -w /workspace/.venv ]]; then
-    uv pip install --no-deps -e . || true
-fi
+set -euo pipefail
 
 exec "$@"
