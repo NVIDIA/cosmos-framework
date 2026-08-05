@@ -241,6 +241,7 @@ def ddp_sync_grad(model, enabled):
         else gradients will still be synchronized.
     """
     assert isinstance(model, torch.nn.Module)
+    fsdp_modules: list = []
     if isinstance(model, DistributedDataParallel):
         old_require_backward_grad_sync = model.require_backward_grad_sync
         if model.static_graph and model.require_backward_grad_sync != enabled:
@@ -249,11 +250,28 @@ def ddp_sync_grad(model, enabled):
                 model.show_sync_grad_static_graph_warning = False
         else:
             model.require_backward_grad_sync = enabled
+    else:
+        # FSDP2 (fully_shard) branch. Without this, gradient accumulation
+        # reduces gradients on EVERY micro-step and saves no communication
+        # (measured: accum=4 step = 4x the accum=1 step on Ethernet HSDP).
+        # We defer only the cross-replica all-reduce to the boundary
+        # micro-step. The intra-node reduce-scatter still runs every
+        # micro-step, so gradients stay sharded and VRAM does not grow
+        # (set_requires_gradient_sync(False) would keep gradients
+        # unsharded: +stored-grad-bytes per rank).
+        from torch.distributed.fsdp import FSDPModule
+
+        fsdp_modules = [m for m in model.modules() if isinstance(m, FSDPModule)]
+        for m in fsdp_modules:
+            m.set_requires_all_reduce(enabled, recurse=False)
     try:
         yield
     finally:
         if isinstance(model, DistributedDataParallel):
             model.require_backward_grad_sync = old_require_backward_grad_sync
+        else:
+            for m in fsdp_modules:
+                m.set_requires_all_reduce(True, recurse=False)
 
 
 def collate_batches(data_batches: list[dict[str, torch.Tensor]]) -> torch.Tensor | dict[str, torch.Tensor]:
