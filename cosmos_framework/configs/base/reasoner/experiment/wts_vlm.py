@@ -89,6 +89,7 @@ class WTSProcessor(VLMProcessor):
         video_cache_size: int = 8,
         video_device: str = "cuda",
         video_num_threads: int = 1,
+        video_max_pixels: int | str | None = None,
         system_prompt: str = "",
         use_daft_chat_template: bool = False,
     ) -> None:
@@ -104,6 +105,23 @@ class WTSProcessor(VLMProcessor):
         self.video_cache_size = video_cache_size
         self.video_device = video_device
         self.video_num_threads = video_num_threads
+        self.video_max_pixels: int | None = None
+        if video_max_pixels not in (None, "", 0, "0"):
+            parsed_video_max_pixels = int(video_max_pixels)
+            if parsed_video_max_pixels < 1:
+                raise ValueError("video_max_pixels must be >= 1")
+            hf_processor = getattr(processor, "processor", processor)
+            video_processor = getattr(hf_processor, "video_processor", None)
+            size = getattr(video_processor, "size", None)
+            if not isinstance(size, dict):
+                raise ValueError("video_max_pixels requires a processor.video_processor.size mapping")
+            shortest_edge = size.get("shortest_edge")
+            if shortest_edge is not None and parsed_video_max_pixels < int(shortest_edge):
+                raise ValueError(
+                    f"video_max_pixels ({parsed_video_max_pixels}) must be >= shortest_edge ({shortest_edge})"
+                )
+            size["longest_edge"] = parsed_video_max_pixels
+            self.video_max_pixels = parsed_video_max_pixels
         self.system_prompt = system_prompt
         self.use_daft_chat_template = use_daft_chat_template
         if self.use_daft_chat_template:
@@ -212,6 +230,7 @@ def _wts_dataloader(
             video_cache_size="${oc.env:WTS_VIDEO_CACHE_SIZE,8}",
             video_device="${oc.env:TAO_VIDEO_DECODER_DEVICE,cuda}",
             video_num_threads="${oc.env:TAO_VIDEO_DECODER_THREADS,1}",
+            video_max_pixels="${oc.env:WTS_VIDEO_MAX_PIXELS,''}",
             system_prompt="${oc.env:WTS_SYSTEM_PROMPT,''}",
         ),
         batcher=L(PoolPackingBatcher)(
@@ -256,6 +275,7 @@ def _aetc_daft_dataloader(*, split: str, shuffle: bool) -> LazyDict:
             video_cache_size="${oc.env:AETC_VIDEO_CACHE_SIZE,8}",
             video_device="${oc.env:TAO_VIDEO_DECODER_DEVICE,cuda}",
             video_num_threads="${oc.env:TAO_VIDEO_DECODER_THREADS,1}",
+            video_max_pixels="${oc.env:AETC_VIDEO_MAX_PIXELS,''}",
             system_prompt="",
             use_daft_chat_template=True,
         ),
@@ -389,4 +409,20 @@ ConfigStore.instance().store(
     package="_global_",
     name="wts_vlm_edge",
     node=wts_vlm_edge,
+)
+
+
+# Edge AETC uses the native Edge policy and the same DAFT dataset contract as
+# the Nano AETC recipe. Runtime processor limits are supplied by TAO rather
+# than encoded by modifying the public model checkpoint.
+aetc_daft_vlm_edge = deepcopy(wts_vlm_edge)
+aetc_daft_vlm_edge["job"]["group"] = "aetc_daft_edge_sft"
+aetc_daft_vlm_edge["dataloader_train"] = _aetc_daft_dataloader(split="train", shuffle=True)
+aetc_daft_vlm_edge["dataloader_val"] = _aetc_daft_dataloader(split="val", shuffle=False)
+
+ConfigStore.instance().store(
+    group="experiment",
+    package="_global_",
+    name="aetc_daft_vlm_edge",
+    node=aetc_daft_vlm_edge,
 )

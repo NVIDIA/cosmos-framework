@@ -9,9 +9,18 @@ import types
 
 import pytest
 
+# These unit tests exercise dataset/config construction, not video decoding.
+# Keep collection deterministic on CPU hosts that do not have FFmpeg/CUDA
+# libraries; decoder availability is covered by the image/compute preflight.
+torchcodec_video = types.ModuleType("cosmos_framework.utils.generator.torchcodec_video")
+torchcodec_video.TorchCodecVideoReader = object
+sys.modules.setdefault("cosmos_framework.utils.generator.torchcodec_video", torchcodec_video)
+
 from cosmos_framework.configs.base.reasoner.experiment.wts_vlm import (
+    WTSProcessor,
     WTSLlavaDataset,
     aetc_daft_vlm,
+    aetc_daft_vlm_edge,
     wts_vlm_edge,
 )
 from cosmos_framework.data.generator.local_datasets.tao_vl_reason import (
@@ -90,6 +99,37 @@ def test_wts_edge_uses_native_edge_policy() -> None:
     assert wts_vlm_edge["defaults"][4] == {"override /vlm_policy": "cosmos3_edge_reasoner"}
     assert "lr_multipliers" not in wts_vlm_edge["optimizer"]
     assert wts_vlm_edge["model"]["config"]["policy"]["model_max_length"] == 16000
+
+
+def test_video_max_pixels_is_a_runtime_processor_setting() -> None:
+    tokenizer = types.SimpleNamespace(pad_token_id=0)
+    video_processor = types.SimpleNamespace(size={"shortest_edge": 4096, "longest_edge": 25165824})
+    hf_processor = types.SimpleNamespace(tokenizer=tokenizer, video_processor=video_processor)
+    wrapped_processor = types.SimpleNamespace(tokenizer=tokenizer, processor=hf_processor)
+
+    processor = WTSProcessor(wrapped_processor, video_max_pixels="16384")
+
+    assert processor.video_max_pixels == 16384
+    assert video_processor.size == {"shortest_edge": 4096, "longest_edge": 16384}
+
+
+def test_video_max_pixels_rejects_incompatible_processor_budget() -> None:
+    tokenizer = types.SimpleNamespace(pad_token_id=0)
+    video_processor = types.SimpleNamespace(size={"shortest_edge": 4096, "longest_edge": 25165824})
+    hf_processor = types.SimpleNamespace(tokenizer=tokenizer, video_processor=video_processor)
+    wrapped_processor = types.SimpleNamespace(tokenizer=tokenizer, processor=hf_processor)
+
+    with pytest.raises(ValueError, match="shortest_edge"):
+        WTSProcessor(wrapped_processor, video_max_pixels=1024)
+
+
+def test_edge_aetc_recipe_uses_edge_policy_and_runtime_video_profile() -> None:
+    assert aetc_daft_vlm_edge["defaults"][4] == {"override /vlm_policy": "cosmos3_edge_reasoner"}
+    assert "video_max_pixels" in aetc_daft_vlm_edge["dataloader_train"]["processor"]
+    assert "video_max_pixels" in wts_vlm_edge["dataloader_train"]["processor"]
+    source = __import__("inspect").getsource(sys.modules[WTSProcessor.__module__])
+    assert "AETC_VIDEO_MAX_PIXELS" in source
+    assert "WTS_VIDEO_MAX_PIXELS" in source
 
 
 def test_daft_dataset_matches_internal_hybrid_index_order(monkeypatch) -> None:
