@@ -52,6 +52,12 @@ RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --locked --no-install-project --no-editable --all-extras --group=$(cat /root/.cuda-name) --group=vllm
 ENV PATH="/workspace/.venv/bin:$PATH"
 
+# install apex (compiled C++/CUDA extensions; needs torch already present), so this line should be after the uv sync command.
+RUN --mount=type=cache,target=/root/.cache/uv \
+    VIRTUAL_ENV=/workspace/.venv APEX_CPP_EXT=1 APEX_CUDA_EXT=1 \
+    uv pip install -v --no-build-isolation --no-deps \
+        git+https://github.com/NVIDIA/apex@bf903a2
+
 # Triton bundled ptxas doesn't support latest GPU architectures
 ENV TRITON_PTXAS_PATH="/usr/local/cuda/bin/ptxas"
 
