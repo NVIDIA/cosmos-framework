@@ -48,7 +48,8 @@ class MapDistributor(DataDistributor):
         name: str = "",
     ):
         self._dataset = dataset
-        self._seed = seed
+        # Configs may resolve seed through ${oc.env:...}, which yields a str.
+        self._seed = int(seed)
         self._shuffle = shuffle
         self._name = name
 

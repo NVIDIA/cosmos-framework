@@ -56,3 +56,13 @@ def test_resume_continues_without_dup_or_skip():
     it2 = iter(loader2)  # one iterator: env-var fast-forward happens once, then continues
     resumed = [next(it2)["id"].item() for _ in range(3)]
     assert resumed == [5, 6, 7]
+
+
+def test_map_distributor_accepts_string_seed():
+    # TAO recipes resolve seed via ${oc.env:TAO_DATALOADER_SEED,42}, which
+    # OmegaConf returns as a string; the distributor must coerce it.
+    from itertools import islice
+
+    dist = MapDistributor(_IdDS(4), shuffle=True, seed="42")
+    items = list(islice(dist.stream(dp_rank=0, dp_world_size=1, worker_id=0, num_workers=1), 6))
+    assert len(items) == 6
