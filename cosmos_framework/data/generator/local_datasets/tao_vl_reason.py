@@ -62,7 +62,7 @@ class TaoVlReasonDaftDataset(Dataset):
                 TaoVlReasonV1_0CosmosRLConversationDataset,
             )
         except ImportError as exc:
-            raise ImportError("nvidia-tao-daft>=2.9.1 is required for the AETC DAFT recipe") from exc
+            raise ImportError("nvidia-tao-daft>=2.9.1 is required for task-aware video annotations") from exc
 
         paths = parse_path_list(annotation_paths)
         if isinstance(media_root, str) and media_root.strip().startswith("["):
@@ -118,7 +118,7 @@ def apply_daft_chat_template(processor: Any) -> None:
             apply_chat_template_override,
         )
     except ImportError as exc:
-        raise ImportError("nvidia-tao-daft>=2.9.1 is required for the AETC DAFT recipe") from exc
+        raise ImportError("nvidia-tao-daft>=2.9.1 is required for task-aware video annotations") from exc
 
     huggingface_processor = getattr(processor, "processor", processor)
     apply_chat_template_override(huggingface_processor)

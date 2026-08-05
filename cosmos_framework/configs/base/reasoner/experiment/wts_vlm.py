@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: OpenMDW-1.1
 
-"""Woven Traffic Safety (WTS) video-QA SFT on the Cosmos3-Nano VLM path."""
+"""Generic conversation and task-aware video SFT recipes for Cosmos3."""
 
 from __future__ import annotations
 
@@ -31,8 +31,8 @@ from cosmos_framework.utils.lazy_config import LazyDict
 from cosmos_framework.utils.reasoner.constant import IGNORE_INDEX
 
 
-class WTSLlavaDataset(Dataset):
-    """Map-style loader for WTS LLaVA JSON annotations."""
+class VideoConversationDataset(Dataset):
+    """Map-style loader for ShareGPT/LLaVA-style video conversations."""
 
     def __init__(
         self,
@@ -52,34 +52,41 @@ class WTSLlavaDataset(Dataset):
         with open(self.annotation_path, encoding="utf-8") as annotation_file:
             records = json.load(annotation_file)
         if not isinstance(records, list):
-            raise TypeError(f"WTS annotations must be a JSON array, got {type(records).__name__}")
+            raise TypeError(f"video-conversation annotations must be a JSON array, got {type(records).__name__}")
         self.records = records[:parsed_limit] if parsed_limit is not None else records
         if not self.records:
-            raise ValueError(f"WTS annotation file contains no usable records: {self.annotation_path}")
+            raise ValueError(f"video-conversation annotation file contains no usable records: {self.annotation_path}")
 
         for index, record in enumerate(self.records):
-            if not isinstance(record, dict) or not isinstance(record.get("video"), str):
-                raise ValueError(f"WTS record {index} must contain a string 'video' field")
-            conversations = record.get("conversations")
+            media_value = next(
+                (record.get(field) for field in ("video", "video_id", "media", "media_path") if isinstance(record.get(field), str)),
+                None,
+            ) if isinstance(record, dict) else None
+            if media_value is None:
+                raise ValueError(f"video-conversation record {index} must contain a string media field")
+            conversations = record.get("conversations") or record.get("messages")
             if not isinstance(conversations, list) or len(conversations) < 2:
-                raise ValueError(f"WTS record {index} must contain at least two conversation turns")
+                raise ValueError(f"video-conversation record {index} must contain at least two conversation turns")
 
     def __len__(self) -> int:
         return len(self.records)
 
     def __getitem__(self, index: int) -> dict[str, Any]:
         record = dict(self.records[index])
-        video_path = record["video"]
+        video_path = next(
+            record[field] for field in ("video", "video_id", "media", "media_path")
+            if isinstance(record.get(field), str)
+        )
         if not os.path.isabs(video_path):
             video_path = os.path.join(self.media_path, video_path)
         if not os.path.isfile(video_path):
-            raise FileNotFoundError(f"WTS video does not exist: {video_path}")
+            raise FileNotFoundError(f"video-conversation media does not exist: {video_path}")
         record["video"] = video_path
         return record
 
 
-class WTSProcessor(VLMProcessor):
-    """Convert WTS ShareGPT records and uniformly sample each video to PIL frames."""
+class VideoSFTProcessor(VLMProcessor):
+    """Convert video-supervision records and uniformly sample media to PIL frames."""
 
     def __init__(
         self,
@@ -141,7 +148,7 @@ class WTSProcessor(VLMProcessor):
         )
         total_frames = len(reader)
         if total_frames < 1:
-            raise ValueError(f"WTS video has zero frames: {video_path}")
+            raise ValueError(f"video-supervision media has zero frames: {video_path}")
         sample_count = min(self.num_video_frames, total_frames)
         if sample_count == 1:
             indices = [0]
@@ -164,6 +171,7 @@ class WTSProcessor(VLMProcessor):
     def _sharegpt_to_openai(self, item: dict) -> list[dict]:
         if "messages" in item:
             messages = deepcopy(item["messages"])
+            video_inserted = False
             for message in messages:
                 content = message.get("content")
                 if not isinstance(content, list):
@@ -173,10 +181,22 @@ class WTSProcessor(VLMProcessor):
                         continue
                     video_path = part.get("video")
                     if not isinstance(video_path, str):
-                        raise TypeError("DAFT video content must contain a string path")
+                        raise TypeError("task-aware video content must contain a string path")
                     frames, fps = self._decode_video(video_path)
                     part["video"] = frames
                     part["fps"] = fps
+                    video_inserted = True
+            if not video_inserted and isinstance(item.get("video"), str):
+                frames, fps = self._decode_video(item["video"])
+                for message in messages:
+                    if message.get("role") != "user":
+                        continue
+                    content = message.get("content", "")
+                    message["content"] = [
+                        {"type": "video", "video": frames, "fps": fps},
+                        {"type": "text", "text": content if isinstance(content, str) else ""},
+                    ]
+                    break
             return messages
 
         conversations = item.get("conversations", [])
@@ -202,16 +222,20 @@ class WTSProcessor(VLMProcessor):
         return messages
 
 
-def _wts_dataloader(
+def _video_conversation_dataloader(
     *,
     annotation_env: str,
     media_env: str,
     limit_env: str,
     shuffle: bool,
+    frame_env: str = "WTS_NUM_VIDEO_FRAMES",
+    cache_env: str = "WTS_VIDEO_CACHE_SIZE",
+    max_pixels_env: str = "WTS_VIDEO_MAX_PIXELS",
+    system_prompt_env: str = "WTS_SYSTEM_PROMPT",
 ) -> LazyDict:
     return L(CosmosDataLoader)(
         distributor=L(MapDistributor)(
-            dataset=L(WTSLlavaDataset)(
+            dataset=L(VideoConversationDataset)(
                 annotation_path=f"${{oc.env:{annotation_env}}}",
                 media_path=f"${{oc.env:{media_env}}}",
                 limit=f"${{oc.env:{limit_env},''}}",
@@ -220,18 +244,18 @@ def _wts_dataloader(
             seed="${oc.env:TAO_DATALOADER_SEED,42}",
             name="train" if shuffle else "val",
         ),
-        processor=L(WTSProcessor)(
+        processor=L(VideoSFTProcessor)(
             processor=L(build_processor)(
                 tokenizer_type="${model.config.policy.backbone.model_name}",
                 config_variant="hf",
             ),
             ignore_index=IGNORE_INDEX,
-            num_video_frames="${oc.env:WTS_NUM_VIDEO_FRAMES,8}",
-            video_cache_size="${oc.env:WTS_VIDEO_CACHE_SIZE,8}",
+            num_video_frames=f"${{oc.env:{frame_env},8}}",
+            video_cache_size=f"${{oc.env:{cache_env},8}}",
             video_device="${oc.env:TAO_VIDEO_DECODER_DEVICE,cuda}",
             video_num_threads="${oc.env:TAO_VIDEO_DECODER_THREADS,1}",
-            video_max_pixels="${oc.env:WTS_VIDEO_MAX_PIXELS,''}",
-            system_prompt="${oc.env:WTS_SYSTEM_PROMPT,''}",
+            video_max_pixels=f"${{oc.env:{max_pixels_env},''}}",
+            system_prompt=f"${{oc.env:{system_prompt_env},''}}",
         ),
         batcher=L(PoolPackingBatcher)(
             max_tokens="${data_setting.max_tokens}",
@@ -247,17 +271,28 @@ def _wts_dataloader(
     )
 
 
-def _aetc_daft_dataloader(*, split: str, shuffle: bool) -> LazyDict:
-    annotation_env = f"AETC_{split.upper()}_ANNOTATIONS"
-    media_env = f"AETC_{split.upper()}_MEDIA"
-    limit_env = f"AETC_{split.upper()}_LIMIT"
+def _task_aware_video_dataloader(
+    *,
+    split: str,
+    shuffle: bool,
+    annotation_env: str | None = None,
+    media_env: str | None = None,
+    limit_env: str | None = None,
+    frame_env: str = "AETC_NUM_VIDEO_FRAMES",
+    cache_env: str = "AETC_VIDEO_CACHE_SIZE",
+    max_pixels_env: str = "AETC_VIDEO_MAX_PIXELS",
+    system_prompt_env: str = "AETC_SYSTEM_PROMPT",
+) -> LazyDict:
+    annotation_env = annotation_env or f"AETC_{split.upper()}_ANNOTATIONS"
+    media_env = media_env or f"AETC_{split.upper()}_MEDIA"
+    limit_env = limit_env or f"AETC_{split.upper()}_LIMIT"
     return L(CosmosDataLoader)(
         distributor=L(MapDistributor)(
             dataset=L(TaoVlReasonDaftDataset)(
                 annotation_paths=f"${{oc.env:{annotation_env}}}",
                 media_root=f"${{oc.env:{media_env}}}",
                 response_mode="hybrid" if split == "train" else "answer",
-                system_prompt="${oc.env:AETC_SYSTEM_PROMPT,''}",
+                system_prompt=f"${{oc.env:{system_prompt_env},''}}",
                 vision_kwargs={},
                 max_samples=f"${{oc.env:{limit_env},''}}",
             ),
@@ -265,17 +300,17 @@ def _aetc_daft_dataloader(*, split: str, shuffle: bool) -> LazyDict:
             seed="${oc.env:TAO_DATALOADER_SEED,42}",
             name=split,
         ),
-        processor=L(WTSProcessor)(
+        processor=L(VideoSFTProcessor)(
             processor=L(build_processor)(
                 tokenizer_type="${model.config.policy.backbone.model_name}",
                 config_variant="hf",
             ),
             ignore_index=IGNORE_INDEX,
-            num_video_frames="${oc.env:AETC_NUM_VIDEO_FRAMES,8}",
-            video_cache_size="${oc.env:AETC_VIDEO_CACHE_SIZE,8}",
+            num_video_frames=f"${{oc.env:{frame_env},8}}",
+            video_cache_size=f"${{oc.env:{cache_env},8}}",
             video_device="${oc.env:TAO_VIDEO_DECODER_DEVICE,cuda}",
             video_num_threads="${oc.env:TAO_VIDEO_DECODER_THREADS,1}",
-            video_max_pixels="${oc.env:AETC_VIDEO_MAX_PIXELS,''}",
+            video_max_pixels=f"${{oc.env:{max_pixels_env},''}}",
             system_prompt="",
             use_daft_chat_template=True,
         ),
@@ -355,13 +390,13 @@ wts_vlm = LazyDict(
             load_from_object_store=dict(enabled=False, credentials="", bucket=""),
             save_to_object_store=dict(enabled=False, credentials="", bucket=""),
         ),
-        dataloader_train=_wts_dataloader(
+        dataloader_train=_video_conversation_dataloader(
             annotation_env="WTS_TRAIN_ANNOTATION",
             media_env="WTS_TRAIN_MEDIA",
             limit_env="WTS_TRAIN_LIMIT",
             shuffle=True,
         ),
-        dataloader_val=_wts_dataloader(
+        dataloader_val=_video_conversation_dataloader(
             annotation_env="WTS_VAL_ANNOTATION",
             media_env="WTS_VAL_MEDIA",
             limit_env="WTS_VAL_LIMIT",
@@ -384,8 +419,8 @@ ConfigStore.instance().store(
 # consuming the same DAFT dataset and Qwen chat-template contract as Cosmos-RL.
 aetc_daft_vlm = deepcopy(wts_vlm)
 aetc_daft_vlm["job"]["group"] = "aetc_daft_sft"
-aetc_daft_vlm["dataloader_train"] = _aetc_daft_dataloader(split="train", shuffle=True)
-aetc_daft_vlm["dataloader_val"] = _aetc_daft_dataloader(split="val", shuffle=False)
+aetc_daft_vlm["dataloader_train"] = _task_aware_video_dataloader(split="train", shuffle=True)
+aetc_daft_vlm["dataloader_val"] = _task_aware_video_dataloader(split="val", shuffle=False)
 
 ConfigStore.instance().store(
     group="experiment",
@@ -417,8 +452,8 @@ ConfigStore.instance().store(
 # than encoded by modifying the public model checkpoint.
 aetc_daft_vlm_edge = deepcopy(wts_vlm_edge)
 aetc_daft_vlm_edge["job"]["group"] = "aetc_daft_edge_sft"
-aetc_daft_vlm_edge["dataloader_train"] = _aetc_daft_dataloader(split="train", shuffle=True)
-aetc_daft_vlm_edge["dataloader_val"] = _aetc_daft_dataloader(split="val", shuffle=False)
+aetc_daft_vlm_edge["dataloader_train"] = _task_aware_video_dataloader(split="train", shuffle=True)
+aetc_daft_vlm_edge["dataloader_val"] = _task_aware_video_dataloader(split="val", shuffle=False)
 
 ConfigStore.instance().store(
     group="experiment",
@@ -426,3 +461,71 @@ ConfigStore.instance().store(
     name="aetc_daft_vlm_edge",
     node=aetc_daft_vlm_edge,
 )
+
+
+# Dataset-neutral TAO contracts. The older experiment registrations above are
+# retained only so existing result configs remain loadable.
+tao_video_conversation = deepcopy(wts_vlm)
+tao_video_conversation["job"]["group"] = "tao_video_conversation_sft"
+tao_video_conversation["dataloader_train"] = _video_conversation_dataloader(
+    annotation_env="TAO_VIDEO_TRAIN_ANNOTATION",
+    media_env="TAO_VIDEO_TRAIN_MEDIA",
+    limit_env="TAO_VIDEO_TRAIN_LIMIT",
+    shuffle=True,
+    frame_env="TAO_VIDEO_NUM_FRAMES",
+    cache_env="TAO_VIDEO_CACHE_SIZE",
+    max_pixels_env="TAO_VIDEO_MAX_PIXELS",
+    system_prompt_env="TAO_VIDEO_SYSTEM_PROMPT",
+)
+tao_video_conversation["dataloader_val"] = _video_conversation_dataloader(
+    annotation_env="TAO_VIDEO_VAL_ANNOTATION",
+    media_env="TAO_VIDEO_VAL_MEDIA",
+    limit_env="TAO_VIDEO_VAL_LIMIT",
+    shuffle=False,
+    frame_env="TAO_VIDEO_NUM_FRAMES",
+    cache_env="TAO_VIDEO_CACHE_SIZE",
+    max_pixels_env="TAO_VIDEO_MAX_PIXELS",
+    system_prompt_env="TAO_VIDEO_SYSTEM_PROMPT",
+)
+
+tao_task_aware_video_reasoning = deepcopy(tao_video_conversation)
+tao_task_aware_video_reasoning["job"]["group"] = "tao_task_aware_video_reasoning_sft"
+tao_task_aware_video_reasoning["dataloader_train"] = _task_aware_video_dataloader(
+    split="train", shuffle=True,
+    annotation_env="TAO_VIDEO_TRAIN_ANNOTATIONS", media_env="TAO_VIDEO_TRAIN_MEDIA_ROOTS",
+    limit_env="TAO_VIDEO_TRAIN_LIMIT", frame_env="TAO_VIDEO_NUM_FRAMES",
+    cache_env="TAO_VIDEO_CACHE_SIZE", max_pixels_env="TAO_VIDEO_MAX_PIXELS",
+    system_prompt_env="TAO_VIDEO_SYSTEM_PROMPT",
+)
+tao_task_aware_video_reasoning["dataloader_val"] = _task_aware_video_dataloader(
+    split="val", shuffle=False,
+    annotation_env="TAO_VIDEO_VAL_ANNOTATIONS", media_env="TAO_VIDEO_VAL_MEDIA_ROOTS",
+    limit_env="TAO_VIDEO_VAL_LIMIT", frame_env="TAO_VIDEO_NUM_FRAMES",
+    cache_env="TAO_VIDEO_CACHE_SIZE", max_pixels_env="TAO_VIDEO_MAX_PIXELS",
+    system_prompt_env="TAO_VIDEO_SYSTEM_PROMPT",
+)
+
+tao_video_conversation_edge = deepcopy(tao_video_conversation)
+tao_video_conversation_edge["defaults"][4] = {"override /vlm_policy": "cosmos3_edge_reasoner"}
+tao_video_conversation_edge["job"]["group"] = "tao_video_conversation_edge_sft"
+tao_video_conversation_edge["optimizer"].pop("lr_multipliers", None)
+tao_video_conversation_edge["model"]["config"]["policy"]["model_max_length"] = 16000
+
+tao_task_aware_video_reasoning_edge = deepcopy(tao_task_aware_video_reasoning)
+tao_task_aware_video_reasoning_edge["defaults"][4] = {"override /vlm_policy": "cosmos3_edge_reasoner"}
+tao_task_aware_video_reasoning_edge["job"]["group"] = "tao_task_aware_video_reasoning_edge_sft"
+tao_task_aware_video_reasoning_edge["optimizer"].pop("lr_multipliers", None)
+tao_task_aware_video_reasoning_edge["model"]["config"]["policy"]["model_max_length"] = 16000
+
+for name, node in (
+    ("tao_video_conversation", tao_video_conversation),
+    ("tao_task_aware_video_reasoning", tao_task_aware_video_reasoning),
+    ("tao_video_conversation_edge", tao_video_conversation_edge),
+    ("tao_task_aware_video_reasoning_edge", tao_task_aware_video_reasoning_edge),
+):
+    ConfigStore.instance().store(group="experiment", package="_global_", name=name, node=node)
+
+
+# Import compatibility for callers that used the development-dataset symbols.
+WTSLlavaDataset = VideoConversationDataset
+WTSProcessor = VideoSFTProcessor
