@@ -87,16 +87,23 @@ class WTSProcessor(VLMProcessor):
         ignore_index: int = IGNORE_INDEX,
         num_video_frames: int = 8,
         video_cache_size: int = 8,
+        video_device: str = "cuda",
+        video_num_threads: int = 1,
         system_prompt: str = "",
         use_daft_chat_template: bool = False,
     ) -> None:
         super().__init__(processor=processor, ignore_index=ignore_index)
+        num_video_frames = int(num_video_frames)
+        video_cache_size = int(video_cache_size)
+        video_num_threads = int(video_num_threads)
         if num_video_frames < 1:
             raise ValueError("num_video_frames must be >= 1")
         if video_cache_size < 0:
             raise ValueError("video_cache_size must be >= 0")
         self.num_video_frames = num_video_frames
         self.video_cache_size = video_cache_size
+        self.video_device = video_device
+        self.video_num_threads = video_num_threads
         self.system_prompt = system_prompt
         self.use_daft_chat_template = use_daft_chat_template
         if self.use_daft_chat_template:
@@ -109,7 +116,11 @@ class WTSProcessor(VLMProcessor):
             self._video_cache.move_to_end(video_path)
             return cached
 
-        reader = TorchCodecVideoReader(video_path, num_threads=2)
+        reader = TorchCodecVideoReader(
+            video_path,
+            num_threads=self.video_num_threads,
+            device=self.video_device,
+        )
         total_frames = len(reader)
         if total_frames < 1:
             raise ValueError(f"WTS video has zero frames: {video_path}")
@@ -188,7 +199,7 @@ def _wts_dataloader(
                 limit=f"${{oc.env:{limit_env},''}}",
             ),
             shuffle=shuffle,
-            seed=42,
+            seed="${oc.env:TAO_DATALOADER_SEED,42}",
             name="train" if shuffle else "val",
         ),
         processor=L(WTSProcessor)(
@@ -197,9 +208,11 @@ def _wts_dataloader(
                 config_variant="hf",
             ),
             ignore_index=IGNORE_INDEX,
-            num_video_frames=8,
-            video_cache_size=8,
-            system_prompt=("You are a helpful assistant that can answer questions about a street-view CCTV footage."),
+            num_video_frames="${oc.env:WTS_NUM_VIDEO_FRAMES,8}",
+            video_cache_size="${oc.env:WTS_VIDEO_CACHE_SIZE,8}",
+            video_device="${oc.env:TAO_VIDEO_DECODER_DEVICE,cuda}",
+            video_num_threads="${oc.env:TAO_VIDEO_DECODER_THREADS,1}",
+            system_prompt="${oc.env:WTS_SYSTEM_PROMPT,''}",
         ),
         batcher=L(PoolPackingBatcher)(
             max_tokens="${data_setting.max_tokens}",
@@ -230,7 +243,7 @@ def _aetc_daft_dataloader(*, split: str, shuffle: bool) -> LazyDict:
                 max_samples=f"${{oc.env:{limit_env},''}}",
             ),
             shuffle=shuffle,
-            seed=42,
+            seed="${oc.env:TAO_DATALOADER_SEED,42}",
             name=split,
         ),
         processor=L(WTSProcessor)(
@@ -239,8 +252,10 @@ def _aetc_daft_dataloader(*, split: str, shuffle: bool) -> LazyDict:
                 config_variant="hf",
             ),
             ignore_index=IGNORE_INDEX,
-            num_video_frames=8,
-            video_cache_size=8,
+            num_video_frames="${oc.env:AETC_NUM_VIDEO_FRAMES,8}",
+            video_cache_size="${oc.env:AETC_VIDEO_CACHE_SIZE,8}",
+            video_device="${oc.env:TAO_VIDEO_DECODER_DEVICE,cuda}",
+            video_num_threads="${oc.env:TAO_VIDEO_DECODER_THREADS,1}",
             system_prompt="",
             use_daft_chat_template=True,
         ),

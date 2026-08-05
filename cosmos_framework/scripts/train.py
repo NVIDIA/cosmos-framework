@@ -229,7 +229,7 @@ def launch(config: Config, args: argparse.Namespace) -> None:
         raise
 
 
-if __name__ == "__main__":
+def main() -> int:
     parser = argparse.ArgumentParser(description="SFT training (structured TOML)")
     parser.add_argument(
         "--sft-toml",
@@ -283,49 +283,41 @@ if __name__ == "__main__":
     if args.deterministic:
         _setup_deterministic_env_and_backends()
 
-    config = load_experiment_from_toml(args.sft_toml, extra_overrides=args.opts)
+    try:
+        config = load_experiment_from_toml(args.sft_toml, extra_overrides=args.opts)
 
-    # log_reproducible_setup reads args.config for telemetry; this entrypoint
-    # only takes --sft-toml, so alias it so the launch info records the TOML.
-    args.config = args.sft_toml
+        # log_reproducible_setup reads args.config for telemetry; this entrypoint
+        # only takes --sft-toml, so alias it so the launch info records the TOML.
+        args.config = args.sft_toml
 
-    if args.dryrun:
-        logging.info("Config:\n" + config.pretty_print(use_color=True))
-        os.makedirs(config.job.path_local, exist_ok=True)
-        try:
-            to_yaml(config, f"{config.job.path_local}/config.yaml")
-        except Exception:
-            logging.error("to_yaml failed, falling back to LazyConfig.save_yaml:")
-            logging.error(f"Traceback: {traceback.format_exc()}")
-            LazyConfig.save_yaml(config, f"{config.job.path_local}/config.yaml")
-        print(f"{config.job.path_local}/config.yaml")
-    else:
-        launch(config, args)
-        # Training finished. Exit without running interpreter finalization.
-        #
-        # A native thread outlives training: at ``atexit`` time
-        # ``threading.enumerate()`` reports only MainThread (plus wandb's daemon
-        # thread), yet finalization then faults with
-        #   Fatal Python error: PyGILState_Release: thread state ... must be
-        #   current when releasing
-        # on some hosts, and blocks forever on others -- in both cases *after*
-        # "Done with training." has been logged and every result produced. The
-        # streaming HuggingFace dataloader is what brings the thread in (a
-        # map-style dataset shuts down cleanly), but nothing reachable from
-        # Python owns it, so there is no handle to close. Not finalizing is what
-        # makes shutdown deterministic.
-        #
-        # ``os._exit`` skips atexit hooks and buffered-file flushing, so flush
-        # explicitly first. Only reached on success: an exception from
-        # ``launch`` propagates normally and keeps the usual traceback and
-        # non-zero exit.
-        #
-        # Opt-in, because skipping atexit is not free: anything registered there
-        # stops running, most visibly wandb's final flush/upload. Off by default
-        # so ordinary training keeps its normal shutdown; the launch regression
-        # sets it because that job is otherwise killed by the CI timeout.
-        if os.environ.get("COSMOS_EXIT_WITHOUT_FINALIZE", "").lower() in ("1", "true"):
-            logging.info("COSMOS_EXIT_WITHOUT_FINALIZE set: exiting without interpreter finalization.")
-            sys.stdout.flush()
-            sys.stderr.flush()
-            os._exit(0)
+        if args.dryrun:
+            logging.info("Config:\n" + config.pretty_print(use_color=True))
+            os.makedirs(config.job.path_local, exist_ok=True)
+            try:
+                to_yaml(config, f"{config.job.path_local}/config.yaml")
+            except Exception:
+                logging.error("to_yaml failed, falling back to LazyConfig.save_yaml:")
+                logging.error(f"Traceback: {traceback.format_exc()}")
+                LazyConfig.save_yaml(config, f"{config.job.path_local}/config.yaml")
+            print(f"{config.job.path_local}/config.yaml")
+        else:
+            launch(config, args)
+            # Some streaming dataloaders leave an unreachable native thread
+            # alive after successful training. This opt-in path preserves the
+            # established workaround while keeping normal atexit behavior by
+            # default. Failures still propagate through the exception handler.
+            if os.environ.get("COSMOS_EXIT_WITHOUT_FINALIZE", "").lower() in ("1", "true"):
+                logging.info("COSMOS_EXIT_WITHOUT_FINALIZE set: exiting without interpreter finalization.")
+                sys.stdout.flush()
+                sys.stderr.flush()
+                os._exit(0)
+    except BaseException as error:
+        from cosmos_framework.callbacks.tao_status import write_early_failure
+
+        write_early_failure(error)
+        raise
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

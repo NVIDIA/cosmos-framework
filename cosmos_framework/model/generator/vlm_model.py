@@ -301,8 +301,17 @@ class VLMModel(ImaginaireModel):
                 self.model.model.sound_und_model.projector.eval()
             n_trainable = sum(parameter.requires_grad for parameter in self.model.model.parameters())
             assert n_trainable > 0, "audio freeze policy left 0 trainable parameters — check freeze patterns"
+        trainable_parameters = sum(parameter.numel() for parameter in self.model.parameters() if parameter.requires_grad)
+        total_parameters = sum(parameter.numel() for parameter in self.model.parameters())
+        self.parameter_summary = {
+            "training_mode": "peft" if self.config.policy.lora_enabled else "dense_sft",
+            "trainable_parameters": trainable_parameters,
+            "total_parameters": total_parameters,
+            "frozen_parameters": total_parameters - trainable_parameters,
+            "trainable_parameter_tensors": n_trainable,
+        }
         log.info(
-            f"freeze config applied (model_type={self.hf_config.model_type}): {n_trainable} trainable parameter tensors"
+            f"freeze config applied (model_type={self.hf_config.model_type}): {self.parameter_summary}"
         )
 
         dp_group = None
@@ -381,6 +390,32 @@ class VLMModel(ImaginaireModel):
             # a cache directory and no longer identifies the Edge Reasoner.
             configured_model_name_or_path=policy.backbone.model_name,
         )
+
+        from cosmos_framework.model.generator.qwen3_vl_compat import apply_qwen3_vl_patch_embed_compat
+
+        patch_embed_changed = apply_qwen3_vl_patch_embed_compat(
+            hf_model.model,
+            model_type=hf_model.hf_config.model_type,
+            mode=policy.qwen3_vl_patch_embed,
+        )
+        if patch_embed_changed:
+            log.info("Using repository-owned linear Qwen3-VL PatchEmbed compatibility path")
+
+        if policy.lora_enabled:
+            from cosmos_framework.utils.generator.lora import inject_lora_pre_fsdp
+
+            inject_lora_pre_fsdp(
+                hf_model.model,
+                lora_rank=policy.lora_rank,
+                lora_alpha=policy.lora_alpha,
+                lora_dropout=policy.lora_dropout,
+                lora_target_modules=policy.lora_target_modules,
+                lora_bias=policy.lora_bias,
+                lora_use_rslora=policy.lora_use_rslora,
+                lora_modules_to_save=policy.lora_modules_to_save,
+                lora_precision=policy.lora_precision,
+            )
+
         # ── b.1. Early family-gate for backbone.pretrained_weights ──
         # Fail-fast on unsupported VLM families BEFORE any expensive work
         # (parallelize, materialize, base-weight load, overlay download).
@@ -479,10 +514,12 @@ class VLMModel(ImaginaireModel):
             else:
                 safetensors_local_path = local_path
 
+            base_skip_patterns = [r".*\.lora_[AB]\.weight"] if policy.lora_enabled else None
             hf_model.load_weights(
                 checkpoint_path=safetensors_local_path,
                 credential_path=None,  # local path after download
                 parallel_dims=parallel_dims if torch.distributed.is_initialized() else None,
+                extra_skip_patterns=base_skip_patterns,
             )
 
             # ── g.2. Optional LLM overlay (backbone.pretrained_weights) ──
@@ -508,7 +545,7 @@ class VLMModel(ImaginaireModel):
                     checkpoint_path=llm_local_path,
                     credential_path=None,
                     parallel_dims=parallel_dims if torch.distributed.is_initialized() else None,
-                    extra_skip_patterns=overlay_skip_patterns,
+                    extra_skip_patterns=overlay_skip_patterns + (base_skip_patterns or []),
                 )
                 lm_loaded = {k for k in keys_loaded if is_lm_key(k)}
                 if not lm_loaded:
@@ -537,6 +574,11 @@ class VLMModel(ImaginaireModel):
                 f"{audio_config.encoder_checkpoint_path}"
             )
 
+        if policy.lora_enabled:
+            from cosmos_framework.utils.generator.lora import init_lora_weights_post_materialization
+
+            init_lora_weights_post_materialization(hf_model.model)
+
         # ── i. Gradient checkpointing ──
         # HF backbone supports only binary on/off via gradient_checkpointing_enable,
         # so VLMActivationCheckpointingConfig.mode is restricted to {"full", "none"}.
@@ -547,6 +589,14 @@ class VLMModel(ImaginaireModel):
         self.parallel_dims = parallel_dims
         self.model_name_or_path = local_path
         self.hf_config = hf_model.hf_config
+
+        trainable = sum(p.numel() for p in hf_model.parameters() if p.requires_grad)
+        total = sum(p.numel() for p in hf_model.parameters())
+        log.info(
+            "parameter summary: "
+            f"mode={'peft' if policy.lora_enabled else 'dense_sft'}, "
+            f"trainable={trainable}, total={total}, frozen={total - trainable}"
+        )
 
     def on_train_start(self, memory_format) -> None:
         """Called by trainer after model.to("cuda"). No device move needed here."""
@@ -638,7 +688,7 @@ class VLMModel(ImaginaireModel):
         labels = data.pop("labels")
         data.pop("attention_mask", None)
         logits = self.model(**data)
-        loss = self._loss_fn(logits, labels)
+        loss, loss_numerator, loss_denominator = self._loss_fn(logits, labels, return_stats=True)
 
         # loss_avg: DP-averaged loss for logging (matches cosmos-rl ReduceOp.AVG).
         # Does not affect the backward scalar. Pick the same 1-D sub-mesh the
@@ -656,7 +706,13 @@ class VLMModel(ImaginaireModel):
         if not torch.distributed.is_initialized() or torch.distributed.get_rank() == 0:
             log.info(f"train/loss_avg: {loss_avg.item():.5f} (iteration {iteration})")
 
-        return {"loss": loss, "loss_avg": loss_avg, "labels": labels}, loss
+        return {
+            "loss": loss,
+            "loss_avg": loss_avg,
+            "loss_numerator": loss_numerator,
+            "loss_denominator": loss_denominator,
+            "labels": labels,
+        }, loss
 
     @torch.no_grad()
     def validation_step(self, data: dict, iteration: int) -> tuple[dict, torch.Tensor]:
@@ -675,5 +731,10 @@ class VLMModel(ImaginaireModel):
         labels = data.pop("labels")
         data.pop("attention_mask", None)
         logits = self.model(**data)
-        loss = self._loss_fn(logits, labels)
-        return {"loss": loss, "labels": labels}, loss
+        loss, loss_numerator, loss_denominator = self._loss_fn(logits, labels, return_stats=True)
+        return {
+            "loss": loss,
+            "loss_numerator": loss_numerator,
+            "loss_denominator": loss_denominator,
+            "labels": labels,
+        }, loss

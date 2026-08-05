@@ -7,6 +7,23 @@ ARG CUDA_VERSION=13.0.2
 ARG BASE_IMAGE=nvidia/cuda:${CUDA_VERSION}-cudnn-devel-ubuntu24.04
 FROM ${BASE_IMAGE}
 
+ARG SOURCE_COMMIT
+ARG SOURCE_TREE
+ARG SOURCE_DIRTY=1
+ARG BUILD_TIMESTAMP
+ARG BASE_IMAGE
+ARG CUDA_VERSION
+LABEL org.opencontainers.image.revision="${SOURCE_COMMIT}" \
+      org.opencontainers.image.created="${BUILD_TIMESTAMP}" \
+      com.nvidia.tao.source-tree="${SOURCE_TREE}" \
+      com.nvidia.tao.backend="cosmos-framework"
+ENV SOURCE_COMMIT="${SOURCE_COMMIT}" \
+    SOURCE_TREE="${SOURCE_TREE}" \
+    SOURCE_DIRTY="${SOURCE_DIRTY}" \
+    BUILD_TIMESTAMP="${BUILD_TIMESTAMP}" \
+    PROVENANCE_BASE_IMAGE="${BASE_IMAGE}" \
+    CUDA_VERSION="${CUDA_VERSION}"
+
 # Set the DEBIAN_FRONTEND environment variable to avoid interactive prompts during apt operations.
 ENV DEBIAN_FRONTEND=noninteractive
 
@@ -28,7 +45,8 @@ COPY --from=ghcr.io/astral-sh/uv:0.11.28 /uv /uvx /usr/local/bin/
 # Copy from the cache instead of linking since it's a mounted volume
 ENV UV_LINK_MODE=copy
 # Cache python downloads
-ENV UV_PYTHON_CACHE_DIR=/root/.cache/uv/python
+ENV UV_PYTHON_CACHE_DIR=/opt/uv-python-cache \
+    UV_PYTHON_INSTALL_DIR=/opt/uv-python
 
 # Install just: https://just.systems/man/en/pre-built-binaries.html
 RUN curl --proto '=https' --tlsv1.2 -sSf https://just.systems/install.sh | bash -s -- --to /usr/local/bin --tag 1.46.0
@@ -41,7 +59,7 @@ WORKDIR /workspace
 RUN --mount=type=cache,target=/root/.cache/uv \
     --mount=type=bind,source=.python-version,target=.python-version \
     uv python install && \
-    chmod 0711 /root
+    chmod -R a+rX /opt/uv-python /opt/uv-python-cache
 
 # Install into virtual environment
 RUN echo "$CUDA_VERSION" | sed -E 's/^([0-9]+)\.([0-9]+).*/cu\1\2/' > /root/.cuda-name
@@ -58,6 +76,9 @@ ENV PATH="/workspace/.venv/bin:$PATH"
 COPY . /workspace
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv pip install --no-deps .
+
+RUN /workspace/.venv/bin/python /workspace/docker/write_image_provenance.py && \
+    chmod -R a+rX /opt/tao /workspace/.venv /workspace/cosmos_framework
 
 # Triton bundled ptxas doesn't support latest GPU architectures
 ENV TRITON_PTXAS_PATH="/usr/local/cuda/bin/ptxas"

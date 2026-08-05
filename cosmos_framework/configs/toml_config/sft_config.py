@@ -11,7 +11,7 @@ override list, ``PATH_REMAPS``, etc.) lives in ``toml_config_helper.py``.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Literal, Optional
 
 import tomllib
 from pydantic import BaseModel, ConfigDict, Field
@@ -374,6 +374,15 @@ class ModelConfig(BaseModel):
             "adapter. Defaults target the four MoE-gen projection matrices."
         ),
     )
+    lora_dropout: float = Field(default=0.0, ge=0.0, lt=1.0)
+    lora_bias: Literal["none", "all", "lora_only"] = "none"
+    lora_use_rslora: bool = False
+    lora_modules_to_save: str = Field(
+        default="",
+        description="Comma-separated module-name suffixes trained and saved with LoRA adapters.",
+    )
+    lora_precision: Literal["float32", "float16", "bfloat16"] | None = None
+    qwen3_vl_patch_embed: Literal["auto", "linear", "conv3d"] = "auto"
 
     ema: EMAConfig = Field(default_factory=EMAConfig)
     parallelism: ParallelismConfig = Field(default_factory=ParallelismConfig)
