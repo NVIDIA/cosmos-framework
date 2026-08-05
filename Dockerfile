@@ -78,7 +78,10 @@ RUN --mount=type=cache,target=/root/.cache/uv \
     uv pip install --no-deps .
 
 RUN /workspace/.venv/bin/python /workspace/docker/write_image_provenance.py && \
-    chmod -R a+rX /opt/tao /workspace/.venv /workspace/cosmos_framework
+    chmod a+rx /workspace /workspace/docker /workspace/docker/entrypoint.sh && \
+    chmod -R a+rX /opt/tao /workspace/.venv /workspace/cosmos_framework && \
+    test -x /workspace/docker/entrypoint.sh && \
+    test -x /workspace/.venv/bin/python
 
 # Triton bundled ptxas doesn't support latest GPU architectures
 ENV TRITON_PTXAS_PATH="/usr/local/cuda/bin/ptxas"
