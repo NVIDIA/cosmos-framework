@@ -48,7 +48,10 @@ class MapDistributor(DataDistributor):
         name: str = "",
     ):
         self._dataset = dataset
-        self._seed = seed
+        # OmegaConf environment interpolation produces a string even when the
+        # environment value is numeric. Normalize at this typed boundary so
+        # epoch arithmetic and torch.Generator seeding remain deterministic.
+        self._seed = int(seed)
         self._shuffle = shuffle
         self._name = name
 

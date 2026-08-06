@@ -49,9 +49,9 @@ def init() -> int | None:
             os.sched_setaffinity(0, compatible_affinity)
         else:
             log.warning(
-                "Skipping GPU CPU affinity because NVML affinity %s does not intersect the process cpuset %s",
-                sorted(device_affinity),
-                sorted(allowed_affinity),
+                "Skipping GPU CPU affinity because NVML affinity "
+                f"{sorted(device_affinity)} does not intersect the process cpuset "
+                f"{sorted(allowed_affinity)}"
             )
     except (pynvml.NVMLError, OSError) as e:
         log.warning(f"Failed to set device affinity: {e}")

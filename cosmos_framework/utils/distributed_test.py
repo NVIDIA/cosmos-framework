@@ -59,6 +59,32 @@ def test_init_intersects_nvml_affinity_with_slurm_cpuset(monkeypatch: pytest.Mon
     set_affinity.assert_called_once_with(0, {32, 33})
 
 
+def test_init_logs_empty_nvml_slurm_affinity_intersection(monkeypatch: pytest.MonkeyPatch) -> None:
+    warning = Mock()
+    monkeypatch.setenv("COSMOS_DEVICE", "cpu")
+    monkeypatch.setenv("TORCH_NCCL_BLOCKING_WAIT", "0")
+    monkeypatch.setenv("TORCH_NCCL_ASYNC_ERROR_HANDLING", "1")
+    monkeypatch.setattr(distributed, "INTERNAL", False)
+    monkeypatch.setattr(distributed.dist, "is_initialized", lambda: False)
+    monkeypatch.setattr(distributed.dist, "is_available", lambda: False)
+    monkeypatch.setattr(distributed.pynvml, "nvmlInit", lambda: None)
+    monkeypatch.setattr(
+        distributed,
+        "Device",
+        lambda _local_rank: SimpleNamespace(get_cpu_affinity=lambda: [0, 1]),
+    )
+    monkeypatch.setattr(distributed.os, "sched_getaffinity", lambda _pid: {32, 33})
+    monkeypatch.setattr(distributed.os, "sched_setaffinity", Mock())
+    monkeypatch.setattr(distributed.log, "warning", warning)
+
+    distributed.init()
+
+    warning.assert_called_once_with(
+        "Skipping GPU CPU affinity because NVML affinity [0, 1] does not "
+        "intersect the process cpuset [32, 33]"
+    )
+
+
 def _contains_tensor(value: Any) -> bool:
     if isinstance(value, torch.Tensor):
         return True
