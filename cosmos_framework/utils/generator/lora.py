@@ -267,6 +267,27 @@ def inject_lora_pre_fsdp(
             param.requires_grad_(False)
             frozen_params += param.numel()
 
+    # Preserve the logical, pre-FSDP adapter scope. Some composable FSDP
+    # transforms recreate parameters with ``requires_grad=True`` even though
+    # the optimizer's ``keys_to_select=['lora_']`` filter still selects only
+    # adapters. Reporting the post-transform flags therefore mislabels every
+    # base parameter as trainable. This captured summary is the authoritative
+    # PEFT scope for status/provenance and cross-backend parity checks.
+    adapter_modules = sorted(
+        name for name, module in network.named_modules() if isinstance(module, LoraInjectedLinear)
+    )
+    network._tao_peft_parameter_summary = {
+        "training_mode": "peft",
+        "trainable_parameters": lora_params,
+        "total_parameters": lora_params + frozen_params,
+        "frozen_parameters": frozen_params,
+        "trainable_parameter_tensors": sum(
+            1 for parameter in network.parameters() if parameter.requires_grad
+        ),
+        "adapter_module_count": len(adapter_modules),
+        "adapter_modules": adapter_modules,
+    }
+
     log.info(
         f"LoRA injection successful: {replaced} modules wrapped, "
         f"{lora_params:,} trainable LoRA params, "

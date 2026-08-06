@@ -303,8 +303,9 @@ class VLMModel(ImaginaireModel):
             assert n_trainable > 0, "audio freeze policy left 0 trainable parameters — check freeze patterns"
         trainable_parameters = sum(parameter.numel() for parameter in self.model.parameters() if parameter.requires_grad)
         total_parameters = sum(parameter.numel() for parameter in self.model.parameters())
-        self.parameter_summary = {
-            "training_mode": "peft" if self.config.policy.lora_enabled else "dense_sft",
+        peft_summary = getattr(self.model.model, "_tao_peft_parameter_summary", None)
+        self.parameter_summary = peft_summary or {
+            "training_mode": "dense_sft",
             "trainable_parameters": trainable_parameters,
             "total_parameters": total_parameters,
             "frozen_parameters": total_parameters - trainable_parameters,

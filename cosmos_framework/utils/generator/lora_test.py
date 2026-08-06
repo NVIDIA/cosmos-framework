@@ -38,6 +38,15 @@ def test_vlm_lora_preserves_base_keys_and_reports_trainable_scope() -> None:
     assert model.q_proj.bias.requires_grad is True
     assert model.lm_head.weight.requires_grad is True
     assert model.q_proj.lora_A.weight.requires_grad is True
+    assert model._tao_peft_parameter_summary == {
+        "training_mode": "peft",
+        "trainable_parameters": 23,
+        "total_parameters": 35,
+        "frozen_parameters": 12,
+        "trainable_parameter_tensors": 4,
+        "adapter_module_count": 1,
+        "adapter_modules": ["q_proj"],
+    }
 
 
 def test_rslora_merge_matches_unmerged_forward() -> None:
