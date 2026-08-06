@@ -289,7 +289,18 @@ class VLMModel(ImaginaireModel):
 
         # Apply freeze before the optimizer is built — ``build_optimizer`` reads
         # ``requires_grad`` off ``named_parameters``.
-        n_trainable = _apply_freeze_config(self.model.model, self.hf_config.model_type, self.config.freeze)
+        if self.config.policy.lora_enabled:
+            from cosmos_framework.utils.generator.lora import apply_lora_trainable_scope
+
+            peft_summary = apply_lora_trainable_scope(
+                self.model.model,
+                lora_target_modules=self.config.policy.lora_target_modules,
+                lora_bias=self.config.policy.lora_bias,
+                lora_modules_to_save=self.config.policy.lora_modules_to_save,
+            )
+            n_trainable = int(peft_summary["trainable_parameter_tensors"])
+        else:
+            n_trainable = _apply_freeze_config(self.model.model, self.hf_config.model_type, self.config.freeze)
         if config.sound_und:
             # The standalone artifact is the sole source of encoder weights.
             # Keep it immutable even when a broad trainable_params expression

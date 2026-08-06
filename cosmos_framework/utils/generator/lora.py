@@ -161,6 +161,66 @@ def _inject_lora_inplace(
     return replaced
 
 
+def apply_lora_trainable_scope(
+    network: torch.nn.Module,
+    *,
+    lora_target_modules: str,
+    lora_bias: str = "none",
+    lora_modules_to_save: str = "",
+) -> dict[str, object]:
+    """Reapply and report the logical LoRA trainable scope.
+
+    The scope must be restored after model materialization/FSDP transforms,
+    which may recreate parameters with ``requires_grad=True``.
+    """
+    target_modules = [item.strip() for item in lora_target_modules.split(",") if item.strip()]
+    modules_to_save = {item.strip() for item in lora_modules_to_save.split(",") if item.strip()}
+    trainable_parameters = 0
+    frozen_parameters = 0
+    trainable_parameter_tensors = 0
+    for name, parameter in network.named_parameters():
+        module_name = name.rsplit(".", 1)[0]
+        parent_name = module_name.rsplit(".", 1)[0]
+        is_module_to_save = any(
+            module_name == suffix
+            or module_name.endswith(f".{suffix}")
+            or parent_name == suffix
+            or parent_name.endswith(f".{suffix}")
+            for suffix in modules_to_save
+        )
+        is_target_bias = name.endswith(".bias") and any(
+            f".{target}." in f".{name}" for target in target_modules
+        )
+        is_trainable_bias = lora_bias == "all" and name.endswith(".bias")
+        trainable = (
+            "lora_" in name
+            or is_module_to_save
+            or is_trainable_bias
+            or (lora_bias == "lora_only" and is_target_bias)
+        )
+        parameter.requires_grad_(trainable)
+        if trainable:
+            trainable_parameters += parameter.numel()
+            trainable_parameter_tensors += 1
+        else:
+            frozen_parameters += parameter.numel()
+
+    adapter_modules = sorted(
+        name for name, module in network.named_modules() if isinstance(module, LoraInjectedLinear)
+    )
+    summary: dict[str, object] = {
+        "training_mode": "peft",
+        "trainable_parameters": trainable_parameters,
+        "total_parameters": trainable_parameters + frozen_parameters,
+        "frozen_parameters": frozen_parameters,
+        "trainable_parameter_tensors": trainable_parameter_tensors,
+        "adapter_module_count": len(adapter_modules),
+        "adapter_modules": adapter_modules,
+    }
+    network._tao_peft_parameter_summary = summary
+    return summary
+
+
 def inject_lora_pre_fsdp(
     network: torch.nn.Module,
     *,
@@ -244,55 +304,21 @@ def inject_lora_pre_fsdp(
     if replaced == 0:
         raise ValueError(f"LoRA injection replaced 0 modules; check lora_target_modules={lora_target_modules!r}")
 
-    lora_params = 0
-    frozen_params = 0
-    for name, param in network.named_parameters():
-        module_name = name.rsplit(".", 1)[0]
-        parent_name = module_name.rsplit(".", 1)[0]
-        is_module_to_save = any(
-            module_name == suffix
-            or module_name.endswith(f".{suffix}")
-            or parent_name == suffix
-            or parent_name.endswith(f".{suffix}")
-            for suffix in modules_to_save
-        )
-        is_target_bias = name.endswith(".bias") and any(
-            f".{target}." in f".{name}" for target in target_modules_list
-        )
-        is_trainable_bias = lora_bias == "all" and name.endswith(".bias")
-        if "lora_" in name or is_module_to_save or is_trainable_bias or (lora_bias == "lora_only" and is_target_bias):
-            param.requires_grad_(True)
-            lora_params += param.numel()
-        else:
-            param.requires_grad_(False)
-            frozen_params += param.numel()
-
-    # Preserve the logical, pre-FSDP adapter scope. Some composable FSDP
-    # transforms recreate parameters with ``requires_grad=True`` even though
-    # the optimizer's ``keys_to_select=['lora_']`` filter still selects only
-    # adapters. Reporting the post-transform flags therefore mislabels every
-    # base parameter as trainable. This captured summary is the authoritative
-    # PEFT scope for status/provenance and cross-backend parity checks.
-    adapter_modules = sorted(
-        name for name, module in network.named_modules() if isinstance(module, LoraInjectedLinear)
+    summary = apply_lora_trainable_scope(
+        network,
+        lora_target_modules=lora_target_modules,
+        lora_bias=lora_bias,
+        lora_modules_to_save=lora_modules_to_save,
     )
-    network._tao_peft_parameter_summary = {
-        "training_mode": "peft",
-        "trainable_parameters": lora_params,
-        "total_parameters": lora_params + frozen_params,
-        "frozen_parameters": frozen_params,
-        "trainable_parameter_tensors": sum(
-            1 for parameter in network.parameters() if parameter.requires_grad
-        ),
-        "adapter_module_count": len(adapter_modules),
-        "adapter_modules": adapter_modules,
-    }
+    trainable_parameters = int(summary["trainable_parameters"])
+    frozen_parameters = int(summary["frozen_parameters"])
+    total_parameters = int(summary["total_parameters"])
 
     log.info(
         f"LoRA injection successful: {replaced} modules wrapped, "
-        f"{lora_params:,} trainable LoRA params, "
-        f"{frozen_params:,} frozen base params "
-        f"({100 * lora_params / max(1, lora_params + frozen_params):.3f}% trainable)"
+        f"{trainable_parameters:,} trainable LoRA params, "
+        f"{frozen_parameters:,} frozen base params "
+        f"({100 * trainable_parameters / max(1, total_parameters):.3f}% trainable)"
     )
     return network
 

@@ -7,6 +7,7 @@ import torch
 
 from cosmos_framework.utils.generator.lora import (
     LoraInjectedLinear,
+    apply_lora_trainable_scope,
     inject_lora_pre_fsdp,
     merge_lora_adapters_,
 )
@@ -47,6 +48,19 @@ def test_vlm_lora_preserves_base_keys_and_reports_trainable_scope() -> None:
         "adapter_module_count": 1,
         "adapter_modules": ["q_proj"],
     }
+
+    model.requires_grad_(True)
+    summary = apply_lora_trainable_scope(
+        model,
+        lora_target_modules="q_proj",
+        lora_bias="lora_only",
+        lora_modules_to_save="lm_head",
+    )
+    assert summary == model._tao_peft_parameter_summary
+    assert model.q_proj.weight.requires_grad is False
+    assert model.q_proj.bias.requires_grad is True
+    assert model.lm_head.weight.requires_grad is True
+    assert model.q_proj.lora_A.weight.requires_grad is True
 
 
 def test_rslora_merge_matches_unmerged_forward() -> None:
