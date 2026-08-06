@@ -28,12 +28,35 @@ def test_init_uses_gloo_backend_for_cpu(monkeypatch: pytest.MonkeyPatch) -> None
         "Device",
         lambda _local_rank: SimpleNamespace(get_cpu_affinity=lambda: [0]),
     )
+    monkeypatch.setattr(distributed.os, "sched_getaffinity", lambda _pid: {0, 1})
     monkeypatch.setattr(distributed.os, "sched_setaffinity", lambda _pid, _affinity: None)
     monkeypatch.setattr(distributed.torch.cuda, "set_device", lambda _local_rank: None)
 
     distributed.init()
 
     assert init_process_group.call_args.kwargs["backend"] == "gloo"
+
+
+def test_init_intersects_nvml_affinity_with_slurm_cpuset(monkeypatch: pytest.MonkeyPatch) -> None:
+    set_affinity = Mock()
+    monkeypatch.setenv("COSMOS_DEVICE", "cpu")
+    monkeypatch.setenv("TORCH_NCCL_BLOCKING_WAIT", "0")
+    monkeypatch.setenv("TORCH_NCCL_ASYNC_ERROR_HANDLING", "1")
+    monkeypatch.setattr(distributed, "INTERNAL", False)
+    monkeypatch.setattr(distributed.dist, "is_initialized", lambda: False)
+    monkeypatch.setattr(distributed.dist, "is_available", lambda: False)
+    monkeypatch.setattr(distributed.pynvml, "nvmlInit", lambda: None)
+    monkeypatch.setattr(
+        distributed,
+        "Device",
+        lambda _local_rank: SimpleNamespace(get_cpu_affinity=lambda: [0, 32, 33]),
+    )
+    monkeypatch.setattr(distributed.os, "sched_getaffinity", lambda _pid: {32, 33, 40})
+    monkeypatch.setattr(distributed.os, "sched_setaffinity", set_affinity)
+
+    distributed.init()
+
+    set_affinity.assert_called_once_with(0, {32, 33})
 
 
 def _contains_tensor(value: Any) -> bool:
