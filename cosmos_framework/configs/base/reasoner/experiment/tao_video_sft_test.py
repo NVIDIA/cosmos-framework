@@ -136,6 +136,40 @@ def test_video_max_pixels_rejects_incompatible_processor_budget() -> None:
         VideoSFTProcessor(wrapped_processor, video_max_pixels=1024)
 
 
+def test_video_override_map_is_validated_and_applied(tmp_path, monkeypatch) -> None:
+    tokenizer = types.SimpleNamespace(pad_token_id=0)
+    wrapped_processor = types.SimpleNamespace(tokenizer=tokenizer)
+    source = tmp_path / "source.mp4"
+    replacement = tmp_path / "replacement.mp4"
+    source.write_bytes(b"source")
+    replacement.write_bytes(b"replacement")
+    override = tmp_path / "overrides.json"
+    override.write_text(json.dumps({str(source): str(replacement)}), encoding="utf-8")
+    decoded_paths: list[str] = []
+
+    class FakeReader:
+        def __init__(self, path, **_kwargs):
+            decoded_paths.append(path)
+
+        def __len__(self):
+            return 1
+
+        def get_frames_nhwc_uint8(self, _indices):
+            import numpy as np
+            return np.zeros((1, 2, 2, 3), dtype=np.uint8)
+
+        def get_avg_fps(self):
+            return 30.0
+
+    monkeypatch.setattr(
+        "cosmos_framework.configs.base.reasoner.experiment.wts_vlm.TorchCodecVideoReader",
+        FakeReader,
+    )
+    processor = VideoSFTProcessor(wrapped_processor, video_override_map=str(override))
+    processor._decode_video(str(source))
+    assert decoded_paths == [str(replacement)]
+
+
 def test_task_aware_edge_recipe_uses_runtime_video_profile() -> None:
     assert tao_task_aware_video_reasoning_edge["defaults"][4] == {"override /vlm_policy": "cosmos3_edge_reasoner"}
     assert "video_max_pixels" in tao_task_aware_video_reasoning_edge["dataloader_train"]["processor"]

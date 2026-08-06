@@ -97,6 +97,7 @@ class VideoSFTProcessor(VLMProcessor):
         video_device: str = "cuda",
         video_num_threads: int = 1,
         video_max_pixels: int | str | None = None,
+        video_override_map: str | None = None,
         system_prompt: str = "",
         use_daft_chat_template: bool = False,
     ) -> None:
@@ -112,6 +113,17 @@ class VideoSFTProcessor(VLMProcessor):
         self.video_cache_size = video_cache_size
         self.video_device = video_device
         self.video_num_threads = video_num_threads
+        self.video_overrides: dict[str, str] = {}
+        if video_override_map not in (None, ""):
+            override_path = os.path.abspath(os.path.expanduser(str(video_override_map)))
+            with open(override_path, encoding="utf-8") as override_file:
+                overrides = json.load(override_file)
+            if not isinstance(overrides, dict) or not all(
+                isinstance(source, str) and isinstance(target, str)
+                for source, target in overrides.items()
+            ):
+                raise ValueError("video_override_map must be a JSON object of string paths")
+            self.video_overrides = overrides
         self.video_max_pixels: int | None = None
         if video_max_pixels not in (None, "", 0, "0"):
             parsed_video_max_pixels = int(video_max_pixels)
@@ -136,6 +148,8 @@ class VideoSFTProcessor(VLMProcessor):
         self._video_cache: OrderedDict[str, tuple[list[Image.Image], float]] = OrderedDict()
 
     def _decode_video(self, video_path: str) -> tuple[list[Image.Image], float]:
+        video_path = self.video_overrides.get(video_path, video_path)
+        video_path = os.path.abspath(os.path.expanduser(video_path))
         cached = self._video_cache.get(video_path)
         if cached is not None:
             self._video_cache.move_to_end(video_path)
@@ -255,6 +269,7 @@ def _video_conversation_dataloader(
             video_device="${oc.env:TAO_VIDEO_DECODER_DEVICE,cuda}",
             video_num_threads="${oc.env:TAO_VIDEO_DECODER_THREADS,1}",
             video_max_pixels=f"${{oc.env:{max_pixels_env},''}}",
+            video_override_map="${oc.env:TAO_VIDEO_OVERRIDE_MAP,''}",
             system_prompt=f"${{oc.env:{system_prompt_env},''}}",
         ),
         batcher=L(PoolPackingBatcher)(
@@ -311,6 +326,7 @@ def _task_aware_video_dataloader(
             video_device="${oc.env:TAO_VIDEO_DECODER_DEVICE,cuda}",
             video_num_threads="${oc.env:TAO_VIDEO_DECODER_THREADS,1}",
             video_max_pixels=f"${{oc.env:{max_pixels_env},''}}",
+            video_override_map="${oc.env:TAO_VIDEO_OVERRIDE_MAP,''}",
             system_prompt="",
             use_daft_chat_template=True,
         ),
