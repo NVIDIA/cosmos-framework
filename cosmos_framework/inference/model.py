@@ -48,6 +48,7 @@ from cosmos_framework.utils.flags import SMOKE
 from cosmos_framework.utils.generator.quantization import (
     apply_modelopt_fp8_checkpoint_inplace,
     is_modelopt_fp8_checkpoint,
+    plan_modelopt_fp8_targets,
 )
 
 if TYPE_CHECKING:
@@ -579,17 +580,27 @@ class Cosmos3OmniModel(transformers.PreTrainedModel):
         config.quantization = attrs.asdict(quantization_config)
 
         # ModelOpt FP8 checkpoints ship already-quantized E4M3 weights plus static
-        # scales. They are installed as TorchAO tensor subclasses after the rest of
-        # the checkpoint loads, which only works on unsharded (plain-tensor) params.
+        # scales. The target linears are swapped to FP8 modules on the meta device
+        # during `build_net` — before FSDP wrap and materialization — so both the
+        # sharded and replicated paths work and peak memory follows the FP8 weights.
         modelopt_checkpoint = is_modelopt_fp8_checkpoint(checkpoint_path)
-        if modelopt_checkpoint and parallelism_config.data_parallel_shard_degree > 1:
-            raise ValueError("ModelOpt FP8 checkpoints are not supported for DP sharded models.")
         if modelopt_checkpoint and quantization_config.method is not None:
             raise ValueError(
                 "A ModelOpt FP8 checkpoint is already quantized; do not also request runtime quantization."
             )
         if modelopt_checkpoint and not _is_diffusers_checkpoint(checkpoint_path):
             raise ValueError(f"ModelOpt FP8 loading requires a diffusers-format checkpoint layout: {checkpoint_path}")
+        if modelopt_checkpoint:
+            # Resolve which linears the checkpoint quantizes here, where the
+            # diffusers key mapping lives, and hand the plain FQN list to the
+            # model config so `build_net` can do the meta-device swap without
+            # reaching back into the loader.
+            config.quantization["modelopt_fp8_checkpoint_path"] = str(checkpoint_path)
+            config.quantization["modelopt_fp8_target_fqns"] = plan_modelopt_fp8_targets(
+                checkpoint_path,
+                _diffusers_to_net_key,
+                weight_map=_diffusers_weight_map(checkpoint_path),
+            )
 
         model = cls(config)
         # Thread the local checkpoint dir to the reasoner LM (consumed by Edge's
