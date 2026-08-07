@@ -21,7 +21,6 @@ from collections import defaultdict
 from dataclasses import dataclass
 
 import torch
-import wandb
 
 from cosmos_framework.model.attention.utils import is_blackwell_dc
 from cosmos_framework.callbacks.every_n import EveryN
@@ -29,6 +28,11 @@ from cosmos_framework.model._base import ImaginaireModel
 from cosmos_framework.trainer import ImaginaireTrainer
 from cosmos_framework.utils import log
 from cosmos_framework.utils.distributed import is_rank0, rank0_only
+
+try:
+    import wandb
+except ImportError:
+    wandb = None  # type: ignore
 
 
 @dataclass
@@ -277,5 +281,5 @@ class OFUCallback(EveryN):
             "ofu/num_samples": float(len(samples)),
         }
 
-        if wandb.run is not None:
+        if wandb and wandb.run is not None:
             wandb.log(log_info, step=iteration)

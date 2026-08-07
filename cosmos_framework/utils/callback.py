@@ -13,12 +13,15 @@ import torch
 import torch.distributed as dist
 import torch.utils.data
 import tqdm
-import wandb
 
 from cosmos_framework.utils.lazy_config import instantiate
 from cosmos_framework.utils import distributed, log, misc, wandb_util
 from cosmos_framework.utils.misc import get_local_tensor_if_DTensor
 
+try:
+    import wandb
+except ImportError:
+    wandb = None  # type: ignore
 
 try:
     from megatron.core import parallel_state
@@ -446,7 +449,7 @@ class WandBCallback(Callback):
         grad_scaler: torch.amp.GradScaler,
         iteration: int = 0,
     ) -> None:  # Log the curent learning rate.
-        if iteration % self.config.trainer.logging_iter == 0 and distributed.is_rank0():
+        if iteration % self.config.trainer.logging_iter == 0 and distributed.is_rank0() and wandb and wandb.run:
             wandb.log({"optim/lr": scheduler.get_last_lr()[0]}, step=iteration)
             wandb.log({"optim/grad_scale": grad_scaler.get_scale()}, step=iteration)
 
@@ -468,7 +471,7 @@ class WandBCallback(Callback):
             dist.all_reduce(sample_size, op=dist.ReduceOp.SUM)
             avg_loss = loss_sum.item() / sample_size.item()
 
-            if distributed.is_rank0():
+            if distributed.is_rank0() and wandb and wandb.run:
                 wandb.log({f"timer/{key}": value for key, value in timer_results.items()}, step=iteration)
                 wandb.log({"train/loss": avg_loss}, step=iteration)
                 wandb.log({"iteration": iteration}, step=iteration)
@@ -506,10 +509,12 @@ class WandBCallback(Callback):
         # Log data/stats of validation set to W&B.
         if distributed.is_rank0():
             log.info(f"Validation loss (iteration {iteration}): {loss:4f}")
-            wandb.log({"val/loss": loss}, step=iteration)
+            if wandb and wandb.run:
+                wandb.log({"val/loss": loss}, step=iteration)
 
     def on_train_end(self, model: ImaginaireModel, iteration: int = 0) -> None:
-        wandb.finish()
+        if wandb and wandb.run:
+            wandb.finish()
 
 
 class LowPrecisionCallback(Callback):

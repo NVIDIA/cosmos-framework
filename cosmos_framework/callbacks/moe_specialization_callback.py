@@ -32,7 +32,6 @@ Buffer ownership
 """
 
 import torch
-import wandb
 from torch.distributed.tensor import DTensor, Partial
 
 from cosmos_framework.callbacks.every_n import EveryN
@@ -40,6 +39,11 @@ from cosmos_framework.model._base import ImaginaireModel
 from cosmos_framework.trainer import ImaginaireTrainer
 from cosmos_framework.utils import distributed
 from cosmos_framework.model.generator.reasoner.qwen3_vl_moe.qwen3_vl_moe import Qwen3VLMoeTextSparseMoeBlock
+
+try:
+    import wandb
+except ImportError:
+    wandb = None  # type: ignore
 
 
 def _get_device_mesh(vfm: torch.nn.Module):
@@ -174,7 +178,7 @@ class MoESpecializationCallback(EveryN):
 
         coact_results = compute_moe_coactivation_metrics(vfm)
 
-        if not (distributed.is_rank0() and wandb.run):
+        if not (distributed.is_rank0() and wandb and wandb.run):
             return
 
         log_dict: dict[str, float] = {}

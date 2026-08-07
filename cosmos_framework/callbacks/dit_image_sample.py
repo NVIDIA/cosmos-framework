@@ -10,12 +10,16 @@ from typing import Any
 
 import torch
 import torchvision
-import wandb
 
 from cosmos_framework.callbacks.every_n import EveryN
 from cosmos_framework.model._base import ImaginaireModel
 from cosmos_framework.trainer import ImaginaireTrainer
 from cosmos_framework.utils import distributed
+
+try:
+    import wandb
+except ImportError:
+    wandb = None  # type: ignore
 
 
 class DiTImageSampleCallback(EveryN):
@@ -75,7 +79,7 @@ class DiTImageSampleCallback(EveryN):
             if was_training:
                 model.train()
 
-        if self.rank != 0 or wandb.run is None or not generated_rows:
+        if self.rank != 0 or wandb is None or wandb.run is None or not generated_rows:
             return
 
         grid_images = torch.cat(generated_rows, dim=0)  # [R*B,3,H,W]

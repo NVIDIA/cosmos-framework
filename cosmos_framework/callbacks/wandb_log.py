@@ -9,12 +9,16 @@ from typing import Tuple
 import torch
 import torch.distributed as dist
 import torch.utils.data
-import wandb
 
 from cosmos_framework.model._base import ImaginaireModel
 from cosmos_framework.utils import distributed, log
 from cosmos_framework.utils.callback import Callback
 from cosmos_framework.utils.easy_io import easy_io
+
+try:
+    import wandb
+except ImportError:
+    wandb = None  # type: ignore
 
 
 @dataclass
@@ -182,7 +186,7 @@ class WandbCallback(Callback):
 
             dist.all_reduce(self.unstable_count, op=dist.ReduceOp.SUM)
 
-            if distributed.is_rank0() and wandb.run is not None:
+            if distributed.is_rank0() and wandb and wandb.run is not None:
                 info = {}
                 info.update(
                     {

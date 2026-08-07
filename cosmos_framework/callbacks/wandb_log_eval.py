@@ -9,12 +9,16 @@ from typing import Tuple
 import torch
 import torch.distributed as dist
 import torch.utils.data
-import wandb
 
 from cosmos_framework.model._base import ImaginaireModel
 from cosmos_framework.utils import distributed, log
 from cosmos_framework.utils.callback import Callback
 from cosmos_framework.utils.easy_io import easy_io
+
+try:
+    import wandb
+except ImportError:
+    wandb = None  # type: ignore
 
 
 @dataclass
@@ -132,7 +136,7 @@ class WandbCallback(Callback):
                     f"s3://rundir/{self.name}/Val_Iter{iteration:09d}.json",
                 )
 
-            if wandb.run is not None:
+            if wandb and wandb.run is not None:
                 wandb.log(info, step=iteration)
 
         # reset unstable count

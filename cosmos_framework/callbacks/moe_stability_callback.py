@@ -136,7 +136,6 @@ DEAD_EXPERT_THRESHOLD_MULTIPLIER = 0.1
 ENTROPY_EPSILON = 1e-9
 
 import torch
-import wandb
 from torch.distributed.tensor import DTensor, Partial
 
 from cosmos_framework.callbacks.every_n import EveryN
@@ -144,6 +143,11 @@ from cosmos_framework.model._base import ImaginaireModel
 from cosmos_framework.trainer import ImaginaireTrainer
 from cosmos_framework.utils import distributed
 from cosmos_framework.model.generator.reasoner.qwen3_vl_moe.qwen3_vl_moe import Qwen3VLMoeTextSparseMoeBlock
+
+try:
+    import wandb
+except ImportError:
+    wandb = None  # type: ignore
 
 
 def _effective_experts(
@@ -488,7 +492,7 @@ class MoEStabilityCallback(EveryN):
     ) -> None:
         metrics = compute_moe_stability_metrics(model.net)
 
-        if not (distributed.is_rank0() and wandb.run):
+        if not (distributed.is_rank0() and wandb and wandb.run):
             return
 
         if metrics and self._per_expert_params is None:
