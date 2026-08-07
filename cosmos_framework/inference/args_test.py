@@ -20,6 +20,7 @@ from cosmos_framework.inference.args import (
     SoundDataOverrides,
     _get_nvml_device_memory_info,
     is_reasoner_only,
+    reasoner_only_overrides,
 )
 from cosmos_framework.inference.common.config import structure_config
 
@@ -55,6 +56,38 @@ def test_reasoner_only_override_disables_vision_tokenizer_in_model_config(tmp_pa
 
     model_dict = structure_config(setup_args.load_model_config_dict(), omegaconf.DictConfig)
     assert model_dict.config.load_vision_tokenizer is False
+
+
+def test_reasoner_only_overrides_disable_every_generation_side_module(tmp_path: Path) -> None:
+    """All three overrides must land on the live model config, not just parse.
+
+    They are orthogonal on purpose: dropping any one of them degrades to the
+    previous behaviour for that module alone.
+    """
+    setup_args = OmniSetupOverrides(
+        checkpoint_path=DEFAULT_CHECKPOINT_NAME,
+        output_dir=tmp_path / "outputs",
+    ).build_setup(world_size=1, local_world_size=1, device_memory_bytes=_H100_MEMORY_BYTES)
+
+    model_dict = structure_config(setup_args.load_model_config_dict(), omegaconf.DictConfig)
+    assert model_dict.config.load_vision_tokenizer is True
+    assert model_dict.config.vision_gen is True
+    # ``include_gen_pathway`` is absent until overridden: the LazyDict only carries
+    # kwargs the experiment config passed explicitly, so the True default lives in
+    # ``_MoTConfigBase.__init__``. That is also why enabling this flag cannot leak
+    # into an exported checkpoint config.
+    assert "include_gen_pathway" not in model_dict.config.vlm_config.model_instance.config
+
+    setup_args.experiment_overrides.extend(reasoner_only_overrides())
+
+    model_dict = structure_config(setup_args.load_model_config_dict(), omegaconf.DictConfig)
+    assert model_dict.config.load_vision_tokenizer is False
+    assert model_dict.config.vision_gen is False
+    assert model_dict.config.vlm_config.model_instance.config.include_gen_pathway is False
+    # Cosmos3VFMNetworkConfig asserts action/sound generation each imply vision
+    # generation, so the three modality flags must be switched off together.
+    assert model_dict.config.action_gen is False
+    assert model_dict.config.sound_gen is False
 
 
 def test_build_parallelism(monkeypatch: pytest.MonkeyPatch):

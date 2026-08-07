@@ -235,6 +235,7 @@ class _MoTConfigBase(object):
         qk_norm_for_text: bool = True,
         qk_norm_for_diffusion: bool = True,
         include_visual: bool = False,
+        include_gen_pathway: bool = True,
         gen_noisy_gating: bool = False,
         gen_cosine_router_config: CosineRouterConfig | None = None,
         gen_aux_loss_free_load_balancing_config: AuxLossFreeLoadBalancingConfig | None = None,
@@ -246,6 +247,9 @@ class _MoTConfigBase(object):
         self.qk_norm_for_text = qk_norm_for_text
         self.qk_norm_for_diffusion = qk_norm_for_diffusion
         self.include_visual = include_visual
+        # Build the MoT generation tower (the ``*_moe_gen`` duplicates).  Reasoner-only
+        # inference disables this; every other caller keeps the default and is unchanged.
+        self.include_gen_pathway = include_gen_pathway
         # Noisy top-k gating on the generation-tower MoE blocks (Shazeer 2017).
         # Gen-tower only; the understanding tower never receives this flag.
         self.gen_noisy_gating = gen_noisy_gating
@@ -484,9 +488,11 @@ class PackedAttentionMoT(nn.Module):
         qk_norm_for_text: bool,
         qk_norm_for_diffusion: bool,
         use_und_k_norm_for_gen: bool = False,
+        include_gen_pathway: bool = True,
     ):
         super().__init__()
         self.config = config
+        self.include_gen_pathway = include_gen_pathway
         self.layer_idx = layer_idx
         self.head_dim = getattr(config, "head_dim", config.hidden_size // config.num_attention_heads)
         self.hidden_size = config.hidden_size
@@ -512,13 +518,15 @@ class PackedAttentionMoT(nn.Module):
             self.q_norm = nn.Identity()
             self.k_norm = nn.Identity()
 
-        # Generation pathway QK norm
-        if qk_norm_for_diffusion:
-            self.q_norm_moe_gen = layer_types.rms_norm(self.head_dim, eps=eps)
-            self.k_norm_moe_gen = layer_types.rms_norm(self.head_dim, eps=eps)
-        else:
-            self.q_norm_moe_gen = nn.Identity()
-            self.k_norm_moe_gen = nn.Identity()
+        # Generation pathway QK norm.  Everything below this point belongs to the
+        # generation tower and is skipped wholesale when it is not built.
+        if include_gen_pathway:
+            if qk_norm_for_diffusion:
+                self.q_norm_moe_gen = layer_types.rms_norm(self.head_dim, eps=eps)
+                self.k_norm_moe_gen = layer_types.rms_norm(self.head_dim, eps=eps)
+            else:
+                self.q_norm_moe_gen = nn.Identity()
+                self.k_norm_moe_gen = nn.Identity()
 
         # Cross-attention K norm: normalises und K tokens seen by the generator in the
         # gen→und cross-attention path.  Only needed when the generation pathway has QK
@@ -528,24 +536,26 @@ class PackedAttentionMoT(nn.Module):
         # uncontrolled magnitude and dominates attention over the gen self-attention path.
         # When both pathways share the same QK norm (or neither has one) k_norm_und_for_gen
         # is None and the standard packed K tensor is used for all paths unchanged.
-        if use_und_k_norm_for_gen and qk_norm_for_diffusion and not qk_norm_for_text:
+        # It serves the generation pathway only, so it is None whenever that tower is absent.
+        if include_gen_pathway and use_und_k_norm_for_gen and qk_norm_for_diffusion and not qk_norm_for_text:
             self.k_norm_und_for_gen: nn.Module | None = layer_types.rms_norm(self.head_dim, eps=eps)
         else:
             self.k_norm_und_for_gen = None
 
         # Generation pathway linear projections
-        self.q_proj_moe_gen = nn.Linear(
-            self.hidden_size, self.num_attention_heads * self.head_dim, bias=config.attention_bias
-        )
-        self.k_proj_moe_gen = nn.Linear(
-            self.hidden_size, self.num_key_value_heads * self.head_dim, bias=config.attention_bias
-        )
-        self.v_proj_moe_gen = nn.Linear(
-            self.hidden_size, self.num_key_value_heads * self.head_dim, bias=config.attention_bias
-        )
-        self.o_proj_moe_gen = nn.Linear(
-            self.num_attention_heads * self.head_dim, self.hidden_size, bias=config.attention_bias
-        )
+        if include_gen_pathway:
+            self.q_proj_moe_gen = nn.Linear(
+                self.hidden_size, self.num_attention_heads * self.head_dim, bias=config.attention_bias
+            )
+            self.k_proj_moe_gen = nn.Linear(
+                self.hidden_size, self.num_key_value_heads * self.head_dim, bias=config.attention_bias
+            )
+            self.v_proj_moe_gen = nn.Linear(
+                self.hidden_size, self.num_key_value_heads * self.head_dim, bias=config.attention_bias
+            )
+            self.o_proj_moe_gen = nn.Linear(
+                self.num_attention_heads * self.head_dim, self.hidden_size, bias=config.attention_bias
+            )
 
         self._apply_rotary_pos_emb = layer_types.apply_rotary_pos_emb
         self.dispatch_attention_fn = dispatch_attention
@@ -822,6 +832,7 @@ def _impl_init(
     gen_noisy_gating: bool = False,
     gen_cosine_router_config: CosineRouterConfig | None = None,
     gen_aux_loss_free_load_balancing_config: AuxLossFreeLoadBalancingConfig | None = None,
+    include_gen_pathway: bool = True,
 ) -> None:
     """Shared ``__init__`` body for the three MoT text-model variants.
 
@@ -831,6 +842,9 @@ def _impl_init(
     """
     self.padding_idx = getattr(config, "pad_token_id", None)
     self.vocab_size = config.vocab_size
+    # Read back by ``_impl_forward``'s guard: the joint generation forward cannot
+    # run on a model built without the generation tower.
+    self.include_gen_pathway = include_gen_pathway
 
     self.embed_tokens = nn.Embedding(config.vocab_size, config.hidden_size, self.padding_idx)
 
@@ -847,13 +861,15 @@ def _impl_init(
                 gen_noisy_gating=gen_noisy_gating,
                 gen_cosine_router_config=gen_cosine_router_config,
                 gen_aux_loss_free_load_balancing_config=gen_aux_loss_free_load_balancing_config,
+                include_gen_pathway=include_gen_pathway,
             )
         )
 
     # Reasoner-pathway final norm.
     self.norm = layer_types.rms_norm(config.hidden_size, eps=config.rms_norm_eps)
-    # Generation-pathway final norm (parallel to ``self.norm``).
-    self.norm_moe_gen = layer_types.rms_norm(config.hidden_size, eps=config.rms_norm_eps)
+    if include_gen_pathway:
+        # Generation-pathway final norm (parallel to ``self.norm``).
+        self.norm_moe_gen = layer_types.rms_norm(config.hidden_size, eps=config.rms_norm_eps)
 
     # Rotary embedding (text-only optimized)
     self.rotary_emb = layer_types.rotary_embedding(config)
@@ -905,6 +921,15 @@ def _impl_forward(
         memory: Optional ``MemoryState`` for persistent memory across
             forward passes.
     """
+
+    # The joint forward drives both towers, so it cannot run on a model built
+    # without the generation pathway.  Reasoner-only decoding goes through
+    # ``_impl_reasoner_forward`` instead and is unaffected.
+    assert getattr(self, "include_gen_pathway", True), (
+        "The joint generation forward requires the MoT generation pathway, but this model was "
+        "built with include_gen_pathway=False (reasoner-only). Drop the "
+        "model.config.vlm_config.model_instance.config.include_gen_pathway=false override."
+    )
 
     # Create position embeddings (Qwen3 style) - squeeze once at model level
     # tensor below is only used for its dtype and device
@@ -1029,9 +1054,11 @@ class MoTDecoderLayer(nn.Module):
         gen_noisy_gating: bool = False,
         gen_cosine_router_config: CosineRouterConfig | None = None,
         gen_aux_loss_free_load_balancing_config: AuxLossFreeLoadBalancingConfig | None = None,
+        include_gen_pathway: bool = True,
     ) -> None:
         super().__init__()
         self.hidden_size = config.hidden_size
+        self.include_gen_pathway = include_gen_pathway
         self.self_attn = PackedAttentionMoT(
             config,
             layer_types=layer_types,
@@ -1039,6 +1066,7 @@ class MoTDecoderLayer(nn.Module):
             qk_norm_for_text=qk_norm_for_text,
             qk_norm_for_diffusion=qk_norm_for_diffusion,
             use_und_k_norm_for_gen=use_und_k_norm_for_gen,
+            include_gen_pathway=include_gen_pathway,
         )
 
         if (
@@ -1047,22 +1075,25 @@ class MoTDecoderLayer(nn.Module):
             and (config.num_experts > 0 and (layer_idx + 1) % config.decoder_sparse_step == 0)
         ):
             self.mlp = Qwen3VLMoeTextSparseMoeBlock(config)
-            # Noisy gating, the cosine router, and aux-loss-free load balancing
-            # are gen-tower only.
-            self.mlp_moe_gen = Qwen3VLMoeTextSparseMoeBlock(
-                config,
-                noisy_gating=gen_noisy_gating,
-                cosine_router_config=gen_cosine_router_config,
-                aux_loss_free_load_balancing_config=gen_aux_loss_free_load_balancing_config,
-            )
+            if include_gen_pathway:
+                # Noisy gating, the cosine router, and aux-loss-free load balancing
+                # are gen-tower only.
+                self.mlp_moe_gen = Qwen3VLMoeTextSparseMoeBlock(
+                    config,
+                    noisy_gating=gen_noisy_gating,
+                    cosine_router_config=gen_cosine_router_config,
+                    aux_loss_free_load_balancing_config=gen_aux_loss_free_load_balancing_config,
+                )
         else:
             self.mlp = layer_types.mlp(config)
-            self.mlp_moe_gen = layer_types.mlp(config)
+            if include_gen_pathway:
+                self.mlp_moe_gen = layer_types.mlp(config)
 
         self.input_layernorm = layer_types.rms_norm(config.hidden_size, eps=config.rms_norm_eps)
-        self.input_layernorm_moe_gen = layer_types.rms_norm(config.hidden_size, eps=config.rms_norm_eps)
         self.post_attention_layernorm = layer_types.rms_norm(config.hidden_size, eps=config.rms_norm_eps)
-        self.post_attention_layernorm_moe_gen = layer_types.rms_norm(config.hidden_size, eps=config.rms_norm_eps)
+        if include_gen_pathway:
+            self.input_layernorm_moe_gen = layer_types.rms_norm(config.hidden_size, eps=config.rms_norm_eps)
+            self.post_attention_layernorm_moe_gen = layer_types.rms_norm(config.hidden_size, eps=config.rms_norm_eps)
 
     def forward(
         self,
@@ -1271,6 +1302,7 @@ class Qwen3VLTextModel(Qwen3VLPreTrainedModel):
         qk_norm_for_text: bool,
         qk_norm_for_diffusion: bool,
         use_und_k_norm_for_gen: bool,
+        include_gen_pathway: bool = True,
     ):
         super().__init__(config)
         _impl_init(
@@ -1280,6 +1312,7 @@ class Qwen3VLTextModel(Qwen3VLPreTrainedModel):
             qk_norm_for_text=qk_norm_for_text,
             qk_norm_for_diffusion=qk_norm_for_diffusion,
             use_und_k_norm_for_gen=use_und_k_norm_for_gen,
+            include_gen_pathway=include_gen_pathway,
         )
 
     def init_taylorseer(self, cache_dic=None, current=None):
@@ -1309,6 +1342,7 @@ class Qwen3VLMoeTextModel(Qwen3VLMoePreTrainedModel):
         gen_noisy_gating: bool = False,
         gen_cosine_router_config: CosineRouterConfig | None = None,
         gen_aux_loss_free_load_balancing_config: AuxLossFreeLoadBalancingConfig | None = None,
+        include_gen_pathway: bool = True,
     ) -> None:
         super().__init__(config)
         _impl_init(
@@ -1321,6 +1355,7 @@ class Qwen3VLMoeTextModel(Qwen3VLMoePreTrainedModel):
             gen_noisy_gating=gen_noisy_gating,
             gen_cosine_router_config=gen_cosine_router_config,
             gen_aux_loss_free_load_balancing_config=gen_aux_loss_free_load_balancing_config,
+            include_gen_pathway=include_gen_pathway,
         )
 
     def init_taylorseer(self, cache_dic=None, current=None):
@@ -1347,6 +1382,7 @@ class Nemotron3DenseVLTextModel(Nemotron3DenseVLPreTrainedModel):
         qk_norm_for_text: bool,
         qk_norm_for_diffusion: bool,
         use_und_k_norm_for_gen: bool,
+        include_gen_pathway: bool = True,
     ):
         super().__init__(config)
         _impl_init(
@@ -1356,6 +1392,7 @@ class Nemotron3DenseVLTextModel(Nemotron3DenseVLPreTrainedModel):
             qk_norm_for_text=qk_norm_for_text,
             qk_norm_for_diffusion=qk_norm_for_diffusion,
             use_und_k_norm_for_gen=use_und_k_norm_for_gen,
+            include_gen_pathway=include_gen_pathway,
         )
 
     def init_taylorseer(self, cache_dic=None, current=None) -> None:
@@ -2036,6 +2073,7 @@ class Qwen3VLTextForCausalLM(Qwen3VLPreTrainedModel):
             qk_norm_for_text=config.qk_norm_for_text,
             qk_norm_for_diffusion=config.qk_norm_for_diffusion,
             use_und_k_norm_for_gen=getattr(config, "use_und_k_norm_for_gen", False),
+            include_gen_pathway=getattr(config, "include_gen_pathway", True),
         )
         self.vocab_size = text_config.vocab_size
         self.lm_head = nn.Linear(text_config.hidden_size, text_config.vocab_size, bias=False)
@@ -2180,6 +2218,7 @@ class Qwen3VLMoeTextForCausalLM(Qwen3VLMoePreTrainedModel):
             qk_norm_for_text=config.qk_norm_for_text,
             qk_norm_for_diffusion=config.qk_norm_for_diffusion,
             use_und_k_norm_for_gen=getattr(config, "use_und_k_norm_for_gen", False),
+            include_gen_pathway=getattr(config, "include_gen_pathway", True),
             gen_noisy_gating=config.gen_noisy_gating,
             gen_cosine_router_config=getattr(config, "gen_cosine_router_config", None),
             gen_aux_loss_free_load_balancing_config=config.gen_aux_loss_free_load_balancing_config,
@@ -2371,6 +2410,7 @@ class Nemotron3DenseVLTextForCausalLM(Nemotron3DenseVLPreTrainedModel):
             qk_norm_for_text=config.qk_norm_for_text,
             qk_norm_for_diffusion=config.qk_norm_for_diffusion,
             use_und_k_norm_for_gen=getattr(config, "use_und_k_norm_for_gen", False),
+            include_gen_pathway=getattr(config, "include_gen_pathway", True),
         )
         self.vocab_size = text_config.vocab_size
         self.lm_head = nn.Linear(text_config.hidden_size, text_config.vocab_size, bias=False)
