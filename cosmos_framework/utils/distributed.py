@@ -263,6 +263,12 @@ def ddp_sync_grad(model, enabled):
             # micro-step, so gradients stay sharded and VRAM does not grow
             # (set_requires_gradient_sync(False) would keep gradients
             # unsharded: +stored-grad-bytes per rank).
+            # Every non-DDP model takes this branch, including single-process
+            # runs: skip early when there is nothing to sync, and before the
+            # fsdp import, which fails on builds without distributed.
+            if not dist.is_available() or not dist.is_initialized():
+                yield
+                return
             from torch.distributed.fsdp import FSDPModule
 
             for m in model.modules():
