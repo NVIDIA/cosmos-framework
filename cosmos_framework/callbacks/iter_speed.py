@@ -4,7 +4,6 @@
 import time
 
 import torch
-import wandb
 from torch import Tensor
 
 from cosmos_framework.callbacks.every_n import EveryN
@@ -13,6 +12,11 @@ from cosmos_framework.trainer import ImaginaireTrainer
 from cosmos_framework.utils import log
 from cosmos_framework.utils.distributed import rank0_only
 from cosmos_framework.utils.easy_io import easy_io
+
+try:
+    import wandb
+except ImportError:
+    wandb = None  # type: ignore
 
 
 class IterSpeed(EveryN):
@@ -100,7 +104,7 @@ class IterSpeed(EveryN):
             if hasattr(model, "token_counter"):
                 per_sample_batch_counter["token_counter"] = model.token_counter
 
-        if wandb.run:
+        if wandb and wandb.run:
             sample_counter = getattr(trainer, "sample_counter", iteration)
             wandb.log(
                 {

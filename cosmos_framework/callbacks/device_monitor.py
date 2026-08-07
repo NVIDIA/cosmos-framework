@@ -8,13 +8,17 @@ import pandas as pd
 import psutil
 import pynvml
 import torch
-import wandb
 
 from cosmos_framework.callbacks.every_n import EveryN
 from cosmos_framework.model._base import ImaginaireModel
 from cosmos_framework.trainer import ImaginaireTrainer
 from cosmos_framework.utils import distributed, log
 from cosmos_framework.utils.easy_io import easy_io
+
+try:
+    import wandb
+except ImportError:
+    wandb = None  # type: ignore
 
 
 def log_prof_data(
@@ -49,7 +53,7 @@ def log_prof_data(
     df = pd.DataFrame(data, columns=columns)
     summary_df = pd.DataFrame({"Avg": avg_values, "Max": max_values, "Min": min_values})
 
-    if wandb.run:
+    if wandb and wandb.run:
         # Log the table
         table = wandb.Table(dataframe=df)
         wandb.log({"DeviceMonitor/prof_data": table}, step=iteration)
@@ -174,7 +178,7 @@ class DeviceMonitor(EveryN):
             log.info(f"{self.name} Stats:\n{summary_df.to_string()}")
             if self.log_memory_detail:
                 memory_stats = torch.cuda.memory_stats()
-                if wandb.run:
+                if wandb and wandb.run:
                     wandb_memory_info = {f"mem/{key}": memory_stats[key] for key in memory_stats.keys()}
                     wandb.log(wandb_memory_info, step=iteration)
                 if self.save_s3:

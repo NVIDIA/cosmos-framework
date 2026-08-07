@@ -3,7 +3,6 @@
 
 import matplotlib.pyplot as plt
 import torch
-import wandb
 from torch.distributed.tensor import DTensor, Partial
 
 from cosmos_framework.callbacks.every_n import EveryN
@@ -11,6 +10,11 @@ from cosmos_framework.model._base import ImaginaireModel
 from cosmos_framework.trainer import ImaginaireTrainer
 from cosmos_framework.utils import distributed
 from cosmos_framework.model.generator.reasoner.qwen3_vl_moe.qwen3_vl_moe import Qwen3VLMoeTextSparseMoeBlock
+
+try:
+    import wandb
+except ImportError:
+    wandb = None  # type: ignore
 
 
 def compute_expert_heatmap(vfm: torch.nn.Module) -> dict[str, torch.Tensor]:
@@ -93,7 +97,7 @@ class ExpertHeatmap(EveryN):
     ) -> None:
         expert_heatmaps = compute_expert_heatmap(model.net)
 
-        if distributed.is_rank0() and wandb.run:
+        if distributed.is_rank0() and wandb and wandb.run:
             for tower, heatmap in expert_heatmaps.items():
                 fig, ax = plt.subplots()
                 im = ax.imshow(heatmap.cpu().numpy())
