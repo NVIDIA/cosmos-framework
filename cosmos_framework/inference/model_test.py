@@ -213,6 +213,7 @@ def test_from_pretrained_dcp_installs_modelopt_fp8_after_load(tmp_path: Path) ->
         patch("cosmos_framework.inference.model._is_diffusers_checkpoint", return_value=True),
         patch("cosmos_framework.inference.model.is_modelopt_fp8_checkpoint", return_value=True),
         patch("cosmos_framework.inference.model._diffusers_weight_map", return_value=merged_weight_map),
+        patch("cosmos_framework.inference.model.plan_modelopt_fp8_targets", return_value=["selected"]),
         patch("cosmos_framework.inference.model.get_model_state_dict", return_value={}),
         patch("cosmos_framework.inference.model.dcp.load", side_effect=record_load),
         patch(
@@ -233,16 +234,6 @@ def test_from_pretrained_dcp_rejects_modelopt_fp8_with_runtime_quantization(tmp_
                 checkpoint_path=tmp_path,
                 config=Cosmos3OmniConfig(),
                 quantization_config=QuantizationConfig(method="fp8"),
-            )
-
-
-def test_from_pretrained_dcp_rejects_modelopt_fp8_with_dp_sharding(tmp_path: Path) -> None:
-    with patch("cosmos_framework.inference.model.is_modelopt_fp8_checkpoint", return_value=True):
-        with pytest.raises(ValueError, match="not supported for DP sharded models"):
-            LightweightDcpModel.from_pretrained_dcp(
-                checkpoint_path=tmp_path,
-                config=Cosmos3OmniConfig(),
-                parallelism_config=ParallelismConfig(data_parallel_shard_degree=2),
             )
 
 
