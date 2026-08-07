@@ -76,6 +76,65 @@ class TestSchemaValidation:
                 }
             )
 
+    def test_native_epoch_schedule_fields_validate(self) -> None:
+        cfg = SFTExperimentConfig.model_validate(
+            {
+                "job": {"task": "vlm", "experiment": "wts_vlm"},
+                "trainer": {
+                    "num_epochs": 2,
+                    "steps_per_epoch": 108,
+                    "validation_freq_in_epoch": 1,
+                },
+                "checkpoint": {"save_freq_in_epoch": 2},
+            }
+        )
+
+        assert cfg.trainer.num_epochs == 2
+        assert cfg.trainer.steps_per_epoch == 108
+        assert cfg.trainer.validation_freq_in_epoch == 1
+        assert cfg.checkpoint.save_freq_in_epoch == 2
+
+    def test_vlm_peft_fields_are_explicit_and_validated(self) -> None:
+        cfg = SFTExperimentConfig.model_validate(
+            {
+                "job": {"task": "vlm", "experiment": "wts_vlm"},
+                "model": {
+                    "lora_enabled": True,
+                    "lora_rank": 8,
+                    "lora_alpha": 16,
+                    "lora_dropout": 0.05,
+                    "lora_target_modules": "q_proj,v_proj",
+                    "lora_bias": "none",
+                    "lora_use_rslora": True,
+                    "lora_modules_to_save": "lm_head",
+                    "lora_precision": "bfloat16",
+                    "qwen3_vl_patch_embed": "linear",
+                },
+            }
+        )
+        assert cfg.model.lora_enabled is True
+        assert cfg.model.lora_rank == 8
+        assert cfg.model.lora_use_rslora is True
+
+    def test_vlm_peft_fields_reach_policy_overrides(self) -> None:
+        overrides = build_hydra_overrides(
+            {
+                "job": {"task": "vlm", "experiment": "wts_vlm"},
+                "model": {
+                    "lora_enabled": True,
+                    "lora_rank": 8,
+                    "lora_dropout": 0.05,
+                    "lora_bias": "lora_only",
+                    "qwen3_vl_patch_embed": "auto",
+                },
+            }
+        )
+        assert "model.config.policy.lora_enabled=true" in overrides
+        assert "model.config.policy.lora_rank=8" in overrides
+        assert "model.config.policy.lora_dropout=0.05" in overrides
+        assert "model.config.policy.lora_bias=lora_only" in overrides
+        assert "model.config.policy.qwen3_vl_patch_embed=auto" in overrides
+
 
 # --------------------------------------------------------------------------- #
 # 2. build_hydra_overrides must NOT emit [custom] as per-leaf overrides        #

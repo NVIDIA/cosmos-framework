@@ -7,11 +7,11 @@ from typing import Optional
 
 import torch
 
-from cosmos_framework.utils.config import CheckpointConfig, JobConfig
-from cosmos_framework.utils.flags import INTERNAL
 from cosmos_framework.model._base import ImaginaireModel
 from cosmos_framework.utils import callback
+from cosmos_framework.utils.config import CheckpointConfig, JobConfig
 from cosmos_framework.utils.easy_io import easy_io
+from cosmos_framework.utils.flags import INTERNAL
 
 
 class AbstractCheckpointer(ABC):
@@ -92,6 +92,7 @@ class AbstractCheckpointer(ABC):
         scheduler: torch.optim.lr_scheduler.LRScheduler,
         grad_scaler: torch.amp.GradScaler,
         iteration: int,
+        epoch: int | None = None,
     ) -> None:
         pass
 

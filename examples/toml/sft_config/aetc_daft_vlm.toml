@@ -1,0 +1,99 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: OpenMDW-1.1
+
+# AETC dense SFT through the internal NVIDIA TAO DAFT data contract.
+# Required environment:
+#   AETC_TRAIN_ANNOTATIONS: JSON array of tao-vl-reason-v1.0 files
+#   AETC_TRAIN_MEDIA: shared media root for the training annotations
+#   AETC_VAL_ANNOTATIONS: JSON array of validation files
+#   AETC_VAL_MEDIA: shared media root for validation
+#   VLM_SAFETENSORS_PATH: Cosmos3-Nano checkpoint
+
+[job]
+task       = "vlm"
+experiment = "aetc_daft_vlm"
+project    = "cosmos3_reasoner"
+group      = "aetc_daft_sft"
+name       = "aetc_daft_vlm"
+wandb_mode = "disabled"
+
+[model]
+attn_implementation = "cosmos"
+precision = "bfloat16"
+
+[model.backbone]
+model_name = "${oc.env:VLM_SAFETENSORS_PATH}"
+safetensors_path = "${oc.env:VLM_SAFETENSORS_PATH}"
+
+[model.ema]
+enabled = false
+rate = 0.1
+iteration_shift = 0
+
+[model.parallelism]
+data_parallel_shard_degree = 4
+data_parallel_replicate_degree = 1
+context_parallel_shard_degree = 1
+cfg_parallel_shard_degree = 1
+
+[model.compile]
+enabled = false
+compile_dynamic = true
+
+[model.activation_checkpointing]
+mode = "full"
+save_ops_regex = ["fmha"]
+preserve_rng_state = true
+determinism_check = "default"
+
+[optimizer]
+betas = [0.9, 0.999]
+eps = 1.0e-6
+fused = true
+lr = 1.0e-5
+weight_decay = 0.01
+
+[scheduler]
+cycle_lengths = [10]
+f_max = [1.0]
+f_min = [1.0]
+f_start = [1.0]
+verbosity_interval = 0
+warm_up_steps = [0]
+
+[trainer]
+distributed_parallelism = "fsdp"
+grad_accum_iter = 1
+logging_iter = 1
+max_iter = 10
+num_epochs = 1
+steps_per_epoch = 10
+max_val_iter = 10
+run_validation = true
+validation_iter = 10
+validation_freq_in_epoch = 1
+run_validation_on_start = false
+
+[trainer.callbacks.compile_tokenizer]
+compile_after_iterations = 3
+enabled = false
+
+[trainer.callbacks.grad_clip]
+clip_norm = 1.0
+force_finite = false
+
+[trainer.callbacks.tao]
+enabled = true
+experiment_name = "Cosmos Framework AETC DAFT SFT"
+logging_interval = 1
+validation_heartbeat_interval = 1
+
+[checkpoint]
+keys_to_skip_loading = []
+load_path = "???"
+save_iter = 10
+save_freq_in_epoch = 1
+
+[dataloader_train]
+max_samples_per_batch = 1
+max_sequence_length = 40960

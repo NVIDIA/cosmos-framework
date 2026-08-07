@@ -42,7 +42,8 @@ def cross_entropy_loss(
     dp_group: dist.ProcessGroup | None = None,
     cp_group: dist.ProcessGroup | None = None,
     ignore_index: int = IGNORE_INDEX,
-) -> torch.Tensor:
+    return_stats: bool = False,
+) -> torch.Tensor | tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     """Next-token-prediction CE loss with DP/CP group reduction.
 
     Matches the behavior of cosmos_rl.policy.trainer.llm_trainer.sft_trainer.async_safe_ce
@@ -79,7 +80,14 @@ def cross_entropy_loss(
             reduction="mean",
         )
         loss = torch.nan_to_num(loss, nan=0.0)
-        return loss * loss_scaling_factor
+        result = loss * loss_scaling_factor
+        if return_stats:
+            per_token_loss = F.cross_entropy(
+                shifted_logits.float(), shifted_labels, ignore_index=ignore_index, reduction="none"
+            )
+            valid = shifted_labels != ignore_index
+            return result, per_token_loss[valid].sum().detach(), valid.sum().detach()
+        return result
 
     # No-CP path: per-token loss, then normalize over the global valid-token count.
     # Reference: async_safe_ce:89-109
@@ -89,13 +97,18 @@ def cross_entropy_loss(
         ignore_index=ignore_index,
         reduction="none",
     )
-    n_valid_tokens = (shifted_labels != ignore_index).sum()
+    valid_mask = shifted_labels != ignore_index
+    local_numerator = per_token_loss[valid_mask].sum()
+    local_denominator = valid_mask.sum()
+    n_valid_tokens = local_denominator.detach().clone()
     num_dp_workers = 1
     if dp_group is not None:
         dist.all_reduce(n_valid_tokens, op=dist.ReduceOp.SUM, group=dp_group)
         num_dp_workers = dist.get_world_size(group=dp_group)
 
-    loss = per_token_loss.sum() / (n_valid_tokens + 1e-8) * (num_dp_workers * loss_scaling_factor)
+    loss = local_numerator / (n_valid_tokens + 1e-8) * (num_dp_workers * loss_scaling_factor)
+    if return_stats:
+        return loss, local_numerator.detach(), local_denominator.detach()
     return loss
 
 
@@ -107,7 +120,8 @@ def weighted_cross_entropy_loss(
     dp_group: dist.ProcessGroup | None = None,
     cp_group: dist.ProcessGroup | None = None,
     ignore_index: int = IGNORE_INDEX,
-) -> torch.Tensor:
+    return_stats: bool = False,
+) -> torch.Tensor | tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     """Next-token-prediction CE loss interpolated between per-token and per-sample reductions.
 
     Matches ``cosmos_rl.policy.trainer.llm_trainer.sft_trainer.async_safe_weighted_ce``
@@ -156,4 +170,8 @@ def weighted_cross_entropy_loss(
         num_dp_workers = dist.get_world_size()
 
     loss = local_loss_sum / local_exp_weight_sum.clamp(min=1) * (num_dp_workers * loss_scaling_factor)  # []
+    if return_stats:
+        token_numerator = (per_token_loss * valid_mask).sum().detach()
+        token_denominator = valid_mask.sum().detach()
+        return loss, token_numerator, token_denominator
     return loss

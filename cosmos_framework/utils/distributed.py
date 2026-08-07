@@ -42,8 +42,18 @@ def init() -> int | None:
     local_rank = int(os.getenv("LOCAL_RANK", 0))
     try:
         device = Device(local_rank)
-        os.sched_setaffinity(0, device.get_cpu_affinity())
-    except pynvml.NVMLError as e:
+        allowed_affinity = set(os.sched_getaffinity(0))
+        device_affinity = set(device.get_cpu_affinity())
+        compatible_affinity = allowed_affinity.intersection(device_affinity)
+        if compatible_affinity:
+            os.sched_setaffinity(0, compatible_affinity)
+        else:
+            log.warning(
+                "Skipping GPU CPU affinity because NVML affinity "
+                f"{sorted(device_affinity)} does not intersect the process cpuset "
+                f"{sorted(allowed_affinity)}"
+            )
+    except (pynvml.NVMLError, OSError) as e:
         log.warning(f"Failed to set device affinity: {e}")
     # Set up distributed communication. CPU checkpoint conversion needs Gloo
     # because NCCL cannot synchronize CPU-resident tokenizer or model tensors.
