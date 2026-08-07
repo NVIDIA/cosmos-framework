@@ -85,7 +85,10 @@ class TestSchemaValidation:
                     "steps_per_epoch": 108,
                     "validation_freq_in_epoch": 1,
                 },
-                "checkpoint": {"save_freq_in_epoch": 2},
+                "checkpoint": {
+                    "save_freq_in_epoch": 2,
+                    "dcp_async_mode_enabled": False,
+                },
             }
         )
 
@@ -93,6 +96,15 @@ class TestSchemaValidation:
         assert cfg.trainer.steps_per_epoch == 108
         assert cfg.trainer.validation_freq_in_epoch == 1
         assert cfg.checkpoint.save_freq_in_epoch == 2
+        assert cfg.checkpoint.dcp_async_mode_enabled is False
+
+        overrides = build_hydra_overrides(
+            {
+                "job": {"task": "vlm", "experiment": "wts_vlm"},
+                "checkpoint": {"dcp_async_mode_enabled": False},
+            }
+        )
+        assert "checkpoint.dcp_async_mode_enabled=false" in overrides
 
     def test_vlm_peft_fields_are_explicit_and_validated(self) -> None:
         cfg = SFTExperimentConfig.model_validate(

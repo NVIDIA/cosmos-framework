@@ -687,6 +687,13 @@ class CheckpointConfig(BaseModel):
         ge=0,
         description="Save every N completed epochs; 0 uses save_iter.",
     )
+    dcp_async_mode_enabled: bool = Field(
+        default=True,
+        description=(
+            "Stage distributed checkpoints to a background process. Set false "
+            "for synchronous checkpoint completion before training continues."
+        ),
+    )
 
 
 # ---------------------------------------------------------------- dataloader_train
