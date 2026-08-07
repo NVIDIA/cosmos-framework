@@ -1,0 +1,126 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: OpenMDW-1.1
+
+# videophy2_lora_edge — LoRA SFT on VideoPhy-2 via CosmosDataLoader, on the
+# Cosmos3-Edge reasoner backbone (public, ungated nvidia/Cosmos3-Edge,
+# model_type cosmos3_edge — native HF metadata, no remote code).
+# Base config = cosmos_framework/configs/base/reasoner/config.py (selected by [job].task="vlm").
+#
+# LoRA counterpart of videophy2_sft_edge. Same dataset, dataflow, backbone and
+# freeze config (the SigLIP2 tower is frozen by regex in the experiment, since
+# freeze_vision_encoder=True only supports Qwen/Intern towers); the delta is the
+# adapter injection plus a LoRA-scale LR.
+#
+# Reasoner weights load DIRECTLY from the nvidia/Cosmos3-Edge snapshot resolved
+# via model_name — no converter step, no required weights env var.
+#
+# Dataset prep:
+#   python -m cosmos_framework.scripts.reasoner.prepare_videophy2_from_hf \
+#       --out_root $VIDEOPHYSICS_ROOT --split both
+#
+# Required env at launch: VIDEOPHYSICS_ROOT (read by the experiment Python).
+#
+# Example launch:
+#   bash examples/launch_sft_videophy2_lora_edge.sh
+
+[job]
+task         = "vlm"
+experiment   = "videophy2_sft_edge"       # the full-FT recipe; LoRA is switched on below
+project      = "cosmos3"
+group        = "vlm_videophy2_lora"
+name         = "videophy2_lora_edge"
+wandb_mode   = "online"
+
+[model]
+# Edge delta: the "cosmos" adapter is Qwen3-VL-only and rejects the Edge
+# reasoner's (cosmos3_edge) mask. flash_attention_2 is ~14% faster than sdpa with
+# matching loss curves; set "sdpa" where flash-attn is not installed.
+attn_implementation = "flash_attention_2"
+precision           = "bfloat16"
+
+# LoRA. Target names match the nano/super recipes, but Edge additionally needs a
+# path exclusion. Verified against the LIVE module tree, not the checkpoint:
+#   LLM attention (modeling_cosmos3_edge.py):  self_attn.{q_proj,k_proj,v_proj,o_proj}
+#   SigLIP2 ViT   (vision_siglip2.py):         self_attn.{q_proj,k_proj,v_proj,out_proj}
+# Three of the four names collide, so name matching alone would also adapt the
+# vision tower — which this recipe freezes (frozen_params=["model\.visual\."]).
+# Adapters landing there is NOT caught by the zero-adapter assertion: they would
+# still be trainable, so the run would look healthy while training the wrong
+# subnetwork. lora_exclude_path_regex keeps them in the LLM.
+#
+# NOTE: the snapshot's model.safetensors.index.json spells the LLM projections
+# to_q/to_k/to_v/to_out. Those are PRE-REMAP checkpoint keys (the loader converts
+# them on load); targeting those names matches nothing in the live model.
+lora_enabled            = true
+lora_rank               = 16
+lora_alpha              = 32
+lora_target_modules     = "q_proj,k_proj,v_proj,o_proj"
+lora_exclude_path_regex = "^model\\.visual\\."
+
+# Supplies arch/config/tokenizer AND weights: the training loader follows the
+# snapshot's root safetensors index into its weight shards.
+[model.backbone]
+model_name = "nvidia/Cosmos3-Edge"
+
+[model.ema]
+enabled         = false
+rate            = 0.1
+iteration_shift = 0
+
+[model.parallelism]
+data_parallel_shard_degree      = -1                     # auto from WORLD_SIZE (4- or 8-GPU)
+data_parallel_replicate_degree  = 1
+context_parallel_shard_degree   = 1
+cfg_parallel_shard_degree       = 1
+
+[model.compile]
+enabled                         = false
+compile_dynamic                 = true
+
+[model.activation_checkpointing]
+mode                = "full"
+save_ops_regex      = ["fmha"]
+preserve_rng_state  = true
+determinism_check   = "default"
+
+[optimizer]
+betas          = [0.9, 0.95]
+eps            = 1.0e-8
+fused          = true
+keys_to_select = ["lora_"]
+# Matched to the full-FT videophy2_sft_edge recipe (lr 1e-6, wd 0.1), with lr
+# lifted 5x because LoRA adapters start from lora_B=0 and only ~0.3% of params
+# carry gradient. Every other field equals videophy2_sft_edge.toml.
+lr             = 5.0e-6
+weight_decay   = 0.1
+
+[scheduler]
+cycle_lengths      = [300]                                # tracks max_iter
+f_max              = [1.0]
+f_min              = [0.1]
+f_start            = [0.05]
+verbosity_interval = 0
+warm_up_steps      = [5]
+
+[trainer]
+distributed_parallelism = "fsdp"
+grad_accum_iter         = 8
+logging_iter            = 1
+max_iter                = 300                             # longer run to see the full LoRA trajectory
+
+[trainer.callbacks.compile_tokenizer]
+compile_after_iterations = 3
+enabled                  = false
+
+[trainer.callbacks.grad_clip]
+clip_norm    = 1.0
+force_finite = false
+
+[checkpoint]
+keys_to_skip_loading = []
+load_path            = "???"
+save_iter            = 1000
+
+[dataloader_train]
+max_samples_per_batch = 1
+max_sequence_length   = 16000

@@ -14,6 +14,7 @@ the state-dict keys ``<path>.lora_A.weight`` and ``<path>.lora_B.weight``.
 from __future__ import annotations
 
 import math
+import re
 
 import torch
 import torch.nn as nn
@@ -65,6 +66,23 @@ class LoraInjectedLinear(nn.Linear):
         lora_out = self.lora_B(self.lora_A(x))
         return base_out + self._lora_scale * lora_out
 
+    def merged_weight(self, base: torch.Tensor, lora_a: torch.Tensor, lora_b: torch.Tensor) -> torch.Tensor:
+        """Fold the adapter into the base weight: ``W + (alpha / r) * B @ A``.
+
+        The three tensors are passed in rather than read off ``self`` because the
+        only caller (``HFExportCallback``) has already all-gathered them out of
+        their FSDP shards — ``self.weight`` is still a per-rank ``DTensor`` at
+        that point. Only ``_lora_scale`` comes from the module, so the merge
+        stays in lockstep with :meth:`forward` if the scaling convention changes.
+
+        The accumulation runs in float32 even when the export dtype is bfloat16:
+        the delta is typically orders of magnitude smaller than the base weight,
+        so adding it in bfloat16 rounds much of it away. The result is cast back
+        to ``base``'s dtype.
+        """
+        delta = torch.mm(lora_b.to(torch.float32), lora_a.to(torch.float32))
+        return (base.to(torch.float32) + self._lora_scale * delta).to(base.dtype)
+
 
 def _target_matches(full_child_path: str, child_name: str, target: str) -> bool:
     """Return True if ``target`` selects the child at ``full_child_path``.
@@ -91,6 +109,7 @@ def _inject_lora_inplace(
     target_modules: list[str],
     rank: int,
     alpha: int,
+    exclude_path_regex: str | None = None,
 ) -> int:
     """Replace each targeted ``nn.Linear`` child in-place with ``LoraInjectedLinear``.
 
@@ -101,16 +120,32 @@ def _inject_lora_inplace(
 
     Snapshots ``named_modules()`` before mutating the tree so newly-inserted
     LoRA submodules are not re-visited.
+
+    ``exclude_path_regex`` skips any module whose dotted path matches (searched,
+    not fullmatch). Name matching alone cannot always separate two towers of a
+    VLM: Cosmos3-Edge names its LLM projections ``q_proj``/``k_proj``/``v_proj``/
+    ``o_proj`` and its SigLIP2 vision projections ``q_proj``/``k_proj``/
+    ``v_proj``/``out_proj`` — three of the four names collide. Passing
+    ``r"^model\\.visual\\."`` keeps the adapters out of the vision tower.
     """
+    exclude = re.compile(exclude_path_regex) if exclude_path_regex else None
     replaced = 0
     for parent_name, parent in list(network.named_modules()):
         for child_name, child in list(parent.named_children()):
             if not isinstance(child, nn.Linear):
                 continue
             full_child_path = f"{parent_name}.{child_name}" if parent_name else child_name
-            if any(_target_matches(full_child_path, child_name, t) for t in target_modules):
-                setattr(parent, child_name, LoraInjectedLinear(child, rank, alpha))
-                replaced += 1
+            if not any(_target_matches(full_child_path, child_name, t) for t in target_modules):
+                continue
+            # Selection and exclusion are orthogonal, and exclusion runs second:
+            # `_target_matches` picks by name or path suffix, then the regex
+            # carves a subtree back out. Cosmos3-Edge needs both — its LLM and
+            # SigLIP2 tower share three of four projection names, so no target
+            # spelling separates them, but the tower is one contiguous subtree.
+            if exclude is not None and exclude.search(full_child_path):
+                continue
+            setattr(parent, child_name, LoraInjectedLinear(child, rank, alpha))
+            replaced += 1
     return replaced
 
 
@@ -120,6 +155,7 @@ def inject_lora_pre_fsdp(
     lora_rank: int,
     lora_alpha: int,
     lora_target_modules: str,
+    lora_exclude_path_regex: str | None = None,
 ) -> torch.nn.Module:
     """Inject LoRA adapters into ``network`` BEFORE FSDP wrap on meta device.
 
@@ -161,10 +197,15 @@ def inject_lora_pre_fsdp(
     if invalid_modules:
         log.warning(f"LoRA target modules not found in model: {invalid_modules}")
 
-    log.info(f"Injecting LoRA on meta device: rank={lora_rank}, alpha={lora_alpha}, targets={target_modules_list}")
+    log.info(
+        f"Injecting LoRA on meta device: rank={lora_rank}, alpha={lora_alpha}, "
+        f"targets={target_modules_list}, exclude_path_regex={lora_exclude_path_regex!r}"
+    )
 
     try:
-        replaced = _inject_lora_inplace(network, target_modules_list, lora_rank, lora_alpha)
+        replaced = _inject_lora_inplace(
+            network, target_modules_list, lora_rank, lora_alpha, exclude_path_regex=lora_exclude_path_regex
+        )
     except Exception as e:
         raise RuntimeError(f"Failed to inject LoRA adapters into model: {e}") from e
 

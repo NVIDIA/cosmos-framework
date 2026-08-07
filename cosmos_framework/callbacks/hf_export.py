@@ -12,6 +12,11 @@ Design notes
 - Worker exceptions are stored in ``_worker_exception`` and re-raised on the next
   checkpoint or at train end, so failures are never silently swallowed.
 - Controlled entirely via ``config.checkpoint.hf_export`` (HFExportConfig).
+- LoRA runs export a MERGED checkpoint: each ``LoraInjectedLinear`` contributes a
+  single ``<path>.weight`` equal to ``W + (alpha / r) * B @ A``, and no ``lora_*``
+  keys are written. The export is therefore a plain HF checkpoint that
+  ``from_pretrained`` (and ``eval_videophy2``) loads with the adapter's effect
+  already in the weights, exactly like a full fine-tune's export.
 
 Phase 2+ note
 -------------
@@ -205,6 +210,60 @@ class HFExportCallback(Callback):
     # Internal helpers
     # ------------------------------------------------------------------
 
+    # Path segments torch.compile and gradient checkpointing insert into the
+    # module tree. They are not part of the HF-native name.
+    _WRAPPER_SEGMENTS: frozenset[str] = frozenset({"_orig_mod", "_checkpoint_wrapped_module"})
+
+    @classmethod
+    def _strip_wrapper_prefixes(cls, name: str) -> str:
+        """Drop wrapper segments from a parameter or module path.
+
+        Dropping whole dot-separated segments rather than substrings matters for
+        module paths: a wrapped module's own path *ends* with the wrapper segment
+        (``layer._checkpoint_wrapped_module``) and has no trailing dot to match
+        on, so substring removal would leave it alone and
+        :meth:`_lora_merge_plan` would key its adapters off a name that no
+        stripped parameter ever produces — a silently unmerged export.
+        """
+        return ".".join(seg for seg in name.split(".") if seg not in cls._WRAPPER_SEGMENTS)
+
+    @staticmethod
+    def _lora_merge_plan(root: torch.nn.Module) -> tuple[dict[str, Any], set[str]]:
+        """Locate every LoRA-adapted linear and the adapter keys it owns.
+
+        Returns ``(merge_targets, adapter_keys)`` where ``merge_targets`` maps a
+        base-weight parameter name to the ``LoraInjectedLinear`` holding it, and
+        ``adapter_keys`` is the set of ``lora_A`` / ``lora_B`` parameter names
+        that must NOT be written to the export. Both use post-strip names so
+        they match what :meth:`_gather_weights` computes.
+
+        Empty on a full fine-tune, which is what keeps that path untouched.
+        """
+        # Deferred: cosmos_framework.utils.generator.lora is only needed when a
+        # LoRA run reaches export, and hf_export is imported from config land.
+        from cosmos_framework.utils.generator.lora import LoraInjectedLinear
+
+        merge_targets: dict[str, Any] = {}
+        adapter_keys: set[str] = set()
+        for module_name, module in root.named_modules():
+            if not isinstance(module, LoraInjectedLinear):
+                continue
+            path = HFExportCallback._strip_wrapper_prefixes(module_name)
+            # An adapted linear at the tree root (or under nothing but wrappers)
+            # strips to "", and its parameters are plain "weight" / "lora_A.weight".
+            prefix = f"{path}." if path else ""
+            merge_targets[f"{prefix}weight"] = module
+            adapter_keys.add(f"{prefix}lora_A.weight")
+            adapter_keys.add(f"{prefix}lora_B.weight")
+        return merge_targets, adapter_keys
+
+    @staticmethod
+    def _gather_full(param: torch.Tensor) -> torch.Tensor:
+        """All-gather a sharded parameter. Collective — every rank must call it."""
+        if isinstance(param, torch.distributed.tensor.DTensor):
+            param = param.full_tensor()
+        return param.detach()
+
     def _gather_weights(self, model: Any) -> tuple[list[dict[str, torch.Tensor]], dict[str, str], int]:
         """Iterate model parameters, all-gather DTensor shards, and build CPU chunks.
 
@@ -212,17 +271,28 @@ class HFExportCallback(Callback):
         ``cpu_chunks`` and ``manifest``; other ranks return empty structures but still
         participate in the distributed all-gathers.
 
+        LoRA adapters are merged into their base weights here, so the export is a
+        plain HF checkpoint either way — see :meth:`_lora_merge_plan`.
+
         Returns:
             cpu_chunks:  List of ``{weight_name: cpu_tensor}`` dicts, one per shard file.
             manifest:    Mapping of ``weight_name → shard_filename``.
             total_size:  Total byte count of all exported tensors (for the index JSON).
         """
+        merge_targets, adapter_keys = self._lora_merge_plan(model.model.model)
+        if merge_targets:
+            log.info(
+                f"[HFExportCallback] Merging {len(merge_targets)} LoRA adapter(s) into their "
+                "base weights; the export carries no lora_* keys."
+            )
+
         cpu_chunks: list[dict[str, torch.Tensor]] = []
         manifest: dict[str, str] = {}
         current_chunk: dict[str, torch.Tensor] = {}
         current_chunk_bytes: int = 0
         total_size: int = 0
         file_idx: int = 0
+        merged: set[str] = set()
 
         for name, param in model.model.model.named_parameters():
             # Phase 2+: HFModel initialises _model via AutoModelForImageTextToText /
@@ -240,12 +310,32 @@ class HFExportCallback(Callback):
             # torch.compile and gradient-checkpointing wrappers inject prefixes into
             # named_parameters() output.  Strip them so exported keys are HF-native,
             # matching what HFModel._load_vlm_weights() does for the in-memory state dict.
-            name = name.replace("_orig_mod.", "").replace("_checkpoint_wrapped_module.", "")
+            name = self._strip_wrapper_prefixes(name)
+
+            # Adapter tensors are folded into their base weight below, so they must
+            # not also be written out: no HF architecture declares lora_* keys, and
+            # from_pretrained() drops unexpected ones with a warning — the export
+            # would look complete while actually being the untuned base model.
+            if name in adapter_keys:
+                continue
 
             # Gather across FSDP / TP / CP ranks (collective — all ranks must call).
-            if isinstance(param, torch.distributed.tensor.DTensor):
-                param = param.full_tensor()
-            param = param.detach()
+            param = self._gather_full(param)
+
+            lora_module = merge_targets.get(name)
+            if lora_module is not None:
+                # lora_A / lora_B are gathered here instead of at their own
+                # named_parameters() entries. Every rank walks the same module
+                # tree in the same order, which is all the all-gather requires.
+                param = lora_module.merged_weight(
+                    param,
+                    self._gather_full(lora_module.lora_A.weight),
+                    self._gather_full(lora_module.lora_B.weight),
+                )
+                merged.add(name)
+
+            # Cast after the merge: merged_weight accumulates in float32, and
+            # casting first would round the delta away before it is added.
             if self._export_dtype is not None:
                 param = param.to(dtype=self._export_dtype)
 
@@ -271,6 +361,37 @@ class HFExportCallback(Callback):
         # Flush the final (possibly partial) chunk.
         if current_chunk_bytes > 0 and is_rank0() and current_chunk:
             cpu_chunks.append(current_chunk)
+
+        # Every adapter the plan found must actually have been folded in. The plan
+        # keys off named_modules() paths and the loop off named_parameters() paths;
+        # if a wrapper this code does not know about ever desynchronizes the two,
+        # the merge silently no-ops and the export is the untuned base model.
+        #
+        # `merged` is tracked on every rank (the loop is rank-independent), so this
+        # aborts everywhere at the same point rather than on rank 0 alone. Both
+        # checks sit after the last collective, so raising cannot strand a peer
+        # mid-all-gather.
+        if len(merged) != len(merge_targets):
+            missed = sorted(set(merge_targets) - merged)
+            raise RuntimeError(
+                f"[HFExportCallback] LoRA merge incomplete: {len(merged)} of "
+                f"{len(merge_targets)} adapters folded in. Unmerged base weights: "
+                f"{missed[:8]}{' ...' if len(missed) > 8 else ''}. The module paths from "
+                "named_modules() no longer line up with the parameter paths from "
+                "named_parameters() — check _WRAPPER_SEGMENTS for a wrapper this code "
+                "does not strip."
+            )
+        # The invariant the export must actually satisfy, asserted directly.
+        # manifest is rank-0-only, so this is a rank-0 check; the count above is
+        # what catches the desync case on every rank.
+        leaked = sorted(k for k in manifest if "lora_" in k)
+        if leaked:
+            raise RuntimeError(
+                f"[HFExportCallback] Adapter tensors leaked into the export: {leaked[:8]}"
+                f"{' ...' if len(leaked) > 8 else ''}. An HF checkpoint must carry merged "
+                "weights only; from_pretrained() would drop these and hand back the "
+                "untuned base model."
+            )
 
         return cpu_chunks, manifest, total_size
 

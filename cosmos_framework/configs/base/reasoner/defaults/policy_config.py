@@ -30,8 +30,30 @@ class PolicyConfig:
     #   0 < exponent < 1 -> interpolation; e.g. exponent=0.5 gives square-root per-token loss (Qwen3-VL)
     weighted_ce_exponent: float = 1.0
 
+    # LoRA (parameter-efficient fine-tuning). When ``lora_enabled=True``,
+    # ``VLMModel._init_vlm`` injects the custom LoRA adapters BEFORE FSDP wrap on
+    # the meta-device HF backbone, then re-initializes lora_A/lora_B after the
+    # meta tensors are materialized and the base weights are loaded. Pair with
+    # ``optimizer.keys_to_select=["lora_"]``.
+    #
+    # ``lora_target_modules`` is matched by EXACT child name (see
+    # ``_inject_lora_inplace``), not substring. The default targets the four
+    # Qwen3-VL LLM attention projections; the vision tower names its projections
+    # ``qkv`` / ``proj`` / ``linear_fc1`` / ``linear_fc2``, so the ViT is never
+    # touched. Other model families (e.g. cosmos3_edge) may need different names.
+    #
+    # ``lora_exclude_path_regex`` is searched against each candidate module's
+    # dotted path and skips matches. Needed when the two towers of a VLM share
+    # projection names: Cosmos3-Edge names its LLM projections q/k/v/o_proj and
+    # its SigLIP2 vision projections q/k/v/out_proj, so three of four collide and
+    # name matching alone would inject adapters into the (frozen) vision tower.
+    lora_enabled: bool = False
+    lora_rank: int = 16
+    lora_alpha: int = 32
+    lora_target_modules: str = "q_proj,k_proj,v_proj,o_proj"
+    lora_exclude_path_regex: str = ""
+
     # Extra model config
-    lora: Union[str, None] = None
     enable_liger_kernel: bool = False
     trainable_map: Union[str, None] = None
     monkey_patch_for_text_only_data: bool = False
