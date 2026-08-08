@@ -101,7 +101,7 @@ python -m cosmos_framework.scripts.inference \
 
 ### Multi-GPU
 
-Use `torchrun --nproc-per-node=N` when launching across multiple GPUs (N > 1). By default the model weights are sharded (FSDP) across all N GPUs, so any model fits. The `throughput` preset runs that single sharded replica over a batch; the `latency` preset additionally needs `--dp-shard-size=1` on multiple GPUs so the ranks are free for context parallelism (see [Parallelism Arguments](#parallelism-arguments)).
+Use `torchrun --nproc-per-node=N` when launching across multiple GPUs (N > 1). By default the model weights are sharded (FSDP) across all N GPUs. The `throughput` preset runs that single sharded replica over a batch; the `latency` preset overlays context and/or CFG parallelism on the same ranks while retaining full-world FSDP sharding (see [Parallelism Arguments](#parallelism-arguments)).
 
 #### Cosmos3-Nano
 
@@ -179,9 +179,9 @@ Set `enable_sound: true` on a `text2video` sample (see [`inputs/omni/t2vs.json`]
 By default the model weights are sharded (FSDP) across **all** visible GPUs (`dp_shard_size = WORLD_SIZE`, `dp_replicate_size = 1`), so any model fits regardless of size. Override any axis with the `--dp-shard-size` / `--dp-replicate-size` / `--cp-size` / `--cfgp-size` flags.
 
 - `--parallelism-preset`
-  - `latency`: Minimize wall-clock per sample by splitting each sample across GPUs with **context parallelism**. On multiple GPUs, also pass `--dp-shard-size=1` so the ranks are used for context/CFG parallelism instead of weight sharding. Used for real-time jobs.
+  - `latency`: Minimize wall-clock per sample by splitting each sample across GPUs with **context and/or CFG parallelism** overlaid on the FSDP ranks. Keep the default full-world FSDP sharding unless the complete checkpoint fits in each smaller shard group. Used for real-time jobs.
   - `throughput`: No context parallelism (`cp=cfgp=1`); the model is sharded across all GPUs and a single replica processes the batch. Used for batch jobs.
-- `--dp-shard-size`: Number of ranks the model is sharded over (FSDP). Defaults to all ranks (`WORLD_SIZE`).
+- `--dp-shard-size`: Number of ranks the model is sharded over (FSDP). Defaults to all ranks (`WORLD_SIZE`). Reducing it is an expert override that increases model memory per rank and may make large checkpoints fail to fit.
 - `--max-num-seqs`: Maximum number of samples batched together per replica.
 
 ## Sample Arguments
