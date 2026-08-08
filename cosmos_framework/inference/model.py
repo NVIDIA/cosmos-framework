@@ -45,6 +45,11 @@ from cosmos_framework.inference.common.public_model_config import (
 )
 from cosmos_framework.utils import misc
 from cosmos_framework.utils.flags import SMOKE
+from cosmos_framework.utils.generator.quantization import (
+    apply_modelopt_fp8_checkpoint_inplace,
+    is_modelopt_fp8_checkpoint,
+    plan_modelopt_fp8_targets,
+)
 
 if TYPE_CHECKING:
     from cosmos_framework.model.generator.omni_mot_model import OmniMoTModel
@@ -351,12 +356,25 @@ class _DiffusersHuggingFaceStorageReader(HuggingFaceStorageReader):
 class _DiffusersLoadPlanner(dcp.DefaultLoadPlanner):
     """Remap diffusers source keys onto the OmniMoTModel.net state dict for DCP load."""
 
-    def __init__(self, checkpoint_path: Path) -> None:
+    def __init__(
+        self,
+        checkpoint_path: Path,
+        *,
+        defer_modelopt_fp8_weights_loading: bool = False,
+    ) -> None:
+        """Initialize the planner.
+
+        When ``defer_modelopt_fp8_weights_loading`` is enabled, ModelOpt FP8
+        weight tensors are omitted from the DCP load so they can be installed
+        directly as TorchAO weights after the remaining checkpoint is loaded.
+        """
         super().__init__()
         self.checkpoint_path = checkpoint_path
         self.weight_map = _diffusers_weight_map(checkpoint_path)
         self.files_to_keys = _diffusers_files_to_keys(self.weight_map)
         self.has_vision_weights = any(rel_path.startswith("vision_encoder/") for rel_path in self.files_to_keys)
+        self.defer_modelopt_fp8_weights_loading = defer_modelopt_fp8_weights_loading
+        self.skipped_source_keys: set[str] = set()
 
     def set_up_planner(
         self,
@@ -365,9 +383,19 @@ class _DiffusersLoadPlanner(dcp.DefaultLoadPlanner):
         is_coordinator: bool = False,
     ) -> None:
         target_state_dict = self._normalize_target_state_dict(state_dict)
-        remapped_state_dict, loaded_keys = self._build_remapped_state_dict(target_state_dict)
+        if self.defer_modelopt_fp8_weights_loading:
+            if metadata is None:
+                raise ValueError("Checkpoint metadata is required to identify ModelOpt FP8 weights.")
+            self.skipped_source_keys = {
+                key
+                for key, tensor_metadata in metadata.state_dict_metadata.items()
+                if isinstance(tensor_metadata, TensorStorageMetadata)
+                and tensor_metadata.properties.dtype == torch.float8_e4m3fn
+                and key.endswith(".weight")
+            }
+        remapped_state_dict, loaded_keys, skipped_target_keys = self._build_remapped_state_dict(target_state_dict)
 
-        missing_keys = set(target_state_dict) - loaded_keys
+        missing_keys = set(target_state_dict) - loaded_keys - skipped_target_keys
         if not self.has_vision_weights:
             missing_keys = {key for key in missing_keys if not key.startswith("language_model.visual.")}
         # Task-specialized checkpoints (e.g. Text2Image, Image2Video) omit the
@@ -403,9 +431,25 @@ class _DiffusersLoadPlanner(dcp.DefaultLoadPlanner):
             target_state_dict[net_key] = tensor
         return target_state_dict
 
-    def _build_remapped_state_dict(self, target_state_dict: dict[str, Any]) -> tuple[dict[str, Any], set[str]]:
+    def _build_remapped_state_dict(
+        self, target_state_dict: dict[str, Any]
+    ) -> tuple[dict[str, Any], set[str], set[str]]:
+        """Build the state dict used to load diffusers weights into the model.
+
+        Args:
+            target_state_dict: Model state dict keyed by normalized Cosmos3 target names.
+
+        Returns:
+            A tuple containing:
+            - A state dict keyed by diffusers checkpoint names whose values reference
+              the corresponding target model tensors.
+            - Target keys that will be populated by the DCP load.
+            - Target keys whose ModelOpt FP8 weights were deferred for direct TorchAO
+              installation.
+        """
         remapped_state_dict: dict[str, Any] = {}
         loaded_keys: set[str] = set()
+        skipped_target_keys: set[str] = set()
         # When the model is built without a visual tower (e.g. Cosmos3-Edge t2i with
         # include_visual disabled), its state dict has no `language_model.visual.*`
         # targets, so the checkpoint's vision_encoder weights have nowhere to go — skip
@@ -413,6 +457,10 @@ class _DiffusersLoadPlanner(dcp.DefaultLoadPlanner):
         has_visual_target = any(key.startswith("language_model.visual.") for key in target_state_dict)
         for diff_key, rel_path in sorted(self.weight_map.items()):
             net_key = _diffusers_to_net_key(diff_key, rel_path)
+            if diff_key in self.skipped_source_keys:
+                if net_key in target_state_dict:
+                    skipped_target_keys.add(net_key)
+                continue
             if net_key is None:
                 if _is_diffusers_model_weight_path(rel_path):
                     if rel_path.startswith("vision_encoder/") and not has_visual_target:
@@ -426,7 +474,7 @@ class _DiffusersLoadPlanner(dcp.DefaultLoadPlanner):
                 raise KeyError(f"Multiple diffusers keys map to target model key {net_key!r}.")
             remapped_state_dict[diff_key] = target_tensor
             loaded_keys.add(net_key)
-        return remapped_state_dict, loaded_keys
+        return remapped_state_dict, loaded_keys, skipped_target_keys
 
 
 class Cosmos3OmniConfig(transformers.PretrainedConfig):
@@ -530,6 +578,30 @@ class Cosmos3OmniModel(transformers.PreTrainedModel):
         config.parallelism = attrs.asdict(parallelism_config)
         config.compile = attrs.asdict(compile_config)
         config.quantization = attrs.asdict(quantization_config)
+
+        # ModelOpt FP8 checkpoints ship already-quantized E4M3 weights plus static
+        # scales. The target linears are swapped to FP8 modules on the meta device
+        # during `build_net` — before FSDP wrap and materialization — so both the
+        # sharded and replicated paths work and peak memory follows the FP8 weights.
+        modelopt_checkpoint = is_modelopt_fp8_checkpoint(checkpoint_path)
+        if modelopt_checkpoint and quantization_config.method is not None:
+            raise ValueError(
+                "A ModelOpt FP8 checkpoint is already quantized; do not also request runtime quantization."
+            )
+        if modelopt_checkpoint and not _is_diffusers_checkpoint(checkpoint_path):
+            raise ValueError(f"ModelOpt FP8 loading requires a diffusers-format checkpoint layout: {checkpoint_path}")
+        if modelopt_checkpoint:
+            # Resolve which linears the checkpoint quantizes here, where the
+            # diffusers key mapping lives, and hand the plain FQN list to the
+            # model config so `build_net` can do the meta-device swap without
+            # reaching back into the loader.
+            config.quantization["modelopt_fp8_checkpoint_path"] = str(checkpoint_path)
+            config.quantization["modelopt_fp8_target_fqns"] = plan_modelopt_fp8_targets(
+                checkpoint_path,
+                _diffusers_to_net_key,
+                weight_map=_diffusers_weight_map(checkpoint_path),
+            )
+
         model = cls(config)
         # Thread the local checkpoint dir to the reasoner LM (consumed by Edge's
         # lazy ``_ensure_vision_tower``): checkpoints that bundle a
@@ -555,9 +627,21 @@ class Cosmos3OmniModel(transformers.PreTrainedModel):
                     dcp.load(
                         state_dict=state_dict,
                         storage_reader=_DiffusersHuggingFaceStorageReader(checkpoint_path),
-                        planner=_DiffusersLoadPlanner(checkpoint_path),
+                        planner=_DiffusersLoadPlanner(
+                            checkpoint_path,
+                            defer_modelopt_fp8_weights_loading=modelopt_checkpoint,
+                        ),
                         no_dist=no_dist,
                     )
+                    if modelopt_checkpoint:
+                        # The FP8 weights were skipped by the planner above; install
+                        # them straight from the checkpoint as TorchAO weights.
+                        apply_modelopt_fp8_checkpoint_inplace(
+                            model.model.net,
+                            checkpoint_path,
+                            key_mapper=_diffusers_to_net_key,
+                            weight_map=_diffusers_weight_map(checkpoint_path),
+                        )
                     return model
                 state_dict = get_model_state_dict(model)
                 _raise_on_missing_vision_keys(checkpoint_path, state_dict)

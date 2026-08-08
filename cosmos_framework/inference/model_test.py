@@ -3,20 +3,27 @@
 
 import json
 from pathlib import Path
+from types import SimpleNamespace
+from typing import Any
+from unittest.mock import patch
 
 import attrs
 import hydra
+import pytest
 import safetensors.torch
 import torch
 import torch.distributed.checkpoint as dcp
+from torch.distributed.checkpoint.metadata import Metadata, TensorProperties, TensorStorageMetadata
 
 from cosmos_framework.configs.base.defaults.compile import CompileConfig
 from cosmos_framework.configs.base.defaults.parallelism import ParallelismConfig
+from cosmos_framework.configs.base.defaults.quantization import QuantizationConfig
 from cosmos_framework.inference.args import _CHECKPOINTS, DEFAULT_CHECKPOINT
 from cosmos_framework.inference.common.args import CheckpointType
 from cosmos_framework.inference.common.config import structure_config
 from cosmos_framework.inference.model import (
     Cosmos3OmniConfig,
+    Cosmos3OmniModel,
     _diffusers_to_net_key,
     _diffusers_weight_map,
     _DiffusersHuggingFaceStorageReader,
@@ -144,6 +151,90 @@ def test_diffusers_dcp_load_remaps_nested_safetensors(tmp_path: Path):
     )
 
     torch.testing.assert_close(target["model.net._orig_mod.vae2llm.weight"], source)
+
+
+class LightweightDcpModel(Cosmos3OmniModel):
+    """Skip the hydra model build so the checkpoint-loading plumbing can be tested on CPU."""
+
+    model: Any
+
+    def __init__(self, config: Cosmos3OmniConfig, *args: object, **kwargs: object) -> None:
+        object.__setattr__(self, "model", SimpleNamespace(net=object()))
+
+
+def test_diffusers_load_planner_skips_modelopt_fp8_weights(tmp_path: Path) -> None:
+    checkpoint_path = tmp_path / "checkpoint"
+    checkpoint_path.mkdir()
+    source_key = "transformer.time_embedder.linear_1.weight"
+    target_key = "time_embedder.mlp.0.weight"
+    (checkpoint_path / "model.safetensors.index.json").write_text(
+        json.dumps({"weight_map": {source_key: "transformer/model.safetensors"}}),
+        encoding="utf-8",
+    )
+    metadata = Metadata(
+        state_dict_metadata={
+            source_key: TensorStorageMetadata(
+                properties=TensorProperties(dtype=torch.float8_e4m3fn),
+                size=torch.Size([1]),
+                chunks=[],
+            )
+        }
+    )
+    planner = _DiffusersLoadPlanner(checkpoint_path, defer_modelopt_fp8_weights_loading=True)
+
+    planner.set_up_planner({target_key: torch.empty(1)}, metadata)
+    plan = planner.create_local_plan()
+
+    assert planner.state_dict == {}
+    assert planner.skipped_source_keys == {source_key}
+    assert plan.items == []
+
+
+def test_from_pretrained_dcp_installs_modelopt_fp8_after_load(tmp_path: Path) -> None:
+    events: list[str] = []
+    converted_targets: list[object] = []
+    merged_weight_map = {"selected.weight": "transformer/model.safetensors"}
+
+    def record_load(**kwargs: Any) -> None:
+        assert kwargs["planner"].defer_modelopt_fp8_weights_loading
+        events.append("load")
+
+    def record_modelopt_conversion(
+        model: object, checkpoint_path: Path, *, key_mapper: object, weight_map: dict[str, str]
+    ) -> list[str]:
+        del checkpoint_path, key_mapper
+        events.append("modelopt")
+        converted_targets.append(model)
+        assert weight_map is merged_weight_map
+        return ["selected"]
+
+    with (
+        patch.object(CheckpointType, "from_path", return_value=CheckpointType.HF),
+        patch("cosmos_framework.inference.model._is_diffusers_checkpoint", return_value=True),
+        patch("cosmos_framework.inference.model.is_modelopt_fp8_checkpoint", return_value=True),
+        patch("cosmos_framework.inference.model._diffusers_weight_map", return_value=merged_weight_map),
+        patch("cosmos_framework.inference.model.plan_modelopt_fp8_targets", return_value=["selected"]),
+        patch("cosmos_framework.inference.model.get_model_state_dict", return_value={}),
+        patch("cosmos_framework.inference.model.dcp.load", side_effect=record_load),
+        patch(
+            "cosmos_framework.inference.model.apply_modelopt_fp8_checkpoint_inplace",
+            side_effect=record_modelopt_conversion,
+        ),
+    ):
+        model = LightweightDcpModel.from_pretrained_dcp(checkpoint_path=tmp_path, config=Cosmos3OmniConfig())
+
+    assert events == ["load", "modelopt"]
+    assert converted_targets == [model.model.net]
+
+
+def test_from_pretrained_dcp_rejects_modelopt_fp8_with_runtime_quantization(tmp_path: Path) -> None:
+    with patch("cosmos_framework.inference.model.is_modelopt_fp8_checkpoint", return_value=True):
+        with pytest.raises(ValueError, match="already quantized"):
+            LightweightDcpModel.from_pretrained_dcp(
+                checkpoint_path=tmp_path,
+                config=Cosmos3OmniConfig(),
+                quantization_config=QuantizationConfig(method="fp8"),
+            )
 
 
 def test_diffusers_weight_map_registered_checkpoint():

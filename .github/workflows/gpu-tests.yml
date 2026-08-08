@@ -9,7 +9,7 @@
 # The six GPU jobs then run (one at a time on the single runner):
 #   * training-smoke                — Nano SFT pipeline (convert -> train 5 -> export -> t2i)
 #   * generator-training-regression — vision_sft_nano loss vs goldens (4-GPU subset)
-#   * generator-inference-smoke     — Nano + Edge multi-modality inference (t2vs/t2v + policy + forward_dynamics)
+#   * generator-inference-smoke     — Nano + Edge multi-modality inference (t2vs/t2v + policy + forward_dynamics) + Nano ModelOpt FP8
 #   * distilled-inference-smoke     — Super 4-step T2I + I2V inference (4-GPU subset)
 #   * reasoner-inference-smoke      — Nano reasoner golden + Edge reasoner smoke + Qwen conversion coverage (4-GPU)
 #   * reasoner-training-regression  — llava_ov loss vs goldens (4-GPU subset)
@@ -18,7 +18,9 @@
 #   * a self-hosted runner labelled [self-hosted, gpu, h200] with 8 GPUs,
 #     NVIDIA drivers, and `uv` on PATH;
 #   * an `HF_TOKEN` repository secret (gated dataset/model downloads, incl. the
-#     streamed LLaVA-OneVision-Data dataset).
+#     streamed LLaVA-OneVision-Data dataset). The Nano ModelOpt FP8 cases also
+#     need it to read nvidia/Cosmos3-Experimental, which is not public; they skip
+#     (they do not fail) when it cannot.
 #
 # Inputs/checkpoints download to examples/ + the HF cache and are reused across
 # runs (the h100 goldens are reused on H200 — see _detect_arch).
@@ -111,7 +113,9 @@ jobs:
   generator-inference-smoke:
     needs: pre-commit
     runs-on: [self-hosted, gpu, h200]
-    timeout-minutes: 60
+    # 90 (not 60) since the Nano step gained the two ModelOpt FP8 cases: a 20 GB
+    # checkpoint on a cold cache plus two more 8-GPU runs.
+    timeout-minutes: 90
     env:
       HF_TOKEN: ${{ secrets.HF_TOKEN }}
       HF_HUB_DISABLE_XET: "1"
@@ -124,9 +128,14 @@ jobs:
         run: uv sync --all-extras --group=cu128-train
 
       # One inference call over t2vs (+sound), action policy, and forward_dynamics; checks each output.
+      # Plus the ModelOpt static-FP8 Nano checkpoint in both parallelism layouts
+      # (FSDP-sharded and replicated). The FP8 checkpoint lives in the
+      # access-controlled nvidia/Cosmos3-Experimental repo, so those two cases SKIP
+      # unless HF_TOKEN can read it — check the log for "no access to
+      # nvidia/Cosmos3-Experimental" before trusting a green run to have covered FP8.
       # MAX_GPUS defaults to 8. -s streams the live process log.
       # Reuse the same input-asset cache dir as the unittest job.
-      - name: Nano inference smoke (t2vs + action policy + forward_dynamics, 8 GPU)
+      - name: Nano inference smoke (t2vs + action policy + forward_dynamics + FP8, 8 GPU)
         run: |
           export LD_LIBRARY_PATH=
           export COSMOS_DOWNLOAD_CACHE_DIR="$RUNNER_WORKSPACE/cosmos_input_cache"

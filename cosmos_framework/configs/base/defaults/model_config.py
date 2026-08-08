@@ -10,6 +10,7 @@ from cosmos_framework.configs.base.defaults.activation_checkpointing import Acti
 from cosmos_framework.configs.base.defaults.compile import CompileConfig
 from cosmos_framework.configs.base.defaults.ema import EMAConfig
 from cosmos_framework.configs.base.defaults.parallelism import ParallelismConfig
+from cosmos_framework.configs.base.defaults.quantization import QuantizationConfig
 from cosmos_framework.configs.base.defaults.reasoner import VLMConfig
 
 
@@ -160,6 +161,12 @@ class OmniMoTModelConfig:
 
     # torch.compile knobs (enabled, compiled_region, dynamic, ...).
     compile: CompileConfig = CompileConfig()
+
+    # Post-training quantization + ModelOpt FP8 checkpoint metadata. Mirrored
+    # from Cosmos3OmniConfig.quantization (see ``inference/model.py``) so
+    # ``build_net`` can read modelopt_fp8_checkpoint_path / target_fqns without
+    # reaching outside the model config schema.
+    quantization: QuantizationConfig = QuantizationConfig()
 
     # Activation-checkpointing policy (trade-off between memory and speed).
     activation_checkpointing: ActivationCheckpointingConfig = ActivationCheckpointingConfig()

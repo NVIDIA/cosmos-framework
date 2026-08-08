@@ -134,6 +134,8 @@ def _build_public_export_model_config(model_dict: dict[str, Any]) -> dict[str, A
             "exclude_regex": [],
             "include_regex": [],
             "method": None,
+            "modelopt_fp8_checkpoint_path": None,
+            "modelopt_fp8_target_fqns": [],
         }
         # ``fp8_granularity`` is inert when quantization is disabled (method=None);
         # ignore it so a disabled config still matches the expected default.
