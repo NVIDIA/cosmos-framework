@@ -29,8 +29,15 @@ from typing import Any, ClassVar
 import huggingface_hub.constants as _hf_const
 import numpy as np
 import torch
-from lerobot.datasets.lerobot_dataset import LeRobotDataset, LeRobotDatasetMetadata
 from torch.utils.data import Dataset
+
+try:
+    import lerobot as lerobot
+    from lerobot.datasets.lerobot_dataset import LeRobotDataset, LeRobotDatasetMetadata
+except ImportError:
+    lerobot = None
+    LeRobotDataset = object  # type: ignore
+    LeRobotDatasetMetadata = object  # type: ignore
 
 _hf_offline_applied = False
 
@@ -190,7 +197,7 @@ def _patch_decoder_cache(max_size: int = _LRU_VIDEO_CACHE_MAX_SIZE) -> None:
     """Replace the module-level ``_default_decoder_cache`` in LeRobot with an
     LRU-capped version to prevent unbounded memory growth in workers."""
     global _decoder_cache_patched
-    if _decoder_cache_patched:
+    if lerobot is None or _decoder_cache_patched:
         return
 
     import lerobot.datasets.video_utils as _vu
@@ -328,6 +335,11 @@ class BaseActionLeRobotDataset(Dataset):
         min_episode_length_frames: int | None = None,
     ) -> None:
         super().__init__()
+        if lerobot is None:
+            raise ImportError(
+                "LeRobot datasets require the `lerobot` package. "
+                "Please install `lerobot` to use this dataset."
+            )
         _ensure_hf_hub_offline()
         _patch_decoder_cache()
         self._memprofile = _memprofile_enabled()

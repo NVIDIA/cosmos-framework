@@ -7,13 +7,17 @@ import os
 from typing import TYPE_CHECKING
 
 import attrs
-import wandb
-import wandb.util
 from omegaconf import DictConfig
 
 from cosmos_framework.utils.lazy_config.lazy import LazyConfig
 from cosmos_framework.utils import distributed, log, object_store
 from cosmos_framework.utils.easy_io import easy_io
+
+try:
+    import wandb
+    import wandb.util
+except ImportError:
+    wandb = None  # type: ignore
 
 if TYPE_CHECKING:
     from cosmos_framework.utils.config import CheckpointConfig, Config, JobConfig
@@ -39,6 +43,8 @@ def init_wandb(config: Config, model: ImaginaireModel) -> None:
         config (Config): The config object for the Imaginaire codebase.
         model (ImaginaireModel): The PyTorch model.
     """
+    if wandb is None:
+        return
     if isinstance(config.job, DictConfig):
         from cosmos_framework.utils.config import JobConfig
 

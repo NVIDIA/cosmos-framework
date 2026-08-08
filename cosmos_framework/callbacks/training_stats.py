@@ -5,13 +5,17 @@ from __future__ import annotations
 
 import torch
 import torch.distributed as dist
-import wandb
 
 from cosmos_framework.model._base import ImaginaireModel
 from cosmos_framework.utils import distributed
 from cosmos_framework.utils.callback import Callback
 from cosmos_framework.callbacks.wandb_log import _LossRecord
 from cosmos_framework.data.generator.action.domain_utils import EMBODIMENT_TO_DOMAIN_ID
+
+try:
+    import wandb
+except ImportError:
+    wandb = None  # type: ignore
 
 # Build inverse mapping: domain_id -> embodiment_type. First occurrence wins when multiple embodiment names share the
 # same domain id.
@@ -275,10 +279,7 @@ class TrainingStatsCallback(Callback):
         embodiment_total, embodiment_counts = self._gather_global_embodiment_counts()
         per_embodiment_loss_dict = self._compute_per_embodiment_loss_stats(log_prefix="train")
 
-        if not distributed.is_rank0():
-            return
-
-        if wandb.run is None:
+        if not distributed.is_rank0() or wandb is None or wandb.run is None:
             return
 
         log_dict: dict[str, float] = {}

@@ -14,9 +14,8 @@ import torch.distributed as dist
 import torch.nn.functional as F
 import torchvision
 import torchvision.transforms.functional as torchvision_F
-import wandb
-from einops import rearrange
 
+from einops import rearrange
 from cosmos_framework.callbacks.every_n import EveryN
 from cosmos_framework.model._base import ImaginaireModel
 from cosmos_framework.utils import distributed, log, misc
@@ -24,6 +23,11 @@ from cosmos_framework.utils.easy_io import easy_io
 from cosmos_framework.tools.visualize.video import save_img_or_video
 from cosmos_framework.model.generator.mot.context_parallel_utils import broadcast_context_parallel_object
 from cosmos_framework.utils.generator.data_utils import slice_data_batch
+
+try:
+    import wandb
+except ImportError:
+    wandb = None  # type: ignore
 
 WandbImagePaths = str | dict[str, str]
 
@@ -297,7 +301,7 @@ def _add_wandb_image_paths(
     image_paths: WandbImagePaths | None,
     caption: str,
 ) -> None:
-    if image_paths is None:
+    if wandb is None or image_paths is None:
         return
     if isinstance(image_paths, dict):
         for key_suffix, image_path in image_paths.items():
@@ -622,7 +626,7 @@ class EveryNDrawSample(EveryN):
 
             log.debug("waiting for all ranks to finish", rank0_only=False)
             dist.barrier()
-        if wandb.run:
+        if wandb and wandb.run:
             sample_counter = getattr(trainer, "sample_counter", iteration)
             data_type = "image" if model.is_image_batch(data_batch) else "video"
             tag += f"_{data_type}"
@@ -932,7 +936,7 @@ class EveryNDrawSample(EveryN):
         file_base_fp = f"{base_fp_wo_ext}_resize.jpg"
         local_path = f"{self.local_dir}/{file_base_fp}"
 
-        if self.rank == 0 and wandb.run:
+        if self.rank == 0 and wandb and wandb.run:
             if is_single_frame:  # image case
                 to_show = rearrange(
                     to_show[:, :n_columns],

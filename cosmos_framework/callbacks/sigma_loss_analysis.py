@@ -9,12 +9,16 @@ import matplotlib.pyplot as plt
 import numpy as np
 import torch
 import torch.distributed as dist
-import wandb
 
 from cosmos_framework.model._base import ImaginaireModel
 from cosmos_framework.utils import distributed, misc
 from cosmos_framework.utils.callback import Callback
 from cosmos_framework.utils.easy_io import easy_io
+
+try:
+    import wandb
+except ImportError:
+    wandb = None  # type: ignore
 
 
 def _get_quantile_bins(n=10) -> np.ndarray:
@@ -107,8 +111,8 @@ class SigmaLossAnalysis(Callback):
         self,
         sigma_arr: torch.Tensor,
         loss_arr: torch.Tensor,  # [N]  # [N]
-    ) -> Optional[wandb.Image]:
-        if len(sigma_arr) == 0:
+    ) -> Optional[object]:
+        if len(sigma_arr) == 0 or wandb is None:
             return None
 
         # Convert to numpy for plotting
@@ -340,5 +344,5 @@ class SigmaLossAnalysis(Callback):
                 if len(self.video_cache.sigma_list) > 0:
                     info.update(self._gather_and_save(self.video_cache, iteration, "sigma_loss_video", log_viz=log_viz))
 
-                if distributed.is_rank0() and info and wandb.run:
+                if distributed.is_rank0() and info and wandb and wandb.run:
                     wandb.log(info, step=iteration)

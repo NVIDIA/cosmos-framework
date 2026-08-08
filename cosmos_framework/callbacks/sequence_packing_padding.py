@@ -2,12 +2,16 @@
 # SPDX-License-Identifier: OpenMDW-1.1
 
 import torch
-import wandb
 
 from cosmos_framework.callbacks.every_n import EveryN
 from cosmos_framework.model._base import ImaginaireModel
 from cosmos_framework.trainer import ImaginaireTrainer
 from cosmos_framework.data.generator.sequence_packing.runtime import get_padding_stats
+
+try:
+    import wandb
+except ImportError:
+    wandb = None  # type: ignore
 
 
 class SequencePackingPadding(EveryN):
@@ -31,7 +35,7 @@ class SequencePackingPadding(EveryN):
         loss: torch.Tensor,
         iteration: int,
     ) -> None:
-        if wandb.run:
+        if wandb and wandb.run:
             padding_stats = get_padding_stats()
             log_dict = {
                 "SequencePackingPadding/max_causal_len_image_batch": padding_stats["MAX_CAUSAL_LEN_IMAGE_BATCH"],
