@@ -197,6 +197,11 @@ def build_transfer_batch(
         "padding_mask": torch.zeros(1, 1, height, width).cuda(),
         "num_frames": torch.tensor([num_frames]).cuda(),
         "num_vision_items_per_sample": [num_vision_items],
+        # Controls need their complete latent sequences for transfer attention, but
+        # only the conditioned prefix of the final item (the generated target) is
+        # consumed by the sampler.  Let the causal-VAE inference path skip encoding
+        # the target's generated tail while preserving full encodes for every control.
+        "prefix_encode_last_vision_item_per_sample": True,
         # Per-control weights for multi-control weighted attention aggregation.
         # Shape: [num_samples], each element is a list of floats (one per control).
         "control_weights": [control_weights],
@@ -448,7 +453,10 @@ def generate_transfer_sample(
         input_frames = pad_temporal_frames(input_frames, max(total_frames, chunk_frames))
 
     output_chunks: list[torch.Tensor] = []
-    control_chunks_per_hint: dict[TransferHintKey, list[torch.Tensor]] = {k: [] for k in per_hint_frames}
+    collect_controls = bool(sample_args.save_control_outputs or sample_args.show_control_condition)
+    control_chunks_per_hint: dict[TransferHintKey, list[torch.Tensor]] = (
+        {k: [] for k in per_hint_frames} if collect_controls else {}
+    )
     previous_output: torch.Tensor | None = None
 
     is_distilled = model.config.fixed_step_sampler_config is not None
@@ -560,15 +568,17 @@ def generate_transfer_sample(
         )
         generated_latent = outputs["vision"][-1]
         output_video = model.decode(generated_latent).clamp(-1, 1).cpu()
-
         if chunk_id == 0:
             output_chunks.append(output_video)
-            for hint_key, cn in control_norms.items():
-                control_chunks_per_hint[hint_key].append(cn.unsqueeze(0).cpu())
         else:
             output_chunks.append(output_video[:, :, current_conditional_frames:])
+
+        if collect_controls:
             for hint_key, cn in control_norms.items():
-                control_chunks_per_hint[hint_key].append(cn[:, current_conditional_frames:].unsqueeze(0).cpu())
+                if chunk_id == 0:
+                    control_chunks_per_hint[hint_key].append(cn.unsqueeze(0).cpu())
+                else:
+                    control_chunks_per_hint[hint_key].append(cn[:, current_conditional_frames:].unsqueeze(0).cpu())
         previous_output = output_video
 
     full_output = torch.cat(output_chunks, dim=2)[:, :, :total_frames]

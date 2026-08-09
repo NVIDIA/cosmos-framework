@@ -5,6 +5,7 @@ from types import SimpleNamespace
 from unittest.mock import Mock
 
 import pytest
+import torch
 
 
 def test_reasoner_only_setup_skips_vision_tokenizer(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -67,3 +68,47 @@ def test_default_setup_loads_vision_tokenizer(monkeypatch: pytest.MonkeyPatch) -
 
     assert model.tokenizer_vision_gen is vision_tokenizer
     vision_tokenizer.reset_dtype.assert_called_once_with()
+
+
+def test_transfer_prefix_encode_keeps_controls_full_and_truncates_target() -> None:
+    from cosmos_framework.model.generator import omni_mot_model
+
+    class CausalTokenizer:
+        is_causal = True
+
+        @staticmethod
+        def get_latent_num_frames(pixel_frames: int) -> int:
+            return (pixel_frames - 1) // 4 + 1
+
+        @staticmethod
+        def get_pixel_num_frames(latent_frames: int) -> int:
+            return (latent_frames - 1) * 4 + 1
+
+    encoded_pixel_lengths: list[int] = []
+
+    def encode_item(item: torch.Tensor, *, num_views: int, frames_per_view: int | None) -> torch.Tensor:
+        assert num_views == 1
+        assert frames_per_view is None
+        pixel_frames = item.shape[2]
+        encoded_pixel_lengths.append(pixel_frames)
+        latent_frames = CausalTokenizer.get_latent_num_frames(pixel_frames)
+        return torch.ones(1, 2, latent_frames, 1, 1)
+
+    model = SimpleNamespace(
+        tokenizer_vision_gen=CausalTokenizer(),
+        _encode_vision_item=encode_item,
+    )
+    controls_and_target = [torch.zeros(1, 3, 97, 2, 2) for _ in range(3)]
+
+    with torch.no_grad():
+        latents = omni_mot_model.OmniMoTModel._encode_vision_x0_tokens(
+            model,
+            controls_and_target,
+            num_vision_items_per_sample=[3],
+            vision_condition_indexes=[[0, 1, 2, 3]],
+            prefix_encode_last_vision_item_per_sample=True,
+        )
+
+    assert encoded_pixel_lengths == [97, 97, 13]
+    assert [latent.shape[2] for latent in latents] == [25, 25, 25]
+    assert torch.count_nonzero(latents[-1][:, :, 4:]) == 0

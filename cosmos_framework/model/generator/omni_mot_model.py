@@ -3511,6 +3511,7 @@ class OmniMoTModel(ImaginaireModel):
         vision_condition_indexes: list[list[int]] | None,
         num_views_per_vision_item: list[int] | None = None,
         frames_per_vision_item: list[int] | None = None,
+        prefix_encode_last_vision_item_per_sample: bool = False,
     ) -> list[torch.Tensor]:
         """Encode vision items into x0 latent tokens, optionally splitting camera views.
 
@@ -3532,9 +3533,13 @@ class OmniMoTModel(ImaginaireModel):
         frame 0). Inverse-dynamics conditions every latent frame, so it keeps the full
         encode automatically.
 
-        The optimization falls back to a full encode for multi-vision samples,
-        multiview items, non-causal tokenizers, samples with no conditioning frames,
-        and any item whose full clip is already the minimal prefix.
+        Multi-vision samples are fully encoded by default.  Callers that explicitly
+        set ``prefix_encode_last_vision_item_per_sample`` opt the last item of each
+        sample into prefix encoding while all preceding items remain full encodes.
+        Transfer inference uses this because its layout is ``[controls..., target]``.
+        The optimization otherwise falls back to a full encode for multiview items,
+        non-causal tokenizers, samples with no conditioning frames, and any item whose
+        full clip is already the minimal prefix.
         """
 
         has_multiview_metadata = num_views_per_vision_item is not None
@@ -3555,17 +3560,44 @@ class OmniMoTModel(ImaginaireModel):
                 )
             frames_per_vision_item_optional = list(frames_per_vision_item)
 
-        # Only opt in when a caller supplied per-sample conditioning indexes, the
-        # samples map 1:1 to single-view vision items (no multi-vision flattening),
-        # and the tokenizer is causal (so a pixel prefix reproduces the leading latents).
+        item_condition_indexes: list[list[int] | None] | None = None
+        if vision_condition_indexes is not None:
+            if num_vision_items_per_sample is None:
+                if len(vision_condition_indexes) == len(raw_state_vision):
+                    item_condition_indexes = list(vision_condition_indexes)
+            elif prefix_encode_last_vision_item_per_sample:
+                if len(vision_condition_indexes) != len(num_vision_items_per_sample):
+                    raise ValueError(
+                        "vision_condition_indexes must align with num_vision_items_per_sample: "
+                        f"got {len(vision_condition_indexes)} condition lists and "
+                        f"{len(num_vision_items_per_sample)} samples"
+                    )
+                if any(num_items < 1 for num_items in num_vision_items_per_sample):
+                    raise ValueError(
+                        "prefix_encode_last_vision_item_per_sample requires at least one vision item per sample"
+                    )
+                item_condition_indexes = []
+                for num_items, condition_indexes in zip(
+                    num_vision_items_per_sample,
+                    vision_condition_indexes,
+                    strict=True,
+                ):
+                    item_condition_indexes.extend([None] * (num_items - 1))
+                    item_condition_indexes.append(condition_indexes)
+                if len(item_condition_indexes) != len(raw_state_vision):
+                    raise ValueError(
+                        "num_vision_items_per_sample must sum to the number of flattened vision items: "
+                        f"got sum={sum(num_vision_items_per_sample)} and {len(raw_state_vision)} items"
+                    )
+
+        # Only opt in when a caller supplied conditioning indexes that can be
+        # aligned to flattened single-view items and the tokenizer is causal.
         optimization_applicable = (
-            vision_condition_indexes is not None
-            and num_vision_items_per_sample is None
+            item_condition_indexes is not None
             and not has_multiview_metadata
             and all(num_views == 1 for num_views in num_views_per_vision_item)
             and self.tokenizer_vision_gen is not None
             and self.tokenizer_vision_gen.is_causal
-            and len(vision_condition_indexes) == len(raw_state_vision)
         )
         if not optimization_applicable:
             # Training does not provide vision_condition_indexes, so it fully
@@ -3596,13 +3628,17 @@ class OmniMoTModel(ImaginaireModel):
             )
 
         tokenizer = self.tokenizer_vision_gen
-        assert vision_condition_indexes is not None  # narrowed by optimization_applicable above
+        assert item_condition_indexes is not None  # narrowed by optimization_applicable above
         x0_tokens_vision: list[torch.Tensor] = []
         for raw_state_vision_i, condition_indexes in zip(
             raw_state_vision,
-            vision_condition_indexes,
+            item_condition_indexes,
             strict=True,
         ):
+            if condition_indexes is None:
+                x0_tokens_vision.append(self._encode_vision_item(raw_state_vision_i, num_views=1, frames_per_view=None))
+                continue
+
             # The temporal axis is the first of the trailing (T, H, W) dims for both the
             # [B, C, T, H, W] and [C, T, H, W] layouts the tokenizer accepts, and encode
             # preserves rank so the same index locates T in the latent output.
@@ -3774,6 +3810,9 @@ class OmniMoTModel(ImaginaireModel):
             vision_condition_indexes,
             num_views_per_vision_item,
             frames_per_vision_item,
+            prefix_encode_last_vision_item_per_sample=bool(
+                data_batch.get("prefix_encode_last_vision_item_per_sample", False)
+            ),
         )
 
         frame_size = data_batch.get("image_size", None)

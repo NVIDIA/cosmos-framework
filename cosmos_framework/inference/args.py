@@ -747,6 +747,7 @@ class TransferDataArgs(ArgsBase, _TransferDataBase):
     num_first_chunk_conditional_frames: pydantic.NonNegativeInt | None = None
     share_vision_temporal_positions: bool | None = None
     emphasize_control_in_prompt: bool | None = None
+    save_control_outputs: bool | None = None
 
 
 class TransferDataOverrides(OverridesBase, _TransferDataBase):
@@ -789,6 +790,8 @@ class TransferDataOverrides(OverridesBase, _TransferDataBase):
     """If True (default), auto-append a one-sentence directive to the user prompt that
     names the active control modality (e.g. "Follow the edge control video precisely.
     ..."). Set False for clean baselines / ablations. The system prompt is unchanged."""
+    save_control_outputs: bool | None = None
+    """Whether to materialize and save copies of the already-supplied control videos."""
 
     @pydantic.model_validator(mode="after")
     def _validate_transfer_hints(self) -> Self:
@@ -829,6 +832,7 @@ class TransferDataOverrides(OverridesBase, _TransferDataBase):
         "num_first_chunk_conditional_frames": 0,
         "share_vision_temporal_positions": True,
         "emphasize_control_in_prompt": True,
+        "save_control_outputs": True,
     }
     _TRANSFER_HINT_DEFAULTS: ClassVar[dict[TransferHintKey, dict[str, Any]]] = {
         TransferHintKey.EDGE: {"preset_edge_threshold": PresetEdgeThreshold.MEDIUM},
