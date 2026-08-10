@@ -18,6 +18,16 @@ from cosmos_framework.auxiliary.guardrail.common.core import (
 )
 from cosmos_framework.utils import log, misc
 
+# Sentinel marking characters that the censor replaced. It must be a character
+# that cannot appear in ordinary text, because censorship is detected by looking
+# for it. Do not colourise it: termcolor strips ANSI escapes when stdout is not a
+# TTY, which reduced the sentinel to a bare "*" in any run whose output was piped
+# to a file, so text containing Markdown emphasis ("**bold**") was reported as
+# blocked even when the blocklist matched nothing.
+CENSOR_SENTINEL = "\x00"
+
+# Displayed to the user in the "Censored Prompt" message. Presentation only --
+# never used to decide whether something was censored.
 CENSOR = misc.Color.red("*")
 
 
@@ -72,11 +82,12 @@ class Blocklist(ContentSafetyGuardrail):
             bool: True if the prompt is blocked, False otherwise
             str: A message indicating why the prompt was blocked
         """
-        censored_prompt = self.profanity.censor(input_prompt, censor_char=CENSOR)
+        censored_prompt = self.profanity.censor(input_prompt, censor_char=CENSOR_SENTINEL)
         # Uncensor whitelisted words that were censored from blocklist fuzzy matching
         censored_prompt = self.uncensor_whitelist(input_prompt, censored_prompt)
-        if CENSOR in censored_prompt:
-            return True, f"Prompt blocked by censorship: Censored Prompt: {censored_prompt}"
+        if CENSOR_SENTINEL in censored_prompt:
+            display_prompt = censored_prompt.replace(CENSOR_SENTINEL, CENSOR)
+            return True, f"Prompt blocked by censorship: Censored Prompt: {display_prompt}"
         return False, ""
 
     @staticmethod
