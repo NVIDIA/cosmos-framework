@@ -1,6 +1,8 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: OpenMDW-1.1
 
+import importlib.util
+
 from hydra.core.config_store import ConfigStore
 
 from cosmos_framework.configs.base.defaults.reasoner import VLMConfig
@@ -59,7 +61,18 @@ nemotron_nano_12b_v2_vl_bf16 = PolicyConfig(backbone=VLMConfig(model_name="nvidi
 # model_type "cosmos3_edge" (native HF metadata, no remote code; classes are
 # registered in-framework). Reasoner weights load directly from the snapshot —
 # the training loader follows its root safetensors index; no converter step.
-cosmos3_edge_reasoner = PolicyConfig(backbone=VLMConfig(model_name="nvidia/Cosmos3-Edge"))
+# The default "cosmos" adapter is Qwen3-VL-specific and rejects Edge's
+# explicit attention mask, so Edge must not inherit it. Prefer flash-attn-2
+# where its wheels exist (x86); fall back to SDPA elsewhere (e.g. aarch64).
+# An explicit attn_implementation in the experiment TOML still wins.
+_EDGE_ATTN_IMPLEMENTATION = (
+    "flash_attention_2" if importlib.util.find_spec("flash_attn") is not None else "sdpa"
+)
+
+cosmos3_edge_reasoner = PolicyConfig(
+    backbone=VLMConfig(model_name="nvidia/Cosmos3-Edge"),
+    attn_implementation=_EDGE_ATTN_IMPLEMENTATION,
+)
 
 
 def register_vlm_policy():
