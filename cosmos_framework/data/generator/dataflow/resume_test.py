@@ -6,6 +6,8 @@ CosmosDataLoaderStateCallback. Single process, num_workers=0."""
 
 from __future__ import annotations
 
+from itertools import islice
+
 import torch
 
 from cosmos_framework.callbacks.cosmos_dataloader_state import CosmosDataLoaderStateCallback
@@ -58,11 +60,13 @@ def test_resume_continues_without_dup_or_skip():
     assert resumed == [5, 6, 7]
 
 
-def test_map_distributor_accepts_string_seed():
-    # TAO recipes resolve seed via ${oc.env:TAO_DATALOADER_SEED,42}, which
-    # OmegaConf returns as a string; the distributor must coerce it.
-    from itertools import islice
+def test_map_distributor_normalizes_environment_style_seed_string():
+    distributor = MapDistributor(_IdDS(4), shuffle=True, seed="42")
 
-    dist = MapDistributor(_IdDS(4), shuffle=True, seed="42")
-    items = list(islice(dist.stream(dp_rank=0, dp_world_size=1, worker_id=0, num_workers=1), 6))
-    assert len(items) == 6
+    assert distributor._seed == 42
+    first = [item["id"].item() for item in islice(distributor.stream(0, 1, 0, 1), 4)]
+    second = [
+        item["id"].item()
+        for item in islice(MapDistributor(_IdDS(4), shuffle=True, seed=42).stream(0, 1, 0, 1), 4)
+    ]
+    assert first == second
