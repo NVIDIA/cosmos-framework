@@ -9,6 +9,7 @@ from difflib import SequenceMatcher
 
 import nltk
 from better_profanity import profanity
+from nltk.corpus import wordnet
 
 from cosmos_framework.auxiliary.guardrail.blocklist.utils import read_keyword_list_from_dir, to_ascii
 from cosmos_framework.auxiliary.guardrail.common.core import (
@@ -30,12 +31,18 @@ CENSOR_SENTINEL = "\x00"
 # never used to decide whether something was censored.
 CENSOR = misc.Color.red("*")
 
+# How many adjacent tokens may be fused when looking for a separator-stripped
+# evasion, i.e. a blocked word written with a space inserted mid-word.
+# Mirrors better_profanity's own lookahead.
+_MAX_JOIN_TOKENS = 3
+
 
 class Blocklist(ContentSafetyGuardrail):
     def __init__(
         self,
         guardrail_partial_match_min_chars: int = 6,
         guardrail_partial_match_letter_count: float = 0.4,
+        guardrail_exempt_fused_prose: bool = True,
     ) -> None:
         """Blocklist model for text filtering safety check.
 
@@ -43,6 +50,14 @@ class Blocklist(ContentSafetyGuardrail):
             checkpoint_dir (str): Path to the checkpoint directory.
             guardrail_partial_match_min_chars (int, optional): Minimum number of characters in a word to check for partial match. Defaults to 6.
             guardrail_partial_match_letter_count (float, optional): Maximum allowed difference in characters for partial match. Defaults to 0.4.
+            guardrail_exempt_fused_prose (bool, optional): When True, a match that
+                exists only because the spaces between ordinary English words were
+                deleted is treated as coincidence rather than evasion, so
+                "a desk in the background" does not match the entry "deskin".
+                Set False to restore the stricter previous behaviour, which blocks
+                that sentence but never lets a fused match through. See
+                `_has_legitimate_match` for the escape class this trades away.
+                Defaults to True.
         """
         self.checkpoint_dir = os.path.join(GUARDRAIL1_CHECKPOINT.download(), "blocklist")
         nltk.data.path.append(os.path.join(self.checkpoint_dir, "nltk_data"))
@@ -50,6 +65,7 @@ class Blocklist(ContentSafetyGuardrail):
         self.profanity = profanity
         self.guardrail_partial_match_min_chars = guardrail_partial_match_min_chars
         self.guardrail_partial_match_letter_count = guardrail_partial_match_letter_count
+        self.guardrail_exempt_fused_prose = guardrail_exempt_fused_prose
 
         # Load blocklist and whitelist keywords
         self.blocklist_words = read_keyword_list_from_dir(os.path.join(self.checkpoint_dir, "custom"))
@@ -57,6 +73,13 @@ class Blocklist(ContentSafetyGuardrail):
         self.exact_match_words = read_keyword_list_from_dir(os.path.join(self.checkpoint_dir, "exact_match"))
 
         self.profanity.load_censor_words(custom_words=self.blocklist_words, whitelist_words=self.whitelist_words)
+        self._dictionary_cache: dict[str, bool] = {}
+        self._max_blocklist_words = max((len(w.split()) for w in self.blocklist_words), default=1)
+        # Entries that genuinely contain spaces, so a spaced match can be told
+        # apart from a match that only worked because the spaces were deleted.
+        self._blocklist_phrases = {
+            " ".join(w.lower().split()) for w in self.blocklist_words if " " in w
+        }
         log.debug(f"Loaded {len(self.blocklist_words)} words/phrases from blocklist")
         log.debug(f"Whitelisted {len(self.whitelist_words)} words/phrases from whitelist")
         log.debug(f"Loaded {len(self.exact_match_words)} exact match words/phrases from blocklist")
@@ -92,10 +115,118 @@ class Blocklist(ContentSafetyGuardrail):
         censored_prompt = self.profanity.censor(input_prompt, censor_char=CENSOR_SENTINEL)
         # Uncensor whitelisted words that were censored from blocklist fuzzy matching
         censored_prompt = self.uncensor_whitelist(input_prompt, censored_prompt)
-        if CENSOR_SENTINEL in censored_prompt:
-            display_prompt = censored_prompt.replace(CENSOR_SENTINEL, CENSOR)
-            return True, f"Prompt blocked by censorship: Censored Prompt: {display_prompt}"
-        return False, ""
+        if CENSOR_SENTINEL not in censored_prompt:
+            return False, ""
+        # better_profanity also matches across word boundaries with the separators
+        # deleted, so confirm a real match exists before blocking. Only reached
+        # when something already matched, so the common path costs nothing.
+        if not self._has_legitimate_match(input_prompt):
+            return False, ""
+        display_prompt = censored_prompt.replace(CENSOR_SENTINEL, CENSOR)
+        return True, f"Prompt blocked by censorship: Censored Prompt: {display_prompt}"
+
+    def _is_dictionary_word(self, word: str) -> bool:
+        """True if the word is ordinary English, per the WordNet corpus.
+
+        Used to tell an evasion apart from a coincidence. If the corpus is
+        unavailable, report False so every join stays suspicious and the filter
+        remains at least as strict as before.
+        """
+        if word not in self._dictionary_cache:
+            try:
+                self._dictionary_cache[word] = bool(wordnet.synsets(word))
+            except LookupError:
+                self._dictionary_cache[word] = False
+        return self._dictionary_cache[word]
+
+    def _is_prose_word(self, word: str) -> bool:
+        """True if the word could plausibly stand alone in ordinary prose.
+
+        Single letters are excluded even though WordNet knows them: a lone "f" or
+        "n" beside another word is the shape of an evasion ("n ike"), not
+        of normal writing.
+        """
+        return len(word) >= 2 and self._is_dictionary_word(word)
+
+    def _fires(self, text: str) -> bool:
+        """True if the matcher censors anything in `text`."""
+        return self.profanity.censor(text, censor_char=CENSOR_SENTINEL) != text
+
+    def _has_legitimate_match(self, input_prompt: str) -> bool:
+        """Re-check a flagged prompt with word boundaries respected.
+
+        better_profanity concatenates adjacent words with their separators removed
+        (`any_next_words_form_swear_word`) so that a blocked word written with a space
+        inserted mid-word is still caught -- "n ike" for the entry "nike". The
+        side effect is that ordinary prose collides with short blocklist entries:
+        "a desk in the background" forms "deskin".
+
+        A match is legitimate when any of these holds:
+
+        * a single whitespace-delimited token matches on its own -- this keeps
+          matches that join across punctuation inside a token, such as "desk-in";
+        * a run of tokens matches a blocklist entry that genuinely contains
+          spaces, such as "Boston Dynamics";
+        * a run of tokens matches only once the spaces are deleted AND at least
+          one part is not an ordinary English word -- which is what an evasion
+          looks like ("n ike", "to yota").
+
+        A space-deleted join whose every part is a dictionary word is rejected as
+        coincidence. Matching is delegated to the library throughout, so leet
+        substitutions and punctuation are handled exactly as before.
+
+        Known limits
+        ------------
+        This is a heuristic on top of a heuristic, and it is worth stating plainly
+        what it does and does not buy.
+
+        * **Escape class introduced here.** A banned word split into pieces that
+          are *all* multi-letter dictionary words is no longer treated as an
+          evasion. "assassin" written as "ass ass in" would pass. Set
+          `guardrail_exempt_fused_prose=False` to give this up and go back to
+          blocking every fused match, at the cost of blocking ordinary prose.
+        * **Escape classes that already existed.** Fused matching never reached
+          far anyway: with the blocklist entry "nike", stock code blocks "n ike"
+          and "ni ke" but not "nik e" or "n i k e", because the library looks
+          ahead only two words and misses trailing single letters. Nothing here
+          widens those.
+        * **WordNet is the trust boundary.** "Ordinary English" means "WordNet has
+          a synset", which over-includes: it counts single letters such as "n" and
+          "f" as words, which is why `_is_prose_word` requires two characters. A
+          fragment that WordNet happens to know ("ike") is treated as ordinary.
+        * **Layering matters.** The blocklist is a coarse pre-filter with model
+          based guardrails (llamaGuard3, qwen3guard, video content safety) running
+          alongside it. It is not the last line of defence, which is what makes
+          this trade reasonable rather than reckless.
+        """
+        if not self.guardrail_exempt_fused_prose:
+            return True
+
+        whitelist = {w.lower() for w in self.whitelist_words}
+        raw_tokens = input_prompt.split()
+        tokens = [t.strip(string.punctuation).lower() for t in raw_tokens]
+
+        for raw, token in zip(raw_tokens, tokens):
+            if token and token not in whitelist and self._fires(raw):
+                return True
+
+        # Phrase matches are bounded by the longest blocklist entry, but a
+        # separator-stripped join fuses several tokens into ONE entry word, so it
+        # needs its own bound. Three matches the library's own lookahead.
+        max_window = max(self._max_blocklist_words, _MAX_JOIN_TOKENS)
+        for i in range(len(tokens)):
+            upper = min(max_window, len(tokens) - i)
+            for size in range(2, upper + 1):
+                window = tokens[i : i + size]
+                if not all(window) or any(w in whitelist for w in window):
+                    break
+                if " ".join(window) in self._blocklist_phrases:
+                    return True
+                if self._fires("".join(window)) and not all(
+                    self._is_prose_word(w) for w in window
+                ):
+                    return True
+        return False
 
     @staticmethod
     def check_partial_match(
