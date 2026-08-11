@@ -11,6 +11,7 @@ import transformers
 from torch import nn
 from transformers import ParakeetEncoder, ParakeetEncoderConfig
 
+from cosmos_framework.model.generator.reasoner.audio.projector import AudioProjector
 from cosmos_framework.model.generator.reasoner.parakeet.configuration_parakeet import (
     ParakeetAudioConfig,
     get_nemotron_parakeet_config,
@@ -179,7 +180,7 @@ class NemotronParakeetEncoder(nn.Module):
         return outputs.last_hidden_state, self.get_output_lengths(input_lengths)
 
 
-class ParakeetAudioProjector(nn.Module):
+class ParakeetAudioProjector(AudioProjector):
     """Project Parakeet features into a reasoner's hidden space.
 
     Architecture: LayerNorm -> Linear -> GELU -> Linear, matching the existing
@@ -188,20 +189,11 @@ class ParakeetAudioProjector(nn.Module):
     """
 
     def __init__(self, config: ParakeetAudioConfig) -> None:
-        super().__init__()
-        self.input_hidden_size = config.encoder_config.hidden_size
-        self.projection_hidden_size = config.projection_hidden_size
-        self.out_hidden_size = config.out_hidden_size
-        self.norm = nn.LayerNorm(self.input_hidden_size, eps=1e-6)
-        self.linear_fc1 = nn.Linear(self.input_hidden_size, self.projection_hidden_size)
-        self.act_fn = nn.GELU()
-        self.linear_fc2 = nn.Linear(self.projection_hidden_size, self.out_hidden_size)
-
-    def reset_parameters(self) -> None:
-        """Initialize projector parameters, including after ``to_empty``."""
-        self.norm.reset_parameters()
-        self.linear_fc1.reset_parameters()
-        self.linear_fc2.reset_parameters()
+        super().__init__(
+            input_hidden_size=config.encoder_config.hidden_size,
+            projection_hidden_size=config.projection_hidden_size,
+            out_hidden_size=config.out_hidden_size,
+        )
 
     def forward(self, hidden_states: torch.Tensor) -> torch.Tensor:
         if hidden_states.ndim not in (2, 3):
@@ -213,10 +205,7 @@ class ParakeetAudioProjector(nn.Module):
             raise ValueError(
                 f"hidden_states must have hidden size {self.input_hidden_size}, got {hidden_states.shape[-1]}"
             )
-        hidden_states = self.norm(hidden_states)
-        hidden_states = self.linear_fc1(hidden_states)
-        hidden_states = self.act_fn(hidden_states)
-        return self.linear_fc2(hidden_states)
+        return super().forward(hidden_states)
 
 
 class ParakeetAudioModel(nn.Module):
@@ -239,6 +228,10 @@ class ParakeetAudioModel(nn.Module):
                 "encoder and projector hidden sizes must match, got "
                 f"{encoder_hidden_size} and {self.projector.input_hidden_size}"
             )
+
+    def init_weights(self, buffer_device: torch.device | None = None) -> None:
+        """Initialize the fresh projector after meta materialization."""
+        self.projector.reset_parameters()
 
     def forward(
         self,

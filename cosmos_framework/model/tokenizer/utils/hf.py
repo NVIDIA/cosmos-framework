@@ -12,12 +12,18 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
-NEMOTRON_VISION_TOKEN_REMAP: dict[str, str] = {
+NEMOTRON_LEGACY_VISION_TOKEN_REMAP: dict[str, str] = {
     "<SPECIAL_20>": "<|vision_start|>",
     "<SPECIAL_21>": "<|vision_end|>",
     "<SPECIAL_22>": "<|image_pad|>",
 }
-_PATCHED_NEMOTRON_SNAPSHOT_CACHE: dict[tuple[str, str], str] = {}
+NEMOTRON_DISTINCT_MEDIA_TOKEN_REMAP: dict[str, str] = {
+    "<SPECIAL_18>": "<|video_pad|>",
+    "<SPECIAL_19>": "<|image_pad|>",
+    "<SPECIAL_20>": "<|vision_start|>",
+    "<SPECIAL_21>": "<|vision_end|>",
+}
+_PATCHED_NEMOTRON_SNAPSHOT_CACHE: dict[tuple[str, str, bool, str | None], str] = {}
 _PATCHED_NEMOTRON_SNAPSHOT_DIRS: set[Path] = set()
 
 
@@ -70,6 +76,7 @@ def resolve_hf_snapshot_path(
     model_name: str,
     cache_dir: str | None,
     required_files: tuple[str, ...] = ("tokenizer_config.json",),
+    revision: str | None = None,
 ) -> str | None:
     """Find a cached HuggingFace snapshot directory for one model.
 
@@ -77,6 +84,8 @@ def resolve_hf_snapshot_path(
         model_name: HuggingFace model identifier such as ``Qwen/Qwen3-0.6B``.
         cache_dir: Root HF cache directory, typically ``HF_HOME``.
         required_files: Files that must exist inside the snapshot directory.
+        revision: Optional immutable snapshot revision. When supplied, do not
+            fall back to another cached revision.
 
     Returns:
         The first matching snapshot directory, or ``None`` if not found.
@@ -95,7 +104,8 @@ def resolve_hf_snapshot_path(
         if not snapshots_root.is_dir():
             continue
 
-        for snapshot_path in _iter_snapshot_candidates(model_root):
+        snapshot_paths = [snapshots_root / revision] if revision is not None else _iter_snapshot_candidates(model_root)
+        for snapshot_path in snapshot_paths:
             if not snapshot_path.is_dir():
                 continue
             if all((snapshot_path / filename).exists() for filename in required_files):
@@ -107,6 +117,7 @@ def load_auto_tokenizer_from_cache(
     model_name: str,
     cache_dir: str | None,
     required_files: tuple[str, ...] = ("tokenizer_config.json",),
+    revision: str | None = None,
     **kwargs: Any,
 ) -> Any:
     """Load a tokenizer from the local HF cache when available.
@@ -117,19 +128,32 @@ def load_auto_tokenizer_from_cache(
     """
     from transformers import AutoTokenizer
 
-    local_snapshot = resolve_hf_snapshot_path(model_name, cache_dir, required_files=required_files)
+    local_snapshot = resolve_hf_snapshot_path(
+        model_name,
+        cache_dir,
+        required_files=required_files,
+        revision=revision,
+    )
     if local_snapshot is not None:
         return AutoTokenizer.from_pretrained(local_snapshot, local_files_only=True, **kwargs)
     return AutoTokenizer.from_pretrained(
         model_name,
         cache_dir=cache_dir,
         local_files_only=cache_dir is not None,
+        revision=revision,
         **kwargs,
     )
 
 
-def _patch_nemotron_tokenizer_snapshot_in_place(snapshot_dir: Path) -> None:
+def _patch_nemotron_tokenizer_snapshot_in_place(
+    snapshot_dir: Path,
+    *,
+    use_distinct_media_tokens: bool,
+) -> None:
     """Rename reserved Nemotron placeholder tokens to tokenizer-visible vision tokens."""
+    token_remap = (
+        NEMOTRON_DISTINCT_MEDIA_TOKEN_REMAP if use_distinct_media_tokens else NEMOTRON_LEGACY_VISION_TOKEN_REMAP
+    )
     tokenizer_json_path = snapshot_dir / "tokenizer.json"
     if tokenizer_json_path.exists():
         with tokenizer_json_path.open(encoding="utf-8") as f:
@@ -137,11 +161,11 @@ def _patch_nemotron_tokenizer_snapshot_in_place(snapshot_dir: Path) -> None:
 
         for entry in tokenizer_data.get("added_tokens", []):
             content = entry.get("content")
-            if content in NEMOTRON_VISION_TOKEN_REMAP:
-                entry["content"] = NEMOTRON_VISION_TOKEN_REMAP[content]
+            if content in token_remap:
+                entry["content"] = token_remap[content]
 
         vocab = tokenizer_data.get("model", {}).get("vocab", {})
-        for old_name, new_name in NEMOTRON_VISION_TOKEN_REMAP.items():
+        for old_name, new_name in token_remap.items():
             if old_name in vocab:
                 vocab[new_name] = vocab.pop(old_name)
 
@@ -155,8 +179,8 @@ def _patch_nemotron_tokenizer_snapshot_in_place(snapshot_dir: Path) -> None:
 
         for entry in tokenizer_config.get("added_tokens_decoder", {}).values():
             content = entry.get("content")
-            if content in NEMOTRON_VISION_TOKEN_REMAP:
-                entry["content"] = NEMOTRON_VISION_TOKEN_REMAP[content]
+            if content in token_remap:
+                entry["content"] = token_remap[content]
 
         with tokenizer_config_path.open("w", encoding="utf-8") as f:
             json.dump(tokenizer_config, f)
@@ -166,26 +190,40 @@ def prepare_nemotron_tokenizer_snapshot(
     model_name: str,
     cache_dir: str | None,
     required_files: tuple[str, ...] = ("tokenizer_config.json", "tokenizer.json"),
+    *,
+    use_distinct_media_tokens: bool = False,
+    revision: str | None = None,
 ) -> str | None:
     """Return a writable copied snapshot with Nemotron vision tokens remapped."""
-    local_snapshot = resolve_hf_snapshot_path(model_name, cache_dir, required_files=required_files)
+    local_snapshot = resolve_hf_snapshot_path(
+        model_name,
+        cache_dir,
+        required_files=required_files,
+        revision=revision,
+    )
     if local_snapshot is None:
         return None
 
     source_snapshot = Path(local_snapshot)
-    cache_key = (model_name, str(source_snapshot.resolve()))
+    cache_key = (model_name, str(source_snapshot.resolve()), use_distinct_media_tokens, revision)
     cached_snapshot = _PATCHED_NEMOTRON_SNAPSHOT_CACHE.get(cache_key)
     if cached_snapshot is not None and Path(cached_snapshot).is_dir():
         return cached_snapshot
 
     patched_root = Path(
         tempfile.mkdtemp(
-            prefix=(f"imaginaire4_nemotron_tokenizer_{model_name.replace('/', '--')}_{source_snapshot.name}_"),
+            prefix=(
+                f"imaginaire4_nemotron_tokenizer_{'distinct' if use_distinct_media_tokens else 'legacy'}_"
+                f"{model_name.replace('/', '--')}_{source_snapshot.name}_"
+            ),
             dir=tempfile.gettempdir(),
         )
     )
     shutil.copytree(source_snapshot, patched_root, dirs_exist_ok=True)
-    _patch_nemotron_tokenizer_snapshot_in_place(patched_root)
+    _patch_nemotron_tokenizer_snapshot_in_place(
+        patched_root,
+        use_distinct_media_tokens=use_distinct_media_tokens,
+    )
     patched_snapshot = str(patched_root)
     _PATCHED_NEMOTRON_SNAPSHOT_CACHE[cache_key] = patched_snapshot
     _PATCHED_NEMOTRON_SNAPSHOT_DIRS.add(patched_root)

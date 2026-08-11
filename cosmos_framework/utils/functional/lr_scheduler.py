@@ -259,3 +259,78 @@ class WSDScheduler:
 
     def __call__(self, n, **kwargs):
         return self.schedule(n, **kwargs)
+
+
+class WSFDScheduler:
+    """Warmup-SlowDecay-FastDecay learning rate scheduler.
+
+    The learning-rate multiplier warms up linearly from ``f_start`` to
+    ``f_max``, decays linearly to ``f_cooldown_start``, and then decays quickly
+    to ``f_min`` using either a linear or cosine curve.
+    """
+
+    def __init__(
+        self,
+        warm_up_steps: int,
+        total_steps: int,
+        decay_steps: int,
+        f_start: float,
+        f_max: float,
+        f_cooldown_start: float,
+        f_min: float,
+        decay_type: str = "cosine",
+        verbosity_interval: int = 0,
+    ) -> None:
+        if decay_type not in ("cosine", "linear"):
+            raise ValueError(f"decay_type must be 'cosine' or 'linear', got '{decay_type}'")
+        if warm_up_steps <= 0:
+            raise ValueError(f"warm_up_steps must be positive, got {warm_up_steps}")
+        if decay_steps <= 0:
+            raise ValueError(f"decay_steps must be positive, got {decay_steps}")
+        if warm_up_steps + decay_steps >= total_steps:
+            raise ValueError("total_steps must leave at least one step for slow decay")
+
+        self.warm_up_steps = warm_up_steps
+        self.total_steps = total_steps
+        self.decay_steps = decay_steps
+        self.decay_type = decay_type
+        self.fast_decay_start = total_steps - decay_steps
+        self.f_start = f_start
+        self.f_max = f_max
+        self.f_cooldown_start = f_cooldown_start
+        self.f_min = f_min
+        self.verbosity_interval = verbosity_interval
+        self.last_f = 0.0
+        self._model: object | None = None
+
+    @property
+    def model(self) -> object | None:
+        return self._model
+
+    @model.setter
+    def model(self, model: object | None) -> None:
+        self._model = model
+
+    def schedule(self, n: int, **kwargs: object) -> float:
+        if n < self.warm_up_steps:
+            f = self.f_start + (self.f_max - self.f_start) * n / self.warm_up_steps
+        elif n < self.fast_decay_start:
+            slow_decay_steps = self.fast_decay_start - self.warm_up_steps
+            t = (n - self.warm_up_steps) / slow_decay_steps
+            f = self.f_max + (self.f_cooldown_start - self.f_max) * t
+        elif n < self.total_steps:
+            t = (n - self.fast_decay_start) / self.decay_steps
+            if self.decay_type == "cosine":
+                f = self.f_min + 0.5 * (self.f_cooldown_start - self.f_min) * (1 + np.cos(t * np.pi))
+            else:
+                f = self.f_cooldown_start + (self.f_min - self.f_cooldown_start) * t
+        else:
+            f = self.f_min
+
+        self.last_f = f
+        if self.verbosity_interval > 0 and n % self.verbosity_interval == 0:
+            log.info(f"current step: {n}, lr-multiplier: {f:.6f}")
+        return f
+
+    def __call__(self, n: int, **kwargs: object) -> float:
+        return self.schedule(n, **kwargs)

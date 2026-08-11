@@ -14,6 +14,7 @@ from omegaconf import DictConfig
 from cosmos_framework.utils.lazy_config.lazy import LazyConfig
 from cosmos_framework.utils import distributed, log, object_store
 from cosmos_framework.utils.easy_io import easy_io
+from cosmos_framework.utils.launch_defaults import get_wandb_entity, get_wandb_project
 
 if TYPE_CHECKING:
     from cosmos_framework.utils.config import CheckpointConfig, Config, JobConfig
@@ -46,6 +47,7 @@ def init_wandb(config: Config, model: ImaginaireModel) -> None:
     else:
         config_job = config.job
     config_checkpoint = config.checkpoint
+    wandb_project = get_wandb_project(config_job.project)
     # Try to fetch the W&B job ID for resuming training.
     wandb_id = _read_wandb_id(config_job, config_checkpoint)
     if wandb_id is None:
@@ -68,8 +70,9 @@ def init_wandb(config: Config, model: ImaginaireModel) -> None:
     try:
         wandb.init(
             force=True,
+            entity=get_wandb_entity(),
             id=wandb_id,
-            project=config_job.project,
+            project=wandb_project,
             group=config_job.group,
             name=config_job.name,
             config=config_resolved,
@@ -91,8 +94,9 @@ def init_wandb(config: Config, model: ImaginaireModel) -> None:
             _write_wandb_id(config_job, config_checkpoint, wandb_id=wandb_id)
             wandb.init(
                 force=True,
+                entity=get_wandb_entity(),
                 id=wandb_id,
-                project=config_job.project,
+                project=wandb_project,
                 group=config_job.group,
                 name=config_job.name,
                 config=config_resolved,
@@ -103,8 +107,9 @@ def init_wandb(config: Config, model: ImaginaireModel) -> None:
             log.warning("W&B authentication failed (401); falling back to offline mode. Error: %s", msg)
             wandb.init(
                 force=True,
+                entity=get_wandb_entity(),
                 id=wandb_id,
-                project=config_job.project,
+                project=wandb_project,
                 group=config_job.group,
                 name=config_job.name,
                 config=config_resolved,
@@ -121,6 +126,9 @@ def init_wandb(config: Config, model: ImaginaireModel) -> None:
 def _read_wandb_id(config_job: JobConfig, config_checkpoint: CheckpointConfig) -> str | None:
     """Read the W&B job ID. If it doesn't exist, return None.
 
+    Reads from the same location as ``_write_wandb_id`` (save object store / local),
+    so resume works when load and save buckets differ.
+
     Args:
         config_wandb (JobConfig): The config object for the W&B logger.
         config_checkpoint (CheckpointConfig): The config object for the checkpointer.
@@ -129,8 +137,8 @@ def _read_wandb_id(config_job: JobConfig, config_checkpoint: CheckpointConfig) -
         wandb_id (str | None): W&B job ID.
     """
     wandb_id = None
-    if config_checkpoint.load_from_object_store.enabled:
-        object_store_loader = object_store.ObjectStore(config_checkpoint.load_from_object_store)
+    if config_checkpoint.save_to_object_store.enabled:
+        object_store_loader = object_store.ObjectStore(config_checkpoint.save_to_object_store)
         wandb_id_path = f"{config_job.path}/wandb_id.txt"
         if object_store_loader.object_exists(key=wandb_id_path):
             wandb_id = object_store_loader.load_object(key=wandb_id_path, type="text").strip()
