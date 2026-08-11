@@ -170,7 +170,10 @@ EDGE_MODEL_CONFIG = dict(
         ),
         tokenizer=L(build_processor_lazy)(
             repository="nvidia/Cosmos3-Edge",
-            revision="main",
+            # Pin the public release used to build the matching DCP checkpoint.
+            # A symbolic ``main`` forces Hugging Face's CLI to contact the Hub
+            # even when the exact snapshot is already staged for an offline job.
+            revision="2a00e87e9976dc3ed5533dd18caf4cdbc3a1bcb2",
         ),
     ),
 )

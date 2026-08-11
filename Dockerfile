@@ -79,7 +79,7 @@ RUN --mount=type=cache,target=/root/.cache/uv \
 
 RUN /workspace/.venv/bin/python /workspace/docker/write_image_provenance.py && \
     chmod a+rx /workspace /workspace/docker /workspace/docker/entrypoint.sh && \
-    chmod -R a+rX /opt/tao /workspace/.venv /workspace/cosmos_framework && \
+    chmod -R a+rX /opt/tao /workspace && \
     test -x /workspace/docker/entrypoint.sh && \
     test -x /workspace/.venv/bin/python
 
