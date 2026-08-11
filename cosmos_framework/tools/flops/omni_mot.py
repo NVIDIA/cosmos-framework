@@ -6,6 +6,12 @@
 from decimal import Decimal
 from typing import NamedTuple
 
+from cosmos_framework.tools.flops.primitives import (
+    compute_layernorm_flops,
+    compute_linear_flops,
+    compute_mlp_flops,
+    compute_moe_flops,
+)
 from cosmos_framework.utils import log
 
 
@@ -50,6 +56,12 @@ class OmniMoTModelDescriptor(NamedTuple):
     # Text prediction
     predict_text_tokens: bool  # whether lm_head is applied for text CE loss
 
+    # Generation-tower MoE extensions
+    gen_moe_shared_expert: bool  # whether gen-tower MoE layers include an always-on shared expert
+    gen_moe_shared_expert_intermediate_scale: int  # shared-expert width relative to moe_intermediate_size
+    # top-k experts activated per token on the gen tower; 0 means "same as num_experts_per_tok"
+    gen_moe_top_k: int = 0
+
 
 def get_omni_mot_model_descriptor(
     hidden_size: int = 2048,
@@ -65,6 +77,9 @@ def get_omni_mot_model_descriptor(
     moe_intermediate_size: int = 1408,
     decoder_sparse_step: int = 1,
     mlp_only_layers: list[int] | None = None,
+    gen_moe_shared_expert: bool = False,
+    gen_moe_shared_expert_intermediate_scale: int = 1,
+    gen_moe_top_k: int | None = None,
     latent_patch_size: int = 2,
     latent_channel_size: int = 16,
     action_dim: int = 32,
@@ -90,6 +105,9 @@ def get_omni_mot_model_descriptor(
         moe_intermediate_size=moe_intermediate_size,
         decoder_sparse_step=decoder_sparse_step,
         mlp_only_layers=mlp_only_layers,
+        gen_moe_shared_expert=gen_moe_shared_expert,
+        gen_moe_shared_expert_intermediate_scale=gen_moe_shared_expert_intermediate_scale,
+        gen_moe_top_k=num_experts_per_tok if gen_moe_top_k is None else gen_moe_top_k,
         latent_patch_size=latent_patch_size,
         latent_channel_size=latent_channel_size,
         action_dim=action_dim,
@@ -280,26 +298,28 @@ def compute_omni_mot_flops_per_batch(
 
     if vision_gen and L_vision > 0:
         patch_latent_dim = cfg.latent_patch_size**2 * cfg.latent_channel_size
-        embedding_flops += 2 * B * L_vision * patch_latent_dim * D
+        embedding_flops += B * compute_linear_flops(patch_latent_dim, D, L_vision, has_bias=False)
 
     if vision_gen and L_vision > 0:
-        embedding_flops += 2 * B * L_vision * D * patch_latent_dim
+        embedding_flops += B * compute_linear_flops(D, patch_latent_dim, L_vision, has_bias=False)
 
     if action_gen and action_tokens > 0:
-        embedding_flops += 2 * B * action_tokens * cfg.action_dim * D
+        embedding_flops += B * compute_linear_flops(cfg.action_dim, D, action_tokens, has_bias=False)
 
     if action_gen and action_tokens > 0:
-        embedding_flops += 2 * B * action_tokens * D * cfg.action_dim
+        embedding_flops += B * compute_linear_flops(D, cfg.action_dim, action_tokens, has_bias=False)
 
     if sound_gen and sound_tokens > 0 and cfg.sound_dim is not None:
-        embedding_flops += 2 * B * sound_tokens * cfg.sound_dim * D
+        embedding_flops += B * compute_linear_flops(cfg.sound_dim, D, sound_tokens, has_bias=False)
 
     if sound_gen and sound_tokens > 0 and cfg.sound_dim is not None:
-        embedding_flops += 2 * B * sound_tokens * D * cfg.sound_dim
+        embedding_flops += B * compute_linear_flops(D, cfg.sound_dim, sound_tokens, has_bias=False)
 
     # TimestepEmbedder MLP: Linear(freq_dim, D) -> SiLU -> Linear(D, D)
     freq_dim = cfg.frequency_embedding_size
-    timestep_mlp_flops_per_call = 2 * freq_dim * D + 2 * D * D
+    timestep_mlp_flops_per_call = compute_linear_flops(freq_dim, D, 1, has_bias=False) + compute_linear_flops(
+        D, D, 1, has_bias=False
+    )
     n_timestep_calls = 0
     if vision_gen and L_vision > 0:
         n_timestep_calls += 1
@@ -310,7 +330,7 @@ def compute_omni_mot_flops_per_batch(
     embedding_flops += n_timestep_calls * B * timestep_mlp_flops_per_call
 
     if cfg.predict_text_tokens:
-        embedding_flops += 2 * B * text_tokens * D * cfg.vocab_size
+        embedding_flops += B * compute_linear_flops(D, cfg.vocab_size, text_tokens, has_bias=False)
 
     log.debug(f"embedding_flops: {embedding_flops}")
 
@@ -347,13 +367,9 @@ def compute_omni_mot_flops_per_batch(
     q_dim = n_heads * d_head
     kv_dim = n_kv_heads * d_head
 
-    def _dense_mlp_flops(seq_len: int | Decimal) -> Decimal:
-        return Decimal(6 * B * seq_len * D * cfg.intermediate_size)
-
-    def _moe_mlp_flops(seq_len: int | Decimal) -> Decimal:
-        gate_flops = 2 * B * seq_len * D * cfg.num_experts
-        expert_flops = cfg.num_experts_per_tok * 6 * B * seq_len * D * cfg.moe_intermediate_size
-        return Decimal(gate_flops + expert_flops)
+    # The gen tower may route to fewer experts than the pretrained und tower.
+    und_top_k = cfg.num_experts_per_tok
+    gen_top_k = cfg.gen_moe_top_k or cfg.num_experts_per_tok
 
     for layer_idx in range(n_layers):
         is_moe_layer = (
@@ -364,25 +380,48 @@ def compute_omni_mot_flops_per_batch(
         )
 
         # 2a. Attention (PackedAttentionMoT)
-        attn_und_proj = 2 * B * S_und * D * q_dim + 2 * B * S_und * D * kv_dim + 2 * B * S_und * D * kv_dim
-        attn_gen_proj = 2 * B * S_gen * D * q_dim + 2 * B * S_gen * D * kv_dim + 2 * B * S_gen * D * kv_dim
+        attn_und_proj = B * (
+            compute_linear_flops(D, q_dim, S_und, has_bias=False)
+            + compute_linear_flops(D, kv_dim, S_und, has_bias=False)
+            + compute_linear_flops(D, kv_dim, S_und, has_bias=False)
+        )
+        attn_gen_proj = B * (
+            compute_linear_flops(D, q_dim, S_gen, has_bias=False)
+            + compute_linear_flops(D, kv_dim, S_gen, has_bias=False)
+            + compute_linear_flops(D, kv_dim, S_gen, has_bias=False)
+        )
         attn_dot = und_attn_dot + gen_attn_dot
-        attn_o_proj = 2 * B * S_und * q_dim * D + 2 * B * S_gen * q_dim * D
-        attn_qk_norm = (
-            5 * B * S_und * n_heads * d_head
-            + 5 * B * S_und * n_kv_heads * d_head
-            + 5 * B * S_gen * n_heads * d_head
-            + 5 * B * S_gen * n_kv_heads * d_head
+        attn_o_proj = B * (
+            compute_linear_flops(q_dim, D, S_und, has_bias=False)
+            + compute_linear_flops(q_dim, D, S_gen, has_bias=False)
+        )
+        attn_qk_norm = B * (
+            compute_layernorm_flops(S_und * n_heads, d_head)
+            + compute_layernorm_flops(S_und * n_kv_heads, d_head)
+            + compute_layernorm_flops(S_gen * n_heads, d_head)
+            + compute_layernorm_flops(S_gen * n_kv_heads, d_head)
         )
         layer_attn_flops = attn_und_proj + attn_gen_proj + attn_qk_norm + attn_dot + attn_o_proj
 
         # 2b. MLP (separate for und and gen pathways)
-        mlp_und_flops = _moe_mlp_flops(S_und) if is_moe_layer else _dense_mlp_flops(S_und)
-        mlp_gen_flops = _moe_mlp_flops(S_gen) if is_moe_layer else _dense_mlp_flops(S_gen)
+        if is_moe_layer:
+            mlp_und_flops = Decimal(
+                B * compute_moe_flops(S_und, D, cfg.moe_intermediate_size, cfg.num_experts, und_top_k)
+            )
+            mlp_gen_flops = Decimal(
+                B * compute_moe_flops(S_gen, D, cfg.moe_intermediate_size, cfg.num_experts, gen_top_k)
+            )
+            if cfg.gen_moe_shared_expert:
+                shared_int = cfg.moe_intermediate_size * cfg.gen_moe_shared_expert_intermediate_scale
+                # Count matmuls only (gate+up+down), omitting elementwise activation/adds.
+                mlp_gen_flops += Decimal(6 * B * S_gen * D * shared_int)
+        else:
+            mlp_und_flops = Decimal(B * compute_mlp_flops(S_und, D, cfg.intermediate_size))
+            mlp_gen_flops = Decimal(B * compute_mlp_flops(S_gen, D, cfg.intermediate_size))
         layer_mlp_flops = mlp_und_flops + mlp_gen_flops
 
         # 2c. RMSNorm (4 layer norms per decoder layer, dimension D)
-        layer_norm_flops = 5 * B * S_und * D + 5 * B * S_gen * D + 5 * B * S_und * D + 5 * B * S_gen * D
+        layer_norm_flops = 2 * B * (compute_layernorm_flops(S_und, D) + compute_layernorm_flops(S_gen, D))
 
         # 2d. Attention softmax
         layer_softmax_flops = und_softmax + gen_softmax
@@ -408,7 +447,7 @@ def compute_omni_mot_flops_per_batch(
     # ===================================================================
     # 3. Final norms (applied to und and gen separately after all layers)
     # ===================================================================
-    final_norm_flops = Decimal(5 * B * S_und * D + 5 * B * S_gen * D)
+    final_norm_flops = Decimal(B * (compute_layernorm_flops(S_und, D) + compute_layernorm_flops(S_gen, D)))
 
     log.debug(f"final_norm_flops: {final_norm_flops}")
 
@@ -440,18 +479,28 @@ def compute_omni_mot_flops_per_batch(
                 and layer_idx not in cfg.mlp_only_layers
                 and (layer_idx + 1) % cfg.decoder_sparse_step == 0
             )
-            gen_proj_mlp_flops += (
-                2 * B * S_gen * D * q_dim
-                + 2 * B * S_gen * D * kv_dim
-                + 2 * B * S_gen * D * kv_dim
-                + 2 * B * S_gen * q_dim * D
+            gen_proj_mlp_flops += B * (
+                compute_linear_flops(D, q_dim, S_gen, has_bias=False)
+                + compute_linear_flops(D, kv_dim, S_gen, has_bias=False)
+                + compute_linear_flops(D, kv_dim, S_gen, has_bias=False)
+                + compute_linear_flops(q_dim, D, S_gen, has_bias=False)
             )
-            gen_proj_mlp_flops += _moe_mlp_flops(S_gen) if is_moe_layer else _dense_mlp_flops(S_gen)
+            if is_moe_layer:
+                gen_proj_mlp_flops += Decimal(
+                    B * compute_moe_flops(S_gen, D, cfg.moe_intermediate_size, cfg.num_experts, gen_top_k)
+                )
+                if cfg.gen_moe_shared_expert:
+                    shared_int = cfg.moe_intermediate_size * cfg.gen_moe_shared_expert_intermediate_scale
+                    gen_proj_mlp_flops += Decimal(6 * B * S_gen * D * shared_int)
+            else:
+                gen_proj_mlp_flops += Decimal(B * compute_mlp_flops(S_gen, D, cfg.intermediate_size))
 
-            gen_norm_flops += 5 * B * S_gen * D * 2
-            gen_norm_flops += 5 * B * S_gen * n_heads * d_head + 5 * B * S_gen * n_kv_heads * d_head
+            gen_norm_flops += 2 * B * compute_layernorm_flops(S_gen, D)
+            gen_norm_flops += B * (
+                compute_layernorm_flops(S_gen * n_heads, d_head) + compute_layernorm_flops(S_gen * n_kv_heads, d_head)
+            )
 
-        gen_norm_flops += 5 * B * S_gen * D
+        gen_norm_flops += B * compute_layernorm_flops(S_gen, D)
 
         gen_embedding_flops = embedding_flops  # conservative: count all embedding flops
 

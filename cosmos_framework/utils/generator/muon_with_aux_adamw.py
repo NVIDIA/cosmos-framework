@@ -64,10 +64,12 @@ from cosmos_framework.utils import log
 from cosmos_framework.utils.misc import get_local_tensor_if_DTensor
 from cosmos_framework.utils.generator.aux_optimizer_utils import (
     compute_pre_ns_update,
-    compute_pre_ns_update_moe_expert,
+    create_moe_megabatches,
+    pair_moe_gate_up_down_params,
     split_orthogonalizable_params,
+    step_stacked_expert_params,
+    validate_split_expert_ns_config,
     zeropower_via_newtonschulz5,
-    zeropower_via_newtonschulz5_batched,
 )
 
 
@@ -109,6 +111,9 @@ class MuonWithAuxAdamW(torch.optim.Optimizer):
         master_weights: bool = False,
         expert_param_keywords: tuple[str, ...] | None = None,
         orthogonalize_skip_patterns: tuple[str, ...] | None = None,
+        split_expert_gate_up: bool = False,
+        batch_split_expert_ns: bool = False,
+        max_moe_expert_ns_matrices: int = 0,
         **kwargs,  # Absorb VFM-specific args (fused, keys_to_select, etc.)
     ):
         # Log any ignored kwargs for debugging
@@ -122,6 +127,10 @@ class MuonWithAuxAdamW(torch.optim.Optimizer):
 
                 warnings.warn(f"MuonWithAuxAdamW ignoring unexpected kwargs: {unexpected}")
 
+        validate_split_expert_ns_config(split_expert_gate_up, batch_split_expert_ns)
+        if max_moe_expert_ns_matrices < 0:
+            raise ValueError(f"max_moe_expert_ns_matrices must be >= 0, got {max_moe_expert_ns_matrices}")
+
         # Master weights requires capturable mode
         if master_weights and not capturable:
             raise RuntimeError("Master weights is currently only supported with capturable=True.")
@@ -134,8 +143,13 @@ class MuonWithAuxAdamW(torch.optim.Optimizer):
         # Store Muon-specific hyperparameters
         self.muon_momentum = muon_momentum
         self.muon_lr_scale = muon_lr_scale
+        # Shape -> LR scaling ratio; see _get_adjusted_lr.
+        self._adjusted_lr_ratios: dict[tuple[int, ...], float] = {}
         self.ns_steps = ns_steps
         self.nesterov = nesterov
+        self.split_expert_gate_up = split_expert_gate_up
+        self.batch_split_expert_ns = batch_split_expert_ns
+        self.max_moe_expert_ns_matrices = max_moe_expert_ns_matrices
 
         # Name substrings that route stacked MoE expert params ([E, M, N]) to the
         # Muon side (each expert slice orthogonalized). Empty = experts stay on
@@ -164,6 +178,10 @@ class MuonWithAuxAdamW(torch.optim.Optimizer):
         # Stacked MoE expert params ([E, M, N]); orthogonalized per expert slice.
         self.stacked_muon_params: list[nn.Parameter] = []
         self.param_to_name: dict[nn.Parameter, str] = {}
+        # Split-expert pair tracking (gate_up + down pairs for multi-layer NS batching).
+        self._split_expert_pairs: list[tuple[nn.Parameter, nn.Parameter]] = []
+        self._split_expert_param_ids: set[int] = set()
+        self._moe_megabatches: list[list[tuple[nn.Parameter, nn.Parameter]]] = []
 
         # Master weight copies (populated by _create_master_weights after categorize_params)
         self._muon_masters: list[torch.Tensor] = []
@@ -242,6 +260,18 @@ class MuonWithAuxAdamW(torch.optim.Optimizer):
         # Sort Muon params by size (largest first) for distributed load balancing
         self.muon_params = sorted(self.muon_params, key=lambda x: x.numel(), reverse=True)
 
+        # Build gate_up/down pairs for split-expert NS (if requested).
+        self._split_expert_pairs = []
+        self._split_expert_param_ids = set()
+        if self.split_expert_gate_up and self.stacked_muon_params:
+            self._split_expert_pairs = pair_moe_gate_up_down_params(self.stacked_muon_params, self.param_to_name)
+            for gate_up_p, down_p in self._split_expert_pairs:
+                self._split_expert_param_ids.add(id(gate_up_p))
+                self._split_expert_param_ids.add(id(down_p))
+
+        # Build MoE megabatch plan (K pairs per NS call).
+        self._create_moe_megabatches()
+
         # Check if using DTensor (FSDP) - determines whether we use distributed NS
         self._params_are_dtensor = isinstance(self.muon_params[0], DTensor) if self.muon_params else False
 
@@ -296,8 +326,13 @@ class MuonWithAuxAdamW(torch.optim.Optimizer):
         Returns:
             Adjusted learning rate for this parameter.
         """
-        A, B = param_shape[:2]
-        adjusted_ratio = self.muon_lr_scale * math.sqrt(max(A, B))
+        # Memoized: the ratio depends only on the shape and muon_lr_scale, both fixed
+        # for the run, but the MoE megabatch path asks for it once per matrix per step.
+        adjusted_ratio = self._adjusted_lr_ratios.get(param_shape)
+        if adjusted_ratio is None:
+            A, B = param_shape[:2]
+            adjusted_ratio = self.muon_lr_scale * math.sqrt(max(A, B))
+            self._adjusted_lr_ratios[param_shape] = adjusted_ratio
         return base_lr * adjusted_ratio
 
     def _maybe_init_master_weights(self) -> None:
@@ -373,86 +408,48 @@ class MuonWithAuxAdamW(torch.optim.Optimizer):
 
         return loss
 
+    def _create_moe_megabatches(self) -> None:
+        """Group split expert pairs into K-layer NS batches (see
+        :func:`create_moe_megabatches`)."""
+        world_size = dist.get_world_size() if (self.use_distributed and dist.is_initialized()) else 1
+        self._moe_megabatches = create_moe_megabatches(
+            self._split_expert_pairs, world_size, self.max_moe_expert_ns_matrices
+        )
+
     def _step_stacked_muon(self) -> None:
-        """Orthogonalize stacked MoE expert params, one expert slice at a time.
+        """Orthogonalize stacked MoE expert params via step_stacked_expert_params.
 
-        Each param has shape ``[E, M, N]`` (E experts, each an M x N matrix). Under
-        FSDP2 these are sharded on the expert dim (dim 0), so every rank holds whole
-        expert matrices -- Newton-Schulz is therefore fully local (no all-gather),
-        and is batched across the local experts via ``zeropower_via_newtonschulz5_batched``.
+        Dispatches to split-expert or megabatch path when ``split_expert_gate_up``
+        is True; falls back to the historical whole-param per-expert NS otherwise.
 
-        NOTE (sharding assumption): the "no communication" property relies on the
-        expert tensor being sharded on dim 0 (the expert axis). This holds for the
-        FSDP2 ``fully_shard`` path used by LLM/VFM here, because FSDP2 shards every
-        parameter on dim 0. It is NOT guaranteed in general -- e.g. tensor/expert
-        parallelism could shard *within* an expert matrix (dim 1/2). That case is
-        unsupported and is rejected by the placement check below (fails loudly
-        rather than silently computing a wrong update); supporting it would require
-        a per-expert gather. The assumption was not exhaustively audited against
-        every parallelization config, which is exactly why it is enforced here.
+        See :func:`step_stacked_expert_params` for the full dispatch logic.
         """
-        for p in self.stacked_muon_params:
-            if p.grad is None:
-                continue
+        if not self.stacked_muon_params:
+            return
 
-            # Validate sharding: only the expert axis (tensor dim 0) may be sharded.
-            if isinstance(p, DTensor):
-                for placement in p.placements:
-                    if placement.is_shard() and placement.dim != 0:
-                        raise NotImplementedError(
-                            "Stacked-expert orthogonalization requires sharding on the expert "
-                            f"dim (0); got placement {placement} for "
-                            f"'{self.param_to_name.get(p, 'unknown')}'."
-                        )
+        moe_megabatches = self._moe_megabatches if self.split_expert_gate_up else None
 
-            local_grad = get_local_tensor_if_DTensor(p.grad)
-            local_param = get_local_tensor_if_DTensor(p)
-            if local_grad.ndim != 3:
-                raise NotImplementedError(
-                    f"Stacked-expert orthogonalization supports 3D params [E, M, N]; "
-                    f"got shape {tuple(local_grad.shape)} for '{self.param_to_name.get(p, 'unknown')}'."
-                )
-
-            state = self.state[p]
-            if len(state) == 0:
-                state["momentum_buffer"] = torch.zeros_like(p).float()
-
-            # Per-expert masked momentum + Nesterov (element-wise over [E, M, N]).
-            # Active experts follow the standard mu*M + G recurrence; inactive
-            # experts (no gradient this step) keep their momentum frozen. ``active``
-            # ([E] bool) is used below to zero the update and skip weight decay for
-            # inactive experts -- required because Newton-Schulz would otherwise
-            # renormalize their stale momentum into a full-strength spurious update.
-            pre_ns, active = compute_pre_ns_update_moe_expert(
-                local_grad,
-                get_local_tensor_if_DTensor(state["momentum_buffer"]),
-                momentum=self.muon_momentum,
-                nesterov=self.nesterov,
-            )
-
-            # Batched Newton-Schulz over the local experts, then zero the update for
-            # inactive experts (their NS result is a bogus unit-norm matrix).
-            ortho = zeropower_via_newtonschulz5_batched(pre_ns, steps=self.ns_steps)
-            ortho = ortho * active.view(-1, 1, 1).to(ortho.dtype)
-
-            # LR scaling uses the per-expert matrix shape (M, N), shared across experts.
-            base_lr = self._base_lr_for(p)
-            wd = self._wd_for(p)
-            adjusted_lr = self._get_adjusted_lr(tuple(p.shape[-2:]), base_lr)
-
-            # Per-expert weight-decay factor: (1 - base_lr*wd) for active experts,
-            # 1.0 (no decay) for inactive ones. Combined with the zeroed update
-            # above, inactive experts are left completely untouched.
-            if self.master_weights:
-                master = get_local_tensor_if_DTensor(self._param_to_master[id(p)])
-                a_wd = active.view(-1, 1, 1).to(master.dtype)
-                master.mul_(1 - a_wd * (base_lr * wd))
-                master.add_(ortho.float() * (-adjusted_lr))
-                local_param.copy_(master)
-            else:
-                a_wd = active.view(-1, 1, 1).to(local_param.dtype)
-                local_param.mul_(1 - a_wd * (base_lr * wd))
-                local_param.add_(ortho.to(local_param.dtype) * (-adjusted_lr))
+        step_stacked_expert_params(
+            self.stacked_muon_params,
+            self._split_expert_pairs,
+            self._split_expert_param_ids,
+            optimizer_state=self.state,
+            param_to_name=self.param_to_name,
+            param_to_master=self._param_to_master,
+            master_weights=self.master_weights,
+            momentum=self.muon_momentum,
+            nesterov=self.nesterov,
+            ns_steps=self.ns_steps,
+            batch_split_expert_ns=self.batch_split_expert_ns,
+            base_lr_for=self._base_lr_for,
+            weight_decay_for=self._wd_for,
+            adjusted_lr_for=self._get_adjusted_lr,
+            moe_megabatches=moe_megabatches,
+            # profile_phases is intentionally left at its default (off): the NVTX
+            # megabatch ranges are gated on DION2's dion2_profile_phases knob, and
+            # Muon has no equivalent. Add one here if the Muon stacked path ever
+            # needs phase-level profiling.
+        )
 
     def _step_muon(self) -> None:
         """

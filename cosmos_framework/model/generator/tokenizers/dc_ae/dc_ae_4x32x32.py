@@ -26,6 +26,7 @@ class DCAE4x32x32Interface(VideoTokenizerInterface):
         bucket_name: str = "",
         object_store_credential_path_pretrained: str = "",
         vae_path: str = "",
+        checkpoint_path: str | None = None,
         chunk_duration: int = 16,
         model_name: str = DEFAULT_MODEL_NAME,
         spatial_compression_factor: int = 32,
@@ -40,7 +41,11 @@ class DCAE4x32x32Interface(VideoTokenizerInterface):
         self._causal = causal
         assert self._causal, "DCAE4x32x32Interface is a causal tokenizer; causal must be True."
         assert encode_exact_durations is None, "DCAE4x32x32Interface does not support encode_exact_durations."
-        vae_path_full = f"s3://{bucket_name}/{vae_path}"
+        if checkpoint_path is not None and (bucket_name or vae_path):
+            raise ValueError("Pass either checkpoint_path or the S3 bucket_name/vae_path pair, not both.")
+        if checkpoint_path is None and (not bucket_name or not vae_path):
+            raise ValueError("Pass checkpoint_path or both bucket_name and vae_path.")
+        checkpoint_source = checkpoint_path or f"s3://{bucket_name}/{vae_path}"
         self._spatial_compression_factor = spatial_compression_factor
         self._temporal_compression_factor = temporal_compression_factor
         self.chunk_duration = chunk_duration
@@ -56,14 +61,17 @@ class DCAE4x32x32Interface(VideoTokenizerInterface):
         with torch.device("meta"):
             self.model = DCAEV(cfg)
 
-        # Load checkpoint from S3 on rank 0 only, then broadcast.
+        # Load the local or S3 checkpoint on rank 0 only, then broadcast.
         if get_rank() == 0:
-            backend_args = {
-                "backend": "s3",
-                "s3_credential_path": object_store_credential_path_pretrained,
-            }
-            checkpoint = easy_io.load(vae_path_full, backend_args=backend_args, map_location=device)
-            log.info(f"loading {vae_path_full}")
+            if checkpoint_path is not None:
+                checkpoint = easy_io.load(checkpoint_path, map_location=device)
+            else:
+                backend_args = {
+                    "backend": "s3",
+                    "s3_credential_path": object_store_credential_path_pretrained,
+                }
+                checkpoint = easy_io.load(checkpoint_source, backend_args=backend_args, map_location=device)
+            log.info(f"loading {checkpoint_source}")
 
             self.model.load_state_dict(checkpoint["model_state_dict"], assign=True)
         else:

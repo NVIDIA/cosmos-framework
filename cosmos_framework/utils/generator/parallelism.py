@@ -21,6 +21,10 @@ Mesh              Shape / dims
 ``cfgp_mesh``     1-D, size ``cfgp``  (CFG parallelism, inference-only)
 ================  ===========================================================
 
+``dp_mesh`` keeps its singleton axes, so it stays 2-D even at ``dp_replicate == 1``.
+``fully_shard`` call sites must therefore go through :func:`fsdp_mesh` rather than reading
+``dp_mesh`` directly — see that function for what a 2-D mesh costs a pure-FSDP run.
+
 Use cases
 ---------
 - VLM training      — ``dp_shard`` (+ optional ``dp_replicate``); cp=cfgp=1.
@@ -260,3 +264,28 @@ class ParallelDims:
     @property
     def cfgp_size(self) -> int:
         return self._meshes["cfgp"].size() if self.cfgp_enabled else 1
+
+
+def fsdp_mesh(parallel_dims: ParallelDims) -> "DeviceMesh | None":
+    """Return the mesh to hand ``fully_shard``: 2-D for HSDP, 1-D for pure FSDP.
+
+    ``fully_shard`` picks its reduction strategy from ``mesh.ndim`` ALONE, never from the
+    dim sizes — a 2-D mesh always becomes ``HSDPMeshInfo``, and FSDP2's ``_is_hsdp`` is a
+    plain ``isinstance`` check on it. Since :meth:`ParallelDims._build_mesh` keeps singleton
+    axes, :attr:`ParallelDims.dp_mesh` is 2-D even when ``dp_replicate == 1``, so handing it
+    over unconditionally puts a pure-FSDP run on the HSDP path: every gradient reduction then
+    pays an ``all_reduce`` over a ONE-RANK group plus the ``all_reduce_stream.wait_stream``
+    that guards it, per FSDP module per step. The gradients are still correct — a one-rank
+    all-reduce is the identity — so the only symptom is unattributed per-step latency, which
+    is why this is easy to introduce and hard to notice.
+
+    Use this instead of reaching for a mesh attribute directly at a ``fully_shard`` call site.
+
+    Returns:
+        ``dp_shard_mesh`` (1-D) when there is no replicate axis to reduce over, else
+        ``dp_mesh`` (2-D). ``None`` when dp is disabled entirely, which callers are expected
+        to have already excluded.
+    """
+    if parallel_dims.dp_replicate_enabled:
+        return parallel_dims.dp_mesh
+    return parallel_dims.dp_shard_mesh

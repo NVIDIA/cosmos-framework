@@ -391,7 +391,7 @@ def sparse_to_img_list(
         channels: Number of channels.
 
     Returns:
-        List of image tensors.
+        List of image tensors. Empty batch elements use shape ``[0, C, 0, 0]``.
     """
     Pt, Ph, Pw = patch_size
 
@@ -417,6 +417,10 @@ def sparse_to_img_list(
     images = []
     for batch_idx in range(sparse_tensor.shape[0]):
         batch_sparse_tensor = sparse_tensor[batch_idx]
+        if batch_sparse_tensor.coords.shape[0] == 0:
+            empty_image = batch_sparse_tensor.feats.new_empty((0, channels, 0, 0))  # [0,C,0,0]
+            images.append(empty_image)
+            continue
         T, H, W, Z = (int(dim) for dim in (batch_sparse_tensor.coords.max(dim=0)[0][1:] + 1).tolist())
         # Avoid Python's built-in all() on tensors; it scalarizes every element.
         if bool((batch_sparse_tensor.coords[:, 1] == (T - 1)).all().item()):

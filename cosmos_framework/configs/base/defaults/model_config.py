@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: OpenMDW-1.1
 
-from typing import Any
+from typing import Any, Literal
 
 import attrs
 
@@ -9,8 +9,17 @@ from cosmos_framework.utils.lazy_config import LazyDict
 from cosmos_framework.configs.base.defaults.activation_checkpointing import ActivationCheckpointingConfig
 from cosmos_framework.configs.base.defaults.compile import CompileConfig
 from cosmos_framework.configs.base.defaults.ema import EMAConfig
+from cosmos_framework.configs.base.defaults.flex_attention import FlexAttentionConfig
 from cosmos_framework.configs.base.defaults.parallelism import ParallelismConfig
 from cosmos_framework.configs.base.defaults.reasoner import VLMConfig
+from cosmos_framework.model.generator.utils.load_balancing_stats import LBLConfig
+
+# Mirrors ``cosmos3.common.args.AttentionIOLayout``. Defined locally on purpose: importing
+# the ``cosmos3`` workspace package at module scope makes the whole cosmos3 config tree
+# unimportable in the released imaginaire4 eval images (v11.2.1 and older ship no
+# ``cosmos3``), which breaks the benchmark-request config-check CI job. Keep in sync with
+# ``packages/cosmos3/cosmos3/common/args.py``.
+AttentionIOLayout = Literal["sequence_sharded", "replicated"]
 
 
 @attrs.define(slots=False)
@@ -19,6 +28,9 @@ class DiffusionExpertConfig:
     timestep_range: float = 1.0
     # Whether to load the generation pathway weights from pretrained LLM/VLM weights.
     load_weights_from_pretrained: bool = True
+    # Whether to add separate learned modality embeddings to image and video generation tokens.
+    # Disabled by default to preserve legacy checkpoints and model behavior.
+    enable_vision_modality_embeddings: bool = False
 
     patch_spatial: int = 2
     max_vae_latent_side_after_patchify: int = (
@@ -43,22 +55,9 @@ class DiffusionExpertConfig:
 
 
 @attrs.define(slots=False)
-class LBLConfig:
-    # For load balancing loss computation.
-    # - "local": Use the fraction of tokens routed to each expert only for the local rank.
-    # - "global": Use the fraction of tokens routed to each expert across all ranks.
-    method: str = "local"
-
-    # Coefficients for the load balancing loss.
-    # - "und": Coefficient for the load balancing loss for the "und" pathway.
-    # - "gen": Coefficient for the load balancing loss for the "gen" pathway.
-    coeff_und: float | None = None
-    coeff_gen: float | None = None
-
-
-@attrs.define(slots=False)
 class RectifiedFlowTrainingConfig:
     shift: Any = 5  # Training time shift. If dict, maps resolution (str) to shift value (int)
+    shift_image: Any | None = None  # Image-specific shift; None inherits shift
     use_dynamic_shift: bool = False  # Whether to use dynamic shifting
     train_time_image_distribution: str = "logitnormal"  # Training time distribution for images
     train_time_video_distribution: str = "logitnormal"  # Training time distribution for videos
@@ -158,6 +157,9 @@ class OmniMoTModelConfig:
     # Parallelism (CP, CFGP, FSDP, DP) and FSDP reduce-dtype configuration.
     parallelism: ParallelismConfig = ParallelismConfig()
 
+    # Tensor layout at the attention boundary when context parallelism is enabled.
+    attention_io_layout: AttentionIOLayout = "sequence_sharded"
+
     # torch.compile knobs (enabled, compiled_region, dynamic, ...).
     compile: CompileConfig = CompileConfig()
 
@@ -206,6 +208,10 @@ class OmniMoTModelConfig:
     # "three_way" must only be used when introducing sparsity
     joint_attn_implementation: str = "two_way"  # "two_way" or "three_way"
 
+    # Whether the within-sample GEN attention runs as one masked FlexAttention call, and under
+    # what mask and kernels.
+    flex_attention: FlexAttentionConfig = FlexAttentionConfig()
+
     # Per-layer NATTEN parameters
     # Must use "three_way" attention if used.
     # If None, all attention layers remain dense.
@@ -251,6 +257,7 @@ class OmniMoTModelConfig:
     # Only supports image2video modes (with or without actions).
     # Requires joint_attn_implementation="three_way".
     video_temporal_causal: bool = False
+
     # "none":             standard joint denoising (shared σ, no clean context)
     # "teacher_forcing":  all frames noised with shared σ; clean history via cross-attention
     # "diffusion_forcing": each latent frame gets independent σ ~ Uniform[0,1]
