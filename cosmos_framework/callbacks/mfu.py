@@ -122,11 +122,13 @@ class MFUCallback(EveryN):
         if self._model_descriptor is not None:
             return
 
-        # Access VLM config from the language model inside the network
-        vlm_cfg = model.net.language_model.config  # type: ignore[attr-defined]
+        # The live language model stores the materialized HF config, while
+        # generation-tower MoT options remain on the model-instance wrapper.
+        hf_vlm_cfg = model.net.language_model.config  # type: ignore[attr-defined]
+        mot_cfg = model.config.vlm_config.model_instance.config
         net_cfg = model.net.config  # type: ignore[attr-defined]
 
-        self._freeze_und = getattr(vlm_cfg, "freeze_und", False)
+        self._freeze_und = getattr(hf_vlm_cfg, "freeze_und", False)
         self._vision_gen = getattr(net_cfg, "vision_gen", True)
         self._action_gen = getattr(net_cfg, "action_gen", False)
         self._sound_gen = getattr(net_cfg, "sound_gen", False)
@@ -143,7 +145,7 @@ class MFUCallback(EveryN):
         self._use_activation_checkpointing = ac_mode != "none"
 
         # MoE fields (may not exist for dense-only configs)
-        text_config = vlm_cfg.text_config if hasattr(vlm_cfg, "text_config") else vlm_cfg
+        text_config = hf_vlm_cfg.text_config if hasattr(hf_vlm_cfg, "text_config") else hf_vlm_cfg
 
         num_experts = getattr(text_config, "num_experts", 0)
         num_experts_per_tok = getattr(text_config, "num_experts_per_tok", 0)
@@ -166,6 +168,13 @@ class MFUCallback(EveryN):
             moe_intermediate_size=moe_intermediate_size,
             decoder_sparse_step=decoder_sparse_step,
             mlp_only_layers=mlp_only_layers,
+            gen_moe_shared_expert=getattr(mot_cfg, "gen_moe_shared_expert", False),
+            gen_moe_shared_expert_intermediate_scale=getattr(
+                mot_cfg,
+                "gen_moe_shared_expert_intermediate_scale",
+                1,
+            ),
+            gen_moe_top_k=getattr(mot_cfg, "gen_moe_top_k", None),
             latent_patch_size=getattr(net_cfg, "latent_patch_size", 2),
             latent_channel_size=getattr(net_cfg, "latent_channel_size", 48),
             action_dim=getattr(net_cfg, "action_dim", 32),

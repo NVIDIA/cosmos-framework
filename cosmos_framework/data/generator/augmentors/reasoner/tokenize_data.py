@@ -4,7 +4,7 @@
 """Visual-Text Transformations or Augmentations."""
 
 import re
-from typing import Dict, Optional, cast
+from typing import Any, Dict, Optional, Protocol, cast
 
 import numpy as np
 import torch
@@ -13,13 +13,13 @@ from PIL import Image
 from cosmos_framework.data.imaginaire.webdataset.augmentors.augmentor import Augmentor
 from cosmos_framework.utils import log
 from cosmos_framework.data.generator.reasoner.video_decoder_qwen import token_to_pixels
-from cosmos_framework.data.generator.processors.parakeet_audio_processor import (
+from cosmos_framework.data.generator.processors import build_audio_processor
+from cosmos_framework.data.generator.processors.audio_utils import (
     AUDIO_END_TOKEN,
     AUDIO_PAD_TOKEN,
     AUDIO_START_TOKEN,
     DEFAULT_REASONER_VIDEO_FPS,
     AudioSpecialTokens,
-    ParakeetAudioProcessor,
     add_reasoner_audio_special_tokens,
     expand_audio_placeholders_in_text,
     get_audio_only_timestamps,
@@ -29,6 +29,19 @@ from cosmos_framework.data.generator.processors.parakeet_audio_processor import 
 )
 from cosmos_framework.data.generator.processors.qwen3vl_processor import Qwen3VLProcessor as Processor
 from cosmos_framework.utils.generator.reasoner.constant import IGNORE_INDEX, PROCESSOR_KEYS_TO_ADD
+
+
+class _AudioProcessor(Protocol):
+    sampling_rate: int
+
+    def __call__(
+        self,
+        audios: Any,
+        *,
+        sampling_rate: int,
+    ) -> dict[str, torch.Tensor]: ...
+
+    def get_token_timestamps(self, audio_feature_length: int) -> list[float]: ...
 
 
 def maybe_subsample_frames(model_name_or_path, list_of_pil_image, max_video_token_length, processor):
@@ -116,7 +129,8 @@ class TokenizeData(Augmentor):
         add_system_prompt_if_missing: bool = False,
         text_only: bool = False,
         sound_und: bool = False,
-        audio_processor: Optional[ParakeetAudioProcessor] = None,
+        audio_processor: Optional[_AudioProcessor] = None,
+        audio_encoder_type: str = "parakeet",
         audio_start_token: str = AUDIO_START_TOKEN,
         audio_pad_token: str = AUDIO_PAD_TOKEN,
         audio_end_token: str = AUDIO_END_TOKEN,
@@ -127,7 +141,7 @@ class TokenizeData(Augmentor):
         Args:
             processor (Processor): Text/Image processor for tokenization.
             max_video_token_length (int): Maximum number of video tokens to use. Defaults to 8192.
-            sound_und (bool): Opt in to Parakeet audio preprocessing and audio-token registration.
+            sound_und (bool): Opt in to audio preprocessing and audio-token registration.
                 Disabled by default so existing text/vision tokenizers are unchanged.
         """
         # Create the tokenizer
@@ -147,7 +161,10 @@ class TokenizeData(Augmentor):
         self.audio_timestamp_fps = audio_timestamp_fps
         self.audio_layout = audio_layout
         if sound_und:
-            self.audio_processor = audio_processor if audio_processor is not None else ParakeetAudioProcessor()
+            if audio_processor is not None:
+                self.audio_processor = audio_processor
+            else:
+                self.audio_processor = build_audio_processor(audio_encoder_type)
             self.audio_special_tokens = add_reasoner_audio_special_tokens(
                 self.processor.tokenizer,
                 model_name_or_path=self.processor.name,
@@ -393,6 +410,10 @@ class TokenizeData(Augmentor):
                             )
                             return None
                         num_audio_tokens = int(audio_outputs["audio_token_lengths"][audio_index])
+                        assert self.audio_processor is not None
+                        audio_token_timestamps = self.audio_processor.get_token_timestamps(
+                            int(audio_outputs["audio_feature_lengths"][audio_index])
+                        )
                         if self.audio_layout == "interleaved_av" and message_has_video:
                             previous_content_type = (
                                 message["content"][content_idx - 1]["type"] if content_idx > 0 else None
@@ -408,6 +429,7 @@ class TokenizeData(Augmentor):
                             audio_segment_lengths_by_video[-1] = get_audio_segment_token_lengths(
                                 num_audio_tokens,
                                 active_video_timestamps,
+                                audio_token_timestamps=audio_token_timestamps,
                             )
                             audio_index += 1
                             continue
@@ -423,6 +445,7 @@ class TokenizeData(Augmentor):
                                     num_audio_tokens=num_audio_tokens,
                                     temporal_patch_size=self.processor.temporal_patch_size,
                                     fps=self.audio_timestamp_fps,
+                                    audio_token_timestamps=audio_token_timestamps,
                                 )
                             )
                         content = {
@@ -431,6 +454,7 @@ class TokenizeData(Augmentor):
                                 audio_pad_token,
                                 audio_outputs["audio_token_lengths"][audio_index : audio_index + 1],
                                 audio_timestamps=[audio_timestamps],
+                                audio_token_timestamps=[audio_token_timestamps],
                                 audio_start_token=audio_start_token,
                                 audio_pad_token=audio_pad_token,
                                 audio_end_token=audio_end_token,

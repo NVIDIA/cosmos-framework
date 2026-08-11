@@ -47,12 +47,10 @@ from cosmos_framework.utils.generator.reasoner.create_position_ids import get_po
 # filesystem path that VLMModel._init_vlm has already rewritten (see _init_vlm: the
 # downloader returns a local cache path, so the configured model name is lost).
 #
-# ``qwen3_vl_moe`` is listed here as forward-compat — MoE dispatch in every family
-# helper below is already wired for the 30B-A3B / 235B-A22B variants. End-to-end
-# training still fails earlier at load_vlm_model's MoE precheck
-# (safetensors_loader.py _is_moe_vlm / NotImplementedError) because sharded MoE
-# weight loading is unimplemented; see spec §2.2. Removing ``qwen3_vl_moe`` here
-# would regress the family helpers the moment MoE load support lands.
+# ``qwen3_vl_moe`` covers the 30B-A3B / 235B-A22B variants: MoE dispatch in every
+# family helper below is wired for them, and load_vlm_model loads their fused
+# ``mlp.experts.*`` tensors through the dense dim-0 shard rule (dim 0 is the
+# expert axis). Removing ``qwen3_vl_moe`` here would regress the family helpers.
 _QWEN_VL_TYPES = {"qwen2_5_vl", "qwen3_vl", "qwen3_vl_moe"}
 # InternVL variants register both "internvl" and "internvl_chat" as model_type
 # in the upstream InternVL HF policy registry.
@@ -62,7 +60,7 @@ _SOUND_UND_ENCODER_STATE_PREFIX = "model.model.sound_und_model.encoder."
 
 
 def _is_sound_und_encoder_state_dict_key(key: str) -> bool:
-    """Match only the standalone VLM's Parakeet encoder state namespace."""
+    """Match only the standalone VLM's audio encoder state namespace."""
     canonical_key = key.replace("_orig_mod.", "").replace("_checkpoint_wrapped_module.", "")
     return canonical_key.startswith(_SOUND_UND_ENCODER_STATE_PREFIX)
 
@@ -107,8 +105,8 @@ def _get_overlay_config(model_type: str) -> tuple[list[str], Callable[[str], boo
     families — safer than silently mis-skipping. Add a new entry when onboarding a
     new VLM family.
 
-    MoE note: ``qwen3_vl_moe`` is accepted here but end-to-end MoE training still
-    fails earlier at ``load_vlm_model``'s MoE precheck (see module docstring on
+    MoE note: ``qwen3_vl_moe`` shares the Qwen VL patterns — its experts live under
+    the same ``visual.*`` / language-tower split (see the module comment on
     ``_QWEN_VL_TYPES``).
     """
     if model_type in _QWEN_VL_TYPES:
@@ -459,10 +457,12 @@ class VLMModel(ImaginaireModel):
         )
         if config.sound_und:
             # ``to_empty`` deliberately discards meta initialization. Encoder
-            # tensors are populated by the authoritative artifact below; only
-            # the projector needs a fresh initialization here. A VLM/DCP
-            # checkpoint may overwrite it later.
-            hf_model.model.sound_und_model.projector.reset_parameters()
+            # tensors are populated by the authoritative artifact below. Let
+            # each audio backend restore its fresh state before checkpoint load;
+            # a VLM/DCP checkpoint may overwrite the projector later.
+            audio_model = hf_model.model.sound_und_model
+            buffer_device = audio_model.projector.linear_fc1.weight.device
+            audio_model.init_weights(buffer_device=buffer_device)
 
         # ── f. Tie embeddings (replaces the legacy post_to_empty_hook) ──
         hf_model.tie_embeddings()
@@ -520,7 +520,7 @@ class VLMModel(ImaginaireModel):
                     )
                 log.info(f"VLMModel: overlaid {len(lm_loaded)} language-model params from {llm_path}")
 
-        # ── h. Load the immutable standalone Parakeet artifact ──
+        # ── h. Load the immutable standalone audio encoder artifact ──
         # This runs for both fresh starts and DCP resumes. On resume, DCP may
         # subsequently restore the same encoder when it was checkpointed; when
         # exclusion is enabled, these artifact weights remain authoritative.
@@ -533,7 +533,7 @@ class VLMModel(ImaginaireModel):
                 parallel_dims=parallel_dims if torch.distributed.is_initialized() else None,
             )
             log.info(
-                f"VLMModel: loaded {len(loaded_audio_keys)} Parakeet encoder tensors from "
+                f"VLMModel: loaded {len(loaded_audio_keys)} audio encoder tensors from "
                 f"{audio_config.encoder_checkpoint_path}"
             )
 
@@ -560,7 +560,7 @@ class VLMModel(ImaginaireModel):
         prefix: str = "",
         keep_vars: bool = False,
     ) -> dict[str, Any]:
-        """Optionally omit the immutable artifact-backed Parakeet encoder."""
+        """Optionally omit the immutable artifact-backed audio encoder."""
         state_dict = super().state_dict(destination=destination, prefix=prefix, keep_vars=keep_vars)
         exclude_encoder = (
             self.config.sound_und and self.config.sound_und_config.exclude_frozen_encoder_from_training_checkpoint

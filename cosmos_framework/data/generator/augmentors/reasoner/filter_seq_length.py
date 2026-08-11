@@ -7,7 +7,7 @@ from typing import Dict, List, Optional
 
 from cosmos_framework.data.imaginaire.webdataset.augmentors.augmentor import Augmentor
 from cosmos_framework.utils import log
-from cosmos_framework.data.generator.processors.parakeet_audio_processor import (
+from cosmos_framework.data.generator.processors.audio_utils import (
     AUDIO_END_TOKEN,
     AUDIO_PAD_TOKEN,
     AUDIO_START_TOKEN,

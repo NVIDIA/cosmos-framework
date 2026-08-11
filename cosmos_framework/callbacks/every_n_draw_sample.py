@@ -130,10 +130,24 @@ def _first_positive_metadata_value(data_batch: dict[str, Any], key: str) -> int 
     return value if value > 0 else None
 
 
+def _get_multiview_visualization_item_counts(
+    data_batch: dict[str, Any],
+    num_vision_items_per_sample: Any,
+    batch_size: int,
+) -> list[int] | None:
+    num_items = _flatten_int_metadata(num_vision_items_per_sample)
+    if num_items:
+        return num_items
+    if "sample_n_views" not in data_batch or "num_video_frames_per_view" not in data_batch:
+        return None
+    return [1] * batch_size
+
+
 def _get_multiview_transfer_metadata(
     data_batch: dict[str, Any],
     num_vision_items_per_sample: Any,
 ) -> MultiviewTransferMetadata | None:
+    """Detect camera-major multiview samples after the caller normalizes one-item counts."""
     if "sample_n_views" not in data_batch or "num_video_frames_per_view" not in data_batch:
         return None
 
@@ -143,7 +157,7 @@ def _get_multiview_transfer_metadata(
 
     sample_n_views = _first_positive_metadata_value(data_batch, "sample_n_views")
     num_video_frames_per_view = _first_positive_metadata_value(data_batch, "num_video_frames_per_view")
-    if num_items[0] < 2 or sample_n_views is None or num_video_frames_per_view is None:
+    if num_items[0] < 1 or sample_n_views is None or num_video_frames_per_view is None:
         return None
 
     return MultiviewTransferMetadata(
@@ -229,7 +243,7 @@ def _get_first_multiview_transfer_rows(
     raw_data: list[torch.Tensor] | None,
     metadata: MultiviewTransferMetadata,
 ) -> tuple[torch.Tensor, torch.Tensor] | None:
-    if raw_data is None or len(raw_data) < metadata.num_vision_items:
+    if metadata.num_vision_items < 2 or raw_data is None or len(raw_data) < metadata.num_vision_items:
         return None
 
     control_video = _prepare_multiview_video_for_visualization(
@@ -247,6 +261,20 @@ def _get_first_multiview_transfer_rows(
     return control_video, gt_target_video
 
 
+def _get_first_multiview_target_row(
+    raw_data: list[torch.Tensor] | None,
+    metadata: MultiviewTransferMetadata,
+) -> torch.Tensor | None:
+    if raw_data is None or len(raw_data) < metadata.num_vision_items:
+        return None
+
+    return _prepare_multiview_video_for_visualization(
+        raw_data[metadata.num_vision_items - 1],
+        metadata.sample_n_views,
+        metadata.num_video_frames_per_view,
+    )  # [V,C,F,H,W] or None
+
+
 def _has_first_multiview_transfer_rows(
     raw_data: list[torch.Tensor] | None,
     metadata: MultiviewTransferMetadata,
@@ -256,7 +284,8 @@ def _has_first_multiview_transfer_rows(
         return False
 
     expected_num_frames = metadata.sample_n_views * metadata.num_video_frames_per_view
-    for vision_item_idx in (0, metadata.num_vision_items - 1):
+    vision_item_indices = (0, metadata.num_vision_items - 1) if metadata.num_vision_items >= 2 else (0,)
+    for vision_item_idx in vision_item_indices:
         vision_item = raw_data[vision_item_idx]  # [B,C,V*F,H,W] or [C,V*F,H,W]
         if vision_item.dim() == 5:
             if vision_item.shape[0] != 1 or vision_item.shape[2] != expected_num_frames:
@@ -269,14 +298,52 @@ def _has_first_multiview_transfer_rows(
     return True
 
 
+def _to_display_uint8(pixels: torch.Tensor) -> torch.Tensor:
+    """Map pixels in [-1, 1] onto the uint8 levels the image and video writers consume.
+
+    Rounding rather than truncating avoids a systematic half-level darkening, and the clamp
+    is what makes out-of-range decoder output saturate instead of wrapping around, since a
+    float outside [0, 255] has no defined uint8 value. Already-uint8 pixels are display
+    levels by construction (``v`` encodes ``v / 127.5 - 1``) and pass through untouched.
+    """
+    if pixels.dtype == torch.uint8:
+        return pixels
+    # clamp() copies, so the in-place steps that follow never touch the caller's tensor.
+    return pixels.clamp(-1, 1).float().add_(1).mul_(127.5).round_().to(torch.uint8)
+
+
+def _to_unit_float(pixels: torch.Tensor) -> torch.Tensor:
+    """Return pixels as float in [0, 1], the range the W&B image writers expect."""
+    if pixels.dtype == torch.uint8:
+        return pixels.float().div_(255)
+    return pixels
+
+
+def _stack_rows_for_display(rows: list[torch.Tensor]) -> torch.Tensor:
+    """Stack visualization rows into one tensor whose values are ready to display.
+
+    uint8 rows already carry display levels and pass through. Float rows arrive in [-1, 1]
+    and are mapped to [0, 1] in place: ``torch.stack`` returns fresh memory, so mutating it
+    cannot touch the caller's rows, and each temporary skipped is a full copy of the grid.
+    """
+    stacked = torch.stack(rows, dim=0)  # [N_rows,B,C,T,H,W]
+    if stacked.dtype == torch.uint8:
+        return stacked
+    return stacked.clamp_(-1, 1).add_(1).div_(2)  # [N_rows,B,C,T,H,W]  range [0,1]
+
+
 def _prepare_multiview_video_for_visualization(
     tensor: torch.Tensor,
     sample_n_views: int,
     num_video_frames_per_view: int,
-) -> torch.Tensor | None:  # tensor: [B,C,V*F,H,W] or [C,V*F,H,W], returns [V,C,F,H,W]
-    """Prepare camera-major pixels for visualization without expanding uint8 inputs on GPU."""
-    is_uint8 = tensor.dtype == torch.uint8
-    if is_uint8:
+) -> torch.Tensor | None:  # tensor: [B,C,V*F,H,W] or [C,V*F,H,W], returns [V,C,F,H,W] uint8
+    """Prepare camera-major pixels for visualization, as display-level uint8 on the host.
+
+    Dataloader pixels arrive as uint8 whose levels are already the display levels, so they
+    are never expanded to float and renormalized -- at multiview grid sizes that expansion
+    alone is gigabytes for rows that end up 8-bit again in the encoder.
+    """
+    if tensor.dtype == torch.uint8:
         tensor = tensor.cpu()  # [B,C,V*F,H,W] or [C,V*F,H,W]
     video_by_view = _split_multiview_tensor_by_view(
         tensor,
@@ -285,10 +352,7 @@ def _prepare_multiview_video_for_visualization(
     )  # [V,C,F,H,W] or None
     if video_by_view is None:
         return None
-    video_by_view = video_by_view.float().cpu()  # [V,C,F,H,W]
-    if is_uint8:
-        video_by_view.div_(127.5).sub_(1.0)  # [V,C,F,H,W]
-    return video_by_view
+    return _to_display_uint8(video_by_view).cpu()  # [V,C,F,H,W]
 
 
 def _add_wandb_image_paths(
@@ -434,6 +498,32 @@ def _synchronize_context_parallel_sampling_batch(
     return synchronized_batch
 
 
+def _replica_identity(model: Any, rank: int) -> tuple[int, bool]:
+    """Return this rank's sample-replica index and whether it owns that replica.
+
+    CP and CFGP are overlay axes over the same sample: sampling gives every rank
+    of a CP x CFGP group the identical batch (see
+    ``_synchronize_context_parallel_sampling_batch``), so without this every rank
+    in the group decodes the same video to CPU float32, writes the same S3 keys
+    and multiplies host memory by the group size. The overlay mesh is built as
+    ``(rest, cfgp, cp)``, so the replica index is the rank divided by the group
+    size and the owner is the group's rank-0 slot.
+    """
+    parallel_dims = getattr(model, "parallel_dims", None)
+    if parallel_dims is None:
+        return rank, True
+
+    cp_size = parallel_dims.cp_size if parallel_dims.cp_enabled else 1
+    cfgp_size = parallel_dims.cfgp_size if parallel_dims.cfgp_enabled else 1
+    group_size = cp_size * cfgp_size
+    if group_size <= 1:
+        return rank, True
+
+    cp_rank = parallel_dims.cp_rank if parallel_dims.cp_enabled else 0
+    cfgp_rank = parallel_dims.cfgp_rank if parallel_dims.cfgp_enabled else 0
+    return rank // group_size, cp_rank == 0 and cfgp_rank == 0
+
+
 class EveryNDrawSample(EveryN):
     """
     This callback sample condition inputs from training data, run inference and save the results to wandb and s3.
@@ -472,7 +562,7 @@ class EveryNDrawSample(EveryN):
         run_at_start: bool = False,
     ) -> None:
         # s3: # files: min(n_sample_to_save, data instance)  # per file: min(batch_size, n_viz_sample)
-        # wandb: normal paths log one preview; multiview transfer logs one preview per selected timestamp.
+        # wandb: normal paths log one preview; multiview samples log one preview per selected timestamp.
         super().__init__(every_n, step_size, run_at_start=run_at_start)
 
         self.n_viz_sample = n_viz_sample
@@ -489,6 +579,9 @@ class EveryNDrawSample(EveryN):
         self.num_sampling_step = num_sampling_step
         self.rank = distributed.get_rank()
         self.fps = fps
+        self.data_parallel_id = self.rank
+        # Overwritten in on_train_start once the model's meshes are known.
+        self.is_replica_leader = True
 
     def on_train_start(self, model: ImaginaireModel, iteration: int = 0) -> None:
         config_job = self.config.job
@@ -497,11 +590,47 @@ class EveryNDrawSample(EveryN):
             os.makedirs(self.local_dir, exist_ok=True)
             log.info(f"Callback: local_dir: {self.local_dir}")
 
-        self.data_parallel_id = self.rank
+        self.data_parallel_id, self.is_replica_leader = _replica_identity(model, self.rank)
 
     def _should_materialize_sample(self) -> bool:
         """Return whether this rank needs decoded pixels for saving or W&B."""
-        return self.rank == 0 or ((self.save_s3 or self.save_local) and self.data_parallel_id < self.n_sample_to_save)
+        if self.rank == 0:
+            return True
+        return self._should_save_to_s3() or self._should_save_local()
+
+    def _should_save_to_s3(self) -> bool:
+        """Return whether this rank owns the S3 artifacts for its sample replica."""
+        return self.save_s3 and self.is_replica_leader and self.data_parallel_id < self.n_sample_to_save
+
+    def _should_save_local(self) -> bool:
+        """Return whether this rank owns the local artifacts for its sample replica."""
+        return self.save_local and self.is_replica_leader and self.data_parallel_id < self.n_sample_to_save
+
+    def _to_visualization_row(self, pixels: torch.Tensor) -> torch.Tensor:
+        """Turn decoded pixels into a host-side visualization row: uint8, on CPU.
+
+        Quantizing on the device, before the copy to the host, is what makes a tiled multiview
+        grid affordable: the transfer, the grid and every copy the encoder makes of the grid
+        all inherit the reduction.
+        """
+        return _to_display_uint8(pixels).cpu()  # [V,C,F,H,W]
+
+    def _skip_multiview_visualization(
+        self,
+        reason: str,
+        metadata: MultiviewTransferMetadata,
+        iteration: int,
+    ) -> MultiviewTransferSampleResult:
+        if self._should_materialize_sample():
+            log.warning(
+                "Skipping multiview sampling visualization "
+                f"at iteration {iteration}: {reason}. "
+                f"num_vision_items={metadata.num_vision_items}, "
+                f"sample_n_views={metadata.sample_n_views}, "
+                f"num_video_frames_per_view={metadata.num_video_frames_per_view}.",
+                rank0_only=False,
+            )
+        return MultiviewTransferSampleResult(handled=True)
 
     @misc.timer("EveryNDrawSample: x0")
     @torch.no_grad()
@@ -580,7 +709,7 @@ class EveryNDrawSample(EveryN):
             "sample_counter": sample_counter,
             "iteration": iteration,
         }
-        if self.save_s3 and self.data_parallel_id < self.n_sample_to_save:
+        if self._should_save_to_s3():
             easy_io.dump(
                 batch_info,
                 f"s3://rundir/{self.name}/Iter{iteration:09d}/BatchInfo_ReplicateID{self.data_parallel_id:04d}_Iter{iteration:09d}.json",
@@ -654,7 +783,11 @@ class EveryNDrawSample(EveryN):
         tag: str,
     ) -> MultiviewTransferSampleResult:
         if not _has_first_multiview_transfer_rows(raw_data, metadata):
-            return MultiviewTransferSampleResult(handled=False)
+            return self._skip_multiview_visualization(
+                "raw multiview rows cannot be split into camera views",
+                metadata,
+                iteration,
+            )
 
         # IMPORTANT: run diffusion generation BEFORE any auxiliary VAE decode.
         # generate_samples_from_batch drives the compiled net under
@@ -679,7 +812,11 @@ class EveryNDrawSample(EveryN):
             )
             sample_vision = sample["vision"]
             if len(sample_vision) != 1:
-                return MultiviewTransferSampleResult(handled=True)
+                return self._skip_multiview_visualization(
+                    f"expected one generated vision tensor, got {len(sample_vision)}",
+                    metadata,
+                    iteration,
+                )
             if should_materialize_sample:
                 generated_latents.append(
                     sample_vision[0].clone()  # [1,C,V*T_latent,H,W] or [C,V*T_latent,H,W]
@@ -691,13 +828,23 @@ class EveryNDrawSample(EveryN):
         if not should_materialize_sample:
             return MultiviewTransferSampleResult(handled=True)
 
+        gt_target_video = _get_first_multiview_target_row(raw_data, metadata)  # [V,C,F,H,W] or None
+        if gt_target_video is None:
+            return self._skip_multiview_visualization(
+                "ground-truth target row cannot be split into camera views",
+                metadata,
+                iteration,
+            )
+
         first_sample_rows = _get_first_multiview_transfer_rows(raw_data, metadata)
-        assert first_sample_rows is not None
-        control_video, gt_target_video = first_sample_rows
-        to_show = [
-            control_video,  # [V,C,F,H,W]
-            gt_target_video,  # [V,C,F,H,W]
-        ]
+        if first_sample_rows is None:
+            to_show = [gt_target_video]  # list[[V,C,F,H,W]]
+        else:
+            control_video, gt_target_video = first_sample_rows
+            to_show = [
+                control_video,  # [V,C,F,H,W]
+                gt_target_video,  # [V,C,F,H,W]
+            ]
 
         assert hasattr(model, "decode")
         generated_rows: list[torch.Tensor] = []
@@ -717,8 +864,12 @@ class EveryNDrawSample(EveryN):
                 metadata.num_video_frames_per_view,
             )  # [V,C,F,H,W] or None
             if generated_by_view is None:
-                return MultiviewTransferSampleResult(handled=True)
-            generated_rows.append(generated_by_view.float().cpu())  # [V,C,F,H,W]
+                return self._skip_multiview_visualization(
+                    "generated video cannot be split into camera views",
+                    metadata,
+                    iteration,
+                )
+            generated_rows.append(self._to_visualization_row(generated_by_view))  # [V,C,F,H,W]
 
         # VAE reconstruction of the clean target latent (decode of the x0 tokens). This is the
         # tokenizer reconstruction ceiling — the best the model could produce if generation were
@@ -745,12 +896,17 @@ class EveryNDrawSample(EveryN):
                 metadata.num_video_frames_per_view,
             )  # [V,C,F,H,W] or None
             if clean_target_by_view is not None:
-                to_show.append(clean_target_by_view.float().cpu())
+                to_show.append(self._to_visualization_row(clean_target_by_view))
 
         to_show.extend(generated_rows)
 
         if any(row.shape != to_show[0].shape for row in to_show):
-            return MultiviewTransferSampleResult(handled=True)
+            row_shapes = [tuple(row.shape) for row in to_show]
+            return self._skip_multiview_visualization(
+                f"visualization rows have inconsistent shapes: {row_shapes}",
+                metadata,
+                iteration,
+            )
 
         base_fp_wo_ext = f"{tag}_ReplicateID{self.data_parallel_id:04d}_Sample_Iter{iteration:09d}"
         base_fp_wo_ext = f"Iter{iteration:09d}/{base_fp_wo_ext}"
@@ -800,7 +956,8 @@ class EveryNDrawSample(EveryN):
         # Check if this is a multi-item vision batch (image editing)
         num_items = data_clean.num_vision_items_per_sample
         is_multi_item = num_items is not None
-        multiview_metadata = _get_multiview_transfer_metadata(data_batch, num_items)
+        multiview_num_items = _get_multiview_visualization_item_counts(data_batch, num_items, data_clean.batch_size)
+        multiview_metadata = _get_multiview_transfer_metadata(data_batch, multiview_num_items)
         if multiview_metadata is not None:
             multiview_result = self._sample_multiview_transfer(
                 model,
@@ -910,7 +1067,7 @@ class EveryNDrawSample(EveryN):
         max_columns: int | None = None,
         split_video_frames_for_wandb: bool = False,
     ) -> WandbImagePaths | None:
-        to_show = (1.0 + torch.stack(to_show, dim=0).clamp(-1, 1)) / 2.0  # [N_rows,B,C,T,H,W]  range [0,1]
+        to_show = _stack_rows_for_display(to_show)  # [N_rows,B,C,T,H,W]  uint8, or float in [0,1]
         is_single_frame = to_show.shape[3] == 1
         max_columns = self.n_viz_sample if max_columns is None else max_columns
         n_columns = min(max_columns, batch_size)
@@ -918,13 +1075,13 @@ class EveryNDrawSample(EveryN):
 
         # ! we only save first n_sample_to_save video!
         video_grid = rearrange(to_show, "n b c t h w -> c t (n h) (b w)")  # [C,T,N_rows*H,B*W]
-        if self.save_s3 and self.data_parallel_id < self.n_sample_to_save:
+        if self._should_save_to_s3():
             save_img_or_video(
                 video_grid,
                 f"s3://rundir/{self.name}/{base_fp_wo_ext}",
                 fps=self.fps,
             )
-        if self.save_local and self.data_parallel_id < self.n_sample_to_save:
+        if self._should_save_local():
             local_video_path = f"{self.local_dir}/{base_fp_wo_ext}"
             os.makedirs(os.path.dirname(local_video_path), exist_ok=True)
             save_img_or_video(video_grid, local_video_path, fps=self.fps)
@@ -939,7 +1096,7 @@ class EveryNDrawSample(EveryN):
                     "n b c t h w -> t c (n h) (b w)",
                 )  # [1,C,N_rows*H,B*W]  (t=1 for images)
                 image_grid = torchvision.utils.make_grid(
-                    to_show, nrow=1, padding=0, normalize=False
+                    _to_unit_float(to_show), nrow=1, padding=0, normalize=False
                 )  # [C,N_rows*H,B*W]
                 # resize so that wandb can handle it
                 os.makedirs(os.path.dirname(local_path), exist_ok=True)
@@ -967,7 +1124,7 @@ class EveryNDrawSample(EveryN):
                             "n b c h w -> 1 c (n h) (b w)",
                         )  # [1,C,N_rows*H,B*W]
                         frame_image_grid = torchvision.utils.make_grid(
-                            frame_to_show,
+                            _to_unit_float(frame_to_show),
                             nrow=1,
                             padding=0,
                             normalize=False,
@@ -986,7 +1143,7 @@ class EveryNDrawSample(EveryN):
 
                 # resize so that wandb can handle it
                 image_grid = torchvision.utils.make_grid(
-                    to_show,
+                    _to_unit_float(to_show),
                     nrow=1,
                     padding=0,
                     normalize=False,

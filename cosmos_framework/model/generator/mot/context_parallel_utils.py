@@ -51,13 +51,14 @@ from cosmos_framework.data.generator.sequence_packing.runtime import (
     get_gen_seq,
     get_und_position_ids,
     get_und_seq,
+    num_local_real_tokens,
 )
 from cosmos_framework.utils.generator.parallelism import ParallelDims
 
 
-def _pad_to_N(N, x: torch.Tensor) -> torch.Tensor:
+def _pad_to_N(N: int, x: torch.Tensor) -> torch.Tensor:
     assert x.shape[0] <= N
-    padded = x.new_zeros((N, *x.shape[1:]))
+    padded = x.new_zeros((N, *x.shape[1:]))  # [N,...]
     padded[: x.shape[0]] = x
     return padded
 
@@ -98,7 +99,7 @@ def broadcast_context_parallel_object(
     parallel_dims: ParallelDims,
     owner_rank: int,
     *,
-    min_tensor_bytes: int = 0,
+    min_tensor_bytes: int = 1024 * 1024,
 ) -> Any:
     """Broadcast one CP owner's object tree to every rank in the CP group.
 
@@ -154,6 +155,14 @@ def get_context_parallel_sharded_sequence(
     gen_shard_len = gen_len // world_size
     gen_shard = gen_seq.narrow(0, rank * gen_shard_len, gen_shard_len)
 
+    # SequencePack keeps all per-token metadata aligned with its padded streams.
+    text_sample_ids = input_pack["_causal_sample_ids"]  # [text_len]
+    gen_sample_ids = input_pack["_full_only_sample_ids"]  # [gen_len]
+    assert text_sample_ids.shape[0] == text_len
+    assert gen_sample_ids.shape[0] == gen_len
+    text_sample_ids_shard = text_sample_ids.narrow(0, rank * text_shard_len, text_shard_len)  # [text_shard_len]
+    gen_sample_ids_shard = gen_sample_ids.narrow(0, rank * gen_shard_len, gen_shard_len)  # [gen_shard_len]
+
     text_position_ids = get_und_position_ids(position_ids, input_pack)
     gen_position_ids = get_gen_position_ids(position_ids, input_pack)
 
@@ -172,6 +181,15 @@ def get_context_parallel_sharded_sequence(
 
     # create local pack
     local_pack = from_mode_splits(text_shard, gen_shard, input_pack, is_sharded=True)
+    local_pack["_causal_sample_ids"] = text_sample_ids_shard
+    local_pack["_full_only_sample_ids"] = gen_sample_ids_shard
+    # Padding sits at the end of each stream, so only the last shards hold any of it. Record the
+    # per-shard real token counts: the counts in the metadata describe the whole batch and would
+    # silently over-count against these shards (see get_num_real_tokens).
+    local_pack["_num_causal_tokens_local"] = num_local_real_tokens(
+        input_pack["_num_causal_tokens"], rank, text_shard_len
+    )
+    local_pack["_num_full_tokens_local"] = num_local_real_tokens(input_pack["_num_full_tokens"], rank, gen_shard_len)
     local_position_ids = torch.cat(
         [text_position_ids_shard, gen_position_ids_shard], dim=0
     )  # [text_shard_len+gen_shard_len] or [text_shard_len+gen_shard_len,3]
@@ -352,18 +370,25 @@ def context_parallel_attention(
     v_und_seq, _ = get_causal_seq(packed_value_states)  # [text_shard_len,H,head_dim]
     v_gen_seq, _ = get_full_only_seq(packed_value_states)  # [gen_shard_len,H,head_dim]
 
-    # Check that number of Q heads is divisible by CP world size. K/V heads may be repeated below for GQA.
-    q_heads = q_und_seq.shape[1]
-    kv_heads = k_und_seq.shape[1]
-    assert q_und_seq.shape[1] % cp_world_size == 0, (
-        f"Query heads ({q_und_seq.shape[1]}) must be divisible by context parallel world size ({cp_world_size})"
-    )
+    # The head counts are fixed by the model config, and PackedAttentionMoT is marked static so they
+    # stay concrete under torch.compile with dynamic shapes. That matters here because the all-to-all
+    # below derives the local head count as ``global // cp_world_size``, which has to stay a number:
+    # Inductor's flex-decoding heuristic evaluates ``ratio & (ratio - 1)`` on the head counts and
+    # raises a TypeError on a symbolic ratio.
+    q_heads = int(q_und_seq.shape[1])
+    kv_heads = int(k_und_seq.shape[1])
+
     assert q_gen_seq.shape[1] == q_heads, (
         f"Understanding query heads ({q_heads}) and generation query heads ({q_gen_seq.shape[1]}) must match"
     )
     assert kv_heads == k_gen_seq.shape[1] == v_und_seq.shape[1] == v_gen_seq.shape[1], (
         f"Key/value heads must match across und/gen K/V tensors, got "
         f"k_und={kv_heads}, k_gen={k_gen_seq.shape[1]}, v_und={v_und_seq.shape[1]}, v_gen={v_gen_seq.shape[1]}"
+    )
+
+    # Check that number of Q heads is divisible by CP world size. K/V heads may be repeated below for GQA.
+    assert q_heads % cp_world_size == 0, (
+        f"Query heads ({q_heads}) must be divisible by context parallel world size ({cp_world_size})"
     )
     assert q_heads % kv_heads == 0, f"Query heads ({q_heads}) must be divisible by KV heads ({kv_heads})"
 

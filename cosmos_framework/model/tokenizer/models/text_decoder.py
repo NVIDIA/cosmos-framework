@@ -11,7 +11,7 @@ Provides:
 Architecture flow (mid-training / ITG path):
     x_no_proj [N, encoder_dim]
         -> SpatialPatchMerger (2x2 concat + MLP) -> [N/4, decoder_hidden]
-        -> ImagePositionEmbeddings (add 2D spatial pos) -> [N/4, decoder_hidden]
+        -> optional legacy ImagePositionEmbeddings -> [N/4, decoder_hidden]
         -> inject into text token embeddings at image_patch_indices
         -> causal LM -> logits [B, S, vocab_size]
         -> CrossEntropy ITG loss (ignore_index=-100 masks vision/padding tokens)
@@ -37,6 +37,11 @@ from loguru import logger as logging
 from cosmos_framework.model.attention import attention as i4_attention
 from cosmos_framework.model.attention.masks import CausalType
 from cosmos_framework.model.attention.natten import NATTEN_SUPPORTED, get_natten_version
+from cosmos_framework.model.tokenizer.models.text_decoder_mrope import (
+    NEMOTRON_2B_MROPE_SECTION,
+    build_multimodal_rope_position_ids,
+    build_nemotron_mrope_rotary_embeddings,
+)
 from cosmos_framework.model.tokenizer.utils.hf import (
     load_auto_tokenizer_from_cache,
     prepare_nemotron_tokenizer_snapshot,
@@ -51,10 +56,13 @@ QWEN3_IM_END_TOKEN_ID = 151645
 QWEN3_VISION_START_TOKEN_ID = 151652
 QWEN3_VISION_END_TOKEN_ID = 151653
 QWEN3_VISION_PAD_TOKEN_ID = 151655
+QWEN3_VIDEO_PAD_TOKEN_ID = 151656
 QWEN3_THINK_START_TOKEN_ID = 151667
 QWEN3_THINK_END_TOKEN_ID = 151668
 NEMOTRON_2B_PAD_TOKEN_ID = 0
 NEMOTRON_2B_EOS_TOKEN_ID = 11
+NEMOTRON_2B_VIDEO_PAD_TOKEN_ID = 18
+NEMOTRON_2B_IMAGE_PAD_TOKEN_ID = 19
 NEMOTRON_2B_VISION_START_TOKEN_ID = 20
 NEMOTRON_2B_VISION_END_TOKEN_ID = 21
 NEMOTRON_2B_VISION_PAD_TOKEN_ID = 22
@@ -70,6 +78,11 @@ TEXT_DECODER_CHECKPOINT_SCOPE_FULL_LAYER = "full_layer"
 TEXT_DECODER_CHECKPOINT_SCOPE_MLP_ONLY = "mlp_only"
 TEXT_DECODER_CHECKPOINT_SCOPES = frozenset(
     {TEXT_DECODER_CHECKPOINT_SCOPE_FULL_LAYER, TEXT_DECODER_CHECKPOINT_SCOPE_MLP_ONLY}
+)
+TEXT_DECODER_POSITION_EMBEDDING_ROPE = "rope"
+TEXT_DECODER_POSITION_EMBEDDING_MROPE = "mrope"
+TEXT_DECODER_POSITION_EMBEDDING_MODES = frozenset(
+    {TEXT_DECODER_POSITION_EMBEDDING_ROPE, TEXT_DECODER_POSITION_EMBEDDING_MROPE}
 )
 VQA_THINKING_MODE_OFF = "off"
 VQA_THINKING_MODE_ON = "on"
@@ -90,6 +103,12 @@ def normalize_vqa_thinking_mode(thinking_mode: str | None) -> str:
             f"Unsupported VQA thinking_mode={thinking_mode!r}; expected one of {sorted(VQA_THINKING_MODES)}."
         )
     return normalized
+
+
+def _validate_optional_positive_int(value: int | None, *, name: str) -> None:
+    """Validate an optional positive integer before loading heavyweight dependencies."""
+    if value is not None and (isinstance(value, bool) or not isinstance(value, int) or value <= 0):
+        raise ValueError(f"{name} must be a positive integer or None, got {value!r}.")
 
 
 def _append_vqa_reasoning_suffix(question: str, reasoning_suffix: str) -> str:
@@ -196,6 +215,194 @@ def _forward_nemotron_natten_attention(
     return projected_output
 
 
+def _repeat_nemotron_key_value_states(
+    key_value_states: torch.Tensor,
+    num_repeats: int,
+) -> torch.Tensor:  # key_value_states: [B,Hkv,T,D], returns: [B,Hq,T,D]
+    """Repeat grouped-query key/value heads using Nemotron's native layout."""
+    if num_repeats <= 0:
+        raise ValueError(f"Nemotron key/value head repeat count must be positive, got {num_repeats}.")
+    if num_repeats == 1:
+        return key_value_states
+    batch_size, num_key_value_heads, sequence_length, head_dim = key_value_states.shape
+    expanded_states = key_value_states[:, :, None, :, :].expand(
+        batch_size,
+        num_key_value_heads,
+        num_repeats,
+        sequence_length,
+        head_dim,
+    )  # [B,Hkv,G,T,D]
+    return expanded_states.reshape(
+        batch_size,
+        num_key_value_heads * num_repeats,
+        sequence_length,
+        head_dim,
+    )  # [B,Hq,T,D]
+
+
+def _forward_nemotron_mrope_sdpa_attention(
+    attention_module: nn.Module,
+    hidden_states: torch.Tensor,
+    attention_mask: torch.Tensor | None,
+    rotary_embeddings: tuple[torch.Tensor, torch.Tensor],
+    past_key_value: tuple[torch.Tensor, torch.Tensor] | None,
+    use_cache: bool,
+) -> tuple[torch.Tensor, tuple[torch.Tensor, torch.Tensor] | None]:
+    """Run non-packed Nemotron attention with mRoPE and the native tuple cache.
+
+    Args:
+        attention_module: Nemotron grouped-query attention module.
+        hidden_states: Current-token hidden states with shape ``[B,T,D]``.
+        attention_mask: Optional key mask with shape ``[B,Tkv]``.
+        rotary_embeddings: Cosine and sine tensors, each with shape ``[B,1,T,Dh]``.
+        past_key_value: Optional key/value cache tensors, each with shape ``[B,Hkv,Tpast,Dh]``.
+        use_cache: Whether to return the extended key/value cache.
+
+    Returns:
+        Attention output with shape ``[B,T,D]`` and the optional extended cache.
+    """
+    batch_size, query_length, _ = hidden_states.shape
+    query_states = attention_module.q_proj(hidden_states)  # [B,T,Hq*D]
+    query_states = query_states.view(
+        batch_size,
+        query_length,
+        attention_module.num_heads,
+        attention_module.head_dim,
+    ).transpose(1, 2)  # [B,Hq,T,D]
+    key_states = attention_module.k_proj(hidden_states)  # [B,T,Hkv*D]
+    key_states = key_states.view(
+        batch_size,
+        query_length,
+        attention_module.num_key_value_heads,
+        attention_module.head_dim,
+    ).transpose(1, 2)  # [B,Hkv,T,D]
+    value_states = attention_module.v_proj(hidden_states)  # [B,T,Hkv*D]
+    value_states = value_states.view(
+        batch_size,
+        query_length,
+        attention_module.num_key_value_heads,
+        attention_module.head_dim,
+    ).transpose(1, 2)  # [B,Hkv,T,D]
+    cosine, sine = rotary_embeddings  # each [B,1,T,Dh]
+    query_states_, key_states_ = _apply_nemotron_rotary_embeddings(
+        query_states,
+        key_states,
+        cosine,
+        sine,
+    )  # [B,Hq,T,D], [B,Hkv,T,D]
+
+    if past_key_value is not None:
+        if len(past_key_value) != 2 or not all(isinstance(state, torch.Tensor) for state in past_key_value):
+            raise TypeError("Nemotron mRoPE cache entries must be (key, value) tensor pairs.")
+        past_key_states, past_value_states = past_key_value  # each [B,Hkv,Tpast,Dh]
+        expected_cache_prefix = (batch_size, attention_module.num_key_value_heads)
+        if (
+            past_key_states.ndim != 4
+            or past_value_states.shape != past_key_states.shape
+            or tuple(past_key_states.shape[:2]) != expected_cache_prefix
+            or past_key_states.shape[-1] != attention_module.head_dim
+        ):
+            raise ValueError(
+                "Nemotron mRoPE cache tensors must share shape [B,Hkv,T,D], got "
+                f"{tuple(past_key_states.shape)} and {tuple(past_value_states.shape)}."
+            )
+        key_states_ = torch.cat([past_key_states, key_states_], dim=2)  # [B,Hkv,Tkv,D]
+        value_states = torch.cat([past_value_states, value_states], dim=2)  # [B,Hkv,Tkv,D]
+
+    present_key_value = (key_states_, value_states) if use_cache else None  # optional each [B,Hkv,Tkv,Dh]
+    num_key_value_groups = attention_module.num_heads // attention_module.num_key_value_heads
+    key_states_for_attention = _repeat_nemotron_key_value_states(
+        key_states_,
+        num_key_value_groups,
+    )  # [B,Hq,Tkv,D]
+    value_states_for_attention = _repeat_nemotron_key_value_states(
+        value_states,
+        num_key_value_groups,
+    )  # [B,Hq,Tkv,D]
+    key_value_length = key_states_for_attention.shape[-2]
+
+    resolved_attention_mask: torch.Tensor | None = None
+    if attention_mask is not None:
+        expected_mask_shape = (batch_size, key_value_length)
+        if tuple(attention_mask.shape) != expected_mask_shape:
+            raise ValueError(
+                f"Nemotron mRoPE attention_mask must have shape {expected_mask_shape}, "
+                f"got {tuple(attention_mask.shape)}."
+            )
+        resolved_attention_mask = attention_mask.to(
+            device=hidden_states.device,
+            dtype=torch.bool,
+        )[:, None, None, :]  # [B,1,1,Tkv]
+    needs_explicit_causal_mask = query_length > 1 and (
+        resolved_attention_mask is not None or key_value_length != query_length
+    )
+    if needs_explicit_causal_mask:
+        causal_mask = torch.ones(
+            query_length,
+            key_value_length,
+            device=hidden_states.device,
+            dtype=torch.bool,
+        )  # [T,Tkv]
+        causal_mask = torch.tril(causal_mask, diagonal=key_value_length - query_length)  # [T,Tkv]
+        expanded_causal_mask = causal_mask[None, None, :, :]  # [1,1,T,Tkv]
+        resolved_attention_mask = (
+            expanded_causal_mask if resolved_attention_mask is None else resolved_attention_mask & expanded_causal_mask
+        )  # [B|1,1,T,Tkv]
+
+    attention_output = F.scaled_dot_product_attention(
+        query_states_,
+        key_states_for_attention,
+        value_states_for_attention,
+        attn_mask=resolved_attention_mask,
+        dropout_p=0.0,
+        is_causal=resolved_attention_mask is None and query_length > 1,
+    )  # [B,Hq,T,D]
+    attention_output = attention_output.transpose(1, 2).contiguous()  # [B,T,Hq,D]
+    attention_output = attention_output.reshape(
+        batch_size,
+        query_length,
+        attention_module.hidden_size,
+    )  # [B,T,D]
+    projected_output = attention_module.o_proj(attention_output)  # [B,T,D]
+    return projected_output, present_key_value
+
+
+def _forward_nemotron_mrope_sdpa_decoder_layer(
+    decoder_layer: nn.Module,
+    hidden_states: torch.Tensor,
+    attention_mask: torch.Tensor | None,
+    rotary_embeddings: tuple[torch.Tensor, torch.Tensor],
+    past_key_value: tuple[torch.Tensor, torch.Tensor] | None,
+    use_cache: bool,
+) -> tuple[torch.Tensor, tuple[torch.Tensor, torch.Tensor] | None]:
+    """Run one non-packed Nemotron layer with explicit mRoPE attention.
+
+    Args:
+        decoder_layer: Nemotron decoder layer.
+        hidden_states: Current-token hidden states with shape ``[B,T,D]``.
+        attention_mask: Optional key mask with shape ``[B,Tkv]``.
+        rotary_embeddings: Cosine and sine tensors, each with shape ``[B,1,T,Dh]``.
+        past_key_value: Optional key/value cache tensors, each with shape ``[B,Hkv,Tpast,Dh]``.
+        use_cache: Whether to return the extended key/value cache.
+
+    Returns:
+        Decoder hidden states with shape ``[B,T,D]`` and the optional extended cache.
+    """
+    residual = hidden_states  # [B,T,D]
+    normalized_hidden_states = decoder_layer.input_layernorm(hidden_states)  # [B,T,D]
+    attention_output, present_key_value = _forward_nemotron_mrope_sdpa_attention(
+        decoder_layer.self_attn,
+        normalized_hidden_states,
+        attention_mask,
+        rotary_embeddings,
+        past_key_value,
+        use_cache,
+    )  # [B,T,D], optional ([B,Hkv,Tkv,D], [B,Hkv,Tkv,D])
+    hidden_states = residual + attention_output  # [B,T,D]
+    hidden_states = _forward_nemotron_mlp_sublayer(decoder_layer, hidden_states)  # [B,T,D]
+    return hidden_states, present_key_value
+
+
 def _forward_nemotron_natten_attention_sublayer(
     decoder_layer: nn.Module,
     hidden_states: torch.Tensor,
@@ -261,6 +468,8 @@ class TextDecoderFamilySpec:
     vision_start_token_id: int
     vision_end_token_id: int
     vision_pad_token_id: int
+    distinct_image_pad_token_id: int | None = None
+    distinct_video_pad_token_id: int | None = None
     suppress_token_ids: tuple[int, ...] = ()
     trust_remote_code: bool = True
     supports_inputs_embeds_forward: bool = True
@@ -276,6 +485,8 @@ QWEN3_SPEC = TextDecoderFamilySpec(
     vision_start_token_id=QWEN3_VISION_START_TOKEN_ID,
     vision_end_token_id=QWEN3_VISION_END_TOKEN_ID,
     vision_pad_token_id=QWEN3_VISION_PAD_TOKEN_ID,
+    distinct_image_pad_token_id=QWEN3_VISION_PAD_TOKEN_ID,
+    distinct_video_pad_token_id=QWEN3_VIDEO_PAD_TOKEN_ID,
     suppress_token_ids=(QWEN3_THINK_START_TOKEN_ID,),
 )
 
@@ -287,6 +498,8 @@ NEMOTRON_2B_SPEC = TextDecoderFamilySpec(
     vision_start_token_id=NEMOTRON_2B_VISION_START_TOKEN_ID,
     vision_end_token_id=NEMOTRON_2B_VISION_END_TOKEN_ID,
     vision_pad_token_id=NEMOTRON_2B_VISION_PAD_TOKEN_ID,
+    distinct_image_pad_token_id=NEMOTRON_2B_IMAGE_PAD_TOKEN_ID,
+    distinct_video_pad_token_id=NEMOTRON_2B_VIDEO_PAD_TOKEN_ID,
     trust_remote_code=True,
     supports_inputs_embeds_forward=False,
     supports_inputs_embeds_generate=False,
@@ -558,6 +771,8 @@ class SpatialPatchMerger(nn.Module):
         input_hidden_size: Encoder output dim (e.g., 1152 for SigLIP2 SO400M).
         out_hidden_size: LLM hidden dim (e.g., 896 for Qwen3-0.6B, read from model config).
         spatial_merge_size: Window size (default 2 for 2x2 merging).
+        intermediate_hidden_size: Optional MLP intermediate width. Defaults to
+            the concatenated post-merge width for backward compatibility.
     """
 
     def __init__(
@@ -565,19 +780,33 @@ class SpatialPatchMerger(nn.Module):
         input_hidden_size: int = 1152,
         out_hidden_size: int = 896,
         spatial_merge_size: int = 2,
+        intermediate_hidden_size: int | None = None,
     ) -> None:
         super().__init__()
-        self.input_hidden_size = input_hidden_size
-        self.out_hidden_size = out_hidden_size
-        self.spatial_merge_size = spatial_merge_size
-        self.merged_hidden_size = input_hidden_size * (spatial_merge_size**2)
+        self.input_hidden_size: int = input_hidden_size
+        self.out_hidden_size: int = out_hidden_size
+        self.spatial_merge_size: int = spatial_merge_size
+        self.merged_hidden_size: int = input_hidden_size * (spatial_merge_size**2)
+        resolved_intermediate_hidden_size = (
+            self.merged_hidden_size if intermediate_hidden_size is None else intermediate_hidden_size
+        )
+        if (
+            isinstance(resolved_intermediate_hidden_size, bool)
+            or not isinstance(resolved_intermediate_hidden_size, int)
+            or resolved_intermediate_hidden_size <= 0
+        ):
+            raise ValueError(
+                "SpatialPatchMerger intermediate_hidden_size must be a positive integer, "
+                f"got {intermediate_hidden_size!r}."
+            )
+        self.intermediate_hidden_size: int = resolved_intermediate_hidden_size
 
         # Pre-merge LayerNorm on input features
-        self.norm = nn.LayerNorm(input_hidden_size, eps=1e-6)
-        # 2-layer MLP: concat_dim -> concat_dim (GELU) -> out_hidden_size
-        self.linear_fc1 = nn.Linear(self.merged_hidden_size, self.merged_hidden_size)
-        self.act_fn = nn.GELU()
-        self.linear_fc2 = nn.Linear(self.merged_hidden_size, out_hidden_size)
+        self.norm: nn.LayerNorm = nn.LayerNorm(input_hidden_size, eps=1e-6)
+        # 2-layer MLP: concat_dim -> intermediate_dim (GELU) -> out_hidden_size
+        self.linear_fc1: nn.Linear = nn.Linear(self.merged_hidden_size, self.intermediate_hidden_size)
+        self.act_fn: nn.GELU = nn.GELU()
+        self.linear_fc2: nn.Linear = nn.Linear(self.intermediate_hidden_size, out_hidden_size)
 
     def forward(
         self,
@@ -715,7 +944,7 @@ class SpatialPatchMerger(nn.Module):
         merged_coords = cat_with_bounded_inputs(merged_coords_list, dim=0)
 
         # MLP projection: merged_hidden_size -> out_hidden_size
-        merged_feats = self.linear_fc2(self.act_fn(self.linear_fc1(merged_feats)))
+        merged_feats = self.linear_fc2(self.act_fn(self.linear_fc1(merged_feats)))  # [N',D_out]
 
         return merged_feats, merged_coords, new_layout
 
@@ -740,15 +969,37 @@ class TextDecoderWrapper(nn.Module):
         packed_attention_backend: str = PACKED_ATTENTION_BACKEND_SDPA,
         natten_native_rms_norm: bool = False,
         gradient_checkpoint_scope: str = TEXT_DECODER_CHECKPOINT_SCOPE_FULL_LAYER,
+        projector_intermediate_size: int | None = None,
+        position_embedding_mode: str = TEXT_DECODER_POSITION_EMBEDDING_ROPE,
+        use_image_position_embeddings: bool = True,
+        use_distinct_media_tokens: bool = False,
+        model_revision: str | None = None,
     ) -> None:
         super().__init__()
 
+        _validate_optional_positive_int(
+            projector_intermediate_size,
+            name="projector_intermediate_size",
+        )
         if dtype is None:
             dtype = torch.bfloat16
 
-        from transformers import AutoModelForCausalLM
-
         self.spec = family_spec or get_text_decoder_family_spec(model_name=model_name)
+        if position_embedding_mode not in TEXT_DECODER_POSITION_EMBEDDING_MODES:
+            raise ValueError(
+                f"Unsupported position_embedding_mode={position_embedding_mode!r}; "
+                f"expected one of {sorted(TEXT_DECODER_POSITION_EMBEDDING_MODES)}."
+            )
+        if (
+            position_embedding_mode == TEXT_DECODER_POSITION_EMBEDDING_MROPE
+            and self.spec.family != NEMOTRON_2B_SPEC.family
+        ):
+            raise ValueError("Multimodal RoPE currently supports only the Nemotron 2B text decoder.")
+        if (
+            position_embedding_mode == TEXT_DECODER_POSITION_EMBEDDING_MROPE
+            and packed_attention_backend != PACKED_ATTENTION_BACKEND_NATTEN
+        ):
+            raise ValueError("Multimodal RoPE requires the NATTEN packed attention backend.")
         if packed_attention_backend not in PACKED_ATTENTION_BACKENDS:
             raise ValueError(
                 f"Unsupported packed_attention_backend={packed_attention_backend!r}; "
@@ -779,7 +1030,9 @@ class TextDecoderWrapper(nn.Module):
         self.packed_attention_backend: str = packed_attention_backend
         self.natten_native_rms_norm: bool = natten_native_rms_norm
         self.gradient_checkpoint_scope: str = gradient_checkpoint_scope
+        self.position_embedding_mode: str = position_embedding_mode
         self._model_name: str = model_name or self.spec.default_model_name
+        self._model_revision: str | None = model_revision
         resolved_attn_implementation = _resolve_attn_implementation(attn_implementation)
         if packed_attention_backend == PACKED_ATTENTION_BACKEND_NATTEN:
             # Packed training bypasses the remote decoder attention. Keep all
@@ -789,12 +1042,20 @@ class TextDecoderWrapper(nn.Module):
                 logging.info(f"Using NATTEN {get_natten_version()} for packed text decoder attention")
         logging.info(f"Loading text decoder: {self._model_name}")
         logging.info(f"Using text decoder attention backend: {resolved_attn_implementation}")
+        from transformers import AutoModelForCausalLM
+
         hf_cache_dir = os.environ.get("HF_HOME")
         local_files_only = hf_cache_dir is not None
-        local_snapshot = resolve_hf_snapshot_path(self._model_name, hf_cache_dir, required_files=("config.json",))
+        local_snapshot = resolve_hf_snapshot_path(
+            self._model_name,
+            hf_cache_dir,
+            required_files=("config.json",),
+            revision=self._model_revision,
+        )
         model_source = local_snapshot or self._model_name
         model_cache_dir = None if local_snapshot is not None else hf_cache_dir
         model_local_files_only = True if local_snapshot is not None else local_files_only
+        model_revision_kwargs = {} if local_snapshot is not None else {"revision": self._model_revision}
 
         try:
             self.text_decoder = AutoModelForCausalLM.from_pretrained(
@@ -806,6 +1067,7 @@ class TextDecoderWrapper(nn.Module):
                 trust_remote_code=self.spec.trust_remote_code,
                 cache_dir=model_cache_dir,
                 local_files_only=model_local_files_only,
+                **model_revision_kwargs,
             )
         except Exception as e:
             if _is_flash_attention_error(e):
@@ -819,6 +1081,7 @@ class TextDecoderWrapper(nn.Module):
                     trust_remote_code=self.spec.trust_remote_code,
                     cache_dir=model_cache_dir,
                     local_files_only=model_local_files_only,
+                    **model_revision_kwargs,
                 )
             else:
                 raise
@@ -844,38 +1107,62 @@ class TextDecoderWrapper(nn.Module):
                 self.lm_config.eos_token_id = self.spec.eos_token_ids[0]
             else:
                 self.lm_config.eos_token_id = list(self.spec.eos_token_ids)
-        self.vision_token_id = self.spec.vision_pad_token_id
+        if use_distinct_media_tokens:
+            if self.spec.distinct_image_pad_token_id is None or self.spec.distinct_video_pad_token_id is None:
+                raise ValueError(f"Text decoder family {self.spec.family!r} has no distinct media token contract.")
+            self.image_token_id = self.spec.distinct_image_pad_token_id
+            self.video_token_id = self.spec.distinct_video_pad_token_id
+        else:
+            self.image_token_id = self.spec.vision_pad_token_id
+            self.video_token_id = self.spec.vision_pad_token_id
+        self.visual_token_ids: tuple[int, ...] = tuple(dict.fromkeys((self.image_token_id, self.video_token_id)))
+        # Compatibility alias for callers that construct image-only test inputs.
+        self.vision_token_id = self.image_token_id
+        self.use_distinct_media_tokens: bool = use_distinct_media_tokens
         self.image_hidden_size = image_hidden_size
         self.spatial_pool_size = spatial_pool_size
         self._caption_tokenizer: Any | None = None
         hidden_size = self.lm_config.hidden_size
 
         # Spatial merging or simple projection
+        self.spatial_merger: SpatialPatchMerger | None
+        self.image_proj: nn.Sequential | None
         if spatial_pool_size > 1:
             self.spatial_merger = SpatialPatchMerger(
                 input_hidden_size=image_hidden_size,
                 out_hidden_size=hidden_size,
                 spatial_merge_size=spatial_pool_size,
+                intermediate_hidden_size=projector_intermediate_size,
             )
             self.image_proj = None
             logging.info(
-                f"SpatialPatchMerger enabled: {image_hidden_size} -> {hidden_size}, "
+                f"SpatialPatchMerger enabled: {self.spatial_merger.merged_hidden_size} -> "
+                f"{self.spatial_merger.intermediate_hidden_size} -> {hidden_size}, "
                 f"merge_size={spatial_pool_size} ({spatial_pool_size**2}x token reduction)"
             )
         else:
             self.spatial_merger = None
+            resolved_projector_intermediate_size = (
+                image_hidden_size * 2 if projector_intermediate_size is None else projector_intermediate_size
+            )
             self.image_proj = nn.Sequential(
-                nn.Linear(image_hidden_size, image_hidden_size * 2),
+                nn.Linear(image_hidden_size, resolved_projector_intermediate_size),
                 nn.GELU(),
-                nn.Linear(image_hidden_size * 2, hidden_size),
+                nn.Linear(resolved_projector_intermediate_size, hidden_size),
             )
 
-        # 2D position embeddings for merged image features
-        self.image_pos_embed = ImagePositionEmbeddings(
-            hidden_size=hidden_size,
-            max_position=128,  # supports up to ~2048px / patch_size=16
-            coord_dim=2,  # (H, W) only
-        )
+        # Legacy Unified checkpoints learned an additional post-projector 2D
+        # table. Edge-compatible mRoPE recipes omit it and rely on the vision
+        # encoder positions plus the decoder's multimodal RoPE instead.
+        self.image_pos_embed: ImagePositionEmbeddings | None
+        if use_image_position_embeddings:
+            self.image_pos_embed = ImagePositionEmbeddings(
+                hidden_size=hidden_size,
+                max_position=128,  # supports up to ~2048px / patch_size=16
+                coord_dim=2,  # (H, W) only
+            )
+        else:
+            self.image_pos_embed = None
 
         # Disable KV cache for training forwards. Generation paths opt back in.
         self.text_decoder.config.use_cache = False
@@ -918,8 +1205,35 @@ class TextDecoderWrapper(nn.Module):
             f"gradient_checkpointing={gradient_checkpointing_enabled}, "
             f"packed_attention_backend={self.packed_attention_backend}, "
             f"natten_native_rms_norm={self.natten_native_rms_norm}, "
-            f"gradient_checkpoint_scope={self.gradient_checkpoint_scope}, use_cache=False"
+            f"gradient_checkpoint_scope={self.gradient_checkpoint_scope}, "
+            f"position_embedding_mode={self.position_embedding_mode}, "
+            f"visual_token_ids={self.visual_token_ids}, "
+            f"image_position_embeddings={self.image_pos_embed is not None}, use_cache=False"
         )
+
+    def _get_visual_placeholder_mask(
+        self,
+        input_ids: torch.Tensor,
+    ) -> torch.Tensor:  # input_ids: [B,S], returns: [B,S]
+        """Return the union of configured image and video placeholder positions."""
+        visual_placeholder_mask = torch.zeros_like(input_ids, dtype=torch.bool)  # [B,S]
+        for token_id in self.visual_token_ids:
+            visual_placeholder_mask |= input_ids == token_id  # [B,S]
+        return visual_placeholder_mask
+
+    def _add_image_position_embeddings(
+        self,
+        image_features: torch.Tensor,
+        image_coords: torch.Tensor,
+    ) -> torch.Tensor:  # image_features: [N,D], image_coords: [N,4|5], returns: [N,D]
+        """Apply the optional legacy post-projector 2D position embedding."""
+        if self.image_pos_embed is None:
+            return image_features
+        if image_coords.shape[1] == 5:
+            coords_2d = image_coords[:, 2:4]  # [N,5] -> [N,2] (H, W)
+        else:
+            coords_2d = image_coords[:, 1:3]  # [N,4] -> [N,2] (H, W)
+        return self.image_pos_embed(features=image_features, coords=coords_2d)  # [N,D]
 
     def _get_eos_token_ids(self) -> tuple[int, ...]:
         """Resolve all EOS token IDs used for generation and bookkeeping."""
@@ -937,7 +1251,12 @@ class TextDecoderWrapper(nn.Module):
             if self.spec.family == NEMOTRON_2B_SPEC.family:
                 from transformers import AutoTokenizer
 
-                patched_snapshot = prepare_nemotron_tokenizer_snapshot(self._model_name, hf_cache_dir)
+                patched_snapshot = prepare_nemotron_tokenizer_snapshot(
+                    self._model_name,
+                    hf_cache_dir,
+                    use_distinct_media_tokens=self.use_distinct_media_tokens,
+                    revision=self._model_revision,
+                )
                 if patched_snapshot is not None:
                     self._caption_tokenizer = AutoTokenizer.from_pretrained(
                         patched_snapshot,
@@ -948,12 +1267,14 @@ class TextDecoderWrapper(nn.Module):
                     self._caption_tokenizer = load_auto_tokenizer_from_cache(
                         self._model_name,
                         hf_cache_dir,
+                        revision=self._model_revision,
                         trust_remote_code=self.spec.trust_remote_code,
                     )
             else:
                 self._caption_tokenizer = load_auto_tokenizer_from_cache(
                     self._model_name,
                     hf_cache_dir,
+                    revision=self._model_revision,
                     trust_remote_code=self.spec.trust_remote_code,
                 )
         return self._caption_tokenizer
@@ -982,7 +1303,6 @@ class TextDecoderWrapper(nn.Module):
         if not decoder_layers:
             raise ValueError("NATTEN packed attention requires at least one Nemotron decoder layer.")
         first_attention = decoder_layers[0].self_attn
-        normalized_position_ids = position_ids.reshape(hidden_states.shape[0], hidden_states.shape[1]).long()  # [1,T]
         rotary_reference = hidden_states.new_empty(
             (
                 hidden_states.shape[0],
@@ -991,10 +1311,35 @@ class TextDecoderWrapper(nn.Module):
                 first_attention.head_dim,
             )
         )  # [1,Hkv,0,D]
-        rotary_embeddings = first_attention.rotary_emb(
-            rotary_reference,
-            normalized_position_ids,
-        )  # each [1,1,T,D]
+        if position_ids.ndim == 2:
+            normalized_position_ids = position_ids.reshape(
+                hidden_states.shape[0],
+                hidden_states.shape[1],
+            ).long()  # [1,T]
+            rotary_embeddings = first_attention.rotary_emb(
+                rotary_reference,
+                normalized_position_ids,
+            )  # each [1,1,T,D]
+        elif (
+            position_ids.ndim == 3
+            and position_ids.shape[0] == 3
+            and position_ids.shape[1] == hidden_states.shape[0]
+            and position_ids.shape[2] == hidden_states.shape[1]
+        ):
+            inv_freq = getattr(first_attention.rotary_emb, "inv_freq", None)  # [Dh/2] or None
+            if not isinstance(inv_freq, torch.Tensor):
+                raise TypeError("Nemotron mRoPE requires the decoder rotary module's inv_freq tensor.")
+            rotary_embeddings = build_nemotron_mrope_rotary_embeddings(
+                inv_freq=inv_freq,
+                position_ids=position_ids,
+                reference=rotary_reference,
+                mrope_section=NEMOTRON_2B_MROPE_SECTION,
+            )  # each [1,1,T,D]
+        else:
+            raise ValueError(
+                "NATTEN position_ids must have shape [1,T] for RoPE or [3,1,T] for mRoPE, "
+                f"got {tuple(position_ids.shape)}."
+            )
         use_manual_gradient_checkpointing = (
             self._manual_gradient_checkpointing_enabled and self.training and hidden_states.requires_grad
         )
@@ -1056,6 +1401,94 @@ class TextDecoderWrapper(nn.Module):
         hidden_states = self.text_decoder.model.norm(hidden_states)  # [1,T,D]
         return SimpleNamespace(last_hidden_state=hidden_states, past_key_values=None)
 
+    def _forward_nemotron_mrope_from_embeddings(
+        self,
+        text_embeds: torch.Tensor,
+        attention_mask: torch.Tensor | None,
+        position_ids: torch.Tensor,
+        past_key_values: Any | None,
+        use_cache: bool,
+    ) -> SimpleNamespace:
+        """Run non-packed mRoPE for validation and cached generation.
+
+        Args:
+            text_embeds: Current-token embeddings with shape ``[B,T,D]``.
+            attention_mask: Optional key mask with shape ``[B,Tkv]``.
+            position_ids: Current-token multimodal positions with shape ``[3,B,T]``.
+            past_key_values: Optional per-layer key/value caches.
+            use_cache: Whether to return extended per-layer caches.
+
+        Returns:
+            Decoder hidden states with shape ``[B,T,D]`` and optional caches.
+        """
+        if self.spec.family != NEMOTRON_2B_SPEC.family:
+            raise ValueError("Multimodal RoPE currently supports only the Nemotron 2B text decoder.")
+        expected_position_shape = (3, text_embeds.shape[0], text_embeds.shape[1])
+        if tuple(position_ids.shape) != expected_position_shape:
+            raise ValueError(
+                f"Non-packed multimodal RoPE position_ids must have shape {expected_position_shape}, "
+                f"got {tuple(position_ids.shape)}."
+            )
+        if self.training and torch.is_grad_enabled():
+            raise RuntimeError("Non-packed mRoPE training is disabled; training must use packed NATTEN metadata.")
+
+        hidden_states = text_embeds  # [B,T,D]
+        decoder_layers = self.text_decoder.model.layers
+        if not decoder_layers:
+            raise ValueError("Multimodal RoPE requires at least one Nemotron decoder layer.")
+        if past_key_values is not None and len(past_key_values) != len(decoder_layers):
+            raise ValueError(f"Nemotron mRoPE expected {len(decoder_layers)} layer caches, got {len(past_key_values)}.")
+
+        first_attention = decoder_layers[0].self_attn
+        rotary_reference = hidden_states.new_empty(
+            (
+                hidden_states.shape[0],
+                first_attention.num_key_value_heads,
+                0,
+                first_attention.head_dim,
+            )
+        )  # [B,Hkv,0,D]
+        inv_freq = getattr(first_attention.rotary_emb, "inv_freq", None)  # [Dh/2] or None
+        if not isinstance(inv_freq, torch.Tensor):
+            raise TypeError("Nemotron mRoPE requires the decoder rotary module's inv_freq tensor.")
+        rotary_embeddings = build_nemotron_mrope_rotary_embeddings(
+            inv_freq=inv_freq,
+            position_ids=position_ids,
+            reference=rotary_reference,
+            mrope_section=NEMOTRON_2B_MROPE_SECTION,
+        )  # each [B,1,T,D]
+
+        hidden_padding_mask = None
+        if attention_mask is not None and tuple(attention_mask.shape) == tuple(hidden_states.shape[:2]):
+            hidden_padding_mask = attention_mask.to(
+                device=hidden_states.device,
+                dtype=torch.bool,
+            )  # [B,T]
+        next_decoder_cache: tuple[tuple[torch.Tensor, torch.Tensor], ...] | None = (
+            () if use_cache else None
+        )  # optional L x each [B,Hkv,Tkv,D]
+        for layer_index, decoder_layer in enumerate(decoder_layers):
+            layer_past = (
+                past_key_values[layer_index] if past_key_values is not None else None
+            )  # optional each [B,Hkv,Tpast,D]
+            hidden_states, layer_cache = _forward_nemotron_mrope_sdpa_decoder_layer(
+                decoder_layer=decoder_layer,
+                hidden_states=hidden_states,
+                attention_mask=attention_mask,
+                rotary_embeddings=rotary_embeddings,
+                past_key_value=layer_past,
+                use_cache=use_cache,
+            )  # [B,T,D], optional ([B,Hkv,Tkv,D], [B,Hkv,Tkv,D])
+            if hidden_padding_mask is not None:
+                hidden_states = hidden_states.masked_fill(~hidden_padding_mask[:, :, None], 0)  # [B,T,D]
+            if use_cache:
+                if layer_cache is None or next_decoder_cache is None:
+                    raise RuntimeError("Nemotron mRoPE attention did not return a requested layer cache.")
+                next_decoder_cache += (layer_cache,)  # L x each [B,Hkv,Tkv,Dh]
+
+        hidden_states = self.text_decoder.model.norm(hidden_states)  # [B,T,D]
+        return SimpleNamespace(last_hidden_state=hidden_states, past_key_values=next_decoder_cache)
+
     def _forward_from_embeddings(
         self,
         text_embeds: torch.Tensor,
@@ -1072,6 +1505,14 @@ class TextDecoderWrapper(nn.Module):
         has_packed_max_seqlen = packed_max_seqlen is not None
         if has_packed_cumulative_seqlen != has_packed_max_seqlen:
             raise ValueError("packed_cumulative_seqlen and packed_max_seqlen must be provided together.")
+        if self.position_embedding_mode == TEXT_DECODER_POSITION_EMBEDDING_MROPE:
+            expected_position_shape = (3, text_embeds.shape[0], text_embeds.shape[1])
+            if position_ids is None or tuple(position_ids.shape) != expected_position_shape:
+                actual_position_shape = None if position_ids is None else tuple(position_ids.shape)
+                raise ValueError(
+                    f"Multimodal RoPE position_ids must have shape {expected_position_shape}, "
+                    f"got {actual_position_shape}."
+                )
         if has_packed_cumulative_seqlen:
             if self.packed_attention_backend != PACKED_ATTENTION_BACKEND_NATTEN:
                 raise ValueError("Packed varlen metadata was provided without the NATTEN packed attention backend.")
@@ -1086,6 +1527,15 @@ class TextDecoderWrapper(nn.Module):
                 position_ids=position_ids,
                 cumulative_seqlen=packed_cumulative_seqlen,
                 max_seqlen=packed_max_seqlen,
+            )
+        if self.position_embedding_mode == TEXT_DECODER_POSITION_EMBEDDING_MROPE:
+            assert position_ids is not None
+            return self._forward_nemotron_mrope_from_embeddings(
+                text_embeds=text_embeds,
+                attention_mask=attention_mask,
+                position_ids=position_ids,
+                past_key_values=past_key_values,
+                use_cache=use_cache,
             )
 
         if self.spec.supports_inputs_embeds_forward:
@@ -1165,7 +1615,7 @@ class TextDecoderWrapper(nn.Module):
                 if use_cache:
                     next_decoder_cache += (layer_outputs[1],)
 
-        hidden_states = self.text_decoder.model.norm(hidden_states)
+        hidden_states = self.text_decoder.model.norm(hidden_states)  # [B,T,D]
         return SimpleNamespace(last_hidden_state=hidden_states, past_key_values=next_decoder_cache)
 
     def _lm_head(self, hidden_states: torch.Tensor) -> torch.Tensor:
@@ -1224,12 +1674,70 @@ class TextDecoderWrapper(nn.Module):
         tokenizer: Any,
         question: str,
         image_token_counts_by_visual: list[int],
+        image_token_block_counts_by_visual: list[list[int]] | None = None,
+        image_token_block_prefixes_by_visual: list[list[str]] | None = None,
+        visual_media_types: list[str] | None = None,
     ) -> tuple[list[int], list[int]]:
         """Build one multimodal user turn and return image-pad offsets per visual."""
         if not image_token_counts_by_visual:
             raise ValueError("VQA prompt construction requires at least one visual token block.")
         if any(int(token_count) <= 0 for token_count in image_token_counts_by_visual):
             raise ValueError(f"Visual token counts must be positive, got {image_token_counts_by_visual!r}.")
+        if visual_media_types is None:
+            normalized_visual_media_types = ["image"] * len(image_token_counts_by_visual)
+        else:
+            normalized_visual_media_types = [str(media_type).lower() for media_type in visual_media_types]
+            if len(normalized_visual_media_types) != len(image_token_counts_by_visual):
+                raise ValueError(
+                    "Visual media types do not match visual-token counts: "
+                    f"{len(normalized_visual_media_types)} != {len(image_token_counts_by_visual)}."
+                )
+            invalid_media_types = sorted(set(normalized_visual_media_types) - {"image", "video"})
+            if invalid_media_types:
+                raise ValueError(f"Unsupported visual media types: {invalid_media_types!r}.")
+
+        if image_token_block_counts_by_visual is None:
+            token_block_counts_by_visual = [[int(token_count)] for token_count in image_token_counts_by_visual]
+        else:
+            token_block_counts_by_visual = [
+                [int(token_count) for token_count in block_counts]
+                for block_counts in image_token_block_counts_by_visual
+            ]
+            if len(token_block_counts_by_visual) != len(image_token_counts_by_visual):
+                raise ValueError(
+                    "Visual token-block groups do not match visual-token counts: "
+                    f"{len(token_block_counts_by_visual)} != {len(image_token_counts_by_visual)}."
+                )
+            for visual_index, (visual_token_count, block_counts) in enumerate(
+                zip(image_token_counts_by_visual, token_block_counts_by_visual)
+            ):
+                if not block_counts or any(token_count <= 0 for token_count in block_counts):
+                    raise ValueError(f"Visual {visual_index} has invalid token-block counts {block_counts!r}.")
+                if sum(block_counts) != int(visual_token_count):
+                    raise ValueError(
+                        f"Visual {visual_index} token blocks {block_counts!r} do not sum to "
+                        f"its total {visual_token_count}."
+                    )
+
+        if image_token_block_prefixes_by_visual is None:
+            token_block_prefixes_by_visual = [[""] * len(block_counts) for block_counts in token_block_counts_by_visual]
+        else:
+            token_block_prefixes_by_visual = [
+                [str(prefix) for prefix in block_prefixes] for block_prefixes in image_token_block_prefixes_by_visual
+            ]
+            if len(token_block_prefixes_by_visual) != len(token_block_counts_by_visual):
+                raise ValueError(
+                    "Visual token-block prefix groups do not match token-block groups: "
+                    f"{len(token_block_prefixes_by_visual)} != {len(token_block_counts_by_visual)}."
+                )
+            for visual_index, (block_counts, block_prefixes) in enumerate(
+                zip(token_block_counts_by_visual, token_block_prefixes_by_visual)
+            ):
+                if len(block_prefixes) != len(block_counts):
+                    raise ValueError(
+                        f"Visual {visual_index} has {len(block_prefixes)} token-block prefixes for "
+                        f"{len(block_counts)} token blocks."
+                    )
 
         def _encode(text: str) -> list[int]:
             return tokenizer.encode(text, add_special_tokens=False)
@@ -1254,13 +1762,11 @@ class TextDecoderWrapper(nn.Module):
             im_start_id = QWEN3_IM_START_TOKEN_ID
             im_end_id = QWEN3_IM_END_TOKEN_ID
             vision_start_id = QWEN3_VISION_START_TOKEN_ID
-            vision_pad_id = QWEN3_VISION_PAD_TOKEN_ID
             vision_end_id = QWEN3_VISION_END_TOKEN_ID
         elif self.spec.family == NEMOTRON_2B_SPEC.family:
             im_start_id = _get_required_token_id(tokenizer, NEMOTRON_2B_IM_START_TOKEN)
             im_end_id = _get_required_token_id(tokenizer, NEMOTRON_2B_IM_END_TOKEN)
             vision_start_id = self.spec.vision_start_token_id
-            vision_pad_id = self.spec.vision_pad_token_id
             vision_end_id = self.spec.vision_end_token_id
         else:
             raise NotImplementedError(
@@ -1271,25 +1777,51 @@ class TextDecoderWrapper(nn.Module):
         image_pad_offsets: list[int] = []
         remaining_text = normalized_question
         visual_index = 0
+        visual_type_counts = {
+            media_type: normalized_visual_media_types.count(media_type) for media_type in {"image", "video"}
+        }
+        add_vision_id = any(visual_count > 1 for visual_count in visual_type_counts.values())
+        visual_ordinal_by_type = {"image": 0, "video": 0}
         while image_placeholder in remaining_text:
             placeholder_index = remaining_text.find(image_placeholder)
             before_text = remaining_text[:placeholder_index]
             remaining_text = remaining_text[placeholder_index + len(image_placeholder) :]
             user_turn.extend(_encode(before_text))
-            if num_visuals > 1:
-                user_turn.extend(_encode(densevl_add_vision_id_text("image", visual_index + 1)))
-            image_pad_offsets.append(len(user_turn) + 1)
-            user_turn.extend([vision_start_id])
-            user_turn.extend([vision_pad_id] * int(image_token_counts_by_visual[visual_index]))
-            user_turn.extend([vision_end_id])
+            visual_media_type = normalized_visual_media_types[visual_index]
+            visual_pad_id = self.video_token_id if visual_media_type == "video" else self.image_token_id
+            visual_ordinal_by_type[visual_media_type] += 1
+            if add_vision_id:
+                user_turn.extend(
+                    _encode(
+                        densevl_add_vision_id_text(
+                            visual_media_type,
+                            visual_ordinal_by_type[visual_media_type],
+                        )
+                    )
+                )
+            for block_token_count, block_prefix in zip(
+                token_block_counts_by_visual[visual_index],
+                token_block_prefixes_by_visual[visual_index],
+            ):
+                user_turn.extend(_encode(block_prefix))
+                image_pad_offsets.append(len(user_turn) + 1)
+                user_turn.extend([vision_start_id])
+                user_turn.extend([visual_pad_id] * block_token_count)
+                user_turn.extend([vision_end_id])
             visual_index += 1
         if image_pad_offsets:
             user_turn.extend(_encode(remaining_text))
         else:
-            image_pad_offsets.append(len(user_turn) + 1)
-            user_turn.extend([vision_start_id])
-            user_turn.extend([vision_pad_id] * int(image_token_counts_by_visual[0]))
-            user_turn.extend([vision_end_id])
+            visual_pad_id = self.video_token_id if normalized_visual_media_types[0] == "video" else self.image_token_id
+            for block_token_count, block_prefix in zip(
+                token_block_counts_by_visual[0],
+                token_block_prefixes_by_visual[0],
+            ):
+                user_turn.extend(_encode(block_prefix))
+                image_pad_offsets.append(len(user_turn) + 1)
+                user_turn.extend([vision_start_id])
+                user_turn.extend([visual_pad_id] * block_token_count)
+                user_turn.extend([vision_end_id])
             user_turn.extend(_encode("\n"))
             user_turn.extend(_encode(normalized_question))
 
@@ -1348,13 +1880,7 @@ class TextDecoderWrapper(nn.Module):
             elif self.image_proj is not None:
                 image_features = self.image_proj(image_features)
 
-            # Extract (H, W) for 2D position embeddings
-            if current_coords.shape[1] == 5:
-                coords_2d = current_coords[:, 2:4]  # (seg, T, H, W, Z) -> (H, W)
-            else:
-                coords_2d = current_coords[:, 1:3]  # (T, H, W, Z) -> (H, W)
-
-            image_features = self.image_pos_embed(features=image_features, coords=coords_2d)
+            image_features = self._add_image_position_embeddings(image_features, current_coords)  # [N',D]
 
         num_pooled_tokens = len(image_features)
 
@@ -1365,7 +1891,7 @@ class TextDecoderWrapper(nn.Module):
         # The host collator validates exact placeholder/index coverage and removes
         # padding sentinels before tensors move to the accelerator.
         # Zero out vision placeholder positions, then insert real image features.
-        vision_mask = (input_ids != self.vision_token_id).to(dtype=text_embeds.dtype)  # [B,S]
+        vision_mask = (~self._get_visual_placeholder_mask(input_ids)).to(dtype=text_embeds.dtype)  # [B,S]
         text_embeds = text_embeds * vision_mask[:, :, None]  # [B,S,d]
 
         if image_patch_indices.ndim != 1:
@@ -1383,6 +1909,16 @@ class TextDecoderWrapper(nn.Module):
                 "Image feature/index count mismatch: "
                 f"got {num_pooled_tokens} pooled features and {image_patch_indices.numel()} indices."
             )
+        multimodal_position_ids: torch.Tensor | None = None
+        if self.position_embedding_mode == TEXT_DECODER_POSITION_EMBEDDING_MROPE:
+            multimodal_position_ids = build_multimodal_rope_position_ids(
+                input_ids=input_ids,
+                image_patch_indices=image_patch_indices,
+                image_coords=current_coords,
+                segment_ids=segment_ids,
+                pad_token_id=self.lm_config.pad_token_id,
+                vision_token_id=self.visual_token_ids,
+            )  # [3,B,S]
         if image_patch_indices.numel() > 0:
             insert_idx = image_patch_indices.to(device=input_ids.device, dtype=torch.long)  # [N]
             text_embeds_flat = text_embeds.reshape(B * S, d)  # [B*S,d]
@@ -1397,14 +1933,29 @@ class TextDecoderWrapper(nn.Module):
                     text_embeds,
                     segment_ids,
                     return_hidden_states=True,
+                    position_ids=multimodal_position_ids,
                 )
             else:
                 decoder_output = self._forward_packed(  # [B,S,Vocab]
                     text_embeds,
                     segment_ids,
+                    position_ids=multimodal_position_ids,
                 )
         else:
-            if return_hidden_states:
+            if multimodal_position_ids is not None and return_hidden_states:
+                decoder_output = self._forward_standard(  # [B,S,D]
+                    text_embeds,
+                    input_ids=input_ids,
+                    return_hidden_states=True,
+                    position_ids=multimodal_position_ids,
+                )
+            elif multimodal_position_ids is not None:
+                decoder_output = self._forward_standard(  # [B,S,Vocab]
+                    text_embeds,
+                    input_ids=input_ids,
+                    position_ids=multimodal_position_ids,
+                )
+            elif return_hidden_states:
                 decoder_output = self._forward_standard(  # [B,S,D]
                     text_embeds,
                     input_ids=input_ids,
@@ -1423,8 +1974,19 @@ class TextDecoderWrapper(nn.Module):
         text_embeds: torch.Tensor,
         input_ids: torch.Tensor | None = None,
         return_hidden_states: bool = False,
+        position_ids: torch.Tensor | None = None,
     ) -> torch.Tensor:
-        """Standard forward pass without segment isolation."""
+        """Standard forward pass without segment isolation.
+
+        Args:
+            text_embeds: Input embeddings with shape ``[B,S,D]``.
+            input_ids: Optional token IDs with shape ``[B,S]``.
+            return_hidden_states: Return hidden states instead of vocabulary logits.
+            position_ids: Optional multimodal positions with shape ``[3,B,S]``.
+
+        Returns:
+            Hidden states or vocabulary logits with shape ``[B,S,D|Vocab]``.
+        """
         effective_text_embeds = text_embeds
         original_seq_len = text_embeds.shape[1]
         effective_seq_len = original_seq_len
@@ -1445,12 +2007,20 @@ class TextDecoderWrapper(nn.Module):
                         effective_text_embeds = text_embeds[:, :effective_seq_len, :]
                         attention_mask = attention_mask[:, :effective_seq_len]
 
-        cache_position = torch.arange(effective_seq_len, device=text_embeds.device)
-        position_ids = cache_position.unsqueeze(0)
+        cache_position = torch.arange(effective_seq_len, device=text_embeds.device)  # [T]
+        if position_ids is None:
+            effective_position_ids = cache_position.unsqueeze(0)  # [1,T]
+        else:
+            if tuple(position_ids.shape) != (3, text_embeds.shape[0], original_seq_len):
+                raise ValueError(
+                    "Non-packed mRoPE position_ids must have shape "
+                    f"{(3, text_embeds.shape[0], original_seq_len)}, got {tuple(position_ids.shape)}."
+                )
+            effective_position_ids = position_ids[:, :, :effective_seq_len]  # [3,B,T]
         outputs = self._forward_from_embeddings(
             text_embeds=effective_text_embeds,
             attention_mask=attention_mask,
-            position_ids=position_ids,
+            position_ids=effective_position_ids,
             cache_position=cache_position,
             use_cache=False,
         )
@@ -1474,6 +2044,7 @@ class TextDecoderWrapper(nn.Module):
         text_embeds: torch.Tensor,
         segment_ids: torch.Tensor,
         return_hidden_states: bool = False,
+        position_ids: torch.Tensor | None = None,
     ) -> torch.Tensor:
         """Segment-isolated forward pass for packed sequences.
 
@@ -1484,6 +2055,7 @@ class TextDecoderWrapper(nn.Module):
         Args:
             text_embeds: [B, S, d] embeddings with image features already injected.
             segment_ids: [B, S] segment IDs (>=0 for valid, -1 for padding).
+            position_ids: Optional mRoPE IDs with shape [3, B, S].
 
         Returns:
             Dense [B, S, vocab_size] logits, or [B, S, hidden_size] hidden
@@ -1492,6 +2064,11 @@ class TextDecoderWrapper(nn.Module):
         B, S, d = text_embeds.shape
         device = text_embeds.device
         dtype = text_embeds.dtype
+        if position_ids is not None:
+            if position_ids.shape != (3, B, S):
+                raise ValueError(f"Packed mRoPE position_ids must have shape {(3, B, S)}, got {position_ids.shape}.")
+            if self.packed_attention_backend != PACKED_ATTENTION_BACKEND_NATTEN:
+                raise ValueError("Packed mRoPE position IDs require the NATTEN packed attention backend.")
 
         # Process each batch element (typically B=1 for packed sequences)
         all_outputs: list[torch.Tensor] = []
@@ -1524,6 +2101,9 @@ class TextDecoderWrapper(nn.Module):
             segment_starts = torch.cumsum(seg_lengths, dim=0) - seg_lengths  # [R]
             segment_positions = torch.arange(valid_indices.numel(), device=device, dtype=torch.long)  # [V]
             segment_positions = segment_positions - torch.repeat_interleave(segment_starts, seg_lengths)  # [V]
+            valid_multimodal_position_ids = (
+                position_ids[:, b].index_select(1, valid_indices) if position_ids is not None else None
+            )  # [3,V] or None
 
             if self.packed_attention_backend == PACKED_ATTENTION_BACKEND_NATTEN:
                 segment_lengths_int32 = seg_lengths.to(dtype=torch.int32)  # [R]
@@ -1532,7 +2112,11 @@ class TextDecoderWrapper(nn.Module):
                 cumulative_seqlen = torch.cat([zero_offset, cumulative_lengths], dim=0)  # [R+1]
                 max_seqlen = int(seg_lengths.max().item())
                 packed_embeds = valid_embeds.unsqueeze(0)  # [1,V,D]
-                packed_position_ids = segment_positions.unsqueeze(0)  # [1,V]
+                packed_position_ids = (
+                    valid_multimodal_position_ids.unsqueeze(1)
+                    if valid_multimodal_position_ids is not None
+                    else segment_positions.unsqueeze(0)
+                )  # [3,1,V] or [1,V]
                 outputs = self._forward_from_embeddings(
                     text_embeds=packed_embeds,
                     attention_mask=None,
@@ -1618,10 +2202,27 @@ class TextDecoderWrapper(nn.Module):
         temperature: float,
         eos_token_ids: tuple[int, ...],
         suppress_token_ids: tuple[int, ...] | None = None,
+        position_ids: torch.Tensor | None = None,
     ) -> torch.Tensor:
-        """Autoregressively generate from a caller-provided embedding prefix."""
+        """Autoregressively generate from a caller-provided embedding prefix.
+
+        Args:
+            input_ids: Prefix token IDs with shape ``[B,S]``.
+            text_embeds: Prefix embeddings with shape ``[B,S,D]``.
+            max_new_tokens: Maximum number of tokens to generate.
+            do_sample: Whether to sample instead of selecting greedily.
+            temperature: Sampling temperature.
+            eos_token_ids: Token IDs that terminate generation.
+            suppress_token_ids: Optional token IDs excluded from sampling.
+            position_ids: Optional multimodal prefix positions with shape ``[3,B,S]``.
+
+        Returns:
+            Prefix and generated token IDs with shape ``[B,S+T_generated]``.
+        """
         resolved_suppress_token_ids = self.spec.suppress_token_ids if suppress_token_ids is None else suppress_token_ids
         if self.spec.supports_inputs_embeds_generate:
+            if position_ids is not None:
+                raise ValueError("Native text generation does not support caller-provided multimodal position IDs.")
             eos_token_id: int | list[int] = eos_token_ids[0] if len(eos_token_ids) == 1 else list(eos_token_ids)
             generate_kwargs = dict(
                 input_ids=input_ids,
@@ -1648,18 +2249,37 @@ class TextDecoderWrapper(nn.Module):
             raise ValueError("Manual caption generation for the Nemotron text decoder only supports batch size 1.")
 
         prefix_len = text_embeds.shape[1]
-        prefix_position_ids = torch.arange(prefix_len, device=text_embeds.device, dtype=torch.long).unsqueeze(0)
-        attention_mask = torch.ones_like(input_ids, dtype=torch.long)
+        if position_ids is None:
+            prefix_position_ids = torch.arange(
+                prefix_len,
+                device=text_embeds.device,
+                dtype=torch.long,
+            ).unsqueeze(0)  # [B,S]
+            next_multimodal_position = None
+        else:
+            expected_position_shape = (3, input_ids.shape[0], prefix_len)
+            if tuple(position_ids.shape) != expected_position_shape:
+                raise ValueError(
+                    f"Generation mRoPE position_ids must have shape {expected_position_shape}, "
+                    f"got {tuple(position_ids.shape)}."
+                )
+            prefix_position_ids = position_ids  # [3,B,S]
+            next_multimodal_position = int(position_ids.amax().item()) + 1
+        attention_mask = torch.ones_like(input_ids, dtype=torch.long)  # [B,S]
         outputs = self._forward_from_embeddings(
             text_embeds=text_embeds,
             attention_mask=attention_mask,
             position_ids=prefix_position_ids,
             use_cache=True,
         )
-        logits = self._lm_head(outputs.last_hidden_state)
+        logits = self._lm_head(outputs.last_hidden_state)  # [B,S,Vocab]
         past_key_values = outputs.past_key_values
         generated_tokens: list[torch.Tensor] = []
-        eos_token_tensor = torch.tensor(eos_token_ids, device=input_ids.device, dtype=input_ids.dtype)
+        eos_token_tensor = torch.tensor(
+            eos_token_ids,
+            device=input_ids.device,
+            dtype=input_ids.dtype,
+        )  # [E]
 
         for step_idx in range(max_new_tokens):
             next_token = self._sample_next_token(
@@ -1678,22 +2298,35 @@ class TextDecoderWrapper(nn.Module):
                 break
 
             total_len = input_ids.shape[1] + len(generated_tokens)
-            attention_mask = torch.ones((input_ids.shape[0], total_len), dtype=torch.long, device=input_ids.device)
-            position_ids = torch.full(
-                (input_ids.shape[0], 1),
-                fill_value=total_len - 1,
-                device=input_ids.device,
+            attention_mask = torch.ones(
+                (input_ids.shape[0], total_len),
                 dtype=torch.long,
-            )
-            next_token_embeds = self._embed_input_ids(next_token.unsqueeze(1))
+                device=input_ids.device,
+            )  # [B,T_total]
+            if next_multimodal_position is None:
+                next_token_position_ids = torch.full(
+                    (input_ids.shape[0], 1),
+                    fill_value=total_len - 1,
+                    device=input_ids.device,
+                    dtype=torch.long,
+                )  # [B,1]
+            else:
+                next_token_position_ids = torch.full(
+                    (3, input_ids.shape[0], 1),
+                    fill_value=next_multimodal_position,
+                    device=input_ids.device,
+                    dtype=torch.long,
+                )  # [3,B,1]
+                next_multimodal_position += 1
+            next_token_embeds = self._embed_input_ids(next_token.unsqueeze(1))  # [B,1,D]
             outputs = self._forward_from_embeddings(
                 text_embeds=next_token_embeds,
                 attention_mask=attention_mask,
-                position_ids=position_ids,
+                position_ids=next_token_position_ids,
                 past_key_values=past_key_values,
                 use_cache=True,
             )
-            logits = self._lm_head(outputs.last_hidden_state)
+            logits = self._lm_head(outputs.last_hidden_state)  # [B,1,Vocab]
             past_key_values = outputs.past_key_values
 
         if len(generated_tokens) == 0:
@@ -1735,11 +2368,7 @@ class TextDecoderWrapper(nn.Module):
             image_features = image_feats_tensor
             coords = image_coords
 
-        if coords.shape[1] == 5:
-            coords_2d = coords[:, 2:4]
-        else:
-            coords_2d = coords[:, 1:3]
-        image_features = self.image_pos_embed(image_features, coords_2d)
+        image_features = self._add_image_position_embeddings(image_features, coords)  # [N',D]
 
         num_image_tokens = len(image_features)
 
@@ -1747,7 +2376,7 @@ class TextDecoderWrapper(nn.Module):
         device = image_features.device
         input_ids = torch.tensor(
             [self.spec.vision_start_token_id]
-            + [self.spec.vision_pad_token_id] * num_image_tokens
+            + [self.image_token_id] * num_image_tokens
             + [self.spec.vision_end_token_id],
             dtype=torch.long,
             device=device,
@@ -1755,9 +2384,25 @@ class TextDecoderWrapper(nn.Module):
 
         # Embed and inject image features
         text_embeds = self._embed_input_ids(input_ids)
-        vision_mask = (input_ids != self.spec.vision_pad_token_id).to(dtype=text_embeds.dtype)
-        text_embeds = text_embeds * vision_mask[:, :, None]
-        text_embeds[0, 1 : 1 + num_image_tokens] = image_features.to(text_embeds.dtype)
+        vision_mask = (~self._get_visual_placeholder_mask(input_ids)).to(dtype=text_embeds.dtype)  # [B,S]
+        text_embeds = text_embeds * vision_mask[:, :, None]  # [B,S,D]
+        text_embeds[0, 1 : 1 + num_image_tokens] = image_features.to(text_embeds.dtype)  # [N,D]
+        generation_position_ids: torch.Tensor | None = None
+        if self.position_embedding_mode == TEXT_DECODER_POSITION_EMBEDDING_MROPE:
+            image_patch_indices = torch.arange(
+                1,
+                1 + num_image_tokens,
+                device=device,
+                dtype=torch.long,
+            )  # [N]
+            generation_position_ids = build_multimodal_rope_position_ids(
+                input_ids=input_ids,
+                image_patch_indices=image_patch_indices,
+                image_coords=coords,
+                segment_ids=None,
+                pad_token_id=self.lm_config.pad_token_id,
+                vision_token_id=self.visual_token_ids,
+            )  # [3,B,S]
 
         input_len = input_ids.shape[1]
         eos_token_ids = self._get_eos_token_ids()
@@ -1768,6 +2413,7 @@ class TextDecoderWrapper(nn.Module):
             do_sample=do_sample,
             temperature=temperature,
             eos_token_ids=eos_token_ids,
+            position_ids=generation_position_ids,
         )
 
         tokenizer = self._ensure_caption_tokenizer()
@@ -1792,11 +2438,15 @@ class TextDecoderWrapper(nn.Module):
         do_sample: bool = True,
         temperature: float = 0.7,
         image_token_counts_by_visual: list[int] | None = None,
+        image_token_block_counts_by_visual: list[list[int]] | None = None,
+        image_token_block_prefixes_by_visual: list[list[str]] | None = None,
+        visual_media_types: list[str] | None = None,
         thinking_mode: str = VQA_THINKING_MODE_OFF,
         reasoning_suffix: str = VQA_REASONING_SUFFIX,
         system_prompt: str = "You are a helpful assistant.",
         decode_skip_special_tokens: bool | None = None,
         return_metadata: bool = False,
+        max_context_tokens: int | None = None,
     ) -> str | tuple[str, dict[str, bool | int]]:
         """Generate an answer to a question about an image.
 
@@ -1812,6 +2462,12 @@ class TextDecoderWrapper(nn.Module):
             do_sample: Whether to sample.
             temperature: Sampling temperature if do_sample=True.
             image_token_counts_by_visual: Merged visual-token counts for each visual block.
+            image_token_block_counts_by_visual: Optional per-visual subdivision into
+                ordered frame token blocks.
+            image_token_block_prefixes_by_visual: Optional text emitted immediately
+                before each corresponding visual token block.
+            visual_media_types: Optional ordered ``image``/``video`` labels used
+                for Dense-VL multi-visual identifiers.
             thinking_mode: ``off`` forces direct-answer mode, ``on`` requests a
                 visible thinking block, and ``raw`` leaves the assistant turn unconstrained.
             reasoning_suffix: User-turn suffix appended in Qwen ``on`` mode. Nemotron
@@ -1822,6 +2478,7 @@ class TextDecoderWrapper(nn.Module):
                 legacy skip-special decode and ``on``/``raw`` preserve tags for
                 answer postprocessing.
             return_metadata: Whether to also return generation metadata.
+            max_context_tokens: Optional hard limit for prompt plus requested generation.
 
         Returns:
             Generated answer string, or ``(answer, metadata)`` when requested.
@@ -1846,11 +2503,7 @@ class TextDecoderWrapper(nn.Module):
             image_features = image_feats_tensor
             coords = image_coords
 
-        if coords.shape[1] == 5:
-            coords_2d = coords[:, 2:4]
-        else:
-            coords_2d = coords[:, 1:3]
-        image_features = self.image_pos_embed(image_features, coords_2d)
+        image_features = self._add_image_position_embeddings(image_features, coords)  # [N',D]
 
         num_image_tokens = len(image_features)
         if image_token_counts_by_visual is None:
@@ -1883,6 +2536,9 @@ class TextDecoderWrapper(nn.Module):
                 tokenizer=tok,
                 question=prompt_question,
                 image_token_counts_by_visual=visual_token_counts,
+                image_token_block_counts_by_visual=image_token_block_counts_by_visual,
+                image_token_block_prefixes_by_visual=image_token_block_prefixes_by_visual,
+                visual_media_types=visual_media_types,
             )
             asst_prefix = [QWEN3_IM_START_TOKEN_ID] + _encode("assistant\n")
             if resolved_thinking_mode == VQA_THINKING_MODE_OFF:
@@ -1901,6 +2557,9 @@ class TextDecoderWrapper(nn.Module):
                 tokenizer=tok,
                 question=prompt_question,
                 image_token_counts_by_visual=visual_token_counts,
+                image_token_block_counts_by_visual=image_token_block_counts_by_visual,
+                image_token_block_prefixes_by_visual=image_token_block_prefixes_by_visual,
+                visual_media_types=visual_media_types,
             )
             asst_prefix = [im_start_id] + _encode("assistant\n")
             if resolved_thinking_mode == VQA_THINKING_MODE_OFF:
@@ -1916,22 +2575,66 @@ class TextDecoderWrapper(nn.Module):
             )
 
         prompt_ids = system_turn + user_turn + asst_prefix
+        if max_context_tokens is not None:
+            if max_context_tokens <= 0:
+                raise ValueError(f"max_context_tokens must be positive when set, got {max_context_tokens}.")
+            required_context_tokens = len(prompt_ids) + max_new_tokens
+            if required_context_tokens > max_context_tokens:
+                raise ValueError(
+                    f"VQA prompt requires {len(prompt_ids)} prompt tokens plus max_new_tokens={max_new_tokens}, "
+                    f"exceeding max_context_tokens={max_context_tokens}."
+                )
         input_ids = torch.tensor([prompt_ids], dtype=torch.long, device=device)
 
         # Embed and inject image features
         text_embeds = self._embed_input_ids(input_ids)
-        vision_mask = (input_ids != self.spec.vision_pad_token_id).to(dtype=text_embeds.dtype)
-        text_embeds = text_embeds * vision_mask[:, :, None]
+        vision_mask = (~self._get_visual_placeholder_mask(input_ids)).to(dtype=text_embeds.dtype)  # [B,S]
+        text_embeds = text_embeds * vision_mask[:, :, None]  # [B,S,D]
+
+        if image_token_block_counts_by_visual is None:
+            prompt_token_block_counts = visual_token_counts
+        else:
+            prompt_token_block_counts = [
+                int(token_count)
+                for visual_block_counts in image_token_block_counts_by_visual
+                for token_count in visual_block_counts
+            ]
 
         # Image features start inside each multimodal user-turn image_pad block.
         feature_start = 0
-        for user_image_pad_offset, visual_token_count in zip(user_image_pad_offsets, visual_token_counts, strict=True):
+        generation_image_patch_indices = (
+            torch.empty(num_image_tokens, device=device, dtype=torch.long)
+            if self.position_embedding_mode == TEXT_DECODER_POSITION_EMBEDDING_MROPE
+            else None
+        )  # [N] or None
+        for user_image_pad_offset, token_block_count in zip(
+            user_image_pad_offsets,
+            prompt_token_block_counts,
+            strict=True,
+        ):
             ip_start = len(system_turn) + user_image_pad_offset
-            feature_end = feature_start + visual_token_count
-            text_embeds[0, ip_start : ip_start + visual_token_count] = image_features[feature_start:feature_end].to(
+            feature_end = feature_start + token_block_count
+            text_embeds[0, ip_start : ip_start + token_block_count] = image_features[feature_start:feature_end].to(
                 text_embeds.dtype
             )
+            if generation_image_patch_indices is not None:
+                generation_image_patch_indices[feature_start:feature_end] = torch.arange(
+                    ip_start,
+                    ip_start + token_block_count,
+                    device=device,
+                    dtype=torch.long,
+                )  # [N_block]
             feature_start = feature_end
+        generation_position_ids: torch.Tensor | None = None
+        if generation_image_patch_indices is not None:
+            generation_position_ids = build_multimodal_rope_position_ids(
+                input_ids=input_ids,
+                image_patch_indices=generation_image_patch_indices,
+                image_coords=coords,
+                segment_ids=None,
+                pad_token_id=self.lm_config.pad_token_id,
+                vision_token_id=self.visual_token_ids,
+            )  # [3,B,S]
 
         # Generate
         # Qwen3 best practice: do NOT use greedy decoding — causes repetitions.
@@ -1945,6 +2648,7 @@ class TextDecoderWrapper(nn.Module):
             temperature=temperature,
             eos_token_ids=eos_token_ids,
             suppress_token_ids=answer_suppress_token_ids,
+            position_ids=generation_position_ids,
         )
 
         answer, metadata = self._decode_generation_result(

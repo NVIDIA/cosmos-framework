@@ -8,7 +8,7 @@ name = "imaginaire-hf-cli"
 version = "0.0.0"
 requires-python = ">=3.10"
 dependencies = [
-    "hf==1.26.0",
+    "hf==1.25.1",
 ]
 
 [tool.uv]

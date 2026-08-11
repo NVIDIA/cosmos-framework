@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: OpenMDW-1.1
 
 import math
+from collections.abc import Sequence
 from typing import List, Tuple
 
 import torch
@@ -9,16 +10,27 @@ from torch import nn
 from transformers.configuration_utils import PretrainedConfig
 from transformers.modeling_utils import PreTrainedModel
 
+from cosmos_framework.utils import log
+from cosmos_framework.configs.base.defaults.flex_attention import (
+    FlexBackendPreference,
+    NoisyAttentionScope,
+)
 from cosmos_framework.model.generator.mot.attention import SplitInfo, build_packed_sequence
 from cosmos_framework.model.generator.mot.context_parallel_utils import (
     get_context_parallel_last_hidden_state,
     get_context_parallel_sharded_sequence,
 )
 from cosmos_framework.model.generator.mot.domain_aware_linear import DomainAwareLinear
+from cosmos_framework.model.generator.mot.flex_attention import (
+    FlexBackend,
+    build_multiview_block_mask,
+    resolve_flex_backend,
+)
 from cosmos_framework.model.generator.mot.modeling_utils import TimestepEmbedder, has_noisy_tokens
 from cosmos_framework.model.generator.utils.memory import MemoryState
 from cosmos_framework.data.generator.sequence_packing import ModalityData, PackedSequence
 from cosmos_framework.data.generator.sequence_packing.natten import verify_natten_parameter_list
+from cosmos_framework.data.generator.sequence_packing.runtime import get_causal_seq, get_full_only_seq
 
 
 class Cosmos3VFMNetworkConfig(PretrainedConfig):
@@ -35,6 +47,7 @@ class Cosmos3VFMNetworkConfig(PretrainedConfig):
         max_latent_w=32,
         max_latent_t=32,
         enable_fps_modulation=False,
+        enable_vision_modality_embeddings: bool = False,
         base_fps=24,
         vit_max_num_patch_per_side=70,
         connector_act="gelu_pytorch_tanh",
@@ -43,6 +56,9 @@ class Cosmos3VFMNetworkConfig(PretrainedConfig):
         timestep_scale=0.001,
         predict_text_tokens=False,
         joint_attn_implementation="two_way",
+        use_multiview_flex_attention: bool = False,
+        flex_attention_backend: FlexBackendPreference = "auto",
+        noisy_attention_scope: NoisyAttentionScope = "all_views",
         action_dim=32,
         num_embodiment_domains=32,
         temporal_compression_factor_vision=4,
@@ -66,6 +82,7 @@ class Cosmos3VFMNetworkConfig(PretrainedConfig):
         self.max_latent_w = max_latent_w
         self.max_latent_t = max_latent_t
         self.enable_fps_modulation = enable_fps_modulation
+        self.enable_vision_modality_embeddings = enable_vision_modality_embeddings
         self.base_fps = base_fps
         self.vit_max_num_patch_per_side = vit_max_num_patch_per_side
         self.connector_act = connector_act
@@ -74,6 +91,9 @@ class Cosmos3VFMNetworkConfig(PretrainedConfig):
         self.timestep_scale = timestep_scale
         self.predict_text_tokens = predict_text_tokens
         self.joint_attn_implementation = joint_attn_implementation
+        self.use_multiview_flex_attention = use_multiview_flex_attention
+        self.flex_attention_backend = flex_attention_backend
+        self.noisy_attention_scope = noisy_attention_scope
         self.temporal_compression_factor_vision = temporal_compression_factor_vision
         self.natten_parameter_list = natten_parameter_list
         self.video_temporal_causal = video_temporal_causal
@@ -135,6 +155,26 @@ class Cosmos3VFMNetwork(PreTrainedModel):
         self.video_temporal_causal = config.video_temporal_causal
         self.pad_for_cuda_graphs = False
 
+        # Which kernels the multiview FlexAttention path runs on, and the mask geometry that
+        # forces. Resolved here rather than per forward because the answer depends on the host
+        # and not on the batch, so a run's log records it once.
+        self.flex_backend: FlexBackend | None = None
+        if config.use_multiview_flex_attention:
+            # The device is only read for the GPU architecture the FlashAttention-4 block size
+            # follows from, which is the same for every device in this process, so the local one
+            # stands in for the one the batch will arrive on.
+            device = (
+                torch.device("cuda", torch.cuda.current_device()) if torch.cuda.is_available() else torch.device("cpu")
+            )
+            self.flex_backend = resolve_flex_backend(device, config.flex_attention_backend)
+            log.info(
+                f"Multiview FlexAttention is running on the {self.flex_backend.name} backend "
+                f"(flex_attention_backend={config.flex_attention_backend!r}), with a "
+                f"{self.flex_backend.block_size} block mask over a GEN stream padded to "
+                f"{self.flex_backend.full_seq_alignment} tokens. Noisy tokens attend to the "
+                f"noisy tokens of their sample under scope {config.noisy_attention_scope!r}."
+            )
+
         if config.vision_gen:
             self.latent_patch_size = config.latent_patch_size
             self.timestep_shift = config.timestep_shift
@@ -150,6 +190,9 @@ class Cosmos3VFMNetwork(PreTrainedModel):
             self.time_embedder = TimestepEmbedder(self.hidden_size, bias=_input_bias)
             self.vae2llm = nn.Linear(self.patch_latent_dim, self.hidden_size, bias=_input_bias)
             self.llm2vae = nn.Linear(self.hidden_size, self.patch_latent_dim)
+            if config.enable_vision_modality_embeddings:
+                self.image_modality_embed = nn.Parameter(torch.zeros(self.hidden_size))
+                self.video_modality_embed = nn.Parameter(torch.zeros(self.hidden_size))
 
         if config.action_gen:
             self.action_dim = config.action_dim
@@ -181,6 +224,10 @@ class Cosmos3VFMNetwork(PreTrainedModel):
             std = 1.0 / math.sqrt(self.hidden_size)
             torch.nn.init.trunc_normal_(self.llm2vae.weight, std=std, a=-3 * std, b=3 * std)
             torch.nn.init.zeros_(self.llm2vae.bias)
+
+            if self.config.enable_vision_modality_embeddings:
+                torch.nn.init.trunc_normal_(self.image_modality_embed, std=std, a=-3 * std, b=3 * std)
+                torch.nn.init.trunc_normal_(self.video_modality_embed, std=std, a=-3 * std, b=3 * std)
 
         if self.config.action_gen:
             # DomainAwareLinear uses embeddings for weights, so we initialize them differently
@@ -292,7 +339,7 @@ class Cosmos3VFMNetwork(PreTrainedModel):
         )
 
     def patchify_and_pack_latents(
-        self, tokens_vision: torch.Tensor, token_shapes_vision: List[Tuple[int, int, int]]
+        self, tokens_vision: torch.Tensor, token_shapes_vision: Sequence[tuple[int, ...]]
     ) -> tuple[torch.Tensor, List[Tuple[int, int, int]]]:
         p = self.latent_patch_size
         # Patchify and pack the latents
@@ -600,6 +647,13 @@ class Cosmos3VFMNetwork(PreTrainedModel):
             vision.tokens, vision.token_shapes
         )  # packed_tokens_vision: [total_vision_patches,patch_latent_dim]
         packed_tokens_vision = self.vae2llm(packed_tokens_vision.to(target_dtype))  # [total_vision_patches,hidden_size]
+        if self.config.enable_vision_modality_embeddings:
+            vision_modality_embed = (
+                self.image_modality_embed if packed_seq.is_image_batch else self.video_modality_embed
+            )  # [hidden_size]
+            packed_tokens_vision = packed_tokens_vision + vision_modality_embed.view(
+                1, -1
+            )  # [total_vision_patches,hidden_size]
 
         has_noisy_vision = vision.mse_loss_indexes.numel() > 0
 
@@ -707,6 +761,8 @@ class Cosmos3VFMNetwork(PreTrainedModel):
         packed_tokens_action, per_token_domain_id = self.pack_action(
             action.tokens, action.token_shapes, action.domain_id
         )
+        # Flow interpolation keeps actions in FP32; cast here to match the action encoder's model dtype.
+        packed_tokens_action = packed_tokens_action.to(target_dtype)  # [B_action*T_action,action_dim]
         packed_tokens_action = self.action2llm(packed_tokens_action, per_token_domain_id)
 
         packed_tokens_action = packed_tokens_action + self.action_modality_embed.view(
@@ -965,7 +1021,11 @@ class Cosmos3VFMNetwork(PreTrainedModel):
             if vision_sequence_indexes is not None:
                 vision_sequence_indexes = vision_sequence_indexes.sort().values  # [N_gen_tokens]
 
-        vision_token_shapes = packed_seq.vision.token_shapes if packed_seq.vision else None
+        # ModalityData.token_shapes is arity-agnostic to cover action and sound as well, but the
+        # temporal-causal metadata downstream reads these as (T, H, W); unpacking pins that here.
+        vision_token_shapes: list[tuple[int, int, int]] | None = (
+            [(t, h, w) for t, h, w in packed_seq.vision.token_shapes] if packed_seq.vision else None
+        )
 
         # The packer is the single source of truth for the supertoken layout.
         # ``num_action_tokens_per_supertoken`` is stamped onto ``packed_seq`` by
@@ -1014,8 +1074,56 @@ class Cosmos3VFMNetwork(PreTrainedModel):
             num_action_tokens_per_supertoken=num_action_tokens_per_supertoken,
             null_action_supertokens=packed_seq.null_action_supertokens,
             pad_for_cuda_graphs=self.pad_for_cuda_graphs,
+            full_seq_alignment=self.flex_backend.full_seq_alignment if self.flex_backend else 1,
+            causal_seq_alignment=self.flex_backend.causal_seq_alignment if self.flex_backend else 1,
             prepared_metadata=prepared_sequence_pack_metadata,
         )
+
+        # Non-None exactly when use_multiview_flex_attention is on, per the resolution in __init__.
+        if self.flex_backend is not None:
+            if self.config.joint_attn_implementation != "two_way":
+                raise ValueError("Multiview FlexAttention requires joint_attn_implementation='two_way'.")
+            # natten_metadata_list is always None here (only the three-way packer builds it), so the
+            # conflict to catch is the configured one: NATTEN parameters would be silently ignored.
+            if self.natten_parameter_list:
+                raise ValueError("Multiview FlexAttention and NATTEN cannot be enabled together.")
+            if packed_seq.vision is None or packed_seq.action is not None or packed_seq.sound is not None:
+                raise ValueError("Multiview FlexAttention currently supports vision-only generation batches.")
+            if packed_seq.num_views_per_vision_item is None:
+                raise ValueError(
+                    "Multiview FlexAttention requires per-camera VAE metadata; "
+                    "enable enable_per_camera_vae_encoding on the dataset."
+                )
+            # None means every sample owns exactly one vision item (standard T2V/I2V);
+            # multi-item samples (image editing, transfer) carry explicit counts.
+            num_vision_items_per_sample = packed_seq.num_vision_items_per_sample or [1] * len(packed_seq.sample_lens)
+            full_only_seq, full_q_offsets = get_full_only_seq(input_pack)
+            causal_seq, causal_offsets = get_causal_seq(input_pack)
+            # The mask is built here, outside the compiled and activation-checkpointed
+            # decoder layers, because the build syncs with the host on a data-dependent
+            # group count, which Dynamo cannot trace inside the checkpoint HOP. All
+            # layers then share the one mask, which is all the attention path needs.
+            #
+            # GEN tokens are the queries and [UND | GEN] the keys, so the UND stream's
+            # padded length and per-sample offsets come along: they are what labels a UND
+            # key with its sample, which is the whole of the gen->und rule.
+            attention_meta.flex_block_mask = build_multiview_block_mask(
+                seq_len=full_only_seq.shape[0],
+                full_q_offsets=full_q_offsets,
+                token_shapes=packed_seq.vision.token_shapes,
+                condition_masks=packed_seq.vision.condition_mask,
+                num_vision_items_per_sample=num_vision_items_per_sample,
+                num_views_per_vision_item=packed_seq.num_views_per_vision_item,
+                device=full_only_seq.device,
+                block_size=self.flex_backend.block_size,
+                num_und=causal_seq.shape[0],
+                causal_offsets=causal_offsets,
+                noisy_attention_scope=self.config.noisy_attention_scope,
+            )
+            # Carried with the mask because its kernels are only valid for the block size the
+            # mask was built at; two_way_attention hands both to flex_attention, which
+            # checks that agreement before running them.
+            attention_meta.flex_backend = self.flex_backend
 
         # ── Multi-control transfer: annotate SplitInfo with per-item ranges ──────
         # Activated only when packed_seq carries control_weights, i.e. the caller

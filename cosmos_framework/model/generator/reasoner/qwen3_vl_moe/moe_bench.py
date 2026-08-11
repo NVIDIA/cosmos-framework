@@ -16,6 +16,9 @@ Usage:
     # Disable torch.compile:
     python -m cosmos_framework.model.generator.reasoner.qwen3_vl_moe.moe_bench --no-compile
 
+    # Price the token_mask path, a quarter of the rows being padding:
+    python -m cosmos_framework.model.generator.reasoner.qwen3_vl_moe.moe_bench --padding-fraction 0.25
+
     # Custom sweep:
     python -m cosmos_framework.model.generator.reasoner.qwen3_vl_moe.moe_bench --backward \
         --hidden-size 4096 \
@@ -71,6 +74,13 @@ class BenchConfig:
     profile_dir: str = "./profiles"
     """Directory to write Chrome trace JSON files."""
     dtype: Literal["bf16", "fp32"] = "bf16"
+    padding_fraction: float | None = None
+    """Share of the rows to make trailing padding, which exercises the ``token_mask`` path.
+
+    Left unset, no mask is passed and every row is a real token. ``0.0`` passes an all-real
+    mask, which prices masking on its own; a positive fraction pads that share of the rows,
+    whose compute the grouped GEMM is meant to skip rather than pay for.
+    """
 
 
 @dataclass
@@ -90,7 +100,14 @@ def _make_inputs(
     config: Qwen3VLMoeTextConfig,
     device: torch.device,
     dtype: torch.dtype,
-) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+    padding_fraction: float | None = None,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor | None]:
+    """Build one batch of expert inputs, optionally with trailing padding rows.
+
+    A padded batch is prepared the way ``Qwen3VLMoeTextSparseMoeBlock`` prepares one, since
+    the experts are entitled to assume it: the padding rows are zeroed and given zero combine
+    weights, and the dispatch histogram counts the real rows only.
+    """
     hidden_states = torch.randn(num_tokens, config.hidden_size, device=device, dtype=dtype)
 
     expert_indices = torch.stack(
@@ -100,11 +117,24 @@ def _make_inputs(
     topk_scores = torch.rand(num_tokens, config.num_experts_per_tok, device=device, dtype=dtype)
     topk_scores = topk_scores / topk_scores.sum(dim=-1, keepdim=True)
 
-    num_tokens_per_expert = torch.zeros(config.num_experts, dtype=torch.int32, device=device)
-    for idx in expert_indices.view(-1):
-        num_tokens_per_expert[idx] += 1
+    token_mask = None
+    if padding_fraction is not None:
+        num_real_tokens = num_tokens - int(num_tokens * padding_fraction)
+        token_mask = torch.arange(num_tokens, device=device) < num_real_tokens  # [num_tokens]
+        hidden_states = torch.where(token_mask.unsqueeze(1), hidden_states, hidden_states.new_zeros(()))
+        # The zero combine weight is also what lets the naive path, which has no mask handling
+        # of its own, still agree with the grouped one on the padding rows.
+        topk_scores = torch.where(token_mask.unsqueeze(1), topk_scores, topk_scores.new_zeros(()))
 
-    return hidden_states, topk_scores, expert_indices, num_tokens_per_expert
+    # The histogram has to count exactly the rows that reach the GEMM, and the padding does not:
+    # it sorts into a sentinel group past the last expert that the permutation never reaches.
+    # Counting it here would shift every real group's offset in the sorted order.
+    dispatched_indices = expert_indices if token_mask is None else expert_indices[token_mask]
+    num_tokens_per_expert = torch.bincount(dispatched_indices.reshape(-1), minlength=config.num_experts).to(
+        torch.int32
+    )  # [num_experts]
+
+    return hidden_states, topk_scores, expert_indices, num_tokens_per_expert, token_mask
 
 
 def bench_forward(
@@ -113,12 +143,13 @@ def bench_forward(
     topk_scores: torch.Tensor,
     expert_indices: torch.Tensor,
     num_tokens_per_expert: torch.Tensor,
+    token_mask: torch.Tensor | None,
     num_warmup: int = 20,
     num_iters: int = 100,
 ) -> float:
     for _ in range(num_warmup):
         with torch.no_grad():
-            module(hidden_states, topk_scores, expert_indices, num_tokens_per_expert)
+            module(hidden_states, topk_scores, expert_indices, num_tokens_per_expert, token_mask)
     torch.cuda.synchronize()
 
     start = torch.cuda.Event(enable_timing=True)
@@ -127,7 +158,7 @@ def bench_forward(
     start.record()
     for _ in range(num_iters):
         with torch.no_grad():
-            module(hidden_states, topk_scores, expert_indices, num_tokens_per_expert)
+            module(hidden_states, topk_scores, expert_indices, num_tokens_per_expert, token_mask)
     end.record()
     torch.cuda.synchronize()
 
@@ -140,12 +171,13 @@ def bench_backward(
     topk_scores: torch.Tensor,
     expert_indices: torch.Tensor,
     num_tokens_per_expert: torch.Tensor,
+    token_mask: torch.Tensor | None,
     num_warmup: int = 20,
     num_iters: int = 100,
 ) -> float:
     for _ in range(num_warmup):
         h = hidden_states.detach().requires_grad_(True)
-        out = module(h, topk_scores, expert_indices, num_tokens_per_expert)
+        out = module(h, topk_scores, expert_indices, num_tokens_per_expert, token_mask)
         out.sum().backward()
     torch.cuda.synchronize()
 
@@ -155,7 +187,7 @@ def bench_backward(
     start.record()
     for _ in range(num_iters):
         h = hidden_states.detach().requires_grad_(True)
-        out = module(h, topk_scores, expert_indices, num_tokens_per_expert)
+        out = module(h, topk_scores, expert_indices, num_tokens_per_expert, token_mask)
         out.sum().backward()
     end.record()
     torch.cuda.synchronize()
@@ -169,6 +201,7 @@ def profile_run(
     topk_scores: torch.Tensor,
     expert_indices: torch.Tensor,
     num_tokens_per_expert: torch.Tensor,
+    token_mask: torch.Tensor | None,
     output_path: str,
     include_backward: bool = False,
     num_warmup: int = 5,
@@ -179,11 +212,11 @@ def profile_run(
     def _step() -> None:
         if include_backward:
             h = hidden_states.detach().requires_grad_(True)
-            out = module(h, topk_scores, expert_indices, num_tokens_per_expert)
+            out = module(h, topk_scores, expert_indices, num_tokens_per_expert, token_mask)
             out.sum().backward()
         else:
             with torch.no_grad():
-                module(hidden_states, topk_scores, expert_indices, num_tokens_per_expert)
+                module(hidden_states, topk_scores, expert_indices, num_tokens_per_expert, token_mask)
 
     for _ in range(num_warmup):
         _step()
@@ -218,6 +251,7 @@ def run_single(
     use_compile: bool,
     dtype: torch.dtype = torch.bfloat16,
     trace_path: str | None = None,
+    padding_fraction: float | None = None,
 ) -> BenchResult:
     device = torch.device("cuda")
     config = Qwen3VLMoeTextConfig(
@@ -232,7 +266,9 @@ def run_single(
     if use_compile:
         module = torch.compile(module, fullgraph=True, dynamic=True)
 
-    hidden_states, topk_scores, expert_indices, num_tokens_per_expert = _make_inputs(num_tokens, config, device, dtype)
+    hidden_states, topk_scores, expert_indices, num_tokens_per_expert, token_mask = _make_inputs(
+        num_tokens, config, device, dtype, padding_fraction
+    )
 
     torch.cuda.reset_peak_memory_stats(device)
 
@@ -242,6 +278,7 @@ def run_single(
         topk_scores,
         expert_indices,
         num_tokens_per_expert,
+        token_mask,
         num_warmup=num_warmup,
         num_iters=num_iters,
     )
@@ -254,6 +291,7 @@ def run_single(
             topk_scores,
             expert_indices,
             num_tokens_per_expert,
+            token_mask,
             num_warmup=num_warmup,
             num_iters=num_iters,
         )
@@ -267,6 +305,7 @@ def run_single(
             topk_scores,
             expert_indices,
             num_tokens_per_expert,
+            token_mask,
             output_path=trace_path,
             include_backward=include_backward,
         )
@@ -291,8 +330,14 @@ def run_comparison(
     use_compile: bool,
     dtype: torch.dtype = torch.bfloat16,
     trace_dir: str | None = None,
+    padding_fraction: float | None = None,
 ) -> None:
-    """Run grouped_mm vs naive side-by-side and report speedup."""
+    """Run grouped_mm vs naive side-by-side and report speedup.
+
+    The two are still comparable under padding, though only the grouped path reads the mask:
+    the naive one computes every row and gets to zero from the zero combine weights that
+    ``_make_inputs`` puts on the padding. Its time is therefore the cost of not skipping.
+    """
     device = torch.device("cuda")
 
     naive = Qwen3VLMoeTextExpertsNaive(config).to(device=device, dtype=dtype)
@@ -302,7 +347,9 @@ def run_comparison(
     if use_compile:
         grouped = torch.compile(grouped, fullgraph=True, dynamic=False)
 
-    hidden_states, topk_scores, expert_indices, num_tokens_per_expert = _make_inputs(num_tokens, config, device, dtype)
+    hidden_states, topk_scores, expert_indices, num_tokens_per_expert, token_mask = _make_inputs(
+        num_tokens, config, device, dtype, padding_fraction
+    )
 
     naive_ms = bench_forward(
         naive,
@@ -310,6 +357,7 @@ def run_comparison(
         topk_scores,
         expert_indices,
         num_tokens_per_expert,
+        token_mask,
         num_warmup=num_warmup,
         num_iters=num_iters,
     )
@@ -319,13 +367,14 @@ def run_comparison(
         topk_scores,
         expert_indices,
         num_tokens_per_expert,
+        token_mask,
         num_warmup=num_warmup,
         num_iters=num_iters,
     )
 
     with torch.no_grad():
-        out_naive = naive(hidden_states, topk_scores, expert_indices, num_tokens_per_expert)
-        out_grouped = grouped(hidden_states, topk_scores, expert_indices, num_tokens_per_expert)
+        out_naive = naive(hidden_states, topk_scores, expert_indices, num_tokens_per_expert, token_mask)
+        out_grouped = grouped(hidden_states, topk_scores, expert_indices, num_tokens_per_expert, token_mask)
     rel_err = (out_naive - out_grouped).norm() / out_naive.norm()
 
     print(f"  naive:     {naive_ms:8.3f} ms")
@@ -346,6 +395,7 @@ def run_comparison(
                 topk_scores,
                 expert_indices,
                 num_tokens_per_expert,
+                token_mask,
                 output_path=path,
             )
 
@@ -354,6 +404,9 @@ def main(args: BenchConfig) -> None:
     dtype_map = {"bf16": torch.bfloat16, "fp32": torch.float32}
     dtype = dtype_map[args.dtype]
 
+    if args.padding_fraction is not None and not 0.0 <= args.padding_fraction < 1.0:
+        raise ValueError(f"padding_fraction must be in [0, 1), got {args.padding_fraction}")
+
     profile_dir: str | None = None
     if args.profile:
         profile_dir = args.profile_dir
@@ -361,7 +414,8 @@ def main(args: BenchConfig) -> None:
 
     gpu_name = torch.cuda.get_device_name(0)
     print(f"GPU: {gpu_name}")
-    print(f"dtype: {args.dtype}, compile: {args.compile}")
+    padding_str = "none (no token_mask)" if args.padding_fraction is None else f"{args.padding_fraction:.2f}"
+    print(f"dtype: {args.dtype}, compile: {args.compile}, padding: {padding_str}")
     print(f"warmup: {args.num_warmup}, iters: {args.num_iters}")
     if profile_dir:
         print(f"profile dir: {profile_dir}")
@@ -395,6 +449,7 @@ def main(args: BenchConfig) -> None:
                 use_compile=args.compile,
                 dtype=dtype,
                 trace_dir=profile_dir,
+                padding_fraction=args.padding_fraction,
             )
             print()
         return
@@ -430,6 +485,7 @@ def main(args: BenchConfig) -> None:
             use_compile=args.compile,
             dtype=dtype,
             trace_path=trace_path,
+            padding_fraction=args.padding_fraction,
         )
         bwd_str = f"{result.bwd_ms:8.3f}" if args.backward else "     N/A"
         print(
