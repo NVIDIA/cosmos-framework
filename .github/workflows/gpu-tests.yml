@@ -337,6 +337,16 @@ jobs:
           uv run --all-extras --group=cu128-train torchrun --nproc_per_node=4 -m pytest -v \
             cosmos_framework/model/generator/mot/context_parallel_test.py -o addopts=
 
+      # HFExportCallback folds LoRA adapters into the base weights and gathers
+      # lora_A / lora_B from inside the base weight's loop iteration, so the
+      # ordering is only exercised once the adapters are DTensors. World size is
+      # fixed at 2; the test skips itself under any other.
+      - name: Distributed unit tests - hf_export LoRA merge (torchrun, 2 ranks)
+        run: |
+          export LD_LIBRARY_PATH=
+          uv run --all-extras --group=cu128-train torchrun --nproc_per_node=2 -m pytest -v \
+            cosmos_framework/callbacks/hf_export_fsdp_test.py -o addopts=
+
       # Clear everything the suite writes into the working tree (all gitignored
       # scratch): pytest tmp dirs (DCP checkpoint, logs), the script-test
       # `outputs/` dir, any `examples/checkpoints`, and the `schemas/` dir from

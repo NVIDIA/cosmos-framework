@@ -268,7 +268,7 @@ Knobs are in the recipe TOML under `[model]`, `[model.parallelism]`, and `[datal
 
 5. **Lower `[dataloader_train].max_samples_per_batch`** to cap samples per micro-batch. `None` lets the packer's token budget decide; setting an explicit small number trades throughput for headroom.
 
-6. **Enable LoRA on a Cosmos3-Nano recipe.** Nano recipes are full-finetune by default (`lora_enabled = false`); setting `[model].lora_enabled = true` trains low-rank adapters instead of the full weights, dropping optimizer-state memory substantially. The `_super` recipes (e.g. `vision_sft_super`) are already LoRA-only, so this lever doesn't apply there.
+6. **Enable LoRA.** Setting `[model].lora_enabled = true` trains low-rank adapters instead of the full weights, dropping optimizer-state memory substantially. Generator (VFM) nano recipes are full-finetune by default, so this lever applies there; the `_super` generator recipes (e.g. `vision_sft_super`) are already LoRA-only. It also works on reasoner (VLM) recipes — see `examples/toml/sft_config/videophy2_lora_{super,edge}.toml`. Pair it with `[optimizer].keys_to_select = ["lora_"]`, and on a VLM whose vision tower shares projection names with its LLM (Cosmos3-Edge), add `[model].lora_exclude_path_regex` so the frozen tower is not adapted too.
 
 See [docs/training.md](./training.md) for the full SFT setup and TOML reference (`[model.activation_checkpointing]`, `[model.parallelism]`, `[dataloader_train]` sections).
 
