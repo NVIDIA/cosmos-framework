@@ -487,6 +487,11 @@ class ActionTransformPipeline:
             enabled, legacy string metadata appenders are skipped and the JSON
             formatter owns viewpoint, action, resolution, duration, FPS, and
             idle-frame fields.  Defaults to ``False``.
+        format_prompt_float_seconds: When ``format_prompt_as_json`` is enabled,
+            emit sub-second-precise float ``duration``/``time`` (e.g. "0.57s")
+            instead of truncated whole seconds ("0s").  Useful for short
+            high-fps clips.  No effect unless JSON prompts are on.  Defaults to
+            ``False``.
     """
 
     def __init__(
@@ -506,6 +511,7 @@ class ActionTransformPipeline:
         append_idle_frames: bool = False,
         idle_frames_dropout: float = 0.05,
         format_prompt_as_json: bool = False,
+        format_prompt_float_seconds: bool = False,
     ) -> None:
         self.caption_key: str = caption_key
         self.video_temporal_downsample: int = video_temporal_downsample
@@ -527,7 +533,9 @@ class ActionTransformPipeline:
 
         self.prompt_json_formatter: ActionPromptJsonFormatter | None = None
         if format_prompt_as_json:
-            self.prompt_json_formatter = ActionPromptJsonFormatter(caption_key=caption_key)
+            self.prompt_json_formatter = ActionPromptJsonFormatter(
+                caption_key=caption_key, float_seconds=format_prompt_float_seconds
+            )
 
         # --- Viewpoint text augmentor (runs after ai_caption, before duration/FPS) ---
         self.viewpoint_augmentor: ViewpointTextInfo | None = None

@@ -185,7 +185,7 @@ class HFExportConfig:
 @make_freezable
 @attrs.define(slots=False)
 class JobConfig:
-    # Project name.
+    # Project name used for output, checkpoint, and resume paths.
     project: str = ""
     # Experiment name.
     group: str = ""
