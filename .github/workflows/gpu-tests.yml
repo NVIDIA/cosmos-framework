@@ -315,7 +315,32 @@ jobs:
           export LD_LIBRARY_PATH=
           export COSMOS_DOWNLOAD_CACHE_DIR="$RUNNER_WORKSPACE/cosmos_input_cache"
           uv run --all-extras --group=cu128-train python -m pytest -v -s \
-            cosmos_framework/ -o addopts=
+            cosmos_framework/ -o addopts= \
+            --deselect cosmos_framework/model/generator/mot/attention_test.py::test_two_way_attention_flex_matches_dense_across_batch_shapes
+
+      # Deselected above and run here instead, in a process of its own.
+      #
+      # NATTEN's fused-NA knobs are process-global, and
+      # cosmos_framework/model/attention/natten/functions.py turns them on at import time
+      # (set_memory_usage_preference("unrestricted"), use_kv_parallelism_in_fused_na(True))
+      # without ever putting them back. Once test_two_way_attention_vs_three_way_attention --
+      # the one test that dispatches to NATTEN -- has run in a process, this test's
+      # [triton-compile-dynamic] case comes back with NaN for dk across the second sample's
+      # whole UND span (17920/141312 elements, first at index (322, 0, 0)). It passes on its
+      # own, on both H100 and H200, so the two are coupled through process state rather than
+      # through anything either one computes.
+      #
+      # Resetting those knobs between the two tests does clear it, but only from a plugin
+      # loaded with -p; the same code in a conftest, a fixture finaliser or a trylast hook
+      # does not, which is not understood well enough to land as a fix. Separate processes
+      # are what the coupling cannot cross. Tracked in #179.
+      - name: Unit tests - two_way_attention flex vs dense (separate process)
+        run: |
+          export LD_LIBRARY_PATH=
+          export COSMOS_DOWNLOAD_CACHE_DIR="$RUNNER_WORKSPACE/cosmos_input_cache"
+          uv run --all-extras --group=cu128-train python -m pytest -v -s \
+            cosmos_framework/model/generator/mot/attention_test.py::test_two_way_attention_flex_matches_dense_across_batch_shapes \
+            -o addopts=
 
       # The cfgp_ar / context_parallel tests call dist.init_process_group and
       # skip under plain pytest (world_size 1); they must be launched with
