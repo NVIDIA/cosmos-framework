@@ -33,6 +33,7 @@ Build the Docker image:
 
 ```bash
 docker build \
+  --build-arg INSTALL_APEX=0 \
   -t cosmos-framework:latest \
   .
 ```

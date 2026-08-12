@@ -52,16 +52,19 @@ RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --locked --no-install-project --no-editable --all-extras --group=$(cat /root/.cuda-name) --group=vllm
 ENV PATH="/workspace/.venv/bin:$PATH"
 
-# Restrict the architectures apex compiles for, e.g. --build-arg TORCH_CUDA_ARCH_LIST=12.0.
-# Left empty, torch enumerates every architecture it knows of, including compute_70, which
-# CUDA 13 no longer supports.
-ARG TORCH_CUDA_ARCH_LIST=""
+# Set to 0 to skip the apex build, which is by far the slowest layer. apex is optional:
+# the only import is in cosmos_framework/callbacks/norm_monitor.py, behind a try/except.
+ARG INSTALL_APEX=1
 
 # install apex (compiled C++/CUDA extensions; needs torch already present), so this line should be after the uv sync command.
 RUN --mount=type=cache,target=/root/.cache/uv \
-    VIRTUAL_ENV=/workspace/.venv APEX_CPP_EXT=1 APEX_CUDA_EXT=1 \
-    uv pip install -v --no-build-isolation --no-deps \
-        git+https://github.com/NVIDIA/apex@bf903a2
+    if [ "$INSTALL_APEX" = "1" ]; then \
+        VIRTUAL_ENV=/workspace/.venv APEX_CPP_EXT=1 APEX_CUDA_EXT=1 \
+        uv pip install -v --no-build-isolation --no-deps \
+            git+https://github.com/NVIDIA/apex@9e3568a; \
+    else \
+        echo "INSTALL_APEX=$INSTALL_APEX, skipping apex"; \
+    fi
 
 # Triton bundled ptxas doesn't support latest GPU architectures
 ENV TRITON_PTXAS_PATH="/usr/local/cuda/bin/ptxas"
