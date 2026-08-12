@@ -56,10 +56,12 @@ def _blocklist_with_words(words: list[str], whitelist: list[str] | None = None) 
     from better_profanity.better_profanity import Profanity
 
     whitelist = whitelist or []
+    tokens = [w for w in whitelist if " " not in w.strip()]
     bl = Blocklist.__new__(Blocklist)
     bl.profanity = Profanity()
-    bl.profanity.load_censor_words(custom_words=words, whitelist_words=whitelist)
+    bl.profanity.load_censor_words(custom_words=words, whitelist_words=tokens)
     bl.whitelist_words = whitelist
+    bl.whitelist_phrases = sorted((w for w in whitelist if " " in w.strip()), key=len, reverse=True)
     return bl
 
 
@@ -347,3 +349,85 @@ def test_normalization_preserves_the_earlier_sentinel_and_markdown_behaviour():
     blocked, message = bl.censor_prompt("a bad\x00word in the text")
     assert blocked is True
     assert "badword" not in message
+
+
+@pytest.mark.L1
+def test_whitelisted_phrase_clears_the_prose_that_fuses_into_an_entry():
+    """The reported false positive: "desk" + "in" fuses into the entry "deskin".
+
+    Whitelisting the phrase exempts that one spelling. Whitelisting either half
+    on its own cannot: the fusing does not consult the whitelist.
+    """
+    bl = _blocklist_with_words(["deskin"], whitelist=["desk in"])
+
+    blocked, message = bl.censor_prompt("a robot sitting at a desk in the background")
+
+    assert blocked is False, message
+
+
+@pytest.mark.L1
+def test_whitelisting_a_phrase_leaves_every_other_spelling_blocked():
+    """The exemption is one spelling wide, not a hole in the entry."""
+    bl = _blocklist_with_words(["deskin"], whitelist=["desk in"])
+
+    for prompt in (
+        "deskin the animal",
+        "d eskin the animal",
+        "de skin the animal",
+        "des kin the animal",
+        "de sk in the animal",
+        "d3skin the animal",
+    ):
+        blocked, _ = bl.censor_prompt(prompt)
+        assert blocked is True, f"{prompt!r} was not blocked"
+
+
+@pytest.mark.L1
+def test_whitelisted_phrase_is_restored_in_the_blocked_message():
+    """The placeholder is internal; the user-facing quote shows their own words."""
+    bl = _blocklist_with_words(["deskin", "badword"], whitelist=["desk in"])
+
+    blocked, message = bl.censor_prompt("a badword next to a desk in the room")
+
+    assert blocked is True
+    assert "desk in" in message
+    assert "zzwhitelisted" not in message
+
+
+@pytest.mark.L1
+def test_whitelisted_word_behaviour_is_unchanged_by_phrase_support():
+    """Single-word whitelisting still goes to the matcher, as before."""
+    bl = _blocklist_with_words(["snow white"], whitelist=["flat", "desk in"])
+
+    blocked, _ = bl.censor_prompt("the floor is flat")
+    assert blocked is False
+
+    blocked, _ = bl.censor_prompt("a Snow White poster on a flat wall")
+    assert blocked is True
+
+
+@pytest.mark.L1
+def test_invisible_character_cannot_reach_the_phrase_exemption():
+    """An exemption must not be reachable by a spelling the reader cannot see.
+
+    "desk<U+200B>in" renders as the entry with nothing between its halves. The
+    invisible character is folded to a space for matching, which would turn it
+    into the whitelisted phrase, so the phrase is matched before that folding.
+    """
+    bl = _blocklist_with_words(["deskin"], whitelist=["desk in"])
+
+    blocked, _ = bl.censor_prompt("desk​in the animal")
+    assert blocked is True
+
+    blocked, _ = bl.censor_prompt("desk­in the animal")
+    assert blocked is True
+
+
+@pytest.mark.L1
+def test_phrase_exemption_survives_spacing_and_case():
+    """The exempted spelling is the phrase as a reader writes it, however spaced."""
+    bl = _blocklist_with_words(["deskin"], whitelist=["desk in"])
+
+    for prompt in ("a desk in the room", "a desk  in the room", "a DESK IN the room", "Desk In The Room"):
+        blocked, _ = bl.censor_prompt(prompt)
+        assert blocked is False, f"{prompt!r} was blocked"

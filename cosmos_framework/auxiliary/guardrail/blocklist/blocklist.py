@@ -36,6 +36,12 @@ CENSOR = misc.Color.red("*")
 # while reaching the matcher as a token it does not recognise.
 INVISIBLE_CHARS = re.compile(r"[­​-‏‪-‮⁠-⁤﻿]")
 
+# Placeholder a whitelisted phrase is replaced with before matching. It has to
+# be a single token that no blocklist entry can fuse with or fuzzy-match, and it
+# has to survive to_ascii, so it is plain lowercase ASCII with no separators.
+WHITELIST_MASK_PREFIX = "zzwhitelisted"
+WHITELIST_MASK_SUFFIX = "zz"
+
 
 class Blocklist(ContentSafetyGuardrail):
     def __init__(
@@ -62,9 +68,15 @@ class Blocklist(ContentSafetyGuardrail):
         self.whitelist_words = read_keyword_list_from_dir(os.path.join(self.checkpoint_dir, "whitelist"))
         self.exact_match_words = read_keyword_list_from_dir(os.path.join(self.checkpoint_dir, "exact_match"))
 
-        self.profanity.load_censor_words(custom_words=self.blocklist_words, whitelist_words=self.whitelist_words)
+        # The matcher's whitelist is a set of single tokens, so a whitelisted
+        # phrase never reaches it. Phrases are handled here instead, by masking
+        # them out of the prompt before matching -- see mask_whitelisted_phrases.
+        self.whitelist_phrases = sorted((w for w in self.whitelist_words if " " in w.strip()), key=len, reverse=True)
+        whitelist_tokens = [w for w in self.whitelist_words if " " not in w.strip()]
+
+        self.profanity.load_censor_words(custom_words=self.blocklist_words, whitelist_words=whitelist_tokens)
         log.debug(f"Loaded {len(self.blocklist_words)} words/phrases from blocklist")
-        log.debug(f"Whitelisted {len(self.whitelist_words)} words/phrases from whitelist")
+        log.debug(f"Whitelisted {len(whitelist_tokens)} words and {len(self.whitelist_phrases)} phrases")
         log.debug(f"Loaded {len(self.exact_match_words)} exact match words/phrases from blocklist")
 
     @staticmethod
@@ -86,10 +98,56 @@ class Blocklist(ContentSafetyGuardrail):
 
         The collapse also closes a plainer hole: a multi-word entry was defeated
         by typing two spaces between its words.
+
+        The two foldings are separate methods because a whitelisted phrase has to
+        be matched between them: see censor_prompt.
         """
+        return Blocklist.fold_invisible_characters(Blocklist.normalize_code_points(prompt))
+
+    @staticmethod
+    def normalize_code_points(prompt: str) -> str:
+        """NFKC, combining marks removed, runs of whitespace collapsed."""
         prompt = unicodedata.normalize("NFKC", prompt)
         prompt = "".join(c for c in unicodedata.normalize("NFKD", prompt) if not unicodedata.combining(c))
+        return " ".join(prompt.split())
+
+    @staticmethod
+    def fold_invisible_characters(prompt: str) -> str:
+        """Rewrite zero-width and bidirectional characters to a space."""
         return " ".join(INVISIBLE_CHARS.sub(" ", prompt).split())
+
+    def mask_whitelisted_phrases(self, prompt: str) -> tuple[str, dict[str, str]]:
+        """Replace whitelisted phrases with placeholders, before matching.
+
+        The matcher fuses adjacent words and tests the fused string against the
+        blocklist, which is how "n ike" is caught. The same fusing means a
+        blocklist entry spelled out of two ordinary words also matches the prose
+        that contains them: "a desk in the background" fuses into an entry.
+
+        Whitelisting the innocent halves cannot fix that -- the fusing does not
+        consult the whitelist, and the halves are ordinary words that should not
+        be exempt on their own. Whitelisting the *phrase* can: the placeholder
+        does not fuse into anything, so exactly one spelling stops matching, and
+        every other spelling of the entry ("d eskin", "de sk in", leetspeak) is
+        still caught.
+
+        Placeholders are single tokens, so the token count is unchanged and the
+        censored output lines up with the input.
+
+        This runs before invisible characters are folded to spaces, and that
+        order matters: "desk<U+200B>in" renders as the entry with no space in it,
+        and folding first would turn it into the whitelisted phrase and exempt an
+        evasion that a reader cannot see. Matching the phrase while the invisible
+        character is still there leaves that spelling blocked.
+        """
+        replacements = {}
+        for index, phrase in enumerate(self.whitelist_phrases):
+            placeholder = f"{WHITELIST_MASK_PREFIX}{index}{WHITELIST_MASK_SUFFIX}"
+            pattern = re.compile(r"\b" + re.escape(phrase.strip()) + r"\b", re.IGNORECASE)
+            prompt, count = pattern.subn(placeholder, prompt)
+            if count:
+                replacements[placeholder] = phrase
+        return prompt, replacements
 
     def censor_prompt(self, input_prompt: str) -> tuple[bool, str]:
         """Censor the prompt using the blocklist with better-profanity fuzzy matching.
@@ -108,13 +166,19 @@ class Blocklist(ContentSafetyGuardrail):
         # than substituting keeps the stricter reading: "n\x00ike" fuses back to
         # a blocked word instead of being split into two harmless tokens.
         input_prompt = input_prompt.replace(CENSOR_SENTINEL, "")
-        input_prompt = self.normalize_for_matching(input_prompt)
-        # The whitelist is handed to load_censor_words(), so the matcher already
-        # leaves whitelisted words alone. Restoring them a second time here is
-        # what introduced the token misalignment described in the commit message.
+        # Whitelisted single words are handed to load_censor_words(), so the
+        # matcher already leaves them alone; restoring them a second time after
+        # censoring is what introduced the token misalignment removed earlier.
+        # Whitelisted phrases never reach the matcher, so they are masked here --
+        # between the two foldings, for the reason given in that method.
+        input_prompt = self.normalize_code_points(input_prompt)
+        input_prompt, masked_phrases = self.mask_whitelisted_phrases(input_prompt)
+        input_prompt = self.fold_invisible_characters(input_prompt)
         censored_prompt = self.profanity.censor(input_prompt, censor_char=CENSOR_SENTINEL)
         if CENSOR_SENTINEL in censored_prompt:
             display_prompt = censored_prompt.replace(CENSOR_SENTINEL, CENSOR)
+            for placeholder, phrase in masked_phrases.items():
+                display_prompt = display_prompt.replace(placeholder, phrase)
             return True, f"Prompt blocked by censorship: Censored Prompt: {display_prompt}"
         return False, ""
 
@@ -226,6 +290,7 @@ class Blocklist(ContentSafetyGuardrail):
         # Check if the input is empty
         if not input_prompt:
             return False, "Input is empty"
+
         input_prompt = to_ascii(input_prompt)
 
         # Check full sentence for censored words
