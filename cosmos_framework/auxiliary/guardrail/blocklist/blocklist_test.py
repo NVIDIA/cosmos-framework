@@ -88,6 +88,32 @@ def test_asterisks_alone_do_not_trigger_a_block():
 
 
 @pytest.mark.L1
+def test_sentinel_in_the_input_does_not_trigger_a_block():
+    """A NUL arriving in the input must not be mistaken for censorship.
+
+    to_ascii only replaces [^\\x00-\\x7F], so \\x00 survives normalization and
+    would otherwise reach the sentinel check unmodified.
+    """
+    bl = _blocklist_with_words(["badword"])
+
+    blocked, message = bl.censor_prompt("a clean prompt with \x00 in it")
+
+    assert blocked is False
+    assert message == ""
+
+
+@pytest.mark.L1
+def test_sentinel_cannot_be_used_to_split_a_blocked_word():
+    """Stripping the sentinel must not open an evasion: the word fuses back."""
+    bl = _blocklist_with_words(["badword"])
+
+    blocked, message = bl.censor_prompt("a bad\x00word in the text")
+
+    assert blocked is True
+    assert "badword" not in message
+
+
+@pytest.mark.L1
 def test_blocked_word_is_still_detected_alongside_markdown():
     """The fix must not weaken detection: a real hit still blocks, and still reports."""
     bl = _blocklist_with_words(["badword"])

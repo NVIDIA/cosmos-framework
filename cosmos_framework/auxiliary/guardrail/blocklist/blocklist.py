@@ -82,6 +82,13 @@ class Blocklist(ContentSafetyGuardrail):
             bool: True if the prompt is blocked, False otherwise
             str: A message indicating why the prompt was blocked
         """
+        # Strip any sentinel already present in the input. to_ascii preserves
+        # \x00 (its range is [^\x00-\x7F]), so without this an input carrying a
+        # NUL would be reported as censored even with no blocklist match -- the
+        # same in-band-marker failure this sentinel replaced. Removing rather
+        # than substituting keeps the stricter reading: "n\x00ike" fuses back to
+        # a blocked word instead of being split into two harmless tokens.
+        input_prompt = input_prompt.replace(CENSOR_SENTINEL, "")
         censored_prompt = self.profanity.censor(input_prompt, censor_char=CENSOR_SENTINEL)
         # Uncensor whitelisted words that were censored from blocklist fuzzy matching
         censored_prompt = self.uncensor_whitelist(input_prompt, censored_prompt)
