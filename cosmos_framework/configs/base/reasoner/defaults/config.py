@@ -17,6 +17,8 @@ class DataSetting:
         qwen_max_video_token_length: Maximum video token length.
         qwen_target_fps: Target fps for video sampling.
         text_chat_order: Order of text items in user messages.
+        custom_system_prompt: System prompt injected when a conversation has no leading system message.
+        strip_original_system_prompt: Remove existing system messages before optional custom prompt injection.
         distributor_type: "with_replace" (WeightedShardlistBasic) or "no_replace" (NoReplaceShardlistBasic).
         distributor_seed: Seed for the distributor.
         max_batch_size: Hard cap on the number of samples in each dynamic batch.
@@ -32,6 +34,8 @@ class DataSetting:
         default="text_end",
         validator=attrs.validators.in_({"text_end", "text_start", "random"}),
     )
+    custom_system_prompt: str | None = "You are a helpful assistant."
+    strip_original_system_prompt: bool = False
     temporal_localization_output_format: str = attrs.field(
         default="random",
         validator=attrs.validators.in_({"dense_video_caption", "temporal_localization", "temporal_caption", "random"}),
@@ -50,7 +54,7 @@ class DataSetting:
     distributor_seed: int = 1993
     webdataset_detshuffle: bool = False
     num_data_workers: int = 8
-    data_prefetch_factor: int = 1
+    data_prefetch_factor: int | None = 1
     val_split_ratio: float = 0.0
     recipe_name: str | None = None
 

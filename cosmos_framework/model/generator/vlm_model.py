@@ -38,6 +38,12 @@ from cosmos_framework.configs.base.reasoner.defaults.policy_config import VLMMod
 from cosmos_framework.model.generator.hf_model import HFModel
 from cosmos_framework.model.generator.parallelize_vlm import parallelize
 from cosmos_framework.model.generator.utils.safetensors_loader import load_vlm_model
+from cosmos_framework.utils.generator.input_probe import (
+    maybe_dump_forward_result,
+    maybe_dump_gradients,
+    maybe_dump_model_inputs,
+    maybe_dump_post_optimizer,
+)
 from cosmos_framework.utils.generator.parallelism import ParallelDims
 from cosmos_framework.utils.generator.reasoner.constant import IGNORE_INDEX
 from cosmos_framework.utils.generator.reasoner.create_position_ids import get_position_ids
@@ -57,6 +63,20 @@ _QWEN_VL_TYPES = {"qwen2_5_vl", "qwen3_vl", "qwen3_vl_moe"}
 _INTERNVL_TYPES = {"internvl", "internvl_chat"}
 
 _SOUND_UND_ENCODER_STATE_PREFIX = "model.model.sound_und_model.encoder."
+
+
+def _canonical_param_name(name: str) -> str:
+    """Strip the wrapper prefixes ``parallelize`` inserts around each repeated block.
+
+    ``torch.compile`` contributes ``_orig_mod.`` and the activation-checkpoint wrapper
+    ``_checkpoint_wrapped_module.`` (see ``parallelize_vlm.apply_compile`` /
+    ``apply_ac``). Unlike ``state_dict()``, ``named_parameters()`` called from the ROOT does
+    not undo either rename — ``nn.Module._named_members`` reads each submodule's
+    ``_parameters`` directly rather than dispatching to the wrapper's own override — so any
+    name-based matching must canonicalize first or silently stop matching as soon as AC or
+    compile is enabled.
+    """
+    return name.replace("_orig_mod.", "").replace("_checkpoint_wrapped_module.", "")
 
 
 def _is_sound_und_encoder_state_dict_key(key: str) -> bool:
@@ -236,6 +256,12 @@ def _apply_freeze_config(model: nn.Module, model_type: str, cfg) -> int:
 
     # Step 2 — regex override (mutually exclusive; already validated above).
     #
+    # Patterns are matched against the CANONICAL name, so an expression aimed inside a
+    # repeated block (e.g. r"layers\.\d+\.self_attn") keeps matching after `parallelize`
+    # wraps that block for activation checkpointing and torch.compile. Matching the raw
+    # `named_parameters()` name would fail silently: the `assert n > 0` below still passes as
+    # long as some other parameter matched.
+    #
     # `remove_duplicate=False` is required for tied weights. Qwen3 configs set
     # `tie_word_embeddings=True`, so `hf_model.tie_embeddings()` makes
     # `lm_head.weight` and `model.embed_tokens.weight` the same tensor. The default
@@ -251,11 +277,11 @@ def _apply_freeze_config(model: nn.Module, model_type: str, cfg) -> int:
         for p in model.parameters():
             p.requires_grad = False
         for param_name, p in model.named_parameters(remove_duplicate=False):
-            if any(re.search(pat, param_name) for pat in trainable_params):
+            if any(re.search(pat, _canonical_param_name(param_name)) for pat in trainable_params):
                 p.requires_grad = True
     elif frozen_params is not None:
         for param_name, p in model.named_parameters(remove_duplicate=False):
-            if any(re.search(pat, param_name) for pat in frozen_params):
+            if any(re.search(pat, _canonical_param_name(param_name)) for pat in frozen_params):
                 p.requires_grad = False
 
     n = sum(p.requires_grad for p in model.parameters())
@@ -282,6 +308,7 @@ class VLMModel(ImaginaireModel):
         validate_sound_understanding_config(config.sound_und_config, sound_und=config.sound_und)
         # Expose model.precision so LowPrecisionCallback can read it (mirrors OmniMoTModel).
         self.precision = getattr(torch, config.precision)
+        self._parity_probe_step: int = 0
         init_flash_attn_meta(config.deterministic)
         self._init_vlm(config, checkpoint)
 
@@ -337,11 +364,11 @@ class VLMModel(ImaginaireModel):
           a. Download HF weights from S3 to local cache.
           b. Meta-init HFModel (params on meta, buffers on CPU via include_buffers=False;
           c. Build ParallelDims + device mesh.
-          d. Apply FSDP2 via parallelize() — meta tensors are NOT auto-materialized.
+          d. Apply activation checkpointing, torch.compile and FSDP2 via parallelize() —
+             meta tensors are NOT auto-materialized.
           e. Explicitly materialize meta tensors; move CPU buffers to CUDA.
           f. Tie output embedding → input embedding if tie_word_embeddings=True.
           g. Load pretrain weights into sharded CUDA tensors.
-          h. Apply gradient checkpointing if configured.
         """
         from cosmos_framework.utils.generator.reasoner.pretrained_models_downloader import (
             maybe_download_hf_model_from_s3,
@@ -433,18 +460,25 @@ class VLMModel(ImaginaireModel):
                 "Use dp_shard > 1 for FSDP2. DDP support is planned for Phase 3."
             )
 
-        # ── d. Apply FSDP2 (+ optional torch.compile of the repeated blocks) ──
+        # ── d. Apply activation checkpointing, torch.compile and FSDP2 ──
         # config.compile is threaded through so model.config.compile.enabled=True
         # actually compiles each block in place (was previously a dead config on
-        # the VLM path — only the MoT path consumed it). See parallelize_vlm.
-        if torch.distributed.is_initialized():
-            parallelize(
-                hf_model,
-                parallel_dims,
-                config.parallelism,
-                config.precision,
-                compile_config=config.compile,
-            )
+        # the VLM path — only the MoT path consumed it). See parallelize_vlm for why the
+        # three passes must run in this order (AC wraps, compile compiles the wrapper, FSDP
+        # shards it).
+        # Called unconditionally, NOT under an is_initialized() guard: activation
+        # checkpointing and compile are independent of distribution, and a single-process
+        # run needs AC as much as a sharded one. apply_fsdp no-ops on its own when
+        # dp_shard <= 1 (ParallelDims clamps dp_shard to world_size), so no mesh is
+        # touched here without dist.
+        parallelize(
+            hf_model,
+            parallel_dims,
+            config.parallelism,
+            config.precision,
+            activation_checkpointing=config.activation_checkpointing,
+            compile_config=config.compile,
+        )
 
         # ── e. Materialize meta tensors on CUDA ──
         # FSDP2 fully_shard does not auto-materialize meta tensors, so allocate
@@ -537,12 +571,6 @@ class VLMModel(ImaginaireModel):
                 f"{audio_config.encoder_checkpoint_path}"
             )
 
-        # ── i. Gradient checkpointing ──
-        # HF backbone supports only binary on/off via gradient_checkpointing_enable,
-        # so VLMActivationCheckpointingConfig.mode is restricted to {"full", "none"}.
-        if config.activation_checkpointing.mode == "full":
-            hf_model.apply_gradient_checkpointing()
-
         self.model = hf_model
         self.parallel_dims = parallel_dims
         self.model_name_or_path = local_path
@@ -552,7 +580,18 @@ class VLMModel(ImaginaireModel):
         """Called by trainer after model.to("cuda"). No device move needed here."""
 
     def on_after_backward(self, iteration: int = 0) -> None:
-        """No-op — FSDP handles gradient synchronization internally."""
+        """Capture exact pre-clip gradients when deep parity probing is enabled."""
+        maybe_dump_gradients(self.model.model, self._parity_probe_step, tag="i4")
+
+    def on_before_zero_grad(
+        self,
+        optimizer: torch.optim.Optimizer,
+        scheduler: torch.optim.lr_scheduler.LRScheduler,
+        iteration: int,
+    ) -> None:
+        """Capture post-step parameters and optimizer state before gradients are cleared."""
+        del scheduler, iteration
+        maybe_dump_post_optimizer(self.model.model, optimizer, self._parity_probe_step, tag="i4")
 
     def state_dict(
         self,
@@ -637,14 +676,14 @@ class VLMModel(ImaginaireModel):
 
         labels = data.pop("labels")
         data.pop("attention_mask", None)
-        logits = self.model(**data)
-        loss = self._loss_fn(logits, labels)
+        maybe_dump_model_inputs(data, iteration, tag="i4", labels=labels)
+        self._parity_probe_step = iteration
+        logits = self.model(_probe_step=iteration, _probe_tag="i4", **data)
+        loss_kwargs = {"probe_step": iteration, "probe_tag": "i4"} if self.config.policy.use_weighted_ce else {}
+        loss = self._loss_fn(logits, labels, **loss_kwargs)
+        maybe_dump_forward_result(logits, {"ce_loss": loss, "total_loss": loss}, iteration, tag="i4")
 
-        # loss_avg: DP-averaged loss for logging (matches cosmos-rl ReduceOp.AVG).
-        # Does not affect the backward scalar. Pick the same 1-D sub-mesh the
-        # legacy single-mesh ``ParallelDims.dp_mesh`` returned — dp_shard if
-        # sharding is on, else dp_replicate — so the reduction group is
-        # byte-identical to pre-merge behavior.
+        # Match cosmos-rl's logged DP-average without changing the backward loss.
         loss_avg = loss.detach().clone()
         pd = getattr(self, "parallel_dims", None)
         dp_mesh = pd.dp_mesh if pd is not None else None

@@ -126,7 +126,8 @@ class TokenizeData(Augmentor):
         processor: Optional[Processor] = None,
         max_video_token_length: int = 8192,
         max_image_token_length: int = 8192,
-        add_system_prompt_if_missing: bool = False,
+        custom_system_prompt: str | None = None,
+        strip_original_system_prompt: bool = False,
         text_only: bool = False,
         sound_und: bool = False,
         audio_processor: Optional[_AudioProcessor] = None,
@@ -141,6 +142,8 @@ class TokenizeData(Augmentor):
         Args:
             processor (Processor): Text/Image processor for tokenization.
             max_video_token_length (int): Maximum number of video tokens to use. Defaults to 8192.
+            custom_system_prompt: Prompt to inject when no leading system message exists.
+            strip_original_system_prompt: Remove existing system messages before optional injection.
             sound_und (bool): Opt in to audio preprocessing and audio-token registration.
                 Disabled by default so existing text/vision tokenizers are unchanged.
         """
@@ -149,7 +152,8 @@ class TokenizeData(Augmentor):
         self.processor = processor  # Expecting a ImageTextTokenizer
         self.max_video_token_length = max_video_token_length
         self.max_image_token_length = max_image_token_length
-        self.add_system_prompt_if_missing = add_system_prompt_if_missing
+        self.custom_system_prompt = custom_system_prompt
+        self.strip_original_system_prompt = strip_original_system_prompt
         if not isinstance(sound_und, bool):
             raise TypeError(f"sound_und must be a bool, got {type(sound_und).__name__}")
         if not sound_und and audio_processor is not None:
@@ -473,8 +477,12 @@ class TokenizeData(Augmentor):
         if len(raw_videos) > 0:
             data_dict["raw_video"] = raw_videos  # each: [3,T,H,W]
 
-        if conversation[0]["role"] != "system" and self.add_system_prompt_if_missing:
-            conversation.insert(0, {"role": "system", "content": "You are a helpful assistant."})
+        if self.strip_original_system_prompt:
+            conversation = [msg for msg in conversation if msg.get("role") != "system"]
+            data_dict["conversation"] = conversation
+
+        if self.custom_system_prompt is not None and conversation[0]["role"] != "system":
+            conversation.insert(0, {"role": "system", "content": self.custom_system_prompt})
 
         if self.text_only and (total_images > 0 or total_videos > 0 or total_audios > 0):
             log.critical(
