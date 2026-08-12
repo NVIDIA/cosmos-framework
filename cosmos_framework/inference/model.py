@@ -45,6 +45,11 @@ from cosmos_framework.inference.common.public_model_config import (
 )
 from cosmos_framework.utils import misc
 from cosmos_framework.utils.flags import SMOKE
+from cosmos_framework.utils.generator.quantization import (
+    apply_modelopt_fp8_checkpoint_inplace,
+    is_modelopt_fp8_checkpoint,
+    plan_modelopt_fp8_targets,
+)
 
 if TYPE_CHECKING:
     from cosmos_framework.model.generator.omni_mot_model import OmniMoTModel
@@ -270,7 +275,84 @@ def _normalize_diffusers_target_key(name: str) -> str:
     return name.removeprefix("model.net.").replace("_orig_mod.", "").replace("_checkpoint_wrapped_module.", "")
 
 
-class _DiffusersHuggingFaceStorageReader(HuggingFaceStorageReader):
+class _MmapSafeReadMixin:
+    """Materialize each safetensors slice into anonymous RAM before the H2D copy.
+
+    ``HuggingFaceStorageReader._process_read_request`` copies tensors straight from the
+    ``mmap``-backed safetensors slice onto the GPU, so the transfer handles a page fault
+    per tensor. On Grace that dominates checkpoint load: a Cosmos3-Super reasoner load
+    spends ~1200s here with zero disk I/O, the data already resident in page cache.
+
+    The copy is applied conditionally -- see ``_materialize_enabled`` for why.
+    """
+
+    _materialize_cache = None
+
+    @classmethod
+    def _materialize_enabled(cls) -> bool:
+        """Whether to stage tensors through anonymous host memory before the H2D copy.
+
+        Defaults on for aarch64 and off elsewhere, overridable in either direction with
+        COSMOS_MATERIALIZE_CHECKPOINT=1/0.
+
+        The staging copy removes a slow file-backed mmap H2D path on Grace, but where that
+        path is already fast the copy is pure overhead: on 8x A100 (Cosmos3-Super, 8 ranks)
+        applying it unconditionally measured ~13.2% slower, because concurrent ranks contend
+        for host memory bandwidth. The architecture is only a proxy for "is the mmap H2D path
+        slow here", so it is used as a default rather than as a hard condition.
+        """
+        if cls._materialize_cache is None:
+            import os
+            import platform
+
+            override = os.environ.get("COSMOS_MATERIALIZE_CHECKPOINT")
+            if override is not None:
+                cls._materialize_cache = override.strip().lower() not in (
+                    "0",
+                    "false",
+                    "no",
+                    "off",
+                    "",
+                )
+            else:
+                cls._materialize_cache = platform.machine().lower() in ("aarch64", "arm64")
+        return cls._materialize_cache
+
+    def _process_read_request(self, f, req, planner) -> None:  # noqa: D102
+        slices = tuple(slice(offset, offset + length) for offset, length in zip(req.storage_offsets, req.lengths))
+        tensor = f.get_slice(req.storage_index.fqn)[slices]
+        target_tensor = planner.resolve_tensor(req).detach()
+
+        if target_tensor.size() != tensor.size():
+            raise AssertionError(f"req {req.storage_index} mismatch sizes {target_tensor.size()} vs {tensor.size()}")
+
+        if target_tensor.is_cuda and self._materialize_enabled():
+            # Materialise into anonymous host memory before the H2D copy.
+            #
+            # The base implementation copies straight from mmap-backed safetensors
+            # storage into a CUDA tensor, so the transfer handles a page fault per
+            # tensor. On Grace this dominates load time (Cosmos3-Super load: ~1200s
+            # down to ~70-85s with this change, measured across two boots; zero disk
+            # I/O either way -- the data is already in page cache).
+            #
+            # Pre-faulting in place is not sufficient: measured on a 4.61 GiB shard,
+            # an mmap source still costs 9.00 ms/tensor after faults are pre-paid,
+            # versus 1.61 ms/tensor from the heap. Pinning the staging buffer is not
+            # necessary either -- with a heap source, pageable (1.61) and pinned
+            # (1.69) are equivalent. A single clone() does both jobs: the memcpy
+            # faults the pages sequentially and leaves the data resident and
+            # anonymous. It is freed as soon as the H2D copy completes.
+            tensor = tensor.contiguous().clone()
+
+        target_tensor.copy_(tensor)
+        planner.commit_tensor(req, target_tensor)
+
+
+class _MmapSafeHuggingFaceStorageReader(_MmapSafeReadMixin, HuggingFaceStorageReader):
+    """Plain HF safetensors reader with the mmap-H2D staging copy."""
+
+
+class _DiffusersHuggingFaceStorageReader(_MmapSafeReadMixin, HuggingFaceStorageReader):
     """Hugging Face safetensors reader that follows diffusers' root weight map."""
 
     def __init__(self, checkpoint_path: Path) -> None:
@@ -351,12 +433,25 @@ class _DiffusersHuggingFaceStorageReader(HuggingFaceStorageReader):
 class _DiffusersLoadPlanner(dcp.DefaultLoadPlanner):
     """Remap diffusers source keys onto the OmniMoTModel.net state dict for DCP load."""
 
-    def __init__(self, checkpoint_path: Path) -> None:
+    def __init__(
+        self,
+        checkpoint_path: Path,
+        *,
+        defer_modelopt_fp8_weights_loading: bool = False,
+    ) -> None:
+        """Initialize the planner.
+
+        When ``defer_modelopt_fp8_weights_loading`` is enabled, ModelOpt FP8
+        weight tensors are omitted from the DCP load so they can be installed
+        directly as TorchAO weights after the remaining checkpoint is loaded.
+        """
         super().__init__()
         self.checkpoint_path = checkpoint_path
         self.weight_map = _diffusers_weight_map(checkpoint_path)
         self.files_to_keys = _diffusers_files_to_keys(self.weight_map)
         self.has_vision_weights = any(rel_path.startswith("vision_encoder/") for rel_path in self.files_to_keys)
+        self.defer_modelopt_fp8_weights_loading = defer_modelopt_fp8_weights_loading
+        self.skipped_source_keys: set[str] = set()
 
     def set_up_planner(
         self,
@@ -365,9 +460,19 @@ class _DiffusersLoadPlanner(dcp.DefaultLoadPlanner):
         is_coordinator: bool = False,
     ) -> None:
         target_state_dict = self._normalize_target_state_dict(state_dict)
-        remapped_state_dict, loaded_keys = self._build_remapped_state_dict(target_state_dict)
+        if self.defer_modelopt_fp8_weights_loading:
+            if metadata is None:
+                raise ValueError("Checkpoint metadata is required to identify ModelOpt FP8 weights.")
+            self.skipped_source_keys = {
+                key
+                for key, tensor_metadata in metadata.state_dict_metadata.items()
+                if isinstance(tensor_metadata, TensorStorageMetadata)
+                and tensor_metadata.properties.dtype == torch.float8_e4m3fn
+                and key.endswith(".weight")
+            }
+        remapped_state_dict, loaded_keys, skipped_target_keys = self._build_remapped_state_dict(target_state_dict)
 
-        missing_keys = set(target_state_dict) - loaded_keys
+        missing_keys = set(target_state_dict) - loaded_keys - skipped_target_keys
         if not self.has_vision_weights:
             missing_keys = {key for key in missing_keys if not key.startswith("language_model.visual.")}
         # Task-specialized checkpoints (e.g. Text2Image, Image2Video) omit the
@@ -403,9 +508,25 @@ class _DiffusersLoadPlanner(dcp.DefaultLoadPlanner):
             target_state_dict[net_key] = tensor
         return target_state_dict
 
-    def _build_remapped_state_dict(self, target_state_dict: dict[str, Any]) -> tuple[dict[str, Any], set[str]]:
+    def _build_remapped_state_dict(
+        self, target_state_dict: dict[str, Any]
+    ) -> tuple[dict[str, Any], set[str], set[str]]:
+        """Build the state dict used to load diffusers weights into the model.
+
+        Args:
+            target_state_dict: Model state dict keyed by normalized Cosmos3 target names.
+
+        Returns:
+            A tuple containing:
+            - A state dict keyed by diffusers checkpoint names whose values reference
+              the corresponding target model tensors.
+            - Target keys that will be populated by the DCP load.
+            - Target keys whose ModelOpt FP8 weights were deferred for direct TorchAO
+              installation.
+        """
         remapped_state_dict: dict[str, Any] = {}
         loaded_keys: set[str] = set()
+        skipped_target_keys: set[str] = set()
         # When the model is built without a visual tower (e.g. Cosmos3-Edge t2i with
         # include_visual disabled), its state dict has no `language_model.visual.*`
         # targets, so the checkpoint's vision_encoder weights have nowhere to go — skip
@@ -413,6 +534,10 @@ class _DiffusersLoadPlanner(dcp.DefaultLoadPlanner):
         has_visual_target = any(key.startswith("language_model.visual.") for key in target_state_dict)
         for diff_key, rel_path in sorted(self.weight_map.items()):
             net_key = _diffusers_to_net_key(diff_key, rel_path)
+            if diff_key in self.skipped_source_keys:
+                if net_key in target_state_dict:
+                    skipped_target_keys.add(net_key)
+                continue
             if net_key is None:
                 if _is_diffusers_model_weight_path(rel_path):
                     if rel_path.startswith("vision_encoder/") and not has_visual_target:
@@ -426,7 +551,7 @@ class _DiffusersLoadPlanner(dcp.DefaultLoadPlanner):
                 raise KeyError(f"Multiple diffusers keys map to target model key {net_key!r}.")
             remapped_state_dict[diff_key] = target_tensor
             loaded_keys.add(net_key)
-        return remapped_state_dict, loaded_keys
+        return remapped_state_dict, loaded_keys, skipped_target_keys
 
 
 class Cosmos3OmniConfig(transformers.PretrainedConfig):
@@ -530,6 +655,30 @@ class Cosmos3OmniModel(transformers.PreTrainedModel):
         config.parallelism = attrs.asdict(parallelism_config)
         config.compile = attrs.asdict(compile_config)
         config.quantization = attrs.asdict(quantization_config)
+
+        # ModelOpt FP8 checkpoints ship already-quantized E4M3 weights plus static
+        # scales. The target linears are swapped to FP8 modules on the meta device
+        # during `build_net` — before FSDP wrap and materialization — so both the
+        # sharded and replicated paths work and peak memory follows the FP8 weights.
+        modelopt_checkpoint = is_modelopt_fp8_checkpoint(checkpoint_path)
+        if modelopt_checkpoint and quantization_config.method is not None:
+            raise ValueError(
+                "A ModelOpt FP8 checkpoint is already quantized; do not also request runtime quantization."
+            )
+        if modelopt_checkpoint and not _is_diffusers_checkpoint(checkpoint_path):
+            raise ValueError(f"ModelOpt FP8 loading requires a diffusers-format checkpoint layout: {checkpoint_path}")
+        if modelopt_checkpoint:
+            # Resolve which linears the checkpoint quantizes here, where the
+            # diffusers key mapping lives, and hand the plain FQN list to the
+            # model config so `build_net` can do the meta-device swap without
+            # reaching back into the loader.
+            config.quantization["modelopt_fp8_checkpoint_path"] = str(checkpoint_path)
+            config.quantization["modelopt_fp8_target_fqns"] = plan_modelopt_fp8_targets(
+                checkpoint_path,
+                _diffusers_to_net_key,
+                weight_map=_diffusers_weight_map(checkpoint_path),
+            )
+
         model = cls(config)
         # Thread the local checkpoint dir to the reasoner LM (consumed by Edge's
         # lazy ``_ensure_vision_tower``): checkpoints that bundle a
@@ -555,13 +704,25 @@ class Cosmos3OmniModel(transformers.PreTrainedModel):
                     dcp.load(
                         state_dict=state_dict,
                         storage_reader=_DiffusersHuggingFaceStorageReader(checkpoint_path),
-                        planner=_DiffusersLoadPlanner(checkpoint_path),
+                        planner=_DiffusersLoadPlanner(
+                            checkpoint_path,
+                            defer_modelopt_fp8_weights_loading=modelopt_checkpoint,
+                        ),
                         no_dist=no_dist,
                     )
+                    if modelopt_checkpoint:
+                        # The FP8 weights were skipped by the planner above; install
+                        # them straight from the checkpoint as TorchAO weights.
+                        apply_modelopt_fp8_checkpoint_inplace(
+                            model.model.net,
+                            checkpoint_path,
+                            key_mapper=_diffusers_to_net_key,
+                            weight_map=_diffusers_weight_map(checkpoint_path),
+                        )
                     return model
                 state_dict = get_model_state_dict(model)
                 _raise_on_missing_vision_keys(checkpoint_path, state_dict)
-                storage_reader = HuggingFaceStorageReader(str(checkpoint_path))
+                storage_reader = _MmapSafeHuggingFaceStorageReader(str(checkpoint_path))
             case _:
                 assert_never(checkpoint_type)
         dcp.load(state_dict=state_dict, storage_reader=storage_reader)

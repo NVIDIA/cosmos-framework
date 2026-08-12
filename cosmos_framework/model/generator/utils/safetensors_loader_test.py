@@ -505,23 +505,91 @@ def test_load_vlm_model_tolerates_missing_lm_head_when_tied(tmp_path):
 
 @pytest.mark.L0
 @pytest.mark.CPU
-def test_load_vlm_model_rejects_moe(tmp_path):
-    """MoE VLMs raise NotImplementedError — MoE is not yet supported."""
+def test_load_vlm_model_loads_moe_fused_expert_weights(tmp_path):
+    """MoE VLMs load like dense ones: the fused ``mlp.experts.*`` tensors and the
+    router gate are copied verbatim on a single rank."""
     cfg = _StubConfig(
-        text_config=_StubConfig(num_experts=128, num_local_experts=None),
+        text_config=_StubConfig(num_experts=4, num_local_experts=None),
         tie_word_embeddings=False,
     )
-    model = _StubModel(param_shapes={"model.embed_tokens.weight": (4, 2)}, config=cfg)
-    expected = torch.arange(8, dtype=torch.float32).view(4, 2)
-    ckpt_dir = _make_safetensors(tmp_path, {"model.embed_tokens.weight": expected})
+    model = _StubModel(
+        param_shapes={
+            "model.language_model.embed_tokens.weight": (4, 2),
+            "model.language_model.layers.0.mlp.gate.weight": (4, 2),
+            # Fused experts: [num_experts, hidden, 2 * moe_intermediate] and
+            # [num_experts, moe_intermediate, hidden] — see
+            # models/reasoner/qwen3_vl_moe/moe.py.
+            "model.language_model.layers.0.mlp.experts.gate_up_proj": (4, 2, 6),
+            "model.language_model.layers.0.mlp.experts.down_proj": (4, 3, 2),
+        },
+        config=cfg,
+    )
+    ckpt = {
+        name: torch.arange(param.numel(), dtype=torch.float32).view(param.shape)
+        for name, param in model._params.items()
+    }
+    ckpt_dir = _make_safetensors(tmp_path, ckpt)
 
-    with pytest.raises(NotImplementedError, match="MoE VLMs"):
-        load_vlm_model(
-            model=model,
-            checkpoint_path=str(ckpt_dir),
-            credential_path=None,
-            parallel_dims=None,
-        )
+    keys_loaded = load_vlm_model(
+        model=model,
+        checkpoint_path=str(ckpt_dir),
+        credential_path=None,
+        parallel_dims=None,
+    )
+
+    assert keys_loaded == set(ckpt)
+    for name, expected in ckpt.items():
+        assert torch.equal(model._params[name].data, expected), name
+
+
+@pytest.mark.L0
+@pytest.mark.CPU
+def test_load_vlm_model_shards_fused_experts_on_expert_dim(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The expert count is dim 0 of a fused expert tensor, so the dense dim-0
+    FSDP rule gives each rank a contiguous slice of experts."""
+    from torch.distributed.tensor import DTensor
+
+    from cosmos_framework.model.generator.utils import safetensors_loader
+
+    config = _StubConfig(
+        text_config=_StubConfig(num_experts=4, num_local_experts=None),
+        tie_word_embeddings=False,
+    )
+    key = "model.language_model.layers.0.mlp.experts.gate_up_proj"
+    model = _StubModel({key: (4, 2, 6)}, config)
+    # Rank 1 of 2 owns experts 2 and 3.
+    local_target = torch.zeros(2, 2, 6)
+    dtensor_target = MagicMock(spec=DTensor)
+    dtensor_target.to_local.return_value = local_target
+    model._params[key] = dtensor_target
+    checkpoint_tensor = torch.arange(4 * 2 * 6, dtype=torch.float32).view(4, 2, 6)
+
+    mesh = MagicMock()
+    mesh.get_local_rank.return_value = 1
+    mesh.size.return_value = 2
+    loader = MagicMock()
+    loader.load_files_parallel.return_value = (
+        {key: checkpoint_tensor},
+        {key: ([4, 2, 6], 0)},
+        {key},
+    )
+    loader.gather_tensor_names_and_build_mapping.return_value = ({key}, {key: 0})
+    loader.iterate_tensors.return_value = iter([(key, checkpoint_tensor)])
+
+    monkeypatch.setattr(safetensors_loader, "_get_dp_shard_mesh", lambda _parallel_dims: mesh)
+    monkeypatch.setattr(safetensors_loader, "MultiRankCheckpointLoader", lambda _mesh: loader)
+
+    keys_loaded = load_vlm_model(
+        model=model,
+        checkpoint_path="unused-by-fake-loader",
+        credential_path=None,
+        parallel_dims=object(),  # type: ignore[arg-type]
+    )
+
+    assert keys_loaded == {key}
+    assert torch.equal(local_target, checkpoint_tensor[2:])
 
 
 @pytest.mark.L0

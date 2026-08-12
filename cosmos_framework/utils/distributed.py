@@ -241,19 +241,56 @@ def ddp_sync_grad(model, enabled):
         else gradients will still be synchronized.
     """
     assert isinstance(model, torch.nn.Module)
-    if isinstance(model, DistributedDataParallel):
-        old_require_backward_grad_sync = model.require_backward_grad_sync
-        if model.static_graph and model.require_backward_grad_sync != enabled:
-            if model.show_sync_grad_static_graph_warning:
-                log.warning("DDP static_graph=True is incompatible with sync_grad(). Performance will be reduced.")
-                model.show_sync_grad_static_graph_warning = False
-        else:
-            model.require_backward_grad_sync = enabled
+    ddp_mutated = False
+    old_require_backward_grad_sync = None
+    fsdp_prev: list = []  # (FSDPModule, previous all_reduce_grads) for exactly the modules we mutated
     try:
+        if isinstance(model, DistributedDataParallel):
+            old_require_backward_grad_sync = model.require_backward_grad_sync
+            if model.static_graph and model.require_backward_grad_sync != enabled:
+                if model.show_sync_grad_static_graph_warning:
+                    log.warning("DDP static_graph=True is incompatible with sync_grad(). Performance will be reduced.")
+                    model.show_sync_grad_static_graph_warning = False
+            else:
+                model.require_backward_grad_sync = enabled
+                ddp_mutated = True
+        else:
+            # FSDP2 (fully_shard) branch. Without this, gradient accumulation
+            # reduces gradients on EVERY micro-step and saves no communication
+            # (measured: accum=4 step = 4x the accum=1 step on Ethernet HSDP).
+            # We defer only the cross-replica all-reduce to the boundary
+            # micro-step. The intra-node reduce-scatter still runs every
+            # micro-step, so gradients stay sharded and VRAM does not grow
+            # (set_requires_gradient_sync(False) would keep gradients
+            # unsharded: +stored-grad-bytes per rank).
+            # Every non-DDP model takes this branch, including single-process
+            # runs: skip early when there is nothing to sync, and before the
+            # fsdp import, which fails on builds without distributed.
+            if not dist.is_available() or not dist.is_initialized():
+                yield
+                return
+            from torch.distributed.fsdp import FSDPModule
+
+            for m in model.modules():
+                if not isinstance(m, FSDPModule):
+                    continue
+                # Mirror of set_requires_all_reduce(recurse=False): it writes
+                # state._fsdp_param_group.all_reduce_grads when the group is
+                # truthy, so that is the previous state to capture. Recording
+                # (module, prev) as we mutate keeps the finally-block exact
+                # even if this loop raises midway.
+                fsdp_param_group = m._get_fsdp_state()._fsdp_param_group
+                if not fsdp_param_group:
+                    continue
+                prev = fsdp_param_group.all_reduce_grads
+                m.set_requires_all_reduce(enabled, recurse=False)
+                fsdp_prev.append((m, prev))
         yield
     finally:
-        if isinstance(model, DistributedDataParallel):
+        if ddp_mutated:
             model.require_backward_grad_sync = old_require_backward_grad_sync
+        for m, prev in fsdp_prev:
+            m.set_requires_all_reduce(prev, recurse=False)
 
 
 def collate_batches(data_batches: list[dict[str, torch.Tensor]]) -> torch.Tensor | dict[str, torch.Tensor]:
@@ -487,7 +524,7 @@ class _TensorBroadcastMetadata:
 
 
 def _extract_tensor_leaves(value: Any, min_tensor_bytes: int) -> tuple[Any, list[torch.Tensor]]:
-    """Replace sufficiently large tensor leaves while preserving the surrounding containers."""
+    """Replace large or CUDA tensor leaves while preserving the surrounding containers."""
     tensor_leaves: list[torch.Tensor] = []
     tensor_metadata_by_id: dict[int, _TensorBroadcastMetadata] = {}
     seen_container_ids: set[int] = set()
@@ -504,7 +541,10 @@ def _extract_tensor_leaves(value: Any, min_tensor_bytes: int) -> tuple[Any, list
     def _extract(current_value: Any) -> Any:
         if isinstance(current_value, torch.Tensor):
             tensor_bytes = current_value.numel() * current_value.element_size()
-            if tensor_bytes < min_tensor_bytes:
+            # Pickling a CUDA tensor preserves the source device index, so a tensor
+            # broadcast from cuda:0 would remain on cuda:0 in a cuda:1 process.
+            # Always use the direct path so receivers rebuild it on their current device.
+            if tensor_bytes < min_tensor_bytes and current_value.device.type != "cuda":
                 return current_value
             if current_value.layout != torch.strided:
                 log.warning(f"Only strided tensors can be broadcast; skip layout={current_value.layout}.")
@@ -572,13 +612,13 @@ def broadcast_object_list_optimized(
     """Broadcast objects in place, sending sufficiently large tensor leaves directly.
 
     This is a signature-compatible alternative to :func:`torch.distributed.broadcast_object_list`.
-    The source broadcasts an object-list skeleton first. Tensor leaves at least
-    ``min_tensor_bytes`` bytes large are replaced by metadata, broadcast
-    directly, and inserted back into the skeleton in traversal order. Smaller
-    tensors remain in the object payload. NCCL groups place directly broadcast
-    tensors on ``device`` or the current CUDA device; other backends use CPU
-    tensors. The default ``sys.maxsize`` threshold calls the original PyTorch
-    collective directly.
+    The source broadcasts an object-list skeleton first. CUDA tensor leaves and
+    tensor leaves at least ``min_tensor_bytes`` bytes large are replaced by
+    metadata, broadcast directly, and inserted back into the skeleton in traversal
+    order. Smaller non-CUDA tensors remain in the object payload. NCCL groups place
+    directly broadcast tensors on ``device`` or the current CUDA device; other
+    backends use CPU tensors. The default ``sys.maxsize`` threshold calls the
+    original PyTorch collective directly.
 
     Direct tensor extraction requires an acyclic tree of plain ``dict``, ``list``,
     and ``tuple`` containers; namedtuples are also supported. Repeated references

@@ -16,7 +16,7 @@ from cosmos_framework.data.generator.augmentors.reasoner.bytes_to_media import B
 from cosmos_framework.data.generator.augmentors.reasoner.filter_output_key import FilterOutputKey
 from cosmos_framework.data.generator.augmentors.reasoner.filter_seq_length import FilterSeqLength
 from cosmos_framework.data.generator.augmentors.reasoner.tokenize_data import TokenizeData
-from cosmos_framework.data.generator.processors.parakeet_audio_processor import (
+from cosmos_framework.data.generator.processors.audio_utils import (
     AUDIO_END_TOKEN,
     AUDIO_PAD_TOKEN,
     AUDIO_START_TOKEN,
@@ -130,9 +130,10 @@ class _FakeVLMProcessor:
 class _FakeAudioProcessor:
     sampling_rate = 16_000
 
-    def __init__(self, token_lengths: tuple[int, ...] = (1, 2)) -> None:
+    def __init__(self, token_lengths: tuple[int, ...] = (1, 2), timestamp_stride: float = 0.08) -> None:
         self.last_audios = None
         self.token_lengths = token_lengths
+        self.timestamp_stride = timestamp_stride
 
     def __call__(self, audios, *, sampling_rate: int) -> dict[str, torch.Tensor]:
         assert sampling_rate == self.sampling_rate
@@ -146,6 +147,10 @@ class _FakeAudioProcessor:
             "audio_feature_lengths": torch.tensor([3, 5][:num_clips], dtype=torch.long),
             "audio_token_lengths": torch.tensor(self.token_lengths[:num_clips], dtype=torch.long),
         }
+
+    def get_token_timestamps(self, audio_feature_length: int) -> list[float]:
+        clip_index = (3, 5).index(audio_feature_length)
+        return [token_index * self.timestamp_stride for token_index in range(self.token_lengths[clip_index])]
 
 
 @pytest.mark.L0
@@ -295,9 +300,16 @@ def test_tokenize_data_preserves_interleaved_audio_order_and_processor_outputs()
 
 @pytest.mark.L0
 @pytest.mark.CPU
-def test_tokenize_data_reuses_video_timestamps_for_audio_and_keeps_tail() -> None:
+@pytest.mark.parametrize(
+    "timestamp_stride,first_segment_length",
+    [(0.08, 5), (0.2, 2)],
+)
+def test_tokenize_data_reuses_video_timestamps_for_audio_and_keeps_tail(
+    timestamp_stride: float,
+    first_segment_length: int,
+) -> None:
     vlm_processor = _FakeVLMProcessor()
-    audio_processor = _FakeAudioProcessor(token_lengths=(10,))
+    audio_processor = _FakeAudioProcessor(token_lengths=(10,), timestamp_stride=timestamp_stride)
     tokenize = TokenizeData(
         processor=vlm_processor,
         sound_und=True,
@@ -339,7 +351,8 @@ def test_tokenize_data_reuses_video_timestamps_for_audio_and_keeps_tail() -> Non
     assert vlm_processor.last_conversation is not None
     audio_text = vlm_processor.last_conversation[0]["content"][1]["text"]
     assert audio_text == (
-        f"{AUDIO_START_TOKEN}<0.1 seconds>{AUDIO_PAD_TOKEN * 5}<0.6 seconds>{AUDIO_PAD_TOKEN * 5}{AUDIO_END_TOKEN}"
+        f"{AUDIO_START_TOKEN}<0.1 seconds>{AUDIO_PAD_TOKEN * first_segment_length}"
+        f"<0.6 seconds>{AUDIO_PAD_TOKEN * (10 - first_segment_length)}{AUDIO_END_TOKEN}"
     )
     assert tokenize(reversed_data) is None
 
@@ -554,11 +567,12 @@ def test_tokenize_data_disabled_does_not_construct_audio_processor_or_mutate_tok
     vlm_processor = _FakeVLMProcessor()
     vocabulary_before = vlm_processor.tokenizer.get_vocab()
 
-    def _unexpected_audio_processor():
+    def _unexpected_audio_processor(audio_encoder_type: str) -> None:
+        del audio_encoder_type
         raise AssertionError("Disabled sound understanding constructed an audio processor")
 
     monkeypatch.setattr(
-        "cosmos_framework.data.generator.augmentors.reasoner.tokenize_data.ParakeetAudioProcessor",
+        "cosmos_framework.data.generator.augmentors.reasoner.tokenize_data.build_audio_processor",
         _unexpected_audio_processor,
     )
     tokenize = TokenizeData(processor=vlm_processor, sound_und=False)
@@ -574,3 +588,32 @@ def test_tokenize_data_disabled_does_not_construct_audio_processor_or_mutate_tok
 
     assert vlm_processor.tokenizer.get_vocab() == vocabulary_before
     assert tokenize(data) is None
+
+
+@pytest.mark.L0
+@pytest.mark.CPU
+@pytest.mark.parametrize("audio_encoder_type", ["parakeet", "qwen3_omni_thinking"])
+def test_tokenize_data_enabled_constructs_selected_audio_processor(
+    monkeypatch: pytest.MonkeyPatch,
+    audio_encoder_type: str,
+) -> None:
+    audio_processor = _FakeAudioProcessor()
+    constructed: list[str] = []
+
+    def _build_audio_processor(selected_audio_encoder_type: str) -> _FakeAudioProcessor:
+        constructed.append(selected_audio_encoder_type)
+        return audio_processor
+
+    monkeypatch.setattr(
+        "cosmos_framework.data.generator.augmentors.reasoner.tokenize_data.build_audio_processor",
+        _build_audio_processor,
+    )
+
+    tokenize = TokenizeData(
+        processor=_FakeVLMProcessor(),
+        sound_und=True,
+        audio_encoder_type=audio_encoder_type,
+    )
+
+    assert constructed == [audio_encoder_type]
+    assert tokenize.audio_processor is audio_processor
