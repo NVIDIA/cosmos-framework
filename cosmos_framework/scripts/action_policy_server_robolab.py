@@ -26,7 +26,9 @@ from cosmos_framework.inference.common.init import init_script
 init_script()
 
 import json
+import os
 import socket
+import time
 import threading
 from dataclasses import dataclass
 from pathlib import Path
@@ -574,6 +576,7 @@ class RobolabPolicyService:
         return sample
 
     def infer(self, obs: dict[str, Any]) -> dict[str, Any]:
+        start_time = time.monotonic()
         sample = self._build_sample(obs)
         data_batch = _build_data_batch_from_sample(sample)
         seed = self._next_seed()
@@ -616,6 +619,11 @@ class RobolabPolicyService:
             video = self.model.decode(pred_vision_latent)  # [1,C,T,H,W]
             video = ((video[0].clamp(-1.0, 1.0) + 1.0) * 127.5).to(torch.uint8).permute(1, 2, 3, 0)  # [T,H,W,3]
             outputs["video"] = video.detach().cpu().numpy()
+
+        infer_time = time.monotonic() - start_time
+        infer_ms = infer_time * 1000.0
+        if os.environ.get("EVAL_VERBOSE"):
+            print(f"infer_ms: {infer_ms:.1f}")
         return outputs
 
 
