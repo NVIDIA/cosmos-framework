@@ -79,6 +79,7 @@ BASIC_CALLBACKS = dict(
         ),
         creds_path=None,
         flush_every_n_batches=100,
+        record_caption=False,
     ),
     mfu=L(MFUCallback)(every_n="${trainer.logging_iter}", grad_accum_iter="${trainer.grad_accum_iter}"),
     ofu=L(OFUCallback)(every_n="${trainer.logging_iter}"),

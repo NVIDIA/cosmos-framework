@@ -13,11 +13,10 @@ from transformers import ParakeetEncoderConfig
 from cosmos_framework.model.generator.reasoner.parakeet.configuration_parakeet import ParakeetAudioConfig
 from cosmos_framework.model.generator.reasoner.parakeet.parakeet import ParakeetAudioModel
 from cosmos_framework.model.generator.utils.safetensors_loader import load_vlm_model
-from cosmos_framework.data.generator.processors.parakeet_audio_processor import (
+from cosmos_framework.data.generator.processors.audio_utils import (
     AUDIO_END_TOKEN,
     AUDIO_PAD_TOKEN,
     AUDIO_START_TOKEN,
-    ParakeetAudioProcessor,
     add_audio_special_tokens,
     build_audio_timeline_text,
     expand_audio_placeholders_in_text,
@@ -26,6 +25,7 @@ from cosmos_framework.data.generator.processors.parakeet_audio_processor import 
     get_qwen_video_timestamps,
     splice_audio_segments_after_video_chunks,
 )
+from cosmos_framework.data.generator.processors.parakeet_audio_processor import ParakeetAudioProcessor
 
 
 class _FakeFeatureExtractor:
@@ -151,6 +151,10 @@ def test_raw_waveform_processor_outputs_feed_tiny_audio_model() -> None:
     assert audio_embeddings.shape == (2, 2, 24)
     assert torch.equal(processor_outputs["audio_feature_lengths"], torch.tensor([8, 10]))
     assert torch.equal(processor_outputs["audio_token_lengths"], torch.tensor([2, 2]))
+    assert [
+        len(processor.get_token_timestamps(int(feature_length)))
+        for feature_length in processor_outputs["audio_feature_lengths"]
+    ] == processor_outputs["audio_token_lengths"].tolist()
     assert torch.equal(
         output_lengths.to(dtype=processor_outputs["audio_token_lengths"].dtype),
         processor_outputs["audio_token_lengths"],
@@ -274,6 +278,14 @@ def test_audio_timeline_uses_qwen_timestamps_and_keeps_the_tail() -> None:
     assert build_audio_timeline_text(4, [0.16]) == (
         f"{AUDIO_START_TOKEN}<0.2 seconds>{AUDIO_PAD_TOKEN * 4}{AUDIO_END_TOKEN}"
     )
+
+    parakeet_token_timestamps = ParakeetAudioProcessor.get_token_timestamps(320)
+    assert len(parakeet_token_timestamps) == 41
+    assert get_audio_segment_token_lengths(
+        41,
+        get_qwen_video_timestamps(num_frames=20, fps=6.25, temporal_patch_size=2),
+        audio_token_timestamps=parakeet_token_timestamps,
+    ) == [4, 4, 4, 4, 4, 4, 4, 4, 4, 5]
 
 
 @pytest.mark.L0

@@ -15,7 +15,7 @@ This module provides:
 import os
 from dataclasses import dataclass
 from functools import partial
-from typing import Any, Literal
+from typing import Any, Literal, cast
 
 import numpy as np
 import torch
@@ -46,6 +46,7 @@ from cosmos_framework.model.tokenizer.models.modules import (
     SparseMultiheadAttentionPoolingHead,
     SparseTensor,
     SparseTransformerBlock,
+    sparse_cat,
 )
 from cosmos_framework.model.tokenizer.models.modules.quantizers import (
     FSQ,
@@ -55,6 +56,7 @@ from cosmos_framework.model.tokenizer.models.modules.quantizers import (
 )
 from cosmos_framework.model.tokenizer.models.modules.transformer.blocks import (
     SPARSE_TRANSFORMER_CHECKPOINT_SCOPE_FULL_LAYER,
+    SPARSE_TRANSFORMER_CHECKPOINT_SCOPE_MLP_ONLY,
     SPARSE_TRANSFORMER_CHECKPOINT_SCOPES,
 )
 from cosmos_framework.model.tokenizer.models.utils import (
@@ -75,6 +77,30 @@ def _validate_vision_checkpoint_group_size(*, name: str | None, group_size: int)
     if isinstance(group_size, bool) or not isinstance(group_size, int) or group_size < 1:
         prefix = "" if name is None else f"{name}_"
         raise ValueError(f"{prefix}checkpoint_group_size must be a positive integer, got {group_size!r}.")
+
+
+def _validate_encoder_mlp_only_checkpoint_max_tokens(
+    *,
+    max_tokens: int | None,
+    encoder_use_checkpoint: bool,
+    encoder_gradient_checkpoint_scope: str,
+    freeze_encoder: bool,
+) -> None:
+    """Validate the default-off call-local encoder checkpoint optimization."""
+    if max_tokens is None:
+        return
+    if isinstance(max_tokens, bool) or not isinstance(max_tokens, int) or max_tokens < 1:
+        raise ValueError(
+            f"encoder_mlp_only_checkpoint_max_tokens must be a positive integer or None, got {max_tokens!r}."
+        )
+    if not encoder_use_checkpoint:
+        raise ValueError("encoder_mlp_only_checkpoint_max_tokens requires encoder checkpointing.")
+    if encoder_gradient_checkpoint_scope != SPARSE_TRANSFORMER_CHECKPOINT_SCOPE_FULL_LAYER:
+        raise ValueError(
+            "encoder_mlp_only_checkpoint_max_tokens requires encoder_gradient_checkpoint_scope='full_layer'."
+        )
+    if freeze_encoder:
+        raise ValueError("encoder_mlp_only_checkpoint_max_tokens is incompatible with freeze_encoder=True.")
 
 
 def _run_sparse_checkpoint_group(
@@ -1398,6 +1424,7 @@ class AutoencoderKLConfig:
     text_decoder_gradient_checkpoint_scope: Literal["full_layer", "mlp_only"] = "full_layer"
     encoder_use_checkpoint: bool | None = None
     encoder_gradient_checkpoint_scope: Literal["full_layer", "mlp_only"] = "full_layer"
+    encoder_mlp_only_checkpoint_max_tokens: int | None = None
     decoder_use_checkpoint: bool | None = None
     encoder_checkpoint_group_size: int = 1
     decoder_checkpoint_group_size: int = 1
@@ -1422,6 +1449,11 @@ class AutoencoderKLConfig:
     use_dual_latent: bool = False
     use_checkpoint: bool = True
     use_ragged_varlen_train_path: bool = False
+    text_decoder_projector_intermediate_size: int | None = None
+    text_decoder_position_embedding_mode: Literal["rope", "mrope"] = "rope"
+    text_decoder_use_image_position_embeddings: bool = True
+    text_decoder_use_distinct_media_tokens: bool = False
+    text_decoder_model_revision: str | None = None
 
 
 class AutoencoderKL(ModelMixin, ConfigMixin, FromOriginalModelMixin):
@@ -1490,6 +1522,7 @@ class AutoencoderKL(ModelMixin, ConfigMixin, FromOriginalModelMixin):
         text_decoder_gradient_checkpoint_scope: Literal["full_layer", "mlp_only"] = "full_layer",
         encoder_use_checkpoint: bool | None = None,
         encoder_gradient_checkpoint_scope: Literal["full_layer", "mlp_only"] = "full_layer",
+        encoder_mlp_only_checkpoint_max_tokens: int | None = None,
         decoder_use_checkpoint: bool | None = None,
         encoder_checkpoint_group_size: int = 1,
         decoder_checkpoint_group_size: int = 1,
@@ -1514,12 +1547,24 @@ class AutoencoderKL(ModelMixin, ConfigMixin, FromOriginalModelMixin):
         use_dual_latent: bool = False,
         use_checkpoint: bool = True,
         use_ragged_varlen_train_path: bool = False,
+        text_decoder_projector_intermediate_size: int | None = None,
+        text_decoder_position_embedding_mode: Literal["rope", "mrope"] = "rope",
+        text_decoder_use_image_position_embeddings: bool = True,
+        text_decoder_use_distinct_media_tokens: bool = False,
+        text_decoder_model_revision: str | None = None,
     ) -> None:
         super().__init__()
         self.use_checkpoint = use_checkpoint
         self.encoder_use_checkpoint = use_checkpoint if encoder_use_checkpoint is None else encoder_use_checkpoint
         self.decoder_use_checkpoint = use_checkpoint if decoder_use_checkpoint is None else decoder_use_checkpoint
         self.encoder_gradient_checkpoint_scope: Literal["full_layer", "mlp_only"] = encoder_gradient_checkpoint_scope
+        _validate_encoder_mlp_only_checkpoint_max_tokens(
+            max_tokens=encoder_mlp_only_checkpoint_max_tokens,
+            encoder_use_checkpoint=self.encoder_use_checkpoint,
+            encoder_gradient_checkpoint_scope=self.encoder_gradient_checkpoint_scope,
+            freeze_encoder=freeze_encoder,
+        )
+        self.encoder_mlp_only_checkpoint_max_tokens: int | None = encoder_mlp_only_checkpoint_max_tokens
         _validate_vision_checkpoint_group_size(name="encoder", group_size=encoder_checkpoint_group_size)
         _validate_vision_checkpoint_group_size(name="decoder", group_size=decoder_checkpoint_group_size)
         self.encoder_checkpoint_group_size: int = encoder_checkpoint_group_size
@@ -1533,6 +1578,11 @@ class AutoencoderKL(ModelMixin, ConfigMixin, FromOriginalModelMixin):
         self.use_post_text_alignment = use_post_text_alignment
         self.use_text_decoder = use_text_decoder
         self.spatial_pool_size = spatial_pool_size
+        self.text_decoder_projector_intermediate_size: int | None = text_decoder_projector_intermediate_size
+        self.text_decoder_position_embedding_mode: Literal["rope", "mrope"] = text_decoder_position_embedding_mode
+        self.text_decoder_use_image_position_embeddings: bool = text_decoder_use_image_position_embeddings
+        self.text_decoder_use_distinct_media_tokens: bool = text_decoder_use_distinct_media_tokens
+        self.text_decoder_model_revision: str | None = text_decoder_model_revision
         self.text_decoder_family = text_decoder_family
         self.text_decoder_packed_attention_backend: Literal["sdpa", "natten"] = text_decoder_packed_attention_backend
         self.text_decoder_natten_native_rms_norm: bool = text_decoder_natten_native_rms_norm
@@ -1711,7 +1761,7 @@ class AutoencoderKL(ModelMixin, ConfigMixin, FromOriginalModelMixin):
                 fast_position_embedding_upsample_backward=self.fast_position_embedding_upsample_backward,
             )
 
-        self.use_slicing = False
+        self.use_slicing: bool = False
         self.logit_bias = None
         self.logit_scale = None
 
@@ -1756,8 +1806,13 @@ class AutoencoderKL(ModelMixin, ConfigMixin, FromOriginalModelMixin):
 
             self.text_decoder_wrapper = TextDecoderWrapper(
                 model_name=text_decoder_model_name,
+                model_revision=text_decoder_model_revision,
                 image_hidden_size=encoder_model_channels,
                 spatial_pool_size=spatial_pool_size,
+                projector_intermediate_size=text_decoder_projector_intermediate_size,
+                position_embedding_mode=text_decoder_position_embedding_mode,
+                use_image_position_embeddings=text_decoder_use_image_position_embeddings,
+                use_distinct_media_tokens=text_decoder_use_distinct_media_tokens,
                 gradient_checkpointing=text_decoder_gradient_checkpointing,
                 packed_attention_backend=text_decoder_packed_attention_backend,
                 natten_native_rms_norm=text_decoder_natten_native_rms_norm,
@@ -1825,12 +1880,17 @@ class AutoencoderKL(ModelMixin, ConfigMixin, FromOriginalModelMixin):
             module.gradient_checkpointing = value
 
     def enable_slicing(self) -> None:
-        """Enable sliced VAE decoding for memory efficiency."""
+        """Enable per-sample VAE encoding and decoding for memory efficiency."""
         self.use_slicing = True
 
     def disable_slicing(self) -> None:
         """Disable sliced VAE decoding."""
         self.use_slicing = False
+
+    @staticmethod
+    def _has_empty_batch_elements(value: SparseTensor) -> bool:
+        """Return whether a sparse batch contains an element with no rows."""
+        return any(batch_slice.start >= batch_slice.stop for batch_slice in value.layout)
 
     def _frame_count_to_latent_steps(self, frame_count: int, name: str, *, allow_zero: bool = False) -> int:
         """Convert a raw frame count to latent temporal steps with strict divisibility checks."""
@@ -1856,6 +1916,65 @@ class AutoencoderKL(ModelMixin, ConfigMixin, FromOriginalModelMixin):
             and not x.has_special_tokens()
             and all(getattr(block, "multiscale", None) is None for block in self.encoder.blocks)
         )
+
+    def _call_main_encoder(
+        self,
+        x: SparseTensor,  # [B,*S,C]
+    ) -> tuple[SparseTensor, dict[str, SparseTensor]]:
+        """Call the non-pooling encoder while honoring the frozen-encoder mode."""
+        if self.freeze_encoder:
+            with torch.no_grad():
+                result = self.encoder(x)  # [B,*S,D], cache
+        else:
+            result = self.encoder(x)  # [B,*S,D], cache
+        return cast(tuple[SparseTensor, dict[str, SparseTensor]], result)
+
+    def _should_use_call_local_encoder_mlp_checkpoint(self, x: SparseTensor) -> bool:  # x: [B,*S,C]
+        """Return whether this physical encoder call fits the configured token bound."""
+        max_tokens = self.encoder_mlp_only_checkpoint_max_tokens
+        if (
+            max_tokens is None
+            or not self.encoder.training
+            or not torch.is_grad_enabled()
+            or x.feats.shape[0] > max_tokens
+        ):
+            return False
+        if not self.encoder.use_checkpoint or any(
+            not block.training or not block.use_checkpoint for block in self.encoder.blocks
+        ):
+            raise RuntimeError(
+                "Call-local encoder MLP-only checkpointing requires the encoder and every block to be in "
+                "training mode with checkpointing enabled."
+            )
+        return True
+
+    def _run_main_encoder(
+        self,
+        x: SparseTensor,  # [B,*S,C]
+    ) -> tuple[SparseTensor, dict[str, SparseTensor]]:
+        """Run one physical encoder call with a temporary token-gated checkpoint scope."""
+        if not self._should_use_call_local_encoder_mlp_checkpoint(x):
+            return self._call_main_encoder(x)
+
+        original_encoder_scope = self.encoder.gradient_checkpoint_scope
+        original_block_scopes = tuple(block.gradient_checkpoint_scope for block in self.encoder.blocks)
+        if original_encoder_scope != SPARSE_TRANSFORMER_CHECKPOINT_SCOPE_FULL_LAYER or any(
+            scope != SPARSE_TRANSFORMER_CHECKPOINT_SCOPE_FULL_LAYER for scope in original_block_scopes
+        ):
+            raise RuntimeError(
+                "Call-local encoder MLP-only checkpointing requires the encoder and every block to be in "
+                "full_layer checkpoint scope before the physical call."
+            )
+
+        try:
+            self.encoder.gradient_checkpoint_scope = SPARSE_TRANSFORMER_CHECKPOINT_SCOPE_MLP_ONLY
+            for block in self.encoder.blocks:
+                block.gradient_checkpoint_scope = SPARSE_TRANSFORMER_CHECKPOINT_SCOPE_MLP_ONLY
+            return self._call_main_encoder(x)
+        finally:
+            self.encoder.gradient_checkpoint_scope = original_encoder_scope
+            for block, scope in zip(self.encoder.blocks, original_block_scopes, strict=True):
+                block.gradient_checkpoint_scope = scope
 
     @staticmethod
     def _pack_independent_temporal_batches(x: SparseTensor, frame_batch_size: int) -> SparseTensor:
@@ -1899,11 +2018,7 @@ class AutoencoderKL(ModelMixin, ConfigMixin, FromOriginalModelMixin):
     def _encode_fused_temporal_batches(self, x: SparseTensor, frame_batch_size: int) -> SparseTensor:
         """Encode independent temporal chunks once and restore the original sparse metadata."""
         packed_x = self._pack_independent_temporal_batches(x, frame_batch_size)
-        if self.freeze_encoder:
-            with torch.no_grad():
-                packed_encoded, _ = self.encoder(packed_x)
-        else:
-            packed_encoded, _ = self.encoder(packed_x)
+        packed_encoded, _ = self._run_main_encoder(packed_x)
         if packed_encoded.feats.shape[0] != x.feats.shape[0]:
             raise RuntimeError(
                 "Fused temporal encoder must preserve sparse row count, got "
@@ -1972,11 +2087,23 @@ class AutoencoderKL(ModelMixin, ConfigMixin, FromOriginalModelMixin):
             raise RuntimeError("Fused temporal decoder must preserve packed coordinate and row-layout identity.")
         return z.replace(packed_decoded.feats)
 
+    def _get_encode_frame_batch_size(self) -> int:
+        """Resolve one encoder temporal-window size for the complete public encode call."""
+        if self.training and self.random_num_sample_frames_batch_sizes is not None:
+            num_sample_frames_batch_size = np.random.choice(self.random_num_sample_frames_batch_sizes)
+        else:
+            num_sample_frames_batch_size = self.num_sample_frames_batch_size
+        return self._frame_count_to_latent_steps(
+            int(num_sample_frames_batch_size),
+            "num_sample_frames_batch_size",
+        )
+
     def _encode(
         self,
         x: SparseTensor,
         normalize: bool = False,
         compute_image_feat: bool = True,
+        frame_batch_size: int | None = None,
     ) -> tuple[SparseTensor, torch.Tensor | None, SparseTensor]:
         """Internal encode method with temporal batching.
 
@@ -1985,19 +2112,14 @@ class AutoencoderKL(ModelMixin, ConfigMixin, FromOriginalModelMixin):
             normalize: Whether to normalize image features.
             compute_image_feat: Whether to compute image features via encoder.head.
                 Set to False for reconstruction-only tasks to save computation.
+            frame_batch_size: Optional pre-resolved temporal window in latent
+                steps. Sliced execution passes one shared value for every sample.
 
         Returns:
             Tuple of (projected latent, image features or None, unprojected encoder output).
         """
-        if self.training and self.random_num_sample_frames_batch_sizes is not None:
-            num_sample_frames_batch_size = np.random.choice(self.random_num_sample_frames_batch_sizes)
-        else:
-            num_sample_frames_batch_size = self.num_sample_frames_batch_size
-
-        frame_batch_size = self._frame_count_to_latent_steps(
-            int(num_sample_frames_batch_size),
-            "num_sample_frames_batch_size",
-        )
+        if frame_batch_size is None:
+            frame_batch_size = self._get_encode_frame_batch_size()
 
         if self.training and self._can_fuse_encoder_temporal_batches(x):
             enc_full = self._encode_fused_temporal_batches(x, frame_batch_size)
@@ -2007,11 +2129,7 @@ class AutoencoderKL(ModelMixin, ConfigMixin, FromOriginalModelMixin):
 
             for x_slice in temporal_slices:
                 if x_slice.coords.shape[0] > 0:
-                    if self.freeze_encoder:
-                        with torch.no_grad():
-                            enc_slice, _ = self.encoder(x_slice)
-                    else:
-                        enc_slice, _ = self.encoder(x_slice)
+                    enc_slice, _ = self._run_main_encoder(x_slice)
                     processed_slices.append(enc_slice)
                 else:
                     processed_slices.append(x_slice)
@@ -2033,6 +2151,39 @@ class AutoencoderKL(ModelMixin, ConfigMixin, FromOriginalModelMixin):
         enc_proj = self.proj(enc_full)
 
         return enc_proj, image_feat, enc_full
+
+    def _encode_sliced_batch(
+        self,
+        sparse_inputs: list[SparseTensor],
+        *,
+        normalize: bool,
+        compute_image_feat: bool,
+        frame_batch_size: int,
+    ) -> tuple[SparseTensor, torch.Tensor | None, SparseTensor]:
+        """Encode single-sample sparse inputs and merge them back into one batch."""
+        encoded_slices = [
+            self._encode(
+                sparse_input,
+                normalize=normalize,
+                compute_image_feat=compute_image_feat,
+                frame_batch_size=frame_batch_size,
+            )
+            for sparse_input in sparse_inputs
+        ]  # tuple[[1,*S,2L], [1,D] | None, [1,*S,C]] per element
+        encoded = sparse_cat([encoded_slice[0] for encoded_slice in encoded_slices], dim=0)  # [B,*S,2L]
+        encoder_output = sparse_cat(
+            [encoded_slice[2] for encoded_slice in encoded_slices],
+            dim=0,
+        )  # [B,*S,C]
+        image_features: torch.Tensor | None = None
+        if compute_image_feat:
+            image_feature_slices = [
+                encoded_slice[1] for encoded_slice in encoded_slices if encoded_slice[1] is not None
+            ]  # [1,D] per element
+            if len(image_feature_slices) != len(encoded_slices):
+                raise RuntimeError("Sliced encoder did not return image features for every batch element.")
+            image_features = cat_with_bounded_inputs(image_feature_slices, dim=0)  # [B,D]
+        return encoded, image_features, encoder_output
 
     @apply_forward_hook
     def encode(
@@ -2056,28 +2207,61 @@ class AutoencoderKL(ModelMixin, ConfigMixin, FromOriginalModelMixin):
         """
         del return_dict
         if self.use_slicing and isinstance(x, torch.Tensor) and x.shape[0] > 1:
-            raise ValueError("Legacy tensor slicing not implemented yet")
+            frame_batch_size = self._get_encode_frame_batch_size()
+            sparse_inputs: list[SparseTensor] = []
+            for batch_index in range(x.shape[0]):
+                batch_tensor = x[batch_index : batch_index + 1]  # [1,*S,C]
+                sparse_input = batch_tensor_to_sparse(batch_tensor, self.patch_size)  # [1,*S,C]
+                sparse_inputs.append(sparse_input)
+            return self._encode_sliced_batch(
+                sparse_inputs,
+                normalize=normalize,
+                compute_image_feat=compute_image_feat,
+                frame_batch_size=frame_batch_size,
+            )
 
-        if isinstance(x, torch.Tensor):
-            x = batch_tensor_to_sparse(x, self.patch_size)
+        should_slice_sparse_batch = self.use_slicing and isinstance(x, SparseTensor) and x.shape[0] > 1
+        has_empty_batch_elements = should_slice_sparse_batch and self._has_empty_batch_elements(x)
+        if should_slice_sparse_batch and has_empty_batch_elements:
+            logging.warning(
+                "VAE slicing is enabled, but the sparse encode batch contains empty elements; "
+                "falling back to whole-batch execution."
+            )
 
-        x, image_feat, x_no_proj = self._encode(x, normalize=normalize, compute_image_feat=compute_image_feat)
-        return x, image_feat, x_no_proj
+        if should_slice_sparse_batch and not has_empty_batch_elements:
+            frame_batch_size = self._get_encode_frame_batch_size()
+            sparse_inputs = [x[batch_index] for batch_index in range(x.shape[0])]  # [1,*S,C] per element
+            return self._encode_sliced_batch(
+                sparse_inputs,
+                normalize=normalize,
+                compute_image_feat=compute_image_feat,
+                frame_batch_size=frame_batch_size,
+            )
+
+        sparse_input = batch_tensor_to_sparse(x, self.patch_size) if isinstance(x, torch.Tensor) else x  # [B,*S,C]
+
+        encoded, image_features, encoder_output = self._encode(
+            sparse_input,
+            normalize=normalize,
+            compute_image_feat=compute_image_feat,
+        )
+        return encoded, image_features, encoder_output
 
     def _decode(
         self,
         z: SparseTensor,
-        return_dict: bool = True,
         training: bool = True,
         discrete_decoder: bool = False,
-    ) -> DecoderOutput | SparseTensor:
+        temporal_plan: tuple[int, int, int, bool] | None = None,
+    ) -> DecoderOutput:
         """Internal decode method with temporal batching or causal-mask decoding.
 
         Args:
             z: Latent SparseTensor.
-            return_dict: Whether to return DecoderOutput.
             training: Whether in training mode.
             discrete_decoder: Whether to use discrete decoder.
+            temporal_plan: Optional pre-resolved temporal scheduling shared by
+                every sample in a sliced public decode call.
 
         Returns:
             Decoded output.
@@ -2100,15 +2284,14 @@ class AutoencoderKL(ModelMixin, ConfigMixin, FromOriginalModelMixin):
                 temporal_causal_mask=True,
             )
 
-            if not return_dict:
-                return (dec,)
-
             return DecoderOutput(sample=dec)
 
-        frame_batch_size, frame_batch_strides, kv_cache_size, kv_cache_detach = self._get_decode_temporal_plan(
-            z=z,
-            training=training,
-        )
+        if temporal_plan is None:
+            temporal_plan = self._get_decode_temporal_plan(
+                z=z,
+                training=training,
+            )
+        frame_batch_size, frame_batch_strides, kv_cache_size, kv_cache_detach = temporal_plan
 
         if self._can_fuse_decoder_temporal_batches(
             z,
@@ -2164,9 +2347,6 @@ class AutoencoderKL(ModelMixin, ConfigMixin, FromOriginalModelMixin):
                 target_coords=z.coords,
                 use_cached_offsets=True,
             )
-
-        if not return_dict:
-            return (dec,)
 
         return DecoderOutput(sample=dec)
 
@@ -2263,23 +2443,69 @@ class AutoencoderKL(ModelMixin, ConfigMixin, FromOriginalModelMixin):
         return_batched_tensor: bool = False,
         training: bool = True,
         discrete_decoder: bool = False,
-    ) -> DecoderOutput | SparseTensor:
+    ) -> DecoderOutput | tuple[SparseTensor | torch.Tensor | list[torch.Tensor]]:
         """Decode latent representation.
 
         Args:
-            z: Latent tensor or SparseTensor.
+            z: Latent SparseTensor. Dense tensors are rejected with an actionable error.
             return_dict: Whether to return DecoderOutput.
-            return_batched_tensor: Whether to return as batched tensor.
+            return_batched_tensor: Whether to convert sparse output to a dense tensor,
+                or a list when batch element shapes differ.
             training: Whether in training mode.
             discrete_decoder: Whether to use discrete decoder.
 
         Returns:
             Decoded output.
         """
-        if self.use_slicing and isinstance(z, torch.Tensor) and z.shape[0] > 1:
-            raise ValueError("Legacy tensor slicing not implemented yet")
+        if isinstance(z, torch.Tensor):
+            raise ValueError(
+                "Dense tensor latent decoding is not supported. Convert the latent grid to a SparseTensor first."
+            )
+
+        should_slice_batch = self.use_slicing and z.shape[0] > 1
+        has_empty_batch_elements = should_slice_batch and self._has_empty_batch_elements(z)
+        if should_slice_batch and has_empty_batch_elements:
+            logging.warning(
+                "VAE slicing is enabled, but the sparse decode batch contains empty elements; "
+                "falling back to whole-batch execution."
+            )
+
+        if should_slice_batch and not has_empty_batch_elements:
+            decoder_temporal_mode = (
+                "causal_mask" if self.decoder_temporal_mode == "causal" else self.decoder_temporal_mode
+            )
+            temporal_plan = (
+                None
+                if decoder_temporal_mode == "causal_mask" and training
+                else self._get_decode_temporal_plan(z=z, training=training)
+            )
+            decoded_slices: list[SparseTensor] = []
+            for batch_index in range(z.shape[0]):
+                latent_slice = z[batch_index]  # [1,*S,C]
+                decoded_output = self._decode(
+                    latent_slice,
+                    training=training,
+                    discrete_decoder=discrete_decoder,
+                    temporal_plan=temporal_plan,
+                )
+                if not isinstance(decoded_output, DecoderOutput):
+                    raise TypeError("Internal sliced decoding must return DecoderOutput.")
+                decoded_slice = decoded_output.sample  # [1,*S,Cout]
+                if not isinstance(decoded_slice, SparseTensor):
+                    raise TypeError(
+                        f"Sliced sparse decoding must return a SparseTensor, got {type(decoded_slice).__name__}."
+                    )
+                decoded_slices.append(decoded_slice)
+            decoded = sparse_cat(decoded_slices, dim=0)  # [B,*S,Cout]
         else:
-            decoded = self._decode(z, training=training, discrete_decoder=discrete_decoder).sample
+            decoded_output = self._decode(
+                z,
+                training=training,
+                discrete_decoder=discrete_decoder,
+            )
+            if not isinstance(decoded_output, DecoderOutput):
+                raise TypeError("Internal decoding must return DecoderOutput.")
+            decoded = decoded_output.sample  # [B,*S,Cout]
 
         if return_batched_tensor and isinstance(decoded, SparseTensor):
             patch_volume = int(np.prod(self.patch_size))
@@ -2290,7 +2516,7 @@ class AutoencoderKL(ModelMixin, ConfigMixin, FromOriginalModelMixin):
                 if decoded.shape[1] == 1:
                     decoded = decoded.squeeze(1)
             else:
-                decoded_list = sparse_to_img_list(decoded, self.patch_size)
+                decoded_list = sparse_to_img_list(decoded, self.patch_size, channels=channels)
                 if len(set(x.shape for x in decoded_list)) > 1:
                     logging.warning(f"Decoded shapes are not the same: {[x.shape for x in decoded_list]}")
                     decoded = decoded_list

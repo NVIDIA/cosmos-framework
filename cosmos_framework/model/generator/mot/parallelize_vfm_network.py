@@ -7,7 +7,7 @@ from torch.distributed.fsdp import fully_shard, register_fsdp_forward_method
 from cosmos_framework.configs.base.defaults.activation_checkpointing import ActivationCheckpointingConfig
 from cosmos_framework.configs.base.defaults.compile import CompileConfig
 from cosmos_framework.model.generator.mot.parallelize_unified_mot import parallelize_unified_mot
-from cosmos_framework.utils.generator.parallelism import ParallelDims
+from cosmos_framework.utils.generator.parallelism import ParallelDims, fsdp_mesh
 
 
 def apply_compile(model: torch.nn.Module, config: CompileConfig):
@@ -84,9 +84,12 @@ def parallelize_vfm_network(
         # Collect parameters to ignore during FSDP wrapping
         ignored_params = set()
 
+        # Same mesh as the per-block wrapping in ``parallelize_unified_mot.apply_fsdp`` (see
+        # ``fsdp_mesh``): the root and the blocks must agree, or one model ends up with a
+        # mix of HSDP and pure-FSDP units whose gradient reductions differ.
         model = fully_shard(
             module=model,
-            mesh=parallel_dims.dp_mesh,
+            mesh=fsdp_mesh(parallel_dims),
             ignored_params=ignored_params,
         )
 

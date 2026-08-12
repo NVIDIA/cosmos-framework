@@ -3,6 +3,7 @@
 
 """Runtime SequencePack helpers used by attention and context parallel paths."""
 
+import math
 from dataclasses import dataclass
 from typing import Any, List, Tuple
 
@@ -45,6 +46,8 @@ class SequencePackMetadata:
     full_indices: torch.Tensor
     causal_seq_offsets: torch.Tensor
     full_only_seq_offsets: torch.Tensor
+    causal_sample_ids: torch.Tensor  # [N_causal_tokens]
+    full_only_sample_ids: torch.Tensor  # [N_full_tokens]
     num_causal_tokens: int
     num_full_tokens: int
 
@@ -74,6 +77,8 @@ class SequencePackMetadata:
             "_full_indices": self.full_indices,
             "_causal_seq_offsets": self.causal_seq_offsets,
             "_full_only_seq_offsets": self.full_only_seq_offsets,
+            "_causal_sample_ids": self.causal_sample_ids,
+            "_full_only_sample_ids": self.full_only_sample_ids,
             "_num_causal_tokens": self.num_causal_tokens,
             "_num_full_tokens": self.num_full_tokens,
             "split_lens": list(self.split_lens),
@@ -125,55 +130,87 @@ def _compute_mode_indices_and_offsets(
     if isinstance(split_lens, torch.Tensor):
         split_lens = split_lens.tolist()
 
-    for i, (split_len, attn_mode) in enumerate(zip(split_lens, attn_modes)):
+    for split_len, attn_mode in zip(split_lens, attn_modes):
         if attn_mode == mode:
             indices.extend(range(start, start + split_len))
             next_offset += split_len
             offsets.append(next_offset)
         start += split_len
-    return torch.tensor(indices, dtype=torch.int32, device=device), torch.tensor(  # [N_mode_tokens], [N_mode_splits+1]
-        offsets, dtype=torch.int32, device=device
-    )
+
+    return (
+        torch.tensor(indices, dtype=torch.int32, device=device),
+        torch.tensor(offsets, dtype=torch.int32, device=device),
+    )  # [N_mode_tokens], [N_mode_splits+1]
 
 
-# Pad causal_seq and full_only_seq to have length 2048 if not already at that size
-def _pad_to_N(N, x: torch.Tensor) -> torch.Tensor:
-    assert x.shape[0] <= N
-    padded = x.new_zeros((N, *x.shape[1:]))
-    padded[: x.shape[0]] = x
-    return padded
+def _get_padded_size(n: int, cp_world_size: int = 1, pad_for_cuda_graphs: bool = False, alignment: int = 1) -> int:
+    """Return the length a stream of ``n`` tokens has to be padded to.
 
-
-def _round_up_to_N(n: int, cp_world_size: int = 1, pad_for_cuda_graphs: bool = False) -> int:
+    ``alignment`` is the caller's own requirement on the padded length (e.g. the
+    FlexAttention block size for the GEN stream); CUDA-graph bucketing and CP
+    divisibility are folded into it so the result satisfies all three at once.
+    """
     if pad_for_cuda_graphs:
         # Reduce recompilations / CUDA graph re-captures by bucketing lengths.
         # <= 2K: 128,  <= 4K: 256,  <= 8K: 512,  <= 16K: 1024,  > 16K: 2048
         if n <= 2048:
-            alignment = 128
+            bucket = 128
         elif n <= 4096:
-            alignment = 256
+            bucket = 256
         elif n <= 8192:
-            alignment = 512
+            bucket = 512
         elif n <= 16384:
-            alignment = 1024
+            bucket = 1024
         else:
-            alignment = 2048
-        n = ((n + alignment - 1) // alignment) * alignment
+            bucket = 2048
+        alignment = math.lcm(alignment, bucket)
 
     # ensure it's divisible by cp_world_size
     if cp_world_size > 1:
-        remainder = n % cp_world_size
-        if remainder != 0:
-            n += cp_world_size - remainder
+        alignment = math.lcm(alignment, cp_world_size)
+
+    if alignment > 1:
+        n = ((n + alignment - 1) // alignment) * alignment
 
     return n
 
 
-def _pad(
-    causal_seq: torch.Tensor, full_only_seq: torch.Tensor, max_causal_len: int, max_full_len: int
+# The only place padding is materialised: _get_padded_size (plus _grow_cuda_graph_bounds
+# under CUDA graphs) decides the target length, this zero-fills a stream up to it.
+def _pad_to_size(size: int, x: torch.Tensor, pad_value: int | float = 0) -> torch.Tensor:
+    assert x.shape[0] <= size
+    padded = x.new_full((size, *x.shape[1:]), pad_value)  # [size,...]
+    padded[: x.shape[0]] = x
+    return padded
+
+
+def _pad_stream_and_sample_ids(
+    sequence: torch.Tensor,  # [N,...]
+    sample_ids: torch.Tensor,  # [N]
+    padded_len: int,
+    padding_sample_id: int,
 ) -> tuple[torch.Tensor, torch.Tensor]:
-    causal_seq = _pad_to_N(max_causal_len, causal_seq)
-    full_only_seq = _pad_to_N(max_full_len, full_only_seq)
+    """Pad one token stream and its per-token sample IDs to the same length."""
+    assert sequence.shape[0] == sample_ids.shape[0]
+    sequence = _pad_to_size(padded_len, sequence)  # [N_padded,...]
+    sample_ids = _pad_to_size(padded_len, sample_ids, pad_value=padding_sample_id)  # [N_padded]
+    return sequence, sample_ids
+
+
+def _append_pad_segment(offsets: torch.Tensor, padded_len: int) -> torch.Tensor:
+    """Return ``offsets`` with ``padded_len`` appended, adding a final segment for the padding.
+
+    ``offsets`` ends at the real token count, so the appended entry describes exactly the rows
+    that :func:`_pad_to_size` zero-filled.
+    """
+    return torch.cat((offsets, offsets.new_full((1,), padded_len)))
+
+
+def _pad(
+    causal_seq: torch.Tensor, full_only_seq: torch.Tensor, padded_causal_len: int, padded_full_len: int
+) -> tuple[torch.Tensor, torch.Tensor]:
+    causal_seq = _pad_to_size(padded_causal_len, causal_seq)
+    full_only_seq = _pad_to_size(padded_full_len, full_only_seq)
     return causal_seq, full_only_seq
 
 
@@ -207,9 +244,17 @@ def _build_sequence_pack_metadata(
 
     sample_lens_cu = torch.tensor([0] + sample_lens, device=device, dtype=torch.int32)  # [N_samples+1]
     _sample_offsets = torch.cumsum(sample_lens_cu, dim=0, dtype=torch.int32)  # [N_samples+1]
+    sample_lens_tensor = torch.tensor(sample_lens, device=device, dtype=torch.int64)  # [N_samples]
+    sample_ids = torch.repeat_interleave(
+        torch.arange(len(sample_lens), device=device, dtype=torch.int64),
+        sample_lens_tensor,
+        output_size=sum(sample_lens),
+    )  # [N_tokens]
 
     _causal_indices, _causal_seq_offsets = _compute_mode_indices_and_offsets(split_lens, attn_modes, "causal", device)
     _full_indices, _full_only_seq_offsets = _compute_mode_indices_and_offsets(split_lens, attn_modes, "full", device)
+    _causal_sample_ids = sample_ids[_causal_indices]  # [N_causal_tokens]
+    _full_only_sample_ids = sample_ids[_full_indices]  # [N_full_tokens]
 
     return SequencePackMetadata(
         sample_lens=tuple(sample_lens),
@@ -224,6 +269,8 @@ def _build_sequence_pack_metadata(
         full_indices=_full_indices,
         causal_seq_offsets=_causal_seq_offsets,
         full_only_seq_offsets=_full_only_seq_offsets,
+        causal_sample_ids=_causal_sample_ids,
+        full_only_sample_ids=_full_only_sample_ids,
         num_causal_tokens=len(_causal_indices),
         num_full_tokens=len(_full_indices),
     )
@@ -251,50 +298,29 @@ def prepare_sequence_pack_metadata(
 # ------------------------------------
 
 
-def _round_up_for_cuda_graphs_or_cp(
-    causal_seq: torch.Tensor,
-    full_only_seq: torch.Tensor,
-    need_causal: int,
-    need_full: int,
-    is_image_batch: bool,
-    pad_for_cuda_graphs: bool,
-) -> tuple[torch.Tensor, torch.Tensor]:
-    """Pad causal/full sequences to the required lengths, growing global bounds for CUDA graphs."""
-    if pad_for_cuda_graphs:
-        global \
-            MAX_CAUSAL_LEN_IMAGE_BATCH, \
-            MAX_FULL_LEN_IMAGE_BATCH, \
-            MAX_CAUSAL_LEN_VIDEO_BATCH, \
-            MAX_FULL_LEN_VIDEO_BATCH
-        if is_image_batch:
-            if need_causal > MAX_CAUSAL_LEN_IMAGE_BATCH:
-                MAX_CAUSAL_LEN_IMAGE_BATCH = need_causal
-                log.info(f"Growing MAX_CAUSAL_LEN_IMAGE_BATCH to {MAX_CAUSAL_LEN_IMAGE_BATCH}", rank0_only=False)
-            if need_full > MAX_FULL_LEN_IMAGE_BATCH:
-                MAX_FULL_LEN_IMAGE_BATCH = need_full
-                log.info(f"Growing MAX_FULL_LEN_IMAGE_BATCH to {MAX_FULL_LEN_IMAGE_BATCH}", rank0_only=False)
-            causal_seq, full_only_seq = _pad(
-                causal_seq,
-                full_only_seq,
-                max_causal_len=MAX_CAUSAL_LEN_IMAGE_BATCH,
-                max_full_len=MAX_FULL_LEN_IMAGE_BATCH,
-            )
-        else:
-            if need_causal > MAX_CAUSAL_LEN_VIDEO_BATCH:
-                MAX_CAUSAL_LEN_VIDEO_BATCH = need_causal
-                log.info(f"Growing MAX_CAUSAL_LEN_VIDEO_BATCH to {MAX_CAUSAL_LEN_VIDEO_BATCH}", rank0_only=False)
-            if need_full > MAX_FULL_LEN_VIDEO_BATCH:
-                MAX_FULL_LEN_VIDEO_BATCH = need_full
-                log.info(f"Growing MAX_FULL_LEN_VIDEO_BATCH to {MAX_FULL_LEN_VIDEO_BATCH}", rank0_only=False)
-            causal_seq, full_only_seq = _pad(
-                causal_seq,
-                full_only_seq,
-                max_causal_len=MAX_CAUSAL_LEN_VIDEO_BATCH,
-                max_full_len=MAX_FULL_LEN_VIDEO_BATCH,
-            )
-    elif need_causal != int(causal_seq.shape[0]) or need_full != int(full_only_seq.shape[0]):
-        causal_seq, full_only_seq = _pad(causal_seq, full_only_seq, need_causal, need_full)
-    return causal_seq, full_only_seq
+def _grow_cuda_graph_bounds(need_causal: int, need_full: int, is_image_batch: bool) -> tuple[int, int]:
+    """Raise the per-batch-kind high-water marks to cover ``need_*`` and return them.
+
+    CUDA graphs are captured per shape, so every step has to pad to the largest length
+    seen so far rather than to its own length: the marks only ever grow.
+    """
+    global MAX_CAUSAL_LEN_IMAGE_BATCH, MAX_FULL_LEN_IMAGE_BATCH, MAX_CAUSAL_LEN_VIDEO_BATCH, MAX_FULL_LEN_VIDEO_BATCH
+    if is_image_batch:
+        if need_causal > MAX_CAUSAL_LEN_IMAGE_BATCH:
+            MAX_CAUSAL_LEN_IMAGE_BATCH = need_causal
+            log.info(f"Growing MAX_CAUSAL_LEN_IMAGE_BATCH to {MAX_CAUSAL_LEN_IMAGE_BATCH}", rank0_only=False)
+        if need_full > MAX_FULL_LEN_IMAGE_BATCH:
+            MAX_FULL_LEN_IMAGE_BATCH = need_full
+            log.info(f"Growing MAX_FULL_LEN_IMAGE_BATCH to {MAX_FULL_LEN_IMAGE_BATCH}", rank0_only=False)
+        return MAX_CAUSAL_LEN_IMAGE_BATCH, MAX_FULL_LEN_IMAGE_BATCH
+
+    if need_causal > MAX_CAUSAL_LEN_VIDEO_BATCH:
+        MAX_CAUSAL_LEN_VIDEO_BATCH = need_causal
+        log.info(f"Growing MAX_CAUSAL_LEN_VIDEO_BATCH to {MAX_CAUSAL_LEN_VIDEO_BATCH}", rank0_only=False)
+    if need_full > MAX_FULL_LEN_VIDEO_BATCH:
+        MAX_FULL_LEN_VIDEO_BATCH = need_full
+        log.info(f"Growing MAX_FULL_LEN_VIDEO_BATCH to {MAX_FULL_LEN_VIDEO_BATCH}", rank0_only=False)
+    return MAX_CAUSAL_LEN_VIDEO_BATCH, MAX_FULL_LEN_VIDEO_BATCH
 
 
 def sequence_pack_from_packed_sequence(
@@ -307,6 +333,8 @@ def sequence_pack_from_packed_sequence(
     is_image_batch: bool = False,
     cp_world_size: int = 1,
     pad_for_cuda_graphs: bool = False,
+    full_seq_alignment: int = 1,
+    causal_seq_alignment: int = 1,
     prepared_metadata: SequencePackMetadata | None = None,
 ) -> SequencePack:
     """
@@ -322,6 +350,13 @@ def sequence_pack_from_packed_sequence(
         sample_lens (List[int]): Length of each sequence. len(sample_lens) == number of samples.
         packed_und_token_indexes (torch.Tensor): The indexes of the understanding tokens in the packed sequence.
         packed_gen_token_indexes (torch.Tensor): The indexes of the generating tokens in the packed sequence.
+        full_seq_alignment (int): Pad the full (GEN) stream to a multiple of this. FlexAttention
+            requires a block-aligned GEN length; satisfying it here means the attention path never
+            has to re-pad q/k/v and metadata per layer.
+        causal_seq_alignment (int): Pad the causal (UND) stream to a multiple of this. The fused
+            FlexAttention path keys GEN queries against ``[UND | GEN]``, so the UND stream needs the
+            same block alignment as the GEN one for the boundary between them to fall on a block
+            boundary.
     """
     del packed_gen_token_indexes
 
@@ -343,26 +378,92 @@ def sequence_pack_from_packed_sequence(
     meta = prepared_metadata.as_sequence_pack_fields()
     causal_seq = packed_sequence[meta["_causal_indices"]]  # [N_causal_tokens,D]
     full_only_seq = packed_sequence[meta["_full_indices"]]  # [N_full_tokens,D]
+    causal_sample_ids = meta["_causal_sample_ids"]  # [N_causal_tokens]
+    full_only_sample_ids = meta["_full_only_sample_ids"]  # [N_full_tokens]
 
-    need_causal = _round_up_to_N(int(causal_seq.shape[0]), cp_world_size, pad_for_cuda_graphs)
-    need_full = _round_up_to_N(int(full_only_seq.shape[0]), cp_world_size, pad_for_cuda_graphs)
+    # Decide the padded lengths, then materialise them once.
+    len_causal = int(causal_seq.shape[0])
+    len_full = int(full_only_seq.shape[0])
+    need_causal = _get_padded_size(len_causal, cp_world_size, pad_for_cuda_graphs, causal_seq_alignment)
+    need_full = _get_padded_size(len_full, cp_world_size, pad_for_cuda_graphs, full_seq_alignment)
+    if pad_for_cuda_graphs:
+        need_causal, need_full = _grow_cuda_graph_bounds(need_causal, need_full, is_image_batch)
 
-    causal_seq, full_only_seq = _round_up_for_cuda_graphs_or_cp(
-        causal_seq,
-        full_only_seq,
-        need_causal,
-        need_full,
-        is_image_batch,
-        pad_for_cuda_graphs,
+    # The pad segment below pairs the two streams segment for segment, so it only applies when
+    # they have the same, non-zero segment count, i.e. every sample contributes both a causal and
+    # a full split. The AR no-text packs carry full splits only (see
+    # test_init_sequence_pack_no_causal_splits), and keep the plain lengths and offsets.
+    pad_segment_supported = (
+        meta["_causal_seq_offsets"].shape[0] == meta["_full_only_seq_offsets"].shape[0]
+        and meta["_causal_seq_offsets"].shape[0] > 1
     )
+
+    # Attention sees the padding as a trailing segment of its own (see the offsets below), and
+    # that segment has to be non-empty on both streams: the gen->und pass pairs GEN queries with
+    # und keys, and an empty key range would turn those rows into an empty softmax. So once
+    # either stream is padded, give both at least one padded row, re-rounded so the alignment
+    # and CUDA-graph bucketing still hold.
+    if pad_segment_supported and (need_causal > len_causal or need_full > len_full):
+        need_causal = max(
+            need_causal, _get_padded_size(len_causal + 1, cp_world_size, pad_for_cuda_graphs, causal_seq_alignment)
+        )
+        need_full = max(
+            need_full, _get_padded_size(len_full + 1, cp_world_size, pad_for_cuda_graphs, full_seq_alignment)
+        )
+        if pad_for_cuda_graphs:
+            # Re-grow the marks so they still cover the bumped lengths and captured shapes hold.
+            need_causal, need_full = _grow_cuda_graph_bounds(need_causal, need_full, is_image_batch)
+
+    if need_causal != len_causal or need_full != len_full:
+        padding_sample_id = meta["sample_offsets"].shape[0] - 1
+        causal_seq, causal_sample_ids = _pad_stream_and_sample_ids(
+            causal_seq,
+            causal_sample_ids,
+            need_causal,
+            padding_sample_id,
+        )
+        full_only_seq, full_only_sample_ids = _pad_stream_and_sample_ids(
+            full_only_seq,
+            full_only_sample_ids,
+            need_full,
+            padding_sample_id,
+        )
 
     pack: SequencePack = {
         **meta,
         "max_num_tokens": sum(sample_lens),
         "causal_seq": causal_seq,
         "full_only_seq": full_only_seq,
+        "_causal_sample_ids": causal_sample_ids,
+        "_full_only_sample_ids": full_only_sample_ids,
         "is_sharded": False,
     }
+
+    # Trailing padding rows belong to no sample, and varlen attention leaves rows outside its
+    # cumulative ranges unwritten in both directions: the forward output rows keep whatever was
+    # in the buffer, and the backward skips the matching dq/dk/dv rows, which then reach the
+    # projection weight gradients with no zero factor to cancel them. So describe the padding as
+    # one extra trailing segment per stream -- the offsets already end at the real token count,
+    # so appending the padded length is enough. Padding then attends only to padding, every real
+    # query keeps its exact range, and both streams gain the same one extra segment, which keeps
+    # the query and key segment counts equal for the gen->und pass. No real sample grows, so each
+    # maximum is whichever is longer, the longest real sample or the padding itself.
+    pad_causal = int(causal_seq.shape[0]) - meta["_num_causal_tokens"]
+    pad_full = int(full_only_seq.shape[0]) - meta["_num_full_tokens"]
+    if pad_segment_supported and (pad_causal > 0 or pad_full > 0):
+        assert pad_causal > 0 and pad_full > 0, (
+            "Padding must land on both streams so the pad segment is non-empty on every side, "
+            f"got pad_causal={pad_causal}, pad_full={pad_full}."
+        )
+        pack["_causal_seq_offsets_pad_segment"] = _append_pad_segment(
+            meta["_causal_seq_offsets"], int(causal_seq.shape[0])
+        )
+        pack["max_causal_len_pad_segment"] = max(meta["max_causal_len"], pad_causal)
+        pack["_full_only_seq_offsets_pad_segment"] = _append_pad_segment(
+            meta["_full_only_seq_offsets"], int(full_only_seq.shape[0])
+        )
+        pack["max_full_len_pad_segment"] = max(meta["max_full_len"], pad_full)
+
     return pack
 
 
@@ -408,8 +509,8 @@ def from_all_seq(packed_sequence: torch.Tensor, metadata_source: SequencePack) -
         causal_seq, full_only_seq = _pad(
             causal_seq,
             full_only_seq,
-            max_causal_len=metadata_source["causal_seq"].shape[0],
-            max_full_len=metadata_source["full_only_seq"].shape[0],
+            padded_causal_len=metadata_source["causal_seq"].shape[0],
+            padded_full_len=metadata_source["full_only_seq"].shape[0],
         )
 
     return from_mode_splits(causal_seq, full_only_seq, metadata_source)
@@ -560,6 +661,48 @@ def get_full_only_seq(pack: SequencePack) -> Tuple[torch.Tensor, torch.Tensor]:
     """
     _ensure_core_metadata(pack)
     return pack["full_only_seq"], pack["_full_only_seq_offsets"]
+
+
+def num_local_real_tokens(num_real_tokens: int, rank: int, shard_len: int) -> int:
+    """
+    Count how many of a stream's real (non-padding) tokens land on ``rank``'s contiguous shard.
+
+    Paired with :func:`get_num_real_tokens`: sharding uses this to record the local counts that the
+    getter later reads back.
+
+    Args:
+        num_real_tokens (int): Real token count for the whole stream.
+        rank (int): Context parallel rank owning the shard.
+        shard_len (int): Length of each rank's shard of the stream.
+    Returns:
+        int: Real token count within this rank's shard.
+    """
+    return max(0, min(shard_len, num_real_tokens - rank * shard_len))
+
+
+def get_num_real_tokens(pack: SequencePack) -> Tuple[int, int]:
+    """
+    Get the number of real (non-padding) und and gen tokens in the sequences this pack holds.
+
+    ``_num_causal_tokens`` / ``_num_full_tokens`` count the whole batch, so a context-parallel local
+    pack needs its own counts: it holds one contiguous shard of each stream, and since padding sits
+    at the end of a stream, the last shard has fewer real tokens than its length while the earlier
+    shards have none of the padding at all. Reading the batch-wide counts against a local shard
+    over-counts silently, because slicing past the end of a tensor clamps instead of raising.
+
+    Args:
+        pack (SequencePack): The sequence pack to get the token counts from.
+    Returns:
+        Tuple[int, int]: Real und token count and real gen token count.
+    """
+    _ensure_core_metadata(pack)
+    if pack["is_sharded"]:
+        assert "_num_causal_tokens_local" in pack and "_num_full_tokens_local" in pack, (
+            "A context parallel local pack must carry _num_causal_tokens_local and "
+            "_num_full_tokens_local; build it with get_context_parallel_sharded_sequence."
+        )
+        return pack["_num_causal_tokens_local"], pack["_num_full_tokens_local"]
+    return pack["_num_causal_tokens"], pack["_num_full_tokens"]
 
 
 def get_device_and_dtype(pack: SequencePack) -> Tuple[torch.device, torch.dtype]:

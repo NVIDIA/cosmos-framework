@@ -55,7 +55,7 @@ class VLMModelConfig:
     precision: str = "bfloat16"
 
     policy: PolicyConfig = PolicyConfig()
-    # Optional Parakeet inputs for standalone Reasoner CE/SFT, disabled by default.
+    # Optional audio inputs for standalone Reasoner CE/SFT, disabled by default.
     sound_und: bool = False
     sound_und_config: SoundUnderstandingConfig = SoundUnderstandingConfig()
     # Applied at model construction, before the optimizer is built.

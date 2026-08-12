@@ -53,7 +53,7 @@ from torch import nn
 from torch.distributed.checkpoint import FileSystemReader, FileSystemWriter
 from torch.distributed.checkpoint.default_planner import DefaultSavePlanner
 
-from cosmos_framework.checkpoint.base import AbstractCheckpointer
+from cosmos_framework.checkpoint.base import AbstractCheckpointer, CheckpointLoadSource
 from cosmos_framework.checkpoint.s3_filesystem import S3StorageReader, S3StorageWriter
 from cosmos_framework.utils.config import CheckpointConfig, JobConfig
 from cosmos_framework.utils import callback, distributed, log, misc
@@ -237,29 +237,29 @@ class DistributedCheckpointer(AbstractCheckpointer):
             self.staging_ckpt_file = None
             self.staging_stream = torch.cuda.Stream()
 
-    def keys_to_resume_during_load(self) -> tuple[list[str], str | None]:
+    def keys_to_resume_during_load(self) -> tuple[list[str], CheckpointLoadSource | None]:
         latest_checkpoint_file = self._read_latest_checkpoint_file()
 
         resume_keys = []
+        source: CheckpointLoadSource | None = None
 
         if latest_checkpoint_file is not None:
             # 1. Resume training from latest_checkpoint.txt under the same name.
-            checkpoint_path = os.path.join(self.load_dirname, latest_checkpoint_file)
+            source = self._same_job_load_source(os.path.join(self.save_dirname, latest_checkpoint_file))
             resume_keys.extend(self.KEYS_TO_SAVE)
         else:
             if self.load_path:
                 # 2. Load the module weights specified by config_checkpoint.path.
                 checkpoint_path = self.load_path
-                if self.load_s3_backend_key:
+                if self.load_s3_backend_key and not str(checkpoint_path).startswith("s3://"):
                     checkpoint_path = f"s3://{self.config_checkpoint.load_from_object_store.bucket}/{checkpoint_path}"
+                source = self._warm_start_load_source(checkpoint_path)
                 if self.load_training_state:
                     resume_keys.extend(self.KEYS_TO_SAVE)
                 else:
                     resume_keys.append("model")
                     if self.only_load_scheduler_state:
                         resume_keys.append("scheduler")
-            else:
-                checkpoint_path = None
         if len(self.keys_not_to_resume) > 0:
             for key in self.keys_not_to_resume:
                 assert key in self.KEYS_TO_SAVE, f"Invalid key to resume: {key} not in {self.KEYS_TO_SAVE}"
@@ -267,7 +267,7 @@ class DistributedCheckpointer(AbstractCheckpointer):
 
         # Ensure that resume_keys does not have duplicates.
         assert len(set(resume_keys)) == len(resume_keys)
-        return resume_keys, checkpoint_path
+        return resume_keys, source
 
     @misc.timer("checkpoint loading")
     def load(
@@ -281,17 +281,17 @@ class DistributedCheckpointer(AbstractCheckpointer):
 
         self.callbacks.on_load_checkpoint_start(model_parts)
 
-        resume_keys, checkpoint_path = self.keys_to_resume_during_load()
-        log.info(f"Resume keys: {resume_keys}, checkpoint path: {checkpoint_path}", rank0_only=False)
+        resume_keys, source = self.keys_to_resume_during_load()
+        log.info(f"Resume keys: {resume_keys}, checkpoint path: {source}", rank0_only=False)
 
         iteration = 0
 
-        if checkpoint_path is not None:
-            self._check_checkpoint_exists(checkpoint_path)
+        if source is not None:
+            self._check_checkpoint_exists(source)
             all_state_dicts = {}
             for key in resume_keys:
-                cur_key_ckpt_full_path = os.path.join(checkpoint_path, key)
-                storage_reader = self.get_stroage_reader(cur_key_ckpt_full_path)
+                cur_key_ckpt_full_path = os.path.join(source.path, key)
+                storage_reader = self.get_stroage_reader(cur_key_ckpt_full_path, source)
                 strict = self.config_checkpoint.strict_resume
                 if key == "model":
                     log.info(f"- Loading the model {cur_key_ckpt_full_path}...", rank0_only=False)
@@ -306,7 +306,7 @@ class DistributedCheckpointer(AbstractCheckpointer):
                     _model_wrapper.load_state_dict(_state_dict)
                     log.info("model.load_state_dict done", rank0_only=False)
                 elif key == "optim":
-                    if not easy_io.exists(cur_key_ckpt_full_path, backend_key=self.load_s3_backend_key):
+                    if not easy_io.exists(cur_key_ckpt_full_path, backend_key=source.backend_key):
                         log.info(
                             f"Checkpoint {cur_key_ckpt_full_path} does not exist, skip loading optimizer.",
                             rank0_only=False,
@@ -342,24 +342,26 @@ class DistributedCheckpointer(AbstractCheckpointer):
                 elif key == "dataloader":
                     rank = dist.get_rank()
                     dataloader_pkl_path = os.path.join(cur_key_ckpt_full_path, f"rank_{rank}.pkl")
-                    if easy_io.exists(dataloader_pkl_path, backend_key=self.load_s3_backend_key):
+                    if easy_io.exists(dataloader_pkl_path, backend_key=source.backend_key):
                         log.info(f"- Loading the dataloader {cur_key_ckpt_full_path}...", rank0_only=False)
                         _state_dict = easy_io.load(
                             dataloader_pkl_path,
                             file_format="pkl",
-                            backend_key=self.load_s3_backend_key,
+                            backend_key=source.backend_key,
                         )
                         all_state_dicts[key] = _state_dict
                 else:
                     raise ValueError(f"Invalid key: {key}. not support to resume.")
 
             self.callbacks.on_load_checkpoint(model_parts, state_dict=all_state_dicts)
-            log.critical(f"Loaded checkpoint from {checkpoint_path} in iteration {iteration}")
+            log.critical(f"Loaded checkpoint from {source} in iteration {iteration}")
         else:
             log.info("Training from scratch.")
         torch.cuda.empty_cache()
 
-        self.callbacks.on_load_checkpoint_end(model_parts, iteration=iteration, checkpoint_path=checkpoint_path)
+        self.callbacks.on_load_checkpoint_end(
+            model_parts, iteration=iteration, checkpoint_path=None if source is None else source.path
+        )
         return iteration
 
     def _async_with_pinned_memory(self, checkpoint_file: str, state_dict: dict[str, tuple[Any, str]]) -> None:
@@ -405,10 +407,12 @@ class DistributedCheckpointer(AbstractCheckpointer):
             )
         return FileSystemWriter(path=checkpoint_path)
 
-    def get_stroage_reader(self, checkpoint_path: str) -> Union[S3StorageReader, FileSystemReader]:
-        if self.load_from_object_store:
+    def get_stroage_reader(
+        self, checkpoint_path: str, source: CheckpointLoadSource
+    ) -> Union[S3StorageReader, FileSystemReader]:
+        if source.uses_object_store:
             return S3StorageReader(
-                credential_path=self.config_checkpoint.load_from_object_store.credentials,
+                credential_path=source.object_store.credentials,
                 path=checkpoint_path,
             )
         return FileSystemReader(checkpoint_path)

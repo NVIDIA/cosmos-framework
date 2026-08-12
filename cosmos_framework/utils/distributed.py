@@ -524,7 +524,7 @@ class _TensorBroadcastMetadata:
 
 
 def _extract_tensor_leaves(value: Any, min_tensor_bytes: int) -> tuple[Any, list[torch.Tensor]]:
-    """Replace sufficiently large tensor leaves while preserving the surrounding containers."""
+    """Replace large or CUDA tensor leaves while preserving the surrounding containers."""
     tensor_leaves: list[torch.Tensor] = []
     tensor_metadata_by_id: dict[int, _TensorBroadcastMetadata] = {}
     seen_container_ids: set[int] = set()
@@ -541,7 +541,10 @@ def _extract_tensor_leaves(value: Any, min_tensor_bytes: int) -> tuple[Any, list
     def _extract(current_value: Any) -> Any:
         if isinstance(current_value, torch.Tensor):
             tensor_bytes = current_value.numel() * current_value.element_size()
-            if tensor_bytes < min_tensor_bytes:
+            # Pickling a CUDA tensor preserves the source device index, so a tensor
+            # broadcast from cuda:0 would remain on cuda:0 in a cuda:1 process.
+            # Always use the direct path so receivers rebuild it on their current device.
+            if tensor_bytes < min_tensor_bytes and current_value.device.type != "cuda":
                 return current_value
             if current_value.layout != torch.strided:
                 log.warning(f"Only strided tensors can be broadcast; skip layout={current_value.layout}.")
@@ -609,13 +612,13 @@ def broadcast_object_list_optimized(
     """Broadcast objects in place, sending sufficiently large tensor leaves directly.
 
     This is a signature-compatible alternative to :func:`torch.distributed.broadcast_object_list`.
-    The source broadcasts an object-list skeleton first. Tensor leaves at least
-    ``min_tensor_bytes`` bytes large are replaced by metadata, broadcast
-    directly, and inserted back into the skeleton in traversal order. Smaller
-    tensors remain in the object payload. NCCL groups place directly broadcast
-    tensors on ``device`` or the current CUDA device; other backends use CPU
-    tensors. The default ``sys.maxsize`` threshold calls the original PyTorch
-    collective directly.
+    The source broadcasts an object-list skeleton first. CUDA tensor leaves and
+    tensor leaves at least ``min_tensor_bytes`` bytes large are replaced by
+    metadata, broadcast directly, and inserted back into the skeleton in traversal
+    order. Smaller non-CUDA tensors remain in the object payload. NCCL groups place
+    directly broadcast tensors on ``device`` or the current CUDA device; other
+    backends use CPU tensors. The default ``sys.maxsize`` threshold calls the
+    original PyTorch collective directly.
 
     Direct tensor extraction requires an acyclic tree of plain ``dict``, ``list``,
     and ``tuple`` containers; namedtuples are also supported. Repeated references

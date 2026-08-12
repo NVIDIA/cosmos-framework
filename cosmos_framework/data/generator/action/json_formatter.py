@@ -57,6 +57,7 @@ class ActionPromptJsonFormatter:
         total_frames_key: str = "idle_frames_total",
         action_key: str = "action",
         viewpoint_templates: dict[str, str] | None = None,
+        float_seconds: bool = False,
     ) -> None:
         self.caption_key: str = caption_key
         self.viewpoint_key: str = viewpoint_key
@@ -66,6 +67,11 @@ class ActionPromptJsonFormatter:
         self.idle_frames_key: str = idle_frames_key
         self.total_frames_key: str = total_frames_key
         self.action_key: str = action_key
+        # When True, ``duration`` and action ``time`` are sub-second-precise
+        # floats (e.g. "0.57s", "0.00-0.57s") instead of truncated/rounded whole
+        # seconds. Useful for short high-fps clips (e.g. 16-frame chunks at 30 fps
+        # = 0.53 s) where the integer format collapses to "0s".
+        self.float_seconds: bool = float_seconds
         self.viewpoint_templates: dict[str, str] = (
             viewpoint_templates if viewpoint_templates is not None else DEFAULT_VIEWPOINT_TEMPLATES
         )
@@ -92,11 +98,15 @@ class ActionPromptJsonFormatter:
                 f"(C, T, H, W), got {type(video).__name__}"
             )
         duration_seconds = video.shape[1] / fps
-        duration = self._truncate_seconds(duration_seconds)
-        action_end_time = self._round_time_seconds(duration_seconds)
+        if self.float_seconds:
+            time_str = f"0.00-{duration_seconds:.2f}s"
+            duration_str = f"{duration_seconds:.2f}s"
+        else:
+            time_str = f"0:00-{self._format_time_mss(self._round_time_seconds(duration_seconds))}"
+            duration_str = f"{self._truncate_seconds(duration_seconds)}s"
 
         action_entry = {
-            "time": f"0:00-{self._format_time_mss(action_end_time)}",
+            "time": time_str,
             "description": self._ensure_sentence(caption),
             "idle_frame": self._get_idle_frame_info(data_dict),
         }
@@ -109,7 +119,7 @@ class ActionPromptJsonFormatter:
                 "framing": self._get_viewpoint_caption(data_dict, additional_view_description),
             },
             "actions": [action_entry],
-            "duration": f"{duration}s",
+            "duration": duration_str,
             "fps": float(fps),
             "resolution": {"H": height, "W": width},
             "aspect_ratio": self._get_aspect_ratio(width, height),
