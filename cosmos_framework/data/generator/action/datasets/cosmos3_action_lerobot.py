@@ -1010,6 +1010,9 @@ class BaseActionLeRobotDataset(Dataset):
             if idle_frames is not None:
                 extras = {"idle_frames": idle_frames, **extras}
 
+        if self._action_normalizer is not None:
+            action = self._action_normalizer.normalize_action(action)  # [T,D]
+
         if self._skip_video_loading:
             result: dict[str, Any] = {"action": action}
             if "idle_frames" in extras:

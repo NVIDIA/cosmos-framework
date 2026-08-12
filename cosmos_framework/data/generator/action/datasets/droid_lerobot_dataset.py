@@ -4,6 +4,7 @@
 import json
 import os
 import random
+from pathlib import Path
 from typing import Any, cast
 
 import numpy as np
@@ -47,6 +48,8 @@ from cosmos_framework.utils import log
 
 _FILTER_DICT_PATH = "/scratch/fsw/portfolios/cosmos/projects/cosmos_base_training/users/haolia/workspace/droid_oss_inputs/keep_ranges_1_0_1.json"
 
+_NORMALIZER_PATH = Path(__file__).parent.parent / "normalizer_stats/droid_lerobot_stats.json"
+
 # 90-degree clockwise rotation about the Z axis (in local frame), converting
 # DROID Franka panda_link8 orientation to the OpenCV camera convention.
 _DROID_TO_OPENCV: np.ndarray = np.array(
@@ -63,6 +66,16 @@ class DROIDLeRobotDataset(BaseActionLeRobotDataset):
     """ """
 
     EMBODIMENT_TYPE: str = "droid_lerobot"
+
+    def _normalizer_path(self) -> Path:
+        """Bundled DROID stats.
+
+        The base convention would resolve to
+        ``datasets/normalizers/droid_lerobot_backward_framewise_rot6d.json``,
+        which does not exist; the shipped file is ``droid_lerobot_stats.json``
+        one directory up, matching every other action dataset.
+        """
+        return _NORMALIZER_PATH
 
     def __init__(
         self,
