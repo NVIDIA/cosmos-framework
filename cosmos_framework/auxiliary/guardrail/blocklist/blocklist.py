@@ -4,6 +4,7 @@
 import argparse
 import os
 import re
+import unicodedata
 from difflib import SequenceMatcher
 
 import nltk
@@ -28,6 +29,12 @@ CENSOR_SENTINEL = "\x00"
 # Displayed to the user in the "Censored Prompt" message. Presentation only --
 # never used to decide whether something was censored.
 CENSOR = misc.Color.red("*")
+
+# Characters that occupy no width, or that only reorder what is drawn: zero-width
+# spaces and joiners, the soft hyphen, and the bidirectional controls. They render
+# as nothing, so a blocklist entry split by one still reads as the entry to a human
+# while reaching the matcher as a token it does not recognise.
+INVISIBLE_CHARS = re.compile(r"[­​-‏‪-‮⁠-⁤﻿]")
 
 
 class Blocklist(ContentSafetyGuardrail):
@@ -60,6 +67,30 @@ class Blocklist(ContentSafetyGuardrail):
         log.debug(f"Whitelisted {len(self.whitelist_words)} words/phrases from whitelist")
         log.debug(f"Loaded {len(self.exact_match_words)} exact match words/phrases from blocklist")
 
+    @staticmethod
+    def normalize_for_matching(prompt: str) -> str:
+        """Fold away the ways a word can be written to look normal but not match.
+
+        The matcher compares whitespace-delimited tokens, so anything that splits
+        a word without being visible, or that spells its letters with a different
+        code point, walks past it while the prompt still reads as the blocked word.
+        Three foldings, all of them lossless as far as a reader is concerned:
+
+        * compatibility normalization (NFKC), which maps fullwidth and other
+          presentation forms onto the ASCII letters they are drawn as;
+        * removal of combining marks, so an accent added to a letter does not
+          make a new word;
+        * invisible characters rewritten to a space, then runs of whitespace
+          collapsed, so a word split by any of them is matched as the split it
+          renders as.
+
+        The collapse also closes a plainer hole: a multi-word entry was defeated
+        by typing two spaces between its words.
+        """
+        prompt = unicodedata.normalize("NFKC", prompt)
+        prompt = "".join(c for c in unicodedata.normalize("NFKD", prompt) if not unicodedata.combining(c))
+        return " ".join(INVISIBLE_CHARS.sub(" ", prompt).split())
+
     def censor_prompt(self, input_prompt: str) -> tuple[bool, str]:
         """Censor the prompt using the blocklist with better-profanity fuzzy matching.
 
@@ -77,6 +108,7 @@ class Blocklist(ContentSafetyGuardrail):
         # than substituting keeps the stricter reading: "n\x00ike" fuses back to
         # a blocked word instead of being split into two harmless tokens.
         input_prompt = input_prompt.replace(CENSOR_SENTINEL, "")
+        input_prompt = self.normalize_for_matching(input_prompt)
         # The whitelist is handed to load_censor_words(), so the matcher already
         # leaves whitelisted words alone. Restoring them a second time here is
         # what introduced the token misalignment described in the commit message.

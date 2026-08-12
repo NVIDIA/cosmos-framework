@@ -1,6 +1,8 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: OpenMDW-1.1
 
+import unicodedata
+
 import pytest
 
 from cosmos_framework.auxiliary.guardrail.blocklist.blocklist import Blocklist
@@ -242,3 +244,106 @@ def test_punctuation_around_a_whitelisted_word_is_preserved():
 
     assert blocked is True
     assert "flat, wall." in message
+
+
+@pytest.mark.L1
+def test_extra_spaces_do_not_defeat_a_multi_word_entry():
+    """A two-word entry was evaded by typing two spaces between its words."""
+    bl = _blocklist_with_words(["snow white"])
+
+    blocked, _ = bl.censor_prompt("a snow  white poster")
+
+    assert blocked is True
+
+
+@pytest.mark.L1
+@pytest.mark.parametrize(
+    ("name", "prompt"),
+    [
+        ("zero width space", "a snow​white poster"),
+        ("zero width non joiner", "a snow‌white poster"),
+        ("soft hyphen", "a snow­white poster"),
+        ("right to left override", "a snow‮white poster"),
+        ("word joiner", "a snow⁠white poster"),
+        ("byte order mark", "a snow﻿white poster"),
+    ],
+)
+def test_invisible_characters_do_not_split_a_blocked_phrase(name, prompt):
+    """An invisible character renders as nothing, so the prompt still reads as the entry.
+
+    Splitting "snow white" with one of these produced a token the matcher did not
+    recognise, while a reader saw the blocked phrase unchanged.
+    """
+    bl = _blocklist_with_words(["snow white"])
+
+    blocked, _ = bl.censor_prompt(prompt)
+
+    assert blocked is True, f"{name} was not folded away"
+
+
+@pytest.mark.L1
+@pytest.mark.parametrize(
+    ("name", "prompt"),
+    [
+        ("non breaking space", "a snow white poster"),
+        ("en quad", "a snow white poster"),
+        ("ideographic space", "a snow　white poster"),
+        ("narrow no break space", "a snow white poster"),
+    ],
+)
+def test_unusual_spaces_do_not_split_a_blocked_phrase(name, prompt):
+    """Any Unicode space between the words of an entry must still match."""
+    bl = _blocklist_with_words(["snow white"])
+
+    blocked, _ = bl.censor_prompt(prompt)
+
+    assert blocked is True, f"{name} was not folded away"
+
+
+@pytest.mark.L1
+def test_fullwidth_letters_are_folded_to_ascii():
+    """Fullwidth forms are drawn as the ASCII letters they normalize to."""
+    bl = _blocklist_with_words(["snow white"])
+
+    blocked, _ = bl.censor_prompt("a ｓｎｏｗ white poster")
+
+    assert blocked is True
+
+
+@pytest.mark.L1
+def test_combining_marks_do_not_make_a_new_word():
+    """An accent added to a letter must not create a word the blocklist misses."""
+    bl = _blocklist_with_words(["snow white"])
+
+    for prompt in ("a snów white poster", unicodedata.normalize("NFD", "a snów white poster")):
+        blocked, _ = bl.censor_prompt(prompt)
+        assert blocked is True, f"{prompt!r} was not folded away"
+
+
+@pytest.mark.L1
+def test_normalization_does_not_block_ordinary_text():
+    """Folding must not invent matches in text that contains none."""
+    bl = _blocklist_with_words(["snow white"], whitelist=["flat"])
+
+    for prompt in (
+        "a robot on a flat desk",
+        "an em dash — and an arrow → in the text",
+        "café scene with Élodie",
+        "snow  and  white  are  separate  words  here",
+        "こんにちは from the model",
+    ):
+        blocked, message = bl.censor_prompt(prompt)
+        assert blocked is False, f"{prompt!r} was wrongly reported as blocked: {message}"
+
+
+@pytest.mark.L1
+def test_normalization_preserves_the_earlier_sentinel_and_markdown_behaviour():
+    """Folding runs after the sentinel strip and must not resurrect the "*" bug."""
+    bl = _blocklist_with_words(["badword"])
+
+    blocked, _ = bl.censor_prompt("A **bold** heading with ​ in it")
+    assert blocked is False
+
+    blocked, message = bl.censor_prompt("a bad\x00word in the text")
+    assert blocked is True
+    assert "badword" not in message
