@@ -6,7 +6,6 @@ from typing import Optional
 
 import torch
 import torch.distributed as dist
-import wandb
 from torch import nn
 from torch.distributed.tensor import DTensor
 
@@ -15,6 +14,11 @@ from cosmos_framework.utils import distributed, log, misc
 from cosmos_framework.utils.callback import Callback
 from cosmos_framework.utils.easy_io import easy_io
 from cosmos_framework.data.generator.sequence_packing.runtime import get_gen_seq
+
+try:
+    import wandb
+except ImportError:
+    wandb = None  # type: ignore
 
 try:
     from apex.contrib.layer_norm import FastLayerNorm
@@ -324,7 +328,7 @@ class NormMonitor(Callback):
                 stats[f"stats/act_grad_norm/{module_name}"] = l2_norm.item()
                 stats[f"stats/act_grad_max/{module_name}"] = stats_dict["max"].item()
 
-            if wandb.run is not None:
+            if wandb and wandb.run is not None:
                 if self.log_stat_wandb:
                     wandb.log({**stats, **important_info}, step=iteration)
                 else:

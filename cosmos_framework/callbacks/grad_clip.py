@@ -5,11 +5,15 @@ import math
 from collections import defaultdict
 
 import torch
-import wandb
 from torch.distributed.tensor import DTensor
 
 from cosmos_framework.utils import log
 from cosmos_framework.utils.callback import Callback
+
+try:
+    import wandb
+except ImportError:
+    wandb = None  # type: ignore
 
 
 def _fused_nan_to_num(grads: list[torch.Tensor]) -> None:
@@ -323,5 +327,5 @@ class GradClip(Callback):
                     log_dict[key] = avg
                     if mesh_str == "global":
                         log.info(f"{key}: {avg:.5f} (iteration {iteration})", rank0_only=False)
-            if wandb.run:
+            if wandb and wandb.run:
                 wandb.log(log_dict, step=iteration)

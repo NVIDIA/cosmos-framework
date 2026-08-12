@@ -12,7 +12,6 @@ from typing import Any, Literal
 import numpy as np
 import pyarrow.parquet as pq
 import torch
-from lerobot.datasets.video_utils import decode_video_frames
 
 from cosmos_framework.data.generator.action.action_spec import ActionSpec, Pos, Rot, build_action_spec
 from cosmos_framework.data.generator.action.datasets.base_dataset import ActionBaseDataset
@@ -157,6 +156,8 @@ class HumanHandPoseLeRobotDataset(ActionBaseDataset):
         return result
 
     def _load_video(self, episode: dict[str, Any], rows: list[dict[str, Any]]) -> torch.Tensor:
+        from lerobot.datasets.video_utils import decode_video_frames
+
         timestamps = [float(row["timestamp"]) for row in rows]
         from_timestamp = float(episode.get(f"videos/{self._image_key}/from_timestamp", 0.0))
         return decode_video_frames(
