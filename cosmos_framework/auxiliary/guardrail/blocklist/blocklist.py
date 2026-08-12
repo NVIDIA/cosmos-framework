@@ -4,7 +4,6 @@
 import argparse
 import os
 import re
-import string
 from difflib import SequenceMatcher
 
 import nltk
@@ -61,17 +60,6 @@ class Blocklist(ContentSafetyGuardrail):
         log.debug(f"Whitelisted {len(self.whitelist_words)} words/phrases from whitelist")
         log.debug(f"Loaded {len(self.exact_match_words)} exact match words/phrases from blocklist")
 
-    def uncensor_whitelist(self, input_prompt: str, censored_prompt: str) -> str:
-        """Explicitly uncensor words that are in the whitelist."""
-        input_words = input_prompt.split()
-        censored_words = censored_prompt.split()
-        whitelist_words = set(self.whitelist_words)
-        for i, token in enumerate(input_words):
-            if token.strip(string.punctuation).lower() in whitelist_words:
-                censored_words[i] = token
-        censored_prompt = " ".join(censored_words)
-        return censored_prompt
-
     def censor_prompt(self, input_prompt: str) -> tuple[bool, str]:
         """Censor the prompt using the blocklist with better-profanity fuzzy matching.
 
@@ -89,9 +77,10 @@ class Blocklist(ContentSafetyGuardrail):
         # than substituting keeps the stricter reading: "n\x00ike" fuses back to
         # a blocked word instead of being split into two harmless tokens.
         input_prompt = input_prompt.replace(CENSOR_SENTINEL, "")
+        # The whitelist is handed to load_censor_words(), so the matcher already
+        # leaves whitelisted words alone. Restoring them a second time here is
+        # what introduced the token misalignment described in the commit message.
         censored_prompt = self.profanity.censor(input_prompt, censor_char=CENSOR_SENTINEL)
-        # Uncensor whitelisted words that were censored from blocklist fuzzy matching
-        censored_prompt = self.uncensor_whitelist(input_prompt, censored_prompt)
         if CENSOR_SENTINEL in censored_prompt:
             display_prompt = censored_prompt.replace(CENSOR_SENTINEL, CENSOR)
             return True, f"Prompt blocked by censorship: Censored Prompt: {display_prompt}"

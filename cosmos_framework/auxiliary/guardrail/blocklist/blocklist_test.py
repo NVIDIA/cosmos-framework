@@ -45,7 +45,7 @@ def test_partial_match_with_threshold():
     assert match is False
 
 
-def _blocklist_with_words(words: list[str]) -> Blocklist:
+def _blocklist_with_words(words: list[str], whitelist: list[str] | None = None) -> Blocklist:
     """Build a Blocklist around a small word list, without downloading a checkpoint.
 
     censor_prompt only needs the profanity matcher and the whitelist, so the
@@ -53,10 +53,11 @@ def _blocklist_with_words(words: list[str]) -> Blocklist:
     """
     from better_profanity.better_profanity import Profanity
 
+    whitelist = whitelist or []
     bl = Blocklist.__new__(Blocklist)
     bl.profanity = Profanity()
-    bl.profanity.load_censor_words(custom_words=words, whitelist_words=[])
-    bl.whitelist_words = []
+    bl.profanity.load_censor_words(custom_words=words, whitelist_words=whitelist)
+    bl.whitelist_words = whitelist
     return bl
 
 
@@ -126,3 +127,118 @@ def test_blocked_word_is_still_detected_alongside_markdown():
     # blocked word is masked.
     assert "**bold**" in message
     assert "badword" not in message
+
+
+@pytest.mark.L1
+def test_multi_word_match_beside_whitelisted_word_does_not_crash():
+    """A multi-word blocklist hit must not make a later whitelisted word crash.
+
+    Regression test: the censored text has one token per match, so a two-word
+    entry made it one token shorter than the input. The whitelist restore walked
+    the two lists by position, so a whitelisted word after the match indexed past
+    the end of the censored list and raised IndexError on an ordinary prompt.
+    """
+    bl = _blocklist_with_words(["snow white"], whitelist=["flat"])
+
+    blocked, message = bl.censor_prompt("Snow White is flat")
+
+    assert blocked is True
+    assert "is flat" in message
+
+
+@pytest.mark.L1
+def test_multi_word_match_does_not_rewrite_a_later_word():
+    """The reported prompt must quote the input, not a shifted copy of it.
+
+    Same off-by-N as above, but landing inside the list instead of past its end:
+    the write went to the wrong token and silently replaced it.
+    """
+    bl = _blocklist_with_words(["snow white"], whitelist=["flat"])
+
+    blocked, message = bl.censor_prompt("a Snow White poster on a flat wall")
+
+    assert blocked is True
+    assert "on a flat wall" in message
+    assert "flat flat" not in message
+
+
+@pytest.mark.L1
+def test_several_multi_word_matches_stay_aligned():
+    """Every additional multi-word hit shifts the two lists one token further."""
+    bl = _blocklist_with_words(["snow white", "boston dynamics"], whitelist=["flat"])
+
+    blocked, message = bl.censor_prompt("Snow White and Boston Dynamics on a flat wall")
+
+    assert blocked is True
+    assert "on a flat wall" in message
+
+
+@pytest.mark.L1
+def test_whitelisted_word_is_not_censored():
+    """The whitelist still works: a whitelisted word is reported as written."""
+    bl = _blocklist_with_words(["snow white"], whitelist=["flat"])
+
+    blocked, message = bl.censor_prompt("a Snow White poster on a flat desk")
+
+    assert blocked is True
+    assert "a flat desk" in message
+
+
+@pytest.mark.L1
+def test_whitelisted_word_alone_does_not_block():
+    """A prompt with only whitelisted words is safe."""
+    bl = _blocklist_with_words(["snow white"], whitelist=["flat"])
+
+    blocked, message = bl.censor_prompt("the floor is flat")
+
+    assert blocked is False
+    assert message == ""
+
+
+@pytest.mark.L1
+def test_whitelisted_word_inside_a_blocked_phrase_stays_censored():
+    """A whitelisted word must not dissolve a phrase that genuinely matched.
+
+    'snow flat' is on the blocklist and 'flat' is whitelisted. The phrase is the
+    match, so it stays censored; whitelisting a word does not license the phrase
+    that contains it.
+    """
+    bl = _blocklist_with_words(["snow flat"], whitelist=["flat"])
+
+    blocked, message = bl.censor_prompt("a snow flat scene")
+
+    assert blocked is True
+    assert "snow flat" not in message
+
+
+@pytest.mark.L1
+def test_whitelisted_word_at_the_end_of_the_prompt():
+    """The final token is where the positional walk ran off the end."""
+    bl = _blocklist_with_words(["snow white"], whitelist=["flat"])
+
+    blocked, message = bl.censor_prompt("a snow white poster flat")
+
+    assert blocked is True
+    assert message.endswith("poster flat")
+
+
+@pytest.mark.L1
+def test_repeated_multi_word_matches():
+    """Two hits in a row shift the alignment twice over."""
+    bl = _blocklist_with_words(["snow white"], whitelist=["flat"])
+
+    blocked, message = bl.censor_prompt("snow white snow white flat wall")
+
+    assert blocked is True
+    assert "flat wall" in message
+
+
+@pytest.mark.L1
+def test_punctuation_around_a_whitelisted_word_is_preserved():
+    """Punctuation belongs to the token and must survive into the message."""
+    bl = _blocklist_with_words(["snow white"], whitelist=["flat"])
+
+    blocked, message = bl.censor_prompt("snow white, flat, wall.")
+
+    assert blocked is True
+    assert "flat, wall." in message
