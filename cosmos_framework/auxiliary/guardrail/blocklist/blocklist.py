@@ -9,6 +9,8 @@ from difflib import SequenceMatcher
 
 import nltk
 from better_profanity import profanity
+from better_profanity.constants import ALLOWED_CHARACTERS
+from better_profanity.varying_string import VaryingString
 from nltk.corpus import wordnet
 
 from cosmos_framework.auxiliary.guardrail.blocklist.utils import read_keyword_list_from_dir, to_ascii
@@ -31,10 +33,22 @@ CENSOR_SENTINEL = "\x00"
 # never used to decide whether something was censored.
 CENSOR = misc.Color.red("*")
 
-# How many adjacent tokens may be fused when looking for a separator-stripped
-# evasion, i.e. a blocked word written with a space inserted mid-word.
-# Mirrors better_profanity's own lookahead.
-_MAX_JOIN_TOKENS = 3
+# Punctuation that better_profanity does not treat as part of a word. The
+# library's ALLOWED_CHARACTERS overlaps string.punctuation on " $ ' * @, which
+# are exactly the characters it substitutes for letters (a->@, s->$, * for
+# several vowels). Stripping those would erase a token the library still
+# matches on, so only the remainder is stripped here.
+_STRIP_CHARS = "".join(sorted(set(string.punctuation) - ALLOWED_CHARACTERS))
+
+# Environment override for guardrail_exempt_fused_prose, so the stricter
+# behaviour is selectable without editing code -- presets.py constructs
+# Blocklist() with no arguments. Set to "0" to restore strict fused matching.
+_EXEMPT_FUSED_PROSE_ENV = "COSMOS_GUARDRAIL_EXEMPT_FUSED_PROSE"
+
+
+def exempt_fused_prose_default() -> bool:
+    """Resolve the default for guardrail_exempt_fused_prose from the environment."""
+    return os.environ.get(_EXEMPT_FUSED_PROSE_ENV, "1") != "0"
 
 
 class Blocklist(ContentSafetyGuardrail):
@@ -42,7 +56,7 @@ class Blocklist(ContentSafetyGuardrail):
         self,
         guardrail_partial_match_min_chars: int = 6,
         guardrail_partial_match_letter_count: float = 0.4,
-        guardrail_exempt_fused_prose: bool = True,
+        guardrail_exempt_fused_prose: bool | None = None,
     ) -> None:
         """Blocklist model for text filtering safety check.
 
@@ -57,8 +71,12 @@ class Blocklist(ContentSafetyGuardrail):
                 Set False to restore the stricter previous behaviour, which blocks
                 that sentence but never lets a fused match through. See
                 `_has_legitimate_match` for the escape class this trades away.
-                Defaults to True.
+                Defaults to the COSMOS_GUARDRAIL_EXEMPT_FUSED_PROSE environment
+                variable, which itself defaults to True; set that variable to "0"
+                to select strict matching without editing code.
         """
+        if guardrail_exempt_fused_prose is None:
+            guardrail_exempt_fused_prose = exempt_fused_prose_default()
         self.checkpoint_dir = os.path.join(GUARDRAIL1_CHECKPOINT.download(), "blocklist")
         nltk.data.path.append(os.path.join(self.checkpoint_dir, "nltk_data"))
         self.lemmatizer = nltk.WordNetLemmatizer()
@@ -73,16 +91,30 @@ class Blocklist(ContentSafetyGuardrail):
         self.exact_match_words = read_keyword_list_from_dir(os.path.join(self.checkpoint_dir, "exact_match"))
 
         self.profanity.load_censor_words(custom_words=self.blocklist_words, whitelist_words=self.whitelist_words)
+        self._configure_join_bookkeeping()
+        log.debug(f"Loaded {len(self.blocklist_words)} words/phrases from blocklist")
+        log.debug(f"Whitelisted {len(self.whitelist_words)} words/phrases from whitelist")
+        log.debug(f"Loaded {len(self.exact_match_words)} exact match words/phrases from blocklist")
+
+    def _configure_join_bookkeeping(self) -> None:
+        """Derive the fused-join state from the loaded blocklist and matcher.
+
+        Called from __init__ and from the test helper, so tests exercise the
+        values production actually runs with rather than a reimplementation.
+        Requires self.profanity to be loaded and self.blocklist_words to be set.
+        """
         self._dictionary_cache: dict[str, bool] = {}
         self._max_blocklist_words = max((len(w.split()) for w in self.blocklist_words), default=1)
         # Entries that genuinely contain spaces, so a spaced match can be told
         # apart from a match that only worked because the spaces were deleted.
-        self._blocklist_phrases = {
-            " ".join(w.lower().split()) for w in self.blocklist_words if " " in w
-        }
-        log.debug(f"Loaded {len(self.blocklist_words)} words/phrases from blocklist")
-        log.debug(f"Whitelisted {len(self.whitelist_words)} words/phrases from whitelist")
-        log.debug(f"Loaded {len(self.exact_match_words)} exact match words/phrases from blocklist")
+        # Stored the way the library stores its own entries, so comparison
+        # dispatches to VaryingString.__eq__ and leet spellings of a phrase
+        # ("b0ston dynamics") still match.
+        self._blocklist_phrases = [
+            VaryingString(" ".join(w.lower().split()), char_map=self.profanity.CHARS_MAPPING)
+            for w in self.blocklist_words
+            if " " in w
+        ]
 
     def uncensor_whitelist(self, input_prompt: str, censored_prompt: str) -> str:
         """Explicitly uncensor words that are in the whitelist."""
@@ -185,11 +217,12 @@ class Blocklist(ContentSafetyGuardrail):
           evasion. "assassin" written as "ass ass in" would pass. Set
           `guardrail_exempt_fused_prose=False` to give this up and go back to
           blocking every fused match, at the cost of blocking ordinary prose.
-        * **Escape classes that already existed.** Fused matching never reached
-          far anyway: with the blocklist entry "nike", stock code blocks "n ike"
-          and "ni ke" but not "nik e" or "n i k e", because the library looks
-          ahead only two words and misses trailing single letters. Nothing here
-          widens those.
+        * **The library's reach is wide.** With the entry "nike", stock code
+          blocks "n ike", "ni ke", "nik e" and "n i k e" alike once a following
+          word closes the window ("nik e shoe"). An earlier version of this note
+          claimed the last two escaped; that was measured on fragments with no
+          trailing token and is wrong. The exemption below therefore gives up
+          more than first documented.
         * **WordNet is the trust boundary.** "Ordinary English" means "WordNet has
           a synset", which over-includes: it counts single letters such as "n" and
           "f" as words, which is why `_is_prose_word` requires two characters. A
@@ -204,7 +237,10 @@ class Blocklist(ContentSafetyGuardrail):
 
         whitelist = {w.lower() for w in self.whitelist_words}
         raw_tokens = input_prompt.split()
-        tokens = [t.strip(string.punctuation).lower() for t in raw_tokens]
+        # Strip only punctuation the library does not count as part of a word.
+        # Stripping its leet characters would empty a token it still matches on,
+        # and an empty token aborts the window scan below.
+        tokens = [t.strip(_STRIP_CHARS).lower() for t in raw_tokens]
 
         for raw, token in zip(raw_tokens, tokens):
             if token and token not in whitelist and self._fires(raw):
@@ -212,8 +248,11 @@ class Blocklist(ContentSafetyGuardrail):
 
         # Phrase matches are bounded by the longest blocklist entry, but a
         # separator-stripped join fuses several tokens into ONE entry word, so it
-        # needs its own bound. Three matches the library's own lookahead.
-        max_window = max(self._max_blocklist_words, _MAX_JOIN_TOKENS)
+        # needs its own bound. Take that bound from the library rather than a
+        # local constant: MAX_NUMBER_COMBINATIONS is monotonic across
+        # load_censor_words calls, so the matcher's reach can exceed anything
+        # derived from the custom list alone.
+        max_window = max(self._max_blocklist_words, self.profanity.MAX_NUMBER_COMBINATIONS + 1)
         for i in range(len(tokens)):
             upper = min(max_window, len(tokens) - i)
             for size in range(2, upper + 1):

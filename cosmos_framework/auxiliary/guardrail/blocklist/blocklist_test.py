@@ -3,7 +3,7 @@
 
 import pytest
 
-from cosmos_framework.auxiliary.guardrail.blocklist.blocklist import Blocklist
+from cosmos_framework.auxiliary.guardrail.blocklist.blocklist import Blocklist, exempt_fused_prose_default
 
 
 @pytest.mark.L1
@@ -60,10 +60,12 @@ def _blocklist_with_words(words: list[str], dictionary: dict | None = None) -> B
     bl.profanity = Profanity()
     bl.profanity.load_censor_words(custom_words=words, whitelist_words=[])
     bl.whitelist_words = []
+    bl.blocklist_words = words
     bl.guardrail_exempt_fused_prose = True
-    bl._dictionary_cache = dict(dictionary or {})
-    bl._max_blocklist_words = max((len(w.split()) for w in words), default=1)
-    bl._blocklist_phrases = {" ".join(w.lower().split()) for w in words if " " in w}
+    # Same derivation production uses, so the join bookkeeping under test is not
+    # a reimplementation of it.
+    bl._configure_join_bookkeeping()
+    bl._dictionary_cache.update(dictionary or {})
     return bl
 
 
@@ -202,6 +204,81 @@ def test_single_token_match_across_punctuation_still_blocks():
     )
 
     blocked, _ = bl.censor_prompt("the desk-in the corner")
+
+    assert blocked is True
+
+
+@pytest.mark.L1
+def test_leet_spelling_of_a_multi_word_entry_still_blocks():
+    """Phrase entries are stored as the library stores them, so o->0 still matches.
+
+    Regression test: holding them as plain strings let "b0ston dynamics" through
+    while stock better_profanity blocked it.
+    """
+    bl = _blocklist_with_words(
+        ["boston dynamics"],
+        {"a": True, "boston": True, "dynamics": True, "robot": True},
+    )
+
+    for prompt in ("a boston dynamics robot", "a b0ston dynamics robot", "a boston dynamic5 robot"):
+        blocked, _ = bl.censor_prompt(prompt)
+        assert blocked is True, f"{prompt!r} should be blocked"
+
+
+@pytest.mark.L1
+def test_join_window_follows_the_library_reach():
+    """The window comes from the matcher, not from the custom list's longest entry.
+
+    Regression test: a local constant of 3 let a 4-token split escape while stock
+    better_profanity blocked it.
+    """
+    bl = _blocklist_with_words(
+        ["supercalifragil"],
+        {"su": True, "per": True, "cali": True, "fragil": False, "now": True},
+    )
+
+    blocked, _ = bl.censor_prompt("su per cali fragil now")
+
+    assert blocked is True
+
+
+@pytest.mark.L1
+def test_leet_characters_are_not_stripped_from_tokens():
+    """Characters the library treats as letters must survive tokenisation.
+
+    Regression test: string.punctuation overlaps ALLOWED_CHARACTERS on " $ ' * @,
+    so stripping it emptied the "$" token and aborted the window scan, letting
+    "wear $ ike shoes" through while stock blocked it.
+    """
+    bl = _blocklist_with_words(
+        ["sike"], {"wear": True, "s": True, "ike": True, "shoes": True}
+    )
+
+    for prompt in ("wear s ike shoes", "wear $ ike shoes"):
+        blocked, _ = bl.censor_prompt(prompt)
+        assert blocked is True, f"{prompt!r} should be blocked"
+
+
+@pytest.mark.L1
+def test_environment_variable_selects_strict_mode(monkeypatch):
+    """The stricter behaviour is reachable without editing code.
+
+    presets.py builds Blocklist() with no arguments, so without an environment
+    path the strict setting could only be chosen by editing source.
+    """
+    monkeypatch.delenv("COSMOS_GUARDRAIL_EXEMPT_FUSED_PROSE", raising=False)
+    assert exempt_fused_prose_default() is True
+
+    monkeypatch.setenv("COSMOS_GUARDRAIL_EXEMPT_FUSED_PROSE", "0")
+    assert exempt_fused_prose_default() is False
+
+    bl = _blocklist_with_words(
+        ["deskin"],
+        {"a": True, "desk": True, "in": True, "the": True, "background": True},
+    )
+    bl.guardrail_exempt_fused_prose = exempt_fused_prose_default()
+
+    blocked, _ = bl.censor_prompt("a desk in the background")
 
     assert blocked is True
 
