@@ -21,8 +21,9 @@ def compute_expert_heatmap(vfm: torch.nn.Module) -> dict[str, torch.Tensor]:
     a tensor of shape (num_layers, num_experts).
 
     Each element of the tensor is the average number of tokens routed to each expert for a
-    given layer. The sum of the elements in each row should be equal to the average number
-    of experts per token for the MoE model (config.num_experts_per_tok).
+    given layer. The sum of the elements in each row should be equal to that tower's
+    experts-per-token (``mlp_module.top_k``), which is ``config.num_experts_per_tok`` unless
+    the gen tower overrides it via ``gen_moe_top_k``.
 
     For dense models, the heatmap is an empty dictionary.
     """

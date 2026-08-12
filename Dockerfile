@@ -24,7 +24,7 @@ RUN --mount=type=cache,target=/var/cache/apt \
 
 # Install uv: https://docs.astral.sh/uv/getting-started/installation/
 # https://github.com/astral-sh/uv-docker-example/blob/main/Dockerfile
-COPY --from=ghcr.io/astral-sh/uv:0.11.28 /uv /uvx /usr/local/bin/
+COPY --from=ghcr.io/astral-sh/uv:0.12.2 /uv /uvx /usr/local/bin/
 # Copy from the cache instead of linking since it's a mounted volume
 ENV UV_LINK_MODE=copy
 # Cache python downloads
@@ -51,6 +51,12 @@ RUN --mount=type=cache,target=/root/.cache/uv \
     --mount=type=bind,source=packages,target=packages \
     uv sync --locked --no-install-project --no-editable --all-extras --group=$(cat /root/.cuda-name) --group=vllm
 ENV PATH="/workspace/.venv/bin:$PATH"
+
+# install apex (compiled C++/CUDA extensions; needs torch already present), so this line should be after the uv sync command.
+RUN --mount=type=cache,target=/root/.cache/uv \
+    VIRTUAL_ENV=/workspace/.venv APEX_CPP_EXT=1 APEX_CUDA_EXT=1 \
+    uv pip install -v --no-build-isolation --no-deps \
+        git+https://github.com/NVIDIA/apex@bf903a2
 
 # Triton bundled ptxas doesn't support latest GPU architectures
 ENV TRITON_PTXAS_PATH="/usr/local/cuda/bin/ptxas"

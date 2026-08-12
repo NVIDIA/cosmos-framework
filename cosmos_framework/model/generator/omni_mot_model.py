@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import collections
 import dataclasses
+import inspect
 import json
 import time
 from collections.abc import Sequence
@@ -16,11 +17,13 @@ import torch
 import torch.distributed as dist
 from einops import rearrange
 from torch.distributed._composable.fsdp import FSDPModule
+from torch.distributed.device_mesh import DeviceMesh
 from torch.nn.modules.module import _IncompatibleKeys
 
 from cosmos_framework.utils.flags import DEVICE, TRAINING, Device
 from cosmos_framework.utils.lazy_config import LazyDict
 from cosmos_framework.utils.lazy_config import instantiate as lazy_instantiate
+from cosmos_framework.utils.lazy_config.registry import locate
 from cosmos_framework.model._base import ImaginaireModel
 from cosmos_framework.utils import log, misc
 from cosmos_framework.utils.count_params import count_params
@@ -56,6 +59,7 @@ from cosmos_framework.model.generator.utils.data_and_condition import (
     build_dense_sound_schedule,
     unwrap_and_densify,
 )
+from cosmos_framework.model.generator.utils.load_balancing_stats import LBLConfig
 from cosmos_framework.model.generator.utils.memory import MemoryState
 from cosmos_framework.model.generator.utils.moe_utils import (
     sync_expert_biases_to_ema,
@@ -212,7 +216,21 @@ class OmniMoTModel(ImaginaireModel):
         with torch.device("meta"):
             assert self.vlm_config.model_instance is not None, "Model instance should be specified"
 
-            language_model = lazy_instantiate(self.vlm_config.model_instance)
+            sample_lbl_enabled = self.config.lbl.method == "sample" and (
+                self.config.lbl.coeff_und is not None or self.config.lbl.coeff_gen is not None
+            )
+            lbl_init_kwargs: dict[str, LBLConfig] = {}
+            if sample_lbl_enabled:
+                # Sample LBL is MoE-only. Dense wrappers reject this kwarg, so fail here
+                # with a clear message instead of a TypeError inside lazy_instantiate.
+                model_target = self.vlm_config.model_instance["_target_"]
+                model_cls = locate(model_target) if isinstance(model_target, str) else model_target
+                assert callable(model_cls), f"Expected a callable model target, got {model_target!r}"
+                assert "lbl_config" in inspect.signature(model_cls).parameters, (
+                    f"lbl.method='sample' requires an MoE model; got {getattr(model_cls, '__qualname__', model_cls)}"
+                )
+                lbl_init_kwargs = {"lbl_config": self.config.lbl}
+            language_model = lazy_instantiate(self.vlm_config.model_instance, **lbl_init_kwargs)
 
             # NOTE: We pass "RF timesteps" to the network in the same scale as the scheduler
             # (i.e., roughly [0, num_train_timesteps]). The MoT network expects to internally
@@ -228,11 +246,17 @@ class OmniMoTModel(ImaginaireModel):
                 max_latent_w=self.config.diffusion_expert_config.max_vae_latent_side_after_patchify,
                 max_latent_t=self.config.state_t,
                 enable_fps_modulation=self.config.diffusion_expert_config.enable_fps_modulation,
+                enable_vision_modality_embeddings=(
+                    self.config.diffusion_expert_config.enable_vision_modality_embeddings
+                ),
                 base_fps=self.config.diffusion_expert_config.base_fps,
                 vision_gen=self.config.vision_gen,
                 action_gen=self.config.action_gen,
                 sound_gen=self.config.sound_gen,
                 joint_attn_implementation=self.config.joint_attn_implementation,
+                use_multiview_flex_attention=self.config.flex_attention.enabled,
+                flex_attention_backend=self.config.flex_attention.backend,
+                noisy_attention_scope=self.config.flex_attention.mask.noisy_attention_scope,
                 timestep_scale=1.0 / float(num_train_timesteps) * self.config.diffusion_expert_config.timestep_range,
                 action_dim=self.config.max_action_dim,
                 num_embodiment_domains=self.config.num_embodiment_domains,
@@ -282,7 +306,7 @@ class OmniMoTModel(ImaginaireModel):
             parallel_dims=self.parallel_dims,
             compile_config=self.config.compile,
             ac_config=self.config.activation_checkpointing,
-            attention_io_layout=self.config.parallelism.attention_io_layout,
+            attention_io_layout=getattr(self.config, "attention_io_layout", "sequence_sharded"),
         )
 
         with misc.timer("meta to cuda and broadcast model states"):
@@ -451,41 +475,50 @@ class OmniMoTModel(ImaginaireModel):
         self.parallel_dims.build_meshes(device_type=DEVICE)
 
     def set_up_scheduler_and_sampler(self):
-        # Get shift value - support both int and dict-based resolution lookup
-        # For scheduler initialization, use model's configured resolution
-        shift_config = self.config.rectified_flow_training_config.shift
-        if isinstance(shift_config, int):
-            shift = shift_config
-        else:
-            # shift set in RectifiedFlow is only used during inference.
-            # So, set it to the resolution of the model.
-            # This part gets executed only when we specify shift as a dict
-            # This is needed during multi-resolution training.
+        # Get shift values - support both int and dict-based resolution lookup.
+        rf_config = self.config.rectified_flow_training_config
+
+        def resolve_shift(shift_config: Any, dynamic_shift_key: str) -> int:
+            if isinstance(shift_config, int):
+                return shift_config
+
             shift_dict = dict(shift_config)
+            # Token-count-based dicts hold no per-resolution value; the shift is derived per batch
+            # in `_get_train_noise_level_vision`, so initialize the scheduler with the identity
+            # shift instead of failing the resolution lookup.
+            if dynamic_shift_key in shift_dict:
+                return 1
             resolution = self.config.resolution
             if resolution not in shift_dict:
                 raise ValueError(
                     f"Resolution '{resolution}' not found in shift dict. Available resolutions: {list(shift_dict.keys())}"
                 )
-            shift = shift_dict[resolution]
+            return shift_dict[resolution]
+
+        shift_video = resolve_shift(rf_config.shift, "dynamic_shift_base_num_tokens_video")
+        _shift_image_cfg = getattr(rf_config, "shift_image", None)
+        shift_image = resolve_shift(
+            _shift_image_cfg if _shift_image_cfg is not None else rf_config.shift,
+            "dynamic_shift_base_num_tokens_image",
+        )
 
         # Rectified Flow timestep scheduler and sampler for training (separate for image and video)
         if self.config.vision_gen:
             self.rectified_flow_image = RectifiedFlow(
                 velocity_field=self.net,
-                train_time_distribution=self.config.rectified_flow_training_config.train_time_image_distribution,
-                use_dynamic_shift=self.config.rectified_flow_training_config.use_dynamic_shift,
-                shift=shift,
-                train_time_weight_method=self.config.rectified_flow_training_config.train_time_weight,
+                train_time_distribution=rf_config.train_time_image_distribution,
+                use_dynamic_shift=rf_config.use_dynamic_shift,
+                shift=shift_image,
+                train_time_weight_method=rf_config.train_time_weight,
                 device=torch.device(DEVICE),
                 dtype=self.tensor_kwargs_fp32["dtype"],
             )
             self.rectified_flow_video = RectifiedFlow(
                 velocity_field=self.net,
-                train_time_distribution=self.config.rectified_flow_training_config.train_time_video_distribution,
-                use_dynamic_shift=self.config.rectified_flow_training_config.use_dynamic_shift,
-                shift=shift,
-                train_time_weight_method=self.config.rectified_flow_training_config.train_time_weight,
+                train_time_distribution=rf_config.train_time_video_distribution,
+                use_dynamic_shift=rf_config.use_dynamic_shift,
+                shift=shift_video,
+                train_time_weight_method=rf_config.train_time_weight,
                 device=torch.device(DEVICE),
                 dtype=self.tensor_kwargs_fp32["dtype"],
             )
@@ -494,7 +527,7 @@ class OmniMoTModel(ImaginaireModel):
                 velocity_field=self.net,
                 train_time_distribution=self.config.rectified_flow_training_config.train_time_action_distribution,
                 use_dynamic_shift=self.config.rectified_flow_training_config.use_dynamic_shift,
-                shift=shift,
+                shift=shift_video,
                 train_time_weight_method=self.config.rectified_flow_training_config.train_time_weight,
                 device=torch.device(DEVICE),
                 dtype=self.tensor_kwargs_fp32["dtype"],
@@ -504,7 +537,7 @@ class OmniMoTModel(ImaginaireModel):
                 velocity_field=self.net,
                 train_time_distribution=self.config.rectified_flow_training_config.train_time_sound_distribution,
                 use_dynamic_shift=self.config.rectified_flow_training_config.use_dynamic_shift,
-                shift=shift,
+                shift=shift_video,
                 train_time_weight_method=self.config.rectified_flow_training_config.train_time_weight,
                 device=torch.device(DEVICE),
                 dtype=self.tensor_kwargs_fp32["dtype"],
@@ -1298,6 +1331,17 @@ class OmniMoTModel(ImaginaireModel):
             normalize_by_active=normalize_by_active,
         )
 
+    def _get_load_balancing_loss_meshes(self) -> tuple[DeviceMesh | None, DeviceMesh | None]:
+        """Return the data- and context-parallel meshes used by load balancing loss."""
+        parallel_dims = getattr(self, "parallel_dims", None)
+        if parallel_dims is None:
+            return None, None
+
+        context_parallel_mesh = None
+        if parallel_dims.cp_enabled and self.config.attention_io_layout == "sequence_sharded":
+            context_parallel_mesh = parallel_dims.cp_mesh
+        return parallel_dims.dp_mesh, context_parallel_mesh
+
     def _loss_averaging_group(self) -> tuple[torch.distributed.ProcessGroup | None, int]:
         """Return the (process_group, size) over which gradients are averaged.
 
@@ -1487,6 +1531,7 @@ class OmniMoTModel(ImaginaireModel):
             total_loss = total_loss * sample_level_scale.to(dtype=total_loss.dtype)
 
         # 2. Load balancing auxiliary losses
+        device_mesh, context_parallel_mesh = self._get_load_balancing_loss_meshes()
         for load_balancing_type in ["und", "gen"]:
             lbl_metadata = out_net.get(f"lbl_metadata_{load_balancing_type}", None)
             if lbl_metadata is None:
@@ -1495,7 +1540,8 @@ class OmniMoTModel(ImaginaireModel):
                 lbl_metadata,
                 coeff=getattr(self.config.lbl, f"coeff_{load_balancing_type}"),
                 method=self.config.lbl.method,
-                device_mesh=self.parallel_dims.dp_mesh if self.parallel_dims else None,
+                device_mesh=device_mesh,
+                context_parallel_mesh=context_parallel_mesh,
             )
             if load_balancing_loss is not None:
                 total_loss += load_balancing_loss
@@ -1585,8 +1631,10 @@ class OmniMoTModel(ImaginaireModel):
         # Continuous RF implementation
         max_timestep = rectified_flow.noise_scheduler.config.num_train_timesteps
 
-        # Get shift value(s) - support both int and dict-based resolution lookup
-        shift_config = self.config.rectified_flow_training_config.shift
+        # Get shift value(s) - images can override the shared/video shift.
+        rf_config = self.config.rectified_flow_training_config
+        shift_image = getattr(rf_config, "shift_image", None)
+        shift_config = shift_image if is_image_batch and shift_image is not None else rf_config.shift
         if isinstance(shift_config, int):
             # Int-based shift: use directly for all samples
             shifts = torch.full((batch_size,), shift_config, dtype=torch.float32)
@@ -2130,16 +2178,21 @@ class OmniMoTModel(ImaginaireModel):
             for i, (x0_action, cond_mask_action) in enumerate(
                 zip(gen_data_clean.x0_tokens_action, packed_sequence.action.condition_mask, strict=True)
             ):
+                # Mirror the vision branch: keep the action noise and the conditioning blend in fp32
+                # so the sampler accumulates in full precision and inference matches the fp32 flow
+                # interpolation used in training. The cast to model dtype happens inside velocity_fn
+                # (at the action encoder boundary in ``_encode_action``).
                 pure_noise_action_i = misc.arch_invariant_rand(
                     tuple(x0_action.shape),
-                    self.tensor_kwargs["dtype"],
-                    self.tensor_kwargs["device"],
+                    self.tensor_kwargs_fp32["dtype"],
+                    self.tensor_kwargs_fp32["device"],
                     seed_dict["action"][i],  # Different seed per sample for diversity
                 )  # [T,action_dim]
+                cond_mask_action_fp32 = cond_mask_action.to(**self.tensor_kwargs_fp32)  # [T,1]
                 noise_action_i = (
-                    cond_mask_action * x0_action.to(**self.tensor_kwargs)
-                    + (1.0 - cond_mask_action) * pure_noise_action_i
-                )
+                    cond_mask_action_fp32 * x0_action.to(**self.tensor_kwargs_fp32)
+                    + (1.0 - cond_mask_action_fp32) * pure_noise_action_i
+                )  # [T,action_dim]
                 if gen_data_clean.raw_action_dim is not None and gen_data_clean.raw_action_dim[i] is not None:
                     noise_action_i[:, gen_data_clean.raw_action_dim[i] :] = 0
                 noise_action_list.append(noise_action_i)
@@ -2160,16 +2213,21 @@ class OmniMoTModel(ImaginaireModel):
             for i, (x0_sound, cond_mask_sound) in enumerate(
                 zip(gen_data_clean.x0_tokens_sound, packed_sequence.sound.condition_mask, strict=True)
             ):
+                # Mirror the vision branch: keep the sound noise and the conditioning blend in fp32
+                # so the sampler accumulates in full precision and inference matches the fp32 flow
+                # interpolation used in training (``_add_noise_to_input`` noises sound in fp32).
+                # The cast to model dtype happens inside velocity_fn.
                 pure_noise_sound_i = misc.arch_invariant_rand(
                     tuple(x0_sound.shape),
-                    self.tensor_kwargs["dtype"],
-                    self.tensor_kwargs["device"],
+                    self.tensor_kwargs_fp32["dtype"],
+                    self.tensor_kwargs_fp32["device"],
                     seed_dict["sound"][i],  # Different seed per sample for diversity
                 )  # [sound_channels,T_sound]
                 # cond_mask_sound is (T, 1), x0_sound is (C, T) — transpose mask for broadcasting
+                cond_mask_sound_fp32 = cond_mask_sound.T.to(**self.tensor_kwargs_fp32)  # [1,T_sound]
                 noise_sound_i = (
-                    cond_mask_sound.T * x0_sound.to(**self.tensor_kwargs)
-                    + (1.0 - cond_mask_sound.T) * pure_noise_sound_i
+                    cond_mask_sound_fp32 * x0_sound.to(**self.tensor_kwargs_fp32)
+                    + (1.0 - cond_mask_sound_fp32) * pure_noise_sound_i
                 )  # [sound_channels,T_sound]
                 noise_sound_list.append(noise_sound_i)
 
@@ -2447,6 +2505,7 @@ class OmniMoTModel(ImaginaireModel):
             x0_tokens_sound=noise_x_sound if has_sound else None,
             fps_sound=gen_data_clean.fps_sound if has_sound else None,
             num_vision_items_per_sample=num_items,
+            num_views_per_vision_item=gen_data_clean.num_views_per_vision_item,
             # Multi-control transfer: carry per-control weights so the packer can
             # populate vision_item_split_lens / control_weights on the packed
             # sequence. Without this, multi_control_two_way_attention never runs
@@ -3352,6 +3411,7 @@ class OmniMoTModel(ImaginaireModel):
                 else None
             )
             subset_num_items = num_items[start:limit]
+            vision_item_slice = slice(vis_start, vis_end)
         else:
             # Standard single-item mode
             subset_x0_vision = gen_data_clean.x0_tokens_vision[start:limit]
@@ -3364,6 +3424,13 @@ class OmniMoTModel(ImaginaireModel):
                 else None
             )
             subset_num_items = None
+            vision_item_slice = slice(start, limit)
+        # Parallel to the flattened vision item list, so it follows the same slice.
+        subset_num_views_per_vision_item = (
+            gen_data_clean.num_views_per_vision_item[vision_item_slice]
+            if gen_data_clean.num_views_per_vision_item is not None
+            else None
+        )
         fps_vision = gen_data_clean.fps_vision[start:limit] if gen_data_clean.fps_vision is not None else None
 
         if has_action:
@@ -3406,6 +3473,7 @@ class OmniMoTModel(ImaginaireModel):
             action_domain_id=action_domain_id,
             raw_action_dim=raw_action_dim,
             num_vision_items_per_sample=subset_num_items,
+            num_views_per_vision_item=subset_num_views_per_vision_item,
         )
 
     @torch.no_grad()
@@ -3878,6 +3946,7 @@ class OmniMoTModel(ImaginaireModel):
             fps_sound=fps_sound,
             action_domain_id=action_domain_id,
             num_vision_items_per_sample=num_vision_items_per_sample,
+            num_views_per_vision_item=num_views_per_vision_item,
             raw_action_dim=raw_action_dim,
             control_weights=control_weights,
         )
@@ -3951,7 +4020,10 @@ class OmniMoTModel(ImaginaireModel):
             containing only non-None entries, or ``None`` if all entries are
             ``None`` / the key is absent.
         """
-        dense_action = unwrap_and_densify(data_batch.get("action", None), self.tensor_kwargs)
+        # Keep normalized actions in FP32 through flow interpolation so adding noise and computing
+        # the velocity target do not inherit BF16 quantization. The noisy encoder input is cast to
+        # model precision at the action encoder boundary in ``_encode_action``.
+        dense_action = unwrap_and_densify(data_batch.get("action", None), self.tensor_kwargs_fp32)
         dense_domain_id = unwrap_and_densify(
             data_batch.get("domain_id", None), {"device": self.tensor_kwargs["device"]}
         )

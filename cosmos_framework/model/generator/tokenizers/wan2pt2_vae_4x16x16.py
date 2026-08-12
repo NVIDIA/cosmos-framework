@@ -741,10 +741,23 @@ class WanVAE_(nn.Module):
             self.temperal_upsample,
             dropout,
         )
+        self._compiled_decoder_forward: Callable[..., torch.Tensor] | None = None
 
         self._enc_conv_num = count_conv3d(self.encoder)
         self._dec_conv_num = count_conv3d(self.decoder)
         self._dec_cache: list[torch.Tensor | None] = self._new_dec_cache()
+
+    def enable_decoder_compile(self) -> None:
+        """Enable static compilation for non-priming decoder slices."""
+        self._compiled_decoder_forward = torch.compile(
+            self.decoder.forward,
+            fullgraph=True,
+            dynamic=False,
+        )
+        log.info(
+            "Enabled static torch.compile for steady-state Wan VAE decoder slices",
+            rank0_only=False,
+        )
 
     def _new_enc_cache(self) -> list:
         """Fresh per-layer cache for the encoder (one slot per CausalConv3d)."""
@@ -960,8 +973,13 @@ class WanVAE_(nn.Module):
         parts = []
         for i in range(x.shape[2]):
             first_chunk = (i == 0) and all(c is None for c in self._dec_cache)
+            decode_forward = (
+                self._compiled_decoder_forward
+                if self._compiled_decoder_forward is not None and not first_chunk
+                else self.decoder.forward
+            )
             parts.append(
-                self.decoder(
+                decode_forward(
                     x[:, :, i : i + 1],
                     feat_cache=self._dec_cache,
                     first_chunk=first_chunk,

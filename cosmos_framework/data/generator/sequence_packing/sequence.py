@@ -857,6 +857,9 @@ class PackedSequenceBuilder:
             # Multi-control transfer
             vision_item_split_lens=list(self.vision_item_split_lens),
             control_weights=gen_data_clean.control_weights,
+            # Vision item layout (multi-item samples, multiview cameras)
+            num_vision_items_per_sample=gen_data_clean.num_vision_items_per_sample,
+            num_views_per_vision_item=gen_data_clean.num_views_per_vision_item,
         )
 
 
@@ -894,6 +897,10 @@ class PackedSequence:
         vision_item_split_lens: Per-sample per-vision-item token counts for multi-control
             transfer.
         control_weights: Per-sample per-control weights for multi-control weighted V-scaling.
+        num_vision_items_per_sample: Number of vision items owned by each sample, or
+            ``None`` when every sample owns exactly one item.
+        num_views_per_vision_item: Number of camera views packed into each flattened
+            vision item, or ``None`` when per-camera VAE encoding is disabled.
     """
 
     # Sequence structure
@@ -942,6 +949,16 @@ class PackedSequence:
     # Parallel to vision_item_split_lens[i][:-1] (excludes noisy item).
     # None for non-transfer or standard single-control samples.
     control_weights: list[list[float]] | None = None
+
+    # Vision item layout, carried over from GenerationDataClean so the network can
+    # reconstruct the per-item geometry of the packed GEN stream:
+    # num_vision_items_per_sample groups the flattened vision items by sample (None
+    # when each sample owns one item), and num_views_per_vision_item records how many
+    # camera-major views each item concatenates along its latent temporal axis (None
+    # when per-camera VAE encoding is disabled). Read by cosmos3_vfm_network.py to
+    # build the multiview FlexAttention mask.
+    num_vision_items_per_sample: list[int] | None = None
+    num_views_per_vision_item: list[int] | None = None
 
     def __post_init__(self) -> None:
         self._sequence_pack_metadata: SequencePackMetadata | None = None
@@ -1010,12 +1027,18 @@ class SequencePlan:
         condition_frame_indexes_vision: Indexes of latent vision frames that are clean/conditioning.
             [] means all frames are noised/supervised.
             All frames specified means all frames are clean (no MSE supervision).
+            Indexes are per-view-local (``[0, 1, ...]`` = first K latent frames within each
+            camera). For multiview items whose latents are camera-major concatenated, the
+            packer expands these to every selected camera before building the condition mask.
             For multi-item samples (e.g. image editing where each sample has multiple
             separately-encoded images), this applies to each vision item individually.
             The number of items per sample is tracked by
             ``GenerationDataClean.num_vision_items_per_sample``.
         share_vision_temporal_positions: Whether all vision items in this sample share
             the same temporal mRoPE grid.
+        vision_temporal_position_groups: Optional integer group ID per vision item. Items
+            with the same integer group ID share a temporal mRoPE grid; ``None`` items
+            remain independent. This supports source-video/reference-image/target-video samples.
         has_action: Whether action input is present for robotics/embodied AI tasks.
             Defaults to False.
         condition_frame_indexes_action: Indexes of action steps that are clean/conditioning.
@@ -1041,6 +1064,7 @@ class SequencePlan:
     # and equal fps across items. Default False preserves single-clip and
     # image-editing semantics where items represent distinct time states.
     share_vision_temporal_positions: bool = False
+    vision_temporal_position_groups: list[int | None] | None = None
 
     # -- action modality --
     has_action: bool = False
@@ -1061,6 +1085,7 @@ class SequencePlan:
             "condition_frame_indexes_action": self.condition_frame_indexes_action,
             "condition_frame_indexes_sound": self.condition_frame_indexes_sound,
             "share_vision_temporal_positions": self.share_vision_temporal_positions,
+            "vision_temporal_position_groups": self.vision_temporal_position_groups,
         }
 
 

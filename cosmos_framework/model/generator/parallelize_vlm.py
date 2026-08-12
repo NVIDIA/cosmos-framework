@@ -47,7 +47,7 @@ def _collect_repeated_blocks(inner: nn.Module) -> tuple[list[nn.Module], set[str
 def _collect_ignored_audio_params(model: HFModel) -> set[nn.Parameter]:
     """Return immutable audio parameters that must stay outside FSDP.
 
-    The Parakeet encoder is always a frozen, artifact-backed feature extractor.
+    The selected audio encoder is always a frozen, artifact-backed feature extractor.
     The projector remains part of the raw HF root (and therefore FSDP-managed)
     even when it is frozen, matching the existing vision merger/projector
     lifecycle and keeping checkpoint tensor layouts uniform.

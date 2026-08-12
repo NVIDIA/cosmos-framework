@@ -143,29 +143,42 @@ def _hf_download(cmd_args: list[str]) -> str:
     """Run Hugging Face CLI download command and return the local path.
 
     Uses a separately locked Hugging Face CLI because the dependency in the
-    application environment is too old and not robust.
+    application environment is too old and not robust. By default, each call
+    uses an isolated environment so this also works from read-only installs.
+    Callers that make repeated downloads can set
+    ``IMAGINAIRE_HF_CLI_ENVIRONMENT`` to reuse a dedicated environment.
     """
     is_rank0 = os.environ.get("RANK", "0") == "0"
+    hf_cli_environment = os.environ.get("IMAGINAIRE_HF_CLI_ENVIRONMENT")
     cmd = [
         "uv",
         "run",
-        "--isolated",
-        "--project",
-        str(_HF_CLI_PROJECT),
-        "--locked",
-        "--no-default-groups",
-        "hf",
-        "download",
-        "--format=json",
-        *cmd_args,
     ]
+    if hf_cli_environment is None:
+        cmd.append("--isolated")
+    cmd.extend(
+        [
+            "--project",
+            str(_HF_CLI_PROJECT),
+            "--locked",
+            "--no-default-groups",
+            "hf",
+            "download",
+            "--format=json",
+            *cmd_args,
+        ]
+    )
     log.info(f"{shlex.join(cmd)}")
+    env = None
+    if hf_cli_environment is not None:
+        env = os.environ | {"UV_PROJECT_ENVIRONMENT": hf_cli_environment}
     output = subprocess.run(
         cmd,
         stdout=subprocess.PIPE,
         stderr=None if is_rank0 else subprocess.PIPE,
         text=True,
         check=True,
+        env=env,
     )
     return json.loads(output.stdout)["path"]
 

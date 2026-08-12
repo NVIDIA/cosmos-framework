@@ -102,6 +102,20 @@ class SequencePlanAugmentor(Augmentor):
             target_resolution_key=self.target_resolution_key,
         )
 
+    def _get_num_frames_and_spatial_shape(
+        self,
+        data_dict: dict,
+        video: object,
+    ) -> tuple[int | None, tuple[int, int] | None]:
+        del data_dict
+        if isinstance(video, torch.Tensor):
+            assert video.ndim == 4, "video should be a tensor with shape (C, T, H, W)"
+            return video.shape[1], (video.shape[2], video.shape[3])  # video: [C,T,H,W]
+
+        # If video is not a tensor or dict, we can't determine the exact number
+        # Use a conservative approach - will be limited by max available frames
+        return None, None
+
     def _get_latent_frame_count(self, num_frames: int | None, spatial_shape: tuple[int, int] | None = None) -> int:
         if num_frames is None:
             return 1
@@ -146,15 +160,7 @@ class SequencePlanAugmentor(Augmentor):
 
         # Determine number of frames
         # Video should be a tensor with shape (C, T, H, W) by this point in the pipeline
-        spatial_shape = None
-        if isinstance(video, torch.Tensor):
-            assert video.ndim == 4, "video should be a tensor with shape (C, T, H, W)"
-            num_frames = video.shape[1]  # video: [C,T,H,W]
-            spatial_shape = (video.shape[2], video.shape[3])
-        else:
-            # If video is not a tensor or dict, we can't determine the exact number
-            # Use a conservative approach - will be limited by max available frames
-            num_frames = None
+        num_frames, spatial_shape = self._get_num_frames_and_spatial_shape(data_dict, video)
 
         T_latent = self._get_latent_frame_count(num_frames, spatial_shape)
 
@@ -182,3 +188,34 @@ class SequencePlanAugmentor(Augmentor):
         data_dict["sequence_plan"] = sequence_plan
 
         return data_dict
+
+
+class MultiviewSequencePlanAugmentor(SequencePlanAugmentor):
+    """Sequence planner for camera-major multiview T2V/I2V samples.
+
+    Multiview video-only datasets pack selected camera clips as
+    ``[C, num_views * frames_per_view, H, W]`` before VAE encoding. The
+    SequencePlan should still store per-view-local latent frame indexes, e.g.
+    ``[0]`` for one I2V conditioning frame per camera. This subclass derives
+    T_latent from ``num_video_frames_per_view`` so the sampled conditioning
+    count is clamped by per-camera length, not the flattened camera-major
+    length. Downstream sequence packing expands those local indexes across all
+    selected cameras using the per-camera VAE metadata.
+    """
+
+    num_frames_key = "num_video_frames_per_view"
+
+    def _get_num_frames_and_spatial_shape(
+        self,
+        data_dict: dict,
+        video: object,
+    ) -> tuple[int | None, tuple[int, int] | None]:
+        _, spatial_shape = super()._get_num_frames_and_spatial_shape(data_dict, video)
+        if self.num_frames_key not in data_dict:
+            raise ValueError(f"{self.num_frames_key} is required for multiview sequence planning.")
+
+        num_frames_value = data_dict[self.num_frames_key]
+        if isinstance(num_frames_value, torch.Tensor):
+            flattened_num_frames = num_frames_value.reshape(-1)  # [N]
+            return int(flattened_num_frames[0].item()), spatial_shape
+        return int(num_frames_value), spatial_shape

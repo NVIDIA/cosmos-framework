@@ -5,6 +5,8 @@
 
 The callback is disabled by default. When enabled, every rank buffers the
 ``__key__`` and ``__url__`` values from batches that reached the training step.
+For Lance Action batches, ``action_sample_fingerprint`` is preferred over
+``__key__`` because it contains the resolved row/start-frame identity.
 At a configurable interval the buffers are gathered to rank 0, which appends
 every consumed sample occurrence to one Lance table.
 
@@ -55,6 +57,24 @@ def _as_list(value: Any, count: int, default: str = "") -> list[str]:
     return values[:count]
 
 
+def _as_optional_string_list(value: Any, count: int) -> list[str | None]:
+    """Normalize optional scalar or batched metadata without stringifying nulls."""
+    if isinstance(value, str):
+        values: list[str | None] = [value]
+    elif isinstance(value, (list, tuple)):
+        values = [str(item) if item is not None else None for item in value]
+    elif value is None:
+        values = []
+    else:
+        values = [str(value)]
+
+    if len(values) == 1 and count > 1:
+        values *= count
+    if len(values) < count:
+        values.extend([None] * (count - len(values)))
+    return values[:count]
+
+
 class SampledMediaRecorder(Callback):
     """Append consumed sample metadata to a Lance table from rank 0.
 
@@ -66,6 +86,11 @@ class SampledMediaRecorder(Callback):
             writes.
         flush_every_n_batches: Number of consumed microbatches buffered per rank
             between distributed gathers and table appends.
+        record_caption: Record the post-augmentation ``ai_caption`` consumed by
+            training. Disabled by default because captions can substantially
+            increase the sampled-media table size. The table always contains a
+            nullable ``caption`` column so this option can be changed safely
+            across restarts.
     """
 
     def __init__(
@@ -74,6 +99,7 @@ class SampledMediaRecorder(Callback):
         output_uri: str = "",
         creds_path: str | None = None,
         flush_every_n_batches: int = 100,
+        record_caption: bool = False,
     ) -> None:
         super().__init__()
         if flush_every_n_batches < 1:
@@ -85,6 +111,7 @@ class SampledMediaRecorder(Callback):
         self.output_uri: str = output_uri
         self.creds_path: str | None = creds_path
         self.flush_every_n_batches: int = flush_every_n_batches
+        self.record_caption: bool = record_caption
 
         self._pending: list[dict[str, Any]] = []
         self._batch_index: int = 0
@@ -111,7 +138,9 @@ class SampledMediaRecorder(Callback):
         return str(getattr(job_config, "name", ""))
 
     def _extract_records(self, data_batch: dict[str, Any], iteration: int, rank: int) -> list[dict[str, Any]]:
-        sample_ids_raw = data_batch.get("__key__")
+        sample_ids_raw = data_batch.get("action_sample_fingerprint")
+        if sample_ids_raw is None:
+            sample_ids_raw = data_batch.get("__key__")
         if sample_ids_raw is None:
             return []
         if isinstance(sample_ids_raw, str):
@@ -127,6 +156,7 @@ class SampledMediaRecorder(Callback):
         media_urls = _as_list(data_batch.get("__url__"), count)
         dataset_names = _as_list(data_batch.get("dataset_name"), count)
         source_names = _as_list(data_batch.get("source_dataset_name"), count)
+        captions = _as_optional_string_list(data_batch.get("ai_caption"), count) if self.record_caption else []
         recorded_at = _utc_now()
         media_type = self._media_type(data_batch)
         run_id = os.environ.get("SLURM_JOB_ID") or os.environ.get("WANDB_RUN_ID", "local")
@@ -145,6 +175,7 @@ class SampledMediaRecorder(Callback):
                 "source_dataset_name": source_names[sample_index],
                 "sample_id": sample_id,
                 "media_url": media_urls[sample_index],
+                "caption": captions[sample_index] if self.record_caption else None,
             }
             for sample_index, sample_id in enumerate(sample_ids)
         ]
@@ -167,8 +198,36 @@ class SampledMediaRecorder(Callback):
                 pa.field("source_dataset_name", pa.string(), nullable=False),
                 pa.field("sample_id", pa.string(), nullable=False),
                 pa.field("media_url", pa.string(), nullable=False),
+                pa.field("caption", pa.string(), nullable=True),
             ]
         )
+
+    def _upgrade_legacy_table_schema(self, existing: Any, storage_options: dict[str, str]) -> Any:
+        """Upgrade the two sampled-media schemas produced before captions became nullable."""
+        import lance
+        import pyarrow as pa
+
+        expected_schema = self._table_schema()
+        expected_base_schema = pa.schema([field for field in expected_schema if field.name != "caption"])
+        existing_base_schema = pa.schema([field for field in existing.schema if field.name != "caption"])
+        if not existing_base_schema.equals(expected_base_schema, check_metadata=False):
+            return existing
+
+        caption_index = existing.schema.get_field_index("caption")
+        schema_changed = False
+        if caption_index < 0:
+            # Passing a nullable field adds an all-null column with a metadata-only operation.
+            existing.add_columns(pa.field("caption", pa.string(), nullable=True))
+            schema_changed = True
+        else:
+            caption_field = existing.schema.field(caption_index)
+            if caption_field.type == pa.string() and not caption_field.nullable:
+                existing.alter_columns({"path": "caption", "nullable": True})
+                schema_changed = True
+
+        if schema_changed:
+            return lance.dataset(self.output_uri, storage_options=storage_options)
+        return existing
 
     def _load_credentials(self) -> dict[str, Any]:
         if self.creds_path is None:
@@ -231,6 +290,7 @@ class SampledMediaRecorder(Callback):
             return
 
         existing = lance.dataset(self.output_uri, storage_options=storage_options)
+        existing = self._upgrade_legacy_table_schema(existing, storage_options)
         if not existing.schema.equals(schema, check_metadata=False):
             raise ValueError(
                 f"Sample recorder schema mismatch for {self.output_uri!r}: expected {schema}, found {existing.schema}."
