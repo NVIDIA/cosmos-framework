@@ -85,6 +85,7 @@ from cosmos_framework.utils.generator.data_utils import get_vision_data_resoluti
 from cosmos_framework.utils.generator.dtensor_helper import DTensorFastEmaModelUpdater
 from cosmos_framework.utils.generator.model_weights_stats import WeightTrainingStat
 from cosmos_framework.utils.generator.parallelism import ParallelDims
+from cosmos_framework.utils.generator.quantization import swap_modelopt_fp8_linears_on_meta
 
 
 class OmniMoTModel(ImaginaireModel):
@@ -289,6 +290,14 @@ class OmniMoTModel(ImaginaireModel):
                     lora_alpha=self.config.lora_alpha,
                     lora_target_modules=self.config.lora_target_modules,
                 )
+
+        # Swap ModelOpt FP8 linears BEFORE FSDP wrap and materialization, for the
+        # same reason LoRA is injected early. `fully_shard` wraps the whole network
+        # into one parameter group, so a linear replaced afterwards leaves the group
+        # holding a stale parameter; and `to_empty` below is what sets peak memory,
+        # which at bf16 shapes exceeds a single 80 GB device for a Super-class model.
+        if self.config.quantization.modelopt_fp8_checkpoint_path:
+            swap_modelopt_fp8_linears_on_meta(net, self.config.quantization.modelopt_fp8_target_fqns)
 
         self.install_attention_dispatch(net)
 
