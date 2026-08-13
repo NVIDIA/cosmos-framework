@@ -226,12 +226,18 @@ class Blocklist(ContentSafetyGuardrail):
         # Check if the input is empty
         if not input_prompt:
             return False, "Input is empty"
-        input_prompt = to_ascii(input_prompt)
 
-        # Check full sentence for censored words
+        # The first pass sees the prompt as written. to_ascii rewrites every
+        # non-ASCII run to a space, which erases exactly the spellings
+        # censor_prompt was taught to fold: a fullwidth or accented letter is
+        # gone rather than normalized, so the word it spells never reaches the
+        # matcher and the prompt reads as clean. censor_prompt does its own
+        # code-point folding, so it needs the original text to fold.
         censored, message = self.censor_prompt(input_prompt)
         if censored:
             return False, message
+
+        input_prompt = to_ascii(input_prompt)
 
         # Check lemmatized words for censored words
         tokens = nltk.word_tokenize(input_prompt)
