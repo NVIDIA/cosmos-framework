@@ -337,6 +337,15 @@ class ConfigFileType(StrEnum):
         raise ValueError(f"Invalid config file: {path}")
 
 
+def _hf_config_has_model_section(config_path: Path) -> bool:
+    """Return whether an HF 'config.json' carries the Cosmos3 'model' section."""
+    try:
+        config_dict = json.loads(config_path.read_text())
+    except (OSError, ValueError):
+        return False
+    return isinstance(config_dict, dict) and isinstance(config_dict.get("model"), dict)
+
+
 def _hf_repository_from_checkpoint_dir(checkpoint_dir: Path) -> str | None:
     """Recover the Hugging Face repository a local checkpoint directory was published under.
 
@@ -597,41 +606,53 @@ class CheckpointOverrides(ConfigOverrides):
     """Directory for caching S3 checkpoints."""
 
     def _resolve_local_hf_config_file(self, checkpoint_dir: Path, *, checkpoints: dict[str, CheckpointConfig]) -> None:
-        """Point 'config_file' at the registered model config for a local HF checkpoint directory.
+        """Point 'config_file' at the model config for a local HF checkpoint directory.
 
-        The architecture always comes from a registered model config, never from
-        the checkpoint directory's own 'config.json'. Passing a registered name
-        as '--checkpoint-path' already resolves that way (see '_build_checkpoint'),
-        and a local copy of the same repository must not resolve differently just
-        because it was named by path. Checkpoints that are not copies of a
-        registered repository have to name their config explicitly.
+        A copy of a registered repository resolves to that entry's model config,
+        the same one a registered '--checkpoint-path' name resolves to. The two
+        spellings of the same checkpoint must not resolve differently, and the
+        registered config is the authority: a published repository's own
+        'config.json' can be an older snapshot of the architecture
+        (nvidia/Cosmos3-Nano omits 'include_visual' and names the text-only
+        processor) or carry no 'model' section at all (nvidia/Cosmos3-Edge).
+
+        Anything else falls back to the directory's own 'config.json', which is
+        the only description available for a checkpoint we do not publish.
         """
         repository = _hf_repository_from_checkpoint_dir(checkpoint_dir)
         registered = next(
             (checkpoint for checkpoint in checkpoints.values() if checkpoint.hf.repository == repository),
             None,
         )
-        if registered is None:
-            known = ", ".join(sorted(checkpoints)) or "<none>"
-            raise ValueError(
-                f"Could not determine which model config describes checkpoint directory: {checkpoint_dir}. "
-                + (
-                    f"The repository it records ({repository}) is not a registered checkpoint."
-                    if repository is not None
-                    else "It records no source repository to match against a registered checkpoint."
-                )
-                + f" Registered checkpoints: {known}. Pass '--config-file' with the Cosmos3 model config that "
-                f"matches this checkpoint (one of 'cosmos_framework/inference/configs/model/*.yaml'), or pass "
-                f"a registered checkpoint name as '--checkpoint-path'."
+        if registered is not None:
+            # Adopt the registry entry's architecture and load-time settings, but
+            # not its 'hf' download spec: the weights are the local directory.
+            self.config_file = registered.config_file
+            self.model_memory_bytes = registered.model_memory_bytes
+            self.vlm_processor_from_checkpoint = registered.vlm_processor_from_checkpoint
+            for value in reversed(registered.experiment_overrides):
+                if value not in self.experiment_overrides:
+                    self.experiment_overrides.insert(0, value)
+            return
+
+        local_config = checkpoint_dir / "config.json"
+        if _hf_config_has_model_section(local_config):
+            self.config_file = str(local_config)
+            return
+
+        known = ", ".join(sorted(checkpoints)) or "<none>"
+        raise ValueError(
+            f"Could not determine which model config describes checkpoint directory: {checkpoint_dir}. "
+            f"Its 'config.json' has no 'model' section, and "
+            + (
+                f"the repository it records ({repository}) is not a registered checkpoint."
+                if repository is not None
+                else "it records no source repository to match against a registered checkpoint."
             )
-        # Adopt the registry entry's architecture and load-time settings, but not
-        # its 'hf' download spec: the weights are the local directory.
-        self.config_file = registered.config_file
-        self.model_memory_bytes = registered.model_memory_bytes
-        self.vlm_processor_from_checkpoint = registered.vlm_processor_from_checkpoint
-        for value in reversed(registered.experiment_overrides):
-            if value not in self.experiment_overrides:
-                self.experiment_overrides.insert(0, value)
+            + f" Registered checkpoints: {known}. Pass '--config-file' with the Cosmos3 model config that "
+            f"matches this checkpoint (one of 'cosmos_framework/inference/configs/model/*.yaml'), or pass "
+            f"a registered checkpoint name as '--checkpoint-path'."
+        )
 
     def _build_checkpoint(self, checkpoints: dict[str, CheckpointConfig]):
         # Detect checkpoint type

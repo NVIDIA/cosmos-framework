@@ -216,18 +216,42 @@ def test_local_checkpoint_without_architecture_raises(tmp_path: Path):
         )
 
 
-def test_local_checkpoint_config_json_never_supplies_the_architecture(tmp_path: Path):
-    """A directory's own 'config.json' is not an architecture source.
+def test_registered_repository_wins_over_the_directory_config(tmp_path: Path):
+    """A registered repository's config wins over the copy's own 'config.json'.
 
-    A registered name and a local copy of the same repository must resolve to the
-    same model config, so a self-describing 'config.json' must not divert that.
+    A published repo's 'config.json' can be an older snapshot of the architecture
+    than the registered config: nvidia/Cosmos3-Nano omits 'include_visual' and
+    names the text-only processor, which made a local copy load a text-only
+    Reasoner. The registered name and a local copy must resolve identically.
+    """
+    checkpoints = OmniSetupOverrides.CHECKPOINTS
+    nano = checkpoints["Cosmos3-Nano"]
+    checkpoint_dir = write_local_hf_checkpoint(
+        tmp_path / "snapshot", config={"model": MODEL_SECTION}, repo_id=nano.hf.repository
+    )
+
+    args = CheckpointOverrides(checkpoint_path=str(checkpoint_dir)).build_checkpoint(checkpoints=checkpoints)
+
+    assert args.config_file == nano.config_file
+    vlm_config = args.load_model_config_dict()["config"]["vlm_config"]
+    assert vlm_config["model_instance"]["config"]["include_visual"] is True
+    assert vlm_config["tokenizer"]["_target_"].endswith("build_processor_lazy")
+
+
+def test_unregistered_local_checkpoint_uses_its_own_config(tmp_path: Path):
+    """A checkpoint we do not publish keeps describing itself.
+
+    Its own 'config.json' is the only description available, so it must keep
+    working without '--config-file' (e.g. the ModelOpt FP8 Nano checkpoint, which
+    ships from a subdirectory of an unregistered repository).
     """
     checkpoint_dir = write_local_hf_checkpoint(tmp_path / "self-described", config={"model": MODEL_SECTION})
 
-    with pytest.raises(ValueError, match="Could not determine which model config"):
-        CheckpointOverrides(checkpoint_path=str(checkpoint_dir)).build_checkpoint(
-            checkpoints=OmniSetupOverrides.CHECKPOINTS
-        )
+    args = CheckpointOverrides(checkpoint_path=str(checkpoint_dir)).build_checkpoint(
+        checkpoints=OmniSetupOverrides.CHECKPOINTS
+    )
+
+    assert args.config_file == str(checkpoint_dir / "config.json")
 
 
 def test_explicit_config_file_bypasses_resolution(tmp_path: Path):

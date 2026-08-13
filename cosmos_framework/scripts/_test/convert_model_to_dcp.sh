@@ -17,12 +17,8 @@ CUDA_VISIBLE_DEVICES= python -m cosmos_framework.scripts.export_model \
     --no-use-ema-weights
 
 # HF Inference
-# The architecture always comes from a registered model config. This directory is
-# an export_model output rather than a copy of a registered repository, so it has
-# to name that config explicitly.
 torchrun $TORCHRUN_ARGS -m cosmos_framework.scripts.inference \
     -i "$INPUT_DIR/omni/t2i.json" \
     -o $OUTPUT_DIR/inference \
     --checkpoint-path $TMP_DIR/model \
-    --config-file cosmos_framework/inference/configs/model/Cosmos3-Nano.yaml \
     $INFERENCE_ARGS
