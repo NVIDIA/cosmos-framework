@@ -11,7 +11,6 @@ from cosmos_framework.configs.base.defaults.compile import CompileConfig
 from cosmos_framework.configs.base.defaults.ema import EMAConfig
 from cosmos_framework.configs.base.defaults.flex_attention import FlexAttentionConfig
 from cosmos_framework.configs.base.defaults.parallelism import ParallelismConfig
-from cosmos_framework.configs.base.defaults.quantization import QuantizationConfig
 from cosmos_framework.configs.base.defaults.reasoner import VLMConfig
 from cosmos_framework.model.generator.utils.load_balancing_stats import LBLConfig
 
@@ -32,6 +31,10 @@ class DiffusionExpertConfig:
     # Whether to add separate learned modality embeddings to image and video generation tokens.
     # Disabled by default to preserve legacy checkpoints and model behavior.
     enable_vision_modality_embeddings: bool = False
+    # Whether to add a single shared learned modality embedding to both image and video
+    # generation tokens (``media_modality_embed``). Mutually exclusive with
+    # ``enable_vision_modality_embeddings``. Disabled by default.
+    enable_media_modality_embedding: bool = False
 
     patch_spatial: int = 2
     max_vae_latent_side_after_patchify: int = (
@@ -163,12 +166,6 @@ class OmniMoTModelConfig:
 
     # torch.compile knobs (enabled, compiled_region, dynamic, ...).
     compile: CompileConfig = CompileConfig()
-
-    # Post-training quantization + ModelOpt FP8 checkpoint metadata. Mirrored
-    # from Cosmos3OmniConfig.quantization (see ``inference/model.py``) so
-    # ``build_net`` can read modelopt_fp8_checkpoint_path / target_fqns without
-    # reaching outside the model config schema.
-    quantization: QuantizationConfig = QuantizationConfig()
 
     # Activation-checkpointing policy (trade-off between memory and speed).
     activation_checkpointing: ActivationCheckpointingConfig = ActivationCheckpointingConfig()

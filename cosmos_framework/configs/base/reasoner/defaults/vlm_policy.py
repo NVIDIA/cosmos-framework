@@ -54,6 +54,10 @@ qwen3_vl_32b_instruct = PolicyConfig(backbone=VLMConfig(model_name="Qwen/Qwen3-V
 
 nemotron_nano_12b_v2_vl_bf16 = PolicyConfig(backbone=VLMConfig(model_name="nvidia/NVIDIA-Nemotron-Nano-12B-v2-VL-BF16"))
 
+signemo_vl_2b = PolicyConfig(
+    backbone=VLMConfig(model_name="nvidia/NVIDIA-Nemotron-3-Dense-VL-2B-BF16-Alignment"), model_max_length=16000
+)
+
 # Cosmos3-Edge reasoner (Nemotron-2B-Dense-VL LM + SigLIP2 vision tower).
 # model_name is the public (ungated) omni release nvidia/Cosmos3-Edge,
 # model_type "cosmos3_edge" (native HF metadata, no remote code; classes are
@@ -159,6 +163,12 @@ def register_vlm_policy():
         package="model.config.policy",
         name="nemotron_nano_12b_v2_vl_bf16",
         node=nemotron_nano_12b_v2_vl_bf16,
+    )
+    cs.store(
+        group="vlm_policy",
+        package="model.config.policy",
+        name="signemo_vl_2b",
+        node=signemo_vl_2b,
     )
     cs.store(
         group="vlm_policy",
