@@ -32,6 +32,7 @@ import torch
 import torch.distributed as dist
 import torch.nn.functional as F
 
+from cosmos_framework.utils.generator.input_probe import maybe_dump_loss_reduction
 from cosmos_framework.utils.generator.reasoner.constant import IGNORE_INDEX
 
 
@@ -107,6 +108,8 @@ def weighted_cross_entropy_loss(
     dp_group: dist.ProcessGroup | None = None,
     cp_group: dist.ProcessGroup | None = None,
     ignore_index: int = IGNORE_INDEX,
+    probe_step: int | None = None,
+    probe_tag: str | None = None,
 ) -> torch.Tensor:
     """Next-token-prediction CE loss interpolated between per-token and per-sample reductions.
 
@@ -149,11 +152,23 @@ def weighted_cross_entropy_loss(
     sample_losses = (per_token_loss * valid_mask).sum(dim=1) / valid_counts.clamp(min=1).pow(exponent)  # [B]
     local_loss_sum = (sample_losses * has_valid).sum()  # []
     local_exp_weight_sum = (valid_counts.pow(1 - exponent) * has_valid).sum()  # []
+    local_exp_weight_sum_before = local_exp_weight_sum.detach().clone()  # []
 
     num_dp_workers = 1
     if dist.is_available() and dist.is_initialized():
-        dist.all_reduce(local_exp_weight_sum, op=dist.ReduceOp.SUM)
+        dist.all_reduce(local_exp_weight_sum, op=dist.ReduceOp.SUM)  # local_exp_weight_sum: []
         num_dp_workers = dist.get_world_size()
-
     loss = local_loss_sum / local_exp_weight_sum.clamp(min=1) * (num_dp_workers * loss_scaling_factor)  # []
+    maybe_dump_loss_reduction(
+        step=probe_step,
+        tag=probe_tag,
+        valid_counts=valid_counts,
+        local_loss_sum=local_loss_sum,
+        denominator_before=local_exp_weight_sum_before,
+        denominator_after=local_exp_weight_sum,
+        final_loss=loss,
+        exponent=exponent,
+        loss_scaling_factor=loss_scaling_factor,
+        world_size=num_dp_workers,
+    )
     return loss

@@ -42,11 +42,7 @@ class GuardrailRunner:
     def run_safety_check(self, input: Any) -> tuple[bool, str]:
         """Run the safety check on the input."""
         if not self.safety_models:
-            log.warning(
-                "No content-safety models configured: the safety check is DISABLED and "
-                "the input is treated as safe. The configured posture does NOT include "
-                "the video content-safety stage for this release."
-            )
+            log.warning("No safety models found, returning safe")
             return True, self.generic_safe_msg
 
         for guardrail in self.safety_models:

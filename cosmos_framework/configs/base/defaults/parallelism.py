@@ -40,12 +40,25 @@ class ParallelismConfig:
     enable_inference_mode: bool = False
 
     # Dtype of the FSDP-sharded "master" parameter copy: what nn.Parameter.data
-    # holds on each rank, what the optimizer reads/writes against, and what the
-    # cross-rank gradient reduce-scatter accumulates into. Threaded both to the
-    # HFModel meta-init (sharded-param storage dtype) and to
-    # MixedPrecisionPolicy.reduce_dtype (gradient comm dtype); these must match
-    # because the reduced gradient writes back into the master param's shard.
-    # The forward/backward compute dtype is the separate ``precision`` field on
-    # the model config (mapped to MixedPrecisionPolicy.param_dtype).
+    # holds on each rank, what the optimizer reads/writes against, and the dtype
+    # the reduced gradient lands in. Threaded both to the HFModel meta-init
+    # (sharded-param storage dtype) and, unless ``fsdp_reduce_dtype`` overrides
+    # it, to MixedPrecisionPolicy.reduce_dtype. The forward/backward compute
+    # dtype is the separate ``precision`` field on the model config (mapped to
+    # MixedPrecisionPolicy.param_dtype).
     # NOTE: only used in VLM; VFM has no FSDP master.
     fsdp_master_dtype: str = "float32"
+
+    # Dtype of the gradient reduce-scatter itself (MixedPrecisionPolicy.reduce_dtype),
+    # decoupled from the master-parameter dtype above. None (the default) reuses
+    # fsdp_master_dtype, i.e. reduce in the master dtype for numerical headroom when
+    # summing across a large shard group.
+    #
+    # Setting "bfloat16" halves the reduce-scatter staging buffer, which FSDP2 sizes at
+    # the FULL unsharded gradient of the unit being reduced — 9.3 GiB per decoder layer
+    # on Qwen3-VL-235B-A22B. The master copy is unaffected: FSDP2's foreach_reduce casts
+    # the reduce output back to the sharded parameter's dtype before assigning .grad, so
+    # only the collective and its staging buffer change. The cost is precision, since
+    # gradients are then summed across the shard group in bf16.
+    # NOTE: only used in VLM; VFM has no FSDP master.
+    fsdp_reduce_dtype: str | None = None

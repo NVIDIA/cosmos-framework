@@ -12,6 +12,7 @@ This module provides:
     - AutoencoderKL: Base VAE model with KL loss for encoding/decoding
 """
 
+import math
 import os
 from dataclasses import dataclass
 from functools import partial
@@ -79,6 +80,16 @@ def _validate_vision_checkpoint_group_size(*, name: str | None, group_size: int)
         raise ValueError(f"{prefix}checkpoint_group_size must be a positive integer, got {group_size!r}.")
 
 
+def _validate_position_embedding_scale(*, name: str, scale: float) -> float:
+    """Return one finite vision position-embedding scale."""
+    if isinstance(scale, bool) or not isinstance(scale, (int, float)):
+        raise TypeError(f"{name}_position_embedding_scale must be a finite number, got {scale!r}.")
+    resolved_scale = float(scale)
+    if not np.isfinite(resolved_scale):
+        raise ValueError(f"{name}_position_embedding_scale must be finite, got {scale!r}.")
+    return resolved_scale
+
+
 def _validate_encoder_mlp_only_checkpoint_max_tokens(
     *,
     max_tokens: int | None,
@@ -101,6 +112,37 @@ def _validate_encoder_mlp_only_checkpoint_max_tokens(
         )
     if freeze_encoder:
         raise ValueError("encoder_mlp_only_checkpoint_max_tokens is incompatible with freeze_encoder=True.")
+
+
+def _validate_register_token_config(
+    *,
+    num_learned_register_tokens: int,
+    use_zero_input_register_token: bool,
+    register_token_init_std: float,
+    multiscale: dict[int, dict[str, Any]] | None,
+) -> None:
+    """Validate one transformer's optional suffix-register configuration."""
+    if (
+        isinstance(num_learned_register_tokens, bool)
+        or not isinstance(num_learned_register_tokens, int)
+        or num_learned_register_tokens < 0
+    ):
+        raise ValueError(
+            f"num_learned_register_tokens must be a non-negative integer, got {num_learned_register_tokens!r}."
+        )
+    if not isinstance(use_zero_input_register_token, bool):
+        raise TypeError(
+            f"use_zero_input_register_token must be a bool, got {type(use_zero_input_register_token).__name__}."
+        )
+    if (
+        isinstance(register_token_init_std, bool)
+        or not isinstance(register_token_init_std, int | float)
+        or not math.isfinite(register_token_init_std)
+        or register_token_init_std < 0.0
+    ):
+        raise ValueError(f"register_token_init_std must be finite and non-negative, got {register_token_init_std!r}.")
+    if (num_learned_register_tokens > 0 or use_zero_input_register_token) and multiscale is not None:
+        raise ValueError("Register tokens are not supported with multiscale transformer blocks.")
 
 
 def _run_sparse_checkpoint_group(
@@ -474,6 +516,11 @@ class SparseTransformerBase(nn.Module):
         gradient_checkpoint_scope: Literal["full_layer", "mlp_only"] = SPARSE_TRANSFORMER_CHECKPOINT_SCOPE_FULL_LAYER,
         fast_position_embedding_upsample_backward: bool = False,
         use_ragged_varlen_train_path: bool = False,
+        position_embedding_scale: float = 1.0,
+        num_learned_register_tokens: int = 0,
+        use_zero_input_register_token: bool = False,
+        register_token_init_std: float = 0.0,
+        qk_rms_norm_eps: float | None = None,
     ) -> None:
         """Initialize SparseTransformerBase.
 
@@ -487,6 +534,8 @@ class SparseTransformerBase(nn.Module):
             pe_mode: Position embedding mode.
             use_checkpoint: Whether to use gradient checkpointing.
             qk_rms_norm: Whether to apply RMS norm to Q/K.
+            qk_rms_norm_eps: Optional finite epsilon for true Q/K RMS
+                normalization. ``None`` preserves historical behavior.
             use_bias: Whether to use bias in linear layers.
             use_rms_norm: Whether to use RMSNorm (vs LayerNorm).
             ln_affine: Whether to use affine parameters in LayerNorm.
@@ -502,9 +551,24 @@ class SparseTransformerBase(nn.Module):
                 transformer layer or only its MLP residual sublayer.
             fast_position_embedding_upsample_backward: Whether qualifying
                 learned 2D position upsampling uses the faster adjoint.
+            position_embedding_scale: Multiplicative scale for additive APE.
+                Zero disables APE while retaining RoPE for ``joint`` mode.
+            num_learned_register_tokens: Number of learned suffix tokens added
+                independently to every attention segment.
+            use_zero_input_register_token: Whether to append one parameter-free
+                zero-input suffix token after the learned register tokens.
+            register_token_init_std: Standard deviation for independent normal
+                initialization of learned register tokens. Zero initializes the
+                learned registers exactly without advancing the RNG state.
         """
         super().__init__()
         _validate_vision_checkpoint_group_size(name=None, group_size=checkpoint_group_size)
+        _validate_register_token_config(
+            num_learned_register_tokens=num_learned_register_tokens,
+            use_zero_input_register_token=use_zero_input_register_token,
+            register_token_init_std=register_token_init_std,
+            multiscale=multiscale,
+        )
         if (
             not isinstance(gradient_checkpoint_scope, str)
             or gradient_checkpoint_scope not in SPARSE_TRANSFORMER_CHECKPOINT_SCOPES
@@ -518,14 +582,34 @@ class SparseTransformerBase(nn.Module):
         self.num_heads = num_heads or model_channels // num_head_channels
         self.mlp_channels = mlp_channels
         self.pe_mode = pe_mode
+        self.position_embedding_scale: float = _validate_position_embedding_scale(
+            name="vision",
+            scale=position_embedding_scale,
+        )
         self.use_checkpoint = use_checkpoint
         self.qk_rms_norm = qk_rms_norm
+        self.qk_rms_norm_eps: float | None = qk_rms_norm_eps
         self.use_bias = use_bias
         self.use_rms_norm = use_rms_norm
         self.dense_train_backend = dense_train_backend
         self.use_ragged_varlen_train_path: bool = use_ragged_varlen_train_path
         self.checkpoint_group_size: int = checkpoint_group_size
         self.gradient_checkpoint_scope: Literal["full_layer", "mlp_only"] = gradient_checkpoint_scope
+        self.num_learned_register_tokens: int = num_learned_register_tokens
+        self.use_zero_input_register_token: bool = use_zero_input_register_token
+        self.register_token_init_std: float = register_token_init_std
+
+        self.register_tokens: nn.Parameter | None
+        if num_learned_register_tokens > 0:
+            self.register_tokens = nn.Parameter(  # [1,R,D]
+                torch.empty(1, num_learned_register_tokens, model_channels)  # [1,R,D]
+            )
+            if register_token_init_std == 0.0:
+                nn.init.zeros_(self.register_tokens)
+            else:
+                nn.init.normal_(self.register_tokens, mean=0.0, std=register_token_init_std)
+        else:
+            self.register_tokens = None
 
         if pe_mode == "ape":
             self.pos_embedder = AbsolutePositionEmbedder(model_channels)
@@ -555,6 +639,7 @@ class SparseTransformerBase(nn.Module):
                     use_checkpoint=self.use_checkpoint,
                     use_rope=(pe_mode in ["rope", "joint"]),
                     qk_rms_norm=self.qk_rms_norm,
+                    qk_rms_norm_eps=self.qk_rms_norm_eps,
                     use_bias=self.use_bias,
                     use_rms_norm=self.use_rms_norm,
                     multiscale=cfg.get(i, None),
@@ -579,6 +664,109 @@ class SparseTransformerBase(nn.Module):
             self.dense_train_backend,
             use_compile=torch.compiler.is_compiling(),
         )
+
+    @property
+    def num_register_tokens(self) -> int:
+        """Return the number of learned plus parameter-free suffix tokens."""
+        return self.num_learned_register_tokens + int(self.use_zero_input_register_token)
+
+    def _append_register_tokens(self, hidden_states: SparseTensor) -> SparseTensor:
+        """Append suffix registers to every sparse attention segment."""
+        if self.num_register_tokens == 0:
+            return hidden_states
+
+        feature_parts: list[torch.Tensor] = []
+        coordinate_parts: list[torch.Tensor] = []
+        layout: list[slice] = []
+        offset = 0
+        register_parts: list[torch.Tensor] = []
+        if self.register_tokens is not None:
+            learned_registers = self.register_tokens[0].to(dtype=hidden_states.dtype)  # [R,D]
+            register_parts.append(learned_registers)
+        if self.use_zero_input_register_token:
+            zero_register = hidden_states.feats.new_zeros((1, hidden_states.feats.shape[-1]))  # [1,D]
+            register_parts.append(zero_register)
+        suffix_features = cat_with_bounded_inputs(register_parts, dim=0)  # [K,D]
+
+        for batch_index, batch_slice in enumerate(hidden_states.layout):
+            batch_features = hidden_states.feats[batch_slice]  # [S,D]
+            batch_coordinates = hidden_states.coords[batch_slice]  # [S,P]
+            special_coordinates = torch.full(  # [K,P]
+                (self.num_register_tokens, hidden_states.coords.shape[-1]),
+                -1,
+                dtype=hidden_states.coords.dtype,
+                device=hidden_states.coords.device,
+            )
+            special_coordinates[:, 0] = batch_index
+            segment_features = torch.cat((batch_features, suffix_features), dim=0)  # [S+K,D]
+            segment_coordinates = torch.cat((batch_coordinates, special_coordinates), dim=0)  # [S+K,P]
+            feature_parts.append(segment_features)
+            coordinate_parts.append(segment_coordinates)
+            segment_length = segment_features.shape[0]
+            layout.append(slice(offset, offset + segment_length))
+            offset += segment_length
+
+        features = cat_with_bounded_inputs(feature_parts, dim=0)  # [T+B*K,D]
+        coordinates = cat_with_bounded_inputs(coordinate_parts, dim=0)  # [T+B*K,P]
+        return SparseTensor(
+            feats=features,
+            coords=coordinates,
+            shape=torch.Size([hidden_states.shape[0], *features.shape[1:]]),
+            layout=layout,
+            scale=hidden_states._scale,
+            has_special_tokens=True,
+        )
+
+    def _strip_register_tokens(
+        self,
+        hidden_states: SparseTensor,
+        output_template: SparseTensor,
+    ) -> SparseTensor:
+        """Drop internal suffix registers and restore the caller's sparse metadata."""
+        if self.num_register_tokens == 0:
+            return hidden_states
+        if len(hidden_states.layout) != len(output_template.layout):
+            raise RuntimeError(
+                "Register-token execution changed the attention-segment count: "
+                f"expected {len(output_template.layout)}, got {len(hidden_states.layout)}."
+            )
+
+        feature_parts: list[torch.Tensor] = []
+        for batch_index, (batch_slice, template_slice) in enumerate(
+            zip(hidden_states.layout, output_template.layout, strict=True)
+        ):
+            expected_patch_tokens = template_slice.stop - template_slice.start
+            expected_segment_tokens = expected_patch_tokens + self.num_register_tokens
+            actual_segment_tokens = batch_slice.stop - batch_slice.start
+            if actual_segment_tokens != expected_segment_tokens:
+                raise RuntimeError(
+                    "Register-token execution changed segment length for batch "
+                    f"{batch_index}: expected {expected_segment_tokens}, got {actual_segment_tokens}."
+                )
+            patch_end = batch_slice.stop - self.num_register_tokens
+            feature_parts.append(hidden_states.feats[batch_slice.start : patch_end])  # [S,D]
+
+        patch_features = cat_with_bounded_inputs(feature_parts, dim=0)  # [T,D]
+        if patch_features.shape[0] != output_template.feats.shape[0]:
+            raise RuntimeError(
+                "Register-token removal did not restore the original row count: "
+                f"expected {output_template.feats.shape[0]}, got {patch_features.shape[0]}."
+            )
+        return output_template.replace(patch_features)
+
+    def _finalize_register_token_outputs(
+        self,
+        hidden_states: SparseTensor,
+        intermediate_hidden_states: list[SparseTensor] | None,
+        output_template: SparseTensor,
+    ) -> tuple[SparseTensor, list[SparseTensor] | None]:
+        """Remove internal registers from final and intermediate outputs."""
+        hidden_states = self._strip_register_tokens(hidden_states, output_template)  # [B,*S,D]
+        if intermediate_hidden_states is not None:
+            intermediate_hidden_states = [
+                self._strip_register_tokens(state, output_template) for state in intermediate_hidden_states
+            ]  # list[[B,*S,D]]
+        return hidden_states, intermediate_hidden_states
 
     def _can_use_grouped_checkpointing(
         self,
@@ -640,14 +828,28 @@ class SparseTransformerBase(nn.Module):
 
         h = self.input_layer(x)
 
-        if self.pe_mode == "ape":
-            h = h + self.pos_embedder(x.coords[:, 1:]).to(h.dtype)
-        elif self.pe_mode in ["learned", "learned4d", "joint"]:
-            h = h + self.pos_embedder(x)
+        if self.position_embedding_scale != 0.0:
+            if self.pe_mode == "ape":
+                position_embedding = self.pos_embedder(x.coords[:, 1:]).to(h.dtype)  # [N,D]
+            elif self.pe_mode in ["learned", "learned4d", "joint"]:
+                position_embedding = self.pos_embedder(x)  # [N,D]
+            else:
+                position_embedding = None
+            if position_embedding is not None and self.position_embedding_scale == 1.0:
+                h = h + position_embedding  # [N,D]
+            elif position_embedding is not None:
+                h = h + position_embedding * self.position_embedding_scale  # [N,D]
 
         block_dtype = next(self.blocks.parameters()).dtype
         if h.dtype != block_dtype:
             h = h.to(block_dtype)
+        output_template = h
+        if self.num_register_tokens > 0:
+            if temporal_causal_mask:
+                raise ValueError("Register tokens are not supported with temporal-causal decoder attention.")
+            if kv_cache_size is not None and kv_cache_size > 0:
+                raise ValueError("Register tokens are not supported with a non-empty decoder KV cache.")
+            h = self._append_register_tokens(h)  # [B,*S+K,D]
         use_grouped_checkpointing = self._can_use_grouped_checkpointing(
             hidden_states=hs,
             kv_cache_size=kv_cache_size,
@@ -663,7 +865,7 @@ class SparseTransformerBase(nn.Module):
                 hs is None,
                 kv_cache_size is None,
                 not temporal_causal_mask,
-                not h.has_special_tokens(),
+                not x.has_special_tokens(),
                 all(getattr(block, "multiscale", None) is None for block in self.blocks),
                 all(getattr(block.attn, "_type", None) == "self" for block in self.blocks),
             )
@@ -686,7 +888,7 @@ class SparseTransformerBase(nn.Module):
                         0
                     ].attn.rope.compute_freqs_cis(  # [T,D_rope]
                         h.coords[:, 1:],
-                        has_special_tokens=False,
+                        has_special_tokens=h.has_special_tokens(),
                     )
             # dense_batch_tokens: ([B,S,D], bool) or None
             dense_batch_tokens = _sparse_tensor_to_dense_batch_tokens(h) if can_use_dense_train_path else None
@@ -712,7 +914,8 @@ class SparseTransformerBase(nn.Module):
                         q_freqs_cis=q_freqs_cis,
                         checkpoint_group_size=checkpoint_group_size,
                     )
-                    h = h.replace(flat_features)  # [B,*S,D]
+                    h = h.replace(flat_features)  # [B,*S+K,D]
+                    h, hs = self._finalize_register_token_outputs(h, hs, output_template)
                     empty_kv_cache: dict[str, SparseTensor]
                     if kv_cache is None:
                         empty_kv_cache = {}
@@ -744,7 +947,10 @@ class SparseTransformerBase(nn.Module):
                         q_freqs_cis=q_freqs_cis,
                         checkpoint_group_size=checkpoint_group_size,
                     )
-                h = h.replace(_dense_batch_tokens_to_flat_features(dense_feats, used_reshape_fast_path))
+                h = h.replace(  # [B,*S+K,D]
+                    _dense_batch_tokens_to_flat_features(dense_feats, used_reshape_fast_path)  # [T+B*K,D]
+                )
+                h, hs = self._finalize_register_token_outputs(h, hs, output_template)
                 empty_kv_cache: dict[str, SparseTensor]
                 if kv_cache is None:
                     empty_kv_cache = {}
@@ -800,7 +1006,8 @@ class SparseTransformerBase(nn.Module):
                         max_q_seqlen=max_q_seqlen,
                         q_freqs_cis=q_freqs_cis,
                     )
-                h = h.replace(feats)
+                h = h.replace(feats)  # [B,*S+K,D]
+                h, hs = self._finalize_register_token_outputs(h, hs, output_template)
                 empty_kv_cache: dict[str, SparseTensor]
                 if kv_cache is None:
                     empty_kv_cache = {}
@@ -870,7 +1077,8 @@ class SparseTransformerBase(nn.Module):
                         q_freqs_cis=q_freqs_cis,
                     )
                     kv_cache[block_cache_key] = updated_block_cache
-                h = h.replace(feats)
+                h = h.replace(feats)  # [B,*S+K,D]
+                h, hs = self._finalize_register_token_outputs(h, hs, output_template)
                 return h, hs, kv_cache
 
         if kv_cache_size is None and not temporal_causal_mask:
@@ -908,6 +1116,7 @@ class SparseTransformerBase(nn.Module):
             else:
                 kv_cache.clear()
                 empty_kv_cache = kv_cache
+            h, hs = self._finalize_register_token_outputs(h, hs, output_template)
             return h, hs, empty_kv_cache
 
         if kv_cache is None:
@@ -933,6 +1142,7 @@ class SparseTransformerBase(nn.Module):
             if hs is not None:
                 hs.append(h)
 
+        h, hs = self._finalize_register_token_outputs(h, hs, output_template)
         return h, hs, kv_cache
 
 
@@ -960,6 +1170,11 @@ class Encoder(SparseTransformerBase):
         gradient_checkpoint_scope: Literal["full_layer", "mlp_only"] = SPARSE_TRANSFORMER_CHECKPOINT_SCOPE_FULL_LAYER,
         fast_position_embedding_upsample_backward: bool = False,
         use_ragged_varlen_train_path: bool = False,
+        position_embedding_scale: float = 1.0,
+        num_learned_register_tokens: int = 0,
+        use_zero_input_register_token: bool = False,
+        register_token_init_std: float = 0.0,
+        qk_rms_norm_eps: float | None = None,
     ) -> None:
         """Initialize Encoder.
 
@@ -973,6 +1188,8 @@ class Encoder(SparseTransformerBase):
             pe_mode: Position embedding mode.
             use_checkpoint: Whether to use gradient checkpointing.
             qk_rms_norm: Whether to apply RMS norm to Q/K.
+            qk_rms_norm_eps: Optional finite epsilon for true Q/K RMS
+                normalization. ``None`` preserves historical behavior.
             use_bias: Whether to use bias in linear layers.
             use_rms_norm: Whether to use RMSNorm.
             pretrained_model: Optional pretrained vision model for weight init.
@@ -988,6 +1205,11 @@ class Encoder(SparseTransformerBase):
                 encoder layer or only its MLP residual sublayer.
             fast_position_embedding_upsample_backward: Whether qualifying
                 learned 2D position upsampling uses the faster adjoint.
+            position_embedding_scale: Multiplicative scale for additive APE.
+            num_learned_register_tokens: Number of learned suffix register tokens.
+            use_zero_input_register_token: Whether to add one parameter-free
+                zero-input suffix register token.
+            register_token_init_std: Learned-register initialization standard deviation.
         """
         super().__init__(
             in_channels,
@@ -999,6 +1221,7 @@ class Encoder(SparseTransformerBase):
             pe_mode,
             use_checkpoint,
             qk_rms_norm,
+            qk_rms_norm_eps=qk_rms_norm_eps,
             use_bias=use_bias,
             use_rms_norm=use_rms_norm,
             dense_train_backend=dense_train_backend,
@@ -1006,6 +1229,10 @@ class Encoder(SparseTransformerBase):
             checkpoint_group_size=checkpoint_group_size,
             gradient_checkpoint_scope=gradient_checkpoint_scope,
             fast_position_embedding_upsample_backward=fast_position_embedding_upsample_backward,
+            position_embedding_scale=position_embedding_scale,
+            num_learned_register_tokens=num_learned_register_tokens,
+            use_zero_input_register_token=use_zero_input_register_token,
+            register_token_init_std=register_token_init_std,
         )
         self.concat_latent = concat_latent
         self.use_head = use_head
@@ -1022,6 +1249,7 @@ class Encoder(SparseTransformerBase):
             use_bias=use_bias,
             use_rms_norm=use_rms_norm,
             qk_rms_norm=qk_rms_norm,
+            qk_rms_norm_eps=qk_rms_norm_eps,
         )
 
         if pretrained_model is not None:
@@ -1227,6 +1455,11 @@ class Decoder(SparseTransformerBase):
         checkpoint_group_size: int = 1,
         fast_position_embedding_upsample_backward: bool = False,
         use_ragged_varlen_train_path: bool = False,
+        position_embedding_scale: float = 1.0,
+        num_learned_register_tokens: int = 0,
+        use_zero_input_register_token: bool = False,
+        register_token_init_std: float = 0.0,
+        qk_rms_norm_eps: float | None = None,
     ) -> None:
         """Initialize Decoder.
 
@@ -1241,6 +1474,8 @@ class Decoder(SparseTransformerBase):
             pe_mode: Position embedding mode.
             use_checkpoint: Whether to use gradient checkpointing.
             qk_rms_norm: Whether to apply RMS norm to Q/K.
+            qk_rms_norm_eps: Optional finite epsilon for true Q/K RMS
+                normalization. ``None`` preserves historical behavior.
             use_bias: Whether to use bias in linear layers.
             use_rms_norm: Whether to use RMSNorm.
             multiscale: Multiscale expansion configuration.
@@ -1253,6 +1488,11 @@ class Decoder(SparseTransformerBase):
                 checkpoint. One preserves per-block checkpointing.
             fast_position_embedding_upsample_backward: Whether qualifying
                 learned 2D position upsampling uses the faster adjoint.
+            position_embedding_scale: Multiplicative scale for additive APE.
+            num_learned_register_tokens: Number of learned suffix register tokens.
+            use_zero_input_register_token: Whether to add one parameter-free
+                zero-input suffix register token.
+            register_token_init_std: Learned-register initialization standard deviation.
         """
         super().__init__(
             in_channels,
@@ -1264,6 +1504,7 @@ class Decoder(SparseTransformerBase):
             pe_mode,
             use_checkpoint,
             qk_rms_norm,
+            qk_rms_norm_eps=qk_rms_norm_eps,
             use_bias=use_bias,
             use_rms_norm=use_rms_norm,
             multiscale=multiscale,
@@ -1271,6 +1512,10 @@ class Decoder(SparseTransformerBase):
             use_ragged_varlen_train_path=use_ragged_varlen_train_path,
             checkpoint_group_size=checkpoint_group_size,
             fast_position_embedding_upsample_backward=fast_position_embedding_upsample_backward,
+            position_embedding_scale=position_embedding_scale,
+            num_learned_register_tokens=num_learned_register_tokens,
+            use_zero_input_register_token=use_zero_input_register_token,
+            register_token_init_std=register_token_init_std,
         )
         self.multiscale = multiscale
         self.multiscale_outputs = multiscale_outputs
@@ -1392,17 +1637,27 @@ class AutoencoderKLConfig:
     encoder_num_heads: int | None = None
     encoder_mlp_channels: float = 2048
     encoder_pe_mode: str = "rope"
+    encoder_position_embedding_scale: float = 1.0
     encoder_qk_rms_norm: bool = True
+    encoder_qk_rms_norm_eps: float | None = None
     encoder_use_bias: bool = False
     encoder_use_rms_norm: bool = True
+    encoder_num_learned_register_tokens: int = 0
+    encoder_use_zero_input_register_token: bool = False
+    encoder_register_token_init_std: float = 0.0
     decoder_model_channels: int = 768
     decoder_num_blocks: int = 12
     decoder_num_heads: int | None = None
     decoder_mlp_channels: float = 2048
     decoder_pe_mode: str = "rope"
+    decoder_position_embedding_scale: float = 1.0
     decoder_qk_rms_norm: bool = True
+    decoder_qk_rms_norm_eps: float | None = None
     decoder_use_bias: bool = False
     decoder_use_rms_norm: bool = True
+    decoder_num_learned_register_tokens: int = 0
+    decoder_use_zero_input_register_token: bool = False
+    decoder_register_token_init_std: float = 0.0
     decoder_multiscale: dict[int, dict[str, Any]] | None = None
     decoder_multiscale_outputs: dict[int, dict[str, Any]] | None = None
     use_decoder: bool = True
@@ -1490,17 +1745,25 @@ class AutoencoderKL(ModelMixin, ConfigMixin, FromOriginalModelMixin):
         encoder_num_heads: int | None = None,
         encoder_mlp_channels: float = 2048,
         encoder_pe_mode: str = "rope",
+        encoder_position_embedding_scale: float = 1.0,
         encoder_qk_rms_norm: bool = True,
         encoder_use_bias: bool = False,
         encoder_use_rms_norm: bool = True,
+        encoder_num_learned_register_tokens: int = 0,
+        encoder_use_zero_input_register_token: bool = False,
+        encoder_register_token_init_std: float = 0.0,
         decoder_model_channels: int = 768,
         decoder_num_blocks: int = 12,
         decoder_num_heads: int | None = None,
         decoder_mlp_channels: float = 2048,
         decoder_pe_mode: str = "rope",
+        decoder_position_embedding_scale: float = 1.0,
         decoder_qk_rms_norm: bool = True,
         decoder_use_bias: bool = False,
         decoder_use_rms_norm: bool = True,
+        decoder_num_learned_register_tokens: int = 0,
+        decoder_use_zero_input_register_token: bool = False,
+        decoder_register_token_init_std: float = 0.0,
         decoder_multiscale: dict[int, dict[str, Any]] | None = None,
         decoder_multiscale_outputs: dict[int, dict[str, Any]] | None = None,
         use_decoder: bool = True,
@@ -1552,6 +1815,8 @@ class AutoencoderKL(ModelMixin, ConfigMixin, FromOriginalModelMixin):
         text_decoder_use_image_position_embeddings: bool = True,
         text_decoder_use_distinct_media_tokens: bool = False,
         text_decoder_model_revision: str | None = None,
+        encoder_qk_rms_norm_eps: float | None = None,
+        decoder_qk_rms_norm_eps: float | None = None,
     ) -> None:
         super().__init__()
         self.use_checkpoint = use_checkpoint
@@ -1649,6 +1914,7 @@ class AutoencoderKL(ModelMixin, ConfigMixin, FromOriginalModelMixin):
             mlp_channels=encoder_mlp_channels,
             pe_mode=encoder_pe_mode,
             qk_rms_norm=encoder_qk_rms_norm,
+            qk_rms_norm_eps=encoder_qk_rms_norm_eps,
             use_bias=encoder_use_bias,
             use_rms_norm=encoder_use_rms_norm,
             pretrained_model=pretrained_vision_model,
@@ -1659,6 +1925,10 @@ class AutoencoderKL(ModelMixin, ConfigMixin, FromOriginalModelMixin):
             checkpoint_group_size=self.encoder_checkpoint_group_size,
             gradient_checkpoint_scope=self.encoder_gradient_checkpoint_scope,
             fast_position_embedding_upsample_backward=self.fast_position_embedding_upsample_backward,
+            position_embedding_scale=encoder_position_embedding_scale,
+            num_learned_register_tokens=encoder_num_learned_register_tokens,
+            use_zero_input_register_token=encoder_use_zero_input_register_token,
+            register_token_init_std=encoder_register_token_init_std,
         )
 
         # Initialize teacher encoder (frozen) — only needed for ITD loss
@@ -1728,6 +1998,7 @@ class AutoencoderKL(ModelMixin, ConfigMixin, FromOriginalModelMixin):
                 num_heads=decoder_num_heads,
                 mlp_channels=decoder_mlp_channels,
                 qk_rms_norm=decoder_qk_rms_norm,
+                qk_rms_norm_eps=decoder_qk_rms_norm_eps,
                 use_bias=decoder_use_bias,
                 use_rms_norm=decoder_use_rms_norm,
                 pe_mode=decoder_pe_mode,
@@ -1738,6 +2009,10 @@ class AutoencoderKL(ModelMixin, ConfigMixin, FromOriginalModelMixin):
                 use_ragged_varlen_train_path=self.use_ragged_varlen_train_path,
                 checkpoint_group_size=self.decoder_checkpoint_group_size,
                 fast_position_embedding_upsample_backward=self.fast_position_embedding_upsample_backward,
+                position_embedding_scale=decoder_position_embedding_scale,
+                num_learned_register_tokens=decoder_num_learned_register_tokens,
+                use_zero_input_register_token=decoder_use_zero_input_register_token,
+                register_token_init_std=decoder_register_token_init_std,
             )
 
         if use_decoder and use_dual_latent:
@@ -1749,6 +2024,7 @@ class AutoencoderKL(ModelMixin, ConfigMixin, FromOriginalModelMixin):
                 num_heads=decoder_num_heads,
                 mlp_channels=decoder_mlp_channels,
                 qk_rms_norm=decoder_qk_rms_norm,
+                qk_rms_norm_eps=decoder_qk_rms_norm_eps,
                 use_bias=decoder_use_bias,
                 use_rms_norm=decoder_use_rms_norm,
                 pe_mode=decoder_pe_mode,
@@ -1759,6 +2035,10 @@ class AutoencoderKL(ModelMixin, ConfigMixin, FromOriginalModelMixin):
                 use_ragged_varlen_train_path=self.use_ragged_varlen_train_path,
                 checkpoint_group_size=self.decoder_checkpoint_group_size,
                 fast_position_embedding_upsample_backward=self.fast_position_embedding_upsample_backward,
+                position_embedding_scale=decoder_position_embedding_scale,
+                num_learned_register_tokens=decoder_num_learned_register_tokens,
+                use_zero_input_register_token=decoder_use_zero_input_register_token,
+                register_token_init_std=decoder_register_token_init_std,
             )
 
         self.use_slicing: bool = False

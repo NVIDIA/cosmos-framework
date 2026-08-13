@@ -233,3 +233,52 @@ def patch_qwen3_vl_forward(model):
     # Replace the forward method
     model.forward = patched_forward.__get__(model, type(model))
     log.critical(f"Patched {type(model).__name__} instance forward with one visual call per forward")
+
+
+def patch_siglip2_pos_embed_antialias_off(vision_transformer) -> None:
+    """Force the SigLIP2 vision tower's position-embedding resize to ``antialias=False``.
+
+    The stock ``get_position_embedding`` interpolates the learned position embedding with
+    ``F.interpolate(mode="bilinear", antialias=True)``. The antialiased backward
+    (``upsample_bilinear2d_aa_backward``) has no deterministic CUDA implementation, so under
+    ``torch.use_deterministic_algorithms(warn_only=True)`` it runs nondeterministically and
+    perturbs vision-encoder grads run-to-run. ``antialias=False`` has a deterministic backward.
+    Reimplements the method verbatim except for the flag; slightly changes pos-embed numerics
+    vs the antialias=True baseline, so apply only for deterministic-repro runs.
+    """
+    import torch.nn.functional as F
+
+    def get_position_embedding(self, grid_thw: torch.Tensor) -> torch.Tensor:
+        positional_embedding = (
+            self.embeddings.position_embedding.weight.reshape(
+                self.embeddings.position_embedding_size, self.embeddings.position_embedding_size, -1
+            )
+            .permute(2, 0, 1)
+            .unsqueeze(0)
+        )
+        total_tokens = int(torch.prod(grid_thw, dim=1).sum().item())
+        embed_dim = self.embeddings.embed_dim
+        resized_positional_embeddings = torch.empty(
+            (total_tokens, embed_dim), dtype=positional_embedding.dtype, device=grid_thw.device
+        )
+        offset = 0
+        for t, height, width in grid_thw:
+            resized_embeddings = F.interpolate(
+                positional_embedding,
+                size=(height.cpu().item(), width.cpu().item()),
+                mode="bilinear",
+                align_corners=False,
+                antialias=False,
+            )
+            resized_embeddings = resized_embeddings.reshape(embed_dim, -1).transpose(0, 1)
+            num_spatial_tokens = height * width
+            total_block_tokens = t * num_spatial_tokens
+            resized_positional_embeddings[offset : offset + total_block_tokens] = resized_embeddings.repeat(t, 1)
+            offset += total_block_tokens
+        assert offset == resized_positional_embeddings.shape[0]
+        return resized_positional_embeddings
+
+    vision_transformer.get_position_embedding = get_position_embedding.__get__(
+        vision_transformer, type(vision_transformer)
+    )
+    log.critical(f"Patched {type(vision_transformer).__name__} get_position_embedding: antialias=False (deterministic)")
