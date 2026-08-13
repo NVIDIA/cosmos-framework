@@ -112,9 +112,7 @@ def install_torchao_float8_fsdp_support() -> None:
     @implements([aten.view.default, aten._unsafe_view.default, aten.reshape.default])
     def _(func, types, args, kwargs):
         self, size = args[0], args[1]
-        return return_and_correct_aliasing(
-            func, args, kwargs, _rewrap_float8(self, self.qdata.reshape(*size))
-        )
+        return return_and_correct_aliasing(func, args, kwargs, _rewrap_float8(self, self.qdata.reshape(*size)))
 
     @implements(aten.split.Tensor)
     def _(func, types, args, kwargs):
@@ -152,9 +150,7 @@ def install_torchao_float8_fsdp_support() -> None:
         # meta tensor. Real scale values arrive with the checkpoint weights.
         scale = torch.empty_like(self.scale, device=device) if device is not None else self.scale
         act_quant_scale = (
-            torch.empty_like(self.act_quant_scale, device=device)
-            if device is not None
-            else self.act_quant_scale
+            torch.empty_like(self.act_quant_scale, device=device) if device is not None else self.act_quant_scale
         )
         return self.__class__(
             qdata,
@@ -180,9 +176,7 @@ def install_torchao_float8_fsdp_support() -> None:
         # E4M3 payload to the compute dtype would silently undo the quantization.
         self = args[0]
         forwarded = {key: value for key, value in kwargs.items() if key != "dtype"}
-        return return_and_correct_aliasing(
-            func, args, kwargs, _rewrap_float8(self, func(self.qdata, **forwarded))
-        )
+        return return_and_correct_aliasing(func, args, kwargs, _rewrap_float8(self, func(self.qdata, **forwarded)))
 
     @implements(aten.copy_.default)
     def _(func, types, args, kwargs):
@@ -628,9 +622,7 @@ def apply_modelopt_fp8_checkpoint_inplace(
     if missing_conversions:
         raise ValueError(f"ModelOpt FP8 weights were not converted: {sorted(missing_conversions)}")
     converted_fqns.sort()
-    sharded_count = sum(
-        1 for fqn in converted_fqns if isinstance(model.get_submodule(fqn).weight.data, DTensor)
-    )
+    sharded_count = sum(1 for fqn in converted_fqns if isinstance(model.get_submodule(fqn).weight.data, DTensor))
     log.info(
         f"Loaded {len(converted_fqns)} calibrated ModelOpt FP8 weights into TorchAO "
         f"({sharded_count} sharded / {len(converted_fqns) - sharded_count} replicated)"

@@ -32,6 +32,10 @@ class DiffusionExpertConfig:
     # Whether to add separate learned modality embeddings to image and video generation tokens.
     # Disabled by default to preserve legacy checkpoints and model behavior.
     enable_vision_modality_embeddings: bool = False
+    # Whether to add a single shared learned modality embedding to both image and video
+    # generation tokens (``media_modality_embed``). Mutually exclusive with
+    # ``enable_vision_modality_embeddings``. Disabled by default.
+    enable_media_modality_embedding: bool = False
 
     patch_spatial: int = 2
     max_vae_latent_side_after_patchify: int = (
