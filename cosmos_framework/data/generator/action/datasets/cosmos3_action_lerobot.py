@@ -319,6 +319,7 @@ class BaseActionLeRobotDataset(Dataset):
         pose_convention: str | None = None,
         rotation_format: str | None = None,
         action_normalization: ActionNormalization | None = None,
+        apply_forward_clamp: bool = False,
         tolerance_s: float = 1e-4,
         max_loaded_datasets: int = _LRU_DATASET_MAX_LOADED,
         skip_video_loading: bool = False,
@@ -352,8 +353,16 @@ class BaseActionLeRobotDataset(Dataset):
             self._rotation_format = rotation_format
             self._action_normalizer: ActionNormalizer | None = None
             if action_normalization is not None:
+                # ``apply_forward_clamp`` decides whether normalized actions are
+                # clamped into [-1, 1]. It matters most on the rot6d diagonal
+                # channels: for DROID, R00/R11 have a q01/q99 half-width of
+                # ~7.7e-4, so they saturate at roughly 3.2 deg of per-frame
+                # rotation and 10 deg/frame normalizes to about -19 unclamped.
+                # Callers name the intent rather than inheriting a default.
                 self._action_normalizer = resolve_action_normalization(
-                    action_normalization, self._load_norm_stats(action_normalization)
+                    action_normalization,
+                    self._load_norm_stats(action_normalization),
+                    apply_forward_clamp=apply_forward_clamp,
                 )
             self._tolerance_s = tolerance_s
             self._max_loaded_datasets = max_loaded_datasets
