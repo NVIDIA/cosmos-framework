@@ -86,3 +86,45 @@ def test_read_keyword_files_skips_blanks_and_comments(tmp_path):
     (tmp_path / "list").write_text("deskin\n\n# a comment\nchromebook\n", encoding="utf-8")
 
     assert read_keyword_files(tmp_path) == ["deskin", "chromebook"]
+
+
+@pytest.mark.L1
+def test_probe_honours_a_whitelisted_phrase():
+    """The remedy this tool prints must be visible to the tool's own probe.
+
+    A whitelist entry that is a phrase never reaches better_profanity; exempting
+    it is something censor_prompt does on top. A probe built on a bare matcher
+    therefore kept reporting "desk in" as reachable after the phrase had been
+    whitelisted -- telling the caller to do something that changed nothing.
+    """
+    without = build_reachability_probe(["deskin"])
+    with_phrase = build_reachability_probe(["deskin"], ["desk in"])
+
+    assert without("desk", "in") is True
+    assert with_phrase("desk", "in") is False
+    # Only that one spelling is exempt; the entry's other splits still fire.
+    assert with_phrase("de", "skin") is True
+
+
+@pytest.mark.L1
+def test_gate_probe_includes_the_candidate_being_gated(tmp_path):
+    """gate checks an entry that is not on the list yet, which is the point.
+
+    Building the probe from the existing list alone means the matcher can never
+    fire on the candidate's own split, so every split is discarded as
+    unreachable and the gate passes anything handed to it.
+    """
+    from cosmos_framework.auxiliary.guardrail.blocklist import hygiene
+
+    blocklist_dir = tmp_path / "custom"
+    blocklist_dir.mkdir()
+    (blocklist_dir / "list").write_text("snow white\n", encoding="utf-8")
+
+    argv = ["--confirm-reachable", str(blocklist_dir), "gate", "deskin"]
+    monkey_vocabulary = hygiene.wordnet_vocabulary
+
+    try:
+        hygiene.wordnet_vocabulary = lambda _dir=None: is_word
+        assert hygiene.main(argv) == 1  # flagged, so non-zero exit
+    finally:
+        hygiene.wordnet_vocabulary = monkey_vocabulary

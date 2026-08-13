@@ -111,19 +111,32 @@ def read_keyword_files(directory: str | Path) -> list[str]:
 def build_reachability_probe(
     blocklist_words: Iterable[str], whitelist_words: Iterable[str] = ()
 ) -> Callable[[str, str], bool]:
-    """Return a predicate telling whether the matcher really blocks a split.
+    """Return a predicate telling whether the deployed path really blocks a split.
 
-    A split is only a problem if the deployed matcher fires on the spaced form;
+    A split is only a problem if the deployed path fires on the spaced form;
     this drops splits that are theoretical for the list being checked.
+
+    The probe runs censor_prompt, not a bare matcher. A whitelist entry that is
+    a phrase never reaches better_profanity -- exempting it is something
+    censor_prompt does on top -- so a bare matcher would keep reporting a split
+    as reachable after the phrase had been whitelisted, which is the remedy this
+    tool prints. The advice has to be checkable by the check that gives it.
     """
     from better_profanity.better_profanity import Profanity
 
-    matcher = Profanity()
-    matcher.load_censor_words(custom_words=list(blocklist_words), whitelist_words=list(whitelist_words))
+    from cosmos_framework.auxiliary.guardrail.blocklist.blocklist import Blocklist
+
+    whitelist = list(whitelist_words)
+    tokens = [w for w in whitelist if " " not in w.strip()]
+
+    probe_blocklist = Blocklist.__new__(Blocklist)
+    probe_blocklist.profanity = Profanity()
+    probe_blocklist.profanity.load_censor_words(custom_words=list(blocklist_words), whitelist_words=tokens)
+    probe_blocklist.whitelist_words = whitelist
+    probe_blocklist.whitelist_phrases = sorted((w for w in whitelist if " " in w.strip()), key=len, reverse=True)
 
     def is_reachable(left: str, right: str) -> bool:
-        probe = PROBE_TEMPLATE.format(left=left, right=right)
-        return matcher.censor(probe, censor_char="\x00") != probe
+        return probe_blocklist.censor_prompt(PROBE_TEMPLATE.format(left=left, right=right))[0]
 
     return is_reachable
 
@@ -248,7 +261,14 @@ def main(argv=None) -> int:
     is_reachable = None
     if source:
         whitelist = read_keyword_files(args.whitelist_dir) if args.whitelist_dir else []
-        is_reachable = build_reachability_probe(read_keyword_files(source), whitelist)
+        entries = read_keyword_files(source)
+        if args.mode == "gate":
+            # The candidate is not on the list yet -- that is the point of the
+            # gate. Probing a matcher built only from the existing list can
+            # never fire on the candidate's own split, so every split would be
+            # discarded as unreachable and the gate would pass anything.
+            entries = entries + list(args.entry)
+        is_reachable = build_reachability_probe(entries, whitelist)
 
     return _cmd_gate(args, is_word, is_reachable) if args.mode == "gate" else _cmd_audit(args, is_word, is_reachable)
 
