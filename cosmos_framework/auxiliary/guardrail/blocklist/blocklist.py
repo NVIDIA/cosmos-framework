@@ -79,6 +79,19 @@ class Blocklist(ContentSafetyGuardrail):
         log.debug(f"Whitelisted {len(whitelist_tokens)} words and {len(self.whitelist_phrases)} phrases")
         log.debug(f"Loaded {len(self.exact_match_words)} exact match words/phrases from blocklist")
 
+        for token in self.unprotected_whitelist_tokens(self.profanity, whitelist_tokens):
+            # better_profanity drops a whitelisted word before it expands the
+            # leetspeak variants of the other entries, so a whitelisted word can
+            # still be censored as some *other* entry's variant -- "flat" is what
+            # "fiat" becomes under the i/l mapping. Whitelisting it then silently
+            # does nothing, which is worth saying out loud at load time.
+            log.warning(f"Whitelisted word is still censored as a variant of another blocklist entry: {token!r}")
+
+    @staticmethod
+    def unprotected_whitelist_tokens(matcher, whitelist_tokens: list[str]) -> list[str]:
+        """Whitelisted words the loaded matcher censors anyway."""
+        return [token for token in whitelist_tokens if matcher.censor(token, censor_char=CENSOR_SENTINEL) != token]
+
     @staticmethod
     def normalize_for_matching(prompt: str) -> str:
         """Fold away the ways a word can be written to look normal but not match.
