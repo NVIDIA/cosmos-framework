@@ -7,23 +7,32 @@ Ported from cosmos_rl.policy.trainer.llm_trainer.sft_trainer.async_safe_ce
 (packages/cosmos-rl/cosmos_rl/policy/trainer/llm_trainer/sft_trainer.py).
 
 The reduction formula must match async_safe_ce exactly to preserve loss parity
-between Phase 0 (cosmos-rl path) and Phase 2 (this module).
+between cosmos-rl and this module — with two deliberate departures described
+below: the group the normalizer spans, and the dropped context-parallel path.
 
-Two reduction paths — determined by cp_group presence:
+The reduction:
 
-  CP enabled (cp_group.size() > 1):
-    Per-rank mean CE loss × loss_scaling_factor.
-    Rationale: each CP rank sees a different segment of the sequence; computing
-    a weighted-mean here would require knowing each rank's valid-token count,
-    which is expensive. The simpler per-rank mean × scaling is consistent with
-    cosmos-rl's implementation.
-
-  CP disabled (cp_group is None or cp_group.size() == 1):
     Sum CE loss / (global_n_valid_tokens + 1e-8) × (num_dp_workers × scaling).
-    The ×num_dp_workers compensates for FSDP's gradient averaging across DP
-    ranks, ensuring the effective gradient equals the gradient of the global
-    mean loss even with unbalanced per-rank token counts.
-    Reference: async_safe_ce:97-109 in the source file above.
+
+The ×num_dp_workers compensates for FSDP's gradient averaging across DP ranks,
+ensuring the effective gradient equals the gradient of the global mean loss even
+with unbalanced per-rank token counts.
+Reference: async_safe_ce:97-109 in the source file above.
+
+Both losses reduce their normalizer (valid-token count for plain CE, the
+exponent-weighted sample weight for weighted CE) over the WHOLE WORLD, taking no
+group argument. Every rank must hold a different sample for that to be the count the
+formula wants, which holds for VLM: ``ParallelDims`` pins
+``dp_replicate * dp_shard == world_size``, so the data-parallel mesh is the world, and
+the axes that would put the same sample on several ranks are rejected — cp/cfgp by
+``VLMModel``, tp/pp by not existing. Revisit this if any of that changes.
+
+async_safe_ce instead reduces over the dp_shard sub-group, which under HSDP
+normalizes each replicate group separately; that agrees with the global token mean
+only when those groups carry equal token counts.
+
+Neither loss takes a cp_group: reducing across context-parallel segments is out of
+scope here.
 """
 
 from __future__ import annotations
@@ -32,6 +41,7 @@ import torch
 import torch.distributed as dist
 import torch.nn.functional as F
 
+from cosmos_framework.utils.generator.input_probe import maybe_dump_loss_reduction
 from cosmos_framework.utils.generator.reasoner.constant import IGNORE_INDEX
 
 
@@ -39,24 +49,19 @@ def cross_entropy_loss(
     logits: torch.Tensor,
     labels: torch.Tensor,
     loss_scaling_factor: float = 1.0,
-    dp_group: dist.ProcessGroup | None = None,
-    cp_group: dist.ProcessGroup | None = None,
     ignore_index: int = IGNORE_INDEX,
 ) -> torch.Tensor:
-    """Next-token-prediction CE loss with DP/CP group reduction.
+    """Next-token-prediction CE loss, normalized over the world's valid tokens.
 
     Matches the behavior of cosmos_rl.policy.trainer.llm_trainer.sft_trainer.async_safe_ce
-    with the TORCH_CROSS_ENTROPY backend (F.cross_entropy with float32 cast).
+    with the TORCH_CROSS_ENTROPY backend (F.cross_entropy with float32 cast), minus its
+    context-parallel path (see module docstring).
 
     Args:
         logits: (B, T, V) float tensor — raw model output before softmax.
         labels: (B, T) long tensor — ground-truth token ids.
                 Positions equal to ignore_index are excluded from the loss.
         loss_scaling_factor: scalar multiplied into the returned loss.
-        dp_group: FSDP data-parallel shard group for loss normalization.
-                  None = no DP reduction (single-GPU or replicate-only).
-        cp_group: Context-parallel group. If size > 1, use per-rank mean.
-                  None = no CP reduction.
         ignore_index: label value to exclude (defaults to ``IGNORE_INDEX``, -100).
 
     Returns:
@@ -68,20 +73,7 @@ def cross_entropy_loss(
     shifted_logits = logits[:, :-1].contiguous().view(-1, logits.size(-1))
     shifted_labels = labels[:, 1:].contiguous().view(-1)
 
-    if cp_group is not None and cp_group.size() > 1:
-        # CP path: each rank sees a different sequence segment.
-        # Use simple mean reduction; nan_to_num handles fully-ignored batches.
-        # Reference: async_safe_ce:74-88
-        loss = F.cross_entropy(
-            shifted_logits.float(),
-            shifted_labels,
-            ignore_index=ignore_index,
-            reduction="mean",
-        )
-        loss = torch.nan_to_num(loss, nan=0.0)
-        return loss * loss_scaling_factor
-
-    # No-CP path: per-token loss, then normalize over the global valid-token count.
+    # Per-token loss, then normalize over the global valid-token count.
     # Reference: async_safe_ce:89-109
     per_token_loss = F.cross_entropy(
         shifted_logits.float(),
@@ -91,9 +83,9 @@ def cross_entropy_loss(
     )
     n_valid_tokens = (shifted_labels != ignore_index).sum()
     num_dp_workers = 1
-    if dp_group is not None:
-        dist.all_reduce(n_valid_tokens, op=dist.ReduceOp.SUM, group=dp_group)
-        num_dp_workers = dist.get_world_size(group=dp_group)
+    if dist.is_available() and dist.is_initialized():
+        dist.all_reduce(n_valid_tokens, op=dist.ReduceOp.SUM)
+        num_dp_workers = dist.get_world_size()
 
     loss = per_token_loss.sum() / (n_valid_tokens + 1e-8) * (num_dp_workers * loss_scaling_factor)
     return loss
@@ -104,9 +96,9 @@ def weighted_cross_entropy_loss(
     labels: torch.Tensor,
     exponent: float,
     loss_scaling_factor: float = 1.0,
-    dp_group: dist.ProcessGroup | None = None,
-    cp_group: dist.ProcessGroup | None = None,
     ignore_index: int = IGNORE_INDEX,
+    probe_step: int | None = None,
+    probe_tag: str | None = None,
 ) -> torch.Tensor:
     """Next-token-prediction CE loss interpolated between per-token and per-sample reductions.
 
@@ -119,19 +111,11 @@ def weighted_cross_entropy_loss(
         exponent: 0 gives per-token loss, 1 gives per-sample loss, values in
             between interpolate by valid-token-count weight.
         loss_scaling_factor: scalar multiplied into the returned loss.
-        dp_group: Ignored for weighted CE. Kept for call-site parity with
-            ``cross_entropy_loss``; normalization uses the default process group
-            to match cosmos-rl.
-        cp_group: Context-parallel group. Weighted CE does not support CP.
         ignore_index: label value to exclude.
 
     Returns:
         Scalar loss tensor.
     """
-    if cp_group is not None and cp_group.size() > 1:
-        raise AssertionError("weighted_cross_entropy_loss does not support CP")
-    del dp_group
-
     batch_size = labels.shape[0]
     shifted_logits = logits[:, :-1].contiguous().view(-1, logits.size(-1))  # [B*(T-1),V]
     shifted_labels = labels[:, 1:].contiguous().view(-1)  # [B*(T-1)]
@@ -149,11 +133,25 @@ def weighted_cross_entropy_loss(
     sample_losses = (per_token_loss * valid_mask).sum(dim=1) / valid_counts.clamp(min=1).pow(exponent)  # [B]
     local_loss_sum = (sample_losses * has_valid).sum()  # []
     local_exp_weight_sum = (valid_counts.pow(1 - exponent) * has_valid).sum()  # []
+    local_exp_weight_sum_before = local_exp_weight_sum.detach().clone()  # []
 
     num_dp_workers = 1
     if dist.is_available() and dist.is_initialized():
-        dist.all_reduce(local_exp_weight_sum, op=dist.ReduceOp.SUM)
+        dist.all_reduce(local_exp_weight_sum, op=dist.ReduceOp.SUM)  # local_exp_weight_sum: []
         num_dp_workers = dist.get_world_size()
 
     loss = local_loss_sum / local_exp_weight_sum.clamp(min=1) * (num_dp_workers * loss_scaling_factor)  # []
+
+    maybe_dump_loss_reduction(
+        step=probe_step,
+        tag=probe_tag,
+        valid_counts=valid_counts,
+        local_loss_sum=local_loss_sum,
+        denominator_before=local_exp_weight_sum_before,
+        denominator_after=local_exp_weight_sum,
+        final_loss=loss,
+        exponent=exponent,
+        loss_scaling_factor=loss_scaling_factor,
+        world_size=num_dp_workers,
+    )
     return loss

@@ -249,6 +249,7 @@ class OmniMoTModel(ImaginaireModel):
                 enable_vision_modality_embeddings=(
                     self.config.diffusion_expert_config.enable_vision_modality_embeddings
                 ),
+                enable_media_modality_embedding=(self.config.diffusion_expert_config.enable_media_modality_embedding),
                 base_fps=self.config.diffusion_expert_config.base_fps,
                 vision_gen=self.config.vision_gen,
                 action_gen=self.config.action_gen,

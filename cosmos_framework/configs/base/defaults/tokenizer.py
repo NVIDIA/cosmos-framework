@@ -8,6 +8,7 @@ from cosmos_framework.utils.lazy_config import LazyCall as L
 from cosmos_framework.model.generator.tokenizers.audio.avae import AVAEInterface
 from cosmos_framework.model.generator.tokenizers.dc_ae.dc_ae_4x32x32 import DCAE4x32x32Interface
 from cosmos_framework.model.generator.tokenizers.flux_vae_8x8 import FluxVAEInterface
+
 from cosmos_framework.model.generator.tokenizers.stable_diffusion_vae_8x8 import StableDiffusionVAEInterface
 from cosmos_framework.model.generator.tokenizers.uniae.noncausal_4x16x16 import UniAEVAEInterface
 from cosmos_framework.model.generator.tokenizers.wan2pt1_vae_4x8x8 import Wan2pt1VAEInterface
@@ -82,6 +83,7 @@ Wan2pt2VAEConfig: LazyDict = L(Wan2pt2VAEInterface)(
     temporal_compression_factor=4,
     causal=True,
 )
+
 
 DCAE4x32x32C64T120_256pFpsAllEncoderCausalDecoderChunkCausal4NoganCosmosPad7V0pt2Config: LazyDict = L(
     DCAE4x32x32Interface

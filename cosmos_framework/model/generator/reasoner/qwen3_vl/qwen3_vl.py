@@ -52,7 +52,6 @@ from cosmos_framework.model.generator.reasoner.qwen3_vl.utils import (
 from cosmos_framework.model.generator.reasoner.qwen3_vl.utils import (
     get_rope_index as _get_rope_index,
 )
-
 from cosmos_framework.utils.generator.quantization import _ModelOptFloat8Linear
 
 from .configuration_qwen3_vl import Qwen3VLConfig, Qwen3VLTextConfig, Qwen3VLVisionConfig

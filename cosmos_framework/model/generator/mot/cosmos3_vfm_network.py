@@ -48,6 +48,7 @@ class Cosmos3VFMNetworkConfig(PretrainedConfig):
         max_latent_t=32,
         enable_fps_modulation=False,
         enable_vision_modality_embeddings: bool = False,
+        enable_media_modality_embedding: bool = False,
         base_fps=24,
         vit_max_num_patch_per_side=70,
         connector_act="gelu_pytorch_tanh",
@@ -83,6 +84,11 @@ class Cosmos3VFMNetworkConfig(PretrainedConfig):
         self.max_latent_t = max_latent_t
         self.enable_fps_modulation = enable_fps_modulation
         self.enable_vision_modality_embeddings = enable_vision_modality_embeddings
+        self.enable_media_modality_embedding = enable_media_modality_embedding
+        if self.enable_vision_modality_embeddings and self.enable_media_modality_embedding:
+            raise ValueError(
+                "enable_vision_modality_embeddings and enable_media_modality_embedding are mutually exclusive"
+            )
         self.base_fps = base_fps
         self.vit_max_num_patch_per_side = vit_max_num_patch_per_side
         self.connector_act = connector_act
@@ -193,6 +199,8 @@ class Cosmos3VFMNetwork(PreTrainedModel):
             if config.enable_vision_modality_embeddings:
                 self.image_modality_embed = nn.Parameter(torch.zeros(self.hidden_size))
                 self.video_modality_embed = nn.Parameter(torch.zeros(self.hidden_size))
+            if config.enable_media_modality_embedding:
+                self.media_modality_embed = nn.Parameter(torch.zeros(self.hidden_size))
 
         if config.action_gen:
             self.action_dim = config.action_dim
@@ -228,6 +236,8 @@ class Cosmos3VFMNetwork(PreTrainedModel):
             if self.config.enable_vision_modality_embeddings:
                 torch.nn.init.trunc_normal_(self.image_modality_embed, std=std, a=-3 * std, b=3 * std)
                 torch.nn.init.trunc_normal_(self.video_modality_embed, std=std, a=-3 * std, b=3 * std)
+            if self.config.enable_media_modality_embedding:
+                torch.nn.init.trunc_normal_(self.media_modality_embed, std=std, a=-3 * std, b=3 * std)
 
         if self.config.action_gen:
             # DomainAwareLinear uses embeddings for weights, so we initialize them differently
@@ -652,6 +662,10 @@ class Cosmos3VFMNetwork(PreTrainedModel):
                 self.image_modality_embed if packed_seq.is_image_batch else self.video_modality_embed
             )  # [hidden_size]
             packed_tokens_vision = packed_tokens_vision + vision_modality_embed.view(
+                1, -1
+            )  # [total_vision_patches,hidden_size]
+        elif self.config.enable_media_modality_embedding:
+            packed_tokens_vision = packed_tokens_vision + self.media_modality_embed.view(
                 1, -1
             )  # [total_vision_patches,hidden_size]
 

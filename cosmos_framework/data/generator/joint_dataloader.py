@@ -17,6 +17,7 @@ from torch.utils.data.dataloader import default_collate
 
 from cosmos_framework.utils.lazy_config import instantiate
 from cosmos_framework.utils import log
+from cosmos_framework.data.generator.drop_sample_contract import DROP_SAMPLE_KEY, DROP_SAMPLE_REASON_KEY
 from cosmos_framework.model.generator.tokenizers.uniae.frame_math import (
     get_uniae_chunk_frames,
     get_uniae_latent_num_frames,
@@ -50,6 +51,19 @@ _ACTION_SAMPLER_METADATA_KEYS = {
     "action_sampler_index_space_fingerprint",
 }
 ACTION_SAMPLER_DROPPED_DRAW_COUNT_KEY = "action_sampler_dropped_draw_count"
+_DROP_SAMPLE_LOG_FIELDS = (
+    "__key__",
+    "source_repo_id",
+    "action_sampler_family",
+    "action_sampler_rank",
+    "action_sampler_worker_id",
+    "action_sampler_draw_count",
+    "action_sampler_index",
+    "action_sampler_aux_seed",
+    "action_sample_row_id",
+    "action_sample_local_start_frame",
+    "action_sample_fingerprint",
+)
 
 
 def _extend_action_sampler_draw_counts(draw_counts: list[int], sample: Mapping[str, Any]) -> None:
@@ -64,6 +78,51 @@ def _extend_action_sampler_draw_counts(draw_counts: list[int], sample: Mapping[s
         draw_counts.extend(int(item) for item in value)
     else:
         draw_counts.append(int(value))
+
+
+def _drop_marker_to_bool(value: Any) -> bool:
+    """Normalize one optional drop marker value to bool."""
+    if value is None:
+        return False
+    if isinstance(value, torch.Tensor):
+        return bool(value.detach().cpu().reshape(-1).any().item())  # []
+    if isinstance(value, (list, tuple)):
+        return any(_drop_marker_to_bool(item) for item in value)
+    return bool(value)
+
+
+def _sample_should_drop(sample: Mapping[str, Any]) -> bool:
+    """Return whether a sample-like dict is marked for deterministic packer-side drop."""
+    return _drop_marker_to_bool(sample.get(DROP_SAMPLE_KEY))
+
+
+def _format_sample_log_value(value: Any) -> str:
+    """Return a compact string for one sample metadata value."""
+    if isinstance(value, torch.Tensor):
+        flat = value.detach().cpu().reshape(-1)  # [N]
+        if flat.numel() == 0:
+            return "[]"
+        if flat.numel() == 1:
+            return repr(flat.item())
+        return repr(flat.tolist())
+    if isinstance(value, (list, tuple)):
+        return repr([_format_sample_log_value(item) for item in value])
+    return repr(value)
+
+
+def _format_drop_sample_log_fields(sample: Mapping[str, Any], dataset_name: str, drop_count: int) -> str:
+    """Return a log payload identifying one dropped sample."""
+    reason = sample.get(DROP_SAMPLE_REASON_KEY, "unknown")
+    fields = [
+        f"count={drop_count}",
+        f"stream={dataset_name!r}",
+        f"reason={_format_sample_log_value(reason)}",
+    ]
+    for key in _DROP_SAMPLE_LOG_FIELDS:
+        value = sample.get(key)
+        if value is not None:
+            fields.append(f"{key}={_format_sample_log_value(value)}")
+    return " ".join(fields)
 
 
 def custom_collate_fn(batch):
@@ -83,6 +142,8 @@ def custom_collate_fn(batch):
         "raw_action_dim",
         "image_size",
         "action_processing_record",
+        DROP_SAMPLE_KEY,
+        DROP_SAMPLE_REASON_KEY,
         *_ACTION_SAMPLER_METADATA_KEYS,
     }
 
@@ -117,6 +178,15 @@ def custom_collate_fn(batch):
             if key in _TIMING_KEYS:
                 continue
             values = [d.get(key) for d in batch]
+            if key == DROP_SAMPLE_KEY:
+                # Drop markers may be present only on rejected samples. Keep a
+                # per-sample bool list so DataLoader(batch_size > 1) can still
+                # drop exactly those consumed draws and report them for resume.
+                result[key] = [_drop_marker_to_bool(value) for value in values]
+                continue
+            if key == DROP_SAMPLE_REASON_KEY:
+                result[key] = ["" if value is None else str(value) for value in values]
+                continue
             if key == "action_processing_record":
                 result[key] = values
                 continue
@@ -317,6 +387,8 @@ class JointDataLoader(webdataset.WebLoader):
     """
 
     _DEFAULT_LOOKAHEAD_LIMIT: ClassVar[int] = 10
+    _DROP_SAMPLE_LOG_FIRST_N: ClassVar[int] = 20
+    _DROP_SAMPLE_LOG_EVERY_N: ClassVar[int] = 1000
 
     def __init__(
         self,
@@ -397,6 +469,7 @@ class JointDataLoader(webdataset.WebLoader):
         self.prewarm: bool = bool(prewarm)
         self.lazy_initialize_child_iterators: bool = bool(lazy_initialize_child_iterators)
         self._child_iterators_initialized: bool = False
+        self._drop_sample_log_count: int = 0
 
         assert (self.max_sequence_length is None) != (self.max_samples_per_batch is None), (
             "Exactly one of max_sequence_length or max_samples_per_batch must be None, but not both."
@@ -458,6 +531,18 @@ class JointDataLoader(webdataset.WebLoader):
             log.info(
                 "JointDataLoader: prewarm DISABLED (debug mode); first iteration may incur per-stream cold-load cost"
             )
+
+    def _log_drop_sample(self, sample: Mapping[str, Any], dataset_name: str) -> None:
+        """Log a rate-limited audit line for one packer-filtered sample."""
+        self._drop_sample_log_count += 1
+        drop_count = self._drop_sample_log_count
+        should_log = drop_count <= self._DROP_SAMPLE_LOG_FIRST_N or drop_count % self._DROP_SAMPLE_LOG_EVERY_N == 0
+        if not should_log:
+            return
+        log.info(
+            "JointDataLoader: filtered drop-sample " + _format_drop_sample_log_fields(sample, dataset_name, drop_count),
+            rank0_only=False,
+        )
 
     def _normalize_uniae_chunk_frames(
         self, uniae_chunk_frames: int | Mapping[str, int] | None
@@ -903,6 +988,14 @@ class IterativeJointDataLoader(JointDataLoader):
                 else:
                     metrics.from_workers += 1
 
+                if _sample_should_drop(output):
+                    # Marked samples are already consumed Lance sampler draws.
+                    # Record their draw counts so checkpoint resume advances past them.
+                    self._log_drop_sample(output, self.dataset_name_list[index_id])
+                    metrics.dropped_count += 1
+                    _extend_action_sampler_draw_counts(metrics.dropped_action_sampler_draw_counts, output)
+                    continue
+
                 num_tokens_in_current_sample = self._compute_num_tokens_per_sample(output)
 
                 if (
@@ -1188,6 +1281,7 @@ class PackingDataLoader(JointDataLoader):
         while True:
             current_sequence_length = 0
             num_samples = 0
+            dropped_count = 0
             output_batch: dict = {}
             dropped_action_sampler_draw_counts: list[int] = []
 
@@ -1208,6 +1302,14 @@ class PackingDataLoader(JointDataLoader):
                 except StopIteration:
                     break
 
+                if _sample_should_drop(output):
+                    # Marked samples are already consumed Lance sampler draws.
+                    # Record their draw counts so checkpoint resume advances past them.
+                    self._log_drop_sample(output, ds_name)
+                    dropped_count += 1
+                    _extend_action_sampler_draw_counts(dropped_action_sampler_draw_counts, output)
+                    continue
+
                 num_tokens_in_current_sample = self._compute_num_tokens_per_sample(output)
 
                 if (
@@ -1221,6 +1323,7 @@ class PackingDataLoader(JointDataLoader):
                             f"PackingDataLoader: Discarding oversized sample with {num_tokens_in_current_sample} tokens. Max sequence length: {self.max_sequence_length}",
                             rank0_only=False,
                         )
+                        dropped_count += 1
                         _extend_action_sampler_draw_counts(dropped_action_sampler_draw_counts, output)
                         continue
 
@@ -1240,6 +1343,7 @@ class PackingDataLoader(JointDataLoader):
             if len(output_batch) == 0:
                 return
 
+            output_batch["_dropped_count"] = dropped_count
             if dropped_action_sampler_draw_counts:
                 output_batch[ACTION_SAMPLER_DROPPED_DRAW_COUNT_KEY] = list(dropped_action_sampler_draw_counts)
             self.global_id += 1
@@ -1325,6 +1429,14 @@ class RandomJointDataLoader(JointDataLoader):
                     metrics.from_buffer += 1
                 else:
                     metrics.from_workers += 1
+
+                if _sample_should_drop(output):
+                    # Marked samples are already consumed Lance sampler draws.
+                    # Record their draw counts so checkpoint resume advances past them.
+                    self._log_drop_sample(output, self.dataset_name_list[index_id])
+                    metrics.dropped_count += 1
+                    _extend_action_sampler_draw_counts(metrics.dropped_action_sampler_draw_counts, output)
+                    continue
 
                 num_tokens_in_current_sample = self._compute_num_tokens_per_sample(output)
 

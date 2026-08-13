@@ -8,8 +8,6 @@ Responsibilities:
     AutoClass (``AutoModelForImageTextToText`` / ``AutoModel`` /
     ``AutoModelForCausalLM`` — see ``HFModel`` for selection rules);
     no weights are loaded.
-  - ``apply_gradient_checkpointing``: wraps HF's standard
-    ``gradient_checkpointing_enable`` API.
   - ``tie_embeddings``: re-establishes the input/output embedding tie after
     FSDP wrapping + meta-materialization.
   - ``load_weights``: dispatches to ``load_vlm_model`` (VLM) or
@@ -18,7 +16,9 @@ Responsibilities:
   - ``forward``: pass-through returning logits.
 
 FSDP wrapping lives in ``vfm/models/parallelize_vlm.py::parallelize()``,
-NOT here.
+NOT here — as does activation checkpointing, which ``parallelize_vlm.apply_ac``
+owns via ``ptd_checkpoint_wrapper`` rather than HF's
+``gradient_checkpointing_enable`` (see that function for why).
 """
 
 import inspect
@@ -32,6 +32,7 @@ from transformers import AutoConfig, AutoModel, AutoModelForCausalLM, AutoModelF
 import cosmos_framework.model.generator.reasoner.cosmos3_edge  # noqa: F401  registers cosmos3_edge with transformers Auto classes
 from cosmos_framework.utils import log
 from cosmos_framework.model.generator.utils.safetensors_loader import load_language_model, load_vlm_model
+from cosmos_framework.utils.generator.input_probe import maybe_dump_pre_forward
 from cosmos_framework.utils.generator.parallelism import ParallelDims
 
 if TYPE_CHECKING:
@@ -241,6 +242,13 @@ class HFModel(nn.Module):
             patch_qwen3_vl_forward(self.model.model)
             log.info("HFModel: applied patch_qwen3_vl_forward for text-only batch support")
 
+        if torch.are_deterministic_algorithms_enabled():
+            from cosmos_framework.utils.generator.monkey_patch import patch_siglip2_pos_embed_antialias_off
+
+            for m in self.model.modules():
+                if type(m).__name__ == "Siglip2VisionTransformer":
+                    patch_siglip2_pos_embed_antialias_off(m)
+
     def train(self, mode: bool = True) -> "HFModel":
         """Keep immutable audio modules in eval mode while training the Reasoner."""
         super().train(mode)
@@ -256,11 +264,6 @@ class HFModel(nn.Module):
         ``OmniMoTModel`` exposes, so ``vfm/utils/optimizer.py`` can iterate
         ``model.net.named_parameters()`` uniformly across model families."""
         return self.model
-
-    def apply_gradient_checkpointing(self) -> None:
-        """Enable gradient checkpointing via HF's standard API."""
-        self.model.gradient_checkpointing_enable(gradient_checkpointing_kwargs={"use_reentrant": False})
-        log.info("HFModel: gradient checkpointing enabled")
 
     def tie_embeddings(self) -> None:
         """Tie output embedding weight to input embedding, matching post_to_empty_hook behavior.
@@ -470,6 +473,8 @@ class HFModel(nn.Module):
         valid tokens never attend to padding tokens regardless, so dropping attention_mask
         is equivalent and avoids the shape mismatch.
         """
+        probe_step = kwargs.pop("_probe_step", None)
+        probe_tag = kwargs.pop("_probe_tag", None)
         forward_keys = self._forward_keys
         filtered = {k: v for k, v in kwargs.items() if k in forward_keys}
         if not self._logged_dropped_forward_keys and len(filtered) != len(kwargs):
@@ -479,5 +484,6 @@ class HFModel(nn.Module):
         if self.hf_config.model_type == "nemotron_vl":
             filtered.pop("attention_mask", None)
         filtered["use_cache"] = False
+        maybe_dump_pre_forward(self.model, filtered, probe_step, probe_tag)
         out = self.model(**filtered)
         return out.logits
