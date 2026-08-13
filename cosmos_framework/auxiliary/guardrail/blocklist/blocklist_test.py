@@ -431,3 +431,26 @@ def test_phrase_exemption_survives_spacing_and_case():
     for prompt in ("a desk in the room", "a desk  in the room", "a DESK IN the room", "Desk In The Room"):
         blocked, _ = bl.censor_prompt(prompt)
         assert blocked is False, f"{prompt!r} was blocked"
+
+
+@pytest.mark.L1
+def test_whitelisted_word_censored_as_another_entrys_variant_is_reported():
+    """Whitelisting a word does not guarantee the matcher spares it.
+
+    better_profanity removes whitelisted words before it expands the leetspeak
+    variants of the remaining entries, so a whitelisted word that happens to be
+    a variant of another entry stays censored -- "flat" is what "fiat" becomes
+    under the i/l mapping. The whitelist entry then silently does nothing, so
+    the loader names it rather than leaving it to be found in production.
+    """
+    from better_profanity.better_profanity import Profanity
+
+    matcher = Profanity()
+    matcher.load_censor_words(custom_words=["fiat"], whitelist_words=["flat"])
+
+    assert Blocklist.unprotected_whitelist_tokens(matcher, ["flat"]) == ["flat"]
+
+    unaffected = Profanity()
+    unaffected.load_censor_words(custom_words=["snow white"], whitelist_words=["flat"])
+
+    assert Blocklist.unprotected_whitelist_tokens(unaffected, ["flat"]) == []
