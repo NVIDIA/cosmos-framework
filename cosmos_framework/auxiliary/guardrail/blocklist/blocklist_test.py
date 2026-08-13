@@ -454,3 +454,47 @@ def test_whitelisted_word_censored_as_another_entrys_variant_is_reported():
     unaffected.load_censor_words(custom_words=["snow white"], whitelist_words=["flat"])
 
     assert Blocklist.unprotected_whitelist_tokens(unaffected, ["flat"]) == []
+
+
+@pytest.mark.L1
+def test_match_straddling_a_whitelisted_phrase_stays_blocked():
+    """The exemption covers the phrase, not everything that touches it.
+
+    Masking the phrase out before matching also deleted any match that overlaps
+    it: with "in gun" on the blocklist, "a desk in gun on the table" stopped
+    being blocked as soon as "desk in" was whitelisted. Only a match lying
+    entirely inside the phrase may be dropped.
+    """
+    bl = _blocklist_with_words(["in gun"], whitelist=["desk in"])
+
+    blocked, _ = bl.censor_prompt("a desk in gun on the table")
+
+    assert blocked is True
+
+
+@pytest.mark.L1
+def test_second_occurrence_of_a_phrase_does_not_hide_a_real_match():
+    """One exempt occurrence must not exempt a different match elsewhere."""
+    bl = _blocklist_with_words(["deskin", "in gun"], whitelist=["desk in"])
+
+    blocked, _ = bl.censor_prompt("a desk in room and a desk in gun")
+
+    assert blocked is True
+
+
+@pytest.mark.L1
+def test_censored_token_spans_locate_a_multi_token_match():
+    """A multi-word match collapses to one censored token; recover its width."""
+    source = "a snow white poster on a wall".split()
+    censored = "a \x00 poster on a wall".split()
+
+    assert Blocklist.censored_token_spans(source, censored) == [(1, 3)]
+
+
+@pytest.mark.L1
+def test_align_folded_to_source_maps_a_split_token_back():
+    """Folding an invisible character splits one source token into two."""
+    source = ["a", "desk​in", "room"]
+    folded = ["a", "desk", "in", "room"]
+
+    assert Blocklist.align_folded_to_source(source, folded) == [0, 1, 1, 2]
