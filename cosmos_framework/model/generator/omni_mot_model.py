@@ -31,7 +31,10 @@ from cosmos_framework.utils.timer import Timer
 from cosmos_framework.model.generator.algorithm.loss.flow_matching import compute_flow_matching_loss
 from cosmos_framework.model.generator.algorithm.loss.load_balancing import compute_load_balancing_loss
 from cosmos_framework.configs.base.defaults.model_config import OmniMoTModelConfig
-from cosmos_framework.data.generator.action.action_processing import ActionProcessor, get_action_processing_records
+from cosmos_framework.data.generator.action.utils.action_processing import (
+    ActionProcessor,
+    get_action_processing_records,
+)
 from cosmos_framework.data.generator.utils import IMAGE_RES_SIZE_INFO, VIDEO_RES_SIZE_INFO
 from cosmos_framework.model.generator.diffusion.rectified_flow import RectifiedFlow
 from cosmos_framework.model.generator.diffusion.samplers.edm import EDMSampler

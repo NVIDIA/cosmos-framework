@@ -114,6 +114,64 @@ def _validate_encoder_mlp_only_checkpoint_max_tokens(
         raise ValueError("encoder_mlp_only_checkpoint_max_tokens is incompatible with freeze_encoder=True.")
 
 
+def _validate_encoder_fused_max_padded_tokens(
+    *,
+    max_padded_tokens: int | None,
+    fuse_encoder_temporal_batches: bool,
+) -> None:
+    """Validate the default-off fused-encoder attention workspace guard."""
+    if max_padded_tokens is None:
+        return
+    if isinstance(max_padded_tokens, bool) or not isinstance(max_padded_tokens, int) or max_padded_tokens < 1:
+        raise ValueError(
+            f"encoder_fused_max_padded_tokens must be a positive integer or None, got {max_padded_tokens!r}."
+        )
+    if not fuse_encoder_temporal_batches:
+        raise ValueError("encoder_fused_max_padded_tokens requires fuse_encoder_temporal_batches=True.")
+
+
+def _partition_consecutive_batches_by_padded_token_budget(
+    sequence_lengths: list[int],
+    max_padded_tokens: int | None,
+) -> list[tuple[int, int]]:
+    """Partition independent attention segments under a Blackwell varlen workspace proxy.
+
+    NATTEN Blackwell FMHA backward allocates against the number of segments
+    multiplied by the longest sequence rounded to eight tokens. Keeping this
+    product bounded avoids pathological ragged-batch workspace amplification
+    without dropping, resizing, or reordering any segment.
+    """
+    if len(sequence_lengths) == 0:
+        return []
+    if any(sequence_length <= 0 for sequence_length in sequence_lengths):
+        raise ValueError(f"Fused encoder sequence lengths must be positive, got {sequence_lengths!r}.")
+    if max_padded_tokens is None:
+        return [(0, len(sequence_lengths))]
+
+    padded_lengths = [((sequence_length + 7) // 8) * 8 for sequence_length in sequence_lengths]
+    for batch_index, padded_length in enumerate(padded_lengths):
+        if padded_length > max_padded_tokens:
+            raise ValueError(
+                "One fused encoder attention segment exceeds encoder_fused_max_padded_tokens: "
+                f"segment={batch_index}, padded_tokens={padded_length}, limit={max_padded_tokens}."
+            )
+
+    ranges: list[tuple[int, int]] = []
+    group_start = 0
+    group_max_padded_length = 0
+    for batch_index, padded_length in enumerate(padded_lengths):
+        candidate_max_padded_length = max(group_max_padded_length, padded_length)
+        candidate_batch_size = batch_index - group_start + 1
+        if candidate_batch_size * candidate_max_padded_length > max_padded_tokens:
+            ranges.append((group_start, batch_index))
+            group_start = batch_index
+            group_max_padded_length = padded_length
+        else:
+            group_max_padded_length = candidate_max_padded_length
+    ranges.append((group_start, len(sequence_lengths)))
+    return ranges
+
+
 def _validate_decoder_no_checkpoint_max_tokens(
     *,
     max_tokens: int | None,
@@ -1704,6 +1762,7 @@ class AutoencoderKLConfig:
     encoder_use_checkpoint: bool | None = None
     encoder_gradient_checkpoint_scope: Literal["full_layer", "mlp_only"] = "full_layer"
     encoder_mlp_only_checkpoint_max_tokens: int | None = None
+    encoder_fused_max_padded_tokens: int | None = None
     decoder_use_checkpoint: bool | None = None
     decoder_no_checkpoint_max_tokens: int | None = None
     encoder_checkpoint_group_size: int = 1
@@ -1811,6 +1870,7 @@ class AutoencoderKL(ModelMixin, ConfigMixin, FromOriginalModelMixin):
         encoder_use_checkpoint: bool | None = None,
         encoder_gradient_checkpoint_scope: Literal["full_layer", "mlp_only"] = "full_layer",
         encoder_mlp_only_checkpoint_max_tokens: int | None = None,
+        encoder_fused_max_padded_tokens: int | None = None,
         decoder_use_checkpoint: bool | None = None,
         decoder_no_checkpoint_max_tokens: int | None = None,
         encoder_checkpoint_group_size: int = 1,
@@ -1856,6 +1916,11 @@ class AutoencoderKL(ModelMixin, ConfigMixin, FromOriginalModelMixin):
             freeze_encoder=freeze_encoder,
         )
         self.encoder_mlp_only_checkpoint_max_tokens: int | None = encoder_mlp_only_checkpoint_max_tokens
+        _validate_encoder_fused_max_padded_tokens(
+            max_padded_tokens=encoder_fused_max_padded_tokens,
+            fuse_encoder_temporal_batches=fuse_encoder_temporal_batches,
+        )
+        self.encoder_fused_max_padded_tokens: int | None = encoder_fused_max_padded_tokens
         _validate_decoder_no_checkpoint_max_tokens(
             max_tokens=decoder_no_checkpoint_max_tokens,
             use_decoder=use_decoder,
@@ -1916,6 +1981,7 @@ class AutoencoderKL(ModelMixin, ConfigMixin, FromOriginalModelMixin):
         self.num_sample_frames_batch_size = 16
         self.num_sample_frames_stride = 12
         self.kv_cache_size = 4
+        self._logged_encoder_fusion_split = False
         self._logged_decoder_temporal_plan = False
 
         # Load SigLIP2 pretrained model (text encoder always needed for text alignment)
@@ -2333,18 +2399,51 @@ class AutoencoderKL(ModelMixin, ConfigMixin, FromOriginalModelMixin):
     def _encode_fused_temporal_batches(self, x: SparseTensor, frame_batch_size: int) -> SparseTensor:
         """Encode independent temporal chunks once and restore the original sparse metadata."""
         packed_x = self._pack_independent_temporal_batches(x, frame_batch_size)
-        packed_encoded, _ = self._run_main_encoder(packed_x)
-        if packed_encoded.feats.shape[0] != x.feats.shape[0]:
+        sequence_lengths = [
+            sequence_length + self.encoder.num_register_tokens for sequence_length in packed_x.get_batch_seq_lens()
+        ]
+        batch_ranges = _partition_consecutive_batches_by_padded_token_budget(
+            sequence_lengths,
+            self.encoder_fused_max_padded_tokens,
+        )
+        if len(batch_ranges) > 1 and not self._logged_encoder_fusion_split:
+            logging.warning(
+                "Splitting fused encoder attention into {} consecutive calls: segments={}, max_segment_tokens={}, "
+                "padded_token_surface={}, limit={}",
+                len(batch_ranges),
+                len(sequence_lengths),
+                max(sequence_lengths),
+                len(sequence_lengths) * (((max(sequence_lengths) + 7) // 8) * 8),
+                self.encoder_fused_max_padded_tokens,
+            )
+            self._logged_encoder_fusion_split = True
+        encoded_feature_parts: list[torch.Tensor] = []
+        for batch_start, batch_end in batch_ranges:
+            packed_chunk = packed_x[batch_start:batch_end] if len(batch_ranges) > 1 else packed_x
+            encoded_chunk, _ = self._run_main_encoder(packed_chunk)
+            if encoded_chunk.feats.shape[0] != packed_chunk.feats.shape[0]:
+                raise RuntimeError(
+                    "Fused temporal encoder must preserve sparse row count, got "
+                    f"{encoded_chunk.feats.shape[0]} rows for {packed_chunk.feats.shape[0]} inputs."
+                )
+            if (
+                encoded_chunk.coords.data_ptr() != packed_chunk.coords.data_ptr()
+                or encoded_chunk.layout is not packed_chunk.layout
+            ):
+                raise RuntimeError("Fused temporal encoder must preserve packed coordinate and row-layout identity.")
+            encoded_feature_parts.append(encoded_chunk.feats)  # [N_i,D]
+
+        packed_encoded_features = (
+            encoded_feature_parts[0]
+            if len(encoded_feature_parts) == 1
+            else cat_with_bounded_inputs(encoded_feature_parts, dim=0)
+        )  # [N,D]
+        if packed_encoded_features.shape[0] != x.feats.shape[0]:
             raise RuntimeError(
                 "Fused temporal encoder must preserve sparse row count, got "
-                f"{packed_encoded.feats.shape[0]} rows for {x.feats.shape[0]} inputs."
+                f"{packed_encoded_features.shape[0]} rows for {x.feats.shape[0]} inputs."
             )
-        if (
-            packed_encoded.coords.data_ptr() != packed_x.coords.data_ptr()
-            or packed_encoded.layout is not packed_x.layout
-        ):
-            raise RuntimeError("Fused temporal encoder must preserve packed coordinate and row-layout identity.")
-        return x.replace(packed_encoded.feats)
+        return x.replace(packed_encoded_features)
 
     def _can_fuse_decoder_temporal_batches(
         self,

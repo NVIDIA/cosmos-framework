@@ -54,7 +54,6 @@ class Qwen3VLMoeTextExpertsGroupedMm(nn.Module):
         self.act_fn = ACT2FN[config.hidden_act]
 
         self.num_experts = config.num_experts
-        self.moe_intermediate_size = config.moe_intermediate_size
         self.hidden_size = config.hidden_size
         self.top_k = config.num_experts_per_tok if top_k is None else top_k
         assert 1 <= self.top_k <= self.num_experts, f"top_k must be in [1, {self.num_experts}], got {self.top_k}."
@@ -122,7 +121,17 @@ class Qwen3VLMoeTextExpertsGroupedMm(nn.Module):
 
         # Compose: permuted_indices indexes into sorted order,
         # token_indices_sorted maps sorted→original. Compose them:
-        sentinel = torch.tensor([num_tokens], device=hidden_states.device)  # for padding slots
+        #
+        # torch.full, not torch.tensor([num_tokens], device=...): the latter stages the value in
+        # pageable host memory, and a pageable H2D copy is cudaMemcpyAsync plus a blocking
+        # cudaStreamSynchronize. That synchronize drains everything this layer has queued, once
+        # per MoE layer (94 of them per forward on the 235B), which costs the CPU the run-ahead
+        # FSDP2 needs: with no explicit forward prefetch, a block's all-gather is only issued when
+        # the CPU reaches its pre-forward hook, so a CPU pinned to the GPU serializes comm behind
+        # compute. full() fills on device with the scalar as a kernel argument — nothing waits.
+        sentinel = torch.full(
+            (1,), num_tokens, dtype=token_indices_sorted.dtype, device=hidden_states.device
+        )  # for padding slots
         token_indices_ext = torch.cat([token_indices_sorted, sentinel])
         combined_indices = token_indices_ext[permuted_indices.long()]
         combined_indices = combined_indices.unsqueeze(-1).expand(-1, dim)
@@ -181,7 +190,6 @@ class Qwen3VLMoeTextExpertsNaive(nn.Module):
         self.act_fn = ACT2FN[config.hidden_act]
 
         self.num_experts = config.num_experts
-        self.moe_intermediate_size = config.moe_intermediate_size
         self.hidden_size = config.hidden_size
 
     def forward(

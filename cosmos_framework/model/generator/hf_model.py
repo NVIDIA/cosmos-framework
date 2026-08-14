@@ -231,16 +231,38 @@ class HFModel(nn.Module):
         if n_cast:
             log.info(f"HFModel: normalized {n_cast} param(s) to {dtype} post-from_config")
 
-        # Patch Qwen3-VL forward for text-only batches (no pixel_values / image_grid_thw).
-        # Required to avoid errors when a batch contains only text: every FSDP rank must
-        # call visual() each step for all-gather sync; the patch runs a lightweight dummy
-        # image and slices the output to [0:0] so it contributes no features.
+        # Patch Qwen3-VL / Qwen3-VL-MoE forward for text-only batches (no pixel_values /
+        # image_grid_thw). Required to avoid errors when a batch contains only text: every
+        # FSDP rank must call visual() each step for all-gather sync; the patch runs a
+        # lightweight dummy image and slices the output to [0:0] so it contributes no features.
+        # Both backbones share the same patch (see patch_qwen3_vl_forward).
         # Must happen BEFORE parallelize() so FSDP captures the patched forward.
-        if hf_config.model_type == "qwen3_vl" and hasattr(self.model, "model"):
+        if hf_config.model_type in ("qwen3_vl", "qwen3_vl_moe") and hasattr(self.model, "model"):
             from cosmos_framework.utils.generator.monkey_patch import patch_qwen3_vl_forward
 
             patch_qwen3_vl_forward(self.model.model)
-            log.info("HFModel: applied patch_qwen3_vl_forward for text-only batch support")
+            log.info(f"HFModel: applied patch_qwen3_vl_forward ({hf_config.model_type}) for text-only batch support")
+
+        # Swap HF's per-expert Python loop for the fused grouped_mm expert kernel. HF's loop
+        # is never the faster choice on the GPUs this trains on, and the patch reuses the
+        # existing expert parameters as-is, so there is nothing to trade off and no knob:
+        # checkpoint and FSDP layouts are unchanged. Also must precede parallelize().
+        if hf_config.model_type == "qwen3_vl_moe":
+            from cosmos_framework.utils.generator.monkey_patch import patch_qwen3_vl_moe_grouped_mm_experts
+
+            n_moe_blocks = patch_qwen3_vl_moe_grouped_mm_experts(self.model)
+            log.info(f"HFModel: applied grouped_mm experts to {n_moe_blocks} MoE block(s)")
+
+        # Give the vision tower a single varlen attention call per block. HF only does that for
+        # flash_attention_2 and otherwise splits the packed patches per image, which costs a
+        # device-to-host sync (and a graph break) in every block; cosmos_framework.model.attention takes the
+        # packed layout directly. Only the cosmos adapter reaches it, so the other
+        # implementations keep HF's split path. Also must precede parallelize().
+        if hf_config.model_type in ("qwen3_vl", "qwen3_vl_moe") and attn_implementation == "cosmos":
+            from cosmos_framework.utils.generator.monkey_patch import patch_qwen3_vl_vision_varlen_attention
+
+            n_vision_attns = patch_qwen3_vl_vision_varlen_attention(self.model)
+            log.info(f"HFModel: applied varlen attention to {n_vision_attns} vision attention module(s)")
 
         if torch.are_deterministic_algorithms_enabled():
             from cosmos_framework.utils.generator.monkey_patch import patch_siglip2_pos_embed_antialias_off

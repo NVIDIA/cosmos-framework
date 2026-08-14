@@ -26,6 +26,10 @@ from cosmos_framework.tools.visualize.video import save_img_or_video
 
 from cosmos_framework.model.generator.mot.context_parallel_utils import broadcast_context_parallel_object
 from cosmos_framework.utils.generator.data_utils import slice_data_batch
+from cosmos_framework.utils.generator.multiview import (
+    decode_multiview_latent_per_view,
+    split_multiview_tensor_by_view,
+)
 
 
 class WandbAnimation(NamedTuple):
@@ -225,78 +229,6 @@ def _to_display_row(pixels: torch.Tensor, *, colorize_lidar: bool = False) -> to
     return _to_display_uint8(pixels).cpu()  # [V,C,F,H,W]
 
 
-def _split_multiview_tensor_by_view(
-    tensor: torch.Tensor,
-    sample_n_views: int,
-    num_video_frames_per_view: int,
-) -> torch.Tensor | None:
-    if tensor.dim() == 5:
-        if tensor.shape[0] != 1:
-            return None
-        view_tensor = tensor[0]  # [C,V*F,H,W]
-    elif tensor.dim() == 4:
-        view_tensor = tensor  # [C,V*F,H,W]
-    else:
-        return None
-
-    expected_num_frames = sample_n_views * num_video_frames_per_view
-    if view_tensor.shape[1] != expected_num_frames:
-        return None
-
-    view_tensor = view_tensor.reshape(
-        view_tensor.shape[0],
-        sample_n_views,
-        num_video_frames_per_view,
-        view_tensor.shape[2],
-        view_tensor.shape[3],
-    )  # [C,V,F,H,W]
-    return view_tensor.permute(1, 0, 2, 3, 4).contiguous()  # [V,C,F,H,W]
-
-
-def _decode_multiview_latent_per_view(
-    model: Any,
-    latent: torch.Tensor,
-    sample_n_views: int,
-    num_video_frames_per_view: int,
-) -> torch.Tensor:  # latent: [B,C,V*T_latent,H,W] or [C,V*T_latent,H,W], returns same rank with T=V*F
-    """Decode camera-major latent clips independently and concatenate their pixels."""
-    if latent.ndim not in (4, 5):
-        raise ValueError(
-            f"Multiview latents must have shape [B,C,T,H,W] or [C,T,H,W], got shape {tuple(latent.shape)}."
-        )
-
-    temporal_dim = latent.ndim - 3
-    num_latent_frames = int(latent.shape[temporal_dim])
-    if num_latent_frames % sample_n_views != 0:
-        raise ValueError(
-            "Multiview latent length must be divisible by sample_n_views: "
-            f"got T={num_latent_frames}, sample_n_views={sample_n_views}."
-        )
-
-    latent_frames_per_view = num_latent_frames // sample_n_views
-    decoded_views: list[torch.Tensor] = []
-    for view_idx in range(sample_n_views):
-        view_latent = latent.narrow(  # [B,C,T_latent,H,W] or [C,T_latent,H,W]
-            temporal_dim,
-            view_idx * latent_frames_per_view,
-            latent_frames_per_view,
-        )
-        decoded_view = model.decode(view_latent)  # [B,C,F,H_pixel,W_pixel] or [C,F,H_pixel,W_pixel]
-        if decoded_view.ndim != latent.ndim:
-            raise ValueError(
-                "Decoded multiview tensors must preserve the latent rank: "
-                f"got latent shape {tuple(view_latent.shape)} and decoded shape {tuple(decoded_view.shape)}."
-            )
-        if decoded_view.shape[temporal_dim] != num_video_frames_per_view:
-            raise ValueError(
-                "Decoded camera clip length must match num_video_frames_per_view: "
-                f"got T={decoded_view.shape[temporal_dim]}, expected {num_video_frames_per_view}."
-            )
-        decoded_views.append(decoded_view)
-
-    return torch.cat(decoded_views, dim=temporal_dim)  # [B,C,V*F,H_pixel,W_pixel] or [C,V*F,H_pixel,W_pixel]
-
-
 def _get_first_multiview_transfer_rows(
     raw_data: list[torch.Tensor] | None,
     metadata: MultiviewTransferMetadata,
@@ -373,15 +305,15 @@ def _decode_transfer_display_row(
     """Decode one latent into a camera-major display row, or None if it cannot be split by view."""
     assert hasattr(model, "decode")
     if "enable_per_camera_vae_encoding" in data_batch:
-        decoded = _decode_multiview_latent_per_view(  # [1,C,V*F,H,W] or [C,V*F,H,W]
-            model,
+        decoded = decode_multiview_latent_per_view(  # [1,C,V*F,H,W] or [C,V*F,H,W]
+            model.decode,
             latent,
             metadata.sample_n_views,
             metadata.num_video_frames_per_view,
         )
     else:
         decoded = model.decode(latent)  # [1,C,V*F,H,W] or [C,V*F,H,W]
-    decoded_by_view = _split_multiview_tensor_by_view(
+    decoded_by_view = split_multiview_tensor_by_view(
         decoded,
         metadata.sample_n_views,
         metadata.num_video_frames_per_view,
@@ -503,7 +435,7 @@ def _prepare_multiview_video_for_visualization(
     """
     if tensor.dtype == torch.uint8:
         tensor = tensor.cpu()  # [B,C,V*F,H,W] or [C,V*F,H,W]
-    video_by_view = _split_multiview_tensor_by_view(
+    video_by_view = split_multiview_tensor_by_view(
         tensor,
         sample_n_views,
         num_video_frames_per_view,

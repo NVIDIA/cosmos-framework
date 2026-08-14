@@ -32,11 +32,13 @@ from cosmos_framework.utils.lazy_config import instantiate
 from cosmos_framework.model._base import ImaginaireModel
 from cosmos_framework.utils import log
 from cosmos_framework.model.generator.algorithm.loss.cross_entropy import cross_entropy_loss, weighted_cross_entropy_loss
+from cosmos_framework.model.generator.algorithm.loss.load_balancing import compute_load_balancing_loss
 from cosmos_framework.configs.base.defaults.parallelism import PRECISION_TO_TORCH_DTYPE
 from cosmos_framework.configs.base.defaults.reasoner import validate_sound_understanding_config
 from cosmos_framework.configs.base.reasoner.defaults.policy_config import VLMModelConfig
 from cosmos_framework.model.generator.hf_model import HFModel
 from cosmos_framework.model.generator.parallelize_vlm import parallelize
+from cosmos_framework.model.generator.utils.moe_utils import collect_hf_moe_lbl_metadata, set_hf_moe_token_mask
 from cosmos_framework.model.generator.utils.safetensors_loader import load_vlm_model
 from cosmos_framework.utils.generator.input_probe import (
     maybe_dump_forward_result,
@@ -46,7 +48,9 @@ from cosmos_framework.utils.generator.input_probe import (
 )
 from cosmos_framework.utils.generator.parallelism import ParallelDims
 from cosmos_framework.utils.generator.reasoner.constant import IGNORE_INDEX
-from cosmos_framework.utils.generator.reasoner.create_position_ids import get_position_ids
+from cosmos_framework.utils.generator.reasoner.pretrained_models_downloader import (
+    maybe_download_hf_model_from_s3,
+)
 
 # Model-type dispatch sets. Using hf_config.model_type (stable HF-defined string)
 # rather than backbone.model_name avoids the brittleness of substring-matching a local
@@ -371,10 +375,6 @@ class VLMModel(ImaginaireModel):
           f. Tie output embedding → input embedding if tie_word_embeddings=True.
           g. Load pretrain weights into sharded CUDA tensors.
         """
-        from cosmos_framework.utils.generator.reasoner.pretrained_models_downloader import (
-            maybe_download_hf_model_from_s3,
-        )
-
         policy = config.policy
 
         load_pretrain_weights = checkpoint.load_path == ""
@@ -658,26 +658,102 @@ class VLMModel(ImaginaireModel):
         scheduler = instantiate(scheduler_config, optimizer=optimizer)
         return optimizer, scheduler
 
-    def training_step(self, data: dict, iteration: int) -> tuple[dict, torch.Tensor]:
-        """position_ids → forward → CE loss."""
-        position_ids = get_position_ids(
-            self.hf_config,
-            input_ids=data["input_ids"],
-            image_grid_thw=data.get("image_grid_thw"),
-            video_grid_thw=data.get("video_grid_thw"),
-            attention_mask=data.get("attention_mask"),
-        )
-        if position_ids is not None:
-            data["position_ids"] = position_ids
+    def _set_moe_token_mask(self, attention_mask: torch.Tensor | None) -> None:
+        """Tell the MoE blocks which rows of this step are real tokens.
 
+        HF's sparse MoE block takes ``forward(hidden_states)`` and nothing else, so the
+        patched forward reads the mask off the module instead; see
+        ``moe_utils.set_hf_moe_token_mask``. Without it the padded rows are dispatched to
+        experts and counted in the routing statistics, and the auxiliary loss trains the
+        router to balance rows that carry no supervision — ``ignore_index`` keeps them out of
+        the cross-entropy, not out of this.
+
+        Publishing it unconditionally (rather than only when ``config.lbl.coeff`` is set) is
+        deliberate: the mask also decides which rows the experts compute, so skipping it would
+        leave the expert GEMMs padding-dependent even with the aux loss off.
+        """
+        if self.hf_config.model_type != "qwen3_vl_moe":
+            return
+
+        set_hf_moe_token_mask(self.model, attention_mask)
+
+    def _moe_load_balancing_loss(self) -> torch.Tensor | None:
+        """Build the MoE load-balancing auxiliary loss from this forward's routing stats.
+
+        Returns ``None`` for a dense backbone or when ``config.lbl.coeff`` is unset. The
+        statistics are stashed per layer by the patched MoE block forward and popped here;
+        see ``moe_utils.collect_hf_moe_lbl_metadata`` for why popping matters.
+
+        The stash is a side channel out of the block's forward, so it only stays
+        grad-connected under NON-reentrant activation checkpointing — reentrant recompute
+        runs the first pass under ``no_grad`` and would silently detach the router
+        probabilities, leaving the aux loss with no gradient. ``parallelize_vlm.apply_ac``
+        wraps blocks with ``ptd_checkpoint_wrapper``, whose ``checkpoint_impl`` defaults to
+        ``CheckpointImpl.NO_REENTRANT``.
+
+        Must be called OUTSIDE any compiled region: ``method="global"`` issues DP
+        collectives, which torch.compile may reorder into a deadlock (see
+        ``compute_load_balancing_loss``). ``training_step`` is eager, so that holds.
+
+        Imports are local because the MoE modules pull in Triton kernels that the dense
+        Qwen3-VL path must not require.
+        """
+        if self.hf_config.model_type != "qwen3_vl_moe":
+            return None
+
+        return compute_load_balancing_loss(
+            collect_hf_moe_lbl_metadata(self.model),
+            coeff=self.config.lbl.coeff,
+            method=self.config.lbl.method,
+            device_mesh=self.parallel_dims.dp_mesh if self.parallel_dims is not None else None,
+        )
+
+    def training_step(self, data: dict, iteration: int) -> tuple[dict, torch.Tensor]:
+        """forward → CE loss, plus the MoE load-balancing loss when ``config.lbl`` enables it.
+
+        position_ids are intentionally NOT precomputed here: both the dense
+        (Qwen3-VL) and MoE (Qwen3-VL-MoE) backbones derive multimodal-RoPE
+        positions internally via their own ``get_rope_index`` when
+        ``position_ids is None`` (their forward is monkey-patched — see
+        ``hf_model`` / ``monkey_patch.patch_qwen3_vl_forward``). Relying on the
+        model's built-in path keeps the native ``[3, B, N]`` mRoPE layout and
+        avoids a redundant external reimplementation.
+
+        ``attention_mask`` is forwarded rather than dropped. Under the ``cosmos`` attention
+        implementation it changes nothing: ``hf_model`` registers that name in HF's
+        ``ALL_ATTENTION_FUNCTIONS`` only, and ``masking_utils._preprocess_mask_arguments``
+        returns no mask at all for an implementation absent from
+        ``ALL_MASK_ATTENTION_FUNCTIONS``, so the adapter attends causally over the whole
+        padded row — safe because ``custom_collate`` pads on the RIGHT and the pad rows are
+        ``ignore_index`` in the labels.
+
+        It is load-bearing for the sdpa / flash fallbacks (``policy.attn_implementation``).
+        Those DO build a mask, and when ``attention_mask`` is None that same function reads
+        the position ids as a packed batch (``find_packed_sequence_indices``: any step other
+        than +1 starts a new sequence). Qwen3-VL's mRoPE temporal ids repeat across an
+        image/video block, so every vision token would be taken for the start of a new
+        sequence and attention would be severed at each one.
+
+        It also reaches ``get_rope_index``, where it only keeps the scan from walking into
+        the trailing pads: right padding puts the real tokens first, so their positions —
+        and the loss — are the same either way. Left-padding would break that silently;
+        ``unit_tests/test_monkey_patch.py`` pins it.
+        """
         labels = data.pop("labels")
-        data.pop("attention_mask", None)
+        self._set_moe_token_mask(data.get("attention_mask"))
+
         maybe_dump_model_inputs(data, iteration, tag="i4", labels=labels)
         self._parity_probe_step = iteration
+
         logits = self.model(_probe_step=iteration, _probe_tag="i4", **data)
         loss_kwargs = {"probe_step": iteration, "probe_tag": "i4"} if self.config.policy.use_weighted_ce else {}
         loss = self._loss_fn(logits, labels, **loss_kwargs)
-        maybe_dump_forward_result(logits, {"ce_loss": loss, "total_loss": loss}, iteration, tag="i4")
+
+        ce_loss = loss.detach().clone()
+        load_balancing_loss = self._moe_load_balancing_loss()
+        if load_balancing_loss is not None:
+            loss = loss + load_balancing_loss
+        maybe_dump_forward_result(logits, {"ce_loss": ce_loss, "total_loss": loss}, iteration, tag="i4")
 
         # Match cosmos-rl's logged DP-average without changing the backward loss.
         loss_avg = loss.detach().clone()
@@ -691,24 +767,24 @@ class VLMModel(ImaginaireModel):
         if not torch.distributed.is_initialized() or torch.distributed.get_rank() == 0:
             log.info(f"train/loss_avg: {loss_avg.item():.5f} (iteration {iteration})")
 
-        return {"loss": loss, "loss_avg": loss_avg, "labels": labels}, loss
+        output = {"loss": loss, "loss_avg": loss_avg, "labels": labels}
+        if load_balancing_loss is not None:
+            # loss/loss_avg are the full objective once the aux term is on; report the two
+            # components separately so a rising CE behind a falling total stays visible.
+            output["ce_loss"] = ce_loss
+            output["aux_loss"] = load_balancing_loss.detach()
+        return output, loss
 
     @torch.no_grad()
     def validation_step(self, data: dict, iteration: int) -> tuple[dict, torch.Tensor]:
         """Required: VLM experiments enable validation by default (pre_exp01x.py:607).
-        ImaginaireTrainer.validate() calls this — must not raise NotImplementedError."""
-        position_ids = get_position_ids(
-            self.hf_config,
-            input_ids=data["input_ids"],
-            image_grid_thw=data.get("image_grid_thw"),
-            video_grid_thw=data.get("video_grid_thw"),
-            attention_mask=data.get("attention_mask"),
-        )
-        if position_ids is not None:
-            data["position_ids"] = position_ids
+        ImaginaireTrainer.validate() calls this — must not raise NotImplementedError.
 
+        Like ``training_step``, position_ids are computed internally by the model and
+        ``attention_mask`` is forwarded (see that method's notes).
+        """
         labels = data.pop("labels")
-        data.pop("attention_mask", None)
+        self._set_moe_token_mask(data.get("attention_mask"))
         logits = self.model(**data)
         loss = self._loss_fn(logits, labels)
         return {"loss": loss, "labels": labels}, loss
