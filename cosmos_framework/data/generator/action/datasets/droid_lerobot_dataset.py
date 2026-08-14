@@ -37,13 +37,13 @@ from cosmos_framework.data.generator.action.datasets.droid_lerobot_dataset_confi
     LEROBOT_ROOTS,
     STATE_FEATURES,
 )
-from cosmos_framework.data.generator.action.pose_utils import (
+from cosmos_framework.data.generator.action.utils.pose_utils import (
     PoseConvention,
     build_abs_pose_from_components,
     convert_rotation,
     pose_abs_to_rel,
 )
-from cosmos_framework.data.generator.action.viewpoint_utils import Viewpoint
+from cosmos_framework.data.generator.action.utils.viewpoint_utils import Viewpoint
 from cosmos_framework.utils import log
 
 _FILTER_DICT_PATH = "/scratch/fsw/portfolios/cosmos/projects/cosmos_base_training/users/haolia/workspace/droid_oss_inputs/keep_ranges_1_0_1.json"

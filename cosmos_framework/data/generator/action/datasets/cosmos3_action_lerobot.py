@@ -57,7 +57,7 @@ def _ensure_hf_hub_offline() -> None:
 
 from functools import cached_property
 
-from cosmos_framework.data.generator.action.action_processing import (
+from cosmos_framework.data.generator.action.utils.action_processing import (
     ActionNormalizationMethod,
     ActionNormalizer,
     load_action_stats,
@@ -66,7 +66,7 @@ from cosmos_framework.data.generator.action.action_processing import (
 
 # Re-export the action_spec DSL from this module so that subclass datasets
 # only need a single import block (alongside ``BaseActionLeRobotDataset``).
-from cosmos_framework.data.generator.action.action_spec import (  # noqa: F401  (re-export)
+from cosmos_framework.data.generator.action.utils.action_spec import (  # noqa: F401  (re-export)
     ActionSpec,
     DimType,
     Gripper,
@@ -76,9 +76,9 @@ from cosmos_framework.data.generator.action.action_spec import (  # noqa: F401  
     Rot,
     build_action_spec,
 )
-from cosmos_framework.data.generator.action.domain_utils import get_domain_id
-from cosmos_framework.data.generator.action.pose_utils import compute_idle_frames
-from cosmos_framework.data.generator.action.viewpoint_utils import Viewpoint
+from cosmos_framework.data.generator.action.utils.domain_utils import get_domain_id
+from cosmos_framework.data.generator.action.utils.pose_utils import compute_idle_frames
+from cosmos_framework.data.generator.action.utils.viewpoint_utils import Viewpoint
 from cosmos_framework.utils import log
 
 
