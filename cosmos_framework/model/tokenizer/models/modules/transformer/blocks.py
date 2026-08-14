@@ -176,6 +176,7 @@ class SparseTransformerBlock(nn.Module):
         multiscale: Any | None = None,
         layer_idx: int | None = None,
         gradient_checkpoint_scope: str = SPARSE_TRANSFORMER_CHECKPOINT_SCOPE_FULL_LAYER,
+        qk_rms_norm_eps: float | None = None,
     ) -> None:
         """Initialize SparseTransformerBlock.
 
@@ -186,6 +187,8 @@ class SparseTransformerBlock(nn.Module):
             use_checkpoint: Whether to use gradient checkpointing.
             use_rope: Whether to use rotary position embeddings.
             qk_rms_norm: Whether to apply RMS normalization to Q and K.
+            qk_rms_norm_eps: Optional finite epsilon for true Q/K RMS
+                normalization. ``None`` preserves historical behavior.
             use_bias: Whether to use bias in linear layers.
             use_rms_norm: Whether to use RMSNorm (vs LayerNorm).
             ln_affine: Whether to use affine parameters in LayerNorm.
@@ -227,6 +230,7 @@ class SparseTransformerBlock(nn.Module):
             use_bias=use_bias,
             use_rope=use_rope,
             qk_rms_norm=qk_rms_norm,
+            qk_rms_norm_eps=qk_rms_norm_eps,
         )
         self.attn.layer_idx = layer_idx
         self.mlp = SparseFeedForwardNet(
@@ -1089,6 +1093,7 @@ class SparseMultiheadAttentionPoolingHead(nn.Module):
         use_bias: bool = True,
         use_rms_norm: bool = False,
         qk_rms_norm: bool = False,
+        qk_rms_norm_eps: float | None = None,
     ) -> None:
         """Initialize SparseMultiheadAttentionPoolingHead.
 
@@ -1101,6 +1106,8 @@ class SparseMultiheadAttentionPoolingHead(nn.Module):
             use_bias: Whether to use bias in linear layers.
             use_rms_norm: Whether to use RMSNorm (vs LayerNorm).
             qk_rms_norm: Whether to apply RMS norm to Q/K.
+            qk_rms_norm_eps: Optional finite epsilon for true Q/K RMS
+                normalization. ``None`` preserves historical behavior.
         """
         super().__init__()
         from cosmos_framework.model.tokenizer.models.modules.attention.modules import SparseMultiHeadAttention
@@ -1121,6 +1128,7 @@ class SparseMultiheadAttentionPoolingHead(nn.Module):
             type="cross",
             use_bias=use_bias,
             qk_rms_norm=qk_rms_norm,
+            qk_rms_norm_eps=qk_rms_norm_eps,
         )
         self.attention.layer_idx = -1
 

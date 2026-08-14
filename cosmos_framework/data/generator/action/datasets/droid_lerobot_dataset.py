@@ -99,6 +99,10 @@ class DROIDLeRobotDataset(BaseActionLeRobotDataset):
         enable_fast_init: bool = False,
         max_num_history_actions: int = 0,
         use_image_augmentation: bool = False,
+        # Appended rather than placed next to ``action_normalization``: the
+        # parameters above are positional-or-keyword, so inserting mid-list
+        # would shift every later argument for positional callers.
+        apply_forward_clamp: bool = False,
     ) -> None:
         """ """
         super().__init__(
@@ -113,6 +117,7 @@ class DROIDLeRobotDataset(BaseActionLeRobotDataset):
             pose_convention=pose_convention,
             rotation_format="rot6d",
             action_normalization=action_normalization,
+            apply_forward_clamp=apply_forward_clamp,
             tolerance_s=tolerance_s,
             enable_fast_init=enable_fast_init,
         )

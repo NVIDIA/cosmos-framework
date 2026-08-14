@@ -10,6 +10,7 @@ from torch.distributed.tensor import DTensor
 
 from cosmos_framework.utils import log
 from cosmos_framework.utils.callback import Callback
+from cosmos_framework.utils.generator.input_probe import maybe_dump_post_clip
 
 
 def _fused_nan_to_num(grads: list[torch.Tensor]) -> None:
@@ -296,6 +297,9 @@ class GradClip(Callback):
             error_if_nonfinite=False,
             foreach=True,
         )
+        if not isinstance(model, list):
+            raw_model = getattr(getattr(model, "model", None), "model", model)
+            maybe_dump_post_clip(raw_model, global_norm, self.clip_norm, iteration, tag="i4")
 
         # 6. Record diagnostic stats: pre-clip per-mesh sub-norms plus the
         #    actual global rescale norm.
@@ -304,24 +308,30 @@ class GradClip(Callback):
             cur_state[mesh_str].update(mesh_norm)
         cur_state["global"].update(global_norm)
 
-        # 7. Log every logging_iter.  The reset is intentionally *outside*
-        #    the ``wandb.run`` gate: ``_MagnitudeRecord.get_stat`` is the
-        #    consumer that flushes the windowed accumulator, so coupling it
-        #    to wandb being live would let stats accumulate unboundedly
-        #    whenever wandb is disabled (smoke tests, ``job.wandb_mode=disabled``,
-        #    wandb init failure) and would back-fill any later wandb enablement
-        #    with the entire pre-enable history.
-        if iteration % self.config.trainer.logging_iter == 0:
-            log_dict: dict[str, float | int] = {"iteration": iteration}
-            for modality, state in self._states.items():
-                for mesh_str, record in state.items():
-                    avg = record.get_stat()
-                    if self.track_per_modality:
-                        key = f"clip_grad_norm/{modality}/{mesh_str}"
-                    else:
-                        key = f"clip_grad_norm/{mesh_str}"
-                    log_dict[key] = avg
-                    if mesh_str == "global":
-                        log.info(f"{key}: {avg:.5f} (iteration {iteration})", rank0_only=False)
-            if wandb.run:
-                wandb.log(log_dict, step=iteration)
+        # Log after the optimizer-step counter advances.
+
+    def on_training_step_end(
+        self,
+        model: torch.nn.Module | list[torch.nn.Module],
+        data_batch: dict[str, torch.Tensor],
+        output_batch: dict[str, torch.Tensor],
+        loss: torch.Tensor,
+        iteration: int = 0,
+    ) -> None:
+        del model, data_batch, output_batch, loss
+
+        if iteration % self.config.trainer.logging_iter != 0:
+            return
+        log_dict: dict[str, float | int] = {"iteration": iteration}
+        for modality, state in self._states.items():
+            for mesh_str, record in state.items():
+                avg = record.get_stat()
+                if self.track_per_modality:
+                    key = f"clip_grad_norm/{modality}/{mesh_str}"
+                else:
+                    key = f"clip_grad_norm/{mesh_str}"
+                log_dict[key] = avg
+                if mesh_str == "global":
+                    log.info(f"{key}: {avg:.5f} (iteration {iteration})", rank0_only=False)
+        if wandb.run:
+            wandb.log(log_dict, step=iteration)
