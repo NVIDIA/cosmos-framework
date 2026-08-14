@@ -105,6 +105,19 @@ def test_tao_status_callback_reports_checkpoint_event(tmp_path) -> None:
     assert record["checkpoint_path"] == str(checkpoint.resolve())
 
 
+def test_tao_status_callback_ignores_dcp_marker_nul_padding(tmp_path) -> None:
+    callback = _callback(tmp_path)
+    checkpoint = tmp_path / "checkpoints" / "epoch_1"
+    checkpoint.mkdir(parents=True)
+    (tmp_path / "checkpoints" / "latest_checkpoint.txt").write_bytes(b"epoch_1\x00\x00\x00")
+
+    callback.on_save_checkpoint_success(iteration=3, elapsed_time=1.25)
+
+    record = _records(tmp_path)[-1]
+    assert record["phase"] == "checkpoint_complete"
+    assert record["checkpoint_path"] == str(checkpoint.resolve())
+
+
 def test_tao_status_callback_writes_failure(tmp_path) -> None:
     callback = _callback(tmp_path)
     callback.on_train_start(model=None, iteration=0)

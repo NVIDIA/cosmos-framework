@@ -465,7 +465,11 @@ class TAOStatusCallback(Callback):
         checkpoint_root = Path(self.config.job.path_local) / "checkpoints"
         latest = checkpoint_root / "latest_checkpoint.txt"
         if latest.is_file():
-            checkpoint_name = latest.read_text(encoding="utf-8").strip()
+            # DCP updates this fixed-width marker in place. A callback can
+            # observe trailing NUL padding while the payload is being
+            # replaced, so decode only the completed checkpoint-name prefix.
+            marker = latest.read_bytes()
+            checkpoint_name = marker.split(b"\x00", 1)[0].decode("utf-8").strip()
             if checkpoint_name:
                 checkpoint_path = str((checkpoint_root / checkpoint_name).resolve())
         writer = self._get_writer()
@@ -483,9 +487,7 @@ class TAOStatusCallback(Callback):
             )
 
     def on_train_end(self, model: Any, iteration: int = 0) -> None:
-        numerator, denominator = self._reduce_accumulator(
-            self._train_loss_numerator, self._train_loss_denominator
-        )
+        numerator, denominator = self._reduce_accumulator(self._train_loss_numerator, self._train_loss_denominator)
         if denominator == 0:
             raise RuntimeError("TAO metric collection observed zero valid training labels")
         self.last_training_loss = numerator / denominator
@@ -517,11 +519,7 @@ class TAOStatusCallback(Callback):
                     int(getattr(getattr(self, "trainer", None), "max_iterations", self.config.trainer.max_iter))
                 ),
                 kpi={
-                    **(
-                        {"train/avg_loss": self.last_training_loss}
-                        if self.last_training_loss is not None
-                        else {}
-                    ),
+                    **({"train/avg_loss": self.last_training_loss} if self.last_training_loss is not None else {}),
                     **(
                         {"val/loss": self.last_validation_loss, "val/avg_loss": self.last_validation_loss}
                         if self.last_validation_loss is not None
