@@ -247,6 +247,77 @@ def test_video_decoder_rejects_cuda_to_cpu_fallback(tmp_path, monkeypatch) -> No
         processor._decode_video(str(source))
 
 
+def test_video_decoder_binds_generic_cuda_to_local_rank(tmp_path, monkeypatch) -> None:
+    tokenizer = types.SimpleNamespace(pad_token_id=0)
+    wrapped_processor = types.SimpleNamespace(tokenizer=tokenizer)
+    source = tmp_path / "source.mp4"
+    source.write_bytes(b"source")
+    decoder_devices: list[str] = []
+
+    class FakeReader:
+        def __init__(self, _path, **kwargs):
+            decoder_devices.append(kwargs["device"])
+            self.last_output_device = kwargs["device"]
+
+        def __len__(self):
+            return 1
+
+        def get_frames_nhwc_uint8(self, _indices):
+            import numpy as np
+
+            return np.zeros((1, 2, 2, 3), dtype=np.uint8)
+
+        def get_avg_fps(self):
+            return 30.0
+
+    monkeypatch.setenv("LOCAL_RANK", "3")
+    monkeypatch.setattr(
+        "cosmos_framework.configs.base.reasoner.experiment.wts_vlm.TorchCodecVideoReader",
+        FakeReader,
+    )
+    processor = VideoSFTProcessor(wrapped_processor, video_device="cuda")
+
+    processor._decode_video(str(source))
+
+    assert processor.requested_video_device == "cuda"
+    assert processor.video_device == "cuda:3"
+    assert decoder_devices == ["cuda:3"]
+
+
+def test_video_decoder_rejects_wrong_rank_cuda_device(tmp_path, monkeypatch) -> None:
+    tokenizer = types.SimpleNamespace(pad_token_id=0)
+    wrapped_processor = types.SimpleNamespace(tokenizer=tokenizer)
+    source = tmp_path / "source.mp4"
+    source.write_bytes(b"source")
+
+    class FakeReader:
+        last_output_device = "cuda:0"
+
+        def __init__(self, _path, **_kwargs):
+            pass
+
+        def __len__(self):
+            return 1
+
+        def get_frames_nhwc_uint8(self, _indices):
+            import numpy as np
+
+            return np.zeros((1, 2, 2, 3), dtype=np.uint8)
+
+        def get_avg_fps(self):
+            return 30.0
+
+    monkeypatch.setenv("LOCAL_RANK", "3")
+    monkeypatch.setattr(
+        "cosmos_framework.configs.base.reasoner.experiment.wts_vlm.TorchCodecVideoReader",
+        FakeReader,
+    )
+    processor = VideoSFTProcessor(wrapped_processor, video_device="cuda")
+
+    with pytest.raises(RuntimeError, match="requested=cuda:3 actual=cuda:0"):
+        processor._decode_video(str(source))
+
+
 def test_task_aware_edge_recipe_uses_runtime_video_profile() -> None:
     assert tao_task_aware_video_reasoning_edge["defaults"][4] == {"override /vlm_policy": "cosmos3_edge_reasoner"}
     assert "video_max_pixels" in tao_task_aware_video_reasoning_edge["dataloader_train"]["processor"]

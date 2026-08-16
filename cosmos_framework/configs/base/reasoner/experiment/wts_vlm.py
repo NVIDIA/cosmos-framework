@@ -89,6 +89,23 @@ class VideoConversationDataset(Dataset):
 class VideoSFTProcessor(VLMProcessor):
     """Convert video-supervision records and uniformly sample media to PIL frames."""
 
+    @staticmethod
+    def _resolve_video_device(video_device: str) -> str:
+        """Bind a generic CUDA request to this torchrun process's local rank."""
+        requested = str(video_device)
+        if requested != "cuda":
+            return requested
+        local_rank = os.environ.get("LOCAL_RANK")
+        if local_rank is None:
+            return requested
+        try:
+            rank = int(local_rank)
+        except ValueError as exc:
+            raise ValueError(f"LOCAL_RANK must be an integer, found {local_rank!r}") from exc
+        if rank < 0:
+            raise ValueError(f"LOCAL_RANK must be non-negative, found {rank}")
+        return f"cuda:{rank}"
+
     def __init__(
         self,
         processor: Any,
@@ -112,7 +129,8 @@ class VideoSFTProcessor(VLMProcessor):
             raise ValueError("video_cache_size must be >= 0")
         self.num_video_frames = num_video_frames
         self.video_cache_size = video_cache_size
-        self.video_device = video_device
+        self.requested_video_device = str(video_device)
+        self.video_device = self._resolve_video_device(self.requested_video_device)
         self.video_num_threads = video_num_threads
         self.video_overrides: dict[str, str] = {}
         if video_override_map not in (None, ""):
@@ -191,11 +209,17 @@ class VideoSFTProcessor(VLMProcessor):
                 indices = torch.linspace(0, total_frames - 1, steps=sample_count).round().to(dtype=torch.long).tolist()
             frames_np = reader.get_frames_nhwc_uint8(indices)
             decoded_device = str(reader.last_output_device)
-            if self.video_device.startswith("cuda") and not decoded_device.startswith("cuda"):
-                raise RuntimeError(
-                    "TorchCodec did not decode on the requested CUDA device: "
-                    f"requested={self.video_device} actual={decoded_device}"
-                )
+            if self.video_device.startswith("cuda"):
+                requested_device = torch.device(self.video_device)
+                actual_device = torch.device(decoded_device)
+                if actual_device.type != "cuda" or (
+                    requested_device.index is not None
+                    and actual_device.index != requested_device.index
+                ):
+                    raise RuntimeError(
+                        "TorchCodec did not decode on the requested CUDA device: "
+                        f"requested={self.video_device} actual={decoded_device}"
+                    )
             frames = [Image.fromarray(frame) for frame in frames_np]
 
             with self._video_cache_lock:
@@ -204,7 +228,8 @@ class VideoSFTProcessor(VLMProcessor):
                         "TAO_FRAMEWORK_VIDEO_RUNTIME "
                         f"rank={os.environ.get('RANK', os.environ.get('LOCAL_RANK', '0'))} "
                         "backend=torchcodec "
-                        f"requested_device={self.video_device} actual_device={decoded_device} "
+                        f"requested_device={self.requested_video_device} "
+                        f"resolved_device={self.video_device} actual_device={decoded_device} "
                         f"video_cache_size={self.video_cache_size} "
                         f"decoder_threads={self.video_num_threads}",
                         flush=True,
