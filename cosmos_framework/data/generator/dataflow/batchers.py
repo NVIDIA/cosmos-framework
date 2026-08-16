@@ -15,6 +15,8 @@ from cosmos_framework.data.generator.dataflow.base import SampleBatcher
 class SimpleBatcher(SampleBatcher):
     """Fixed-size batching — stock DataLoader behavior. Never needs sample_size."""
 
+    preserves_source_order = True
+
     def __init__(self, batch_size: int, drop_last: bool = False):
         if batch_size < 1:
             raise ValueError(f"batch_size must be >= 1, got {batch_size}")
@@ -237,6 +239,8 @@ class SequentialPackingBatcher(SampleBatcher):
     token formula (needs the tokenizer compression factors + patch size + optional
     sound params).
     """
+
+    preserves_source_order = True
 
     def __init__(
         self,

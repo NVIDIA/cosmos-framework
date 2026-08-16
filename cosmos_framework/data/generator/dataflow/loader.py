@@ -84,18 +84,22 @@ class _DataflowIterableDataset(torch.utils.data.IterableDataset):
             if has_meta:
                 epochs = [s["_dp_epoch"] for s in group]
                 positions = [s["_dp_stream_pos"] for s in group]
-                max_epoch = max(epochs)
-                max_pos = max(positions)
-                # Resume records (max_epoch, max_pos) and fast-forwards to max_pos+1 —
-                # bit-for-bit with the legacy collate_batch. That is gap-free only when
-                # this batch is a single sample (max_batch_size=1, all live recipes) or a
-                # single-epoch contiguous run (sequential packing). A reordering batcher
-                # (pool packing) at batch_size>1, or a batch spanning an epoch boundary,
-                # would leave buffered lower positions unrecorded and skip them on resume.
-                # Fail loudly rather than silently drop samples in that unsupported combo.
-                if len(group) > 1:
-                    contiguous = min(epochs) == max_epoch and sorted(positions) == list(
-                        range(min(positions), max_pos + 1)
+                if self._batcher.preserves_source_order:
+                    # The final emitted sample is the exact stream cursor even
+                    # when a large fixed batch spans one or more short epochs.
+                    # Independent maxima are invalid across an epoch boundary
+                    # because positions restart at zero in each epoch.
+                    cursor_epoch = group[-1]["_dp_epoch"]
+                    cursor_pos = group[-1]["_dp_stream_pos"]
+                else:
+                    cursor_epoch = max(epochs)
+                    cursor_pos = max(positions)
+                # A reordering batcher can leave lower positions buffered when
+                # yielding a multi-sample group. Preserve the existing strict
+                # rejection for that unsupported resume combination.
+                if len(group) > 1 and not self._batcher.preserves_source_order:
+                    contiguous = min(epochs) == cursor_epoch and sorted(positions) == list(
+                        range(min(positions), cursor_pos + 1)
                     )
                     if not contiguous:
                         raise ValueError(
@@ -108,8 +112,8 @@ class _DataflowIterableDataset(torch.utils.data.IterableDataset):
                 clean = [{k: v for k, v in s.items() if not k.startswith("_dp_")} for s in group]
                 batch = self._collator.collate(clean)
                 batch["sample_worker_id"] = torch.tensor([worker_id] * len(group))
-                batch["sample_epoch"] = torch.tensor([max_epoch] * len(group))
-                batch["sample_index"] = torch.tensor([max_pos] * len(group))
+                batch["sample_epoch"] = torch.tensor([cursor_epoch] * len(group))
+                batch["sample_index"] = torch.tensor([cursor_pos] * len(group))
             else:
                 batch = self._collator.collate(group)
             yield batch

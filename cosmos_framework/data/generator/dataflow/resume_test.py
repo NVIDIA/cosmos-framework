@@ -90,6 +90,38 @@ def test_contiguous_multisample_batches_resume_without_dup_or_skip():
     assert next(iter(resumed_loader))["id"].tolist() == [4, 5, 6, 7]
 
 
+def test_contiguous_batch_crossing_epochs_stamps_last_stream_cursor():
+    callback = CosmosDataLoaderStateCallback()
+    loader = CosmosDataLoader(
+        distributor=MapDistributor(_IdDS(2), shuffle=False),
+        processor=IdentityProcessor(),
+        batcher=ContiguousBatcher(max_batch_size=4),
+        num_workers=0,
+    )
+
+    first = next(iter(loader))
+    callback._update_state_from_batch(first)
+
+    assert first["id"].tolist() == [0, 1, 0, 1]
+    assert first["sample_epoch"].tolist() == [1, 1, 1, 1]
+    assert first["sample_index"].tolist() == [1, 1, 1, 1]
+    assert callback.state_dict()[0] == {"epoch": 1, "index": 1}
+
+    resumed_callback = CosmosDataLoaderStateCallback()
+    resumed_callback.load_state_dict(callback.state_dict())
+    resumed_loader = CosmosDataLoader(
+        distributor=MapDistributor(_IdDS(2), shuffle=False),
+        processor=IdentityProcessor(),
+        batcher=ContiguousBatcher(max_batch_size=4),
+        num_workers=0,
+    )
+    resumed = next(iter(resumed_loader))
+
+    assert resumed["id"].tolist() == [0, 1, 0, 1]
+    assert resumed["sample_epoch"].tolist() == [3, 3, 3, 3]
+    assert resumed["sample_index"].tolist() == [1, 1, 1, 1]
+
+
 def test_contiguous_batcher_sequence_ceiling_preserves_fixed_batch_size():
     batcher = ContiguousBatcher(max_batch_size=3, max_tokens=4)
     samples = iter(

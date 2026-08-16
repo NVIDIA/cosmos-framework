@@ -47,6 +47,10 @@ class RawItemProcessor(ABC):
 class SampleBatcher(ABC):
     """Consumes a stream of samples and yields groups (the selection strategy)."""
 
+    # Resume cursors may use the final sample only when the batcher guarantees
+    # that yielded groups preserve the distributor stream order.
+    preserves_source_order: bool = False
+
     @abstractmethod
     def batches(self, samples: Iterator[dict]) -> Iterator[list[dict]]:
         """Pull from ``samples``; yield one ``list[dict]`` per batch."""
