@@ -140,6 +140,7 @@ class CosmosDataLoader(torch.utils.data.DataLoader):
         prefetch_factor: int | None = None,
         persistent_workers: bool = False,
         pin_memory: bool = False,
+        multiprocessing_context: str | None = None,
         processing_threads: int = 1,
         parallel_dims=None,
     ):
@@ -153,7 +154,15 @@ class CosmosDataLoader(torch.utils.data.DataLoader):
             batcher = SimpleBatcher(batch_size=batch_size)
         if collator is None:
             collator = DefaultBatchCollator()
+        num_workers = int(num_workers)
         processing_threads = int(processing_threads)
+        if prefetch_factor is not None:
+            prefetch_factor = int(prefetch_factor)
+            if prefetch_factor < 1:
+                raise ValueError(
+                    "CosmosDataLoader: prefetch_factor must be >= 1 when configured, "
+                    f"got {prefetch_factor}"
+                )
         if processing_threads < 1:
             raise ValueError(
                 "CosmosDataLoader: processing_threads must be >= 1, "
@@ -208,6 +217,8 @@ class CosmosDataLoader(torch.utils.data.DataLoader):
         )
         if num_workers > 0 and prefetch_factor is not None:
             loader_kwargs["prefetch_factor"] = prefetch_factor
+        if num_workers > 0 and multiprocessing_context is not None:
+            loader_kwargs["multiprocessing_context"] = multiprocessing_context
         super().__init__(dataset, batch_size=None, **loader_kwargs)
 
 

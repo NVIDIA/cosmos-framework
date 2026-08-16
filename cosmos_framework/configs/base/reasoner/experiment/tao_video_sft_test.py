@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import json
+import pickle
 import sys
 import threading
 import time
@@ -382,6 +383,27 @@ def test_task_aware_edge_recipe_uses_runtime_video_profile() -> None:
     source = __import__("inspect").getsource(sys.modules[VideoSFTProcessor.__module__])
     assert "TAO_VIDEO_MAX_PIXELS" in source
     assert "TAO_FRAMEWORK_SFT_PROCESS_THREADS" in source
+    assert "TAO_FRAMEWORK_DATALOADER_NUM_WORKERS" in source
+    assert "TAO_FRAMEWORK_DATALOADER_PREFETCH_FACTOR" in source
+
+
+def test_video_processor_is_spawn_pickle_safe() -> None:
+    wrapped_processor = types.SimpleNamespace(
+        tokenizer=types.SimpleNamespace(pad_token_id=0)
+    )
+    processor = VideoSFTProcessor(
+        wrapped_processor,
+        video_cache_size=8,
+        video_max_pixels=None,
+    )
+    processor._video_cache["cached"] = ([], 1.0)
+    restored = pickle.loads(pickle.dumps(processor))
+
+    assert restored._video_cache == {}
+    assert restored._video_inflight == {}
+    assert restored._video_runtime_attested is False
+    assert restored._video_cache_lock.acquire(blocking=False)
+    restored._video_cache_lock.release()
 
 
 def test_daft_dataset_matches_internal_hybrid_index_order(monkeypatch) -> None:

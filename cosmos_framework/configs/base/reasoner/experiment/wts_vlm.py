@@ -177,6 +177,21 @@ class VideoSFTProcessor(VLMProcessor):
         self._video_inflight: dict[str, threading.Event] = {}
         self._video_runtime_attested = False
 
+    def __getstate__(self) -> dict[str, Any]:
+        """Drop process-local synchronization and cache state before spawn."""
+        state = self.__dict__.copy()
+        state.pop("_video_cache_lock", None)
+        state["_video_cache"] = OrderedDict()
+        state["_video_inflight"] = {}
+        state["_video_runtime_attested"] = False
+        return state
+
+    def __setstate__(self, state: dict[str, Any]) -> None:
+        """Recreate rank-local cache synchronization in a spawned worker."""
+        self.__dict__.update(state)
+        self._video_cache_lock = threading.Lock()
+        self._video_inflight = {}
+
     def _decode_video(self, video_path: str) -> tuple[list[Image.Image], float]:
         video_path = self.video_overrides.get(video_path, video_path)
         video_path = os.path.abspath(os.path.expanduser(video_path))
@@ -357,10 +372,11 @@ def _video_conversation_dataloader(
             drop_last=False,
         ),
         collator=L(VLMCollator)(),
-        num_workers=0,
-        prefetch_factor=None,
-        persistent_workers=False,
+        num_workers="${oc.env:TAO_FRAMEWORK_DATALOADER_NUM_WORKERS,1}",
+        prefetch_factor="${oc.env:TAO_FRAMEWORK_DATALOADER_PREFETCH_FACTOR,2}",
+        persistent_workers=True,
         pin_memory=False,
+        multiprocessing_context="spawn",
         processing_threads="${oc.env:TAO_FRAMEWORK_SFT_PROCESS_THREADS,1}",
     )
 
@@ -415,10 +431,11 @@ def _task_aware_video_dataloader(
             drop_last=False,
         ),
         collator=L(VLMCollator)(),
-        num_workers=0,
-        prefetch_factor=None,
-        persistent_workers=False,
+        num_workers="${oc.env:TAO_FRAMEWORK_DATALOADER_NUM_WORKERS,1}",
+        prefetch_factor="${oc.env:TAO_FRAMEWORK_DATALOADER_PREFETCH_FACTOR,2}",
+        persistent_workers=True,
         pin_memory=False,
+        multiprocessing_context="spawn",
         processing_threads="${oc.env:TAO_FRAMEWORK_SFT_PROCESS_THREADS,1}",
     )
 

@@ -194,3 +194,33 @@ def test_processing_threads_rejects_zero():
             batch_size=1,
             processing_threads=0,
         )
+
+
+def test_spawn_prefetch_is_enabled_only_with_workers():
+    worker_loader = CosmosDataLoader(
+        distributor=MapDistributor(_IdDS(4), shuffle=False),
+        processor=IdentityProcessor(),
+        batch_size=1,
+        num_workers="1",
+        prefetch_factor="2",
+        persistent_workers=True,
+        multiprocessing_context="spawn",
+    )
+    assert worker_loader.num_workers == 1
+    assert worker_loader.prefetch_factor == 2
+    assert worker_loader.persistent_workers is True
+    assert worker_loader.multiprocessing_context.get_start_method() == "spawn"
+
+    inline_loader = CosmosDataLoader(
+        distributor=MapDistributor(_IdDS(4), shuffle=False),
+        processor=IdentityProcessor(),
+        batch_size=1,
+        num_workers=0,
+        prefetch_factor=2,
+        persistent_workers=True,
+        multiprocessing_context="spawn",
+    )
+    assert inline_loader.num_workers == 0
+    assert inline_loader.prefetch_factor is None
+    assert inline_loader.persistent_workers is False
+    assert inline_loader.multiprocessing_context is None
