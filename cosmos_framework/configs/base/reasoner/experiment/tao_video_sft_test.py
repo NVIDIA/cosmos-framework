@@ -97,7 +97,13 @@ def test_wts_recipe_uses_resume_safe_contiguous_batches() -> None:
     )
 
     batcher = tao_video_conversation["dataloader_train"]["batcher"]
-    assert batcher["_target_"] is ContiguousBatcher
+    target = batcher["_target_"]
+    if isinstance(target, str):
+        assert target == (
+            "cosmos_framework.data.generator.dataflow.ContiguousBatcher"
+        )
+    else:
+        assert target is ContiguousBatcher
     assert batcher["max_batch_size"] == 1
     assert batcher["max_tokens"] == 81920
 
@@ -200,7 +206,11 @@ def test_video_override_map_is_validated_and_applied(tmp_path, monkeypatch) -> N
         "cosmos_framework.configs.base.reasoner.experiment.wts_vlm.TorchCodecVideoReader",
         FakeReader,
     )
-    processor = VideoSFTProcessor(wrapped_processor, video_override_map=str(override))
+    processor = VideoSFTProcessor(
+        wrapped_processor,
+        video_max_pixels=None,
+        video_override_map=str(override),
+    )
     processor._decode_video(str(source))
     assert decoded_paths == [str(replacement)]
 
@@ -236,7 +246,11 @@ def test_video_cache_single_flight_avoids_duplicate_concurrent_decodes(tmp_path,
         "cosmos_framework.configs.base.reasoner.experiment.wts_vlm.TorchCodecVideoReader",
         FakeReader,
     )
-    processor = VideoSFTProcessor(wrapped_processor, video_cache_size=2)
+    processor = VideoSFTProcessor(
+        wrapped_processor,
+        video_cache_size=2,
+        video_max_pixels=None,
+    )
 
     with ThreadPoolExecutor(max_workers=4) as executor:
         decoded = list(executor.map(processor._decode_video, [str(source)] * 4))
@@ -272,7 +286,11 @@ def test_video_decoder_rejects_cuda_to_cpu_fallback(tmp_path, monkeypatch) -> No
         "cosmos_framework.configs.base.reasoner.experiment.wts_vlm.TorchCodecVideoReader",
         FakeReader,
     )
-    processor = VideoSFTProcessor(wrapped_processor, video_device="cuda")
+    processor = VideoSFTProcessor(
+        wrapped_processor,
+        video_device="cuda",
+        video_max_pixels=None,
+    )
 
     with pytest.raises(RuntimeError, match="did not decode on the requested CUDA device"):
         processor._decode_video(str(source))
@@ -306,7 +324,11 @@ def test_video_decoder_binds_generic_cuda_to_local_rank(tmp_path, monkeypatch) -
         "cosmos_framework.configs.base.reasoner.experiment.wts_vlm.TorchCodecVideoReader",
         FakeReader,
     )
-    processor = VideoSFTProcessor(wrapped_processor, video_device="cuda")
+    processor = VideoSFTProcessor(
+        wrapped_processor,
+        video_device="cuda",
+        video_max_pixels=None,
+    )
 
     processor._decode_video(str(source))
 
@@ -343,7 +365,11 @@ def test_video_decoder_rejects_wrong_rank_cuda_device(tmp_path, monkeypatch) -> 
         "cosmos_framework.configs.base.reasoner.experiment.wts_vlm.TorchCodecVideoReader",
         FakeReader,
     )
-    processor = VideoSFTProcessor(wrapped_processor, video_device="cuda")
+    processor = VideoSFTProcessor(
+        wrapped_processor,
+        video_device="cuda",
+        video_max_pixels=None,
+    )
 
     with pytest.raises(RuntimeError, match="requested=cuda:3 actual=cuda:0"):
         processor._decode_video(str(source))
