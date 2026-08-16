@@ -26,6 +26,7 @@ from cosmos_framework.configs.base.reasoner.experiment.tao_video_sft import (
     tao_task_aware_video_reasoning_edge,
     tao_video_conversation_edge,
 )
+from cosmos_framework.data.generator.dataflow import ContiguousBatcher
 from cosmos_framework.data.generator.local_datasets.tao_vl_reason import (
     TaoVlReasonDaftDataset,
     apply_daft_chat_template,
@@ -90,6 +91,16 @@ def test_video_conversation_dataset_resolves_media_paths_and_limit(tmp_path) -> 
     assert dataset[0]["video"] == str(media / "clip.mp4")
 
 
+def test_wts_recipe_uses_resume_safe_contiguous_batches() -> None:
+    from cosmos_framework.configs.base.reasoner.experiment.wts_vlm import (
+        tao_video_conversation,
+    )
+
+    batcher = tao_video_conversation["dataloader_train"]["batcher"]
+    assert batcher["_target_"] is ContiguousBatcher
+    assert batcher["max_batch_size"] == 1
+
+
 def test_video_conversation_dataset_rejects_invalid_record(tmp_path) -> None:
     annotations = tmp_path / "annotations.json"
     annotations.write_text(json.dumps([{"video": "clip.mp4"}]), encoding="utf-8")
@@ -103,10 +114,16 @@ def test_video_conversation_dataset_accepts_generic_media_and_messages(tmp_path)
     media.mkdir()
     (media / "clip.mp4").write_bytes(b"video")
     annotations = tmp_path / "annotations.json"
-    annotations.write_text(json.dumps([{
-        "media_path": "clip.mp4",
-        "messages": [{"role": "user", "content": "question"}, {"role": "assistant", "content": "answer"}],
-    }]))
+    annotations.write_text(
+        json.dumps(
+            [
+                {
+                    "media_path": "clip.mp4",
+                    "messages": [{"role": "user", "content": "question"}, {"role": "assistant", "content": "answer"}],
+                }
+            ]
+        )
+    )
     dataset = VideoConversationDataset(str(annotations), str(media))
     assert dataset[0]["video"] == str(media / "clip.mp4")
 
@@ -127,6 +144,18 @@ def test_video_max_pixels_is_a_runtime_processor_setting() -> None:
 
     assert processor.video_max_pixels == 16384
     assert video_processor.size == {"shortest_edge": 4096, "longest_edge": 16384}
+
+
+def test_video_max_pixels_defaults_to_shared_nano_budget() -> None:
+    tokenizer = types.SimpleNamespace(pad_token_id=0)
+    video_processor = types.SimpleNamespace(size={"shortest_edge": 4096, "longest_edge": 25165824})
+    hf_processor = types.SimpleNamespace(tokenizer=tokenizer, video_processor=video_processor)
+    wrapped_processor = types.SimpleNamespace(tokenizer=tokenizer, processor=hf_processor)
+
+    processor = VideoSFTProcessor(wrapped_processor)
+
+    assert processor.video_max_pixels == 81920
+    assert video_processor.size == {"shortest_edge": 4096, "longest_edge": 81920}
 
 
 def test_video_max_pixels_rejects_incompatible_processor_budget() -> None:
@@ -160,6 +189,7 @@ def test_video_override_map_is_validated_and_applied(tmp_path, monkeypatch) -> N
 
         def get_frames_nhwc_uint8(self, _indices):
             import numpy as np
+
             return np.zeros((1, 2, 2, 3), dtype=np.uint8)
 
         def get_avg_fps(self):

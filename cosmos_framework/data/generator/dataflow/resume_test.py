@@ -14,6 +14,7 @@ import torch
 
 from cosmos_framework.callbacks.cosmos_dataloader_state import CosmosDataLoaderStateCallback
 from cosmos_framework.data.generator.dataflow import (
+    ContiguousBatcher,
     CosmosDataLoader,
     IdentityProcessor,
     MapDistributor,
@@ -63,14 +64,39 @@ def test_resume_continues_without_dup_or_skip():
     assert resumed == [5, 6, 7]
 
 
+def test_contiguous_multisample_batches_resume_without_dup_or_skip():
+    callback = CosmosDataLoaderStateCallback()
+    loader = CosmosDataLoader(
+        distributor=MapDistributor(_IdDS(20), shuffle=False),
+        processor=IdentityProcessor(),
+        batcher=ContiguousBatcher(max_batch_size=4),
+        num_workers=0,
+    )
+    first = next(iter(loader))
+    callback._update_state_from_batch(first)
+
+    assert first["id"].tolist() == [0, 1, 2, 3]
+    assert callback.state_dict()[0]["index"] == 3
+
+    resumed_callback = CosmosDataLoaderStateCallback()
+    resumed_callback.load_state_dict(callback.state_dict())
+    resumed_loader = CosmosDataLoader(
+        distributor=MapDistributor(_IdDS(20), shuffle=False),
+        processor=IdentityProcessor(),
+        batcher=ContiguousBatcher(max_batch_size=4),
+        num_workers=0,
+    )
+
+    assert next(iter(resumed_loader))["id"].tolist() == [4, 5, 6, 7]
+
+
 def test_map_distributor_normalizes_environment_style_seed_string():
     distributor = MapDistributor(_IdDS(4), shuffle=True, seed="42")
 
     assert distributor._seed == 42
     first = [item["id"].item() for item in islice(distributor.stream(0, 1, 0, 1), 4)]
     second = [
-        item["id"].item()
-        for item in islice(MapDistributor(_IdDS(4), shuffle=True, seed=42).stream(0, 1, 0, 1), 4)
+        item["id"].item() for item in islice(MapDistributor(_IdDS(4), shuffle=True, seed=42).stream(0, 1, 0, 1), 4)
     ]
     assert first == second
 

@@ -20,7 +20,7 @@ from torch.utils.data import Dataset
 
 from cosmos_framework.callbacks.cosmos_dataloader_state import CosmosDataLoaderStateCallback
 from cosmos_framework.configs.base.reasoner.experiment.dataflow_roles import VLMCollator, VLMProcessor
-from cosmos_framework.data.generator.dataflow import CosmosDataLoader, MapDistributor, PoolPackingBatcher
+from cosmos_framework.data.generator.dataflow import ContiguousBatcher, CosmosDataLoader, MapDistributor
 from cosmos_framework.data.generator.local_datasets.tao_vl_reason import (
     TaoVlReasonDaftDataset,
     apply_daft_chat_template,
@@ -59,10 +59,18 @@ class VideoConversationDataset(Dataset):
             raise ValueError(f"video-conversation annotation file contains no usable records: {self.annotation_path}")
 
         for index, record in enumerate(self.records):
-            media_value = next(
-                (record.get(field) for field in ("video", "video_id", "media", "media_path") if isinstance(record.get(field), str)),
-                None,
-            ) if isinstance(record, dict) else None
+            media_value = (
+                next(
+                    (
+                        record.get(field)
+                        for field in ("video", "video_id", "media", "media_path")
+                        if isinstance(record.get(field), str)
+                    ),
+                    None,
+                )
+                if isinstance(record, dict)
+                else None
+            )
             if media_value is None:
                 raise ValueError(f"video-conversation record {index} must contain a string media field")
             conversations = record.get("conversations") or record.get("messages")
@@ -75,7 +83,8 @@ class VideoConversationDataset(Dataset):
     def __getitem__(self, index: int) -> dict[str, Any]:
         record = dict(self.records[index])
         video_path = next(
-            record[field] for field in ("video", "video_id", "media", "media_path")
+            record[field]
+            for field in ("video", "video_id", "media", "media_path")
             if isinstance(record.get(field), str)
         )
         if not os.path.isabs(video_path):
@@ -114,7 +123,7 @@ class VideoSFTProcessor(VLMProcessor):
         video_cache_size: int = 8,
         video_device: str = "cuda",
         video_num_threads: int = 1,
-        video_max_pixels: int | str | None = None,
+        video_max_pixels: int | str | None = 81920,
         video_override_map: str | None = None,
         system_prompt: str = "",
         use_daft_chat_template: bool = False,
@@ -138,8 +147,7 @@ class VideoSFTProcessor(VLMProcessor):
             with open(override_path, encoding="utf-8") as override_file:
                 overrides = json.load(override_file)
             if not isinstance(overrides, dict) or not all(
-                isinstance(source, str) and isinstance(target, str)
-                for source, target in overrides.items()
+                isinstance(source, str) and isinstance(target, str) for source, target in overrides.items()
             ):
                 raise ValueError("video_override_map must be a JSON object of string paths")
             self.video_overrides = overrides
@@ -213,8 +221,7 @@ class VideoSFTProcessor(VLMProcessor):
                 requested_device = torch.device(self.video_device)
                 actual_device = torch.device(decoded_device)
                 if actual_device.type != "cuda" or (
-                    requested_device.index is not None
-                    and actual_device.index != requested_device.index
+                    requested_device.index is not None and actual_device.index != requested_device.index
                 ):
                     raise RuntimeError(
                         "TorchCodec did not decode on the requested CUDA device: "
@@ -340,15 +347,13 @@ def _video_conversation_dataloader(
             video_cache_size=f"${{oc.env:{cache_env},8}}",
             video_device="${oc.env:TAO_VIDEO_DECODER_DEVICE,cuda}",
             video_num_threads="${oc.env:TAO_VIDEO_DECODER_THREADS,1}",
-            video_max_pixels=f"${{oc.env:{max_pixels_env},''}}",
+            video_max_pixels=f"${{oc.env:{max_pixels_env},81920}}",
             video_override_map="${oc.env:TAO_VIDEO_OVERRIDE_MAP,''}",
             system_prompt=f"${{oc.env:{system_prompt_env},''}}",
         ),
-        batcher=L(PoolPackingBatcher)(
-            max_tokens="${data_setting.max_tokens}",
-            pool_size=16 if shuffle else 1,
+        batcher=L(ContiguousBatcher)(
             max_batch_size=1,
-            long_threshold=6400,
+            drop_last=False,
         ),
         collator=L(VLMCollator)(),
         num_workers=0,
@@ -398,16 +403,14 @@ def _task_aware_video_dataloader(
             video_cache_size=f"${{oc.env:{cache_env},8}}",
             video_device="${oc.env:TAO_VIDEO_DECODER_DEVICE,cuda}",
             video_num_threads="${oc.env:TAO_VIDEO_DECODER_THREADS,1}",
-            video_max_pixels=f"${{oc.env:{max_pixels_env},''}}",
+            video_max_pixels=f"${{oc.env:{max_pixels_env},81920}}",
             video_override_map="${oc.env:TAO_VIDEO_OVERRIDE_MAP,''}",
             system_prompt="",
             use_daft_chat_template=True,
         ),
-        batcher=L(PoolPackingBatcher)(
-            max_tokens="${data_setting.max_tokens}",
-            pool_size=16 if shuffle else 1,
+        batcher=L(ContiguousBatcher)(
             max_batch_size=1,
-            long_threshold=6400,
+            drop_last=False,
         ),
         collator=L(VLMCollator)(),
         num_workers=0,
@@ -581,17 +584,25 @@ tao_video_conversation["dataloader_val"] = _video_conversation_dataloader(
 tao_task_aware_video_reasoning = deepcopy(tao_video_conversation)
 tao_task_aware_video_reasoning["job"]["group"] = "tao_task_aware_video_reasoning_sft"
 tao_task_aware_video_reasoning["dataloader_train"] = _task_aware_video_dataloader(
-    split="train", shuffle=True,
-    annotation_env="TAO_VIDEO_TRAIN_ANNOTATIONS", media_env="TAO_VIDEO_TRAIN_MEDIA_ROOTS",
-    limit_env="TAO_VIDEO_TRAIN_LIMIT", frame_env="TAO_VIDEO_NUM_FRAMES",
-    cache_env="TAO_VIDEO_CACHE_SIZE", max_pixels_env="TAO_VIDEO_MAX_PIXELS",
+    split="train",
+    shuffle=True,
+    annotation_env="TAO_VIDEO_TRAIN_ANNOTATIONS",
+    media_env="TAO_VIDEO_TRAIN_MEDIA_ROOTS",
+    limit_env="TAO_VIDEO_TRAIN_LIMIT",
+    frame_env="TAO_VIDEO_NUM_FRAMES",
+    cache_env="TAO_VIDEO_CACHE_SIZE",
+    max_pixels_env="TAO_VIDEO_MAX_PIXELS",
     system_prompt_env="TAO_VIDEO_SYSTEM_PROMPT",
 )
 tao_task_aware_video_reasoning["dataloader_val"] = _task_aware_video_dataloader(
-    split="val", shuffle=False,
-    annotation_env="TAO_VIDEO_VAL_ANNOTATIONS", media_env="TAO_VIDEO_VAL_MEDIA_ROOTS",
-    limit_env="TAO_VIDEO_VAL_LIMIT", frame_env="TAO_VIDEO_NUM_FRAMES",
-    cache_env="TAO_VIDEO_CACHE_SIZE", max_pixels_env="TAO_VIDEO_MAX_PIXELS",
+    split="val",
+    shuffle=False,
+    annotation_env="TAO_VIDEO_VAL_ANNOTATIONS",
+    media_env="TAO_VIDEO_VAL_MEDIA_ROOTS",
+    limit_env="TAO_VIDEO_VAL_LIMIT",
+    frame_env="TAO_VIDEO_NUM_FRAMES",
+    cache_env="TAO_VIDEO_CACHE_SIZE",
+    max_pixels_env="TAO_VIDEO_MAX_PIXELS",
     system_prompt_env="TAO_VIDEO_SYSTEM_PROMPT",
 )
 

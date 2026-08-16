@@ -32,6 +32,19 @@ class SimpleBatcher(SampleBatcher):
             yield buf
 
 
+class ContiguousBatcher(SimpleBatcher):
+    """Resume-safe fixed-size batches with the VLM ``max_batch_size`` API.
+
+    Unlike pool packing, this batcher never reorders the map-style distributor
+    stream. The final sample position therefore remains an exact checkpoint
+    cursor for multi-sample batches.
+    """
+
+    def __init__(self, max_batch_size: int = 1, drop_last: bool = False):
+        self.max_batch_size = max_batch_size
+        super().__init__(batch_size=max_batch_size, drop_last=drop_last)
+
+
 class _Modality(Enum):
     IMAGE = "image"
     VIDEO = "video"
@@ -234,6 +247,7 @@ class SequentialPackingBatcher(SampleBatcher):
         #   - list of ints        → len(text_token_ids)
         #   - 2-D tensor [1,S]    → shape[1]  (mirrors original .shape[1] branch)
         import torch as _torch
+
         text_token_ids = sample["text_token_ids"]
         if isinstance(text_token_ids, list):
             if len(text_token_ids) > 0 and isinstance(text_token_ids[0], _torch.Tensor):
