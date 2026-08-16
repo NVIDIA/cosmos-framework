@@ -90,6 +90,26 @@ def test_contiguous_multisample_batches_resume_without_dup_or_skip():
     assert next(iter(resumed_loader))["id"].tolist() == [4, 5, 6, 7]
 
 
+def test_contiguous_batcher_sequence_ceiling_preserves_fixed_batch_size():
+    batcher = ContiguousBatcher(max_batch_size=3, max_tokens=4)
+    samples = iter(
+        [
+            {"id": 0, "input_ids": [1, 2]},
+            {"id": 1, "input_ids": [1, 2, 3, 4]},
+            {"id": 2, "input_ids": [1]},
+        ]
+    )
+    assert [[item["id"] for item in batch] for batch in batcher.batches(samples)] == [
+        [0, 1, 2]
+    ]
+
+
+def test_contiguous_batcher_rejects_sample_over_sequence_ceiling():
+    batcher = ContiguousBatcher(max_batch_size=2, max_tokens=3)
+    with pytest.raises(ValueError, match="exceeds max_tokens"):
+        list(batcher.batches(iter([{"input_ids": [1, 2, 3, 4]}])))
+
+
 def test_map_distributor_normalizes_environment_style_seed_string():
     distributor = MapDistributor(_IdDS(4), shuffle=True, seed="42")
 

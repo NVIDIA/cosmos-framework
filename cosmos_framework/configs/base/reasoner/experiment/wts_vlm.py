@@ -353,6 +353,7 @@ def _video_conversation_dataloader(
         ),
         batcher=L(ContiguousBatcher)(
             max_batch_size=1,
+            max_tokens=81920,
             drop_last=False,
         ),
         collator=L(VLMCollator)(),
@@ -410,6 +411,7 @@ def _task_aware_video_dataloader(
         ),
         batcher=L(ContiguousBatcher)(
             max_batch_size=1,
+            max_tokens=81920,
             drop_last=False,
         ),
         collator=L(VLMCollator)(),

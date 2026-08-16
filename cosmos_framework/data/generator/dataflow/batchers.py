@@ -40,9 +40,37 @@ class ContiguousBatcher(SimpleBatcher):
     cursor for multi-sample batches.
     """
 
-    def __init__(self, max_batch_size: int = 1, drop_last: bool = False):
+    def __init__(
+        self,
+        max_batch_size: int = 1,
+        max_tokens: int | None = None,
+        drop_last: bool = False,
+    ):
+        if max_tokens is not None and int(max_tokens) < 1:
+            raise ValueError("max_tokens must be positive when configured")
         self.max_batch_size = max_batch_size
+        # Unlike PoolPackingBatcher, this is a per-sample sequence ceiling.
+        # The fixed contiguous batch size remains authoritative so the global
+        # batch and optimizer-update count do not change with token lengths.
+        self.max_tokens = int(max_tokens) if max_tokens is not None else None
         super().__init__(batch_size=max_batch_size, drop_last=drop_last)
+
+    def batches(self, samples: Iterator[dict]) -> Iterator[list[dict]]:
+        if self.max_tokens is None:
+            yield from super().batches(samples)
+            return
+
+        def checked() -> Iterator[dict]:
+            for sample in samples:
+                input_ids = sample.get("input_ids")
+                if input_ids is not None and len(input_ids) > self.max_tokens:
+                    raise ValueError(
+                        "contiguous batch sample exceeds max_tokens: "
+                        f"{len(input_ids)} > {self.max_tokens}"
+                    )
+                yield sample
+
+        yield from super().batches(checked())
 
 
 class _Modality(Enum):

@@ -99,6 +99,7 @@ def test_wts_recipe_uses_resume_safe_contiguous_batches() -> None:
     batcher = tao_video_conversation["dataloader_train"]["batcher"]
     assert batcher["_target_"] is ContiguousBatcher
     assert batcher["max_batch_size"] == 1
+    assert batcher["max_tokens"] == 81920
 
 
 def test_video_conversation_dataset_rejects_invalid_record(tmp_path) -> None:
