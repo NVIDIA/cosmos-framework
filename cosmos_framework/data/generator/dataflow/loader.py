@@ -8,11 +8,13 @@ each DataLoader worker. The canonical training dataloader.
 
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
+from itertools import islice
+
+import numpy as np
 import torch
 import torch.utils.data
-import numpy as np
 
-from cosmos_framework.utils import log
 from cosmos_framework.data.generator.dataflow.base import (
     BatchCollator,
     DataDistributor,
@@ -21,6 +23,7 @@ from cosmos_framework.data.generator.dataflow.base import (
 )
 from cosmos_framework.data.generator.dataflow.batchers import SimpleBatcher
 from cosmos_framework.data.generator.dataflow.collators import DefaultBatchCollator
+from cosmos_framework.utils import log
 
 
 class _DataflowIterableDataset(torch.utils.data.IterableDataset):
@@ -34,6 +37,7 @@ class _DataflowIterableDataset(torch.utils.data.IterableDataset):
         collator: BatchCollator,
         dp_rank: int,
         dp_world_size: int,
+        processing_threads: int,
     ):
         super().__init__()
         self._distributor = distributor
@@ -42,22 +46,38 @@ class _DataflowIterableDataset(torch.utils.data.IterableDataset):
         self._collator = collator
         self._dp_rank = dp_rank
         self._dp_world_size = dp_world_size
+        self._processing_threads = processing_threads
 
     def __iter__(self):
         info = torch.utils.data.get_worker_info()
         worker_id, num_workers = (info.id, info.num_workers) if info else (0, 1)
         raw = self._distributor.stream(self._dp_rank, self._dp_world_size, worker_id, num_workers)
 
+        def _process_one(item):
+            if isinstance(item, dict):
+                meta = {k: item.pop(k) for k in list(item) if k.startswith("_dp_")}
+            else:
+                meta = {}
+            sample = self._processor.process(item)
+            if meta and isinstance(sample, dict):
+                sample.update(meta)
+            return sample
+
         def _processed():
-            for item in raw:
-                if isinstance(item, dict):
-                    meta = {k: item.pop(k) for k in list(item) if k.startswith("_dp_")}
-                else:
-                    meta = {}
-                s = self._processor.process(item)
-                if meta and isinstance(s, dict):
-                    s.update(meta)
-                yield s
+            if self._processing_threads == 1:
+                for item in raw:
+                    yield _process_one(item)
+                return
+
+            # Keep one small, bounded in-process pool per DataLoader worker.
+            # executor.map preserves source order, so sharding, packing, and
+            # checkpoint/resume positions remain identical to serial processing.
+            with ThreadPoolExecutor(max_workers=self._processing_threads) as executor:
+                while True:
+                    chunk = list(islice(raw, self._processing_threads))
+                    if not chunk:
+                        return
+                    yield from executor.map(_process_one, chunk)
 
         for group in self._batcher.batches(_processed()):
             has_meta = bool(group) and isinstance(group[0], dict) and "_dp_epoch" in group[0]
@@ -116,6 +136,7 @@ class CosmosDataLoader(torch.utils.data.DataLoader):
         prefetch_factor: int | None = None,
         persistent_workers: bool = False,
         pin_memory: bool = False,
+        processing_threads: int = 1,
         parallel_dims=None,
     ):
         if batch_size is not None and batcher is not None:
@@ -128,6 +149,12 @@ class CosmosDataLoader(torch.utils.data.DataLoader):
             batcher = SimpleBatcher(batch_size=batch_size)
         if collator is None:
             collator = DefaultBatchCollator()
+        processing_threads = int(processing_threads)
+        if processing_threads < 1:
+            raise ValueError(
+                "CosmosDataLoader: processing_threads must be >= 1, "
+                f"got {processing_threads}"
+            )
 
         if parallel_dims is not None:
             dp_rank, dp_world_size = parallel_dims.dp_coord
@@ -150,6 +177,7 @@ class CosmosDataLoader(torch.utils.data.DataLoader):
             collator=collator,
             dp_rank=dp_rank,
             dp_world_size=dp_world_size,
+            processing_threads=processing_threads,
         )
 
         from cosmos_framework.data.generator.dataflow.distributors import MapDistributor

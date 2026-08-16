@@ -6,8 +6,10 @@ CosmosDataLoaderStateCallback. Single process, num_workers=0."""
 
 from __future__ import annotations
 
+import threading
 from itertools import islice
 
+import pytest
 import torch
 
 from cosmos_framework.callbacks.cosmos_dataloader_state import CosmosDataLoaderStateCallback
@@ -15,6 +17,7 @@ from cosmos_framework.data.generator.dataflow import (
     CosmosDataLoader,
     IdentityProcessor,
     MapDistributor,
+    RawItemProcessor,
 )
 
 
@@ -70,3 +73,46 @@ def test_map_distributor_normalizes_environment_style_seed_string():
         for item in islice(MapDistributor(_IdDS(4), shuffle=True, seed=42).stream(0, 1, 0, 1), 4)
     ]
     assert first == second
+
+
+class _ConcurrentIdentityProcessor(RawItemProcessor):
+    def __init__(self, participants: int):
+        self._barrier = threading.Barrier(participants, timeout=2)
+        self._lock = threading.Lock()
+        self.active = 0
+        self.peak = 0
+
+    def process(self, item):
+        with self._lock:
+            self.active += 1
+            self.peak = max(self.peak, self.active)
+        self._barrier.wait()
+        with self._lock:
+            self.active -= 1
+        return item
+
+
+def test_processing_threads_preserve_order_and_run_concurrently():
+    processor = _ConcurrentIdentityProcessor(participants=4)
+    loader = CosmosDataLoader(
+        distributor=MapDistributor(_IdDS(8), shuffle=False),
+        processor=processor,
+        batch_size=1,
+        num_workers=0,
+        processing_threads="4",
+    )
+
+    batches = list(islice(loader, 4))
+
+    assert [batch["id"].item() for batch in batches] == [0, 1, 2, 3]
+    assert processor.peak == 4
+
+
+def test_processing_threads_rejects_zero():
+    with pytest.raises(ValueError, match="processing_threads"):
+        CosmosDataLoader(
+            distributor=MapDistributor(_IdDS(1), shuffle=False),
+            processor=IdentityProcessor(),
+            batch_size=1,
+            processing_threads=0,
+        )

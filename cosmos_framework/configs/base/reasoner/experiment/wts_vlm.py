@@ -8,6 +8,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import threading
 from collections import OrderedDict
 from copy import deepcopy
 from typing import Any
@@ -146,41 +147,87 @@ class VideoSFTProcessor(VLMProcessor):
         if self.use_daft_chat_template:
             apply_daft_chat_template(processor)
         self._video_cache: OrderedDict[str, tuple[list[Image.Image], float]] = OrderedDict()
+        self._video_cache_lock = threading.Lock()
+        self._video_inflight: dict[str, threading.Event] = {}
+        self._video_runtime_attested = False
 
     def _decode_video(self, video_path: str) -> tuple[list[Image.Image], float]:
         video_path = self.video_overrides.get(video_path, video_path)
         video_path = os.path.abspath(os.path.expanduser(video_path))
-        cached = self._video_cache.get(video_path)
-        if cached is not None:
-            self._video_cache.move_to_end(video_path)
-            return cached
-
-        reader = TorchCodecVideoReader(
-            video_path,
-            num_threads=self.video_num_threads,
-            device=self.video_device,
-        )
-        total_frames = len(reader)
-        if total_frames < 1:
-            raise ValueError(f"video-supervision media has zero frames: {video_path}")
-        sample_count = min(self.num_video_frames, total_frames)
-        if sample_count == 1:
-            indices = [0]
-        else:
-            indices = torch.linspace(0, total_frames - 1, steps=sample_count).round().to(dtype=torch.long).tolist()
-        frames_np = reader.get_frames_nhwc_uint8(indices)
-        frames = [Image.fromarray(frame) for frame in frames_np]
-
-        source_fps = reader.get_avg_fps()
-        average_stride = (indices[-1] - indices[0]) / max(len(indices) - 1, 1) if len(indices) > 1 else 1.0
-        effective_fps = source_fps / max(average_stride, 1.0)
-        decoded = (frames, float(effective_fps))
         if self.video_cache_size > 0:
-            self._video_cache[video_path] = decoded
-            self._video_cache.move_to_end(video_path)
-            while len(self._video_cache) > self.video_cache_size:
-                self._video_cache.popitem(last=False)
-        return decoded
+            # Concurrent processing can request the same source video in one
+            # logical pool. Elect one decoder and let peers consume its cached
+            # result, avoiding duplicate GPU decoder sessions without prewarm.
+            while True:
+                with self._video_cache_lock:
+                    cached = self._video_cache.get(video_path)
+                    if cached is not None:
+                        self._video_cache.move_to_end(video_path)
+                        return cached
+                    inflight = self._video_inflight.get(video_path)
+                    if inflight is None:
+                        inflight = threading.Event()
+                        self._video_inflight[video_path] = inflight
+                        decode_owner = True
+                    else:
+                        decode_owner = False
+                if decode_owner:
+                    break
+                inflight.wait()
+
+        try:
+            reader = TorchCodecVideoReader(
+                video_path,
+                num_threads=self.video_num_threads,
+                device=self.video_device,
+            )
+            total_frames = len(reader)
+            if total_frames < 1:
+                raise ValueError(f"video-supervision media has zero frames: {video_path}")
+            sample_count = min(self.num_video_frames, total_frames)
+            if sample_count == 1:
+                indices = [0]
+            else:
+                indices = torch.linspace(0, total_frames - 1, steps=sample_count).round().to(dtype=torch.long).tolist()
+            frames_np = reader.get_frames_nhwc_uint8(indices)
+            decoded_device = str(reader.last_output_device)
+            if self.video_device.startswith("cuda") and not decoded_device.startswith("cuda"):
+                raise RuntimeError(
+                    "TorchCodec did not decode on the requested CUDA device: "
+                    f"requested={self.video_device} actual={decoded_device}"
+                )
+            frames = [Image.fromarray(frame) for frame in frames_np]
+
+            with self._video_cache_lock:
+                if not self._video_runtime_attested:
+                    print(
+                        "TAO_FRAMEWORK_VIDEO_RUNTIME "
+                        f"rank={os.environ.get('RANK', os.environ.get('LOCAL_RANK', '0'))} "
+                        "backend=torchcodec "
+                        f"requested_device={self.video_device} actual_device={decoded_device} "
+                        f"video_cache_size={self.video_cache_size} "
+                        f"decoder_threads={self.video_num_threads}",
+                        flush=True,
+                    )
+                    self._video_runtime_attested = True
+
+            source_fps = reader.get_avg_fps()
+            average_stride = (indices[-1] - indices[0]) / max(len(indices) - 1, 1) if len(indices) > 1 else 1.0
+            effective_fps = source_fps / max(average_stride, 1.0)
+            decoded = (frames, float(effective_fps))
+            if self.video_cache_size > 0:
+                with self._video_cache_lock:
+                    self._video_cache[video_path] = decoded
+                    self._video_cache.move_to_end(video_path)
+                    while len(self._video_cache) > self.video_cache_size:
+                        self._video_cache.popitem(last=False)
+            return decoded
+        finally:
+            if self.video_cache_size > 0:
+                with self._video_cache_lock:
+                    completed = self._video_inflight.pop(video_path, None)
+                    if completed is not None:
+                        completed.set()
 
     def _sharegpt_to_openai(self, item: dict) -> list[dict]:
         if "messages" in item:
@@ -283,6 +330,7 @@ def _video_conversation_dataloader(
         prefetch_factor=None,
         persistent_workers=False,
         pin_memory=False,
+        processing_threads="${oc.env:TAO_FRAMEWORK_SFT_PROCESS_THREADS,1}",
     )
 
 
@@ -341,6 +389,7 @@ def _task_aware_video_dataloader(
         prefetch_factor=None,
         persistent_workers=False,
         pin_memory=False,
+        processing_threads="${oc.env:TAO_FRAMEWORK_SFT_PROCESS_THREADS,1}",
     )
 
 

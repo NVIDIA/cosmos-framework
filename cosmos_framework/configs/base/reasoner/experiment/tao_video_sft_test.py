@@ -5,7 +5,10 @@ from __future__ import annotations
 
 import json
 import sys
+import threading
+import time
 import types
+from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 
@@ -150,6 +153,7 @@ def test_video_override_map_is_validated_and_applied(tmp_path, monkeypatch) -> N
     class FakeReader:
         def __init__(self, path, **_kwargs):
             decoded_paths.append(path)
+            self.last_output_device = "cuda:0"
 
         def __len__(self):
             return 1
@@ -170,12 +174,86 @@ def test_video_override_map_is_validated_and_applied(tmp_path, monkeypatch) -> N
     assert decoded_paths == [str(replacement)]
 
 
+def test_video_cache_single_flight_avoids_duplicate_concurrent_decodes(tmp_path, monkeypatch) -> None:
+    tokenizer = types.SimpleNamespace(pad_token_id=0)
+    wrapped_processor = types.SimpleNamespace(tokenizer=tokenizer)
+    source = tmp_path / "source.mp4"
+    source.write_bytes(b"source")
+    calls = 0
+    calls_lock = threading.Lock()
+
+    class FakeReader:
+        def __init__(self, _path, **_kwargs):
+            nonlocal calls
+            self.last_output_device = "cuda:0"
+            with calls_lock:
+                calls += 1
+            time.sleep(0.05)
+
+        def __len__(self):
+            return 2
+
+        def get_frames_nhwc_uint8(self, _indices):
+            import numpy as np
+
+            return np.zeros((2, 2, 2, 3), dtype=np.uint8)
+
+        def get_avg_fps(self):
+            return 30.0
+
+    monkeypatch.setattr(
+        "cosmos_framework.configs.base.reasoner.experiment.wts_vlm.TorchCodecVideoReader",
+        FakeReader,
+    )
+    processor = VideoSFTProcessor(wrapped_processor, video_cache_size=2)
+
+    with ThreadPoolExecutor(max_workers=4) as executor:
+        decoded = list(executor.map(processor._decode_video, [str(source)] * 4))
+
+    assert calls == 1
+    assert all(result is decoded[0] for result in decoded)
+
+
+def test_video_decoder_rejects_cuda_to_cpu_fallback(tmp_path, monkeypatch) -> None:
+    tokenizer = types.SimpleNamespace(pad_token_id=0)
+    wrapped_processor = types.SimpleNamespace(tokenizer=tokenizer)
+    source = tmp_path / "source.mp4"
+    source.write_bytes(b"source")
+
+    class FakeReader:
+        last_output_device = "cpu"
+
+        def __init__(self, _path, **_kwargs):
+            pass
+
+        def __len__(self):
+            return 1
+
+        def get_frames_nhwc_uint8(self, _indices):
+            import numpy as np
+
+            return np.zeros((1, 2, 2, 3), dtype=np.uint8)
+
+        def get_avg_fps(self):
+            return 30.0
+
+    monkeypatch.setattr(
+        "cosmos_framework.configs.base.reasoner.experiment.wts_vlm.TorchCodecVideoReader",
+        FakeReader,
+    )
+    processor = VideoSFTProcessor(wrapped_processor, video_device="cuda")
+
+    with pytest.raises(RuntimeError, match="did not decode on the requested CUDA device"):
+        processor._decode_video(str(source))
+
+
 def test_task_aware_edge_recipe_uses_runtime_video_profile() -> None:
     assert tao_task_aware_video_reasoning_edge["defaults"][4] == {"override /vlm_policy": "cosmos3_edge_reasoner"}
     assert "video_max_pixels" in tao_task_aware_video_reasoning_edge["dataloader_train"]["processor"]
     assert "video_max_pixels" in tao_video_conversation_edge["dataloader_train"]["processor"]
     source = __import__("inspect").getsource(sys.modules[VideoSFTProcessor.__module__])
     assert "TAO_VIDEO_MAX_PIXELS" in source
+    assert "TAO_FRAMEWORK_SFT_PROCESS_THREADS" in source
 
 
 def test_daft_dataset_matches_internal_hybrid_index_order(monkeypatch) -> None:
