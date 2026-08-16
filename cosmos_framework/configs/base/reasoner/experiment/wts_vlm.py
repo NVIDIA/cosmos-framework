@@ -377,7 +377,7 @@ def _video_conversation_dataloader(
         persistent_workers=True,
         pin_memory=False,
         multiprocessing_context="spawn",
-        processing_threads="${oc.env:TAO_FRAMEWORK_SFT_PROCESS_THREADS,1}",
+        processing_threads="${oc.env:TAO_FRAMEWORK_SFT_PROCESS_THREADS,8}",
     )
 
 
@@ -436,7 +436,7 @@ def _task_aware_video_dataloader(
         persistent_workers=True,
         pin_memory=False,
         multiprocessing_context="spawn",
-        processing_threads="${oc.env:TAO_FRAMEWORK_SFT_PROCESS_THREADS,1}",
+        processing_threads="${oc.env:TAO_FRAMEWORK_SFT_PROCESS_THREADS,8}",
     )
 
 
