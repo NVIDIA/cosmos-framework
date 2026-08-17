@@ -235,6 +235,8 @@ class VLMTokensPerSec(EveryN):
         if not torch.cuda.is_available():
             return None
         name = torch.cuda.get_device_name()
+        if "B300" in name or "GB300" in name:
+            return 2.25e15  # HGX B300 dense BF16: 36 PFLOPS sparse / 2 / 8 GPUs (datasheet)
         if any(k in name for k in ("B200", "GB200", "Blackwell")):
             return 2.45e15  # GB200 NVL72 dense BF16 ~2.45 PFLOP/s/GPU (no sparsity)
         if "H200" in name or "H100" in name:
