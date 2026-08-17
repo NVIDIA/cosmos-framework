@@ -52,6 +52,7 @@ from cosmos_framework.model.generator.reasoner.qwen3_vl.utils import (
 from cosmos_framework.model.generator.reasoner.qwen3_vl.utils import (
     get_rope_index as _get_rope_index,
 )
+from cosmos_framework.utils.generator.quantization import _ModelOptFloat8Linear
 
 from .configuration_qwen3_vl import Qwen3VLConfig, Qwen3VLTextConfig, Qwen3VLVisionConfig
 
@@ -608,6 +609,11 @@ class Qwen3VLPreTrainedModel(PreTrainedModel):
 
     def _init_weights(self, module: nn.Module, buffer_device: torch.device | None) -> None:
         """Initialize the weights."""
+        # A ModelOpt FP8 linear carries an E4M3 weight that the checkpoint fills
+        # wholesale, and `normal_` has no float8 kernel. Random init would be both
+        # unimplemented and pointless here.
+        if isinstance(module, _ModelOptFloat8Linear):
+            return
         super()._init_weights(module)
 
         if isinstance(

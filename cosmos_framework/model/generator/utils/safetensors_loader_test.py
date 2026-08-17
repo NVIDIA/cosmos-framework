@@ -360,6 +360,107 @@ def test_load_vlm_model_copies_matching_keys(tmp_path):
 
 @pytest.mark.L0
 @pytest.mark.CPU
+def test_load_vlm_model_copies_full_tensor_into_replicated_target_with_dp_shard(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Regular tensors, including scalar buffers, stay replicated with a shard mesh."""
+    from cosmos_framework.model.generator.utils import safetensors_loader
+
+    config = _StubConfig(
+        text_config=_StubConfig(num_experts=None, num_local_experts=None),
+        tie_word_embeddings=False,
+    )
+    model = _StubModel({"encoder.weight": (4, 2), "encoder.num_batches_tracked": ()}, config)
+    expected = torch.arange(8, dtype=torch.float32).view(4, 2)
+    expected_scalar = torch.tensor(7.0)
+
+    mesh = MagicMock()
+    mesh.get_local_rank.return_value = 0
+    mesh.size.return_value = 2
+    loader = MagicMock()
+    loader.load_files_parallel.return_value = (
+        {"encoder.weight": expected, "encoder.num_batches_tracked": expected_scalar},
+        {"encoder.weight": ([4, 2], 0), "encoder.num_batches_tracked": ([], 0)},
+        {"encoder.weight", "encoder.num_batches_tracked"},
+    )
+    loader.gather_tensor_names_and_build_mapping.return_value = (
+        {"encoder.weight", "encoder.num_batches_tracked"},
+        {"encoder.weight": 0, "encoder.num_batches_tracked": 0},
+    )
+    loader.iterate_tensors.return_value = iter(
+        [
+            ("encoder.weight", expected),
+            ("encoder.num_batches_tracked", expected_scalar),
+        ]
+    )
+
+    monkeypatch.setattr(safetensors_loader, "_get_dp_shard_mesh", lambda _parallel_dims: mesh)
+    monkeypatch.setattr(safetensors_loader, "MultiRankCheckpointLoader", lambda _mesh: loader)
+
+    keys_loaded = load_vlm_model(
+        model=model,
+        checkpoint_path="unused-by-fake-loader",
+        credential_path=None,
+        parallel_dims=object(),  # type: ignore[arg-type]
+    )
+
+    assert keys_loaded == {"encoder.weight", "encoder.num_batches_tracked"}
+    assert torch.equal(model._params["encoder.weight"].data, expected)
+    assert torch.equal(model._params["encoder.num_batches_tracked"].data, expected_scalar)
+
+
+@pytest.mark.L0
+@pytest.mark.CPU
+def test_load_vlm_model_copies_local_shard_into_dtensor_target(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from torch.distributed.tensor import DTensor
+
+    from cosmos_framework.model.generator.utils import safetensors_loader
+
+    config = _StubConfig(
+        text_config=_StubConfig(num_experts=None, num_local_experts=None),
+        tie_word_embeddings=False,
+    )
+    model = _StubModel({"encoder.weight": (4, 2)}, config)
+    local_target = torch.zeros(2, 2)
+    dtensor_target = MagicMock(spec=DTensor)
+    dtensor_target.to_local.return_value = local_target
+    model._params["encoder.weight"] = dtensor_target
+    checkpoint_tensor = torch.arange(8, dtype=torch.float32).view(4, 2)
+
+    mesh = MagicMock()
+    mesh.get_local_rank.return_value = 1
+    mesh.size.return_value = 2
+    loader = MagicMock()
+    loader.load_files_parallel.return_value = (
+        {"encoder.weight": checkpoint_tensor},
+        {"encoder.weight": ([4, 2], 0)},
+        {"encoder.weight"},
+    )
+    loader.gather_tensor_names_and_build_mapping.return_value = (
+        {"encoder.weight"},
+        {"encoder.weight": 0},
+    )
+    loader.iterate_tensors.return_value = iter([("encoder.weight", checkpoint_tensor)])
+
+    monkeypatch.setattr(safetensors_loader, "_get_dp_shard_mesh", lambda _parallel_dims: mesh)
+    monkeypatch.setattr(safetensors_loader, "MultiRankCheckpointLoader", lambda _mesh: loader)
+
+    keys_loaded = load_vlm_model(
+        model=model,
+        checkpoint_path="unused-by-fake-loader",
+        credential_path=None,
+        parallel_dims=object(),  # type: ignore[arg-type]
+    )
+
+    assert keys_loaded == {"encoder.weight"}
+    assert torch.equal(local_target, checkpoint_tensor[2:])
+    dtensor_target.to_local.assert_called_once_with()
+
+
+@pytest.mark.L0
+@pytest.mark.CPU
 def test_load_vlm_model_tolerates_missing_lm_head_when_tied(tmp_path):
     """tie_word_embeddings=True + no lm_head in checkpoint → no error,
     AND lm_head.weight.data must equal embed_tokens.weight.data after load
@@ -404,23 +505,91 @@ def test_load_vlm_model_tolerates_missing_lm_head_when_tied(tmp_path):
 
 @pytest.mark.L0
 @pytest.mark.CPU
-def test_load_vlm_model_rejects_moe(tmp_path):
-    """MoE VLMs raise NotImplementedError — MoE is not yet supported."""
+def test_load_vlm_model_loads_moe_fused_expert_weights(tmp_path):
+    """MoE VLMs load like dense ones: the fused ``mlp.experts.*`` tensors and the
+    router gate are copied verbatim on a single rank."""
     cfg = _StubConfig(
-        text_config=_StubConfig(num_experts=128, num_local_experts=None),
+        text_config=_StubConfig(num_experts=4, num_local_experts=None),
         tie_word_embeddings=False,
     )
-    model = _StubModel(param_shapes={"model.embed_tokens.weight": (4, 2)}, config=cfg)
-    expected = torch.arange(8, dtype=torch.float32).view(4, 2)
-    ckpt_dir = _make_safetensors(tmp_path, {"model.embed_tokens.weight": expected})
+    model = _StubModel(
+        param_shapes={
+            "model.language_model.embed_tokens.weight": (4, 2),
+            "model.language_model.layers.0.mlp.gate.weight": (4, 2),
+            # Fused experts: [num_experts, hidden, 2 * moe_intermediate] and
+            # [num_experts, moe_intermediate, hidden] — see
+            # models/reasoner/qwen3_vl_moe/moe.py.
+            "model.language_model.layers.0.mlp.experts.gate_up_proj": (4, 2, 6),
+            "model.language_model.layers.0.mlp.experts.down_proj": (4, 3, 2),
+        },
+        config=cfg,
+    )
+    ckpt = {
+        name: torch.arange(param.numel(), dtype=torch.float32).view(param.shape)
+        for name, param in model._params.items()
+    }
+    ckpt_dir = _make_safetensors(tmp_path, ckpt)
 
-    with pytest.raises(NotImplementedError, match="MoE VLMs"):
-        load_vlm_model(
-            model=model,
-            checkpoint_path=str(ckpt_dir),
-            credential_path=None,
-            parallel_dims=None,
-        )
+    keys_loaded = load_vlm_model(
+        model=model,
+        checkpoint_path=str(ckpt_dir),
+        credential_path=None,
+        parallel_dims=None,
+    )
+
+    assert keys_loaded == set(ckpt)
+    for name, expected in ckpt.items():
+        assert torch.equal(model._params[name].data, expected), name
+
+
+@pytest.mark.L0
+@pytest.mark.CPU
+def test_load_vlm_model_shards_fused_experts_on_expert_dim(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The expert count is dim 0 of a fused expert tensor, so the dense dim-0
+    FSDP rule gives each rank a contiguous slice of experts."""
+    from torch.distributed.tensor import DTensor
+
+    from cosmos_framework.model.generator.utils import safetensors_loader
+
+    config = _StubConfig(
+        text_config=_StubConfig(num_experts=4, num_local_experts=None),
+        tie_word_embeddings=False,
+    )
+    key = "model.language_model.layers.0.mlp.experts.gate_up_proj"
+    model = _StubModel({key: (4, 2, 6)}, config)
+    # Rank 1 of 2 owns experts 2 and 3.
+    local_target = torch.zeros(2, 2, 6)
+    dtensor_target = MagicMock(spec=DTensor)
+    dtensor_target.to_local.return_value = local_target
+    model._params[key] = dtensor_target
+    checkpoint_tensor = torch.arange(4 * 2 * 6, dtype=torch.float32).view(4, 2, 6)
+
+    mesh = MagicMock()
+    mesh.get_local_rank.return_value = 1
+    mesh.size.return_value = 2
+    loader = MagicMock()
+    loader.load_files_parallel.return_value = (
+        {key: checkpoint_tensor},
+        {key: ([4, 2, 6], 0)},
+        {key},
+    )
+    loader.gather_tensor_names_and_build_mapping.return_value = ({key}, {key: 0})
+    loader.iterate_tensors.return_value = iter([(key, checkpoint_tensor)])
+
+    monkeypatch.setattr(safetensors_loader, "_get_dp_shard_mesh", lambda _parallel_dims: mesh)
+    monkeypatch.setattr(safetensors_loader, "MultiRankCheckpointLoader", lambda _mesh: loader)
+
+    keys_loaded = load_vlm_model(
+        model=model,
+        checkpoint_path="unused-by-fake-loader",
+        credential_path=None,
+        parallel_dims=object(),  # type: ignore[arg-type]
+    )
+
+    assert keys_loaded == {key}
+    assert torch.equal(local_target, checkpoint_tensor[2:])
 
 
 @pytest.mark.L0
@@ -470,6 +639,105 @@ def test_load_vlm_model_skip_patterns_on_model_keys(tmp_path):
         skip_patterns=skip,
     )
     assert "model.embed_tokens.weight" in keys_loaded
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# optional_missing_patterns — resume new modules without skipping present keys
+# ──────────────────────────────────────────────────────────────────────────────
+
+
+@pytest.mark.L0
+@pytest.mark.CPU
+def test_load_vlm_model_optional_missing_patterns_loads_present_key(tmp_path):
+    """An optional key present in the checkpoint is copied and reported loaded."""
+    cfg = _StubConfig(
+        text_config=_StubConfig(num_experts=None, num_local_experts=None),
+        tie_word_embeddings=False,
+    )
+    model = _StubModel(
+        param_shapes={
+            "model.embed_tokens.weight": (2, 2),
+            "sound_und_model.projector.weight": (2, 2),
+        },
+        config=cfg,
+    )
+    expected_projector = torch.full((2, 2), 7.0)
+    ckpt_dir = _make_safetensors(
+        tmp_path,
+        {
+            "model.embed_tokens.weight": torch.ones(2, 2),
+            "sound_und_model.projector.weight": expected_projector,
+        },
+    )
+
+    keys_loaded = load_vlm_model(
+        model=model,
+        checkpoint_path=str(ckpt_dir),
+        credential_path=None,
+        parallel_dims=None,
+        optional_missing_patterns=[r"^sound_und_model\..*"],
+    )
+
+    assert "sound_und_model.projector.weight" in keys_loaded
+    assert torch.equal(model._params["sound_und_model.projector.weight"].data, expected_projector)
+
+
+@pytest.mark.L0
+@pytest.mark.CPU
+def test_load_vlm_model_optional_missing_patterns_tolerates_absent_key(tmp_path):
+    """An optional model key may be absent from an older checkpoint."""
+    cfg = _StubConfig(
+        text_config=_StubConfig(num_experts=None, num_local_experts=None),
+        tie_word_embeddings=False,
+    )
+    model = _StubModel(
+        param_shapes={
+            "model.embed_tokens.weight": (2, 2),
+            "sound_und_model.projector.weight": (2, 2),
+        },
+        config=cfg,
+    )
+    sentinel = torch.full((2, 2), 9.0)
+    model._params["sound_und_model.projector.weight"].data.copy_(sentinel)
+    ckpt_dir = _make_safetensors(tmp_path, {"model.embed_tokens.weight": torch.ones(2, 2)})
+
+    keys_loaded = load_vlm_model(
+        model=model,
+        checkpoint_path=str(ckpt_dir),
+        credential_path=None,
+        parallel_dims=None,
+        optional_missing_patterns=[r"^sound_und_model\..*"],
+    )
+
+    assert "sound_und_model.projector.weight" not in keys_loaded
+    assert torch.equal(model._params["sound_und_model.projector.weight"].data, sentinel)
+
+
+@pytest.mark.L0
+@pytest.mark.CPU
+def test_load_vlm_model_optional_missing_patterns_still_rejects_required_missing_key(tmp_path):
+    """Missing keys outside the optional patterns remain hard errors."""
+    cfg = _StubConfig(
+        text_config=_StubConfig(num_experts=None, num_local_experts=None),
+        tie_word_embeddings=False,
+    )
+    model = _StubModel(
+        param_shapes={
+            "model.embed_tokens.weight": (2, 2),
+            "sound_und_model.projector.weight": (2, 2),
+        },
+        config=cfg,
+    )
+    ckpt_dir = _make_safetensors(tmp_path, {"unrelated.weight": torch.zeros(1)})
+
+    with pytest.raises(ValueError, match=r"required model parameter"):
+        load_vlm_model(
+            model=model,
+            checkpoint_path=str(ckpt_dir),
+            credential_path=None,
+            parallel_dims=None,
+            optional_missing_patterns=[r"^sound_und_model\..*"],
+        )
 
 
 # ──────────────────────────────────────────────────────────────────────────────

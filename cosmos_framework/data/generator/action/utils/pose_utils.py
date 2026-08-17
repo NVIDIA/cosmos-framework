@@ -525,6 +525,33 @@ def pose_rel_to_abs(
 
 
 # -----------------------------------------------------------------------------
+# Absolute 9D pose vectors: [pos(3), rot6d(6)]
+# -----------------------------------------------------------------------------
+
+
+def pose_abs_to_abs9d(poses_abs: np.ndarray) -> np.ndarray:
+    """Convert absolute poses to absolute ``[pos(3), rot6d(6)]`` vectors.
+
+    Both halves of the name mean different things: the input is an absolute
+    ``(T, 4, 4)`` trajectory, and the output keeps absolute values rather than
+    per-step deltas.
+
+    The leading frame is dropped so the output aligns step-for-step with
+    ``pose_abs_to_rel(..., rotation_format="rot6d")``, which spends one frame
+    forming its first delta.
+
+    Args:
+        poses_abs: Absolute poses with shape ``(T, 4, 4)``.
+
+    Returns:
+        Array of shape ``(T - 1, 9)`` and dtype ``float32``.
+    """
+    pos = poses_abs[1:, :3, 3].astype(np.float32)  # (T-1, 3)
+    rot6d = convert_rotation(poses_abs[1:, :3, :3], input_format="matrix", output_format="rot6d")  # (T-1, 6)
+    return np.concatenate([pos, rot6d], axis=-1)
+
+
+# -----------------------------------------------------------------------------
 # Idle-frame detection
 # -----------------------------------------------------------------------------
 
@@ -685,7 +712,7 @@ def compute_idle_frames(
 
     # Import locally to avoid a circular import at module load time
     # (action_spec.py imports RotationConvention from this file).
-    from cosmos_framework.data.generator.action.action_spec import DimType
+    from cosmos_framework.data.generator.action.utils.action_spec import DimType
 
     pos_idx = [i for i, t in enumerate(spec.types) if t == DimType.POS]
     rot_idx = [i for i, t in enumerate(spec.types) if t == DimType.ROT]

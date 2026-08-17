@@ -45,7 +45,7 @@ def _run_experts_grouped_mm(
 
 
 class Qwen3VLMoeTextExpertsGroupedMm(nn.Module):
-    def __init__(self, config):
+    def __init__(self, config: Qwen3VLMoeTextConfig, top_k: int | None = None) -> None:
         super().__init__()
         self.gate_up_proj = nn.Parameter(
             torch.empty(config.num_experts, config.hidden_size, 2 * config.moe_intermediate_size)
@@ -54,9 +54,9 @@ class Qwen3VLMoeTextExpertsGroupedMm(nn.Module):
         self.act_fn = ACT2FN[config.hidden_act]
 
         self.num_experts = config.num_experts
-        self.moe_intermediate_size = config.moe_intermediate_size
         self.hidden_size = config.hidden_size
-        self.top_k = config.num_experts_per_tok
+        self.top_k = config.num_experts_per_tok if top_k is None else top_k
+        assert 1 <= self.top_k <= self.num_experts, f"top_k must be in [1, {self.num_experts}], got {self.top_k}."
 
     def forward(
         self,
@@ -64,6 +64,7 @@ class Qwen3VLMoeTextExpertsGroupedMm(nn.Module):
         topk_scores: torch.Tensor,  # [num_tokens,top_k]
         expert_indices: torch.Tensor,  # [num_tokens,top_k]
         num_tokens_per_expert: torch.Tensor,  # [num_experts]
+        token_mask: torch.Tensor | None,  # [num_tokens]
     ) -> torch.Tensor:  # [num_tokens,hidden_size]
         """
         This module obtains the output of the experts by routing the tokens
@@ -73,11 +74,31 @@ class Qwen3VLMoeTextExpertsGroupedMm(nn.Module):
             hidden_states (torch.Tensor): (batch_size * seq_len, hidden_size)
             topk_scores (torch.Tensor): (batch_size * seq_len, top_k)
             expert_indices (torch.Tensor): (batch_size * seq_len, top_k)
+            num_tokens_per_expert (torch.Tensor): (num_experts,) number of tokens each
+                expert is to process. It counts exactly the number of real tokens that reach
+                the GEMM.
+            token_mask (torch.Tensor | None): (batch_size * seq_len,) boolean, false on the tokens
+                that are padding rather than real tokens. Those tokens are sent to a sentinel group
+                past the last expert, which the stable sort places after every real group and the
+                permutation therefore never reaches, so neither their compute nor their values reach
+                the GEMM. ``None`` treats every token as a real token.
 
         Returns:
             torch.Tensor: (batch_size * seq_len, hidden_size)
         """
+        assert topk_scores.shape == expert_indices.shape, (
+            f"topk_scores and expert_indices must have matching shapes, got "
+            f"{tuple(topk_scores.shape)} and {tuple(expert_indices.shape)}."
+        )
+        assert expert_indices.shape[-1] == self.top_k, (
+            f"Grouped-MM top_k={self.top_k} does not match runtime routing top_k={expert_indices.shape[-1]}."
+        )
         num_tokens, dim = hidden_states.shape
+        if token_mask is not None:
+            # A group index past the last expert, rather than -1: the sort has to leave the real
+            # groups starting where ``num_tokens_per_expert`` says they do, and a negative key
+            # would push the padding in front of expert 0 instead of behind expert E-1.
+            expert_indices = expert_indices.masked_fill(~token_mask.unsqueeze(1), self.num_experts)
         topk_scores_sorted, token_indices_sorted = self._reorder_tokens(
             topk_scores,
             expert_indices,
@@ -100,7 +121,17 @@ class Qwen3VLMoeTextExpertsGroupedMm(nn.Module):
 
         # Compose: permuted_indices indexes into sorted order,
         # token_indices_sorted maps sorted→original. Compose them:
-        sentinel = torch.tensor([num_tokens], device=hidden_states.device)  # for padding slots
+        #
+        # torch.full, not torch.tensor([num_tokens], device=...): the latter stages the value in
+        # pageable host memory, and a pageable H2D copy is cudaMemcpyAsync plus a blocking
+        # cudaStreamSynchronize. That synchronize drains everything this layer has queued, once
+        # per MoE layer (94 of them per forward on the 235B), which costs the CPU the run-ahead
+        # FSDP2 needs: with no explicit forward prefetch, a block's all-gather is only issued when
+        # the CPU reaches its pre-forward hook, so a CPU pinned to the GPU serializes comm behind
+        # compute. full() fills on device with the scalar as a kernel argument — nothing waits.
+        sentinel = torch.full(
+            (1,), num_tokens, dtype=token_indices_sorted.dtype, device=hidden_states.device
+        )  # for padding slots
         token_indices_ext = torch.cat([token_indices_sorted, sentinel])
         combined_indices = token_indices_ext[permuted_indices.long()]
         combined_indices = combined_indices.unsqueeze(-1).expand(-1, dim)
@@ -159,7 +190,6 @@ class Qwen3VLMoeTextExpertsNaive(nn.Module):
         self.act_fn = ACT2FN[config.hidden_act]
 
         self.num_experts = config.num_experts
-        self.moe_intermediate_size = config.moe_intermediate_size
         self.hidden_size = config.hidden_size
 
     def forward(
@@ -168,6 +198,7 @@ class Qwen3VLMoeTextExpertsNaive(nn.Module):
         topk_scores: torch.Tensor,  # [num_tokens,top_k]
         expert_indices: torch.Tensor,  # [num_tokens,top_k]
         num_tokens_per_expert: torch.Tensor,  # [num_experts]
+        token_mask: torch.Tensor | None,  # [num_tokens]
     ) -> torch.Tensor:  # [num_tokens,hidden_size]
         """
         When training it is more efficient to just loop over the experts and compute the output for each expert
@@ -180,11 +211,16 @@ class Qwen3VLMoeTextExpertsNaive(nn.Module):
             routing_weights (torch.Tensor): (batch_size * token_num, top_k)
             expert_indices (torch.Tensor): (batch_size * token_num, top_k)
             num_tokens_per_expert (torch.Tensor): (num_experts,)
+            token_mask (torch.Tensor | None): (batch_size * token_num,) boolean, false on padding
+                rows. Ignored here: this reference path computes every row and relies on the caller
+                having given the padding rows a zero score, which contributes nothing to the sum.
+                Skipping their compute is a property of the grouped-GEMM path only.
 
         Returns:
             torch.Tensor: (batch_size * seq_len, hidden_size)
         """
         del num_tokens_per_expert
+        del token_mask
         assert hidden_states.ndim == 2, "hidden_states must be of shape (batch_size * seq_len, hidden_size)"
         assert hidden_states.shape[1] == self.hidden_size, (
             "hidden_states must be of shape (batch_size * seq_len, hidden_size)"
@@ -239,10 +275,14 @@ class Qwen3VLMoeTextExpertsNaive(nn.Module):
         nn.init.normal_(self.down_proj, mean=0.0, std=0.02)
 
 
-def create_text_experts(config: Qwen3VLMoeTextConfig, implementation_type: str = "naive") -> nn.Module:
+def create_text_experts(
+    config: Qwen3VLMoeTextConfig,
+    implementation_type: str = "naive",
+    top_k: int | None = None,
+) -> nn.Module:
     if implementation_type == "naive":
         return Qwen3VLMoeTextExpertsNaive(config)
     elif implementation_type == "grouped_mm":
-        return Qwen3VLMoeTextExpertsGroupedMm(config)
+        return Qwen3VLMoeTextExpertsGroupedMm(config, top_k=top_k)
     else:
         raise ValueError(f"Invalid implementation: {implementation_type}")

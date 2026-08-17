@@ -25,6 +25,8 @@ EMBODIMENT_TO_DOMAIN_ID: dict[str, int] = {
     "abc_yam": 16,  # ABC uses the same YAM 20D FK action contract
     "fractal": 20,
     "drawanything": 21,
+    "behavior1k_lerobot": 22,  # BEHAVIOR-1K R1Pro mobile bimanual (23D joint action)
+    "maniparena": 23,  # ManipArena x2robot/ex001_6r dual-arm; own 20D EE-direct action projection
 }
 
 
@@ -45,8 +47,10 @@ EMBODIMENT_TO_RAW_ACTION_DIM: dict[str, int] = {
     "xdof_yam": 20,
     "molmoact2_yam": 20,
     "abc_yam": 20,
+    "maniparena": 20,  # dual-arm EE: [pos(3)+rot6d(6)+gripper(1)] x 2
     "fractal": 10,
     "drawanything": 3,
+    "behavior1k_lerobot": 23,  # base(3) trunk(4) arms(14) grippers(2)
     # NOTE: ``libero`` (7/10/13 depending on ``rotation_space``) and ``hand_pose``
     # (variable with ``keypoint_option`` and ``rotation_format``) are absent
     # because their raw width is set per-dataset at construction time. Inference

@@ -44,3 +44,17 @@ class QuantizationConfig:
     # considered as excluded.
     include_regex: list[str] = attrs.field(factory=list)
     exclude_regex: list[str] = attrs.field(factory=list)
+
+    # Local root of a ModelOpt static-FP8 diffusers checkpoint. When set, the
+    # linears named by ``modelopt_fp8_target_fqns`` are swapped to FP8 modules on
+    # the meta device *before* the network is parallelized and materialized, so
+    # peak memory follows the FP8 weights rather than their bf16 shapes. This is
+    # independent of ``method``, which selects runtime (post-training)
+    # quantization; a ModelOpt checkpoint arrives already quantized.
+    modelopt_fp8_checkpoint_path: str | None = attrs.field(default=None)
+
+    # Target module FQNs (relative to the VFM network) that the ModelOpt FP8
+    # checkpoint carries quantized weights for. Computed from the checkpoint
+    # index by the loader, which knows the diffusers key mapping; passed through
+    # the config so the meta-device swap in ``build_net`` needs no mapper.
+    modelopt_fp8_target_fqns: list[str] = attrs.field(factory=list)

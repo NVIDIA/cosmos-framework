@@ -32,10 +32,10 @@ import pyarrow.parquet as pq
 import torch
 import torch.nn.functional as F
 
-from cosmos_framework.data.generator.action.action_spec import ActionSpec, Gripper, Pos, Rot, build_action_spec
+from cosmos_framework.data.generator.action.utils.action_spec import ActionSpec, Gripper, Pos, Rot, build_action_spec
 from cosmos_framework.data.generator.action.datasets.base_dataset import ActionBaseDataset
 from cosmos_framework.data.generator.action.libero_pose_utils import libero_action_dim, libero_rotation_format
-from cosmos_framework.data.generator.action.pose_utils import convert_rotation
+from cosmos_framework.data.generator.action.utils.pose_utils import convert_rotation
 from cosmos_framework.utils import log
 
 CameraMode = Literal["image", "wrist_image", "concat_view"]

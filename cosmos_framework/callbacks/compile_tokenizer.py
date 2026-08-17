@@ -64,7 +64,12 @@ class CompileTokenizer(Callback):
         self.enabled: bool = enabled
         self.compile_after_iterations: int = compile_after_iterations
         self.skip_counter: int = 0
-        self.warmup_resolutions: Sequence[str] | None = warmup_resolutions
+        # Hydra can coerce numeric-looking CLI values such as ``"256"`` to
+        # integers after launcher shell parsing. Resolution lookup tables use
+        # string keys, so normalize them at the callback boundary.
+        self.warmup_resolutions: Sequence[str] | None = (
+            None if warmup_resolutions is None else [str(resolution) for resolution in warmup_resolutions]
+        )
         self.backend: Literal["cudagraphs", "inductor"] = backend
         self.mode: Literal["reduce-overhead", "max-autotune"] | None = mode
         self.fullgraph: bool = fullgraph

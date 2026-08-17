@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: OpenMDW-1.1
 
-from typing import Any
+from typing import Any, Literal
 
 import attrs
 
@@ -9,8 +9,18 @@ from cosmos_framework.utils.lazy_config import LazyDict
 from cosmos_framework.configs.base.defaults.activation_checkpointing import ActivationCheckpointingConfig
 from cosmos_framework.configs.base.defaults.compile import CompileConfig
 from cosmos_framework.configs.base.defaults.ema import EMAConfig
+from cosmos_framework.configs.base.defaults.flex_attention import FlexAttentionConfig
 from cosmos_framework.configs.base.defaults.parallelism import ParallelismConfig
+from cosmos_framework.configs.base.defaults.quantization import QuantizationConfig
 from cosmos_framework.configs.base.defaults.reasoner import VLMConfig
+from cosmos_framework.model.generator.utils.load_balancing_stats import LBLConfig
+
+# Mirrors ``cosmos3.common.args.AttentionIOLayout``. Defined locally on purpose: importing
+# the ``cosmos3`` workspace package at module scope makes the whole cosmos3 config tree
+# unimportable in the released imaginaire4 eval images (v11.2.1 and older ship no
+# ``cosmos3``), which breaks the benchmark-request config-check CI job. Keep in sync with
+# ``packages/cosmos3/cosmos3/common/args.py``.
+AttentionIOLayout = Literal["sequence_sharded", "replicated"]
 
 
 @attrs.define(slots=False)
@@ -19,6 +29,13 @@ class DiffusionExpertConfig:
     timestep_range: float = 1.0
     # Whether to load the generation pathway weights from pretrained LLM/VLM weights.
     load_weights_from_pretrained: bool = True
+    # Whether to add separate learned modality embeddings to image and video generation tokens.
+    # Disabled by default to preserve legacy checkpoints and model behavior.
+    enable_vision_modality_embeddings: bool = False
+    # Whether to add a single shared learned modality embedding to both image and video
+    # generation tokens (``media_modality_embed``). Mutually exclusive with
+    # ``enable_vision_modality_embeddings``. Disabled by default.
+    enable_media_modality_embedding: bool = False
 
     patch_spatial: int = 2
     max_vae_latent_side_after_patchify: int = (
@@ -43,22 +60,9 @@ class DiffusionExpertConfig:
 
 
 @attrs.define(slots=False)
-class LBLConfig:
-    # For load balancing loss computation.
-    # - "local": Use the fraction of tokens routed to each expert only for the local rank.
-    # - "global": Use the fraction of tokens routed to each expert across all ranks.
-    method: str = "local"
-
-    # Coefficients for the load balancing loss.
-    # - "und": Coefficient for the load balancing loss for the "und" pathway.
-    # - "gen": Coefficient for the load balancing loss for the "gen" pathway.
-    coeff_und: float | None = None
-    coeff_gen: float | None = None
-
-
-@attrs.define(slots=False)
 class RectifiedFlowTrainingConfig:
     shift: Any = 5  # Training time shift. If dict, maps resolution (str) to shift value (int)
+    shift_image: Any | None = None  # Image-specific shift; None inherits shift
     use_dynamic_shift: bool = False  # Whether to use dynamic shifting
     train_time_image_distribution: str = "logitnormal"  # Training time distribution for images
     train_time_video_distribution: str = "logitnormal"  # Training time distribution for videos
@@ -95,6 +99,23 @@ class RectifiedFlowTrainingConfig:
     # (T-K)/T, which undertrains the attend-to-clean-history dynamics. Kept
     # False by default to preserve legacy loss magnitudes; enable for AR/DF training.
     normalize_loss_by_active: bool = False
+
+    # Sample-level (vs rank-level) loss averaging for the vision modality.
+    #
+    # By default the vision loss on each rank is a mean over that rank's samples, and
+    # FSDP/DDP averages gradients across ranks — so every *rank* contributes equally
+    # regardless of how many image/video samples it holds ("rank-level averaging").
+    # When ranks carry different sample counts this over-weights samples on sparse ranks.
+    #
+    # When True, the loss is renormalized so every *sample* contributes equally across
+    # the whole data-parallel group: each iteration all-reduces the total number of image
+    # and video samples over the DP group, and image and video losses are each normalized
+    # by their own global sample count and then summed. This counteracts the framework's
+    # rank-level gradient averaging so the effective objective is a true per-sample mean.
+    # The two independently normalized terms are weighted by the existing `image_loss_scale`
+    # (images; falls back to `loss_scale` when None) and `loss_scale` (videos), so their
+    # balance is tuned with the same knobs as the legacy rank-level path.
+    sample_level_loss_averaging: bool = False
 
 
 @attrs.define(slots=False)
@@ -141,8 +162,17 @@ class OmniMoTModelConfig:
     # Parallelism (CP, CFGP, FSDP, DP) and FSDP reduce-dtype configuration.
     parallelism: ParallelismConfig = ParallelismConfig()
 
+    # Tensor layout at the attention boundary when context parallelism is enabled.
+    attention_io_layout: AttentionIOLayout = "sequence_sharded"
+
     # torch.compile knobs (enabled, compiled_region, dynamic, ...).
     compile: CompileConfig = CompileConfig()
+
+    # Post-training quantization + ModelOpt FP8 checkpoint metadata. Mirrored
+    # from Cosmos3OmniConfig.quantization (see ``inference/model.py``) so
+    # ``build_net`` can read modelopt_fp8_checkpoint_path / target_fqns without
+    # reaching outside the model config schema.
+    quantization: QuantizationConfig = QuantizationConfig()
 
     # Activation-checkpointing policy (trade-off between memory and speed).
     activation_checkpointing: ActivationCheckpointingConfig = ActivationCheckpointingConfig()
@@ -189,6 +219,10 @@ class OmniMoTModelConfig:
     # "three_way" must only be used when introducing sparsity
     joint_attn_implementation: str = "two_way"  # "two_way" or "three_way"
 
+    # Whether the within-sample GEN attention runs as one masked FlexAttention call, and under
+    # what mask and kernels.
+    flex_attention: FlexAttentionConfig = FlexAttentionConfig()
+
     # Per-layer NATTEN parameters
     # Must use "three_way" attention if used.
     # If None, all attention layers remain dense.
@@ -234,6 +268,7 @@ class OmniMoTModelConfig:
     # Only supports image2video modes (with or without actions).
     # Requires joint_attn_implementation="three_way".
     video_temporal_causal: bool = False
+
     # "none":             standard joint denoising (shared σ, no clean context)
     # "teacher_forcing":  all frames noised with shared σ; clean history via cross-attention
     # "diffusion_forcing": each latent frame gets independent σ ~ Uniform[0,1]

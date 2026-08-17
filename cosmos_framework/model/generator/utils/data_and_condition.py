@@ -34,6 +34,12 @@ class GenerationDataClean:
     # to each sample (e.g. [2, 2, ...]).  None for standard T2I/T2V (one item per sample).
     num_vision_items_per_sample: list[int] | None = None
 
+    # Multiview (per-camera VAE encoding): number of camera views packed into each
+    # flattened vision item, parallel to x0_tokens_vision. Each item concatenates its
+    # camera clips along the latent temporal axis (camera-major), so latent_t is
+    # num_views * frames_per_view. None when per-camera VAE encoding is disabled.
+    num_views_per_vision_item: list[int] | None = None
+
     # Audio (Sound)
     raw_state_sound: torch.Tensor | None = None
     x0_tokens_sound: torch.Tensor | None = None

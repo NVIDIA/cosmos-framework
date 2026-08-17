@@ -394,9 +394,12 @@ def _build_model_key_by_tail(state_dict: dict) -> dict[str, str]:
 def _is_moe_vlm(model: torch.nn.Module) -> bool:
     """Detect whether an HF VLM is a Mixture-of-Experts model.
 
-    MoE VLMs (Qwen3-VL-30B-A3B, Qwen3-VL-235B-A22B) need replicated-gate +
-    FSDP-fused-expert shard rules that load_vlm_model does NOT yet implement.
-    Callers use this to raise NotImplementedError before sharding.
+    MoE VLMs (Qwen3-VL-30B-A3B, Qwen3-VL-235B-A22B) keep their experts as
+    fused ``[num_experts, ...]`` parameters (see
+    ``models/reasoner/qwen3_vl_moe/moe.py``), so the expert axis IS dim 0 and
+    FSDP shards them with the same rule as any dense weight — load_vlm_model
+    needs no MoE-specific shard handling.  Detection is used for logging, so a
+    mis-shaped expert tensor can be attributed to an MoE checkpoint.
 
     Detection sources (any one is sufficient):
     - ``model.config.text_config.num_experts`` (if present and non-None)
@@ -1240,8 +1243,9 @@ def load_vlm_model(
     credential_path: str | None,
     parallel_dims: ParallelDims | None,
     skip_patterns: list[str] | None = None,
+    optional_missing_patterns: list[str] | None = None,
 ) -> set[str]:
-    """Load a HF VLM checkpoint (safetensors) into an FSDP-wrapped HFModel.
+    """Load safetensors into an HF VLM or a compatible state-dict module.
 
     Local paths and S3 URIs are tried first; if no safetensors are found,
     explicit ``hf://org/model`` Hub URIs and bare ``org/model`` repo IDs fall
@@ -1254,14 +1258,20 @@ def load_vlm_model(
     completeness in both directions; the vision-shard content hash is checked
     first (:func:`_verify_edge_vision_shard_hash`).
 
-    Both ``tensor_names_to_skip`` and ``extra_skip_patterns`` are lists of
-    regex patterns applied to the RESOLVED model key (post-name_converter).
-    Phase-5 skips any model key matched by either list; Phase-6's
-    completeness check tolerates missing model keys matched by either
-    list.  The two kwargs are semantically identical — separate names let
-    call sites distinguish "model-type fixed skips" (from
-    ``_tensor_names_to_skip_for``) from "overlay-specific skips" (from
-    ``VLMModel._init_vlm`` for the pretrained_weights.backbone_path overlay).
+    The destination may mix FSDP-managed ``DTensor`` parameters with regular
+    replicated parameters. Checkpoint tensors are sharded only for ``DTensor``
+    targets; regular targets receive the full tensor on every rank. This lets a
+    frozen modality module kept outside FSDP reuse the same distributed I/O.
+
+    ``skip_patterns`` are regexes applied to the resolved model key
+    (post-name_converter). A matching checkpoint tensor is not copied, and a
+    matching model key may also be absent from the checkpoint.
+
+    ``optional_missing_patterns`` only relaxes the Phase-6 completeness
+    check. A matching tensor is still copied and reported in ``keys_loaded``
+    when present; only its absence from the checkpoint is tolerated. This is
+    suitable for newly added modules that should resume when their weights
+    exist while remaining compatible with older checkpoints.
 
     Cosmos-rl-style universal loader — no per-family hand-coded key mapping.
     Resolves the FSDP shard sub-group via :func:`_get_dp_shard_mesh`, which
@@ -1270,9 +1280,10 @@ def load_vlm_model(
     in their own overlay meshes and do NOT participate in checkpoint sharding.
 
     Preconditions:
-    - ``parallelize()`` has been called on the HFModel (parameters are DTensors).
-    - ``HFModel.tie_embeddings()`` has been called before this function so that
-      tied ``lm_head.weight`` / ``embed_tokens.weight`` share DTensor storage.
+    - Any FSDP-managed destination parameters have already been parallelized;
+      regular replicated parameters are also supported.
+    - For a VLM with tied embeddings, ``HFModel.tie_embeddings()`` has been
+      called first so ``lm_head.weight`` / ``embed_tokens.weight`` share storage.
     - When ``parallel_dims`` is provided AND ``parallel_dims.dp_shard > 1``,
       ``parallel_dims.build_meshes()`` MUST have been called by the caller.
       Otherwise ``dp_shard_mesh`` returns None and the loader silently falls
@@ -1281,8 +1292,23 @@ def load_vlm_model(
       correctness regression for FSDP runs.  Pass ``parallel_dims=None``
       explicitly for the single-process / unit-test fallback.
 
+    Args:
+        model: Destination module whose state dict receives checkpoint tensors.
+        checkpoint_path: Local, S3/GCS, or Hugging Face checkpoint path.
+        credential_path: Optional credentials for an object-store checkpoint.
+        parallel_dims: Distributed layout, or ``None`` for single-process loading.
+        skip_patterns: Optional regexes for model keys that must not be loaded
+            even when present and may be absent.
+        optional_missing_patterns: Optional regexes for model keys that are
+            loaded normally when present but may be absent.
+
+    MoE VLMs (Qwen3-VL-30B-A3B, Qwen3-VL-235B-A22B) are supported: their fused
+    ``mlp.experts.{gate_up_proj,down_proj}`` tensors carry the expert count on
+    dim 0, which is the axis FSDP shards, so they flow through the same dim-0
+    slicing as dense weights.  Expert parallelism is not modelled by
+    ``ParallelDims``; a dedicated expert mesh would need its own shard rule.
+
     Raises:
-        NotImplementedError: for MoE VLMs (not yet supported — see spec §2.2).
         ValueError: when the checkpoint is missing a required model parameter.
 
     Returns:
@@ -1304,14 +1330,11 @@ def load_vlm_model(
         hf_conv_map=hf_conv_map if hf_conv_map else None,
     )
 
-    # Phase 4: MoE precheck — fail early rather than silently mis-shard.
+    # Phase 4: MoE fused expert tensors are sharded by the dense dim-0 rule
+    # below (dim 0 is the expert axis); logged so an expert shape mismatch can
+    # be attributed to the MoE layout.
     if _is_moe_vlm(model):
-        raise NotImplementedError(
-            "load_vlm_model does not yet support MoE VLMs "
-            "(e.g. Qwen3-VL-30B-A3B, Qwen3-VL-235B-A22B). Expected follow-up MR "
-            "ports cosmos-rl's is_moe_mlp_fused_into_dp_shard / replicated-gate "
-            "handling. Use a dense VLM checkpoint (2B, 4B, 8B, 32B) until then."
-        )
+        log.info("load_vlm_model: MoE VLM detected; fused expert tensors are sharded on dim 0 (expert axis)")
 
     # Indexed-snapshot detection (nvidia/Cosmos3-Edge layout).  Every other
     # layout returns None and takes the existing flat-glob path unchanged.
@@ -1343,6 +1366,7 @@ def load_vlm_model(
     # semantics and avoids fragility with prefix variations.  The same
     # compiled list drives Phase-5 skip and Phase-6 tolerance.
     compiled_skip_patterns = [re.compile(p) for p in (skip_patterns or [])]
+    compiled_optional_missing_patterns = [re.compile(p) for p in (optional_missing_patterns or [])]
     keys_loaded: set[str] = set()
     skipped_model_keys: set[str] = set()
     unexpected_index_keys: set[str] = set()
@@ -1384,7 +1408,12 @@ def load_vlm_model(
         local_view = target.to_local() if is_dtensor else target
 
         # Slice with the FSDP (shard_rank, shard_size), not loader.rank/world_size.
-        shard = _shard_first_dim(tensor, shard_size, shard_rank)
+        # FSDP-managed parameters expose DTensor local views and therefore need
+        # the checkpoint tensor sliced to this rank. Modules deliberately kept
+        # outside FSDP (for example a frozen modality encoder) remain regular,
+        # replicated tensors and must receive the complete checkpoint tensor on
+        # every rank.
+        shard = _shard_first_dim(tensor, shard_size, shard_rank) if is_dtensor else tensor
         if shard.device != local_view.device:
             shard = shard.to(local_view.device)
 
@@ -1426,6 +1455,7 @@ def load_vlm_model(
     # handles the case where the ckpt doesn't contain the key at all, so the
     # Phase 5 loop never saw it and skipped_model_keys didn't accumulate it.
     missing = {k for k in missing if not any(p.fullmatch(k) for p in compiled_skip_patterns)}
+    missing = {k for k in missing if not any(p.fullmatch(k) for p in compiled_optional_missing_patterns)}
     tie = getattr(model.config, "tie_word_embeddings", False)
     real_missing = {k for k in missing if not (tie and "lm_head.weight" in k)}
     if real_missing:
@@ -1538,16 +1568,14 @@ def load_vfm_model(
     :func:`load_vlm_model`.  This keeps the loader composable with
     superset checkpoints.
 
-    Note on MoE: unlike :func:`load_vlm_model`, this loader does **not**
-    raise ``NotImplementedError`` for "MoE" models.  Cosmos3's MoT
-    pathway uses ``_moe_gen``-suffixed *parameter* duplication of the
-    standard dense layout — not HF-native ``mlp.experts.*`` modules — so
-    the FSDP shard rule is the same as for dense models (slice on dim 0).
-    True HF MoE VLMs (e.g. ``Qwen3-VL-30B-A3B``) inside
-    ``language_model`` would still need MoE-aware shard handling that
-    this loader does not implement; callers using such language towers
-    should rely on :func:`load_language_model`'s MoE-aware path
-    (under ``init_moe`` semantics) before composing.
+    Note on MoE: Cosmos3's MoT pathway uses ``_moe_gen``-suffixed
+    *parameter* duplication of the standard dense layout — not HF-native
+    ``mlp.experts.*`` modules — so the FSDP shard rule is the same as for
+    dense models (slice on dim 0).  True HF MoE VLMs (e.g.
+    ``Qwen3-VL-30B-A3B``) inside ``language_model`` fuse their experts
+    into ``[num_experts, ...]`` tensors, whose dim 0 is likewise the FSDP
+    shard axis, so they take the same path (as they do in
+    :func:`load_vlm_model`).
 
     Args:
         model: A ``Cosmos3VFMNetwork`` (typically wrapped in FSDP).

@@ -42,7 +42,7 @@ from cosmos_framework.data.generator.action.agibot_spec import (
     get_agibot_world_kind_spec,
     get_agibot_world_urdf_path,
 )
-from cosmos_framework.data.generator.action.pose_utils import convert_rotation
+from cosmos_framework.data.generator.action.utils.pose_utils import convert_rotation
 
 _GRIPPER_VALUE_EPS = 1e-4
 _QUATERNION_NORM_EPS = 1e-8

@@ -4,7 +4,7 @@
 import functools
 import math
 from dataclasses import dataclass
-from typing import Any, Callable, NamedTuple, Optional, Union
+from typing import Any, Callable, Optional, Union
 
 import torch
 import torch.nn as nn
@@ -40,6 +40,7 @@ from cosmos_framework.model.generator.reasoner.qwen3_vl_moe.configuration_qwen3_
 from cosmos_framework.model.generator.reasoner.qwen3_vl_moe.moe import (
     create_text_experts,
 )
+from cosmos_framework.model.generator.utils.load_balancing_stats import LBLMetadata, compute_sample_lbl_stats
 
 # Small additive constant to prevent log(0) in router entropy computation.
 ENTROPY_EPSILON = 1e-9
@@ -57,24 +58,6 @@ def _make_coactivation_pairs(top_k: int, device: torch.device | str | None = Non
     if not pairs:
         return torch.empty((0, 2), dtype=torch.long, device=target_device)
     return torch.tensor(pairs, dtype=torch.long, device=target_device)
-
-
-# We need to use namedtuple instead of dataclass because it is picklable.
-class LBLMetadata(NamedTuple):
-    """Metadata for load balancing loss computation."""
-
-    # The number of tokens routed to each expert for this rank.
-    num_tokens_per_expert: torch.Tensor
-
-    # The total number of tokens in the batch.
-    num_tokens: torch.Tensor
-
-    # The average probability of routing to each expert for this rank.
-    mean_router_prob_per_expert: torch.Tensor
-
-    # Number of experts selected per token (num_experts_per_tok).
-    # Shape is [1] per layer, or [num_layers, 1] after stacking across layers.
-    top_k: torch.Tensor
 
 
 @dataclass(frozen=True)
@@ -118,6 +101,22 @@ class CosineRouterConfig:
     input_centering: str = "none"
     ema_momentum: float = 0.99
     clamp_temperature: bool = True
+
+
+def _weighted_sum(values: torch.Tensor, token_weight: torch.Tensor | None) -> torch.Tensor:
+    """Sum over rows, counting each row by ``token_weight``.  [N,...] -> [...]"""
+    if token_weight is None:
+        return values.sum(dim=0)
+    weight = token_weight.to(values.dtype).reshape(-1, *([1] * (values.ndim - 1)))  # [N] or [N,1,...]
+    return (values * weight).sum(dim=0)
+
+
+def _weighted_mean(values: torch.Tensor, token_weight: torch.Tensor | None) -> torch.Tensor:
+    """Mean over rows, counting each row by ``token_weight``.  [N,D] -> [1,D]"""
+    if token_weight is None:
+        return values.mean(dim=0, keepdim=True)  # [1,D]
+    count = token_weight.to(values.dtype).sum().clamp_min(1.0)
+    return (_weighted_sum(values, token_weight) / count).unsqueeze(0)  # [1,D]
 
 
 class CosineRouter(nn.Module):
@@ -171,18 +170,26 @@ class CosineRouter(nn.Module):
             persistent=False,
         )
 
-    def forward(self, hidden_states: torch.Tensor, gate: nn.Linear) -> torch.Tensor:
-        """Compute standard or cosine router logits.  [N,D] -> [N,E]"""
+    def forward(
+        self, hidden_states: torch.Tensor, gate: nn.Linear, token_weight: torch.Tensor | None = None
+    ) -> torch.Tensor:
+        """Compute standard or cosine router logits.  [N,D] -> [N,E]
+
+        ``token_weight`` [N] is how much each row counts toward the input-centering
+        statistics: pass zeros for padding rows so they do not move the mean this router
+        subtracts. ``None`` counts every row, which is what an unpadded stream wants.
+        """
         x = hidden_states.to(torch.float32)  # [N,D]
         if self.input_centering == "ema":
             if self.training:
                 with torch.no_grad():
-                    router_bias_delta = x.detach().sum(dim=0)  # [D]
+                    contribution = x.detach() if token_weight is None else x.detach() * token_weight.unsqueeze(1)
+                    router_bias_delta = contribution.sum(dim=0)  # [D]
                     self.router_bias_sum.add_(router_bias_delta)  # [D]
-                    self.router_bias_count.add_(x.shape[0])  # [1]
+                    self.router_bias_count.add_(x.shape[0] if token_weight is None else token_weight.sum())  # [1]
             x = x - self.router_bias  # [N,D]
         elif self.input_centering == "batch_mean" and x.shape[0] > 1:
-            x = x - x.mean(dim=0, keepdim=True)  # [N,D]
+            x = x - _weighted_mean(x, token_weight)  # [N,D]
 
         if not self.use_cosine_similarity:
             return gate(x.to(hidden_states.dtype))  # [N,E]
@@ -260,6 +267,37 @@ class CosineRouter(nn.Module):
         self._init_input_centering_buffers(buffer_device=buffer_device)
 
 
+class SharedExpert(nn.Module):
+    """Always-on SwiGLU expert added to the sparse routed output."""
+
+    def __init__(
+        self,
+        hidden_size: int,
+        intermediate_size: int,
+        hidden_act: str,
+    ) -> None:
+        super().__init__()
+        if intermediate_size <= 0:
+            raise ValueError(f"intermediate_size must be positive, got {intermediate_size}")
+
+        self.intermediate_size: int = intermediate_size
+        self.act_fn: Callable[[torch.Tensor], torch.Tensor] = ACT2FN[hidden_act]
+        self.gate_up_proj: nn.Linear = nn.Linear(hidden_size, 2 * intermediate_size, bias=False)
+        self.down_proj: nn.Linear = nn.Linear(intermediate_size, hidden_size, bias=False)
+
+    def forward(self, hidden_states: torch.Tensor) -> torch.Tensor:
+        """Apply the shared expert. [N,D] -> [N,D]"""
+        gate_up = self.gate_up_proj(hidden_states)  # [N,2I]
+        gate, up = gate_up.chunk(2, dim=-1)  # 2x [N,I]
+        hidden_states = self.act_fn(gate) * up  # [N,I]
+        return self.down_proj(hidden_states)  # [N,D]
+
+    def init_weights(self, std: float) -> None:
+        """Initialize as a zero-output residual branch."""
+        nn.init.normal_(self.gate_up_proj.weight, mean=0.0, std=std)
+        nn.init.zeros_(self.down_proj.weight)
+
+
 @use_kernel_forward_from_hub("RMSNorm")
 class Qwen3VLMoeTextRMSNorm(nn.Module):
     def __init__(self, hidden_size, eps=1e-6):
@@ -281,6 +319,36 @@ class Qwen3VLMoeTextRMSNorm(nn.Module):
         return f"{tuple(self.weight.shape)}, eps={self.variance_epsilon}"
 
 
+def _weighted_expert_counts(
+    expert_indices: torch.Tensor, num_experts: int, token_weight: torch.Tensor | None
+) -> torch.Tensor:
+    """Tokens routed to each expert, counting each token by ``token_weight``.  [N,K] -> int32 [E]
+
+    The weighted form is a scatter rather than a histogram because it has to skip padding
+    rows without selecting them out: an index-select would make the count's shape depend on
+    how many rows are real, which is exactly the data-dependent shape the padded MoE path
+    exists to avoid. ``token_weight`` is a 0/1 mask, so integer accumulation loses nothing,
+    and the dtype is not free to change: this count reaches a Triton kernel that uses it as
+    a loop bound, which has to be an integer.
+    """
+    if token_weight is None:
+        # histc takes integers on CUDA but not on CPU, where it dispatches to the histogram
+        # kernel and raises `"histogram_cpu" not implemented for 'Int'`. Both come back as
+        # int32 so the caller sees one dtype regardless of device.
+        histc_input = (
+            expert_indices.float() if expert_indices.device.type == "cpu" else expert_indices.to(dtype=torch.int32)
+        )  # [N*K]
+        return torch.histc(
+            histc_input.view(-1),
+            bins=num_experts,
+            min=0,
+            max=num_experts - 1,
+        ).to(dtype=torch.int32)  # int32 [E]
+    weights = token_weight.unsqueeze(1).expand_as(expert_indices).reshape(-1).to(torch.int32)  # [N*K]
+    counts = torch.zeros(num_experts, dtype=torch.int32, device=expert_indices.device)  # [E]
+    return counts.scatter_add_(0, expert_indices.reshape(-1).to(torch.int64), weights)  # int32 [E]
+
+
 class Qwen3VLMoeTextSparseMoeBlock(nn.Module):
     def __init__(
         self,
@@ -288,6 +356,9 @@ class Qwen3VLMoeTextSparseMoeBlock(nn.Module):
         noisy_gating: bool = False,
         cosine_router_config: CosineRouterConfig | None = None,
         aux_loss_free_load_balancing_config: AuxLossFreeLoadBalancingConfig | None = None,
+        enable_shared_expert: bool = False,
+        shared_expert_intermediate_scale: int = 1,
+        top_k: int | None = None,
     ) -> None:
         load_balancing_config = aux_loss_free_load_balancing_config or AuxLossFreeLoadBalancingConfig()
         super().__init__()
@@ -297,7 +368,10 @@ class Qwen3VLMoeTextSparseMoeBlock(nn.Module):
         self.config = config
         self.hidden_size = config.hidden_size
         self.num_experts = config.num_experts
-        self.top_k = config.num_experts_per_tok
+        # Override config.num_experts_per_tok for this block only. This changes routing,
+        # not expert weight shapes, so existing checkpoints remain compatible.
+        self.top_k = config.num_experts_per_tok if top_k is None else top_k
+        assert 1 <= self.top_k <= self.num_experts, f"top_k must be in [1, {self.num_experts}], got {self.top_k}."
         self.gate = nn.Linear(config.hidden_size, config.num_experts, bias=False)
         # Aux-loss-free load balancing (gen tower only). A
         # gradient-free per-expert bias is added to the top-k SELECTION score. It is
@@ -339,7 +413,17 @@ class Qwen3VLMoeTextSparseMoeBlock(nn.Module):
             config=cosine_router_config or CosineRouterConfig(),
             hidden_size=config.hidden_size,
         )
-        self.experts = create_text_experts(config, implementation_type="grouped_mm")
+        # Shared expert is gen-tower only. Its zero-initialized output projection
+        # preserves the pretrained warm start while allowing an always-on FFN path
+        # to learn alongside the sparse experts.
+        self.shared_expert: SharedExpert | None = None
+        if enable_shared_expert:
+            self.shared_expert = SharedExpert(
+                hidden_size=config.hidden_size,
+                intermediate_size=config.moe_intermediate_size * shared_expert_intermediate_scale,
+                hidden_act=config.hidden_act,
+            )
+        self.experts = create_text_experts(config, implementation_type="grouped_mm", top_k=self.top_k)
 
         # ── Heatmap tracking ──────────────────────────────────────────────────────
         # Token counts read and reset by ExpertHeatmap on its own schedule.
@@ -412,7 +496,7 @@ class Qwen3VLMoeTextSparseMoeBlock(nn.Module):
         # with the module; persistent=False since it's derived from config constants.
         self.register_buffer(
             "_coact_pairs",
-            _make_coactivation_pairs(config.num_experts_per_tok),
+            _make_coactivation_pairs(self.top_k),
             persistent=False,
         )
 
@@ -422,7 +506,10 @@ class Qwen3VLMoeTextSparseMoeBlock(nn.Module):
         num_tokens: torch.Tensor,
         routing_probabilities: torch.Tensor,
         expert_indices: torch.Tensor,
+        token_weight: torch.Tensor | None = None,
     ) -> None:
+        # ``token_weight`` [num_tokens] zeroes out the padding rows of a padded stream, so every
+        # statistic below describes real tokens only. The counts arrive already weighted.
         # ── Heatmap + stability buffers ──────────────────────────────────────
         # Accumulate into both buffer sets so each callback can reset independently.
         self.total_tokens_per_expert.add_(num_tokens_per_expert)
@@ -436,13 +523,13 @@ class Qwen3VLMoeTextSparseMoeBlock(nn.Module):
         token_entropy = -torch.sum(
             routing_probabilities * torch.log(routing_probabilities + ENTROPY_EPSILON), dim=-1
         )  # [num_tokens]
-        self.sum_token_entropy.add_(token_entropy.sum().to(torch.float64))
+        self.sum_token_entropy.add_(_weighted_sum(token_entropy, token_weight).to(torch.float64))
         # Per-token soft effective experts = exp(H(p_t)), bounded in [1, N].
         # We accumulate the sum here (not the mean) so the callback can compute
         # mean_t exp(H_t) over any reset window. Kept separate from
         # sum_token_entropy because exp(mean H) != mean exp(H) in general.
-        self.sum_per_token_soft_eff.add_(token_entropy.exp().sum().to(torch.float64))
-        self.sum_router_prob_per_expert.add_(routing_probabilities.sum(dim=0).to(torch.float64))
+        self.sum_per_token_soft_eff.add_(_weighted_sum(token_entropy.exp(), token_weight).to(torch.float64))
+        self.sum_router_prob_per_expert.add_(_weighted_sum(routing_probabilities, token_weight).to(torch.float64))
 
         # ── Co-activation counting ────────────────────────────────────────────
         # For every ordered pair (k1, k2) of top-K slots with k1 < k2, find the
@@ -462,16 +549,39 @@ class Qwen3VLMoeTextSparseMoeBlock(nn.Module):
             dtype=self.coactivation_counts.dtype,
             device=self.coactivation_counts.device,
         )
-        flat_idx = flat_idx.reshape(-1)
-        flat_counts.scatter_add_(0, flat_idx, torch.ones_like(flat_idx, dtype=flat_counts.dtype))
+        # scatter_add_ requires the index and the source to agree in rank, so both are
+        # flattened before either is built.
+        flat_idx = flat_idx.reshape(-1)  # [num_tokens*C(K,2)]
+        if token_weight is None:
+            pair_counts = torch.ones_like(flat_idx, dtype=flat_counts.dtype)  # [num_tokens*C(K,2)]
+        else:
+            pair_counts = (
+                token_weight.unsqueeze(1).expand_as(e1).reshape(-1).to(flat_counts.dtype)
+            )  # [num_tokens*C(K,2)]
+        flat_counts.scatter_add_(0, flat_idx, pair_counts)
         self.coactivation_counts.view(-1).add_(flat_counts)
 
-    def forward(self, hidden_states: torch.Tensor) -> tuple[torch.Tensor, LBLMetadata]:
+    def forward(
+        self,
+        hidden_states: torch.Tensor,  # [N,hidden_size]
+        token_mask: torch.Tensor | None = None,  # [N]
+        sample_ids: torch.Tensor | None = None,  # [N]
+        num_samples: int | None = None,
+    ) -> tuple[torch.Tensor, LBLMetadata]:
         """
         This function performs the MoE computation, including routing, dispatch, GEMMs and combine.
 
         Args:
             hidden_states (torch.Tensor): (num_tokens, hidden_size)
+            token_mask (torch.Tensor | None): (num_tokens) boolean mask, false on the rows that are
+                padding rather than real tokens. Padding rows keep their place in every tensor, so
+                no shape here depends on how many rows are real, but they are zeroed on the way in,
+                given a zero combine weight, left out of every routing statistic, and routed to a
+                sentinel group the experts skip. They therefore cost no expert compute and
+                influence neither the output, nor the gradients, nor the load balancing. ``None``
+                treats every row as a real token.
+            sample_ids (torch.Tensor | None): (num_tokens) sample assignment for each token.
+            num_samples (int | None): Number of packed samples, excluding the padding sentinel.
 
         Returns:
             torch.Tensor: (num_tokens, hidden_size)
@@ -480,8 +590,17 @@ class Qwen3VLMoeTextSparseMoeBlock(nn.Module):
         """
         assert hidden_states.ndim == 2, "hidden_states must be of shape (num_tokens, hidden_size)"
         num_tokens = hidden_states.shape[0]
+        token_weight = None if token_mask is None else token_mask.to(torch.float32)  # [num_tokens]
+        if token_mask is not None:
+            # Padding rows are zeroed before anything reads them, so a non-finite value left in the
+            # padding by an upstream masked attention cannot reach the router or the experts. A
+            # select rather than a multiply because multiplying by zero would propagate it, both
+            # forwards and into the expert gradients.
+            hidden_states = torch.where(
+                token_mask.unsqueeze(1), hidden_states, hidden_states.new_zeros(())
+            )  # [num_tokens,hidden_size]
 
-        router_logits = self.cosine_router(hidden_states, self.gate)  # [num_tokens,num_experts]
+        router_logits = self.cosine_router(hidden_states, self.gate, token_weight)  # [num_tokens,num_experts]
         # Clean router scores. For sigmoid routing these are independent expert
         # affinities, while softmax routing produces a probability distribution.
         routing_scores = self.cosine_router.get_scores(router_logits)  # [num_tokens,num_experts]
@@ -535,59 +654,94 @@ class Qwen3VLMoeTextSparseMoeBlock(nn.Module):
         else:
             expert_weights = expert_weights / expert_weights.sum(dim=-1, keepdim=True)  # [num_tokens,top_k]
         expert_weights = expert_weights.to(hidden_states.dtype)  # [num_tokens,top_k]
+        if token_weight is not None:
+            # A zero combine weight is the implementation-independent half of making a padding row
+            # inert: it contributes nothing to ``routed_out`` and no gradient to the experts it was
+            # nominally dispatched to, whether or not the experts skip its compute.
+            expert_weights = expert_weights * token_weight.unsqueeze(1).to(expert_weights.dtype)
 
-        num_tokens_per_expert = torch.histc(
-            expert_indices.to(dtype=torch.int32).view(-1),
-            bins=self.num_experts,
-            min=0,
-            max=self.num_experts - 1,
-        )  # [num_experts]
+        # The dispatch histogram, which the experts also read as the map from an expert to its
+        # slots in the sorted order. It therefore counts exactly the rows that reach the GEMM:
+        # every row when there is no mask, and the real rows only when there is, because the
+        # experts route the padding to a sentinel group they never compute.
+        num_tokens_per_expert = _weighted_expert_counts(
+            expert_indices, self.num_experts, token_weight
+        )  # int32 [num_experts]
 
         routed_out = self.experts(
             hidden_states=hidden_states,
             topk_scores=expert_weights,
             expert_indices=expert_indices,
             num_tokens_per_expert=num_tokens_per_expert,
+            token_mask=token_mask,
         )  # [num_tokens,hidden_size]
 
+        if self.shared_expert is not None:
+            shared_out = self.shared_expert(hidden_states)  # [num_tokens,hidden_size]
+            routed_out = routed_out + shared_out  # [num_tokens,hidden_size]
+
         num_tokens_per_expert = num_tokens_per_expert.to(dtype=torch.int64)  # [num_experts]
-        num_tokens = torch.tensor(
-            [num_tokens],
-            dtype=torch.int64,
-            device=num_tokens_per_expert.device,
+        num_real_tokens = (
+            torch.tensor([num_tokens], dtype=torch.int64, device=num_tokens_per_expert.device)
+            if token_weight is None
+            else token_weight.sum().to(torch.int64).reshape(1)
         )  # [1]
 
         # Compute the average normalized routing probability per expert.
         # Sigmoid affinities are normalized across experts for this LBL term.
-        mean_router_prob_per_expert = torch.mean(routing_probabilities, dim=0)  # [num_experts]
+        mean_router_prob_per_expert = _weighted_mean(routing_probabilities, token_weight).squeeze(0)  # [num_experts]
 
         # LBL count: when bias correction is on, ``num_tokens_per_expert`` reflects
         # the bias-balanced dispatch, which would artificially satisfy LBL while
         # the unbiased routing mass stays concentrated. Feed LBL the gate-natural counts
-        # instead. With bias off this is bit-identical to ``num_tokens_per_expert``.
+        # instead. With bias off the gate-natural selection is the dispatch, so this is
+        # bit-identical to ``num_tokens_per_expert``.
         if self.aux_loss_free_load_balancing_config.enabled:
-            num_tokens_per_expert_lbl = torch.histc(
-                natural_indices.to(dtype=torch.int32).view(-1),
-                bins=self.num_experts,
-                min=0,
-                max=self.num_experts - 1,
-            ).to(dtype=torch.int64)  # [num_experts]
+            natural_counts = _weighted_expert_counts(natural_indices, self.num_experts, token_weight)
+            num_tokens_per_expert_lbl = natural_counts.to(dtype=torch.int64)  # [num_experts]
         else:
             num_tokens_per_expert_lbl = num_tokens_per_expert
 
+        sample_num_tokens_per_expert = None
+        sample_num_tokens = None
+        sample_router_prob_sum_per_expert = None
+        if sample_ids is not None:
+            assert num_samples is not None
+            if token_mask is not None:
+                # Route padding to the extra sample bucket that compute_sample_lbl_stats discards.
+                sample_ids = torch.where(
+                    token_mask,
+                    sample_ids,
+                    sample_ids.new_full((), num_samples),
+                )  # [num_tokens]
+            (
+                sample_num_tokens_per_expert,
+                sample_num_tokens,
+                sample_router_prob_sum_per_expert,
+            ) = compute_sample_lbl_stats(
+                routing_probabilities,
+                natural_indices,
+                sample_ids,
+                num_samples,
+            )
+
         lbl_metadata = LBLMetadata(
             num_tokens_per_expert=num_tokens_per_expert_lbl,
-            num_tokens=num_tokens,
+            num_tokens=num_real_tokens,
             mean_router_prob_per_expert=mean_router_prob_per_expert,
             top_k=torch.tensor([self.top_k], dtype=torch.int64, device=num_tokens_per_expert.device),  # [1]
+            sample_num_tokens_per_expert=sample_num_tokens_per_expert,
+            sample_num_tokens=sample_num_tokens,
+            sample_router_prob_sum_per_expert=sample_router_prob_sum_per_expert,
         )
 
         with torch.no_grad():
             self._update_moe_callback_stats(
                 num_tokens_per_expert=num_tokens_per_expert,
-                num_tokens=num_tokens,
+                num_tokens=num_real_tokens,
                 routing_probabilities=routing_probabilities,
                 expert_indices=expert_indices,
+                token_weight=token_weight,
             )
             # Accumulate the actual (bias-balanced) dispatch counts that drive
             # the bias controller toward an even load.
@@ -773,6 +927,8 @@ class Qwen3VLMoeTextSparseMoeBlock(nn.Module):
             # uniformly, giving symmetric exploration before gate_noise learns.
             nn.init.zeros_(self.gate_noise.weight)
         self.cosine_router.init_weights(buffer_device=buffer_device)
+        if self.shared_expert is not None:
+            self.shared_expert.init_weights(std=std)
 
 
 def rotate_half(x):

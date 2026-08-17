@@ -34,7 +34,8 @@ OPTIMIZER_KWARGS: dict[str, Any] = dict(
 # Muon / Dion2 share the standard factory knobs (keys_to_select, lr_multipliers,
 # disable_weight_decay_for_1d_params) plus their own orthogonalization
 # hyperparameters. ``fused`` is required by the factory; the AdamW side is fused
-# by construction and ``capturable`` / ``master_weights`` are forced on.
+# by construction, ``capturable`` is forced on, and ``master_weights`` is derived
+# from the parameter dtypes (see ``_needs_master_weights`` in utils/optimizer.py).
 MUON_OPTIMIZER_KWARGS: dict[str, Any] = dict(
     # Base learning rate. Muon scales matrix params by muon_lr_scale*sqrt(max(A,B));
     # the AdamW side and the per-param-group lr_multipliers use it directly.
@@ -56,6 +57,17 @@ MUON_OPTIMIZER_KWARGS: dict[str, Any] = dict(
     ns_steps=5,
     nesterov=True,
     use_distributed=True,
+    # MoE expert gate/up split and multi-layer NS megabatching.
+    # split_expert_gate_up splits gate_up_proj [E,H,2I] into two [E,H,I] halves
+    # so gate, up, and down are orthogonalized independently.
+    split_expert_gate_up=False,
+    # When True (requires split_expert_gate_up), batches gate+up+transposed-down
+    # from one layer into a single NS call.
+    batch_split_expert_ns=False,
+    # Maximum total [E,H,I] matrices per NS call across K consecutive layers.
+    # K = max(1, max_moe_expert_ns_matrices // (3 * E_local)).
+    # 0 = K=1 (one layer at a time, same as batch_split_expert_ns alone).
+    max_moe_expert_ns_matrices=0,
 )
 
 DION2_OPTIMIZER_KWARGS: dict[str, Any] = dict(
@@ -80,6 +92,15 @@ DION2_OPTIMIZER_KWARGS: dict[str, Any] = dict(
     # Dion2-specific: submatrix selection fraction and error-feedback decay.
     fraction=1.0,
     ef_decay=0.95,
+    # Maximum same-shape matrix count processed per rank in one redistribution.
+    # Each shape group independently uses the smaller of this cap and ceil(group_size / FSDP size).
+    max_dion2_megabatch_width=25,
+    # Opt-in Torch/NVTX annotations for forward/NS/reverse/apply phases.
+    dion2_profile_phases=False,
+    # MoE expert gate/up split and multi-layer NS megabatching.
+    split_expert_gate_up=False,
+    batch_split_expert_ns=False,
+    max_moe_expert_ns_matrices=0,
 )
 
 LAMBDACOSINE_KWARGS: dict[str, Any] = dict(
@@ -138,7 +159,7 @@ def register_optimizers(optimizer_kwargs: dict[str, Any]) -> None:
 
 
 def register_schedulers(lambdacosine_kwargs: dict[str, Any]) -> None:
-    """Register the ``lambdalinear`` and ``lambdacosine`` SKUs."""
+    """Register the learning-rate scheduler SKUs."""
     cs = ConfigStore.instance()
     cs.store(
         group="scheduler",
@@ -178,6 +199,24 @@ def register_schedulers(lambdacosine_kwargs: dict[str, Any]) -> None:
             decay_type="cosine",
             f_start=0.01,
             f_max=1.0,
+            f_min=0.1,
+        ),
+    )
+    # WSFD (Warmup-SlowDecay-FastDecay) scheduler for LLM pretraining
+    cs.store(
+        group="scheduler",
+        package="scheduler",
+        name="wsfd",
+        node=L(build_lr_scheduler)(
+            optimizer=PLACEHOLDER,
+            lr_scheduler_type="wsfd",
+            warm_up_steps=2000,
+            total_steps=50000,
+            decay_steps=5000,
+            decay_type="cosine",
+            f_start=0.01,
+            f_max=1.0,
+            f_cooldown_start=0.9,
             f_min=0.1,
         ),
     )

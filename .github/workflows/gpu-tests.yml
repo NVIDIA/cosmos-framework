@@ -9,7 +9,7 @@
 # The six GPU jobs then run (one at a time on the single runner):
 #   * training-smoke                — Nano SFT pipeline (convert -> train 5 -> export -> t2i)
 #   * generator-training-regression — vision_sft_nano loss vs goldens (4-GPU subset)
-#   * generator-inference-smoke     — Nano + Edge multi-modality inference (t2vs/t2v + policy + forward_dynamics)
+#   * generator-inference-smoke     — Nano + Edge multi-modality inference (t2vs/t2v + policy + forward_dynamics) + Nano ModelOpt FP8
 #   * distilled-inference-smoke     — Super 4-step T2I + I2V inference (4-GPU subset)
 #   * reasoner-inference-smoke      — Nano reasoner golden + Edge reasoner smoke + Qwen conversion coverage (4-GPU)
 #   * reasoner-training-regression  — llava_ov loss vs goldens (4-GPU subset)
@@ -18,7 +18,9 @@
 #   * a self-hosted runner labelled [self-hosted, gpu, h200] with 8 GPUs,
 #     NVIDIA drivers, and `uv` on PATH;
 #   * an `HF_TOKEN` repository secret (gated dataset/model downloads, incl. the
-#     streamed LLaVA-OneVision-Data dataset).
+#     streamed LLaVA-OneVision-Data dataset). The Nano ModelOpt FP8 cases also
+#     need it to read nvidia/Cosmos3-Experimental, which is not public; they skip
+#     (they do not fail) when it cannot.
 #
 # Inputs/checkpoints download to examples/ + the HF cache and are reused across
 # runs (the h100 goldens are reused on H200 — see _detect_arch).
@@ -111,7 +113,9 @@ jobs:
   generator-inference-smoke:
     needs: pre-commit
     runs-on: [self-hosted, gpu, h200]
-    timeout-minutes: 60
+    # 90 (not 60) since the Nano step gained the two ModelOpt FP8 cases: a 20 GB
+    # checkpoint on a cold cache plus two more 8-GPU runs.
+    timeout-minutes: 90
     env:
       HF_TOKEN: ${{ secrets.HF_TOKEN }}
       HF_HUB_DISABLE_XET: "1"
@@ -124,9 +128,14 @@ jobs:
         run: uv sync --all-extras --group=cu128-train
 
       # One inference call over t2vs (+sound), action policy, and forward_dynamics; checks each output.
+      # Plus the ModelOpt static-FP8 Nano checkpoint in both parallelism layouts
+      # (FSDP-sharded and replicated). The FP8 checkpoint lives in the
+      # access-controlled nvidia/Cosmos3-Experimental repo, so those two cases SKIP
+      # unless HF_TOKEN can read it — check the log for "no access to
+      # nvidia/Cosmos3-Experimental" before trusting a green run to have covered FP8.
       # MAX_GPUS defaults to 8. -s streams the live process log.
       # Reuse the same input-asset cache dir as the unittest job.
-      - name: Nano inference smoke (t2vs + action policy + forward_dynamics, 8 GPU)
+      - name: Nano inference smoke (t2vs + action policy + forward_dynamics + FP8, 8 GPU)
         run: |
           export LD_LIBRARY_PATH=
           export COSMOS_DOWNLOAD_CACHE_DIR="$RUNNER_WORKSPACE/cosmos_input_cache"
@@ -315,7 +324,44 @@ jobs:
           export LD_LIBRARY_PATH=
           export COSMOS_DOWNLOAD_CACHE_DIR="$RUNNER_WORKSPACE/cosmos_input_cache"
           uv run --all-extras --group=cu128-train python -m pytest -v -s \
-            cosmos_framework/ -o addopts=
+            cosmos_framework/ -o addopts= \
+            --deselect cosmos_framework/model/generator/mot/attention_test.py::test_two_way_attention_flex_matches_dense_across_batch_shapes
+
+      # Deselected above and run here instead, in a process of its own.
+      #
+      # NATTEN's fused-NA knobs are process-global, and
+      # cosmos_framework/model/attention/natten/functions.py turns them on at import time
+      # (set_memory_usage_preference("unrestricted"), use_kv_parallelism_in_fused_na(True))
+      # without ever putting them back. Once test_two_way_attention_vs_three_way_attention --
+      # the one test that dispatches to NATTEN -- has run in a process, this test's
+      # [triton-compile-dynamic] case comes back with NaN for dk across the second sample's
+      # whole UND span (17920/141312 elements, first at index (322, 0, 0)). It passes on its
+      # own, on both H100 and H200, so the two are coupled through process state rather than
+      # through anything either one computes.
+      #
+      # Resetting those knobs between the two tests does clear it, but only from a plugin
+      # loaded with -p; the same code in a conftest, a fixture finaliser or a trylast hook
+      # does not, which is not understood well enough to land as a fix. Separate processes
+      # are what the coupling cannot cross. Tracked in #179.
+      #
+      # The test itself arrives with #179, so on a branch that predates it there is nothing
+      # to run: a node id pytest cannot collect is a usage error (exit 4), not an empty run,
+      # which would fail this job on main until #179 lands. The grep is against the source
+      # rather than a --collect-only probe so that an import error still fails loudly
+      # instead of reading as "not there yet". The --deselect above needs no such guard;
+      # it is a no-op when nothing matches.
+      - name: Unit tests - two_way_attention flex vs dense (separate process)
+        run: |
+          export LD_LIBRARY_PATH=
+          export COSMOS_DOWNLOAD_CACHE_DIR="$RUNNER_WORKSPACE/cosmos_input_cache"
+          test_file=cosmos_framework/model/generator/mot/attention_test.py
+          test_name=test_two_way_attention_flex_matches_dense_across_batch_shapes
+          if ! grep -q "def $test_name" "$test_file"; then
+            echo "::notice::$test_name is not on this branch yet (arrives with #179); nothing to run."
+            exit 0
+          fi
+          uv run --all-extras --group=cu128-train python -m pytest -v -s \
+            "$test_file::$test_name" -o addopts=
 
       # The cfgp_ar / context_parallel tests call dist.init_process_group and
       # skip under plain pytest (world_size 1); they must be launched with

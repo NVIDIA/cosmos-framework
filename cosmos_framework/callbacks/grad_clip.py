@@ -10,19 +10,17 @@ from torch.distributed.tensor import DTensor
 
 from cosmos_framework.utils import log
 from cosmos_framework.utils.callback import Callback
+from cosmos_framework.utils.generator.input_probe import maybe_dump_post_clip
 
 
 def _fused_nan_to_num(grads: list[torch.Tensor]) -> None:
     """Replace NaN/Inf entries with 0.0 in every floating-point grad in-place.
 
     Runs eager, NOT ``@torch.compile``. Compiling this generates a GPU-only Triton
-    ``nan_to_num`` kernel, which crashes whenever any grad in the list is a CPU tensor (some
-    parameters carry a small CPU grad): the static CUDA launcher launches it with ``stream=0``
-    -> ``CUDA driver error: invalid argument``, and the standard launcher raises ``Pointer
-    argument cannot be accessed from Triton (cpu tensor?)``. Both were observed at 720 under
-    replay-TF + torch.compile (grad-clip runs at the optimizer step, after the large compiled
-    graphs are cached). Eager ``torch.nan_to_num`` handles CPU and CUDA grads alike; the fusion win
-    from compiling a handful of per-tensor ops once per step is negligible next to that fragility.
+    ``nan_to_num`` kernel, which crashes whenever any grad in the list is a CPU tensor.
+    Eager ``torch.nan_to_num`` handles CPU and CUDA grads alike; the fusion win
+    from compiling a handful of per-tensor ops once per step is negligible next
+    to that fragility.
     """
     grads = [g for g in grads if torch.is_floating_point(g)]
     for g in grads:
@@ -54,79 +52,76 @@ class _MagnitudeRecord:
         return avg_state
 
 
+def _mesh_key(param: torch.Tensor) -> str:
+    """Mesh-group key for ``param``: its mesh-dim names joined, else ``"default"``.
+
+    If one parameter belongs to multiple meshes, use a flattened mesh name
+    by concatenating all the mesh-dim names together.  ``mesh_dim_names``
+    is ``tuple[str, ...] | None`` on DeviceMesh — fall back to ``default``
+    when names weren't assigned.  Plain (non-DTensor) params also map to
+    ``"default"``.
+    """
+    if hasattr(param, "device_mesh"):
+        names = param.device_mesh.mesh_dim_names
+        return "-".join(names) if names else "default"
+    return "default"
+
+
+def _group_params_by_mesh(parameters: list[torch.Tensor]) -> dict[str, list[torch.Tensor]]:
+    """Group the parameters by their device meshes.
+
+    A parameter's mesh assignment is fixed once the model is built, so hot-path
+    callers are expected to build this mapping once and reuse it rather than
+    re-deriving mesh keys every optimizer step.
+    """
+    parameters_by_mesh: dict[str, list[torch.Tensor]] = defaultdict(list)
+    for param in parameters:
+        parameters_by_mesh[_mesh_key(param)].append(param)
+    return parameters_by_mesh
+
+
 @torch.no_grad()
-def _clip_grad(
-    parameters: list[torch.Tensor],
-    max_norm: float,
+def _total_norm_by_mesh(
+    parameters_by_mesh: dict[str, list[torch.Tensor]],
     norm_type: float = 2.0,
     error_if_nonfinite: bool = False,
     foreach: bool | None = None,
-    return_norm_only: bool = False,
 ) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
-    """
-    Clip the gradient norm of an iterable of parameters.
+    """Compute one global grad norm across pre-grouped mesh buckets.
 
     Gradient norm clipping requires computing the gradient norm over the entire model.
     `torch.nn.utils.clip_grad_norm_` only computes gradient norm along DP/FSDP/TP dimensions.
     We need to manually reduce the gradient norm across PP stages.
     See https://github.com/pytorch/torchtitan/issues/596 for details.
 
-    Params are grouped by their ``device_mesh`` (by mesh-dim-names string —
-    plain (non-DTensor) params map to ``"default"``). A scalar L2 norm is
-    computed per mesh group, DTensor results are reduced to local scalars
-    via ``.full_tensor()``, the per-mesh scalars are combined into one
-    global norm, and (unless ``return_norm_only=True``) every mesh group
-    is rescaled with that single global scalar.
+    A scalar L2 norm is computed per mesh group, DTensor results are reduced to
+    local scalars via ``.full_tensor()``, and the per-mesh scalars are combined
+    into one global norm.
 
-    Args:
-        parameters: an iterable of Tensors or a single Tensor that will have gradients normalized
-        max_norm (float): max norm of the gradients
-        norm_type (float): type of the used p-norm. Can be ``'inf'`` for
-            infinity norm.
-        error_if_nonfinite (bool): if True, an error is thrown if the total
-            norm of the gradients from :attr:`parameters` is ``nan``,
-            ``inf``, or ``-inf``. Default: False (will switch to True in the future)
-        foreach (bool): use the faster foreach-based implementation.
-            If ``None``, use the foreach implementation for CUDA and CPU native tensors and silently
-            fall back to the slow implementation for other device types.
-            Default: ``None``
-        return_norm_only: if True, skip in-place rescaling of grads and only
-            return the computed norms.
+    Every parameter in every group must have a gradient; callers are expected to
+    pre-filter, as :meth:`GradClip.on_before_optimizer_step` does when it builds
+    the groups.
+
+    ``parameters_by_mesh`` must be non-empty. Zero parameters have no meaningful
+    norm, and the caller that can hit that (a no-grad / all-frozen step) wants to
+    skip clipping entirely rather than rescale by some placeholder, so it is
+    rejected here instead of being given one.
 
     Returns:
         ``(total_norm, per_mesh_norms)`` where ``total_norm`` is the global
-        scalar norm used for the rescale, and ``per_mesh_norms`` maps each
-        mesh-dim-names key (or ``"default"`` for plain params) to its
-        pre-clip per-mesh L2 norm.
-
+        scalar norm, and ``per_mesh_norms`` maps each mesh-dim-names key
+        (or ``"default"`` for plain params) to its per-mesh L2 norm.
     """
-    # Group the parameters by their device meshes.
-    parameters_by_mesh: dict[str, list[torch.Tensor]] = defaultdict(list)
-    for param in parameters:
-        if param.grad is None:
-            raise ValueError(
-                f"_clip_grad received a parameter with no gradient "
-                f"(shape={tuple(param.shape)}, dtype={param.dtype}); "
-                "callers are expected to pre-filter."
-            )
-
-        # If one parameter belongs to multiple meshes, use a flattened mesh name
-        # by concatenating all the mesh-dim names together.  ``mesh_dim_names``
-        # is ``tuple[str, ...] | None`` on DeviceMesh — fall back to ``default``
-        # when names weren't assigned.
-        if hasattr(param, "device_mesh"):
-            names = param.device_mesh.mesh_dim_names
-            device_mesh_str = "-".join(names) if names else "default"
-        else:
-            device_mesh_str = "default"
-        parameters_by_mesh[device_mesh_str].append(param)
+    if not parameters_by_mesh:
+        raise ValueError(
+            "_total_norm_by_mesh received no mesh groups; a step with no gradients has no global "
+            "norm to compute, and the caller should skip clipping instead."
+        )
 
     # Compute the norm for each mesh group
     per_mesh_norms: dict[str, torch.Tensor] = {}
     per_mesh_norm_list = []
     for mesh, params in parameters_by_mesh.items():
-        # Every param reached here passed the ``param.grad is None`` check in
-        # the grouping loop above, so this list comprehension is total.
         grads = [p.grad for p in params]
         mesh_norm = torch.nn.utils.get_total_norm(grads, norm_type, error_if_nonfinite, foreach)
 
@@ -134,54 +129,94 @@ def _clip_grad(
         # `torch.distributed._tensor.ops.math_ops._NormPartial`.
         # We can simply reduce the DTensor to get the total norm in this
         # tensor's process group and then convert it to a local tensor.
-        # NOTE: It has two purposes:
-        # 1. to make sure the total norm is computed correctly when PP is used (see below)
-        # 2. to return a reduced mesh_norm tensor whose .item() would return the correct value
         if isinstance(mesh_norm, DTensor):
             # Will reach here if any non-PP parallelism is used.
             # If only using PP, mesh_norm will be a local tensor.
 
-            # Remove FT replicate dimension if it exists.
+            # Reduce over every mesh dimension — including an FT replicate dim if
+            # one exists — into a plain, rank-replicated tensor.
             mesh_norm = mesh_norm.full_tensor()
+
+        # Both paths are supposed to land on one number per group: ``get_total_norm``
+        # reduces to 0-dim and ``full_tensor()`` preserves that. A norm that arrives
+        # un-reduced instead (some future DTensor path keeping a replica dimension)
+        # would be logged as a meaningless per-mesh magnitude and, on the
+        # single-group path below, become a non-scalar ``total_norm`` that rescales
+        # grads elementwise. Raise rather than assert, so ``python -O`` cannot strip
+        # the check; one ``numel()`` per mesh group costs nothing.
+        if mesh_norm.numel() != 1:
+            raise ValueError(
+                f"grad norm for mesh {mesh!r} is not a scalar (shape {tuple(mesh_norm.shape)}); "
+                "it was not fully reduced over that mesh."
+            )
+
         # Expose the (rank-replicated) per-mesh scalar for diagnostic logging.
         per_mesh_norms[mesh] = mesh_norm
-
-        # Make the norm to be a 1D tensor so we can call cat() later.
-        if mesh_norm.ndim == 0:
-            mesh_norm = mesh_norm.reshape(1)
         per_mesh_norm_list.append(mesh_norm)
 
-    # Compute the total norm among all meshes.
+    # Compute the total norm among all meshes. ``get_total_norm`` always reduces
+    # to 0-dim and ``full_tensor()`` preserves that, so stack (rather than cat)
+    # turns the per-mesh scalars into the 1-D tensor to reduce over without
+    # reshaping any of them first.
     if len(per_mesh_norm_list) > 1:
-        per_mesh_norm_tensor = torch.cat(per_mesh_norm_list)
+        per_mesh_norm_tensor = torch.stack(per_mesh_norm_list)
         if math.isinf(norm_type):
             total_norm = torch.max(per_mesh_norm_tensor)
         else:
+            # In place on the freshly stacked copy, so per_mesh_norms is unaffected.
             per_mesh_norm_tensor **= norm_type
             total_norm = torch.sum(per_mesh_norm_tensor)
             total_norm **= 1.0 / norm_type
     else:
-        assert per_mesh_norm_list[0].numel() == 1, "total_norm should be a scalar"
-        total_norm = per_mesh_norm_list[0].view(-1)[0]
-
-    if not return_norm_only:
-        # Perform clipping on each mesh group
-        for mesh, params in parameters_by_mesh.items():
-            torch.nn.utils.clip_grads_with_norm_(params, max_norm, total_norm, foreach)
+        # A single mesh group's scalar — already checked to be one above — IS the
+        # global norm; skip the pow/sum/pow round trip. This is VFM's current
+        # FSDP-only path.
+        total_norm = per_mesh_norm_list[0]
 
     return total_norm, per_mesh_norms
+
+
+@torch.no_grad()
+def _clip_grads_with_global_norm(
+    parameters_by_mesh: dict[str, list[torch.Tensor]],
+    max_norm: float,
+    total_norm: torch.Tensor,
+    foreach: bool | None = None,
+) -> None:
+    """Do the clipping: scale every gradient in place by ``min(1, max_norm / total_norm)``.
+
+    This is where gradients are actually modified. ``total_norm`` is the norm the
+    caller already measured, not one recomputed here, and the clip is conditional
+    in the usual way — torch clamps the coefficient at 1.0, so a step whose norm
+    is already within ``max_norm`` comes out untouched.
+
+    What matters is that every group is passed the SAME ``total_norm``, which is
+    what makes this one global rescale of the whole model rather than one clip per
+    mesh. Giving each group its own norm would be stock ``clip_grad_norm_``
+    behaviour and would apply a different factor to, say, dense FSDP-sharded
+    params and EP-sharded MoE experts, distorting their relative magnitudes.
+
+    The loop exists because groups are the form the caller's parameters are
+    already in, having been grouped to compute the per-mesh norms; the factor
+    itself does not depend on the group. Flattening them into a single call is
+    therefore not obviously equivalent — one fused ``foreach`` multiply spanning
+    tensors from different meshes is not something to assume works.
+    """
+    for params in parameters_by_mesh.values():
+        torch.nn.utils.clip_grads_with_norm_(params, max_norm, total_norm, foreach)
 
 
 class GradClip(Callback):
     """Unified gradient-clipping callback for both VFM (diffusion) and VLM training.
 
-    The heavy lifting is delegated to ``_clip_grad``: it groups
-    params by their ``device_mesh`` (using mesh-dim-names as the key),
-    computes a scalar L2 norm per mesh group (reducing any DTensor result
-    via ``.full_tensor()``), combines the per-mesh scalars into ONE global
-    norm via ``sqrt(sum(per_mesh_norm**2))``, and applies
-    ``torch.nn.utils.clip_grads_with_norm_`` per mesh group with the SAME
-    global scalar — a SINGLE GLOBAL rescale across every parameter.
+    Params are grouped by their ``device_mesh`` (using mesh-dim-names as the
+    key) once and cached; each step ``_total_norm_by_mesh`` computes a scalar
+    L2 norm per mesh group (reducing any DTensor result via ``.full_tensor()``)
+    and combines the per-mesh scalars into ONE global norm via
+    ``sqrt(sum(per_mesh_norm**2))``, then ``_clip_grads_with_global_norm``
+    scales the gradients by ``min(1, clip_norm / global_norm)``, passing every
+    mesh group that same global scalar — a SINGLE GLOBAL rescale across every
+    parameter.
 
     This is necessary for correctness when parameters live on multiple device
     meshes (e.g. dense FSDP-shard + EP-shard MoE experts): clipping each
@@ -209,8 +244,9 @@ class GradClip(Callback):
 
     Args:
       clip_norm: max norm to clip to.
-      force_finite: if True, NaN/Inf in any grad is zeroed in-place before
-        the norm computation.
+      force_finite: if True, NaN/Inf in any grad is zeroed in-place and the
+        norm re-measured, on the steps where the computed norm comes back
+        non-finite (which is exactly the steps where some grad entry is).
       track_per_modality: if True, route stats into image/video buckets via
         ``model.is_image_batch(data_batch)``. If False, accumulate into a
         single un-bucketed log group.
@@ -230,9 +266,51 @@ class GradClip(Callback):
         # wandb keys are short (`clip_grad_norm/{mesh}`); for VFM the bucket is
         # "image" or "video" (`clip_grad_norm/image/{mesh}`).
         # Inner key: mesh string, plus the synthetic "global" key for the
-        # actual rescale norm returned by _clip_grad.
+        # actual global norm used for the rescale.
         self._states: dict[str, dict[str, _MagnitudeRecord]] = defaultdict(lambda: defaultdict(_MagnitudeRecord))
         self._state_key: str = ""
+
+        # The model parts the cache was built from, paired with the mesh grouping
+        # of every one of their parameters; filled on the first optimizer step and
+        # reused afterwards (see ``_mesh_groups``). Both the module tree walk and
+        # the mesh-key derivation are pure-Python and O(#params); rebuilding them
+        # every step put a few thousand Python frames on the critical path.
+        self._cached_mesh_groups: tuple[list[torch.nn.Module], dict[str, list[torch.Tensor]]] | None = None
+
+    def _mesh_groups(self, model_parts: list[torch.nn.Module]) -> dict[str, list[torch.Tensor]]:
+        """Mesh-grouped parameters for ``model_parts``, walking the tree only once.
+
+        ``Module.parameters()`` is a recursive generator over the whole module
+        tree, so calling it per step is expensive for a large model — and most of
+        that tree is frozen here anyway (``_build_params_with_metadata`` clears
+        ``requires_grad`` for everything outside ``keys_to_select``). Parameter
+        identity and mesh membership are both fixed once the model is built, so
+        the walk and the grouping are cached; only the per-step
+        ``grad is not None`` filter in ``on_before_optimizer_step`` stays dynamic,
+        because which params receive a gradient can vary by batch (e.g. image vs
+        video, audio vs no audio).
+
+        One callback instance is expected to serve one model for the life of a
+        run. Silently re-serving a cache built from some other model would clip
+        the wrong parameter set, so the parts are held and identity-checked
+        rather than compared by ``id()``, which is only unique among live
+        objects. Note that this cannot catch parameters being replaced *inside*
+        an unchanged module (progressive unfreezing, a LoRA merge, any
+        reparametrization); such a caller has to invalidate the cache itself.
+        """
+        if self._cached_mesh_groups is None:
+            params = [p for part in model_parts for p in part.parameters()]
+            self._cached_mesh_groups = (model_parts, _group_params_by_mesh(params))
+
+        cached_parts, mesh_groups = self._cached_mesh_groups
+        if len(cached_parts) != len(model_parts) or any(
+            cached is not part for cached, part in zip(cached_parts, model_parts, strict=True)
+        ):
+            raise RuntimeError(
+                f"{type(self).__name__} was called with different model parts than the ones its parameter "
+                "cache was built from; one callback instance must serve one model."
+            )
+        return mesh_groups
 
     def on_training_step_start(
         self,
@@ -265,63 +343,96 @@ class GradClip(Callback):
             # model_parts as list[ImaginaireModel] (FSDP + PP, no DDP).
             model_parts = model if isinstance(model, list) else [model]
 
-        # 2. Collect params with grads.
-        all_params: list[torch.Tensor] = []
-        for part in model_parts:
-            for p in part.parameters():
-                if p.grad is not None:
-                    all_params.append(p)
+        # 2. Collect params with grads, per mesh group. The grouping itself is
+        #    cached; only the grad-presence filter is redone each step.
+        grouped_params: dict[str, list[torch.Tensor]] = {}
+        for mesh, params in self._mesh_groups(model_parts).items():
+            with_grad = [p for p in params if p.grad is not None]
+            if with_grad:
+                grouped_params[mesh] = with_grad
 
-        # 3. No-grad / all-frozen step → skip. _clip_grad's empty
+        # 3. No-grad / all-frozen step → skip. There is nothing to clip, and
+        #    ``_total_norm_by_mesh`` rejects an empty grouping rather than
+        #    inventing a norm; deeper down, ``get_total_norm``'s own empty
         #    fallback uses torch.cuda.current_device() and would crash on CPU.
-        if not all_params:
+        if not grouped_params:
             return
 
-        # 4. Optionally zero NaN/Inf in grads.
-        if self.force_finite:
-            _fused_nan_to_num([p.grad for p in all_params])
-
-        # 5. Compute per-mesh norms, the global rescale norm, and clip in
-        #    one call. ``_clip_grad`` groups params by mesh,
-        #    computes per-mesh L2 norms (reducing DTensor results to local
-        #    scalars), combines them into a single global norm, and
-        #    rescales every mesh group with that scalar.
-        #
-        #    When ``force_finite`` is False we did NOT sanitize the grads, so
-        #    ask ``get_total_norm`` to raise rather than silently producing a
-        #    NaN ``total_norm`` that would taint every parameter on rescale.
-        global_norm, per_mesh_norms = _clip_grad(
-            all_params,
-            self.clip_norm,
+        # 4. Compute per-mesh L2 norms (reducing DTensor results to local
+        #    scalars) and combine them into the single global norm that will
+        #    rescale every mesh group.
+        global_norm, per_mesh_norms = _total_norm_by_mesh(
+            grouped_params,
             error_if_nonfinite=False,
             foreach=True,
         )
 
-        # 6. Record diagnostic stats: pre-clip per-mesh sub-norms plus the
+        # 5. Optionally zero NaN/Inf in grads, but only when the norm says
+        #    there is something to zero: any non-finite grad entry makes the
+        #    global norm non-finite, so this is exact, and it keeps the common
+        #    (finite) step from issuing one eager ``nan_to_num`` per gradient
+        #    tensor. The finiteness test syncs on a scalar; that is affordable
+        #    here because SkipNaNStep already all-reduces and ``.item()``s a
+        #    flag immediately before this callback, so the device is drained
+        #    either way. Drop SkipNaNStep and this becomes the step's first
+        #    sync point.
+        if self.force_finite and not bool(torch.isfinite(global_norm)):
+            _fused_nan_to_num([p.grad for params in grouped_params.values() for p in params])
+            # Re-measure so both the rescale and the logged diagnostics reflect
+            # the sanitized grads, matching the pre-sanitize-always behavior.
+            global_norm, per_mesh_norms = _total_norm_by_mesh(
+                grouped_params,
+                error_if_nonfinite=False,
+                foreach=True,
+            )
+
+        # 6. Clip: scale every grad by min(1, clip_norm / global_norm), one factor
+        #    for the whole model.
+        _clip_grads_with_global_norm(grouped_params, self.clip_norm, global_norm, foreach=True)
+
+        if not isinstance(model, list):
+            raw_model = getattr(getattr(model, "model", None), "model", model)
+            maybe_dump_post_clip(raw_model, global_norm, self.clip_norm, iteration, tag="i4")
+
+        # 7. Record diagnostic stats: pre-clip per-mesh sub-norms plus the
         #    actual global rescale norm.
         cur_state = self._states[self._state_key]
         for mesh_str, mesh_norm in per_mesh_norms.items():
             cur_state[mesh_str].update(mesh_norm)
         cur_state["global"].update(global_norm)
 
-        # 7. Log every logging_iter.  The reset is intentionally *outside*
-        #    the ``wandb.run`` gate: ``_MagnitudeRecord.get_stat`` is the
-        #    consumer that flushes the windowed accumulator, so coupling it
-        #    to wandb being live would let stats accumulate unboundedly
-        #    whenever wandb is disabled (smoke tests, ``job.wandb_mode=disabled``,
-        #    wandb init failure) and would back-fill any later wandb enablement
-        #    with the entire pre-enable history.
-        if iteration % self.config.trainer.logging_iter == 0:
-            log_dict: dict[str, float | int] = {"iteration": iteration}
-            for modality, state in self._states.items():
-                for mesh_str, record in state.items():
-                    avg = record.get_stat()
-                    if self.track_per_modality:
-                        key = f"clip_grad_norm/{modality}/{mesh_str}"
-                    else:
-                        key = f"clip_grad_norm/{mesh_str}"
-                    log_dict[key] = avg
-                    if mesh_str == "global":
-                        log.info(f"{key}: {avg:.5f} (iteration {iteration})", rank0_only=False)
-            if wandb.run:
-                wandb.log(log_dict, step=iteration)
+        # 8. Log after the optimizer-step counter advances, in
+        #    ``on_training_step_end``.
+
+    def on_training_step_end(
+        self,
+        model: torch.nn.Module | list[torch.nn.Module],
+        data_batch: dict[str, torch.Tensor],
+        output_batch: dict[str, torch.Tensor],
+        loss: torch.Tensor,
+        iteration: int = 0,
+    ) -> None:
+        """Log the stats accumulated by ``on_before_optimizer_step`` every logging_iter."""
+        del model, data_batch, output_batch, loss
+
+        if iteration % self.config.trainer.logging_iter != 0:
+            return
+        # The reset is intentionally *outside* the ``wandb.run`` gate:
+        # ``_MagnitudeRecord.get_stat`` is the consumer that flushes the
+        # windowed accumulator, so coupling it to wandb being live would let
+        # stats accumulate unboundedly whenever wandb is disabled (smoke tests,
+        # ``job.wandb_mode=disabled``, wandb init failure) and would back-fill
+        # any later wandb enablement with the entire pre-enable history.
+        log_dict: dict[str, float | int] = {"iteration": iteration}
+        for modality, state in self._states.items():
+            for mesh_str, record in state.items():
+                avg = record.get_stat()
+                if self.track_per_modality:
+                    key = f"clip_grad_norm/{modality}/{mesh_str}"
+                else:
+                    key = f"clip_grad_norm/{mesh_str}"
+                log_dict[key] = avg
+                if mesh_str == "global":
+                    log.info(f"{key}: {avg:.5f} (iteration {iteration})", rank0_only=False)
+        if wandb.run:
+            wandb.log(log_dict, step=iteration)

@@ -8,7 +8,12 @@ from __future__ import annotations
 import pytest
 from PIL import Image
 
-from cosmos_framework.utils.generator.image_resize import get_max_pixels_resized_size, resize_pil_image
+from cosmos_framework.utils.generator.image_resize import (
+    choose_aspect_nearest_shape,
+    get_max_pixels_resized_size,
+    resize_aspect_nearest_no_upscale,
+    resize_pil_image,
+)
 
 pytestmark = [pytest.mark.L0, pytest.mark.CPU]
 
@@ -40,3 +45,26 @@ def test_resize_pil_image_uses_computed_size() -> None:
     resized = resize_pil_image(image, max_pixels=1024 * 1024, padding_constant=32)
 
     assert resized.size == (1344, 768)
+
+
+@pytest.mark.parametrize(
+    ("source_size", "expected_size"),
+    [
+        ((1920, 1080), (768, 432)),
+        ((1024, 1024), (960, 960)),
+        ((640, 480), (640, 480)),
+    ],
+)
+def test_choose_aspect_nearest_shape_matches_the_vision_protocol(
+    source_size: tuple[int, int],
+    expected_size: tuple[int, int],
+) -> None:
+    assert choose_aspect_nearest_shape(source_size, max_size=960, padding_constant=16) == expected_size
+
+
+def test_resize_aspect_nearest_no_upscale_uses_the_selected_shape() -> None:
+    image = Image.new("RGB", (1920, 1080), (10, 20, 30))
+
+    resized = resize_aspect_nearest_no_upscale(image, max_size=960, padding_constant=16)
+
+    assert resized.size == (768, 432)

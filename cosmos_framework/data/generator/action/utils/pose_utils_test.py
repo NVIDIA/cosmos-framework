@@ -6,11 +6,12 @@ import pytest
 import torch
 from scipy.spatial.transform import Rotation as R
 
-from cosmos_framework.data.generator.action.pose_utils import (
+from cosmos_framework.data.generator.action.utils.pose_utils import (
     _normalize_rotation_matrices,
     _to_numpy_float32,
     build_abs_pose_from_components,
     convert_rotation,
+    pose_abs_to_abs9d,
     pose_abs_to_rel,
     pose_rel_to_abs,
 )
@@ -205,3 +206,30 @@ def test_pose_abs_to_rel_roundtrips_through_pose_rel_to_abs(
     )
 
     np.testing.assert_allclose(reconstructed, poses_abs, atol=1e-5)
+
+
+@pytest.mark.L0
+@pytest.mark.parametrize("dtype", [np.float32, np.float64])
+def test_pose9d_helpers_emit_float32_without_explicit_casts(dtype) -> None:
+    """The 9D forms return (T-1, 9) float32, whatever dtype comes in.
+
+    ``pose_abs_to_abs9d`` deliberately carries no dtype cast of its own beyond
+    the position slice: ``convert_rotation`` normalizes through
+    ``_to_numpy_float32``, and ``pose_abs_to_rel`` ends in
+    ``.astype(np.float32)``. This pins that, so the casts cannot creep back in
+    without a test failing.
+    """
+    poses_abs = _make_example_poses_abs().astype(dtype)  # (T, 4, 4)
+    num_frames = len(poses_abs)
+
+    rel = pose_abs_to_rel(poses_abs, rotation_format="rot6d", pose_convention="backward_framewise")
+    abs9 = pose_abs_to_abs9d(poses_abs)
+
+    for name, out in (("rel", rel), ("abs", abs9)):
+        assert out.shape == (num_frames - 1, 9), f"{name}: {out.shape}"
+        assert out.dtype == np.float32, f"{name}: {out.dtype}"
+
+    # The absolute form keeps the trajectory's own positions, offset by one
+    # frame; the relative form must not.
+    np.testing.assert_allclose(abs9[:, :3], poses_abs[1:, :3, 3], atol=1e-6)
+    assert not np.allclose(rel[:, :3], abs9[:, :3])

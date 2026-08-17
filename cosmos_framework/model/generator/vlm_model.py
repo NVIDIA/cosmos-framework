@@ -19,39 +19,91 @@ Phase 3 — init_flash_attn_meta ported to vfm/utils/flash_attn.py;
 
 import os
 import re
-from collections.abc import Callable
+from collections import OrderedDict
+from collections.abc import Callable, Mapping
 from functools import partial
+from typing import Any
 
 import torch
 import torch.nn as nn
+from torch.nn.modules.module import _IncompatibleKeys
 
 from cosmos_framework.utils.lazy_config import instantiate
 from cosmos_framework.model._base import ImaginaireModel
 from cosmos_framework.utils import log
 from cosmos_framework.model.generator.algorithm.loss.cross_entropy import cross_entropy_loss, weighted_cross_entropy_loss
+from cosmos_framework.model.generator.algorithm.loss.load_balancing import compute_load_balancing_loss
 from cosmos_framework.configs.base.defaults.parallelism import PRECISION_TO_TORCH_DTYPE
+from cosmos_framework.configs.base.defaults.reasoner import validate_sound_understanding_config
 from cosmos_framework.configs.base.reasoner.defaults.policy_config import VLMModelConfig
 from cosmos_framework.model.generator.hf_model import HFModel
 from cosmos_framework.model.generator.parallelize_vlm import parallelize
+from cosmos_framework.model.generator.utils.moe_utils import collect_hf_moe_lbl_metadata, set_hf_moe_token_mask
+from cosmos_framework.model.generator.utils.safetensors_loader import load_vlm_model
+from cosmos_framework.utils.generator.input_probe import (
+    maybe_dump_forward_result,
+    maybe_dump_gradients,
+    maybe_dump_model_inputs,
+    maybe_dump_post_optimizer,
+)
 from cosmos_framework.utils.generator.parallelism import ParallelDims
 from cosmos_framework.utils.generator.reasoner.constant import IGNORE_INDEX
-from cosmos_framework.utils.generator.reasoner.create_position_ids import get_position_ids
+from cosmos_framework.utils.generator.reasoner.pretrained_models_downloader import (
+    maybe_download_hf_model_from_s3,
+)
 
 # Model-type dispatch sets. Using hf_config.model_type (stable HF-defined string)
 # rather than backbone.model_name avoids the brittleness of substring-matching a local
 # filesystem path that VLMModel._init_vlm has already rewritten (see _init_vlm: the
 # downloader returns a local cache path, so the configured model name is lost).
 #
-# ``qwen3_vl_moe`` is listed here as forward-compat — MoE dispatch in every family
-# helper below is already wired for the 30B-A3B / 235B-A22B variants. End-to-end
-# training still fails earlier at load_vlm_model's MoE precheck
-# (safetensors_loader.py _is_moe_vlm / NotImplementedError) because sharded MoE
-# weight loading is unimplemented; see spec §2.2. Removing ``qwen3_vl_moe`` here
-# would regress the family helpers the moment MoE load support lands.
+# ``qwen3_vl_moe`` covers the 30B-A3B / 235B-A22B variants: MoE dispatch in every
+# family helper below is wired for them, and load_vlm_model loads their fused
+# ``mlp.experts.*`` tensors through the dense dim-0 shard rule (dim 0 is the
+# expert axis). Removing ``qwen3_vl_moe`` here would regress the family helpers.
 _QWEN_VL_TYPES = {"qwen2_5_vl", "qwen3_vl", "qwen3_vl_moe"}
 # InternVL variants register both "internvl" and "internvl_chat" as model_type
 # in the upstream InternVL HF policy registry.
 _INTERNVL_TYPES = {"internvl", "internvl_chat"}
+
+_SOUND_UND_ENCODER_STATE_PREFIX = "model.model.sound_und_model.encoder."
+
+
+def _canonical_param_name(name: str) -> str:
+    """Strip the wrapper prefixes ``parallelize`` inserts around each repeated block.
+
+    ``torch.compile`` contributes ``_orig_mod.`` and the activation-checkpoint wrapper
+    ``_checkpoint_wrapped_module.`` (see ``parallelize_vlm.apply_compile`` /
+    ``apply_ac``). Unlike ``state_dict()``, ``named_parameters()`` called from the ROOT does
+    not undo either rename — ``nn.Module._named_members`` reads each submodule's
+    ``_parameters`` directly rather than dispatching to the wrapper's own override — so any
+    name-based matching must canonicalize first or silently stop matching as soon as AC or
+    compile is enabled.
+    """
+    return name.replace("_orig_mod.", "").replace("_checkpoint_wrapped_module.", "")
+
+
+def _is_sound_und_encoder_state_dict_key(key: str) -> bool:
+    """Match only the standalone VLM's audio encoder state namespace."""
+    canonical_key = key.replace("_orig_mod.", "").replace("_checkpoint_wrapped_module.", "")
+    return canonical_key.startswith(_SOUND_UND_ENCODER_STATE_PREFIX)
+
+
+def _set_sound_und_encoder_dtype_for_fsdp(
+    hf_model: HFModel,
+    *,
+    precision: str,
+    fsdp_enabled: bool,
+) -> None:
+    """Store the replicated encoder in forward dtype only with FSDP MP.
+
+    Without FSDP, the projector stays in the model's master dtype, so the
+    encoder must stay there too. With FSDP mixed precision, the raw root casts
+    its projector to the forward dtype while the ignored encoder is not cast;
+    explicitly matching the encoder avoids an encoder→projector dtype mismatch.
+    """
+    if hf_model.sound_und and fsdp_enabled:
+        hf_model.model.sound_und_model.encoder.to(dtype=PRECISION_TO_TORCH_DTYPE[precision])
 
 
 def _get_overlay_config(model_type: str) -> tuple[list[str], Callable[[str], bool]]:
@@ -77,8 +129,8 @@ def _get_overlay_config(model_type: str) -> tuple[list[str], Callable[[str], boo
     families — safer than silently mis-skipping. Add a new entry when onboarding a
     new VLM family.
 
-    MoE note: ``qwen3_vl_moe`` is accepted here but end-to-end MoE training still
-    fails earlier at ``load_vlm_model``'s MoE precheck (see module docstring on
+    MoE note: ``qwen3_vl_moe`` shares the Qwen VL patterns — its experts live under
+    the same ``visual.*`` / language-tower split (see the module comment on
     ``_QWEN_VL_TYPES``).
     """
     if model_type in _QWEN_VL_TYPES:
@@ -208,6 +260,12 @@ def _apply_freeze_config(model: nn.Module, model_type: str, cfg) -> int:
 
     # Step 2 — regex override (mutually exclusive; already validated above).
     #
+    # Patterns are matched against the CANONICAL name, so an expression aimed inside a
+    # repeated block (e.g. r"layers\.\d+\.self_attn") keeps matching after `parallelize`
+    # wraps that block for activation checkpointing and torch.compile. Matching the raw
+    # `named_parameters()` name would fail silently: the `assert n > 0` below still passes as
+    # long as some other parameter matched.
+    #
     # `remove_duplicate=False` is required for tied weights. Qwen3 configs set
     # `tie_word_embeddings=True`, so `hf_model.tie_embeddings()` makes
     # `lm_head.weight` and `model.embed_tokens.weight` the same tensor. The default
@@ -223,11 +281,11 @@ def _apply_freeze_config(model: nn.Module, model_type: str, cfg) -> int:
         for p in model.parameters():
             p.requires_grad = False
         for param_name, p in model.named_parameters(remove_duplicate=False):
-            if any(re.search(pat, param_name) for pat in trainable_params):
+            if any(re.search(pat, _canonical_param_name(param_name)) for pat in trainable_params):
                 p.requires_grad = True
     elif frozen_params is not None:
         for param_name, p in model.named_parameters(remove_duplicate=False):
-            if any(re.search(pat, param_name) for pat in frozen_params):
+            if any(re.search(pat, _canonical_param_name(param_name)) for pat in frozen_params):
                 p.requires_grad = False
 
     n = sum(p.requires_grad for p in model.parameters())
@@ -251,25 +309,43 @@ class VLMModel(ImaginaireModel):
         from cosmos_framework.utils.generator.flash_attn import init_flash_attn_meta
 
         self.config = config
+        validate_sound_understanding_config(config.sound_und_config, sound_und=config.sound_und)
         # Expose model.precision so LowPrecisionCallback can read it (mirrors OmniMoTModel).
         self.precision = getattr(torch, config.precision)
+        self._parity_probe_step: int = 0
         init_flash_attn_meta(config.deterministic)
         self._init_vlm(config, checkpoint)
 
         # Apply freeze before the optimizer is built — ``build_optimizer`` reads
         # ``requires_grad`` off ``named_parameters``.
         n_trainable = _apply_freeze_config(self.model.model, self.hf_config.model_type, self.config.freeze)
+        if config.sound_und:
+            # The standalone artifact is the sole source of encoder weights.
+            # Keep it immutable even when a broad trainable_params expression
+            # (or a full-finetune config) would otherwise re-enable it.
+            self.model.model.sound_und_model.encoder.requires_grad_(False)
+            self.model.model.sound_und_model.encoder.eval()
+            if config.sound_und_config.freeze_projector:
+                self.model.model.sound_und_model.projector.requires_grad_(False)
+                self.model.model.sound_und_model.projector.eval()
+            n_trainable = sum(parameter.requires_grad for parameter in self.model.model.parameters())
+            assert n_trainable > 0, "audio freeze policy left 0 trainable parameters — check freeze patterns"
         log.info(
             f"freeze config applied (model_type={self.hf_config.model_type}): {n_trainable} trainable parameter tensors"
         )
 
-        dp_group = None
-        cp_group = None
-        if self.parallel_dims is not None:
-            if self.parallel_dims.dp_shard_enabled:
-                dp_group = self.parallel_dims.dp_shard_mesh.get_group()
-            if self.parallel_dims.cp_enabled:
-                cp_group = self.parallel_dims.cp_mesh.get_group()
+        if self.parallel_dims is not None and self.parallel_dims.cp_enabled:
+            # Both CE variants normalize over every rank in the world, which is only the
+            # count they want while each rank holds a different sample. CP breaks that:
+            # its ranks hold segments of one sequence, and no reduction over those has
+            # been verified against the objective trained here (see the loss module
+            # docstring). ``_init_vlm`` already asserts cp == 1 for the attention path,
+            # which makes this unreachable today — it is here so the loss keeps its own
+            # requirement if CP is ever wired into attention.
+            raise NotImplementedError(
+                f"VLM loss does not support context parallelism (got cp={self.parallel_dims.cp}); "
+                "set parallelism.context_parallel_shard_degree=1."
+            )
 
         if config.policy.use_weighted_ce:
             log.info(f"Using weighted CE loss with exponent={config.policy.weighted_ce_exponent}")
@@ -277,16 +353,12 @@ class VLMModel(ImaginaireModel):
                 weighted_cross_entropy_loss,
                 exponent=config.policy.weighted_ce_exponent,
                 loss_scaling_factor=1.0,
-                dp_group=dp_group,
-                cp_group=cp_group,
                 ignore_index=IGNORE_INDEX,
             )
         else:
             self._loss_fn = partial(
                 cross_entropy_loss,
                 loss_scaling_factor=1.0,
-                dp_group=dp_group,
-                cp_group=cp_group,
                 ignore_index=IGNORE_INDEX,
             )
 
@@ -297,16 +369,12 @@ class VLMModel(ImaginaireModel):
           a. Download HF weights from S3 to local cache.
           b. Meta-init HFModel (params on meta, buffers on CPU via include_buffers=False;
           c. Build ParallelDims + device mesh.
-          d. Apply FSDP2 via parallelize() — meta tensors are NOT auto-materialized.
+          d. Apply activation checkpointing, torch.compile and FSDP2 via parallelize() —
+             meta tensors are NOT auto-materialized.
           e. Explicitly materialize meta tensors; move CPU buffers to CUDA.
           f. Tie output embedding → input embedding if tie_word_embeddings=True.
           g. Load pretrain weights into sharded CUDA tensors.
-          h. Apply gradient checkpointing if configured.
         """
-        from cosmos_framework.utils.generator.reasoner.pretrained_models_downloader import (
-            maybe_download_hf_model_from_s3,
-        )
-
         policy = config.policy
 
         load_pretrain_weights = checkpoint.load_path == ""
@@ -333,8 +401,12 @@ class VLMModel(ImaginaireModel):
             # Default "cosmos" → cosmos_framework.model.attention (NATTEN/blackwell-fmha);
             # set policy.attn_implementation=flash_attention_2 to fall back.
             attn_implementation=policy.attn_implementation,
+            sound_und=config.sound_und,
+            sound_und_config=config.sound_und_config,
+            # Token policy needs the configured identity because local_path is
+            # a cache directory and no longer identifies the Edge Reasoner.
+            configured_model_name_or_path=policy.backbone.model_name,
         )
-
         # ── b.1. Early family-gate for backbone.pretrained_weights ──
         # Fail-fast on unsupported VLM families BEFORE any expensive work
         # (parallelize, materialize, base-weight load, overlay download).
@@ -373,28 +445,36 @@ class VLMModel(ImaginaireModel):
         if torch.distributed.is_initialized():
             parallel_dims.build_meshes(device_type="cuda")
 
-        # Replicate-only (DDP) is not implemented in Phase 2's parallelize().
-        # Raise early rather than running with no gradient synchronization and
-        # silently producing wrong training results.
-        if parallel_dims.dp_replicate_enabled and not parallel_dims.dp_shard_enabled:
-            raise NotImplementedError(
-                "VLMModel Phase 2 does not support replicate-only DDP "
-                "(dp_replicate > 1, dp_shard == 1). "
-                "Use dp_shard > 1 for FSDP2. DDP support is planned for Phase 3."
-            )
+        # dp_enabled, not dp_shard_enabled: replicate-only (dp_shard == 1,
+        # dp_replicate == world_size) still goes through fully_shard — on a 2-D
+        # mesh whose shard dim is 1 — so its mixed-precision policy applies and
+        # the encoder must be cast alongside the projector. Must track
+        # ``apply_fsdp``'s own guard.
+        _set_sound_und_encoder_dtype_for_fsdp(
+            hf_model,
+            precision=config.precision,
+            fsdp_enabled=parallel_dims.dp_enabled,
+        )
 
-        # ── d. Apply FSDP2 (+ optional torch.compile of the repeated blocks) ──
+        # ── d. Apply activation checkpointing, torch.compile and FSDP2 ──
         # config.compile is threaded through so model.config.compile.enabled=True
         # actually compiles each block in place (was previously a dead config on
-        # the VLM path — only the MoT path consumed it). See parallelize_vlm.
-        if torch.distributed.is_initialized():
-            parallelize(
-                hf_model,
-                parallel_dims,
-                config.parallelism,
-                config.precision,
-                compile_config=config.compile,
-            )
+        # the VLM path — only the MoT path consumed it). See parallelize_vlm for why the
+        # three passes must run in this order (AC wraps, compile compiles the wrapper, FSDP
+        # shards it).
+        # Called unconditionally, NOT under an is_initialized() guard: activation
+        # checkpointing and compile are independent of distribution, and a single-process
+        # run needs AC as much as a sharded one. apply_fsdp no-ops on its own when there is
+        # no data-parallel axis at all, which is the only case reachable without dist, so no
+        # mesh is touched here.
+        parallelize(
+            hf_model,
+            parallel_dims,
+            config.parallelism,
+            config.precision,
+            activation_checkpointing=config.activation_checkpointing,
+            compile_config=config.compile,
+        )
 
         # ── e. Materialize meta tensors on CUDA ──
         # FSDP2 fully_shard does not auto-materialize meta tensors, so allocate
@@ -405,6 +485,14 @@ class VLMModel(ImaginaireModel):
             lambda t: torch.empty_like(t, device="cuda") if t.device.type == "meta" else t.to("cuda"),
             recurse=True,
         )
+        if config.sound_und:
+            # ``to_empty`` deliberately discards meta initialization. Encoder
+            # tensors are populated by the authoritative artifact below. Let
+            # each audio backend restore its fresh state before checkpoint load;
+            # a VLM/DCP checkpoint may overwrite the projector later.
+            audio_model = hf_model.model.sound_und_model
+            buffer_device = audio_model.projector.linear_fc1.weight.device
+            audio_model.init_weights(buffer_device=buffer_device)
 
         # ── f. Tie embeddings (replaces the legacy post_to_empty_hook) ──
         hf_model.tie_embeddings()
@@ -462,11 +550,22 @@ class VLMModel(ImaginaireModel):
                     )
                 log.info(f"VLMModel: overlaid {len(lm_loaded)} language-model params from {llm_path}")
 
-        # ── i. Gradient checkpointing ──
-        # HF backbone supports only binary on/off via gradient_checkpointing_enable,
-        # so VLMActivationCheckpointingConfig.mode is restricted to {"full", "none"}.
-        if config.activation_checkpointing.mode == "full":
-            hf_model.apply_gradient_checkpointing()
+        # ── h. Load the immutable standalone audio encoder artifact ──
+        # This runs for both fresh starts and DCP resumes. On resume, DCP may
+        # subsequently restore the same encoder when it was checkpointed; when
+        # exclusion is enabled, these artifact weights remain authoritative.
+        if config.sound_und:
+            audio_config = config.sound_und_config
+            loaded_audio_keys = load_vlm_model(
+                model=hf_model.model.sound_und_model.encoder,
+                checkpoint_path=audio_config.encoder_checkpoint_path,
+                credential_path=audio_config.encoder_checkpoint_credentials_path or None,
+                parallel_dims=parallel_dims if torch.distributed.is_initialized() else None,
+            )
+            log.info(
+                f"VLMModel: loaded {len(loaded_audio_keys)} audio encoder tensors from "
+                f"{audio_config.encoder_checkpoint_path}"
+            )
 
         self.model = hf_model
         self.parallel_dims = parallel_dims
@@ -477,7 +576,71 @@ class VLMModel(ImaginaireModel):
         """Called by trainer after model.to("cuda"). No device move needed here."""
 
     def on_after_backward(self, iteration: int = 0) -> None:
-        """No-op — FSDP handles gradient synchronization internally."""
+        """Capture exact pre-clip gradients when deep parity probing is enabled."""
+        maybe_dump_gradients(self.model.model, self._parity_probe_step, tag="i4")
+
+    def on_before_zero_grad(
+        self,
+        optimizer: torch.optim.Optimizer,
+        scheduler: torch.optim.lr_scheduler.LRScheduler,
+        iteration: int,
+    ) -> None:
+        """Capture post-step parameters and optimizer state before gradients are cleared."""
+        del scheduler, iteration
+        maybe_dump_post_optimizer(self.model.model, optimizer, self._parity_probe_step, tag="i4")
+
+    def state_dict(
+        self,
+        destination: dict[str, Any] | None = None,
+        prefix: str = "",
+        keep_vars: bool = False,
+    ) -> dict[str, Any]:
+        """Optionally omit the immutable artifact-backed audio encoder."""
+        state_dict = super().state_dict(destination=destination, prefix=prefix, keep_vars=keep_vars)
+        exclude_encoder = (
+            self.config.sound_und and self.config.sound_und_config.exclude_frozen_encoder_from_training_checkpoint
+        )
+        if not exclude_encoder:
+            return state_dict
+
+        for key in tuple(state_dict):
+            if (not prefix or key.startswith(prefix)) and _is_sound_und_encoder_state_dict_key(
+                key.removeprefix(prefix)
+            ):
+                del state_dict[key]
+        return state_dict
+
+    def load_state_dict(
+        self,
+        state_dict: Mapping[str, Any],
+        strict: bool = True,
+        assign: bool = False,
+    ) -> _IncompatibleKeys:
+        """Restore trainable state while preserving an excluded encoder artifact."""
+        exclude_encoder = (
+            self.config.sound_und and self.config.sound_und_config.exclude_frozen_encoder_from_training_checkpoint
+        )
+        if not exclude_encoder:
+            return super().load_state_dict(state_dict, strict=strict, assign=assign)
+
+        filtered_state_dict = OrderedDict(
+            (key, value) for key, value in state_dict.items() if not _is_sound_und_encoder_state_dict_key(key)
+        )
+        metadata = getattr(state_dict, "_metadata", None)
+        if metadata is not None:
+            filtered_state_dict._metadata = metadata  # type: ignore[attr-defined]
+
+        incompatible = super().load_state_dict(filtered_state_dict, strict=False, assign=assign)
+        missing_keys = [key for key in incompatible.missing_keys if not _is_sound_und_encoder_state_dict_key(key)]
+        unexpected_keys = list(incompatible.unexpected_keys)
+        if strict and (missing_keys or unexpected_keys):
+            errors = []
+            if missing_keys:
+                errors.append(f"Missing key(s): {', '.join(repr(key) for key in missing_keys)}")
+            if unexpected_keys:
+                errors.append(f"Unexpected key(s): {', '.join(repr(key) for key in unexpected_keys)}")
+            raise RuntimeError(f"Error(s) in loading state_dict for {type(self).__name__}: " + "; ".join(errors))
+        return _IncompatibleKeys(missing_keys, unexpected_keys)
 
     def init_optimizer_scheduler(self, optimizer_config, scheduler_config):
         """Build optimizer + scheduler from hydra-instantiated configs.
@@ -495,28 +658,104 @@ class VLMModel(ImaginaireModel):
         scheduler = instantiate(scheduler_config, optimizer=optimizer)
         return optimizer, scheduler
 
-    def training_step(self, data: dict, iteration: int) -> tuple[dict, torch.Tensor]:
-        """position_ids → forward → CE loss."""
-        position_ids = get_position_ids(
-            self.hf_config,
-            input_ids=data["input_ids"],
-            image_grid_thw=data.get("image_grid_thw"),
-            video_grid_thw=data.get("video_grid_thw"),
-            attention_mask=data.get("attention_mask"),
+    def _set_moe_token_mask(self, attention_mask: torch.Tensor | None) -> None:
+        """Tell the MoE blocks which rows of this step are real tokens.
+
+        HF's sparse MoE block takes ``forward(hidden_states)`` and nothing else, so the
+        patched forward reads the mask off the module instead; see
+        ``moe_utils.set_hf_moe_token_mask``. Without it the padded rows are dispatched to
+        experts and counted in the routing statistics, and the auxiliary loss trains the
+        router to balance rows that carry no supervision — ``ignore_index`` keeps them out of
+        the cross-entropy, not out of this.
+
+        Publishing it unconditionally (rather than only when ``config.lbl.coeff`` is set) is
+        deliberate: the mask also decides which rows the experts compute, so skipping it would
+        leave the expert GEMMs padding-dependent even with the aux loss off.
+        """
+        if self.hf_config.model_type != "qwen3_vl_moe":
+            return
+
+        set_hf_moe_token_mask(self.model, attention_mask)
+
+    def _moe_load_balancing_loss(self) -> torch.Tensor | None:
+        """Build the MoE load-balancing auxiliary loss from this forward's routing stats.
+
+        Returns ``None`` for a dense backbone or when ``config.lbl.coeff`` is unset. The
+        statistics are stashed per layer by the patched MoE block forward and popped here;
+        see ``moe_utils.collect_hf_moe_lbl_metadata`` for why popping matters.
+
+        The stash is a side channel out of the block's forward, so it only stays
+        grad-connected under NON-reentrant activation checkpointing — reentrant recompute
+        runs the first pass under ``no_grad`` and would silently detach the router
+        probabilities, leaving the aux loss with no gradient. ``parallelize_vlm.apply_ac``
+        wraps blocks with ``ptd_checkpoint_wrapper``, whose ``checkpoint_impl`` defaults to
+        ``CheckpointImpl.NO_REENTRANT``.
+
+        Must be called OUTSIDE any compiled region: ``method="global"`` issues DP
+        collectives, which torch.compile may reorder into a deadlock (see
+        ``compute_load_balancing_loss``). ``training_step`` is eager, so that holds.
+
+        Imports are local because the MoE modules pull in Triton kernels that the dense
+        Qwen3-VL path must not require.
+        """
+        if self.hf_config.model_type != "qwen3_vl_moe":
+            return None
+
+        return compute_load_balancing_loss(
+            collect_hf_moe_lbl_metadata(self.model),
+            coeff=self.config.lbl.coeff,
+            method=self.config.lbl.method,
+            device_mesh=self.parallel_dims.dp_mesh if self.parallel_dims is not None else None,
         )
-        if position_ids is not None:
-            data["position_ids"] = position_ids
 
+    def training_step(self, data: dict, iteration: int) -> tuple[dict, torch.Tensor]:
+        """forward → CE loss, plus the MoE load-balancing loss when ``config.lbl`` enables it.
+
+        position_ids are intentionally NOT precomputed here: both the dense
+        (Qwen3-VL) and MoE (Qwen3-VL-MoE) backbones derive multimodal-RoPE
+        positions internally via their own ``get_rope_index`` when
+        ``position_ids is None`` (their forward is monkey-patched — see
+        ``hf_model`` / ``monkey_patch.patch_qwen3_vl_forward``). Relying on the
+        model's built-in path keeps the native ``[3, B, N]`` mRoPE layout and
+        avoids a redundant external reimplementation.
+
+        ``attention_mask`` is forwarded rather than dropped. Under the ``cosmos`` attention
+        implementation it changes nothing: ``hf_model`` registers that name in HF's
+        ``ALL_ATTENTION_FUNCTIONS`` only, and ``masking_utils._preprocess_mask_arguments``
+        returns no mask at all for an implementation absent from
+        ``ALL_MASK_ATTENTION_FUNCTIONS``, so the adapter attends causally over the whole
+        padded row — safe because ``custom_collate`` pads on the RIGHT and the pad rows are
+        ``ignore_index`` in the labels.
+
+        It is load-bearing for the sdpa / flash fallbacks (``policy.attn_implementation``).
+        Those DO build a mask, and when ``attention_mask`` is None that same function reads
+        the position ids as a packed batch (``find_packed_sequence_indices``: any step other
+        than +1 starts a new sequence). Qwen3-VL's mRoPE temporal ids repeat across an
+        image/video block, so every vision token would be taken for the start of a new
+        sequence and attention would be severed at each one.
+
+        It also reaches ``get_rope_index``, where it only keeps the scan from walking into
+        the trailing pads: right padding puts the real tokens first, so their positions —
+        and the loss — are the same either way. Left-padding would break that silently;
+        ``unit_tests/test_monkey_patch.py`` pins it.
+        """
         labels = data.pop("labels")
-        data.pop("attention_mask", None)
-        logits = self.model(**data)
-        loss = self._loss_fn(logits, labels)
+        self._set_moe_token_mask(data.get("attention_mask"))
 
-        # loss_avg: DP-averaged loss for logging (matches cosmos-rl ReduceOp.AVG).
-        # Does not affect the backward scalar. Pick the same 1-D sub-mesh the
-        # legacy single-mesh ``ParallelDims.dp_mesh`` returned — dp_shard if
-        # sharding is on, else dp_replicate — so the reduction group is
-        # byte-identical to pre-merge behavior.
+        maybe_dump_model_inputs(data, iteration, tag="i4", labels=labels)
+        self._parity_probe_step = iteration
+
+        logits = self.model(_probe_step=iteration, _probe_tag="i4", **data)
+        loss_kwargs = {"probe_step": iteration, "probe_tag": "i4"} if self.config.policy.use_weighted_ce else {}
+        loss = self._loss_fn(logits, labels, **loss_kwargs)
+
+        ce_loss = loss.detach().clone()
+        load_balancing_loss = self._moe_load_balancing_loss()
+        if load_balancing_loss is not None:
+            loss = loss + load_balancing_loss
+        maybe_dump_forward_result(logits, {"ce_loss": ce_loss, "total_loss": loss}, iteration, tag="i4")
+
+        # Match cosmos-rl's logged DP-average without changing the backward loss.
         loss_avg = loss.detach().clone()
         pd = getattr(self, "parallel_dims", None)
         dp_mesh = pd.dp_mesh if pd is not None else None
@@ -528,24 +767,24 @@ class VLMModel(ImaginaireModel):
         if not torch.distributed.is_initialized() or torch.distributed.get_rank() == 0:
             log.info(f"train/loss_avg: {loss_avg.item():.5f} (iteration {iteration})")
 
-        return {"loss": loss, "loss_avg": loss_avg, "labels": labels}, loss
+        output = {"loss": loss, "loss_avg": loss_avg, "labels": labels}
+        if load_balancing_loss is not None:
+            # loss/loss_avg are the full objective once the aux term is on; report the two
+            # components separately so a rising CE behind a falling total stays visible.
+            output["ce_loss"] = ce_loss
+            output["aux_loss"] = load_balancing_loss.detach()
+        return output, loss
 
     @torch.no_grad()
     def validation_step(self, data: dict, iteration: int) -> tuple[dict, torch.Tensor]:
         """Required: VLM experiments enable validation by default (pre_exp01x.py:607).
-        ImaginaireTrainer.validate() calls this — must not raise NotImplementedError."""
-        position_ids = get_position_ids(
-            self.hf_config,
-            input_ids=data["input_ids"],
-            image_grid_thw=data.get("image_grid_thw"),
-            video_grid_thw=data.get("video_grid_thw"),
-            attention_mask=data.get("attention_mask"),
-        )
-        if position_ids is not None:
-            data["position_ids"] = position_ids
+        ImaginaireTrainer.validate() calls this — must not raise NotImplementedError.
 
+        Like ``training_step``, position_ids are computed internally by the model and
+        ``attention_mask`` is forwarded (see that method's notes).
+        """
         labels = data.pop("labels")
-        data.pop("attention_mask", None)
+        self._set_moe_token_mask(data.get("attention_mask"))
         logits = self.model(**data)
         loss = self._loss_fn(logits, labels)
         return {"loss": loss, "labels": labels}, loss

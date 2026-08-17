@@ -30,6 +30,13 @@ All four samples produce a video; the policy sample additionally produces an
 action, the t2vs sample an audio track, and the transfer sample exercises the
 control-guidance branch.
 
+3. Two ``text2video`` calls against the ModelOpt static-FP8 Nano checkpoint, one
+   per parallelism layout (FSDP-sharded and replicated) -> a non-degenerate
+   ``vision.mp4`` each. Covers the FP8 checkpoint path end to end: detection,
+   the meta-device linear swap, the TorchAO weight install, and — in the sharded
+   layout — the FP8 all-gather. Skipped when the checkpoint is not reachable
+   (see ``_download_fp8_checkpoint``).
+
 Smoke-level only (output validity, not numeric goldens). The checkpoint + its
 tokenizers download from the HF Hub on first run and are reused afterward.
 
@@ -44,6 +51,7 @@ not collected.
 
 import json
 import os
+import re
 import shutil
 import socket
 import subprocess
@@ -147,6 +155,60 @@ _MULTI_CONTROL_SPEC = {
     "edge": {"weight": 0.5, "preset_edge_threshold": "medium"},
     "blur": {"weight": 0.5, "preset_blur_strength": "medium"},
     "emphasize_control_in_prompt": False,
+}
+
+# ModelOpt static-FP8 Cosmos3-Nano checkpoint. It is not published under its own
+# repository yet, so it cannot be a ``--checkpoint-path`` registry name (see
+# ``_CHECKPOINTS`` in ``cosmos_framework/inference/args.py``): it lives in a
+# subdirectory of the access-controlled nvidia/Cosmos3-Experimental repo, pinned to
+# the revision the FP8 loader was validated against. The test downloads that one
+# subdirectory and passes the resulting local path to the CLI. Once the checkpoint
+# is released under its own name, register it and drop ``_download_fp8_checkpoint``.
+_FP8_REPOSITORY = "nvidia/Cosmos3-Experimental"
+_FP8_REVISION = "f0cdb8ea37360e8510e2c0caf84c0f9f3e8751c8"
+_FP8_SUBDIRECTORY = "cosmos3-nano-fp8-14072026"
+
+# Emitted by ``swap_modelopt_fp8_linears_on_meta`` / ``install_torchao_float8_fsdp_support``
+# (``cosmos_framework/utils/generator/quantization.py``). The swap count is parsed rather
+# than string-matched: a checkpoint whose FP8 targets failed to resolve would swap zero
+# linears, run the whole model in bf16, and otherwise produce a perfectly valid video.
+_FP8_SWAP_LOG = re.compile(r"Swapped (\d+) linears to meta-device ModelOpt FP8 modules")
+_FP8_FSDP_LOG = "Installed TorchAO static-FP8 FSDP support"
+
+# Downscaled generation overrides shared by both FP8 layouts (480p / 29 frames /
+# 10 steps, one chunk). The FP8 path under test is per-tensor weight quantization,
+# which is independent of resolution and step count, so a short clip exercises it
+# just as well as the checkpoint's 720p/189-frame defaults at a fraction of the
+# runtime — the same trade-off ``_TRANSFER_SPEC`` above makes.
+_FP8_GENERATION_ARGS = (
+    "--resolution=480",
+    "--aspect-ratio=16,9",
+    "--fps=30",
+    "--num-frames=29",
+    "--num-steps=10",
+    "--seed=0",
+)
+
+# One entry per parallelism layout. ``sharded`` is the layout that matters most
+# here: FSDP2 all-gathers the FP8 weights through the TorchAO tensor-subclass
+# hooks, which is the path that does not exist upstream, and it is the only
+# layout a Super-class FP8 model fits in. ``replicated`` guards the
+# single-device-weights path that worked before those hooks were added.
+_FP8_LAYOUTS = {
+    "sharded": (
+        "--parallelism-preset=throughput",
+        "--dp-shard-size=8",
+        "--dp-replicate-size=1",
+        "--cp-size=1",
+        "--cfgp-size=1",
+    ),
+    "replicated": (
+        "--parallelism-preset=latency",
+        "--dp-shard-size=1",
+        "--dp-replicate-size=1",
+        "--cp-size=8",
+        "--cfgp-size=1",
+    ),
 }
 
 # Audio sanity thresholds for the muxed sound track.
@@ -279,32 +341,69 @@ def _assert_valid_action(content: dict, where: str) -> None:
     assert np.all(np.isfinite(arr)), f"action output has NaN/Inf ({where})"
 
 
+def _download_fp8_checkpoint() -> Path:
+    """Download the pinned ModelOpt FP8 Nano checkpoint and return its local root.
+
+    Skips the test — rather than failing it — when the repository is unreachable
+    for a credentials reason (no ``HF_TOKEN``, or a token without access to
+    nvidia/Cosmos3-Experimental), so a fork PR without the runner secret does not
+    go red. Any other failure (a deleted revision, a broken download) still fails
+    loudly: a silently-skipping FP8 job would look green while testing nothing.
+    """
+    from huggingface_hub import snapshot_download
+    from huggingface_hub.errors import GatedRepoError, HfHubHTTPError, RepositoryNotFoundError
+
+    try:
+        repo_root = snapshot_download(
+            repo_id=_FP8_REPOSITORY,
+            revision=_FP8_REVISION,
+            allow_patterns=[f"{_FP8_SUBDIRECTORY}/*"],
+        )
+    except (GatedRepoError, RepositoryNotFoundError) as error:
+        pytest.skip(f"no access to {_FP8_REPOSITORY} (needs an HF_TOKEN with read access): {error!r}")
+    except HfHubHTTPError as error:
+        status_code = getattr(error.response, "status_code", None)
+        if status_code in (401, 403):
+            pytest.skip(f"no access to {_FP8_REPOSITORY} (HTTP {status_code}): {error!r}")
+        raise
+
+    checkpoint_path = Path(repo_root) / _FP8_SUBDIRECTORY
+    assert (checkpoint_path / "hf_quant_config.json").is_file(), (
+        f"{checkpoint_path} is not a ModelOpt FP8 checkpoint (no hf_quant_config.json); "
+        f"revision {_FP8_REVISION} may have changed"
+    )
+    return checkpoint_path
+
+
 @pytest.fixture(scope="module", autouse=True)
-def _require_8_gpus() -> None:
-    """Skip the module unless we can launch an 8-GPU run here."""
+def _require_gpus() -> None:
+    """Skip the module unless we can launch a ``MAX_GPUS``-wide run here."""
     if shutil.which("torchrun") is None:
         pytest.skip("torchrun not on PATH -- must run inside the inference container")
     try:
         import torch
     except Exception as exc:  # pragma: no cover -- surfaces during dev only
         pytest.skip(f"torch unavailable ({exc!r})")
-    if not torch.cuda.is_available() or torch.cuda.device_count() < 8:
-        pytest.skip(f"requires 8 visible CUDA devices, found {torch.cuda.device_count()}")
+    if not torch.cuda.is_available() or torch.cuda.device_count() < MAX_GPUS:
+        pytest.skip(f"requires {MAX_GPUS} visible CUDA devices, found {torch.cuda.device_count()}")
 
 
-# Defined only when the active MAX_GPUS is 8 -- the conftest rejects ``gpus(N)``
-# markers outside ``ALL_NUM_GPUS = (0, 1, MAX_GPUS)``.
-if MAX_GPUS == 8:
+# Markers use MAX_GPUS because the conftest rejects ``gpus(N)`` outside
+# ``ALL_NUM_GPUS = (0, 1, MAX_GPUS)``. Cases that genuinely need 8 ranks carry
+# their own skipif below: on a smaller host only the 4-rank case can run, and
+# forcing the others onto fewer ranks would change what they cover (ParallelDims
+# fails when the parallelism product does not equal world_size).
+if MAX_GPUS in (4, 8):
 
     @pytest.mark.level(2)
-    @pytest.mark.gpus(8)
+    @pytest.mark.gpus(MAX_GPUS)
     def test_nano_inference_omni(tmp_path: Path) -> None:
         """Throughput run over t2vs + policy + forward_dynamics, plus a separate latency transfer run."""
         # --- 1) Throughput run: t2vs + policy + forward_dynamics ----------------
         out_dir = tmp_path / "out"
         cmd = [
             "torchrun",
-            "--nproc_per_node=8",
+            f"--nproc_per_node={MAX_GPUS}",
             f"--master_port={_free_port()}",
             "-m",
             "cosmos_framework.scripts.inference",
@@ -405,7 +504,7 @@ if MAX_GPUS == 8:
         _assert_video_has_content(transfer_video)
 
     @pytest.mark.level(2)
-    @pytest.mark.gpus(8)
+    @pytest.mark.gpus(MAX_GPUS)
     def test_nano_inference_multi_control_transfer(tmp_path: Path) -> None:
         """Multi-control transfer: edge + blur derived on the fly from ONE source
         video, blended by ``multi_control_two_way_attention``.
@@ -469,4 +568,64 @@ if MAX_GPUS == 8:
         )
         video = so.parent / "vision.mp4"
         assert video.is_file(), f"multi-control run produced no vision.mp4 ({so})"
+        _assert_video_has_content(video)
+
+    @pytest.mark.level(2)
+    @pytest.mark.gpus(MAX_GPUS)
+    # Unlike the cases above, this one cannot simply follow MAX_GPUS: the FP8
+    # setup pins cp_size=8 / dp_shard_size=8, which ParallelDims rejects against
+    # a smaller WORLD_SIZE. Running it below 8 needs a different parallelism
+    # layout, i.e. a different thing under test.
+    @pytest.mark.skipif(MAX_GPUS < 8, reason="FP8 setup pins 8-way cp/dp_shard")
+    @pytest.mark.parametrize("layout", sorted(_FP8_LAYOUTS))
+    def test_nano_fp8_inference(tmp_path: Path, layout: str) -> None:
+        """text2video from the ModelOpt static-FP8 Nano checkpoint, once per layout.
+
+        The FP8 checkpoint ships already-quantized E4M3 weights plus static
+        per-tensor scales, so this run covers a path the bf16 cases above never
+        touch: ``is_modelopt_fp8_checkpoint`` detection, the meta-device swap of the
+        target linears to TorchAO FP8 modules (before FSDP wrap, so peak memory
+        follows the FP8 shapes), the deferred weight install, and the FP8 forward.
+
+        ``sharded`` additionally covers the FSDP2 path — the TorchAO static-FP8
+        tensor upstream implements neither the all-gather hooks nor the shape ops
+        FSDP2 needs, so without the local support shim the run dies on the first
+        all-gather rather than producing a degraded video. Completing the run *is*
+        the assertion there; ``_assert_video_has_content`` then catches the
+        numerically-broken-but-still-running case (wrong scales -> collapsed clip).
+        """
+        checkpoint_path = _download_fp8_checkpoint()
+        out_dir = tmp_path / f"out_fp8_{layout}"
+        cmd = [
+            "torchrun",
+            f"--nproc_per_node={MAX_GPUS}",
+            f"--master_port={_free_port()}",
+            "-m",
+            "cosmos_framework.scripts.inference",
+            *_FP8_LAYOUTS[layout],
+            "-i",
+            "inputs/omni/t2v.json",
+            "-o",
+            str(out_dir),
+            "--checkpoint-path",
+            str(checkpoint_path),
+            *_FP8_GENERATION_ARGS,
+        ]
+        log = _run(cmd, tmp_path / f"inference_fp8_{layout}.log")
+
+        # The checkpoint was recognized as ModelOpt FP8 and its linears really were
+        # swapped. Without the count check a checkpoint whose targets failed to
+        # resolve would run entirely in bf16 and still pass every output assertion.
+        swap_match = _FP8_SWAP_LOG.search(log)
+        assert swap_match is not None, f"no ModelOpt FP8 linear swap in the {layout} run; FP8 path never engaged"
+        assert int(swap_match.group(1)) > 0, f"ModelOpt FP8 swap matched 0 linears in the {layout} run"
+        assert _FP8_FSDP_LOG in log, f"TorchAO static-FP8 FSDP support was not installed in the {layout} run"
+
+        results = sorted(out_dir.rglob("sample_outputs.json"))
+        assert len(results) == 1, f"expected 1 FP8 sample_outputs.json, found {[str(p) for p in results]}"
+        so = results[0]
+        args = json.loads(so.read_text()).get("args", {})
+        assert args.get("model_mode") == "text2video", f"expected a text2video sample, got {args.get('model_mode')}"
+        video = so.parent / "vision.mp4"
+        assert video.is_file(), f"FP8 {layout} run produced no vision.mp4 ({so})"
         _assert_video_has_content(video)

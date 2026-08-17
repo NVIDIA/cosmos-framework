@@ -4,6 +4,7 @@
 import json
 import os
 import random
+from pathlib import Path
 from typing import Any, cast
 
 import numpy as np
@@ -36,16 +37,18 @@ from cosmos_framework.data.generator.action.datasets.droid_lerobot_dataset_confi
     LEROBOT_ROOTS,
     STATE_FEATURES,
 )
-from cosmos_framework.data.generator.action.pose_utils import (
+from cosmos_framework.data.generator.action.utils.pose_utils import (
     PoseConvention,
     build_abs_pose_from_components,
     convert_rotation,
     pose_abs_to_rel,
 )
-from cosmos_framework.data.generator.action.viewpoint_utils import Viewpoint
+from cosmos_framework.data.generator.action.utils.viewpoint_utils import Viewpoint
 from cosmos_framework.utils import log
 
 _FILTER_DICT_PATH = "/scratch/fsw/portfolios/cosmos/projects/cosmos_base_training/users/haolia/workspace/droid_oss_inputs/keep_ranges_1_0_1.json"
+
+_NORMALIZER_PATH = Path(__file__).parent.parent / "normalizer_stats/droid_lerobot_stats.json"
 
 # 90-degree clockwise rotation about the Z axis (in local frame), converting
 # DROID Franka panda_link8 orientation to the OpenCV camera convention.
@@ -63,6 +66,16 @@ class DROIDLeRobotDataset(BaseActionLeRobotDataset):
     """ """
 
     EMBODIMENT_TYPE: str = "droid_lerobot"
+
+    def _normalizer_path(self) -> Path:
+        """Bundled DROID stats.
+
+        The base convention would resolve to
+        ``datasets/normalizers/droid_lerobot_backward_framewise_rot6d.json``,
+        which does not exist; the shipped file is ``droid_lerobot_stats.json``
+        one directory up, matching every other action dataset.
+        """
+        return _NORMALIZER_PATH
 
     def __init__(
         self,
@@ -86,6 +99,10 @@ class DROIDLeRobotDataset(BaseActionLeRobotDataset):
         enable_fast_init: bool = False,
         max_num_history_actions: int = 0,
         use_image_augmentation: bool = False,
+        # Appended rather than placed next to ``action_normalization``: the
+        # parameters above are positional-or-keyword, so inserting mid-list
+        # would shift every later argument for positional callers.
+        apply_forward_clamp: bool = False,
     ) -> None:
         """ """
         super().__init__(
@@ -100,6 +117,7 @@ class DROIDLeRobotDataset(BaseActionLeRobotDataset):
             pose_convention=pose_convention,
             rotation_format="rot6d",
             action_normalization=action_normalization,
+            apply_forward_clamp=apply_forward_clamp,
             tolerance_s=tolerance_s,
             enable_fast_init=enable_fast_init,
         )

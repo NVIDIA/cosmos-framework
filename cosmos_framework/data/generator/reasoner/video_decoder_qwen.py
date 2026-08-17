@@ -16,13 +16,14 @@ from typing import Callable, Optional
 
 import torch
 from PIL import Image
-from qwen_vl_utils.vision_process import smart_nframes, smart_resize
+from qwen_vl_utils.vision_process import smart_resize
 from torchcodec.decoders import VideoDecoder
 from torchvision import transforms
 from torchvision.transforms import InterpolationMode
 
 from cosmos_framework.utils import log
 from cosmos_framework.data.generator.processors.qwen3vl_processor import Qwen3VLProcessor
+from cosmos_framework.utils.generator.video_frame_sampling import smart_nframes_with_factor
 
 Image.MAX_IMAGE_PIXELS = 933120000
 _VIDEO_EXTENSIONS = "mp4 avi webm mov".split()
@@ -199,9 +200,12 @@ def _video_decoder_qwen_func(
     max_pixels: int = token_to_pixels(max_video_token_length, patch_size, temporal_patch_size, merge_size)
     max_frames: int = max_pixels // (min_height_width) ** 2 // temporal_patch_size
 
-    # sample based on target fps
-    nframes = smart_nframes(dict(fps=target_fps), total_frames=total_frames, video_fps=video_fps)
-    nframes = min(nframes, max_frames)
+    nframes = smart_nframes_with_factor(
+        {"fps": target_fps, "max_frames": max_frames},
+        total_frames=total_frames,
+        video_fps=video_fps,
+        frame_factor=temporal_patch_size,
+    )
     if start_frame is not None and end_frame is not None:
         idx = torch.linspace(start_frame, end_frame - 1, nframes).round().long().tolist()  # [nframes]
     else:
@@ -226,7 +230,10 @@ def _video_decoder_qwen_func(
 
     # recompute max_pixels based on number of sampled frames
     nframes, _, height, width = video_frames.shape
-    max_pixels = max_pixels // nframes
+    # Floor the per-frame budget at min_pixels so smart_resize never gets an inverted range
+    # (min_pixels > max_pixels) for many-frame videos. Matches the projects/cosmos3/vlm decoder
+    # the cosmos-rl i4 data bridge used.
+    max_pixels = max(max_pixels // nframes, min_pixels)
     if processor.use_smart_resize:
         resized_height, resized_width = smart_resize(
             height,

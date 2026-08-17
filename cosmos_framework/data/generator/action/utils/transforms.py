@@ -9,8 +9,9 @@ The reflection padding snaps each sample to the closest predefined resolution fr
 ``VIDEO_RES_SIZE_INFO`` (matching VFM's approach), guaranteeing a bounded set of
 output shapes that are all multiples of 16.
 
-See :func:`~.unified_dataset.wrap_dataset` for the convenience factory that
-combines datasets with transforms, and :class:`~.unified_dataset.MapToIterableAdapter`
+See :func:`cosmos_framework.data.generator.action.unified_dataset.wrap_dataset`
+for the convenience factory that combines datasets with transforms, and
+:class:`cosmos_framework.data.generator.action.unified_dataset.MapToIterableAdapter`
 for the map-to-iterable wrapper.
 """
 
@@ -20,12 +21,12 @@ import torch
 import torchvision.transforms.functional as transforms_F
 
 from cosmos_framework.utils import log
-from cosmos_framework.data.generator.action.action_processing import (
+from cosmos_framework.data.generator.action.utils.action_processing import (
     ActionNormalizer,
     ActionProcessor,
 )
-from cosmos_framework.data.generator.action.json_formatter import ActionPromptJsonFormatter
-from cosmos_framework.data.generator.action.viewpoint_utils import ViewpointTextInfo
+from cosmos_framework.data.generator.action.utils.json_formatter import ActionPromptJsonFormatter
+from cosmos_framework.data.generator.action.utils.viewpoint_utils import ViewpointTextInfo
 from cosmos_framework.data.generator.augmentors.duration_fps_text_timestamps import DurationFPSTextTimeStamps
 from cosmos_framework.data.generator.augmentors.idle_frames_text_info import IdleFramesTextInfo
 from cosmos_framework.data.generator.augmentors.resolution_text_info import ResolutionTextInfo
@@ -487,6 +488,11 @@ class ActionTransformPipeline:
             enabled, legacy string metadata appenders are skipped and the JSON
             formatter owns viewpoint, action, resolution, duration, FPS, and
             idle-frame fields.  Defaults to ``False``.
+        format_prompt_float_seconds: When ``format_prompt_as_json`` is enabled,
+            emit sub-second-precise float ``duration``/``time`` (e.g. "0.57s")
+            instead of truncated whole seconds ("0s").  Useful for short
+            high-fps clips.  No effect unless JSON prompts are on.  Defaults to
+            ``False``.
     """
 
     def __init__(
@@ -506,6 +512,7 @@ class ActionTransformPipeline:
         append_idle_frames: bool = False,
         idle_frames_dropout: float = 0.05,
         format_prompt_as_json: bool = False,
+        format_prompt_float_seconds: bool = False,
     ) -> None:
         self.caption_key: str = caption_key
         self.video_temporal_downsample: int = video_temporal_downsample
@@ -527,7 +534,9 @@ class ActionTransformPipeline:
 
         self.prompt_json_formatter: ActionPromptJsonFormatter | None = None
         if format_prompt_as_json:
-            self.prompt_json_formatter = ActionPromptJsonFormatter(caption_key=caption_key)
+            self.prompt_json_formatter = ActionPromptJsonFormatter(
+                caption_key=caption_key, float_seconds=format_prompt_float_seconds
+            )
 
         # --- Viewpoint text augmentor (runs after ai_caption, before duration/FPS) ---
         self.viewpoint_augmentor: ViewpointTextInfo | None = None
@@ -544,7 +553,12 @@ class ActionTransformPipeline:
             self.duration_fps_augmentor = DurationFPSTextTimeStamps(
                 input_keys=[caption_key, "video", "conditioning_fps"],
                 output_keys=[caption_key],
-                args={"caption_key": caption_key, "video_key": "video", "fps_key": "conditioning_fps"},
+                args={
+                    "caption_key": caption_key,
+                    "video_key": "video",
+                    "fps_key": "conditioning_fps",
+                    "num_frames_key": "video_num_frames",
+                },
             )
 
         # --- Resolution text augmentor (runs before tokenization) ---
@@ -674,7 +688,7 @@ class ActionTransformPipeline:
         video = data_dict.get("video")
         action = data_dict.get("action")
         assert video is not None, "video is required"
-        video_length = video.shape[1]  # [C,T,H,W] -> T
+        video_length = int(data_dict.pop("video_num_frames", video.shape[1]))  # logical T before decode compaction
         action_length = action.shape[0] if isinstance(action, torch.Tensor) else max(video_length - 1, 0)
 
         # Prepend history action frames (ground-truth conditioning) if present.

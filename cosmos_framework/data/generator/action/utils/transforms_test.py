@@ -8,8 +8,8 @@ from types import SimpleNamespace
 import pytest
 import torch
 
-from cosmos_framework.data.generator.action.json_formatter import ActionPromptJsonFormatter
-from cosmos_framework.data.generator.action.transforms import (
+from cosmos_framework.data.generator.action.utils.json_formatter import ActionPromptJsonFormatter
+from cosmos_framework.data.generator.action.utils.transforms import (
     ActionTransformPipeline,
     reflection_pad_to_target,
     remove_reflection_padding,
@@ -170,6 +170,57 @@ def test_action_transform_pipeline_json_prompt_toggle() -> None:
     assert prompt["aspect_ratio"] == "16,9"
     assert result["action"].shape == (16, 4)
     torch.testing.assert_close(result["action_raw"], action)
+
+
+@pytest.mark.L0
+def test_action_transform_pipeline_supports_compact_streaming_video() -> None:
+    pipeline = ActionTransformPipeline(
+        tokenizer_config=None,
+        max_action_dim=4,
+        format_prompt_as_json=True,
+    )
+    action = torch.zeros(960, 2)
+    data_dict = {
+        "ai_caption": "Move the camera.",
+        "video": torch.zeros(3, 1, 192, 320),
+        "video_num_frames": 961,
+        "action": action,
+        "conditioning_fps": torch.tensor(24),
+        "mode": "forward_dynamics",
+        "domain_id": torch.tensor(0),
+        "viewpoint": "ego_view",
+    }
+
+    result = pipeline(data_dict, resolution="256")
+
+    assert result["ai_caption"]["duration"] == "40s"
+    assert result["sequence_plan"].condition_frame_indexes_vision == [0]
+    assert len(result["sequence_plan"].condition_frame_indexes_action) == 960
+    assert "video_num_frames" not in result
+    assert result["video"].shape[1] == 1
+
+
+@pytest.mark.L0
+def test_action_transform_pipeline_plain_prompt_uses_logical_video_duration() -> None:
+    pipeline = ActionTransformPipeline(
+        tokenizer_config=None,
+        max_action_dim=4,
+    )
+    data_dict = {
+        "ai_caption": "Move the camera.",
+        "video": torch.zeros(3, 1, 192, 320),
+        "video_num_frames": 961,
+        "action": torch.zeros(960, 2),
+        "conditioning_fps": torch.tensor(24),
+        "mode": "forward_dynamics",
+        "domain_id": torch.tensor(0),
+        "viewpoint": "ego_view",
+    }
+
+    result = pipeline(data_dict, resolution="256")
+
+    assert "The video is 40.0 seconds long and is of 24 FPS." in result["ai_caption"]
+    assert result["video"].shape[1] == 1
 
 
 @pytest.mark.L0
