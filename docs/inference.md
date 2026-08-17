@@ -20,6 +20,7 @@ ______________________________________________________________________
 - [Sample Arguments](#sample-arguments)
   - [Text](#text)
   - [Vision (Image/Video)](#vision-imagevideo)
+    - [Resolution tiers](#resolution-tiers)
   - [Action](#action)
   - [Reasoner](#reasoner)
   - [Custom Defaults](#custom-defaults)
@@ -221,13 +222,13 @@ For the `480` and `720` tiers the `16,9` output height matches the tier name (`8
 `1280x720`). The `256` tier does not: its widescreen entries are smaller than the name
 suggests.
 
-| `aspect_ratio` | `256` | `480` | `720` | `768` |
-| -------------- | ----- | ----- | ----- | ----- |
-| `1,1`  | 256x256 | 640x640 | 960x960 | 1024x1024 |
-| `4,3`  | 320x256 | 736x544 | 1104x832 | 1184x880 |
-| `3,4`  | 256x320 | 544x736 | 832x1104 | 880x1184 |
-| `16,9` | **320x192** | 832x480 | 1280x720 | 1360x768 |
-| `9,16` | **192x320** | 480x832 | 720x1280 | 768x1360 |
+| `aspect_ratio` | `256`       | `480`   | `720`    | `768`     |
+| -------------- | ----------- | ------- | -------- | --------- |
+| `1,1`          | 256x256     | 640x640 | 960x960  | 1024x1024 |
+| `4,3`          | 320x256     | 736x544 | 1104x832 | 1184x880  |
+| `3,4`          | 256x320     | 544x736 | 832x1104 | 880x1184  |
+| `16,9`         | **320x192** | 832x480 | 1280x720 | 1360x768  |
+| `9,16`         | **192x320** | 480x832 | 720x1280 | 768x1360  |
 
 So `resolution: "256"` with the default `16,9` produces a 320x192 output, not 256 pixels
 tall. Use `aspect_ratio: "1,1"` or `"4,3"` if you need a 256-pixel short edge at that tier.
