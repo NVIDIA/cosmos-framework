@@ -27,6 +27,7 @@ EMBODIMENT_TO_DOMAIN_ID: dict[str, int] = {
     "drawanything": 21,
     "behavior1k_lerobot": 22,  # BEHAVIOR-1K R1Pro mobile bimanual (23D joint action)
     "maniparena": 23,  # ManipArena x2robot/ex001_6r dual-arm; own 20D EE-direct action projection
+    "robocasa": 24,
 }
 
 
@@ -56,6 +57,7 @@ EMBODIMENT_TO_RAW_ACTION_DIM: dict[str, int] = {
     # because their raw width is set per-dataset at construction time. Inference
     # in inverse_dynamics/WAM modes is not supported for these domains until
     # canonical widths are added here.
+    "robocasa": 10,
 }
 
 
