@@ -864,6 +864,9 @@ class SetupArgs(ABC, CheckpointArgs, ParallelismArgs, QuantizationArgs, Guardrai
     num_iterations: pydantic.PositiveInt
     max_model_len: pydantic.PositiveInt | None
     max_num_seqs: pydantic.PositiveInt | None
+    diffusion_cache: bool
+    diffusion_cache_thresh: float | None
+    diffusion_cache_residual_order: int | None
 
     # Subclass must implement these fields/methods
     # ------------------------------------------------------------
@@ -916,6 +919,23 @@ class SetupOverrides(ABC, CheckpointOverrides, ParallelismOverrides, Quantizatio
     max_num_seqs: pydantic.PositiveInt | None = 1
     """Maximum number of sequences per batch.  When set, samples are packed into
     batches by number of sequences."""
+    diffusion_cache: bool = False
+    """Enable the diffusion-time inference cache.
+    Shared inference setup disables the cache by default. The inference CLI enables
+    it by default; pass ``--no-diffusion-cache`` to disable it. Caching is based on
+    SeaCache: Spectral-Evolution-Aware Cache for Accelerating Diffusion Models
+    (https://arxiv.org/abs/2602.18993). Autoregressive and KV-cache generation
+    bypass the cache automatically.
+    """
+    diffusion_cache_thresh: float | None = None
+    """Accumulated relative-L1 threshold (``diffusion_cache_thresh``), shared by the
+    conditional and unconditional pathways. Larger values allow more skipping at
+    the cost of lower fidelity. ``None`` uses the ``DiffusionCache.Config`` default
+    (0.35). Only takes effect when diffusion cache is enabled."""
+    diffusion_cache_residual_order: int | None = None
+    """Polynomial order for extrapolating the generation residual on a skipped step via
+    Newton divided differences: 0 = constant reuse, 1 = linear, 2 = quadratic.
+    ``None`` uses the default (1).  Only used when diffusion cache is enabled."""
 
     def _build_setup(self):
         if self.num_iterations > 1 and not self.benchmark:
