@@ -168,6 +168,8 @@ class TAOStatusCallback(Callback):
         self._validation_batches = 0
         self._validation_loss_numerator = 0.0
         self._validation_loss_denominator = 0
+        self._validation_local_numerators: list[torch.Tensor] = []
+        self._validation_local_denominators: list[torch.Tensor] = []
         self._train_loss_numerator = 0.0
         self._train_loss_denominator = 0
         self.last_training_loss: float | None = None
@@ -380,6 +382,8 @@ class TAOStatusCallback(Callback):
         self._validation_batches = 0
         self._validation_loss_numerator = 0.0
         self._validation_loss_denominator = 0
+        self._validation_local_numerators = []
+        self._validation_local_denominators = []
         writer = self._get_writer()
         if writer is not None:
             writer.write(
@@ -398,13 +402,13 @@ class TAOStatusCallback(Callback):
         iteration: int = 0,
     ) -> None:
         local_numerator, local_denominator = self._local_token_stats(loss, data_batch, output_batch)
-        average_loss, _, _ = self._global_token_average(loss, data_batch, output_batch)
+        self._validation_local_numerators.append(local_numerator)
+        self._validation_local_denominators.append(local_denominator)
         self._validation_batches += 1
-        self._validation_loss_numerator += float(local_numerator.item())
-        self._validation_loss_denominator += int(local_denominator.item())
 
         if self._validation_batches % self.validation_heartbeat_interval != 0:
             return
+        average_loss, _, _ = self._global_token_average(loss, data_batch, output_batch)
         writer = self._get_writer()
         max_validation_batches = getattr(self.config.trainer, "max_val_iter", None)
         batch_progress = (
@@ -429,6 +433,30 @@ class TAOStatusCallback(Callback):
             log.info(f"Validation {self._epoch_label(iteration)}, batch {batch_progress} - Loss: {average_loss:.6f}")
 
     def on_validation_end(self, model: Any, iteration: int = 0) -> None:
+        if self._validation_local_numerators:
+            # Preserve the historical Python-float accumulation order exactly,
+            # while replacing one CUDA synchronization per scalar per batch
+            # with one bounded transfer at validation end.
+            local_numerators = (
+                torch.stack(self._validation_local_numerators).detach().cpu().tolist()
+            )
+            local_denominators = (
+                torch.stack(self._validation_local_denominators).detach().cpu().tolist()
+            )
+            self._validation_loss_numerator = sum(
+                float(value) for value in local_numerators
+            )
+            self._validation_loss_denominator = sum(
+                int(value) for value in local_denominators
+            )
+            print(
+                "TAO_FRAMEWORK_VALIDATION_STATUS_REDUCTION_ATTESTATION "
+                f"mode=deferred_scalar_transfer batches={self._validation_batches} "
+                f"rank={os.environ.get('RANK', os.environ.get('LOCAL_RANK', '0'))}",
+                flush=True,
+            )
+        self._validation_local_numerators = []
+        self._validation_local_denominators = []
         numerator, denominator = self._reduce_accumulator(
             self._validation_loss_numerator, self._validation_loss_denominator
         )

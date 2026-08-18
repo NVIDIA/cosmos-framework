@@ -105,6 +105,37 @@ def test_tao_status_callback_reports_checkpoint_event(tmp_path) -> None:
     assert record["checkpoint_path"] == str(checkpoint.resolve())
 
 
+def test_validation_stats_defer_scalar_transfer_until_end(tmp_path) -> None:
+    callback = _callback(tmp_path)
+    callback.validation_heartbeat_interval = 50
+    callback.on_validation_start(model=None, dataloader_val=None, iteration=3)
+
+    numerators = [torch.tensor(1.25), torch.tensor(2.5)]
+    denominators = [torch.tensor(4), torch.tensor(6)]
+    for numerator, denominator in zip(numerators, denominators):
+        callback.on_validation_step_end(
+            model=None,
+            data_batch={"input_ids": torch.zeros(1, 3)},
+            output_batch={
+                "loss_numerator": numerator,
+                "loss_denominator": denominator,
+            },
+            loss=numerator / denominator,
+            iteration=3,
+        )
+
+    assert callback._validation_loss_numerator == 0.0
+    assert callback._validation_loss_denominator == 0
+    assert len(callback._validation_local_numerators) == 2
+    callback.on_validation_end(model=None, iteration=3)
+
+    assert callback._validation_loss_numerator == 3.75
+    assert callback._validation_loss_denominator == 10
+    assert callback.last_validation_loss == 0.375
+    assert callback._validation_local_numerators == []
+    assert callback._validation_local_denominators == []
+
+
 def test_tao_status_callback_ignores_dcp_marker_nul_padding(tmp_path) -> None:
     callback = _callback(tmp_path)
     checkpoint = tmp_path / "checkpoints" / "epoch_1"

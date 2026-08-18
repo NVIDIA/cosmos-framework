@@ -9,9 +9,11 @@ import sys
 import threading
 import time
 import types
+from collections import OrderedDict
 from concurrent.futures import ThreadPoolExecutor
 
 import pytest
+from PIL import Image
 
 # These unit tests exercise dataset/config construction, not video decoding.
 # Keep collection deterministic on CPU hosts that do not have FFmpeg/CUDA
@@ -107,6 +109,98 @@ def test_wts_recipe_uses_resume_safe_contiguous_batches() -> None:
         assert target is ContiguousBatcher
     assert batcher["max_batch_size"] == 1
     assert batcher["max_tokens"] == 81920
+
+
+def test_media_grouped_validation_stream_is_finite_and_equally_padded() -> None:
+    from cosmos_framework.configs.base.reasoner.experiment.wts_vlm import (
+        MediaGroupedMapDistributor,
+    )
+
+    class FakeDataset:
+        records = [{"value": index} for index in range(11)]
+
+        def __len__(self) -> int:
+            return len(self.records)
+
+        def __getitem__(self, index: int) -> dict:
+            return dict(self.records[index])
+
+        def media_identity(self, index: int) -> str:
+            return f"video-{index // 2}"
+
+    distributor = MediaGroupedMapDistributor(FakeDataset(), shuffle=False)
+    streams = [
+        list(distributor.stream(rank, 4, 0, 1))
+        for rank in range(4)
+    ]
+
+    assert distributor.finite_validation_stream is True
+    assert [len(stream) for stream in streams] == [3, 3, 3, 3]
+    assert all(item["_dp_epoch"] == 0 for stream in streams for item in stream)
+    assert sorted(item["value"] for stream in streams for item in stream) == [
+        0,
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+    ]
+
+
+def test_media_grouped_validation_stages_bounded_unique_media() -> None:
+    from cosmos_framework.configs.base.reasoner.experiment.wts_vlm import (
+        MediaGroupedMapDistributor,
+    )
+
+    rank_groups = OrderedDict(
+        {
+            "a": [0, 1, 2],
+            "b": [3, 4, 5],
+            "c": [6, 7],
+            "d": [8, 9],
+        }
+    )
+
+    staged = MediaGroupedMapDistributor._staged_cache_frontload(
+        rank_groups,
+        batch_size=4,
+        unique_per_batch=2,
+    )
+
+    assert staged == [0, 3, 1, 4, 6, 8, 2, 5, 7, 9]
+    assert sorted(staged) == list(range(10))
+
+
+def test_processed_video_cache_is_on_demand_and_returns_copies() -> None:
+    from cosmos_framework.configs.base.reasoner.experiment.wts_vlm import (
+        _ProcessedVideoCacheProxy,
+    )
+
+    class FakeProcessor:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def __call__(self, *, videos):
+            self.calls += 1
+            return {"calls": self.calls, "frame_count": len(videos)}
+
+    processor = FakeProcessor()
+    cached = _ProcessedVideoCacheProxy(processor, capacity=1)
+    frame = Image.new("RGB", (2, 2))
+
+    first = cached(videos=[frame])
+    first["calls"] = 999
+    second = cached(videos=[frame])
+
+    assert processor.calls == 1
+    assert second == {"calls": 1, "frame_count": 1}
+    assert second is not first
 
 
 def test_video_conversation_dataset_rejects_invalid_record(tmp_path) -> None:

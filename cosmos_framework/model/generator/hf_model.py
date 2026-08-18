@@ -21,7 +21,10 @@ FSDP wrapping lives in ``vfm/models/parallelize_vlm.py::parallelize()``,
 NOT here.
 """
 
-from typing import TYPE_CHECKING
+import os
+from collections import OrderedDict
+from types import MethodType
+from typing import TYPE_CHECKING, Callable
 
 import torch
 import torch.nn as nn
@@ -29,12 +32,144 @@ from accelerate import init_on_device
 from transformers import AutoConfig, AutoModel, AutoModelForCausalLM, AutoModelForImageTextToText, AutoTokenizer
 
 import cosmos_framework.model.generator.reasoner.cosmos3_edge  # noqa: F401  registers cosmos3_edge with transformers Auto classes
-from cosmos_framework.utils import log
 from cosmos_framework.model.generator.utils.safetensors_loader import load_language_model, load_vlm_model
+from cosmos_framework.utils import log
 from cosmos_framework.utils.generator.parallelism import ParallelDims
 
 if TYPE_CHECKING:
     from cosmos_framework.configs.base.defaults.reasoner import SoundUnderstandingConfig
+
+
+class _ValidationVideoFeatureCache:
+    """Rank-local GPU LRU for deterministic, repeated validation videos."""
+
+    def __init__(self, capacity: int):
+        self.capacity = capacity
+        self.entries: OrderedDict[tuple, tuple] = OrderedDict()
+        self.calls = 0
+        self.hits = 0
+        self.misses = 0
+        self.sync_dummy_encodes = 0
+        self.global_all_hit_calls = 0
+        self.bypassed_calls = 0
+        self.hit_attested = False
+
+    @staticmethod
+    def _distributed_flag(value: bool, device: torch.device, op: torch.distributed.ReduceOp) -> bool:
+        if not (torch.distributed.is_available() and torch.distributed.is_initialized()):
+            return value
+        flag = torch.tensor([int(value)], device=device, dtype=torch.int32)
+        torch.distributed.all_reduce(flag, op=op)
+        return bool(flag.item())
+
+    def get_or_encode(
+        self,
+        cache_keys: list[str] | tuple[str, ...] | None,
+        pixel_values: torch.Tensor,
+        grid_thw: torch.Tensor,
+        encode_fn: Callable,
+        spatial_merge_size: int,
+    ):
+        local_cacheable = (
+            grid_thw is not None
+            and grid_thw.ndim == 2
+            and isinstance(cache_keys, (list, tuple))
+            and len(cache_keys) == int(grid_thw.shape[0])
+        )
+        grids: list[tuple[int, ...]] = []
+        raw_sizes: list[int] = []
+        if local_cacheable:
+            grids = [tuple(int(value) for value in row.detach().cpu().tolist()) for row in grid_thw]
+            raw_sizes = [grid[0] * grid[1] * grid[2] for grid in grids]
+            local_cacheable = sum(raw_sizes) == int(pixel_values.shape[0])
+
+        globally_cacheable = self._distributed_flag(
+            local_cacheable, pixel_values.device, torch.distributed.ReduceOp.MIN
+        )
+        if not globally_cacheable:
+            self.bypassed_calls += 1
+            return encode_fn(pixel_values, grid_thw)
+
+        merged_sizes = [size // (spatial_merge_size**2) for size in raw_sizes]
+        resolved_keys = [(str(key), grid) for key, grid in zip(cache_keys, grids)]
+        pixel_chunks = torch.split(pixel_values, raw_sizes, dim=0)
+        available: dict[tuple, tuple] = {}
+        missing: OrderedDict[tuple, int] = OrderedDict()
+        call_hits = 0
+        for index, key in enumerate(resolved_keys):
+            entry = self.entries.get(key)
+            if entry is None:
+                missing.setdefault(key, index)
+            else:
+                self.entries.move_to_end(key)
+                available[key] = entry
+                call_hits += 1
+
+        any_rank_missing = self._distributed_flag(
+            bool(missing), pixel_values.device, torch.distributed.ReduceOp.MAX
+        )
+        if any_rank_missing and missing:
+            miss_indices = list(missing.values())
+            miss_pixels = torch.cat([pixel_chunks[index] for index in miss_indices], dim=0)
+            miss_grids = torch.stack([grid_thw[index] for index in miss_indices], dim=0)
+            fresh_main, fresh_deepstack = encode_fn(miss_pixels, miss_grids)
+            fresh_main_splits = torch.split(
+                fresh_main,
+                [merged_sizes[index] for index in miss_indices],
+                dim=0,
+            )
+            deepstack_splits = [
+                torch.split(layer, [merged_sizes[index] for index in miss_indices], dim=0)
+                for layer in fresh_deepstack
+            ]
+            for fresh_index, key in enumerate(missing):
+                entry = (
+                    fresh_main_splits[fresh_index].detach().clone(),
+                    tuple(parts[fresh_index].detach().clone() for parts in deepstack_splits),
+                )
+                available[key] = entry
+                self.entries[key] = entry
+                self.entries.move_to_end(key)
+                while len(self.entries) > self.capacity:
+                    self.entries.popitem(last=False)
+        elif any_rank_missing:
+            encode_fn(pixel_chunks[0], grid_thw[:1])
+            self.sync_dummy_encodes += 1
+        else:
+            self.global_all_hit_calls += 1
+
+        ordered = [available[key] for key in resolved_keys]
+        main = torch.cat([entry[0] for entry in ordered], dim=0)
+        deepstack = [
+            torch.cat([entry[1][layer] for entry in ordered], dim=0)
+            for layer in range(len(ordered[0][1]) if ordered else 0)
+        ]
+        self.calls += 1
+        self.hits += call_hits
+        self.misses += len(missing)
+        if call_hits and not self.hit_attested:
+            print(
+                "TAO_FRAMEWORK_VALIDATION_FEATURE_CACHE_HIT_ATTESTATION "
+                f"rank={os.environ.get('RANK', '0')} capacity={self.capacity} hits={call_hits}",
+                flush=True,
+            )
+            self.hit_attested = True
+        return main, deepstack
+
+    def clear(self) -> dict[str, int]:
+        stats = {
+            "calls": self.calls,
+            "hits": self.hits,
+            "misses": self.misses,
+            "entries": len(self.entries),
+            "sync_dummy_encodes": self.sync_dummy_encodes,
+            "global_all_hit_calls": self.global_all_hit_calls,
+            "bypassed_calls": self.bypassed_calls,
+        }
+        self.entries.clear()
+        self.calls = self.hits = self.misses = 0
+        self.sync_dummy_encodes = self.global_all_hit_calls = self.bypassed_calls = 0
+        return stats
 
 
 def _tensor_names_to_skip_for(model_type: str) -> list[str]:
@@ -155,12 +290,12 @@ class HFModel(nn.Module):
             )
 
         if sound_und:
-            from cosmos_framework.model.generator.reasoner.parakeet.configuration_parakeet import ParakeetAudioConfig
-            from cosmos_framework.model.generator.reasoner.parakeet.parakeet import ParakeetAudioModel
-            from cosmos_framework.model.generator.reasoner.parakeet.utils import patch_reasoner_audio_forward
             from cosmos_framework.data.generator.processors.parakeet_audio_processor import (
                 add_reasoner_audio_special_tokens,
             )
+            from cosmos_framework.model.generator.reasoner.parakeet.configuration_parakeet import ParakeetAudioConfig
+            from cosmos_framework.model.generator.reasoner.parakeet.parakeet import ParakeetAudioModel
+            from cosmos_framework.model.generator.reasoner.parakeet.utils import patch_reasoner_audio_forward
 
             input_embeddings = self.model.get_input_embeddings()
             if input_embeddings is None or not hasattr(input_embeddings, "weight"):
@@ -231,6 +366,11 @@ class HFModel(nn.Module):
         if n_cast:
             log.info(f"HFModel: normalized {n_cast} param(s) to {dtype} post-from_config")
 
+        self._tao_validation_video_cache_keys = None
+        self._tao_validation_video_cache_active = False
+        self._tao_validation_video_feature_cache = None
+        self._configure_validation_video_feature_cache()
+
         # Patch Qwen3-VL forward for text-only batches (no pixel_values / image_grid_thw).
         # Required to avoid errors when a batch contains only text: every FSDP rank must
         # call visual() each step for all-gather sync; the patch runs a lightweight dummy
@@ -242,8 +382,59 @@ class HFModel(nn.Module):
             patch_qwen3_vl_forward(self.model.model)
             log.info("HFModel: applied patch_qwen3_vl_forward for text-only batch support")
 
+    def _configure_validation_video_feature_cache(self) -> None:
+        capacity = int(os.environ.get("TAO_FRAMEWORK_VALIDATION_VIDEO_FEATURE_CACHE_SIZE", "0"))
+        if capacity < 0:
+            raise ValueError("TAO_FRAMEWORK_VALIDATION_VIDEO_FEATURE_CACHE_SIZE must be non-negative")
+        if capacity == 0:
+            return
+        if self.hf_config.model_type != "qwen3_vl":
+            raise RuntimeError("Framework validation feature cache currently supports only qwen3_vl")
+        target = getattr(self.model, "model", None)
+        visual = getattr(target, "visual", None)
+        original = getattr(visual, "forward", None)
+        spatial_merge_size = getattr(visual, "spatial_merge_size", None)
+        if target is None or not callable(original) or not spatial_merge_size:
+            raise RuntimeError("Framework validation feature cache could not resolve Qwen3-VL vision encoder")
+        cache = _ValidationVideoFeatureCache(capacity)
+
+        def cached_visual_forward(visual_self, pixel_values, grid_thw=None):
+            del visual_self
+            if not self._tao_validation_video_cache_active:
+                return original(pixel_values, grid_thw)
+            return cache.get_or_encode(
+                self._tao_validation_video_cache_keys,
+                pixel_values,
+                grid_thw,
+                original,
+                int(spatial_merge_size),
+            )
+
+        # c312482 applies ``patch_qwen3_vl_forward``, whose active video path
+        # invokes ``self.visual(...)`` directly and bypasses both
+        # ``get_video_features`` and ``get_image_features``.  Hook the actual
+        # visual boundary so repeated validation media can reuse deterministic
+        # features.  FSDP's per-block collectives remain aligned by
+        # ``get_or_encode``: if any rank misses, every rank enters the native
+        # visual stack once; only a global all-hit batch skips it collectively.
+        visual.forward = MethodType(cached_visual_forward, visual)
+        self._tao_validation_video_feature_cache = cache
+        print(
+            "TAO_FRAMEWORK_VALIDATION_FEATURE_CACHE_ENABLED_ATTESTATION "
+            f"rank={os.environ.get('RANK', '0')} capacity={capacity} boundary=visual_forward",
+            flush=True,
+        )
+
+    def clear_validation_video_feature_cache(self) -> dict[str, int] | None:
+        if self._tao_validation_video_feature_cache is None:
+            return None
+        return self._tao_validation_video_feature_cache.clear()
+
     def train(self, mode: bool = True) -> "HFModel":
         """Keep immutable audio modules in eval mode while training the Reasoner."""
+        if mode and self._tao_validation_video_feature_cache is not None:
+            if self._tao_validation_video_feature_cache.entries:
+                self.clear_validation_video_feature_cache()
         super().train(mode)
         if self.sound_und:
             self.model.sound_und_model.encoder.eval()
@@ -442,9 +633,19 @@ class HFModel(nn.Module):
         valid tokens never attend to padding tokens regardless, so dropping attention_mask
         is equivalent and avoids the shape mismatch.
         """
+        cache_keys = kwargs.pop("tao_video_cache_keys", None)
         filtered = {k: v for k, v in kwargs.items() if k not in self._COLLATE_NON_MODEL_KEYS}
         if self.hf_config.model_type == "nemotron_vl":
             filtered.pop("attention_mask", None)
         filtered["use_cache"] = False
-        out = self.model(**filtered)
+        cache = self._tao_validation_video_feature_cache
+        self._tao_validation_video_cache_active = (
+            cache is not None and not self.training and not torch.is_grad_enabled()
+        )
+        self._tao_validation_video_cache_keys = cache_keys
+        try:
+            out = self.model(**filtered)
+        finally:
+            self._tao_validation_video_cache_keys = None
+            self._tao_validation_video_cache_active = False
         return out.logits

@@ -80,6 +80,18 @@ class VideoConversationDataset(Dataset):
     def __len__(self) -> int:
         return len(self.records)
 
+    def media_identity(self, index: int) -> str:
+        """Return the stable local-media identity used by validation caches."""
+        record = self.records[index]
+        video_path = next(
+            record[field]
+            for field in ("video", "video_id", "media", "media_path")
+            if isinstance(record.get(field), str)
+        )
+        if not os.path.isabs(video_path):
+            video_path = os.path.join(self.media_path, video_path)
+        return os.path.realpath(video_path)
+
     def __getitem__(self, index: int) -> dict[str, Any]:
         record = dict(self.records[index])
         video_path = next(
@@ -93,6 +105,97 @@ class VideoConversationDataset(Dataset):
             raise FileNotFoundError(f"video-conversation media does not exist: {video_path}")
         record["video"] = video_path
         return record
+
+
+class _ProcessedVideoCacheProxy:
+    """On-demand worker-local cache around the HF video preprocessor."""
+
+    def __init__(self, processor: Any, capacity: int) -> None:
+        self._processor = processor
+        self.capacity = int(capacity)
+        self._entries: OrderedDict[tuple, Any] = OrderedDict()
+        self._lock = threading.Lock()
+        self._inflight: dict[tuple, threading.Event] = {}
+        self._hit_attested = False
+
+    def __getattr__(self, name: str) -> Any:
+        processor = self.__dict__.get("_processor")
+        if processor is None:
+            raise AttributeError(name)
+        return getattr(processor, name)
+
+    def __getstate__(self) -> dict[str, Any]:
+        state = self.__dict__.copy()
+        state.pop("_lock", None)
+        state["_entries"] = OrderedDict()
+        state["_inflight"] = {}
+        state["_hit_attested"] = False
+        return state
+
+    def __setstate__(self, state: dict[str, Any]) -> None:
+        self.__dict__.update(state)
+        self._lock = threading.Lock()
+        self._inflight = {}
+
+    @staticmethod
+    def _identity(videos: Any) -> tuple | None:
+        frames: list[tuple[int, tuple[int, int], str]] = []
+
+        def collect(value: Any) -> None:
+            if isinstance(value, Image.Image):
+                frames.append((id(value), value.size, value.mode))
+            elif isinstance(value, (list, tuple)):
+                for item in value:
+                    collect(item)
+
+        collect(videos)
+        return tuple(frames) if frames else None
+
+    def __call__(self, *args: Any, **kwargs: Any) -> Any:
+        videos = kwargs.get("videos", args[0] if args else None)
+        key = self._identity(videos)
+        if key is None or self.capacity <= 0:
+            return self._processor(*args, **kwargs)
+
+        while True:
+            with self._lock:
+                cached = self._entries.get(key)
+                if cached is not None:
+                    self._entries.move_to_end(key)
+                    if not self._hit_attested:
+                        print(
+                            "TAO_FRAMEWORK_VALIDATION_PROCESSED_VIDEO_CACHE_HIT_ATTESTATION "
+                            f"rank={os.environ.get('RANK', os.environ.get('LOCAL_RANK', '0'))} "
+                            f"capacity={self.capacity}",
+                            flush=True,
+                        )
+                        self._hit_attested = True
+                    return deepcopy(cached)
+                inflight = self._inflight.get(key)
+                if inflight is None:
+                    inflight = threading.Event()
+                    self._inflight[key] = inflight
+                    owner = True
+                else:
+                    owner = False
+            if owner:
+                break
+            inflight.wait()
+
+        try:
+            output = self._processor(*args, **kwargs)
+            canonical = deepcopy(output)
+            with self._lock:
+                self._entries[key] = canonical
+                self._entries.move_to_end(key)
+                while len(self._entries) > self.capacity:
+                    self._entries.popitem(last=False)
+            return output
+        finally:
+            with self._lock:
+                completed = self._inflight.pop(key, None)
+                if completed is not None:
+                    completed.set()
 
 
 class VideoSFTProcessor(VLMProcessor):
@@ -123,6 +226,7 @@ class VideoSFTProcessor(VLMProcessor):
         video_cache_size: int = 8,
         video_device: str = "cuda",
         video_num_threads: int = 1,
+        processed_video_cache_size: int = 0,
         video_max_pixels: int | str | None = 81920,
         video_override_map: str | None = None,
         system_prompt: str = "",
@@ -132,15 +236,36 @@ class VideoSFTProcessor(VLMProcessor):
         num_video_frames = int(num_video_frames)
         video_cache_size = int(video_cache_size)
         video_num_threads = int(video_num_threads)
+        processed_video_cache_size = int(processed_video_cache_size)
         if num_video_frames < 1:
             raise ValueError("num_video_frames must be >= 1")
         if video_cache_size < 0:
             raise ValueError("video_cache_size must be >= 0")
+        if processed_video_cache_size < 0:
+            raise ValueError("processed_video_cache_size must be >= 0")
         self.num_video_frames = num_video_frames
         self.video_cache_size = video_cache_size
         self.requested_video_device = str(video_device)
         self.video_device = self._resolve_video_device(self.requested_video_device)
         self.video_num_threads = video_num_threads
+        self.processed_video_cache_size = processed_video_cache_size
+        hf_processor = getattr(processor, "processor", None)
+        video_processor = getattr(hf_processor, "video_processor", None)
+        if processed_video_cache_size:
+            if video_processor is None:
+                raise RuntimeError(
+                    "processed video caching requires processor.video_processor"
+                )
+            hf_processor.video_processor = _ProcessedVideoCacheProxy(
+                video_processor,
+                processed_video_cache_size,
+            )
+            print(
+                "TAO_FRAMEWORK_VALIDATION_PROCESSED_VIDEO_CACHE_ENABLED_ATTESTATION "
+                f"rank={os.environ.get('RANK', os.environ.get('LOCAL_RANK', '0'))} "
+                f"capacity={processed_video_cache_size} population=on_demand",
+                flush=True,
+            )
         self.video_overrides: dict[str, str] = {}
         if video_override_map not in (None, ""):
             override_path = os.path.abspath(os.path.expanduser(str(video_override_map)))
@@ -329,6 +454,151 @@ class VideoSFTProcessor(VLMProcessor):
             messages.append({"role": role, "content": content})
         return messages
 
+    def process(self, item: dict) -> dict:
+        sample = super().process(item)
+        video_path = item.get("video")
+        if isinstance(video_path, str):
+            video_path = self.video_overrides.get(video_path, video_path)
+            sample["tao_video_cache_key"] = os.path.realpath(
+                os.path.abspath(os.path.expanduser(video_path))
+            )
+        return sample
+
+
+class VideoVLMCollator(VLMCollator):
+    """Preserve one stable video identity per sample for validation caching."""
+
+    def collate(self, samples: list[dict]) -> dict:
+        cache_keys = [sample.get("tao_video_cache_key") for sample in samples]
+        batch = super().collate(samples)
+        batch.pop("tao_video_cache_key", None)
+        if all(isinstance(key, str) for key in cache_keys):
+            batch["tao_video_cache_keys"] = cache_keys
+        return batch
+
+
+class MediaGroupedMapDistributor(MapDistributor):
+    """Group repeated validation media while preserving the padded multiset.
+
+    Every DP-rank/worker stream receives exactly ``ceil(N / streams)`` records.
+    Whole media groups are assigned first and split only when required to fill
+    equal stream capacities, so FSDP ranks execute the same number of forwards.
+    The validation stream is finite so ``drop_last=False`` can emit one equal
+    partial final batch per rank without pulling records from the next epoch.
+    """
+
+    finite_validation_stream = True
+
+    @staticmethod
+    def _staged_cache_frontload(
+        rank_groups: OrderedDict[str, list[int]],
+        batch_size: int,
+        unique_per_batch: int,
+    ) -> list[int]:
+        """Bound unseen media per early batch while preserving every index."""
+        if batch_size <= 0 or unique_per_batch <= 0 or unique_per_batch > batch_size:
+            raise ValueError(
+                "staged validation cache frontloading requires positive batch and "
+                "unique counts with unique <= batch"
+            )
+        remaining = OrderedDict((key, list(group)) for key, group in rank_groups.items())
+        group_keys = list(remaining)
+        active_keys: list[str] = []
+        ordered: list[int] = []
+
+        for start in range(0, len(group_keys), unique_per_batch):
+            new_keys = group_keys[start : start + unique_per_batch]
+            active_keys.extend(new_keys)
+            batch = [remaining[key].pop(0) for key in new_keys]
+            while len(batch) < batch_size:
+                made_progress = False
+                for key in active_keys:
+                    if remaining[key]:
+                        batch.append(remaining[key].pop(0))
+                        made_progress = True
+                        if len(batch) == batch_size:
+                            break
+                if not made_progress:
+                    break
+            ordered.extend(batch)
+
+        for group in remaining.values():
+            ordered.extend(group)
+        return ordered
+
+    @staticmethod
+    def _assign_groups(dataset: VideoConversationDataset, total_streams: int) -> list[list[int]]:
+        n = len(dataset)
+        per_stream = (n + total_streams - 1) // total_streams
+        padded = list(range(n))
+        padded.extend(padded[: per_stream * total_streams - n])
+
+        groups: OrderedDict[str, list[int]] = OrderedDict()
+        for index in padded:
+            groups.setdefault(dataset.media_identity(index), []).append(index)
+
+        assignments = [[] for _ in range(total_streams)]
+        remaining = [per_stream] * total_streams
+        ordered_groups = sorted(enumerate(groups.values()), key=lambda item: (-len(item[1]), item[0]))
+        for _, original_group in ordered_groups:
+            group = list(original_group)
+            while group:
+                fitting = [stream for stream, capacity in enumerate(remaining) if capacity >= len(group)]
+                if fitting:
+                    stream = max(fitting, key=lambda value: (remaining[value], -value))
+                    take = len(group)
+                else:
+                    stream = max(range(total_streams), key=lambda value: (remaining[value], -value))
+                    take = remaining[stream]
+                if take <= 0:
+                    raise RuntimeError("media-grouped validation sharding exhausted stream capacity")
+                assignments[stream].extend(group[:take])
+                remaining[stream] -= take
+                del group[:take]
+
+        if any(remaining) or any(len(indices) != per_stream for indices in assignments):
+            raise RuntimeError("media-grouped validation sharding did not produce equal stream lengths")
+
+        batch_size = int(os.environ.get("TAO_FRAMEWORK_VALIDATION_BATCH_SIZE", "1"))
+        unique_per_batch = int(
+            os.environ.get(
+                "TAO_FRAMEWORK_VALIDATION_CACHE_FRONTLOAD_UNIQUE_PER_BATCH",
+                str(max(1, batch_size // 2)),
+            )
+        )
+        staged_assignments: list[list[int]] = []
+        for assignment in assignments:
+            rank_groups: OrderedDict[str, list[int]] = OrderedDict()
+            for index in assignment:
+                rank_groups.setdefault(dataset.media_identity(index), []).append(index)
+            staged = MediaGroupedMapDistributor._staged_cache_frontload(
+                rank_groups,
+                batch_size,
+                unique_per_batch,
+            )
+            if len(staged) != per_stream or sorted(staged) != sorted(assignment):
+                raise RuntimeError(
+                    "staged validation cache frontloading changed the rank-local multiset"
+                )
+            staged_assignments.append(staged)
+        assignments = staged_assignments
+        return assignments
+
+    def stream(self, dp_rank, dp_world_size, worker_id, num_workers):
+        if self._shuffle:
+            raise ValueError("MediaGroupedMapDistributor is validation-only and requires shuffle=False")
+        stream_id = dp_rank * num_workers + worker_id
+        total_streams = dp_world_size * num_workers
+        assignments = self._assign_groups(self._dataset, total_streams)
+        if stream_id >= len(assignments):
+            return
+        for position, index in enumerate(assignments[stream_id]):
+            item = self._dataset[index]
+            if isinstance(item, dict):
+                yield {"_dp_epoch": 0, "_dp_stream_pos": position, **item}
+            else:
+                yield item
+
 
 def _video_conversation_dataloader(
     *,
@@ -341,8 +611,16 @@ def _video_conversation_dataloader(
     max_pixels_env: str = "WTS_VIDEO_MAX_PIXELS",
     system_prompt_env: str = "WTS_SYSTEM_PROMPT",
 ) -> LazyDict:
+    validation_grouped = (
+        not shuffle
+        and os.environ.get("TAO_FRAMEWORK_VALIDATION_SHARD_STRATEGY", "stride") == "media_grouped"
+    )
+    distributor_cls = MediaGroupedMapDistributor if validation_grouped else MapDistributor
+    max_batch_size = (
+        int(os.environ.get("TAO_FRAMEWORK_VALIDATION_BATCH_SIZE", "1")) if not shuffle else 1
+    )
     return L(CosmosDataLoader)(
-        distributor=L(MapDistributor)(
+        distributor=L(distributor_cls)(
             dataset=L(VideoConversationDataset)(
                 annotation_path=f"${{oc.env:{annotation_env}}}",
                 media_path=f"${{oc.env:{media_env}}}",
@@ -362,20 +640,25 @@ def _video_conversation_dataloader(
             video_cache_size=f"${{oc.env:{cache_env},8}}",
             video_device="${oc.env:TAO_VIDEO_DECODER_DEVICE,cuda}",
             video_num_threads="${oc.env:TAO_VIDEO_DECODER_THREADS,1}",
+            processed_video_cache_size=(
+                "${oc.env:TAO_FRAMEWORK_VALIDATION_PROCESSED_VIDEO_CACHE_SIZE,0}"
+                if not shuffle
+                else 0
+            ),
             video_max_pixels=f"${{oc.env:{max_pixels_env},81920}}",
             video_override_map="${oc.env:TAO_VIDEO_OVERRIDE_MAP,''}",
             system_prompt=f"${{oc.env:{system_prompt_env},''}}",
         ),
         batcher=L(ContiguousBatcher)(
-            max_batch_size=1,
+            max_batch_size=max_batch_size,
             max_tokens=81920,
             drop_last=False,
         ),
-        collator=L(VLMCollator)(),
+        collator=L(VideoVLMCollator)(),
         num_workers="${oc.env:TAO_FRAMEWORK_DATALOADER_NUM_WORKERS,1}",
-        prefetch_factor="${oc.env:TAO_FRAMEWORK_DATALOADER_PREFETCH_FACTOR,2}",
+        prefetch_factor="${oc.env:TAO_FRAMEWORK_DATALOADER_PREFETCH_FACTOR,4}",
         persistent_workers=True,
-        pin_memory=False,
+        pin_memory=True,
         multiprocessing_context="spawn",
         processing_threads="${oc.env:TAO_FRAMEWORK_SFT_PROCESS_THREADS,8}",
     )
