@@ -24,6 +24,7 @@ from cosmos_framework.model.tokenizer.models.dense_backends import (
 )
 from cosmos_framework.model.tokenizer.models.modules.transformer.blocks import LearnedPositionEmbedder
 from cosmos_framework.model.tokenizer.models.sparse_autoencoder import AutoencoderKL, SparseTransformerBase
+from cosmos_framework.model.tokenizer.utils.precision import activation_dtype
 from cosmos_framework.model.tokenizer.utils.tensors import cat_with_bounded_inputs
 
 
@@ -290,7 +291,40 @@ class DenseAutoencoderRuntime(nn.Module):
         pad_to: int | None = None,
         encode_chunk_batch_size: int = 1,
     ) -> torch.Tensor:
-        """Encode a dense video tensor into `[B, T_p, H_p, W_p, 2C]` latent moments.
+        return self._encode_grid(
+            video,
+            chunk_raw_frames=chunk_raw_frames,
+            pad_to=pad_to,
+            encode_chunk_batch_size=encode_chunk_batch_size,
+            project=True,
+        )
+
+    def encode_features(
+        self,
+        video: torch.Tensor,
+        chunk_raw_frames: int | None = None,
+        pad_to: int | None = None,
+        encode_chunk_batch_size: int = 1,
+    ) -> torch.Tensor:
+        """Encode a dense video into the post-encoder, post-normalization feature grid."""
+        return self._encode_grid(
+            video,
+            chunk_raw_frames=chunk_raw_frames,
+            pad_to=pad_to,
+            encode_chunk_batch_size=encode_chunk_batch_size,
+            project=False,
+        )
+
+    def _encode_grid(
+        self,
+        video: torch.Tensor,
+        chunk_raw_frames: int | None = None,
+        pad_to: int | None = None,
+        encode_chunk_batch_size: int = 1,
+        *,
+        project: bool,
+    ) -> torch.Tensor:
+        """Encode a dense video tensor into a projected or native encoder grid.
 
         Args:
             video: Dense channels-last video tensor ``[B, T, H, W, 3]``.
@@ -431,11 +465,15 @@ class DenseAutoencoderRuntime(nn.Module):
 
         def _encode_padded_chunks(padded_chunks: list[torch.Tensor]) -> list[torch.Tensor]:
             if len(padded_chunks) == 1:
-                encoded = self._encode_video_chunk(padded_chunks[0], pad_to=pad_to)
+                encoded = self._encode_video_chunk(padded_chunks[0], pad_to=pad_to, project=project)
                 return [_trim_boundary_latents(encoded)]
 
             batched_video = cat_with_bounded_inputs(padded_chunks, dim=0)  # [B*G,t_pad,H,W,3]
-            encoded = self._encode_video_chunk(batched_video, pad_to=pad_to)  # [B*G,T_lat,Hp,Wp,2C]
+            encoded = self._encode_video_chunk(
+                batched_video,
+                pad_to=pad_to,
+                project=project,
+            )  # [B*G,T_lat,Hp,Wp,C]
             per_video_batch = padded_chunks[0].shape[0]
             return list(_trim_boundary_latents(encoded).split(per_video_batch, dim=0))
 
@@ -447,7 +485,7 @@ class DenseAutoencoderRuntime(nn.Module):
             # pad_to=None: this chunk has 1 temporal patch, not the regular chunk shape.
             first_frame = video[:, 0:1]  # [B,1,H,W,3]
             first_chunk = first_frame.expand(-1, patch_time, -1, -1, -1).contiguous()  # [B,Pt,H,W,3]
-            encoded_chunks.append(self._encode_video_chunk(first_chunk, pad_to=None))  # [B,1,Hp,Wp,2C]
+            encoded_chunks.append(self._encode_video_chunk(first_chunk, pad_to=None, project=project))  # [B,1,Hp,Wp,C]
 
         chunk_specs = [
             (
@@ -665,8 +703,10 @@ class DenseAutoencoderRuntime(nn.Module):
         self,
         dense_video_chunk: torch.Tensor,
         pad_to: int | None = None,
+        *,
+        project: bool = True,
     ) -> torch.Tensor:
-        """Encode one dense video chunk into projected latent moments."""
+        """Encode one dense video chunk into projected moments or native features."""
         assert pad_to is None or self.backend == "batched_with_padding", (
             "pad_to is only supported for batched_with_padding backend"
         )
@@ -687,7 +727,7 @@ class DenseAutoencoderRuntime(nn.Module):
             height_patches=height_patches,
             width_patches=width_patches,
             device=patch_feats.device,
-            dtype=self.autoencoder.encoder.input_layer.weight.dtype,
+            dtype=activation_dtype(self.autoencoder.encoder.input_layer.weight.dtype),
         )
 
         learned_pe = metadata.learned_pe
@@ -721,6 +761,7 @@ class DenseAutoencoderRuntime(nn.Module):
             q_seqlen=metadata.q_seqlen,
             cu_seqlens_q=metadata.cu_seqlens,
             max_q_seqlen=metadata.max_seq_len if not needs_padding else pad_to,
+            project=project,
         )
 
         if needs_padding:
@@ -738,10 +779,12 @@ class DenseAutoencoderRuntime(nn.Module):
         q_seqlen: list[int] | None = None,
         cu_seqlens_q: torch.Tensor | None = None,
         max_q_seqlen: int | None = None,
+        *,
+        project: bool = True,
     ) -> torch.Tensor:
-        """Encode one dense `[B, S, patch_dim]` chunk into projected latent moments."""
+        """Encode one dense `[B, S, patch_dim]` chunk into projected moments or native features."""
         encoder = self.autoencoder.encoder
-        input_dtype = encoder.input_layer.weight.dtype
+        input_dtype = activation_dtype(encoder.input_layer.weight.dtype)
         if patch_feats.dtype != input_dtype:
             patch_feats = patch_feats.to(input_dtype)
         patch_seq_len = patch_feats.shape[1]
@@ -750,7 +793,7 @@ class DenseAutoencoderRuntime(nn.Module):
             feats = feats + learned_pe  # [B,S,D]
 
         block_param = next(encoder.blocks.parameters(), None)
-        block_dtype = block_param.dtype if block_param is not None else feats.dtype
+        block_dtype = activation_dtype(block_param.dtype) if block_param is not None else feats.dtype
         if feats.dtype != block_dtype:
             feats = feats.to(block_dtype)  # [B,S,D]
 
@@ -773,6 +816,8 @@ class DenseAutoencoderRuntime(nn.Module):
         )
         feats = feats[:, :patch_seq_len]  # [B,S,D]
         feats = encoder.post_layernorm(feats)  # [B,S,D]
+        if not project:
+            return feats
         return F.linear(feats, self.autoencoder.proj.weight, self.autoencoder.proj.bias)  # [B,S,2L]
 
     def _patchify_dense_video(self, dense_video: torch.Tensor) -> torch.Tensor:
@@ -807,7 +852,7 @@ class DenseAutoencoderRuntime(nn.Module):
             height_patches=height_patches,
             width_patches=width_patches,
             device=feats.device,
-            dtype=self.autoencoder.decoder.input_layer.weight.dtype,
+            dtype=activation_dtype(self.autoencoder.decoder.input_layer.weight.dtype),
         )
         patch_feats = self._decode_chunk_core(
             feats,
@@ -836,7 +881,7 @@ class DenseAutoencoderRuntime(nn.Module):
     ) -> torch.Tensor:
         """Decode one dense `[B, S, latent_dim]` chunk into patch-space features."""
         decoder = self.autoencoder.decoder
-        input_dtype = decoder.input_layer.weight.dtype
+        input_dtype = activation_dtype(decoder.input_layer.weight.dtype)
         if feats.dtype != input_dtype:
             feats = feats.to(input_dtype)
 
@@ -846,7 +891,7 @@ class DenseAutoencoderRuntime(nn.Module):
             feats = feats + learned_pe  # [B,S,D]
 
         block_param = next(decoder.blocks.parameters(), None)
-        block_dtype = block_param.dtype if block_param is not None else feats.dtype
+        block_dtype = activation_dtype(block_param.dtype) if block_param is not None else feats.dtype
         if feats.dtype != block_dtype:
             feats = feats.to(block_dtype)  # [B,S,D]
 
@@ -1035,9 +1080,8 @@ class DenseAutoencoderRuntime(nn.Module):
             and module.pos_embedder.position_embedding.weight.requires_grad
         )
         # Trainable learned positions are cacheable only during eval without
-        # gradients. Even there, cache only weight-independent metadata: public
-        # tensor APIs do not expose a mutation generation that can reliably
-        # detect in-place updates to a learned position table.
+        # gradients. Even there, cache only weight-independent metadata:
+        # `.data` mutations do not reliably change tensor identity or version.
         cache_enabled = self.metadata_cache_max_entries > 0 and not (
             learned_position_requires_grad and (self.training or torch.is_grad_enabled())
         )
@@ -1057,7 +1101,7 @@ class DenseAutoencoderRuntime(nn.Module):
             if has_learned_position:
                 return replace(
                     cached,
-                    learned_pe=self._build_learned_position_embeddings(
+                    learned_pe=self._build_learned_position_embeddings(  # [1,T*H*W,D]
                         module,
                         temporal_patches=temporal_patches,
                         height_patches=height_patches,

@@ -26,6 +26,9 @@ ActionNormalizationMethod = Literal[
     "minmax",
 ]
 QUANTILE_ROT_SCALE_FLOOR_TARGET_MAX = 5.0
+_RAW_ROTATION_STATS_METHODS = frozenset(
+    {"quantile_rot", "quantile_rot_scale_floor", "asinh_rot", "piecewise_asinh_rot"}
+)
 
 
 class ActionNormalizer(Protocol):
@@ -228,6 +231,47 @@ def resolve_action_normalization(
     )
 
 
+def load_action_normalization_stats(
+    action_normalization: ActionNormalizationMethod,
+    *,
+    stats_path: str | Path,
+    stats_key: str | None = None,
+    expected_dim: int | None = None,
+) -> dict[str, torch.Tensor]:
+    """Load tensor action stats for a configured normalization method."""
+    if stats_key is None:
+        stats_key = "global_raw" if action_normalization in _RAW_ROTATION_STATS_METHODS else "global"
+    raw_stats = load_action_stats(str(stats_path), stats_key=stats_key)
+    if expected_dim is not None:
+        for name, values in raw_stats.items():
+            if values.shape != (expected_dim,):
+                raise ValueError(f"Action stats {name!r} must have shape [{expected_dim}], got {values.shape}.")
+    return {name: torch.from_numpy(values).float() for name, values in raw_stats.items()}
+
+
+def load_action_normalizer(
+    action_normalization: ActionNormalizationMethod | None,
+    *,
+    stats_path: str | Path,
+    apply_forward_clamp: bool,
+    stats_key: str | None = None,
+    expected_dim: int | None = None,
+) -> ActionNormalizer | None:
+    """Load and resolve an action normalizer from pre-computed stats."""
+    if action_normalization is None:
+        return None
+    return resolve_action_normalization(
+        action_normalization,
+        load_action_normalization_stats(
+            action_normalization,
+            stats_path=stats_path,
+            stats_key=stats_key,
+            expected_dim=expected_dim,
+        ),
+        apply_forward_clamp=apply_forward_clamp,
+    )
+
+
 def make_pose_action_scale_normalizer(
     action_dim: int,
     *,
@@ -262,6 +306,7 @@ class ActionProcessingRecord:
 
     raw_action_dim: int
     action_normalizer: ActionNormalizer | None
+    action_valid_mask: torch.Tensor | None = None  # [D_raw] bool
 
 
 def pad_action_to_max_dim(
@@ -312,6 +357,7 @@ class ActionProcessor:
         action: torch.Tensor,
         *,
         action_normalizer: ActionNormalizer | None,
+        action_valid_mask: torch.Tensor | None = None,  # [D_raw] bool
     ) -> dict[str, Any]:
         """Return a sample with canonical raw and model-space action fields.
 
@@ -331,17 +377,34 @@ class ActionProcessor:
                     f"Action normalizer changed action width from {raw_action_dim} to {int(action.shape[-1])}"
                 )
 
+        if action_valid_mask is not None:
+            if action_valid_mask.dtype != torch.bool or action_valid_mask.ndim != 1:
+                raise ValueError(
+                    f"action_valid_mask must be a 1D bool tensor, got "
+                    f"shape={tuple(action_valid_mask.shape)} dtype={action_valid_mask.dtype}"
+                )
+            if action_valid_mask.numel() != raw_action_dim:
+                raise ValueError(
+                    f"action_valid_mask width {action_valid_mask.numel()} != raw_action_dim {raw_action_dim}"
+                )
+            action_valid_mask = action_valid_mask.to(device=action.device).contiguous()
+
         processed_data_dict = dict(data_dict)
         processed_data_dict["action_raw"] = action_raw
         processed_data_dict["action"] = pad_action_to_max_dim(action, self.max_action_dim)  # [T,D_model]
         record = ActionProcessingRecord(
             raw_action_dim=raw_action_dim,
             action_normalizer=action_normalizer,
+            action_valid_mask=action_valid_mask,
         )
         processed_data_dict["raw_action_dim"] = (
             torch.tensor(record.raw_action_dim, dtype=torch.long) if self.action_channel_masking else None
         )  # []
         processed_data_dict["action_processing_record"] = record
+        if action_valid_mask is not None:
+            processed_data_dict["action_valid_mask"] = pad_action_to_max_dim(action_valid_mask, self.max_action_dim).to(
+                dtype=torch.bool
+            )
         return processed_data_dict
 
     @staticmethod

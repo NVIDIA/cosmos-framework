@@ -6,6 +6,8 @@ from typing import Dict, List, Optional
 
 import numpy as np
 import torch
+import transformers
+from packaging.version import Version
 from transformers.models.auto.processing_auto import AutoProcessor
 
 from cosmos_framework.utils import log
@@ -42,9 +44,17 @@ def maybe_parse_video_content(
                         log.critical(
                             f"fps is None for video {sub_content}. Better to set the fps explicitly", rank0_only=False
                         )
+                    frames_indices = sub_content.get("frames_indices")
+                    if frames_indices is None:
+                        frames_indices = list(range(len(sub_content["video"])))
+                    if len(frames_indices) != len(sub_content["video"]):
+                        raise ValueError(
+                            "Video frame metadata must contain one index per provided frame: "
+                            f"{len(frames_indices)} indices for {len(sub_content['video'])} frames"
+                        )
                     video_fps.append(fps)
-                    video_total_num_frames.append(len(sub_content["video"]))
-                    video_frames_indices.append(list(range(video_total_num_frames[-1])))
+                    video_total_num_frames.append(sub_content.get("total_num_frames", len(sub_content["video"])))
+                    video_frames_indices.append(frames_indices)
     return num_video, video_fps, video_total_num_frames, video_frames_indices
 
 
@@ -78,6 +88,8 @@ class Qwen3VLProcessor:
             )
 
         self.processor = AutoProcessor.from_pretrained(model_name_or_path_local, trust_remote_code=True)
+        normalized_name = str(name).lower()
+        self.retain_mm_token_type_ids = "qwen3.5" in normalized_name or "qwen3_5" in normalized_name
         log.info("Successfully loaded processor from local cache")
 
         if hasattr(self.processor, "image_token"):
@@ -144,6 +156,9 @@ class Qwen3VLProcessor:
                 "do_sample_frames": False,
                 "video_metadata": video_metadata[0] if num_video == 1 else video_metadata,
             }
+        chat_template_kwargs = (
+            {"processor_kwargs": kwargs} if Version(transformers.__version__) >= Version("5.0") else kwargs
+        )
         inputs = self.processor.apply_chat_template(
             messages,
             tokenize=tokenize,
@@ -153,16 +168,37 @@ class Qwen3VLProcessor:
             # padding="max_length",
             # max_length=16000,
             # truncation=False,
-            **kwargs,
+            **chat_template_kwargs,
         )
 
         # Convert batch features into single features
         # By default, the processor returns a batch of features, but we use processor in dataloader, so we need to convert it to single features
-        inputs["input_ids"] = inputs["input_ids"][0]  # [N_token]
-        inputs["attention_mask"] = inputs["attention_mask"][0]  # [N_token]
+        sequence_keys = ["input_ids", "attention_mask"]
+        if getattr(self, "retain_mm_token_type_ids", False):
+            sequence_keys.append("mm_token_type_ids")
+        else:
+            inputs.pop("mm_token_type_ids", None)
+        for key in sequence_keys:
+            if key in inputs:
+                inputs[key] = inputs[key][0]  # [N_token]
+        if "mm_token_type_ids" in inputs and inputs["mm_token_type_ids"].shape != inputs["input_ids"].shape:
+            log.warning(
+                "Processor returned mm_token_type_ids with shape "
+                f"{inputs['mm_token_type_ids'].shape} for input_ids with shape {inputs['input_ids'].shape}; "
+                "rebuilding modality IDs from the final token sequence"
+            )
+            inputs["mm_token_type_ids"] = self.build_mm_token_type_ids(inputs["input_ids"])
         num_image_tokens = inputs["input_ids"] == self.image_token_id  # [N_token]
         num_video_tokens = inputs["input_ids"] == self.video_token_id  # [N_token]
         return inputs
+
+    def build_mm_token_type_ids(self, input_ids: torch.Tensor) -> torch.Tensor:
+        mm_token_type_ids = torch.zeros_like(input_ids, dtype=torch.long)
+        if self.image_token_id is not None:
+            mm_token_type_ids[input_ids == self.image_token_id] = 1
+        if self.video_token_id is not None:
+            mm_token_type_ids[input_ids == self.video_token_id] = 2
+        return mm_token_type_ids
 
     def add_assistant_tokens_mask(self, tokens):
         """

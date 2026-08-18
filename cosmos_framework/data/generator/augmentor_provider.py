@@ -789,7 +789,7 @@ def get_video_augmentor_v3_with_audio(
 def get_video_augmentor_v3_json_caption(
     resolution: str,
     caption_config: dict | None = None,
-    tokenizer_config: Optional[LazyDict] = None,
+    tokenizer_config: LazyDict | None = None,
     cfg_dropout_rate: float = 0.0,
     append_duration_fps_timestamps: bool = False,
     append_resolution_info: bool = False,
@@ -807,13 +807,17 @@ def get_video_augmentor_v3_json_caption(
     sound_generation_mode: str = "t2vs",
     extract_audio: bool = True,
     caption_key: str = "caption",
-    **kwargs,
-):
+    natural_language_caption: bool = False,
+    append_audio_caption: bool = False,
+    **kwargs: object,
+) -> dict[str, object]:
     """Build a video augmentation pipeline for JSON-captioned, chunked video datasets.
 
     The pipeline samples a single caption chunk per video, decodes only that chunk's
-    frames, optionally extracts audio, and injects ``metas["caption_audio"]`` into the
-    caption dict as an ``audio_description`` field when present.
+    frames, and optionally extracts audio. By default, metadata audio captions are
+    injected into the caption dictionary. Natural-language mode instead emits the
+    selected inner caption as text and can append the audio caption in its own
+    paragraph before a final video metadata section.
 
     Args:
         resolution: Target resolution key (e.g., "480p"). Looked up in VIDEO_RES_SIZE_INFO
@@ -846,12 +850,18 @@ def get_video_augmentor_v3_json_caption(
             When False, emits placeholder sound=None and audio_sample_rate keys
             without decoding audio.  Useful for mixing video-only and audio
             datasets in the same dataloader with consistent output keys.
+        natural_language_caption: Emit the selected chunk caption as text.
+        append_audio_caption: Append a decoded audio caption to natural-language
+            text before duration and resolution metadata.
         **kwargs: Additional keyword arguments forwarded via ``conditioning_config``,
             ``uniform_conditioning``, ``temporal_compression_factor``.
 
     Returns:
         dict: Ordered dictionary of augmentation stage name to LazyCall config.
     """
+
+    if append_audio_caption and not natural_language_caption:
+        raise ValueError("append_audio_caption requires natural_language_caption=True")
 
     conditioning_config = kwargs.get("conditioning_config", None)
     uniform_conditioning = kwargs.get("uniform_conditioning", False)
@@ -870,6 +880,7 @@ def get_video_augmentor_v3_json_caption(
                 "caption_config": caption_config,
                 "caption_key": caption_key,
                 "keep_metas": True,
+                "natural_language_caption": natural_language_caption,
             },
         ),
         "video_parsing": L(video_parsing.VideoParsingChunkedFrames)(
@@ -889,6 +900,7 @@ def get_video_augmentor_v3_json_caption(
                 "extract_audio": extract_audio,
                 "audio_sample_rate": audio_sample_rate,
                 "emit_placeholder_sound": not extract_audio,
+                "keep_metas": append_audio_caption,
                 "causal_vae": causal_vae,
                 "uniae_pad_frames": uniae_pad_frames,
                 "uniae_chunk_frames": uniae_chunk_frames,
@@ -994,6 +1006,36 @@ def get_video_augmentor_v3_json_caption(
             ),
         }
     )
+
+    if append_audio_caption:
+        # Keep the natural-language sections in training prompt order:
+        # video caption, audio description, then duration/resolution metadata.
+        duration_fps_timestamps = augmentors.pop("duration_fps_timestamps")
+        resolution_info = augmentors.pop("resolution_info")
+        text_tokenization = augmentors.pop("text_tokenization")
+        sound_sequence_plan_augmentor = augmentors.pop("sound_sequence_plan")
+        augmentors["audio_caption"] = L(audio_caption.AudioCaptionAppender)(
+            input_keys=["metas", "ai_caption"],
+            args={
+                "audio_caption_key": "caption_audio",
+                "sound_key": "sound",
+                "separator": "\n\nAudio description: ",
+            },
+        )
+        augmentors["duration_fps_timestamps"] = duration_fps_timestamps
+        augmentors["resolution_info"] = resolution_info
+        augmentors["text_tokenization"] = text_tokenization
+        augmentors["sound_sequence_plan"] = sound_sequence_plan_augmentor
+
+    if natural_language_caption:
+        # Natural-language prompts keep generated descriptions and mechanical
+        # video metadata in separate paragraphs, with or without audio.
+        if append_duration_fps_timestamps:
+            augmentors["duration_fps_timestamps"]["args"]["separator"] = "\n\nMeta: "
+            augmentors["duration_fps_timestamps"]["args"]["force_separator"] = True
+        elif append_resolution_info:
+            augmentors["resolution_info"]["args"]["separator"] = "\n\nMeta: "
+            augmentors["resolution_info"]["args"]["force_separator"] = True
 
     if resize_on_read:
         # When resize_on_read is True, we resize the video frames on read instead of during decoding.
@@ -1312,8 +1354,8 @@ def image_basic_augmentor_with_tokenization(
             to convert captions into token IDs.
         cfg_dropout_rate: Probability of dropping the caption (replacing with empty string)
             for classifier-free guidance training.
-        append_resolution_info: If True, appends a resolution metadata string
-            (e.g., "This image is 512x512.") to the caption.
+        append_resolution_info: If True, appends image resolution in a final metadata
+            section (e.g., "\n\nMeta: This image is of 512x512 resolution.").
         use_system_prompt: If True, prepends a system prompt to the tokenized caption
             that instructs the model it is an image generation assistant.
         train_on_captions: If non-empty, only use these caption types (e.g. ["dense"], ["qwen3vl_30B_v1_dense"]).
@@ -1347,7 +1389,8 @@ def image_basic_augmentor_with_tokenization(
                 "caption_prefix": kwargs.get("caption_prefix", None),
             },
         ),
-        # Resolution info augmentor - appends metadata like "This image is 512x512."
+        # Resolution info augmentor - appends a final metadata section like
+        # "\n\nMeta: This image is of 512x512 resolution."
         # Reads final_height/final_width from CropToMultiple (required).
         "resolution_info": L(resolution_text_info.ResolutionTextInfo)(
             input_keys=["ai_caption", "images", "image_size"],
@@ -1358,6 +1401,8 @@ def image_basic_augmentor_with_tokenization(
                 "caption_key": "ai_caption",
                 "image_key": "images",
                 "enabled": append_resolution_info,
+                "separator": "\n\nMeta: ",
+                "force_separator": True,
             },
         ),
         "text_tokenization": L(text_tokenizer.TextTokenizerTransform)(

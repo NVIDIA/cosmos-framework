@@ -11,7 +11,8 @@ Topology
   ``world_size`` so the overlay grid is well-formed, but the same rank may
   appear in both a dp group AND a cp/cfgp group.
 
-Three meshes are built (any subset, depending on which axes are >1):
+Three meshes are built (``dp_mesh`` always for training, the overlays depending
+on which of their axes are >1):
 
 ================  ===========================================================
 Mesh              Shape / dims
@@ -70,8 +71,10 @@ class ParallelDims:
                                used for only VFM to parallelize the conditional and
                                unconditional guidance.
         enable_inference_mode: Selects inference-time semantics — ``cfgp`` may
-                               be >1 and ``dp_enabled`` ignores ``dp_replicate``
-                               (matches the legacy VFM inference path).
+                               be >1 and ``dp_enabled`` becomes degree-based
+                               (``dp_shard > 1``, ignoring ``dp_replicate``) rather than
+                               training's unconditional True (matches the legacy VFM
+                               inference path).
     """
 
     world_size: int
@@ -227,9 +230,18 @@ class ParallelDims:
 
     @property
     def dp_enabled(self) -> bool:
+        """Whether a dp mesh is built and the network is wrapped in FSDP2 units.
+
+        Training is unconditional, degree 1 (a single-rank ``(1, 1)`` mesh) included: the
+        wrap is also what installs the ``MixedPrecisionPolicy``, so skipping it where there
+        is no cross-rank sharding to gain would leave nothing to cast the master parameters
+        down to the compute dtype, silently making the master dtype the compute dtype.
+        Inference installs no policy, so it keeps the degree-based test rather than pay for
+        DTensor parameters it cannot use, and ignores ``dp_replicate``.
+        """
         if self.enable_inference_mode:
             return self.dp_shard > 1
-        return self.dp_replicate > 1 or self.dp_shard > 1
+        return True
 
     @property
     def dp_shard_enabled(self) -> bool:

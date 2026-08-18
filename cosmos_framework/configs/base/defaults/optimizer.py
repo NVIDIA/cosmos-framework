@@ -34,8 +34,10 @@ OPTIMIZER_KWARGS: dict[str, Any] = dict(
 # Muon / Dion2 share the standard factory knobs (keys_to_select, lr_multipliers,
 # disable_weight_decay_for_1d_params) plus their own orthogonalization
 # hyperparameters. ``fused`` is required by the factory; the AdamW side is fused
-# by construction, ``capturable`` is forced on, and ``master_weights`` is derived
-# from the parameter dtypes (see ``_needs_master_weights`` in utils/optimizer.py).
+# by construction and ``capturable`` is forced on. Both optimizers require FP32
+# params and update them in place, so they take no ``master_weights`` (unlike
+# FusedAdam, which derives it from the parameter dtypes -- see
+# ``_needs_master_weights`` in utils/optimizer.py).
 MUON_OPTIMIZER_KWARGS: dict[str, Any] = dict(
     # Base learning rate. Muon scales matrix params by muon_lr_scale*sqrt(max(A,B));
     # the AdamW side and the per-param-group lr_multipliers use it directly.
@@ -97,7 +99,7 @@ DION2_OPTIMIZER_KWARGS: dict[str, Any] = dict(
     max_dion2_megabatch_width=25,
     # Opt-in Torch/NVTX annotations for forward/NS/reverse/apply phases.
     dion2_profile_phases=False,
-    # MoE expert gate/up split and multi-layer NS megabatching.
+    # Shared and routed MoE expert gate/up splitting, plus multi-layer NS megabatching.
     split_expert_gate_up=False,
     batch_split_expert_ns=False,
     max_moe_expert_ns_matrices=0,

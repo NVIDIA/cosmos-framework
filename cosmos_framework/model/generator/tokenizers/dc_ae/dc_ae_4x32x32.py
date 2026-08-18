@@ -2,7 +2,6 @@
 # SPDX-License-Identifier: OpenMDW-1.1
 
 from collections.abc import Sequence
-from typing import Optional
 
 import torch
 
@@ -36,8 +35,8 @@ class DCAE4x32x32Interface(VideoTokenizerInterface):
         device: str = "cuda",
         compilable: bool = True,
         causal: bool = True,
-        encode_exact_durations: Optional[list[int]] = None,
-    ):
+        encode_exact_durations: list[int] | None = None,
+    ) -> None:
         self._causal = causal
         assert self._causal, "DCAE4x32x32Interface is a causal tokenizer; causal must be True."
         assert encode_exact_durations is None, "DCAE4x32x32Interface does not support encode_exact_durations."
@@ -140,10 +139,10 @@ class DCAE4x32x32Interface(VideoTokenizerInterface):
                     self.model.encode(torch.randn(1, 3, T, H, W).cuda().to(torch.bfloat16))
 
     @property
-    def dtype(self):
+    def dtype(self) -> torch.dtype:
         return self.model.dtype
 
-    def reset_dtype(self):
+    def reset_dtype(self) -> None:
         pass
 
     @torch.inference_mode()
@@ -171,33 +170,33 @@ class DCAE4x32x32Interface(VideoTokenizerInterface):
     def get_latent_num_frames(self, num_pixel_frames: int) -> int:
         return (num_pixel_frames + self.model.cfg.num_pad_frames) // self._temporal_compression_factor
 
-    def get_pixel_num_frames(self, num_latent_frames: int, **kwargs) -> int:
+    def get_pixel_num_frames(self, num_latent_frames: int, **kwargs: object) -> int:
         return num_latent_frames * self._temporal_compression_factor - self.model.cfg.num_pad_frames
 
     @property
-    def spatial_compression_factor(self):
+    def spatial_compression_factor(self) -> int:
         return self._spatial_compression_factor
 
     @property
-    def temporal_compression_factor(self):
+    def temporal_compression_factor(self) -> int:
         return self._temporal_compression_factor
 
     @property
-    def pixel_chunk_duration(self):
+    def pixel_chunk_duration(self) -> int:
         return self.chunk_duration
 
     @property
-    def latent_chunk_duration(self):
+    def latent_chunk_duration(self) -> int:
         return self.get_latent_num_frames(self.chunk_duration)
 
     @property
-    def latent_ch(self):
+    def latent_ch(self) -> int:
         return self.model.cfg.latent_channels
 
     @property
-    def spatial_resolution(self):
+    def spatial_resolution(self) -> int:
         return 512
 
     @property
-    def name(self):
+    def name(self) -> str:
         return "dc_ae_4x32x32_tokenizer"

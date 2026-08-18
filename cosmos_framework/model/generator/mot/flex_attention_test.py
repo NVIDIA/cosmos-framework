@@ -6,7 +6,7 @@ import dataclasses
 import math
 import unittest.mock
 from collections.abc import Iterator
-from typing import cast
+from typing import Any, cast
 
 import pytest
 import torch
@@ -785,28 +785,41 @@ _MULTIVIEW_CASES: dict[str, dict] = {
     # One item, 2 views x 2 frames/view x 2 spatial tokens, first latent frame
     # of each camera kept clean.
     "two_views_first_frame_cond": dict(
-        num_vision_items_per_sample=[1],
+        num_items_per_sample=[1],
         token_shapes=[(4, 2, 1)],
-        num_views_per_vision_item=[2],
+        num_views_per_item=[2],
         condition_frames=[[0, 2]],
         pad=4,
     ),
     # Transfer layout: every sample carries a noisy video plus a fully
     # conditioning control item sharing its (frame, view) grid.
     "transfer_two_items_two_samples": dict(
-        num_vision_items_per_sample=[2, 2],
+        num_items_per_sample=[2, 2],
         token_shapes=[(4, 1, 2), (4, 1, 2), (2, 2, 1), (2, 2, 1)],
-        num_views_per_vision_item=[2, 2, 1, 1],
+        num_views_per_item=[2, 2, 1, 1],
         condition_frames=[[0], [0, 1, 2, 3], [], [0, 1]],
         pad=5,
     ),
     # Degenerate single-frame single-view item, exactly filling the sequence.
     "single_frame_single_view": dict(
-        num_vision_items_per_sample=[1],
+        num_items_per_sample=[1],
         token_shapes=[(1, 3, 3)],
-        num_views_per_vision_item=[1],
+        num_views_per_item=[1],
         condition_frames=[[]],
         pad=0,
+    ),
+    # Joint camera + LiDAR: one sample owning a camera pair on a 3-frame grid and a range
+    # pair on a 4-frame one, each pair a fully conditioning control item beside its noisy
+    # target, as JointCamLidarToTrainingFormat emits them. The range pair sits on view 1,
+    # which is how the LiDAR sweeps stay off the camera's grid; the two grids differ in
+    # both length and spatial extent, which is the case a per-sample grid check rejects.
+    "joint_camera_and_lidar": dict(
+        num_items_per_sample=[4],
+        token_shapes=[(3, 1, 2), (3, 1, 2), (4, 2, 1), (4, 2, 1)],
+        num_views_per_item=[1, 1, 1, 1],
+        condition_frames=[[0, 1, 2], [], [0, 1, 2, 3], []],
+        view_offsets_per_item=[0, 0, 1, 1],
+        pad=4,
     ),
 }
 
@@ -827,7 +840,7 @@ def _case_offsets(case: dict) -> torch.Tensor:
     """Per-sample cumulative GEN offsets, ``int32`` as the packer emits them."""
     offsets = [0]
     item_idx = 0
-    for num_items in case["num_vision_items_per_sample"]:
+    for num_items in case["num_items_per_sample"]:
         sample_tokens = 0
         for _ in range(num_items):
             latent_t, patch_h, patch_w = case["token_shapes"][item_idx]
@@ -841,10 +854,11 @@ def _expected_tokens(case: dict) -> list[dict]:
     """Per-token descriptors derived independently from the camera-major layout."""
     tokens: list[dict] = []
     item_idx = 0
-    for sample, num_items in enumerate(case["num_vision_items_per_sample"]):
+    view_offsets = case.get("view_offsets_per_item") or [0] * len(case["token_shapes"])
+    for sample, num_items in enumerate(case["num_items_per_sample"]):
         for item_in_sample in range(num_items):
             latent_t, patch_h, patch_w = case["token_shapes"][item_idx]
-            num_views = case["num_views_per_vision_item"][item_idx]
+            num_views = case["num_views_per_item"][item_idx]
             frames_per_view = latent_t // num_views
             condition_frames = set(case["condition_frames"][item_idx])
             for view in range(num_views):
@@ -855,7 +869,7 @@ def _expected_tokens(case: dict) -> list[dict]:
                             dict(
                                 s=sample,
                                 t=frame,
-                                v=view,
+                                v=view_offsets[item_idx] + view,
                                 noisy=not is_cond,
                                 ct=item_in_sample if is_cond else -1,
                             )
@@ -864,7 +878,9 @@ def _expected_tokens(case: dict) -> list[dict]:
     return tokens
 
 
-def _build_case_metadata(case: dict) -> tuple[FlexMetadata, int]:
+def _build_case_metadata(
+    case: dict, noisy_attention_scope: NoisyAttentionScope = "all_views"
+) -> tuple[FlexMetadata, int]:
     """Run the builder on a case; returns the metadata and the real token count."""
     offsets = _case_offsets(case)
     num_real = int(offsets[-1])
@@ -877,9 +893,11 @@ def _build_case_metadata(case: dict) -> tuple[FlexMetadata, int]:
         full_q_offsets=offsets,
         token_shapes=case["token_shapes"],
         condition_masks=condition_masks,
-        num_vision_items_per_sample=case["num_vision_items_per_sample"],
-        num_views_per_vision_item=case["num_views_per_vision_item"],
+        num_items_per_sample=case["num_items_per_sample"],
+        num_views_per_item=case["num_views_per_item"],
         device=torch.device("cpu"),
+        noisy_attention_scope=noisy_attention_scope,
+        view_offsets_per_item=case.get("view_offsets_per_item"),
     )
     return metadata, num_real
 
@@ -997,8 +1015,8 @@ def test_build_multiview_flex_metadata_accepts_flat_bool_condition_mask() -> Non
         full_q_offsets=_case_offsets(case),
         token_shapes=case["token_shapes"],
         condition_masks=[torch.tensor([True, False, True, False])],
-        num_vision_items_per_sample=case["num_vision_items_per_sample"],
-        num_views_per_vision_item=case["num_views_per_vision_item"],
+        num_items_per_sample=case["num_items_per_sample"],
+        num_views_per_item=case["num_views_per_item"],
         device=torch.device("cpu"),
     )
     assert torch.equal(from_bool.is_noisy, metadata.is_noisy)
@@ -1014,8 +1032,8 @@ def test_build_multiview_flex_metadata_rejects_bad_view_count(num_views: int) ->
             full_q_offsets=torch.tensor([0, 8], dtype=torch.int32),
             token_shapes=[(4, 1, 2)],
             condition_masks=[_condition_mask(4, [])],
-            num_vision_items_per_sample=[1],
-            num_views_per_vision_item=[num_views],
+            num_items_per_sample=[1],
+            num_views_per_item=[num_views],
             device=torch.device("cpu"),
         )
 
@@ -1028,22 +1046,22 @@ def test_build_multiview_flex_metadata_rejects_condition_mask_length() -> None:
             full_q_offsets=torch.tensor([0, 8], dtype=torch.int32),
             token_shapes=[(4, 1, 2)],
             condition_masks=[_condition_mask(3, [])],
-            num_vision_items_per_sample=[1],
-            num_views_per_vision_item=[2],
+            num_items_per_sample=[1],
+            num_views_per_item=[2],
             device=torch.device("cpu"),
         )
 
 
 @pytest.mark.L0
 def test_build_multiview_flex_metadata_rejects_item_count_mismatch() -> None:
-    with pytest.raises(ValueError, match="must align with flattened vision items"):
+    with pytest.raises(ValueError, match="must align with the flattened items"):
         build_multiview_flex_metadata(
             seq_len=16,
             full_q_offsets=torch.tensor([0, 8], dtype=torch.int32),
             token_shapes=[(4, 1, 2)],
             condition_masks=[_condition_mask(4, [])],
-            num_vision_items_per_sample=[2],  # two items claimed, one supplied
-            num_views_per_vision_item=[2],
+            num_items_per_sample=[2],  # two items claimed, one supplied
+            num_views_per_item=[2],
             device=torch.device("cpu"),
         )
 
@@ -1056,8 +1074,8 @@ def test_build_multiview_flex_metadata_rejects_packed_token_count_mismatch() -> 
             full_q_offsets=torch.tensor([0, 7], dtype=torch.int32),  # item contributes 8
             token_shapes=[(4, 1, 2)],
             condition_masks=[_condition_mask(4, [])],
-            num_vision_items_per_sample=[1],
-            num_views_per_vision_item=[2],
+            num_items_per_sample=[1],
+            num_views_per_item=[2],
             device=torch.device("cpu"),
         )
 
@@ -1071,8 +1089,97 @@ def test_build_multiview_flex_metadata_rejects_mixed_grids_in_a_sample() -> None
             # Same token count, but 2 views x 2 frames against 1 view x 4 frames.
             token_shapes=[(4, 1, 2), (4, 1, 2)],
             condition_masks=[_condition_mask(4, [0]), _condition_mask(4, [0, 1, 2, 3])],
-            num_vision_items_per_sample=[2],
-            num_views_per_vision_item=[2, 1],
+            num_items_per_sample=[2],
+            num_views_per_item=[2, 1],
+            device=torch.device("cpu"),
+        )
+
+
+@pytest.mark.L0
+def test_build_multiview_flex_metadata_rejects_mixed_grids_within_one_view_range() -> None:
+    """Items on their own views may disagree on the grid; items sharing views may not.
+
+    The relaxation that lets a camera pair sit beside a range pair has to stay confined to
+    the view boundary: on one view, conditioning still reaches noisy by matching the frame,
+    so a control item on another grid would condition the wrong moments silently.
+    """
+    with pytest.raises(ValueError, match=r"same \(num_views, frames_per_view\) grid"):
+        build_multiview_flex_metadata(
+            seq_len=64,
+            full_q_offsets=torch.tensor([0, 48], dtype=torch.int32),
+            token_shapes=[(4, 1, 2), (4, 1, 2), (4, 1, 2)],
+            condition_masks=[_condition_mask(4, [0]), _condition_mask(4, [0, 1, 2, 3]), _condition_mask(4, [])],
+            num_items_per_sample=[3],
+            # The first two share view offset 0 and disagree: 2 views x 2 frames against 1 x 4.
+            num_views_per_item=[2, 1, 1],
+            view_offsets_per_item=[0, 0, 2],
+            device=torch.device("cpu"),
+        )
+
+
+@pytest.mark.L0
+def test_build_multiview_flex_metadata_keeps_a_second_sensor_off_the_camera_grid() -> None:
+    """The joint layout: a camera pair on view 0 and a range pair on view 1.
+
+    Both are what the joint recipe packs and what a per-sample grid check rejected, the two
+    pairs running to different lengths. The view offset is what stops the rules that match on
+    ``(frame, view)`` from pairing a camera latent with the sweep of the same frame index --
+    1.33 s against 1.0 s, the streams running at 7.5 and 10 Hz.
+    """
+    case = _MULTIVIEW_CASES["joint_camera_and_lidar"]
+    metadata, num_real = _build_case_metadata(case)
+    camera_tokens = 2 * (3 * 2)
+
+    assert num_real == camera_tokens + 2 * (4 * 2)
+    assert torch.equal(
+        metadata.view_id[:num_real], torch.tensor([0] * camera_tokens + [1] * (num_real - camera_tokens))
+    )
+    # Each pair numbers its own frames, so both runs start at 0 and stop at their own length.
+    assert metadata.frame_id[:camera_tokens].max() == 2
+    assert metadata.frame_id[camera_tokens:num_real].max() == 3
+
+    m = _mask_mod_to_dense(metadata)
+    camera_noisy = int(metadata.is_noisy[:camera_tokens].nonzero()[0])
+    lidar_control = int((~metadata.is_noisy[camera_tokens:num_real]).nonzero()[0]) + camera_tokens
+    lidar_noisy = int(metadata.is_noisy[camera_tokens:num_real].nonzero()[0]) + camera_tokens
+    assert m[camera_noisy, lidar_noisy], "the sensors couple through their noisy tokens"
+    assert not m[camera_noisy, lidar_control], "and not through the other sensor's control clip"
+
+
+@pytest.mark.L0
+def test_joint_camera_lidar_rejects_factorized_same_view_or_frame() -> None:
+    """same_view_or_frame pairs tokens by frame index; camera and LiDAR do not share one."""
+    case = _MULTIVIEW_CASES["joint_camera_and_lidar"]
+    with pytest.raises(ValueError, match="same_view_or_frame"):
+        _build_case_metadata(case, noisy_attention_scope="same_view_or_frame")
+
+
+@pytest.mark.L0
+def test_build_multiview_flex_metadata_without_view_offsets_starts_every_item_at_view_zero() -> None:
+    """Omitting the offsets is the same batch as passing zero for every item.
+
+    This is the invariance that keeps every camera-only recipe on the mask it trained with:
+    the argument is new, and a pack that leaves it out has to build what it built before.
+    """
+    case = _MULTIVIEW_CASES["transfer_two_items_two_samples"]
+    without_offsets, _ = _build_case_metadata(case)
+    with_zero_offsets, _ = _build_case_metadata({**case, "view_offsets_per_item": [0] * len(case["token_shapes"])})
+
+    assert torch.equal(without_offsets.view_id, with_zero_offsets.view_id)
+    assert torch.equal(_mask_mod_to_dense(without_offsets), _mask_mod_to_dense(with_zero_offsets))
+
+
+@pytest.mark.L0
+def test_build_multiview_flex_metadata_rejects_view_offset_count_mismatch() -> None:
+    with pytest.raises(ValueError, match="view offsets for 2 flattened items"):
+        build_multiview_flex_metadata(
+            seq_len=32,
+            full_q_offsets=torch.tensor([0, 16], dtype=torch.int32),
+            token_shapes=[(4, 1, 2), (4, 1, 2)],
+            condition_masks=[_condition_mask(4, []), _condition_mask(4, [0, 1, 2, 3])],
+            num_items_per_sample=[2],
+            num_views_per_item=[1, 1],
+            view_offsets_per_item=[0],
             device=torch.device("cpu"),
         )
 
@@ -1093,8 +1200,8 @@ def test_build_multiview_flex_metadata_prepends_the_und_stream() -> None:
         full_q_offsets=_case_offsets(case),
         token_shapes=case["token_shapes"],
         condition_masks=condition_masks,
-        num_vision_items_per_sample=case["num_vision_items_per_sample"],
-        num_views_per_vision_item=case["num_views_per_vision_item"],
+        num_items_per_sample=case["num_items_per_sample"],
+        num_views_per_item=case["num_views_per_item"],
         device=torch.device("cpu"),
         num_und=num_und,
         causal_offsets=torch.tensor([0, 3, 5], dtype=torch.int32),  # 3 + 2 real UND tokens, 3 padded
@@ -1124,8 +1231,8 @@ def test_build_multiview_flex_metadata_requires_causal_offsets_for_a_fused_strea
             full_q_offsets=torch.tensor([0, 8], dtype=torch.int32),
             token_shapes=[(4, 1, 2)],
             condition_masks=[_condition_mask(4, [])],
-            num_vision_items_per_sample=[1],
-            num_views_per_vision_item=[2],
+            num_items_per_sample=[1],
+            num_views_per_item=[2],
             device=torch.device("cpu"),
             num_und=8,
         )
@@ -1139,8 +1246,8 @@ def test_build_multiview_flex_metadata_rejects_overlong_metadata() -> None:
             full_q_offsets=torch.tensor([0, 8], dtype=torch.int32),
             token_shapes=[(4, 1, 2)],
             condition_masks=[_condition_mask(4, [])],
-            num_vision_items_per_sample=[1],
-            num_views_per_vision_item=[2],
+            num_items_per_sample=[1],
+            num_views_per_item=[2],
             device=torch.device("cpu"),
         )
 
@@ -1513,8 +1620,8 @@ def test_build_multiview_block_mask_covers_the_padded_gen_stream(backend: FlexBa
         full_q_offsets=_case_offsets(case).to(device),
         token_shapes=case["token_shapes"],
         condition_masks=condition_masks,
-        num_vision_items_per_sample=case["num_vision_items_per_sample"],
-        num_views_per_vision_item=case["num_views_per_vision_item"],
+        num_items_per_sample=case["num_items_per_sample"],
+        num_views_per_item=case["num_views_per_item"],
         device=device,
         block_size=backend.block_size,
     )
@@ -1554,8 +1661,8 @@ def test_build_multiview_block_mask_matches_create_block_mask_on_a_camera_pack(
         full_q_offsets=torch.tensor([0, 2 * item_tokens], dtype=torch.int32),
         token_shapes=[(latent_t, spatial_tokens, 1)] * 2,
         condition_masks=[_condition_mask(latent_t, []), _condition_mask(latent_t, list(range(latent_t)))],
-        num_vision_items_per_sample=[2],
-        num_views_per_vision_item=[num_views, num_views],
+        num_items_per_sample=[2],
+        num_views_per_item=[num_views, num_views],
         device=torch.device("cpu"),
         noisy_attention_scope=noisy_attention_scope,
     )
@@ -1609,8 +1716,8 @@ def test_a_noisy_scope_reaches_the_block_mask_as_sparsity(
         full_q_offsets=torch.tensor([0, item_tokens], dtype=torch.int32),
         token_shapes=[(latent_t, spatial_tokens, 1)],
         condition_masks=[_condition_mask(latent_t, [])],
-        num_vision_items_per_sample=[1],
-        num_views_per_vision_item=[num_views],
+        num_items_per_sample=[1],
+        num_views_per_item=[num_views],
         device=torch.device("cpu"),
         block_size=backend.block_size,
         noisy_attention_scope=noisy_attention_scope,
@@ -1728,8 +1835,8 @@ def _wiring_block_mask(
             _condition_mask(latent_t, frames)
             for (latent_t, _, _), frames in zip(_WIRING_TOKEN_SHAPES, condition_frames)
         ],
-        num_vision_items_per_sample=[1] * len(_WIRING_UND_LENS),
-        num_views_per_vision_item=_WIRING_NUM_VIEWS,
+        num_items_per_sample=[1] * len(_WIRING_UND_LENS),
+        num_views_per_item=_WIRING_NUM_VIEWS,
         device=full_only_seq.device,
         block_size=block_size,
         num_und=causal_seq.shape[0],
@@ -1784,7 +1891,7 @@ def test_network_wiring_matches_the_reference_visibility_with_conditioning(backe
     is the case that ties ``token_shapes`` and the conditioning quadrants to the tokens
     the packer actually laid out.
 
-    It still cannot observe ``num_views_per_vision_item``, because every rule it exercises
+    It still cannot observe ``num_views_per_item``, because every rule it exercises
     reads the frame and view ids together (``same_fv``), and the camera-major layout makes
     ``(view, frame)`` a bijection with the latent index -- so "same (frame, view)" is "same
     latent frame" whatever the view count, which need only divide ``latent_t``. The test
@@ -1800,9 +1907,9 @@ def test_network_wiring_matches_the_reference_visibility_with_conditioning(backe
 
     tokens = _expected_tokens(
         dict(
-            num_vision_items_per_sample=[1] * len(_WIRING_UND_LENS),
+            num_items_per_sample=[1] * len(_WIRING_UND_LENS),
             token_shapes=_WIRING_TOKEN_SHAPES,
-            num_views_per_vision_item=_WIRING_NUM_VIEWS,
+            num_views_per_item=_WIRING_NUM_VIEWS,
             condition_frames=condition_frames,
         )
     )
@@ -1843,9 +1950,9 @@ def test_network_wiring_honours_the_noisy_attention_scope(
 
     tokens = _expected_tokens(
         dict(
-            num_vision_items_per_sample=[1] * len(_WIRING_UND_LENS),
+            num_items_per_sample=[1] * len(_WIRING_UND_LENS),
             token_shapes=_WIRING_TOKEN_SHAPES,
-            num_views_per_vision_item=_WIRING_NUM_VIEWS,
+            num_views_per_item=_WIRING_NUM_VIEWS,
             condition_frames=[[], []],
         )
     )
@@ -1859,3 +1966,110 @@ def test_network_wiring_honours_the_noisy_attention_scope(
     for other_scope in set(NOISY_ATTENTION_SCOPES) - {noisy_attention_scope}:
         other = _reference_visibility(tokens, q_len, und_samples=und_samples, noisy_attention_scope=other_scope)
         assert not torch.equal(expected, other), f"{noisy_attention_scope} and {other_scope} agree on this pack"
+
+
+def _mask_items_pack(*, num_views: int, with_lidar: bool, with_view_metadata: bool = True) -> Any:
+    """A one-sample pack of two camera items, optionally beside two LiDAR items."""
+    from cosmos_framework.data.generator.sequence_packing.sequence import ModalityData, PackedSequence
+
+    def stream(token_shapes: list[tuple[int, int, int]]) -> ModalityData:
+        return ModalityData(
+            tokens=[torch.zeros(1) for _ in token_shapes],
+            token_shapes=token_shapes,
+            condition_mask=[torch.ones(shape[0]) for shape in token_shapes],
+        )
+
+    camera_shape = (2 * num_views, 1, 1)
+    return PackedSequence(
+        sample_lens=[1],
+        vision=stream([camera_shape, camera_shape]),
+        num_vision_items_per_sample=[2],
+        num_views_per_vision_item=[num_views, num_views] if with_view_metadata else None,
+        lidar=stream([(3, 1, 1), (3, 1, 1)]) if with_lidar else None,
+        num_lidar_items_per_sample=[2] if with_lidar else None,
+    )
+
+
+@pytest.mark.L0
+def test_mask_items_leave_a_camera_only_pack_on_view_zero() -> None:
+    """No LiDAR means no view offsets at all, which is what keeps the camera mask untouched.
+
+    Imported here rather than at module scope because the network module pulls in the reasoner
+    stack, which these CPU cases have no need of.
+    """
+    from cosmos_framework.model.generator.mot.cosmos3_vfm_network import _multiview_mask_items
+
+    items = _multiview_mask_items(_mask_items_pack(num_views=2, with_lidar=False))
+
+    assert items.num_items_per_sample == [2]
+    assert items.num_views_per_item == [2, 2]
+    assert items.view_offsets_per_item is None
+
+
+@pytest.mark.L0
+def test_mask_items_place_the_lidar_stream_past_the_widest_camera_item() -> None:
+    """A six-camera rig owns views 0-5, so the range clips start at view 6, not view 1."""
+    from cosmos_framework.model.generator.mot.cosmos3_vfm_network import _multiview_mask_items
+
+    items = _multiview_mask_items(_mask_items_pack(num_views=6, with_lidar=True))
+
+    # The sample reads [camera, camera, lidar, lidar], the order the packer lays down.
+    assert items.num_items_per_sample == [4]
+    assert items.num_views_per_item == [6, 6, 1, 1]
+    assert items.view_offsets_per_item == [0, 0, 6, 6]
+    assert [shape[0] for shape in items.token_shapes] == [12, 12, 3, 3]
+
+
+@pytest.mark.L0
+def test_mask_items_read_a_joint_pack_without_per_camera_metadata_as_single_camera() -> None:
+    """The joint recipe's camera clips skip the per-camera encode path, so they carry no counts."""
+    from cosmos_framework.model.generator.mot.cosmos3_vfm_network import _multiview_mask_items
+
+    items = _multiview_mask_items(_mask_items_pack(num_views=1, with_lidar=True, with_view_metadata=False))
+
+    assert items.num_views_per_item == [1, 1, 1, 1]
+    assert items.view_offsets_per_item == [0, 0, 1, 1]
+
+
+@pytest.mark.L0
+def test_mask_items_reject_a_camera_only_pack_without_per_camera_metadata() -> None:
+    """Without a second stream to vouch for one view per item, a missing count stays an error."""
+    from cosmos_framework.model.generator.mot.cosmos3_vfm_network import _multiview_mask_items
+
+    with pytest.raises(ValueError, match="per-camera VAE metadata"):
+        _multiview_mask_items(_mask_items_pack(num_views=1, with_lidar=False, with_view_metadata=False))
+
+
+@pytest.mark.L0
+def test_mask_items_accept_a_lidar_only_pack() -> None:
+    """A range-only FlexAttention batch has no cameras, so every item stays on view 0."""
+    from cosmos_framework.model.generator.mot.cosmos3_vfm_network import _multiview_mask_items
+    from cosmos_framework.data.generator.sequence_packing.sequence import ModalityData, PackedSequence
+
+    lidar = ModalityData(
+        tokens=[torch.zeros(1), torch.zeros(1)],
+        token_shapes=[(3, 1, 1), (3, 1, 1)],
+        condition_mask=[torch.ones(3), torch.ones(3)],
+    )
+    items = _multiview_mask_items(
+        PackedSequence(
+            sample_lens=[1],
+            vision=None,
+            lidar=lidar,
+            num_lidar_items_per_sample=[2],
+        )
+    )
+
+    assert items.num_items_per_sample == [2]
+    assert items.num_views_per_item == [1, 1]
+    assert items.view_offsets_per_item is None
+    assert [shape[0] for shape in items.token_shapes] == [3, 3]
+
+
+@pytest.mark.L0
+def test_mask_items_reject_a_pack_with_neither_stream() -> None:
+    from cosmos_framework.model.generator.mot.cosmos3_vfm_network import _multiview_mask_items
+    from cosmos_framework.data.generator.sequence_packing.sequence import PackedSequence
+
+    with pytest.raises(ValueError, match="vision or LiDAR"):
+        _multiview_mask_items(PackedSequence(sample_lens=[1], vision=None, lidar=None))

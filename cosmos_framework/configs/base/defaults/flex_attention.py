@@ -26,7 +26,8 @@ import attrs
 # * ``"same_view"``: ``1/V`` of them. Each camera only attends to its own noisy tokens. Cost
 #   is V*(FS)^2.
 # * ``"same_view_or_frame"``: Each camera attends to its own noisy tokens plus the same frame in
-#   every other camera. Cost is V*(FS)^2 + F*(VS)^2.
+#   every other camera. Cost is V*(FS)^2 + F*(VS)^2. Not allowed on a joint camera + LiDAR pack:
+#   the two streams do not share a frame index.
 NoisyAttentionScope = Literal["all_views", "same_view", "same_view_or_frame"]
 
 # The scopes of ``NoisyAttentionScope`` at runtime, which the annotation itself is not.

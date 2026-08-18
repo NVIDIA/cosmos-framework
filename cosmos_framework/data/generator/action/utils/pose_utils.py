@@ -754,3 +754,41 @@ def compute_idle_frames(
         idle = _consecutive_streaks(idle, min_streak)
 
     return int(idle.sum())
+
+
+def compute_framewise_idle_frames(
+    action_raw: torch.Tensor | np.ndarray,
+    spec: "ActionSpec",  # noqa: F821 — forward ref, real import is in action_spec.py
+    *,
+    fps: float,
+    pose_convention: PoseConvention,
+    eps_t_per_sec: float = 5e-3,
+    eps_r_per_sec: float = math.radians(1.5),
+    eps_g: float = 1e-2,
+    joint_threshold_per_sec: float = 5e-3,
+    min_streak: int = 3,
+    eps_t: float | None = None,
+    eps_r: float | None = None,
+    joint_threshold: float | None = None,
+) -> torch.Tensor | None:  # [] or None
+    """Apply the shared framewise idle policy and return a trainer scalar.
+
+    Velocity thresholds are converted from per-second to per-frame units using
+    ``fps`` unless an explicit per-frame override is provided. Anchored and
+    absolute pose conventions do not have framewise idle semantics.
+    """
+    if pose_convention != "backward_framewise":
+        return None
+    if fps <= 0:
+        raise ValueError(f"fps must be positive, got {fps}.")
+
+    idle_frame_count = compute_idle_frames(
+        action_raw,
+        spec,
+        eps_t=eps_t if eps_t is not None else eps_t_per_sec / fps,
+        eps_r=eps_r if eps_r is not None else eps_r_per_sec / fps,
+        eps_g=eps_g,
+        joint_threshold=(joint_threshold if joint_threshold is not None else joint_threshold_per_sec / fps),
+        min_streak=min_streak,
+    )
+    return torch.tensor(idle_frame_count, dtype=torch.long)  # []

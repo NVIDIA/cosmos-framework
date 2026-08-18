@@ -394,16 +394,20 @@ def build_multiview_flex_metadata(
     full_q_offsets: torch.Tensor,
     token_shapes: Sequence[tuple[int, ...]],
     condition_masks: Sequence[torch.Tensor],
-    num_vision_items_per_sample: list[int],
-    num_views_per_vision_item: list[int],
+    num_items_per_sample: list[int],
+    num_views_per_item: list[int],
     device: torch.device,
     num_und: int = 0,
     causal_offsets: torch.Tensor | None = None,
     noisy_attention_scope: NoisyAttentionScope = "all_views",
+    view_offsets_per_item: Sequence[int] | None = None,
 ) -> FlexMetadata:
     """Build key-stream metadata for camera-major multiview transfer items.
 
-    Each vision item contributes ``latent_t * patch_h * patch_w`` tokens laid out
+    An item is one latent clip of one generation stream: a camera clip, or a LiDAR range
+    clip, which the caller appends after its sample's camera items.
+
+    Each item contributes ``latent_t * patch_h * patch_w`` tokens laid out
     view-outer, frame-inner, spatial-innermost, matching the dataset, which
     concatenates the per-camera clips along the latent time axis.
     ``condition_masks[i]`` indexes that same camera-major latent axis, with a
@@ -412,13 +416,17 @@ def build_multiview_flex_metadata(
     Two invariants are checked because violating either corrupts the mask
     silently rather than failing: the item token counts have to add up to the
     packed GEN token count (``full_q_offsets[-1]``), and all items of one sample
-    have to share a ``(num_views, frames_per_view)`` grid, since conditioning
-    tokens reach noisy tokens by matching ``(frame, view)``.
+    **sharing a view range** have to agree on their ``(num_views,
+    frames_per_view)`` grid, since conditioning tokens reach noisy tokens by
+    matching ``(frame, view)``. Items placed on disjoint views by
+    ``view_offsets_per_item`` are free to differ, no rule pairing them at
+    all -- a joint camera + LiDAR sample carries a 71-latent camera pair on view 0
+    beside a 94-sweep range pair on view 1.
 
     Shape notation used here and in the inline annotations below:
 
-    * ``num_samples = len(num_vision_items_per_sample)``;
-    * ``num_items = sum(num_vision_items_per_sample)``, the flattened item count;
+    * ``num_samples = len(num_items_per_sample)``;
+    * ``num_items = sum(num_items_per_sample)``, the flattened item count;
     * for item ``i``, ``token_shapes[i] = (latent_t, patch_h, patch_w)`` with
       ``latent_t = num_views * frames_per_view`` and
       ``spatial_tokens = patch_h * patch_w``, so the item owns
@@ -436,8 +444,8 @@ def build_multiview_flex_metadata(
             ``num_items`` entries.
         condition_masks: one mask per item, each ``[latent_t]`` over the camera-major
             latent axis; a non-zero entry marks a conditioning (clean) frame.
-        num_vision_items_per_sample: items owned by each sample, ``num_samples`` entries.
-        num_views_per_vision_item: cameras per item, ``num_items`` entries.
+        num_items_per_sample: items owned by each sample, ``num_samples`` entries.
+        num_views_per_item: cameras per item, ``num_items`` entries.
         device: device for the returned tensors.
         num_und: block-padded UND (causal) stream length, which prefixes the key
             stream. 0 leaves the metadata GEN-only, for a square self-attention mask.
@@ -449,6 +457,15 @@ def build_multiview_flex_metadata(
             those of every view, of its own view, or of its own view or frame. See
             ``NoisyAttentionScope``; :class:`FlexMetadata` carries it on to both forms
             of the predicate.
+        view_offsets_per_item: where each item's views start on the sample's view
+            axis, ``num_items`` entries. ``None`` starts every item at view 0, the shared
+            camera rig each pre-joint caller describes. A second sensor is another set of
+            views: giving the LiDAR items an offset past the cameras is what stops a camera
+            latent and a LiDAR sweep that happen to share a frame index -- different moments,
+            the two streams running at different latent rates -- from pairing up under the
+            rules that match on ``(frame, view)``. ``same_view_or_frame`` is rejected when
+            more than one offset is present, because that scope *does* pair across views
+            by frame index.
 
     Returns:
         :class:`FlexMetadata` whose five per-token fields are each
@@ -459,23 +476,42 @@ def build_multiview_flex_metadata(
 
     Raises:
         ValueError: if the per-item sequences disagree on ``num_items``, if a
-            ``latent_t`` is not divisible by its ``num_views``, if one sample's items
-            disagree on the ``(num_views, frames_per_view)`` grid, if a condition mask
-            length does not match its ``latent_t``, if ``real_token_count`` does not
-            match ``full_q_offsets[-1]`` or exceeds ``seq_len``, or if ``num_und`` is
-            non-zero without ``causal_offsets``.
+            ``latent_t`` is not divisible by its ``num_views``, if the items of one
+            sample sharing a view offset disagree on the ``(num_views, frames_per_view)``
+            grid, if a condition mask length does not match its ``latent_t``, if
+            ``real_token_count`` does not match ``full_q_offsets[-1]`` or exceeds
+            ``seq_len``, or if ``num_und`` is non-zero without ``causal_offsets``.
     """
     if num_und and causal_offsets is None:
         raise ValueError(
             f"A fused key stream with {num_und} UND tokens needs causal_offsets to label them by "
             "sample; without it every UND key would look like padding to the mask."
         )
-    num_items = sum(num_vision_items_per_sample)
-    if not (len(token_shapes) == len(condition_masks) == len(num_views_per_vision_item) == num_items):
+    num_items = sum(num_items_per_sample)
+    if not (len(token_shapes) == len(condition_masks) == len(num_views_per_item) == num_items):
         raise ValueError(
-            "Multiview FlexAttention metadata must align with flattened vision items: "
+            "Multiview FlexAttention metadata must align with the flattened items: "
             f"got {len(token_shapes)} token shapes, {len(condition_masks)} condition masks, "
-            f"{len(num_views_per_vision_item)} view counts, and {num_items} expected items."
+            f"{len(num_views_per_item)} view counts, and {num_items} expected items."
+        )
+    # All-zero is the single-rig case: every item's views start at 0, which is the layout
+    # every caller had before a second sensor could share the pack.
+    item_view_offsets = [0] * num_items if view_offsets_per_item is None else list(view_offsets_per_item)
+    if len(item_view_offsets) != num_items:
+        raise ValueError(
+            f"Multiview FlexAttention metadata got {len(item_view_offsets)} view offsets for "
+            f"{num_items} flattened items."
+        )
+    # same_view_or_frame is factorized spatial + temporal attention: a noisy token
+    # reaches its own view at every frame, and every view at its own frame index.
+    # A second sensor on its own view offset does not share that index — 7.5 Hz
+    # camera latents vs 10 Hz sweeps — so the temporal half of the factorization
+    # would pair unrelated moments.
+    if noisy_attention_scope == "same_view_or_frame" and len(set(item_view_offsets)) > 1:
+        raise ValueError(
+            "noisy_attention_scope='same_view_or_frame' is not allowed on a joint camera + "
+            "LiDAR pack: camera frames and LiDAR sweeps do not correspond. Use 'all_views' "
+            "or 'same_view'."
         )
 
     frame_ids: list[torch.Tensor] = []
@@ -483,26 +519,29 @@ def build_multiview_flex_metadata(
     noisy_flags: list[torch.Tensor] = []
     cond_type_ids: list[torch.Tensor] = []
     item_idx = 0
-    for sample_num_items in num_vision_items_per_sample:
-        sample_grid: tuple[int, int] | None = None
+    for sample_num_items in num_items_per_sample:
+        # Per view offset rather than per sample: the grid has to hold wherever the mask
+        # compares frames and views, and items on disjoint views are never compared.
+        sample_grids: dict[int, tuple[int, int]] = {}
         for cond_type in range(sample_num_items):
             latent_t, patch_h, patch_w = token_shapes[item_idx]
-            num_views = num_views_per_vision_item[item_idx]
+            num_views = num_views_per_item[item_idx]
             if num_views < 1 or latent_t % num_views != 0:
                 raise ValueError(
-                    f"Vision item {item_idx} has latent_t={latent_t}, which is not divisible by num_views={num_views}."
+                    f"Item {item_idx} has latent_t={latent_t}, which is not divisible by num_views={num_views}."
                 )
 
             frames_per_view = latent_t // num_views
             # Noisy tokens see conditioning tokens by matching (frame, view), so an item
             # on a different grid would pair up unrelated frames and leave the extra
             # cameras unconditioned without any complaint from the mask.
-            if sample_grid is None:
-                sample_grid = (num_views, frames_per_view)
-            elif sample_grid != (num_views, frames_per_view):
+            view_offset = item_view_offsets[item_idx]
+            offset_grid = sample_grids.setdefault(view_offset, (num_views, frames_per_view))
+            if offset_grid != (num_views, frames_per_view):
                 raise ValueError(
-                    "All vision items of a sample must share the same (num_views, frames_per_view) grid: "
-                    f"item {item_idx} has {(num_views, frames_per_view)}, expected {sample_grid}."
+                    "All vision items of a sample sharing a view offset must share the same "
+                    f"(num_views, frames_per_view) grid: item {item_idx} at view offset {view_offset} has "
+                    f"{(num_views, frames_per_view)}, expected {offset_grid}."
                 )
             spatial_tokens = patch_h * patch_w
             # Frame index cycles within each view; view index is constant across a view's
@@ -511,7 +550,9 @@ def build_multiview_flex_metadata(
                 torch.arange(frames_per_view, device=device).repeat(num_views).repeat_interleave(spatial_tokens)
             )  # [item_tokens]
             view_ids.append(
-                torch.arange(num_views, device=device).repeat_interleave(frames_per_view * spatial_tokens)
+                (view_offset + torch.arange(num_views, device=device)).repeat_interleave(
+                    frames_per_view * spatial_tokens
+                )
             )  # [item_tokens]
 
             condition_mask = condition_masks[item_idx].to(device=device, dtype=torch.bool)  # [latent_t]
@@ -960,13 +1001,14 @@ def build_multiview_block_mask(
     full_q_offsets: torch.Tensor,
     token_shapes: Sequence[tuple[int, ...]],
     condition_masks: Sequence[torch.Tensor],
-    num_vision_items_per_sample: list[int],
-    num_views_per_vision_item: list[int],
+    num_items_per_sample: list[int],
+    num_views_per_item: list[int],
     device: torch.device,
     block_size: tuple[int, int],
     num_und: int = 0,
     causal_offsets: torch.Tensor | None = None,
     noisy_attention_scope: NoisyAttentionScope = "all_views",
+    view_offsets_per_item: Sequence[int] | None = None,
 ) -> BlockMask:
     """Build the GEN-tower :class:`BlockMask` for camera-major multiview items.
 
@@ -974,8 +1016,9 @@ def build_multiview_block_mask(
     :func:`build_multiview_flex_metadata` and :func:`build_block_mask` back to back so
     the caller only handles the mask. See those two for the token layout the metadata
     encodes, for why the mask has to be built outside the decoder layers, for what
-    ``block_size`` selects, for what ``num_und`` / ``causal_offsets`` add, and for what
-    ``noisy_attention_scope`` lets the noisy tokens reach.
+    ``block_size`` selects, for what ``num_und`` / ``causal_offsets`` add, for what
+    ``noisy_attention_scope`` lets the noisy tokens reach, and for how
+    ``view_offsets_per_item`` keeps a second sensor's items on views of their own.
 
     The two stages stay separately callable because the metadata layout is checked on
     CPU in the unit tests, independently of the block-mask construction.
@@ -985,12 +1028,13 @@ def build_multiview_block_mask(
         full_q_offsets=full_q_offsets,
         token_shapes=token_shapes,
         condition_masks=condition_masks,
-        num_vision_items_per_sample=num_vision_items_per_sample,
-        num_views_per_vision_item=num_views_per_vision_item,
+        num_items_per_sample=num_items_per_sample,
+        num_views_per_item=num_views_per_item,
         device=device,
         num_und=num_und,
         causal_offsets=causal_offsets,
         noisy_attention_scope=noisy_attention_scope,
+        view_offsets_per_item=view_offsets_per_item,
     )
     return build_block_mask(metadata, device, block_size)
 
