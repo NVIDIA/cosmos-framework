@@ -58,8 +58,11 @@ _LAUNCHER = "tests/launch_sft_vision_nano_5iter.sh"
 
 # rank-0 per-iteration loss from the IterSpeed callback, e.g.
 #   [RANK 0] Iteration 1: Hit counter: 1/50 | Loss: 0.2302 | Time: ...
+# The ``[RANK n]`` prefix is only emitted while IterSpeed logs from every rank; it logs
+# rank-0-only in newer builds, which drops the prefix. Capture the rank when present so
+# either format yields one value per step instead of nothing / every rank's copy.
 _RANK0_LOSS_RE = re.compile(
-    r"\[RANK\s+0\]\s+Iteration\s+\d+:\s+Hit counter:[^|]+\|\s+Loss:\s+([-+0-9.eE]+)"
+    r"(?:\[RANK\s+(?P<rank>\d+)\]\s+)?Iteration\s+\d+:\s+Hit counter:[^|]+\|\s+Loss:\s+(?P<loss>[-+0-9.eE]+)"
 )
 
 
@@ -157,8 +160,12 @@ def _rank0_losses(text: str) -> list[float]:
     """Parse the rank-0 per-iteration ``Loss:`` series (one value per step)."""
     vals = []
     for m in _RANK0_LOSS_RE.finditer(text):
+        # An unprefixed line is already rank-0-only; a prefixed one counts only when it
+        # is rank 0, so the every-rank format does not multiply the series.
+        if (m.group("rank") or "0") != "0":
+            continue
         try:
-            v = float(m.group(1))
+            v = float(m.group("loss"))
         except ValueError:
             continue
         if v == v and abs(v) != float("inf"):  # finite (NaN != NaN)
