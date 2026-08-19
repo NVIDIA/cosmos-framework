@@ -47,13 +47,15 @@ class ParallelismConfig:
     enable_inference_mode: bool = False
 
     # Dtype of the FSDP-sharded "master" parameter copy: what nn.Parameter.data
-    # holds on each rank, what the optimizer reads/writes against, and the dtype
-    # the reduced gradient lands in. Threaded both to the HFModel meta-init
-    # (sharded-param storage dtype) and, unless ``fsdp_reduce_dtype`` overrides
-    # it, to MixedPrecisionPolicy.reduce_dtype. The forward/backward compute
-    # dtype is the separate ``precision`` field on the model config (mapped to
-    # MixedPrecisionPolicy.param_dtype).
-    # NOTE: only used in VLM; VFM has no FSDP master.
+    # holds on each rank, what the optimizer reads/writes against, and what the
+    # checkpoint stores. Supplies the sharded-param storage dtype at meta-init
+    # (VLM via HFModel, VFM via ``OmniMoTModel.set_up_model``) and, unless
+    # ``fsdp_reduce_dtype`` overrides it, MixedPrecisionPolicy.reduce_dtype -- so the
+    # reduced gradient lands in the dtype of the shard it writes back into.
+    # The forward/backward compute dtype is the separate ``precision`` field on
+    # the model config (mapped to MixedPrecisionPolicy.param_dtype).
+    # Setting it equal to ``precision`` opts out of mixed precision entirely: no policy is
+    # installed and the params are stored, computed with, and reduced in the compute dtype.
     fsdp_master_dtype: str = "float32"
 
     # Dtype of the gradient reduce-scatter itself (MixedPrecisionPolicy.reduce_dtype),
@@ -67,5 +69,4 @@ class ParallelismConfig:
     # the reduce output back to the sharded parameter's dtype before assigning .grad, so
     # only the collective and its staging buffer change. The cost is precision, since
     # gradients are then summed across the shard group in bf16.
-    # NOTE: only used in VLM; VFM has no FSDP master.
     fsdp_reduce_dtype: str | None = None

@@ -130,7 +130,7 @@ def parse_frame_range_from_wdinfo(wdinfo: str) -> tuple[int, int | float] | None
     return None
 
 
-def _normalize_skip_frame_ranges(
+def normalize_skip_frame_ranges(
     skip_frame_range: str | list[str] | None,
 ) -> set[tuple[int, int | float]]:
     """Normalize ``skip_frame_range`` into a set of (min_frames, max_frames) buckets.
@@ -211,7 +211,7 @@ def filter_wdinfos_by_frame_range(
         ['wdinfo/frames_400_500/wdinfo.json', 'wdinfo/frames_600_700/wdinfo.json']
         # frames_500_600 excluded because its bucket matches skip_frame_range
     """
-    skip_buckets = _normalize_skip_frame_ranges(skip_frame_range)
+    skip_buckets = normalize_skip_frame_ranges(skip_frame_range)
 
     if min_frames is None and max_frames is None and not skip_buckets:
         return wdinfos

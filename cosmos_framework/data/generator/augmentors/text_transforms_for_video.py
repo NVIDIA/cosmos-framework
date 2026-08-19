@@ -513,16 +513,18 @@ class TextTransformForVideoTransferChunkedFrames(TextTransformForVideoTransferFu
 
 
 class TextTransformForVideoJsonCaption(Augmentor):
-    """
-    This augmentor is used to transform the caption from a json string to a string.
-    The caption is assumed to be in the format of a json string.
-    The caption is then transformed to a string by converting the json string to a dictionary and then converting the dictionary to a string.
-    The caption is then returned as a string.
+    """Transform a chunk-keyed caption and expose its matching frame range.
 
-    When ``meta_dict["caption_audio"]`` is present and non-empty, its contents
-    are injected into the caption dict under the ``"audio_description"`` key.
-    This happens after the JSON field dropout so the audio description is
-    preserved whenever upstream metadata provides it.
+    The outer caption is a JSON object keyed by chunk. Inner captions may be
+    structured dictionaries, JSON-encoded dictionaries, or plain prose. Plain
+    prose is normalized to ``{"description": prose}`` so all downstream text
+    transforms receive a dictionary while ``VideoParsingChunkedFrames`` receives
+    the selected chunk's frame boundaries.
+
+    By default, a non-empty metadata audio caption is injected into the caption
+    dictionary. With ``natural_language_caption=True``, the selected chunk's
+    description is emitted as text instead so a downstream AudioCaptionAppender
+    can add the audio caption before a final video metadata section.
     """
 
     def __init__(self, input_keys: dict, output_keys: Optional[list] = None, args: Optional[dict] = None) -> None:
@@ -530,11 +532,12 @@ class TextTransformForVideoJsonCaption(Augmentor):
         assert len(input_keys) >= 2, (
             "TextTransformForVideoJsonCaption augmentor requires at least two input keys: [meta_key, video_key]"
         )
-        self.meta_key = input_keys[0]
-        self.video_key = input_keys[1]
-        self.args = args or {}
-        self.keep_metas = self.args.get("keep_metas", False)
-        self.caption_key = self.args.get("caption_key", "caption")
+        self.meta_key: str = input_keys[0]
+        self.video_key: str = input_keys[1]
+        self.args: dict = args or {}
+        self.keep_metas: bool = self.args.get("keep_metas", False)
+        self.caption_key: str = self.args.get("caption_key", "caption")
+        self.natural_language_caption: bool = self.args.get("natural_language_caption", False)
 
     @staticmethod
     def _json_dict_or_none(raw_caption: object) -> dict | None:
@@ -547,6 +550,25 @@ class TextTransformForVideoJsonCaption(Augmentor):
         except (json.JSONDecodeError, TypeError):
             return None
         return parsed_caption if isinstance(parsed_caption, dict) else None
+
+    @staticmethod
+    def _caption_payload_to_dict(raw_caption: object) -> dict:
+        """Normalize a structured JSON or plain-text chunk caption."""
+        if isinstance(raw_caption, dict):
+            return dict(raw_caption)
+        if not isinstance(raw_caption, str) or not raw_caption.strip():
+            raise ValueError("chunk caption must be a non-empty string or dictionary")
+
+        try:
+            parsed_caption = json.loads(raw_caption)
+        except (json.JSONDecodeError, TypeError):
+            return {"description": raw_caption}
+
+        if isinstance(parsed_caption, dict):
+            return parsed_caption
+        if isinstance(parsed_caption, str) and parsed_caption.strip():
+            return {"description": parsed_caption}
+        raise ValueError("chunk caption JSON must decode to a non-empty string or dictionary")
 
     @staticmethod
     def _frame_count_or_large_bound(meta_dict: dict) -> int:
@@ -630,9 +652,9 @@ class TextTransformForVideoJsonCaption(Augmentor):
 
         Parses the per-chunk caption JSON, randomly samples one chunk, and writes
         the chunk's frame range into ``data_dict`` so a downstream
-        ``VideoParsingChunkedFrames`` can decode only that frame range. When a
-        non-empty ``caption_audio`` field is present in the metadata, it is
-        injected into the caption dict under the ``"audio_description"`` key.
+        ``VideoParsingChunkedFrames`` can decode only that frame range. Output is
+        either the existing structured caption or, when configured, the selected
+        description as natural-language text.
 
         Args:
             data_dict (dict): Input data dict
@@ -688,10 +710,8 @@ class TextTransformForVideoJsonCaption(Augmentor):
             data_dict["chunk_start_frame"] = int(sampled_chunk["start_frame"])
             data_dict["chunk_end_frame"] = int(sampled_chunk["end_frame"])
 
-            if "caption_json" in sampled_chunk:
-                caption_json = sampled_chunk["caption_json"]
-            else:
-                caption_json = json.loads(sampled_chunk["caption"])
+            caption_payload = sampled_chunk.get("caption_json", sampled_chunk.get("caption"))
+            caption_json = self._caption_payload_to_dict(caption_payload)
         except Exception as e:
             log.warning(
                 f"TextTransformForVideoJsonCaption dataloader error -- url: {data_dict.get('__url__')}, key: {data_dict.get('__key__')}\n error {e}",
@@ -705,13 +725,23 @@ class TextTransformForVideoJsonCaption(Augmentor):
                 if random.random() < json_field_dropout_rate:
                     caption_json.pop(key)
 
-        # Inject audio caption from metas as a new field when available. Added after the field
-        # dropout above so it is preserved whenever upstream metadata provides it.
-        audio_caption = self._find_audio_caption(meta_dict)
-        if isinstance(audio_caption, str) and len(audio_caption) > 0:
-            caption_json["audio_description"] = audio_caption
-
-        data_dict["ai_caption"] = caption_json
+        if self.natural_language_caption:
+            caption_text = caption_json.get("description")
+            if not isinstance(caption_text, str) or not caption_text.strip():
+                log.warning(
+                    f"TextTransformForVideoJsonCaption: natural-language chunk is missing a description. "
+                    f"url: {data_dict.get('__url__')}, key: {data_dict.get('__key__')}",
+                    rank0_only=False,
+                )
+                return None
+            data_dict["ai_caption"] = caption_text
+        else:
+            # Inject audio caption from metas as a new field when available. Added after the field
+            # dropout above so it is preserved whenever upstream metadata provides it.
+            audio_caption = self._find_audio_caption(meta_dict)
+            if isinstance(audio_caption, str) and len(audio_caption) > 0:
+                caption_json["audio_description"] = audio_caption
+            data_dict["ai_caption"] = caption_json
 
         # Delete metas unless keep_metas=True (set when downstream augmentors still need them,
         # e.g. VideoParsingChunkedFrames needs framerate/width/height/nb_frames).

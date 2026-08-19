@@ -153,16 +153,22 @@ def test_multiview_extract_frames_resizes_torchcodec_frames(monkeypatch: pytest.
     module = _import_or_skip("cosmos_framework.data.generator.multiview.multiview_dataset")
     calls: list[tuple[object, list[int]]] = []
 
-    def fake_decode_frames_tchw_uint8(
-        source: object,
-        indices: list[int],
-        **_: object,
-    ) -> tuple[torch.Tensor, SimpleNamespace]:
-        calls.append((source, indices))
-        frames = torch.arange(len(indices) * 3 * 4 * 6, dtype=torch.uint8).reshape(len(indices), 3, 4, 6)  # [T,C,H,W]
-        return frames, SimpleNamespace(average_fps=29.97)
+    class FakeTorchCodecVideoReader:
+        metadata = SimpleNamespace(num_frames=100, average_fps=29.97)
 
-    monkeypatch.setattr(module, "decode_frames_tchw_uint8", fake_decode_frames_tchw_uint8)
+        def __init__(self, source: object) -> None:
+            self.source = source
+
+        def get_frames_tchw_uint8(self, indices: list[int]) -> torch.Tensor:
+            calls.append((self.source, indices))
+            return torch.arange(len(indices) * 3 * 4 * 6, dtype=torch.uint8).reshape(  # [T,C,H,W]
+                len(indices),
+                3,
+                4,
+                6,
+            )
+
+    monkeypatch.setattr(module, "TorchCodecVideoReader", FakeTorchCodecVideoReader)
 
     frames, fps, original_hw = module.ExtractFramesAndCaptions._extract_frames(  # [T,C,H,W]
         b"video",

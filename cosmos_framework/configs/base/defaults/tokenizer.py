@@ -229,6 +229,24 @@ def register_tokenizer() -> None:
     )
 
 
+def register_lidar_tokenizer() -> None:
+    """Register LiDAR tokenizers under ``model.config.lidar_tokenizer``.
+
+    A joint camera + LiDAR recipe holds two vision tokenizers at once, so the LiDAR one needs
+    its own package: registering it under ``model.config.tokenizer`` would displace the camera
+    tokenizer. With this group in place, the dataloader's per-sensor token accounting can
+    interpolate ``${model.config.lidar_tokenizer.temporal_compression_factor}`` the same way
+    it already reads the camera factors off ``model.config.tokenizer``.
+    """
+    cs = ConfigStore.instance()
+    cs.store(
+        group="lidar_tokenizer",
+        package="model.config.lidar_tokenizer",
+        name="lidar_transformer_vae_tokenizer",
+        node=LidarTransformerVAEConfig,
+    )
+
+
 def register_sound_tokenizer() -> None:
     """Register sound tokenizers in Hydra ConfigStore under model.config.sound_tokenizer."""
     cs = ConfigStore.instance()

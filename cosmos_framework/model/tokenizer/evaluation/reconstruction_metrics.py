@@ -18,6 +18,7 @@ import torch
 import torch.nn as nn
 
 from cosmos_framework.model.tokenizer.evaluation.lpips_cache import construct_with_shared_cache_warmup
+from cosmos_framework.model.tokenizer.utils.precision import metric_compute_autocast
 
 # Import torchmetrics for SSIM and LPIPS
 try:
@@ -167,32 +168,40 @@ class PSNRMetric(nn.Module):
             Dict with 'sum' (sum of per-sample PSNRs) and 'count' (number of samples)
             for proper distributed averaging.
         """
-        # Handle video format by flattening batch and time dimensions
-        if original.dim() == 5:  # (B, T, C, H, W)
-            b, t, c, h, w = original.shape
-            original = original.reshape(b * t, c, h, w)
-            reconstructed = reconstructed.reshape(b * t, c, h, w)
+        with metric_compute_autocast(original.device):
+            # Handle video format by flattening batch and time dimensions
+            if original.dim() == 5:  # (B, T, C, H, W)
+                b, t, c, h, w = original.shape
+                original = original.reshape(b * t, c, h, w)  # [B*T,C,H,W]
+                reconstructed = reconstructed.reshape(b * t, c, h, w)  # [B*T,C,H,W]
 
-        # Convert to uint8 [0, 255] range
-        original_uint8 = (original.clamp(0, 1) * 255).byte()
-        reconstructed_uint8 = (reconstructed.clamp(0, 1) * 255).byte()
+            # Convert to uint8 [0, 255] range
+            original_uint8 = (original.clamp(0, 1) * 255).byte()  # [B*,C,H,W]
+            reconstructed_uint8 = (reconstructed.clamp(0, 1) * 255).byte()  # [B*,C,H,W]
 
-        # Compute per-sample MSE on uint8 values (as float for precision)
-        mse = torch.mean((original_uint8.float() - reconstructed_uint8.float()) ** 2, dim=[1, 2, 3])  # (B,)
+            # Compute per-sample MSE on uint8 values (as float for precision)
+            mse = torch.mean(  # [B*]
+                (original_uint8.float() - reconstructed_uint8.float()) ** 2,
+                dim=[1, 2, 3],
+            )
 
-        # Handle zero MSE (identical images) - use max PSNR of 100 dB
-        max_psnr = 100.0
-        mse = torch.where(
-            mse == 0,
-            torch.tensor(10.0 ** (-max_psnr / 10.0) * 255.0 * 255.0, device=mse.device, dtype=mse.dtype),
-            mse,
-        )
+            # Handle zero MSE (identical images) - use max PSNR of 100 dB
+            max_psnr = 100.0
+            mse = torch.where(  # [B*]
+                mse == 0,
+                torch.tensor(  # []
+                    10.0 ** (-max_psnr / 10.0) * 255.0 * 255.0,
+                    device=mse.device,
+                    dtype=mse.dtype,
+                ),
+                mse,
+            )
 
-        # Compute PSNR per sample with max_val=255
-        psnr = 20 * torch.log10(255.0 / torch.sqrt(mse))
+            # Compute PSNR per sample with max_val=255
+            psnr = 20 * torch.log10(255.0 / torch.sqrt(mse))  # [B*]
 
-        # Return sum and count for proper distributed averaging
-        return {"sum": psnr.sum().item(), "count": psnr.shape[0]}
+            # Return sum and count for proper distributed averaging
+            return {"sum": psnr.sum().item(), "count": psnr.shape[0]}
 
 
 class SSIMMetric(nn.Module):
@@ -215,6 +224,11 @@ class SSIMMetric(nn.Module):
             self._ssim_metric = None
 
     def forward(self, original: torch.Tensor, reconstructed: torch.Tensor) -> dict:
+        """Compute SSIM in FP32 even when called from model autocast."""
+        with metric_compute_autocast(original.device):
+            return self._forward_fp32(original, reconstructed)
+
+    def _forward_fp32(self, original: torch.Tensor, reconstructed: torch.Tensor) -> dict:
         """Compute SSIM between original and reconstructed tensors.
 
         Args:
@@ -292,6 +306,11 @@ class LPIPSMetric(nn.Module):
             self._lpips_metric = None
 
     def forward(self, original: torch.Tensor, reconstructed: torch.Tensor) -> dict:
+        """Compute LPIPS in FP32 even when called from model autocast."""
+        with metric_compute_autocast(original.device):
+            return self._forward_fp32(original, reconstructed)
+
+    def _forward_fp32(self, original: torch.Tensor, reconstructed: torch.Tensor) -> dict:
         """Compute LPIPS between original and reconstructed tensors.
 
         Args:

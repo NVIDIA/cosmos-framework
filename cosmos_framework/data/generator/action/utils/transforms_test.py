@@ -173,6 +173,30 @@ def test_action_transform_pipeline_json_prompt_toggle() -> None:
 
 
 @pytest.mark.L0
+def test_action_transform_pipeline_preserves_explicit_action_valid_mask() -> None:
+    pipeline = ActionTransformPipeline(
+        tokenizer_config=None,
+        max_action_dim=4,
+        append_viewpoint_info=False,
+        append_duration_fps_timestamps=False,
+        append_resolution_info=False,
+    )
+    data_dict = {
+        "ai_caption": "Move.",
+        "video": torch.zeros(3, 3, 256, 256),
+        "action": torch.zeros(2, 2),
+        "mode": "wam",
+        "domain_id": torch.tensor(0),
+    }
+    valid_mask = torch.tensor([True, False])
+
+    result = pipeline(data_dict, resolution="256", action_valid_mask=valid_mask)
+
+    torch.testing.assert_close(result["action_valid_mask"], torch.tensor([True, False, False, False]))
+    torch.testing.assert_close(result["action_processing_record"].action_valid_mask, valid_mask)
+
+
+@pytest.mark.L0
 def test_action_transform_pipeline_supports_compact_streaming_video() -> None:
     pipeline = ActionTransformPipeline(
         tokenizer_config=None,

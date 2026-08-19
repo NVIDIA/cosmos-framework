@@ -104,6 +104,7 @@ class ModalityData:
     noisy_frame_indexes: list[torch.Tensor] = field(default_factory=list)
     domain_id: list[torch.Tensor] = field(default_factory=list)
     raw_action_dim: list[torch.Tensor | None] | None = field(default_factory=list)
+    action_valid_mask: list[torch.Tensor | None] | None = field(default_factory=list)
 
     def __post_init__(self) -> None:
         assert isinstance(self.sequence_indexes, torch.Tensor), "ModalityData.sequence_indexes must be finalized"
@@ -122,6 +123,8 @@ class ModalityData:
         # raw_action_dim is optional (e.g., when action-channel masking is disabled).
         if self.raw_action_dim is not None:
             self.raw_action_dim = [d.cuda() if d is not None else None for d in self.raw_action_dim]
+        if self.action_valid_mask is not None:
+            self.action_valid_mask = [m.cuda() if m is not None else None for m in self.action_valid_mask]
 
 
 def prepare_attention_mask_per_sample(split_lens, attn_modes, device="cpu"):

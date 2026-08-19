@@ -251,6 +251,7 @@ def build_sequence_plan_from_mode(
             - "forward_dynamics": Predict video given first frame and all actions
             - "inverse_dynamics": Predict actions given all video frames
             - "wam": Jointly denoise video and actions given the first frame
+            - "policy": Predict actions given the first frame
         video_length: Number of video frames (including the conditioning frame).
         action_length: Number of action steps (typically video_length - 1).
         has_text: Whether text conditioning is available. Defaults to True.
@@ -277,14 +278,14 @@ def build_sequence_plan_from_mode(
         {'has_text': True, 'has_vision': True, 'has_action': True,
          'condition_frame_indexes_vision': [0], 'condition_frame_indexes_action': []}
     """
-    valid_modes = ["forward_dynamics", "inverse_dynamics", "wam"]
+    valid_modes = ["forward_dynamics", "inverse_dynamics", "wam", "policy"]
     if mode not in valid_modes:
         raise ValueError(f"Invalid mode: {mode!r}. Must be one of {valid_modes}")
 
     # Determine condition frame indexes based on mode
-    # forward_dynamics/wam: first frame is clean (conditioning)
+    # forward_dynamics/wam/policy: first frame is clean (conditioning)
     # inverse_dynamics: all frames are provided as context
-    if mode in ["forward_dynamics", "wam"]:
+    if mode in ["forward_dynamics", "wam", "policy"]:
         condition_frame_indexes_vision = [0]
     elif mode == "inverse_dynamics":
         # All frames are observed for inverse dynamics
@@ -294,7 +295,7 @@ def build_sequence_plan_from_mode(
 
     # For action conditioning indexes:
     # forward_dynamics: all action steps are clean (conditioning)
-    # inverse_dynamics/wam: action is supervised (predicted)
+    # inverse_dynamics/wam/policy: action is supervised (predicted)
     # History frames (prepended) are always conditioning.
     #
     # `base_action_length` is the number of *predicted* action steps, i.e.
@@ -322,6 +323,8 @@ def build_sequence_plan_from_mode(
     has_initial_state = video_length > 1 and (base_action_length - 1) % (video_length - 1) == 0
     if mode == "forward_dynamics":
         condition_frame_indexes_action = list(range(action_length))
+    elif mode == "policy":
+        condition_frame_indexes_action = list(range(num_history_actions))
     elif base_action_length == video_length - 1:
         # Case A: only the history block is conditioning.
         condition_frame_indexes_action = list(range(num_history_actions))
@@ -341,7 +344,9 @@ def build_sequence_plan_from_mode(
     # `1 - num_history_actions`) is applied only when there is no
     # initial-state action, so the offset skips past the first action
     # slot that is instead consumed by the initial state.
-    if base_action_length == video_length - 1:
+    if mode == "policy":
+        action_start_frame_offset = 1 - num_history_actions
+    elif base_action_length == video_length - 1:
         action_start_frame_offset = 1 - num_history_actions  # Case A
     elif base_action_length == video_length:
         action_start_frame_offset = -num_history_actions  # Case B
@@ -604,6 +609,8 @@ class ActionTransformPipeline:
         data_dict: dict,
         resolution: str | None,
         action_normalizer: ActionNormalizer | None = None,
+        *,
+        action_valid_mask: torch.Tensor | None = None,
     ) -> dict:
         """Apply the transform pipeline to a single data dictionary.
 
@@ -634,6 +641,9 @@ class ActionTransformPipeline:
             action_normalizer: Optional source-provided action normalizer. When
                 present, only unpadded real action channels are normalized
                 before model-space channel padding.
+            action_valid_mask: Optional explicit slot-validity mask for the
+                unpadded action. This is passed separately from ``data_dict``
+                so intermediate transforms cannot silently drop it.
 
         Returns:
             The same dictionary, mutated in-place with padded tensors,
@@ -713,6 +723,7 @@ class ActionTransformPipeline:
             data_dict,
             action,
             action_normalizer=action_normalizer,
+            action_valid_mask=action_valid_mask,
         )
 
         return data_dict

@@ -23,6 +23,7 @@ EMBODIMENT_TO_DOMAIN_ID: dict[str, int] = {
     "xdof_yam": 16,
     "molmoact2_yam": 16,  # MolmoAct2 uses the same YAM 20D FK action contract
     "abc_yam": 16,  # ABC uses the same YAM 20D FK action contract
+    "robotwin": 17,  # RoboTwin dual-arm ALOHA (14D absolute joint_pos)
     "fractal": 20,
     "drawanything": 21,
     "behavior1k_lerobot": 22,  # BEHAVIOR-1K R1Pro mobile bimanual (23D joint action)
@@ -48,6 +49,7 @@ EMBODIMENT_TO_RAW_ACTION_DIM: dict[str, int] = {
     "molmoact2_yam": 20,
     "abc_yam": 20,
     "maniparena": 20,  # dual-arm EE: [pos(3)+rot6d(6)+gripper(1)] x 2
+    "robotwin": 14,  # dual-arm ALOHA: [L 6 joints + 1 gripper, R 6 joints + 1 gripper]
     "fractal": 10,
     "drawanything": 3,
     "behavior1k_lerobot": 23,  # base(3) trunk(4) arms(14) grippers(2)
