@@ -202,6 +202,34 @@ def is_reasoner_only(sample_overrides: Sequence["OmniSampleOverrides"]) -> bool:
     return bool(sample_overrides) and all(sample.sample_meta.model_mode.is_reasoner for sample in sample_overrides)
 
 
+def reasoner_only_overrides() -> list[str]:
+    """Config overrides that drop generation-side modules for reasoner-only runs.
+
+    Reasoner decoding runs entirely in the understanding tower, so none of these
+    modules are reachable. ``dcp.load`` is pull-based, so not building them also
+    means their tensors are never read from the checkpoint.
+
+    The three flags are deliberately orthogonal and each defaults to the
+    generation-enabled value: dropping any one entry from this list degrades to
+    the previous behaviour for that module alone, leaving the others in effect.
+    """
+    return [
+        # The generation VAE (Wan2.2 for Edge): ~1.3 GiB resident, and its weights
+        # are downloaded lazily at tokenizer construction, so skipping it also
+        # avoids a ~2.6 GiB download on a cold cache.
+        "model.config.load_vision_tokenizer=false",
+        # VFM-level generation heads: time_embedder, proj_in/proj_out, action_*, sound_*.
+        # All three modality flags must fall together: ``Cosmos3VFMNetworkConfig``
+        # asserts that action and sound generation each imply vision generation, and
+        # Edge checkpoints ship with ``action_gen=true``.
+        "model.config.vision_gen=false",
+        "model.config.action_gen=false",
+        "model.config.sound_gen=false",
+        # The MoT generation tower (every ``*_moe_gen`` module): ~2.0 GiB resident.
+        "model.config.vlm_config.model_instance.config.include_gen_pathway=false",
+    ]
+
+
 class VisionMode(StrEnum):
     IMAGE = "image"
     VIDEO = "video"

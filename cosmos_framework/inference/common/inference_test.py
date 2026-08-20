@@ -213,6 +213,41 @@ def test_download_on_nonzero_rank_reuses_broadcast_path(monkeypatch: pytest.Monk
     download.assert_not_called()
 
 
+def test_guardrail_runners_skip_video_construction(monkeypatch: pytest.MonkeyPatch) -> None:
+    """``include_video=False`` must not even construct the video runner.
+
+    Reasoner-only runs never reach the video guardrail, and the point of the flag
+    is to avoid paying for RetinaFace at all — asserting on ``video is None`` alone
+    would still pass if the runner were built and then discarded.
+    """
+    from cosmos_framework.auxiliary.guardrail.common import presets
+
+    text_runner = cast(Any, object())
+    video_builds: list[bool] = []
+    monkeypatch.setattr(presets, "create_text_guardrail_runner", lambda **_: text_runner)
+    monkeypatch.setattr(presets, "create_video_guardrail_runner", lambda **_: video_builds.append(True))
+
+    guardrail_args = GuardrailArgs(guardrails=True, offload_guardrail_models=False)
+    runners = GuardrailRunners.create(guardrail_args, include_video=False)
+
+    assert runners.text is text_runner
+    assert runners.video is None
+    assert video_builds == []
+
+
+def test_guardrail_runners_build_video_by_default(monkeypatch: pytest.MonkeyPatch) -> None:
+    from cosmos_framework.auxiliary.guardrail.common import presets
+
+    video_runner = cast(Any, object())
+    monkeypatch.setattr(presets, "create_text_guardrail_runner", lambda **_: cast(Any, object()))
+    monkeypatch.setattr(presets, "create_video_guardrail_runner", lambda **_: video_runner)
+
+    guardrail_args = GuardrailArgs(guardrails=True, offload_guardrail_models=False)
+    runners = GuardrailRunners.create(guardrail_args)
+
+    assert runners.video is video_runner
+
+
 def test_guardrail_runners() -> None:
     from cosmos_framework.auxiliary.guardrail.common import presets
 

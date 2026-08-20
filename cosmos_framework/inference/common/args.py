@@ -844,6 +844,18 @@ class GuardrailArgs(ArgsBase):
 
     guardrails: bool
     offload_guardrail_models: bool
+    video_guardrail: bool = pydantic.Field(default=True, exclude=True)
+    """Build the video guardrail runner.
+
+    Runtime-only policy field. It has no ``GuardrailOverrides`` counterpart on
+    purpose: exposing a CLI flag that disables face blurring for generative runs
+    would be a safety footgun, so only the reasoner-only path sets it False.
+
+    ``exclude=True`` keeps it out of ``model_dump()`` because ``SetupArgs`` dumps
+    must round-trip back through ``SetupOverrides``, which forbids extra keys
+    (see ``args_test.test_setup_args``). Anything that rebuilds args from a dump
+    therefore gets the safe default of building the runner.
+    """
 
 
 class GuardrailOverrides(OverridesBase):

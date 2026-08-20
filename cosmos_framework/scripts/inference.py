@@ -12,7 +12,7 @@ from typing import Annotated
 import pydantic
 import tyro
 
-from cosmos_framework.inference.args import OmniSetupOverrides, is_reasoner_only
+from cosmos_framework.inference.args import OmniSetupOverrides, is_reasoner_only, reasoner_only_overrides
 from cosmos_framework.inference.common.args import SampleOutputs, SetupOverrides, tyro_cli
 from cosmos_framework.inference.common.init import init_output_dir
 from cosmos_framework.utils import log
@@ -45,8 +45,10 @@ def inference(args: InferenceArgs):
         )
         log.info(f"Loaded {len(sample_overrides_list)} samples")
         if is_reasoner_only(sample_overrides_list):
-            setup_args.experiment_overrides.append("model.config.load_vision_tokenizer=false")
-            log.info("Reasoner-only inputs detected; generation vision tokenizer will not be loaded")
+            setup_args.experiment_overrides.extend(reasoner_only_overrides())
+            # Reasoner output is text, so no frames ever reach the video guardrail.
+            setup_args.video_guardrail = False
+            log.info("Reasoner-only inputs detected; generation-side modules will not be loaded")
         for sample_overrides in sample_overrides_list:
             assert sample_overrides.name
             sample_overrides.output_dir = setup_args.output_dir / sample_overrides.name
