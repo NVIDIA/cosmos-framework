@@ -489,11 +489,12 @@ class HFModel(nn.Module):
         Forces use_cache=False for training, applied after filtering because not every HF
         forward names use_cache in its signature (Qwen3-VL takes it via ``**kwargs``).
 
-        For nemotron_vl: attention_mask is also dropped. NemotronVLModel.get_rope_index
-        strips padding positions when attention_mask is present, returning position_ids
-        shorter than inputs_embeds (padded_len). With right-padding + causal attention,
-        valid tokens never attend to padding tokens regardless, so dropping attention_mask
-        is equivalent and avoids the shape mismatch.
+        For Nemotron VL (``nemotron_vl`` or its remote-code name
+        ``nemotron_siglip2``): attention_mask is also dropped.
+        NemotronVLModel.get_rope_index strips padding positions when attention_mask is
+        present, returning position_ids shorter than inputs_embeds (padded_len). With
+        right-padding + causal attention, valid tokens never attend to padding tokens
+        regardless, so dropping attention_mask is equivalent and avoids the shape mismatch.
         """
         probe_step = kwargs.pop("_probe_step", None)
         probe_tag = kwargs.pop("_probe_tag", None)
@@ -503,7 +504,7 @@ class HFModel(nn.Module):
             dropped = sorted(set(kwargs) - forward_keys)
             log.info(f"HFModel: dropping non-forward batch keys {dropped} before {type(self.model).__name__}.forward")
             self._logged_dropped_forward_keys = True
-        if self.hf_config.model_type == "nemotron_vl":
+        if self.hf_config.model_type in {"nemotron_vl", "nemotron_siglip2"}:
             filtered.pop("attention_mask", None)
         filtered["use_cache"] = False
         maybe_dump_pre_forward(self.model, filtered, probe_step, probe_tag)

@@ -47,6 +47,7 @@ from cosmos_framework.model.tokenizer.utils.hf import (
     prepare_nemotron_tokenizer_snapshot,
     resolve_hf_snapshot_path,
 )
+from cosmos_framework.model.tokenizer.utils.precision import activation_dtype
 from cosmos_framework.model.tokenizer.utils.tensors import cat_with_bounded_inputs, stack_with_bounded_inputs
 from cosmos_framework.model.tokenizer.utils.vlm_prompt_format import densevl_add_vision_id_text
 
@@ -982,7 +983,7 @@ class TextDecoderWrapper(nn.Module):
             name="projector_intermediate_size",
         )
         if dtype is None:
-            dtype = torch.bfloat16
+            dtype = torch.float32
 
         self.spec = family_spec or get_text_decoder_family_spec(model_name=model_name)
         if position_embedding_mode not in TEXT_DECODER_POSITION_EMBEDDING_MODES:
@@ -1281,7 +1282,12 @@ class TextDecoderWrapper(nn.Module):
 
     def _embed_input_ids(self, input_ids: torch.Tensor) -> torch.Tensor:
         """Embed token IDs using the model's input embedding module."""
-        return self.text_decoder.get_input_embeddings()(input_ids)
+        text_embeds = self.text_decoder.get_input_embeddings()(input_ids)
+        # Embedding lookups are not an autocast op, so FP32 embedding weights hand back an
+        # FP32 sequence. Stage it in the compute dtype instead: everything merged into it
+        # (image features, masks) follows this dtype, so leaving it FP32 would widen the
+        # whole decoder residual stream.
+        return text_embeds.to(activation_dtype(text_embeds.dtype))
 
     def _forward_nemotron_natten_from_embeddings(
         self,

@@ -479,7 +479,9 @@ class VisionDataOverrides(OverridesBase, _VisionDataBase):
 
     # Vision fields
     resolution: Resolution | None = None
-    """Vision resolution.
+    """Vision resolution tier, not a pixel dimension. Resolved against
+    ``aspect_ratio`` by ``vision_size`` -- ``"256"`` at the default ``16,9``
+    yields 320x192. See docs/inference.md for the full table.
 
     Defaults to model config resolution.
 

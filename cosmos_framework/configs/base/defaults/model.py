@@ -8,17 +8,6 @@ from cosmos_framework.configs.base.defaults.model_config import OmniMoTModelConf
 from cosmos_framework.configs.base.defaults.parallelism import ParallelismConfig
 from cosmos_framework.model.generator.omni_mot_model import OmniMoTModel
 
-MOT_DDP_CONFIG = dict(
-    trainer=dict(
-        distributed_parallelism="ddp",
-    ),
-    model=L(OmniMoTModel)(
-        config=OmniMoTModelConfig(),
-        _recursive_=False,
-    ),
-)
-
-
 MOT_FSDP_CONFIG = dict(
     trainer=dict(
         distributed_parallelism="fsdp",
@@ -27,6 +16,8 @@ MOT_FSDP_CONFIG = dict(
         config=OmniMoTModelConfig(
             parallelism=ParallelismConfig(
                 data_parallel_shard_degree=8,
+                fsdp_master_dtype="float32",
+                fsdp_reduce_dtype="bfloat16",
             ),
         ),
         _recursive_=False,
@@ -36,5 +27,4 @@ MOT_FSDP_CONFIG = dict(
 
 def register_model():
     cs = ConfigStore.instance()
-    cs.store(group="model", package="_global_", name="mot_ddp", node=MOT_DDP_CONFIG)
     cs.store(group="model", package="_global_", name="mot_fsdp", node=MOT_FSDP_CONFIG)

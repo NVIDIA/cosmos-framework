@@ -407,9 +407,10 @@ def apply_fsdp(
                             checkpoint; see :func:`apply_compile` and :func:`apply_ac`.
         parallel_dims:      ParallelDims with meshes already built via
                             :meth:`ParallelDims.build_meshes`.
-        parallelism_config: Source of the FSDP gradient-reduction dtype threaded to
-                            ``MixedPrecisionPolicy.reduce_dtype`` — ``fsdp_reduce_dtype``
-                            when set, else ``fsdp_master_dtype`` (see
+        parallelism_config: Source of the gradient-reduction dtype threaded to
+                            ``MixedPrecisionPolicy.reduce_dtype``: ``fsdp_reduce_dtype``
+                            when set, else ``fsdp_master_dtype``, which is also the dtype
+                            HFModel meta-init stored the sharded params in (see
                             :func:`_resolve_reduce_dtype`).
         precision:          FSDP MixedPrecisionPolicy parameter dtype
                             (``"bfloat16"``, ``"float16"``, or ``"float32"``).
@@ -418,6 +419,9 @@ def apply_fsdp(
         log.info("parallelize: no data-parallel axis (dp_shard == dp_replicate == 1) — skipping FSDP2 wrapping")
         return
 
+    # ``fsdp_reduce_dtype`` overrides the gradient-reduction dtype; ``None`` follows the
+    # master dtype, so the reduced gradient lands in the dtype of the shard it writes back
+    # into -- the shard the optimizer steps, and the dtype HFModel meta-init stored it in.
     mp_policy = MixedPrecisionPolicy(
         param_dtype=PRECISION_TO_TORCH_DTYPE[precision],
         reduce_dtype=_resolve_reduce_dtype(parallelism_config),
@@ -496,9 +500,9 @@ def parallelize(
                                   device).
         parallel_dims:            ParallelDims with meshes already built via
                                   :meth:`ParallelDims.build_meshes`.
-        parallelism_config:       Source of the FSDP gradient-reduction dtype
-                                  (``fsdp_reduce_dtype``, falling back to
-                                  ``fsdp_master_dtype``).
+        parallelism_config:       Source of the FSDP master and gradient-reduction dtypes
+                                  (``fsdp_master_dtype``, and ``fsdp_reduce_dtype``
+                                  falling back to it).
         precision:                FSDP MixedPrecisionPolicy parameter dtype.
         activation_checkpointing: AC policy (mode, ``save_ops_regex``,
                                   ``preserve_rng_state``, ``determinism_check``).

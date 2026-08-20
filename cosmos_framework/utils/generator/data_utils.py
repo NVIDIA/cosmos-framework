@@ -94,6 +94,10 @@ def slice_data_batch(
         ``video = [v1_s1, v2_s1, v1_s2, v2_s2]``. Slicing with
         ``start=0, limit=1`` returns ``video = [v1_s1, v2_s1]``.
 
+    The ``lidar`` field is flattened the same way and follows
+    ``num_lidar_items_per_sample``, since a sample's range clips need not be as
+    many as its camera clips.
+
     Args:
         data_batch: The data batch to slice.
         start: The start sample index (inclusive).
@@ -108,16 +112,15 @@ def slice_data_batch(
     assert start >= 0 and limit > 0, "Start and limit must be positive"
     assert start < limit, "Start must be less than limit"
 
+    def flat_range(counts: Any) -> tuple[int, int]:
+        counts_list = counts.tolist() if isinstance(counts, torch.Tensor) else list(counts)
+        return sum(counts_list[:start]), sum(counts_list[:limit])
+
     num_items = data_batch.get("num_vision_items_per_sample")
-    if num_items is not None:
-        if isinstance(num_items, torch.Tensor):
-            num_items_list = num_items.tolist()
-        else:
-            num_items_list = list(num_items)
-        flat_start = sum(num_items_list[:start])
-        flat_limit = sum(num_items_list[:limit])
-    else:
-        flat_start, flat_limit = start, limit
+    flat_start, flat_limit = flat_range(num_items) if num_items is not None else (start, limit)
+    # The LiDAR stream is flattened the same way, and counts its own items.
+    num_lidar_items = data_batch.get("num_lidar_items_per_sample")
+    lidar_start, lidar_limit = flat_range(num_lidar_items) if num_lidar_items is not None else (start, limit)
 
     multi_item_fields = set(multi_item_fields)
 
@@ -125,6 +128,8 @@ def slice_data_batch(
     for key, value in data_batch.items():
         if key in multi_item_fields and num_items is not None:
             s, e = flat_start, flat_limit
+        elif key == "lidar" and num_lidar_items is not None:
+            s, e = lidar_start, lidar_limit
         else:
             s, e = start, limit
         if isinstance(value, torch.Tensor):

@@ -917,26 +917,6 @@ def _impl_init(
     self.post_init()
 
 
-def _impl_init_taylorseer(self, cache_dic=None, current=None):
-    """Initialize TaylorSeer acceleration attributes.
-
-    Shared implementation for ``init_taylorseer`` on
-    ``Qwen3VLTextModel``, ``Qwen3VLMoeTextModel``, and
-    ``Nemotron3DenseVLTextModel``.
-    """
-    self.cache_dic = cache_dic or {}
-    self.current = current or {
-        "step": 0,
-        "type": "full",
-        "stream": "layers_stream",
-        "layer": 0,
-        "module": "total",
-        "activated_steps": [0],
-    }
-    # Enable TaylorSeer flag
-    self.enable_taylorseer = True
-
-
 def _stack_lbl_metadata(
     lbl_metadata_all: dict[str, list[LBLMetadata]],
 ) -> dict[str, LBLMetadata]:
@@ -1452,9 +1432,6 @@ class Qwen3VLTextModel(Qwen3VLPreTrainedModel):
             include_gen_pathway=include_gen_pathway,
         )
 
-    def init_taylorseer(self, cache_dic=None, current=None):
-        _impl_init_taylorseer(self, cache_dic=cache_dic, current=current)
-
     def forward(self, *args, **kwargs):
         return _impl_forward(self, *args, **kwargs)
 
@@ -1503,9 +1480,6 @@ class Qwen3VLMoeTextModel(Qwen3VLMoePreTrainedModel):
             include_gen_pathway=include_gen_pathway,
         )
 
-    def init_taylorseer(self, cache_dic=None, current=None):
-        _impl_init_taylorseer(self, cache_dic=cache_dic, current=current)
-
     def forward(self, *args, **kwargs):
         return _impl_forward(self, *args, **kwargs)
 
@@ -1539,9 +1513,6 @@ class Nemotron3DenseVLTextModel(Nemotron3DenseVLPreTrainedModel):
             use_und_k_norm_for_gen=use_und_k_norm_for_gen,
             include_gen_pathway=include_gen_pathway,
         )
-
-    def init_taylorseer(self, cache_dic=None, current=None) -> None:
-        _impl_init_taylorseer(self, cache_dic=cache_dic, current=current)
 
     def forward(self, *args, **kwargs):
         return _impl_forward(self, *args, **kwargs)

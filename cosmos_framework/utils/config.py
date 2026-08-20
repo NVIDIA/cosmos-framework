@@ -392,7 +392,7 @@ class Profiling:
     # CUDA memory snapshot: set this True to dump allocator snapshots.
     enable_memory_snapshot: bool = False
     save_s3: bool = False
-    profile_freq: int = 1
+    profile_freq: int = 100
     # Number of warmup iterations before the active profile iterations.
     profile_warmup: int = 3
     # Number of consecutive active iterations to capture in one trace.

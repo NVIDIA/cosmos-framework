@@ -20,6 +20,7 @@ from cosmos_framework.model.generator.mot.attention import (
 )
 from cosmos_framework.model.generator.mot.flex_attention import (
     FlexBackend,
+    MaskItem,
     build_multiview_block_mask,
     resolve_flex_backend,
 )
@@ -744,10 +745,17 @@ def _multiview_block_mask(pack: SequencePack, shape: _MultiviewShape, *, block_s
     return build_multiview_block_mask(
         seq_len=full_only_seq.shape[0],
         full_q_offsets=full_q_offsets,
-        token_shapes=list(shape.token_shapes),
-        condition_masks=[torch.zeros(latent_t, dtype=torch.bool) for latent_t, _, _ in shape.token_shapes],
-        num_vision_items_per_sample=[1] * len(shape.und_lens),
-        num_views_per_vision_item=list(shape.num_views),
+        items_per_sample=[
+            # One item per sample, none of it conditioning.
+            [
+                MaskItem(
+                    token_shape=token_shape,
+                    condition_mask=torch.zeros(token_shape[0], dtype=torch.bool),
+                    num_views=num_views,
+                )
+            ]
+            for token_shape, num_views in zip(shape.token_shapes, shape.num_views)
+        ],
         device=full_only_seq.device,
         block_size=block_size,
         num_und=causal_seq.shape[0],

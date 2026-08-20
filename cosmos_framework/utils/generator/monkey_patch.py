@@ -398,13 +398,14 @@ def patch_qwen3_vl_moe_grouped_mm_experts(model: torch.nn.Module) -> int:
         # mean_router_prob_per_expert carries gradient (the counts are a histogram), so the
         # aux loss trains the router alone — the standard Switch/GShard formulation.
         #
-        # Real forward only. Under non-reentrant activation checkpointing the backward
-        # re-executes this forward once per layer, and the collector has already popped the
-        # stash for this step, so a re-stash is never cleared. The module's reference to
-        # mean_router_prob_per_expert — a tensor of the RECOMPUTED graph — would then pin
-        # that layer's recomputed activations for the rest of the backward. With every layer
-        # doing it the recomputations accumulate instead of being freed one at a time, which
-        # is what OOMs the 94-layer Qwen3-VL-235B-A22B in its first backward.
+        # Compute the metadata in both the real forward and non-reentrant activation-checkpoint
+        # recomputation so both passes save the same tensors. Stash only the real forward's
+        # metadata: the collector has already popped it by recomputation time, so a re-stash
+        # would never be cleared. The module's reference to mean_router_prob_per_expert — a
+        # tensor of the RECOMPUTED graph — would then pin that layer's recomputed activations
+        # for the rest of the backward. With every layer doing it the recomputations accumulate
+        # instead of being freed one at a time, which is what OOMs the 94-layer
+        # Qwen3-VL-235B-A22B in its first backward.
         #
         # Every term is over real tokens only, so the loss a step reports does not move when
         # the collate happens to pad the batch further: the counts already skip the padding,
@@ -418,17 +419,18 @@ def patch_qwen3_vl_moe_grouped_mm_experts(model: torch.nn.Module) -> int:
         # for 8 bytes, once per layer per step. full() fills on device, passing the scalar
         # as a kernel argument, so no host memory is involved and nothing waits. The masked
         # token count is a device-side sum of the mask for the same reason.
+        lbl_metadata = LBLMetadata(
+            num_tokens_per_expert=num_tokens_per_expert.to(dtype=torch.int64),  # [num_experts]
+            num_tokens=(
+                torch.full((1,), hidden_states.shape[0], dtype=torch.int64, device=hidden_states.device)
+                if token_weight is None
+                else token_weight.sum().to(torch.int64).reshape(1)
+            ),  # [1]
+            mean_router_prob_per_expert=_weighted_mean(routing_weights, token_weight).squeeze(0),  # [num_experts]
+            top_k=torch.full((1,), self.top_k, dtype=torch.int64, device=hidden_states.device),  # [1]
+        )
         if not _in_autograd_backward():
-            self.lbl_metadata = LBLMetadata(
-                num_tokens_per_expert=num_tokens_per_expert.to(dtype=torch.int64),  # [num_experts]
-                num_tokens=(
-                    torch.full((1,), hidden_states.shape[0], dtype=torch.int64, device=hidden_states.device)
-                    if token_weight is None
-                    else token_weight.sum().to(torch.int64).reshape(1)
-                ),  # [1]
-                mean_router_prob_per_expert=_weighted_mean(routing_weights, token_weight).squeeze(0),  # [num_experts]
-                top_k=torch.full((1,), self.top_k, dtype=torch.int64, device=hidden_states.device),  # [1]
-            )
+            self.lbl_metadata = lbl_metadata
 
         routed_out = self.experts(
             hidden_states=hidden_states,

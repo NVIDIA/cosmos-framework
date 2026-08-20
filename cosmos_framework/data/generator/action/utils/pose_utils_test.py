@@ -6,15 +6,30 @@ import pytest
 import torch
 from scipy.spatial.transform import Rotation as R
 
+from cosmos_framework.data.generator.action.utils.action_spec import Gripper, Pos, Rot, build_action_spec
 from cosmos_framework.data.generator.action.utils.pose_utils import (
     _normalize_rotation_matrices,
     _to_numpy_float32,
     build_abs_pose_from_components,
+    compute_framewise_idle_frames,
     convert_rotation,
     pose_abs_to_abs9d,
     pose_abs_to_rel,
     pose_rel_to_abs,
 )
+
+
+@pytest.mark.L0
+def test_compute_framewise_idle_frames_applies_fps_policy() -> None:
+    action = torch.zeros((4, 10), dtype=torch.float32)
+    action[:, 0] = 7.5e-4
+    action[:, 3] = 1.0
+    action[:, 7] = 1.0
+    spec = build_action_spec(Pos(), Rot("rot6d"), Gripper())
+
+    assert compute_framewise_idle_frames(action, spec, fps=10, pose_convention="backward_framewise") == 0
+    assert compute_framewise_idle_frames(action, spec, fps=5, pose_convention="backward_framewise") == 4
+    assert compute_framewise_idle_frames(action, spec, fps=5, pose_convention="backward_anchored") is None
 
 
 def _make_example_poses_abs() -> np.ndarray:

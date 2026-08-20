@@ -583,12 +583,12 @@ def multi_control_two_way_attention(
         torch._check(k.shape[0] == v.shape[0])
         n_q, n_kv = q.shape[0], k.shape[0]
         # These lengths come from data-dependent unpadding, so they are unbacked
-        # symints under torch.compile. The selected attention backend (NATTEN)
-        # validates varlen inputs with `max_seqlen == 0` / `max_seqlen < 1`
-        # guards; without a positivity fact Dynamo cannot discharge `Eq(n, 0)`.
-        # Every control/noisy segment always has at least one token, so assert it.
+        # symints under torch.compile. Backend validation checks require positive
+        # lengths, and cuDNN specifically rejects KV length 1. This path builds
+        # KV as [text | ctrl_i | noisy], where ctrl_i and noisy are non-empty for
+        # valid multi-control packs, so assert the stronger invariant.
         torch._check(n_q > 0)
-        torch._check(n_kv > 0)
+        torch._check(n_kv > 1)
         # Pass cumulative_seqlen_{Q,KV} + max_seqlen_{Q,KV} directly instead of
         # seqlens_{Q,KV}. The frontend derives cumulative offsets from seqlens via
         # `generate_varlen_parameters`, which calls `.max().item()` (a device-host

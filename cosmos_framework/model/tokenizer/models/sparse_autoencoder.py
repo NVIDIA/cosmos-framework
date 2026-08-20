@@ -66,6 +66,7 @@ from cosmos_framework.model.tokenizer.models.utils import (
     sparse_to_batched_tensor,
     sparse_to_img_list,
 )
+from cosmos_framework.model.tokenizer.utils.precision import activation_dtype
 from cosmos_framework.model.tokenizer.utils.tensors import cat_with_bounded_inputs, stack_with_bounded_inputs
 
 # =============================================================================
@@ -904,7 +905,7 @@ class SparseTransformerBase(nn.Module):
         """
         hs: list[SparseTensor] | None = [] if collect_hidden_states else None
 
-        input_dtype = next(self.input_layer.parameters()).dtype
+        input_dtype = activation_dtype(next(self.input_layer.parameters()).dtype)
         if x.dtype != input_dtype:
             x = x.to(input_dtype)
 
@@ -922,7 +923,7 @@ class SparseTransformerBase(nn.Module):
             elif position_embedding is not None:
                 h = h + position_embedding * self.position_embedding_scale  # [N,D]
 
-        block_dtype = next(self.blocks.parameters()).dtype
+        block_dtype = activation_dtype(next(self.blocks.parameters()).dtype)
         if h.dtype != block_dtype:
             h = h.to(block_dtype)
         output_template = h

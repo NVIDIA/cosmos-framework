@@ -460,6 +460,13 @@ class Cosmos3OmniModel(transformers.PreTrainedModel):
         # Disable training-only features
         model_dict.config.ema.enabled = False
         model_dict.config.activation_checkpointing.mode = "none"
+        # Training's `dp_enabled` is unconditionally True so the FSDP2 wrap can install
+        # the mixed-precision policy, and that wrap builds a device mesh, which needs an
+        # initialized process group. This wrapper is only ever built for inference and
+        # export -- including single-process runs with no torchrun rendezvous (the
+        # checkpoint conversion scripts) -- so it must not inherit that from a training
+        # config it was handed.
+        model_dict.config.parallelism.enable_inference_mode = True
         if SMOKE:
             # Minimize model size for smoke test
             vlm_dict = model_dict.config.vlm_config.model_instance

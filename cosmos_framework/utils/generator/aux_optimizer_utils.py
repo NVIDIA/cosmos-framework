@@ -419,14 +419,13 @@ def compute_pre_ns_updates_moe_expert(
     ``test_batched_pre_ns_momentum_persists_across_steps``).
 
     Every tensor in ``grads`` (and likewise in ``momentum_buffers``) MUST share one
-    shape and one stride. A call mixing layouts -- e.g. gate/up ``[E, H, I]`` slices
-    together with ``down`` ``[E, I, H]`` -- compiles an artifact whose argument
-    binding depends on how the inputs happen to alias each other. FSDP re-buckets
-    expert gradients between the first and second optimizer step after a checkpoint
-    resume (per-parameter buffers become views of one flat per-layer buffer), and
-    dynamo does not recompile on that change, so arguments get bound to the wrong
-    slots. Call this once per layout instead; see
-    ``test_megabatch_survives_grad_alias_topology_change``.
+    shape and one stride and MUST NOT alias another tensor in the same call. A call
+    mixing layouts -- e.g. gate/up ``[E, H, I]`` slices together with ``down``
+    ``[E, I, H]`` -- or aliasing roles -- e.g. gate and up halves of one fused
+    ``gate_up`` buffer -- makes AOTAutograd reconstruct the inputs from synthetic
+    bases. PyTorch 2.9 cannot proxy-track symbolic FSDP stride products during that
+    reconstruction. Call this once per role to retain compatibility with that
+    runtime; see ``test_megabatch_pre_ns_calls_are_storage_disjoint_by_role``.
 
     Note: ``fullgraph=True`` specializes on the list length, so a differently sized
     tail batch costs one extra compile (48 layers at K=8 divides evenly, so none).
@@ -534,11 +533,10 @@ def apply_stacked_expert_updates_batched(
 
 @dataclass
 class _ExpertApplyGroup:
-    """Matrices sharing one tensor layout, accumulated for a single batched apply.
+    """Matrices from one tensor role, accumulated for a single batched apply.
 
     Exists so the megabatch apply issues one
-    :func:`apply_stacked_expert_updates_batched` call per layout, which is what
-    guarantees a single layout per compiled graph.
+    :func:`apply_stacked_expert_updates_batched` call per role.
     """
 
     params: list[torch.Tensor] = field(default_factory=list)  # [E,M,N] each
@@ -1102,8 +1100,9 @@ def _step_stacked_moe_megabatch(
     down_preps: list[_PreparedStackedExpertParam | None] = []
 
     # Phase 1 — pre-NS: momentum update + Nesterov for all K pairs, batched across
-    # layers with one call per tensor layout (gate+up, then down) so each compiled
-    # graph sees a single layout.
+    # layers with one call per tensor role. Gate and up have the same layout but are
+    # aliasing halves of one fused buffer, so combining them makes AOTAutograd rebuild
+    # symbolic FSDP views from synthetic bases, which PyTorch 2.9 cannot proxy-track.
     with _nvtx_phase("moe.megabatch.pre_ns", context.profile_phases):
         gate_grads: list[torch.Tensor] = []
         gate_moms: list[torch.Tensor] = []
@@ -1133,10 +1132,8 @@ def _step_stacked_moe_megabatch(
             else:
                 down_preps.append(None)
 
-        # Two batched momentum recurrences, one per layout: gate and up are both
-        # [E, H, I] halves of the fused gate_up buffer and share a layout, while down
-        # is [E, I, H]. Mixing the two in one compiled call is what breaks on resume
-        # (see compute_pre_ns_updates_moe_expert).
+        # Three batched momentum recurrences, one per role. Inputs within each call
+        # are storage-disjoint because each layer is its own FSDP unit.
         def _pre_ns(
             grads: list[torch.Tensor], moms: list[torch.Tensor]
         ) -> tuple[list[torch.Tensor], list[torch.Tensor]]:
@@ -1144,13 +1141,8 @@ def _step_stacked_moe_megabatch(
                 return [], []
             return compute_pre_ns_updates_moe_expert(grads, moms, momentum=context.momentum, nesterov=context.nesterov)
 
-        n_gate = len(gate_grads)
-        gate_up_pre, gate_up_act = _pre_ns(gate_grads + up_grads, gate_moms + up_moms)
-        gate_pre_list = gate_up_pre[:n_gate]
-        up_pre_list = gate_up_pre[n_gate:]
-        gate_active_list = gate_up_act[:n_gate]
-        up_active_list = gate_up_act[n_gate:]
-
+        gate_pre_list, gate_active_list = _pre_ns(gate_grads, gate_moms)
+        up_pre_list, up_active_list = _pre_ns(up_grads, up_moms)
         down_pre, down_active_list = _pre_ns(down_grads, down_moms)
         down_pre_list = [t.mT for t in down_pre]  # [E, H, I] aligned with gate/up
 
@@ -1185,9 +1177,9 @@ def _step_stacked_moe_megabatch(
         up_per = up_block.split(E, dim=0) if n_g else ()
         down_per = down_block.split(E, dim=0) if n_d else ()
 
-        # Group by layout, then apply one layout per batched call, for the same reason
-        # the pre-NS above is split: gate/up slices and down must not share a graph.
-        gate_up_group = _ExpertApplyGroup()
+        # Apply each role separately so aliased gate/up slices do not share a compiled graph.
+        gate_group = _ExpertApplyGroup()
+        up_group = _ExpertApplyGroup()
         down_group = _ExpertApplyGroup()
 
         g_idx = d_idx = 0
@@ -1201,7 +1193,7 @@ def _step_stacked_moe_megabatch(
                 adj_lr = context.adjusted_lr_for(matrix_shape, base_lr)
 
                 # Inactive-expert zeroing happens inside the compiled apply.
-                gate_up_group.add(
+                gate_group.add(
                     gu.local_param[..., :gate_width],
                     gate_per[g_idx],
                     gate_active_list[g_idx],
@@ -1210,7 +1202,7 @@ def _step_stacked_moe_megabatch(
                     adj_lr,
                     gu.master[..., :gate_width] if gu.master is not None else None,
                 )
-                gate_up_group.add(
+                up_group.add(
                     gu.local_param[..., gate_width:],
                     up_per[g_idx],
                     up_active_list[g_idx],
@@ -1235,7 +1227,7 @@ def _step_stacked_moe_megabatch(
                 )
                 d_idx += 1
 
-        for group in (gate_up_group, down_group):
+        for group in (gate_group, up_group, down_group):
             group.apply()
 
 
