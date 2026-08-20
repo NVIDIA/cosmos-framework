@@ -952,15 +952,30 @@ _GOLDENS: dict[str, dict[str, dict[str, list[float] | None]]] = {
             "loss": [1.06924, 0.88399, 1.09293, 1.16314, 1.03592, 0.99041, 1.11041, 0.97001, 0.81246, 0.98548],
             "grad_norm": None,
         },
-        # Recaptured 2026-06-03 after the TOML-config rewrite shifted some
-        # defaults. Runs under ``--deterministic`` so loss reproduces bit-exact
-        # across all 10 iters, but grad_norm is non-det because
-        # ``compile.enabled=true`` makes the all-rank reduction not bit-exact
+        # Recaptured 2026-08-19 on 4 × H200 after the VFM moved onto FSDP2 mixed
+        # precision. What changed is which layer owns the FP32 master, not whether one
+        # exists: previously the sharded parameter was BF16 and FusedAdam held the
+        # master itself (``_needs_master_weights`` is True for a BF16 param); now
+        # ``fsdp_master_dtype`` -- until then VLM-only -- makes the sharded parameter
+        # FP32 and FSDP down-casts to BF16 for compute, so FusedAdam needs no master of
+        # its own. Both arrangements accumulate in FP32 and run forward/backward in
+        # BF16, so they are equivalent on paper; the series still shifts because the
+        # implementations differ (a different TE multi_tensor_adam variant, and the
+        # BF16 down-cast moving from the optimizer to the all-gather). iter-0 is
+        # unchanged -- forward only, and an FP32 master loaded from BF16 weights
+        # down-casts back losslessly -- and the gap then grows monotonically to 1.2e-3
+        # by iter 9. Two independent runs of this build agree to within 2e-4, well
+        # inside the 1e-3 tolerance, so the shift is systematic rather than
+        # run-to-run noise. Tolerance is deliberately left at 1e-3: the refreshed
+        # series still rejects the pre-mixed-precision one.
+        #
+        # Otherwise as before: runs under ``--deterministic``; grad_norm is non-det
+        # because ``compile.enabled=true`` makes the all-rank reduction not bit-exact
         # on H100. Captured at lr=2e-5; the ``vision_sft_nano`` spec pins
         # ``optimizer.lr=2.0e-5`` so these stay valid even though the shipped
         # recipe now uses 1e-4 (see the pin comment in _build_specs).
         "vision_sft_nano": {
-            "loss": [0.2242, 0.2141, 0.2429, 0.2259, 0.2608, 0.2555, 0.332, 0.2256, 0.2041, 0.2621],
+            "loss": [0.2242, 0.2141, 0.2428, 0.2259, 0.2607, 0.2553, 0.3318, 0.2252, 0.2035, 0.2609],
             "grad_norm": None,
         },
         "vision_sft_super": {
