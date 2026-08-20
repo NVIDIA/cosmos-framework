@@ -349,7 +349,7 @@ if __name__ == "__main__":
     Usage:
     PYTHONPATH=. python3 cosmos_framework/utils/reasoner/pretrained_models_downloader.py
     """
-    cache_dir = maybe_download_model(  # noqa: F821
+    cache_dir = maybe_download_hf_model_from_s3(
         "eagle_er_qwen3_1p7b_siglip_400m", "credentials/s3_training.secret", "bucket4"
     )
     print(f"Downloaded to {cache_dir}")
