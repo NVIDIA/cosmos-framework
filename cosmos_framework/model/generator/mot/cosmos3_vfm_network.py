@@ -1263,15 +1263,25 @@ class Cosmos3VFMNetwork(PreTrainedModel):
             attention_meta.flex_backend = self.flex_backend
 
         # ── Multi-control transfer: annotate SplitInfo with per-item ranges ──────
-        # Activated only when packed_seq carries control_weights, i.e. the caller
-        # has set up a multi-control batch via build_transfer_batch.
+        # This block is entered for any pack carrying control_weights, single-control
+        # included; ``_annotate_multi_control_ranges`` is what narrows it to packs with
+        # more than one weight, and leaves the ranges unset otherwise.
+        #
+        # That distinction decides the routing, so it is not cosmetic. dispatch_attention
+        # sends a pack to multi_control_two_way_attention iff control_stream_token_ranges
+        # is set, and that path is maskless by construction. A single-control multiview
+        # pack must therefore leave the ranges unset and fall through to
+        # two_way_attention, which is the only path that applies the multiview flex mask.
+        # Annotating it here would silently drop that mask.
         #
         # multi_control_two_way_attention runs N independent maskless SDPA passes,
         # one per control.  For each pass i, KV = [text | ctrl_i | noisy].
         # The final noisy output is the weighted sum of the N pass outputs:
         #   noisy_out = w_1 * noisy_out_1 + ... + w_N * noisy_out_N
         # All SDPA calls are maskless → Flash Attention always active.
-        # N=1, w=1.0 → identical to two_way_attention.
+        # In the plain dense case, N=1, w=1.0 matches two_way_attention; in a
+        # multiview FlexAttention batch, single-control packs must stay unannotated
+        # so two_way_attention applies the flex mask.
         #
         # CP compatibility: control_stream_token_ranges are gen-relative global
         # offsets computed here, before CP sharding.  Ulysses CP restores the full
@@ -1282,34 +1292,8 @@ class Cosmos3VFMNetwork(PreTrainedModel):
             and packed_seq.control_weights is not None
             and packed_seq.vision_item_split_lens
         ):
-            # For multi-control, each sample must have N controls + 1 noisy item
-            # (items 0..N-2 are controls, item N-1 is the noisy target).
-            # Only batch_size=1 is supported; assert to catch misuse early.
-            assert len(packed_seq.vision_item_split_lens) == 1, (
-                f"Multi-control transfer requires batch_size=1, got {len(packed_seq.vision_item_split_lens)} samples."
-            )
-            item_lens = packed_seq.vision_item_split_lens[0]  # [L_ctrl0, L_ctrl1, ..., L_noisy]
-            weights = packed_seq.control_weights[0]  # [w_ctrl0, w_ctrl1, ...]
-            assert len(item_lens) > 1, (
-                f"Multi-control requires at least 1 control + 1 noisy item; got vision_item_split_lens={item_lens}."
-            )
-            assert len(weights) == len(item_lens) - 1, (
-                f"control_weights length ({len(weights)}) must equal number of control items ({len(item_lens) - 1})."
-            )
-            ctrl_ranges: list[tuple[int, int]] = []
-            cursor = 0
-            for lens in item_lens[:-1]:  # all but last = control streams
-                ctrl_ranges.append((cursor, cursor + lens))
-                cursor += lens
-            noisy_range = (cursor, cursor + item_lens[-1])
             n_gen = int(vision_sequence_indexes.shape[0]) if vision_sequence_indexes is not None else 0
-            assert noisy_range[1] == n_gen, (
-                f"vision_item_split_lens sums to {noisy_range[1]} gen tokens but packed tensor has "
-                f"{n_gen}; packing inconsistency detected."
-            )
-            attention_meta.control_stream_token_ranges = ctrl_ranges
-            attention_meta.noisy_token_range = noisy_range
-            attention_meta.control_weights = weights
+            _annotate_multi_control_ranges(attention_meta, packed_seq, n_gen=n_gen)
 
         input_pack, packed_position_ids = get_context_parallel_sharded_sequence(
             attn_implementation=self.config.joint_attn_implementation,
@@ -1357,6 +1341,43 @@ class Cosmos3VFMNetwork(PreTrainedModel):
             output_dict["ce_preds"] = packed_ce_preds
 
         return output_dict
+
+
+def _annotate_multi_control_ranges(attention_meta: SplitInfo, packed_seq: PackedSequence, *, n_gen: int) -> None:
+    """Populate multi-control attention ranges only for true multi-control packs."""
+    if packed_seq.control_weights is None or not packed_seq.vision_item_split_lens:
+        return
+    has_multiple_controls = any(len(weights) > 1 for weights in packed_seq.control_weights)
+    if not has_multiple_controls:
+        return
+
+    # For multi-control, each sample must have N controls + 1 noisy item
+    # (items 0..N-2 are controls, item N-1 is the noisy target).
+    # Only batch_size=1 is supported; assert to catch misuse early.
+    assert len(packed_seq.vision_item_split_lens) == 1, (
+        f"Multi-control transfer requires batch_size=1, got {len(packed_seq.vision_item_split_lens)} samples."
+    )
+    item_lens = packed_seq.vision_item_split_lens[0]  # [L_ctrl0,L_ctrl1,...,L_noisy]
+    weights = packed_seq.control_weights[0]  # [w_ctrl0,w_ctrl1,...]
+    assert len(item_lens) > 1, (
+        f"Multi-control requires at least 1 control + 1 noisy item; got vision_item_split_lens={item_lens}."
+    )
+    assert len(weights) == len(item_lens) - 1, (
+        f"control_weights length ({len(weights)}) must equal number of control items ({len(item_lens) - 1})."
+    )
+    ctrl_ranges: list[tuple[int, int]] = []
+    cursor = 0
+    for lens in item_lens[:-1]:  # all but last = control streams
+        ctrl_ranges.append((cursor, cursor + lens))
+        cursor += lens
+    noisy_range = (cursor, cursor + item_lens[-1])
+    assert noisy_range[1] == n_gen, (
+        f"vision_item_split_lens sums to {noisy_range[1]} gen tokens but packed tensor has "
+        f"{n_gen}; packing inconsistency detected."
+    )
+    attention_meta.control_stream_token_ranges = ctrl_ranges
+    attention_meta.noisy_token_range = noisy_range
+    attention_meta.control_weights = weights
 
 
 def _multiview_mask_items(packed_seq: PackedSequence) -> list[list[MaskItem]]:

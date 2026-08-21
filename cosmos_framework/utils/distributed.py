@@ -32,8 +32,20 @@ if TYPE_CHECKING:
     from cosmos_framework.utils.config import DDPConfig
 
 
-def init() -> int | None:
-    """Initialize distributed training."""
+def init(store: dist.Store | None = None, backend: str | None = None) -> int | None:
+    """Initialize distributed training.
+
+    Args:
+        store: Optional pre-built rendezvous store. When given, it is used instead of ``env://``
+            rendezvous, so no ``MASTER_PORT`` is bound. Used by the background checkpoint process,
+            whose store adopts a socket its parent reserved (see
+            :mod:`cosmos_framework.checkpoint.background_store`). ``RANK`` and ``WORLD_SIZE`` must be
+            set, as they are for env:// rendezvous.
+        backend: Optional backend override. Defaults to nccl on CUDA. The background checkpoint
+            process passes "gloo": it coordinates over CPU-resident state dicts, which NCCL cannot
+            synchronize, and a second NCCL group per rank would consume GPU memory alongside the
+            training group's communicators.
+    """
     if dist.is_initialized():
         return torch.cuda.current_device()
 
@@ -64,8 +76,18 @@ def init() -> int | None:
                 f"Set default NCCL subgroup timeout to {subgroup_timeout_seconds} seconds",
                 rank0_only=False,
             )
-        backend = "nccl" if os.environ.get("COSMOS_DEVICE", "cuda").lower() == "cuda" else "gloo"
-        dist.init_process_group(backend=backend, init_method="env://", timeout=timeout_timedelta)
+        if backend is None:
+            backend = "nccl" if os.environ.get("COSMOS_DEVICE", "cuda").lower() == "cuda" else "gloo"
+        if store is not None:
+            dist.init_process_group(
+                backend=backend,
+                store=store,
+                rank=int(os.environ["RANK"]),
+                world_size=int(os.environ["WORLD_SIZE"]),
+                timeout=timeout_timedelta,
+            )
+        else:
+            dist.init_process_group(backend=backend, init_method="env://", timeout=timeout_timedelta)
         log.critical(
             f"Initialized distributed training with local rank {local_rank} using {backend} with timeout {timeout_seconds}",
             rank0_only=False,

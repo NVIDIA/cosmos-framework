@@ -6,7 +6,7 @@ import multiprocessing
 import queue
 import threading
 from collections import deque
-from collections.abc import Iterator, Mapping
+from collections.abc import Iterator, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from typing import Any, ClassVar, Dict, Union
@@ -420,7 +420,7 @@ class JointDataLoader(webdataset.WebLoader):
         patch_spatial: int,
         max_sequence_length: int | None,
         max_samples_per_batch: int | None,
-        lidar_spatial_compression_factor: int | None = None,
+        lidar_spatial_compression: Sequence[int] | None = None,
         lidar_temporal_compression_factor: int | None = None,
         sound_latent_fps: float = 0,
         audio_sample_rate: int = 48000,
@@ -452,7 +452,7 @@ class JointDataLoader(webdataset.WebLoader):
             tokenizer_temporal_compression_factor: The temporal compression factor of the tokenizer.
             patch_spatial: Spatial pathification factor.
             max_samples_per_batch: Max number of samples per packed batch (alternative to max_sequence_length).
-            lidar_spatial_compression_factor: Spatial compression of the LiDAR VAE. Required only
+            lidar_spatial_compression: ``(height, width)`` compression of the LiDAR VAE. Required only
                 for streams whose samples carry a ``lidar`` key, whose clips are costed with the
                 LiDAR VAE rather than the camera's — the two compress time differently (4x versus
                 1x), and an item costed with the wrong factor silently over-packs the batch.
@@ -495,12 +495,25 @@ class JointDataLoader(webdataset.WebLoader):
         self.lookahead_limits: list[int] = []
         self.tokenizer_spatial_compression_factor = tokenizer_spatial_compression_factor
         self.tokenizer_temporal_compression_factor = tokenizer_temporal_compression_factor
-        self.lidar_spatial_compression_factor = (
-            int(lidar_spatial_compression_factor) if lidar_spatial_compression_factor is not None else None
+        self.lidar_spatial_compression = (
+            tuple(int(factor) for factor in lidar_spatial_compression)
+            if lidar_spatial_compression is not None
+            else None
         )
+        if self.lidar_spatial_compression is not None and (
+            len(self.lidar_spatial_compression) != 2 or any(factor <= 0 for factor in self.lidar_spatial_compression)
+        ):
+            raise ValueError(
+                "lidar_spatial_compression must contain two positive factors "
+                f"(height, width), got {self.lidar_spatial_compression}"
+            )
         self.lidar_temporal_compression_factor = (
             int(lidar_temporal_compression_factor) if lidar_temporal_compression_factor is not None else None
         )
+        if self.lidar_temporal_compression_factor is not None and self.lidar_temporal_compression_factor <= 0:
+            raise ValueError(
+                f"lidar_temporal_compression_factor must be positive, got {self.lidar_temporal_compression_factor}"
+            )
         self.patch_spatial = patch_spatial
         self.max_sequence_length = max_sequence_length
         self.max_samples_per_batch = max_samples_per_batch
@@ -614,16 +627,17 @@ class JointDataLoader(webdataset.WebLoader):
         clips = data_batch.get("lidar")
         if not clips:
             return 0
-        if self.lidar_spatial_compression_factor is None or self.lidar_temporal_compression_factor is None:
+        if self.lidar_spatial_compression is None or self.lidar_temporal_compression_factor is None:
             raise ValueError(
                 "This batch carries a LiDAR stream, but the loader has no LiDAR compression factors. "
-                "Set lidar_spatial_compression_factor and lidar_temporal_compression_factor."
+                "Set lidar_spatial_compression and lidar_temporal_compression_factor."
             )
+        spatial_h, spatial_w = self.lidar_spatial_compression
         num_tokens = 0
         for clip in clips:
             _, T, H, W = clip.shape
-            patch_h = math.ceil(H // self.lidar_spatial_compression_factor / self.patch_spatial)
-            patch_w = math.ceil(W // self.lidar_spatial_compression_factor / self.patch_spatial)
+            patch_h = math.ceil(H // spatial_h / self.patch_spatial)
+            patch_w = math.ceil(W // spatial_w / self.patch_spatial)
             latent_t = 1 + (T - 1) // self.lidar_temporal_compression_factor
             num_tokens += patch_h * patch_w * latent_t
         return num_tokens
@@ -1070,7 +1084,7 @@ class IterativeJointDataLoader(JointDataLoader):
         patch_spatial: int,
         max_sequence_length: int | None = None,
         max_samples_per_batch: int | None = None,
-        lidar_spatial_compression_factor: int | None = None,
+        lidar_spatial_compression: Sequence[int] | None = None,
         lidar_temporal_compression_factor: int | None = None,
         sound_latent_fps: float = 0,
         audio_sample_rate: int = 48000,
@@ -1101,7 +1115,7 @@ class IterativeJointDataLoader(JointDataLoader):
             patch_spatial,
             max_sequence_length,
             max_samples_per_batch,
-            lidar_spatial_compression_factor=lidar_spatial_compression_factor,
+            lidar_spatial_compression=lidar_spatial_compression,
             lidar_temporal_compression_factor=lidar_temporal_compression_factor,
             sound_latent_fps=sound_latent_fps,
             audio_sample_rate=audio_sample_rate,

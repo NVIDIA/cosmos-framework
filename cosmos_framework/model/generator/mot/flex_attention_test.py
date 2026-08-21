@@ -6,7 +6,7 @@ import dataclasses
 import math
 import unittest.mock
 from collections.abc import Iterator
-from typing import Any, cast
+from typing import cast
 
 import pytest
 import torch
@@ -41,6 +41,7 @@ from cosmos_framework.data.generator.sequence_packing.runtime import (
     get_causal_seq,
     get_full_only_seq,
 )
+from cosmos_framework.data.generator.sequence_packing.sequence import ModalityData, PackedSequence
 
 # The two mask geometries the cases below are held to. Triton's block is square and
 # device-independent. FlashAttention-4's is the Blackwell one, where each CTA owns two query
@@ -877,6 +878,106 @@ def _condition_mask(latent_t: int, condition_frames: list[int]) -> torch.Tensor:
     for frame_idx in condition_frames:
         mask[frame_idx, 0, 0] = 1.0
     return mask
+
+
+def _multiview_mask_items_for_test(packed_seq: PackedSequence) -> list[list[MaskItem]]:
+    pytest.importorskip("transformers", reason="cosmos3_vfm_network requires the Cosmos3 network dependencies.")
+    from cosmos_framework.model.generator.mot.cosmos3_vfm_network import _multiview_mask_items
+
+    return _multiview_mask_items(packed_seq)
+
+
+def _mask_items_pack(*, num_views: int, with_lidar: bool, with_view_metadata: bool = True) -> PackedSequence:
+    """A one-sample pack of two camera items, optionally beside two LiDAR items."""
+
+    def stream(token_shapes: list[tuple[int, int, int]]) -> ModalityData:
+        return ModalityData(
+            tokens=[torch.zeros(1) for _ in token_shapes],  # list[[1]]
+            token_shapes=token_shapes,
+            condition_mask=[torch.ones(shape[0]) for shape in token_shapes],  # list[[T]]
+        )
+
+    camera_shape = (2 * num_views, 1, 1)
+    return PackedSequence(
+        sample_lens=[1],
+        vision=stream([camera_shape, camera_shape]),
+        num_vision_items_per_sample=[2],
+        num_views_per_vision_item=[num_views, num_views] if with_view_metadata else None,
+        lidar=stream([(3, 1, 1), (3, 1, 1)]) if with_lidar else None,
+        num_lidar_items_per_sample=[2] if with_lidar else None,
+    )
+
+
+@pytest.mark.L0
+def test_mask_items_leave_a_camera_only_pack_on_view_zero() -> None:
+    """No LiDAR means every item stays on view 0, which keeps the camera mask untouched."""
+    items = _multiview_mask_items_for_test(_mask_items_pack(num_views=2, with_lidar=False))
+
+    assert [len(sample_items) for sample_items in items] == [2]
+    assert [item.num_views for item in items[0]] == [2, 2]
+    assert [item.view_offset for item in items[0]] == [0, 0]
+    assert [item.is_control for item in items[0]] == [True, False]
+
+
+@pytest.mark.L0
+def test_mask_items_place_the_lidar_stream_past_the_widest_camera_item() -> None:
+    """A six-camera rig owns views 0-5, so the range clips start at view 6, not view 1."""
+    items = _multiview_mask_items_for_test(_mask_items_pack(num_views=6, with_lidar=True))
+
+    # The sample reads [camera, camera, lidar, lidar], the order the packer lays down.
+    assert [len(sample_items) for sample_items in items] == [4]
+    assert [item.num_views for item in items[0]] == [6, 6, 1, 1]
+    assert [item.view_offset for item in items[0]] == [0, 0, 6, 6]
+    assert [item.latent_t for item in items[0]] == [12, 12, 3, 3]
+    # Per stream: each sensor's first item conditions its second.
+    assert [item.is_control for item in items[0]] == [True, False, True, False]
+
+
+@pytest.mark.L0
+def test_mask_items_read_a_joint_pack_without_per_camera_metadata_as_single_camera() -> None:
+    """The joint recipe's camera clips skip the per-camera encode path, so they carry no counts."""
+    items = _multiview_mask_items_for_test(_mask_items_pack(num_views=1, with_lidar=True, with_view_metadata=False))
+
+    assert [item.num_views for item in items[0]] == [1, 1, 1, 1]
+    assert [item.view_offset for item in items[0]] == [0, 0, 1, 1]
+    assert [item.is_control for item in items[0]] == [True, False, True, False]
+
+
+@pytest.mark.L0
+def test_mask_items_reject_a_camera_only_pack_without_per_camera_metadata() -> None:
+    """Without a second stream to vouch for one view per item, a missing count stays an error."""
+    with pytest.raises(ValueError, match="per-camera VAE metadata"):
+        _multiview_mask_items_for_test(_mask_items_pack(num_views=1, with_lidar=False, with_view_metadata=False))
+
+
+@pytest.mark.L0
+def test_mask_items_accept_a_lidar_only_pack() -> None:
+    """A range-only attention batch has no cameras, so every item stays on view 0."""
+    lidar = ModalityData(
+        tokens=[torch.zeros(1), torch.zeros(1)],  # list[[1]]
+        token_shapes=[(3, 1, 1), (3, 1, 1)],
+        condition_mask=[torch.ones(3), torch.ones(3)],  # list[[3]]
+    )
+    items = _multiview_mask_items_for_test(
+        PackedSequence(
+            sample_lens=[1],
+            vision=None,
+            lidar=lidar,
+            num_lidar_items_per_sample=[2],
+        )
+    )
+
+    assert [len(sample_items) for sample_items in items] == [2]
+    assert [item.num_views for item in items[0]] == [1, 1]
+    assert [item.view_offset for item in items[0]] == [0, 0]
+    assert [item.is_control for item in items[0]] == [True, False]
+    assert [item.latent_t for item in items[0]] == [3, 3]
+
+
+@pytest.mark.L0
+def test_mask_items_reject_a_pack_with_neither_stream() -> None:
+    with pytest.raises(ValueError, match="vision or LiDAR"):
+        _multiview_mask_items_for_test(PackedSequence(sample_lens=[1], vision=None, lidar=None))
 
 
 def _case_offsets(case: dict) -> torch.Tensor:
@@ -2026,115 +2127,3 @@ def test_network_wiring_honours_the_attention_scope(backend: FlexBackend, attent
     for other_scope in set(ATTENTION_SCOPES) - {attention_scope}:
         other = _reference_visibility(tokens, q_len, und_samples=und_samples, attention_scope=other_scope)
         assert not torch.equal(expected, other), f"{attention_scope} and {other_scope} agree on this pack"
-
-
-def _mask_items_pack(*, num_views: int, with_lidar: bool, with_view_metadata: bool = True) -> Any:
-    """A one-sample pack of two camera items, optionally beside two LiDAR items."""
-    from cosmos_framework.data.generator.sequence_packing.sequence import ModalityData, PackedSequence
-
-    def stream(token_shapes: list[tuple[int, int, int]]) -> ModalityData:
-        return ModalityData(
-            tokens=[torch.zeros(1) for _ in token_shapes],
-            token_shapes=token_shapes,
-            condition_mask=[torch.ones(shape[0]) for shape in token_shapes],
-        )
-
-    camera_shape = (2 * num_views, 1, 1)
-    return PackedSequence(
-        sample_lens=[1],
-        vision=stream([camera_shape, camera_shape]),
-        num_vision_items_per_sample=[2],
-        num_views_per_vision_item=[num_views, num_views] if with_view_metadata else None,
-        lidar=stream([(3, 1, 1), (3, 1, 1)]) if with_lidar else None,
-        num_lidar_items_per_sample=[2] if with_lidar else None,
-    )
-
-
-@pytest.mark.L0
-def test_mask_items_leave_a_camera_only_pack_on_view_zero() -> None:
-    """No LiDAR means every item stays on view 0, which keeps the camera mask untouched.
-
-    Imported here rather than at module scope because the network module pulls in the reasoner
-    stack, which these CPU cases have no need of.
-    """
-    from cosmos_framework.model.generator.mot.cosmos3_vfm_network import _multiview_mask_items
-
-    items = _multiview_mask_items(_mask_items_pack(num_views=2, with_lidar=False))
-
-    assert [len(sample_items) for sample_items in items] == [2]
-    assert [item.num_views for item in items[0]] == [2, 2]
-    assert [item.view_offset for item in items[0]] == [0, 0]
-    assert [item.is_control for item in items[0]] == [True, False]
-
-
-@pytest.mark.L0
-def test_mask_items_place_the_lidar_stream_past_the_widest_camera_item() -> None:
-    """A six-camera rig owns views 0-5, so the range clips start at view 6, not view 1."""
-    from cosmos_framework.model.generator.mot.cosmos3_vfm_network import _multiview_mask_items
-
-    items = _multiview_mask_items(_mask_items_pack(num_views=6, with_lidar=True))
-
-    # The sample reads [camera, camera, lidar, lidar], the order the packer lays down.
-    assert [len(sample_items) for sample_items in items] == [4]
-    assert [item.num_views for item in items[0]] == [6, 6, 1, 1]
-    assert [item.view_offset for item in items[0]] == [0, 0, 6, 6]
-    assert [item.latent_t for item in items[0]] == [12, 12, 3, 3]
-    # Per stream: each sensor's first item conditions its second.
-    assert [item.is_control for item in items[0]] == [True, False, True, False]
-
-
-@pytest.mark.L0
-def test_mask_items_read_a_joint_pack_without_per_camera_metadata_as_single_camera() -> None:
-    """The joint recipe's camera clips skip the per-camera encode path, so they carry no counts."""
-    from cosmos_framework.model.generator.mot.cosmos3_vfm_network import _multiview_mask_items
-
-    items = _multiview_mask_items(_mask_items_pack(num_views=1, with_lidar=True, with_view_metadata=False))
-
-    assert [item.num_views for item in items[0]] == [1, 1, 1, 1]
-    assert [item.view_offset for item in items[0]] == [0, 0, 1, 1]
-    assert [item.is_control for item in items[0]] == [True, False, True, False]
-
-
-@pytest.mark.L0
-def test_mask_items_reject_a_camera_only_pack_without_per_camera_metadata() -> None:
-    """Without a second stream to vouch for one view per item, a missing count stays an error."""
-    from cosmos_framework.model.generator.mot.cosmos3_vfm_network import _multiview_mask_items
-
-    with pytest.raises(ValueError, match="per-camera VAE metadata"):
-        _multiview_mask_items(_mask_items_pack(num_views=1, with_lidar=False, with_view_metadata=False))
-
-
-@pytest.mark.L0
-def test_mask_items_accept_a_lidar_only_pack() -> None:
-    """A range-only FlexAttention batch has no cameras, so every item stays on view 0."""
-    from cosmos_framework.model.generator.mot.cosmos3_vfm_network import _multiview_mask_items
-    from cosmos_framework.data.generator.sequence_packing.sequence import ModalityData, PackedSequence
-
-    lidar = ModalityData(
-        tokens=[torch.zeros(1), torch.zeros(1)],
-        token_shapes=[(3, 1, 1), (3, 1, 1)],
-        condition_mask=[torch.ones(3), torch.ones(3)],
-    )
-    items = _multiview_mask_items(
-        PackedSequence(
-            sample_lens=[1],
-            vision=None,
-            lidar=lidar,
-            num_lidar_items_per_sample=[2],
-        )
-    )
-
-    assert [len(sample_items) for sample_items in items] == [2]
-    assert [item.num_views for item in items[0]] == [1, 1]
-    assert [item.view_offset for item in items[0]] == [0, 0]
-    assert [item.is_control for item in items[0]] == [True, False]
-    assert [item.latent_t for item in items[0]] == [3, 3]
-
-
-@pytest.mark.L0
-def test_mask_items_reject_a_pack_with_neither_stream() -> None:
-    from cosmos_framework.model.generator.mot.cosmos3_vfm_network import _multiview_mask_items
-    from cosmos_framework.data.generator.sequence_packing.sequence import PackedSequence
-
-    with pytest.raises(ValueError, match="vision or LiDAR"):
-        _multiview_mask_items(PackedSequence(sample_lens=[1], vision=None, lidar=None))

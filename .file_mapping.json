@@ -1,7 +1,7 @@
 {
-  "_source_commit": "02f21ec8097056f5b94570463c41fc7dcf958934-dirty",
-  "_dest_commit": "c14617c2bc93dacbf69674fb964eec93182933d9",
-  "_generated_at": "2026-08-19T05:52:23Z",
+  "_source_commit": "e4324d1ef91cc30858348aecae9f51150e334f16-dirty",
+  "_dest_commit": "c7e8d76b5da8aeae38cdac91c6cfd57185b2f6bc",
+  "_generated_at": "2026-08-21T07:21:23Z",
   "files": {
     "imaginaire/__init__.py": "cosmos_framework/__init__.py",
     "imaginaire/attention/__init__.py": "cosmos_framework/model/attention/__init__.py",
@@ -69,6 +69,7 @@
     "imaginaire/auxiliary/guardrail/video_content_safety_filter/vision_encoder.py": "cosmos_framework/auxiliary/guardrail/video_content_safety_filter/vision_encoder.py",
     "imaginaire/callbacks/every_n.py": "cosmos_framework/callbacks/every_n.py",
     "imaginaire/callbacks/manual_gc.py": "cosmos_framework/callbacks/manual_gc.py",
+    "imaginaire/checkpointer/background_store.py": "cosmos_framework/checkpoint/background_store.py",
     "imaginaire/checkpointer/base.py": "cosmos_framework/checkpoint/base.py",
     "imaginaire/checkpointer/dummy.py": "cosmos_framework/checkpoint/dummy.py",
     "imaginaire/checkpointer/s3_filesystem.py": "cosmos_framework/checkpoint/s3_filesystem.py",
@@ -351,6 +352,7 @@
     "projects/cosmos3/cosmos3/models/mot/cosmos3_vfm_network.py": "cosmos_framework/model/generator/mot/cosmos3_vfm_network.py",
     "projects/cosmos3/cosmos3/models/mot/diffusion_cache.py": "cosmos_framework/model/generator/mot/diffusion_cache.py",
     "projects/cosmos3/cosmos3/models/mot/domain_aware_linear.py": "cosmos_framework/model/generator/mot/domain_aware_linear.py",
+    "projects/cosmos3/cosmos3/models/mot/domain_aware_linear_test.py": "cosmos_framework/model/generator/mot/domain_aware_linear_test.py",
     "projects/cosmos3/cosmos3/models/mot/dot_product_attention.py": "cosmos_framework/model/generator/mot/dot_product_attention.py",
     "projects/cosmos3/cosmos3/models/mot/flex_attention.py": "cosmos_framework/model/generator/mot/flex_attention.py",
     "projects/cosmos3/cosmos3/models/mot/flex_attention_bench.py": "cosmos_framework/model/generator/mot/flex_attention_bench.py",

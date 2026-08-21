@@ -25,6 +25,7 @@ from cosmos_framework.model.generator.mot.flex_attention import (
     resolve_flex_backend,
 )
 from cosmos_framework.model.generator.mot.flex_attention_test import _FLASH_UNAVAILABLE_MARKERS
+from cosmos_framework.data.generator.sequence_packing.sequence import PackedSequence
 from cosmos_framework.data.generator.sequence_packing.runtime import (
     SequencePack,
     get_all_seq,
@@ -603,6 +604,52 @@ def test_decoder_layer_optimized_path_empty_und_tensor_shape():
     meta = {"causal_seq": new_und, "full_only_seq": ref}
     retrieved = get_und_seq(meta)  # type: ignore[arg-type]
     assert retrieved.shape == (0, hidden_dim), "get_und_seq must return 2D tensor"
+
+
+def _split_info_for_multi_control_test() -> attention.SplitInfo:
+    return attention.SplitInfo(split_lens=[1, 1], attn_modes=["causal", "full"], sample_lens=[2], actual_len=2)
+
+
+def _annotate_multi_control_ranges_for_test(
+    attention_meta: attention.SplitInfo, packed_seq: PackedSequence, *, n_gen: int
+) -> None:
+    pytest.importorskip("transformers", reason="cosmos3_vfm_network requires the Cosmos3 network dependencies.")
+    from cosmos_framework.model.generator.mot.cosmos3_vfm_network import _annotate_multi_control_ranges
+
+    _annotate_multi_control_ranges(attention_meta, packed_seq, n_gen=n_gen)
+
+
+@pytest.mark.L0
+def test_multi_control_range_annotation_ignores_single_control_weight() -> None:
+    attention_meta = _split_info_for_multi_control_test()
+    packed_seq = PackedSequence(vision_item_split_lens=[[3, 4]], control_weights=[[1.0]])
+
+    _annotate_multi_control_ranges_for_test(attention_meta, packed_seq, n_gen=7)
+
+    assert attention_meta.control_stream_token_ranges is None
+    assert attention_meta.noisy_token_range is None
+    assert attention_meta.control_weights is None
+
+
+@pytest.mark.L0
+def test_multi_control_range_annotation_sets_ranges_for_multiple_controls() -> None:
+    attention_meta = _split_info_for_multi_control_test()
+    packed_seq = PackedSequence(vision_item_split_lens=[[2, 3, 5]], control_weights=[[0.25, 0.75]])
+
+    _annotate_multi_control_ranges_for_test(attention_meta, packed_seq, n_gen=10)
+
+    assert attention_meta.control_stream_token_ranges == [(0, 2), (2, 5)]
+    assert attention_meta.noisy_token_range == (5, 10)
+    assert attention_meta.control_weights == [0.25, 0.75]
+
+
+@pytest.mark.L0
+def test_multi_control_range_annotation_rejects_inconsistent_token_count() -> None:
+    attention_meta = _split_info_for_multi_control_test()
+    packed_seq = PackedSequence(vision_item_split_lens=[[2, 3, 5]], control_weights=[[0.25, 0.75]])
+
+    with pytest.raises(AssertionError, match="packing inconsistency"):
+        _annotate_multi_control_ranges_for_test(attention_meta, packed_seq, n_gen=9)
 
 
 # ── two_way_attention on the multiview FlexAttention mask ────────────────────

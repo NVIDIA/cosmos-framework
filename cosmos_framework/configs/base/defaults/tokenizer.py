@@ -186,6 +186,7 @@ AVAE_48k_25hzConfig: LazyDict = L(AVAEInterface)(
 )
 
 
+
 def register_tokenizer() -> None:
     cs = ConfigStore.instance()
 
@@ -242,8 +243,14 @@ def register_lidar_tokenizer() -> None:
     cs.store(
         group="lidar_tokenizer",
         package="model.config.lidar_tokenizer",
-        name="lidar_transformer_vae_tokenizer",
-        node=LidarTransformerVAEConfig,
+        name="lidar_tokenizer_v0",
+        node=LidarTokenizerV0Config,
+    )
+    cs.store(
+        group="lidar_tokenizer",
+        package="model.config.lidar_tokenizer",
+        name="lidar_tokenizer_v1",
+        node=LidarTokenizerV1Config,
     )
 
 
