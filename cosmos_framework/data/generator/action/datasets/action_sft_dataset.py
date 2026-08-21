@@ -21,6 +21,10 @@ from torch.utils.data import Dataset, IterableDataset, get_worker_info
 
 from cosmos_framework.data.generator.action.datasets.droid_merged_lerobot_dataset import DROIDMergedLeRobotDataset
 from cosmos_framework.data.generator.action.datasets.droid_lerobot_dataset import DROIDLeRobotDataset
+from cosmos_framework.data.generator.action.datasets.robocasa_lerobot_dataset import (
+    DEFAULT_ALL_ATOMIC_TASKS,
+    RoboCasaLeRobotDataset,
+)
 from cosmos_framework.data.generator.action.datasets.libero_lerobot_dataset import LIBEROLeRobotDataset
 from cosmos_framework.data.generator.action.utils.transforms import ActionTransformPipeline
 
@@ -210,6 +214,89 @@ def get_action_droid_merged_lerobot_sft_dataset(
         return ActionIterableShuffleDataset(sft, seed=episode_shuffle_seed)
     return sft
 
+
+def get_action_robocasa_sft_dataset(
+    *,
+    root: str,
+    fps: float = 20.0,
+    chunk_length: int = 16,
+    mode: str = "wam",
+    viewpoint: str = "concat_view",
+    camera_set: str = "wrist_lr",
+    task_names: tuple[str, ...] | list[str] = DEFAULT_ALL_ATOMIC_TASKS,
+    use_state: bool = False,
+    use_base_action: bool = False,
+    base_encoding: str = "ego",
+    action_normalization: str | None = None,
+    split: str = "train",
+    split_val_ratio: float = 0.01,
+    split_seed: int = 42,
+    resolution: str | int = "256",
+    max_action_dim: int = 64,
+    tokenizer_config: dict | None = None,
+    cfg_dropout_rate: float = 0.1,
+    append_viewpoint_info: bool = True,
+    append_duration_fps_timestamps: bool = True,
+    append_resolution_info: bool = True,
+    append_idle_frames: bool = True,
+    format_prompt_as_json: bool = False,
+    iterable_shuffle: bool = False,
+    episode_shuffle_seed: int = 42,
+) -> Dataset:
+    """Build the RoboCasa fixed-base action-policy SFT dataset.
+
+    Feeds ``RoboCasaLeRobotDataset`` (10D ``[pos, rot6d, gripper]`` end-effector
+    deltas, concat_view wrist + two third-person cams) through
+    ``ActionTransformPipeline``. ``root`` is the RoboCasa atomic dir
+    (``.../target/atomic``); each task in ``task_names`` is discovered as
+    ``<root>/<task>/*/lerobot`` and registered as a separate LeRobot shard.
+    Defaults to ``action_normalization=None`` (like DROID); pass ``quantile_rot``
+    with a bundled stats file to normalize.
+
+    ``use_base_action=True`` widens the contract so the mobile base is representable
+    (required for the full 18-task ``DEFAULT_ALL_ATOMIC_TASKS`` set, which includes
+    NavigateKitchen); leave it False for the 10D fixed-base recipe. ``base_encoding``
+    then selects the base representation:
+
+    * ``"ego"`` (default, 20D) --
+      ``[base_pos(3), base_rot6d(6), control_mode(1), eef_pos(3), eef_rot6d(6), gripper(1)]``
+    * ``"raw"`` (15D) --
+      ``[base_motion(4), control_mode(1), eef_pos(3), eef_rot6d(6), gripper(1)]``
+
+    ``"raw"`` regresses RoboCasa's native normalised velocity command, so replay is an
+    identity round-trip and the base channels share the arm's scale; ``"ego"`` is retained
+    as the default so existing configs and checkpoints reproduce unchanged.
+    """
+    dataset: Dataset = RoboCasaLeRobotDataset(
+        root=root,
+        fps=fps,
+        chunk_length=chunk_length,
+        mode=mode,
+        viewpoint=viewpoint,
+        camera_set=camera_set,
+        task_names=task_names,
+        use_state=use_state,
+        use_base_action=use_base_action,
+        base_encoding=base_encoding,
+        action_normalization=action_normalization,
+        split=split,
+        split_val_ratio=split_val_ratio,
+        split_seed=split_seed,
+    )
+    transform = ActionTransformPipeline(
+        tokenizer_config=tokenizer_config,
+        cfg_dropout_rate=cfg_dropout_rate,
+        max_action_dim=max_action_dim,
+        append_viewpoint_info=append_viewpoint_info,
+        append_duration_fps_timestamps=append_duration_fps_timestamps,
+        append_resolution_info=append_resolution_info,
+        append_idle_frames=append_idle_frames,
+        format_prompt_as_json=format_prompt_as_json,
+    )
+    sft = ActionSFTDataset(dataset, transform, resolution)
+    if iterable_shuffle:
+        return ActionIterableShuffleDataset(sft, seed=episode_shuffle_seed)
+    return sft
 
 def get_action_libero_sft_dataset(
     *,
