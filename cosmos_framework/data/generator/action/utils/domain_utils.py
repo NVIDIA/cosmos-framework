@@ -52,12 +52,12 @@ EMBODIMENT_TO_RAW_ACTION_DIM: dict[str, int] = {
     "fractal": 10,
     "drawanything": 3,
     "behavior1k_lerobot": 23,  # base(3) trunk(4) arms(14) grippers(2)
-    # NOTE: ``libero`` (7/10/13 depending on ``rotation_space``) and ``hand_pose``
-    # (variable with ``keypoint_option`` and ``rotation_format``) are absent
-    # because their raw width is set per-dataset at construction time. Inference
-    # in inverse_dynamics/WAM modes is not supported for these domains until
-    # canonical widths are added here.
-    "robocasa": 10,
+    # NOTE: ``libero`` (7/10/13 depending on ``rotation_space``), ``hand_pose``
+    # (variable with ``keypoint_option`` and ``rotation_format``) and ``robocasa``
+    # (10 arm-only, 15/20 with the mobile base, per ``use_base_action`` /
+    # ``base_encoding``) are absent because their raw width is set per-dataset at
+    # construction time. Inference in inverse_dynamics/WAM modes is not supported
+    # for these domains until canonical widths are added here.
 }
 
 

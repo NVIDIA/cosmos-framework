@@ -171,13 +171,22 @@ ATOMIC_SEEN_NUM_ROLLOUTS = 50
 
 
 def official_horizon(task: str):
-    """Official per-task rollout horizon from robocasa's registry (source of truth), with a
-    hardcoded fallback for a few tasks if the import is unavailable."""
+    """Official per-task rollout horizon from robocasa's registry (the source of truth).
+
+    Returns ``None`` when the registry cannot be read, so the caller falls back to
+    ``--max-steps``. Mirroring the horizons here would just be a copy that silently
+    goes stale (v1.0.1 already rebased every one of them by 1.5x), so the miss is
+    reported instead."""
     try:
         from robocasa.utils.dataset_registry_utils import get_task_horizon
         return int(get_task_horizon(task))
-    except Exception:
-        return _OFFICIAL_HORIZON_FALLBACK.get(task)
+    except Exception as exc:
+        print(
+            f"[eval] WARNING: could not read the official horizon for {task} from robocasa "
+            f"({type(exc).__name__}: {exc}); falling back to --max-steps",
+            flush=True,
+        )
+        return None
 
 
 def make_env(dataset_dir: str, cam_size: int, *, obj_split=None, layout_style=None, seed=None):

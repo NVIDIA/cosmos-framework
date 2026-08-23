@@ -346,6 +346,10 @@ class RoboCasaLeRobotDataset(BaseActionLeRobotDataset):
 
         ``root`` may point at the atomic dir (``.../target/atomic``) or directly
         at a single ``lerobot`` dir. Missing tasks are skipped with a warning.
+
+        A task may hold more than one dated export (RoboCasa ships re-collected
+        demos under a new date). All of them are registered: silently keeping one
+        would train on less data than the caller staged, with nothing to show for it.
         """
         root = root.rstrip("/")
         if os.path.basename(root) == "lerobot" and os.path.isdir(os.path.join(root, "meta")):
@@ -357,7 +361,12 @@ class RoboCasaLeRobotDataset(BaseActionLeRobotDataset):
             if not matches:
                 log.warning(f"RoboCasaLeRobotDataset: no lerobot shard for task {task!r} under {root!r}; skipping.")
                 continue
-            shard_roots.append(matches[0])
+            if len(matches) > 1:
+                log.info(
+                    f"RoboCasaLeRobotDataset: task {task!r} has {len(matches)} dated exports under "
+                    f"{root!r}; registering all of them: {matches}"
+                )
+            shard_roots.extend(matches)
         return shard_roots
 
     # ---- action / spec -----------------------------------------------------

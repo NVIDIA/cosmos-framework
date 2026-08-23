@@ -31,10 +31,11 @@ from cosmos_framework.utils.generator.data_utils import get_vision_data_resoluti
 
 # Domains whose raw action width is chosen per dataset at construction time rather than
 # being a property of the embodiment -- ``hand_pose`` varies with ``keypoint_option`` and
-# ``rotation_format``, ``libero`` with ``rotation_space``. They are absent from
-# ``EMBODIMENT_TO_RAW_ACTION_DIM`` for that reason, so forward dynamics has to take the
-# width from the action file instead of looking it up.
-_PER_DATASET_ACTION_WIDTH = frozenset({"hand_pose", "libero"})
+# ``rotation_format``, ``libero`` with ``rotation_space``, ``robocasa`` with
+# ``use_base_action`` / ``base_encoding`` (10 arm-only, 15 raw base, 20 ego base). They are
+# absent from ``EMBODIMENT_TO_RAW_ACTION_DIM`` for that reason, so forward dynamics has to
+# take the width from the action file instead of looking it up.
+_PER_DATASET_ACTION_WIDTH = frozenset({"hand_pose", "libero", "robocasa"})
 
 
 def _load_actions(

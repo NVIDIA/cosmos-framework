@@ -231,6 +231,30 @@ def _extract_chunk_length_from_config(config: Any) -> int | None:
     return None
 
 
+def _extract_raw_action_dim_from_config(config: Any) -> int | None:
+    """Derive the RoboCasa action width from the experiment's dataset settings.
+
+    The width is a function of the dataset contract, not a free parameter:
+    ``use_base_action=False`` is the 10-D arm-only contract, and with the base
+    channels it is 15-D for ``base_encoding="raw"`` or 20-D for ``"ego"``.  This
+    mirrors ``RoboCasaLeRobotDataset.action_dim``.  Returns ``None`` when the
+    config carries no RoboCasa dataset node to read.
+    """
+    use_base_action = _extract_bool_from_config(config, "use_base_action", default=False)
+    if not use_base_action:
+        # Absent as well as explicitly False. Only claim the 10-D contract when the
+        # config really is a RoboCasa one; otherwise leave the width unresolved.
+        if _extract_str_from_config(config, "base_encoding") is None:
+            return None
+        return 10
+    base_encoding = _extract_str_from_config(config, "base_encoding")
+    if base_encoding == "raw":
+        return 15
+    if base_encoding == "ego":
+        return 20
+    return None
+
+
 def _strip_data_url_prefix(b64: str) -> str:
     # Accept "data:image/png;base64,...." as well as raw base64.
     if "," in b64 and b64[:64].lower().startswith("data:"):
@@ -470,13 +494,16 @@ class ActionServerArgs(pydantic.BaseModel):
     # ----- action policy parameters -------------------------------------------
     action_chunk_size: int | None = None
     """Number of action steps to predict. Defaults to ``chunk_length`` /
-    ``num_action_per_chunk`` from the experiment config (or 16)."""
+    ``num_action_per_chunk`` from the experiment config (or 32)."""
     max_action_dim: int | None = None
     """Maximum action dimension. Defaults to ``model.config.max_action_dim``
     from the experiment config (or 64)."""
     raw_action_dim: int | None = None
-    """Unpadded action dimension used for action-channel masking. Inferred
-    from action stats when omitted."""
+    """Unpadded action dimension used for action-channel masking, and the width
+    the ``state`` token in a /predict request must have. Optional override:
+    when omitted it is taken from the action stats, else derived from the
+    experiment config's ``use_base_action`` / ``base_encoding`` (10 arm-only,
+    15 ``raw``, 20 ``ego``). Startup fails if none of the three resolves."""
 
     # ----- action denormalization ---------------------------------------------
     action_stats_path: Path | None = None
@@ -697,10 +724,29 @@ class ActionModelService:
         self.action_mean: torch.Tensor | None = None
         self.action_std: torch.Tensor | None = None
         self.action_normalization: ResolvedActionNormalization = "minmax"
+        # Effective action width: --raw-action-dim > action stats > experiment config.
+        # There is no default: guessing a width silently produces a server whose
+        # /predict rejects every request from a correctly configured evaluator, and the
+        # error surfaces far from its cause.
         self.raw_action_dim: int | None = self.cfg.raw_action_dim
+        self.raw_action_dim_source = "--raw-action-dim" if self.raw_action_dim is not None else ""
         self._load_action_normalization_stats()
+        if self.raw_action_dim is not None and not self.raw_action_dim_source:
+            self.raw_action_dim_source = "action stats"
         if self.raw_action_dim is None:
-            self.raw_action_dim = 7
+            self.raw_action_dim = _extract_raw_action_dim_from_config(self.experiment_config)
+            self.raw_action_dim_source = "experiment config"
+        if self.raw_action_dim is None:
+            raise ValueError(
+                "could not determine the action width: the experiment config carries no RoboCasa "
+                "dataset node to read use_base_action/base_encoding from, and no action stats were "
+                "given. Pass --raw-action-dim explicitly (15 for the default recipe: "
+                "use_base_action=True, base_encoding='raw')."
+            )
+        log.info(
+            f"[action-server] effective raw_action_dim={self.raw_action_dim} "
+            f"(from {self.raw_action_dim_source})"
+        )
 
         if args.run_validation:
             self._run_developer_validation()
@@ -840,7 +886,10 @@ class ActionModelService:
             "seed": self.cfg.seed,
             "action_chunk_size": self.cfg.action_chunk_size,
             "max_action_dim": self.cfg.max_action_dim,
-            "raw_action_dim": self.cfg.raw_action_dim,
+            # The effective width actually enforced by /predict, not the CLI flag.
+            "raw_action_dim": self.raw_action_dim,
+            "raw_action_dim_source": self.raw_action_dim_source,
+            "requires_state": self.requires_state,
             "action_stats_path": str(self.cfg.action_stats_path) if self.cfg.action_stats_path else None,
         }
 
@@ -1378,7 +1427,7 @@ def serve(args: ActionServerArgs) -> None:
         f"experiment_name={service.cfg.experiment_name!r} "
         f"steps={service.cfg.num_steps} guidance={service.cfg.guidance} fps={service.cfg.fps} "
         f"action_chunk_size={service.cfg.action_chunk_size} max_action_dim={service.cfg.max_action_dim} "
-        f"raw_action_dim={service.cfg.raw_action_dim} "
+        f"raw_action_dim={service.raw_action_dim} "
         f"dump_dir={service.cfg.dump_dir} dump_every={service.cfg.dump_every} "
         f"http_400_on_error={service.cfg.http_400_on_error}"
     )
