@@ -85,7 +85,7 @@ class MixedPrecisionRuntime:
         self._block_provider = None  # set by Task 4
         self.cached_bytes = 0  # set by Task 3
 
-    def install(self, net: nn.Module) -> None:
+    def install(self, net: nn.Module, blocks: list[nn.Module] | None = None) -> None:
         """Discover, validate, and tag every ModelOpt FP8 linear under ``net``."""
         # Import here: quantization.py imports are lazy-torchao friendly and
         # mixed_precision must not become a hard torchao dependency at import.
@@ -122,6 +122,14 @@ class MixedPrecisionRuntime:
                     cache = _dequantize_w8a16_weight(_unwrap_float8(module.weight)).contiguous()
                     module.register_buffer("_w8a16_weight_cache", cache, persistent=False)
                     self.cached_bytes += cache.numel() * cache.element_size()
+        if cache_mode in ("gpu_block", "cpu_block"):
+            if blocks is None:
+                blocks = list(net.language_model.model.layers)
+            provider_cls = _GpuBlockWeightProvider if cache_mode == "gpu_block" else _CpuBlockWeightProvider
+            dtype = self._modules_by_path["generation"][0].weight.dtype
+            self._block_provider = provider_cls(self, blocks, dtype)
+            self._block_provider.initialize()
+            self.cached_bytes = self._block_provider.device_bytes
         reasoner_label = "W8A16" if self.config.mixed_precision_reasoner_policy == "high_precision" else "W8A8"
         log.info(
             f"Mixed precision installed: reasoner={reasoner_label}, "
@@ -129,9 +137,10 @@ class MixedPrecisionRuntime:
             f"last {self.config.mixed_precision_last_steps} W8A16 / middle W8A8, "
             f"cache={self.config.mixed_precision_w8a16_cache}, linears={self.installed_counts}"
         )
+        host_bytes = self._block_provider.host_bytes if self._block_provider is not None else 0
         log.info(
             f"Mixed precision W8A16 cache ready: mode={cache_mode}, "
-            f"resident_bytes={self.cached_bytes}"
+            f"resident_bytes={self.cached_bytes}, host_bytes={host_bytes}"
         )
 
     def use_high_precision(self, path: str) -> bool:
@@ -178,11 +187,172 @@ class MixedPrecisionRuntime:
 
 
 def install_mixed_precision_runtime(
-    net: nn.Module, quantization_config: QuantizationConfig
+    net: nn.Module,
+    quantization_config: QuantizationConfig,
+    blocks: list[nn.Module] | None = None,
 ) -> MixedPrecisionRuntime | None:
     """Install mixed precision on ``net`` when enabled; return the runtime or None."""
     if not quantization_config.mixed_precision_enabled:
         return None
     runtime = MixedPrecisionRuntime(quantization_config)
-    runtime.install(net)
+    runtime.install(net, blocks=blocks)
     return runtime
+
+
+class _BlockWeightProvider:
+    """Stage per-decoder-layer W8A16 generation weights through two device slots.
+
+    Layer hooks drive a double buffer: while layer N computes against its
+    ready slot, the staging stream fills the other slot with layer N+1's
+    dense weights. Ready/free CUDA events order the two streams. Port of
+    vllm-omni's W8A16BlockWeightProvider.
+    """
+
+    def __init__(self, runtime: "MixedPrecisionRuntime", blocks: list[nn.Module], dtype: torch.dtype) -> None:
+        self._runtime = runtime
+        self._blocks = blocks
+        self._dtype = dtype
+        # entries[b] = list of (module, offset, out_features, in_features)
+        self._entries: list[list[tuple[nn.Module, int, int, int]]] = []
+        self._block_numels: list[int] = []
+        self._slots: tuple[torch.Tensor, torch.Tensor] | None = None
+        self._stage_stream: torch.cuda.Stream | None = None
+        self._ready_events: list[torch.cuda.Event] = []
+        self._free_events: list[torch.cuda.Event] = []
+        self._loaded: list[int | None] = [None, None]
+        self._hook_handles: list = []
+        self.device_bytes = 0
+        self.host_bytes = 0
+
+    def initialize(self) -> None:
+        """Build per-block inventories, allocate the two slots, install hooks."""
+        from cosmos_framework.utils.generator.quantization import _ModelOptFloat8Linear
+
+        for block in self._blocks:
+            entries: list[tuple[nn.Module, int, int, int]] = []
+            offset = 0
+            for _, module in block.named_modules():
+                if not isinstance(module, _ModelOptFloat8Linear):
+                    continue
+                if module._mixed_precision_path != "generation":
+                    continue
+                out_features, in_features = module.weight.qdata.shape
+                entries.append((module, offset, out_features, in_features))
+                offset += out_features * in_features
+            self._entries.append(entries)
+            self._block_numels.append(offset)
+
+        max_numel = max(self._block_numels)
+        device = self._entries[0][0][0].weight.device
+        self._slots = (
+            torch.empty(max_numel, dtype=self._dtype, device=device),
+            torch.empty(max_numel, dtype=self._dtype, device=device),
+        )
+        self.device_bytes = 2 * max_numel * self._slots[0].element_size()
+        self._stage_stream = torch.cuda.Stream(device=device)
+        self._ready_events = [torch.cuda.Event(), torch.cuda.Event()]
+        self._free_events = [torch.cuda.Event(), torch.cuda.Event()]
+        for event in self._free_events:
+            event.record()  # both slots start free
+
+        for block_index, block in enumerate(self._blocks):
+            self._hook_handles.append(
+                block.register_forward_pre_hook(self._make_pre_hook(block_index), prepend=True)
+            )
+            self._hook_handles.append(
+                block.register_forward_hook(self._make_post_hook(block_index), always_call=True)
+            )
+        self._materialize_sources()
+
+    def _materialize_sources(self) -> None:
+        """Subclass hook: prepare per-block weight sources (host copies for CPU mode)."""
+
+    def _fill_slot(self, slot: int, block_index: int) -> None:
+        raise NotImplementedError
+
+    def _stage(self, block_index: int) -> None:
+        """Queue block ``block_index`` into its slot on the staging stream."""
+        slot = block_index % 2
+        if self._loaded[slot] == block_index:
+            return
+        stream = self._stage_stream
+        stream.wait_event(self._free_events[slot])
+        with torch.cuda.stream(stream):
+            self._fill_slot(slot, block_index)
+        self._ready_events[slot].record(stream)
+        self._loaded[slot] = block_index
+
+    def preload_first(self) -> None:
+        self._stage(0)
+
+    def _make_pre_hook(self, block_index: int):
+        def _pre_hook(module: nn.Module, args) -> None:
+            if not self._runtime.use_high_precision("generation"):
+                return
+            self._stage(block_index)  # no-op when already queued by the previous post-hook
+            slot = block_index % 2
+            torch.cuda.current_stream().wait_event(self._ready_events[slot])
+            slot_buffer = self._slots[slot]
+            for linear, offset, out_features, in_features in self._entries[block_index]:
+                linear._mixed_precision_staged_weight = slot_buffer[
+                    offset : offset + out_features * in_features
+                ].view(out_features, in_features)
+            if block_index + 1 < len(self._blocks):
+                self._stage(block_index + 1)
+
+        return _pre_hook
+
+    def _make_post_hook(self, block_index: int):
+        def _post_hook(module: nn.Module, args, output) -> None:
+            slot = block_index % 2
+            staged_any = False
+            for linear, _, _, _ in self._entries[block_index]:
+                staged_any = staged_any or linear._mixed_precision_staged_weight is not None
+                linear._mixed_precision_staged_weight = None
+            if staged_any:
+                # The slot may be refilled only after this block's compute is done.
+                self._free_events[slot].record(torch.cuda.current_stream())
+                self._loaded[slot] = None
+
+        return _post_hook
+
+    def reset(self) -> None:
+        """Synchronize staging work and clear request-scoped state."""
+        if self._stage_stream is not None:
+            self._stage_stream.synchronize()
+        self._loaded = [None, None]
+        for entries in self._entries:
+            for linear, _, _, _ in entries:
+                linear._mixed_precision_staged_weight = None
+        for event in self._free_events:
+            event.record()
+
+
+class _GpuBlockWeightProvider(_BlockWeightProvider):
+    """Fill slots by dequantizing the resident FP8 weights on the staging stream."""
+
+    def _fill_slot(self, slot: int, block_index: int) -> None:
+        slot_buffer = self._slots[slot]
+        for linear, offset, out_features, in_features in self._entries[block_index]:
+            view = slot_buffer[offset : offset + out_features * in_features].view(out_features, in_features)
+            weight = linear.weight
+            view.copy_(weight.qdata.to(self._dtype))
+            view.mul_(weight.scale.to(device=view.device, dtype=self._dtype))
+
+
+class _CpuBlockWeightProvider(_BlockWeightProvider):
+    """Fill slots by H2D-copying pre-dequantized pinned-host BF16 blocks."""
+
+    def _materialize_sources(self) -> None:
+        self._host_blocks: list[torch.Tensor] = []
+        for block_index, entries in enumerate(self._entries):
+            host = torch.empty(self._block_numels[block_index], dtype=self._dtype, pin_memory=True)
+            for linear, offset, out_features, in_features in entries:
+                dense = _dequantize_w8a16_weight(linear.weight)
+                host[offset : offset + out_features * in_features].copy_(dense.reshape(-1))
+            self._host_blocks.append(host)
+            self.host_bytes += host.numel() * host.element_size()
+
+    def _fill_slot(self, slot: int, block_index: int) -> None:
+        numel = self._block_numels[block_index]
+        self._slots[slot][:numel].copy_(self._host_blocks[block_index], non_blocking=True)

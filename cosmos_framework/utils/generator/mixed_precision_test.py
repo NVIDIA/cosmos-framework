@@ -241,3 +241,86 @@ def test_cached_forward_matches_uncached_forward() -> None:
     runtime_plain.set_step(0, 4)
     inputs = torch.randn(2, 4, dtype=torch.bfloat16)
     torch.testing.assert_close(net_cached.mlp_moe_gen.up_proj(inputs), net_plain.mlp_moe_gen.up_proj(inputs))
+
+
+class _TinyLayeredNet(nn.Module):
+    """Two decoder-layer-like blocks, each with reasoner and generation linears."""
+
+    def __init__(self, device: str = "cpu") -> None:
+        super().__init__()
+        self.layers = nn.ModuleList([_TinyMoTLayer(device), _TinyMoTLayer(device)])
+
+
+class _TinyMoTLayer(nn.Module):
+    def __init__(self, device: str = "cpu") -> None:
+        super().__init__()
+        # 16/16: real (non-mixed-precision) W8A8 forward dispatches to
+        # torch._scaled_mm, which requires both GEMM operands' reduction/output
+        # dims to be multiples of 16 on this hardware — unlike the W8A16 path
+        # (dense F.linear over a dequantized weight), which tolerates any shape.
+        self.mlp = nn.Module()
+        self.mlp.up_proj = _make_fp8_linear(out_features=16, in_features=16, device=device)
+        self.mlp_moe_gen = nn.Module()
+        self.mlp_moe_gen.up_proj = _make_fp8_linear(out_features=16, in_features=16, device=device)
+
+    def forward(self, inputs: torch.Tensor) -> torch.Tensor:
+        return self.mlp_moe_gen.up_proj(inputs)
+
+
+def _cuda_layered_net() -> "_TinyLayeredNet":
+    # Built directly on cuda — no .to() move of the FP8 tensor subclass.
+    return _TinyLayeredNet(device="cuda")
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="block providers need CUDA streams")
+@pytest.mark.parametrize("cache_mode", ["gpu_block", "cpu_block"])
+def test_block_provider_stages_and_matches_dequant(cache_mode: str) -> None:
+    net = _cuda_layered_net()
+    runtime = install_mixed_precision_runtime(
+        net,
+        _enabled_config(mixed_precision_w8a16_cache=cache_mode),
+        blocks=list(net.layers),
+    )
+    runtime.set_step(0, 4)  # W8A16 -> preload_first
+    inputs = torch.randn(2, 16, dtype=torch.bfloat16, device="cuda")
+    for layer in net.layers:
+        output = layer(inputs)
+        weight = layer.mlp_moe_gen.up_proj.weight
+        expected = torch.nn.functional.linear(
+            inputs, weight.qdata.to(torch.bfloat16) * weight.scale.to(torch.bfloat16)
+        )
+        torch.testing.assert_close(output, expected)
+    runtime.reset()
+    assert all(layer.mlp_moe_gen.up_proj._mixed_precision_staged_weight is None for layer in net.layers)
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="block providers need CUDA streams")
+def test_block_provider_idle_on_w8a8_steps() -> None:
+    net = _cuda_layered_net()
+    runtime = install_mixed_precision_runtime(
+        net,
+        _enabled_config(mixed_precision_w8a16_cache="gpu_block"),
+        blocks=list(net.layers),
+    )
+    runtime.set_step(1, 4)  # middle step -> W8A8
+    _ = net.layers[0](torch.randn(2, 16, dtype=torch.bfloat16, device="cuda"))
+    assert net.layers[0].mlp_moe_gen.up_proj._mixed_precision_staged_weight is None
+    runtime.reset()
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="block providers need CUDA streams")
+def test_block_provider_reusable_across_requests() -> None:
+    net = _cuda_layered_net()
+    runtime = install_mixed_precision_runtime(
+        net,
+        _enabled_config(mixed_precision_w8a16_cache="gpu_block"),
+        blocks=list(net.layers),
+    )
+    inputs = torch.randn(2, 16, dtype=torch.bfloat16, device="cuda")
+    for _ in range(2):  # two full "requests" with mixed schedules
+        for step in range(4):
+            runtime.set_step(step, 4)
+            for layer in net.layers:
+                _ = layer(inputs)
+        runtime.reset()
+    assert runtime.last_trace == ("W8A16", "W8A8", "W8A8", "W8A16")
