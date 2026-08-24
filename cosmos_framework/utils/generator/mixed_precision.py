@@ -83,7 +83,7 @@ class MixedPrecisionRuntime:
         self._generation_high_precision = False
         self._trace: list[str] = []
         self._block_provider = None  # set by Task 4
-        self._cached_bytes = 0  # set by Task 3
+        self.cached_bytes = 0  # set by Task 3
 
     def install(self, net: nn.Module) -> None:
         """Discover, validate, and tag every ModelOpt FP8 linear under ``net``."""
@@ -114,12 +114,24 @@ class MixedPrecisionRuntime:
                 f"got {self.config.mixed_precision_w8a16_cache!r}"
             )
         net._mixed_precision_runtime = self
+        cache_mode = self.config.mixed_precision_w8a16_cache
+        if cache_mode in ("generation", "all"):
+            cached_paths = PRECISION_PATHS if cache_mode == "all" else ("generation",)
+            for path in cached_paths:
+                for module in self._modules_by_path[path]:
+                    cache = _dequantize_w8a16_weight(_unwrap_float8(module.weight)).contiguous()
+                    module.register_buffer("_w8a16_weight_cache", cache, persistent=False)
+                    self.cached_bytes += cache.numel() * cache.element_size()
         reasoner_label = "W8A16" if self.config.mixed_precision_reasoner_policy == "high_precision" else "W8A8"
         log.info(
             f"Mixed precision installed: reasoner={reasoner_label}, "
             f"generation=first {self.config.mixed_precision_first_steps} + "
             f"last {self.config.mixed_precision_last_steps} W8A16 / middle W8A8, "
             f"cache={self.config.mixed_precision_w8a16_cache}, linears={self.installed_counts}"
+        )
+        log.info(
+            f"Mixed precision W8A16 cache ready: mode={cache_mode}, "
+            f"resident_bytes={self.cached_bytes}"
         )
 
     def use_high_precision(self, path: str) -> bool:

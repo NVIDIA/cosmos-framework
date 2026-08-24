@@ -200,3 +200,44 @@ def test_dequantize_w8a16_weight_unwraps_float8() -> None:
     dequantized = _dequantize_w8a16_weight(_unwrap_float8(module.weight))
     expected = module.weight.qdata.to(torch.bfloat16) * module.weight.scale.to(torch.bfloat16)
     torch.testing.assert_close(dequantized, expected)
+
+
+def test_generation_cache_covers_generation_path_only() -> None:
+    net = _TinyMoTNet()
+    runtime = install_mixed_precision_runtime(
+        net, _enabled_config(mixed_precision_w8a16_cache="generation")
+    )
+    gen = net.mlp_moe_gen.up_proj
+    reasoner = net.mlp.up_proj
+    assert isinstance(gen._w8a16_weight_cache, torch.Tensor)
+    assert gen._w8a16_weight_cache.dtype == torch.bfloat16
+    assert getattr(reasoner, "_w8a16_weight_cache", None) is None
+    assert runtime.cached_bytes == gen._w8a16_weight_cache.numel() * 2
+    # cache must not leak into state_dict
+    assert not any("_w8a16_weight_cache" in key for key in net.state_dict())
+
+
+def test_all_cache_covers_both_paths_and_matches_dequant() -> None:
+    net = _TinyMoTNet()
+    install_mixed_precision_runtime(net, _enabled_config(mixed_precision_w8a16_cache="all"))
+    for module in (net.mlp.up_proj, net.mlp_moe_gen.up_proj):
+        weight = module.weight
+        torch.testing.assert_close(
+            module._w8a16_weight_cache,
+            weight.qdata.to(torch.bfloat16) * weight.scale.to(torch.bfloat16),
+        )
+
+
+def test_cached_forward_matches_uncached_forward() -> None:
+    torch.manual_seed(0)
+    net_cached = _TinyMoTNet()
+    torch.manual_seed(0)
+    net_plain = _TinyMoTNet()
+    runtime_cached = install_mixed_precision_runtime(
+        net_cached, _enabled_config(mixed_precision_w8a16_cache="all")
+    )
+    runtime_plain = install_mixed_precision_runtime(net_plain, _enabled_config())
+    runtime_cached.set_step(0, 4)
+    runtime_plain.set_step(0, 4)
+    inputs = torch.randn(2, 4, dtype=torch.bfloat16)
+    torch.testing.assert_close(net_cached.mlp_moe_gen.up_proj(inputs), net_plain.mlp_moe_gen.up_proj(inputs))
