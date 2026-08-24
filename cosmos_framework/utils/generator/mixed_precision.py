@@ -12,6 +12,13 @@ feature (branch ``mixed-precision-diffusion-steps``) onto the framework's
 TorchAO FP8 path.
 """
 
+import torch
+from torch import nn
+from torch.distributed.tensor import DTensor
+
+from cosmos_framework.utils import log
+from cosmos_framework.configs.base.defaults.quantization import QuantizationConfig
+
 PRECISION_PATHS = ("reasoner", "generation")
 W8A16_CACHE_MODES = ("none", "generation", "all", "cpu_block", "gpu_block")
 
@@ -31,14 +38,6 @@ def use_w8a16_step(first_steps: int, last_steps: int, step_index: int, num_steps
     if num_steps == 1:
         return False
     return step_index < first_steps or step_index >= num_steps - last_steps
-
-
-import torch
-from torch import nn
-from torch.distributed.tensor import DTensor
-
-from cosmos_framework.utils import log
-from cosmos_framework.configs.base.defaults.quantization import QuantizationConfig
 
 
 def _unwrap_float8(weight: torch.Tensor) -> torch.Tensor:
@@ -153,7 +152,7 @@ class MixedPrecisionRuntime:
         cached = getattr(module, "_w8a16_weight_cache", None)
         if cached is not None:
             return cached
-        return _dequantize_w8a16_weight(module.weight)
+        return _dequantize_w8a16_weight(_unwrap_float8(module.weight))
 
     def reset(self) -> None:
         """Finish the request: log the trace and return to idle W8A8 state."""

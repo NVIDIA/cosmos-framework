@@ -57,8 +57,9 @@ import torch
 from torch import nn
 
 from cosmos_framework.utils.generator.mixed_precision import (
-    MixedPrecisionRuntime,
     install_mixed_precision_runtime,
+    _unwrap_float8,
+    _dequantize_w8a16_weight,
 )
 from cosmos_framework.utils.generator.quantization import _ModelOptFloat8Linear
 
@@ -192,3 +193,10 @@ def test_install_rejects_smoothquant_layer() -> None:
     net.mlp_moe_gen.up_proj.pre_quant_scale = torch.ones(4)
     with pytest.raises(ValueError, match="pre_quant_scale"):
         install_mixed_precision_runtime(net, _enabled_config())
+
+
+def test_dequantize_w8a16_weight_unwraps_float8() -> None:
+    module = _make_fp8_linear()
+    dequantized = _dequantize_w8a16_weight(_unwrap_float8(module.weight))
+    expected = module.weight.qdata.to(torch.bfloat16) * module.weight.scale.to(torch.bfloat16)
+    torch.testing.assert_close(dequantized, expected)
