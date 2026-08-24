@@ -48,6 +48,13 @@ class _ModelOptFloat8Linear(nn.Linear):
     _modelopt_high_precision_dtype: torch.dtype | None = None
     # True once real checkpoint data has been installed.
     _modelopt_weight_loaded: bool = False
+    # Mixed-precision diffusion steps (see utils/generator/mixed_precision.py).
+    # None until install_mixed_precision_runtime tags this module.
+    _mixed_precision_runtime = None
+    _mixed_precision_path: str = "generation"
+    # A (N, K) dense view staged by the block provider for the current decoder
+    # layer, or None. Read here, written only by the provider hooks.
+    _mixed_precision_staged_weight: torch.Tensor | None = None
 
     def forward(self, inputs: torch.Tensor) -> torch.Tensor:
         output_shape = (*inputs.shape[:-1], self.out_features)
@@ -58,6 +65,12 @@ class _ModelOptFloat8Linear(nn.Linear):
         # PrototypeFloat8Tensor requires the input and its static (1, 1) activation
         # scale to have equal rank, so flatten token dimensions before dispatch.
         flat_inputs = inputs.reshape(-1, inputs.shape[-1])
+        runtime = self._mixed_precision_runtime
+        if runtime is not None and runtime.use_high_precision(self._mixed_precision_path):
+            # W8A16: dense GEMM against the dequantized FP8 weight; the
+            # activation stays in the compute dtype.
+            weight = runtime.resolve_w8a16_weight(self)
+            return F.linear(flat_inputs, weight, self.bias).reshape(output_shape)
         flat_outputs = F.linear(flat_inputs, self.weight, self.bias)
         return flat_outputs.reshape(output_shape)
 

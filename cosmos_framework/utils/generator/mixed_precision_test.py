@@ -51,3 +51,144 @@ def test_schedule_validates_bounds() -> None:
         use_w8a16_step(1, 1, 5, 5)
     with pytest.raises(IndexError):
         use_w8a16_step(1, 1, -1, 5)
+
+
+import torch
+from torch import nn
+
+from cosmos_framework.utils.generator.mixed_precision import (
+    MixedPrecisionRuntime,
+    install_mixed_precision_runtime,
+)
+from cosmos_framework.utils.generator.quantization import _ModelOptFloat8Linear
+
+
+def _make_fp8_linear(
+    out_features: int = 8, in_features: int = 4, device: str = "cpu"
+) -> _ModelOptFloat8Linear:
+    """Build a _ModelOptFloat8Linear with a real PrototypeFloat8Tensor weight on ``device``.
+
+    Built directly on the target device: moving a constructed PrototypeFloat8Tensor
+    with ``.to()`` is not guaranteed to be supported by the subclass.
+    """
+    from torchao.float8.inference import Float8MMConfig
+    from torchao.prototype.quantization.float8_static_quant.prototype_float8_tensor import (
+        PrototypeFloat8Tensor,
+    )
+    from torchao.quantization import PerTensor
+    from torchao.quantization.quantize_.workflows import QuantizeTensorToFloat8Kwargs
+
+    module = _ModelOptFloat8Linear(in_features, out_features, bias=False, dtype=torch.bfloat16, device=device)
+    module._modelopt_high_precision_dtype = torch.bfloat16
+    qdata = torch.randn(out_features, in_features, device=device).clamp(-1, 1).to(torch.float8_e4m3fn)
+    mm_config = Float8MMConfig(use_fast_accum=True)
+    module.weight = nn.Parameter(
+        PrototypeFloat8Tensor(
+            qdata,
+            torch.full((1, 1), 0.5, dtype=torch.float32, device=device),
+            act_quant_scale=torch.full((1, 1), 1.0, dtype=torch.float32, device=device),
+            block_size=[out_features, in_features],
+            mm_config=mm_config,
+            act_quant_kwargs=QuantizeTensorToFloat8Kwargs(
+                float8_dtype=torch.float8_e4m3fn, granularity=PerTensor(), mm_config=mm_config
+            ),
+            dtype=torch.bfloat16,
+        ),
+        requires_grad=False,
+    )
+    return module
+
+
+class _TinyMoTNet(nn.Module):
+    """Minimal net shape: one reasoner-path and one generation-path FP8 linear."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.mlp = nn.Module()
+        self.mlp.up_proj = _make_fp8_linear()
+        self.mlp_moe_gen = nn.Module()
+        self.mlp_moe_gen.up_proj = _make_fp8_linear()
+
+
+def _enabled_config(**overrides) -> QuantizationConfig:
+    values = dict(mixed_precision_first_steps=1, mixed_precision_last_steps=1, mixed_precision_w8a16_cache="none")
+    values.update(overrides)
+    return QuantizationConfig(**values)
+
+
+def test_install_returns_none_when_disabled() -> None:
+    net = _TinyMoTNet()
+    assert install_mixed_precision_runtime(net, QuantizationConfig()) is None
+    assert getattr(net, "_mixed_precision_runtime", None) is None
+
+
+def test_install_classifies_paths_and_tags_modules() -> None:
+    net = _TinyMoTNet()
+    runtime = install_mixed_precision_runtime(net, _enabled_config())
+    assert runtime is not None
+    assert net._mixed_precision_runtime is runtime
+    assert runtime.installed_counts == {"reasoner": 1, "generation": 1}
+    assert net.mlp.up_proj._mixed_precision_path == "reasoner"
+    assert net.mlp_moe_gen.up_proj._mixed_precision_path == "generation"
+    assert net.mlp.up_proj._mixed_precision_runtime is runtime
+
+
+def test_install_requires_both_paths() -> None:
+    net = _TinyMoTNet()
+    net.mlp.up_proj = nn.Linear(4, 8)  # no reasoner-path FP8 linear left
+    with pytest.raises(ValueError, match="reasoner"):
+        install_mixed_precision_runtime(net, _enabled_config())
+
+
+def test_step_state_and_trace() -> None:
+    net = _TinyMoTNet()
+    runtime = install_mixed_precision_runtime(net, _enabled_config())
+    runtime.set_step(0, 4)
+    assert runtime.use_high_precision("generation")
+    runtime.set_step(1, 4)
+    assert not runtime.use_high_precision("generation")
+    # reasoner policy is static, independent of the step
+    assert runtime.use_high_precision("reasoner")
+    runtime.set_base_precision()
+    assert not runtime.use_high_precision("generation")
+    runtime.reset()
+    assert runtime.last_trace == ("W8A16", "W8A8")
+    assert not runtime.use_high_precision("generation")
+
+
+def test_reasoner_base_policy() -> None:
+    net = _TinyMoTNet()
+    runtime = install_mixed_precision_runtime(
+        net, _enabled_config(mixed_precision_reasoner_policy="base_precision")
+    )
+    assert not runtime.use_high_precision("reasoner")
+
+
+def test_w8a16_forward_matches_manual_dequant() -> None:
+    net = _TinyMoTNet()
+    runtime = install_mixed_precision_runtime(net, _enabled_config())
+    module = net.mlp_moe_gen.up_proj
+    inputs = torch.randn(3, 5, 4, dtype=torch.bfloat16)
+    runtime.set_step(0, 4)  # W8A16
+    output = module(inputs)
+    weight = module.weight
+    expected = torch.nn.functional.linear(
+        inputs.reshape(-1, 4), weight.qdata.to(torch.bfloat16) * weight.scale.to(torch.bfloat16)
+    ).reshape(3, 5, 8)
+    assert output.shape == (3, 5, 8)
+    torch.testing.assert_close(output, expected)
+
+
+def test_w8a16_forward_zero_rows() -> None:
+    net = _TinyMoTNet()
+    runtime = install_mixed_precision_runtime(net, _enabled_config())
+    runtime.set_step(0, 4)
+    output = net.mlp_moe_gen.up_proj(torch.empty(0, 4, dtype=torch.bfloat16))
+    assert output.shape == (0, 8)
+
+
+def test_install_rejects_smoothquant_layer() -> None:
+    net = _TinyMoTNet()
+    net.mlp_moe_gen.up_proj.pre_quant_scale = torch.ones(4)
+    with pytest.raises(ValueError, match="pre_quant_scale"):
+        install_mixed_precision_runtime(net, _enabled_config())
