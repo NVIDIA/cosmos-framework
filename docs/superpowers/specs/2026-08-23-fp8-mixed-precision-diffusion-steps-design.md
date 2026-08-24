@@ -108,7 +108,10 @@ Attached to the VFM network as `net._mixed_precision_runtime` when enabled.
 - **Install:** scans for `_ModelOptFloat8Linear` modules and classifies each
   by FQN: contains `_moe_gen` → `generation` path, else → `reasoner` path.
   Tags each module with its path and a back-reference to the runtime.
-  Validates both inventories are non-empty.
+  Validates both inventories are non-empty, and validates each bound linear
+  (parity with vllm's bind-time checks): canonical `float8_e4m3fn` weight
+  data, a scalar per-tensor `weight_scale` that is finite and positive, and
+  no unexpected SmoothQuant-style pre-quant scale.
 - **State:** the config, the current step's `generation_high_precision`
   flag, `use_high_precision(path)` (reasoner → static policy; generation →
   current step flag), and a per-request precision trace logged on reset
