@@ -242,6 +242,11 @@ class _BlockWeightProvider:
             self._entries.append(entries)
             self._block_numels.append(offset)
 
+        if not any(self._entries):
+            raise ValueError(
+                "gpu_block/cpu_block cache found no generation-path FP8 linears in the provided blocks"
+            )
+
         max_numel = max(self._block_numels)
         device = self._entries[0][0][0].weight.device
         self._slots = (
@@ -324,6 +329,9 @@ class _BlockWeightProvider:
         for entries in self._entries:
             for linear, _, _, _ in entries:
                 linear._mixed_precision_staged_weight = None
+        # Re-recording free events on the *current* stream (no explicit stream
+        # arg) is only correct because reset() always runs on the same stream
+        # as the forward passes it follows, at all current call sites.
         for event in self._free_events:
             event.record()
 

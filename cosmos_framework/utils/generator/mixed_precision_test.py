@@ -244,24 +244,35 @@ def test_cached_forward_matches_uncached_forward() -> None:
 
 
 class _TinyLayeredNet(nn.Module):
-    """Two decoder-layer-like blocks, each with reasoner and generation linears."""
+    """N decoder-layer-like blocks, each with reasoner and generation linears."""
 
-    def __init__(self, device: str = "cpu") -> None:
+    def __init__(
+        self,
+        device: str = "cpu",
+        num_layers: int = 2,
+        out_features: int = 16,
+        in_features: int = 16,
+    ) -> None:
         super().__init__()
-        self.layers = nn.ModuleList([_TinyMoTLayer(device), _TinyMoTLayer(device)])
+        self.layers = nn.ModuleList(
+            [
+                _TinyMoTLayer(device, out_features=out_features, in_features=in_features)
+                for _ in range(num_layers)
+            ]
+        )
 
 
 class _TinyMoTLayer(nn.Module):
-    def __init__(self, device: str = "cpu") -> None:
+    def __init__(self, device: str = "cpu", out_features: int = 16, in_features: int = 16) -> None:
         super().__init__()
-        # 16/16: real (non-mixed-precision) W8A8 forward dispatches to
+        # 16/16 default: real (non-mixed-precision) W8A8 forward dispatches to
         # torch._scaled_mm, which requires both GEMM operands' reduction/output
         # dims to be multiples of 16 on this hardware — unlike the W8A16 path
         # (dense F.linear over a dequantized weight), which tolerates any shape.
         self.mlp = nn.Module()
-        self.mlp.up_proj = _make_fp8_linear(out_features=16, in_features=16, device=device)
+        self.mlp.up_proj = _make_fp8_linear(out_features=out_features, in_features=in_features, device=device)
         self.mlp_moe_gen = nn.Module()
-        self.mlp_moe_gen.up_proj = _make_fp8_linear(out_features=16, in_features=16, device=device)
+        self.mlp_moe_gen.up_proj = _make_fp8_linear(out_features=out_features, in_features=in_features, device=device)
 
     def forward(self, inputs: torch.Tensor) -> torch.Tensor:
         return self.mlp_moe_gen.up_proj(inputs)
@@ -321,6 +332,40 @@ def test_block_provider_reusable_across_requests() -> None:
         for step in range(4):
             runtime.set_step(step, 4)
             for layer in net.layers:
-                _ = layer(inputs)
+                output = layer(inputs)
+                if runtime.use_high_precision("generation"):
+                    weight = layer.mlp_moe_gen.up_proj.weight
+                    expected = torch.nn.functional.linear(
+                        inputs, weight.qdata.to(torch.bfloat16) * weight.scale.to(torch.bfloat16)
+                    )
+                    torch.testing.assert_close(output, expected)
         runtime.reset()
     assert runtime.last_trace == ("W8A16", "W8A8", "W8A8", "W8A16")
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="block providers need CUDA streams")
+def test_block_provider_wraparound_across_four_blocks() -> None:
+    # 4 blocks over 2 slots (block_index % 2) means blocks 0/2 share slot 0 and
+    # blocks 1/3 share slot 1 within a single W8A16 step -- this exercises
+    # mid-request slot wraparound, not just cross-request reuse. Larger (256,
+    # 256) linears and 20 repeated passes create real staging-stream work and
+    # contention around the free/ready events, instead of finishing so fast
+    # that a sync bug could go unnoticed.
+    net = _TinyLayeredNet(device="cuda", num_layers=4, out_features=256, in_features=256)
+    runtime = install_mixed_precision_runtime(
+        net,
+        _enabled_config(mixed_precision_w8a16_cache="gpu_block"),
+        blocks=list(net.layers),
+    )
+    runtime.set_step(0, 4)  # W8A16 -> preload_first
+    inputs = torch.randn(2, 256, dtype=torch.bfloat16, device="cuda")
+    for _ in range(20):
+        for layer in net.layers:
+            output = layer(inputs)
+            weight = layer.mlp_moe_gen.up_proj.weight
+            expected = torch.nn.functional.linear(
+                inputs, weight.qdata.to(torch.bfloat16) * weight.scale.to(torch.bfloat16)
+            )
+            torch.testing.assert_close(output, expected)
+    runtime.reset()
+    assert all(layer.mlp_moe_gen.up_proj._mixed_precision_staged_weight is None for layer in net.layers)
