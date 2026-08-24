@@ -1168,6 +1168,10 @@ class OmniInference(Inference):
             method=setup_args.quantization_method,
             include_regex=list(setup_args.quantization_include_regex),
             exclude_regex=list(setup_args.quantization_exclude_regex),
+            mixed_precision_first_steps=setup_args.mixed_precision_first_steps,
+            mixed_precision_last_steps=setup_args.mixed_precision_last_steps,
+            mixed_precision_reasoner_policy=setup_args.mixed_precision_reasoner_policy,
+            mixed_precision_w8a16_cache=setup_args.mixed_precision_w8a16_cache,
         )
 
     @override

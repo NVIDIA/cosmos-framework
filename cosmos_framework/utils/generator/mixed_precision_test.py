@@ -369,3 +369,43 @@ def test_block_provider_wraparound_across_four_blocks() -> None:
             torch.testing.assert_close(output, expected)
     runtime.reset()
     assert all(layer.mlp_moe_gen.up_proj._mixed_precision_staged_weight is None for layer in net.layers)
+
+
+def test_quantization_args_round_trip_mixed_precision_fields() -> None:
+    from cosmos_framework.inference.common.args import QuantizationOverrides
+
+    overrides = QuantizationOverrides(
+        mixed_precision_first_steps=2,
+        mixed_precision_last_steps=3,
+        mixed_precision_reasoner_policy="base_precision",
+        mixed_precision_w8a16_cache="none",
+    )
+    args = overrides.build_quantization()
+    assert args.mixed_precision_first_steps == 2
+    assert args.mixed_precision_last_steps == 3
+    assert args.mixed_precision_reasoner_policy == "base_precision"
+    assert args.mixed_precision_w8a16_cache == "none"
+
+
+def test_validate_mixed_precision_load_rejects_non_fp8_checkpoint() -> None:
+    from cosmos_framework.inference.model import _validate_mixed_precision_load
+
+    with pytest.raises(ValueError, match="ModelOpt FP8"):
+        _validate_mixed_precision_load(
+            _enabled_config(), modelopt_checkpoint=False, use_cuda_graphs=False
+        )
+
+
+def test_validate_mixed_precision_load_rejects_cuda_graphs() -> None:
+    from cosmos_framework.inference.model import _validate_mixed_precision_load
+
+    with pytest.raises(ValueError, match="cuda_graphs"):
+        _validate_mixed_precision_load(
+            _enabled_config(), modelopt_checkpoint=True, use_cuda_graphs=True
+        )
+
+
+def test_validate_mixed_precision_load_noop_when_disabled() -> None:
+    from cosmos_framework.inference.model import _validate_mixed_precision_load
+
+    _validate_mixed_precision_load(QuantizationConfig(), modelopt_checkpoint=False, use_cuda_graphs=True)
