@@ -39,9 +39,15 @@ reasoner policy, W8A16 weight-cache mode) and all five cache modes
   `self_attn.{q,k,v,o}_proj`) and generation (`mlp_moe_gen.*`,
   `self_attn.{q,k,v,o}_proj_moe_gen`). `proj_in`/`proj_out`/`lm_head`/vision
   tower stay high precision in the export.
-- Samplers (`fixed_step.py`, `unipc.py`, `edm.py`) call
-  `velocity_fn(latent, timestep)` once per denoising step; CFG cond/uncond
-  forwards happen inside one `velocity_fn` call. There is no per-step hook.
+- Samplers: UniPC and FixedStep call `velocity_fn(latent, timestep)` once per
+  denoising step via a shared `__call__` signature. EDM wraps `velocity_fn` in
+  an `x0_fn` and may evaluate it multiple times per step (Runge-Kutta
+  multi-eval), looping via its own `fori_loop` closure. CFG cond/uncond
+  forwards happen inside one evaluation. There is no per-step hook anywhere.
+- `parallelize_vfm_network` (called from `build_net`) rebuilds parts of the
+  network — notably the `language_model` subtree — so module identities are
+  only final after it. FP8 checkpoint weights are installed later
+  (`apply_modelopt_fp8_checkpoint_inplace` in `load_model`).
 
 ## Configuration
 
@@ -71,7 +77,23 @@ four fields:
 **Step schedule** (identical to vllm):
 `high_precision = step_index < first_steps or step_index >= num_steps - last_steps`.
 Overlap (`first+last >= num_steps`) → all steps W8A16. `num_steps == 1` is
-special-cased to W8A8, matching vllm.
+special-cased to W8A8, matching vllm — and with a concrete framework reason:
+FSDP collective alignment pads slow ranks with dummy samples forced to
+`num_steps=1` (`inference.py`), and the special case keeps those dummies on
+the cheap path. A genuine 1-step user request also gets W8A8 (same open TODO
+as vllm; relevant if 4-step distilled models are ever run with 1 step).
+
+**Compile/graph constraints:**
+
+- `use_cuda_graphs` + mixed precision → `ValueError` at setup. Per-step
+  Python-state branching and event-driven slot staging are incompatible with
+  graph capture/replay.
+- `torch.compile` is allowed: the precision flag is a Python bool read in
+  `_ModelOptFloat8Linear.forward`, so each precision compiles its own variant
+  (2 total; first W8A16 step pays a compile). With `gpu_block`/`cpu_block`,
+  the per-layer hooks force graph breaks at decoder-layer boundaries —
+  accepted as best-effort; measure in the PR and prefer
+  `none`/`generation`/`all` if the breaks cost too much under compile.
 
 ## New module: `cosmos_framework/utils/generator/mixed_precision.py`
 
@@ -95,6 +117,14 @@ Attached to the VFM network as `net._mixed_precision_runtime` when enabled.
   (also triggers block-provider `preload_first` when the step selects
   W8A16); `reset()` in a `finally` around the sampler call (log trace, sync
   the staging stream, clear staged state, clear the flag).
+- **Installation ordering:** the runtime is installed (and full caches
+  filled) immediately after `apply_modelopt_fp8_checkpoint_inplace`, which
+  itself runs after `parallelize_vfm_network` and materialization — the
+  module graph is final and real weight bytes are present at that point.
+  Under FSDP only path tagging happens (cache mode is forced to `none`).
+- **Logging** (parity with vllm): an install line (per-path linear counts,
+  resolved reasoner policy, first/last widths, cache mode), a ready line
+  (cached linear count, device/host cache bytes), and the per-request trace.
 
 ### W8A16 weight sources (cache modes)
 
@@ -131,32 +161,36 @@ The existing zero-row and rank-flattening workarounds stay shared. Weight
 resolution priority mirrors vllm: staged slot view → full-cache buffer →
 on-the-fly dequantization.
 
-`torch.compile`: the precision flag is a Python bool read in forward, so each
-precision compiles its own variant (2 total); first W8A16 step pays a
-compile. Accepted; documented.
-
 ## Per-step hook
 
-All three samplers gain an optional
-`step_callback: Callable[[int, int], None] | None` parameter, invoked as
-`step_callback(step_index, num_steps)` before each step's `velocity_fn`.
-`generate_samples_from_batch` (omni_mot_model) passes a callback when the
-runtime is installed, and wraps the sampler call in `try/finally` with
+Each sampler invokes an optional callback as
+`step_callback(step_index, num_steps)` at the top of each denoising step,
+before that step's model evaluation(s). Plumbing per sampler:
+
+- **UniPC / FixedStep:** a new optional `step_callback` parameter on
+  `__call__`, called once per loop iteration.
+- **EDM:** the callback threads into the `step_fn` closure driven by
+  `fori_loop` (the step index is the loop variable). A step's multiple
+  Runge-Kutta evaluations all run under that step's single selection.
+
+`generate_samples_from_batch` (omni_mot_model) passes the callback when the
+runtime is installed, and wraps the sampler invocation in `try/finally` with
 `runtime.reset()` in `finally`.
 
 - CFG cond/uncond forwards share one step → one precision selection, matching
   vllm semantics.
 - FSDP `_extra_num_steps` dummy sampler padding calls run after the real
-  call; their precision is whatever state remains. Output is discarded and
-  mixed precision changes GEMM kernels, not the collective sequence, so
-  alignment is unaffected. (To keep kernels cheap, `reset()` runs after the
-  padding calls; padding thus executes W8A8 unless the trailing state was
-  W8A16 — harmless either way.)
+  call. They do NOT receive `step_callback`; instead the runtime is
+  explicitly set to base precision (W8A8) before the dummy call, so padding
+  runs deterministic and cheap. Output is discarded, and precision changes
+  GEMM kernels, not the collective sequence, so alignment is unaffected.
+  `reset()` still runs after the padding calls.
 
 ## Error handling
 
 - Mixed-precision flags + non-FP8 checkpoint → `ValueError` at load.
 - FSDP + cache mode other than `none` → `ValueError` at load.
+- `use_cuda_graphs` + mixed precision → `ValueError` at setup.
 - Install finds an empty reasoner or generation inventory → `ValueError`
   (unexpected checkpoint shape).
 - `set_step` with out-of-range index → `IndexError` (ported validation).
