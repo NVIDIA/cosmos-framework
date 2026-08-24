@@ -3413,95 +3413,115 @@ class OmniMoTModel(ImaginaireModel):
                     "condition_mask": condition_mask,
                 }
 
-            if isinstance(sampler, FixedStepSampler) or scheduler_type == "unipc":
-                latents = sampler(
-                    velocity_fn,
-                    initial_noise,
-                    num_steps=num_steps,
-                    shift=shift,
-                    seed=seed,
-                    **fixed_step_sampler_kwargs,
-                )
-                if _extra_num_steps > 0:
-                    # Dummy sampler call to issue (_extra_num_steps × per-step)
-                    # FSDP allgathers; output discarded so `latents` keeps the
-                    # real result captured above. Slow ranks have _extra_num_steps==0
-                    # here, but they're issuing the SAME number of in-sampler
-                    # collectives via their longer real call.
-                    log.debug(
-                        f"FSDP alignment: dummy sampler run with {_extra_num_steps} "
-                        f"extra steps (local={num_steps}, max={_max_num_steps})"
-                    )
-                    _ = sampler(
+            # Mixed-precision diffusion steps: select W8A16/W8A8 once per
+            # sampler step; reset (trace + staging cleanup) when the request
+            # ends, including on error.
+            _mixed_precision_runtime = getattr(self.net, "_mixed_precision_runtime", None)
+            _step_callback = _mixed_precision_runtime.set_step if _mixed_precision_runtime is not None else None
+
+            try:
+                if isinstance(sampler, FixedStepSampler) or scheduler_type == "unipc":
+                    latents = sampler(
                         velocity_fn,
-                        latents,
-                        num_steps=_extra_num_steps,
+                        initial_noise,
+                        num_steps=num_steps,
                         shift=shift,
                         seed=seed,
+                        step_callback=_step_callback,
                         **fixed_step_sampler_kwargs,
                     )
-            else:
-                # EDM Sampler
-                chunk_sizes = [_x.shape[0] for _x in initial_noise]
-                initial_noise = torch.cat(initial_noise, dim=0)
+                    if _extra_num_steps > 0:
+                        # Dummy sampler call to issue (_extra_num_steps × per-step)
+                        # FSDP allgathers; output discarded so `latents` keeps the
+                        # real result captured above. Slow ranks have _extra_num_steps==0
+                        # here, but they're issuing the SAME number of in-sampler
+                        # collectives via their longer real call.
+                        log.debug(
+                            f"FSDP alignment: dummy sampler run with {_extra_num_steps} "
+                            f"extra steps (local={num_steps}, max={_max_num_steps})"
+                        )
+                        if _mixed_precision_runtime is not None:
+                            # Deterministic cheap padding: the FSDP-alignment dummy
+                            # call must not inherit the last real step's W8A16.
+                            _mixed_precision_runtime.set_base_precision()
+                        _ = sampler(
+                            velocity_fn,
+                            latents,
+                            num_steps=_extra_num_steps,
+                            shift=shift,
+                            seed=seed,
+                            **fixed_step_sampler_kwargs,
+                        )
+                else:
+                    # EDM Sampler
+                    chunk_sizes = [_x.shape[0] for _x in initial_noise]
+                    initial_noise = torch.cat(initial_noise, dim=0)
 
-                def x0_fn(noise_x: torch.Tensor, sigma: torch.Tensor) -> torch.Tensor:
-                    assert sigma.ndim == 0, f"sigma must be 0D, got {sigma.shape}"
-                    timestep_rf = sigma * float(self.config.rectified_flow_inference_config.num_train_timesteps)
+                    def x0_fn(noise_x: torch.Tensor, sigma: torch.Tensor) -> torch.Tensor:
+                        assert sigma.ndim == 0, f"sigma must be 0D, got {sigma.shape}"
+                        timestep_rf = sigma * float(self.config.rectified_flow_inference_config.num_train_timesteps)
 
-                    # Convert noise_x to list of tensors for velocity_fn, and then
-                    # concatenate the results back into a single tensor.
-                    _noise_x = list(torch.split(noise_x, chunk_sizes, dim=0))
-                    _velocity_pred = velocity_fn(_noise_x, timestep_rf.reshape(1, 1))
-                    velocity_pred = torch.cat(_velocity_pred, dim=0)
+                        # Convert noise_x to list of tensors for velocity_fn, and then
+                        # concatenate the results back into a single tensor.
+                        _noise_x = list(torch.split(noise_x, chunk_sizes, dim=0))
+                        _velocity_pred = velocity_fn(_noise_x, timestep_rf.reshape(1, 1))
+                        velocity_pred = torch.cat(_velocity_pred, dim=0)
 
-                    x0_pred = noise_x - sigma * velocity_pred
-                    return x0_pred
+                        x0_pred = noise_x - sigma * velocity_pred
+                        return x0_pred
 
-                latents = sampler(
-                    x0_fn,
-                    initial_noise,
-                    num_steps=num_steps,
-                    sigma_max=sigma_max,
-                    sigma_min=0.002,
-                    solver_option="2ab",
-                )
-                if _extra_num_steps > 0:
-                    # Pad the FSDP allgather sequence with ``_extra_num_steps``
-                    # direct ``x0_fn`` calls instead of a second EDM sampler
-                    # run. Avoids two EDM-specific footguns:
-                    #   (1) ``EDMSampler._forward_impl`` always runs an extra
-                    #       ``sample_clean`` denoiser forward (see
-                    #       ``cosmos_framework/model/vfm/diffusion/samplers/edm.py``).
-                    #       A nested sampler call would add one too many
-                    #       forwards on fast ranks, since the slow rank's
-                    #       single call also pays the ``sample_clean`` cost.
-                    #   (2) ``get_rev_ts(..., num_steps=0)`` divides by zero,
-                    #       producing NaN sigmas. The fix's ``extra==1`` edge
-                    #       case would need num_steps=0 to balance the count.
-                    # Direct ``x0_fn`` calls bypass both: each call routes
-                    # through the same ``velocity_fn`` closure (so the
-                    # per-call CFG all_reduce still aligns ranks), issues
-                    # exactly one model forward, and discards its return.
-                    # ``latents`` is the catted single tensor at this point;
-                    # the dummy sigma value is irrelevant for collective
-                    # alignment because the model's allgather sequence is
-                    # determined by tensor shapes, not sigma.
-                    log.debug(
-                        f"FSDP alignment: padding {_extra_num_steps} dummy x0_fn calls "
-                        f"(local={num_steps}, max={_max_num_steps})"
+                    latents = sampler(
+                        x0_fn,
+                        initial_noise,
+                        num_steps=num_steps,
+                        sigma_max=sigma_max,
+                        sigma_min=0.002,
+                        solver_option="2ab",
+                        step_callback=_step_callback,
                     )
-                    # ``x0_fn`` expects a sigma in the RF domain (the real EDM
-                    # loop converts raw sigmas via ``sigmas_L / (1 + sigmas_L)``
-                    # at edm.py:174, landing them in ``(0, 1)``). Mirror that
-                    # transform here so the dummy call's timestep stays in the
-                    # same numerical domain as a real sampler step. The exact
-                    # value doesn't matter for collective alignment, only the
-                    # domain.
-                    _dummy_sigma = latents.new_tensor(sigma_max / (1.0 + sigma_max))
-                    for _ in range(_extra_num_steps):
-                        _ = x0_fn(latents, _dummy_sigma)
-                latents = list(torch.split(latents, chunk_sizes, dim=0))
+                    if _extra_num_steps > 0:
+                        # Pad the FSDP allgather sequence with ``_extra_num_steps``
+                        # direct ``x0_fn`` calls instead of a second EDM sampler
+                        # run. Avoids two EDM-specific footguns:
+                        #   (1) ``EDMSampler._forward_impl`` always runs an extra
+                        #       ``sample_clean`` denoiser forward (see
+                        #       ``cosmos_framework/model/vfm/diffusion/samplers/edm.py``).
+                        #       A nested sampler call would add one too many
+                        #       forwards on fast ranks, since the slow rank's
+                        #       single call also pays the ``sample_clean`` cost.
+                        #   (2) ``get_rev_ts(..., num_steps=0)`` divides by zero,
+                        #       producing NaN sigmas. The fix's ``extra==1`` edge
+                        #       case would need num_steps=0 to balance the count.
+                        # Direct ``x0_fn`` calls bypass both: each call routes
+                        # through the same ``velocity_fn`` closure (so the
+                        # per-call CFG all_reduce still aligns ranks), issues
+                        # exactly one model forward, and discards its return.
+                        # ``latents`` is the catted single tensor at this point;
+                        # the dummy sigma value is irrelevant for collective
+                        # alignment because the model's allgather sequence is
+                        # determined by tensor shapes, not sigma.
+                        log.debug(
+                            f"FSDP alignment: padding {_extra_num_steps} dummy x0_fn calls "
+                            f"(local={num_steps}, max={_max_num_steps})"
+                        )
+                        if _mixed_precision_runtime is not None:
+                            # Deterministic cheap padding: the FSDP-alignment dummy
+                            # call must not inherit the last real step's W8A16.
+                            _mixed_precision_runtime.set_base_precision()
+                        # ``x0_fn`` expects a sigma in the RF domain (the real EDM
+                        # loop converts raw sigmas via ``sigmas_L / (1 + sigmas_L)``
+                        # at edm.py:174, landing them in ``(0, 1)``). Mirror that
+                        # transform here so the dummy call's timestep stays in the
+                        # same numerical domain as a real sampler step. The exact
+                        # value doesn't matter for collective alignment, only the
+                        # domain.
+                        _dummy_sigma = latents.new_tensor(sigma_max / (1.0 + sigma_max))
+                        for _ in range(_extra_num_steps):
+                            _ = x0_fn(latents, _dummy_sigma)
+                    latents = list(torch.split(latents, chunk_sizes, dim=0))
+            finally:
+                if _mixed_precision_runtime is not None:
+                    _mixed_precision_runtime.reset()
 
             # Split flattened latents back into vision latents, LiDAR latents, external actions,
             # and sound latents. Mirror the per-sample logic from _prepare_inference_data:
