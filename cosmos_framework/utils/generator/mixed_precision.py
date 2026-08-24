@@ -45,9 +45,17 @@ def _unwrap_float8(weight: torch.Tensor) -> torch.Tensor:
     return weight.to_local() if isinstance(weight, DTensor) else weight
 
 
-def _dequantize_w8a16_weight(weight: torch.Tensor) -> torch.Tensor:
-    """Dequantize a full (gathered) PrototypeFloat8Tensor to a dense (N, K) matrix."""
-    return weight.qdata.to(weight.dtype) * weight.scale.to(weight.dtype)
+def _dequantize_w8a16_weight(weight: torch.Tensor, dtype: torch.dtype) -> torch.Tensor:
+    """Dequantize a full (gathered) PrototypeFloat8Tensor to a dense (N, K) matrix.
+
+    ``dtype`` must be the activation compute dtype, not ``weight.dtype`` --
+    the PrototypeFloat8Tensor subclass's own ``.dtype`` reflects how the
+    checkpoint was exported (e.g. float32 on the real Cosmos3-Nano FP8
+    checkpoint) and need not match the activations the dense GEMM runs
+    against. Mirrors vllm-omni, which always resolves dense W8A16 weights in
+    the activation dtype.
+    """
+    return weight.qdata.to(dtype) * weight.scale.to(dtype)
 
 
 def _validate_fp8_linear(module: nn.Module, fqn: str) -> None:
@@ -74,8 +82,11 @@ def _validate_fp8_linear(module: nn.Module, fqn: str) -> None:
 class MixedPrecisionRuntime:
     """Owns per-step precision state and the tagged FP8 linear inventory."""
 
-    def __init__(self, config: QuantizationConfig) -> None:
+    def __init__(self, config: QuantizationConfig, activation_dtype: torch.dtype = torch.bfloat16) -> None:
+        if activation_dtype not in (torch.bfloat16, torch.float16):
+            raise ValueError(f"activation_dtype must be torch.bfloat16 or torch.float16, got {activation_dtype}")
         self.config = config
+        self.activation_dtype = activation_dtype
         self.installed_counts: dict[str, int] = {path: 0 for path in PRECISION_PATHS}
         self.last_trace: tuple[str, ...] = ()
         self.is_sharded = False
@@ -119,15 +130,14 @@ class MixedPrecisionRuntime:
             cached_paths = PRECISION_PATHS if cache_mode == "all" else ("generation",)
             for path in cached_paths:
                 for module in self._modules_by_path[path]:
-                    cache = _dequantize_w8a16_weight(_unwrap_float8(module.weight)).contiguous()
+                    cache = _dequantize_w8a16_weight(_unwrap_float8(module.weight), self.activation_dtype).contiguous()
                     module.register_buffer("_w8a16_weight_cache", cache, persistent=False)
                     self.cached_bytes += cache.numel() * cache.element_size()
         if cache_mode in ("gpu_block", "cpu_block"):
             if blocks is None:
                 blocks = list(net.language_model.model.layers)
             provider_cls = _GpuBlockWeightProvider if cache_mode == "gpu_block" else _CpuBlockWeightProvider
-            dtype = self._modules_by_path["generation"][0].weight.dtype
-            self._block_provider = provider_cls(self, blocks, dtype)
+            self._block_provider = provider_cls(self, blocks, self.activation_dtype)
             self._block_provider.initialize()
             self.cached_bytes = self._block_provider.device_bytes
         reasoner_label = "W8A16" if self.config.mixed_precision_reasoner_policy == "high_precision" else "W8A8"
@@ -169,11 +179,21 @@ class MixedPrecisionRuntime:
         """Resolve a dense (N, K) weight: staged slot -> full cache -> on-the-fly."""
         staged = module._mixed_precision_staged_weight
         if staged is not None:
+            if staged.dtype != self.activation_dtype:
+                raise TypeError(
+                    f"staged W8A16 weight dtype {staged.dtype} does not match "
+                    f"activation_dtype {self.activation_dtype}"
+                )
             return staged
         cached = getattr(module, "_w8a16_weight_cache", None)
         if cached is not None:
+            if cached.dtype != self.activation_dtype:
+                raise TypeError(
+                    f"cached W8A16 weight dtype {cached.dtype} does not match "
+                    f"activation_dtype {self.activation_dtype}"
+                )
             return cached
-        return _dequantize_w8a16_weight(_unwrap_float8(module.weight))
+        return _dequantize_w8a16_weight(_unwrap_float8(module.weight), self.activation_dtype)
 
     def reset(self) -> None:
         """Finish the request: log the trace and return to idle W8A8 state."""
@@ -190,11 +210,12 @@ def install_mixed_precision_runtime(
     net: nn.Module,
     quantization_config: QuantizationConfig,
     blocks: list[nn.Module] | None = None,
+    activation_dtype: torch.dtype = torch.bfloat16,
 ) -> MixedPrecisionRuntime | None:
     """Install mixed precision on ``net`` when enabled; return the runtime or None."""
     if not quantization_config.mixed_precision_enabled:
         return None
-    runtime = MixedPrecisionRuntime(quantization_config)
+    runtime = MixedPrecisionRuntime(quantization_config, activation_dtype=activation_dtype)
     runtime.install(net, blocks=blocks)
     return runtime
 
@@ -356,7 +377,7 @@ class _CpuBlockWeightProvider(_BlockWeightProvider):
         for block_index, entries in enumerate(self._entries):
             host = torch.empty(self._block_numels[block_index], dtype=self._dtype, pin_memory=True)
             for linear, offset, out_features, in_features in entries:
-                dense = _dequantize_w8a16_weight(linear.weight)
+                dense = _dequantize_w8a16_weight(linear.weight, self._dtype)
                 host[offset : offset + out_features * in_features].copy_(dense.reshape(-1))
             self._host_blocks.append(host)
             self.host_bytes += host.numel() * host.element_size()

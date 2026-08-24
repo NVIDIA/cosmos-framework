@@ -68,9 +68,18 @@ class _ModelOptFloat8Linear(nn.Linear):
         runtime = self._mixed_precision_runtime
         if runtime is not None and runtime.use_high_precision(self._mixed_precision_path):
             # W8A16: dense GEMM against the dequantized FP8 weight; the
-            # activation stays in the compute dtype.
+            # activation stays in the compute dtype. The resolved weight is
+            # in the runtime's configured activation_dtype, which normally
+            # matches the live activations -- but defensively cast both
+            # operands to the weight's dtype and cast the result back to the
+            # input dtype when they differ (e.g. a fp16-activation model run
+            # against a bf16-configured runtime), instead of crashing.
             weight = runtime.resolve_w8a16_weight(self)
-            return F.linear(flat_inputs, weight, self.bias).reshape(output_shape)
+            if weight.dtype != flat_inputs.dtype:
+                output = F.linear(flat_inputs.to(weight.dtype), weight, self.bias).to(inputs.dtype)
+            else:
+                output = F.linear(flat_inputs, weight, self.bias)
+            return output.reshape(output_shape)
         flat_outputs = F.linear(flat_inputs, self.weight, self.bias)
         return flat_outputs.reshape(output_shape)
 

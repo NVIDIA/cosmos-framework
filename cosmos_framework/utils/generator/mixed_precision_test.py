@@ -65,12 +65,20 @@ from cosmos_framework.utils.generator.quantization import _ModelOptFloat8Linear
 
 
 def _make_fp8_linear(
-    out_features: int = 8, in_features: int = 4, device: str = "cpu"
+    out_features: int = 8,
+    in_features: int = 4,
+    device: str = "cpu",
+    high_precision_dtype: torch.dtype = torch.bfloat16,
 ) -> _ModelOptFloat8Linear:
     """Build a _ModelOptFloat8Linear with a real PrototypeFloat8Tensor weight on ``device``.
 
     Built directly on the target device: moving a constructed PrototypeFloat8Tensor
     with ``.to()`` is not guaranteed to be supported by the subclass.
+
+    ``high_precision_dtype`` controls the PrototypeFloat8Tensor subclass's own
+    ``.dtype`` (i.e. what the checkpoint declares itself as, e.g. float32 on
+    the real Cosmos3-Nano checkpoint) -- independent of the activation dtype
+    the mixed-precision runtime is configured with.
     """
     from torchao.float8.inference import Float8MMConfig
     from torchao.prototype.quantization.float8_static_quant.prototype_float8_tensor import (
@@ -79,8 +87,10 @@ def _make_fp8_linear(
     from torchao.quantization import PerTensor
     from torchao.quantization.quantize_.workflows import QuantizeTensorToFloat8Kwargs
 
-    module = _ModelOptFloat8Linear(in_features, out_features, bias=False, dtype=torch.bfloat16, device=device)
-    module._modelopt_high_precision_dtype = torch.bfloat16
+    module = _ModelOptFloat8Linear(
+        in_features, out_features, bias=False, dtype=high_precision_dtype, device=device
+    )
+    module._modelopt_high_precision_dtype = high_precision_dtype
     qdata = torch.randn(out_features, in_features, device=device).clamp(-1, 1).to(torch.float8_e4m3fn)
     mm_config = Float8MMConfig(use_fast_accum=True)
     module.weight = nn.Parameter(
@@ -93,7 +103,7 @@ def _make_fp8_linear(
             act_quant_kwargs=QuantizeTensorToFloat8Kwargs(
                 float8_dtype=torch.float8_e4m3fn, granularity=PerTensor(), mm_config=mm_config
             ),
-            dtype=torch.bfloat16,
+            dtype=high_precision_dtype,
         ),
         requires_grad=False,
     )
@@ -103,12 +113,12 @@ def _make_fp8_linear(
 class _TinyMoTNet(nn.Module):
     """Minimal net shape: one reasoner-path and one generation-path FP8 linear."""
 
-    def __init__(self) -> None:
+    def __init__(self, high_precision_dtype: torch.dtype = torch.bfloat16) -> None:
         super().__init__()
         self.mlp = nn.Module()
-        self.mlp.up_proj = _make_fp8_linear()
+        self.mlp.up_proj = _make_fp8_linear(high_precision_dtype=high_precision_dtype)
         self.mlp_moe_gen = nn.Module()
-        self.mlp_moe_gen.up_proj = _make_fp8_linear()
+        self.mlp_moe_gen.up_proj = _make_fp8_linear(high_precision_dtype=high_precision_dtype)
 
 
 def _enabled_config(**overrides) -> QuantizationConfig:
@@ -197,7 +207,7 @@ def test_install_rejects_smoothquant_layer() -> None:
 
 def test_dequantize_w8a16_weight_unwraps_float8() -> None:
     module = _make_fp8_linear()
-    dequantized = _dequantize_w8a16_weight(_unwrap_float8(module.weight))
+    dequantized = _dequantize_w8a16_weight(_unwrap_float8(module.weight), torch.bfloat16)
     expected = module.weight.qdata.to(torch.bfloat16) * module.weight.scale.to(torch.bfloat16)
     torch.testing.assert_close(dequantized, expected)
 
@@ -252,27 +262,43 @@ class _TinyLayeredNet(nn.Module):
         num_layers: int = 2,
         out_features: int = 16,
         in_features: int = 16,
+        high_precision_dtype: torch.dtype = torch.bfloat16,
     ) -> None:
         super().__init__()
         self.layers = nn.ModuleList(
             [
-                _TinyMoTLayer(device, out_features=out_features, in_features=in_features)
+                _TinyMoTLayer(
+                    device,
+                    out_features=out_features,
+                    in_features=in_features,
+                    high_precision_dtype=high_precision_dtype,
+                )
                 for _ in range(num_layers)
             ]
         )
 
 
 class _TinyMoTLayer(nn.Module):
-    def __init__(self, device: str = "cpu", out_features: int = 16, in_features: int = 16) -> None:
+    def __init__(
+        self,
+        device: str = "cpu",
+        out_features: int = 16,
+        in_features: int = 16,
+        high_precision_dtype: torch.dtype = torch.bfloat16,
+    ) -> None:
         super().__init__()
         # 16/16 default: real (non-mixed-precision) W8A8 forward dispatches to
         # torch._scaled_mm, which requires both GEMM operands' reduction/output
         # dims to be multiples of 16 on this hardware — unlike the W8A16 path
         # (dense F.linear over a dequantized weight), which tolerates any shape.
         self.mlp = nn.Module()
-        self.mlp.up_proj = _make_fp8_linear(out_features=out_features, in_features=in_features, device=device)
+        self.mlp.up_proj = _make_fp8_linear(
+            out_features=out_features, in_features=in_features, device=device, high_precision_dtype=high_precision_dtype
+        )
         self.mlp_moe_gen = nn.Module()
-        self.mlp_moe_gen.up_proj = _make_fp8_linear(out_features=out_features, in_features=in_features, device=device)
+        self.mlp_moe_gen.up_proj = _make_fp8_linear(
+            out_features=out_features, in_features=in_features, device=device, high_precision_dtype=high_precision_dtype
+        )
 
     def forward(self, inputs: torch.Tensor) -> torch.Tensor:
         return self.mlp_moe_gen.up_proj(inputs)
@@ -409,3 +435,72 @@ def test_validate_mixed_precision_load_noop_when_disabled() -> None:
     from cosmos_framework.inference.model import _validate_mixed_precision_load
 
     _validate_mixed_precision_load(QuantizationConfig(), modelopt_checkpoint=False, use_cuda_graphs=True)
+
+
+# --- Regression coverage for the real-checkpoint W8A16 dtype bug -----------
+#
+# On the real Cosmos3-Nano FP8 checkpoint, the PrototypeFloat8Tensor
+# subclass's own ``.dtype`` is float32 (not the activation dtype). The first
+# W8A16 forward used to dequantize into ``weight.dtype`` and crashed with
+# "expected mat1 and mat2 to have the same dtype, but got: c10::BFloat16 !=
+# float" against bf16 activations. These tests build fp32-subclass-dtype FP8
+# linears (mirroring the real checkpoint) and assert the runtime always
+# resolves dense W8A16 weights in its configured activation dtype instead.
+
+
+def test_w8a16_forward_matches_manual_dequant_fp32_subclass_dtype() -> None:
+    net = _TinyMoTNet(high_precision_dtype=torch.float32)
+    runtime = install_mixed_precision_runtime(net, _enabled_config())
+    module = net.mlp_moe_gen.up_proj
+    inputs = torch.randn(3, 5, 4, dtype=torch.bfloat16)
+    runtime.set_step(0, 4)  # W8A16
+    output = module(inputs)
+    weight = module.weight
+    expected = torch.nn.functional.linear(
+        inputs.reshape(-1, 4), weight.qdata.to(torch.bfloat16) * weight.scale.to(torch.bfloat16)
+    ).reshape(3, 5, 8)
+    assert output.dtype == torch.bfloat16
+    assert output.shape == (3, 5, 8)
+    torch.testing.assert_close(output, expected)
+
+
+def test_all_cache_bf16_regardless_of_fp32_subclass_dtype() -> None:
+    net = _TinyMoTNet(high_precision_dtype=torch.float32)
+    runtime = install_mixed_precision_runtime(net, _enabled_config(mixed_precision_w8a16_cache="all"))
+    for module in (net.mlp.up_proj, net.mlp_moe_gen.up_proj):
+        weight = module.weight
+        assert module._w8a16_weight_cache.dtype == torch.bfloat16
+        torch.testing.assert_close(
+            module._w8a16_weight_cache,
+            weight.qdata.to(torch.bfloat16) * weight.scale.to(torch.bfloat16),
+        )
+    runtime.set_step(0, 4)  # W8A16
+    inputs = torch.randn(2, 4, dtype=torch.bfloat16)
+    output = net.mlp_moe_gen.up_proj(inputs)
+    weight = net.mlp_moe_gen.up_proj.weight
+    expected = torch.nn.functional.linear(inputs, weight.qdata.to(torch.bfloat16) * weight.scale.to(torch.bfloat16))
+    assert output.dtype == torch.bfloat16
+    torch.testing.assert_close(output, expected)
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="block providers need CUDA streams")
+def test_gpu_block_provider_bf16_slots_regardless_of_fp32_subclass_dtype() -> None:
+    net = _TinyLayeredNet(device="cuda", high_precision_dtype=torch.float32)
+    runtime = install_mixed_precision_runtime(
+        net,
+        _enabled_config(mixed_precision_w8a16_cache="gpu_block"),
+        blocks=list(net.layers),
+    )
+    assert runtime._block_provider._slots[0].dtype == torch.bfloat16
+    assert runtime._block_provider._slots[1].dtype == torch.bfloat16
+    runtime.set_step(0, 4)  # W8A16 -> preload_first
+    inputs = torch.randn(2, 16, dtype=torch.bfloat16, device="cuda")
+    for layer in net.layers:
+        output = layer(inputs)
+        weight = layer.mlp_moe_gen.up_proj.weight
+        expected = torch.nn.functional.linear(
+            inputs, weight.qdata.to(torch.bfloat16) * weight.scale.to(torch.bfloat16)
+        )
+        assert output.dtype == torch.bfloat16
+        torch.testing.assert_close(output, expected)
+    runtime.reset()
