@@ -33,9 +33,8 @@ def init_flash_attn_meta(deterministic: bool = False) -> None:
     configure_training() did.
 
     Args:
-        deterministic: If True, enables PyTorch and CuDNN deterministic modes.
-            HF flash_attention_2 respects torch.backends.cudnn.deterministic
-            and torch.use_deterministic_algorithms().
+        deterministic: If True, enables PyTorch, CuDNN and FlashAttention
+            deterministic modes.
     """
     if deterministic:
         import torch
@@ -44,3 +43,10 @@ def init_flash_attn_meta(deterministic: bool = False) -> None:
         torch.use_deterministic_algorithms(True, warn_only=True)
         # Required for deterministic CuBLAS on CUDA >= 10.2
         os.environ.setdefault("CUBLAS_WORKSPACE_CONFIG", ":4096:8")
+        # FlashAttention-2 is a separate CUDA extension whose backward uses
+        # atomics, so torch.use_deterministic_algorithms cannot police it -- it
+        # reports nothing even with warn_only=False. Transformers picks FA2's
+        # deterministic backward up from this environment variable in
+        # modeling_flash_attention_utils, so without it two same-seed runs
+        # diverge within a few steps despite every setting above.
+        os.environ.setdefault("FLASH_ATTENTION_DETERMINISTIC", "1")
