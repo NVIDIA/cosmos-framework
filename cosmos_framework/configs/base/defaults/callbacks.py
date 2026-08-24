@@ -35,6 +35,7 @@ from cosmos_framework.callbacks.sigma_loss_analysis import SigmaLossAnalysis
 from cosmos_framework.callbacks.skip_nan_step import SkipNaNStep
 from cosmos_framework.callbacks.termination_signal_checkpoint import TerminationSignalCheckpoint
 from cosmos_framework.callbacks.training_stats import TrainingStatsCallback
+from cosmos_framework.callbacks.wall_clock_checkpoint import WallClockCheckpoint
 from cosmos_framework.callbacks.wandb_log import WandbCallback as WandBCallbackMultiplier
 from cosmos_framework.callbacks.wandb_log_eval import WandbCallback as WandBCallbackEval
 
@@ -142,6 +143,9 @@ JOB_MONITOR_CALLBACKS = dict(
     termination_signal_checkpoint=L(TerminationSignalCheckpoint)(
         min_save_fraction=1 / 3,
     ),
+    # Interval comes from the environment, so submitting to a cluster that enforces a
+    # wall-clock bound turns this on without every experiment config opting in.
+    wall_clock_checkpoint=L(WallClockCheckpoint)(),
 )
 
 OPTIMIZATION_CALLBACKS = dict(

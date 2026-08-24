@@ -578,6 +578,19 @@ def build_multiview_flex_metadata(
             f"A fused key stream with {num_und} UND tokens needs causal_offsets to label them by "
             "sample; without it every UND key would look like padding to the mask."
         )
+    # The two streams label their tokens with sample ids drawn from their own offsets, and the
+    # predicate compares those ids across the streams (``same_sample``). That only means anything
+    # if both number their samples the same way, which holds because the packer emits exactly one
+    # causal and one full split per sample (``pack_text_tokens`` / ``finish_sample``). Nothing here
+    # can see that, so check it: a pack that broke the pairing -- an AR no-text pack reaching this
+    # path, say -- would pair GEN and UND tokens of unrelated samples with no other symptom.
+    if causal_offsets is not None and causal_offsets.shape[0] != full_q_offsets.shape[0]:
+        raise ValueError(
+            f"The UND and GEN streams disagree on their sample count: causal_offsets describes "
+            f"{causal_offsets.shape[0] - 1} samples and full_q_offsets {full_q_offsets.shape[0] - 1}. "
+            "The multiview mask labels both streams from their own offsets and compares those "
+            "labels, so the two have to number the same samples."
+        )
     _check_view_grids_agree(items_per_sample)
     items = [item for sample_items in items_per_sample for item in sample_items]
 

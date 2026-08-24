@@ -7,8 +7,12 @@ import collections
 import collections.abc
 import ctypes
 import functools
+import math
 import os
+import socket
 import sys
+import threading
+import time
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import timedelta
@@ -174,6 +178,122 @@ def barrier() -> None:
     """Barrier for all GPUs."""
     if dist.is_available() and dist.is_initialized():
         dist.barrier()
+
+
+WORLD_COMM_TIMEOUT_ENV_VAR = "COSMOS_WORLD_COMM_TIMEOUT_SEC"
+# Comfortably above a legitimate large-scale communicator build, and well below both the 1800s NCCL
+# watchdog and the cluster idle-GPU reaper, so a stuck startup requeues instead of being reclaimed.
+DEFAULT_WORLD_COMM_TIMEOUT_SEC = 600.0
+WORLD_COMM_TIMEOUT_EXIT_CODE = 93
+# Grace period between the deadline expiring and the abort, so a build that lands in the same instant
+# is not mistaken for a stall. Costs nothing on a real stall and never on a healthy build.
+WORLD_COMM_ABORT_GRACE_SEC = 5.0
+
+
+def get_world_comm_timeout_sec() -> float:
+    """Return the world-communicator deadline in seconds, or 0 to wait indefinitely."""
+    raw = os.environ.get(WORLD_COMM_TIMEOUT_ENV_VAR, "").strip()
+    if not raw:
+        return DEFAULT_WORLD_COMM_TIMEOUT_SEC
+    try:
+        parsed = float(raw)
+    except ValueError:
+        log.warning(f"Ignoring non-numeric {WORLD_COMM_TIMEOUT_ENV_VAR}={raw!r}")
+        return DEFAULT_WORLD_COMM_TIMEOUT_SEC
+    if not math.isfinite(parsed):
+        # float() accepts "nan" and "inf", and both defeat the deadline they are supposed to set: nan
+        # compares False against everything, so it slips through the `timeout_sec > 0` guard and
+        # silently disarms the watchdog, while inf makes Event.wait raise OverflowError inside the
+        # watchdog thread. Either way the stall this exists to bound goes unbounded.
+        log.warning(f"Ignoring non-finite {WORLD_COMM_TIMEOUT_ENV_VAR}={raw!r}")
+        return DEFAULT_WORLD_COMM_TIMEOUT_SEC
+    if parsed < 0:
+        # Clamping to 0 here would read a negative as the documented request to wait indefinitely,
+        # so a typo like -60 would silently disarm the watchdog. Only an explicit 0 should do that.
+        log.warning(f"Ignoring negative {WORLD_COMM_TIMEOUT_ENV_VAR}={raw!r} (set 0 to wait indefinitely)")
+        return DEFAULT_WORLD_COMM_TIMEOUT_SEC
+    return parsed
+
+
+def _abort_on_world_comm_timeout(done: threading.Event, timeout_sec: float, rank: int, world_size: int) -> None:
+    """Log and kill the process if the world communicator is not up before the deadline."""
+    if done.wait(timeout_sec):
+        return
+    # The builder only signals once its collective has returned, so a build finishing right as the
+    # deadline expires would otherwise be killed as a stall. Give it a moment to say it is done. A
+    # real stall spends this grace period exactly as stuck as it was before.
+    if done.wait(WORLD_COMM_ABORT_GRACE_SEC):
+        log.warning(
+            f"[RANK {rank}] The world communicator took nearly the full {timeout_sec:.0f}s deadline "
+            f"to come up. Treating it as healthy, but this rank was within "
+            f"{WORLD_COMM_ABORT_GRACE_SEC:.0f}s of aborting the job.",
+            rank0_only=False,
+        )
+        return
+    log.critical(
+        f"[RANK {rank}] The {world_size}-rank world NCCL communicator did not come up within "
+        f"{timeout_sec:.0f}s on {socket.gethostname()}. This is a cross-domain fabric or bootstrap "
+        f"fault, not a model or config error. Aborting so the job requeues instead of idling. "
+        f"Re-run with NCCL_DEBUG=INFO and NCCL_DEBUG_SUBSYS=INIT,NET to identify the stuck peer, or "
+        f"raise {WORLD_COMM_TIMEOUT_ENV_VAR} if this job legitimately needs longer.",
+        rank0_only=False,
+    )
+    sys.stderr.flush()
+    sys.stdout.flush()
+    # ncclCommInitRank blocks inside a C call, so the stuck thread cannot be unwound from Python and
+    # a normal exit would just join it. Leave immediately instead.
+    os._exit(WORLD_COMM_TIMEOUT_EXIT_CODE)
+
+
+def ensure_world_communicator(timeout_sec: float | None = None) -> None:
+    """Build the world-size communicator up front, under a deadline and with log lines around it.
+
+    PyTorch creates NCCL communicators lazily, so the world communicator is built by whichever
+    collective happens to run first. That makes a cross-domain fabric fault surface as an unattributed
+    hang inside unrelated code, with no log line naming what is stuck. Doing the build here gives it
+    a name, a bounded duration, and an actionable error.
+
+    The deadline needs a watchdog thread rather than a signal or a process-group timeout: a stall
+    inside ``ncclCommInitRank`` never enqueues work, so PyTorch's collective watchdog has nothing to
+    time out on, and the calling thread is parked in a C call where Python exceptions cannot land.
+    """
+    if not (dist.is_available() and dist.is_initialized()):
+        return
+    world_size = get_world_size()
+    if world_size < 2:
+        return
+    if timeout_sec is None:
+        timeout_sec = get_world_comm_timeout_sec()
+
+    rank = get_rank()
+    on_cuda = dist.get_backend() == "nccl"
+    log.info(
+        f"Building the {world_size}-rank world communicator (deadline {timeout_sec:.0f}s)",
+        rank0_only=False,
+    )
+    done = threading.Event()
+    if timeout_sec > 0:
+        threading.Thread(
+            target=_abort_on_world_comm_timeout,
+            args=(done, timeout_sec, rank, world_size),
+            name="world-comm-watchdog",
+            daemon=True,
+        ).start()
+
+    start = time.monotonic()
+    try:
+        probe = torch.ones(1, device="cuda" if on_cuda else "cpu", dtype=torch.float32)
+        dist.all_reduce(probe)
+        if on_cuda:
+            torch.cuda.synchronize()
+    finally:
+        done.set()
+    if probe.item() != float(world_size):
+        raise RuntimeError(
+            f"World communicator check summed to {probe.item()} across {world_size} ranks; "
+            "the world process group is not consistent."
+        )
+    log.info(f"World communicator ready in {time.monotonic() - start:.2f} s")
 
 
 def rank0_first(func: Callable) -> Callable:

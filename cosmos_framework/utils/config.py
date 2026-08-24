@@ -525,6 +525,12 @@ class Config:
     def validate(self) -> None:
         """Validate that the config has all required fields."""
 
+        # The broadcast below is the job's first world-size collective, so it is where the world NCCL
+        # communicator actually gets built. Build it explicitly and under a deadline first, so a
+        # cross-domain fabric fault reports itself here instead of hanging inside config validation
+        # until an external reaper reclaims the allocation.
+        distributed.ensure_world_communicator()
+
         # broadcast job.name across all ranks to make sure it is consistent
         # otherwise, unaligned job names leads unaligned path to save checkpoints
         job_name_tensor = torch.ByteTensor(bytearray(self.job.name, "utf-8")).cuda()

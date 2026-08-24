@@ -242,6 +242,24 @@ class ImaginaireTrainer:
         self._cp_data_window.advance(cp_size)
         return data_batch, False
 
+    @staticmethod
+    def _context_parallel_size(model: ImaginaireModel) -> int:
+        parallel_dims = getattr(model, "parallel_dims", None)
+        if parallel_dims is None or not parallel_dims.cp_enabled:
+            return 1
+        return int(parallel_dims.cp_mesh.size())
+
+    def _resume_dataloader_fetch_count(self, model: ImaginaireModel, iteration: int) -> int:
+        """Return the raw-batch position used to restart the dataloader.
+
+        Partial CP windows are intentionally discarded on resume because their
+        rank-local batches and tokenized payloads are not checkpointed. Starting at
+        the next raw batch avoids replaying any data from that partial window.
+        """
+        microsteps = iteration * self.config.trainer.grad_accum_iter
+        cp_size = self._context_parallel_size(model)
+        return (microsteps + cp_size - 1) // cp_size
+
     def train(
         self,
         model: ImaginaireModel,
@@ -266,8 +284,9 @@ class ImaginaireTrainer:
         self.callbacks.on_optimizer_init_end()
         # Load the model checkpoint and get the starting iteration number.
         iteration = self.checkpointer.load(model, optimizer, scheduler, grad_scaler)
+        dataloader_fetch_count = self._resume_dataloader_fetch_count(model, iteration)
         if hasattr(dataloader_train, "set_start_iteration"):
-            dataloader_train.set_start_iteration(iteration * self.config.trainer.grad_accum_iter)
+            dataloader_train.set_start_iteration(dataloader_fetch_count)
         grad_accum_iter = 0
         log.critical(f"Distributed parallelism mode: {self.config.trainer.distributed_parallelism}")
         if self.config.trainer.distributed_parallelism == "ddp":

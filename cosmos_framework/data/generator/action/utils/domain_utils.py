@@ -8,6 +8,10 @@ EMBODIMENT_TO_DOMAIN_ID: dict[str, int] = {
     "av": 1,
     "camera_pose": 2,
     "hand_pose": 3,
+    # Alias for the WebHumanAction (Action100M) Lance hand adapter. Same domain
+    # as "hand_pose" (shared with embodiment_a) so it reuses the same action2llm/llm2action
+    # DomainAwareLinear weights rather than training a fresh encoder/decoder.
+    "webhumanaction_hand": 3,
     "pusht": 4,
     "libero": 5,
     "umi": 6,
@@ -28,6 +32,10 @@ EMBODIMENT_TO_DOMAIN_ID: dict[str, int] = {
     "drawanything": 21,
     "behavior1k_lerobot": 22,  # BEHAVIOR-1K R1Pro mobile bimanual (23D joint action)
     "maniparena": 23,  # ManipArena x2robot/ex001_6r dual-arm; own 20D EE-direct action projection
+    # New dedicated slot (not reusing agibot's domain 15): WebHumanAction body
+    # (camera+head+wrists, yesCam 36D) trains its own action2llm/llm2action
+    # DomainAwareLinear weights from scratch instead of continuing agibot's.
+    "webhumanaction_body": 24,
 }
 
 
@@ -45,6 +53,7 @@ EMBODIMENT_TO_RAW_ACTION_DIM: dict[str, int] = {
     "agibotworld": 29,
     "embodiment_c_gripper": 29,
     "embodiment_c_gripper_ext": 29,
+    "webhumanaction_body": 36,  # camera(9) + head(9) + R_wrist(9) + L_wrist(9)
     "xdof_yam": 20,
     "molmoact2_yam": 20,
     "abc_yam": 20,

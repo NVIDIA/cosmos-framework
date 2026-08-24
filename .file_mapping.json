@@ -1,7 +1,7 @@
 {
-  "_source_commit": "e4324d1ef91cc30858348aecae9f51150e334f16-dirty",
-  "_dest_commit": "c7e8d76b5da8aeae38cdac91c6cfd57185b2f6bc",
-  "_generated_at": "2026-08-21T07:21:23Z",
+  "_source_commit": "25433d97814a8bc359af6dd27ff5f561f885b2d6-dirty",
+  "_dest_commit": "5eee9ed574255f017b192161bfbb5a10253d65cf",
+  "_generated_at": "2026-08-24T08:07:37Z",
   "files": {
     "imaginaire/__init__.py": "cosmos_framework/__init__.py",
     "imaginaire/attention/__init__.py": "cosmos_framework/model/attention/__init__.py",
@@ -219,6 +219,7 @@
     "projects/cosmos3/cosmos3/callbacks/termination_signal_checkpoint.py": "cosmos_framework/callbacks/termination_signal_checkpoint.py",
     "projects/cosmos3/cosmos3/callbacks/tokens_per_sec.py": "cosmos_framework/callbacks/tokens_per_sec.py",
     "projects/cosmos3/cosmos3/callbacks/training_stats.py": "cosmos_framework/callbacks/training_stats.py",
+    "projects/cosmos3/cosmos3/callbacks/wall_clock_checkpoint.py": "cosmos_framework/callbacks/wall_clock_checkpoint.py",
     "projects/cosmos3/cosmos3/callbacks/wandb_log.py": "cosmos_framework/callbacks/wandb_log.py",
     "projects/cosmos3/cosmos3/callbacks/wandb_log_eval.py": "cosmos_framework/callbacks/wandb_log_eval.py",
     "projects/cosmos3/cosmos3/callbacks/wandb_vis.py": "cosmos_framework/callbacks/wandb_vis.py",
@@ -287,6 +288,7 @@
     "projects/cosmos3/cosmos3/datasets/augmentors/interleaved_image_transform.py": "cosmos_framework/data/generator/augmentors/interleaved_image_transform.py",
     "projects/cosmos3/cosmos3/datasets/augmentors/interleaved_image_transform_test.py": "cosmos_framework/data/generator/augmentors/interleaved_image_transform_test.py",
     "projects/cosmos3/cosmos3/datasets/augmentors/interleaved_video_parsing.py": "cosmos_framework/data/generator/augmentors/interleaved_video_parsing.py",
+    "projects/cosmos3/cosmos3/datasets/augmentors/interleaved_video_parsing_test.py": "cosmos_framework/data/generator/augmentors/interleaved_video_parsing_test.py",
     "projects/cosmos3/cosmos3/datasets/augmentors/merge_datadict.py": "cosmos_framework/data/generator/augmentors/merge_datadict.py",
     "projects/cosmos3/cosmos3/datasets/augmentors/multi_reference_transform.py": "cosmos_framework/data/generator/augmentors/multi_reference_transform.py",
     "projects/cosmos3/cosmos3/datasets/augmentors/pkl_to_media.py": "cosmos_framework/data/generator/augmentors/pkl_to_media.py",

@@ -1,7 +1,9 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: OpenMDW-1.1
 
+import math
 import pickle
+import threading
 from collections import deque
 from types import SimpleNamespace
 from typing import Any
@@ -312,3 +314,145 @@ def test_broadcast_object_list_optimized_rejects_shared_containers_before_collec
 def test_broadcast_object_list_optimized_rejects_negative_threshold() -> None:
     with pytest.raises(ValueError, match="must be non-negative"):
         distributed.broadcast_object_list_optimized([], src=0, min_tensor_bytes=-1)
+
+
+@pytest.mark.L0
+@pytest.mark.CPU
+def test_world_comm_timeout_defaults_when_unset(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv(distributed.WORLD_COMM_TIMEOUT_ENV_VAR, raising=False)
+    assert distributed.get_world_comm_timeout_sec() == distributed.DEFAULT_WORLD_COMM_TIMEOUT_SEC
+
+
+@pytest.mark.L0
+@pytest.mark.CPU
+@pytest.mark.parametrize(("value", "expected"), [("120", 120.0), ("0", 0.0), ("  90.5  ", 90.5)])
+def test_world_comm_timeout_honors_override(monkeypatch: pytest.MonkeyPatch, value: str, expected: float) -> None:
+    monkeypatch.setenv(distributed.WORLD_COMM_TIMEOUT_ENV_VAR, value)
+    assert distributed.get_world_comm_timeout_sec() == expected
+
+
+@pytest.mark.L0
+@pytest.mark.CPU
+def test_world_comm_timeout_falls_back_on_garbage(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv(distributed.WORLD_COMM_TIMEOUT_ENV_VAR, "not-a-number")
+    assert distributed.get_world_comm_timeout_sec() == distributed.DEFAULT_WORLD_COMM_TIMEOUT_SEC
+
+
+@pytest.mark.L0
+@pytest.mark.CPU
+@pytest.mark.parametrize("value", ["nan", "NaN", "inf", "-inf", "Infinity", "1e400"])
+def test_world_comm_timeout_rejects_non_finite(monkeypatch: pytest.MonkeyPatch, value: str) -> None:
+    # float() takes these, and each one disarms the watchdog: nan fails the `> 0` guard so no thread
+    # is started, and inf makes the thread's Event.wait raise OverflowError.
+    monkeypatch.setenv(distributed.WORLD_COMM_TIMEOUT_ENV_VAR, value)
+
+    timeout_sec = distributed.get_world_comm_timeout_sec()
+
+    assert timeout_sec == distributed.DEFAULT_WORLD_COMM_TIMEOUT_SEC
+    assert math.isfinite(timeout_sec)
+    assert timeout_sec > 0
+
+
+@pytest.mark.L0
+@pytest.mark.CPU
+@pytest.mark.parametrize("value", ["-60", "-0.5"])
+def test_world_comm_timeout_rejects_negative(monkeypatch: pytest.MonkeyPatch, value: str) -> None:
+    # 0 is the documented way to wait indefinitely, so clamping a negative into it would read a typo
+    # as a deliberate request to disarm the watchdog.
+    monkeypatch.setenv(distributed.WORLD_COMM_TIMEOUT_ENV_VAR, value)
+
+    timeout_sec = distributed.get_world_comm_timeout_sec()
+
+    assert timeout_sec == distributed.DEFAULT_WORLD_COMM_TIMEOUT_SEC
+    assert timeout_sec > 0
+
+
+@pytest.mark.L0
+@pytest.mark.CPU
+def test_world_comm_watchdog_stays_quiet_when_build_finishes(monkeypatch: pytest.MonkeyPatch) -> None:
+    exit_codes: list[int] = []
+    monkeypatch.setattr(distributed.os, "_exit", exit_codes.append)
+    done = threading.Event()
+    done.set()
+
+    distributed._abort_on_world_comm_timeout(done, 30.0, rank=0, world_size=8)
+
+    assert exit_codes == []
+
+
+@pytest.mark.L0
+@pytest.mark.CPU
+def test_world_comm_watchdog_aborts_on_deadline(monkeypatch: pytest.MonkeyPatch) -> None:
+    exit_codes: list[int] = []
+    monkeypatch.setattr(distributed.os, "_exit", exit_codes.append)
+    monkeypatch.setattr(distributed, "WORLD_COMM_ABORT_GRACE_SEC", 0.01)
+
+    distributed._abort_on_world_comm_timeout(threading.Event(), 0.01, rank=3, world_size=128)
+
+    assert exit_codes == [distributed.WORLD_COMM_TIMEOUT_EXIT_CODE]
+
+
+@pytest.mark.L0
+@pytest.mark.CPU
+def test_world_comm_watchdog_spares_a_build_that_lands_during_the_grace(monkeypatch: pytest.MonkeyPatch) -> None:
+    # A build completing in the same instant the deadline expires must not be killed as a stall.
+    exit_codes: list[int] = []
+    monkeypatch.setattr(distributed.os, "_exit", exit_codes.append)
+    monkeypatch.setattr(distributed, "WORLD_COMM_ABORT_GRACE_SEC", 30.0)
+    done = threading.Event()
+    threading.Timer(0.05, done.set).start()
+
+    distributed._abort_on_world_comm_timeout(done, 0.01, rank=3, world_size=128)
+
+    assert exit_codes == []
+
+
+def _stub_world(monkeypatch: pytest.MonkeyPatch, world_size: int) -> None:
+    monkeypatch.setattr(distributed.dist, "is_available", lambda: True)
+    monkeypatch.setattr(distributed.dist, "is_initialized", lambda: True)
+    monkeypatch.setattr(distributed.dist, "get_backend", lambda *_args, **_kwargs: "gloo")
+    monkeypatch.setattr(distributed, "get_world_size", lambda *_args, **_kwargs: world_size)
+    monkeypatch.setattr(distributed, "get_rank", lambda *_args, **_kwargs: 0)
+
+
+@pytest.mark.L0
+@pytest.mark.CPU
+def test_ensure_world_communicator_probes_once(monkeypatch: pytest.MonkeyPatch) -> None:
+    _stub_world(monkeypatch, world_size=4)
+    probes: list[torch.Tensor] = []
+
+    def fake_all_reduce(tensor: torch.Tensor, *_args: Any, **_kwargs: Any) -> None:
+        probes.append(tensor)
+        tensor.fill_(4.0)
+
+    monkeypatch.setattr(distributed.dist, "all_reduce", fake_all_reduce)
+
+    distributed.ensure_world_communicator()
+
+    assert len(probes) == 1
+
+
+@pytest.mark.L0
+@pytest.mark.CPU
+def test_ensure_world_communicator_rejects_inconsistent_world(monkeypatch: pytest.MonkeyPatch) -> None:
+    _stub_world(monkeypatch, world_size=4)
+
+    def fake_all_reduce(tensor: torch.Tensor, *_args: Any, **_kwargs: Any) -> None:
+        tensor.fill_(3.0)
+
+    monkeypatch.setattr(distributed.dist, "all_reduce", fake_all_reduce)
+
+    with pytest.raises(RuntimeError, match="not consistent"):
+        distributed.ensure_world_communicator()
+
+
+@pytest.mark.L0
+@pytest.mark.CPU
+def test_ensure_world_communicator_skips_single_rank(monkeypatch: pytest.MonkeyPatch) -> None:
+    _stub_world(monkeypatch, world_size=1)
+    all_reduce = Mock()
+    monkeypatch.setattr(distributed.dist, "all_reduce", all_reduce)
+
+    distributed.ensure_world_communicator()
+
+    all_reduce.assert_not_called()

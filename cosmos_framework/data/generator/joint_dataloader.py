@@ -591,6 +591,10 @@ class JointDataLoader(webdataset.WebLoader):
                 f"JointDataLoader: configured forkserver preload modules: {preload_modules}",
                 rank0_only=False,
             )
+        log.info(
+            f"JointDataLoader: initializing {len(self.dataloader_list)} child iterator(s).",
+            rank0_only=False,
+        )
         self.dataloaders = [iter(dataloader) for dataloader in self.dataloader_list]
         self.buffers = [deque() for _ in range(len(self.dataloader_list))]
         self._child_iterators_initialized = True
@@ -675,6 +679,7 @@ class JointDataLoader(webdataset.WebLoader):
         """Produce and buffer one batch from a single dataloader."""
         import time
 
+        log.info(f"Pre-warm: starting dataloader {name!r}", rank0_only=False)
         started_at = time.monotonic()
         try:
             batch = next(dl_iter)
