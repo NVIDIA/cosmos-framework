@@ -36,6 +36,7 @@
 **Interfaces:**
 
 - Consumes: nothing new.
+
 - Produces:
   - `QuantizationConfig.mixed_precision_first_steps: int` (default 0), `.mixed_precision_last_steps: int` (default 0), `.mixed_precision_reasoner_policy: str` (`"high_precision"`/`"base_precision"`, default `"high_precision"`), `.mixed_precision_w8a16_cache: str` (`"none"`/`"generation"`/`"all"`/`"cpu_block"`/`"gpu_block"`, default `"gpu_block"`), property `.mixed_precision_enabled -> bool`.
   - `mixed_precision.use_w8a16_step(first_steps: int, last_steps: int, step_index: int, num_steps: int) -> bool`
@@ -209,6 +210,7 @@ git commit -m "feat(quantization): mixed-precision step schedule and config fiel
 **Interfaces:**
 
 - Consumes: `use_w8a16_step`, `QuantizationConfig` (Task 1); `_ModelOptFloat8Linear` and TorchAO weight attrs `.qdata`/`.scale` (existing).
+
 - Produces:
   - `class MixedPrecisionRuntime:` with `__init__(self, config: QuantizationConfig)`, `install(self, net: torch.nn.Module) -> None`, `set_step(self, step_index: int, num_steps: int) -> None`, `set_base_precision(self) -> None`, `use_high_precision(self, path: str) -> bool`, `resolve_w8a16_weight(self, module: torch.nn.Module) -> torch.Tensor`, `reset(self) -> None`; attributes `installed_counts: dict[str, int]`, `last_trace: tuple[str, ...]`, `is_sharded: bool`, `config`.
   - `install_mixed_precision_runtime(net: torch.nn.Module, quantization_config: QuantizationConfig) -> MixedPrecisionRuntime | None` — returns None when `not config.mixed_precision_enabled`; otherwise installs and sets `net._mixed_precision_runtime`.
@@ -581,6 +583,7 @@ git commit -m "feat(quantization): mixed-precision runtime and W8A16 dispatch in
 **Interfaces:**
 
 - Consumes: `MixedPrecisionRuntime`, `_dequantize_w8a16_weight` (Task 2).
+
 - Produces: modules on covered paths gain a non-persistent buffer `_w8a16_weight_cache` (dense `(N, K)`, weight dtype); `runtime.cached_bytes: int` (rename of `_cached_bytes`, public); a ready log line.
 
 - [ ] **Step 1: Write the failing tests**
@@ -677,6 +680,7 @@ git commit -m "feat(quantization): resident W8A16 full-cache modes (generation/a
 **Interfaces:**
 
 - Consumes: `MixedPrecisionRuntime` (`_block_provider` slot, `use_high_precision`), `_dequantize_w8a16_weight`, `module._mixed_precision_staged_weight` (Task 2).
+
 - Produces:
   - `class _BlockWeightProvider:` (base) with `__init__(self, runtime, blocks: list[nn.Module], dtype: torch.dtype)`, `initialize() -> None`, `preload_first() -> None`, `reset() -> None`, `device_bytes: int`, `host_bytes: int`. Subclasses `_GpuBlockWeightProvider` / `_CpuBlockWeightProvider` override `_fill_slot(self, slot: int, block_index: int) -> None`.
   - `MixedPrecisionRuntime.install` creates the provider for `gpu_block`/`cpu_block` given `blocks` — a new optional `install(net, blocks=None)` parameter: `blocks: list[nn.Module] | None`, the ordered decoder layers to hook. When `blocks is None` and a block cache mode is configured, `install` resolves `list(net.language_model.model.layers)`; tests pass an explicit list.
@@ -978,6 +982,7 @@ git commit -m "feat(quantization): double-buffered gpu_block/cpu_block W8A16 sta
 **Interfaces:**
 
 - Consumes: nothing from earlier tasks (pure sampler change).
+
 - Produces: every sampler accepts `step_callback: Callable[[int, int], None] | None = None` and calls `step_callback(step_index, num_steps)` exactly once at the top of each denoising step, before that step's model evaluation(s). EDM's optional final `sample_clean` forward runs after the last step under the last step's selection (no extra callback).
 
 - [ ] **Step 1: Write the failing tests**
@@ -1123,6 +1128,7 @@ git commit -m "feat(samplers): optional per-step callback in FixedStep/UniPC/EDM
 **Interfaces:**
 
 - Consumes: `net._mixed_precision_runtime` (`set_step`, `set_base_precision`, `reset` — Task 2), sampler `step_callback` (Task 5).
+
 - Produces: per-request precision lifecycle around every sampler branch. No new public API.
 
 - [ ] **Step 1: Implement (no isolated unit test — covered by Task 8 e2e; the change is control-flow glue)**
@@ -1212,6 +1218,7 @@ git commit -m "feat(inference): drive mixed-precision steps from the sampler loo
 **Interfaces:**
 
 - Consumes: `QuantizationConfig` mixed-precision fields (Task 1), `install_mixed_precision_runtime` (Tasks 2-4).
+
 - Produces: CLI flags `--mixed-precision-first-steps`, `--mixed-precision-last-steps`, `--mixed-precision-reasoner-policy`, `--mixed-precision-w8a16-cache`; load-time errors per Global Constraints; runtime installed right after `apply_modelopt_fp8_checkpoint_inplace`.
 
 - [ ] **Step 1: Write the failing tests**
@@ -1436,7 +1443,9 @@ Confirm the logs show `Mixed precision installed: ... linears={'reasoner': N, 'g
 Repeat Step 3 with `--mixed-precision-w8a16-cache none`, `generation`, `all`, `cpu_block`, and once with `--mixed-precision-first-steps 999` (all steps W8A16). Same seed for all runs. Confirm:
 
 - all five cache modes produce identical (or bitwise-near, allclose) outputs to each other;
+
 - the trace for the 999 run is all `W8A16`;
+
 - record per-mode peak memory (`torch.cuda.max_memory_allocated` is logged by the framework; otherwise `nvidia-smi` sampling) and wall time for the PR description.
 
 - [ ] **Step 5: Error-path spot checks**
