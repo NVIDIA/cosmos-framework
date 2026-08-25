@@ -762,10 +762,12 @@ class QuantizationOverrides(OverridesBase):
     mixed_precision_reasoner_policy: Literal["high_precision", "base_precision"] = "high_precision"
     """Understanding-pathway precision when mixed precision is enabled:
     high_precision keeps reasoner linears on W8A16 for every step."""
-    mixed_precision_w8a16_cache: Literal["none", "generation", "all", "cpu_block", "gpu_block"] = "gpu_block"
-    """W8A16 dense-weight source: none dequantizes per call; generation/all hold
-    resident BF16 caches; gpu_block/cpu_block stream per-layer double buffers.
-    FSDP-sharded runs support only none."""
+    mixed_precision_w8a16_cache: Literal["none", "generation", "all", "cpu_block", "gpu_block"] = "none"
+    """W8A16 dense-weight source: none (default) dequantizes per call and works
+    everywhere, including FSDP-sharded runs, at wall time indistinguishable from
+    the cached modes; generation/all hold resident BF16 caches; gpu_block/
+    cpu_block stream per-layer double buffers. FSDP-sharded runs support only
+    none."""
 
     def build_quantization(self) -> QuantizationArgs:
         return self._build(QuantizationArgs)

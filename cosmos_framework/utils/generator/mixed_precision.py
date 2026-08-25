@@ -121,8 +121,9 @@ class MixedPrecisionRuntime:
             )
         if self.is_sharded and self.config.mixed_precision_w8a16_cache != "none":
             raise ValueError(
-                "FSDP-sharded FP8 weights support only mixed_precision_w8a16_cache='none'; "
-                f"got {self.config.mixed_precision_w8a16_cache!r}"
+                "FSDP-sharded FP8 weights support only mixed_precision_w8a16_cache='none' "
+                f"(the default); got {self.config.mixed_precision_w8a16_cache!r}. Drop the "
+                "flag or pass --mixed-precision-w8a16-cache none for sharded runs."
             )
         net._mixed_precision_runtime = self
         cache_mode = self.config.mixed_precision_w8a16_cache

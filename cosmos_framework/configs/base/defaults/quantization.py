@@ -82,9 +82,13 @@ class QuantizationConfig:
     # Where W8A16 dense weights come from: "none" dequantizes per call,
     # "generation"/"all" hold resident BF16 caches, "gpu_block"/"cpu_block"
     # stage per-decoder-layer slots through a double buffer. Only "none" is
-    # supported when the model is FSDP-sharded.
+    # supported when the model is FSDP-sharded. The default deliberately
+    # diverges from vllm-omni's "gpu_block": measured wall time of "none" is
+    # indistinguishable from the cached modes at first/last-step schedules
+    # (t2i, t2v, and FSDP-sharded Super runs), and "none" works everywhere,
+    # including multi-GPU FSDP where the cached modes are rejected at load.
     mixed_precision_w8a16_cache: str = attrs.field(
-        default="gpu_block",
+        default="none",
         validator=attrs.validators.in_({"none", "generation", "all", "cpu_block", "gpu_block"}),
     )
 
