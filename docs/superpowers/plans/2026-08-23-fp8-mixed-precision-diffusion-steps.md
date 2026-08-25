@@ -28,11 +28,13 @@
 ### Task 1: Config fields on `QuantizationConfig` + step-schedule function
 
 **Files:**
+
 - Modify: `cosmos_framework/configs/base/defaults/quantization.py`
 - Create: `cosmos_framework/utils/generator/mixed_precision.py`
 - Test: `cosmos_framework/utils/generator/mixed_precision_test.py`
 
 **Interfaces:**
+
 - Consumes: nothing new.
 - Produces:
   - `QuantizationConfig.mixed_precision_first_steps: int` (default 0), `.mixed_precision_last_steps: int` (default 0), `.mixed_precision_reasoner_policy: str` (`"high_precision"`/`"base_precision"`, default `"high_precision"`), `.mixed_precision_w8a16_cache: str` (`"none"`/`"generation"`/`"all"`/`"cpu_block"`/`"gpu_block"`, default `"gpu_block"`), property `.mixed_precision_enabled -> bool`.
@@ -199,11 +201,13 @@ git commit -m "feat(quantization): mixed-precision step schedule and config fiel
 ### Task 2: `MixedPrecisionRuntime` (install/tagging/validation/state/trace) + on-the-fly W8A16 dispatch in `_ModelOptFloat8Linear`
 
 **Files:**
+
 - Modify: `cosmos_framework/utils/generator/mixed_precision.py`
 - Modify: `cosmos_framework/utils/generator/quantization.py` (`_ModelOptFloat8Linear`, ~line 43-65)
 - Test: `cosmos_framework/utils/generator/mixed_precision_test.py`
 
 **Interfaces:**
+
 - Consumes: `use_w8a16_step`, `QuantizationConfig` (Task 1); `_ModelOptFloat8Linear` and TorchAO weight attrs `.qdata`/`.scale` (existing).
 - Produces:
   - `class MixedPrecisionRuntime:` with `__init__(self, config: QuantizationConfig)`, `install(self, net: torch.nn.Module) -> None`, `set_step(self, step_index: int, num_steps: int) -> None`, `set_base_precision(self) -> None`, `use_high_precision(self, path: str) -> bool`, `resolve_w8a16_weight(self, module: torch.nn.Module) -> torch.Tensor`, `reset(self) -> None`; attributes `installed_counts: dict[str, int]`, `last_trace: tuple[str, ...]`, `is_sharded: bool`, `config`.
@@ -570,10 +574,12 @@ git commit -m "feat(quantization): mixed-precision runtime and W8A16 dispatch in
 ### Task 3: Full W8A16 caches (`generation` / `all` modes)
 
 **Files:**
+
 - Modify: `cosmos_framework/utils/generator/mixed_precision.py` (`MixedPrecisionRuntime.install`)
 - Test: `cosmos_framework/utils/generator/mixed_precision_test.py`
 
 **Interfaces:**
+
 - Consumes: `MixedPrecisionRuntime`, `_dequantize_w8a16_weight` (Task 2).
 - Produces: modules on covered paths gain a non-persistent buffer `_w8a16_weight_cache` (dense `(N, K)`, weight dtype); `runtime.cached_bytes: int` (rename of `_cached_bytes`, public); a ready log line.
 
@@ -664,10 +670,12 @@ git commit -m "feat(quantization): resident W8A16 full-cache modes (generation/a
 ### Task 4: Double-buffered block providers (`gpu_block` / `cpu_block`)
 
 **Files:**
+
 - Modify: `cosmos_framework/utils/generator/mixed_precision.py`
 - Test: `cosmos_framework/utils/generator/mixed_precision_test.py`
 
 **Interfaces:**
+
 - Consumes: `MixedPrecisionRuntime` (`_block_provider` slot, `use_high_precision`), `_dequantize_w8a16_weight`, `module._mixed_precision_staged_weight` (Task 2).
 - Produces:
   - `class _BlockWeightProvider:` (base) with `__init__(self, runtime, blocks: list[nn.Module], dtype: torch.dtype)`, `initialize() -> None`, `preload_first() -> None`, `reset() -> None`, `device_bytes: int`, `host_bytes: int`. Subclasses `_GpuBlockWeightProvider` / `_CpuBlockWeightProvider` override `_fill_slot(self, slot: int, block_index: int) -> None`.
@@ -961,12 +969,14 @@ git commit -m "feat(quantization): double-buffered gpu_block/cpu_block W8A16 sta
 ### Task 5: `step_callback` in the three samplers
 
 **Files:**
+
 - Modify: `cosmos_framework/model/generator/diffusion/samplers/fixed_step.py` (`FixedStepSampler.__call__`)
 - Modify: `cosmos_framework/model/generator/diffusion/samplers/unipc.py` (`UniPCSampler.forward`)
 - Modify: `cosmos_framework/model/generator/diffusion/samplers/edm.py` (`EDMSampler.forward`, `EDMSampler._forward_impl`, `differential_equation_solver`)
 - Test: `cosmos_framework/model/generator/diffusion/samplers/fixed_step_test.py` (append) and inline tests below in a new `cosmos_framework/model/generator/diffusion/samplers/step_callback_test.py`
 
 **Interfaces:**
+
 - Consumes: nothing from earlier tasks (pure sampler change).
 - Produces: every sampler accepts `step_callback: Callable[[int, int], None] | None = None` and calls `step_callback(step_index, num_steps)` exactly once at the top of each denoising step, before that step's model evaluation(s). EDM's optional final `sample_clean` forward runs after the last step under the last step's selection (no extra callback).
 
@@ -1107,9 +1117,11 @@ git commit -m "feat(samplers): optional per-step callback in FixedStep/UniPC/EDM
 ### Task 6: Wire the runtime into `generate_samples_from_batch`
 
 **Files:**
+
 - Modify: `cosmos_framework/model/generator/omni_mot_model.py` (sampler invocation region, ~line 3382-3500)
 
 **Interfaces:**
+
 - Consumes: `net._mixed_precision_runtime` (`set_step`, `set_base_precision`, `reset` — Task 2), sampler `step_callback` (Task 5).
 - Produces: per-request precision lifecycle around every sampler branch. No new public API.
 
@@ -1191,12 +1203,14 @@ git commit -m "feat(inference): drive mixed-precision steps from the sampler loo
 ### Task 7: CLI plumbing + load-time validation + runtime install in `load_model`
 
 **Files:**
+
 - Modify: `cosmos_framework/inference/common/args.py` (`QuantizationArgs` ~line 733, `QuantizationOverrides` ~line 741)
 - Modify: `cosmos_framework/inference/inference.py` (`OmniInference._get_quantization_config`, ~line 1166)
 - Modify: `cosmos_framework/inference/model.py` (`load_model`, ~line 652-736)
 - Test: `cosmos_framework/utils/generator/mixed_precision_test.py` (validation), plus a CLI-args assertion in `cosmos_framework/inference/common/args.py`'s existing test file if present — otherwise the args round-trip test below lives in `mixed_precision_test.py`.
 
 **Interfaces:**
+
 - Consumes: `QuantizationConfig` mixed-precision fields (Task 1), `install_mixed_precision_runtime` (Tasks 2-4).
 - Produces: CLI flags `--mixed-precision-first-steps`, `--mixed-precision-last-steps`, `--mixed-precision-reasoner-policy`, `--mixed-precision-w8a16-cache`; load-time errors per Global Constraints; runtime installed right after `apply_modelopt_fp8_checkpoint_inplace`.
 
@@ -1363,9 +1377,11 @@ git commit -m "feat(inference): CLI flags, load-time validation, and runtime ins
 ### Task 8: End-to-end verification on `cosmos3-nano-fp8-14072026` (single GPU)
 
 **Files:**
+
 - No committed changes (results go in the PR description).
 
 **Interfaces:**
+
 - Consumes: everything above; the FP8 checkpoint from `nvidia/Cosmos3-Experimental@f0cdb8ea37360e8510e2c0caf84c0f9f3e8751c8`, subfolder `cosmos3-nano-fp8-14072026`.
 
 - [ ] **Step 1: Download the checkpoint**
@@ -1418,6 +1434,7 @@ Confirm the logs show `Mixed precision installed: ... linears={'reasoner': N, 'g
 - [ ] **Step 4: Cache-mode equivalence + full-W8A16 sweep**
 
 Repeat Step 3 with `--mixed-precision-w8a16-cache none`, `generation`, `all`, `cpu_block`, and once with `--mixed-precision-first-steps 999` (all steps W8A16). Same seed for all runs. Confirm:
+
 - all five cache modes produce identical (or bitwise-near, allclose) outputs to each other;
 - the trace for the 999 run is all `W8A16`;
 - record per-mode peak memory (`torch.cuda.max_memory_allocated` is logged by the framework; otherwise `nvidia-smi` sampling) and wall time for the PR description.

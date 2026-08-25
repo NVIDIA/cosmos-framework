@@ -54,12 +54,12 @@ reasoner policy, W8A16 weight-cache mode) and all five cache modes
 `QuantizationConfig` (attrs) and `QuantizationOverrides` (pydantic CLI) gain
 four fields:
 
-| CLI flag | Values | Default |
-|---|---|---|
-| `--mixed-precision-first-steps` | int ≥ 0 | 0 |
-| `--mixed-precision-last-steps` | int ≥ 0 | 0 |
-| `--mixed-precision-reasoner-policy` | `high_precision` / `base_precision` | `high_precision` |
-| `--mixed-precision-w8a16-cache` | `none` / `generation` / `all` / `cpu_block` / `gpu_block` | `gpu_block` |
+| CLI flag                            | Values                                                    | Default          |
+| ----------------------------------- | --------------------------------------------------------- | ---------------- |
+| `--mixed-precision-first-steps`     | int ≥ 0                                                   | 0                |
+| `--mixed-precision-last-steps`      | int ≥ 0                                                   | 0                |
+| `--mixed-precision-reasoner-policy` | `high_precision` / `base_precision`                       | `high_precision` |
+| `--mixed-precision-w8a16-cache`     | `none` / `generation` / `all` / `cpu_block` / `gpu_block` | `gpu_block`      |
 
 - **Enablement:** active iff `first_steps + last_steps > 0` AND the loaded
   checkpoint is ModelOpt FP8. Defaults (0/0) leave behavior byte-identical to
@@ -131,13 +131,13 @@ Attached to the VFM network as `net._mixed_precision_runtime` when enabled.
 
 ### W8A16 weight sources (cache modes)
 
-| Mode | Behavior | Memory |
-|---|---|---|
-| `none` | Dequantize per call: `weight.qdata.to(bf16) * weight.scale` | zero extra |
-| `generation` | Non-persistent BF16 buffers for all generation-path linears, filled once after load | ~2× FP8 gen weights, resident |
-| `all` | Same, for both paths | ~2× all FP8 weights, resident |
-| `cpu_block` | Two max-block device slots; next layer's BF16 streamed H2D from pinned host copies | 2 block slots device + full BF16 pinned host |
-| `gpu_block` (default) | Two max-block device slots; next layer's BF16 dequantized from resident FP8 on a side stream | 2 block slots device |
+| Mode                  | Behavior                                                                                     | Memory                                       |
+| --------------------- | -------------------------------------------------------------------------------------------- | -------------------------------------------- |
+| `none`                | Dequantize per call: `weight.qdata.to(bf16) * weight.scale`                                  | zero extra                                   |
+| `generation`          | Non-persistent BF16 buffers for all generation-path linears, filled once after load          | ~2× FP8 gen weights, resident                |
+| `all`                 | Same, for both paths                                                                         | ~2× all FP8 weights, resident                |
+| `cpu_block`           | Two max-block device slots; next layer's BF16 streamed H2D from pinned host copies           | 2 block slots device + full BF16 pinned host |
+| `gpu_block` (default) | Two max-block device slots; next layer's BF16 dequantized from resident FP8 on a side stream | 2 block slots device                         |
 
 `W8A16BlockWeightProvider` (gpu_block/cpu_block) is a port of vllm's
 `block_cache.py`: per-`MoTDecoderLayer` `forward_pre_hook`/`forward_hook`
