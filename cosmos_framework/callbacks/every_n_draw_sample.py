@@ -43,7 +43,7 @@ class WandbAnimation(NamedTuple):
 # What a clip is previewed as in W&B: one still grid, one panel per sampled
 # frame, or an animation of every frame.
 WandbClipPreview = Literal["grid", "frames", "animation"]
-WandbMedia = str | dict[str, str] | WandbAnimation
+WandbMedia = str | dict[str, str | WandbAnimation] | WandbAnimation
 
 
 def resize_image(image: torch.Tensor, size: int = 1024) -> torch.Tensor:
@@ -137,22 +137,6 @@ class TransferGeneration:
         return [per_guidance[item_index] for per_guidance in self.latents]
 
 
-@dataclass(frozen=True, slots=True)
-class _SensorStream:
-    """One sensor's contribution to a joint sample: its items, and how to read them.
-
-    ``raw_items`` and ``x0_items`` are that sensor's ``[control, target]`` sequence, taken from
-    the modality the sensor belongs to — the vision stream for a camera, the LiDAR stream for a
-    range clip — which is why a joint sample never needs per-item sensor tags.
-    """
-
-    name: str
-    is_lidar: bool
-    generated_key: str
-    raw_items: list[torch.Tensor]
-    x0_items: list[torch.Tensor] | None
-
-
 def _flatten_int_metadata(value: Any) -> list[int] | None:
     if value is None:
         return None
@@ -220,85 +204,14 @@ def _get_multiview_transfer_metadata(
     )
 
 
-def _first_metadata_string(value: Any) -> str | None:
-    while isinstance(value, (list, tuple)):
-        if not value:
-            return None
-        value = value[0]
-    if isinstance(value, bytes):
-        value = value.decode("utf-8", errors="replace")
-    return value if isinstance(value, str) and value else None
 
 
-def _is_lidar_visualization_batch(data_batch: dict[str, Any]) -> bool:
-    """Return True when draw samples should be colorized as LiDAR range maps."""
-    return (
-        _first_metadata_string(data_batch.get("vision_tokenizer_type")) == "lidar"
-        or _first_metadata_string(data_batch.get("dataset_name")) == "lidar_transfer"
-    )
-
-
-def _first_sample_sensor_streams(data_clean: Any, num_vision_items: int) -> list[_SensorStream] | None:
-    """Split the drawn sample into one stream per sensor, or None if it carries just one.
-
-    A sample that holds both a camera clip and a range clip cannot be drawn by the plain
-    multiview path: the two disagree in resolution (720p versus 128x1024), in clip length
-    (7.5 Hz latents versus 10 Hz sweeps) and in which VAE decodes them, while that path reads
-    one of each from the batch. It is drawn a column per sensor instead, see
-    ``_sample_multisensor_transfer``.
-    """
-    num_lidar_items_per_sample = getattr(data_clean, "num_lidar_items_per_sample", None)
-    if not num_lidar_items_per_sample or num_vision_items < 1:
-        return None
-    num_lidar_items = int(num_lidar_items_per_sample[0])
-    raw_lidar = data_clean.raw_state_lidar
-    if num_lidar_items < 1 or raw_lidar is None or len(raw_lidar) < num_lidar_items:
-        return None
-    raw_vision = data_clean.raw_state_vision
-    if raw_vision is None or len(raw_vision) < num_vision_items:
-        return None
-
-    x0_vision = data_clean.x0_tokens_vision
-    x0_lidar = data_clean.x0_tokens_lidar
-    return [
-        _SensorStream(
-            name="camera",
-            is_lidar=False,
-            generated_key="vision",
-            raw_items=list(raw_vision[:num_vision_items]),
-            x0_items=list(x0_vision[:num_vision_items]) if x0_vision is not None else None,
-        ),
-        _SensorStream(
-            name="lidar",
-            is_lidar=True,
-            generated_key="lidar",
-            raw_items=list(raw_lidar[:num_lidar_items]),
-            x0_items=list(x0_lidar[:num_lidar_items]) if x0_lidar is not None else None,
-        ),
-    ]
-
-
-def _visualization_frames_per_view(item: torch.Tensor, sample_n_views: int) -> int | None:
-    """Frames per view held by one raw vision item, or None if it cannot hold whole views."""
-    if item.dim() == 5:
-        num_frames = item.shape[2]
-    elif item.dim() == 4:
-        num_frames = item.shape[1]
-    else:
-        return None
-    if sample_n_views < 1 or num_frames % sample_n_views != 0:
-        return None
-    return num_frames // sample_n_views
-
-
-
-
-def _to_display_row(pixels: torch.Tensor, *, colorize_lidar: bool = False) -> torch.Tensor:
+def _to_display_row(pixels: torch.Tensor) -> torch.Tensor:
     """Turn decoded pixels into a host-side visualization row: uint8, on CPU.
 
     Quantizing on the device, before the copy to the host, is what makes a tiled multiview
     grid affordable: the transfer, the grid and every copy the encoder makes of the grid
-    all inherit the reduction. LiDAR range maps are colorized to RGB instead.
+    all inherit the reduction.
     """
     return _to_display_uint8(pixels).cpu()  # [V,C,F,H,W]
 
@@ -306,8 +219,6 @@ def _to_display_row(pixels: torch.Tensor, *, colorize_lidar: bool = False) -> to
 def _get_first_multiview_transfer_rows(
     raw_data: list[torch.Tensor] | None,
     metadata: MultiviewTransferMetadata,
-    *,
-    colorize_lidar: bool = False,
 ) -> tuple[torch.Tensor, torch.Tensor] | None:
     if metadata.num_vision_items < 2 or raw_data is None or len(raw_data) < metadata.num_vision_items:
         return None
@@ -316,13 +227,11 @@ def _get_first_multiview_transfer_rows(
         raw_data[0],
         metadata.sample_n_views,
         metadata.num_video_frames_per_view,
-        colorize_lidar=colorize_lidar,
     )  # [V,C,F,H,W] or None
     gt_target_video = _prepare_multiview_video_for_visualization(
         raw_data[metadata.num_vision_items - 1],
         metadata.sample_n_views,
         metadata.num_video_frames_per_view,
-        colorize_lidar=colorize_lidar,
     )  # [V,C,F,H,W] or None
     if control_video is None or gt_target_video is None:
         return None
@@ -332,8 +241,6 @@ def _get_first_multiview_transfer_rows(
 def _get_first_multiview_target_row(
     raw_data: list[torch.Tensor] | None,
     metadata: MultiviewTransferMetadata,
-    *,
-    colorize_lidar: bool = False,
 ) -> torch.Tensor | None:
     if raw_data is None or len(raw_data) < metadata.num_vision_items:
         return None
@@ -342,49 +249,46 @@ def _get_first_multiview_target_row(
         raw_data[metadata.num_vision_items - 1],
         metadata.sample_n_views,
         metadata.num_video_frames_per_view,
-        colorize_lidar=colorize_lidar,
     )  # [V,C,F,H,W] or None
 
 
 def _get_first_transfer_dataloader_rows(
     raw_data: list[torch.Tensor] | None,
     metadata: MultiviewTransferMetadata,
-    *,
-    colorize_lidar: bool = False,
 ) -> list[torch.Tensor] | None:
     """Return the dataloader rows to display: ``[control, target]``, or ``[target]`` alone.
 
     Target-only batches (no control item) still draw, so the target row is the one that has
     to be readable; a missing control row just means there is nothing to compare against.
     """
-    target_row = _get_first_multiview_target_row(
-        raw_data, metadata, colorize_lidar=colorize_lidar
-    )  # [V,C,F,H,W] or None
+    target_row = _get_first_multiview_target_row(raw_data, metadata)  # [V,C,F,H,W] or None
     if target_row is None:
         return None
-    control_and_target = _get_first_multiview_transfer_rows(raw_data, metadata, colorize_lidar=colorize_lidar)
+    control_and_target = _get_first_multiview_transfer_rows(raw_data, metadata)
     if control_and_target is None:
         return [target_row]  # list[[V,C,F,H,W]]
     return list(control_and_target)  # list[[V,C,F,H,W]]  (control, target)
 
 
-def _decode_transfer_display_row(
+def _decode_transfer_pixel_row(
     model: Any,
     latent: torch.Tensor,  # [1,C,V*T_latent,H,W] or [C,V*T_latent,H,W]
     data_batch: dict[str, Any],
     metadata: MultiviewTransferMetadata,
     *,
     decode: Callable[[torch.Tensor], torch.Tensor] | None = None,
-    colorize_lidar: bool = False,
+    decode_per_view: bool | None = None,
 ) -> torch.Tensor | None:  # [V,C,F,H,W] or None
-    """Decode one latent into a camera-major display row, or None if it cannot be split by view.
+    """Decode one latent into a host-side pixel row without display conversion.
 
     ``decode`` defaults to the model's main VAE; a joint camera + LiDAR sample passes
-    ``model.decode_lidar`` for the rows that hold range clips, since there the two streams have
-    a VAE each. ``colorize_lidar`` renders one-channel range as color instead of RGB.
+    ``model.decode_lidar`` for range clips because the two streams have separate VAEs.
+    LiDAR never uses the per-camera encode path, even when the camera items do.
     """
     decode = decode if decode is not None else model.decode
-    if "enable_per_camera_vae_encoding" in data_batch:
+    if decode_per_view is None:
+        decode_per_view = "enable_per_camera_vae_encoding" in data_batch
+    if decode_per_view:
         decoded = decode_multiview_latent_per_view(  # [1,C,V*F,H,W] or [C,V*F,H,W]
             decode,
             latent,
@@ -400,7 +304,28 @@ def _decode_transfer_display_row(
     )  # [V,C,F,H,W] or None
     if decoded_by_view is None:
         return None
-    return _to_display_row(decoded_by_view, colorize_lidar=colorize_lidar)  # [V,C,F,H,W]
+    return decoded_by_view.detach().float().cpu()
+
+
+def _decode_transfer_display_row(
+    model: Any,
+    latent: torch.Tensor,
+    data_batch: dict[str, Any],
+    metadata: MultiviewTransferMetadata,
+    *,
+    decode: Callable[[torch.Tensor], torch.Tensor] | None = None,
+    decode_per_view: bool | None = None,
+) -> torch.Tensor | None:
+    """Decode one latent into a camera-major display row."""
+    pixel_row = _decode_transfer_pixel_row(
+        model,
+        latent,
+        data_batch,
+        metadata,
+        decode=decode,
+        decode_per_view=decode_per_view,
+    )
+    return None if pixel_row is None else _to_display_row(pixel_row)
 
 
 def _render_text_stamp(label: str, scale: int = 2) -> torch.Tensor:  # [3,h,w] uint8
@@ -522,70 +447,6 @@ def _mismatched_row_shapes(rows: list[torch.Tensor]) -> list[tuple[int, ...]] | 
     return None
 
 
-def _resample_row_to_frames(row: torch.Tensor, num_frames: int) -> torch.Tensor:
-    """Resample a display row onto ``num_frames`` ticks of the clip it already covers.
-
-    Sensors that share a sample share its wall clock, because the recipe cuts every stream
-    from one source-frame window with their first frames aligned. Rows of different lengths
-    therefore span the same seconds, and a nearest-tick map puts them on one timeline
-    without drifting. The result is always fresh memory, which is what lets a caller stamp
-    labels into a row that may be a view of the dataloader's own pixels.
-    """
-    source_frames = row.shape[2]
-    ticks = torch.arange(num_frames, device=row.device)
-    return row.index_select(2, (ticks * source_frames // num_frames).clamp_(max=source_frames - 1))
-
-
-def _resize_row_to_cell(row: torch.Tensor, height: int, width: int) -> torch.Tensor:
-    """Scale a display row into one grid cell, nearest-neighbour.
-
-    One grid has one cell size, and the sensors agree on neither size nor aspect: a 720x1280
-    camera clip next to a 128x1024 range map. Nearest keeps a range map's beam rows as hard
-    bands rather than inventing gradients between beams that were never measured.
-    """
-    if row.shape[-2:] == (height, width):
-        return row
-    views, channels, frames = row.shape[:3]
-    frames_first = row.permute(0, 2, 1, 3, 4).reshape(views * frames, channels, *row.shape[-2:])  # [V*F,C,H,W]
-    resized = torchvision_F.resize(
-        frames_first,
-        [height, width],
-        interpolation=torchvision_F.InterpolationMode.NEAREST,
-    )  # [V*F,C,h,w]
-    return resized.reshape(views, frames, channels, height, width).permute(0, 2, 1, 3, 4).contiguous()
-
-
-def _combine_sensor_rows_as_columns(
-    group_rows: list[list[torch.Tensor]],  # per sensor, per row: [V,C,F,H,W]
-    group_labels: list[list[str]],
-) -> list[torch.Tensor]:  # per row: [sum(V),C,T,h,w]
-    """Lay each sensor's display rows out as its own columns of one grid.
-
-    Row i means the same thing for every sensor -- control, ground truth, decoded clean
-    tokens, generated -- so the sensors line up as columns and the grid reads across: what
-    each one was given, what it should produce, what it did. Getting there costs a common
-    timeline and a common cell, and a label per cell, since a column no longer says which
-    sensor it holds.
-    """
-    num_frames = min(rows[0].shape[2] for rows in group_rows)
-    channels = max(rows[0].shape[1] for rows in group_rows)
-    height = max(rows[0].shape[3] for rows in group_rows)
-    width = max(rows[0].shape[4] for rows in group_rows)
-
-    combined: list[torch.Tensor] = []
-    for row_index in range(len(group_rows[0])):
-        cells: list[torch.Tensor] = []
-        for rows, labels in zip(group_rows, group_labels, strict=True):
-            cell = _resample_row_to_frames(rows[row_index], num_frames)  # [V,C,T,H,W]
-            cell = _resize_row_to_cell(cell, height, width)  # [V,C,T,h,w]
-            _stamp_row_label(cell, labels[row_index])
-            if cell.shape[1] < channels:
-                cell = cell.expand(-1, channels, -1, -1, -1)  # a one-channel row joins as grey
-            cells.append(cell)
-        combined.append(torch.cat(cells, dim=0))  # [sum(V),C,T,h,w]
-    return combined
-
-
 def _has_first_multiview_transfer_rows(
     raw_data: list[torch.Tensor] | None,
     metadata: MultiviewTransferMetadata,
@@ -647,8 +508,6 @@ def _prepare_multiview_video_for_visualization(
     tensor: torch.Tensor,
     sample_n_views: int,
     num_video_frames_per_view: int,
-    *,
-    colorize_lidar: bool = False,
 ) -> torch.Tensor | None:  # tensor: [B,C,V*F,H,W] or [C,V*F,H,W], returns [V,C,F,H,W] uint8
     """Prepare camera-major pixels for visualization, as display-level uint8 on the host.
 
@@ -665,7 +524,7 @@ def _prepare_multiview_video_for_visualization(
     )  # [V,C,F,H,W] or None
     if video_by_view is None:
         return None
-    return _to_display_row(video_by_view, colorize_lidar=colorize_lidar)  # [V,C,F,H,W]
+    return _to_display_row(video_by_view)  # [V,C,F,H,W]
 
 
 def _write_gif(frames: torch.Tensor, path: str, fps: float, max_size: int = 1024) -> None:
@@ -698,8 +557,8 @@ def _add_wandb_media(
         info[key_prefix] = wandb.Video(media.path, caption=f"{caption} | {media.num_frames} frames")
         return
     if isinstance(media, dict):
-        for key_suffix, image_path in media.items():
-            info[f"{key_prefix}_{key_suffix}"] = wandb.Image(image_path, caption=caption)
+        for key_suffix, item in media.items():
+            _add_wandb_media(info, f"{key_prefix}_{key_suffix}", item, caption)
         return
     info[key_prefix] = wandb.Image(media, caption=caption)
 
@@ -969,6 +828,8 @@ class EveryNDrawSample(EveryN):
         data_clean = model.get_data_and_condition(data_batch)
         raw_data = data_clean.raw_state_vision
         x0 = data_clean.x0_tokens_vision
+        transfer_raw_data = raw_data
+        transfer_x0 = x0
 
         # Handle model parallelism if available (legacy models)
         if hasattr(model, "broadcast_split_for_model_parallelsim"):
@@ -1109,7 +970,6 @@ class EveryNDrawSample(EveryN):
         data_batch: dict[str, Any],
         metadata: MultiviewTransferMetadata,
         iteration: int,
-        streams: list[_SensorStream] | None = None,
     ) -> TransferGeneration:
         """Sample the first clip of the batch once per guidance scale.
 
@@ -1121,14 +981,9 @@ class EveryNDrawSample(EveryN):
         ~undenoised noise. Decoding display rows only after this returns (matching the
         standard single-item sample() path ordering) keeps generation bit-for-bit as in the
         runs that produced good zero-shot output.
-
-        ``streams``, when given, names one generated target per sensor of a joint sample and
-        the modality each is returned under, so the drawn columns cannot silently take another
-        sensor's latent. Left ``None``, a single generated vision target is expected.
         """
         should_materialize_sample = self._should_materialize_sample()
-        # One generated latent per stream, read from that stream's own key.
-        expected_keys = [stream.generated_key for stream in streams] if streams is not None else ["vision"]
+        expected_keys = ["vision"]
         latents: list[list[torch.Tensor]] = []
         generation_batch = slice_data_batch(data_batch, start=0, limit=1)
         for guidance in self.guidance:
@@ -1262,261 +1117,6 @@ class EveryNDrawSample(EveryN):
             return self._skip_multiview_visualization(skip_reason, metadata, iteration)
         return MultiviewTransferSampleResult(handled=True, media=media)
 
-    def _sample_lidar_transfer(
-        self,
-        model: Any,
-        data_batch: dict[str, Any],
-        raw_data: list[torch.Tensor] | None,
-        x0: list[torch.Tensor] | None,
-        metadata: MultiviewTransferMetadata,
-        iteration: int,
-        tag: str,
-    ) -> MultiviewTransferSampleResult:
-        """Draw an HD-map to LiDAR transfer sample: colorized range views, played as a clip.
-
-        Rows are [control, GT, clean recon, generated] as for camera rigs, but a range clip is
-        a single wide view whose whole point is how the sweep evolves, so the rows are
-        colorized from one-channel range, labelled with what they hold, and W&B gets the full
-        clip as an animation instead of three sampled frames.
-        """
-        if not _has_first_multiview_transfer_rows(raw_data, metadata):
-            return self._skip_multiview_visualization(
-                "raw range rows cannot be read from the batch",
-                metadata,
-                iteration,
-            )
-
-        generation = self._generate_transfer_latents(model, data_batch, metadata, iteration)
-        if generation.stop is not None:
-            return generation.stop
-
-        media: WandbMedia | None = None
-        skip_reason: str | None = None
-        if self._should_materialize_sample():
-            to_show = _get_first_transfer_dataloader_rows(  # list[[V,C,F,H,W]] or None
-                raw_data,
-                metadata,
-                colorize_lidar=True,
-            )
-            if to_show is None:
-                skip_reason = "ground-truth range clip cannot be read from the batch"
-            else:
-                # One label per row, in row order, so a stack of near-identical range maps stays readable.
-                row_labels = ["control signal (HD map)", "real LiDAR"] if len(to_show) == 2 else ["real LiDAR"]
-
-                generated_rows: list[torch.Tensor] = []
-                generated_row_labels: list[str] = []
-                for guidance, generated_latent in zip(self.guidance, generation.item_latents(0), strict=True):
-                    generated_row = _decode_transfer_display_row(  # [V,C,F,H,W] or None
-                        model,
-                        generated_latent,
-                        data_batch,
-                        metadata,
-                        colorize_lidar=True,
-                    )
-                    if generated_row is None:
-                        skip_reason = "generated range clip cannot be read from the decoder"
-                        break
-                    generated_rows.append(generated_row)  # [V,C,F,H,W]
-                    generated_row_labels.append(f"generated LiDAR (guidance {guidance})")
-
-                if skip_reason is None:
-                    # Tokenizer reconstruction ceiling for the target sweeps: how close the range VAE can
-                    # get on its own, which is what separates tokenizer loss from generation quality.
-                    # Decoded after the generated rows, shown before them (see _generate_transfer_latents).
-                    if x0 is not None and len(x0) >= metadata.num_vision_items:
-                        clean_target_row = _decode_transfer_display_row(  # [V,C,F,H,W] or None
-                            model,
-                            x0[metadata.num_vision_items - 1],
-                            data_batch,
-                            metadata,
-                            colorize_lidar=True,
-                        )
-                        if clean_target_row is not None:
-                            to_show.append(clean_target_row)
-                            row_labels.append("decoded clean tokens")
-
-                    to_show.extend(generated_rows)
-                    row_labels.extend(generated_row_labels)
-
-                    row_shapes = _mismatched_row_shapes(to_show)
-                    if row_shapes is not None:
-                        skip_reason = f"visualization rows have inconsistent shapes: {row_shapes}"
-                    else:
-                        for row, row_label in zip(to_show, row_labels, strict=True):
-                            _stamp_row_label(row, row_label)
-
-                        media = self.run_save(
-                            to_show,
-                            metadata.sample_n_views,
-                            self._transfer_artifact_path(tag, iteration),
-                            max_columns=metadata.sample_n_views,
-                            wandb_clip_preview="animation",
-                        )
-
-        self._barrier_after_transfer_materialize()
-        if skip_reason is not None:
-            return self._skip_multiview_visualization(skip_reason, metadata, iteration)
-        return MultiviewTransferSampleResult(handled=True, media=media)
-
-    def _lidar_playback_fps(self, model: Any) -> float:
-        """Sweep rate of the LiDAR stream, so its animation plays in real time."""
-        lidar_fps = getattr(model.config, "lidar_fps", None)
-        return float(lidar_fps) if lidar_fps else self.fps
-
-    def _sensor_group_rows(
-        self,
-        model: Any,
-        data_batch: dict[str, Any],
-        group_raw: list[torch.Tensor],
-        group_x0: list[torch.Tensor] | None,
-        generated_latents: list[torch.Tensor],
-        sensor_name: str,
-        sample_n_views: int,
-        *,
-        is_lidar: bool,
-    ) -> tuple[tuple[list[torch.Tensor], list[str]] | None, str | None]:
-        """Build one sensor's display rows and their labels, or say why they cannot be built.
-
-        The group is a self-contained ``[control, target]`` sequence of a single sensor, so it
-        is read with the same row helpers as a single-sensor batch, given a metadata
-        describing that sensor's own clip length, and decoded by that sensor's own VAE.
-        """
-        decode = model.decode_lidar if is_lidar else model.decode
-        num_video_frames_per_view = _visualization_frames_per_view(group_raw[0], sample_n_views)
-        if num_video_frames_per_view is None:
-            return None, f"{sensor_name} rows cannot be split into views"
-
-        group_metadata = MultiviewTransferMetadata(
-            num_vision_items=len(group_raw),
-            sample_n_views=sample_n_views,
-            num_video_frames_per_view=num_video_frames_per_view,
-        )
-        to_show = _get_first_transfer_dataloader_rows(  # list[[V,C,F,H,W]] or None
-            group_raw,
-            group_metadata,
-            colorize_lidar=is_lidar,
-        )
-        if to_show is None:
-            return None, f"ground-truth {sensor_name} row cannot be read from the batch"
-        # One label per row, in row order, for the cells that get stamped once combined.
-        row_labels = [f"real {sensor_name}"]
-        if len(to_show) == 2:
-            row_labels = [f"{sensor_name} control signal", f"real {sensor_name}"]
-
-        generated_rows: list[torch.Tensor] = []
-        generated_row_labels: list[str] = []
-        for guidance, generated_latent in zip(self.guidance, generated_latents, strict=True):
-            generated_row = _decode_transfer_display_row(  # [V,C,F,H,W] or None
-                model,
-                generated_latent,
-                data_batch,
-                group_metadata,
-                decode=decode,
-                colorize_lidar=is_lidar,
-            )
-            if generated_row is None:
-                return None, f"generated {sensor_name} clip cannot be read from the decoder"
-            generated_rows.append(generated_row)  # [V,C,F,H,W]
-            generated_row_labels.append(f"generated {sensor_name} (guidance {guidance})")
-
-        # Tokenizer reconstruction ceiling of this sensor's target, which is what separates
-        # tokenizer loss from generation quality. Decoded after the generated rows, shown
-        # before them (see the ordering note in _generate_transfer_latents).
-        if group_x0 is not None:
-            clean_target_row = _decode_transfer_display_row(  # [V,C,F,H,W] or None
-                model,
-                group_x0[-1],
-                data_batch,
-                group_metadata,
-                decode=decode,
-                colorize_lidar=is_lidar,
-            )
-            if clean_target_row is not None:
-                to_show.append(clean_target_row)
-                row_labels.append(f"decoded clean {sensor_name} tokens")
-
-        to_show.extend(generated_rows)
-        row_labels.extend(generated_row_labels)
-
-        row_shapes = _mismatched_row_shapes(to_show)
-        if row_shapes is not None:
-            return None, f"{sensor_name} visualization rows have inconsistent shapes: {row_shapes}"
-        return (to_show, row_labels), None
-
-    def _sample_multisensor_transfer(
-        self,
-        model: Any,
-        data_batch: dict[str, Any],
-        streams: list[_SensorStream],
-        metadata: MultiviewTransferMetadata,
-        iteration: int,
-        tag: str,
-    ) -> MultiviewTransferSampleResult:
-        """Draw a joint camera + LiDAR sample as one clip, a column per sensor.
-
-        Each sensor is read and decoded on its own terms -- its own VAE, its own clip length,
-        its own colorization -- and the sensors then meet as columns of a single grid whose
-        rows are the roles they share: control, ground truth, decoded clean tokens, generated.
-        Reading across a row is the point of a joint recipe, so the two are worth the common
-        cell and timeline that a single grid costs (see _combine_sensor_rows_as_columns).
-        """
-        # Generation covers the whole sample once, before any decode (see the cudagraph note in
-        # _generate_transfer_latents), and returns one generated target per stream.
-        generation = self._generate_transfer_latents(
-            model,
-            data_batch,
-            metadata,
-            iteration,
-            streams=streams,
-        )
-        if generation.stop is not None:
-            return generation.stop
-
-        media: WandbMedia | None = None
-        skip_reason: str | None = None
-        if self._should_materialize_sample():
-            group_rows: list[list[torch.Tensor]] = []
-            group_labels: list[list[str]] = []
-            for stream_index, stream in enumerate(streams):
-                rows_and_labels, skip_reason = self._sensor_group_rows(
-                    model,
-                    data_batch,
-                    stream.raw_items,
-                    stream.x0_items,
-                    generation.item_latents(stream_index),
-                    stream.name,
-                    metadata.sample_n_views,
-                    is_lidar=stream.is_lidar,
-                )
-                if rows_and_labels is None:
-                    break
-                group_rows.append(rows_and_labels[0])
-                group_labels.append(rows_and_labels[1])
-
-            if skip_reason is None and len({len(rows) for rows in group_rows}) != 1:
-                # A column only means something opposite the same role in every other column.
-                skip_reason = f"sensors contributed different row counts: {[len(rows) for rows in group_rows]}"
-            if skip_reason is None:
-                to_show = _combine_sensor_rows_as_columns(group_rows, group_labels)  # list[[V_all,C,T,h,w]]
-                # The sensor with the fewest frames sets the timeline, so no clip is stretched
-                # into frames it never had, and the clip plays back at that sensor's own rate.
-                slowest = min(range(len(streams)), key=lambda index: group_rows[index][0].shape[2])
-                num_columns = to_show[0].shape[0]
-                media = self.run_save(
-                    to_show,
-                    num_columns,
-                    self._transfer_artifact_path(tag, iteration),
-                    max_columns=num_columns,
-                    wandb_clip_preview="animation",
-                    fps=self._lidar_playback_fps(model) if streams[slowest].is_lidar else self.fps,
-                )
-
-        self._barrier_after_transfer_materialize()
-        if skip_reason is not None:
-            return self._skip_multiview_visualization(skip_reason, metadata, iteration)
-        return MultiviewTransferSampleResult(handled=True, media=media)
-
     @misc.timer("EveryNDrawSample: sample")
     def sample(
         self,
@@ -1547,6 +1147,8 @@ class EveryNDrawSample(EveryN):
         )
         raw_data = data_clean.raw_state_vision
         x0 = data_clean.x0_tokens_vision
+        transfer_raw_data = raw_data
+        transfer_x0 = x0
 
         # determine the number of visualized samples
         n_viz_sample = min(self.n_viz_sample, data_clean.batch_size)
@@ -1554,32 +1156,20 @@ class EveryNDrawSample(EveryN):
         # Check if this is a multi-item vision batch (image editing)
         num_items = data_clean.num_vision_items_per_sample
         is_multi_item = num_items is not None
-        multiview_num_items = _get_multiview_visualization_item_counts(data_batch, num_items, data_clean.batch_size)
+        transfer_num_items = num_items
+        multiview_num_items = _get_multiview_visualization_item_counts(
+            data_batch,
+            transfer_num_items,
+            data_clean.batch_size,
+        )
         transfer_metadata = _get_multiview_transfer_metadata(data_batch, multiview_num_items)
         if transfer_metadata is not None:
-            # Only the first sample is drawn, so ask whether that sample carries both streams:
-            # a batch that packs a camera-only sample next to a LiDAR-only one is not a joint
-            # sample and must keep its single-sensor path.
-            joint_streams = _first_sample_sensor_streams(data_clean, transfer_metadata.num_vision_items)
-            if joint_streams is not None:
-                return self._sample_multisensor_transfer(
-                    model,
-                    data_batch,
-                    joint_streams,
-                    transfer_metadata,
-                    iteration,
-                    tag,
-                ).media
-            draw_transfer_sample = (
-                self._sample_lidar_transfer
-                if _is_lidar_visualization_batch(data_batch)
-                else self._sample_multiview_transfer
-            )
+            draw_transfer_sample = self._sample_multiview_transfer
             transfer_result = draw_transfer_sample(
                 model,
                 data_batch,
-                raw_data,
-                x0,
+                transfer_raw_data,
+                transfer_x0,
                 transfer_metadata,
                 iteration,
                 tag,

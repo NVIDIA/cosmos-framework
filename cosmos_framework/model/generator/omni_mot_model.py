@@ -94,6 +94,18 @@ from cosmos_framework.utils.generator.parallelism import ParallelDims
 from cosmos_framework.utils.generator.quantization import swap_modelopt_fp8_linears_on_meta
 
 
+def _uses_lidar_primary_tokenizer(data_batch: dict[str, Any]) -> bool:
+    """Return whether the primary ``video`` stream carries metric LiDAR V1 clips."""
+    value = data_batch.get("vision_tokenizer_type")
+    while isinstance(value, (list, tuple)):
+        if not value:
+            return False
+        value = value[0]
+    if isinstance(value, bytes):
+        value = value.decode("utf-8", errors="replace")
+    return value == "lidar"
+
+
 class OmniMoTModel(ImaginaireModel):
     """
     Mixture of Transformers (MoT) model to be trained with the flow matching objective
@@ -4107,6 +4119,7 @@ class OmniMoTModel(ImaginaireModel):
         # Detect whether any sample has multiple vision items (e.g. image editing).
         # If so, track the count per sample before all vision items from this batch are flattened into a list.
         is_image_batch = self.is_image_batch(data_batch)
+        uses_lidar_primary_tokenizer = _uses_lidar_primary_tokenizer(data_batch)
         sample_vision_list = data_batch[self.input_image_key if is_image_batch else self.input_video_key]
 
         # we should always get this information here during training. If we can read this field
@@ -4130,7 +4143,11 @@ class OmniMoTModel(ImaginaireModel):
             if has_multiple_vision_per_sample:
                 media_key = self.input_video_key if not is_image_batch else self.input_image_key
                 data_batch[media_key] = [item.unsqueeze(0) for sublist in sample_vision_list for item in sublist]
-                if data_batch[media_key][0].dtype == torch.float32 and not is_image_batch:
+                if (
+                    data_batch[media_key][0].dtype == torch.float32
+                    and not is_image_batch
+                    and not uses_lidar_primary_tokenizer
+                ):
                     data_batch["is_preprocessed"] = (
                         True  # for video batch, is_processed = True means the video data is normalized. However, for the image batch, is_processed = True means the image data is augmented with a temporal dimension.
                     )
@@ -4162,7 +4179,8 @@ class OmniMoTModel(ImaginaireModel):
         if num_views_per_vision_item is None:
             # Legacy VFM/image path: normalize the complete input when needed and
             # preserve the existing image batch-dimension handling.
-            self._normalize_video_databatch_inplace(data_batch)
+            if not uses_lidar_primary_tokenizer:
+                self._normalize_video_databatch_inplace(data_batch)
             self._augment_image_dim_inplace(data_batch)  # converts each image tensor to [1,C,1,H,W]
             raw_state_vision = data_batch[media_key]
         else:
@@ -4317,8 +4335,9 @@ class OmniMoTModel(ImaginaireModel):
         """Encode the batch's LiDAR range clips into x0 latent tokens.
 
         ``data_batch["lidar"]`` arrives from the loader as one entry per sample — a list of
-        range clips, already normalized to ``[-1,1]`` — and is flattened here the way the
-        vision key is. The per-sample counts are written back to the batch, both so a second
+        tokenizer-native range clips — and is flattened here the way the vision key is. V1
+        clips carry metric range, unit intensity and validity; normalization belongs to the
+        tokenizer. The per-sample counts are written back to the batch, both so a second
         pass over the same batch sees the flat form and so the visualization callbacks can
         regroup the items once the training payload is gone.
 

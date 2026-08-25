@@ -1,6 +1,7 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: OpenMDW-1.1
 
+import torch
 from hydra.core.config_store import ConfigStore
 
 from cosmos_framework.utils.lazy_config import PLACEHOLDER, LazyDict
@@ -251,6 +252,12 @@ def register_lidar_tokenizer() -> None:
         package="model.config.lidar_tokenizer",
         name="lidar_tokenizer_v1",
         node=LidarTokenizerV1Config,
+    )
+    cs.store(
+        group="lidar_tokenizer",
+        package="model.config.lidar_tokenizer",
+        name="lidar_tokenizer_v1_r105_b1800_symmetric",
+        node=LidarTokenizerV1R105B1800SymmetricConfig,
     )
 
 

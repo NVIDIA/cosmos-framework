@@ -3,12 +3,12 @@
 
 """Record the image and video IDs consumed by training.
 
-The callback is disabled by default. When enabled, every rank buffers the
-``__key__`` and ``__url__`` values from batches that reached the training step.
-For Lance Action batches, ``action_sample_fingerprint`` is preferred over
-``__key__`` because it contains the resolved row/start-frame identity.
-At a configurable interval the buffers are gathered to rank 0, which appends
-every consumed sample occurrence to one Lance table.
+The callback is disabled by default. When enabled, every rank buffers sample
+identity and media provenance from batches that reached the training step.
+Lance Action batches prefer ``action_sample_fingerprint`` over ``__key__``;
+VLM batches additionally preserve conversation text and exact media byte-range
+references. At a configurable interval the buffers are gathered to rank 0,
+which appends every consumed sample occurrence to one Lance table.
 
 The resulting table can be inspected with the Streamlit viewer in
 ``tools/lance_sample_viewer``.
@@ -75,6 +75,25 @@ def _as_optional_string_list(value: Any, count: int) -> list[str | None]:
     return values[:count]
 
 
+def _media_items_by_sample(value: Any, count: int) -> list[list[dict[str, Any]]]:
+    """Normalize optional VLM media provenance while preserving sample boundaries."""
+    if not isinstance(value, (list, tuple)):
+        return [[] for _ in range(count)]
+    if count == 1 and all(isinstance(item, dict) for item in value):
+        values: list[Any] = [value]
+    else:
+        values = list(value)
+
+    normalized: list[list[dict[str, Any]]] = []
+    for sample_index in range(count):
+        sample_value = values[sample_index] if sample_index < len(values) else []
+        if not isinstance(sample_value, (list, tuple)):
+            normalized.append([])
+            continue
+        normalized.append([dict(item) for item in sample_value if isinstance(item, dict)])
+    return normalized
+
+
 class SampledMediaRecorder(Callback):
     """Append consumed sample metadata to a Lance table from rank 0.
 
@@ -125,13 +144,20 @@ class SampledMediaRecorder(Callback):
 
     @staticmethod
     def _media_type(data_batch: dict[str, Any]) -> str:
-        has_images = data_batch.get("images") is not None
-        has_video = data_batch.get("video") is not None
+        has_images = data_batch.get("images") is not None or data_batch.get("raw_image") is not None
+        has_video = data_batch.get("video") is not None or data_batch.get("raw_video") is not None
         if has_images and not has_video:
             return "image"
         if has_video and not has_images:
             return "video"
         return "image_video" if has_images and has_video else "unknown"
+
+    @classmethod
+    def _media_types(cls, data_batch: dict[str, Any], count: int) -> list[str]:
+        """Prefer the canonical VLM media type and retain the VFM fallback."""
+        explicit = _as_list(data_batch.get("media_type"), count)
+        fallback = cls._media_type(data_batch)
+        return [media_type or fallback for media_type in explicit]
 
     def _job_name(self) -> str:
         job_config = getattr(getattr(self, "config", None), "job", None)
@@ -157,9 +183,18 @@ class SampledMediaRecorder(Callback):
         dataset_names = _as_list(data_batch.get("dataset_name"), count)
         source_names = _as_list(data_batch.get("source_dataset_name"), count)
         captions = _as_optional_string_list(data_batch.get("ai_caption"), count) if self.record_caption else []
+        source_ids = _as_list(data_batch.get("source_id"), count)
+        conversations = _as_list(data_batch.get("dialog_str"), count)
+        media_items = _media_items_by_sample(data_batch.get("sample_browser_media"), count)
         recorded_at = _utc_now()
-        media_type = self._media_type(data_batch)
+        media_types = self._media_types(data_batch, count)
         run_id = os.environ.get("SLURM_JOB_ID") or os.environ.get("WANDB_RUN_ID", "local")
+
+        for sample_index, items in enumerate(media_items):
+            if items:
+                media_urls[sample_index] = str(items[0].get("media_url") or media_urls[sample_index])
+            if not dataset_names[sample_index]:
+                dataset_names[sample_index] = source_names[sample_index]
 
         return [
             {
@@ -170,12 +205,15 @@ class SampledMediaRecorder(Callback):
                 "batch_index": self._batch_index,
                 "sample_index": sample_index,
                 "rank": rank,
-                "media_type": media_type,
+                "media_type": media_types[sample_index],
                 "dataset_name": dataset_names[sample_index],
                 "source_dataset_name": source_names[sample_index],
+                "source_id": source_ids[sample_index],
                 "sample_id": sample_id,
                 "media_url": media_urls[sample_index],
                 "caption": captions[sample_index] if self.record_caption else None,
+                "conversation": conversations[sample_index],
+                "media_items": json.dumps(media_items[sample_index], separators=(",", ":"), sort_keys=True),
             }
             for sample_index, sample_id in enumerate(sample_ids)
         ]
@@ -196,33 +234,46 @@ class SampledMediaRecorder(Callback):
                 pa.field("media_type", pa.string(), nullable=False),
                 pa.field("dataset_name", pa.string(), nullable=False),
                 pa.field("source_dataset_name", pa.string(), nullable=False),
+                pa.field("source_id", pa.string(), nullable=True),
                 pa.field("sample_id", pa.string(), nullable=False),
                 pa.field("media_url", pa.string(), nullable=False),
                 pa.field("caption", pa.string(), nullable=True),
+                pa.field("conversation", pa.string(), nullable=True),
+                pa.field("media_items", pa.string(), nullable=True),
             ]
         )
 
     def _upgrade_legacy_table_schema(self, existing: Any, storage_options: dict[str, str]) -> Any:
-        """Upgrade the two sampled-media schemas produced before captions became nullable."""
+        """Add nullable fields missing from older sampled-media tables."""
         import lance
-        import pyarrow as pa
 
         expected_schema = self._table_schema()
-        expected_base_schema = pa.schema([field for field in expected_schema if field.name != "caption"])
-        existing_base_schema = pa.schema([field for field in existing.schema if field.name != "caption"])
-        if not existing_base_schema.equals(expected_base_schema, check_metadata=False):
+        # A tuple in _table_schema() declaration order, not a set: the loop below appends
+        # missing columns in this order, and set iteration is hash-randomized -- two runs
+        # upgrading the same legacy table would otherwise produce different column orders.
+        optional_field_order = ("source_id", "caption", "conversation", "media_items")
+        optional_fields = frozenset(optional_field_order)
+        expected_by_name = {field.name: field for field in expected_schema}
+        existing_by_name = {field.name: field for field in existing.schema}
+        required_names = set(expected_by_name).difference(optional_fields)
+        if not required_names.issubset(existing_by_name) or not set(existing_by_name).issubset(expected_by_name):
+            return existing
+        if any(
+            existing_field.type != expected_by_name[name].type
+            or (name not in optional_fields and existing_field.nullable != expected_by_name[name].nullable)
+            for name, existing_field in existing_by_name.items()
+        ):
             return existing
 
-        caption_index = existing.schema.get_field_index("caption")
         schema_changed = False
-        if caption_index < 0:
-            # Passing a nullable field adds an all-null column with a metadata-only operation.
-            existing.add_columns(pa.field("caption", pa.string(), nullable=True))
-            schema_changed = True
-        else:
-            caption_field = existing.schema.field(caption_index)
-            if caption_field.type == pa.string() and not caption_field.nullable:
-                existing.alter_columns({"path": "caption", "nullable": True})
+        for name in optional_field_order:
+            existing_field = existing_by_name.get(name)
+            if existing_field is None:
+                # Nullable fields are added metadata-only; old fragments remain untouched.
+                existing.add_columns(expected_by_name[name])
+                schema_changed = True
+            elif not existing_field.nullable:
+                existing.alter_columns({"path": name, "nullable": True})
                 schema_changed = True
 
         if schema_changed:
@@ -291,7 +342,9 @@ class SampledMediaRecorder(Callback):
 
         existing = lance.dataset(self.output_uri, storage_options=storage_options)
         existing = self._upgrade_legacy_table_schema(existing, storage_options)
-        if not existing.schema.equals(schema, check_metadata=False):
+        if existing.schema.names != schema.names and set(existing.schema.names) == set(schema.names):
+            table = table.select(existing.schema.names)
+        if not existing.schema.equals(table.schema, check_metadata=False):
             raise ValueError(
                 f"Sample recorder schema mismatch for {self.output_uri!r}: expected {schema}, found {existing.schema}."
             )

@@ -104,7 +104,7 @@ class Cosmos3VFMNetworkConfig(PretrainedConfig):
         self.joint_attn_implementation = joint_attn_implementation
         self.use_multiview_flex_attention = use_multiview_flex_attention
         self.flex_attention_backend = flex_attention_backend
-        self.attention_scope = attention_scope
+        self.attention_scope: AttentionScope = attention_scope
         self.temporal_compression_factor_vision = temporal_compression_factor_vision
         self.natten_parameter_list = natten_parameter_list
         self.video_temporal_causal = video_temporal_causal

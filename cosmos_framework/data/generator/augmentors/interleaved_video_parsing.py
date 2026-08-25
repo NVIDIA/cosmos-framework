@@ -444,6 +444,15 @@ class VideoTransferAlignedLegacyChunkParsing(VideoTransferAlignedFullFramesParsi
 class VideoTransferAlignedChunkedFramesParsing(VideoTransferAlignedFullFramesParsing):
     """Decode RGB and aligned control videos for a selected caption chunk."""
 
+    def __init__(self, input_keys: list, output_keys: list | None = None, args: dict | None = None) -> None:
+        super().__init__(input_keys=input_keys, output_keys=output_keys, args=args)
+        self.min_num_frames = int(self.args.get("min_num_frames", 1))
+        assert self.min_num_frames >= 1, f"min_num_frames must be >= 1, got {self.min_num_frames}"
+        self.teacher_forcing_frames_per_chunk = int(self.args.get("teacher_forcing_frames_per_chunk", 1))
+        assert self.teacher_forcing_frames_per_chunk >= 1, (
+            f"teacher_forcing_frames_per_chunk must be >= 1, got {self.teacher_forcing_frames_per_chunk}"
+        )
+
     def _sample_frame_indices_for_chunk(
         self,
         decoder_len: int,
@@ -464,8 +473,12 @@ class VideoTransferAlignedChunkedFramesParsing(VideoTransferAlignedFullFramesPar
         if max_num_frames < 1:
             return [], stride
 
-        # Wan VAE temporal compression expects 1 + 4N video frames.
-        num_video_frames = 1 + 4 * ((max_num_frames - 1) // 4)
+        # Wan VAE compresses every four pixel frames after the first frame into one
+        # latent. Align the result to complete teacher-forcing chunks as well.
+        pixel_frames_per_chunk = 4 * self.teacher_forcing_frames_per_chunk
+        num_video_frames = 1 + pixel_frames_per_chunk * ((max_num_frames - 1) // pixel_frames_per_chunk)
+        if num_video_frames < self.min_num_frames:
+            return [], stride
         return frame_indices[:num_video_frames], stride
 
     def __call__(self, data_dict: dict) -> dict | None:
@@ -521,7 +534,8 @@ class VideoTransferAlignedChunkedFramesParsing(VideoTransferAlignedFullFramesPar
             )
             if len(frame_indices) == 0:
                 log.warning(
-                    f"VideoTransferAlignedChunkedFramesParsing: empty chunk after clamping/stride. "
+                    f"VideoTransferAlignedChunkedFramesParsing: chunk has fewer than "
+                    f"{self.min_num_frames} VAE-aligned frames after clamping/stride. "
                     f"chunk=[{chunk_start},{chunk_end}), aligned_decoder_len={aligned_decoder_len}, "
                     f"url: {data_dict['__url__']}, key: {data_dict['__key__']}",
                     rank0_only=False,
