@@ -269,7 +269,10 @@ class _BlockWeightProvider:
             )
 
         max_numel = max(self._block_numels)
-        device = self._entries[0][0][0].weight.device
+        # Blocks without generation-path linears are legitimate (e.g. a leading
+        # reasoner-only layer); take the device from the first block that has any.
+        first_nonempty = next(entries for entries in self._entries if entries)
+        device = first_nonempty[0][0].weight.device
         self._slots = (
             torch.empty(max_numel, dtype=self._dtype, device=device),
             torch.empty(max_numel, dtype=self._dtype, device=device),

@@ -504,3 +504,39 @@ def test_gpu_block_provider_bf16_slots_regardless_of_fp32_subclass_dtype() -> No
         assert output.dtype == torch.bfloat16
         torch.testing.assert_close(output, expected)
     runtime.reset()
+
+
+class _ReasonerOnlyLayer(nn.Module):
+    """A decoder-layer-like block with only a reasoner-path FP8 linear."""
+
+    def __init__(self, device: str = "cpu", features: int = 16) -> None:
+        super().__init__()
+        self.mlp = nn.Module()
+        self.mlp.up_proj = _make_fp8_linear(out_features=features, in_features=features, device=device)
+
+    def forward(self, inputs: torch.Tensor) -> torch.Tensor:
+        return self.mlp.up_proj(inputs)
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="block providers need CUDA streams")
+@pytest.mark.parametrize("cache_mode", ["gpu_block", "cpu_block"])
+def test_block_provider_tolerates_generation_free_leading_block(cache_mode: str) -> None:
+    """Block 0 with no generation-path linears must not break initialize();
+    later blocks' staged weights must still resolve correctly."""
+    net = nn.Module()
+    net.layers = nn.ModuleList([_ReasonerOnlyLayer(device="cuda"), _TinyMoTLayer(device="cuda")])
+    runtime = install_mixed_precision_runtime(
+        net,
+        _enabled_config(mixed_precision_w8a16_cache=cache_mode),
+        blocks=list(net.layers),
+    )
+    runtime.set_step(0, 4)  # W8A16 -> preload_first stages the empty block 0
+    inputs = torch.randn(2, 16, dtype=torch.bfloat16, device="cuda")
+    _ = net.layers[0](inputs)
+    output = net.layers[1](inputs)
+    weight = net.layers[1].mlp_moe_gen.up_proj.weight
+    expected = torch.nn.functional.linear(
+        inputs, weight.qdata.to(torch.bfloat16) * weight.scale.to(torch.bfloat16)
+    )
+    torch.testing.assert_close(output, expected)
+    runtime.reset()
