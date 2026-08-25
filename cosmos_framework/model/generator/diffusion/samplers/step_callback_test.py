@@ -56,6 +56,34 @@ def test_edm_invokes_callback_per_step_before_evaluations() -> None:
     assert min(evaluations) >= 1
 
 
+def test_edm_rk_multi_eval_callback_once_per_step_before_evaluations() -> None:
+    """RK solvers (e.g. 2mid) evaluate the model more than once per step; the
+    callback must still fire exactly once per step, before all of that step's
+    evaluations — so a per-step precision switch covers every evaluation."""
+    calls: list[tuple[int, int]] = []
+    evals_per_step: dict[int, int] = {}
+
+    def x0_fn(noisy: torch.Tensor, sigma: torch.Tensor) -> torch.Tensor:
+        assert calls, "model evaluated before any step callback"
+        evals_per_step[calls[-1][0]] = evals_per_step.get(calls[-1][0], 0) + 1
+        return torch.zeros_like(noisy)
+
+    sampler = EDMSampler()
+    sampler(
+        x0_fn,
+        torch.randn(1, 4),
+        num_steps=6,
+        solver_option="2mid",
+        step_callback=lambda i, n: calls.append((i, n)),
+    )
+    num_steps = calls[-1][1]
+    # exactly one callback per step, in order
+    assert [c[0] for c in calls] == list(range(num_steps))
+    # the RK 2mid branch ran multiple evaluations per step, all attributed to
+    # the step whose callback had already fired
+    assert all(count >= 2 for step, count in evals_per_step.items() if step < num_steps - 1), evals_per_step
+
+
 def test_callback_default_none_keeps_behavior() -> None:
     sampler = FixedStepSampler(t_list=[1.0, 0.5, 0.0])
     noise = torch.randn(8)
