@@ -13,8 +13,18 @@ import torch
 from cosmos_framework.model.attention.utils.safe_ops import log
 
 # Minimum cuDNN runtime version, in ``torch.backends.cudnn.version()`` encoding
-# (major * 10000 + minor * 100 + patch). 92000 == cuDNN 9.20.0.
-CUDNN_MIN_BACKEND_VERSION = 92000
+# (major * 10000 + minor * 100 + patch). 91500 == cuDNN 9.15.0.
+#
+# This backend dispatches through PyTorch's own cuDNN SDPA ATen op, which is
+# present and correct from 9.15. Requiring 9.20 silently excluded the whole
+# cuDNN path on stacks shipping 9.15.1 -- on Blackwell that left NATTEN as the
+# only survivor, since the arch-103 preference order is cudnn/natten/flash2 and
+# flash2 needs a flash-attn package the CUDA base image does not carry.
+# Measured on a GB300 (cuDNN 91501): cuDNN attention matched the other fused
+# backends numerically (max|err| 0.01562 against the math reference, identical
+# to FLASH and EFFICIENT) and cut Cosmos3-Nano LoRA SFT from 2.94s/step to
+# 2.62s/step with training loss preserved.
+CUDNN_MIN_BACKEND_VERSION = 91500
 
 
 def cudnn_supported() -> bool:
