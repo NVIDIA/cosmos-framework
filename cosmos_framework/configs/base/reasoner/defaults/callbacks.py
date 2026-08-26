@@ -9,6 +9,7 @@ from hydra.core.config_store import ConfigStore
 
 from cosmos_framework.callbacks.dataloader_state import DataLoaderStateCallback
 from cosmos_framework.callbacks.grad_clip import GradClip
+from cosmos_framework.callbacks.loss_spike_rollback import LossSpikeRollback
 from cosmos_framework.callbacks.hf_export import HFExportCallback
 from cosmos_framework.callbacks.iter_speed import IterSpeed
 from cosmos_framework.callbacks.learning_rate_logger import LearningRateLogger
@@ -46,6 +47,9 @@ def register_callbacks():
             save_s3="${upload_reproducible_setup}",
         ),
         grad_clip=L(GradClip)(clip_norm=1.0, force_finite=False),  # use model
+        # Registered after grad_clip only for readability; the guard reads the gradient
+        # norm in on_after_backward, which runs before any clipping regardless of order.
+        loss_spike_rollback=L(LossSpikeRollback)(enabled=False),  # use model + optimizer
         learning_rate_logger=L(LearningRateLogger)(every_n=10),
         low_precision=L(LowPrecisionCallback)(
             update_iter=1,
