@@ -194,10 +194,15 @@ _FP8_GENERATION_ARGS = (
 # hooks, which is the path that does not exist upstream, and it is the only
 # layout a Super-class FP8 model fits in. ``replicated`` guards the
 # single-device-weights path that worked before those hooks were added.
+# Both layouts follow MAX_GPUS so the product of the parallel degrees equals
+# WORLD_SIZE, which is what ParallelDims validates. `sharded` stays pure FSDP and
+# `replicated` pure context-parallel -- the distinction each case exists to
+# cover -- at whichever width the run has. cp_size is bounded by MAX_CP_SIZE=32,
+# so 4 and 8 are both in range.
 _FP8_LAYOUTS = {
     "sharded": (
         "--parallelism-preset=throughput",
-        "--dp-shard-size=8",
+        f"--dp-shard-size={MAX_GPUS}",
         "--dp-replicate-size=1",
         "--cp-size=1",
         "--cfgp-size=1",
@@ -206,7 +211,7 @@ _FP8_LAYOUTS = {
         "--parallelism-preset=latency",
         "--dp-shard-size=1",
         "--dp-replicate-size=1",
-        "--cp-size=8",
+        f"--cp-size={MAX_GPUS}",
         "--cfgp-size=1",
     ),
 }
@@ -389,10 +394,8 @@ def _require_gpus() -> None:
 
 
 # Markers use MAX_GPUS because the conftest rejects ``gpus(N)`` outside
-# ``ALL_NUM_GPUS = (0, 1, MAX_GPUS)``. Cases that genuinely need 8 ranks carry
-# their own skipif below: on a smaller host only the 4-rank case can run, and
-# forcing the others onto fewer ranks would change what they cover (ParallelDims
-# fails when the parallelism product does not equal world_size).
+# ``ALL_NUM_GPUS = (0, 1, MAX_GPUS)``. Every case here derives its parallelism
+# from the active width, so both supported widths are listed.
 if MAX_GPUS in (4, 8):
 
     @pytest.mark.level(2)
@@ -572,11 +575,6 @@ if MAX_GPUS in (4, 8):
 
     @pytest.mark.level(2)
     @pytest.mark.gpus(MAX_GPUS)
-    # Unlike the cases above, this one cannot simply follow MAX_GPUS: the FP8
-    # setup pins cp_size=8 / dp_shard_size=8, which ParallelDims rejects against
-    # a smaller WORLD_SIZE. Running it below 8 needs a different parallelism
-    # layout, i.e. a different thing under test.
-    @pytest.mark.skipif(MAX_GPUS < 8, reason="FP8 setup pins 8-way cp/dp_shard")
     @pytest.mark.parametrize("layout", sorted(_FP8_LAYOUTS))
     def test_nano_fp8_inference(tmp_path: Path, layout: str) -> None:
         """text2video from the ModelOpt static-FP8 Nano checkpoint, once per layout.
