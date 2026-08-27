@@ -102,6 +102,8 @@ class LossSpikeRollback(Callback):
         lr_backoff: float = 0.5,
         lr_recovery: float = 1.02,
         lr_min_scale: float = 0.1,
+        lr_ceiling_decay: float = 0.8,
+        baseline_inflation_cap: float = 4.0,
     ) -> None:
         super().__init__()
         self.enabled = enabled
@@ -113,13 +115,21 @@ class LossSpikeRollback(Callback):
         self.lr_backoff = lr_backoff
         self.lr_recovery = lr_recovery
         self.lr_min_scale = lr_min_scale
+        self.lr_ceiling_decay = lr_ceiling_decay
+        self.baseline_inflation_cap = baseline_inflation_cap
 
         self._norms: deque[float] = deque(maxlen=window)
         self._ring: deque[dict[str, Any]] = deque(maxlen=self.rollback_depth)
         self._pending_reason: str | None = None
         self._consecutive = 0
         self._lr_scale = 1.0
-        self._base_lrs: list[float] | None = None
+        # Ceiling that recovery walks back toward. Ratchets down on every rollback so a run
+        # that keeps tripping settles at a lower rate instead of climbing back to a rate it
+        # has already demonstrated it cannot hold.
+        self._lr_ceiling = 1.0
+        self._base_lrs: list[list[float]] | None = None
+        # Lowest median seen since arming: the run's demonstrated healthy scale.
+        self._healthy_baseline: float | None = None
         self.rollbacks = 0
 
     # ---------------------------------------------------------------- detection
@@ -134,9 +144,16 @@ class LossSpikeRollback(Callback):
             return None
         ordered = sorted(self._norms)
         mid = len(ordered) // 2
-        if len(ordered) % 2:
-            return ordered[mid]
-        return 0.5 * (ordered[mid - 1] + ordered[mid])
+        median = ordered[mid] if len(ordered) % 2 else 0.5 * (ordered[mid - 1] + ordered[mid])
+
+        # Anchor the baseline to the healthiest scale this run has demonstrated. Without
+        # this the baseline chases a deteriorating run upward: once the window fills with
+        # elevated norms, the relative test silently demands an ever larger spike to trip.
+        # Observed in practice -- a baseline that drifted from ~0.4 to 9.03 needed a norm
+        # above 90 to fire, so the guard went quiet exactly when it was needed most.
+        if self._healthy_baseline is None or median < self._healthy_baseline:
+            self._healthy_baseline = median
+        return min(median, self.baseline_inflation_cap * self._healthy_baseline)
 
     @torch.no_grad()
     def on_after_backward(self, model: "ImaginaireModel", iteration: int = 0) -> None:
@@ -206,7 +223,11 @@ class LossSpikeRollback(Callback):
                 if key in state and isinstance(state[key], torch.Tensor):
                     state[key].copy_(saved)
         # Everything newer than the restored point came after the poisoned step, so it is
-        # not a safe place to rewind to a second time.
+        # not a safe place to rewind to a second time. The gradient-norm history is NOT
+        # cleared alongside it: those samples were all taken before the spike (the spiking
+        # value is never appended), they describe the state we just rewound to, and
+        # discarding them forces the baseline to be rebuilt from post-rollback steps that
+        # may themselves be unhealthy.
         self._ring.clear()
         return True
 
@@ -226,7 +247,9 @@ class LossSpikeRollback(Callback):
                 self._base_lrs = [
                     [group["lr"] for group in opt.param_groups] for opt in _real_optimizers(optimizer)
                 ]
-        self._lr_scale = max(self.lr_min_scale, min(1.0, self._lr_scale * factor))
+        if factor < 1.0:
+            self._lr_ceiling = max(self.lr_min_scale, self._lr_ceiling * self.lr_ceiling_decay)
+        self._lr_scale = max(self.lr_min_scale, min(self._lr_ceiling, self._lr_scale * factor))
 
         if schedulers:
             for sched, bases in zip(schedulers, self._base_lrs):
@@ -248,7 +271,7 @@ class LossSpikeRollback(Callback):
 
         if self._pending_reason is None:
             self._consecutive = 0
-            if self._lr_scale < 1.0:
+            if self._lr_scale < self._lr_ceiling:
                 self._scale_lr(optimizer, scheduler, self.lr_recovery)
             self._capture(model, optimizer)
             return
@@ -266,7 +289,6 @@ class LossSpikeRollback(Callback):
         if self._restore(model, optimizer):
             self.rollbacks += 1
             self._scale_lr(optimizer, scheduler, self.lr_backoff)
-            self._norms.clear()
             log.warning(
                 f"loss-spike guard: rolled back at iteration {iteration} ({reason}); "
                 f"learning rate scaled to {self._lr_scale:.3f} of base [rollback #{self.rollbacks}]"

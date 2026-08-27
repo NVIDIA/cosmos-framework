@@ -92,3 +92,57 @@ def test_disabled_is_inert():
     _step(model, optimizer, scheduler, callback, 10.0)
     assert callback.rollbacks == 0
     assert not callback._ring, "disabled guard should not pay the snapshot memory cost"
+
+
+def test_baseline_does_not_chase_a_deteriorating_run():
+    """The failure that let a real run escape the guard.
+
+    Once the window fills with elevated norms the median rises, and a purely relative test
+    then demands an ever larger spike to trip. Observed in training: the baseline drifted
+    from ~0.4 to 9.03, so firing required a norm above 90 and the guard went quiet exactly
+    when it was needed. The baseline is anchored to the healthiest scale the run has shown.
+    """
+    model, optimizer, scheduler, callback = _harness(baseline_inflation_cap=4.0)
+    for _ in range(20):
+        _step(model, optimizer, scheduler, callback, 0.01)
+    healthy = callback._baseline()
+    assert healthy is not None
+
+    # Feed a sustained elevation an order of magnitude above healthy, short of tripping.
+    for _ in range(60):
+        for parameter in model.parameters():
+            parameter.grad = torch.full_like(parameter, 0.05)
+        callback.on_after_backward(model)
+        callback.on_before_zero_grad(model, optimizer, scheduler)
+
+    inflated = callback._baseline()
+    assert inflated <= 4.0 * healthy * 1.001, f"baseline inflated to {inflated} from {healthy}"
+
+
+def test_repeated_rollbacks_ratchet_the_learning_rate_down():
+    """A run that keeps tripping must not climb back to a rate it cannot hold."""
+    model, optimizer, scheduler, callback = _harness(max_consecutive=100)
+    for _ in range(20):
+        _step(model, optimizer, scheduler, callback, 0.01)
+
+    ceilings = []
+    for _ in range(3):
+        _step(model, optimizer, scheduler, callback, 10.0)  # spike
+        for _ in range(40):  # long clean stretch: recovery walks up to the ceiling
+            _step(model, optimizer, scheduler, callback, 0.01)
+        ceilings.append(callback._lr_ceiling)
+
+    assert ceilings == sorted(ceilings, reverse=True), f"ceiling did not ratchet down: {ceilings}"
+    assert ceilings[-1] < 1.0
+    assert callback._lr_scale <= callback._lr_ceiling + 1e-9
+
+
+def test_rollback_keeps_the_healthy_norm_window():
+    """Clearing the window on rollback discards the only healthy reference available."""
+    model, optimizer, scheduler, callback = _harness()
+    for _ in range(20):
+        _step(model, optimizer, scheduler, callback, 0.01)
+    before = len(callback._norms)
+    _step(model, optimizer, scheduler, callback, 10.0)
+    assert callback.rollbacks == 1
+    assert len(callback._norms) == before, "healthy gradient-norm history was discarded"
