@@ -104,6 +104,7 @@ class LossSpikeRollback(Callback):
         lr_min_scale: float = 0.1,
         lr_ceiling_decay: float = 0.8,
         baseline_inflation_cap: float = 4.0,
+        backoff_cooldown: int = 50,
     ) -> None:
         super().__init__()
         self.enabled = enabled
@@ -117,6 +118,7 @@ class LossSpikeRollback(Callback):
         self.lr_min_scale = lr_min_scale
         self.lr_ceiling_decay = lr_ceiling_decay
         self.baseline_inflation_cap = baseline_inflation_cap
+        self.backoff_cooldown = backoff_cooldown
 
         self._norms: deque[float] = deque(maxlen=window)
         self._ring: deque[dict[str, Any]] = deque(maxlen=self.rollback_depth)
@@ -130,6 +132,9 @@ class LossSpikeRollback(Callback):
         self._base_lrs: list[list[float]] | None = None
         # Lowest median seen since arming: the run's demonstrated healthy scale.
         self._healthy_baseline: float | None = None
+        # Iteration of the last learning-rate backoff, so a burst of spikes counts as one
+        # episode rather than as one escalation per rollback.
+        self._last_backoff: int | None = None
         self.rollbacks = 0
 
     # ---------------------------------------------------------------- detection
@@ -248,8 +253,16 @@ class LossSpikeRollback(Callback):
                     [group["lr"] for group in opt.param_groups] for opt in _real_optimizers(optimizer)
                 ]
         if factor < 1.0:
+            # Back off RELATIVE TO THE CEILING, not to the current scale. Compounding from
+            # the current scale makes a cluster of spikes multiply out: four rollbacks
+            # inside thirteen steps drove 0.5**4 straight into the floor, and the run then
+            # spent its remaining 274 steps at a tenth of the intended rate -- rescued from
+            # divergence but undertrained, which cost roughly ten points of accuracy.
+            # The ceiling carries the persistent penalty; this is the temporary dip.
             self._lr_ceiling = max(self.lr_min_scale, self._lr_ceiling * self.lr_ceiling_decay)
-        self._lr_scale = max(self.lr_min_scale, min(self._lr_ceiling, self._lr_scale * factor))
+            self._lr_scale = max(self.lr_min_scale, self._lr_ceiling * self.lr_backoff)
+        else:
+            self._lr_scale = max(self.lr_min_scale, min(self._lr_ceiling, self._lr_scale * factor))
 
         if schedulers:
             for sched, bases in zip(schedulers, self._base_lrs):
@@ -288,7 +301,12 @@ class LossSpikeRollback(Callback):
 
         if self._restore(model, optimizer):
             self.rollbacks += 1
-            self._scale_lr(optimizer, scheduler, self.lr_backoff)
+            # Rewinding repeatedly is cheap and safe; cutting the rate repeatedly is not.
+            # Only the first rollback of an episode moves the rate.
+            fresh_episode = self._last_backoff is None or (iteration - self._last_backoff) >= self.backoff_cooldown
+            if fresh_episode:
+                self._last_backoff = iteration
+                self._scale_lr(optimizer, scheduler, self.lr_backoff)
             log.warning(
                 f"loss-spike guard: rolled back at iteration {iteration} ({reason}); "
                 f"learning rate scaled to {self._lr_scale:.3f} of base [rollback #{self.rollbacks}]"

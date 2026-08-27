@@ -33,6 +33,20 @@ def _step(model, optimizer, scheduler, callback, grad_scale):
     optimizer.zero_grad(set_to_none=True)
 
 
+def _step_at(model, optimizer, scheduler, callback, grad_scale, iteration):
+    for parameter in model.parameters():
+        parameter.grad = torch.full_like(parameter, grad_scale)
+    callback.on_after_backward(model, iteration=iteration)
+    optimizer.step()
+    callback.on_before_zero_grad(model, optimizer, scheduler, iteration=iteration)
+    scheduler.step()
+    optimizer.zero_grad(set_to_none=True)
+
+
+def _spike_at(model, optimizer, scheduler, callback, iteration):
+    _step_at(model, optimizer, scheduler, callback, 10.0, iteration)
+
+
 def test_no_rollback_on_steady_gradients():
     model, optimizer, scheduler, callback = _harness()
     for _ in range(20):
@@ -54,7 +68,8 @@ def test_rollback_restores_weights_and_backs_off_lr():
     assert callback.rollbacks == 1, "guard did not fire on an injected spike"
     for name, parameter in model.named_parameters():
         torch.testing.assert_close(parameter.detach(), expected[name])
-    assert scheduler.base_lrs == [0.005], "learning rate was not halved on rollback"
+    # Backoff is ceiling-relative: ceiling ratchets 1.0 -> 0.8, then dips by 0.5.
+    assert scheduler.base_lrs == [0.01 * 0.8 * 0.5], f"unexpected rate {scheduler.base_lrs}"
 
 
 def test_lr_backoff_survives_scheduler_step():
@@ -146,3 +161,48 @@ def test_rollback_keeps_the_healthy_norm_window():
     _step(model, optimizer, scheduler, callback, 10.0)
     assert callback.rollbacks == 1
     assert len(callback._norms) == before, "healthy gradient-norm history was discarded"
+
+
+def test_clustered_rollbacks_do_not_compound_into_the_floor():
+    """The failure that rescued a run from divergence but left it undertrained.
+
+    Four rollbacks inside thirteen steps compounded 0.5**4 straight into the learning-rate
+    floor; the run then spent its remaining 274 steps at a tenth of the intended rate and
+    lost about ten points of accuracy. A burst of spikes is one episode, not four
+    escalations, and the dip is measured from the ceiling rather than from wherever the
+    scale happens to have landed.
+    """
+    model, optimizer, scheduler, callback = _harness(max_consecutive=100, backoff_cooldown=50)
+    for _ in range(20):
+        _step(model, optimizer, scheduler, callback, 0.01)
+
+    iteration = 0
+    for burst in range(4):  # four spikes a few steps apart: one episode
+        _spike_at(model, optimizer, scheduler, callback, iteration)
+        iteration += 1
+        for _ in range(3):  # clean steps repopulate the ring a rollback cleared
+            _step_at(model, optimizer, scheduler, callback, 0.01, iteration)
+            iteration += 1
+
+    assert callback.rollbacks == 4, "every spike should still be rewound"
+    assert callback._lr_scale > callback.lr_min_scale, (
+        f"clustered rollbacks collapsed the rate to the floor ({callback._lr_scale})"
+    )
+    assert callback._lr_ceiling > 0.5, f"ceiling over-ratcheted within one episode ({callback._lr_ceiling})"
+
+
+def test_separated_episodes_still_ratchet():
+    """Spikes far apart are genuinely separate episodes and should each cost rate."""
+    model, optimizer, scheduler, callback = _harness(max_consecutive=100, backoff_cooldown=10)
+    for _ in range(20):
+        _step(model, optimizer, scheduler, callback, 0.01)
+
+    ceilings = []
+    for episode in range(3):
+        it = episode * 100
+        _spike_at(model, optimizer, scheduler, callback, it)
+        ceilings.append(callback._lr_ceiling)
+        for offset in range(1, 6):  # clean steps rebuild the ring for the next episode
+            _step_at(model, optimizer, scheduler, callback, 0.01, it + offset)
+
+    assert ceilings == sorted(ceilings, reverse=True) and ceilings[-1] < ceilings[0]
