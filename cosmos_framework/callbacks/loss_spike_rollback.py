@@ -105,6 +105,7 @@ class LossSpikeRollback(Callback):
         lr_ceiling_decay: float = 0.8,
         baseline_inflation_cap: float = 4.0,
         backoff_cooldown: int = 50,
+        recovery_health_factor: float = 2.0,
     ) -> None:
         super().__init__()
         self.enabled = enabled
@@ -119,6 +120,7 @@ class LossSpikeRollback(Callback):
         self.lr_ceiling_decay = lr_ceiling_decay
         self.baseline_inflation_cap = baseline_inflation_cap
         self.backoff_cooldown = backoff_cooldown
+        self.recovery_health_factor = recovery_health_factor
 
         self._norms: deque[float] = deque(maxlen=window)
         self._ring: deque[dict[str, Any]] = deque(maxlen=self.rollback_depth)
@@ -189,6 +191,15 @@ class LossSpikeRollback(Callback):
 
         self._pending_reason = None
         self._norms.append(grad_norm)
+
+    def _is_healthy(self) -> bool:
+        """Is the current gradient-norm scale back near the run's demonstrated healthy one?"""
+        if self._healthy_baseline is None or len(self._norms) < self.min_observations:
+            return True  # not enough evidence to withhold recovery
+        ordered = sorted(self._norms)
+        mid = len(ordered) // 2
+        median = ordered[mid] if len(ordered) % 2 else 0.5 * (ordered[mid - 1] + ordered[mid])
+        return median <= self.recovery_health_factor * self._healthy_baseline
 
     # ------------------------------------------------------------ snapshot/undo
 
@@ -284,7 +295,12 @@ class LossSpikeRollback(Callback):
 
         if self._pending_reason is None:
             self._consecutive = 0
-            if self._lr_scale < self._lr_ceiling:
+            # Recover only once the run is demonstrably healthy again, not merely because
+            # this particular step did not spike. A degraded run looks clean between its
+            # spikes, so a recovery gated on "no spike this step" walks the rate back up
+            # while the model is still sick -- observed climbing to 0.627 of base while the
+            # median loss sat at 0.69, five times its healthy value, for 280 steps.
+            if self._lr_scale < self._lr_ceiling and self._is_healthy():
                 self._scale_lr(optimizer, scheduler, self.lr_recovery)
             self._capture(model, optimizer)
             return

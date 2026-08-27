@@ -206,3 +206,43 @@ def test_separated_episodes_still_ratchet():
             _step_at(model, optimizer, scheduler, callback, 0.01, it + offset)
 
     assert ceilings == sorted(ceilings, reverse=True) and ceilings[-1] < ceilings[0]
+
+
+def test_recovery_waits_for_the_run_to_be_healthy_again():
+    """A degraded run looks clean between spikes, and must not be handed its rate back.
+
+    Observed in training: the rate climbed back to 0.627 of base while the median loss sat
+    at 0.69, roughly five times its healthy value, and stayed there for 280 steps.
+    """
+    model, optimizer, scheduler, callback = _harness(recovery_health_factor=2.0)
+    for _ in range(20):
+        _step(model, optimizer, scheduler, callback, 0.01)
+    _step(model, optimizer, scheduler, callback, 10.0)  # spike -> backoff
+    suppressed = callback._lr_scale
+    assert suppressed < callback._lr_ceiling
+
+    # Sustained elevation well above healthy but below the spike threshold: no step trips
+    # the guard, yet the run is plainly not well.
+    for _ in range(80):
+        _step(model, optimizer, scheduler, callback, 0.08)
+    assert callback.rollbacks == 1, "elevation should not itself trip the guard"
+    # A few recovery steps land before the window accumulates enough elevated samples for
+    # the median to register the degradation; what matters is that recovery then stops
+    # well short of the ceiling, where an ungated 1.02-per-step walk would have arrived.
+    assert callback._lr_scale < suppressed * 1.15, (
+        f"rate recovered to {callback._lr_scale} while the run was still degraded"
+    )
+    assert callback._lr_scale < 0.7 * callback._lr_ceiling, (
+        f"rate reached {callback._lr_scale}, close to the ceiling {callback._lr_ceiling}"
+    )
+
+
+def test_recovery_resumes_once_gradients_return_to_normal():
+    model, optimizer, scheduler, callback = _harness(recovery_health_factor=2.0)
+    for _ in range(20):
+        _step(model, optimizer, scheduler, callback, 0.01)
+    _step(model, optimizer, scheduler, callback, 10.0)
+    suppressed = callback._lr_scale
+    for _ in range(80):  # genuinely healthy steps
+        _step(model, optimizer, scheduler, callback, 0.01)
+    assert callback._lr_scale > suppressed, "rate never recovered despite a healthy run"
