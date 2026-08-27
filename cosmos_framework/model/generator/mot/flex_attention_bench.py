@@ -33,20 +33,24 @@ what the causal prefix mostly buys is that the shape being timed is the shape a 
 runs, padding blocks included.
 
 Default scenario (the one this script was written for): 11 cameras at 720p, one
-fully-conditioning camera item (the control/clean stream) plus one noisy camera
-item (the video being generated), both on the same ``(view, frame)`` grid. That is
-the transfer layout the mask was designed for, so the mask keeps
+fully-conditioning camera item (the control/clean stream, positionally first) plus
+one noisy camera item (the video being generated, positionally last -- the RGB
+target), both on the same ``(view, frame)`` grid. That is the transfer layout the
+mask was designed for, so the mask keeps
 
-* noisy -> noisy: what ``--noisy-attention-scopes`` admits, by default the full square
-  within the sample (the dominant term),
-* noisy -> conditioning: same ``(frame, view)`` only,
-* conditioning -> conditioning: same ``(frame, view)`` and same item,
-* conditioning -> noisy: never.
+* noisy (RGB) -> RGB: what ``--attention-scopes`` admits, by default the full square
+  within the sample (the dominant term), reaching conditioning and noisy RGB keys
+  alike,
+* conditioning (RGB) -> conditioning (RGB): the same ``--attention-scopes`` reach,
+  confined to conditioning keys,
+* RGB (either) -> control: own view, any frame, unconditional on ``attention_scope``,
+* control -> control: the same own-view-any-frame reach, among control items only,
+* conditioning (RGB) -> noisy (RGB), or control -> RGB in either direction: never.
 
-Noisy attention scopes (``--noisy-attention-scopes``)
------------------------------------------------------
+Attention scopes (``--attention-scopes``)
+------------------------------------------
 
-The noisy square above is the largest quadrant of the mask, so the ``noisy_attention_scope``
+The noisy square above is the largest quadrant of the mask, so the ``attention_scope``
 config knob -- which restricts it to the query's own camera (``same_view``) or to its own
 camera and its own instant (``same_view_or_frame``) -- is the one mask choice that changes
 what a step costs rather than only what it may look at. Passing several scopes runs the whole
@@ -98,7 +102,7 @@ the FLOP count above but costs more than a full one to run, because the ``mask_m
 evaluated over every position in it and the unmasked fast path is gone -- twice over in the
 backward, which evaluates the mask in both of its passes. So a mask with a high partial
 share posts a lower MFU at the same visited-block count, and a narrower
-``noisy_attention_scope`` can be genuinely faster while reporting *worse* utilization: it
+``attention_scope`` can be genuinely faster while reporting *worse* utilization: it
 gets there by turning full blocks into partial ones.
 
 And ``mask_build`` evaluates the ``mask_mod`` over every block pair, so at these sequence
@@ -168,12 +172,12 @@ Examples:
     # What the narrower noisy->noisy scopes buy, forward + backward. The dense baseline is
     # identical for every scope and by far the slowest row, so a scope sweep skips it.
     python -m cosmos_framework.model.generator.mot.flex_attention_bench \
-        --noisy-attention-scopes all_views same_view_or_frame same_view --backward --skip-dense
+        --attention-scopes all_views same_view_or_frame same_view --backward --skip-dense
 
     # The same sweep down to the masks alone: their build cost and their sparsity, with no
     # q/k/v allocated and no attention run, so it also fits where the dense shapes do not.
     python -m cosmos_framework.model.generator.mot.flex_attention_bench \
-        --noisy-attention-scopes all_views same_view_or_frame same_view --mask-only
+        --attention-scopes all_views same_view_or_frame same_view --mask-only
 
     # I2V-style conditioning: first latent frame of every camera kept clean.
     python -m cosmos_framework.model.generator.mot.flex_attention_bench \
@@ -209,9 +213,10 @@ from torch import Tensor
 from torch.nn.attention.flex_attention import BlockMask
 
 from cosmos_framework.model.attention import attention
-from cosmos_framework.configs.base.defaults.flex_attention import NoisyAttentionScope
+from cosmos_framework.configs.base.defaults.flex_attention import AttentionScope
 from cosmos_framework.model.generator.mot.flex_attention import (
     FlexBackend,
+    MaskItem,
     _get_flash_flex_backend,
     _get_triton_flex_backend,
     build_multiview_block_mask,
@@ -270,8 +275,9 @@ class MultiviewScenario:
 
     Every sample owns ``num_noisy_items`` generated items plus ``num_cond_items``
     fully-conditioning control items, all sharing one ``(num_views,
-    latent_frames_per_view)`` grid -- the mask requires that, since conditioning
-    tokens reach noisy tokens by matching ``(frame, view)``.
+    latent_frames_per_view)`` grid -- the mask requires that, since RGB and control
+    tokens reach each other by matching ``view``. See :func:`build_pack_inputs` for how
+    the items are ordered and which one ends up the RGB target.
 
     ``noisy_cond_frames_per_view`` models I2V-style conditioning inside a generated
     item: its leading N latent frames of *every* camera are clean, which is what
@@ -284,7 +290,7 @@ class MultiviewScenario:
     contributes to the key stream, which GEN tokens of that sample all attend to. It is
     counted per sample, like every other token knob here.
 
-    ``noisy_attention_scope`` is the one field that changes the mask rather than the pack:
+    ``attention_scope`` is the one field that changes the mask rather than the pack:
     the tokens, the padding and every other quadrant are identical across scopes, so two
     scenarios differing only in it are timing the same attention under a narrower mask.
 
@@ -312,7 +318,7 @@ class MultiviewScenario:
     num_samples: int
     seq_alignment: int
     causal_seq_alignment: int
-    noisy_attention_scope: NoisyAttentionScope
+    attention_scope: AttentionScope
 
     def __post_init__(self) -> None:
         # Positivity is all these two need here: they are the backends' own block sizes, and
@@ -353,21 +359,40 @@ class MultiviewScenario:
         """Latent frames per camera that are generated, i.e. all but the I2V-style clean ones."""
         return self.latent_frames_per_view - self.noisy_cond_frames_per_view
 
-    @property
-    def noisy_cells_in_scope(self) -> int:
-        """``(frame, view)`` cells of noisy tokens one noisy query reaches under its scope.
+    def _cells_in_scope(self, frames: int) -> int:
+        """``(frame, view)`` cells of a ``num_views`` by ``frames`` subgrid one query reaches.
 
-        The noisy grid is ``num_views`` by :attr:`noisy_frames_per_view` and every one of its
-        cells holds the same number of noisy tokens, so this count over that grid's size is
-        exactly the fraction of the noisy square ``noisy_attention_scope`` keeps: all of it,
-        ``1/V`` of it, or the cross through the grid, ``(F + V - 1)/(V*F)``.
+        Every cell of a subgrid this shape holds the same number of tokens, so this count
+        over the subgrid is exactly the fraction of it ``attention_scope`` keeps: all of it,
+        ``1/V`` of it, or the cross through the grid, ``(F + V - 1)/(V*F)``. Used for the RGB
+        target's noisy cells, its conditioning cells and its full grid alike -- the scope
+        reach is the same formula over whichever of those three the query cell belongs to.
         """
-        frames = self.noisy_frames_per_view
         return {
             "all_views": self.num_views * frames,
             "same_view": frames,
             "same_view_or_frame": frames + self.num_views - 1,
-        }[self.noisy_attention_scope]
+        }[self.attention_scope]
+
+    @property
+    def noisy_cells_in_scope(self) -> int:
+        """``(frame, view)`` cells of noisy tokens one noisy query reaches under its scope."""
+        return self._cells_in_scope(self.noisy_frames_per_view)
+
+    @property
+    def cond_cells_in_scope(self) -> int:
+        """``(frame, view)`` cells of conditioning tokens one conditioning query reaches."""
+        return self._cells_in_scope(self.noisy_cond_frames_per_view)
+
+    @property
+    def full_cells_in_scope(self) -> int:
+        """``(frame, view)`` cells of the RGB target's whole grid one noisy query reaches.
+
+        Noisy queries reach every RGB key within scope, conditioning and noisy alike (unlike
+        conditioning queries, confined to conditioning keys), so their reach is this count
+        over the full grid rather than :attr:`noisy_cells_in_scope`'s noisy-only one.
+        """
+        return self._cells_in_scope(self.latent_frames_per_view)
 
     @property
     def patch_hw(self) -> tuple[int, int]:
@@ -455,10 +480,7 @@ class MultiviewScenario:
 class PackInputs:
     """The mask-building arguments a packed batch of this scenario would carry."""
 
-    token_shapes: list[tuple[int, int, int]]
-    condition_masks: list[Tensor]  # one [latent_t] bool mask per item
-    num_vision_items_per_sample: list[int]
-    num_views_per_vision_item: list[int]
+    items_per_sample: list[list[MaskItem]]  # control items first, then the generated ones
     full_q_offsets: Tensor  # [num_samples+1], int32: cumulative per-sample GEN offsets
     causal_offsets: Tensor  # [num_samples+1], int32: cumulative per-sample UND offsets
     dense_q_offsets: Tensor  # [num_samples+1], int32: GEN queries per sample
@@ -470,9 +492,12 @@ class PackInputs:
 def build_pack_inputs(scenario: MultiviewScenario, device: torch.device) -> PackInputs:
     """Materialize the per-item metadata for ``build_multiview_block_mask``.
 
-    Items are laid out noisy-first then control, matching the transfer packing order;
-    the order only names the ``cond_type_id`` values, since every mask rule is gated on
-    ``same_sample``.
+    Items are laid out control-first then noisy, matching the transfer packing order, and
+    ``is_control_per_item`` says so outright: the ``num_cond_items`` control items are
+    control, the ``num_noisy_items`` generated items are targets. Nothing is inferred from
+    item order, so ``num_noisy_items > 1`` gives several RGB target items sharing the RGB
+    rules rather than demoting all but the last to control -- see
+    :func:`allowed_pair_count`, which counts pairs on that same basis.
 
     The ``dense_*`` offsets describe the same attention for the varlen baseline: GEN
     queries against their own sample's UND and GEN keys, which is what
@@ -485,8 +510,21 @@ def build_pack_inputs(scenario: MultiviewScenario, device: torch.device) -> Pack
     pairs this adds are the padding rows against one sample's keys, a rounding error next
     to the counts below, and they keep every output row written.
     """
-    condition_masks: list[Tensor] = []
+
+    def _item(condition_mask: Tensor, is_control: bool) -> MaskItem:
+        return MaskItem(
+            token_shape=scenario.token_shape,
+            condition_mask=condition_mask,
+            num_views=scenario.num_views,
+            is_control=is_control,
+        )
+
+    items_per_sample: list[list[MaskItem]] = []
     for _ in range(scenario.num_samples):
+        sample_items = [
+            _item(torch.ones(scenario.latent_t, dtype=torch.bool, device=device), is_control=True)
+            for _ in range(scenario.num_cond_items)
+        ]
         for _ in range(scenario.num_noisy_items):
             mask = torch.zeros(scenario.latent_t, dtype=torch.bool, device=device)  # [latent_t]
             if scenario.noisy_cond_frames_per_view:
@@ -496,11 +534,9 @@ def build_pack_inputs(scenario: MultiviewScenario, device: torch.device) -> Pack
                 for view_idx in range(scenario.num_views):
                     start = view_idx * frames_per_view
                     mask[start : start + scenario.noisy_cond_frames_per_view] = True
-            condition_masks.append(mask)
-        for _ in range(scenario.num_cond_items):
-            condition_masks.append(torch.ones(scenario.latent_t, dtype=torch.bool, device=device))  # [latent_t]
+            sample_items.append(_item(mask, is_control=False))
+        items_per_sample.append(sample_items)
 
-    num_items = scenario.num_samples * scenario.items_per_sample
     offsets = [scenario.tokens_per_sample * i for i in range(scenario.num_samples + 1)]
     causal_offsets = [scenario.num_causal_tokens * i for i in range(scenario.num_samples + 1)]
 
@@ -512,10 +548,7 @@ def build_pack_inputs(scenario: MultiviewScenario, device: torch.device) -> Pack
         return max(end - start for start, end in zip(cumulative, cumulative[1:]))
 
     return PackInputs(
-        token_shapes=[scenario.token_shape] * num_items,
-        condition_masks=condition_masks,
-        num_vision_items_per_sample=[scenario.items_per_sample] * scenario.num_samples,
-        num_views_per_vision_item=[scenario.num_views] * num_items,
+        items_per_sample=items_per_sample,
         full_q_offsets=torch.tensor(offsets, dtype=torch.int32, device=device),  # [num_samples+1]
         causal_offsets=torch.tensor(causal_offsets, dtype=torch.int32, device=device),  # [num_samples+1]
         dense_q_offsets=torch.tensor(dense_q_offsets, dtype=torch.int32, device=device),  # [num_samples+1]
@@ -528,21 +561,26 @@ def build_pack_inputs(scenario: MultiviewScenario, device: torch.device) -> Pack
 def allowed_pair_count(scenario: MultiviewScenario) -> int:
     """Token pairs the multiview mask lets through, counted exactly from the geometry.
 
-    Every ``(frame, view)`` cell holds ``spatial_tokens`` tokens per item. With ``V``
-    views, ``F`` frames per view, ``S`` spatial tokens, ``C_n`` noisy items, ``C_c``
-    control items and ``c`` leading clean frames per view inside each noisy item, per
-    sample:
+    The ``C_c`` control items are control and the ``C_n`` generated items are RGB targets,
+    stated per item rather than inferred from order (see :func:`build_pack_inputs`), so
+    every generated item shares the RGB rules.
 
-    * noisy -> noisy covers the share of the noisy square that
-      ``noisy_attention_scope`` keeps: each of the ``V * (F - c)`` noisy cells reaches
-      :attr:`MultiviewScenario.noisy_cells_in_scope` of them, and every cell holds
-      ``C_n * S`` noisy tokens;
-    * noisy -> conditioning is confined to the query's own cell, which holds
-      ``C_c * S`` control tokens;
-    * conditioning -> conditioning is confined to the cell *and* the item, so each
-      conditioning item contributes ``S**2`` per cell it appears in: control items in
-      all ``V * F`` cells, noisy items only in their ``V * c`` clean cells;
-    * conditioning -> noisy contributes nothing;
+    A ``(frame, view)`` cell holds ``spatial_tokens`` (``S``) tokens per item, hence
+    ``C_n * S`` RGB tokens; a view holds ``C_c * F * S`` control tokens. Every generated
+    item carries the same ``c`` leading clean frames per view, so a cell is all-clean or
+    all-noisy together. With ``V`` views and ``F`` frames per view, per sample:
+
+    * control -> control is confined to the query's own view, any frame:
+      ``V * (C_c*F*S)**2``;
+    * RGB -> control is the same own-view-any-frame reach from the other direction: each
+      view's ``C_n*F*S`` RGB tokens reach its ``C_c*F*S`` control tokens;
+    * noisy -> RGB reaches every RGB key within ``attention_scope``, conditioning and noisy
+      alike: each of the ``V * (F - c)`` noisy cells reaches
+      :attr:`MultiviewScenario.full_cells_in_scope` of them, ``C_n*S`` tokens apiece;
+    * conditioning -> conditioning is the analogous within-scope reach, confined to the
+      ``V * c`` conditioning cells: each reaches
+      :attr:`MultiviewScenario.cond_cells_in_scope` of them;
+    * conditioning -> noisy, and control -> RGB, contribute nothing;
     * every GEN token, noisy or conditioning, reaches all of its sample's causal tokens,
       the one quadrant the mask leaves unrestricted.
     """
@@ -550,16 +588,19 @@ def allowed_pair_count(scenario: MultiviewScenario) -> int:
     frames = scenario.latent_frames_per_view
     spatial = scenario.spatial_tokens
     clean = scenario.noisy_cond_frames_per_view
-    noisy_items = scenario.num_noisy_items
-    cond_items = scenario.num_cond_items
+    rgb_cell_tokens = scenario.num_noisy_items * spatial
+    control_tokens_per_view = scenario.num_cond_items * frames * spatial
+
+    control_to_control = views * control_tokens_per_view**2
+    rgb_to_control = views * (scenario.num_noisy_items * frames * spatial) * control_tokens_per_view
 
     noisy_cells = views * (frames - clean)
-    cell_noisy_tokens = noisy_items * spatial
-    noisy_to_noisy = noisy_cells * scenario.noisy_cells_in_scope * cell_noisy_tokens**2
-    noisy_to_cond = noisy_cells * cell_noisy_tokens * (cond_items * spatial)
-    cond_to_cond = (views * frames * cond_items + views * clean * noisy_items) * spatial**2
+    noisy_to_rgb = noisy_cells * scenario.full_cells_in_scope * rgb_cell_tokens**2
+    cond_cells = views * clean
+    cond_to_cond = cond_cells * scenario.cond_cells_in_scope * rgb_cell_tokens**2
+
     gen_to_und = scenario.tokens_per_sample * scenario.num_causal_tokens
-    return scenario.num_samples * (noisy_to_noisy + noisy_to_cond + cond_to_cond + gen_to_und)
+    return scenario.num_samples * (control_to_control + rgb_to_control + noisy_to_rgb + cond_to_cond + gen_to_und)
 
 
 def dense_pair_count(scenario: MultiviewScenario) -> int:
@@ -588,7 +629,7 @@ class MaskBlocks:
     honest cost proxy for achieved TFLOP/s and MFU, with :func:`allowed_pair_count` as the
     lower bound a perfectly block-aligned mask would reach.
 
-    :attr:`partial_fraction` is the reason a narrower ``noisy_attention_scope`` can post a
+    :attr:`partial_fraction` is the reason a narrower ``attention_scope`` can post a
     lower MFU than the scope it beats. Narrowing turns full blocks into empty ones, but it also
     turns some into partial ones -- the boundaries of the rule land inside blocks -- and those
     are both more expensive than a full block and less useful, so the visited-pair count that
@@ -833,15 +874,12 @@ def run_scenario(
             return build_multiview_block_mask(
                 seq_len=scenario.seq_len,
                 full_q_offsets=pack.full_q_offsets,
-                token_shapes=pack.token_shapes,
-                condition_masks=pack.condition_masks,
-                num_vision_items_per_sample=pack.num_vision_items_per_sample,
-                num_views_per_vision_item=pack.num_views_per_vision_item,
+                items_per_sample=pack.items_per_sample,
                 device=device,
                 block_size=block_size,
                 num_und=scenario.causal_seq_len,
                 causal_offsets=pack.causal_offsets,
-                noisy_attention_scope=scenario.noisy_attention_scope,
+                attention_scope=scenario.attention_scope,
             )
 
         latencies, peak, error = time_call(
@@ -1022,7 +1060,7 @@ def print_scenario(scenario: MultiviewScenario, stats: dict, backends: Sequence[
     dense_pairs = stats["dense_pairs"]
     allowed = stats["allowed_pairs"]
     print(
-        f"  mask (noisy scope {scenario.noisy_attention_scope!r}): allowed pairs {allowed:.3e} "
+        f"  mask (noisy scope {scenario.attention_scope!r}): allowed pairs {allowed:.3e} "
         f"of dense {dense_pairs:.3e} = {100.0 * allowed / dense_pairs:.1f}%"
     )
     # One line per mask built: what the kernel is left to visit, and how much of that it has
@@ -1101,7 +1139,7 @@ def print_projection(rows: list[Row], num_layers: int) -> None:
 
 @dataclass(frozen=True)
 class ScopeRun:
-    """One point of the ``noisy_attention_scopes`` sweep, kept for :func:`print_scope_comparison`."""
+    """One point of the ``attention_scopes`` sweep, kept for :func:`print_scope_comparison`."""
 
     scenario: MultiviewScenario
     rows: list[Row]
@@ -1130,7 +1168,7 @@ SCOPE_COMPARISON_VARIANTS: tuple[tuple[str, str], ...] = (
 
 
 def print_scope_comparison(runs: Sequence[ScopeRun]) -> None:
-    """Compare a ``noisy_attention_scopes`` sweep against its first entry.
+    """Compare a ``attention_scopes`` sweep against its first entry.
 
     The scope narrows the noisy->noisy quadrant and nothing else, and every scope runs the
     same pack, so the pairs it drops are the whole of the saving. Two ratios bound what a
@@ -1163,10 +1201,10 @@ def print_scope_comparison(runs: Sequence[ScopeRun]) -> None:
     narrower mask did not get sparser at all, which at these sizes should not happen.
     """
     base = runs[0]
-    scope_width = max(18, *(len(run.scenario.noisy_attention_scope) for run in runs))
+    scope_width = max(18, *(len(run.scenario.attention_scope) for run in runs))
     masks = [name for name in SCOPE_COMPARISON_MASKS if f"visited_pairs{mask_stats_suffix(name)}" in base.stats]
     print()
-    print(f"Scope comparison, against the {base.scenario.noisy_attention_scope!r} baseline:")
+    print(f"Scope comparison, against the {base.scenario.attention_scope!r} baseline:")
 
     headers = ["noisy scope", "allowed%", "pairs"]
     widths = [scope_width, 9, 8]
@@ -1179,7 +1217,7 @@ def print_scope_comparison(runs: Sequence[ScopeRun]) -> None:
         dense_pairs = run.stats["dense_pairs"]
         allowed = run.stats["allowed_pairs"]
         cells = [
-            run.scenario.noisy_attention_scope,
+            run.scenario.attention_scope,
             f"{100.0 * allowed / dense_pairs:.2f}",
             _format_ratio(_ratio(base.stats["allowed_pairs"], allowed)),
         ]
@@ -1220,7 +1258,7 @@ def print_scope_comparison(runs: Sequence[ScopeRun]) -> None:
                 format_row(
                     [
                         variant,
-                        run.scenario.noisy_attention_scope,
+                        run.scenario.attention_scope,
                         f"{row.median_ms:.3f}",
                         f"{measured:.2f}x",
                         "-" if math.isnan(blocks) else f"{100.0 * measured / blocks:.0f}%",
@@ -1267,7 +1305,7 @@ class BenchConfig:
     """Causal (understanding/caption) tokens per sample, prefixed to the key stream; 0 for GEN->GEN only."""
     num_samples: int = 1
     """Samples packed into the batch."""
-    noisy_attention_scopes: list[NoisyAttentionScope] = field(default_factory=lambda: ["all_views"])
+    attention_scopes: list[AttentionScope] = field(default_factory=lambda: ["all_views"])
     """Noisy->noisy scopes to benchmark; one run per value, all compared against the first."""
     num_q_heads: int = 32
     """Query heads (Cosmos3 16B/8B: 32)."""
@@ -1308,13 +1346,13 @@ class BenchConfig:
         pixel_frames: int,
         seq_alignment: int,
         causal_seq_alignment: int,
-        noisy_attention_scope: NoisyAttentionScope,
+        attention_scope: AttentionScope,
     ) -> MultiviewScenario:
         """The scenario for one point of the ``pixel_frames_per_view`` x scope sweep."""
         return MultiviewScenario(
             seq_alignment=seq_alignment,
             causal_seq_alignment=causal_seq_alignment,
-            noisy_attention_scope=noisy_attention_scope,
+            attention_scope=attention_scope,
             num_views=self.num_views,
             pixel_frames_per_view=pixel_frames,
             resolution_hw=self.resolution_hw,
@@ -1346,7 +1384,7 @@ def emit_json_rows(
             json.dumps(
                 {
                     "variant": row.variant,
-                    "noisy_attention_scope": scenario.noisy_attention_scope,
+                    "attention_scope": scenario.attention_scope,
                     "num_views": scenario.num_views,
                     "pixel_frames_per_view": scenario.pixel_frames_per_view,
                     "latent_frames_per_view": scenario.latent_frames_per_view,
@@ -1409,11 +1447,11 @@ def main(config: BenchConfig) -> None:
             )
 
     for pixel_frames in config.pixel_frames_per_view:
-        # One ScopeRun per noisy_attention_scope, all over the same pack, so the comparison
+        # One ScopeRun per attention_scope, all over the same pack, so the comparison
         # below attributes every difference between them to the mask.
         runs: list[ScopeRun] = []
-        for noisy_attention_scope in config.noisy_attention_scopes:
-            scenario = config.scenario(pixel_frames, seq_alignment, causal_seq_alignment, noisy_attention_scope)
+        for attention_scope in config.attention_scopes:
+            scenario = config.scenario(pixel_frames, seq_alignment, causal_seq_alignment, attention_scope)
             rows, stats = run_scenario(scenario, config, device, triton_backend, flash_backend)
             runs.append(ScopeRun(scenario, rows, stats))
 

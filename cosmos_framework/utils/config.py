@@ -392,7 +392,7 @@ class Profiling:
     # CUDA memory snapshot: set this True to dump allocator snapshots.
     enable_memory_snapshot: bool = False
     save_s3: bool = False
-    profile_freq: int = 1
+    profile_freq: int = 100
     # Number of warmup iterations before the active profile iterations.
     profile_warmup: int = 3
     # Number of consecutive active iterations to capture in one trace.
@@ -524,6 +524,12 @@ class Config:
 
     def validate(self) -> None:
         """Validate that the config has all required fields."""
+
+        # The broadcast below is the job's first world-size collective, so it is where the world NCCL
+        # communicator actually gets built. Build it explicitly and under a deadline first, so a
+        # cross-domain fabric fault reports itself here instead of hanging inside config validation
+        # until an external reaper reclaims the allocation.
+        distributed.ensure_world_communicator()
 
         # broadcast job.name across all ranks to make sure it is consistent
         # otherwise, unaligned job names leads unaligned path to save checkpoints

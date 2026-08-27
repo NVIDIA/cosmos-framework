@@ -35,6 +35,8 @@ class DurationFPSTextTimeStamps(Augmentor):
             - fps_key (str): Key for FPS value in data_dict. Default: "conditioning_fps"
             - template (str): Format string for metadata text. Default: DEFAULT_TEMPLATE constant
             - separator (str): Separator between caption and metadata. Default: ". "
+            - force_separator (bool): Always use separator instead of punctuation-aware spacing.
+              Default: False.
             - enabled (bool): Whether augmentation is enabled. Default: True
             - skip_on_error (bool): If True, skip on errors and return original data_dict. If False, return None. Default: True
             - num_multiplier_key (str): Key for num_multiplier value in data_dict. Default: "num_multiplier"
@@ -54,6 +56,7 @@ class DurationFPSTextTimeStamps(Augmentor):
         self.fps_key = args.get("fps_key", "conditioning_fps") if args else "conditioning_fps"
         self.template = args.get("template", DEFAULT_TEMPLATE) if args else DEFAULT_TEMPLATE
         self.default_separator = args.get("separator", ". ") if args else ". "
+        self.force_separator: bool = args.get("force_separator", False) if args else False
         self.enabled = args.get("enabled", True) if args else True
         self.skip_on_error = args.get("skip_on_error", True) if args else True
         self.num_multiplier_key = args.get("num_multiplier_key", "num_multiplier") if args else "num_multiplier"
@@ -118,8 +121,11 @@ class DurationFPSTextTimeStamps(Augmentor):
                 # Case 1: Caption is a string (existing behavior).
                 metadata_text = self.template.format(duration=duration, fps=fps)
 
-                # Choose separator based on whether caption ends with a period
-                separator = " " if caption.rstrip().endswith(".") else self.default_separator
+                # Preserve the existing punctuation-aware default unless a caller
+                # explicitly needs a structural section boundary.
+                separator = self.default_separator
+                if not self.force_separator and caption.rstrip().endswith("."):
+                    separator = " "
 
                 # Update caption text
                 data_dict[self.caption_key] = caption + separator + metadata_text

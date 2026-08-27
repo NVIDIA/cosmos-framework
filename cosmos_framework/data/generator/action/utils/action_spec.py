@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: OpenMDW-1.1
 
-"""Action-vector specification: per-dim type label + idle thresholds.
+"""Shared action-vector specification: per-dim type label + idle thresholds.
 
 Single concept: every column of an action vector has a :class:`DimType` label.
 Idle detection iterates by type and applies the matching algorithm:
@@ -34,7 +34,7 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import ClassVar
 
-from cosmos_framework.data.generator.action.pose_utils import (
+from cosmos_framework.data.generator.action.utils.pose_utils import (
     RotationConvention,
     _identity_rotation_vector,
 )

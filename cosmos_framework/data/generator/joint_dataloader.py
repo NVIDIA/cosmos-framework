@@ -2,10 +2,11 @@
 # SPDX-License-Identifier: OpenMDW-1.1
 
 import math
+import multiprocessing
 import queue
 import threading
 from collections import deque
-from collections.abc import Iterator, Mapping
+from collections.abc import Iterator, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from typing import Any, ClassVar, Dict, Union
@@ -17,6 +18,7 @@ from torch.utils.data.dataloader import default_collate
 
 from cosmos_framework.utils.lazy_config import instantiate
 from cosmos_framework.utils import log
+from cosmos_framework.utils.generator.cost_model.budget import IterationTimeBudget, IterationTimeBudgetConfig
 from cosmos_framework.data.generator.drop_sample_contract import DROP_SAMPLE_KEY, DROP_SAMPLE_REASON_KEY
 from cosmos_framework.model.generator.tokenizers.uniae.frame_math import (
     get_uniae_chunk_frames,
@@ -140,8 +142,12 @@ def custom_collate_fn(batch):
         "sequence_plan",
         "sound",
         "raw_action_dim",
+        "action_valid_mask",
         "image_size",
         "action_processing_record",
+        # Like "video": a per-sample list of range clips, which default_collate would try to
+        # stack even though the two sensors' clips differ in length and resolution.
+        "lidar",
         DROP_SAMPLE_KEY,
         DROP_SAMPLE_REASON_KEY,
         *_ACTION_SAMPLER_METADATA_KEYS,
@@ -243,6 +249,9 @@ class _PackingMetrics:
     dropped_action_sampler_draw_counts: list[int] = field(default_factory=list)
     from_buffer: int = 0
     from_workers: int = 0
+    # Sum of per-sample cost-model seconds over the batch. Stays 0 when no
+    # iteration-time budget is configured, since the cost model is not consulted.
+    sample_seconds: float = 0.0
 
     STATS_SPEC: ClassVar[list[tuple[str, str, str]]] = [
         # (batch_key, wandb_suffix, aggregation_type)
@@ -252,16 +261,29 @@ class _PackingMetrics:
         ("_from_workers", "from_workers", "list"),
         ("_buffer_size", "buffer_size", "list"),
         ("_dropped_count", "dropped", "scalar"),
+        # Milliseconds rather than seconds because the monitor aggregates these as ints.
+        ("_projected_iteration_ms", "projected_iteration_ms", "list"),
     ]
 
-    def attach_to(self, output_batch: dict, buffer_size: int) -> None:
-        """Write packing statistics into the output batch dict."""
+    def attach_to(self, output_batch: dict, buffer_size: int, projected_iteration_sec: float | None = None) -> None:
+        """Write packing statistics into the output batch dict.
+
+        Args:
+            output_batch: Batch to annotate.
+            buffer_size: Samples left over in the look-ahead buffer.
+            projected_iteration_sec: Cost-model projection of this batch's
+                iteration time, or ``None`` when no budget is configured (in which
+                case the metric is left off the batch entirely rather than logged
+                as a misleading zero).
+        """
         output_batch["_num_tokens"] = self.current_sequence_length
         output_batch["_num_samples"] = self.num_samples
         output_batch["_from_buffer"] = self.from_buffer
         output_batch["_from_workers"] = self.from_workers
         output_batch["_buffer_size"] = buffer_size
         output_batch["_dropped_count"] = self.dropped_count
+        if projected_iteration_sec is not None:
+            output_batch["_projected_iteration_ms"] = int(round(projected_iteration_sec * 1000))
         if self.dropped_action_sampler_draw_counts:
             output_batch[ACTION_SAMPLER_DROPPED_DRAW_COUNT_KEY] = list(self.dropped_action_sampler_draw_counts)
 
@@ -398,6 +420,8 @@ class JointDataLoader(webdataset.WebLoader):
         patch_spatial: int,
         max_sequence_length: int | None,
         max_samples_per_batch: int | None,
+        lidar_spatial_compression: Sequence[int] | None = None,
+        lidar_temporal_compression_factor: int | None = None,
         sound_latent_fps: float = 0,
         audio_sample_rate: int = 48000,
         prewarm: bool = True,
@@ -407,6 +431,8 @@ class JointDataLoader(webdataset.WebLoader):
         uniae_chunk_frames: int | Mapping[str, int] | None = None,
         uniae_pad_frames: int | None = None,
         lazy_initialize_child_iterators: bool = False,
+        iteration_time_budget: IterationTimeBudgetConfig | None = None,
+        forkserver_preload_modules: list[str] | None = None,
     ) -> None:
         """
         Initialize the JointDataLoader with multiple datasets.
@@ -416,12 +442,21 @@ class JointDataLoader(webdataset.WebLoader):
         Vice versa, to use max_samples_per_batch, max_sequence_length needs to be None.
         max_sequence_length and max_samples_per_batch cannot both be None simultaneously.
 
+        ``iteration_time_budget`` is an independent, additional ceiling: when set, a batch
+        grows only while it satisfies both the token limit above and the projected
+        iteration time.
+
         Args:
             dataloaders: key - dataset_name; value - {"dataloader": dataloader, "ratio": data_ratio}
             tokenizer_spatial_compression_factor: The spatial compression factor of the tokenizer.
             tokenizer_temporal_compression_factor: The temporal compression factor of the tokenizer.
             patch_spatial: Spatial pathification factor.
             max_samples_per_batch: Max number of samples per packed batch (alternative to max_sequence_length).
+            lidar_spatial_compression: ``(height, width)`` compression of the LiDAR VAE. Required only
+                for streams whose samples carry a ``lidar`` key, whose clips are costed with the
+                LiDAR VAE rather than the camera's — the two compress time differently (4x versus
+                1x), and an item costed with the wrong factor silently over-packs the batch.
+            lidar_temporal_compression_factor: Temporal compression of the LiDAR VAE.
             sound_latent_fps: Sound tokenizer latent rate in Hz (e.g. 25). If 0, sound tokens are not counted.
             audio_sample_rate: Audio sample rate in Hz (e.g. 48000). Used with sound_latent_fps to estimate
                 sound token count.
@@ -436,6 +471,11 @@ class JointDataLoader(webdataset.WebLoader):
                 now but defer ``iter(child_dataloader)`` and optional prewarm until
                 this joint loader is iterated.  This lets resume logic restore
                 dataloader-owned sampler state before PyTorch workers prefetch.
+            iteration_time_budget: Optional cost-model ceiling on the projected
+                wall-clock time of one iteration. ``None``, or a config whose
+                ``iteration_time_target`` is ``None``, packs on tokens alone.
+            forkserver_preload_modules: Optional modules imported once by the
+                multiprocessing forkserver before it creates child workers.
 
         Example:
             joint_loader = IterativeJointDataLoader(
@@ -455,6 +495,25 @@ class JointDataLoader(webdataset.WebLoader):
         self.lookahead_limits: list[int] = []
         self.tokenizer_spatial_compression_factor = tokenizer_spatial_compression_factor
         self.tokenizer_temporal_compression_factor = tokenizer_temporal_compression_factor
+        self.lidar_spatial_compression = (
+            tuple(int(factor) for factor in lidar_spatial_compression)
+            if lidar_spatial_compression is not None
+            else None
+        )
+        if self.lidar_spatial_compression is not None and (
+            len(self.lidar_spatial_compression) != 2 or any(factor <= 0 for factor in self.lidar_spatial_compression)
+        ):
+            raise ValueError(
+                "lidar_spatial_compression must contain two positive factors "
+                f"(height, width), got {self.lidar_spatial_compression}"
+            )
+        self.lidar_temporal_compression_factor = (
+            int(lidar_temporal_compression_factor) if lidar_temporal_compression_factor is not None else None
+        )
+        if self.lidar_temporal_compression_factor is not None and self.lidar_temporal_compression_factor <= 0:
+            raise ValueError(
+                f"lidar_temporal_compression_factor must be positive, got {self.lidar_temporal_compression_factor}"
+            )
         self.patch_spatial = patch_spatial
         self.max_sequence_length = max_sequence_length
         self.max_samples_per_batch = max_samples_per_batch
@@ -463,6 +522,7 @@ class JointDataLoader(webdataset.WebLoader):
         if prewarm_concurrency < 1:
             raise ValueError(f"prewarm_concurrency must be at least 1, got {prewarm_concurrency}.")
         self.prewarm_concurrency = prewarm_concurrency
+        self.forkserver_preload_modules: list[str] = list(forkserver_preload_modules or [])
         self.default_lookahead_limit = int(default_lookahead_limit)
         self.uniae_pad_frames = int(uniae_pad_frames) if uniae_pad_frames is not None else None
         self.uniae_chunk_frames = self._normalize_uniae_chunk_frames(uniae_chunk_frames)
@@ -474,6 +534,13 @@ class JointDataLoader(webdataset.WebLoader):
         assert (self.max_sequence_length is None) != (self.max_samples_per_batch is None), (
             "Exactly one of max_sequence_length or max_samples_per_batch must be None, but not both."
         )
+
+        self.iteration_time_budget: IterationTimeBudget | None = (
+            iteration_time_budget.build() if iteration_time_budget is not None else None
+        )
+        if self.iteration_time_budget is not None:
+            log.info(f"JointDataLoader: packing to {self.iteration_time_budget.describe()}")
+            self.iteration_time_budget.warn_if_unreachable()
 
         _lookahead_overrides: Dict[str, int] = dict(lookahead_limits) if lookahead_limits else {}
         unknown = set(_lookahead_overrides) - set(dataloaders)
@@ -517,6 +584,17 @@ class JointDataLoader(webdataset.WebLoader):
         """Create child iterators and optionally prewarm them once."""
         if self._child_iterators_initialized:
             return
+        if self.forkserver_preload_modules:
+            preload_modules = list(dict.fromkeys(["__main__", *self.forkserver_preload_modules]))
+            multiprocessing.set_forkserver_preload(preload_modules)
+            log.info(
+                f"JointDataLoader: configured forkserver preload modules: {preload_modules}",
+                rank0_only=False,
+            )
+        log.info(
+            f"JointDataLoader: initializing {len(self.dataloader_list)} child iterator(s).",
+            rank0_only=False,
+        )
         self.dataloaders = [iter(dataloader) for dataloader in self.dataloader_list]
         self.buffers = [deque() for _ in range(len(self.dataloader_list))]
         self._child_iterators_initialized = True
@@ -543,6 +621,30 @@ class JointDataLoader(webdataset.WebLoader):
             "JointDataLoader: filtered drop-sample " + _format_drop_sample_log_fields(sample, dataset_name, drop_count),
             rank0_only=False,
         )
+
+    def _num_lidar_tokens(self, data_batch: Mapping[str, Any]) -> int:
+        """Cost the sample's LiDAR range clips with the LiDAR VAE's own compression.
+
+        The LiDAR VAE does not compress time, so costing a sweep clip with the camera's 4x
+        would undercount it fourfold and silently over-pack the batch.
+        """
+        clips = data_batch.get("lidar")
+        if not clips:
+            return 0
+        if self.lidar_spatial_compression is None or self.lidar_temporal_compression_factor is None:
+            raise ValueError(
+                "This batch carries a LiDAR stream, but the loader has no LiDAR compression factors. "
+                "Set lidar_spatial_compression and lidar_temporal_compression_factor."
+            )
+        spatial_h, spatial_w = self.lidar_spatial_compression
+        num_tokens = 0
+        for clip in clips:
+            _, T, H, W = clip.shape
+            patch_h = math.ceil(H // spatial_h / self.patch_spatial)
+            patch_w = math.ceil(W // spatial_w / self.patch_spatial)
+            latent_t = 1 + (T - 1) // self.lidar_temporal_compression_factor
+            num_tokens += patch_h * patch_w * latent_t
+        return num_tokens
 
     def _normalize_uniae_chunk_frames(
         self, uniae_chunk_frames: int | Mapping[str, int] | None
@@ -577,6 +679,7 @@ class JointDataLoader(webdataset.WebLoader):
         """Produce and buffer one batch from a single dataloader."""
         import time
 
+        log.info(f"Pre-warm: starting dataloader {name!r}", rank0_only=False)
         started_at = time.monotonic()
         try:
             batch = next(dl_iter)
@@ -670,6 +773,28 @@ class JointDataLoader(webdataset.WebLoader):
         Returns:
             int: The number of tokens per sample.
         """
+        und_tokens, gen_tokens = self._compute_token_split_per_sample(data_batch)
+        return und_tokens + gen_tokens
+
+    def _compute_token_split_per_sample(self, data_batch: dict) -> tuple[int, int]:
+        """
+        Split one sample's packed length into the understanding and generation pathways.
+
+        The two towers of the MoT attend over the same packed sequence but cost
+        different amounts per token, so the cost model prices them separately. The
+        two returned counts always sum to ``_compute_num_tokens_per_sample``.
+
+        The three structural markers (``<eos>``, ``<vision_start>``, ``<vision_end>``)
+        are attributed to the stream they delimit rather than broken out, which keeps
+        that sum exact at the cost of a handful of tokens landing on one side or the
+        other.
+
+        Args:
+            data_batch (dict): The data batch containing the text tokens.
+
+        Returns:
+            tuple[int, int]: ``(understanding tokens, generation tokens)``.
+        """
 
         # The token sequence we have is
         # <text tokens> <eos> <vision_start> <image tokens> <vision_end> [<action tokens>]
@@ -680,14 +805,15 @@ class JointDataLoader(webdataset.WebLoader):
         # Action tokens have 1 token per time step (no spatial dimension)
 
         has_text_tokens = "text_token_ids" in data_batch
-        num_tokens = 0
+        und_tokens = 0
+        gen_tokens = 0
         if has_text_tokens:
             text_token_ids = data_batch["text_token_ids"]
             if isinstance(text_token_ids, list):
                 num_text_tokens = text_token_ids[0].shape[0]
             else:
                 num_text_tokens = text_token_ids.shape[1]
-            num_tokens += num_text_tokens + 1
+            und_tokens = num_text_tokens + 1
 
         # Vision part
         is_image_batch = "images" in data_batch
@@ -738,7 +864,11 @@ class JointDataLoader(webdataset.WebLoader):
             num_vision_tokens = patch_h_shape * patch_w_shape * latent_t_shape
             if has_text_tokens:
                 num_vision_tokens += 2
-            num_tokens += num_vision_tokens
+            gen_tokens += num_vision_tokens
+
+        # LiDAR part: its own VAE, hence its own compression factors. Charged to
+        # gen_tokens so the iteration-time cost model sees the sweeps.
+        gen_tokens += self._num_lidar_tokens(data_batch)
 
         # Action part: each action time step is 1 token.
         # Action tensor shape is (T_action, D) per sample; stored as a single-element list.
@@ -749,7 +879,7 @@ class JointDataLoader(webdataset.WebLoader):
                 if action is None:
                     continue
                 num_action_tokens = action.shape[0]
-                num_tokens += num_action_tokens
+                gen_tokens += num_action_tokens
 
         # Sound part — estimate sound tokens from audio waveform length
         if self.sound_latent_fps > 0 and "sound" in data_batch:
@@ -763,9 +893,68 @@ class JointDataLoader(webdataset.WebLoader):
                     num_audio_samples = first_sound.shape[-1]
                     audio_duration = num_audio_samples / self.audio_sample_rate
                     num_sound_tokens = int(audio_duration * self.sound_latent_fps)
-                    num_tokens += num_sound_tokens
+                    gen_tokens += num_sound_tokens
 
-        return num_tokens
+        return und_tokens, gen_tokens
+
+    def _compute_sample_cost(self, data_batch: dict) -> tuple[int, float]:
+        """
+        Packed length and projected iteration-time cost of one sample.
+
+        Args:
+            data_batch (dict): One unpacked sample.
+
+        Returns:
+            tuple[int, float]: Token count, and the seconds this sample would add to
+            this rank's iteration time. The seconds are 0 when no iteration-time
+            budget is configured, in which case the cost model is never consulted.
+        """
+        und_tokens, gen_tokens = self._compute_token_split_per_sample(data_batch)
+        num_tokens = und_tokens + gen_tokens
+        if self.iteration_time_budget is None:
+            return num_tokens, 0.0
+        return num_tokens, self.iteration_time_budget.sample_seconds(und_tokens, gen_tokens)
+
+    def _sample_fits(
+        self,
+        *,
+        num_tokens: int,
+        sample_seconds: float,
+        packed_tokens: int,
+        packed_sample_seconds: float,
+        batch_started: bool,
+    ) -> bool:
+        """
+        Whether one more sample may join the batch under both packing ceilings.
+
+        The token ceiling can reject the very first sample, in which case the caller
+        drops it as unpackable. The time ceiling never does: it only stops a batch
+        from growing. A target set below the cost of a single sample therefore yields
+        one-sample batches rather than an empty stream, which keeps a mis-set target
+        from silently starving training.
+
+        Args:
+            num_tokens: Candidate's packed length.
+            sample_seconds: Candidate's projected cost in seconds.
+            packed_tokens: Tokens already in the batch.
+            packed_sample_seconds: Projected seconds already in the batch.
+            batch_started: Whether the batch already holds at least one sample.
+
+        Returns:
+            True when the candidate fits.
+        """
+        if self.max_sequence_length is not None and packed_tokens + num_tokens >= self.max_sequence_length:
+            return False
+        if self.iteration_time_budget is not None and batch_started:
+            if not self.iteration_time_budget.has_room_for(packed_sample_seconds, sample_seconds):
+                return False
+        return True
+
+    def _projected_iteration_sec(self, packed_sample_seconds: float) -> float | None:
+        """Cost-model projection of a packed batch's iteration time, or None if unbudgeted."""
+        if self.iteration_time_budget is None:
+            return None
+        return self.iteration_time_budget.projected_seconds(packed_sample_seconds)
 
     # Keys whose value per sample is a list of tensors to be flattened into one list in the batch
     _FLATTEN_LIST_KEYS = {"image_size"}
@@ -900,6 +1089,8 @@ class IterativeJointDataLoader(JointDataLoader):
         patch_spatial: int,
         max_sequence_length: int | None = None,
         max_samples_per_batch: int | None = None,
+        lidar_spatial_compression: Sequence[int] | None = None,
+        lidar_temporal_compression_factor: int | None = None,
         sound_latent_fps: float = 0,
         audio_sample_rate: int = 48000,
         seed: int | None = 42,
@@ -912,6 +1103,8 @@ class IterativeJointDataLoader(JointDataLoader):
         enable_async_batch_building: bool = False,
         async_batch_building_timeout_s: float = 1200.0,
         lazy_initialize_child_iterators: bool = False,
+        iteration_time_budget: IterationTimeBudgetConfig | None = None,
+        forkserver_preload_modules: list[str] | None = None,
     ) -> None:
         if async_batch_building_timeout_s <= 0:
             raise ValueError(f"async_batch_building_timeout_s must be positive, got {async_batch_building_timeout_s}.")
@@ -927,6 +1120,8 @@ class IterativeJointDataLoader(JointDataLoader):
             patch_spatial,
             max_sequence_length,
             max_samples_per_batch,
+            lidar_spatial_compression=lidar_spatial_compression,
+            lidar_temporal_compression_factor=lidar_temporal_compression_factor,
             sound_latent_fps=sound_latent_fps,
             audio_sample_rate=audio_sample_rate,
             prewarm=prewarm,
@@ -936,6 +1131,8 @@ class IterativeJointDataLoader(JointDataLoader):
             uniae_chunk_frames=uniae_chunk_frames,
             uniae_pad_frames=uniae_pad_frames,
             lazy_initialize_child_iterators=lazy_initialize_child_iterators,
+            iteration_time_budget=iteration_time_budget,
+            forkserver_preload_modules=forkserver_preload_modules,
         )
         self.seed = seed
         # Calculate probabilities for random sampling
@@ -996,15 +1193,18 @@ class IterativeJointDataLoader(JointDataLoader):
                     _extend_action_sampler_draw_counts(metrics.dropped_action_sampler_draw_counts, output)
                     continue
 
-                num_tokens_in_current_sample = self._compute_num_tokens_per_sample(output)
+                num_tokens_in_current_sample, sample_seconds = self._compute_sample_cost(output)
 
-                if (
-                    self.max_sequence_length is not None
-                    and metrics.current_sequence_length + num_tokens_in_current_sample >= self.max_sequence_length
+                if not self._sample_fits(
+                    num_tokens=num_tokens_in_current_sample,
+                    sample_seconds=sample_seconds,
+                    packed_tokens=metrics.current_sequence_length,
+                    packed_sample_seconds=metrics.sample_seconds,
+                    batch_started=len(output_batch) > 0,
                 ):
                     if len(output_batch) == 0:
-                        # This case happens when current_sequence_length = 0 and num_tokens_in_current_sample > self.max_sequence_length
-                        # In this case, we should simply discard the current sample and get the next sample.
+                        # Only the token limit can reject an empty batch, so this sample does not
+                        # fit at any batch size: discard it and get the next sample.
                         log.info(
                             f"Discarding oversized sample with {num_tokens_in_current_sample} tokens. Max sequence length: {self.max_sequence_length}",
                             rank0_only=False,
@@ -1013,14 +1213,15 @@ class IterativeJointDataLoader(JointDataLoader):
                         _extend_action_sampler_draw_counts(metrics.dropped_action_sampler_draw_counts, output)
                         continue
 
-                    # current_sequence_length > 0 and selected sample is too large to fit in the remaining space.
-                    # Instead of stopping immediately (creating large padding), we buffer this large sample
-                    # and try to find a smaller one that fits in the remaining space.
+                    # The batch is non-empty and the selected sample overruns the remaining token
+                    # or time budget. Instead of stopping immediately (creating large padding), we
+                    # buffer this large sample and try to find a smaller one that fits.
                     skipped_samples.append(output)
                     lookahead_count += 1
                     continue
 
                 metrics.current_sequence_length += num_tokens_in_current_sample
+                metrics.sample_seconds += sample_seconds
                 metrics.num_samples += 1
                 output["dataset_name"] = self.dataset_name_list[index_id]
                 self._update_output_batch(output_batch, output)
@@ -1033,7 +1234,11 @@ class IterativeJointDataLoader(JointDataLoader):
             if len(output_batch) == 0:
                 return
 
-            metrics.attach_to(output_batch, buffer_size=len(self.buffers[index_id]))
+            metrics.attach_to(
+                output_batch,
+                buffer_size=len(self.buffers[index_id]),
+                projected_iteration_sec=self._projected_iteration_sec(metrics.sample_seconds),
+            )
             self.global_id += 1
             yield output_batch
 
@@ -1241,6 +1446,7 @@ class PackingDataLoader(JointDataLoader):
         lookahead_limit: int = JointDataLoader._DEFAULT_LOOKAHEAD_LIMIT,
         uniae_chunk_frames: int | Mapping[str, int] | None = None,
         uniae_pad_frames: int | None = None,
+        iteration_time_budget: IterationTimeBudgetConfig | None = None,
     ):
         """
         Args:
@@ -1258,6 +1464,7 @@ class PackingDataLoader(JointDataLoader):
             lookahead_limit: Packing-loop look-ahead for the wrapped dataloader.
             uniae_chunk_frames: Optional UniAE full chunk size, or resolution-keyed chunk sizes.
             uniae_pad_frames: Optional UniAE boundary padding frames per chunk.
+            iteration_time_budget: Optional cost-model ceiling on the projected iteration time.
         """
         wrapped = {dataset_name: {"dataloader": dataloader, "ratio": 1}}
         super().__init__(
@@ -1272,6 +1479,7 @@ class PackingDataLoader(JointDataLoader):
             lookahead_limits={dataset_name: int(lookahead_limit)},
             uniae_chunk_frames=uniae_chunk_frames,
             uniae_pad_frames=uniae_pad_frames,
+            iteration_time_budget=iteration_time_budget,
         )
 
     def __iter__(self):
@@ -1280,6 +1488,7 @@ class PackingDataLoader(JointDataLoader):
 
         while True:
             current_sequence_length = 0
+            packed_sample_seconds = 0.0
             num_samples = 0
             dropped_count = 0
             output_batch: dict = {}
@@ -1310,15 +1519,18 @@ class PackingDataLoader(JointDataLoader):
                     _extend_action_sampler_draw_counts(dropped_action_sampler_draw_counts, output)
                     continue
 
-                num_tokens_in_current_sample = self._compute_num_tokens_per_sample(output)
+                num_tokens_in_current_sample, sample_seconds = self._compute_sample_cost(output)
 
-                if (
-                    self.max_sequence_length is not None
-                    and current_sequence_length + num_tokens_in_current_sample >= self.max_sequence_length
+                if not self._sample_fits(
+                    num_tokens=num_tokens_in_current_sample,
+                    sample_seconds=sample_seconds,
+                    packed_tokens=current_sequence_length,
+                    packed_sample_seconds=packed_sample_seconds,
+                    batch_started=len(output_batch) > 0,
                 ):
                     if len(output_batch) == 0:
-                        # This case happens when current_sequence_length = 0 and num_tokens_in_current_sample > self.max_sequence_length
-                        # In this case, we should simply discard the current sample and get the next sample.
+                        # Only the token limit can reject an empty batch, so this sample does not
+                        # fit at any batch size: discard it and get the next sample.
                         log.error(
                             f"PackingDataLoader: Discarding oversized sample with {num_tokens_in_current_sample} tokens. Max sequence length: {self.max_sequence_length}",
                             rank0_only=False,
@@ -1332,6 +1544,7 @@ class PackingDataLoader(JointDataLoader):
                     continue
 
                 current_sequence_length += num_tokens_in_current_sample
+                packed_sample_seconds += sample_seconds
                 num_samples += 1
                 # Allows the dataset name to be overridden by the sample itself.
                 output["dataset_name"] = output.get("dataset_name", ds_name)
@@ -1343,7 +1556,13 @@ class PackingDataLoader(JointDataLoader):
             if len(output_batch) == 0:
                 return
 
+            # Same key _PackingMetrics.attach_to writes on the other loops, so token
+            # consumers (the iter_speed callback, the packing monitor) see this loop too.
+            output_batch["_num_tokens"] = current_sequence_length
             output_batch["_dropped_count"] = dropped_count
+            projected_iteration_sec = self._projected_iteration_sec(packed_sample_seconds)
+            if projected_iteration_sec is not None:
+                output_batch["_projected_iteration_ms"] = int(round(projected_iteration_sec * 1000))
             if dropped_action_sampler_draw_counts:
                 output_batch[ACTION_SAMPLER_DROPPED_DRAW_COUNT_KEY] = list(dropped_action_sampler_draw_counts)
             self.global_id += 1
@@ -1381,6 +1600,7 @@ class RandomJointDataLoader(JointDataLoader):
         lookahead_limits: Dict[str, int] | None = None,
         uniae_chunk_frames: int | Mapping[str, int] | None = None,
         uniae_pad_frames: int | None = None,
+        iteration_time_budget: IterationTimeBudgetConfig | None = None,
     ):
         super().__init__(
             dataloaders,
@@ -1395,6 +1615,7 @@ class RandomJointDataLoader(JointDataLoader):
             lookahead_limits=lookahead_limits,
             uniae_chunk_frames=uniae_chunk_frames,
             uniae_pad_frames=uniae_pad_frames,
+            iteration_time_budget=iteration_time_budget,
         )
 
         # Convert data ratios to probabilities
@@ -1438,15 +1659,18 @@ class RandomJointDataLoader(JointDataLoader):
                     _extend_action_sampler_draw_counts(metrics.dropped_action_sampler_draw_counts, output)
                     continue
 
-                num_tokens_in_current_sample = self._compute_num_tokens_per_sample(output)
+                num_tokens_in_current_sample, sample_seconds = self._compute_sample_cost(output)
 
-                if (
-                    self.max_sequence_length is not None
-                    and metrics.current_sequence_length + num_tokens_in_current_sample >= self.max_sequence_length
+                if not self._sample_fits(
+                    num_tokens=num_tokens_in_current_sample,
+                    sample_seconds=sample_seconds,
+                    packed_tokens=metrics.current_sequence_length,
+                    packed_sample_seconds=metrics.sample_seconds,
+                    batch_started=len(output_batch) > 0,
                 ):
                     if len(output_batch) == 0:
-                        # This case happens when current_sequence_length = 0 and num_tokens_in_current_sample > self.max_sequence_length
-                        # In this case, we should simply discard the current sample and get the next sample.
+                        # Only the token limit can reject an empty batch, so this sample does not
+                        # fit at any batch size: discard it and get the next sample.
                         log.info(
                             f"Discarding oversized sample with {num_tokens_in_current_sample} tokens. Max sequence length: {self.max_sequence_length}",
                             rank0_only=False,
@@ -1455,14 +1679,15 @@ class RandomJointDataLoader(JointDataLoader):
                         _extend_action_sampler_draw_counts(metrics.dropped_action_sampler_draw_counts, output)
                         continue
 
-                    # current_sequence_length > 0 and selected sample is too large to fit in the remaining space.
-                    # Instead of stopping immediately (creating large padding), we buffer this large sample
-                    # and try to find a smaller one that fits in the remaining space.
+                    # The batch is non-empty and the selected sample overruns the remaining token
+                    # or time budget. Instead of stopping immediately (creating large padding), we
+                    # buffer this large sample and try to find a smaller one that fits.
                     skipped_samples.append(output)
                     lookahead_count += 1
                     continue
 
                 metrics.current_sequence_length += num_tokens_in_current_sample
+                metrics.sample_seconds += sample_seconds
                 metrics.num_samples += 1
                 output["dataset_name"] = self.dataset_name_list[index_id]
                 self._update_output_batch(output_batch, output)
@@ -1475,5 +1700,9 @@ class RandomJointDataLoader(JointDataLoader):
             if len(output_batch) == 0:
                 return
 
-            metrics.attach_to(output_batch, buffer_size=len(self.buffers[index_id]))
+            metrics.attach_to(
+                output_batch,
+                buffer_size=len(self.buffers[index_id]),
+                projected_iteration_sec=self._projected_iteration_sec(metrics.sample_seconds),
+            )
             yield output_batch

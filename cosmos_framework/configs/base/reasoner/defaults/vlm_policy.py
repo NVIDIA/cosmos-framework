@@ -36,6 +36,8 @@ qwen3_vl_30b_a3b_instruct = PolicyConfig(backbone=VLMConfig(model_name="Qwen/Qwe
 
 qwen3_vl_30b_a3b_thinking = PolicyConfig(backbone=VLMConfig(model_name="Qwen/Qwen3-VL-30B-A3B-Thinking"))
 
+qwen3_vl_235b_a22b_instruct = PolicyConfig(backbone=VLMConfig(model_name="Qwen/Qwen3-VL-235B-A22B-Instruct"))
+
 qwen3_vl_235b_a22b_thinking = PolicyConfig(backbone=VLMConfig(model_name="Qwen/Qwen3-VL-235B-A22B-Thinking"))
 
 qwen3_vl_8b_thinking = PolicyConfig(backbone=VLMConfig(model_name="Qwen/Qwen3-VL-8B-Thinking"))
@@ -109,6 +111,12 @@ def register_vlm_policy():
         package="model.config.policy",
         name="qwen3_vl_30b_a3b_thinking",
         node=qwen3_vl_30b_a3b_thinking,
+    )
+    cs.store(
+        group="vlm_policy",
+        package="model.config.policy",
+        name="qwen3_vl_235b_a22b_instruct",
+        node=qwen3_vl_235b_a22b_instruct,
     )
     cs.store(
         group="vlm_policy",

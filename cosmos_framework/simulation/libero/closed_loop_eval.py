@@ -55,8 +55,8 @@ from cosmos_framework.data.generator.action.libero_pose_utils import (
     libero_rotation_format,
     libero_rotation_space_from_action_dim,
 )
-from cosmos_framework.data.generator.action.pose_utils import convert_rotation
-from cosmos_framework.data.generator.action.viewpoint_utils import DEFAULT_VIEWPOINT_TEMPLATES
+from cosmos_framework.data.generator.action.utils.pose_utils import convert_rotation
+from cosmos_framework.data.generator.action.utils.viewpoint_utils import DEFAULT_VIEWPOINT_TEMPLATES
 
 benchmark: Any
 get_libero_path: Any

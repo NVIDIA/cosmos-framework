@@ -23,7 +23,7 @@ This runs in three explicit phases:
 
 1. :class:`FlexMetadata` holds the per-token fields (packed ``sample_id``, plus the
    multiview supertoken fields ``frame_id`` / ``view_id`` / ``is_noisy`` /
-   ``cond_type_id``), covering the ``[UND | GEN]`` key stream;
+   ``is_control``), covering the ``[UND | GEN]`` key stream;
    :func:`build_multiview_flex_metadata` derives them from a packed batch.
 2. :func:`build_block_mask` derives the ``BlockMask`` from that metadata, once per
    forward and outside the decoder layers. The mask is rectangular: GEN tokens are
@@ -43,26 +43,25 @@ coarser query block, so the returned :class:`FlexBackend` carries the block size
 padding multiple alongside the kernel options rather than leaving the three to be matched
 up by hand. ``flex_attention_bench`` times both backends and documents the install.
 
-When the multiview fields are populated, :func:`build_block_mask` enforces the
-supertoken rules: conditioning tokens attend only to conditioning tokens of the
-same type in the same (frame, view) and never to noisy tokens; noisy tokens
-attend to the noisy tokens of their sample that the ``noisy_attention_scope``
-admits -- by default all of them -- and, additionally, to every conditioning
-token in the same (frame, view). Every GEN token, conditioning or
-noisy, attends to every UND token of its own sample, which is what the dense
-gen->und pass does. Richer patterns can be added later by populating extra
-metadata fields and extending the ``mask_mod`` instead of hand-rolling new varlen
-bookkeeping.
+The supertoken rules :func:`build_block_mask` enforces, all within a sample: RGB
+conditioning tokens reach RGB conditioning tokens, RGB noisy tokens reach noisy and
+conditioning alike, both within whatever view footprint ``attention_scope`` admits (every
+view by default). Control tokens -- a WSM (World Scenario Map) control video, say -- are a
+separate modality read off ``is_control``: RGB tokens reach them at their own view only,
+control tokens reach each other at their own view only, and no control token reaches an RGB
+token at all. Every GEN token, conditioning or noisy, attends to every UND token of its own
+sample, as the dense gen->und pass does. See :func:`_multiview_pair_predicate` for the rules
+themselves; richer patterns mean more metadata fields and a longer ``mask_mod``, not new
+varlen bookkeeping.
 
 LSE convention
 --------------
-torch's ``flex_attention(..., return_aux=AuxRequest(lse=True))`` returns the log-sum-exp of the scaled
-scores in **natural log** with default scale ``1/sqrt(head_dim)`` and layout
-``[B, H, S]`` -- identical to ``cosmos_framework.model.attention(..., return_lse=True)`` once
-transposed to the heads-last ``[B, S, H]`` layout, so a caller that does want to merge
-this output with another attention term can. The fused attention path does not: it is a
-complete attention, and asking for the LSE would put a gradient for it in the graph,
-which is what the FlashAttention-4 backward refuses to lower.
+``AuxRequest(lse=True)`` returns the log-sum-exp of the scaled scores in **natural log**, at
+the default ``1/sqrt(head_dim)`` scale, in the ``[B, H, S]`` layout -- identical to
+``cosmos_framework.model.attention(..., return_lse=True)`` once transposed to heads-last ``[B, S, H]``,
+so a caller that does want to merge this output with another attention term can. The fused
+path does not ask for it: it is a complete attention, and the gradient the request puts in
+the graph is what the FlashAttention-4 backward refuses to lower.
 """
 
 from __future__ import annotations
@@ -75,9 +74,9 @@ from torch.nn.attention.flex_attention import BlockMask
 from torch.nn.attention.flex_attention import flex_attention as torch_flex_attention
 
 from cosmos_framework.configs.base.defaults.flex_attention import (
+    ATTENTION_SCOPES,
     FLEX_BACKEND_PREFERENCES,
-    NOISY_ATTENTION_SCOPES,
-    NoisyAttentionScope,
+    AttentionScope,
 )
 
 # ``dynamic=False`` specialises one kernel per (block-aligned) shape and reuses
@@ -95,10 +94,10 @@ class FlexMetadata:
     """Per-key-token metadata that drives the flex block mask.
 
     Each field is a 1-D ``[seq_len]`` tensor covering the key/value stream the mask
-    spans, in packed token order. All are ``int64`` except ``is_noisy``, which is
-    ``bool``. Padding positions use the sentinel ``-1`` (``False`` for ``is_noisy``) so
-    real queries never attend to padding and padded queries attend only to padding (no
-    empty-softmax NaN).
+    spans, in packed token order. All are ``int64`` except ``is_noisy`` and ``is_control``,
+    which are ``bool``. Padding positions carry the sentinel ``-1`` (``False`` for the two
+    bool fields) so real queries never attend to padding and padded queries attend only to
+    padding (no empty-softmax NaN).
 
     The key stream is the concatenation ``[UND | GEN]``: ``num_und`` block-padded
     understanding tokens followed by the block-padded GEN tokens. The GEN tokens are
@@ -117,24 +116,37 @@ class FlexMetadata:
       tokens, which have no place in the camera grid.
     * ``is_noisy``: ``bool`` tensor, ``True`` for noisy (visual) tokens and
       ``False`` for conditioning tokens (and for UND tokens).
-    * ``cond_type_id``: conditioning-stream type per token (e.g. 0 = type A,
-      1 = type B); ``-1`` for noisy and UND tokens.
+    * ``is_control``: ``bool`` tensor, ``True`` for tokens of a control item (e.g. a WSM --
+      World Scenario Map -- control video), ``False`` for every other token (RGB and UND
+      alike). It carries no per-item identity, so control tokens sharing a view read as one
+      signal; since the control rules only ever pair within a view, that costs nothing as
+      long as a view holds a single control stream, which is the caller's to arrange (see
+      ``MaskItem.is_control``). The field is also the only switch the control rules have: the
+      ordinary T2V/I2V/V2V batch marks no control item, carries it all-``False``, and the
+      control terms drop out of the predicate on their own -- one fewer place for a config flag
+      and the data it describes to disagree.
 
     The mask enforces, within a sample:
 
     * GEN Q -> UND K: always (the gen->und pass, unrestricted);
-    * conditioning Q -> conditioning K: same ``(frame, view, cond_type)``;
-    * conditioning Q -> noisy K: never;
-    * noisy Q -> noisy K: bidirectional over whatever ``NoisyAttentionScope`` admits --
-      every noisy token of the sample, the query's own view, or its own view or frame;
-    * noisy Q -> conditioning K: same ``(frame, view)`` (any cond type).
+    * RGB conditioning Q -> RGB conditioning K: within whatever ``AttentionScope`` admits
+      (every view, its own view, or its own view or frame);
+    * RGB conditioning Q -> RGB noisy K: never;
+    * RGB noisy Q -> RGB noisy or conditioning K alike: within the same
+      ``AttentionScope`` reach;
+    * RGB Q (conditioning or noisy) -> control K: same view, any frame;
+    * control Q -> control K: same view, any frame;
+    * control Q -> RGB K: never.
 
-    ``noisy_attention_scope`` is the one field that is a choice rather than a description of
-    the batch. It rides here so that the two places the predicate is built from -- the
-    ``mask_mod`` the kernel calls and the block-level collapsing in
-    :func:`build_block_mask` -- cannot be given different answers: a block the collapsing
-    calls fully unmasked is one the kernel never calls ``mask_mod`` on at all, so the two
-    disagreeing would not raise, it would silently attend across views.
+    :func:`_multiview_pair_predicate` is where those rules are actually expressed, so it is
+    the one to trust if this list and it ever drift apart.
+
+    ``attention_scope`` is a choice rather than a description of the batch; it rides here
+    so that the two places the predicate is built from -- the ``mask_mod`` the kernel
+    calls and the block-level collapsing in :func:`build_block_mask` -- cannot be given
+    different answers: a block the collapsing calls fully unmasked is one the kernel never
+    calls ``mask_mod`` on at all, so the two disagreeing would not raise, it would silently
+    attend across views.
 
     This type is an intermediate: :func:`build_block_mask` folds it into a
     :class:`BlockMask` and only that mask travels on to
@@ -148,21 +160,17 @@ class FlexMetadata:
     frame_id: torch.Tensor
     view_id: torch.Tensor
     is_noisy: torch.Tensor
-    cond_type_id: torch.Tensor
+    is_control: torch.Tensor
     num_und: int
-    noisy_attention_scope: NoisyAttentionScope
+    attention_scope: AttentionScope
 
     def __post_init__(self) -> None:
-        # The annotation is a Literal, which nothing enforces at runtime, and an unrecognised
-        # scope would not fail: the predicate reads it by equality, so a typo leaves both of
-        # its gates off and masks as "same_view". A config reaching here has already been
-        # validated by attrs, but this type is also built directly, and a silently narrower
-        # mask is a worse outcome than a rejected one.
-        if self.noisy_attention_scope not in NOISY_ATTENTION_SCOPES:
-            raise ValueError(
-                f"Unknown noisy_attention_scope {self.noisy_attention_scope!r}; "
-                f"expected one of {NOISY_ATTENTION_SCOPES}."
-            )
+        # Nothing enforces the Literal at runtime, and an unrecognised scope would not fail:
+        # the predicate reads it by equality, so a typo leaves both gates off and masks as
+        # "same_view". attrs already validated a scope that arrived via config, but this type
+        # is also built directly, and a silently narrower mask is worse than a rejected one.
+        if self.attention_scope not in ATTENTION_SCOPES:
+            raise ValueError(f"Unknown attention_scope {self.attention_scope!r}; expected one of {ATTENTION_SCOPES}.")
 
     @property
     def q_len(self) -> int:
@@ -241,18 +249,18 @@ class _StreamFields:
     frame_id: torch.Tensor
     view_id: torch.Tensor
     is_noisy: torch.Tensor
-    cond_type_id: torch.Tensor
+    is_control: torch.Tensor
     is_und: torch.Tensor
 
     def tail(self, start: int) -> _StreamFields:
         """The same fields covering the tokens from ``start`` on, re-based to offset zero.
 
-        Copies, not views: a view of ``field[start:]`` carries ``start`` as its storage
-        offset, and under dynamic shapes that offset reaches the graph as a symbolic scalar,
-        which the FlashAttention-4 backend rejects for the same reason it rejects a captured
-        Python int -- see :func:`_multiview_mask_mod`. Cloning leaves the fields' own lengths
-        as the only symbols the mask carries, and those the backend does accept. The cost is
-        six int64/bool rows of the GEN stream, copied once per step alongside the mask itself.
+        Copies, not views: a view of ``field[start:]`` carries ``start`` as its storage offset,
+        which under dynamic shapes reaches the graph as a symbolic scalar -- rejected by the
+        FlashAttention-4 backend for the same reason a captured Python int is, see
+        :func:`_multiview_mask_mod`. Cloning leaves the fields' own lengths as the only symbols
+        the mask carries, and those the backend accepts. The cost is six int64/bool rows of the
+        GEN stream, copied once per step alongside the mask itself.
         """
         return _StreamFields(**{f.name: getattr(self, f.name)[start:].clone() for f in fields(self)})
 
@@ -264,7 +272,7 @@ def _key_stream_fields(metadata: FlexMetadata) -> _StreamFields:
         frame_id=metadata.frame_id,
         view_id=metadata.view_id,
         is_noisy=metadata.is_noisy,
-        cond_type_id=metadata.cond_type_id,
+        is_control=metadata.is_control,
         is_und=_und_flags(metadata),
     )
 
@@ -283,7 +291,7 @@ def _query_stream_fields(metadata: FlexMetadata) -> _StreamFields:
 def _multiview_pair_predicate(
     q_fields: _StreamFields,
     kv_fields: _StreamFields,
-    noisy_attention_scope: NoisyAttentionScope,
+    attention_scope: AttentionScope,
 ) -> MaskMod:
     """Return the multiview supertoken predicate, reading each side's own fields.
 
@@ -294,43 +302,51 @@ def _multiview_pair_predicate(
     ``mask_mod`` FlexAttention itself calls -- see :func:`_multiview_mask_mod`.
 
     All rules are gated on ``same_sample`` (block-diagonal packing). On top of
-    that, using the per-token frame/view/type metadata:
+    that, using the per-token frame/view/modality metadata:
 
     * any GEN Q attends to every UND K of its sample -- the gen->und pass, which
       carries no further restriction;
-    * conditioning Q attends only to conditioning K of the **same conditioning
-      type** in the **same (frame, view)**;
-    * conditioning Q -> noisy K: never (no rule fires for this quadrant);
-    * noisy Q attends to the noisy K that ``noisy_attention_scope`` admits -- every one in
-      the sample, those of its own view, or those of its own view or its own frame -- and,
-      in addition, to every conditioning K in the **same (frame, view)** regardless of
-      conditioning type.
+    * RGB conditioning Q attends only to RGB conditioning K, within whatever
+      ``attention_scope`` admits (every view, its own view, or its own view or frame);
+    * RGB conditioning Q -> RGB noisy K: never (no rule fires for this quadrant);
+    * RGB noisy Q attends every RGB K -- noisy or conditioning alike -- within the same
+      ``attention_scope`` reach;
+    * RGB Q (conditioning or noisy alike) attends every control K of its **own view**, any
+      frame;
+    * control Q attends every control K of its **own view**, any frame, and no RGB K at all.
 
-    The narrow scopes restrict on the view or the frame alone and not on ``(frame, view)``:
-    a view keeps its own frames, which is the temporal attention that makes it a clip rather
-    than a set of stills, and a frame keeps its own views, which is what registers the
-    cameras against each other. Both are free at the block level, because
-    :func:`_metadata_groups` already splits its runs per ``(item, frame, view)`` cell, so the
-    coarse predicate can tell views and frames apart without a finer grouping.
+    Every rule here is a view rule, not a ``(frame, view)`` one. Every scope gives a query
+    its own view at *any* frame, which is what makes ``"same_view"`` a clip's own attention
+    rather than a set of stills, and a token's frame matters only through
+    ``"same_view_or_frame"``, which adds every other view at the query's own instant and so
+    registers the cameras against each other. Frames are free at the block level anyway,
+    because :func:`_metadata_groups` already splits its runs per ``(item, frame, view)``
+    cell, so the coarse predicate tells views and frames apart without a finer grouping.
 
-    The GEN rules all read ``frame_id`` / ``view_id`` / ``cond_type_id``, which UND
-    tokens carry as ``-1``, so none of them fires on a UND key and the UND rule is
-    the only one that admits that quadrant.
+    A batch with no control item carries ``is_control`` all-``False``, which drops both
+    control terms on its own -- see :class:`FlexMetadata`.
 
-    Padding positions carry ``sample_id == -1`` (and ``-1`` in the other fields),
-    so real queries never see them and padded queries attend only to padding. The
-    packer keeps at least one padded row on each stream once either is padded, so a
-    padded query always has a padded key to attend to.
+    Neither control rule can fire on a UND key: both require ``k_control``, which UND tokens
+    carry as ``False``. The RGB rules are less tidy. Under ``"all_views"``,
+    ``reaches_every_view`` alone satisfies ``rgb_pair_in_scope`` for a UND key, so a GEN
+    query admits its own sample's UND keys through that term too; nothing observable changes,
+    since ``gen_to_und`` already admits them unconditionally, but the UND quadrant is not
+    exclusively ``gen_to_und``'s doing under that scope. Under the other two scopes the RGB
+    rules compare ``view_id`` / ``frame_id``, where UND's ``-1`` matches no real GEN token.
+
+    Padding carries ``-1`` in every id field, so real queries never see it and padded queries
+    attend only to padding. The packer keeps at least one padded row on each stream once
+    either is padded, so a padded query always has a padded key to attend to.
     """
-    # The scope enters as tensors rather than as the string it arrives as, because the closure
-    # below is what Inductor traces and a captured scalar is what the FlashAttention-4 backend
-    # refuses to lower -- see :func:`_multiview_mask_mod`, and the structural test that pins it.
-    # Folding them into the expression rather than branching around it also leaves a single path
-    # through the predicate, so the element-level and block-level forms cannot come apart. Both
-    # gates off leaves the query its own view, which every scope admits.
+    # The scope enters as a tensor rather than as the string it arrives as: the closure below
+    # is what Inductor traces, and a captured scalar is what the FlashAttention-4 backend
+    # refuses to lower -- see :func:`_multiview_mask_mod` and the structural test that pins
+    # it. Folding it into the expression rather than branching around it also leaves one path
+    # through the predicate, so the element-level and block-level forms cannot come apart.
+    # Both gates off leaves the query its own view, which every scope admits.
     device = q_fields.view_id.device
-    reaches_every_view = torch.tensor(noisy_attention_scope == "all_views", device=device)
-    reaches_own_frame = torch.tensor(noisy_attention_scope == "same_view_or_frame", device=device)
+    reaches_every_view = torch.tensor(attention_scope == "all_views", device=device)
+    reaches_own_frame = torch.tensor(attention_scope == "same_view_or_frame", device=device)
 
     def pair_allowed(
         b: torch.Tensor,
@@ -341,22 +357,30 @@ def _multiview_pair_predicate(
         same_sample = q_fields.sample_id[q_idx] == kv_fields.sample_id[kv_idx]
         same_frame = q_fields.frame_id[q_idx] == kv_fields.frame_id[kv_idx]
         same_view = q_fields.view_id[q_idx] == kv_fields.view_id[kv_idx]
-        same_fv = same_frame & same_view
-        same_cond_type = q_fields.cond_type_id[q_idx] == kv_fields.cond_type_id[kv_idx]
         q_noisy = q_fields.is_noisy[q_idx]
         k_noisy = kv_fields.is_noisy[kv_idx]
+        q_control = q_fields.is_control[q_idx]
+        k_control = kv_fields.is_control[kv_idx]
 
         # GEN Q -> UND K: the whole caption of the sample, conditioning and noisy alike.
         gen_to_und = kv_fields.is_und[kv_idx]
-        # conditioning Q -> conditioning K: same (frame, view, cond type).
-        cond_to_cond = (~q_noisy) & (~k_noisy) & same_fv & same_cond_type
-        # noisy Q -> noisy K: the whole sample, the query's own view, or its view or frame.
+        # Both RGB rules below share the same view/frame footprint -- whatever
+        # attention_scope admits -- and differ only in how they gate on noise.
         in_scope = reaches_every_view | same_view | (reaches_own_frame & same_frame)
-        noisy_to_noisy = q_noisy & k_noisy & in_scope
-        # noisy Q -> conditioning K: same (frame, view), any cond type.
-        noisy_to_cond = q_noisy & (~k_noisy) & same_fv
+        rgb_pair_in_scope = (~q_control) & (~k_control) & in_scope
+        # RGB conditioning Q -> RGB conditioning K: within scope. Conditioning tokens carry no
+        # type of their own, so any two the scope admits are interchangeable -- there is no
+        # cond-type left to distinguish them by.
+        cond_to_cond = rgb_pair_in_scope & (~q_noisy) & (~k_noisy)
+        # RGB noisy Q -> any RGB K (noisy or conditioning), within scope. (RGB conditioning
+        # Q never reaches an RGB noisy K: that quadrant has no rule.)
+        noisy_to_rgb = rgb_pair_in_scope & q_noisy
+        # RGB Q (any) -> control K: own view, any frame; control Q -> control K: own view, any frame;
+        # control Q -> RGB K: never (no rule admits it).
+        rgb_to_control = (~q_control) & k_control & same_view
+        control_to_control = q_control & k_control & same_view
 
-        return same_sample & (gen_to_und | cond_to_cond | noisy_to_noisy | noisy_to_cond)
+        return same_sample & (gen_to_und | cond_to_cond | noisy_to_rgb | rgb_to_control | control_to_control)
 
     return pair_allowed
 
@@ -364,80 +388,161 @@ def _multiview_pair_predicate(
 def _multiview_mask_mod(metadata: FlexMetadata) -> MaskMod:
     """The predicate in FlexAttention's own index convention: ``q_idx`` numbers GEN from zero.
 
-    This is the closure that ends up inside the :class:`BlockMask` and therefore the one
-    Inductor traces, so what it captures is a hard constraint rather than a detail. It
-    captures tensors, and tensors that start at offset zero. The obvious alternative -- keep
-    the key-stream predicate and shift the row index, ``pair_allowed(q_idx + num_und,
-    kv_idx)`` -- captures ``num_und`` as a Python int, and the FlashAttention-4 backend
-    rejects the whole graph for it: a captured scalar goes dynamic as soon as the enclosing
-    region is compiled with dynamic shapes, and CuteDSL cannot inline a symbolic value into
-    its template. Slicing the fields per side rather than shifting the index does not get rid
-    of that scalar on its own -- it moves it into the slice's storage offset, which goes
+    This closure ends up inside the :class:`BlockMask` and is therefore the one Inductor
+    traces, so what it captures is a hard constraint: tensors only, and tensors that start at
+    offset zero. The obvious alternative -- keep the key-stream predicate and shift the row
+    index, ``pair_allowed(q_idx + num_und, kv_idx)`` -- captures ``num_und`` as a Python int,
+    and the FlashAttention-4 backend rejects the whole graph for it, because a captured scalar
+    goes dynamic as soon as the enclosing region is compiled with dynamic shapes and CuteDSL
+    cannot inline a symbolic value into its template. Slicing the fields per side does not get
+    rid of that scalar either -- it moves it into the slice's storage offset, which goes
     dynamic just the same, hence the copy in :meth:`_StreamFields.tail`.
 
-    Symbolically shaped fields are fine, and a training run demonstrates it: one graph over a
-    hundred padded geometries, on the flash backend, because the lengths the mask needs are
-    ones the surrounding graph already has symbols for and nothing has to be lifted into the
-    subgraph. A caller that hands the mask over without that relation available can still trip
-    the check, which is what ``attention_test`` exercises.
+    Symbolically *shaped* fields are fine: a training run holds one graph over a hundred
+    padded geometries on the flash backend, because the lengths the mask needs are ones the
+    surrounding graph already has symbols for, so nothing is lifted into the subgraph. A
+    caller without that relation available can still trip the check, as ``attention_test``
+    exercises.
     """
     return _multiview_pair_predicate(
         _query_stream_fields(metadata),
         _key_stream_fields(metadata),
-        metadata.noisy_attention_scope,
+        metadata.attention_scope,
     )
+
+
+@dataclass(frozen=True)
+class MaskItem:
+    """One latent clip of one generation stream, as the multiview mask sees it.
+
+    An item is a camera clip, a LiDAR range clip, or a control stream conditioning one of
+    those. It contributes ``latent_t * patch_h * patch_w`` tokens laid out view-outer,
+    frame-inner, spatial-innermost -- the camera-major order the multiview dataset
+    concatenates its per-camera clips in.
+
+    The per-item invariants are checked here, at construction, rather than by the builder
+    that consumes a batch of these: an item whose latent axis does not divide into its
+    views, or whose condition mask does not cover that axis, is malformed on its own terms,
+    and catching it here names the one item rather than an index into a flattened list.
+
+    Attributes:
+        token_shape: ``(latent_t, patch_h, patch_w)``, where ``latent_t = num_views *
+            frames_per_view`` counts the camera-major latent axis.
+        condition_mask: ``[latent_t]`` over that same axis, a non-zero entry marking a
+            conditioning (clean) frame -- what ``SequencePacker.pack_vision_tokens``
+            appends to ``vision.condition_mask``. Any shape whose element count is
+            ``latent_t`` will do; the builder reshapes it.
+        num_views: cameras this item covers.
+        view_offset: where its views start on its sample's view axis. Items on disjoint
+            offsets are paired by no rule at all, which is what keeps a second sensor's
+            clips off the camera rig's views -- see :func:`build_multiview_flex_metadata`.
+        is_control: whether this is a control stream rather than a target conditioning on
+            one. The mask confines a control item to its own view and keeps it out of the
+            RGB rules entirely -- see :func:`_multiview_pair_predicate`.
+    """
+
+    token_shape: tuple[int, ...]
+    condition_mask: torch.Tensor
+    num_views: int = 1
+    view_offset: int = 0
+    is_control: bool = False
+
+    def __post_init__(self) -> None:
+        if self.num_views < 1 or self.latent_t % self.num_views != 0:
+            raise ValueError(
+                f"MaskItem has latent_t={self.latent_t}, which is not divisible by num_views={self.num_views}."
+            )
+        if self.condition_mask.numel() != self.latent_t:
+            raise ValueError(
+                f"MaskItem condition mask covers {self.condition_mask.numel()} frames, expected {self.latent_t}."
+            )
+
+    @property
+    def latent_t(self) -> int:
+        """Frames on the camera-major latent axis, i.e. ``num_views * frames_per_view``."""
+        return self.token_shape[0]
+
+    @property
+    def frames_per_view(self) -> int:
+        """Latent frames one of this item's cameras contributes."""
+        return self.latent_t // self.num_views
+
+    @property
+    def spatial_tokens(self) -> int:
+        """Tokens one latent frame of one camera contributes."""
+        return self.token_shape[1] * self.token_shape[2]
+
+    @property
+    def num_tokens(self) -> int:
+        """GEN tokens this item owns."""
+        return self.latent_t * self.spatial_tokens
+
+    @property
+    def view_grid(self) -> tuple[int, int]:
+        """``(num_views, frames_per_view)``, the grid its tokens are laid out on."""
+        return (self.num_views, self.frames_per_view)
+
+
+def _check_view_grids_agree(items_per_sample: Sequence[Sequence[MaskItem]]) -> None:
+    """Reject a sample whose items disagree on a view offset they share.
+
+    An offset's views and frames are the coordinate system the mask's comparisons live in,
+    so two items sharing an offset but dividing it differently would pair up unrelated
+    cameras and leave the wider item's extra views outside the grid the others cover.
+
+    Items on *disjoint* offsets are compared by no rule, so they are free to differ: that is
+    what lets a joint camera + LiDAR sample carry a camera grid on one offset beside a range
+    grid of another shape on the next.
+    """
+    for sample_idx, sample_items in enumerate(items_per_sample):
+        grid_by_view_offset: dict[int, tuple[int, int]] = {}
+        for item_idx, item in enumerate(sample_items):
+            # setdefault records the offset's first grid and returns it thereafter, so every
+            # later item at that offset is compared against the one that established it.
+            expected_grid = grid_by_view_offset.setdefault(item.view_offset, item.view_grid)
+            if item.view_grid != expected_grid:
+                raise ValueError(
+                    "All items of a sample sharing a view offset must share the same "
+                    f"(num_views, frames_per_view) grid: item {item_idx} of sample {sample_idx} at view "
+                    f"offset {item.view_offset} has {item.view_grid}, expected {expected_grid}."
+                )
 
 
 def build_multiview_flex_metadata(
     *,
     seq_len: int,
     full_q_offsets: torch.Tensor,
-    token_shapes: Sequence[tuple[int, ...]],
-    condition_masks: Sequence[torch.Tensor],
-    num_vision_items_per_sample: list[int],
-    num_views_per_vision_item: list[int],
+    items_per_sample: Sequence[Sequence[MaskItem]],
     device: torch.device,
     num_und: int = 0,
     causal_offsets: torch.Tensor | None = None,
-    noisy_attention_scope: NoisyAttentionScope = "all_views",
+    attention_scope: AttentionScope = "all_views",
 ) -> FlexMetadata:
     """Build key-stream metadata for camera-major multiview transfer items.
 
-    Each vision item contributes ``latent_t * patch_h * patch_w`` tokens laid out
-    view-outer, frame-inner, spatial-innermost, matching the dataset, which
-    concatenates the per-camera clips along the latent time axis.
-    ``condition_masks[i]`` indexes that same camera-major latent axis, with a
-    non-zero entry marking a conditioning (clean) frame.
+    ``items_per_sample`` is one list of :class:`MaskItem` per packed sample, in packed
+    order, describing every generation stream the sample carries: its camera clips, its
+    LiDAR range clips, and whichever of those are control streams. The nesting is the
+    grouping, so nothing here has to check that a flat item list and a per-sample count
+    agree -- and :class:`MaskItem` has already checked each item on its own terms.
 
-    Two invariants are checked because violating either corrupts the mask
-    silently rather than failing: the item token counts have to add up to the
-    packed GEN token count (``full_q_offsets[-1]``), and all items of one sample
-    have to share a ``(num_views, frames_per_view)`` grid, since conditioning
-    tokens reach noisy tokens by matching ``(frame, view)``.
-
-    Shape notation used here and in the inline annotations below:
-
-    * ``num_samples = len(num_vision_items_per_sample)``;
-    * ``num_items = sum(num_vision_items_per_sample)``, the flattened item count;
-    * for item ``i``, ``token_shapes[i] = (latent_t, patch_h, patch_w)`` with
-      ``latent_t = num_views * frames_per_view`` and
-      ``spatial_tokens = patch_h * patch_w``, so the item owns
-      ``item_tokens = latent_t * spatial_tokens`` GEN tokens;
-    * ``real_token_count = sum(item_tokens)``, which must equal
-      ``full_q_offsets[-1]`` and cannot exceed ``seq_len``.
+    What is left to check is the one invariant that spans items: those of a sample
+    **sharing a view offset** have to agree on their ``(num_views, frames_per_view)``
+    grid, since that is the coordinate system the mask compares views and frames in. Items
+    on disjoint offsets are paired by no rule and are free to differ -- a joint camera +
+    LiDAR sample carries a 71-latent camera pair on view 0 beside a 94-sweep range pair on
+    view 1. See :func:`_check_view_grids_agree`.
 
     Args:
         seq_len: block-padded GEN sequence length, i.e. the query count. The returned
             fields are ``[num_und + seq_len]``, covering the fused ``[UND | GEN]`` key
             stream.
-        full_q_offsets: cumulative per-sample GEN offsets, ``[num_samples + 1]``;
-            ``full_q_offsets[-1]`` is the real (unpadded) GEN token count.
-        token_shapes: one ``(latent_t, patch_h, patch_w)`` triple per item,
-            ``num_items`` entries.
-        condition_masks: one mask per item, each ``[latent_t]`` over the camera-major
-            latent axis; a non-zero entry marks a conditioning (clean) frame.
-        num_vision_items_per_sample: items owned by each sample, ``num_samples`` entries.
-        num_views_per_vision_item: cameras per item, ``num_items`` entries.
+        full_q_offsets: cumulative per-sample GEN offsets, ``[len(items_per_sample) + 1]``;
+            ``full_q_offsets[-1]`` is the real (unpadded) GEN token count, which the items'
+            own token counts have to add up to.
+        items_per_sample: the items each sample owns, in packed order. See
+            :class:`MaskItem` for what one describes and which of its fields the mask
+            rules read.
         device: device for the returned tensors.
         num_und: block-padded UND (causal) stream length, which prefixes the key
             stream. 0 leaves the metadata GEN-only, for a square self-attention mask.
@@ -445,105 +550,110 @@ def build_multiview_flex_metadata(
             required when ``num_und`` is non-zero, since the UND rule is "same sample"
             and nothing else. ``causal_offsets[-1]`` is the real UND token count, so
             everything past it is padding.
-        noisy_attention_scope: which noisy tokens of its sample a noisy token reaches --
+        attention_scope: which same-kind (RGB) tokens of its sample a token reaches --
             those of every view, of its own view, or of its own view or frame. See
-            ``NoisyAttentionScope``; :class:`FlexMetadata` carries it on to both forms
-            of the predicate.
+            ``AttentionScope``; :class:`FlexMetadata` carries it on to both forms of the
+            predicate. Never widens a control token's reach, which is always its own view.
+            ``"same_view_or_frame"`` is rejected once more than one view offset is in play,
+            because that scope pairs across views by frame index and a second sensor does
+            not share the camera's frame index -- 7.5 Hz camera latents against 10 Hz
+            sweeps.
 
     Returns:
         :class:`FlexMetadata` whose five per-token fields are each
-        ``[num_und + seq_len]``: the UND tokens (sample ids only, ``-1`` in every
-        multiview field), then the ``real_token_count`` real GEN tokens in packed
-        order, each stream followed by ``-1`` sentinels (``False`` for ``is_noisy``)
+        ``[num_und + seq_len]``: the UND tokens (sample ids only, ``-1`` / ``False`` in
+        every multiview field), then the real GEN tokens in packed order, each stream
+        followed by ``-1`` sentinels (``False`` for ``is_noisy`` and ``is_control``)
         across its trailing pad.
 
     Raises:
-        ValueError: if the per-item sequences disagree on ``num_items``, if a
-            ``latent_t`` is not divisible by its ``num_views``, if one sample's items
-            disagree on the ``(num_views, frames_per_view)`` grid, if a condition mask
-            length does not match its ``latent_t``, if ``real_token_count`` does not
-            match ``full_q_offsets[-1]`` or exceeds ``seq_len``, or if ``num_und`` is
-            non-zero without ``causal_offsets``.
+        ValueError: if the items of one sample sharing a view offset disagree on the
+            ``(num_views, frames_per_view)`` grid, if the items' token counts do not add up
+            to ``full_q_offsets[-1]`` or exceed ``seq_len``, if ``num_und`` is non-zero
+            without ``causal_offsets``, or if ``attention_scope`` is
+            ``"same_view_or_frame"`` with more than one view offset present.
     """
     if num_und and causal_offsets is None:
         raise ValueError(
             f"A fused key stream with {num_und} UND tokens needs causal_offsets to label them by "
             "sample; without it every UND key would look like padding to the mask."
         )
-    num_items = sum(num_vision_items_per_sample)
-    if not (len(token_shapes) == len(condition_masks) == len(num_views_per_vision_item) == num_items):
+    # The two streams label their tokens with sample ids drawn from their own offsets, and the
+    # predicate compares those ids across the streams (``same_sample``). That only means anything
+    # if both number their samples the same way, which holds because the packer emits exactly one
+    # causal and one full split per sample (``pack_text_tokens`` / ``finish_sample``). Nothing here
+    # can see that, so check it: a pack that broke the pairing -- an AR no-text pack reaching this
+    # path, say -- would pair GEN and UND tokens of unrelated samples with no other symptom.
+    if causal_offsets is not None and causal_offsets.shape[0] != full_q_offsets.shape[0]:
         raise ValueError(
-            "Multiview FlexAttention metadata must align with flattened vision items: "
-            f"got {len(token_shapes)} token shapes, {len(condition_masks)} condition masks, "
-            f"{len(num_views_per_vision_item)} view counts, and {num_items} expected items."
+            f"The UND and GEN streams disagree on their sample count: causal_offsets describes "
+            f"{causal_offsets.shape[0] - 1} samples and full_q_offsets {full_q_offsets.shape[0] - 1}. "
+            "The multiview mask labels both streams from their own offsets and compares those "
+            "labels, so the two have to number the same samples."
+        )
+    _check_view_grids_agree(items_per_sample)
+    items = [item for sample_items in items_per_sample for item in sample_items]
+
+    # same_view_or_frame is factorized spatial + temporal attention: a noisy token reaches its
+    # own view at every frame, and every view at its own frame index. A second sensor on its own
+    # view offset does not share that index -- 7.5 Hz camera latents vs 10 Hz sweeps -- so the
+    # temporal half of the factorization would pair unrelated moments.
+    #
+    # The test is how many view ranges are in play, not whether any of them is non-zero: a
+    # single range renumbered off zero shifts every view id by a constant, which same_view
+    # (an equality) and same_frame (blind to the view) both ignore. Rejecting that would
+    # forbid a layout the scope handles correctly.
+    view_ranges = {item.view_offset for item in items}
+    if attention_scope == "same_view_or_frame" and len(view_ranges) > 1:
+        raise ValueError(
+            "attention_scope='same_view_or_frame' is not allowed on a joint camera + "
+            "LiDAR pack: camera frames and LiDAR sweeps do not correspond. Use 'all_views' "
+            "or 'same_view'."
         )
 
     frame_ids: list[torch.Tensor] = []
     view_ids: list[torch.Tensor] = []
     noisy_flags: list[torch.Tensor] = []
-    cond_type_ids: list[torch.Tensor] = []
-    item_idx = 0
-    for sample_num_items in num_vision_items_per_sample:
-        sample_grid: tuple[int, int] | None = None
-        for cond_type in range(sample_num_items):
-            latent_t, patch_h, patch_w = token_shapes[item_idx]
-            num_views = num_views_per_vision_item[item_idx]
-            if num_views < 1 or latent_t % num_views != 0:
-                raise ValueError(
-                    f"Vision item {item_idx} has latent_t={latent_t}, which is not divisible by num_views={num_views}."
-                )
+    control_flags: list[torch.Tensor] = []
+    # Purely constructive: every field below is per item, and every invariant an item could
+    # violate has been checked already, so this needs no per-sample scope of its own.
+    for item in items:
+        num_views, frames_per_view = item.view_grid
+        spatial_tokens = item.spatial_tokens
+        # Frame index cycles within each view; view index is constant across a view's
+        # whole frame run. Both expand to one entry per token: [item_tokens].
+        frame_ids.append(
+            torch.arange(frames_per_view, device=device).repeat(num_views).repeat_interleave(spatial_tokens)
+        )  # [item_tokens]
+        view_ids.append(
+            (item.view_offset + torch.arange(num_views, device=device)).repeat_interleave(
+                frames_per_view * spatial_tokens
+            )
+        )  # [item_tokens]
 
-            frames_per_view = latent_t // num_views
-            # Noisy tokens see conditioning tokens by matching (frame, view), so an item
-            # on a different grid would pair up unrelated frames and leave the extra
-            # cameras unconditioned without any complaint from the mask.
-            if sample_grid is None:
-                sample_grid = (num_views, frames_per_view)
-            elif sample_grid != (num_views, frames_per_view):
-                raise ValueError(
-                    "All vision items of a sample must share the same (num_views, frames_per_view) grid: "
-                    f"item {item_idx} has {(num_views, frames_per_view)}, expected {sample_grid}."
-                )
-            spatial_tokens = patch_h * patch_w
-            # Frame index cycles within each view; view index is constant across a view's
-            # whole frame run. Both expand to one entry per token: [item_tokens].
-            frame_ids.append(
-                torch.arange(frames_per_view, device=device).repeat(num_views).repeat_interleave(spatial_tokens)
-            )  # [item_tokens]
-            view_ids.append(
-                torch.arange(num_views, device=device).repeat_interleave(frames_per_view * spatial_tokens)
-            )  # [item_tokens]
-
-            condition_mask = condition_masks[item_idx].to(device=device, dtype=torch.bool)  # [latent_t]
-            if condition_mask.numel() != latent_t:
-                raise ValueError(f"Condition mask {item_idx} has {condition_mask.numel()} frames, expected {latent_t}.")
-            # Per-frame flag -> per-token flag, every token of a frame sharing the frame's state.
-            is_conditioning = condition_mask.reshape(latent_t).repeat_interleave(spatial_tokens)  # [item_tokens], bool
-            noisy_flags.append(~is_conditioning)  # [item_tokens], bool
-            cond_type_ids.append(
-                torch.where(
-                    is_conditioning,
-                    torch.full(is_conditioning.shape, cond_type, device=device, dtype=torch.long),
-                    torch.full(is_conditioning.shape, -1, device=device, dtype=torch.long),
-                )
-            )  # [item_tokens]
-            item_idx += 1
+        condition_mask = item.condition_mask.to(device=device, dtype=torch.bool)  # [latent_t]
+        # Per-frame flag -> per-token flag, every token of a frame sharing the frame's state.
+        is_conditioning = condition_mask.reshape(item.latent_t).repeat_interleave(spatial_tokens)  # [item_tokens], bool
+        noisy_flags.append(~is_conditioning)  # [item_tokens], bool
+        control_flags.append(
+            torch.full(is_conditioning.shape, item.is_control, device=device, dtype=torch.bool)
+        )  # [item_tokens]
 
     frame_id = torch.cat(frame_ids)  # [real_token_count]
     view_id = torch.cat(view_ids)  # [real_token_count]
     is_noisy = torch.cat(noisy_flags)  # [real_token_count], bool
-    cond_type_id = torch.cat(cond_type_ids)  # [real_token_count]
+    is_control = torch.cat(control_flags)  # [real_token_count], bool
     real_token_count = frame_id.shape[0]
-    # These counts come from token_shapes while the offsets come from the packer's full
-    # splits. If they disagree, _build_stream_sample_ids draws the padding boundary somewhere
-    # else than this metadata does, which mislabels real tokens as padding or padding as
-    # conditioning tokens. Reading the last offset costs one device sync per forward; this
-    # runs outside the compiled decoder layers.
+    # These counts come from token_shapes while the offsets come from the packer's full splits.
+    # If they disagree, _build_stream_sample_ids draws the padding boundary somewhere else than
+    # this metadata does, so real tokens read as padding or padding reads as a real conditioning
+    # token. Reading the last offset costs one device sync per forward, which is affordable
+    # because this runs outside the compiled decoder layers.
     packed_token_count = int(full_q_offsets[-1])
     if real_token_count != packed_token_count:
         raise ValueError(
             f"Multiview metadata covers {real_token_count} GEN tokens but the pack holds "
-            f"{packed_token_count}; token_shapes and the packed full-attention splits disagree."
+            f"{packed_token_count}; the items and the packed full-attention splits disagree."
         )
     if real_token_count > seq_len:
         raise ValueError(f"Multiview metadata has {real_token_count} tokens, exceeding GEN sequence length {seq_len}.")
@@ -553,22 +663,22 @@ def build_multiview_flex_metadata(
         sentinel = torch.full((pad,), -1, device=device, dtype=torch.long)  # [pad]
         frame_id = torch.cat((frame_id, sentinel))  # [seq_len]
         view_id = torch.cat((view_id, sentinel))  # [seq_len]
-        cond_type_id = torch.cat((cond_type_id, sentinel))  # [seq_len]
         is_noisy = torch.cat((is_noisy, torch.zeros(pad, device=device, dtype=torch.bool)))  # [seq_len], bool
+        is_control = torch.cat((is_control, torch.zeros(pad, device=device, dtype=torch.bool)))  # [seq_len], bool
 
     sample_id = _build_stream_sample_ids(full_q_offsets, seq_len, device)  # [seq_len]
 
     if num_und:
         assert causal_offsets is not None  # guarded above; narrows the type for the checker.
         # UND keys join the front of the stream carrying nothing but their sample: the
-        # multiview fields are what the GEN rules match on, and holding them at -1 is
+        # multiview fields are what the GEN rules match on, and holding them at -1 / False is
         # what keeps those rules from firing on this quadrant.
         und_sentinel = torch.full((num_und,), -1, device=device, dtype=torch.long)  # [num_und]
         sample_id = torch.cat((_build_stream_sample_ids(causal_offsets, num_und, device), sample_id))
         frame_id = torch.cat((und_sentinel, frame_id))  # [num_und+seq_len]
         view_id = torch.cat((und_sentinel, view_id))  # [num_und+seq_len]
-        cond_type_id = torch.cat((und_sentinel, cond_type_id))  # [num_und+seq_len]
         is_noisy = torch.cat((torch.zeros(num_und, device=device, dtype=torch.bool), is_noisy))  # bool
+        is_control = torch.cat((torch.zeros(num_und, device=device, dtype=torch.bool), is_control))  # bool
 
     return FlexMetadata(
         seq_len=num_und + seq_len,
@@ -576,9 +686,9 @@ def build_multiview_flex_metadata(
         frame_id=frame_id,  # [num_und+seq_len]
         view_id=view_id,  # [num_und+seq_len]
         is_noisy=is_noisy,  # [num_und+seq_len], bool
-        cond_type_id=cond_type_id,  # [num_und+seq_len]
+        is_control=is_control,  # [num_und+seq_len], bool
         num_und=num_und,
-        noisy_attention_scope=noisy_attention_scope,
+        attention_scope=attention_scope,
     )
 
 
@@ -590,12 +700,11 @@ def _check_block_aligned(seq_len: int, stream: str, alignment: int) -> None:
     block size, and a block straddling the boundary would be a partial one for every
     query, costing the fully-unmasked fast path on the whole gen->und quadrant.
 
-    ``alignment`` is the block that tiles the stream, which is the backend's rather than
-    a fixed number: :func:`triton_backend_block_size` on Triton, or FlashAttention-4's
-    coarser query tile on Blackwell (:func:`flash_backend_block_size`). The latter is
-    always a multiple of the former, so the backend's own block is the only multiple a
-    length has to satisfy, and it is the one worth naming: raising about the 128 floor
-    instead would understate the requirement.
+    ``alignment`` is the backend's block rather than a fixed number:
+    :func:`triton_backend_block_size` on Triton, or FlashAttention-4's coarser query tile on
+    Blackwell (:func:`flash_backend_block_size`). The latter is always a multiple of the
+    former, so naming the backend's own block is both sufficient and the honest requirement;
+    raising about the 128 floor instead would understate it.
     """
     if seq_len % alignment != 0:
         knob = "full_seq_alignment" if stream == "GEN" else "causal_seq_alignment"
@@ -672,10 +781,10 @@ class FlexBackend:
     def full_seq_alignment(self) -> int:
         """``build_packed_sequence``'s GEN padding multiple for this backend.
 
-        The GEN stream supplies the mask's rows, so it has to be padded to the query block
-        -- 256 on Blackwell FA4, which is coarser than the granularity the metadata itself
-        is built at. That block is always a multiple of :func:`triton_backend_block_size`'s
-        (see :func:`flash_backend_block_size`), so padding to it satisfies both at once.
+        The GEN stream supplies the mask's rows, so it pads to the query block -- 256 on
+        Blackwell FA4, coarser than the granularity the metadata itself is built at. That
+        block is always a multiple of :func:`triton_backend_block_size`'s, so padding to it
+        satisfies both.
         """
         return self.block_size[0]
 
@@ -683,10 +792,10 @@ class FlexBackend:
     def causal_seq_alignment(self) -> int:
         """``build_packed_sequence``'s UND padding multiple for this backend.
 
-        The UND stream is keys only, so what it answers to is the key block, and that is 128
-        on both backends -- FA4 buys its coarser tiles in the query dimension alone. Padding
-        it to the query block instead would also be correct, just more padding for nothing:
-        all the boundary between the two streams has to fall on is a key-block boundary.
+        The UND stream is keys only, so it answers to the key block, 128 on both backends --
+        FA4 buys its coarser tiles in the query dimension alone. Padding it to the query block
+        would also be correct, just more padding for nothing: all the boundary between the two
+        streams has to land on is a key-block boundary.
         """
         return self.block_size[1]
 
@@ -823,7 +932,7 @@ def _metadata_groups(metadata: FlexMetadata, device: torch.device) -> tuple[torc
             metadata.frame_id,
             metadata.view_id,
             metadata.is_noisy.to(torch.long),
-            metadata.cond_type_id,
+            metadata.is_control.to(torch.long),
             _und_flags(metadata).to(torch.long),
         ),
         dim=1,
@@ -856,8 +965,8 @@ def build_block_mask(
     """Build the GEN-tower :class:`BlockMask` from precomputed flex metadata.
 
     Uses the multiview supertoken ``mask_mod``; the multiview fields
-    (``frame_id`` / ``view_id`` / ``is_noisy`` / ``cond_type_id``) must be
-    populated on ``metadata``.
+    (``frame_id`` / ``view_id`` / ``is_noisy`` / ``is_control``) must be populated on
+    ``metadata``.
 
     ``create_block_mask`` is deliberately not used here. It evaluates the predicate
     into a dense ``[Q_LEN, KV_LEN]`` bool tensor before reducing it to blocks, and
@@ -909,7 +1018,7 @@ def build_block_mask(
     _check_block_aligned(metadata.q_len, "GEN", q_block_size)
     _check_block_aligned(metadata.num_und, "UND", kv_block_size)
     key_fields = _key_stream_fields(metadata)
-    pair_allowed = _multiview_pair_predicate(key_fields, key_fields, metadata.noisy_attention_scope)
+    pair_allowed = _multiview_pair_predicate(key_fields, key_fields, metadata.attention_scope)
     mask_mod = _multiview_mask_mod(metadata)
     num_q_blocks = metadata.q_len // q_block_size
     num_kv_blocks = metadata.seq_len // kv_block_size
@@ -958,24 +1067,22 @@ def build_multiview_block_mask(
     *,
     seq_len: int,
     full_q_offsets: torch.Tensor,
-    token_shapes: Sequence[tuple[int, ...]],
-    condition_masks: Sequence[torch.Tensor],
-    num_vision_items_per_sample: list[int],
-    num_views_per_vision_item: list[int],
+    items_per_sample: Sequence[Sequence[MaskItem]],
     device: torch.device,
     block_size: tuple[int, int],
     num_und: int = 0,
     causal_offsets: torch.Tensor | None = None,
-    noisy_attention_scope: NoisyAttentionScope = "all_views",
+    attention_scope: AttentionScope = "all_views",
 ) -> BlockMask:
     """Build the GEN-tower :class:`BlockMask` for camera-major multiview items.
 
     The entry point for the packed-batch path: it runs
     :func:`build_multiview_flex_metadata` and :func:`build_block_mask` back to back so
-    the caller only handles the mask. See those two for the token layout the metadata
-    encodes, for why the mask has to be built outside the decoder layers, for what
-    ``block_size`` selects, for what ``num_und`` / ``causal_offsets`` add, and for what
-    ``noisy_attention_scope`` lets the noisy tokens reach.
+    the caller only handles the mask. See :class:`MaskItem` for what one item describes,
+    and those two functions for the token layout the metadata encodes, for why the mask has
+    to be built outside the decoder layers, for what ``block_size`` selects, for what
+    ``num_und`` / ``causal_offsets`` add, and for what ``attention_scope`` lets same-kind
+    (RGB) tokens reach.
 
     The two stages stay separately callable because the metadata layout is checked on
     CPU in the unit tests, independently of the block-mask construction.
@@ -983,14 +1090,11 @@ def build_multiview_block_mask(
     metadata = build_multiview_flex_metadata(
         seq_len=seq_len,
         full_q_offsets=full_q_offsets,
-        token_shapes=token_shapes,
-        condition_masks=condition_masks,
-        num_vision_items_per_sample=num_vision_items_per_sample,
-        num_views_per_vision_item=num_views_per_vision_item,
+        items_per_sample=items_per_sample,
         device=device,
         num_und=num_und,
         causal_offsets=causal_offsets,
-        noisy_attention_scope=noisy_attention_scope,
+        attention_scope=attention_scope,
     )
     return build_block_mask(metadata, device, block_size)
 
@@ -1026,14 +1130,12 @@ def flex_attention(
             :func:`build_block_mask` (or :func:`build_multiview_block_mask`); it must
             have been built for the same two lengths.
         backend: the :class:`FlexBackend` from the :func:`resolve_flex_backend` call that
-            decided ``block_mask``'s block size; its ``kernel_options`` are what select the
-            kernels. The whole object rather than those options alone, because the two only
-            mean anything together -- the FlashAttention-4 options are correct for a mask
-            built at that backend's block size and silently wrong for any other -- so
-            passing it lets that agreement be checked here. Required, since every mask was
-            built at some backend's block size and running it on another's is the bug this
-            checks for; :func:`resolve_flex_backend` is where one comes from. Dynamo guards
-            on the ``kernel_options`` dict, so each distinct value compiles its own kernel.
+            decided ``block_mask``'s block size; its ``kernel_options`` select the kernels.
+            The whole object rather than those options alone, because the two only mean
+            anything together -- FlashAttention-4's options are correct for a mask built at
+            that backend's block size and silently wrong for any other -- so passing it lets
+            the check below compare the two. Dynamo guards on the ``kernel_options`` dict, so
+            each distinct value compiles its own kernel.
         return_lse: when ``True`` also return the log-sum-exp, for a caller that merges
             this output with another attention term. The fused path does not, and asking
             for it costs the FlashAttention-4 backward, which cannot differentiate it.
@@ -1073,11 +1175,8 @@ def flex_attention(
             f"{q_seq_len} tokens against {kv_seq_len} keys; the mask must be built from the same pack "
             "that produced q/k/v."
         )
-    # The mask carries the backend's geometry: it was built at the block size the kernel steps
-    # in, 256 query rows on Blackwell FA4 against 128 on Triton, so it is what the streams have
-    # to be measured against. One check per stream, each against the block that tiles it, as
-    # build_block_mask makes them -- a partial trailing block would silently drop the rows the
-    # mask has no entry for.
+    # The mask was built at the block size the kernel steps in -- 256 query rows on Blackwell
+    # FA4 against 128 on Triton -- so it carries the geometry the streams are measured against.
     mask_q_block, mask_kv_block = block_mask.BLOCK_SIZE
     if (mask_q_block, mask_kv_block) != backend.block_size:
         # The kernels below step backend.block_size whatever the mask says, and an over-fine
@@ -1087,6 +1186,8 @@ def flex_attention(
             f"block_mask was built at {(mask_q_block, mask_kv_block)} blocks, but the {backend.name} backend "
             f"steps {backend.block_size}; build the mask from the same FlexBackend that runs it."
         )
+    # One check per stream, each against the block that tiles it, as build_block_mask makes
+    # them: a partial trailing block would silently drop the rows the mask has no entry for.
     _check_block_aligned(q_seq_len, "GEN", mask_q_block)
     _check_block_aligned(kv_seq_len - q_seq_len, "UND", mask_kv_block)
 

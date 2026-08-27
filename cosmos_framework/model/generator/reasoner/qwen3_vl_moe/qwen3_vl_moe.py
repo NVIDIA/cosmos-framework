@@ -332,12 +332,18 @@ def _weighted_expert_counts(
     a loop bound, which has to be an integer.
     """
     if token_weight is None:
+        # histc takes integers on CUDA but not on CPU, where it dispatches to the histogram
+        # kernel and raises `"histogram_cpu" not implemented for 'Int'`. Both come back as
+        # int32 so the caller sees one dtype regardless of device.
+        histc_input = (
+            expert_indices.float() if expert_indices.device.type == "cpu" else expert_indices.to(dtype=torch.int32)
+        )  # [N*K]
         return torch.histc(
-            expert_indices.to(dtype=torch.int32).view(-1),
+            histc_input.view(-1),
             bins=num_experts,
             min=0,
             max=num_experts - 1,
-        )  # int32 [E]
+        ).to(dtype=torch.int32)  # int32 [E]
     weights = token_weight.unsqueeze(1).expand_as(expert_indices).reshape(-1).to(torch.int32)  # [N*K]
     counts = torch.zeros(num_experts, dtype=torch.int32, device=expert_indices.device)  # [E]
     return counts.scatter_add_(0, expert_indices.reshape(-1).to(torch.int64), weights)  # int32 [E]

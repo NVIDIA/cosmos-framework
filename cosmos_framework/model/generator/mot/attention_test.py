@@ -3,7 +3,7 @@
 
 import random  # noqa: I001 - release import rewriting changes the package sort order.
 import contextlib
-from collections.abc import Iterator
+from collections.abc import Iterator, Sequence
 from dataclasses import dataclass
 from types import SimpleNamespace
 from typing import cast
@@ -13,20 +13,26 @@ import torch
 from torch.nn.attention.flex_attention import BlockMask
 
 import cosmos_framework.model.generator.mot.attention as attention
+from cosmos_framework.model.attention import attention as imaginaire_attention
+from cosmos_framework.model.attention import multi_dimensional_attention_varlen
 from cosmos_framework.model.attention.natten import NATTEN_SUPPORTED
+from cosmos_framework.model.attention.varlen import generate_multi_dim_varlen_parameters
 from cosmos_framework.utils.misc import set_torch_compile_options
 from cosmos_framework.model.generator.mot.attention import (
     build_packed_sequence,
 )
 from cosmos_framework.model.generator.mot.flex_attention import (
     FlexBackend,
+    MaskItem,
     build_multiview_block_mask,
     resolve_flex_backend,
 )
 from cosmos_framework.model.generator.mot.flex_attention_test import _FLASH_UNAVAILABLE_MARKERS
+from cosmos_framework.data.generator.sequence_packing.sequence import PackedSequence
 from cosmos_framework.data.generator.sequence_packing.runtime import (
     SequencePack,
     get_all_seq,
+    get_all_seq_padded,
     get_causal_seq,
     get_full_only_seq,
     get_gen_seq,
@@ -381,39 +387,33 @@ class _SampleCountTripwire:
         raise AssertionError("the sample count was read, which specializes the compiled graph on it")
 
 
-def _varlen_kwargs_with(sample_offsets: object) -> dict[str, object]:
-    offsets = torch.tensor([0, 4], dtype=torch.int32)  # [num_samples+1]
-    return attention._varlen_kwargs(
-        cast(torch.Tensor, sample_offsets),
-        cumulative_seqlen_Q=offsets,
-        cumulative_seqlen_KV=offsets,
-        max_seqlen_Q=4,
-        max_seqlen_KV=4,
-    )
+def _use_varlen_with(sample_offsets: object) -> bool:
+    return attention._use_varlen(cast(torch.Tensor, sample_offsets))
 
 
 @pytest.mark.L0
-def test_varlen_kwargs_does_not_read_the_sample_count_while_training() -> None:
+def test_use_varlen_does_not_read_the_sample_count_while_training() -> None:
     """A pack's sample count varies from step to step, so reading it costs a recompile.
 
-    ``_varlen_kwargs`` only wants the count to take a dense-attention shortcut that is gated to
-    inference, and short-circuit evaluation is what keeps training away from it.
+    ``_use_varlen`` only wants the count to take a dense-attention shortcut that is gated to
+    inference, and short-circuit evaluation is what keeps training away from it: the grad-mode
+    test is the left operand of an ``or``, so training never reaches the count at all.
     """
-    varlen_kwargs = _varlen_kwargs_with(_SampleCountTripwire())
-
-    assert set(varlen_kwargs) == {"cumulative_seqlen_Q", "cumulative_seqlen_KV", "max_seqlen_Q", "max_seqlen_KV"}
+    assert _use_varlen_with(_SampleCountTripwire()) is True
 
 
 @pytest.mark.L0
-def test_varlen_kwargs_takes_the_dense_path_for_a_single_sample_without_grad() -> None:
+def test_use_varlen_takes_the_dense_path_for_a_single_sample_without_grad() -> None:
+    # [0, 4] is one sample, so the varlen ranges would describe the whole tensor and buy nothing.
     with torch.no_grad():
-        assert _varlen_kwargs_with(torch.tensor([0, 4], dtype=torch.int32)) == {}
+        assert _use_varlen_with(torch.tensor([0, 4], dtype=torch.int32)) is False
 
 
 @pytest.mark.L0
-def test_varlen_kwargs_stays_varlen_for_several_samples_without_grad() -> None:
+def test_use_varlen_stays_varlen_for_several_samples_without_grad() -> None:
+    # [0, 2, 4] is two samples, which the dense API has no way to keep apart.
     with torch.no_grad():
-        assert _varlen_kwargs_with(torch.tensor([0, 2, 4], dtype=torch.int32)) != {}
+        assert _use_varlen_with(torch.tensor([0, 2, 4], dtype=torch.int32)) is True
 
 
 @pytest.mark.L0
@@ -604,6 +604,52 @@ def test_decoder_layer_optimized_path_empty_und_tensor_shape():
     assert retrieved.shape == (0, hidden_dim), "get_und_seq must return 2D tensor"
 
 
+def _split_info_for_multi_control_test() -> attention.SplitInfo:
+    return attention.SplitInfo(split_lens=[1, 1], attn_modes=["causal", "full"], sample_lens=[2], actual_len=2)
+
+
+def _annotate_multi_control_ranges_for_test(
+    attention_meta: attention.SplitInfo, packed_seq: PackedSequence, *, n_gen: int
+) -> None:
+    pytest.importorskip("transformers", reason="cosmos3_vfm_network requires the Cosmos3 network dependencies.")
+    from cosmos_framework.model.generator.mot.cosmos3_vfm_network import _annotate_multi_control_ranges
+
+    _annotate_multi_control_ranges(attention_meta, packed_seq, n_gen=n_gen)
+
+
+@pytest.mark.L0
+def test_multi_control_range_annotation_ignores_single_control_weight() -> None:
+    attention_meta = _split_info_for_multi_control_test()
+    packed_seq = PackedSequence(vision_item_split_lens=[[3, 4]], control_weights=[[1.0]])
+
+    _annotate_multi_control_ranges_for_test(attention_meta, packed_seq, n_gen=7)
+
+    assert attention_meta.control_stream_token_ranges is None
+    assert attention_meta.noisy_token_range is None
+    assert attention_meta.control_weights is None
+
+
+@pytest.mark.L0
+def test_multi_control_range_annotation_sets_ranges_for_multiple_controls() -> None:
+    attention_meta = _split_info_for_multi_control_test()
+    packed_seq = PackedSequence(vision_item_split_lens=[[2, 3, 5]], control_weights=[[0.25, 0.75]])
+
+    _annotate_multi_control_ranges_for_test(attention_meta, packed_seq, n_gen=10)
+
+    assert attention_meta.control_stream_token_ranges == [(0, 2), (2, 5)]
+    assert attention_meta.noisy_token_range == (5, 10)
+    assert attention_meta.control_weights == [0.25, 0.75]
+
+
+@pytest.mark.L0
+def test_multi_control_range_annotation_rejects_inconsistent_token_count() -> None:
+    attention_meta = _split_info_for_multi_control_test()
+    packed_seq = PackedSequence(vision_item_split_lens=[[2, 3, 5]], control_weights=[[0.25, 0.75]])
+
+    with pytest.raises(AssertionError, match="packing inconsistency"):
+        _annotate_multi_control_ranges_for_test(attention_meta, packed_seq, n_gen=9)
+
+
 # ── two_way_attention on the multiview FlexAttention mask ────────────────────
 # The generator's full attention has two implementations of "every GEN token attends to
 # its whole sample": the dense varlen kernel, and a single FlexAttention call over the
@@ -744,10 +790,17 @@ def _multiview_block_mask(pack: SequencePack, shape: _MultiviewShape, *, block_s
     return build_multiview_block_mask(
         seq_len=full_only_seq.shape[0],
         full_q_offsets=full_q_offsets,
-        token_shapes=list(shape.token_shapes),
-        condition_masks=[torch.zeros(latent_t, dtype=torch.bool) for latent_t, _, _ in shape.token_shapes],
-        num_vision_items_per_sample=[1] * len(shape.und_lens),
-        num_views_per_vision_item=list(shape.num_views),
+        items_per_sample=[
+            # One item per sample, none of it conditioning.
+            [
+                MaskItem(
+                    token_shape=token_shape,
+                    condition_mask=torch.zeros(token_shape[0], dtype=torch.bool),
+                    num_views=num_views,
+                )
+            ]
+            for token_shape, num_views in zip(shape.token_shapes, shape.num_views)
+        ],
         device=full_only_seq.device,
         block_size=block_size,
         num_und=causal_seq.shape[0],
@@ -1019,6 +1072,647 @@ def test_two_way_attention_flex_matches_dense_across_batch_shapes(
             "supposed to specialize its own, so a shape that reused an earlier graph is not being specialized "
             "on the sequence length the way that setting says it is."
         )
+
+
+def _two_way_pack(
+    x: torch.Tensor,
+    und_lens: Sequence[int],
+    gen_lens: Sequence[int],
+    *,
+    full_seq_alignment: int,
+    causal_seq_alignment: int,
+) -> SequencePack:
+    """Pack ``x`` as one UND and one GEN split per sample, padded to the two alignments.
+
+    The alignments are the knob, rather than a ``FlexBackend``: what the two tests below need
+    is a pack whose GEN stream is longer than its real token count, and the dense path they
+    exercise is the one taken when no flex mask comes along. Context parallel reaches the same
+    state through ``cp_world_size``, which ``_get_padded_size`` folds into the same alignment.
+    """
+    split_lens: list[int] = []
+    und_indexes: list[int] = []
+    gen_indexes: list[int] = []
+    start = 0
+    for und_len, gen_len in zip(und_lens, gen_lens):
+        split_lens.extend((und_len, gen_len))
+        und_indexes.extend(range(start, start + und_len))
+        gen_indexes.extend(range(start + und_len, start + und_len + gen_len))
+        start += und_len + gen_len
+
+    return build_packed_sequence(
+        "two_way",
+        packed_sequence=x,
+        attn_modes=["causal", "full"] * len(und_lens),
+        split_lens=split_lens,
+        sample_lens=[und_len + gen_len for und_len, gen_len in zip(und_lens, gen_lens)],
+        packed_und_token_indexes=cast(torch.LongTensor, torch.tensor(und_indexes, dtype=torch.long, device=x.device)),
+        packed_gen_token_indexes=cast(torch.LongTensor, torch.tensor(gen_indexes, dtype=torch.long, device=x.device)),
+        num_heads=x.shape[-2],
+        head_dim=x.shape[-1],
+        num_layers=1,
+        full_seq_alignment=full_seq_alignment,
+        causal_seq_alignment=causal_seq_alignment,
+    )[0]
+
+
+def _natten_varlen_multi_dim_supported() -> bool:
+    """Whether ``multi_dimensional_attention_varlen`` can actually run here.
+
+    ``NATTEN_SUPPORTED`` is the coarser gate -- NATTEN present and new enough for the dense
+    multi-dim ops. Varlen multi-dim landed later, and ``generate_multi_dim_varlen_parameters``
+    raises rather than degrades when it is missing, so a test guarded on the coarse flag alone
+    fails on an older NATTEN instead of skipping.
+    """
+    if not NATTEN_SUPPORTED:
+        return False
+    try:
+        from cosmos_framework.model.attention.natten import NATTEN_VARLEN_MULTI_DIM_VERSION, natten_version_satisfies
+
+        return bool(natten_version_satisfies(NATTEN_VARLEN_MULTI_DIM_VERSION))
+    except Exception:
+        return False
+
+
+_NATTEN_VARLEN_MULTI_DIM = _natten_varlen_multi_dim_supported()
+
+# 2**16, which bf16 holds exactly, so a row that still carries it compares equal on the nose.
+# A finite marker rather than NaN on purpose: NaN only catches an unwritten row when the
+# recycled block happened to hold NaN, while this catches one whatever the kernel does or does
+# not write, and tells "written as zero" apart from "left as it was found".
+_POISON = 65536.0
+
+
+def _stage_poisoned_blocks(
+    shape: tuple[int, ...], dtype: torch.dtype, device: torch.device, fill: float = _POISON, count: int = 8
+) -> set[int]:
+    """Leave ``fill``-filled blocks of ``shape`` in the caching allocator; return their addresses.
+
+    A varlen kernel writes only the rows its cumulative ranges cover, so if it allocates its
+    output with ``empty_like(q)`` the rows past the last offset keep whatever the block already
+    held. Freshly recycled blocks are where that content comes from in a training step, and
+    this stages several of them at exactly the size the kernel is about to ask for.
+
+    The addresses come back because staging the blocks is not the same as the kernel *getting*
+    one. Everything else the call allocates on the way -- the causal pass's own output, the
+    ``get_all_seq`` gather, the key concatenations -- competes for the same size class, so the
+    output buffer may well be a block none of this ever touched. A test that assumed otherwise
+    would read a freshly-zeroed page as proof that the kernel wrote it. :func:`_assert_from_a
+    _staged_block` is what turns that assumption into a check.
+    """
+    blocks = [torch.full(shape, fill, dtype=dtype, device=device) for _ in range(count)]
+    addresses = {block.data_ptr() for block in blocks}
+    del blocks  # Back to the allocator's cache, poison and all.
+    return addresses
+
+
+def _skip_unless_from_a_staged_block(out: torch.Tensor, addresses: set[int]) -> None:
+    """Skip unless ``out`` lives in one of the staged blocks, so its content means something.
+
+    ``two_way_attention`` reshapes the kernel's output before packing it, but ``squeeze`` and
+    ``flatten`` on a contiguous tensor are views, so the address survives to here. If it is not
+    one of the staged ones then the buffer was never poisoned and its padded rows say nothing
+    about whether the kernel wrote them -- which is a skip, not a pass.
+    """
+    if out.data_ptr() not in addresses:
+        pytest.skip(
+            "The kernel's output buffer was not one of the staged blocks, so its padded rows "
+            "carry no evidence either way. Re-run, or widen the staging, to get a verdict."
+        )
+
+
+# Backends that ``cosmos_framework.model.attention.attention`` may dispatch a varlen call to; ``choose_backend``
+# decides which one is used. We only test NATTEN here, since production runs exclusively use it.
+# Flash3 on H100/H200 is expected to fail this test, as it leaves rows past the cumulative ranges
+# unwritten. NATTEN instead zeros out those rows. We no longer rely on this property for
+# correctness, but retain the test in case it becomes relevant again in the future.
+_VARLEN_BACKENDS = ("natten",)
+
+
+@pytest.mark.L0
+@pytest.mark.GPU
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="The varlen attention kernels require a GPU.")
+@pytest.mark.parametrize("backend", _VARLEN_BACKENDS)
+def test_varlen_attention_writes_query_rows_past_its_cumulative_ranges(backend: str) -> None:
+    """The varlen primitive on its own: are rows outside ``cu_seqlens_Q`` written, or left as found?
+
+    This is the question the two pack-level tests below inherit, asked where it can actually be
+    answered. Inside ``two_way_attention`` the output buffer competes with everything else the
+    call allocates at that size, so the staged block rarely reaches the kernel and the tests
+    skip. Here the varlen call is the only thing allocating 64 KB, so the staged block usually
+    does reach it -- and the backends return ``out`` as ``[total_tokens, H, Dv]`` sized by the
+    *padded* query count, which is exactly the buffer in question.
+
+    ``backend`` is pinned rather than left to ``choose_backend`` because the answer is the
+    kernel's, not the frontend's: NATTEN, flash3 and flash2 are separate implementations behind
+    one entry point, and one of them zeroing the uncovered rows says nothing about the others.
+
+    A query length past ``cu_seqlens_Q[-1]`` is the shape the packer produces whenever it pads
+    the GEN stream: ``sequence_pack_from_packed_sequence`` pads ``full_only_seq`` while
+    ``_full_only_seq_offsets`` still stops at the last real token.
+    """
+    device = torch.device("cuda")
+    heads, head_dim = 4, 64
+    real, padded = 96, 128
+
+    # Two samples covering [0, 96); rows 96..127 of q are outside every range. Only the query
+    # stream is padded, which is the shape the two-way dense full pass has: its keys come from
+    # get_all_seq, which holds real tokens only.
+    offsets = torch.tensor([0, 48, real], device=device, dtype=torch.int32)
+
+    # Retried for the same reason the backward companion is: whether the staged block reaches the
+    # kernel is the allocator's business, and a miss is a skip, which is not an answer. Fresh
+    # tensors each round so nothing is held across attempts to compete for the size class.
+    inner = None
+    for attempt in range(24):
+        torch.manual_seed(attempt)
+        q = torch.randn(1, padded, heads, head_dim, device=device, dtype=torch.bfloat16)
+        k = torch.randn(1, real, heads, head_dim, device=device, dtype=torch.bfloat16)
+        v = torch.randn(1, real, heads, head_dim, device=device, dtype=torch.bfloat16)
+
+        torch.cuda.synchronize()
+        addresses = _stage_poisoned_blocks((padded, heads, head_dim), torch.bfloat16, device, count=64)
+        try:
+            out = imaginaire_attention(
+                q,
+                k,
+                v,
+                cumulative_seqlen_Q=offsets,
+                cumulative_seqlen_KV=offsets,
+                max_seqlen_Q=48,
+                max_seqlen_KV=48,
+                backend=backend,
+            )
+        except (ValueError, NotImplementedError, RuntimeError, AssertionError) as e:
+            pytest.skip(f"The {backend} backend cannot run this varlen case here: {type(e).__name__}: {e}")
+
+        candidate = out.squeeze(0)  # [padded,H,D], the kernel's own buffer
+        if candidate.data_ptr() in addresses:
+            inner = candidate.clone()
+            break
+
+    if inner is None:
+        pytest.skip(
+            "The output buffer never landed on a staged block across 24 attempts, so its rows past the "
+            "ranges carry no evidence either way."
+        )
+
+    tail = inner[real:]  # [pad_rows,heads,head_dim]
+    poisoned_rows = int((tail == _POISON).flatten(1).any(dim=1).sum())
+    assert not poisoned_rows, (
+        f"{poisoned_rows} of the {padded - real} query rows past cu_seqlens_Q[-1] came back holding the "
+        f"poison their buffer was staged with: the {backend} varlen forward leaves them exactly as it found "
+        "them. Any caller that pads its query stream past its offsets inherits whatever the recycled block "
+        "held -- which is the two-way dense full pass, whose queries are the padded GEN stream."
+    )
+
+
+@pytest.mark.L0
+@pytest.mark.GPU
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="The varlen attention kernels require a GPU.")
+@pytest.mark.parametrize("backend", _VARLEN_BACKENDS)
+def test_varlen_attention_backward_writes_query_grad_rows_past_its_ranges(backend: str) -> None:
+    """The other half of the same question, on the backward: is ``dQ`` written past the ranges?
+
+    The forward companion above settles the output buffer. The gradient is the half that would
+    actually cost something: ``dQ`` rows for padded queries reach the q-projection's weight
+    gradient, which sums over every row, so a non-finite one there lands on the whole weight
+    rather than on the padding alone -- ``0 * NaN`` is NaN, not zero.
+
+    ``dQ`` is allocated at the same ``[total_tokens, H, D]`` as the forward output, so the same
+    staging works on it, and the same address check says whether the staging reached it.
+    """
+    device = torch.device("cuda")
+    heads, head_dim = 4, 64
+    real, padded = 96, 128
+    offsets = torch.tensor([0, 48, real], device=device, dtype=torch.int32)
+
+    # All three streams are padded, so all three gradients have rows past the ranges. The packer
+    # pads both streams too -- causal_seq is the K/V of the causal pass -- so dK and dV carry the
+    # same question dQ does, and testing only dQ would leave two thirds of it open.
+    #
+    # Each gradient competes for its size class with everything else the backward allocates, so a
+    # single staging attempt usually misses and the address check skips, which says nothing.
+    # Retrying with a fresh graph makes "the allocator did not cooperate" a question of patience
+    # rather than a verdict. ``torch.autograd.grad`` rather than ``.backward()`` so the gradients
+    # arrive as the backward produced them, with no AccumulateGrad in the way that might hand
+    # back a copy of a buffer the kernel never touched.
+    landed: dict[str, torch.Tensor] = {}
+    for attempt in range(24):
+        torch.manual_seed(attempt)
+        q, k, v = (
+            torch.randn(1, padded, heads, head_dim, device=device, dtype=torch.bfloat16, requires_grad=True)
+            for _ in range(3)
+        )
+        try:
+            out = imaginaire_attention(
+                q,
+                k,
+                v,
+                cumulative_seqlen_Q=offsets,
+                cumulative_seqlen_KV=offsets,
+                max_seqlen_Q=48,
+                max_seqlen_KV=48,
+                backend=backend,
+            )
+        except (ValueError, NotImplementedError, RuntimeError, AssertionError) as e:
+            pytest.skip(f"The {backend} backend cannot run this varlen case here: {type(e).__name__}: {e}")
+
+        # Zero on the padded rows, as a real loss leaves them: it reads only the real tokens.
+        grad_out = torch.randn_like(out)
+        grad_out[:, real:] = 0
+
+        torch.cuda.synchronize()
+        addresses = _stage_poisoned_blocks((padded, heads, head_dim), torch.bfloat16, device, count=64)
+        grads = torch.autograd.grad(out, (q, k, v), grad_out)
+        for name, grad in zip(("dQ", "dK", "dV"), grads):
+            if name not in landed and grad.squeeze(0).data_ptr() in addresses:
+                landed[name] = grad.squeeze(0).clone()
+        if len(landed) == 3:
+            break
+
+    if not landed:
+        pytest.skip(
+            "No gradient landed on a staged block across 24 attempts, so their rows past the ranges carry no "
+            "evidence either way."
+        )
+
+    # Every gradient is reported, not just the first to fail. Which of the three a backend leaves
+    # alone is the whole finding -- dQ maps to the padded query stream and dK/dV to the padded key
+    # stream, and the passes in attention.py pad those independently -- so aborting on whichever
+    # sorts first would hide most of the answer.
+    verdicts: list[str] = []
+    for name in ("dQ", "dK", "dV"):
+        grad = landed.get(name)
+        if grad is None:
+            verdicts.append(f"{name}: untested (never landed on a staged block)")
+            continue
+        tail = grad[real:]  # [pad_rows,heads,head_dim]
+        poisoned_rows = int((tail == _POISON).flatten(1).any(dim=1).sum())
+        finite = bool(torch.isfinite(grad).all())
+        verdicts.append(f"{name}: {poisoned_rows}/{padded - real} padded rows left as staged, finite={finite}")
+
+    left_untouched = [
+        name
+        for name in ("dQ", "dK", "dV")
+        if landed.get(name) is not None and bool((landed[name][real:] == _POISON).any())
+    ]
+    assert not left_untouched, (
+        f"The {backend} varlen backward leaves {', '.join(left_untouched)} unwritten past the cumulative "
+        f"ranges. Full verdict -- {'; '.join(verdicts)}. Those rows reach the matching projection's weight "
+        "gradient, where dW sums over every row, so one non-finite row there takes out every weight rather "
+        "than just the padding."
+    )
+    assert len(landed) == 3, (
+        f"Only {sorted(landed)} landed on a staged block, so the rest are untested here. Full verdict -- "
+        f"{'; '.join(verdicts)}. Re-run for a verdict on all three."
+    )
+
+
+@pytest.mark.L0
+@pytest.mark.GPU
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="The varlen attention kernels require a GPU.")
+@pytest.mark.skipif(
+    not _NATTEN_VARLEN_MULTI_DIM,
+    reason="Varlen multi-dimensional NATTEN requires NATTEN >= 0.21.9.dev0.",
+)
+def test_natten_varlen_attention_writes_rows_past_its_token_layouts() -> None:
+    """The same question for NATTEN, which production training runs.
+
+    NATTEN does not take ``cu_seqlens`` at all: ``generate_multi_dim_varlen_parameters`` derives
+    its metadata from ``token_layout_list``, the per-sample spatial layouts, and those describe
+    real tokens only -- ``build_natten_metadata`` builds them from ``vision_token_shapes``. So a
+    padded GEN stream reaches ``multi_dimensional_attention_varlen`` with more rows than the
+    layouts account for, which is the state ``sequence_packing/natten.py`` flags as a standing
+    TODO ("we're assuming ... no padding in between ... We should either make sure this never
+    happens, or have static checks in place").
+
+    ``three_way_attention`` merges this output with the gen->und pass through
+    ``merge_attentions``, so whatever lands in those rows propagates from there.
+    """
+    device = torch.device("cuda")
+    heads, head_dim = 4, 64
+    # Two samples of 4 supertokens x 16 spatial tokens, the shape build_natten_metadata
+    # produces for temporal-causal packs: (T, num_action + H*W).
+    token_layout_list = [(4, 16), (4, 16)]
+    real = sum(t * s for t, s in token_layout_list)
+    padded = real + 32
+
+    metadata = generate_multi_dim_varlen_parameters(
+        token_layout_list=token_layout_list,
+        head_dim=head_dim,
+        device=device,
+        dtype=torch.bfloat16,
+        requires_grad=False,
+        is_causal=(True, False),
+    )
+
+    torch.manual_seed(0)
+    q = torch.randn(1, padded, heads, head_dim, device=device, dtype=torch.bfloat16)
+    k = torch.randn(1, padded, heads, head_dim, device=device, dtype=torch.bfloat16)
+    v = torch.randn(1, padded, heads, head_dim, device=device, dtype=torch.bfloat16)
+
+    torch.cuda.synchronize()
+    addresses = _stage_poisoned_blocks((padded, heads, head_dim), torch.bfloat16, device, count=32)
+
+    out = multi_dimensional_attention_varlen(q, k, v, metadata=metadata)
+
+    inner = cast(torch.Tensor, out).squeeze(0)  # [padded,H,D]
+    _skip_unless_from_a_staged_block(inner, addresses)
+
+    tail = inner[real:]
+    still_poisoned = int((tail == _POISON).any(dim=-1).sum())
+    assert not still_poisoned, (
+        f"{still_poisoned} of the {padded - real} rows past NATTEN's token layouts came back holding the "
+        "poison their buffer was staged with: NATTEN leaves them as it found them, so a padded GEN stream "
+        "carries whatever the recycled block held into merge_attentions and on to o_proj_moe_gen."
+    )
+
+
+@pytest.mark.L0
+@pytest.mark.GPU
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="The varlen attention kernels require a GPU.")
+def test_two_way_dense_gen_pass_writes_its_padded_query_rows() -> None:
+    """Every row of the dense GEN pass's output is written, padding included.
+
+    ``two_way_attention``'s causal pass switches to ``_causal_seq_offsets_pad_segment`` when the
+    pack carries one, so its padding is covered by a trailing segment and the kernel writes it.
+    The GEN pass does not: it keys against ``get_all_seq``, which holds real tokens only and
+    whose ``sample_offsets`` have no matching extra segment, so it runs on the plain
+    ``_full_only_seq_offsets``. Those stop at the last real GEN token while ``full_q`` is the
+    padded stream, leaving the tail rows outside every cumulative range.
+
+    What makes that worth a test rather than a comment is where those rows go next:
+    ``unified_mot`` feeds the whole padded GEN stream into ``o_proj_moe_gen``, and a dense MLP
+    is row-wise, so nothing between here and the projection re-zeros them.
+    """
+    device = torch.device("cuda")
+    und_lens, gen_lens = (12, 20), (100, 140)
+    real_len = sum(und_lens) + sum(gen_lens)
+    real_gen = sum(gen_lens)
+
+    qkv = torch.randn(3, real_len, 4, 64, device=device, dtype=torch.bfloat16)
+    packs = cast(
+        tuple[SequencePack, SequencePack, SequencePack],
+        tuple(
+            _two_way_pack(qkv[i], und_lens, gen_lens, full_seq_alignment=128, causal_seq_alignment=128)
+            for i in range(3)
+        ),
+    )
+
+    padded_gen = int(get_gen_seq(packs[0]).shape[0])
+    assert padded_gen > real_gen, (
+        f"The GEN stream came out unpadded ({padded_gen} rows for {real_gen} real tokens), so this test would "
+        "assert nothing. Raise full_seq_alignment until the packer pads it."
+    )
+
+    # flash allocates the varlen output as empty_like(q), i.e. [padded_gen, heads, head_dim].
+    addresses = _stage_poisoned_blocks((padded_gen, qkv.shape[-2], qkv.shape[-1]), torch.bfloat16, device)
+
+    # No flex mask, so this takes the dense branch -- the one under test.
+    out = attention.two_way_attention(*packs)
+
+    gen_out = get_gen_seq(out)
+    _skip_unless_from_a_staged_block(gen_out, addresses)
+    tail = gen_out[real_gen:]
+    still_poisoned = int((tail == _POISON).any(dim=-1).sum())
+    assert not still_poisoned, (
+        f"{still_poisoned} of the GEN stream's {padded_gen - real_gen} padded rows came back holding the "
+        "poison the output buffer was staged with, so the dense GEN pass left them unwritten and they carry "
+        "whatever the recycled block did. They reach o_proj_moe_gen from here."
+    )
+    assert torch.isfinite(tail).all(), (
+        f"{int((~torch.isfinite(tail)).any(dim=-1).sum())} of the GEN stream's {padded_gen - real_gen} padded "
+        "rows came back non-finite."
+    )
+
+
+@pytest.mark.L0
+@pytest.mark.GPU
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="The varlen attention kernels require a GPU.")
+def test_padded_gen_rows_do_not_poison_a_downstream_weight_gradient() -> None:
+    """A projection reading the padded GEN stream gets a finite weight gradient.
+
+    This is the consequence the row-level test above only implies. ``dW = X.T @ dOut`` sums over
+    every row the projection saw, padding included. The loss never reads a padded row, so its
+    ``dOut`` is zero there -- but zero times a non-finite ``X`` is NaN, not zero, and that NaN
+    lands on the whole weight gradient rather than on the padded rows alone. The real tokens'
+    contribution is finite by construction here, so a non-finite ``.grad`` can only have come
+    through the padding.
+    """
+    device = torch.device("cuda")
+    und_lens, gen_lens = (12, 20), (100, 140)
+    real_len = sum(und_lens) + sum(gen_lens)
+    real_gen = sum(gen_lens)
+
+    qkv = torch.randn(3, real_len, 4, 64, device=device, dtype=torch.bfloat16, requires_grad=True)
+    packs = cast(
+        tuple[SequencePack, SequencePack, SequencePack],
+        tuple(
+            _two_way_pack(qkv[i], und_lens, gen_lens, full_seq_alignment=128, causal_seq_alignment=128)
+            for i in range(3)
+        ),
+    )
+    padded_gen = int(get_gen_seq(packs[0]).shape[0])
+    assert padded_gen > real_gen, "The GEN stream has to be padded for this test to assert anything."
+
+    # Poison with NaN here rather than with the finite marker: this test is about what a
+    # non-finite activation does to the gradient, so it stages the case that would.
+    addresses = _stage_poisoned_blocks(
+        (padded_gen, qkv.shape[-2], qkv.shape[-1]), torch.bfloat16, device, fill=float("nan")
+    )
+
+    out = attention.two_way_attention(*packs)
+
+    # Stands in for o_proj_moe_gen, which unified_mot hands the whole padded GEN stream.
+    # get_gen_seq is already [tokens, heads * head_dim]: two_way_attention flattens the head
+    # axes before it packs the result.
+    gen_out = get_gen_seq(out)
+    _skip_unless_from_a_staged_block(gen_out, addresses)
+    proj = torch.nn.Linear(gen_out.shape[-1], 8, device=device, dtype=torch.float32)
+    projected = proj(gen_out.float())
+    # Only the real rows reach the loss, exactly as the packer's loss indexes arrange.
+    projected[:real_gen].sum().backward()
+
+    assert proj.weight.grad is not None
+    assert torch.isfinite(proj.weight.grad).all(), (
+        "The projection's weight gradient came back non-finite. The padded GEN rows carry a "
+        "non-finite activation and dW sums over them, so 0 * NaN puts NaN on every weight."
+    )
+
+
+@pytest.mark.L0
+@pytest.mark.GPU
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="The varlen attention kernels require a GPU.")
+def test_two_way_dense_full_pass_covers_its_padded_queries() -> None:
+    """The dense full pass's cumulative ranges reach as far as its padded query stream does.
+
+    The structural half of the padding story, which needs no allocator luck to assert. Whether a
+    kernel leaves an uncovered row alone is the kernel's business and varies by backend (flash3
+    does, NATTEN does not), so the pack has to cover them either way -- and covering them takes a
+    segment on *both* sides, since a query range with no matching key range is an empty softmax.
+
+    Before ``_sample_offsets_pad_segment`` the causal pass had that pairing and the dense full
+    pass did not, which is the asymmetry this pins: its keys come from the interleaved stream,
+    whose ``sample_offsets`` had no pad segment to pair the GEN queries' one against.
+    """
+    device = torch.device("cuda")
+    und_lens, gen_lens = (12, 20), (100, 140)
+    real_len = sum(und_lens) + sum(gen_lens)
+
+    qkv = torch.randn(3, real_len, 4, 64, device=device, dtype=torch.bfloat16)
+    pack = _two_way_pack(qkv[0], und_lens, gen_lens, full_seq_alignment=128, causal_seq_alignment=128)
+
+    padded_gen = int(get_gen_seq(pack).shape[0])
+    padded_und = int(get_und_seq(pack).shape[0])
+    assert padded_gen > sum(gen_lens) and padded_und > sum(und_lens), (
+        "Both streams have to be padded for the pad segments to exist at all."
+    )
+
+    assert "_sample_offsets_pad_segment" in pack, (
+        "A padded two-way pack needs the interleaved stream's pad segment, or the dense full pass "
+        "has nothing to pair its padded GEN queries against."
+    )
+    q_offsets = pack["_full_only_seq_offsets_pad_segment"]
+    kv_offsets = pack["_sample_offsets_pad_segment"]
+
+    # The query ranges reach the end of the padded GEN stream, the key ranges the end of the
+    # padded interleaved stream, so no row of either sits outside every range.
+    assert int(q_offsets[-1]) == padded_gen, (
+        f"The GEN query ranges stop at {int(q_offsets[-1])} but the stream holds {padded_gen} rows."
+    )
+    assert int(kv_offsets[-1]) == padded_und + padded_gen, (
+        f"The key ranges stop at {int(kv_offsets[-1])} but the interleaved stream holds {padded_und + padded_gen} rows."
+    )
+    padded_all_seq, _, _ = get_all_seq_padded(pack)
+    assert padded_all_seq.shape[0] == int(kv_offsets[-1]), (
+        "The padded interleaved stream and the offsets describing it have to agree on their length."
+    )
+
+    # Same segment count on both sides, so every query segment has exactly one key segment --
+    # including the trailing pad segment, which would otherwise be an empty softmax.
+    assert q_offsets.shape[0] == kv_offsets.shape[0], (
+        f"The full pass pairs {q_offsets.shape[0] - 1} query segments against {kv_offsets.shape[0] - 1} key segments."
+    )
+    # And that trailing segment is non-empty on both sides.
+    assert int(q_offsets[-1]) > int(q_offsets[-2]), "The GEN pad segment is empty."
+    assert int(kv_offsets[-1]) > int(kv_offsets[-2]), "The interleaved pad segment is empty."
+
+    # max_seqlen has to cover the pad segment too: a varlen kernel tiles up to it.
+    assert pack["max_full_len_pad_segment"] >= padded_gen - sum(gen_lens)
+    assert pack["max_sample_len_pad_segment"] >= (padded_und - sum(und_lens)) + (padded_gen - sum(gen_lens))
+
+
+@pytest.mark.L0
+@pytest.mark.CPU
+def test_pad_segments_are_emitted_as_a_complete_set() -> None:
+    """A padded pack carries every pad segment or none, never some of them.
+
+    The three pairs are one mechanism: the causal pass reads the causal offsets, the dense full
+    pass reads the full offsets against the interleaved ones, and a pack holding only the first
+    two would leave the full pass on plain offsets while the causal pass was covered. That is the
+    asymmetry the interleaved segment was added to remove, and a partial set would reinstate it
+    without failing anything, so the constructor asserts instead of emitting a subset.
+    """
+    device = torch.device("cpu")
+    und_lens, gen_lens = (12, 20), (100, 140)
+    x = torch.randn(sum(und_lens) + sum(gen_lens), 4, 64, device=device)
+    pack = _two_way_pack(x, und_lens, gen_lens, full_seq_alignment=128, causal_seq_alignment=128)
+
+    pad_segment_keys = [
+        "_causal_seq_offsets_pad_segment",
+        "max_causal_len_pad_segment",
+        "_full_only_seq_offsets_pad_segment",
+        "max_full_len_pad_segment",
+        "_sample_offsets_pad_segment",
+        "max_sample_len_pad_segment",
+    ]
+    present = [key for key in pad_segment_keys if key in pack]
+    assert present == pad_segment_keys, f"Padded pack carries only {present}."
+
+    # The three offset tensors describe the same number of segments, so every pass pairs its
+    # query segments one to one with its key segments, pad segment included.
+    assert (
+        pack["_causal_seq_offsets_pad_segment"].shape[0]
+        == pack["_full_only_seq_offsets_pad_segment"].shape[0]
+        == pack["_sample_offsets_pad_segment"].shape[0]
+    )
+    # And the max lengths are ints, not the tensors they sit beside -- the pairing that a typo
+    # here would silently swap, since both are just dict entries.
+    for key in ("max_causal_len_pad_segment", "max_full_len_pad_segment", "max_sample_len_pad_segment"):
+        assert isinstance(pack[key], int), f"{key} should be an int, got {type(pack[key]).__name__}."
+    for key in ("_causal_seq_offsets_pad_segment", "_full_only_seq_offsets_pad_segment", "_sample_offsets_pad_segment"):
+        assert isinstance(pack[key], torch.Tensor), f"{key} should be a tensor, got {type(pack[key]).__name__}."
+
+
+_PAD_SEGMENT_KEYS = (
+    "_causal_seq_offsets_pad_segment",
+    "max_causal_len_pad_segment",
+    "_full_only_seq_offsets_pad_segment",
+    "max_full_len_pad_segment",
+    "_sample_offsets_pad_segment",
+    "max_sample_len_pad_segment",
+)
+
+
+@pytest.mark.L0
+@pytest.mark.CPU
+def test_paired_splits_always_reserve_a_pad_segment() -> None:
+    """Whenever the pad segment applies, it is reserved up front rather than only when
+    alignment happened to force padding.
+
+    The segment's one row is folded into the padded length before rounding, so a pack whose
+    real token count already sits on an alignment boundary still gets it. Reserving it only
+    when rounding produced spare rows was the bug: an already-aligned pack then carried no
+    segment, and the padded rows it did have went back to being unwritten by the varlen kernel.
+    Alignment 1 is the sharpest case -- nothing to round up to, so the old code reserved
+    nothing at all.
+    """
+    device = torch.device("cpu")
+    und_lens, gen_lens = (12, 20), (100, 140)
+    x = torch.randn(sum(und_lens) + sum(gen_lens), 4, 64, device=device)
+    pack = _two_way_pack(x, und_lens, gen_lens, full_seq_alignment=1, causal_seq_alignment=1)
+
+    missing = [key for key in _PAD_SEGMENT_KEYS if key not in pack]
+    assert not missing, f"A pack with one causal and one full split per sample must reserve {missing}."
+
+    # The reserved row is real: both streams outgrow their token counts, so the trailing
+    # segment each pad offset describes is non-empty and no row sits outside every range.
+    assert get_und_seq(pack).shape[0] > sum(und_lens)
+    assert get_gen_seq(pack).shape[0] > sum(gen_lens)
+    assert int(pack["_causal_seq_offsets_pad_segment"][-1]) == get_und_seq(pack).shape[0]
+    assert int(pack["_full_only_seq_offsets_pad_segment"][-1]) == get_gen_seq(pack).shape[0]
+
+
+@pytest.mark.L0
+@pytest.mark.CPU
+def test_pack_without_paired_splits_carries_no_pad_segments() -> None:
+    """The other side of the contract: nothing to pair, so no pad segments and callers fall back.
+
+    The pad segment pairs the two streams segment for segment, so it only applies when every
+    sample contributes both a causal and a full split. An AR no-text pack carries full splits
+    only (see ``test_prepare_sequence_pack_metadata_no_causal_splits``), leaving the causal side
+    with nothing to pair against, so the constructor emits none of the six fields.
+    """
+    device = torch.device("cpu")
+    gen_len = 100
+    x = torch.randn(gen_len, 4, 64, device=device)
+    pack = build_packed_sequence(
+        "two_way",
+        packed_sequence=x,
+        attn_modes=["full"],
+        split_lens=[gen_len],
+        sample_lens=[gen_len],
+        packed_und_token_indexes=cast(torch.LongTensor, torch.empty(0, dtype=torch.long, device=device)),
+        packed_gen_token_indexes=cast(torch.LongTensor, torch.arange(gen_len, dtype=torch.long, device=device)),
+        num_heads=x.shape[-2],
+        head_dim=x.shape[-1],
+        num_layers=1,
+        full_seq_alignment=1,
+        causal_seq_alignment=1,
+    )[0]
+
+    for key in _PAD_SEGMENT_KEYS:
+        assert key not in pack, f"A pack with no causal splits should not carry {key}."
 
 
 if __name__ == "__main__":

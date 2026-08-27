@@ -1,6 +1,7 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: OpenMDW-1.1
 
+import json
 import sys
 from pathlib import Path
 from types import SimpleNamespace
@@ -25,9 +26,12 @@ def _sample_record(iteration: int, caption: str | None = None) -> dict[str, obje
         "media_type": "video",
         "dataset_name": "video_256",
         "source_dataset_name": "source",
+        "source_id": "",
         "sample_id": f"video-{iteration}",
         "media_url": f"s3://bucket/video-{iteration}.mp4",
         "caption": caption,
+        "conversation": "",
+        "media_items": "[]",
     }
 
 
@@ -104,6 +108,46 @@ def test_media_type_accepts_batched_tensors() -> None:
     assert SampledMediaRecorder._media_type({}) == "unknown"
 
 
+def test_extract_records_from_vlm_conversation_batch(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("SLURM_JOB_ID", "54321")
+    callback = SampledMediaRecorder(enabled=True, output_uri="/tmp/samples.lance")
+    callback.config = SimpleNamespace(job=SimpleNamespace(name="vlm_experiment"))
+    first_media = {
+        "media_key": "front.jpg",
+        "media_type": "image",
+        "mime_type": "image/jpeg",
+        "relative_path": "media/front.jpg",
+        "media_url": "s3r://bucket/media.tar:512-17",
+    }
+    second_media = {
+        "media_key": "clip.mp4",
+        "media_type": "video",
+        "mime_type": "video/mp4",
+        "relative_path": "media/clip.mp4",
+        "media_url": "s3r://bucket/media.tar:1024-23",
+    }
+    batch = {
+        "__key__": ["conv-a", "conv-b"],
+        "__url__": ["s3://bucket/a.tar", "s3://bucket/b.tar"],
+        "dialog_str": ["user: describe the image", "user: describe the video"],
+        "media_type": ["image", "video"],
+        "raw_image": [[torch.empty(3, 1, 16, 16)], []],  # each image: [C,T,H,W]
+        "raw_video": [[], [torch.empty(3, 4, 16, 16)]],  # each video: [C,T,H,W]
+        "sample_browser_media": [[first_media], [second_media]],
+        "source_dataset_name": ["dataset-a", "dataset-b"],
+        "source_id": ["source-a", "source-b"],
+    }
+
+    records = callback._extract_records(batch, iteration=11, rank=7)
+
+    assert [record["media_type"] for record in records] == ["image", "video"]
+    assert [record["dataset_name"] for record in records] == ["dataset-a", "dataset-b"]
+    assert [record["source_id"] for record in records] == ["source-a", "source-b"]
+    assert [record["media_url"] for record in records] == [first_media["media_url"], second_media["media_url"]]
+    assert json.loads(records[0]["media_items"]) == [first_media]
+    assert records[1]["conversation"] == "user: describe the video"
+
+
 def test_extract_records_preserves_repeated_sample_occurrences() -> None:
     callback = SampledMediaRecorder(enabled=True, output_uri="/tmp/samples.lance")
     callback.config = SimpleNamespace(job=SimpleNamespace(name="test_experiment"))
@@ -164,7 +208,8 @@ def test_local_lance_append_upgrades_legacy_table_metadata_only(tmp_path: Path) 
     pa = pytest.importorskip("pyarrow")
     output_uri = str(tmp_path / "samples.lance")
     callback = SampledMediaRecorder(enabled=True, output_uri=output_uri)
-    legacy_schema = pa.schema([field for field in callback._table_schema() if field.name != "caption"])
+    vlm_fields = {"source_id", "conversation", "media_items"}
+    legacy_schema = pa.schema([field for field in callback._table_schema() if field.name not in vlm_fields])
     legacy_table = pa.Table.from_pylist([_sample_record(1)], schema=legacy_schema)
     lance.write_dataset(legacy_table, output_uri, mode="create")
     data_files_before = lance.dataset(output_uri).get_fragments()[0].data_files()
@@ -173,4 +218,6 @@ def test_local_lance_append_upgrades_legacy_table_metadata_only(tmp_path: Path) 
 
     upgraded = lance.dataset(output_uri)
     assert upgraded.get_fragments()[0].data_files() == data_files_before
+    assert set(upgraded.schema.names) == set(callback._table_schema().names)
     assert upgraded.to_table(columns=["caption"])["caption"].to_pylist() == [None, "recorded caption"]
+    assert upgraded.to_table(columns=["source_id"])["source_id"].to_pylist() == [None, ""]
