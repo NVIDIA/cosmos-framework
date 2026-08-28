@@ -21,14 +21,13 @@ from torch.distributed.device_mesh import DeviceMesh
 from torch.distributed.fsdp import MixedPrecisionPolicy
 from torch.nn.modules.module import _IncompatibleKeys
 
-from cosmos_framework.utils.flags import DEVICE, TRAINING, Device
+from cosmos_framework.utils.flags import DEVICE, Device
 from cosmos_framework.utils.lazy_config import LazyDict
 from cosmos_framework.utils.lazy_config import instantiate as lazy_instantiate
 from cosmos_framework.utils.lazy_config.registry import locate
 from cosmos_framework.model._base import ImaginaireModel
 from cosmos_framework.utils import log, misc
 from cosmos_framework.utils.count_params import count_params
-from cosmos_framework.utils.timer import Timer
 from cosmos_framework.model.generator.algorithm.loss.flow_matching import compute_flow_matching_loss
 from cosmos_framework.model.generator.algorithm.loss.load_balancing import compute_load_balancing_loss
 from cosmos_framework.configs.base.defaults.model_config import OmniMoTModelConfig
@@ -140,8 +139,6 @@ class OmniMoTModel(ImaginaireModel):
 
         # 5. Set up training time scheduler and inference time sampler
         self.set_up_scheduler_and_sampler()
-
-        self.log_enc_time_every_n = config.log_enc_time_every_n
 
     def set_precision(self) -> None:
         self.precision = PRECISION_TO_TORCH_DTYPE[self.config.precision]
@@ -310,6 +307,7 @@ class OmniMoTModel(ImaginaireModel):
                     self.config.diffusion_expert_config.enable_vision_modality_embeddings
                 ),
                 enable_media_modality_embedding=(self.config.diffusion_expert_config.enable_media_modality_embedding),
+                enable_action_modality_embedding=(self.config.diffusion_expert_config.enable_action_modality_embedding),
                 enable_sound_modality_embedding=(self.config.diffusion_expert_config.enable_sound_modality_embedding),
                 base_fps=self.config.diffusion_expert_config.base_fps,
                 vision_gen=self.config.vision_gen,
@@ -322,6 +320,7 @@ class OmniMoTModel(ImaginaireModel):
                 timestep_scale=1.0 / float(num_train_timesteps) * self.config.diffusion_expert_config.timestep_range,
                 action_dim=self.config.max_action_dim,
                 num_embodiment_domains=self.config.num_embodiment_domains,
+                action_io_projector_type=self.config.action_io_projector_type,
                 temporal_compression_factor_vision=(
                     self.tokenizer_vision_gen.temporal_compression_factor
                     if self.tokenizer_vision_gen is not None
@@ -956,7 +955,6 @@ class OmniMoTModel(ImaginaireModel):
         per_camera_vae_encoding = "enable_per_camera_vae_encoding" in data_batch
         gen_data_clean = self.get_data_and_condition(
             data_batch,
-            iteration=iteration,
             retain_raw_state_vision=not per_camera_vae_encoding,
         )
         gen_data_clean, memory_info = self.memory_init_training(gen_data_clean, data_batch, input_text_indexes)
@@ -1601,9 +1599,9 @@ class OmniMoTModel(ImaginaireModel):
             else:
                 # No action data in this batch. Connect the network's dummy preds_action
                 # to the loss so action-specific params
-                # (llm2action, action2llm, action_modality_embed) stay in the backward
-                # graph. Without this, FSDP reduce-scatter / DDP all-reduce will hang
-                # when other ranks do have action data.
+                # (llm2action, action2llm, and action_modality_embed when enabled)
+                # stay in the backward graph. Without this, FSDP reduce-scatter /
+                # DDP all-reduce will hang when other ranks do have action data.
                 dummy_loss = 0.0 * sum(p.sum() for p in out_net["preds_action"])
                 total_loss += dummy_loss
                 losses_dict["flow_matching_loss_action"] = dummy_loss
@@ -2265,6 +2263,12 @@ class OmniMoTModel(ImaginaireModel):
             vision_condition_indexes=vision_condition_indexes,
             retain_raw_state_vision=not per_camera_vae_encoding,
         )
+        if gen_data_clean.num_views_per_vision_item is None:
+            gen_data_clean.num_views_per_vision_item = self._get_explicit_single_view_metadata(
+                data_batch,
+                gen_data_clean.num_vision_items_per_sample,
+                gen_data_clean.batch_size,
+            )
 
         num_items_per_sample = gen_data_clean.num_vision_items_per_sample  # None for standard T2I/T2V
 
@@ -3559,10 +3563,9 @@ class OmniMoTModel(ImaginaireModel):
                 for j in range(n_vis):
                     vision_shape = gen_data_clean.x0_tokens_vision[idx_vision + j].shape
                     vision_dim = int(torch.prod(torch.tensor(vision_shape)))
-                    # Return every item the plan marked as generated. Usually that is only the
-                    # last one, but a joint camera + LiDAR sample generates a target per sensor,
-                    # so the returned list is flat over items rather than one entry per sample.
-                    if is_item_generated(
+                    # Keep standard single-vision inference dense, including conditioned Action
+                    # vision. Multi-item camera/LiDAR inference returns only generated items.
+                    if n_vis == 1 or is_item_generated(
                         sequence_plans[i].condition_frame_indexes_vision,
                         item_idx=j,
                         num_items=n_vis,
@@ -3816,6 +3819,25 @@ class OmniMoTModel(ImaginaireModel):
     @torch.no_grad()
     def forward(self, xt, t):
         pass
+
+    @staticmethod
+    def _get_explicit_single_view_metadata(
+        data_batch: dict[str, Any],
+        num_vision_items_per_sample: list[int] | None,
+        batch_size: int,
+    ) -> list[int] | None:
+        """Read one-view item metadata without opting into uint8 per-camera VAE encoding."""
+        num_views = read_positive_int_metadata(
+            data_batch,
+            "num_views_per_vision_item",
+            expected_count=sum(num_vision_items_per_sample or [1] * batch_size),
+        )
+        if num_views is not None and any(num_view != 1 for num_view in num_views):
+            raise ValueError(
+                "Explicit num_views_per_vision_item metadata is only supported for preprocessed "
+                f"single-view inputs, got {num_views}."
+            )
+        return num_views
 
     @staticmethod
     def _get_multiview_vae_metadata(
@@ -4092,7 +4114,6 @@ class OmniMoTModel(ImaginaireModel):
     def get_data_and_condition(
         self,
         data_batch: dict[str, torch.Tensor],
-        iteration: int = 1,
         vision_condition_indexes: list[list[int]] | None = None,
         retain_raw_state_vision: bool = True,
     ) -> GenerationDataClean:
@@ -4103,7 +4124,6 @@ class OmniMoTModel(ImaginaireModel):
 
         Args:
             data_batch: Raw data batch from the dataloader.
-            iteration: Current iteration (only used for time-based logging during training).
             vision_condition_indexes: Optional per-sample list of conditioning latent
                 frame indexes (one list per sample, taken from each ``SequencePlan``).
                 When provided (inference only), it enables the causal-VAE prefix-encode
@@ -4157,16 +4177,6 @@ class OmniMoTModel(ImaginaireModel):
         batch_size = (
             len(sample_vision_list) if num_vision_items_per_sample is None else len(num_vision_items_per_sample)
         )
-
-        log_enc_time = False
-        timer = None
-        if TRAINING:
-            import wandb
-
-            log_enc_time = iteration % self.log_enc_time_every_n == 0 and wandb.run
-            if log_enc_time:
-                timer = Timer(unit="s")
-                timer.start()
 
         num_views_per_vision_item, frames_per_vision_item = self._get_multiview_vae_metadata(
             data_batch,
@@ -4281,26 +4291,6 @@ class OmniMoTModel(ImaginaireModel):
         else:
             fps_sound = None
 
-        if TRAINING and log_enc_time and timer is not None:
-            timer.end()
-            elapsed = timer.get_cuda_time()
-            h, w = raw_state_vision[0].shape[-2], raw_state_vision[0].shape[-1]
-            resolution_label = "unknown"
-            for res_name, aspect_ratios in VIDEO_RES_SIZE_INFO.items():
-                if (h, w) in aspect_ratios.values():
-                    resolution_label = res_name
-                    if res_name == "704":
-                        # 720 shares some aspect ratios with 704 (e.g., 1:1 at 960x960); prefer 720.
-                        if (h, w) in VIDEO_RES_SIZE_INFO.get("720", {}).values():
-                            resolution_label = "720"
-                    break
-            wandb.log(
-                {
-                    f"timer/encoding_{resolution_label}p": elapsed,
-                    "timer/encoding": elapsed,
-                },
-                step=iteration,
-            )
         control_weights: list[list[float]] | None = data_batch.get("control_weights", None)
         return GenerationDataClean(
             batch_size=batch_size,

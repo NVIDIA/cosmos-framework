@@ -173,6 +173,42 @@ def test_action_transform_pipeline_json_prompt_toggle() -> None:
 
 
 @pytest.mark.L0
+def test_action_transform_pipeline_json_prompt_respects_duration_fps_toggle() -> None:
+    pipeline = ActionTransformPipeline(
+        tokenizer_config=None,
+        max_action_dim=4,
+        append_duration_fps_timestamps=False,
+        format_prompt_as_json=True,
+    )
+    video = torch.zeros(3, 17, 192, 320)  # [C,T,H,W]
+    action = torch.zeros(16, 2)  # [T,D]
+    data_dict = {
+        "ai_caption": "Open the drawer.",
+        "video": video,
+        "action": action,
+        "mode": "wam",
+        "domain_id": torch.tensor(0),  # []
+        "viewpoint": "third_person_view",
+        "idle_frames": torch.tensor(3),  # []
+    }
+
+    result = pipeline(data_dict, resolution="256")
+
+    prompt = result["ai_caption"]
+    assert isinstance(prompt, dict)
+    assert list(prompt.keys()) == ["cinematography", "actions", "resolution", "aspect_ratio"]
+    assert list(prompt["actions"][0].keys()) == ["description", "idle_frame"]
+    assert prompt["actions"] == [
+        {
+            "description": "Open the drawer.",
+            "idle_frame": "3 out of 16.",
+        }
+    ]
+    assert result["action"].shape == (16, 4)
+    torch.testing.assert_close(result["action_raw"], action)
+
+
+@pytest.mark.L0
 def test_action_transform_pipeline_preserves_explicit_action_valid_mask() -> None:
     pipeline = ActionTransformPipeline(
         tokenizer_config=None,

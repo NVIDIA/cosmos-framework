@@ -20,6 +20,7 @@ from cosmos_framework.utils.lazy_config import instantiate
 from cosmos_framework.utils import log
 from cosmos_framework.utils.generator.cost_model.budget import IterationTimeBudget, IterationTimeBudgetConfig
 from cosmos_framework.data.generator.drop_sample_contract import DROP_SAMPLE_KEY, DROP_SAMPLE_REASON_KEY
+from cosmos_framework.data.generator.token_mix_control import TokenMixControlConfig, TokenMixController
 from cosmos_framework.model.generator.tokenizers.uniae.frame_math import (
     get_uniae_chunk_frames,
     get_uniae_latent_num_frames,
@@ -41,11 +42,14 @@ _ACTION_SAMPLER_METADATA_KEYS = {
     "action_sampler_world_size",
     "action_sampler_worker_id",
     "action_sampler_num_workers",
-    "action_sampler_family_rank_start",
-    "action_sampler_family_rank_end",
     "action_sampler_seed",
     "action_sampler_worker_seed",
     "action_sampler_use_deterministic_seed",
+    "action_sampler_rank_group",
+    "action_sampler_rank_group_rank_start",
+    "action_sampler_rank_group_rank_end",
+    "action_sampler_rank_group_members",
+    "action_sampler_rank_group_fingerprint",
     "action_sampler_draw_count",
     "action_sampler_index",
     "action_sampler_aux_seed",
@@ -679,7 +683,6 @@ class JointDataLoader(webdataset.WebLoader):
         """Produce and buffer one batch from a single dataloader."""
         import time
 
-        log.info(f"Pre-warm: starting dataloader {name!r}", rank0_only=False)
         started_at = time.monotonic()
         try:
             batch = next(dl_iter)
@@ -1104,6 +1107,7 @@ class IterativeJointDataLoader(JointDataLoader):
         async_batch_building_timeout_s: float = 1200.0,
         lazy_initialize_child_iterators: bool = False,
         iteration_time_budget: IterationTimeBudgetConfig | None = None,
+        token_mix_control: TokenMixControlConfig | None = None,
         forkserver_preload_modules: list[str] | None = None,
     ) -> None:
         if async_batch_building_timeout_s <= 0:
@@ -1112,6 +1116,29 @@ class IterativeJointDataLoader(JointDataLoader):
         # The packer thread starts only after child iterator prewarm has completed.
         if enable_async_batch_building and not prewarm:
             raise ValueError("enable_async_batch_building=True requires prewarm=True.")
+
+        # A time ceiling skews the token mix here exactly as it does on the random
+        # loader, but the correction cannot be applied here: this loader seeds the draw
+        # so every rank picks the same modality, and weights estimated from a rank's own
+        # batches would differ per rank and desynchronize it. Correcting it would take
+        # an all-reduce of the tallies, which the packer's daemon thread makes unsafe.
+        # Refused rather than silently skipped, since the skew is otherwise invisible.
+        # A single source has no mix to skew, so it is left alone.
+        # Checked against the raw dataloaders dict before super().__init__() so an invalid
+        # config fails fast instead of first instantiating and prewarming every child loader.
+        positive_ratio_count = sum(1 for d in dataloaders.values() if d is not None and d["ratio"] > 0)
+        if (
+            positive_ratio_count > 1
+            and iteration_time_budget is not None
+            and (token_mix_control is None or token_mix_control.enabled)
+        ):
+            raise ValueError(
+                "iteration_time_budget pulls each source's share of the tokens away from its configured ratio, by "
+                "as much as its tokens per batch differ from the other sources', and IterativeJointDataLoader "
+                "cannot correct that without desynchronizing the modality its ranks agree on. Use "
+                "RandomJointDataLoader, whose ranks already draw independently, or accept the skew explicitly "
+                "with token_mix_control=TokenMixControlConfig(enabled=False)."
+            )
 
         super().__init__(
             dataloaders,
@@ -1134,6 +1161,7 @@ class IterativeJointDataLoader(JointDataLoader):
             iteration_time_budget=iteration_time_budget,
             forkserver_preload_modules=forkserver_preload_modules,
         )
+
         self.seed = seed
         # Calculate probabilities for random sampling
         total_ratio = sum(self.data_ratios)
@@ -1584,6 +1612,14 @@ class RandomJointDataLoader(JointDataLoader):
 
     Note: Unlike IterativeJointDataLoader, this does not guarantee synchronized modality
     selection across ranks.
+
+    When ``iteration_time_budget`` is set, or ``token_mix_control`` is given
+    explicitly, the ratios are held as target *token* shares rather than as draw
+    probabilities: whatever makes tokens per batch differ by source -- typically a
+    time ceiling, but not necessarily -- would otherwise hand an expensive source's
+    share to a cheap one. See ``token_mix_control`` for what adapts the draw, and
+    :mod:`cosmos_framework.data.generator.token_mix_control` for why that is only
+    safe on this loader.
     """
 
     def __init__(
@@ -1601,6 +1637,7 @@ class RandomJointDataLoader(JointDataLoader):
         uniae_chunk_frames: int | Mapping[str, int] | None = None,
         uniae_pad_frames: int | None = None,
         iteration_time_budget: IterationTimeBudgetConfig | None = None,
+        token_mix_control: TokenMixControlConfig | None = None,
     ):
         super().__init__(
             dataloaders,
@@ -1621,9 +1658,26 @@ class RandomJointDataLoader(JointDataLoader):
         # Convert data ratios to probabilities
         self.data_ratios = np.array([ratio / sum(self.data_ratios) for ratio in self.data_ratios])
 
+        # Only worth running when a time ceiling is in force: that is what makes tokens
+        # per batch differ by source, which is what pulls the token mix off the ratios.
+        # The ratios then read as the target token share rather than as the draw itself.
+        self.token_mix: TokenMixController | None = None
+        if self.iteration_time_budget is not None or token_mix_control is not None:
+            # A time ceiling is the usual reason tokens per batch differ by source, but not
+            # the only possible one, so an explicitly configured token_mix_control is honored
+            # on its own -- the caller asked for it, so build it with their parameters even
+            # with no time ceiling in force. Only iteration_time_budget on its own falls back
+            # to the default config, since there is nothing else to size it from.
+            config = token_mix_control if token_mix_control is not None else TokenMixControlConfig()
+            if config.enabled:
+                self.token_mix = config.build(self.dataset_name_list, self.data_ratios)
+        if self.token_mix is not None:
+            log.info("RandomJointDataLoader: adapting the draw to hold the token mix on the configured ratios.")
+
     def __iter__(self):
         while True:
-            index_id = np.random.choice(len(self.dataloader_list), p=self.data_ratios)
+            probs = self.data_ratios if self.token_mix is None else self.token_mix.sampling_probs
+            index_id = np.random.choice(len(self.dataloader_list), p=probs)
 
             metrics = _PackingMetrics()
             output_batch = dict()
@@ -1705,4 +1759,8 @@ class RandomJointDataLoader(JointDataLoader):
                 buffer_size=len(self.buffers[index_id]),
                 projected_iteration_sec=self._projected_iteration_sec(metrics.sample_seconds),
             )
+            if self.token_mix is not None:
+                # The packed length, after every ceiling, look-ahead miss and drop, is
+                # exactly the quantity whose split across sources is being held.
+                self.token_mix.observe(index_id, metrics.current_sequence_length)
             yield output_batch

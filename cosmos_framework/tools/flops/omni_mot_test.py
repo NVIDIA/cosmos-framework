@@ -160,6 +160,60 @@ def test_total_equals_forward_times_one_plus_backward_ratio() -> None:
 
 
 @pytest.mark.L0
+@pytest.mark.parametrize("context_parallel_size", [2, 4])
+def test_context_parallel_scales_transformer_flops_per_device(context_parallel_size: int) -> None:
+    """With no outside projections, all estimated FLOPs are sharded by CP."""
+    cfg = _mini_cfg()
+    kwargs: dict[str, object] = dict(
+        B=1,
+        text_tokens=4,
+        vision_tokens=0,
+        backwardpass_ratio=2.0,
+        use_activation_checkpointing=True,
+    )
+    unsharded = compute_omni_mot_flops_per_batch(cfg, **kwargs)  # type: ignore[arg-type]
+    sharded = compute_omni_mot_flops_per_batch(  # type: ignore[arg-type]
+        cfg,
+        context_parallel_size=context_parallel_size,
+        **kwargs,
+    )
+
+    assert sharded == unsharded / Decimal(context_parallel_size)
+
+
+@pytest.mark.L0
+def test_context_parallel_keeps_modality_projections_replicated() -> None:
+    """CP shards transformer work but not the pre/post-transformer vision projections."""
+    cfg = _mini_cfg()
+    batch_size = 1
+    vision_tokens = 4
+    backwardpass_ratio = 2.0
+    patch_latent_dim = cfg.latent_patch_size**2 * cfg.latent_channel_size
+    embedding_flops = Decimal(
+        4 * batch_size * vision_tokens * patch_latent_dim * cfg.hidden_size
+        + 2 * batch_size * cfg.frequency_embedding_size * cfg.hidden_size
+        + 2 * batch_size * cfg.hidden_size * cfg.hidden_size
+    )
+    kwargs: dict[str, object] = dict(
+        B=batch_size,
+        text_tokens=4,
+        vision_tokens=vision_tokens,
+        freeze_und=True,
+        backwardpass_ratio=backwardpass_ratio,
+        use_activation_checkpointing=True,
+    )
+    unsharded = compute_omni_mot_flops_per_batch(cfg, **kwargs)  # type: ignore[arg-type]
+    sharded = compute_omni_mot_flops_per_batch(  # type: ignore[arg-type]
+        cfg,
+        context_parallel_size=4,
+        **kwargs,
+    )
+
+    replicated_flops = embedding_flops * Decimal(1 + backwardpass_ratio)
+    assert sharded == replicated_flops + (unsharded - replicated_flops) / Decimal(4)
+
+
+@pytest.mark.L0
 def test_activation_checkpointing_adds_block_flops() -> None:
     """AC raises the total by exactly total_block_flops.
 

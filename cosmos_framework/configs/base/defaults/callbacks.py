@@ -33,7 +33,6 @@ from cosmos_framework.callbacks.sampled_media_recorder import SampledMediaRecord
 from cosmos_framework.callbacks.sequence_packing_padding import SequencePackingPadding
 from cosmos_framework.callbacks.sigma_loss_analysis import SigmaLossAnalysis
 from cosmos_framework.callbacks.skip_nan_step import SkipNaNStep
-from cosmos_framework.callbacks.termination_signal_checkpoint import TerminationSignalCheckpoint
 from cosmos_framework.callbacks.training_stats import TrainingStatsCallback
 from cosmos_framework.callbacks.wall_clock_checkpoint import WallClockCheckpoint
 from cosmos_framework.callbacks.wandb_log import WandbCallback as WandBCallbackMultiplier
@@ -139,9 +138,6 @@ JOB_MONITOR_CALLBACKS = dict(
         every_n=200,
         save_s3="${upload_reproducible_setup}",
         upload_every_n_mul=5,
-    ),
-    termination_signal_checkpoint=L(TerminationSignalCheckpoint)(
-        min_save_fraction=1 / 3,
     ),
     # Interval comes from the environment, so submitting to a cluster that enforces a
     # wall-clock bound turns this on without every experiment config opting in.

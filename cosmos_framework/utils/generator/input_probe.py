@@ -359,7 +359,7 @@ def maybe_dump_model_inputs(
     *,
     labels: torch.Tensor | None = None,
 ) -> None:
-    """Dump forward kwargs for ``step`` if the probe is enabled.
+    """Dump forward kwargs for ``step`` for trainer label if the probe is enabled.
 
     Args:
         kwargs: the dict expanded into the model forward (before any wrapper

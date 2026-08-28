@@ -26,8 +26,19 @@ import numpy as np
 import torch
 from scipy.spatial.transform import Rotation as R
 
-PoseConvention = Literal["absolute", "backward_anchored", "backward_framewise"]
+PoseConvention = Literal[
+    "absolute",
+    "backward_anchored",
+    "backward_framewise",
+    "backward_chunk_anchored_8f",
+    "backward_chunk_anchored_16f",
+]
 RotationConvention = Literal["matrix", "euler_xyz", "quat_xyzw", "quat_wxyz", "rot6d", "axisangle", "rot9d"]
+
+_POSE_CHUNK_LENGTHS: dict[PoseConvention, int] = {
+    "backward_chunk_anchored_8f": 8,
+    "backward_chunk_anchored_16f": 16,
+}
 
 
 def _to_numpy_float32(array: torch.Tensor | np.ndarray) -> np.ndarray:
@@ -394,14 +405,16 @@ def _get_relative_delta_transform(
         return inv_poses_abs[frame_idx] @ poses_abs[frame_idx + 1]
     if pose_convention == "backward_anchored":
         return inv_poses_abs[0] @ poses_abs[frame_idx + 1]
-    raise ValueError(
-        f"Unsupported pose_convention={pose_convention!r}. Expected one of: backward_framewise, backward_anchored."
-    )
+    if chunk_length := _POSE_CHUNK_LENGTHS.get(pose_convention):
+        anchor_idx = (frame_idx // chunk_length) * chunk_length
+        return inv_poses_abs[anchor_idx] @ poses_abs[frame_idx + 1]
+    raise ValueError(f"Unsupported pose_convention={pose_convention!r}")
 
 
 def _apply_relative_delta_transform(
     current_pose: np.ndarray,
     initial_pose: np.ndarray,
+    chunk_anchor: np.ndarray,
     delta_T: np.ndarray,
     pose_convention: PoseConvention,
 ) -> np.ndarray:
@@ -410,6 +423,7 @@ def _apply_relative_delta_transform(
     Args:
         current_pose: The current reconstructed pose for framewise modes.
         initial_pose: The anchor pose used by anchored modes.
+        chunk_anchor: Fixed anchor for the current generated chunk.
         delta_T: Relative transform for the current step.
         pose_convention: Pose convention controlling how ``delta_T``
             should be composed back into an absolute pose.
@@ -421,9 +435,9 @@ def _apply_relative_delta_transform(
         return current_pose @ delta_T
     if pose_convention == "backward_anchored":
         return initial_pose @ delta_T
-    raise ValueError(
-        f"Unsupported pose_convention={pose_convention!r}. Expected one of: backward_framewise, backward_anchored."
-    )
+    if pose_convention in _POSE_CHUNK_LENGTHS:
+        return chunk_anchor @ delta_T
+    raise ValueError(f"Unsupported pose_convention={pose_convention!r}")
 
 
 def pose_abs_to_rel(
@@ -442,6 +456,9 @@ def pose_abs_to_rel(
         pose_convention: Pose convention:
             - ``backward_framewise``: ``delta_T = T_i^{-1} @ T_{i+1}``
             - ``backward_anchored``: ``delta_T = T_0^{-1} @ T_{i+1}``
+            - ``backward_chunk_anchored_8f`` and ``backward_chunk_anchored_16f``:
+              each group of 8 or 16 targets is relative to the pose immediately
+              before the group.
 
     Returns:
         An array of shape ``(T - 1, D)`` where ``D = 3 + rotation_dim``.
@@ -451,7 +468,6 @@ def pose_abs_to_rel(
     """
     num_frames = len(poses_abs)
     assert num_frames > 1, "At least 2 frames are required to compute relative poses"
-
     # Compute inverse poses
     inv_poses_abs = np.linalg.inv(poses_abs)
 
@@ -505,10 +521,14 @@ def pose_rel_to_abs(
 
     poses_abs = [initial_pose]
     current_pose = initial_pose
+    chunk_anchor = initial_pose
 
     num_poses_rel = poses_rel.shape[0]
+    chunk_length = _POSE_CHUNK_LENGTHS.get(pose_convention)
 
     for i in range(num_poses_rel):
+        if chunk_length is not None and i > 0 and i % chunk_length == 0:
+            chunk_anchor = current_pose
         delta_T = _pose_vector_to_delta_transform(
             poses_rel[i],
             rotation_input_format=rotation_format,
@@ -516,7 +536,13 @@ def pose_rel_to_abs(
             normalize_rotation=normalize_rotation,
             rotation_scale=rotation_scale,
         )
-        next_pose = _apply_relative_delta_transform(current_pose, initial_pose, delta_T, pose_convention)
+        next_pose = _apply_relative_delta_transform(
+            current_pose,
+            initial_pose,
+            chunk_anchor,
+            delta_T,
+            pose_convention,
+        )
 
         poses_abs.append(next_pose)
         current_pose = next_pose

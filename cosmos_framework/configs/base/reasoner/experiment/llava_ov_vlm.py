@@ -175,6 +175,9 @@ pre_exp012_llava_ov = LazyDict(
             max_iter=10,
             logging_iter=1,
             run_validation=False,
+            callbacks=dict(
+                wandb=dict(log_train_loss_to_console=True),
+            ),
         ),
         optimizer=dict(
             lr=1e-5,
