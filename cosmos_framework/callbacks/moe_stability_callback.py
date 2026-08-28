@@ -372,6 +372,49 @@ def compute_moe_stability_metrics(vfm: torch.nn.Module) -> dict[str, dict]:
     return results
 
 
+def compute_loss_free_bias_metrics(vfm: torch.nn.Module) -> dict[str, torch.Tensor | list[int]]:
+    """Compute per-layer loss-free routing-bias statistics for enabled generation MoE blocks."""
+    layer_indices: list[int] = []
+    means: list[torch.Tensor] = []
+    standard_deviations: list[torch.Tensor] = []
+    absolute_maxima: list[torch.Tensor] = []
+    saturation_fractions: list[torch.Tensor] = []
+
+    with torch.no_grad():
+        for layer_idx, layer in enumerate(vfm.language_model.model.layers):
+            mlp = getattr(layer, "mlp_moe_gen", None)
+            if not isinstance(mlp, Qwen3VLMoeTextSparseMoeBlock):
+                continue
+            config = mlp.aux_loss_free_load_balancing_config
+            if not config.enabled:
+                continue
+
+            expert_bias = mlp.expert_bias
+            if isinstance(expert_bias, DTensor):
+                expert_bias = expert_bias.full_tensor()
+            bias = expert_bias.detach().float()
+            max_bias = config.max_bias
+
+            layer_indices.append(layer_idx)
+            means.append(bias.mean())
+            standard_deviations.append(bias.std(correction=0))
+            absolute_maxima.append(bias.abs().max())
+            if max_bias is None:
+                saturation_fractions.append(bias.new_zeros(()))
+            else:
+                saturation_fractions.append((bias.abs() >= float(max_bias)).float().mean())
+
+    if not layer_indices:
+        return {}
+    return {
+        "layer_indices": layer_indices,
+        "mu": torch.stack(means),
+        "sigma": torch.stack(standard_deviations),
+        "abs_max": torch.stack(absolute_maxima),
+        "saturation_fraction": torch.stack(saturation_fractions),
+    }
+
+
 def compute_moe_param_counts(text_config) -> tuple[int, int, int]:
     """Analytically derive ``(per_expert_params, shared_params, num_experts)`` for the
     Effective Parameters metric, purely from the LLM (generator) text config.
@@ -469,7 +512,7 @@ class MoEStabilityCallback(EveryN):
         every_n (int): Logging interval in training steps.
     """
 
-    def __init__(self, every_n: int = 100):
+    def __init__(self, every_n: int = 250):
         super().__init__(every_n=every_n)
         # Static parameter counts for the Effective Parameters metric, computed lazily
         # on the first logging step (on rank 0) and cached thereafter.
@@ -487,6 +530,7 @@ class MoEStabilityCallback(EveryN):
         iteration: int,
     ) -> None:
         metrics = compute_moe_stability_metrics(model.net)
+        loss_free_bias_metrics = compute_loss_free_bias_metrics(model.net)
 
         if not (distributed.is_rank0() and wandb.run):
             return
@@ -502,7 +546,7 @@ class MoEStabilityCallback(EveryN):
 
         log_dict: dict[str, float] = {}
         for tower, tower_metrics in metrics.items():
-            layer_indices = tower_metrics.pop("layer_indices")
+            layer_indices = tower_metrics["layer_indices"]
 
             # Effective Parameters (per tower) = shared LLM backbone + effective experts.
             # honest_eff_normalized is a per-layer fraction in [0, 1]; multiply by the
@@ -515,9 +559,24 @@ class MoEStabilityCallback(EveryN):
                 log_dict[f"moe_stability/effective_params_billions/{tower}"] = effective_params / 1e9
 
             for metric_name, values in tower_metrics.items():
+                if metric_name == "layer_indices":
+                    continue
                 for layer_idx, val in zip(layer_indices, values):
                     log_dict[f"moe_stability/{metric_name}/{tower}/layer_{layer_idx:03d}"] = val.item()
                 log_dict[f"moe_stability/{metric_name}/{tower}/mean"] = values.mean().item()
                 log_dict[f"moe_stability/{metric_name}/{tower}/max"] = values.max().item()
 
-        wandb.log(log_dict, step=iteration)
+        if loss_free_bias_metrics:
+            layer_indices = loss_free_bias_metrics["layer_indices"]
+            for metric_name, values in loss_free_bias_metrics.items():
+                if metric_name == "layer_indices":
+                    continue
+                assert isinstance(values, torch.Tensor)
+                for layer_idx, value in zip(layer_indices, values):
+                    log_dict[f"moe_stability/loss_free_bias_{metric_name}/gen/layer_{layer_idx:03d}"] = value.item()
+                log_dict[f"moe_stability/loss_free_bias_{metric_name}/gen/mean"] = values.mean().item()
+                log_dict[f"moe_stability/loss_free_bias_{metric_name}/gen/min"] = values.min().item()
+                log_dict[f"moe_stability/loss_free_bias_{metric_name}/gen/max"] = values.max().item()
+
+        if log_dict:
+            wandb.log(log_dict, step=iteration)

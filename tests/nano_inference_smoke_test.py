@@ -194,10 +194,15 @@ _FP8_GENERATION_ARGS = (
 # hooks, which is the path that does not exist upstream, and it is the only
 # layout a Super-class FP8 model fits in. ``replicated`` guards the
 # single-device-weights path that worked before those hooks were added.
+# Both layouts follow MAX_GPUS so the product of the parallel degrees equals
+# WORLD_SIZE, which is what ParallelDims validates. `sharded` stays pure FSDP and
+# `replicated` pure context-parallel -- the distinction each case exists to
+# cover -- at whichever width the run has. cp_size is bounded by MAX_CP_SIZE=32,
+# so 4 and 8 are both in range.
 _FP8_LAYOUTS = {
     "sharded": (
         "--parallelism-preset=throughput",
-        "--dp-shard-size=8",
+        f"--dp-shard-size={MAX_GPUS}",
         "--dp-replicate-size=1",
         "--cp-size=1",
         "--cfgp-size=1",
@@ -206,7 +211,7 @@ _FP8_LAYOUTS = {
         "--parallelism-preset=latency",
         "--dp-shard-size=1",
         "--dp-replicate-size=1",
-        "--cp-size=8",
+        f"--cp-size={MAX_GPUS}",
         "--cfgp-size=1",
     ),
 }
@@ -376,31 +381,32 @@ def _download_fp8_checkpoint() -> Path:
 
 
 @pytest.fixture(scope="module", autouse=True)
-def _require_8_gpus() -> None:
-    """Skip the module unless we can launch an 8-GPU run here."""
+def _require_gpus() -> None:
+    """Skip the module unless we can launch a ``MAX_GPUS``-wide run here."""
     if shutil.which("torchrun") is None:
         pytest.skip("torchrun not on PATH -- must run inside the inference container")
     try:
         import torch
     except Exception as exc:  # pragma: no cover -- surfaces during dev only
         pytest.skip(f"torch unavailable ({exc!r})")
-    if not torch.cuda.is_available() or torch.cuda.device_count() < 8:
-        pytest.skip(f"requires 8 visible CUDA devices, found {torch.cuda.device_count()}")
+    if not torch.cuda.is_available() or torch.cuda.device_count() < MAX_GPUS:
+        pytest.skip(f"requires {MAX_GPUS} visible CUDA devices, found {torch.cuda.device_count()}")
 
 
-# Defined only when the active MAX_GPUS is 8 -- the conftest rejects ``gpus(N)``
-# markers outside ``ALL_NUM_GPUS = (0, 1, MAX_GPUS)``.
-if MAX_GPUS == 8:
+# Markers use MAX_GPUS because the conftest rejects ``gpus(N)`` outside
+# ``ALL_NUM_GPUS = (0, 1, MAX_GPUS)``. Every case here derives its parallelism
+# from the active width, so both supported widths are listed.
+if MAX_GPUS in (4, 8):
 
     @pytest.mark.level(2)
-    @pytest.mark.gpus(8)
+    @pytest.mark.gpus(MAX_GPUS)
     def test_nano_inference_omni(tmp_path: Path) -> None:
         """Throughput run over t2vs + policy + forward_dynamics, plus a separate latency transfer run."""
         # --- 1) Throughput run: t2vs + policy + forward_dynamics ----------------
         out_dir = tmp_path / "out"
         cmd = [
             "torchrun",
-            "--nproc_per_node=8",
+            f"--nproc_per_node={MAX_GPUS}",
             f"--master_port={_free_port()}",
             "-m",
             "cosmos_framework.scripts.inference",
@@ -501,7 +507,7 @@ if MAX_GPUS == 8:
         _assert_video_has_content(transfer_video)
 
     @pytest.mark.level(2)
-    @pytest.mark.gpus(8)
+    @pytest.mark.gpus(MAX_GPUS)
     def test_nano_inference_multi_control_transfer(tmp_path: Path) -> None:
         """Multi-control transfer: edge + blur derived on the fly from ONE source
         video, blended by ``multi_control_two_way_attention``.
@@ -568,7 +574,7 @@ if MAX_GPUS == 8:
         _assert_video_has_content(video)
 
     @pytest.mark.level(2)
-    @pytest.mark.gpus(8)
+    @pytest.mark.gpus(MAX_GPUS)
     @pytest.mark.parametrize("layout", sorted(_FP8_LAYOUTS))
     def test_nano_fp8_inference(tmp_path: Path, layout: str) -> None:
         """text2video from the ModelOpt static-FP8 Nano checkpoint, once per layout.
@@ -590,7 +596,7 @@ if MAX_GPUS == 8:
         out_dir = tmp_path / f"out_fp8_{layout}"
         cmd = [
             "torchrun",
-            "--nproc_per_node=8",
+            f"--nproc_per_node={MAX_GPUS}",
             f"--master_port={_free_port()}",
             "-m",
             "cosmos_framework.scripts.inference",

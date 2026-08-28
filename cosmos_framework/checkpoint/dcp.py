@@ -44,6 +44,7 @@ import enum
 import multiprocessing
 import os
 import re
+import socket
 import time
 from multiprocessing import get_context
 from typing import Any, Dict, Optional, Protocol, Tuple, Union, runtime_checkable
@@ -69,6 +70,10 @@ from torch.distributed.checkpoint.stateful import Stateful
 from torch.distributed.tensor import DTensor, Replicate
 from torch.nn.modules.module import _IncompatibleKeys
 
+from cosmos_framework.checkpoint.background_store import (
+    build_background_store,
+    reserve_background_store_socket,
+)
 from cosmos_framework.checkpoint.base import AbstractCheckpointer, CheckpointLoadSource
 from cosmos_framework.checkpoint.s3_filesystem import S3StorageReader, S3StorageWriter
 from cosmos_framework.utils.config import CheckpointConfig, JobConfig
@@ -178,6 +183,8 @@ def save_checkpoint_in_background(
     sender_queue: multiprocessing.Queue,
     config_checkpoint: CheckpointConfig,
     config_job: JobConfig,
+    listen_socket: Optional[socket.socket],
+    port: int,
 ) -> None:
     """
     Handles model checkpoint saving in a separate background process using PyTorch's distributed functionality.
@@ -188,6 +195,9 @@ def save_checkpoint_in_background(
         sender_queue: Queue to send completion signals back to the main process
         config_checkpoint: Configuration settings for checkpoint saving behavior
         config_job: Configuration settings for the training job
+        listen_socket: On rank 0, the socket reserved by the parent for this process group's
+            TCPStore; ``None`` on every other rank
+        port: Port ``listen_socket`` is bound to, broadcast to every rank by the parent
 
     Flow:
         1. Initializes distributed processing environment
@@ -200,19 +210,18 @@ def save_checkpoint_in_background(
         AssertionError: If received object is neither Terminate signal nor valid state dict tuple
 
     Note:
-        - Uses a different port than the main process to avoid conflicts
-        - Disables TorchElastic agent store for checkpoint operations
+        - Serves its store on a port reserved by the parent, so it never competes for one
         - Automatically cleans up distributed process group on exit
     """
-    # Configure distributed environment
-    os.environ["MASTER_PORT"] = str(int(os.environ["MASTER_PORT"]) + 2)
-    os.environ["TORCHELASTIC_USE_AGENT_STORE"] = "False"
-
     # Set up GPU device and distributed processing
     torch.cuda.set_device(int(os.environ["LOCAL_RANK"]))
-    if dist.is_initialized():
-        dist.destroy_process_group()
-    dist.init_process_group(backend="gloo")
+    store = build_background_store(listen_socket, port)
+    dist.init_process_group(
+        backend="gloo",
+        store=store,
+        rank=int(os.environ["RANK"]),
+        world_size=int(os.environ["WORLD_SIZE"]),
+    )
 
     # Initialize checkpointing mechanism
     checkpoint_handler = DistributedCheckpointer(
@@ -689,6 +698,16 @@ class DistributedCheckpointer(AbstractCheckpointer):
             self.async_mode = AsyncMode.DISABLED
 
         if self.async_mode == AsyncMode.ASYNC_WITH_PINNED_MEM:
+            # The background process group's TCPStore server lives on rank 0's node. Rank 0
+            # reserves the port here and keeps it bound until its background process adopts the
+            # socket, so nothing on the node can take the port in between; the port number is
+            # broadcast so every background process knows where to connect.
+            self.background_listen_socket = None
+            background_port = [0]
+            if dist.get_rank() == 0:
+                self.background_listen_socket, background_port[0] = reserve_background_store_socket()
+            dist.broadcast_object_list(background_port, src=0)
+
             ctx = get_context("spawn")
             self.mp_queue_send = ctx.Queue()
             self.mp_queue_recv = ctx.Queue()
@@ -699,6 +718,8 @@ class DistributedCheckpointer(AbstractCheckpointer):
                     self.mp_queue_recv,
                     config_checkpoint,
                     config_job,
+                    self.background_listen_socket,
+                    background_port[0],
                 ),
                 daemon=True,
             )
@@ -1157,3 +1178,9 @@ class DistributedCheckpointer(AbstractCheckpointer):
 
                 self.mp_queue_send.put(Terminate())
                 self.mp.join()
+
+            # Release rank 0's copy of the store socket; the background process owns the fd it
+            # adopted, so this only drops the parent's now-unused reference.
+            if self.background_listen_socket is not None:
+                self.background_listen_socket.close()
+                self.background_listen_socket = None

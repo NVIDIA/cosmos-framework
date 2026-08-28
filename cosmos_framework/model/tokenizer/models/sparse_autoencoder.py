@@ -66,6 +66,7 @@ from cosmos_framework.model.tokenizer.models.utils import (
     sparse_to_batched_tensor,
     sparse_to_img_list,
 )
+from cosmos_framework.model.tokenizer.utils.precision import activation_dtype
 from cosmos_framework.model.tokenizer.utils.tensors import cat_with_bounded_inputs, stack_with_bounded_inputs
 
 # =============================================================================
@@ -112,6 +113,64 @@ def _validate_encoder_mlp_only_checkpoint_max_tokens(
         )
     if freeze_encoder:
         raise ValueError("encoder_mlp_only_checkpoint_max_tokens is incompatible with freeze_encoder=True.")
+
+
+def _validate_encoder_fused_max_padded_tokens(
+    *,
+    max_padded_tokens: int | None,
+    fuse_encoder_temporal_batches: bool,
+) -> None:
+    """Validate the default-off fused-encoder attention workspace guard."""
+    if max_padded_tokens is None:
+        return
+    if isinstance(max_padded_tokens, bool) or not isinstance(max_padded_tokens, int) or max_padded_tokens < 1:
+        raise ValueError(
+            f"encoder_fused_max_padded_tokens must be a positive integer or None, got {max_padded_tokens!r}."
+        )
+    if not fuse_encoder_temporal_batches:
+        raise ValueError("encoder_fused_max_padded_tokens requires fuse_encoder_temporal_batches=True.")
+
+
+def _partition_consecutive_batches_by_padded_token_budget(
+    sequence_lengths: list[int],
+    max_padded_tokens: int | None,
+) -> list[tuple[int, int]]:
+    """Partition independent attention segments under a Blackwell varlen workspace proxy.
+
+    NATTEN Blackwell FMHA backward allocates against the number of segments
+    multiplied by the longest sequence rounded to eight tokens. Keeping this
+    product bounded avoids pathological ragged-batch workspace amplification
+    without dropping, resizing, or reordering any segment.
+    """
+    if len(sequence_lengths) == 0:
+        return []
+    if any(sequence_length <= 0 for sequence_length in sequence_lengths):
+        raise ValueError(f"Fused encoder sequence lengths must be positive, got {sequence_lengths!r}.")
+    if max_padded_tokens is None:
+        return [(0, len(sequence_lengths))]
+
+    padded_lengths = [((sequence_length + 7) // 8) * 8 for sequence_length in sequence_lengths]
+    for batch_index, padded_length in enumerate(padded_lengths):
+        if padded_length > max_padded_tokens:
+            raise ValueError(
+                "One fused encoder attention segment exceeds encoder_fused_max_padded_tokens: "
+                f"segment={batch_index}, padded_tokens={padded_length}, limit={max_padded_tokens}."
+            )
+
+    ranges: list[tuple[int, int]] = []
+    group_start = 0
+    group_max_padded_length = 0
+    for batch_index, padded_length in enumerate(padded_lengths):
+        candidate_max_padded_length = max(group_max_padded_length, padded_length)
+        candidate_batch_size = batch_index - group_start + 1
+        if candidate_batch_size * candidate_max_padded_length > max_padded_tokens:
+            ranges.append((group_start, batch_index))
+            group_start = batch_index
+            group_max_padded_length = padded_length
+        else:
+            group_max_padded_length = candidate_max_padded_length
+    ranges.append((group_start, len(sequence_lengths)))
+    return ranges
 
 
 def _validate_decoder_no_checkpoint_max_tokens(
@@ -619,6 +678,7 @@ class SparseTransformerBase(nn.Module):
         self.use_ragged_varlen_train_path: bool = use_ragged_varlen_train_path
         self.checkpoint_group_size: int = checkpoint_group_size
         self.gradient_checkpoint_scope: Literal["full_layer", "mlp_only"] = gradient_checkpoint_scope
+        self.preserve_fp32_residual_stream: bool = False
         self.num_learned_register_tokens: int = num_learned_register_tokens
         self.use_zero_input_register_token: bool = use_zero_input_register_token
         self.register_token_init_std: float = register_token_init_std
@@ -688,6 +748,25 @@ class SparseTransformerBase(nn.Module):
             self.dense_train_backend,
             use_compile=torch.compiler.is_compiling(),
         )
+
+    def _resolve_block_dtype(self) -> torch.dtype:
+        """Resolve the transformer residual-stream dtype for this invocation.
+
+        Reduced-precision autocast normally keeps the residual stream in its
+        compute dtype. Offline reconstruction evaluation may retain an FP32
+        decoder residual stream while autocast still runs the expensive
+        attention and MLP projections in reduced precision.
+        """
+        block_parameter = next(self.blocks.parameters(), None)
+        if block_parameter is None:
+            return next(self.input_layer.parameters()).dtype
+        if (
+            self.preserve_fp32_residual_stream
+            and block_parameter.dtype == torch.float32
+            and torch.is_autocast_enabled(block_parameter.device.type)
+        ):
+            return torch.float32
+        return activation_dtype(block_parameter.dtype, device_type=block_parameter.device.type)
 
     @property
     def num_register_tokens(self) -> int:
@@ -846,7 +925,7 @@ class SparseTransformerBase(nn.Module):
         """
         hs: list[SparseTensor] | None = [] if collect_hidden_states else None
 
-        input_dtype = next(self.input_layer.parameters()).dtype
+        input_dtype = activation_dtype(next(self.input_layer.parameters()).dtype)
         if x.dtype != input_dtype:
             x = x.to(input_dtype)
 
@@ -864,9 +943,9 @@ class SparseTransformerBase(nn.Module):
             elif position_embedding is not None:
                 h = h + position_embedding * self.position_embedding_scale  # [N,D]
 
-        block_dtype = next(self.blocks.parameters()).dtype
+        block_dtype = self._resolve_block_dtype()
         if h.dtype != block_dtype:
-            h = h.to(block_dtype)
+            h = h.to(block_dtype)  # [N,D]
         output_template = h
         if self.num_register_tokens > 0:
             if temporal_causal_mask:
@@ -1543,6 +1622,7 @@ class Decoder(SparseTransformerBase):
         )
         self.multiscale = multiscale
         self.multiscale_outputs = multiscale_outputs
+        self.force_fp32_output_projection: bool = False
 
         # Select last multiscale channel configuration
         if multiscale is not None and multiscale_outputs is None:
@@ -1587,6 +1667,18 @@ class Decoder(SparseTransformerBase):
                 self.multiscale_out_layers.append(out_layer)
                 self.recover_factors.append(recover_factor)
 
+    def _apply_output_projection(
+        self,
+        output_layer: SparseLinear,
+        hidden_states: SparseTensor,  # [B,*S,D]
+    ) -> SparseTensor:  # returns: [B,*S,P]
+        """Apply one decoder output projection under its configured compute policy."""
+        if self.force_fp32_output_projection:
+            projection_input = hidden_states.to(torch.float32)  # [B,*S,D]
+            with torch.autocast(device_type=hidden_states.device.type, enabled=False):
+                return output_layer(projection_input)  # [B,*S,P]
+        return output_layer(hidden_states)  # [B,*S,P]
+
     def forward(
         self,
         x: SparseTensor,
@@ -1626,12 +1718,12 @@ class Decoder(SparseTransformerBase):
             )
             h = hs[self.multiscale_outputs[0]["layer_id"]]
             h = h.replace(self.out_norm(h.feats))
-            h = self.out_layer(h)
+            h = self._apply_output_projection(self.out_layer, h)  # [B,*S,P]
 
             for i, cfg in enumerate(self.multiscale_outputs[1:]):
                 h_i = hs[cfg["layer_id"]]
                 h_i = h_i.replace(self.multiscale_out_norms[i](h_i.feats))
-                h_i = self.multiscale_out_layers[i](h_i)
+                h_i = self._apply_output_projection(self.multiscale_out_layers[i], h_i)  # [B,*S,P]
                 if self.multiscale is not None:
                     h_i = h_i.shrink_by_factors(self.recover_factors[i])
                 h = h + h_i
@@ -1640,7 +1732,7 @@ class Decoder(SparseTransformerBase):
 
         else:
             h = h.replace(self.out_norm(h.feats))
-            h = self.out_layer(h)
+            h = self._apply_output_projection(self.out_layer, h)  # [B,*S,P]
 
             if self.multiscale is not None:
                 h = h.shrink_by_factors(self.recover_factor)
@@ -1704,6 +1796,7 @@ class AutoencoderKLConfig:
     encoder_use_checkpoint: bool | None = None
     encoder_gradient_checkpoint_scope: Literal["full_layer", "mlp_only"] = "full_layer"
     encoder_mlp_only_checkpoint_max_tokens: int | None = None
+    encoder_fused_max_padded_tokens: int | None = None
     decoder_use_checkpoint: bool | None = None
     decoder_no_checkpoint_max_tokens: int | None = None
     encoder_checkpoint_group_size: int = 1
@@ -1811,6 +1904,7 @@ class AutoencoderKL(ModelMixin, ConfigMixin, FromOriginalModelMixin):
         encoder_use_checkpoint: bool | None = None,
         encoder_gradient_checkpoint_scope: Literal["full_layer", "mlp_only"] = "full_layer",
         encoder_mlp_only_checkpoint_max_tokens: int | None = None,
+        encoder_fused_max_padded_tokens: int | None = None,
         decoder_use_checkpoint: bool | None = None,
         decoder_no_checkpoint_max_tokens: int | None = None,
         encoder_checkpoint_group_size: int = 1,
@@ -1856,6 +1950,11 @@ class AutoencoderKL(ModelMixin, ConfigMixin, FromOriginalModelMixin):
             freeze_encoder=freeze_encoder,
         )
         self.encoder_mlp_only_checkpoint_max_tokens: int | None = encoder_mlp_only_checkpoint_max_tokens
+        _validate_encoder_fused_max_padded_tokens(
+            max_padded_tokens=encoder_fused_max_padded_tokens,
+            fuse_encoder_temporal_batches=fuse_encoder_temporal_batches,
+        )
+        self.encoder_fused_max_padded_tokens: int | None = encoder_fused_max_padded_tokens
         _validate_decoder_no_checkpoint_max_tokens(
             max_tokens=decoder_no_checkpoint_max_tokens,
             use_decoder=use_decoder,
@@ -1916,6 +2015,7 @@ class AutoencoderKL(ModelMixin, ConfigMixin, FromOriginalModelMixin):
         self.num_sample_frames_batch_size = 16
         self.num_sample_frames_stride = 12
         self.kv_cache_size = 4
+        self._logged_encoder_fusion_split = False
         self._logged_decoder_temporal_plan = False
 
         # Load SigLIP2 pretrained model (text encoder always needed for text alignment)
@@ -2333,18 +2433,51 @@ class AutoencoderKL(ModelMixin, ConfigMixin, FromOriginalModelMixin):
     def _encode_fused_temporal_batches(self, x: SparseTensor, frame_batch_size: int) -> SparseTensor:
         """Encode independent temporal chunks once and restore the original sparse metadata."""
         packed_x = self._pack_independent_temporal_batches(x, frame_batch_size)
-        packed_encoded, _ = self._run_main_encoder(packed_x)
-        if packed_encoded.feats.shape[0] != x.feats.shape[0]:
+        sequence_lengths = [
+            sequence_length + self.encoder.num_register_tokens for sequence_length in packed_x.get_batch_seq_lens()
+        ]
+        batch_ranges = _partition_consecutive_batches_by_padded_token_budget(
+            sequence_lengths,
+            self.encoder_fused_max_padded_tokens,
+        )
+        if len(batch_ranges) > 1 and not self._logged_encoder_fusion_split:
+            logging.warning(
+                "Splitting fused encoder attention into {} consecutive calls: segments={}, max_segment_tokens={}, "
+                "padded_token_surface={}, limit={}",
+                len(batch_ranges),
+                len(sequence_lengths),
+                max(sequence_lengths),
+                len(sequence_lengths) * (((max(sequence_lengths) + 7) // 8) * 8),
+                self.encoder_fused_max_padded_tokens,
+            )
+            self._logged_encoder_fusion_split = True
+        encoded_feature_parts: list[torch.Tensor] = []
+        for batch_start, batch_end in batch_ranges:
+            packed_chunk = packed_x[batch_start:batch_end] if len(batch_ranges) > 1 else packed_x
+            encoded_chunk, _ = self._run_main_encoder(packed_chunk)
+            if encoded_chunk.feats.shape[0] != packed_chunk.feats.shape[0]:
+                raise RuntimeError(
+                    "Fused temporal encoder must preserve sparse row count, got "
+                    f"{encoded_chunk.feats.shape[0]} rows for {packed_chunk.feats.shape[0]} inputs."
+                )
+            if (
+                encoded_chunk.coords.data_ptr() != packed_chunk.coords.data_ptr()
+                or encoded_chunk.layout is not packed_chunk.layout
+            ):
+                raise RuntimeError("Fused temporal encoder must preserve packed coordinate and row-layout identity.")
+            encoded_feature_parts.append(encoded_chunk.feats)  # [N_i,D]
+
+        packed_encoded_features = (
+            encoded_feature_parts[0]
+            if len(encoded_feature_parts) == 1
+            else cat_with_bounded_inputs(encoded_feature_parts, dim=0)
+        )  # [N,D]
+        if packed_encoded_features.shape[0] != x.feats.shape[0]:
             raise RuntimeError(
                 "Fused temporal encoder must preserve sparse row count, got "
-                f"{packed_encoded.feats.shape[0]} rows for {x.feats.shape[0]} inputs."
+                f"{packed_encoded_features.shape[0]} rows for {x.feats.shape[0]} inputs."
             )
-        if (
-            packed_encoded.coords.data_ptr() != packed_x.coords.data_ptr()
-            or packed_encoded.layout is not packed_x.layout
-        ):
-            raise RuntimeError("Fused temporal encoder must preserve packed coordinate and row-layout identity.")
-        return x.replace(packed_encoded.feats)
+        return x.replace(packed_encoded_features)
 
     def _can_fuse_decoder_temporal_batches(
         self,

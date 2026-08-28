@@ -297,6 +297,7 @@ def get_factored_qkv_data(
     sample_lens,
     packed_und_token_indexes,
     packed_gen_token_indexes,
+    cp_world_size: int = 1,
 ):
     print(f"DEBUG: packed_und_token_indexes length: {packed_und_token_indexes.shape[0]}")
     print(f"DEBUG: split_lens sum causal: {sum(l for l, m in zip(split_lens, attn_modes) if m == 'causal')}")
@@ -308,6 +309,7 @@ def get_factored_qkv_data(
         sample_lens=sample_lens,
         packed_und_token_indexes=packed_und_token_indexes,
         packed_gen_token_indexes=packed_gen_token_indexes,
+        cp_world_size=cp_world_size,
     )
     global_k_pack = from_all_seq(global_packed_sequence_k, global_q_pack)
     global_v_pack = from_all_seq(global_packed_sequence_v, global_q_pack)
@@ -567,6 +569,10 @@ def test_context_parallel_attention_two_way():
         global_packed_data.sample_lens,
         global_packed_data.text_indexes,
         global_packed_data.vision.sequence_indexes,
+        # The pack below is sharded across the CP group, so it has to be built with the CP world
+        # size the way the model path builds it (see build_packed_sequence): the trailing pad
+        # segment is only rounded up to a CP-divisible length when the packer knows about CP.
+        cp_world_size=cp_size,
     )
 
     # Verify global pack has full 32-sample metadata

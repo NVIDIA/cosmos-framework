@@ -26,11 +26,12 @@ import attrs
 # * ``"same_view"``: ``1/V`` of them. Each camera only attends to its own noisy tokens. Cost
 #   is V*(FS)^2.
 # * ``"same_view_or_frame"``: Each camera attends to its own noisy tokens plus the same frame in
-#   every other camera. Cost is V*(FS)^2 + F*(VS)^2.
-NoisyAttentionScope = Literal["all_views", "same_view", "same_view_or_frame"]
+#   every other camera. Cost is V*(FS)^2 + F*(VS)^2. Not allowed on a joint camera + LiDAR pack:
+#   the two streams do not share a frame index.
+AttentionScope = Literal["all_views", "same_view", "same_view_or_frame"]
 
-# The scopes of ``NoisyAttentionScope`` at runtime, which the annotation itself is not.
-NOISY_ATTENTION_SCOPES = get_args(NoisyAttentionScope)
+# The scopes of ``AttentionScope`` at runtime, which the annotation itself is not.
+ATTENTION_SCOPES = get_args(AttentionScope)
 
 # Which kernels the multiview mask runs on. See flex_attention.resolve_flex_backend for what
 # each one resolves to and the comment on ``FlexAttentionConfig.backend`` for when to pin one.
@@ -48,12 +49,18 @@ class FlexAttentionMaskConfig:
     view.
     """
 
-    # Which noisy tokens of its sample a noisy token attends to. Cross-view attention is what
-    # lets the rig agree with itself, so the full square is the default; the narrower scopes buy
-    # attention that grows with the rig rather than with its square, per the comment above.
-    noisy_attention_scope: NoisyAttentionScope = attrs.field(
+    # Which same-kind (RGB) tokens of its sample a token attends to: conditioning tokens
+    # reach conditioning tokens, and noisy tokens reach both noisy and conditioning tokens
+    # alike. Cross-view attention is what lets the rig agree with itself, so the full square
+    # is the default; the narrower scopes buy attention that grows with the rig rather than
+    # with its square, per the comment above. Never widens a WSM (World Scenario Map) control
+    # token's reach, which is always its own view -- see
+    # flex_attention.build_multiview_flex_metadata's ``is_control_per_item``, which the
+    # network derives per generation stream, and which a batch without a control stream
+    # leaves empty.
+    attention_scope: AttentionScope = attrs.field(
         default="all_views",
-        validator=attrs.validators.in_(NOISY_ATTENTION_SCOPES),
+        validator=attrs.validators.in_(ATTENTION_SCOPES),
     )
 
 

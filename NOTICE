@@ -44,11 +44,3 @@ Notice:
   Copyright (c) Facebook, Inc. and its affiliates.
 File:
   cosmos_framework/utils/lazy_config/__init__.py
-
-TaylorSeer
-Source: https://github.com/Shenyi-Z/TaylorSeer
-License: GPL-3.0
-Notice:
-  Upstream source files do not contain an explicit copyright notice.
-Files:
-  cosmos_framework/model/generator/utils/taylorseer.py

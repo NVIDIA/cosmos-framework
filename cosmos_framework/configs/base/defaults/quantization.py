@@ -58,3 +58,41 @@ class QuantizationConfig:
     # index by the loader, which knows the diffusers key mapping; passed through
     # the config so the meta-device swap in ``build_net`` needs no mapper.
     modelopt_fp8_target_fqns: list[str] = attrs.field(factory=list)
+
+    # Mixed-precision diffusion steps for ModelOpt FP8 checkpoints: the first
+    # ``mixed_precision_first_steps`` and last ``mixed_precision_last_steps``
+    # denoising steps run generation-path linears with 16-bit activations
+    # (W8A16: dequantized FP8 weight + dense GEMM); the middle steps keep the
+    # FP8-activation path (W8A8). Both 0 (default) disables the feature.
+    mixed_precision_first_steps: int = attrs.field(
+        default=0, validator=[attrs.validators.instance_of(int), attrs.validators.ge(0)]
+    )
+    mixed_precision_last_steps: int = attrs.field(
+        default=0, validator=[attrs.validators.instance_of(int), attrs.validators.ge(0)]
+    )
+
+    # Reasoner-path (understanding pathway) precision, independent of the step
+    # schedule: "high_precision" keeps those linears on W8A16 for every step;
+    # "base_precision" keeps them on W8A8.
+    mixed_precision_reasoner_policy: str = attrs.field(
+        default="high_precision",
+        validator=attrs.validators.in_({"high_precision", "base_precision"}),
+    )
+
+    # Where W8A16 dense weights come from: "none" dequantizes per call,
+    # "generation"/"all" hold resident BF16 caches, "gpu_block"/"cpu_block"
+    # stage per-decoder-layer slots through a double buffer. Only "none" is
+    # supported when the model is FSDP-sharded. The default deliberately
+    # diverges from vllm-omni's "gpu_block": measured wall time of "none" is
+    # indistinguishable from the cached modes at first/last-step schedules
+    # (t2i, t2v, and FSDP-sharded Super runs), and "none" works everywhere,
+    # including multi-GPU FSDP where the cached modes are rejected at load.
+    mixed_precision_w8a16_cache: str = attrs.field(
+        default="none",
+        validator=attrs.validators.in_({"none", "generation", "all", "cpu_block", "gpu_block"}),
+    )
+
+    @property
+    def mixed_precision_enabled(self) -> bool:
+        """Whether mixed-precision diffusion steps are requested."""
+        return self.mixed_precision_first_steps + self.mixed_precision_last_steps > 0

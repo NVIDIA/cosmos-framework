@@ -275,6 +275,24 @@ def _normalize_diffusers_target_key(name: str) -> str:
     return name.removeprefix("model.net.").replace("_orig_mod.", "").replace("_checkpoint_wrapped_module.", "")
 
 
+def _validate_mixed_precision_load(
+    quantization_config: QuantizationConfig, *, modelopt_checkpoint: bool, use_cuda_graphs: bool
+) -> None:
+    """Fail fast on unsupported mixed-precision-step combinations."""
+    if not quantization_config.mixed_precision_enabled:
+        return
+    if not modelopt_checkpoint:
+        raise ValueError(
+            "mixed_precision_first_steps/last_steps require a ModelOpt FP8 checkpoint "
+            "(hf_quant_config.json with quant_method='modelopt', quant_algo='FP8')."
+        )
+    if use_cuda_graphs:
+        raise ValueError(
+            "Mixed-precision diffusion steps are incompatible with use_cuda_graphs: "
+            "per-step precision switching cannot be captured/replayed."
+        )
+
+
 class _MmapSafeReadMixin:
     """Materialize each safetensors slice into anonymous RAM before the H2D copy.
 
@@ -623,6 +641,13 @@ class Cosmos3OmniModel(transformers.PreTrainedModel):
         # Disable training-only features
         model_dict.config.ema.enabled = False
         model_dict.config.activation_checkpointing.mode = "none"
+        # Training's `dp_enabled` is unconditionally True so the FSDP2 wrap can install
+        # the mixed-precision policy, and that wrap builds a device mesh, which needs an
+        # initialized process group. This wrapper is only ever built for inference and
+        # export -- including single-process runs with no torchrun rendezvous (the
+        # checkpoint conversion scripts) -- so it must not inherit that from a training
+        # config it was handed.
+        model_dict.config.parallelism.enable_inference_mode = True
         if SMOKE:
             # Minimize model size for smoke test
             vlm_dict = model_dict.config.vlm_config.model_instance
@@ -667,6 +692,11 @@ class Cosmos3OmniModel(transformers.PreTrainedModel):
             )
         if modelopt_checkpoint and not _is_diffusers_checkpoint(checkpoint_path):
             raise ValueError(f"ModelOpt FP8 loading requires a diffusers-format checkpoint layout: {checkpoint_path}")
+        _validate_mixed_precision_load(
+            quantization_config,
+            modelopt_checkpoint=modelopt_checkpoint,
+            use_cuda_graphs=compile_config.use_cuda_graphs,
+        )
         if modelopt_checkpoint:
             # Resolve which linears the checkpoint quantizes here, where the
             # diffusers key mapping lives, and hand the plain FQN list to the
@@ -719,6 +749,14 @@ class Cosmos3OmniModel(transformers.PreTrainedModel):
                             key_mapper=_diffusers_to_net_key,
                             weight_map=_diffusers_weight_map(checkpoint_path),
                         )
+                        # Mixed precision installs after FP8 weights are in
+                        # place and the module graph is final (parallelize +
+                        # materialize already ran inside build_net).
+                        from cosmos_framework.utils.generator.mixed_precision import (
+                            install_mixed_precision_runtime,
+                        )
+
+                        install_mixed_precision_runtime(model.model.net, quantization_config)
                     return model
                 state_dict = get_model_state_dict(model)
                 _raise_on_missing_vision_keys(checkpoint_path, state_dict)

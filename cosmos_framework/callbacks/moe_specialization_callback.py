@@ -41,6 +41,103 @@ from cosmos_framework.trainer import ImaginaireTrainer
 from cosmos_framework.utils import distributed
 from cosmos_framework.model.generator.reasoner.qwen3_vl_moe.qwen3_vl_moe import Qwen3VLMoeTextSparseMoeBlock
 
+_RANK_EPSILON = 1e-12
+
+
+def _validate_router_weight(gate_weight: torch.Tensor) -> torch.Tensor:
+    """Return a detached FP32 router matrix after validating its shape."""
+    if gate_weight.ndim != 2:
+        raise ValueError(f"Expected a 2-D router weight, got shape {tuple(gate_weight.shape)}")
+    return gate_weight.detach().to(torch.float32)
+
+
+def calculate_mods(gate_weight: torch.Tensor) -> torch.Tensor:
+    """Compute mean off-diagonal absolute cosine similarity between router rows."""
+    weight = _validate_router_weight(gate_weight)
+    num_experts = weight.shape[0]
+    if num_experts < 2:
+        return weight.new_zeros(())
+    normalized = torch.nn.functional.normalize(weight, dim=1)
+    absolute_cosines = (normalized @ normalized.T).abs()
+    off_diagonal_sum = absolute_cosines.sum() - absolute_cosines.diagonal().sum()
+    return off_diagonal_sum / (num_experts * (num_experts - 1))
+
+
+def _entropy_rank(probabilities: torch.Tensor) -> torch.Tensor:
+    """Return exp(entropy(probabilities)), matching the offline router-rank implementation."""
+    probabilities = probabilities.clamp_min(_RANK_EPSILON)
+    return torch.exp(-(probabilities * probabilities.log()).sum())
+
+
+def _calculate_router_ranks(
+    gate_weight: torch.Tensor,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+    """Compute effective and spectral ranks from one router SVD."""
+    weight = _validate_router_weight(gate_weight)
+    singular_values = torch.linalg.svdvals(weight)
+    singular_probabilities = singular_values / singular_values.sum().clamp_min(_RANK_EPSILON)
+    effective_rank = _entropy_rank(singular_probabilities)
+    energy = singular_values.square()
+    energy_probabilities = energy / energy.sum().clamp_min(_RANK_EPSILON)
+    spectral_rank = _entropy_rank(energy_probabilities)
+    max_possible_rank = min(weight.shape)
+    return (
+        effective_rank,
+        effective_rank / max_possible_rank,
+        spectral_rank,
+        spectral_rank / max_possible_rank,
+    )
+
+
+def _materialize_parameter(parameter: torch.Tensor) -> torch.Tensor:
+    """Materialize one logical parameter, participating in DTensor collectives on every rank."""
+    if isinstance(parameter, DTensor):
+        return parameter.full_tensor()
+    return parameter
+
+
+def compute_moe_router_geometry_metrics(vfm: torch.nn.Module) -> dict[str, dict]:
+    """Compute checkpoint-compatible router geometry metrics per layer and tower."""
+    results: dict[str, dict] = {}
+    with torch.no_grad():
+        for tower in ("und", "gen"):
+            layer_indices: list[int] = []
+            mods: list[torch.Tensor] = []
+            effective_ranks: list[torch.Tensor] = []
+            effective_ranks_normalized: list[torch.Tensor] = []
+            spectral_ranks: list[torch.Tensor] = []
+            spectral_ranks_normalized: list[torch.Tensor] = []
+
+            for layer_idx, layer in enumerate(vfm.language_model.model.layers):
+                mlp = layer.mlp if tower == "und" else getattr(layer, "mlp_moe_gen", None)
+                if not isinstance(mlp, Qwen3VLMoeTextSparseMoeBlock):
+                    continue
+
+                gate_weight = _materialize_parameter(mlp.gate.weight)
+                (
+                    effective_rank,
+                    effective_rank_normalized,
+                    spectral_rank,
+                    spectral_rank_normalized,
+                ) = _calculate_router_ranks(gate_weight)
+                layer_indices.append(layer_idx)
+                mods.append(calculate_mods(gate_weight))
+                effective_ranks.append(effective_rank)
+                effective_ranks_normalized.append(effective_rank_normalized)
+                spectral_ranks.append(spectral_rank)
+                spectral_ranks_normalized.append(spectral_rank_normalized)
+
+            if layer_indices:
+                results[tower] = {
+                    "layer_indices": layer_indices,
+                    "mods": torch.stack(mods),
+                    "effective_rank": torch.stack(effective_ranks),
+                    "effective_rank_normalized": torch.stack(effective_ranks_normalized),
+                    "spectral_rank": torch.stack(spectral_ranks),
+                    "spectral_rank_normalized": torch.stack(spectral_ranks_normalized),
+                }
+    return results
+
 
 def _get_device_mesh(vfm: torch.nn.Module):
     weight = vfm.language_model.model.layers[0].self_attn.q_proj.weight
@@ -158,7 +255,7 @@ class MoESpecializationCallback(EveryN):
         every_n (int): Logging interval in training steps.
     """
 
-    def __init__(self, every_n: int = 100):
+    def __init__(self, every_n: int = 250):
         super().__init__(every_n=every_n)
 
     def every_n_impl(
@@ -190,3 +287,39 @@ class MoESpecializationCallback(EveryN):
                 log_dict[f"moe_specialization/{metric_name}/{tower}/max"] = values.max().item()
 
         wandb.log(log_dict, step=iteration)
+
+
+class MoERouterGeometryCallback(EveryN):
+    """Log per-layer router MODS, effective rank, and spectral rank."""
+
+    def __init__(self, every_n: int = 250):
+        super().__init__(every_n=every_n)
+
+    def every_n_impl(
+        self,
+        trainer: ImaginaireTrainer,
+        model: ImaginaireModel,
+        data_batch: dict[str, torch.Tensor],
+        output_batch: dict[str, torch.Tensor],
+        loss: torch.Tensor,
+        iteration: int,
+    ) -> None:
+        metrics = compute_moe_router_geometry_metrics(model.net)
+
+        if not (distributed.is_rank0() and wandb.run):
+            return
+
+        log_dict: dict[str, float] = {}
+        for tower, tower_metrics in metrics.items():
+            layer_indices = tower_metrics["layer_indices"]
+            for metric_name, values in tower_metrics.items():
+                if metric_name == "layer_indices":
+                    continue
+                for layer_idx, value in zip(layer_indices, values):
+                    log_dict[f"moe_router_geometry/{metric_name}/{tower}/layer_{layer_idx:03d}"] = value.item()
+                log_dict[f"moe_router_geometry/{metric_name}/{tower}/mean"] = values.mean().item()
+                log_dict[f"moe_router_geometry/{metric_name}/{tower}/min"] = values.min().item()
+                log_dict[f"moe_router_geometry/{metric_name}/{tower}/max"] = values.max().item()
+
+        if log_dict:
+            wandb.log(log_dict, step=iteration)

@@ -12,11 +12,12 @@ This module provides metric computation for tokenizer evaluation:
 from __future__ import annotations
 
 import os
-from contextlib import nullcontext
 from typing import Any
 
 import torch
 from loguru import logger as logging
+
+from cosmos_framework.model.tokenizer.utils.precision import metric_compute_autocast
 
 
 def compute_psnr(
@@ -229,10 +230,7 @@ class FIDComputer:
 
     def _autocast_context(self) -> Any:
         """Return an autocast context appropriate for the current device."""
-        device_type = torch.device(self.device).type
-        if device_type == "cuda":
-            return torch.autocast(device_type="cuda", enabled=False, dtype=torch.float32)
-        return nullcontext()
+        return metric_compute_autocast(self.device)
 
     def _ensure_initialized(self) -> bool:
         """Lazily initialize the FID metric."""
@@ -431,11 +429,11 @@ class FIDComputer:
         try:
             import torch.distributed as dist
 
-            if dist.is_available() and dist.is_initialized():
-                states = self._get_reduced_states()
-                fid_value = self._compute_fid_from_states(states)
-            else:
-                with self._autocast_context():
+            with self._autocast_context():
+                if dist.is_available() and dist.is_initialized():
+                    states = self._get_reduced_states()
+                    fid_value = self._compute_fid_from_states(states)
+                else:
                     fid_value = self._metric.compute()
             return fid_value.item()
         except Exception as e:

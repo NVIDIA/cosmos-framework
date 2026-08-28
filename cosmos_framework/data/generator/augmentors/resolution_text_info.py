@@ -38,6 +38,8 @@ class ResolutionTextInfo(Augmentor):
             - image_template (str): Format string for image metadata. Default: DEFAULT_IMAGE_TEMPLATE
             - video_template (str): Format string for video metadata. Default: DEFAULT_VIDEO_TEMPLATE
             - separator (str): Separator between caption and metadata. Default: ". "
+            - force_separator (bool): Always use separator instead of punctuation-aware spacing.
+              Default: False.
             - enabled (bool): Whether augmentation is enabled. Default: True
     """
 
@@ -54,6 +56,7 @@ class ResolutionTextInfo(Augmentor):
         self.image_template = args.get("image_template", DEFAULT_IMAGE_TEMPLATE) if args else DEFAULT_IMAGE_TEMPLATE
         self.video_template = args.get("video_template", DEFAULT_VIDEO_TEMPLATE) if args else DEFAULT_VIDEO_TEMPLATE
         self.default_separator = args.get("separator", ". ") if args else ". "
+        self.force_separator: bool = args.get("force_separator", False) if args else False
         self.enabled = args.get("enabled", True) if args else True
 
     def __call__(self, data_dict: dict) -> dict | None:
@@ -97,8 +100,11 @@ class ResolutionTextInfo(Augmentor):
             # Format metadata text
             metadata_text = template.format(height=height, width=width)
 
-            # Choose separator based on whether caption ends with a period
-            separator = " " if caption.rstrip().endswith(".") else self.default_separator
+            # Preserve the existing punctuation-aware default unless a caller
+            # explicitly needs a structural section boundary.
+            separator = self.default_separator
+            if not self.force_separator and caption.rstrip().endswith("."):
+                separator = " "
 
             # Update caption
             data_dict[self.caption_key] = caption + separator + metadata_text

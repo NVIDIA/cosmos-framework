@@ -22,7 +22,7 @@ from torch.utils.data import Dataset, IterableDataset, get_worker_info
 from cosmos_framework.data.generator.action.datasets.droid_merged_lerobot_dataset import DROIDMergedLeRobotDataset
 from cosmos_framework.data.generator.action.datasets.droid_lerobot_dataset import DROIDLeRobotDataset
 from cosmos_framework.data.generator.action.datasets.libero_lerobot_dataset import LIBEROLeRobotDataset
-from cosmos_framework.data.generator.action.transforms import ActionTransformPipeline
+from cosmos_framework.data.generator.action.utils.transforms import ActionTransformPipeline
 
 
 class ActionSFTDataset(Dataset):

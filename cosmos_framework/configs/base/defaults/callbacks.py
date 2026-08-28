@@ -20,19 +20,26 @@ from cosmos_framework.callbacks.heart_beat import HeartBeat
 from cosmos_framework.callbacks.iter_speed import IterSpeed
 from cosmos_framework.callbacks.load_pretrained import LoadPretrained
 from cosmos_framework.callbacks.mfu import MFUCallback
-from cosmos_framework.callbacks.moe_specialization_callback import MoESpecializationCallback
+from cosmos_framework.callbacks.moe_specialization_callback import (
+    MoERouterGeometryCallback,
+    MoESpecializationCallback,
+)
 from cosmos_framework.callbacks.moe_stability_callback import MoEStabilityCallback
 from cosmos_framework.callbacks.norm_monitor import NormMonitor
 from cosmos_framework.callbacks.ofu import OFUCallback
 from cosmos_framework.callbacks.param_count import ParamCount
+from cosmos_framework.callbacks.parameter_geometry_callback import ParameterGeometryCallback
 from cosmos_framework.callbacks.sampled_media_recorder import SampledMediaRecorder
 from cosmos_framework.callbacks.sequence_packing_padding import SequencePackingPadding
 from cosmos_framework.callbacks.sigma_loss_analysis import SigmaLossAnalysis
 from cosmos_framework.callbacks.skip_nan_step import SkipNaNStep
 from cosmos_framework.callbacks.termination_signal_checkpoint import TerminationSignalCheckpoint
 from cosmos_framework.callbacks.training_stats import TrainingStatsCallback
+from cosmos_framework.callbacks.wall_clock_checkpoint import WallClockCheckpoint
 from cosmos_framework.callbacks.wandb_log import WandbCallback as WandBCallbackMultiplier
 from cosmos_framework.callbacks.wandb_log_eval import WandbCallback as WandBCallbackEval
+
+MOE_DIAGNOSTICS_EVERY_N = 250
 
 BASIC_CALLBACKS = dict(
     iter_speed=L(IterSpeed)(  # does not use model or optimizer
@@ -54,8 +61,10 @@ BASIC_CALLBACKS = dict(
     wandb_val=L(WandBCallbackEval)(
         save_s3="${upload_reproducible_setup}",
     ),
-    moe_stability=L(MoEStabilityCallback)(every_n=250),
-    moe_specialization=L(MoESpecializationCallback)(every_n=250),
+    moe_stability=L(MoEStabilityCallback)(every_n=MOE_DIAGNOSTICS_EVERY_N),
+    moe_specialization=L(MoESpecializationCallback)(every_n=MOE_DIAGNOSTICS_EVERY_N),
+    moe_router_geometry=L(MoERouterGeometryCallback)(every_n=MOE_DIAGNOSTICS_EVERY_N),
+    parameter_geometry=L(ParameterGeometryCallback)(every_n=MOE_DIAGNOSTICS_EVERY_N),
     expert_heatmap=L(ExpertHeatmap)(),
     load_pretrained=L(LoadPretrained)(),
     compile_tokenizer=L(CompileTokenizer)(enabled=False, compile_after_iterations=3),
@@ -134,6 +143,9 @@ JOB_MONITOR_CALLBACKS = dict(
     termination_signal_checkpoint=L(TerminationSignalCheckpoint)(
         min_save_fraction=1 / 3,
     ),
+    # Interval comes from the environment, so submitting to a cluster that enforces a
+    # wall-clock bound turns this on without every experiment config opting in.
+    wall_clock_checkpoint=L(WallClockCheckpoint)(),
 )
 
 OPTIMIZATION_CALLBACKS = dict(

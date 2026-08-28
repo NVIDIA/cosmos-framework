@@ -17,7 +17,7 @@ from cosmos_framework.utils.easy_io import easy_io
 MEMORY_SNAPSHOT_MAX_ENTRIES = 100000
 
 
-def _validate_profile_schedule(*, profile_freq: int, warmup: int, active: int) -> None:
+def validate_profile_schedule(*, profile_freq: int, warmup: int, active: int) -> None:
     if active <= 0:
         raise ValueError("profile_active must be positive")
     if warmup < 0:
@@ -58,7 +58,7 @@ def maybe_enable_profiling(config, *, global_step: int = 0):
 
         warmup = config.trainer.profiling.profile_warmup
         active = config.trainer.profiling.profile_active
-        _validate_profile_schedule(profile_freq=profile_freq, warmup=warmup, active=active)
+        validate_profile_schedule(profile_freq=profile_freq, warmup=warmup, active=active)
         wait = profile_freq - (active + warmup)
 
         with torch.profiler.profile(
@@ -128,8 +128,23 @@ def maybe_enable_memory_snapshot(config, *, global_step: int = 0):
         profiler = MemoryProfiler(global_step, config.trainer.profiling.profile_freq)
         try:
             yield profiler
-        except torch.cuda.OutOfMemoryError as e:
-            profiler.step(exit_ctx=True)
+        except torch.cuda.OutOfMemoryError:
+            # Dump what the allocator was holding when it ran out, then let the OOM keep going.
+            # Swallowing it would end the train loop and return from trainer.train() normally, so
+            # the process would exit 0 and a run truncated at iteration 3 would be indistinguishable
+            # from one that reached max_iter — and a launcher configured to resubmit on failure
+            # would see nothing to resubmit. Bare re-raise: the traceback stays pointed at the
+            # allocation that failed rather than at this line.
+            try:
+                profiler.step(exit_ctx=True)
+            except Exception:
+                # The dump is best-effort, and a failed dump must not become the reported cause of
+                # death: snapshotting an exhausted allocator can OOM again, and the write itself can
+                # fail. Letting that surface would swap the exception callers see and point the
+                # traceback at the serializer instead of the allocation. Logged on every rank, since
+                # the rank that ran out of memory is usually not rank 0.
+                log.exception("Failed to dump the exit memory snapshot", rank0_only=False)
+            raise
     else:
         yield None
 
@@ -156,7 +171,7 @@ def maybe_enable_nsys_profiling(config, *, global_step: int = 0):
     freq = config.trainer.profiling.profile_freq
     warmup = config.trainer.profiling.profile_warmup
     active = config.trainer.profiling.profile_active
-    _validate_profile_schedule(profile_freq=freq, warmup=warmup, active=active)
+    validate_profile_schedule(profile_freq=freq, warmup=warmup, active=active)
 
     active_start_iter = freq - active
     active_end_iter = freq - 1

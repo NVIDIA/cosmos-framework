@@ -737,6 +737,10 @@ class QuantizationArgs(ArgsBase):
     quantization_method: QuantizationMethod | None
     quantization_include_regex: list[str]
     quantization_exclude_regex: list[str]
+    mixed_precision_first_steps: int
+    mixed_precision_last_steps: int
+    mixed_precision_reasoner_policy: Literal["high_precision", "base_precision"]
+    mixed_precision_w8a16_cache: Literal["none", "generation", "all", "cpu_block", "gpu_block"]
 
 
 class QuantizationOverrides(OverridesBase):
@@ -750,6 +754,20 @@ class QuantizationOverrides(OverridesBase):
     """Regexes matched against module FQNs; a Linear is quantized only if it matches one (empty = all)."""
     quantization_exclude_regex: list[str] = pydantic.Field(default_factory=list)
     """Regexes matched against module FQNs; a Linear is skipped if it matches any."""
+    mixed_precision_first_steps: int = pydantic.Field(default=0, ge=0)
+    """ModelOpt FP8 checkpoints only: run the first N diffusion steps with 16-bit
+    activations (W8A16) instead of FP8 activations (W8A8). 0 disables."""
+    mixed_precision_last_steps: int = pydantic.Field(default=0, ge=0)
+    """ModelOpt FP8 checkpoints only: run the last N diffusion steps with W8A16."""
+    mixed_precision_reasoner_policy: Literal["high_precision", "base_precision"] = "high_precision"
+    """Understanding-pathway precision when mixed precision is enabled:
+    high_precision keeps reasoner linears on W8A16 for every step."""
+    mixed_precision_w8a16_cache: Literal["none", "generation", "all", "cpu_block", "gpu_block"] = "none"
+    """W8A16 dense-weight source: none (default) dequantizes per call and works
+    everywhere, including FSDP-sharded runs, at wall time indistinguishable from
+    the cached modes; generation/all hold resident BF16 caches; gpu_block/
+    cpu_block stream per-layer double buffers. FSDP-sharded runs support only
+    none."""
 
     def build_quantization(self) -> QuantizationArgs:
         return self._build(QuantizationArgs)
@@ -864,6 +882,9 @@ class SetupArgs(ABC, CheckpointArgs, ParallelismArgs, QuantizationArgs, Guardrai
     num_iterations: pydantic.PositiveInt
     max_model_len: pydantic.PositiveInt | None
     max_num_seqs: pydantic.PositiveInt | None
+    diffusion_cache: bool
+    diffusion_cache_thresh: float | None
+    diffusion_cache_residual_order: int | None
 
     # Subclass must implement these fields/methods
     # ------------------------------------------------------------
@@ -916,6 +937,23 @@ class SetupOverrides(ABC, CheckpointOverrides, ParallelismOverrides, Quantizatio
     max_num_seqs: pydantic.PositiveInt | None = 1
     """Maximum number of sequences per batch.  When set, samples are packed into
     batches by number of sequences."""
+    diffusion_cache: bool = False
+    """Enable the diffusion-time inference cache.
+    Shared inference setup disables the cache by default. The inference CLI enables
+    it by default; pass ``--no-diffusion-cache`` to disable it. Caching is based on
+    SeaCache: Spectral-Evolution-Aware Cache for Accelerating Diffusion Models
+    (https://arxiv.org/abs/2602.18993). Autoregressive and KV-cache generation
+    bypass the cache automatically.
+    """
+    diffusion_cache_thresh: float | None = None
+    """Accumulated relative-L1 threshold (``diffusion_cache_thresh``), shared by the
+    conditional and unconditional pathways. Larger values allow more skipping at
+    the cost of lower fidelity. ``None`` uses the ``DiffusionCache.Config`` default
+    (0.35). Only takes effect when diffusion cache is enabled."""
+    diffusion_cache_residual_order: int | None = None
+    """Polynomial order for extrapolating the generation residual on a skipped step via
+    Newton divided differences: 0 = constant reuse, 1 = linear, 2 = quadratic.
+    ``None`` uses the default (1).  Only used when diffusion cache is enabled."""
 
     def _build_setup(self):
         if self.num_iterations > 1 and not self.benchmark:

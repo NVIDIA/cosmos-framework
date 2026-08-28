@@ -401,6 +401,58 @@ Qwen3VLMoT_VLM_235b_a22b_Instruct_GCP_Config: VLMConfig = VLMConfig(
 )
 
 
+# Cosmos3.5 Super Reasoner (Qwen3-VL 30B-A3B backbone)
+Cosmos3p5SuperReasoner_VLM_GCP_Config: VLMConfig = VLMConfig(
+    model_name="nvidia/Cosmos3.5-Super-Reasoner",
+    model_instance=L(Qwen3VLMoeTextForCausalLM)(
+        config=L(create_vlm_config)(
+            base_config=L(Qwen3VLMoeMoTConfig.from_json_file)(
+                json_file="cosmos_framework/model/generator/reasoner/qwen3_vl_moe/configs/Qwen3-VL-30B-A3B-Instruct.json"
+            ),
+            layer_module="Qwen3VLMoeTextMoTDecoderLayer",
+            qk_norm_for_text=True,
+            qk_norm_for_diffusion=True,
+        ),
+    ),
+    tokenizer=L(build_processor_lazy)(
+        tokenizer_type="Qwen/Qwen3-VL-30B-A3B-Instruct",
+        config_variant="gcp",
+    ),
+    layer_module="Qwen3VLMoeTextMoTDecoderLayer",
+    pretrained_weights=PretrainedWeightsConfig(
+        backbone_path="s3://bucket0/cosmos3/pretrained/huggingface/Cosmos-Reason/Cosmos3.5-Super-Reasoner/",
+        credentials_path="credentials/gcp_checkpoint.secret",
+        enable_gcs_patch_in_boto3=True,
+    ),
+)
+
+
+# Cosmos3.5 Ultra Reasoner (Qwen3-VL 235B-A22B backbone)
+Cosmos3p5UltraReasoner_VLM_GCP_Config: VLMConfig = VLMConfig(
+    model_name="nvidia/Cosmos3.5-Ultra-Reasoner",
+    model_instance=L(Qwen3VLMoeTextForCausalLM)(
+        config=L(create_vlm_config)(
+            base_config=L(Qwen3VLMoeMoTConfig.from_json_file)(
+                json_file="cosmos_framework/model/generator/reasoner/qwen3_vl_moe/configs/Qwen3-VL-235B-A22B-Instruct.json"
+            ),
+            layer_module="Qwen3VLMoeTextMoTDecoderLayer",
+            qk_norm_for_text=True,
+            qk_norm_for_diffusion=True,
+        ),
+    ),
+    tokenizer=L(build_processor_lazy)(
+        tokenizer_type="Qwen/Qwen3-VL-235B-A22B-Instruct",
+        config_variant="gcp",
+    ),
+    layer_module="Qwen3VLMoeTextMoTDecoderLayer",
+    pretrained_weights=PretrainedWeightsConfig(
+        backbone_path="s3://bucket0/cosmos3/pretrained/huggingface/Cosmos-Reason/Cosmos3.5-Ultra-Reasoner/",
+        credentials_path="credentials/gcp_checkpoint.secret",
+        enable_gcs_patch_in_boto3=True,
+    ),
+)
+
+
 # Config for Qwen3VL 2B Instruct model
 # Qwen3VL uses Qwen2Tokenizer
 Qwen3VLMoT_VLM_2b_Instruct_Config: VLMConfig = VLMConfig(
@@ -968,6 +1020,18 @@ def register_vlm():
         package="model.config.vlm_config",
         name="qwen3_vl_mot_vlm_235b_a22b_instruct_gcp",
         node=Qwen3VLMoT_VLM_235b_a22b_Instruct_GCP_Config,
+    )
+    cs.store(
+        group="vlm_config",
+        package="model.config.vlm_config",
+        name="cosmos3p5_super_reasoner_vlm_gcp",
+        node=Cosmos3p5SuperReasoner_VLM_GCP_Config,
+    )
+    cs.store(
+        group="vlm_config",
+        package="model.config.vlm_config",
+        name="cosmos3p5_ultra_reasoner_vlm_gcp",
+        node=Cosmos3p5UltraReasoner_VLM_GCP_Config,
     )
     cs.store(
         group="vlm_config",

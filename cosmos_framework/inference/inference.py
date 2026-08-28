@@ -1168,6 +1168,10 @@ class OmniInference(Inference):
             method=setup_args.quantization_method,
             include_regex=list(setup_args.quantization_include_regex),
             exclude_regex=list(setup_args.quantization_exclude_regex),
+            mixed_precision_first_steps=setup_args.mixed_precision_first_steps,
+            mixed_precision_last_steps=setup_args.mixed_precision_last_steps,
+            mixed_precision_reasoner_policy=setup_args.mixed_precision_reasoner_policy,
+            mixed_precision_w8a16_cache=setup_args.mixed_precision_w8a16_cache,
         )
 
     @override
@@ -1340,7 +1344,34 @@ class OmniInference(Inference):
                     rank0_only=False,
                 )
 
-        return cls(setup_args=setup_args, model=model, vae_decode_stream=vae_decode_stream, **kwargs)
+        pipe = cls(setup_args=setup_args, model=model, vae_decode_stream=vae_decode_stream, **kwargs)
+        # Install here (not only in scripts/inference.py) so all callers —
+        # cosmos-benchmarks EvalModel, Ray serve, CLI — get the default-on cache.
+        cls._maybe_install_diffusion_cache(pipe, setup_args)
+        return pipe
+
+    @staticmethod
+    def _maybe_install_diffusion_cache(pipe: "OmniInference", setup_args: SetupArgs) -> None:
+        """Install SeaCache on ``pipe.model`` when ``setup_args.diffusion_cache`` is set.
+
+        ``num_steps`` is adopted per ``generate_samples_from_batch`` call via
+        ``begin_generation``, so install-time ``sample_args_list`` can be empty.
+        """
+        if not setup_args.diffusion_cache:
+            return
+        from cosmos_framework.model.generator.mot.diffusion_cache import install_diffusion_cache
+
+        config_overrides: dict[str, Any] = {}
+        if setup_args.diffusion_cache_thresh is not None:
+            config_overrides["diffusion_cache_thresh"] = setup_args.diffusion_cache_thresh
+        if setup_args.diffusion_cache_residual_order is not None:
+            config_overrides["residual_order"] = setup_args.diffusion_cache_residual_order
+        install_diffusion_cache(
+            pipe=pipe,
+            enabled=True,
+            sample_args_list=[],
+            config_overrides=config_overrides or None,
+        )
 
     @classmethod
     def save_data(

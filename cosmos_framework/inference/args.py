@@ -128,9 +128,9 @@ class SamplingOverrides(OverridesBase):
             self.num_steps = min(self.num_steps, 1)
 
 
-InferenceResolution = Literal["256", "480", "720", "768", "1080"]
+InferenceResolution = Literal["256", "480", "720", "768"]
 if TRAINING:
-    Resolution = Literal["256", "480", "704", "720", "768", "1080"]
+    Resolution = Literal["256", "480", "704", "720", "768"]
 else:
     Resolution = InferenceResolution
 AspectRatio = Literal["1,1", "4,3", "3,4", "16,9", "9,16"]
@@ -451,9 +451,22 @@ class VisionDataOverrides(OverridesBase, _VisionDataBase):
 
     # Vision fields
     resolution: Resolution | None = None
-    """Vision resolution.
-    
+    """Vision resolution tier, not a pixel dimension. Resolved against
+    ``aspect_ratio`` by ``vision_size`` -- ``"256"`` at the default ``16,9``
+    yields 320x192. See docs/inference.md for the full table.
+
     Defaults to model config resolution.
+
+    Accepting a value here does not mean the loaded checkpoint can generate it.
+    Per the published model cards:
+
+    * Cosmos3-Edge: 256/480, images and video.
+    * Cosmos3-Nano: 256/480/720, images and video.
+    * Cosmos3-Super: 256/480/720; 768 additionally for images (the shipped tier
+      of the Super-Text2Image variants).
+
+    These ranges are not enforced per checkpoint: a value outside them still
+    runs, at a tier the model was never trained on.
     """
     aspect_ratio: AspectRatio | None = None
     """Vision aspect ratio. When None, image_edit preserves the input image's native
@@ -464,7 +477,8 @@ class VisionDataOverrides(OverridesBase, _VisionDataBase):
     """Number of vision frames.
 
     Range by resolution: 256p: [24, 400], 480p: [24, 300], 720p/768p: [24, 200].
-    Image-only resolutions (e.g. 1080p) require num_frames=1.
+    These are global limits; a checkpoint's own published range may be tighter
+    (Cosmos3-Edge is documented as 50-150 video frames).
     """
     video_save_quality: Training[VideoSaveQuality | None] = None
     """Quality of the saved video (0-10)."""
