@@ -640,10 +640,19 @@ def _video_conversation_dataloader(
             video_cache_size=f"${{oc.env:{cache_env},8}}",
             video_device="${oc.env:TAO_VIDEO_DECODER_DEVICE,cuda}",
             video_num_threads="${oc.env:TAO_VIDEO_DECODER_THREADS,1}",
+            # Training was pinned to 0, so every epoch re-decoded every video. That is
+            # the dominant cost of a training step here: measured on a GB300, the wall
+            # step splits 2.00s waiting on the dataloader against 0.62s of compute, so
+            # decode is roughly three quarters of the run. A cache large enough to hold
+            # the split turns epochs after the first into cache hits.
+            #
+            # Left at 0 by default because the cache is per dataloader worker and holds
+            # decoded frames, so capacity has to be chosen against the dataset size and
+            # available host memory rather than assumed.
             processed_video_cache_size=(
                 "${oc.env:TAO_FRAMEWORK_VALIDATION_PROCESSED_VIDEO_CACHE_SIZE,0}"
                 if not shuffle
-                else 0
+                else "${oc.env:TAO_FRAMEWORK_TRAIN_PROCESSED_VIDEO_CACHE_SIZE,0}"
             ),
             video_max_pixels=f"${{oc.env:{max_pixels_env},81920}}",
             video_override_map="${oc.env:TAO_VIDEO_OVERRIDE_MAP,''}",
