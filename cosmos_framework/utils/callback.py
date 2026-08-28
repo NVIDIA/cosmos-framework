@@ -435,6 +435,9 @@ class WandBCallback(Callback):
     - val/loss: The computed overall loss in the validation dataset.
     """
 
+    def __init__(self, log_train_loss_to_console: bool = False) -> None:
+        self.log_train_loss_to_console = log_train_loss_to_console
+
     def on_train_start(self, model: ImaginaireModel, iteration: int = 0) -> None:
         wandb_util.init_wandb(self.config, model=model)
         self._train_objective_numerator: torch.Tensor | None = None
@@ -501,6 +504,8 @@ class WandBCallback(Callback):
                 avg_loss = loss_sum.item() / sample_size.item()
 
             if distributed.is_rank0():
+                if self.log_train_loss_to_console:
+                    log.info(f"train/loss_avg: {avg_loss:.5f} (iteration {iteration - 1})")
                 wandb.log({f"timer/{key}": value for key, value in timer_results.items()}, step=iteration)
                 wandb.log({"train/loss": avg_loss, "train/loss_avg": avg_loss}, step=iteration)
                 wandb.log({"iteration": iteration}, step=iteration)
