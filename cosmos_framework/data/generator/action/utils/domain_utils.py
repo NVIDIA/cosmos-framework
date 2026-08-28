@@ -28,6 +28,9 @@ EMBODIMENT_TO_DOMAIN_ID: dict[str, int] = {
     "molmoact2_yam": 16,  # MolmoAct2 uses the same YAM 20D FK action contract
     "abc_yam": 16,  # ABC uses the same YAM 20D FK action contract
     "robotwin": 17,  # RoboTwin dual-arm ALOHA (14D absolute joint_pos)
+    # Shares RoboTwin's domain: the same arm, differing only by millimetre link
+    # lengths and a 0.9 deg yaw calibration baked into RoboTwin's URDF.
+    "robodojo": 17,
     "fractal": 20,
     "drawanything": 21,
     "behavior1k_lerobot": 22,  # BEHAVIOR-1K R1Pro mobile bimanual (23D joint action)
@@ -36,6 +39,19 @@ EMBODIMENT_TO_DOMAIN_ID: dict[str, int] = {
     # (camera+head+wrists, yesCam 36D) trains its own action2llm/llm2action
     # DomainAwareLinear weights from scratch instead of continuing agibot's.
     "webhumanaction_body": 24,
+    "so101-molmo-midtrain-15hz": 25,
+    "so100-molmo-midtrain-15hz": 26,
+    "so101-bimanual-midtrain-conditional": 27,
+    # GenieSim G2A is the simulated counterpart of Embodiment C and emits the
+    # same 29-D [head, right arm/gripper, left arm/gripper] contract.
+    "geniesim3_g2a": 15,
+    "geniesim3_g2a_joint": 28,
+    # ManipArena mobile-manipulation children only: 29D head+dual-arm SE(3). A
+    # dedicated slot rather than sharing domain 23, because the width and semantics
+    # differ from the 20D contract and it trains its own action2llm/llm2action
+    # DomainAwareLinear weights. New embodiments append above the maximum; the gaps
+    # at 10/11/14/18/19 index retired embodiments and are not reused.
+    "maniparena_mobile": 29,
 }
 
 
@@ -58,10 +74,18 @@ EMBODIMENT_TO_RAW_ACTION_DIM: dict[str, int] = {
     "molmoact2_yam": 20,
     "abc_yam": 20,
     "maniparena": 20,  # dual-arm EE: [pos(3)+rot6d(6)+gripper(1)] x 2
+    # head(9) + left(9)+grip(1) + right(9)+grip(1); head/left/right, not head/right/left
+    "maniparena_mobile": 29,
     "robotwin": 14,  # dual-arm ALOHA: [L 6 joints + 1 gripper, R 6 joints + 1 gripper]
+    "robodojo": 14,  # dual-arm ARX-X5: [L 6 joints + 1 gripper, R 6 joints + 1 gripper]
     "fractal": 10,
     "drawanything": 3,
     "behavior1k_lerobot": 23,  # base(3) trunk(4) arms(14) grippers(2)
+    "so101-molmo-midtrain-15hz": 10,
+    "so100-molmo-midtrain-15hz": 10,
+    "so101-bimanual-midtrain-conditional": 20,
+    "geniesim3_g2a": 29,
+    "geniesim3_g2a_joint": 16,
     # NOTE: ``libero`` (7/10/13 depending on ``rotation_space``) and ``hand_pose``
     # (variable with ``keypoint_option`` and ``rotation_format``) are absent
     # because their raw width is set per-dataset at construction time. Inference

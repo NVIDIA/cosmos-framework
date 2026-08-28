@@ -182,16 +182,14 @@ class MixedPrecisionRuntime:
         if staged is not None:
             if staged.dtype != self.activation_dtype:
                 raise TypeError(
-                    f"staged W8A16 weight dtype {staged.dtype} does not match "
-                    f"activation_dtype {self.activation_dtype}"
+                    f"staged W8A16 weight dtype {staged.dtype} does not match activation_dtype {self.activation_dtype}"
                 )
             return staged
         cached = getattr(module, "_w8a16_weight_cache", None)
         if cached is not None:
             if cached.dtype != self.activation_dtype:
                 raise TypeError(
-                    f"cached W8A16 weight dtype {cached.dtype} does not match "
-                    f"activation_dtype {self.activation_dtype}"
+                    f"cached W8A16 weight dtype {cached.dtype} does not match activation_dtype {self.activation_dtype}"
                 )
             return cached
         return _dequantize_w8a16_weight(_unwrap_float8(module.weight), self.activation_dtype)
@@ -265,9 +263,7 @@ class _BlockWeightProvider:
             self._block_numels.append(offset)
 
         if not any(self._entries):
-            raise ValueError(
-                "gpu_block/cpu_block cache found no generation-path FP8 linears in the provided blocks"
-            )
+            raise ValueError("gpu_block/cpu_block cache found no generation-path FP8 linears in the provided blocks")
 
         max_numel = max(self._block_numels)
         # Blocks without generation-path linears are legitimate (e.g. a leading
@@ -286,12 +282,8 @@ class _BlockWeightProvider:
             event.record()  # both slots start free
 
         for block_index, block in enumerate(self._blocks):
-            self._hook_handles.append(
-                block.register_forward_pre_hook(self._make_pre_hook(block_index), prepend=True)
-            )
-            self._hook_handles.append(
-                block.register_forward_hook(self._make_post_hook(block_index), always_call=True)
-            )
+            self._hook_handles.append(block.register_forward_pre_hook(self._make_pre_hook(block_index), prepend=True))
+            self._hook_handles.append(block.register_forward_hook(self._make_post_hook(block_index), always_call=True))
         self._materialize_sources()
 
     def _materialize_sources(self) -> None:
@@ -324,9 +316,9 @@ class _BlockWeightProvider:
             torch.cuda.current_stream().wait_event(self._ready_events[slot])
             slot_buffer = self._slots[slot]
             for linear, offset, out_features, in_features in self._entries[block_index]:
-                linear._mixed_precision_staged_weight = slot_buffer[
-                    offset : offset + out_features * in_features
-                ].view(out_features, in_features)
+                linear._mixed_precision_staged_weight = slot_buffer[offset : offset + out_features * in_features].view(
+                    out_features, in_features
+                )
             if block_index + 1 < len(self._blocks):
                 self._stage(block_index + 1)
 

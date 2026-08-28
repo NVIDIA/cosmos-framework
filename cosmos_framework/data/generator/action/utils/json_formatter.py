@@ -57,6 +57,7 @@ class ActionPromptJsonFormatter:
         total_frames_key: str = "idle_frames_total",
         action_key: str = "action",
         viewpoint_templates: dict[str, str] | None = None,
+        append_duration_fps_timestamps: bool = True,
         float_seconds: bool = False,
         video_num_frames_key: str = "video_num_frames",
     ) -> None:
@@ -73,6 +74,7 @@ class ActionPromptJsonFormatter:
         # seconds. Useful for short high-fps clips (e.g. 16-frame chunks at 30 fps
         # = 0.53 s) where the integer format collapses to "0s".
         self.float_seconds: bool = float_seconds
+        self.append_duration_fps_timestamps: bool = append_duration_fps_timestamps
         self.video_num_frames_key: str = video_num_frames_key
         self.viewpoint_templates: dict[str, str] = (
             viewpoint_templates if viewpoint_templates is not None else DEFAULT_VIEWPOINT_TEMPLATES
@@ -89,43 +91,48 @@ class ActionPromptJsonFormatter:
             return data_dict
 
         height, width = self._get_resolution(data_dict)
-        fps = self._get_scalar_float(data_dict.get(self.fps_key), self.fps_key)
-        if fps <= 0:
-            raise ValueError(f"ActionPromptJsonFormatter: '{self.fps_key}' must be positive, got {fps}")
+        time_str = None
+        duration_str = None
+        fps = None
+        if self.append_duration_fps_timestamps:
+            fps = self._get_scalar_float(data_dict.get(self.fps_key), self.fps_key)
+            if fps <= 0:
+                raise ValueError(f"ActionPromptJsonFormatter: '{self.fps_key}' must be positive, got {fps}")
 
-        video = data_dict.get(self.video_key)
-        if not isinstance(video, torch.Tensor) or video.ndim < 2:
-            raise ValueError(
-                f"ActionPromptJsonFormatter: expected '{self.video_key}' to be a video tensor with shape "
-                f"(C, T, H, W), got {type(video).__name__}"
-            )
-        duration_seconds = int(data_dict.get(self.video_num_frames_key, video.shape[1])) / fps
-        if self.float_seconds:
-            time_str = f"0.00-{duration_seconds:.2f}s"
-            duration_str = f"{duration_seconds:.2f}s"
-        else:
-            time_str = f"0:00-{self._format_time_mss(self._round_time_seconds(duration_seconds))}"
-            duration_str = f"{self._truncate_seconds(duration_seconds)}s"
+            video = data_dict.get(self.video_key)
+            if not isinstance(video, torch.Tensor) or video.ndim < 2:
+                raise ValueError(
+                    f"ActionPromptJsonFormatter: expected '{self.video_key}' to be a video tensor with shape "
+                    f"(C, T, H, W), got {type(video).__name__}"
+                )
+            duration_seconds = int(data_dict.get(self.video_num_frames_key, video.shape[1])) / fps
+            if self.float_seconds:
+                time_str = f"0.00-{duration_seconds:.2f}s"
+                duration_str = f"{duration_seconds:.2f}s"
+            else:
+                time_str = f"0:00-{self._format_time_mss(self._round_time_seconds(duration_seconds))}"
+                duration_str = f"{self._truncate_seconds(duration_seconds)}s"
 
-        action_entry = {
-            "time": time_str,
-            "description": self._ensure_sentence(caption),
-            "idle_frame": self._get_idle_frame_info(data_dict),
-        }
+        action_entry: dict[str, object] = {}
+        if time_str is not None:
+            action_entry["time"] = time_str
+        action_entry["description"] = self._ensure_sentence(caption)
+        action_entry["idle_frame"] = self._get_idle_frame_info(data_dict)
         # Appended after the existing keys so prompts without relabeling are
         # byte-identical to before this field existed.
         action_entry.update(self._get_relabel_prompt(data_dict, relabel_prompt))
 
-        prompt = {
+        prompt: dict[str, object] = {
             "cinematography": {
                 "framing": self._get_viewpoint_caption(data_dict, additional_view_description),
             },
             "actions": [action_entry],
-            "duration": duration_str,
-            "fps": float(fps),
-            "resolution": {"H": height, "W": width},
-            "aspect_ratio": self._get_aspect_ratio(width, height),
         }
+        if duration_str is not None and fps is not None:
+            prompt["duration"] = duration_str
+            prompt["fps"] = float(fps)
+        prompt["resolution"] = {"H": height, "W": width}
+        prompt["aspect_ratio"] = self._get_aspect_ratio(width, height)
         cleaned_prompt = self._drop_empty_fields(prompt)
         self._raise_if_empty_fields(cleaned_prompt)
         data_dict[self.caption_key] = cleaned_prompt

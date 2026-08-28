@@ -73,12 +73,16 @@ _BOUNDARY_PARAMETER_PATHS = (
     "sound2llm.bias",
     "llm2sound.weight",
     "llm2sound.bias",
-    # Domain-aware action boundaries: ``fc`` and ``bias`` are embeddings whose
-    # first dimension indexes embodiments.
+    # Action boundaries. Domain-aware projectors store weights under ``fc``;
+    # shared-weight projectors store one matrix directly under ``weight``.
     "action2llm.fc.weight",
+    "action2llm.weight",
     "action2llm.bias.weight",
+    "action2llm.bias",
     "llm2action.fc.weight",
+    "llm2action.weight",
     "llm2action.bias.weight",
+    "llm2action.bias",
     # Shared diffusion timestep boundary.
     "time_embedder.mlp.0.weight",
     "time_embedder.mlp.0.bias",

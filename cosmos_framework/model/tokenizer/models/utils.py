@@ -37,6 +37,7 @@ from cosmos_framework.model.tokenizer.models.modules.sparse_tensor import (
 from cosmos_framework.model.tokenizer.models.modules.sparse_tensor import (
     reconstruct_from_temporal_slices as reconstruct_from_temporal_slices,
 )
+from cosmos_framework.model.tokenizer.task_types import TaskFamily, task_type_is
 
 try:
     import wandb
@@ -46,6 +47,10 @@ except ImportError:
     HAS_WANDB = False
 
 EPS = 1e-6
+_MAX_SPARSE_COORDINATE = 1023
+_SPARSE_COORDINATE_DTYPES = frozenset(
+    {torch.int8, torch.int16, torch.int32, torch.int64, torch.uint8, torch.uint16, torch.uint32, torch.uint64}
+)
 
 
 # =============================================================================
@@ -260,71 +265,97 @@ def _infer_uniform_batch_grid_shape(sparse_tensor: SparseTensor) -> tuple[int, i
 
     if sparse_tensor.coords.shape[0] == 0 or sparse_tensor.coords.shape[1] != 5:
         return None
+    if sparse_tensor.coords.dtype not in _SPARSE_COORDINATE_DTYPES:
+        return None
 
-    if hasattr(sparse_tensor, "get_batch_seq_lens"):
-        seq_lens = sparse_tensor.get_batch_seq_lens()
-    else:
-        layout = getattr(sparse_tensor, "layout", None)
-        if layout is None:
-            return None
+    batch_size = int(sparse_tensor.shape[0])
+    coords = sparse_tensor.coords.long()  # [N,5]
+    batch_indices = coords[:, 0]  # [N]
+    spatial_coords = coords[:, 1:]  # [N,4]
+    invalid_coordinate_mask = (coords < 0) | (coords > _MAX_SPARSE_COORDINATE)  # [N,5]
+    invalid_coordinate_mask[:, 0] |= batch_indices >= batch_size  # [N,5]
+    if bool(invalid_coordinate_mask.any()):
+        return None
 
-        seq_lens = []
-        for item in layout:
-            if isinstance(item, slice):
-                start = 0 if item.start is None else int(item.start)
-                stop = start if item.stop is None else int(item.stop)
-                seq_lens.append(max(0, stop - start))
-            else:
-                seq_lens.append(int(len(item)))
-
-    if not seq_lens or any(seq_len == 0 for seq_len in seq_lens):
+    seq_lens = sparse_tensor.get_batch_seq_lens()
+    if len(seq_lens) != batch_size or not seq_lens or any(seq_len <= 0 for seq_len in seq_lens):
         return None
     if len(set(seq_lens)) != 1:
         return None
 
-    special_mask = (sparse_tensor.coords[:, 1:] == -1).all(dim=1)
-    if bool(special_mask.any()):
-        return None
-
-    batch_size = sparse_tensor.shape[0]
-    batch_indices = sparse_tensor.coords[:, 0].long()
-    spatial_coords = sparse_tensor.coords[:, 1:].long()
-    device = getattr(sparse_tensor, "device", sparse_tensor.feats.device)
+    device = sparse_tensor.coords.device
 
     max_per_axis = []
     for axis in range(spatial_coords.shape[1]):
-        axis_max = torch.full((batch_size,), -1, dtype=torch.long, device=device)
+        axis_max = torch.full((batch_size,), -1, dtype=torch.long, device=device)  # [B]
         axis_max = axis_max.scatter_reduce(
             0,
             batch_indices,
             spatial_coords[:, axis],
             reduce="amax",
             include_self=True,
-        )
+        )  # [B]
         max_per_axis.append(axis_max)
 
-    temporal_min = torch.full((batch_size,), torch.iinfo(torch.long).max, dtype=torch.long, device=device)
+    grid_shape = torch.stack(max_per_axis, dim=1) + 1  # [B,4]
+    temporal_min = torch.full((batch_size,), torch.iinfo(torch.long).max, dtype=torch.long, device=device)  # [B]
     temporal_min = temporal_min.scatter_reduce(
         0,
         batch_indices,
         spatial_coords[:, 0],
         reduce="amin",
         include_self=True,
-    )
-
-    grid_shape = torch.stack(max_per_axis, dim=1) + 1
-    image_like_batches = temporal_min == max_per_axis[0]
+    )  # [B]
+    image_like_batches = temporal_min == grid_shape[:, 0] - 1  # [B]
     if bool(image_like_batches.all()):
         grid_shape[:, 0] = 1
+    elif bool((temporal_min != 0).any()):
+        return None
 
     if not torch.equal(grid_shape, grid_shape[0].unsqueeze(0).expand_as(grid_shape)):
         return None
 
-    t, h, w, z = (int(dim.item()) for dim in grid_shape[0])
+    t, h, w, z = (int(dim) for dim in grid_shape[0].tolist())
     if seq_lens[0] != t * h * w * z:
         return None
 
     return t, h, w, z
+
+
+def _canonical_sparse_features(
+    sparse_tensor: SparseTensor,
+    grid_shape: tuple[int, int, int, int],
+) -> torch.Tensor | None:
+    """Return features in canonical `[batch, time, height, width, depth]` row order."""
+    batch_size = int(sparse_tensor.shape[0])
+    T, H, W, Z = grid_shape
+    coords = sparse_tensor.coords.long()  # [N,5]
+    batch_indices = coords[:, 0]  # [N]
+    temporal_coords = coords[:, 1]  # [N]
+    if T == 1:
+        temporal_origins = torch.full(
+            (batch_size,), torch.iinfo(torch.long).max, dtype=torch.long, device=coords.device
+        )  # [B]
+        temporal_origins = temporal_origins.scatter_reduce(
+            0,
+            batch_indices,
+            temporal_coords,
+            reduce="amin",
+            include_self=True,
+        )  # [B]
+        temporal_coords = temporal_coords - temporal_origins[batch_indices]  # [N]
+
+    linear_indices = (((batch_indices * T + temporal_coords) * H + coords[:, 2]) * W + coords[:, 3]) * Z + coords[
+        :, 4
+    ]  # [N]
+    canonical_indices = torch.arange(linear_indices.numel(), device=coords.device)  # [N]
+    if torch.equal(linear_indices, canonical_indices):
+        return sparse_tensor.feats
+    canonical_order = torch.argsort(linear_indices)  # [N]
+    sorted_indices = linear_indices[canonical_order]  # [N]
+    if not torch.equal(sorted_indices, canonical_indices):
+        return None
+    return sparse_tensor.feats.index_select(0, canonical_order)  # [N,P]
 
 
 def sparse_to_batched_tensor(
@@ -356,8 +387,12 @@ def sparse_to_batched_tensor(
     if Z != 1:
         return None
 
+    canonical_feats = _canonical_sparse_features(sparse_tensor, grid_shape)  # [N,P]
+    if canonical_feats is None:
+        return None
+
     images = rearrange(
-        sparse_tensor.feats,
+        canonical_feats,
         "(b t h w) (Pt Ph Pw c) -> b (t Pt) c (h Ph) (w Pw)",
         b=batch_size,
         t=T,
@@ -368,7 +403,7 @@ def sparse_to_batched_tensor(
         Pw=Pw,
     )
 
-    if "image_rec" in task_type and images.shape[1] > 1:
+    if task_type_is(task_type, TaskFamily.IMAGE_RECONSTRUCTION) and images.shape[1] > 1:
         images = images[:, 0:1]
 
     return images
@@ -421,12 +456,18 @@ def sparse_to_img_list(
             empty_image = batch_sparse_tensor.feats.new_empty((0, channels, 0, 0))  # [0,C,0,0]
             images.append(empty_image)
             continue
-        T, H, W, Z = (int(dim) for dim in (batch_sparse_tensor.coords.max(dim=0)[0][1:] + 1).tolist())
-        # Avoid Python's built-in all() on tensors; it scalarizes every element.
-        if bool((batch_sparse_tensor.coords[:, 1] == (T - 1)).all().item()):
-            T = 1
+        grid_shape = _infer_uniform_batch_grid_shape(batch_sparse_tensor)
+        canonical_feats = None if grid_shape is None else _canonical_sparse_features(batch_sparse_tensor, grid_shape)
+        if grid_shape is None or canonical_feats is None:
+            raise ValueError(
+                f"Sparse batch {batch_idx} cannot be converted to dense media because its coordinate grid "
+                "contains duplicate, missing, or out-of-range positions."
+            )
+        T, H, W, Z = grid_shape
+        if Z != 1:
+            raise ValueError(f"Sparse batch {batch_idx} has unsupported depth grid size Z={Z}; expected Z=1.")
         img = rearrange(
-            batch_sparse_tensor.feats,
+            canonical_feats,
             "(t h w) (Pt Ph Pw c) -> (t Pt) c (h Ph) (w Pw)",
             t=T,
             h=H,
@@ -436,7 +477,7 @@ def sparse_to_img_list(
             Pw=Pw,
         )
 
-        if "image_rec" in task_type and img.shape[0] > 1:
+        if task_type_is(task_type, TaskFamily.IMAGE_RECONSTRUCTION) and img.shape[0] > 1:
             img = img[0:1]
 
         images.append(img)

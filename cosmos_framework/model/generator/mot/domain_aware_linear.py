@@ -10,6 +10,8 @@ Based on the X-VLA implementation:
 https://github.com/2toinf/X-VLA/blob/main/models/transformer.py
 """
 
+import math
+
 import torch
 import torch.nn.functional as F
 from packaging.version import Version
@@ -46,9 +48,12 @@ class DomainAwareLinear(nn.Module):
         # Store per-domain biases as embeddings: [num_domains, output_size]
         self.bias = nn.Embedding(num_domains, output_size)
 
-        # Initialize weights
-        nn.init.xavier_uniform_(self.fc.weight)
-        nn.init.zeros_(self.bias.weight)
+        self.initialize_action_parameters(1.0 / math.sqrt(self.input_size))
+
+    def initialize_action_parameters(self, std: float) -> None:
+        """Apply the shared Cosmos3 action-boundary initialization policy."""
+        nn.init.trunc_normal_(self.fc.weight, std=std, a=-3 * std, b=3 * std)  # [N,O*I]
+        nn.init.zeros_(self.bias.weight)  # [N,O]
 
     def forward(self, x: torch.Tensor, domain_id: torch.LongTensor) -> torch.Tensor:
         """Forward pass with domain-specific weights.

@@ -29,6 +29,9 @@ class PolicyConfig:
     #   exponent=0 -> per-token loss: every token contributes equally to the global loss
     #   0 < exponent < 1 -> interpolation; e.g. exponent=0.5 gives square-root per-token loss (Qwen3-VL)
     weighted_ce_exponent: float = 1.0
+    # Opt-in objective change: normalize CE once over the full gradient-accumulation window
+    # instead of averaging independently normalized microbatch ratios.
+    normalize_weighted_ce_over_accumulation_window: bool = False
 
     # Extra model config
     lora: Union[str, None] = None

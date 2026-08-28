@@ -321,8 +321,14 @@ class ImaginaireTrainer:
             maybe_enable_nsys_profiling(self.config, global_step=iteration) as nsys_profiler,
         ):
             while True:
+                if iteration >= self.config.trainer.max_iter:
+                    break
                 dataloader_train_iter = iter(dataloader_train)
                 while True:
+                    # If max_iter is reached, exit the training loop before loading the nex batch
+                    if iteration >= self.config.trainer.max_iter:
+                        _end_training = True
+                        break
                     self.callbacks.on_before_dataloading(iteration)
                     try:
                         with (
@@ -343,10 +349,6 @@ class ImaginaireTrainer:
                         break
                     finally:
                         self.callbacks.on_after_dataloading(iteration)
-                    # If max_iter is reached, exit the training loop.
-                    if iteration >= self.config.trainer.max_iter:
-                        _end_training = True
-                        break
                     # Move all tensors in the data batch to GPU device.
                     data_batch = misc.to(data_batch, device="cuda")
                     # Keep the CUDA copy for later slots in the CP data window.
@@ -446,7 +448,8 @@ class ImaginaireTrainer:
                 with self.straggler_detector.profile_section(
                     "bwd", self.config.trainer.straggler_detection.analyze_backward
                 ):
-                    loss_scaled = grad_scaler.scale(loss / self.config.trainer.grad_accum_iter)
+                    backward_loss = output_batch.get("_backward_loss", loss)
+                    loss_scaled = grad_scaler.scale(backward_loss / self.config.trainer.grad_accum_iter)
                     loss_scaled.backward()
                     model.on_after_backward()
             self.callbacks.on_after_backward(model, iteration=iteration)
@@ -456,10 +459,19 @@ class ImaginaireTrainer:
                 with self.straggler_detector.profile_section(
                     "opt", self.config.trainer.straggler_detection.analyze_optimizer
                 ):
-                    self.callbacks.on_before_optimizer_step(
-                        model, optimizer, scheduler, grad_scaler, iteration=iteration
-                    )
-                    model.on_before_optimizer_step(optimizer, scheduler, iteration=iteration)
+                    # Window-normalized objectives must scale accumulated gradients before
+                    # clipping/norm-monitor callbacks inspect them. Other models retain the
+                    # historical callback-before-model hook order.
+                    if "_backward_loss" in output_batch:
+                        model.on_before_optimizer_step(optimizer, scheduler, iteration=iteration)
+                        self.callbacks.on_before_optimizer_step(
+                            model, optimizer, scheduler, grad_scaler, iteration=iteration
+                        )
+                    else:
+                        self.callbacks.on_before_optimizer_step(
+                            model, optimizer, scheduler, grad_scaler, iteration=iteration
+                        )
+                        model.on_before_optimizer_step(optimizer, scheduler, iteration=iteration)
                     self._optimizer_step(model, optimizer, scheduler, grad_scaler, iteration=iteration)
                     self.callbacks.on_before_zero_grad(model, optimizer, scheduler, iteration=iteration)
                     model.on_before_zero_grad(optimizer, scheduler, iteration=iteration)

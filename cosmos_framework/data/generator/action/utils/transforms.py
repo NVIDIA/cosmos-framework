@@ -22,6 +22,7 @@ import torchvision.transforms.functional as transforms_F
 
 from cosmos_framework.utils import log
 from cosmos_framework.data.generator.action.utils.action_processing import (
+    ActionCodec,
     ActionNormalizer,
     ActionProcessor,
 )
@@ -492,7 +493,8 @@ class ActionTransformPipeline:
             structured JSON-compatible dictionary before tokenization.  When
             enabled, legacy string metadata appenders are skipped and the JSON
             formatter owns viewpoint, action, resolution, duration, FPS, and
-            idle-frame fields.  Defaults to ``False``.
+            idle-frame fields. ``append_duration_fps_timestamps`` still controls
+            the JSON duration/FPS/timestamp fields. Defaults to ``False``.
         format_prompt_float_seconds: When ``format_prompt_as_json`` is enabled,
             emit sub-second-precise float ``duration``/``time`` (e.g. "0.57s")
             instead of truncated whole seconds ("0s").  Useful for short
@@ -540,7 +542,9 @@ class ActionTransformPipeline:
         self.prompt_json_formatter: ActionPromptJsonFormatter | None = None
         if format_prompt_as_json:
             self.prompt_json_formatter = ActionPromptJsonFormatter(
-                caption_key=caption_key, float_seconds=format_prompt_float_seconds
+                caption_key=caption_key,
+                append_duration_fps_timestamps=append_duration_fps_timestamps,
+                float_seconds=format_prompt_float_seconds,
             )
 
         # --- Viewpoint text augmentor (runs after ai_caption, before duration/FPS) ---
@@ -611,6 +615,9 @@ class ActionTransformPipeline:
         action_normalizer: ActionNormalizer | None = None,
         *,
         action_valid_mask: torch.Tensor | None = None,
+        normalized_action: torch.Tensor | None = None,
+        history_normalized_action: torch.Tensor | None = None,
+        action_codec: ActionCodec | None = None,
     ) -> dict:
         """Apply the transform pipeline to a single data dictionary.
 
@@ -631,8 +638,9 @@ class ActionTransformPipeline:
         7. Tokenize caption text (if enabled).
         8. Build a ``SequencePlan`` from the ``"mode"`` key (if present).
         9. Preserve the canonical unnormalized and unpadded action as
-           ``"action_raw"``, normalize real channels, pad ``"action"`` to
-           ``max_action_dim``, and attach ``"action_processing_record"``.
+           ``"action_raw"``, normalize native actions or consume an explicitly
+           encoded normalized action, pad ``"action"`` to ``max_action_dim``, and
+           attach ``"action_processing_record"``.
 
         Args:
             data_dict: A sample dictionary as returned by a Action dataset.
@@ -644,6 +652,9 @@ class ActionTransformPipeline:
             action_valid_mask: Optional explicit slot-validity mask for the
                 unpadded action. This is passed separately from ``data_dict``
                 so intermediate transforms cannot silently drop it.
+            normalized_action: Optional already-normalized canonical action tensor.
+            history_normalized_action: Normalized counterpart of ``history_action``.
+            action_codec: Decoder paired with an explicitly normalized action.
 
         Returns:
             The same dictionary, mutated in-place with padded tensors,
@@ -706,8 +717,20 @@ class ActionTransformPipeline:
         num_history_actions = 0
         if history_action is not None and isinstance(action, torch.Tensor):
             num_history_actions = history_action.shape[0]
-            action = torch.cat([history_action, action], dim=0)
+            action = torch.cat([history_action, action], dim=0)  # [H+T,D_raw]
+            if normalized_action is not None:
+                if history_normalized_action is None:
+                    raise ValueError(
+                        "history_normalized_action is required when history_action and normalized_action are set"
+                    )
+                normalized_action = torch.cat(  # [H+T,D_raw]
+                    [history_normalized_action, normalized_action], dim=0
+                )
+            elif history_normalized_action is not None:
+                raise ValueError("history_normalized_action requires normalized_action")
             action_length += num_history_actions
+        elif history_normalized_action is not None:
+            raise ValueError("history_normalized_action requires history_action")
 
         sequence_plan = build_sequence_plan_from_mode(
             mode=mode,
@@ -724,6 +747,8 @@ class ActionTransformPipeline:
             action,
             action_normalizer=action_normalizer,
             action_valid_mask=action_valid_mask,
+            normalized_action=normalized_action,
+            action_codec=action_codec,
         )
 
         return data_dict

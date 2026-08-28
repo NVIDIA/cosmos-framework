@@ -78,12 +78,17 @@ from cosmos_framework.configs.base.defaults.flex_attention import (
     FLEX_BACKEND_PREFERENCES,
     AttentionScope,
 )
+from cosmos_framework.model.generator.mot.flex_attention_utils import (
+    build_block_mask_from_metadata_runs,
+    metadata_run_groups,
+)
 
-# ``dynamic=False`` specialises one kernel per (block-aligned) shape and reuses
-# it across steps. Only the BlockMask *data* changes per step, which does not
-# trigger recompilation. torch's entry point is imported under an alias because this
-# module's own, :func:`flex_attention`, takes that name.
-_COMPILED_FLEX_ATTENTION = torch.compile(torch_flex_attention, dynamic=False)
+# ``dynamic=True`` lets one compiled kernel handle varying (block-aligned) shapes
+# across steps instead of specialising and recompiling per shape. Only the BlockMask
+# *data* changes per step, which does not trigger recompilation either way. torch's
+# entry point is imported under an alias because this module's own,
+# :func:`flex_attention`, takes that name.
+_COMPILED_FLEX_ATTENTION = torch.compile(torch_flex_attention, dynamic=True)
 
 # A FlexAttention mask predicate: (b, h, q_idx, kv_idx) -> bool tensor.
 MaskMod = Callable[[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor], torch.Tensor]
@@ -895,20 +900,6 @@ def resolve_flex_backend(device: torch.device, preference: str = "auto") -> Flex
     return _get_triton_flex_backend()
 
 
-def _block_presence(
-    group_id: torch.Tensor,
-    num_blocks: int,
-    block_size: int,
-    num_groups: int,
-    device: torch.device,
-) -> torch.Tensor:
-    """One-hot ``[num_blocks, num_groups]`` marking which metadata runs each block touches."""
-    presence = torch.zeros(num_blocks, num_groups, dtype=torch.float32, device=device)
-    block_of_token = torch.arange(group_id.numel(), device=device) // block_size  # [seq_len]
-    presence[block_of_token, group_id] = 1.0
-    return presence
-
-
 def _metadata_groups(metadata: FlexMetadata, device: torch.device) -> tuple[torch.Tensor, torch.Tensor]:
     """Split the key stream into runs of tokens that agree on every metadata field.
 
@@ -926,35 +917,17 @@ def _metadata_groups(metadata: FlexMetadata, device: torch.device) -> tuple[torc
     Returns ``(group_id [seq_len], representatives [num_groups])``, where
     ``representatives`` holds the first token index of each run.
     """
-    fields = torch.stack(
+    return metadata_run_groups(
         (
             metadata.sample_id,
             metadata.frame_id,
             metadata.view_id,
-            metadata.is_noisy.to(torch.long),
-            metadata.is_control.to(torch.long),
-            _und_flags(metadata).to(torch.long),
+            metadata.is_noisy,
+            metadata.is_control,
+            _und_flags(metadata),
         ),
-        dim=1,
-    )  # [seq_len, 6]
-    starts_run = torch.ones(metadata.seq_len, dtype=torch.bool, device=device)  # [seq_len]
-    starts_run[1:] = (fields[1:] != fields[:-1]).any(dim=1)
-    group_id = torch.cumsum(starts_run, dim=0) - 1  # [seq_len]
-    representatives = torch.nonzero(starts_run, as_tuple=False).squeeze(1)  # [num_groups]
-    return group_id, representatives
-
-
-def _ordered_blocks(dense_blocks: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
-    """Convert a ``[1, 1, nQ, nKV]`` bool block matrix to FlexAttention's block form.
-
-    Mirrors ``torch.nn.attention.flex_attention._dense_to_ordered``: per query-block
-    row, how many kv blocks are selected and their indices with the selected ones
-    first. The sort is stable and descending, so the selected indices stay ascending.
-    """
-    dense = dense_blocks.to(torch.int32)  # [1,1,nQ,nKV]
-    counts = dense.sum(dim=-1).to(torch.int32)  # [1,1,nQ]
-    indices = torch.argsort(dense, dim=-1, descending=True, stable=True).to(torch.int32)  # [1,1,nQ,nKV]
-    return counts.contiguous(), indices.contiguous()
+        device=device,
+    )
 
 
 def build_block_mask(
@@ -1020,46 +993,20 @@ def build_block_mask(
     key_fields = _key_stream_fields(metadata)
     pair_allowed = _multiview_pair_predicate(key_fields, key_fields, metadata.attention_scope)
     mask_mod = _multiview_mask_mod(metadata)
-    num_q_blocks = metadata.q_len // q_block_size
-    num_kv_blocks = metadata.seq_len // kv_block_size
-
     group_id, representatives = _metadata_groups(metadata, device)
-    batch_index = torch.zeros((), dtype=torch.long, device=device)  # the predicate ignores b/h
-    # The predicate rather than the mask_mod: representatives index the key stream on both
-    # sides, while the mask_mod expects a query-relative row index.
-    allowed = pair_allowed(
-        batch_index,
-        batch_index,
-        representatives.unsqueeze(1),  # [num_groups,1]
-        representatives.unsqueeze(0),  # [1,num_groups]
-    ).to(torch.float32)  # [num_groups,num_groups]
-
-    num_groups = representatives.numel()
     # Queries are the GEN tail of the key stream, so their presence comes from that slice.
-    presence_q = _block_presence(
-        group_id[metadata.num_und :], num_q_blocks, q_block_size, num_groups, device
-    )  # [nQ,num_groups]
-    presence_kv = (
-        presence_q
-        if metadata.num_und == 0 and kv_block_size == q_block_size
-        else _block_presence(group_id, num_kv_blocks, kv_block_size, num_groups, device)
-    )  # [nKV,num_groups]
-
-    allowed_hits = (presence_q @ allowed) @ presence_kv.t()  # [nQ,nKV]
-    blocked_hits = (presence_q @ (1.0 - allowed)) @ presence_kv.t()  # [nQ,nKV]
-    full_blocks = blocked_hits == 0.0  # [nQ,nKV]
-    partial_blocks = (allowed_hits > 0.0) & ~full_blocks  # [nQ,nKV]
-
-    kv_num_blocks, kv_indices = _ordered_blocks(partial_blocks.view(1, 1, num_q_blocks, num_kv_blocks))
-    full_kv_num_blocks, full_kv_indices = _ordered_blocks(full_blocks.view(1, 1, num_q_blocks, num_kv_blocks))
-    return BlockMask.from_kv_blocks(
-        kv_num_blocks,
-        kv_indices,
-        full_kv_num_blocks,
-        full_kv_indices,
-        BLOCK_SIZE=block_size,
+    query_group_id = group_id if metadata.num_und == 0 else group_id[metadata.num_und :]
+    return build_block_mask_from_metadata_runs(
+        q_group_id=query_group_id,
+        kv_group_id=group_id,
+        q_representatives=representatives,
+        kv_representatives=representatives,
+        pair_allowed=pair_allowed,
         mask_mod=mask_mod,
-        seq_lengths=(metadata.q_len, metadata.seq_len),
+        q_len=metadata.q_len,
+        kv_len=metadata.seq_len,
+        device=device,
+        block_size=block_size,
     )
 
 

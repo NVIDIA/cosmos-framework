@@ -199,7 +199,7 @@ def test_normalize_rotation_matrices_batched_matches_reference_loop() -> None:
 @pytest.mark.parametrize("rotation_format", ["rot9d", "rot6d", "quat_xyzw", "euler_xyz", "axisangle"])
 @pytest.mark.parametrize(
     "pose_convention",
-    ["backward_anchored", "backward_framewise"],
+    ["backward_anchored", "backward_framewise", "backward_chunk_anchored_8f", "backward_chunk_anchored_16f"],
 )
 def test_pose_abs_to_rel_roundtrips_through_pose_rel_to_abs(
     rotation_format: str,
@@ -220,6 +220,49 @@ def test_pose_abs_to_rel_roundtrips_through_pose_rel_to_abs(
         initial_pose=poses_abs[0],
     )
 
+    np.testing.assert_allclose(reconstructed, poses_abs, atol=1e-5)
+
+
+@pytest.mark.L0
+def test_chunk_anchored_encoding_and_decoding() -> None:
+    poses_abs = np.tile(np.eye(4, dtype=np.float32), (17, 1, 1))
+    poses_abs[:, 0, 3] = np.arange(17, dtype=np.float32)
+    chunk_rel = pose_abs_to_rel(
+        poses_abs,
+        rotation_format="rot6d",
+        pose_convention="backward_chunk_anchored_8f",
+    )
+
+    np.testing.assert_allclose(chunk_rel[:, 0], [1, 2, 3, 4, 5, 6, 7, 8, 1, 2, 3, 4, 5, 6, 7, 8])
+    reconstructed = pose_rel_to_abs(
+        chunk_rel,
+        rotation_format="rot6d",
+        pose_convention="backward_chunk_anchored_8f",
+    )
+    np.testing.assert_allclose(reconstructed, poses_abs, atol=1e-6)
+
+
+@pytest.mark.L0
+def test_chunk_anchored_supports_partial_chunks_and_is_world_invariant() -> None:
+    poses_abs = _make_example_poses_abs()
+    world_transform = build_abs_pose_from_components(
+        np.array([[4.0, -2.0, 1.0]], dtype=np.float32),
+        np.array([[0.3, -0.2, 0.4]], dtype=np.float32),
+        "euler_xyz",
+    )[0]
+    chunk_rel = pose_abs_to_rel(poses_abs, rotation_format="rot6d", pose_convention="backward_chunk_anchored_8f")
+    transformed_rel = pose_abs_to_rel(
+        world_transform[None] @ poses_abs,
+        rotation_format="rot6d",
+        pose_convention="backward_chunk_anchored_8f",
+    )
+    np.testing.assert_allclose(transformed_rel, chunk_rel, atol=1e-5)
+    reconstructed = pose_rel_to_abs(
+        chunk_rel,
+        rotation_format="rot6d",
+        pose_convention="backward_chunk_anchored_8f",
+        initial_pose=poses_abs[0],
+    )
     np.testing.assert_allclose(reconstructed, poses_abs, atol=1e-5)
 
 
