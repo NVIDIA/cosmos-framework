@@ -1,7 +1,10 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: OpenMDW-1.1
 
+import pytest
 import torch
+
+pytestmark = [pytest.mark.L0, pytest.mark.CPU]
 
 from cosmos_framework.model.generator.diffusion.samplers.edm import EDMSampler
 from cosmos_framework.model.generator.diffusion.samplers.fixed_step import FixedStepSampler
@@ -88,7 +91,5 @@ def test_callback_default_none_keeps_behavior() -> None:
     sampler = FixedStepSampler(t_list=[1.0, 0.5, 0.0])
     noise = torch.randn(8)
     out_a = sampler(lambda latent, timestep: torch.zeros_like(latent), noise, seed=1)
-    out_b = sampler(
-        lambda latent, timestep: torch.zeros_like(latent), noise, seed=1, step_callback=lambda i, n: None
-    )
+    out_b = sampler(lambda latent, timestep: torch.zeros_like(latent), noise, seed=1, step_callback=lambda i, n: None)
     torch.testing.assert_close(out_a, out_b)

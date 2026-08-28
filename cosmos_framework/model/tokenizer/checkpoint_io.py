@@ -25,6 +25,9 @@ from cosmos_framework.utils.easy_io import easy_io
 
 TorchMapLocation = str | torch.device | Callable[[Any, str], Any] | dict[str, str] | None
 DCP_MODEL_LOAD_INFO_KEY = "dcp_model_load_info"
+_LEGACY_NON_ZIP_MMAP_ERROR_PREFIX = (
+    "mmap can only be used with files saved with `torch.save(_use_new_zipfile_serialization=True)"
+)
 _RQ_CODEBOOK_STAGE_KEY_PATTERN = re.compile(r"(?:^|\.)quantizer\.codebooks\.(\d+)(?:\.|$)")
 
 
@@ -161,8 +164,9 @@ def load_local_torch_checkpoint(
 ) -> Any:
     """Load a local checkpoint with safe tensor-only unpickling.
 
-    Older PyTorch releases may not support ``mmap``. In that case the load is
-    retried without memory mapping while retaining ``weights_only=True``.
+    Older PyTorch releases may not support ``mmap``, and checkpoints written
+    with PyTorch's legacy non-ZIP serializer cannot be memory mapped. Those two
+    compatibility cases retry without mmap while retaining ``weights_only=True``.
     """
     with torch.serialization.safe_globals(_safe_checkpoint_globals()):
         if not mmap:
@@ -170,6 +174,10 @@ def load_local_torch_checkpoint(
         try:
             return torch.load(checkpoint_path, map_location=map_location, weights_only=True, mmap=True)
         except TypeError:
+            return torch.load(checkpoint_path, map_location=map_location, weights_only=True)
+        except RuntimeError as error:
+            if _LEGACY_NON_ZIP_MMAP_ERROR_PREFIX not in str(error):
+                raise
             return torch.load(checkpoint_path, map_location=map_location, weights_only=True)
 
 

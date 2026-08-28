@@ -15,12 +15,16 @@ from cosmos_framework.configs.base.defaults.flex_attention import (
     AttentionScope,
     FlexBackendPreference,
 )
+from cosmos_framework.model.generator.mot.action_io_projector import (
+    ACTION_IO_PROJECTOR_DOMAIN_AWARE,
+    ACTION_IO_PROJECTOR_TYPES,
+    build_action_io_projector,
+)
 from cosmos_framework.model.generator.mot.attention import SplitInfo, build_packed_sequence
 from cosmos_framework.model.generator.mot.context_parallel_utils import (
     get_context_parallel_last_hidden_state,
     get_context_parallel_sharded_sequence,
 )
-from cosmos_framework.model.generator.mot.domain_aware_linear import DomainAwareLinear
 from cosmos_framework.model.generator.mot.flex_attention import (
     FlexBackend,
     MaskItem,
@@ -51,6 +55,7 @@ class Cosmos3VFMNetworkConfig(PretrainedConfig):
         enable_fps_modulation=False,
         enable_vision_modality_embeddings: bool = False,
         enable_media_modality_embedding: bool = False,
+        enable_action_modality_embedding: bool = True,
         enable_sound_modality_embedding: bool = True,
         base_fps=24,
         vit_max_num_patch_per_side=70,
@@ -65,6 +70,7 @@ class Cosmos3VFMNetworkConfig(PretrainedConfig):
         attention_scope: AttentionScope = "all_views",
         action_dim=32,
         num_embodiment_domains=32,
+        action_io_projector_type: str = ACTION_IO_PROJECTOR_DOMAIN_AWARE,
         temporal_compression_factor_vision=4,
         temporal_compression_factor_action=1,
         natten_parameter_list=None,
@@ -89,6 +95,7 @@ class Cosmos3VFMNetworkConfig(PretrainedConfig):
         self.enable_fps_modulation = enable_fps_modulation
         self.enable_vision_modality_embeddings = enable_vision_modality_embeddings
         self.enable_media_modality_embedding = enable_media_modality_embedding
+        self.enable_action_modality_embedding = enable_action_modality_embedding
         self.enable_sound_modality_embedding = enable_sound_modality_embedding
         if self.enable_vision_modality_embeddings and self.enable_media_modality_embedding:
             raise ValueError(
@@ -114,6 +121,12 @@ class Cosmos3VFMNetworkConfig(PretrainedConfig):
         self.action_gen = action_gen  # whether to generate action tokens
         self.action_dim = action_dim
         self.num_embodiment_domains = num_embodiment_domains
+        if action_io_projector_type not in ACTION_IO_PROJECTOR_TYPES:
+            raise ValueError(
+                f"Unsupported action_io_projector_type={action_io_projector_type!r}; "
+                f"expected one of {ACTION_IO_PROJECTOR_TYPES}."
+            )
+        self.action_io_projector_type = action_io_projector_type
         self.temporal_compression_factor_action = temporal_compression_factor_action
         if self.action_gen:
             assert self.vision_gen, (
@@ -221,10 +234,16 @@ class Cosmos3VFMNetwork(PreTrainedModel):
         if config.action_gen:
             self.action_dim = config.action_dim
             self.num_embodiment_domains = config.num_embodiment_domains
-            self.action2llm = DomainAwareLinear(self.action_dim, self.hidden_size, self.num_embodiment_domains)
-            self.llm2action = DomainAwareLinear(self.hidden_size, self.action_dim, self.num_embodiment_domains)
+            self.action_io_projector_type = config.action_io_projector_type
+            self.action2llm = build_action_io_projector(
+                self.action_io_projector_type, self.action_dim, self.hidden_size, self.num_embodiment_domains
+            )
+            self.llm2action = build_action_io_projector(
+                self.action_io_projector_type, self.hidden_size, self.action_dim, self.num_embodiment_domains
+            )
 
-            self.action_modality_embed = nn.Parameter(torch.zeros(self.hidden_size))
+            if config.enable_action_modality_embedding:
+                self.action_modality_embed = nn.Parameter(torch.zeros(self.hidden_size))  # [hidden_size]
 
         if config.sound_gen:
             self.sound_dim = config.sound_dim
@@ -269,19 +288,17 @@ class Cosmos3VFMNetwork(PreTrainedModel):
                 torch.nn.init.trunc_normal_(self.media_modality_embed, std=std, a=-3 * std, b=3 * std)
 
         if self.config.action_gen:
-            # DomainAwareLinear uses embeddings for weights, so we initialize them differently
             # action2llm: input_size=action_dim, output_size=hidden_size
             std = 1.0 / math.sqrt(self.action_dim)
-            torch.nn.init.trunc_normal_(self.action2llm.fc.weight, std=std, a=-3 * std, b=3 * std)
-            torch.nn.init.zeros_(self.action2llm.bias.weight)
+            self.action2llm.initialize_action_parameters(std)
 
             # llm2action: input_size=hidden_size, output_size=action_dim
             std = 1.0 / math.sqrt(self.hidden_size)
-            torch.nn.init.trunc_normal_(self.llm2action.fc.weight, std=std, a=-3 * std, b=3 * std)
-            torch.nn.init.zeros_(self.llm2action.bias.weight)
+            self.llm2action.initialize_action_parameters(std)
 
-            std = 1.0 / math.sqrt(self.hidden_size)
-            torch.nn.init.trunc_normal_(self.action_modality_embed, std=std, a=-3 * std, b=3 * std)
+            if self.config.enable_action_modality_embedding:
+                std = 1.0 / math.sqrt(self.hidden_size)
+                torch.nn.init.trunc_normal_(self.action_modality_embed, std=std, a=-3 * std, b=3 * std)  # [hidden_size]
 
         if self.config.sound_gen:
             # sound2llm: input_size=sound_dim, output_size=hidden_size
@@ -896,11 +913,14 @@ class Cosmos3VFMNetwork(PreTrainedModel):
         )
         # Flow interpolation keeps actions in FP32; cast here to match the action encoder's model dtype.
         packed_tokens_action = packed_tokens_action.to(target_dtype)  # [B_action*T_action,action_dim]
-        packed_tokens_action = self.action2llm(packed_tokens_action, per_token_domain_id)
-
-        packed_tokens_action = packed_tokens_action + self.action_modality_embed.view(
-            1, -1
+        packed_tokens_action = self.action2llm(
+            packed_tokens_action, per_token_domain_id
         )  # [B_action*T_action,hidden_size]
+
+        if self.config.enable_action_modality_embedding:
+            packed_tokens_action = packed_tokens_action + self.action_modality_embed.view(
+                1, -1
+            )  # [B_action*T_action,hidden_size]
 
         has_noisy_actions = has_noisy_tokens(action)
         if has_noisy_actions:
@@ -940,9 +960,9 @@ class Cosmos3VFMNetwork(PreTrainedModel):
                 [1, self.action_dim], device=last_hidden_state.device, dtype=last_hidden_state.dtype
             )  # [1,action_dim]
             dummy_domain_id = torch.zeros([1], device=last_hidden_state.device, dtype=torch.long)  # [1]
-            preds_action = self.action2llm(preds_action, dummy_domain_id) + self.action_modality_embed.view(
-                1, -1
-            )  # [1,hidden_size]
+            preds_action = self.action2llm(preds_action, dummy_domain_id)  # [1,hidden_size]
+            if self.config.enable_action_modality_embedding:
+                preds_action = preds_action + self.action_modality_embed.view(1, -1)  # [1,hidden_size]
             preds_action = self.llm2action(preds_action, dummy_domain_id)  # [1,action_dim]
             # Return a list of per-sample zero tensors with correct shapes (e.g. (T, action_dim)),
             # so downstream code (_get_velocity, _compute_flow_matching_loss) that iterates over preds_action
