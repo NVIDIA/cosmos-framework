@@ -382,6 +382,16 @@ class HFModel(nn.Module):
             patch_qwen3_vl_forward(self.model.model)
             log.info("HFModel: applied patch_qwen3_vl_forward for text-only batch support")
 
+            # Upstream reserves the vision tower's packed attention path for
+            # FlashAttention-2, which this stack has no aarch64 wheel for, so the
+            # per-chunk fallback is what runs: one attention call per chunk per block.
+            if os.environ.get("TAO_FRAMEWORK_BATCH_VISION_ATTENTION", "1") not in {"0", "false", "no"}:
+                from cosmos_framework.utils.generator.monkey_patch import (
+                    patch_qwen3_vl_vision_attention,
+                )
+
+                patch_qwen3_vl_vision_attention(self.model.model)
+
     def _configure_validation_video_feature_cache(self) -> None:
         capacity = int(os.environ.get("TAO_FRAMEWORK_VALIDATION_VIDEO_FEATURE_CACHE_SIZE", "0"))
         if capacity < 0:

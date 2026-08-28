@@ -233,3 +233,124 @@ def patch_qwen3_vl_forward(model):
     # Replace the forward method
     model.forward = patched_forward.__get__(model, type(model))
     log.critical(f"Patched {type(model).__name__} instance forward with one visual call per forward")
+
+
+def patch_qwen3_vl_vision_attention(model) -> int:
+    """Batch the vision tower's equal-length attention chunks into one call.
+
+    Upstream ``Qwen3VLVisionAttention.forward`` reserves its packed path for
+    FlashAttention-2, which consumes ``cu_seqlens`` directly and issues a single
+    varlen kernel. Every other backend takes the fallback, which splits q/k/v on
+    ``cu_seqlens`` and loops::
+
+        splits = [torch.split(t, lengths.tolist(), dim=2) for t in (q, k, v)]
+        attn_outputs = [attention_interface(self, q, k, v, ...) for q, k, v in zip(*splits)]
+
+    That is one attention call per chunk per block. FlashAttention-2 is unavailable
+    on this stack -- there is no aarch64 flash-attn wheel for the CUDA base image --
+    so the fallback is what actually runs, and it dominates the step.
+
+    Measured on a GB300 with Cosmos3-Nano at batch 31: 124 chunks x 27 blocks =
+    3,348 attention calls per step, every one of shape ``[1, 16, 32, 72]``, costing
+    161us of CPU dispatch for 3.6us of GPU work. The GPU sat idle roughly 90% of the
+    step while the host queued kernels.
+
+    When every chunk is the same length -- which holds whenever the batch is uniform
+    in resolution and frame count -- the loop is exactly a batched attention over the
+    chunk axis, so the chunks can be folded into dim 0 and issued as one call. This
+    is an algebraic identity, not an approximation: attention does not mix across
+    chunks in either form, and each chunk keeps its own softmax normalisation.
+
+    Falls back to the stock implementation when chunk lengths differ, so a ragged
+    batch stays correct rather than silently attending across chunk boundaries.
+
+    Returns the number of attention modules patched.
+    """
+    from transformers.modeling_utils import ALL_ATTENTION_FUNCTIONS
+    from transformers.models.qwen3_vl.modeling_qwen3_vl import (
+        apply_rotary_pos_emb_vision,
+        eager_attention_forward,
+    )
+
+    def batched_forward(
+        self,
+        hidden_states: torch.Tensor,
+        cu_seqlens: torch.Tensor,
+        position_embeddings: tuple[torch.Tensor, torch.Tensor],
+        **kwargs,
+    ):
+        seq_length = hidden_states.shape[0]
+        query_states, key_states, value_states = (
+            self.qkv(hidden_states).reshape(seq_length, 3, self.num_heads, -1).permute(1, 0, 2, 3).unbind(0)
+        )
+        cos, sin = position_embeddings
+        query_states, key_states = apply_rotary_pos_emb_vision(query_states, key_states, cos, sin)
+
+        query_states = query_states.transpose(0, 1).unsqueeze(0)
+        key_states = key_states.transpose(0, 1).unsqueeze(0)
+        value_states = value_states.transpose(0, 1).unsqueeze(0)
+
+        attention_interface = eager_attention_forward
+        if self.config._attn_implementation != "eager":
+            attention_interface = ALL_ATTENTION_FUNCTIONS[self.config._attn_implementation]
+
+        lengths = cu_seqlens[1:] - cu_seqlens[:-1]
+        chunk = int(lengths[0])
+        uniform = bool(torch.all(lengths == lengths[0]))
+
+        if uniform and chunk > 0:
+            # [1, heads, chunks * chunk, dim] -> [chunks, heads, chunk, dim]. The chunk
+            # axis becomes the batch axis, which is what the loop was expressing.
+            chunks = query_states.shape[2] // chunk
+            def _fold(t):
+                return (
+                    t.squeeze(0)
+                    .reshape(self.num_heads, chunks, chunk, -1)
+                    .permute(1, 0, 2, 3)
+                    .contiguous()
+                )
+
+            attn_output, _ = attention_interface(
+                self,
+                _fold(query_states),
+                _fold(key_states),
+                _fold(value_states),
+                attention_mask=None,
+                scaling=self.scaling,
+                dropout=0.0 if not self.training else self.attention_dropout,
+                is_causal=False,
+                **kwargs,
+            )
+            # attention_interface returns [chunks, chunk, heads, dim]; restore token order.
+            attn_output = attn_output.reshape(chunks * chunk, self.num_heads, -1)
+        else:
+            splits = [
+                torch.split(tensor, lengths.tolist(), dim=2)
+                for tensor in (query_states, key_states, value_states)
+            ]
+            attn_outputs = [
+                attention_interface(
+                    self,
+                    q,
+                    k,
+                    v,
+                    attention_mask=None,
+                    scaling=self.scaling,
+                    dropout=0.0 if not self.training else self.attention_dropout,
+                    is_causal=False,
+                    **kwargs,
+                )[0]
+                for q, k, v in zip(*splits)
+            ]
+            attn_output = torch.cat(attn_outputs, dim=1).squeeze(0)
+
+        attn_output = attn_output.reshape(seq_length, -1).contiguous()
+        return self.proj(attn_output)
+
+    patched = 0
+    for module in model.modules():
+        if type(module).__name__ == "Qwen3VLVisionAttention":
+            module.forward = batched_forward.__get__(module, type(module))
+            patched += 1
+    log.critical(f"Patched {patched} Qwen3VLVisionAttention module(s) to batch equal-length chunks")
+    return patched
