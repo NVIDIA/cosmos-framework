@@ -125,9 +125,10 @@ jobs:
   generator-inference-smoke:
     needs: pre-commit
     runs-on: [self-hosted, gpu, h200]
-    # 90 (not 60) since the Nano step gained the two ModelOpt FP8 cases: a 20 GB
-    # checkpoint on a cold cache plus two more full-width runs.
-    timeout-minutes: 90
+    # 105 (not 60) since the Nano step gained the three ModelOpt FP8 cases (two
+    # parallelism layouts + mixed-precision diffusion steps): a 20 GB checkpoint
+    # on a cold cache plus three more full-width runs.
+    timeout-minutes: 105
     env:
       HF_TOKEN: ${{ secrets.HF_TOKEN }}
       HF_HUB_DISABLE_XET: "1"
@@ -144,8 +145,10 @@ jobs:
 
       # One inference call over t2vs (+sound), action policy, and forward_dynamics; checks each output.
       # Plus the ModelOpt static-FP8 Nano checkpoint in both parallelism layouts
-      # (FSDP-sharded and replicated). The FP8 checkpoint lives in the
-      # access-controlled nvidia/Cosmos3-Experimental repo, so those two cases SKIP
+      # (FSDP-sharded and replicated) and once more with FP8 mixed-precision
+      # diffusion steps (W8A16 edge steps; exact schedule asserted from the
+      # MIXED_PRECISION_TRACE log). The FP8 checkpoint lives in the
+      # access-controlled nvidia/Cosmos3-Experimental repo, so those three cases SKIP
       # unless HF_TOKEN can read it — check the log for "no access to
       # nvidia/Cosmos3-Experimental" before trusting a green run to have covered FP8.
       # -s streams the live process log.
