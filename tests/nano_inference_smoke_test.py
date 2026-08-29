@@ -377,9 +377,19 @@ def _download_fp8_checkpoint() -> Path:
     nvidia/Cosmos3-Experimental), so a fork PR without the runner secret does not
     go red. Any other failure (a deleted revision, a broken download) still fails
     loudly: a silently-skipping FP8 job would look green while testing nothing.
+
+    ``REQUIRE_FP8=1`` promotes that skip to a hard failure. The CI job whose
+    stated purpose includes FP8 coverage sets it, so a token rotation or a
+    permissions change on the gated repo turns that job red instead of silently
+    dropping every FP8 case while still reporting green.
     """
     from huggingface_hub import snapshot_download
     from huggingface_hub.errors import GatedRepoError, HfHubHTTPError, RepositoryNotFoundError
+
+    def _skip_or_fail_no_access(reason: str) -> None:
+        if os.environ.get("REQUIRE_FP8") == "1":
+            pytest.fail(f"REQUIRE_FP8=1 but the FP8 checkpoint is unreachable: {reason}")
+        pytest.skip(reason)
 
     try:
         repo_root = snapshot_download(
@@ -388,11 +398,11 @@ def _download_fp8_checkpoint() -> Path:
             allow_patterns=[f"{_FP8_SUBDIRECTORY}/*"],
         )
     except (GatedRepoError, RepositoryNotFoundError) as error:
-        pytest.skip(f"no access to {_FP8_REPOSITORY} (needs an HF_TOKEN with read access): {error!r}")
+        _skip_or_fail_no_access(f"no access to {_FP8_REPOSITORY} (needs an HF_TOKEN with read access): {error!r}")
     except HfHubHTTPError as error:
         status_code = getattr(error.response, "status_code", None)
         if status_code in (401, 403):
-            pytest.skip(f"no access to {_FP8_REPOSITORY} (HTTP {status_code}): {error!r}")
+            _skip_or_fail_no_access(f"no access to {_FP8_REPOSITORY} (HTTP {status_code}): {error!r}")
         raise
 
     checkpoint_path = Path(repo_root) / _FP8_SUBDIRECTORY
