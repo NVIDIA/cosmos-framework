@@ -245,6 +245,21 @@ def test_setup_args(tmp_path: Path):
     check_model_equal(OmniSetupOverrides.model_validate(args.model_dump()).build_setup(), args)
 
 
+def test_diffusion_cache_max_consecutive_cached_round_trip(tmp_path: Path) -> None:
+    overrides = OmniSetupOverrides(
+        checkpoint_path=DEFAULT_CHECKPOINT_NAME,
+        output_dir=tmp_path / "outputs",
+        diffusion_cache=True,
+        diffusion_cache_max_consecutive_cached=3,
+    )
+
+    args = overrides.build_setup()
+
+    assert args.diffusion_cache is True
+    assert args.diffusion_cache_max_consecutive_cached == 3
+    assert OmniSetupOverrides.model_validate(args.model_dump()).diffusion_cache_max_consecutive_cached == 3
+
+
 def test_sample_args(tmp_path: Path):
     setup_args = OmniSetupOverrides(
         checkpoint_path=DEFAULT_CHECKPOINT_NAME,
