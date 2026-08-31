@@ -321,6 +321,28 @@ def load_action_normalizer(
     )
 
 
+def make_camera_global_asinh_normalizer(
+    stats_path: str | Path = GLOBAL_ASINH_METRIC_GRIPPER_STATS_PATH,
+    *,
+    pose_convention: str = "backward_anchored",
+) -> ActionAsinhNormalization:
+    """Build the native 9D camera normalizer from the canonical global-asinh profile."""
+    if pose_convention not in {
+        "backward_anchored",
+        "backward_chunk_anchored_8f",
+        "backward_chunk_anchored_16f",
+    }:
+        raise ValueError(f"global_asinh normalization requires an anchored pose convention, got {pose_convention!r}")
+    stats = load_action_normalization_stats(
+        "global_asinh",
+        stats_path=stats_path,
+        expected_dim=59,
+    )
+    lo = stats["q01"][:9]
+    hi = stats["q99"][:9]
+    return ActionAsinhNormalization(offset=(hi + lo) / 2.0, scale=(hi - lo).clamp(min=1e-8) / 2.0)
+
+
 def make_pose_action_scale_normalizer(
     action_dim: int,
     *,

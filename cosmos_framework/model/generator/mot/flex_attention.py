@@ -43,11 +43,10 @@ coarser query block, so the returned :class:`FlexBackend` carries the block size
 padding multiple alongside the kernel options rather than leaving the three to be matched
 up by hand. ``flex_attention_bench`` times both backends and documents the install.
 
-The supertoken rules :func:`build_block_mask` enforces, all within a sample: RGB
-conditioning tokens reach RGB conditioning tokens, RGB noisy tokens reach noisy and
-conditioning alike, both within whatever view footprint ``attention_scope`` admits (every
-view by default). Control tokens -- a WSM (World Scenario Map) control video, say -- are a
-separate modality read off ``is_control``: RGB tokens reach them at their own view only,
+The supertoken rules :func:`build_block_mask` enforces, all within a sample: every RGB
+token reaches every RGB token within whatever view footprint ``attention_scope`` admits
+(every view by default). Control tokens -- a WSM (World Scenario Map) control video, say --
+are a separate modality read off ``is_control``: RGB tokens reach them at their own view only,
 control tokens reach each other at their own view only, and no control token reaches an RGB
 token at all. Every GEN token, conditioning or noisy, attends to every UND token of its own
 sample, as the dense gen->und pass does. See :func:`_multiview_pair_predicate` for the rules
@@ -66,6 +65,7 @@ the graph is what the FlashAttention-4 backward refuses to lower.
 
 from __future__ import annotations
 
+import math
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, fields
 
@@ -130,18 +130,26 @@ class FlexMetadata:
       ordinary T2V/I2V/V2V batch marks no control item, carries it all-``False``, and the
       control terms drop out of the predicate on their own -- one fewer place for a config flag
       and the data it describes to disagree.
+    * ``timestamp``: ``float`` tensor, the wall-clock instant (in seconds, relative to
+      whatever origin the caller's items share) a token's ``(view, frame)`` cell was
+      captured at; ``-1.0`` on UND tokens and on padding, matching the other fields'
+      sentinel. Read only by the ``"decomposed"`` scope's temporal half, and only when
+      ``decomposed_temporal_window_seconds`` is set -- see :func:`_multiview_pair_predicate`.
+      A token's timestamp is a function of its ``(view_id, frame_id)`` alone (one view's
+      frames tick at one rate), which is what lets :func:`_metadata_groups` keep grouping on
+      the integer fields without this one: two tokens sharing a run already share their
+      timestamp.
 
     The mask enforces, within a sample:
 
     * GEN Q -> UND K: always (the gen->und pass, unrestricted);
-    * RGB conditioning Q -> RGB conditioning K: within whatever ``AttentionScope`` admits
-      (every view, its own view, or its own view or frame);
-    * RGB conditioning Q -> RGB noisy K: never;
-    * RGB noisy Q -> RGB noisy or conditioning K alike: within the same
-      ``AttentionScope`` reach;
-    * RGB Q (conditioning or noisy) -> control K: same view, any frame;
+    * sensor Q -> sensor K: within whatever ``AttentionScope`` admits (every view, its own
+      view, or -- ``"decomposed"`` -- its own view or its own frame, or -- with
+      ``decomposed_temporal_window_seconds`` set -- its own view or a key within that many
+      seconds of it, at or before it), regardless of whether either token is conditioning;
+    * sensor Q (conditioning or noisy) -> control K: same view, any frame;
     * control Q -> control K: same view, any frame;
-    * control Q -> RGB K: never.
+    * control Q -> sensor K: never.
 
     :func:`_multiview_pair_predicate` is where those rules are actually expressed, so it is
     the one to trust if this list and it ever drift apart.
@@ -166,8 +174,10 @@ class FlexMetadata:
     view_id: torch.Tensor
     is_noisy: torch.Tensor
     is_control: torch.Tensor
+    timestamp: torch.Tensor
     num_und: int
     attention_scope: AttentionScope
+    decomposed_temporal_window_seconds: float | None = None
 
     def __post_init__(self) -> None:
         # Nothing enforces the Literal at runtime, and an unrecognised scope would not fail:
@@ -176,6 +186,11 @@ class FlexMetadata:
         # is also built directly, and a silently narrower mask is worse than a rejected one.
         if self.attention_scope not in ATTENTION_SCOPES:
             raise ValueError(f"Unknown attention_scope {self.attention_scope!r}; expected one of {ATTENTION_SCOPES}.")
+        if self.decomposed_temporal_window_seconds is not None and self.decomposed_temporal_window_seconds < 0:
+            raise ValueError(
+                "decomposed_temporal_window_seconds must be non-negative, got "
+                f"{self.decomposed_temporal_window_seconds}."
+            )
 
     @property
     def q_len(self) -> int:
@@ -256,6 +271,7 @@ class _StreamFields:
     is_noisy: torch.Tensor
     is_control: torch.Tensor
     is_und: torch.Tensor
+    timestamp: torch.Tensor
 
     def tail(self, start: int) -> _StreamFields:
         """The same fields covering the tokens from ``start`` on, re-based to offset zero.
@@ -279,6 +295,7 @@ def _key_stream_fields(metadata: FlexMetadata) -> _StreamFields:
         is_noisy=metadata.is_noisy,
         is_control=metadata.is_control,
         is_und=_und_flags(metadata),
+        timestamp=metadata.timestamp,
     )
 
 
@@ -297,6 +314,7 @@ def _multiview_pair_predicate(
     q_fields: _StreamFields,
     kv_fields: _StreamFields,
     attention_scope: AttentionScope,
+    decomposed_temporal_window_seconds: float | None = None,
 ) -> MaskMod:
     """Return the multiview supertoken predicate, reading each side's own fields.
 
@@ -311,47 +329,75 @@ def _multiview_pair_predicate(
 
     * any GEN Q attends to every UND K of its sample -- the gen->und pass, which
       carries no further restriction;
-    * RGB conditioning Q attends only to RGB conditioning K, within whatever
-      ``attention_scope`` admits (every view, its own view, or its own view or frame);
-    * RGB conditioning Q -> RGB noisy K: never (no rule fires for this quadrant);
-    * RGB noisy Q attends every RGB K -- noisy or conditioning alike -- within the same
-      ``attention_scope`` reach;
-    * RGB Q (conditioning or noisy alike) attends every control K of its **own view**, any
+    * every sensor Q attends every sensor K within whatever ``attention_scope`` admits
+      (every view, its own view, or -- ``"decomposed"`` -- its own view or its own frame /
+      temporal window), regardless of whether either token is conditioning;
+    * sensor Q (conditioning or noisy alike) attends every control K of its **own view**, any
       frame;
-    * control Q attends every control K of its **own view**, any frame, and no RGB K at all.
+    * control Q attends every control K of its **own view**, any frame, and no sensor K at all.
 
     Every rule here is a view rule, not a ``(frame, view)`` one. Every scope gives a query
     its own view at *any* frame, which is what makes ``"same_view"`` a clip's own attention
     rather than a set of stills, and a token's frame matters only through
-    ``"same_view_or_frame"``, which adds every other view at the query's own instant and so
+    ``"decomposed"``, which adds every other view at the query's own instant and so
     registers the cameras against each other. Frames are free at the block level anyway,
     because :func:`_metadata_groups` already splits its runs per ``(item, frame, view)``
     cell, so the coarse predicate tells views and frames apart without a finer grouping.
+
+    ``"decomposed"``'s temporal half is, by default, "the query's own frame index" --
+    ``same_frame``, which only means the same instant when every sensor shares one clock.
+    ``decomposed_temporal_window_seconds`` replaces that with a real-time comparison instead:
+    a key is in the query's temporal reach when ``0 <= q_timestamp - k_timestamp <=
+    decomposed_temporal_window_seconds`` (both bounds widened by a small float32 tolerance, since
+    ``timestamp`` is computed from ``frame_id * seconds_per_frame`` and a pair meant to land
+    exactly on a boundary can round a hair past it), i.e. the key was captured at or before the
+    query, within that many seconds -- what lets a 7.5 Hz camera and a 10 Hz LiDAR sweep register
+    against each other by real capture time rather than by a frame index neither shares. Left
+    ``None``, the scope keeps its original same-frame-index meaning.
 
     A batch with no control item carries ``is_control`` all-``False``, which drops both
     control terms on its own -- see :class:`FlexMetadata`.
 
     Neither control rule can fire on a UND key: both require ``k_control``, which UND tokens
-    carry as ``False``. The RGB rules are less tidy. Under ``"all_views"``,
-    ``reaches_every_view`` alone satisfies ``rgb_pair_in_scope`` for a UND key, so a GEN
+    carry as ``False``. The sensor rules are less tidy. Under ``"all_views"``,
+    ``reaches_every_view`` alone satisfies ``sensor_pair_in_scope`` for a UND key, so a GEN
     query admits its own sample's UND keys through that term too; nothing observable changes,
     since ``gen_to_und`` already admits them unconditionally, but the UND quadrant is not
-    exclusively ``gen_to_und``'s doing under that scope. Under the other two scopes the RGB
-    rules compare ``view_id`` / ``frame_id``, where UND's ``-1`` matches no real GEN token.
+    exclusively ``gen_to_und``'s doing under that scope. Under the other two scopes the sensor
+    rules compare ``view_id`` / ``frame_id`` (or ``timestamp``), where UND's ``-1`` sentinel
+    matches no real GEN token (a UND key's ``timestamp`` sentinel of ``-1.0`` could satisfy
+    ``0 <= q_ts - (-1.0) <= window`` for a query at ``q_ts <= window - 1``, but that path is
+    unreachable: ``gen_to_und`` already admits every UND key unconditionally, and no rule ever
+    needs the temporal term to do so).
 
     Padding carries ``-1`` in every id field, so real queries never see it and padded queries
     attend only to padding. The packer keeps at least one padded row on each stream once
     either is padded, so a padded query always has a padded key to attend to.
     """
-    # The scope enters as a tensor rather than as the string it arrives as: the closure below
-    # is what Inductor traces, and a captured scalar is what the FlashAttention-4 backend
+    # The scope enters as tensors rather than as the string/float it arrives as: the closure
+    # below is what Inductor traces, and a captured scalar is what the FlashAttention-4 backend
     # refuses to lower -- see :func:`_multiview_mask_mod` and the structural test that pins
     # it. Folding it into the expression rather than branching around it also leaves one path
     # through the predicate, so the element-level and block-level forms cannot come apart.
     # Both gates off leaves the query its own view, which every scope admits.
     device = q_fields.view_id.device
     reaches_every_view = torch.tensor(attention_scope == "all_views", device=device)
-    reaches_own_frame = torch.tensor(attention_scope == "same_view_or_frame", device=device)
+    is_decomposed = torch.tensor(attention_scope == "decomposed", device=device)
+    has_temporal_window = torch.tensor(decomposed_temporal_window_seconds is not None, device=device)
+    # The value is meaningless while has_temporal_window is False (the same_frame branch runs
+    # instead), so 0.0 stands in rather than a sentinel that would need its own guard.
+    temporal_window = torch.tensor(
+        0.0 if decomposed_temporal_window_seconds is None else decomposed_temporal_window_seconds,
+        dtype=torch.float32,
+        device=device,
+    )
+    # timestamp is frame_id * seconds_per_frame in float32 (build_multiview_flex_metadata), so a
+    # pair that is mathematically exactly on the window boundary -- the motivating case, aligning
+    # sensors at rates like 7.5 Hz and 10 Hz -- can round a hair to either side of it. This
+    # widens both edges of the ``[0, temporal_window]`` bound by a tolerance well above float32
+    # rounding noise at realistic frame counts, and well below any window worth configuring in
+    # seconds, so it only ever pulls a boundary pair back in, never admits an unrelated one.
+    temporal_window_eps = torch.tensor(1e-4, dtype=torch.float32, device=device)
 
     def pair_allowed(
         b: torch.Tensor,
@@ -362,30 +408,28 @@ def _multiview_pair_predicate(
         same_sample = q_fields.sample_id[q_idx] == kv_fields.sample_id[kv_idx]
         same_frame = q_fields.frame_id[q_idx] == kv_fields.frame_id[kv_idx]
         same_view = q_fields.view_id[q_idx] == kv_fields.view_id[kv_idx]
-        q_noisy = q_fields.is_noisy[q_idx]
-        k_noisy = kv_fields.is_noisy[kv_idx]
         q_control = q_fields.is_control[q_idx]
         k_control = kv_fields.is_control[kv_idx]
 
         # GEN Q -> UND K: the whole caption of the sample, conditioning and noisy alike.
         gen_to_und = kv_fields.is_und[kv_idx]
-        # Both RGB rules below share the same view/frame footprint -- whatever
-        # attention_scope admits -- and differ only in how they gate on noise.
-        in_scope = reaches_every_view | same_view | (reaches_own_frame & same_frame)
-        rgb_pair_in_scope = (~q_control) & (~k_control) & in_scope
-        # RGB conditioning Q -> RGB conditioning K: within scope. Conditioning tokens carry no
-        # type of their own, so any two the scope admits are interchangeable -- there is no
-        # cond-type left to distinguish them by.
-        cond_to_cond = rgb_pair_in_scope & (~q_noisy) & (~k_noisy)
-        # RGB noisy Q -> any RGB K (noisy or conditioning), within scope. (RGB conditioning
-        # Q never reaches an RGB noisy K: that quadrant has no rule.)
-        noisy_to_rgb = rgb_pair_in_scope & q_noisy
-        # RGB Q (any) -> control K: own view, any frame; control Q -> control K: own view, any frame;
-        # control Q -> RGB K: never (no rule admits it).
-        rgb_to_control = (~q_control) & k_control & same_view
+        # The "own instant" half of decomposed: same frame index by default, or a
+        # non-negative, bounded gap in real capture time once a window is configured.
+        timestamp_gap = q_fields.timestamp[q_idx] - kv_fields.timestamp[kv_idx]
+        within_temporal_window = (timestamp_gap >= -temporal_window_eps) & (
+            timestamp_gap <= temporal_window + temporal_window_eps
+        )
+        reaches_own_instant = is_decomposed & torch.where(has_temporal_window, within_temporal_window, same_frame)
+        # Sensor attention uses the same view/instant footprint for conditioning and noisy
+        # tokens, matching the dense base I2V/V2V attention pattern within that scope.
+        in_scope = reaches_every_view | same_view | reaches_own_instant
+        sensor_to_sensor = (~q_control) & (~k_control) & in_scope
+        # sensor Q (any) -> control K: own view, any frame; control Q -> control K: own view,
+        # any frame; control Q -> sensor K: never (no rule admits it).
+        sensor_to_control = (~q_control) & k_control & same_view
         control_to_control = q_control & k_control & same_view
 
-        return same_sample & (gen_to_und | cond_to_cond | noisy_to_rgb | rgb_to_control | control_to_control)
+        return same_sample & (gen_to_und | sensor_to_sensor | sensor_to_control | control_to_control)
 
     return pair_allowed
 
@@ -413,6 +457,7 @@ def _multiview_mask_mod(metadata: FlexMetadata) -> MaskMod:
         _query_stream_fields(metadata),
         _key_stream_fields(metadata),
         metadata.attention_scope,
+        metadata.decomposed_temporal_window_seconds,
     )
 
 
@@ -443,7 +488,14 @@ class MaskItem:
             clips off the camera rig's views -- see :func:`build_multiview_flex_metadata`.
         is_control: whether this is a control stream rather than a target conditioning on
             one. The mask confines a control item to its own view and keeps it out of the
-            RGB rules entirely -- see :func:`_multiview_pair_predicate`.
+            sensor rules entirely -- see :func:`_multiview_pair_predicate`.
+        seconds_per_frame: real-world time between two consecutive latent frames of one of
+            this item's cameras, i.e. the inverse of that sensor's latent frame rate. Only
+            read to build :attr:`FlexMetadata.timestamp`, which only the ``"decomposed"``
+            scope's ``decomposed_temporal_window_seconds`` form consults -- every other rule
+            and the default ``"decomposed"`` form still compare ``frame_id`` directly. The
+            default, ``1.0``, makes a token's timestamp equal its frame index, which is
+            harmless as long as nothing reads it.
     """
 
     token_shape: tuple[int, ...]
@@ -451,6 +503,7 @@ class MaskItem:
     num_views: int = 1
     view_offset: int = 0
     is_control: bool = False
+    seconds_per_frame: float = 1.0
 
     def __post_init__(self) -> None:
         if self.num_views < 1 or self.latent_t % self.num_views != 0:
@@ -461,6 +514,8 @@ class MaskItem:
             raise ValueError(
                 f"MaskItem condition mask covers {self.condition_mask.numel()} frames, expected {self.latent_t}."
             )
+        if self.seconds_per_frame <= 0:
+            raise ValueError(f"MaskItem.seconds_per_frame must be positive, got {self.seconds_per_frame}.")
 
     @property
     def latent_t(self) -> int:
@@ -493,14 +548,20 @@ def _check_view_grids_agree(items_per_sample: Sequence[Sequence[MaskItem]]) -> N
 
     An offset's views and frames are the coordinate system the mask's comparisons live in,
     so two items sharing an offset but dividing it differently would pair up unrelated
-    cameras and leave the wider item's extra views outside the grid the others cover.
+    cameras and leave the wider item's extra views outside the grid the others cover. The
+    same goes for ``seconds_per_frame``: a shared offset means the items describe the same
+    cameras, and :attr:`FlexMetadata.timestamp` is a function of ``(view_id, frame_id)``
+    alone (see its docstring), so two items at that offset ticking at different rates would
+    give one ``(view_id, frame_id)`` cell two different timestamps depending on which item's
+    token landed there.
 
     Items on *disjoint* offsets are compared by no rule, so they are free to differ: that is
     what lets a joint camera + LiDAR sample carry a camera grid on one offset beside a range
-    grid of another shape on the next.
+    grid of another shape (and its own frame rate) on the next.
     """
     for sample_idx, sample_items in enumerate(items_per_sample):
         grid_by_view_offset: dict[int, tuple[int, int]] = {}
+        seconds_per_frame_by_view_offset: dict[int, float] = {}
         for item_idx, item in enumerate(sample_items):
             # setdefault records the offset's first grid and returns it thereafter, so every
             # later item at that offset is compared against the one that established it.
@@ -510,6 +571,18 @@ def _check_view_grids_agree(items_per_sample: Sequence[Sequence[MaskItem]]) -> N
                     "All items of a sample sharing a view offset must share the same "
                     f"(num_views, frames_per_view) grid: item {item_idx} of sample {sample_idx} at view "
                     f"offset {item.view_offset} has {item.view_grid}, expected {expected_grid}."
+                )
+            expected_seconds_per_frame = seconds_per_frame_by_view_offset.setdefault(
+                item.view_offset, item.seconds_per_frame
+            )
+            # isclose rather than ==: seconds_per_frame is typically 1/fps, and two items
+            # computing the "same" rate from different but equal fractions (e.g. 1/7.5 vs
+            # 4/30.0) can otherwise land a ULP apart and trip this check spuriously.
+            if not math.isclose(item.seconds_per_frame, expected_seconds_per_frame):
+                raise ValueError(
+                    "All items of a sample sharing a view offset must share the same "
+                    f"seconds_per_frame: item {item_idx} of sample {sample_idx} at view offset "
+                    f"{item.view_offset} has {item.seconds_per_frame}, expected {expected_seconds_per_frame}."
                 )
 
 
@@ -522,6 +595,7 @@ def build_multiview_flex_metadata(
     num_und: int = 0,
     causal_offsets: torch.Tensor | None = None,
     attention_scope: AttentionScope = "all_views",
+    decomposed_temporal_window_seconds: float | None = None,
 ) -> FlexMetadata:
     """Build key-stream metadata for camera-major multiview transfer items.
 
@@ -555,28 +629,37 @@ def build_multiview_flex_metadata(
             required when ``num_und`` is non-zero, since the UND rule is "same sample"
             and nothing else. ``causal_offsets[-1]`` is the real UND token count, so
             everything past it is padding.
-        attention_scope: which same-kind (RGB) tokens of its sample a token reaches --
-            those of every view, of its own view, or of its own view or frame. See
+        attention_scope: which same-kind (sensor) tokens of its sample a token reaches --
+            those of every view, of its own view, or of its own view or instant. See
             ``AttentionScope``; :class:`FlexMetadata` carries it on to both forms of the
             predicate. Never widens a control token's reach, which is always its own view.
-            ``"same_view_or_frame"`` is rejected once more than one view offset is in play,
-            because that scope pairs across views by frame index and a second sensor does
-            not share the camera's frame index -- 7.5 Hz camera latents against 10 Hz
-            sweeps.
+            ``"decomposed"`` is rejected once more than one view offset is in play and
+            ``decomposed_temporal_window_seconds`` is ``None``, because that combination pairs
+            across views by frame index and a second sensor does not share the camera's frame
+            index -- 7.5 Hz camera latents against 10 Hz sweeps. Passing a window lifts that
+            restriction: the temporal half then compares real capture time instead, which is
+            defined across sensors.
+        decomposed_temporal_window_seconds: with ``attention_scope="decomposed"``, replaces
+            "the query's own frame index" with "any key within this many seconds at or before
+            the query's real capture time" for the scope's temporal half -- see
+            :func:`_multiview_pair_predicate`. ``None`` (the default) keeps the frame-index
+            form, which is also the only form :class:`MaskItem`'s default
+            ``seconds_per_frame=1.0`` produces the same answer for. Ignored outside
+            ``"decomposed"``.
 
     Returns:
-        :class:`FlexMetadata` whose five per-token fields are each
-        ``[num_und + seq_len]``: the UND tokens (sample ids only, ``-1`` / ``False`` in
-        every multiview field), then the real GEN tokens in packed order, each stream
-        followed by ``-1`` sentinels (``False`` for ``is_noisy`` and ``is_control``)
-        across its trailing pad.
+        :class:`FlexMetadata` whose per-token fields are each ``[num_und + seq_len]``: the
+        UND tokens (sample ids only, ``-1`` / ``False`` in every multiview field), then the
+        real GEN tokens in packed order, each stream followed by ``-1`` / ``-1.0`` sentinels
+        (``False`` for ``is_noisy`` and ``is_control``) across its trailing pad.
 
     Raises:
         ValueError: if the items of one sample sharing a view offset disagree on the
-            ``(num_views, frames_per_view)`` grid, if the items' token counts do not add up
-            to ``full_q_offsets[-1]`` or exceed ``seq_len``, if ``num_und`` is non-zero
-            without ``causal_offsets``, or if ``attention_scope`` is
-            ``"same_view_or_frame"`` with more than one view offset present.
+            ``(num_views, frames_per_view)`` grid or on ``seconds_per_frame``, if the items'
+            token counts do not add up to ``full_q_offsets[-1]`` or exceed ``seq_len``, if
+            ``num_und`` is non-zero without ``causal_offsets``, or if ``attention_scope`` is
+            ``"decomposed"`` with more than one view offset present and
+            ``decomposed_temporal_window_seconds`` is ``None``.
     """
     if num_und and causal_offsets is None:
         raise ValueError(
@@ -599,25 +682,31 @@ def build_multiview_flex_metadata(
     _check_view_grids_agree(items_per_sample)
     items = [item for sample_items in items_per_sample for item in sample_items]
 
-    # same_view_or_frame is factorized spatial + temporal attention: a noisy token reaches its
-    # own view at every frame, and every view at its own frame index. A second sensor on its own
-    # view offset does not share that index -- 7.5 Hz camera latents vs 10 Hz sweeps -- so the
-    # temporal half of the factorization would pair unrelated moments.
+    # decomposed is spatial + temporal attention decomposed into two terms: a noisy token
+    # reaches its own view at every frame, and every view at its own frame index (or, with a
+    # temporal window configured, at its own real capture time). A second sensor on its own
+    # view offset does
+    # not share the camera's frame index -- 7.5 Hz camera latents vs 10 Hz sweeps -- so the
+    # frame-index form of the temporal half would pair unrelated moments; the timestamp form
+    # does not have that problem, since it compares real time rather than an index each sensor
+    # numbers its own way, which is exactly what a window opts into.
     #
     # The test is how many view ranges are in play, not whether any of them is non-zero: a
     # single range renumbered off zero shifts every view id by a constant, which same_view
     # (an equality) and same_frame (blind to the view) both ignore. Rejecting that would
     # forbid a layout the scope handles correctly.
     view_ranges = {item.view_offset for item in items}
-    if attention_scope == "same_view_or_frame" and len(view_ranges) > 1:
+    if attention_scope == "decomposed" and len(view_ranges) > 1 and decomposed_temporal_window_seconds is None:
         raise ValueError(
-            "attention_scope='same_view_or_frame' is not allowed on a joint camera + "
-            "LiDAR pack: camera frames and LiDAR sweeps do not correspond. Use 'all_views' "
-            "or 'same_view'."
+            "attention_scope='decomposed' is not allowed on a joint camera + "
+            "LiDAR pack without decomposed_temporal_window_seconds: camera frames and LiDAR "
+            "sweeps do not correspond by index. Use 'all_views', 'same_view', or set "
+            "decomposed_temporal_window_seconds to compare by real capture time instead."
         )
 
     frame_ids: list[torch.Tensor] = []
     view_ids: list[torch.Tensor] = []
+    timestamps: list[torch.Tensor] = []
     noisy_flags: list[torch.Tensor] = []
     control_flags: list[torch.Tensor] = []
     # Purely constructive: every field below is per item, and every invariant an item could
@@ -627,13 +716,17 @@ def build_multiview_flex_metadata(
         spatial_tokens = item.spatial_tokens
         # Frame index cycles within each view; view index is constant across a view's
         # whole frame run. Both expand to one entry per token: [item_tokens].
-        frame_ids.append(
-            torch.arange(frames_per_view, device=device).repeat(num_views).repeat_interleave(spatial_tokens)
-        )  # [item_tokens]
+        item_frame_ids = torch.arange(frames_per_view, device=device).repeat(num_views)  # [num_views*frames_per_view]
+        frame_ids.append(item_frame_ids.repeat_interleave(spatial_tokens))  # [item_tokens]
         view_ids.append(
             (item.view_offset + torch.arange(num_views, device=device)).repeat_interleave(
                 frames_per_view * spatial_tokens
             )
+        )  # [item_tokens]
+        # Real capture time of a frame index, at this item's own rate -- see
+        # MaskItem.seconds_per_frame and FlexMetadata.timestamp.
+        timestamps.append(
+            (item_frame_ids.to(torch.float32) * item.seconds_per_frame).repeat_interleave(spatial_tokens)
         )  # [item_tokens]
 
         condition_mask = item.condition_mask.to(device=device, dtype=torch.bool)  # [latent_t]
@@ -646,6 +739,7 @@ def build_multiview_flex_metadata(
 
     frame_id = torch.cat(frame_ids)  # [real_token_count]
     view_id = torch.cat(view_ids)  # [real_token_count]
+    timestamp = torch.cat(timestamps)  # [real_token_count], float
     is_noisy = torch.cat(noisy_flags)  # [real_token_count], bool
     is_control = torch.cat(control_flags)  # [real_token_count], bool
     real_token_count = frame_id.shape[0]
@@ -666,8 +760,10 @@ def build_multiview_flex_metadata(
     pad = seq_len - real_token_count
     if pad:
         sentinel = torch.full((pad,), -1, device=device, dtype=torch.long)  # [pad]
+        timestamp_sentinel = torch.full((pad,), -1.0, device=device, dtype=torch.float32)  # [pad]
         frame_id = torch.cat((frame_id, sentinel))  # [seq_len]
         view_id = torch.cat((view_id, sentinel))  # [seq_len]
+        timestamp = torch.cat((timestamp, timestamp_sentinel))  # [seq_len]
         is_noisy = torch.cat((is_noisy, torch.zeros(pad, device=device, dtype=torch.bool)))  # [seq_len], bool
         is_control = torch.cat((is_control, torch.zeros(pad, device=device, dtype=torch.bool)))  # [seq_len], bool
 
@@ -679,9 +775,11 @@ def build_multiview_flex_metadata(
         # multiview fields are what the GEN rules match on, and holding them at -1 / False is
         # what keeps those rules from firing on this quadrant.
         und_sentinel = torch.full((num_und,), -1, device=device, dtype=torch.long)  # [num_und]
+        und_timestamp_sentinel = torch.full((num_und,), -1.0, device=device, dtype=torch.float32)  # [num_und]
         sample_id = torch.cat((_build_stream_sample_ids(causal_offsets, num_und, device), sample_id))
         frame_id = torch.cat((und_sentinel, frame_id))  # [num_und+seq_len]
         view_id = torch.cat((und_sentinel, view_id))  # [num_und+seq_len]
+        timestamp = torch.cat((und_timestamp_sentinel, timestamp))  # [num_und+seq_len]
         is_noisy = torch.cat((torch.zeros(num_und, device=device, dtype=torch.bool), is_noisy))  # bool
         is_control = torch.cat((torch.zeros(num_und, device=device, dtype=torch.bool), is_control))  # bool
 
@@ -692,8 +790,10 @@ def build_multiview_flex_metadata(
         view_id=view_id,  # [num_und+seq_len]
         is_noisy=is_noisy,  # [num_und+seq_len], bool
         is_control=is_control,  # [num_und+seq_len], bool
+        timestamp=timestamp,  # [num_und+seq_len], float
         num_und=num_und,
         attention_scope=attention_scope,
+        decomposed_temporal_window_seconds=decomposed_temporal_window_seconds,
     )
 
 
@@ -991,7 +1091,9 @@ def build_block_mask(
     _check_block_aligned(metadata.q_len, "GEN", q_block_size)
     _check_block_aligned(metadata.num_und, "UND", kv_block_size)
     key_fields = _key_stream_fields(metadata)
-    pair_allowed = _multiview_pair_predicate(key_fields, key_fields, metadata.attention_scope)
+    pair_allowed = _multiview_pair_predicate(
+        key_fields, key_fields, metadata.attention_scope, metadata.decomposed_temporal_window_seconds
+    )
     mask_mod = _multiview_mask_mod(metadata)
     group_id, representatives = _metadata_groups(metadata, device)
     # Queries are the GEN tail of the key stream, so their presence comes from that slice.
@@ -1020,6 +1122,7 @@ def build_multiview_block_mask(
     num_und: int = 0,
     causal_offsets: torch.Tensor | None = None,
     attention_scope: AttentionScope = "all_views",
+    decomposed_temporal_window_seconds: float | None = None,
 ) -> BlockMask:
     """Build the GEN-tower :class:`BlockMask` for camera-major multiview items.
 
@@ -1028,8 +1131,9 @@ def build_multiview_block_mask(
     the caller only handles the mask. See :class:`MaskItem` for what one item describes,
     and those two functions for the token layout the metadata encodes, for why the mask has
     to be built outside the decoder layers, for what ``block_size`` selects, for what
-    ``num_und`` / ``causal_offsets`` add, and for what ``attention_scope`` lets same-kind
-    (RGB) tokens reach.
+    ``num_und`` / ``causal_offsets`` add, for what ``attention_scope`` lets same-kind
+    (sensor) tokens reach, and for what ``decomposed_temporal_window_seconds`` changes about
+    the ``"decomposed"`` scope's temporal half.
 
     The two stages stay separately callable because the metadata layout is checked on
     CPU in the unit tests, independently of the block-mask construction.
@@ -1042,6 +1146,7 @@ def build_multiview_block_mask(
         num_und=num_und,
         causal_offsets=causal_offsets,
         attention_scope=attention_scope,
+        decomposed_temporal_window_seconds=decomposed_temporal_window_seconds,
     )
     return build_block_mask(metadata, device, block_size)
 
