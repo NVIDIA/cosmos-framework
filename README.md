@@ -29,6 +29,7 @@
 - [Training (Supervised Fine-Tuning)](./docs/training.md)
   - [JSONL Dataset](./docs/dataset_jsonl.md)
 - [Inference](./docs/inference.md)
+  - [TensorRT-LLM static-FP8 cookbook](./docs/tensorrt_llm_static_fp8.md)
 - [Policy Server](./docs/action_policy_droid_server.md)
 - [Agent Skills](#agent-skills)
 - Reference

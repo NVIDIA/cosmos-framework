@@ -15,6 +15,7 @@ ______________________________________________________________________
     - [Cosmos3-Nano](#cosmos3-nano)
     - [Cosmos3-Super](#cosmos3-super)
 - [Models](#models)
+- [TensorRT-LLM static FP8](#tensorrt-llm-static-fp8)
 - [Modes](#modes)
 - [Parallelism Arguments](#parallelism-arguments)
 - [Sample Arguments](#sample-arguments)
@@ -158,6 +159,13 @@ The four `--{dp,cp,cfgp}-*-size` flags override the auto-selected values from `-
 | Cosmos3-Nano  | `--checkpoint-path=Cosmos3-Nano`  | All                                            |
 | Cosmos3-Edge  | `--checkpoint-path=Cosmos3-Edge`  | All except audio (`enable_sound`)              |
 | Cosmos3-Super | `--checkpoint-path=Cosmos3-Super` | `text2image`, `text2video`, `image2video`      |
+
+## TensorRT-LLM static FP8
+
+To run local ModelOpt-calibrated Cosmos3 Nano or Super FP8 checkpoints with
+TensorRT-LLM, follow the [single-GPU TensorRT-LLM static-FP8
+cookbook](./tensorrt_llm_static_fp8.md). It covers T2I, T2V, I2V, and V2V,
+including the required one-GPU configs and artifact checks.
 
 ## Modes
 
