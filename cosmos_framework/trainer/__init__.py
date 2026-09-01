@@ -142,8 +142,8 @@ class ImaginaireTrainer:
             LazyConfig.save_yaml(config, f"{config.job.path_local}/config.yaml")
         dist.barrier()
         if INTERNAL:
-            log.init_loguru_file(f"{config.job.path_local}/stdout.log")
             if distributed.is_rank0():
+                log.init_loguru_file(f"{config.job.path_local}/stdout.log")
                 # Print important environment variables and the effective config.
                 log.info("Config:\n" + config.pretty_print(use_color=True))
             misc.print_environ_variables(["TORCH_HOME", "IMAGINAIRE_OUTPUT_ROOT", "ENABLE_ONELOGGER"])
