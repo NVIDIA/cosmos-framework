@@ -408,6 +408,12 @@ class PackedSequenceBuilder:
             if actual_temporal_compression_factor is None
             else int(actual_temporal_compression_factor)
         )
+        # Real-world seconds between two consecutive latent frames of this item, independent
+        # of enable_fps_modulation (which only gates whether mRoPE positions use it). Falls
+        # back to 1.0 -- an index-derived "instant" -- when the item's fps is unknown, matching
+        # MaskItem's own default so an unknown-fps item behaves like today's single-stream case.
+        item_seconds_per_frame = item_temporal_compression_factor / fps if fps else 1.0
+        modality.seconds_per_frame.append(item_seconds_per_frame)
         mrope_ids, self._mrope_temporal_offset = get_3d_mrope_ids_vae_tokens(
             grid_t=latent_t,
             grid_h=patch_h,
@@ -877,6 +883,7 @@ class PackedSequenceBuilder:
             "tokens": modality.tokens,
             "condition_mask": list(modality.condition_mask),
             "noisy_frame_indexes": list(modality.noisy_frame_indexes),
+            "seconds_per_frame": list(modality.seconds_per_frame),
         }
         if domain_id is not None:
             kwargs["domain_id"] = domain_id

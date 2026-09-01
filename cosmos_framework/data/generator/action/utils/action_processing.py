@@ -22,6 +22,7 @@ ActionNormalizationMethod = Literal[
     "quantile_rot_scale_floor",
     "asinh_rot",
     "piecewise_asinh_rot",
+    "global_asinh",
     "meanstd",
     "minmax",
 ]
@@ -29,6 +30,13 @@ QUANTILE_ROT_SCALE_FLOOR_TARGET_MAX = 5.0
 _RAW_ROTATION_STATS_METHODS = frozenset(
     {"quantile_rot", "quantile_rot_scale_floor", "asinh_rot", "piecewise_asinh_rot"}
 )
+GLOBAL_ASINH_GRIPPER_01_STATS_PATH = (
+    Path(__file__).parents[1] / "normalizers" / "global_asinh_v1_backward_anchored_gripper_binary.json"
+)
+GLOBAL_ASINH_METRIC_GRIPPER_STATS_PATH = (
+    Path(__file__).parents[1] / "normalizers" / "global_asinh_v1_backward_anchored_gripper_metric.json"
+)
+ActionNormalizationStats = dict[str, torch.Tensor]
 
 
 class ActionNormalizer(Protocol):
@@ -40,6 +48,16 @@ class ActionNormalizer(Protocol):
 
     def denormalize_action(self, action: torch.Tensor) -> torch.Tensor:  # action: [...,D], returns [...,D]
         """Invert model-space action values back into raw action values."""
+        ...
+
+
+class ActionCodec(Protocol):
+    """Decode a canonical normalized action into canonical raw space."""
+
+    def decode_to_unified(
+        self, normalized_action: torch.Tensor
+    ) -> torch.Tensor:  # normalized_action: [...,D], returns [...,D]
+        """Decode normalized values into the canonical raw action layout."""
         ...
 
 
@@ -102,9 +120,18 @@ class ActionAsinhNormalization:
     offset: torch.Tensor
     scale: torch.Tensor
     unit: float = math.asinh(1.0)
+    action_schema: Literal["native", "unified_v1"] = "native"
+
+    def _validate_width(self, action: torch.Tensor) -> None:  # action: [...,D]
+        if action.ndim == 0 or action.shape[-1] != self.offset.numel():
+            raise ValueError(
+                f"action width {action.shape[-1] if action.ndim else 0} does not match normalizer width "
+                f"{self.offset.numel()}"
+            )
 
     def normalize_action(self, action: torch.Tensor) -> torch.Tensor:  # action: [...,D], returns [...,D]
         """Normalize raw action values with an invertible asinh transform."""
+        self._validate_width(action)
         offset = self.offset.to(device=action.device, dtype=action.dtype)  # [D]
         scale = self.scale.to(device=action.device, dtype=action.dtype)  # [D]
         unit = torch.as_tensor(self.unit, device=action.device, dtype=action.dtype)  # []
@@ -112,6 +139,7 @@ class ActionAsinhNormalization:
 
     def denormalize_action(self, action: torch.Tensor) -> torch.Tensor:  # action: [...,D], returns [...,D]
         """Invert asinh action normalization."""
+        self._validate_width(action)
         offset = self.offset.to(device=action.device, dtype=action.dtype)  # [D]
         scale = self.scale.to(device=action.device, dtype=action.dtype)  # [D]
         unit = torch.as_tensor(self.unit, device=action.device, dtype=action.dtype)  # []
@@ -187,10 +215,19 @@ def load_action_stats(stats_path: str, stats_key: str = "global") -> dict[str, n
 
 def resolve_action_normalization(
     method: ActionNormalizationMethod,
-    stats: dict[str, torch.Tensor],
+    stats: ActionNormalizationStats | None = None,
     apply_forward_clamp: bool = False,
+    *,
+    pose_convention: str | None = None,
 ) -> ActionNormalizer:
-    """Resolve configured action stats into forward/inverse normalization parameters."""
+    """Resolve one configured normalization method into its forward/inverse transform."""
+    if stats is None:
+        raise ValueError(f"{method} normalization requires per-dataset action statistics")
+    if method == "global_asinh" and pose_convention != "backward_anchored":
+        raise ValueError(
+            f"global_asinh normalization requires pose_convention='backward_anchored', got {pose_convention!r}"
+        )
+
     if method == "meanstd":
         offset = stats["mean"]  # [D]
         scale = stats["std"].clamp(min=1e-8)  # [D]
@@ -199,7 +236,14 @@ def resolve_action_normalization(
     if method == "minmax":
         lo = stats["min"]  # [D]
         hi = stats["max"]  # [D]
-    elif method in ("quantile", "quantile_rot", "quantile_rot_scale_floor", "asinh_rot", "piecewise_asinh_rot"):
+    elif method in (
+        "quantile",
+        "quantile_rot",
+        "quantile_rot_scale_floor",
+        "asinh_rot",
+        "piecewise_asinh_rot",
+        "global_asinh",
+    ):
         lo = stats["q01"]  # [D]
         hi = stats["q99"]  # [D]
     else:
@@ -213,8 +257,9 @@ def resolve_action_normalization(
         scale_floor = torch.maximum(min_dev, max_dev) / QUANTILE_ROT_SCALE_FLOOR_TARGET_MAX  # [D]
         scale = torch.maximum(scale, scale_floor.clamp(min=1e-8))  # [D]
 
-    if method == "asinh_rot":
-        return ActionAsinhNormalization(offset=offset, scale=scale)
+    if method in {"asinh_rot", "global_asinh"}:
+        action_schema = "unified_v1" if method == "global_asinh" else "native"
+        return ActionAsinhNormalization(offset=offset, scale=scale, action_schema=action_schema)
     if method == "piecewise_asinh_rot":
         return ActionPiecewiseAsinhNormalization(offset=offset, scale=scale)
 
@@ -239,6 +284,10 @@ def load_action_normalization_stats(
     expected_dim: int | None = None,
 ) -> dict[str, torch.Tensor]:
     """Load tensor action stats for a configured normalization method."""
+    if action_normalization == "global_asinh":
+        if expected_dim is not None and expected_dim != 59:
+            raise ValueError(f"global_asinh stats require expected_dim=59, got {expected_dim}")
+        expected_dim = 59
     if stats_key is None:
         stats_key = "global_raw" if action_normalization in _RAW_ROTATION_STATS_METHODS else "global"
     raw_stats = load_action_stats(str(stats_path), stats_key=stats_key)
@@ -270,6 +319,28 @@ def load_action_normalizer(
         ),
         apply_forward_clamp=apply_forward_clamp,
     )
+
+
+def make_camera_global_asinh_normalizer(
+    stats_path: str | Path = GLOBAL_ASINH_METRIC_GRIPPER_STATS_PATH,
+    *,
+    pose_convention: str = "backward_anchored",
+) -> ActionAsinhNormalization:
+    """Build the native 9D camera normalizer from the canonical global-asinh profile."""
+    if pose_convention not in {
+        "backward_anchored",
+        "backward_chunk_anchored_8f",
+        "backward_chunk_anchored_16f",
+    }:
+        raise ValueError(f"global_asinh normalization requires an anchored pose convention, got {pose_convention!r}")
+    stats = load_action_normalization_stats(
+        "global_asinh",
+        stats_path=stats_path,
+        expected_dim=59,
+    )
+    lo = stats["q01"][:9]
+    hi = stats["q99"][:9]
+    return ActionAsinhNormalization(offset=(hi + lo) / 2.0, scale=(hi - lo).clamp(min=1e-8) / 2.0)
 
 
 def make_pose_action_scale_normalizer(
@@ -307,6 +378,11 @@ class ActionProcessingRecord:
     raw_action_dim: int
     action_normalizer: ActionNormalizer | None
     action_valid_mask: torch.Tensor | None = None  # [D_raw] bool
+    action_codec: ActionCodec | None = None
+
+    def __post_init__(self) -> None:
+        if self.action_normalizer is not None and self.action_codec is not None:
+            raise ValueError("ActionProcessingRecord cannot contain both an action_normalizer and an action_codec")
 
 
 def pad_action_to_max_dim(
@@ -358,24 +434,37 @@ class ActionProcessor:
         *,
         action_normalizer: ActionNormalizer | None,
         action_valid_mask: torch.Tensor | None = None,  # [D_raw] bool
+        normalized_action: torch.Tensor | None = None,  # [T,D_raw]
+        action_codec: ActionCodec | None = None,
     ) -> dict[str, Any]:
-        """Return a sample with canonical raw and model-space action fields.
+        """Return a sample with canonical raw and normalized action fields.
 
         ``action_raw`` is the exact unnormalized, unpadded action accepted by
         this method. It is the canonical external-space target for evaluation.
         ``action`` is the normalized and padded model-space representation.
+        Unified actions may provide that normalized representation explicitly so
+        mapping and native normalization stay outside this padding boundary.
         """
 
         raw_action_dim = int(action.shape[-1])
         if "action_raw" in data_dict:
             raise ValueError("action_raw is reserved for the canonical ActionProcessor input")
         action_raw = action.clone()  # [T,D]
-        if action_normalizer is not None:
-            action = action_normalizer.normalize_action(action)  # [T,D]
-            if int(action.shape[-1]) != raw_action_dim:
-                raise ValueError(
-                    f"Action normalizer changed action width from {raw_action_dim} to {int(action.shape[-1])}"
-                )
+        if action_normalizer is not None and action_codec is not None:
+            raise ValueError("Provide either action_normalizer or action_codec, not both")
+        if (normalized_action is None) != (action_codec is None):
+            raise ValueError("normalized_action and action_codec must be provided together")
+        if normalized_action is not None and action_normalizer is not None:
+            raise ValueError("normalized_action cannot be combined with action_normalizer")
+        if normalized_action is None:
+            normalized_action = action  # [T,D]
+            if action_normalizer is not None:
+                normalized_action = action_normalizer.normalize_action(action)  # [T,D]
+        if normalized_action.shape != action.shape:
+            raise ValueError(
+                f"normalized_action shape {tuple(normalized_action.shape)} does not match "
+                f"raw action shape {tuple(action.shape)}"
+            )
 
         if action_valid_mask is not None:
             if action_valid_mask.dtype != torch.bool or action_valid_mask.ndim != 1:
@@ -387,15 +476,18 @@ class ActionProcessor:
                 raise ValueError(
                     f"action_valid_mask width {action_valid_mask.numel()} != raw_action_dim {raw_action_dim}"
                 )
-            action_valid_mask = action_valid_mask.to(device=action.device).contiguous()
+            action_valid_mask = action_valid_mask.to(device=normalized_action.device).contiguous()  # [D_raw]
 
         processed_data_dict = dict(data_dict)
         processed_data_dict["action_raw"] = action_raw
-        processed_data_dict["action"] = pad_action_to_max_dim(action, self.max_action_dim)  # [T,D_model]
+        processed_data_dict["action"] = pad_action_to_max_dim(  # [T,D_model]
+            normalized_action, self.max_action_dim
+        )
         record = ActionProcessingRecord(
             raw_action_dim=raw_action_dim,
             action_normalizer=action_normalizer,
             action_valid_mask=action_valid_mask,
+            action_codec=action_codec,
         )
         processed_data_dict["raw_action_dim"] = (
             torch.tensor(record.raw_action_dim, dtype=torch.long) if self.action_channel_masking else None
@@ -419,9 +511,11 @@ class ActionProcessor:
         action: torch.Tensor,
         record: ActionProcessingRecord,
     ) -> torch.Tensor:
-        """Unpad and denormalize a generated model-space action tensor."""
+        """Unpad and decode a generated model-space action into canonical raw space."""
         action = ActionProcessor._unpad_action(action, record.raw_action_dim)  # [...,D_raw]
-        if record.action_normalizer is not None:
+        if record.action_codec is not None:
+            action = record.action_codec.decode_to_unified(action)  # [...,D_raw]
+        elif record.action_normalizer is not None:
             action = record.action_normalizer.denormalize_action(action)  # [...,D_raw]
         return action  # [...,D_raw]
 

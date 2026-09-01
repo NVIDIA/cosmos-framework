@@ -58,6 +58,7 @@ class GenerationDataClean:
     x0_tokens_action: list[torch.Tensor] | None = None
     fps_action: torch.Tensor | None = None
     action_domain_id: list[torch.Tensor] | None = None  # per-sample domain IDs, None when no action samples
+    action_family: list[str] | None = None  # dataset names aligned with the dense action rows
     raw_action_dim: list[torch.Tensor] | None = None  # raw action dimension, used adding masks to loss calculation
     action_valid_mask: list[torch.Tensor] | None = None  # per-slot semantic validity for action loss/noise
 

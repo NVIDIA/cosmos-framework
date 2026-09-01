@@ -46,10 +46,15 @@ from cosmos_framework.utils.generator.input_probe import (
     maybe_dump_model_inputs,
     maybe_dump_post_optimizer,
 )
+from cosmos_framework.utils.generator.optimizer import OptimizersContainer
 from cosmos_framework.utils.generator.parallelism import ParallelDims
 from cosmos_framework.utils.generator.reasoner.constant import IGNORE_INDEX
 from cosmos_framework.utils.generator.reasoner.pretrained_models_downloader import (
     maybe_download_hf_model_from_s3,
+)
+from cosmos_framework.utils.generator.reasoner.true_packing import (
+    TRUE_PACKING_CPU_PREPARED_KEY,
+    assert_packing_temporal_inputs_supported,
 )
 
 # Model-type dispatch sets. Using hf_config.model_type (stable HF-defined string)
@@ -304,6 +309,8 @@ class VLMModel(ImaginaireModel):
         checkpoint:      root CheckpointConfig (load_path, load_from_object_store).
     """
 
+    emits_exact_validation_stats: bool = True
+
     def __init__(self, config: VLMModelConfig, checkpoint):
         super().__init__()
         from cosmos_framework.utils.generator.flash_attn import init_flash_attn_meta
@@ -361,6 +368,16 @@ class VLMModel(ImaginaireModel):
                 loss_scaling_factor=1.0,
                 ignore_index=IGNORE_INDEX,
             )
+        # Dense weighted CE is normalized once over the whole gradient-accumulation window.
+        # The trainer averages microbatch losses by K; training_step therefore backprops the
+        # unnormalized WORLD numerator and this hook applies K / sum(global denominator).
+        self._window_normalize_weighted_ce = bool(
+            config.policy.use_weighted_ce
+            and config.policy.normalize_weighted_ce_over_accumulation_window
+            and self.hf_config.model_type == "qwen3_vl"
+        )
+        self._weighted_ce_window_denominator: torch.Tensor | None = None
+        self._weighted_ce_window_microbatches: int = 0
 
     def _init_vlm(self, config: VLMModelConfig, checkpoint) -> None:
         """Initialize VLM without the legacy ModelRegistry (Phase 2+).
@@ -579,6 +596,28 @@ class VLMModel(ImaginaireModel):
         """Capture exact pre-clip gradients when deep parity probing is enabled."""
         maybe_dump_gradients(self.model.model, self._parity_probe_step, tag="i4")
 
+    def on_before_optimizer_step(
+        self,
+        optimizer: torch.optim.Optimizer | OptimizersContainer,
+        scheduler: torch.optim.lr_scheduler.LRScheduler,
+        iteration: int,
+    ) -> None:
+        """Finish exact weighted-CE normalization over a gradient-accumulation window."""
+        del scheduler, iteration
+        if self._weighted_ce_window_denominator is None:
+            return
+        if self._weighted_ce_window_microbatches <= 0:
+            raise RuntimeError("weighted-CE denominator exists without accumulated microbatches")
+        scale = self._weighted_ce_window_microbatches / self._weighted_ce_window_denominator.clamp(min=1)
+        optimizers = optimizer.optimizers if isinstance(optimizer, OptimizersContainer) else [optimizer]
+        for inner_optimizer in optimizers:
+            for group in inner_optimizer.param_groups:
+                for parameter in group["params"]:
+                    if parameter.grad is not None:
+                        parameter.grad.mul_(scale)
+        self._weighted_ce_window_denominator = None
+        self._weighted_ce_window_microbatches = 0
+
     def on_before_zero_grad(
         self,
         optimizer: torch.optim.Optimizer,
@@ -708,6 +747,78 @@ class VLMModel(ImaginaireModel):
             device_mesh=self.parallel_dims.dp_mesh if self.parallel_dims is not None else None,
         )
 
+    def _prepare_true_packing(self, data: dict[str, Any]) -> None:
+        """Prepare dense Qwen3-VL true-packed positions and standard varlen metadata in place.
+
+        Padded batches return immediately and continue using the current model-internal M-RoPE
+        path. Packed batches are accepted only for the one backend/model combination whose
+        block-diagonal attention and position parity are covered by this MR.
+        """
+        true_packing = data.get("true_packing", False)
+        if true_packing is False:
+            return
+        if true_packing is not True:
+            raise TypeError("true_packing must be a Python bool")
+        if self.hf_config.model_type != "qwen3_vl":
+            raise NotImplementedError(
+                f"True packing is validated only for dense qwen3_vl; got model_type={self.hf_config.model_type!r}"
+            )
+        if self.config.sound_und:
+            raise NotImplementedError(
+                "True packing is not validated for audio understanding inputs; use padded batching."
+            )
+        if self.config.policy.attn_implementation != "cosmos":
+            raise NotImplementedError(
+                "True packing requires policy.attn_implementation='cosmos'; other backends may "
+                "ignore varlen metadata and permit cross-sample attention"
+            )
+        if self.config.policy.use_weighted_ce and not self._window_normalize_weighted_ce:
+            raise ValueError(
+                "True packing with weighted CE requires "
+                "policy.normalize_weighted_ce_over_accumulation_window=True. Set it explicitly "
+                "in both packed and padded A/B arms so the optimizer objective is unchanged."
+            )
+        if data.pop(TRUE_PACKING_CPU_PREPARED_KEY, None) is not True:
+            raise RuntimeError(
+                "true-packed batches must carry CPU-precomputed position_ids; construct them in the "
+                "packing dataloader before the trainer H2D copy"
+            )
+        assert_packing_temporal_inputs_supported(data)
+        seq_lens = data.pop("seq_lens")
+        if not isinstance(seq_lens, list) or not all(isinstance(length, int) for length in seq_lens):
+            raise TypeError("seq_lens must be a list of Python ints")
+        packed_cu_seq_lens = data.pop("packed_cu_seq_lens")
+        packed_max_length = data.pop("packed_max_length")
+        if not isinstance(packed_cu_seq_lens, torch.Tensor) or packed_cu_seq_lens.dtype != torch.int32:
+            raise TypeError("packed_cu_seq_lens must be one int32 tensor")
+        if not isinstance(packed_max_length, int):
+            raise TypeError("packed_max_length must be a Python int")
+
+        position_ids = data.get("position_ids")
+        input_ids = data.get("input_ids")
+        if not isinstance(position_ids, torch.Tensor) or position_ids.dtype != torch.long:
+            raise TypeError("CPU-precomputed position_ids must be one int64 tensor")
+        if not isinstance(input_ids, torch.Tensor):
+            raise TypeError("true-packed input_ids must be a tensor")
+        expected_position_shape = (3, 1, input_ids.shape[1])
+        if tuple(position_ids.shape) != expected_position_shape:
+            raise ValueError(
+                f"true-packed position_ids must have shape {expected_position_shape}, got {tuple(position_ids.shape)}"
+            )
+        if position_ids.device != input_ids.device:
+            raise ValueError(
+                "position_ids and input_ids must be moved to the same device by the trainer; "
+                f"got {position_ids.device} and {input_ids.device}"
+            )
+
+        # Assign the same cumulative-boundary tensor object to Q and K after its one H2D copy.
+        # The cosmos adapter accepts the standard HF protocol directly.
+        data["cu_seq_lens_q"] = packed_cu_seq_lens
+        data["cu_seq_lens_k"] = packed_cu_seq_lens
+        data["max_length_q"] = packed_max_length
+        data["max_length_k"] = packed_max_length
+        data.pop("true_packing", None)
+
     def training_step(self, data: dict, iteration: int) -> tuple[dict, torch.Tensor]:
         """forward → CE loss, plus the MoE load-balancing loss when ``config.lbl`` enables it.
 
@@ -739,6 +850,7 @@ class VLMModel(ImaginaireModel):
         and the loss — are the same either way. Left-padding would break that silently;
         ``unit_tests/test_monkey_patch.py`` pins it.
         """
+        self._prepare_true_packing(data)
         labels = data.pop("labels")
         self._set_moe_token_mask(data.get("attention_mask"))
 
@@ -746,30 +858,62 @@ class VLMModel(ImaginaireModel):
         self._parity_probe_step = iteration
 
         logits = self.model(_probe_step=iteration, _probe_tag="i4", **data)
-        loss_kwargs = {"probe_step": iteration, "probe_tag": "i4"} if self.config.policy.use_weighted_ce else {}
-        loss = self._loss_fn(logits, labels, **loss_kwargs)
+        loss_kwargs: dict[str, Any] = {}
+        if self.config.policy.use_weighted_ce:
+            loss_kwargs = {
+                "probe_step": iteration,
+                "probe_tag": "i4",
+                "cu_seq_lens": data.get("cu_seq_lens_q"),
+            }
+        loss_result = self._loss_fn(
+            logits,
+            labels,
+            return_stats=True,
+            **loss_kwargs,
+        )
+        if not isinstance(loss_result, tuple):
+            raise TypeError("training loss must return statistics when return_stats=True")
+        loss, loss_stats = loss_result
+        backward_loss: torch.Tensor
+        if self._window_normalize_weighted_ce:
+            denominator = loss_stats.global_objective_denominator
+            backward_loss = loss * denominator
+            if self._weighted_ce_window_denominator is None:
+                self._weighted_ce_window_denominator = denominator.detach().clone()
+            else:
+                self._weighted_ce_window_denominator.add_(denominator)
+            self._weighted_ce_window_microbatches += 1
+        else:
+            backward_loss = loss
 
         ce_loss = loss.detach().clone()
         load_balancing_loss = self._moe_load_balancing_loss()
         if load_balancing_loss is not None:
             loss = loss + load_balancing_loss
+            backward_loss = backward_loss + load_balancing_loss
         maybe_dump_forward_result(logits, {"ce_loss": ce_loss, "total_loss": loss}, iteration, tag="i4")
 
-        # Match cosmos-rl's logged DP-average without changing the backward loss.
-        loss_avg = loss.detach().clone()
-        pd = getattr(self, "parallel_dims", None)
-        dp_mesh = pd.dp_mesh if pd is not None else None
-        if torch.distributed.is_initialized() and dp_mesh is not None:
-            sub_dim = "dp_shard" if pd.dp_shard_enabled else "dp_replicate"
-            torch.distributed.all_reduce(
-                loss_avg, op=torch.distributed.ReduceOp.AVG, group=dp_mesh[sub_dim].get_group()
-            )
-        if not torch.distributed.is_initialized() or torch.distributed.get_rank() == 0:
-            log.info(f"train/loss_avg: {loss_avg.item():.5f} (iteration {iteration})")
-
-        output = {"loss": loss, "loss_avg": loss_avg, "labels": labels}
+        # Callbacks accumulate these primitives on every microbatch and reduce over WORLD only at
+        # logging cadence. With explicit window normalization they are the local ratio-of-sums
+        # primitives. Otherwise the trained objective is the historical mean of independently
+        # normalized microbatch/rank losses, so emit (loss, 1) and aggregate that exact mean rather
+        # than silently logging a different exposure-weighted objective.
+        if self._window_normalize_weighted_ce:
+            train_objective_numerator = loss_stats.objective_numerator
+            train_objective_denominator = loss_stats.objective_denominator
+        else:
+            train_objective_numerator = loss.detach()
+            train_objective_denominator = torch.ones_like(train_objective_numerator)
+        output = {
+            "loss": loss,
+            "labels": labels,
+            "train_objective_numerator": train_objective_numerator,
+            "train_objective_denominator": train_objective_denominator,
+        }
+        if backward_loss is not loss:
+            output["_backward_loss"] = backward_loss
         if load_balancing_loss is not None:
-            # loss/loss_avg are the full objective once the aux term is on; report the two
+            # loss is the full objective once the aux term is on; report the two
             # components separately so a rising CE behind a falling total stays visible.
             output["ce_loss"] = ce_loss
             output["aux_loss"] = load_balancing_loss.detach()
@@ -783,8 +927,23 @@ class VLMModel(ImaginaireModel):
         Like ``training_step``, position_ids are computed internally by the model and
         ``attention_mask`` is forwarded (see that method's notes).
         """
+        self._prepare_true_packing(data)
         labels = data.pop("labels")
         self._set_moe_token_mask(data.get("attention_mask"))
         logits = self.model(**data)
-        loss = self._loss_fn(logits, labels)
-        return {"loss": loss, "labels": labels}, loss
+        loss_kwargs: dict[str, Any] = {}
+        if self.config.policy.use_weighted_ce:
+            loss_kwargs["cu_seq_lens"] = data.get("cu_seq_lens_q")
+        loss_result = self._loss_fn(logits, labels, return_stats=True, **loss_kwargs)
+        if not isinstance(loss_result, tuple):
+            raise TypeError("validation loss must return (loss, LossStatistics) when return_stats=True")
+        loss, stats = loss_result
+        output: dict[str, torch.Tensor] = {
+            "loss": loss,
+            "labels": labels,
+            "val_objective_numerator": stats.objective_numerator,
+            "val_objective_denominator": stats.objective_denominator,
+            "val_token_ce_sum": stats.token_ce_sum,
+            "val_n_valid_tokens": stats.valid_token_count,
+        }
+        return output, loss

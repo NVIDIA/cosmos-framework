@@ -25,8 +25,10 @@ That collective is throttled to at most every ``check_every_n`` iterations,
 but the stride shrinks as the deadline approaches: rank 0 divides the time
 still owed by its measured step time and broadcasts the result, so a job at
 minutes per iteration ends up checking every step rather than sailing hours
-past the interval.  What remains is a one-iteration overshoot, because a
-checkpoint can only be taken at a step boundary.
+past the interval.  What remains is normally a one-iteration overshoot, because
+a checkpoint can only be taken at a step boundary.  With context parallelism,
+the save may wait a few more steps until the trainer reaches the next CP
+data-window boundary, so dataloader sampler state is checkpointed safely.
 
 What the interval bounds
 -----------------------
@@ -64,17 +66,61 @@ the top of the *next* ``save()``, so any blocking work there stalls the
 training step.  Removing a checkpoint means thousands of individual object
 deletions, so it is handed to a background thread on rank 0.
 
-Because that thread is a daemon, an interpreter exit (notably the
-``sys.exit(0)`` in the SIGUSR1 preemption path) can abandon a deletion
+Because that thread is a daemon, an interpreter exit can abandon a deletion
 midway.  A ``.deleting`` marker is therefore written before the first object
 is removed, and any checkpoint carrying it is re-queued on the next startup,
 which makes deletion idempotent and resumable rather than leaving a partial
 directory behind forever.
+
+Completeness
+------------
+
+Retention would otherwise delete on the strength of a *reported* success:
+``on_save_checkpoint_success`` fires when the background writer says it is
+done, and nothing else in the checkpoint path ever reads a checkpoint back to
+confirm it is loadable.  Had the object store silently truncated a write the
+writer believed it completed, pruning would discard a good checkpoint in
+favour of a bad one.
+
+So before an expired checkpoint is removed, the checkpoint that displaced it
+is checked two ways.  First, each component must have its ``.metadata``, which
+DCP writes only once that component's shards are all in.  Second, every shard
+must be at least as long as that metadata says it is: ``storage_data`` records
+a file, an offset and a length for every shard written, so the high-water mark
+of ``offset + length`` is the last byte the writer claims to have put in each
+file, and a ``HEAD`` gives the byte count actually stored.  A failed check
+defers the deletion rather than cancelling it: the retained window grows by one
+instead of advancing over a checkpoint that may not load, and the next prune
+retries.
+
+A ``.metadata`` that will not parse defers too.  It was written by the same DCP
+runtime minutes earlier, so it cannot plausibly be a format from the future,
+and a corrupt or truncated one is exactly the damage being looked for.
+
+The second check is what covers a shard whose write stopped partway.  The first
+cannot see that, because ``.metadata`` is a separate, later object -- its
+presence says the writer got to the end of the component, not that every byte
+before it arrived.
+
+Neither check reads shard contents, so neither can see corruption *within* a
+shard: bytes that are present and the right length but wrong.  Detecting that
+would mean reading every byte back on every save, and it would buy little here.
+A digest computed while writing cannot catch a source buffer that was already
+wrong, TLS covers the wire, and the object store checksums its own bytes at
+rest.  Truncation is the failure mode left over, and it is the one this sees.
+
+The cost is one ``HEAD`` per shard plus the metadata read itself, on the rank-0
+deletion thread, so the training step pays nothing for it.  The metadata read is
+the only part that is not negligible: ``storage_data`` carries an entry per
+shard, so on the largest configurations that object is big enough to be worth
+watching.
 """
 
 from __future__ import annotations
 
+import bisect
 import os
+import pickle
 import queue
 import threading
 import time
@@ -87,7 +133,7 @@ from cosmos_framework.utils import distributed, log
 from cosmos_framework.utils.callback import Callback
 from cosmos_framework.utils.easy_io import easy_io
 
-#: Set by ``get_executor_gcp()`` so that submitting to the enforced clusters turns
+#: Set by ``get_executor_gcp()`` for every cluster it serves, so that submitting turns
 #: this on without every experiment config having to opt in.
 INTERVAL_MINUTES_ENV_VAR = "COSMOS3_CHECKPOINT_WALL_CLOCK_MINUTES"
 
@@ -97,6 +143,19 @@ SAVED_MARKER = "wall_clock_checkpoint.json"
 
 #: Written before deletion starts so an interrupted deletion can be resumed.
 DELETING_MARKER = "wall_clock_deleting.json"
+
+#: The state a resume needs, one DCP component per subdirectory.  ``dataloader/`` is
+#: left out: it is optional and written as pickles rather than by DCP, so it has no
+#: ``.metadata`` and its absence says nothing about whether the save finished.
+DCP_COMPONENTS = ("model", "optim", "scheduler", "trainer")
+
+#: Written by DCP once a component's shards are all in, which makes it the closest
+#: thing a checkpoint has to a completion marker.
+DCP_METADATA = ".metadata"
+
+#: How many short shards to name individually before summarizing the remainder, so a
+#: component that lost all of them reports the scale rather than flooding the log.
+SHORT_SHARD_REPORT_LIMIT = 5
 
 
 class WallClockCheckpoint(Callback):
@@ -152,8 +211,14 @@ class WallClockCheckpoint(Callback):
         self._scheduler: torch.optim.lr_scheduler.LRScheduler | None = None
         self._grad_scaler: torch.amp.GradScaler | None = None
 
-        self._delete_queue: queue.Queue[int] = queue.Queue()
+        # Each entry pairs a checkpoint to remove with the one that displaced it, whose
+        # completeness the removal is conditional on. ``None`` waives the condition.
+        self._delete_queue: queue.Queue[tuple[int, int | None]] = queue.Queue()
         self._delete_thread: threading.Thread | None = None
+        # Deletions the completeness probe declined, waiting to be taken back into the
+        # history above. Routed through a queue rather than written back directly so that
+        # the history stays owned by the one thread that prunes it.
+        self._deferred_deletions: queue.Queue[int] = queue.Queue()
 
     @staticmethod
     def _resolve_interval_minutes(interval_minutes: float | None) -> float:
@@ -253,6 +318,13 @@ class WallClockCheckpoint(Callback):
         self._next_check_iteration = iteration + stride
         if not should_save:
             return
+        if self._cp_data_window_active():
+            self._next_check_iteration = iteration + 1
+            log.info(
+                f"[WallClockCheckpoint] Deferring checkpoint at iteration {iteration}: "
+                "context-parallel data window is active."
+            )
+            return
         assert self._optimizer is not None, (
             "[WallClockCheckpoint] Optimizer reference not set — on_before_optimizer_step was never called"
         )
@@ -264,6 +336,13 @@ class WallClockCheckpoint(Callback):
         # Deliberately no finalize() here: training continues and the async DCP
         # write should stay overlapped with it.
         self.trainer.checkpointer.save(model, self._optimizer, self._scheduler, self._grad_scaler, iteration=iteration)
+
+    def _cp_data_window_active(self) -> bool:
+        """Return whether saving now would land inside an unfinished CP data window."""
+        cp_data_window = getattr(self.trainer, "_cp_data_window", None)
+        if cp_data_window is None:
+            return False
+        return bool(getattr(cp_data_window, "active", False)) or int(getattr(cp_data_window, "offset", 0)) != 0
 
     def _agree_on_save(self, should_save: bool, stride: int) -> tuple[bool, int]:
         """Replace every rank's answer with rank 0's, so the collective save stays in step.
@@ -330,10 +409,28 @@ class WallClockCheckpoint(Callback):
     def _prune(self) -> None:
         if self._keep_last <= 0:
             return
+        self._readmit_deferred()
         while len(self._wall_clock_iterations) > self._keep_last:
-            self._enqueue_delete(self._wall_clock_iterations.pop(0))
+            expired = self._wall_clock_iterations.pop(0)
+            # The newest checkpoint is what pushed this one out of the window, and it is
+            # unaffected by popping from the front, so it survives a multi-step catch-up.
+            self._enqueue_delete(expired, displaced_by=self._wall_clock_iterations[-1])
 
-    def _enqueue_delete(self, iteration: int) -> None:
+    def _readmit_deferred(self) -> None:
+        """Take back the deletions the completeness probe declined, so this prune retries them.
+
+        Each one is re-inserted in order and then immediately reconsidered against the
+        checkpoint that has since arrived, which is how retention catches up as soon as a
+        save turns up complete. Until then the window simply holds one more checkpoint.
+        """
+        while True:
+            try:
+                iteration = self._deferred_deletions.get_nowait()
+            except queue.Empty:
+                return
+            bisect.insort(self._wall_clock_iterations, iteration)
+
+    def _enqueue_delete(self, iteration: int, displaced_by: int | None = None) -> None:
         if self._delete_thread is None:
             self._delete_thread = threading.Thread(
                 target=self._delete_worker,
@@ -341,7 +438,7 @@ class WallClockCheckpoint(Callback):
                 daemon=True,
             )
             self._delete_thread.start()
-        self._delete_queue.put(iteration)
+        self._delete_queue.put((iteration, displaced_by))
         log.info(
             f"[WallClockCheckpoint] Queued iteration {iteration} for deletion "
             f"(queue depth {self._delete_queue.qsize()})."
@@ -349,17 +446,27 @@ class WallClockCheckpoint(Callback):
 
     def _delete_worker(self) -> None:
         while True:
-            iteration = self._delete_queue.get()
+            iteration, displaced_by = self._delete_queue.get()
             try:
-                self._delete_checkpoint(iteration)
+                self._delete_checkpoint(iteration, displaced_by)
             except Exception as error:  # noqa: BLE001 - deletion must never take down training
                 log.error(f"[WallClockCheckpoint] Failed to delete checkpoint at iteration {iteration}: {error}")
             finally:
                 self._delete_queue.task_done()
 
-    def _delete_checkpoint(self, iteration: int) -> None:
+    def _delete_checkpoint(self, iteration: int, displaced_by: int | None = None) -> None:
         dirname = self._checkpoint_dirname(iteration)
         if not self._safe_to_delete(iteration, dirname):
+            return
+        # Probed here rather than at enqueue time because this is the deletion thread:
+        # the same reason the deletion itself is not done on the training step.
+        if displaced_by is not None and not self._verify_complete(displaced_by):
+            log.error(
+                f"[WallClockCheckpoint] Keeping {dirname}: iteration {displaced_by}, which displaced it, "
+                "does not look complete. Retention holds one extra checkpoint rather than advancing "
+                "over one that may not load, and will retry after the next save."
+            )
+            self._deferred_deletions.put(iteration)
             return
         start_time = time.monotonic()
         deleting_marker = os.path.join(dirname, DELETING_MARKER)
@@ -422,6 +529,150 @@ class WallClockCheckpoint(Callback):
         except Exception as error:  # noqa: BLE001 - keep deleting the rest of the checkpoint
             log.warning(f"[WallClockCheckpoint] Could not remove {path}: {error}")
 
+    def _verify_complete(self, iteration: int) -> bool:
+        """Report whether a checkpoint carries its metadata and shards of the stated length.
+
+        This is the difference between a save that was *reported* successful and one that
+        left something loadable behind. It stops short of being an integrity check: a
+        shard of the right length holding the wrong bytes still passes, since proving
+        otherwise means reading the checkpoint back. What it catches is truncation, at
+        either granularity -- a component that never reached its metadata, or a shard that
+        stopped partway -- which is the shape of failure that would have us delete the
+        better of two checkpoints.
+
+        A probe that cannot be answered counts as incomplete, so a blip in the object
+        store costs a retained checkpoint rather than the one we were about to keep.
+        """
+        dirname = self._checkpoint_dirname(iteration)
+        for component in DCP_COMPONENTS:
+            component_dirname = os.path.join(dirname, component)
+            path = os.path.join(component_dirname, DCP_METADATA)
+            try:
+                if not easy_io.exists(path, backend_key=self._backend_key):
+                    log.error(f"[WallClockCheckpoint] {path} is missing; iteration {iteration} may not load.")
+                    return False
+            except Exception as error:  # noqa: BLE001 - an unanswerable probe is not a pass
+                log.warning(f"[WallClockCheckpoint] Could not probe {path}: {error}")
+                return False
+            if not self._verify_shard_sizes(component_dirname):
+                log.error(f"[WallClockCheckpoint] {component_dirname} is short; iteration {iteration} may not load.")
+                return False
+        return True
+
+    def _verify_shard_sizes(self, component_dirname: str) -> bool:
+        """Check every shard is at least as long as this component's metadata says.
+
+        Sizes come from ``HEAD`` requests, so nothing is downloaded but the metadata. Only
+        short files count as damage: a longer one is not a truncation, and padding a writer
+        chose to add is none of our business.
+
+        Metadata this cannot interpret is damage rather than an exemption, which is the
+        distinction between the two early returns below; see ``_expected_shard_sizes``.
+        """
+        metadata_path = os.path.join(component_dirname, DCP_METADATA)
+        try:
+            payload = easy_io.get(metadata_path, backend_key=self._backend_key)
+        except Exception as error:  # noqa: BLE001 - transient, and the next prune retries
+            log.warning(f"[WallClockCheckpoint] Could not read {metadata_path}: {error}")
+            return False
+        expected = self._expected_shard_sizes(payload, metadata_path)
+        if expected is None:
+            return False
+        if not expected:
+            return True
+        relative_paths = sorted(expected)
+        # ``map`` submits every request before the first result can be read, so there is no
+        # early exit to be had inside the pool: leaving the block early would still await
+        # the requests already in flight. The sizes are therefore gathered inside the pool
+        # and judged outside it, which also lets a component that lost many shards be
+        # reported as the single systemic failure it is rather than as its first casualty.
+        with ThreadPoolExecutor(max_workers=self._delete_concurrency) as pool:
+            paths = (os.path.join(component_dirname, name) for name in relative_paths)
+            sizes = list(pool.map(self._object_size, paths))
+        short: list[tuple[str, int]] = []
+        for relative_path, size in zip(relative_paths, sizes):
+            if size is None:
+                return False
+            if size < expected[relative_path]:
+                short.append((relative_path, size))
+        if not short:
+            return True
+        for relative_path, size in short[:SHORT_SHARD_REPORT_LIMIT]:
+            log.error(
+                f"[WallClockCheckpoint] {os.path.join(component_dirname, relative_path)} holds {size} bytes "
+                f"but its metadata accounts for {expected[relative_path]}; the write was cut short."
+            )
+        if len(short) > SHORT_SHARD_REPORT_LIMIT:
+            log.error(
+                f"[WallClockCheckpoint] ...and {len(short) - SHORT_SHARD_REPORT_LIMIT} further short shards under "
+                f"{component_dirname}, of {len(relative_paths)} checked."
+            )
+        return False
+
+    @staticmethod
+    def _expected_shard_sizes(payload: bytes, metadata_path: str) -> dict[str, int] | None:
+        """The byte length DCP's metadata implies for each shard file it wrote.
+
+        ``None`` means the payload could not be interpreted, which counts as damage. The
+        metadata was written by the same DCP runtime minutes earlier, so a payload that
+        will not parse is evidence the save did not land rather than evidence of a format
+        from the future -- and a corrupt or truncated ``.metadata`` is exactly the damage
+        this is looking for, so reading it as "nothing to check" would clear the successor
+        precisely when it is least trustworthy.
+
+        An empty mapping is the separate, benign case: metadata that parsed and recorded
+        no shards, which leaves nothing for the size check to compare.
+
+        Each layout is therefore recognized explicitly -- a ``str`` path with a
+        non-negative ``int`` offset and length -- and anything else defers. If a future
+        format needs supporting, teach this function that format rather than widening what
+        counts as acceptable.
+        """
+        try:
+            # Plain pickle rather than a reader: this mirrors how DCP's own
+            # FileSystemReader.read_metadata loads the file, without needing a
+            # CheckpointLoadSource built to point back at the save location.
+            metadata = pickle.loads(payload)
+        except Exception as error:  # noqa: BLE001 - a payload that will not parse is damage
+            log.error(f"[WallClockCheckpoint] Could not unpickle {metadata_path}: {error}.")
+            return None
+        storage_data = getattr(metadata, "storage_data", None)
+        if not isinstance(storage_data, dict):
+            log.error(
+                f"[WallClockCheckpoint] {metadata_path} carries no storage_data mapping "
+                f"(found {type(storage_data).__name__})."
+            )
+            return None
+        sizes: dict[str, int] = {}
+        for info in storage_data.values():
+            relative_path = getattr(info, "relative_path", None)
+            offset = getattr(info, "offset", None)
+            length = getattr(info, "length", None)
+            if (
+                not isinstance(relative_path, str)
+                or not isinstance(offset, int)
+                or not isinstance(length, int)
+                # A negative byte range is not something DCP writes, and left alone it would
+                # be worse than useless: the high-water mark below floors at zero, so one
+                # negative entry would quietly reduce a shard's expected length to nothing
+                # and pass any file at all.
+                or offset < 0
+                or length < 0
+            ):
+                log.error(
+                    f"[WallClockCheckpoint] {metadata_path} holds a storage_data entry this cannot read: {info!r}."
+                )
+                return None
+            sizes[relative_path] = max(sizes.get(relative_path, 0), offset + length)
+        return sizes
+
+    def _object_size(self, path: str) -> int | None:
+        try:
+            return easy_io.size(path, backend_key=self._backend_key)
+        except Exception as error:  # noqa: BLE001 - an unanswerable probe is not a pass
+            log.warning(f"[WallClockCheckpoint] Could not size {path}: {error}")
+            return None
+
     def _safe_to_delete(self, iteration: int, dirname: str) -> bool:
         """Refuse anything that is not unambiguously an expendable wall-clock save."""
         save_iter = self.config.checkpoint.save_iter
@@ -474,7 +725,9 @@ class WallClockCheckpoint(Callback):
             f"and {len(interrupted)} interrupted deletions from {save_dirname}."
         )
         for iteration in interrupted:
-            self._enqueue_delete(iteration)
+            # Unconditional: this checkpoint has already been partly dismantled, so there
+            # is nothing left to preserve by holding it back.
+            self._enqueue_delete(iteration, displaced_by=None)
         self._prune()
 
     def _read_markers(self, iteration: int) -> tuple[bool, bool]:

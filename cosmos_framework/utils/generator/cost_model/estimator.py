@@ -37,8 +37,8 @@ an "absorbed" price. Doing that needs the size of the step the sample will join,
 which is a property of the training config rather than of anything measured here,
 and quoting it against an assumed size produces a number whose sensitivity to the
 assumption is invisible once printed. The benchmark instead fills every measured
-step to a token floor, so ``c0`` is fitted against steps that are not dominated by
-it, and the two bracketing prices above are what gets quoted.
+step to a common token target, so ``c0`` is fitted against steps that are not
+dominated by it, and the two bracketing prices above are what gets quoted.
 
 Cost is a function of TWO variables: the understanding (text) tokens ``x`` and
 the generation (vision + sound) tokens ``y`` a sample contributes.
@@ -261,6 +261,23 @@ def descriptor_from_model(model: Any) -> tuple[OmniMoTModelDescriptor, FlopFlags
     return descriptor, flags
 
 
+def dtypes_from_model(model: Any) -> tuple[str, str, str]:
+    """Read ``(precision, fsdp_master_dtype, fsdp_reduce_dtype)`` off a built model.
+
+    Taken from the model rather than from a benchmark flag because they belong to
+    the experiment: a calibration is supposed to price what that experiment trains
+    at, and a dtype the benchmark preferred instead would be priced into every
+    coefficient without appearing anywhere in the fit.
+
+    The reduce dtype is resolved the way ``parallelize_vlm._resolve_reduce_dtype``
+    resolves it, ``None`` meaning "follow the master", so a calibration records the
+    dtype the collective ran in rather than the placeholder standing for it.
+    """
+    parallelism = model.config.parallelism
+    master = str(parallelism.fsdp_master_dtype)
+    return str(model.config.precision), master, str(parallelism.fsdp_reduce_dtype or master)
+
+
 def descriptor_from_json_file(path: str | Path, **kwargs: Any) -> OmniMoTModelDescriptor:
     """Load a HF model-config JSON file and build a FLOP descriptor from it.
 
@@ -343,7 +360,12 @@ class BucketMeasurement:
         spec: The sample shape that was run.
         steps: Timed steps (warm-up excluded).
         samples_per_step: Samples per step summed across all ranks.
-        sec_per_step: Mean wall-clock seconds per step.
+        sec_per_step: Mean wall-clock seconds per step, TRANSFORMER-ONLY: the benchmark
+            measures the VAE encode's own time via CUDA events (see
+            ``cost_model.benchmark.time_bucket`` / ``MethodTimer``) and subtracts it before
+            constructing this measurement, so the cost model fitted from it
+            (:func:`fit_token_cost_model`) never has to separate the two -- VAE cost is
+            excluded exactly rather than modeled or left mixed into the fit.
         gpu_sec_per_sample: ``sec_per_step * world_size / samples_per_step`` --
             the headline measured quantity.
         flops_per_sample: Analytic FLOPs for one sample of this shape.
@@ -475,6 +497,18 @@ class Calibration:
             over parameters, so it cannot depend on what the batch held -- but
             lowers ``c0`` by the update's cost. Incremental prices are unaffected;
             new-step prices are understated.
+        precision: Forward/backward compute dtype (``model.config.precision``).
+            The one dtype here that scales every coefficient rather than just the
+            intercept, matmuls and attention being most of a step, so a fit
+            measured at one precision prices no other. Recorded rather than pinned
+            for exactly that reason: a calibration is meant to describe the
+            experiment it was run against, not a dtype the benchmark preferred.
+        fsdp_master_dtype: Dtype of the sharded parameter copy, which the optimizer
+            reads and writes. Elementwise over parameters, so it moves ``c0`` and
+            the memory ceiling and no per-token term.
+        fsdp_reduce_dtype: Dtype the gradient reduce-scatter runs in, resolved to
+            what FSDP actually used rather than left as the ``None`` that means
+            "follow the master dtype". Parameter-sized traffic, so ``c0`` again.
         metadata: Free-form provenance (git sha, experiment name, timestamp).
     """
 
@@ -488,6 +522,9 @@ class Calibration:
     flags: FlopFlags = field(default_factory=FlopFlags)
     measurements: dict[str, BucketMeasurement] = field(default_factory=dict)
     measured_optimizer_step: bool = True
+    precision: str = "bfloat16"
+    fsdp_master_dtype: str = "float32"
+    fsdp_reduce_dtype: str = "float32"
     metadata: dict[str, Any] = field(default_factory=dict)
 
     @property
@@ -516,6 +553,9 @@ class Calibration:
                 for name, measurement in self.measurements.items()
             },
             "measured_optimizer_step": self.measured_optimizer_step,
+            "precision": self.precision,
+            "fsdp_master_dtype": self.fsdp_master_dtype,
+            "fsdp_reduce_dtype": self.fsdp_reduce_dtype,
             "metadata": self.metadata,
         }
 
@@ -540,6 +580,13 @@ class Calibration:
             # Absent in calibrations written before the update could be skipped, and
             # those all included it.
             measured_optimizer_step=bool(payload.get("measured_optimizer_step", True)),
+            # Absent in calibrations written before the dtypes were recorded. The
+            # defaults are the config's own, which every cosmos3 experiment has left
+            # alone, so an older file reads as what it almost certainly ran at --
+            # and, being uniform, still pools with a run measured today.
+            precision=str(payload.get("precision", "bfloat16")),
+            fsdp_master_dtype=str(payload.get("fsdp_master_dtype", "float32")),
+            fsdp_reduce_dtype=str(payload.get("fsdp_reduce_dtype", "float32")),
             metadata=payload.get("metadata", {}),
         )
 
@@ -577,7 +624,9 @@ class Calibration:
         size. Whether the parameter update was timed is checked for the
         same reason: pooling a run that stepped the optimizer with one that did not
         fits a single intercept to two different fixed costs, landing between them
-        and describing neither.
+        and describing neither. The three dtypes are checked as well, the compute
+        precision because it scales every coefficient and the two FSDP dtypes
+        because they move the intercept and the reduce-scatter under it.
 
         Colliding bucket names are kept, not overwritten: the same shape measured
         twice is two pieces of evidence, and least squares is the right place to
@@ -591,8 +640,8 @@ class Calibration:
 
         Raises:
             ValueError: If ``paths`` is empty, or if two runs disagree on the model,
-                the device, the peak throughput, the world size, or which per-step
-                work was timed.
+                the device, the peak throughput, the world size, a dtype, or which
+                per-step work was timed.
         """
         if not paths:
             raise ValueError("No calibration files given")
@@ -608,6 +657,9 @@ class Calibration:
             "world_size",
             "context_parallel_shard_degree",
             "measured_optimizer_step",
+            "precision",
+            "fsdp_master_dtype",
+            "fsdp_reduce_dtype",
         )
         measurements = dict(merged.measurements)
         sources = {str(first_path): merged.metadata}
@@ -618,9 +670,9 @@ class Calibration:
                     raise ValueError(
                         f"Cannot pool {path} with {first_path}: {attribute} differs "
                         f"({theirs!r} vs {mine!r}). Step times from different models, devices, "
-                        "world sizes or context-parallel degrees are not comparable, and neither "
-                        "are steps that differ on whether the parameter update was timed, so a "
-                        "shared fit would be meaningless."
+                        "world sizes, context-parallel degrees or dtypes are not comparable, and "
+                        "neither are steps that differ on whether the parameter update was timed, "
+                        "so a shared fit would be meaningless."
                     )
             if other.descriptor_fields != merged.descriptor_fields or other.flags != merged.flags:
                 log.warning(
@@ -778,11 +830,22 @@ class TokenCostModel:
             projections, expert GEMMs, and the VAE encode, which is linear in
             tokens because a token is a fixed 4096 pixels at every resolution.
         world_size: Ranks that shared the step these coefficients were measured
-            over. Every per-sample term is already a one-GPU quantity, because
-            one rank runs a sample from end to end; ``c0`` is not, because it is
-            replicated work that all the ranks did at once. Recording the scale
-            is what lets a consumer at a different one recover the per-rank
-            floor instead of dividing by its own rank count.
+            over. At ``cp_size == 1`` every per-sample term is already a one-GPU
+            (wall-clock) quantity, because one rank runs a sample from end to
+            end; ``c0`` never is, because it is replicated work that all the
+            ranks did at once. Recording the scale is what lets a consumer at a
+            different one recover the per-rank floor instead of dividing by its
+            own rank count -- see :attr:`fixed_sec_per_step_per_rank`.
+        cp_size: Context-parallel degree the coefficients were measured at. A cp
+            group of this many ranks jointly produces ONE sample (splitting its
+            sequence via all-to-all), so at ``cp_size > 1`` the per-sample terms
+            are GPU-seconds summed over that whole group, not a one-GPU quantity
+            -- dividing by ``cp_size`` recovers wall-clock latency, the way
+            dividing ``c0`` by ``world_size`` does. These are DIFFERENT divisors
+            for a reason: ``c0`` is paid once per step by every rank in the
+            world simultaneously, while a per-sample term is paid once per
+            sample by only the ``cp_size`` ranks that cooperated on it. See
+            :meth:`marginal_latency_sec` / :meth:`new_step_latency_sec`.
         fitted_terms: Which columns the fit actually used. A coefficient whose
             column is absent is fixed at zero rather than guessed, and the label
             ``DE_shared_linear`` means ``D`` and ``E`` were tied to a single rate.
@@ -818,6 +881,7 @@ class TokenCostModel:
     gpu_sec_per_und_token: float = 0.0
     gpu_sec_per_gen_token: float = 0.0
     world_size: int = 1
+    cp_size: int = 1
     fitted_terms: tuple[str, ...] = ()
     und_identifiable: bool = False
     num_points: int = 0
@@ -910,6 +974,30 @@ class TokenCostModel:
         """Predicted whole-step GPU-seconds for ``samples_per_step`` identical samples."""
         return self.fixed_gpu_sec_per_step + samples_per_step * self.marginal_gpu_sec(und_tokens, gen_tokens)
 
+    def marginal_latency_sec(self, und_tokens: int, gen_tokens: int) -> float:
+        """Wall-clock seconds :meth:`marginal_gpu_sec` costs, not GPU-seconds spent on it.
+
+        ``marginal_gpu_sec`` sums every per-sample term (``F, A, B, C, D, E``), each of which
+        is GPU-seconds over the ``cp_size`` ranks that jointly produce one sample (see
+        :attr:`cp_size`'s docstring). Because ``cp_size`` multiplies every one of those terms
+        identically, dividing the sum once is exact -- it is not an approximation that happens
+        to distribute evenly.
+        """
+        return self.marginal_gpu_sec(und_tokens, gen_tokens) / self.cp_size
+
+    def new_step_latency_sec(self, und_tokens: int, gen_tokens: int) -> float:
+        """Wall-clock seconds :meth:`new_step_gpu_sec` costs, not GPU-seconds spent on it.
+
+        NOT ``new_step_gpu_sec(...) / cp_size``: ``new_step_gpu_sec`` sums two terms with
+        DIFFERENT resource-to-latency divisors -- ``c0`` (every rank in the world pays it at
+        once, divisor ``world_size``, i.e. :attr:`fixed_sec_per_step_per_rank`) and the marginal
+        terms (only the ``cp_size`` ranks in one group pay them, divisor ``cp_size``, i.e.
+        :meth:`marginal_latency_sec`). Dividing the combined total by ``cp_size`` alone
+        under-divides ``c0`` whenever ``world_size > cp_size`` (more than one cp group in the
+        job), overstating this quantity by a factor of ``world_size / cp_size``.
+        """
+        return self.fixed_sec_per_step_per_rank + self.marginal_latency_sec(und_tokens, gen_tokens)
+
     @property
     def crossover_gen_tokens(self) -> float:
         """Clip length at which generation self-attention costs as much as linear generation work.
@@ -953,17 +1041,31 @@ class _Column:
     ``sets`` is usually a single field, but a column can drive two when the data
     cannot tell them apart and the honest response is to tie them together rather
     than to invent one or discard the other.
+
+    Attributes:
+        pinnable: Whether an unconstrained solve putting this column below zero is
+            grounds to pin it at zero and refit the rest, rather than reject the whole
+            design outright -- see :func:`_fit_without_the_floor`. True only for
+            ``c0``-and-``F``-shaped columns: fixed costs that are physically allowed to be
+            genuinely zero (no per-step floor when nothing recurs per step, no per-sample
+            setup when a sample's own launch cost is negligible). False for every rate
+            column (the three areas, ``D``, ``E``, the tied linear rate): a negative rate
+            means longer sequences ran faster, which is not a thing hardware does, so it
+            signals the sweep drifted in efficiency across its range rather than a
+            genuinely-zero mechanism, and pinning it would paper over that rather than
+            report it.
     """
 
     label: str
     value: Any
     sets: tuple[str, ...]
+    pinnable: bool = False
 
 
 # Named for the coefficient each fills rather than by letter, because the letters
 # are easy to transpose and a swapped pair here would be a silent mispricing.
-_COL_C0 = _Column("c0_per_step", lambda m: 1.0, ("fixed_gpu_sec_per_step",))
-_COL_F = _Column("F_per_sample", lambda m: m.samples_per_step, ("fixed_gpu_sec_per_sample",))
+_COL_C0 = _Column("c0_per_step", lambda m: 1.0, ("fixed_gpu_sec_per_step",), pinnable=True)
+_COL_F = _Column("F_per_sample", lambda m: m.samples_per_step, ("fixed_gpu_sec_per_sample",), pinnable=True)
 _COL_A = _Column("A_und_area", lambda m: m.und_area_per_step, ("gpu_sec_per_und_area",))
 _COL_B = _Column("B_gen_area", lambda m: m.gen_area_per_step, ("gpu_sec_per_gen_area",))
 _COL_C = _Column("C_cross_area", lambda m: m.cross_area_per_step, ("gpu_sec_per_cross_area",))
@@ -984,7 +1086,9 @@ _COL_DE_TIED = _Column(
 #
 #   E, B, c0   never dropped -- linear generation work, generation self-attention,
 #              and the per-step floor are the backbone, and all three are
-#              identifiable from a clip-length sweep alone
+#              identifiable from a clip-length sweep alone. c0 can still be PINNED
+#              to zero within a design, which is a different thing from dropping it
+#              and is handled by _fit_without_the_floor rather than by this ladder
 #   A          dropped first -- understanding causal self-attention over a caption
 #              two orders of magnitude shorter than a clip is the smallest real
 #              effect here, and the easiest for noise to swamp
@@ -1040,6 +1144,111 @@ _DESIGNS: tuple[tuple[_Column, ...], ...] = (
 )
 
 
+def _fit_without_the_floor(
+    pin_columns: tuple[_Column, ...],
+    columns: tuple[_Column, ...],
+    measurements: list[BucketMeasurement],
+    targets: list[float],
+) -> tuple[tuple[_Column, ...], list[float]] | None:
+    """Re-solve ``columns`` with ``pin_columns`` pinned at zero and dropped from the design.
+
+    Called when EVERY coefficient the unconstrained solve put below zero is pinnable (see
+    :attr:`_Column.pinnable`) -- ``c0``, ``F``, or both together. Both are fixed costs whose
+    true value is routinely zero: a calibration measured without the parameter update has
+    almost no per-step floor left to find (``c0``), and a compiled kernel's per-sample launch
+    overhead can be small enough that noise alone flips its sign (``F``) -- especially since
+    the two compete for the same limited signal (see :func:`fit_token_cost_model`'s
+    docstring), so it is common for an unconstrained solve to push one negative while pulling
+    the other artificially high to compensate. Pinning whichever one(s) went negative is the
+    constrained answer, and it costs nothing that is really there.
+
+    What it saves is the rest of the design. No design in ``_DESIGNS`` omits an intercept, so
+    degrading on a negative fixed cost walks the whole ladder -- every rung of which also has
+    one -- down to a design with fewer rate terms, which prices the token-proportional work
+    worse in exchange for a fixed cost that was zero anyway.
+
+    A negative RATE is NOT treated this way, and the asymmetry is the point: zero generation
+    attention or zero cost per token is not a thing hardware does, so a negative one means the
+    sweep drifted in efficiency across its range and the model cannot express what happened.
+    Degrading, which is the ladder's answer, is the right response to that -- which is exactly
+    why this function refuses outright (returns ``None``) unless EVERY negative coefficient in
+    the unconstrained solve was pinnable; a negative rate mixed in with a negative fixed cost
+    is still a sign the model cannot express this design, pinnable or not.
+
+    Returns ``(columns_without pin_columns, coefficients)``, or ``None`` if that design is
+    degenerate or has a negative coefficient of its own, leaving the caller to degrade as it
+    would have.
+    """
+    kept = tuple(column for column in columns if column not in pin_columns)
+    if not kept:
+        return None
+    design = [[column.value(measurement) for column in kept] for measurement in measurements]
+    if _rank(design) < len(kept):
+        return None
+    coefficients = _least_squares(design, targets)
+    if coefficients is None or any(value < 0 for value in coefficients):
+        return None
+    return kept, coefficients
+
+
+@dataclass(frozen=True)
+class _LadderFit:
+    """One design ladder's outcome: the columns and coefficients that survived, or none did."""
+
+    columns: tuple[_Column, ...] | None
+    coefficients: list[float]
+    rejected: list[str]
+    pinned: tuple[str, ...]
+
+
+def _fit_ladder(
+    designs: tuple[tuple[_Column, ...], ...],
+    usable: list[BucketMeasurement],
+    targets: list[float],
+) -> _LadderFit:
+    """Walk a design ladder, richest first, and return the first design the data can support.
+
+    Fits a step-time target against a design matrix built from ``BucketMeasurement``
+    columns, rank-checking each candidate before trusting its solve, and falling back to
+    pinning any negative FIXED cost (``c0``, ``F``, or both -- see :attr:`_Column.pinnable`)
+    at zero rather than discarding a whole design over it -- see
+    :func:`_fit_without_the_floor`. Which columns are pinnable is a property of the columns
+    themselves, not something this function is told separately.
+    """
+    rejected: list[str] = []
+    for columns in designs:
+        width = len(columns)
+        design = [[column.value(m) for column in columns] for m in usable]
+        if len(usable) < width:
+            rejected.append(f"the {width}-term design ({len(usable)} steps cannot fit {width} coefficients)")
+            continue
+        if _rank(design) < width:
+            rejected.append(
+                f"the {width}-term design (rank {_rank(design)} of {width}; the sweep cannot separate them)"
+            )
+            continue
+        coefficients = _least_squares(design, targets)
+        if coefficients is None:
+            rejected.append(f"the {width}-term design (singular)")
+            continue
+        # Note that a fixed cost is deliberately NOT capped against the shortest measured
+        # step. On a short clip it genuinely is most of the step, and clamping it there
+        # would only inflate the rate terms to compensate. Zero is the only bound, and
+        # only from below.
+        negative = [column for column, value in zip(columns, coefficients, strict=True) if value < 0]
+        if negative and all(column.pinnable for column in negative):
+            pinned = _fit_without_the_floor(tuple(negative), columns, usable, targets)
+            if pinned is not None:
+                kept, without_floor = pinned
+                return _LadderFit(kept, without_floor, rejected, tuple(column.label for column in negative))
+        if negative:
+            labels = ", ".join(column.label for column in negative)
+            rejected.append(f"the {width}-term design ({labels} came out negative)")
+            continue
+        return _LadderFit(columns, coefficients, rejected, ())
+    return _LadderFit(None, [], rejected, ())
+
+
 def fit_token_cost_model(calibration: Calibration) -> TokenCostModel:
     """Fit the general quadratic cost model to the measured steps.
 
@@ -1073,8 +1282,14 @@ def fit_token_cost_model(calibration: Calibration) -> TokenCostModel:
     impossible; it would mean longer sequences run faster. When the
     unconstrained solve produces one it is a symptom of efficiency drift across
     the sweep -- short steps are launch- and bandwidth-bound and retire tokens
-    more slowly per unit of work than long ones -- not a real measurement, so
-    the fit degrades to a simpler design instead of keeping it.
+    more slowly per unit of work than long ones -- or simply of a term that is
+    truly zero, as ``c0`` nearly is on a run that skipped the parameter update.
+    For a slope the fit degrades to a simpler design, drift being something the
+    model cannot express rather than something to clamp. For the intercept it does
+    not: a floor of zero is ordinary, no rung of the ladder is without one, and
+    degrading over it ends at the single tied linear rate that cannot express
+    attention at all. So a lone negative ``c0`` is pinned to zero and the rest of
+    the design is kept -- see :func:`_fit_without_the_floor`.
 
     Args:
         calibration: Measurements from one or more benchmark runs.
@@ -1089,7 +1304,11 @@ def fit_token_cost_model(calibration: Calibration) -> TokenCostModel:
         if measurement.gpu_sec_per_step > 0 and measurement.spec.total_tokens > 0 and measurement.samples_per_step > 0
     ]
     if not usable:
-        return TokenCostModel(world_size=calibration.world_size, source="unfitted (no usable measurements)")
+        return TokenCostModel(
+            world_size=calibration.world_size,
+            cp_size=max(calibration.context_parallel_shard_degree, 1),
+            source="unfitted (no usable measurements)",
+        )
 
     targets = [measurement.gpu_sec_per_step for measurement in usable]
     und_lengths = [measurement.spec.text_tokens for measurement in usable]
@@ -1101,6 +1320,9 @@ def fit_token_cost_model(calibration: Calibration) -> TokenCostModel:
         # ``c0`` comes out of the fit in GPU-seconds over this many ranks, and is
         # meaningless as a wall-clock figure without it.
         world_size=calibration.world_size,
+        # Divisor for the per-sample terms' latency form -- see cp_size's docstring
+        # on why this is a different divisor than world_size, not the same one.
+        cp_size=max(calibration.context_parallel_shard_degree, 1),
         num_points=len(usable),
         distinct_und_tokens=distinct_und,
         distinct_gen_tokens=distinct_gen,
@@ -1108,7 +1330,12 @@ def fit_token_cost_model(calibration: Calibration) -> TokenCostModel:
         gen_token_range=(min(gen_lengths), max(gen_lengths)),
     )
 
-    def finish(columns: tuple[_Column, ...], coefficients: list[float], rejected: list[str]) -> TokenCostModel:
+    def finish(
+        columns: tuple[_Column, ...],
+        coefficients: list[float],
+        rejected: list[str],
+        pinned: tuple[str, ...] = (),
+    ) -> TokenCostModel:
         fields = {
             "fixed_gpu_sec_per_step": 0.0,
             "fixed_gpu_sec_per_sample": 0.0,
@@ -1125,6 +1352,8 @@ def fit_token_cost_model(calibration: Calibration) -> TokenCostModel:
         source = f"{len(columns)}-term fit over {len(usable)} steps"
         if _COL_DE_TIED.label in labels:
             source += "; the caption never varied, so D was tied to E rather than measured"
+        if pinned:
+            source += f"; {', '.join(pinned)} pinned to zero (the unconstrained solve put {'them' if len(pinned) > 1 else 'it'} below it)"
         # Say WHY each richer design lost, not just that it did. "Unidentifiable"
         # and "came out negative" call for different fixes -- another sweep axis
         # versus a suspect measurement -- so collapsing them into one message sends
@@ -1151,31 +1380,9 @@ def fit_token_cost_model(calibration: Calibration) -> TokenCostModel:
             max_residual_fraction=worst,
         )
 
-    rejected: list[str] = []
-    for columns in _DESIGNS:
-        width = len(columns)
-        design = [[column.value(m) for column in columns] for m in usable]
-        if len(usable) < width:
-            rejected.append(f"the {width}-term design ({len(usable)} steps cannot fit {width} coefficients)")
-            continue
-        if _rank(design) < width:
-            rejected.append(
-                f"the {width}-term design (rank {_rank(design)} of {width}; the sweep cannot separate them)"
-            )
-            continue
-        coefficients = _least_squares(design, targets)
-        if coefficients is None:
-            rejected.append(f"the {width}-term design (singular)")
-            continue
-        # Note that c0 is deliberately NOT capped against the shortest measured
-        # step. On a short clip the fixed cost genuinely is most of the step, and
-        # clamping it there would only inflate the per-token terms to compensate.
-        negative = [column.label for column, value in zip(columns, coefficients, strict=True) if value < 0]
-        if negative:
-            rejected.append(f"the {width}-term design ({', '.join(negative)} came out negative)")
-            continue
-        return finish(columns, coefficients, rejected)
-
+    ladder = _fit_ladder(_DESIGNS, usable, targets)
+    if ladder.columns is not None:
+        return finish(ladder.columns, ladder.coefficients, ladder.rejected, ladder.pinned)
     return replace(base, source="unfitted (every candidate design was degenerate or unphysical)")
 
 
@@ -1224,6 +1431,30 @@ class CostEstimate:
             outside it. Worth separating because a sweep that never varied
             caption length cannot price any other caption length, however well
             it does on clip length.
+        cp_size: Context-parallel degree the calibration was measured at.
+        latency_sec_per_sample: Wall-clock seconds the sample adds, as opposed to
+            ``marginal_gpu_sec_per_sample``'s GPU-seconds (total resource across
+            every rank). These are the SAME number at ``cp_size == 1``: the
+            regression's ``world_size`` cancels out of the fitted coefficients by
+            construction (targets and the ``samples_per_step`` design column both
+            scale with it), so a marginal GPU-second already equals a marginal
+            wall-clock second there. It does NOT cancel for ``cp_size``, because
+            ``samples_per_step`` counts DISTINCT samples (divided by ``cp_size``
+            in the benchmark, since a cp group shares one sample) while
+            ``gpu_sec_per_step`` still sums busy time over every rank including
+            the ``cp_size`` in each group -- so the fitted marginal price is
+            inflated by exactly ``cp_size`` relative to the wall-clock cost of
+            the sample the ``cp_size`` ranks jointly produced. Dividing back out
+            recovers latency; the GPU-second figure is left undivided on purpose,
+            since CP genuinely costs more total resource per sample (the
+            communication in exchange for less memory and, usually, less
+            latency), and that is what the resource-cost columns are for.
+        new_step_latency_sec_per_sample: The wall-clock form of
+            ``new_step_gpu_sec_per_sample``. NOT that value divided by ``cp_size``:
+            ``new_step_gpu_sec_per_sample`` sums ``c0`` (every rank in the world pays it
+            at once, so its latency divisor is ``world_size``) with the marginal terms
+            (only the ``cp_size`` ranks in one group pay them). See
+            :meth:`TokenCostModel.new_step_latency_sec`.
     """
 
     name: str
@@ -1240,6 +1471,9 @@ class CostEstimate:
     und_fraction: float = 0.0
     extrapolated_tokens: bool = False
     extrapolated_und_tokens: bool = False
+    cp_size: int = 1
+    latency_sec_per_sample: float = 0.0
+    new_step_latency_sec_per_sample: float = 0.0
 
     @property
     def residual_fraction(self) -> float | None:
@@ -1373,6 +1607,8 @@ def estimate(
     marginal_tflops = sample_flops / marginal_gpu_sec / 1e12 if marginal_gpu_sec > 0 else 0.0
     mfu = marginal_tflops / calibration.peak_tflops_per_gpu if calibration.peak_tflops_per_gpu > 0 else 0.0
 
+    new_step_gpu_sec = model.new_step_gpu_sec(und, gen)
+
     return CostEstimate(
         name=spec.name,
         spec=spec,
@@ -1381,11 +1617,16 @@ def estimate(
         marginal_gpu_sec_per_sample=marginal_gpu_sec,
         marginal_tflops_per_gpu=marginal_tflops,
         source=model.source,
-        new_step_gpu_sec_per_sample=model.new_step_gpu_sec(und, gen),
+        new_step_gpu_sec_per_sample=new_step_gpu_sec,
         mfu=mfu,
         measured_marginal_gpu_sec_per_sample=measured_marginal,
         quadratic_fraction=quadratic_fraction,
         und_fraction=und_fraction,
         extrapolated_tokens=model.extrapolates(und, gen),
         extrapolated_und_tokens=model.extrapolates_und(und),
+        cp_size=model.cp_size,
+        # NOT new_step_gpu_sec / cp_size -- see TokenCostModel.new_step_latency_sec's
+        # docstring for why that under-divides c0 whenever world_size > cp_size.
+        latency_sec_per_sample=model.marginal_latency_sec(und, gen),
+        new_step_latency_sec_per_sample=model.new_step_latency_sec(und, gen),
     )

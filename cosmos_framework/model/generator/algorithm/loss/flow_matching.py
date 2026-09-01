@@ -10,9 +10,26 @@ passed explicitly instead of being read from ``self``.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+
 import torch
 
+from cosmos_framework.data.generator.action.utils.unified_action_schema import (
+    UNIFIED_ACTION_DIM,
+    UNIFIED_ACTION_SLOT_GROUPS,
+)
 from cosmos_framework.model.generator.diffusion.rectified_flow import RectifiedFlow
+
+ACTION_SLOT_SAMPLE_LOSS_KEY = "_action_slot_sample_loss"
+ACTION_SLOT_SAMPLE_COUNT_KEY = "_action_slot_sample_count"
+
+
+@dataclass(frozen=True)
+class ActionSlotLossStats:
+    """Detached per-sample slot losses and contribution indicators, shape ``[B,S]``."""
+
+    sample_loss: torch.Tensor
+    sample_count: torch.Tensor
 
 
 def compute_flow_matching_loss(
@@ -26,6 +43,7 @@ def compute_flow_matching_loss(
     raw_action_dim: list[torch.Tensor] | None = None,
     action_valid_mask: list[torch.Tensor] | None = None,
     normalize_by_active: bool = False,
+    action_slot_stats: ActionSlotLossStats | None = None,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """Compute flow matching loss for a modality.
 
@@ -43,6 +61,7 @@ def compute_flow_matching_loss(
         rectified_flow: The rectified flow object for time weighting.
         tensor_kwargs_fp32: Dict of dtype/device kwargs forwarded to
             ``rectified_flow.train_time_weight``.
+        raw_action_dim: Optional unpadded Action width for each sample.
         action_valid_mask: Optional per-sample channel-validity masks. Invalid
             action channels are excluded from both numerator and denominator.
         normalize_by_active: When True, normalize per-instance loss by the count of
@@ -50,6 +69,8 @@ def compute_flow_matching_loss(
             ``sum / active_count`` semantics needed for distillation critics where
             conditioned frames contribute no signal and should not dilute the
             denominator.
+        action_slot_stats: Optional collector for detached normalized per-sample
+            losses over the canonical unified Action slots.
 
     Returns:
         tuple: A tuple containing two elements:
@@ -65,7 +86,6 @@ def compute_flow_matching_loss(
     # tw_i gets the same shape so w(σ_t) broadcasts element-wise over non-T dims.
     per_instance_losses = []
     per_instance_weighted_losses = []
-
     for i in range(len(pred)):
         T_i = condition_mask[i].shape[0]
         sqerr_i = (pred[i] - target[i]) ** 2  # vision:[C,T,H,W]  action/sound:[T,D]
@@ -95,14 +115,37 @@ def compute_flow_matching_loss(
         ts_i = timesteps[i, :T_i] if timesteps.dim() > 1 else timesteps[i]  # DF:[T_i]  TF:[1]
         tw_i = rectified_flow.train_time_weight(ts_i, tensor_kwargs_fp32)  # DF:[T_i]  TF:[1]
         tw_i = tw_i.reshape(-1, *([1] * (condition_mask[i].ndim - 1)))  # vision:[T_i,1,1]  action/sound:[T_i,1]
+        weighted_sqerr_i = sqerr_i * tw_i * noisy_mask_i
         if normalize_by_active or slot_mask_i is not None:
-            per_instance_weighted_losses.append((sqerr_i * tw_i * noisy_mask_i).sum() / active_count)
+            per_instance_weighted_losses.append(weighted_sqerr_i.sum() / active_count)
         else:
-            per_instance_weighted_losses.append((sqerr_i * tw_i * noisy_mask_i).mean())
+            per_instance_weighted_losses.append(weighted_sqerr_i.mean())
+
+        if (
+            action_slot_stats is not None
+            and raw_action_dim is not None
+            and raw_action_dim[i] is not None
+            and slot_mask_i is not None
+        ):
+            with torch.no_grad():
+                is_unified = torch.as_tensor(raw_action_dim[i], device=weighted_sqerr_i.device).eq(UNIFIED_ACTION_DIM)
+                is_unified = is_unified.to(dtype=torch.float32)
+                detached_sqerr = weighted_sqerr_i.detach()
+                normalization_count = (
+                    noisy_mask_i.sum(dtype=torch.float32) if normalize_by_active else noisy_mask_i.numel()
+                )
+                sample_slot_losses: list[torch.Tensor] = []
+                sample_slot_counts: list[torch.Tensor] = []
+                for _, slot in UNIFIED_ACTION_SLOT_GROUPS:
+                    active_slot_channels = slot_mask_i[:, slot].sum(dtype=torch.float32)
+                    sample_count = active_slot_channels.gt(0).to(dtype=torch.float32) * is_unified
+                    slot_denominator = (normalization_count * active_slot_channels).clamp(min=1)
+                    slot_loss_sum = detached_sqerr[..., slot].sum(dtype=torch.float32)
+                    sample_slot_losses.append(slot_loss_sum / slot_denominator * sample_count)
+                    sample_slot_counts.append(sample_count)
+                action_slot_stats.sample_loss[i].add_(torch.stack(sample_slot_losses))
+                action_slot_stats.sample_count[i].add_(torch.stack(sample_slot_counts))
 
     per_instance_loss = torch.stack(per_instance_losses)  # [B]
     per_instance_weighted_loss = torch.stack(per_instance_weighted_losses)  # [B]
-    return (
-        per_instance_weighted_loss.mean(),  # []
-        per_instance_loss,  # [B]
-    )
+    return per_instance_weighted_loss.mean(), per_instance_loss

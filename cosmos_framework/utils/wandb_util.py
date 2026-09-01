@@ -121,6 +121,15 @@ def init_wandb(config: Config, model: ImaginaireModel) -> None:
 
     if wandb.run:
         wandb.run.config.update({f"JOB_INFO/{k}": v for k, v in JOB_INFO.items()}, allow_val_change=True)
+        # Reproducibility: record the resolved layout / packing env flags (e.g. COSMOS_PACK_TRUE_PACKING,
+        # COSMOS_PACK_FLAT_BUDGET, COSMOS_PACK_SEED) in the run config so every run's packing knobs are
+        # queryable in W&B. Prefix-scanned rather than hardcoded, so new flags are captured automatically;
+        # a no-op for runs/projects that do not set any of them.
+        pack_env = {
+            f"packing_env/{k}": v for k, v in sorted(os.environ.items()) if k.startswith(("COSMOS_PACK", "COSMOS_VLM"))
+        }
+        if pack_env:
+            wandb.run.config.update(pack_env, allow_val_change=True)
 
 
 def _read_wandb_id(config_job: JobConfig, config_checkpoint: CheckpointConfig) -> str | None:

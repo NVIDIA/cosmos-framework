@@ -283,7 +283,8 @@ def _decode_transfer_pixel_row(
 
     ``decode`` defaults to the model's main VAE; a joint camera + LiDAR sample passes
     ``model.decode_lidar`` for range clips because the two streams have separate VAEs.
-    LiDAR never uses the per-camera encode path, even when the camera items do.
+    LiDAR callers pass ``decode_per_view=False``: V0 and V1 are both 1x temporal on a
+    single range view, not 4x camera-major WAN clips.
     """
     decode = decode if decode is not None else model.decode
     if decode_per_view is None:

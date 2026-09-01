@@ -125,15 +125,22 @@ jobs:
   generator-inference-smoke:
     needs: pre-commit
     runs-on: [self-hosted, gpu, h200]
-    # 90 (not 60) since the Nano step gained the two ModelOpt FP8 cases: a 20 GB
-    # checkpoint on a cold cache plus two more full-width runs.
-    timeout-minutes: 90
+    # 105 (not 60) since the Nano step gained the three ModelOpt FP8 cases (two
+    # parallelism layouts + mixed-precision diffusion steps): a 20 GB checkpoint
+    # on a cold cache plus three more full-width runs.
+    timeout-minutes: 105
     env:
       HF_TOKEN: ${{ secrets.HF_TOKEN }}
       HF_HUB_DISABLE_XET: "1"
       # Both steps use the `throughput` preset, whose layout is derived from
       # world_size (cfgp=1, cp=1, dp_shard=world_size), so the width is free.
       TEST_MAX_GPUS: "4"
+      # This is the job whose stated purpose includes FP8 coverage: promote the
+      # cannot-reach-nvidia/Cosmos3-Experimental skip to a hard failure, so a
+      # token rotation or a permissions change turns the job red instead of
+      # silently dropping all three FP8 cases. Forks and local runs (which do
+      # not set this) keep the skip behaviour.
+      REQUIRE_FP8: "1"
     steps:
       - uses: actions/checkout@v6
 
@@ -144,10 +151,12 @@ jobs:
 
       # One inference call over t2vs (+sound), action policy, and forward_dynamics; checks each output.
       # Plus the ModelOpt static-FP8 Nano checkpoint in both parallelism layouts
-      # (FSDP-sharded and replicated). The FP8 checkpoint lives in the
-      # access-controlled nvidia/Cosmos3-Experimental repo, so those two cases SKIP
-      # unless HF_TOKEN can read it — check the log for "no access to
-      # nvidia/Cosmos3-Experimental" before trusting a green run to have covered FP8.
+      # (FSDP-sharded and replicated) and once more with FP8 mixed-precision
+      # diffusion steps (W8A16 edge steps; exact schedule asserted from the
+      # MIXED_PRECISION_TRACE log). The FP8 checkpoint lives in the
+      # access-controlled nvidia/Cosmos3-Experimental repo; elsewhere those three
+      # cases SKIP unless HF_TOKEN can read it, but REQUIRE_FP8=1 above makes the
+      # skip a hard failure here, so a green run is guaranteed to have covered FP8.
       # -s streams the live process log.
       # Reuse the same input-asset cache dir as the unittest job.
       - name: Nano inference smoke (t2vs + action policy + forward_dynamics + FP8, 4 GPU)

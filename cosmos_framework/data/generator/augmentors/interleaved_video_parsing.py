@@ -1,6 +1,7 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: OpenMDW-1.1
 
+import math
 import random
 from collections.abc import Callable
 from typing import Optional
@@ -28,10 +29,15 @@ def _create_video_decoder(
     seek_mode: str,
     num_ffmpeg_threads: int,
     transforms: _PostDecodeTransforms = None,
+    output_dtype: torch.dtype = torch.uint8,
 ) -> tuple[VideoDecoder, _PostDecodeTransforms]:
     global _SUPPORTS_VIDEO_DECODER_TRANSFORMS, _WARNED_POST_DECODE_TRANSFORMS
 
-    kwargs = {"seek_mode": seek_mode, "num_ffmpeg_threads": num_ffmpeg_threads}
+    kwargs = {
+        "seek_mode": seek_mode,
+        "num_ffmpeg_threads": num_ffmpeg_threads,
+        "output_dtype": output_dtype,
+    }
     if transforms is None:
         return VideoDecoder(video, **kwargs), None
 
@@ -129,12 +135,14 @@ class VideoTransferAlignedFullFramesParsing(VideoParsingWithFullFrames):
         video: bytes,
         frame_indices: list[int],
         transforms: list[Resize] | None = None,
+        output_dtype: torch.dtype = torch.uint8,
     ) -> torch.Tensor:  # returns [C,T,H,W]
         video_decoder, post_decode_transforms = _create_video_decoder(
             video,
             self.seek_mode,
             self.video_decode_num_threads,
             transforms,
+            output_dtype,
         )
         try:
             frame_batch = video_decoder.get_frames_at(frame_indices)
@@ -583,3 +591,201 @@ class VideoTransferAlignedChunkedFramesParsing(VideoTransferAlignedFullFramesPar
         data_dict.pop("chunk_start_frame", None)
         data_dict.pop("chunk_end_frame", None)
         return data_dict
+
+
+class VideoTransferAlignedSelectedControlParsing(VideoTransferAlignedChunkedFramesParsing):
+    """Decode a selected caption window and only its preselected persisted control, when required."""
+
+    _PERSISTED_MODALITIES = {"depth", "seg"}
+
+    def __init__(self, input_keys: list, output_keys: Optional[list] = None, args: Optional[dict] = None) -> None:
+        assert input_keys == ["metas", "video"], (
+            "VideoTransferAlignedSelectedControlParsing requires exactly [metas, video]; "
+            "persisted_control is selected dynamically."
+        )
+        super().__init__(input_keys=input_keys, output_keys=output_keys, args=args)
+        self.fps_tolerance = float(self.args.get("aligned_fps_tolerance", 1e-3))
+        self._expected_decode_metadata: list[tuple[bytes, dict]] = []
+
+    @staticmethod
+    def _required_number(meta: dict, key: str) -> float | None:
+        value = meta.get(key)
+        if value is None:
+            return None
+        return float(value)
+
+    def _fps_matches_with_one_frame_tolerance(
+        self,
+        first_fps: float,
+        second_fps: float,
+        frame_count: int | None,
+    ) -> bool:
+        if math.isclose(first_fps, second_fps, rel_tol=0.0, abs_tol=self.fps_tolerance):
+            return True
+        if first_fps <= 0.0 or second_fps <= 0.0 or frame_count is None or frame_count < 1:
+            return False
+        duration_delta = abs(frame_count / first_fps - frame_count / second_fps)
+        one_frame_seconds = max(1.0 / first_fps, 1.0 / second_fps)
+        return duration_delta <= one_frame_seconds + 1e-9
+
+    def _validate_persisted_metadata(self, data_dict: dict, persisted_meta: dict) -> bool:
+        rgb_meta = data_dict[self.meta_key]
+        for key in ("width", "height", "framerate"):
+            if self._required_number(rgb_meta, key) is None or self._required_number(persisted_meta, key) is None:
+                log.warning(
+                    f"Selected persisted control requires RGB/control descriptor field {key!r}. "
+                    f"url: {data_dict.get('__url__')}, key: {data_dict.get('__key__')}",
+                    rank0_only=False,
+                )
+                return False
+        for key in ("width", "height"):
+            rgb_value = self._required_number(rgb_meta, key)
+            persisted_value = self._required_number(persisted_meta, key)
+            if rgb_value != persisted_value:
+                log.warning(
+                    f"Selected persisted control {key}={persisted_value} does not match RGB {key}={rgb_value}. "
+                    f"url: {data_dict.get('__url__')}, key: {data_dict.get('__key__')}",
+                    rank0_only=False,
+                )
+                return False
+        rgb_fps = self._required_number(rgb_meta, "framerate")
+        persisted_fps = self._required_number(persisted_meta, "framerate")
+        assert rgb_fps is not None and persisted_fps is not None
+        frame_counts = [self._required_number(meta, "nb_frames") for meta in (rgb_meta, persisted_meta)]
+        comparable_frame_count = (
+            int(min(value for value in frame_counts if value is not None))
+            if any(value is not None for value in frame_counts)
+            else None
+        )
+        if not self._fps_matches_with_one_frame_tolerance(rgb_fps, persisted_fps, comparable_frame_count):
+            log.warning(
+                f"Selected persisted control fps={persisted_fps} does not match RGB fps={rgb_fps}. "
+                f"url: {data_dict.get('__url__')}, key: {data_dict.get('__key__')}",
+                rank0_only=False,
+            )
+            return False
+        return True
+
+    def _probe_video_len(self, video: bytes) -> int:
+        """Validate descriptor geometry/FPS against the TorchCodec stream header."""
+        decoder = VideoDecoder(
+            video,
+            seek_mode=self.seek_mode,
+            num_ffmpeg_threads=self.video_decode_num_threads,
+        )
+        try:
+            decoder_len = len(decoder)
+            expected = next((meta for payload, meta in self._expected_decode_metadata if payload is video), None)
+            if expected is not None:
+                actual = {
+                    "width": decoder.metadata.width,
+                    "height": decoder.metadata.height,
+                    "framerate": decoder.metadata.average_fps,
+                    "nb_frames": decoder_len,
+                }
+                for key in ("width", "height", "nb_frames"):
+                    expected_value = self._required_number(expected, key)
+                    if expected_value is not None and expected_value != float(actual[key]):
+                        raise ValueError(
+                            f"Decoded {key}={actual[key]} does not match descriptor {key}={expected_value}."
+                        )
+                expected_fps = self._required_number(expected, "framerate")
+                actual_fps = float(actual["framerate"])
+                if expected_fps is not None and not self._fps_matches_with_one_frame_tolerance(
+                    expected_fps,
+                    actual_fps,
+                    decoder_len,
+                ):
+                    raise ValueError(
+                        f"Decoded framerate={actual_fps} does not match descriptor framerate={expected_fps}."
+                    )
+            return decoder_len
+        finally:
+            del decoder
+
+    @staticmethod
+    def _normalize_depth_frames(frames: torch.Tensor) -> torch.Tensor:  # frames: [C,T,H,W], returns [3,T,H,W]
+        if frames.shape[0] not in (1, 3):
+            raise ValueError(f"Depth video must decode to one or three channels, got {tuple(frames.shape)}.")
+        if frames.dtype != torch.float32:
+            raise ValueError(f"Depth video must decode to float32, got {frames.dtype}.")
+        if not torch.isfinite(frames).all():
+            raise ValueError("Depth video contains non-finite values.")
+        min_value = frames.min().item()
+        max_value = frames.max().item()
+        if min_value < 0.0 or max_value > 1.0:
+            raise ValueError(f"Depth video values must be in [0, 1], got [{min_value}, {max_value}].")
+        if frames.shape[0] == 1:
+            frames = frames.expand(3, -1, -1, -1)  # [3,T,H,W]
+        return frames.mul(255.0)  # [3,T,H,W]
+
+    def _decode_frames_at(
+        self,
+        video: bytes,
+        frame_indices: list[int],
+        transforms: list[Resize] | None = None,
+        output_dtype: torch.dtype = torch.uint8,
+    ) -> torch.Tensor:  # returns [C,T,H,W]
+        if video is getattr(self, "_depth_control_video", None):
+            output_dtype = torch.float32
+        return super()._decode_frames_at(video, frame_indices, transforms, output_dtype)  # [C,T,H,W]
+
+    def __call__(self, data_dict: dict) -> dict | None:
+        modality = data_dict.get("_selected_control_modality")
+        control_bytes: bytes | None = None
+        if modality not in {"edge", "blur", "depth", "seg"}:
+            log.warning(f"Unknown selected transfer modality {modality!r}.", rank0_only=False)
+            return None
+        persisted = modality in self._PERSISTED_MODALITIES
+        if persisted:
+            control_bytes = data_dict.get("persisted_control")
+            persisted_meta = data_dict.get("_persisted_control_meta")
+            if not isinstance(control_bytes, bytes) or not isinstance(persisted_meta, dict):
+                log.warning(f"Missing selected persisted control for modality {modality!r}.", rank0_only=False)
+                return None
+            if not self._validate_persisted_metadata(data_dict, persisted_meta):
+                return None
+
+        self.control_video_keys = ["persisted_control"] if persisted else []
+        self._depth_control_video = control_bytes if modality == "depth" else None
+        self._expected_decode_metadata = [(data_dict["video"], data_dict[self.meta_key])]
+        if persisted:
+            self._expected_decode_metadata.append(
+                (data_dict["persisted_control"], data_dict["_persisted_control_meta"])
+            )
+        try:
+            parsed = super().__call__(data_dict)
+        finally:
+            self.control_video_keys = []
+            self._depth_control_video = None
+            self._expected_decode_metadata = []
+        if parsed is None:
+            return None
+        if not persisted:
+            return parsed
+
+        persisted_video = parsed.get("persisted_control")
+        if not isinstance(persisted_video, dict) or not isinstance(persisted_video.get("video"), torch.Tensor):
+            return None
+        control_frames = persisted_video["video"]  # [C,T,H,W]
+        rgb_frames = parsed["video"]["video"]  # [C,T,H,W]
+        if control_frames.shape[1] != rgb_frames.shape[1]:
+            log.warning("RGB and persisted control decoded unequal frame counts.", rank0_only=False)
+            return None
+        if modality == "depth":
+            try:
+                control_frames = self._normalize_depth_frames(control_frames)  # [3,T,H,W]
+            except ValueError as error:
+                log.warning(str(error), rank0_only=False)
+                return None
+            parsed["depth"] = control_frames  # [3,T,H,W]
+        else:
+            if control_frames.shape[0] != 3:
+                log.warning(
+                    f"Semantic video must decode to three channels, got {tuple(control_frames.shape)}.",
+                    rank0_only=False,
+                )
+                return None
+            parsed["segmentation"] = control_frames  # [3,T,H,W]
+        parsed.pop("persisted_control", None)
+        return parsed

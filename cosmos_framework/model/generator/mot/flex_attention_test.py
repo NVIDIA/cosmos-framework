@@ -77,13 +77,14 @@ def _metadata_from_tokens(
     device: str = "cpu",
     und_samples: list[int] | None = None,
     attention_scope: str = "all_views",
+    decomposed_temporal_window_seconds: float | None = None,
 ) -> FlexMetadata:
     """Build a :class:`FlexMetadata` from an explicit list of GEN token descriptors.
 
     Each token dict has ``s`` (sample), ``t`` (frame), ``v`` (view), ``noisy`` (bool),
     and optionally ``control`` (bool, defaults ``False``) marking a control (e.g. WSM)
-    token. Positions beyond ``len(tokens)`` are padding and get the ``-1`` / ``False``
-    sentinels.
+    token, and ``ts`` (float, defaults to ``t``) marking its real capture time. Positions
+    beyond ``len(tokens)`` are padding and get the ``-1`` / ``-1.0`` / ``False`` sentinels.
 
     ``und_samples`` prepends the UND half of the fused key stream: one sample id per
     UND token, ``-1`` for UND padding. That id is the only field the gen->und rule
@@ -112,6 +113,11 @@ def _metadata_from_tokens(
         dtype=torch.bool,
         device=device,
     )
+    timestamp = torch.tensor(
+        [-1.0] * num_und + [float(tok.get("ts", tok["t"])) for tok in tokens] + [-1.0] * pad,
+        dtype=torch.float32,
+        device=device,
+    )
     return FlexMetadata(
         seq_len=num_und + seq_len,
         sample_id=torch.tensor(
@@ -121,8 +127,10 @@ def _metadata_from_tokens(
         view_id=col("v"),
         is_noisy=is_noisy,
         is_control=is_control,
+        timestamp=timestamp,
         num_und=num_und,
         attention_scope=cast(AttentionScope, attention_scope),
+        decomposed_temporal_window_seconds=decomposed_temporal_window_seconds,
     )
 
 
@@ -166,6 +174,7 @@ def _reference_visibility(
     seq_len: int,
     und_samples: list[int] | None = None,
     attention_scope: AttentionScope = "all_views",
+    decomposed_temporal_window_seconds: float | None = None,
 ) -> torch.Tensor:
     """Ground-truth ``[seq_len, num_und + seq_len]`` bool ``M[q, k] = q attends to k``.
 
@@ -174,10 +183,15 @@ def _reference_visibility(
     ``und_samples`` the matrix gains the gen->und columns on the left, where the rule is
     "same sample" alone, and is rectangular as the fused mask is.
 
-    ``attention_scope`` narrows the RGB<->RGB reach (conditioning<->conditioning and
-    noisy->any RGB alike); it never widens a control token's reach, which is always its
+    ``attention_scope`` narrows the sensor<->sensor reach, regardless of whether a token is
+    conditioning or noisy; it never widens a control token's reach, which is always its
     own view, any frame. Spelled out per scope rather than derived from the
     implementation's gates, so a rule that changes shape has to be restated here.
+
+    ``decomposed_temporal_window_seconds`` swaps ``"decomposed"``'s "same frame index" half
+    for "any key's ``ts`` within that many seconds at or before the query's", using each
+    token dict's ``ts`` (defaulting to its frame index, as :func:`_metadata_from_tokens`
+    does).
     """
     und_samples = list(und_samples or [])
     num_und = len(und_samples)
@@ -185,14 +199,19 @@ def _reference_visibility(
     def desc(i: int) -> dict:
         if i < len(tokens):
             return tokens[i]
-        return dict(s=-1, t=-1, v=-1, noisy=False, control=False)
+        return dict(s=-1, t=-1, v=-1, ts=-1.0, noisy=False, control=False)
 
     def in_scope(dq: dict, dk: dict) -> bool:
         if attention_scope == "all_views":
             return True
         if attention_scope == "same_view":
             return dq["v"] == dk["v"]
-        return dq["v"] == dk["v"] or dq["t"] == dk["t"]
+        if decomposed_temporal_window_seconds is None:
+            same_instant = dq["t"] == dk["t"]
+        else:
+            gap = dq.get("ts", dq["t"]) - dk.get("ts", dk["t"])
+            same_instant = 0 <= gap <= decomposed_temporal_window_seconds
+        return dq["v"] == dk["v"] or same_instant
 
     m = torch.zeros(seq_len, num_und + seq_len, dtype=torch.bool)
     for q in range(seq_len):
@@ -210,12 +229,8 @@ def _reference_visibility(
                 ok = k_control and same_view  # control Q -> control K: own view; never RGB K.
             elif k_control:
                 ok = same_view  # RGB Q (any) -> control K: own view, any frame.
-            elif not dq["noisy"] and not dk["noisy"]:
-                ok = in_scope(dq, dk)  # RGB conditioning -> RGB conditioning: within scope.
-            elif dq["noisy"]:
-                ok = in_scope(dq, dk)  # RGB noisy -> any RGB (noisy or conditioning): within scope.
-            else:  # RGB conditioning query -> RGB noisy key: never
-                ok = False
+            else:
+                ok = in_scope(dq, dk)  # RGB Q -> RGB K: within scope, independent of noise state.
             m[q, num_und + k] = ok
     return m
 
@@ -621,7 +636,55 @@ def test_multiview_mask_mod_noisy_scopes_cut_the_camera_grid() -> None:
     #                                                  (t0,v0) (t0,v1) (t1,v0) (t1,v1)
     assert seen["all_views"] == [True, True, True, True]
     assert seen["same_view"] == [True, False, True, False]
-    assert seen["same_view_or_frame"] == [True, True, True, False]
+    assert seen["decomposed"] == [True, True, True, False]
+
+
+@pytest.mark.L0
+def test_multiview_mask_mod_decomposed_temporal_window_replaces_same_frame() -> None:
+    """With a window set, decomposed's temporal half compares ``ts`` instead of ``t``.
+
+    Fractional and out-of-order ``ts`` values (a query does not have to be the later of a
+    pair) exercise the ``0 <= q_ts - k_ts <= window`` form directly: only a key captured at
+    or before the query, within the window, is in reach through this half of the scope.
+    """
+    tokens = [
+        dict(s=0, t=0, v=0, ts=1.0, noisy=True),  # query
+        dict(s=0, t=1, v=1, ts=0.6, noisy=True),  # different view, 0.4s before: in a 0.5s window
+        dict(s=0, t=2, v=1, ts=1.4, noisy=True),  # different view, 0.4s after: q_ts - k_ts < 0
+        dict(s=0, t=3, v=1, ts=0.3, noisy=True),  # different view, 0.7s before: outside a 0.5s window
+    ]
+    metadata = _metadata_from_tokens(tokens, attention_scope="decomposed", decomposed_temporal_window_seconds=0.5)
+    m = _mask_mod_to_dense(metadata)[0].tolist()
+
+    assert m == [True, True, False, False]
+
+    # A window of 0 recovers "same instant", stated in real time rather than frame index.
+    same_instant_tokens = [
+        dict(s=0, t=0, v=0, ts=1.0, noisy=True),
+        dict(s=0, t=5, v=1, ts=1.0, noisy=True),  # different frame index, same timestamp
+    ]
+    zero_window = _metadata_from_tokens(
+        same_instant_tokens, attention_scope="decomposed", decomposed_temporal_window_seconds=0.0
+    )
+    assert _mask_mod_to_dense(zero_window)[0, 1]
+
+
+@pytest.mark.L0
+def test_multiview_mask_mod_decomposed_temporal_window_tolerates_float_rounding() -> None:
+    """``timestamp`` is ``frame_id * seconds_per_frame`` in float32, so a pair meant to land
+    exactly on the window boundary can round a hair past it; the comparison has to tolerate
+    that noise without also admitting a key that is genuinely outside the window.
+    """
+    window = 0.5
+    tokens = [
+        dict(s=0, t=0, v=0, ts=1.0, noisy=True),  # query
+        dict(s=0, t=1, v=1, ts=1.0 - window - 5e-5, noisy=True),  # a hair past the boundary: still in reach
+        dict(s=0, t=2, v=1, ts=1.0 - window - 5e-3, noisy=True),  # genuinely outside the window
+    ]
+    metadata = _metadata_from_tokens(tokens, attention_scope="decomposed", decomposed_temporal_window_seconds=window)
+    m = _mask_mod_to_dense(metadata)[0].tolist()
+
+    assert m == [True, True, False]
 
 
 @pytest.mark.L0
@@ -650,7 +713,7 @@ def test_multiview_mask_mod_specific_rules() -> None:
     ``same_view`` is deliberately not the default ``all_views``: it is what makes the
     RGB<->RGB reach and the RGB<->control reach comparable (both view-gated), so the
     only thing distinguishing them below is that control ignores the frame RGB<->RGB
-    would otherwise need ``same_view_or_frame`` to cross.
+    would otherwise need ``decomposed`` to cross.
     """
     tokens = [
         dict(s=0, t=0, v=0, noisy=False),  # 0
@@ -664,13 +727,12 @@ def test_multiview_mask_mod_specific_rules() -> None:
     ]
     m = _mask_mod_to_dense(_metadata_from_tokens(tokens, attention_scope="same_view"))
 
-    # RGB conditioning (t0,v0) reaches RGB conditioning of its own view at any frame
-    # (index 4, a different frame) and control of its own view at any frame (indices
-    # 2, 6), but not a different view (indices 3, 7), and never a noisy key (index 1).
-    assert m[0, 0] and m[0, 4]
+    # RGB conditioning (t0,v0) reaches every RGB key of its own view at any frame,
+    # including noisy keys (indices 1, 5), and control of its own view at any frame
+    # (indices 2, 6), but not a different view (indices 3, 7).
+    assert m[0, 0] and m[0, 1] and m[0, 4] and m[0, 5]
     assert m[0, 2] and m[0, 6]
     assert not m[0, 3] and not m[0, 7]
-    assert not m[0, 1]
 
     # RGB noisy (t0,v0) reaches every RGB key of its own view, conditioning or noisy
     # alike, at any frame (indices 0, 1, 4, 5), and control of its own view at any
@@ -895,6 +957,7 @@ def _mask_items_pack(*, num_views: int, with_lidar: bool, with_view_metadata: bo
             tokens=[torch.zeros(1) for _ in token_shapes],  # list[[1]]
             token_shapes=token_shapes,
             condition_mask=[torch.ones(shape[0]) for shape in token_shapes],  # list[[T]]
+            seconds_per_frame=[1.0 for _ in token_shapes],
         )
 
     camera_shape = (2 * num_views, 1, 1)
@@ -957,6 +1020,7 @@ def test_mask_items_accept_a_lidar_only_pack() -> None:
         tokens=[torch.zeros(1), torch.zeros(1)],  # list[[1]]
         token_shapes=[(3, 1, 1), (3, 1, 1)],
         condition_mask=[torch.ones(3), torch.ones(3)],  # list[[3]]
+        seconds_per_frame=[1.0, 1.0],
     )
     items = _multiview_mask_items_for_test(
         PackedSequence(
@@ -1058,7 +1122,11 @@ def _case_items(case: dict) -> list[list[MaskItem]]:
     return items_per_sample
 
 
-def _build_case_metadata(case: dict, attention_scope: AttentionScope = "all_views") -> tuple[FlexMetadata, int]:
+def _build_case_metadata(
+    case: dict,
+    attention_scope: AttentionScope = "all_views",
+    decomposed_temporal_window_seconds: float | None = None,
+) -> tuple[FlexMetadata, int]:
     """Run the builder on a case; returns the metadata and the real token count."""
     offsets = _case_offsets(case)
     num_real = int(offsets[-1])
@@ -1068,6 +1136,7 @@ def _build_case_metadata(case: dict, attention_scope: AttentionScope = "all_view
         items_per_sample=_case_items(case),
         device=torch.device("cpu"),
         attention_scope=attention_scope,
+        decomposed_temporal_window_seconds=decomposed_temporal_window_seconds,
     )
     return metadata, num_real
 
@@ -1171,10 +1240,10 @@ def test_build_multiview_flex_metadata_reaches_the_control_item_by_view() -> Non
     assert m[target_noisy_v0f1, control_v0f1]
     assert not m[target_noisy_v0f1, control_v1f0], "a different view's control token must stay masked"
 
-    # A conditioning RGB target token reaches control the same way, but never a
-    # noisy RGB key of its own item.
+    # A conditioning RGB target token reaches control the same way and also reaches
+    # noisy RGB keys within its attention scope.
     assert m[target_cond_v0f0, control_v0f0] and m[target_cond_v0f0, control_v0f1]
-    assert not m[target_cond_v0f0, target_noisy_v0f1], "conditioning queries never attend to noisy keys"
+    assert m[target_cond_v0f0, target_noisy_v0f1]
 
     # Control never reaches RGB, in either direction.
     assert not m[control_v0f0, target_cond_v0f0]
@@ -1247,6 +1316,45 @@ def test_mask_item_rejects_condition_mask_length() -> None:
     """A mask that does not cover the item's latent axis is malformed on its own."""
     with pytest.raises(ValueError, match="expected 4"):
         MaskItem(token_shape=(4, 1, 2), condition_mask=_condition_mask(3, []), num_views=2)
+
+
+@pytest.mark.L0
+def test_build_multiview_flex_metadata_rejects_items_disagreeing_on_seconds_per_frame() -> None:
+    """Two items sharing a view offset must tick at the same rate, or one (view, frame) cell
+    would resolve to two different timestamps depending on which item's token landed there."""
+    shape = (2, 1, 1)
+    items = [
+        [
+            MaskItem(token_shape=shape, condition_mask=_condition_mask(2, []), seconds_per_frame=1.0 / 7.5),
+            MaskItem(token_shape=shape, condition_mask=_condition_mask(2, []), seconds_per_frame=1.0 / 10.0),
+        ]
+    ]
+    with pytest.raises(ValueError, match="seconds_per_frame"):
+        build_multiview_flex_metadata(
+            seq_len=4,
+            full_q_offsets=torch.tensor([0, 4], dtype=torch.int32),
+            items_per_sample=items,
+            device=torch.device("cpu"),
+        )
+
+
+@pytest.mark.L0
+def test_build_multiview_flex_metadata_tolerates_float_noise_in_seconds_per_frame() -> None:
+    """Two items computing the same rate from different fractions must not spuriously clash."""
+    shape = (2, 1, 1)
+    items = [
+        [
+            MaskItem(token_shape=shape, condition_mask=_condition_mask(2, []), seconds_per_frame=1.0 / 7.5),
+            MaskItem(token_shape=shape, condition_mask=_condition_mask(2, []), seconds_per_frame=4.0 / 30.0),
+        ]
+    ]
+    metadata = build_multiview_flex_metadata(
+        seq_len=4,
+        full_q_offsets=torch.tensor([0, 4], dtype=torch.int32),
+        items_per_sample=items,
+        device=torch.device("cpu"),
+    )
+    assert metadata.seq_len == 4
 
 
 @pytest.mark.L0
@@ -1331,11 +1439,36 @@ def test_build_multiview_flex_metadata_keeps_a_second_sensor_off_the_camera_grid
 
 
 @pytest.mark.L0
-def test_joint_camera_lidar_rejects_factorized_same_view_or_frame() -> None:
-    """same_view_or_frame pairs tokens by frame index; camera and LiDAR do not share one."""
+def test_joint_camera_lidar_rejects_the_decomposed_scope() -> None:
+    """decomposed pairs tokens by frame index by default; camera and LiDAR do not share one."""
     case = _MULTIVIEW_CASES["joint_camera_and_lidar"]
-    with pytest.raises(ValueError, match="same_view_or_frame"):
-        _build_case_metadata(case, attention_scope="same_view_or_frame")
+    with pytest.raises(ValueError, match="decomposed"):
+        _build_case_metadata(case, attention_scope="decomposed")
+
+
+@pytest.mark.L0
+def test_joint_camera_lidar_decomposed_scope_allowed_with_a_temporal_window() -> None:
+    """A temporal window compares real capture time instead, which is defined across sensors."""
+    case = _MULTIVIEW_CASES["joint_camera_and_lidar"]
+    metadata, _ = _build_case_metadata(case, attention_scope="decomposed", decomposed_temporal_window_seconds=0.0)
+    m = _mask_mod_to_dense(metadata)
+
+    # Layout (see _MULTIVIEW_CASES["joint_camera_and_lidar"]): camera control 0..5, camera
+    # noisy 6..11 (view 0, 2 spatial tokens/frame), LiDAR control 12..19, LiDAR noisy 20..27
+    # (view 1, 2 spatial tokens/frame). Both items default to seconds_per_frame=1.0, so a
+    # window of 0s reproduces same-frame-index pairing, now across the two view offsets.
+    camera_noisy_frame1 = 8
+    lidar_noisy_frame1 = 22
+    lidar_noisy_frame2 = 24
+    assert metadata.frame_id[camera_noisy_frame1] == 1
+    assert metadata.frame_id[lidar_noisy_frame1] == 1
+    assert metadata.frame_id[lidar_noisy_frame2] == 2
+    assert metadata.view_id[camera_noisy_frame1] == 0
+    assert metadata.view_id[lidar_noisy_frame1] == 1
+
+    assert m[camera_noisy_frame1, lidar_noisy_frame1], "same real capture time, different views: in reach"
+    assert m[lidar_noisy_frame1, camera_noisy_frame1]
+    assert not m[camera_noisy_frame1, lidar_noisy_frame2], "a different instant stays out of a 0s window"
 
 
 @pytest.mark.L0
@@ -1864,7 +1997,7 @@ def test_a_noisy_scope_reaches_the_block_mask_as_sparsity(
     kept = {
         "all_views": 1.0,
         "same_view": 1 / num_views,
-        "same_view_or_frame": (frames_per_view + num_views - 1) / (num_views * frames_per_view),
+        "decomposed": (frames_per_view + num_views - 1) / (num_views * frames_per_view),
     }[attention_scope]
 
     block_mask = build_multiview_block_mask(

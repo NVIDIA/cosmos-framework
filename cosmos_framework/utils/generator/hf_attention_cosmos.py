@@ -25,6 +25,27 @@ Strict guards (raise rather than silently break loss parity):
   ``is_causal=True`` (and no padding, i.e. Qwen3-VL VLM training with
   ``max_batch_size=1``). A 4-D additive mask would need explicit handling.
 - ``max_length_{q,k}`` given as tensors — see :func:`hf_attention_cosmos`.
+
+True sequence packing: when the batch is a single
+``B=1`` concatenated row, the standard ``cu_seq_lens_{q,k}`` / ``max_length_{q,k}``
+metadata are threaded down as kwargs
+(``VLMModel.training_step`` -> ``Qwen3VLForConditionalGeneration.forward(**kwargs)`` ->
+... -> this adapter). When present, we run **block-diagonal varlen causal** attention
+via ``cosmos_framework.model.attention``'s varlen path (one segment per packed sample plus the FP8
+pad tail) so each sample attends causally only within itself — semantically identical to
+the per-row causal mask of padded batching. ``attention_mask`` stays ``None`` in this mode
+(it is popped in ``training_step`` and ``create_causal_mask`` early-exits under cosmos).
+
+Backend: with ``is_causal=True`` + ``CausalType.TopLeft`` + varlen, the only compatible
+``cosmos_framework.model.attention`` backend is **NATTEN** (``blackwell-fmha`` on GB200/sm100,
+``hopper-fmha`` on sm90, ``cutlass-fmha`` fallback) — NOT Flash: flash2 varlen is banned
+and flash2/flash3 only accept ``BottomRight``/``DontCare`` causal, while cuDNN varlen is
+not integrated (see ``cosmos_framework/attention/*/checks.py``).
+
+Narrow causal-varlen contract: true-packed text uses block-diagonal causal
+self-attention with shared Q/KV boundaries (``B=1``, ``q_len == kv_len``). Those
+extra guards apply only when ``module.is_causal`` is true; the existing non-causal
+Qwen vision-tower varlen path remains supported.
 """
 
 from __future__ import annotations
@@ -92,6 +113,14 @@ def hf_attention_cosmos(
             "cosmos adapter does not support sliding_window. Qwen3-VL VLM training should pass None here."
         )
 
+    legacy_varlen_keys = {"cu_seqlens", "max_seqlen"} & kwargs.keys()
+    if legacy_varlen_keys:
+        raise ValueError(
+            f"legacy varlen aliases {sorted(legacy_varlen_keys)} are unsafe because they can silently "
+            "select dense attention; use cu_seq_lens_q/cu_seq_lens_k and max_length_q/max_length_k"
+        )
+
+    is_causal = bool(getattr(module, "is_causal", False))
     is_varlen = cu_seq_lens_q is not None or cu_seq_lens_k is not None
     if is_varlen:
         if cu_seq_lens_q is None or cu_seq_lens_k is None:
@@ -108,10 +137,29 @@ def hf_attention_cosmos(
             raise ValueError(
                 f"varlen attention needs both max_length_q and max_length_k, got {max_length_q=}, {max_length_k=}."
             )
+        if is_causal and cu_seq_lens_q is not cu_seq_lens_k:
+            raise ValueError("causal true-packed self-attention requires one shared Q/KV boundary tensor")
         # cosmos_framework.model.attention requires int32; HF's vision tower already builds cu_seqlens as
         # int32 (except under torch.jit tracing), so this is normally a no-op and never a sync.
         cu_seq_lens_q = cu_seq_lens_q.to(torch.int32)
         cu_seq_lens_k = cu_seq_lens_k.to(torch.int32)
+        if is_causal:
+            if query.shape[0] != 1 or key.shape[0] != 1 or value.shape[0] != 1:
+                raise NotImplementedError(
+                    "causal varlen attention is reserved for a single B=1 true-packed row; "
+                    f"got q={query.shape[0]}, k={key.shape[0]}, v={value.shape[0]}"
+                )
+            if not (query.shape[-2] == key.shape[-2] == value.shape[-2]):
+                raise NotImplementedError(
+                    "causal varlen attention requires self-attention with q_len == k_len == v_len; "
+                    f"got q={query.shape[-2]}, k={key.shape[-2]}, v={value.shape[-2]}"
+                )
+            if cu_seq_lens_q.shape != cu_seq_lens_k.shape or max_length_q != max_length_k:
+                raise ValueError(
+                    "causal varlen attention requires identical Q/KV segmentation; "
+                    f"got shapes {cu_seq_lens_q.shape}/{cu_seq_lens_k.shape} and "
+                    f"max lengths {max_length_q}/{max_length_k}"
+                )
 
     # BHSD -> BSHD
     q = query.transpose(1, 2)
@@ -133,7 +181,6 @@ def hf_attention_cosmos(
         k = k.to(torch.bfloat16)
         v = v.to(torch.bfloat16)
 
-    is_causal = bool(getattr(module, "is_causal", False))
     causal_type = CausalType.TopLeft if is_causal else None
 
     out = imag_attention(

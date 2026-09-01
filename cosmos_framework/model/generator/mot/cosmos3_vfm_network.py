@@ -15,12 +15,16 @@ from cosmos_framework.configs.base.defaults.flex_attention import (
     AttentionScope,
     FlexBackendPreference,
 )
+from cosmos_framework.model.generator.mot.action_io_projector import (
+    ACTION_IO_PROJECTOR_DOMAIN_AWARE,
+    ACTION_IO_PROJECTOR_TYPES,
+    build_action_io_projector,
+)
 from cosmos_framework.model.generator.mot.attention import SplitInfo, build_packed_sequence
 from cosmos_framework.model.generator.mot.context_parallel_utils import (
     get_context_parallel_last_hidden_state,
     get_context_parallel_sharded_sequence,
 )
-from cosmos_framework.model.generator.mot.domain_aware_linear import DomainAwareLinear
 from cosmos_framework.model.generator.mot.flex_attention import (
     FlexBackend,
     MaskItem,
@@ -51,6 +55,7 @@ class Cosmos3VFMNetworkConfig(PretrainedConfig):
         enable_fps_modulation=False,
         enable_vision_modality_embeddings: bool = False,
         enable_media_modality_embedding: bool = False,
+        enable_action_modality_embedding: bool = True,
         enable_sound_modality_embedding: bool = True,
         base_fps=24,
         vit_max_num_patch_per_side=70,
@@ -63,8 +68,10 @@ class Cosmos3VFMNetworkConfig(PretrainedConfig):
         use_multiview_flex_attention: bool = False,
         flex_attention_backend: FlexBackendPreference = "auto",
         attention_scope: AttentionScope = "all_views",
+        decomposed_temporal_window_seconds: float | None = None,
         action_dim=32,
         num_embodiment_domains=32,
+        action_io_projector_type: str = ACTION_IO_PROJECTOR_DOMAIN_AWARE,
         temporal_compression_factor_vision=4,
         temporal_compression_factor_action=1,
         natten_parameter_list=None,
@@ -89,6 +96,7 @@ class Cosmos3VFMNetworkConfig(PretrainedConfig):
         self.enable_fps_modulation = enable_fps_modulation
         self.enable_vision_modality_embeddings = enable_vision_modality_embeddings
         self.enable_media_modality_embedding = enable_media_modality_embedding
+        self.enable_action_modality_embedding = enable_action_modality_embedding
         self.enable_sound_modality_embedding = enable_sound_modality_embedding
         if self.enable_vision_modality_embeddings and self.enable_media_modality_embedding:
             raise ValueError(
@@ -105,6 +113,7 @@ class Cosmos3VFMNetworkConfig(PretrainedConfig):
         self.use_multiview_flex_attention = use_multiview_flex_attention
         self.flex_attention_backend = flex_attention_backend
         self.attention_scope: AttentionScope = attention_scope
+        self.decomposed_temporal_window_seconds = decomposed_temporal_window_seconds
         self.temporal_compression_factor_vision = temporal_compression_factor_vision
         self.natten_parameter_list = natten_parameter_list
         self.video_temporal_causal = video_temporal_causal
@@ -114,6 +123,12 @@ class Cosmos3VFMNetworkConfig(PretrainedConfig):
         self.action_gen = action_gen  # whether to generate action tokens
         self.action_dim = action_dim
         self.num_embodiment_domains = num_embodiment_domains
+        if action_io_projector_type not in ACTION_IO_PROJECTOR_TYPES:
+            raise ValueError(
+                f"Unsupported action_io_projector_type={action_io_projector_type!r}; "
+                f"expected one of {ACTION_IO_PROJECTOR_TYPES}."
+            )
+        self.action_io_projector_type = action_io_projector_type
         self.temporal_compression_factor_action = temporal_compression_factor_action
         if self.action_gen:
             assert self.vision_gen, (
@@ -178,12 +193,16 @@ class Cosmos3VFMNetwork(PreTrainedModel):
                 torch.device("cuda", torch.cuda.current_device()) if torch.cuda.is_available() else torch.device("cpu")
             )
             self.flex_backend = resolve_flex_backend(device, config.flex_attention_backend)
+            temporal_window = config.decomposed_temporal_window_seconds
+            temporal_window_note = (
+                f", with a {temporal_window}s decomposed temporal window" if temporal_window is not None else ""
+            )
             log.info(
                 f"Multiview FlexAttention is running on the {self.flex_backend.name} backend "
                 f"(flex_attention_backend={config.flex_attention_backend!r}), with a "
                 f"{self.flex_backend.block_size} block mask over a GEN stream padded to "
                 f"{self.flex_backend.full_seq_alignment} tokens. Noisy tokens attend to the "
-                f"noisy tokens of their sample under scope {config.attention_scope!r}."
+                f"noisy tokens of their sample under scope {config.attention_scope!r}{temporal_window_note}."
             )
 
         if config.vision_gen:
@@ -221,10 +240,16 @@ class Cosmos3VFMNetwork(PreTrainedModel):
         if config.action_gen:
             self.action_dim = config.action_dim
             self.num_embodiment_domains = config.num_embodiment_domains
-            self.action2llm = DomainAwareLinear(self.action_dim, self.hidden_size, self.num_embodiment_domains)
-            self.llm2action = DomainAwareLinear(self.hidden_size, self.action_dim, self.num_embodiment_domains)
+            self.action_io_projector_type = config.action_io_projector_type
+            self.action2llm = build_action_io_projector(
+                self.action_io_projector_type, self.action_dim, self.hidden_size, self.num_embodiment_domains
+            )
+            self.llm2action = build_action_io_projector(
+                self.action_io_projector_type, self.hidden_size, self.action_dim, self.num_embodiment_domains
+            )
 
-            self.action_modality_embed = nn.Parameter(torch.zeros(self.hidden_size))
+            if config.enable_action_modality_embedding:
+                self.action_modality_embed = nn.Parameter(torch.zeros(self.hidden_size))  # [hidden_size]
 
         if config.sound_gen:
             self.sound_dim = config.sound_dim
@@ -269,19 +294,17 @@ class Cosmos3VFMNetwork(PreTrainedModel):
                 torch.nn.init.trunc_normal_(self.media_modality_embed, std=std, a=-3 * std, b=3 * std)
 
         if self.config.action_gen:
-            # DomainAwareLinear uses embeddings for weights, so we initialize them differently
             # action2llm: input_size=action_dim, output_size=hidden_size
             std = 1.0 / math.sqrt(self.action_dim)
-            torch.nn.init.trunc_normal_(self.action2llm.fc.weight, std=std, a=-3 * std, b=3 * std)
-            torch.nn.init.zeros_(self.action2llm.bias.weight)
+            self.action2llm.initialize_action_parameters(std)
 
             # llm2action: input_size=hidden_size, output_size=action_dim
             std = 1.0 / math.sqrt(self.hidden_size)
-            torch.nn.init.trunc_normal_(self.llm2action.fc.weight, std=std, a=-3 * std, b=3 * std)
-            torch.nn.init.zeros_(self.llm2action.bias.weight)
+            self.llm2action.initialize_action_parameters(std)
 
-            std = 1.0 / math.sqrt(self.hidden_size)
-            torch.nn.init.trunc_normal_(self.action_modality_embed, std=std, a=-3 * std, b=3 * std)
+            if self.config.enable_action_modality_embedding:
+                std = 1.0 / math.sqrt(self.hidden_size)
+                torch.nn.init.trunc_normal_(self.action_modality_embed, std=std, a=-3 * std, b=3 * std)  # [hidden_size]
 
         if self.config.sound_gen:
             # sound2llm: input_size=sound_dim, output_size=hidden_size
@@ -851,7 +874,7 @@ class Cosmos3VFMNetwork(PreTrainedModel):
             )  # [1,patch_latent_dim]
             probe = llm2vae(vae2llm(probe))  # [1,patch_latent_dim]
             # Per-item zeros of the right shape, so callers iterating the predictions
-            # (_get_velocity, _compute_flow_matching_loss) see the shapes they expect; the
+            # (_get_velocity, compute_flow_matching_loss) see the shapes they expect; the
             # probe is folded into the first so the projections stay in the autograd graph.
             if modality is not None and modality.tokens is not None:
                 preds = [torch.zeros_like(tok) for tok in modality.tokens]
@@ -896,11 +919,14 @@ class Cosmos3VFMNetwork(PreTrainedModel):
         )
         # Flow interpolation keeps actions in FP32; cast here to match the action encoder's model dtype.
         packed_tokens_action = packed_tokens_action.to(target_dtype)  # [B_action*T_action,action_dim]
-        packed_tokens_action = self.action2llm(packed_tokens_action, per_token_domain_id)
-
-        packed_tokens_action = packed_tokens_action + self.action_modality_embed.view(
-            1, -1
+        packed_tokens_action = self.action2llm(
+            packed_tokens_action, per_token_domain_id
         )  # [B_action*T_action,hidden_size]
+
+        if self.config.enable_action_modality_embedding:
+            packed_tokens_action = packed_tokens_action + self.action_modality_embed.view(
+                1, -1
+            )  # [B_action*T_action,hidden_size]
 
         has_noisy_actions = has_noisy_tokens(action)
         if has_noisy_actions:
@@ -940,12 +966,12 @@ class Cosmos3VFMNetwork(PreTrainedModel):
                 [1, self.action_dim], device=last_hidden_state.device, dtype=last_hidden_state.dtype
             )  # [1,action_dim]
             dummy_domain_id = torch.zeros([1], device=last_hidden_state.device, dtype=torch.long)  # [1]
-            preds_action = self.action2llm(preds_action, dummy_domain_id) + self.action_modality_embed.view(
-                1, -1
-            )  # [1,hidden_size]
+            preds_action = self.action2llm(preds_action, dummy_domain_id)  # [1,hidden_size]
+            if self.config.enable_action_modality_embedding:
+                preds_action = preds_action + self.action_modality_embed.view(1, -1)  # [1,hidden_size]
             preds_action = self.llm2action(preds_action, dummy_domain_id)  # [1,action_dim]
             # Return a list of per-sample zero tensors with correct shapes (e.g. (T, action_dim)),
-            # so downstream code (_get_velocity, _compute_flow_matching_loss) that iterates over preds_action
+            # so downstream code (_get_velocity, compute_flow_matching_loss) that iterates over preds_action
             # gets properly-shaped tensors. Without this, the dummy tensor (1, action_dim)
             # would cause a size mismatch when concatenating vision+action velocities.
             if action is not None and action.tokens is not None:
@@ -1256,6 +1282,7 @@ class Cosmos3VFMNetwork(PreTrainedModel):
                 num_und=causal_seq.shape[0],
                 causal_offsets=causal_offsets,
                 attention_scope=self.config.attention_scope,
+                decomposed_temporal_window_seconds=self.config.decomposed_temporal_window_seconds,
             )
             # Carried with the mask because its kernels are only valid for the block size the
             # mask was built at; two_way_attention hands both to flex_attention, which
@@ -1400,6 +1427,12 @@ def _multiview_mask_items(packed_seq: PackedSequence) -> list[list[MaskItem]]:
     deciding whether a LiDAR item is control, and vice versa. A stream contributing a
     single item per sample -- every T2V/I2V/V2V batch, and either stream of a one-item-each
     joint pack -- marks nothing, so ``flex_attention``'s control rules stay unreachable.
+
+    Each item's ``seconds_per_frame`` comes from ``ModalityData.seconds_per_frame``, the real
+    time between two of that item's latent frames (``sequence.py``'s ``_pack_grid_tokens``).
+    Camera and LiDAR items disagree here even on a shared frame index, since the two sensors
+    run at different rates -- what ``decomposed_temporal_window_seconds`` needs to compare the
+    two streams by actual capture time rather than by frame index.
     """
     num_samples = len(packed_seq.sample_lens)
     vision = packed_seq.vision
@@ -1449,6 +1482,7 @@ def _multiview_mask_items(packed_seq: PackedSequence) -> list[list[MaskItem]]:
                         num_views=views_per_vision_item[vision_cursor],
                         view_offset=0,
                         is_control=item_in_stream < num_vision - 1,
+                        seconds_per_frame=vision.seconds_per_frame[vision_cursor],
                     )
                 )
                 vision_cursor += 1
@@ -1461,6 +1495,7 @@ def _multiview_mask_items(packed_seq: PackedSequence) -> list[list[MaskItem]]:
                         num_views=1,
                         view_offset=lidar_view_offset,
                         is_control=item_in_stream < num_lidar - 1,
+                        seconds_per_frame=lidar.seconds_per_frame[lidar_cursor],
                     )
                 )
                 lidar_cursor += 1

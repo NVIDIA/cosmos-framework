@@ -413,7 +413,7 @@ class DiffusionCache:
 
     @dataclass(frozen=True, slots=True)
     class Config:
-        diffusion_cache_thresh: float = 0.35
+        diffusion_cache_thresh: float = 0.25
         """Accumulated relative-L1 budget before a full eval is forced (shared across
         the per-step CFG-pass pathways).  Larger ⇒ more skipping ⇒ faster but
         lower fidelity."""
@@ -425,6 +425,9 @@ class DiffusionCache:
         """Retention: always run full for the first ``ret_steps`` steps (warmup)."""
         cutoff_from_end: int = 1
         """Always run full for the last ``cutoff_from_end`` steps (0 disables)."""
+        max_consecutive_cached: int = 2
+        """Maximum consecutive residual reuses per CFG pathway before forcing a
+        full evaluation. ``0`` disables the limit."""
         power_exp: float = 3.0
         """Exponent of the ``1/|f|^power_exp`` clean-signal power prior in the SEA filter."""
         timestep_max: float = 1000.0
@@ -433,6 +436,14 @@ class DiffusionCache:
         def __post_init__(self) -> None:
             if self.residual_order < 0:
                 raise ValueError(f"residual_order must be >= 0, got {self.residual_order}")
+            if (
+                isinstance(self.max_consecutive_cached, bool)
+                or not isinstance(self.max_consecutive_cached, int)
+                or self.max_consecutive_cached < 0
+            ):
+                raise ValueError(
+                    f"max_consecutive_cached must be a nonnegative integer, got {self.max_consecutive_cached}"
+                )
 
         @classmethod
         def from_overrides(cls, overrides: dict[str, Any] | None) -> "DiffusionCache.Config":
@@ -457,6 +468,7 @@ class DiffusionCache:
         accumulated: float = 0.0
         prev_indicator: list[torch.Tensor] | None = None
         history: list[tuple[int, LMCacheEntry]] = field(default_factory=list)
+        consecutive_cached: int = 0
 
     @dataclass(slots=True)
     class State:
@@ -580,6 +592,7 @@ class DiffusionCache:
                 and _cache_entry_matches(ps.history[-1][1], in_causal, in_full, gen_only)
             )
             if reuse:
+                ps.consecutive_cached += 1
                 und_out = ps.history[-1][1][0]  # understanding: absolute reuse (not a residual)
                 gen_delta = _extrapolate_gen(ps.history, self.state.step, self.config.residual_order)
                 out_pack = dict(pack)
@@ -591,6 +604,7 @@ class DiffusionCache:
 
             outputs = original_lm_forward(pack, *args, **kwargs)
             if caching:
+                ps.consecutive_cached = 0
                 out_pack = outputs[0] if isinstance(outputs, tuple) else outputs
                 entry = _lm_cache_entry(in_causal, in_full, out_pack["causal_seq"], out_pack["full_only_seq"])
                 ps.history.append((self.state.step, entry))
@@ -637,9 +651,13 @@ class DiffusionCache:
         step = self.state.step
         cfg = self.config
 
+        max_consecutive_forced = bool(
+            cfg.max_consecutive_cached and ps.consecutive_cached >= cfg.max_consecutive_cached
+        )
         forced = (
             step < cfg.ret_steps
             or step >= self.num_steps - cfg.cutoff_from_end
+            or max_consecutive_forced
             or not ps.history
             or indicator is None
             or ps.prev_indicator is None
@@ -813,7 +831,8 @@ def install_diffusion_cache(
         f"Enabled diffusion cache (diffusion-time inference cache) "
         f"max_num_steps={max_num_steps} "
         f"diffusion_cache_thresh={cfg.diffusion_cache_thresh} ret_steps={cfg.ret_steps} "
-        f"cutoff_from_end={cfg.cutoff_from_end} power_exp={cfg.power_exp} "
+        f"cutoff_from_end={cfg.cutoff_from_end} "
+        f"max_consecutive_cached={cfg.max_consecutive_cached} power_exp={cfg.power_exp} "
         f"residual_order={cfg.residual_order}"
     )
     return cache

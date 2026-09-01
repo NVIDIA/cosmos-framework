@@ -14,7 +14,7 @@ from typing import Literal, get_args
 
 import attrs
 
-# Which noisy tokens a noisy token attends to, among those of its own sample.
+# Which RGB tokens an RGB token attends to, among those of its own sample.
 #
 # The noisy square is the largest quadrant of the multiview mask -- every other rule is already
 # confined to a single ``(frame, view)`` cell -- so this is the choice that sets what the mask
@@ -25,10 +25,12 @@ import attrs
 #   the default. Cost is (FVS)^2.
 # * ``"same_view"``: ``1/V`` of them. Each camera only attends to its own noisy tokens. Cost
 #   is V*(FS)^2.
-# * ``"same_view_or_frame"``: Each camera attends to its own noisy tokens plus the same frame in
-#   every other camera. Cost is V*(FS)^2 + F*(VS)^2. Not allowed on a joint camera + LiDAR pack:
-#   the two streams do not share a frame index.
-AttentionScope = Literal["all_views", "same_view", "same_view_or_frame"]
+# * ``"decomposed"``: Each camera attends to its own noisy tokens plus the same frame in
+#   every other camera, which decomposes the square into a temporal half and a spatial one.
+#   Cost is V*(FS)^2 + F*(VS)^2. Rejected on a joint camera + LiDAR pack unless
+#   ``decomposed_temporal_window_seconds`` is set: the two streams do not share a frame
+#   index, but they do share real capture time, which the window compares instead.
+AttentionScope = Literal["all_views", "same_view", "decomposed"]
 
 # The scopes of ``AttentionScope`` at runtime, which the annotation itself is not.
 ATTENTION_SCOPES = get_args(AttentionScope)
@@ -49,18 +51,28 @@ class FlexAttentionMaskConfig:
     view.
     """
 
-    # Which same-kind (RGB) tokens of its sample a token attends to: conditioning tokens
-    # reach conditioning tokens, and noisy tokens reach both noisy and conditioning tokens
-    # alike. Cross-view attention is what lets the rig agree with itself, so the full square
-    # is the default; the narrower scopes buy attention that grows with the rig rather than
-    # with its square, per the comment above. Never widens a WSM (World Scenario Map) control
-    # token's reach, which is always its own view -- see
+    # Which RGB tokens of its sample an RGB token attends to, independent of whether the
+    # query or key is conditioning. Cross-view attention is what lets the rig agree with
+    # itself, so the full square is the default; the narrower scopes buy attention that grows
+    # with the rig rather than with its square, per the comment above. Never widens a WSM
+    # (World Scenario Map) control token's reach, which is always its own view -- see
     # flex_attention.build_multiview_flex_metadata's ``is_control_per_item``, which the
     # network derives per generation stream, and which a batch without a control stream
     # leaves empty.
     attention_scope: AttentionScope = attrs.field(
         default="all_views",
         validator=attrs.validators.in_(ATTENTION_SCOPES),
+    )
+
+    # Only read under attention_scope="decomposed". Replaces that scope's temporal half --
+    # "the query's own frame index" -- with "any key within this many seconds at or before the
+    # query's own capture time", i.e. 0 <= query_timestamp - key_timestamp <= this value. None
+    # (the default) keeps the frame-index form, which only agrees across sensors that share one
+    # clock; a joint camera + LiDAR pack needs a window instead; see
+    # flex_attention.build_multiview_flex_metadata and ._multiview_pair_predicate.
+    decomposed_temporal_window_seconds: float | None = attrs.field(
+        default=None,
+        validator=attrs.validators.optional(attrs.validators.ge(0)),
     )
 
 
