@@ -131,6 +131,20 @@ def _format_drop_sample_log_fields(sample: Mapping[str, Any], dataset_name: str,
     return " ".join(fields)
 
 
+def _batch_size_from_collated_batch(batch: dict) -> int:
+    """Count the samples in a collated batch.
+
+    Camera batches are sized by their vision stream. The LiDAR-only AV recipe decodes no
+    camera at all, so it carries neither ``images`` nor ``video`` and the sweeps are the
+    only per-sample list left to count.
+    """
+    for key in ("images", "video", "lidar"):
+        value = batch.get(key)
+        if value is not None:
+            return len(value)
+    raise KeyError("A collated batch needs one of 'images', 'video' or 'lidar' to be split into samples.")
+
+
 def custom_collate_fn(batch):
     """
     Collate function that works like default_collate for all keys other than "text_token_ids", "images", and "video".
@@ -691,9 +705,7 @@ class JointDataLoader(webdataset.WebLoader):
             return
         elapsed = time.monotonic() - started_at
 
-        is_image_batch = "images" in batch
-        input_images_or_videos = batch["images" if is_image_batch else "video"]
-        batch_size = len(input_images_or_videos)
+        batch_size = _batch_size_from_collated_batch(batch)
 
         # Split the collated batch into individual samples and push them
         # into the buffer — identical to the splitting logic in
@@ -818,9 +830,15 @@ class JointDataLoader(webdataset.WebLoader):
                 num_text_tokens = text_token_ids.shape[1]
             und_tokens = num_text_tokens + 1
 
-        # Vision part
+        # Vision part. A LiDAR-only sample has no camera stream, so the loop below prices
+        # nothing and the whole generation cost comes from the sweeps.
         is_image_batch = "images" in data_batch
-        input_images_or_videos = data_batch["images" if is_image_batch else "video"]
+        # Absent rather than empty for a LiDAR-only sample, and tested for explicitly: the loop
+        # below also accepts a bare tensor, and `or []` would ask that tensor for its truth
+        # value before reaching that branch.
+        input_images_or_videos = data_batch.get("images" if is_image_batch else "video")
+        if input_images_or_videos is None:
+            input_images_or_videos = []
         if "enable_per_camera_vae_encoding" in data_batch:
             sample_n_views_values = read_positive_int_metadata(data_batch, "sample_n_views", expected_count=1)
             frames_per_view_values = read_positive_int_metadata(
@@ -1023,9 +1041,7 @@ class JointDataLoader(webdataset.WebLoader):
             except StopIteration:
                 raise
 
-            is_image_batch = "images" in batch
-            input_images_or_videos = batch["images" if is_image_batch else "video"]
-            batch_size = len(input_images_or_videos)
+            batch_size = _batch_size_from_collated_batch(batch)
 
             for i in range(batch_size):
                 sample = {}
