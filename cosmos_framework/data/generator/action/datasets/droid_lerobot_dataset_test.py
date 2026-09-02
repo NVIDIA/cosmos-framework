@@ -5,13 +5,14 @@ from __future__ import annotations
 
 import pytest
 import torch
+import torchvision.transforms.v2 as T
 
 from cosmos_framework.data.generator.action.datasets.droid_lerobot_dataset import DROIDLeRobotDataset
 
 _IMAGE_FEATURES = {"wrist": "wrist_key", "left": "left_key", "right": "right_key"}
 
 
-def _dataset(use_image_augmentation: bool) -> DROIDLeRobotDataset:
+def _dataset(use_image_augmentation: bool, jitter_after_compose: bool = False) -> DROIDLeRobotDataset:
     """Build a bare instance exercising only ``_compose_multi_view``.
 
     ``__init__`` opens LeRobot datasets from disk, which this test does not need:
@@ -21,7 +22,8 @@ def _dataset(use_image_augmentation: bool) -> DROIDLeRobotDataset:
     dataset = object.__new__(DROIDLeRobotDataset)
     dataset._image_features = _IMAGE_FEATURES
     dataset._use_image_augmentation = use_image_augmentation
-    dataset._geometric_augmentor = None
+    dataset._jitter_after_compose = jitter_after_compose
+    dataset._image_augmentor = None
     dataset._color_augmentor = None
     return dataset
 
@@ -46,10 +48,12 @@ def test_compose_multi_view_tiles_wrist_over_left_and_right() -> None:
 
 
 @pytest.mark.L0
-def test_compose_multi_view_keeps_layout_under_augmentation() -> None:
+@pytest.mark.parametrize("jitter_after_compose", [False, True])
+def test_compose_multi_view_keeps_layout_under_augmentation(jitter_after_compose: bool) -> None:
     """Augmentation must not change the composite's shape or tiling."""
     torch.manual_seed(0)
-    composite = _dataset(use_image_augmentation=True)._compose_multi_view(_sample(0.1, 0.5, 0.9))
+    dataset = _dataset(use_image_augmentation=True, jitter_after_compose=jitter_after_compose)
+    composite = dataset._compose_multi_view(_sample(0.1, 0.5, 0.9))
 
     assert composite.shape == (2, 3, 24, 32)
     # Each region is still uniform, so the tiles did not bleed into each other.
@@ -58,7 +62,8 @@ def test_compose_multi_view_keeps_layout_under_augmentation() -> None:
 
 
 @pytest.mark.L0
-def test_color_jitter_is_shared_across_the_three_views() -> None:
+@pytest.mark.parametrize("jitter_after_compose", [False, True])
+def test_color_jitter_is_shared_across_the_three_views(jitter_after_compose: bool) -> None:
     """One colour draw covers the whole composite.
 
     Jittering the views independently would cut colour diversity across the
@@ -66,7 +71,8 @@ def test_color_jitter_is_shared_across_the_three_views() -> None:
     views have to stay identical after augmentation.
     """
     torch.manual_seed(0)
-    composite = _dataset(use_image_augmentation=True)._compose_multi_view(_sample(0.4, 0.4, 0.4))
+    dataset = _dataset(use_image_augmentation=True, jitter_after_compose=jitter_after_compose)
+    composite = dataset._compose_multi_view(_sample(0.4, 0.4, 0.4))
 
     wrist_px = composite[:, :, :16, :].flatten()[0]
     torch.testing.assert_close(composite[:, :, 16:, :16], torch.full((2, 3, 8, 16), wrist_px))
@@ -74,11 +80,32 @@ def test_color_jitter_is_shared_across_the_three_views() -> None:
 
 
 @pytest.mark.L0
-def test_augmentation_actually_changes_the_composite() -> None:
+@pytest.mark.parametrize("jitter_after_compose", [False, True])
+def test_augmentation_actually_changes_the_composite(jitter_after_compose: bool) -> None:
     """Guards against the augmentor silently becoming a no-op."""
     sample = _sample(0.4, 0.6, 0.8)
     plain = _dataset(use_image_augmentation=False)._compose_multi_view(sample)
     torch.manual_seed(0)
-    augmented = _dataset(use_image_augmentation=True)._compose_multi_view(sample)
+    dataset = _dataset(use_image_augmentation=True, jitter_after_compose=jitter_after_compose)
+    augmented = dataset._compose_multi_view(sample)
 
     assert not torch.allclose(plain, augmented)
+
+
+@pytest.mark.L0
+def test_default_keeps_jitter_inside_the_per_view_pipeline() -> None:
+    """``jitter_after_compose`` defaults to the original ordering.
+
+    Off: ColorJitter stays bundled in the per-view Compose and nothing runs on
+    the composite, byte-identical to the pre-flag pipeline. On: ColorJitter
+    leaves the per-view Compose and runs on the composite instead.
+    """
+    default = _dataset(use_image_augmentation=True)
+    default._compose_multi_view(_sample(0.1, 0.5, 0.9))
+    assert default._color_augmentor is None
+    assert any(isinstance(t, T.ColorJitter) for t in default._image_augmentor.transforms)
+
+    reordered = _dataset(use_image_augmentation=True, jitter_after_compose=True)
+    reordered._compose_multi_view(_sample(0.1, 0.5, 0.9))
+    assert isinstance(reordered._color_augmentor, T.ColorJitter)
+    assert not any(isinstance(t, T.ColorJitter) for t in reordered._image_augmentor.transforms)

@@ -103,6 +103,7 @@ class DROIDLeRobotDataset(BaseActionLeRobotDataset):
         # parameters above are positional-or-keyword, so inserting mid-list
         # would shift every later argument for positional callers.
         apply_forward_clamp: bool = False,
+        jitter_after_compose: bool = False,
     ) -> None:
         """ """
         super().__init__(
@@ -129,6 +130,7 @@ class DROIDLeRobotDataset(BaseActionLeRobotDataset):
         self._filter_dict_path = filter_dict_path or _FILTER_DICT_PATH
         self._max_num_history_actions = max_num_history_actions
         self._use_image_augmentation = use_image_augmentation
+        self._jitter_after_compose = jitter_after_compose
         if max_num_history_actions > 0 and action_space not in ("midtrain", "joint_pos"):
             raise ValueError(
                 f"max_num_history_actions is only supported with action_space='midtrain' or 'joint_pos', got {action_space!r}"
@@ -183,7 +185,7 @@ class DROIDLeRobotDataset(BaseActionLeRobotDataset):
             with open(self._filter_dict_path) as f:
                 self._filter_dict = json.load(f)
 
-        self._geometric_augmentor: T.Compose | None = None
+        self._image_augmentor: T.Compose | None = None
         self._color_augmentor: T.ColorJitter | None = None
 
         # Eager source registration. i4 defers this to its own dataloader's
@@ -314,17 +316,20 @@ class DROIDLeRobotDataset(BaseActionLeRobotDataset):
         Left and right exterior cameras are downscaled by 2x so that they
         tile to the same width as the wrist view. The output height is 3H/2.
 
-        Augmentation is split around the composition. The random crop and
-        resize stay per view and run first, because cropping the composite
-        would cut across the tile boundaries. ColorJitter runs last, on the
-        composite, where the exterior views have already been downscaled: that
-        is 3H/2 x W pixels instead of the 3H x W of the three full-size views,
-        so it costs roughly half as much for the same augmentation. Both
-        orderings draw one set of colour factors and apply it to every view, so
-        the views still agree on lighting; what changes is that the exterior
-        views are jittered after downscaling rather than before, which for a
-        random augmentation is a re-parameterization rather than a different
-        distribution. See issue #174.
+        By default the full augmentation pipeline (random crop, resize,
+        ColorJitter) runs per view before composition. With
+        ``jitter_after_compose=True`` the pipeline is split around the
+        composition: crop and resize stay per view and run first, because
+        cropping the composite would cut across the tile boundaries, while
+        ColorJitter runs last, on the composite, where the exterior views have
+        already been downscaled. That is 3H/2 x W pixels instead of the
+        3H x W of the three full-size views, so it costs roughly half as much
+        for the same augmentation. Both orderings draw one set of colour
+        factors and apply it to every view, so the views still agree on
+        lighting; what changes is that the exterior views are jittered after
+        downscaling rather than before, which for a random augmentation is a
+        re-parameterization rather than a different distribution. See
+        issue #174.
 
         Returns:
             Composited raw video tensor in ``(T,C,H_out,W)`` float format.
@@ -334,17 +339,20 @@ class DROIDLeRobotDataset(BaseActionLeRobotDataset):
         right = sample[self._image_features["right"]]  # [T,C,H_r,W_r]
 
         if self._use_image_augmentation:
-            if self._geometric_augmentor is None:
+            if self._image_augmentor is None:
                 _, _, h, w = wrist.shape
-                self._geometric_augmentor = T.Compose(
-                    [
-                        T.RandomCrop((int(h * 0.95), int(w * 0.95))),
-                        T.Resize((h, w), antialias=True),
-                    ]
-                )
-                self._color_augmentor = T.ColorJitter(brightness=0.3, contrast=0.4, saturation=0.5, hue=0.08)
+                transforms: list[Any] = [
+                    T.RandomCrop((int(h * 0.95), int(w * 0.95))),
+                    T.Resize((h, w), antialias=True),
+                ]
+                color_jitter = T.ColorJitter(brightness=0.3, contrast=0.4, saturation=0.5, hue=0.08)
+                if self._jitter_after_compose:
+                    self._color_augmentor = color_jitter
+                else:
+                    transforms.append(color_jitter)
+                self._image_augmentor = T.Compose(transforms)
             n, m = wrist.shape[0], wrist.shape[0] + left.shape[0]
-            combined = self._geometric_augmentor(torch.cat([wrist, left, right], dim=0))
+            combined = self._image_augmentor(torch.cat([wrist, left, right], dim=0))
             wrist, left, right = combined[:n], combined[n:m], combined[m:]
 
         _, _, h_w, w_w = wrist.shape
@@ -356,7 +364,7 @@ class DROIDLeRobotDataset(BaseActionLeRobotDataset):
 
         composite = torch.cat([wrist, bottom], dim=-2)  # [T,C,3H/2,W]
 
-        if self._use_image_augmentation:
+        if self._color_augmentor is not None:
             composite = self._color_augmentor(composite)
 
         return composite  # [T,C,3H/2,W]
