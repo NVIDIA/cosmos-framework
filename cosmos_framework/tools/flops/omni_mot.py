@@ -215,6 +215,7 @@ def compute_omni_mot_flops_per_batch(
     attn_modes: list[str] | None = None,
     include_padding: bool = False,
     use_activation_checkpointing: bool = False,
+    context_parallel_size: int = 1,
 ) -> Decimal:
     """Compute training FLOPs for a single batch of the OmniMoT model.
 
@@ -233,6 +234,7 @@ def compute_omni_mot_flops_per_batch(
       - RMSNorm at all positions (4 per layer + Q/K norms + 2 final norms).
       - Backward pass with special handling for freeze_und.
       - Activation checkpointing forward recomputation during backward.
+      - Per-device transformer FLOPs under sequence-sharded context parallelism.
 
     Args:
         cfg: Model architecture descriptor.
@@ -264,9 +266,14 @@ def compute_omni_mot_flops_per_batch(
             recomputation of each transformer layer during the backward pass.
             Activation checkpointing discards intermediate activations and
             recomputes them on-the-fly, adding ~1x layer forward FLOPs.
+        context_parallel_size: Sequence-sharded context-parallel degree. The
+            transformer blocks and final norms operate on a sequence/head shard,
+            so their per-device FLOPs are divided by this value. Modality
+            projections and timestep embeddings outside the transformer remain
+            replicated and are not divided.
 
     Returns:
-        Total training FLOPs (forward + backward) as a Decimal.
+        Per-device training FLOPs (forward + backward) as a Decimal.
     """
     bp_ratio = Decimal(backwardpass_ratio)
     D = cfg.hidden_size
@@ -454,12 +461,17 @@ def compute_omni_mot_flops_per_batch(
     # ===================================================================
     # 4. Forward pass total
     # ===================================================================
-    fp = embedding_flops + total_block_flops + final_norm_flops
+    # Sequence-sharded CP splits transformer work across the CP group. The
+    # modality projections and timestep embeddings above execute before the
+    # sequence is sharded and therefore remain replicated on every device.
+    per_device_block_flops = total_block_flops / context_parallel_size
+    per_device_final_norm_flops = final_norm_flops / context_parallel_size
+    fp = embedding_flops + per_device_block_flops + per_device_final_norm_flops
 
     log.debug(f"Forward pass FLOPs: {fp}")
     log.debug(f"  embedding_flops:    {embedding_flops} ({_pct(embedding_flops, fp)}%)")
-    log.debug(f"  transformer_blocks: {total_block_flops} ({_pct(total_block_flops, fp)}%)")
-    log.debug(f"  final_norms:        {final_norm_flops} ({_pct(final_norm_flops, fp)}%)")
+    log.debug(f"  transformer_blocks: {per_device_block_flops} ({_pct(per_device_block_flops, fp)}%)")
+    log.debug(f"  final_norms:        {per_device_final_norm_flops} ({_pct(per_device_final_norm_flops, fp)}%)")
 
     # ===================================================================
     # 5. Backward pass
@@ -507,9 +519,10 @@ def compute_omni_mot_flops_per_batch(
         backward_attn_flops = gen_attn_dot * n_layers
         backward_softmax_flops = gen_softmax * n_layers
 
-        bp = (
-            gen_proj_mlp_flops + backward_attn_flops + backward_softmax_flops + gen_norm_flops + gen_embedding_flops
-        ) * bp_ratio
+        gen_transformer_flops = (
+            gen_proj_mlp_flops + backward_attn_flops + backward_softmax_flops + gen_norm_flops
+        ) / context_parallel_size
+        bp = (gen_transformer_flops + gen_embedding_flops) * bp_ratio
 
     else:
         bp = fp * bp_ratio
@@ -523,7 +536,7 @@ def compute_omni_mot_flops_per_batch(
     # dot products, softmax, MLP, and norms — everything inside the layer).
     ac_recomp = Decimal(0)
     if use_activation_checkpointing:
-        ac_recomp = total_block_flops
+        ac_recomp = per_device_block_flops
 
     total = fp + bp + ac_recomp
 

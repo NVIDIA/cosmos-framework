@@ -12,6 +12,8 @@ are trained as one-shot denoisers at specific discrete sigmas, not as smooth
 score functions.
 """
 
+from collections.abc import Callable
+
 import torch
 
 from cosmos_framework.model.generator.diffusion.samplers.utils import run_multiseed
@@ -41,6 +43,7 @@ class FixedStepSampler:
         seed: int | list[int] | None = None,
         condition_reference: torch.Tensor | list[torch.Tensor] | None = None,
         condition_mask: torch.Tensor | list[torch.Tensor] | None = None,
+        step_callback: Callable[[int, int], None] | None = None,
     ) -> torch.Tensor | list[torch.Tensor]:
         """Run the fixed-step sampling loop.
 
@@ -100,9 +103,12 @@ class FixedStepSampler:
 
         latent = noise
 
+        num_steps_total = len(t_list) - 1
         for step_idx, (sigma_cur, sigma_next) in enumerate(
             zip(t_list[:-1], t_list[1:]),
         ):
+            if step_callback is not None:
+                step_callback(step_idx, num_steps_total)
             timestep = torch.tensor(sigma_cur * self.num_train_timesteps, device=device)
             v_pred = velocity_fn(latent, timestep.reshape(1, 1))
 

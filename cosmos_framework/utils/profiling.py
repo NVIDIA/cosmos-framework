@@ -17,7 +17,7 @@ from cosmos_framework.utils.easy_io import easy_io
 MEMORY_SNAPSHOT_MAX_ENTRIES = 100000
 
 
-def _validate_profile_schedule(*, profile_freq: int, warmup: int, active: int) -> None:
+def validate_profile_schedule(*, profile_freq: int, warmup: int, active: int) -> None:
     if active <= 0:
         raise ValueError("profile_active must be positive")
     if warmup < 0:
@@ -58,7 +58,7 @@ def maybe_enable_profiling(config, *, global_step: int = 0):
 
         warmup = config.trainer.profiling.profile_warmup
         active = config.trainer.profiling.profile_active
-        _validate_profile_schedule(profile_freq=profile_freq, warmup=warmup, active=active)
+        validate_profile_schedule(profile_freq=profile_freq, warmup=warmup, active=active)
         wait = profile_freq - (active + warmup)
 
         with torch.profiler.profile(
@@ -171,7 +171,7 @@ def maybe_enable_nsys_profiling(config, *, global_step: int = 0):
     freq = config.trainer.profiling.profile_freq
     warmup = config.trainer.profiling.profile_warmup
     active = config.trainer.profiling.profile_active
-    _validate_profile_schedule(profile_freq=freq, warmup=warmup, active=active)
+    validate_profile_schedule(profile_freq=freq, warmup=warmup, active=active)
 
     active_start_iter = freq - active
     active_end_iter = freq - 1

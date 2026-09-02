@@ -43,6 +43,40 @@ def _normalize_public_dependency_path(
     return value
 
 
+def resolve_student_base_model(
+    model_dict: dict[str, Any],
+    *,
+    default_base_model: type,
+) -> tuple[type, type]:
+    """Return the ``(model, config)`` classes a student config should project onto.
+
+    Temporally-causal students (Self-Forcing / teacher-forcing recipes) must
+    project onto the causal base. ``video_temporal_causal`` lives on the base
+    config, but ``teacher_forcing_frames_per_chunk`` and the AR cache settings
+    are declared by ``OmniMoTCausalModelConfig``, so projecting them onto the
+    bidirectional base would silently drop those fields and name a model class
+    that cannot run the autoregressive decode loop.
+
+    The lookup lives here rather than in ``cosmos3.scripts.export_model`` because
+    that package must not import the internal interactive tree. The causal
+    classes are imported lazily so that exporting a non-causal student never
+    pulls in the autoregressive stack.
+    """
+    from cosmos_framework.configs.base.defaults.model_config import OmniMoTModelConfig
+
+    config = model_dict.get("config")
+    is_causal = isinstance(config, dict) and bool(config.get("video_temporal_causal", False))
+    if not is_causal:
+        return default_base_model, OmniMoTModelConfig
+
+    from cosmos_framework.model.generator.omni_mot_causal_model import (
+        OmniMoTCausalModel,
+        OmniMoTCausalModelConfig,
+    )
+
+    return OmniMoTCausalModel, OmniMoTCausalModelConfig
+
+
 def build_student_checkpoint_metadata(*, use_ema_weights: bool) -> dict[str, str | bool]:
     """Build portable metadata without source checkpoint or credential paths."""
     return {

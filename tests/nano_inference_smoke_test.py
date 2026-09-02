@@ -37,6 +37,13 @@ control-guidance branch.
    layout — the FP8 all-gather. Skipped when the checkpoint is not reachable
    (see ``_download_fp8_checkpoint``).
 
+4. One more ``text2video`` call against the same FP8 checkpoint with FP8
+   mixed-precision diffusion steps enabled (``--mixed-precision-first-steps`` /
+   ``--mixed-precision-last-steps``): the first/last N denoising steps run
+   W8A16 (dequantized weight + dense GEMM) while middle steps keep the TorchAO
+   W8A8 path. Asserts the exact per-step precision schedule from the
+   ``MIXED_PRECISION_TRACE`` log line plus a non-degenerate ``vision.mp4``.
+
 Smoke-level only (output validity, not numeric goldens). The checkpoint + its
 tokenizers download from the HF Hub on first run and are reused afterward.
 
@@ -194,10 +201,15 @@ _FP8_GENERATION_ARGS = (
 # hooks, which is the path that does not exist upstream, and it is the only
 # layout a Super-class FP8 model fits in. ``replicated`` guards the
 # single-device-weights path that worked before those hooks were added.
+# Both layouts follow MAX_GPUS so the product of the parallel degrees equals
+# WORLD_SIZE, which is what ParallelDims validates. `sharded` stays pure FSDP and
+# `replicated` pure context-parallel -- the distinction each case exists to
+# cover -- at whichever width the run has. cp_size is bounded by MAX_CP_SIZE=32,
+# so 4 and 8 are both in range.
 _FP8_LAYOUTS = {
     "sharded": (
         "--parallelism-preset=throughput",
-        "--dp-shard-size=8",
+        f"--dp-shard-size={MAX_GPUS}",
         "--dp-replicate-size=1",
         "--cp-size=1",
         "--cfgp-size=1",
@@ -206,10 +218,26 @@ _FP8_LAYOUTS = {
         "--parallelism-preset=latency",
         "--dp-shard-size=1",
         "--dp-replicate-size=1",
-        "--cp-size=8",
+        f"--cp-size={MAX_GPUS}",
         "--cfgp-size=1",
     ),
 }
+
+# Mixed-precision diffusion steps (FP8 W8A16 edge steps) schedule for the
+# dedicated smoke case: with the 10-step ``_FP8_GENERATION_ARGS`` run this
+# selects 2x W8A16 / 6x W8A8 / 2x W8A16 (``use_w8a16_step``). Small enough to
+# stay cheap, large enough that first, middle, and last regions are all
+# non-empty.
+_MIXED_PRECISION_FIRST_STEPS = 2
+_MIXED_PRECISION_LAST_STEPS = 2
+
+# Emitted by ``MixedPrecisionRuntime`` (``cosmos_framework/utils/generator/
+# mixed_precision.py``): the install summary at load time and the per-request
+# per-step precision trace at request end. The trace is parsed and compared
+# exactly — a run that silently ignored the flags would log an all-W8A8 trace
+# (or none at all) and still produce a perfectly valid video.
+_MIXED_PRECISION_INSTALL_LOG = "Mixed precision installed:"
+_MIXED_PRECISION_TRACE_LOG = re.compile(r"MIXED_PRECISION_TRACE steps=([A-Za-z0-9,]+)")
 
 # Audio sanity thresholds for the muxed sound track.
 _RMS_SILENCE_FLOOR = 1e-4  # below this the track is effectively silence
@@ -349,9 +377,19 @@ def _download_fp8_checkpoint() -> Path:
     nvidia/Cosmos3-Experimental), so a fork PR without the runner secret does not
     go red. Any other failure (a deleted revision, a broken download) still fails
     loudly: a silently-skipping FP8 job would look green while testing nothing.
+
+    ``REQUIRE_FP8=1`` promotes that skip to a hard failure. The CI job whose
+    stated purpose includes FP8 coverage sets it, so a token rotation or a
+    permissions change on the gated repo turns that job red instead of silently
+    dropping every FP8 case while still reporting green.
     """
     from huggingface_hub import snapshot_download
     from huggingface_hub.errors import GatedRepoError, HfHubHTTPError, RepositoryNotFoundError
+
+    def _skip_or_fail_no_access(reason: str) -> None:
+        if os.environ.get("REQUIRE_FP8") == "1":
+            pytest.fail(f"REQUIRE_FP8=1 but the FP8 checkpoint is unreachable: {reason}")
+        pytest.skip(reason)
 
     try:
         repo_root = snapshot_download(
@@ -360,11 +398,11 @@ def _download_fp8_checkpoint() -> Path:
             allow_patterns=[f"{_FP8_SUBDIRECTORY}/*"],
         )
     except (GatedRepoError, RepositoryNotFoundError) as error:
-        pytest.skip(f"no access to {_FP8_REPOSITORY} (needs an HF_TOKEN with read access): {error!r}")
+        _skip_or_fail_no_access(f"no access to {_FP8_REPOSITORY} (needs an HF_TOKEN with read access): {error!r}")
     except HfHubHTTPError as error:
         status_code = getattr(error.response, "status_code", None)
         if status_code in (401, 403):
-            pytest.skip(f"no access to {_FP8_REPOSITORY} (HTTP {status_code}): {error!r}")
+            _skip_or_fail_no_access(f"no access to {_FP8_REPOSITORY} (HTTP {status_code}): {error!r}")
         raise
 
     checkpoint_path = Path(repo_root) / _FP8_SUBDIRECTORY
@@ -389,10 +427,8 @@ def _require_gpus() -> None:
 
 
 # Markers use MAX_GPUS because the conftest rejects ``gpus(N)`` outside
-# ``ALL_NUM_GPUS = (0, 1, MAX_GPUS)``. Cases that genuinely need 8 ranks carry
-# their own skipif below: on a smaller host only the 4-rank case can run, and
-# forcing the others onto fewer ranks would change what they cover (ParallelDims
-# fails when the parallelism product does not equal world_size).
+# ``ALL_NUM_GPUS = (0, 1, MAX_GPUS)``. Every case here derives its parallelism
+# from the active width, so both supported widths are listed.
 if MAX_GPUS in (4, 8):
 
     @pytest.mark.level(2)
@@ -572,11 +608,6 @@ if MAX_GPUS in (4, 8):
 
     @pytest.mark.level(2)
     @pytest.mark.gpus(MAX_GPUS)
-    # Unlike the cases above, this one cannot simply follow MAX_GPUS: the FP8
-    # setup pins cp_size=8 / dp_shard_size=8, which ParallelDims rejects against
-    # a smaller WORLD_SIZE. Running it below 8 needs a different parallelism
-    # layout, i.e. a different thing under test.
-    @pytest.mark.skipif(MAX_GPUS < 8, reason="FP8 setup pins 8-way cp/dp_shard")
     @pytest.mark.parametrize("layout", sorted(_FP8_LAYOUTS))
     def test_nano_fp8_inference(tmp_path: Path, layout: str) -> None:
         """text2video from the ModelOpt static-FP8 Nano checkpoint, once per layout.
@@ -628,4 +659,77 @@ if MAX_GPUS in (4, 8):
         assert args.get("model_mode") == "text2video", f"expected a text2video sample, got {args.get('model_mode')}"
         video = so.parent / "vision.mp4"
         assert video.is_file(), f"FP8 {layout} run produced no vision.mp4 ({so})"
+        _assert_video_has_content(video)
+
+    @pytest.mark.level(2)
+    @pytest.mark.gpus(MAX_GPUS)
+    def test_nano_fp8_mixed_precision_inference(tmp_path: Path) -> None:
+        """text2video from the FP8 Nano checkpoint with mixed-precision diffusion steps.
+
+        Same run as the ``sharded`` case of ``test_nano_fp8_inference`` plus the
+        ``--mixed-precision-first-steps`` / ``--mixed-precision-last-steps`` flags,
+        so the first/last 2 of the 10 denoising steps run W8A16 (dequantized E4M3
+        weight + dense GEMM) while the middle 6 keep the TorchAO W8A8 path. The
+        sharded layout is the one that constrains the feature: FSDP-sharded FP8
+        weights support only the default ``mixed_precision_w8a16_cache='none'``
+        (per-step on-the-fly dequant), which is exactly the mode exercised here.
+
+        The pass criterion is the schedule itself, not just a valid video: the
+        ``MIXED_PRECISION_TRACE`` line is parsed and compared exactly against the
+        expected ``2x W8A16 / 6x W8A8 / 2x W8A16`` sequence, so a run where the
+        flags never engaged (all-W8A8 trace, or no trace at all) fails even though
+        its output video would look fine. ``_assert_video_has_content`` then
+        catches the numerically-broken-but-still-running case.
+        """
+        checkpoint_path = _download_fp8_checkpoint()
+        out_dir = tmp_path / "out_fp8_mixed_precision"
+        cmd = [
+            "torchrun",
+            f"--nproc_per_node={MAX_GPUS}",
+            f"--master_port={_free_port()}",
+            "-m",
+            "cosmos_framework.scripts.inference",
+            *_FP8_LAYOUTS["sharded"],
+            "-i",
+            "inputs/omni/t2v.json",
+            "-o",
+            str(out_dir),
+            "--checkpoint-path",
+            str(checkpoint_path),
+            *_FP8_GENERATION_ARGS,
+            f"--mixed-precision-first-steps={_MIXED_PRECISION_FIRST_STEPS}",
+            f"--mixed-precision-last-steps={_MIXED_PRECISION_LAST_STEPS}",
+        ]
+        log = _run(cmd, tmp_path / "inference_fp8_mixed_precision.log")
+
+        # The FP8 path itself still engaged (same guard as test_nano_fp8_inference).
+        swap_match = _FP8_SWAP_LOG.search(log)
+        assert swap_match is not None and int(swap_match.group(1)) > 0, (
+            "no ModelOpt FP8 linear swap in the mixed-precision run; FP8 path never engaged"
+        )
+        # ... and the mixed-precision runtime was installed on top of it.
+        assert _MIXED_PRECISION_INSTALL_LOG in log, (
+            "mixed precision was never installed despite --mixed-precision-first/last-steps"
+        )
+
+        # Exact per-step precision schedule. num_steps is read from
+        # _FP8_GENERATION_ARGS so the expectation cannot drift from the run.
+        (num_steps,) = [int(a.split("=")[1]) for a in _FP8_GENERATION_ARGS if a.startswith("--num-steps=")]
+        expected = (
+            ["W8A16"] * _MIXED_PRECISION_FIRST_STEPS
+            + ["W8A8"] * (num_steps - _MIXED_PRECISION_FIRST_STEPS - _MIXED_PRECISION_LAST_STEPS)
+            + ["W8A16"] * _MIXED_PRECISION_LAST_STEPS
+        )
+        traces = [m.split(",") for m in _MIXED_PRECISION_TRACE_LOG.findall(log)]
+        assert expected in traces, (
+            f"expected a MIXED_PRECISION_TRACE of {'/'.join(expected)}, got traces={traces}"
+        )
+
+        results = sorted(out_dir.rglob("sample_outputs.json"))
+        assert len(results) == 1, f"expected 1 mixed-precision sample_outputs.json, found {[str(p) for p in results]}"
+        so = results[0]
+        args = json.loads(so.read_text()).get("args", {})
+        assert args.get("model_mode") == "text2video", f"expected a text2video sample, got {args.get('model_mode')}"
+        video = so.parent / "vision.mp4"
+        assert video.is_file(), f"FP8 mixed-precision run produced no vision.mp4 ({so})"
         _assert_video_has_content(video)

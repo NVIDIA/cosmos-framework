@@ -114,33 +114,14 @@ from cosmos_framework.utils.generator.aux_optimizer_utils import (
     zeropower_via_newtonschulz5,
     zeropower_via_newtonschulz5_batched,
 )
+from cosmos_framework.utils.generator.optimizer import require_fp32_param_group
 
 _Dion2PhaseArgs = ParamSpec("_Dion2PhaseArgs")
 _Dion2PhaseResult = TypeVar("_Dion2PhaseResult")
 
 
 @torch.compile(fullgraph=True)
-def _apply_dion2_distributed_updates_with_master(
-    local_params: list[torch.Tensor],
-    back_local: torch.Tensor,
-    active_indices: list[int],
-    masters: list[torch.Tensor],
-    base_lrs: list[float | torch.Tensor],
-    weight_decays: list[float],
-    adjusted_lr_ratios: list[float],
-) -> None:  # local_params: [M,N] each, back_local: [S,...], returns None
-    """Apply one active distributed DION2 batch through FP32 master weights."""
-    for local_param, active_index, master, base_lr, weight_decay, adjusted_lr_ratio in zip(
-        local_params, active_indices, masters, base_lrs, weight_decays, adjusted_lr_ratios
-    ):
-        update_local = back_local[active_index]  # matching local update shard
-        master.mul_(1 - base_lr * weight_decay)  # local FP32 master shard
-        master.add_(update_local.float() * base_lr, alpha=-adjusted_lr_ratio)  # local FP32 master shard
-        local_param.copy_(master)  # local parameter shard
-
-
-@torch.compile(fullgraph=True)
-def _apply_dion2_distributed_updates_without_master(
+def _apply_dion2_distributed_updates_compiled(
     local_params: list[torch.Tensor],
     back_local: torch.Tensor,
     active_indices: list[int],
@@ -148,7 +129,7 @@ def _apply_dion2_distributed_updates_without_master(
     weight_decays: list[float],
     adjusted_lr_ratios: list[float],
 ) -> None:  # local_params: [M,N] each, back_local: [S,...], returns None
-    """Apply one active distributed DION2 batch directly to model weights."""
+    """Apply one active distributed DION2 batch to the FP32 parameters in place."""
     for local_param, active_index, base_lr, weight_decay, adjusted_lr_ratio in zip(
         local_params, active_indices, base_lrs, weight_decays, adjusted_lr_ratios
     ):
@@ -172,6 +153,14 @@ class Dion2WithAuxAdamW(torch.optim.Optimizer):
     - Error feedback: maintains momentum for unselected parts
     - Megabatched processing: handles world_size * K same-shape params per redistribution
 
+    Parameter precision: every parameter must be FP32, which
+    :meth:`add_param_group` enforces. Both the DION2 and the auxiliary AdamW update
+    are applied to the parameter in place in FP32, so there are no FP32 master
+    weights. To keep the forward/backward in BF16, wrap the model in FSDP2 with
+    ``MixedPrecisionPolicy(param_dtype=torch.bfloat16, reduce_dtype=torch.float32)``:
+    FSDP down-casts for compute and all-gather while the sharded parameter this
+    optimizer steps stays FP32. Do not cast the parameters themselves.
+
     Args:
         params: Iterable of parameters to optimize.
         lr: Base learning rate.
@@ -185,11 +174,17 @@ class Dion2WithAuxAdamW(torch.optim.Optimizer):
         adam_betas: Beta coefficients for the auxiliary AdamW side.
         eps: Epsilon for AdamW numerical stability.
         use_distributed: Whether to use distributed operations.
+        capturable: Must be ``True`` (the default); passing ``False`` raises. Only the
+            CUDA-graph-capturable update is implemented: ``lr`` and the per-group ``step``
+            are kept as device tensors and dispatched to Transformer Engine's
+            ``multi_tensor_adam_capturable``. The keyword is retained because the
+            factory in ``utils/optimizer.py`` passes it explicitly.
         max_dion2_megabatch_width: Maximum number of same-shape matrices processed per rank.
         dion2_profile_phases: Whether to emit Torch Profiler and NVTX phase ranges.
-        split_expert_gate_up: When True, gate_up_proj [E,H,2I] params are split into
-            separate gate and up [E,H,I] matrices before Newton-Schulz; enables
-            finer-grained orthogonalization and MoE megabatching.
+        split_expert_gate_up: When True, both routed gate_up_proj [E,H,2I]
+            parameters and fused 2-D shared-expert gate_up_proj [2I,H] parameters
+            are split into separate gate and up matrices before Newton-Schulz.
+            Enables finer-grained orthogonalization and routed-expert megabatching.
         batch_split_expert_ns: When True (and split_expert_gate_up=True), gate+up+down
             matrices for one layer are batched into a single NS call. Superseded by
             the megabatch path when max_moe_expert_ns_matrices > 0.
@@ -212,8 +207,7 @@ class Dion2WithAuxAdamW(torch.optim.Optimizer):
         adam_betas: tuple[float, float] = (0.9, 0.95),
         eps: float = 1e-8,
         use_distributed: bool = True,
-        capturable: bool = False,
-        master_weights: bool = False,
+        capturable: bool = True,
         expert_param_keywords: tuple[str, ...] | None = None,
         orthogonalize_skip_patterns: tuple[str, ...] | None = None,
         max_dion2_megabatch_width: int = 25,
@@ -225,6 +219,16 @@ class Dion2WithAuxAdamW(torch.optim.Optimizer):
     ) -> None:
         if "dion2_megabatch_width" in kwargs:
             raise TypeError("dion2_megabatch_width has been removed; use max_dion2_megabatch_width instead")
+        if "master_weights" in kwargs:
+            # Not silently ignored: a caller asking for master weights is asking for
+            # precision this optimizer no longer provides that way, and would otherwise
+            # get a warning buried in the log.
+            raise ValueError(
+                "Dion2WithAuxAdamW no longer maintains FP32 master weights -- its parameters "
+                "must already be FP32, which makes a master a bit-identical duplicate (see the "
+                "class docstring). Drop the master_weights argument."
+            )
+
         if kwargs:
             ignored_keys = list(kwargs.keys())
             expected_ignored = {"fused", "keys_to_select", "adamw_betas", "adamw_eps"}
@@ -248,9 +252,12 @@ class Dion2WithAuxAdamW(torch.optim.Optimizer):
         if max_moe_expert_ns_matrices < 0:
             raise ValueError(f"max_moe_expert_ns_matrices must be >= 0, got {max_moe_expert_ns_matrices}")
 
-        # Master weights requires capturable mode
-        if master_weights and not capturable:
-            raise RuntimeError("Master weights is currently only supported with capturable=True.")
+        # Only the capturable update is implemented: lr and the per-group step are held as
+        # device tensors and dispatched to TE's multi_tensor_adam_capturable. The factory in
+        # utils/optimizer.py always passes True, so the non-capturable branches were dead
+        # and have been removed.
+        if not capturable:
+            raise ValueError("Dion2WithAuxAdamW only supports capturable=True.")
 
         # Store hyperparameters
         # Note: lr is accessed via property that reads from param_groups
@@ -289,9 +296,10 @@ class Dion2WithAuxAdamW(torch.optim.Optimizer):
         self._process_group = None
         self._device_mesh: DeviceMesh | None = None
 
-        # Master weights settings (for mixed-precision training stability)
+        # ``capturable`` is always True (enforced above) and is kept as an attribute
+        # because external code duck-types on it to detect the group-level step
+        # convention (see ``DistillationTrainer._uses_group_step``).
         self.capturable = capturable
-        self.master_weights = master_weights
 
         # Parameter lists
         self.dion2_params: list[nn.Parameter] = []
@@ -300,22 +308,20 @@ class Dion2WithAuxAdamW(torch.optim.Optimizer):
         self.stacked_dion2_params: list[nn.Parameter] = []
         self.param_to_name: dict[nn.Parameter, str] = {}
         self._dion2_batches: list[list[nn.Parameter]] = []
+        # Frozen during parameter categorization so optimizer steps never need to
+        # inspect parameter names. Batch membership is frozen when batches are built.
+        self._shared_expert_gate_up_param_ids: set[int] = set()
+        self._split_shared_gate_up_batch_ids: set[int] = set()
         # Split-expert pair tracking (gate_up + down pairs for multi-layer NS batching).
         self._split_expert_pairs: list[tuple[nn.Parameter, nn.Parameter]] = []
         self._split_expert_param_ids: set[int] = set()
         self._moe_megabatches: list[list[tuple[nn.Parameter, nn.Parameter]]] = []
 
-        # Master weight copies (populated by _create_master_weights after categorize_params)
-        self._dion2_masters: list[torch.Tensor] = []
-        self._adamw_masters: list[torch.Tensor] = []
-
         # Transformer Engine fused Adam. The zero buffer is the noop flag required
         # as the second argument of TE's multi_tensor_applier; it is a fixed
         # constant here (no AMP overflow handling).
         self._dummy_overflow_buf = torch.tensor([0], dtype=torch.int, device="cuda")
-        self._multi_tensor_adam = tex.multi_tensor_adam
         self._multi_tensor_adam_capturable = tex.multi_tensor_adam_capturable
-        self._multi_tensor_adam_capturable_master = tex.multi_tensor_adam_capturable_master
 
         # Initialize base optimizer. betas / eps go in the defaults so each param
         # group carries them (FusedAdam convention); the AdamW step reads them
@@ -323,15 +329,15 @@ class Dion2WithAuxAdamW(torch.optim.Optimizer):
         defaults = dict(lr=lr, weight_decay=weight_decay, betas=self.adam_betas, eps=eps)
         super().__init__(params, defaults)
 
-        # Convert LR to tensor for capturable mode
-        if capturable:
-            for idx, group in enumerate(self.param_groups):
-                if len(group["params"]) == 0:
-                    continue
-                device = group["params"][0].device
-                if isinstance(group["lr"], float):
-                    group["lr"] = torch.tensor(group["lr"], dtype=torch.float32)
-                self.param_groups[idx]["lr"] = group["lr"].to(device=device)
+        # Convert LR to a device tensor: the capturable kernels read it from device memory
+        # (and an LR scheduler then updates it in place rather than rebinding a float).
+        for idx, group in enumerate(self.param_groups):
+            if len(group["params"]) == 0:
+                continue
+            device = group["params"][0].device
+            if isinstance(group["lr"], float):
+                group["lr"] = torch.tensor(group["lr"], dtype=torch.float32)
+            self.param_groups[idx]["lr"] = group["lr"].to(device=device)
 
         # id(param) -> owning param_group, so the DION2 and AdamW updates can read
         # the *per-group* lr / weight_decay (honors lr_multipliers and
@@ -339,13 +345,29 @@ class Dion2WithAuxAdamW(torch.optim.Optimizer):
         # to a single global lr/wd, matching the original (reference) behavior.
         self._param_group_map: dict[int, dict] = {}
         self._adamw_param_ids: set[int] = set()
-        # Master weights are created lazily on the first step() (FusedAdam-style),
-        # so that after a checkpoint resume they are rebuilt from the *restored*
-        # params rather than the freshly-initialized ones.
-        self._masters_initialized = False
-        self._param_to_master: dict[int, torch.Tensor] = {}
 
-        log.info(f"Dion2WithAuxAdamW master_weights: {master_weights} capturable: {capturable}")
+        log.info(f"Dion2WithAuxAdamW capturable: {capturable}")
+
+    def add_param_group(self, param_group: dict) -> None:
+        """Register a param group, rejecting any parameter that is not FP32.
+
+        ``torch.optim.Optimizer.__init__`` funnels every group through here, so this
+        doubles as the construction-time check. See the class docstring for why FP32
+        parameters are required in place of FP32 master weights.
+
+        Validates before calling ``super()`` -- ``Optimizer.add_param_group`` appends the
+        group to ``self.param_groups`` unconditionally, so validating after the call would
+        leave a rejected group registered (with mixed-dtype params `categorize_params` is
+        unaware of) if a caller caught the ``ValueError`` and kept stepping. See
+        :func:`require_fp32_param_group`.
+        """
+        require_fp32_param_group(
+            param_group,
+            "Dion2WithAuxAdamW",
+            "it applies both the DION2 and the AdamW update to the parameter in place in "
+            "FP32 and keeps no master weights",
+        )
+        super().add_param_group(param_group)
 
     def categorize_params(self, model: nn.Module) -> None:
         """
@@ -378,6 +400,8 @@ class Dion2WithAuxAdamW(torch.optim.Optimizer):
         # 3D MoE experts (orthogonalized per expert slice in _step_stacked_dion2).
         self.dion2_params = [p for p in orthogonalizable if p.ndim == 2]
         self.stacked_dion2_params = [p for p in orthogonalizable if p.ndim >= 3]
+
+        self._freeze_shared_expert_gate_up_params()
 
         # Sort by size for load balancing
         self.dion2_params = sorted(self.dion2_params, key=lambda x: x.numel(), reverse=True)
@@ -425,10 +449,6 @@ class Dion2WithAuxAdamW(torch.optim.Optimizer):
             for p in group["params"]:
                 self._param_group_map[id(p)] = group
         self._adamw_param_ids = {id(p) for p in self.adamw_params}
-
-        # NOTE: master weights are intentionally NOT created here. They are
-        # created lazily on the first step() (see _maybe_init_master_weights) so
-        # that a checkpoint resume rebuilds them from the restored params.
 
     def _assert_homogeneous_sharding(self) -> None:
         """Verify every DION2 param shares the first param's mesh and sharding.
@@ -504,11 +524,14 @@ class Dion2WithAuxAdamW(torch.optim.Optimizer):
         multiple of ``world_size`` and each rank still receives complete matrices.
         """
         self._dion2_batches = []
+        self._split_shared_gate_up_batch_ids = set()
 
         # Step 1: Group params by global shape and dtype (identical on all ranks).
-        shape_groups: dict[tuple[tuple[int, ...], torch.dtype], list[nn.Parameter]] = {}
+        shape_groups: dict[tuple[tuple[int, ...], torch.dtype, bool], list[nn.Parameter]] = {}
         for p in self.dion2_params:
-            group_key = (tuple(p.shape), p.dtype)
+            # Split shared-expert gate/up params must occupy their own redistribution
+            # batches so every full matrix received by a rank has the same NS layout.
+            group_key = (tuple(p.shape), p.dtype, self._is_shared_expert_gate_up(p))
             if group_key not in shape_groups:
                 shape_groups[group_key] = []
             shape_groups[group_key].append(p)
@@ -520,6 +543,16 @@ class Dion2WithAuxAdamW(torch.optim.Optimizer):
             for i in range(0, len(params), group_capacity):
                 batch = params[i : i + group_capacity]
                 self._dion2_batches.append(batch)
+
+        # Classification is invariant after categorization. Verify the batching
+        # invariant once here, outside the per-step collective path, and cache the
+        # split status on the batch object itself.
+        for batch in self._dion2_batches:
+            split_shared_gate_up = self._is_shared_expert_gate_up(batch[0])
+            if any(self._is_shared_expert_gate_up(p) != split_shared_gate_up for p in batch[1:]):
+                raise RuntimeError("DION2 dense batch mixed split and unsplit shared-expert gate/up parameters")
+            if split_shared_gate_up:
+                self._split_shared_gate_up_batch_ids.add(id(batch))
 
         # Log batch info
         num_shape_groups = len(shape_groups)
@@ -534,14 +567,15 @@ class Dion2WithAuxAdamW(torch.optim.Optimizer):
                 f"{padded_batches} need padding)"
             )
             # Log shape group details
-            for (shape, dtype), params in shape_groups.items():
+            for (shape, dtype, split_shared_gate_up), params in shape_groups.items():
                 natural_width = math.ceil(len(params) / self._world_size)
                 effective_width = self._dion2_group_megabatch_width(len(params))
                 group_capacity = self._world_size * effective_width
                 rounds = math.ceil(len(params) / group_capacity)
                 padded_slots = (-len(params)) % self._world_size
                 log.info(
-                    f"  Shape {shape}, dtype={dtype}: {len(params)} params, "
+                    f"  Shape {shape}, dtype={dtype}, split_shared_gate_up={split_shared_gate_up}: "
+                    f"{len(params)} params, "
                     f"natural_width={natural_width}, effective_width={effective_width}, "
                     f"capacity={group_capacity}, {rounds} rounds, {padded_slots} padded slots"
                 )
@@ -558,6 +592,24 @@ class Dion2WithAuxAdamW(torch.optim.Optimizer):
         if actual_batch_size < 1 or actual_batch_size > max_batch_size:
             raise ValueError(f"DION2 batch size must be in [1, {max_batch_size}], got {actual_batch_size}")
         return math.ceil(actual_batch_size / self._world_size)
+
+    @staticmethod
+    def _validate_redistributed_matrix_shape(
+        local_matrices: torch.Tensor,
+        effective_width: int,
+        expected_matrix_shape: tuple[int, ...],
+    ) -> None:
+        """Verify that redistribution produced complete logical matrices."""
+        if local_matrices.shape[0] != effective_width:
+            raise RuntimeError(
+                f"DION2 expected {effective_width} full matrices per rank after redistribution, "
+                f"got local shape {tuple(local_matrices.shape)}"
+            )
+        if tuple(local_matrices.shape[1:]) != expected_matrix_shape:
+            raise RuntimeError(
+                f"DION2 expected full matrix shape {expected_matrix_shape} after redistribution, "
+                f"got local shape {tuple(local_matrices.shape)}"
+            )
 
     def _base_lr_for(self, p: nn.Parameter) -> float | torch.Tensor:
         """Per-group base learning rate for ``p`` (honors lr_multipliers)."""
@@ -585,52 +637,39 @@ class Dion2WithAuxAdamW(torch.optim.Optimizer):
             self._adjusted_lr_ratios[param_shape] = ratio
         return ratio
 
-    def _maybe_init_master_weights(self) -> None:
-        """Create FP32 master weights on first use (FusedAdam-style lazy init)."""
-        if self.master_weights and not self._masters_initialized:
-            self._create_master_weights()
+    def _matches_shared_expert_gate_up_name(self, p: nn.Parameter) -> bool:
+        """Whether ``p`` has the configured shared-expert gate/up name."""
+        if not self.split_expert_gate_up:
+            return False
+        name_parts = self.param_to_name.get(p, "").split(".")
+        return name_parts[-3:] == ["shared_expert", "gate_up_proj", "weight"]
 
-    def _create_master_weights(self) -> None:
-        """
-        Create FP32 master weight copies for mixed-precision training stability.
+    def _freeze_shared_expert_gate_up_params(self) -> None:
+        """Resolve name-based shared-expert classification once at setup time."""
+        shared_expert_gate_up_params = [p for p in self.dion2_params if self._matches_shared_expert_gate_up_name(p)]
+        self._shared_expert_gate_up_param_ids = {id(p) for p in shared_expert_gate_up_params}
+        for p in shared_expert_gate_up_params:
+            self._validate_shared_expert_gate_up_shape(p)
+            log.info(f"DION2 split shared-expert gate/up parameter: {self.param_to_name[p]} shape={tuple(p.shape)}")
 
-        Creates param_groups_master (for LowPrecisionCallback compatibility) and
-        indexed lists for efficient lookup during DION2/AdamW steps.
-        """
-        # Create param_groups_master mirroring param_groups (like FusedAdam)
-        # This enables LowPrecisionCallback to copy masters -> params periodically
-        self.param_groups_master = []
-        for pg in self.param_groups:
-            param_list = pg["params"]
-            self.param_groups_master.append(
-                {
-                    "params": [p.clone().detach().float() if self.master_weights else None for p in param_list],
-                }
+    def _is_shared_expert_gate_up(self, p: nn.Parameter) -> bool:
+        """Whether ``p`` was classified as a fused shared-expert gate/up projection."""
+        return id(p) in self._shared_expert_gate_up_param_ids
+
+    def _validate_shared_expert_gate_up_shape(self, p: nn.Parameter) -> None:
+        """Validate the physical [2I,H] layout required for virtual splitting."""
+        if p.ndim != 2 or p.shape[0] % 2 != 0:
+            name = self.param_to_name.get(p, "unknown")
+            raise ValueError(
+                f"split_expert_gate_up expected shared expert '{name}' to have shape [2I,H], got {tuple(p.shape)}"
             )
 
-        # Build param_id -> master mapping for efficient lookup
-        self._param_to_master: dict[int, torch.Tensor] = {}
-        for group, group_master in zip(self.param_groups, self.param_groups_master):
-            for p, p_master in zip(group["params"], group_master["params"]):
-                if p_master is not None:
-                    self._param_to_master[id(p)] = p_master
-
-        # Create indexed lists for DION2/AdamW step() methods
-        self._dion2_masters = [self._param_to_master[id(p)] for p in self.dion2_params]
-        self._adamw_masters = [self._param_to_master[id(p)] for p in self.adamw_params]
-
-        dense_dion2_master_numel = sum(m.numel() for m in self._dion2_masters)
-        stacked_dion2_master_numel = sum(self._param_to_master[id(p)].numel() for p in self.stacked_dion2_params)
-        dion2_master_numel = dense_dion2_master_numel + stacked_dion2_master_numel
-        dion2_master_count = len(self._dion2_masters) + len(self.stacked_dion2_params)
-        adamw_master_numel = sum(m.numel() for m in self._adamw_masters)
-        log.info(
-            f"Created FP32 master weights: {dion2_master_count} DION2 params ({dion2_master_numel:,} elements: "
-            f"{len(self._dion2_masters)} dense/{dense_dion2_master_numel:,} + "
-            f"{len(self.stacked_dion2_params)} stacked-expert/{stacked_dion2_master_numel:,}), "
-            f"{len(self._adamw_masters)} AdamW params ({adamw_master_numel:,} elements)"
-        )
-        self._masters_initialized = True
+    def _get_adjusted_lr_ratio_for_param(self, p: nn.Parameter) -> float:
+        """Return LR scaling using a shared gate/up half's logical shape."""
+        shape = tuple(p.shape)
+        if self._is_shared_expert_gate_up(p):
+            shape = (shape[0] // 2, shape[1])
+        return self._get_adjusted_lr_ratio(shape)
 
     @torch.no_grad()
     def step(self, closure=None):
@@ -639,10 +678,6 @@ class Dion2WithAuxAdamW(torch.optim.Optimizer):
         if closure is not None:
             with torch.enable_grad():
                 loss = closure()
-
-        # Lazily build FP32 master weights from the current (possibly
-        # checkpoint-restored) params before the first update.
-        self._maybe_init_master_weights()
 
         # Params are split into three disjoint buckets at init (see
         # categorize_params) and each is updated by a different function below:
@@ -683,8 +718,11 @@ class Dion2WithAuxAdamW(torch.optim.Optimizer):
             self._split_expert_param_ids,
             optimizer_state=self.state,
             param_to_name=self.param_to_name,
-            param_to_master=self._param_to_master,
-            master_weights=self.master_weights,
+            # No FP32 masters: this optimizer's params are already FP32 and are updated in
+            # place (see the class docstring), so the helper's master path is unused and it
+            # writes the update straight into the parameter.
+            param_to_master={},
+            master_weights=False,
             momentum=self.muon_momentum,
             nesterov=self.nesterov,
             ns_steps=self.ns_steps,
@@ -712,7 +750,7 @@ class Dion2WithAuxAdamW(torch.optim.Optimizer):
         2. All-to-all to redistribute shards (each rank gets full submatrix for its param)
         3. Newton-Schulz on K full submatrices per rank (2-D specialization for K=1)
         4. All-to-all to scatter results back
-        5. Apply weight decay and update (to FP32 master if enabled)
+        5. Apply weight decay and update (in place, in FP32, on the param)
         """
         if not self.dion2_params:
             return
@@ -738,6 +776,25 @@ class Dion2WithAuxAdamW(torch.optim.Optimizer):
             ortho = zeropower_via_newtonschulz5(matrices[0], steps=self.ns_steps)  # [M,N]
             return ortho.unsqueeze(0)  # [1,M,N]
         return zeropower_via_newtonschulz5_batched(matrices, steps=self.ns_steps)  # [K,M,N]
+
+    def _dion2_orthogonalize_dense_batch(
+        self,
+        matrices: torch.Tensor,
+        *,
+        split_shared_gate_up: bool,
+    ) -> torch.Tensor:  # matrices/returns: [K,M,N]
+        """Orthogonalize reconstructed dense matrices, virtually splitting shared gate/up."""
+        if not split_shared_gate_up:
+            return self._dion2_orthogonalize(matrices)
+        if matrices.ndim != 3 or matrices.shape[1] % 2 != 0:
+            raise ValueError(
+                "split_expert_gate_up expected reconstructed shared-expert matrices with shape [K,2I,H], "
+                f"got {tuple(matrices.shape)}"
+            )
+        batch_size, fused_rows, hidden_size = matrices.shape
+        logical_matrices = matrices.reshape(batch_size * 2, fused_rows // 2, hidden_size)  # [2K,I,H]
+        logical_ortho = self._dion2_orthogonalize(logical_matrices)  # [2K,I,H]
+        return logical_ortho.reshape(batch_size, fused_rows, hidden_size)  # [K,2I,H]
 
     def _dion2_pre_ns_updates_and_pack(
         self,
@@ -788,7 +845,6 @@ class Dion2WithAuxAdamW(torch.optim.Optimizer):
     ) -> None:  # back_local: [S,...]
         local_params: list[torch.Tensor] = []
         active_indices: list[int] = []
-        masters: list[torch.Tensor] = []
         base_lrs: list[float | torch.Tensor] = []
         weight_decays: list[float] = []
         adjusted_lr_ratios: list[float] = []
@@ -802,53 +858,50 @@ class Dion2WithAuxAdamW(torch.optim.Optimizer):
             local_param = p._local_tensor  # local parameter shard
             base_lr = self._base_lr_for(p)
             wd = self._wd_for(p)
-            adjusted_lr_ratio = self._get_adjusted_lr_ratio(tuple(p.shape))
+            adjusted_lr_ratio = self._get_adjusted_lr_ratio_for_param(p)
             local_params.append(local_param)
             active_indices.append(i)
             base_lrs.append(base_lr)
             weight_decays.append(wd)
             adjusted_lr_ratios.append(adjusted_lr_ratio)
-            if self.master_weights:
-                master = get_local_tensor_if_DTensor(self._param_to_master[id(p)])  # local FP32 master shard
-                masters.append(master)
 
         if not local_params:
             return
-        if self.master_weights:
-            _apply_dion2_distributed_updates_with_master(
-                local_params,
-                back_local,
-                active_indices,
-                masters,
-                base_lrs,
-                weight_decays,
-                adjusted_lr_ratios,
-            )
-        else:
-            _apply_dion2_distributed_updates_without_master(
-                local_params,
-                back_local,
-                active_indices,
-                base_lrs,
-                weight_decays,
-                adjusted_lr_ratios,
-            )
+        _apply_dion2_distributed_updates_compiled(
+            local_params,
+            back_local,
+            active_indices,
+            base_lrs,
+            weight_decays,
+            adjusted_lr_ratios,
+        )
 
     def _process_dion2_batch(self, batch: list[nn.Parameter]) -> None:
         """Process a single batch of params using DION2 all-to-all pattern."""
         world_size = self._world_size
 
         actual_batch_size = len(batch)
+        split_shared_gate_up = id(batch) in self._split_shared_gate_up_batch_ids
 
         # Check if using DTensor (FSDP)
         is_dtensor = isinstance(batch[0], DTensor)
 
         if is_dtensor and world_size > 1:
-            self._process_dion2_batch_distributed(batch, actual_batch_size)
+            self._process_dion2_batch_distributed(
+                batch,
+                actual_batch_size,
+                split_shared_gate_up=split_shared_gate_up,
+            )
         else:
             self._process_dion2_batch_single(batch)
 
-    def _process_dion2_batch_distributed(self, batch: list[nn.Parameter], actual_batch_size: int) -> None:
+    def _process_dion2_batch_distributed(
+        self,
+        batch: list[nn.Parameter],
+        actual_batch_size: int,
+        *,
+        split_shared_gate_up: bool,
+    ) -> None:
         """Process a batch via DTensor collectives (the "each rank orthogonalizes one
         whole param" transpose), correct for uneven / non-divisible shard dims.
 
@@ -879,7 +932,7 @@ class Dion2WithAuxAdamW(torch.optim.Optimizer):
         # well-scoped change: per-param DTensor select (norms via
         # ``pre.abs().sum(sharded_dim).full_tensor()`` -> top-k -> ``index_select``
         # with a Replicate index), error-feedback decay on the momentum buffer, and a
-        # branched apply that reuses ``_apply_submatrix_update[_master]`` (index_add
+        # branched apply that reuses ``_apply_submatrix_update`` (index_add
         # into the selected indices). Deferred for now: every config runs fraction=1.0,
         # so this path is unused and not worth the added complexity yet. Single-device
         # fraction<1 still works via ``_process_dion2_batch_single``.
@@ -985,18 +1038,15 @@ class Dion2WithAuxAdamW(torch.optim.Optimizer):
         )
         local_matrices = per_matrix.to_local()  # [K,M,N]
         del stacked, per_matrix
-        if local_matrices.shape[0] != effective_width:
-            raise RuntimeError(
-                f"DION2 expected {effective_width} full matrices per rank after redistribution, "
-                f"got local shape {tuple(local_matrices.shape)}"
-            )
+        self._validate_redistributed_matrix_shape(local_matrices, effective_width, tuple(first_param.shape))
 
         # Step 4: Newton-Schulz keeps a unified [K,M,N] interface. The helper
         # selects the specialized 2-D kernel internally when K=1.
         ortho_p = self._run_dion2_phase(  # [K,M,N]
             "dion2.megabatch.ns",
-            self._dion2_orthogonalize,
+            self._dion2_orthogonalize_dense_batch,
             local_matrices,
+            split_shared_gate_up=split_shared_gate_up,
         )
         del local_matrices
 
@@ -1068,25 +1118,22 @@ class Dion2WithAuxAdamW(torch.optim.Optimizer):
                 mom.add_(grad)
                 submatrix, indices = self._select_submatrix(mom, state, shard_dim=1)
 
-            # Newton-Schulz
-            ortho = zeropower_via_newtonschulz5(submatrix, steps=self.ns_steps)
+            # Newton-Schulz. A fused shared-expert gate/up projection is split
+            # only after its full logical matrix is available on this device.
+            ortho = self._dion2_orthogonalize_dense_batch(
+                submatrix.unsqueeze(0),
+                split_shared_gate_up=self._is_shared_expert_gate_up(p),
+            )[0]
 
             # Get adjusted LR / wd from the owning param-group.
             base_lr = self._base_lr_for(p)
             wd = self._wd_for(p)
-            adjusted_lr = self._get_adjusted_lr(p.shape, base_lr)
+            adjusted_lr = base_lr * self._get_adjusted_lr_ratio_for_param(p)
 
-            if self.master_weights:
-                # Update FP32 master, then write the param directly inside
-                # _apply_submatrix_update_master.
-                master = get_local_tensor_if_DTensor(self._param_to_master[id(p)])
-                master.mul_(1 - base_lr * wd)
-                self._apply_submatrix_update_master(master, param, ortho, indices, adjusted_lr, select_dim=-2)
-            else:
-                # Apply weight decay
-                param.mul_(1 - base_lr * wd)
-                # Apply update to selected indices
-                self._apply_submatrix_update(param, ortho, indices, adjusted_lr, select_dim=-2)
+            # Apply weight decay
+            param.mul_(1 - base_lr * wd)
+            # Apply update to selected indices
+            self._apply_submatrix_update(param, ortho, indices, adjusted_lr, select_dim=-2)
 
     def _select_submatrix(
         self,
@@ -1183,46 +1230,19 @@ class Dion2WithAuxAdamW(torch.optim.Optimizer):
             else:
                 param.index_add_(dim=1, index=indices, source=scaled_ortho)
 
-    def _apply_submatrix_update_master(
-        self,
-        master: torch.Tensor,
-        param: torch.Tensor,
-        ortho: torch.Tensor,
-        indices: torch.Tensor | None,
-        lr: float | torch.Tensor,
-        select_dim: int,
-    ) -> None:
-        """Apply orthogonalized update to FP32 master, then copy to BF16 param."""
-        ortho = ortho.float()
-
-        if indices is None or self.fraction == 1.0:
-            # Full matrix update. lr may be a tensor (capturable), so scale via
-            # multiply rather than ``alpha=`` (Tensor.add_ only accepts a Number).
-            master.add_(ortho * (-lr))
-        else:
-            # Submatrix update at selected indices
-            scaled_ortho = -lr * ortho
-            if select_dim == -2 or select_dim == 0:
-                master.index_add_(dim=0, index=indices, source=scaled_ortho)
-            else:
-                master.index_add_(dim=1, index=indices, source=scaled_ortho)
-        # Write the BF16 param directly from the updated FP32 master so we do not
-        # depend on LowPrecisionCallback (the OptimizersContainer hides
-        # master_weights from it). Matches FusedAdam's in-kernel param write.
-        param.copy_(master)
-
     def _step_adamw(self) -> None:
         """
         AdamW step using Transformer Engine's fused kernel.
 
         Iterates over param groups so each group's lr / betas / eps / weight_decay
         (set by the factory's lr_multipliers and disable_weight_decay_for_1d_params)
-        is honored, then batches by dtype within the group. The per-group step
-        counter lives on ``group["step"]`` (FusedAdam-style) so it is
-        round-tripped by the distributed-checkpoint optimizer state dict.
+        is honored. The per-group step counter lives on ``group["step"]``
+        (FusedAdam-style) so it is round-tripped by the distributed-checkpoint
+        optimizer state dict.
 
-        When master_weights=True and capturable=True, uses
-        multi_tensor_adam_capturable_master which maintains FP32 master weights.
+        Params and moments are all FP32 (see :meth:`add_param_group`), so a group is one
+        dtype batch for ``multi_tensor_adam_capturable``, which updates the param in
+        place -- there is no master weight for it to maintain alongside.
         """
         if not self.adamw_params:
             return
@@ -1242,16 +1262,15 @@ class Dion2WithAuxAdamW(torch.optim.Optimizer):
             # Per-group step counter stored on the group (FusedAdam convention) so
             # DCP round-trips it on resume.
             if group.get("step", None) is not None:
-                if self.capturable and not isinstance(group["step"], torch.Tensor):
+                if not isinstance(group["step"], torch.Tensor):
                     group["step"] = torch.tensor(group["step"], dtype=torch.int32, device=device)
-                group["step"] = (
-                    group["step"].to(device=device) if isinstance(group["step"], torch.Tensor) else group["step"]
-                )
+                group["step"] = group["step"].to(device=device)
                 group["step"] += 1
             else:
-                group["step"] = torch.tensor([1], dtype=torch.int32, device=device) if self.capturable else 1
+                group["step"] = torch.tensor([1], dtype=torch.int32, device=device)
 
-            if self.capturable and not isinstance(group["lr"], torch.Tensor):
+            # An LR scheduler may have written a plain float into the group.
+            if not isinstance(group["lr"], torch.Tensor):
                 group["lr"] = torch.tensor(group["lr"], dtype=torch.float32, device=device)
 
             lr = group["lr"]
@@ -1260,105 +1279,42 @@ class Dion2WithAuxAdamW(torch.optim.Optimizer):
             beta1, beta2 = group["betas"]
             eps = group["eps"]
 
-            g_16, p_16, m_16, v_16 = [], [], [], []
-            g_bf, p_bf, m_bf, v_bf = [], [], [], []
-            g_32, p_32, m_32, v_32 = [], [], [], []
-            p_16_master, p_bf_master, p_32_master = [], [], []
+            grads, params, exp_avgs, exp_avg_sqs = [], [], [], []
 
             for p in group_params:
                 if p.grad is None:
                     continue
-
-                grad = get_local_tensor_if_DTensor(p.grad)
-                param = get_local_tensor_if_DTensor(p)
 
                 state = self.state[p]
                 if len(state) == 0:
                     state["exp_avg"] = torch.zeros_like(p).float()
                     state["exp_avg_sq"] = torch.zeros_like(p).float()
 
-                exp_avg = get_local_tensor_if_DTensor(state["exp_avg"])
-                exp_avg_sq = get_local_tensor_if_DTensor(state["exp_avg_sq"])
-                master = get_local_tensor_if_DTensor(self._param_to_master[id(p)]) if self.master_weights else None
+                grads.append(get_local_tensor_if_DTensor(p.grad))
+                params.append(get_local_tensor_if_DTensor(p))
+                exp_avgs.append(get_local_tensor_if_DTensor(state["exp_avg"]))
+                exp_avg_sqs.append(get_local_tensor_if_DTensor(state["exp_avg_sq"]))
 
-                if p.dtype == torch.float16:
-                    g_16.append(grad)
-                    p_16.append(param)
-                    m_16.append(exp_avg)
-                    v_16.append(exp_avg_sq)
-                    if self.master_weights:
-                        p_16_master.append(master)
-                elif p.dtype == torch.bfloat16:
-                    g_bf.append(grad)
-                    p_bf.append(param)
-                    m_bf.append(exp_avg)
-                    v_bf.append(exp_avg_sq)
-                    if self.master_weights:
-                        p_bf_master.append(master)
-                elif p.dtype == torch.float32:
-                    g_32.append(grad)
-                    p_32.append(param)
-                    m_32.append(exp_avg)
-                    v_32.append(exp_avg_sq)
-                    if self.master_weights:
-                        p_32_master.append(master)
-                else:
-                    raise RuntimeError(f"Unsupported dtype {p.dtype}")
+            if not grads:
+                continue
 
-            if self.capturable:
-                # The capturable-master kernel requires an inverse-scale argument;
-                # bf16-only training has no grad scaler, so it is a constant one.
-                kernel_inv_scale = torch.ones((1,), device=device, dtype=torch.float32)
-                dtype_batches = (
-                    (g_16, p_16, m_16, v_16, p_16_master),
-                    (g_bf, p_bf, m_bf, v_bf, p_bf_master),
-                    (g_32, p_32, m_32, v_32, p_32_master),
-                )
-                kernel = (
-                    self._multi_tensor_adam_capturable_master
-                    if self.master_weights
-                    else self._multi_tensor_adam_capturable
-                )
-                for g_, p_, m_, v_, pm_ in dtype_batches:
-                    if len(g_) == 0:
-                        continue
-                    tensor_lists = [g_, p_, m_, v_, pm_] if self.master_weights else [g_, p_, m_, v_]
-                    te.pytorch.optimizers.multi_tensor_applier(
-                        kernel,
-                        self._dummy_overflow_buf,
-                        tensor_lists,
-                        lr,
-                        beta1,
-                        beta2,
-                        eps,
-                        step,
-                        adam_w_mode,
-                        bias_correction,
-                        wd,
-                        kernel_inv_scale,
-                    )
-            else:
-                dtype_batches = (
-                    (g_16, p_16, m_16, v_16),
-                    (g_bf, p_bf, m_bf, v_bf),
-                    (g_32, p_32, m_32, v_32),
-                )
-                for g_, p_, m_, v_ in dtype_batches:
-                    if len(g_) == 0:
-                        continue
-                    te.pytorch.optimizers.multi_tensor_applier(
-                        self._multi_tensor_adam,
-                        self._dummy_overflow_buf,
-                        [g_, p_, m_, v_],
-                        lr,
-                        beta1,
-                        beta2,
-                        eps,
-                        step,
-                        adam_w_mode,
-                        bias_correction,
-                        wd,
-                    )
+            # The capturable kernel requires an inverse-scale argument; bf16-only
+            # training has no grad scaler, so it is a constant one.
+            kernel_inv_scale = torch.ones((1,), device=device, dtype=torch.float32)
+            te.pytorch.optimizers.multi_tensor_applier(
+                self._multi_tensor_adam_capturable,
+                self._dummy_overflow_buf,
+                [grads, params, exp_avgs, exp_avg_sqs],
+                lr,
+                beta1,
+                beta2,
+                eps,
+                step,
+                adam_w_mode,
+                bias_correction,
+                wd,
+                kernel_inv_scale,
+            )
 
     def load_state_dict(self, state_dict: dict) -> None:
         """Load optimizer state.
@@ -1366,29 +1322,30 @@ class Dion2WithAuxAdamW(torch.optim.Optimizer):
         The optimizer state (per-param momentum / exp_avg / exp_avg_sq and the
         per-group ``step``) round-trips through the base ``torch.optim.Optimizer``
         state dict, so the distributed-checkpoint container can save/restore it
-        with FSDP2 resharding just like FusedAdam. Master weights are *not*
-        checkpointed; they are rebuilt from the restored params on the next
-        ``step()`` (see ``_maybe_init_master_weights``).
+        with FSDP2 resharding just like FusedAdam. There is no master weight to
+        restore: the FP32 weight is the parameter itself, which the model checkpoint
+        carries.
+
+        The state needs no dtype fix-up either. ``super().load_state_dict`` casts every
+        floating-point state tensor to its param's dtype, which the FP32-param invariant
+        makes FP32 -- so the moments and the momentum buffer come back FP32 whatever
+        precision the checkpoint stored them in.
         """
         super().load_state_dict(state_dict)
 
-        # Force master weights to be rebuilt from the (now restored) params.
-        self._masters_initialized = False
-        self.param_groups_master = None
-
         for group in self.param_groups:
             device = group["params"][0].device if group["params"] else "cuda"
-            if self.capturable:
-                if isinstance(group["lr"], torch.Tensor):
-                    group["lr"] = group["lr"].to(device=device)
-                else:
-                    group["lr"] = torch.tensor(group["lr"], dtype=torch.float32, device=device)
-                if group.get("step", None) is not None and not isinstance(group["step"], torch.Tensor):
-                    group["step"] = torch.tensor(group["step"], dtype=torch.int32, device=device)
-            for p in group["params"]:
-                state = self.state[p]
-                if "exp_avg" in state:
-                    state["exp_avg"] = state["exp_avg"].float()
-                    state["exp_avg_sq"] = state["exp_avg_sq"].float()
-                if "momentum_buffer" in state:
-                    state["momentum_buffer"] = state["momentum_buffer"].float()
+            # load_state_dict copies param_groups from the checkpoint verbatim, so restore
+            # the device tensors the capturable kernels require.
+            if isinstance(group["lr"], torch.Tensor):
+                group["lr"] = group["lr"].to(device=device)
+            else:
+                group["lr"] = torch.tensor(group["lr"], dtype=torch.float32, device=device)
+            if group.get("step", None) is not None and not isinstance(group["step"], torch.Tensor):
+                group["step"] = torch.tensor(group["step"], dtype=torch.int32, device=device)
+
+        # ``super().load_state_dict`` replaces every param_group dict (it rebuilds them
+        # from the checkpoint and re-attaches the current params), so the map built in
+        # categorize_params now points at the discarded dicts -- the DION2 and AdamW
+        # updates would read a pre-resume lr / weight_decay that no scheduler updates.
+        self._param_group_map = {id(p): group for group in self.param_groups for p in group["params"]}

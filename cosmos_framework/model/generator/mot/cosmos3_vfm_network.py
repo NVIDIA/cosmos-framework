@@ -12,17 +12,22 @@ from transformers.modeling_utils import PreTrainedModel
 
 from cosmos_framework.utils import log
 from cosmos_framework.configs.base.defaults.flex_attention import (
+    AttentionScope,
     FlexBackendPreference,
-    NoisyAttentionScope,
+)
+from cosmos_framework.model.generator.mot.action_io_projector import (
+    ACTION_IO_PROJECTOR_DOMAIN_AWARE,
+    ACTION_IO_PROJECTOR_TYPES,
+    build_action_io_projector,
 )
 from cosmos_framework.model.generator.mot.attention import SplitInfo, build_packed_sequence
 from cosmos_framework.model.generator.mot.context_parallel_utils import (
     get_context_parallel_last_hidden_state,
     get_context_parallel_sharded_sequence,
 )
-from cosmos_framework.model.generator.mot.domain_aware_linear import DomainAwareLinear
 from cosmos_framework.model.generator.mot.flex_attention import (
     FlexBackend,
+    MaskItem,
     build_multiview_block_mask,
     resolve_flex_backend,
 )
@@ -43,12 +48,15 @@ class Cosmos3VFMNetworkConfig(PretrainedConfig):
         latent_patch_size=2,
         latent_downsample_factor=8,
         latent_channel_size=16,
+        lidar_latent_channel_size=None,
         max_latent_h=32,
         max_latent_w=32,
         max_latent_t=32,
         enable_fps_modulation=False,
         enable_vision_modality_embeddings: bool = False,
         enable_media_modality_embedding: bool = False,
+        enable_action_modality_embedding: bool = True,
+        enable_sound_modality_embedding: bool = True,
         base_fps=24,
         vit_max_num_patch_per_side=70,
         connector_act="gelu_pytorch_tanh",
@@ -59,9 +67,11 @@ class Cosmos3VFMNetworkConfig(PretrainedConfig):
         joint_attn_implementation="two_way",
         use_multiview_flex_attention: bool = False,
         flex_attention_backend: FlexBackendPreference = "auto",
-        noisy_attention_scope: NoisyAttentionScope = "all_views",
+        attention_scope: AttentionScope = "all_views",
+        decomposed_temporal_window_seconds: float | None = None,
         action_dim=32,
         num_embodiment_domains=32,
+        action_io_projector_type: str = ACTION_IO_PROJECTOR_DOMAIN_AWARE,
         temporal_compression_factor_vision=4,
         temporal_compression_factor_action=1,
         natten_parameter_list=None,
@@ -79,12 +89,15 @@ class Cosmos3VFMNetworkConfig(PretrainedConfig):
         self.latent_patch_size = latent_patch_size
         self.latent_downsample_factor = latent_downsample_factor
         self.latent_channel_size = latent_channel_size
+        self.lidar_latent_channel_size = lidar_latent_channel_size
         self.max_latent_h = max_latent_h
         self.max_latent_w = max_latent_w
         self.max_latent_t = max_latent_t
         self.enable_fps_modulation = enable_fps_modulation
         self.enable_vision_modality_embeddings = enable_vision_modality_embeddings
         self.enable_media_modality_embedding = enable_media_modality_embedding
+        self.enable_action_modality_embedding = enable_action_modality_embedding
+        self.enable_sound_modality_embedding = enable_sound_modality_embedding
         if self.enable_vision_modality_embeddings and self.enable_media_modality_embedding:
             raise ValueError(
                 "enable_vision_modality_embeddings and enable_media_modality_embedding are mutually exclusive"
@@ -99,7 +112,8 @@ class Cosmos3VFMNetworkConfig(PretrainedConfig):
         self.joint_attn_implementation = joint_attn_implementation
         self.use_multiview_flex_attention = use_multiview_flex_attention
         self.flex_attention_backend = flex_attention_backend
-        self.noisy_attention_scope = noisy_attention_scope
+        self.attention_scope: AttentionScope = attention_scope
+        self.decomposed_temporal_window_seconds = decomposed_temporal_window_seconds
         self.temporal_compression_factor_vision = temporal_compression_factor_vision
         self.natten_parameter_list = natten_parameter_list
         self.video_temporal_causal = video_temporal_causal
@@ -109,6 +123,12 @@ class Cosmos3VFMNetworkConfig(PretrainedConfig):
         self.action_gen = action_gen  # whether to generate action tokens
         self.action_dim = action_dim
         self.num_embodiment_domains = num_embodiment_domains
+        if action_io_projector_type not in ACTION_IO_PROJECTOR_TYPES:
+            raise ValueError(
+                f"Unsupported action_io_projector_type={action_io_projector_type!r}; "
+                f"expected one of {ACTION_IO_PROJECTOR_TYPES}."
+            )
+        self.action_io_projector_type = action_io_projector_type
         self.temporal_compression_factor_action = temporal_compression_factor_action
         if self.action_gen:
             assert self.vision_gen, (
@@ -173,12 +193,16 @@ class Cosmos3VFMNetwork(PreTrainedModel):
                 torch.device("cuda", torch.cuda.current_device()) if torch.cuda.is_available() else torch.device("cpu")
             )
             self.flex_backend = resolve_flex_backend(device, config.flex_attention_backend)
+            temporal_window = config.decomposed_temporal_window_seconds
+            temporal_window_note = (
+                f", with a {temporal_window}s decomposed temporal window" if temporal_window is not None else ""
+            )
             log.info(
                 f"Multiview FlexAttention is running on the {self.flex_backend.name} backend "
                 f"(flex_attention_backend={config.flex_attention_backend!r}), with a "
                 f"{self.flex_backend.block_size} block mask over a GEN stream padded to "
                 f"{self.flex_backend.full_seq_alignment} tokens. Noisy tokens attend to the "
-                f"noisy tokens of their sample under scope {config.noisy_attention_scope!r}."
+                f"noisy tokens of their sample under scope {config.attention_scope!r}{temporal_window_note}."
             )
 
         if config.vision_gen:
@@ -196,6 +220,17 @@ class Cosmos3VFMNetwork(PreTrainedModel):
             self.time_embedder = TimestepEmbedder(self.hidden_size, bias=_input_bias)
             self.vae2llm = nn.Linear(self.patch_latent_dim, self.hidden_size, bias=_input_bias)
             self.llm2vae = nn.Linear(self.hidden_size, self.patch_latent_dim)
+
+            # LiDAR is its own modality: a range clip enters and leaves the sequence through
+            # its own pair of projections, the way action and sound do. Its VAE is wider than
+            # the camera's (128 vs 48), and these two matrices are what that costs -- a patch
+            # count follows T, H and W, not channels, so the streams agree on everything else
+            # and share the grid packing, patchify and timestep machinery below.
+            self.lidar_latent_channel = config.lidar_latent_channel_size
+            if self.lidar_latent_channel is not None:
+                self.lidar_patch_latent_dim = self.latent_patch_size**2 * self.lidar_latent_channel
+                self.lidar2llm = nn.Linear(self.lidar_patch_latent_dim, self.hidden_size, bias=_input_bias)
+                self.llm2lidar = nn.Linear(self.hidden_size, self.lidar_patch_latent_dim)
             if config.enable_vision_modality_embeddings:
                 self.image_modality_embed = nn.Parameter(torch.zeros(self.hidden_size))
                 self.video_modality_embed = nn.Parameter(torch.zeros(self.hidden_size))
@@ -205,16 +240,23 @@ class Cosmos3VFMNetwork(PreTrainedModel):
         if config.action_gen:
             self.action_dim = config.action_dim
             self.num_embodiment_domains = config.num_embodiment_domains
-            self.action2llm = DomainAwareLinear(self.action_dim, self.hidden_size, self.num_embodiment_domains)
-            self.llm2action = DomainAwareLinear(self.hidden_size, self.action_dim, self.num_embodiment_domains)
+            self.action_io_projector_type = config.action_io_projector_type
+            self.action2llm = build_action_io_projector(
+                self.action_io_projector_type, self.action_dim, self.hidden_size, self.num_embodiment_domains
+            )
+            self.llm2action = build_action_io_projector(
+                self.action_io_projector_type, self.hidden_size, self.action_dim, self.num_embodiment_domains
+            )
 
-            self.action_modality_embed = nn.Parameter(torch.zeros(self.hidden_size))
+            if config.enable_action_modality_embedding:
+                self.action_modality_embed = nn.Parameter(torch.zeros(self.hidden_size))  # [hidden_size]
 
         if config.sound_gen:
             self.sound_dim = config.sound_dim
             self.sound2llm = nn.Linear(config.sound_dim, self.hidden_size, bias=config.enable_input_bias)
             self.llm2sound = nn.Linear(self.hidden_size, config.sound_dim)
-            self.sound_modality_embed = nn.Parameter(torch.zeros(self.hidden_size))
+            if config.enable_sound_modality_embedding:
+                self.sound_modality_embed = nn.Parameter(torch.zeros(self.hidden_size))  # [hidden_size]
 
         self.config = config
         self.parallel_dims = None
@@ -233,6 +275,18 @@ class Cosmos3VFMNetwork(PreTrainedModel):
             torch.nn.init.trunc_normal_(self.llm2vae.weight, std=std, a=-3 * std, b=3 * std)
             torch.nn.init.zeros_(self.llm2vae.bias)
 
+            if self.lidar_latent_channel is not None:
+                # Fan-in scaling as for every other head; named separately because the
+                # modality embeddings below read the llm2vae ``std``.
+                lidar_in_std = 1.0 / math.sqrt(self.lidar_patch_latent_dim)
+                torch.nn.init.trunc_normal_(
+                    self.lidar2llm.weight, std=lidar_in_std, a=-3 * lidar_in_std, b=3 * lidar_in_std
+                )
+                if self.config.enable_input_bias:
+                    torch.nn.init.zeros_(self.lidar2llm.bias)
+                torch.nn.init.trunc_normal_(self.llm2lidar.weight, std=std, a=-3 * std, b=3 * std)
+                torch.nn.init.zeros_(self.llm2lidar.bias)
+
             if self.config.enable_vision_modality_embeddings:
                 torch.nn.init.trunc_normal_(self.image_modality_embed, std=std, a=-3 * std, b=3 * std)
                 torch.nn.init.trunc_normal_(self.video_modality_embed, std=std, a=-3 * std, b=3 * std)
@@ -240,19 +294,17 @@ class Cosmos3VFMNetwork(PreTrainedModel):
                 torch.nn.init.trunc_normal_(self.media_modality_embed, std=std, a=-3 * std, b=3 * std)
 
         if self.config.action_gen:
-            # DomainAwareLinear uses embeddings for weights, so we initialize them differently
             # action2llm: input_size=action_dim, output_size=hidden_size
             std = 1.0 / math.sqrt(self.action_dim)
-            torch.nn.init.trunc_normal_(self.action2llm.fc.weight, std=std, a=-3 * std, b=3 * std)
-            torch.nn.init.zeros_(self.action2llm.bias.weight)
+            self.action2llm.initialize_action_parameters(std)
 
             # llm2action: input_size=hidden_size, output_size=action_dim
             std = 1.0 / math.sqrt(self.hidden_size)
-            torch.nn.init.trunc_normal_(self.llm2action.fc.weight, std=std, a=-3 * std, b=3 * std)
-            torch.nn.init.zeros_(self.llm2action.bias.weight)
+            self.llm2action.initialize_action_parameters(std)
 
-            std = 1.0 / math.sqrt(self.hidden_size)
-            torch.nn.init.trunc_normal_(self.action_modality_embed, std=std, a=-3 * std, b=3 * std)
+            if self.config.enable_action_modality_embedding:
+                std = 1.0 / math.sqrt(self.hidden_size)
+                torch.nn.init.trunc_normal_(self.action_modality_embed, std=std, a=-3 * std, b=3 * std)  # [hidden_size]
 
         if self.config.sound_gen:
             # sound2llm: input_size=sound_dim, output_size=hidden_size
@@ -266,8 +318,9 @@ class Cosmos3VFMNetwork(PreTrainedModel):
             torch.nn.init.trunc_normal_(self.llm2sound.weight, std=std, a=-3 * std, b=3 * std)
             torch.nn.init.zeros_(self.llm2sound.bias)
 
-            std = 1.0 / math.sqrt(self.hidden_size)
-            torch.nn.init.trunc_normal_(self.sound_modality_embed, std=std, a=-3 * std, b=3 * std)
+            if self.config.enable_sound_modality_embedding:
+                std = 1.0 / math.sqrt(self.hidden_size)
+                torch.nn.init.trunc_normal_(self.sound_modality_embed, std=std, a=-3 * std, b=3 * std)
 
         self.language_model.init_weights(buffer_device=buffer_device)
 
@@ -348,10 +401,21 @@ class Cosmos3VFMNetwork(PreTrainedModel):
             return_only_new_tokens=return_only_new_tokens,
         )
 
+    @property
+    def lidar_gen(self) -> bool:
+        """Whether this network carries the LiDAR stream's own projections."""
+        return self.config.vision_gen and self.lidar_latent_channel is not None
+
     def patchify_and_pack_latents(
-        self, tokens_vision: torch.Tensor, token_shapes_vision: Sequence[tuple[int, ...]]
+        self,
+        tokens_vision: torch.Tensor,
+        token_shapes_vision: Sequence[tuple[int, ...]],
+        latent_channel: int | None = None,
     ) -> tuple[torch.Tensor, List[Tuple[int, int, int]]]:
         p = self.latent_patch_size
+        # One channel count per call: the caller passes its stream's width, since patches of
+        # different widths cannot pack into one tensor.
+        latent_channel = self.latent_channel if latent_channel is None else latent_channel
         # Patchify and pack the latents
         packed_latent = []
         original_latent_shapes = []  # Store original shapes for unpadding later
@@ -371,7 +435,7 @@ class Cosmos3VFMNetwork(PreTrainedModel):
             # Zero-pad if dimensions are not divisible by p
             if h_padded != h_actual or w_padded != w_actual:
                 padded = torch.zeros(
-                    (self.latent_channel, t_actual, h_padded, w_padded),
+                    (latent_channel, t_actual, h_padded, w_padded),
                     device=latent.device,
                     dtype=latent.dtype,
                 )  # [C,T,H_padded,W_padded]
@@ -384,10 +448,10 @@ class Cosmos3VFMNetwork(PreTrainedModel):
 
             # Patchify
             latent = latent.reshape(
-                self.latent_channel, t_actual, h_patches, p, w_patches, p
+                latent_channel, t_actual, h_patches, p, w_patches, p
             )  # [C,T,h_patches,p,w_patches,p]
             latent = torch.einsum("cthpwq->thwpqc", latent).reshape(
-                -1, p * p * self.latent_channel
+                -1, p * p * latent_channel
             )  # [T*h_patches*w_patches,patch_latent_dim]
             packed_latent.append(latent)
 
@@ -401,8 +465,11 @@ class Cosmos3VFMNetwork(PreTrainedModel):
         token_shapes_vision: List[Tuple[int, int, int]],
         noisy_frame_indexes_vision: list[torch.Tensor],
         original_latent_shapes: List[Tuple[int, int, int]] | None = None,
+        latent_channel: int | None = None,
     ) -> list[torch.Tensor]:
         p = self.latent_patch_size
+        # One channel count per call, as in ``patchify_and_pack_latents``.
+        latent_channel = self.latent_channel if latent_channel is None else latent_channel
         unpatchified_latents = []
 
         # Split packed_mse_preds back into individual latents based on token_shapes_vision
@@ -428,7 +495,7 @@ class Cosmos3VFMNetwork(PreTrainedModel):
 
             # Initialize with the original shape (after unpadding), zeros for clean frames
             output_tensor = torch.zeros(
-                (self.latent_channel, t_c, h_orig, w_orig),
+                (latent_channel, t_c, h_orig, w_orig),
                 device=packed_mse_preds.device,
                 dtype=packed_mse_preds.dtype,
             )  # [C,T,H_orig,W_orig]
@@ -439,14 +506,12 @@ class Cosmos3VFMNetwork(PreTrainedModel):
                 latent_patches = packed_mse_preds[start_idx:end_idx]  # [num_patches,patch_latent_dim]
                 # Reshape back to [t_n, h_patches, w_patches, p, p, channels]
                 latent_patches = latent_patches.reshape(
-                    t_n, h_patches, w_patches, p, p, self.latent_channel
+                    t_n, h_patches, w_patches, p, p, latent_channel
                 )  # [T_n,h_patches,w_patches,p,p,C]
                 # Invert the einsum operation: "thwpqc->cthpwq"
                 latent = torch.einsum("thwpqc->cthpwq", latent_patches)  # [C,T_n,h_patches,p,w_patches,p]
                 # Reshape back to [channels, t_n, h_padded, w_padded]
-                latent = latent.reshape(
-                    self.latent_channel, t_n, h_patches * p, w_patches * p
-                )  # [C,T_n,H_padded,W_padded]
+                latent = latent.reshape(latent_channel, t_n, h_patches * p, w_patches * p)  # [C,T_n,H_padded,W_padded]
 
                 # Crop to original dimensions (unpad the zeros)
                 latent = latent[:, :, :h_orig, :w_orig]  # [C,T_n,H_orig,W_orig]
@@ -637,59 +702,97 @@ class Cosmos3VFMNetwork(PreTrainedModel):
         Returns:
             Original latent shapes before padding (for unpadding during decode), or None if no vision tokens.
         """
-        if packed_seq.vision is None or packed_seq.vision.tokens is None:
-            # No vision tokens in this batch
-            return None
-
-        vision = packed_seq.vision
-        assert vision.tokens is not None  # Type narrowing (checked above but reassignment loses it)
-        assert vision.token_shapes is not None
-        assert isinstance(vision.sequence_indexes, torch.Tensor)
-        assert isinstance(vision.timesteps, torch.Tensor)
-        torch._assert(
-            vision.timesteps.dtype in (torch.long, torch.float32),
-            f"Timestep must be long/float32, got {vision.timesteps.dtype}",
+        if self.config.enable_vision_modality_embeddings:
+            modality_embed = self.image_modality_embed if packed_seq.is_image_batch else self.video_modality_embed
+        elif self.config.enable_media_modality_embedding:
+            modality_embed = self.media_modality_embed
+        else:
+            modality_embed = None
+        return self._encode_grid_stream(
+            packed_seq,
+            packed_seq.vision,
+            packed_sequence,
+            vae2llm=self.vae2llm,
+            latent_channel=self.latent_channel,
+            modality_embed=modality_embed,
+            target_dtype=target_dtype,
         )
 
-        assert isinstance(vision.mse_loss_indexes, torch.Tensor)
+    def _encode_lidar(
+        self,
+        packed_seq: PackedSequence,
+        packed_sequence: torch.Tensor,
+        target_dtype: torch.dtype,
+    ) -> List[Tuple[int, int, int]] | None:
+        """Project LiDAR range-view tokens and fill into packed_sequence.
 
-        packed_tokens_vision, original_latent_shapes = self.patchify_and_pack_latents(
-            vision.tokens, vision.token_shapes
-        )  # packed_tokens_vision: [total_vision_patches,patch_latent_dim]
-        packed_tokens_vision = self.vae2llm(packed_tokens_vision.to(target_dtype))  # [total_vision_patches,hidden_size]
-        if self.config.enable_vision_modality_embeddings:
-            vision_modality_embed = (
-                self.image_modality_embed if packed_seq.is_image_batch else self.video_modality_embed
-            )  # [hidden_size]
-            packed_tokens_vision = packed_tokens_vision + vision_modality_embed.view(
-                1, -1
-            )  # [total_vision_patches,hidden_size]
-        elif self.config.enable_media_modality_embedding:
-            packed_tokens_vision = packed_tokens_vision + self.media_modality_embed.view(
-                1, -1
-            )  # [total_vision_patches,hidden_size]
+        Same treatment as the vision stream, through the LiDAR VAE's own width and its own
+        pair of projections. No modality embedding: the two streams already differ by their
+        projections and by where mRoPE puts them.
+        """
+        return self._encode_grid_stream(
+            packed_seq,
+            packed_seq.lidar,
+            packed_sequence,
+            vae2llm=self.lidar2llm,
+            latent_channel=self.lidar_latent_channel,
+            modality_embed=None,
+            target_dtype=target_dtype,
+        )
 
-        has_noisy_vision = vision.mse_loss_indexes.numel() > 0
+    def _encode_grid_stream(
+        self,
+        packed_seq: PackedSequence,
+        modality: ModalityData | None,
+        packed_sequence: torch.Tensor,
+        *,
+        vae2llm: nn.Linear,
+        latent_channel: int,
+        modality_embed: torch.Tensor | None,
+        target_dtype: torch.dtype,
+    ) -> List[Tuple[int, int, int]] | None:
+        """Patchify, project and scatter one stream of VAE latent grids.
 
-        if has_noisy_vision:
-            timesteps_vision = vision.timesteps.to(dtype=torch.float32) * self.timestep_scale  # [N_noisy_frames_vision]
+        Shared by the vision and LiDAR streams so a second grid modality cannot drift from
+        the first on patchification, timestep embedding or where its tokens land.
 
-            packed_timestep_embeds_vision = self._embed_packed_timesteps(
-                timesteps_vision, packed_seq
-            )  # [N_noisy_frames_vision,hidden_size]
-            packed_timestep_embeds_vision = packed_timestep_embeds_vision.to(
-                target_dtype
-            )  # [N_noisy_frames_vision,hidden_size]
+        Returns:
+            Original latent shapes before padding, for unpadding during decode, or ``None``
+            when the stream holds no tokens.
+        """
+        if modality is None or modality.tokens is None:
+            return None
 
-            packed_tokens_vision = _apply_timestep_embeds_to_noisy_tokens(
-                packed_tokens=packed_tokens_vision,
-                packed_timestep_embeds=packed_timestep_embeds_vision,
-                noisy_frame_indexes=vision.noisy_frame_indexes,
-                token_shapes=vision.token_shapes,
-            )  # [total_vision_patches,hidden_size]
+        assert modality.token_shapes is not None
+        assert isinstance(modality.sequence_indexes, torch.Tensor)
+        assert isinstance(modality.timesteps, torch.Tensor)
+        torch._assert(
+            modality.timesteps.dtype in (torch.long, torch.float32),
+            f"Timestep must be long/float32, got {modality.timesteps.dtype}",
+        )
+        assert isinstance(modality.mse_loss_indexes, torch.Tensor)
 
-        packed_sequence[vision.sequence_indexes] = (
-            packed_tokens_vision  # [total_vision_patches,hidden_size] scattered into [N_total,hidden_size]
+        packed_patches, original_latent_shapes = self.patchify_and_pack_latents(
+            modality.tokens, modality.token_shapes, latent_channel=latent_channel
+        )  # [total_patches,patch_latent_dim]
+        packed_tokens = vae2llm(packed_patches.to(target_dtype))  # [total_patches,hidden_size]
+        if modality_embed is not None:
+            packed_tokens = packed_tokens + modality_embed.view(1, -1)  # [total_patches,hidden_size]
+
+        if modality.mse_loss_indexes.numel() > 0:
+            timesteps = modality.timesteps.to(dtype=torch.float32) * self.timestep_scale  # [N_noisy_frames]
+            packed_timestep_embeds = self._embed_packed_timesteps(timesteps, packed_seq)  # [N_noisy_frames,hidden_size]
+            packed_timestep_embeds = packed_timestep_embeds.to(target_dtype)  # [N_noisy_frames,hidden_size]
+
+            packed_tokens = _apply_timestep_embeds_to_noisy_tokens(
+                packed_tokens=packed_tokens,
+                packed_timestep_embeds=packed_timestep_embeds,
+                noisy_frame_indexes=modality.noisy_frame_indexes,
+                token_shapes=modality.token_shapes,
+            )  # [total_patches,hidden_size]
+
+        packed_sequence[modality.sequence_indexes] = (
+            packed_tokens  # [total_patches,hidden_size] scattered into [N_total,hidden_size]
         )
         return original_latent_shapes
 
@@ -708,51 +811,90 @@ class Cosmos3VFMNetwork(PreTrainedModel):
             output_dict: Output dictionary to update with mse_preds (modified in-place).
             original_latent_shapes: Original latent shapes before padding (for unpadding).
         """
-        vision = packed_seq.vision
-        # Check if no vision or no noisy vision tokens
-        has_noisy_vision = (
-            vision is not None
-            and vision.tokens is not None
-            and isinstance(vision.mse_loss_indexes, torch.Tensor)
-            and vision.mse_loss_indexes.numel() > 0
-        )
-        if not has_noisy_vision:
-            # No noisy vision tokens present. The model is predicting actions
-            # given clean vision tokens. We need to execute a dummy forward to maintain
-            # computation graph consistency across ranks (FSDP should torch all weights).
-            preds_vision = torch.zeros(
-                [1, self.patch_latent_dim], device=last_hidden_state.device, dtype=last_hidden_state.dtype
-            )  # [1,patch_latent_dim]
-            preds_vision = self.vae2llm(preds_vision)  # [1,hidden_size]
-            preds_vision = self.llm2vae(preds_vision)  # [1,patch_latent_dim]
-            # Return a list of per-sample zero tensors with correct shapes (e.g. (C, T, H, W)),
-            # so downstream code (_get_velocity, _compute_flow_matching_loss) that iterates over preds_vision
-            # gets properly-shaped tensors. Without this, the dummy tensor (1, patch_latent_dim)
-            # would cause a size mismatch when concatenating vision+action velocities.
-            # When vision is None (no vision in batch), fall back to [preds_vision] purely for
-            # gradient graph consistency — it won't be iterated over.
-            if vision is not None and vision.tokens is not None:
-                preds_vision_list = [torch.zeros_like(tok) for tok in vision.tokens]
-                # Inject dummy forward's computation graph so vae2llm/llm2vae params
-                # stay in the autograd graph (zeros_like creates detached tensors).
-                preds_vision_list[0] = preds_vision_list[0] + 0.0 * preds_vision.sum()
-            else:
-                preds_vision_list = [preds_vision]
-            output_dict.update(preds_vision=preds_vision_list)
-        else:
-            assert vision is not None  # Type narrowing
-            assert isinstance(vision.mse_loss_indexes, torch.Tensor)
-            assert vision.noisy_frame_indexes is not None
-            preds_vision = self.llm2vae(
-                last_hidden_state[vision.mse_loss_indexes]
-            )  # [total_noisy_vision_patches,patch_latent_dim]
-            preds_vision = self.unpatchify_and_unpack_latents(
-                preds_vision,
-                token_shapes_vision=vision.token_shapes,
-                noisy_frame_indexes_vision=vision.noisy_frame_indexes,
+        output_dict.update(
+            preds_vision=self._decode_grid_stream(
+                packed_seq.vision,
+                last_hidden_state,
+                vae2llm=self.vae2llm,
+                llm2vae=self.llm2vae,
+                latent_channel=self.latent_channel,
+                patch_latent_dim=self.patch_latent_dim,
                 original_latent_shapes=original_latent_shapes,
             )
-            output_dict.update(preds_vision=preds_vision)
+        )
+
+    def _decode_lidar(
+        self,
+        packed_seq: PackedSequence,
+        last_hidden_state: torch.Tensor,
+        output_dict: dict,
+        original_latent_shapes: List[Tuple[int, int, int]] | None = None,
+    ) -> None:
+        """Decode LiDAR tokens from hidden states and update output_dict."""
+        output_dict.update(
+            preds_lidar=self._decode_grid_stream(
+                packed_seq.lidar,
+                last_hidden_state,
+                vae2llm=self.lidar2llm,
+                llm2vae=self.llm2lidar,
+                latent_channel=self.lidar_latent_channel,
+                patch_latent_dim=self.lidar_patch_latent_dim,
+                original_latent_shapes=original_latent_shapes,
+            )
+        )
+
+    def _decode_grid_stream(
+        self,
+        modality: ModalityData | None,
+        last_hidden_state: torch.Tensor,
+        *,
+        vae2llm: nn.Linear,
+        llm2vae: nn.Linear,
+        latent_channel: int,
+        patch_latent_dim: int,
+        original_latent_shapes: List[Tuple[int, int, int]] | None,
+    ) -> list[torch.Tensor]:
+        """Read one stream's noisy patches back out of the hidden states.
+
+        Returns:
+            One ``[1,C,T,H,W]`` prediction per item of the stream. A stream with nothing
+            noised -- absent from the batch, or present as conditioning only -- still runs a
+            zero-weighted pass through its own two projections, so every rank reaches the
+            same parameters in a step, which is what FSDP requires.
+        """
+        has_noisy = (
+            modality is not None
+            and modality.tokens is not None
+            and isinstance(modality.mse_loss_indexes, torch.Tensor)
+            and modality.mse_loss_indexes.numel() > 0
+        )
+        if not has_noisy:
+            probe = torch.zeros(
+                [1, patch_latent_dim], device=last_hidden_state.device, dtype=last_hidden_state.dtype
+            )  # [1,patch_latent_dim]
+            probe = llm2vae(vae2llm(probe))  # [1,patch_latent_dim]
+            # Per-item zeros of the right shape, so callers iterating the predictions
+            # (_get_velocity, compute_flow_matching_loss) see the shapes they expect; the
+            # probe is folded into the first so the projections stay in the autograd graph.
+            if modality is not None and modality.tokens is not None:
+                preds = [torch.zeros_like(tok) for tok in modality.tokens]
+                preds[0] = preds[0] + 0.0 * probe.sum()
+                return preds
+            # The stream is absent, so nothing iterates this; it exists for the graph alone.
+            return [probe]
+
+        assert modality is not None  # Type narrowing
+        assert isinstance(modality.mse_loss_indexes, torch.Tensor)
+        assert modality.noisy_frame_indexes is not None
+        noisy_patches = last_hidden_state[modality.mse_loss_indexes]  # [total_noisy_patches,hidden_size]
+        preds = llm2vae(noisy_patches)  # [total_noisy_patches,patch_latent_dim]
+        return self.unpatchify_and_unpack_latents(
+            preds,
+            token_shapes_vision=modality.token_shapes,
+            noisy_frame_indexes_vision=modality.noisy_frame_indexes,
+            original_latent_shapes=original_latent_shapes,
+            latent_channel=latent_channel,
+        )
 
     def _encode_action(
         self,
@@ -777,11 +919,14 @@ class Cosmos3VFMNetwork(PreTrainedModel):
         )
         # Flow interpolation keeps actions in FP32; cast here to match the action encoder's model dtype.
         packed_tokens_action = packed_tokens_action.to(target_dtype)  # [B_action*T_action,action_dim]
-        packed_tokens_action = self.action2llm(packed_tokens_action, per_token_domain_id)
-
-        packed_tokens_action = packed_tokens_action + self.action_modality_embed.view(
-            1, -1
+        packed_tokens_action = self.action2llm(
+            packed_tokens_action, per_token_domain_id
         )  # [B_action*T_action,hidden_size]
+
+        if self.config.enable_action_modality_embedding:
+            packed_tokens_action = packed_tokens_action + self.action_modality_embed.view(
+                1, -1
+            )  # [B_action*T_action,hidden_size]
 
         has_noisy_actions = has_noisy_tokens(action)
         if has_noisy_actions:
@@ -821,12 +966,12 @@ class Cosmos3VFMNetwork(PreTrainedModel):
                 [1, self.action_dim], device=last_hidden_state.device, dtype=last_hidden_state.dtype
             )  # [1,action_dim]
             dummy_domain_id = torch.zeros([1], device=last_hidden_state.device, dtype=torch.long)  # [1]
-            preds_action = self.action2llm(preds_action, dummy_domain_id) + self.action_modality_embed.view(
-                1, -1
-            )  # [1,hidden_size]
+            preds_action = self.action2llm(preds_action, dummy_domain_id)  # [1,hidden_size]
+            if self.config.enable_action_modality_embedding:
+                preds_action = preds_action + self.action_modality_embed.view(1, -1)  # [1,hidden_size]
             preds_action = self.llm2action(preds_action, dummy_domain_id)  # [1,action_dim]
             # Return a list of per-sample zero tensors with correct shapes (e.g. (T, action_dim)),
-            # so downstream code (_get_velocity, _compute_flow_matching_loss) that iterates over preds_action
+            # so downstream code (_get_velocity, compute_flow_matching_loss) that iterates over preds_action
             # gets properly-shaped tensors. Without this, the dummy tensor (1, action_dim)
             # would cause a size mismatch when concatenating vision+action velocities.
             if action is not None and action.tokens is not None:
@@ -888,11 +1033,11 @@ class Cosmos3VFMNetwork(PreTrainedModel):
         )  # [total_sound_tokens,sound_dim]
         packed_tokens_sound = packed_tokens_sound.to(target_dtype)  # [total_sound_tokens,sound_dim]
 
-        # Project sound tokens + modality embedding. Position info comes from
-        # mRoPE position IDs in the attention layers.
-        packed_tokens_sound = (
-            self.sound2llm(packed_tokens_sound) + self.sound_modality_embed
-        )  # [total_sound_tokens,hidden_size]
+        # Project sound tokens and optionally add a modality embedding. Position info
+        # comes from mRoPE position IDs in the attention layers.
+        packed_tokens_sound = self.sound2llm(packed_tokens_sound)  # [total_sound_tokens,hidden_size]
+        if self.config.enable_sound_modality_embedding:
+            packed_tokens_sound = packed_tokens_sound + self.sound_modality_embed  # [total_sound_tokens,hidden_size]
 
         has_noisy_sound = sound.mse_loss_indexes.numel() > 0
         if has_noisy_sound:
@@ -941,7 +1086,9 @@ class Cosmos3VFMNetwork(PreTrainedModel):
             preds_sound = torch.zeros(
                 [1, self.sound_dim], device=last_hidden_state.device, dtype=last_hidden_state.dtype
             )  # [1,sound_dim]
-            preds_sound = self.sound2llm(preds_sound) + self.sound_modality_embed  # [1,hidden_size]
+            preds_sound = self.sound2llm(preds_sound)  # [1,hidden_size]
+            if self.config.enable_sound_modality_embedding:
+                preds_sound = preds_sound + self.sound_modality_embed  # [1,hidden_size]
             preds_sound = self.llm2sound(preds_sound)  # [1,sound_dim]
             if sound is not None and sound.tokens is not None:
                 preds_sound_list = [torch.zeros_like(tok) for tok in sound.tokens]
@@ -982,6 +1129,7 @@ class Cosmos3VFMNetwork(PreTrainedModel):
         Returns:
             dict with keys:
                 - "preds_vision": list[Tensor[C,T,H,W]], one per sample.
+                - "preds_lidar": Velocity predictions for LiDAR tokens (if the LiDAR stream is configured).
                 - "preds_action": Velocity predictions for action tokens (if action_gen).
                 - "preds_sound": Velocity predictions for sound tokens (if sound_gen).
                 - "last_hidden_state": Last hidden state from the transformer.
@@ -996,8 +1144,13 @@ class Cosmos3VFMNetwork(PreTrainedModel):
 
         # encode vision tokens
         original_latent_shapes: List[Tuple[int, int, int]] | None = None
+        original_latent_shapes_lidar: List[Tuple[int, int, int]] | None = None
         if self.config.vision_gen:
             original_latent_shapes = self._encode_vision(packed_seq, packed_sequence, target_dtype)
+
+        # encode lidar tokens
+        if self.lidar_gen:
+            original_latent_shapes_lidar = self._encode_lidar(packed_seq, packed_sequence, target_dtype)
 
         # encode action tokens
         if self.config.action_gen:
@@ -1022,6 +1175,8 @@ class Cosmos3VFMNetwork(PreTrainedModel):
             assert packed_seq.vision.token_shapes is not None
             assert isinstance(packed_seq.vision.sequence_indexes, torch.Tensor)
             all_gen_indexes.append(packed_seq.vision.sequence_indexes)
+        if packed_seq.lidar is not None and isinstance(packed_seq.lidar.sequence_indexes, torch.Tensor):
+            all_gen_indexes.append(packed_seq.lidar.sequence_indexes)
         if packed_seq.action is not None and isinstance(packed_seq.action.sequence_indexes, torch.Tensor):
             all_gen_indexes.append(packed_seq.action.sequence_indexes)
         if packed_seq.sound is not None and isinstance(packed_seq.sound.sequence_indexes, torch.Tensor):
@@ -1101,16 +1256,13 @@ class Cosmos3VFMNetwork(PreTrainedModel):
             # conflict to catch is the configured one: NATTEN parameters would be silently ignored.
             if self.natten_parameter_list:
                 raise ValueError("Multiview FlexAttention and NATTEN cannot be enabled together.")
-            if packed_seq.vision is None or packed_seq.action is not None or packed_seq.sound is not None:
-                raise ValueError("Multiview FlexAttention currently supports vision-only generation batches.")
-            if packed_seq.num_views_per_vision_item is None:
+            if packed_seq.action is not None or packed_seq.sound is not None:
                 raise ValueError(
-                    "Multiview FlexAttention requires per-camera VAE metadata; "
-                    "enable enable_per_camera_vae_encoding on the dataset."
+                    "Multiview FlexAttention supports vision and LiDAR generation batches, not action or sound."
                 )
-            # None means every sample owns exactly one vision item (standard T2V/I2V);
-            # multi-item samples (image editing, transfer) carry explicit counts.
-            num_vision_items_per_sample = packed_seq.num_vision_items_per_sample or [1] * len(packed_seq.sample_lens)
+            if packed_seq.vision is None and packed_seq.lidar is None:
+                raise ValueError("Multiview FlexAttention needs a vision or LiDAR generation stream.")
+            mask_items = _multiview_mask_items(packed_seq)
             full_only_seq, full_q_offsets = get_full_only_seq(input_pack)
             causal_seq, causal_offsets = get_causal_seq(input_pack)
             # The mask is built here, outside the compiled and activation-checkpointed
@@ -1124,15 +1276,13 @@ class Cosmos3VFMNetwork(PreTrainedModel):
             attention_meta.flex_block_mask = build_multiview_block_mask(
                 seq_len=full_only_seq.shape[0],
                 full_q_offsets=full_q_offsets,
-                token_shapes=packed_seq.vision.token_shapes,
-                condition_masks=packed_seq.vision.condition_mask,
-                num_vision_items_per_sample=num_vision_items_per_sample,
-                num_views_per_vision_item=packed_seq.num_views_per_vision_item,
+                items_per_sample=mask_items,
                 device=full_only_seq.device,
                 block_size=self.flex_backend.block_size,
                 num_und=causal_seq.shape[0],
                 causal_offsets=causal_offsets,
-                noisy_attention_scope=self.config.noisy_attention_scope,
+                attention_scope=self.config.attention_scope,
+                decomposed_temporal_window_seconds=self.config.decomposed_temporal_window_seconds,
             )
             # Carried with the mask because its kernels are only valid for the block size the
             # mask was built at; two_way_attention hands both to flex_attention, which
@@ -1140,15 +1290,25 @@ class Cosmos3VFMNetwork(PreTrainedModel):
             attention_meta.flex_backend = self.flex_backend
 
         # ── Multi-control transfer: annotate SplitInfo with per-item ranges ──────
-        # Activated only when packed_seq carries control_weights, i.e. the caller
-        # has set up a multi-control batch via build_transfer_batch.
+        # This block is entered for any pack carrying control_weights, single-control
+        # included; ``_annotate_multi_control_ranges`` is what narrows it to packs with
+        # more than one weight, and leaves the ranges unset otherwise.
+        #
+        # That distinction decides the routing, so it is not cosmetic. dispatch_attention
+        # sends a pack to multi_control_two_way_attention iff control_stream_token_ranges
+        # is set, and that path is maskless by construction. A single-control multiview
+        # pack must therefore leave the ranges unset and fall through to
+        # two_way_attention, which is the only path that applies the multiview flex mask.
+        # Annotating it here would silently drop that mask.
         #
         # multi_control_two_way_attention runs N independent maskless SDPA passes,
         # one per control.  For each pass i, KV = [text | ctrl_i | noisy].
         # The final noisy output is the weighted sum of the N pass outputs:
         #   noisy_out = w_1 * noisy_out_1 + ... + w_N * noisy_out_N
         # All SDPA calls are maskless → Flash Attention always active.
-        # N=1, w=1.0 → identical to two_way_attention.
+        # In the plain dense case, N=1, w=1.0 matches two_way_attention; in a
+        # multiview FlexAttention batch, single-control packs must stay unannotated
+        # so two_way_attention applies the flex mask.
         #
         # CP compatibility: control_stream_token_ranges are gen-relative global
         # offsets computed here, before CP sharding.  Ulysses CP restores the full
@@ -1159,34 +1319,8 @@ class Cosmos3VFMNetwork(PreTrainedModel):
             and packed_seq.control_weights is not None
             and packed_seq.vision_item_split_lens
         ):
-            # For multi-control, each sample must have N controls + 1 noisy item
-            # (items 0..N-2 are controls, item N-1 is the noisy target).
-            # Only batch_size=1 is supported; assert to catch misuse early.
-            assert len(packed_seq.vision_item_split_lens) == 1, (
-                f"Multi-control transfer requires batch_size=1, got {len(packed_seq.vision_item_split_lens)} samples."
-            )
-            item_lens = packed_seq.vision_item_split_lens[0]  # [L_ctrl0, L_ctrl1, ..., L_noisy]
-            weights = packed_seq.control_weights[0]  # [w_ctrl0, w_ctrl1, ...]
-            assert len(item_lens) > 1, (
-                f"Multi-control requires at least 1 control + 1 noisy item; got vision_item_split_lens={item_lens}."
-            )
-            assert len(weights) == len(item_lens) - 1, (
-                f"control_weights length ({len(weights)}) must equal number of control items ({len(item_lens) - 1})."
-            )
-            ctrl_ranges: list[tuple[int, int]] = []
-            cursor = 0
-            for lens in item_lens[:-1]:  # all but last = control streams
-                ctrl_ranges.append((cursor, cursor + lens))
-                cursor += lens
-            noisy_range = (cursor, cursor + item_lens[-1])
             n_gen = int(vision_sequence_indexes.shape[0]) if vision_sequence_indexes is not None else 0
-            assert noisy_range[1] == n_gen, (
-                f"vision_item_split_lens sums to {noisy_range[1]} gen tokens but packed tensor has "
-                f"{n_gen}; packing inconsistency detected."
-            )
-            attention_meta.control_stream_token_ranges = ctrl_ranges
-            attention_meta.noisy_token_range = noisy_range
-            attention_meta.control_weights = weights
+            _annotate_multi_control_ranges(attention_meta, packed_seq, n_gen=n_gen)
 
         input_pack, packed_position_ids = get_context_parallel_sharded_sequence(
             attn_implementation=self.config.joint_attn_implementation,
@@ -1212,6 +1346,10 @@ class Cosmos3VFMNetwork(PreTrainedModel):
         if self.config.vision_gen:
             self._decode_vision(packed_seq, last_hidden_state, output_dict, original_latent_shapes)
 
+        # decode lidar tokens
+        if self.lidar_gen:
+            self._decode_lidar(packed_seq, last_hidden_state, output_dict, original_latent_shapes_lidar)
+
         # decode action tokens
         if self.config.action_gen:
             self._decode_action(packed_seq, last_hidden_state, output_dict)
@@ -1230,6 +1368,139 @@ class Cosmos3VFMNetwork(PreTrainedModel):
             output_dict["ce_preds"] = packed_ce_preds
 
         return output_dict
+
+
+def _annotate_multi_control_ranges(attention_meta: SplitInfo, packed_seq: PackedSequence, *, n_gen: int) -> None:
+    """Populate multi-control attention ranges only for true multi-control packs."""
+    if packed_seq.control_weights is None or not packed_seq.vision_item_split_lens:
+        return
+    has_multiple_controls = any(len(weights) > 1 for weights in packed_seq.control_weights)
+    if not has_multiple_controls:
+        return
+
+    # For multi-control, each sample must have N controls + 1 noisy item
+    # (items 0..N-2 are controls, item N-1 is the noisy target).
+    # Only batch_size=1 is supported; assert to catch misuse early.
+    assert len(packed_seq.vision_item_split_lens) == 1, (
+        f"Multi-control transfer requires batch_size=1, got {len(packed_seq.vision_item_split_lens)} samples."
+    )
+    item_lens = packed_seq.vision_item_split_lens[0]  # [L_ctrl0,L_ctrl1,...,L_noisy]
+    weights = packed_seq.control_weights[0]  # [w_ctrl0,w_ctrl1,...]
+    assert len(item_lens) > 1, (
+        f"Multi-control requires at least 1 control + 1 noisy item; got vision_item_split_lens={item_lens}."
+    )
+    assert len(weights) == len(item_lens) - 1, (
+        f"control_weights length ({len(weights)}) must equal number of control items ({len(item_lens) - 1})."
+    )
+    ctrl_ranges: list[tuple[int, int]] = []
+    cursor = 0
+    for lens in item_lens[:-1]:  # all but last = control streams
+        ctrl_ranges.append((cursor, cursor + lens))
+        cursor += lens
+    noisy_range = (cursor, cursor + item_lens[-1])
+    assert noisy_range[1] == n_gen, (
+        f"vision_item_split_lens sums to {noisy_range[1]} gen tokens but packed tensor has "
+        f"{n_gen}; packing inconsistency detected."
+    )
+    attention_meta.control_stream_token_ranges = ctrl_ranges
+    attention_meta.noisy_token_range = noisy_range
+    attention_meta.control_weights = weights
+
+
+def _multiview_mask_items(packed_seq: PackedSequence) -> list[list[MaskItem]]:
+    """Describe each sample to the multiview mask as its vision items, then its LiDAR items.
+
+    The packer lays a sample out in exactly that order, so walking the two streams sample by
+    sample reproduces the packed order the mask assumes.
+
+    LiDAR items take a view offset past the cameras. A range clip is not one of the rig's
+    views, and the offset is what keeps the rules that match on view from pairing a camera
+    latent with the sweep that happens to share its frame index -- two different instants,
+    since the streams run at different latent rates. A batch with no LiDAR, or a LiDAR-only
+    batch, leaves every item on view 0, so its mask is bit-identical to the single-stream
+    one.
+
+    Control items are marked per stream, not per sample: within each of the two streams,
+    every item but the last is a control item conditioning the one that follows it, which
+    is the same convention the packer uses when it forces those items fully clean
+    (``packers.py``). Doing it per stream is what keeps a camera item's position from
+    deciding whether a LiDAR item is control, and vice versa. A stream contributing a
+    single item per sample -- every T2V/I2V/V2V batch, and either stream of a one-item-each
+    joint pack -- marks nothing, so ``flex_attention``'s control rules stay unreachable.
+
+    Each item's ``seconds_per_frame`` comes from ``ModalityData.seconds_per_frame``, the real
+    time between two of that item's latent frames (``sequence.py``'s ``_pack_grid_tokens``).
+    Camera and LiDAR items disagree here even on a shared frame index, since the two sensors
+    run at different rates -- what ``decomposed_temporal_window_seconds`` needs to compare the
+    two streams by actual capture time rather than by frame index.
+    """
+    num_samples = len(packed_seq.sample_lens)
+    vision = packed_seq.vision
+    lidar = packed_seq.lidar
+    if vision is None and lidar is None:
+        raise ValueError("Multiview FlexAttention needs a vision or LiDAR generation stream.")
+
+    # None means every sample owns exactly one vision item (standard T2V/I2V);
+    # multi-item samples (image editing, transfer) carry explicit counts. A
+    # LiDAR-only pack has no vision items.
+    if vision is None:
+        vision_counts = [0] * num_samples
+        views_per_vision_item: list[int] = []
+    else:
+        vision_counts = packed_seq.num_vision_items_per_sample or [1] * num_samples
+        views_per_vision_item = list(packed_seq.num_views_per_vision_item or [])
+        if not views_per_vision_item:
+            if lidar is None:
+                raise ValueError(
+                    "Multiview FlexAttention requires per-camera VAE metadata; "
+                    "enable enable_per_camera_vae_encoding on the dataset."
+                )
+            # A pack carrying both streams cannot hold that metadata: it is written by the
+            # camera-major uint8 encode path, which a range clip never takes. Such a pack is
+            # single-camera by construction, so one view per item is the grid the mask needs,
+            # and the only thing it needs the count for.
+            views_per_vision_item = [1] * sum(vision_counts)
+
+    lidar_counts = [0] * num_samples
+    if lidar is not None:
+        lidar_counts = packed_seq.num_lidar_items_per_sample or [1] * num_samples
+    # Step past the widest camera item so no LiDAR item can land on a camera's view.
+    lidar_view_offset = max(views_per_vision_item, default=0)
+
+    items_per_sample: list[list[MaskItem]] = []
+    vision_cursor = 0
+    lidar_cursor = 0
+    for sample_idx in range(num_samples):
+        sample_items: list[MaskItem] = []
+        num_vision, num_lidar = vision_counts[sample_idx], lidar_counts[sample_idx]
+        if vision is not None:
+            for item_in_stream in range(num_vision):
+                sample_items.append(
+                    MaskItem(
+                        token_shape=vision.token_shapes[vision_cursor],
+                        condition_mask=vision.condition_mask[vision_cursor],
+                        num_views=views_per_vision_item[vision_cursor],
+                        view_offset=0,
+                        is_control=item_in_stream < num_vision - 1,
+                        seconds_per_frame=vision.seconds_per_frame[vision_cursor],
+                    )
+                )
+                vision_cursor += 1
+        if lidar is not None:
+            for item_in_stream in range(num_lidar):
+                sample_items.append(
+                    MaskItem(
+                        token_shape=lidar.token_shapes[lidar_cursor],
+                        condition_mask=lidar.condition_mask[lidar_cursor],
+                        num_views=1,
+                        view_offset=lidar_view_offset,
+                        is_control=item_in_stream < num_lidar - 1,
+                        seconds_per_frame=lidar.seconds_per_frame[lidar_cursor],
+                    )
+                )
+                lidar_cursor += 1
+        items_per_sample.append(sample_items)
+    return items_per_sample
 
 
 def _apply_timestep_embeds_to_noisy_tokens(

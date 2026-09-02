@@ -10,6 +10,30 @@ from unittest.mock import Mock
 import pytest
 
 
+def test_diffusion_cache_max_consecutive_cached_override(monkeypatch: pytest.MonkeyPatch) -> None:
+    from cosmos_framework.inference import inference
+    from cosmos_framework.model.generator.mot import diffusion_cache
+
+    install = Mock()
+    monkeypatch.setattr(diffusion_cache, "install_diffusion_cache", install)
+    pipe = SimpleNamespace()
+    setup_args = SimpleNamespace(
+        diffusion_cache=True,
+        diffusion_cache_thresh=None,
+        diffusion_cache_residual_order=None,
+        diffusion_cache_max_consecutive_cached=3,
+    )
+
+    inference.OmniInference._maybe_install_diffusion_cache(pipe, setup_args)
+
+    install.assert_called_once_with(
+        pipe=pipe,
+        enabled=True,
+        sample_args_list=[],
+        config_overrides={"max_consecutive_cached": 3},
+    )
+
+
 def test_finalize_data_batch_does_not_mutate_reusable_video_list() -> None:
     torch = pytest.importorskip("torch")
 

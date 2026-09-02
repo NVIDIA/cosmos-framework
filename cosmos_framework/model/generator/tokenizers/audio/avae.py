@@ -1,9 +1,9 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: OpenMDW-1.1
 
-"""
-AVAE (Audio Variational AutoEncoder) Tokenizer for Imaginaire4
-ported from https://invalid_url
+"""Ported from https://invalid_url.
+
+AVAE (Audio Variational AutoEncoder) Tokenizer for Imaginaire4.
 commit hash: 80fbd8cfecb1867cc864e6d4fe0a474d8403a474
 """
 
@@ -250,7 +250,13 @@ class AVAEModel:
         x = x.to(self.dtype)  # [B,C,T_audio_padded]
 
         # Encode
-        enc_return_dict = self.model.encode(x)
+        # Audio clip lengths vary continuously (not bucketed), so cudnn.benchmark's
+        # shape-keyed algorithm cache never stabilizes here and instead re-runs a full
+        # algorithm search on nearly every call. Disable it locally for this conv1d
+        # stack; the actual GPU compute per call is small enough that the heuristic
+        # algorithm choice is negligible next to the cost of the repeated search.
+        with torch.backends.cudnn.flags(benchmark=False, deterministic=True):
+            enc_return_dict = self.model.encode(x)
         if isinstance(enc_return_dict, dict) and "latent" in enc_return_dict:
             latent = enc_return_dict["latent"]  # [B,io_channels,T_latent]
         else:
@@ -275,11 +281,14 @@ class AVAEModel:
         z = z.to(self.dtype)  # [B,io_channels,T_latent]
 
         # Decode
-        if hasattr(self.model, "decode"):
-            dec_return_dict = self.model.decode(z)
-            audio_out = dec_return_dict["decoder_out"]  # [B,C,T_audio]
-        else:
-            audio_out = self.model.decoder(z)  # [B,C,T_audio]
+        # See the matching note in encode(): variable-length latents defeat cudnn.benchmark's
+        # algorithm cache for this conv1d stack, so disable it locally to avoid repeated searches.
+        with torch.backends.cudnn.flags(benchmark=False, deterministic=True):
+            if hasattr(self.model, "decode"):
+                dec_return_dict = self.model.decode(z)
+                audio_out = dec_return_dict["decoder_out"]  # [B,C,T_audio]
+            else:
+                audio_out = self.model.decoder(z)  # [B,C,T_audio]
 
         # Clamp to valid audio range
         audio_out = torch.clamp(audio_out, min=-1.0, max=1.0)  # [B,C,T_audio]

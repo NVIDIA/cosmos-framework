@@ -10,14 +10,20 @@ import wandb
 from cosmos_framework.model._base import ImaginaireModel
 from cosmos_framework.utils import distributed
 from cosmos_framework.utils.callback import Callback
+from cosmos_framework.model.generator.algorithm.loss.flow_matching import (
+    ACTION_SLOT_SAMPLE_COUNT_KEY,
+    ACTION_SLOT_SAMPLE_LOSS_KEY,
+)
 from cosmos_framework.callbacks.wandb_log import _LossRecord
 from cosmos_framework.data.generator.action.utils.domain_utils import EMBODIMENT_TO_DOMAIN_ID
+from cosmos_framework.data.generator.action.utils.unified_action_schema import UNIFIED_ACTION_SLOT_GROUPS
 
 # Build inverse mapping: domain_id -> embodiment_type. First occurrence wins when multiple embodiment names share the
 # same domain id.
 DOMAIN_ID_TO_EMBODIMENT: dict[int, str] = {}
 for _k, _v in EMBODIMENT_TO_DOMAIN_ID.items():
     DOMAIN_ID_TO_EMBODIMENT.setdefault(_v, _k)
+NUM_ACTION_DOMAINS = max(DOMAIN_ID_TO_EMBODIMENT) + 1
 
 
 class TrainingStatsCallback(Callback):
@@ -32,6 +38,8 @@ class TrainingStatsCallback(Callback):
         self._embodiment_total_count: int = 0
         self._per_embodiment_loss: dict[str, _LossRecord] = {}
         self._per_embodiment_sub_loss: dict[str, dict[str, _LossRecord]] = {}
+        self._action_slot_family_stats: dict[str, torch.Tensor] = {}
+        self._action_slot_rank_stats: torch.Tensor | None = None
 
     def _accumulate_mode_counts(self, data_batch: dict[str, torch.Tensor]) -> None:
         modes = data_batch.get("mode", None)
@@ -186,11 +194,135 @@ class TrainingStatsCallback(Callback):
         if embodiment not in self._per_embodiment_sub_loss:
             self._per_embodiment_sub_loss[embodiment] = {}
         for key in output_batch:
+            if key.startswith("_"):
+                continue
             if "loss" in key and "per_instance" not in key:
                 if key not in self._per_embodiment_sub_loss[embodiment]:
                     self._per_embodiment_sub_loss[embodiment][key] = _LossRecord()
                 self._per_embodiment_sub_loss[embodiment][key].loss += output_batch[key].detach().float()
                 self._per_embodiment_sub_loss[embodiment][key].iter_count += 1
+
+    def _accumulate_rank_action_slot_stats(self, sample_loss: torch.Tensor, sample_count: torch.Tensor) -> None:
+        """Accumulate optimizer-aligned rank/microbatch means."""
+        # Match the optimizer reduction: every contributing rank-local
+        # microbatch mean has equal weight, independent of its sample count.
+        rank_sample_count = sample_count.sum(dim=0)
+        rank_has_slot = rank_sample_count.gt(0)
+        if self._action_slot_rank_stats is None:
+            self._action_slot_rank_stats = sample_loss.new_zeros(
+                (2, len(UNIFIED_ACTION_SLOT_GROUPS)), dtype=torch.float32
+            )
+        self._action_slot_rank_stats[0].add_(sample_loss.sum(dim=0) / rank_sample_count.clamp(min=1))
+        self._action_slot_rank_stats[1].add_(rank_has_slot.to(dtype=torch.float32))
+
+    def _accumulate_family_action_slot_stats(
+        self, sample_loss: torch.Tensor, sample_count: torch.Tensor, dataset_names: list[str]
+    ) -> None:
+        """Accumulate sample-weighted statistics for each action dataset."""
+        for dataset_name in sorted(set(dataset_names)):
+            row_indices = [index for index, name in enumerate(dataset_names) if name == dataset_name]
+            index = torch.tensor(row_indices, device=sample_loss.device)
+            stats = self._action_slot_family_stats.get(dataset_name)
+            if stats is None:
+                stats = sample_loss.new_zeros((2, len(UNIFIED_ACTION_SLOT_GROUPS)), dtype=torch.float32)
+                self._action_slot_family_stats[dataset_name] = stats
+            stats[0].add_(sample_loss.index_select(0, index).sum(dim=0))
+            stats[1].add_(sample_count.index_select(0, index).sum(dim=0))
+
+    def _accumulate_action_slot_stats(self, output_batch: dict[str, torch.Tensor]) -> None:
+        """Accumulate global and per-dataset action-slot diagnostics."""
+        sample_loss = output_batch.get(ACTION_SLOT_SAMPLE_LOSS_KEY)
+        sample_count = output_batch.get(ACTION_SLOT_SAMPLE_COUNT_KEY)
+        if (
+            not isinstance(sample_loss, torch.Tensor)
+            or not isinstance(sample_count, torch.Tensor)
+            or sample_loss.ndim != 2
+            or sample_loss.shape != sample_count.shape
+            or sample_loss.shape[1] != len(UNIFIED_ACTION_SLOT_GROUPS)
+        ):
+            return
+
+        sample_loss = sample_loss.detach().float()
+        sample_count = sample_count.detach().float()
+        self._accumulate_rank_action_slot_stats(sample_loss, sample_count)
+
+        dataset_names = output_batch.get("_action_family")
+        if isinstance(dataset_names, str):
+            dataset_names = [dataset_names]
+        if (
+            not isinstance(dataset_names, (list, tuple))
+            or len(dataset_names) != sample_loss.shape[0]
+            or any(not isinstance(name, str) or not name for name in dataset_names)
+        ):
+            return
+        self._accumulate_family_action_slot_stats(sample_loss, sample_count, list(dataset_names))
+
+    def _compute_action_slot_loss_stats(self, log_prefix: str) -> dict[str, float]:
+        """Aggregate rank-weighted global and sample-weighted per-dataset slot losses."""
+        local_dataset_stats = {
+            dataset_name: stats.cpu().tolist() for dataset_name, stats in self._action_slot_family_stats.items()
+        }
+        local_rank_stats = self._action_slot_rank_stats
+        if local_rank_stats is None:
+            local_rank_stats = torch.zeros(2, len(UNIFIED_ACTION_SLOT_GROUPS), dtype=torch.float32)
+        local_payload = (local_dataset_stats, local_rank_stats.cpu().tolist())
+        if dist.is_available() and dist.is_initialized():
+            gathered: list[tuple[dict[str, list[list[float]]], list[list[float]]] | None] = [
+                None for _ in range(dist.get_world_size())
+            ]
+            dist.all_gather_object(gathered, local_payload)
+        else:
+            gathered = [local_payload]
+
+        family_totals: dict[str, torch.Tensor] = {}
+        rank_totals = torch.zeros(2, len(UNIFIED_ACTION_SLOT_GROUPS), dtype=torch.float64)
+        for payload in gathered:
+            if payload is None:
+                continue
+            dataset_stats, rank_stats = payload
+            rank_totals.add_(torch.tensor(rank_stats, dtype=torch.float64))
+            for dataset_name, stats in dataset_stats.items():
+                family_totals.setdefault(
+                    dataset_name,
+                    torch.zeros(2, len(UNIFIED_ACTION_SLOT_GROUPS), dtype=torch.float64),
+                ).add_(torch.tensor(stats, dtype=torch.float64))
+
+        result: dict[str, float] = {}
+        for slot_index, (slot_name, _) in enumerate(UNIFIED_ACTION_SLOT_GROUPS):
+            count = rank_totals[1, slot_index].item()
+            if count > 0:
+                result[f"{log_prefix}_stats_loss_action_slot/{slot_name}"] = rank_totals[0, slot_index].item() / count
+        for dataset_name, stats in sorted(family_totals.items()):
+            sample_loss_sum = stats[0]
+            sample_count = stats[1]
+            for slot_index, (slot_name, _) in enumerate(UNIFIED_ACTION_SLOT_GROUPS):
+                count = sample_count[slot_index].item()
+                if count > 0:
+                    result[f"{log_prefix}_stats_action_slot_loss/{dataset_name}/{slot_name}"] = (
+                        sample_loss_sum[slot_index].item() / count
+                    )
+                    result[f"{log_prefix}_stats_action_slot_count/{dataset_name}/{slot_name}"] = count
+        self._action_slot_family_stats = {}
+        self._action_slot_rank_stats = None
+        return result
+
+    @torch.no_grad()
+    def on_training_step_batch_end(
+        self,
+        model: ImaginaireModel,
+        data_batch: dict[str, torch.Tensor],
+        output_batch: dict[str, torch.Tensor],
+        loss: torch.Tensor,
+        iteration: int = 0,
+    ) -> None:
+        parallel_dims = getattr(model, "parallel_dims", None)
+        if (
+            parallel_dims is not None
+            and getattr(parallel_dims, "cp_enabled", False)
+            and getattr(parallel_dims, "cp_rank", 0) != 0
+        ):
+            return
+        self._accumulate_action_slot_stats(output_batch)
 
     def _compute_per_embodiment_loss_stats(self, log_prefix: str) -> dict[str, float]:
         """Compute per-embodiment loss averages across all ranks.
@@ -274,6 +406,7 @@ class TrainingStatsCallback(Callback):
         mode_total, mode_counts = self._gather_global_mode_counts()
         embodiment_total, embodiment_counts = self._gather_global_embodiment_counts()
         per_embodiment_loss_dict = self._compute_per_embodiment_loss_stats(log_prefix="train")
+        action_slot_loss_dict = self._compute_action_slot_loss_stats(log_prefix="train")
 
         if not distributed.is_rank0():
             return
@@ -291,5 +424,6 @@ class TrainingStatsCallback(Callback):
             )
         )
         log_dict.update(per_embodiment_loss_dict)
+        log_dict.update(action_slot_loss_dict)
 
         wandb.log({k: float(v) for k, v in log_dict.items()}, step=iteration)

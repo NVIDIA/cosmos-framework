@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import importlib
+import inspect
 import os
 import sys
 import time
@@ -392,7 +393,7 @@ class Profiling:
     # CUDA memory snapshot: set this True to dump allocator snapshots.
     enable_memory_snapshot: bool = False
     save_s3: bool = False
-    profile_freq: int = 1
+    profile_freq: int = 100
     # Number of warmup iterations before the active profile iterations.
     profile_warmup: int = 3
     # Number of consecutive active iterations to capture in one trace.
@@ -525,6 +526,12 @@ class Config:
     def validate(self) -> None:
         """Validate that the config has all required fields."""
 
+        # The broadcast below is the job's first world-size collective, so it is where the world NCCL
+        # communicator actually gets built. Build it explicitly and under a deadline first, so a
+        # cross-domain fabric fault reports itself here instead of hanging inside config validation
+        # until an external reaper reclaims the allocation.
+        distributed.ensure_world_communicator()
+
         # broadcast job.name across all ranks to make sure it is consistent
         # otherwise, unaligned job names leads unaligned path to save checkpoints
         job_name_tensor = torch.ByteTensor(bytearray(self.job.name, "utf-8")).cuda()
@@ -536,11 +543,18 @@ class Config:
         assert self.job.name != ""
 
 
-def load_config(config_path: str, opts: list[str], enable_one_logger: bool = False) -> Config:
+def load_config(
+    config_path: str,
+    opts: list[str],
+    enable_one_logger: bool = False,
+    experiment_module: str | None = None,
+) -> Config:
     from cosmos_framework.utils.serialization import from_yaml, load_callable
 
     t1 = time.monotonic_ns()
     if config_path.endswith(".yaml"):
+        if experiment_module is not None:
+            raise ValueError("experiment_module is only supported for Python configs")
         config = from_yaml(config_path)
         # for registration of dataloaders, etc.
         _ = load_callable(config.__module__).make_config()
@@ -549,7 +563,7 @@ def load_config(config_path: str, opts: list[str], enable_one_logger: bool = Fal
 
         config = override(config, opts, remove_defaults=True)
     else:
-        config = _load_py_config(config_path, opts, validate=False)
+        config = _load_py_config(config_path, opts, validate=False, experiment_module=experiment_module)
 
     if enable_one_logger:
         try:
@@ -568,7 +582,12 @@ def load_config(config_path: str, opts: list[str], enable_one_logger: bool = Fal
     return config
 
 
-def _load_py_config(config_path: str, opts: list[str], validate: bool = True) -> Config:
+def _load_py_config(
+    config_path: str,
+    opts: list[str],
+    validate: bool = True,
+    experiment_module: str | None = None,
+) -> Config:
     # NOTE: circular dependency
     from cosmos_framework.utils.config_helper import get_config_module, override
 
@@ -578,7 +597,20 @@ def _load_py_config(config_path: str, opts: list[str], validate: bool = True) ->
     logging.debug(f"get_config_module: took {(t2 - t1) / 1e6:.2f}ms")
 
     t1 = time.monotonic_ns()
-    config = importlib.import_module(config_module).make_config()
+    config_factory = importlib.import_module(config_module).make_config
+    if experiment_module is None:
+        config = config_factory()
+    else:
+        parameters = inspect.signature(config_factory).parameters
+        accepts_experiment_module = "experiment_module" in parameters or any(
+            parameter.kind is inspect.Parameter.VAR_KEYWORD for parameter in parameters.values()
+        )
+        if not accepts_experiment_module:
+            raise ValueError(
+                f"{config_module}.make_config() does not accept experiment_module; "
+                "remove --experiment-module or update make_config()"
+            )
+        config = config_factory(experiment_module=experiment_module)
     t2 = time.monotonic_ns()
     logging.debug(f"importlib.import_module: took {(t2 - t1) / 1e6:.2f}ms")
 

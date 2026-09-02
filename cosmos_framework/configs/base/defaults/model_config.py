@@ -13,6 +13,7 @@ from cosmos_framework.configs.base.defaults.flex_attention import FlexAttentionC
 from cosmos_framework.configs.base.defaults.parallelism import ParallelismConfig
 from cosmos_framework.configs.base.defaults.quantization import QuantizationConfig
 from cosmos_framework.configs.base.defaults.reasoner import VLMConfig
+from cosmos_framework.model.generator.mot.action_io_projector import ACTION_IO_PROJECTOR_TYPES
 from cosmos_framework.model.generator.utils.load_balancing_stats import LBLConfig
 
 # Mirrors ``cosmos3.common.args.AttentionIOLayout``. Defined locally on purpose: importing
@@ -36,6 +37,12 @@ class DiffusionExpertConfig:
     # generation tokens (``media_modality_embed``). Mutually exclusive with
     # ``enable_vision_modality_embeddings``. Disabled by default.
     enable_media_modality_embedding: bool = False
+    # Whether to add a learned modality embedding to action generation tokens.
+    # Enabled by default to preserve legacy checkpoints and model behavior.
+    enable_action_modality_embedding: bool = True
+    # Whether to add a learned modality embedding to sound generation tokens.
+    # Enabled by default
+    enable_sound_modality_embedding: bool = True
 
     patch_spatial: int = 2
     max_vae_latent_side_after_patchify: int = (
@@ -72,6 +79,7 @@ class RectifiedFlowTrainingConfig:
     loss_scale: float = 1.0  # Loss scale
     image_loss_scale: float | None = None  # If set, overrides loss_scale for images
     sound_loss_scale: float | None = None  # If set, overrides loss_scale for sound
+    lidar_loss_scale: float | None = None  # If set, overrides loss_scale for lidar
     use_discrete_rf: bool = False  # Whether to use discrete formulation of rectified flow
 
     # user: please adjust this value according to loss_scale to balance the action loss with the video loss.
@@ -156,6 +164,26 @@ class OmniMoTModelConfig:
 
     Reasoner-only inference disables this to avoid loading the generation VAE.
     """
+
+    lidar_tokenizer: LazyDict | None = None
+    """VAE for the LiDAR range-view stream, alongside the camera VAE in ``tokenizer``.
+
+    When set, a sample's ``lidar`` items are encoded and decoded by this VAE, which lets
+    one sample carry both camera clips and LiDAR range clips. Its ``latent_ch`` is
+    expected to differ from ``state_ch``; LiDAR keeps its own width through its own
+    projections in the network, so ``lidar_state_ch`` must be set to the same value.
+    """
+
+    lidar_state_ch: int | None = None
+    """LiDAR VAE latent channel count, i.e. the width of the network's LiDAR heads."""
+
+    lidar_fps: float | None = None
+    """Sweep rate in Hz of LiDAR items, the counterpart of the camera's per-sample fps.
+
+    With the LiDAR VAE's temporal compression this converts a LiDAR latent index to
+    seconds, which is what puts the two sensors' latents on one mRoPE time axis.
+    """
+
     net: LazyDict = None
     ema: EMAConfig = EMAConfig()
 
@@ -287,7 +315,13 @@ class OmniMoTModelConfig:
     # action configs
     action_gen: bool = False  # whether to use action related parameters and condition/generate action tokens
     max_action_dim: int = 32  # maximum dimension of the action space, we need to pad the data to this dimension.
-    num_embodiment_domains: int = 32  # number of domains for the domain-aware linear layer
+    num_embodiment_domains: int = 32  # number of action domains/types supported by the I/O projectors
+    # Selects both action2llm and llm2action together so experiments cannot accidentally
+    # compare a hybrid encoder/decoder pair. Legacy configs retain domain-aware behavior.
+    action_io_projector_type: str = attrs.field(
+        default="domain_aware",
+        validator=attrs.validators.in_(ACTION_IO_PROJECTOR_TYPES),
+    )
 
     # sound configs
     sound_gen: bool = False  # whether to use sound related parameters and condition/generate sound tokens
@@ -300,8 +334,6 @@ class OmniMoTModelConfig:
     # the MoE router input and create prompt invariant routing.  This is observed empirically
     # in the 30B-A3B checkpoint.
     enable_input_bias: bool = True
-
-    log_enc_time_every_n: int = 100  # Frequency of logging encoding time to W&B
 
     # When True, ``OmniMoTModel.state_dict`` / ``load_state_dict`` skip the
     # reasoner (und) pathway weights under ``language_model`` — i.e. every key

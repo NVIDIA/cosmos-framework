@@ -27,7 +27,7 @@ class InferenceArgs(pydantic.BaseModel):
     Accepts glob patterns (e.g. `inputs/*.json`).
     """
 
-    setup: SetupOverrides = OmniSetupOverrides.model_construct()
+    setup: SetupOverrides = OmniSetupOverrides.model_construct(diffusion_cache=True)
     """Setup arguments."""
 
 
@@ -53,6 +53,7 @@ def inference(args: InferenceArgs):
             sample_overrides.download(sample_overrides.output_dir / "inputs")
 
     pipe = setup_args.get_inference_cls().create(setup_args)
+
     sample_args_list = []
     for overrides in sample_overrides_list:
         try:
@@ -65,6 +66,7 @@ def inference(args: InferenceArgs):
             overrides.output_dir.mkdir(parents=True, exist_ok=True)
             skip_output = SampleOutputs(args=overrides.model_dump(mode="json"), status="skip", message=msg)
             (overrides.output_dir / "sample_outputs.json").write_text(skip_output.model_dump_json())
+
     pipe.generate(sample_args_list)
 
     if setup_args.benchmark and is_rank0():

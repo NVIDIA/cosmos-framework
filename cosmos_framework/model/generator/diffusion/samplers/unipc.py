@@ -1,7 +1,8 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: OpenMDW-1.1
 
-from typing import Callable, Optional
+from collections.abc import Callable
+from typing import Optional
 
 import attrs
 import torch
@@ -36,6 +37,7 @@ class UniPCSampler(torch.nn.Module):
         num_steps: int = 35,
         shift: float | None = None,
         seed: int | list[int] | None = None,
+        step_callback: Callable[[int, int], None] | None = None,
     ) -> torch.Tensor | list[torch.Tensor]:
         """Run the UniPC multi-step sampling loop.
 
@@ -80,7 +82,9 @@ class UniPCSampler(torch.nn.Module):
         timesteps = sample_scheduler[0].timesteps if isinstance(sample_scheduler, list) else sample_scheduler.timesteps
         latent = noise
 
-        for timestep in progress_bar(timesteps, desc="Sampling", total=len(timesteps)):
+        for step_index, timestep in enumerate(progress_bar(timesteps, desc="Sampling", total=len(timesteps))):
+            if step_callback is not None:
+                step_callback(step_index, len(timesteps))
             velocity_pred = velocity_fn(latent, timestep.reshape(1, 1))
 
             def _scheduler_step(

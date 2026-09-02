@@ -6,6 +6,7 @@ IGNORE_INDEX = -100
 PROCESSOR_KEYS_TO_ADD_QWEN = [
     "input_ids",
     "attention_mask",
+    "mm_token_type_ids",
     "pixel_values",
     "pixel_values_videos",
     "image_grid_thw",

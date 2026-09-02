@@ -142,8 +142,8 @@ class ImaginaireTrainer:
             LazyConfig.save_yaml(config, f"{config.job.path_local}/config.yaml")
         dist.barrier()
         if INTERNAL:
-            log.init_loguru_file(f"{config.job.path_local}/stdout.log")
             if distributed.is_rank0():
+                log.init_loguru_file(f"{config.job.path_local}/stdout.log")
                 # Print important environment variables and the effective config.
                 log.info("Config:\n" + config.pretty_print(use_color=True))
             misc.print_environ_variables(["TORCH_HOME", "IMAGINAIRE_OUTPUT_ROOT", "ENABLE_ONELOGGER"])
@@ -242,6 +242,24 @@ class ImaginaireTrainer:
         self._cp_data_window.advance(cp_size)
         return data_batch, False
 
+    @staticmethod
+    def _context_parallel_size(model: ImaginaireModel) -> int:
+        parallel_dims = getattr(model, "parallel_dims", None)
+        if parallel_dims is None or not parallel_dims.cp_enabled:
+            return 1
+        return int(parallel_dims.cp_mesh.size())
+
+    def _resume_dataloader_fetch_count(self, model: ImaginaireModel, iteration: int) -> int:
+        """Return the raw-batch position used to restart the dataloader.
+
+        Partial CP windows are intentionally discarded on resume because their
+        rank-local batches and tokenized payloads are not checkpointed. Starting at
+        the next raw batch avoids replaying any data from that partial window.
+        """
+        microsteps = iteration * self.config.trainer.grad_accum_iter
+        cp_size = self._context_parallel_size(model)
+        return (microsteps + cp_size - 1) // cp_size
+
     def train(
         self,
         model: ImaginaireModel,
@@ -266,8 +284,9 @@ class ImaginaireTrainer:
         self.callbacks.on_optimizer_init_end()
         # Load the model checkpoint and get the starting iteration number.
         iteration = self.checkpointer.load(model, optimizer, scheduler, grad_scaler)
+        dataloader_fetch_count = self._resume_dataloader_fetch_count(model, iteration)
         if hasattr(dataloader_train, "set_start_iteration"):
-            dataloader_train.set_start_iteration(iteration * self.config.trainer.grad_accum_iter)
+            dataloader_train.set_start_iteration(dataloader_fetch_count)
         grad_accum_iter = 0
         log.critical(f"Distributed parallelism mode: {self.config.trainer.distributed_parallelism}")
         if self.config.trainer.distributed_parallelism == "ddp":
@@ -302,8 +321,14 @@ class ImaginaireTrainer:
             maybe_enable_nsys_profiling(self.config, global_step=iteration) as nsys_profiler,
         ):
             while True:
+                if iteration >= self.config.trainer.max_iter:
+                    break
                 dataloader_train_iter = iter(dataloader_train)
                 while True:
+                    # If max_iter is reached, exit the training loop before loading the nex batch
+                    if iteration >= self.config.trainer.max_iter:
+                        _end_training = True
+                        break
                     self.callbacks.on_before_dataloading(iteration)
                     try:
                         with (
@@ -324,10 +349,6 @@ class ImaginaireTrainer:
                         break
                     finally:
                         self.callbacks.on_after_dataloading(iteration)
-                    # If max_iter is reached, exit the training loop.
-                    if iteration >= self.config.trainer.max_iter:
-                        _end_training = True
-                        break
                     # Move all tensors in the data batch to GPU device.
                     data_batch = misc.to(data_batch, device="cuda")
                     # Keep the CUDA copy for later slots in the CP data window.
@@ -427,7 +448,8 @@ class ImaginaireTrainer:
                 with self.straggler_detector.profile_section(
                     "bwd", self.config.trainer.straggler_detection.analyze_backward
                 ):
-                    loss_scaled = grad_scaler.scale(loss / self.config.trainer.grad_accum_iter)
+                    backward_loss = output_batch.get("_backward_loss", loss)
+                    loss_scaled = grad_scaler.scale(backward_loss / self.config.trainer.grad_accum_iter)
                     loss_scaled.backward()
                     model.on_after_backward()
             self.callbacks.on_after_backward(model, iteration=iteration)
@@ -437,10 +459,19 @@ class ImaginaireTrainer:
                 with self.straggler_detector.profile_section(
                     "opt", self.config.trainer.straggler_detection.analyze_optimizer
                 ):
-                    self.callbacks.on_before_optimizer_step(
-                        model, optimizer, scheduler, grad_scaler, iteration=iteration
-                    )
-                    model.on_before_optimizer_step(optimizer, scheduler, iteration=iteration)
+                    # Window-normalized objectives must scale accumulated gradients before
+                    # clipping/norm-monitor callbacks inspect them. Other models retain the
+                    # historical callback-before-model hook order.
+                    if "_backward_loss" in output_batch:
+                        model.on_before_optimizer_step(optimizer, scheduler, iteration=iteration)
+                        self.callbacks.on_before_optimizer_step(
+                            model, optimizer, scheduler, grad_scaler, iteration=iteration
+                        )
+                    else:
+                        self.callbacks.on_before_optimizer_step(
+                            model, optimizer, scheduler, grad_scaler, iteration=iteration
+                        )
+                        model.on_before_optimizer_step(optimizer, scheduler, iteration=iteration)
                     self._optimizer_step(model, optimizer, scheduler, grad_scaler, iteration=iteration)
                     self.callbacks.on_before_zero_grad(model, optimizer, scheduler, iteration=iteration)
                     model.on_before_zero_grad(optimizer, scheduler, iteration=iteration)

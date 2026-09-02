@@ -66,6 +66,7 @@ from cosmos_framework.model.tokenizer.models.utils import (
     sparse_to_batched_tensor,
     sparse_to_img_list,
 )
+from cosmos_framework.model.tokenizer.utils.precision import activation_dtype
 from cosmos_framework.model.tokenizer.utils.tensors import cat_with_bounded_inputs, stack_with_bounded_inputs
 
 # =============================================================================
@@ -677,6 +678,7 @@ class SparseTransformerBase(nn.Module):
         self.use_ragged_varlen_train_path: bool = use_ragged_varlen_train_path
         self.checkpoint_group_size: int = checkpoint_group_size
         self.gradient_checkpoint_scope: Literal["full_layer", "mlp_only"] = gradient_checkpoint_scope
+        self.preserve_fp32_residual_stream: bool = False
         self.num_learned_register_tokens: int = num_learned_register_tokens
         self.use_zero_input_register_token: bool = use_zero_input_register_token
         self.register_token_init_std: float = register_token_init_std
@@ -746,6 +748,25 @@ class SparseTransformerBase(nn.Module):
             self.dense_train_backend,
             use_compile=torch.compiler.is_compiling(),
         )
+
+    def _resolve_block_dtype(self) -> torch.dtype:
+        """Resolve the transformer residual-stream dtype for this invocation.
+
+        Reduced-precision autocast normally keeps the residual stream in its
+        compute dtype. Offline reconstruction evaluation may retain an FP32
+        decoder residual stream while autocast still runs the expensive
+        attention and MLP projections in reduced precision.
+        """
+        block_parameter = next(self.blocks.parameters(), None)
+        if block_parameter is None:
+            return next(self.input_layer.parameters()).dtype
+        if (
+            self.preserve_fp32_residual_stream
+            and block_parameter.dtype == torch.float32
+            and torch.is_autocast_enabled(block_parameter.device.type)
+        ):
+            return torch.float32
+        return activation_dtype(block_parameter.dtype, device_type=block_parameter.device.type)
 
     @property
     def num_register_tokens(self) -> int:
@@ -904,7 +925,7 @@ class SparseTransformerBase(nn.Module):
         """
         hs: list[SparseTensor] | None = [] if collect_hidden_states else None
 
-        input_dtype = next(self.input_layer.parameters()).dtype
+        input_dtype = activation_dtype(next(self.input_layer.parameters()).dtype)
         if x.dtype != input_dtype:
             x = x.to(input_dtype)
 
@@ -922,9 +943,9 @@ class SparseTransformerBase(nn.Module):
             elif position_embedding is not None:
                 h = h + position_embedding * self.position_embedding_scale  # [N,D]
 
-        block_dtype = next(self.blocks.parameters()).dtype
+        block_dtype = self._resolve_block_dtype()
         if h.dtype != block_dtype:
-            h = h.to(block_dtype)
+            h = h.to(block_dtype)  # [N,D]
         output_template = h
         if self.num_register_tokens > 0:
             if temporal_causal_mask:
@@ -1601,6 +1622,7 @@ class Decoder(SparseTransformerBase):
         )
         self.multiscale = multiscale
         self.multiscale_outputs = multiscale_outputs
+        self.force_fp32_output_projection: bool = False
 
         # Select last multiscale channel configuration
         if multiscale is not None and multiscale_outputs is None:
@@ -1645,6 +1667,18 @@ class Decoder(SparseTransformerBase):
                 self.multiscale_out_layers.append(out_layer)
                 self.recover_factors.append(recover_factor)
 
+    def _apply_output_projection(
+        self,
+        output_layer: SparseLinear,
+        hidden_states: SparseTensor,  # [B,*S,D]
+    ) -> SparseTensor:  # returns: [B,*S,P]
+        """Apply one decoder output projection under its configured compute policy."""
+        if self.force_fp32_output_projection:
+            projection_input = hidden_states.to(torch.float32)  # [B,*S,D]
+            with torch.autocast(device_type=hidden_states.device.type, enabled=False):
+                return output_layer(projection_input)  # [B,*S,P]
+        return output_layer(hidden_states)  # [B,*S,P]
+
     def forward(
         self,
         x: SparseTensor,
@@ -1684,12 +1718,12 @@ class Decoder(SparseTransformerBase):
             )
             h = hs[self.multiscale_outputs[0]["layer_id"]]
             h = h.replace(self.out_norm(h.feats))
-            h = self.out_layer(h)
+            h = self._apply_output_projection(self.out_layer, h)  # [B,*S,P]
 
             for i, cfg in enumerate(self.multiscale_outputs[1:]):
                 h_i = hs[cfg["layer_id"]]
                 h_i = h_i.replace(self.multiscale_out_norms[i](h_i.feats))
-                h_i = self.multiscale_out_layers[i](h_i)
+                h_i = self._apply_output_projection(self.multiscale_out_layers[i], h_i)  # [B,*S,P]
                 if self.multiscale is not None:
                     h_i = h_i.shrink_by_factors(self.recover_factors[i])
                 h = h + h_i
@@ -1698,7 +1732,7 @@ class Decoder(SparseTransformerBase):
 
         else:
             h = h.replace(self.out_norm(h.feats))
-            h = self.out_layer(h)
+            h = self._apply_output_projection(self.out_layer, h)  # [B,*S,P]
 
             if self.multiscale is not None:
                 h = h.shrink_by_factors(self.recover_factor)

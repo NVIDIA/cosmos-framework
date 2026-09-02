@@ -11,7 +11,8 @@ Topology
   ``world_size`` so the overlay grid is well-formed, but the same rank may
   appear in both a dp group AND a cp/cfgp group.
 
-Three meshes are built (any subset, depending on which axes are >1):
+Three meshes are built (``dp_mesh`` always for training, the overlays depending
+on which of their axes are >1):
 
 ================  ===========================================================
 Mesh              Shape / dims
@@ -69,9 +70,19 @@ class ParallelDims:
                                unless ``enable_inference_mode`` is True). Also is
                                used for only VFM to parallelize the conditional and
                                unconditional guidance.
+        lb:                    VAE load-balancing group size, in ``[1, world_size]``.
+                               Overlay axis like cp/cfgp (does not consume dp rank
+                               slots), but independent of them: it groups ranks for a
+                               one-off raw-video exchange before the VAE encode, not
+                               for sharding the packed sequence, so it is built as its
+                               own 1-D mesh rather than folded into the cp/cfgp mesh.
+                               Only needs to divide ``world_size``, with no relation to
+                               cp or cfgp required.
         enable_inference_mode: Selects inference-time semantics — ``cfgp`` may
-                               be >1 and ``dp_enabled`` ignores ``dp_replicate``
-                               (matches the legacy VFM inference path).
+                               be >1 and ``dp_enabled`` becomes degree-based
+                               (``dp_shard > 1``, ignoring ``dp_replicate``) rather than
+                               training's unconditional True (matches the legacy VFM
+                               inference path).
     """
 
     world_size: int
@@ -79,6 +90,7 @@ class ParallelDims:
     dp_replicate: int = -1
     cp: int = 1
     cfgp: int = 1
+    lb: int = 1
     enable_inference_mode: bool = False
     _meshes: dict = field(default_factory=dict, init=False, repr=False)
 
@@ -94,6 +106,12 @@ class ParallelDims:
         if not self.enable_inference_mode and self.cfgp > 1:
             raise ValueError(
                 f"CFG (Guidance Parallelism) must be 1 when enable_inference_mode is False. got {self.cfgp}"
+            )
+        if self.lb < 1 or self.lb > self.world_size:
+            raise ValueError(f"LB (VAE load-balance group size) must be in [1, world_size]. got {self.lb}")
+        if self.world_size % self.lb != 0:
+            raise ValueError(
+                f"Invalid parallel dims: lb({self.lb}) does not evenly divide world_size({self.world_size})"
             )
 
         # --- dp_shard auto-infer / clamp ---
@@ -186,6 +204,17 @@ class ParallelDims:
             if self.dp_replicate_enabled:
                 self._meshes["dp_replicate"] = self._meshes["dp"]["dp_replicate"]
 
+        if self.lb_enabled:
+            # A separate mesh, not folded into the cp/cfgp overlay: lb groups ranks for a
+            # one-off data exchange unrelated to how the packed sequence is sharded, so it
+            # has no reason to share that mesh's process group or its divisibility
+            # constraints against cp/cfgp.
+            self._meshes["lb"] = self._build_mesh(
+                device_type,
+                dims=[self.world_size // self.lb, self.lb],
+                names=["lb_rest", "lb"],
+            )["lb"]
+
     # --- mesh accessors -----------------------------------------------------
 
     @property
@@ -223,13 +252,26 @@ class ParallelDims:
     def cfgp_mesh(self) -> "DeviceMesh | None":
         return self._meshes.get("cfgp")
 
+    @property
+    def lb_mesh(self) -> "DeviceMesh | None":
+        return self._meshes.get("lb")
+
     # --- boolean flags ------------------------------------------------------
 
     @property
     def dp_enabled(self) -> bool:
+        """Whether a dp mesh is built and the network is wrapped in FSDP2 units.
+
+        Training is unconditional, degree 1 (a single-rank ``(1, 1)`` mesh) included: the
+        wrap is also what installs the ``MixedPrecisionPolicy``, so skipping it where there
+        is no cross-rank sharding to gain would leave nothing to cast the master parameters
+        down to the compute dtype, silently making the master dtype the compute dtype.
+        Inference installs no policy, so it keeps the degree-based test rather than pay for
+        DTensor parameters it cannot use, and ignores ``dp_replicate``.
+        """
         if self.enable_inference_mode:
             return self.dp_shard > 1
-        return self.dp_replicate > 1 or self.dp_shard > 1
+        return True
 
     @property
     def dp_shard_enabled(self) -> bool:
@@ -246,6 +288,10 @@ class ParallelDims:
     @property
     def cfgp_enabled(self) -> bool:
         return self.cfgp > 1
+
+    @property
+    def lb_enabled(self) -> bool:
+        return self.lb > 1
 
     # --- rank/size helpers --------------------------------------------------
 
@@ -264,6 +310,14 @@ class ParallelDims:
     @property
     def cfgp_size(self) -> int:
         return self._meshes["cfgp"].size() if self.cfgp_enabled else 1
+
+    @property
+    def lb_rank(self) -> int:
+        return self._meshes["lb"].get_local_rank() if self.lb_enabled else 0
+
+    @property
+    def lb_size(self) -> int:
+        return self._meshes["lb"].size() if self.lb_enabled else 1
 
 
 def fsdp_mesh(parallel_dims: ParallelDims) -> "DeviceMesh | None":

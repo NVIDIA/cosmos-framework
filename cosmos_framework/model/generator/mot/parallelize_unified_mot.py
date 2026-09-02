@@ -19,7 +19,7 @@ import torch.nn as nn
 from torch.distributed.algorithms._checkpoint.checkpoint_wrapper import (
     checkpoint_wrapper as ptd_checkpoint_wrapper,
 )
-from torch.distributed.fsdp import fully_shard, register_fsdp_forward_method
+from torch.distributed.fsdp import MixedPrecisionPolicy, fully_shard, register_fsdp_forward_method
 from torch.utils.checkpoint import (
     CheckpointPolicy,
     create_selective_checkpoint_contexts,
@@ -223,6 +223,7 @@ def apply_cp(
 def apply_fsdp(
     model: nn.Module,
     parallel_dims: ParallelDims,
+    mp_policy: MixedPrecisionPolicy | None = None,
 ):
     """
     Apply data parallelism (via FSDP2) to the model.
@@ -244,10 +245,24 @@ def apply_fsdp(
     Args:
         model (nn.Module): The model to apply data parallelism to.
         parallel_dims (ParallelDims): The device mesh to use for data parallelism and expert parallel.
+            Called whenever ``dp_enabled`` holds, which for training includes a single-rank
+            ``(1, 1)`` mesh: the wrap is what installs ``mp_policy``, so it has to happen
+            even where there is no cross-rank sharding to gain.
+        mp_policy (MixedPrecisionPolicy | None): Mixed-precision policy for each block's FSDP
+            unit. ``None`` means FSDP2's default (no casting): the parameters are used for
+            compute and gradient reduction in whatever dtype the module holds them. Pass a
+            policy to keep the sharded parameters -- the ones the optimizer steps -- in a
+            higher precision than the forward/backward, i.e. ``param_dtype`` is the compute
+            (and all-gather) dtype and ``reduce_dtype`` the gradient-reduction dtype, which
+            must match the dtype the module's parameters are stored in.
     """
     mesh = fsdp_mesh(parallel_dims)
     for _, block in model.model.layers.named_children():
-        fully_shard(block, mesh=mesh)
+        fully_shard(
+            module=block,
+            mesh=mesh,
+            mp_policy=mp_policy or MixedPrecisionPolicy(),
+        )
         register_fsdp_forward_method(block, "reasoner_forward")
 
 
@@ -257,6 +272,7 @@ def parallelize_unified_mot(
     compile_config: CompileConfig,
     ac_config: ActivationCheckpointingConfig,
     attention_io_layout: str = "sequence_sharded",
+    mp_policy: MixedPrecisionPolicy | None = None,
 ) -> nn.Module:
     """Optimize the model using CP, FSDP, activation checkpointing, and torch.compile.
 
@@ -276,6 +292,8 @@ def parallelize_unified_mot(
             ``save_ops_regex`` ops, mode="full", save only the outputs of
             each transformer block).
         attention_io_layout: Tensor layout at the attention boundary under CP.
+        mp_policy: FSDP2 mixed-precision policy, forwarded to :func:`apply_fsdp`.
+            ``None`` keeps FSDP2's default of no casting.
 
     """
     if parallel_dims is not None and parallel_dims.cp_enabled:
@@ -289,5 +307,5 @@ def parallelize_unified_mot(
     if compile_config.enabled:
         apply_compile(model, compile_config)
     if parallel_dims is not None and parallel_dims.dp_enabled:
-        apply_fsdp(model, parallel_dims)
+        apply_fsdp(model, parallel_dims, mp_policy)
     return model

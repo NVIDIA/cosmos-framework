@@ -425,7 +425,18 @@ class HFModel(nn.Module):
     # MoE load-balancing bookkeeping. Both arrive as a tensor or a bool, so the guards
     # torch.compile installs on them are cheap shape/dtype guards rather than the per-sample
     # value guards that make the stray string keys ruinous (see forward()).
-    _FORWARD_KWARGS_PASSTHROUGHS: frozenset[str] = frozenset({"second_per_grid_ts", "output_router_logits"})
+    _FORWARD_KWARGS_PASSTHROUGHS: frozenset[str] = frozenset(
+        {
+            "second_per_grid_ts",
+            "output_router_logits",
+            # Standard HF varlen-attention metadata. The monkey-patched Qwen text
+            # forward consumes these from **kwargs and threads them to every decoder layer.
+            "cu_seq_lens_q",
+            "cu_seq_lens_k",
+            "max_length_q",
+            "max_length_k",
+        }
+    )
 
     # Both set once and read every step. Class-level defaults rather than __init__
     # assignments because the test suite builds instances through __new__:
@@ -489,11 +500,12 @@ class HFModel(nn.Module):
         Forces use_cache=False for training, applied after filtering because not every HF
         forward names use_cache in its signature (Qwen3-VL takes it via ``**kwargs``).
 
-        For nemotron_vl: attention_mask is also dropped. NemotronVLModel.get_rope_index
-        strips padding positions when attention_mask is present, returning position_ids
-        shorter than inputs_embeds (padded_len). With right-padding + causal attention,
-        valid tokens never attend to padding tokens regardless, so dropping attention_mask
-        is equivalent and avoids the shape mismatch.
+        For Nemotron VL (``nemotron_vl`` or its remote-code name
+        ``nemotron_siglip2``): attention_mask is also dropped.
+        NemotronVLModel.get_rope_index strips padding positions when attention_mask is
+        present, returning position_ids shorter than inputs_embeds (padded_len). With
+        right-padding + causal attention, valid tokens never attend to padding tokens
+        regardless, so dropping attention_mask is equivalent and avoids the shape mismatch.
         """
         probe_step = kwargs.pop("_probe_step", None)
         probe_tag = kwargs.pop("_probe_tag", None)
@@ -503,7 +515,7 @@ class HFModel(nn.Module):
             dropped = sorted(set(kwargs) - forward_keys)
             log.info(f"HFModel: dropping non-forward batch keys {dropped} before {type(self.model).__name__}.forward")
             self._logged_dropped_forward_keys = True
-        if self.hf_config.model_type == "nemotron_vl":
+        if self.hf_config.model_type in {"nemotron_vl", "nemotron_siglip2"}:
             filtered.pop("attention_mask", None)
         filtered["use_cache"] = False
         maybe_dump_pre_forward(self.model, filtered, probe_step, probe_tag)

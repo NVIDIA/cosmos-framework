@@ -29,7 +29,10 @@ _AUX_ADAMW_OPTIMIZERS = ("muonwithauxadamw", "dion2withauxadamw")
 
 # Optimizers that can keep FP32 master copies of the parameters they update.
 # Whether they actually do is decided per build by ``_needs_master_weights``.
-_MASTER_WEIGHT_OPTIMIZERS = ("fusedadam",) + _AUX_ADAMW_OPTIMIZERS
+# FusedAdam is the only one: the Muon/Dion2 pair requires FP32 params and updates them
+# in place, so a master there would duplicate the parameter bit-for-bit, and both reject
+# the kwarg rather than ignoring it.
+_MASTER_WEIGHT_OPTIMIZERS = ("fusedadam",)
 
 
 class ParamMetadata(NamedTuple):
@@ -49,16 +52,15 @@ def _convert_omegaconf_to_python(obj: Any) -> Any:
 
 
 def _needs_master_weights(params: list[nn.Parameter] | list[dict[str, Any]]) -> bool:
-    """Return True when any parameter is stored below fp32.
+    """Whether an FP32 master copy of each parameter would buy any precision.
 
-    FP32 master copies only buy numerical stability when the optimizer's own
-    parameters are low precision, which is the VFM setup (params live in
-    bf16).  The VLM path stores the FSDP-sharded params in
-    ``parallelism.fsdp_master_dtype`` (fp32 by default) and casts to bf16 only
-    for compute via ``MixedPrecisionPolicy.param_dtype``, so a master copy
-    there is an exact duplicate of the param shard: 4 bytes per parameter of
-    extra optimizer memory, plus an extra write per step, for no numerical
-    gain.
+    A master weight exists to give a low-precision parameter a higher-precision
+    accumulator. For a parameter that is already FP32 it is a bit-identical duplicate:
+    the same update, but 4 extra bytes per element and a copy every step. So masters are
+    only worth maintaining when some parameter is not already FP32, which is what setting
+    ``parallelism.fsdp_master_dtype`` equal to ``precision`` (no FSDP mixed precision)
+    produces. Under FSDP mixed precision the sharded param the optimizer steps IS the
+    FP32 master, and it is what the checkpoint stores.
 
     Args:
         params: Either a flat parameter list or PyTorch param-group dicts.
@@ -68,6 +70,43 @@ def _needs_master_weights(params: list[nn.Parameter] | list[dict[str, Any]]) -> 
         if any(p.dtype != torch.float32 for p in group):
             return True
     return False
+
+
+def require_fp32_param_group(param_group: dict, optimizer_name: str, reason: str, master_weights: bool = False) -> None:
+    """Normalize ``param_group["params"]`` and reject it if any param isn't FP32.
+
+    No-op when ``master_weights`` is True: a master weight is a higher-precision
+    accumulator for a lower-precision parameter, so the parameter's own dtype is
+    then unconstrained (see :func:`_needs_master_weights`).
+
+    Otherwise mirrors ``torch.optim.Optimizer.add_param_group``'s own normalization
+    (a single Tensor or a generator becomes a list) and writes the normalized list
+    back onto ``param_group`` in place, so callers can validate *before* handing the
+    group to ``super().add_param_group()`` -- which appends to ``self.param_groups``
+    unconditionally, so validating after the call would leave a rejected group
+    registered if a caller caught the ``ValueError`` and kept stepping.
+
+    Args:
+        param_group: The group dict passed to ``add_param_group``; mutated in place.
+        optimizer_name: Name used in the error message (e.g. "Dion2WithAuxAdamW").
+        reason: Clause explaining why this optimizer needs FP32 params, appended
+            after ``"{optimizer_name} requires FP32 parameters -- "``.
+        master_weights: When True, skip validation entirely (see above).
+    """
+    if master_weights:
+        return
+    params = param_group["params"]
+    params = [params] if isinstance(params, torch.Tensor) else list(params)
+    dtypes = {p.dtype for p in params if p.dtype != torch.float32}
+    if dtypes:
+        raise ValueError(
+            f"{optimizer_name} requires FP32 parameters -- {reason} -- but got "
+            f"{sorted(str(dtype) for dtype in dtypes)}. Allocate the model in float32 and get "
+            "the low-precision forward/backward from FSDP2's MixedPrecisionPolicy("
+            "param_dtype=torch.bfloat16, reduce_dtype=torch.float32) rather than casting the "
+            "parameters."
+        )
+    param_group["params"] = params
 
 
 def _optimizer_cls(
@@ -84,16 +123,20 @@ def _optimizer_cls(
       flows through and selects the fused CUDA kernel.
     - ``"fusedadam"``: NVIDIA's :class:`cosmos_framework.utils.generator.fused_adam.FusedAdam`.
       It is fused by construction and rejects a ``fused`` kwarg, so any
-      ``fused`` entry is popped before instantiation.  We force
-      ``capturable=True`` (the only mode exercised in our distributed training
-      stack) and derive ``master_weights`` from the parameter dtypes, see
-      :func:`_needs_master_weights`.
+      ``fused`` entry is popped before instantiation.  We force ``capturable=True``
+      because it is the only mode exercised in our distributed training stack, and
+      default ``master_weights`` to whether the params need one (see
+      :func:`_needs_master_weights`); an explicit value in ``optimizer_kwargs`` wins.
+    - ``"muonwithauxadamw"`` / ``"dion2withauxadamw"``: hybrid orthogonalizing
+      optimizers.  ``fused`` is popped and ``capturable`` forced on as above, but
+      ``master_weights`` is never passed: both require FP32 params, update them in
+      place, and reject the kwarg.
 
     Raises ``NotImplementedError`` for any other ``optimizer_type``.
     """
     # Master weights are derived, not configured: they are dead weight when the
-    # optimizer already owns fp32 params. Computed once here for the branches
-    # below that support them.
+    # optimizer already owns fp32 params. Computed here for the one branch below
+    # that supports them, where an explicit config value still wins.
     master_weights = False
     if optimizer_type.lower() in _MASTER_WEIGHT_OPTIMIZERS:
         master_weights = _needs_master_weights(params)
@@ -109,29 +152,36 @@ def _optimizer_cls(
         # FusedAdam is fused by construction and does not accept a ``fused`` kwarg.
         optimizer_kwargs.pop("fused", None)
         # Force ``capturable`` on -- the only configuration exercised in our
-        # distributed-training stack -- and set the derived ``master_weights``.
-        # Overwrite in-place rather than passing as positional keywords,
-        # otherwise a caller that also sets either flag would trigger a
+        # distributed-training stack.  Overwrite in-place rather than passing as a
+        # positional keyword, otherwise a caller that also sets the flag would trigger a
         # duplicate-kwarg ``TypeError``.
         optimizer_kwargs["capturable"] = True
-        optimizer_kwargs["master_weights"] = master_weights
+        # Master weights only when the params are not already FP32: under FSDP mixed
+        # precision the sharded param IS the FP32 master, so a second copy would be a
+        # bit-identical duplicate. ``setdefault`` leaves an explicit config value alone.
+        optimizer_kwargs.setdefault("master_weights", master_weights)
         optimizer = FusedAdam(params, **optimizer_kwargs)
     elif optimizer_type.lower() == "muonwithauxadamw":
         from cosmos_framework.utils.generator.muon_with_aux_adamw import MuonWithAuxAdamW
 
         # Muon's AdamW side is the TE-fused kernel; it is fused by construction and
-        # absorbs ``fused`` via **kwargs, but we pop it here to be explicit. We force
-        # capturable and derive master_weights to match FusedAdam's setup.
+        # absorbs ``fused`` via **kwargs, but we pop it here to be explicit.
         optimizer_kwargs.pop("fused", None)
         optimizer_kwargs["capturable"] = True
-        optimizer_kwargs["master_weights"] = master_weights
+        # ``master_weights`` is deliberately not forced on here (unlike FusedAdam): Muon
+        # requires FP32 params and updates them in place, so a master weight would
+        # duplicate the param bit-for-bit. It rejects the kwarg rather than ignoring it, so
+        # a config that still sets it fails loudly instead of paying for a no-op copy.
         optimizer = MuonWithAuxAdamW(params, **optimizer_kwargs)
     elif optimizer_type.lower() == "dion2withauxadamw":
         from cosmos_framework.utils.generator.dion2_with_aux_adamw import Dion2WithAuxAdamW
 
         optimizer_kwargs.pop("fused", None)
         optimizer_kwargs["capturable"] = True
-        optimizer_kwargs["master_weights"] = master_weights
+        # ``master_weights`` is deliberately not forced on here (unlike FusedAdam):
+        # Dion2 requires FP32 params and updates them in place, so a master weight would
+        # duplicate the param bit-for-bit. It rejects the kwarg rather than ignoring it, so
+        # a config that still sets it fails loudly instead of paying for a no-op copy.
         optimizer = Dion2WithAuxAdamW(params, **optimizer_kwargs)
     else:
         raise NotImplementedError(f"Optimizer {optimizer_type} not found.")

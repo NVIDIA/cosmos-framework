@@ -12,6 +12,9 @@ from __future__ import annotations
 
 from typing import Literal
 
+import torch
+import torch.nn.functional as F
+
 from cosmos_framework.data.imaginaire.webdataset.augmentors.augmentor import Augmentor
 from cosmos_framework.utils import log
 
@@ -25,6 +28,20 @@ DEFAULT_VIEWPOINT_TEMPLATES: dict[str, str] = {
     "top_down_2d_view": "This video is captured from a top-down view of a flat 2D scene.",
     "video_game_view": "This video is captured from an in-game camera perspective in a virtual environment.",
 }
+
+
+def compose_multiview(
+    primary: torch.Tensor,  # [T,C,H,W]
+    left: torch.Tensor,  # [T,C,H_l,W_l]
+    right: torch.Tensor,  # [T,C,H_r,W_r]
+) -> torch.Tensor:  # [T,C,3H/2,W]
+    """Place the primary view above two half-sized side views."""
+    height, width = primary.shape[-2:]
+    half_size = (height // 2, width // 2)
+    left = F.interpolate(left, size=half_size, mode="bilinear", align_corners=False)  # [T,C,H/2,W/2]
+    right = F.interpolate(right, size=half_size, mode="bilinear", align_corners=False)  # [T,C,H/2,W/2]
+    bottom = torch.cat([left, right], dim=-1)  # [T,C,H/2,W]
+    return torch.cat([primary, bottom], dim=-2)  # [T,C,3H/2,W]
 
 
 class ViewpointTextInfo(Augmentor):

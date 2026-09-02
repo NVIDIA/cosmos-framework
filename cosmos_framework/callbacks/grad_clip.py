@@ -189,18 +189,6 @@ def _clip_grads_with_global_norm(
     caller already measured, not one recomputed here, and the clip is conditional
     in the usual way — torch clamps the coefficient at 1.0, so a step whose norm
     is already within ``max_norm`` comes out untouched.
-
-    What matters is that every group is passed the SAME ``total_norm``, which is
-    what makes this one global rescale of the whole model rather than one clip per
-    mesh. Giving each group its own norm would be stock ``clip_grad_norm_``
-    behaviour and would apply a different factor to, say, dense FSDP-sharded
-    params and EP-sharded MoE experts, distorting their relative magnitudes.
-
-    The loop exists because groups are the form the caller's parameters are
-    already in, having been grouped to compute the per-mesh norms; the factor
-    itself does not depend on the group. Flattening them into a single call is
-    therefore not obviously equivalent — one fused ``foreach`` multiply spanning
-    tensors from different meshes is not something to assume works.
     """
     for params in parameters_by_mesh.values():
         torch.nn.utils.clip_grads_with_norm_(params, max_norm, total_norm, foreach)
