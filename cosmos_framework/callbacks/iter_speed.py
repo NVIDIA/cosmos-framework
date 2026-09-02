@@ -375,9 +375,15 @@ class IterSpeed(EveryN):
             if is_image_batch:
                 image_batch_size = len(data_batch[model.input_image_key])
                 per_sample_batch_counter["image_batch_size"] = image_batch_size
-            else:
+            elif model.input_video_key in data_batch:
                 video_batch_size = len(data_batch[model.input_video_key])
                 per_sample_batch_counter["video_batch_size"] = video_batch_size
+            elif "lidar" in data_batch:
+                lidar_counts = data_batch.get("num_lidar_items_per_sample")
+                lidar_batch_size = len(lidar_counts) if lidar_counts is not None else len(data_batch["lidar"])
+                per_sample_batch_counter["lidar_batch_size"] = lidar_batch_size
+            # `is_image_batch` answers False for both videos and the dedicated LiDAR-only
+            # stream, so each branch tests the stream it is about to count.
         # for LLM training only
         elif "input_ids" in data_batch:
             mbs = data_batch["input_ids"].shape[0]

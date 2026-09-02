@@ -1178,6 +1178,7 @@ class EveryNDrawSample(EveryN):
             if transfer_result.handled:
                 return transfer_result.media
 
+
         if is_multi_item:
             # Image editing: raw_data is flat [src1, tgt1, src2, tgt2, ...].
             # Split into per-sample condition (source) and GT target images.

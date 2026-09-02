@@ -170,6 +170,10 @@ def _expand_per_sample_to_per_vision_item(
             num_items
         ):  # torch.stack(tensor[idx].repeat(num_vision_items_per_sample[idx]) for idx in range(len(num_vision_items_per_sample)))
             expanded.append(tensor[sample_idx])  # [...]
+    if not expanded:
+        # No sample owns a vision item, as in the LiDAR-only recipe. Slicing rather than
+        # stacking keeps the trailing dims, which torch.stack cannot infer from nothing.
+        return tensor[:0]  # [0,...]
     return torch.stack(expanded)  # [N_vision_items,...]
 
 

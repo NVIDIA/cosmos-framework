@@ -10,6 +10,8 @@ from cosmos_framework.model.generator.tokenizers.audio.avae import AVAEInterface
 from cosmos_framework.model.generator.tokenizers.dc_ae.dc_ae_4x32x32 import DCAE4x32x32Interface
 from cosmos_framework.model.generator.tokenizers.flux_vae_8x8 import FluxVAEInterface
 
+# isort: off
+# isort: on
 from cosmos_framework.model.generator.tokenizers.stable_diffusion_vae_8x8 import StableDiffusionVAEInterface
 from cosmos_framework.model.generator.tokenizers.uniae.noncausal_4x16x16 import UniAEVAEInterface
 from cosmos_framework.model.generator.tokenizers.wan2pt1_vae_4x8x8 import Wan2pt1VAEInterface
@@ -201,6 +203,10 @@ def register_tokenizer() -> None:
     # Wan2pt1 and Wan2pt2 tokenizers
     cs.store(group="tokenizer", package="model.config.tokenizer", name="wan2pt1_tokenizer", node=Wan2pt1VAEConfig)
     cs.store(group="tokenizer", package="model.config.tokenizer", name="wan2pt2_tokenizer", node=Wan2pt2VAEConfig)
+    # LiDAR VAEs are deliberately absent from this group: a range clip is its own modality
+    # with its own projections into the sequence, so it is registered under
+    # ``model.config.lidar_tokenizer`` by ``register_lidar_tokenizer`` below. Installing one
+    # here would displace the camera tokenizer and route rangemaps through the vision heads.
     # UniAE tokenizer
     cs.store(
         group="tokenizer",

@@ -49,6 +49,37 @@ write, so a save triggered while one is still in flight -- during a filesystem
 outage, say -- stalls the step rather than starting a second concurrent write, and
 a previous write that failed ends the job there.
 
+Yielding to a nearby milestone
+------------------------------
+
+That serialization is why this callback also has to look ahead.  A wall-clock save
+started shortly before a ``save_iter`` milestone does not just duplicate it: the
+milestone's save blocks until our write drains, and the training step blocks with
+it.  On GCP at 470B, a write begun 3.5 minutes before a milestone ran for 844
+seconds and stalled the job for ten of them, and because the two cadences were
+within a few minutes of each other it recurred on nearly every cycle.
+
+So a save is skipped when the next milestone is projected to arrive sooner than a
+write takes.  Yielding costs only the time left until that milestone, which is
+about to checkpoint regardless, whereas going ahead costs a stall -- so the write
+estimate is deliberately pessimistic in both directions it can be wrong.
+
+It is the larger of ``assumed_write_minutes`` and the slowest write in a short
+recent window, never an average.  An average is the wrong statistic for a guard
+whose entire purpose is to avoid a tail event: the run above wrote in 84s and in
+844s within the same hour, and anything centred between the two clears a
+five-minute gap that the slow write would then stall for nine minutes.  The
+assumed floor covers the case where nothing has been measured yet, which is not
+an edge case -- async completion is only reported when the next save drains the
+previous one, so the first wall-clock decision after a start or resume routinely
+has no sample at all, and on a preempted job that first cycle comes around often.
+
+The consequence is worth stating plainly: a job whose milestones are closer
+together than roughly the interval plus the assumed write time will run on its
+milestone cadence, because every wall-clock save yields.  That is the intended
+trade -- those jobs are already checkpointing about as often as this callback
+would have made them.
+
 Retention
 ---------
 
@@ -124,6 +155,7 @@ import pickle
 import queue
 import threading
 import time
+from collections import deque
 from concurrent.futures import ThreadPoolExecutor
 
 import torch
@@ -157,6 +189,11 @@ DCP_METADATA = ".metadata"
 #: component that lost all of them reports the scale rather than flooding the log.
 SHORT_SHARD_REPORT_LIMIT = 5
 
+#: How many recent write durations the milestone guard keeps. Long enough that one slow
+#: write still counts for a few cycles, short enough that a store which has since got
+#: faster is not judged forever by its worst hour.
+WRITE_SAMPLE_WINDOW = 8
+
 
 class WallClockCheckpoint(Callback):
     """Save a checkpoint whenever ``interval_minutes`` of wall-clock time elapses.
@@ -174,6 +211,11 @@ class WallClockCheckpoint(Callback):
             takes effect while a save is still far off.
         min_iterations: Minimum iterations since the last checkpoint of any
             kind before a wall-clock save is allowed.
+        assumed_write_minutes: Write duration the milestone guard plans against
+            until a slower one is measured.  Sized to the slow end of what the
+            object store has been seen to do, because guessing low here brings
+            back the stall the guard exists to prevent, while guessing high only
+            defers a save to a milestone that was about to happen anyway.
         delete_concurrency: Parallel object deletions per checkpoint removal.
     """
 
@@ -183,6 +225,7 @@ class WallClockCheckpoint(Callback):
         keep_last: int = 3,
         check_every_n: int = 10,
         min_iterations: int = 1,
+        assumed_write_minutes: float = 15.0,
         delete_concurrency: int = 8,
     ) -> None:
         super().__init__()
@@ -200,6 +243,11 @@ class WallClockCheckpoint(Callback):
         # Rank 0's smoothed step duration, used to convert time remaining into a stride.
         self._previous_step_end: float | None = None
         self._step_seconds: float | None = None
+        # Recent write durations on rank 0, used to tell whether a save started now
+        # would still be running when the next milestone lands.
+        self._assumed_write_seconds = max(0.0, assumed_write_minutes) * 60.0
+        self._write_samples: deque[float] = deque(maxlen=WRITE_SAMPLE_WINDOW)
+        self._milestone_skip_logged = False
         # Iterations this callback asked for but whose save has not been confirmed yet.
         self._triggered_iterations: set[int] = set()
         # Confirmed wall-clock checkpoints, ascending. Only maintained on rank 0,
@@ -280,9 +328,10 @@ class WallClockCheckpoint(Callback):
         # us from saving twice on the same iteration.
         self._last_checkpoint_time = time.monotonic()
         self._last_checkpoint_iteration = iteration
+        self._milestone_skip_logged = False
 
     def on_save_checkpoint_success(self, iteration: int = 0, elapsed_time: float = 0) -> None:
-        del elapsed_time
+        self._observe_write_duration(elapsed_time)
         if iteration not in self._triggered_iterations:
             return
         self._triggered_iterations.discard(iteration)
@@ -314,7 +363,8 @@ class WallClockCheckpoint(Callback):
             self._next_check_iteration = iteration + 1
             return
         elapsed = time.monotonic() - self._last_checkpoint_time
-        should_save, stride = self._agree_on_save(elapsed >= self._interval_seconds, self._next_stride(elapsed))
+        due = elapsed >= self._interval_seconds and not self._milestone_lands_mid_write(iteration)
+        should_save, stride = self._agree_on_save(due, self._next_stride(elapsed))
         self._next_check_iteration = iteration + stride
         if not should_save:
             return
@@ -336,6 +386,53 @@ class WallClockCheckpoint(Callback):
         # Deliberately no finalize() here: training continues and the async DCP
         # write should stay overlapped with it.
         self.trainer.checkpointer.save(model, self._optimizer, self._scheduler, self._grad_scaler, iteration=iteration)
+
+    def _milestone_lands_mid_write(self, iteration: int) -> bool:
+        """Whether the next ``save_iter`` milestone would arrive before our write ended.
+
+        Saves cannot overlap -- ``save()`` drains the previous write before starting --
+        so a wall-clock save begun shortly before a milestone does not merely duplicate
+        it, it stalls the training step for whatever is left of the write. Seen on GCP at
+        470B, where a save started 3.5 minutes ahead of a milestone took 844 seconds and
+        cost the job a 10 minute stall; the two cadences were close enough that this
+        repeated on nearly every cycle.
+
+        Yielding to the milestone costs little, since it is about to checkpoint anyway:
+        exposure grows only by the time left until it lands, not by a full interval.
+        Going ahead when the estimate was optimistic costs a stall of up to a whole
+        write, so the estimate errs high -- see ``_write_estimate``.
+        """
+        save_iter = self.config.checkpoint.save_iter
+        if save_iter <= 0 or self._step_seconds is None:
+            return False
+        write_seconds = self._write_estimate()
+        seconds_to_milestone = (save_iter - iteration % save_iter) * self._step_seconds
+        if seconds_to_milestone >= write_seconds:
+            return False
+        if distributed.is_rank0() and not self._milestone_skip_logged:
+            self._milestone_skip_logged = True
+            basis = "measured" if write_seconds > self._assumed_write_seconds else "assumed"
+            log.info(
+                f"[WallClockCheckpoint] Yielding to the save_iter milestone at iteration {iteration}: "
+                f"it is ~{seconds_to_milestone / 60:.1f} minutes out and a write takes "
+                f"~{write_seconds / 60:.1f} minutes ({basis}), so saving now would stall it."
+            )
+        return True
+
+    def _write_estimate(self) -> float:
+        """The write duration to plan against: the recent worst case, floored.
+
+        Not an average of any kind. The guard exists to avoid a tail event, so the
+        number it needs is the one it has to survive -- the same run wrote in 84s and
+        844s within the hour, and any statistic sitting between the two clears a
+        five-minute gap the slow write would stall for nine minutes.
+
+        The floor carries the cold start. Async completion is only reported when the
+        next save drains the previous one, so the first decision after a start or
+        resume has nothing measured yet, and it is also the decision most likely to
+        sit near a milestone.
+        """
+        return max(self._assumed_write_seconds, max(self._write_samples, default=0.0))
 
     def _cp_data_window_active(self) -> bool:
         """Return whether saving now would land inside an unfinished CP data window."""
@@ -373,6 +470,16 @@ class WallClockCheckpoint(Callback):
         if remaining <= 0.0 or self._step_seconds is None or self._step_seconds <= 0.0:
             return 1
         return max(1, min(self._check_every_n, int(remaining / self._step_seconds)))
+
+    def _observe_write_duration(self, elapsed_time: float) -> None:
+        """Record how long a checkpoint write took, counting milestone saves too.
+
+        Every save reports here, not only ours, so a store slower than assumed widens
+        the guard as soon as it shows itself.
+        """
+        if elapsed_time <= 0.0:
+            return
+        self._write_samples.append(elapsed_time)
 
     def _observe_step_duration(self) -> None:
         """Smooth the observed step time, which is what makes the stride adaptive."""
@@ -486,8 +593,12 @@ class WallClockCheckpoint(Callback):
         swept = self._sweep_subdirectories(dirname)
         self._delete_object(deleting_marker)
         # Nothing but an empty directory is left; drop it so that anything scanning for
-        # iter_* directories does not mistake the husk for a checkpoint.
-        self._rmtree(dirname)
+        # iter_* directories does not mistake the husk for a checkpoint. Only a
+        # filesystem backend leaves one: an object store has no directory to remove once
+        # its contents are gone, and asking anyway answers 404, which reads like a failed
+        # deletion in the logs. Probe first rather than warn about the expected case.
+        if self._exists(dirname):
+            self._rmtree(dirname)
         log.info(
             f"[WallClockCheckpoint] Deleted wall-clock checkpoint {dirname} "
             f"({len(paths) + 1} objects, {swept} subtrees in {time.monotonic() - start_time:.1f}s)."
@@ -514,6 +625,13 @@ class WallClockCheckpoint(Callback):
         except Exception as error:  # noqa: BLE001 - an unlistable directory only costs us the sweep
             log.warning(f"[WallClockCheckpoint] Could not list subdirectories of {dirname}: {error}")
             return []
+
+    def _exists(self, path: str) -> bool:
+        try:
+            return bool(easy_io.exists(path, backend_key=self._backend_key))
+        except Exception as error:  # noqa: BLE001 - an unanswerable probe is treated as absent
+            log.warning(f"[WallClockCheckpoint] Could not check whether {path} exists: {error}")
+            return False
 
     def _rmtree(self, path: str) -> bool:
         try:
