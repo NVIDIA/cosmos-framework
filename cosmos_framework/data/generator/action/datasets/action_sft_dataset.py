@@ -19,13 +19,13 @@ from typing import Any
 
 from torch.utils.data import Dataset, IterableDataset, get_worker_info
 
-from cosmos_framework.data.generator.action.datasets.droid_merged_lerobot_dataset import DROIDMergedLeRobotDataset
 from cosmos_framework.data.generator.action.datasets.droid_lerobot_dataset import DROIDLeRobotDataset
+from cosmos_framework.data.generator.action.datasets.droid_merged_lerobot_dataset import DROIDMergedLeRobotDataset
+from cosmos_framework.data.generator.action.datasets.libero_lerobot_dataset import LIBEROLeRobotDataset
 from cosmos_framework.data.generator.action.datasets.robocasa_lerobot_dataset import (
     DEFAULT_ALL_ATOMIC_TASKS,
     RoboCasaLeRobotDataset,
 )
-from cosmos_framework.data.generator.action.datasets.libero_lerobot_dataset import LIBEROLeRobotDataset
 from cosmos_framework.data.generator.action.utils.transforms import ActionTransformPipeline
 
 
@@ -104,6 +104,7 @@ def get_action_droid_sft_dataset(
     action_normalization: str | None = None,
     viewpoint: str = "concat_view",
     use_image_augmentation: bool = False,
+    jitter_after_compose: bool = False,
     use_filter_dict: bool = False,
     filter_dict_path: str | None = None,
     resolution: str | int = "256",
@@ -133,6 +134,7 @@ def get_action_droid_sft_dataset(
         use_state=use_state,
         action_normalization=action_normalization,
         use_image_augmentation=use_image_augmentation,  # i4: bundles random-crop+resize+ColorJitter
+        jitter_after_compose=jitter_after_compose,
         use_filter_dict=use_filter_dict,
         filter_dict_path=filter_dict_path,
         use_success_only=use_success_only,
@@ -167,6 +169,7 @@ def get_action_droid_merged_lerobot_sft_dataset(
     split: str = "train",
     use_success_only: bool = False,
     use_image_augmentation: bool = False,
+    jitter_after_compose: bool = False,
     use_filter_dict: bool = False,
     filter_dict_path: str | None = None,
     resolution: str | int = "480",
@@ -193,6 +196,7 @@ def get_action_droid_merged_lerobot_sft_dataset(
         use_state=use_state,
         action_normalization=action_normalization,
         use_image_augmentation=use_image_augmentation,
+        jitter_after_compose=jitter_after_compose,
         use_filter_dict=use_filter_dict,
         filter_dict_path=filter_dict_path,
         split=split,
