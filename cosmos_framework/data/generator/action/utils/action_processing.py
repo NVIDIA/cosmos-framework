@@ -516,6 +516,14 @@ class ActionProcessor:
             action = record.action_normalizer.denormalize_action(action)  # [...,D_raw]
         return action  # [...,D_raw]
 
+    @staticmethod
+    def postprocess_action_to_schema(
+        action: torch.Tensor,
+        record: ActionProcessingRecord,
+    ) -> torch.Tensor:
+        """Decode a generated model-space action into its canonical raw schema."""
+        return ActionProcessor.postprocess_action(action, record)
+
 
 def get_action_processing_records(data_batch: dict[str, Any]) -> list[ActionProcessingRecord | None]:
     """Read all per-sample processing records from a collated Action batch."""

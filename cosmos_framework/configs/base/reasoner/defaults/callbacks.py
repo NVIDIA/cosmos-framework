@@ -19,6 +19,7 @@ from cosmos_framework.callbacks.iter_speed import IterSpeed
 from cosmos_framework.callbacks.learning_rate_logger import LearningRateLogger
 from cosmos_framework.callbacks.log_tensor_shape import LogTensorShapeCallback
 from cosmos_framework.callbacks.param_count import ParamCount
+from cosmos_framework.callbacks.sampled_media_recorder import SampledMediaRecorder
 from cosmos_framework.callbacks.tokens_per_sec import VLMTokensPerSec
 from cosmos_framework.callbacks.wandb_log import WandbCallback as WandBCallbackMultiplier
 from cosmos_framework.callbacks.wandb_vis import VisualizationLoggingCallback
@@ -52,6 +53,15 @@ def register_callbacks():
             config=PLACEHOLDER,
             trainer=PLACEHOLDER,
         ),  # reads model.precision; no extra kwarg needed
+        sampled_media=L(SampledMediaRecorder)(
+            enabled=False,
+            output_uri=(
+                "${oc.env:IMAGINAIRE_OUTPUT_ROOT,/tmp/imaginaire4-output}/"
+                "${job.project}/${job.group}/${job.name}/sampled_media.lance"
+            ),
+            creds_path=None,
+            flush_every_n_batches=100,
+        ),
         # nvtx=L(NVTXCallback)(synchronize=True),
     )
 

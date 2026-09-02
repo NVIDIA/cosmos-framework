@@ -363,24 +363,35 @@ class SigmaLossAnalysis(Callback):
         loss: torch.Tensor,
         iteration: int = 0,
     ) -> None:
+        # Both keys are part of training_step's callback contract, including on a LiDAR-only
+        # step (where sigma is an empty tensor). Index directly so a broken camera callback
+        # payload still fails fast instead of silently stopping this analysis.
         sigma = output_batch["sigma"]
         fm_loss_vision_per_instance = output_batch["flow_matching_loss_vision_per_instance"]
 
-        # sigma is [B] (base), [B,1] (TF), or [B,T_max] (DF); reduce to [B] for logging.
-        # Raise rather than assert, so ``python -O`` cannot strip the check: with it gone, a
-        # 3-D sigma survives the ``mean(dim=-1)`` below as [B,T] instead of [B] and reaches
-        # ``_SigmaLossCache.add``, which rejects it only for having a different element count
-        # than the loss -- a confusing numel error one frame away from the real problem,
-        # which is the shape arriving here.
-        if sigma.ndim > 2:
-            raise ValueError(f"Sigma should be [B], [B,1] or [B,T_max], got shape {tuple(sigma.shape)}")
-        if sigma.ndim == 2:
-            sigma = sigma.mean(dim=-1)  # [B]  (reduced from [B,T_max] or [B,1])
+        # A LiDAR-only step has no vision stream, so there is no vision sigma to bin its loss
+        # against and nothing to cache. The key is written on every step, holding an empty
+        # ``[0,T]`` tensor rather than None once no sample owns a vision item, while the vision
+        # loss is still the one-element dummy that keeps the camera projections in the graph.
+        # Hence the count test: on presence alone this pair reaches ``add`` and is rejected for
+        # a numel mismatch on the first step. Only the caching is skipped -- the gather below is
+        # collective across the world, so every rank has to reach it either way.
+        if sigma.numel() > 0:
+            # sigma is [B] (base), [B,1] (TF), or [B,T_max] (DF); reduce to [B] for logging.
+            # Raise rather than assert, so ``python -O`` cannot strip the check: with it gone, a
+            # 3-D sigma survives the ``mean(dim=-1)`` below as [B,T] instead of [B] and reaches
+            # ``_SigmaLossCache.add``, which rejects it only for having a different element count
+            # than the loss -- a confusing numel error one frame away from the real problem,
+            # which is the shape arriving here.
+            if sigma.ndim > 2:
+                raise ValueError(f"Sigma should be [B], [B,1] or [B,T_max], got shape {tuple(sigma.shape)}")
+            if sigma.ndim == 2:
+                sigma = sigma.mean(dim=-1)  # [B]  (reduced from [B,T_max] or [B,1])
 
-        if cast(_SupportsIsImageBatch, model).is_image_batch(data_batch):
-            self.image_cache.add(sigma, fm_loss_vision_per_instance)
-        else:
-            self.video_cache.add(sigma, fm_loss_vision_per_instance)
+            if cast(_SupportsIsImageBatch, model).is_image_batch(data_batch):
+                self.image_cache.add(sigma, fm_loss_vision_per_instance)
+            else:
+                self.video_cache.add(sigma, fm_loss_vision_per_instance)
 
         if iteration % self.every_n == 0:
             info = {}

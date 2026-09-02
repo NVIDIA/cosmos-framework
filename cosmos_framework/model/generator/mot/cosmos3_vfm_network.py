@@ -1233,7 +1233,7 @@ class Cosmos3VFMNetwork(PreTrainedModel):
             is_image_batch=packed_seq.is_image_batch,
             head_dim=self.head_dim,
             num_layers=self.num_hidden_layers,
-            token_shapes=packed_seq.vision.token_shapes,
+            token_shapes=packed_seq.vision.token_shapes if packed_seq.vision is not None else None,
             natten_parameter_list=self.natten_parameter_list,
             cp_world_size=sequence_shard_world_size,
             video_temporal_causal=use_video_temporal_causal,

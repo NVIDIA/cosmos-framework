@@ -584,13 +584,22 @@ class DiffusionCache:
             in_causal, in_full = pack["causal_seq"], pack["full_only_seq"]
             caching = self._cache_active and not _disables_caching(memory)
             gen_only = caching and _is_gen_only(memory)
+            history_matches = bool(ps.history and _cache_entry_matches(ps.history[-1][1], in_causal, in_full, gen_only))
+            if caching and self.state.calc_type == "cache":
+                shape_requires_full = self._synchronize_compute(not history_matches, pathway)
+                if shape_requires_full:
+                    self.state.calc_type = "full"
+                    self._step_skipped -= 1
+                    self._step_full += 1
+                    ps.accumulated = 0.0
+            if caching and ps.history and not history_matches:
+                # Guidance-interval boundaries can switch the internal batch
+                # between N and 2N. Start a fresh extrapolation history so a
+                # later cache hit never combines residuals with different shapes.
+                ps.history.clear()
+                ps.consecutive_cached = 0
 
-            reuse = (
-                caching
-                and self.state.calc_type == "cache"
-                and ps.history
-                and _cache_entry_matches(ps.history[-1][1], in_causal, in_full, gen_only)
-            )
+            reuse = caching and self.state.calc_type == "cache" and history_matches
             if reuse:
                 ps.consecutive_cached += 1
                 und_out = ps.history[-1][1][0]  # understanding: absolute reuse (not a residual)

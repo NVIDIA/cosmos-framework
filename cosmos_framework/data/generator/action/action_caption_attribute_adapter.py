@@ -227,5 +227,6 @@ ACTION_CAPTION_ATTRIBUTE_ADAPTER = ActionCaptionAttributeAdapter(
         "web_human_action_body": P("real", "human", "static_single", "human_head_and_wrists"),
         "vitra_ego4d": P("real", "human", "ego_head", "human_head_wrists_and_fingertips"),
         "embodiment_a": P("real", "human", "ego_head", "human_head_wrists_and_fingertips"),
+        "behavior1k_subtask": P("synthetic", "dual_arm", "head_over_wrists", "ego_and_dual_arm_end_effectors"),
     }
 )
