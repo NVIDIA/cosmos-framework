@@ -52,20 +52,20 @@ Attention scopes (``--attention-scopes``)
 
 The noisy square above is the largest quadrant of the mask, so the ``attention_scope``
 config knob -- which restricts it to the query's own camera (``same_view``) or to its own
-camera and its own instant (``same_view_or_frame``) -- is the one mask choice that changes
+camera and its own instant (``decomposed``) -- is the one mask choice that changes
 what a step costs rather than only what it may look at. Passing several scopes runs the whole
 benchmark once per scope over the identical pack and adds a comparison table of what each one
 bought, against the first scope listed:
 
 * ``pairs`` is the ratio of allowed token pairs, i.e. the speedup a mask whose rules landed on
   block boundaries would give: ``V`` for ``same_view``, ``V*F / (F + V - 1)`` for
-  ``same_view_or_frame`` over the noisy square, diluted by the quadrants the scope leaves
+  ``decomposed`` over the noisy square, diluted by the quadrants the scope leaves
   alone;
 * ``blocks`` is the ratio of *visited blocks*, i.e. what this mask at this block size actually
   leaves the kernel free to skip, and therefore the ratio to read the wall clock against. It
   trails ``pairs`` by whatever the scope's boundaries cost in partially-masked blocks, which
   are charged in full: ``same_view`` keeps nearly all of its saving, since a camera's tokens
-  are one contiguous run of the camera-major layout, while ``same_view_or_frame`` gives more
+  are one contiguous run of the camera-major layout, while ``decomposed`` gives more
   of it back, since its same-frame stripes are single ``(frame, view)`` cells (920 tokens at
   the default geometry, against 128- or 256-token blocks) and each stripe pays a partial block
   at both ends;
@@ -172,12 +172,12 @@ Examples:
     # What the narrower noisy->noisy scopes buy, forward + backward. The dense baseline is
     # identical for every scope and by far the slowest row, so a scope sweep skips it.
     python -m cosmos_framework.model.generator.mot.flex_attention_bench \
-        --attention-scopes all_views same_view_or_frame same_view --backward --skip-dense
+        --attention-scopes all_views decomposed same_view --backward --skip-dense
 
     # The same sweep down to the masks alone: their build cost and their sparsity, with no
     # q/k/v allocated and no attention run, so it also fits where the dense shapes do not.
     python -m cosmos_framework.model.generator.mot.flex_attention_bench \
-        --attention-scopes all_views same_view_or_frame same_view --mask-only
+        --attention-scopes all_views decomposed same_view --mask-only
 
     # I2V-style conditioning: first latent frame of every camera kept clean.
     python -m cosmos_framework.model.generator.mot.flex_attention_bench \
@@ -371,7 +371,7 @@ class MultiviewScenario:
         return {
             "all_views": self.num_views * frames,
             "same_view": frames,
-            "same_view_or_frame": frames + self.num_views - 1,
+            "decomposed": frames + self.num_views - 1,
         }[self.attention_scope]
 
     @property
@@ -380,18 +380,8 @@ class MultiviewScenario:
         return self._cells_in_scope(self.noisy_frames_per_view)
 
     @property
-    def cond_cells_in_scope(self) -> int:
-        """``(frame, view)`` cells of conditioning tokens one conditioning query reaches."""
-        return self._cells_in_scope(self.noisy_cond_frames_per_view)
-
-    @property
     def full_cells_in_scope(self) -> int:
-        """``(frame, view)`` cells of the RGB target's whole grid one noisy query reaches.
-
-        Noisy queries reach every RGB key within scope, conditioning and noisy alike (unlike
-        conditioning queries, confined to conditioning keys), so their reach is this count
-        over the full grid rather than :attr:`noisy_cells_in_scope`'s noisy-only one.
-        """
+        """``(frame, view)`` cells of the RGB target's whole grid one RGB query reaches."""
         return self._cells_in_scope(self.latent_frames_per_view)
 
     @property
@@ -574,33 +564,26 @@ def allowed_pair_count(scenario: MultiviewScenario) -> int:
       ``V * (C_c*F*S)**2``;
     * RGB -> control is the same own-view-any-frame reach from the other direction: each
       view's ``C_n*F*S`` RGB tokens reach its ``C_c*F*S`` control tokens;
-    * noisy -> RGB reaches every RGB key within ``attention_scope``, conditioning and noisy
-      alike: each of the ``V * (F - c)`` noisy cells reaches
+    * every RGB query reaches every RGB key within ``attention_scope``, conditioning and
+      noisy alike: each of the ``V * F`` RGB cells reaches
       :attr:`MultiviewScenario.full_cells_in_scope` of them, ``C_n*S`` tokens apiece;
-    * conditioning -> conditioning is the analogous within-scope reach, confined to the
-      ``V * c`` conditioning cells: each reaches
-      :attr:`MultiviewScenario.cond_cells_in_scope` of them;
-    * conditioning -> noisy, and control -> RGB, contribute nothing;
+    * control -> RGB contributes nothing;
     * every GEN token, noisy or conditioning, reaches all of its sample's causal tokens,
       the one quadrant the mask leaves unrestricted.
     """
     views = scenario.num_views
     frames = scenario.latent_frames_per_view
     spatial = scenario.spatial_tokens
-    clean = scenario.noisy_cond_frames_per_view
     rgb_cell_tokens = scenario.num_noisy_items * spatial
     control_tokens_per_view = scenario.num_cond_items * frames * spatial
 
     control_to_control = views * control_tokens_per_view**2
     rgb_to_control = views * (scenario.num_noisy_items * frames * spatial) * control_tokens_per_view
 
-    noisy_cells = views * (frames - clean)
-    noisy_to_rgb = noisy_cells * scenario.full_cells_in_scope * rgb_cell_tokens**2
-    cond_cells = views * clean
-    cond_to_cond = cond_cells * scenario.cond_cells_in_scope * rgb_cell_tokens**2
+    rgb_to_rgb = views * frames * scenario.full_cells_in_scope * rgb_cell_tokens**2
 
     gen_to_und = scenario.tokens_per_sample * scenario.num_causal_tokens
-    return scenario.num_samples * (control_to_control + rgb_to_control + noisy_to_rgb + cond_to_cond + gen_to_und)
+    return scenario.num_samples * (control_to_control + rgb_to_control + rgb_to_rgb + gen_to_und)
 
 
 def dense_pair_count(scenario: MultiviewScenario) -> int:
@@ -1179,7 +1162,7 @@ def print_scope_comparison(runs: Sequence[ScopeRun]) -> None:
     * ``blocks`` -- the visited-block ratio of the mask actually built, i.e. the work the
       kernel is left free to skip. Below ``pairs`` by what the scope's boundaries cost, which
       is little for ``same_view`` (one contiguous run per camera) and more for
-      ``same_view_or_frame`` (a partial block at each end of every same-frame stripe).
+      ``decomposed`` (a partial block at each end of every same-frame stripe).
     * ``skipped%`` -- the share of the mask's whole block grid that is empty, i.e. the
       computation the scope removes outright. Read with ``partial%`` it says how the narrowing
       landed: blocks the rules missed entirely (skipped, free) against blocks they cut through

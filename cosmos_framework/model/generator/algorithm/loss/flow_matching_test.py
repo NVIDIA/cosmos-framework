@@ -6,7 +6,16 @@
 import pytest
 import torch
 
-from cosmos_framework.model.generator.algorithm.loss.flow_matching import compute_flow_matching_loss
+from cosmos_framework.model.generator.algorithm.loss.flow_matching import (
+    ActionSlotLossStats,
+    compute_flow_matching_loss,
+)
+from cosmos_framework.data.generator.action.utils.unified_action_schema import (
+    EGO_POSE,
+    RIGHT_OPENNESS,
+    RIGHT_WRIST_POSE,
+    UNIFIED_ACTION_DIM,
+)
 
 
 class _UnitWeightFlow:
@@ -66,6 +75,44 @@ def test_padded_action_valid_mask_is_cropped_with_raw_action_dim() -> None:
         action_valid_mask=[torch.tensor([True, False, True, False])],
     )
     torch.testing.assert_close(weighted, torch.tensor(5.0))
+
+
+@pytest.mark.L0
+def test_action_slot_losses_share_original_computation_with_padded_model_width() -> None:
+    max_action_dim = UNIFIED_ACTION_DIM + 5
+    pred = torch.full((1, max_action_dim), 100.0, requires_grad=True)
+    with torch.no_grad():
+        pred[:, EGO_POSE] = 2.0
+        pred[:, RIGHT_WRIST_POSE] = 3.0
+        pred[:, RIGHT_OPENNESS] = 4.0
+    valid_mask = torch.zeros(max_action_dim, dtype=torch.bool)
+    valid_mask[EGO_POSE] = True
+    valid_mask[RIGHT_WRIST_POSE] = True
+    valid_mask[RIGHT_OPENNESS] = True
+
+    slot_stats = ActionSlotLossStats(sample_loss=torch.zeros(1, 7), sample_count=torch.zeros(1, 7))
+    weighted, per_instance = compute_flow_matching_loss(
+        pred=[pred],
+        target=[torch.zeros_like(pred)],
+        condition_mask=[torch.zeros(1, 1)],
+        timesteps=torch.zeros(1, 1),
+        has_valid_tokens=True,
+        rectified_flow=_UnitWeightFlow(),
+        tensor_kwargs_fp32={"dtype": torch.float32},
+        raw_action_dim=[torch.tensor(UNIFIED_ACTION_DIM)],
+        action_valid_mask=[valid_mask],
+        action_slot_stats=slot_stats,
+    )
+
+    torch.testing.assert_close(weighted, torch.tensor(7.0))
+    torch.testing.assert_close(per_instance, torch.tensor([7.0]))
+    torch.testing.assert_close(
+        slot_stats.sample_loss,
+        torch.tensor([[4.0, 9.0, 0.0, 16.0, 0.0, 0.0, 0.0]]),
+    )
+    torch.testing.assert_close(slot_stats.sample_count, torch.tensor([[1.0, 1.0, 0.0, 1.0, 0.0, 0.0, 0.0]]))
+    assert weighted.requires_grad
+    assert not slot_stats.sample_loss.requires_grad
 
 
 @pytest.mark.L0

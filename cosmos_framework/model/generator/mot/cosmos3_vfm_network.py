@@ -68,6 +68,7 @@ class Cosmos3VFMNetworkConfig(PretrainedConfig):
         use_multiview_flex_attention: bool = False,
         flex_attention_backend: FlexBackendPreference = "auto",
         attention_scope: AttentionScope = "all_views",
+        decomposed_temporal_window_seconds: float | None = None,
         action_dim=32,
         num_embodiment_domains=32,
         action_io_projector_type: str = ACTION_IO_PROJECTOR_DOMAIN_AWARE,
@@ -112,6 +113,7 @@ class Cosmos3VFMNetworkConfig(PretrainedConfig):
         self.use_multiview_flex_attention = use_multiview_flex_attention
         self.flex_attention_backend = flex_attention_backend
         self.attention_scope: AttentionScope = attention_scope
+        self.decomposed_temporal_window_seconds = decomposed_temporal_window_seconds
         self.temporal_compression_factor_vision = temporal_compression_factor_vision
         self.natten_parameter_list = natten_parameter_list
         self.video_temporal_causal = video_temporal_causal
@@ -191,12 +193,16 @@ class Cosmos3VFMNetwork(PreTrainedModel):
                 torch.device("cuda", torch.cuda.current_device()) if torch.cuda.is_available() else torch.device("cpu")
             )
             self.flex_backend = resolve_flex_backend(device, config.flex_attention_backend)
+            temporal_window = config.decomposed_temporal_window_seconds
+            temporal_window_note = (
+                f", with a {temporal_window}s decomposed temporal window" if temporal_window is not None else ""
+            )
             log.info(
                 f"Multiview FlexAttention is running on the {self.flex_backend.name} backend "
                 f"(flex_attention_backend={config.flex_attention_backend!r}), with a "
                 f"{self.flex_backend.block_size} block mask over a GEN stream padded to "
                 f"{self.flex_backend.full_seq_alignment} tokens. Noisy tokens attend to the "
-                f"noisy tokens of their sample under scope {config.attention_scope!r}."
+                f"noisy tokens of their sample under scope {config.attention_scope!r}{temporal_window_note}."
             )
 
         if config.vision_gen:
@@ -868,7 +874,7 @@ class Cosmos3VFMNetwork(PreTrainedModel):
             )  # [1,patch_latent_dim]
             probe = llm2vae(vae2llm(probe))  # [1,patch_latent_dim]
             # Per-item zeros of the right shape, so callers iterating the predictions
-            # (_get_velocity, _compute_flow_matching_loss) see the shapes they expect; the
+            # (_get_velocity, compute_flow_matching_loss) see the shapes they expect; the
             # probe is folded into the first so the projections stay in the autograd graph.
             if modality is not None and modality.tokens is not None:
                 preds = [torch.zeros_like(tok) for tok in modality.tokens]
@@ -965,7 +971,7 @@ class Cosmos3VFMNetwork(PreTrainedModel):
                 preds_action = preds_action + self.action_modality_embed.view(1, -1)  # [1,hidden_size]
             preds_action = self.llm2action(preds_action, dummy_domain_id)  # [1,action_dim]
             # Return a list of per-sample zero tensors with correct shapes (e.g. (T, action_dim)),
-            # so downstream code (_get_velocity, _compute_flow_matching_loss) that iterates over preds_action
+            # so downstream code (_get_velocity, compute_flow_matching_loss) that iterates over preds_action
             # gets properly-shaped tensors. Without this, the dummy tensor (1, action_dim)
             # would cause a size mismatch when concatenating vision+action velocities.
             if action is not None and action.tokens is not None:
@@ -1276,6 +1282,7 @@ class Cosmos3VFMNetwork(PreTrainedModel):
                 num_und=causal_seq.shape[0],
                 causal_offsets=causal_offsets,
                 attention_scope=self.config.attention_scope,
+                decomposed_temporal_window_seconds=self.config.decomposed_temporal_window_seconds,
             )
             # Carried with the mask because its kernels are only valid for the block size the
             # mask was built at; two_way_attention hands both to flex_attention, which
@@ -1420,6 +1427,12 @@ def _multiview_mask_items(packed_seq: PackedSequence) -> list[list[MaskItem]]:
     deciding whether a LiDAR item is control, and vice versa. A stream contributing a
     single item per sample -- every T2V/I2V/V2V batch, and either stream of a one-item-each
     joint pack -- marks nothing, so ``flex_attention``'s control rules stay unreachable.
+
+    Each item's ``seconds_per_frame`` comes from ``ModalityData.seconds_per_frame``, the real
+    time between two of that item's latent frames (``sequence.py``'s ``_pack_grid_tokens``).
+    Camera and LiDAR items disagree here even on a shared frame index, since the two sensors
+    run at different rates -- what ``decomposed_temporal_window_seconds`` needs to compare the
+    two streams by actual capture time rather than by frame index.
     """
     num_samples = len(packed_seq.sample_lens)
     vision = packed_seq.vision
@@ -1469,6 +1482,7 @@ def _multiview_mask_items(packed_seq: PackedSequence) -> list[list[MaskItem]]:
                         num_views=views_per_vision_item[vision_cursor],
                         view_offset=0,
                         is_control=item_in_stream < num_vision - 1,
+                        seconds_per_frame=vision.seconds_per_frame[vision_cursor],
                     )
                 )
                 vision_cursor += 1
@@ -1481,6 +1495,7 @@ def _multiview_mask_items(packed_seq: PackedSequence) -> list[list[MaskItem]]:
                         num_views=1,
                         view_offset=lidar_view_offset,
                         is_control=item_in_stream < num_lidar - 1,
+                        seconds_per_frame=lidar.seconds_per_frame[lidar_cursor],
                     )
                 )
                 lidar_cursor += 1

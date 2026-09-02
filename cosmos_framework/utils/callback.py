@@ -109,12 +109,19 @@ class Callback:
     All callbacks should inherit from this class and adhere to the established method names and signatures.
     """
 
-    def __init__(self, config: Optional["Config"] = None, trainer: Optional["ImaginaireTrainer"] = None):
+    def __init__(
+        self,
+        config: Optional["Config"] = None,
+        trainer: Optional["ImaginaireTrainer"] = None,
+        *,
+        _deprecation_warning_stacklevel: int = 2,
+    ) -> None:
         """Initializes a Callback object.
 
         Args:
             config (Optional[Config]): The configuration object for the Imaginaire codebase, if available.
             trainer (Optional[ImaginaireTrainer]): The main trainer handling the training loop, if available.
+            _deprecation_warning_stacklevel (int): Stack level for deprecated constructor arguments.
 
         Notes:
             The config and trainer parameters are optional to maintain backward compatibility.
@@ -127,7 +134,7 @@ class Callback:
                 "The 'config' and 'trainer' parameters are deprecated and will be removed in a future release. "
                 "Please update your code to create Callback instances without these parameters.",
                 DeprecationWarning,
-                stacklevel=2,
+                stacklevel=_deprecation_warning_stacklevel,
             )
         del config, trainer
 
@@ -435,7 +442,8 @@ class WandBCallback(Callback):
     - val/loss: The computed overall loss in the validation dataset.
     """
 
-    def __init__(self, log_train_loss_to_console: bool = False) -> None:
+    def __init__(self, *args: Any, log_train_loss_to_console: bool = False, **kwargs: Any) -> None:
+        super().__init__(*args, _deprecation_warning_stacklevel=3, **kwargs)
         self.log_train_loss_to_console = log_train_loss_to_console
 
     def on_train_start(self, model: ImaginaireModel, iteration: int = 0) -> None:
@@ -505,7 +513,7 @@ class WandBCallback(Callback):
 
             if distributed.is_rank0():
                 if self.log_train_loss_to_console:
-                    log.info(f"train/loss_avg: {avg_loss:.5f} (iteration {iteration - 1})")
+                    log.info(f"train/loss_avg: {avg_loss:.5f} (iteration {iteration})")
                 wandb.log({f"timer/{key}": value for key, value in timer_results.items()}, step=iteration)
                 wandb.log({"train/loss": avg_loss, "train/loss_avg": avg_loss}, step=iteration)
                 wandb.log({"iteration": iteration}, step=iteration)

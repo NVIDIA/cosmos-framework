@@ -30,6 +30,9 @@ QUANTILE_ROT_SCALE_FLOOR_TARGET_MAX = 5.0
 _RAW_ROTATION_STATS_METHODS = frozenset(
     {"quantile_rot", "quantile_rot_scale_floor", "asinh_rot", "piecewise_asinh_rot"}
 )
+_GLOBAL_ASINH_POSE_CONVENTIONS = frozenset(
+    {"backward_anchored", "backward_chunk_anchored_8f", "backward_chunk_anchored_16f"}
+)
 GLOBAL_ASINH_GRIPPER_01_STATS_PATH = (
     Path(__file__).parents[1] / "normalizers" / "global_asinh_v1_backward_anchored_gripper_binary.json"
 )
@@ -223,10 +226,8 @@ def resolve_action_normalization(
     """Resolve one configured normalization method into its forward/inverse transform."""
     if stats is None:
         raise ValueError(f"{method} normalization requires per-dataset action statistics")
-    if method == "global_asinh" and pose_convention != "backward_anchored":
-        raise ValueError(
-            f"global_asinh normalization requires pose_convention='backward_anchored', got {pose_convention!r}"
-        )
+    if method == "global_asinh" and pose_convention not in _GLOBAL_ASINH_POSE_CONVENTIONS:
+        raise ValueError(f"global_asinh normalization requires an anchored pose convention, got {pose_convention!r}")
 
     if method == "meanstd":
         offset = stats["mean"]  # [D]
@@ -319,6 +320,24 @@ def load_action_normalizer(
         ),
         apply_forward_clamp=apply_forward_clamp,
     )
+
+
+def make_camera_global_asinh_normalizer(
+    stats_path: str | Path = GLOBAL_ASINH_METRIC_GRIPPER_STATS_PATH,
+    *,
+    pose_convention: str = "backward_anchored",
+) -> ActionAsinhNormalization:
+    """Build the native 9D camera normalizer from the canonical global-asinh profile."""
+    if pose_convention not in _GLOBAL_ASINH_POSE_CONVENTIONS:
+        raise ValueError(f"global_asinh normalization requires an anchored pose convention, got {pose_convention!r}")
+    stats = load_action_normalization_stats(
+        "global_asinh",
+        stats_path=stats_path,
+        expected_dim=59,
+    )
+    lo = stats["q01"][:9]
+    hi = stats["q99"][:9]
+    return ActionAsinhNormalization(offset=(hi + lo) / 2.0, scale=(hi - lo).clamp(min=1e-8) / 2.0)
 
 
 def make_pose_action_scale_normalizer(

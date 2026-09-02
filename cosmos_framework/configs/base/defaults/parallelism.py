@@ -43,6 +43,17 @@ class ParallelismConfig:
     # Number of ranks for CFG parallelism.
     cfg_parallel_shard_degree: int = 1
 
+    # Size of the group ranks exchange raw video samples within before the VAE encode, to
+    # equalize each rank's predicted VAE-encode cost for the step (see
+    # models.mot.vae_load_balance and OmniMoTModel._prepare_training_data). 1 (the default)
+    # disables load balancing entirely -- same convention as context_parallel_shard_degree
+    # and cfg_parallel_shard_degree. Must evenly divide world_size. Unlike cp/cfgp this is
+    # NOT an attention-sharding overlay: it only ever runs once per cp-window (on the step
+    # that actually calls the VAE encoder), and has no interaction with how the packed
+    # sequence is sharded for compute. Size it to stay within one node (NVLink) to keep the
+    # raw-pixel exchange cheap -- nothing here enforces that, it is a placement choice.
+    vae_load_balance_group_size: int = 1
+
     # Inference-mode mesh toggle for ParallelDims.
     enable_inference_mode: bool = False
 
