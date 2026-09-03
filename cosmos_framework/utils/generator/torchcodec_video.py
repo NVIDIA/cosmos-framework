@@ -12,6 +12,7 @@ from typing import Any, BinaryIO
 
 import numpy as np
 import torch
+import torchcodec
 from torchcodec.decoders import VideoDecoder
 from torchcodec.transforms import Resize
 
@@ -24,6 +25,10 @@ class VideoMetadata:
     average_fps: float
     height: int | None = None
     width: int | None = None
+
+
+def _torchcodec_version() -> str:
+    return getattr(torchcodec, "__version__", "(unknown version)")
 
 
 def _normalize_source(source: VideoSource) -> VideoSource:
@@ -47,16 +52,32 @@ def _build_decoder(
     normalized_source = _normalize_source(source)
     # Preserve FFmpeg/TorchCodec's 0 sentinel so callers can request automatic thread selection.
     num_ffmpeg_threads = 0 if num_threads == 0 else max(num_threads, 1)
-    kwargs: dict[str, Any] = {"num_ffmpeg_threads": num_ffmpeg_threads, "output_dtype": output_dtype}
+    kwargs: dict[str, Any] = {"num_ffmpeg_threads": num_ffmpeg_threads}
     if custom_frame_mappings is None:
         kwargs["seek_mode"] = seek_mode
     else:
         kwargs["custom_frame_mappings"] = custom_frame_mappings
     if device != "cpu":
         kwargs["device"] = device
+    # ``output_dtype`` arrived after the pinned cu128/cu130 TorchCodec (0.10.0), whose
+    # ``VideoDecoder.__init__`` has no such parameter -- forwarding it unconditionally breaks
+    # every call, including plain metadata probes.  uint8 is 0.10's native output, so only a
+    # non-default request needs the keyword at all.  (``transforms`` does exist on 0.10; it is
+    # still sent only on demand, and covered by the same guard for older builds.)
+    if output_dtype != torch.uint8:
+        kwargs["output_dtype"] = output_dtype
     if resize_size is not None:
         kwargs["transforms"] = [Resize(resize_size)]
-    return VideoDecoder(normalized_source, **kwargs)
+    try:
+        return VideoDecoder(normalized_source, **kwargs)
+    except TypeError as error:
+        unsupported = next((key for key in ("output_dtype", "transforms") if key in kwargs and key in str(error)), None)
+        if unsupported is None:
+            raise
+        raise TypeError(
+            f"Installed torchcodec {_torchcodec_version()} does not support VideoDecoder({unsupported}=...). "
+            f"Upgrade torchcodec to use {unsupported}."
+        ) from error
 
 
 def _read_basic_metadata(decoder: Any) -> tuple[int, float]:
