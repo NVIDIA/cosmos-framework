@@ -22,9 +22,10 @@ from pathlib import Path
 
 import modelopt
 import torch
-from cosmos_framework.inference.model import _diffusers_to_net_key
 from modelopt.torch.export.diffusers_utils import hide_quantizers_from_state_dict
 from modelopt.torch.export.unified_export_hf import _process_quantized_modules
+
+from cosmos_framework.inference.model import _diffusers_to_net_key
 
 from .checkpoint_io import load_sharded_safetensors, save_sharded_safetensors
 from .safetensors_index import build_root_index
@@ -117,10 +118,16 @@ _SCALE_SUFFIXES = (".weight_scale", ".weight_scale_2", ".input_scale", ".input_s
 # ModelOpt ``ignore`` list so a reasoning-path loader (vllm Cosmos3ForConditionalGeneration)
 # does not FP8-quantize the vision tower / projections it can't supply scales for.
 _DIFFUSERS_IGNORE_MODULES = [
-    "proj_in", "proj_out", "time_embedder*",
-    "audio_proj_in", "audio_proj_out", "action_proj_in", "action_proj_out",
+    "proj_in",
+    "proj_out",
+    "time_embedder*",
+    "audio_proj_in",
+    "audio_proj_out",
+    "action_proj_in",
+    "action_proj_out",
     "lm_head",
-    "model.visual*", "visual*",
+    "model.visual*",
+    "visual*",
 ]
 
 
@@ -169,9 +176,7 @@ class Fp8DiffusersExporter:
                         "schema mismatch; the overlay assumption is broken."
                     )
                 if bf16[k].shape != v.shape:
-                    raise ValueError(
-                        f"shape mismatch for {k}: bf16 {tuple(bf16[k].shape)} vs fp8 {tuple(v.shape)}"
-                    )
+                    raise ValueError(f"shape mismatch for {k}: bf16 {tuple(bf16[k].shape)} vs fp8 {tuple(v.shape)}")
                 merged[k] = v
                 quantized_modules.add(k[: -len(".weight")])
                 n_weight += 1

@@ -23,6 +23,10 @@ from pathlib import Path
 
 import modelopt.torch.quantization as mtq
 import torch
+from datasets import load_dataset
+from modelopt.torch.utils.vlm_dataset_utils import get_vlm_dataset_dataloader
+from PIL import Image
+
 from cosmos_framework.data.generator.sequence_packing import SequencePlan
 from cosmos_framework.model.generator.diffusion.samplers.fixed_step import (
     FixedStepSampler,
@@ -30,9 +34,6 @@ from cosmos_framework.model.generator.diffusion.samplers.fixed_step import (
 from cosmos_framework.model.generator.utils.data_and_condition import (
     GenerationDataClean,
 )
-from datasets import load_dataset
-from modelopt.torch.utils.vlm_dataset_utils import get_vlm_dataset_dataloader
-from PIL import Image
 
 QUANT_CONFIGS = {"fp8": mtq.FP8_DEFAULT_CFG}
 
@@ -75,9 +76,7 @@ def apply_legacy_timestep_embedding(model) -> None:
         )
         / half
     )
-    embedder._timestep_frequencies.copy_(
-        legacy_frequencies.to(dtype=embedder._timestep_frequencies.dtype)
-    )
+    embedder._timestep_frequencies.copy_(legacy_frequencies.to(dtype=embedder._timestep_frequencies.dtype))
     print("[calib] legacy-equivalence timestep frequencies enabled")
 
 
@@ -135,6 +134,7 @@ def apply_legacy_attention(model, *, text_width: int = 512) -> None:
     single-sample, two-way calibration path.
     """
     import torch.nn.functional as F
+
     from cosmos_framework.data.generator.sequence_packing.runtime import (
         from_mode_splits,
         get_causal_seq_padded,
@@ -177,13 +177,9 @@ def apply_legacy_attention(model, *, text_width: int = 512) -> None:
         num_und, num_gen = get_num_real_tokens(query_pack)
         padding_rows = text_width - num_und
         if padding_rows < 0:
-            raise ValueError(
-                f"legacy text width {text_width} is smaller than {num_und} real tokens"
-            )
+            raise ValueError(f"legacy text width {text_width} is smaller than {num_und} real tokens")
         normalized_key_pack = kwargs.get("packed_key_states_normalized")
-        generation_key_pack = (
-            normalized_key_pack if normalized_key_pack is not None else key_pack
-        )
+        generation_key_pack = normalized_key_pack if normalized_key_pack is not None else key_pack
         key_und = get_und_seq(generation_key_pack)[:num_und]
         key_gen = get_gen_seq(generation_key_pack)[:num_gen]
         value_und = get_und_seq(value_pack)[:num_und]
@@ -261,9 +257,7 @@ def prepare_calibration_prompts(num_samples: int):
     prompts (the large, video-backed dataset is never downloaded in full). Only the
     ``Detailed_Caption`` text column is read — never the image column.
     """
-    dataset = load_dataset(
-        "WenhaoWang/VideoUFO", split="Full", streaming=True
-    ).select_columns("Detailed_Caption")
+    dataset = load_dataset("WenhaoWang/VideoUFO", split="Full", streaming=True).select_columns("Detailed_Caption")
     raw_prompts = [row["Detailed_Caption"] for row in itertools.islice(dataset, num_samples)]
 
     return raw_prompts
@@ -326,16 +320,12 @@ def vae_encode_cond_images(vae, images, height, width, num_frames):
     import numpy as np
 
     config = getattr(vae, "config", None)
-    has_mean_std = (
-        config is not None
-        and hasattr(config, "latents_mean")
-        and hasattr(config, "latents_std")
-    )
+    has_mean_std = config is not None and hasattr(config, "latents_mean") and hasattr(config, "latents_std")
     latents = []
     for img in images:
         img = img.convert("RGB").resize((width, height))
         px = torch.from_numpy(np.asarray(img)).float().div(255.0)  # [H,W,3] in [0,1]
-        px = px.permute(2, 0, 1).unsqueeze(0) * 2.0 - 1.0          # [1,3,H,W] in [-1,1]
+        px = px.permute(2, 0, 1).unsqueeze(0) * 2.0 - 1.0  # [1,3,H,W] in [-1,1]
         video = px.unsqueeze(2).expand(-1, -1, num_frames, -1, -1).contiguous()
         video = video.to(device="cuda", dtype=vae.dtype)
         with torch.no_grad():
@@ -365,6 +355,7 @@ def resolve_distilled_sigmas(input_dir: Path) -> list[float] | None:
     Both carry identical values today; reading both means a checkpoint that ships
     only one still calibrates on the true few-step schedule.
     """
+
     def _load(name: str) -> dict:
         try:
             with open(Path(input_dir) / name) as f:
@@ -372,10 +363,9 @@ def resolve_distilled_sigmas(input_dir: Path) -> list[float] | None:
         except (OSError, ValueError):
             return {}
 
-    sigmas = (
-        _load("modular_model_index.json").get("distilled_sigmas")
-        or (_load("scheduler/scheduler_config.json").get("fixed_step_sampler_config") or {}).get("t_list")
-    )
+    sigmas = _load("modular_model_index.json").get("distilled_sigmas") or (
+        _load("scheduler/scheduler_config.json").get("fixed_step_sampler_config") or {}
+    ).get("t_list")
     return [float(s) for s in sigmas] if sigmas else None
 
 
@@ -558,15 +548,19 @@ def make_forward_loop(
         ):
             print(f"[calib] prompt {prompt_idx + 1}/{n_prompts}")
             noise = torch.randn(
-                1, NUM_CHANNELS, T, H, W, dtype=torch.bfloat16, device="cuda",
+                1,
+                NUM_CHANNELS,
+                T,
+                H,
+                W,
+                dtype=torch.bfloat16,
+                device="cuda",
             )
             if use_legacy_scheduler:
                 noise = noise * float(getattr(_scheduler, "init_noise_sigma", 1.0))
             image_latent = None
             if i2v:
-                cond_latent = cond_latents[prompt_idx % len(cond_latents)].to(
-                    dtype=torch.bfloat16, device="cuda"
-                )
+                cond_latent = cond_latents[prompt_idx % len(cond_latents)].to(dtype=torch.bfloat16, device="cuda")
                 image_latent = cond_latent[:, :, 0:1]  # clean frame 0 for re-injection
                 latents = condition_mask * cond_latent + (1.0 - condition_mask) * noise
             else:
@@ -598,13 +592,9 @@ def make_forward_loop(
                     _scheduler.set_timesteps(num_inference_steps, device="cuda")
                 image_latent_legacy = image_latent
                 for timestep in _scheduler.timesteps:
-                    noise_pred_cond = _run(
-                        mdl, latents, timestep.unsqueeze(0), cond_text_indexes
-                    )[0]
+                    noise_pred_cond = _run(mdl, latents, timestep.unsqueeze(0), cond_text_indexes)[0]
                     if do_cfg:
-                        noise_pred_uncond = _run(
-                            mdl, latents, timestep.unsqueeze(0), uncond_text_indexes
-                        )[0]
+                        noise_pred_uncond = _run(mdl, latents, timestep.unsqueeze(0), uncond_text_indexes)[0]
                         noise_pred = noise_pred_uncond + guidance_scale * (noise_pred_cond - noise_pred_uncond)
                     else:
                         noise_pred = noise_pred_cond

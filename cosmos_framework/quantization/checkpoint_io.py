@@ -16,10 +16,11 @@ from pathlib import Path
 from tempfile import gettempdir
 
 import torch
-from cosmos_framework.inference.args import OmniSetupOverrides
-from cosmos_framework.inference.inference import OmniInference
 from huggingface_hub import snapshot_download
 from safetensors.torch import load_file, save_file
+
+from cosmos_framework.inference.args import OmniSetupOverrides
+from cosmos_framework.inference.inference import OmniInference
 
 
 def load_sharded_safetensors(checkpoint_dir: str | Path) -> dict[str, torch.Tensor]:
@@ -97,9 +98,7 @@ def load_transformer(model_name_or_path: str):
     input_dir = resolve_checkpoint_path(model_name_or_path)
     transformer_dir = input_dir / "transformer"
     if not transformer_dir.is_dir():
-        raise FileNotFoundError(
-            f"Expected {transformer_dir} (a diffusers-layout transformer/)."
-        )
+        raise FileNotFoundError(f"Expected {transformer_dir} (a diffusers-layout transformer/).")
 
     setup_args = OmniSetupOverrides(
         checkpoint_path=str(input_dir),

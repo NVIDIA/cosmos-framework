@@ -14,15 +14,15 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
 
-import torch
 import modelopt.torch.quantization as mtq
+import torch
 
 from . import calibration as _calib
 from . import export as _export
 from .checkpoint_io import (
     load_legacy_scheduler,
-    load_transformer,
     load_sharded_safetensors,
+    load_transformer,
     resolve_checkpoint_path,
     save_sharded_safetensors,
 )
@@ -33,6 +33,7 @@ FP8_E4M3_MAX = 448.0
 @dataclass
 class Shape:
     """Calibration latent shape (pixel-space; the VAE scale factors are applied internally)."""
+
     height: int
     width: int
     num_frames: int
@@ -47,6 +48,7 @@ class Sampler:
     checkpoint (the distilled students ship a ``FlowMatchEulerDiscreteScheduler`` and
     a fixed sigma ``t_list``); the UniPC knobs below are ignored for those.
     """
+
     num_inference_steps: int
     guidance_scale: float
     flow_shift: float = 10.0
@@ -58,8 +60,8 @@ class Sampler:
 
 
 # --- Production shapes (models.mk) -------------------------------------------
-SHAPE_VIDEO = Shape(height=720, width=1280, num_frames=189)   # t2v / i2v
-SHAPE_IMAGE = Shape(height=720, width=1280, num_frames=1)     # t2i
+SHAPE_VIDEO = Shape(height=720, width=1280, num_frames=189)  # t2v / i2v
+SHAPE_IMAGE = Shape(height=720, width=1280, num_frames=1)  # t2i
 # Small shapes for the demo runs (a single prompt, seconds not minutes).
 SHAPE_VIDEO_DEMO = Shape(height=480, width=720, num_frames=29)
 SHAPE_IMAGE_DEMO = Shape(height=512, width=512, num_frames=1)
@@ -67,19 +69,29 @@ SHAPE_IMAGE_DEMO = Shape(height=512, width=512, num_frames=1)
 # --- Production samplers (models.mk) -----------------------------------------
 # t2v / i2v base: UniPC "runtime" preset (flow_shift=10, sigma_max=80, flow sigmas).
 SAMPLER_VIDEO_BASE = Sampler(
-    num_inference_steps=50, guidance_scale=6.0,
-    flow_shift=10.0, sigma_max=80.0, use_karras_sigmas=False, use_flow_sigmas=True,
+    num_inference_steps=50,
+    guidance_scale=6.0,
+    flow_shift=10.0,
+    sigma_max=80.0,
+    use_karras_sigmas=False,
+    use_flow_sigmas=True,
     label="video base (UniPC runtime)",
 )
 # t2i base: UniPC with flow_shift=3, sigma_max=200, karras sigmas.
 SAMPLER_IMAGE_BASE = Sampler(
-    num_inference_steps=50, guidance_scale=6.0,
-    flow_shift=3.0, sigma_max=200.0, use_karras_sigmas=True, use_flow_sigmas=True,
+    num_inference_steps=50,
+    guidance_scale=6.0,
+    flow_shift=3.0,
+    sigma_max=200.0,
+    use_karras_sigmas=True,
+    use_flow_sigmas=True,
     label="t2i base (UniPC karras)",
 )
 # Distilled students (t2i / i2v): FlowMatchEuler, 4 fixed steps, CFG-free.
 SAMPLER_DISTILLED = Sampler(
-    num_inference_steps=4, guidance_scale=1.0, explicit_sigmas=None,
+    num_inference_steps=4,
+    guidance_scale=1.0,
+    explicit_sigmas=None,
     label="distilled (FlowMatchEuler 4-step, CFG-free)",
 )
 
@@ -90,8 +102,10 @@ class _StubVAE:
     ``make_forward_loop`` reads ``vae.config.scale_factor_{temporal,spatial}`` to size
     the latent; the full VAE is only needed to encode i2v conditioning frames.
     """
+
     def __init__(self, temporal: int = 4, spatial: int = 16):
         import types
+
         self.config = types.SimpleNamespace(scale_factor_temporal=temporal, scale_factor_spatial=spatial)
 
 
@@ -159,7 +173,11 @@ def quantize_fp8_checkpoint(
         else:
             raise ValueError("profile='i2v' requires i2v_cond_dir or i2v_cond_dataset.")
         cond_latents = _calib.vae_encode_cond_images(
-            vae, images, shape.height, shape.width, shape.num_frames,
+            vae,
+            images,
+            shape.height,
+            shape.width,
+            shape.num_frames,
         )
 
     forward_loop = _calib.make_forward_loop(
