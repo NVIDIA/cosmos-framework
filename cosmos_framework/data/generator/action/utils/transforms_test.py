@@ -11,11 +11,62 @@ import torch
 from cosmos_framework.data.generator.action.utils.json_formatter import ActionPromptJsonFormatter
 from cosmos_framework.data.generator.action.utils.transforms import (
     ActionTransformPipeline,
+    add_action_mode_metadata,
     reflection_pad_to_target,
     remove_reflection_padding,
 )
 from cosmos_framework.data.generator.augmentors.duration_fps_text_timestamps import DurationFPSTextTimeStamps
 from cosmos_framework.data.generator.augmentors.resolution_text_info import ResolutionTextInfo
+
+
+@pytest.mark.L0
+@pytest.mark.parametrize(
+    ("mode", "expected"),
+    [
+        (
+            "forward_dynamics",
+            "Open the drawer. Predict the future video given the image and action.",
+        ),
+        (
+            "inverse_dynamics",
+            "Predict the underlying action given the video.",
+        ),
+        (
+            "wam",
+            "Open the drawer. Predict the future video and action given the image.",
+        ),
+    ],
+)
+def test_add_action_mode_metadata_supports_plain_captions(
+    mode: str,
+    expected: str,
+) -> None:
+    caption = "  Open the drawer.  "
+
+    result = add_action_mode_metadata(caption, mode)
+
+    assert result == expected
+
+
+@pytest.mark.L0
+def test_add_action_mode_metadata_supports_structured_captions() -> None:
+    caption = {
+        "actions": [{"description": "Open the drawer."}],
+        "duration": "2s",
+    }
+
+    forward_dynamics = add_action_mode_metadata(caption, "forward_dynamics")
+    inverse_dynamics = add_action_mode_metadata(caption, "inverse_dynamics")
+
+    assert forward_dynamics == {
+        "actions": caption["actions"],
+        "mode_description": "Predict the future video given the image and action.",
+        "duration": "2s",
+    }
+    assert inverse_dynamics == {
+        "mode_description": "Predict the underlying action given the video.",
+        "duration": "2s",
+    }
 
 
 @pytest.mark.L0
@@ -129,11 +180,34 @@ def test_action_prompt_json_formatter_drops_empty_viewpoint() -> None:
 
 
 @pytest.mark.L0
+def test_action_transform_pipeline_disables_mode_specific_prompt_by_default() -> None:
+    pipeline = ActionTransformPipeline(
+        tokenizer_config=None,
+        max_action_dim=4,
+        append_viewpoint_info=False,
+        append_duration_fps_timestamps=False,
+        append_resolution_info=False,
+    )
+    data_dict = {
+        "ai_caption": "Open the drawer.",
+        "video": torch.zeros(3, 17, 256, 256),  # [C,T,H,W]
+        "action": torch.zeros(16, 2),  # [T,D]
+        "mode": "inverse_dynamics",
+        "domain_id": torch.tensor(0),  # []
+    }
+
+    result = pipeline(data_dict, resolution="256")
+
+    assert result["ai_caption"] == "Open the drawer."
+
+
+@pytest.mark.L0
 def test_action_transform_pipeline_json_prompt_toggle() -> None:
     pipeline = ActionTransformPipeline(
         tokenizer_config=None,
         max_action_dim=4,
         format_prompt_as_json=True,
+        enable_mode_specific_prompt=True,
     )
     video = torch.zeros(3, 17, 192, 320)  # [C,T,H,W]
     action = torch.zeros(16, 2)  # [T,D]
@@ -152,8 +226,17 @@ def test_action_transform_pipeline_json_prompt_toggle() -> None:
 
     prompt = result["ai_caption"]
     assert isinstance(prompt, dict)
-    assert list(prompt.keys()) == ["cinematography", "actions", "duration", "fps", "resolution", "aspect_ratio"]
+    assert list(prompt.keys()) == [
+        "actions",
+        "mode_description",
+        "cinematography",
+        "duration",
+        "fps",
+        "resolution",
+        "aspect_ratio",
+    ]
     assert list(prompt["actions"][0].keys()) == ["time", "description", "idle_frame"]
+    assert prompt["mode_description"] == "Predict the future video and action given the image."
     assert prompt["cinematography"] == {
         "framing": "This video is captured from a third-person perspective looking towards the agent from the front."
     }
@@ -168,6 +251,44 @@ def test_action_transform_pipeline_json_prompt_toggle() -> None:
     assert prompt["fps"] == 8.0
     assert prompt["resolution"] == {"H": 192, "W": 320}
     assert prompt["aspect_ratio"] == "16,9"
+    assert result["action"].shape == (16, 4)
+    torch.testing.assert_close(result["action_raw"], action)
+
+
+@pytest.mark.L0
+def test_action_transform_pipeline_json_prompt_respects_duration_fps_toggle() -> None:
+    pipeline = ActionTransformPipeline(
+        tokenizer_config=None,
+        max_action_dim=4,
+        append_duration_fps_timestamps=False,
+        format_prompt_as_json=True,
+        enable_mode_specific_prompt=True,
+    )
+    video = torch.zeros(3, 17, 192, 320)  # [C,T,H,W]
+    action = torch.zeros(16, 2)  # [T,D]
+    data_dict = {
+        "ai_caption": "Open the drawer.",
+        "video": video,
+        "action": action,
+        "mode": "wam",
+        "domain_id": torch.tensor(0),  # []
+        "viewpoint": "third_person_view",
+        "idle_frames": torch.tensor(3),  # []
+    }
+
+    result = pipeline(data_dict, resolution="256")
+
+    prompt = result["ai_caption"]
+    assert isinstance(prompt, dict)
+    assert list(prompt.keys()) == ["actions", "mode_description", "cinematography", "resolution", "aspect_ratio"]
+    assert list(prompt["actions"][0].keys()) == ["description", "idle_frame"]
+    assert prompt["mode_description"] == "Predict the future video and action given the image."
+    assert prompt["actions"] == [
+        {
+            "description": "Open the drawer.",
+            "idle_frame": "3 out of 16.",
+        }
+    ]
     assert result["action"].shape == (16, 4)
     torch.testing.assert_close(result["action_raw"], action)
 
@@ -254,6 +375,7 @@ def test_action_transform_pipeline_keeps_ai_caption_string_path() -> None:
         max_action_dim=4,
         append_idle_frames=True,
         idle_frames_dropout=0.0,
+        enable_mode_specific_prompt=True,
     )
     video = torch.zeros(3, 17, 256, 256)  # [C,T,H,W]
     action = torch.zeros(16, 2)  # [T,D]
@@ -272,6 +394,7 @@ def test_action_transform_pipeline_keeps_ai_caption_string_path() -> None:
 
     assert result["ai_caption"] == (
         "Open the drawer. "
+        "Predict the future video and action given the image. "
         "This video is captured from a third-person perspective looking towards the agent from the front. "
         "The video is 2.0 seconds long and is of 8 FPS. "
         "This video is of 256x256 resolution. "
@@ -281,12 +404,94 @@ def test_action_transform_pipeline_keeps_ai_caption_string_path() -> None:
 
 
 @pytest.mark.L0
+def test_action_transform_pipeline_groups_registered_caption_postfixes() -> None:
+    pipeline = ActionTransformPipeline(
+        tokenizer_config=None,
+        max_action_dim=4,
+        append_action_caption_semantics=True,
+        append_duration_fps_timestamps=False,
+        append_resolution_info=False,
+    )
+    video = torch.zeros(3, 17, 256, 256)  # [C,T,H,W]
+    action = torch.zeros(16, 2)  # [T,D]
+    data_dict = {
+        "ai_caption": "Open the drawer",
+        "video": video,
+        "action": action,
+        "mode": "forward_dynamics",
+        "domain_id": torch.tensor(0),  # []
+        "viewpoint": "third_person_view",
+        "action_caption_attributes": {
+            "domain_postfix": "Domain.",
+            "embodiment_postfix": "Embodiment.",
+            "view_postfix": "Dataset-specific view.",
+            "subject_postfix": "Caption subject.",
+        },
+    }
+
+    result = pipeline(data_dict, resolution="256")
+
+    assert result["ai_caption"] == ("Open the drawer. Domain. Embodiment. Dataset-specific view. Caption subject.")
+    assert "action_caption_attributes" not in result
+    assert "third-person perspective" not in result["ai_caption"]
+    assert result["action"].shape == (16, 4)
+
+
+@pytest.mark.L0
+def test_action_transform_pipeline_avoids_generic_viewpoint_with_attribute_postfixes() -> None:
+    pipeline = ActionTransformPipeline(
+        tokenizer_config=None,
+        max_action_dim=4,
+        append_action_caption_semantics=True,
+        append_duration_fps_timestamps=False,
+        append_resolution_info=False,
+    )
+    data_dict = {
+        "ai_caption": "Open the drawer.",
+        "video": torch.zeros(3, 17, 256, 256),  # [C,T,H,W]
+        "action": torch.zeros(16, 2),  # [T,D]
+        "mode": "forward_dynamics",
+        "domain_id": torch.tensor(0),  # []
+        "viewpoint": "third_person_view",
+    }
+
+    result = pipeline(data_dict, resolution="256")
+
+    assert result["ai_caption"] == "Open the drawer."
+
+
+@pytest.mark.L0
+def test_action_transform_pipeline_preserves_empty_caption_with_attribute_postfixes() -> None:
+    pipeline = ActionTransformPipeline(
+        tokenizer_config=None,
+        max_action_dim=4,
+        append_action_caption_semantics=True,
+        append_duration_fps_timestamps=False,
+        append_resolution_info=False,
+    )
+    data_dict = {
+        "ai_caption": "",
+        "video": torch.zeros(3, 17, 256, 256),  # [C,T,H,W]
+        "action": torch.zeros(16, 2),  # [T,D]
+        "mode": "forward_dynamics",
+        "domain_id": torch.tensor(0),  # []
+        "viewpoint": "third_person_view",
+        "action_caption_attributes": {},
+    }
+
+    result = pipeline(data_dict, resolution="256")
+
+    assert result["ai_caption"] == ""
+
+
+@pytest.mark.L0
 def test_action_transform_pipeline_keeps_idle_frames_for_forward_dynamics() -> None:
     pipeline = ActionTransformPipeline(
         tokenizer_config=None,
         max_action_dim=4,
         append_idle_frames=True,
         idle_frames_dropout=0.0,
+        enable_mode_specific_prompt=True,
     )
     video = torch.zeros(3, 17, 256, 256)  # [C,T,H,W]
     action = torch.zeros(16, 2)  # [T,D]
@@ -303,6 +508,7 @@ def test_action_transform_pipeline_keeps_idle_frames_for_forward_dynamics() -> N
 
     result = pipeline(data_dict, resolution="256")
 
+    assert result["ai_caption"].startswith("Open the drawer. Predict the future video given the image and action.")
     assert "IdleFrames: 3 out of 16." in result["ai_caption"]
     assert result["action"].shape == (16, 4)
 
@@ -314,6 +520,7 @@ def test_action_transform_pipeline_skips_idle_frames_for_inverse_dynamics_string
         max_action_dim=4,
         append_idle_frames=True,
         idle_frames_dropout=0.0,
+        enable_mode_specific_prompt=True,
     )
     video = torch.zeros(3, 17, 256, 256)  # [C,T,H,W]
     action = torch.zeros(16, 2)  # [T,D]
@@ -330,6 +537,11 @@ def test_action_transform_pipeline_skips_idle_frames_for_inverse_dynamics_string
 
     result = pipeline(data_dict, resolution="256")
 
+    assert result["ai_caption"].startswith(
+        "Predict the underlying action given the video. "
+        "This video is captured from a third-person perspective looking towards the agent from the front."
+    )
+    assert "Open the drawer" not in result["ai_caption"]
     assert "IdleFrames" not in result["ai_caption"]
     assert result["action"].shape == (16, 4)
 
@@ -340,6 +552,7 @@ def test_action_transform_pipeline_skips_idle_frames_for_inverse_dynamics_json_p
         tokenizer_config=None,
         max_action_dim=4,
         format_prompt_as_json=True,
+        enable_mode_specific_prompt=True,
     )
     video = torch.zeros(3, 17, 256, 256)  # [C,T,H,W]
     action = torch.zeros(16, 2)  # [T,D]
@@ -358,12 +571,9 @@ def test_action_transform_pipeline_skips_idle_frames_for_inverse_dynamics_json_p
 
     prompt = result["ai_caption"]
     assert isinstance(prompt, dict)
-    assert prompt["actions"] == [
-        {
-            "time": "0:00-0:02",
-            "description": "Open the drawer.",
-        }
-    ]
+    assert prompt["mode_description"] == "Predict the underlying action given the video."
+    assert "actions" not in prompt
+    assert "Open the drawer" not in str(prompt)
     assert result["action"].shape == (16, 4)
 
 

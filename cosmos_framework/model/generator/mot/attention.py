@@ -123,57 +123,51 @@ from cosmos_framework.data.generator.sequence_packing.runtime import (
     SequencePackMetadata,
     from_mode_splits,
     get_all_seq,
+    get_all_seq_padded,
     get_causal_seq,
+    get_causal_seq_padded,
     get_full_only_seq,
+    get_full_only_seq_padded,
     sequence_pack_from_packed_sequence,
 )
 
 
-def _varlen_kwargs(
-    sample_offsets: torch.Tensor,
-    *,
-    cumulative_seqlen_Q: torch.Tensor,
-    cumulative_seqlen_KV: torch.Tensor,
-    max_seqlen_Q: int,
-    max_seqlen_KV: int,
-) -> dict[str, Any]:
-    """The varlen arguments for one :func:`attention` call, or ``{}`` to use the dense API.
+def _use_varlen(sample_offsets: torch.Tensor) -> bool:
+    """Whether a pass over this pack needs the varlen (sequence-packed) attention API.
 
-    With a single sample there is exactly one sequence in the pack, so the varlen
-    (sequence-packed) metadata is redundant and we can call the dense attention API instead
-    (no cumulative/max seqlen args). This remains correct in the presence of trailing padding:
-    for causal self-attention the mask never lets a real query attend to padded keys (padding
-    is appended after all real tokens), get_all_seq returns unpadded KV for the full path, and
-    any padded query rows are independent of the real rows and simply discarded downstream.
+    True means the caller passes the ``cumulative_seqlen_*``/``max_seqlen_*`` metadata to
+    :func:`attention`; False means it calls the dense API instead, with no ranges at all.
 
-    The dense path is gated to forward-only (inference) execution via
-    torch.is_grad_enabled(), which is False under torch.no_grad()/torch.inference_mode()
-    and True during training. This avoids branching on the sample count during training,
-    where batch composition varies between single- and multi-sample packs; keeping a single
-    code path there prevents torch.compile from specializing on both shapes and incurring
-    the associated recompilation overhead.
+    With a single sample there is exactly one sequence in the pack, so that metadata is
+    redundant and the dense API computes the same thing. This remains correct in the presence
+    of trailing padding: for causal self-attention the mask never lets a real query attend to
+    padded keys (padding is appended after all real tokens), the full path keeps the unpadded
+    ``get_all_seq`` KV whenever this returns False (the dense API has no ranges to fence
+    padding off with), and any padded query rows are independent of the real rows and simply
+    discarded downstream.
+
+    The dense path is gated to forward-only (inference) execution via ``torch.is_grad_enabled``,
+    which is False under ``torch.no_grad()``/``torch.inference_mode()`` and True during training.
+    This avoids branching on the sample count during training, where batch composition varies
+    between single- and multi-sample packs; keeping a single code path there prevents
+    torch.compile from specializing on both shapes and incurring the associated recompilation
+    overhead.
+
+    The grad-mode test comes first so that training never reaches the sample count, since ``or``
+    stops at the first true operand. Reading that count costs no kernel and no device sync --
+    ``sample_offsets`` has shape ``[num_samples + 1]``, so the count is a shape -- but comparing
+    a shape against a constant makes torch.compile specialize the enclosing graph on that count,
+    and a training run whose packs hold one sample sometimes and several other times then
+    recompiles every layer on each count it meets. Inference wants the specialization and has a
+    stable count.
 
     Args:
-        sample_offsets: the pack's per-sample offsets, whose length gives the sample count.
-        cumulative_seqlen_Q: cumulative query offsets for this pass.
-        cumulative_seqlen_KV: cumulative key offsets for this pass.
-        max_seqlen_Q: longest query sequence in the pack.
-        max_seqlen_KV: longest key sequence in the pack.
+        sample_offsets: the pack's per-sample offsets, shape ``[num_samples + 1]``, whose length
+            gives the sample count.
+    Returns:
+        bool: True to pass varlen metadata to :func:`attention`, False to use the dense API.
     """
-    # The grad-mode test comes first so that training never reaches the sample count, since
-    # ``and`` stops at the first false operand. Reading it costs no kernel and no device sync --
-    # sample_offsets has shape [num_samples + 1], so the count is a shape -- but comparing a shape
-    # against a constant makes torch.compile specialize the enclosing graph on that count, and a
-    # training run whose packs hold one sample sometimes and several other times then recompiles
-    # every layer on each count it meets. Inference wants the specialization and has a stable count.
-    if not torch.is_grad_enabled() and sample_offsets.shape[0] - 1 == 1:
-        return {}
-    return dict(
-        cumulative_seqlen_Q=cumulative_seqlen_Q,
-        cumulative_seqlen_KV=cumulative_seqlen_KV,
-        max_seqlen_Q=max_seqlen_Q,
-        max_seqlen_KV=max_seqlen_KV,
-    )
+    return torch.is_grad_enabled() or sample_offsets.shape[0] > 2
 
 
 def two_way_attention(
@@ -211,31 +205,20 @@ def two_way_attention(
         packed_key_states_normalized if packed_key_states_normalized is not None else packed_key_states
     )
 
-    causal_q, causal_q_offsets = get_causal_seq(packed_query_states)
-    causal_k, causal_k_offsets = get_causal_seq(packed_key_states)
-    causal_v, _ = get_causal_seq(packed_value_states)
-    full_q, full_q_offsets = get_full_only_seq(packed_query_states)
-
-    # Trailing padding rows belong to no sample, and varlen attention leaves rows outside its
-    # cumulative ranges unwritten in both directions: the forward output rows keep whatever was in
-    # the buffer, and the backward skips the matching dq/dk/dv rows, which then reach the
-    # projection weight gradients with no zero factor to cancel them. The pack describes its
-    # padding as one extra trailing segment per stream, so the causal pass switches to those
-    # offsets, as three_way_attention does for every pass. The full pass below keeps the plain
-    # offsets: its keys are the interleaved get_all_seq stream, whose sample_offsets have no such
-    # extra segment, and the FlexAttention branch needs no offsets at all because the mask marks
-    # padding with the -1 sentinel.
-    if "_causal_seq_offsets_pad_segment" in packed_query_states:
-        # The offsets index the whole padded stream, so they only fit a pack that holds it whole.
-        assert not packed_query_states["is_sharded"], (
-            "Pad-segment offsets describe the unsharded stream, so a context parallel local shard "
-            "needs offsets rebased onto the shard."
-        )
-        causal_q_offsets = packed_query_states["_causal_seq_offsets_pad_segment"]
-        causal_k_offsets = packed_key_states["_causal_seq_offsets_pad_segment"]
-        max_causal_len = packed_query_states["max_causal_len_pad_segment"]
-    else:
-        max_causal_len = packed_query_states["max_causal_len"]
+    # get_causal_seq_padded/get_full_only_seq_padded prefer the pack's pad-segment offsets when it
+    # carries one: trailing padding rows belong to no sample, and varlen attention leaves rows
+    # outside its cumulative ranges unwritten in both directions, so every pass that may see
+    # padding needs to switch to it. The FlexAttention branch below needs no offsets at all,
+    # because its mask marks padding with the -1 sentinel.
+    #
+    # Only the offsets and max lengths differ between the plain and the _padded accessors -- the
+    # stream each returns is the pack's own tower tensor, already padded at pack time, so the two
+    # families hand back the same object. That is why the FlexAttention branch below can mix them
+    # freely when it concatenates the towers, and why ``causal_k_normalized`` here belongs to that
+    # branch alone: the dense full pass takes its und keys from the interleaved stream instead.
+    causal_q, causal_q_offsets, max_causal_len = get_causal_seq_padded(packed_query_states)
+    causal_k, causal_k_offsets, _ = get_causal_seq_padded(packed_key_states)
+    causal_v, _, _ = get_causal_seq_padded(packed_value_states)
 
     # NOTE: we can only use the don't care causal mask when we know seqlen_Q == seqlen_KV.
     # Since this is a varlen use case, we would need to statically check all Q and KV offsets
@@ -247,16 +230,18 @@ def two_way_attention(
     use_dont_care_mask = causal_q_offsets is causal_k_offsets
 
     sample_offsets = packed_query_states["sample_offsets"]
+    use_varlen = _use_varlen(sample_offsets)
 
-    causal_varlen_kwargs = _varlen_kwargs(
-        sample_offsets,
-        cumulative_seqlen_Q=causal_q_offsets,
-        cumulative_seqlen_KV=causal_k_offsets,
-        max_seqlen_Q=max_causal_len,
-        max_seqlen_KV=max_causal_len,
-    )
+    if use_varlen:
+        causal_varlen_kwargs: dict[str, Any] = dict(
+            cumulative_seqlen_Q=causal_q_offsets,
+            cumulative_seqlen_KV=causal_k_offsets,
+            max_seqlen_Q=max_causal_len,
+            max_seqlen_KV=max_causal_len,
+        )
+    else:
+        causal_varlen_kwargs = dict()
 
-    # NOTE: cosmos_framework attention is BSHD in, BSHD out
     causal_res = attention(
         causal_q.unsqueeze(0),  # [1,N_und,heads,head_dim]
         causal_k.unsqueeze(0),  # [1,N_und,heads,head_dim]
@@ -269,6 +254,8 @@ def two_way_attention(
     # [1,N_und,heads,head_dim] -> [N_und,heads,head_dim] -> [N_und,heads*head_dim]
     causal_out = causal_res.squeeze(0).flatten(-2, -1)  # type: ignore  # [N_und,heads*head_dim]
 
+    full_q, full_q_offsets, max_full_len = get_full_only_seq_padded(packed_query_states)
+
     if flex_block_mask is not None:
         if flex_backend is None:
             raise ValueError(
@@ -278,35 +265,57 @@ def two_way_attention(
         # FlexAttention: the multiview supertoken mask encoded in flex_block_mask. It keys
         # GEN queries against [UND | GEN], so the two block-padded streams are concatenated
         # in that order rather than gathered back into the interleaved pack order that
-        # get_all_seq produces. Both come from the packs the dense path below reads: the
-        # normalized keys, since und normalization is exactly what the gen pass wants, and
-        # the raw values. This path needs no varlen offsets and no separate cross-attention
-        # term: padding carries the -1 sentinel in the mask, so every row is written and
-        # only padding attends to padding.
-        und_k, _ = get_causal_seq(packed_key_normalized)  # [N_und,heads,head_dim]
-        und_v, _ = get_causal_seq(packed_value_states)  # [N_und,heads,head_dim]
-        gen_k, _ = get_full_only_seq(packed_key_normalized)  # [N_full,heads,head_dim]
-        gen_v, _ = get_full_only_seq(packed_value_states)  # [N_full,heads,head_dim]
+        # get_all_seq produces. The mask was built over exactly these two lengths, which is why
+        # the towers go in whole, padding included. Both halves come from the packs the dense
+        # path below reads: the normalized keys, since und normalization is exactly what the gen
+        # pass wants, and the raw values -- the UND halves are the tensors already fetched above,
+        # and only the GEN halves are new here. This path needs no varlen offsets and no separate
+        # cross-attention term: padding carries the -1 sentinel in the mask, so every row is
+        # written and only padding attends to padding.
+        causal_k_normalized, _ = get_causal_seq(packed_key_normalized)
+        full_k, _ = get_full_only_seq(packed_key_normalized)  # [N_full,heads,head_dim]
+        full_v, _ = get_full_only_seq(packed_value_states)  # [N_full,heads,head_dim]
         full_res = flex_attention(
             full_q.unsqueeze(0),  # [1,N_full,heads,head_dim]
-            torch.cat((und_k, gen_k)).unsqueeze(0),  # [1,N_und+N_full,heads,head_dim]
-            torch.cat((und_v, gen_v)).unsqueeze(0),  # [1,N_und+N_full,heads,head_dim]
+            torch.cat((causal_k_normalized, full_k)).unsqueeze(0),  # [1,N_und+N_full,heads,head_dim]
+            torch.cat((causal_v, full_v)).unsqueeze(0),  # [1,N_und+N_full,heads,head_dim]
             flex_block_mask,
             flex_backend,
         )  # [1,N_full,heads,head_dim]
     else:
-        full_varlen_kwargs = _varlen_kwargs(
-            sample_offsets,
-            cumulative_seqlen_Q=full_q_offsets,
-            cumulative_seqlen_KV=sample_offsets,
-            max_seqlen_Q=packed_query_states["max_full_len"],
-            max_seqlen_KV=packed_query_states["max_sample_len"],
-        )
+        # Same treatment the causal pass gets above, on the stream this pass actually keys
+        # against. full_q is the padded GEN stream, so without a pad segment its trailing rows
+        # sit outside every cumulative range, and a varlen kernel leaves such rows -- and their
+        # dq/dk/dv -- exactly as it found them (flash3 demonstrably does; see
+        # ``attention_test.test_varlen_attention_backward_writes_query_grad_rows_past_its_ranges``).
+        # Covering them takes a segment on both sides: the query side already has one (from
+        # get_full_only_seq_padded above), and get_all_seq_padded gives the key side the matching
+        # one, which is why this pass could not simply reuse the towers' offsets.
+        if use_varlen:
+            sample_k, sample_kv_offsets, max_sample_len = get_all_seq_padded(packed_key_normalized)
+            sample_v, _, _ = get_all_seq_padded(packed_value_states)
+            full_varlen_kwargs: dict[str, Any] = dict(
+                cumulative_seqlen_Q=full_q_offsets,
+                cumulative_seqlen_KV=sample_kv_offsets,
+                max_seqlen_Q=max_full_len,
+                max_seqlen_KV=max_sample_len,
+            )
+        else:
+            # The padded key stream is only correct alongside the offsets that fence it off, so it
+            # is not an option here even when the pack carries one: the dense API has no ranges to
+            # confine a query to, padding K is zero, and exp(q.0) = 1 would give every real query
+            # softmax mass on every padding row. get_all_seq's real-token stream has no padding to
+            # attend to in the first place, which is what makes this branch correct -- and what
+            # makes get_all_seq_padded impossible to hoist out of this if, however much its own
+            # fallback to get_all_seq (taken only when the pack has no pad segment) invites it.
+            sample_k = get_all_seq(packed_key_normalized)
+            sample_v = get_all_seq(packed_value_states)
+            full_varlen_kwargs = dict()
 
         full_res = attention(
             full_q.unsqueeze(0),  # [1,N_full,heads,head_dim]
-            get_all_seq(packed_key_normalized).unsqueeze(0),  # [1,N_all,heads,head_dim]  normed und K for gen
-            get_all_seq(packed_value_states).unsqueeze(0),  # [1,N_all,heads,head_dim]
+            sample_k.unsqueeze(0),  # [1,N_all,heads,head_dim]  normed und K for gen
+            sample_v.unsqueeze(0),  # [1,N_all,heads,head_dim]
             **full_varlen_kwargs,
         )  # [1,N_full,heads,head_dim]
 
@@ -350,25 +359,30 @@ def three_way_attention(
     We should be careful when extending this to beyond t2i and t2v.
 
     ``packed_key_states_normalized``: optional alternative K pack for the gen→und cross-attention
-    (``full_ca``).  When provided, ``get_causal_seq(packed_key_states_normalized)`` supplies the und
-    K tokens seen by the generator, while ``get_causal_seq(packed_key_states)`` (raw und K) is
-    still used for the reasoner's own causal self-attention.  If ``None``, both paths share
-    ``packed_key_states``.
+    (``full_ca``).  When provided, its causal (und) stream supplies the und K tokens seen by the
+    generator, while ``packed_key_states``' own causal stream (raw und K) is still used for the
+    reasoner's own causal self-attention.  If ``None``, both paths share ``packed_key_states``.
     """
 
-    causal_q, causal_q_offsets = get_causal_seq(packed_query_states)
-    causal_k, causal_k_offsets = get_causal_seq(packed_key_states)
+    # get_causal_seq_padded/get_full_only_seq_padded prefer the pack's pad-segment offsets when a
+    # pack carries one: trailing padding rows belong to no sample, and varlen attention leaves
+    # rows outside its cumulative ranges unwritten in both directions, so every pass that may see
+    # padding needs to switch to it. Both streams gain the same extra segment, which is what keeps
+    # the query and key segment counts equal for the gen->und pass below.
+    causal_q, causal_q_offsets, max_causal_len = get_causal_seq_padded(packed_query_states)
+    causal_k, causal_k_offsets, _ = get_causal_seq_padded(packed_key_states)
 
     # For gen→und cross-attention use normed keys when provided,
     # otherwise fall back to the standard causal keys.
     if packed_key_states_normalized is not None:
-        causal_k_normalized, causal_k_normalized_offsets = get_causal_seq(packed_key_states_normalized)
+        causal_k_normalized, causal_k_normalized_offsets, _ = get_causal_seq_padded(packed_key_states_normalized)
     else:
         causal_k_normalized, causal_k_normalized_offsets = causal_k, causal_k_offsets
-    causal_v, _ = get_causal_seq(packed_value_states)
-    full_q, full_q_offsets = get_full_only_seq(packed_query_states)
-    full_k, _ = get_full_only_seq(packed_key_states)
-    full_v, _ = get_full_only_seq(packed_value_states)
+    causal_v, _, _ = get_causal_seq_padded(packed_value_states)
+
+    full_q, full_q_offsets, max_full_len = get_full_only_seq_padded(packed_query_states)
+    full_k, _, _ = get_full_only_seq_padded(packed_key_states)
+    full_v, _, _ = get_full_only_seq_padded(packed_value_states)
 
     if attention_meta is not None and attention_meta.null_action_supertokens:
         # Zero V for the first num_action_tokens_per_supertoken tokens of each
@@ -377,46 +391,17 @@ def three_way_attention(
         # regardless of attention weights. Softmax mass is still allocated to these positions (not
         # redistributed), so this differs from hard key masking, but the output contribution is 0.
         full_v = full_v.clone()
-        starts = full_q_offsets[:-1].long()  # [B]
+        # Deliberately the plain (non-pad-segment) get_full_only_seq offsets, not full_q_offsets
+        # above: this indexes into the start of each real sample's GEN sequence, and the
+        # pad-segment variant appends the padding region's own start as a spurious extra "sample".
+        # Zeroing from that spurious start could walk num_action_tokens_per_supertoken rows past
+        # the tensor's end, since the pad segment is only guaranteed non-empty, not that long.
+        _, full_q_offsets_unpadded = get_full_only_seq(packed_query_states)
+        starts = full_q_offsets_unpadded[:-1].long()  # [B]
         null_positions = (
             starts.unsqueeze(1) + torch.arange(attention_meta.num_action_tokens_per_supertoken, device=starts.device)
         ).reshape(-1)
         full_v[null_positions] = 0
-
-    # Trailing padding rows belong to no sample, and varlen attention leaves rows outside its
-    # cumulative ranges unwritten in both directions: the forward output rows keep whatever was in
-    # the buffer, and the backward skips the matching dq/dk/dv rows, which then reach the
-    # projection weight gradients with no zero factor to cancel them. When the pack carries
-    # padding it describes it as one extra trailing segment per stream, so switching every pass
-    # over to those offsets makes padding attend only to padding while each real query keeps its
-    # exact range. Both streams gain the same extra segment, which is what keeps the query and key
-    # segment counts equal for the gen->und pass below.
-    # The two invariants below are asserted rather than folded into the condition: falling back to
-    # the plain offsets is exactly the unwritten-gradient case this branch exists to avoid, so it
-    # has to fail loudly instead of quietly.
-    use_pad_segment = "_full_only_seq_offsets_pad_segment" in packed_query_states
-    if use_pad_segment:
-        # The offsets index the whole padded stream, so they only fit a pack that holds it whole.
-        # Context parallel gathers the sequence back with an all-to-all before dispatching here, so
-        # this holds today; a scheme that kept the sequence sharded through attention would have to
-        # rebase every segment boundary onto the shard.
-        assert not packed_query_states["is_sharded"], (
-            "Pad-segment offsets describe the unsharded stream, so a context parallel local shard "
-            "needs offsets rebased onto the shard."
-        )
-        causal_q_offsets = packed_query_states["_causal_seq_offsets_pad_segment"]
-        causal_k_offsets = packed_key_states["_causal_seq_offsets_pad_segment"]
-        causal_k_normalized_offsets = (
-            packed_key_states_normalized["_causal_seq_offsets_pad_segment"]
-            if packed_key_states_normalized is not None
-            else causal_k_offsets
-        )
-        full_q_offsets = packed_query_states["_full_only_seq_offsets_pad_segment"]
-        max_causal_len = packed_query_states["max_causal_len_pad_segment"]
-        max_full_len = packed_query_states["max_full_len_pad_segment"]
-    else:
-        max_causal_len = packed_query_states["max_causal_len"]
-        max_full_len = packed_query_states["max_full_len"]
 
     use_dont_care_mask = causal_q_offsets is causal_k_offsets
 
@@ -517,6 +502,7 @@ def multi_control_two_way_attention(
         split_info: SplitInfo carrying ``control_stream_token_ranges``,
             ``noisy_token_range``, and ``control_weights`` (all must be non-None).
     """
+    assert not torch.is_grad_enabled(), "Multi-control attention does not support grad mode"
     assert split_info.control_stream_token_ranges is not None
     assert split_info.noisy_token_range is not None
     assert split_info.control_weights is not None
@@ -525,24 +511,29 @@ def multi_control_two_way_attention(
     noisy_s, noisy_e = split_info.noisy_token_range
     weights = split_info.control_weights
 
-    # ── 1. Text self-attention (causal, unchanged) ───────────────────────────
+    # ── 1. Text self-attention (causal) ──────────────────────────────────────
     causal_q, causal_q_offsets = get_causal_seq(packed_query_states)
     causal_k, causal_k_offsets = get_causal_seq(packed_key_states)
     causal_v, _ = get_causal_seq(packed_value_states)
 
     use_dont_care_mask = causal_q_offsets is causal_k_offsets
+
+    # No varlen metadata: this pack holds one sample, so the offsets are a single
+    # [0, n_text].
+    #
+    # Unlike _sdpa these streams are still padded -- nothing unpads them -- so dense keys
+    # over the padded length rather than over [0, n_text]. That costs nothing here (the text
+    # stream is small enough that both forms are launch-bound) and changes no real row:
+    # padding is appended after every real token, so a real query i < n_text only ever
+    # attends keys <= i, all of them real.
     causal_res = attention(
         causal_q.unsqueeze(0),
         causal_k.unsqueeze(0),
         causal_v.unsqueeze(0),
-        cumulative_seqlen_Q=causal_q_offsets,
-        cumulative_seqlen_KV=causal_k_offsets,
-        max_seqlen_Q=packed_query_states["max_causal_len"],
-        max_seqlen_KV=packed_query_states["max_causal_len"],
         is_causal=True,
         causal_type=CausalType.DontCare if use_dont_care_mask else CausalType.TopLeft,
     )
-    causal_out = causal_res.squeeze(0).flatten(-2, -1)  # [N_text, Hq*D]
+    causal_out = causal_res.squeeze(0).flatten(-2, -1)  # type: ignore  # [N_text, Hq*D]
 
     # ── 2. Extract unpadded full/gen tokens ──────────────────────────────────
     full_q, full_q_offsets = get_full_only_seq(packed_query_states)
@@ -551,6 +542,7 @@ def multi_control_two_way_attention(
 
     n_text = int(causal_k_offsets[-1])
     n_full = int(full_q_offsets[-1])
+
     # `n_full` comes from int(full_q_offsets[-1]) → an unbacked symint under
     # torch.compile. The control ranges + noisy range partition the full/gen
     # segment with noisy last, so `noisy_e` (a concrete int from SplitInfo) is
@@ -582,33 +574,32 @@ def multi_control_two_way_attention(
         # the guard statically instead of raising a data-dependent error.
         torch._check(k.shape[0] == v.shape[0])
         n_q, n_kv = q.shape[0], k.shape[0]
+
         # These lengths come from data-dependent unpadding, so they are unbacked
         # symints under torch.compile. Backend validation checks require positive
         # lengths, and cuDNN specifically rejects KV length 1. This path builds
         # KV as [text | ctrl_i | noisy], where ctrl_i and noisy are non-empty for
-        # valid multi-control packs, so assert the stronger invariant.
+        # valid multi-control packs, so assert the stronger invariant. Without
+        # these, Dynamo cannot discharge them against unbacked symints.
         torch._check(n_q > 0)
         torch._check(n_kv > 1)
-        # Pass cumulative_seqlen_{Q,KV} + max_seqlen_{Q,KV} directly instead of
-        # seqlens_{Q,KV}. The frontend derives cumulative offsets from seqlens via
-        # `generate_varlen_parameters`, which calls `.max().item()` (a device-host
-        # sync) and is explicitly disallowed inside a torch.compile region. Each
-        # pass here is a single (batch=1) packed sequence, so the cumulative
-        # offsets are simply [0, n]. Building them ourselves keeps the whole path
-        # inside the compiled graph.
-        zero = torch.zeros(1, dtype=torch.int32, device=q.device)
-        cu_seqlens_q = torch.cat([zero, torch.tensor([n_q], dtype=torch.int32, device=q.device)])
-        cu_seqlens_kv = torch.cat([zero, torch.tensor([n_kv], dtype=torch.int32, device=q.device)])
+
+        # No varlen metadata on purpose. Every tensor here was unpadded above and
+        # each pass is a single (batch=1) sequence, so cumulative offsets would be
+        # exactly [0, n] -- one range spanning the whole tensor, constraining
+        # nothing its shape does not already. Passing them is not free: the
+        # frontend derives `is_varlen` from their presence and feeds it to
+        # `choose_backend`, and cuDNN declines varlen outright, so the varlen form
+        # silently fell through to NATTEN. Dropping it lets cuDNN take this path:
+        # measured on GB200, 1.3x-3.7x faster per call and 1.2x-1.9x over the
+        # whole function, and no further from a float64 reference than the NATTEN
+        # path it replaces.
         res = attention(
             q.unsqueeze(0),  # [1, N_q,  Hq,  D]
             k.unsqueeze(0),  # [1, N_kv, Hkv, D]
             v.unsqueeze(0),  # [1, N_kv, Hkv, D]
-            cumulative_seqlen_Q=cu_seqlens_q,
-            cumulative_seqlen_KV=cu_seqlens_kv,
-            max_seqlen_Q=n_q,
-            max_seqlen_KV=n_kv,
         )  # [1, N_q, Hq, D]
-        return res.squeeze(0).flatten(-2, -1)  # [N_q, Hq*D]
+        return res.squeeze(0).flatten(-2, -1)  # type: ignore  # [N_q, Hq*D]
 
     # ── 3. N independent single-control passes ────────────────────────────────
     # For each control i: KV = [text | ctrl_i | noisy] — maskless SDPA.

@@ -101,7 +101,7 @@ class MFUCallback(EveryN):
         self._vision_gen: bool = True
         self._action_gen: bool = False
         self._sound_gen: bool = False
-        self._world_size: int = 1
+        self._context_parallel_size: int = 1
         self._use_activation_checkpointing: bool = False
 
         # Accumulation state between every_n windows
@@ -183,7 +183,14 @@ class MFUCallback(EveryN):
             predict_text_tokens=getattr(net_cfg, "predict_text_tokens", False),
         )
 
-        self._world_size = torch.distributed.get_world_size() if torch.distributed.is_initialized() else 1
+        parallel_dims = getattr(model, "parallel_dims", None)
+        attention_io_layout = getattr(model_cfg, "attention_io_layout", "sequence_sharded")
+        if (
+            attention_io_layout == "sequence_sharded"
+            and parallel_dims is not None
+            and getattr(parallel_dims, "cp_enabled", False)
+        ):
+            self._context_parallel_size = max(1, int(parallel_dims.cp_size))
 
     # ------------------------------------------------------------------ #
     # Per-step accumulation
@@ -242,9 +249,12 @@ class MFUCallback(EveryN):
             attn_modes=attn_modes_list,
             include_padding=self.include_padding,
             use_activation_checkpointing=self._use_activation_checkpointing,
+            context_parallel_size=self._context_parallel_size,
         )
 
-        # VAE encoder forward-pass FLOPs (frozen, no backward).
+        # VAE encoder forward-pass FLOPs (frozen, no backward). Context
+        # parallelism applies only to the VFM network, so VAE FLOPs stay
+        # unscaled.
         if self.include_vae_encoder:
             vae_pixel_shapes = output_batch.get("vae_pixel_shapes")
             if vae_pixel_shapes:

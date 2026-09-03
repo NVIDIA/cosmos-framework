@@ -55,7 +55,6 @@ model:
       coeff_gen: null
       coeff_und: null
       method: local
-    log_enc_time_every_n: 100
     lora_alpha: 32
     lora_enabled: false
     lora_rank: 16

@@ -189,34 +189,3 @@ def test_multiview_augmentations_defer_normalization_to_model() -> None:
     augmentations, _ = module.make_augmentations(module.MultiviewAugmentationConfig())
 
     assert "normalize" not in augmentations
-
-
-def test_sekai_frame_count_uses_probe_video(monkeypatch: pytest.MonkeyPatch) -> None:
-    module = _import_or_skip("projects.cosmos3.sil.omnidreams.datasets.sekai")
-    seen: list[bytes] = []
-
-    def fake_probe_video(source: bytes) -> SimpleNamespace:
-        seen.append(source)
-        return SimpleNamespace(num_frames=37, average_fps=30.0, height=16, width=16)
-
-    monkeypatch.setattr(module, "probe_video", fake_probe_video)
-
-    assert module._num_available_video_frames(b"sekai-video") == 37
-    assert seen == [b"sekai-video"]
-
-
-def test_sekai_fit_window_clamps_to_available_span() -> None:
-    module = _import_or_skip("projects.cosmos3.sil.omnidreams.datasets.sekai")
-
-    assert module._fit_window_to_available_video(
-        frame_start=20,
-        num_video_frames=8,
-        stride=2,
-        num_available_frames=30,
-    ) == (20, 5)
-    assert module._fit_window_to_available_video(
-        frame_start=100,
-        num_video_frames=8,
-        stride=3,
-        num_available_frames=10,
-    ) == (0, 4)

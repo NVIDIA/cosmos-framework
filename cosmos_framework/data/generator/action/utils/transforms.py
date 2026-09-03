@@ -17,11 +17,17 @@ for the map-to-iterable wrapper.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
+
 import torch
 import torchvision.transforms.functional as transforms_F
 
 from cosmos_framework.utils import log
+from cosmos_framework.data.generator.action.action_caption_attribute_adapter import (
+    append_action_caption_semantics,
+)
 from cosmos_framework.data.generator.action.utils.action_processing import (
+    ActionCodec,
     ActionNormalizer,
     ActionProcessor,
 )
@@ -35,10 +41,48 @@ from cosmos_framework.data.generator.utils import VIDEO_RES_SIZE_INFO
 from cosmos_framework.data.generator.sequence_packing import SequencePlan
 from cosmos_framework.utils.generator.data_utils import get_vision_data_resolution
 
+ACTION_MODE_DESCRIPTIONS: dict[str, str] = {
+    "forward_dynamics": "Predict the future video given the image and action.",
+    "inverse_dynamics": "Predict the underlying action given the video.",
+    "wam": "Predict the future video and action given the image.",
+}
+
 
 def _should_append_idle_frame_info(mode: object) -> bool:
     """Return whether idle-frame prompt metadata should be surfaced."""
     return mode != "inverse_dynamics"
+
+
+def add_action_mode_metadata(caption: object, mode: object) -> object:
+    """Serialize mode-specific metadata into a plain or structured prompt.
+
+    Inverse dynamics omits the source action caption because it describes the
+    target action. Calling this before the plain-caption metadata appenders
+    avoids parsing an already-rendered string to remove that source caption.
+    """
+    mode_description = ACTION_MODE_DESCRIPTIONS.get(mode) if isinstance(mode, str) else None
+    if mode_description is None:
+        return caption
+
+    if isinstance(caption, dict):
+        processed_caption = {key: value for key, value in caption.items() if key != "mode_description"}
+        actions = processed_caption.pop("actions", None)
+        if mode == "inverse_dynamics":
+            return {"mode_description": mode_description, **processed_caption}
+        if actions is None:
+            return {"mode_description": mode_description, **processed_caption}
+        return {"actions": actions, "mode_description": mode_description, **processed_caption}
+
+    if isinstance(caption, str):
+        if mode == "inverse_dynamics":
+            return mode_description
+
+        input_task = caption.strip()
+        if input_task and not input_task.endswith((".", "!", "?")):
+            input_task += "."
+        return " ".join(segment for segment in (input_task, mode_description) if segment)
+
+    return mode_description
 
 
 def find_closest_target_size(h: int, w: int, resolution: str | int) -> tuple[int, int]:
@@ -470,6 +514,11 @@ class ActionTransformPipeline:
         append_viewpoint_info: Whether to append viewpoint type metadata to the
             caption (via ``ViewpointTextInfo`` augmentor).  Requires that
             samples contain a ``"viewpoint"`` key.  Defaults to ``True``.
+        append_action_caption_semantics: Whether to append the domain,
+            embodiment, view-composition, and caption-subject postfixes attached
+            by registered Lance Action datasets. Enabling this disables the
+            generic viewpoint postfix so each caption has one view description.
+            Defaults to ``False``.
         append_duration_fps_timestamps: Whether to append duration and FPS metadata to the
             caption (matching VFM's ``DurationFPSTextTimeStamps`` augmentor).
             Defaults to ``True``.
@@ -492,7 +541,11 @@ class ActionTransformPipeline:
             structured JSON-compatible dictionary before tokenization.  When
             enabled, legacy string metadata appenders are skipped and the JSON
             formatter owns viewpoint, action, resolution, duration, FPS, and
-            idle-frame fields.  Defaults to ``False``.
+            idle-frame fields. ``append_duration_fps_timestamps`` still controls
+            the JSON duration/FPS/timestamp fields. Defaults to ``False``.
+        enable_mode_specific_prompt: Whether to add the mode-specific prediction
+            description to the prompt metadata and omit the source action caption
+            for inverse dynamics. Defaults to ``False``.
         format_prompt_float_seconds: When ``format_prompt_as_json`` is enabled,
             emit sub-second-precise float ``duration``/``time`` (e.g. "0.57s")
             instead of truncated whole seconds ("0s").  Useful for short
@@ -512,17 +565,21 @@ class ActionTransformPipeline:
         max_action_dim: int = 32,
         action_channel_masking: bool = True,
         append_viewpoint_info: bool = True,
+        append_action_caption_semantics: bool = False,
         append_duration_fps_timestamps: bool = True,
         append_resolution_info: bool = True,
         append_idle_frames: bool = False,
         idle_frames_dropout: float = 0.05,
         format_prompt_as_json: bool = False,
+        enable_mode_specific_prompt: bool = False,
         format_prompt_float_seconds: bool = False,
     ) -> None:
         self.caption_key: str = caption_key
         self.video_temporal_downsample: int = video_temporal_downsample
         self.max_action_dim: int = max_action_dim
         self.action_channel_masking: bool = action_channel_masking
+        self.enable_mode_specific_prompt: bool = enable_mode_specific_prompt
+        self.append_action_caption_semantics: bool = append_action_caption_semantics
         self.action_processor: ActionProcessor = ActionProcessor(
             max_action_dim=max_action_dim,
             action_channel_masking=action_channel_masking,
@@ -540,12 +597,14 @@ class ActionTransformPipeline:
         self.prompt_json_formatter: ActionPromptJsonFormatter | None = None
         if format_prompt_as_json:
             self.prompt_json_formatter = ActionPromptJsonFormatter(
-                caption_key=caption_key, float_seconds=format_prompt_float_seconds
+                caption_key=caption_key,
+                append_duration_fps_timestamps=append_duration_fps_timestamps,
+                float_seconds=format_prompt_float_seconds,
             )
 
         # --- Viewpoint text augmentor (runs after ai_caption, before duration/FPS) ---
         self.viewpoint_augmentor: ViewpointTextInfo | None = None
-        if append_viewpoint_info and self.prompt_json_formatter is None:
+        if append_viewpoint_info and not append_action_caption_semantics and self.prompt_json_formatter is None:
             self.viewpoint_augmentor = ViewpointTextInfo(
                 input_keys=[caption_key, "viewpoint"],
                 output_keys=[caption_key],
@@ -604,6 +663,38 @@ class ActionTransformPipeline:
                 },
             )
 
+    def _apply_plain_caption_postfixes(self, data_dict: dict, mode: object) -> dict:
+        """Append configured plain-caption metadata in one deterministic order."""
+        has_action_caption_attributes = (
+            self.append_action_caption_semantics and "action_caption_attributes" in data_dict
+        )
+        if has_action_caption_attributes:
+            attributes = data_dict["action_caption_attributes"]
+            if not isinstance(attributes, Mapping):
+                raise TypeError("action_caption_attributes must be a mapping.")
+            caption = data_dict.get(self.caption_key)
+            # Preserve empty action captions instead of creating metadata-only prompts.
+            if isinstance(caption, str) and caption:
+                data_dict[self.caption_key] = append_action_caption_semantics(caption, attributes)
+        elif self.viewpoint_augmentor is not None:
+            result = self.viewpoint_augmentor(data_dict)
+            if result is not None:
+                data_dict = result
+
+        for augmentor in (self.duration_fps_augmentor, self.resolution_info_augmentor):
+            if augmentor is None:
+                continue
+            result = augmentor(data_dict)
+            if result is not None:
+                data_dict = result
+
+        if self.idle_frames_augmentor is not None and _should_append_idle_frame_info(mode):
+            result = self.idle_frames_augmentor(data_dict)
+            if result is not None:
+                data_dict = result
+
+        return data_dict
+
     def __call__(
         self,
         data_dict: dict,
@@ -611,6 +702,9 @@ class ActionTransformPipeline:
         action_normalizer: ActionNormalizer | None = None,
         *,
         action_valid_mask: torch.Tensor | None = None,
+        normalized_action: torch.Tensor | None = None,
+        history_normalized_action: torch.Tensor | None = None,
+        action_codec: ActionCodec | None = None,
     ) -> dict:
         """Apply the transform pipeline to a single data dictionary.
 
@@ -623,16 +717,20 @@ class ActionTransformPipeline:
         1. Resize + reflection-pad spatial dimensions to the closest
            predefined target from ``VIDEO_RES_SIZE_INFO[resolution]``.
         2. Format the caption as a structured JSON prompt (if enabled).
-        3. Otherwise, append viewpoint type metadata to caption (if enabled).
-        4. Append duration/FPS metadata to caption (if enabled).
-        5. Append resolution metadata to caption (if enabled).
-        6. Append idle-frame metadata (Pi0.7-style) to caption unless the
+        3. If enabled, serialize the mode-specific description as prompt
+           metadata. For inverse dynamics, omit the input action caption.
+        4. For plain prompts, append registered semantic postfixes when present;
+           otherwise append generic viewpoint metadata (if enabled).
+        5. Append duration/FPS metadata to plain prompts (if enabled).
+        6. Append resolution metadata to plain prompts (if enabled).
+        7. Append idle-frame metadata (Pi0.7-style) to plain prompts unless the
            sample is in inverse dynamics mode (if enabled).
-        7. Tokenize caption text (if enabled).
-        8. Build a ``SequencePlan`` from the ``"mode"`` key (if present).
-        9. Preserve the canonical unnormalized and unpadded action as
-           ``"action_raw"``, normalize real channels, pad ``"action"`` to
-           ``max_action_dim``, and attach ``"action_processing_record"``.
+        8. Tokenize caption text (if enabled).
+        9. Build a ``SequencePlan`` from the ``"mode"`` key (if present).
+        10. Preserve the canonical unnormalized and unpadded action as
+           ``"action_raw"``, normalize native actions or consume an explicitly
+           encoded normalized action, pad ``"action"`` to ``max_action_dim``, and
+           attach ``"action_processing_record"``.
 
         Args:
             data_dict: A sample dictionary as returned by a Action dataset.
@@ -644,6 +742,9 @@ class ActionTransformPipeline:
             action_valid_mask: Optional explicit slot-validity mask for the
                 unpadded action. This is passed separately from ``data_dict``
                 so intermediate transforms cannot silently drop it.
+            normalized_action: Optional already-normalized canonical action tensor.
+            history_normalized_action: Normalized counterpart of ``history_action``.
+            action_codec: Decoder paired with an explicitly normalized action.
 
         Returns:
             The same dictionary, mutated in-place with padded tensors,
@@ -659,6 +760,9 @@ class ActionTransformPipeline:
         # 2. Format the caption as structured JSON when requested; otherwise run the legacy string appenders.
         if self.prompt_json_formatter is not None:
             data_dict = self.prompt_json_formatter(data_dict)
+            # 3. Optionally add mode metadata after the structured prompt exists.
+            if self.enable_mode_specific_prompt:
+                data_dict[self.caption_key] = add_action_mode_metadata(data_dict.get(self.caption_key), mode)
         else:
             # The relabeling is only rendered by the JSON formatter.  Drop it
             # here so that enabling ``annotation_mode`` without
@@ -666,35 +770,22 @@ class ActionTransformPipeline:
             # leaking a dict into the collate function.
             data_dict.pop("relabel_prompt", None)
 
-            # 3. Append viewpoint type metadata to caption (if enabled).
-            if self.viewpoint_augmentor is not None:
-                result = self.viewpoint_augmentor(data_dict)
-                if result is not None:
-                    data_dict = result
+            # 3. Optionally add mode metadata before the remaining plain-prompt metadata.
+            if self.enable_mode_specific_prompt:
+                data_dict[self.caption_key] = add_action_mode_metadata(data_dict.get(self.caption_key), mode)
 
-            # 4. Append duration/FPS metadata to caption (if enabled).
-            if self.duration_fps_augmentor is not None:
-                result = self.duration_fps_augmentor(data_dict)
-                if result is not None:
-                    data_dict = result
+            # 4-7. Append plain-caption metadata in canonical order.
+            data_dict = self._apply_plain_caption_postfixes(data_dict, mode)
 
-            # 5. Append resolution metadata to caption (if enabled).
-            if self.resolution_info_augmentor is not None:
-                result = self.resolution_info_augmentor(data_dict)
-                if result is not None:
-                    data_dict = result
+        # This nested dictionary cannot be consumed by the training collator.
+        # Its semantic fields have already been rendered into the caption.
+        data_dict.pop("action_caption_attributes", None)
 
-            # 6. Append idle-frame metadata to caption (if enabled for this mode).
-            if self.idle_frames_augmentor is not None and _should_append_idle_frame_info(mode):
-                result = self.idle_frames_augmentor(data_dict)
-                if result is not None:
-                    data_dict = result
-
-        # 7. Tokenize caption text (if enabled).
+        # 8. Tokenize caption text (if enabled).
         if self.text_tokenizer is not None:
             data_dict = self.text_tokenizer(data_dict)
 
-        # 8. Build a ``SequencePlan`` from the ``"mode"`` key (if present).
+        # 9. Build a ``SequencePlan`` from the ``"mode"`` key (if present).
         video = data_dict.get("video")
         action = data_dict.get("action")
         assert video is not None, "video is required"
@@ -706,8 +797,20 @@ class ActionTransformPipeline:
         num_history_actions = 0
         if history_action is not None and isinstance(action, torch.Tensor):
             num_history_actions = history_action.shape[0]
-            action = torch.cat([history_action, action], dim=0)
+            action = torch.cat([history_action, action], dim=0)  # [H+T,D_raw]
+            if normalized_action is not None:
+                if history_normalized_action is None:
+                    raise ValueError(
+                        "history_normalized_action is required when history_action and normalized_action are set"
+                    )
+                normalized_action = torch.cat(  # [H+T,D_raw]
+                    [history_normalized_action, normalized_action], dim=0
+                )
+            elif history_normalized_action is not None:
+                raise ValueError("history_normalized_action requires normalized_action")
             action_length += num_history_actions
+        elif history_normalized_action is not None:
+            raise ValueError("history_normalized_action requires history_action")
 
         sequence_plan = build_sequence_plan_from_mode(
             mode=mode,
@@ -724,6 +827,8 @@ class ActionTransformPipeline:
             action,
             action_normalizer=action_normalizer,
             action_valid_mask=action_valid_mask,
+            normalized_action=normalized_action,
+            action_codec=action_codec,
         )
 
         return data_dict

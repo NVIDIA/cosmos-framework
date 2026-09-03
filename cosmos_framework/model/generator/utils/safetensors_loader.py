@@ -1489,9 +1489,10 @@ def load_vfm_model(
       (``language_model.lm_head.*``) and — for Qwen3-VL-based variants —
       the visual encoder (ViT) under ``language_model.visual.*``;
     - the VFM-specific top-level parameters: ``time_embedder.*``,
-      ``vae2llm.*`` / ``llm2vae.*``, plus the optional
-      ``action2llm.*`` / ``llm2action.*`` / ``action_modality_embed`` and
-      ``sound2llm.*`` / ``llm2sound.*`` / ``sound_modality_embed`` heads.
+      ``vae2llm.*`` / ``llm2vae.*``, plus the optional action heads
+      (``action2llm.*`` / ``llm2action.*`` and, when configured,
+      ``action_modality_embed``) and sound heads (``sound2llm.*`` /
+      ``llm2sound.*`` / ``sound_modality_embed``).
 
     Checkpoint keys are interpreted in the **native VFM state-dict
     format** — i.e. exactly ``vfm_network.state_dict().keys()`` after
@@ -1513,8 +1514,8 @@ def load_vfm_model(
       - ``language_model.model.layers.0.self_attn.q_proj_moe_gen.weight``
       - ``language_model.visual.blocks.0.weight`` (Qwen3-VL ViT)
       - ``vae2llm.weight`` / ``llm2vae.bias`` / ``time_embedder.mlp.0.weight``
-      - ``action2llm.fc.weight`` / ``action_modality_embed`` (when
-        ``action_gen=True``)
+      - ``action2llm.fc.weight`` / ``action_modality_embed`` (the latter when
+        ``action_gen=True`` and ``enable_action_modality_embedding=True``)
       - ``sound2llm.weight`` / ``sound_modality_embed`` (when
         ``sound_gen=True``)
 

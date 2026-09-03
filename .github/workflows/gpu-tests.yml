@@ -1,22 +1,29 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: OpenMDW-1.1
 
-# Cosmos3-Nano GPU test suite on a self-hosted 8×H200 runner.
+# Cosmos3-Nano GPU test suite on a self-hosted H200 runner.
+#
+# Every job is 4-GPU: each sets ``TEST_MAX_GPUS: "4"``, which is what
+# ``cosmos_framework/inference/fixtures/args.py`` reads to build
+# ``ALL_NUM_GPUS = (0, 1, MAX_GPUS)`` -- the set of widths ``--num-gpus`` and the
+# ``gpus(N)`` markers may name. The env var and the ``--num-gpus`` flag must
+# agree, or collection either errors on an out-of-range choice or deselects
+# everything.
 #
 # A single ``pre-commit`` (lint) job runs first; the six GPU jobs all
 # ``needs:`` it, so they wait on ONE pre-commit run and are skipped if lint
 # fails — the single self-hosted runner is never spent on a lint-failing commit.
 # The six GPU jobs then run (one at a time on the single runner):
 #   * training-smoke                — Nano SFT pipeline (convert -> train 5 -> export -> t2i)
-#   * generator-training-regression — vision_sft_nano loss vs goldens (4-GPU subset)
+#   * generator-training-regression — vision_sft_nano loss vs goldens
 #   * generator-inference-smoke     — Nano + Edge multi-modality inference (t2vs/t2v + policy + forward_dynamics) + Nano ModelOpt FP8
-#   * distilled-inference-smoke     — Super 4-step T2I + I2V inference (4-GPU subset)
-#   * reasoner-inference-smoke      — Nano reasoner golden + Edge reasoner smoke + Qwen conversion coverage (4-GPU)
-#   * reasoner-training-regression  — llava_ov loss vs goldens (4-GPU subset)
+#   * distilled-inference-smoke     — Super 4-step T2I + I2V inference
+#   * reasoner-inference-smoke      — Nano reasoner golden + Edge reasoner smoke + Qwen conversion coverage
+#   * reasoner-training-regression  — llava_ov loss vs goldens
 #
 # Requires:
-#   * a self-hosted runner labelled [self-hosted, gpu, h200] with 8 GPUs,
-#     NVIDIA drivers, and `uv` on PATH;
+#   * a self-hosted runner labelled [self-hosted, gpu, h200] with at least 4
+#     GPUs, NVIDIA drivers, and `uv` on PATH;
 #   * an `HF_TOKEN` repository secret (gated dataset/model downloads, incl. the
 #     streamed LLaVA-OneVision-Data dataset). The Nano ModelOpt FP8 cases also
 #     need it to read nvidia/Cosmos3-Experimental, which is not public; they skip
@@ -49,6 +56,11 @@ jobs:
     env:
       HF_TOKEN: ${{ secrets.HF_TOKEN }}
       HF_HUB_DISABLE_XET: "1"
+      # 4-GPU SFT run. vision_sft_nano_5iter.toml sets
+      # data_parallel_shard_degree = -1 (auto from WORLD_SIZE), so this is a
+      # valid FSDP layout; each rank holds twice the shard it did at 8, which is
+      # the memory headroom to watch if this job starts OOM-ing.
+      TEST_MAX_GPUS: "4"
     steps:
       - uses: actions/checkout@v6
 
@@ -59,12 +71,12 @@ jobs:
 
       # Full SFT pipeline: download + convert Nano->DCP, train 5 steps (loss
       # trend), export to HF safetensors, then a t2i generation from the export.
-      # MAX_GPUS defaults to 8. -s streams the live process log.
-      - name: Nano SFT pipeline smoke (convert -> train 5 -> export -> t2i, 8 GPU)
+      # -s streams the live process log.
+      - name: Nano SFT pipeline smoke (convert -> train 5 -> export -> t2i, 4 GPU)
         run: |
           export LD_LIBRARY_PATH=
           uv run --all-extras --group=cu128-train python -m pytest -v -s \
-            tests/nano_training_smoke_test.py --num-gpus=8 --levels=2 -o addopts=
+            tests/nano_training_smoke_test.py --num-gpus=4 --levels=2 -o addopts=
 
       # Clear the heavy artifacts (even on failure): examples/checkpoints (the
       # Cosmos3-Nano DCP + Wan VAE, ~30 GB) and the pytest tmp dirs (the SFT
@@ -83,7 +95,7 @@ jobs:
     env:
       HF_TOKEN: ${{ secrets.HF_TOKEN }}
       HF_HUB_DISABLE_XET: "1"
-      # Select the 4-GPU regression test variant (uses 4 of the 8 GPUs).
+      # Select the 4-GPU regression test variant.
       TEST_MAX_GPUS: "4"
     steps:
       - uses: actions/checkout@v6
@@ -96,7 +108,7 @@ jobs:
       # Generator (vision_sft_nano) loss vs the h100 goldens, plus a Nano DCP ->
       # Diffusers conversion that validates the exported component files and indexes.
       # Both tests share the module-scoped staged Nano DCP. -s streams the live log.
-      - name: Generator regression and Nano Diffusers export (4-GPU subset)
+      - name: Generator regression and Nano Diffusers export (4 GPU)
         run: |
           export LD_LIBRARY_PATH=
           uv run --all-extras --group=cu128-train python -m pytest -v -s \
@@ -113,12 +125,22 @@ jobs:
   generator-inference-smoke:
     needs: pre-commit
     runs-on: [self-hosted, gpu, h200]
-    # 90 (not 60) since the Nano step gained the two ModelOpt FP8 cases: a 20 GB
-    # checkpoint on a cold cache plus two more 8-GPU runs.
-    timeout-minutes: 90
+    # 105 (not 60) since the Nano step gained the three ModelOpt FP8 cases (two
+    # parallelism layouts + mixed-precision diffusion steps): a 20 GB checkpoint
+    # on a cold cache plus three more full-width runs.
+    timeout-minutes: 105
     env:
       HF_TOKEN: ${{ secrets.HF_TOKEN }}
       HF_HUB_DISABLE_XET: "1"
+      # Both steps use the `throughput` preset, whose layout is derived from
+      # world_size (cfgp=1, cp=1, dp_shard=world_size), so the width is free.
+      TEST_MAX_GPUS: "4"
+      # This is the job whose stated purpose includes FP8 coverage: promote the
+      # cannot-reach-nvidia/Cosmos3-Experimental skip to a hard failure, so a
+      # token rotation or a permissions change turns the job red instead of
+      # silently dropping all three FP8 cases. Forks and local runs (which do
+      # not set this) keep the skip behaviour.
+      REQUIRE_FP8: "1"
     steps:
       - uses: actions/checkout@v6
 
@@ -129,30 +151,32 @@ jobs:
 
       # One inference call over t2vs (+sound), action policy, and forward_dynamics; checks each output.
       # Plus the ModelOpt static-FP8 Nano checkpoint in both parallelism layouts
-      # (FSDP-sharded and replicated). The FP8 checkpoint lives in the
-      # access-controlled nvidia/Cosmos3-Experimental repo, so those two cases SKIP
-      # unless HF_TOKEN can read it — check the log for "no access to
-      # nvidia/Cosmos3-Experimental" before trusting a green run to have covered FP8.
-      # MAX_GPUS defaults to 8. -s streams the live process log.
+      # (FSDP-sharded and replicated) and once more with FP8 mixed-precision
+      # diffusion steps (W8A16 edge steps; exact schedule asserted from the
+      # MIXED_PRECISION_TRACE log). The FP8 checkpoint lives in the
+      # access-controlled nvidia/Cosmos3-Experimental repo; elsewhere those three
+      # cases SKIP unless HF_TOKEN can read it, but REQUIRE_FP8=1 above makes the
+      # skip a hard failure here, so a green run is guaranteed to have covered FP8.
+      # -s streams the live process log.
       # Reuse the same input-asset cache dir as the unittest job.
-      - name: Nano inference smoke (t2vs + action policy + forward_dynamics + FP8, 8 GPU)
+      - name: Nano inference smoke (t2vs + action policy + forward_dynamics + FP8, 4 GPU)
         run: |
           export LD_LIBRARY_PATH=
           export COSMOS_DOWNLOAD_CACHE_DIR="$RUNNER_WORKSPACE/cosmos_input_cache"
           uv run --all-extras --group=cu128-train python -m pytest -v -s \
-            tests/nano_inference_smoke_test.py --num-gpus=8 --levels=2 -o addopts=
+            tests/nano_inference_smoke_test.py --num-gpus=4 --levels=2 -o addopts=
 
       # Same three-modality smoke on the smaller Cosmos3-Edge checkpoint: a plain
       # t2v (Edge has no sound, so t2vs is swapped for t2v and its 480/121/24
       # generation defaults are asserted) plus action policy + forward_dynamics.
       # Reuses the same input-asset cache dir; the Edge checkpoint downloads once
       # and is reused afterward.
-      - name: Edge inference smoke (t2v + action policy + forward_dynamics, 8 GPU)
+      - name: Edge inference smoke (t2v + action policy + forward_dynamics, 4 GPU)
         run: |
           export LD_LIBRARY_PATH=
           export COSMOS_DOWNLOAD_CACHE_DIR="$RUNNER_WORKSPACE/cosmos_input_cache"
           uv run --all-extras --group=cu128-train python -m pytest -v -s \
-            tests/edge_inference_smoke_test.py --num-gpus=8 --levels=2 -o addopts=
+            tests/edge_inference_smoke_test.py --num-gpus=4 --levels=2 -o addopts=
 
       # Inference writes only the pytest tmp dir (the t2vs video + logs); the
       # checkpoint download stays in the HF cache (kept). No examples/ artifacts.
@@ -202,7 +226,7 @@ jobs:
     env:
       HF_TOKEN: ${{ secrets.HF_TOKEN }}
       HF_HUB_DISABLE_XET: "1"
-      # 4-GPU reasoner inference test (uses 4 of the 8 GPUs); the gpus(4) marker
+      # 4-GPU reasoner inference test; the gpus(4) marker
       # requires MAX_GPUS == 4.
       TEST_MAX_GPUS: "4"
     steps:
@@ -265,7 +289,7 @@ jobs:
     env:
       HF_TOKEN: ${{ secrets.HF_TOKEN }}
       HF_HUB_DISABLE_XET: "1"
-      # Select the 4-GPU regression test variant (uses 4 of the 8 GPUs).
+      # Select the 4-GPU regression test variant.
       TEST_MAX_GPUS: "4"
     steps:
       - uses: actions/checkout@v6
@@ -276,7 +300,7 @@ jobs:
         run: uv sync --all-extras --group=cu128-train
 
       # Reasoner (llava_ov) loss vs the h100 goldens. -s streams the live log.
-      - name: Reasoner regression (llava_ov, 4-GPU subset)
+      - name: Reasoner regression (llava_ov, 4 GPU)
         run: |
           export LD_LIBRARY_PATH=
           uv run --all-extras --group=cu128-train python -m pytest -v -s \
@@ -304,6 +328,11 @@ jobs:
     env:
       HF_TOKEN: ${{ secrets.HF_TOKEN }}
       HF_HUB_DISABLE_XET: "1"
+      # This job passes no --num-gpus, so it only collects the gpus(0)/gpus(1)
+      # cases either way. Pinning the width anyway keeps the whole workflow on
+      # one ALL_NUM_GPUS, so a gpus(8) marker added later fails collection here
+      # rather than passing lint and dying on the runner.
+      TEST_MAX_GPUS: "4"
     steps:
       - uses: actions/checkout@v6
 

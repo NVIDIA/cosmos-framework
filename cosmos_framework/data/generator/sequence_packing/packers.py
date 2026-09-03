@@ -291,33 +291,88 @@ def pack_input_sequence(
         if video_temporal_causal and sequence_plan.has_vision:
             # Temporal causal path: when sequence_plan.has_action=True, interleaved supertokens
             # [action_t, vision_t]; when False, supertokens are just vision patches.
-            input_vision_tokens = gen_data_clean.x0_tokens_vision[idx_vision]
-            idx_vision += 1
+            # Transfer training owns two aligned vision items (clean control, then target).
+            # Pack both as separate payloads while sharing their temporal mRoPE grid; the
+            # teacher-forcing attention path uses the recorded item lengths to keep control
+            # and target visibility distinct.
+            num_vis = (
+                gen_data_clean.num_vision_items_per_sample[sample_idx]
+                if gen_data_clean.num_vision_items_per_sample is not None
+                else 1
+            )
+            if num_vis not in (1, 2):
+                raise ValueError(
+                    "Temporal-causal packing supports one vision item, or exactly two aligned "
+                    f"transfer items (control + target); got {num_vis} items for sample {sample_idx}."
+                )
+            if num_vis == 2 and sequence_plan.has_action:
+                raise ValueError("Temporal-causal transfer packing does not support action tokens.")
+            if num_vis == 2 and not sequence_plan.share_vision_temporal_positions:
+                raise ValueError(
+                    "Temporal-causal transfer requires share_vision_temporal_positions=True "
+                    "for aligned control and target frames."
+                )
 
-            vision_fps = _get_optional_fps(gen_data_clean.fps_vision, idx_vision - 1)
+            # FPS is per logical sample, including samples with multiple vision items.
+            vision_fps = _get_optional_fps(gen_data_clean.fps_vision, sample_idx)
 
             input_action_tokens_tc: torch.Tensor | None = None
             action_fps_tc = None
             if sequence_plan.has_action:
-                input_action_tokens_tc = gen_data_clean.x0_tokens_action[idx_action]
+                input_action_tokens_tc = gen_data_clean.x0_tokens_action[idx_action]  # [B,T_action,D]
                 action_fps_tc = _get_optional_fps(gen_data_clean.fps_action, idx_action)
                 idx_action += 1
 
-            supertoken_split_len, null_flag = pack_supertokens_temporal_causal(
-                seq_builder=seq_builder,
-                input_vision_tokens=input_vision_tokens,
-                input_action_tokens=input_action_tokens_tc,
-                condition_frame_indexes_vision=sequence_plan.condition_frame_indexes_vision,
-                input_timestep=input_timestep,
-                latent_patch_size=latent_patch_size,
-                temporal_compression_factor=temporal_compression_factor,
-                action_dim=action_dim,
-                vision_fps=vision_fps,
-                action_fps=action_fps_tc,
-                enable_fps_modulation=enable_fps_modulation,
-                base_fps=base_fps,
-                pack_action_tokens=sequence_plan.has_action,
-            )
+            vision_split_len = 0
+            item_split_lens: list[int] = []
+            item_temporal_offset = seq_builder.mrope_temporal_offset
+            null_flag = False
+            expected_transfer_shape: tuple[int, ...] | None = None
+            for item_idx in range(num_vis):
+                input_vision_tokens = gen_data_clean.x0_tokens_vision[idx_vision]  # [B,C,T,H,W]
+                idx_vision += 1
+                if num_vis == 2:
+                    item_shape = tuple(input_vision_tokens.shape[2:])
+                    if expected_transfer_shape is None:
+                        expected_transfer_shape = item_shape
+                    elif item_shape != expected_transfer_shape:
+                        raise ValueError(
+                            "Temporal-causal transfer requires aligned control and target latent shapes; "
+                            f"got {expected_transfer_shape} and {item_shape}."
+                        )
+                    # Rewind before the target so control_t and target_t receive identical
+                    # temporal coordinates. The target call advances the cursor back to the
+                    # correct single-video high-water mark.
+                    if item_idx > 0:
+                        seq_builder.set_mrope_temporal_offset(item_temporal_offset)
+
+                item_condition_frames = resolve_item_condition_frames(
+                    sequence_plan.condition_frame_indexes_vision,
+                    item_idx=item_idx,
+                    num_items=num_vis,
+                    latent_t=input_vision_tokens.shape[2],
+                )
+                item_split_len, item_null_flag = pack_supertokens_temporal_causal(
+                    seq_builder=seq_builder,
+                    input_vision_tokens=input_vision_tokens,
+                    input_action_tokens=input_action_tokens_tc,
+                    condition_frame_indexes_vision=item_condition_frames,
+                    input_timestep=input_timestep,
+                    latent_patch_size=latent_patch_size,
+                    temporal_compression_factor=temporal_compression_factor,
+                    action_dim=action_dim,
+                    vision_fps=vision_fps,
+                    action_fps=action_fps_tc,
+                    enable_fps_modulation=enable_fps_modulation,
+                    base_fps=base_fps,
+                    pack_action_tokens=sequence_plan.has_action,
+                )
+                vision_split_len += item_split_len
+                item_split_lens.append(item_split_len)
+                null_flag = null_flag or item_null_flag
+
+            if num_vis == 2:
+                seq_builder.vision_item_split_lens.append(item_split_lens)
             null_action_flags.append(null_flag)
             # We assume all samples in a batch share the same has_action layout, so
             # stamp the supertoken layout constant directly here. This is the
@@ -326,9 +381,8 @@ def pack_input_sequence(
             seq_builder.num_action_tokens_per_supertoken = (
                 temporal_compression_factor if sequence_plan.has_action else 0
             )
-            sample_len += supertoken_split_len
-            vision_split_len = supertoken_split_len
-            action_split_len = 0  # Already absorbed into supertoken_split_len
+            sample_len += vision_split_len
+            action_split_len = 0  # Already absorbed into vision_split_len
             lidar_split_len = 0  # Temporal-causal packing rejects LiDAR above
 
         else:

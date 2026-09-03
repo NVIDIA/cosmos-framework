@@ -1,10 +1,10 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: OpenMDW-1.1
 
-"""8-GPU Cosmos3-Nano SFT pipeline smoke test (train -> export -> infer).
+"""Cosmos3-Nano SFT pipeline smoke test (train -> export -> infer), ``MAX_GPUS`` ranks.
 
 Runs the documented Vision SFT (Cosmos3-Nano) lifecycle from ``docs/training.md``
-end to end on 8 GPUs and validates each artifact:
+end to end on ``MAX_GPUS`` GPUs and validates each artifact:
 
   1. Step 1 -- download the bridge-v2 subset dataset + the Wan2.2 VAE.
   2. Step 2 -- ``convert_model_to_dcp`` Cosmos3-Nano -> DCP; check DCP completeness.
@@ -23,10 +23,17 @@ Inputs land in the documented ``.gitignore``-d locations (``examples/data/``,
 ``examples/checkpoints/``, cached across runs); run output goes under the pytest
 tmp dir. Steps 1-2 are skipped when their artifacts already exist.
 
-Invocation (inside the training container, from the repo root, on an 8-GPU
-node)::
+The run is ``MAX_GPUS`` ranks wide (``TEST_MAX_GPUS``, default 8).
+``vision_sft_nano_5iter.toml`` sets ``data_parallel_shard_degree = -1`` (auto
+from ``WORLD_SIZE``), so a narrower run is a valid FSDP layout -- each rank just
+holds a proportionally larger shard, which is the thing to watch for OOM when
+lowering it. The loss check is a trend, not a golden, so the batch-size change
+that comes with it does not invalidate the assertion.
+
+Invocation (inside the training container, from the repo root)::
 
     pytest -s tests/nano_training_smoke_test.py --num-gpus=8 --levels=2 -o addopts=
+    TEST_MAX_GPUS=4 pytest -s tests/nano_training_smoke_test.py --num-gpus=4 --levels=2 -o addopts=
 
 Without ``--num-gpus``/``--levels`` (e.g. the no-GPU pre-commit CI) the test is
 not collected.
@@ -391,8 +398,8 @@ def _assert_valid_image(path: Path) -> None:
 
 
 @pytest.fixture(scope="module", autouse=True)
-def _require_8_gpus() -> None:
-    """Skip the module unless we can launch an 8-GPU training run here."""
+def _require_gpus() -> None:
+    """Skip the module unless we can launch a ``MAX_GPUS``-wide training run here."""
     if shutil.which("torchrun") is None:
         pytest.skip("torchrun not on PATH -- must run inside the training container")
     if shutil.which("uvx") is None:
@@ -401,14 +408,17 @@ def _require_8_gpus() -> None:
         import torch
     except Exception as exc:  # pragma: no cover
         pytest.skip(f"torch unavailable ({exc!r})")
-    if not torch.cuda.is_available() or torch.cuda.device_count() < 8:
-        pytest.skip(f"requires 8 visible CUDA devices, found {torch.cuda.device_count()}")
+    if not torch.cuda.is_available() or torch.cuda.device_count() < MAX_GPUS:
+        pytest.skip(f"requires {MAX_GPUS} visible CUDA devices, found {torch.cuda.device_count()}")
 
 
-if MAX_GPUS == 8:
+# Markers use MAX_GPUS because the conftest rejects ``gpus(N)`` outside
+# ``ALL_NUM_GPUS = (0, 1, MAX_GPUS)``. Both supported widths are listed so the
+# module is collected under either.
+if MAX_GPUS in (4, 8):
 
     @pytest.mark.level(2)
-    @pytest.mark.gpus(8)
+    @pytest.mark.gpus(MAX_GPUS)
     def test_nano_sft_train_export_infer(tmp_path: Path) -> None:
         """Full Cosmos3-Nano SFT pipeline: convert -> train 5 -> export -> t2i infer."""
         # 1-2. Inputs + HF->DCP convert, then DCP completeness.
@@ -424,7 +434,7 @@ if MAX_GPUS == 8:
             extra_env={
                 "MASTER_PORT": str(_free_port()),
                 "OUTPUT_ROOT": str(tmp_path / "launcher_out"),
-                "NPROC_PER_NODE": "8",
+                "NPROC_PER_NODE": str(MAX_GPUS),
             },
         )
         assert rc == 0, f"SFT launch failed (exit {rc}):\nLog tail:\n{out[-4000:]}"
@@ -490,7 +500,7 @@ if MAX_GPUS == 8:
         infer_out = tmp_path / "exported_out"
         rc, out = _run(
             [
-                "torchrun", "--nproc_per_node=8", f"--master_port={_free_port()}",
+                "torchrun", f"--nproc_per_node={MAX_GPUS}", f"--master_port={_free_port()}",
                 "-m", "cosmos_framework.scripts.inference",
                 "--parallelism-preset=throughput",
                 "-i", "inputs/omni/t2i.json",

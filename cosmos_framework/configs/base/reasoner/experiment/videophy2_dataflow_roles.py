@@ -16,9 +16,9 @@ _TARGET_VIDEO_FPS = 2.0
 
 
 def _decode_video_to_pil_frames(video_bytes: bytes) -> tuple[list, float]:
-    from torchcodec.decoders import VideoDecoder
-    from PIL import Image
     import numpy as np
+    from PIL import Image
+    from torchcodec.decoders import VideoDecoder
 
     decoder = VideoDecoder(video_bytes)
     total_frames = decoder.metadata.num_frames or 0
@@ -37,7 +37,7 @@ def _decode_video_to_pil_frames(video_bytes: bytes) -> tuple[list, float]:
     frames_np = frames_tensor.permute(0, 2, 3, 1).contiguous().cpu().numpy().astype(np.uint8)
     frames = [Image.fromarray(f) for f in frames_np]
 
-    effective_fps = source_fps / stride if stride > 0 else source_fps
+    effective_fps = len(indices) / total_frames * source_fps
     return frames, float(effective_fps)
 
 
@@ -119,9 +119,7 @@ class VideoPhy2Processor(RawItemProcessor):
     def process(self, item: dict) -> dict:
         conversation = item.get("texts")
         if not isinstance(conversation, list):
-            raise TypeError(
-                f"LocalSFTDataset sample expected 'texts' to be a list, got {type(conversation).__name__}"
-            )
+            raise TypeError(f"LocalSFTDataset sample expected 'texts' to be a list, got {type(conversation).__name__}")
         media_bytes_by_key = item.get("media") or {}
         messages = self._materialize_media_in_conversation(conversation, media_bytes_by_key)
         inputs = self._processor.apply_chat_template(messages, tokenize=True, add_generation_prompt=False)

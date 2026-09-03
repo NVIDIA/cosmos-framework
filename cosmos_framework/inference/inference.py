@@ -1168,6 +1168,10 @@ class OmniInference(Inference):
             method=setup_args.quantization_method,
             include_regex=list(setup_args.quantization_include_regex),
             exclude_regex=list(setup_args.quantization_exclude_regex),
+            mixed_precision_first_steps=setup_args.mixed_precision_first_steps,
+            mixed_precision_last_steps=setup_args.mixed_precision_last_steps,
+            mixed_precision_reasoner_policy=setup_args.mixed_precision_reasoner_policy,
+            mixed_precision_w8a16_cache=setup_args.mixed_precision_w8a16_cache,
         )
 
     @override
@@ -1362,6 +1366,8 @@ class OmniInference(Inference):
             config_overrides["diffusion_cache_thresh"] = setup_args.diffusion_cache_thresh
         if setup_args.diffusion_cache_residual_order is not None:
             config_overrides["residual_order"] = setup_args.diffusion_cache_residual_order
+        if setup_args.diffusion_cache_max_consecutive_cached is not None:
+            config_overrides["max_consecutive_cached"] = setup_args.diffusion_cache_max_consecutive_cached
         install_diffusion_cache(
             pipe=pipe,
             enabled=True,

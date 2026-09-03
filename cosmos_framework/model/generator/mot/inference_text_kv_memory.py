@@ -5,7 +5,10 @@
 
 Caches understanding (text) K/V from the first denoising forward and reuses
 them on later steps within the same request. Intentionally self-contained in
-``cosmos3`` — does not import ``projects.cosmos3.interactive``.
+``cosmos3`` — does not import ``cosmos_framework.data.generator.sequence_packing``.
+
+Supports single-sample packs (dense attention) and multi-sample packs such as
+batched CFG (cond+uncond as B=2) via varlen attention with per-sample isolation.
 """
 
 from __future__ import annotations
@@ -48,6 +51,13 @@ class InferenceTextKVMemoryValue(MemoryValue):
     und_v_cached: torch.Tensor | None
     frame_idx: int
     gen_len: int
+    """Total gen tokens across all samples (``_num_full_tokens``)."""
+    kv_reorder_indices: torch.Tensor | None = None
+    """Indices that turn ``[all und|all gen]`` into ``[und_i|gen_i|...]``."""
+    cumulative_seqlen_q: torch.Tensor | None = None
+    cumulative_seqlen_kv: torch.Tensor | None = None
+    max_seqlen_q: int = 0
+    max_seqlen_kv: int = 0
     for_cuda_graphs: bool = False
 
 
@@ -57,10 +67,48 @@ class InferenceTextKVMemoryState(MemoryState):
     def __init__(self, text_kv_cache: list[UndKVCache]) -> None:
         self._text_kv_cache = text_kv_cache
         self._gen_len = 0
+        self._kv_reorder_indices: torch.Tensor | None = None
+        self._cumulative_seqlen_q: torch.Tensor | None = None
+        self._cumulative_seqlen_kv: torch.Tensor | None = None
+        self._max_seqlen_q = 0
+        self._max_seqlen_kv = 0
 
     def init(self, hidden_states: dict, device: torch.device) -> None:
         del device
         self._gen_len = int(hidden_states["_num_full_tokens"])
+        # Precompute the multi-sample layout outside the compiled decoder layers.
+        # Doing this here avoids converting CUDA offsets to Python lists and
+        # rebuilding the same chunked K/V layout once per layer.
+        und_off = hidden_states.get("_causal_seq_offsets")
+        gen_off = hidden_states.get("_full_only_seq_offsets")
+        if isinstance(und_off, torch.Tensor) and isinstance(gen_off, torch.Tensor) and und_off.shape != gen_off.shape:
+            raise RuntimeError(f"und/gen sample counts disagree: und={und_off.numel() - 1} gen={gen_off.numel() - 1}")
+        if isinstance(und_off, torch.Tensor) and isinstance(gen_off, torch.Tensor) and und_off.numel() > 2:
+            und_off = und_off.to(dtype=torch.int32)
+            gen_off = gen_off.to(dtype=torch.int32)
+            und_lens = und_off[1:] - und_off[:-1]
+            gen_lens = gen_off[1:] - gen_off[:-1]
+            sample_ids = torch.arange(und_lens.numel(), dtype=torch.int64, device=und_off.device)
+            und_sample_ids = torch.repeat_interleave(sample_ids, und_lens.to(dtype=torch.int64))
+            gen_sample_ids = torch.repeat_interleave(sample_ids, gen_lens.to(dtype=torch.int64))
+
+            # Stable sorting preserves UND-before-GEN within each sample because
+            # the source stream is [all UND | all GEN].
+            self._kv_reorder_indices = torch.argsort(
+                torch.cat((und_sample_ids, gen_sample_ids)),
+                stable=True,
+            )
+            self._cumulative_seqlen_q = gen_off
+            self._cumulative_seqlen_kv = und_off + gen_off
+            self._max_seqlen_q = int(gen_lens.max())
+            self._max_seqlen_kv = int((und_lens + gen_lens).max())
+        else:
+            # Single-sample: keep the legacy dense path.
+            self._kv_reorder_indices = None
+            self._cumulative_seqlen_q = None
+            self._cumulative_seqlen_kv = None
+            self._max_seqlen_q = 0
+            self._max_seqlen_kv = 0
 
     def read_for_layer(self, layer_idx: int) -> InferenceTextKVMemoryValue:
         cache = self._text_kv_cache[layer_idx]
@@ -74,6 +122,11 @@ class InferenceTextKVMemoryState(MemoryState):
             und_v_cached=und_v_cached,
             frame_idx=1 if cache.is_initialized else 0,
             gen_len=self._gen_len,
+            kv_reorder_indices=self._kv_reorder_indices,
+            cumulative_seqlen_q=self._cumulative_seqlen_q,
+            cumulative_seqlen_kv=self._cumulative_seqlen_kv,
+            max_seqlen_q=self._max_seqlen_q,
+            max_seqlen_kv=self._max_seqlen_kv,
             for_cuda_graphs=False,
         )
 
@@ -103,7 +156,13 @@ def _attention_gen_with_cached_text(
     packed_value_states: SequencePack,
     memory_value: InferenceTextKVMemoryValue,
 ) -> tuple[SequencePack, KVToStore | None]:
-    """Gen-only attention attending to cached text K/V plus current gen K/V."""
+    """Gen-only attention attending to cached text K/V plus current gen K/V.
+
+    Single-sample packs use the dense attention API. Multi-sample packs (e.g.
+    batched CFG with cond+uncond) rebuild KV in sample-major order
+    ``[und_0|gen_0|und_1|gen_1|...]`` and call varlen attention so sample ``i``'s
+    gen queries only see sample ``i``'s und+gen keys.
+    """
     q_gen = get_gen_seq(packed_query_states)  # [S_curr, H, D]
     k_gen = get_gen_seq(packed_key_states)  # [S_curr, H_kv, D]
     v_gen = get_gen_seq(packed_value_states)  # [S_curr, H_kv, D]
@@ -111,26 +170,66 @@ def _attention_gen_with_cached_text(
     gen_len = memory_value.gen_len
     k_curr = k_gen[:gen_len].unsqueeze(0)  # [1, S_gen_real, H_kv, D]
     v_curr = v_gen[:gen_len].unsqueeze(0)  # [1, S_gen_real, H_kv, D]
+    q_curr = q_gen.unsqueeze(0)  # [1, S_curr, H, D]
 
-    kv_parts_k = [k_curr]
-    kv_parts_v = [v_curr]
-    if memory_value.und_k_cached is not None:
-        assert memory_value.und_v_cached is not None
-        kv_parts_k.insert(0, memory_value.und_k_cached)
-        kv_parts_v.insert(0, memory_value.und_v_cached)
-
-    k_full = torch.cat(kv_parts_k, dim=1)  # [1, S_total, H_kv, D]
-    v_full = torch.cat(kv_parts_v, dim=1)  # [1, S_total, H_kv, D]
-
-    attn_result = attention(
-        query=q_gen.unsqueeze(0),  # [1, S_curr, H, D]
-        key=k_full,
-        value=v_full,
-        is_causal=False,
-        return_lse=False,
+    kv_reorder_indices = memory_value.kv_reorder_indices
+    cumulative_seqlen_q = memory_value.cumulative_seqlen_q
+    cumulative_seqlen_kv = memory_value.cumulative_seqlen_kv
+    multi_sample = (
+        kv_reorder_indices is not None
+        and cumulative_seqlen_q is not None
+        and cumulative_seqlen_kv is not None
+        and memory_value.und_k_cached is not None
     )
+
+    if not multi_sample:
+        kv_parts_k = [k_curr]
+        kv_parts_v = [v_curr]
+        if memory_value.und_k_cached is not None:
+            assert memory_value.und_v_cached is not None
+            kv_parts_k.insert(0, memory_value.und_k_cached)
+            kv_parts_v.insert(0, memory_value.und_v_cached)
+
+        k_full = torch.cat(kv_parts_k, dim=1)  # [1, S_total, H_kv, D]
+        v_full = torch.cat(kv_parts_v, dim=1)  # [1, S_total, H_kv, D]
+
+        attn_result = attention(
+            query=q_curr,
+            key=k_full,
+            value=v_full,
+            is_causal=False,
+            return_lse=False,
+        )
+    else:
+        assert memory_value.und_v_cached is not None
+        assert kv_reorder_indices is not None
+        assert cumulative_seqlen_q is not None and cumulative_seqlen_kv is not None
+        und_k = memory_value.und_k_cached  # [1, N_und, H_kv, D]
+        und_v = memory_value.und_v_cached
+        k_full = torch.cat((und_k, k_curr), dim=1).index_select(1, kv_reorder_indices)
+        v_full = torch.cat((und_v, v_curr), dim=1).index_select(1, kv_reorder_indices)
+
+        attn_result = attention(
+            query=q_curr[:, :gen_len],
+            key=k_full,
+            value=v_full,
+            is_causal=False,
+            return_lse=False,
+            cumulative_seqlen_Q=cumulative_seqlen_q,
+            cumulative_seqlen_KV=cumulative_seqlen_kv,
+            max_seqlen_Q=memory_value.max_seqlen_q,
+            max_seqlen_KV=memory_value.max_seqlen_kv,
+        )
+
     assert isinstance(attn_result, torch.Tensor)
-    gen_out = attn_result.squeeze(0).flatten(-2, -1)  # [S_curr, H*D]
+    gen_out = attn_result.squeeze(0).flatten(-2, -1)  # [S_gen_real, H*D]
+    # Match legacy behavior: padded query rows (if any) stay in q_gen but only
+    # the real prefix is produced by attention; zero-fill the tail so padded
+    # slots stay finite (new_empty can leave NaN/Inf from recycled BF16 memory).
+    if gen_out.shape[0] < q_gen.shape[0]:
+        padded = q_gen.new_zeros(q_gen.shape[0], gen_out.shape[-1])
+        padded[: gen_out.shape[0]] = gen_out
+        gen_out = padded
 
     output = from_und_gen_splits(
         gen_out.new_empty(0, gen_out.shape[-1]),
@@ -190,7 +289,7 @@ def install_inference_memory_attention_dispatch(
                 raise RuntimeError(
                     "Cannot install memory-aware attention dispatch over "
                     f"{current_name}; request-local text K/V reuse requires the default "
-                    "dispatch_attention (CP/CFGP paths are excluded by eligibility guards)."
+                    "dispatch_attention (the CP path is excluded by its eligibility guard)."
                 )
             previous.append((attn, current))
             attn.dispatch_attention_fn = dispatch_attention_with_text_kv_memory

@@ -425,7 +425,18 @@ class HFModel(nn.Module):
     # MoE load-balancing bookkeeping. Both arrive as a tensor or a bool, so the guards
     # torch.compile installs on them are cheap shape/dtype guards rather than the per-sample
     # value guards that make the stray string keys ruinous (see forward()).
-    _FORWARD_KWARGS_PASSTHROUGHS: frozenset[str] = frozenset({"second_per_grid_ts", "output_router_logits"})
+    _FORWARD_KWARGS_PASSTHROUGHS: frozenset[str] = frozenset(
+        {
+            "second_per_grid_ts",
+            "output_router_logits",
+            # Standard HF varlen-attention metadata. The monkey-patched Qwen text
+            # forward consumes these from **kwargs and threads them to every decoder layer.
+            "cu_seq_lens_q",
+            "cu_seq_lens_k",
+            "max_length_q",
+            "max_length_k",
+        }
+    )
 
     # Both set once and read every step. Class-level defaults rather than __init__
     # assignments because the test suite builds instances through __new__:

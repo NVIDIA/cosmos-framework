@@ -56,6 +56,10 @@ DenseImageTemporalPadding = Literal["repeat", "zero"]
 DenseVideoTemporalMode = Literal["native", "standalone_first_frame"]
 
 
+class DenseRuntimeCompatibilityError(ValueError):
+    """A recognized autoencoder architecture incompatibility with the dense runtime."""
+
+
 class DenseAutoencoderRuntime(nn.Module):
     """Dense frozen-runtime wrapper around an existing sparse autoencoder.
 
@@ -182,41 +186,78 @@ class DenseAutoencoderRuntime(nn.Module):
             metadata_cache_max_entries=metadata_cache_max_entries,
         )
 
+    @classmethod
+    def get_autoencoder_incompatibility(cls, autoencoder: AutoencoderKL) -> str | None:
+        """Return a recognized dense-runtime incompatibility without masking other errors."""
+        try:
+            cls._validate_autoencoder(autoencoder)
+        except DenseRuntimeCompatibilityError as exc:
+            return str(exc)
+        return None
+
     @staticmethod
     def _validate_autoencoder(autoencoder: AutoencoderKL) -> None:
         """Validate that the sparse autoencoder fits the dense-runtime V1 scope."""
         if not hasattr(autoencoder, "decoder"):
-            raise ValueError("Dense runtime V1 requires use_decoder=True.")
+            raise DenseRuntimeCompatibilityError("Dense runtime V1 requires use_decoder=True.")
 
         encoder = autoencoder.encoder
         decoder = autoencoder.decoder
 
         if encoder.concat_latent is not None:
-            raise ValueError("Dense runtime V1 does not support concat_latent.")
+            raise DenseRuntimeCompatibilityError("Dense runtime V1 does not support concat_latent.")
         if autoencoder.use_dual_latent:
-            raise ValueError("Dense runtime V1 does not support dual latent.")
+            raise DenseRuntimeCompatibilityError("Dense runtime V1 does not support dual latent.")
         if autoencoder.use_quantizer:
-            raise ValueError("Dense runtime V1 does not support quantized latent paths.")
+            raise DenseRuntimeCompatibilityError("Dense runtime V1 does not support quantized latent paths.")
         if autoencoder.decoder_temporal_mode != "bidirectional":
-            raise ValueError(
+            raise DenseRuntimeCompatibilityError(
                 "Dense runtime V1 only supports decoder_temporal_mode='bidirectional', "
                 f"got {autoencoder.decoder_temporal_mode!r}."
             )
         if int(autoencoder.inference_kv_cache_size) != 0:
-            raise ValueError(
+            raise DenseRuntimeCompatibilityError(
                 "Dense runtime V1 does not support decoder KV cache; "
                 f"got inference_kv_cache_size={autoencoder.inference_kv_cache_size}."
             )
         if decoder.multiscale is not None or decoder.multiscale_outputs is not None:
-            raise ValueError("Dense runtime V1 does not support decoder multiscale outputs.")
+            raise DenseRuntimeCompatibilityError("Dense runtime V1 does not support decoder multiscale outputs.")
         if any(getattr(block, "multiscale", None) is not None for block in encoder.blocks):
-            raise ValueError("Dense runtime V1 does not support encoder multiscale blocks.")
+            raise DenseRuntimeCompatibilityError("Dense runtime V1 does not support encoder multiscale blocks.")
         if any(getattr(block, "multiscale", None) is not None for block in decoder.blocks):
-            raise ValueError("Dense runtime V1 does not support decoder multiscale blocks.")
+            raise DenseRuntimeCompatibilityError("Dense runtime V1 does not support decoder multiscale blocks.")
         if encoder.pe_mode not in {"joint", "learned"}:
-            raise ValueError(f"Dense runtime V1 currently requires encoder learned/joint PE, got {encoder.pe_mode}.")
+            raise DenseRuntimeCompatibilityError(
+                f"Dense runtime V1 currently requires encoder learned/joint PE, got {encoder.pe_mode}."
+            )
         if decoder.pe_mode not in {"joint", "learned"}:
-            raise ValueError(f"Dense runtime V1 currently requires decoder learned/joint PE, got {decoder.pe_mode}.")
+            raise DenseRuntimeCompatibilityError(
+                f"Dense runtime V1 currently requires decoder learned/joint PE, got {decoder.pe_mode}."
+            )
+        DenseAutoencoderRuntime._validate_position_embedding_contract(encoder, "encoder")
+        DenseAutoencoderRuntime._validate_position_embedding_contract(decoder, "decoder")
+
+    @staticmethod
+    def _validate_position_embedding_contract(module: SparseTransformerBase, module_name: str) -> None:
+        """Validate learned-PE and RoPE assumptions used by dense grid metadata."""
+        if module.position_embedding_scale != 0.0 and not isinstance(module.pos_embedder, LearnedPositionEmbedder):
+            raise DenseRuntimeCompatibilityError(
+                f"Dense runtime V1 expects {module_name} LearnedPositionEmbedder for learned/joint PE, "
+                f"got {type(module.pos_embedder).__name__}."
+            )
+
+        blocks_with_rope = [block for block in module.blocks if getattr(block.attn, "use_rope", False)]
+        rope_configs = {
+            (
+                block.attn.rope.head_dim,
+                block.attn.rope.pos_cls_token,
+            )
+            for block in blocks_with_rope
+        }
+        if len(rope_configs) > 1:
+            raise DenseRuntimeCompatibilityError(
+                f"Dense runtime V1 requires uniform {module_name} RoPE configuration across blocks."
+            )
 
     @property
     def patch_size(self) -> tuple[int, int, int]:
@@ -792,8 +833,7 @@ class DenseAutoencoderRuntime(nn.Module):
         if learned_pe is not None:
             feats = feats + learned_pe  # [B,S,D]
 
-        block_param = next(encoder.blocks.parameters(), None)
-        block_dtype = activation_dtype(block_param.dtype) if block_param is not None else feats.dtype
+        block_dtype = encoder._resolve_block_dtype()
         if feats.dtype != block_dtype:
             feats = feats.to(block_dtype)  # [B,S,D]
 
@@ -890,8 +930,7 @@ class DenseAutoencoderRuntime(nn.Module):
         if learned_pe is not None:
             feats = feats + learned_pe  # [B,S,D]
 
-        block_param = next(decoder.blocks.parameters(), None)
-        block_dtype = activation_dtype(block_param.dtype) if block_param is not None else feats.dtype
+        block_dtype = decoder._resolve_block_dtype()
         if feats.dtype != block_dtype:
             feats = feats.to(block_dtype)  # [B,S,D]
 
@@ -914,6 +953,10 @@ class DenseAutoencoderRuntime(nn.Module):
         )
         feats = feats[:, :patch_seq_len]  # [B,S,D]
         feats = decoder.out_norm(feats)  # [B,S,D]
+        if decoder.force_fp32_output_projection:
+            feats = feats.to(torch.float32)  # [B,S,D]
+            with torch.autocast(device_type=feats.device.type, enabled=False):
+                return F.linear(feats, decoder.out_layer.weight, decoder.out_layer.bias)  # [B,S,P]
         return F.linear(feats, decoder.out_layer.weight, decoder.out_layer.bias)  # [B,S,P]
 
     @staticmethod
