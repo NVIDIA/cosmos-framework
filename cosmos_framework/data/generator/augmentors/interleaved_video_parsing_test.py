@@ -295,7 +295,7 @@ def test_selected_parser_constructs_uint8_rgb_semantic_and_float32_depth_decoder
 
     class FakeDecoder:
         def __init__(self, payload: bytes, **kwargs: object) -> None:
-            output_dtype = kwargs["output_dtype"]
+            output_dtype = kwargs.get("output_dtype", torch.uint8)
             assert isinstance(output_dtype, torch.dtype)
             self.output_dtype = output_dtype
             calls.append((payload, output_dtype))
@@ -305,6 +305,7 @@ def test_selected_parser_constructs_uint8_rgb_semantic_and_float32_depth_decoder
             return type("FrameBatch", (), {"data": frames})()
 
     monkeypatch.setattr(video_parsing, "VideoDecoder", FakeDecoder)
+    monkeypatch.setattr(video_parsing, "_SUPPORTS_VIDEO_DECODER_OUTPUT_DTYPE", None)
     parser = _make_selected_parser()
     depth_payload = bytes(bytearray(b"depth"))
     parser._depth_control_video = depth_payload
@@ -318,6 +319,51 @@ def test_selected_parser_constructs_uint8_rgb_semantic_and_float32_depth_decoder
         (b"semantic", torch.uint8),
         (depth_payload, torch.float32),
     ]
+
+
+@pytest.mark.L0
+@pytest.mark.CPU
+def test_video_decoder_scales_float32_after_decode_for_legacy_torchcodec(monkeypatch: pytest.MonkeyPatch) -> None:
+    successful_initializations = 0
+
+    class LegacyDecoder:
+        def __init__(self, _payload: bytes, seek_mode: str, num_ffmpeg_threads: int) -> None:
+            nonlocal successful_initializations
+            self.seek_mode = seek_mode
+            self.num_ffmpeg_threads = num_ffmpeg_threads
+            successful_initializations += 1
+
+    monkeypatch.setattr(video_parsing, "VideoDecoder", LegacyDecoder)
+    monkeypatch.setattr(video_parsing, "_SUPPORTS_VIDEO_DECODER_OUTPUT_DTYPE", None)
+    monkeypatch.setattr(video_parsing, "_WARNED_POST_DECODE_OUTPUT_DTYPE", False)
+    decoder, transforms = video_parsing._create_video_decoder(b"rgb", "exact", 1)
+
+    assert isinstance(decoder, LegacyDecoder)
+    assert decoder.seek_mode == "exact"
+    assert decoder.num_ffmpeg_threads == 1
+    assert transforms is None
+
+    resize = video_parsing.Resize((1, 1))
+    decoder, transforms = video_parsing._create_video_decoder(
+        b"depth",
+        "exact",
+        1,
+        transforms=[resize],
+        output_dtype=torch.float32,
+    )
+    frames = torch.tensor([[[[0, 255]], [[0, 255]], [[0, 255]]]], dtype=torch.uint8)  # [T,C,H,W]
+    frames = video_parsing._apply_post_decode_transforms(frames, transforms)
+
+    assert isinstance(decoder, LegacyDecoder)
+    assert frames.dtype == torch.float32
+    assert frames.shape == (1, 3, 1, 1)
+    assert torch.allclose(frames, torch.full_like(frames, 0.5))
+    assert video_parsing._SUPPORTS_VIDEO_DECODER_OUTPUT_DTYPE is False
+
+    # The failed keyword probe is cached, so subsequent depth decoders start without output_dtype.
+    _, transforms = video_parsing._create_video_decoder(b"depth", "exact", 1, output_dtype=torch.float32)
+    assert successful_initializations == 3
+    assert transforms == [video_parsing._uint8_frames_to_float32]
 
 
 @pytest.mark.L0
@@ -402,7 +448,7 @@ def test_gray12_depth_preserves_precision_through_selected_control_and_generic_n
 
     class FakeDecoder:
         def __init__(self, _payload: bytes, **kwargs: object) -> None:
-            output_dtype = kwargs["output_dtype"]
+            output_dtype = kwargs.get("output_dtype", torch.uint8)
             assert isinstance(output_dtype, torch.dtype)
             self.output_dtype = output_dtype
 
@@ -414,6 +460,7 @@ def test_gray12_depth_preserves_precision_through_selected_control_and_generic_n
             return type("FrameBatch", (), {"data": frames})()
 
     monkeypatch.setattr(video_parsing, "VideoDecoder", FakeDecoder)
+    monkeypatch.setattr(video_parsing, "_SUPPORTS_VIDEO_DECODER_OUTPUT_DTYPE", None)
     sample = {
         "metas": {"framerate": 30.0, "nb_frames": 5, "width": 3, "height": 1},
         "video": b"rgb",

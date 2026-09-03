@@ -12,6 +12,7 @@ types.  The dispatch is installed on each attention layer by
 from collections.abc import Callable
 
 import torch
+from torch.nn.attention.flex_attention import BlockMask
 
 from cosmos_framework.model.attention import (
     attention,
@@ -21,17 +22,21 @@ from cosmos_framework.model.attention import (
 from cosmos_framework.model.attention.masks import CausalType
 from cosmos_framework.model.generator.mot.attention import SplitInfo, two_way_attention
 from cosmos_framework.model.generator.mot.attention import dispatch_attention as vfm_dispatch_attention
+from cosmos_framework.model.generator.mot.flex_attention import FlexBackend, flex_attention
 from cosmos_framework.model.generator.utils.memory import KVToStore, MemoryValue
 from cosmos_framework.data.generator.sequence_packing.runtime import (
     SequencePack,
     from_mode_splits,
     from_und_gen_splits,
     get_causal_seq,
+    get_causal_seq_padded,
     get_full_only_seq,
     get_gen_seq,
 )
+from cosmos_framework.configs.base.defaults.replay_attention import TeacherForcingReplayPolicyConfig
 from cosmos_framework.model.generator.utils.kv_cache import (
     ARMemoryValue,
+    FlexARMemoryValue,
     KVTrainMemoryValue,
     TFNoisyMemoryValue,
     TFReplayCleanMemoryValue,
@@ -413,6 +418,8 @@ def dispatch_attention_no_memory_ac_safe(
             packed_key_states,
             packed_value_states,
             packed_key_states_normalized=packed_key_states_normalized,
+            flex_block_mask=attention_mask.flex_block_mask,
+            flex_backend=attention_mask.flex_backend,
         )
     output, _ = vfm_dispatch_attention(
         packed_query_states,
@@ -424,6 +431,67 @@ def dispatch_attention_no_memory_ac_safe(
         packed_key_states_normalized=packed_key_states_normalized,
     )
     return output
+
+
+def two_way_flex_attention_with_memory(
+    packed_query_states: SequencePack,
+    packed_key_states: SequencePack,
+    packed_value_states: SequencePack,
+    *,
+    packed_key_states_normalized: SequencePack | None,
+    flex_block_mask: BlockMask,
+    flex_backend: FlexBackend,
+    flex_memory_k: torch.Tensor | None,
+    flex_memory_v: torch.Tensor | None,
+) -> SequencePack:
+    """Run two-way attention with an optional key-only Flex K/V suffix."""
+    if (flex_memory_k is None) != (flex_memory_v is None):
+        raise ValueError("flex_memory_k and flex_memory_v must be provided together.")
+    packed_key_normalized = (
+        packed_key_states_normalized if packed_key_states_normalized is not None else packed_key_states
+    )
+    causal_q, causal_q_offsets, max_causal_len = get_causal_seq_padded(packed_query_states)  # [N_und,H,D], [B+1 or B+2]
+    causal_k, causal_k_offsets, _ = get_causal_seq_padded(packed_key_states)  # [N_und,H,D], [B+1 or B+2]
+    causal_v, _, _ = get_causal_seq_padded(packed_value_states)  # [N_und,H,D], [B+1 or B+2]
+    full_q, _ = get_full_only_seq(packed_query_states)  # [N_gen,H,D], [B+1]
+
+    use_dont_care_mask = causal_q_offsets is causal_k_offsets
+    causal_res = attention(
+        causal_q.unsqueeze(0),  # [1,N_und,H,D]
+        causal_k.unsqueeze(0),  # [1,N_und,H,D]
+        causal_v.unsqueeze(0),  # [1,N_und,H,D]
+        cumulative_seqlen_Q=causal_q_offsets,
+        cumulative_seqlen_KV=causal_k_offsets,
+        max_seqlen_Q=max_causal_len,
+        max_seqlen_KV=max_causal_len,
+        is_causal=True,
+        causal_type=CausalType.DontCare if use_dont_care_mask else CausalType.TopLeft,
+    )  # [1,N_und,H,D]
+    if not isinstance(causal_res, torch.Tensor):
+        raise TypeError("Two-way causal attention must return a tensor.")
+    causal_out = causal_res.squeeze(0).flatten(-2, -1)  # [N_und,H*D]
+
+    und_k, _ = get_causal_seq(packed_key_normalized)  # [N_und,H,D], [B+1]
+    und_v, _ = get_causal_seq(packed_value_states)  # [N_und,H,D], [B+1]
+    gen_k, _ = get_full_only_seq(packed_key_normalized)  # [N_gen,H,D], [B+1]
+    gen_v, _ = get_full_only_seq(packed_value_states)  # [N_gen,H,D], [B+1]
+    key_parts = [und_k, gen_k]
+    value_parts = [und_v, gen_v]
+    if flex_memory_k is not None:
+        assert flex_memory_v is not None
+        key_parts.append(flex_memory_k.squeeze(0))  # [N_memory,H,D]
+        value_parts.append(flex_memory_v.squeeze(0))  # [N_memory,H,D]
+    flex_keys = torch.cat(key_parts).unsqueeze(0)  # [1,N_und+N_gen+N_memory,H,D]
+    flex_values = torch.cat(value_parts).unsqueeze(0)  # [1,N_und+N_gen+N_memory,H,D]
+    full_res = flex_attention(
+        full_q.unsqueeze(0),  # [1,N_gen,H,D]
+        flex_keys,
+        flex_values,
+        flex_block_mask,
+        flex_backend,
+    )  # [1,N_gen,H,D]
+    full_out = full_res.squeeze(0).flatten(-2, -1)  # [N_gen,H*D]
+    return from_mode_splits(causal_out, full_out, packed_query_states)
 
 
 def _frame0_pad_forward(
@@ -622,31 +690,23 @@ def _tf_gen_attention_framewise(
 
     See :func:`teacher_forcing_gen_attention` for the shared contract.
     """
-    _, T, S_super, num_heads, head_dim = gen_q_2d.shape
+    _, T, S_super, _num_heads, head_dim = gen_q_2d.shape
     num_kv_heads = gen_k_2d.shape[-2]
-
-    # --- (a) Spatial-only self-attention (T folded into batch dim) ---
-    # Naming: ``_sa`` = self-attention, ``_ca`` = cross-attention, ``_lse`` = log-sum-exp.
-    spatial_sa, spatial_sa_lse = attention(
-        gen_q_2d.reshape(T, S_super, num_heads, head_dim),
-        gen_k_2d.reshape(T, S_super, num_kv_heads, head_dim),
-        gen_v_2d.reshape(T, S_super, num_kv_heads, head_dim),
-        is_causal=False,
-        return_lse=True,
-        backend="natten",  # This is the only place where a non-natten backend might be selected.
-    )
-    # Use view instead of reshape; data cannot be copied before merge_attentions.
-    spatial_sa = spatial_sa.view(1, T, S_super, num_heads, head_dim)
-    spatial_sa_lse = spatial_sa_lse.view(1, T, S_super, num_heads)
-
-    # --- (b) Strictly-past causal cross-attention to current-segment clean KV ---
     clean_k_2d = cached_clean_gen_k.reshape(1, T, S_super, num_kv_heads, head_dim)  # [1,T,S_super,H_kv,D]
     clean_v_2d = cached_clean_gen_v.reshape(1, T, S_super, num_kv_heads, head_dim)  # [1,T,S_super,H_kv,D]
-    clean_ca, clean_ca_lse = strictly_past_causal_attention(  # [1,T,S_super,H,D], [1,T,S_super,H]
-        gen_q_2d, clean_k_2d, clean_v_2d
+    current_components = _current_chunk_attention_components(
+        gen_q_2d,
+        gen_k_2d,
+        gen_v_2d,
+        frames_per_chunk=1,
     )
-
-    return [(spatial_sa, spatial_sa_lse), (clean_ca, clean_ca_lse)]
+    strictly_past_components = _tf_strictly_past_attention_components(
+        gen_q_2d,
+        clean_k_2d,
+        clean_v_2d,
+        frames_per_chunk=1,
+    )
+    return [*current_components, *strictly_past_components]
 
 
 def _tf_gen_attention_chunkwise(
@@ -670,87 +730,19 @@ def _tf_gen_attention_chunkwise(
 
     See :func:`teacher_forcing_gen_attention` for the shared contract.
     """
-    _, T, S_super, num_heads, head_dim = gen_q_2d.shape
+    _, T, S_super, _num_heads, head_dim = gen_q_2d.shape
     num_kv_heads = gen_k_2d.shape[-2]
     C = frames_per_chunk
-    if (T - 1) % C != 0:
-        raise ValueError(f"Chunkwise teacher forcing requires (T - 1) % frames_per_chunk == 0; got T={T}, C={C}.")
-    n_body = (T - 1) // C
-    if n_body < 1:
-        # Frame 0 (singleton chunk) plus at least one C-frame body chunk are
-        # required, i.e. T >= 1 + C.  Shorter clips would have been truncated to
-        # T == 1 upstream; filter them out at the data level (min latent frames
-        # >= 1 + frames_per_chunk) before chunkwise teacher forcing.
-        raise ValueError(
-            f"Chunkwise teacher forcing needs T >= 1 + frames_per_chunk (one singleton frame plus at "
-            f"least one full chunk); got T={T}, C={C}."
-        )
-    body_super = C * S_super
-    neg_inf = torch.finfo(torch.float32).min
-
     clean_k_2d = cached_clean_gen_k.reshape(1, T, S_super, num_kv_heads, head_dim)  # [1,T,S_super,H_kv,D]
     clean_v_2d = cached_clean_gen_v.reshape(1, T, S_super, num_kv_heads, head_dim)  # [1,T,S_super,H_kv,D]
-
-    # ---- (1) frame-0 intra-frame spatial self-attention (the singleton chunk) ----
-    sa0, sa0_lse = attention(
-        gen_q_2d[:, 0:1].reshape(1, S_super, num_heads, head_dim),
-        gen_k_2d[:, 0:1].reshape(1, S_super, num_kv_heads, head_dim),
-        gen_v_2d[:, 0:1].reshape(1, S_super, num_kv_heads, head_dim),
-        is_causal=False,
-        return_lse=True,
-    )
-    # ``attention`` returns LSE as [B,S,H,1]; drop the trailing singleton (a
-    # storage-preserving view) so the bridge's backward copy_ into the kernel's
-    # saved LSE shape-matches the [B,*,H] tensors the pad/inverse produce.
-    sa0_lse = sa0_lse.reshape(1, S_super, num_heads)
-
-    def _only_frame0_forward(o: torch.Tensor, lse: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
-        # Place the single computed frame at index 0; pad frames 1..T-1 with -inf.
-        o = o.reshape(1, 1, S_super, num_heads, head_dim)
-        lse = lse.reshape(1, 1, S_super, num_heads)
-        pad_o = torch.zeros(1, T - 1, S_super, num_heads, head_dim, device=o.device, dtype=o.dtype)
-        pad_lse = torch.full((1, T - 1, S_super, num_heads), neg_inf, device=lse.device, dtype=lse.dtype)
-        return torch.cat([o, pad_o], dim=1), torch.cat([lse, pad_lse], dim=1)
-
-    def _only_frame0_inverse(o: torch.Tensor, lse: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
-        return o[:, :1].reshape(1, S_super, num_heads, head_dim), lse[:, :1].reshape(1, S_super, num_heads)
-
-    sa0_full, sa0_full_lse = MergeAttentionsBridge.apply(sa0, sa0_lse, _only_frame0_forward, _only_frame0_inverse)
-
-    # ---- (2) body intra-chunk spatio-temporal self-attention (bidirectional within chunk) ----
-    # Frames 1..T-1 are grouped into n_body chunks of C frames; folding the chunk
-    # index into the batch dim makes each chunk attend over its own C*S_super tokens.
-    sab, sab_lse = attention(
-        gen_q_2d[:, 1:].reshape(n_body, body_super, num_heads, head_dim),
-        gen_k_2d[:, 1:].reshape(n_body, body_super, num_kv_heads, head_dim),
-        gen_v_2d[:, 1:].reshape(n_body, body_super, num_kv_heads, head_dim),
-        is_causal=False,
-        return_lse=True,
-    )
-    sab_lse = sab_lse.reshape(n_body, body_super, num_heads)
-
-    def _body_forward(o: torch.Tensor, lse: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
-        o = o.reshape(1, T - 1, S_super, num_heads, head_dim)
-        lse = lse.reshape(1, T - 1, S_super, num_heads)
-        return _frame0_pad_forward(o, lse)  # prepend frame 0 (-inf) -> [1, T, ...]
-
-    def _body_inverse(o: torch.Tensor, lse: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
-        o, lse = _frame0_pad_inverse(o, lse)  # drop frame 0 -> [1, T-1, ...]
-        return (
-            o.reshape(n_body, body_super, num_heads, head_dim),
-            lse.reshape(n_body, body_super, num_heads),
-        )
-
-    sab_full, sab_full_lse = MergeAttentionsBridge.apply(sab, sab_lse, _body_forward, _body_inverse)
-
+    current_components = _current_chunk_attention_components(gen_q_2d, gen_k_2d, gen_v_2d, C)
     strictly_past_components = _tf_strictly_past_attention_components(
         gen_q_2d,
         clean_k_2d,
         clean_v_2d,
         frames_per_chunk=C,
     )
-
-    return [(sa0_full, sa0_full_lse), (sab_full, sab_full_lse), *strictly_past_components]
+    return [*current_components, *strictly_past_components]
 
 
 def _tf_strictly_past_attention_components(
@@ -896,6 +888,134 @@ def _pad_transfer_item_component(
     return MergeAttentionsBridge.apply(out, lse, _forward, _inverse)
 
 
+def _current_chunk_attention_components(
+    query: torch.Tensor,  # [1,T,S,H,D]
+    key: torch.Tensor,  # [1,T,S,H_kv,D]
+    value: torch.Tensor,  # [1,T,S,H_kv,D]
+    frames_per_chunk: int,
+) -> list[tuple[torch.Tensor, torch.Tensor]]:
+    """Attend each query only to K/V from its current ``[1, C, C, ...]`` chunk."""
+    batch_size, num_frames, spatial_tokens, num_heads, head_dim = query.shape
+    num_kv_heads = key.shape[-2]
+    chunk_size = frames_per_chunk
+    if chunk_size < 1:
+        raise ValueError(f"frames_per_chunk must be >= 1, got {chunk_size}.")
+
+    if chunk_size == 1:
+        current_out, current_lse = attention(  # [T,S,H,D], [T,S,H,1]
+            query.reshape(num_frames, spatial_tokens, num_heads, head_dim),  # [T,S,H,D]
+            key.reshape(num_frames, spatial_tokens, num_kv_heads, head_dim),  # [T,S,H_kv,D]
+            value.reshape(num_frames, spatial_tokens, num_kv_heads, head_dim),  # [T,S,H_kv,D]
+            is_causal=False,
+            return_lse=True,
+            backend="natten",
+        )
+        current_out = current_out.view(  # [1,T,S,H,D]
+            batch_size, num_frames, spatial_tokens, num_heads, head_dim
+        )
+        current_lse = current_lse.view(batch_size, num_frames, spatial_tokens, num_heads)  # [1,T,S,H]
+        return [(current_out, current_lse)]
+
+    if (num_frames - 1) % chunk_size != 0:
+        raise ValueError(
+            f"Chunkwise teacher forcing requires (T - 1) % frames_per_chunk == 0; got T={num_frames}, C={chunk_size}."
+        )
+    num_body_chunks = (num_frames - 1) // chunk_size
+    if num_body_chunks < 1:
+        raise ValueError(
+            f"Chunkwise teacher forcing needs T >= 1 + frames_per_chunk (one singleton frame plus at "
+            f"least one full chunk); got T={num_frames}, C={chunk_size}."
+        )
+    body_tokens = chunk_size * spatial_tokens
+    neg_inf = torch.finfo(torch.float32).min
+
+    frame0_out, frame0_lse = attention(  # [1,S,H,D], [1,S,H,1]
+        query[:, :1].reshape(batch_size, spatial_tokens, num_heads, head_dim),  # [1,S,H,D]
+        key[:, :1].reshape(batch_size, spatial_tokens, num_kv_heads, head_dim),  # [1,S,H_kv,D]
+        value[:, :1].reshape(batch_size, spatial_tokens, num_kv_heads, head_dim),  # [1,S,H_kv,D]
+        is_causal=False,
+        return_lse=True,
+    )
+    frame0_lse = frame0_lse.reshape(batch_size, spatial_tokens, num_heads)  # [1,S,H]
+
+    def _frame0_forward(
+        out: torch.Tensor,  # [1,S,H,D]
+        lse: torch.Tensor,  # [1,S,H]
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        out = out.reshape(batch_size, 1, spatial_tokens, num_heads, head_dim)  # [1,1,S,H,D]
+        lse = lse.reshape(batch_size, 1, spatial_tokens, num_heads)  # [1,1,S,H]
+        pad_out = torch.zeros(  # [1,T-1,S,H,D]
+            batch_size,
+            num_frames - 1,
+            spatial_tokens,
+            num_heads,
+            head_dim,
+            device=out.device,
+            dtype=out.dtype,
+        )
+        pad_lse = torch.full(  # [1,T-1,S,H]
+            (batch_size, num_frames - 1, spatial_tokens, num_heads),
+            neg_inf,
+            device=lse.device,
+            dtype=lse.dtype,
+        )
+        return (
+            torch.cat([out, pad_out], dim=1),  # [1,T,S,H,D]
+            torch.cat([lse, pad_lse], dim=1),  # [1,T,S,H]
+        )
+
+    def _frame0_inverse(
+        out: torch.Tensor,  # [1,T,S,H,D]
+        lse: torch.Tensor,  # [1,T,S,H]
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        return (
+            out[:, :1].reshape(batch_size, spatial_tokens, num_heads, head_dim),  # [1,S,H,D]
+            lse[:, :1].reshape(batch_size, spatial_tokens, num_heads),  # [1,S,H]
+        )
+
+    frame0_full, frame0_full_lse = MergeAttentionsBridge.apply(  # [1,T,S,H,D], [1,T,S,H]
+        frame0_out,
+        frame0_lse,
+        _frame0_forward,
+        _frame0_inverse,
+    )
+
+    body_out, body_lse = attention(  # [N_body,C*S,H,D], [N_body,C*S,H,1]
+        query[:, 1:].reshape(batch_size * num_body_chunks, body_tokens, num_heads, head_dim),  # [N_body,C*S,H,D]
+        key[:, 1:].reshape(batch_size * num_body_chunks, body_tokens, num_kv_heads, head_dim),  # [N_body,C*S,H_kv,D]
+        value[:, 1:].reshape(batch_size * num_body_chunks, body_tokens, num_kv_heads, head_dim),  # [N_body,C*S,H_kv,D]
+        is_causal=False,
+        return_lse=True,
+    )
+    body_lse = body_lse.reshape(batch_size * num_body_chunks, body_tokens, num_heads)  # [N_body,C*S,H]
+
+    def _body_forward(
+        out: torch.Tensor,  # [N_body,C*S,H,D]
+        lse: torch.Tensor,  # [N_body,C*S,H]
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        out = out.reshape(batch_size, num_frames - 1, spatial_tokens, num_heads, head_dim)  # [1,T-1,S,H,D]
+        lse = lse.reshape(batch_size, num_frames - 1, spatial_tokens, num_heads)  # [1,T-1,S,H]
+        return _frame0_pad_forward(out, lse)  # [1,T,S,H,D], [1,T,S,H]
+
+    def _body_inverse(
+        out: torch.Tensor,  # [1,T,S,H,D]
+        lse: torch.Tensor,  # [1,T,S,H]
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        out, lse = _frame0_pad_inverse(out, lse)  # [1,T-1,S,H,D], [1,T-1,S,H]
+        return (
+            out.reshape(batch_size * num_body_chunks, body_tokens, num_heads, head_dim),  # [N_body,C*S,H,D]
+            lse.reshape(batch_size * num_body_chunks, body_tokens, num_heads),  # [N_body,C*S,H]
+        )
+
+    body_full, body_full_lse = MergeAttentionsBridge.apply(  # [1,T,S,H,D], [1,T,S,H]
+        body_out,
+        body_lse,
+        _body_forward,
+        _body_inverse,
+    )
+    return [(frame0_full, frame0_full_lse), (body_full, body_full_lse)]
+
+
 def _inclusive_chunk_causal_attention_components(
     query: torch.Tensor,  # [1,T,S,H,D]
     key: torch.Tensor,  # [1,T,S,H_kv,D]
@@ -903,6 +1023,8 @@ def _inclusive_chunk_causal_attention_components(
     frames_per_chunk: int,
 ) -> list[tuple[torch.Tensor, torch.Tensor]]:
     """Attend each query chunk to aligned K/V chunks up to and including itself."""
+    if frames_per_chunk < 1:
+        raise ValueError(f"frames_per_chunk must be >= 1, got {frames_per_chunk}.")
     _, num_frames, spatial_tokens, _num_heads, _head_dim = query.shape
     num_kv_heads = key.shape[-2]
     head_dim = key.shape[-1]
@@ -911,6 +1033,55 @@ def _inclusive_chunk_causal_attention_components(
     if frames_per_chunk > 1:
         return _tf_gen_attention_chunkwise(query, key, value, flat_key, flat_value, frames_per_chunk)
     return _tf_gen_attention_framewise(query, key, value, flat_key, flat_value)
+
+
+def _control_visibility_attention_components(
+    query: torch.Tensor,  # [1,T,S,H,D]
+    key: torch.Tensor,  # [1,T,S,H_kv,D]
+    value: torch.Tensor,  # [1,T,S,H_kv,D]
+    policy: TeacherForcingReplayPolicyConfig,
+    frames_per_chunk: int,
+) -> list[tuple[torch.Tensor, torch.Tensor]]:
+    """Apply the backend-neutral transfer-control visibility policy."""
+    batch_size, num_frames, spatial_tokens, num_heads, head_dim = query.shape
+    num_kv_heads = key.shape[-2]
+    if policy.control_visibility == "global":
+        global_out, global_lse = attention(  # [1,T*S,H,D], [1,T*S,H,1]
+            query.reshape(batch_size, num_frames * spatial_tokens, num_heads, head_dim),  # [1,T*S,H,D]
+            key.reshape(batch_size, num_frames * spatial_tokens, num_kv_heads, head_dim),  # [1,T*S,H_kv,D]
+            value.reshape(batch_size, num_frames * spatial_tokens, num_kv_heads, head_dim),  # [1,T*S,H_kv,D]
+            is_causal=False,
+            return_lse=True,
+        )
+        return [(global_out, global_lse)]
+    if policy.control_visibility == "causal":
+        return _inclusive_chunk_causal_attention_components(query, key, value, frames_per_chunk)
+    if policy.control_visibility == "current":
+        return _current_chunk_attention_components(query, key, value, frames_per_chunk)
+    raise ValueError(f"Unknown control visibility: {policy.control_visibility!r}")
+
+
+def _clean_pass_target_attention_components(
+    query: torch.Tensor,  # [1,T,S,H,D]
+    key: torch.Tensor,  # [1,T,S,H_kv,D]
+    value: torch.Tensor,  # [1,T,S,H_kv,D]
+    policy: TeacherForcingReplayPolicyConfig,
+    frames_per_chunk: int,
+) -> list[tuple[torch.Tensor, torch.Tensor]]:
+    """Apply clean target causality without consulting multiview-only scope."""
+    if policy.clean_pass_causality == "frame":
+        target_out, target_lse = multi_dimensional_attention(  # [1,T,S,H,D], [1,T,S,H]
+            query,
+            key,
+            value,
+            is_causal=(True, False),
+            return_lse=True,
+            backend="natten",
+        )
+        return [(target_out, target_lse)]
+    if policy.clean_pass_causality == "chunk":
+        return _inclusive_chunk_causal_attention_components(query, key, value, frames_per_chunk)
+    raise ValueError(f"Unknown clean-pass causality: {policy.clean_pass_causality!r}")
 
 
 def teacher_forcing_transfer_attention(
@@ -927,10 +1098,13 @@ def teacher_forcing_transfer_attention(
     """Build control-conditioned temporal-causal TF components for aligned transfer items.
 
     Each returned pair is shaped ``[1,2*T*S,H,D]`` and ``[1,2*T*S,H]``.
-    ``causal_control_with_rgb_history`` lets control queries additionally read
-    clean RGB from strictly earlier teacher-forcing chunks. Target queries see
-    target history through ordinary replay teacher forcing and see control only
-    through their current ``[1, C, C, ...]`` chunk in either causal mode.
+    ``control_visibility`` applies identically to control self-attention and
+    target-to-control attention: ``global`` exposes the full control clip,
+    ``causal`` exposes all control chunks through the current chunk, and
+    ``current`` exposes only the aligned current chunk. The optional RGB-history
+    policy lets control queries additionally read clean target tokens from
+    strictly earlier chunks. Target queries see target history through ordinary
+    replay teacher forcing.
     """
     num_frames, height, width = target_shape
     spatial_tokens = height * width
@@ -947,25 +1121,14 @@ def teacher_forcing_transfer_attention(
     control_v_2d = control_v.reshape(  # [1,T,S,H_kv,D]
         1, num_frames, spatial_tokens, num_kv_heads, head_dim
     )
-    control_attention_mode = memory_value.transfer_control_attention_mode
-    if control_attention_mode == "global_control":
-        control_sa, control_sa_lse = attention(  # [1,T*S,H,D], [1,T*S,H,1]
-            control_q.unsqueeze(0),  # [1,T*S,H,D]
-            control_k.unsqueeze(0),  # [1,T*S,H_kv,D]
-            control_v.unsqueeze(0),  # [1,T*S,H_kv,D]
-            is_causal=False,
-            return_lse=True,
-        )
-        control_components = [(control_sa, control_sa_lse)]
-    elif control_attention_mode in ("causal_control", "causal_control_with_rgb_history"):
-        control_components = _inclusive_chunk_causal_attention_components(
-            control_q_2d,
-            control_k_2d,
-            control_v_2d,
-            memory_value.frames_per_chunk,
-        )
-    else:
-        raise ValueError(f"Unknown transfer control attention mode: {control_attention_mode!r}")
+    policy = memory_value.teacher_forcing_replay_policy
+    control_components = _control_visibility_attention_components(
+        control_q_2d,
+        control_k_2d,
+        control_v_2d,
+        policy,
+        memory_value.frames_per_chunk,
+    )
 
     components: list[tuple[torch.Tensor, torch.Tensor]] = []
     for control_out, control_lse in control_components:
@@ -993,7 +1156,7 @@ def teacher_forcing_transfer_attention(
         clean_target_k = target_k.unsqueeze(0)  # [1,T*S,H_kv,D]
         clean_target_v = target_v.unsqueeze(0)  # [1,T*S,H_kv,D]
 
-    if control_attention_mode == "causal_control_with_rgb_history":
+    if policy.controls_read_strict_past_clean_rgb:
         clean_target_k_2d = clean_target_k.reshape(  # [1,T,S,H_kv,D]
             1, num_frames, spatial_tokens, num_kv_heads, head_dim
         )
@@ -1028,15 +1191,13 @@ def teacher_forcing_transfer_attention(
             cached_clean_gen_v=clean_target_v,
         )
     else:
-        target_sa, target_sa_lse = multi_dimensional_attention(  # [1,T,S,H,D], [1,T,S,H]
+        target_components = _clean_pass_target_attention_components(
             target_q_2d,
             target_k_2d,
             target_v_2d,
-            is_causal=(True, False),
-            return_lse=True,
-            backend="natten",
+            policy,
+            memory_value.frames_per_chunk,
         )
-        target_components = [(target_sa, target_sa_lse)]
 
     for target_out, target_lse in target_components:
         components.append(
@@ -1057,30 +1218,19 @@ def teacher_forcing_transfer_attention(
     else:
         target_control_k = control_k.unsqueeze(0)  # [1,T*S,H_kv,D]
         target_control_v = control_v.unsqueeze(0)  # [1,T*S,H_kv,D]
-    if control_attention_mode == "global_control":
-        target_control, target_control_lse = attention(  # [1,T*S,H,D], [1,T*S,H,1]
-            target_q.unsqueeze(0),  # [1,T*S,H,D]
-            target_control_k,
-            target_control_v,
-            is_causal=False,
-            return_lse=True,
-        )
-        target_control_components = [(target_control, target_control_lse)]
-    elif control_attention_mode in ("causal_control", "causal_control_with_rgb_history"):
-        target_control_k_2d = target_control_k.reshape(  # [1,T,S,H_kv,D]
-            1, num_frames, spatial_tokens, num_kv_heads, head_dim
-        )
-        target_control_v_2d = target_control_v.reshape(  # [1,T,S,H_kv,D]
-            1, num_frames, spatial_tokens, num_kv_heads, head_dim
-        )
-        target_control_components = _inclusive_chunk_causal_attention_components(
-            target_q_2d,
-            target_control_k_2d,
-            target_control_v_2d,
-            memory_value.frames_per_chunk,
-        )
-    else:
-        raise ValueError(f"Unknown transfer control attention mode: {control_attention_mode!r}")
+    target_control_k_2d = target_control_k.reshape(  # [1,T,S,H_kv,D]
+        1, num_frames, spatial_tokens, num_kv_heads, head_dim
+    )
+    target_control_v_2d = target_control_v.reshape(  # [1,T,S,H_kv,D]
+        1, num_frames, spatial_tokens, num_kv_heads, head_dim
+    )
+    target_control_components = _control_visibility_attention_components(
+        target_q_2d,
+        target_control_k_2d,
+        target_control_v_2d,
+        policy,
+        memory_value.frames_per_chunk,
+    )
 
     for target_control_out, target_control_lse in target_control_components:
         components.append(
@@ -1213,6 +1363,16 @@ def three_way_attention_with_kv_cache(
                 video_k_2d,
                 video_v_2d,
                 memory_value,
+                memory_value.frames_per_chunk,
+            )
+        elif isinstance(memory_value, TFReplayCleanMemoryValue):
+            # Single-view three-way replay uses only clean-pass causality from
+            # the unified policy; multiview scope does not apply to this layout.
+            video_components = _clean_pass_target_attention_components(
+                video_q_2d,
+                video_k_2d,
+                video_v_2d,
+                memory_value.teacher_forcing_replay_policy,
                 memory_value.frames_per_chunk,
             )
         else:
@@ -1695,6 +1855,37 @@ def dispatch_attention_with_memory(
     - ``ARMemoryValue`` with ``frame_idx == 0`` → interactive no-memory dispatch
     - ``None`` → interactive no-memory dispatch
     """
+    if (
+        isinstance(memory_value, (TFReplayCleanMemoryValue, TFNoisyMemoryValue, FlexARMemoryValue))
+        and isinstance(attention_mask, SplitInfo)
+        and not attention_mask.is_three_way
+        and attention_mask.flex_block_mask is not None
+    ):
+        if attention_mask.flex_backend is None:
+            raise ValueError("Two-way Flex memory attention requires a FlexBackend.")
+        output = two_way_flex_attention_with_memory(
+            packed_query_states,
+            packed_key_states,
+            packed_value_states,
+            packed_key_states_normalized=packed_key_states_normalized,
+            flex_block_mask=attention_mask.flex_block_mask,
+            flex_backend=attention_mask.flex_backend,
+            flex_memory_k=(
+                memory_value.cached_clean_gen_k
+                if isinstance(memory_value, TFNoisyMemoryValue)
+                else memory_value.cached_gen_k
+                if isinstance(memory_value, FlexARMemoryValue)
+                else None
+            ),
+            flex_memory_v=(
+                memory_value.cached_clean_gen_v
+                if isinstance(memory_value, TFNoisyMemoryValue)
+                else memory_value.cached_gen_v
+                if isinstance(memory_value, FlexARMemoryValue)
+                else None
+            ),
+        )
+        return output, None
     if isinstance(memory_value, KVTrainMemoryValue):
         attention_meta = attention_mask if isinstance(attention_mask, SplitInfo) else None
         output = three_way_attention_with_kv_cache(

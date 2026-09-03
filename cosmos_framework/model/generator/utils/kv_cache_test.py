@@ -9,6 +9,7 @@ import torch
 from cosmos_framework.model.attention import attention
 from cosmos_framework.model.generator.mot.attention import SplitInfo
 from cosmos_framework.data.generator.sequence_packing.runtime import SequencePack, get_gen_seq
+from cosmos_framework.configs.base.defaults.replay_attention import TeacherForcingReplayPolicyConfig
 from cosmos_framework.model.generator.mot.causal_attention import (
     attention_AR_gen_only,
     three_way_attention_with_kv_cache,
@@ -34,6 +35,7 @@ from cosmos_framework.model.generator.utils.kv_storage_backend import (
 
 
 @pytest.mark.L0
+@pytest.mark.CPU
 def test_flex_ar_memory_state_captures_selected_tokens_at_requested_offset() -> None:
     """Prefill and refresh writes share one fixed-capacity cache without exposing padding."""
     cache: list[tuple[torch.Tensor, torch.Tensor] | None] = [None]
@@ -64,6 +66,61 @@ def test_flex_ar_memory_state_captures_selected_tokens_at_requested_offset() -> 
     assert torch.equal(value.cached_gen_k[:, :3], gen_k[:, [0, 2, 1]])
     assert torch.equal(value.cached_gen_v[:, :3], gen_v[:, [0, 2, 1]])
     assert torch.count_nonzero(value.cached_gen_k[:, 3:]) == 0
+
+
+@pytest.mark.L0
+@pytest.mark.CPU
+def test_flex_ar_memory_state_scatters_selected_tokens_to_indexed_cache_slots() -> None:
+    """Explicit cache indexes support interleaved writes without changing source selection."""
+    state = FlexARMemoryState(
+        num_layers=1,
+        memory_seq_len=6,
+        write_indexes=torch.tensor([2, 0]),  # [S_write]
+        cache_write_indexes=torch.tensor([4, 1]),  # [S_write]
+    )
+    gen_k = torch.arange(12, dtype=torch.float32).reshape(1, 3, 2, 2)  # [1,S_gen,H_kv,D]
+    gen_v = gen_k + 100  # [1,S_gen,H_kv,D]
+    und = torch.empty(1, 0, 2, 2)  # [1,0,H_kv,D]
+
+    state.write_for_layer(0, (gen_k, gen_v, und, und))
+
+    value = state.read_for_layer(0)
+    assert value.cached_gen_k is not None and value.cached_gen_v is not None
+    torch.testing.assert_close(value.cached_gen_k[:, 4], gen_k[:, 2])
+    torch.testing.assert_close(value.cached_gen_k[:, 1], gen_k[:, 0])
+    torch.testing.assert_close(value.cached_gen_v[:, 4], gen_v[:, 2])
+    torch.testing.assert_close(value.cached_gen_v[:, 1], gen_v[:, 0])
+    unwritten_slots = torch.tensor([0, 2, 3, 5])  # [S_unwritten]
+    assert torch.count_nonzero(value.cached_gen_k[:, unwritten_slots]) == 0  # []
+    assert torch.count_nonzero(value.cached_gen_v[:, unwritten_slots]) == 0  # []
+
+
+@pytest.mark.L0
+@pytest.mark.CPU
+@pytest.mark.parametrize(
+    ("write_indexes", "cache_write_indexes", "match"),
+    [
+        (torch.tensor([[0, 1]]), None, "write_indexes must be one-dimensional"),
+        (torch.tensor([0, 1]), torch.tensor([[0, 1]]), "cache_write_indexes must be one-dimensional"),
+        (torch.tensor([0]), torch.tensor([0.0]), "must use an integer dtype"),
+        (None, torch.tensor([0]), "cache_write_indexes requires write_indexes"),
+        (torch.tensor([0, 1]), torch.tensor([0]), "must have the same length"),
+        (torch.tensor([0]), torch.tensor([-1]), "must be in"),
+        (torch.tensor([0]), torch.tensor([4]), "must be in"),
+    ],
+)
+def test_flex_ar_memory_state_validates_cache_write_indexes(
+    write_indexes: torch.Tensor | None,
+    cache_write_indexes: torch.Tensor | None,
+    match: str,
+) -> None:
+    with pytest.raises(ValueError, match=match):
+        FlexARMemoryState(
+            num_layers=1,
+            memory_seq_len=4,
+            write_indexes=write_indexes,
+            cache_write_indexes=cache_write_indexes,
+        )
 
 
 @pytest.mark.L0
@@ -1046,6 +1103,110 @@ def test_ar_memory_state_read_for_layer():
 
 
 @pytest.mark.L0
+@pytest.mark.CPU
+def test_ar_memory_state_transfer_sink_keeps_prefix_and_pair_aligned_recent_history() -> None:
+    """Transfer history limiting retains the logical sink and drops an orphan RGB entry."""
+    batch_size, tokens_per_entry, num_heads, head_dim = 1, 2, 1, 1
+    cache = DualKVCache(gen_cache_size=6, attention_sink_size=2)
+
+    def make_entry(entry_idx: int) -> tuple[torch.Tensor, torch.Tensor]:
+        key = torch.full((batch_size, tokens_per_entry, num_heads, head_dim), float(entry_idx))  # [B,S_entry,H,D]
+        value = key + 100.0  # [B,S_entry,H,D]
+        return key, value
+
+    entries = [make_entry(entry_idx) for entry_idx in range(9)]
+    for logical_idx in range(8):
+        cache.gen_cache.store_kv(*entries[logical_idx], frame_idx=logical_idx)
+
+    sink_tokens = 2 * tokens_per_entry
+    control_state = ARMemoryState(
+        [cache],
+        frame_idx=8,
+        transfer_history_sink_tokens=sink_tokens,
+        transfer_history_max_tokens=2 * tokens_per_entry,
+    )
+    control_state.init({"_num_full_tokens": tokens_per_entry}, torch.device("cpu"))
+    control_memory = control_state.read_for_layer(0)
+    expected_control_k = torch.cat(
+        (entries[0][0], entries[1][0], entries[6][0], entries[7][0]), dim=1
+    )  # [B,4*S_entry,H,D]
+    expected_control_v = torch.cat(
+        (entries[0][1], entries[1][1], entries[6][1], entries[7][1]), dim=1
+    )  # [B,4*S_entry,H,D]
+    assert control_memory.gen_k_hist is not None
+    assert control_memory.gen_v_hist is not None
+    torch.testing.assert_close(control_memory.gen_k_hist, expected_control_k)
+    torch.testing.assert_close(control_memory.gen_v_hist, expected_control_v)
+
+    cache.gen_cache.store_kv(*entries[8], frame_idx=8)
+    target_state = ARMemoryState(
+        [cache],
+        frame_idx=9,
+        transfer_history_sink_tokens=sink_tokens,
+        transfer_history_max_tokens=3 * tokens_per_entry,
+    )
+    target_state.init({"_num_full_tokens": tokens_per_entry}, torch.device("cpu"))
+    target_memory = target_state.read_for_layer(0)
+    expected_target_k = torch.cat(
+        (entries[0][0], entries[1][0], entries[6][0], entries[7][0], entries[8][0]), dim=1
+    )  # [B,5*S_entry,H,D]
+    expected_target_v = torch.cat(
+        (entries[0][1], entries[1][1], entries[6][1], entries[7][1], entries[8][1]), dim=1
+    )  # [B,5*S_entry,H,D]
+    assert target_memory.gen_k_hist is not None
+    assert target_memory.gen_v_hist is not None
+    torch.testing.assert_close(target_memory.gen_k_hist, expected_target_k)
+    torch.testing.assert_close(target_memory.gen_v_hist, expected_target_v)
+
+    sink_only_state = ARMemoryState(
+        [cache],
+        frame_idx=9,
+        transfer_history_sink_tokens=sink_tokens,
+        transfer_history_max_tokens=0,
+    )
+    sink_only_state.init({"_num_full_tokens": tokens_per_entry}, torch.device("cpu"))
+    sink_only_memory = sink_only_state.read_for_layer(0)
+    assert sink_only_memory.gen_k_hist is not None
+    assert sink_only_memory.gen_v_hist is not None
+    expected_sink_only_k = torch.cat((entries[0][0], entries[1][0]), dim=1)  # [B,2*S_entry,H,D]
+    expected_sink_only_v = torch.cat((entries[0][1], entries[1][1]), dim=1)  # [B,2*S_entry,H,D]
+    torch.testing.assert_close(sink_only_memory.gen_k_hist, expected_sink_only_k)
+    torch.testing.assert_close(sink_only_memory.gen_v_hist, expected_sink_only_v)
+
+
+@pytest.mark.L0
+@pytest.mark.CPU
+def test_ar_memory_state_transfer_history_without_sink_keeps_legacy_total_suffix() -> None:
+    """With zero sink tokens, max tokens continues to cap the complete history."""
+    batch_size, tokens_per_entry, num_heads, head_dim = 1, 2, 1, 1
+    cache = DualKVCache(gen_cache_size=4)
+    entries: list[tuple[torch.Tensor, torch.Tensor]] = []
+    for entry_idx in range(7):
+        key = torch.full((batch_size, tokens_per_entry, num_heads, head_dim), float(entry_idx))  # [B,S_entry,H,D]
+        value = key + 100.0  # [B,S_entry,H,D]
+        entries.append((key, value))
+        cache.gen_cache.store_kv(key, value, frame_idx=entry_idx)
+
+    state = ARMemoryState(
+        [cache],
+        frame_idx=7,
+        transfer_history_sink_tokens=0,
+        transfer_history_max_tokens=2 * tokens_per_entry,
+    )
+    state.init({"_num_full_tokens": tokens_per_entry}, torch.device("cpu"))
+    memory_value = state.read_for_layer(0)
+    assert memory_value.gen_k_hist is not None
+    assert memory_value.gen_v_hist is not None
+    expected_k = torch.cat((entries[5][0], entries[6][0]), dim=1)  # [B,2*S_entry,H,D]
+    expected_v = torch.cat((entries[5][1], entries[6][1]), dim=1)  # [B,2*S_entry,H,D]
+    torch.testing.assert_close(memory_value.gen_k_hist, expected_k)
+    torch.testing.assert_close(memory_value.gen_v_hist, expected_v)
+
+    with pytest.raises(ValueError, match="transfer_history_sink_tokens must be >= 0"):
+        ARMemoryState([cache], frame_idx=7, transfer_history_sink_tokens=-1)
+
+
+@pytest.mark.L0
 def test_ar_memory_state_post_saturation_static_compile_keeps_true_frame_idx() -> None:
     """Static post-saturation compile keeps true frame_idx and a stable dispatch flag."""
     B, S_und, S_gen, H, D = 1, 2, 3, 2, 4
@@ -1302,6 +1463,11 @@ def test_teacher_forcing_memory_state_supports_cp_head_sharded_cache() -> None:
     local_num_kv_heads = 2
     head_dim = 8
     dual_caches = [DualKVCache(gen_cache_size=2)]
+    replay_policy = TeacherForcingReplayPolicyConfig(
+        control_visibility="current",
+        controls_read_strict_past_clean_rgb=True,
+        clean_pass_causality="chunk",
+    )
     state = TeacherForcingMemoryState(
         vision_token_shapes=[(T, H_p, W_p)],
         num_action_tokens_per_supertoken=tcf,
@@ -1311,7 +1477,7 @@ def test_teacher_forcing_memory_state_supports_cp_head_sharded_cache() -> None:
         num_kv_heads=local_num_kv_heads,
         head_dim=head_dim,
         frames_per_chunk=4,
-        transfer_control_attention_mode="causal_control",
+        teacher_forcing_replay_policy=replay_policy,
         context_parallel_size=context_parallel_size,
     )
     pack = _mk_factored_pack_with_caption(
@@ -1342,7 +1508,7 @@ def test_teacher_forcing_memory_state_supports_cp_head_sharded_cache() -> None:
     assert isinstance(pass1_value, TFReplayCleanMemoryValue)
     assert pass1_value.supports_context_parallel_attention
     assert pass1_value.frames_per_chunk == 4
-    assert pass1_value.transfer_control_attention_mode == "causal_control"
+    assert pass1_value.teacher_forcing_replay_policy is replay_policy
     assert pass1_value.cached_und_k.shape == (1, padded_causal_len, local_num_kv_heads, head_dim)
     assert pass1_value.cached_gen_k.shape == (1, tokens_per_seg, local_num_kv_heads, head_dim)
 
@@ -1366,7 +1532,7 @@ def test_teacher_forcing_memory_state_supports_cp_head_sharded_cache() -> None:
     assert isinstance(pass2_value, TFNoisyMemoryValue)
     assert pass2_value.supports_context_parallel_attention
     assert pass2_value.frames_per_chunk == 4
-    assert pass2_value.transfer_control_attention_mode == "causal_control"
+    assert pass2_value.teacher_forcing_replay_policy is replay_policy
     assert pass2_value.cached_clean_gen_k.shape == (1, tokens_per_seg, local_num_kv_heads, head_dim)
     assert pass2_value.cached_clean_gen_v.shape == (1, tokens_per_seg, local_num_kv_heads, head_dim)
 

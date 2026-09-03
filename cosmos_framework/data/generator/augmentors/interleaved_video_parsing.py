@@ -21,23 +21,25 @@ from cosmos_framework.data.generator.augmentors.video_parsing import VideoParsin
 # private symbols of ``video_parsing.py``. Behavior matches the originals.
 _PostDecodeTransforms = list[Callable[[torch.Tensor], torch.Tensor]] | None
 _SUPPORTS_VIDEO_DECODER_TRANSFORMS: bool | None = None
+_SUPPORTS_VIDEO_DECODER_OUTPUT_DTYPE: bool | None = None
 _WARNED_POST_DECODE_TRANSFORMS = False
+_WARNED_POST_DECODE_OUTPUT_DTYPE = False
 
 
-def _create_video_decoder(
+def _uint8_frames_to_float32(frames: torch.Tensor) -> torch.Tensor:
+    """Match TorchCodec's float32 output contract on releases that only decode uint8."""
+    if frames.dtype != torch.uint8:
+        raise ValueError(f"Expected legacy TorchCodec to decode uint8 frames, got {frames.dtype}.")
+    return frames.to(dtype=torch.float32).div_(255.0)  # [T,C,H,W]
+
+
+def _create_video_decoder_with_transforms(
     video: bytes,
-    seek_mode: str,
-    num_ffmpeg_threads: int,
-    transforms: _PostDecodeTransforms = None,
-    output_dtype: torch.dtype = torch.uint8,
+    kwargs: dict[str, object],
+    transforms: _PostDecodeTransforms,
 ) -> tuple[VideoDecoder, _PostDecodeTransforms]:
     global _SUPPORTS_VIDEO_DECODER_TRANSFORMS, _WARNED_POST_DECODE_TRANSFORMS
 
-    kwargs = {
-        "seek_mode": seek_mode,
-        "num_ffmpeg_threads": num_ffmpeg_threads,
-        "output_dtype": output_dtype,
-    }
     if transforms is None:
         return VideoDecoder(video, **kwargs), None
 
@@ -46,8 +48,8 @@ def _create_video_decoder(
             decoder = VideoDecoder(video, transforms=transforms, **kwargs)
             _SUPPORTS_VIDEO_DECODER_TRANSFORMS = True
             return decoder, None
-        except TypeError as e:
-            if "transforms" not in str(e):
+        except TypeError as error:
+            if "transforms" not in str(error):
                 raise
             _SUPPORTS_VIDEO_DECODER_TRANSFORMS = False
 
@@ -59,6 +61,50 @@ def _create_video_decoder(
         )
         _WARNED_POST_DECODE_TRANSFORMS = True
     return VideoDecoder(video, **kwargs), transforms
+
+
+def _create_video_decoder(
+    video: bytes,
+    seek_mode: str,
+    num_ffmpeg_threads: int,
+    transforms: _PostDecodeTransforms = None,
+    output_dtype: torch.dtype = torch.uint8,
+) -> tuple[VideoDecoder, _PostDecodeTransforms]:
+    global _SUPPORTS_VIDEO_DECODER_OUTPUT_DTYPE, _WARNED_POST_DECODE_OUTPUT_DTYPE
+
+    kwargs: dict[str, object] = {
+        "seek_mode": seek_mode,
+        "num_ffmpeg_threads": num_ffmpeg_threads,
+    }
+    requests_float32 = output_dtype == torch.float32
+    if output_dtype not in (torch.uint8, torch.float32):
+        raise ValueError(f"Unsupported video output dtype {output_dtype}.")
+    if requests_float32 and _SUPPORTS_VIDEO_DECODER_OUTPUT_DTYPE is not False:
+        kwargs["output_dtype"] = output_dtype
+
+    if requests_float32 and _SUPPORTS_VIDEO_DECODER_OUTPUT_DTYPE is False:
+        return VideoDecoder(video, **kwargs), [_uint8_frames_to_float32, *(transforms or [])]
+
+    try:
+        decoder, post_decode_transforms = _create_video_decoder_with_transforms(video, kwargs, transforms)
+    except TypeError as error:
+        if not requests_float32 or "output_dtype" not in str(error):
+            raise
+        _SUPPORTS_VIDEO_DECODER_OUTPUT_DTYPE = False
+        kwargs.pop("output_dtype")
+        if not _WARNED_POST_DECODE_OUTPUT_DTYPE:
+            log.warning(
+                "Installed torchcodec does not support VideoDecoder(output_dtype=torch.float32); "
+                "decoding uint8 and scaling frames to float32 in [0, 1].",
+                rank0_only=True,
+            )
+            _WARNED_POST_DECODE_OUTPUT_DTYPE = True
+        # Convert before resize so the fallback follows the native float32 transform order.
+        return VideoDecoder(video, **kwargs), [_uint8_frames_to_float32, *(transforms or [])]
+
+    if requests_float32:
+        _SUPPORTS_VIDEO_DECODER_OUTPUT_DTYPE = True
+    return decoder, post_decode_transforms
 
 
 def _apply_post_decode_transforms(

@@ -13,6 +13,7 @@ from typing import Any, BinaryIO
 import numpy as np
 import torch
 from torchcodec.decoders import VideoDecoder
+from torchcodec.transforms import Resize
 
 VideoSource = str | Path | bytes | io.BytesIO | BinaryIO
 
@@ -40,17 +41,21 @@ def _build_decoder(
     seek_mode: str = "exact",
     device: str = "cpu",
     custom_frame_mappings: bytes | None = None,
+    resize_size: tuple[int, int] | None = None,
+    output_dtype: torch.dtype = torch.uint8,
 ) -> Any:
     normalized_source = _normalize_source(source)
     # Preserve FFmpeg/TorchCodec's 0 sentinel so callers can request automatic thread selection.
     num_ffmpeg_threads = 0 if num_threads == 0 else max(num_threads, 1)
-    kwargs: dict[str, Any] = {"num_ffmpeg_threads": num_ffmpeg_threads}
+    kwargs: dict[str, Any] = {"num_ffmpeg_threads": num_ffmpeg_threads, "output_dtype": output_dtype}
     if custom_frame_mappings is None:
         kwargs["seek_mode"] = seek_mode
     else:
         kwargs["custom_frame_mappings"] = custom_frame_mappings
     if device != "cpu":
         kwargs["device"] = device
+    if resize_size is not None:
+        kwargs["transforms"] = [Resize(resize_size)]
     return VideoDecoder(normalized_source, **kwargs)
 
 
@@ -105,6 +110,8 @@ class TorchCodecVideoReader:
         device: str = "cpu",
         include_dimensions: bool = False,
         custom_frame_mappings: bytes | None = None,
+        resize_size: tuple[int, int] | None = None,
+        output_dtype: torch.dtype = torch.uint8,
     ) -> None:
         self._decoder = _build_decoder(
             source,
@@ -112,6 +119,8 @@ class TorchCodecVideoReader:
             seek_mode=seek_mode,
             device=device,
             custom_frame_mappings=custom_frame_mappings,
+            resize_size=resize_size,
+            output_dtype=output_dtype,
         )
         self.metadata = _metadata_from_frame(self._decoder, include_dimensions=include_dimensions)
 

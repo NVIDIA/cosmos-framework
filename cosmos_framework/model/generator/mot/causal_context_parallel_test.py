@@ -25,7 +25,7 @@ from cosmos_framework.model.generator.mot.causal_attention import (
 from cosmos_framework.model.generator.utils.kv_cache import ARMemoryValue, DualKVCache, TFNoisyMemoryValue
 
 
-def setup_distributed_environment():
+def setup_distributed_environment() -> tuple[int, int]:
     """Initializes the distributed environment."""
     if "RANK" not in os.environ:
         pytest.skip("requires distributed environment (run with: torchrun --nproc_per_node=2)")
@@ -33,7 +33,8 @@ def setup_distributed_environment():
         dist.init_process_group(backend="nccl", init_method="env://")
     rank = dist.get_rank()
     world_size = dist.get_world_size()
-    torch.cuda.set_device(rank)
+    local_rank = int(os.environ.get("LOCAL_RANK", rank % torch.cuda.device_count()))
+    torch.cuda.set_device(local_rank)
     return rank, world_size
 
 
@@ -205,7 +206,7 @@ def test_context_parallel_replay_teacher_forcing_matches_full_attention():
     if world_size < 2:
         pytest.skip("requires at least 2 GPUs")
 
-    device = torch.device("cuda", rank)
+    device = torch.device("cuda", torch.cuda.current_device())
     dtype = torch.bfloat16
     parallel_dims = ParallelDims(enable_inference_mode=True, world_size=world_size, dp_shard=1, cp=world_size)
     parallel_dims.build_meshes("cuda")
@@ -315,7 +316,7 @@ def test_context_parallel_ar_inference():
         print("Skipping test: requires at least 2 GPUs.")
         return
 
-    device = torch.device("cuda", rank)
+    device = torch.device("cuda", torch.cuda.current_device())
     parallel_dims = ParallelDims(enable_inference_mode=True, world_size=world_size, dp_shard=1, cp=world_size)
     parallel_dims.build_meshes("cuda")
     cp_mesh = parallel_dims.cp_mesh
@@ -435,7 +436,7 @@ def test_context_parallel_ar_frame0_stores_head_sharded():
     if world_size < 2:
         pytest.skip("requires at least 2 GPUs")
 
-    device = torch.device("cuda", rank)
+    device = torch.device("cuda", torch.cuda.current_device())
     parallel_dims = ParallelDims(enable_inference_mode=True, world_size=world_size, dp_shard=1, cp=world_size)
     parallel_dims.build_meshes("cuda")
     cp_mesh = parallel_dims.cp_mesh
@@ -557,7 +558,7 @@ def test_context_parallel_ar_round_trip():
     if world_size < 2:
         pytest.skip("requires at least 2 GPUs")
 
-    device = torch.device("cuda", rank)
+    device = torch.device("cuda", torch.cuda.current_device())
     parallel_dims = ParallelDims(enable_inference_mode=True, world_size=world_size, dp_shard=1, cp=world_size)
     parallel_dims.build_meshes("cuda")
     cp_mesh = parallel_dims.cp_mesh
@@ -717,7 +718,7 @@ def test_cp_ar_denoising_loop_equivalence():
     if world_size < 2:
         pytest.skip("requires at least 2 GPUs")
 
-    device = torch.device("cuda", rank)
+    device = torch.device("cuda", torch.cuda.current_device())
     parallel_dims = ParallelDims(enable_inference_mode=True, world_size=world_size, dp_shard=1, cp=world_size)
     parallel_dims.build_meshes("cuda")
     cp_mesh = parallel_dims.cp_mesh
@@ -841,7 +842,7 @@ def test_cfgp_cp_ar_denoising_loop_equivalence():
     if world_size < 4:
         pytest.skip("requires at least 4 GPUs")
 
-    device = torch.device("cuda", rank)
+    device = torch.device("cuda", torch.cuda.current_device())
     parallel_dims = ParallelDims(enable_inference_mode=True, world_size=world_size, dp_shard=1, cfgp=2, cp=2)
     parallel_dims.build_meshes("cuda")
     cp_mesh = parallel_dims.cp_mesh
@@ -1197,7 +1198,7 @@ def test_context_parallel_ar_compile_no_cuda_graphs():
     if world_size < 2:
         pytest.skip("requires at least 2 GPUs")
 
-    device = torch.device("cuda", rank)
+    device = torch.device("cuda", torch.cuda.current_device())
     parallel_dims = ParallelDims(enable_inference_mode=True, world_size=world_size, dp_shard=1, cp=world_size)
     parallel_dims.build_meshes("cuda")
     cp_mesh = parallel_dims.cp_mesh
@@ -1298,7 +1299,7 @@ def test_context_parallel_ar_compile_with_cuda_graphs():
     if world_size < 2:
         pytest.skip("requires at least 2 GPUs")
 
-    device = torch.device("cuda", rank)
+    device = torch.device("cuda", torch.cuda.current_device())
     dtype = torch.bfloat16
     parallel_dims = ParallelDims(enable_inference_mode=True, world_size=world_size, dp_shard=1, cp=world_size)
     parallel_dims.build_meshes("cuda")

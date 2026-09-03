@@ -84,7 +84,7 @@ def get_3d_mrope_ids_vae_tokens(
     base_temporal_compression_factor: int | None = None,
     start_frame_offset: int = 0,
     temporal_positions: torch.Tensor | None = None,
-    actual_temporal_compression_factor: int | None = None,
+    temporal_position_period: int | None = None,
 ) -> tuple[torch.Tensor, int | float]:
     """Generate 3D mRoPE position IDs for VAE vision tokens (image/video latents).
 
@@ -114,10 +114,10 @@ def get_3d_mrope_ids_vae_tokens(
         start_frame_offset: Offset added to frame indices before FPS scaling.
             Use 1 for action embeddings so they start at frame 1 instead of 0.
         temporal_positions: Optional explicit temporal coordinates for each latent
-            frame, in source-frame / actual-temporal-compression-factor units.
+            frame, in source-frame / temporal-compression-factor units.
             When provided, positions can be fractional and must have shape ``(grid_t,)``.
-        actual_temporal_compression_factor: Temporal compression factor that defines
-            ``temporal_positions``. Defaults to ``temporal_compression_factor``.
+        temporal_position_period: Optional period for latent-index temporal coordinates.
+            Multiview camera-major grids set this to the latent frames per view.
 
     Returns:
         Tuple of:
@@ -132,6 +132,8 @@ def get_3d_mrope_ids_vae_tokens(
     # Callers that want integer positions (e.g. images) pass fps=None.
     fps_modulation_enabled = fps is not None
     explicit_temporal_positions = temporal_positions is not None
+    if temporal_position_period is not None and temporal_position_period <= 0:
+        raise ValueError(f"temporal_position_period must be positive, got {temporal_position_period}.")
 
     # Default base_temporal_compression_factor to temporal_compression_factor if not specified
     effective_base_tcf = (
@@ -139,12 +141,6 @@ def get_3d_mrope_ids_vae_tokens(
         if base_temporal_compression_factor is not None
         else temporal_compression_factor
     )
-    effective_actual_tcf = (
-        actual_temporal_compression_factor
-        if actual_temporal_compression_factor is not None
-        else temporal_compression_factor
-    )
-
     if explicit_temporal_positions:
         assert temporal_positions is not None
         if temporal_positions.ndim != 1 or temporal_positions.shape[0] != grid_t:
@@ -155,11 +151,11 @@ def get_3d_mrope_ids_vae_tokens(
         # offsets from source-frame units into the same coordinate space.
         frame_indices = temporal_positions.to(dtype=torch.float32)  # [grid_t]
         if start_frame_offset != 0:
-            frame_indices = frame_indices + start_frame_offset / effective_actual_tcf  # [grid_t]
+            frame_indices = frame_indices + start_frame_offset / temporal_compression_factor  # [grid_t]
 
         if fps_modulation_enabled:
             scaled_t = (
-                frame_indices * effective_actual_tcf * (base_fps / effective_base_tcf) / fps + temporal_offset
+                frame_indices * temporal_compression_factor * (base_fps / effective_base_tcf) / fps + temporal_offset
             )  # [grid_t]
         else:
             scaled_t = frame_indices + temporal_offset  # [grid_t]
@@ -174,6 +170,8 @@ def get_3d_mrope_ids_vae_tokens(
 
         # Frame indices: 0, 1, 2, ..., grid_t-1
         frame_indices = torch.arange(grid_t, dtype=torch.float32)  # [grid_t]
+        if temporal_position_period is not None:
+            frame_indices = frame_indices.remainder(temporal_position_period)  # [grid_t]
 
         # Apply FPS scaling: scaled_time = (frame_index + start_frame_offset) / tps * base_tps
         scaled_t = (frame_indices + start_frame_offset) / tps * base_tps + temporal_offset  # [grid_t]
@@ -183,10 +181,11 @@ def get_3d_mrope_ids_vae_tokens(
     else:
         # No FPS modulation: use integer frame indices
         # Apply start_frame_offset for cross-modality alignment (e.g., action tokens start at frame 1)
+        frame_indices = torch.arange(grid_t, dtype=torch.long)  # [grid_t]
+        if temporal_position_period is not None:
+            frame_indices = frame_indices.remainder(temporal_position_period)  # [grid_t]
         t_index = (
-            (
-                torch.arange(grid_t, dtype=torch.long).view(-1, 1).expand(-1, grid_h * grid_w).flatten()
-            )  # [grid_t*grid_h*grid_w]
+            frame_indices.view(-1, 1).expand(-1, grid_h * grid_w).flatten()  # [grid_t*grid_h*grid_w]
             + int(temporal_offset)
             + start_frame_offset
         )
