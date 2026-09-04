@@ -1,7 +1,7 @@
 {
-  "_source_commit": "3f2febdb626b29757fe189849367fe8be500229b-dirty",
-  "_dest_commit": "4bc4392b615a2d6719313a368f81540117e5e405",
-  "_generated_at": "2026-09-03T13:04:28Z",
+  "_source_commit": "baffa0ba03aaf142afe4855895d9325b7521a8ce-dirty",
+  "_dest_commit": "6ea69664ab873320d026fcaebda3f9674332028e",
+  "_generated_at": "2026-09-04T05:52:09Z",
   "files": {
     "imaginaire/__init__.py": "cosmos_framework/__init__.py",
     "imaginaire/attention/__init__.py": "cosmos_framework/model/attention/__init__.py",
@@ -318,6 +318,7 @@
     "projects/cosmos3/cosmos3/datasets/augmentors/resolution_text_info.py": "cosmos_framework/data/generator/augmentors/resolution_text_info.py",
     "projects/cosmos3/cosmos3/datasets/augmentors/sequence_plan.py": "cosmos_framework/data/generator/augmentors/sequence_plan.py",
     "projects/cosmos3/cosmos3/datasets/augmentors/sound_sequence_plan.py": "cosmos_framework/data/generator/augmentors/sound_sequence_plan.py",
+    "projects/cosmos3/cosmos3/datasets/augmentors/sound_sequence_plan_test.py": "cosmos_framework/data/generator/augmentors/sound_sequence_plan_test.py",
     "projects/cosmos3/cosmos3/datasets/augmentors/text_tokenizer.py": "cosmos_framework/data/generator/augmentors/text_tokenizer.py",
     "projects/cosmos3/cosmos3/datasets/augmentors/text_transforms_for_image.py": "cosmos_framework/data/generator/augmentors/text_transforms_for_image.py",
     "projects/cosmos3/cosmos3/datasets/augmentors/text_transforms_for_video.py": "cosmos_framework/data/generator/augmentors/text_transforms_for_video.py",
