@@ -46,6 +46,7 @@ import os
 import re
 import socket
 import time
+from datetime import timedelta
 from multiprocessing import get_context
 from typing import Any, Dict, Optional, Protocol, Tuple, Union, runtime_checkable
 
@@ -164,6 +165,20 @@ class AsyncMode(str, enum.Enum):
     ASYNC_WITH_PINNED_MEM = "async_with_pinned_mem"
 
 
+# Ceiling on a single async save, enforced by the background process group. This is a budget for the
+# whole write phase rather than for any one rank: ranks that own no unique shard finish in ~1s and
+# then block in DCP's post-write gather, so their timeout starts almost as soon as the write begins
+# and expires while the ranks holding real shards are still uploading. On a 768-node 235B run a
+# healthy save takes 2-3 minutes end to end, but object-store slowdowns have stretched the model
+# shards alone past 40 minutes, so the ceiling is sized for a degraded store, not the expected case.
+BACKGROUND_SAVE_TIMEOUT = timedelta(minutes=60)
+
+# Ceiling on the main process waiting for a result from the background process. Must stay above
+# BACKGROUND_SAVE_TIMEOUT so that a stuck save is reported by the background process (which knows
+# why it failed) instead of surfacing here as an opaque queue timeout.
+SAVE_RESULT_TIMEOUT = timedelta(minutes=70)
+
+
 class Terminate:
     pass
 
@@ -221,6 +236,7 @@ def save_checkpoint_in_background(
         store=store,
         rank=int(os.environ["RANK"]),
         world_size=int(os.environ["WORLD_SIZE"]),
+        timeout=BACKGROUND_SAVE_TIMEOUT,
     )
 
     # Initialize checkpointing mechanism
@@ -253,7 +269,10 @@ def save_checkpoint_in_background(
             checkpoint_handler.save_state_dict_worker(state_dict, checkpoint_path)
             succeeded = True
         except Exception as e:
-            log.error(f"Error saving checkpoint to {checkpoint_path}: {e}")
+            # Logged from every rank: the ranks that own no unique shard are usually the first to
+            # hit the process group timeout, and rank 0 is typically still inside the collective
+            # with nothing to report, so a rank0-only log loses the only record of why a save died.
+            log.error(f"Error saving checkpoint to {checkpoint_path}: {e}", rank0_only=False)
             # continue because if the thread exits, the main thread keeps on adding to the queue
         finally:
             elapsed_time = time.monotonic() - start_time
@@ -1016,10 +1035,9 @@ class DistributedCheckpointer(AbstractCheckpointer):
         try:
             log.info(f"Waiting for checkpoint save result")
 
-            # Note that we set a timeout of 1 hour to avoid blocking the main process
-            # indefinitely. Gloo and NCCL timeouts are ~30 minutes, so this timeout
-            # should typically be sufficient.
-            save_done: SaveDone = self.mp_queue_recv.get(timeout=3600)
+            # Bounded so the main process never blocks indefinitely. Kept above
+            # BACKGROUND_SAVE_TIMEOUT so the background process reports the real failure first.
+            save_done: SaveDone = self.mp_queue_recv.get(timeout=SAVE_RESULT_TIMEOUT.total_seconds())
 
             log.info(f"Received checkpoint save result: {save_done}")
 
@@ -1031,7 +1049,7 @@ class DistributedCheckpointer(AbstractCheckpointer):
             success = save_done.succeeded
 
         except Exception as e:
-            log.error(f"Error waiting for checkpoint save result: {e}")
+            log.error(f"Error waiting for checkpoint save result: {e}", rank0_only=False)
 
         if not success:
             # Terminate training execution upon a failed checkpoint save attempt.

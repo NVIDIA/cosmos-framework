@@ -81,6 +81,7 @@ class Cosmos3VFMNetworkConfig(PretrainedConfig):
         temporal_compression_factor_sound=1,
         sound_latent_fps: int = 25,
         enable_input_bias: bool = True,
+        control_attends_sensor: bool = False,
         **kwargs,
     ):
         self.vision_gen = vision_gen
@@ -113,6 +114,7 @@ class Cosmos3VFMNetworkConfig(PretrainedConfig):
         self.use_multiview_flex_attention = use_multiview_flex_attention
         self.flex_attention_backend = flex_attention_backend
         self.attention_scope: AttentionScope = attention_scope
+        self.control_attends_sensor: bool = control_attends_sensor
         self.decomposed_temporal_window_seconds = decomposed_temporal_window_seconds
         self.temporal_compression_factor_vision = temporal_compression_factor_vision
         self.natten_parameter_list = natten_parameter_list
@@ -1282,6 +1284,7 @@ class Cosmos3VFMNetwork(PreTrainedModel):
                 num_und=causal_seq.shape[0],
                 causal_offsets=causal_offsets,
                 attention_scope=self.config.attention_scope,
+                control_attends_sensor=self.config.control_attends_sensor,
                 decomposed_temporal_window_seconds=self.config.decomposed_temporal_window_seconds,
             )
             # Carried with the mask because its kernels are only valid for the block size the

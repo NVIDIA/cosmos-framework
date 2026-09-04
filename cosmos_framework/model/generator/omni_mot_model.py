@@ -392,6 +392,7 @@ class OmniMoTModel(ImaginaireModel):
                 use_multiview_flex_attention=self.config.flex_attention.enabled,
                 flex_attention_backend=self.config.flex_attention.backend,
                 attention_scope=self.config.flex_attention.mask.attention_scope,
+                control_attends_sensor=self.config.flex_attention.mask.control_attends_sensor,
                 decomposed_temporal_window_seconds=self.config.flex_attention.mask.decomposed_temporal_window_seconds,
                 timestep_scale=1.0 / float(num_train_timesteps) * self.config.diffusion_expert_config.timestep_range,
                 action_dim=self.config.max_action_dim,
@@ -824,6 +825,9 @@ class OmniMoTModel(ImaginaireModel):
                 self.tokenizer_lidar_gen.temporal_compression_factor if self.tokenizer_lidar_gen is not None else None
             ),
             vision_temporal_position_mode=self.config.diffusion_expert_config.vision_temporal_position_mode,
+            align_temporal_positions_across_views=(
+                self.config.diffusion_expert_config.align_temporal_positions_across_views
+            ),
             video_temporal_causal=self.config.video_temporal_causal,
             action_dim=self.config.max_action_dim,
             initial_mrope_temporal_offset=initial_mrope_temporal_offset,
@@ -1466,9 +1470,39 @@ class OmniMoTModel(ImaginaireModel):
         raw_action_dim: list[torch.Tensor] | None = None,
         action_valid_mask: list[torch.Tensor] | None = None,
         normalize_by_active: bool = False,
+        exclude_fully_conditioned_items: bool = False,
         action_slot_stats: ActionSlotLossStats | None = None,
     ) -> tuple[torch.Tensor, torch.Tensor]:
-        """Preserve the instance API used by posttrain and interactive subclasses."""
+        """Compute flow matching loss for a modality.
+
+        Args:
+            pred: Predicted velocity field (list of tensors, one per sample).
+            target: Target velocity field (list of tensors, one per sample).
+                Under rectified flow the target is ``v = eps - x0``.
+            condition_mask: Mask where 1 = clean/conditioning, 0 = noisy/generation (list of tensors).
+            timesteps: Diffusion timesteps for time weighting. Shape [B,1] for
+                base/teacher_forcing (all frames share one timestep) or [B,T_max]
+                for diffusion_forcing (per-frame independent timesteps). Time weights
+                are applied per-frame before averaging, so non-uniform weight functions
+                are handled correctly.
+            has_valid_tokens: Whether this modality has valid noisy tokens.
+            rectified_flow: The rectified flow object for time weighting.
+            normalize_by_active: When True, normalize per-instance loss by the count of
+                active (noisy) elements rather than all elements. Preserves the
+                ``sum / active_count`` semantics needed for distillation critics where
+                conditioned frames contribute no signal and should not dilute the
+                denominator.
+            exclude_fully_conditioned_items: When True, omit items with no noisy
+                tokens from the final scalar mean while retaining their per-instance
+                zero entries.
+            action_slot_stats: Optional collector for detached normalized per-sample
+                losses over the canonical unified Action slots.
+
+        Returns:
+            tuple: A tuple containing two elements:
+                - Flow matching loss (or dummy loss for gradient consistency).
+                - Per-instance loss (or dummy loss for gradient consistency).
+        """
         return compute_flow_matching_loss(
             pred=pred,
             target=target,
@@ -1480,6 +1514,7 @@ class OmniMoTModel(ImaginaireModel):
             raw_action_dim=raw_action_dim,
             action_valid_mask=action_valid_mask,
             normalize_by_active=normalize_by_active,
+            exclude_fully_conditioned_items=exclude_fully_conditioned_items,
             action_slot_stats=action_slot_stats,
         )
 
@@ -1594,6 +1629,9 @@ class OmniMoTModel(ImaginaireModel):
             # With no camera stream there are no noisy vision tokens, so this returns its dummy
             # loss over the network's zero-weighted vision predictions. That is what keeps
             # vae2llm and llm2vae in the backward graph on every rank, which FSDP requires.
+            # Transfer teacher forcing flattens clean controls and the generated target into
+            # one vision-item list. Keep the per-item vector aligned for logging, but do not
+            # let zero-loss controls dilute the scalar training objective.
             fm_loss_vision, fm_loss_vision_per_instance = compute_flow_matching_loss(
                 pred=out_net["preds_vision"],
                 target=gen_data_noised.vt_target_vision,
@@ -1603,15 +1641,17 @@ class OmniMoTModel(ImaginaireModel):
                 rectified_flow=rectified_flow_vision,
                 tensor_kwargs_fp32=self.tensor_kwargs_fp32,
                 normalize_by_active=normalize_by_active,
+                exclude_fully_conditioned_items=getattr(self.config, "causal_training_strategy", None)
+                == "teacher_forcing",
             )
             loss_scale = (
                 rf_cfg.image_loss_scale if is_image_batch and rf_cfg.image_loss_scale is not None else rf_cfg.loss_scale
             )
-            total_loss += fm_loss_vision * loss_scale
-            losses_dict["flow_matching_loss_vision"] = fm_loss_vision
-            losses_dict["flow_matching_loss_vision_per_instance"] = fm_loss_vision_per_instance
+            total_loss += fm_loss_vision * loss_scale  # []
+            losses_dict["flow_matching_loss_vision"] = fm_loss_vision  # []
+            losses_dict["flow_matching_loss_vision_per_instance"] = fm_loss_vision_per_instance  # [N]
         else:
-            losses_dict["flow_matching_loss_vision"] = torch.tensor(0.0, **self.tensor_kwargs_fp32)
+            losses_dict["flow_matching_loss_vision"] = torch.tensor(0.0, **self.tensor_kwargs_fp32)  # []
 
         # Same condition the network builds its LiDAR projections under, so the two cannot
         # disagree about whether this run has a LiDAR stream to supervise.
@@ -1632,8 +1672,8 @@ class OmniMoTModel(ImaginaireModel):
                     normalize_by_active=normalize_by_active,
                 )
                 lidar_loss_scale = rf_cfg.lidar_loss_scale if rf_cfg.lidar_loss_scale is not None else rf_cfg.loss_scale
-                total_loss += fm_loss_lidar * lidar_loss_scale
-                losses_dict["flow_matching_loss_lidar"] = fm_loss_lidar
+                total_loss += fm_loss_lidar * lidar_loss_scale  # []
+                losses_dict["flow_matching_loss_lidar"] = fm_loss_lidar  # []
             else:
                 # No LiDAR data in this batch. Connect the network's dummy preds_lidar to the
                 # loss so lidar2llm / llm2lidar stay in the backward graph, or FSDP's gradient
@@ -1650,9 +1690,9 @@ class OmniMoTModel(ImaginaireModel):
                     "preds_lidar must carry the network's zero-weighted probe so lidar2llm / "
                     "llm2lidar stay in the backward graph on a batch with no LiDAR"
                 )
-                dummy_loss = 0.0 * sum(p.sum() for p in preds_lidar)
-                total_loss += dummy_loss
-                losses_dict["flow_matching_loss_lidar"] = dummy_loss
+                dummy_loss = 0.0 * sum(p.sum() for p in preds_lidar)  # []
+                total_loss += dummy_loss  # []
+                losses_dict["flow_matching_loss_lidar"] = dummy_loss  # []
 
         if self.config.action_gen:
             if data_batch_packed.action is not None:

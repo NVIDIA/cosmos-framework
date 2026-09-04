@@ -124,6 +124,7 @@ def pack_input_sequence(
     sound_base_temporal_compression_factor: int | None = None,
     temporal_compression_factor: int = 4,
     vision_temporal_position_mode: str = "latent_index",
+    align_temporal_positions_across_views: bool = False,
     video_temporal_causal: bool = False,
     action_dim: int = 32,
     initial_mrope_temporal_offset: int | float = 0,
@@ -166,8 +167,11 @@ def pack_input_sequence(
         temporal_compression_factor: VAE temporal compression factor (default 4).
             Obtained from the VAE tokenizer at runtime.
         vision_temporal_position_mode: Temporal coordinates used for unified_3d_mrope vision tokens.
-            "latent_index" keeps legacy positions; "uniae_source_right_edge" uses
+            "latent_index" uses latent-frame indexes; "uniae_source_right_edge" uses
             per-latent positions from gen_data_clean.temporal_positions_vision.
+        align_temporal_positions_across_views: If True, camera-major views within one
+            vision item reuse the same local temporal coordinates. Disabled by default and requires
+            gen_data_clean.num_views_per_vision_item to identify multiview items.
         video_temporal_causal: If True, pack vision and optional action as temporal-causal
             supertokens instead of separate modality blocks.
         action_dim: Action feature dimension used when temporal-causal packing creates
@@ -199,6 +203,13 @@ def pack_input_sequence(
         )
     has_any_vision = any(plan.has_vision for plan in sequence_plans)
     explicit_vision_temporal_positions_active = vision_temporal_position_mode != "latent_index" and has_any_vision
+    has_multiview_vision_items = (
+        has_any_vision
+        and gen_data_clean.num_views_per_vision_item is not None
+        and any(num_views > 1 for num_views in gen_data_clean.num_views_per_vision_item)
+    )
+    if has_multiview_vision_items and video_temporal_causal:
+        raise NotImplementedError("video_temporal_causal=True is not wired for multiview vision items yet.")
     if explicit_vision_temporal_positions_active:
         if gen_data_clean.temporal_positions_vision is None:
             raise ValueError(
@@ -407,9 +418,9 @@ def pack_input_sequence(
                 # temporal mRoPE grid. We snapshot the offset before the loop and
                 # rewind to it before each item, so every item produces identical
                 # temporal IDs. Each pack_vision_tokens call still advances the
-                # offset by latent_t internally; in shared-grid mode the post-loop
-                # offset equals snapshot + latent_t (single-clip semantics for
-                # downstream EOV / next-modality tokens).
+                # offset internally; in shared-grid mode the post-loop offset equals
+                # the first item's effective temporal span (T_view when temporal
+                # positions are also shared across camera views).
                 shared_grid = sequence_plan.share_vision_temporal_positions and num_vis > 1
                 temporal_groups = sequence_plan.vision_temporal_position_groups
                 if temporal_groups is not None:
@@ -471,6 +482,14 @@ def pack_input_sequence(
                     if gen_data_clean.num_views_per_vision_item is not None:
                         num_views = gen_data_clean.num_views_per_vision_item[flat_vision_idx]
                     latent_t = input_vision_tokens.shape[2]
+                    temporal_position_period: int | None = None
+                    if align_temporal_positions_across_views and num_views > 1:
+                        if latent_t % num_views != 0:
+                            raise ValueError(
+                                "Aligning temporal positions across views requires latent_t divisible by num_views: "
+                                f"got latent_t={latent_t}, num_views={num_views} for item {flat_vision_idx}."
+                            )
+                        temporal_position_period = latent_t // num_views
                     item_condition_frames = expand_multiview_condition_frame_indexes(
                         item_condition_frames,
                         num_views=num_views,
@@ -551,6 +570,7 @@ def pack_input_sequence(
                         base_fps=base_fps,
                         temporal_compression_factor=temporal_compression_factor,
                         vision_temporal_positions=vision_temporal_positions,
+                        temporal_position_period=temporal_position_period,
                     )
                     if temporal_groups is not None:
                         grouped_end_offset = max(grouped_end_offset, seq_builder.mrope_temporal_offset)
@@ -576,7 +596,13 @@ def pack_input_sequence(
                     if gen_data_clean.num_lidar_items_per_sample is not None
                     else 1
                 )
+                if lidar_temporal_compression_factor is None:
+                    raise ValueError("lidar_temporal_compression_factor must be set when has_lidar=True")
+
                 sample_lidar_fps = _get_optional_fps(gen_data_clean.fps_lidar, sample_idx)
+                if sample_lidar_fps is None:
+                    raise ValueError("sample_lidar_fps must be set when has_lidar=True")
+
                 # Both sensors of a sample were cut from one window, so every LiDAR item starts
                 # where the vision items started and the sample's clock ends at whichever stream
                 # reaches furthest -- a 9.4 s camera clip and the sweeps taken during it.
@@ -603,8 +629,8 @@ def pack_input_sequence(
                         lidar_fps=sample_lidar_fps,
                         enable_fps_modulation=enable_fps_modulation,
                         base_fps=base_fps,
-                        temporal_compression_factor=temporal_compression_factor,
-                        actual_temporal_compression_factor=lidar_temporal_compression_factor,
+                        temporal_compression_factor=lidar_temporal_compression_factor,
+                        base_temporal_compression_factor=temporal_compression_factor,
                     )
                     streams_end_offset = max(streams_end_offset, seq_builder.mrope_temporal_offset)
 

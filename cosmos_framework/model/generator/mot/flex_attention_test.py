@@ -15,6 +15,7 @@ from torch.nn.attention.flex_attention import BlockMask, create_block_mask
 from cosmos_framework.configs.base.defaults.flex_attention import (
     ATTENTION_SCOPES,
     AttentionScope,
+    FlexAttentionMaskConfig,
 )
 from cosmos_framework.model.generator.mot import flex_attention as flex_attention_module
 from cosmos_framework.model.generator.mot.attention import build_packed_sequence
@@ -71,6 +72,12 @@ _GEN_ALIGNMENT = math.lcm(_TRITON_BACKEND.full_seq_alignment, _FLASH_BACKEND.ful
 _UND_ALIGNMENT = math.lcm(_TRITON_BACKEND.causal_seq_alignment, _FLASH_BACKEND.causal_seq_alignment)
 
 
+@pytest.mark.L0
+def test_control_attends_sensor_defaults_off() -> None:
+    """Existing configs preserve the one-way sensor-to-control mask unless opted in."""
+    assert not FlexAttentionMaskConfig().control_attends_sensor
+
+
 def _metadata_from_tokens(
     tokens: list[dict],
     seq_len: int | None = None,
@@ -78,12 +85,13 @@ def _metadata_from_tokens(
     und_samples: list[int] | None = None,
     attention_scope: str = "all_views",
     decomposed_temporal_window_seconds: float | None = None,
+    control_attends_sensor: bool = False,
 ) -> FlexMetadata:
     """Build a :class:`FlexMetadata` from an explicit list of GEN token descriptors.
 
     Each token dict has ``s`` (sample), ``t`` (frame), ``v`` (view), ``noisy`` (bool),
     and optionally ``control`` (bool, defaults ``False``) marking a control (e.g. WSM)
-    token, and ``ts`` (float, defaults to ``t``) marking its real capture time. Positions
+    token and ``ts`` (float, defaults to ``t``) marking its real capture time. Positions
     beyond ``len(tokens)`` are padding and get the ``-1`` / ``-1.0`` / ``False`` sentinels.
 
     ``und_samples`` prepends the UND half of the fused key stream: one sample id per
@@ -130,6 +138,7 @@ def _metadata_from_tokens(
         timestamp=timestamp,
         num_und=num_und,
         attention_scope=cast(AttentionScope, attention_scope),
+        control_attends_sensor=control_attends_sensor,
         decomposed_temporal_window_seconds=decomposed_temporal_window_seconds,
     )
 
@@ -169,12 +178,30 @@ def _make_multiview_tokens() -> list[dict]:
     return tokens
 
 
+def _make_control_sensor_tokens() -> list[dict]:
+    """Camera and LiDAR controls and targets that isolate every optional-edge gate."""
+    return [
+        dict(s=0, t=1, v=0, noisy=False, control=True),  # 0: vision control query
+        dict(s=0, t=0, v=0, noisy=False),  # 1: past conditioning RGB
+        dict(s=0, t=0, v=0, noisy=True),  # 2: past noisy RGB
+        dict(s=0, t=1, v=0, noisy=False),  # 3: current conditioning RGB
+        dict(s=0, t=1, v=0, noisy=True),  # 4: current noisy RGB
+        dict(s=0, t=2, v=0, noisy=False),  # 5: future conditioning RGB
+        dict(s=0, t=2, v=0, noisy=True),  # 6: future noisy RGB
+        dict(s=0, t=0, v=1, noisy=False),  # 7: LiDAR conditioning target on its own view offset
+        dict(s=1, t=0, v=0, noisy=False),  # 8: other-sample camera target
+        dict(s=0, t=1, v=1, noisy=True),  # 9: LiDAR noisy target on its own view offset
+        dict(s=0, t=1, v=1, noisy=False, control=True),  # 10: LiDAR control
+    ]
+
+
 def _reference_visibility(
     tokens: list[dict],
     seq_len: int,
     und_samples: list[int] | None = None,
     attention_scope: AttentionScope = "all_views",
     decomposed_temporal_window_seconds: float | None = None,
+    control_attends_sensor: bool = False,
 ) -> torch.Tensor:
     """Ground-truth ``[seq_len, num_und + seq_len]`` bool ``M[q, k] = q attends to k``.
 
@@ -184,9 +211,11 @@ def _reference_visibility(
     "same sample" alone, and is rectangular as the fused mask is.
 
     ``attention_scope`` narrows the sensor<->sensor reach, regardless of whether a token is
-    conditioning or noisy; it never widens a control token's reach, which is always its
-    own view, any frame. Spelled out per scope rather than derived from the
-    implementation's gates, so a rule that changes shape has to be restated here.
+    conditioning or noisy; a control token is always confined to its own view, any frame.
+    ``control_attends_sensor`` optionally adds every non-control sensor key in a control's
+    own view, across all frames and noise states. Camera and LiDAR use the same rule.
+    Spelled out per scope rather than derived from the implementation's gates, so a rule
+    that changes shape has to be restated here.
 
     ``decomposed_temporal_window_seconds`` swaps ``"decomposed"``'s "same frame index" half
     for "any key's ``ts`` within that many seconds at or before the query's", using each
@@ -226,11 +255,12 @@ def _reference_visibility(
             k_control = dk.get("control", False)
             same_view = dq["v"] == dk["v"]
             if q_control:
-                ok = k_control and same_view  # control Q -> control K: own view; never RGB K.
+                control_to_sensor = control_attends_sensor and not k_control
+                ok = same_view and (k_control or control_to_sensor)
             elif k_control:
-                ok = same_view  # RGB Q (any) -> control K: own view, any frame.
+                ok = same_view  # Sensor Q (any) -> control K: own view, any frame.
             else:
-                ok = in_scope(dq, dk)  # RGB Q -> RGB K: within scope, independent of noise state.
+                ok = in_scope(dq, dk)  # Sensor Q -> sensor K: within scope, independent of noise state.
             m[q, num_und + k] = ok
     return m
 
@@ -268,23 +298,33 @@ def _mask_mod_to_dense(metadata: FlexMetadata) -> torch.Tensor:
 
 
 def _multi_block_tokens() -> list[dict]:
-    """A layout several blocks wide: 2 samples x (noisy + control) x 2 views x 7 frames.
+    """A layout several blocks wide: 2 samples x (RGB + control) x 2 views x 7 frames.
 
     Each ``(item, frame, view)`` cell holds 40 tokens, so blocks straddle cell
-    boundaries (partial blocks) while the leading blocks of each noisy item fall
-    entirely inside the always-visible noisy region (full blocks). Both kinds have to
-    appear at either geometry, which is what sets the frame count: an item spans 560
-    tokens here, so whole blocks fit inside one even at FA4's 256-row query tile.
+    boundaries (partial blocks) while the leading blocks of each RGB item fall
+    entirely inside the always-visible sensor region (full blocks). The RGB item's first
+    two frames are clean and the rest are noisy, so enabled control rows exercise both
+    noise states. Both block kinds have to appear at either geometry, which is what sets
+    the frame count: an item spans 560 tokens here, so whole blocks fit inside one even at
+    FA4's 256-row query tile.
     2240 real tokens, leaving 64 padding positions in the padded sequence below.
     """
     tokens: list[dict] = []
     for sample in range(2):
         for item in range(2):
-            noisy_item = item == 0
+            rgb_item = item == 0
             for view in range(2):
                 for frame in range(7):
                     for _ in range(40):
-                        tokens.append(dict(s=sample, t=frame, v=view, noisy=noisy_item, ct=-1 if noisy_item else item))
+                        tokens.append(
+                            dict(
+                                s=sample,
+                                t=frame,
+                                v=view,
+                                noisy=rgb_item and frame >= 2,
+                                control=not rgb_item,
+                            )
+                        )
     return tokens
 
 
@@ -377,14 +417,23 @@ def test_build_block_mask_matches_the_mask_mod_it_was_built_from(backend: FlexBa
 
 @pytest.mark.L0
 @_GEOMETRIES
-def test_build_block_mask_matches_create_block_mask(backend: FlexBackend) -> None:
+@pytest.mark.parametrize(
+    "control_attends_sensor",
+    (False, True),
+    ids=("control_one_way", "control_reaches_sensor"),
+)
+def test_build_block_mask_matches_create_block_mask(backend: FlexBackend, control_attends_sensor: bool) -> None:
     """The run-collapsed build agrees with torch's dense-evaluation builder.
 
     Run at both geometries because the collapse is where a coarser tile can go wrong: a block
     is full only if every run it covers is, and FA4's asymmetric 256x128 makes each block span
     twice the rows.
     """
-    metadata = _metadata_from_tokens(_multi_block_tokens(), seq_len=_MULTI_BLOCK_SEQ_LEN)
+    metadata = _metadata_from_tokens(
+        _multi_block_tokens(),
+        seq_len=_MULTI_BLOCK_SEQ_LEN,
+        control_attends_sensor=control_attends_sensor,
+    )
     q_block, kv_block = backend.block_size
     num_q_blocks, num_kv_blocks = metadata.q_len // q_block, metadata.seq_len // kv_block
 
@@ -570,7 +619,12 @@ def test_multiview_mask_mod_captures_only_tensors() -> None:
     compiled run on Hopper or Blackwell would notice.
     """
     und_samples = _und_samples(12, 12, length=_UND_ALIGNMENT)
-    metadata = _metadata_from_tokens(_make_multiview_tokens(), seq_len=_GEN_ALIGNMENT, und_samples=und_samples)
+    metadata = _metadata_from_tokens(
+        _make_multiview_tokens(),
+        seq_len=_GEN_ALIGNMENT,
+        und_samples=und_samples,
+        control_attends_sensor=True,
+    )
     assert metadata.num_und > 0  # the fused stream, i.e. the case that would need a shift
 
     captured = _mask_mod_captures(metadata)
@@ -603,13 +657,28 @@ def test_multiview_mask_mod_captures_no_offset_views() -> None:
 
 @pytest.mark.L0
 @_NOISY_SCOPES
-def test_multiview_mask_mod_matches_reference(attention_scope: AttentionScope) -> None:
-    tokens = _make_multiview_tokens()
+@pytest.mark.parametrize(
+    "control_attends_sensor",
+    (False, True),
+    ids=("control_one_way", "control_reaches_sensor"),
+)
+def test_multiview_mask_mod_matches_reference(attention_scope: AttentionScope, control_attends_sensor: bool) -> None:
+    tokens = _make_control_sensor_tokens()
     seq_len = len(tokens)
-    metadata = _metadata_from_tokens(tokens, seq_len=seq_len, attention_scope=attention_scope)
+    metadata = _metadata_from_tokens(
+        tokens,
+        seq_len=seq_len,
+        attention_scope=attention_scope,
+        control_attends_sensor=control_attends_sensor,
+    )
 
     got = _mask_mod_to_dense(metadata)
-    expected = _reference_visibility(tokens, seq_len, attention_scope=attention_scope)
+    expected = _reference_visibility(
+        tokens,
+        seq_len,
+        attention_scope=attention_scope,
+        control_attends_sensor=control_attends_sensor,
+    )
     assert torch.equal(got, expected)
 
 
@@ -753,6 +822,36 @@ def test_multiview_mask_mod_specific_rules() -> None:
     # not the other view's RGB or control tokens.
     assert m[3, 3] and m[3, 7]
     assert not m[3, 0] and not m[3, 2] and not m[3, 4] and not m[3, 6]
+
+
+@pytest.mark.L0
+def test_control_option_reaches_all_same_view_sensor_frames_for_camera_and_lidar() -> None:
+    """The optional edge treats camera and LiDAR controls symmetrically by view."""
+    tokens = _make_control_sensor_tokens()
+    disabled = _mask_mod_to_dense(_metadata_from_tokens(tokens))  # [N,N], bool
+    enabled = _mask_mod_to_dense(_metadata_from_tokens(tokens, control_attends_sensor=True))  # [N,N], bool
+
+    camera_control = 0
+    camera_targets = torch.tensor([1, 2, 3, 4, 5, 6])  # [6]
+    lidar_targets = torch.tensor([7, 9])  # [2]
+    lidar_control = 10
+    assert not disabled[camera_control, camera_targets].any()
+    assert not disabled[lidar_control, lidar_targets].any()
+    assert enabled[camera_control, camera_targets].all()
+    assert enabled[lidar_control, lidar_targets].all()
+
+    other_sample_target = 8
+    assert not enabled[camera_control, lidar_targets].any()
+    assert not enabled[lidar_control, camera_targets].any()
+    assert not enabled[camera_control, other_sample_target]
+    assert not enabled[lidar_control, other_sample_target]
+
+    # The only newly admitted pairs are each control row's same-view sensor keys.
+    expected_new_edges = torch.zeros_like(enabled)  # [q_len, kv_len], bool
+    expected_new_edges[camera_control, camera_targets] = True
+    expected_new_edges[lidar_control, lidar_targets] = True
+    assert torch.equal(enabled & ~disabled, expected_new_edges)
+    assert not (disabled & ~enabled).any()
 
 
 @pytest.mark.L0
@@ -1063,7 +1162,7 @@ def _expected_tokens(case: dict) -> list[dict]:
 
     ``is_control_per_item`` and ``view_offsets_per_item`` are read straight off the case,
     as :func:`build_multiview_flex_metadata` reads them off its arguments; both default to
-    the single-stream, no-control layout when a case omits them.
+    the single-stream, no-control sensor layout when omitted.
     """
     tokens: list[dict] = []
     item_idx = 0
@@ -1099,7 +1198,7 @@ def _case_items(case: dict) -> list[list[MaskItem]]:
 
     The cases stay column-shaped because that reads better as table data; this is the one
     place that transposes them, so a case omitting ``view_offsets_per_item`` or
-    ``is_control_per_item`` gets those fields' own defaults.
+    ``is_control_per_item`` gets those fields' defaults.
     """
     num_items = len(case["token_shapes"])
     view_offsets = case.get("view_offsets_per_item") or [0] * num_items
@@ -1126,6 +1225,7 @@ def _build_case_metadata(
     case: dict,
     attention_scope: AttentionScope = "all_views",
     decomposed_temporal_window_seconds: float | None = None,
+    control_attends_sensor: bool = False,
 ) -> tuple[FlexMetadata, int]:
     """Run the builder on a case; returns the metadata and the real token count."""
     offsets = _case_offsets(case)
@@ -1136,6 +1236,7 @@ def _build_case_metadata(
         items_per_sample=_case_items(case),
         device=torch.device("cpu"),
         attention_scope=attention_scope,
+        control_attends_sensor=control_attends_sensor,
         decomposed_temporal_window_seconds=decomposed_temporal_window_seconds,
     )
     return metadata, num_real
@@ -1183,13 +1284,22 @@ def test_build_multiview_flex_metadata_matches_reference_layout(case_name: str) 
 
 @pytest.mark.L0
 @pytest.mark.parametrize("case_name", sorted(_MULTIVIEW_CASES))
-def test_build_multiview_flex_metadata_mask_matches_reference(case_name: str) -> None:
+@pytest.mark.parametrize(
+    "control_attends_sensor",
+    (False, True),
+    ids=("control_one_way", "control_reaches_sensor"),
+)
+def test_build_multiview_flex_metadata_mask_matches_reference(case_name: str, control_attends_sensor: bool) -> None:
     """The built metadata drives exactly the documented visibility rules."""
     case = _MULTIVIEW_CASES[case_name]
-    metadata, _ = _build_case_metadata(case)
+    metadata, _ = _build_case_metadata(case, control_attends_sensor=control_attends_sensor)
 
     got = _mask_mod_to_dense(metadata)
-    expected = _reference_visibility(_expected_tokens(case), metadata.seq_len)
+    expected = _reference_visibility(
+        _expected_tokens(case),
+        metadata.seq_len,
+        control_attends_sensor=control_attends_sensor,
+    )
     assert torch.equal(got, expected)
 
 
@@ -2075,6 +2185,54 @@ def _effective_token_mask(block_mask: BlockMask) -> torch.Tensor:
         return blocks.repeat_interleave(q_block, dim=0).repeat_interleave(kv_block, dim=1)
 
     return _to_tokens(full) | (_to_tokens(partial) & elementwise)
+
+
+@pytest.mark.L0
+@_GEOMETRIES
+def test_build_multiview_block_mask_propagates_control_attends_sensor_option(backend: FlexBackend) -> None:
+    """The composed builder adds exactly the all-frame control-to-sensor rectangle."""
+    cell_tokens = 128
+    latent_t = 3
+    item_tokens = latent_t * cell_tokens
+    seq_len = 2 * item_tokens
+    offsets = torch.tensor([0, seq_len], dtype=torch.int32)  # [2]
+    control_condition = torch.ones(latent_t, 1, 1)  # [T,1,1]
+    target_condition = torch.tensor([1.0, 0.0, 0.0]).view(latent_t, 1, 1)  # [T,1,1]
+    items = [
+        [
+            MaskItem(
+                token_shape=(latent_t, cell_tokens, 1),
+                condition_mask=control_condition,
+                num_views=1,
+                is_control=True,
+            ),
+            MaskItem(
+                token_shape=(latent_t, cell_tokens, 1),
+                condition_mask=target_condition,
+                num_views=1,
+            ),
+        ]
+    ]
+    kwargs = dict(
+        seq_len=seq_len,
+        full_q_offsets=offsets,
+        items_per_sample=items,
+        device=torch.device("cpu"),
+        block_size=backend.block_size,
+    )
+
+    disabled = build_multiview_block_mask(**kwargs)  # type: ignore[arg-type]
+    enabled = build_multiview_block_mask(  # type: ignore[arg-type]
+        **kwargs, control_attends_sensor=True
+    )
+    disabled_dense = _effective_token_mask(disabled)  # [S,S], bool
+    enabled_dense = _effective_token_mask(enabled)  # [S,S], bool
+    expected_new_edges = torch.zeros_like(enabled_dense)  # [S,S], bool
+    # Every control query may read every target sensor key, whether clean or noisy.
+    expected_new_edges[:item_tokens, item_tokens : 2 * item_tokens] = True
+
+    assert torch.equal(enabled_dense & ~disabled_dense, expected_new_edges)
+    assert not (disabled_dense & ~enabled_dense).any()
 
 
 def _wiring_pack(x: torch.Tensor, *, backend: FlexBackend) -> SequencePack:

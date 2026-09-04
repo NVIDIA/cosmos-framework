@@ -14,23 +14,41 @@ from __future__ import annotations
 
 import contextlib
 import itertools
-from collections.abc import Callable, Generator
+from collections.abc import Callable, Generator, Sequence
 from typing import Any, Literal
+from unittest.mock import patch
 
 import attrs
 import torch
 import torch.distributed as dist
 from loguru import logger as log
+from omegaconf import OmegaConf
 from typing_extensions import override
 
+import cosmos_framework.model.generator.omni_mot_model as omni_mot_model_module
 from cosmos_framework.configs.base.defaults.model_config import OmniMoTModelConfig
 from cosmos_framework.model.generator.omni_mot_model import OmniMoTModel, _broadcast_seed
 from cosmos_framework.model.generator.utils.data_and_condition import GenerationDataClean
 from cosmos_framework.model.generator.utils.memory import MemoryState
-from cosmos_framework.data.generator.sequence_packing import PackedSequence
+from cosmos_framework.data.generator.sequence_packing import PackedSequence, build_sequence_plans_from_data_batch
 from cosmos_framework.data.generator.sequence_packing.modality import compute_text_split_length
+from cosmos_framework.configs.base.defaults.causal_flex_attention import CausalFlexAttentionConfig
+from cosmos_framework.configs.base.defaults.replay_attention import (
+    TeacherForcingKVImplementation,
+    TeacherForcingReplayPolicyConfig,
+)
 from cosmos_framework.model.generator.attention_io_layout import AttentionIOLayout
 from cosmos_framework.model.generator.mot.causal_attention import dispatch_attention_with_memory
+from cosmos_framework.model.generator.mot.causal_cosmos3_vfm_network import (
+    InteractiveCosmos3VFMNetwork,
+    build_interactive_multiview_mask_items,
+)
+from cosmos_framework.model.generator.mot.causal_flex_attention import (
+    MultiviewTransferARCurrentRole,
+    MultiviewTransferARMemoryLayout,
+    build_multiview_transfer_ar_memory_layout,
+    build_teacher_forcing_clean_target_token_indexes,
+)
 from cosmos_framework.model.generator.mot.post_saturation.installer import install_ar_post_saturation_mode
 from cosmos_framework.model.generator.mot.post_saturation.runtime import (
     is_ar_post_saturation_cuda_graph_frame,
@@ -42,16 +60,24 @@ from cosmos_framework.model.generator.mot.post_saturation.runtime import (
 from cosmos_framework.model.generator.mot.post_saturation.static_compile import (
     validate_ar_static_und_cache_lengths,
 )
-from cosmos_framework.model.generator.teacher_forcing import make_teacher_forcing_clean_pack
+from cosmos_framework.model.generator.teacher_forcing import (
+    make_teacher_forcing_clean_pack,
+    mark_modality_as_clean_condition,
+)
 from cosmos_framework.model.generator.utils.kv_cache import (
     ARMemoryState,
     DualKVCache,
+    FlexARMemoryState,
     TeacherForcingMemoryState,
 )
 from cosmos_framework.model.generator.utils.kv_storage_backend import validate_kv_cache_dtype
 from cosmos_framework.model.generator.utils.nvfp4 import resolve_legacy_nvfp4_mode
 from cosmos_framework.data.generator.sequence_packing.autoregressive import pack_input_sequence_autoregressive
 from cosmos_framework.utils.generator.data_batch import condition_frame_indexes_vision_from_batch
+
+_ARBranch = Literal["conditional", "unconditional"]
+_ARBranchRunner = Callable[[PackedSequence, torch.Tensor, torch.Tensor, _ARBranch], torch.Tensor]
+_TEACHER_FORCING_REPLAY_STRATEGIES: tuple[str, ...] = ("teacher_forcing", "teacher_forcing_dcm")
 
 
 class GaussianBellTrainTimeWeight:
@@ -96,6 +122,23 @@ class OmniMoTCausalModelConfig(OmniMoTModelConfig):
     base-class logic moves behind overridable hooks.
     """
 
+    # The base VFM config remains unchanged. This subclass adds replayed
+    # teacher-forcing connectivity only for interactive causal models.
+    flex_attention: CausalFlexAttentionConfig = CausalFlexAttentionConfig()
+
+    # Select the replay implementation through one causal-model input instead
+    # of reconstructing it from lower-level attention settings. The model
+    # resolves this selector to the internal two-way FlexAttention or three-way
+    # attention layout while it builds the network.
+    teacher_forcing_kv_implementation: TeacherForcingKVImplementation = attrs.field(
+        default="singleview_threeway_kv",
+        validator=attrs.validators.in_(("multiview_flex_kv", "singleview_threeway_kv")),
+    )
+
+    # Backend-neutral connectivity for clean replay and transfer control. Both
+    # replay implementations consume the same policy object.
+    teacher_forcing_replay_policy: TeacherForcingReplayPolicyConfig = attrs.Factory(TeacherForcingReplayPolicyConfig)
+
     # Tensor layout at the attention boundary when CP is enabled. Both layouts
     # may run the attention kernel with head-sharded Q/K/V:
     # ``sequence_sharded`` keeps surrounding projections/MLP sequence-sharded
@@ -120,11 +163,15 @@ class OmniMoTCausalModelConfig(OmniMoTModelConfig):
 
     # Rolling KV cache size for AR inference, specified in latent frames.
     # None = unbounded (keep all frames). When set, GenKVCache uses a circular
-    # buffer of this many latent frames.
+    # buffer of this many latent frames. For framewise
+    # causal_control_with_rgb_history Transfer, this is the total logical
+    # temporal window including the current frame; the physical cache contains
+    # paired control/RGB entries.
     kv_cache_inference_size: int | None = None
 
     # Number of initial AR-inference generation frames to keep pinned in the
-    # KV cache while later frames roll through the remaining cache slots.
+    # KV cache while later frames roll through the remaining cache slots. For
+    # Transfer this is expressed in logical frames and pins both control and RGB.
     attention_sink_size: int = 0
 
     # Maximum packed understanding/text KV length used by post-saturation
@@ -172,30 +219,6 @@ class OmniMoTCausalModelConfig(OmniMoTModelConfig):
     teacher_forcing_transfer_control_dropout_rate: float = attrs.field(
         default=0.0,
         validator=attrs.validators.and_(attrs.validators.ge(0.0), attrs.validators.le(1.0)),
-    )
-
-    # Visibility of the clean transfer control stream. ``global_control`` is
-    # backward-compatible full-clip attention. ``causal_control`` follows the
-    # same [1, C, C, ...] chunk partition as target teacher forcing. The
-    # ``causal_control_with_rgb_history`` mode additionally lets control queries
-    # consume clean RGB from strictly earlier teacher-forcing chunks.
-    transfer_control_attention_mode: Literal[
-        "global_control",
-        "causal_control",
-        "current_only_control",
-        "causal_control_with_rgb_history",
-        "current_only_control_with_rgb_history",
-    ] = attrs.field(
-        default="global_control",
-        validator=attrs.validators.in_(
-            (
-                "global_control",
-                "causal_control",
-                "current_only_control",
-                "causal_control_with_rgb_history",
-                "current_only_control_with_rgb_history",
-            )
-        ),
     )
 
     # Alternate bidirectional and teacher-forcing steps. Each cycle runs
@@ -260,6 +283,111 @@ def _iter_ar_chunk_ranges(start_frame: int, num_frames: int, chunk_size: int):
         f = chunk_end
 
 
+def _iter_multiview_logical_frames(
+    vision_latent: torch.Tensor,
+    *,
+    num_views: int,
+) -> Generator[torch.Tensor, None, None]:  # vision_latent: [B,C,V*T,H,W], yields [B,C,V,H,W]
+    """Yield one camera-major latent time step across all views at a time."""
+    if num_views < 1:
+        raise ValueError(f"num_views must be positive, got {num_views}.")
+    if vision_latent.ndim != 5:
+        raise ValueError(f"Expected multiview latent rank 5, got shape {tuple(vision_latent.shape)}.")
+    flat_frame_count = int(vision_latent.shape[2])
+    if flat_frame_count % num_views != 0:
+        raise ValueError(f"Camera-major latent length {flat_frame_count} must be divisible by num_views={num_views}.")
+    frames_per_view = flat_frame_count // num_views
+    vision_by_view = vision_latent.reshape(  # [B,C,V,T,H,W]
+        vision_latent.shape[0],
+        vision_latent.shape[1],
+        num_views,
+        frames_per_view,
+        vision_latent.shape[3],
+        vision_latent.shape[4],
+    )
+    for frame_idx in range(frames_per_view):
+        logical_frame = vision_by_view[:, :, :, frame_idx : frame_idx + 1].reshape(  # [B,C,V,H,W]
+            vision_latent.shape[0],
+            vision_latent.shape[1],
+            num_views,
+            vision_latent.shape[3],
+            vision_latent.shape[4],
+        )
+        yield logical_frame
+
+
+def _multiview_conditioned_prefix_length(
+    target_condition_mask: torch.Tensor,
+    *,
+    num_views: int,
+    frames_per_view: int,
+) -> int:
+    """Return a synchronized contiguous-prefix length from a camera-major mask."""
+    expected_frames = num_views * frames_per_view
+    if num_views < 1 or frames_per_view < 1 or target_condition_mask.numel() != expected_frames:
+        raise ValueError(
+            "Expected one target condition value per camera-major frame; "
+            f"got shape {tuple(target_condition_mask.shape)} for V={num_views}, T={frames_per_view}."
+        )
+    condition_grid = target_condition_mask.to(dtype=torch.bool).reshape(num_views, frames_per_view)  # [V,T]
+    if not torch.equal(condition_grid, condition_grid[0:1].expand_as(condition_grid)):
+        raise ValueError("Multiview transfer AR requires synchronized target conditioning across every view.")
+    condition_indexes = torch.nonzero(condition_grid[0], as_tuple=False).squeeze(1)  # [T_condition]
+    expected_indexes = torch.arange(condition_indexes.numel(), device=condition_indexes.device)  # [T_condition]
+    if not torch.equal(condition_indexes, expected_indexes):
+        raise ValueError(
+            "Multiview transfer AR only supports contiguous prefix conditioning from frame 0; "
+            f"got condition frame indexes {condition_indexes.tolist()}."
+        )
+    return condition_indexes.numel()
+
+
+def _submit_multiview_conditioned_prefix(
+    target_latent: torch.Tensor,
+    *,
+    num_views: int,
+    frames_per_view: int,
+    condition_count: int,
+    output_frames: int,
+    on_clean_vision_chunk: Callable[[torch.Tensor], None] | None,
+) -> torch.Tensor | None:  # target_latent: [B,C,V*T,H,W], returns [B,C,V*T_prefix,H,W] or None
+    """Return the camera-major conditioned prefix and optionally submit it for decode."""
+    if condition_count == 0:
+        return None
+    if num_views < 1 or frames_per_view < 1:
+        raise ValueError(f"Expected positive multiview dimensions, got V={num_views}, T={frames_per_view}.")
+    if target_latent.ndim != 5 or target_latent.shape[2] != num_views * frames_per_view:
+        raise ValueError(
+            "Expected camera-major target shape [B,C,V*T,H,W], "
+            f"got {tuple(target_latent.shape)} for V={num_views}, T={frames_per_view}."
+        )
+    if not 0 <= condition_count <= frames_per_view:
+        raise ValueError(f"condition_count must be in [0, {frames_per_view}], got {condition_count}.")
+    if not 1 <= output_frames <= frames_per_view:
+        raise ValueError(f"output_frames must be in [1, {frames_per_view}], got {output_frames}.")
+
+    prefix_frame_count = min(condition_count, output_frames)
+    batch_size, channels, _, height, width = target_latent.shape
+    target_by_view = target_latent.reshape(  # [B,C,V,T,H,W]
+        batch_size,
+        channels,
+        num_views,
+        frames_per_view,
+        height,
+        width,
+    )
+    conditioned_prefix = target_by_view[:, :, :, :prefix_frame_count].reshape(  # [B,C,V*T_prefix,H,W]
+        batch_size,
+        channels,
+        num_views * prefix_frame_count,
+        height,
+        width,
+    )
+    if on_clean_vision_chunk is not None:
+        on_clean_vision_chunk(conditioned_prefix)
+    return conditioned_prefix
+
+
 def _validate_kv_cache_dtype_supports_cuda_graphs(kv_cache_dtype: str | None, cuda_graph_path_active: bool) -> None:
     """Reject FP8 KV cache when the cuda-graph AR path is effectively active.
 
@@ -296,6 +424,44 @@ def _validate_attention_sink_config(kv_cache_inference_size: int | None, attenti
         )
 
 
+def _resolve_teacher_forcing_replay_policy(value: Any) -> TeacherForcingReplayPolicyConfig:
+    """Canonicalize LazyConfig policy values and revalidate all policy invariants."""
+    if OmegaConf.is_config(value):
+        value = OmegaConf.to_object(value)
+    if isinstance(value, dict):
+        value = TeacherForcingReplayPolicyConfig(**value)
+    if not isinstance(value, TeacherForcingReplayPolicyConfig):
+        raise TypeError(
+            "teacher_forcing_replay_policy must resolve to a TeacherForcingReplayPolicyConfig, "
+            f"got {type(value).__name__}."
+        )
+    attrs.validate(value)
+    value.validate()
+    return value
+
+
+def _resolve_teacher_forcing_kv_implementation(value: Any) -> TeacherForcingKVImplementation:
+    """Validate the public replay selector after LazyConfig resolution."""
+    supported_implementations = ("multiview_flex_kv", "singleview_threeway_kv")
+    if value not in supported_implementations:
+        raise ValueError(
+            f"teacher_forcing_kv_implementation must be one of {supported_implementations}, got {value!r}."
+        )
+    return value
+
+
+def _validate_teacher_forcing_kv_strategy(
+    implementation: TeacherForcingKVImplementation,
+    causal_training_strategy: str,
+) -> None:
+    """Reject selectors that cannot be honored by the configured training strategy."""
+    if implementation == "multiview_flex_kv" and causal_training_strategy not in _TEACHER_FORCING_REPLAY_STRATEGIES:
+        raise ValueError(
+            "teacher_forcing_kv_implementation='multiview_flex_kv' requires causal_training_strategy "
+            f"to be one of {_TEACHER_FORCING_REPLAY_STRATEGIES}, got {causal_training_strategy!r}."
+        )
+
+
 class OmniMoTCausalModel(OmniMoTModel):
     """Mixture of Transformers model with causal (AR) generation capabilities.
 
@@ -309,11 +475,40 @@ class OmniMoTCausalModel(OmniMoTModel):
     # Set while a bidirectional MoBA step or dense MoBA inference runs. Read by
     # pre_noise_memory_hook and denoise.
     _bidirectional_step_active: bool = False
+    _teacher_forcing_kv_implementation_runtime: TeacherForcingKVImplementation
+    _teacher_forcing_replay_policy_runtime: TeacherForcingReplayPolicyConfig
 
     def __init__(self, config: OmniMoTCausalModelConfig):
+        # LazyCall deliberately keeps nested config values as DictConfig. Hold
+        # the validated attrs object separately: assigning it back into the
+        # structured DictConfig would immediately coerce it back to DictConfig.
+        implementation = _resolve_teacher_forcing_kv_implementation(config.teacher_forcing_kv_implementation)
+        _validate_teacher_forcing_kv_strategy(implementation, config.causal_training_strategy)
+        self._teacher_forcing_kv_implementation_runtime = implementation
+        self._teacher_forcing_replay_policy_runtime = _resolve_teacher_forcing_replay_policy(
+            config.teacher_forcing_replay_policy
+        )
         super().__init__(config)
         if self.config.enable_moba:
             self._validate_moba_config()
+
+    def _get_teacher_forcing_replay_policy(self) -> TeacherForcingReplayPolicyConfig:
+        """Return the validated runtime policy, including lightweight test models."""
+        policy = getattr(self, "_teacher_forcing_replay_policy_runtime", None)
+        if not isinstance(policy, TeacherForcingReplayPolicyConfig):
+            policy = self.config.teacher_forcing_replay_policy
+        policy = _resolve_teacher_forcing_replay_policy(policy)
+        self._teacher_forcing_replay_policy_runtime = policy
+        return policy
+
+    def _get_teacher_forcing_kv_implementation(self) -> TeacherForcingKVImplementation:
+        """Return the validated runtime selector, including lightweight test models."""
+        implementation = getattr(self, "_teacher_forcing_kv_implementation_runtime", None)
+        if implementation is not None:
+            return implementation
+        implementation = _resolve_teacher_forcing_kv_implementation(self.config.teacher_forcing_kv_implementation)
+        self._teacher_forcing_kv_implementation_runtime = implementation
+        return implementation
 
     @override
     def set_up_scheduler_and_sampler(self) -> None:
@@ -344,6 +539,63 @@ class OmniMoTCausalModel(OmniMoTModel):
         """Install ``dispatch_attention_with_memory`` on every attention layer."""
         for layer in net.language_model.model.layers:
             layer.self_attn.dispatch_attention_fn = dispatch_attention_with_memory
+
+    @override
+    def build_net(
+        self,
+        dtype: torch.dtype,
+        *,
+        mp_policy: Any | None = None,
+        lora_enabled: bool | None = None,
+    ) -> torch.nn.Module:
+        """Resolve the selected teacher-forcing KV implementation and build it."""
+        uses_multiview_flex_kv = self._uses_multiview_flex_kv()
+        if self.config.causal_training_strategy not in _TEACHER_FORCING_REPLAY_STRATEGIES:
+            return super().build_net(dtype, mp_policy=mp_policy, lora_enabled=lora_enabled)
+
+        replay_policy = self._get_teacher_forcing_replay_policy()
+        # The selector is the public source of truth. Resolve it to the base
+        # network's implementation knobs only while the network is constructed,
+        # then restore the caller's config so those internal knobs do not become
+        # a second teacher-forcing API.
+        video_temporal_causal = self.config.video_temporal_causal
+        joint_attn_implementation = self.config.joint_attn_implementation
+        flex_attention_enabled = self.config.flex_attention.enabled
+        attention_scope = self.config.flex_attention.mask.attention_scope
+        decomposed_temporal_window_seconds = self.config.flex_attention.mask.decomposed_temporal_window_seconds
+        self.config.joint_attn_implementation = "two_way" if uses_multiview_flex_kv else "three_way"
+        self.config.flex_attention.enabled = uses_multiview_flex_kv
+        if uses_multiview_flex_kv:
+            # Core validates temporal causality as a three-way-only layout. The
+            # replay mask supplies causality for this two-way path.
+            self.config.video_temporal_causal = False
+            self.config.flex_attention.mask.attention_scope = replay_policy.multiview_attention_scope
+            self.config.flex_attention.mask.decomposed_temporal_window_seconds = (
+                replay_policy.decomposed_temporal_window_seconds
+            )
+        try:
+            if uses_multiview_flex_kv:
+                with patch.object(
+                    omni_mot_model_module,
+                    "Cosmos3VFMNetwork",
+                    InteractiveCosmos3VFMNetwork,
+                ):
+                    net = super().build_net(dtype, mp_policy=mp_policy, lora_enabled=lora_enabled)
+            else:
+                net = super().build_net(dtype, mp_policy=mp_policy, lora_enabled=lora_enabled)
+        finally:
+            self.config.video_temporal_causal = video_temporal_causal
+            self.config.joint_attn_implementation = joint_attn_implementation
+            self.config.flex_attention.enabled = flex_attention_enabled
+            self.config.flex_attention.mask.attention_scope = attention_scope
+            self.config.flex_attention.mask.decomposed_temporal_window_seconds = decomposed_temporal_window_seconds
+
+        if uses_multiview_flex_kv:
+            net.config.video_temporal_causal = video_temporal_causal
+            net.video_temporal_causal = video_temporal_causal
+            setattr(net, "teacher_forcing_replay_policy", replay_policy)
+            setattr(net, "teacher_forcing_frames_per_chunk", self.config.teacher_forcing_frames_per_chunk)
+        return net
 
     def maybe_convert_linears_to_nvfp4(self) -> None:
         """Convert the decoder linears to NVFP4 in place, driven by ``config.nvfp4_linears``.
@@ -376,19 +628,21 @@ class OmniMoTCausalModel(OmniMoTModel):
     ) -> tuple[GenerationDataClean, dict]:
         """Prepare per-step memory info for causal training.
 
-        Optionally removes the control item from transfer samples, drops trailing
-        latent frames so every clip satisfies the chunkwise-TF constraint, then
-        returns the default (non-rolling) memory info. Rolling KV-cache
-        (segment-based) training is not supported.
+        Optionally removes the control item from transfer samples. The legacy
+        path drops trailing latent frames to satisfy the chunkwise-TF constraint;
+        the multiview Flex path keeps partial camera-major tails and represents them
+        in mask metadata. Returns the default (non-rolling) memory info. Rolling
+        KV-cache (segment-based) training is not supported.
         """
         del input_text_indexes
         gen_data_clean = self._maybe_drop_teacher_forcing_transfer_control(gen_data_clean, data_batch)
         # Chunkwise TF requires every latent vision clip to satisfy (T - 1) % C == 0.
-        # The dataloaders only VAE-align clip lengths (T arbitrary), so we drop the
-        # trailing latent frames here -- in lockstep across all modalities -- then
-        # assert the result (a safety net that should now always pass).
-        gen_data_clean = self._truncate_for_chunkwise_tf(gen_data_clean)
-        self._assert_chunkwise_tf_shape(gen_data_clean)
+        # The legacy chunkwise path requires divisibility and therefore drops
+        # trailing latent frames in lockstep across modalities. The multiview Flex
+        # path represents camera-major partial tails explicitly in its mask metadata.
+        if not self._uses_multiview_flex_kv():
+            gen_data_clean = self._truncate_for_chunkwise_tf(gen_data_clean)
+            self._assert_chunkwise_tf_shape(gen_data_clean)
 
         return gen_data_clean, {
             "skip_text": False,
@@ -472,6 +726,27 @@ class OmniMoTCausalModel(OmniMoTModel):
             "teacher_forcing",
             "teacher_forcing_dcm",
         )
+
+    def _uses_multiview_flex_kv(self) -> bool:
+        """Whether this run selected replayed multiview Flex K/V."""
+        implementation = self._get_teacher_forcing_kv_implementation()
+        _validate_teacher_forcing_kv_strategy(implementation, self.config.causal_training_strategy)
+        return (
+            self.config.causal_training_strategy in _TEACHER_FORCING_REPLAY_STRATEGIES
+            and implementation == "multiview_flex_kv"
+        )
+
+    @override
+    def _pack_input_sequence(self, *args: Any, **kwargs: Any) -> PackedSequence:
+        """Keep the standard multiview layout when Flex supplies causality."""
+        if not self._uses_multiview_flex_kv():
+            return super()._pack_input_sequence(*args, **kwargs)
+        video_temporal_causal = self.config.video_temporal_causal
+        self.config.video_temporal_causal = False
+        try:
+            return super()._pack_input_sequence(*args, **kwargs)
+        finally:
+            self.config.video_temporal_causal = video_temporal_causal
 
     def _validate_moba_config(self) -> None:
         """Validate assumptions required by MoBA training. Called once at __init__."""
@@ -698,13 +973,43 @@ class OmniMoTCausalModel(OmniMoTModel):
         detach_clean_kv: bool,
     ) -> TeacherForcingMemoryState:
         """Build replayed clean K/V for one denoiser network."""
+        clean_target_indexes: torch.Tensor | None = None
+        if self._uses_multiview_flex_kv():
+            if packed_sequence.vision is None or packed_sequence.num_views_per_vision_item is None:
+                raise ValueError("Two-way Flex teacher forcing requires multiview vision metadata.")
+            original_condition_masks = [
+                mask.clone() for mask in packed_sequence.vision.condition_mask
+            ]  # list of [latent_t]
+            clean_target_indexes = build_teacher_forcing_clean_target_token_indexes(
+                items_per_sample=build_interactive_multiview_mask_items(
+                    packed_sequence,
+                    condition_masks=original_condition_masks,
+                ),
+                device=packed_sequence.text_ids.device,
+            )  # [S_clean_real]
+            flex_backend = getattr(net, "flex_backend", None)
+            if flex_backend is None:
+                raise ValueError("Two-way Flex teacher forcing requires the network FlexAttention backend.")
+            kv_alignment = flex_backend.block_size[1]
+            selected_clean_target_padded_capacity = (
+                (clean_target_indexes.numel() + kv_alignment - 1) // kv_alignment
+            ) * kv_alignment
+            packed_sequence.teacher_forcing_pass = "noisy"
+            packed_sequence.teacher_forcing_original_condition_masks_vision = original_condition_masks
+            packed_sequence.teacher_forcing_selected_clean_target_padded_capacity = (
+                selected_clean_target_padded_capacity
+            )
+
         tf_memory = self._build_tf_memory_state(
             packed_sequence=packed_sequence,
             memory_info=memory_info,
             net=net,
             detach_clean_kv=detach_clean_kv,
+            selected_clean_gen_token_indexes=clean_target_indexes,
         )
         clean_pack = make_teacher_forcing_clean_pack(packed_sequence)
+        if self._uses_multiview_flex_kv():
+            clean_pack.teacher_forcing_pass = "clean"
         ctx = torch.no_grad() if detach_clean_kv else contextlib.nullcontext()
         with ctx:
             clean_pack.to_cuda()
@@ -721,6 +1026,15 @@ class OmniMoTCausalModel(OmniMoTModel):
         """Fail early for TF layouts unsupported by the replayed K/V path."""
         if not self.config.video_temporal_causal:
             raise ValueError("Teacher-forcing replay requires video_temporal_causal=True.")
+        if self._uses_multiview_flex_kv():
+            if packed_seq.vision is None or packed_seq.action is not None or packed_seq.sound is not None:
+                raise ValueError("Two-way Flex teacher forcing supports vision-only generation batches.")
+            if packed_seq.num_views_per_vision_item is None:
+                raise ValueError(
+                    "Two-way Flex teacher forcing requires per-camera VAE metadata; enable "
+                    "enable_per_camera_vae_encoding on the dataset."
+                )
+            return
         if packed_seq.vision is None or len(packed_seq.vision.token_shapes) not in (1, 2):
             num_layouts = 0 if packed_seq.vision is None else len(packed_seq.vision.token_shapes)
             raise ValueError(
@@ -760,6 +1074,7 @@ class OmniMoTCausalModel(OmniMoTModel):
         memory_info: dict,
         net: torch.nn.Module | None = None,
         detach_clean_kv: bool | None = None,
+        selected_clean_gen_token_indexes: torch.Tensor | None = None,
     ) -> TeacherForcingMemoryState:
         """Construct a ``TeacherForcingMemoryState`` for the two-pass training path."""
         net = self.net if net is None else net
@@ -774,6 +1089,11 @@ class OmniMoTCausalModel(OmniMoTModel):
         context_parallel_size = (
             self.parallel_dims.cp_size if self.parallel_dims and self.parallel_dims.cp_enabled else 1
         )
+        selected_clean_gen_padded_capacity = (
+            int(getattr(packed_sequence, "teacher_forcing_selected_clean_target_padded_capacity", 0))
+            if selected_clean_gen_token_indexes is not None
+            else 0
+        )
 
         return TeacherForcingMemoryState(
             vision_token_shapes=vision_token_shapes,
@@ -786,8 +1106,10 @@ class OmniMoTCausalModel(OmniMoTModel):
             detach_clean_kv=detach_clean_kv,
             clamp_empty_varlen_kv=self.config.clamp_empty_varlen_kv,
             frames_per_chunk=self.config.teacher_forcing_frames_per_chunk,
-            transfer_control_attention_mode=self.config.transfer_control_attention_mode,
+            teacher_forcing_replay_policy=self._get_teacher_forcing_replay_policy(),
             context_parallel_size=context_parallel_size,
+            selected_clean_gen_token_indexes=selected_clean_gen_token_indexes,
+            selected_clean_gen_padded_capacity=selected_clean_gen_padded_capacity,
         )
 
     @override
@@ -837,6 +1159,8 @@ class OmniMoTCausalModel(OmniMoTModel):
         post_saturation_static_compile: bool = memory_info.get("post_saturation_static_compile", False)
         coarse_cuda_graph: bool = memory_info.get("coarse_cuda_graph", False)
         stage_gen_cache_writes: bool = memory_info.get("stage_gen_cache_writes", False)
+        transfer_history_sink_tokens: int = memory_info.get("transfer_history_sink_tokens", 0)
+        transfer_history_max_tokens: int | None = memory_info.get("transfer_history_max_tokens")
         dual_kv_cache: list[DualKVCache] | None = memory_info["dual_kv_cache"]
         frame_idx: int = memory_info["frame_idx"]
         write_gen_cache: bool = memory_info.get("write_gen_cache", True)
@@ -875,6 +1199,8 @@ class OmniMoTCausalModel(OmniMoTModel):
                     write_gen_cache=write_gen_cache,
                     kv_head_shard_rank=kv_head_shard_rank,
                     kv_head_shard_size=kv_head_shard_size,
+                    transfer_history_sink_tokens=transfer_history_sink_tokens,
+                    transfer_history_max_tokens=transfer_history_max_tokens,
                 )
             return ARMemoryState(
                 dual_kv_cache=dual_kv_cache,
@@ -891,6 +1217,8 @@ class OmniMoTCausalModel(OmniMoTModel):
                 static_und_cache_max_len=self.config.ar_static_und_cache_max_len,
                 coarse_cuda_graph=coarse_cuda_graph,
                 stage_gen_cache_writes=stage_gen_cache_writes,
+                transfer_history_sink_tokens=transfer_history_sink_tokens,
+                transfer_history_max_tokens=transfer_history_max_tokens,
             )
 
         # If not using a KV-cache.
@@ -974,14 +1302,15 @@ class OmniMoTCausalModel(OmniMoTModel):
             Sequence: ``[text] [v0*] [a0* v1_noisy] [a1* v2_noisy] ...``
             Action ``a{i}`` (shape ``(tcf, D)``) guides the transition ``v{i} → v{i+1}``.
         ``video_transfer``
-            Sequence: ``[text] [control_chunk0*] [RGB_chunk0] ...``. The
-            current control chunk and clean RGB from prior chunks are cached in
-            dependency order for ``causal_control_with_rgb_history``.
+            Sequence: ``[text] [control_chunk0*] [target_chunk0] ...``. Single-view
+            transfer uses the rolling AR cache. Camera-major multiview transfer
+            generates synchronized target chunks with the replayed teacher-forcing
+            FlexAttention mask.
 
         Args:
             data_batch: Raw data batch from dataloader.
             mode: Generation mode — ``"text2image"``, ``"text2video"``, ``"image2video"``,
-                or ``"forward_dynamics"``.
+                ``"forward_dynamics"``, ``"text2video_action_conditioned"``, or ``"video_transfer"``.
             guidance: CFG guidance weight. When ``guidance == 1.0``, the
                 unconditional branch is skipped (no extra forward pass).
             seed: Base random seed; each latent frame uses ``seed + frame_idx``.
@@ -1005,7 +1334,8 @@ class OmniMoTCausalModel(OmniMoTModel):
 
         Yields:
             dict payloads with:
-                - ``"vision"``: one latent frame, shape ``(1, C, 1, H, W)``.
+                - ``"vision"``: one logical latent frame, shape ``(1, C, 1, H, W)`` for
+                  single-view generation or ``(1, C, V, H, W)`` for multiview transfer.
                 - ``"action"``: action latents (``forward_dynamics`` only).
         """
         valid_modes = [
@@ -1023,6 +1353,26 @@ class OmniMoTCausalModel(OmniMoTModel):
         if sampler_mode not in ("rf", "distilled"):
             raise ValueError(f"sampler_mode must be 'rf' or 'distilled', got {sampler_mode!r}")
         reset_ar_post_saturation_runtime_for_generation(self)
+
+        if mode == "video_transfer" and self._uses_multiview_flex_kv():
+            if self.config.compile.enabled:
+                raise ValueError("Multiview transfer AR requires eager attention; run with --no-use-torch-compile.")
+            yield from self._iter_samples_multiview_transfer_autoregressive(
+                data_batch=data_batch,
+                guidance=guidance,
+                seed=seed,
+                num_steps=num_steps,
+                shift=shift,
+                normalize_cfg=normalize_cfg,
+                sampler_mode=sampler_mode,
+                distilled_num_steps=distilled_num_steps,
+                sync_num_frames_across_ranks=sync_num_frames_across_ranks,
+                sync_process_group=sync_process_group,
+                max_num_frames=max_num_frames,
+                on_clean_vision_chunk=on_clean_vision_chunk,
+                has_negative_prompt=has_negative_prompt,
+            )
+            return
 
         # Step 1: Prepare data and build sequence plans
         condition_frame_indexes: list[int] = []
@@ -1047,14 +1397,22 @@ class OmniMoTCausalModel(OmniMoTModel):
         is_transfer = mode == "video_transfer"
         generation_vision_item_idx = 0
         if is_transfer:
-            if self.config.transfer_control_attention_mode != "causal_control_with_rgb_history":
+            replay_policy = self._get_teacher_forcing_replay_policy()
+            if (
+                replay_policy.control_visibility != "causal"
+                or not replay_policy.controls_read_strict_past_clean_rgb
+                or replay_policy.clean_pass_causality != "frame"
+            ):
                 raise ValueError(
-                    "This inference-only transfer path supports "
-                    "transfer_control_attention_mode='causal_control_with_rgb_history'; "
-                    f"got {self.config.transfer_control_attention_mode!r}."
+                    "Single-view video_transfer AR requires "
+                    "teacher_forcing_replay_policy.control_visibility='causal' and "
+                    "controls_read_strict_past_clean_rgb=True and "
+                    "clean_pass_causality='frame'."
                 )
             if self.parallel_dims is not None and getattr(self.parallel_dims, "cp_enabled", False):
-                raise ValueError("video_transfer AR inference requires context_parallel_size=1.")
+                raise ValueError(
+                    "video_transfer AR inference does not support context parallelism; use context_parallel_size=1."
+                )
             if gen_data_clean.num_vision_items_per_sample != [2] or len(vision_items) != 2:
                 raise ValueError(
                     "video_transfer AR inference requires one logical sample with [control, target] vision items; "
@@ -1092,6 +1450,7 @@ class OmniMoTCausalModel(OmniMoTModel):
         assert batch_size == 1, "AR generation currently only supports batch_size=1"
 
         # Step 2: Tokenize text once (conditional + unconditional for CFG)
+        has_negative_prompt = has_negative_prompt or (is_transfer and f"neg_{self.input_caption_key}" in data_batch)
         cond_text_tokens, uncond_text_tokens = self._get_inference_text_tokens(data_batch, has_negative_prompt)
 
         # Frames N>=1 skip text (cached in und_cache), so they must pre-seed the mRoPE offset
@@ -1171,10 +1530,11 @@ class OmniMoTCausalModel(OmniMoTModel):
                 "Chunkwise AR inference (teacher_forcing_frames_per_chunk > 1) is only supported on the "
                 "eager dynamic-shape path; run with --no-use-torch-compile (compile.use_cuda_graphs off)."
             )
-        if is_transfer and (num_frames < 1 + chunk_size or (num_frames - 1) % chunk_size != 0):
+        if is_transfer and chunk_size > 1 and ((num_frames - 1) % chunk_size != 0 or num_frames < 1 + chunk_size):
             raise ValueError(
-                "video_transfer AR inference must match the trained [1, C, C, ...] latent partition: "
-                f"require T >= 1 + C and (T - 1) % C == 0, got T={num_frames}, C={chunk_size}."
+                "video_transfer AR inference must exactly match the teacher-forcing latent partition "
+                "[1, C, C, ...]: require (T - 1) % C == 0 and T >= 1 + C, got "
+                f"T={num_frames}, C={chunk_size}. Adjust the input pixel-frame count."
             )
 
         # The static-shape compile-safe path reads via ``fetch_kv_padded``
@@ -1184,11 +1544,30 @@ class OmniMoTCausalModel(OmniMoTModel):
         # (None = "unbounded" in eager mode), default to num_frames — but
         # only when the compile-safe path is actually in use.
         _validate_attention_sink_config(self.config.kv_cache_inference_size, self.config.attention_sink_size)
-        if is_transfer and self.config.kv_cache_inference_size is not None:
-            raise ValueError("video_transfer AR inference requires kv_cache_inference_size=None for full history.")
+        transfer_sliding_window_size = self.config.kv_cache_inference_size if is_transfer else None
+        if transfer_sliding_window_size is not None:
+            if chunk_size != 1:
+                raise ValueError(
+                    "finite causal_control_with_rgb_history KV windows require teacher_forcing_frames_per_chunk=1"
+                )
+            if transfer_sliding_window_size < 1:
+                raise ValueError(
+                    "finite causal_control_with_rgb_history KV windows require kv_cache_inference_size >= 1"
+                )
         if is_transfer and self.config.kv_cache_dtype is not None:
-            raise ValueError("video_transfer AR inference requires kv_cache_dtype=None for exact cache values.")
-        gen_cache_size = 2 * num_frames + 1 if is_transfer else self.config.kv_cache_inference_size
+            raise ValueError("video_transfer AR inference requires kv_cache_dtype=None for BF16 cache storage.")
+        if transfer_sliding_window_size is not None:
+            # Every logical Transfer frame contributes one control and one RGB
+            # cache entry. The current target has not been stored yet, so 2 * W
+            # physical slots expose W controls and W - 1 RGB frames.
+            gen_cache_size = 2 * transfer_sliding_window_size
+            physical_attention_sink_size = 2 * self.config.attention_sink_size
+        elif is_transfer:
+            gen_cache_size = 2 * num_frames + 1
+            physical_attention_sink_size = 0
+        else:
+            gen_cache_size = self.config.kv_cache_inference_size
+            physical_attention_sink_size = self.config.attention_sink_size
         if gen_cache_size is None and use_ar_rolling_path:
             gen_cache_size = num_frames
         dual_kv_cache = [
@@ -1196,7 +1575,7 @@ class OmniMoTCausalModel(OmniMoTModel):
                 gen_cache_size=gen_cache_size,
                 kv_cache_dtype=self.config.kv_cache_dtype,
                 kv_cache_kernel_impl=self.config.kv_cache_kernel_impl,
-                attention_sink_size=self.config.attention_sink_size,
+                attention_sink_size=physical_attention_sink_size,
             )
             for _ in range(num_layers)
         ]
@@ -1206,7 +1585,7 @@ class OmniMoTCausalModel(OmniMoTModel):
                     gen_cache_size=gen_cache_size,
                     kv_cache_dtype=self.config.kv_cache_dtype,
                     kv_cache_kernel_impl=self.config.kv_cache_kernel_impl,
-                    attention_sink_size=self.config.attention_sink_size,
+                    attention_sink_size=physical_attention_sink_size,
                 )
                 for _ in range(num_layers)
             ]
@@ -1296,6 +1675,24 @@ class OmniMoTCausalModel(OmniMoTModel):
         _video_tc: bool = self.config.video_temporal_causal
         _enable_fps_mod: bool = self.config.diffusion_expert_config.enable_fps_modulation
         _base_fps: float = float(self.config.diffusion_expert_config.base_fps)
+        transfer_history_sink_tokens = 0
+        transfer_history_control_max_tokens: int | None = None
+        transfer_history_target_max_tokens: int | None = None
+        if transfer_sliding_window_size is not None:
+            transfer_latent_h = vision_items[0].shape[-2]
+            transfer_latent_w = vision_items[0].shape[-1]
+            # Cosmos3VFMNetwork zero-pads non-divisible latent grids before
+            # patchifying. Count those padding patches because they occupy KV
+            # sequence positions (720p: 45x80 latents -> 23x40 patches).
+            transfer_patch_h = (transfer_latent_h + _patch_size - 1) // _patch_size
+            transfer_patch_w = (transfer_latent_w + _patch_size - 1) // _patch_size
+            transfer_tokens_per_frame = transfer_patch_h * transfer_patch_w
+            recent_past_frames = transfer_sliding_window_size - self.config.attention_sink_size - 1
+            transfer_history_sink_tokens = 2 * self.config.attention_sink_size * transfer_tokens_per_frame
+            # Before C_t is cached, retain complete recent (C_j, R_j) pairs.
+            transfer_history_control_max_tokens = 2 * recent_past_frames * transfer_tokens_per_frame
+            # R_t additionally sees its aligned current control C_t.
+            transfer_history_target_max_tokens = (2 * recent_past_frames + 1) * transfer_tokens_per_frame
         transfer_history_cache_idx = 0
 
         # Step 7: Prefill KV cache with text + conditioned prefix frames (image2video / forward_dynamics only).
@@ -1361,10 +1758,11 @@ class OmniMoTCausalModel(OmniMoTModel):
                 include_text = transfer_history_cache_idx == 0
                 control_latent = vision_items[0][:, :, chunk_start:chunk_end].to(
                     **self.tensor_kwargs
-                )  # [1,C,T_control,H,W]
+                )  # [1,C,chunk_len,H,W]
                 self._seed_frame_into_kv_cache(
                     frame_latent=control_latent,
                     frame_idx=transfer_history_cache_idx,
+                    position_frame_idx=chunk_start,
                     dual_kv_cache=dual_kv_cache,
                     dual_kv_cache_uncond=dual_kv_cache_uncond,
                     cond_text_tokens=cond_text_tokens[0] if (cond_text_tokens and include_text) else None,
@@ -1385,9 +1783,10 @@ class OmniMoTCausalModel(OmniMoTModel):
                     enable_fps_mod=_enable_fps_mod,
                     base_fps=_base_fps,
                     modality_margin=_margin,
-                    use_ar_rolling_path=use_ar_rolling_path,
-                    position_frame_idx=chunk_start,
+                    use_ar_rolling_path=False,
                     condition_frame_indexes_vision=list(range(chunk_len)),
+                    transfer_history_sink_tokens=transfer_history_sink_tokens,
+                    transfer_history_max_tokens=transfer_history_control_max_tokens,
                 )
                 transfer_history_cache_idx += 1
             if not dist.is_initialized() or dist.get_rank() == 0:
@@ -1518,6 +1917,8 @@ class OmniMoTCausalModel(OmniMoTModel):
                 fps_vision_list=fps_vision_list,
                 fps_action_list=fps_action_list,
                 use_ar_rolling_path=use_ar_rolling_path,
+                transfer_history_sink_tokens=transfer_history_sink_tokens,
+                transfer_history_max_tokens=transfer_history_target_max_tokens,
             )
             if on_clean_vision_chunk is not None:
                 on_clean_vision_chunk(denoised_chunk)
@@ -1553,6 +1954,7 @@ class OmniMoTCausalModel(OmniMoTModel):
                 self._seed_frame_into_kv_cache(
                     frame_latent=_frame_latent,
                     frame_idx=transfer_history_cache_idx if is_transfer else _f,
+                    position_frame_idx=_f,
                     dual_kv_cache=dual_kv_cache,
                     dual_kv_cache_uncond=dual_kv_cache_uncond,
                     cond_text_tokens=(
@@ -1578,7 +1980,8 @@ class OmniMoTCausalModel(OmniMoTModel):
                     base_fps=_base_fps,
                     modality_margin=_margin,
                     use_ar_rolling_path=use_ar_rolling_path,
-                    position_frame_idx=_f,
+                    transfer_history_sink_tokens=transfer_history_sink_tokens,
+                    transfer_history_max_tokens=transfer_history_target_max_tokens,
                 )
                 if is_transfer:
                     transfer_history_cache_idx += 1
@@ -1606,6 +2009,585 @@ class OmniMoTCausalModel(OmniMoTModel):
                     next_streamed_action = yield payload
                 else:
                     yield payload
+
+    def _build_multiview_transfer_ar_pack(
+        self,
+        *,
+        vision_latent: torch.Tensor,  # [1,C,V*chunk_len,H,W]
+        text_tokens: list[int],
+        fps_vision: list[float],
+        num_views: int,
+        frames_per_view: int,
+        chunk_start: int,
+        memory_layout: MultiviewTransferARMemoryLayout,
+        current_role: MultiviewTransferARCurrentRole,
+    ) -> PackedSequence:
+        """Pack one explicitly typed multiview AR chunk at its training mRoPE positions.
+
+        Finalized target history uses the same clean-condition embedding semantics as
+        teacher-forcing replay. ``current_role`` independently preserves its explicit
+        FlexAttention role after the noised-token metadata is cleared.
+        """
+        if vision_latent.shape[2] % num_views != 0:
+            raise ValueError(
+                f"Multiview transfer chunk latent_t={vision_latent.shape[2]} "
+                f"must be divisible by num_views={num_views}."
+            )
+        chunk_len = vision_latent.shape[2] // num_views
+        temporal_positions = torch.cat(
+            [
+                torch.arange(
+                    view_idx * frames_per_view + chunk_start,
+                    view_idx * frames_per_view + chunk_start + chunk_len,
+                    dtype=torch.float32,
+                )
+                for view_idx in range(num_views)
+            ]
+        )  # [V*chunk_len]
+        pack = pack_input_sequence_autoregressive(
+            vision_latent=vision_latent,
+            action_latent=None,
+            text_tokens=text_tokens,
+            timestep=0.0,
+            fps_vision=fps_vision,
+            fps_action=None,
+            special_tokens=self.llm_special_tokens,
+            latent_patch_size=self.config.diffusion_expert_config.patch_spatial,
+            condition_frame_indexes_vision=[],
+            frame_idx=0,
+            temporal_compression_factor=self.tokenizer_vision_gen.temporal_compression_factor or 4,
+            video_temporal_causal=False,
+            action_dim=self.config.max_action_dim,
+            enable_fps_modulation=self.config.diffusion_expert_config.enable_fps_modulation,
+            base_fps=float(self.config.diffusion_expert_config.base_fps),
+            unified_3d_mrope_temporal_modality_margin=(
+                self.config.diffusion_expert_config.unified_3d_mrope_temporal_modality_margin
+            ),
+            vision_temporal_positions=temporal_positions,
+            num_views=num_views,
+        )
+        pack.to_cuda()
+        pack.multiview_transfer_ar_metadata = {
+            "current_frame_start": chunk_start,
+            "frames_per_view": frames_per_view,
+            "frames_per_chunk": self.config.teacher_forcing_frames_per_chunk,
+            "current_role": current_role,
+            "memory_layout": memory_layout,
+        }
+        if current_role == "clean_target":
+            if pack.vision is None:
+                raise ValueError("Multiview transfer clean-history packing requires vision tokens.")
+            mark_modality_as_clean_condition(pack.vision)
+        self._cast_generated_tokens_to_precision(pack)
+        return pack
+
+    def _capture_multiview_transfer_ar_memory(
+        self,
+        *,
+        pack: PackedSequence,
+        cache: list[tuple[torch.Tensor, torch.Tensor] | None],
+        memory_seq_len: int,
+        write_indexes: torch.Tensor,
+        write_offset: int,
+        cache_write_indexes: torch.Tensor | None = None,
+    ) -> None:
+        """Run one clean pass and commit selected GEN K/V into the multiview transfer cache."""
+        memory = FlexARMemoryState(
+            num_layers=self.net.num_hidden_layers,
+            memory_seq_len=memory_seq_len,
+            cache=cache,
+            write_indexes=write_indexes,
+            write_offset=write_offset,
+            cache_write_indexes=cache_write_indexes,
+        )
+        self.denoise(data_batch_packed=pack, memory=memory)
+
+    @staticmethod
+    def _merge_multiview_transfer_ar_memory(
+        *,
+        destination: list[tuple[torch.Tensor, torch.Tensor] | None],
+        source: list[tuple[torch.Tensor, torch.Tensor] | None],
+        cache_indexes: torch.Tensor,
+    ) -> None:
+        """Copy selected fixed-slot K/V from a no-memory clean pass."""
+        if len(destination) != len(source):
+            raise ValueError(f"Expected matching cache layers, got {len(destination)} and {len(source)}.")
+        for layer_idx, source_kv in enumerate(source):
+            if source_kv is None:
+                raise ValueError(f"Clean replay did not capture K/V for layer {layer_idx}.")
+            source_k, source_v = source_kv
+            destination_kv = destination[layer_idx]
+            if destination_kv is None:
+                destination_k = torch.zeros_like(source_k)  # [1,S_memory,H_kv,D]
+                destination_v = torch.zeros_like(source_v)  # [1,S_memory,H_kv,D]
+                destination[layer_idx] = (destination_k, destination_v)
+            else:
+                destination_k, destination_v = destination_kv
+            layer_cache_indexes = cache_indexes.to(device=source_k.device, dtype=torch.long)  # [S_write]
+            selected_k = torch.index_select(source_k, 1, layer_cache_indexes)  # [1,S_write,H_kv,D]
+            selected_v = torch.index_select(source_v, 1, layer_cache_indexes)  # [1,S_write,H_kv,D]
+            destination_k.index_copy_(1, layer_cache_indexes, selected_k)  # [1,S_memory,H_kv,D]
+            destination_v.index_copy_(1, layer_cache_indexes, selected_v)  # [1,S_memory,H_kv,D]
+
+    def _generate_multiview_transfer_ar_chunk(
+        self,
+        *,
+        cond_pack: PackedSequence,
+        uncond_pack: PackedSequence | None,
+        cond_cache: list[tuple[torch.Tensor, torch.Tensor] | None],
+        uncond_cache: list[tuple[torch.Tensor, torch.Tensor] | None] | None,
+        curr_vision_latent: torch.Tensor,  # [1,C,V*chunk_len,H,W]
+        guidance: float,
+        num_steps: int,
+        shift: float,
+        seed: int,
+        chunk_start: int,
+        num_frames: int,
+        normalize_cfg: bool,
+        sampler_mode: str,
+        distilled_num_steps: int | None,
+        memory_seq_len: int,
+    ) -> torch.Tensor:  # [1,C,V*chunk_len,H,W]
+        """Denoise one synchronized multiview chunk against the Flex KV suffix."""
+        cond_memory = FlexARMemoryState(
+            num_layers=self.net.num_hidden_layers,
+            memory_seq_len=memory_seq_len,
+            cache=cond_cache,
+        )
+        uncond_memory = (
+            FlexARMemoryState(
+                num_layers=self.net.num_hidden_layers,
+                memory_seq_len=memory_seq_len,
+                cache=uncond_cache,
+            )
+            if uncond_cache is not None
+            else None
+        )
+
+        def run_branch(
+            pack: PackedSequence,
+            noise_vision: torch.Tensor,  # [1,C,V*chunk_len,H,W]
+            timestep: torch.Tensor,  # [1,1]
+            branch: _ARBranch,
+        ) -> torch.Tensor:  # [1,C,V*chunk_len,H,W]
+            OmniMoTCausalModel._set_ar_vision_noise(self, pack, noise_vision, timestep)
+            cfgp_enabled = self.parallel_dims is not None and self.parallel_dims.cfgp_enabled
+            # Under CFGP each rank has one branch-local cache in ``cond_memory``.
+            memory = cond_memory if cfgp_enabled or branch == "conditional" else uncond_memory
+            assert memory is not None
+            output = self.denoise(data_batch_packed=pack, memory=memory)
+            return torch.stack(output["preds_vision"])  # [1,C,V*chunk_len,H,W]
+
+        def velocity_fn(noise_x: torch.Tensor, timestep: torch.Tensor) -> torch.Tensor:
+            return OmniMoTCausalModel._predict_ar_velocity_with_cfg(
+                self,
+                noise_x=noise_x,
+                timestep=timestep,
+                vision_shape=curr_vision_latent.shape,
+                packed_seq=cond_pack,
+                packed_seq_uncond=uncond_pack,
+                guidance=guidance,
+                normalize_cfg=normalize_cfg,
+                run_branch=run_branch,
+            )  # [1,N_tokens_flat]
+
+        initial_noise = curr_vision_latent.flatten(start_dim=1)  # [1,N_tokens_flat]
+        denoised_flat = OmniMoTCausalModel._run_ar_sampler(
+            self,
+            velocity_fn,
+            initial_noise,
+            sampler_mode=sampler_mode,
+            num_steps=num_steps,
+            shift=shift,
+            seed=seed,
+            sample_idx=chunk_start,
+            num_frames=num_frames,
+            distilled_num_steps=distilled_num_steps,
+        )  # [1,N_tokens_flat]
+        return denoised_flat.reshape(curr_vision_latent.shape)  # [1,C,V*chunk_len,H,W]
+
+    @torch.no_grad()
+    def _iter_samples_multiview_transfer_autoregressive(
+        self,
+        *,
+        data_batch: dict,
+        guidance: float,
+        seed: int,
+        num_steps: int,
+        shift: float,
+        normalize_cfg: bool,
+        sampler_mode: str,
+        distilled_num_steps: int | None,
+        sync_num_frames_across_ranks: bool,
+        sync_process_group: Any | None,
+        max_num_frames: int | None,
+        on_clean_vision_chunk: Callable[[torch.Tensor], None] | None,
+        has_negative_prompt: bool,
+    ) -> Generator[dict[str, Any], torch.Tensor | None, None]:
+        """Generate the target for a two-item camera-major multiview transfer sample."""
+        if not self._uses_multiview_flex_kv():
+            raise ValueError("Multiview transfer AR requires replayed two-way Flex teacher-forcing configuration.")
+        if self.config.action_gen or self.config.sound_gen:
+            raise ValueError("Multiview transfer AR supports vision-only models.")
+        sequence_plans = build_sequence_plans_from_data_batch(
+            data_batch=data_batch,
+            input_video_key=self.input_video_key,
+            input_image_key=self.input_image_key,
+        )
+        if len(sequence_plans) != 1:
+            raise ValueError(f"Multiview transfer AR requires batch_size=1, got {len(sequence_plans)} samples.")
+        vision_condition_indexes = [sequence_plans[0].condition_frame_indexes_vision]
+        gen_data_clean = self.get_data_and_condition(
+            data_batch,
+            vision_condition_indexes=vision_condition_indexes,
+            retain_raw_state_vision=False,
+        )
+        if gen_data_clean.x0_tokens_vision is None or len(gen_data_clean.x0_tokens_vision) != 2:
+            num_items = 0 if gen_data_clean.x0_tokens_vision is None else len(gen_data_clean.x0_tokens_vision)
+            raise ValueError(f"Multiview transfer AR requires [control, target], got {num_items} vision items.")
+        if gen_data_clean.num_vision_items_per_sample != [2]:
+            raise ValueError(
+                "Multiview transfer AR requires one sample with exactly two vision items; "
+                f"got {gen_data_clean.num_vision_items_per_sample}."
+            )
+        if gen_data_clean.num_views_per_vision_item is None or len(gen_data_clean.num_views_per_vision_item) != 2:
+            raise ValueError("Multiview transfer AR requires per-camera VAE metadata for both vision items.")
+        num_views = gen_data_clean.num_views_per_vision_item[0]
+        if gen_data_clean.num_views_per_vision_item != [num_views, num_views]:
+            raise ValueError(
+                f"Control and target must use the same views, got {gen_data_clean.num_views_per_vision_item}."
+            )
+        control_latent, target_latent = gen_data_clean.x0_tokens_vision
+        if control_latent.shape != target_latent.shape:
+            raise ValueError(
+                f"Control and target latent shapes must match, got {control_latent.shape} and {target_latent.shape}."
+            )
+        if target_latent.shape[2] % num_views != 0:
+            raise ValueError(f"Target latent_t={target_latent.shape[2]} is not divisible by {num_views} views.")
+        frames_per_view = target_latent.shape[2] // num_views
+        output_frames = frames_per_view if max_num_frames is None else min(frames_per_view, max_num_frames)
+        if output_frames < 1:
+            raise ValueError(f"max_num_frames must leave at least one frame, got {max_num_frames}.")
+        if sync_num_frames_across_ranks and dist.is_available() and dist.is_initialized():
+            frame_count = torch.tensor([output_frames], device=target_latent.device, dtype=torch.long)  # [1]
+            dist.all_reduce(frame_count, op=dist.ReduceOp.MIN, group=sync_process_group)
+            output_frames = int(frame_count.item())
+
+        cond_text_tokens, uncond_text_tokens = self._get_inference_text_tokens(data_batch, has_negative_prompt)
+        cfgp_enabled = self.parallel_dims is not None and self.parallel_dims.cfgp_enabled
+        if cfgp_enabled:
+            seed = _broadcast_seed([seed], self.parallel_dims.cfgp_mesh.get_group(), self.parallel_dims.cfgp_rank)[0]
+        cfg_active = guidance != 1.0 or cfgp_enabled
+        fps_vision = gen_data_clean.fps_vision.tolist() if gen_data_clean.fps_vision is not None else [24.0]
+
+        def build_prefill_pack(
+            text_tokens: list[int],
+            *,
+            materialized_target_frame_ranges: Sequence[tuple[int, int]] | None = None,
+        ) -> PackedSequence:
+            pack = self._pack_input_sequence(
+                sequence_plans,
+                [text_tokens],
+                gen_data_clean,
+                torch.zeros(1, dtype=torch.float32),  # [1]
+            )
+            if pack.vision is None:
+                raise ValueError("Multiview transfer AR prefill requires packed vision data.")
+            original_masks = [mask.clone() for mask in pack.vision.condition_mask]  # list[[latent_t]]
+            pack.teacher_forcing_pass = "clean"
+            pack.teacher_forcing_original_condition_masks_vision = original_masks
+            if materialized_target_frame_ranges is not None:
+                # Keep the full two-item geometry so control and target-condition
+                # queries interact in one forward, while the replay mask hides
+                # ungenerated target suffix values from every real query.
+                pack.teacher_forcing_materialized_target_frame_ranges = tuple(materialized_target_frame_ranges)
+            pack.to_cuda()
+            self._cast_generated_tokens_to_precision(pack)
+            return pack
+
+        cond_prefill = build_prefill_pack(
+            cond_text_tokens[0],
+            materialized_target_frame_ranges=[],
+        )
+        assert cond_prefill.vision is not None
+        target_condition_mask = cond_prefill.vision.condition_mask[1]  # [V*T,1,1]
+        flex_backend = getattr(self.net, "flex_backend", None)
+        if flex_backend is None:
+            raise ValueError("Multiview transfer AR requires an initialized FlexAttention backend.")
+        control_shape, target_shape = cond_prefill.vision.token_shapes
+        total_memory_tokens = control_shape[0] * control_shape[1] * control_shape[2]
+        total_memory_tokens += target_shape[0] * target_shape[1] * target_shape[2]
+        kv_alignment = flex_backend.block_size[1]
+        memory_seq_len = ((total_memory_tokens + kv_alignment - 1) // kv_alignment) * kv_alignment
+        condition_count = _multiview_conditioned_prefix_length(
+            target_condition_mask,
+            num_views=num_views,
+            frames_per_view=frames_per_view,
+        )
+        generated_target = target_latent.to(**self.tensor_kwargs).clone()  # [1,C,V*T,H,W]
+        gen_data_clean.x0_tokens_vision[1] = generated_target
+        history_ranges: list[tuple[int, int]] = []
+        control_ranges: list[tuple[int, int]] = []
+        materialized_condition_count = min(condition_count, output_frames)
+        target_condition_ranges = [(0, materialized_condition_count)] if materialized_condition_count else []
+        num_layers = self.net.num_hidden_layers
+        cond_cache: list[tuple[torch.Tensor, torch.Tensor] | None] = [None] * num_layers
+        uncond_cache: list[tuple[torch.Tensor, torch.Tensor] | None] | None = (
+            [None] * num_layers if cfg_active and not cfgp_enabled else None
+        )
+
+        def build_memory_layout() -> MultiviewTransferARMemoryLayout:
+            return build_multiview_transfer_ar_memory_layout(
+                token_shapes=cond_prefill.vision.token_shapes,
+                target_condition_mask=target_condition_mask,
+                num_views=num_views,
+                frames_per_chunk=self.config.teacher_forcing_frames_per_chunk,
+                control_frame_ranges=control_ranges,
+                target_condition_frame_ranges=target_condition_ranges,
+                history_frame_ranges=history_ranges,
+                memory_seq_len=memory_seq_len,
+                device=target_condition_mask.device,
+            )
+
+        def capture_clean_prefill(
+            *,
+            pack: PackedSequence,
+            destination: list[tuple[torch.Tensor, torch.Tensor] | None],
+            memory_layout: MultiviewTransferARMemoryLayout,
+        ) -> None:
+            """Capture a full clean pass without reading partially-built AR memory."""
+            scratch_cache: list[tuple[torch.Tensor, torch.Tensor] | None] = [None] * num_layers
+            self._capture_multiview_transfer_ar_memory(
+                pack=pack,
+                cache=scratch_cache,
+                memory_seq_len=memory_seq_len,
+                write_indexes=memory_layout.prefill_source_token_indexes,
+                write_offset=0,
+                cache_write_indexes=memory_layout.prefill_cache_token_indexes,
+            )
+            self._merge_multiview_transfer_ar_memory(
+                destination=destination,
+                source=scratch_cache,
+                cache_indexes=memory_layout.prefill_cache_token_indexes,
+            )
+
+        controls_read_rgb = self._get_teacher_forcing_replay_policy().controls_read_strict_past_clean_rgb
+        if not controls_read_rgb:
+            control_ranges.append((0, frames_per_view))
+            initial_memory_layout = build_memory_layout()
+            uncond_prefill = None
+            if cfg_active:
+                assert uncond_text_tokens is not None
+                uncond_prefill = build_prefill_pack(
+                    uncond_text_tokens[0],
+                    materialized_target_frame_ranges=[],
+                )
+            if cfgp_enabled:
+                local_prefill = cond_prefill if self.parallel_dims.cfgp_rank == 0 else uncond_prefill
+                assert local_prefill is not None
+                capture_clean_prefill(
+                    pack=local_prefill,
+                    destination=cond_cache,
+                    memory_layout=initial_memory_layout,
+                )
+            else:
+                capture_clean_prefill(
+                    pack=cond_prefill,
+                    destination=cond_cache,
+                    memory_layout=initial_memory_layout,
+                )
+                if uncond_cache is not None:
+                    assert uncond_prefill is not None
+                    capture_clean_prefill(
+                        pack=uncond_prefill,
+                        destination=uncond_cache,
+                        memory_layout=initial_memory_layout,
+                    )
+
+        conditioned_prefix = _submit_multiview_conditioned_prefix(
+            generated_target,
+            num_views=num_views,
+            frames_per_view=frames_per_view,
+            condition_count=condition_count,
+            output_frames=output_frames,
+            on_clean_vision_chunk=on_clean_vision_chunk,
+        )
+        if conditioned_prefix is not None:
+            for prefix_frame in _iter_multiview_logical_frames(conditioned_prefix, num_views=num_views):
+                yield {"vision": prefix_frame}
+        for chunk_start, chunk_end in _iter_ar_chunk_ranges(
+            condition_count, output_frames, self.config.teacher_forcing_frames_per_chunk
+        ):
+            chunk_len = chunk_end - chunk_start
+            if controls_read_rgb:
+                control_ranges[:] = [(0, frames_per_view)]
+                refreshed_memory_layout = build_memory_layout()
+                refreshed_cond_prefill = build_prefill_pack(
+                    cond_text_tokens[0],
+                    materialized_target_frame_ranges=history_ranges,
+                )
+                refreshed_uncond_prefill = None
+                if cfg_active:
+                    assert uncond_text_tokens is not None
+                    refreshed_uncond_prefill = build_prefill_pack(
+                        uncond_text_tokens[0],
+                        materialized_target_frame_ranges=history_ranges,
+                    )
+                if cfgp_enabled:
+                    local_prefill = (
+                        refreshed_cond_prefill if self.parallel_dims.cfgp_rank == 0 else refreshed_uncond_prefill
+                    )
+                    assert local_prefill is not None
+                    capture_clean_prefill(
+                        pack=local_prefill,
+                        destination=cond_cache,
+                        memory_layout=refreshed_memory_layout,
+                    )
+                else:
+                    capture_clean_prefill(
+                        pack=refreshed_cond_prefill,
+                        destination=cond_cache,
+                        memory_layout=refreshed_memory_layout,
+                    )
+                    if uncond_cache is not None:
+                        assert refreshed_uncond_prefill is not None
+                        capture_clean_prefill(
+                            pack=refreshed_uncond_prefill,
+                            destination=uncond_cache,
+                            memory_layout=refreshed_memory_layout,
+                        )
+            memory_layout = build_memory_layout()
+            noise_generator = torch.Generator(device=target_latent.device).manual_seed(seed + chunk_start)
+            chunk_noise = torch.empty(
+                (
+                    1,
+                    target_latent.shape[1],
+                    num_views * chunk_len,
+                    target_latent.shape[3],
+                    target_latent.shape[4],
+                ),
+                device=target_latent.device,
+                dtype=self.tensor_kwargs["dtype"],
+            ).normal_(generator=noise_generator)  # [1,C,V*chunk_len,H,W]
+            cond_pack = self._build_multiview_transfer_ar_pack(
+                vision_latent=chunk_noise,
+                text_tokens=cond_text_tokens[0],
+                fps_vision=fps_vision,
+                num_views=num_views,
+                frames_per_view=frames_per_view,
+                chunk_start=chunk_start,
+                memory_layout=memory_layout,
+                current_role="current_target",
+            )
+            uncond_pack = (
+                self._build_multiview_transfer_ar_pack(
+                    vision_latent=chunk_noise,
+                    text_tokens=uncond_text_tokens[0],
+                    fps_vision=fps_vision,
+                    num_views=num_views,
+                    frames_per_view=frames_per_view,
+                    chunk_start=chunk_start,
+                    memory_layout=memory_layout,
+                    current_role="current_target",
+                )
+                if cfg_active
+                else None
+            )
+            denoised_chunk = self._generate_multiview_transfer_ar_chunk(
+                cond_pack=cond_pack,
+                uncond_pack=uncond_pack,
+                cond_cache=cond_cache,
+                uncond_cache=uncond_cache,
+                curr_vision_latent=chunk_noise,
+                guidance=guidance,
+                num_steps=num_steps,
+                shift=shift,
+                seed=seed,
+                chunk_start=chunk_start,
+                num_frames=output_frames,
+                normalize_cfg=normalize_cfg,
+                sampler_mode=sampler_mode,
+                distilled_num_steps=distilled_num_steps,
+                memory_seq_len=memory_seq_len,
+            )
+            for view_idx in range(num_views):
+                source_start = view_idx * chunk_len
+                target_start = view_idx * frames_per_view + chunk_start
+                generated_target[:, :, target_start : target_start + chunk_len].copy_(
+                    denoised_chunk[:, :, source_start : source_start + chunk_len]
+                )  # [1,C,chunk_len,H,W]
+            if on_clean_vision_chunk is not None:
+                on_clean_vision_chunk(denoised_chunk)
+
+            if chunk_end < output_frames:
+                clean_cond_pack = self._build_multiview_transfer_ar_pack(
+                    vision_latent=denoised_chunk.to(**self.tensor_kwargs),
+                    text_tokens=cond_text_tokens[0],
+                    fps_vision=fps_vision,
+                    num_views=num_views,
+                    frames_per_view=frames_per_view,
+                    chunk_start=chunk_start,
+                    memory_layout=memory_layout,
+                    current_role="clean_target",
+                )
+                clean_uncond_pack = (
+                    self._build_multiview_transfer_ar_pack(
+                        vision_latent=denoised_chunk.to(**self.tensor_kwargs),
+                        text_tokens=uncond_text_tokens[0],
+                        fps_vision=fps_vision,
+                        num_views=num_views,
+                        frames_per_view=frames_per_view,
+                        chunk_start=chunk_start,
+                        memory_layout=memory_layout,
+                        current_role="clean_target",
+                    )
+                    if cfg_active
+                    else None
+                )
+                spatial_tokens = target_shape[1] * target_shape[2]
+                chunk_token_count = num_views * chunk_len * spatial_tokens
+                write_indexes = torch.arange(
+                    chunk_token_count, device=target_condition_mask.device, dtype=torch.long
+                )  # [chunk_tokens]
+                cache_write_indexes = memory_layout.target_cache_token_indexes(
+                    (chunk_start, chunk_end)
+                )  # [chunk_tokens]
+                if cfgp_enabled:
+                    local_clean_pack = clean_cond_pack if self.parallel_dims.cfgp_rank == 0 else clean_uncond_pack
+                    assert local_clean_pack is not None
+                    self._capture_multiview_transfer_ar_memory(
+                        pack=local_clean_pack,
+                        cache=cond_cache,
+                        memory_seq_len=memory_seq_len,
+                        write_indexes=write_indexes,
+                        write_offset=0,
+                        cache_write_indexes=cache_write_indexes,
+                    )
+                else:
+                    self._capture_multiview_transfer_ar_memory(
+                        pack=clean_cond_pack,
+                        cache=cond_cache,
+                        memory_seq_len=memory_seq_len,
+                        write_indexes=write_indexes,
+                        write_offset=0,
+                        cache_write_indexes=cache_write_indexes,
+                    )
+                    if uncond_cache is not None:
+                        assert clean_uncond_pack is not None
+                        self._capture_multiview_transfer_ar_memory(
+                            pack=clean_uncond_pack,
+                            cache=uncond_cache,
+                            memory_seq_len=memory_seq_len,
+                            write_indexes=write_indexes,
+                            write_offset=0,
+                            cache_write_indexes=cache_write_indexes,
+                        )
+                history_ranges.append((chunk_start, chunk_end))
+
+            # Expose progress after the chunk is ready for future AR steps. Each
+            # event represents one latent time step across every synchronized view.
+            for output_frame in _iter_multiview_logical_frames(denoised_chunk, num_views=num_views):
+                yield {"vision": output_frame}
 
     def _cast_ar_action_tokens_to_projection_dtype(self, packed_seq: PackedSequence) -> None:
         """Cast AR action tokens to the dtype expected by the action projection."""
@@ -1649,6 +2631,8 @@ class OmniMoTCausalModel(OmniMoTModel):
         use_ar_rolling_path: bool = False,
         position_frame_idx: int | None = None,
         condition_frame_indexes_vision: list[int] | None = None,
+        transfer_history_sink_tokens: int = 0,
+        transfer_history_max_tokens: int | None = None,
     ) -> None:
         """Run one forward pass that writes ``frame_latent``'s K/V into
         ``dual_kv_cache[layer].gen_cache[frame_idx]``, under the strategy-appropriate
@@ -1666,7 +2650,8 @@ class OmniMoTCausalModel(OmniMoTModel):
         static-shape branch asserts it populated.
 
         Args:
-            frame_latent: Clean frame/chunk latent ``(1, C, T, H, W)``.
+            frame_latent: Clean frame/chunk latent ``(1, C, T, H, W)`` — user-provided
+                conditioning vision at prefill or denoised ``x̂₀`` at refresh.
             frame_idx: Logical K/V-cache index.
             cond_text_tokens / uncond_text_tokens: Text tokens to include in the pack,
                 or ``None`` to reuse cached ``und_cache`` (for ``frame_idx > 0``).
@@ -1676,10 +2661,12 @@ class OmniMoTCausalModel(OmniMoTModel):
             curr_action_latent: Action for this frame (forward_dynamics only) or None.
             seed: Base seed; only consulted under ``diffusion_forcing`` for ε sampling.
             position_frame_idx: Global latent-frame position used for mRoPE. Defaults
-                to ``frame_idx``. Transfer uses interleaved cache indexes while
-                preserving aligned control/target temporal positions.
-            condition_frame_indexes_vision: Clean local frame indexes for a
-                multi-frame control prefill.
+                to ``frame_idx``; transfer inference uses interleaved cache indexes.
+            condition_frame_indexes_vision: Clean packed-frame indexes. Defaults to
+                ``[0]`` for teacher-forcing refreshes.
+            transfer_history_sink_tokens: Leading pinned Transfer-history tokens.
+            transfer_history_max_tokens: Maximum recent Transfer-history suffix,
+                or maximum total suffix when no sink tokens are configured.
         """
         if position_frame_idx is None:
             position_frame_idx = frame_idx
@@ -1754,6 +2741,8 @@ class OmniMoTCausalModel(OmniMoTModel):
             "post_saturation_static_compile": post_saturation_static_compile,
             "frame_idx": frame_idx,
             "write_gen_cache": True,
+            "transfer_history_sink_tokens": transfer_history_sink_tokens,
+            "transfer_history_max_tokens": transfer_history_max_tokens,
         }
 
         if cfgp_enabled:
@@ -1794,6 +2783,8 @@ class OmniMoTCausalModel(OmniMoTModel):
                 "post_saturation_static_compile": post_saturation_static_compile,
                 "frame_idx": frame_idx,
                 "write_gen_cache": True,
+                "transfer_history_sink_tokens": transfer_history_sink_tokens,
+                "transfer_history_max_tokens": transfer_history_max_tokens,
             }
             if post_saturation_cuda_graph:
                 run_ar_post_saturation_cuda_graph(
@@ -1881,6 +2872,118 @@ class OmniMoTCausalModel(OmniMoTModel):
                 raise ValueError(f"Unsupported distilled sample_type: {sample_type!r}")
         return x  # [B,N_tokens_flat]
 
+    def _set_ar_vision_noise(
+        self,
+        packed_seq: PackedSequence,
+        vision_latent: torch.Tensor,  # [B,C,T,H,W]
+        timestep: torch.Tensor,  # [B,1]
+    ) -> None:
+        """Set one noisy vision item and its shared diffusion timestep."""
+        assert packed_seq.vision is not None and len(packed_seq.vision.tokens) == 1
+        packed_seq.vision.tokens = [vision_latent.to(**self.tensor_kwargs)]  # list[[B,C,T,H,W]]
+        n_vision_patches = len(packed_seq.vision.mse_loss_indexes)
+        packed_seq.vision.timesteps = (
+            timestep.flatten()[0].repeat(n_vision_patches).to(device=self.tensor_kwargs["device"], dtype=torch.float32)
+        )  # [N_noisy_vision]
+
+    def _predict_ar_velocity_with_cfg(
+        self,
+        *,
+        noise_x: torch.Tensor,  # [B,N_tokens_flat]
+        timestep: torch.Tensor,  # [B,1]
+        vision_shape: torch.Size,
+        packed_seq: PackedSequence,
+        packed_seq_uncond: PackedSequence | None,
+        guidance: float,
+        normalize_cfg: bool,
+        run_branch: _ARBranchRunner,
+    ) -> torch.Tensor:  # [B,N_tokens_flat]
+        """Run conditional branches and combine them with CFG."""
+        assert timestep.shape == (1, 1), f"Expected timestep shape (1, 1), got {tuple(timestep.shape)}."
+        noise_vision = noise_x.reshape(vision_shape)  # [B,C,T,H,W]
+        cfgp_enabled = self.parallel_dims is not None and self.parallel_dims.cfgp_enabled
+        if cfgp_enabled:
+            cfgp_rank = self.parallel_dims.cfgp_rank
+            cfgp_size = self.parallel_dims.cfgp_size
+            cfgp_group = self.parallel_dims.cfgp_mesh.get_group()
+            local_pack = packed_seq if cfgp_rank == 0 else packed_seq_uncond
+            assert local_pack is not None
+            branch: _ARBranch = "conditional" if cfgp_rank == 0 else "unconditional"
+            local_velocity = run_branch(local_pack, noise_vision, timestep, branch).contiguous()  # [B,C,T,H,W]
+            peer_velocity = torch.empty_like(local_velocity)  # [B,C,T,H,W]
+            cfgp_peer = (cfgp_rank + 1) % cfgp_size
+            requests = dist.batch_isend_irecv(
+                [
+                    dist.P2POp(op=dist.isend, tensor=local_velocity, group_peer=cfgp_peer, group=cfgp_group),
+                    dist.P2POp(op=dist.irecv, tensor=peer_velocity, group_peer=cfgp_peer, group=cfgp_group),
+                ]
+            )
+            for request in requests:
+                request.wait()
+            velocity_cond = local_velocity if cfgp_rank == 0 else peer_velocity  # [B,C,T,H,W]
+            velocity_uncond = peer_velocity if cfgp_rank == 0 else local_velocity  # [B,C,T,H,W]
+        else:
+            velocity_cond = run_branch(packed_seq, noise_vision, timestep, "conditional")  # [B,C,T,H,W]
+            if guidance == 1.0:
+                return velocity_cond.flatten(start_dim=1)  # [B,N_tokens_flat]
+            assert packed_seq_uncond is not None
+            velocity_uncond = run_branch(packed_seq_uncond, noise_vision, timestep, "unconditional")  # [B,C,T,H,W]
+
+        if normalize_cfg:
+            velocity = (1 - guidance) * velocity_uncond + guidance * velocity_cond  # [B,C,T,H,W]
+        else:
+            velocity = velocity_uncond + guidance * (velocity_cond - velocity_uncond)  # [B,C,T,H,W]
+        return velocity.flatten(start_dim=1)  # [B,N_tokens_flat]
+
+    def _run_ar_sampler(
+        self,
+        velocity_fn: Callable[[torch.Tensor, torch.Tensor], torch.Tensor],
+        initial_noise: torch.Tensor,  # [B,N_tokens_flat]
+        *,
+        sampler_mode: str,
+        num_steps: int,
+        shift: float,
+        seed: int,
+        sample_idx: int,
+        num_frames: int | None,
+        distilled_num_steps: int | None,
+    ) -> torch.Tensor:  # [B,N_tokens_flat]
+        """Run the configured AR sampler for one frame or synchronized chunk."""
+        if sampler_mode == "distilled":
+            return self._run_distilled_ar_sampler(
+                velocity_fn,
+                initial_noise,
+                seed=seed,
+                frame_idx=sample_idx,
+                num_frames=num_frames,
+                distilled_num_steps=distilled_num_steps,
+            )  # [B,N_tokens_flat]
+        if sampler_mode == "rf" and self.config.rectified_flow_inference_config.scheduler_type == "unipc":
+            return self.sampler(
+                velocity_fn,
+                initial_noise,
+                num_steps=num_steps,
+                shift=shift,
+                seed=seed + sample_idx,
+            )  # [B,N_tokens_flat]
+        if sampler_mode == "rf":
+
+            def x0_fn(noise_x: torch.Tensor, sigma: torch.Tensor) -> torch.Tensor:
+                timestep_rf = sigma * float(self.config.rectified_flow_inference_config.num_train_timesteps)  # [B]
+                timestep_rf = timestep_rf.unsqueeze(0)  # [1,B]
+                velocity = velocity_fn(noise_x, timestep_rf)  # [B,N_tokens_flat]
+                return noise_x - sigma * velocity  # [B,N_tokens_flat]
+
+            return self.sampler(
+                x0_fn,
+                initial_noise,
+                num_steps=num_steps,
+                sigma_max=80.0,
+                sigma_min=0.002,
+                solver_option="2ab",
+            )  # [B,N_tokens_flat]
+        raise ValueError(f"Unsupported sampler_mode: {sampler_mode!r}")
+
     @torch.no_grad()
     def generate_next_frame(
         self,
@@ -1906,6 +3009,8 @@ class OmniMoTCausalModel(OmniMoTModel):
         sampler_mode: str = "rf",
         distilled_num_steps: int | None = None,
         use_ar_rolling_path: bool = False,
+        transfer_history_sink_tokens: int = 0,
+        transfer_history_max_tokens: int | None = None,
     ) -> torch.Tensor:
         """
         Denoise a single frame using AR generation with cumulative pack.
@@ -1933,12 +3038,15 @@ class OmniMoTCausalModel(OmniMoTModel):
             fps_action_list: FPS list for action tokens
             frame_idx: Current temporal frame/chunk index (default: 0).
             cache_frame_idx: Logical K/V-cache index. Defaults to ``frame_idx``;
-                transfer uses an interleaved control/RGB index.
+                transfer uses an interleaved control/target index.
             num_frames: Total latent frame count for frame-aware distilled schedules.
             normalize_cfg: Normalize CFG output
             sampler_mode: ``"rf"`` for multi-step RF sampling, ``"distilled"`` for
                 direct causal-distillation few-step sampling.
             distilled_num_steps: Optional debug truncation for distilled schedules.
+            transfer_history_sink_tokens: Leading pinned Transfer-history tokens.
+            transfer_history_max_tokens: Maximum recent Transfer-history suffix,
+                or maximum total suffix when no sink tokens are configured.
 
         Returns:
             Denoised frame latent. Shape: (1, C, 1, H, W)
@@ -1967,22 +3075,7 @@ class OmniMoTCausalModel(OmniMoTModel):
         ) -> None:
             """Set noisy latents for the current frame/chunk in the pack (one vision item)."""
             if pack.vision is not None:
-                # tokens is list[Tensor] with exactly one entry (one vision item / clip).
-                assert len(pack.vision.tokens) == 1, (
-                    f"AR packing: expected 1 vision item, got {len(pack.vision.tokens)}"
-                )
-                pack.vision.tokens = [noise_x_vision.to(**self.tensor_kwargs)]
-                # One timestep entry per noisy patch (Th*Tw per latent frame, across
-                # all frames of the chunk); the chunk is denoised at a single σ.
-                n_vision_patches = len(pack.vision.mse_loss_indexes)
-                pack.vision.timesteps = (
-                    timestep.flatten()[0]
-                    .repeat(n_vision_patches)
-                    .to(
-                        device=self.tensor_kwargs["device"],
-                        dtype=torch.float32,
-                    )
-                )  # [N_noisy_vision]
+                OmniMoTCausalModel._set_ar_vision_noise(self, pack, noise_x_vision, timestep)
 
             if curr_action_latent is not None and pack.action is not None:
                 # For action, we keep it clean (condition) - no noise added
@@ -2013,14 +3106,7 @@ class OmniMoTCausalModel(OmniMoTModel):
             Handles both conditional (with text) and unconditional (without text) forward passes
             for Classifier-Free Guidance (CFG).
             """
-            assert timestep.shape == (1, 1), f"Expected (1, 1), got {timestep.shape}"
-
-            # Reshape noise_x to vision shape
-            vision_shape = curr_vision_latent.shape
-            noise_x_vision = noise_x.reshape(vision_shape)  # [B,C,1,H,W]
-
             cfgp_enabled = self.parallel_dims is not None and self.parallel_dims.cfgp_enabled
-
             # AR path selection (single ``attention_AR_gen_only`` kernel
             # for all inference modes):
             #
@@ -2041,170 +3127,75 @@ class OmniMoTCausalModel(OmniMoTModel):
             use_ar_rolling = use_ar_rolling_path and cache_frame_idx > 0
             post_saturation_static_compile = is_ar_post_saturation_static_compile_frame(self, cache_frame_idx)
             post_saturation_cuda_graph = is_ar_post_saturation_cuda_graph_frame(self, cache_frame_idx)
-            memory_info = {
-                "dual_kv_cache": dual_kv_cache,
-                "use_rolling_kv_cache": False,
-                "use_ar_rolling": use_ar_rolling,
-                "post_saturation_static_compile": post_saturation_static_compile,
-                "frame_idx": cache_frame_idx,
-                # Do not persist noisy current-frame K/V from intermediate
-                # denoising steps into the rolling AR cache.
-                # The clean denoised frame is written exactly once by
-                # ``_seed_frame_into_kv_cache`` after sampling finishes.
-                "write_gen_cache": False,
-            }
 
-            if cfgp_enabled:
-                # CFGP: each rank runs one branch in parallel, then P2P-exchange velocities.
-                # Rank 0 = conditional, rank 1 = unconditional.
-                cfgp_rank = self.parallel_dims.cfgp_rank
-                cfgp_size = self.parallel_dims.cfgp_size
-                cfgp_group = self.parallel_dims.cfgp_mesh.get_group()
-
-                if cfgp_rank == 0:
-                    set_pack_noise(packed_seq, noise_x_vision, timestep)
-                    torch.compiler.cudagraph_mark_step_begin()
-                    # memory_info has the local (conditional for rank 0) kv_cache.
-                    memory = self.build_memory_state(packed_seq, memory_info)
-                    out = self.denoise(
-                        data_batch_packed=packed_seq,
-                        memory=memory,
-                    )
+            def run_branch(
+                pack: PackedSequence,
+                noise_vision: torch.Tensor,  # [B,C,1,H,W]
+                branch_timestep: torch.Tensor,  # [1,1]
+                branch: _ARBranch,
+            ) -> torch.Tensor:  # [B,C,1,H,W]
+                set_pack_noise(pack, noise_vision, branch_timestep)
+                if cfgp_enabled or branch == "conditional":
+                    branch_cache = dual_kv_cache
                 else:
-                    assert packed_seq_uncond is not None
-                    set_pack_noise(packed_seq_uncond, noise_x_vision, timestep)
-                    torch.compiler.cudagraph_mark_step_begin()
-                    # memory_info has the local (unconditional for rank 1) kv_cache
-                    memory = self.build_memory_state(packed_seq_uncond, memory_info)
-                    out = self.denoise(
-                        data_batch_packed=packed_seq_uncond,
-                        memory=memory,
+                    assert dual_kv_cache_uncond is not None, (
+                        "dual_kv_cache_uncond required when guidance != 1.0 without CFGP"
                     )
-
-                # P2P exchange: same pattern as _run_classifier_free_guidance()
-                v = torch.stack(out["preds_vision"]).contiguous()  # [1,C,1,H,W]
-                other_v = torch.empty_like(v)  # [1,C,1,H,W]
-                cfgp_peer = (cfgp_rank + 1) % cfgp_size
-                reqs = dist.batch_isend_irecv(
-                    [
-                        dist.P2POp(op=dist.isend, tensor=v, group_peer=cfgp_peer, group=cfgp_group),
-                        dist.P2POp(op=dist.irecv, tensor=other_v, group_peer=cfgp_peer, group=cfgp_group),
-                    ]
-                )
-                for req in reqs:
-                    req.wait()
-                velocity_cond = v if cfgp_rank == 0 else other_v  # [1,C,1,H,W]
-                velocity_uncond = other_v if cfgp_rank == 0 else v  # [1,C,1,H,W]
-            else:
-                # Sequential path (no CFGP)
-                set_pack_noise(packed_seq, noise_x_vision, timestep)
-                if post_saturation_cuda_graph:
-                    out_cond = run_ar_post_saturation_cuda_graph(
-                        self,
-                        kind="denoise",
-                        branch="conditional",
-                        packed_seq=packed_seq,
-                        memory_info=memory_info,
-                    )
-                else:
-                    torch.compiler.cudagraph_mark_step_begin()
-                    # memory_info holds the conditional kv-cache
-                    memory_cond = self.build_memory_state(packed_seq, memory_info)
-                    out_cond = self.denoise(
-                        data_batch_packed=packed_seq,
-                        memory=memory_cond,
-                    )
-                velocity_cond = torch.stack(out_cond["preds_vision"])  # [1,C,1,H,W]
-
-                # Skip the unconditional forward when guidance == 1.0 — the CFG
-                # formula collapses to velocity_cond, so computing it is pure waste.
-                if guidance == 1.0:
-                    return velocity_cond.flatten(start_dim=1)  # [B,N_tokens_flat]
-
-                assert packed_seq_uncond is not None, "packed_seq_uncond required when guidance != 1.0 without CFGP"
-                assert dual_kv_cache_uncond is not None, (
-                    "dual_kv_cache_uncond required when guidance != 1.0 without CFGP"
-                )
-                set_pack_noise(packed_seq_uncond, noise_x_vision, timestep)
-                memory_info_uncond = {
-                    "dual_kv_cache": dual_kv_cache_uncond,
+                    branch_cache = dual_kv_cache_uncond
+                memory_info = {
+                    "dual_kv_cache": branch_cache,
                     "use_rolling_kv_cache": False,
                     "use_ar_rolling": use_ar_rolling,
                     "post_saturation_static_compile": post_saturation_static_compile,
                     "frame_idx": cache_frame_idx,
-                    # Do not persist noisy unconditional K/V from intermediate
-                    # denoising steps into the rolling AR cache.
-                    # The clean denoised frame is written exactly once by
-                    # ``_seed_frame_into_kv_cache`` after sampling finishes.
+                    # Do not persist noisy current-frame K/V from intermediate
+                    # denoising steps into the rolling AR cache. The clean frame
+                    # is written exactly once after sampling finishes.
                     "write_gen_cache": False,
+                    "transfer_history_sink_tokens": transfer_history_sink_tokens,
+                    "transfer_history_max_tokens": transfer_history_max_tokens,
                 }
-                if post_saturation_cuda_graph:
-                    out_uncond = run_ar_post_saturation_cuda_graph(
+                if not cfgp_enabled and post_saturation_cuda_graph:
+                    output = run_ar_post_saturation_cuda_graph(
                         self,
                         kind="denoise",
-                        branch="unconditional",
-                        packed_seq=packed_seq_uncond,
-                        memory_info=memory_info_uncond,
+                        branch=branch,
+                        packed_seq=pack,
+                        memory_info=memory_info,
                     )
                 else:
                     torch.compiler.cudagraph_mark_step_begin()
-                    memory_uncond = self.build_memory_state(packed_seq_uncond, memory_info_uncond)
-                    out_uncond = self.denoise(
-                        data_batch_packed=packed_seq_uncond,
-                        memory=memory_uncond,
-                    )
-                velocity_uncond = torch.stack(out_uncond["preds_vision"])  # [1,C,1,H,W]
+                    memory = self.build_memory_state(pack, memory_info)
+                    output = self.denoise(data_batch_packed=pack, memory=memory)
+                return torch.stack(output["preds_vision"])  # [B,C,1,H,W]
 
-            if normalize_cfg:
-                # Normalized CFG: interpolate between uncond and cond
-                velocity_pred = (1 - guidance) * velocity_uncond + guidance * velocity_cond  # [1,C,1,H,W]
-            else:
-                # Standard CFG
-                velocity_pred = velocity_uncond + guidance * (velocity_cond - velocity_uncond)  # [1,C,1,H,W]
-
-            # Return flattened velocity
-            return velocity_pred.flatten(start_dim=1)  # [B,N_tokens_flat]
+            return OmniMoTCausalModel._predict_ar_velocity_with_cfg(
+                self,
+                noise_x=noise_x,
+                timestep=timestep,
+                vision_shape=curr_vision_latent.shape,
+                packed_seq=packed_seq,
+                packed_seq_uncond=packed_seq_uncond,
+                guidance=guidance,
+                normalize_cfg=normalize_cfg,
+                run_branch=run_branch,
+            )  # [B,N_tokens_flat]
 
         # Initialize noise
         initial_noise = curr_vision_latent.flatten(start_dim=1)  # [B,N_tokens_flat]
 
-        # Run sampler
-        if sampler_mode == "distilled":
-            denoised_flat = self._run_distilled_ar_sampler(
-                velocity_fn,
-                initial_noise,
-                seed=seed,
-                frame_idx=frame_idx,
-                num_frames=num_frames,
-                distilled_num_steps=distilled_num_steps,
-            )  # [B,N_tokens_flat]
-        elif sampler_mode == "rf" and self.config.rectified_flow_inference_config.scheduler_type == "unipc":
-            denoised_flat = self.sampler(
-                velocity_fn,
-                initial_noise,
-                num_steps=num_steps,
-                shift=shift,
-                seed=seed + frame_idx,
-            )  # [1,C*H*W]
-        elif sampler_mode == "rf":
-            # EDM sampler
-            def x0_fn(noise_x: torch.Tensor, sigma: torch.Tensor) -> torch.Tensor:
-                timestep_rf = sigma * float(self.config.rectified_flow_inference_config.num_train_timesteps)
-                timestep_rf = timestep_rf.unsqueeze(0)  # [1,1]
-                velocity_pred = velocity_fn(noise_x, timestep_rf)  # [1,C*H*W]
-                x0_pred = noise_x - sigma * velocity_pred  # [1,C*H*W]
-                return x0_pred
-
-            denoised_flat = self.sampler(
-                x0_fn,
-                initial_noise,
-                num_steps=num_steps,
-                sigma_max=80.0,
-                sigma_min=0.002,
-                solver_option="2ab",
-            )
-        else:
-            raise ValueError(f"Unsupported sampler_mode: {sampler_mode!r}")
+        denoised_flat = OmniMoTCausalModel._run_ar_sampler(
+            self,
+            velocity_fn,
+            initial_noise,
+            sampler_mode=sampler_mode,
+            num_steps=num_steps,
+            shift=shift,
+            seed=seed,
+            sample_idx=frame_idx,
+            num_frames=num_frames,
+            distilled_num_steps=distilled_num_steps,
+        )  # [B,N_tokens_flat]
 
         # Reshape to frame shape
         denoised_frame = denoised_flat.reshape(curr_vision_latent.shape)  # [B,C,1,H,W]

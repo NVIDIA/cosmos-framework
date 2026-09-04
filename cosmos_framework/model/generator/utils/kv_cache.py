@@ -12,7 +12,7 @@ and streaming inference patterns.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 import torch
@@ -20,6 +20,7 @@ import torch.nn.functional as F
 
 # Re-exported from memory.py for backward compatibility.
 from cosmos_framework.model.generator.utils.memory import KVToStore, MemoryState, MemoryValue
+from cosmos_framework.configs.base.defaults.replay_attention import TeacherForcingReplayPolicyConfig
 from cosmos_framework.model.generator.utils.kv_storage_backend import (
     BF16StorageBackend,
     FP8StorageBackend,
@@ -827,9 +828,10 @@ class TFReplayCleanMemoryValue(KVTrainMemoryValue):
     ``KVTrainMemoryValue`` and remains CP-rejected.
     """
 
-    # Transfer control visibility. ``global_control`` preserves the original
-    # full-clip behavior; ``causal_control`` uses the [1, C, C, ...] chunk grid.
-    transfer_control_attention_mode: str = "global_control"
+    # Backend-neutral visibility policy shared with the noisy replay pass.
+    teacher_forcing_replay_policy: TeacherForcingReplayPolicyConfig = field(
+        default_factory=TeacherForcingReplayPolicyConfig
+    )
     frames_per_chunk: int = 1
 
     @property
@@ -850,8 +852,10 @@ class TFNoisyMemoryValue(KVTrainMemoryValue):
     # Latent frames per causal chunk (chunk partition is [1, C, C, ...]; the
     # first chunk is always a single frame).  1 == framewise teacher forcing.
     frames_per_chunk: int = 1
-    # Transfer control visibility; see ``TFReplayCleanMemoryValue``.
-    transfer_control_attention_mode: str = "global_control"
+    # Backend-neutral visibility policy shared with the clean replay pass.
+    teacher_forcing_replay_policy: TeacherForcingReplayPolicyConfig = field(
+        default_factory=TeacherForcingReplayPolicyConfig
+    )
 
     @property
     def supports_context_parallel_attention(self) -> bool:
@@ -1160,7 +1164,7 @@ class TeacherForcingMemoryState(KVCacheTrainMemoryState):
         detach_clean_kv: bool = False,
         clamp_empty_varlen_kv: bool = True,
         frames_per_chunk: int = 1,
-        transfer_control_attention_mode: str = "global_control",
+        teacher_forcing_replay_policy: TeacherForcingReplayPolicyConfig | None = None,
         context_parallel_size: int = 1,
         selected_clean_gen_token_indexes: torch.Tensor | None = None,
         selected_clean_gen_padded_capacity: int = 0,
@@ -1179,7 +1183,11 @@ class TeacherForcingMemoryState(KVCacheTrainMemoryState):
         self.pass_number = 1
         self.detach_clean_kv = detach_clean_kv
         self.frames_per_chunk = frames_per_chunk
-        self.transfer_control_attention_mode = transfer_control_attention_mode
+        self.teacher_forcing_replay_policy = (
+            TeacherForcingReplayPolicyConfig()
+            if teacher_forcing_replay_policy is None
+            else teacher_forcing_replay_policy
+        )
         if selected_clean_gen_token_indexes is None and selected_clean_gen_padded_capacity:
             raise ValueError("selected_clean_gen_padded_capacity requires selected_clean_gen_token_indexes.")
         if (
@@ -1249,7 +1257,7 @@ class TeacherForcingMemoryState(KVCacheTrainMemoryState):
                 cached_gen_v=base_value.cached_gen_v,
                 max_gen_cache_tokens=base_value.max_gen_cache_tokens,
                 clamp_empty_varlen_kv=base_value.clamp_empty_varlen_kv,
-                transfer_control_attention_mode=self.transfer_control_attention_mode,
+                teacher_forcing_replay_policy=self.teacher_forcing_replay_policy,
                 frames_per_chunk=self.frames_per_chunk,
             )
 
@@ -1280,7 +1288,7 @@ class TeacherForcingMemoryState(KVCacheTrainMemoryState):
             cached_clean_gen_k=clean_k,
             cached_clean_gen_v=clean_v,
             frames_per_chunk=self.frames_per_chunk,
-            transfer_control_attention_mode=self.transfer_control_attention_mode,
+            teacher_forcing_replay_policy=self.teacher_forcing_replay_policy,
         )
 
     def write_for_layer(self, layer_idx: int, kv_to_store: KVToStore) -> None:
@@ -1320,7 +1328,7 @@ class TeacherForcingMemoryState(KVCacheTrainMemoryState):
 
 @dataclass
 class FlexARMemoryValue(MemoryValue):
-    """Read-only fixed-capacity K/V suffix for multiview WSM AR inference."""
+    """Read-only fixed-capacity K/V suffix for multiview transfer AR inference."""
 
     cached_gen_k: torch.Tensor | None  # [1,S_memory,H_kv,D] or None during prefill
     cached_gen_v: torch.Tensor | None  # [1,S_memory,H_kv,D] or None during prefill
@@ -1332,7 +1340,7 @@ class FlexARMemoryState(MemoryState):
     The cache list is shared by the prefill, denoising, and clean-refresh
     states of one CFG branch. Denoising states omit ``write_indexes`` and are
     read-only; prefill/refresh states select clean GEN K/V and write them into
-    the requested suffix range.
+    either a contiguous suffix range or explicitly indexed cache slots.
     """
 
     def __init__(
@@ -1343,6 +1351,7 @@ class FlexARMemoryState(MemoryState):
         cache: list[tuple[torch.Tensor, torch.Tensor] | None] | None = None,
         write_indexes: torch.Tensor | None = None,
         write_offset: int = 0,
+        cache_write_indexes: torch.Tensor | None = None,
     ) -> None:
         if memory_seq_len < 1:
             raise ValueError(f"memory_seq_len must be >= 1, got {memory_seq_len}.")
@@ -1352,8 +1361,31 @@ class FlexARMemoryState(MemoryState):
         self.cache = [None] * num_layers if cache is None else cache
         if len(self.cache) != num_layers:
             raise ValueError(f"Expected {num_layers} cache entries, got {len(self.cache)}.")
+        if write_indexes is not None and write_indexes.ndim != 1:
+            raise ValueError(f"write_indexes must be one-dimensional, got shape {tuple(write_indexes.shape)}.")
+        if cache_write_indexes is not None:
+            if cache_write_indexes.ndim != 1:
+                raise ValueError(
+                    f"cache_write_indexes must be one-dimensional, got shape {tuple(cache_write_indexes.shape)}."
+                )
+            if cache_write_indexes.dtype not in (torch.int32, torch.int64):
+                raise ValueError(f"cache_write_indexes must use an integer dtype, got {cache_write_indexes.dtype}.")
+            if write_indexes is None:
+                raise ValueError("cache_write_indexes requires write_indexes.")
+            if cache_write_indexes.numel() != write_indexes.numel():
+                raise ValueError(
+                    "cache_write_indexes and write_indexes must have the same length; "
+                    f"got {cache_write_indexes.numel()} and {write_indexes.numel()}."
+                )
+            if cache_write_indexes.numel() and (
+                int(cache_write_indexes.min().item()) < 0 or int(cache_write_indexes.max().item()) >= memory_seq_len
+            ):
+                raise ValueError(
+                    f"cache_write_indexes must be in [0, {memory_seq_len}); got {cache_write_indexes.tolist()}."
+                )
         self.write_indexes = write_indexes
         self.write_offset = write_offset
+        self.cache_write_indexes = cache_write_indexes
 
     def requires_natten_metadata(self) -> bool:
         return False
@@ -1376,7 +1408,7 @@ class FlexARMemoryState(MemoryState):
         selected_k = torch.index_select(gen_k, 1, write_indexes).detach()  # [1,S_write,H_kv,D]
         selected_v = torch.index_select(gen_v, 1, write_indexes).detach()  # [1,S_write,H_kv,D]
         write_end = self.write_offset + selected_k.shape[1]
-        if write_end > self.memory_seq_len:
+        if self.cache_write_indexes is None and write_end > self.memory_seq_len:
             raise ValueError(
                 f"Flex AR cache write [{self.write_offset}, {write_end}) exceeds capacity {self.memory_seq_len}."
             )
@@ -1391,8 +1423,13 @@ class FlexARMemoryState(MemoryState):
             self.cache[layer_idx] = (cached_k, cached_v)
         else:
             cached_k, cached_v = cached_kv
-        cached_k[:, self.write_offset : write_end].copy_(selected_k)  # [1,S_write,H_kv,D]
-        cached_v[:, self.write_offset : write_end].copy_(selected_v)  # [1,S_write,H_kv,D]
+        if self.cache_write_indexes is None:
+            cached_k[:, self.write_offset : write_end].copy_(selected_k)  # [1,S_write,H_kv,D]
+            cached_v[:, self.write_offset : write_end].copy_(selected_v)  # [1,S_write,H_kv,D]
+            return
+        cache_write_indexes = self.cache_write_indexes.to(device=cached_k.device, dtype=torch.long)  # [S_write]
+        cached_k.index_copy_(1, cache_write_indexes, selected_k)  # [1,S_memory,H_kv,D]
+        cached_v.index_copy_(1, cache_write_indexes, selected_v)  # [1,S_memory,H_kv,D]
 
     def is_gen_only(self) -> bool:
         return False
@@ -1547,6 +1584,13 @@ class ARMemoryState(MemoryState):
             so a full-model post-saturation CUDA Graph can replay across frames.
         stage_gen_cache_writes: Retain refresh K/V outputs at captured addresses
             for an explicit cache commit after graph replay.
+        transfer_history_sink_tokens: Number of leading cached visual tokens to
+            preserve before applying Transfer history limiting. This is the
+            tokenized form of complete logical Transfer sink frames.
+        transfer_history_max_tokens: Optional Transfer history limit. With a
+            positive ``transfer_history_sink_tokens`` this limits only the
+            recent suffix after the pinned prefix. With no sink tokens it keeps
+            the legacy behavior of limiting the complete history to a suffix.
     """
 
     def requires_natten_metadata(self) -> bool:
@@ -1570,6 +1614,8 @@ class ARMemoryState(MemoryState):
         static_und_cache_max_len: int | None = None,
         coarse_cuda_graph: bool = False,
         stage_gen_cache_writes: bool = False,
+        transfer_history_sink_tokens: int = 0,
+        transfer_history_max_tokens: int | None = None,
     ) -> None:
         self.dual_kv_cache = dual_kv_cache
         self.frame_idx = frame_idx
@@ -1585,6 +1631,8 @@ class ARMemoryState(MemoryState):
         self.static_und_cache_max_len = static_und_cache_max_len
         self.coarse_cuda_graph: bool = coarse_cuda_graph
         self.stage_gen_cache_writes: bool = stage_gen_cache_writes
+        self.transfer_history_sink_tokens: int = transfer_history_sink_tokens
+        self.transfer_history_max_tokens: int | None = transfer_history_max_tokens
         self._staged_gen_kv: list[tuple[torch.Tensor, torch.Tensor] | None] = [None] * len(dual_kv_cache)
         self._coarse_padded_und_kv: list[tuple[torch.Tensor, torch.Tensor] | None] = [None] * len(dual_kv_cache)
         if for_cuda_graphs:
@@ -1597,6 +1645,13 @@ class ARMemoryState(MemoryState):
             )
         if coarse_cuda_graph:
             assert post_saturation_static_compile, "coarse_cuda_graph=True requires post-saturation static compile"
+        if transfer_history_sink_tokens < 0:
+            raise ValueError(f"transfer_history_sink_tokens must be >= 0, got {transfer_history_sink_tokens}")
+        if transfer_history_max_tokens is not None:
+            if transfer_history_max_tokens < 0:
+                raise ValueError(f"transfer_history_max_tokens must be >= 0, got {transfer_history_max_tokens}")
+            if for_cuda_graphs or post_saturation_static_compile:
+                raise ValueError("transfer history limiting supports only dynamic-shape AR inference")
         if kv_head_shard_size > 1:
             assert not for_cuda_graphs, "local KV-head cache storage does not support CUDA graph static-cache mode"
             assert num_kv_heads is not None, "local KV-head cache storage requires num_kv_heads"
@@ -1715,6 +1770,34 @@ class ARMemoryState(MemoryState):
                 )  # [1,S_hist_max,H,D] each
             else:
                 gen_k_hist, gen_v_hist = cache.gen_cache.fetch_kv(self.frame_idx)  # [B,S_hist,H,D] each or None
+            if self.transfer_history_max_tokens is not None and gen_k_hist is not None:
+                if gen_v_hist is None or gen_v_hist.shape[1] != gen_k_hist.shape[1]:
+                    raise AssertionError(
+                        "transfer history K/V cache lengths differ: "
+                        f"k={gen_k_hist.shape[1]}, v={None if gen_v_hist is None else gen_v_hist.shape[1]}"
+                    )
+                max_tokens = self.transfer_history_max_tokens
+                sink_tokens = min(self.transfer_history_sink_tokens, gen_k_hist.shape[1])
+                if sink_tokens == 0:
+                    if max_tokens == 0:
+                        gen_k_hist = None
+                        gen_v_hist = None
+                    elif gen_k_hist.shape[1] > max_tokens:
+                        gen_k_hist = gen_k_hist[:, -max_tokens:]  # [B,S_history_limited,H,D]
+                        gen_v_hist = gen_v_hist[:, -max_tokens:]  # [B,S_history_limited,H,D]
+                else:
+                    recent_available = gen_k_hist.shape[1] - sink_tokens
+                    recent_tokens = min(max_tokens, recent_available)
+                    sink_k = gen_k_hist[:, :sink_tokens]  # [B,S_sink,H,D]
+                    sink_v = gen_v_hist[:, :sink_tokens]  # [B,S_sink,H,D]
+                    if recent_tokens == 0:
+                        gen_k_hist = sink_k  # [B,S_sink,H,D]
+                        gen_v_hist = sink_v  # [B,S_sink,H,D]
+                    else:
+                        recent_k = gen_k_hist[:, -recent_tokens:]  # [B,S_recent,H,D]
+                        recent_v = gen_v_hist[:, -recent_tokens:]  # [B,S_recent,H,D]
+                        gen_k_hist = torch.cat((sink_k, recent_k), dim=1)  # [B,S_sink+S_recent,H,D]
+                        gen_v_hist = torch.cat((sink_v, recent_v), dim=1)  # [B,S_sink+S_recent,H,D]
             if self.post_saturation_static_compile:
                 assert self.static_und_cache_max_len is not None
                 assert self._real_und_cache_len_t is not None

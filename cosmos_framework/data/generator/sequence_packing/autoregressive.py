@@ -99,7 +99,7 @@ def pack_input_sequence_autoregressive(
         action_domain_id: Optional domain id for DomainAwareLinear action projection.
         raw_action_dim: Optional raw action width before model-space padding.
         vision_temporal_positions: Optional absolute flattened-item latent
-            coordinates for every frame in ``vision_latent``. Multiview WSM AR
+            coordinates for every frame in ``vision_latent``. Multiview transfer AR
             uses this to preserve each camera's position in the full camera-major
             training item while packing only the current chunk.
         num_views: Number of camera views concatenated along the latent temporal

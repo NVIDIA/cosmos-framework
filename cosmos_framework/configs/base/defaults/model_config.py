@@ -57,9 +57,11 @@ class DiffusionExpertConfig:
     # sound on the same latent-frame temporal grid as vision/action.
     sound_base_temporal_compression_factor: int | None = None
     # Temporal coordinates used for unified_3d_mrope vision tokens.
-    # - "latent_index": legacy behavior, positions are 0, 1, ..., T_latent-1.
+    # - "latent_index": use latent-frame indexes, optionally shared across camera views.
     # - "uniae_source_right_edge": use UniAE padded-patch right-edge source-frame coordinates.
     vision_temporal_position_mode: str = "latent_index"
+    # Whether camera-major views reuse the same local temporal mRoPE coordinates.
+    align_temporal_positions_across_views: bool = False
     # For unified_3d_mrope: whether spatial (H, W) indices reset to 0 for each vision segment
     unified_3d_mrope_reset_spatial_ids: bool = True
     # Setting the temporal gap on the boundary of the different modalities, default is 0, using a value greater than 0 will add an additional offset on the accumulated temporal offset.

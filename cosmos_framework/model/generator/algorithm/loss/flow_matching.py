@@ -43,6 +43,7 @@ def compute_flow_matching_loss(
     raw_action_dim: list[torch.Tensor] | None = None,
     action_valid_mask: list[torch.Tensor] | None = None,
     normalize_by_active: bool = False,
+    exclude_fully_conditioned_items: bool = False,
     action_slot_stats: ActionSlotLossStats | None = None,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """Compute flow matching loss for a modality.
@@ -69,6 +70,10 @@ def compute_flow_matching_loss(
             ``sum / active_count`` semantics needed for distillation critics where
             conditioned frames contribute no signal and should not dilute the
             denominator.
+        exclude_fully_conditioned_items: When True, omit items with no noisy tokens
+            from the final scalar mean while preserving their zero entries in the
+            per-instance output. This prevents clean controls in flattened transfer
+            samples from diluting the generated target loss.
         action_slot_stats: Optional collector for detached normalized per-sample
             losses over the canonical unified Action slots.
 
@@ -86,10 +91,12 @@ def compute_flow_matching_loss(
     # tw_i gets the same shape so w(σ_t) broadcasts element-wise over non-T dims.
     per_instance_losses = []
     per_instance_weighted_losses = []
+    has_noisy_items: list[torch.Tensor] = []
     for i in range(len(pred)):
         T_i = condition_mask[i].shape[0]
         sqerr_i = (pred[i] - target[i]) ** 2  # vision:[C,T,H,W]  action/sound:[T,D]
         noisy_mask_i = 1.0 - condition_mask[i]  # vision:[T,1,1]  action/sound:[T,1]
+        has_noisy_items.append(torch.any(noisy_mask_i != 0))  # []
         if raw_action_dim is not None and raw_action_dim[i] is not None:
             sqerr_i = sqerr_i[:, : raw_action_dim[i]]
         slot_mask_i = None
@@ -148,4 +155,16 @@ def compute_flow_matching_loss(
 
     per_instance_loss = torch.stack(per_instance_losses)  # [B]
     per_instance_weighted_loss = torch.stack(per_instance_weighted_losses)  # [B]
-    return per_instance_weighted_loss.mean(), per_instance_loss
+    if exclude_fully_conditioned_items:
+        active_item_mask = torch.stack(has_noisy_items).to(
+            device=per_instance_weighted_loss.device,
+            dtype=per_instance_weighted_loss.dtype,
+        )  # [B]
+        active_item_count = active_item_mask.sum().clamp(min=1)  # []
+        weighted_loss = (per_instance_weighted_loss * active_item_mask).sum() / active_item_count  # []
+    else:
+        weighted_loss = per_instance_weighted_loss.mean()  # []
+    return (
+        weighted_loss,  # []
+        per_instance_loss,  # [B]
+    )

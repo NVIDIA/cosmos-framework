@@ -43,15 +43,16 @@ coarser query block, so the returned :class:`FlexBackend` carries the block size
 padding multiple alongside the kernel options rather than leaving the three to be matched
 up by hand. ``flex_attention_bench`` times both backends and documents the install.
 
-The supertoken rules :func:`build_block_mask` enforces, all within a sample: every RGB
-token reaches every RGB token within whatever view footprint ``attention_scope`` admits
-(every view by default). Control tokens -- a WSM (World Scenario Map) control video, say --
-are a separate modality read off ``is_control``: RGB tokens reach them at their own view only,
-control tokens reach each other at their own view only, and no control token reaches an RGB
-token at all. Every GEN token, conditioning or noisy, attends to every UND token of its own
-sample, as the dense gen->und pass does. See :func:`_multiview_pair_predicate` for the rules
-themselves; richer patterns mean more metadata fields and a longer ``mask_mod``, not new
-varlen bookkeeping.
+The supertoken rules :func:`build_block_mask` enforces, all within a sample: every non-control
+sensor token reaches every non-control sensor token within whatever view footprint
+``attention_scope`` admits (every view by default). Control tokens -- a WSM (World Scenario
+Map) video or LiDAR control stream, say -- are a separate modality read off ``is_control``:
+sensor tokens reach them at their own view only, and control tokens reach each other at their
+own view only. Optionally, a control query can also reach every non-control sensor key of its
+own view, across all frames and noise states. Every GEN token, conditioning or noisy, attends
+to every UND token of its own sample, as the dense gen->und pass does. See
+:func:`_multiview_pair_predicate` for the rules themselves; richer patterns mean more metadata
+fields and a longer ``mask_mod``, not new varlen bookkeeping.
 
 LSE convention
 --------------
@@ -119,17 +120,15 @@ class FlexMetadata:
       belong to, which is the only field their rule reads.
     * ``frame_id`` / ``view_id``: per-token frame and view indices; ``-1`` on UND
       tokens, which have no place in the camera grid.
-    * ``is_noisy``: ``bool`` tensor, ``True`` for noisy (visual) tokens and
+    * ``is_noisy``: ``bool`` tensor, ``True`` for noisy sensor tokens and
       ``False`` for conditioning tokens (and for UND tokens).
     * ``is_control``: ``bool`` tensor, ``True`` for tokens of a control item (e.g. a WSM --
-      World Scenario Map -- control video), ``False`` for every other token (RGB and UND
+      World Scenario Map -- control video), ``False`` for every other token (sensor and UND
       alike). It carries no per-item identity, so control tokens sharing a view read as one
       signal; since the control rules only ever pair within a view, that costs nothing as
       long as a view holds a single control stream, which is the caller's to arrange (see
-      ``MaskItem.is_control``). The field is also the only switch the control rules have: the
-      ordinary T2V/I2V/V2V batch marks no control item, carries it all-``False``, and the
-      control terms drop out of the predicate on their own -- one fewer place for a config flag
-      and the data it describes to disagree.
+      ``MaskItem.is_control``). An ordinary T2V/I2V/V2V batch marks no control item, carries
+      it all-``False``, and drops every control term out of the predicate on its own.
     * ``timestamp``: ``float`` tensor, the wall-clock instant (in seconds, relative to
       whatever origin the caller's items share) a token's ``(view, frame)`` cell was
       captured at; ``-1.0`` on UND tokens and on padding, matching the other fields'
@@ -149,7 +148,8 @@ class FlexMetadata:
       seconds of it, at or before it), regardless of whether either token is conditioning;
     * sensor Q (conditioning or noisy) -> control K: same view, any frame;
     * control Q -> control K: same view, any frame;
-    * control Q -> sensor K: never.
+    * control Q -> non-control sensor K: same view, any frame and noise state, only when
+      ``control_attends_sensor`` is enabled. This applies equally to camera and LiDAR streams.
 
     :func:`_multiview_pair_predicate` is where those rules are actually expressed, so it is
     the one to trust if this list and it ever drift apart.
@@ -178,6 +178,7 @@ class FlexMetadata:
     num_und: int
     attention_scope: AttentionScope
     decomposed_temporal_window_seconds: float | None = None
+    control_attends_sensor: bool = False
 
     def __post_init__(self) -> None:
         # Nothing enforces the Literal at runtime, and an unrecognised scope would not fail:
@@ -280,8 +281,8 @@ class _StreamFields:
         which under dynamic shapes reaches the graph as a symbolic scalar -- rejected by the
         FlashAttention-4 backend for the same reason a captured Python int is, see
         :func:`_multiview_mask_mod`. Cloning leaves the fields' own lengths as the only symbols
-        the mask carries, and those the backend accepts. The cost is six int64/bool rows of the
-        GEN stream, copied once per step alongside the mask itself.
+        the mask carries, and those the backend accepts. The cost is one copy of every metadata
+        row in the GEN stream per step, alongside the mask itself.
         """
         return _StreamFields(**{f.name: getattr(self, f.name)[start:].clone() for f in fields(self)})
 
@@ -315,6 +316,7 @@ def _multiview_pair_predicate(
     kv_fields: _StreamFields,
     attention_scope: AttentionScope,
     decomposed_temporal_window_seconds: float | None = None,
+    control_attends_sensor: bool = False,
 ) -> MaskMod:
     """Return the multiview supertoken predicate, reading each side's own fields.
 
@@ -334,13 +336,14 @@ def _multiview_pair_predicate(
       temporal window), regardless of whether either token is conditioning;
     * sensor Q (conditioning or noisy alike) attends every control K of its **own view**, any
       frame;
-    * control Q attends every control K of its **own view**, any frame, and no sensor K at all.
+    * control Q attends every control K of its **own view**, any frame;
+    * when ``control_attends_sensor`` is enabled, a control Q also attends every non-control
+      sensor K of its **own view**, at any frame and noise state. Camera and LiDAR streams use
+      the same rule; their disjoint view offsets prevent cross-sensor pairs.
 
-    Every rule here is a view rule, not a ``(frame, view)`` one. Every scope gives a query
-    its own view at *any* frame, which is what makes ``"same_view"`` a clip's own attention
-    rather than a set of stills, and a token's frame matters only through
-    ``"decomposed"``, which adds every other view at the query's own instant and so
-    registers the cameras against each other. Frames are free at the block level anyway,
+    Every control rule here is a view rule rather than a ``(frame, view)`` rule: every
+    scope gives a query its own view at *any* frame, which makes ``"same_view"`` a clip's
+    own attention rather than a set of stills. Frames are free at the block level
     because :func:`_metadata_groups` already splits its runs per ``(item, frame, view)``
     cell, so the coarse predicate tells views and frames apart without a finer grouping.
 
@@ -355,11 +358,12 @@ def _multiview_pair_predicate(
     against each other by real capture time rather than by a frame index neither shares. Left
     ``None``, the scope keeps its original same-frame-index meaning.
 
-    A batch with no control item carries ``is_control`` all-``False``, which drops both
+    A batch with no control item carries ``is_control`` all-``False``, which drops all
     control terms on its own -- see :class:`FlexMetadata`.
 
-    Neither control rule can fire on a UND key: both require ``k_control``, which UND tokens
-    carry as ``False``. The sensor rules are less tidy. Under ``"all_views"``,
+    No control rule can fire on a UND key: the existing terms require ``k_control``, while
+    the optional sensor term requires ``same_view``; UND tokens carry ``view_id=-1``.
+    The sensor rules are less tidy. Under ``"all_views"``,
     ``reaches_every_view`` alone satisfies ``sensor_pair_in_scope`` for a UND key, so a GEN
     query admits its own sample's UND keys through that term too; nothing observable changes,
     since ``gen_to_und`` already admits them unconditionally, but the UND quadrant is not
@@ -383,6 +387,7 @@ def _multiview_pair_predicate(
     device = q_fields.view_id.device
     reaches_every_view = torch.tensor(attention_scope == "all_views", device=device)
     is_decomposed = torch.tensor(attention_scope == "decomposed", device=device)
+    control_reaches_sensor = torch.tensor(control_attends_sensor, device=device)  # [], bool
     has_temporal_window = torch.tensor(decomposed_temporal_window_seconds is not None, device=device)
     # The value is meaningless while has_temporal_window is False (the same_frame branch runs
     # instead), so 0.0 stands in rather than a sentinel that would need its own guard.
@@ -424,12 +429,16 @@ def _multiview_pair_predicate(
         # tokens, matching the dense base I2V/V2V attention pattern within that scope.
         in_scope = reaches_every_view | same_view | reaches_own_instant
         sensor_to_sensor = (~q_control) & (~k_control) & in_scope
-        # sensor Q (any) -> control K: own view, any frame; control Q -> control K: own view,
-        # any frame; control Q -> sensor K: never (no rule admits it).
+        # Sensor Q (any) -> control K and control Q -> control K: own view, any frame.
         sensor_to_control = (~q_control) & k_control & same_view
         control_to_control = q_control & k_control & same_view
+        # Optionally, a control Q reaches every non-control sensor K of its own view, at
+        # every frame. Camera and LiDAR use disjoint view offsets, so this cannot cross them.
+        control_to_sensor = control_reaches_sensor & q_control & (~k_control) & same_view  # [...], bool
 
-        return same_sample & (gen_to_und | sensor_to_sensor | sensor_to_control | control_to_control)
+        return same_sample & (  # [...], bool
+            gen_to_und | sensor_to_sensor | sensor_to_control | control_to_control | control_to_sensor
+        )
 
     return pair_allowed
 
@@ -457,7 +466,8 @@ def _multiview_mask_mod(metadata: FlexMetadata) -> MaskMod:
         _query_stream_fields(metadata),
         _key_stream_fields(metadata),
         metadata.attention_scope,
-        metadata.decomposed_temporal_window_seconds,
+        decomposed_temporal_window_seconds=metadata.decomposed_temporal_window_seconds,
+        control_attends_sensor=metadata.control_attends_sensor,
     )
 
 
@@ -596,6 +606,7 @@ def build_multiview_flex_metadata(
     causal_offsets: torch.Tensor | None = None,
     attention_scope: AttentionScope = "all_views",
     decomposed_temporal_window_seconds: float | None = None,
+    control_attends_sensor: bool = False,
 ) -> FlexMetadata:
     """Build key-stream metadata for camera-major multiview transfer items.
 
@@ -646,6 +657,9 @@ def build_multiview_flex_metadata(
             form, which is also the only form :class:`MaskItem`'s default
             ``seconds_per_frame=1.0`` produces the same answer for. Ignored outside
             ``"decomposed"``.
+        control_attends_sensor: whether a control query may attend to every non-control sensor
+            key in its own view, across all frames and noise states. False preserves the existing
+            one-way sensor-to-control connectivity. Applies equally to camera and LiDAR streams.
 
     Returns:
         :class:`FlexMetadata` whose per-token fields are each ``[num_und + seq_len]``: the
@@ -794,6 +808,7 @@ def build_multiview_flex_metadata(
         num_und=num_und,
         attention_scope=attention_scope,
         decomposed_temporal_window_seconds=decomposed_temporal_window_seconds,
+        control_attends_sensor=control_attends_sensor,
     )
 
 
@@ -1092,7 +1107,11 @@ def build_block_mask(
     _check_block_aligned(metadata.num_und, "UND", kv_block_size)
     key_fields = _key_stream_fields(metadata)
     pair_allowed = _multiview_pair_predicate(
-        key_fields, key_fields, metadata.attention_scope, metadata.decomposed_temporal_window_seconds
+        key_fields,
+        key_fields,
+        metadata.attention_scope,
+        decomposed_temporal_window_seconds=metadata.decomposed_temporal_window_seconds,
+        control_attends_sensor=metadata.control_attends_sensor,
     )
     mask_mod = _multiview_mask_mod(metadata)
     group_id, representatives = _metadata_groups(metadata, device)
@@ -1123,6 +1142,7 @@ def build_multiview_block_mask(
     causal_offsets: torch.Tensor | None = None,
     attention_scope: AttentionScope = "all_views",
     decomposed_temporal_window_seconds: float | None = None,
+    control_attends_sensor: bool = False,
 ) -> BlockMask:
     """Build the GEN-tower :class:`BlockMask` for camera-major multiview items.
 
@@ -1132,8 +1152,9 @@ def build_multiview_block_mask(
     and those two functions for the token layout the metadata encodes, for why the mask has
     to be built outside the decoder layers, for what ``block_size`` selects, for what
     ``num_und`` / ``causal_offsets`` add, for what ``attention_scope`` lets same-kind
-    (sensor) tokens reach, and for what ``decomposed_temporal_window_seconds`` changes about
-    the ``"decomposed"`` scope's temporal half.
+    (sensor) tokens reach, for what ``decomposed_temporal_window_seconds`` changes about the
+    ``"decomposed"`` scope's temporal half, and for what
+    ``control_attends_sensor`` adds to control queries.
 
     The two stages stay separately callable because the metadata layout is checked on
     CPU in the unit tests, independently of the block-mask construction.
@@ -1147,6 +1168,7 @@ def build_multiview_block_mask(
         causal_offsets=causal_offsets,
         attention_scope=attention_scope,
         decomposed_temporal_window_seconds=decomposed_temporal_window_seconds,
+        control_attends_sensor=control_attends_sensor,
     )
     return build_block_mask(metadata, device, block_size)
 

@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: OpenMDW-1.1
 
-VERSION = "1.0.2"
+VERSION = "1.0.3"
 MINIMAL_SCHEMA_CALLBACK_ARGS = {
     "initialize": {
         "required": {

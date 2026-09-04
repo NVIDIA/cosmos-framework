@@ -145,3 +145,59 @@ def test_conditioned_frames_remain_in_default_denominator_with_slot_mask() -> No
     torch.testing.assert_close(default_weighted, torch.tensor(2.5))
     torch.testing.assert_close(active_per_instance, torch.tensor([5.0]))
     torch.testing.assert_close(active_weighted, torch.tensor(5.0))
+
+
+@pytest.mark.L0
+@pytest.mark.parametrize("normalize_by_active", [False, True])
+def test_fully_conditioned_control_can_be_excluded_from_scalar_mean(normalize_by_active: bool) -> None:
+    control_pred = torch.full((1, 2, 1, 1), 100.0)  # [C,T,H,W]
+    target_pred = torch.tensor([[[[100.0]], [[2.0]]]])  # [C,T,H,W]
+    pred = [control_pred, target_pred]
+    target = [torch.zeros_like(control_pred), torch.zeros_like(target_pred)]  # list of [C,T,H,W]
+    condition_mask = [
+        torch.ones(2, 1, 1),  # [T,1,1]
+        torch.tensor([[[1.0]], [[0.0]]]),  # [T,1,1]
+    ]
+    common_kwargs = dict(
+        pred=pred,
+        target=target,
+        condition_mask=condition_mask,
+        timesteps=torch.zeros(2, 1),  # [B_items,1]
+        has_valid_tokens=True,
+        rectified_flow=_UnitWeightFlow(),
+        tensor_kwargs_fp32={"dtype": torch.float32},
+        normalize_by_active=normalize_by_active,
+    )
+
+    legacy_weighted, legacy_per_instance = compute_flow_matching_loss(**common_kwargs)  # [], [B_items]
+    filtered_weighted, filtered_per_instance = compute_flow_matching_loss(
+        **common_kwargs,
+        exclude_fully_conditioned_items=True,
+    )  # [], [B_items]
+
+    expected_target_loss = 4.0 if normalize_by_active else 2.0
+    expected_per_instance = torch.tensor([0.0, expected_target_loss])  # [B_items]
+    torch.testing.assert_close(legacy_per_instance, expected_per_instance)
+    torch.testing.assert_close(filtered_per_instance, expected_per_instance)
+    torch.testing.assert_close(legacy_weighted, torch.tensor(expected_target_loss / 2.0))
+    torch.testing.assert_close(filtered_weighted, torch.tensor(expected_target_loss))
+
+
+@pytest.mark.L0
+def test_excluding_all_fully_conditioned_items_returns_differentiable_zero() -> None:
+    pred_item = torch.ones(1, 2, 1, 1, requires_grad=True)  # [C,T,H,W]
+    weighted, per_instance = compute_flow_matching_loss(
+        pred=[pred_item],
+        target=[torch.zeros_like(pred_item)],
+        condition_mask=[torch.ones(2, 1, 1)],  # [T,1,1]
+        timesteps=torch.zeros(1, 1),  # [B_items,1]
+        has_valid_tokens=True,
+        rectified_flow=_UnitWeightFlow(),
+        tensor_kwargs_fp32={"dtype": torch.float32},
+        exclude_fully_conditioned_items=True,
+    )  # [], [B_items]
+
+    torch.testing.assert_close(weighted, torch.tensor(0.0))
+    torch.testing.assert_close(per_instance, torch.tensor([0.0]))
+    weighted.backward()
+    torch.testing.assert_close(pred_item.grad, torch.zeros_like(pred_item))

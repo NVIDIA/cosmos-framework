@@ -75,6 +75,11 @@ class FlexAttentionMaskConfig:
         validator=attrs.validators.optional(attrs.validators.ge(0)),
     )
 
+    # Let a control query attend to every non-control sensor key in the same view,
+    # across all frames. False preserves the existing one-way sensor-to-control
+    # connectivity. Applies equally to camera and LiDAR control/target streams.
+    control_attends_sensor: bool = False
+
 
 @attrs.define(slots=False)
 class FlexAttentionConfig:

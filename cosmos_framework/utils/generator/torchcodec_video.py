@@ -12,7 +12,9 @@ from typing import Any, BinaryIO
 
 import numpy as np
 import torch
+import torchcodec
 from torchcodec.decoders import VideoDecoder
+from torchcodec.transforms import Resize
 
 VideoSource = str | Path | bytes | io.BytesIO | BinaryIO
 
@@ -23,6 +25,10 @@ class VideoMetadata:
     average_fps: float
     height: int | None = None
     width: int | None = None
+
+
+def _torchcodec_version() -> str:
+    return getattr(torchcodec, "__version__", "(unknown version)")
 
 
 def _normalize_source(source: VideoSource) -> VideoSource:
@@ -40,6 +46,8 @@ def _build_decoder(
     seek_mode: str = "exact",
     device: str = "cpu",
     custom_frame_mappings: bytes | None = None,
+    resize_size: tuple[int, int] | None = None,
+    output_dtype: torch.dtype = torch.uint8,
 ) -> Any:
     normalized_source = _normalize_source(source)
     # Preserve FFmpeg/TorchCodec's 0 sentinel so callers can request automatic thread selection.
@@ -51,7 +59,25 @@ def _build_decoder(
         kwargs["custom_frame_mappings"] = custom_frame_mappings
     if device != "cpu":
         kwargs["device"] = device
-    return VideoDecoder(normalized_source, **kwargs)
+    # ``output_dtype`` arrived after the pinned cu128/cu130 TorchCodec (0.10.0), whose
+    # ``VideoDecoder.__init__`` has no such parameter -- forwarding it unconditionally breaks
+    # every call, including plain metadata probes.  uint8 is 0.10's native output, so only a
+    # non-default request needs the keyword at all.  (``transforms`` does exist on 0.10; it is
+    # still sent only on demand, and covered by the same guard for older builds.)
+    if output_dtype != torch.uint8:
+        kwargs["output_dtype"] = output_dtype
+    if resize_size is not None:
+        kwargs["transforms"] = [Resize(resize_size)]
+    try:
+        return VideoDecoder(normalized_source, **kwargs)
+    except TypeError as error:
+        unsupported = next((key for key in ("output_dtype", "transforms") if key in kwargs and key in str(error)), None)
+        if unsupported is None:
+            raise
+        raise TypeError(
+            f"Installed torchcodec {_torchcodec_version()} does not support VideoDecoder({unsupported}=...). "
+            f"Upgrade torchcodec to use {unsupported}."
+        ) from error
 
 
 def _read_basic_metadata(decoder: Any) -> tuple[int, float]:
@@ -105,6 +131,8 @@ class TorchCodecVideoReader:
         device: str = "cpu",
         include_dimensions: bool = False,
         custom_frame_mappings: bytes | None = None,
+        resize_size: tuple[int, int] | None = None,
+        output_dtype: torch.dtype = torch.uint8,
     ) -> None:
         self._decoder = _build_decoder(
             source,
@@ -112,6 +140,8 @@ class TorchCodecVideoReader:
             seek_mode=seek_mode,
             device=device,
             custom_frame_mappings=custom_frame_mappings,
+            resize_size=resize_size,
+            output_dtype=output_dtype,
         )
         self.metadata = _metadata_from_frame(self._decoder, include_dimensions=include_dimensions)
 

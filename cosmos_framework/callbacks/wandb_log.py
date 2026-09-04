@@ -335,6 +335,13 @@ class WandbCallback(Callback):
                             f"train{self.wandb_extra_tag}_detail/{key}": loss,
                         }
                     )
+                modality_loss_keys = {
+                    "vision_loss": "flow_matching_loss_vision",
+                    "lidar_loss": "flow_matching_loss_lidar",
+                }
+                for log_key, output_key in modality_loss_keys.items():
+                    if output_key in avg_final_all_loss:
+                        info[f"train{self.wandb_extra_tag}/{log_key}"] = avg_final_all_loss[output_key]
                 for dataset_name, loss in avg_final_loss_per_dataset.items():
                     tag = ""
                     if "per_seq" in dataset_name:

@@ -332,6 +332,7 @@ class _AsyncBatchBuilder:
         self._results: queue.Queue[_AsyncBatchBuildResult | None] = queue.Queue()
         self._outstanding_sequence_id: int | None = None
         self._closed: bool = False
+        self._stream_ended: bool = False
         self._thread: threading.Thread = threading.Thread(target=self._run, name="async-batch-builder", daemon=True)
         self._thread.start()
 
@@ -355,6 +356,16 @@ class _AsyncBatchBuilder:
         """Wait for and return the exact batch object produced for the outstanding request."""
         sequence_id = self._outstanding_sequence_id
         if sequence_id is None:
+            if self._stream_ended:
+                # Re-entering __iter__ after the packing loop ran dry. The builder cannot
+                # restart, and the interesting failure is upstream: a child dataloader
+                # yielded nothing, so name it rather than the empty request queue.
+                raise RuntimeError(
+                    "The packed-batch stream has already ended, so async batch building cannot "
+                    "resume. A child dataloader produced no samples on this rank: check its "
+                    "earlier warnings for an exhausted shard (a Lance replay slot with no rows "
+                    "assigned) or for every sample being dropped or discarded as oversized."
+                )
             raise RuntimeError("No async batch building request is outstanding.")
         if self._closed:
             raise RuntimeError("Async batch builder was closed while waiting for a batch.")
@@ -383,6 +394,7 @@ class _AsyncBatchBuilder:
         if result.error is not None:
             raise RuntimeError(f"Async batch building failed for sequence_id={sequence_id}.") from result.error
         if result.end_of_stream:
+            self._stream_ended = True
             raise StopIteration
         if result.batch is None:
             raise RuntimeError(f"Async batch builder returned no batch for sequence_id={sequence_id}.")
