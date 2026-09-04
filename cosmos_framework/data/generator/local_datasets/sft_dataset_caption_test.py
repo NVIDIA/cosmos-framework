@@ -4,7 +4,7 @@
 
 import json
 
-from cosmos_framework.data.generator.local_datasets.sft_dataset import _select_caption
+from cosmos_framework.data.generator.local_datasets.sft_dataset import _load_sft_metadata_from_s3, _select_caption
 from cosmos_framework.inference.structured_caption import CAPTION_JSON_KEY
 
 
@@ -53,3 +53,31 @@ def test_weighted_caption_types_fallback():
 
 def test_no_known_caption_key_returns_none():
     assert _select_caption({"start_frame": 0, "end_frame": 84}) is None
+
+
+def test_load_sft_metadata_can_disable_duration_and_window_prefilters(tmp_path):
+    jsonl = tmp_path / "short_tasks.jsonl"
+    record = {
+        "uuid": "short-task",
+        "duration": 120.0,
+        "width": 256,
+        "height": 256,
+        "vision_path": "clips/short-task.mp4",
+        "t2w_windows": [
+            {
+                "start_frame": 0,
+                "end_frame": 9,
+                "temporal_interval": 1,
+                "caption": "short task",
+            }
+        ],
+    }
+    jsonl.write_text(json.dumps(record) + "\n")
+
+    default_filtered = _load_sft_metadata_from_s3(None, str(jsonl), min_frames=61)
+    assert default_filtered == []
+
+    kept = _load_sft_metadata_from_s3(None, str(jsonl), min_frames=None, max_duration_s=None)
+    assert len(kept) == 1
+    assert kept[0]["uuid"] == "short-task"
+    assert kept[0]["t2w_windows"][0]["caption"] == "short task"
