@@ -318,6 +318,15 @@ class OmniMoTModel(ImaginaireModel):
             assert self.tokenizer_sound_gen.latent_ch == self.config.sound_dim, (
                 f"sound tokenizer latent_ch {self.tokenizer_sound_gen.latent_ch} != sound_dim {self.config.sound_dim}"
             )
+            # The augmentor derives the synchronized sound prefix from config.sound_latent_fps (dataloader
+            # workers never see the tokenizer); pin it to the tokenizer so training and inference agree.
+            assert (
+                self.config.sound_latent_fps * self.tokenizer_sound_gen.temporal_compression_factor
+                == self.tokenizer_sound_gen.sample_rate
+            ), (
+                f"sound_latent_fps {self.config.sound_latent_fps} != sample_rate/hop "
+                f"{self.tokenizer_sound_gen.sample_rate}/{self.tokenizer_sound_gen.temporal_compression_factor}"
+            )
             if hasattr(self.tokenizer_sound_gen, "reset_dtype"):
                 self.tokenizer_sound_gen.reset_dtype()
             log.info(f"Sound tokenizer initialized: {type(self.tokenizer_sound_gen).__name__}")
@@ -4439,6 +4448,42 @@ class OmniMoTModel(ImaginaireModel):
 
         return x0_tokens_vision
 
+    def _encode_sound_x0_tokens(
+        self,
+        raw_state_sound: list[torch.Tensor],
+        sequence_plans: list[SequencePlan],
+    ) -> list[torch.Tensor]:
+        """Encode sound targets, re-encoding VS2VS prefixes from prefix samples only.
+
+        The non-causal tokenizer would leak future context into conditioned prefix latents, so
+        a contiguous proper prefix is re-encoded alone (matching inference); empty and full
+        prefixes keep the single encode. ``raw_state_sound`` is the dense list from
+        ``_normalize_sound_databatch_inplace``; the strict zip enforces its 1:1 alignment with
+        the ``has_sound`` plans that the packer's ``idx_sound`` counter relies on.
+        """
+        x0_tokens_sound = [
+            self.encode_sound(sound).contiguous().float() for sound in raw_state_sound
+        ]  # list of [sound_channels,T_sound]
+        sound_plans = [plan for plan in sequence_plans if plan.has_sound]
+        compression_factor = int(self.tokenizer_sound_gen.temporal_compression_factor)
+        for sound, x0_sound, plan in zip(raw_state_sound, x0_tokens_sound, sound_plans, strict=True):
+            condition_indexes = plan.condition_frame_indexes_sound
+            num_condition_frames = len(condition_indexes)
+            is_proper_prefix = 0 < num_condition_frames < int(x0_sound.shape[1]) and condition_indexes == list(
+                range(num_condition_frames)
+            )
+            if not is_proper_prefix:
+                continue
+            prefix_num_samples = num_condition_frames * compression_factor
+            prefix_tokens = (
+                self.encode_sound(sound[..., :prefix_num_samples]).contiguous().float()
+            )  # [sound_channels,T_prefix]
+            x0_sound[:, :num_condition_frames].copy_(
+                prefix_tokens[:, :num_condition_frames]
+            )  # [sound_channels,num_condition_frames]
+
+        return x0_tokens_sound
+
     def get_data_and_condition(
         self,
         data_batch: dict[str, torch.Tensor],
@@ -4590,10 +4635,12 @@ class OmniMoTModel(ImaginaireModel):
         action_valid_mask = data_batch.get("action_valid_mask", None)
 
         # Sound/audio - normalize, encode if present and sound_gen is enabled
-        self._normalize_sound_databatch_inplace(data_batch)
-        raw_state_sound = data_batch.get("sound", None)
+        raw_state_sound = self._normalize_sound_databatch_inplace(data_batch)
         if raw_state_sound is not None and self.tokenizer_sound_gen is not None:
-            x0_tokens_sound = [self.encode_sound(s).contiguous().float() for s in raw_state_sound]
+            # Sound batches always carry plans (``build_sequence_plans_from_data_batch`` asserts it
+            # before every training/inference call), so a missing key fails loudly here rather than
+            # silently skipping the VS2VS prefix re-encode.
+            x0_tokens_sound = self._encode_sound_x0_tokens(raw_state_sound, data_batch["sequence_plan"])
         else:
             x0_tokens_sound = None
 
@@ -4846,8 +4893,8 @@ class OmniMoTModel(ImaginaireModel):
         )
         return dense_action, dense_domain_id, dense_action_family
 
-    def _normalize_sound_databatch_inplace(self, data_batch: dict[str, torch.Tensor]) -> None:
-        """Flatten and densify nested sound lists in-place.
+    def _normalize_sound_databatch_inplace(self, data_batch: dict[str, torch.Tensor]) -> list[torch.Tensor] | None:
+        """Normalize the plans' sound flags in-place and return the dense sound list.
 
         The joint dataloader produces sound data as
         ``[[tensor], [None], [tensor], ...]`` (each sample wrapped in a single-element
@@ -4858,7 +4905,8 @@ class OmniMoTModel(ImaginaireModel):
            (kept aligned by ``custom_collate_fn`` preserving ``None`` placeholders).
         3. Filters out None entries: ``[t, None, t]`` -> ``[t, t]``
         4. Moves tensors to the model device.
-        5. Sets ``data_batch["sound"]`` to ``None`` if no valid sound data remains.
+        5. Returns the dense list, or ``None`` (also stored in ``data_batch["sound"]``)
+           if no valid sound data remains.
 
         Alignment invariant: ``custom_collate_fn`` keeps the ``"sound"`` key
         as a list with ``None`` placeholders for samples that lack audio (e.g.
@@ -4866,6 +4914,9 @@ class OmniMoTModel(ImaginaireModel):
         1:1 with ``sequence_plan``.  ``SoundSequencePlanBuilder`` already sets
         each plan's ``has_sound`` according to that sample's actual sound
         presence, so clearing flags for ``None`` slots here is just defensive.
+        The per-sample slots stay in ``data_batch["sound"]``: the online sampling
+        callbacks call ``get_data_and_condition`` again on the trainer's batch (and
+        on prefix slices of it), which must see the same alignment.
         """
         raw_state_sound = data_batch.get("sound", None)
         sequence_plans = data_batch.get("sequence_plan", None)
@@ -4937,8 +4988,8 @@ class OmniMoTModel(ImaginaireModel):
         if len(raw_state_sound) == 0:
             _disable_sound_on_plans()
             data_batch["sound"] = None
-        else:
-            data_batch["sound"] = raw_state_sound
+            return None
+        return raw_state_sound
 
     def _augment_image_dim_inplace(self, data_batch: dict[str, torch.Tensor]) -> None:
         """

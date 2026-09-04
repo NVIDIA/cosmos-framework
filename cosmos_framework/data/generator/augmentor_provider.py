@@ -805,6 +805,8 @@ def get_video_augmentor_v3_json_caption(
     max_num_frames: int = 1000,
     audio_sample_rate: int = 48000,
     sound_generation_mode: str = "t2vs",
+    sound_latent_fps: float = 25.0,
+    sound_prefix_conditioning_prob: float = 1.0,
     extract_audio: bool = True,
     caption_key: str = "caption",
     natural_language_caption: bool = False,
@@ -844,8 +846,11 @@ def get_video_augmentor_v3_json_caption(
         resize_on_read: If True, resizes video frames during decoding rather than as a
             separate augmentation step, reducing peak CPU memory usage.
         audio_sample_rate: Sample rate for audio extraction.
-        sound_generation_mode: One of "t2vs", "tv2s", "ts2v", "ti2sv".
+        sound_generation_mode: One of "t2vs", "tv2s", "ts2v", "ti2sv", "vs2vs".
             Controls how the SequencePlan is built for conditioning.
+        sound_latent_fps: Sound tokenizer latent rate in Hz.
+        sound_prefix_conditioning_prob: Probability that an eligible "vs2vs" sample conditions
+            on the synchronized audio prefix (vs full-audio generation).
         extract_audio: When True (default), decodes audio from video bytes.
             When False, emits placeholder sound=None and audio_sample_rate keys
             without decoding audio.  Useful for mixing video-only and audio
@@ -1002,6 +1007,9 @@ def get_video_augmentor_v3_json_caption(
                     "mode": sound_generation_mode,
                     "video_key": "video",
                     "sound_key": "sound",
+                    "temporal_compression_factor": temporal_compression_factor,
+                    "sound_latent_fps": sound_latent_fps,
+                    "sound_prefix_conditioning_prob": sound_prefix_conditioning_prob,
                 },
             ),
         }

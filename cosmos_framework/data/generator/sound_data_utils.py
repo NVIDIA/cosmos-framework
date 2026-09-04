@@ -11,12 +11,38 @@ Supported modes:
     - tv2s: Text + Video → Sound (foley - video conditioned, sound generated)
     - ts2v: Text + Sound → Video (sound conditioned, video generated)
     - ti2sv: Text + Image → Sound + Video (first frame conditioned, rest + sound generated)
+    - vs2vs: Video + Sound → Video + Sound (synchronized continuation for V2V samples)
 """
+
+import math
 
 from cosmos_framework.data.generator.sequence_packing import SequencePlan
 
 # Valid generation modes for sound
-VALID_SOUND_MODES = {"t2vs", "tv2s", "ts2v", "ti2sv"}
+VALID_SOUND_MODES = {"t2vs", "tv2s", "ts2v", "ti2sv", "vs2vs"}
+
+
+def get_sound_condition_frame_indexes(
+    vision_prefix_length: int,
+    video_temporal_compression_factor: int,
+    conditioning_fps: float,
+    sound_num_samples: int,
+    audio_sample_rate: int,
+    sound_latent_fps: float,
+) -> list[int] | None:
+    """Map a contiguous V2V latent prefix to the synchronized sound latent prefix.
+
+    A causal video VAE represents ``k`` conditioned latent frames with
+    ``1 + (k - 1) * video_temporal_compression_factor`` pixel frames. Only complete
+    sound latent intervals inside that duration are conditioned. Returns None when
+    the audio cannot yield a non-empty prefix plus at least one future latent.
+    """
+    sound_latent_length = math.ceil(sound_num_samples * sound_latent_fps / audio_sample_rate)
+    vision_prefix_pixel_frames = 1 + (vision_prefix_length - 1) * video_temporal_compression_factor
+    sound_prefix_length = math.floor(vision_prefix_pixel_frames * sound_latent_fps / conditioning_fps)
+    if not 0 < sound_prefix_length < sound_latent_length:
+        return None
+    return list(range(sound_prefix_length))
 
 
 def build_sequence_plan_for_sound(
@@ -37,6 +63,7 @@ def build_sequence_plan_for_sound(
             - "tv2s": Text + Video → Sound (video conditioned, sound generated)
             - "ts2v": Text + Sound → Video (sound conditioned, video generated)
             - "ti2sv": Text + Image → Sound + Video (first frame conditioned)
+            - "vs2vs": Video + Sound → Video + Sound (synchronized continuation)
         video_latent_length: Number of video latent frames.
         sound_latent_length: Number of sound latent tokens.
         has_text: Whether text conditioning is available. Defaults to True.
@@ -63,8 +90,8 @@ def build_sequence_plan_for_sound(
     if mode not in VALID_SOUND_MODES:
         raise ValueError(f"Invalid mode: {mode!r}. Must be one of {VALID_SOUND_MODES}")
 
-    if mode == "t2vs":
-        # Text → Video + Sound: both generated jointly
+    if mode in ("t2vs", "vs2vs"):
+        # Text → Video + Sound: both generated jointly. VS2VS prefixes are added downstream.
         return SequencePlan(
             has_text=has_text,
             has_vision=True,
