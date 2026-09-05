@@ -1,7 +1,7 @@
 {
-  "_source_commit": "baffa0ba03aaf142afe4855895d9325b7521a8ce-dirty",
-  "_dest_commit": "6ea69664ab873320d026fcaebda3f9674332028e",
-  "_generated_at": "2026-09-04T05:52:09Z",
+  "_source_commit": "905f3ea9d249012e7df52df5d3a0525fcccbdf08-dirty",
+  "_dest_commit": "0fe093eafbac390ffb7906a6f4ed9f558fe42c4c",
+  "_generated_at": "2026-09-05T05:52:02Z",
   "files": {
     "imaginaire/__init__.py": "cosmos_framework/__init__.py",
     "imaginaire/attention/__init__.py": "cosmos_framework/model/attention/__init__.py",
@@ -507,6 +507,7 @@
     "projects/cosmos3/cosmos3/utils/model_weights_stats.py": "cosmos_framework/utils/generator/model_weights_stats.py",
     "projects/cosmos3/cosmos3/utils/monkey_patch.py": "cosmos_framework/utils/generator/monkey_patch.py",
     "projects/cosmos3/cosmos3/utils/multiview.py": "cosmos_framework/utils/generator/multiview.py",
+    "projects/cosmos3/cosmos3/utils/multiview_test.py": "cosmos_framework/utils/generator/multiview_test.py",
     "projects/cosmos3/cosmos3/utils/muon_with_aux_adamw.py": "cosmos_framework/utils/generator/muon_with_aux_adamw.py",
     "projects/cosmos3/cosmos3/utils/optimizer.py": "cosmos_framework/utils/generator/optimizer.py",
     "projects/cosmos3/cosmos3/utils/parallelism.py": "cosmos_framework/utils/generator/parallelism.py",

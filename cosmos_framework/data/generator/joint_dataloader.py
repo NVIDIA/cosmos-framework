@@ -53,8 +53,6 @@ _ACTION_SAMPLER_METADATA_KEYS = {
     "action_sampler_draw_count",
     "action_sampler_index",
     "action_sampler_aux_seed",
-    "action_sampler_dataset_length",
-    "action_sampler_index_space_fingerprint",
 }
 ACTION_SAMPLER_DROPPED_DRAW_COUNT_KEY = "action_sampler_dropped_draw_count"
 _DROP_SAMPLE_LOG_FIELDS = (
@@ -68,6 +66,7 @@ _DROP_SAMPLE_LOG_FIELDS = (
     "action_sampler_aux_seed",
     "action_sample_row_id",
     "action_sample_local_start_frame",
+    "action_sample_caption_mode",
     "action_sample_fingerprint",
 )
 
