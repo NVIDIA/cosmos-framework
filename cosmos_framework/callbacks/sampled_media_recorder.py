@@ -185,6 +185,7 @@ class SampledMediaRecorder(Callback):
         captions = _as_optional_string_list(data_batch.get("ai_caption"), count) if self.record_caption else []
         source_ids = _as_list(data_batch.get("source_id"), count)
         conversations = _as_list(data_batch.get("dialog_str"), count)
+        caption_modes = _as_optional_string_list(data_batch.get("action_sample_caption_mode"), count)
         media_items = _media_items_by_sample(data_batch.get("sample_browser_media"), count)
         recorded_at = _utc_now()
         media_types = self._media_types(data_batch, count)
@@ -212,6 +213,7 @@ class SampledMediaRecorder(Callback):
                 "sample_id": sample_id,
                 "media_url": media_urls[sample_index],
                 "caption": captions[sample_index] if self.record_caption else None,
+                "caption_mode": caption_modes[sample_index],
                 "conversation": conversations[sample_index],
                 "media_items": json.dumps(media_items[sample_index], separators=(",", ":"), sort_keys=True),
             }
@@ -238,6 +240,7 @@ class SampledMediaRecorder(Callback):
                 pa.field("sample_id", pa.string(), nullable=False),
                 pa.field("media_url", pa.string(), nullable=False),
                 pa.field("caption", pa.string(), nullable=True),
+                pa.field("caption_mode", pa.string(), nullable=True),
                 pa.field("conversation", pa.string(), nullable=True),
                 pa.field("media_items", pa.string(), nullable=True),
             ]
@@ -251,7 +254,7 @@ class SampledMediaRecorder(Callback):
         # A tuple in _table_schema() declaration order, not a set: the loop below appends
         # missing columns in this order, and set iteration is hash-randomized -- two runs
         # upgrading the same legacy table would otherwise produce different column orders.
-        optional_field_order = ("source_id", "caption", "conversation", "media_items")
+        optional_field_order = ("source_id", "caption", "caption_mode", "conversation", "media_items")
         optional_fields = frozenset(optional_field_order)
         expected_by_name = {field.name: field for field in expected_schema}
         existing_by_name = {field.name: field for field in existing.schema}

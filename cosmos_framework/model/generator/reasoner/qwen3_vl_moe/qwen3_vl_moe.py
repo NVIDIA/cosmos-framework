@@ -561,6 +561,58 @@ class Qwen3VLMoeTextSparseMoeBlock(nn.Module):
         flat_counts.scatter_add_(0, flat_idx, pair_counts)
         self.coactivation_counts.view(-1).add_(flat_counts)
 
+    def select_experts(
+        self,
+        selection_logits: torch.Tensor,  # [N,num_experts]
+        selection_scores: torch.Tensor,  # [N,num_experts]
+        natural_indices: torch.Tensor,  # [N,top_k]
+        natural_weights: torch.Tensor,  # [N,top_k]
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """The dispatch selection: the experts each token is sent to and their combine weights.
+
+        This is the one seam of the forward that decides WHICH experts a token reaches; an
+        integration that must route differently (a subclass, or a method bound on the instance at
+        adaptation time) overrides this and nothing else. The load-balancing statistics never see
+        its result: they count the gate-natural selection, which ``forward`` computes before calling
+        here and passes in so the plain path pays for one top-k.
+
+        Args:
+            selection_logits: (num_tokens, num_experts) router logits the selection is made on
+                (noised under noisy gating, otherwise the clean logits).
+            selection_scores: (num_tokens, num_experts) the activated ``selection_logits``.
+            natural_indices: (num_tokens, top_k) the gate's own top-k over ``selection_scores``.
+            natural_weights: (num_tokens, top_k) the ``selection_scores`` at ``natural_indices``.
+
+        Returns:
+            torch.Tensor: (num_tokens, top_k) int64 expert ids, the dispatch.
+            torch.Tensor: (num_tokens, top_k) combine weights, normalized over the row, in the
+                score dtype.
+        """
+        if self.aux_loss_free_load_balancing_config.enabled:
+            # Aux-loss-free load balancing changes selection only. DeepSeek-style
+            # Sigmoid routing adds bias to independent activated scores. Softmax
+            # scores are compressed and coupled by sum-to-one normalization, so
+            # bias is applied in logit space  to avoid disproportionate rank
+            # jumps.
+            biased_selection_scores = self.cosine_router.apply_selection_bias(
+                router_logits=selection_logits,
+                router_scores=selection_scores,
+                expert_bias=self.expert_bias.detach(),
+            )  # [num_tokens,num_experts]
+            _, expert_indices = torch.topk(
+                biased_selection_scores, self.top_k, dim=-1
+            )  # [num_tokens,top_k], [num_tokens,top_k]
+            expert_weights = selection_scores.gather(1, expert_indices)  # [num_tokens,top_k]
+        else:
+            expert_indices = natural_indices  # [num_tokens,top_k]
+            expert_weights = natural_weights  # [num_tokens,top_k]
+
+        if self.cosine_router.activation == "sigmoid":
+            expert_weights = self.cosine_router.normalize_scores(expert_weights)  # [num_tokens,top_k]
+        else:
+            expert_weights = expert_weights / expert_weights.sum(dim=-1, keepdim=True)  # [num_tokens,top_k]
+        return expert_indices, expert_weights
+
     def forward(
         self,
         hidden_states: torch.Tensor,  # [N,hidden_size]
@@ -570,6 +622,8 @@ class Qwen3VLMoeTextSparseMoeBlock(nn.Module):
     ) -> tuple[torch.Tensor, LBLMetadata]:
         """
         This function performs the MoE computation, including routing, dispatch, GEMMs and combine.
+        The dispatch selection (which experts a token reaches, with what combine weights) is
+        ``select_experts``; everything else here is routing statistics, dispatch and combine.
 
         Args:
             hidden_states (torch.Tensor): (num_tokens, hidden_size)
@@ -630,29 +684,9 @@ class Qwen3VLMoeTextSparseMoeBlock(nn.Module):
             selection_scores, self.top_k, dim=-1
         )  # [num_tokens,top_k], [num_tokens,top_k]
 
-        if self.aux_loss_free_load_balancing_config.enabled:
-            # Aux-loss-free load balancing changes selection only. DeepSeek-style
-            # Sigmoid routing adds bias to independent activated scores. Softmax
-            # scores are compressed and coupled by sum-to-one normalization, so
-            # bias is applied in logit space  to avoid disproportionate rank
-            # jumps.
-            biased_selection_scores = self.cosine_router.apply_selection_bias(
-                router_logits=selection_logits,
-                router_scores=selection_scores,
-                expert_bias=self.expert_bias.detach(),
-            )  # [num_tokens,num_experts]
-            _, expert_indices = torch.topk(
-                biased_selection_scores, self.top_k, dim=-1
-            )  # [num_tokens,top_k], [num_tokens,top_k]
-            expert_weights = selection_scores.gather(1, expert_indices)  # [num_tokens,top_k]
-        else:
-            expert_indices = natural_indices  # [num_tokens,top_k]
-            expert_weights = natural_weights  # [num_tokens,top_k]
-
-        if self.cosine_router.activation == "sigmoid":
-            expert_weights = self.cosine_router.normalize_scores(expert_weights)  # [num_tokens,top_k]
-        else:
-            expert_weights = expert_weights / expert_weights.sum(dim=-1, keepdim=True)  # [num_tokens,top_k]
+        expert_indices, expert_weights = self.select_experts(
+            selection_logits, selection_scores, natural_indices, natural_weights
+        )  # [num_tokens,top_k], [num_tokens,top_k]
         expert_weights = expert_weights.to(hidden_states.dtype)  # [num_tokens,top_k]
         if token_weight is not None:
             # A zero combine weight is the implementation-independent half of making a padding row
@@ -691,16 +725,16 @@ class Qwen3VLMoeTextSparseMoeBlock(nn.Module):
         # Sigmoid affinities are normalized across experts for this LBL term.
         mean_router_prob_per_expert = _weighted_mean(routing_probabilities, token_weight).squeeze(0)  # [num_experts]
 
-        # LBL count: when bias correction is on, ``num_tokens_per_expert`` reflects
-        # the bias-balanced dispatch, which would artificially satisfy LBL while
-        # the unbiased routing mass stays concentrated. Feed LBL the gate-natural counts
-        # instead. With bias off the gate-natural selection is the dispatch, so this is
-        # bit-identical to ``num_tokens_per_expert``.
-        if self.aux_loss_free_load_balancing_config.enabled:
+        # LBL count: always the gate-natural selection. A dispatch that differs from it (bias
+        # correction, or any ``select_experts`` override) would artificially satisfy LBL while the
+        # unbiased routing mass stays concentrated, so LBL is fed the natural counts instead. When
+        # the dispatch IS the natural selection (the plain path returns ``natural_indices`` itself)
+        # ``num_tokens_per_expert`` already is that count.
+        if expert_indices is natural_indices:
+            num_tokens_per_expert_lbl = num_tokens_per_expert
+        else:
             natural_counts = _weighted_expert_counts(natural_indices, self.num_experts, token_weight)
             num_tokens_per_expert_lbl = natural_counts.to(dtype=torch.int64)  # [num_experts]
-        else:
-            num_tokens_per_expert_lbl = num_tokens_per_expert
 
         sample_num_tokens_per_expert = None
         sample_num_tokens = None

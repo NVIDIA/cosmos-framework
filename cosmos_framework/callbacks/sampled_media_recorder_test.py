@@ -64,20 +64,22 @@ def test_extract_records_prefers_action_fingerprint() -> None:
         "video": [object(), object()],
         "__key__": ["legacy-a", "legacy-b"],
         "action_sample_fingerprint": [
-            "libero_10:v4:idx0:row5:start0:rank0:worker0:retry0:orig0",
-            "robomind_franka:v4:idx2:row7:start2:rank1:worker3:retry0:orig2",
+            "libero_10:v4:idx0:row5:start0:rank0",
+            "robomind_franka:v4:idx2:row7:start2:rank1",
         ],
         "dataset_name": ["action_data", "action_data"],
         "source_dataset_name": ["libero_10", "robomind_franka"],
+        "action_sample_caption_mode": ["short", "dense"],
     }
 
     records = callback._extract_records(batch, iteration=12, rank=0)
 
     assert [record["sample_id"] for record in records] == [
-        "libero_10:v4:idx0:row5:start0:rank0:worker0:retry0:orig0",
-        "robomind_franka:v4:idx2:row7:start2:rank1:worker3:retry0:orig2",
+        "libero_10:v4:idx0:row5:start0:rank0",
+        "robomind_franka:v4:idx2:row7:start2:rank1",
     ]
     assert [record["source_dataset_name"] for record in records] == ["libero_10", "robomind_franka"]
+    assert [record["caption_mode"] for record in records] == ["short", "dense"]
 
 
 def test_extract_records_accepts_action_fingerprint_without_legacy_key() -> None:
@@ -85,16 +87,14 @@ def test_extract_records_accepts_action_fingerprint_without_legacy_key() -> None
     callback.config = SimpleNamespace(job=SimpleNamespace(name="test_experiment"))
     batch = {
         "video": [object()],
-        "action_sample_fingerprint": ["robomind_franka:v4:idx2:row7:start2:rank1:worker3:retry0:orig2"],
+        "action_sample_fingerprint": ["robomind_franka:v4:idx2:row7:start2:rank1"],
         "dataset_name": ["action_data"],
         "source_dataset_name": ["robomind_franka"],
     }
 
     records = callback._extract_records(batch, iteration=12, rank=1)
 
-    assert [record["sample_id"] for record in records] == [
-        "robomind_franka:v4:idx2:row7:start2:rank1:worker3:retry0:orig2"
-    ]
+    assert [record["sample_id"] for record in records] == ["robomind_franka:v4:idx2:row7:start2:rank1"]
     assert records[0]["rank"] == 1
 
 

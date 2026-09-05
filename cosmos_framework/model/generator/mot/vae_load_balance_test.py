@@ -221,6 +221,7 @@ def _run_offload(shapes_by_rank: dict[int, list[tuple[int, ...]]], world_size: i
 @pytest.mark.L0
 @pytest.mark.CPU
 @pytest.mark.serial
+@pytest.mark.no_xdist
 class TestOffloadEncode:
     def test_offloaded_samples_return_correct_latents_to_their_owner(self) -> None:
         """Rank 0 owns 3 samples heavy enough to force offloading; ranks 1/2 own none.
