@@ -877,8 +877,17 @@ class OmniMoTCausalModel(OmniMoTModel):
         # the null conditioning frame, not stored), i.e. (T-1)*tcf rows. Round the
         # stored real-action frame count down to the chunk grid; this matches each
         # entry's truncated vision because both round the same T with the same rule.
+        # Framewise domain IDs describe those stored real actions, so truncate them
+        # in lockstep. The temporal-causal packer adds the null-frame domain prefix
+        # later, when it also adds the null action tokens.
         if gen_data_clean.x0_tokens_action is not None:
             tcf = self.tokenizer_vision_gen.temporal_compression_factor or 1
+            action_domain_ids = gen_data_clean.action_domain_id
+            if action_domain_ids is not None and len(action_domain_ids) != len(gen_data_clean.x0_tokens_action):
+                raise ValueError(
+                    "Action-domain metadata must have one entry per action tensor before chunkwise-TF truncation; "
+                    f"got {len(action_domain_ids)} domain entries for {len(gen_data_clean.x0_tokens_action)} actions."
+                )
             for j, act in enumerate(gen_data_clean.x0_tokens_action):
                 if act is None:
                     continue
@@ -889,6 +898,16 @@ class OmniMoTCausalModel(OmniMoTModel):
                         f"temporal_compression_factor={tcf}; cannot chunk-align for chunkwise TF."
                     )
                 keep_rows = C * ((rows // tcf) // C) * tcf  # (keep_t - 1) * tcf
+                if action_domain_ids is not None:
+                    domain_ids = action_domain_ids[j]
+                    flat_domain_ids = domain_ids.reshape(-1)
+                    if flat_domain_ids.numel() not in (1, rows):
+                        raise ValueError(
+                            f"Action-domain entry {j} must be scalar or have one ID per real action row before "
+                            f"chunkwise-TF truncation; got {flat_domain_ids.numel()} IDs for {rows} rows."
+                        )
+                    if flat_domain_ids.numel() == rows and keep_rows < rows:
+                        action_domain_ids[j] = flat_domain_ids[:keep_rows].contiguous()
                 if keep_rows < rows:
                     gen_data_clean.x0_tokens_action[j] = act[..., :keep_rows, :].contiguous()
 
@@ -1226,11 +1245,40 @@ class OmniMoTCausalModel(OmniMoTModel):
 
     @staticmethod
     def _first_action_domain_id(gen_data_clean: GenerationDataClean) -> torch.Tensor | None:
-        """Return the first action-domain id for batch-size-one AR packing."""
+        """Return the first sample's scalar or framewise action-domain IDs."""
         action_domain_id = getattr(gen_data_clean, "action_domain_id", None)
         if action_domain_id is None or len(action_domain_id) == 0:
             return None
-        return action_domain_id[0]  # [1] or []
+        return action_domain_id[0]  # [T_action], [1], or []
+
+    @staticmethod
+    def _slice_action_domain_id(
+        action_domain_id: torch.Tensor | None,
+        start: int,
+        end: int,
+    ) -> torch.Tensor | None:
+        """Return scalar metadata unchanged or slice framewise IDs for one AR unit."""
+        if action_domain_id is None:
+            return None
+        flat_domain_id = torch.as_tensor(action_domain_id, dtype=torch.long).reshape(-1)
+        if flat_domain_id.numel() == 0:
+            return None
+        if flat_domain_id.numel() == 1:
+            return flat_domain_id
+        if not 0 <= start < end <= flat_domain_id.numel():
+            raise ValueError(
+                "Framewise action-domain IDs do not cover the requested AR action-token range: "
+                f"range=[{start},{end}), available={flat_domain_id.numel()}."
+            )
+        return flat_domain_id[start:end]
+
+    @staticmethod
+    def _null_action_domain_id(action_domain_id: torch.Tensor | None) -> torch.Tensor | None:
+        """Use the first real action's domain for the initial null-action supertoken."""
+        if action_domain_id is None:
+            return None
+        flat_domain_id = torch.as_tensor(action_domain_id, dtype=torch.long).reshape(-1)
+        return flat_domain_id[:1] if flat_domain_id.numel() > 0 else None
 
     @staticmethod
     def _first_raw_action_dim(gen_data_clean: GenerationDataClean) -> torch.Tensor | None:
@@ -1718,6 +1766,9 @@ class OmniMoTCausalModel(OmniMoTModel):
                     cond_cached_text_offset=cond_cached_text_offset,
                     uncond_cached_text_offset=uncond_cached_text_offset,
                     curr_action_latent=None,
+                    action_domain_id=(
+                        OmniMoTCausalModel._null_action_domain_id(action_domain_id) if has_action else None
+                    ),
                     gen_data_clean=gen_data_clean,
                     fps_vision_list=fps_vision_list,
                     fps_action_list=fps_action_list,
@@ -1770,6 +1821,7 @@ class OmniMoTCausalModel(OmniMoTModel):
                     cond_cached_text_offset=cond_cached_text_offset,
                     uncond_cached_text_offset=uncond_cached_text_offset,
                     curr_action_latent=None,
+                    action_domain_id=None,
                     gen_data_clean=gen_data_clean,
                     fps_vision_list=fps_vision_list,
                     fps_action_list=fps_action_list,
@@ -1814,8 +1866,16 @@ class OmniMoTCausalModel(OmniMoTModel):
                     curr_action_latent = gen_data_clean.x0_tokens_action[0][
                         (chunk_start - 1) * _tcf : (chunk_end - 1) * _tcf, :
                     ].to(**self.tensor_kwargs)  # a_{chunk_start-1}..a_{chunk_end-2}; [chunk_len*tcf, D]
+                curr_action_domain_id = OmniMoTCausalModel._slice_action_domain_id(
+                    action_domain_id,
+                    (chunk_start - 1) * _tcf,
+                    (chunk_end - 1) * _tcf,
+                )
             else:
                 curr_action_latent = None
+                curr_action_domain_id = (
+                    OmniMoTCausalModel._null_action_domain_id(action_domain_id) if has_action else None
+                )
 
             # Initialize the whole chunk with noise: [1, C, chunk_len, H, W].
             _ref0 = vision_items[generation_vision_item_idx][:, :, 0:1, :, :].to(**self.tensor_kwargs)  # [1,C,1,H,W]
@@ -1860,7 +1920,7 @@ class OmniMoTCausalModel(OmniMoTModel):
                 cached_text_offset=None if _cond_pack_text is not None else cond_cached_text_offset,
                 unified_3d_mrope_temporal_modality_margin=_margin,
                 force_action_tokens=_video_tc and self.config.action_gen,
-                action_domain_id=action_domain_id,
+                action_domain_id=curr_action_domain_id,
                 raw_action_dim=raw_action_dim,
             )
 
@@ -1888,7 +1948,7 @@ class OmniMoTCausalModel(OmniMoTModel):
                     cached_text_offset=None if _uncond_pack_text is not None else uncond_cached_text_offset,
                     unified_3d_mrope_temporal_modality_margin=_margin,
                     force_action_tokens=_video_tc and self.config.action_gen,
-                    action_domain_id=action_domain_id,
+                    action_domain_id=curr_action_domain_id,
                     raw_action_dim=raw_action_dim,
                 )
 
@@ -1943,6 +2003,7 @@ class OmniMoTCausalModel(OmniMoTModel):
                 # Sampler returns fp32; cast to bf16 so vae2llm matches the model graph.
                 _frame_latent = denoised_chunk[:, :, _local_i : _local_i + 1].to(**self.tensor_kwargs)  # [1,C,1,H,W]
                 _seed_action: torch.Tensor | None = None
+                _seed_action_domain_id: torch.Tensor | None = None
                 if has_action and _f > 0:
                     if streaming_actions:
                         _seed_action = curr_action_latent  # [tcf,D] (chunk_len == 1 under streaming)
@@ -1951,6 +2012,13 @@ class OmniMoTCausalModel(OmniMoTModel):
                         _seed_action = gen_data_clean.x0_tokens_action[0][(_f - 1) * _tcf : _f * _tcf, :].to(
                             **self.tensor_kwargs
                         )  # a_{_f-1}; [tcf,D]
+                    _seed_action_domain_id = OmniMoTCausalModel._slice_action_domain_id(
+                        action_domain_id,
+                        (_f - 1) * _tcf,
+                        _f * _tcf,
+                    )
+                elif has_action:
+                    _seed_action_domain_id = OmniMoTCausalModel._null_action_domain_id(action_domain_id)
                 self._seed_frame_into_kv_cache(
                     frame_latent=_frame_latent,
                     frame_idx=transfer_history_cache_idx if is_transfer else _f,
@@ -1966,6 +2034,7 @@ class OmniMoTCausalModel(OmniMoTModel):
                     cond_cached_text_offset=cond_cached_text_offset,
                     uncond_cached_text_offset=uncond_cached_text_offset,
                     curr_action_latent=_seed_action,
+                    action_domain_id=_seed_action_domain_id,
                     gen_data_clean=gen_data_clean,
                     fps_vision_list=fps_vision_list,
                     fps_action_list=fps_action_list,
@@ -2615,6 +2684,7 @@ class OmniMoTCausalModel(OmniMoTModel):
         cond_cached_text_offset: int,
         uncond_cached_text_offset: int,
         curr_action_latent: torch.Tensor | None,
+        action_domain_id: torch.Tensor | None,
         gen_data_clean: GenerationDataClean,
         fps_vision_list: list[float],
         fps_action_list: list[float],
@@ -2694,7 +2764,6 @@ class OmniMoTCausalModel(OmniMoTModel):
             raise ValueError(f"Unknown causal_training_strategy: {strategy!r}")
 
         def _build_pack(text_tokens: list[int] | None, cached_text_offset: int) -> PackedSequence:
-            action_domain_id = OmniMoTCausalModel._first_action_domain_id(gen_data_clean)
             raw_action_dim = OmniMoTCausalModel._first_raw_action_dim(gen_data_clean)
             return pack_input_sequence_autoregressive(
                 vision_latent=frame_in,

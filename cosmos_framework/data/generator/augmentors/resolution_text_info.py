@@ -28,6 +28,9 @@ class ResolutionTextInfo(Augmentor):
         Augmented (image): "A cat playing with a ball. This image is 512x512."
         Augmented (video): "A cat playing with a ball. This video is 480x854."
 
+    An ordered list of captions is augmented item by item for separate-view
+    multiview tokenization.
+
     Args:
         input_keys (list): Input keys (not used, kept for API compatibility)
         output_keys (list): Output keys (not used, kept for API compatibility)
@@ -76,6 +79,18 @@ class ResolutionTextInfo(Augmentor):
         assert self.caption_key in data_dict, f"caption_key '{self.caption_key}' not found in data_dict."
         caption = data_dict[self.caption_key]
 
+        if isinstance(caption, list):
+            if not caption or not all(isinstance(item, (str, dict)) for item in caption):
+                raise ValueError(f"Unsupported caption type: {type(caption)}")
+            updated_captions: list[str | dict] = []
+            for item in caption:
+                item_data = dict(data_dict)
+                item_data[self.caption_key] = item
+                updated_item_data = self(item_data)
+                assert updated_item_data is not None
+                updated_captions.append(updated_item_data[self.caption_key])
+            data_dict[self.caption_key] = updated_captions
+            return data_dict
         if (not isinstance(caption, str) and not isinstance(caption, dict)) or caption == "":
             # This is for unconditional case.
             return data_dict

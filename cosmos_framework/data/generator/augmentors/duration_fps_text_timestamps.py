@@ -26,6 +26,9 @@ class DurationFPSTextTimeStamps(Augmentor):
         Original caption: "A cat playing with a ball"
         Augmented caption: "A cat playing with a ball. The video is 1.4 seconds long and is of 24 FPS"
 
+    An ordered list of captions is augmented item by item for separate-view
+    multiview tokenization.
+
     Args:
         input_keys (list): Input keys (not used, kept for API compatibility)
         output_keys (list): Output keys (not used, kept for API compatibility)
@@ -85,6 +88,19 @@ class DurationFPSTextTimeStamps(Augmentor):
             else:
                 return None
         caption = data_dict[self.caption_key]
+        if isinstance(caption, list):
+            if not caption or not all(isinstance(item, (str, dict)) for item in caption):
+                return data_dict if self.skip_on_error else None
+            updated_captions: list[str | dict] = []
+            for item in caption:
+                item_data = dict(data_dict)
+                item_data[self.caption_key] = item
+                updated_item_data = self(item_data)
+                if updated_item_data is None:
+                    return None
+                updated_captions.append(updated_item_data[self.caption_key])
+            data_dict[self.caption_key] = updated_captions
+            return data_dict
         if (not isinstance(caption, str) and not isinstance(caption, dict)) or caption == "":
             if self.skip_on_error:
                 return data_dict
