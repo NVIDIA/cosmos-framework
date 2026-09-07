@@ -1,7 +1,7 @@
 {
-  "_source_commit": "6d357d204f58a6aaef967442bc071e08c8cb736b-dirty",
-  "_dest_commit": "c23cf8ce41d5060cd4f838a664bf92b443b5b284",
-  "_generated_at": "2026-09-06T05:52:07Z",
+  "_source_commit": "aa88627921856c9c83ab8edf42c46e506255d3a6-dirty",
+  "_dest_commit": "fcd1d7eb07ad76dd7f15c61185a2377f15918ac7",
+  "_generated_at": "2026-09-07T05:52:05Z",
   "files": {
     "imaginaire/__init__.py": "cosmos_framework/__init__.py",
     "imaginaire/attention/__init__.py": "cosmos_framework/model/attention/__init__.py",
