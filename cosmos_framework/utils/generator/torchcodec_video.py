@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import io
+import logging
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, BinaryIO
@@ -15,6 +16,8 @@ import torch
 import torchcodec
 from torchcodec.decoders import VideoDecoder
 from torchcodec.transforms import Resize
+
+log = logging.getLogger(__name__)
 
 VideoSource = str | Path | bytes | io.BytesIO | BinaryIO
 
@@ -180,6 +183,76 @@ def decode_frames_tchw_uint8(
     frames_tchw = decoder.get_frames_at(indices).data.cpu()  # [T,C,H,W]
     metadata = _metadata_from_frame(decoder, frames_tchw[:1])  # frames_tchw[:1]: [1,C,H,W]
     return frames_tchw, metadata
+
+
+def decode_all_frames_nhwc_uint8(
+    source: VideoSource,
+    *,
+    num_threads: int = 1,
+    device: str = "cpu",
+) -> tuple[np.ndarray, VideoMetadata]:
+    """Decode every frame of a video by streaming from the start.
+
+    ``metadata.num_frames`` counts the whole file, but decoding applies the mp4 edit list
+    (``elst``) -- and TorchCodec 0.10.0 mis-scales its ``media_time``, starting far later than the
+    container asks. One QA clip requests a 6.98 ms trim (``media_time`` 6980 at timescale 1000000)
+    and TorchCodec starts 964.57 ms in, at frame 14. Indexing over ``range(num_frames)`` then counts
+    from frame 0 while decoding starts at frame 14, so the request overruns the stream by exactly
+    the frames skipped and raises ``RuntimeError: Requested next frame while there are no more
+    frames left to decode``. ffmpeg reads the same edit list correctly and loses a single frame, so
+    nothing a viewer sees matches what the indexed path produced.
+
+    ``seek_mode="approximate"`` does not apply the edit list, so the mis-scaled offset is never
+    computed and every frame is reachable. ``average_fps`` still comes from the exact-mode scan,
+    which measures the rate instead of reading the declared one -- these clips are often variable
+    frame rate, where the two differ sharply (30 declared vs 14.93 real for that same clip).
+
+    ``VideoDecoder`` defines no ``__iter__``, so iteration runs through the legacy ``__getitem__``
+    protocol, which stops only on ``IndexError``. The end-of-stream ``RuntimeError`` is therefore
+    caught and treated as the end, which also degrades any future count/start disagreement to
+    "decode what is there" rather than a crash.
+
+    Frames are written straight into a preallocated ``[T,H,W,C]`` buffer: stacking a list and then
+    permuting to NHWC would hold the whole video twice.
+    """
+    decoder = _build_decoder(source, num_threads=num_threads, seek_mode="approximate", device=device)
+    capacity, _ = _read_basic_metadata(decoder)
+    frames_nhwc: torch.Tensor | None = None
+    count = 0
+    try:
+        for frame in decoder:  # a bare [C,H,W] uint8 tensor, not a Frame object
+            frame = frame.cpu()
+            if frames_nhwc is None:
+                channels, height, width = frame.shape
+                frames_nhwc = torch.empty((max(capacity, 1), height, width, channels), dtype=frame.dtype)
+            elif count == frames_nhwc.shape[0]:
+                # The count under-reported the stream; grow rather than drop frames.
+                grow_by = max(count // 4, 1)
+                frames_nhwc = torch.cat([frames_nhwc, torch.empty_like(frames_nhwc[:grow_by])])
+            frames_nhwc[count].copy_(frame.permute(1, 2, 0))  # [C,H,W] -> [H,W,C]
+            count += 1
+    except RuntimeError as exc:
+        if "no more frames" not in str(exc):
+            raise
+    if frames_nhwc is None or count == 0:
+        raise ValueError(f"Decoded zero frames from {source!r}")
+    frames_nhwc = frames_nhwc[:count]  # [T,H,W,C]
+    _, height, width, _ = frames_nhwc.shape
+
+    counted_frames, measured_fps = _read_basic_metadata(
+        _build_decoder(source, num_threads=num_threads, seek_mode="exact", device=device)
+    )
+    if counted_frames != count:
+        log.warning(
+            "Video frame count disagrees with the decoded stream (indexed scan: %d frames;"
+            " decoded: %d @ %.2f fps) - trusting the decoded frames: %r",
+            counted_frames,
+            count,
+            measured_fps,
+            source,
+        )
+    metadata = VideoMetadata(num_frames=count, average_fps=measured_fps, height=int(height), width=int(width))
+    return frames_nhwc.numpy(), metadata  # a view of the buffer, not a copy
 
 
 def decode_frames_cthw_uint8(
