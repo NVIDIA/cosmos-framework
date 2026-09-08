@@ -6,7 +6,7 @@ import math
 import os
 from functools import cache
 from pathlib import Path
-from typing import TYPE_CHECKING, Annotated, Any, ClassVar, Literal, Self, cast, override
+from typing import TYPE_CHECKING, Annotated, Any, ClassVar, Literal, Self, Sequence, cast, override
 
 import pydantic
 import pynvml
@@ -128,9 +128,9 @@ class SamplingOverrides(OverridesBase):
             self.num_steps = min(self.num_steps, 1)
 
 
-InferenceResolution = Literal["256", "480", "720", "768", "1080"]
+InferenceResolution = Literal["256", "480", "720", "768"]
 if TRAINING:
-    Resolution = Literal["256", "480", "704", "720", "768", "1080"]
+    Resolution = Literal["256", "480", "704", "720", "768"]
 else:
     Resolution = InferenceResolution
 AspectRatio = Literal["1,1", "4,3", "3,4", "16,9", "9,16"]
@@ -195,6 +195,39 @@ REASONER_MODEL_MODES: frozenset[ModelMode] = frozenset({ModelMode.REASONER})
 # Modes that condition generation on a real input audio clip (require a model
 # with ``sound_gen=True`` and a ``sound_path``).
 SOUND_CONDITION_MODEL_MODES: frozenset[ModelMode] = frozenset({ModelMode.AUDIO_IMAGE2VIDEO})
+
+
+def is_reasoner_only(sample_overrides: Sequence["OmniSampleOverrides"]) -> bool:
+    """Return whether every requested sample uses the reasoner-only path."""
+    return bool(sample_overrides) and all(sample.sample_meta.model_mode.is_reasoner for sample in sample_overrides)
+
+
+def reasoner_only_overrides() -> list[str]:
+    """Config overrides that drop generation-side modules for reasoner-only runs.
+
+    Reasoner decoding runs entirely in the understanding tower, so none of these
+    modules are reachable. ``dcp.load`` is pull-based, so not building them also
+    means their tensors are never read from the checkpoint.
+
+    The three flags are deliberately orthogonal and each defaults to the
+    generation-enabled value: dropping any one entry from this list degrades to
+    the previous behaviour for that module alone, leaving the others in effect.
+    """
+    return [
+        # The generation VAE (Wan2.2 for Edge): ~1.3 GiB resident, and its weights
+        # are downloaded lazily at tokenizer construction, so skipping it also
+        # avoids a ~2.6 GiB download on a cold cache.
+        "model.config.load_vision_tokenizer=false",
+        # VFM-level generation heads: time_embedder, proj_in/proj_out, action_*, sound_*.
+        # All three modality flags must fall together: ``Cosmos3VFMNetworkConfig``
+        # asserts that action and sound generation each imply vision generation, and
+        # Edge checkpoints ship with ``action_gen=true``.
+        "model.config.vision_gen=false",
+        "model.config.action_gen=false",
+        "model.config.sound_gen=false",
+        # The MoT generation tower (every ``*_moe_gen`` module): ~2.0 GiB resident.
+        "model.config.vlm_config.model_instance.config.include_gen_pathway=false",
+    ]
 
 
 class VisionMode(StrEnum):
@@ -446,9 +479,22 @@ class VisionDataOverrides(OverridesBase, _VisionDataBase):
 
     # Vision fields
     resolution: Resolution | None = None
-    """Vision resolution.
-    
+    """Vision resolution tier, not a pixel dimension. Resolved against
+    ``aspect_ratio`` by ``vision_size`` -- ``"256"`` at the default ``16,9``
+    yields 320x192. See docs/inference.md for the full table.
+
     Defaults to model config resolution.
+
+    Accepting a value here does not mean the loaded checkpoint can generate it.
+    Per the published model cards:
+
+    * Cosmos3-Edge: 256/480, images and video.
+    * Cosmos3-Nano: 256/480/720, images and video.
+    * Cosmos3-Super: 256/480/720; 768 additionally for images (the shipped tier
+      of the Super-Text2Image variants).
+
+    These ranges are not enforced per checkpoint: a value outside them still
+    runs, at a tier the model was never trained on.
     """
     aspect_ratio: AspectRatio | None = None
     """Vision aspect ratio. When None, image_edit preserves the input image's native
@@ -459,7 +505,8 @@ class VisionDataOverrides(OverridesBase, _VisionDataBase):
     """Number of vision frames.
 
     Range by resolution: 256p: [24, 400], 480p: [24, 300], 720p/768p: [24, 200].
-    Image-only resolutions (e.g. 1080p) require num_frames=1.
+    These are global limits; a checkpoint's own published range may be tighter
+    (Cosmos3-Edge is documented as 50-150 video frames).
     """
     video_save_quality: Training[VideoSaveQuality | None] = None
     """Quality of the saved video (0-10)."""
@@ -1223,7 +1270,7 @@ _CHECKPOINTS: dict[str, CheckpointConfig] = {
         s3_uri="s3://bucket1/cosmos3_vfm/cosmos3_ga_text2image_4step/",
         hf=CheckpointDirHf(
             repository="nvidia/Cosmos3-Super-Text2Image-4Step",
-            revision="1ba94110bc118f479bbd5e461e79d685d74b2554",
+            revision="main",
         ),
         experiment_overrides=(
             "model.config.resolution='768'",
@@ -1245,7 +1292,7 @@ _CHECKPOINTS: dict[str, CheckpointConfig] = {
         s3_uri="s3://bucket1/cosmos3_vfm/cosmos3_ga_image2video_4step/",
         hf=CheckpointDirHf(
             repository="nvidia/Cosmos3-Super-Image2Video-4Step",
-            revision="f85d3335d2ad8b352462cecbd637aa980cec9688",
+            revision="main",
         ),
         experiment_overrides=(
             "model.config.resolution='480'",

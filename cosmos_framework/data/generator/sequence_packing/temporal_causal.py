@@ -106,7 +106,7 @@ def pack_supertokens_temporal_causal(
                 real_actions = input_action_tokens.squeeze(0)  # [T*tcf,action_dim] or [N,action_dim]
             else:
                 real_actions = input_action_tokens  # [N,action_dim]
-            null_tokens = torch.zeros(tcf, action_dim, device=device, dtype=real_actions.dtype)  # [tcf,action_dim]
+            null_tokens = real_actions.new_zeros((tcf, action_dim))  # [tcf,action_dim]
             if real_actions.shape[0] == latent_t * tcf:
                 # AR generation (single frame: tcf == 1*tcf, or chunk: latent_t*tcf):
                 # every supertoken carries a real action, no null prefix.

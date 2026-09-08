@@ -35,7 +35,10 @@ from cosmos_framework.model.generator.tokenizers.uniae.frame_math import (
     normalize_resolution_int_mapping,
 )
 from cosmos_framework.utils.generator.data_utils import get_vision_data_resolution
-from cosmos_framework.model.tokenizer.checkpoint_identity import extract_checkpoint_provenance, resolve_checkpoint_identity
+from cosmos_framework.model.tokenizer.checkpoint_identity import (
+    extract_checkpoint_provenance,
+    resolve_checkpoint_identity,
+)
 from cosmos_framework.model.tokenizer.checkpoint_io import (
     DCP_MODEL_LOAD_INFO_KEY,
     DCPModelLoadInfo,

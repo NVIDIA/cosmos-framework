@@ -46,7 +46,7 @@ ______________________________________________________________________
 For CUDA 13 builds, the [NVIDIA NGC PyTorch container](https://catalog.ngc.nvidia.com/orgs/nvidia/containers/pytorch) is the recommended starting point — it bundles PyTorch + CUDA 13 + cuDNN + NCCL tuned for NVIDIA hardware, plus Apex, TransformerEngine, and Megatron utilities that training infra users commonly need.
 
 ```dockerfile
-FROM nvcr.io/nvidia/pytorch:25.09-py3
+FROM nvcr.io/nvidia/pytorch:26.06-py3
 ```
 
 For CUDA 12.8 builds, pin to an earlier NGC tag (e.g. `nvcr.io/nvidia/pytorch:25.06-py3`) that still ships CUDA 12.
@@ -70,7 +70,7 @@ The two supported install paths are the recommended base image and the Docker co
 
 ### Quickstart: From the Recommended Base Image
 
-If you started from the [recommended base image](#recommended-base-image) (`nvcr.io/nvidia/pytorch:25.09-py3`), the following commands set up the full environment in one go. Run them **from the root of this repository** (i.e. inside the `Cosmos/` directory you just cloned):
+If you started from the [recommended base image](#recommended-base-image) (`nvcr.io/nvidia/pytorch:26.06-py3`), the following commands set up the full environment in one go. Run them **from the root of this repository** (i.e. inside the `Cosmos/` directory you just cloned):
 
 ```shell
 apt-get update

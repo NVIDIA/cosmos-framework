@@ -13,8 +13,8 @@ import torch
 from cosmos_framework.model.attention.utils.safe_ops import log
 
 # Minimum cuDNN runtime version, in ``torch.backends.cudnn.version()`` encoding
-# (major * 10000 + minor * 100 + patch). 92200 == cuDNN 9.22.0.
-CUDNN_MIN_BACKEND_VERSION = 92200
+# (major * 10000 + minor * 100 + patch). 92000 == cuDNN 9.20.0.
+CUDNN_MIN_BACKEND_VERSION = 92000
 
 
 def cudnn_supported() -> bool:

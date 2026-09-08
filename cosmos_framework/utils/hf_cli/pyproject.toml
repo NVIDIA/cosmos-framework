@@ -1,0 +1,15 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: OpenMDW-1.1
+
+# From this directory, check with `uv lock --check`.
+# To upgrade, edit the hf pin and run `uv lock --upgrade-package hf`.
+[project]
+name = "imaginaire-hf-cli"
+version = "0.0.0"
+requires-python = ">=3.10"
+dependencies = [
+    "hf==1.25.1",
+]
+
+[tool.uv]
+package = false

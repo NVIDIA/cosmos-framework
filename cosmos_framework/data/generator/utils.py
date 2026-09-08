@@ -49,7 +49,17 @@ VIDEO_RES_SIZE_INFO: dict[str, dict[str, tuple[int, int]]] = {
         "16,9": (320, 192),
         "9,16": (192, 320),
     },
-    "480": {"1,1": (640, 640), "4,3": (736, 544), "3,4": (544, 736), "16,9": (832, 480), "9,16": (480, 832)},
+    # "2,3" (h/w=1.5, W:H=2:3): added for the BEHAVIOR-1K R1Pro concat_view composite
+    # (native 1080x720), so it snaps to an exact-aspect 512x768 canvas with no
+    # reflection padding. Scoped to the 480 tier that b1k trains at.
+    "480": {
+        "1,1": (640, 640),
+        "4,3": (736, 544),
+        "3,4": (544, 736),
+        "16,9": (832, 480),
+        "9,16": (480, 832),
+        "2,3": (512, 768),
+    },
     # 704 resolutions are nicely divisible by 32
     "704": {"1,1": (960, 960), "4,3": (1088, 832), "3,4": (832, 1088), "16,9": (1280, 704), "9,16": (704, 1280)},
     "720": {"1,1": (960, 960), "4,3": (1104, 832), "3,4": (832, 1104), "16,9": (1280, 720), "9,16": (720, 1280)},
@@ -120,7 +130,7 @@ def parse_frame_range_from_wdinfo(wdinfo: str) -> tuple[int, int | float] | None
     return None
 
 
-def _normalize_skip_frame_ranges(
+def normalize_skip_frame_ranges(
     skip_frame_range: str | list[str] | None,
 ) -> set[tuple[int, int | float]]:
     """Normalize ``skip_frame_range`` into a set of (min_frames, max_frames) buckets.
@@ -201,7 +211,7 @@ def filter_wdinfos_by_frame_range(
         ['wdinfo/frames_400_500/wdinfo.json', 'wdinfo/frames_600_700/wdinfo.json']
         # frames_500_600 excluded because its bucket matches skip_frame_range
     """
-    skip_buckets = _normalize_skip_frame_ranges(skip_frame_range)
+    skip_buckets = normalize_skip_frame_ranges(skip_frame_range)
 
     if min_frames is None and max_frames is None and not skip_buckets:
         return wdinfos

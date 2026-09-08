@@ -3,6 +3,7 @@
 
 import copy
 
+import attrs
 import pytest
 
 from cosmos_framework.inference.common import distillation_export
@@ -94,7 +95,7 @@ def test_sanitize_student_public_model_config_removes_internal_loaders() -> None
                 },
                 "tokenizer": {
                     "_target_": (
-                        "projects.cosmos3.interactive.configs.distillation_implementation."
+                        "cosmos_framework.data.generator.sequence_packing.configs.distillation_implementation."
                         "_create_oss_tokenizer_with_internal_download"
                     ),
                     "config_variant": "gcp",
@@ -299,3 +300,42 @@ def test_resolve_vision_checkpoint_path_prefers_local_override() -> None:
 
     assert path == "/local/vision"
     assert fallback_called is False
+
+
+def test_resolve_student_base_model_keeps_default_for_bidirectional_config() -> None:
+    class _DefaultBaseModel:
+        pass
+
+    model_dict = {"config": {"video_temporal_causal": False}}
+
+    model_cls, config_cls = distillation_export.resolve_student_base_model(
+        model_dict, default_base_model=_DefaultBaseModel
+    )
+
+    assert model_cls is _DefaultBaseModel
+    assert config_cls.__name__ == "OmniMoTModelConfig"
+
+
+def test_resolve_student_base_model_selects_causal_base_for_causal_config() -> None:
+    class _DefaultBaseModel:
+        pass
+
+    model_dict = {"config": {"video_temporal_causal": True, "teacher_forcing_frames_per_chunk": 4}}
+
+    model_cls, config_cls = distillation_export.resolve_student_base_model(
+        model_dict, default_base_model=_DefaultBaseModel
+    )
+
+    assert model_cls.__name__ == "OmniMoTCausalModel"
+    assert config_cls.__name__ == "OmniMoTCausalModelConfig"
+    # The causal-only field must survive the projection field filter.
+    assert "teacher_forcing_frames_per_chunk" in {field.name for field in attrs.fields(config_cls)}
+
+
+def test_resolve_student_base_model_tolerates_missing_config() -> None:
+    class _DefaultBaseModel:
+        pass
+
+    model_cls, _ = distillation_export.resolve_student_base_model({}, default_base_model=_DefaultBaseModel)
+
+    assert model_cls is _DefaultBaseModel

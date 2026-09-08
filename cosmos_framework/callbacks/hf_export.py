@@ -74,9 +74,8 @@ def _upload_folder_to_s3(local_folder: str, bucket: str, s3_prefix: str, credent
             local_path = os.path.join(root, fname)
             rel = os.path.relpath(local_path, local_folder)
             s3_path = f"s3://{bucket}/{s3_prefix}/{rel}"
-            # Pass the local path string so Boto3Backend uses upload_file() —
-            # a streaming transfer that avoids reading the whole shard into memory.
-            backend.put(local_path, s3_path)
+            # Stream the local file through the backend's upload path.
+            backend.copyfile_from_local(local_path, s3_path)
             log.info(f"[HFExportCallback] Uploaded {local_path} → {s3_path}")
 
 

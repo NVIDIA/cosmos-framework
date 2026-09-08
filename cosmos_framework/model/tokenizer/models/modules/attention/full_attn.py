@@ -11,7 +11,9 @@ This module provides full attention implementations supporting:
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
+from functools import lru_cache
 from typing import TYPE_CHECKING, Any, overload
 
 import torch
@@ -20,7 +22,7 @@ from torch.nn.attention import SDPBackend, sdpa_kernel
 
 from cosmos_framework.model.attention.frontend import attention as i4_attention
 from cosmos_framework.model.attention.varlen import generate_varlen_parameters
-from cosmos_framework.model.tokenizer.utils.tensors import cat_with_bounded_inputs
+from cosmos_framework.model.tokenizer.utils.tensors import cat_with_bounded_inputs, stack_with_bounded_inputs
 
 if TYPE_CHECKING:
     from cosmos_framework.model.tokenizer.models.modules.sparse_tensor import SparseTensor
@@ -31,6 +33,103 @@ __all__ = [
     "tensor_dense_scaled_dot_product_attention",
     "tensor_varlen_scaled_dot_product_attention",
 ]
+
+_NO_COMPATIBLE_ATTENTION_BACKEND_PREFIX = "Could not find a compatible Attention backend"
+
+
+@lru_cache(maxsize=1)
+def _warn_varlen_portability_fallback() -> None:
+    """Log the first use of the slower cross-architecture varlen fallback."""
+    logging.warning(
+        "No optimized packed-varlen attention backend is compatible with this runtime; "
+        "using shape-grouped PyTorch scaled-dot-product attention."
+    )
+
+
+def _segmented_varlen_scaled_dot_product_attention(
+    q: torch.Tensor,  # [Tq,Hq,D]
+    k: torch.Tensor,  # [Tkv,Hkv,D]
+    v: torch.Tensor,  # [Tkv,Hkv,Dv]
+    cu_seqlens_q: torch.Tensor,  # [B+1]
+    cu_seqlens_kv: torch.Tensor,  # [B+1]
+    max_q_seqlen: int,
+    max_kv_seqlen: int,
+) -> torch.Tensor:  # [Tq,Hq,Dv]
+    """Apply exact shape-grouped SDPA when the runtime has no packed-varlen kernel."""
+    if k.shape[0] != v.shape[0]:
+        raise ValueError("Packed-varlen K and V token counts must match.")
+    if k.shape[1] != v.shape[1]:
+        raise ValueError("Packed-varlen K and V head counts must match.")
+    if k.shape[1] == 0 or q.shape[1] % k.shape[1] != 0:
+        raise ValueError("Packed-varlen query head count must be divisible by the KV head count.")
+    enable_gqa = q.shape[1] != k.shape[1]
+    q_offsets = [int(value) for value in cu_seqlens_q.detach().cpu().tolist()]
+    kv_offsets = [int(value) for value in cu_seqlens_kv.detach().cpu().tolist()]
+    if len(q_offsets) != len(kv_offsets) or len(q_offsets) < 2:
+        raise ValueError("Packed-varlen cumulative sequence lengths must describe the same non-empty batch.")
+    if q_offsets[0] != 0 or kv_offsets[0] != 0 or q_offsets[-1] != q.shape[0] or kv_offsets[-1] != k.shape[0]:
+        raise ValueError("Packed-varlen cumulative sequence lengths do not match the Q/KV token counts.")
+    q_lengths = [end - start for start, end in zip(q_offsets, q_offsets[1:])]
+    kv_lengths = [end - start for start, end in zip(kv_offsets, kv_offsets[1:])]
+    if any(length < 0 for length in (*q_lengths, *kv_lengths)):
+        raise ValueError("Packed-varlen cumulative sequence lengths must be nondecreasing.")
+    if max(q_lengths, default=0) > max_q_seqlen or max(kv_lengths, default=0) > max_kv_seqlen:
+        raise ValueError("Packed-varlen maximum sequence lengths are smaller than the cumulative sequence lengths.")
+
+    if any(q_length > 0 and kv_length == 0 for q_length, kv_length in zip(q_lengths, kv_lengths)):
+        raise ValueError("Packed-varlen attention cannot evaluate a non-empty query segment without KV tokens.")
+
+    batch_size = len(q_lengths)
+    if len(set(q_lengths)) == 1 and len(set(kv_lengths)) == 1:
+        q_length = q_lengths[0]
+        kv_length = kv_lengths[0]
+        if q_length > 0:
+            q_batch = q.reshape(batch_size, q_length, q.shape[1], q.shape[2]).permute(0, 2, 1, 3)  # [B,Hq,Tq,D]
+            k_batch = k.reshape(batch_size, kv_length, k.shape[1], k.shape[2]).permute(0, 2, 1, 3)  # [B,Hkv,Tkv,D]
+            v_batch = v.reshape(batch_size, kv_length, v.shape[1], v.shape[2]).permute(0, 2, 1, 3)  # [B,Hkv,Tkv,Dv]
+            output_batch = F.scaled_dot_product_attention(
+                q_batch,
+                k_batch,
+                v_batch,
+                enable_gqa=enable_gqa,
+            )  # [B,Hq,Tq,Dv]
+            return output_batch.permute(0, 2, 1, 3).reshape(q.shape[0], q.shape[1], v.shape[-1])  # [Tq,Hq,Dv]
+
+    shape_groups: dict[tuple[int, int], list[int]] = {}
+    output_segments: list[torch.Tensor | None] = [None] * batch_size
+    for batch_idx, (q_length, kv_length) in enumerate(zip(q_lengths, kv_lengths)):
+        if q_length == 0:
+            output_segments[batch_idx] = q.new_empty((0, q.shape[1], v.shape[-1]))  # [0,Hq,Dv]
+        else:
+            shape_groups.setdefault((q_length, kv_length), []).append(batch_idx)
+
+    for (_q_length, _kv_length), batch_indices in shape_groups.items():
+        q_group = stack_with_bounded_inputs(
+            [q[q_offsets[index] : q_offsets[index + 1]] for index in batch_indices], dim=0
+        )  # [Bg,Tq_i,Hq,D]
+        k_group = stack_with_bounded_inputs(
+            [k[kv_offsets[index] : kv_offsets[index + 1]] for index in batch_indices], dim=0
+        )  # [Bg,Tkv_i,Hkv,D]
+        v_group = stack_with_bounded_inputs(
+            [v[kv_offsets[index] : kv_offsets[index + 1]] for index in batch_indices], dim=0
+        )  # [Bg,Tkv_i,Hkv,Dv]
+        output_group = F.scaled_dot_product_attention(
+            q_group.permute(0, 2, 1, 3),  # [Bg,Hq,Tq_i,D]
+            k_group.permute(0, 2, 1, 3),  # [Bg,Hkv,Tkv_i,D]
+            v_group.permute(0, 2, 1, 3),  # [Bg,Hkv,Tkv_i,Dv]
+            enable_gqa=enable_gqa,
+        ).permute(0, 2, 1, 3)  # [Bg,Tq_i,Hq,Dv]
+        for group_idx, batch_idx in enumerate(batch_indices):
+            output_segments[batch_idx] = output_group[group_idx]  # [Tq_i,H,Dv]
+
+    if any(segment is None for segment in output_segments):
+        raise RuntimeError("Packed-varlen portability fallback did not produce every query segment.")
+    resolved_segments = [segment for segment in output_segments if segment is not None]
+    if len(resolved_segments) != batch_size:
+        raise RuntimeError("Packed-varlen portability fallback produced an incomplete query batch.")
+    if not resolved_segments:
+        return q.new_empty((0, q.shape[1], v.shape[-1]))  # [0,Hq,Dv]
+    return cat_with_bounded_inputs(resolved_segments, dim=0)  # [Tq,Hq,Dv]
 
 
 def _generate_varlen_metadata(
@@ -61,28 +160,44 @@ def _generate_varlen_metadata(
 
 
 def tensor_varlen_scaled_dot_product_attention(
-    q: torch.Tensor,
-    k: torch.Tensor,
-    v: torch.Tensor,
-    cu_seqlens_q: torch.Tensor,
-    cu_seqlens_kv: torch.Tensor,
+    q: torch.Tensor,  # [Tq,Hq,D]
+    k: torch.Tensor,  # [Tkv,Hkv,D]
+    v: torch.Tensor,  # [Tkv,Hkv,Dv]
+    cu_seqlens_q: torch.Tensor,  # [B+1]
+    cu_seqlens_kv: torch.Tensor,  # [B+1]
     max_q_seqlen: int,
     max_kv_seqlen: int,
-) -> torch.Tensor:
+) -> torch.Tensor:  # [Tq,Hq,Dv]
     """Apply tokenizer packed varlen attention through cosmos_framework.model.attention."""
     if q.shape[0] == 0:
-        return q.new_empty((0, q.shape[1], v.shape[-1]))
+        return q.new_empty((0, q.shape[1], v.shape[-1]))  # [0,Hq,Dv]
 
-    out = i4_attention(
-        query=q.unsqueeze(0).contiguous(),
-        key=k.unsqueeze(0).contiguous(),
-        value=v.unsqueeze(0).contiguous(),
-        cumulative_seqlen_Q=cu_seqlens_q,
-        cumulative_seqlen_KV=cu_seqlens_kv,
-        max_seqlen_Q=max_q_seqlen,
-        max_seqlen_KV=max_kv_seqlen,
-    )
-    return out.squeeze(0)
+    try:
+        out = i4_attention(
+            query=q.unsqueeze(0).contiguous(),  # [1,Tq,Hq,D]
+            key=k.unsqueeze(0).contiguous(),  # [1,Tkv,Hkv,D]
+            value=v.unsqueeze(0).contiguous(),  # [1,Tkv,Hkv,Dv]
+            cumulative_seqlen_Q=cu_seqlens_q,
+            cumulative_seqlen_KV=cu_seqlens_kv,
+            max_seqlen_Q=max_q_seqlen,
+            max_seqlen_KV=max_kv_seqlen,
+        )  # [1,Tq,Hq,Dv]
+    except ValueError as error:
+        if not str(error).startswith(_NO_COMPATIBLE_ATTENTION_BACKEND_PREFIX):
+            raise
+        _warn_varlen_portability_fallback()
+        return _segmented_varlen_scaled_dot_product_attention(
+            q,
+            k,
+            v,
+            cu_seqlens_q,
+            cu_seqlens_kv,
+            max_q_seqlen,
+            max_kv_seqlen,
+        )  # [Tq,Hq,Dv]
+    if not isinstance(out, torch.Tensor):
+        raise TypeError("Tokenizer packed-varlen attention requires a tensor output without auxiliary values.")
+    return out.squeeze(0)  # [Tq,Hq,Dv]
 
 
 def tensor_dense_scaled_dot_product_attention(

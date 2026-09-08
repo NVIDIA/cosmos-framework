@@ -16,7 +16,7 @@ import torch
 class GenerationDataClean:
     """
     Container for tokenized states and conditioning info (clean states)
-    for the multi-modal (vision, sound, action) MoT training.
+    for the multi-modal (vision, lidar, sound, action) MoT training.
     Used for the VFM generation model.
     """
 
@@ -34,6 +34,20 @@ class GenerationDataClean:
     # to each sample (e.g. [2, 2, ...]).  None for standard T2I/T2V (one item per sample).
     num_vision_items_per_sample: list[int] | None = None
 
+    # Multiview (per-camera VAE encoding): number of camera views packed into each
+    # flattened vision item, parallel to x0_tokens_vision. Each item concatenates its
+    # camera clips along the latent temporal axis (camera-major), so latent_t is
+    # num_views * frames_per_view. None when per-camera VAE encoding is disabled.
+    num_views_per_vision_item: list[int] | None = None
+
+    # LiDAR (list of per-item range-view latents, flattened over samples the way
+    # x0_tokens_vision is). A range clip is its own modality with its own VAE and its own
+    # sweep rate, so it never appears among the vision items.
+    raw_state_lidar: list[torch.Tensor] | None = None
+    x0_tokens_lidar: list[torch.Tensor] | None = None
+    fps_lidar: torch.Tensor | None = None
+    num_lidar_items_per_sample: list[int] | None = None
+
     # Audio (Sound)
     raw_state_sound: torch.Tensor | None = None
     x0_tokens_sound: torch.Tensor | None = None
@@ -44,7 +58,9 @@ class GenerationDataClean:
     x0_tokens_action: list[torch.Tensor] | None = None
     fps_action: torch.Tensor | None = None
     action_domain_id: list[torch.Tensor] | None = None  # per-sample domain IDs, None when no action samples
+    action_family: list[str] | None = None  # dataset names aligned with the dense action rows
     raw_action_dim: list[torch.Tensor] | None = None  # raw action dimension, used adding masks to loss calculation
+    action_valid_mask: list[torch.Tensor] | None = None  # per-slot semantic validity for action loss/noise
 
     # Multi-control transfer: per-sample list of per-control weights.
     # Shape: [num_samples], each element is a list of floats (one per control stream).
@@ -56,7 +72,7 @@ class GenerationDataClean:
 class GenerationDataNoised:
     """Container for states after noise addition, along with other
     helper attributes for the flow-matching (gt velocity and noise)
-    for the multi-modal (vision, sound, action) MoT training.
+    for the multi-modal (vision, lidar, sound, action) MoT training.
     Used for the VFM generation model.
     """
 
@@ -66,6 +82,12 @@ class GenerationDataNoised:
     xt_tokens_vision: torch.Tensor  # tokens added with noise level t per flow-matching formulation
     vt_target_vision: torch.Tensor  # gt rectified flow field
     sigmas_vision: torch.Tensor | None = None  # SNR to add to the vision tokens
+
+    # LiDAR
+    epsilon_lidar: torch.Tensor | None = None
+    xt_tokens_lidar: torch.Tensor | None = None
+    vt_target_lidar: torch.Tensor | None = None
+    sigmas_lidar: torch.Tensor | None = None
 
     # Audio (Sound)
     epsilon_sound: torch.Tensor | None = None
@@ -79,6 +101,7 @@ class GenerationDataNoised:
     vt_target_action: torch.Tensor | None = None
     sigmas_action: torch.Tensor | None = None
     raw_action_dim: list[torch.Tensor] | None = None  # raw action dimension, used adding masks to loss calculation
+    action_valid_mask: list[torch.Tensor] | None = None  # per-slot semantic validity for action states
 
 
 def unwrap_and_densify(raw: list | torch.Tensor | None, to_kwargs: dict) -> list[torch.Tensor] | None:
@@ -147,6 +170,10 @@ def _expand_per_sample_to_per_vision_item(
             num_items
         ):  # torch.stack(tensor[idx].repeat(num_vision_items_per_sample[idx]) for idx in range(len(num_vision_items_per_sample)))
             expanded.append(tensor[sample_idx])  # [...]
+    if not expanded:
+        # No sample owns a vision item, as in the LiDAR-only recipe. Slicing rather than
+        # stacking keeps the trailing dims, which torch.stack cannot infer from nothing.
+        return tensor[:0]  # [0,...]
     return torch.stack(expanded)  # [N_vision_items,...]
 
 

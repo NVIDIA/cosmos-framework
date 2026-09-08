@@ -44,7 +44,9 @@ import enum
 import multiprocessing
 import os
 import re
+import socket
 import time
+from datetime import timedelta
 from multiprocessing import get_context
 from typing import Any, Dict, Optional, Protocol, Tuple, Union, runtime_checkable
 
@@ -69,7 +71,11 @@ from torch.distributed.checkpoint.stateful import Stateful
 from torch.distributed.tensor import DTensor, Replicate
 from torch.nn.modules.module import _IncompatibleKeys
 
-from cosmos_framework.checkpoint.base import AbstractCheckpointer
+from cosmos_framework.checkpoint.background_store import (
+    build_background_store,
+    reserve_background_store_socket,
+)
+from cosmos_framework.checkpoint.base import AbstractCheckpointer, CheckpointLoadSource
 from cosmos_framework.checkpoint.s3_filesystem import S3StorageReader, S3StorageWriter
 from cosmos_framework.utils.config import CheckpointConfig, JobConfig
 from cosmos_framework.model._base import ImaginaireModel
@@ -159,6 +165,20 @@ class AsyncMode(str, enum.Enum):
     ASYNC_WITH_PINNED_MEM = "async_with_pinned_mem"
 
 
+# Ceiling on a single async save, enforced by the background process group. This is a budget for the
+# whole write phase rather than for any one rank: ranks that own no unique shard finish in ~1s and
+# then block in DCP's post-write gather, so their timeout starts almost as soon as the write begins
+# and expires while the ranks holding real shards are still uploading. On a 768-node 235B run a
+# healthy save takes 2-3 minutes end to end, but object-store slowdowns have stretched the model
+# shards alone past 40 minutes, so the ceiling is sized for a degraded store, not the expected case.
+BACKGROUND_SAVE_TIMEOUT = timedelta(minutes=60)
+
+# Ceiling on the main process waiting for a result from the background process. Must stay above
+# BACKGROUND_SAVE_TIMEOUT so that a stuck save is reported by the background process (which knows
+# why it failed) instead of surfacing here as an opaque queue timeout.
+SAVE_RESULT_TIMEOUT = timedelta(minutes=70)
+
+
 class Terminate:
     pass
 
@@ -178,6 +198,8 @@ def save_checkpoint_in_background(
     sender_queue: multiprocessing.Queue,
     config_checkpoint: CheckpointConfig,
     config_job: JobConfig,
+    listen_socket: Optional[socket.socket],
+    port: int,
 ) -> None:
     """
     Handles model checkpoint saving in a separate background process using PyTorch's distributed functionality.
@@ -188,6 +210,9 @@ def save_checkpoint_in_background(
         sender_queue: Queue to send completion signals back to the main process
         config_checkpoint: Configuration settings for checkpoint saving behavior
         config_job: Configuration settings for the training job
+        listen_socket: On rank 0, the socket reserved by the parent for this process group's
+            TCPStore; ``None`` on every other rank
+        port: Port ``listen_socket`` is bound to, broadcast to every rank by the parent
 
     Flow:
         1. Initializes distributed processing environment
@@ -200,19 +225,19 @@ def save_checkpoint_in_background(
         AssertionError: If received object is neither Terminate signal nor valid state dict tuple
 
     Note:
-        - Uses a different port than the main process to avoid conflicts
-        - Disables TorchElastic agent store for checkpoint operations
+        - Serves its store on a port reserved by the parent, so it never competes for one
         - Automatically cleans up distributed process group on exit
     """
-    # Configure distributed environment
-    os.environ["MASTER_PORT"] = str(int(os.environ["MASTER_PORT"]) + 2)
-    os.environ["TORCHELASTIC_USE_AGENT_STORE"] = "False"
-
     # Set up GPU device and distributed processing
     torch.cuda.set_device(int(os.environ["LOCAL_RANK"]))
-    if dist.is_initialized():
-        dist.destroy_process_group()
-    dist.init_process_group(backend="gloo")
+    store = build_background_store(listen_socket, port)
+    dist.init_process_group(
+        backend="gloo",
+        store=store,
+        rank=int(os.environ["RANK"]),
+        world_size=int(os.environ["WORLD_SIZE"]),
+        timeout=BACKGROUND_SAVE_TIMEOUT,
+    )
 
     # Initialize checkpointing mechanism
     checkpoint_handler = DistributedCheckpointer(
@@ -244,7 +269,10 @@ def save_checkpoint_in_background(
             checkpoint_handler.save_state_dict_worker(state_dict, checkpoint_path)
             succeeded = True
         except Exception as e:
-            log.error(f"Error saving checkpoint to {checkpoint_path}: {e}")
+            # Logged from every rank: the ranks that own no unique shard are usually the first to
+            # hit the process group timeout, and rank 0 is typically still inside the collective
+            # with nothing to report, so a rank0-only log loses the only record of why a save died.
+            log.error(f"Error saving checkpoint to {checkpoint_path}: {e}", rank0_only=False)
             # continue because if the thread exits, the main thread keeps on adding to the queue
         finally:
             elapsed_time = time.monotonic() - start_time
@@ -689,6 +717,16 @@ class DistributedCheckpointer(AbstractCheckpointer):
             self.async_mode = AsyncMode.DISABLED
 
         if self.async_mode == AsyncMode.ASYNC_WITH_PINNED_MEM:
+            # The background process group's TCPStore server lives on rank 0's node. Rank 0
+            # reserves the port here and keeps it bound until its background process adopts the
+            # socket, so nothing on the node can take the port in between; the port number is
+            # broadcast so every background process knows where to connect.
+            self.background_listen_socket = None
+            background_port = [0]
+            if dist.get_rank() == 0:
+                self.background_listen_socket, background_port[0] = reserve_background_store_socket()
+            dist.broadcast_object_list(background_port, src=0)
+
             ctx = get_context("spawn")
             self.mp_queue_send = ctx.Queue()
             self.mp_queue_recv = ctx.Queue()
@@ -699,6 +737,8 @@ class DistributedCheckpointer(AbstractCheckpointer):
                     self.mp_queue_recv,
                     config_checkpoint,
                     config_job,
+                    self.background_listen_socket,
+                    background_port[0],
                 ),
                 daemon=True,
             )
@@ -708,78 +748,68 @@ class DistributedCheckpointer(AbstractCheckpointer):
             self.staging_stream = torch.cuda.Stream()
             self.checkpoint_in_progress = False
 
-    def keys_to_resume_during_load(self) -> tuple[set[str], str | None, bool | None]:
+    def keys_to_resume_during_load(self) -> tuple[set[str], CheckpointLoadSource | None]:
         """
-        Determines the keys to resume from the checkpoint and the checkpoint path.
+        Determines the keys to resume from the checkpoint and the checkpoint source.
         If the checkpoint is the latest checkpoint of the same model, then it is a
         normal resume. If the checkpoint is a different model's checkpoint, then it is
         a warm start.
 
-        Args:
-            None
-
         Returns:
             resume_keys: The keys to resume from the checkpoint.
-            checkpoint_path: The path to the checkpoint. If the checkpoint is a different
-            warm_start: Whether to warm start the training from a different model's checkpoint.
-                If the checkpoint is a different model's checkpoint, then this is True.
-                If the checkpoint is the latest checkpoint of the same model, then this is False.
+            source: Resolved path and object-store access, or None to train from scratch.
+                ``source.warm_start`` is True for ``load_path`` warm-start and False for
+                same-job auto-resume.
         """
         latest_checkpoint_file = self._read_latest_checkpoint_file()
 
         resume_keys = []
-        warm_start = None
+        source: CheckpointLoadSource | None = None
 
         if latest_checkpoint_file is not None:
             # 1. Resume training from the latest checkpoint of the same model.
-            warm_start = False
-            checkpoint_path = os.path.join(self.load_dirname, latest_checkpoint_file)
+            # Use save_dirname (not load_dirname): latest_checkpoint.txt is written to the
+            # save bucket, which may differ from the load bucket used only for warm-start.
+            source = self._same_job_load_source(os.path.join(self.save_dirname, latest_checkpoint_file))
             resume_keys.extend(self.CHECKPOINT_KEYS)
 
-        else:
-            if self.load_path and not str(self.load_path).endswith(".pt"):
-                # 2. Warm Start: Resume training from a different model's checkpoint
-                # specified by `load_path`.
-                warm_start = True
-                checkpoint_path = self.load_path
+        elif self.load_path and not str(self.load_path).endswith(".pt"):
+            # 2. Warm Start: Resume training from a different model's checkpoint
+            # specified by `load_path`.
+            checkpoint_path = self.load_path
 
-                if self.load_s3_backend_key:
-                    checkpoint_path = f"s3://{self.config_checkpoint.load_from_object_store.bucket}/{checkpoint_path}"
+            if self.load_s3_backend_key and not str(checkpoint_path).startswith("s3://"):
+                checkpoint_path = f"s3://{self.config_checkpoint.load_from_object_store.bucket}/{checkpoint_path}"
 
-                    # If the path doesn't end with specific checkpoint, read the latest
-                    # checkpoint file to determine the most recent checkpoint iteration.
-                    if not re.search(r"/checkpoints/iter_\d{9}/?$", checkpoint_path):
-                        old_ckpt_path = checkpoint_path
-                        latest_ckpt_path = os.path.join(checkpoint_path, "checkpoints/latest_checkpoint.txt")
+                # If the path doesn't end with specific checkpoint, read the latest
+                # checkpoint file to determine the most recent checkpoint iteration.
+                if not re.search(r"/checkpoints/iter_\d{9}/?$", checkpoint_path):
+                    old_ckpt_path = checkpoint_path
+                    latest_ckpt_path = os.path.join(checkpoint_path, "checkpoints/latest_checkpoint.txt")
 
-                        # If the latest checkpoint file exists, use it to determine the
-                        # checkpoint path. Otherwise, use the original path.
-                        if easy_io.exists(latest_ckpt_path, backend_key=self.load_s3_backend_key):
-                            checkpoint_file = easy_io.load(
-                                latest_ckpt_path, backend_key=self.load_s3_backend_key
-                            ).strip()
-                            checkpoint_path = f"{checkpoint_path}/checkpoints/{checkpoint_file}"
-                        else:
-                            log.warning(
-                                f"Latest checkpoint file {latest_ckpt_path} not found, load from {old_ckpt_path}"
-                            )
-                            checkpoint_path = old_ckpt_path
+                    # If the latest checkpoint file exists, use it to determine the
+                    # checkpoint path. Otherwise, use the original path.
+                    if easy_io.exists(latest_ckpt_path, backend_key=self.load_s3_backend_key):
+                        checkpoint_file = easy_io.load(latest_ckpt_path, backend_key=self.load_s3_backend_key).strip()
+                        checkpoint_path = f"{checkpoint_path}/checkpoints/{checkpoint_file}"
+                    else:
+                        log.warning(f"Latest checkpoint file {latest_ckpt_path} not found, load from {old_ckpt_path}")
+                        checkpoint_path = old_ckpt_path
 
-                if self.load_training_state:
-                    resume_keys.extend(self.CHECKPOINT_KEYS)
-                else:
-                    resume_keys.append("model")
-                    if self.only_load_scheduler_state:
-                        resume_keys.append("scheduler")
+            source = self._warm_start_load_source(checkpoint_path)
+            if self.load_training_state:
+                resume_keys.extend(self.CHECKPOINT_KEYS)
             else:
-                checkpoint_path = None
+                resume_keys.append("model")
+                if self.only_load_scheduler_state:
+                    resume_keys.append("scheduler")
 
         if len(self.keys_not_to_resume) > 0:
             for key in self.keys_not_to_resume:
                 assert key in self.CHECKPOINT_KEYS, f"Invalid key to resume: {key} not in {self.CHECKPOINT_KEYS}"
             resume_keys = [key for key in resume_keys if key not in self.keys_not_to_resume]
 
-        return set(resume_keys), checkpoint_path, warm_start
+        return set(resume_keys), source
 
     @misc.timer("checkpoint loading")
     def load(
@@ -792,28 +822,28 @@ class DistributedCheckpointer(AbstractCheckpointer):
         if self.callbacks is not None:
             self.callbacks.on_load_checkpoint_start(model)
 
-        resume_keys, checkpoint_path, warm_start = self.keys_to_resume_during_load()
+        resume_keys, source = self.keys_to_resume_during_load()
         resume_keys = sorted(resume_keys)
-        log.critical(f"Resuming ckpt {checkpoint_path} with keys: {resume_keys}")
+        log.critical(f"Resuming ckpt {source} with keys: {resume_keys}")
 
         iteration = 0
         global_rank = dist.get_rank() if dist.is_initialized() else 0
 
-        if checkpoint_path is not None:
-            self._check_checkpoint_exists(checkpoint_path)
+        if source is not None:
+            self._check_checkpoint_exists(source)
 
             for key in resume_keys:
                 dist.barrier()
 
-                cur_key_ckpt_full_path = os.path.join(checkpoint_path, key)
+                cur_key_ckpt_full_path = os.path.join(source.path, key)
                 log.critical(f"Start loading checkpoint from {cur_key_ckpt_full_path}")
 
-                storage_reader = self.get_storage_reader(cur_key_ckpt_full_path)
+                storage_reader = self.get_storage_reader(cur_key_ckpt_full_path, source)
                 strict_resume = self.config_checkpoint.strict_resume
 
                 # Note that we only allow skipping loading of keys during warm start. If the checkpoint is
                 # the latest checkpoint of the same model, then we don't need to skip any keys.
-                keys_to_skip_loading = self.config_checkpoint.keys_to_skip_loading if warm_start else []
+                keys_to_skip_loading = self.config_checkpoint.keys_to_skip_loading if source.warm_start else []
 
                 # Dedup-load context: when enabled, replicated state is read by a single rank and
                 # broadcast over the device mesh instead of being read redundantly by every rank. The
@@ -845,7 +875,7 @@ class DistributedCheckpointer(AbstractCheckpointer):
                         # Fill in the reads the planner dropped by broadcasting from each leaf's
                         # single reader. Must run before the EMA copy and load_state_dict below.
                         _broadcast_state_dict(_state_dict, global_rank)
-                    if self.config_checkpoint.load_ema_to_reg and warm_start:
+                    if self.config_checkpoint.load_ema_to_reg and source.warm_start:
                         # The model has both net.* and net_ema.* submodules, so _state_dict
                         # contains both sets of keys after dcp.load(). Copy EMA weights into
                         # regular model weights so we can warm-start from EMA (and reset EMA
@@ -922,7 +952,7 @@ class DistributedCheckpointer(AbstractCheckpointer):
                         set_rand_state_dict(_state_dict[rng_key])
 
                 elif key == "dataloader":
-                    if not easy_io.exists(cur_key_ckpt_full_path, backend_key=self.load_s3_backend_key):
+                    if not easy_io.exists(cur_key_ckpt_full_path, backend_key=source.backend_key):
                         log.info(
                             f"Checkpoint {cur_key_ckpt_full_path} does not exist, skip loading dataloader.",
                             rank0_only=False,
@@ -931,7 +961,7 @@ class DistributedCheckpointer(AbstractCheckpointer):
 
                     rank = dist.get_rank()
                     dataloader_pkl_path = os.path.join(cur_key_ckpt_full_path, f"rank_{rank}.pkl")
-                    if not easy_io.exists(dataloader_pkl_path, backend_key=self.load_s3_backend_key):
+                    if not easy_io.exists(dataloader_pkl_path, backend_key=source.backend_key):
                         log.info(f"No dataloader checkpoint found at {dataloader_pkl_path}", rank0_only=False)
                         continue
 
@@ -939,7 +969,7 @@ class DistributedCheckpointer(AbstractCheckpointer):
                     _state_dict = easy_io.load(
                         dataloader_pkl_path,
                         file_format="pkl",
-                        backend_key=self.load_s3_backend_key,
+                        backend_key=source.backend_key,
                     )
                     dataloader_wrapper = _DataloaderWrapper(self.callbacks)
                     if dataloader_wrapper.has_state():
@@ -951,7 +981,7 @@ class DistributedCheckpointer(AbstractCheckpointer):
             if self.callbacks is not None and resume_keys:
                 # Note that this callback is never used in the codebase.
                 self.callbacks.on_load_checkpoint(model, state_dict={})
-            log.info(f"Loaded checkpoint from {checkpoint_path} in iteration {iteration}")
+            log.info(f"Loaded checkpoint from {source} in iteration {iteration}")
 
         else:
             log.info("Training from scratch.")
@@ -959,7 +989,9 @@ class DistributedCheckpointer(AbstractCheckpointer):
         torch.cuda.empty_cache()
 
         if self.callbacks is not None:
-            self.callbacks.on_load_checkpoint_end(model, iteration=iteration, checkpoint_path=checkpoint_path)
+            self.callbacks.on_load_checkpoint_end(
+                model, iteration=iteration, checkpoint_path=None if source is None else source.path
+            )
         return iteration
 
     def _checkpoint_async_with_pinned_memory(
@@ -1003,10 +1035,9 @@ class DistributedCheckpointer(AbstractCheckpointer):
         try:
             log.info(f"Waiting for checkpoint save result")
 
-            # Note that we set a timeout of 1 hour to avoid blocking the main process
-            # indefinitely. Gloo and NCCL timeouts are ~30 minutes, so this timeout
-            # should typically be sufficient.
-            save_done: SaveDone = self.mp_queue_recv.get(timeout=3600)
+            # Bounded so the main process never blocks indefinitely. Kept above
+            # BACKGROUND_SAVE_TIMEOUT so the background process reports the real failure first.
+            save_done: SaveDone = self.mp_queue_recv.get(timeout=SAVE_RESULT_TIMEOUT.total_seconds())
 
             log.info(f"Received checkpoint save result: {save_done}")
 
@@ -1018,7 +1049,7 @@ class DistributedCheckpointer(AbstractCheckpointer):
             success = save_done.succeeded
 
         except Exception as e:
-            log.error(f"Error waiting for checkpoint save result: {e}")
+            log.error(f"Error waiting for checkpoint save result: {e}", rank0_only=False)
 
         if not success:
             # Terminate training execution upon a failed checkpoint save attempt.
@@ -1036,10 +1067,14 @@ class DistributedCheckpointer(AbstractCheckpointer):
             )
         return FileSystemWriter(path=checkpoint_path)
 
-    def get_storage_reader(self, checkpoint_path: str) -> Union[S3StorageReader, FileSystemReader]:
-        if self.load_from_object_store:
+    def get_storage_reader(
+        self,
+        checkpoint_path: str,
+        source: CheckpointLoadSource,
+    ) -> Union[S3StorageReader, FileSystemReader]:
+        if source.uses_object_store:
             return S3StorageReader(
-                credential_path=self.config_checkpoint.load_from_object_store.credentials,
+                credential_path=source.object_store.credentials,
                 path=checkpoint_path,
                 enable_gcs_patch_in_boto3=self.config_checkpoint.enable_gcs_patch_in_boto3,
             )
@@ -1161,3 +1196,9 @@ class DistributedCheckpointer(AbstractCheckpointer):
 
                 self.mp_queue_send.put(Terminate())
                 self.mp.join()
+
+            # Release rank 0's copy of the store socket; the background process owns the fd it
+            # adopted, so this only drops the parent's now-unused reference.
+            if self.background_listen_socket is not None:
+                self.background_listen_socket.close()
+                self.background_listen_socket = None

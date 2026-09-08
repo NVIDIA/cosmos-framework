@@ -8,7 +8,7 @@ from __future__ import annotations
 import numpy as np
 import torch
 
-from cosmos_framework.data.generator.action.pose_utils import (
+from cosmos_framework.data.generator.action.utils.pose_utils import (
     RotationConvention,
     build_abs_pose_from_components,
 )

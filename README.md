@@ -57,7 +57,7 @@ uv sync --all-extras --group=cu130-train
 source .venv/bin/activate && export LD_LIBRARY_PATH=
 ```
 
-If you are starting from the recommended NGC image (`nvcr.io/nvidia/pytorch:25.09-py3`), see the [one-shot quickstart](./docs/setup.md#quickstart-from-the-recommended-base-image).
+If you are starting from the recommended NGC image (`nvcr.io/nvidia/pytorch:26.06-py3`), see the [one-shot quickstart](./docs/setup.md#quickstart-from-the-recommended-base-image).
 
 ## Training
 

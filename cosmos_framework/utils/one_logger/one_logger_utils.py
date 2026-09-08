@@ -213,7 +213,7 @@ class OneLoggerUtils:
             - **one_logger_project** (str): The project name for the OneLogger system.
             - **one_logger_run_name** (str): The name for the current run, used for identifying the log entries.
             - **one_logger_async** (bool): Whether to enable asynchronous logging.
-            - **log_every_n_train_iterations** (int): Frequency of logging, specified as the number of steps between logs. NOTE: this value will only affect the on_train_batch_end callback
+            - **log_every_n_train_iterations** (int): Frequency of logging, specified as the number of steps between logs. NOTE: this value will only affect the on_train_batch_end and on_train_step_end callbacks
             - **barrier** (callable, optional): Function to synchronize all ranks, optional. Default to None.  NOTE: If no barrier function provided, OneLogger won't set any barrier for any timestamp calculation across ranks. So only the timestamp calculated in last rank will be used.
 
         **config** (for Minimal Schema) must contain:
@@ -494,10 +494,12 @@ class OneLoggerUtils:
         self._validate_and_store_args("initialize", config)
 
         self._store_set("train_iterations", 0)
+        self._store_set("train_batch", 0)
         self._store_set("validation_iterations", 0)
         self._store_set("train_samples", 0)
         self._store_set("train_epochs", 0)
         self._store_set("train_iterations_time_total", 0)
+        self._store_set("train_batch_time_total", 0)
         self._store_set("validation_iterations_time_total", 0)
         if self.mode & self.O_CKPT:
             self._store_set("save_checkpoint_count", 0)
@@ -860,35 +862,39 @@ class OneLoggerUtils:
 
     @_check_enabled
     def on_train_batch_start(self, set_barrier: bool = False, **metrics_input_kwargs: Dict[str, Any]) -> None:
-        """Log metrics at the beginning of each train iteraion
+        """Log metrics at the beginning of each train batch
+
+        This only covers the forward/backward pass of a single batch. The wall clock of a whole train
+        iteration is tracked by `on_train_step_start` / `on_train_step_end` instead.
+
         :param set_barrier: Synchronize ranks before executing the callback. Default to False. NOTE: if this is set to True, `barrier` in `OneLoggerUtils` constructor must be set with correct callable object.
         :type set_barrier: bool
 
         :param metrics_input_kwargs: Metrics needed for callback function invocation. Currently no input metrics needed.
         :type metrics_input_kwargs: dict
         """
-        self._on_start("train_iterations", set_barrier)
+        self._on_start("train_batch", set_barrier)
         self._validate_and_store_args("on_train_batch_start", metrics_input_kwargs)
 
     @_check_enabled
     def on_train_batch_end(self, set_barrier: bool = False, **metrics_input_kwargs: Dict[str, Any]) -> None:
-        """Log metrics at the end of each train iteraion
+        """Log metrics at the end of each train batch
+
+        Sample, token and FLOP counters are tracked here rather than per train iteration because a batch is
+        the unit that consumes samples: with gradient accumulation an iteration consumes several batches.
+
         :param set_barrier: Synchronize ranks before executing the callback. Default to False. NOTE: if this is set to True, `barrier` in `OneLoggerUtils` constructor must be set with correct callable object.
         :type set_barrier: bool
 
         :param metrics_input_kwargs: Metrics needed for callback function invocation. Currently no input metrics needed.
         :type metrics_input_kwargs: dict
         """
-        self._on_end("train_iterations", set_barrier)
+        self._on_end("train_batch", set_barrier)
         self._validate_and_store_args("on_train_batch_end", metrics_input_kwargs)
 
         if self.mode & self.O_MINIMAL:
             global_batch_size = self._store_get("global_batch_size")
-            self._store_set("train_iterations", self._store_get("train_iterations") + 1)
-            self._store_set(
-                "train_iterations_end",
-                self._store_get("train_iterations_start") + self._store_get("train_iterations"),
-            )
+            self._store_set("train_batch", self._store_get("train_batch") + 1)
             self._store_set(
                 "train_samples",
                 self._store_get("train_samples") + global_batch_size,
@@ -898,14 +904,9 @@ class OneLoggerUtils:
                 self._store_get("train_samples_start") + self._store_get("train_samples"),
             )
             self._store_set(
-                "train_iterations_time_total",
-                self.timer.get("train_iterations").get("total"),
+                "train_batch_time_total",
+                self.timer.get("train_batch").get("total"),
             )
-            if not self._store_has_key("first_logged_train_iterations_finish_time"):
-                self._store_set(
-                    "first_logged_train_iterations_finish_time",
-                    self.timer.get("train_iterations").get("finish") * 1000,
-                )
             if self._store_has_key("seq_length"):
                 self._store_set(
                     "train_tokens",
@@ -923,20 +924,96 @@ class OneLoggerUtils:
 
         metrics_to_log = self._get_metrics_on_train_batch_end()
 
-        if self._store_get("train_iterations_end") % self.log_every_n_train_iterations == 0:
+        if self._store_get("train_batch") % self.log_every_n_train_iterations == 0:
             self._log_metrics(metrics_to_log)
 
     def _get_metrics_on_train_batch_end(self):
         """Helper function to get all metrics needed to be tracked on_train_batch_end"""
         metrics_to_log = {}
         if self.mode & self.O_MINIMAL:
-            metrics_to_log["train_iterations"] = self._store_get("train_iterations")
-            metrics_to_log["train_iterations_end"] = self._store_get("train_iterations_start") + self._store_get(
-                "train_iterations"
-            )
+            metrics_to_log["train_batch"] = self._store_get("train_batch")
             metrics_to_log["train_samples"] = self._store_get("train_samples")
             metrics_to_log["train_samples_end"] = self._store_get("train_samples_start") + self._store_get(
                 "train_samples"
+            )
+            metrics_to_log["train_batch_time_total"] = self._store_get("train_batch_time_total")
+            timer_data = self.timer.get("train_batch")
+            timer_avg = timer_data.get("avg")
+            timer_min = timer_data.get("min")
+            metrics_to_log["train_batch_time_msecs_avg"] = timer_avg * 1000 if timer_avg is not None else 0
+            metrics_to_log["train_batch_time_msecs_min"] = timer_min * 1000 if timer_min is not None else 0
+            if self._store_has_key("train_tokens"):
+                metrics_to_log["train_tokens"] = self._store_get("train_tokens")
+            self._log_app_tag(self._store_get("app_tag"))
+
+        return metrics_to_log
+
+    @_check_enabled
+    def on_train_step_start(self, set_barrier: bool = False, **metrics_input_kwargs: Dict[str, Any]) -> None:
+        """Log metrics at the beginning of a train iteration.
+
+        This starts the `train_iterations` timer, which covers the whole iteration as the trainer sees it:
+        all gradient accumulation batches, the optimizer update, the checkpoint saving and the work done by
+        the callbacks of the iteration.
+
+        :param set_barrier: Synchronize ranks before executing the callback. Default to False. NOTE: if this is set to True, `barrier` in `OneLoggerUtils` constructor must be set with correct callable object.
+        :type set_barrier: bool
+
+        :param metrics_input_kwargs: Metrics needed for callback function invocation. Currently no input metrics needed.
+        :type metrics_input_kwargs: dict
+        """
+        self._validate_and_store_args("on_train_step_start", metrics_input_kwargs)
+        # When gradient accumulation is used, the trainer calls this callback for every batch but only calls
+        # the matching end callback on the optimizer update, so keep the running iteration timer as is.
+        if self.timer.is_active("train_iterations"):
+            return
+        self._on_start("train_iterations", set_barrier)
+
+    @_check_enabled
+    def on_train_step_end(self, set_barrier: bool = False, **metrics_input_kwargs: Dict[str, Any]) -> None:
+        """Log metrics at the end of a train iteration.
+
+        :param set_barrier: Synchronize ranks before executing the callback. Default to False. NOTE: if this is set to True, `barrier` in `OneLoggerUtils` constructor must be set with correct callable object.
+        :type set_barrier: bool
+
+        :param metrics_input_kwargs: Metrics needed for callback function invocation. Currently no input metrics needed.
+        :type metrics_input_kwargs: dict
+        """
+        self._validate_and_store_args("on_train_step_end", metrics_input_kwargs)
+        # The iteration timer is missing if the first start callback of the run was not observed, e.g. when
+        # the training loop is resumed in the middle of a gradient accumulation window.
+        if not self.timer.is_active("train_iterations"):
+            return
+        self._on_end("train_iterations", set_barrier)
+
+        if self.mode & self.O_MINIMAL:
+            self._store_set("train_iterations", self._store_get("train_iterations") + 1)
+            self._store_set(
+                "train_iterations_end",
+                self._store_get("train_iterations_start") + self._store_get("train_iterations"),
+            )
+            self._store_set(
+                "train_iterations_time_total",
+                self.timer.get("train_iterations").get("total"),
+            )
+            if not self._store_has_key("first_logged_train_iterations_finish_time"):
+                self._store_set(
+                    "first_logged_train_iterations_finish_time",
+                    self.timer.get("train_iterations").get("finish") * 1000,
+                )
+
+        metrics_to_log = self._get_metrics_on_train_step_end()
+
+        if self._store_get("train_iterations_end") % self.log_every_n_train_iterations == 0:
+            self._log_metrics(metrics_to_log)
+
+    def _get_metrics_on_train_step_end(self):
+        """Helper function to get all metrics needed to be tracked on_train_step_end"""
+        metrics_to_log = {}
+        if self.mode & self.O_MINIMAL:
+            metrics_to_log["train_iterations"] = self._store_get("train_iterations")
+            metrics_to_log["train_iterations_end"] = self._store_get("train_iterations_start") + self._store_get(
+                "train_iterations"
             )
             metrics_to_log["train_iterations_time_total"] = self._store_get("train_iterations_time_total")
             timer_data = self.timer.get("train_iterations")
@@ -951,9 +1028,6 @@ class OneLoggerUtils:
             metrics_to_log["last_logged_train_iterations_finish_time"] = (
                 timer_finish * 1000 if timer_finish is not None else 0
             )
-            if self._store_has_key("train_tokens"):
-                metrics_to_log["train_tokens"] = self._store_get("train_tokens")
-            self._log_app_tag(self._store_get("app_tag"))
         if self.mode & self.O_THROUGHPUT:
             train_iterations_time_total = self._store_get("train_iterations_time_total")
             if train_iterations_time_total:
@@ -1074,6 +1148,7 @@ class OneLoggerUtils:
 
         # Make sure iteration related metrics is updated in DB for each checkpointing
         metrics_to_update = self._get_metrics_on_train_batch_end()
+        metrics_to_update.update(self._get_metrics_on_train_step_end())
         self._log_metrics(metrics_to_update)
 
         global_step = self._store_get("global_step")
@@ -1431,3 +1506,24 @@ def destroy_one_logger() -> None:
 
 def get_one_logger() -> OneLoggerUtils:
     return one_logger
+
+
+def one_logger_train_step_timer_start() -> None:
+    """Start the OneLogger `train_iterations` timer of a train step. No-op when OneLogger is disabled.
+
+    This is called from the training loop rather than from `OneLoggerCallback` on purpose: the timed region
+    contains the callback dispatches themselves, and the order in which `CallBackGroup` runs the registered
+    callbacks is not guaranteed, so a callback-based timer would miss the work done by the callbacks that
+    happen to run after it.
+    """
+    if one_logger_is_initialized():
+        one_logger.on_train_step_start()
+
+
+def one_logger_train_step_timer_end() -> None:
+    """Stop the OneLogger `train_iterations` timer of a train step. No-op when OneLogger is disabled.
+
+    See `one_logger_train_step_timer_start` for why this is driven by the training loop instead of a callback.
+    """
+    if one_logger_is_initialized():
+        one_logger.on_train_step_end()

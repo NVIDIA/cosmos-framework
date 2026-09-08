@@ -8,12 +8,13 @@ from typing import TYPE_CHECKING
 
 import attrs
 import wandb
-import wandb.util
 from omegaconf import DictConfig
+from wandb.sdk.lib.runid import generate_id
 
 from cosmos_framework.utils.lazy_config.lazy import LazyConfig
 from cosmos_framework.utils import distributed, log, object_store
 from cosmos_framework.utils.easy_io import easy_io
+from cosmos_framework.utils.launch_defaults import get_wandb_entity, get_wandb_project
 
 if TYPE_CHECKING:
     from cosmos_framework.utils.config import CheckpointConfig, Config, JobConfig
@@ -46,11 +47,12 @@ def init_wandb(config: Config, model: ImaginaireModel) -> None:
     else:
         config_job = config.job
     config_checkpoint = config.checkpoint
+    wandb_project = get_wandb_project(config_job.project)
     # Try to fetch the W&B job ID for resuming training.
     wandb_id = _read_wandb_id(config_job, config_checkpoint)
     if wandb_id is None:
         # Generate a new W&B job ID.
-        wandb_id = wandb.util.generate_id()
+        wandb_id = generate_id()
         _write_wandb_id(config_job, config_checkpoint, wandb_id=wandb_id)
         log.info(f"Generating new wandb ID: {wandb_id}")
     else:
@@ -68,8 +70,9 @@ def init_wandb(config: Config, model: ImaginaireModel) -> None:
     try:
         wandb.init(
             force=True,
+            entity=get_wandb_entity(),
             id=wandb_id,
-            project=config_job.project,
+            project=wandb_project,
             group=config_job.group,
             name=config_job.name,
             config=config_resolved,
@@ -87,12 +90,13 @@ def init_wandb(config: Config, model: ImaginaireModel) -> None:
         ):
             log.warning("W&B run exists but current user lacks update permission; starting a new run instead.")
             # Generate and persist a new wandb id, then create a fresh run.
-            wandb_id = wandb.util.generate_id()
+            wandb_id = generate_id()
             _write_wandb_id(config_job, config_checkpoint, wandb_id=wandb_id)
             wandb.init(
                 force=True,
+                entity=get_wandb_entity(),
                 id=wandb_id,
-                project=config_job.project,
+                project=wandb_project,
                 group=config_job.group,
                 name=config_job.name,
                 config=config_resolved,
@@ -103,8 +107,9 @@ def init_wandb(config: Config, model: ImaginaireModel) -> None:
             log.warning("W&B authentication failed (401); falling back to offline mode. Error: %s", msg)
             wandb.init(
                 force=True,
+                entity=get_wandb_entity(),
                 id=wandb_id,
-                project=config_job.project,
+                project=wandb_project,
                 group=config_job.group,
                 name=config_job.name,
                 config=config_resolved,
@@ -116,10 +121,22 @@ def init_wandb(config: Config, model: ImaginaireModel) -> None:
 
     if wandb.run:
         wandb.run.config.update({f"JOB_INFO/{k}": v for k, v in JOB_INFO.items()}, allow_val_change=True)
+        # Reproducibility: record the resolved layout / packing env flags (e.g. COSMOS_PACK_TRUE_PACKING,
+        # COSMOS_PACK_FLAT_BUDGET, COSMOS_PACK_SEED) in the run config so every run's packing knobs are
+        # queryable in W&B. Prefix-scanned rather than hardcoded, so new flags are captured automatically;
+        # a no-op for runs/projects that do not set any of them.
+        pack_env = {
+            f"packing_env/{k}": v for k, v in sorted(os.environ.items()) if k.startswith(("COSMOS_PACK", "COSMOS_VLM"))
+        }
+        if pack_env:
+            wandb.run.config.update(pack_env, allow_val_change=True)
 
 
 def _read_wandb_id(config_job: JobConfig, config_checkpoint: CheckpointConfig) -> str | None:
     """Read the W&B job ID. If it doesn't exist, return None.
+
+    Reads from the same location as ``_write_wandb_id`` (save object store / local),
+    so resume works when load and save buckets differ.
 
     Args:
         config_wandb (JobConfig): The config object for the W&B logger.
@@ -129,8 +146,8 @@ def _read_wandb_id(config_job: JobConfig, config_checkpoint: CheckpointConfig) -
         wandb_id (str | None): W&B job ID.
     """
     wandb_id = None
-    if config_checkpoint.load_from_object_store.enabled:
-        object_store_loader = object_store.ObjectStore(config_checkpoint.load_from_object_store)
+    if config_checkpoint.save_to_object_store.enabled:
+        object_store_loader = object_store.ObjectStore(config_checkpoint.save_to_object_store)
         wandb_id_path = f"{config_job.path}/wandb_id.txt"
         if object_store_loader.object_exists(key=wandb_id_path):
             wandb_id = object_store_loader.load_object(key=wandb_id_path, type="text").strip()

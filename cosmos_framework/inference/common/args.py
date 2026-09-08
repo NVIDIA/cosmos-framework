@@ -337,6 +337,45 @@ class ConfigFileType(StrEnum):
         raise ValueError(f"Invalid config file: {path}")
 
 
+def _hf_config_has_model_section(config_path: Path) -> bool:
+    """Return whether an HF 'config.json' carries the Cosmos3 'model' section."""
+    try:
+        config_dict = json.loads(config_path.read_text())
+    except (OSError, ValueError):
+        return False
+    return isinstance(config_dict, dict) and isinstance(config_dict.get("model"), dict)
+
+
+def _hf_repository_from_checkpoint_dir(checkpoint_dir: Path) -> str | None:
+    """Recover the Hugging Face repository a local checkpoint directory was published under.
+
+    'convert_model_to_diffusers' stamps every component in
+    'modular_model_index.json' with the source repo id. Unlike the directory
+    name it survives a copy or rename, so it is the only dependable way to map a
+    downloaded checkpoint directory back onto its registry entry.
+
+    Returns None when the file is absent, unreadable, or does not agree on a
+    single repository.
+    """
+    try:
+        index = json.loads((checkpoint_dir / "modular_model_index.json").read_text())
+    except (OSError, ValueError):
+        return None
+    if not isinstance(index, dict):
+        return None
+    repositories = {
+        component[2]["pretrained_model_name_or_path"]
+        for component in index.values()
+        if isinstance(component, list)
+        and len(component) == 3
+        and isinstance(component[2], dict)
+        and isinstance(component[2].get("pretrained_model_name_or_path"), str)
+    }
+    if len(repositories) != 1:
+        return None
+    return repositories.pop()
+
+
 def _validate_config_file(v: str) -> str:
     config_file_type = ConfigFileType.from_path(v)
     if config_file_type == ConfigFileType.MODULE:
@@ -383,6 +422,18 @@ class ConfigArgs(ArgsBase):
                 return unstructure_config(self.load_config().model)
             case ConfigFileType.YAML | ConfigFileType.JSON:
                 config_dict = deserialize_config_dict(Path(self.config_file))
+                # Check for 'model' before merging: 'experiment_overrides' are
+                # dotlists rooted at 'model.', so merging first synthesizes a
+                # 'model' section out of the overrides alone. That defeats the
+                # guard in 'load_model_config_from_hf_config' and turns a
+                # missing architecture into a much later, opaque failure deep in
+                # model construction (e.g. omegaconf "Missing key ema").
+                if "model" not in config_dict:
+                    raise KeyError(
+                        f"Config file has no 'model' section, so it does not describe a Cosmos3 model "
+                        f"architecture: {self.config_file}. Pass '--config-file' with a Cosmos3 model config "
+                        f"(e.g. one of 'cosmos_framework/inference/configs/model/*.yaml')."
+                    )
                 overrides_omegaconf = OmegaConf.from_dotlist(self.experiment_overrides)
                 config_dict = OmegaConf.to_container(OmegaConf.merge(config_dict, overrides_omegaconf), resolve=False)
                 assert isinstance(config_dict, dict)
@@ -554,6 +605,55 @@ class CheckpointOverrides(ConfigOverrides):
     checkpoint_cache_dir: Training[Path | None] = None
     """Directory for caching S3 checkpoints."""
 
+    def _resolve_local_hf_config_file(self, checkpoint_dir: Path, *, checkpoints: dict[str, CheckpointConfig]) -> None:
+        """Point 'config_file' at the model config for a local HF checkpoint directory.
+
+        A copy of a registered repository resolves to that entry's model config,
+        the same one a registered '--checkpoint-path' name resolves to. The two
+        spellings of the same checkpoint must not resolve differently, and the
+        registered config is the authority: a published repository's own
+        'config.json' can be an older snapshot of the architecture
+        (nvidia/Cosmos3-Nano omits 'include_visual' and names the text-only
+        processor) or carry no 'model' section at all (nvidia/Cosmos3-Edge).
+
+        Anything else falls back to the directory's own 'config.json', which is
+        the only description available for a checkpoint we do not publish.
+        """
+        repository = _hf_repository_from_checkpoint_dir(checkpoint_dir)
+        registered = next(
+            (checkpoint for checkpoint in checkpoints.values() if checkpoint.hf.repository == repository),
+            None,
+        )
+        if registered is not None:
+            # Adopt the registry entry's architecture and load-time settings, but
+            # not its 'hf' download spec: the weights are the local directory.
+            self.config_file = registered.config_file
+            self.model_memory_bytes = registered.model_memory_bytes
+            self.vlm_processor_from_checkpoint = registered.vlm_processor_from_checkpoint
+            for value in reversed(registered.experiment_overrides):
+                if value not in self.experiment_overrides:
+                    self.experiment_overrides.insert(0, value)
+            return
+
+        local_config = checkpoint_dir / "config.json"
+        if _hf_config_has_model_section(local_config):
+            self.config_file = str(local_config)
+            return
+
+        known = ", ".join(sorted(checkpoints)) or "<none>"
+        raise ValueError(
+            f"Could not determine which model config describes checkpoint directory: {checkpoint_dir}. "
+            f"Its 'config.json' has no 'model' section, and "
+            + (
+                f"the repository it records ({repository}) is not a registered checkpoint."
+                if repository is not None
+                else "it records no source repository to match against a registered checkpoint."
+            )
+            + f" Registered checkpoints: {known}. Pass '--config-file' with the Cosmos3 model config that "
+            f"matches this checkpoint (one of 'cosmos_framework/inference/configs/model/*.yaml'), or pass "
+            f"a registered checkpoint name as '--checkpoint-path'."
+        )
+
     def _build_checkpoint(self, checkpoints: dict[str, CheckpointConfig]):
         # Detect checkpoint type
         if self.checkpoint_path in checkpoints:
@@ -582,17 +682,13 @@ class CheckpointOverrides(ConfigOverrides):
                 checkpoint_dir = checkpoint_dir / "model"
             self.checkpoint_path = str(checkpoint_dir)
             self.checkpoint_type = CheckpointType.from_path(checkpoint_dir)
-            # Local HF dir with no explicit --config-file: fall back to the
-            # dir's own config.json (mirrors the registry branch and
-            # from_pretrained_dcp). Without this, config_file stays at the
-            # default .py module, which needs a Hydra experiment that a local
-            # HF dir cannot supply -> MissingConfigException("experiment/").
-            if (
-                self.checkpoint_type == CheckpointType.HF
-                and self.config_file == DEFAULT_CONFIG_FILE
-                and (checkpoint_dir / "config.json").is_file()
-            ):
-                self.config_file = str(checkpoint_dir / "config.json")
+            # Local HF dir with no explicit --config-file: resolve the same
+            # registered model config the registry branch above would use. Left
+            # alone, config_file stays at the default .py module, which needs a
+            # Hydra experiment that a local HF dir cannot supply ->
+            # MissingConfigException("experiment/").
+            if self.checkpoint_type == CheckpointType.HF and self.config_file == DEFAULT_CONFIG_FILE:
+                self._resolve_local_hf_config_file(checkpoint_dir, checkpoints=checkpoints)
         self.config_file_type = ConfigFileType.from_path(self.config_file)
 
         if self.checkpoint_type == CheckpointType.DCP and self.config_file_type == ConfigFileType.MODULE:
@@ -641,6 +737,10 @@ class QuantizationArgs(ArgsBase):
     quantization_method: QuantizationMethod | None
     quantization_include_regex: list[str]
     quantization_exclude_regex: list[str]
+    mixed_precision_first_steps: int
+    mixed_precision_last_steps: int
+    mixed_precision_reasoner_policy: Literal["high_precision", "base_precision"]
+    mixed_precision_w8a16_cache: Literal["none", "generation", "all", "cpu_block", "gpu_block"]
 
 
 class QuantizationOverrides(OverridesBase):
@@ -654,6 +754,20 @@ class QuantizationOverrides(OverridesBase):
     """Regexes matched against module FQNs; a Linear is quantized only if it matches one (empty = all)."""
     quantization_exclude_regex: list[str] = pydantic.Field(default_factory=list)
     """Regexes matched against module FQNs; a Linear is skipped if it matches any."""
+    mixed_precision_first_steps: int = pydantic.Field(default=0, ge=0)
+    """ModelOpt FP8 checkpoints only: run the first N diffusion steps with 16-bit
+    activations (W8A16) instead of FP8 activations (W8A8). 0 disables."""
+    mixed_precision_last_steps: int = pydantic.Field(default=0, ge=0)
+    """ModelOpt FP8 checkpoints only: run the last N diffusion steps with W8A16."""
+    mixed_precision_reasoner_policy: Literal["high_precision", "base_precision"] = "high_precision"
+    """Understanding-pathway precision when mixed precision is enabled:
+    high_precision keeps reasoner linears on W8A16 for every step."""
+    mixed_precision_w8a16_cache: Literal["none", "generation", "all", "cpu_block", "gpu_block"] = "none"
+    """W8A16 dense-weight source: none (default) dequantizes per call and works
+    everywhere, including FSDP-sharded runs, at wall time indistinguishable from
+    the cached modes; generation/all hold resident BF16 caches; gpu_block/
+    cpu_block stream per-layer double buffers. FSDP-sharded runs support only
+    none."""
 
     def build_quantization(self) -> QuantizationArgs:
         return self._build(QuantizationArgs)
@@ -748,6 +862,18 @@ class GuardrailArgs(ArgsBase):
 
     guardrails: bool
     offload_guardrail_models: bool
+    video_guardrail: bool = pydantic.Field(default=True, exclude=True)
+    """Build the video guardrail runner.
+
+    Runtime-only policy field. It has no ``GuardrailOverrides`` counterpart on
+    purpose: exposing a CLI flag that disables face blurring for generative runs
+    would be a safety footgun, so only the reasoner-only path sets it False.
+
+    ``exclude=True`` keeps it out of ``model_dump()`` because ``SetupArgs`` dumps
+    must round-trip back through ``SetupOverrides``, which forbids extra keys
+    (see ``args_test.test_setup_args``). Anything that rebuilds args from a dump
+    therefore gets the safe default of building the runner.
+    """
 
 
 class GuardrailOverrides(OverridesBase):
@@ -768,6 +894,10 @@ class SetupArgs(ABC, CheckpointArgs, ParallelismArgs, QuantizationArgs, Guardrai
     num_iterations: pydantic.PositiveInt
     max_model_len: pydantic.PositiveInt | None
     max_num_seqs: pydantic.PositiveInt | None
+    diffusion_cache: bool
+    diffusion_cache_thresh: float | None
+    diffusion_cache_residual_order: int | None
+    diffusion_cache_max_consecutive_cached: pydantic.NonNegativeInt | None
 
     # Subclass must implement these fields/methods
     # ------------------------------------------------------------
@@ -820,6 +950,27 @@ class SetupOverrides(ABC, CheckpointOverrides, ParallelismOverrides, Quantizatio
     max_num_seqs: pydantic.PositiveInt | None = 1
     """Maximum number of sequences per batch.  When set, samples are packed into
     batches by number of sequences."""
+    diffusion_cache: bool = False
+    """Enable the diffusion-time inference cache.
+    Shared inference setup disables the cache by default. The inference CLI enables
+    it by default; pass ``--no-diffusion-cache`` to disable it. Caching is based on
+    SeaCache: Spectral-Evolution-Aware Cache for Accelerating Diffusion Models
+    (https://arxiv.org/abs/2602.18993). Autoregressive and KV-cache generation
+    bypass the cache automatically.
+    """
+    diffusion_cache_thresh: float | None = None
+    """Accumulated relative-L1 threshold (``diffusion_cache_thresh``), shared by the
+    conditional and unconditional pathways. Larger values allow more skipping at
+    the cost of lower fidelity. ``None`` uses the ``DiffusionCache.Config`` default
+    (0.25). Only takes effect when diffusion cache is enabled."""
+    diffusion_cache_residual_order: int | None = None
+    """Polynomial order for extrapolating the generation residual on a skipped step via
+    Newton divided differences: 0 = constant reuse, 1 = linear, 2 = quadratic.
+    ``None`` uses the default (1).  Only used when diffusion cache is enabled."""
+    diffusion_cache_max_consecutive_cached: pydantic.NonNegativeInt | None = None
+    """Maximum consecutive residual reuses per CFG pathway before forcing a full
+    evaluation. ``0`` disables the limit and ``None`` uses the cache default (2).
+    Only used when diffusion cache is enabled."""
 
     def _build_setup(self):
         if self.num_iterations > 1 and not self.benchmark:

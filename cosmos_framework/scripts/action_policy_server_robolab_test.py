@@ -91,9 +91,16 @@ def test_server_args_default_to_released_droid_serving_config() -> None:
     assert args.action_space == "joint_pos"
     assert args.use_state is True
     assert args.guidance == 3.0
+    assert args.guidance_interval is None
     assert args.num_steps == 4
     assert args.shift == 5.0
     assert args.deterministic_seed is False
+
+
+def test_server_args_accept_guidance_interval() -> None:
+    args = robolab_server.RobolabServerArgs(guidance_interval=(960.0, 1001.0))
+
+    assert args.guidance_interval == (960.0, 1001.0)
 
 
 def test_joint_pos_observation_preprocessing_matches_internal_layout() -> None:
@@ -105,6 +112,7 @@ def test_joint_pos_observation_preprocessing_matches_internal_layout() -> None:
         seed=0,
         deterministic_seed=True,
         guidance=3.0,
+        guidance_interval=None,
         num_steps=4,
         shift=5.0,
         conditioning_fps=15.0,

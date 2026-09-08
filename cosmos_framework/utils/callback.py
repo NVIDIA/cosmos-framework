@@ -109,12 +109,19 @@ class Callback:
     All callbacks should inherit from this class and adhere to the established method names and signatures.
     """
 
-    def __init__(self, config: Optional["Config"] = None, trainer: Optional["ImaginaireTrainer"] = None):
+    def __init__(
+        self,
+        config: Optional["Config"] = None,
+        trainer: Optional["ImaginaireTrainer"] = None,
+        *,
+        _deprecation_warning_stacklevel: int = 2,
+    ) -> None:
         """Initializes a Callback object.
 
         Args:
             config (Optional[Config]): The configuration object for the Imaginaire codebase, if available.
             trainer (Optional[ImaginaireTrainer]): The main trainer handling the training loop, if available.
+            _deprecation_warning_stacklevel (int): Stack level for deprecated constructor arguments.
 
         Notes:
             The config and trainer parameters are optional to maintain backward compatibility.
@@ -127,7 +134,7 @@ class Callback:
                 "The 'config' and 'trainer' parameters are deprecated and will be removed in a future release. "
                 "Please update your code to create Callback instances without these parameters.",
                 DeprecationWarning,
-                stacklevel=2,
+                stacklevel=_deprecation_warning_stacklevel,
             )
         del config, trainer
 
@@ -435,8 +442,35 @@ class WandBCallback(Callback):
     - val/loss: The computed overall loss in the validation dataset.
     """
 
+    def __init__(self, *args: Any, log_train_loss_to_console: bool = False, **kwargs: Any) -> None:
+        super().__init__(*args, _deprecation_warning_stacklevel=3, **kwargs)
+        self.log_train_loss_to_console = log_train_loss_to_console
+
     def on_train_start(self, model: ImaginaireModel, iteration: int = 0) -> None:
         wandb_util.init_wandb(self.config, model=model)
+        self._train_objective_numerator: torch.Tensor | None = None
+        self._train_objective_denominator: torch.Tensor | None = None
+
+    def on_training_step_batch_end(
+        self,
+        model: ImaginaireModel,
+        data_batch: dict[str, torch.Tensor],
+        output_batch: dict[str, torch.Tensor],
+        loss: torch.Tensor,
+        iteration: int = 0,
+    ) -> None:
+        del model, data_batch, loss, iteration
+        numerator = output_batch.get("train_objective_numerator")
+        denominator = output_batch.get("train_objective_denominator")
+        if numerator is None or denominator is None:
+            return
+        if self._train_objective_numerator is None:
+            self._train_objective_numerator = numerator.detach().clone()
+            self._train_objective_denominator = denominator.detach().clone()
+        else:
+            self._train_objective_numerator.add_(numerator)
+            assert self._train_objective_denominator is not None
+            self._train_objective_denominator.add_(denominator)
 
     def on_before_optimizer_step(
         self,
@@ -461,16 +495,27 @@ class WandBCallback(Callback):
         if iteration % self.config.trainer.logging_iter == 0:
             timer_results = self.trainer.training_timer.compute_average_results()
 
-            # reduce loss
-            sample_size = torch.tensor(misc.get_data_batch_size(data_batch), device="cuda")
-            loss_sum = loss * sample_size
-            dist.all_reduce(loss_sum, op=dist.ReduceOp.SUM)
-            dist.all_reduce(sample_size, op=dist.ReduceOp.SUM)
-            avg_loss = loss_sum.item() / sample_size.item()
+            if self._train_objective_numerator is not None:
+                assert self._train_objective_denominator is not None
+                loss_sum = self._train_objective_numerator
+                sample_size = self._train_objective_denominator
+                dist.all_reduce(loss_sum, op=dist.ReduceOp.SUM)
+                dist.all_reduce(sample_size, op=dist.ReduceOp.SUM)
+                avg_loss = loss_sum.item() / max(sample_size.item(), 1e-8)
+                self._train_objective_numerator = None
+                self._train_objective_denominator = None
+            else:
+                sample_size = torch.tensor(misc.get_data_batch_size(data_batch), device="cuda")
+                loss_sum = loss * sample_size
+                dist.all_reduce(loss_sum, op=dist.ReduceOp.SUM)
+                dist.all_reduce(sample_size, op=dist.ReduceOp.SUM)
+                avg_loss = loss_sum.item() / sample_size.item()
 
             if distributed.is_rank0():
+                if self.log_train_loss_to_console:
+                    log.info(f"train/loss_avg: {avg_loss:.5f} (iteration {iteration})")
                 wandb.log({f"timer/{key}": value for key, value in timer_results.items()}, step=iteration)
-                wandb.log({"train/loss": avg_loss}, step=iteration)
+                wandb.log({"train/loss": avg_loss, "train/loss_avg": avg_loss}, step=iteration)
                 wandb.log({"iteration": iteration}, step=iteration)
             self.trainer.training_timer.reset()
 
@@ -482,7 +527,10 @@ class WandBCallback(Callback):
             data_batches=[],
             output_batches=[],
             loss=torch.tensor(0.0, device="cuda"),
-            sample_size=torch.tensor(0, device="cuda"),
+            sample_size=torch.tensor(0.0, device="cuda"),
+            token_ce_sum=torch.tensor(0.0, device="cuda"),
+            valid_token_count=torch.tensor(0, device="cuda"),
+            exact_stats_expected=bool(getattr(model, "emits_exact_validation_stats", False)),
         )
 
     def on_validation_step_end(
@@ -494,19 +542,52 @@ class WandBCallback(Callback):
         iteration: int = 0,
     ) -> None:  # Collect the validation batch and aggregate the overall loss.
         # Collect the validation batch and aggregate the overall loss.
-        batch_size = misc.get_data_batch_size(data_batch)
-        self._val_cache["loss"] += loss * batch_size
-        self._val_cache["sample_size"] += batch_size
+        # Preferred path: aggregate the configured objective and ordinary token CE independently
+        # from local numerators/denominators produced by the SAME loss pass. This preserves weighted
+        # CE as val/loss while exposing a layout-invariant val/token_ce, without constructing a second
+        # FP32 logits copy. Legacy models retain the original physical-sample-weighted fallback.
+        if self._val_cache["exact_stats_expected"]:
+            required = {
+                "val_objective_numerator",
+                "val_objective_denominator",
+                "val_token_ce_sum",
+                "val_n_valid_tokens",
+            }
+            missing = required - output_batch.keys()
+            if missing:
+                raise KeyError(f"model declared exact validation stats but omitted {sorted(missing)}")
+            self._val_cache["loss"] += output_batch["val_objective_numerator"]
+            self._val_cache["sample_size"] += output_batch["val_objective_denominator"]
+            self._val_cache["token_ce_sum"] += output_batch["val_token_ce_sum"]
+            self._val_cache["valid_token_count"] += output_batch["val_n_valid_tokens"]
+        else:
+            batch_size = misc.get_data_batch_size(data_batch)
+            self._val_cache["loss"] += loss * batch_size
+            self._val_cache["sample_size"] += batch_size
 
     def on_validation_end(self, model: ImaginaireModel, iteration: int = 0) -> None:
         # Compute the average validation loss across all devices.
         dist.all_reduce(self._val_cache["loss"], op=dist.ReduceOp.SUM)
         dist.all_reduce(self._val_cache["sample_size"], op=dist.ReduceOp.SUM)
-        loss = self._val_cache["loss"].item() / self._val_cache["sample_size"]
+        if self._val_cache["exact_stats_expected"]:
+            dist.all_reduce(self._val_cache["token_ce_sum"], op=dist.ReduceOp.SUM)
+            dist.all_reduce(self._val_cache["valid_token_count"], op=dist.ReduceOp.SUM)
+        # sample_size is either a token count (preferred token-weighted path) or a sample count (legacy
+        # path); both are summed across ranks above. Guard against an empty validation set.
+        total = self._val_cache["sample_size"]
+        total = total.item() if torch.is_tensor(total) else total
+        loss = self._val_cache["loss"].item() / max(total, 1e-8)
+        token_ce: float | None = None
+        if self._val_cache["exact_stats_expected"]:
+            valid_token_count = self._val_cache["valid_token_count"].item()
+            token_ce = self._val_cache["token_ce_sum"].item() / max(valid_token_count, 1e-8)
         # Log data/stats of validation set to W&B.
         if distributed.is_rank0():
-            log.info(f"Validation loss (iteration {iteration}): {loss:4f}")
-            wandb.log({"val/loss": loss}, step=iteration)
+            log.info(f"Validation objective (iteration {iteration}): {loss:4f}")
+            metrics = {"val/loss": loss, "val/objective": loss}
+            if token_ce is not None:
+                metrics["val/token_ce"] = token_ce
+            wandb.log(metrics, step=iteration)
 
     def on_train_end(self, model: ImaginaireModel, iteration: int = 0) -> None:
         wandb.finish()

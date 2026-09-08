@@ -85,22 +85,25 @@ class VQEmbedding(nn.Embedding):
         Returns:
             Distance tensor of shape (..., n_embed).
         """
-        codebook_t = self.weight[:-1, :].t()  # [E,K]
-        (embed_dim, _) = codebook_t.shape
-        inputs_shape = inputs.shape
-        assert inputs_shape[-1] == embed_dim
+        # Nearest-code assignment is discrete, so BF16 autocast rounding in addmm can
+        # select a different code even though the codebook itself remains FP32.
+        with torch.autocast(device_type=inputs.device.type, enabled=False):
+            codebook_t = self.weight[:-1, :].t()  # [E,K]
+            (embed_dim, _) = codebook_t.shape
+            inputs_shape = inputs.shape
+            assert inputs_shape[-1] == embed_dim
 
-        inputs_flat = inputs.reshape(-1, embed_dim).to(dtype=codebook_t.dtype)  # [N,E]
+            inputs_flat = inputs.reshape(-1, embed_dim).to(dtype=codebook_t.dtype)  # [N,E]
 
-        inputs_norm_sq = inputs_flat.pow(2.0).sum(dim=1, keepdim=True)  # [N,1]
-        codebook_t_norm_sq = codebook_t.pow(2.0).sum(dim=0, keepdim=True)  # [1,K]
-        distances = torch.addmm(
-            inputs_norm_sq + codebook_t_norm_sq,
-            inputs_flat,
-            codebook_t,
-            alpha=-2.0,
-        )  # [N,K]
-        distances = distances.reshape(*inputs_shape[:-1], -1)  # [...,K]
+            inputs_norm_sq = inputs_flat.pow(2.0).sum(dim=1, keepdim=True)  # [N,1]
+            codebook_t_norm_sq = codebook_t.pow(2.0).sum(dim=0, keepdim=True)  # [1,K]
+            distances = torch.addmm(
+                inputs_norm_sq + codebook_t_norm_sq,
+                inputs_flat,
+                codebook_t,
+                alpha=-2.0,
+            )  # [N,K]
+            distances = distances.reshape(*inputs_shape[:-1], -1)  # [...,K]
         return distances
 
     @torch.no_grad()
@@ -113,47 +116,51 @@ class VQEmbedding(nn.Embedding):
         Returns:
             Index tensor of shape (...,).
         """
-        input_shape = inputs.shape
-        embed_dim = input_shape[-1]
-        inputs_flat = inputs.reshape(-1, embed_dim).to(dtype=self.weight.dtype)  # [N,E]
-        codebook = self.weight[:-1, :]  # [K,E]
-        chunk_size = self.distance_chunk_size
-        if chunk_size is None:
-            distances = self.compute_distances(inputs)  # [...,K]
-            return distances.argmin(dim=-1)  # [...]
+        # Keep every distance tile in FP32 under the training-step autocast context.
+        with torch.autocast(device_type=inputs.device.type, enabled=False):
+            input_shape = inputs.shape
+            embed_dim = input_shape[-1]
+            inputs_flat = inputs.reshape(-1, embed_dim).to(dtype=self.weight.dtype)  # [N,E]
+            codebook = self.weight[:-1, :]  # [K,E]
+            chunk_size = self.distance_chunk_size
+            if chunk_size is None:
+                distances = self.compute_distances(inputs)  # [...,K]
+                return distances.argmin(dim=-1)  # [...]
 
-        best_indices = torch.zeros(inputs_flat.shape[0], dtype=torch.long, device=inputs.device)  # [N]
-        for input_start in range(0, inputs_flat.shape[0], chunk_size):
-            input_end = min(input_start + chunk_size, inputs_flat.shape[0])
-            input_chunk = inputs_flat[input_start:input_end]  # [Nc,E]
-            input_norm_sq = input_chunk.pow(2.0).sum(dim=1, keepdim=True)  # [Nc,1]
-            input_best_distances = input_chunk.new_full((input_chunk.shape[0],), float("inf"))  # [Nc]
-            input_best_indices = torch.zeros(input_chunk.shape[0], dtype=torch.long, device=inputs.device)  # [Nc]
-            for codebook_start in range(0, codebook.shape[0], chunk_size):
-                codebook_end = min(codebook_start + chunk_size, codebook.shape[0])
-                codebook_chunk = codebook[codebook_start:codebook_end]  # [Kc,E]
-                codebook_norm_sq = codebook_chunk.pow(2.0).sum(dim=1).unsqueeze(0)  # [1,Kc]
-                chunk_distances = torch.addmm(
-                    input_norm_sq + codebook_norm_sq,
-                    input_chunk,
-                    codebook_chunk.t(),
-                    alpha=-2.0,
-                )  # [Nc,Kc]
-                chunk_best_distances, chunk_best_indices = chunk_distances.min(dim=1)  # [Nc], [Nc]
-                use_chunk = chunk_best_distances < input_best_distances  # [Nc]
-                input_best_distances = torch.where(  # [Nc]
-                    use_chunk,
-                    chunk_best_distances,
-                    input_best_distances,
+            best_indices = torch.zeros(inputs_flat.shape[0], dtype=torch.long, device=inputs.device)  # [N]
+            for input_start in range(0, inputs_flat.shape[0], chunk_size):
+                input_end = min(input_start + chunk_size, inputs_flat.shape[0])
+                input_chunk = inputs_flat[input_start:input_end]  # [Nc,E]
+                input_norm_sq = input_chunk.pow(2.0).sum(dim=1, keepdim=True)  # [Nc,1]
+                input_best_distances = input_chunk.new_full((input_chunk.shape[0],), float("inf"))  # [Nc]
+                input_best_indices = torch.zeros(  # [Nc]
+                    input_chunk.shape[0], dtype=torch.long, device=inputs.device
                 )
-                input_best_indices = torch.where(  # [Nc]
-                    use_chunk,
-                    chunk_best_indices + codebook_start,
-                    input_best_indices,
-                )
-            best_indices[input_start:input_end] = input_best_indices  # [Nc]
+                for codebook_start in range(0, codebook.shape[0], chunk_size):
+                    codebook_end = min(codebook_start + chunk_size, codebook.shape[0])
+                    codebook_chunk = codebook[codebook_start:codebook_end]  # [Kc,E]
+                    codebook_norm_sq = codebook_chunk.pow(2.0).sum(dim=1).unsqueeze(0)  # [1,Kc]
+                    chunk_distances = torch.addmm(
+                        input_norm_sq + codebook_norm_sq,
+                        input_chunk,
+                        codebook_chunk.t(),
+                        alpha=-2.0,
+                    )  # [Nc,Kc]
+                    chunk_best_distances, chunk_best_indices = chunk_distances.min(dim=1)  # [Nc], [Nc]
+                    use_chunk = chunk_best_distances < input_best_distances  # [Nc]
+                    input_best_distances = torch.where(  # [Nc]
+                        use_chunk,
+                        chunk_best_distances,
+                        input_best_distances,
+                    )
+                    input_best_indices = torch.where(  # [Nc]
+                        use_chunk,
+                        chunk_best_indices + codebook_start,
+                        input_best_indices,
+                    )
+                best_indices[input_start:input_end] = input_best_indices  # [Nc]
 
-        return best_indices.reshape(input_shape[:-1])  # [...]
+            return best_indices.reshape(input_shape[:-1])  # [...]
 
     @torch.no_grad()
     def _tile_with_noise(self, x: torch.Tensor, target_n: int) -> torch.Tensor:

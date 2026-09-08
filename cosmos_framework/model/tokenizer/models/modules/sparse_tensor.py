@@ -7,7 +7,7 @@ This module provides the SparseTensor class for efficient sparse tensor operatio
 with support for both torchsparse and spconv backends.
 """
 
-# ruff: noqa
+# Ruff checks this module through the repository-wide configuration.
 # pylint: skip-file
 from __future__ import annotations
 
@@ -340,7 +340,17 @@ class SparseTensor:
                 assert self.feats.shape[0] == self.coords.shape[0], (
                     f"Invalid feats shape: {self.feats.shape}, coords shape: {self.coords.shape}"
                 )
-                assert self.shape == self.__cal_shape(self.feats, self.coords), f"Invalid shape: {self.shape}"
+                coordinate_shape = self.__cal_shape(self.feats, self.coords)
+                assert len(self.shape) == len(coordinate_shape), (
+                    f"Invalid shape rank: {self.shape}, coordinate-derived shape: {coordinate_shape}"
+                )
+                assert self.shape[0] >= coordinate_shape[0], (
+                    f"Invalid batch dimension: {self.shape[0]} is smaller than the coordinate-derived minimum "
+                    f"{coordinate_shape[0]}"
+                )
+                assert self.shape[1:] == coordinate_shape[1:], (
+                    f"Invalid feature shape: {self.shape[1:]}, expected {coordinate_shape[1:]}"
+                )
                 assert self.layout == self.__cal_layout(self.coords, self.shape[0]), f"Invalid layout: {self.layout}"
                 for i in range(self.shape[0]):
                     batch_slice = self.layout[i]
@@ -868,6 +878,7 @@ class SparseTensor:
         else:
             raise ValueError(f"Unknown index type: {type(idx)}")
 
+        selected_batch_size = len(idx)
         coords = []
         feats = []
         for new_idx, old_idx in enumerate(idx):
@@ -928,7 +939,17 @@ class SparseTensor:
                 device=self.feats.device,
             )
 
-        return SparseTensor(feats=feats, coords=coords)
+        selected_shape = torch.Size([selected_batch_size, *self.shape[1:]])
+        selected_layout = self._build_layout_from_batch_indices(coords[:, 0], selected_batch_size)
+        selected_has_special_tokens = False if self._has_special_tokens is False else None
+        return SparseTensor(
+            feats=feats,
+            coords=coords,
+            shape=selected_shape,
+            layout=selected_layout,
+            scale=self._scale,
+            has_special_tokens=selected_has_special_tokens,
+        )
 
     def register_spatial_cache(self, key: Any, value: Any) -> None:
         """Register a spatial cache.
@@ -1616,7 +1637,11 @@ def sparse_batch_broadcast(input: SparseTensor, other: torch.Tensor) -> torch.Te
     return broadcasted
 
 
-def sparse_batch_op(input: SparseTensor, other: torch.Tensor, op: callable = torch.add) -> SparseTensor:
+def sparse_batch_op(
+    input: SparseTensor,
+    other: torch.Tensor,
+    op: Callable[[torch.Tensor, torch.Tensor], torch.Tensor] = torch.add,
+) -> SparseTensor:
     """Broadcast a tensor and perform an operation with a sparse tensor.
 
     Args:
@@ -1640,21 +1665,42 @@ def sparse_cat(inputs: list[SparseTensor], dim: int = 0) -> SparseTensor:
     Returns:
         Concatenated SparseTensor.
     """
+    if len(inputs) == 0:
+        raise ValueError("sparse_cat requires at least one input.")
+
     if dim == 0:
+        scale = inputs[0]._scale
+        if any(input._scale != scale for input in inputs[1:]):
+            raise ValueError("Cannot concatenate SparseTensors with different scales along the batch dimension.")
+
         start = 0
-        coords = []
+        coords_parts = []
         for input in inputs:
-            coords.append(input.coords.clone())
-            coords[-1][:, 0] += start
+            input_coords = input.coords.clone()  # [N_i,D]
+            input_coords[:, 0] += start
+            coords_parts.append(input_coords)
             start += input.shape[0]
-        coords = cat_with_bounded_inputs(coords, dim=0)
-        feats = cat_with_bounded_inputs([input.feats for input in inputs], dim=0)
+
+        coords = cat_with_bounded_inputs(coords_parts, dim=0)  # [N,D]
+        feats = cat_with_bounded_inputs([input.feats for input in inputs], dim=0)  # [N,*F]
+        shape = torch.Size([start, *feats.shape[1:]])
+        layout = SparseTensor._build_layout_from_batch_indices(coords[:, 0], start)
+        if any(input._has_special_tokens is True for input in inputs):
+            has_special_tokens: bool | None = True
+        elif all(input._has_special_tokens is False for input in inputs):
+            has_special_tokens = False
+        else:
+            has_special_tokens = None
         output = SparseTensor(
             coords=coords,
             feats=feats,
+            shape=shape,
+            layout=layout,
+            scale=scale,
+            has_special_tokens=has_special_tokens,
         )
     else:
-        feats = cat_with_bounded_inputs([input.feats for input in inputs], dim=dim)
+        feats = cat_with_bounded_inputs([input.feats for input in inputs], dim=dim)  # [N,*F_cat]
         output = inputs[0].replace(feats)
 
     return output

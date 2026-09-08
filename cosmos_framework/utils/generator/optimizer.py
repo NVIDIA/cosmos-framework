@@ -13,7 +13,12 @@ from torch.distributed.checkpoint.state_dict import StateDictOptions, get_optimi
 from torch.distributed.checkpoint.stateful import Stateful
 from torch.optim.lr_scheduler import LambdaLR, LRScheduler
 
-from cosmos_framework.utils.functional.lr_scheduler import LambdaLinearScheduler, LambdaWarmUpCosineScheduler, WSDScheduler
+from cosmos_framework.utils.functional.lr_scheduler import (
+    LambdaLinearScheduler,
+    LambdaWarmUpCosineScheduler,
+    WSDScheduler,
+    WSFDScheduler,
+)
 from cosmos_framework.utils import log
 
 # Hybrid orthogonalizing optimizers (Muon / Dion2) that own their parameter
@@ -21,6 +26,13 @@ from cosmos_framework.utils import log
 # as a single optimizer instance over all selected params (no per-device-mesh
 # split) and need ``categorize_params`` called after construction.
 _AUX_ADAMW_OPTIMIZERS = ("muonwithauxadamw", "dion2withauxadamw")
+
+# Optimizers that can keep FP32 master copies of the parameters they update.
+# Whether they actually do is decided per build by ``_needs_master_weights``.
+# FusedAdam is the only one: the Muon/Dion2 pair requires FP32 params and updates them
+# in place, so a master there would duplicate the parameter bit-for-bit, and both reject
+# the kwarg rather than ignoring it.
+_MASTER_WEIGHT_OPTIMIZERS = ("fusedadam",)
 
 
 class ParamMetadata(NamedTuple):
@@ -39,6 +51,64 @@ def _convert_omegaconf_to_python(obj: Any) -> Any:
     return obj
 
 
+def _needs_master_weights(params: list[nn.Parameter] | list[dict[str, Any]]) -> bool:
+    """Whether an FP32 master copy of each parameter would buy any precision.
+
+    A master weight exists to give a low-precision parameter a higher-precision
+    accumulator. For a parameter that is already FP32 it is a bit-identical duplicate:
+    the same update, but 4 extra bytes per element and a copy every step. So masters are
+    only worth maintaining when some parameter is not already FP32, which is what setting
+    ``parallelism.fsdp_master_dtype`` equal to ``precision`` (no FSDP mixed precision)
+    produces. Under FSDP mixed precision the sharded param the optimizer steps IS the
+    FP32 master, and it is what the checkpoint stores.
+
+    Args:
+        params: Either a flat parameter list or PyTorch param-group dicts.
+    """
+    for entry in params:
+        group = entry["params"] if isinstance(entry, dict) else [entry]
+        if any(p.dtype != torch.float32 for p in group):
+            return True
+    return False
+
+
+def require_fp32_param_group(param_group: dict, optimizer_name: str, reason: str, master_weights: bool = False) -> None:
+    """Normalize ``param_group["params"]`` and reject it if any param isn't FP32.
+
+    No-op when ``master_weights`` is True: a master weight is a higher-precision
+    accumulator for a lower-precision parameter, so the parameter's own dtype is
+    then unconstrained (see :func:`_needs_master_weights`).
+
+    Otherwise mirrors ``torch.optim.Optimizer.add_param_group``'s own normalization
+    (a single Tensor or a generator becomes a list) and writes the normalized list
+    back onto ``param_group`` in place, so callers can validate *before* handing the
+    group to ``super().add_param_group()`` -- which appends to ``self.param_groups``
+    unconditionally, so validating after the call would leave a rejected group
+    registered if a caller caught the ``ValueError`` and kept stepping.
+
+    Args:
+        param_group: The group dict passed to ``add_param_group``; mutated in place.
+        optimizer_name: Name used in the error message (e.g. "Dion2WithAuxAdamW").
+        reason: Clause explaining why this optimizer needs FP32 params, appended
+            after ``"{optimizer_name} requires FP32 parameters -- "``.
+        master_weights: When True, skip validation entirely (see above).
+    """
+    if master_weights:
+        return
+    params = param_group["params"]
+    params = [params] if isinstance(params, torch.Tensor) else list(params)
+    dtypes = {p.dtype for p in params if p.dtype != torch.float32}
+    if dtypes:
+        raise ValueError(
+            f"{optimizer_name} requires FP32 parameters -- {reason} -- but got "
+            f"{sorted(str(dtype) for dtype in dtypes)}. Allocate the model in float32 and get "
+            "the low-precision forward/backward from FSDP2's MixedPrecisionPolicy("
+            "param_dtype=torch.bfloat16, reduce_dtype=torch.float32) rather than casting the "
+            "parameters."
+        )
+    param_group["params"] = params
+
+
 def _optimizer_cls(
     params: list[nn.Parameter] | list[dict[str, Any]],
     optimizer_type: str,
@@ -53,12 +123,25 @@ def _optimizer_cls(
       flows through and selects the fused CUDA kernel.
     - ``"fusedadam"``: NVIDIA's :class:`cosmos_framework.utils.generator.fused_adam.FusedAdam`.
       It is fused by construction and rejects a ``fused`` kwarg, so any
-      ``fused`` entry is popped before instantiation.  We also force
-      ``capturable=True`` and ``master_weights=True`` because those are the
-      only settings exercised in our distributed training stack.
+      ``fused`` entry is popped before instantiation.  We force ``capturable=True``
+      because it is the only mode exercised in our distributed training stack, and
+      default ``master_weights`` to whether the params need one (see
+      :func:`_needs_master_weights`); an explicit value in ``optimizer_kwargs`` wins.
+    - ``"muonwithauxadamw"`` / ``"dion2withauxadamw"``: hybrid orthogonalizing
+      optimizers.  ``fused`` is popped and ``capturable`` forced on as above, but
+      ``master_weights`` is never passed: both require FP32 params, update them in
+      place, and reject the kwarg.
 
     Raises ``NotImplementedError`` for any other ``optimizer_type``.
     """
+    # Master weights are derived, not configured: they are dead weight when the
+    # optimizer already owns fp32 params. Computed here for the one branch below
+    # that supports them, where an explicit config value still wins.
+    master_weights = False
+    if optimizer_type.lower() in _MASTER_WEIGHT_OPTIMIZERS:
+        master_weights = _needs_master_weights(params)
+        log.info(f"{optimizer_type}: master_weights={master_weights} (derived from parameter dtypes)")
+
     if optimizer_type.lower() == "adam":
         optimizer = torch.optim.Adam(params, **optimizer_kwargs)
     elif optimizer_type.lower() == "adamw":
@@ -68,29 +151,37 @@ def _optimizer_cls(
 
         # FusedAdam is fused by construction and does not accept a ``fused`` kwarg.
         optimizer_kwargs.pop("fused", None)
-        # Force ``capturable`` / ``master_weights`` on -- the only configuration
-        # exercised in our distributed-training stack.  Overwrite in-place
-        # rather than passing as positional keywords, otherwise a caller that
-        # also sets either flag would trigger a duplicate-kwarg ``TypeError``.
+        # Force ``capturable`` on -- the only configuration exercised in our
+        # distributed-training stack.  Overwrite in-place rather than passing as a
+        # positional keyword, otherwise a caller that also sets the flag would trigger a
+        # duplicate-kwarg ``TypeError``.
         optimizer_kwargs["capturable"] = True
-        optimizer_kwargs["master_weights"] = True
+        # Master weights only when the params are not already FP32: under FSDP mixed
+        # precision the sharded param IS the FP32 master, so a second copy would be a
+        # bit-identical duplicate. ``setdefault`` leaves an explicit config value alone.
+        optimizer_kwargs.setdefault("master_weights", master_weights)
         optimizer = FusedAdam(params, **optimizer_kwargs)
     elif optimizer_type.lower() == "muonwithauxadamw":
         from cosmos_framework.utils.generator.muon_with_aux_adamw import MuonWithAuxAdamW
 
         # Muon's AdamW side is the TE-fused kernel; it is fused by construction and
-        # absorbs ``fused`` via **kwargs, but we pop it here to be explicit. We force
-        # capturable + master_weights to match FusedAdam's mixed-precision setup.
+        # absorbs ``fused`` via **kwargs, but we pop it here to be explicit.
         optimizer_kwargs.pop("fused", None)
         optimizer_kwargs["capturable"] = True
-        optimizer_kwargs["master_weights"] = True
+        # ``master_weights`` is deliberately not forced on here (unlike FusedAdam): Muon
+        # requires FP32 params and updates them in place, so a master weight would
+        # duplicate the param bit-for-bit. It rejects the kwarg rather than ignoring it, so
+        # a config that still sets it fails loudly instead of paying for a no-op copy.
         optimizer = MuonWithAuxAdamW(params, **optimizer_kwargs)
     elif optimizer_type.lower() == "dion2withauxadamw":
         from cosmos_framework.utils.generator.dion2_with_aux_adamw import Dion2WithAuxAdamW
 
         optimizer_kwargs.pop("fused", None)
         optimizer_kwargs["capturable"] = True
-        optimizer_kwargs["master_weights"] = True
+        # ``master_weights`` is deliberately not forced on here (unlike FusedAdam):
+        # Dion2 requires FP32 params and updates them in place, so a master weight would
+        # duplicate the param bit-for-bit. It rejects the kwarg rather than ignoring it, so
+        # a config that still sets it fails loudly instead of paying for a no-op copy.
         optimizer = Dion2WithAuxAdamW(params, **optimizer_kwargs)
     else:
         raise NotImplementedError(f"Optimizer {optimizer_type} not found.")
@@ -495,19 +586,20 @@ def build_optimizer(
 def _lr_scheduler_cls(
     lr_scheduler_type: str,
     **lr_scheduler_kwargs: Any,
-) -> LambdaLinearScheduler | LambdaWarmUpCosineScheduler | WSDScheduler:
+) -> LambdaLinearScheduler | LambdaWarmUpCosineScheduler | WSDScheduler | WSFDScheduler:
     """Instantiate a lambda-style scheduler whose ``.schedule(step)`` returns an LR multiplier.
 
     Both returned classes expose a ``schedule(step) -> float`` callable that
     :class:`LRSchedulersContainer` wraps with ``torch.optim.lr_scheduler.LambdaLR``
     to drive each optimizer's param-group LRs.  ``lr_scheduler_type`` matching is
     case-insensitive; valid values are ``"lambdalinear"`` (linear decay),
-    ``"lambdacosine"`` (warmup + cosine decay), and ``"wsd"``
-    (warmup-stable-decay).  Any other value raises ``NotImplementedError``.
+    ``"lambdacosine"`` (warmup + cosine decay), ``"wsd"``
+    (warmup-stable-decay), and ``"wsfd"`` (warmup-slow-decay-fast-decay).
+    Any other value raises ``NotImplementedError``.
     All remaining ``**lr_scheduler_kwargs`` are forwarded verbatim to the
     underlying scheduler constructor (e.g. ``warm_up_steps``, ``cycle_lengths``,
-    ``total_steps``, ``decay_steps``, ``f_start``, ``f_max``, ``f_min``,
-    ``verbosity_interval``).
+    ``total_steps``, ``decay_steps``, ``f_start``, ``f_max``,
+    ``f_cooldown_start``, ``f_min``, ``verbosity_interval``).
     """
     if lr_scheduler_type.lower() == "lambdalinear":
         lr_scheduler = LambdaLinearScheduler(**lr_scheduler_kwargs)
@@ -515,6 +607,8 @@ def _lr_scheduler_cls(
         lr_scheduler = LambdaWarmUpCosineScheduler(**lr_scheduler_kwargs)
     elif lr_scheduler_type.lower() == "wsd":
         lr_scheduler = WSDScheduler(**lr_scheduler_kwargs)
+    elif lr_scheduler_type.lower() == "wsfd":
+        lr_scheduler = WSFDScheduler(**lr_scheduler_kwargs)
     else:
         raise NotImplementedError(f"LR Scheduler {lr_scheduler_type} not found.")
     return lr_scheduler

@@ -12,7 +12,7 @@ from typing import Annotated
 import pydantic
 import tyro
 
-from cosmos_framework.inference.args import OmniSetupOverrides
+from cosmos_framework.inference.args import OmniSetupOverrides, is_reasoner_only, reasoner_only_overrides
 from cosmos_framework.inference.common.args import SampleOutputs, SetupOverrides, tyro_cli
 from cosmos_framework.inference.common.init import init_output_dir
 from cosmos_framework.utils import log
@@ -27,7 +27,7 @@ class InferenceArgs(pydantic.BaseModel):
     Accepts glob patterns (e.g. `inputs/*.json`).
     """
 
-    setup: SetupOverrides = OmniSetupOverrides.model_construct()
+    setup: SetupOverrides = OmniSetupOverrides.model_construct(diffusion_cache=True)
     """Setup arguments."""
 
 
@@ -44,12 +44,18 @@ def inference(args: InferenceArgs):
             args.input_files, overrides=setup_args.sample_overrides
         )
         log.info(f"Loaded {len(sample_overrides_list)} samples")
+        if is_reasoner_only(sample_overrides_list):
+            setup_args.experiment_overrides.extend(reasoner_only_overrides())
+            # Reasoner output is text, so no frames ever reach the video guardrail.
+            setup_args.video_guardrail = False
+            log.info("Reasoner-only inputs detected; generation-side modules will not be loaded")
         for sample_overrides in sample_overrides_list:
             assert sample_overrides.name
             sample_overrides.output_dir = setup_args.output_dir / sample_overrides.name
             sample_overrides.download(sample_overrides.output_dir / "inputs")
 
     pipe = setup_args.get_inference_cls().create(setup_args)
+
     sample_args_list = []
     for overrides in sample_overrides_list:
         try:
@@ -62,6 +68,7 @@ def inference(args: InferenceArgs):
             overrides.output_dir.mkdir(parents=True, exist_ok=True)
             skip_output = SampleOutputs(args=overrides.model_dump(mode="json"), status="skip", message=msg)
             (overrides.output_dir / "sample_outputs.json").write_text(skip_output.model_dump_json())
+
     pipe.generate(sample_args_list)
 
     if setup_args.benchmark and is_rank0():

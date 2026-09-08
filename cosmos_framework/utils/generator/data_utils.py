@@ -6,13 +6,7 @@ from typing import Any
 
 import torch
 
-_RESOLUTION_768_SHAPES: tuple[tuple[int, int], ...] = (
-    (1024, 1024),
-    (1184, 880),
-    (880, 1184),
-    (1360, 768),
-    (768, 1360),
-)
+from cosmos_framework.utils.generator.image_resize import get_vision_data_resolution as get_vision_data_resolution
 
 
 def read_positive_int_metadata(
@@ -80,45 +74,6 @@ def read_positive_int_metadata(
     return values
 
 
-def get_vision_data_resolution(spatial_shape: tuple[int, int]) -> str:
-    """Determine the resolution string from spatial dimensions.
-
-    Maps the spatial shape (height, width) to a resolution string. This is used
-    for resolution-dependent shift lookup when using dict-based shift
-    configuration.
-
-    Args:
-        spatial_shape: Tuple of (height, width) in pixels.
-
-    Returns:
-        Resolution string: "256", "480", "720", or "768".
-
-    Raises:
-        ValueError: If the spatial shape is unsupported.
-
-    Note:
-        See VIDEO_RES_SIZE_INFO for more details on resolution definitions.
-        For the current definition of resolution, these conditions are satisfied.
-    """
-    if spatial_shape in _RESOLUTION_768_SHAPES:
-        return "768"
-
-    min_dim = min(spatial_shape[0], spatial_shape[1])
-    if min_dim <= 256:
-        return "256"
-    elif min_dim <= 640:
-        return "480"
-    elif min_dim <= 960:
-        return "720"
-    elif min_dim <= 2048:
-        # Free-form inputs above the 720 tier (e.g. multi-reference generation
-        # producing shapes like (992, 1024)) that are not a canonical 768 shape:
-        # route to the closest defined higher tier "768".
-        return "768"
-    else:
-        raise ValueError(f"Unsupported resolution: {spatial_shape}")
-
-
 def slice_data_batch(
     data_batch: dict[str, Any],
     start: int,
@@ -139,6 +94,10 @@ def slice_data_batch(
         ``video = [v1_s1, v2_s1, v1_s2, v2_s2]``. Slicing with
         ``start=0, limit=1`` returns ``video = [v1_s1, v2_s1]``.
 
+    The ``lidar`` field is flattened the same way and follows
+    ``num_lidar_items_per_sample``, since a sample's range clips need not be as
+    many as its camera clips.
+
     Args:
         data_batch: The data batch to slice.
         start: The start sample index (inclusive).
@@ -153,16 +112,15 @@ def slice_data_batch(
     assert start >= 0 and limit > 0, "Start and limit must be positive"
     assert start < limit, "Start must be less than limit"
 
+    def flat_range(counts: Any) -> tuple[int, int]:
+        counts_list = counts.tolist() if isinstance(counts, torch.Tensor) else list(counts)
+        return sum(counts_list[:start]), sum(counts_list[:limit])
+
     num_items = data_batch.get("num_vision_items_per_sample")
-    if num_items is not None:
-        if isinstance(num_items, torch.Tensor):
-            num_items_list = num_items.tolist()
-        else:
-            num_items_list = list(num_items)
-        flat_start = sum(num_items_list[:start])
-        flat_limit = sum(num_items_list[:limit])
-    else:
-        flat_start, flat_limit = start, limit
+    flat_start, flat_limit = flat_range(num_items) if num_items is not None else (start, limit)
+    # The LiDAR stream is flattened the same way, and counts its own items.
+    num_lidar_items = data_batch.get("num_lidar_items_per_sample")
+    lidar_start, lidar_limit = flat_range(num_lidar_items) if num_lidar_items is not None else (start, limit)
 
     multi_item_fields = set(multi_item_fields)
 
@@ -170,6 +128,8 @@ def slice_data_batch(
     for key, value in data_batch.items():
         if key in multi_item_fields and num_items is not None:
             s, e = flat_start, flat_limit
+        elif key == "lidar" and num_lidar_items is not None:
+            s, e = lidar_start, lidar_limit
         else:
             s, e = start, limit
         if isinstance(value, torch.Tensor):

@@ -12,7 +12,10 @@ import io
 import pickle as pkl
 from typing import Dict, Optional
 
+import numpy as np
+import torch
 from PIL import Image, UnidentifiedImageError
+from torchcodec.decoders import AudioDecoder
 
 from cosmos_framework.data.imaginaire.webdataset.augmentors.augmentor import Augmentor
 from cosmos_framework.utils import log
@@ -30,9 +33,10 @@ class BytesToMedia(Augmentor):
         A dictionary mapping media names (str) to bytes objects.
 
     The output format is a dictionary mapping names to their respective decoded objects:
-    Input dict[str, bytes] -> Output dict[str, torch.Tensor | PIL.Image]
+    Input dict[str, bytes | decoded audio] -> Output dict[str, torch.Tensor | np.ndarray | PIL.Image]
 
-    Corrupted or non-decodable bytes are skipped with a warning.
+    Corrupted or non-decodable bytes are skipped with a warning. Encoded audio
+    is decoded to a mono 16 kHz waveform for the downstream audio processor.
     """
 
     def __init__(
@@ -50,6 +54,8 @@ class BytesToMedia(Augmentor):
         use_start_frame_end_frame: bool = False,
         frame_count_random_range: Optional[list[int]] = None,
         processor: Qwen3VLProcessor = None,
+        extract_audio: bool = False,
+        audio_sample_rate: int = 16_000,
     ) -> None:
         """
         Args:
@@ -65,6 +71,8 @@ class BytesToMedia(Augmentor):
             is_input_pickle_byptes (bool): Whether the input key is in the data_dict instead of pkl files. (For cosmos predict2 videos)
             use_start_frame_end_frame (bool): Whether to use start_frame and end_frame to decode the video. (For cosmos predict2 videos)
             frame_count_random_range (list[int], optional): Random frame count range. Defaults to None.
+            extract_audio (bool): Whether to decode the audio stream from video containers.
+            audio_sample_rate (int): Target sample rate for decoded mono audio.
         """
         self.input_key = input_key
         self.output_key = output_key
@@ -81,6 +89,8 @@ class BytesToMedia(Augmentor):
         self.is_input_pickle_byptes = is_input_pickle_byptes
         self.use_start_frame_end_frame = use_start_frame_end_frame
         self.processor = processor
+        self.extract_audio = extract_audio
+        self.audio_sample_rate = audio_sample_rate
 
     def _is_video_key(self, name: str) -> bool:
         """Returns whether the media key will be decoded as video."""
@@ -95,6 +105,39 @@ class BytesToMedia(Augmentor):
             "control_input_edge",
         )
         return "video" in name_lower or ".mp4" in name_lower or name_lower in control_video_names
+
+    @staticmethod
+    def _is_audio_key(name: str) -> bool:
+        """Return whether a media key denotes an audio clip."""
+        name_lower = name.lower()
+        return "audio" in name_lower or "sound" in name_lower or name_lower.endswith((".wav", ".flac"))
+
+    def _bytes_to_audio_waveform(
+        self,
+        media_bytes: bytes,
+        identifier: str,
+        start_frame: int | None = None,
+        end_frame: int | None = None,
+    ) -> torch.Tensor | None:
+        """Decode standalone audio or a video audio stream to mono 16 kHz."""
+        try:
+            decoder = AudioDecoder(
+                media_bytes,
+                sample_rate=self.audio_sample_rate,
+                num_channels=1,
+            )
+            if start_frame is not None and end_frame is not None:
+                video_metadata = probe_video(media_bytes, num_threads=self.video_decoder_params["num_threads"])
+                samples = decoder.get_samples_played_in_range(
+                    start_seconds=start_frame / video_metadata.average_fps,
+                    stop_seconds=end_frame / video_metadata.average_fps,
+                )
+            else:
+                samples = decoder.get_all_samples()
+            return samples.data.squeeze(0).contiguous()
+        except Exception as e:
+            log.warning(f"Skipping audio for '{identifier}': Error decoding media bytes: {e}")
+            return None
 
     def _probe_video_duration_seconds(
         self,
@@ -271,6 +314,13 @@ class BytesToMedia(Augmentor):
                             total_video_duration=total_video_duration,
                         )
                         if result:
+                            if self.extract_audio:
+                                audio = self._bytes_to_audio_waveform(
+                                    item,
+                                    identifier=f"{input_key}['{name}']",
+                                )
+                                if audio is not None:
+                                    result["audio"] = audio
                             output_data[name] = result
                     elif self._is_video_key(name) and self.use_start_frame_end_frame:
                         assert "start_frame" in data_dict.keys() and "end_frame" in data_dict.keys(), (
@@ -288,6 +338,15 @@ class BytesToMedia(Augmentor):
                             total_video_duration=total_video_duration,
                         )
                         if result:
+                            if self.extract_audio:
+                                audio = self._bytes_to_audio_waveform(
+                                    item,
+                                    identifier=f"{input_key}['{name}']",
+                                    start_frame=start_frame,
+                                    end_frame=end_frame,
+                                )
+                                if audio is not None:
+                                    result["audio"] = audio
                             output_data[name] = result
 
                     elif (
@@ -300,10 +359,20 @@ class BytesToMedia(Augmentor):
                         result = self._bytes_to_pil(item, identifier=f"{input_key}['{name}']")
                         if result:
                             output_data[name] = result
+                    elif self._is_audio_key(name):
+                        audio = self._bytes_to_audio_waveform(
+                            item,
+                            identifier=f"{input_key}['{name}']",
+                        )
+                        if audio is not None:
+                            output_data[name] = audio
                     else:
                         log.warning(
                             f"Skipping item with key '{name}' in '{input_key}': Key does not contain 'video', '.mp4', '.jpg', '.jpeg', '.png', or 'image'."
                         )
+                elif self._is_audio_key(name) and isinstance(item, np.ndarray | torch.Tensor):
+                    # Preserve already-decoded waveforms for custom/in-memory datasets.
+                    output_data[name] = item
                 else:
                     log.warning(f"Skipping item with key '{name}' in '{input_key}': Expected bytes, got {type(item)}.")
         else:

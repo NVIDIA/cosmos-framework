@@ -57,8 +57,10 @@ def stable_object_metadata(response: dict[str, object]) -> dict[str, object]:
     }
 
 
-def make_s3_client(credentials_path: str) -> Any:
+def make_s3_client(credentials_path: str | None) -> Any:
     """Construct an S3 client from the repository credential-file format."""
+    if credentials_path is None:
+        return boto3.client("s3")
     with open(credentials_path) as credential_file:
         credentials = json.load(credential_file)
     return boto3.client(
@@ -111,7 +113,7 @@ def _list_s3_prefix_objects(client: Any, *, bucket: str, prefix: str) -> list[di
     return objects
 
 
-def resolve_checkpoint_identity(checkpoint_path: str, credentials_path: str) -> dict[str, object]:
+def resolve_checkpoint_identity(checkpoint_path: str, credentials_path: str | None) -> dict[str, object]:
     """Resolve a stable model identity for local files/directories or S3 objects."""
     parsed = urlparse(checkpoint_path)
     if parsed.scheme == "s3":

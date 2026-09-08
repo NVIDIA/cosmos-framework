@@ -64,7 +64,6 @@ from cosmos_framework.model.generator.reasoner.qwen3_vl_moe.configuration_qwen3_
 from cosmos_framework.model.generator.reasoner.qwen3_vl_moe.qwen3_vl_moe import (
     AuxLossFreeLoadBalancingConfig,
     CosineRouterConfig,
-    LBLMetadata,
     Qwen3VLMoePreTrainedModel,
     Qwen3VLMoeTextMLP,
     Qwen3VLMoeTextRMSNorm,
@@ -72,13 +71,17 @@ from cosmos_framework.model.generator.reasoner.qwen3_vl_moe.qwen3_vl_moe import 
     Qwen3VLMoeTextSparseMoeBlock,
     Qwen3VLMoeVisionModel,
 )
+from cosmos_framework.model.generator.utils.load_balancing_stats import (
+    LBLConfig,
+    LBLMetadata,
+)
 from cosmos_framework.model.generator.utils.memory import KVToStore, MemoryState, MemoryValue
 from cosmos_framework.data.generator.sequence_packing.runtime import (
     SequencePack,
     from_all_seq,
     from_und_gen_splits,
-    get_device_and_dtype,
     get_gen_seq,
+    get_num_real_tokens,
     get_und_seq,
     set_gen_seq,
     set_und_seq,
@@ -236,9 +239,13 @@ class _MoTConfigBase(object):
         qk_norm_for_text: bool = True,
         qk_norm_for_diffusion: bool = True,
         include_visual: bool = False,
+        include_gen_pathway: bool = True,
         gen_noisy_gating: bool = False,
         gen_cosine_router_config: CosineRouterConfig | None = None,
         gen_aux_loss_free_load_balancing_config: AuxLossFreeLoadBalancingConfig | None = None,
+        gen_moe_shared_expert: bool = False,
+        gen_moe_shared_expert_intermediate_scale: int = 1,
+        gen_moe_top_k: int | None = None,
         text_config_overrides: Mapping[str, Any] | None = None,
     ) -> None:
         # Defensive copy so downstream materialization can't mutate the
@@ -247,6 +254,9 @@ class _MoTConfigBase(object):
         self.qk_norm_for_text = qk_norm_for_text
         self.qk_norm_for_diffusion = qk_norm_for_diffusion
         self.include_visual = include_visual
+        # Build the MoT generation tower (the ``*_moe_gen`` duplicates).  Reasoner-only
+        # inference disables this; every other caller keeps the default and is unchanged.
+        self.include_gen_pathway = include_gen_pathway
         # Noisy top-k gating on the generation-tower MoE blocks (Shazeer 2017).
         # Gen-tower only; the understanding tower never receives this flag.
         self.gen_noisy_gating = gen_noisy_gating
@@ -260,6 +270,14 @@ class _MoTConfigBase(object):
         self.gen_aux_loss_free_load_balancing_config: AuxLossFreeLoadBalancingConfig = (
             gen_aux_loss_free_load_balancing_config or AuxLossFreeLoadBalancingConfig()
         )
+        # Shared (always-on) expert on the gen-tower MoE blocks (gen-tower only).
+        self.gen_moe_shared_expert = gen_moe_shared_expert
+        # Shared-expert FFN width as a multiple of ``moe_intermediate_size``.
+        self.gen_moe_shared_expert_intermediate_scale = gen_moe_shared_expert_intermediate_scale
+        # Routed experts per token on the gen tower only; ``None`` keeps the
+        # checkpoint's ``num_experts_per_tok``. The und tower always keeps the
+        # pretrained value, so lowering this does not perturb the frozen backbone.
+        self.gen_moe_top_k = gen_moe_top_k
         # Plain attribute (not a property) so the ``create_vlm_config``
         # post-construction ``setattr`` flow can replace the whole
         # mapping in one shot; default to ``{}`` so the merge in
@@ -485,9 +503,11 @@ class PackedAttentionMoT(nn.Module):
         qk_norm_for_text: bool,
         qk_norm_for_diffusion: bool,
         use_und_k_norm_for_gen: bool = False,
+        include_gen_pathway: bool = True,
     ):
         super().__init__()
         self.config = config
+        self.include_gen_pathway = include_gen_pathway
         self.layer_idx = layer_idx
         self.head_dim = getattr(config, "head_dim", config.hidden_size // config.num_attention_heads)
         self.hidden_size = config.hidden_size
@@ -513,13 +533,15 @@ class PackedAttentionMoT(nn.Module):
             self.q_norm = nn.Identity()
             self.k_norm = nn.Identity()
 
-        # Generation pathway QK norm
-        if qk_norm_for_diffusion:
-            self.q_norm_moe_gen = layer_types.rms_norm(self.head_dim, eps=eps)
-            self.k_norm_moe_gen = layer_types.rms_norm(self.head_dim, eps=eps)
-        else:
-            self.q_norm_moe_gen = nn.Identity()
-            self.k_norm_moe_gen = nn.Identity()
+        # Generation pathway QK norm.  Everything below this point belongs to the
+        # generation tower and is skipped wholesale when it is not built.
+        if include_gen_pathway:
+            if qk_norm_for_diffusion:
+                self.q_norm_moe_gen = layer_types.rms_norm(self.head_dim, eps=eps)
+                self.k_norm_moe_gen = layer_types.rms_norm(self.head_dim, eps=eps)
+            else:
+                self.q_norm_moe_gen = nn.Identity()
+                self.k_norm_moe_gen = nn.Identity()
 
         # Cross-attention K norm: normalises und K tokens seen by the generator in the
         # gen→und cross-attention path.  Only needed when the generation pathway has QK
@@ -529,24 +551,26 @@ class PackedAttentionMoT(nn.Module):
         # uncontrolled magnitude and dominates attention over the gen self-attention path.
         # When both pathways share the same QK norm (or neither has one) k_norm_und_for_gen
         # is None and the standard packed K tensor is used for all paths unchanged.
-        if use_und_k_norm_for_gen and qk_norm_for_diffusion and not qk_norm_for_text:
+        # It serves the generation pathway only, so it is None whenever that tower is absent.
+        if include_gen_pathway and use_und_k_norm_for_gen and qk_norm_for_diffusion and not qk_norm_for_text:
             self.k_norm_und_for_gen: nn.Module | None = layer_types.rms_norm(self.head_dim, eps=eps)
         else:
             self.k_norm_und_for_gen = None
 
         # Generation pathway linear projections
-        self.q_proj_moe_gen = nn.Linear(
-            self.hidden_size, self.num_attention_heads * self.head_dim, bias=config.attention_bias
-        )
-        self.k_proj_moe_gen = nn.Linear(
-            self.hidden_size, self.num_key_value_heads * self.head_dim, bias=config.attention_bias
-        )
-        self.v_proj_moe_gen = nn.Linear(
-            self.hidden_size, self.num_key_value_heads * self.head_dim, bias=config.attention_bias
-        )
-        self.o_proj_moe_gen = nn.Linear(
-            self.num_attention_heads * self.head_dim, self.hidden_size, bias=config.attention_bias
-        )
+        if include_gen_pathway:
+            self.q_proj_moe_gen = nn.Linear(
+                self.hidden_size, self.num_attention_heads * self.head_dim, bias=config.attention_bias
+            )
+            self.k_proj_moe_gen = nn.Linear(
+                self.hidden_size, self.num_key_value_heads * self.head_dim, bias=config.attention_bias
+            )
+            self.v_proj_moe_gen = nn.Linear(
+                self.hidden_size, self.num_key_value_heads * self.head_dim, bias=config.attention_bias
+            )
+            self.o_proj_moe_gen = nn.Linear(
+                self.num_attention_heads * self.head_dim, self.hidden_size, bias=config.attention_bias
+            )
 
         self._apply_rotary_pos_emb = layer_types.apply_rotary_pos_emb
         self.dispatch_attention_fn = dispatch_attention
@@ -577,7 +601,10 @@ class PackedAttentionMoT(nn.Module):
         return (
             self.replicated_attention_io_local_head_o_proj
             and memory_value is not None
-            and getattr(memory_value, "frame_idx", 0) > 0
+            and (
+                getattr(memory_value, "post_saturation_static_compile", False)
+                or getattr(memory_value, "frame_idx", 0) > 0
+            )
             and not getattr(memory_value, "for_cuda_graphs", False)
         )
 
@@ -625,6 +652,18 @@ class PackedAttentionMoT(nn.Module):
         q_gen = q_gen_in.view(-1, self.num_attention_heads, self.head_dim)  # [N_gen,num_heads,head_dim]
         k_gen = k_gen_in.view(-1, self.num_key_value_heads, self.head_dim)  # [N_gen,num_kv_heads,head_dim]
         v_gen = v_gen_in.view(-1, self.num_key_value_heads, self.head_dim)  # [N_gen,num_kv_heads,head_dim]
+
+        # The sequence length is the only size that varies between steps, but Dynamo lifts the int
+        # attributes of a module into SymInts, so the head counts reach the views above as symbols.
+        # That breaks FlexAttention's Inductor lowering, which tests the Q:KV head ratio for a power
+        # of two with ``ratio & (ratio - 1)`` and raises a TypeError on a symbolic ratio, and it
+        # leaves the head count inside every index expression downstream instead of folding it away.
+        # Specialise here, where the size is still a bare symbol: after the CP all-to-all it is
+        # ``FloorDiv(head, cp_world_size)``, and marking a compound expression only guards its value
+        # instead of folding the symbol away.
+        if torch.compiler.is_compiling():
+            for head_split in (q_und, k_und, v_und, q_gen, k_gen, v_gen):
+                torch._dynamo.mark_static(head_split, 1)
 
         q_und = self.q_norm(q_und)  # [N_und,num_heads,head_dim]
         k_und = self.k_norm(k_und)  # [N_und,num_kv_heads,head_dim]
@@ -823,6 +862,11 @@ def _impl_init(
     gen_noisy_gating: bool = False,
     gen_cosine_router_config: CosineRouterConfig | None = None,
     gen_aux_loss_free_load_balancing_config: AuxLossFreeLoadBalancingConfig | None = None,
+    lbl_config: LBLConfig | None = None,
+    gen_moe_shared_expert: bool = False,
+    gen_moe_shared_expert_intermediate_scale: int = 1,
+    gen_moe_top_k: int | None = None,
+    include_gen_pathway: bool = True,
 ) -> None:
     """Shared ``__init__`` body for the three MoT text-model variants.
 
@@ -832,6 +876,9 @@ def _impl_init(
     """
     self.padding_idx = getattr(config, "pad_token_id", None)
     self.vocab_size = config.vocab_size
+    # Read back by ``_impl_forward``'s guard: the joint generation forward cannot
+    # run on a model built without the generation tower.
+    self.include_gen_pathway = include_gen_pathway
 
     self.embed_tokens = nn.Embedding(config.vocab_size, config.hidden_size, self.padding_idx)
 
@@ -848,13 +895,19 @@ def _impl_init(
                 gen_noisy_gating=gen_noisy_gating,
                 gen_cosine_router_config=gen_cosine_router_config,
                 gen_aux_loss_free_load_balancing_config=gen_aux_loss_free_load_balancing_config,
+                lbl_config=lbl_config,
+                gen_moe_shared_expert=gen_moe_shared_expert,
+                gen_moe_shared_expert_intermediate_scale=gen_moe_shared_expert_intermediate_scale,
+                gen_moe_top_k=gen_moe_top_k,
+                include_gen_pathway=include_gen_pathway,
             )
         )
 
     # Reasoner-pathway final norm.
     self.norm = layer_types.rms_norm(config.hidden_size, eps=config.rms_norm_eps)
-    # Generation-pathway final norm (parallel to ``self.norm``).
-    self.norm_moe_gen = layer_types.rms_norm(config.hidden_size, eps=config.rms_norm_eps)
+    if include_gen_pathway:
+        # Generation-pathway final norm (parallel to ``self.norm``).
+        self.norm_moe_gen = layer_types.rms_norm(config.hidden_size, eps=config.rms_norm_eps)
 
     # Rotary embedding (text-only optimized)
     self.rotary_emb = layer_types.rotary_embedding(config)
@@ -864,24 +917,51 @@ def _impl_init(
     self.post_init()
 
 
-def _impl_init_taylorseer(self, cache_dic=None, current=None):
-    """Initialize TaylorSeer acceleration attributes.
+def _stack_lbl_metadata(
+    lbl_metadata_all: dict[str, list[LBLMetadata]],
+) -> dict[str, LBLMetadata]:
+    """Stack per-layer load-balancing metadata for each MoT pathway."""
+    final_lbl_metadata: dict[str, LBLMetadata] = {}
+    for pathway, lbl_metadata_list in lbl_metadata_all.items():
+        if not lbl_metadata_list:
+            continue
 
-    Shared implementation for ``init_taylorseer`` on
-    ``Qwen3VLTextModel``, ``Qwen3VLMoeTextModel``, and
-    ``Nemotron3DenseVLTextModel``.
-    """
-    self.cache_dic = cache_dic or {}
-    self.current = current or {
-        "step": 0,
-        "type": "full",
-        "stream": "layers_stream",
-        "layer": 0,
-        "module": "total",
-        "activated_steps": [0],
-    }
-    # Enable TaylorSeer flag
-    self.enable_taylorseer = True
+        num_tokens_per_expert = torch.stack(
+            [lbl_metadata.num_tokens_per_expert for lbl_metadata in lbl_metadata_list]
+        )  # [num_layers,num_experts]
+        num_tokens = torch.stack([lbl_metadata.num_tokens for lbl_metadata in lbl_metadata_list])  # [num_layers,1]
+        mean_router_prob_per_expert = torch.stack(
+            [lbl_metadata.mean_router_prob_per_expert for lbl_metadata in lbl_metadata_list]
+        )  # [num_layers,num_experts]
+        top_k = torch.stack([lbl_metadata.top_k for lbl_metadata in lbl_metadata_list])  # [num_layers,1]
+
+        sample_num_tokens_per_expert = None
+        sample_num_tokens = None
+        sample_router_prob_sum_per_expert = None
+        if lbl_metadata_list[0].sample_num_tokens_per_expert is not None:
+            assert all(metadata.sample_num_tokens_per_expert is not None for metadata in lbl_metadata_list)
+            assert all(metadata.sample_num_tokens is not None for metadata in lbl_metadata_list)
+            assert all(metadata.sample_router_prob_sum_per_expert is not None for metadata in lbl_metadata_list)
+            sample_num_tokens_per_expert = torch.stack(
+                [metadata.sample_num_tokens_per_expert for metadata in lbl_metadata_list]
+            )  # [num_layers,num_samples,num_experts]
+            sample_num_tokens = torch.stack(
+                [metadata.sample_num_tokens for metadata in lbl_metadata_list]
+            )  # [num_layers,num_samples,1]
+            sample_router_prob_sum_per_expert = torch.stack(
+                [metadata.sample_router_prob_sum_per_expert for metadata in lbl_metadata_list]
+            )  # [num_layers,num_samples,num_experts]
+
+        final_lbl_metadata[pathway] = LBLMetadata(
+            num_tokens_per_expert=num_tokens_per_expert,
+            num_tokens=num_tokens,
+            mean_router_prob_per_expert=mean_router_prob_per_expert,
+            top_k=top_k,
+            sample_num_tokens_per_expert=sample_num_tokens_per_expert,
+            sample_num_tokens=sample_num_tokens,
+            sample_router_prob_sum_per_expert=sample_router_prob_sum_per_expert,
+        )
+    return final_lbl_metadata
 
 
 def _impl_forward(
@@ -907,10 +987,19 @@ def _impl_forward(
             forward passes.
     """
 
+    # The joint forward drives both towers, so it cannot run on a model built
+    # without the generation pathway.  Reasoner-only decoding goes through
+    # ``_impl_reasoner_forward`` instead and is unaffected.
+    assert getattr(self, "include_gen_pathway", True), (
+        "The joint generation forward requires the MoT generation pathway, but this model was "
+        "built with include_gen_pathway=False (reasoner-only). Drop the "
+        "model.config.vlm_config.model_instance.config.include_gen_pathway=false override."
+    )
+
     # Create position embeddings (Qwen3 style) - squeeze once at model level
     # tensor below is only used for its dtype and device
-    device, dtype = get_device_and_dtype(pack)
-    _meta_tensor = torch.tensor([], dtype=dtype, device=device)
+    _meta_tensor = get_gen_seq(pack)  # [S_gen,D]
+    device = _meta_tensor.device
     cos, sin = self.rotary_emb(
         _meta_tensor, position_ids=position_ids.unsqueeze(0) if position_ids.ndim == 1 else position_ids.unsqueeze(1)
     )  # if ndim == 2, the mrope position_ids is (3, seq_len); inject the batch dim in the
@@ -927,7 +1016,7 @@ def _impl_forward(
     # Tracking the load balancing loss across all layers. For dense models, lbl_metadata_all
     # will be a dictionary with empty lists for each pathway. For MoE models, the lists
     # for each pathway will be populated with the load balancing loss metadata for each layer.
-    lbl_metadata_all = dict(und=[], gen=[])
+    lbl_metadata_all: dict[str, list[LBLMetadata]] = dict(und=[], gen=[])
 
     hidden_states = pack
 
@@ -958,26 +1047,8 @@ def _impl_forward(
         for pathway, lbl_metadata in lbl_metadata_dict.items():
             lbl_metadata_all[pathway].append(lbl_metadata)
 
-    # Compute the load balancing loss across all layers. For dense models, final_lbl_metadata
-    # will be an empty dictionary. For MoE models, it will be a dictionary with the stacked
-    # load balancing loss metadata for each pathway.
-    final_lbl_metadata: dict[str, LBLMetadata] = dict()
-    for pathway, lbl_metadata_list in lbl_metadata_all.items():
-        if len(lbl_metadata_list) > 0:
-            num_tokens_per_expert = torch.stack(
-                [lbl_metadata.num_tokens_per_expert for lbl_metadata in lbl_metadata_list]
-            )  # [num_layers,num_experts]
-            num_tokens = torch.stack([lbl_metadata.num_tokens for lbl_metadata in lbl_metadata_list])  # [num_layers]
-            mean_router_prob_per_expert = torch.stack(
-                [lbl_metadata.mean_router_prob_per_expert for lbl_metadata in lbl_metadata_list]
-            )  # [num_layers,num_experts]
-            top_k = torch.stack([lbl_metadata.top_k for lbl_metadata in lbl_metadata_list])  # [num_layers,1]
-            final_lbl_metadata[pathway] = LBLMetadata(
-                num_tokens_per_expert=num_tokens_per_expert,
-                num_tokens=num_tokens,
-                mean_router_prob_per_expert=mean_router_prob_per_expert,
-                top_k=top_k,
-            )
+    # Dense models produce no metadata. MoE models produce one stacked entry per pathway.
+    final_lbl_metadata = _stack_lbl_metadata(lbl_metadata_all)
 
     hidden_states_out = zeros_like(hidden_states)
     set_und_seq(hidden_states_out, self.norm(get_und_seq(hidden_states)))  # [N_und,hidden_size]
@@ -988,7 +1059,10 @@ def _impl_forward(
 
 def _run_mlp(
     mlp: torch.nn.Module,
-    input: torch.Tensor,
+    input: torch.Tensor,  # [N,hidden_size]
+    token_mask: torch.Tensor | None,  # [N]
+    sample_ids: torch.Tensor | None = None,  # [N]
+    num_samples: int | None = None,
 ) -> tuple[torch.Tensor, LBLMetadata | None]:
     """Run an MLP block and normalize the return shape across dense / MoE.
 
@@ -998,16 +1072,52 @@ def _run_mlp(
     helper unifies both into a single ``(output, lbl_metadata_or_None)`` shape
     so the decoder layers and the reasoner-tower forward don't need to branch
     on the MLP type.
+
+    ``token_mask`` marks which rows of ``input`` are real tokens rather than trailing
+    padding. Only the MoE block has routing statistics for padding to distort; a dense
+    MLP is row-wise, so it takes the padded rows as they come.
     """
+    if sample_ids is not None:
+        assert sample_ids.shape == (input.shape[0],)
     if isinstance(mlp, Qwen3VLMoeTextSparseMoeBlock):
         (
             output_tensor,
             lbl_metadata,
-        ) = mlp(input)
+        ) = mlp(
+            input,
+            token_mask=token_mask,
+            sample_ids=sample_ids,
+            num_samples=num_samples,
+        )
     else:
+        if token_mask is not None:
+            # A dense MLP has no statistics to protect, but zeroing the padding rows still keeps a
+            # non-finite value left there by an upstream masked attention out of its weight
+            # gradients, which the rows would otherwise reach now that they are no longer sliced off.
+            input = torch.where(token_mask.unsqueeze(1), input, input.new_zeros(()))
         output_tensor = mlp(input)
         lbl_metadata = None
     return output_tensor, lbl_metadata
+
+
+def _get_local_sample_ids(pack: SequencePack, pathway: str) -> tuple[torch.Tensor, int]:
+    """Return per-token sample IDs and the global sample count for a packed pathway."""
+    assert pathway in ("und", "gen")
+    sample_ids_key = "_causal_sample_ids" if pathway == "und" else "_full_only_sample_ids"
+    sample_ids = pack[sample_ids_key]  # [N_pathway]
+    num_samples = pack["sample_offsets"].shape[0] - 1
+    return sample_ids, num_samples
+
+
+def _real_token_mask(num_rows: int, num_real_tokens: int, device: torch.device) -> torch.Tensor:
+    """Which of a stream's ``num_rows`` rows hold real tokens rather than trailing padding.
+
+    A mask keeps every downstream shape independent of the count. Slicing the stream by the
+    count instead makes the MLP input's length data dependent, so ``torch.compile`` guards on
+    it and recompiles the layer whenever context-parallel sharding lands a different amount
+    of padding on a rank.
+    """
+    return torch.arange(num_rows, device=device) < num_real_tokens
 
 
 class MoTDecoderLayer(nn.Module):
@@ -1030,9 +1140,15 @@ class MoTDecoderLayer(nn.Module):
         gen_noisy_gating: bool = False,
         gen_cosine_router_config: CosineRouterConfig | None = None,
         gen_aux_loss_free_load_balancing_config: AuxLossFreeLoadBalancingConfig | None = None,
+        lbl_config: LBLConfig | None = None,
+        gen_moe_shared_expert: bool = False,
+        gen_moe_shared_expert_intermediate_scale: int = 1,
+        gen_moe_top_k: int | None = None,
+        include_gen_pathway: bool = True,
     ) -> None:
         super().__init__()
         self.hidden_size = config.hidden_size
+        self.include_gen_pathway = include_gen_pathway
         self.self_attn = PackedAttentionMoT(
             config,
             layer_types=layer_types,
@@ -1040,6 +1156,7 @@ class MoTDecoderLayer(nn.Module):
             qk_norm_for_text=qk_norm_for_text,
             qk_norm_for_diffusion=qk_norm_for_diffusion,
             use_und_k_norm_for_gen=use_und_k_norm_for_gen,
+            include_gen_pathway=include_gen_pathway,
         )
 
         if (
@@ -1048,22 +1165,33 @@ class MoTDecoderLayer(nn.Module):
             and (config.num_experts > 0 and (layer_idx + 1) % config.decoder_sparse_step == 0)
         ):
             self.mlp = Qwen3VLMoeTextSparseMoeBlock(config)
-            # Noisy gating, the cosine router, and aux-loss-free load balancing
-            # are gen-tower only.
-            self.mlp_moe_gen = Qwen3VLMoeTextSparseMoeBlock(
-                config,
-                noisy_gating=gen_noisy_gating,
-                cosine_router_config=gen_cosine_router_config,
-                aux_loss_free_load_balancing_config=gen_aux_loss_free_load_balancing_config,
-            )
+            if include_gen_pathway:
+                # Noisy gating, the cosine router, aux-loss-free load balancing,
+                # the shared expert, and the top-k override are gen-tower only.
+                self.mlp_moe_gen = Qwen3VLMoeTextSparseMoeBlock(
+                    config,
+                    noisy_gating=gen_noisy_gating,
+                    cosine_router_config=gen_cosine_router_config,
+                    aux_loss_free_load_balancing_config=gen_aux_loss_free_load_balancing_config,
+                    enable_shared_expert=gen_moe_shared_expert,
+                    shared_expert_intermediate_scale=gen_moe_shared_expert_intermediate_scale,
+                    top_k=gen_moe_top_k,
+                )
         else:
             self.mlp = layer_types.mlp(config)
-            self.mlp_moe_gen = layer_types.mlp(config)
+            if include_gen_pathway:
+                self.mlp_moe_gen = layer_types.mlp(config)
 
+        # Each ``*_moe_gen`` norm stays registered next to its und counterpart so the
+        # module (and therefore state-dict) order is byte-for-byte the previous one
+        # whenever the generation pathway is built.
         self.input_layernorm = layer_types.rms_norm(config.hidden_size, eps=config.rms_norm_eps)
-        self.input_layernorm_moe_gen = layer_types.rms_norm(config.hidden_size, eps=config.rms_norm_eps)
+        if include_gen_pathway:
+            self.input_layernorm_moe_gen = layer_types.rms_norm(config.hidden_size, eps=config.rms_norm_eps)
         self.post_attention_layernorm = layer_types.rms_norm(config.hidden_size, eps=config.rms_norm_eps)
-        self.post_attention_layernorm_moe_gen = layer_types.rms_norm(config.hidden_size, eps=config.rms_norm_eps)
+        if include_gen_pathway:
+            self.post_attention_layernorm_moe_gen = layer_types.rms_norm(config.hidden_size, eps=config.rms_norm_eps)
+        self.lbl_config: LBLConfig = lbl_config or LBLConfig()
 
     def forward(
         self,
@@ -1151,22 +1279,29 @@ class MoTDecoderLayer(nn.Module):
 
         # Pre-MLP layernorm and processing
         lbl_metadata_dict: dict[str, LBLMetadata] = dict()
+        gen_sample_ids = None
+        gen_num_samples = None
+        if self.lbl_config.method == "sample" and self.lbl_config.coeff_gen is not None:
+            gen_sample_ids, gen_num_samples = _get_local_sample_ids(input, "gen")
 
         if gen_only:
             # gen_only: skip und, compute gen tokens only
             ln_out_und = residual_gen.new_empty(0, residual_gen.shape[-1])
             ln_out_gen = self.post_attention_layernorm_moe_gen(residual_gen)
 
-            # UNPAD MLP INPUT (gen only)
-            gen_len = pack_attn_out["_num_full_tokens"]
-            ln_out_gen_unpadded = ln_out_gen[:gen_len]  # [N_gen_unpadded,hidden_size]
+            # MASK MLP PADDING (gen only)
+            _, gen_len = get_num_real_tokens(pack_attn_out)
+            gen_token_mask = _real_token_mask(ln_out_gen.shape[0], gen_len, ln_out_gen.device)  # [N_gen]
 
             # Run MLP (gen only)
-            mlp_out_gen_unpadded, lbl_metadata_gen = _run_mlp(self.mlp_moe_gen, ln_out_gen_unpadded)
-            # mlp_out_gen_unpadded: [N_gen_unpadded,hidden_size]
-
-            # PAD MLP OUTPUT (gen only)
-            mlp_out_gen = torch.cat([mlp_out_gen_unpadded, ln_out_gen[gen_len:]], dim=0)  # [N_gen,hidden_size]
+            mlp_out_gen, lbl_metadata_gen = _run_mlp(
+                self.mlp_moe_gen,
+                ln_out_gen,
+                gen_token_mask,
+                sample_ids=gen_sample_ids,
+                num_samples=gen_num_samples,
+            )
+            # mlp_out_gen: [N_gen,hidden_size], zero on the padding rows
 
             # Build metadata dict (no und metadata in optimized path)
             if lbl_metadata_gen is not None:
@@ -1180,22 +1315,33 @@ class MoTDecoderLayer(nn.Module):
             ln_out_und = self.post_attention_layernorm(residual_und)  # [N_und,hidden_size]
             ln_out_gen = self.post_attention_layernorm_moe_gen(residual_gen)  # [N_gen,hidden_size]
 
-            # UNPAD MLP INPUT ===============
+            # MASK MLP PADDING ===============
             # NOTE: This is only need for the MoE auxiliary loss computation and to avoid
             #       artificial expert inbalance due to routing padding tokens.
-            gen_len = pack_attn_out["_num_full_tokens"]
-            und_len = pack_attn_out["_num_causal_tokens"]
-            ln_out_und_unpadded = ln_out_und[:und_len]  # [N_und_unpadded,hidden_size]
-            ln_out_gen_unpadded = ln_out_gen[:gen_len]  # [N_gen_unpadded,hidden_size]
+            und_len, gen_len = get_num_real_tokens(pack_attn_out)
+            und_token_mask = _real_token_mask(ln_out_und.shape[0], und_len, ln_out_und.device)  # [N_und]
+            gen_token_mask = _real_token_mask(ln_out_gen.shape[0], gen_len, ln_out_gen.device)  # [N_gen]
 
-            mlp_out_und_unpadded, lbl_metadata_und = _run_mlp(self.mlp, ln_out_und_unpadded)
-            # mlp_out_und_unpadded: [N_und_unpadded,hidden_size]
-            mlp_out_gen_unpadded, lbl_metadata_gen = _run_mlp(self.mlp_moe_gen, ln_out_gen_unpadded)
-            # mlp_out_gen_unpadded: [N_gen_unpadded,hidden_size]
-
-            # PAD MLP OUTPUT ===============
-            mlp_out_und = torch.cat([mlp_out_und_unpadded, ln_out_und[und_len:]], dim=0)  # [N_und,hidden_size]
-            mlp_out_gen = torch.cat([mlp_out_gen_unpadded, ln_out_gen[gen_len:]], dim=0)  # [N_gen,hidden_size]
+            und_sample_ids = None
+            und_num_samples = None
+            if self.lbl_config.method == "sample" and self.lbl_config.coeff_und is not None:
+                und_sample_ids, und_num_samples = _get_local_sample_ids(input, "und")
+            mlp_out_und, lbl_metadata_und = _run_mlp(
+                self.mlp,
+                ln_out_und,
+                und_token_mask,
+                sample_ids=und_sample_ids,
+                num_samples=und_num_samples,
+            )
+            # mlp_out_und: [N_und,hidden_size], zero on the padding rows
+            mlp_out_gen, lbl_metadata_gen = _run_mlp(
+                self.mlp_moe_gen,
+                ln_out_gen,
+                gen_token_mask,
+                sample_ids=gen_sample_ids,
+                num_samples=gen_num_samples,
+            )
+            # mlp_out_gen: [N_gen,hidden_size], zero on the padding rows
 
             if lbl_metadata_und is not None:
                 lbl_metadata_dict["und"] = lbl_metadata_und
@@ -1252,8 +1398,9 @@ class MoTDecoderLayer(nn.Module):
         # and ``Qwen3VLMoeTextSparseMoeBlock`` (returns ``(Tensor, LBLMetadata)``).
         # The MoE block expects flat ``[N, hidden_size]`` input, so we flatten and
         # reshape back.  In inference we discard the LBL metadata.
+        # No token mask: this path runs one dense reasoner batch, whose rows are all real.
         B, T, H = h.shape
-        mlp_out, _ = _run_mlp(self.mlp, h.reshape(B * T, H))  # [B*T,hidden_size]
+        mlp_out, _ = _run_mlp(self.mlp, h.reshape(B * T, H), None)  # [B*T,hidden_size]
         mlp_out = mlp_out.view(B, T, H)
         return residual + mlp_out  # [B,T,hidden_size]
 
@@ -1272,6 +1419,7 @@ class Qwen3VLTextModel(Qwen3VLPreTrainedModel):
         qk_norm_for_text: bool,
         qk_norm_for_diffusion: bool,
         use_und_k_norm_for_gen: bool,
+        include_gen_pathway: bool = True,
     ):
         super().__init__(config)
         _impl_init(
@@ -1281,10 +1429,8 @@ class Qwen3VLTextModel(Qwen3VLPreTrainedModel):
             qk_norm_for_text=qk_norm_for_text,
             qk_norm_for_diffusion=qk_norm_for_diffusion,
             use_und_k_norm_for_gen=use_und_k_norm_for_gen,
+            include_gen_pathway=include_gen_pathway,
         )
-
-    def init_taylorseer(self, cache_dic=None, current=None):
-        _impl_init_taylorseer(self, cache_dic=cache_dic, current=current)
 
     def forward(self, *args, **kwargs):
         return _impl_forward(self, *args, **kwargs)
@@ -1310,6 +1456,11 @@ class Qwen3VLMoeTextModel(Qwen3VLMoePreTrainedModel):
         gen_noisy_gating: bool = False,
         gen_cosine_router_config: CosineRouterConfig | None = None,
         gen_aux_loss_free_load_balancing_config: AuxLossFreeLoadBalancingConfig | None = None,
+        lbl_config: LBLConfig | None = None,
+        gen_moe_shared_expert: bool = False,
+        gen_moe_shared_expert_intermediate_scale: int = 1,
+        gen_moe_top_k: int | None = None,
+        include_gen_pathway: bool = True,
     ) -> None:
         super().__init__(config)
         _impl_init(
@@ -1322,10 +1473,12 @@ class Qwen3VLMoeTextModel(Qwen3VLMoePreTrainedModel):
             gen_noisy_gating=gen_noisy_gating,
             gen_cosine_router_config=gen_cosine_router_config,
             gen_aux_loss_free_load_balancing_config=gen_aux_loss_free_load_balancing_config,
+            lbl_config=lbl_config,
+            gen_moe_shared_expert=gen_moe_shared_expert,
+            gen_moe_shared_expert_intermediate_scale=gen_moe_shared_expert_intermediate_scale,
+            gen_moe_top_k=gen_moe_top_k,
+            include_gen_pathway=include_gen_pathway,
         )
-
-    def init_taylorseer(self, cache_dic=None, current=None):
-        _impl_init_taylorseer(self, cache_dic=cache_dic, current=current)
 
     def forward(self, *args, **kwargs):
         return _impl_forward(self, *args, **kwargs)
@@ -1348,6 +1501,7 @@ class Nemotron3DenseVLTextModel(Nemotron3DenseVLPreTrainedModel):
         qk_norm_for_text: bool,
         qk_norm_for_diffusion: bool,
         use_und_k_norm_for_gen: bool,
+        include_gen_pathway: bool = True,
     ):
         super().__init__(config)
         _impl_init(
@@ -1357,10 +1511,8 @@ class Nemotron3DenseVLTextModel(Nemotron3DenseVLPreTrainedModel):
             qk_norm_for_text=qk_norm_for_text,
             qk_norm_for_diffusion=qk_norm_for_diffusion,
             use_und_k_norm_for_gen=use_und_k_norm_for_gen,
+            include_gen_pathway=include_gen_pathway,
         )
-
-    def init_taylorseer(self, cache_dic=None, current=None) -> None:
-        _impl_init_taylorseer(self, cache_dic=cache_dic, current=current)
 
     def forward(self, *args, **kwargs):
         return _impl_forward(self, *args, **kwargs)
@@ -2037,6 +2189,7 @@ class Qwen3VLTextForCausalLM(Qwen3VLPreTrainedModel):
             qk_norm_for_text=config.qk_norm_for_text,
             qk_norm_for_diffusion=config.qk_norm_for_diffusion,
             use_und_k_norm_for_gen=getattr(config, "use_und_k_norm_for_gen", False),
+            include_gen_pathway=getattr(config, "include_gen_pathway", True),
         )
         self.vocab_size = text_config.vocab_size
         self.lm_head = nn.Linear(text_config.hidden_size, text_config.vocab_size, bias=False)
@@ -2172,7 +2325,12 @@ class Qwen3VLMoeTextForCausalLM(Qwen3VLMoePreTrainedModel):
     # lm_head.weight is tied to model.embed_tokens.weight
     _tied_weights_keys: list[str] = ["lm_head.weight"]
 
-    def __init__(self, config: Qwen3VLMoeMoTConfig):
+    def __init__(
+        self,
+        config: Qwen3VLMoeMoTConfig,
+        *,
+        lbl_config: LBLConfig | None = None,
+    ) -> None:
         super().__init__(config.full_config)
 
         text_config = config.text_config
@@ -2181,9 +2339,18 @@ class Qwen3VLMoeTextForCausalLM(Qwen3VLMoePreTrainedModel):
             qk_norm_for_text=config.qk_norm_for_text,
             qk_norm_for_diffusion=config.qk_norm_for_diffusion,
             use_und_k_norm_for_gen=getattr(config, "use_und_k_norm_for_gen", False),
+            include_gen_pathway=getattr(config, "include_gen_pathway", True),
             gen_noisy_gating=config.gen_noisy_gating,
             gen_cosine_router_config=getattr(config, "gen_cosine_router_config", None),
             gen_aux_loss_free_load_balancing_config=config.gen_aux_loss_free_load_balancing_config,
+            lbl_config=lbl_config,
+            gen_moe_shared_expert=getattr(config, "gen_moe_shared_expert", False),
+            gen_moe_shared_expert_intermediate_scale=getattr(
+                config,
+                "gen_moe_shared_expert_intermediate_scale",
+                1,
+            ),
+            gen_moe_top_k=getattr(config, "gen_moe_top_k", None),
         )
         self.vocab_size = text_config.vocab_size
         self.lm_head = nn.Linear(text_config.hidden_size, text_config.vocab_size, bias=False)
@@ -2222,6 +2389,10 @@ class Qwen3VLMoeTextForCausalLM(Qwen3VLMoePreTrainedModel):
             elif "router_bias" in original_name:
                 # Learned cosine-router de-sink bias is gen-tower only (the und tower
                 # has no router_bias counterpart), so keep its zero-init.
+                pass
+            elif "shared_expert" in original_name:
+                # Shared expert is gen-tower only with no und counterpart; keep its
+                # init_weights values (random up-proj, zero down-proj).
                 pass
             else:
                 raise ValueError(f"Could not find {original_name} in state_dict for initialization of {name}")
@@ -2372,6 +2543,7 @@ class Nemotron3DenseVLTextForCausalLM(Nemotron3DenseVLPreTrainedModel):
             qk_norm_for_text=config.qk_norm_for_text,
             qk_norm_for_diffusion=config.qk_norm_for_diffusion,
             use_und_k_norm_for_gen=getattr(config, "use_und_k_norm_for_gen", False),
+            include_gen_pathway=getattr(config, "include_gen_pathway", True),
         )
         self.vocab_size = text_config.vocab_size
         self.lm_head = nn.Linear(text_config.hidden_size, text_config.vocab_size, bias=False)

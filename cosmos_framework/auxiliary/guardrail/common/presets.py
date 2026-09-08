@@ -22,11 +22,17 @@ def create_text_guardrail_runner(offload_model_to_cpu: bool = False) -> Guardrai
 
 def create_video_guardrail_runner(offload_model_to_cpu: bool = False) -> GuardrailRunner:
     """Create the video guardrail runner."""
+    safety_models = [
+        # VideoContentSafetyFilter(offload_model_to_cpu=offload_model_to_cpu)
+        # Too many false positives, add back when fixed
+    ]
+    if not safety_models:
+        log.warning(
+            "Video content safety classifier is disabled in this release; "
+            "effective guardrail coverage is text checks and face blur only."
+        )
     return GuardrailRunner(
-        safety_models=[
-            # VideoContentSafetyFilter(offload_model_to_cpu=offload_model_to_cpu)
-            # Too many false positives, add back when fixed
-        ],
+        safety_models=safety_models,
         postprocessors=[RetinaFaceFilter(offload_model_to_cpu=offload_model_to_cpu)],
     )
 

@@ -20,10 +20,8 @@ the VLM forward always consumes -- so it is correct for the VLM path and
 self-normalizes for any residual per-step token variation.
 
 Measurement notes:
-  - Reports rank-0 *per-GPU* throughput. With token-based packing (each rank
-    packs to the same ``max_tokens`` budget) this is representative of every
-    rank; no cross-rank collective is taken, so the callback adds no
-    communication and does not contaminate timing.
+  - Accumulates every gradient-accumulation microbatch and reduces once per logging window.
+    Reports global token sums, per-GPU rates, rank min/mean/max, and max-rank memory.
   - ``input_ids.numel()`` is a metadata read (tensor shape), so it triggers no
     device sync.
   - Content (non-pad) tokens are read from the loader-emitted CPU int
@@ -37,7 +35,9 @@ Measurement notes:
 Packing-aware telemetry. On top of the headline
 throughput rate, this callback reports the "iteration speed per sample at a given packing
 density" view, in four groups:
-  - per-sample / per-step: ``sec_per_sample``, ``samples_per_step``, ``tokens_per_step``.
+  - per-sample / per-microbatch: ``sec_per_sample``, ``samples_per_step``, ``tokens_per_step``.
+    The historical ``*_per_step`` aliases are per-rank microbatch metrics; explicit optimizer-step
+    and global names are emitted separately so gradient accumulation cannot change their meaning.
   - density: ``useful_util`` (= U/padded), supervision density ``rho_sup`` (= U*/U),
     ``attention_quadratic_waste`` (the O(L^2) work true packing would remove), and the
     unpadded ``seq_max_len`` (l_max) mean/max.
@@ -58,6 +58,7 @@ import os
 import time
 
 import torch
+import torch.distributed as dist
 import wandb
 from torch import Tensor
 
@@ -65,7 +66,8 @@ from cosmos_framework.callbacks.every_n import EveryN
 from cosmos_framework.model._base import ImaginaireModel
 from cosmos_framework.trainer import ImaginaireTrainer
 from cosmos_framework.utils import log
-from cosmos_framework.utils.distributed import is_rank0, rank0_only
+from cosmos_framework.utils.distributed import is_rank0
+from cosmos_framework.data.generator.packing_iterable_dataset import FP8_PAD_MULTIPLE, SingletonCause
 
 
 class VLMTokensPerSec(EveryN):
@@ -118,19 +120,51 @@ class VLMTokensPerSec(EveryN):
         self._samples_in_window: int = 0
         self._singleton_steps_in_window: int = 0
         self._steps_in_window: int = 0
+        self._optimizer_steps_in_window: int = 0
         self._window_start_time: float | None = None
         # Extended packing telemetry (all from loader-emitted CPU ints -> sync-free).
         self._supervised_tokens_in_window: int = 0  # U* = #(labels != ignore_index)
-        self._padded_attn_in_window: int = 0  # Σ_step k * padded_len^2 (attention work paid)
+        self._padded_attn_in_window: int = 0  # Σ_step attended token pairs (attention work paid)
         self._content_attn_in_window: int = 0  # Σ_step Σ_i L_i^2 (attention work needed)
+        self._equivalent_padded_attn_in_window: int = 0  # Σ_step k*round16(l_max)^2 reference
         self._seq_max_len_sum: int = 0  # for mean l_max over the window
         self._seq_max_len_max: int = 0  # max l_max over the window
         self._seq_max_len_steps: int = 0  # #steps that carried seq_max_len (for the mean)
         # Cost-model calibration: packer-predicted per-step runtime (FLOP path only).
         self._predicted_runtime_ms_in_window: float = 0.0
         self._predicted_steps_in_window: int = 0
+        # Packing diagnostics from the dynamic batcher.
+        #   over_budget: #multi-sample steps whose realized padded cost exceeded the correct
+        #     token budget -> the budget-gate symptom (0 under the fixed gate, >0 under legacy).
+        #   singleton_cause: histogram of WHY singleton steps happened (SingletonCause value).
+        self._over_budget_steps_in_window: int = 0
+        self._singleton_cause_counts: dict[int, int] = {}
+        # Packing-time telemetry: collate (batch-assembly) wall-time emitted per step by
+        # custom_collate. Averaged over the window and compared against timer/dataloader_train to see
+        # whether the packing assembly ever surfaces as a main-process fetch stall.
+        self._collate_ms_in_window: float = 0.0
+        self._collate_steps_in_window: int = 0
+        # Block-sparsity reference: Σ_step (Σ_i L_i)^2 = Σ_step S^2, the DENSE packed-row attention a
+        # single B=1 row WOULD cost. Against Σ_i L_i^2 (content_attn) this is the off-diagonal fraction
+        # the varlen (cu_seqlens) kernel skips -- reported as attn_block_sparsity, a data property
+        # distinct from the padded-reference attn_quadratic_waste (see the report section).
+        self._packed_dense_attn_in_window: int = 0
 
-    def on_training_step_end(
+    def on_training_step_batch_start(
+        self,
+        model: ImaginaireModel,
+        data_batch: dict[str, torch.Tensor],
+        iteration: int = 0,
+    ) -> None:
+        """Open the window before the first measured microbatch starts computing."""
+        if self._enabled and self._hit_counter >= self.hit_thres and self._window_start_time is None:
+            if torch.cuda.is_available():
+                # Measure this reporting window only. A cumulative CUDA peak can otherwise include
+                # model construction, warmup, or an earlier validation pass.
+                torch.cuda.reset_peak_memory_stats()
+            self._window_start_time = time.time()
+
+    def on_training_step_batch_end(
         self,
         model: ImaginaireModel,
         data_batch: dict[str, torch.Tensor],
@@ -141,32 +175,18 @@ class VLMTokensPerSec(EveryN):
         # Telemetry-off A/B arm: complete no-op (no accumulation, no periodic report).
         if not self._enabled:
             return
-        # Skip warm-up steps entirely (no timing, no accumulation).
+        # Skip all microbatches belonging to warm-up optimizer steps.
         if self._hit_counter < self.hit_thres:
-            self._hit_counter += 1
             return
-
-        # Only rank 0 accumulates AND reports. every_n_impl (which resets the window) is
-        # @rank0_only, so accumulating on the other ranks would never reset -- their window
-        # counters (notably _padded_attn_in_window ~ Σ k·l_max²) would grow for the entire
-        # run. This callback takes no cross-rank collective (it reports rank-0 per-GPU
-        # throughput), so scoping accumulation to rank 0 matches the report/reset scope.
-        # Non-rank0 still delegates to EveryN below so its periodic distributed barrier
-        # (barrier_after_run) stays collective and in lockstep.
-        if not is_rank0():
-            super().on_training_step_end(model, data_batch, output_batch, loss, iteration)
-            return
-
-        # Open the timing window on the first post-warm-up step.
-        if self._window_start_time is None:
-            self._window_start_time = time.time()
 
         ids = data_batch.get(self.length_key)
         if ids is not None:
-            # numel() is the PADDED token count (dynamic batching pads each batch to
-            # its longest member); shape[0] is the number of packed samples this step.
-            n_samples = int(ids.shape[0]) if ids.dim() > 1 else 1
+            # numel() is the physical token count. shape[0] counts rows, while a true-packed
+            # row can contain several logical samples.
+            n_rows = int(ids.shape[0]) if ids.dim() > 1 else 1
             self._tokens_in_window += int(ids.numel())
+            logical_batch_size = data_batch.get("logical_batch_size")
+            n_samples = int(logical_batch_size) if logical_batch_size is not None else n_rows
             self._samples_in_window += n_samples
             if n_samples == 1:
                 self._singleton_steps_in_window += 1
@@ -184,8 +204,10 @@ class VLMTokensPerSec(EveryN):
             else:
                 pad = data_batch.get("pad_token_id")
                 if pad is not None:
-                    pad_id = int(pad.flatten()[0])
-                    self._useful_tokens_in_window += int((ids != pad_id).sum())
+                    flat_pad = pad.flatten()  # [N_pad]
+                    pad_id = int(flat_pad[0])
+                    non_pad_mask = ids != pad_id  # [B,T]
+                    self._useful_tokens_in_window += int(non_pad_mask.sum())  # [] -> int
 
             # Extended packing telemetry. All reads are loader-emitted CPU ints (or tensor
             # shape metadata), so this adds NO device sync to the timed step. Each is guarded
@@ -202,19 +224,67 @@ class VLMTokensPerSec(EveryN):
                 self._seq_max_len_sum += smax
                 self._seq_max_len_max = max(self._seq_max_len_max, smax)
                 self._seq_max_len_steps += 1
-            # Padded attention work this step = n_samples * padded_len^2. padded_len is the
-            # row length the model actually attends over (shape metadata -> no sync).
-            padded_len = int(ids.shape[1]) if ids.dim() > 1 else int(ids.shape[0])
-            self._padded_attn_in_window += n_samples * padded_len * padded_len
+            # The collate emits the actual block-diagonal work: padded rows pay B*T_pad^2;
+            # true packing pays sum(L_i^2) plus the isolated FP8 tail segment. Fall back to
+            # the physical dense-row work for collates that do not expose this metadata.
+            attended_token_pairs = data_batch.get("attended_token_pairs")
+            if attended_token_pairs is not None:
+                self._padded_attn_in_window += int(attended_token_pairs)
+            else:
+                padded_len = int(ids.shape[1]) if ids.dim() > 1 else int(ids.shape[0])
+                self._padded_attn_in_window += n_rows * padded_len * padded_len
+
+            # Layout-independent references for interpreting the actual paid work above.
+            if smax is not None and slq is not None:
+                equivalent_padded_len = ((smax + FP8_PAD_MULTIPLE - 1) // FP8_PAD_MULTIPLE) * FP8_PAD_MULTIPLE
+                self._equivalent_padded_attn_in_window += n_samples * equivalent_padded_len * equivalent_padded_len
+                if content is not None:
+                    dense_packed_length = int(content)
+                    self._packed_dense_attn_in_window += dense_packed_length * dense_packed_length
+            else:
+                padded_len = int(ids.shape[1]) if ids.dim() > 1 else int(ids.shape[0])
+                self._equivalent_padded_attn_in_window += n_rows * padded_len * padded_len
+            # Packing diagnostics (loader-emitted CPU ints -> sync-free; absent on non-packer
+            # collates). over_budget counts the budget-gate symptom; singleton_cause bins WHY a step
+            # was a singleton so the singleton_rate is actionable.
+            ob = data_batch.get("over_budget")
+            if ob is not None:
+                self._over_budget_steps_in_window += int(ob)
+            if n_samples == 1:
+                sc = data_batch.get("singleton_cause")
+                if sc is not None:
+                    sc = int(sc)
+                    self._singleton_cause_counts[sc] = self._singleton_cause_counts.get(sc, 0) + 1
         # Packer-predicted per-step runtime (FLOP cost model), a CPU float emitted by
         # collate_fn only on the FLOP-batching path -> sync-free; absent => skipped.
         pred = data_batch.get("predicted_runtime_ms")
         if pred is not None:
             self._predicted_runtime_ms_in_window += float(pred)
             self._predicted_steps_in_window += 1
+        # Packing-time (batch-assembly) wall-time, a CPU float emitted per step by custom_collate
+        # (sync-free). Absent for a pre-collated / non-VLM batch -> that step is skipped, and the
+        # per-step mean below divides by the count of steps that actually carried it.
+        cms = data_batch.get("collate_ms")
+        if cms is not None:
+            self._collate_ms_in_window += float(cms)
+            self._collate_steps_in_window += 1
         self._steps_in_window += 1
 
-        # Delegate to EveryN for the periodic reporting cadence.
+    def on_training_step_end(
+        self,
+        model: ImaginaireModel,
+        data_batch: dict[str, torch.Tensor],
+        output_batch: dict[str, torch.Tensor],
+        loss: torch.Tensor,
+        iteration: int = 0,
+    ) -> None:
+        """Advance optimizer-step cadence after every microbatch has been accumulated."""
+        if not self._enabled:
+            return
+        if self._hit_counter < self.hit_thres:
+            self._hit_counter += 1
+            return
+        self._optimizer_steps_in_window += 1
         super().on_training_step_end(model, data_batch, output_batch, loss, iteration)
 
     def _get_num_params(self, model: ImaginaireModel) -> int | None:
@@ -260,7 +330,128 @@ class VLMTokensPerSec(EveryN):
             self._flop_coeff_resolved = 8.0 if ac_mode == "full" else 6.0
         return self._flop_coeff_resolved
 
-    @rank0_only
+    def _synchronize_window(self, elapsed: float) -> tuple[float, int, float, float, float, float, float, float]:
+        """Reduce one telemetry window once, outside the measured microbatch hot path."""
+        world_size = dist.get_world_size() if dist.is_available() and dist.is_initialized() else 1
+        reduce_device = (
+            torch.device("cuda", torch.cuda.current_device())
+            if dist.is_available() and dist.is_initialized() and dist.get_backend() == "nccl"
+            else torch.device("cpu")
+        )
+        local_useful_tps = self._useful_tokens_in_window / elapsed if elapsed > 0 else 0.0
+        local_predicted_microbatch_ms = (
+            self._predicted_runtime_ms_in_window / self._predicted_steps_in_window
+            if self._predicted_steps_in_window
+            else 0.0
+        )
+        cause_values = [self._singleton_cause_counts.get(cause.value, 0) for cause in SingletonCause]
+        sums = torch.tensor(  # [N_SUM]
+            [
+                self._tokens_in_window,
+                self._useful_tokens_in_window,
+                self._samples_in_window,
+                self._singleton_steps_in_window,
+                self._steps_in_window,
+                self._optimizer_steps_in_window,
+                self._supervised_tokens_in_window,
+                self._padded_attn_in_window,
+                self._content_attn_in_window,
+                self._seq_max_len_sum,
+                self._seq_max_len_steps,
+                self._predicted_runtime_ms_in_window,
+                self._predicted_steps_in_window,
+                self._over_budget_steps_in_window,
+                self._equivalent_padded_attn_in_window,
+                self._packed_dense_attn_in_window,
+                self._collate_ms_in_window,
+                self._collate_steps_in_window,
+                local_useful_tps,
+                *cause_values,
+            ],
+            dtype=torch.float64,
+            device=reduce_device,
+        )
+        peak_allocated_gb = torch.cuda.max_memory_allocated() / 1e9 if torch.cuda.is_available() else 0.0
+        peak_reserved_gb = torch.cuda.max_memory_reserved() / 1e9 if torch.cuda.is_available() else 0.0
+        maxima = torch.tensor(  # [N_MAX]
+            [
+                elapsed,
+                self._seq_max_len_max,
+                peak_allocated_gb,
+                peak_reserved_gb,
+                local_useful_tps,
+                local_predicted_microbatch_ms,
+            ],
+            dtype=torch.float64,
+            device=reduce_device,
+        )
+        minimum_useful_tps = torch.tensor([local_useful_tps], dtype=torch.float64, device=reduce_device)  # [1]
+        if world_size > 1:
+            dist.all_reduce(sums, op=dist.ReduceOp.SUM)
+            dist.all_reduce(maxima, op=dist.ReduceOp.MAX)
+            dist.all_reduce(minimum_useful_tps, op=dist.ReduceOp.MIN)
+
+        sum_values = sums.cpu().tolist()  # [N_SUM]
+        max_values = maxima.cpu().tolist()  # [N_MAX]
+        self._tokens_in_window = int(sum_values[0])
+        self._useful_tokens_in_window = int(sum_values[1])
+        self._samples_in_window = int(sum_values[2])
+        self._singleton_steps_in_window = int(sum_values[3])
+        self._steps_in_window = int(sum_values[4])
+        self._optimizer_steps_in_window = int(sum_values[5])
+        self._supervised_tokens_in_window = int(sum_values[6])
+        self._padded_attn_in_window = int(sum_values[7])
+        self._content_attn_in_window = int(sum_values[8])
+        self._seq_max_len_sum = int(sum_values[9])
+        self._seq_max_len_steps = int(sum_values[10])
+        self._predicted_runtime_ms_in_window = float(sum_values[11])
+        self._predicted_steps_in_window = int(sum_values[12])
+        self._over_budget_steps_in_window = int(sum_values[13])
+        self._equivalent_padded_attn_in_window = int(sum_values[14])
+        self._packed_dense_attn_in_window = int(sum_values[15])
+        self._collate_ms_in_window = float(sum_values[16])
+        self._collate_steps_in_window = int(sum_values[17])
+        self._singleton_cause_counts = {
+            cause.value: int(sum_values[19 + idx]) for idx, cause in enumerate(SingletonCause)
+        }
+        self._seq_max_len_max = int(max_values[1])
+        return (
+            float(max_values[0]),
+            world_size,
+            float(minimum_useful_tps.cpu().item()),  # [1] -> scalar
+            float(sum_values[18]) / world_size,
+            float(max_values[4]),
+            float(max_values[2]),
+            float(max_values[3]),
+            float(max_values[5]),
+        )
+
+    def _reset_window(self) -> None:
+        """Clear reduced counters for the next reporting interval."""
+        self._tokens_in_window = 0
+        self._useful_tokens_in_window = 0
+        self._samples_in_window = 0
+        self._singleton_steps_in_window = 0
+        self._steps_in_window = 0
+        self._optimizer_steps_in_window = 0
+        self._supervised_tokens_in_window = 0
+        self._padded_attn_in_window = 0
+        self._content_attn_in_window = 0
+        self._equivalent_padded_attn_in_window = 0
+        self._packed_dense_attn_in_window = 0
+        self._seq_max_len_sum = 0
+        self._seq_max_len_max = 0
+        self._seq_max_len_steps = 0
+        self._predicted_runtime_ms_in_window = 0.0
+        self._predicted_steps_in_window = 0
+        self._over_budget_steps_in_window = 0
+        self._singleton_cause_counts = {}
+        self._collate_ms_in_window = 0.0
+        self._collate_steps_in_window = 0
+        if torch.cuda.is_available():
+            torch.cuda.reset_peak_memory_stats()
+        self._window_start_time = time.time()
+
     def every_n_impl(
         self,
         trainer: ImaginaireTrainer,
@@ -270,16 +461,34 @@ class VLMTokensPerSec(EveryN):
         loss: Tensor,
         iteration: int,
     ) -> None:
-        if self._window_start_time is None or self._steps_in_window == 0:
+        elapsed = time.time() - self._window_start_time if self._window_start_time is not None else 0.0
+        (
+            elapsed,
+            world_size,
+            useful_tps_rank_min,
+            useful_tps_rank_mean,
+            useful_tps_rank_max,
+            peak_mem_gb,
+            peak_reserved_mem_gb,
+            predicted_microbatch_ms_rank_max,
+        ) = self._synchronize_window(elapsed)
+
+        if elapsed <= 0 or self._tokens_in_window == 0 or self._steps_in_window == 0:
+            self._reset_window()
+            return
+        if not is_rank0():
+            self._reset_window()
             return
 
-        elapsed = time.time() - self._window_start_time
-        if elapsed <= 0 or self._tokens_in_window == 0:
-            return
-
-        tokens_per_sec_per_gpu = self._tokens_in_window / elapsed
-        tokens_per_step = self._tokens_in_window / self._steps_in_window
-        samples_per_step = self._samples_in_window / self._steps_in_window
+        tokens_per_sec_global = self._tokens_in_window / elapsed
+        tokens_per_sec_per_gpu = tokens_per_sec_global / world_size
+        optimizer_rank_steps = self._optimizer_steps_in_window or self._steps_in_window
+        tokens_per_rank_per_optimizer_step = self._tokens_in_window / optimizer_rank_steps
+        samples_per_rank_per_optimizer_step = self._samples_in_window / optimizer_rank_steps
+        tokens_per_rank_per_microbatch = self._tokens_in_window / self._steps_in_window
+        samples_per_rank_per_microbatch = self._samples_in_window / self._steps_in_window
+        tokens_global_per_optimizer_step = tokens_per_rank_per_optimizer_step * world_size
+        samples_global_per_optimizer_step = samples_per_rank_per_optimizer_step * world_size
         singleton_rate = self._singleton_steps_in_window / self._steps_in_window
 
         # Packing efficiency: useful (non-pad) tokens vs the padded budget actually
@@ -287,23 +496,37 @@ class VLMTokensPerSec(EveryN):
         # buy little); useful_util << 1 => padding waste (pool_size / scoring / true
         # sequence packing are the levers). useful_tokens_per_sec is the REAL training
         # throughput (what loss-vs-tokens should be measured against).
-        useful_tokens_per_sec_per_gpu = self._useful_tokens_in_window / elapsed
+        useful_tokens_per_sec_global = self._useful_tokens_in_window / elapsed
+        useful_tokens_per_sec_per_gpu = useful_tokens_per_sec_global / world_size
         useful_util = self._useful_tokens_in_window / self._tokens_in_window if self._tokens_in_window else 0.0
 
         # --- Extended packing telemetry (the "iteration speed per sample at a density" view) ---
         # sec_per_sample is only fair alongside the density terms below, so they are logged
         # together. NOTE: we intentionally do NOT log a
         # sec_per_useful_token -- it is the exact reciprocal of useful_tokens_per_sec_per_gpu.
-        sec_per_sample = elapsed / self._samples_in_window if self._samples_in_window else 0.0
+        sec_per_sample = elapsed * world_size / self._samples_in_window if self._samples_in_window else 0.0
         # rho_sup = U*/U : fraction of CONTENT tokens that carry a loss signal.
         rho_sup = (
             self._supervised_tokens_in_window / self._useful_tokens_in_window if self._useful_tokens_in_window else 0.0
         )
-        useful_supervised_tokens_per_sec_per_gpu = self._supervised_tokens_in_window / elapsed
-        # attention-quadratic waste = 1 - Σ L_i^2 / Σ k*l_max^2 : the part of attention cost
-        # that true sequence packing removes but the linear useful_util cannot see.
+        useful_supervised_tokens_per_sec_per_gpu = self._supervised_tokens_in_window / elapsed / world_size
+        # Actual paid-vs-useful quadratic work. True packing is near zero except for the
+        # isolated FP8 tail; padded batching reports its realized row-padding tax.
         attention_quadratic_waste = (
             1.0 - self._content_attn_in_window / self._padded_attn_in_window if self._padded_attn_in_window else 0.0
+        )
+        equivalent_padded_attention_waste = (
+            1.0 - self._content_attn_in_window / self._equivalent_padded_attn_in_window
+            if self._equivalent_padded_attn_in_window
+            else 0.0
+        )
+        # block sparsity = 1 - Σ L_i^2 / Σ S^2 : off-diagonal fraction of a DENSE packed row that the
+        # cu_seqlens (block-diagonal) kernel skips. Distinct from attn_quadratic_waste: driven by the
+        # sample COUNT k, not intra-pack length variance. Also a data property (loader ints only).
+        attn_block_sparsity = (
+            1.0 - self._content_attn_in_window / self._packed_dense_attn_in_window
+            if self._packed_dense_attn_in_window
+            else 0.0
         )
         seq_max_len_mean = self._seq_max_len_sum / self._seq_max_len_steps if self._seq_max_len_steps else 0.0
         seq_max_len_max = self._seq_max_len_max
@@ -315,11 +538,11 @@ class VLMTokensPerSec(EveryN):
         # lowers comm-per-sample (more useful work under the same collectives). Structural estimate,
         # not a measured NCCL byte count.
         num_params = self._get_num_params(model)
-        useful_tokens_per_step = self._useful_tokens_in_window / self._steps_in_window
+        useful_tokens_per_rank_per_microbatch = self._useful_tokens_in_window / self._steps_in_window
         comm_bytes_per_useful_token = 0.0
-        if num_params and useful_tokens_per_step > 0:
-            comm_bytes_per_step = self._comm_factor * num_params * self._comm_dtype_bytes
-            comm_bytes_per_useful_token = comm_bytes_per_step / useful_tokens_per_step
+        if num_params and useful_tokens_per_rank_per_microbatch > 0:
+            comm_bytes_per_microbatch = self._comm_factor * num_params * self._comm_dtype_bytes
+            comm_bytes_per_useful_token = comm_bytes_per_microbatch / useful_tokens_per_rank_per_microbatch
 
         # --- Useful-MFU + compute-bound flag ---
         # useful_mfu = coeff * N * useful_tokens/s / peak (conventional linear-term MFU, but on
@@ -343,32 +566,73 @@ class VLMTokensPerSec(EveryN):
         # compute only, realized includes optimizer/comm/dataloader); a drifting or large ratio means
         # the packer is mis-sizing steps (oversized => comm under-amortized; undersized => throughput
         # left on the table). Populated only on the FLOP-batching path.
-        realized_step_ms = elapsed * 1000.0 / self._steps_in_window
-        predicted_step_ms = 0.0
+        microsteps_per_rank = self._steps_in_window / world_size
+        realized_microbatch_ms = elapsed * 1000.0 / microsteps_per_rank
+        predicted_microbatch_ms = 0.0
         realized_over_predicted = 0.0
         if self._predicted_steps_in_window > 0:
-            predicted_step_ms = self._predicted_runtime_ms_in_window / self._predicted_steps_in_window
-            if predicted_step_ms > 0:
-                realized_over_predicted = realized_step_ms / predicted_step_ms
+            # Compare the slowest realized rank with the slowest rank's mean prediction. A global
+            # mean prediction can hide exactly the rank skew that controls distributed step time.
+            predicted_microbatch_ms = predicted_microbatch_ms_rank_max
+            if predicted_microbatch_ms > 0:
+                realized_over_predicted = realized_microbatch_ms / predicted_microbatch_ms
 
-        # Cumulative device peak (NOT reset) -> OOM-headroom gate for Nmax/Tmax sweeps.
-        peak_mem_gb = torch.cuda.max_memory_allocated() / 1e9 if torch.cuda.is_available() else 0.0
+        # --- Packing-time diagnostic: batch-assembly (collate) wall-time per step ---
+        # collate_ms is the mean time custom_collate spends ASSEMBLING each batch in the dataloader
+        # worker (padding+stacking vs concat+cu_seqlens). It runs in worker processes overlapped with
+        # the GPU step, so a nonzero value is only a bottleneck if it also shows up in
+        # timer/dataloader_train (the main-process fetch wait). collate_ms_frac expresses it as a
+        # fraction of realized_microbatch_ms: << 1 means the packing assembly is fully hidden by compute.
+        # This is the metric for the true-packing-vs-padded dataloader-slowdown A/B.
+        collate_ms = (
+            self._collate_ms_in_window / self._collate_steps_in_window if self._collate_steps_in_window else 0.0
+        )
+        collate_ms_frac = collate_ms / realized_microbatch_ms if realized_microbatch_ms > 0 else 0.0
+
+        # --- Packing diagnostics: over-budget rate and singleton-cause breakdown ---
+        # over_budget_rate > 0 means the batcher admitted multi-sample steps past the token budget
+        # (the budget-gate bug; expected 0 under the fixed gate). The singleton-cause fractions (of all
+        # steps) say WHICH lever drives singleton_rate: BUDGET_CLIFF/FLOP_BUDGET -> raise the
+        # budget; NO_CANDIDATE -> raise pool_size / improve interleaving; MAX_BATCH_CAP -> raise
+        # max_batch_size; LONG_THRESHOLD -> inherent long samples (true packing would help).
+        over_budget_rate = self._over_budget_steps_in_window / self._steps_in_window if self._steps_in_window else 0.0
+        singleton_cause_str = ""
+        singleton_cause_wandb: dict[str, float] = {}
+        if self._steps_in_window:
+            for cause in SingletonCause:
+                if cause is SingletonCause.NONE:
+                    continue
+                frac = self._singleton_cause_counts.get(cause.value, 0) / self._steps_in_window
+                singleton_cause_wandb[f"packing/singleton_{cause.name.lower()}_rate"] = frac
+                if frac > 0:
+                    singleton_cause_str += f"{cause.name.lower()} {frac:.3f} "
 
         log.info(
             f"{iteration} : tokens_per_sec_per_gpu {tokens_per_sec_per_gpu:.1f} | "
             f"useful_tokens_per_sec_per_gpu {useful_tokens_per_sec_per_gpu:.1f} | "
             f"useful_supervised_tokens_per_sec_per_gpu {useful_supervised_tokens_per_sec_per_gpu:.1f} | "
-            f"tokens_per_step {tokens_per_step:.1f} | samples_per_step {samples_per_step:.2f} | "
+            f"tokens_per_rank_per_optimizer_step {tokens_per_rank_per_optimizer_step:.1f} | "
+            f"samples_per_rank_per_optimizer_step {samples_per_rank_per_optimizer_step:.2f} | "
+            f"tokens_per_rank_per_microbatch {tokens_per_rank_per_microbatch:.1f} | "
+            f"samples_per_rank_per_microbatch {samples_per_rank_per_microbatch:.2f} | "
             f"sec_per_sample {sec_per_sample:.4f} | "
             f"useful_util {useful_util:.3f} | rho_sup {rho_sup:.3f} | "
             f"attn_quadratic_waste {attention_quadratic_waste:.3f} | "
+            f"equivalent_padded_attn_waste {equivalent_padded_attention_waste:.3f} | "
+            f"attn_block_sparsity {attn_block_sparsity:.3f} | "
+            f"collate_ms {collate_ms:.2f} | collate_ms_frac {collate_ms_frac:.3f} | "
             f"seq_max_len_mean {seq_max_len_mean:.0f} | seq_max_len_max {seq_max_len_max} | "
             f"useful_mfu {useful_mfu:.3f} | compute_bound {compute_bound} | "
             f"comm_bytes_per_useful_token {comm_bytes_per_useful_token:.1f} | "
-            f"realized_step_ms {realized_step_ms:.0f} | predicted_step_ms {predicted_step_ms:.0f} | "
+            f"realized_microbatch_ms {realized_microbatch_ms:.0f} | "
+            f"predicted_microbatch_ms {predicted_microbatch_ms:.0f} | "
             f"realized_over_predicted {realized_over_predicted:.2f} | "
-            f"singleton_rate {singleton_rate:.3f} | "
-            f"peak_mem_gb {peak_mem_gb:.1f} | steps_in_window {self._steps_in_window}",
+            f"singleton_rate {singleton_rate:.3f} | over_budget_rate {over_budget_rate:.3f} | "
+            f"singleton_cause [ {singleton_cause_str}] | "
+            f"useful_tps_rank_min_mean_max {useful_tps_rank_min:.1f}/{useful_tps_rank_mean:.1f}/"
+            f"{useful_tps_rank_max:.1f} | peak_mem_gb {peak_mem_gb:.1f} | "
+            f"peak_reserved_mem_gb {peak_reserved_mem_gb:.1f} | "
+            f"microsteps_in_window_per_rank {microsteps_per_rank:.0f}",
             rank0_only=False,
         )
 
@@ -376,40 +640,46 @@ class VLMTokensPerSec(EveryN):
             wandb.log(
                 {
                     "throughput/tokens_per_sec_per_gpu": tokens_per_sec_per_gpu,
+                    "throughput/tokens_per_sec_global": tokens_per_sec_global,
                     "throughput/useful_tokens_per_sec_per_gpu": useful_tokens_per_sec_per_gpu,
+                    "throughput/useful_tokens_per_sec_global": useful_tokens_per_sec_global,
+                    "throughput/useful_tokens_per_sec_rank_min": useful_tps_rank_min,
+                    "throughput/useful_tokens_per_sec_rank_mean": useful_tps_rank_mean,
+                    "throughput/useful_tokens_per_sec_rank_max": useful_tps_rank_max,
                     "throughput/useful_supervised_tokens_per_sec_per_gpu": useful_supervised_tokens_per_sec_per_gpu,
-                    "throughput/tokens_per_step": tokens_per_step,
-                    "throughput/samples_per_step": samples_per_step,
+                    # Historical advisor aliases are per-rank microbatch values.
+                    "throughput/tokens_per_step": tokens_per_rank_per_microbatch,
+                    "throughput/samples_per_step": samples_per_rank_per_microbatch,
+                    "throughput/tokens_per_rank_per_optimizer_step": tokens_per_rank_per_optimizer_step,
+                    "throughput/samples_per_rank_per_optimizer_step": samples_per_rank_per_optimizer_step,
+                    "throughput/tokens_global_per_optimizer_step": tokens_global_per_optimizer_step,
+                    "throughput/samples_global_per_optimizer_step": samples_global_per_optimizer_step,
+                    "throughput/tokens_per_rank_per_microbatch": tokens_per_rank_per_microbatch,
+                    "throughput/samples_per_rank_per_microbatch": samples_per_rank_per_microbatch,
                     "throughput/sec_per_sample": sec_per_sample,
                     "throughput/useful_mfu": useful_mfu,
                     "throughput/compute_bound": compute_bound,
                     "throughput/singleton_rate": singleton_rate,
-                    "throughput/peak_mem_gb": peak_mem_gb,
+                    "throughput/peak_window_allocated_gb": peak_mem_gb,
+                    "throughput/peak_window_reserved_gb": peak_reserved_mem_gb,
                     "packing/useful_util": useful_util,
                     "packing/rho_sup": rho_sup,
                     "packing/attention_quadratic_waste": attention_quadratic_waste,
+                    "packing/equivalent_padded_attention_waste": equivalent_padded_attention_waste,
+                    "packing/attn_block_sparsity": attn_block_sparsity,
                     "packing/seq_max_len_mean": seq_max_len_mean,
                     "packing/seq_max_len_max": seq_max_len_max,
+                    "packing/over_budget_rate": over_budget_rate,
+                    **singleton_cause_wandb,
                     "comm/comm_bytes_per_useful_token": comm_bytes_per_useful_token,
-                    "cost_model/predicted_step_ms": predicted_step_ms,
-                    "cost_model/realized_step_ms": realized_step_ms,
+                    "cost_model/predicted_microbatch_ms_rank_max": predicted_microbatch_ms,
+                    "cost_model/realized_microbatch_ms": realized_microbatch_ms,
                     "cost_model/realized_over_predicted": realized_over_predicted,
+                    "dataloader/collate_ms": collate_ms,
+                    "dataloader/collate_ms_frac": collate_ms_frac,
                 },
                 step=iteration,
             )
 
-        # Reset the window (peak mem is intentionally left cumulative).
-        self._tokens_in_window = 0
-        self._useful_tokens_in_window = 0
-        self._samples_in_window = 0
-        self._singleton_steps_in_window = 0
-        self._steps_in_window = 0
-        self._supervised_tokens_in_window = 0
-        self._padded_attn_in_window = 0
-        self._content_attn_in_window = 0
-        self._seq_max_len_sum = 0
-        self._seq_max_len_max = 0
-        self._seq_max_len_steps = 0
-        self._predicted_runtime_ms_in_window = 0.0
-        self._predicted_steps_in_window = 0
-        self._window_start_time = time.time()
+        # Reset counters and CUDA peaks so the next report is a disjoint window.
+        self._reset_window()

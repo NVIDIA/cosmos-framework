@@ -385,10 +385,28 @@ class ConvLayer3d(nn.Module):
         elif self.causal:
             if feature_cache is not None:
                 idx = feat_idx[0]
-                cache = x[:, :, -self.custom_padding[4] :].clone().detach()
-                if feature_cache[idx] is not None:
-                    x[:, :, : self.custom_padding[4]] = feature_cache[idx]
-                feature_cache[idx] = cache
+                pad = self.custom_padding[4]
+                cached = feature_cache[idx]
+                tail = x[:, :, -pad:]
+                # The head (pad region) and the tail kept for the next chunk only stay
+                # disjoint while the chunk is at least twice the padding, which is what
+                # makes it safe to read the old cache out before overwriting it.
+                if cached is not None and x.shape[2] >= 2 * pad and cached.shape == tail.shape:
+                    assert cached.dtype == x.dtype, (
+                        f"Feature cache dtype {cached.dtype} does not match activation dtype {x.dtype}"
+                    )
+                    # Updating in place keeps the cache at a static address, which is what
+                    # lets CUDA graphs capture it without the caller cloning the whole
+                    # cache for every chunk.
+                    x[:, :, :pad] = cached
+                    cached.copy_(tail.detach())
+                else:
+                    # Overlapping head and tail: the tail has to be snapshotted before the
+                    # head is replaced. This rebinds the slot, which the caller reconciles.
+                    cache = tail.clone().detach()
+                    if cached is not None:
+                        x[:, :, :pad] = cached
+                    feature_cache[idx] = cache
                 feat_idx[0] += 1
             x = self.conv(x)
         else:

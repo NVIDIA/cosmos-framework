@@ -115,6 +115,7 @@ class EDMSampler(torch.nn.Module):
         S_max: float = float("inf"),
         S_noise: float = 1,
         solver_option: str = "2ab",
+        step_callback: Optional[Callable[[int, int], None]] = None,
     ) -> torch.Tensor:  # [B,StateShape]
         in_dtype = x_sigma_max.dtype
 
@@ -137,7 +138,7 @@ class EDMSampler(torch.nn.Module):
         timestamps_cfg = SolverTimestampConfig(nfe=num_steps, t_min=sigma_min, t_max=sigma_max, order=rho)
         sampler_cfg = EDMSamplerConfig(solver=solver_cfg, timestamps=timestamps_cfg, sample_clean=True)
 
-        return self._forward_impl(float64_x0_fn, x_sigma_max, sampler_cfg).to(in_dtype)
+        return self._forward_impl(float64_x0_fn, x_sigma_max, sampler_cfg, step_callback=step_callback).to(in_dtype)
 
     @torch.no_grad()
     def _forward_impl(
@@ -146,6 +147,7 @@ class EDMSampler(torch.nn.Module):
         noisy_input_B_StateShape: torch.Tensor,
         sampler_cfg: Optional[EDMSamplerConfig] = None,
         callback_fns: Optional[List[Callable]] = None,
+        step_callback: Optional[Callable[[int, int], None]] = None,
     ) -> torch.Tensor:
         """
         Internal implementation of the forward pass.
@@ -155,6 +157,9 @@ class EDMSampler(torch.nn.Module):
             noisy_input_B_StateShape: Input tensor with noise.
             sampler_cfg: Configuration for the sampler.
             callback_fns: List of callback functions to be called during sampling.
+            step_callback: Optional callback invoked once per denoising step,
+                before that step's model evaluation(s), as
+                ``step_callback(step_index, num_steps)``.
 
         Returns:
             torch.Tensor: Denoised output tensor.
@@ -171,7 +176,7 @@ class EDMSampler(torch.nn.Module):
             sigmas_L = sigmas_L / (1 + sigmas_L)  # [L]
 
         denoised_output = differential_equation_solver(
-            denoiser_fn, sigmas_L, sampler_cfg.solver, callback_fns=callback_fns
+            denoiser_fn, sigmas_L, sampler_cfg.solver, callback_fns=callback_fns, step_callback=step_callback
         )(noisy_input_B_StateShape)  # [B,StateShape]
 
         if sampler_cfg.sample_clean:
@@ -211,6 +216,7 @@ def differential_equation_solver(
     sigmas_L: torch.Tensor,  # [L]
     solver_cfg: SolverConfig,
     callback_fns: Optional[List[Callable]] = None,
+    step_callback: Optional[Callable[[int, int], None]] = None,
 ) -> Callable[[torch.Tensor], torch.Tensor]:
     """
     Creates a differential equation solver function.
@@ -220,6 +226,9 @@ def differential_equation_solver(
         sigmas_L: Tensor of sigma values with shape [L,].
         solver_cfg: Configuration for the solver.
         callback_fns: Optional list of callback functions.
+        step_callback: Optional callback invoked once per denoising step,
+            before that step's model evaluation(s), as
+            ``step_callback(step_index, num_steps)``.
 
     Returns:
         A function that solves the differential equation.
@@ -250,6 +259,8 @@ def differential_equation_solver(
         def step_fn(
             i_th: int, state: Tuple[torch.Tensor, Optional[List[torch.Tensor]]]
         ) -> Tuple[torch.Tensor, Optional[List[torch.Tensor]]]:
+            if step_callback is not None:
+                step_callback(i_th, num_step)
             input_x_B_StateShape, x0_preds = state  # [B,StateShape]
             sigma_cur_0, sigma_next_0 = sigmas_L[i_th], sigmas_L[i_th + 1]  # scalar, scalar
 

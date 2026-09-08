@@ -41,7 +41,6 @@ SUPER_MODEL_CONFIG = dict(
     input_video_key="video",
     joint_attn_implementation="two_way",
     latent_downsample_factor=16,
-    log_enc_time_every_n=100,
     lora_alpha=32,
     lora_enabled=True,
     lora_rank=16,

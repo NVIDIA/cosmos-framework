@@ -63,13 +63,13 @@ from PIL import Image
 # Action-specific helpers live in the in-tree project tree. Imports stay as
 # `projects.cosmos3.vfm.*` and are auto-rewritten to `cosmos3._src.vfm.*` by the
 # cosmos-framework release script.
-from cosmos_framework.data.generator.action.action_processing import (
+from cosmos_framework.data.generator.action.utils.action_processing import (
     ActionProcessingRecord,
     make_batched_action_processing_fields,
 )
-from cosmos_framework.data.generator.action.domain_utils import get_domain_id
-from cosmos_framework.data.generator.action.json_formatter import ActionPromptJsonFormatter
-from cosmos_framework.data.generator.action.transforms import (
+from cosmos_framework.data.generator.action.utils.domain_utils import get_domain_id
+from cosmos_framework.data.generator.action.utils.json_formatter import ActionPromptJsonFormatter
+from cosmos_framework.data.generator.action.utils.transforms import (
     build_sequence_plan_from_mode,
     find_closest_target_size,
     reflection_pad_to_target,

@@ -32,6 +32,9 @@ Implementation
   - This callback polls for the presence of this sentinel file at the end of
     each training step.
   - When detected, it triggers an emergency checkpoint save.
+  - After the collective async save is finalized, this callback creates
+    ``$SLURM_LOG_DIR/SIGUSR1_CHECKPOINT_SUCCEEDED``.  The batch script uses
+    that second sentinel to activate a dependent training segment.
 
 * **Why the Python process can't receive SIGUSR1 directly:**
 
@@ -62,6 +65,7 @@ from __future__ import annotations
 import os
 import signal
 import sys
+from pathlib import Path
 
 import torch
 
@@ -79,7 +83,7 @@ class TerminationSignalCheckpoint(Callback):
             emergency save is allowed.  Defaults to 1/3.
     """
 
-    def __init__(self, min_save_fraction: float = 1 / 3):
+    def __init__(self, min_save_fraction: float = 1 / 3) -> None:
         super().__init__()
         self._min_save_fraction = min_save_fraction
         self._current_iteration: int = 0
@@ -93,6 +97,9 @@ class TerminationSignalCheckpoint(Callback):
         # relay SIGUSR1 into the container.
         slurm_log_dir = os.environ.get("SLURM_LOG_DIR", "")
         self._sigusr1_sentinel = os.path.join(slurm_log_dir, "SIGUSR1_RECEIVED") if slurm_log_dir else ""
+        self._checkpoint_success_sentinel = (
+            os.path.join(slurm_log_dir, "SIGUSR1_CHECKPOINT_SUCCEEDED") if slurm_log_dir else ""
+        )
 
     # ------------------------------------------------------------------
     # Lifecycle hooks
@@ -152,6 +159,21 @@ class TerminationSignalCheckpoint(Callback):
         # Async DCP checkpointing queues the write to a background process.
         # We must wait for it to finish before exiting.
         self.trainer.checkpointer.finalize()
+        if self._checkpoint_success_sentinel:
+            # The batch shell uses this marker to activate an ``afternotok``
+            # successor only after the collective async checkpoint has
+            # actually finished.  In particular, the below-threshold path
+            # above exits without creating it.
+            try:
+                Path(self._checkpoint_success_sentinel).touch()
+            except OSError as error:
+                log.error(
+                    "[TerminationSignalCheckpoint] Failed to create checkpoint success sentinel "
+                    f"{self._checkpoint_success_sentinel!r}: {error}"
+                )
+                # Keep the failure visible to Slurm so an ``afternotok``
+                # successor is not cancelled by a false successful exit.
+                sys.exit(1)
         log.info(f"[TerminationSignalCheckpoint] Checkpoint saved at iteration {iteration}.")
         sys.exit(0)
 

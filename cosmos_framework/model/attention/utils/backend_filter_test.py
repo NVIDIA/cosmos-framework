@@ -63,26 +63,28 @@ class TestParseBackendFilter(unittest.TestCase):
         result = parse_backend_filter("-flash2,-invalid_backend", default)
         assert result == ["natten", "cudnn"]  # flash2 removed, invalid_backend ignored with warning
 
-    @pytest.mark.xfail(raises=ValueError, strict=True)
     def test_error_mixing_bans_and_allows(self):
         """Test that mixing bans and allows raises an error."""
         default = ["flash2", "natten", "cudnn"]
         # This should raise ValueError about mixing ban-list and allow-list
-        parse_backend_filter("-flash2,natten", default)
+        with pytest.raises(ValueError, match="Cannot mix ban-list"):
+            parse_backend_filter("-flash2,natten", default)
 
-    @pytest.mark.xfail(raises=ValueError, strict=True)
     def test_error_invalid_allow_backends(self):
         """Test that invalid backends in allow-list raise an error."""
         default = ["flash2", "natten", "cudnn"]
         # This should raise ValueError about invalid backend in allow-list
-        parse_backend_filter("flash3", default)
+        with pytest.raises(ValueError, match=r"Invalid backend\(s\) in allow-list: \['flash3'\]"):
+            parse_backend_filter("flash3", default)
 
-    @pytest.mark.xfail(raises=ValueError, strict=True)
     def test_error_case_sensitivity_allow(self):
         """Test that backend names are case-sensitive in allow-list."""
         default = ["flash2", "natten"]
-        # This should raise ValueError about invalid backend (case mismatch)
-        parse_backend_filter("Flash2", default)
+        # Matching on the rejected name pins the case-sensitivity behavior: if the
+        # allow-list were ever lower-cased, "Flash2" would resolve to a valid backend
+        # and no error would be raised at all.
+        with pytest.raises(ValueError, match=r"Invalid backend\(s\) in allow-list: \['Flash2'\]"):
+            parse_backend_filter("Flash2", default)
 
 
 @pytest.mark.L0

@@ -14,9 +14,9 @@ import pyarrow.parquet as pq
 import torch
 from lerobot.datasets.video_utils import decode_video_frames
 
-from cosmos_framework.data.generator.action.action_spec import ActionSpec, Pos, Rot, build_action_spec
+from cosmos_framework.data.generator.action.utils.action_spec import ActionSpec, Pos, Rot, build_action_spec
 from cosmos_framework.data.generator.action.datasets.base_dataset import ActionBaseDataset
-from cosmos_framework.data.generator.action.pose_utils import build_abs_pose_from_components, pose_abs_to_rel
+from cosmos_framework.data.generator.action.utils.pose_utils import build_abs_pose_from_components, pose_abs_to_rel
 
 PoseConvention = Literal["backward_framewise"]
 Viewpoint = Literal["ego_view"]

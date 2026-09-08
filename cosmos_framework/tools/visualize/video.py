@@ -30,8 +30,23 @@ def save_video(grid, video_name, fps=30):
     )
 
 
+def _to_writer_uint8(sample: Tensor, pattern: str) -> np.ndarray:
+    """Lay a display tensor out as the contiguous uint8 array the writers consume.
+
+    A uint8 sample already carries display levels, so it is only transposed. The float
+    round trip it used to take -- up-converted to [0, 1] here, multiplied by 255 again a
+    few lines later -- cost two copies of the whole clip, which is the difference between
+    hundreds of megabytes and tens of gigabytes for a tiled multiview grid. That round
+    trip also lost a level: 1/127.5 is not exact in binary, so truncating the reconstructed
+    float darkened each pixel by up to one step.
+    """
+    if sample.dtype == torch.uint8:
+        return np.ascontiguousarray(rearrange(sample.cpu().numpy(), pattern))
+    return rearrange((sample.cpu().float().numpy() * 255), pattern).astype(np.uint8)
+
+
 def save_img_or_video(
-    sample: Tensor,  # [C,T,H,W] in [0,1] range
+    sample: Tensor,  # [C,T,H,W] float in [0,1], or uint8 in [0,255]
     save_fp_wo_ext: Union[str, IO[Any]],
     fps: int = 24,
     quality=None,
@@ -42,7 +57,8 @@ def save_img_or_video(
     Save a tensor as an image or video file based on shape
 
         Args:
-        sample (Tensor): Input tensor with shape (C, T, H, W) in [0, 1] range.
+        sample (Tensor): Input tensor with shape (C, T, H, W), floating point in [0, 1]
+            range or uint8 in [0, 255].
         save_fp_wo_ext (Union[str, IO[Any]]): File path without extension or file-like object.
         fps (int): Frames per second for video. Default is 24.
     """
@@ -55,14 +71,13 @@ def save_img_or_video(
         sample = sample.clamp(0, 1)
     else:
         assert sample.dtype == torch.uint8, "Only support uint8 tensor"
-        sample = sample.float().div(255)
 
     if ffmpeg_params is not None:
         kwargs["ffmpeg_params"] = ffmpeg_params
 
     if sample.shape[1] == 1:
         save_obj = PILImage.fromarray(
-            rearrange((sample.cpu().float().numpy() * 255), "c 1 h w -> h w c").astype(np.uint8),
+            _to_writer_uint8(sample, "c 1 h w -> h w c"),
             mode="RGB",
         )
         ext = ".jpg" if isinstance(save_fp_wo_ext, str) else ""
@@ -77,7 +92,7 @@ def save_img_or_video(
     else:
         if quality is not None:
             kwargs["quality"] = quality
-        save_obj = rearrange((sample.cpu().float().numpy() * 255), "c t h w -> t h w c").astype(np.uint8)
+        save_obj = _to_writer_uint8(sample, "c t h w -> t h w c")
         ext = ".mp4" if isinstance(save_fp_wo_ext, str) else ""
         easy_io.dump(
             save_obj,

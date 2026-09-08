@@ -215,30 +215,37 @@ class NormMonitor(Callback):
         # Track generation tower params and und→gen cross-attention norms; exclude EMA params
         return ("moe_gen" in param_name or "k_norm_und_for_gen" in param_name) and "net_ema" not in param_name
 
-    def _compute_l2_stats(self, tensor: torch.Tensor, detach: bool = True) -> dict[str, torch.Tensor]:
+    def _compute_l2_stats(
+        self,
+        tensor: torch.Tensor,
+        detach: bool = True,
+        include_max: bool = True,
+    ) -> dict[str, torch.Tensor]:
         """Compute statistics (squared sum and max) for a tensor.
 
         Args:
             tensor: Input tensor to compute statistics for.
             detach: If True, detach the tensor before computing stats.
+            include_max: If True, also compute the absolute maximum.
 
         Returns:
-            Dictionary with "sq_sum" (squared sum for L2 norm) and "max" (absolute max).
+            Dictionary with "sq_sum" (squared sum for L2 norm) and, when requested,
+            "max" (absolute max).
         """
         data = tensor.detach() if detach else tensor
         if isinstance(data, DTensor):
             data = data.to_local()
 
         if data.numel() == 0:
-            return {
-                "sq_sum": torch.zeros((), device=data.device, dtype=torch.float32),  # []
-                "max": torch.zeros((), device=data.device, dtype=data.dtype),  # []
-            }
+            stats = {"sq_sum": torch.zeros((), device=data.device, dtype=torch.float32)}  # []
+            if include_max:
+                stats["max"] = torch.zeros((), device=data.device, dtype=data.dtype)  # []
+            return stats
 
-        return {
-            "sq_sum": (data.float() ** 2).sum(),
-            "max": data.abs().max(),
-        }
+        stats = {"sq_sum": (data.float() ** 2).sum()}
+        if include_max:
+            stats["max"] = data.abs().max()
+        return stats
 
     @misc.timer("norm_monitor")
     def _compute_and_log_stats(self, model: nn.Module, iteration: int = 0) -> None:
@@ -249,6 +256,7 @@ class NormMonitor(Callback):
         aggregate them across all ranks.
         """
         named_parameters = self._get_named_parameters(model)
+        detailed_stats_enabled = self.log_stat_wandb or self.save_s3
 
         # Accumulators for local shard statistics (squared sum for L2 norm)
         local_param_sq_sum = torch.tensor(0.0, device="cuda", dtype=torch.float32)
@@ -263,12 +271,20 @@ class NormMonitor(Callback):
                 continue
 
             # Compute local statistics on this rank's shard
-            per_param_stats[param_name] = self._compute_l2_stats(param)
-            local_param_sq_sum += per_param_stats[param_name]["sq_sum"]
+            param_stats = self._compute_l2_stats(param, include_max=detailed_stats_enabled)
+            local_param_sq_sum += param_stats["sq_sum"]
+            if detailed_stats_enabled:
+                per_param_stats[param_name] = param_stats
 
             if param.grad is not None:
-                per_grad_stats[param_name] = self._compute_l2_stats(param.grad, detach=False)
-                local_grad_sq_sum += per_grad_stats[param_name]["sq_sum"]
+                grad_stats = self._compute_l2_stats(
+                    param.grad,
+                    detach=False,
+                    include_max=detailed_stats_enabled,
+                )
+                local_grad_sq_sum += grad_stats["sq_sum"]
+                if detailed_stats_enabled:
+                    per_grad_stats[param_name] = grad_stats
 
         # All-reduce to aggregate statistics across all FSDP ranks
         dist.all_reduce(local_param_sq_sum, op=dist.ReduceOp.SUM)

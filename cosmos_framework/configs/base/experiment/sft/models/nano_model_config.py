@@ -28,7 +28,6 @@ NANO_MODEL_CONFIG = dict(
     input_video_key="video",
     joint_attn_implementation="two_way",
     latent_downsample_factor=16,
-    log_enc_time_every_n=100,
     max_action_dim=64,
     max_num_tokens_after_packing=45056,
     num_embodiment_domains=32,

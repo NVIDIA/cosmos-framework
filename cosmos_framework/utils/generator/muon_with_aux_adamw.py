@@ -64,11 +64,14 @@ from cosmos_framework.utils import log
 from cosmos_framework.utils.misc import get_local_tensor_if_DTensor
 from cosmos_framework.utils.generator.aux_optimizer_utils import (
     compute_pre_ns_update,
-    compute_pre_ns_update_moe_expert,
+    create_moe_megabatches,
+    pair_moe_gate_up_down_params,
     split_orthogonalizable_params,
+    step_stacked_expert_params,
+    validate_split_expert_ns_config,
     zeropower_via_newtonschulz5,
-    zeropower_via_newtonschulz5_batched,
 )
+from cosmos_framework.utils.generator.optimizer import require_fp32_param_group
 
 
 class MuonWithAuxAdamW(torch.optim.Optimizer):
@@ -91,6 +94,19 @@ class MuonWithAuxAdamW(torch.optim.Optimizer):
         adam_betas: Beta coefficients for the auxiliary AdamW side (matches VFM convention).
         eps: Epsilon for AdamW numerical stability.
         use_distributed: Whether to sync step counters across ranks when loading checkpoints.
+
+    Parameter precision: every parameter must be FP32, which
+    :meth:`add_param_group` enforces. Both the Muon and the auxiliary AdamW update are
+    applied to the parameter in place in FP32, so there are no FP32 master weights: for
+    an FP32 parameter a master would be a bit-identical duplicate of it, costing 4 bytes
+    per element and an extra copy per step while computing the same numbers. It also
+    removes the master weights' checkpoint problem -- the FP32 weight is now the
+    parameter itself, which the checkpoint already stores losslessly, rather than a copy
+    that has to be re-derived from a rounded parameter on resume. To keep the
+    forward/backward in BF16, wrap the model in FSDP2 with
+    ``MixedPrecisionPolicy(param_dtype=torch.bfloat16, reduce_dtype=torch.float32)``:
+    FSDP down-casts for compute and all-gather while the sharded parameter this
+    optimizer steps stays FP32. Do not cast the parameters themselves.
     """
 
     def __init__(
@@ -106,11 +122,23 @@ class MuonWithAuxAdamW(torch.optim.Optimizer):
         eps: float = 1e-8,
         use_distributed: bool = True,
         capturable: bool = False,
-        master_weights: bool = False,
         expert_param_keywords: tuple[str, ...] | None = None,
         orthogonalize_skip_patterns: tuple[str, ...] | None = None,
+        split_expert_gate_up: bool = False,
+        batch_split_expert_ns: bool = False,
+        max_moe_expert_ns_matrices: int = 0,
         **kwargs,  # Absorb VFM-specific args (fused, keys_to_select, etc.)
     ):
+        if "master_weights" in kwargs:
+            # Not silently ignored: a caller asking for master weights is asking for
+            # precision this optimizer no longer provides that way, and would otherwise
+            # get a warning buried in the log.
+            raise ValueError(
+                "MuonWithAuxAdamW no longer maintains FP32 master weights -- its parameters "
+                "must already be FP32, which makes a master a bit-identical duplicate (see the "
+                "class docstring). Drop the master_weights argument."
+            )
+
         # Log any ignored kwargs for debugging
         if kwargs:
             ignored_keys = list(kwargs.keys())
@@ -122,9 +150,9 @@ class MuonWithAuxAdamW(torch.optim.Optimizer):
 
                 warnings.warn(f"MuonWithAuxAdamW ignoring unexpected kwargs: {unexpected}")
 
-        # Master weights requires capturable mode
-        if master_weights and not capturable:
-            raise RuntimeError("Master weights is currently only supported with capturable=True.")
+        validate_split_expert_ns_config(split_expert_gate_up, batch_split_expert_ns)
+        if max_moe_expert_ns_matrices < 0:
+            raise ValueError(f"max_moe_expert_ns_matrices must be >= 0, got {max_moe_expert_ns_matrices}")
 
         # Store shared hyperparameters
         # Note: lr is accessed via property that reads from param_groups
@@ -134,8 +162,13 @@ class MuonWithAuxAdamW(torch.optim.Optimizer):
         # Store Muon-specific hyperparameters
         self.muon_momentum = muon_momentum
         self.muon_lr_scale = muon_lr_scale
+        # Shape -> LR scaling ratio; see _get_adjusted_lr.
+        self._adjusted_lr_ratios: dict[tuple[int, ...], float] = {}
         self.ns_steps = ns_steps
         self.nesterov = nesterov
+        self.split_expert_gate_up = split_expert_gate_up
+        self.batch_split_expert_ns = batch_split_expert_ns
+        self.max_moe_expert_ns_matrices = max_moe_expert_ns_matrices
 
         # Name substrings that route stacked MoE expert params ([E, M, N]) to the
         # Muon side (each expert slice orthogonalized). Empty = experts stay on
@@ -154,9 +187,9 @@ class MuonWithAuxAdamW(torch.optim.Optimizer):
         # Distributed settings
         self.use_distributed = use_distributed and dist.is_initialized()
 
-        # Master weights settings (for mixed-precision training stability)
+        # ``capturable`` is also read by external code that duck-types on it to detect the
+        # group-level step convention (see ``DistillationTrainer._uses_group_step``).
         self.capturable = capturable
-        self.master_weights = master_weights
 
         # Parameter lists (populated by categorize_params)
         self.muon_params: list[nn.Parameter] = []
@@ -164,10 +197,10 @@ class MuonWithAuxAdamW(torch.optim.Optimizer):
         # Stacked MoE expert params ([E, M, N]); orthogonalized per expert slice.
         self.stacked_muon_params: list[nn.Parameter] = []
         self.param_to_name: dict[nn.Parameter, str] = {}
-
-        # Master weight copies (populated by _create_master_weights after categorize_params)
-        self._muon_masters: list[torch.Tensor] = []
-        self._adamw_masters: list[torch.Tensor] = []
+        # Split-expert pair tracking (gate_up + down pairs for multi-layer NS batching).
+        self._split_expert_pairs: list[tuple[nn.Parameter, nn.Parameter]] = []
+        self._split_expert_param_ids: set[int] = set()
+        self._moe_megabatches: list[list[tuple[nn.Parameter, nn.Parameter]]] = []
 
         # Transformer Engine fused Adam for AdamW params. The zero buffer is the
         # noop flag required as the second argument of TE's multi_tensor_applier;
@@ -175,7 +208,6 @@ class MuonWithAuxAdamW(torch.optim.Optimizer):
         self._dummy_overflow_buf = torch.tensor([0], dtype=torch.int, device="cuda")
         self._multi_tensor_adam = tex.multi_tensor_adam
         self._multi_tensor_adam_capturable = tex.multi_tensor_adam_capturable
-        self._multi_tensor_adam_capturable_master = tex.multi_tensor_adam_capturable_master
 
         # Initialize base optimizer. betas / eps go in the defaults so each param
         # group carries them (FusedAdam convention); the AdamW step reads them
@@ -200,13 +232,29 @@ class MuonWithAuxAdamW(torch.optim.Optimizer):
         # the original (reference) behavior. Populated by categorize_params.
         self._param_group_map: dict[int, dict] = {}
         self._adamw_param_ids: set[int] = set()
-        # Master weights are created lazily on the first step() (FusedAdam-style),
-        # so that after a checkpoint resume they are rebuilt from the *restored*
-        # params rather than the freshly-initialized ones.
-        self._masters_initialized = False
-        self._param_to_master: dict[int, torch.Tensor] = {}
 
-        log.info(f"MuonWithAuxAdamW master_weights: {master_weights} capturable: {capturable}")
+        log.info(f"MuonWithAuxAdamW capturable: {capturable}")
+
+    def add_param_group(self, param_group: dict) -> None:
+        """Register a param group, rejecting any parameter that is not FP32.
+
+        ``torch.optim.Optimizer.__init__`` funnels every group through here, so this
+        doubles as the construction-time check. See the class docstring for why FP32
+        parameters are required in place of FP32 master weights.
+
+        Validates before calling ``super()`` -- ``Optimizer.add_param_group`` appends the
+        group to ``self.param_groups`` unconditionally, so validating after the call would
+        leave a rejected group registered (with mixed-dtype params `categorize_params` is
+        unaware of) if a caller caught the ``ValueError`` and kept stepping. See
+        :func:`require_fp32_param_group`.
+        """
+        require_fp32_param_group(
+            param_group,
+            "MuonWithAuxAdamW",
+            "it applies both the Muon and the AdamW update to the parameter in place in "
+            "FP32 and keeps no master weights",
+        )
+        super().add_param_group(param_group)
 
     def categorize_params(self, model: nn.Module) -> None:
         """
@@ -242,6 +290,18 @@ class MuonWithAuxAdamW(torch.optim.Optimizer):
         # Sort Muon params by size (largest first) for distributed load balancing
         self.muon_params = sorted(self.muon_params, key=lambda x: x.numel(), reverse=True)
 
+        # Build gate_up/down pairs for split-expert NS (if requested).
+        self._split_expert_pairs = []
+        self._split_expert_param_ids = set()
+        if self.split_expert_gate_up and self.stacked_muon_params:
+            self._split_expert_pairs = pair_moe_gate_up_down_params(self.stacked_muon_params, self.param_to_name)
+            for gate_up_p, down_p in self._split_expert_pairs:
+                self._split_expert_param_ids.add(id(gate_up_p))
+                self._split_expert_param_ids.add(id(down_p))
+
+        # Build MoE megabatch plan (K pairs per NS call).
+        self._create_moe_megabatches()
+
         # Check if using DTensor (FSDP) - determines whether we use distributed NS
         self._params_are_dtensor = isinstance(self.muon_params[0], DTensor) if self.muon_params else False
 
@@ -270,10 +330,6 @@ class MuonWithAuxAdamW(torch.optim.Optimizer):
                 self._param_group_map[id(p)] = group
         self._adamw_param_ids = {id(p) for p in self.adamw_params}
 
-        # NOTE: master weights are intentionally NOT created here. They are
-        # created lazily on the first step() (see _maybe_init_master_weights) so
-        # that a checkpoint resume rebuilds them from the restored params.
-
     def _base_lr_for(self, p: nn.Parameter) -> float | torch.Tensor:
         """Per-group base learning rate for ``p`` (honors lr_multipliers)."""
         return self._param_group_map[id(p)]["lr"]
@@ -296,51 +352,14 @@ class MuonWithAuxAdamW(torch.optim.Optimizer):
         Returns:
             Adjusted learning rate for this parameter.
         """
-        A, B = param_shape[:2]
-        adjusted_ratio = self.muon_lr_scale * math.sqrt(max(A, B))
+        # Memoized: the ratio depends only on the shape and muon_lr_scale, both fixed
+        # for the run, but the MoE megabatch path asks for it once per matrix per step.
+        adjusted_ratio = self._adjusted_lr_ratios.get(param_shape)
+        if adjusted_ratio is None:
+            A, B = param_shape[:2]
+            adjusted_ratio = self.muon_lr_scale * math.sqrt(max(A, B))
+            self._adjusted_lr_ratios[param_shape] = adjusted_ratio
         return base_lr * adjusted_ratio
-
-    def _maybe_init_master_weights(self) -> None:
-        """Create FP32 master weights on first use (FusedAdam-style lazy init)."""
-        if self.master_weights and not self._masters_initialized:
-            self._create_master_weights()
-
-    def _create_master_weights(self) -> None:
-        """
-        Create FP32 master weight copies for mixed-precision training stability.
-
-        Creates param_groups_master (for LowPrecisionCallback compatibility) and
-        indexed lists for efficient lookup during Muon/AdamW steps.
-        """
-        # Create param_groups_master mirroring param_groups (like FusedAdam)
-        # This enables LowPrecisionCallback to copy masters -> params periodically
-        self.param_groups_master = []
-        for pg in self.param_groups:
-            param_list = pg["params"]
-            self.param_groups_master.append(
-                {
-                    "params": [p.clone().detach().float() if self.master_weights else None for p in param_list],
-                }
-            )
-
-        # Build param_id -> master mapping for efficient lookup
-        self._param_to_master: dict[int, torch.Tensor] = {}
-        for group, group_master in zip(self.param_groups, self.param_groups_master):
-            for p, p_master in zip(group["params"], group_master["params"]):
-                if p_master is not None:
-                    self._param_to_master[id(p)] = p_master
-
-        # Create indexed lists for Muon/AdamW step() methods
-        self._muon_masters = [self._param_to_master[id(p)] for p in self.muon_params]
-        self._adamw_masters = [self._param_to_master[id(p)] for p in self.adamw_params]
-
-        muon_master_numel = sum(m.numel() for m in self._muon_masters)
-        adamw_master_numel = sum(m.numel() for m in self._adamw_masters)
-        log.info(
-            f"Created FP32 master weights: {len(self._muon_masters)} Muon ({muon_master_numel:,} elements), "
-            f"{len(self._adamw_masters)} AdamW ({adamw_master_numel:,} elements)"
-        )
-        self._masters_initialized = True
 
     @torch.no_grad()
     def step(self, closure=None):
@@ -358,10 +377,6 @@ class MuonWithAuxAdamW(torch.optim.Optimizer):
             with torch.enable_grad():
                 loss = closure()
 
-        # Lazily build FP32 master weights from the current (possibly
-        # checkpoint-restored) params before the first update.
-        self._maybe_init_master_weights()
-
         # Muon updates (with distributed NS for FSDP)
         self._step_muon()
 
@@ -373,86 +388,51 @@ class MuonWithAuxAdamW(torch.optim.Optimizer):
 
         return loss
 
+    def _create_moe_megabatches(self) -> None:
+        """Group split expert pairs into K-layer NS batches (see
+        :func:`create_moe_megabatches`)."""
+        world_size = dist.get_world_size() if (self.use_distributed and dist.is_initialized()) else 1
+        self._moe_megabatches = create_moe_megabatches(
+            self._split_expert_pairs, world_size, self.max_moe_expert_ns_matrices
+        )
+
     def _step_stacked_muon(self) -> None:
-        """Orthogonalize stacked MoE expert params, one expert slice at a time.
+        """Orthogonalize stacked MoE expert params via step_stacked_expert_params.
 
-        Each param has shape ``[E, M, N]`` (E experts, each an M x N matrix). Under
-        FSDP2 these are sharded on the expert dim (dim 0), so every rank holds whole
-        expert matrices -- Newton-Schulz is therefore fully local (no all-gather),
-        and is batched across the local experts via ``zeropower_via_newtonschulz5_batched``.
+        Dispatches to split-expert or megabatch path when ``split_expert_gate_up``
+        is True; falls back to the historical whole-param per-expert NS otherwise.
 
-        NOTE (sharding assumption): the "no communication" property relies on the
-        expert tensor being sharded on dim 0 (the expert axis). This holds for the
-        FSDP2 ``fully_shard`` path used by LLM/VFM here, because FSDP2 shards every
-        parameter on dim 0. It is NOT guaranteed in general -- e.g. tensor/expert
-        parallelism could shard *within* an expert matrix (dim 1/2). That case is
-        unsupported and is rejected by the placement check below (fails loudly
-        rather than silently computing a wrong update); supporting it would require
-        a per-expert gather. The assumption was not exhaustively audited against
-        every parallelization config, which is exactly why it is enforced here.
+        See :func:`step_stacked_expert_params` for the full dispatch logic.
         """
-        for p in self.stacked_muon_params:
-            if p.grad is None:
-                continue
+        if not self.stacked_muon_params:
+            return
 
-            # Validate sharding: only the expert axis (tensor dim 0) may be sharded.
-            if isinstance(p, DTensor):
-                for placement in p.placements:
-                    if placement.is_shard() and placement.dim != 0:
-                        raise NotImplementedError(
-                            "Stacked-expert orthogonalization requires sharding on the expert "
-                            f"dim (0); got placement {placement} for "
-                            f"'{self.param_to_name.get(p, 'unknown')}'."
-                        )
+        moe_megabatches = self._moe_megabatches if self.split_expert_gate_up else None
 
-            local_grad = get_local_tensor_if_DTensor(p.grad)
-            local_param = get_local_tensor_if_DTensor(p)
-            if local_grad.ndim != 3:
-                raise NotImplementedError(
-                    f"Stacked-expert orthogonalization supports 3D params [E, M, N]; "
-                    f"got shape {tuple(local_grad.shape)} for '{self.param_to_name.get(p, 'unknown')}'."
-                )
-
-            state = self.state[p]
-            if len(state) == 0:
-                state["momentum_buffer"] = torch.zeros_like(p).float()
-
-            # Per-expert masked momentum + Nesterov (element-wise over [E, M, N]).
-            # Active experts follow the standard mu*M + G recurrence; inactive
-            # experts (no gradient this step) keep their momentum frozen. ``active``
-            # ([E] bool) is used below to zero the update and skip weight decay for
-            # inactive experts -- required because Newton-Schulz would otherwise
-            # renormalize their stale momentum into a full-strength spurious update.
-            pre_ns, active = compute_pre_ns_update_moe_expert(
-                local_grad,
-                get_local_tensor_if_DTensor(state["momentum_buffer"]),
-                momentum=self.muon_momentum,
-                nesterov=self.nesterov,
-            )
-
-            # Batched Newton-Schulz over the local experts, then zero the update for
-            # inactive experts (their NS result is a bogus unit-norm matrix).
-            ortho = zeropower_via_newtonschulz5_batched(pre_ns, steps=self.ns_steps)
-            ortho = ortho * active.view(-1, 1, 1).to(ortho.dtype)
-
-            # LR scaling uses the per-expert matrix shape (M, N), shared across experts.
-            base_lr = self._base_lr_for(p)
-            wd = self._wd_for(p)
-            adjusted_lr = self._get_adjusted_lr(tuple(p.shape[-2:]), base_lr)
-
-            # Per-expert weight-decay factor: (1 - base_lr*wd) for active experts,
-            # 1.0 (no decay) for inactive ones. Combined with the zeroed update
-            # above, inactive experts are left completely untouched.
-            if self.master_weights:
-                master = get_local_tensor_if_DTensor(self._param_to_master[id(p)])
-                a_wd = active.view(-1, 1, 1).to(master.dtype)
-                master.mul_(1 - a_wd * (base_lr * wd))
-                master.add_(ortho.float() * (-adjusted_lr))
-                local_param.copy_(master)
-            else:
-                a_wd = active.view(-1, 1, 1).to(local_param.dtype)
-                local_param.mul_(1 - a_wd * (base_lr * wd))
-                local_param.add_(ortho.to(local_param.dtype) * (-adjusted_lr))
+        step_stacked_expert_params(
+            self.stacked_muon_params,
+            self._split_expert_pairs,
+            self._split_expert_param_ids,
+            optimizer_state=self.state,
+            param_to_name=self.param_to_name,
+            # No FP32 masters: this optimizer's params are already FP32 and are updated in
+            # place (see the class docstring), so the helper's master path is unused and it
+            # writes the update straight into the parameter.
+            param_to_master={},
+            master_weights=False,
+            momentum=self.muon_momentum,
+            nesterov=self.nesterov,
+            ns_steps=self.ns_steps,
+            batch_split_expert_ns=self.batch_split_expert_ns,
+            base_lr_for=self._base_lr_for,
+            weight_decay_for=self._wd_for,
+            adjusted_lr_for=self._get_adjusted_lr,
+            moe_megabatches=moe_megabatches,
+            # profile_phases is intentionally left at its default (off): the NVTX
+            # megabatch ranges are gated on DION2's dion2_profile_phases knob, and
+            # Muon has no equivalent. Add one here if the Muon stacked path ever
+            # needs phase-level profiling.
+        )
 
     def _step_muon(self) -> None:
         """
@@ -463,14 +443,11 @@ class MuonWithAuxAdamW(torch.optim.Optimizer):
         2. All-gather shards to reconstruct full pre-NS gradient
         3. Run Newton-Schulz on full matrix (must be done globally)
         4. Scatter back to get local orthogonalized update
-        5. Apply weight decay and update to local shard (or FP32 master if enabled)
+        5. Apply weight decay and update to the local shard, in place, in FP32
 
         For non-DTensor parameters, runs single-device Muon.
-
-        When master_weights=True, updates are applied to FP32 masters and
-        then copied back to BF16 params for numerical stability.
         """
-        for idx, p in enumerate(self.muon_params):
+        for p in self.muon_params:
             if p.grad is None:
                 continue
 
@@ -574,7 +551,7 @@ class MuonWithAuxAdamW(torch.optim.Optimizer):
                 # and redistribute to p's placements. Replicate -> Shard is pure local
                 # slicing (no communication) and re-applies the exact same (possibly
                 # padded) shard layout p has, so local_update lines up with the local
-                # shard / FP32 master.
+                # shard.
                 ortho_dtensor = DTensor.from_local(
                     full_ortho,
                     device_mesh,
@@ -590,22 +567,13 @@ class MuonWithAuxAdamW(torch.optim.Optimizer):
                 wd = self._wd_for(p)
                 adjusted_lr = self._get_adjusted_lr(full_pre_ns.shape, base_lr)
 
-                if self.master_weights:
-                    # Update FP32 master, then write the BF16 param directly so we
-                    # do not depend on LowPrecisionCallback (the OptimizersContainer
-                    # hides master_weights from it). Matches FusedAdam, whose kernel
-                    # writes the param in-place.
-                    #
-                    # NOTE: adjusted_lr may be a tensor (capturable mode), so we
-                    # scale via multiply rather than ``alpha=`` (Tensor.add_ only
-                    # accepts a Python-number alpha).
-                    master = get_local_tensor_if_DTensor(self._muon_masters[idx])
-                    master.mul_(1 - base_lr * wd)
-                    master.add_(local_update.float() * (-adjusted_lr))
-                    local_param.copy_(master)
-                else:
-                    local_param.mul_(1 - base_lr * wd)
-                    local_param.add_(local_update * (-adjusted_lr))
+                # NOTE: adjusted_lr may be a tensor (capturable mode), so we scale via
+                # multiply rather than ``alpha=`` (Tensor.add_ only accepts a
+                # Python-number alpha). ``local_update`` comes out of Newton-Schulz in
+                # bf16, so upcast before scaling: a Python-float lr would not promote it
+                # and the product would be rounded to bf16 before reaching the param.
+                local_param.mul_(1 - base_lr * wd)
+                local_param.add_(local_update.to(local_param.dtype) * (-adjusted_lr))
 
             else:
                 # Single-device Muon (non-FSDP or non-sharded)
@@ -634,18 +602,12 @@ class MuonWithAuxAdamW(torch.optim.Optimizer):
                 wd = self._wd_for(p)
                 adjusted_lr = self._get_adjusted_lr(p.shape, base_lr)
 
-                # Apply weight decay (using base LR) and update (using adjusted LR)
-                if self.master_weights:
-                    # Update FP32 master, then write the BF16 param directly (see
-                    # the distributed branch above for rationale). adjusted_lr may be
-                    # a tensor (capturable), so scale via multiply, not ``alpha=``.
-                    master = get_local_tensor_if_DTensor(self._muon_masters[idx])
-                    master.mul_(1 - base_lr * wd)
-                    master.add_(update.float() * (-adjusted_lr))
-                    param.copy_(master)
-                else:
-                    param.mul_(1 - base_lr * wd)
-                    param.add_(update * (-adjusted_lr))
+                # Apply weight decay (using base LR) and update (using adjusted LR).
+                # adjusted_lr may be a tensor (capturable), so scale via multiply, not
+                # ``alpha=``; ``update`` is bf16 out of Newton-Schulz, so upcast it first
+                # (see the distributed branch above).
+                param.mul_(1 - base_lr * wd)
+                param.add_(update.to(param.dtype) * (-adjusted_lr))
 
     def _step_adamw(self) -> None:
         """
@@ -653,12 +615,13 @@ class MuonWithAuxAdamW(torch.optim.Optimizer):
 
         Iterates over param groups so each group's lr / betas / eps / weight_decay
         (set by the factory's lr_multipliers and disable_weight_decay_for_1d_params)
-        is honored, then batches by dtype (fp16, bf16, fp32) within the group. The
-        per-group step counter lives on ``group["step"]`` (FusedAdam-style) so
-        it is round-tripped by the distributed-checkpoint optimizer state dict.
+        is honored. The per-group step counter lives on ``group["step"]``
+        (FusedAdam-style) so it is round-tripped by the distributed-checkpoint
+        optimizer state dict.
 
-        When master_weights=True and capturable=True, uses
-        multi_tensor_adam_capturable_master which maintains FP32 master weights.
+        Params and moments are all FP32 (see :meth:`add_param_group`), so a group is one
+        dtype batch, and the kernel updates the param in place -- there is no master
+        weight for it to maintain alongside.
         """
         if not self.adamw_params:
             return
@@ -696,106 +659,57 @@ class MuonWithAuxAdamW(torch.optim.Optimizer):
             beta1, beta2 = group["betas"]
             eps = group["eps"]
 
-            # Batch parameters by dtype for multi-tensor apply.
-            g_16, p_16, m_16, v_16 = [], [], [], []
-            g_bf, p_bf, m_bf, v_bf = [], [], [], []
-            g_32, p_32, m_32, v_32 = [], [], [], []
-            p_16_master, p_bf_master, p_32_master = [], [], []
+            grads, params, exp_avgs, exp_avg_sqs = [], [], [], []
 
             for p in group_params:
                 if p.grad is None:
                     continue
-
-                grad = get_local_tensor_if_DTensor(p.grad)
-                param = get_local_tensor_if_DTensor(p)
 
                 state = self.state[p]
                 if len(state) == 0:
                     state["exp_avg"] = torch.zeros_like(p).float()
                     state["exp_avg_sq"] = torch.zeros_like(p).float()
 
-                exp_avg = get_local_tensor_if_DTensor(state["exp_avg"])
-                exp_avg_sq = get_local_tensor_if_DTensor(state["exp_avg_sq"])
-                master = get_local_tensor_if_DTensor(self._param_to_master[id(p)]) if self.master_weights else None
+                grads.append(get_local_tensor_if_DTensor(p.grad))
+                params.append(get_local_tensor_if_DTensor(p))
+                exp_avgs.append(get_local_tensor_if_DTensor(state["exp_avg"]))
+                exp_avg_sqs.append(get_local_tensor_if_DTensor(state["exp_avg_sq"]))
 
-                if p.dtype == torch.float16:
-                    g_16.append(grad)
-                    p_16.append(param)
-                    m_16.append(exp_avg)
-                    v_16.append(exp_avg_sq)
-                    if self.master_weights:
-                        p_16_master.append(master)
-                elif p.dtype == torch.bfloat16:
-                    g_bf.append(grad)
-                    p_bf.append(param)
-                    m_bf.append(exp_avg)
-                    v_bf.append(exp_avg_sq)
-                    if self.master_weights:
-                        p_bf_master.append(master)
-                elif p.dtype == torch.float32:
-                    g_32.append(grad)
-                    p_32.append(param)
-                    m_32.append(exp_avg)
-                    v_32.append(exp_avg_sq)
-                    if self.master_weights:
-                        p_32_master.append(master)
-                else:
-                    raise RuntimeError(f"Unsupported dtype {p.dtype} for fused AdamW")
+            if not grads:
+                continue
 
+            tensor_lists = [grads, params, exp_avgs, exp_avg_sqs]
             if self.capturable:
-                # The capturable-master kernel requires an inverse-scale argument;
+                # The capturable kernel requires a trailing inverse-scale argument;
                 # bf16-only training has no grad scaler, so it is a constant one.
-                kernel_inv_scale = torch.ones((1,), device=device, dtype=torch.float32)
-                dtype_batches = (
-                    (g_16, p_16, m_16, v_16, p_16_master),
-                    (g_bf, p_bf, m_bf, v_bf, p_bf_master),
-                    (g_32, p_32, m_32, v_32, p_32_master),
+                te.pytorch.optimizers.multi_tensor_applier(
+                    self._multi_tensor_adam_capturable,
+                    self._dummy_overflow_buf,
+                    tensor_lists,
+                    lr,
+                    beta1,
+                    beta2,
+                    eps,
+                    step,
+                    adam_w_mode,
+                    bias_correction,
+                    wd,
+                    torch.ones((1,), device=device, dtype=torch.float32),
                 )
-                kernel = (
-                    self._multi_tensor_adam_capturable_master
-                    if self.master_weights
-                    else self._multi_tensor_adam_capturable
-                )
-                for g_, p_, m_, v_, pm_ in dtype_batches:
-                    if len(g_) == 0:
-                        continue
-                    tensor_lists = [g_, p_, m_, v_, pm_] if self.master_weights else [g_, p_, m_, v_]
-                    te.pytorch.optimizers.multi_tensor_applier(
-                        kernel,
-                        self._dummy_overflow_buf,
-                        tensor_lists,
-                        lr,
-                        beta1,
-                        beta2,
-                        eps,
-                        step,
-                        adam_w_mode,
-                        bias_correction,
-                        wd,
-                        kernel_inv_scale,
-                    )
             else:
-                dtype_batches = (
-                    (g_16, p_16, m_16, v_16),
-                    (g_bf, p_bf, m_bf, v_bf),
-                    (g_32, p_32, m_32, v_32),
+                te.pytorch.optimizers.multi_tensor_applier(
+                    self._multi_tensor_adam,
+                    self._dummy_overflow_buf,
+                    tensor_lists,
+                    lr,
+                    beta1,
+                    beta2,
+                    eps,
+                    step,
+                    adam_w_mode,
+                    bias_correction,
+                    wd,
                 )
-                for g_, p_, m_, v_ in dtype_batches:
-                    if len(g_) == 0:
-                        continue
-                    te.pytorch.optimizers.multi_tensor_applier(
-                        self._multi_tensor_adam,
-                        self._dummy_overflow_buf,
-                        [g_, p_, m_, v_],
-                        lr,
-                        beta1,
-                        beta2,
-                        eps,
-                        step,
-                        adam_w_mode,
-                        bias_correction,
-                        wd,
-                    )
 
     def load_state_dict(self, state_dict: dict) -> None:
         """Load optimizer state.
@@ -803,18 +717,18 @@ class MuonWithAuxAdamW(torch.optim.Optimizer):
         The optimizer state (per-param momentum / exp_avg / exp_avg_sq and the
         per-group ``step``) round-trips through the base ``torch.optim.Optimizer``
         state dict, so the distributed-checkpoint container can save/restore it
-        with FSDP2 resharding just like FusedAdam. Master weights are *not*
-        checkpointed; they are rebuilt from the restored params on the next
-        ``step()`` (see ``_maybe_init_master_weights``).
+        with FSDP2 resharding just like FusedAdam. There is no master weight to
+        restore: the FP32 weight is the parameter itself, which the model checkpoint
+        carries.
 
         This direct-call path (used outside the OptimizersContainer / DCP flow)
-        keeps the moments in FP32 and normalizes the capturable LR/step tensors.
+        normalizes the capturable LR/step tensors. The state needs no dtype fix-up:
+        ``super().load_state_dict`` casts every floating-point state tensor to its
+        param's dtype, which the FP32-param invariant makes FP32 -- so the moments and
+        the momentum buffer come back FP32 whatever precision the checkpoint stored
+        them in.
         """
         super().load_state_dict(state_dict)
-
-        # Force master weights to be rebuilt from the (now restored) params.
-        self._masters_initialized = False
-        self.param_groups_master = None
 
         for group in self.param_groups:
             device = group["params"][0].device if group["params"] else "cuda"
@@ -825,10 +739,3 @@ class MuonWithAuxAdamW(torch.optim.Optimizer):
                     group["lr"] = torch.tensor(group["lr"], dtype=torch.float32, device=device)
                 if group.get("step", None) is not None and not isinstance(group["step"], torch.Tensor):
                     group["step"] = torch.tensor(group["step"], dtype=torch.int32, device=device)
-            for p in group["params"]:
-                state = self.state[p]
-                if "exp_avg" in state:
-                    state["exp_avg"] = state["exp_avg"].float()
-                    state["exp_avg_sq"] = state["exp_avg_sq"].float()
-                if "momentum_buffer" in state:
-                    state["momentum_buffer"] = state["momentum_buffer"].float()

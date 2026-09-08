@@ -3,8 +3,11 @@
 
 """Latent-corruption utilities for denoising-tokenizer training."""
 
+import hashlib
+import re
 from collections.abc import Mapping, Sequence
 from numbers import Real
+from pathlib import Path
 from typing import Any
 
 import torch
@@ -16,12 +19,42 @@ from cosmos_framework.model.tokenizer.checkpoint_identity import (
     resolve_checkpoint_identity,
 )
 
+_SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
+
+
+def _checkpoint_identities_match(
+    recorded_identity: Mapping[str, object],
+    current_identity: Mapping[str, object],
+) -> bool:
+    """Compare local checkpoints by content while keeping remote locations identity-bearing."""
+    recorded_kind = recorded_identity.get("kind")
+    current_kind = current_identity.get("kind")
+    if recorded_kind != current_kind:
+        return False
+    if recorded_kind == "local_file":
+        content_keys = ("kind", "size", "sha256")
+        return all(recorded_identity.get(key) == current_identity.get(key) for key in content_keys)
+    if recorded_kind == "local_directory":
+        content_keys = ("kind", "files")
+        return all(recorded_identity.get(key) == current_identity.get(key) for key in content_keys)
+    return dict(recorded_identity) == dict(current_identity)
+
+
+def _sha256_file(path: Path, *, chunk_size: int = 8 * 1024 * 1024) -> str:
+    """Hash one local normalization sidecar without loading it into memory."""
+    digest = hashlib.sha256()
+    with path.open("rb") as file_handle:
+        while chunk := file_handle.read(chunk_size):
+            digest.update(chunk)
+    return digest.hexdigest()
+
 
 def load_latent_normalization(
     path: str,
     *,
     latent_channels: int,
     backend_args: Mapping[str, Any] | None = None,
+    expected_sidecar_sha256: str = "",
     expected_checkpoint_path: str | None = None,
     require_checkpoint_identity: bool = False,
 ) -> tuple[torch.Tensor, torch.Tensor]:  # returns mean: [C], std: [C]
@@ -35,6 +68,24 @@ def load_latent_normalization(
         backend_args = plain_backend_args
     elif backend_args is not None:
         backend_args = dict(backend_args)
+
+    if expected_sidecar_sha256:
+        if _SHA256_PATTERN.fullmatch(expected_sidecar_sha256) is None:
+            raise ValueError(
+                "expected_sidecar_sha256 must contain exactly 64 lower-case hexadecimal characters; "
+                f"got {expected_sidecar_sha256!r}."
+            )
+        sidecar_path = Path(path)
+        if not sidecar_path.is_file():
+            raise ValueError(
+                f"SHA-256-pinned latent normalization currently requires a local immutable sidecar file; got {path!r}."
+            )
+        actual_sidecar_sha256 = _sha256_file(sidecar_path)
+        if actual_sidecar_sha256 != expected_sidecar_sha256:
+            raise ValueError(
+                f"Latent-normalization sidecar SHA-256 mismatch for {path}: expected "
+                f"{expected_sidecar_sha256}, got {actual_sidecar_sha256}."
+            )
 
     if path.lower().endswith(".json"):
         payload = easy_io.load(path, backend_args=backend_args)
@@ -56,11 +107,6 @@ def load_latent_normalization(
                 "An expected checkpoint path is required when latent-normalization checkpoint/statistics "
                 "matching is enabled."
             )
-        if source_checkpoint != expected_checkpoint_path:
-            raise ValueError(
-                f"Latent-normalization sidecar {path} was computed for checkpoint "
-                f"{source_checkpoint!r}, expected {expected_checkpoint_path!r}."
-            )
         if not source_checkpoint_identity:
             raise ValueError(
                 f"Latent-normalization sidecar {path} must contain source_checkpoint_identity "
@@ -73,7 +119,15 @@ def load_latent_normalization(
                 raise TypeError("Latent-normalization s3_credential_path must be a string.")
             credentials_path = credentials_value
         current_checkpoint_identity = resolve_checkpoint_identity(expected_checkpoint_path, credentials_path)
-        if current_checkpoint_identity != source_checkpoint_identity:
+        recorded_kind = source_checkpoint_identity.get("kind")
+        current_kind = current_checkpoint_identity.get("kind")
+        both_local = recorded_kind in {"local_file", "local_directory"} and recorded_kind == current_kind
+        if not both_local and source_checkpoint != expected_checkpoint_path:
+            raise ValueError(
+                f"Latent-normalization sidecar {path} was computed for checkpoint "
+                f"{source_checkpoint!r}, expected {expected_checkpoint_path!r}."
+            )
+        if not _checkpoint_identities_match(source_checkpoint_identity, current_checkpoint_identity):
             raise ValueError(
                 f"Latent-normalization sidecar {path} checkpoint identity does not match the current checkpoint "
                 f"at {expected_checkpoint_path}; regenerate statistics from the exact checkpoint used for training."

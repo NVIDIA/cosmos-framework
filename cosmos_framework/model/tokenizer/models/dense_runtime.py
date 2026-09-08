@@ -24,6 +24,7 @@ from cosmos_framework.model.tokenizer.models.dense_backends import (
 )
 from cosmos_framework.model.tokenizer.models.modules.transformer.blocks import LearnedPositionEmbedder
 from cosmos_framework.model.tokenizer.models.sparse_autoencoder import AutoencoderKL, SparseTransformerBase
+from cosmos_framework.model.tokenizer.utils.precision import activation_dtype
 from cosmos_framework.model.tokenizer.utils.tensors import cat_with_bounded_inputs
 
 
@@ -53,6 +54,10 @@ class DenseGridMetadata:
 DenseGridMetadataKey = tuple[str, int, int, int, int, str, str]
 DenseImageTemporalPadding = Literal["repeat", "zero"]
 DenseVideoTemporalMode = Literal["native", "standalone_first_frame"]
+
+
+class DenseRuntimeCompatibilityError(ValueError):
+    """A recognized autoencoder architecture incompatibility with the dense runtime."""
 
 
 class DenseAutoencoderRuntime(nn.Module):
@@ -121,6 +126,10 @@ class DenseAutoencoderRuntime(nn.Module):
         self._validate_autoencoder(autoencoder)
         self.autoencoder = autoencoder
         self.backend = backend
+        if backend == "batched_with_padding" and (
+            autoencoder.encoder.num_register_tokens > 0 or autoencoder.decoder.num_register_tokens > 0
+        ):
+            raise ValueError("Dense runtime batched_with_padding does not support register tokens.")
         if chunk_size <= 0:
             raise ValueError(f"chunk_size must be positive, got {chunk_size}.")
         if pad_frames < 0:
@@ -177,41 +186,78 @@ class DenseAutoencoderRuntime(nn.Module):
             metadata_cache_max_entries=metadata_cache_max_entries,
         )
 
+    @classmethod
+    def get_autoencoder_incompatibility(cls, autoencoder: AutoencoderKL) -> str | None:
+        """Return a recognized dense-runtime incompatibility without masking other errors."""
+        try:
+            cls._validate_autoencoder(autoencoder)
+        except DenseRuntimeCompatibilityError as exc:
+            return str(exc)
+        return None
+
     @staticmethod
     def _validate_autoencoder(autoencoder: AutoencoderKL) -> None:
         """Validate that the sparse autoencoder fits the dense-runtime V1 scope."""
         if not hasattr(autoencoder, "decoder"):
-            raise ValueError("Dense runtime V1 requires use_decoder=True.")
+            raise DenseRuntimeCompatibilityError("Dense runtime V1 requires use_decoder=True.")
 
         encoder = autoencoder.encoder
         decoder = autoencoder.decoder
 
         if encoder.concat_latent is not None:
-            raise ValueError("Dense runtime V1 does not support concat_latent.")
+            raise DenseRuntimeCompatibilityError("Dense runtime V1 does not support concat_latent.")
         if autoencoder.use_dual_latent:
-            raise ValueError("Dense runtime V1 does not support dual latent.")
+            raise DenseRuntimeCompatibilityError("Dense runtime V1 does not support dual latent.")
         if autoencoder.use_quantizer:
-            raise ValueError("Dense runtime V1 does not support quantized latent paths.")
+            raise DenseRuntimeCompatibilityError("Dense runtime V1 does not support quantized latent paths.")
         if autoencoder.decoder_temporal_mode != "bidirectional":
-            raise ValueError(
+            raise DenseRuntimeCompatibilityError(
                 "Dense runtime V1 only supports decoder_temporal_mode='bidirectional', "
                 f"got {autoencoder.decoder_temporal_mode!r}."
             )
         if int(autoencoder.inference_kv_cache_size) != 0:
-            raise ValueError(
+            raise DenseRuntimeCompatibilityError(
                 "Dense runtime V1 does not support decoder KV cache; "
                 f"got inference_kv_cache_size={autoencoder.inference_kv_cache_size}."
             )
         if decoder.multiscale is not None or decoder.multiscale_outputs is not None:
-            raise ValueError("Dense runtime V1 does not support decoder multiscale outputs.")
+            raise DenseRuntimeCompatibilityError("Dense runtime V1 does not support decoder multiscale outputs.")
         if any(getattr(block, "multiscale", None) is not None for block in encoder.blocks):
-            raise ValueError("Dense runtime V1 does not support encoder multiscale blocks.")
+            raise DenseRuntimeCompatibilityError("Dense runtime V1 does not support encoder multiscale blocks.")
         if any(getattr(block, "multiscale", None) is not None for block in decoder.blocks):
-            raise ValueError("Dense runtime V1 does not support decoder multiscale blocks.")
+            raise DenseRuntimeCompatibilityError("Dense runtime V1 does not support decoder multiscale blocks.")
         if encoder.pe_mode not in {"joint", "learned"}:
-            raise ValueError(f"Dense runtime V1 currently requires encoder learned/joint PE, got {encoder.pe_mode}.")
+            raise DenseRuntimeCompatibilityError(
+                f"Dense runtime V1 currently requires encoder learned/joint PE, got {encoder.pe_mode}."
+            )
         if decoder.pe_mode not in {"joint", "learned"}:
-            raise ValueError(f"Dense runtime V1 currently requires decoder learned/joint PE, got {decoder.pe_mode}.")
+            raise DenseRuntimeCompatibilityError(
+                f"Dense runtime V1 currently requires decoder learned/joint PE, got {decoder.pe_mode}."
+            )
+        DenseAutoencoderRuntime._validate_position_embedding_contract(encoder, "encoder")
+        DenseAutoencoderRuntime._validate_position_embedding_contract(decoder, "decoder")
+
+    @staticmethod
+    def _validate_position_embedding_contract(module: SparseTransformerBase, module_name: str) -> None:
+        """Validate learned-PE and RoPE assumptions used by dense grid metadata."""
+        if module.position_embedding_scale != 0.0 and not isinstance(module.pos_embedder, LearnedPositionEmbedder):
+            raise DenseRuntimeCompatibilityError(
+                f"Dense runtime V1 expects {module_name} LearnedPositionEmbedder for learned/joint PE, "
+                f"got {type(module.pos_embedder).__name__}."
+            )
+
+        blocks_with_rope = [block for block in module.blocks if getattr(block.attn, "use_rope", False)]
+        rope_configs = {
+            (
+                block.attn.rope.head_dim,
+                block.attn.rope.pos_cls_token,
+            )
+            for block in blocks_with_rope
+        }
+        if len(rope_configs) > 1:
+            raise DenseRuntimeCompatibilityError(
+                f"Dense runtime V1 requires uniform {module_name} RoPE configuration across blocks."
+            )
 
     @property
     def patch_size(self) -> tuple[int, int, int]:
@@ -286,7 +332,40 @@ class DenseAutoencoderRuntime(nn.Module):
         pad_to: int | None = None,
         encode_chunk_batch_size: int = 1,
     ) -> torch.Tensor:
-        """Encode a dense video tensor into `[B, T_p, H_p, W_p, 2C]` latent moments.
+        return self._encode_grid(
+            video,
+            chunk_raw_frames=chunk_raw_frames,
+            pad_to=pad_to,
+            encode_chunk_batch_size=encode_chunk_batch_size,
+            project=True,
+        )
+
+    def encode_features(
+        self,
+        video: torch.Tensor,
+        chunk_raw_frames: int | None = None,
+        pad_to: int | None = None,
+        encode_chunk_batch_size: int = 1,
+    ) -> torch.Tensor:
+        """Encode a dense video into the post-encoder, post-normalization feature grid."""
+        return self._encode_grid(
+            video,
+            chunk_raw_frames=chunk_raw_frames,
+            pad_to=pad_to,
+            encode_chunk_batch_size=encode_chunk_batch_size,
+            project=False,
+        )
+
+    def _encode_grid(
+        self,
+        video: torch.Tensor,
+        chunk_raw_frames: int | None = None,
+        pad_to: int | None = None,
+        encode_chunk_batch_size: int = 1,
+        *,
+        project: bool,
+    ) -> torch.Tensor:
+        """Encode a dense video tensor into a projected or native encoder grid.
 
         Args:
             video: Dense channels-last video tensor ``[B, T, H, W, 3]``.
@@ -427,11 +506,15 @@ class DenseAutoencoderRuntime(nn.Module):
 
         def _encode_padded_chunks(padded_chunks: list[torch.Tensor]) -> list[torch.Tensor]:
             if len(padded_chunks) == 1:
-                encoded = self._encode_video_chunk(padded_chunks[0], pad_to=pad_to)
+                encoded = self._encode_video_chunk(padded_chunks[0], pad_to=pad_to, project=project)
                 return [_trim_boundary_latents(encoded)]
 
             batched_video = cat_with_bounded_inputs(padded_chunks, dim=0)  # [B*G,t_pad,H,W,3]
-            encoded = self._encode_video_chunk(batched_video, pad_to=pad_to)  # [B*G,T_lat,Hp,Wp,2C]
+            encoded = self._encode_video_chunk(
+                batched_video,
+                pad_to=pad_to,
+                project=project,
+            )  # [B*G,T_lat,Hp,Wp,C]
             per_video_batch = padded_chunks[0].shape[0]
             return list(_trim_boundary_latents(encoded).split(per_video_batch, dim=0))
 
@@ -443,7 +526,7 @@ class DenseAutoencoderRuntime(nn.Module):
             # pad_to=None: this chunk has 1 temporal patch, not the regular chunk shape.
             first_frame = video[:, 0:1]  # [B,1,H,W,3]
             first_chunk = first_frame.expand(-1, patch_time, -1, -1, -1).contiguous()  # [B,Pt,H,W,3]
-            encoded_chunks.append(self._encode_video_chunk(first_chunk, pad_to=None))  # [B,1,Hp,Wp,2C]
+            encoded_chunks.append(self._encode_video_chunk(first_chunk, pad_to=None, project=project))  # [B,1,Hp,Wp,C]
 
         chunk_specs = [
             (
@@ -661,8 +744,10 @@ class DenseAutoencoderRuntime(nn.Module):
         self,
         dense_video_chunk: torch.Tensor,
         pad_to: int | None = None,
+        *,
+        project: bool = True,
     ) -> torch.Tensor:
-        """Encode one dense video chunk into projected latent moments."""
+        """Encode one dense video chunk into projected moments or native features."""
         assert pad_to is None or self.backend == "batched_with_padding", (
             "pad_to is only supported for batched_with_padding backend"
         )
@@ -683,7 +768,7 @@ class DenseAutoencoderRuntime(nn.Module):
             height_patches=height_patches,
             width_patches=width_patches,
             device=patch_feats.device,
-            dtype=self.autoencoder.encoder.input_layer.weight.dtype,
+            dtype=activation_dtype(self.autoencoder.encoder.input_layer.weight.dtype),
         )
 
         learned_pe = metadata.learned_pe
@@ -717,6 +802,7 @@ class DenseAutoencoderRuntime(nn.Module):
             q_seqlen=metadata.q_seqlen,
             cu_seqlens_q=metadata.cu_seqlens,
             max_q_seqlen=metadata.max_seq_len if not needs_padding else pad_to,
+            project=project,
         )
 
         if needs_padding:
@@ -734,22 +820,33 @@ class DenseAutoencoderRuntime(nn.Module):
         q_seqlen: list[int] | None = None,
         cu_seqlens_q: torch.Tensor | None = None,
         max_q_seqlen: int | None = None,
+        *,
+        project: bool = True,
     ) -> torch.Tensor:
-        """Encode one dense `[B, S, patch_dim]` chunk into projected latent moments."""
+        """Encode one dense `[B, S, patch_dim]` chunk into projected moments or native features."""
         encoder = self.autoencoder.encoder
-        input_dtype = encoder.input_layer.weight.dtype
+        input_dtype = activation_dtype(encoder.input_layer.weight.dtype)
         if patch_feats.dtype != input_dtype:
             patch_feats = patch_feats.to(input_dtype)
-        feats = F.linear(patch_feats, encoder.input_layer.weight, encoder.input_layer.bias)
+        patch_seq_len = patch_feats.shape[1]
+        feats = F.linear(patch_feats, encoder.input_layer.weight, encoder.input_layer.bias)  # [B,S,D]
         if learned_pe is not None:
-            feats = feats + learned_pe
+            feats = feats + learned_pe  # [B,S,D]
 
-        block_param = next(encoder.blocks.parameters(), None)
-        block_dtype = block_param.dtype if block_param is not None else feats.dtype
+        block_dtype = encoder._resolve_block_dtype()
         if feats.dtype != block_dtype:
-            feats = feats.to(block_dtype)
+            feats = feats.to(block_dtype)  # [B,S,D]
 
-        feats = self._run_block_stack(
+        feats, q_seqlen, cu_seqlens_q, max_q_seqlen, rope_freqs_cis = self._append_dense_register_tokens(
+            module=encoder,
+            feats=feats,
+            q_seqlen=q_seqlen,
+            cu_seqlens_q=cu_seqlens_q,
+            max_q_seqlen=max_q_seqlen,
+            rope_freqs_cis=rope_freqs_cis,
+        )  # [B,S+K,D], metadata with S+K
+
+        feats = self._run_block_stack(  # [B,S+K,D]
             blocks=encoder.blocks,
             feats=feats,
             q_seqlen=q_seqlen,
@@ -757,8 +854,11 @@ class DenseAutoencoderRuntime(nn.Module):
             max_q_seqlen=max_q_seqlen,
             rope_freqs_cis=rope_freqs_cis,
         )
-        feats = encoder.post_layernorm(feats)
-        return F.linear(feats, self.autoencoder.proj.weight, self.autoencoder.proj.bias)
+        feats = feats[:, :patch_seq_len]  # [B,S,D]
+        feats = encoder.post_layernorm(feats)  # [B,S,D]
+        if not project:
+            return feats
+        return F.linear(feats, self.autoencoder.proj.weight, self.autoencoder.proj.bias)  # [B,S,2L]
 
     def _patchify_dense_video(self, dense_video: torch.Tensor) -> torch.Tensor:
         """Patchify a dense channels-last video chunk into `[B, S, patch_dim]`."""
@@ -792,7 +892,7 @@ class DenseAutoencoderRuntime(nn.Module):
             height_patches=height_patches,
             width_patches=width_patches,
             device=feats.device,
-            dtype=self.autoencoder.decoder.input_layer.weight.dtype,
+            dtype=activation_dtype(self.autoencoder.decoder.input_layer.weight.dtype),
         )
         patch_feats = self._decode_chunk_core(
             feats,
@@ -821,20 +921,29 @@ class DenseAutoencoderRuntime(nn.Module):
     ) -> torch.Tensor:
         """Decode one dense `[B, S, latent_dim]` chunk into patch-space features."""
         decoder = self.autoencoder.decoder
-        input_dtype = decoder.input_layer.weight.dtype
+        input_dtype = activation_dtype(decoder.input_layer.weight.dtype)
         if feats.dtype != input_dtype:
             feats = feats.to(input_dtype)
 
-        feats = F.linear(feats, decoder.input_layer.weight, decoder.input_layer.bias)
+        patch_seq_len = feats.shape[1]
+        feats = F.linear(feats, decoder.input_layer.weight, decoder.input_layer.bias)  # [B,S,D]
         if learned_pe is not None:
-            feats = feats + learned_pe
+            feats = feats + learned_pe  # [B,S,D]
 
-        block_param = next(decoder.blocks.parameters(), None)
-        block_dtype = block_param.dtype if block_param is not None else feats.dtype
+        block_dtype = decoder._resolve_block_dtype()
         if feats.dtype != block_dtype:
-            feats = feats.to(block_dtype)
+            feats = feats.to(block_dtype)  # [B,S,D]
 
-        feats = self._run_block_stack(
+        feats, q_seqlen, cu_seqlens_q, max_q_seqlen, rope_freqs_cis = self._append_dense_register_tokens(
+            module=decoder,
+            feats=feats,
+            q_seqlen=q_seqlen,
+            cu_seqlens_q=cu_seqlens_q,
+            max_q_seqlen=max_q_seqlen,
+            rope_freqs_cis=rope_freqs_cis,
+        )  # [B,S+K,D], metadata with S+K
+
+        feats = self._run_block_stack(  # [B,S+K,D]
             blocks=decoder.blocks,
             feats=feats,
             q_seqlen=q_seqlen,
@@ -842,8 +951,75 @@ class DenseAutoencoderRuntime(nn.Module):
             max_q_seqlen=max_q_seqlen,
             rope_freqs_cis=rope_freqs_cis,
         )
-        feats = decoder.out_norm(feats)
-        return F.linear(feats, decoder.out_layer.weight, decoder.out_layer.bias)
+        feats = feats[:, :patch_seq_len]  # [B,S,D]
+        feats = decoder.out_norm(feats)  # [B,S,D]
+        if decoder.force_fp32_output_projection:
+            feats = feats.to(torch.float32)  # [B,S,D]
+            with torch.autocast(device_type=feats.device.type, enabled=False):
+                return F.linear(feats, decoder.out_layer.weight, decoder.out_layer.bias)  # [B,S,P]
+        return F.linear(feats, decoder.out_layer.weight, decoder.out_layer.bias)  # [B,S,P]
+
+    @staticmethod
+    def _append_dense_register_tokens(
+        *,
+        module: SparseTransformerBase,
+        feats: torch.Tensor,
+        q_seqlen: list[int] | None,
+        cu_seqlens_q: torch.Tensor | None,
+        max_q_seqlen: int | None,
+        rope_freqs_cis: torch.Tensor | None,
+    ) -> tuple[torch.Tensor, list[int] | None, torch.Tensor | None, int | None, torch.Tensor | None]:
+        """Append per-segment suffix registers and extend dense attention metadata."""
+        num_register_tokens = module.num_register_tokens
+        if num_register_tokens == 0:
+            return feats, q_seqlen, cu_seqlens_q, max_q_seqlen, rope_freqs_cis
+
+        batch_size, patch_seq_len, hidden_dim = feats.shape
+        register_parts: list[torch.Tensor] = []
+        if module.register_tokens is not None:
+            learned_registers = module.register_tokens.expand(batch_size, -1, -1).to(dtype=feats.dtype)  # [B,R,D]
+            register_parts.append(learned_registers)
+        if module.use_zero_input_register_token:
+            zero_register = feats.new_zeros((batch_size, 1, hidden_dim))  # [B,1,D]
+            register_parts.append(zero_register)
+        suffix_features = torch.cat(register_parts, dim=1)  # [B,K,D]
+        feats = torch.cat((feats, suffix_features), dim=1)  # [B,S+K,D]
+
+        if q_seqlen is not None:
+            if q_seqlen != [patch_seq_len] * batch_size:
+                raise ValueError(
+                    "Dense register tokens require uniform unpadded sequence metadata, "
+                    f"got q_seqlen={q_seqlen}, batch_size={batch_size}, patch_seq_len={patch_seq_len}."
+                )
+            q_seqlen = [seq_len + num_register_tokens for seq_len in q_seqlen]
+            cu_seqlens_q = torch.tensor(  # [B+1]
+                [0, *q_seqlen],
+                dtype=torch.int32,
+                device=feats.device,
+            ).cumsum(dim=0, dtype=torch.int32)
+            max_q_seqlen = max(q_seqlen)
+        elif cu_seqlens_q is not None or max_q_seqlen is not None:
+            raise ValueError("Dense register-token metadata must provide q_seqlen together with cumulative lengths.")
+
+        if rope_freqs_cis is not None:
+            expected_rope_tokens = batch_size * patch_seq_len
+            if rope_freqs_cis.shape[0] != expected_rope_tokens:
+                raise ValueError(
+                    "Dense register-token RoPE metadata has the wrong row count: "
+                    f"expected {expected_rope_tokens}, got {rope_freqs_cis.shape[0]}."
+                )
+            batched_rope = rope_freqs_cis.reshape(batch_size, patch_seq_len, -1)  # [B,S,D_rope]
+            register_rope = torch.ones(  # [B,K,D_rope]
+                (batch_size, num_register_tokens, rope_freqs_cis.shape[-1]),
+                dtype=rope_freqs_cis.dtype,
+                device=rope_freqs_cis.device,
+            )
+            rope_freqs_cis = torch.cat((batched_rope, register_rope), dim=1).reshape(  # [B*(S+K),D_rope]
+                batch_size * (patch_seq_len + num_register_tokens),
+                -1,
+            )
+
+        return feats, q_seqlen, cu_seqlens_q, max_q_seqlen, rope_freqs_cis
 
     def _unpatchify_dense_video_chunk(
         self,
@@ -937,7 +1113,9 @@ class DenseAutoencoderRuntime(nn.Module):
             dtype,
         )
         has_learned_position = bool(
-            module.pe_mode in {"joint", "learned"} and isinstance(module.pos_embedder, LearnedPositionEmbedder)
+            module.position_embedding_scale != 0.0
+            and module.pe_mode in {"joint", "learned"}
+            and isinstance(module.pos_embedder, LearnedPositionEmbedder)
         )
         learned_position_requires_grad = bool(
             has_learned_position
@@ -945,9 +1123,8 @@ class DenseAutoencoderRuntime(nn.Module):
             and module.pos_embedder.position_embedding.weight.requires_grad
         )
         # Trainable learned positions are cacheable only during eval without
-        # gradients. Even there, cache only weight-independent metadata: public
-        # tensor APIs do not expose a mutation generation that can reliably
-        # detect in-place updates to a learned position table.
+        # gradients. Even there, cache only weight-independent metadata:
+        # `.data` mutations do not reliably change tensor identity or version.
         cache_enabled = self.metadata_cache_max_entries > 0 and not (
             learned_position_requires_grad and (self.training or torch.is_grad_enabled())
         )
@@ -967,7 +1144,7 @@ class DenseAutoencoderRuntime(nn.Module):
             if has_learned_position:
                 return replace(
                     cached,
-                    learned_pe=self._build_learned_position_embeddings(
+                    learned_pe=self._build_learned_position_embeddings(  # [1,T*H*W,D]
                         module,
                         temporal_patches=temporal_patches,
                         height_patches=height_patches,
@@ -1045,7 +1222,7 @@ class DenseAutoencoderRuntime(nn.Module):
         device: torch.device,
     ) -> torch.Tensor | None:
         """Build broadcastable learned spatial embeddings for one uniform chunk."""
-        if module.pe_mode not in {"joint", "learned"}:
+        if module.position_embedding_scale == 0.0 or module.pe_mode not in {"joint", "learned"}:
             return None
         if not isinstance(module.pos_embedder, LearnedPositionEmbedder):
             raise ValueError(
@@ -1067,7 +1244,9 @@ class DenseAutoencoderRuntime(nn.Module):
         ).to(dtype=positional_embeddings.dtype)
         spatial_flat = spatial_embeddings.reshape(height_patches * width_patches, -1)
         temporal_flat = spatial_flat.repeat(temporal_patches, 1)
-        return temporal_flat.unsqueeze(0)
+        if module.position_embedding_scale == 1.0:
+            return temporal_flat.unsqueeze(0)  # [1,T*H*W,D]
+        return temporal_flat.unsqueeze(0) * module.position_embedding_scale  # [1,T*H*W,D]
 
     def _build_rope_freqs_cis(
         self,

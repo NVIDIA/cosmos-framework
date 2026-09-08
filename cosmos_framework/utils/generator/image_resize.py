@@ -11,6 +11,76 @@ from PIL import Image
 
 DEFAULT_MAX_PIXELS = 1024 * 1024
 DEFAULT_PADDING_CONSTANT = 32
+_RESOLUTION_768_SHAPES: tuple[tuple[int, int], ...] = (
+    (1024, 1024),
+    (1184, 880),
+    (880, 1184),
+    (1360, 768),
+    (768, 1360),
+)
+_SUPPORTED_VISION_RESOLUTION_TIERS = frozenset({"256", "480", "720"})
+
+
+def get_vision_data_resolution(spatial_shape: tuple[int, int]) -> str:
+    """Determine the resolution string from spatial dimensions."""
+    if spatial_shape in _RESOLUTION_768_SHAPES:
+        return "768"
+
+    min_dim = min(spatial_shape[0], spatial_shape[1])
+    if min_dim <= 256:
+        return "256"
+    if min_dim <= 640:
+        return "480"
+    if min_dim <= 960:
+        return "720"
+    if min_dim <= 2048:
+        return "768"
+    raise ValueError(f"Unsupported resolution: {spatial_shape}")
+
+
+def choose_aspect_nearest_shape(
+    original_size: tuple[int, int],
+    max_size: int,
+    padding_constant: int,
+) -> tuple[int, int]:
+    """Choose the largest supported no-upscale shape with the closest aspect ratio."""
+    original_width, original_height = original_size
+    if original_width < 1 or original_height < 1:
+        raise ValueError(f"Invalid source image size: {original_size}.")
+    if max_size < 1 or padding_constant < 1:
+        raise ValueError("max_size and padding_constant must be positive.")
+
+    capped_long_side = min(max_size, max(original_width, original_height))
+    legal_long_side = max(padding_constant, (capped_long_side // padding_constant) * padding_constant)
+    target_aspect = original_width / original_height
+    best: tuple[tuple[float, int], int, int] | None = None
+
+    for width in range(padding_constant, legal_long_side + 1, padding_constant):
+        for height in range(padding_constant, legal_long_side + 1, padding_constant):
+            try:
+                resolution_tier = get_vision_data_resolution((height, width))
+            except ValueError:
+                continue
+            if resolution_tier not in _SUPPORTED_VISION_RESOLUTION_TIERS:
+                continue
+            score = (abs((width / height) / target_aspect - 1.0), -(width * height))
+            if best is None or score < best[0]:
+                best = (score, width, height)
+
+    if best is None:
+        raise ValueError(
+            f"No I4-supported shape for source={original_size}, max_size={max_size}, "
+            f"padding_constant={padding_constant}."
+        )
+    return best[1], best[2]
+
+
+def resize_aspect_nearest_no_upscale(image: Image.Image, max_size: int, padding_constant: int) -> Image.Image:
+    """Apply the Vision aspect-preserving, no-upscale input policy."""
+    target_size = choose_aspect_nearest_shape(image.size, max_size, padding_constant)
+    if target_size == image.size:
+        return image
+    return image.resize(target_size, resample=Image.Resampling.LANCZOS)
 
 
 def get_max_pixels_resized_size(

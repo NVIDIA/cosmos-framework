@@ -4,7 +4,7 @@
 import argparse
 import os
 import re
-import string
+import unicodedata
 from difflib import SequenceMatcher
 
 import nltk
@@ -18,7 +18,23 @@ from cosmos_framework.auxiliary.guardrail.common.core import (
 )
 from cosmos_framework.utils import log, misc
 
+# Sentinel marking characters that the censor replaced. It must be a character
+# that cannot appear in ordinary text, because censorship is detected by looking
+# for it. Do not colourise it: termcolor strips ANSI escapes when stdout is not a
+# TTY, which reduced the sentinel to a bare "*" in any run whose output was piped
+# to a file, so text containing Markdown emphasis ("**bold**") was reported as
+# blocked even when the blocklist matched nothing.
+CENSOR_SENTINEL = "\x00"
+
+# Displayed to the user in the "Censored Prompt" message. Presentation only --
+# never used to decide whether something was censored.
 CENSOR = misc.Color.red("*")
+
+# Characters that occupy no width, or that only reorder what is drawn: zero-width
+# spaces and joiners, the soft hyphen, and the bidirectional controls. They render
+# as nothing, so a blocklist entry split by one still reads as the entry to a human
+# while reaching the matcher as a token it does not recognise.
+INVISIBLE_CHARS = re.compile(r"[­​-‏‪-‮⁠-⁤﻿]")
 
 
 class Blocklist(ContentSafetyGuardrail):
@@ -51,16 +67,29 @@ class Blocklist(ContentSafetyGuardrail):
         log.debug(f"Whitelisted {len(self.whitelist_words)} words/phrases from whitelist")
         log.debug(f"Loaded {len(self.exact_match_words)} exact match words/phrases from blocklist")
 
-    def uncensor_whitelist(self, input_prompt: str, censored_prompt: str) -> str:
-        """Explicitly uncensor words that are in the whitelist."""
-        input_words = input_prompt.split()
-        censored_words = censored_prompt.split()
-        whitelist_words = set(self.whitelist_words)
-        for i, token in enumerate(input_words):
-            if token.strip(string.punctuation).lower() in whitelist_words:
-                censored_words[i] = token
-        censored_prompt = " ".join(censored_words)
-        return censored_prompt
+    @staticmethod
+    def normalize_for_matching(prompt: str) -> str:
+        """Fold away the ways a word can be written to look normal but not match.
+
+        The matcher compares whitespace-delimited tokens, so anything that splits
+        a word without being visible, or that spells its letters with a different
+        code point, walks past it while the prompt still reads as the blocked word.
+        Three foldings, all of them lossless as far as a reader is concerned:
+
+        * compatibility normalization (NFKC), which maps fullwidth and other
+          presentation forms onto the ASCII letters they are drawn as;
+        * removal of combining marks, so an accent added to a letter does not
+          make a new word;
+        * invisible characters rewritten to a space, then runs of whitespace
+          collapsed, so a word split by any of them is matched as the split it
+          renders as.
+
+        The collapse also closes a plainer hole: a multi-word entry was defeated
+        by typing two spaces between its words.
+        """
+        prompt = unicodedata.normalize("NFKC", prompt)
+        prompt = "".join(c for c in unicodedata.normalize("NFKD", prompt) if not unicodedata.combining(c))
+        return " ".join(INVISIBLE_CHARS.sub(" ", prompt).split())
 
     def censor_prompt(self, input_prompt: str) -> tuple[bool, str]:
         """Censor the prompt using the blocklist with better-profanity fuzzy matching.
@@ -72,11 +101,21 @@ class Blocklist(ContentSafetyGuardrail):
             bool: True if the prompt is blocked, False otherwise
             str: A message indicating why the prompt was blocked
         """
-        censored_prompt = self.profanity.censor(input_prompt, censor_char=CENSOR)
-        # Uncensor whitelisted words that were censored from blocklist fuzzy matching
-        censored_prompt = self.uncensor_whitelist(input_prompt, censored_prompt)
-        if CENSOR in censored_prompt:
-            return True, f"Prompt blocked by censorship: Censored Prompt: {censored_prompt}"
+        # Strip any sentinel already present in the input. to_ascii preserves
+        # \x00 (its range is [^\x00-\x7F]), so without this an input carrying a
+        # NUL would be reported as censored even with no blocklist match -- the
+        # same in-band-marker failure this sentinel replaced. Removing rather
+        # than substituting keeps the stricter reading: "n\x00ike" fuses back to
+        # a blocked word instead of being split into two harmless tokens.
+        input_prompt = input_prompt.replace(CENSOR_SENTINEL, "")
+        input_prompt = self.normalize_for_matching(input_prompt)
+        # The whitelist is handed to load_censor_words(), so the matcher already
+        # leaves whitelisted words alone. Restoring them a second time here is
+        # what introduced the token misalignment described in the commit message.
+        censored_prompt = self.profanity.censor(input_prompt, censor_char=CENSOR_SENTINEL)
+        if CENSOR_SENTINEL in censored_prompt:
+            display_prompt = censored_prompt.replace(CENSOR_SENTINEL, CENSOR)
+            return True, f"Prompt blocked by censorship: Censored Prompt: {display_prompt}"
         return False, ""
 
     @staticmethod

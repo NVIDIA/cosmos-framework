@@ -251,6 +251,13 @@ def init_torch_test():
 
 
 _WHITELIST_ENV_VARS = {
+    # Both set by sklearn/__init__.py at import time (OpenMP workarounds: allow a
+    # duplicate OpenMP runtime, and skip the intel-openmp 2019.5 fork bug).  Reached
+    # from any test importing transformers.generation, whose candidate_generator does
+    # `from sklearn.metrics import roc_curve` under is_sklearn_available() -- true
+    # since scikit-learn arrived as a librosa dependency.
+    "KMP_DUPLICATE_LIB_OK",
+    "KMP_INIT_AT_FORK",
     "LD_LIBRARY_PATH",
     # Set as a side-effect of importing TransformerEngine (via NANO_MODEL_CONFIG /
     # SUPER_MODEL_CONFIG).  Any SFT experiment config test that imports a model config

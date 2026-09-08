@@ -20,6 +20,7 @@ ______________________________________________________________________
 - [Sample Arguments](#sample-arguments)
   - [Text](#text)
   - [Vision (Image/Video)](#vision-imagevideo)
+    - [Resolution tiers](#resolution-tiers)
   - [Action](#action)
   - [Reasoner](#reasoner)
   - [Custom Defaults](#custom-defaults)
@@ -210,8 +211,29 @@ Common arguments:
 Common arguments:
 
 - `fps`: Condition and output frames per second.
-- `resolution` (`"256"`, `"480"`, `"720"`): Condition and output resolution (height in pixels).
-- `aspect_ratio` (`1,1`, `4,3`, `"3,4`, `16,9`, `9,16`): Condition and output aspect ratio. Defaults to `16,9`.
+- `resolution` (`"256"`, `"480"`, `"720"`, `"768"`): Condition and output resolution **tier**, not a
+  pixel dimension. The output width and height are looked up from the tier *and* the
+  aspect ratio — see [Resolution tiers](#resolution-tiers) below.
+- `aspect_ratio` (`1,1`, `4,3`, `3,4`, `16,9`, `9,16`): Condition and output aspect ratio. Defaults to `16,9`.
+
+#### Resolution tiers
+
+For the `480` and `720` tiers the `16,9` output height matches the tier name (`832x480`,
+`1280x720`). The `256` tier does not: its widescreen entries are smaller than the name
+suggests.
+
+| `aspect_ratio` | `256`       | `480`   | `720`    | `768`     |
+| -------------- | ----------- | ------- | -------- | --------- |
+| `1,1`          | 256x256     | 640x640 | 960x960  | 1024x1024 |
+| `4,3`          | 320x256     | 736x544 | 1104x832 | 1184x880  |
+| `3,4`          | 256x320     | 544x736 | 832x1104 | 880x1184  |
+| `16,9`         | **320x192** | 832x480 | 1280x720 | 1360x768  |
+| `9,16`         | **192x320** | 480x832 | 720x1280 | 768x1360  |
+
+So `resolution: "256"` with the default `16,9` produces a 320x192 output, not 256 pixels
+tall. Use `aspect_ratio: "1,1"` or `"4,3"` if you need a 256-pixel short edge at that tier.
+The authoritative tables are `IMAGE_RES_SIZE_INFO` and `VIDEO_RES_SIZE_INFO` in
+`cosmos_framework/data/generator/utils.py`.
 
 Condition arguments:
 

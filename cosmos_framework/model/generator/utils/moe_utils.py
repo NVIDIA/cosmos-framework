@@ -5,8 +5,14 @@ from collections.abc import Iterator
 
 import torch
 from torch.distributed.device_mesh import DeviceMesh
+from transformers.models.qwen3_vl_moe.modeling_qwen3_vl_moe import (
+    Qwen3VLMoeTextSparseMoeBlock as HFQwen3VLMoeTextSparseMoeBlock,
+)
 
-from cosmos_framework.model.generator.reasoner.qwen3_vl_moe.qwen3_vl_moe import Qwen3VLMoeTextSparseMoeBlock
+from cosmos_framework.model.generator.reasoner.qwen3_vl_moe.qwen3_vl_moe import (
+    LBLMetadata,
+    Qwen3VLMoeTextSparseMoeBlock,
+)
 
 
 def _iter_generation_moe_blocks(
@@ -16,6 +22,88 @@ def _iter_generation_moe_blocks(
     for name, module in net.named_modules():
         if isinstance(module, Qwen3VLMoeTextSparseMoeBlock) and "moe_gen" in name:
             yield name, module
+
+
+def set_hf_moe_token_mask(net: torch.nn.Module, attention_mask: torch.Tensor | None) -> None:
+    """Publish which rows are real tokens to every patched HF sparse MoE block.
+
+    The patched block forward (see ``monkey_patch.patch_qwen3_vl_moe_grouped_mm_experts``)
+    receives only ``hidden_states``, so it cannot tell the collate's trailing padding from
+    content on its own. Without this, its routing statistics count the padding: the padded
+    rows are dispatched to experts, land in the token counts and in the mean router
+    probability, and the auxiliary loss then trains the router to balance rows that carry no
+    supervision — ``ignore_index`` keeps them out of the cross-entropy, not out of this. The
+    native ``Qwen3VLMoeTextSparseMoeBlock`` takes the same mask as a forward argument.
+
+    The mirror image of :func:`collect_hf_moe_lbl_metadata`: this publishes before the
+    forward, that collects after it. A plain attribute for the same reason — it holds one
+    step's tensor and must never reach a state_dict.
+
+    Published per step and overwritten by the next one rather than cleared after the forward:
+    under non-reentrant activation checkpointing the block forward is re-executed during
+    backward and has to mask the same rows, or the recomputed activations would not match the
+    ones the forward produced.
+
+    Args:
+        net: Any module containing the patched HF ``Qwen3VLMoeTextSparseMoeBlock`` submodules
+            (e.g. ``HFModel`` or the raw HF model).
+        attention_mask: The collate's ``[B, N]`` mask, true on real tokens. ``None`` clears
+            the blocks, which makes them count every row — what an unpadded stream wants.
+    """
+    if attention_mask is not None and attention_mask.ndim != 2:
+        raise ValueError(
+            f"attention_mask must be [B, N] to flatten alongside hidden_states, got {tuple(attention_mask.shape)}"
+        )
+    # Flattened once per step rather than once per layer: the block sees hidden_states already
+    # reshaped to [B*N, hidden_size].
+    token_mask = None if attention_mask is None else attention_mask.reshape(-1).bool()  # [B*N]
+    for module in net.modules():
+        if isinstance(module, HFQwen3VLMoeTextSparseMoeBlock):
+            module.token_mask = token_mask
+
+
+def collect_hf_moe_lbl_metadata(net: torch.nn.Module) -> LBLMetadata | None:
+    """Pop the per-layer load-balancing statistics stashed on HF sparse MoE blocks.
+
+    The statistics live on a plain ``block.lbl_metadata`` attribute set by the patched
+    forward (see monkey_patch.patch_qwen3_vl_moe_grouped_mm_experts) rather than a buffer:
+    it holds a graph-carrying tensor for the lifetime of one forward and must never reach a
+    state_dict.
+
+    Returns them stacked into the ``[num_layers, ...]`` layout that
+    :func:`~cosmos_framework.model.generator.algorithm.loss.load_balancing.compute_load_balancing_loss`
+    expects, or ``None`` for a backbone with no patched MoE block (or before its first
+    forward).
+
+    Popping is the point: ``mean_router_prob_per_expert`` carries the router's autograd
+    graph, so leaving it on the module would pin a whole step's activations past backward.
+    Call it exactly once per forward, before backward. The recompute that non-reentrant
+    activation checkpointing runs during backward does NOT re-stash — ``monkey_patch``'s
+    patched MoE block forward skips the stash there precisely because this collector has
+    already run by then and would never clear it.
+
+    Args:
+        net: Any module containing the patched HF ``Qwen3VLMoeTextSparseMoeBlock``
+            submodules (e.g. ``HFModel`` or the raw HF model).
+    """
+    per_layer: list[LBLMetadata] = []
+    for module in net.modules():
+        if not isinstance(module, HFQwen3VLMoeTextSparseMoeBlock):
+            continue
+        metadata = getattr(module, "lbl_metadata", None)
+        if metadata is None:
+            continue
+        module.lbl_metadata = None
+        per_layer.append(metadata)
+
+    if not per_layer:
+        return None
+    return LBLMetadata(
+        num_tokens_per_expert=torch.stack([m.num_tokens_per_expert for m in per_layer]),  # [L,E]
+        num_tokens=torch.stack([m.num_tokens for m in per_layer]),  # [L,1]
+        mean_router_prob_per_expert=torch.stack([m.mean_router_prob_per_expert for m in per_layer]),  # [L,E]
+        top_k=torch.stack([m.top_k for m in per_layer]),  # [L,1]
+    )
 
 
 def update_expert_biases(

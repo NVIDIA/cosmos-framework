@@ -14,7 +14,6 @@ import cattrs
 import cattrs.preconf.json
 import safetensors.torch
 import torch
-import torchvision.io
 from PIL import Image
 from qwen_vl_utils.vision_process import smart_nframes
 from torch.utils._pytree import tree_map_only
@@ -46,6 +45,7 @@ from cosmos_framework.inference.model import Cosmos3OmniConfig, Cosmos3OmniModel
 from cosmos_framework.inference.vision import (
     build_conditioned_video_batch,
     build_image_edit_batch,
+    decode_video_thwc_uint8,
     load_conditioning_image,
     load_conditioning_video,
     load_prompt_upsampling_image,
@@ -291,8 +291,13 @@ def _compute_num_tokens_for_sample(sample_args: OmniSampleArgs, model: OmniMoTMo
     w, h = sample_args.vision_size
     T = sample_args.num_frames
 
-    spatial_cf = cast(int, model.tokenizer_vision_gen.spatial_compression_factor)
-    temporal_cf = cast(int, model.tokenizer_vision_gen.temporal_compression_factor)
+    vision_tokenizer = model.tokenizer_vision_gen
+    if vision_tokenizer is None:
+        spatial_cf = cast(int, model.config.tokenizer.spatial_compression_factor)
+        temporal_cf = cast(int, model.config.tokenizer.temporal_compression_factor)
+    else:
+        spatial_cf = vision_tokenizer.spatial_compression_factor
+        temporal_cf = vision_tokenizer.temporal_compression_factor
     patch_spatial: int = model.config.diffusion_expert_config.patch_spatial
 
     vae_spatial_downsample = spatial_cf * patch_spatial
@@ -574,17 +579,16 @@ def _get_prompt_sample_data(sample_args: OmniSampleArgs, model: OmniMoTModel, *,
 def _decode_reasoner_video(vision_path: str, video_fps: float | None) -> dict[str, Any]:
     """Decode a local video file into the frame-list payload the Qwen3-VL processor expects.
 
-    Returns ``{"frames": [PIL.Image, ...], "fps": float}``. Uses the same
-    ``torchvision.io.read_video`` decode the rest of the inference path relies on
-    (no ``decord`` dependency), then uniformly samples frames toward ``video_fps``
-    (default 2.0) via Qwen's ``smart_nframes``. The repo ``Qwen3VLProcessor`` runs
-    with ``do_sample_frames=False``, so it consumes this pre-sampled frame list
-    as-is and handles its own per-frame resize."""
-    frames, _, info = torchvision.io.read_video(str(vision_path), pts_unit="sec")  # [T,H,W,C] uint8
+    Returns ``{"frames": [PIL.Image, ...], "fps": float}``. Uses the same TorchCodec
+    decode the rest of the inference path relies on (no ``decord`` dependency), then
+    uniformly samples frames toward ``video_fps`` (default 2.0) via Qwen's
+    ``smart_nframes``. The repo ``Qwen3VLProcessor`` runs with ``do_sample_frames=False``,
+    so it consumes this pre-sampled frame list as-is and handles its own per-frame resize."""
+    frames, src_fps = decode_video_thwc_uint8(Path(vision_path))  # [T,H,W,C] uint8
     total_frames = int(frames.shape[0])
     if total_frames == 0:
         raise ValueError(f"Decoded zero frames from reasoner video: {vision_path}")
-    src_fps = float(info.get("video_fps") or 0.0) or 1.0
+    src_fps = src_fps or 1.0
     target_fps = video_fps if video_fps is not None else 2.0
     nframes = smart_nframes({"fps": target_fps}, total_frames=total_frames, video_fps=src_fps)
     idx = torch.linspace(0, total_frames - 1, nframes).round().long().tolist()
@@ -1164,6 +1168,10 @@ class OmniInference(Inference):
             method=setup_args.quantization_method,
             include_regex=list(setup_args.quantization_include_regex),
             exclude_regex=list(setup_args.quantization_exclude_regex),
+            mixed_precision_first_steps=setup_args.mixed_precision_first_steps,
+            mixed_precision_last_steps=setup_args.mixed_precision_last_steps,
+            mixed_precision_reasoner_policy=setup_args.mixed_precision_reasoner_policy,
+            mixed_precision_w8a16_cache=setup_args.mixed_precision_w8a16_cache,
         )
 
     @override
@@ -1290,7 +1298,10 @@ class OmniInference(Inference):
                 log.debug(f"Sampler overridden to: {sampler_override}")
 
         vae_decode_stream: torch.cuda.Stream | None = None
-        if setup_args.use_separate_pipeline_vision_decode_gpu:
+        vision_tokenizer = model.tokenizer_vision_gen
+        if setup_args.use_separate_pipeline_vision_decode_gpu and vision_tokenizer is None:
+            log.info("Separate vision decode GPU setup skipped because the generation vision tokenizer is not loaded")
+        elif setup_args.use_separate_pipeline_vision_decode_gpu:
             # The CP/CFGP ranks are partitioned into replica-local groups of size
             # cp_size * cfgp_size. Only the first rank in each group owns separate-VAE
             # decode work. For example, with cp_size=2 and cfgp_size=1, ranks [0,1]
@@ -1310,7 +1321,7 @@ class OmniInference(Inference):
                 vae_device = torch.device("cuda", vae_device_index)
                 inference_device = torch.device("cuda", torch.cuda.current_device())
                 vae_decode_stream = torch.cuda.Stream(device=vae_device)
-                vae = model.tokenizer_vision_gen.model
+                vae = vision_tokenizer.model
                 vae.device = str(vae_device)
                 vae.model = vae.model.to(device=vae_device)
                 vae.scale = tree_map_only(torch.Tensor, lambda tensor: tensor.to(device=vae_device), vae.scale)
@@ -1333,7 +1344,36 @@ class OmniInference(Inference):
                     rank0_only=False,
                 )
 
-        return cls(setup_args=setup_args, model=model, vae_decode_stream=vae_decode_stream, **kwargs)
+        pipe = cls(setup_args=setup_args, model=model, vae_decode_stream=vae_decode_stream, **kwargs)
+        # Install here (not only in scripts/inference.py) so all callers —
+        # cosmos-benchmarks EvalModel, Ray serve, CLI — get the default-on cache.
+        cls._maybe_install_diffusion_cache(pipe, setup_args)
+        return pipe
+
+    @staticmethod
+    def _maybe_install_diffusion_cache(pipe: "OmniInference", setup_args: SetupArgs) -> None:
+        """Install SeaCache on ``pipe.model`` when ``setup_args.diffusion_cache`` is set.
+
+        ``num_steps`` is adopted per ``generate_samples_from_batch`` call via
+        ``begin_generation``, so install-time ``sample_args_list`` can be empty.
+        """
+        if not setup_args.diffusion_cache:
+            return
+        from cosmos_framework.model.generator.mot.diffusion_cache import install_diffusion_cache
+
+        config_overrides: dict[str, Any] = {}
+        if setup_args.diffusion_cache_thresh is not None:
+            config_overrides["diffusion_cache_thresh"] = setup_args.diffusion_cache_thresh
+        if setup_args.diffusion_cache_residual_order is not None:
+            config_overrides["residual_order"] = setup_args.diffusion_cache_residual_order
+        if setup_args.diffusion_cache_max_consecutive_cached is not None:
+            config_overrides["max_consecutive_cached"] = setup_args.diffusion_cache_max_consecutive_cached
+        install_diffusion_cache(
+            pipe=pipe,
+            enabled=True,
+            sample_args_list=[],
+            config_overrides=config_overrides or None,
+        )
 
     @classmethod
     def save_data(

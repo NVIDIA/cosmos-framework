@@ -19,6 +19,8 @@ from cosmos_framework.inference.args import (
     OmniSetupOverrides,
     SoundDataOverrides,
     _get_nvml_device_memory_info,
+    is_reasoner_only,
+    reasoner_only_overrides,
 )
 from cosmos_framework.inference.common.config import structure_config
 
@@ -29,6 +31,63 @@ _H100_MEMORY_BYTES = 80 * 1024**3
 # Reserved for future use (paired with the reserved memory-based `_get_dp_shard_size`
 # heuristic in args.py); not currently exercised.
 _GB200_MEMORY_BYTES = 192 * 1024**3
+
+
+def test_reasoner_only_detection() -> None:
+    reasoner = OmniSampleOverrides(model_mode=ModelMode.REASONER)
+    generator = OmniSampleOverrides(model_mode=ModelMode.TEXT2VIDEO)
+
+    assert is_reasoner_only([reasoner])
+    assert is_reasoner_only([reasoner, reasoner])
+    assert not is_reasoner_only([reasoner, generator])
+    assert not is_reasoner_only([])
+
+
+def test_reasoner_only_override_disables_vision_tokenizer_in_model_config(tmp_path: Path) -> None:
+    setup_args = OmniSetupOverrides(
+        checkpoint_path=DEFAULT_CHECKPOINT_NAME,
+        output_dir=tmp_path / "outputs",
+    ).build_setup(world_size=1, local_world_size=1, device_memory_bytes=_H100_MEMORY_BYTES)
+
+    model_dict = structure_config(setup_args.load_model_config_dict(), omegaconf.DictConfig)
+    assert model_dict.config.load_vision_tokenizer is True
+
+    setup_args.experiment_overrides.append("model.config.load_vision_tokenizer=false")
+
+    model_dict = structure_config(setup_args.load_model_config_dict(), omegaconf.DictConfig)
+    assert model_dict.config.load_vision_tokenizer is False
+
+
+def test_reasoner_only_overrides_disable_every_generation_side_module(tmp_path: Path) -> None:
+    """All three overrides must land on the live model config, not just parse.
+
+    They are orthogonal on purpose: dropping any one of them degrades to the
+    previous behaviour for that module alone.
+    """
+    setup_args = OmniSetupOverrides(
+        checkpoint_path=DEFAULT_CHECKPOINT_NAME,
+        output_dir=tmp_path / "outputs",
+    ).build_setup(world_size=1, local_world_size=1, device_memory_bytes=_H100_MEMORY_BYTES)
+
+    model_dict = structure_config(setup_args.load_model_config_dict(), omegaconf.DictConfig)
+    assert model_dict.config.load_vision_tokenizer is True
+    assert model_dict.config.vision_gen is True
+    # ``include_gen_pathway`` is absent until overridden: the LazyDict only carries
+    # kwargs the experiment config passed explicitly, so the True default lives in
+    # ``_MoTConfigBase.__init__``. That is also why enabling this flag cannot leak
+    # into an exported checkpoint config.
+    assert "include_gen_pathway" not in model_dict.config.vlm_config.model_instance.config
+
+    setup_args.experiment_overrides.extend(reasoner_only_overrides())
+
+    model_dict = structure_config(setup_args.load_model_config_dict(), omegaconf.DictConfig)
+    assert model_dict.config.load_vision_tokenizer is False
+    assert model_dict.config.vision_gen is False
+    assert model_dict.config.vlm_config.model_instance.config.include_gen_pathway is False
+    # Cosmos3VFMNetworkConfig asserts action/sound generation each imply vision
+    # generation, so the three modality flags must be switched off together.
+    assert model_dict.config.action_gen is False
+    assert model_dict.config.sound_gen is False
 
 
 def test_build_parallelism(monkeypatch: pytest.MonkeyPatch):
@@ -151,14 +210,14 @@ def test_checkpoints():
         (
             "Cosmos3-Super-Text2Image-4Step",
             "nvidia/Cosmos3-Super-Text2Image-4Step",
-            "1ba94110bc118f479bbd5e461e79d685d74b2554",
+            "main",
             "768",
             24,
         ),
         (
             "Cosmos3-Super-Image2Video-4Step",
             "nvidia/Cosmos3-Super-Image2Video-4Step",
-            "f85d3335d2ad8b352462cecbd637aa980cec9688",
+            "main",
             "480",
             16,
         ),
@@ -217,6 +276,21 @@ def test_setup_args(tmp_path: Path):
     # Check idempotent
     check_model_equal(overrides.build_setup(), args)
     check_model_equal(OmniSetupOverrides.model_validate(args.model_dump()).build_setup(), args)
+
+
+def test_diffusion_cache_max_consecutive_cached_round_trip(tmp_path: Path) -> None:
+    overrides = OmniSetupOverrides(
+        checkpoint_path=DEFAULT_CHECKPOINT_NAME,
+        output_dir=tmp_path / "outputs",
+        diffusion_cache=True,
+        diffusion_cache_max_consecutive_cached=3,
+    )
+
+    args = overrides.build_setup()
+
+    assert args.diffusion_cache is True
+    assert args.diffusion_cache_max_consecutive_cached == 3
+    assert OmniSetupOverrides.model_validate(args.model_dump()).diffusion_cache_max_consecutive_cached == 3
 
 
 def test_sample_args(tmp_path: Path):

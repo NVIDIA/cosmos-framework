@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: OpenMDW-1.1
 
 import os
+import random
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
@@ -13,7 +14,11 @@ from loguru import logger as log
 from cosmos_framework.utils.flags import INTERNAL
 from cosmos_framework.utils.easy_io.backends.auto_auth import json_load_auth, open_auth
 
-_LOCK_TIMEOUT_SECONDS = 1800  # 30 minutes
+_CACHE_WAIT_TIMEOUT_SECONDS = 30 * 60
+_MARKER_POLL_SECONDS = 20.0
+_MARKER_POLL_JITTER_SECONDS = 10.0
+_METADATA_COMPLETE_MARKER = ".download_complete_metadata"
+_WEIGHTS_COMPLETE_MARKER = ".download_complete_weights"
 
 
 def _load_s3_credentials(credential_path: str) -> dict:
@@ -27,29 +32,16 @@ def _load_s3_credentials(credential_path: str) -> dict:
         return json_load_auth(f)
 
 
-def parallel_download_s3_prefix_to_dir(
+def _list_s3_prefix_objects(
     bucket: str,
     prefix: str,
-    dest_dir: str,
     credential_path: str,
-    max_workers: int = 4,
-    skip_if_exists: bool = True,
-    exclude_list: list[str] = [],
-) -> list[str]:
-    """
-    Parallel download of all objects under s3_uri (prefix) to dest_dir,
-    preserving relative paths. Returns list of downloaded (or skipped) local paths.
-    Example of exclude_list: [".safetensors"]
-    """
-    os.makedirs(dest_dir, exist_ok=True)
-
+    exclude_list: list[str],
+) -> list[tuple[str, int]]:
     s3 = boto3.client("s3", **_load_s3_credentials(credential_path))
-
-    # List all objects under prefix (paginated)
     paginator = s3.get_paginator("list_objects_v2")
     pages = paginator.paginate(Bucket=bucket, Prefix=prefix)
 
-    # Collect (key, size) for real objects (exclude "folders")
     objects: list[tuple[str, int]] = []
     for page in pages:
         for obj in page.get("Contents", []):
@@ -61,6 +53,53 @@ def parallel_download_s3_prefix_to_dir(
                 log.info(f"Skipping {key} because it matches exclude_list {exclude_list}")
                 continue
             objects.append((key, obj["Size"]))
+    return objects
+
+
+def _local_path_for_s3_key(dest_dir: str, prefix: str, key: str) -> str:
+    rel_path = os.path.relpath(key, start=prefix) if prefix else key
+    return os.path.join(dest_dir, rel_path)
+
+
+def _cache_matches_s3_manifest(
+    cache_dir: str,
+    prefix: str,
+    objects: list[tuple[str, int]],
+) -> bool:
+    if not objects:
+        return False
+
+    for key, size in objects:
+        local_path = _local_path_for_s3_key(cache_dir, prefix, key)
+        try:
+            if not os.path.isfile(local_path) or os.path.getsize(local_path) != size:
+                return False
+        except OSError:
+            return False
+    return True
+
+
+def parallel_download_s3_prefix_to_dir(
+    bucket: str,
+    prefix: str,
+    dest_dir: str,
+    credential_path: str,
+    max_workers: int = 4,
+    skip_if_exists: bool = True,
+    exclude_list: list[str] = [],
+    objects: list[tuple[str, int]] | None = None,
+) -> list[str]:
+    """
+    Parallel download of all objects under s3_uri (prefix) to dest_dir,
+    preserving relative paths. Returns list of downloaded (or skipped) local paths.
+    Example of exclude_list: [".safetensors"]
+    """
+    os.makedirs(dest_dir, exist_ok=True)
+
+    s3 = boto3.client("s3", **_load_s3_credentials(credential_path))
+
+    if objects is None:
+        objects = _list_s3_prefix_objects(bucket, prefix, credential_path, exclude_list)
 
     # Nothing to do
     if not objects:
@@ -78,8 +117,7 @@ def parallel_download_s3_prefix_to_dir(
     )
 
     def submit_download(executor, key, size):
-        rel_path = os.path.relpath(key, start=prefix) if prefix else key
-        local_path = os.path.join(dest_dir, rel_path)
+        local_path = _local_path_for_s3_key(dest_dir, prefix, key)
         os.makedirs(os.path.dirname(local_path), exist_ok=True)
 
         # Skip if exists and size matches
@@ -121,6 +159,36 @@ def has_model_weights(cache_dir: str) -> bool:
     import glob
 
     return len(glob.glob(os.path.join(cache_dir, "*.safetensors"))) > 0
+
+
+def _completion_marker_path(cache_dir: str, include_model_weights: bool) -> str:
+    marker_name = _WEIGHTS_COMPLETE_MARKER if include_model_weights else _METADATA_COMPLETE_MARKER
+    return os.path.join(cache_dir, marker_name)
+
+
+def _is_cache_complete(cache_dir: str, include_model_weights: bool) -> bool:
+    marker_path = _completion_marker_path(cache_dir, include_model_weights)
+    if os.path.exists(marker_path):
+        return True
+    return not include_model_weights and os.path.exists(_completion_marker_path(cache_dir, True))
+
+
+def _write_completion_marker(cache_dir: str, include_model_weights: bool) -> None:
+    marker_path = _completion_marker_path(cache_dir, include_model_weights)
+    temporary_marker_path = f"{marker_path}.{os.getpid()}.tmp"
+    try:
+        with open(temporary_marker_path, "w") as marker_file:
+            marker_file.write("complete\n")
+        os.replace(temporary_marker_path, marker_path)
+    finally:
+        if os.path.exists(temporary_marker_path):
+            os.remove(temporary_marker_path)
+
+
+def _mark_cache_complete(cache_dir: str, include_model_weights: bool) -> None:
+    _write_completion_marker(cache_dir, include_model_weights)
+    if include_model_weights:
+        _write_completion_marker(cache_dir, False)
 
 
 def s3_dir_exists(bucket, prefix, credentials):
@@ -221,6 +289,9 @@ def maybe_download_hf_model_from_s3(
             if "://" not in local_path:
                 return local_path
 
+    if _is_cache_complete(cache_dir, include_model_weights):
+        return cache_dir
+
     if not s3_dir_exists(bucket, s3_prefix, credentials):
         if require_s3_exists:
             raise FileNotFoundError(f"Model {model_name_or_path} not found in s3://{bucket}/{s3_prefix}")
@@ -231,25 +302,46 @@ def maybe_download_hf_model_from_s3(
             )
             return model_name_or_path
 
+    os.makedirs(cache_dir, exist_ok=True)
     lock_path = os.path.join(cache_dir, "lock.lock")
-    lock = filelock.FileLock(lock_path, timeout=_LOCK_TIMEOUT_SECONDS)  # 1 minute timeout for download
-    with lock:
-        if (
-            os.path.exists(cache_dir)
-            and not include_model_weights
-            and os.path.exists(os.path.join(cache_dir, "vocab.json"))
-        ):
-            return cache_dir
-        elif os.path.exists(cache_dir) and include_model_weights and has_model_weights(cache_dir):
-            return cache_dir
-        else:
-            os.makedirs(cache_dir, exist_ok=True)
-            tic = time.time()
-            parallel_download_s3_prefix_to_dir(bucket, s3_prefix, cache_dir, credentials, exclude_list=exclude_list)
-            toc = time.time()
-            print(f"Time taken to download model {model_name_or_path}: {toc - tic:.3f} seconds")
+    lock = filelock.FileLock(lock_path, timeout=0)
+    deadline = time.monotonic() + _CACHE_WAIT_TIMEOUT_SECONDS
 
-    return cache_dir
+    try:
+        lock.acquire(timeout=0)
+    except filelock.Timeout as error:
+        while not _is_cache_complete(cache_dir, include_model_weights):
+            remaining_seconds = deadline - time.monotonic()
+            if remaining_seconds <= 0:
+                raise TimeoutError(f"Timed out waiting for the completed model cache marker in {cache_dir}") from error
+            poll_seconds = _MARKER_POLL_SECONDS + random.uniform(0, _MARKER_POLL_JITTER_SECONDS)
+            time.sleep(min(poll_seconds, remaining_seconds))
+        return cache_dir
+
+    try:
+        if _is_cache_complete(cache_dir, include_model_weights):
+            return cache_dir
+
+        objects = _list_s3_prefix_objects(bucket, s3_prefix, credentials, exclude_list)
+        if _cache_matches_s3_manifest(cache_dir, s3_prefix, objects):
+            _mark_cache_complete(cache_dir, include_model_weights)
+            return cache_dir
+
+        tic = time.time()
+        parallel_download_s3_prefix_to_dir(
+            bucket,
+            s3_prefix,
+            cache_dir,
+            credentials,
+            exclude_list=exclude_list,
+            objects=objects,
+        )
+        toc = time.time()
+        print(f"Time taken to download model {model_name_or_path}: {toc - tic:.3f} seconds")
+        _mark_cache_complete(cache_dir, include_model_weights)
+        return cache_dir
+    finally:
+        lock.release()
 
 
 if __name__ == "__main__":

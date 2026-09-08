@@ -19,9 +19,9 @@ from typing import Any, Literal
 import numpy as np
 import torch
 
-from cosmos_framework.data.generator.action.action_spec import ActionSpec, Gripper, Pos, Rot, build_action_spec
+from cosmos_framework.data.generator.action.utils.action_spec import ActionSpec, Gripper, Pos, Rot, build_action_spec
 from cosmos_framework.data.generator.action.datasets.base_dataset import ActionBaseDataset
-from cosmos_framework.data.generator.action.pose_utils import (
+from cosmos_framework.data.generator.action.utils.pose_utils import (
     build_abs_pose_from_components,
     pose_abs_to_rel,
 )

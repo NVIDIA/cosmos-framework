@@ -26,6 +26,9 @@ class DurationFPSTextTimeStamps(Augmentor):
         Original caption: "A cat playing with a ball"
         Augmented caption: "A cat playing with a ball. The video is 1.4 seconds long and is of 24 FPS"
 
+    An ordered list of captions is augmented item by item for separate-view
+    multiview tokenization.
+
     Args:
         input_keys (list): Input keys (not used, kept for API compatibility)
         output_keys (list): Output keys (not used, kept for API compatibility)
@@ -35,9 +38,14 @@ class DurationFPSTextTimeStamps(Augmentor):
             - fps_key (str): Key for FPS value in data_dict. Default: "conditioning_fps"
             - template (str): Format string for metadata text. Default: DEFAULT_TEMPLATE constant
             - separator (str): Separator between caption and metadata. Default: ". "
+            - force_separator (bool): Always use separator instead of punctuation-aware spacing.
+              Default: False.
             - enabled (bool): Whether augmentation is enabled. Default: True
             - skip_on_error (bool): If True, skip on errors and return original data_dict. If False, return None. Default: True
             - num_multiplier_key (str): Key for num_multiplier value in data_dict. Default: "num_multiplier"
+            - num_frames_key (str): Key holding the frame count to derive duration from. Required for
+              multiview samples, whose video tensor concatenates views along the temporal axis so that
+              ``video.shape[1]`` is num_views * frames_per_view. Default: None (use the video tensor).
     """
 
     def __init__(
@@ -51,9 +59,11 @@ class DurationFPSTextTimeStamps(Augmentor):
         self.fps_key = args.get("fps_key", "conditioning_fps") if args else "conditioning_fps"
         self.template = args.get("template", DEFAULT_TEMPLATE) if args else DEFAULT_TEMPLATE
         self.default_separator = args.get("separator", ". ") if args else ". "
+        self.force_separator: bool = args.get("force_separator", False) if args else False
         self.enabled = args.get("enabled", True) if args else True
         self.skip_on_error = args.get("skip_on_error", True) if args else True
         self.num_multiplier_key = args.get("num_multiplier_key", "num_multiplier") if args else "num_multiplier"
+        self.num_frames_key = args.get("num_frames_key", None) if args else None
 
     def __call__(self, data_dict: dict) -> dict | None:
         """
@@ -78,6 +88,19 @@ class DurationFPSTextTimeStamps(Augmentor):
             else:
                 return None
         caption = data_dict[self.caption_key]
+        if isinstance(caption, list):
+            if not caption or not all(isinstance(item, (str, dict)) for item in caption):
+                return data_dict if self.skip_on_error else None
+            updated_captions: list[str | dict] = []
+            for item in caption:
+                item_data = dict(data_dict)
+                item_data[self.caption_key] = item
+                updated_item_data = self(item_data)
+                if updated_item_data is None:
+                    return None
+                updated_captions.append(updated_item_data[self.caption_key])
+            data_dict[self.caption_key] = updated_captions
+            return data_dict
         if (not isinstance(caption, str) and not isinstance(caption, dict)) or caption == "":
             if self.skip_on_error:
                 return data_dict
@@ -92,12 +115,20 @@ class DurationFPSTextTimeStamps(Augmentor):
         else:
             fps = float(fps_value)
 
-        # Extract ACTUAL number of frames from the video tensor shape
-        # This is critical - we need the final frame count after all processing
-        video = data_dict[self.video_key]
-
-        # Video shape is (C, T, H, W)
-        num_frames = video.shape[1]
+        # Extract ACTUAL number of frames after all video processing.
+        # Prefer an explicit count when the caller supplies one: a multiview video
+        # tensor concatenates its views along the temporal axis, so shape[1] would
+        # overstate the clip length by a factor of num_views.
+        num_frames = None
+        if self.num_frames_key is not None and self.num_frames_key in data_dict:
+            num_frames_value = data_dict[self.num_frames_key]
+            if isinstance(num_frames_value, torch.Tensor):
+                num_frames = int(num_frames_value.reshape(-1)[0].item())
+            else:
+                num_frames = int(num_frames_value)
+        if not num_frames:
+            # Video shape is (C, T, H, W)
+            num_frames = data_dict[self.video_key].shape[1]
 
         # Compute duration and append to caption
         if fps > 0:
@@ -106,8 +137,11 @@ class DurationFPSTextTimeStamps(Augmentor):
                 # Case 1: Caption is a string (existing behavior).
                 metadata_text = self.template.format(duration=duration, fps=fps)
 
-                # Choose separator based on whether caption ends with a period
-                separator = " " if caption.rstrip().endswith(".") else self.default_separator
+                # Preserve the existing punctuation-aware default unless a caller
+                # explicitly needs a structural section boundary.
+                separator = self.default_separator
+                if not self.force_separator and caption.rstrip().endswith("."):
+                    separator = " "
 
                 # Update caption text
                 data_dict[self.caption_key] = caption + separator + metadata_text

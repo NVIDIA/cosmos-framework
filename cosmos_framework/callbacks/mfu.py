@@ -101,7 +101,7 @@ class MFUCallback(EveryN):
         self._vision_gen: bool = True
         self._action_gen: bool = False
         self._sound_gen: bool = False
-        self._world_size: int = 1
+        self._context_parallel_size: int = 1
         self._use_activation_checkpointing: bool = False
 
         # Accumulation state between every_n windows
@@ -122,11 +122,13 @@ class MFUCallback(EveryN):
         if self._model_descriptor is not None:
             return
 
-        # Access VLM config from the language model inside the network
-        vlm_cfg = model.net.language_model.config  # type: ignore[attr-defined]
+        # The live language model stores the materialized HF config, while
+        # generation-tower MoT options remain on the model-instance wrapper.
+        hf_vlm_cfg = model.net.language_model.config  # type: ignore[attr-defined]
+        mot_cfg = model.config.vlm_config.model_instance.config
         net_cfg = model.net.config  # type: ignore[attr-defined]
 
-        self._freeze_und = getattr(vlm_cfg, "freeze_und", False)
+        self._freeze_und = getattr(hf_vlm_cfg, "freeze_und", False)
         self._vision_gen = getattr(net_cfg, "vision_gen", True)
         self._action_gen = getattr(net_cfg, "action_gen", False)
         self._sound_gen = getattr(net_cfg, "sound_gen", False)
@@ -143,7 +145,7 @@ class MFUCallback(EveryN):
         self._use_activation_checkpointing = ac_mode != "none"
 
         # MoE fields (may not exist for dense-only configs)
-        text_config = vlm_cfg.text_config if hasattr(vlm_cfg, "text_config") else vlm_cfg
+        text_config = hf_vlm_cfg.text_config if hasattr(hf_vlm_cfg, "text_config") else hf_vlm_cfg
 
         num_experts = getattr(text_config, "num_experts", 0)
         num_experts_per_tok = getattr(text_config, "num_experts_per_tok", 0)
@@ -166,6 +168,13 @@ class MFUCallback(EveryN):
             moe_intermediate_size=moe_intermediate_size,
             decoder_sparse_step=decoder_sparse_step,
             mlp_only_layers=mlp_only_layers,
+            gen_moe_shared_expert=getattr(mot_cfg, "gen_moe_shared_expert", False),
+            gen_moe_shared_expert_intermediate_scale=getattr(
+                mot_cfg,
+                "gen_moe_shared_expert_intermediate_scale",
+                1,
+            ),
+            gen_moe_top_k=getattr(mot_cfg, "gen_moe_top_k", None),
             latent_patch_size=getattr(net_cfg, "latent_patch_size", 2),
             latent_channel_size=getattr(net_cfg, "latent_channel_size", 48),
             action_dim=getattr(net_cfg, "action_dim", 32),
@@ -174,7 +183,14 @@ class MFUCallback(EveryN):
             predict_text_tokens=getattr(net_cfg, "predict_text_tokens", False),
         )
 
-        self._world_size = torch.distributed.get_world_size() if torch.distributed.is_initialized() else 1
+        parallel_dims = getattr(model, "parallel_dims", None)
+        attention_io_layout = getattr(model_cfg, "attention_io_layout", "sequence_sharded")
+        if (
+            attention_io_layout == "sequence_sharded"
+            and parallel_dims is not None
+            and getattr(parallel_dims, "cp_enabled", False)
+        ):
+            self._context_parallel_size = max(1, int(parallel_dims.cp_size))
 
     # ------------------------------------------------------------------ #
     # Per-step accumulation
@@ -233,9 +249,12 @@ class MFUCallback(EveryN):
             attn_modes=attn_modes_list,
             include_padding=self.include_padding,
             use_activation_checkpointing=self._use_activation_checkpointing,
+            context_parallel_size=self._context_parallel_size,
         )
 
-        # VAE encoder forward-pass FLOPs (frozen, no backward).
+        # VAE encoder forward-pass FLOPs (frozen, no backward). Context
+        # parallelism applies only to the VFM network, so VAE FLOPs stay
+        # unscaled.
         if self.include_vae_encoder:
             vae_pixel_shapes = output_batch.get("vae_pixel_shapes")
             if vae_pixel_shapes:

@@ -21,14 +21,20 @@ to generate images or videos, aligned with cosmos/transfer2. This module provide
 from __future__ import annotations
 
 import random
-from typing import cast
+from typing import Any, cast
 
 import torch
 import torchvision.transforms.functional as transforms_F
 
 from cosmos_framework.data.imaginaire.webdataset.augmentors.augmentor import Augmentor
 from cosmos_framework.utils import log
-from cosmos_framework.data.generator.augmentors.transfer_control_input import AddControlInputComb
+from cosmos_framework.data.generator.augmentors.transfer_control_input.control_input import (
+    AddControlInputBlur,
+    AddControlInputComb,
+    AddControlInputDepth,
+    AddControlInputEdge,
+    AddControlInputSeg,
+)
 from cosmos_framework.data.generator.utils import VIDEO_RES_SIZE_INFO
 from cosmos_framework.data.generator.sequence_packing import SequencePlan
 
@@ -314,4 +320,61 @@ class AddControlFromVideoComb(Augmentor):
         for key in self.CONTROL_KEYS:
             data_dict.pop(key, None)
             data_dict.pop(key + "_mask", None)
+        return data_dict
+
+
+class AddSelectedControlFromVideo(Augmentor):
+    """Apply the preselected available control without rediscovery or resampling."""
+
+    _CONTROL_BY_MODALITY = {
+        "edge": (AddControlInputEdge, "control_input_edge"),
+        "blur": (AddControlInputBlur, "control_input_blur"),
+        "depth": (AddControlInputDepth, "control_input_depth"),
+        "seg": (AddControlInputSeg, "control_input_seg"),
+    }
+    _RAW_KEYS = (
+        "depth",
+        "segmentation",
+        "persisted_control",
+        "_persisted_control_meta",
+        "_selected_control_modality",
+        "_selected_rgb_stream_id",
+    )
+
+    def __init__(
+        self,
+        input_keys: list[str],
+        output_keys: list[str] | None = None,
+        args: dict[str, Any] | None = None,
+        **kwargs: Any,
+    ) -> None:
+        super().__init__(input_keys, output_keys or ["control_input"], args)
+        self._augmentors = {
+            modality: augmentor_class(
+                input_keys=input_keys,
+                output_keys=[output_key],
+                args=args,
+                **kwargs,
+            )
+            for modality, (augmentor_class, output_key) in self._CONTROL_BY_MODALITY.items()
+        }
+
+    def __call__(self, data_dict: dict) -> dict | None:
+        modality = data_dict.get("_selected_control_modality")
+        if modality not in self._augmentors:
+            log.warning(f"Unknown selected transfer modality {modality!r}.", rank0_only=False)
+            return None
+        output_key = self._CONTROL_BY_MODALITY[modality][1]
+        data_dict = self._augmentors[modality](data_dict)
+        control = data_dict.get(output_key)
+        if not isinstance(control, torch.Tensor) or control.numel() == 0:
+            log.warning(f"Selected transfer modality {modality!r} produced no tensor.", rank0_only=False)
+            return None
+        data_dict["control_input"] = control  # [C,T,H,W]
+        for _name, (_, temporary_key) in self._CONTROL_BY_MODALITY.items():
+            data_dict.pop(temporary_key, None)
+            data_dict.pop(temporary_key + "_mask", None)
+        for raw_key in self._RAW_KEYS:
+            data_dict.pop(raw_key, None)
+        data_dict.pop("preprocess_failed", None)
         return data_dict

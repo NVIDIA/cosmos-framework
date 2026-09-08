@@ -66,23 +66,49 @@ class LoraInjectedLinear(nn.Linear):
         return base_out + self._lora_scale * lora_out
 
 
+def _target_matches(full_child_path: str, child_name: str, target: str) -> bool:
+    """Return True if ``target`` selects the child at ``full_child_path``.
+
+    Two matching modes, chosen by whether ``target`` contains a ``.``:
+
+    * Plain leaf name (e.g. ``q_proj_moe_gen``): matches when the child's own
+      name equals ``target``. Leaf names like ``*_moe_gen`` are unique to the
+      generation tower, so this cleanly selects gen-only modules.
+    * Path-qualified suffix (e.g. ``mlp_moe_gen.up_proj``): matches when the
+      child's full dotted path equals ``target`` or ends with ``.`` + ``target``.
+      This disambiguates leaf names that are shared across towers — e.g. the
+      dense-FFN ``up_proj`` / ``down_proj`` exist under BOTH the understanding
+      ``mlp`` and the generation ``mlp_moe_gen``; ``mlp_moe_gen.up_proj``
+      targets only the generation-tower copy.
+    """
+    if "." in target:
+        return full_child_path == target or full_child_path.endswith("." + target)
+    return child_name == target
+
+
 def _inject_lora_inplace(
     network: nn.Module,
     target_modules: list[str],
     rank: int,
     alpha: int,
 ) -> int:
-    """Replace each ``<target>`` ``nn.Linear`` child in-place with ``LoraInjectedLinear``.
+    """Replace each targeted ``nn.Linear`` child in-place with ``LoraInjectedLinear``.
 
-    Match is by exact child name (e.g., ``q_proj_moe_gen``), not substring.
+    Targets are matched by :func:`_target_matches`: plain leaf names match by
+    exact child name; names containing a ``.`` match by full-path suffix so
+    tower-shared leaf names (e.g. ``mlp_moe_gen.up_proj``) can be selected
+    without also wrapping the understanding tower's ``mlp.up_proj``.
+
     Snapshots ``named_modules()`` before mutating the tree so newly-inserted
     LoRA submodules are not re-visited.
     """
-    target_set = set(target_modules)
     replaced = 0
-    for _parent_name, parent in list(network.named_modules()):
+    for parent_name, parent in list(network.named_modules()):
         for child_name, child in list(parent.named_children()):
-            if child_name in target_set and isinstance(child, nn.Linear):
+            if not isinstance(child, nn.Linear):
+                continue
+            full_child_path = f"{parent_name}.{child_name}" if parent_name else child_name
+            if any(_target_matches(full_child_path, child_name, t) for t in target_modules):
                 setattr(parent, child_name, LoraInjectedLinear(child, rank, alpha))
                 replaced += 1
     return replaced
@@ -121,8 +147,17 @@ def inject_lora_pre_fsdp(
     if not target_modules_list:
         raise ValueError("LoRA target_modules cannot be empty")
 
-    model_module_names = {name.split(".")[-1] for name, _ in network.named_modules()}
-    invalid_modules = [t for t in target_modules_list if t not in model_module_names]
+    all_module_paths = [name for name, _ in network.named_modules()]
+    leaf_names = {p.split(".")[-1] for p in all_module_paths}
+
+    def _target_exists(t: str) -> bool:
+        # Path-qualified targets (e.g. "mlp_moe_gen.up_proj") match by full-path
+        # suffix; plain leaf targets match against the set of leaf names.
+        if "." in t:
+            return any(p == t or p.endswith("." + t) for p in all_module_paths)
+        return t in leaf_names
+
+    invalid_modules = [t for t in target_modules_list if not _target_exists(t)]
     if invalid_modules:
         log.warning(f"LoRA target modules not found in model: {invalid_modules}")
 

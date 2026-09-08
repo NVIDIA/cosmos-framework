@@ -1,6 +1,7 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: OpenMDW-1.1
 
+import torch
 from hydra.core.config_store import ConfigStore
 
 from cosmos_framework.utils.lazy_config import PLACEHOLDER, LazyDict
@@ -8,6 +9,9 @@ from cosmos_framework.utils.lazy_config import LazyCall as L
 from cosmos_framework.model.generator.tokenizers.audio.avae import AVAEInterface
 from cosmos_framework.model.generator.tokenizers.dc_ae.dc_ae_4x32x32 import DCAE4x32x32Interface
 from cosmos_framework.model.generator.tokenizers.flux_vae_8x8 import FluxVAEInterface
+
+# isort: off
+# isort: on
 from cosmos_framework.model.generator.tokenizers.stable_diffusion_vae_8x8 import StableDiffusionVAEInterface
 from cosmos_framework.model.generator.tokenizers.uniae.noncausal_4x16x16 import UniAEVAEInterface
 from cosmos_framework.model.generator.tokenizers.wan2pt1_vae_4x8x8 import Wan2pt1VAEInterface
@@ -82,6 +86,7 @@ Wan2pt2VAEConfig: LazyDict = L(Wan2pt2VAEInterface)(
     temporal_compression_factor=4,
     causal=True,
 )
+
 
 DCAE4x32x32C64T120_256pFpsAllEncoderCausalDecoderChunkCausal4NoganCosmosPad7V0pt2Config: LazyDict = L(
     DCAE4x32x32Interface
@@ -184,6 +189,7 @@ AVAE_48k_25hzConfig: LazyDict = L(AVAEInterface)(
 )
 
 
+
 def register_tokenizer() -> None:
     cs = ConfigStore.instance()
 
@@ -197,6 +203,10 @@ def register_tokenizer() -> None:
     # Wan2pt1 and Wan2pt2 tokenizers
     cs.store(group="tokenizer", package="model.config.tokenizer", name="wan2pt1_tokenizer", node=Wan2pt1VAEConfig)
     cs.store(group="tokenizer", package="model.config.tokenizer", name="wan2pt2_tokenizer", node=Wan2pt2VAEConfig)
+    # LiDAR VAEs are deliberately absent from this group: a range clip is its own modality
+    # with its own projections into the sequence, so it is registered under
+    # ``model.config.lidar_tokenizer`` by ``register_lidar_tokenizer`` below. Installing one
+    # here would displace the camera tokenizer and route rangemaps through the vision heads.
     # UniAE tokenizer
     cs.store(
         group="tokenizer",
@@ -224,6 +234,36 @@ def register_tokenizer() -> None:
         package="model.config.tokenizer",
         name="dcae4x32x32_c128_t120_256p_fps_all_encoder_causal_decoder_chunk_causal_4_nogan_cosmos_pad_7_v0.2_lcr_tokenizer",
         node=DCAE4x32x32C128T120_256pFpsAllEncoderCausalDecoderChunkCausal4NoganCosmosPad7V0pt2LCRConfig,
+    )
+
+
+def register_lidar_tokenizer() -> None:
+    """Register LiDAR tokenizers under ``model.config.lidar_tokenizer``.
+
+    A joint camera + LiDAR recipe holds two vision tokenizers at once, so the LiDAR one needs
+    its own package: registering it under ``model.config.tokenizer`` would displace the camera
+    tokenizer. With this group in place, the dataloader's per-sensor token accounting can
+    interpolate ``${model.config.lidar_tokenizer.temporal_compression_factor}`` the same way
+    it already reads the camera factors off ``model.config.tokenizer``.
+    """
+    cs = ConfigStore.instance()
+    cs.store(
+        group="lidar_tokenizer",
+        package="model.config.lidar_tokenizer",
+        name="lidar_tokenizer_v0",
+        node=LidarTokenizerV0Config,
+    )
+    cs.store(
+        group="lidar_tokenizer",
+        package="model.config.lidar_tokenizer",
+        name="lidar_tokenizer_v1",
+        node=LidarTokenizerV1Config,
+    )
+    cs.store(
+        group="lidar_tokenizer",
+        package="model.config.lidar_tokenizer",
+        name="lidar_tokenizer_v1_r105_b1800_symmetric",
+        node=LidarTokenizerV1R105B1800SymmetricConfig,
     )
 
 

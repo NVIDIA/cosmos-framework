@@ -28,6 +28,9 @@ class ResolutionTextInfo(Augmentor):
         Augmented (image): "A cat playing with a ball. This image is 512x512."
         Augmented (video): "A cat playing with a ball. This video is 480x854."
 
+    An ordered list of captions is augmented item by item for separate-view
+    multiview tokenization.
+
     Args:
         input_keys (list): Input keys (not used, kept for API compatibility)
         output_keys (list): Output keys (not used, kept for API compatibility)
@@ -38,6 +41,8 @@ class ResolutionTextInfo(Augmentor):
             - image_template (str): Format string for image metadata. Default: DEFAULT_IMAGE_TEMPLATE
             - video_template (str): Format string for video metadata. Default: DEFAULT_VIDEO_TEMPLATE
             - separator (str): Separator between caption and metadata. Default: ". "
+            - force_separator (bool): Always use separator instead of punctuation-aware spacing.
+              Default: False.
             - enabled (bool): Whether augmentation is enabled. Default: True
     """
 
@@ -54,6 +59,7 @@ class ResolutionTextInfo(Augmentor):
         self.image_template = args.get("image_template", DEFAULT_IMAGE_TEMPLATE) if args else DEFAULT_IMAGE_TEMPLATE
         self.video_template = args.get("video_template", DEFAULT_VIDEO_TEMPLATE) if args else DEFAULT_VIDEO_TEMPLATE
         self.default_separator = args.get("separator", ". ") if args else ". "
+        self.force_separator: bool = args.get("force_separator", False) if args else False
         self.enabled = args.get("enabled", True) if args else True
 
     def __call__(self, data_dict: dict) -> dict | None:
@@ -73,6 +79,18 @@ class ResolutionTextInfo(Augmentor):
         assert self.caption_key in data_dict, f"caption_key '{self.caption_key}' not found in data_dict."
         caption = data_dict[self.caption_key]
 
+        if isinstance(caption, list):
+            if not caption or not all(isinstance(item, (str, dict)) for item in caption):
+                raise ValueError(f"Unsupported caption type: {type(caption)}")
+            updated_captions: list[str | dict] = []
+            for item in caption:
+                item_data = dict(data_dict)
+                item_data[self.caption_key] = item
+                updated_item_data = self(item_data)
+                assert updated_item_data is not None
+                updated_captions.append(updated_item_data[self.caption_key])
+            data_dict[self.caption_key] = updated_captions
+            return data_dict
         if (not isinstance(caption, str) and not isinstance(caption, dict)) or caption == "":
             # This is for unconditional case.
             return data_dict
@@ -97,8 +115,11 @@ class ResolutionTextInfo(Augmentor):
             # Format metadata text
             metadata_text = template.format(height=height, width=width)
 
-            # Choose separator based on whether caption ends with a period
-            separator = " " if caption.rstrip().endswith(".") else self.default_separator
+            # Preserve the existing punctuation-aware default unless a caller
+            # explicitly needs a structural section boundary.
+            separator = self.default_separator
+            if not self.force_separator and caption.rstrip().endswith("."):
+                separator = " "
 
             # Update caption
             data_dict[self.caption_key] = caption + separator + metadata_text

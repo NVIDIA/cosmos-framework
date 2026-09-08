@@ -200,6 +200,18 @@ Depends on resolution:
 
 Default is 189 frames at 24 FPS (~7.9 seconds).
 
+### Q: I set `resolution` to `256` but the output is 320x192 — why?
+
+`resolution` names a resolution *tier*, not the output height. The actual width and height
+are looked up from the tier together with `aspect_ratio`, which defaults to `16,9`.
+
+The `256` tier is the one where the two disagree: `"256"` + `16,9` resolves to 320x192.
+Within the same tier, `1,1` gives 256x256 and `4,3` gives 320x256, so set `aspect_ratio`
+explicitly if you need a 256-pixel short edge. The `480` and `720` tiers do not have this
+mismatch — their `16,9` entries are 832x480 and 1280x720.
+
+See [Inference § Resolution tiers](./inference.md#resolution-tiers) for the full table.
+
 ### Q: What input formats does image-to-video support?
 
 Provide a `vision_path` pointing to an image (`.jpg`, `.jpeg`, `.png`) or a URL. See `inputs/omni/i2v.json` for the format.

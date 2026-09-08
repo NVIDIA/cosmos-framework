@@ -30,6 +30,20 @@ All four samples produce a video; the policy sample additionally produces an
 action, the t2vs sample an audio track, and the transfer sample exercises the
 control-guidance branch.
 
+3. Two ``text2video`` calls against the ModelOpt static-FP8 Nano checkpoint, one
+   per parallelism layout (FSDP-sharded and replicated) -> a non-degenerate
+   ``vision.mp4`` each. Covers the FP8 checkpoint path end to end: detection,
+   the meta-device linear swap, the TorchAO weight install, and — in the sharded
+   layout — the FP8 all-gather. Skipped when the checkpoint is not reachable
+   (see ``_download_fp8_checkpoint``).
+
+4. One more ``text2video`` call against the same FP8 checkpoint with FP8
+   mixed-precision diffusion steps enabled (``--mixed-precision-first-steps`` /
+   ``--mixed-precision-last-steps``): the first/last N denoising steps run
+   W8A16 (dequantized weight + dense GEMM) while middle steps keep the TorchAO
+   W8A8 path. Asserts the exact per-step precision schedule from the
+   ``MIXED_PRECISION_TRACE`` log line plus a non-degenerate ``vision.mp4``.
+
 Smoke-level only (output validity, not numeric goldens). The checkpoint + its
 tokenizers download from the HF Hub on first run and are reused afterward.
 
@@ -44,6 +58,7 @@ not collected.
 
 import json
 import os
+import re
 import shutil
 import socket
 import subprocess
@@ -148,6 +163,81 @@ _MULTI_CONTROL_SPEC = {
     "blur": {"weight": 0.5, "preset_blur_strength": "medium"},
     "emphasize_control_in_prompt": False,
 }
+
+# ModelOpt static-FP8 Cosmos3-Nano checkpoint. It is not published under its own
+# repository yet, so it cannot be a ``--checkpoint-path`` registry name (see
+# ``_CHECKPOINTS`` in ``cosmos_framework/inference/args.py``): it lives in a
+# subdirectory of the access-controlled nvidia/Cosmos3-Experimental repo, pinned to
+# the revision the FP8 loader was validated against. The test downloads that one
+# subdirectory and passes the resulting local path to the CLI. Once the checkpoint
+# is released under its own name, register it and drop ``_download_fp8_checkpoint``.
+_FP8_REPOSITORY = "nvidia/Cosmos3-Experimental"
+_FP8_REVISION = "f0cdb8ea37360e8510e2c0caf84c0f9f3e8751c8"
+_FP8_SUBDIRECTORY = "cosmos3-nano-fp8-14072026"
+
+# Emitted by ``swap_modelopt_fp8_linears_on_meta`` / ``install_torchao_float8_fsdp_support``
+# (``cosmos_framework/utils/generator/quantization.py``). The swap count is parsed rather
+# than string-matched: a checkpoint whose FP8 targets failed to resolve would swap zero
+# linears, run the whole model in bf16, and otherwise produce a perfectly valid video.
+_FP8_SWAP_LOG = re.compile(r"Swapped (\d+) linears to meta-device ModelOpt FP8 modules")
+_FP8_FSDP_LOG = "Installed TorchAO static-FP8 FSDP support"
+
+# Downscaled generation overrides shared by both FP8 layouts (480p / 29 frames /
+# 10 steps, one chunk). The FP8 path under test is per-tensor weight quantization,
+# which is independent of resolution and step count, so a short clip exercises it
+# just as well as the checkpoint's 720p/189-frame defaults at a fraction of the
+# runtime — the same trade-off ``_TRANSFER_SPEC`` above makes.
+_FP8_GENERATION_ARGS = (
+    "--resolution=480",
+    "--aspect-ratio=16,9",
+    "--fps=30",
+    "--num-frames=29",
+    "--num-steps=10",
+    "--seed=0",
+)
+
+# One entry per parallelism layout. ``sharded`` is the layout that matters most
+# here: FSDP2 all-gathers the FP8 weights through the TorchAO tensor-subclass
+# hooks, which is the path that does not exist upstream, and it is the only
+# layout a Super-class FP8 model fits in. ``replicated`` guards the
+# single-device-weights path that worked before those hooks were added.
+# Both layouts follow MAX_GPUS so the product of the parallel degrees equals
+# WORLD_SIZE, which is what ParallelDims validates. `sharded` stays pure FSDP and
+# `replicated` pure context-parallel -- the distinction each case exists to
+# cover -- at whichever width the run has. cp_size is bounded by MAX_CP_SIZE=32,
+# so 4 and 8 are both in range.
+_FP8_LAYOUTS = {
+    "sharded": (
+        "--parallelism-preset=throughput",
+        f"--dp-shard-size={MAX_GPUS}",
+        "--dp-replicate-size=1",
+        "--cp-size=1",
+        "--cfgp-size=1",
+    ),
+    "replicated": (
+        "--parallelism-preset=latency",
+        "--dp-shard-size=1",
+        "--dp-replicate-size=1",
+        f"--cp-size={MAX_GPUS}",
+        "--cfgp-size=1",
+    ),
+}
+
+# Mixed-precision diffusion steps (FP8 W8A16 edge steps) schedule for the
+# dedicated smoke case: with the 10-step ``_FP8_GENERATION_ARGS`` run this
+# selects 2x W8A16 / 6x W8A8 / 2x W8A16 (``use_w8a16_step``). Small enough to
+# stay cheap, large enough that first, middle, and last regions are all
+# non-empty.
+_MIXED_PRECISION_FIRST_STEPS = 2
+_MIXED_PRECISION_LAST_STEPS = 2
+
+# Emitted by ``MixedPrecisionRuntime`` (``cosmos_framework/utils/generator/
+# mixed_precision.py``): the install summary at load time and the per-request
+# per-step precision trace at request end. The trace is parsed and compared
+# exactly — a run that silently ignored the flags would log an all-W8A8 trace
+# (or none at all) and still produce a perfectly valid video.
+_MIXED_PRECISION_INSTALL_LOG = "Mixed precision installed:"
+_MIXED_PRECISION_TRACE_LOG = re.compile(r"MIXED_PRECISION_TRACE steps=([A-Za-z0-9,]+)")
 
 # Audio sanity thresholds for the muxed sound track.
 _RMS_SILENCE_FLOOR = 1e-4  # below this the track is effectively silence
@@ -279,32 +369,77 @@ def _assert_valid_action(content: dict, where: str) -> None:
     assert np.all(np.isfinite(arr)), f"action output has NaN/Inf ({where})"
 
 
+def _download_fp8_checkpoint() -> Path:
+    """Download the pinned ModelOpt FP8 Nano checkpoint and return its local root.
+
+    Skips the test — rather than failing it — when the repository is unreachable
+    for a credentials reason (no ``HF_TOKEN``, or a token without access to
+    nvidia/Cosmos3-Experimental), so a fork PR without the runner secret does not
+    go red. Any other failure (a deleted revision, a broken download) still fails
+    loudly: a silently-skipping FP8 job would look green while testing nothing.
+
+    ``REQUIRE_FP8=1`` promotes that skip to a hard failure. The CI job whose
+    stated purpose includes FP8 coverage sets it, so a token rotation or a
+    permissions change on the gated repo turns that job red instead of silently
+    dropping every FP8 case while still reporting green.
+    """
+    from huggingface_hub import snapshot_download
+    from huggingface_hub.errors import GatedRepoError, HfHubHTTPError, RepositoryNotFoundError
+
+    def _skip_or_fail_no_access(reason: str) -> None:
+        if os.environ.get("REQUIRE_FP8") == "1":
+            pytest.fail(f"REQUIRE_FP8=1 but the FP8 checkpoint is unreachable: {reason}")
+        pytest.skip(reason)
+
+    try:
+        repo_root = snapshot_download(
+            repo_id=_FP8_REPOSITORY,
+            revision=_FP8_REVISION,
+            allow_patterns=[f"{_FP8_SUBDIRECTORY}/*"],
+        )
+    except (GatedRepoError, RepositoryNotFoundError) as error:
+        _skip_or_fail_no_access(f"no access to {_FP8_REPOSITORY} (needs an HF_TOKEN with read access): {error!r}")
+    except HfHubHTTPError as error:
+        status_code = getattr(error.response, "status_code", None)
+        if status_code in (401, 403):
+            _skip_or_fail_no_access(f"no access to {_FP8_REPOSITORY} (HTTP {status_code}): {error!r}")
+        raise
+
+    checkpoint_path = Path(repo_root) / _FP8_SUBDIRECTORY
+    assert (checkpoint_path / "hf_quant_config.json").is_file(), (
+        f"{checkpoint_path} is not a ModelOpt FP8 checkpoint (no hf_quant_config.json); "
+        f"revision {_FP8_REVISION} may have changed"
+    )
+    return checkpoint_path
+
+
 @pytest.fixture(scope="module", autouse=True)
-def _require_8_gpus() -> None:
-    """Skip the module unless we can launch an 8-GPU run here."""
+def _require_gpus() -> None:
+    """Skip the module unless we can launch a ``MAX_GPUS``-wide run here."""
     if shutil.which("torchrun") is None:
         pytest.skip("torchrun not on PATH -- must run inside the inference container")
     try:
         import torch
     except Exception as exc:  # pragma: no cover -- surfaces during dev only
         pytest.skip(f"torch unavailable ({exc!r})")
-    if not torch.cuda.is_available() or torch.cuda.device_count() < 8:
-        pytest.skip(f"requires 8 visible CUDA devices, found {torch.cuda.device_count()}")
+    if not torch.cuda.is_available() or torch.cuda.device_count() < MAX_GPUS:
+        pytest.skip(f"requires {MAX_GPUS} visible CUDA devices, found {torch.cuda.device_count()}")
 
 
-# Defined only when the active MAX_GPUS is 8 -- the conftest rejects ``gpus(N)``
-# markers outside ``ALL_NUM_GPUS = (0, 1, MAX_GPUS)``.
-if MAX_GPUS == 8:
+# Markers use MAX_GPUS because the conftest rejects ``gpus(N)`` outside
+# ``ALL_NUM_GPUS = (0, 1, MAX_GPUS)``. Every case here derives its parallelism
+# from the active width, so both supported widths are listed.
+if MAX_GPUS in (4, 8):
 
     @pytest.mark.level(2)
-    @pytest.mark.gpus(8)
+    @pytest.mark.gpus(MAX_GPUS)
     def test_nano_inference_omni(tmp_path: Path) -> None:
         """Throughput run over t2vs + policy + forward_dynamics, plus a separate latency transfer run."""
         # --- 1) Throughput run: t2vs + policy + forward_dynamics ----------------
         out_dir = tmp_path / "out"
         cmd = [
             "torchrun",
-            "--nproc_per_node=8",
+            f"--nproc_per_node={MAX_GPUS}",
             f"--master_port={_free_port()}",
             "-m",
             "cosmos_framework.scripts.inference",
@@ -405,7 +540,7 @@ if MAX_GPUS == 8:
         _assert_video_has_content(transfer_video)
 
     @pytest.mark.level(2)
-    @pytest.mark.gpus(8)
+    @pytest.mark.gpus(MAX_GPUS)
     def test_nano_inference_multi_control_transfer(tmp_path: Path) -> None:
         """Multi-control transfer: edge + blur derived on the fly from ONE source
         video, blended by ``multi_control_two_way_attention``.
@@ -469,4 +604,132 @@ if MAX_GPUS == 8:
         )
         video = so.parent / "vision.mp4"
         assert video.is_file(), f"multi-control run produced no vision.mp4 ({so})"
+        _assert_video_has_content(video)
+
+    @pytest.mark.level(2)
+    @pytest.mark.gpus(MAX_GPUS)
+    @pytest.mark.parametrize("layout", sorted(_FP8_LAYOUTS))
+    def test_nano_fp8_inference(tmp_path: Path, layout: str) -> None:
+        """text2video from the ModelOpt static-FP8 Nano checkpoint, once per layout.
+
+        The FP8 checkpoint ships already-quantized E4M3 weights plus static
+        per-tensor scales, so this run covers a path the bf16 cases above never
+        touch: ``is_modelopt_fp8_checkpoint`` detection, the meta-device swap of the
+        target linears to TorchAO FP8 modules (before FSDP wrap, so peak memory
+        follows the FP8 shapes), the deferred weight install, and the FP8 forward.
+
+        ``sharded`` additionally covers the FSDP2 path — the TorchAO static-FP8
+        tensor upstream implements neither the all-gather hooks nor the shape ops
+        FSDP2 needs, so without the local support shim the run dies on the first
+        all-gather rather than producing a degraded video. Completing the run *is*
+        the assertion there; ``_assert_video_has_content`` then catches the
+        numerically-broken-but-still-running case (wrong scales -> collapsed clip).
+        """
+        checkpoint_path = _download_fp8_checkpoint()
+        out_dir = tmp_path / f"out_fp8_{layout}"
+        cmd = [
+            "torchrun",
+            f"--nproc_per_node={MAX_GPUS}",
+            f"--master_port={_free_port()}",
+            "-m",
+            "cosmos_framework.scripts.inference",
+            *_FP8_LAYOUTS[layout],
+            "-i",
+            "inputs/omni/t2v.json",
+            "-o",
+            str(out_dir),
+            "--checkpoint-path",
+            str(checkpoint_path),
+            *_FP8_GENERATION_ARGS,
+        ]
+        log = _run(cmd, tmp_path / f"inference_fp8_{layout}.log")
+
+        # The checkpoint was recognized as ModelOpt FP8 and its linears really were
+        # swapped. Without the count check a checkpoint whose targets failed to
+        # resolve would run entirely in bf16 and still pass every output assertion.
+        swap_match = _FP8_SWAP_LOG.search(log)
+        assert swap_match is not None, f"no ModelOpt FP8 linear swap in the {layout} run; FP8 path never engaged"
+        assert int(swap_match.group(1)) > 0, f"ModelOpt FP8 swap matched 0 linears in the {layout} run"
+        assert _FP8_FSDP_LOG in log, f"TorchAO static-FP8 FSDP support was not installed in the {layout} run"
+
+        results = sorted(out_dir.rglob("sample_outputs.json"))
+        assert len(results) == 1, f"expected 1 FP8 sample_outputs.json, found {[str(p) for p in results]}"
+        so = results[0]
+        args = json.loads(so.read_text()).get("args", {})
+        assert args.get("model_mode") == "text2video", f"expected a text2video sample, got {args.get('model_mode')}"
+        video = so.parent / "vision.mp4"
+        assert video.is_file(), f"FP8 {layout} run produced no vision.mp4 ({so})"
+        _assert_video_has_content(video)
+
+    @pytest.mark.level(2)
+    @pytest.mark.gpus(MAX_GPUS)
+    def test_nano_fp8_mixed_precision_inference(tmp_path: Path) -> None:
+        """text2video from the FP8 Nano checkpoint with mixed-precision diffusion steps.
+
+        Same run as the ``sharded`` case of ``test_nano_fp8_inference`` plus the
+        ``--mixed-precision-first-steps`` / ``--mixed-precision-last-steps`` flags,
+        so the first/last 2 of the 10 denoising steps run W8A16 (dequantized E4M3
+        weight + dense GEMM) while the middle 6 keep the TorchAO W8A8 path. The
+        sharded layout is the one that constrains the feature: FSDP-sharded FP8
+        weights support only the default ``mixed_precision_w8a16_cache='none'``
+        (per-step on-the-fly dequant), which is exactly the mode exercised here.
+
+        The pass criterion is the schedule itself, not just a valid video: the
+        ``MIXED_PRECISION_TRACE`` line is parsed and compared exactly against the
+        expected ``2x W8A16 / 6x W8A8 / 2x W8A16`` sequence, so a run where the
+        flags never engaged (all-W8A8 trace, or no trace at all) fails even though
+        its output video would look fine. ``_assert_video_has_content`` then
+        catches the numerically-broken-but-still-running case.
+        """
+        checkpoint_path = _download_fp8_checkpoint()
+        out_dir = tmp_path / "out_fp8_mixed_precision"
+        cmd = [
+            "torchrun",
+            f"--nproc_per_node={MAX_GPUS}",
+            f"--master_port={_free_port()}",
+            "-m",
+            "cosmos_framework.scripts.inference",
+            *_FP8_LAYOUTS["sharded"],
+            "-i",
+            "inputs/omni/t2v.json",
+            "-o",
+            str(out_dir),
+            "--checkpoint-path",
+            str(checkpoint_path),
+            *_FP8_GENERATION_ARGS,
+            f"--mixed-precision-first-steps={_MIXED_PRECISION_FIRST_STEPS}",
+            f"--mixed-precision-last-steps={_MIXED_PRECISION_LAST_STEPS}",
+        ]
+        log = _run(cmd, tmp_path / "inference_fp8_mixed_precision.log")
+
+        # The FP8 path itself still engaged (same guard as test_nano_fp8_inference).
+        swap_match = _FP8_SWAP_LOG.search(log)
+        assert swap_match is not None and int(swap_match.group(1)) > 0, (
+            "no ModelOpt FP8 linear swap in the mixed-precision run; FP8 path never engaged"
+        )
+        # ... and the mixed-precision runtime was installed on top of it.
+        assert _MIXED_PRECISION_INSTALL_LOG in log, (
+            "mixed precision was never installed despite --mixed-precision-first/last-steps"
+        )
+
+        # Exact per-step precision schedule. num_steps is read from
+        # _FP8_GENERATION_ARGS so the expectation cannot drift from the run.
+        (num_steps,) = [int(a.split("=")[1]) for a in _FP8_GENERATION_ARGS if a.startswith("--num-steps=")]
+        expected = (
+            ["W8A16"] * _MIXED_PRECISION_FIRST_STEPS
+            + ["W8A8"] * (num_steps - _MIXED_PRECISION_FIRST_STEPS - _MIXED_PRECISION_LAST_STEPS)
+            + ["W8A16"] * _MIXED_PRECISION_LAST_STEPS
+        )
+        traces = [m.split(",") for m in _MIXED_PRECISION_TRACE_LOG.findall(log)]
+        assert expected in traces, (
+            f"expected a MIXED_PRECISION_TRACE of {'/'.join(expected)}, got traces={traces}"
+        )
+
+        results = sorted(out_dir.rglob("sample_outputs.json"))
+        assert len(results) == 1, f"expected 1 mixed-precision sample_outputs.json, found {[str(p) for p in results]}"
+        so = results[0]
+        args = json.loads(so.read_text()).get("args", {})
+        assert args.get("model_mode") == "text2video", f"expected a text2video sample, got {args.get('model_mode')}"
+        video = so.parent / "vision.mp4"
+        assert video.is_file(), f"FP8 mixed-precision run produced no vision.mp4 ({so})"
         _assert_video_has_content(video)

@@ -5,8 +5,9 @@ import io
 import os
 import threading
 import time
+from collections import Counter
 from contextlib import contextmanager
-from typing import Generator, Union
+from typing import Any, Generator, Union
 from urllib.parse import urlparse
 
 import boto3
@@ -88,6 +89,55 @@ class _CountingPipeWriter(io.RawIOBase):
             self._f.close()
 
 
+class _HttpAttemptCounter:
+    """Counts the outcome of every HTTP attempt made by one boto3 client.
+
+    ``upload_fileobj`` retries inside botocore (see the ``retries`` config in
+    :meth:`S3FileSystem._get_boto3_client`), so throttling responses are absorbed there along with
+    the client-side rate limiting they trigger. Nothing reaches ``_retry_with_backoff``, and a store
+    that has slowed to a crawl looks identical in the logs to a healthy one. Counting attempts as
+    botocore makes them is the only way to tell the two apart after the fact.
+
+    Hooks ``needs-retry``, which botocore emits once per HTTP attempt, including attempts it then
+    retries itself. Handlers on that event must return ``None`` or botocore treats the return value
+    as a retry instruction, so :meth:`record` deliberately returns nothing.
+    """
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._outcomes: Counter[str] = Counter()
+
+    def record(self, response: Any = None, caught_exception: BaseException | None = None, **_kwargs: Any) -> None:
+        if caught_exception is not None:
+            outcome = type(caught_exception).__name__
+        elif response is not None and response[0] is not None:
+            http_response, parsed = response
+            status = http_response.status_code
+            if 200 <= status < 300:
+                outcome = "ok"
+            else:
+                code = parsed.get("Error", {}).get("Code", "") if isinstance(parsed, dict) else ""
+                outcome = f"HTTP {status} {code}".strip()
+        else:
+            return
+        with self._lock:
+            self._outcomes[outcome] += 1
+
+    def snapshot(self) -> Counter[str]:
+        with self._lock:
+            return Counter(self._outcomes)
+
+    def describe_since(self, baseline: Counter[str]) -> str:
+        """Summarize the attempts made since ``baseline``, for appending to a completion log."""
+        delta = self.snapshot() - baseline
+        total = sum(delta.values())
+        summary = f"{total} request{'' if total == 1 else 's'}"
+        failed = [(outcome, n) for outcome, n in delta.most_common() if outcome != "ok"]
+        if failed:
+            summary += ", retried: " + ", ".join(f"{outcome} x{n}" for outcome, n in failed)
+        return summary
+
+
 class S3FileSystem(FileSystemBase):
     """Implementation of FileSystemBase for AWS S3 storage."""
 
@@ -133,6 +183,7 @@ class S3FileSystem(FileSystemBase):
         # Built lazily so read-only callers don't pay for it.
         self._credential_path = credential_path
         self._boto3_client = None
+        self._attempt_counter = _HttpAttemptCounter()
 
     def _get_boto3_client(self):
         """Lazily build a boto3 S3 client configured for our endpoint.
@@ -151,6 +202,7 @@ class S3FileSystem(FileSystemBase):
                 retries={"max_attempts": 5, "mode": "adaptive"},
             )
             self._boto3_client = boto3.client("s3", **cred_info, config=cfg)
+            self._boto3_client.meta.events.register("needs-retry.s3", self._attempt_counter.record)
         return self._boto3_client
 
     def _retry_with_backoff(self, operation_func, *args, **kwargs):
@@ -254,6 +306,11 @@ class S3FileSystem(FileSystemBase):
                         pass
 
             log.info(f"S3 Filesystem: Streaming upload {key} to bucket {bucket}", rank0_only=False)
+            # Attributing the client-wide attempt counts to this upload is sound because a single
+            # filesystem writes its files one at a time; the concurrency within an upload comes from
+            # the TransferManager's part threads, which all belong to this call.
+            attempts_before = self._attempt_counter.snapshot()
+            started_at = time.monotonic()
             uploader = threading.Thread(target=_upload_thread, daemon=True, name=f"s3-upload-{key[-32:]}")
             uploader.start()
 
@@ -273,7 +330,14 @@ class S3FileSystem(FileSystemBase):
                 if upload_err[0] is not None and not caller_raised:
                     # Upload thread failed; surface that to the caller.
                     raise upload_err[0]
-            log.info(f"S3 Filesystem: Upload complete for {key}", rank0_only=False)
+            elapsed = time.monotonic() - started_at
+            mib = counting_writer.tell() / 2**20
+            rate = f"{mib / elapsed:.1f} MiB/s" if elapsed > 0 else "n/a"
+            log.info(
+                f"S3 Filesystem: Upload complete for {key}: {mib:.1f} MiB in {elapsed:.1f}s ({rate}), "
+                f"{self._attempt_counter.describe_since(attempts_before)}",
+                rank0_only=False,
+            )
         else:
             raise ValueError(f"Unsupported mode: {mode}")
 

@@ -10,6 +10,30 @@ from unittest.mock import Mock
 import pytest
 
 
+def test_diffusion_cache_max_consecutive_cached_override(monkeypatch: pytest.MonkeyPatch) -> None:
+    from cosmos_framework.inference import inference
+    from cosmos_framework.model.generator.mot import diffusion_cache
+
+    install = Mock()
+    monkeypatch.setattr(diffusion_cache, "install_diffusion_cache", install)
+    pipe = SimpleNamespace()
+    setup_args = SimpleNamespace(
+        diffusion_cache=True,
+        diffusion_cache_thresh=None,
+        diffusion_cache_residual_order=None,
+        diffusion_cache_max_consecutive_cached=3,
+    )
+
+    inference.OmniInference._maybe_install_diffusion_cache(pipe, setup_args)
+
+    install.assert_called_once_with(
+        pipe=pipe,
+        enabled=True,
+        sample_args_list=[],
+        config_overrides={"max_consecutive_cached": 3},
+    )
+
+
 def test_finalize_data_batch_does_not_mutate_reusable_video_list() -> None:
     torch = pytest.importorskip("torch")
 
@@ -29,6 +53,60 @@ def test_finalize_data_batch_does_not_mutate_reusable_video_list() -> None:
     assert source_batch["video"][0] is original_video
     assert source_batch["video"][0].dtype == torch.uint8
     assert "is_preprocessed" not in source_batch
+
+
+def test_compute_num_tokens_uses_config_when_vision_tokenizer_is_not_loaded() -> None:
+    from cosmos_framework.inference.inference import _compute_num_tokens_for_sample
+
+    model = SimpleNamespace(
+        tokenizer_vision_gen=None,
+        config=SimpleNamespace(
+            tokenizer=SimpleNamespace(
+                spatial_compression_factor=16,
+                temporal_compression_factor=4,
+            ),
+            diffusion_expert_config=SimpleNamespace(patch_spatial=2),
+        ),
+    )
+    sample_args = SimpleNamespace(vision_size=(256, 128), num_frames=9)
+
+    assert _compute_num_tokens_for_sample(sample_args, model) == 96
+
+
+def test_separate_vision_decode_gpu_is_ignored_without_vision_tokenizer(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    from cosmos_framework.inference import inference
+    from cosmos_framework.inference.args import DEFAULT_CHECKPOINT_NAME, OmniSetupOverrides
+    from cosmos_framework.inference.common.args import ConfigFileType
+
+    setup_args = OmniSetupOverrides(
+        checkpoint_path=DEFAULT_CHECKPOINT_NAME,
+        output_dir=tmp_path / "outputs",
+        guardrails=False,
+        use_separate_pipeline_vision_decode_gpu=True,
+    ).build_setup(world_size=1, local_world_size=1, device_memory_bytes=80 * 1024**3)
+    setup_args.config_file_type = ConfigFileType.MODULE
+
+    model = SimpleNamespace(
+        config=SimpleNamespace(
+            rectified_flow_inference_config=SimpleNamespace(scheduler_type=setup_args.sampler),
+        ),
+        tokenizer_vision_gen=None,
+    )
+    load_model = Mock(return_value=SimpleNamespace(model=model))
+    device_count = Mock(side_effect=AssertionError("separate VAE setup should not inspect CUDA devices"))
+    monkeypatch.setattr(inference, "_download_on_rank0", lambda _download: tmp_path)
+    monkeypatch.setattr(inference.Cosmos3OmniModel, "from_pretrained_dcp", load_model)
+    monkeypatch.setattr(inference.torch.cuda, "device_count", device_count)
+
+    pipe = inference.OmniInference._create(setup_args, guardrails=None, _timer=None)
+
+    assert pipe.model is model
+    assert pipe.vae_decode_stream is None
+    load_model.assert_called_once()
+    device_count.assert_not_called()
 
 
 def _make_v2v_sample_args(**overrides: Any) -> SimpleNamespace:

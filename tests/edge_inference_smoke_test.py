@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: OpenMDW-1.1
 
-"""8-GPU multi-modality inference smoke test for Cosmos3-Edge.
+"""Multi-modality inference smoke test for Cosmos3-Edge (``MAX_GPUS`` ranks).
 
 Mirrors ``nano_inference_smoke_test.py`` but targets the smaller Cosmos3-Edge
 checkpoint, adapted to its capabilities: Edge has ``sound_gen=false`` (so the
@@ -34,10 +34,15 @@ Smoke-level only (output validity + the Edge default triple, not numeric
 goldens). The checkpoint + its tokenizers download from the HF Hub on first run
 and are reused afterward.
 
-Invocation (inside the inference container, from the repo root, on an 8-GPU
-node)::
+The run is ``MAX_GPUS`` ranks wide (``TEST_MAX_GPUS``, default 8). The
+``throughput`` preset derives its layout from ``world_size`` (cfgp=1, cp=1,
+dp_shard=world_size), so 4 and 8 are both valid; what changes is the FSDP shard
+width, not what the test covers.
+
+Invocation (inside the inference container, from the repo root)::
 
     pytest -s tests/edge_inference_smoke_test.py --num-gpus=8 --levels=2 -o addopts=
+    TEST_MAX_GPUS=4 pytest -s tests/edge_inference_smoke_test.py --num-gpus=4 --levels=2 -o addopts=
 
 Without ``--num-gpus``/``--levels`` (e.g. the no-GPU pre-commit CI) the test is
 not collected.
@@ -156,30 +161,31 @@ def _assert_valid_action(content: dict, where: str) -> None:
 
 
 @pytest.fixture(scope="module", autouse=True)
-def _require_8_gpus() -> None:
-    """Skip the module unless we can launch an 8-GPU run here."""
+def _require_gpus() -> None:
+    """Skip the module unless we can launch a ``MAX_GPUS``-wide run here."""
     if shutil.which("torchrun") is None:
         pytest.skip("torchrun not on PATH -- must run inside the inference container")
     try:
         import torch
     except Exception as exc:  # pragma: no cover -- surfaces during dev only
         pytest.skip(f"torch unavailable ({exc!r})")
-    if not torch.cuda.is_available() or torch.cuda.device_count() < 8:
-        pytest.skip(f"requires 8 visible CUDA devices, found {torch.cuda.device_count()}")
+    if not torch.cuda.is_available() or torch.cuda.device_count() < MAX_GPUS:
+        pytest.skip(f"requires {MAX_GPUS} visible CUDA devices, found {torch.cuda.device_count()}")
 
 
-# Defined only when the active MAX_GPUS is 8 -- the conftest rejects ``gpus(N)``
-# markers outside ``ALL_NUM_GPUS = (0, 1, MAX_GPUS)``.
-if MAX_GPUS == 8:
+# Markers use MAX_GPUS because the conftest rejects ``gpus(N)`` outside
+# ``ALL_NUM_GPUS = (0, 1, MAX_GPUS)``. Both supported widths are listed so the
+# module is collected under either; nothing here pins a parallelism degree.
+if MAX_GPUS in (4, 8):
 
     @pytest.mark.level(2)
-    @pytest.mark.gpus(8)
+    @pytest.mark.gpus(MAX_GPUS)
     def test_edge_inference_omni(tmp_path: Path) -> None:
         """Throughput run over t2v + policy + forward_dynamics on Cosmos3-Edge."""
         out_dir = tmp_path / "out"
         cmd = [
             "torchrun",
-            "--nproc_per_node=8",
+            f"--nproc_per_node={MAX_GPUS}",
             f"--master_port={_free_port()}",
             "-m",
             "cosmos_framework.scripts.inference",

@@ -78,3 +78,33 @@ def get_wdinfo_sql(datasource: str, storage_type: str, data_type: str, split_typ
     FROM datasource_to_wdinfo
     WHERE datasource_name='{datasource}' AND data_type='{data_type}' AND storage_type='{storage_type}' AND split_type='{split_type}'
     """
+
+
+def get_recipe_source_weights(
+    recipe_name: str,
+    storage_type: str,
+    data_type: str,
+    is_production_database: bool = False,
+) -> list[tuple[str, str, float]]:
+    """Return collection, source, and effective weight for one recipe."""
+    cursor = get_recipe_cursor(is_production_database)
+    cursor.execute(
+        """
+        SELECT mapping.datacollection_name, source.datasource_name,
+               mapping.ratio * source.ratio AS effective_weight
+        FROM datarecipe_to_datacollection AS mapping
+        INNER JOIN datacollection_to_datasource AS source
+        ON source.datacollection_name = mapping.datacollection_name
+           AND source.storage_type = mapping.storage_type
+           AND source.data_type = mapping.data_type
+        WHERE mapping.datarecipe_name = %s
+          AND mapping.storage_type = %s
+          AND mapping.data_type = %s
+        ORDER BY mapping.datacollection_name, source.datasource_name
+        """,
+        (recipe_name, storage_type, data_type),
+    )
+    return [
+        (str(row.datacollection_name), str(row.datasource_name), float(row.effective_weight))
+        for row in cursor.fetchall()
+    ]

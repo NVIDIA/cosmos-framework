@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import sys
 import traceback
 
 import torch
@@ -296,3 +297,31 @@ if __name__ == "__main__":
         print(f"{config.job.path_local}/config.yaml")
     else:
         launch(config, args)
+        # Training finished. Exit without running interpreter finalization.
+        #
+        # A native thread outlives training: at ``atexit`` time
+        # ``threading.enumerate()`` reports only MainThread (plus wandb's daemon
+        # thread), yet finalization then faults with
+        #   Fatal Python error: PyGILState_Release: thread state ... must be
+        #   current when releasing
+        # on some hosts, and blocks forever on others -- in both cases *after*
+        # "Done with training." has been logged and every result produced. The
+        # streaming HuggingFace dataloader is what brings the thread in (a
+        # map-style dataset shuts down cleanly), but nothing reachable from
+        # Python owns it, so there is no handle to close. Not finalizing is what
+        # makes shutdown deterministic.
+        #
+        # ``os._exit`` skips atexit hooks and buffered-file flushing, so flush
+        # explicitly first. Only reached on success: an exception from
+        # ``launch`` propagates normally and keeps the usual traceback and
+        # non-zero exit.
+        #
+        # Opt-in, because skipping atexit is not free: anything registered there
+        # stops running, most visibly wandb's final flush/upload. Off by default
+        # so ordinary training keeps its normal shutdown; the launch regression
+        # sets it because that job is otherwise killed by the CI timeout.
+        if os.environ.get("COSMOS_EXIT_WITHOUT_FINALIZE", "").lower() in ("1", "true"):
+            logging.info("COSMOS_EXIT_WITHOUT_FINALIZE set: exiting without interpreter finalization.")
+            sys.stdout.flush()
+            sys.stderr.flush()
+            os._exit(0)

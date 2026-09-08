@@ -19,6 +19,7 @@ class LearningRateLogger(Callback):
 
     def __init__(self, every_n: int = 10) -> None:
         self.every_n: int = every_n
+        self._pending_lr: dict[str, float | torch.Tensor] = {}
 
     def on_before_optimizer_step(
         self,
@@ -30,9 +31,8 @@ class LearningRateLogger(Callback):
     ) -> None:
         del model, scheduler, grad_scaler
         gate = self.config.trainer.logging_iter * self.every_n
-        if not (iteration == 1 or (gate > 0 and iteration % gate == 0)):
-            return
-        if not distributed.is_rank0() or not wandb.run:
+        next_step = iteration + 1
+        if not (next_step == 1 or (gate > 0 and next_step % gate == 0)):
             return
         if not (hasattr(optimizer, "optimizers") and hasattr(optimizer, "model")):
             return
@@ -56,6 +56,23 @@ class LearningRateLogger(Callback):
                     lr_key = lr_key_by_param_id.get(id(param))
                     if lr_key is not None:
                         unique_lr[f"optim/lr_{lr_key}"] = param_group["lr"]
-        if not unique_lr:
+        self._pending_lr = unique_lr
+
+    def on_training_step_end(
+        self,
+        model: torch.nn.Module | list[torch.nn.Module],
+        data_batch: dict[str, torch.Tensor],
+        output_batch: dict[str, torch.Tensor],
+        loss: torch.Tensor,
+        iteration: int = 0,
+    ) -> None:
+        del model, data_batch, output_batch, loss
+        gate = self.config.trainer.logging_iter * self.every_n
+        if not (iteration == 1 or (gate > 0 and iteration % gate == 0)):
             return
-        wandb.log(unique_lr, step=iteration)
+        if not distributed.is_rank0() or not wandb.run:
+            return
+        if not self._pending_lr:
+            return
+        wandb.log(self._pending_lr, step=iteration)
+        self._pending_lr = {}

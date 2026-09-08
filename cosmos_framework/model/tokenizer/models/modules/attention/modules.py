@@ -307,16 +307,31 @@ class SparseMultiHeadRMSNorm(nn.Module):
     Applies RMS normalization with per-head learnable scale parameters.
     """
 
-    def __init__(self, dim: int, heads: int) -> None:
+    def __init__(self, dim: int, heads: int, eps: float | None = None) -> None:
         """Initialize SparseMultiHeadRMSNorm.
 
         Args:
             dim: Dimension per head.
             heads: Number of attention heads.
+            eps: Optional finite epsilon for true RMS normalization. ``None``
+                preserves the historical unit-vector normalization exactly.
         """
         super().__init__()
-        self.scale = dim**0.5
-        self.gamma = nn.Parameter(torch.ones(heads, dim))
+        if eps is not None and (
+            isinstance(eps, bool) or not isinstance(eps, int | float) or not math.isfinite(eps) or eps <= 0.0
+        ):
+            raise ValueError(f"eps must be a finite positive number or None, got {eps!r}.")
+        self.dim: int = dim
+        self.eps: float | None = None if eps is None else float(eps)
+        self.scale: float = dim**0.5
+        self.gamma: nn.Parameter = nn.Parameter(torch.ones(heads, dim))  # [H,D]
+
+    def _normalize(self, x: torch.Tensor) -> torch.Tensor:  # x: [...,H,D], returns [...,H,D]
+        """Normalize in float32 while preserving the historical default."""
+        x_float = x.float()  # [...,H,D]
+        if self.eps is None:
+            return F.normalize(x_float, dim=-1)  # [...,H,D]
+        return F.rms_norm(x_float, (self.dim,), eps=self.eps)  # [...,H,D]
 
     def forward(self, x: "SparseTensor" | torch.Tensor) -> "SparseTensor" | torch.Tensor:
         """Apply multi-head RMS normalization.
@@ -329,21 +344,23 @@ class SparseMultiHeadRMSNorm(nn.Module):
         """
         from cosmos_framework.model.tokenizer.models.modules.sparse_tensor import SparseTensor
 
+        output_scale = self.scale if self.eps is None else 1.0
         if isinstance(x, SparseTensor):
             output_dtype = x.dtype
             if not self.training and output_dtype != torch.float32 and self.gamma.dtype == output_dtype:
-                normalized_feats = F.normalize(x.feats.float(), dim=-1).to(output_dtype)
-                return x.replace(normalized_feats * self.gamma * self.scale)
-            normalized_feats = F.normalize(x.feats.float(), dim=-1)
-            scaled_feats = (normalized_feats * self.gamma * self.scale).to(output_dtype)
+                normalized_feats = self._normalize(x.feats).to(output_dtype)  # [T,H,D]
+                scaled_feats = normalized_feats * self.gamma * output_scale  # [T,H,D]
+                return x.replace(scaled_feats)
+            normalized_feats = self._normalize(x.feats)  # [T,H,D]
+            scaled_feats = (normalized_feats * self.gamma * output_scale).to(output_dtype)  # [T,H,D]
             return x.replace(scaled_feats)
         else:
             output_dtype = x.dtype
             if not self.training and output_dtype != torch.float32 and self.gamma.dtype == output_dtype:
-                normalized = F.normalize(x.float(), dim=-1).to(output_dtype)
-                return normalized * self.gamma * self.scale
-            normalized = F.normalize(x.float(), dim=-1)
-            return (normalized * self.gamma * self.scale).to(output_dtype)
+                normalized = self._normalize(x).to(output_dtype)  # [...,H,D]
+                return normalized * self.gamma * output_scale  # [...,H,D]
+            normalized = self._normalize(x)  # [...,H,D]
+            return (normalized * self.gamma * output_scale).to(output_dtype)  # [...,H,D]
 
 
 class SparseMultiHeadAttention(nn.Module):
@@ -373,6 +390,7 @@ class SparseMultiHeadAttention(nn.Module):
         qk_rms_norm: bool = False,
         out_channels: int | None = None,
         pos_cls_token: int = 0,
+        qk_rms_norm_eps: float | None = None,
     ) -> None:
         """Initialize SparseMultiHeadAttention.
 
@@ -384,6 +402,8 @@ class SparseMultiHeadAttention(nn.Module):
             use_bias: Whether to use bias in linear projections.
             use_rope: Whether to use rotary position embeddings.
             qk_rms_norm: Whether to apply RMS normalization to Q and K.
+            qk_rms_norm_eps: Optional finite epsilon for true Q/K RMS
+                normalization. ``None`` preserves historical behavior.
             out_channels: Number of output channels (defaults to channels).
             pos_cls_token: Position used for special/CLS sparse tokens in RoPE.
         """
@@ -400,6 +420,8 @@ class SparseMultiHeadAttention(nn.Module):
         self._type = type
         self.use_rope = use_rope
         self.qk_rms_norm = qk_rms_norm
+        if qk_rms_norm_eps is not None and not qk_rms_norm:
+            raise ValueError("qk_rms_norm_eps requires qk_rms_norm=True.")
         self.layer_idx: int | None = None
         self._debug_capture_enabled = False
         self._debug_capture_store_qkv = True
@@ -415,8 +437,8 @@ class SparseMultiHeadAttention(nn.Module):
             self.to_kv = nn.Linear(self.ctx_channels, channels * 2, bias=use_bias)
 
         if self.qk_rms_norm:
-            self.q_rms_norm = SparseMultiHeadRMSNorm(head_dim, num_heads)
-            self.k_rms_norm = SparseMultiHeadRMSNorm(head_dim, num_heads)
+            self.q_rms_norm = SparseMultiHeadRMSNorm(head_dim, num_heads, eps=qk_rms_norm_eps)
+            self.k_rms_norm = SparseMultiHeadRMSNorm(head_dim, num_heads, eps=qk_rms_norm_eps)
 
         self.to_out = nn.Linear(channels, out_channels, bias=use_bias)
 
