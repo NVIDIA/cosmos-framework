@@ -2683,3 +2683,47 @@ class TestBidirectionalStepMixing:
                 model.training_step({}, iteration=0)
 
         assert model._bidirectional_step_active is False
+
+
+@pytest.mark.L0
+@pytest.mark.CPU
+def test_teacher_forcing_replay_policy_resolves_a_serialized_config_dict() -> None:
+    """A config round-tripped through an exported checkpoint must still resolve.
+
+    Serializing a config adds a "_type" marker next to the real fields. Passing that
+    dict straight to attrs raised TypeError("unexpected keyword argument '_type'"), so
+    every causal model failed to load from an exported artifact while in-process
+    construction -- which never sees the marker -- kept working.
+    """
+    from cosmos_framework.configs.base.defaults.replay_attention import (
+        TeacherForcingReplayPolicyConfig,
+    )
+    from cosmos_framework.model.generator.omni_mot_causal_model import (
+        _resolve_teacher_forcing_replay_policy,
+    )
+
+    serialized = {
+        "_type": "cosmos_framework.configs.base.defaults.replay_attention.TeacherForcingReplayPolicyConfig",
+        "control_visibility": "current",
+        "controls_read_strict_past_clean_rgb": True,
+        "clean_pass_causality": "chunk",
+    }
+
+    resolved = _resolve_teacher_forcing_replay_policy(serialized)
+
+    assert isinstance(resolved, TeacherForcingReplayPolicyConfig)
+    assert resolved.control_visibility == "current"
+    assert resolved.controls_read_strict_past_clean_rgb is True
+    assert resolved.clean_pass_causality == "chunk"
+
+
+@pytest.mark.L0
+@pytest.mark.CPU
+def test_teacher_forcing_replay_policy_still_rejects_unknown_real_fields() -> None:
+    """Stripping the marker must not turn typos into silently ignored fields."""
+    from cosmos_framework.model.generator.omni_mot_causal_model import (
+        _resolve_teacher_forcing_replay_policy,
+    )
+
+    with pytest.raises(TypeError, match="control_visibilty"):
+        _resolve_teacher_forcing_replay_policy({"_type": "x", "control_visibilty": "current"})

@@ -429,7 +429,12 @@ def _resolve_teacher_forcing_replay_policy(value: Any) -> TeacherForcingReplayPo
     if OmegaConf.is_config(value):
         value = OmegaConf.to_object(value)
     if isinstance(value, dict):
-        value = TeacherForcingReplayPolicyConfig(**value)
+        # Drop lazy-config serializer metadata before construction. A config that has been
+        # round-tripped through an exported checkpoint carries a "_type" marker alongside
+        # the real fields, and attrs rejects it as an unexpected keyword. In-process
+        # construction never sees the marker, so this only failed when loading from an
+        # export -- which is every public run of a causal model.
+        value = TeacherForcingReplayPolicyConfig(**{k: v for k, v in value.items() if not k.startswith("_")})
     if not isinstance(value, TeacherForcingReplayPolicyConfig):
         raise TypeError(
             "teacher_forcing_replay_policy must resolve to a TeacherForcingReplayPolicyConfig, "
