@@ -95,12 +95,39 @@ def test_server_args_default_to_released_droid_serving_config() -> None:
     assert args.num_steps == 4
     assert args.shift == 5.0
     assert args.deterministic_seed is False
+    assert args.cfg_parallel is False
 
 
 def test_server_args_accept_guidance_interval() -> None:
     args = robolab_server.RobolabServerArgs(guidance_interval=(960.0, 1001.0))
 
     assert args.guidance_interval == (960.0, 1001.0)
+
+
+@pytest.mark.parametrize(
+    ("cfg_parallel", "world_size", "expected"),
+    [
+        (False, 1, {"dp_shard_size": 1, "cfgp_size": 1, "cp_size": 1}),
+        (True, 2, {"dp_shard_size": 1, "cfgp_size": 2, "cp_size": 1}),
+    ],
+)
+def test_resolve_parallelism_overrides(
+    cfg_parallel: bool,
+    world_size: int,
+    expected: dict[str, int],
+) -> None:
+    assert (
+        robolab_server._resolve_parallelism_overrides(cfg_parallel=cfg_parallel, world_size=world_size) == expected
+    )
+
+
+@pytest.mark.parametrize(("cfg_parallel", "world_size"), [(False, 2), (True, 1), (True, 4)])
+def test_resolve_parallelism_overrides_rejects_unsupported_launches(
+    cfg_parallel: bool,
+    world_size: int,
+) -> None:
+    with pytest.raises(ValueError):
+        robolab_server._resolve_parallelism_overrides(cfg_parallel=cfg_parallel, world_size=world_size)
 
 
 def test_joint_pos_observation_preprocessing_matches_internal_layout() -> None:
