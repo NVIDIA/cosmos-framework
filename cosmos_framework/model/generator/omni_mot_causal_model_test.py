@@ -554,6 +554,38 @@ def test_three_way_teacher_forcing_memory_state_does_not_require_flex_metadata()
 
 @pytest.mark.L0
 @pytest.mark.CPU
+def test_chunkwise_tf_truncates_framewise_action_domain_ids_with_real_actions() -> None:
+    """Chunk alignment keeps real-action domain metadata on the same rows."""
+    from cosmos_framework.model.generator.omni_mot_causal_model import OmniMoTCausalModel
+
+    model = object.__new__(OmniMoTCausalModel)
+    model.config = SimpleNamespace(
+        teacher_forcing_frames_per_chunk=4,
+        causal_training_strategy="teacher_forcing",
+    )
+    model.tokenizer_vision_gen = SimpleNamespace(
+        temporal_compression_factor=4,
+        get_pixel_num_frames=lambda latent_frames: 1 + (latent_frames - 1) * 4,
+    )
+    original_domain_ids = (torch.arange(900) // 100).to(torch.long)
+    gen_data = SimpleNamespace(
+        is_image_batch=False,
+        x0_tokens_vision=[torch.zeros(1, 2, 226, 1, 1)],
+        raw_state_vision=[torch.zeros(1, 3, 901, 1, 1)],
+        x0_tokens_action=[torch.zeros(900, 8)],
+        action_domain_id=[original_domain_ids.clone()],
+    )
+
+    result = OmniMoTCausalModel._truncate_for_chunkwise_tf(model, gen_data)
+
+    assert result.x0_tokens_vision[0].shape[2] == 225
+    assert result.raw_state_vision[0].shape[-3] == 897
+    assert result.x0_tokens_action[0].shape[-2] == 896
+    torch.testing.assert_close(result.action_domain_id[0], original_domain_ids[:896])
+
+
+@pytest.mark.L0
+@pytest.mark.CPU
 def test_multiview_clean_callback_includes_partial_conditioned_prefix() -> None:
     """A partial prefix is submitted once in camera-major view order."""
     from cosmos_framework.model.generator.omni_mot_causal_model import (
@@ -1191,6 +1223,36 @@ def test_generic_ar_cfg_uses_branch_specific_dual_kv_caches() -> None:
     assert observed_caches == [cond_cache, uncond_cache]
 
 
+@pytest.mark.L0
+@pytest.mark.CPU
+def test_chunkwise_tf_keeps_scalar_action_domain_id_scalar() -> None:
+    """Scalar-domain streams remain scalar while their action rows are cropped."""
+    from cosmos_framework.model.generator.omni_mot_causal_model import OmniMoTCausalModel
+
+    model = object.__new__(OmniMoTCausalModel)
+    model.config = SimpleNamespace(
+        teacher_forcing_frames_per_chunk=4,
+        causal_training_strategy="teacher_forcing",
+    )
+    model.tokenizer_vision_gen = SimpleNamespace(
+        temporal_compression_factor=4,
+        get_pixel_num_frames=lambda latent_frames: 1 + (latent_frames - 1) * 4,
+    )
+    gen_data = SimpleNamespace(
+        is_image_batch=False,
+        x0_tokens_vision=[torch.zeros(1, 2, 226, 1, 1)],
+        raw_state_vision=[torch.zeros(1, 3, 901, 1, 1)],
+        x0_tokens_action=[torch.zeros(900, 8)],
+        action_domain_id=[torch.tensor(22, dtype=torch.long)],
+    )
+
+    result = OmniMoTCausalModel._truncate_for_chunkwise_tf(model, gen_data)
+
+    assert result.x0_tokens_action[0].shape[-2] == 896
+    assert result.action_domain_id[0].shape == ()
+    assert result.action_domain_id[0].item() == 22
+
+
 # ---------------------------------------------------------------------------
 # L0 — Text tokens at start frame
 # ---------------------------------------------------------------------------
@@ -1412,11 +1474,13 @@ class TestARGenerationLoopLogic:
         model: MagicMock,
         mode: str,
         data_batch: dict | None = None,
+        gen_data: SimpleNamespace | None = None,
         **ar_kwargs,
     ) -> tuple[dict, MagicMock]:
         from cosmos_framework.model.generator.omni_mot_causal_model import OmniMoTCausalModel
 
-        gen_data = self._make_gen_data(mode)
+        if gen_data is None:
+            gen_data = self._make_gen_data(mode)
         model.get_data_and_condition.return_value = gen_data
         model._get_inference_text_tokens.return_value = ([[1, 2, 3]], None)
         mock_pack = MagicMock()
@@ -1806,6 +1870,34 @@ class TestARGenerationLoopLogic:
         assert first_pack_call["raw_action_dim"].item() == 6
 
     @pytest.mark.L0
+    def test_chunkwise_ar_slices_framewise_action_domain_ids(self) -> None:
+        """Successive AR chunks and clean-cache refreshes receive aligned domain slices."""
+        model = self._make_model_mock()
+        model.config.video_temporal_causal = True
+        model.config.teacher_forcing_frames_per_chunk = 4
+        num_frames = 9  # conditioned frame 0 followed by two complete four-frame chunks
+        gen_data = self._make_gen_data("forward_dynamics")
+        gen_data.x0_tokens_vision = [torch.zeros(1, self.C, num_frames, self.H, self.W)]
+        gen_data.x0_tokens_action = [torch.zeros((num_frames - 1) * self.TCF, 8)]
+        framewise_domain_ids = torch.tensor([2] * 16 + [22] * 16, dtype=torch.long)
+        gen_data.action_domain_id = [framewise_domain_ids]
+        model.generate_next_frame.side_effect = lambda **kwargs: torch.zeros_like(kwargs["curr_vision_latent"])
+        _, mock_pack = self._run(model, "forward_dynamics", gen_data=gen_data)
+
+        # Guidance is active, so each chunk is packed once for conditional and
+        # once for unconditional denoising.
+        assert len(mock_pack.call_args_list) == 4
+        for pack_call in mock_pack.call_args_list[:2]:
+            torch.testing.assert_close(pack_call.kwargs["action_domain_id"], framewise_domain_ids[:16])
+        for pack_call in mock_pack.call_args_list[2:]:
+            torch.testing.assert_close(pack_call.kwargs["action_domain_id"], framewise_domain_ids[16:])
+
+        seed_calls = model._seed_frame_into_kv_cache.call_args_list
+        torch.testing.assert_close(seed_calls[0].kwargs["action_domain_id"], framewise_domain_ids[:1])
+        torch.testing.assert_close(seed_calls[1].kwargs["action_domain_id"], framewise_domain_ids[:4])
+        torch.testing.assert_close(seed_calls[5].kwargs["action_domain_id"], framewise_domain_ids[16:20])
+
+    @pytest.mark.L0
     def test_sampler_mode_passed_to_generate_next_frame(self):
         """Callback/inference distilled mode reaches the per-frame sampler."""
         from cosmos_framework.model.generator.omni_mot_causal_model import OmniMoTCausalModel
@@ -2098,6 +2190,7 @@ class TestCFGPARGeneration:
                 cond_cached_text_offset=0,
                 uncond_cached_text_offset=0,
                 curr_action_latent=None,
+                action_domain_id=None,
                 gen_data_clean=SimpleNamespace(fps_vision=None, fps_action=None),
                 fps_vision_list=[24.0],
                 fps_action_list=[24.0],

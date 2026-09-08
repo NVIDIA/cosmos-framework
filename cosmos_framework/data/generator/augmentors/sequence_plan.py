@@ -4,7 +4,7 @@
 """Augmentor for creating sequence plans with random conditional frames.
 
 Supports two sampling strategies:
-- weighted dict (``conditioning_config``): explicit frame-count → probability pairs
+- weighted dict (``conditioning_config``): named mode or legacy prefix count → probability pairs
 - uniform (``uniform_conditioning=True``): k ~ Uniform{0, T_latent-1}, where T_latent
   is computed from the actual video length using the VAE temporal compression factor
   or UniAE chunking parameters when provided.
@@ -24,20 +24,29 @@ from cosmos_framework.model.generator.tokenizers.uniae.frame_math import (
     normalize_uniae_chunk_frames,
 )
 
+_NAMED_CONDITIONING_FRAME_COUNTS = {
+    "t2v": 0,
+    "i2v": 1,
+    "v2v": 2,
+}
+_FRAME_INTERPOLATION_MODE = "frame_interpolation"
+_VALID_NAMED_CONDITIONING_MODES = {*_NAMED_CONDITIONING_FRAME_COUNTS, _FRAME_INTERPOLATION_MODE}
+
 
 class SequencePlanAugmentor(Augmentor):
     """Augmentor that creates SequencePlan with random conditional frames.
 
-    Samples k conditioning frames and writes ``condition_frame_indexes_vision = list(range(k))``
-    into the SequencePlan. Downstream packing code reads this field to set condition_mask.
+    Samples conditioning frame indexes and writes them into the SequencePlan.
+    Downstream packing code reads this field to set condition_mask.
 
     Args:
         input_keys: List of input keys (not used, but required by Augmentor interface).
         output_keys: List of output keys (not used, but required by Augmentor interface).
         args: Dictionary containing:
-            - "conditioning_config" (dict[int, float], optional): Weighted distribution
-              mapping latent-frame counts to unnormalized probabilities.
-              Example: {0: 0.5, 4: 0.3, 8: 0.2}. Clamped to T_latent-1 at runtime.
+            - "conditioning_config" (dict[str | int, float], optional): Weighted
+              distribution mapping named modes or legacy prefix frame counts to
+              unnormalized probabilities. Named modes are ``"t2v"``, ``"i2v"``,
+              ``"v2v"``, and ``"frame_interpolation"``.
             - "uniform_conditioning" (bool, default False): When True, samples
               k ~ Uniform{0, T_latent-1}. Takes precedence over conditioning_config when
               both are set. At least one of uniform_conditioning or conditioning_config
@@ -57,7 +66,7 @@ class SequencePlanAugmentor(Augmentor):
         if args is None:
             args = {}
 
-        self.conditioning_config = args.get("conditioning_config")
+        self.conditioning_config: dict[str | int, float] | None = args.get("conditioning_config")
         self.uniform_conditioning = args.get("uniform_conditioning", False)
         self.temporal_compression_factor = args.get("temporal_compression_factor", 4)
         self.target_resolution_key = None if args.get("resolution") is None else str(args["resolution"])
@@ -69,10 +78,15 @@ class SequencePlanAugmentor(Augmentor):
 
         # Validate and normalize probabilities
         if self.conditioning_config is not None:
-            # Validate keys are non-negative integers
-            for num_frames, prob in self.conditioning_config.items():
-                if not isinstance(num_frames, int) or num_frames < 0:
-                    raise ValueError(f"conditioning_config keys must be non-negative integers, got {num_frames}")
+            for mode, prob in self.conditioning_config.items():
+                if isinstance(mode, int):
+                    if mode < 0:
+                        raise ValueError(f"integer conditioning_config keys must be non-negative, got {mode!r}")
+                elif not isinstance(mode, str) or mode not in _VALID_NAMED_CONDITIONING_MODES:
+                    raise ValueError(
+                        "conditioning_config keys must be non-negative integers or one of "
+                        f"{sorted(_VALID_NAMED_CONDITIONING_MODES)}, got {mode!r}"
+                    )
                 if not isinstance(prob, (int, float)) or prob < 0:
                     raise ValueError(f"conditioning_config values must be non-negative numbers, got {prob}")
 
@@ -83,7 +97,7 @@ class SequencePlanAugmentor(Augmentor):
 
             self.normalized_config = {k: v / total_prob for k, v in self.conditioning_config.items()}
         else:
-            self.normalized_config = {0: 1.0}
+            self.normalized_config = {"t2v": 1.0}
 
     def _normalize_uniae_chunk_frames(
         self, uniae_chunk_frames: int | Mapping[str, int] | None
@@ -148,7 +162,7 @@ class SequencePlanAugmentor(Augmentor):
         """
         # Get video to determine available frames
         video = data_dict.get("video")
-        if video is None or (self.conditioning_config is None and not self.uniform_conditioning):
+        if video is None:
             # This is an image batch
             sequence_plan = SequencePlan(
                 has_text=True,  # Has text prompt!
@@ -164,18 +178,32 @@ class SequencePlanAugmentor(Augmentor):
 
         T_latent = self._get_latent_frame_count(num_frames, spatial_shape)
 
-        # Sample number of conditional frames
         if self.uniform_conditioning:
             num_conditional_frames = random.randint(0, max(0, T_latent - 1))
+            condition_frame_indexes_vision = list(range(num_conditional_frames))
         else:
-            frames_options = list(self.normalized_config.keys())
+            modes = list(self.normalized_config.keys())
             weights = list(self.normalized_config.values())
-            num_conditional_frames = random.choices(frames_options, weights=weights, k=1)[0]
-            num_conditional_frames = min(num_conditional_frames, T_latent - 1) if num_frames is not None else 0
-
-        # Create condition_frame_indexes_vision list
-        # Conditional frames are always the first N frames
-        condition_frame_indexes_vision = list(range(num_conditional_frames))
+            selected_mode = random.choices(modes, weights=weights, k=1)[0]
+            if isinstance(selected_mode, int):
+                num_conditional_frames = selected_mode
+                num_conditional_frames = min(num_conditional_frames, T_latent - 1) if num_frames is not None else 0
+                condition_frame_indexes_vision = list(range(num_conditional_frames))
+            elif selected_mode == _FRAME_INTERPOLATION_MODE:
+                if T_latent == 1:
+                    # Conditioning the only latent frame would leave nothing to noise or supervise.
+                    condition_frame_indexes_vision = []
+                elif T_latent == 2:
+                    # Two conditions would leave no useful interpolation target.
+                    condition_frame_indexes_vision = [0]
+                else:
+                    second_frame_index = random.randint(2, T_latent - 1)
+                    condition_frame_indexes_vision = [0, second_frame_index]
+            else:
+                num_conditional_frames = _NAMED_CONDITIONING_FRAME_COUNTS[selected_mode]
+                num_conditional_frames = min(num_conditional_frames, T_latent - 1) if num_frames is not None else 0
+                # Prefix conditioning is used for T2V, I2V, and V2V.
+                condition_frame_indexes_vision = list(range(num_conditional_frames))
 
         # Create SequencePlan
         sequence_plan = SequencePlan(

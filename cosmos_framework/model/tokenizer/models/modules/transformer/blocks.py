@@ -559,8 +559,8 @@ class SparseTransformerBlock(nn.Module):
         return feats + h, {} if kv_cache is None else kv_cache
 
 
-class _AntialiasedBilinearUpsampleWithFastBackward(torch.autograd.Function):
-    """Keep the antialiased forward while using the equivalent upsample-only adjoint."""
+class _AntialiasedBilinearResizeWithCustomBackward(torch.autograd.Function):
+    """Keep the antialiased forward while selecting a strict or fast custom adjoint."""
 
     @staticmethod
     def forward(
@@ -571,8 +571,6 @@ class _AntialiasedBilinearUpsampleWithFastBackward(torch.autograd.Function):
     ) -> torch.Tensor:
         """Run the native antialiased forward and retain only shape metadata."""
         input_height, input_width = input_tensor.shape[-2:]
-        if target_height < input_height or target_width < input_width:
-            raise ValueError("The fast position-embedding adjoint is only valid for pure bilinear upsampling.")
         ctx.input_size = tuple(input_tensor.shape)
         ctx.output_size = (target_height, target_width)
         return F.interpolate(
@@ -589,15 +587,104 @@ class _AntialiasedBilinearUpsampleWithFastBackward(torch.autograd.Function):
         grad_output: torch.Tensor,
     ) -> tuple[torch.Tensor, None, None]:
         """Apply the non-antialiased pure-upsample adjoint."""
-        grad_input = torch.ops.aten.upsample_bilinear2d_backward.default(
-            grad_output,
-            ctx.output_size,
-            ctx.input_size,
-            False,
-            None,
-            None,
-        )
+        if torch.are_deterministic_algorithms_enabled():
+            grad_input = _deterministic_antialiased_bilinear_resize_adjoint(
+                grad_output,
+                input_height=ctx.input_size[-2],
+                input_width=ctx.input_size[-1],
+            )
+        else:
+            grad_input = torch.ops.aten.upsample_bilinear2d_backward.default(
+                grad_output,
+                ctx.output_size,
+                ctx.input_size,
+                False,
+                None,
+                None,
+            )
         return grad_input, None, None
+
+
+def _antialiased_bilinear_axis_weights(
+    *,
+    input_size: int,
+    output_size: int,
+    device: torch.device,
+    dtype: torch.dtype,
+) -> torch.Tensor:
+    """Build one exact antialiased align-corners-false resize matrix."""
+    # Keep the untouched axis nondegenerate. PyTorch's antialias kernel has a
+    # special width-one path whose coefficients do not represent the general
+    # separable 2D operator used by real position grids.
+    basis = (
+        torch.eye(input_size, device=device, dtype=dtype)
+        .reshape(1, input_size, input_size, 1)
+        .expand(1, input_size, input_size, input_size)
+    )
+    resized_basis = F.interpolate(
+        basis,
+        size=(output_size, input_size),
+        mode="bilinear",
+        align_corners=False,
+        antialias=True,
+    )
+    return resized_basis[0, :, :, 0].transpose(0, 1).contiguous()
+
+
+def _deterministic_antialiased_bilinear_resize_adjoint(
+    grad_output: torch.Tensor,
+    *,
+    input_height: int,
+    input_width: int,
+) -> torch.Tensor:
+    """Apply the exact separable resize adjoint deterministically without CUDA atomics."""
+    output_height, output_width = grad_output.shape[-2:]
+    compute_dtype = torch.float32 if grad_output.dtype in {torch.bfloat16, torch.float16} else grad_output.dtype
+    grad_matrix = grad_output.to(compute_dtype).reshape(-1, output_height, output_width)
+    height_weights = _antialiased_bilinear_axis_weights(
+        input_size=input_height,
+        output_size=output_height,
+        device=grad_output.device,
+        dtype=compute_dtype,
+    )
+    width_weights = _antialiased_bilinear_axis_weights(
+        input_size=input_width,
+        output_size=output_width,
+        device=grad_output.device,
+        dtype=compute_dtype,
+    )
+    height_reduced = torch.matmul(grad_matrix.transpose(1, 2), height_weights).transpose(1, 2)
+    grad_input = torch.matmul(height_reduced, width_weights)
+    return grad_input.reshape(*grad_output.shape[:-2], input_height, input_width).to(grad_output.dtype)
+
+
+def _use_fast_position_embedding_upsample_backward(
+    *,
+    enabled: bool,
+    is_cuda: bool,
+    dtype: torch.dtype,
+    requires_grad: bool,
+    grad_enabled: bool,
+    source_height: int,
+    source_width: int,
+    target_height: int,
+    target_width: int,
+) -> bool:
+    """Select the equivalent pure-upsample adjoint for speed or strict determinism."""
+    if not enabled or not is_cuda or not requires_grad or not grad_enabled:
+        return False
+    if torch.are_deterministic_algorithms_enabled():
+        # CUDA has no deterministic antialiased bilinear backward. For pure
+        # upsampling its forward is identical to ordinary bilinear interpolation,
+        # while mixed resize shapes require the exact antialiased interpolation
+        # matrix. Both use deterministic matrix reductions in strict mode.
+        return True
+    return (
+        target_height >= source_height
+        and target_width >= source_width
+        and dtype == torch.bfloat16
+        and (target_height * target_width >= _FAST_POSITION_EMBEDDING_BACKWARD_MIN_TARGET_PATCHES)
+    )
 
 
 class LearnedPositionEmbedder(nn.Module):
@@ -649,18 +736,19 @@ class LearnedPositionEmbedder(nn.Module):
             pos_emb = positional_embeddings.permute(2, 0, 1).unsqueeze(0)
             if pos_emb.device != target_device or pos_emb.dtype != compute_dtype:
                 pos_emb = pos_emb.to(device=target_device, dtype=compute_dtype)
-            use_fast_backward = bool(
-                self.fast_upsample_backward
-                and pos_emb.is_cuda
-                and pos_emb.dtype == torch.bfloat16
-                and pos_emb.requires_grad
-                and torch.is_grad_enabled()
-                and target_height >= self.position_embedding_size
-                and target_width >= self.position_embedding_size
-                and target_height * target_width >= _FAST_POSITION_EMBEDDING_BACKWARD_MIN_TARGET_PATCHES
+            use_fast_backward = _use_fast_position_embedding_upsample_backward(
+                enabled=self.fast_upsample_backward,
+                is_cuda=pos_emb.is_cuda,
+                dtype=pos_emb.dtype,
+                requires_grad=pos_emb.requires_grad,
+                grad_enabled=torch.is_grad_enabled(),
+                source_height=self.position_embedding_size,
+                source_width=self.position_embedding_size,
+                target_height=target_height,
+                target_width=target_width,
             )
             if use_fast_backward:
-                resized_pos_emb = _AntialiasedBilinearUpsampleWithFastBackward.apply(
+                resized_pos_emb = _AntialiasedBilinearResizeWithCustomBackward.apply(
                     pos_emb,
                     target_height,
                     target_width,

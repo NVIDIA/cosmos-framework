@@ -8,8 +8,8 @@ from typing import TYPE_CHECKING
 
 import attrs
 import wandb
-import wandb.util
 from omegaconf import DictConfig
+from wandb.sdk.lib.runid import generate_id
 
 from cosmos_framework.utils.lazy_config.lazy import LazyConfig
 from cosmos_framework.utils import distributed, log, object_store
@@ -52,7 +52,7 @@ def init_wandb(config: Config, model: ImaginaireModel) -> None:
     wandb_id = _read_wandb_id(config_job, config_checkpoint)
     if wandb_id is None:
         # Generate a new W&B job ID.
-        wandb_id = wandb.util.generate_id()
+        wandb_id = generate_id()
         _write_wandb_id(config_job, config_checkpoint, wandb_id=wandb_id)
         log.info(f"Generating new wandb ID: {wandb_id}")
     else:
@@ -90,7 +90,7 @@ def init_wandb(config: Config, model: ImaginaireModel) -> None:
         ):
             log.warning("W&B run exists but current user lacks update permission; starting a new run instead.")
             # Generate and persist a new wandb id, then create a fresh run.
-            wandb_id = wandb.util.generate_id()
+            wandb_id = generate_id()
             _write_wandb_id(config_job, config_checkpoint, wandb_id=wandb_id)
             wandb.init(
                 force=True,

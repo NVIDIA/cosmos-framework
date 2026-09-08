@@ -2,6 +2,8 @@
 # SPDX-License-Identifier: OpenMDW-1.1
 
 from collections.abc import Callable
+from pathlib import Path
+from typing import Any, Literal, cast
 
 import torch
 
@@ -114,3 +116,118 @@ def decode_multiview_latent_per_view(
         decoded_views.append(decoded_view)
 
     return torch.cat(decoded_views, dim=temporal_dim)  # [B,C,V*F,H_pixel,W_pixel] or [C,V*F,H_pixel,W_pixel]
+
+
+def load_multiview_media_pixels(
+    path: Path,
+    *,
+    target_h: int,
+    target_w: int,
+    max_frames: int,
+    keep: str = "first",
+    video_loader: Callable[..., torch.Tensor],
+    image_loader: Callable[..., torch.Tensor],
+    video_extensions: frozenset[str],
+    image_extensions: frozenset[str],
+) -> torch.Tensor:  # returns [3,T,H,W]
+    suffix = path.suffix.lower()
+    if suffix in video_extensions:
+        frames_normalized = video_loader(
+            path,
+            target_h=target_h,
+            target_w=target_w,
+            max_frames=max_frames,
+            keep=cast(Literal["first", "last"], keep),
+        )  # [3,T,H,W]
+        frames_uint8 = ((frames_normalized + 1.0) * 127.5).round().clamp(0, 255).to(torch.uint8)  # [3,T,H,W]
+        return frames_uint8
+    if suffix not in image_extensions:
+        raise ValueError(f"Unsupported multiview media extension: {path.suffix!r} ({path}).")
+    image_uint8 = image_loader(path, target_h=target_h, target_w=target_w)  # [3,H,W]
+    return image_uint8.unsqueeze(1)  # [3,1,H,W]
+
+
+def pad_multiview_view_video(
+    frames: torch.Tensor | None,
+    *,
+    num_frames: int,
+    height: int,
+    width: int,
+) -> torch.Tensor:  # frames: [3,T,H,W] or None, returns [3,F,H,W]
+    video = torch.full((3, num_frames, height, width), 128, dtype=torch.uint8)  # [3,F,H,W]
+    if frames is None:
+        return video
+    if (
+        frames.dim() != 4
+        or int(frames.shape[0]) != 3
+        or int(frames.shape[2]) != height
+        or int(frames.shape[3]) != width
+    ):
+        raise ValueError(
+            "Expected multiview frames shape [3,T,H,W] matching the requested output size, "
+            f"got {tuple(frames.shape)} for H={height}, W={width}."
+        )
+    t_fill = min(int(frames.shape[1]), num_frames)
+    if t_fill <= 0:
+        return video
+    video[:, :t_fill] = frames[:, :t_fill]  # [3,t_fill,H,W]
+    if t_fill < num_frames:
+        video[:, t_fill:] = video[:, t_fill - 1 : t_fill].expand(
+            -1,
+            num_frames - t_fill,
+            -1,
+            -1,
+        )  # [3,F-t_fill,H,W]
+    return video
+
+
+def build_camera_major_video(view_videos: list[torch.Tensor], *, device: Any) -> torch.Tensor:  # returns [1,3,V*F,H,W]
+    if not view_videos:
+        raise ValueError("Multiview inference requires at least one camera view.")
+    camera_major_video = torch.cat(view_videos, dim=1).unsqueeze(0).to(device=device)  # [1,3,V*F,H,W]
+    return camera_major_video
+
+
+def normalize_multiview_control_weights(weights: list[float]) -> list[float]:
+    """Return normalized per-control weights for the multiview transfer batch."""
+    if not weights:
+        raise ValueError("Multiview transfer inference requires an explicit transfer hint such as wsm={}.")
+    if any(weight < 0 for weight in weights):
+        raise ValueError(f"control_weights must all be non-negative, got {weights}.")
+    total_weight = sum(weights)
+    if total_weight <= 0:
+        raise ValueError(f"control_weights must have a positive sum, got {weights}.")
+    return [weight / total_weight for weight in weights]
+
+
+def slice_multiview_view_frames(
+    frames: torch.Tensor,
+    *,
+    start_frame: int,
+    end_frame: int,
+) -> torch.Tensor:  # frames: [3,T,H,W], returns [3,T_slice,H,W]
+    if start_frame < 0 or end_frame <= start_frame:
+        raise ValueError(f"Invalid multiview frame slice [{start_frame}, {end_frame}).")
+    total_frames = int(frames.shape[1])
+    if start_frame >= total_frames:
+        raise ValueError(
+            f"Caption frame_range starts at frame {start_frame}, but the multiview media has only {total_frames} frames."
+        )
+    clipped_end_frame = min(end_frame, total_frames)
+    return frames[:, start_frame:clipped_end_frame]  # [3,T_slice,H,W]
+
+
+def generated_multiview_condition_frames(
+    view_videos: list[torch.Tensor],
+    *,
+    num_condition_frames: int,
+) -> list[torch.Tensor | None]:  # view_videos: list[[3,F,H,W]], returns list[[3,F_cond,H,W]]
+    """Convert decoded generated pixels in [0, 1] into uint8 feedback condition frames."""
+    if num_condition_frames <= 0:
+        return [None for _ in view_videos]
+    condition_frames: list[torch.Tensor | None] = []
+    for view_video in view_videos:
+        tail = view_video[:, -num_condition_frames:]  # [3,F_cond,H,W]
+        condition = (tail * 255.0).round().clamp(0, 255).to(torch.uint8)  # [3,F_cond,H,W], [0,1] -> uint8
+        condition_frames.append(condition)
+    return condition_frames

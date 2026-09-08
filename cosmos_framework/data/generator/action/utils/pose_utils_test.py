@@ -291,3 +291,93 @@ def test_pose9d_helpers_emit_float32_without_explicit_casts(dtype) -> None:
     # frame; the relative form must not.
     np.testing.assert_allclose(abs9[:, :3], poses_abs[1:, :3, 3], atol=1e-6)
     assert not np.allclose(rel[:, :3], abs9[:, :3])
+
+
+@pytest.mark.L0
+def test_backward_anchored_anchor_index_rows_are_relative_to_the_anchor_frame() -> None:
+    """Every anchored row must be ``T_anchor^-1 @ T_k`` with the anchor frame skipped."""
+    poses_abs = _make_example_poses_abs()  # (4, 4, 4)
+    anchor = 2
+
+    rel = pose_abs_to_rel(
+        poses_abs,
+        rotation_format="rot6d",
+        pose_convention="backward_anchored",
+        anchor_index=anchor,
+    )
+
+    assert rel.shape == (len(poses_abs) - 1, 9)
+    inv_anchor = np.linalg.inv(poses_abs[anchor])
+    frames = [f for f in range(len(poses_abs)) if f != anchor]
+    for row, frame in zip(rel, frames):
+        expected = inv_anchor @ poses_abs[frame]
+        np.testing.assert_allclose(row[:3], expected[:3, 3], atol=1e-5)
+        # Column-based rot6d: first two columns of R.
+        np.testing.assert_allclose(row[3:6], expected[:3, 0], atol=1e-5)
+        np.testing.assert_allclose(row[6:9], expected[:3, 1], atol=1e-5)
+
+
+@pytest.mark.L0
+def test_backward_anchored_anchor_index_zero_matches_the_legacy_behavior() -> None:
+    """``anchor_index=0`` (the default) must reproduce the pre-anchor-index rows exactly."""
+    poses_abs = _make_example_poses_abs()
+
+    default_rows = pose_abs_to_rel(poses_abs, rotation_format="rot6d", pose_convention="backward_anchored")
+    explicit_rows = pose_abs_to_rel(
+        poses_abs, rotation_format="rot6d", pose_convention="backward_anchored", anchor_index=0
+    )
+
+    np.testing.assert_allclose(default_rows, explicit_rows, atol=0)
+    inv0 = np.linalg.inv(poses_abs[0])
+    for i in range(len(poses_abs) - 1):
+        np.testing.assert_allclose(default_rows[i, :3], (inv0 @ poses_abs[i + 1])[:3, 3], atol=1e-5)
+
+
+@pytest.mark.L0
+@pytest.mark.parametrize("anchor", [0, 1, 2, 3])
+def test_backward_anchored_anchor_index_roundtrips(anchor: int) -> None:
+    """Encoding at any anchor and decoding with the anchor pose must reproduce the trajectory."""
+    poses_abs = _make_example_poses_abs()
+
+    rel = pose_abs_to_rel(poses_abs, rotation_format="rot6d", pose_convention="backward_anchored", anchor_index=anchor)
+    reconstructed = pose_rel_to_abs(
+        rel,
+        rotation_format="rot6d",
+        pose_convention="backward_anchored",
+        initial_pose=poses_abs[anchor],
+        anchor_index=anchor,
+    )
+
+    np.testing.assert_allclose(reconstructed, poses_abs, atol=1e-5)
+
+
+@pytest.mark.L0
+def test_backward_anchored_history_and_future_signs_oppose_for_monotonic_motion() -> None:
+    """+z motion with the anchor mid-window: history rows -z, future rows +z."""
+    poses = np.tile(np.eye(4, dtype=np.float64), (5, 1, 1))
+    poses[:, 2, 3] = np.arange(5) * 0.1  # frames at z = 0.0 .. 0.4; anchor frame 2 at z = 0.2
+
+    rel = pose_abs_to_rel(poses, rotation_format="rot6d", pose_convention="backward_anchored", anchor_index=2)
+
+    np.testing.assert_allclose(rel[:2, 2], [-0.2, -0.1], atol=1e-6)  # history: where the EEF was
+    np.testing.assert_allclose(rel[2:, 2], [0.1, 0.2], atol=1e-6)  # future: where it should go
+
+
+@pytest.mark.L0
+def test_anchor_index_is_rejected_for_backward_framewise() -> None:
+    """Framewise deltas have no anchor; a stray anchor_index must fail loudly."""
+    poses_abs = _make_example_poses_abs()
+    with pytest.raises(ValueError, match="anchor_index"):
+        pose_abs_to_rel(poses_abs, rotation_format="rot6d", pose_convention="backward_framewise", anchor_index=1)
+    rel = pose_abs_to_rel(poses_abs, rotation_format="rot6d", pose_convention="backward_framewise")
+    with pytest.raises(ValueError, match="anchor_index"):
+        pose_rel_to_abs(rel, rotation_format="rot6d", pose_convention="backward_framewise", anchor_index=1)
+
+
+@pytest.mark.L0
+def test_anchor_index_out_of_range_is_rejected() -> None:
+    poses_abs = _make_example_poses_abs()
+    with pytest.raises(ValueError, match="out of range"):
+        pose_abs_to_rel(poses_abs, rotation_format="rot6d", pose_convention="backward_anchored", anchor_index=4)
+    with pytest.raises(ValueError, match="out of range"):
+        pose_abs_to_rel(poses_abs, rotation_format="rot6d", pose_convention="backward_anchored", anchor_index=-1)

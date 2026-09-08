@@ -387,28 +387,49 @@ def _get_relative_delta_transform(
     inv_poses_abs: np.ndarray,
     frame_idx: int,
     pose_convention: PoseConvention,
+    anchor_index: int = 0,
 ) -> np.ndarray:
     """Compute one relative transform from an absolute-pose trajectory.
 
     Args:
         poses_abs: Absolute poses of shape ``(T, 4, 4)``.
         inv_poses_abs: Precomputed inverses of ``poses_abs`` with the same shape.
-        frame_idx: Index of the step to encode, in ``[0, T - 2]``.
+        frame_idx: Index of the output row to encode, in ``[0, T - 2]``.
         pose_convention: Pose convention controlling which two poses
             define the delta and whether it is framewise or anchored.
+        anchor_index: For ``backward_anchored`` only: index of the anchor pose.
+            Row ``frame_idx`` encodes the frame at ``frame_idx`` when it precedes
+            the anchor and ``frame_idx + 1`` otherwise, so the anchor frame itself
+            (which would encode as the identity) is skipped and the output stays
+            ``T - 1`` rows for any anchor. ``backward_framewise`` has no anchor and
+            requires the default ``0``.
 
     Returns:
         The relative transform ``delta_T`` with shape ``(4, 4)`` for the
         requested step and convention.
     """
     if pose_convention == "backward_framewise":
+        if anchor_index != 0:
+            raise ValueError(f"anchor_index is only meaningful for backward_anchored, got {anchor_index} (framewise).")
         return inv_poses_abs[frame_idx] @ poses_abs[frame_idx + 1]
     if pose_convention == "backward_anchored":
-        return inv_poses_abs[0] @ poses_abs[frame_idx + 1]
+        # `anchor_index` generalises a fixed anchor of 0: at anchor_index=0 this reduces
+        # exactly to `inv_poses_abs[0] @ poses_abs[frame_idx + 1]`. The generalisation is
+        # what makes anchored encoding usable with action history, where the anchor is the
+        # current frame rather than the window start.
+        target = frame_idx if frame_idx < anchor_index else frame_idx + 1
+        return inv_poses_abs[anchor_index] @ poses_abs[target]
     if chunk_length := _POSE_CHUNK_LENGTHS.get(pose_convention):
+        # The chunk-anchored conventions deliberately do NOT use the anchor-skip above: their
+        # target is always >= anchor_idx + 1, so no identity row can arise and no skip is needed.
+        if anchor_index != 0:
+            raise ValueError(f"anchor_index is only meaningful for backward_anchored, got {anchor_index}.")
         anchor_idx = (frame_idx // chunk_length) * chunk_length
         return inv_poses_abs[anchor_idx] @ poses_abs[frame_idx + 1]
-    raise ValueError(f"Unsupported pose_convention={pose_convention!r}")
+    raise ValueError(
+        f"Unsupported pose_convention={pose_convention!r}. Expected one of: backward_framewise, "
+        f"backward_anchored, {', '.join(sorted(_POSE_CHUNK_LENGTHS))}."
+    )
 
 
 def _apply_relative_delta_transform(
@@ -444,6 +465,7 @@ def pose_abs_to_rel(
     poses_abs: np.ndarray,
     rotation_format: RotationConvention = "rot9d",
     pose_convention: PoseConvention = "backward_framewise",
+    anchor_index: int = 0,
 ) -> np.ndarray:
     """Convert an absolute-pose trajectory into relative-pose action vectors.
 
@@ -455,26 +477,41 @@ def pose_abs_to_rel(
             ``euler_xyz``.
         pose_convention: Pose convention:
             - ``backward_framewise``: ``delta_T = T_i^{-1} @ T_{i+1}``
-            - ``backward_anchored``: ``delta_T = T_0^{-1} @ T_{i+1}``
+            - ``backward_anchored``: ``delta_T = T_a^{-1} @ T_k`` for every frame
+              ``k != a``, where ``a = anchor_index``. With ``anchor_index = 0``
+              this is ``T_0^{-1} @ T_{i+1}``.
             - ``backward_chunk_anchored_8f`` and ``backward_chunk_anchored_16f``:
               each group of 8 or 16 targets is relative to the pose immediately
               before the group.
+        anchor_index: For ``backward_anchored``: which frame anchors the window.
+            With action history the anchor is the *current* frame (index ``H``),
+            so the ``H`` rows before it point backward (where the EEF was,
+            relative to now) and the rows after it point forward (where it should
+            go). The anchor frame itself is skipped -- it would encode as the
+            identity -- keeping the output at ``T - 1`` rows. The default ``0``
+            reproduces the history-free behavior (anchor at the window start,
+            which *is* the current frame when ``H = 0``). Must be ``0`` for
+            ``backward_framewise`` and for the chunk-anchored conventions.
 
     Returns:
         An array of shape ``(T - 1, D)`` where ``D = 3 + rotation_dim``.
 
     Raises:
         AssertionError: If fewer than two absolute poses are provided.
+        ValueError: If ``anchor_index`` is out of range for ``poses_abs``.
     """
     num_frames = len(poses_abs)
     assert num_frames > 1, "At least 2 frames are required to compute relative poses"
+    if not 0 <= anchor_index < num_frames:
+        raise ValueError(f"anchor_index={anchor_index} out of range for {num_frames} poses.")
+
     # Compute inverse poses
     inv_poses_abs = np.linalg.inv(poses_abs)
 
     poses_rel = []
     # We produce num_frames - 1 relative poses
     for i in range(num_frames - 1):
-        delta_T = _get_relative_delta_transform(poses_abs, inv_poses_abs, i, pose_convention)
+        delta_T = _get_relative_delta_transform(poses_abs, inv_poses_abs, i, pose_convention, anchor_index)
         poses_rel.append(
             _delta_transform_to_pose_vector(
                 delta_T,
@@ -493,6 +530,7 @@ def pose_rel_to_abs(
     normalize_rotation: bool = True,
     translation_scale: float = 1.0,
     rotation_scale: float = 1.0,
+    anchor_index: int = 0,
 ) -> np.ndarray:
     """Reconstruct an absolute-pose trajectory from relative-pose action vectors.
 
@@ -502,7 +540,8 @@ def pose_rel_to_abs(
         rotation_format: Convention used by the rotation block of ``poses_rel``.
         pose_convention: Pose convention used when the vectors were
             encoded. This must match the convention passed to `pose_abs_to_rel()`.
-        initial_pose: Absolute pose for the first frame. If ``None``, the
+        initial_pose: Absolute pose for the anchor frame (``backward_anchored``)
+            or the first frame (``backward_framewise``). If ``None``, the
             identity transform is used.
         normalize_rotation: Whether to project decoded rotations onto ``SO(3)``
             before composing them back into the trajectory.
@@ -512,6 +551,12 @@ def pose_rel_to_abs(
         rotation_scale: Scalar used to undo rotation scaling in ``poses_rel``.
             Prefer denormalizing with the dataset action normalizer before
             calling this function.
+        anchor_index: Must match the value passed to :func:`pose_abs_to_rel`.
+            For ``backward_anchored``, ``initial_pose`` is placed at this frame
+            index in the output and every row decodes independently as
+            ``initial_pose @ delta`` (rows before the anchor are past frames,
+            rows after it future frames). Must be ``0`` for
+            ``backward_framewise``.
 
     Returns:
         Absolute poses with shape ``(T, 4, 4)`` where ``T = len(poses_rel) + 1``.
@@ -519,11 +564,33 @@ def pose_rel_to_abs(
     if initial_pose is None:
         initial_pose = np.eye(4)
 
+    num_poses_rel = poses_rel.shape[0]
+    if not 0 <= anchor_index <= num_poses_rel:
+        raise ValueError(f"anchor_index={anchor_index} out of range for {num_poses_rel} relative poses.")
+    if pose_convention != "backward_anchored" and anchor_index != 0:
+        raise ValueError(f"anchor_index is only meaningful for backward_anchored, got {anchor_index}.")
+
+    if pose_convention == "backward_anchored" and anchor_index != 0:
+        # For a mid-window anchor, rows decode independently and the anchor pose must be
+        # inserted at its frame position to recover the original trajectory order.
+        poses_abs = [
+            initial_pose
+            @ _pose_vector_to_delta_transform(
+                pose_rel,
+                rotation_input_format=rotation_format,
+                translation_scale=translation_scale,
+                normalize_rotation=normalize_rotation,
+                rotation_scale=rotation_scale,
+            )
+            for pose_rel in poses_rel
+        ]
+        poses_abs.insert(anchor_index, initial_pose)
+        return np.stack(poses_abs)  # [T,4,4]
+
+    # Preserve the existing reconstruction path when the anchor remains at frame 0.
     poses_abs = [initial_pose]
     current_pose = initial_pose
     chunk_anchor = initial_pose
-
-    num_poses_rel = poses_rel.shape[0]
     chunk_length = _POSE_CHUNK_LENGTHS.get(pose_convention)
 
     for i in range(num_poses_rel):
@@ -548,6 +615,33 @@ def pose_rel_to_abs(
         current_pose = next_pose
 
     return np.stack(poses_abs)  # [T,4,4]
+
+
+def pose_anchored_to_framewise(
+    poses_rel: np.ndarray,
+    rotation_format: RotationConvention = "rot6d",
+) -> np.ndarray:
+    """Re-encode anchored relative-pose rows as framewise one-step rows.
+
+    Idleness (and any other per-step property) is a fact about the underlying
+    trajectory, not its encoding: anchored rows ``P_k = T_anchor^-1 @ T_k`` are
+    losslessly convertible to one-step deltas ``delta_k = P_{k-1}^-1 @ P_k``
+    (with ``P_0 = I``, since the anchor precedes the first row). This enables
+    per-step checks written for the framewise convention -- e.g.
+    :func:`compute_idle_frames` -- to run on anchored action chunks.
+
+    Only forward-of-anchor rows may be passed (the dataset's ``action`` chunk;
+    ``anchor_index`` 0 semantics). History rows would need their own ordering.
+
+    Args:
+        poses_rel: ``(K, D)`` anchored rows, layout ``[translation(3), rotation]``.
+        rotation_format: Rotation convention of the rows' rotation block.
+
+    Returns:
+        ``(K, D)`` framewise rows in the same layout and rotation convention.
+    """
+    poses_abs = pose_rel_to_abs(poses_rel, rotation_format=rotation_format, pose_convention="backward_anchored")
+    return pose_abs_to_rel(poses_abs, rotation_format=rotation_format, pose_convention="backward_framewise")
 
 
 # -----------------------------------------------------------------------------

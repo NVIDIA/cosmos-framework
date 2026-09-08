@@ -1852,7 +1852,7 @@ class OmniMoTModel(ImaginaireModel):
 
     def _load_and_tokenize_text_data(
         self,
-        data_batch: dict[str, torch.Tensor],
+        data_batch: dict[str, Any],
         iteration: int,
     ) -> list[list[int]]:
         """
@@ -1865,6 +1865,11 @@ class OmniMoTModel(ImaginaireModel):
         Returns:
             list[torch.Tensor]: The input text tokens.
         """
+        if "text_token_lengths" in data_batch:
+            raise NotImplementedError(
+                "Per-view text tokenization requires grouped sequence-packing and attention support. "
+                "Disable separate_view_text_tokenization until that follow-up lands."
+            )
         input_text_tokens = data_batch["text_token_ids"]
         if isinstance(input_text_tokens, list):
             # Convert text tokens to list of lists of ints

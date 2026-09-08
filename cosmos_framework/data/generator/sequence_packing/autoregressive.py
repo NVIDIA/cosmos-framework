@@ -96,7 +96,8 @@ def pack_input_sequence_autoregressive(
         force_action_tokens: Pack the temporal-causal action prefix even when
             ``action_latent`` is ``None``. This is required for frame-0 null
             action supertokens in action-conditioned AR/FDM layouts.
-        action_domain_id: Optional domain id for DomainAwareLinear action projection.
+        action_domain_id: Optional scalar domain id or one domain id per packed
+            action token for DomainAwareLinear action projection.
         raw_action_dim: Optional raw action width before model-space padding.
         vision_temporal_positions: Optional absolute flattened-item latent
             coordinates for every frame in ``vision_latent``. Multiview transfer AR
@@ -208,11 +209,19 @@ def pack_input_sequence_autoregressive(
     fps_action_t = (
         torch.as_tensor(fps_action, dtype=torch.float32) if (fps_action is not None and has_action) else None
     )  # [B_action] or None
-    action_domain_id_tensor = (
-        torch.as_tensor(action_domain_id, dtype=torch.long).reshape(1)
-        if has_action and action_domain_id is not None
-        else None
-    )  # [1] or None
+    action_domain_id_tensor: torch.Tensor | None = None
+    if has_action and action_domain_id is not None:
+        action_domain_id_tensor = torch.as_tensor(action_domain_id, dtype=torch.long).reshape(-1)
+        expected_action_tokens = (
+            action_latent.shape[-2]
+            if action_latent is not None
+            else (vision_latent.shape[2] * temporal_compression_factor if vision_latent is not None else 0)
+        )
+        if action_domain_id_tensor.numel() not in (1, expected_action_tokens):
+            raise ValueError(
+                "action_domain_id must be scalar or provide one ID per packed action token; "
+                f"got {action_domain_id_tensor.numel()} IDs for {expected_action_tokens} action tokens."
+            )
     action_domain_id_list = [action_domain_id_tensor] if action_domain_id_tensor is not None else None
     raw_action_dim_list = (
         [torch.as_tensor(raw_action_dim, dtype=torch.long)] if has_action and raw_action_dim is not None else None

@@ -924,7 +924,45 @@ class PackedSequenceBuilder:
         action_domain_id = None
         if self.action is not None:
             if gen_data_clean.action_domain_id is not None:
-                action_domain_id = gen_data_clean.action_domain_id
+                if len(gen_data_clean.action_domain_id) != len(self.action.token_shapes):
+                    raise ValueError(
+                        "Action-domain metadata must have one entry per packed action item; "
+                        f"got {len(gen_data_clean.action_domain_id)} domain entries for "
+                        f"{len(self.action.token_shapes)} action items."
+                    )
+                action_domain_id = []
+                for item_index, (domain_ids, token_shape) in enumerate(
+                    zip(gen_data_clean.action_domain_id, self.action.token_shapes)
+                ):
+                    flat_domain_ids = domain_ids.reshape(-1)
+                    packed_token_count = int(token_shape[0])
+                    if flat_domain_ids.numel() == 1:
+                        # A scalar domain applies to the whole action item and is
+                        # expanded per token by the network.
+                        action_domain_id.append(flat_domain_ids)
+                        continue
+
+                    if self.null_action_supertokens:
+                        null_token_count = self.num_action_tokens_per_supertoken
+                        expected_real_count = packed_token_count - null_token_count
+                        if null_token_count < 1 or flat_domain_ids.numel() != expected_real_count:
+                            raise ValueError(
+                                f"Framewise action-domain entry {item_index} must cover the real action rows "
+                                "before the temporal-causal null prefix; "
+                                f"got {flat_domain_ids.numel()} IDs, expected {expected_real_count} for "
+                                f"{packed_token_count} packed tokens ({null_token_count} null)."
+                            )
+                        # Null actions use the first forthcoming real action's
+                        # domain, matching autoregressive inference semantics.
+                        null_domain_ids = flat_domain_ids[:1].expand(null_token_count)
+                        action_domain_id.append(torch.cat([null_domain_ids, flat_domain_ids]).contiguous())
+                    else:
+                        if flat_domain_ids.numel() != packed_token_count:
+                            raise ValueError(
+                                f"Framewise action-domain entry {item_index} must have one ID per packed action "
+                                f"token; got {flat_domain_ids.numel()} IDs for {packed_token_count} tokens."
+                            )
+                        action_domain_id.append(flat_domain_ids)
             else:
                 default_action_domain_id = torch.zeros(1, dtype=torch.long)  # [1]
                 action_domain_id = [default_action_domain_id] * len(self.action.token_shapes)

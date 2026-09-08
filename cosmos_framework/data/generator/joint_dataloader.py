@@ -53,8 +53,6 @@ _ACTION_SAMPLER_METADATA_KEYS = {
     "action_sampler_draw_count",
     "action_sampler_index",
     "action_sampler_aux_seed",
-    "action_sampler_dataset_length",
-    "action_sampler_index_space_fingerprint",
 }
 ACTION_SAMPLER_DROPPED_DRAW_COUNT_KEY = "action_sampler_dropped_draw_count"
 _DROP_SAMPLE_LOG_FIELDS = (
@@ -68,6 +66,7 @@ _DROP_SAMPLE_LOG_FIELDS = (
     "action_sampler_aux_seed",
     "action_sample_row_id",
     "action_sample_local_start_frame",
+    "action_sample_caption_mode",
     "action_sample_fingerprint",
 )
 
@@ -145,13 +144,16 @@ def _batch_size_from_collated_batch(batch: dict) -> int:
     raise KeyError("A collated batch needs one of 'images', 'video' or 'lidar' to be split into samples.")
 
 
-def custom_collate_fn(batch):
+def custom_collate_fn(batch: list[dict[str, Any]] | dict[str, Any]) -> dict[str, Any]:
     """
-    Collate function that works like default_collate for all keys other than "text_token_ids", "images", and "video".
-    For "text_token_ids", "images", and "video" it simply returns them in a list, instead of stacking them as a tensor.
+    Collate like default_collate while preserving ragged media, text tokens, and text metadata as per-sample lists.
+
+    Legacy scalar/dict ``ai_caption`` values retain default_collate behavior;
+    only separate-view caption lists are preserved as ragged per-sample values.
     """
     list_collate_keys = {
         "text_token_ids",
+        "text_token_lengths",
         "images",
         "video",
         "action",
@@ -183,7 +185,15 @@ def custom_collate_fn(batch):
 
     # Handle the case where the batch is already a dictionary (e.g. column-wise batching)
     if isinstance(batch, dict):
-        return {key: (value if key in list_collate_keys else default_collate(value)) for key, value in batch.items()}
+        return {
+            key: (
+                value
+                if key in list_collate_keys
+                or (key == "ai_caption" and isinstance(value, list) and any(isinstance(item, list) for item in value))
+                else default_collate(value)
+            )
+            for key, value in batch.items()
+        }
 
     # Handle standard list of samples
     elem = batch[0]
@@ -212,6 +222,9 @@ def custom_collate_fn(batch):
                 result[key] = ["" if value is None else str(value) for value in values]
                 continue
             if key == "action_processing_record":
+                result[key] = values
+                continue
+            if key == "ai_caption" and any(isinstance(value, list) for value in values):
                 result[key] = values
                 continue
             if any(value is None for value in values):
@@ -837,10 +850,13 @@ class JointDataLoader(webdataset.WebLoader):
         if has_text_tokens:
             text_token_ids = data_batch["text_token_ids"]
             if isinstance(text_token_ids, list):
-                num_text_tokens = text_token_ids[0].shape[0]
+                # Price every independently tokenized per-view caption. The packing MR
+                # will use these boundaries as separate UND segments; accounting for the
+                # wrapper per segment here prevents the batch builder from underpacking.
+                und_tokens = sum(int(tokens.shape[0]) + 1 for tokens in text_token_ids)
             else:
                 num_text_tokens = text_token_ids.shape[1]
-            und_tokens = num_text_tokens + 1
+                und_tokens = num_text_tokens + 1
 
         # Vision part. A LiDAR-only sample has no camera stream, so the loop below prices
         # nothing and the whole generation cost comes from the sweeps.
@@ -1010,9 +1026,9 @@ class JointDataLoader(webdataset.WebLoader):
     def __len__(self) -> int:
         return self.data_len
 
-    # Keys where each sample may hold multiple tensors (e.g. multiple video
-    # clips in a packed sequence).  Kept as single-element lists per sample
-    # via v[i:i+1] so that _update_output_batch yields list[list[Tensor]].
+    # Keys where each sample may hold multiple tensors (e.g. per-view captions
+    # or multiple video clips). Nested per-sample lists are preserved; a bare
+    # tensor is wrapped so _update_output_batch always yields list[list[Tensor]].
     _MULTI_ITEM_KEYS = {"text_token_ids", "images", "video", "action", "action_raw", "sound"}
 
     def _get_next_sample(self, index_id: int) -> dict:
@@ -1022,9 +1038,9 @@ class JointDataLoader(webdataset.WebLoader):
         dataloader and splits it into individual samples.
 
         Splitting rules:
-            - Multi-item list values (keys in ``_MULTI_ITEM_KEYS``): sliced
-              via ``v[i:i+1]`` to yield a single-element list ``[tensor]``.
-              A packed sequence can contain multiple items per key.
+            - Multi-item list values (keys in ``_MULTI_ITEM_KEYS``): a nested
+              per-sample list is preserved; a bare element is sliced via
+              ``v[i:i+1]`` to yield a single-element list ``[tensor]``.
             - Per-sequence metadata list values (all other list keys, e.g.
               ``sequence_plan``, ``domain_id``): direct-indexed via ``v[i]``
               to yield the bare element.
@@ -1035,7 +1051,7 @@ class JointDataLoader(webdataset.WebLoader):
         batch has the following shapes:
             - Multi-item keys (``text_token_ids``, ``video``, ``images``,
               ``action_raw``, ``action``): ``list[list[Tensor]]`` — each inner
-              list has one element from one sub-sample.
+              list contains every item from one sub-sample.
             - Per-sequence metadata keys (``sequence_plan``, ``domain_id``,
               ``dataset_name``, etc.): ``list[element]`` — flat list.
             - Tensor-origin keys: ``list[Tensor(1, ...)]``.
