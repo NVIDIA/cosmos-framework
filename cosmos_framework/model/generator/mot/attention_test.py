@@ -6,7 +6,7 @@ import contextlib
 from collections.abc import Iterator, Sequence
 from dataclasses import dataclass
 from types import SimpleNamespace
-from typing import cast
+from typing import Any, cast
 
 import pytest
 import torch
@@ -23,7 +23,7 @@ from cosmos_framework.model.generator.mot.attention import (
 )
 from cosmos_framework.model.generator.mot.flex_attention import (
     FlexBackend,
-    MaskItem,
+    SensorMaskItem,
     build_multiview_block_mask,
     resolve_flex_backend,
 )
@@ -387,8 +387,11 @@ class _SampleCountTripwire:
         raise AssertionError("the sample count was read, which specializes the compiled graph on it")
 
 
-def _use_varlen_with(sample_offsets: object) -> bool:
-    return attention._use_varlen(cast(torch.Tensor, sample_offsets))
+def _use_varlen_with(sample_offsets: object, *, has_caption_offsets: bool = False) -> bool:
+    return attention._use_varlen(
+        cast(torch.Tensor, sample_offsets),
+        has_caption_offsets=has_caption_offsets,
+    )
 
 
 @pytest.mark.L0
@@ -414,6 +417,70 @@ def test_use_varlen_stays_varlen_for_several_samples_without_grad() -> None:
     # [0, 2, 4] is two samples, which the dense API has no way to keep apart.
     with torch.no_grad():
         assert _use_varlen_with(torch.tensor([0, 2, 4], dtype=torch.int32)) is True
+
+
+@pytest.mark.L0
+def test_use_varlen_stays_varlen_for_caption_offsets_without_grad() -> None:
+    with torch.no_grad():
+        assert _use_varlen_with(_SampleCountTripwire(), has_caption_offsets=True) is True
+
+
+@pytest.mark.L0
+def test_two_way_attention_passes_caption_boundaries_during_single_sample_inference(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The no-grad B=1 fast path still hands all caption ranges to causal attention."""
+    caption_lens = [[3, 5]]
+    und_indexes = torch.arange(8, dtype=torch.long)  # [N_und]
+    gen_indexes = torch.arange(8, 16, dtype=torch.long)  # [N_gen]
+    metadata = prepare_sequence_pack_metadata(
+        sample_lens=[16],
+        split_lens=[8, 8],
+        attn_modes=["causal", "full"],
+        packed_und_token_indexes=und_indexes,
+        device=torch.device("cpu"),
+        text_caption_lens=caption_lens,
+    )
+
+    def make_pack(values: torch.Tensor) -> SequencePack:
+        return sequence_pack_from_packed_sequence(
+            packed_sequence=values,
+            attn_modes=["causal", "full"],
+            split_lens=[8, 8],
+            sample_lens=[16],
+            packed_und_token_indexes=und_indexes,
+            packed_gen_token_indexes=gen_indexes,
+            prepared_metadata=metadata,
+            text_caption_lens=caption_lens,
+        )
+
+    calls: list[dict[str, Any]] = []
+
+    def fake_attention(
+        query: torch.Tensor,
+        key: torch.Tensor,
+        value: torch.Tensor,
+        **kwargs: Any,
+    ) -> torch.Tensor:
+        del key, value
+        calls.append(kwargs)
+        return torch.zeros_like(query)
+
+    monkeypatch.setattr(attention, "attention", fake_attention)
+    qkv = torch.zeros(3, 16, 1, 2)  # [QKV,N,heads,head_dim]
+    packs = tuple(make_pack(qkv[index]) for index in range(3))
+
+    with torch.no_grad():
+        attention.two_way_attention(*packs)
+
+    assert len(calls) == 2
+    # The last range is the packer's trailing padding segment; the first two are the
+    # independent caption ranges whose loss in the old dense shortcut caused cross-caption
+    # attention.
+    assert calls[0]["cumulative_seqlen_Q"].tolist() == [0, 3, 8, 9]
+    assert calls[0]["cumulative_seqlen_KV"].tolist() == [0, 3, 8, 9]
+    assert calls[0]["max_seqlen_Q"] == 5
+    assert "cumulative_seqlen_Q" in calls[1], "caption offsets select varlen for both attention passes"
 
 
 @pytest.mark.L0
@@ -642,6 +709,45 @@ def test_multi_control_range_annotation_sets_ranges_for_multiple_controls() -> N
 
 
 @pytest.mark.L0
+def test_multi_control_range_annotation_rejects_per_view_captions() -> None:
+    """Multi-control routing has no per-caption boundaries, so refuse the pack that needs them.
+
+    Setting the ranges sends the pack to ``multi_control_two_way_attention``, which reads the
+    per-sample causal offsets and never the per-caption ones. A per-view pack would run with
+    every caption attending every other -- no error, no wrong-looking loss -- which is the
+    failure per-view captions exist to prevent.
+    """
+    attention_meta = _split_info_for_multi_control_test()
+    packed_seq = PackedSequence(
+        vision_item_split_lens=[[2, 3, 5]],
+        control_weights=[[0.25, 0.75]],
+        text_caption_lens=[[3, 2]],
+        text_caption_view_ids=[[0, 1]],
+    )
+
+    with pytest.raises(ValueError, match="per-view captions and multiple control streams"):
+        _annotate_multi_control_ranges_for_test(attention_meta, packed_seq, n_gen=10)
+
+    assert attention_meta.control_stream_token_ranges is None, "the pack must not be annotated"
+
+
+@pytest.mark.L0
+def test_multi_control_range_annotation_allows_a_single_caption_per_sample() -> None:
+    """The guard keys on the per-view layout, not on the presence of caption bookkeeping."""
+    attention_meta = _split_info_for_multi_control_test()
+    packed_seq = PackedSequence(
+        vision_item_split_lens=[[2, 3, 5]],
+        control_weights=[[0.25, 0.75]],
+        text_caption_lens=[[5]],
+        text_caption_view_ids=[[-1]],
+    )
+
+    _annotate_multi_control_ranges_for_test(attention_meta, packed_seq, n_gen=10)
+
+    assert attention_meta.control_stream_token_ranges == [(0, 2), (2, 5)]
+
+
+@pytest.mark.L0
 def test_multi_control_range_annotation_rejects_inconsistent_token_count() -> None:
     attention_meta = _split_info_for_multi_control_test()
     packed_seq = PackedSequence(vision_item_split_lens=[[2, 3, 5]], control_weights=[[0.25, 0.75]])
@@ -790,10 +896,10 @@ def _multiview_block_mask(pack: SequencePack, shape: _MultiviewShape, *, block_s
     return build_multiview_block_mask(
         seq_len=full_only_seq.shape[0],
         full_q_offsets=full_q_offsets,
-        items_per_sample=[
+        sensor_mask_items=[
             # One item per sample, none of it conditioning.
             [
-                MaskItem(
+                SensorMaskItem(
                     token_shape=token_shape,
                     condition_mask=torch.zeros(token_shape[0], dtype=torch.bool),
                     num_views=num_views,
@@ -801,10 +907,14 @@ def _multiview_block_mask(pack: SequencePack, shape: _MultiviewShape, *, block_s
             ]
             for token_shape, num_views in zip(shape.token_shapes, shape.num_views)
         ],
+        caption_mask_items=None,
         device=full_only_seq.device,
         block_size=block_size,
         num_und=causal_seq.shape[0],
         causal_offsets=causal_offsets,
+        attention_scope="all_views",
+        decomposed_temporal_window_seconds=None,
+        control_attends_sensor=False,
     )
 
 

@@ -119,18 +119,25 @@ _SYSTEM_PROMPT_IMAGE_EDITING = "You are a helpful assistant who will edit images
 _SYSTEM_PROMPT_VIDEO_EDITING = "You are a helpful assistant who will edit videos based on the user's instructions."
 
 _SYSTEM_PROMPT_TRANSFER = "You are a helpful assistant that generates images or videos following the user's instructions and control signals (edge maps, blur, depth, or segmentation)."
+_SYSTEM_PROMPT_AV_MULTIVIEW_TRANSFER = (
+    "You are a helpful assistant that generates temporally synchronized, geometrically consistent autonomous-driving "
+    "videos from per-camera scene descriptions and provided control signals. Treat all camera views as simultaneous "
+    "observations of the same driving scene, preserving each camera's viewpoint, shared ego motion, road layout, "
+    "object identity and motion, weather, lighting, and cross-view consistency."
+)
 
 _SYSTEM_PROMPTS = {
     "editing": _SYSTEM_PROMPT_IMAGE_EDITING,
     "video_editing": _SYSTEM_PROMPT_VIDEO_EDITING,
     "transfer": _SYSTEM_PROMPT_TRANSFER,
+    "av_multiview_transfer": _SYSTEM_PROMPT_AV_MULTIVIEW_TRANSFER,
 }
 
 
 class TextTokenizerTransformForEditing(Augmentor):
     """Tokenizer augmentor for interleaved tasks: image editing or transfer (control-conditioned generation).
 
-    Uses a task-specific system prompt. Pass args["task"] = "editing" (default) or "transfer".
+    Uses a task-specific system prompt selected from ``_SYSTEM_PROMPTS``.
     """
 
     def __init__(self, input_keys: list, output_keys: Optional[list] = None, args: Optional[dict] = None) -> None:
@@ -176,5 +183,5 @@ class TextTokenizerTransformForTransfer(TextTokenizerTransformForEditing):
 
     def __init__(self, input_keys: list, output_keys: Optional[list] = None, args: Optional[dict] = None) -> None:
         args = dict(args) if args else {}
-        args["task"] = "transfer"
+        args.setdefault("task", "transfer")
         super().__init__(input_keys, output_keys, args)

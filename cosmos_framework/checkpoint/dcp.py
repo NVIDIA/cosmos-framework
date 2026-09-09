@@ -382,8 +382,11 @@ class CustomLoadPlanner(dcp.DefaultLoadPlanner):
         self.dedup = dedup
         self._global_rank = global_rank
 
-        if len(self.keys_to_skip_loading) > 0:
-            log.info(f"Skipping loading of keys that match the following patterns: {self.keys_to_skip_loading}")
+        if self.keys_to_skip_loading:
+            log.warning(
+                f"keys_to_skip_loading={self.keys_to_skip_loading}; checkpoint parameters matching these patterns "
+                "will not be loaded. Set keys_to_skip_loading=[] to load all matching modules."
+            )
 
     def set_up_planner(
         self,
@@ -804,12 +807,8 @@ class DistributedCheckpointer(AbstractCheckpointer):
                 if self.only_load_scheduler_state:
                     resume_keys.append("scheduler")
 
-        if len(self.keys_not_to_resume) > 0:
-            for key in self.keys_not_to_resume:
-                assert key in self.CHECKPOINT_KEYS, f"Invalid key to resume: {key} not in {self.CHECKPOINT_KEYS}"
-            resume_keys = [key for key in resume_keys if key not in self.keys_not_to_resume]
-
-        return set(resume_keys), source
+        resume_keys = self._filter_resume_keys(set(resume_keys), self.CHECKPOINT_KEYS, source)
+        return resume_keys, source
 
     @misc.timer("checkpoint loading")
     def load(

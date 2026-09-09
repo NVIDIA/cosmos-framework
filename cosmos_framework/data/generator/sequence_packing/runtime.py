@@ -50,6 +50,17 @@ class SequencePackMetadata:
     full_only_sample_ids: torch.Tensor  # [N_full_tokens]
     num_causal_tokens: int
     num_full_tokens: int
+    # Per-view captions: the causal stream's varlen boundaries subdivided one range per
+    # caption instead of one per sample, so each caption attends causally over itself and no
+    # further. None whenever every sample packs a single caption, which leaves the causal
+    # pass on the per-sample causal_seq_offsets exactly as before.
+    caption_seq_offsets: torch.Tensor | None = None  # [N_captions+1]
+    max_caption_len: int = 0
+    # The caption subdivision these offsets were built from, normalized so that "one caption per
+    # sample" and "no caption layout" are the same value -- they produce identical metadata.
+    # Kept alongside the offsets so ``matches_layout`` can compare a layout the offsets alone
+    # cannot: two packs can agree on every split length and still subdivide a split differently.
+    caption_lens: tuple[tuple[int, ...], ...] | None = None
 
     def matches_layout(
         self,
@@ -57,13 +68,21 @@ class SequencePackMetadata:
         split_lens: list[int],
         attn_modes: list[str],
         device: torch.device,
+        text_caption_lens: list[list[int]] | None = None,
     ) -> bool:
-        """Return whether this metadata describes the supplied layout."""
+        """Return whether this metadata describes the supplied layout.
+
+        ``text_caption_lens`` is part of the layout, not a detail of it: a 100-token causal
+        split subdivided ``[50, 50]`` and one subdivided ``[30, 70]`` agree on ``sample_lens``,
+        ``split_lens`` and ``attn_modes`` while placing every caption boundary differently, so
+        reusing one pack's metadata for the other would attend the wrong ranges.
+        """
         return (
             self.sample_lens == tuple(sample_lens)
             and self.split_lens == tuple(split_lens)
             and self.attn_modes == tuple(attn_modes)
             and self.device == device
+            and self.caption_lens == _normalize_caption_layout(text_caption_lens)
         )
 
     def as_sequence_pack_fields(self) -> dict[str, Any]:
@@ -83,6 +102,8 @@ class SequencePackMetadata:
             "_num_full_tokens": self.num_full_tokens,
             "split_lens": list(self.split_lens),
             "attn_modes": list(self.attn_modes),
+            "_caption_seq_offsets": self.caption_seq_offsets,
+            "max_caption_len": self.max_caption_len,
         }
 
 
@@ -231,11 +252,63 @@ def _ensure_core_metadata(pack: SequencePack) -> None:
             raise KeyError(f"Missing required pack field: {key}")
 
 
+def _normalize_caption_layout(
+    text_caption_lens: list[list[int]] | None,
+) -> tuple[tuple[int, ...], ...] | None:
+    """The caption layout as a comparable value, or ``None`` when it subdivides nothing.
+
+    One caption per sample subdivides the causal stream exactly as the per-sample offsets
+    already do, so it and an absent layout describe the same pack and have to compare equal.
+    """
+    if not text_caption_lens or all(len(sample_lens) <= 1 for sample_lens in text_caption_lens):
+        return None
+    return tuple(tuple(sample_lens) for sample_lens in text_caption_lens)
+
+
+def _build_caption_offsets(
+    text_caption_lens: list[list[int]] | None,
+    causal_seq_offsets: torch.Tensor,
+    device: torch.device,
+) -> tuple[torch.Tensor | None, int]:
+    """``(caption_seq_offsets, max_caption_len)`` subdividing the causal stream per caption.
+
+    Returns ``(None, 0)`` unless some sample packs more than one caption: with one caption per
+    sample the subdivision is exactly ``causal_seq_offsets``, and returning it would only give
+    the attention path a second tensor meaning the same thing.
+
+    The lengths are checked against ``causal_seq_offsets`` rather than trusted: they come from
+    the builder's own bookkeeping while the offsets come from ``split_lens``, and a caption
+    layout that disagreed with the split it lives in would silently move every varlen boundary
+    after the first mismatch.
+    """
+    if _normalize_caption_layout(text_caption_lens) is None:
+        return None, 0
+    assert text_caption_lens is not None  # narrowed by the normalization above
+
+    causal_split_lens = torch.diff(causal_seq_offsets).tolist()
+    if len(text_caption_lens) != len(causal_split_lens):
+        raise ValueError(
+            f"The caption layout describes {len(text_caption_lens)} causal splits but the pack holds "
+            f"{len(causal_split_lens)}; every sample with text owns exactly one causal split."
+        )
+    for sample_idx, (caption_lens, split_len) in enumerate(zip(text_caption_lens, causal_split_lens)):
+        if sum(caption_lens) != split_len:
+            raise ValueError(
+                f"Sample {sample_idx}'s captions cover {sum(caption_lens)} tokens but its causal split "
+                f"holds {split_len}; the captions must tile the split exactly."
+            )
+
+    flat_caption_lens = [length for caption_lens in text_caption_lens for length in caption_lens]
+    offsets = torch.tensor([0] + flat_caption_lens, device=device, dtype=torch.int32)  # [N_captions+1]
+    return torch.cumsum(offsets, dim=0, dtype=torch.int32), max(flat_caption_lens)
+
+
 def _build_sequence_pack_metadata(
     sample_lens: list[int],
     split_lens: list[int],
     attn_modes: list[str],
     device: torch.device,
+    text_caption_lens: list[list[int]] | None = None,
 ) -> SequencePackMetadata:
     """Build device tensors and scalar metadata for one sequence layout."""
     _max_sample_len = max(sample_lens)
@@ -255,6 +328,7 @@ def _build_sequence_pack_metadata(
     _full_indices, _full_only_seq_offsets = _compute_mode_indices_and_offsets(split_lens, attn_modes, "full", device)
     _causal_sample_ids = sample_ids[_causal_indices]  # [N_causal_tokens]
     _full_only_sample_ids = sample_ids[_full_indices]  # [N_full_tokens]
+    _caption_seq_offsets, _max_caption_len = _build_caption_offsets(text_caption_lens, _causal_seq_offsets, device)
 
     return SequencePackMetadata(
         sample_lens=tuple(sample_lens),
@@ -273,6 +347,9 @@ def _build_sequence_pack_metadata(
         full_only_sample_ids=_full_only_sample_ids,
         num_causal_tokens=len(_causal_indices),
         num_full_tokens=len(_full_indices),
+        caption_seq_offsets=_caption_seq_offsets,
+        max_caption_len=_max_caption_len,
+        caption_lens=_normalize_caption_layout(text_caption_lens),
     )
 
 
@@ -282,15 +359,22 @@ def prepare_sequence_pack_metadata(
     attn_modes: list[str],
     packed_und_token_indexes: torch.Tensor,
     device: torch.device,
+    text_caption_lens: list[list[int]] | None = None,
 ) -> SequencePackMetadata:
-    """Validate and prepare reusable metadata for one packed-sequence layout."""
+    """Validate and prepare reusable metadata for one packed-sequence layout.
+
+    ``text_caption_lens`` is the per-sample caption layout from
+    ``PackedSequence.text_caption_lens``; supplying it is what subdivides the causal stream's
+    varlen boundaries per caption. Omitting it (or passing a layout with one caption per
+    sample) leaves the causal pass on the per-sample boundaries.
+    """
     non_causal_text_idxs = _find_non_causal_text_token_idx(
         attn_modes,
         split_lens,
         packed_und_token_indexes.tolist(),
     )
     assert len(non_causal_text_idxs) == 0, "non_causal_text_idxs should be empty"
-    return _build_sequence_pack_metadata(sample_lens, split_lens, attn_modes, device)
+    return _build_sequence_pack_metadata(sample_lens, split_lens, attn_modes, device, text_caption_lens)
 
 
 # ------------------------------------
@@ -336,6 +420,7 @@ def sequence_pack_from_packed_sequence(
     full_seq_alignment: int = 1,
     causal_seq_alignment: int = 1,
     prepared_metadata: SequencePackMetadata | None = None,
+    text_caption_lens: list[list[int]] | None = None,
 ) -> SequencePack:
     """
     Create a sequence pack from a packed sequence and metadata.
@@ -357,6 +442,12 @@ def sequence_pack_from_packed_sequence(
             FlexAttention path keys GEN queries against ``[UND | GEN]``, so the UND stream needs the
             same block alignment as the GEN one for the boundary between them to fall on a block
             boundary.
+        text_caption_lens (list[list[int]] | None): Per-sample caption layout from
+            ``PackedSequence.text_caption_lens``. It subdivides each sample's causal split one
+            range per caption, which is what keeps per-view captions from attending one another;
+            omitting it for a per-view pack builds metadata that silently merges them. It is also
+            part of what ``prepared_metadata`` is checked against, since two packs can share every
+            split length and still place their caption boundaries differently.
     """
     del packed_gen_token_indexes
 
@@ -367,8 +458,11 @@ def sequence_pack_from_packed_sequence(
             attn_modes=attn_modes,
             packed_und_token_indexes=packed_und_token_indexes,
             device=packed_sequence.device,
+            text_caption_lens=text_caption_lens,
         )
-    elif not prepared_metadata.matches_layout(sample_lens, split_lens, attn_modes, packed_sequence.device):
+    elif not prepared_metadata.matches_layout(
+        sample_lens, split_lens, attn_modes, packed_sequence.device, text_caption_lens
+    ):
         raise ValueError("Prepared sequence-pack metadata does not match the current packed-sequence layout")
 
     assert sum(sample_lens) == packed_sequence.shape[0], (
@@ -454,6 +548,15 @@ def sequence_pack_from_packed_sequence(
             meta["_causal_seq_offsets"], int(causal_seq.shape[0])
         )
         pack["max_causal_len_pad_segment"] = max(meta["max_causal_len"], pad_causal)
+        if meta["_caption_seq_offsets"] is not None:
+            # The caption boundaries subdivide the same stream, so its padding is the same
+            # trailing rows and needs the same extra segment. Unlike the two above this one
+            # pairs with nothing -- it only ever drives the causal self-attention pass, where
+            # queries and keys are both the causal stream.
+            pack["_caption_seq_offsets_pad_segment"] = _append_pad_segment(
+                meta["_caption_seq_offsets"], int(causal_seq.shape[0])
+            )
+            pack["max_caption_len_pad_segment"] = max(meta["max_caption_len"], pad_causal)
         pack["_full_only_seq_offsets_pad_segment"] = _append_pad_segment(
             meta["_full_only_seq_offsets"], int(full_only_seq.shape[0])
         )
@@ -780,6 +883,35 @@ def get_causal_seq_padded(pack: SequencePack) -> Tuple[torch.Tensor, torch.Tenso
         max_len = pack["max_causal_len"]
 
     return seq, offsets, max_len
+
+
+def get_causal_self_attention_offsets(pack: SequencePack) -> Tuple[torch.Tensor, int] | None:
+    """``(offsets, max_len)`` for the causal self-attention pass under per-view captions.
+
+    ``None`` unless the pack carries per-view captions, in which case the caller keeps
+    :func:`get_causal_seq_padded`'s per-sample boundaries and nothing changes.
+
+    Where those boundaries make one sample's whole text one causal document, these make each
+    of its captions its own: a caption attends causally over itself and reaches no other, which
+    is the point of packing one per camera in the first place. Only this pass moves. The
+    gen->und direction still keys against the whole causal stream and is narrowed per view by
+    the multiview mask instead, which is what lets LiDAR read every caption while a camera
+    reads one.
+
+    Returned as its own accessor rather than folded into :func:`get_causal_seq_padded` because
+    that one serves every reader of the causal stream, and only this pass wants the narrower
+    boundaries.
+    """
+    offsets = pack.get("_caption_seq_offsets")
+    if offsets is None:
+        return None
+    if has_pad_segment(pack):
+        assert not pack["is_sharded"], (
+            "Pad-segment offsets describe the unsharded stream, so a context parallel local shard "
+            "needs offsets rebased onto the shard."
+        )
+        return pack["_caption_seq_offsets_pad_segment"], pack["max_caption_len_pad_segment"]
+    return offsets, pack["max_caption_len"]
 
 
 def get_full_only_seq_padded(pack: SequencePack) -> Tuple[torch.Tensor, torch.Tensor, int]:

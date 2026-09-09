@@ -185,6 +185,19 @@ class AbstractCheckpointer(ABC):
             warm_start=True,
         )
 
+    def _filter_resume_keys(
+        self,
+        resume_keys: set[str],
+        checkpoint_keys: list[str],
+        source: CheckpointLoadSource | None,
+    ) -> set[str]:
+        """Filter checkpoint components excluded from warm-start loading."""
+        keys_not_to_resume = set(self.keys_not_to_resume) if source is not None and source.warm_start else set()
+        invalid_keys = keys_not_to_resume.difference(checkpoint_keys)
+        if invalid_keys:
+            raise ValueError(f"Invalid keys to resume: {sorted(invalid_keys)} not in {checkpoint_keys}")
+        return resume_keys.difference(keys_not_to_resume)
+
     def _read_latest_checkpoint_file(self) -> str | None:
         """Get the file name of the latest saved checkpoint. If it doesn't exist, return None.
 
