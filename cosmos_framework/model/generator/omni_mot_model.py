@@ -94,7 +94,7 @@ from cosmos_framework.data.generator.sequence_packing import (
     pack_input_sequence,
 )
 from cosmos_framework.data.generator.sequence_packing.modality import add_special_tokens
-from cosmos_framework.data.generator.sequence_packing.packers import is_item_generated
+from cosmos_framework.data.generator.sequence_packing.packers import is_item_generated, uses_single_timestep
 from cosmos_framework.model.generator.tokenizers.interface import VideoTokenizerInterface
 from cosmos_framework.model.generator.upsampler.prompts import build_messages, clean_response
 from cosmos_framework.utils.generator.data_utils import get_vision_data_resolution, read_positive_int_metadata
@@ -1349,6 +1349,10 @@ class OmniMoTModel(ImaginaireModel):
                         for i, nfi in enumerate(packed_sequence.action.noisy_frame_indexes)
                     ]
                 ).to(dtype=torch.float32)  # [N_action_noisy]
+                # These per-sample action sigmas can differ even when the vision timesteps the
+                # packer saw were uniform, so the fast path in _embed_packed_timesteps no longer
+                # holds for this sequence.
+                packed_sequence.uses_single_timestep &= uses_single_timestep(sample_ts)
             else:
                 timesteps_action, sigmas_action = (None, None)
 
@@ -1369,6 +1373,9 @@ class OmniMoTModel(ImaginaireModel):
                         for i, nfi in enumerate(packed_sequence.sound.noisy_frame_indexes)
                     ]
                 ).to(dtype=torch.float32)  # [N_sound_noisy]
+                # As above: independent per-sample sound sigmas invalidate the single-timestep
+                # fast path even when the packer saw uniform vision timesteps.
+                packed_sequence.uses_single_timestep &= uses_single_timestep(sample_ts)
             else:
                 timesteps_sound, sigmas_sound = (None, None)
 
