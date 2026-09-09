@@ -143,7 +143,6 @@ def pack_input_sequence(
     sound_base_temporal_compression_factor: int | None = None,
     temporal_compression_factor: int = 4,
     vision_temporal_position_mode: str = "latent_index",
-    align_temporal_positions_across_views: bool = False,
     video_temporal_causal: bool = False,
     action_dim: int = 32,
     initial_mrope_temporal_offset: int | float = 0,
@@ -188,9 +187,6 @@ def pack_input_sequence(
         vision_temporal_position_mode: Temporal coordinates used for unified_3d_mrope vision tokens.
             "latent_index" uses latent-frame indexes; "uniae_source_right_edge" uses
             per-latent positions from gen_data_clean.temporal_positions_vision.
-        align_temporal_positions_across_views: If True, camera-major views within one
-            vision item reuse the same local temporal coordinates. Disabled by default and requires
-            gen_data_clean.num_views_per_vision_item to identify multiview items.
         video_temporal_causal: If True, pack vision and optional action as temporal-causal
             supertokens instead of separate modality blocks.
         action_dim: Action feature dimension used when temporal-causal packing creates
@@ -294,21 +290,39 @@ def pack_input_sequence(
 
         # Pack text tokens if has_text=True and not skipped
         if sequence_plan.has_text and not skip_text_tokens:
-            text_ids = input_text_indexes[idx_text]
-            idx_text += 1
-
             has_generation_for_sample = (
                 sequence_plan.has_vision
                 or sequence_plan.has_lidar
                 or sequence_plan.has_action
                 or sequence_plan.has_sound
             )
-            text_sample_len = seq_builder.pack_text_tokens(
-                text_ids,
-                special_tokens,
-                has_generation=has_generation_for_sample,
-                use_float_positions=use_float_mrope_positions,
-            )
+            if sequence_plan.text_view_ids is None:
+                text_ids = input_text_indexes[idx_text]
+                idx_text += 1
+                text_sample_len = seq_builder.pack_text_tokens(
+                    text_ids,
+                    special_tokens,
+                    has_generation=has_generation_for_sample,
+                    use_float_positions=use_float_mrope_positions,
+                )
+            else:
+                # Per-view captions: the sample owns one caption per camera, laid consecutively
+                # in input_text_indexes, and they share the sample's single causal split.
+                num_captions = len(sequence_plan.text_view_ids)
+                text_ids_per_view = input_text_indexes[idx_text : idx_text + num_captions]
+                if len(text_ids_per_view) != num_captions:
+                    raise ValueError(
+                        f"Sample {sample_idx} declares {num_captions} per-view captions but only "
+                        f"{len(text_ids_per_view)} remain in input_text_indexes."
+                    )
+                idx_text += num_captions
+                text_sample_len = seq_builder.pack_text_tokens_per_view(
+                    text_ids_per_view,
+                    sequence_plan.text_view_ids,
+                    special_tokens,
+                    has_generation=has_generation_for_sample,
+                    use_float_positions=use_float_mrope_positions,
+                )
             sample_len += text_sample_len
 
             # End of text modality, add an offset as the boundary between text and vision.
@@ -502,7 +516,7 @@ def pack_input_sequence(
                         num_views = gen_data_clean.num_views_per_vision_item[flat_vision_idx]
                     latent_t = input_vision_tokens.shape[2]
                     temporal_position_period: int | None = None
-                    if align_temporal_positions_across_views and num_views > 1:
+                    if num_views > 1:
                         if latent_t % num_views != 0:
                             raise ValueError(
                                 "Aligning temporal positions across views requires latent_t divisible by num_views: "

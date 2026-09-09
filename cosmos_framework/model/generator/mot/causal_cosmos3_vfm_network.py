@@ -15,9 +15,10 @@ from torch.utils.hooks import RemovableHandle
 from cosmos_framework.model.generator.mot.attention import SplitInfo
 from cosmos_framework.model.generator.mot.cosmos3_vfm_network import (
     Cosmos3VFMNetwork,
-    _multiview_mask_items,
+    _multiview_caption_mask_items,
+    _multiview_sensor_mask_items,
 )
-from cosmos_framework.model.generator.mot.flex_attention import MaskItem
+from cosmos_framework.model.generator.mot.flex_attention import SensorMaskItem
 from cosmos_framework.data.generator.sequence_packing import PackedSequence
 from cosmos_framework.data.generator.sequence_packing.runtime import (
     SequencePack,
@@ -39,12 +40,25 @@ def build_interactive_multiview_mask_items(
     packed_seq: PackedSequence,
     *,
     condition_masks: Sequence[torch.Tensor] | None = None,
-) -> list[list[MaskItem]]:
-    """Build base mask items, optionally restoring pre-replay condition masks."""
-    items_per_sample = _multiview_mask_items(packed_seq)
+) -> list[list[SensorMaskItem]]:
+    """Build base mask items, optionally restoring pre-replay condition masks.
+
+    Refuses a pack carrying per-view captions. One caption per camera only means something
+    if a camera reads its own and not its neighbours', and the replay masks built from these
+    items describe the GEN stream only -- they key every GEN token against the whole UND
+    stream, with no notion of which caption belongs to which view. Running anyway would read
+    all of a sample's captions indiscriminately, at no error and no obviously wrong loss.
+    """
+    if _multiview_caption_mask_items(packed_seq) is not None:
+        raise ValueError(
+            "This pack carries per-view captions (separate_view_text_tokenization), which the "
+            "interactive replay masks cannot scope to a camera. Turn off "
+            "separate_view_text_tokenization on the dataset for interactive replay."
+        )
+    sensor_mask_items = _multiview_sensor_mask_items(packed_seq)
     if condition_masks is None:
-        return items_per_sample
-    flat_items = [item for sample_items in items_per_sample for item in sample_items]
+        return sensor_mask_items
+    flat_items = [item for sample_items in sensor_mask_items for item in sample_items]
     if len(flat_items) != len(condition_masks):
         raise ValueError(
             f"Teacher-forcing condition masks contain {len(condition_masks)} items, but the pack contains "
@@ -52,7 +66,7 @@ def build_interactive_multiview_mask_items(
         )
     mask_iter = iter(condition_masks)
     return [
-        [replace(item, condition_mask=next(mask_iter)) for item in sample_items] for sample_items in items_per_sample
+        [replace(item, condition_mask=next(mask_iter)) for item in sample_items] for sample_items in sensor_mask_items
     ]
 
 
@@ -153,7 +167,7 @@ class InteractiveCosmos3VFMNetwork(Cosmos3VFMNetwork):
             flex_metadata = build_multiview_transfer_ar_flex_metadata(
                 seq_len=global_gen_seq_len,
                 full_q_offsets=full_q_offsets,
-                items_per_sample=build_interactive_multiview_mask_items(packed_seq),
+                sensor_mask_items=build_interactive_multiview_mask_items(packed_seq),
                 device=full_only_seq.device,
                 num_und=global_und_seq_len,
                 causal_offsets=causal_offsets,
@@ -183,7 +197,7 @@ class InteractiveCosmos3VFMNetwork(Cosmos3VFMNetwork):
             flex_metadata = build_teacher_forcing_multiview_flex_metadata(
                 seq_len=global_gen_seq_len,
                 full_q_offsets=full_q_offsets,
-                items_per_sample=build_interactive_multiview_mask_items(
+                sensor_mask_items=build_interactive_multiview_mask_items(
                     packed_seq,
                     condition_masks=original_masks,
                 ),

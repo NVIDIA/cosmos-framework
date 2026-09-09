@@ -10,6 +10,7 @@ from PIL import Image
 
 from cosmos_framework.data.generator.augmentors.video_editing_transform import (
     PairedVideoEditingToTrainingFormat,
+    SelectAddRemoveVideoEditingCaption,
     aligned_frame_indices,
     parse_video_editing_conversation,
     parse_video_editing_conversation_with_references,
@@ -42,6 +43,84 @@ def test_parse_video_editing_conversation() -> None:
         "video_1.mp4",
         "Remove the car",
     )
+
+
+def _caption_augmentation() -> dict[str, dict[str, str]]:
+    return {
+        "add": {
+            "original": "Add original",
+            "short": "Add short",
+            "medium": "Add medium",
+            "long": "Add long",
+        },
+        "remove": {
+            "original": "Remove original",
+            "short": "Remove short",
+            "medium": "Remove medium",
+            "long": "Remove long",
+        },
+    }
+
+
+def test_add_caption_selection_reverses_source_and_target_videos() -> None:
+    transform = SelectAddRemoveVideoEditingCaption(
+        add_probability=1.0,
+        caption_variant_probabilities={"original": 0.0, "short": 0.0, "medium": 0.0, "long": 1.0},
+    )
+    sample = {
+        "__key__": "add-row",
+        "media": {"source_video": b"object-present", "edited_video": b"object-removed"},
+        "caption_augmentation": json.dumps(_caption_augmentation()),
+    }
+
+    result = transform(sample)
+
+    assert result is sample
+    assert parse_video_editing_conversation(result["texts"]) == ("edited_video", "source_video", "Add long")
+    assert result["selected_edit_direction"] == "add"
+    assert result["selected_caption_variant"] == "long"
+
+
+def test_remove_caption_selection_preserves_source_and_target_videos() -> None:
+    transform = SelectAddRemoveVideoEditingCaption(
+        add_probability=0.0,
+        caption_variant_probabilities={"original": 1.0, "short": 0.0, "medium": 0.0, "long": 0.0},
+    )
+    sample = {
+        "__key__": "remove-row",
+        "media": {"source_video": b"object-present", "edited_video": b"object-removed"},
+        "caption_augmentation": json.dumps(_caption_augmentation()).encode(),
+    }
+
+    result = transform(sample)
+
+    assert result is sample
+    assert parse_video_editing_conversation(result["texts"]) == (
+        "source_video",
+        "edited_video",
+        "Remove original",
+    )
+    assert result["selected_edit_direction"] == "remove"
+    assert result["selected_caption_variant"] == "original"
+
+
+@pytest.mark.parametrize(
+    "probabilities",
+    (
+        {"original": 0.1, "short": 0.1, "medium": 0.1},
+        {"original": 0.1, "short": 0.1, "medium": 0.1, "long": 0.6},
+        {"original": -0.1, "short": 0.1, "medium": 0.1, "long": 0.9},
+    ),
+)
+def test_caption_selection_rejects_invalid_probabilities(probabilities: dict[str, float]) -> None:
+    with pytest.raises(ValueError, match="probabilit"):
+        SelectAddRemoveVideoEditingCaption(caption_variant_probabilities=probabilities)
+
+
+def test_caption_selection_rejects_incomplete_payload() -> None:
+    transform = SelectAddRemoveVideoEditingCaption()
+
+    assert transform({"__key__": "bad-row", "caption_augmentation": '{"add": {}}'}) is None
 
 
 def _jpeg_bytes(width: int = 40, height: int = 20) -> bytes:

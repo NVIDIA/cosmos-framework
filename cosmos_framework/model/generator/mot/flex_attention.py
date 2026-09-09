@@ -118,8 +118,19 @@ class FlexMetadata:
     * ``sample_id``: packed sample index per token; yields the block-diagonal
       same-sample constraint every rule requires. UND tokens carry the sample they
       belong to, which is the only field their rule reads.
-    * ``frame_id`` / ``view_id``: per-token frame and view indices; ``-1`` on UND
-      tokens, which have no place in the camera grid.
+    * ``frame_id``: per-token frame index; ``-1`` on UND tokens, which have no place in the
+      camera grid.
+    * ``view_id``: which camera view a token belongs to, and -- on a UND token -- which camera
+      view its caption *describes*. The two readings share one column because the streams are
+      disjoint: a GEN token is always a token of some view, a UND token is always text about
+      one. ``-1`` marks a token no view owns: padding, and a sample-level caption (the single
+      caption a batch without ``separate_view_text_tokenization`` packs, describing the whole
+      rig). A ``-1`` UND key is reachable from every view, so a stream of them reproduces the
+      unrestricted gen->und pass exactly.
+
+      Only the gen->und rule reads the UND half. The sensor rules exclude UND keys outright
+      and the control rules require ``is_control``, which no UND token carries -- see
+      :func:`_multiview_pair_predicate`, which is where that separation is kept.
     * ``is_noisy``: ``bool`` tensor, ``True`` for noisy sensor tokens and
       ``False`` for conditioning tokens (and for UND tokens).
     * ``is_control``: ``bool`` tensor, ``True`` for tokens of a control item (e.g. a WSM --
@@ -127,7 +138,7 @@ class FlexMetadata:
       alike). It carries no per-item identity, so control tokens sharing a view read as one
       signal; since the control rules only ever pair within a view, that costs nothing as
       long as a view holds a single control stream, which is the caller's to arrange (see
-      ``MaskItem.is_control``). An ordinary T2V/I2V/V2V batch marks no control item, carries
+      ``SensorMaskItem.is_control``). An ordinary T2V/I2V/V2V batch marks no control item, carries
       it all-``False``, and drops every control term out of the predicate on its own.
     * ``timestamp``: ``float`` tensor, the wall-clock instant (in seconds, relative to
       whatever origin the caller's items share) a token's ``(view, frame)`` cell was
@@ -139,9 +150,16 @@ class FlexMetadata:
       the integer fields without this one: two tokens sharing a run already share their
       timestamp.
 
+    * ``reads_every_caption``: ``bool`` tensor, ``True`` for GEN tokens of a stream that is
+      not scoped to one camera and therefore reads every caption of its sample -- a LiDAR
+      sweep, which fuses the whole rig rather than looking through one camera. ``False`` on
+      camera tokens, on UND tokens and on padding. Read only by the gen->und rule.
+
     The mask enforces, within a sample:
 
-    * GEN Q -> UND K: always (the gen->und pass, unrestricted);
+    * GEN Q -> UND K: every UND token of the sample when the query reads every caption or
+      the key is a sample-level caption, and otherwise only the caption describing the
+      query's own view (the gen->und pass);
     * sensor Q -> sensor K: within whatever ``AttentionScope`` admits (every view, its own
       view, or -- ``"decomposed"`` -- its own view or its own frame, or -- with
       ``decomposed_temporal_window_seconds`` set -- its own view or a key within that many
@@ -166,6 +184,13 @@ class FlexMetadata:
     :func:`flex_attention`. The tensors themselves stay reachable through the
     mask's ``mask_mod`` closure, which the kernel evaluates on partially-masked
     blocks, so nothing here can be freed early.
+
+    Every field is required. None of them has a default, deliberately: a default here is a
+    silently narrower or wider mask, which is the one failure this type cannot surface --
+    ``attention_scope`` and ``control_attends_sensor`` change what a token may attend, and
+    ``reads_every_caption`` decides whether a stream reads one caption or all of them. A new
+    construction site has to state each of them rather than inherit an answer, and the two
+    that exist (:func:`build_multiview_flex_metadata` and the test builder) both do.
     """
 
     seq_len: int
@@ -175,10 +200,11 @@ class FlexMetadata:
     is_noisy: torch.Tensor
     is_control: torch.Tensor
     timestamp: torch.Tensor
+    reads_every_caption: torch.Tensor
     num_und: int
     attention_scope: AttentionScope
-    decomposed_temporal_window_seconds: float | None = None
-    control_attends_sensor: bool = False
+    decomposed_temporal_window_seconds: float | None
+    control_attends_sensor: bool
 
     def __post_init__(self) -> None:
         # Nothing enforces the Literal at runtime, and an unrecognised scope would not fail:
@@ -273,6 +299,7 @@ class _StreamFields:
     is_control: torch.Tensor
     is_und: torch.Tensor
     timestamp: torch.Tensor
+    reads_every_caption: torch.Tensor
 
     def tail(self, start: int) -> _StreamFields:
         """The same fields covering the tokens from ``start`` on, re-based to offset zero.
@@ -297,6 +324,7 @@ def _key_stream_fields(metadata: FlexMetadata) -> _StreamFields:
         is_control=metadata.is_control,
         is_und=_und_flags(metadata),
         timestamp=metadata.timestamp,
+        reads_every_caption=metadata.reads_every_caption,
     )
 
 
@@ -329,8 +357,11 @@ def _multiview_pair_predicate(
     All rules are gated on ``same_sample`` (block-diagonal packing). On top of
     that, using the per-token frame/view/modality metadata:
 
-    * any GEN Q attends to every UND K of its sample -- the gen->und pass, which
-      carries no further restriction;
+    * a GEN Q attends the UND K of its sample whose caption its view is described by: every
+      one of them when the key is a sample-level caption (``view_id`` ``-1``, the single
+      caption a batch without per-view captions packs) or when the query's stream is not
+      scoped to a camera (``reads_every_caption``, i.e. a LiDAR sweep), and otherwise only
+      the caption of the query's own view, matched by ``same_view`` -- the gen->und pass;
     * every sensor Q attends every sensor K within whatever ``attention_scope`` admits
       (every view, its own view, or -- ``"decomposed"`` -- its own view or its own frame /
       temporal window), regardless of whether either token is conditioning;
@@ -361,18 +392,15 @@ def _multiview_pair_predicate(
     A batch with no control item carries ``is_control`` all-``False``, which drops all
     control terms on its own -- see :class:`FlexMetadata`.
 
-    No control rule can fire on a UND key: the existing terms require ``k_control``, while
-    the optional sensor term requires ``same_view``; UND tokens carry ``view_id=-1``.
-    The sensor rules are less tidy. Under ``"all_views"``,
-    ``reaches_every_view`` alone satisfies ``sensor_pair_in_scope`` for a UND key, so a GEN
-    query admits its own sample's UND keys through that term too; nothing observable changes,
-    since ``gen_to_und`` already admits them unconditionally, but the UND quadrant is not
-    exclusively ``gen_to_und``'s doing under that scope. Under the other two scopes the sensor
-    rules compare ``view_id`` / ``frame_id`` (or ``timestamp``), where UND's ``-1`` sentinel
-    matches no real GEN token (a UND key's ``timestamp`` sentinel of ``-1.0`` could satisfy
-    ``0 <= q_ts - (-1.0) <= window`` for a query at ``q_ts <= window - 1``, but that path is
-    unreachable: ``gen_to_und`` already admits every UND key unconditionally, and no rule ever
-    needs the temporal term to do so).
+    ``gen_to_und`` is the sole term admitting a UND key, and the other rules say so explicitly:
+    ``sensor_to_sensor`` and ``control_to_sensor`` carry ``~k_und``, while ``sensor_to_control``
+    and ``control_to_control`` require ``k_control``, which no UND token carries. That is
+    load-bearing rather than tidiness. ``view_id`` on a UND token names the view its caption
+    describes (see :class:`FlexMetadata`), so ``same_view`` matches a caption against the camera
+    it was written for -- which is exactly what ``gen_to_und`` wants and exactly what the other
+    rules must not act on. Under ``"all_views"`` ``reaches_every_view`` alone satisfies
+    ``in_scope``, so without ``~k_und`` a per-view caption would come in through
+    ``sensor_to_sensor`` and reach every view no matter what ``gen_to_und`` says.
 
     Padding carries ``-1`` in every id field, so real queries never see it and padded queries
     attend only to padding. The packer keeps at least one padded row on each stream once
@@ -415,9 +443,17 @@ def _multiview_pair_predicate(
         same_view = q_fields.view_id[q_idx] == kv_fields.view_id[kv_idx]
         q_control = q_fields.is_control[q_idx]
         k_control = kv_fields.is_control[kv_idx]
+        k_und = kv_fields.is_und[kv_idx]
 
-        # GEN Q -> UND K: the whole caption of the sample, conditioning and noisy alike.
-        gen_to_und = kv_fields.is_und[kv_idx]
+        # GEN Q -> UND K: the sample's captions, conditioning and noisy alike. On a UND key
+        # view_id is the view the caption *describes* (see FlexMetadata), so same_view already
+        # reads "this caption is about the querying camera's view". A sample-level caption
+        # carries -1 and is reachable from every view, which is what a batch without per-view
+        # captions packs and what keeps this term unrestricted there. With one caption per
+        # camera, a camera query keeps only its own view's caption, while a stream that is not
+        # scoped to one camera -- a LiDAR sweep -- keeps all of them.
+        caption_reaches_query = q_fields.reads_every_caption[q_idx] | (kv_fields.view_id[kv_idx] < 0) | same_view
+        gen_to_und = k_und & caption_reaches_query
         # The "own instant" half of decomposed: same frame index by default, or a
         # non-negative, bounded gap in real capture time once a window is configured.
         timestamp_gap = q_fields.timestamp[q_idx] - kv_fields.timestamp[kv_idx]
@@ -428,13 +464,21 @@ def _multiview_pair_predicate(
         # Sensor attention uses the same view/instant footprint for conditioning and noisy
         # tokens, matching the dense base I2V/V2V attention pattern within that scope.
         in_scope = reaches_every_view | same_view | reaches_own_instant
-        sensor_to_sensor = (~q_control) & (~k_control) & in_scope
-        # Sensor Q (any) -> control K and control Q -> control K: own view, any frame.
+        # ``~k_und`` here and on control_to_sensor below keeps gen_to_und the *only* term that
+        # admits a UND key, which is what makes the caption scoping above mean anything. Without
+        # it on sensor_to_sensor, a UND key (is_control=False) satisfies the rule under
+        # "all_views", where reaches_every_view alone satisfies in_scope, and every per-view
+        # caption reaches every view no matter what gen_to_und says. Since view_id on a UND
+        # token now names its caption's view, same_view can match a UND key outright, so the
+        # exclusion has to be explicit rather than resting on the old -1 sentinel.
+        sensor_to_sensor = (~q_control) & (~k_control) & (~k_und) & in_scope
+        # Sensor Q (any) -> control K and control Q -> control K: own view, any frame. Neither
+        # can reach a UND key: both require k_control, which no UND token carries.
         sensor_to_control = (~q_control) & k_control & same_view
         control_to_control = q_control & k_control & same_view
         # Optionally, a control Q reaches every non-control sensor K of its own view, at
         # every frame. Camera and LiDAR use disjoint view offsets, so this cannot cross them.
-        control_to_sensor = control_reaches_sensor & q_control & (~k_control) & same_view  # [...], bool
+        control_to_sensor = control_reaches_sensor & q_control & (~k_control) & (~k_und) & same_view  # [...], bool
 
         return same_sample & (  # [...], bool
             gen_to_und | sensor_to_sensor | sensor_to_control | control_to_control | control_to_sensor
@@ -472,7 +516,7 @@ def _multiview_mask_mod(metadata: FlexMetadata) -> MaskMod:
 
 
 @dataclass(frozen=True)
-class MaskItem:
+class SensorMaskItem:
     """One latent clip of one generation stream, as the multiview mask sees it.
 
     An item is a camera clip, a LiDAR range clip, or a control stream conditioning one of
@@ -506,6 +550,12 @@ class MaskItem:
             and the default ``"decomposed"`` form still compare ``frame_id`` directly. The
             default, ``1.0``, makes a token's timestamp equal its frame index, which is
             harmless as long as nothing reads it.
+        reads_every_caption: whether this item's tokens read every caption of their sample
+            rather than the one describing their own view. Set on a stream that is not
+            scoped to a camera -- a LiDAR sweep fuses the whole rig, so every camera's
+            caption describes part of what it sees. Only read under the per-view caption
+            layout: with a single sample-level caption every item reaches it regardless. See
+            :func:`_multiview_pair_predicate`.
     """
 
     token_shape: tuple[int, ...]
@@ -514,18 +564,19 @@ class MaskItem:
     view_offset: int = 0
     is_control: bool = False
     seconds_per_frame: float = 1.0
+    reads_every_caption: bool = False
 
     def __post_init__(self) -> None:
         if self.num_views < 1 or self.latent_t % self.num_views != 0:
             raise ValueError(
-                f"MaskItem has latent_t={self.latent_t}, which is not divisible by num_views={self.num_views}."
+                f"SensorMaskItem has latent_t={self.latent_t}, which is not divisible by num_views={self.num_views}."
             )
         if self.condition_mask.numel() != self.latent_t:
             raise ValueError(
-                f"MaskItem condition mask covers {self.condition_mask.numel()} frames, expected {self.latent_t}."
+                f"SensorMaskItem condition mask covers {self.condition_mask.numel()} frames, expected {self.latent_t}."
             )
         if self.seconds_per_frame <= 0:
-            raise ValueError(f"MaskItem.seconds_per_frame must be positive, got {self.seconds_per_frame}.")
+            raise ValueError(f"SensorMaskItem.seconds_per_frame must be positive, got {self.seconds_per_frame}.")
 
     @property
     def latent_t(self) -> int:
@@ -553,7 +604,117 @@ class MaskItem:
         return (self.num_views, self.frames_per_view)
 
 
-def _check_view_grids_agree(items_per_sample: Sequence[Sequence[MaskItem]]) -> None:
+@dataclass(frozen=True)
+class CaptionMaskItem:
+    """One caption of one sample's UND stream, as the multiview mask sees it.
+
+    A batch without ``separate_view_text_tokenization`` packs a single caption describing the
+    whole rig; one with it packs one caption per camera, and this is what tells the mask which
+    camera each of them describes.
+
+    Attributes:
+        view_id: the camera view this caption describes, on the same view axis
+            :attr:`SensorMaskItem.view_offset` numbers -- so a caption's ``view_id`` equals the
+            ``view_id`` its camera's tokens carry, which is what the gen->und rule compares.
+            ``-1`` marks a sample-level caption, reachable from every view.
+        num_tokens: UND tokens this caption owns, framing (BOS / EOS / start-of-generation)
+            included, i.e. the caption's own span of the causal stream.
+    """
+
+    view_id: int
+    num_tokens: int
+
+    def __post_init__(self) -> None:
+        if self.num_tokens < 1:
+            raise ValueError(f"CaptionMaskItem covers {self.num_tokens} tokens; a caption owns at least one.")
+        if self.view_id < -1:
+            raise ValueError(
+                f"CaptionMaskItem view_id must be a view index or -1 for a sample-level caption, got {self.view_id}."
+            )
+
+
+def _camera_views_of_sample(sample_items: Sequence[SensorMaskItem]) -> set[int]:
+    """The view ids of a sample's view-scoped (camera) items -- the views a caption may describe.
+
+    Items that reach every caption (LiDAR) are excluded: they are not one of the rig's cameras,
+    so no caption describes them, which is exactly why they read all of them instead. Control
+    items are included, since a control stream sits on the view of the target it conditions and
+    so shares that view's caption.
+    """
+    return {
+        item.view_offset + view
+        for item in sample_items
+        if not item.reads_every_caption
+        for view in range(item.num_views)
+    }
+
+
+def _build_und_view_ids(
+    sensor_mask_items: Sequence[Sequence[SensorMaskItem]],
+    caption_mask_items: Sequence[Sequence[CaptionMaskItem]] | None,
+    num_und: int,
+    device: torch.device,
+) -> torch.Tensor:
+    """The UND prefix of ``view_id``: the view each caption describes, ``-1`` when sample-level.
+
+    On a UND token ``view_id`` names the view its caption is *about*, which is what lets
+    ``same_view`` pair a caption with the camera it was written for -- see
+    :class:`FlexMetadata` and :func:`_multiview_pair_predicate`. ``-1`` is the "reachable from
+    every view" value, so the default this returns leaves the gen->und pass exactly as
+    unrestricted as it was before per-view captions existed.
+
+    ``caption_mask_items`` is the per-view layout only: the sample-level one is spelled
+    ``None``, so a caller never states it caption by caption.
+
+    Enforces that layout's one invariant -- a sample's captions cover each of its camera views
+    exactly once. Three captions for four cameras, two naming the same view, one naming a view
+    the sample does not own, or a ``-1`` that names no view at all would each leave some camera
+    reading a caption written for another one, or reading none at all (an empty gen->und
+    quadrant), so they are rejected here rather than masked into silence.
+    """
+    if caption_mask_items is None:
+        return torch.full((num_und,), -1, device=device, dtype=torch.long)  # [num_und]
+
+    if len(caption_mask_items) != len(sensor_mask_items):
+        raise ValueError(
+            f"caption_mask_items describes {len(caption_mask_items)} samples but sensor_mask_items "
+            f"describes {len(sensor_mask_items)}; both label the same packed samples."
+        )
+
+    view_id_runs: list[torch.Tensor] = []
+    for sample_idx, (caption_items, sensor_items) in enumerate(zip(caption_mask_items, sensor_mask_items)):
+        if not caption_items:
+            raise ValueError(f"Sample {sample_idx} carries no caption; every sample the mask spans packs at least one.")
+        # One check covers every way the layout can be wrong -- too few or too many captions, two
+        # naming the same view, one naming a view the sample does not own, and the -1 that means
+        # "no view" (a sample-level caption reaching a per-view batch). All of them come out as
+        # the two sorted lists disagreeing, and printing both says which it was.
+        caption_view_ids = sorted(caption_item.view_id for caption_item in caption_items)
+        camera_views = sorted(_camera_views_of_sample(sensor_items))
+        if caption_view_ids != camera_views:
+            raise ValueError(
+                f"Sample {sample_idx} has {len(caption_view_ids)} captions for views {caption_view_ids} "
+                f"but {len(camera_views)} camera views {camera_views}; per-view captions must cover "
+                "each camera view exactly once."
+            )
+        for caption_item in caption_items:
+            view_id_runs.append(
+                torch.full((caption_item.num_tokens,), caption_item.view_id, device=device, dtype=torch.long)
+            )
+
+    caption_view_id = torch.cat(view_id_runs)  # [caption_token_count]
+    caption_token_count = caption_view_id.shape[0]
+    if caption_token_count > num_und:
+        raise ValueError(f"The captions cover {caption_token_count} UND tokens, exceeding the UND stream's {num_und}.")
+    if caption_token_count < num_und:
+        # The UND stream's trailing pad, which carries the same -1 every other field pads with.
+        caption_view_id = torch.cat(
+            (caption_view_id, torch.full((num_und - caption_token_count,), -1, device=device, dtype=torch.long))
+        )  # [num_und]
+    return caption_view_id  # [num_und]
+
+
+def _check_view_grids_agree(sensor_mask_items: Sequence[Sequence[SensorMaskItem]]) -> None:
     """Reject a sample whose items disagree on a view offset they share.
 
     An offset's views and frames are the coordinate system the mask's comparisons live in,
@@ -569,7 +730,7 @@ def _check_view_grids_agree(items_per_sample: Sequence[Sequence[MaskItem]]) -> N
     what lets a joint camera + LiDAR sample carry a camera grid on one offset beside a range
     grid of another shape (and its own frame rate) on the next.
     """
-    for sample_idx, sample_items in enumerate(items_per_sample):
+    for sample_idx, sample_items in enumerate(sensor_mask_items):
         grid_by_view_offset: dict[int, tuple[int, int]] = {}
         seconds_per_frame_by_view_offset: dict[int, float] = {}
         for item_idx, item in enumerate(sample_items):
@@ -600,21 +761,22 @@ def build_multiview_flex_metadata(
     *,
     seq_len: int,
     full_q_offsets: torch.Tensor,
-    items_per_sample: Sequence[Sequence[MaskItem]],
+    sensor_mask_items: Sequence[Sequence[SensorMaskItem]],
+    caption_mask_items: Sequence[Sequence[CaptionMaskItem]] | None,
     device: torch.device,
-    num_und: int = 0,
-    causal_offsets: torch.Tensor | None = None,
-    attention_scope: AttentionScope = "all_views",
-    decomposed_temporal_window_seconds: float | None = None,
-    control_attends_sensor: bool = False,
+    num_und: int,
+    causal_offsets: torch.Tensor | None,
+    attention_scope: AttentionScope,
+    decomposed_temporal_window_seconds: float | None,
+    control_attends_sensor: bool,
 ) -> FlexMetadata:
     """Build key-stream metadata for camera-major multiview transfer items.
 
-    ``items_per_sample`` is one list of :class:`MaskItem` per packed sample, in packed
+    ``sensor_mask_items`` is one list of :class:`SensorMaskItem` per packed sample, in packed
     order, describing every generation stream the sample carries: its camera clips, its
     LiDAR range clips, and whichever of those are control streams. The nesting is the
     grouping, so nothing here has to check that a flat item list and a per-sample count
-    agree -- and :class:`MaskItem` has already checked each item on its own terms.
+    agree -- and :class:`SensorMaskItem` has already checked each item on its own terms.
 
     What is left to check is the one invariant that spans items: those of a sample
     **sharing a view offset** have to agree on their ``(num_views, frames_per_view)``
@@ -627,11 +789,11 @@ def build_multiview_flex_metadata(
         seq_len: block-padded GEN sequence length, i.e. the query count. The returned
             fields are ``[num_und + seq_len]``, covering the fused ``[UND | GEN]`` key
             stream.
-        full_q_offsets: cumulative per-sample GEN offsets, ``[len(items_per_sample) + 1]``;
+        full_q_offsets: cumulative per-sample GEN offsets, ``[len(sensor_mask_items) + 1]``;
             ``full_q_offsets[-1]`` is the real (unpadded) GEN token count, which the items'
             own token counts have to add up to.
-        items_per_sample: the items each sample owns, in packed order. See
-            :class:`MaskItem` for what one describes and which of its fields the mask
+        sensor_mask_items: the items each sample owns, in packed order. See
+            :class:`SensorMaskItem` for what one describes and which of its fields the mask
             rules read.
         device: device for the returned tensors.
         num_und: block-padded UND (causal) stream length, which prefixes the key
@@ -654,12 +816,20 @@ def build_multiview_flex_metadata(
             "the query's own frame index" with "any key within this many seconds at or before
             the query's real capture time" for the scope's temporal half -- see
             :func:`_multiview_pair_predicate`. ``None`` (the default) keeps the frame-index
-            form, which is also the only form :class:`MaskItem`'s default
+            form, which is also the only form :class:`SensorMaskItem`'s default
             ``seconds_per_frame=1.0`` produces the same answer for. Ignored outside
             ``"decomposed"``.
         control_attends_sensor: whether a control query may attend to every non-control sensor
             key in its own view, across all frames and noise states. False preserves the existing
             one-way sensor-to-control connectivity. Applies equally to camera and LiDAR streams.
+        caption_mask_items: the captions each sample's UND stream carries, in packed order,
+            each naming the camera view it describes -- see :class:`CaptionMaskItem`. ``None`` (the
+            default) labels every UND token ``-1``, i.e. one caption for the whole rig,
+            reachable from every view, which is the layout a batch without
+            ``separate_view_text_tokenization`` packs and leaves the gen->und pass exactly as
+            unrestricted as it was. Supplying it requires a UND stream (``num_und`` non-zero),
+            and each sample's captions must cover its camera views exactly once; see
+            :func:`_build_und_view_ids`.
 
     Returns:
         :class:`FlexMetadata` whose per-token fields are each ``[num_und + seq_len]``: the
@@ -693,8 +863,8 @@ def build_multiview_flex_metadata(
             "The multiview mask labels both streams from their own offsets and compares those "
             "labels, so the two have to number the same samples."
         )
-    _check_view_grids_agree(items_per_sample)
-    items = [item for sample_items in items_per_sample for item in sample_items]
+    _check_view_grids_agree(sensor_mask_items)
+    items = [item for sample_items in sensor_mask_items for item in sample_items]
 
     # decomposed is spatial + temporal attention decomposed into two terms: a noisy token
     # reaches its own view at every frame, and every view at its own frame index (or, with a
@@ -723,6 +893,7 @@ def build_multiview_flex_metadata(
     timestamps: list[torch.Tensor] = []
     noisy_flags: list[torch.Tensor] = []
     control_flags: list[torch.Tensor] = []
+    every_caption_flags: list[torch.Tensor] = []
     # Purely constructive: every field below is per item, and every invariant an item could
     # violate has been checked already, so this needs no per-sample scope of its own.
     for item in items:
@@ -738,7 +909,7 @@ def build_multiview_flex_metadata(
             )
         )  # [item_tokens]
         # Real capture time of a frame index, at this item's own rate -- see
-        # MaskItem.seconds_per_frame and FlexMetadata.timestamp.
+        # SensorMaskItem.seconds_per_frame and FlexMetadata.timestamp.
         timestamps.append(
             (item_frame_ids.to(torch.float32) * item.seconds_per_frame).repeat_interleave(spatial_tokens)
         )  # [item_tokens]
@@ -750,12 +921,16 @@ def build_multiview_flex_metadata(
         control_flags.append(
             torch.full(is_conditioning.shape, item.is_control, device=device, dtype=torch.bool)
         )  # [item_tokens]
+        every_caption_flags.append(
+            torch.full(is_conditioning.shape, item.reads_every_caption, device=device, dtype=torch.bool)
+        )  # [item_tokens]
 
     frame_id = torch.cat(frame_ids)  # [real_token_count]
     view_id = torch.cat(view_ids)  # [real_token_count]
     timestamp = torch.cat(timestamps)  # [real_token_count], float
     is_noisy = torch.cat(noisy_flags)  # [real_token_count], bool
     is_control = torch.cat(control_flags)  # [real_token_count], bool
+    reads_every_caption = torch.cat(every_caption_flags)  # [real_token_count], bool
     real_token_count = frame_id.shape[0]
     # These counts come from token_shapes while the offsets come from the packer's full splits.
     # If they disagree, _build_stream_sample_ids draws the padding boundary somewhere else than
@@ -780,22 +955,35 @@ def build_multiview_flex_metadata(
         timestamp = torch.cat((timestamp, timestamp_sentinel))  # [seq_len]
         is_noisy = torch.cat((is_noisy, torch.zeros(pad, device=device, dtype=torch.bool)))  # [seq_len], bool
         is_control = torch.cat((is_control, torch.zeros(pad, device=device, dtype=torch.bool)))  # [seq_len], bool
+        reads_every_caption = torch.cat(
+            (reads_every_caption, torch.zeros(pad, device=device, dtype=torch.bool))
+        )  # [seq_len], bool
 
     sample_id = _build_stream_sample_ids(full_q_offsets, seq_len, device)  # [seq_len]
 
     if num_und:
         assert causal_offsets is not None  # guarded above; narrows the type for the checker.
-        # UND keys join the front of the stream carrying nothing but their sample: the
-        # multiview fields are what the GEN rules match on, and holding them at -1 / False is
-        # what keeps those rules from firing on this quadrant.
+        # UND keys join the front of the stream carrying their sample and, on ``view_id``, the
+        # view their caption describes. Every other multiview field is what the GEN rules match
+        # on, and holding those at -1 / False is what keeps them from firing on this quadrant.
         und_sentinel = torch.full((num_und,), -1, device=device, dtype=torch.long)  # [num_und]
         und_timestamp_sentinel = torch.full((num_und,), -1.0, device=device, dtype=torch.float32)  # [num_und]
         sample_id = torch.cat((_build_stream_sample_ids(causal_offsets, num_und, device), sample_id))
         frame_id = torch.cat((und_sentinel, frame_id))  # [num_und+seq_len]
-        view_id = torch.cat((und_sentinel, view_id))  # [num_und+seq_len]
+        view_id = torch.cat(
+            (_build_und_view_ids(sensor_mask_items, caption_mask_items, num_und, device), view_id)
+        )  # [num_und+seq_len]
         timestamp = torch.cat((und_timestamp_sentinel, timestamp))  # [num_und+seq_len]
         is_noisy = torch.cat((torch.zeros(num_und, device=device, dtype=torch.bool), is_noisy))  # bool
         is_control = torch.cat((torch.zeros(num_und, device=device, dtype=torch.bool), is_control))  # bool
+        reads_every_caption = torch.cat(
+            (torch.zeros(num_und, device=device, dtype=torch.bool), reads_every_caption)
+        )  # bool
+    elif caption_mask_items is not None:
+        raise ValueError(
+            "caption_mask_items describes the UND stream's captions, but this metadata is "
+            "GEN-only (num_und=0), so there is no UND stream to label."
+        )
 
     return FlexMetadata(
         seq_len=num_und + seq_len,
@@ -809,6 +997,7 @@ def build_multiview_flex_metadata(
         attention_scope=attention_scope,
         decomposed_temporal_window_seconds=decomposed_temporal_window_seconds,
         control_attends_sensor=control_attends_sensor,
+        reads_every_caption=reads_every_caption,  # [num_und+seq_len], bool
     )
 
 
@@ -1032,6 +1221,10 @@ def _metadata_groups(metadata: FlexMetadata, device: torch.device) -> tuple[torc
     Returns ``(group_id [seq_len], representatives [num_groups])``, where
     ``representatives`` holds the first token index of each run.
     """
+    # reads_every_caption joins the tuple because the predicate reads it: without it a run
+    # could hold both a camera and a LiDAR token, and evaluating the predicate on a single
+    # representative would answer for both. Captions describing different views are already
+    # split apart by view_id, which carries the caption's view on a UND token.
     return metadata_run_groups(
         (
             metadata.sample_id,
@@ -1040,6 +1233,7 @@ def _metadata_groups(metadata: FlexMetadata, device: torch.device) -> tuple[torc
             metadata.is_noisy,
             metadata.is_control,
             _und_flags(metadata),
+            metadata.reads_every_caption,
         ),
         device=device,
     )
@@ -1135,26 +1329,28 @@ def build_multiview_block_mask(
     *,
     seq_len: int,
     full_q_offsets: torch.Tensor,
-    items_per_sample: Sequence[Sequence[MaskItem]],
+    sensor_mask_items: Sequence[Sequence[SensorMaskItem]],
+    caption_mask_items: Sequence[Sequence[CaptionMaskItem]] | None,
     device: torch.device,
     block_size: tuple[int, int],
-    num_und: int = 0,
-    causal_offsets: torch.Tensor | None = None,
-    attention_scope: AttentionScope = "all_views",
-    decomposed_temporal_window_seconds: float | None = None,
-    control_attends_sensor: bool = False,
+    num_und: int,
+    causal_offsets: torch.Tensor | None,
+    attention_scope: AttentionScope,
+    decomposed_temporal_window_seconds: float | None,
+    control_attends_sensor: bool,
 ) -> BlockMask:
     """Build the GEN-tower :class:`BlockMask` for camera-major multiview items.
 
     The entry point for the packed-batch path: it runs
     :func:`build_multiview_flex_metadata` and :func:`build_block_mask` back to back so
-    the caller only handles the mask. See :class:`MaskItem` for what one item describes,
+    the caller only handles the mask. See :class:`SensorMaskItem` for what one item describes,
     and those two functions for the token layout the metadata encodes, for why the mask has
     to be built outside the decoder layers, for what ``block_size`` selects, for what
     ``num_und`` / ``causal_offsets`` add, for what ``attention_scope`` lets same-kind
     (sensor) tokens reach, for what ``decomposed_temporal_window_seconds`` changes about the
-    ``"decomposed"`` scope's temporal half, and for what
-    ``control_attends_sensor`` adds to control queries.
+    ``"decomposed"`` scope's temporal half, for what
+    ``control_attends_sensor`` adds to control queries, and for what
+    ``caption_mask_items`` narrows the gen->und pass to.
 
     The two stages stay separately callable because the metadata layout is checked on
     CPU in the unit tests, independently of the block-mask construction.
@@ -1162,7 +1358,8 @@ def build_multiview_block_mask(
     metadata = build_multiview_flex_metadata(
         seq_len=seq_len,
         full_q_offsets=full_q_offsets,
-        items_per_sample=items_per_sample,
+        sensor_mask_items=sensor_mask_items,
+        caption_mask_items=caption_mask_items,
         device=device,
         num_und=num_und,
         causal_offsets=causal_offsets,

@@ -16,7 +16,7 @@ from cosmos_framework.model.generator.mot.flex_attention import (
     FlexMetadata as BaseFlexMetadata,
 )
 from cosmos_framework.model.generator.mot.flex_attention import (
-    MaskItem,
+    SensorMaskItem,
     build_multiview_flex_metadata,
 )
 from cosmos_framework.model.generator.mot.flex_attention_utils import (
@@ -238,13 +238,13 @@ def _causal_steps_from_frames(frame_id: torch.Tensor, frames_per_chunk: int) -> 
 
 def build_teacher_forcing_clean_target_token_indexes(
     *,
-    items_per_sample: Sequence[Sequence[MaskItem]],
+    sensor_mask_items: Sequence[Sequence[SensorMaskItem]],
     device: torch.device,
 ) -> torch.Tensor:
     """Return GEN-relative indexes of target tokens cached by the clean pass."""  # returns [N_clean]
     selected_indexes: list[torch.Tensor] = []
     token_offset = 0
-    for sample_idx, sample_items in enumerate(items_per_sample):
+    for sample_idx, sample_items in enumerate(sensor_mask_items):
         target_items = [item for item in sample_items if not item.is_control]
         if len(target_items) != 1:
             raise ValueError(
@@ -308,18 +308,18 @@ def _base_token_roles(
 
 def _teacher_forcing_materialized_stream_mask(
     *,
-    items_per_sample: Sequence[Sequence[MaskItem]],
+    sensor_mask_items: Sequence[Sequence[SensorMaskItem]],
     target_frame_ranges: Sequence[tuple[int, int]],
     num_und: int,
     gen_seq_len: int,
     device: torch.device,
 ) -> torch.Tensor:  # returns [UND+GEN]
     """Mark controls, target conditions, and materialized target ranges as real tokens."""
-    target_items = [item for sample_items in items_per_sample for item in sample_items if not item.is_control]
-    if len(items_per_sample) != 1 or len(target_items) != 1:
+    target_items = [item for sample_items in sensor_mask_items for item in sample_items if not item.is_control]
+    if len(sensor_mask_items) != 1 or len(target_items) != 1:
         raise ValueError("Materialized target ranges require one teacher-forcing sample with exactly one target item.")
     materialized_item_tokens: list[torch.Tensor] = []
-    for item in items_per_sample[0]:
+    for item in sensor_mask_items[0]:
         if item.is_control:
             materialized_frames = torch.ones(item.latent_t, device=device, dtype=torch.bool)  # [V*T]
         else:
@@ -349,7 +349,7 @@ def build_teacher_forcing_multiview_flex_metadata(
     *,
     seq_len: int,
     full_q_offsets: torch.Tensor,
-    items_per_sample: Sequence[Sequence[MaskItem]],
+    sensor_mask_items: Sequence[Sequence[SensorMaskItem]],
     device: torch.device,
     num_und: int,
     causal_offsets: torch.Tensor,
@@ -374,12 +374,20 @@ def build_teacher_forcing_multiview_flex_metadata(
     base = build_multiview_flex_metadata(
         seq_len=seq_len,
         full_q_offsets=full_q_offsets,
-        items_per_sample=items_per_sample,
+        sensor_mask_items=sensor_mask_items,
+        # Replay packs carry one sample-level caption per sample -- per-view captions are
+        # refused upstream in ``build_interactive_multiview_mask_items`` -- so there is no
+        # per-camera caption for the gen->und pass to narrow to.
+        caption_mask_items=None,
         device=device,
         num_und=num_und,
         causal_offsets=causal_offsets,
         attention_scope=teacher_forcing_replay_policy.multiview_attention_scope,
         decomposed_temporal_window_seconds=teacher_forcing_replay_policy.decomposed_temporal_window_seconds,
+        # The replay policy expresses control visibility itself, through ``control_visibility``
+        # and ``controls_read_strict_past_clean_rgb``, and layers it onto this metadata below.
+        # Letting the base add its own control->sensor edges would double-specify it.
+        control_attends_sensor=False,
     )
     token_role_id, _is_und, _is_gen = _base_token_roles(base, pass_kind=pass_kind)
     sample_id = base.sample_id  # [S]
@@ -390,7 +398,7 @@ def build_teacher_forcing_multiview_flex_metadata(
     is_control = base.is_control  # [S]
     if materialized_target_frame_ranges is not None:
         materialized = _teacher_forcing_materialized_stream_mask(
-            items_per_sample=items_per_sample,
+            sensor_mask_items=sensor_mask_items,
             target_frame_ranges=materialized_target_frame_ranges,
             num_und=num_und,
             gen_seq_len=seq_len,
@@ -422,7 +430,7 @@ def build_teacher_forcing_multiview_flex_metadata(
     )
     if pass_kind == "noisy":
         clean_indexes = build_teacher_forcing_clean_target_token_indexes(
-            items_per_sample=items_per_sample,
+            sensor_mask_items=sensor_mask_items,
             device=device,
         )  # [N_clean]
         if clean_indexes.numel() > clean_memory_seq_len:
@@ -636,7 +644,7 @@ def build_multiview_transfer_ar_flex_metadata(
     *,
     seq_len: int,
     full_q_offsets: torch.Tensor,
-    items_per_sample: Sequence[Sequence[MaskItem]],
+    sensor_mask_items: Sequence[Sequence[SensorMaskItem]],
     device: torch.device,
     num_und: int,
     causal_offsets: torch.Tensor,
@@ -653,9 +661,9 @@ def build_multiview_transfer_ar_flex_metadata(
             f"Unknown multiview transfer AR current_role {current_role!r}; "
             f"expected one of {MULTIVIEW_TRANSFER_AR_CURRENT_ROLES}."
         )
-    if len(items_per_sample) != 1 or len(items_per_sample[0]) != 1:
+    if len(sensor_mask_items) != 1 or len(sensor_mask_items[0]) != 1:
         raise ValueError("Multiview transfer AR current packs require one sample with one vision item.")
-    current_item = items_per_sample[0][0]
+    current_item = sensor_mask_items[0][0]
     if current_item.num_views != memory_layout.num_views:
         raise ValueError(
             f"Current multiview transfer AR pack has {current_item.num_views} views, "
@@ -681,12 +689,16 @@ def build_multiview_transfer_ar_flex_metadata(
     base = build_multiview_flex_metadata(
         seq_len=seq_len,
         full_q_offsets=full_q_offsets,
-        items_per_sample=items_per_sample,
+        sensor_mask_items=sensor_mask_items,
+        # As in the teacher-forcing pass above: one sample-level caption, and the replay
+        # policy owns control visibility rather than the base metadata.
+        caption_mask_items=None,
         device=device,
         num_und=num_und,
         causal_offsets=causal_offsets,
         attention_scope=teacher_forcing_replay_policy.multiview_attention_scope,
         decomposed_temporal_window_seconds=teacher_forcing_replay_policy.decomposed_temporal_window_seconds,
+        control_attends_sensor=False,
     )
     positions, is_und, is_gen = _stream_membership(base)
     current_role_id = {

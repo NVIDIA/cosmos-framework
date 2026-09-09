@@ -265,6 +265,12 @@ def register_lidar_tokenizer() -> None:
         name="lidar_tokenizer_v1_r105_b1800_symmetric",
         node=LidarTokenizerV1R105B1800SymmetricConfig,
     )
+    cs.store(
+        group="lidar_tokenizer",
+        package="model.config.lidar_tokenizer",
+        name="lidar_tokenizer_v1p2_r105_b1800",
+        node=LidarTokenizerV1P2R105B1800Config,
+    )
 
 
 def register_sound_tokenizer() -> None:

@@ -26,6 +26,7 @@ from cosmos_framework.utils.easy_io import easy_io
 from cosmos_framework.tools.visualize.video import save_img_or_video
 
 from cosmos_framework.model.generator.mot.context_parallel_utils import broadcast_context_parallel_object
+from cosmos_framework.model.generator.reasoner.qwen3_vl.utils import _SYSTEM_PROMPT_TRANSFER
 from cosmos_framework.utils.generator.data_utils import slice_data_batch
 from cosmos_framework.utils.generator.multiview import (
     decode_multiview_latent_per_view,
@@ -987,6 +988,11 @@ class EveryNDrawSample(EveryN):
         expected_keys = ["vision"]
         latents: list[list[torch.Tensor]] = []
         generation_batch = slice_data_batch(data_batch, start=0, limit=1)
+        # The transfer dataset tokenizer adds this task prompt internally without storing it in
+        # the batch. Preserve an explicit caller-provided prompt, but otherwise restore the same
+        # prompt before train-sample inference re-tokenizes the raw caption. The fixed multiview
+        # validation callback applies the same default when it constructs its batch.
+        generation_batch.setdefault("system_prompt", _SYSTEM_PROMPT_TRANSFER)
         for guidance in self.guidance:
             sample = model.generate_samples_from_batch(
                 generation_batch,

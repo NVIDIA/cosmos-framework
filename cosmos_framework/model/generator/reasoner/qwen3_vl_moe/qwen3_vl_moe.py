@@ -1860,6 +1860,10 @@ class Qwen3VLMoeCausalLMOutputWithPast(ModelOutput):
     attentions: Optional[tuple[torch.FloatTensor]] = None
     rope_deltas: Optional[torch.LongTensor] = None
     aux_loss: Optional[torch.FloatTensor] = None
+    # The final layer's states. This stack collects no PER-LAYER states -- the text model
+    # returns only its last -- so `hidden_states` above stays None and a consumer that needs
+    # the final state, such as a value head, reads it here under the usual HF name.
+    last_hidden_state: Optional[torch.FloatTensor] = None
 
 
 @dataclass
@@ -2325,6 +2329,7 @@ class Qwen3VLMoeForConditionalGeneration(Qwen3VLMoePreTrainedModel, GenerationMi
             logits=logits,
             past_key_values=outputs.past_key_values,
             rope_deltas=outputs.rope_deltas,
+            last_hidden_state=hidden_states,
         )
 
     def prepare_inputs_for_generation(

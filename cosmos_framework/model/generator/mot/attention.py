@@ -124,6 +124,7 @@ from cosmos_framework.data.generator.sequence_packing.runtime import (
     from_mode_splits,
     get_all_seq,
     get_all_seq_padded,
+    get_causal_self_attention_offsets,
     get_causal_seq,
     get_causal_seq_padded,
     get_full_only_seq,
@@ -132,19 +133,22 @@ from cosmos_framework.data.generator.sequence_packing.runtime import (
 )
 
 
-def _use_varlen(sample_offsets: torch.Tensor) -> bool:
+def _use_varlen(sample_offsets: torch.Tensor, *, has_caption_offsets: bool) -> bool:
     """Whether a pass over this pack needs the varlen (sequence-packed) attention API.
 
     True means the caller passes the ``cumulative_seqlen_*``/``max_seqlen_*`` metadata to
     :func:`attention`; False means it calls the dense API instead, with no ranges at all.
 
-    With a single sample there is exactly one sequence in the pack, so that metadata is
-    redundant and the dense API computes the same thing. This remains correct in the presence
-    of trailing padding: for causal self-attention the mask never lets a real query attend to
-    padded keys (padding is appended after all real tokens), the full path keeps the unpadded
-    ``get_all_seq`` KV whenever this returns False (the dense API has no ranges to fence
-    padding off with), and any padded query rows are independent of the real rows and simply
-    discarded downstream.
+    With a single sample and no per-caption boundaries there is exactly one sequence in the
+    pack, so that metadata is redundant and the dense API computes the same thing. Per-caption
+    boundaries require the varlen API even for a single sample so causal self-attention keeps
+    the captions independent. The same varlen decision is shared by both attention passes.
+
+    The single-sample dense shortcut remains correct in the presence of trailing padding: for
+    causal self-attention the mask never lets a real query attend to padded keys (padding is
+    appended after all real tokens), the full path keeps the unpadded ``get_all_seq`` KV
+    whenever this returns False (the dense API has no ranges to fence padding off with), and
+    any padded query rows are independent of the real rows and simply discarded downstream.
 
     The dense path is gated to forward-only (inference) execution via ``torch.is_grad_enabled``,
     which is False under ``torch.no_grad()``/``torch.inference_mode()`` and True during training.
@@ -164,10 +168,11 @@ def _use_varlen(sample_offsets: torch.Tensor) -> bool:
     Args:
         sample_offsets: the pack's per-sample offsets, shape ``[num_samples + 1]``, whose length
             gives the sample count.
+        has_caption_offsets: whether the causal stream carries per-caption boundaries.
     Returns:
         bool: True to pass varlen metadata to :func:`attention`, False to use the dense API.
     """
-    return torch.is_grad_enabled() or sample_offsets.shape[0] > 2
+    return has_caption_offsets or torch.is_grad_enabled() or sample_offsets.shape[0] > 2
 
 
 def two_way_attention(
@@ -220,6 +225,17 @@ def two_way_attention(
     causal_k, causal_k_offsets, _ = get_causal_seq_padded(packed_key_states)
     causal_v, _, _ = get_causal_seq_padded(packed_value_states)
 
+    # Per-view captions cut the causal stream finer than one document per sample: each caption
+    # is its own, so no caption attends another. One tensor is handed to both sides on purpose --
+    # ``use_dont_care_mask`` below is an identity check, and splitting it into two equal tensors
+    # would silently drop the pass to CausalType.TopLeft. ``causal_k_normalized`` and the
+    # gen->und pass keep the per-sample offsets: the mask, not these boundaries, is what decides
+    # which captions a GEN token reads.
+    caption_offsets = get_causal_self_attention_offsets(packed_query_states)
+    if caption_offsets is not None:
+        causal_q_offsets, max_causal_len = caption_offsets
+        causal_k_offsets = causal_q_offsets
+
     # NOTE: we can only use the don't care causal mask when we know seqlen_Q == seqlen_KV.
     # Since this is a varlen use case, we would need to statically check all Q and KV offsets
     # are the same.
@@ -230,7 +246,7 @@ def two_way_attention(
     use_dont_care_mask = causal_q_offsets is causal_k_offsets
 
     sample_offsets = packed_query_states["sample_offsets"]
-    use_varlen = _use_varlen(sample_offsets)
+    use_varlen = _use_varlen(sample_offsets, has_caption_offsets=caption_offsets is not None)
 
     if use_varlen:
         causal_varlen_kwargs: dict[str, Any] = dict(
@@ -705,6 +721,7 @@ def build_packed_sequence(
     full_seq_alignment: int = 1,
     causal_seq_alignment: int = 1,
     prepared_metadata: SequencePackMetadata | None = None,
+    text_caption_lens: list[list[int]] | None = None,
 ) -> tuple[SequencePack, AttentionMaskType, list | None]:
     """
     Build the model input pack and attention meta for joint attention.
@@ -784,6 +801,7 @@ def build_packed_sequence(
         full_seq_alignment=full_seq_alignment,
         causal_seq_alignment=causal_seq_alignment,
         prepared_metadata=prepared_metadata,
+        text_caption_lens=text_caption_lens,
     )
     # Not needed anymore, can cause recompilations.
     input_pack.pop("split_lens", None)

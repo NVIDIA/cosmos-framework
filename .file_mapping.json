@@ -1,7 +1,7 @@
 {
-  "_source_commit": "aa88627921856c9c83ab8edf42c46e506255d3a6-dirty",
-  "_dest_commit": "fcd1d7eb07ad76dd7f15c61185a2377f15918ac7",
-  "_generated_at": "2026-09-07T05:52:05Z",
+  "_source_commit": "4f04f5a51368651b886aa4f2572ebd8fc1fc3c05-dirty",
+  "_dest_commit": "fa1881878ab9b234583d89319d56c7903be5161d",
+  "_generated_at": "2026-09-09T10:32:31Z",
   "files": {
     "imaginaire/__init__.py": "cosmos_framework/__init__.py",
     "imaginaire/attention/__init__.py": "cosmos_framework/model/attention/__init__.py",
@@ -538,6 +538,7 @@
     "projects/cosmos3/interactive/models/mot/post_saturation/static_compile.py": "cosmos_framework/model/generator/mot/post_saturation/static_compile.py",
     "projects/cosmos3/interactive/models/mot/replicated_io.py": "cosmos_framework/model/generator/mot/replicated_io.py",
     "projects/cosmos3/interactive/models/mot/three_way_attention_test.py": "cosmos_framework/model/generator/mot/three_way_attention_test.py",
+    "projects/cosmos3/interactive/models/multiview_transfer_ar.py": "cosmos_framework/model/generator/multiview_transfer_ar.py",
     "projects/cosmos3/interactive/models/omni_mot_causal_model.py": "cosmos_framework/model/generator/omni_mot_causal_model.py",
     "projects/cosmos3/interactive/models/omni_mot_causal_model_test.py": "cosmos_framework/model/generator/omni_mot_causal_model_test.py",
     "projects/cosmos3/interactive/models/teacher_forcing.py": "cosmos_framework/model/generator/teacher_forcing.py",

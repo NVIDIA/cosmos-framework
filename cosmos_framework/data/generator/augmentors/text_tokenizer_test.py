@@ -29,16 +29,20 @@ def _make_transfer_tokenizer(
     *,
     cfg_dropout_rate: float = 0.0,
     tokenize_separately: bool = True,
+    task: str | None = None,
 ) -> text_tokenizer.TextTokenizerTransformForTransfer:
     monkeypatch.setattr(text_tokenizer, "lazy_instantiate", lambda _config: processor)
+    args: dict[str, object] = {
+        "tokenizer_config": object(),
+        "cfg_dropout_rate": cfg_dropout_rate,
+        "tokenize_separately": tokenize_separately,
+    }
+    if task is not None:
+        args["task"] = task
     return text_tokenizer.TextTokenizerTransformForTransfer(
         input_keys=["ai_caption"],
         output_keys=["text_token_ids", "text_token_lengths"] if tokenize_separately else ["text_token_ids"],
-        args={
-            "tokenizer_config": object(),
-            "cfg_dropout_rate": cfg_dropout_rate,
-            "tokenize_separately": tokenize_separately,
-        },
+        args=args,
     )
 
 
@@ -57,6 +61,19 @@ def test_transfer_tokenizer_tokenizes_each_view_independently(monkeypatch: pytes
     assert [caption for caption, _kwargs in processor.calls] == result["ai_caption"]
     assert all(
         call_kwargs["system_prompt"] == text_tokenizer._SYSTEM_PROMPT_TRANSFER for _, call_kwargs in processor.calls
+    )
+
+
+def test_transfer_tokenizer_accepts_av_multiview_system_prompt(monkeypatch: pytest.MonkeyPatch) -> None:
+    processor = _FakeProcessor()
+    tokenizer = _make_transfer_tokenizer(monkeypatch, processor, task="av_multiview_transfer")
+
+    result = tokenizer({"ai_caption": ["front view", "rear view"], "sample_n_views": 2})
+
+    assert result is not None
+    assert all(
+        call_kwargs["system_prompt"] == text_tokenizer._SYSTEM_PROMPT_AV_MULTIVIEW_TRANSFER
+        for _, call_kwargs in processor.calls
     )
 
 

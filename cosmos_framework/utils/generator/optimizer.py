@@ -706,9 +706,9 @@ class LRSchedulersContainer(Stateful):
                 raise ValueError(
                     f"LRSchedulersContainer.load_state_dict: checkpoint holds a single "
                     f"scheduler's state, but this container has {len(self.schedulers)}. "
-                    "Resume from a checkpoint saved with a matching number of schedulers, "
-                    "or add the scheduler to `checkpoint.keys_not_to_resume` to start "
-                    "scheduler state fresh."
+                    "For same-job resume, use a checkpoint saved with a matching number of schedulers. "
+                    "To start scheduler state fresh instead, create a new run with this checkpoint as "
+                    "`checkpoint.load_path` and add `scheduler` to `checkpoint.keys_not_to_resume`."
                 )
             self.schedulers[0].load_state_dict(copy.deepcopy(state_dict))
             return
@@ -717,9 +717,10 @@ class LRSchedulersContainer(Stateful):
             raise ValueError(
                 f"LRSchedulersContainer.load_state_dict: checkpoint has state for "
                 f"{len(per_scheduler_states)} schedulers, but this container has "
-                f"{len(self.schedulers)}. Resume from a checkpoint with a matching number "
-                "of schedulers, or add the scheduler to `checkpoint.keys_not_to_resume` to "
-                "start scheduler state fresh."
+                f"{len(self.schedulers)}. For same-job resume, use a checkpoint saved with a matching "
+                "number of schedulers. To start scheduler state fresh instead, create a new run with "
+                "this checkpoint as `checkpoint.load_path` and add `scheduler` to "
+                "`checkpoint.keys_not_to_resume`."
             )
         for scheduler, sub_state in zip(self.schedulers, per_scheduler_states):
             # Deepcopy so nested mutable values (lists) are not aliased across

@@ -302,9 +302,9 @@ class CheckpointConfig:
     # Path of model weights to resume the checkpoint from.
     load_path: str = ""
 
-    # The following 3 flags (load_training_state, only_load_scheduler_state, keys_to_skip_loading)
-    # only take effect when the checkpoints are loaded from `load_path`. If loading happens from
-    # the previous checkpoint of the same model, these flags are ignored.
+    # The following flags (load_training_state, only_load_scheduler_state, keys_to_skip_loading,
+    # keys_not_to_resume) only take effect when checkpoints are loaded from `load_path`.
+    # If loading happens from the previous checkpoint of the same model, these flags are ignored.
 
     # Whether to load the training states (optimizer/scheduler/grad-scaler) from the checkpoint path.
     load_training_state: bool = False
@@ -329,7 +329,8 @@ class CheckpointConfig:
     # Print detailed information during checkpoint saving/loading.
     verbose: bool = True
 
-    # Keys not to resume from the checkpoint, choices: ["model", "optim", "scheduler", "trainer", "dataloader"]
+    # Checkpoint components not to resume when warm-starting from `load_path`.
+    # Choices: ["model", "optim", "scheduler", "trainer", "dataloader"]
     keys_not_to_resume: list[str] = []
 
     # Whether to use the local filesystem for broadcasting checkpoint data (used for Tensor Parallel Checkpointer).

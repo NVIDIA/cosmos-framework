@@ -84,6 +84,16 @@ class PackedSequenceBuilder:
     ce_loss_indexes: list[int] = field(default_factory=list)
     ce_loss_weights: list[float] = field(default_factory=list)
 
+    # Caption layout inside each sample's causal split: one entry per sample, holding that
+    # sample's per-caption token counts and the camera view each caption describes. A sample
+    # packing the usual single caption records [split_len] / [-1], the "sample-level caption"
+    # the mask reads as reachable from every view. Per-view captions record one entry per
+    # camera. Consumed by runtime._build_sequence_pack_metadata (which turns the lengths into
+    # the causal stream's varlen boundaries, so no caption attends another) and by
+    # cosmos3_vfm_network.py (which turns the view ids into flex_attention.CaptionMaskItem).
+    text_caption_lens: list[list[int]] = field(default_factory=list)
+    text_caption_view_ids: list[list[int]] = field(default_factory=list)
+
     # Build-time mRoPE tracking (used during packing, not after finalize).
     # position_ids accumulates (3, N) tensors and finalize() produces a
     # (3, total_seq_len) tensor.
@@ -248,6 +258,101 @@ class PackedSequenceBuilder:
 
         self.attn_modes.append("causal")
         self.split_lens.append(split_len)
+        self.text_caption_lens.append([split_len])
+        self.text_caption_view_ids.append([-1])
+
+        return split_len
+
+    def pack_text_tokens_per_view(
+        self,
+        text_ids_per_view: list[list[int]],
+        view_ids: list[int],
+        special_tokens: dict[str, int],
+        has_generation: bool,
+        use_float_positions: bool = False,
+    ) -> int:
+        """Pack one caption per camera view into the sample's single causal split.
+
+        The per-view caption layout (``separate_view_text_tokenization``). Each caption gets
+        the same ``BOS + ids + EOS + start-of-generation`` framing and the same CE-loss
+        bookkeeping :meth:`pack_text_tokens` gives the single sample-level caption, so a
+        caption is structurally what it always was; what changes is that a sample owns several
+        of them, and that each is its own document for the causal attention -- their
+        boundaries ride out on ``text_caption_lens``, which
+        ``runtime._build_sequence_pack_metadata`` turns into the causal stream's varlen
+        offsets. No caption can attend another.
+
+        Only **one** ``attn_modes`` / ``split_lens`` entry is appended, covering all of them.
+        Emitting one causal split per caption would give the same varlen boundaries for free,
+        but the causal and full streams have to keep equal split counts: ``runtime``'s
+        ``pad_segment_supported`` and ``flex_attention.build_multiview_flex_metadata`` both
+        pair them one for one, per sample.
+
+        Every caption starts from the same mRoPE temporal offset (the cursor is rewound
+        between them, the way ``share_vision_temporal_positions`` rewinds across vision
+        items) and the cursor advances once, past the longest. Captions are alternatives
+        describing one instant of one rig rather than a sequence, so laying them end to end
+        on the temporal axis would push the generation stream further along it with every
+        extra camera and make a sample's vision positions depend on its view count.
+
+        Args:
+            text_ids_per_view: One caption's token IDs per camera view, in view order.
+            view_ids: The camera view each caption describes, parallel to
+                ``text_ids_per_view``.
+            special_tokens: Dictionary of special token IDs.
+            has_generation: Whether there's media/action after the text.
+            use_float_positions: If True, generate float position IDs for 3D mRoPE.
+
+        Returns:
+            Total text sample length across every caption, i.e. the causal split's length.
+        """
+        if len(text_ids_per_view) != len(view_ids):
+            raise ValueError(
+                f"Per-view captions and their view ids must correspond: got {len(text_ids_per_view)} "
+                f"captions and {len(view_ids)} view ids."
+            )
+        if not text_ids_per_view:
+            raise ValueError("Per-view text packing needs at least one caption.")
+
+        caption_start_offset = self._mrope_temporal_offset
+        furthest_offset = self._mrope_temporal_offset
+        caption_lens: list[int] = []
+        for text_ids in text_ids_per_view:
+            # Rewind so every caption is laid on the same temporal grid; see the docstring.
+            self._mrope_temporal_offset = caption_start_offset
+            if "bos_token_id" in special_tokens:
+                shifted_text_ids = [special_tokens["bos_token_id"]] + text_ids
+            else:
+                shifted_text_ids = text_ids
+
+            span_token_ids = shifted_text_ids + [special_tokens["eos_token_id"]]
+            if has_generation:
+                span_token_ids.append(special_tokens["start_of_generation"])
+            caption_len = len(span_token_ids)
+
+            position_ids, self._mrope_temporal_offset = get_3d_mrope_ids_text_tokens(
+                num_tokens=caption_len,
+                temporal_offset=self._mrope_temporal_offset,
+                use_float_positions=use_float_positions,
+            )  # position_ids: [3,caption_len]
+            furthest_offset = max(furthest_offset, self._mrope_temporal_offset)
+
+            span_start, _ = self.append_text_span(span_token_ids, position_ids)
+
+            # Same per-caption CE supervision the single-caption path applies.
+            self.ce_loss_indexes.extend(range(span_start, span_start + len(shifted_text_ids)))
+            self.ce_loss_weights.extend([1.0] * len(shifted_text_ids))
+            self.label_ids.extend(text_ids[1:] + [special_tokens["eos_token_id"]])
+            caption_lens.append(caption_len)
+
+        # The generation stream follows the longest caption, not the last one packed.
+        self._mrope_temporal_offset = furthest_offset
+
+        split_len = sum(caption_lens)
+        self.attn_modes.append("causal")
+        self.split_lens.append(split_len)
+        self.text_caption_lens.append(caption_lens)
+        self.text_caption_view_ids.append(list(view_ids))
 
         return split_len
 
@@ -1009,6 +1114,8 @@ class PackedSequenceBuilder:
             num_action_tokens_per_supertoken=self.num_action_tokens_per_supertoken,
             # Multi-control transfer
             vision_item_split_lens=list(self.vision_item_split_lens),
+            text_caption_lens=[list(lens) for lens in self.text_caption_lens],
+            text_caption_view_ids=[list(view_ids) for view_ids in self.text_caption_view_ids],
             control_weights=gen_data_clean.control_weights,
             # Vision item layout (multi-item samples, multiview cameras)
             num_vision_items_per_sample=gen_data_clean.num_vision_items_per_sample,
@@ -1109,6 +1216,13 @@ class PackedSequence:
     # None for non-transfer or standard single-control samples.
     control_weights: list[list[float]] | None = None
 
+    # Caption layout inside each sample's causal split; see PackedSequenceBuilder for what the
+    # two lists hold. Every sample with text records an entry, so a batch packing the usual
+    # single caption per sample carries [[split_len], ...] / [[-1], ...] and behaves exactly
+    # as it did before per-view captions existed.
+    text_caption_lens: list[list[int]] = field(default_factory=list)
+    text_caption_view_ids: list[list[int]] = field(default_factory=list)
+
     # Vision item layout, carried over from GenerationDataClean so the network can
     # reconstruct the per-item geometry of the packed GEN stream:
     # num_vision_items_per_sample groups the flattened vision items by sample (None
@@ -1170,6 +1284,7 @@ class PackedSequence:
             attn_modes=self.attn_modes,
             packed_und_token_indexes=self.text_indexes,
             device=self.text_indexes.device,
+            text_caption_lens=self.text_caption_lens,
         )
 
     def get_sequence_pack_metadata(self) -> SequencePackMetadata | None:
@@ -1189,6 +1304,15 @@ class SequencePlan:
     Attributes:
         has_text: Whether text/caption tokens are present for this sample.
             Used for text-conditioned generation (e.g., text-to-image/video).
+        text_view_ids: With one caption per camera view (the layout the multiview dataset
+            emits under ``separate_view_text_tokenization``), the camera view each of this
+            sample's captions describes, in the order the captions appear in
+            ``input_text_indexes``. ``None`` (the default) is the single sample-level caption
+            every other batch packs. The list length is the sample's caption count, so the
+            packer consumes that many entries rather than one, and the mask uses the view ids
+            to keep each camera to its own caption -- see
+            ``flex_attention.CaptionMaskItem``. All captions land in the one causal split the
+            sample already owns; only their varlen boundaries differ.
         has_vision: Whether vision input (image or video latents) is present.
             Defaults to False.
         condition_frame_indexes_vision: Indexes of latent vision frames that are clean/conditioning.
@@ -1224,6 +1348,7 @@ class SequencePlan:
 
     # -- understanding (text conditioning) --
     has_text: bool
+    text_view_ids: list[int] | None = None
 
     # -- vision modality --
     has_vision: bool = False
@@ -1256,6 +1381,7 @@ class SequencePlan:
     def as_dict(self) -> dict:
         return {
             "has_text": self.has_text,
+            "text_view_ids": self.text_view_ids,
             "has_vision": self.has_vision,
             "has_lidar": self.has_lidar,
             "has_action": self.has_action,

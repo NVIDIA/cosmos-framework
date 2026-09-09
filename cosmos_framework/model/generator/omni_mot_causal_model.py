@@ -43,12 +43,7 @@ from cosmos_framework.model.generator.mot.causal_cosmos3_vfm_network import (
     InteractiveCosmos3VFMNetwork,
     build_interactive_multiview_mask_items,
 )
-from cosmos_framework.model.generator.mot.causal_flex_attention import (
-    MultiviewTransferARCurrentRole,
-    MultiviewTransferARMemoryLayout,
-    build_multiview_transfer_ar_memory_layout,
-    build_teacher_forcing_clean_target_token_indexes,
-)
+from cosmos_framework.model.generator.mot.causal_flex_attention import build_teacher_forcing_clean_target_token_indexes
 from cosmos_framework.model.generator.mot.post_saturation.installer import install_ar_post_saturation_mode
 from cosmos_framework.model.generator.mot.post_saturation.runtime import (
     is_ar_post_saturation_cuda_graph_frame,
@@ -60,9 +55,9 @@ from cosmos_framework.model.generator.mot.post_saturation.runtime import (
 from cosmos_framework.model.generator.mot.post_saturation.static_compile import (
     validate_ar_static_und_cache_lengths,
 )
+from cosmos_framework.model.generator.multiview_transfer_ar import MultiviewTransferARBackend
 from cosmos_framework.model.generator.teacher_forcing import (
     make_teacher_forcing_clean_pack,
-    mark_modality_as_clean_condition,
 )
 from cosmos_framework.model.generator.utils.kv_cache import (
     ARMemoryState,
@@ -429,7 +424,12 @@ def _resolve_teacher_forcing_replay_policy(value: Any) -> TeacherForcingReplayPo
     if OmegaConf.is_config(value):
         value = OmegaConf.to_object(value)
     if isinstance(value, dict):
-        value = TeacherForcingReplayPolicyConfig(**value)
+        # Drop lazy-config serializer metadata before construction. A config that has been
+        # round-tripped through an exported checkpoint carries a "_type" marker alongside
+        # the real fields, and attrs rejects it as an unexpected keyword. In-process
+        # construction never sees the marker, so this only failed when loading from an
+        # export -- which is every public run of a causal model.
+        value = TeacherForcingReplayPolicyConfig(**{k: v for k, v in value.items() if not k.startswith("_")})
     if not isinstance(value, TeacherForcingReplayPolicyConfig):
         raise TypeError(
             "teacher_forcing_replay_policy must resolve to a TeacherForcingReplayPolicyConfig, "
@@ -2079,124 +2079,9 @@ class OmniMoTCausalModel(OmniMoTModel):
                 else:
                     yield payload
 
-    def _build_multiview_transfer_ar_pack(
-        self,
-        *,
-        vision_latent: torch.Tensor,  # [1,C,V*chunk_len,H,W]
-        text_tokens: list[int],
-        fps_vision: list[float],
-        num_views: int,
-        frames_per_view: int,
-        chunk_start: int,
-        memory_layout: MultiviewTransferARMemoryLayout,
-        current_role: MultiviewTransferARCurrentRole,
-    ) -> PackedSequence:
-        """Pack one explicitly typed multiview AR chunk at its training mRoPE positions.
-
-        Finalized target history uses the same clean-condition embedding semantics as
-        teacher-forcing replay. ``current_role`` independently preserves its explicit
-        FlexAttention role after the noised-token metadata is cleared.
-        """
-        if vision_latent.shape[2] % num_views != 0:
-            raise ValueError(
-                f"Multiview transfer chunk latent_t={vision_latent.shape[2]} "
-                f"must be divisible by num_views={num_views}."
-            )
-        chunk_len = vision_latent.shape[2] // num_views
-        temporal_positions = torch.cat(
-            [
-                torch.arange(
-                    view_idx * frames_per_view + chunk_start,
-                    view_idx * frames_per_view + chunk_start + chunk_len,
-                    dtype=torch.float32,
-                )
-                for view_idx in range(num_views)
-            ]
-        )  # [V*chunk_len]
-        pack = pack_input_sequence_autoregressive(
-            vision_latent=vision_latent,
-            action_latent=None,
-            text_tokens=text_tokens,
-            timestep=0.0,
-            fps_vision=fps_vision,
-            fps_action=None,
-            special_tokens=self.llm_special_tokens,
-            latent_patch_size=self.config.diffusion_expert_config.patch_spatial,
-            condition_frame_indexes_vision=[],
-            frame_idx=0,
-            temporal_compression_factor=self.tokenizer_vision_gen.temporal_compression_factor or 4,
-            video_temporal_causal=False,
-            action_dim=self.config.max_action_dim,
-            enable_fps_modulation=self.config.diffusion_expert_config.enable_fps_modulation,
-            base_fps=float(self.config.diffusion_expert_config.base_fps),
-            unified_3d_mrope_temporal_modality_margin=(
-                self.config.diffusion_expert_config.unified_3d_mrope_temporal_modality_margin
-            ),
-            vision_temporal_positions=temporal_positions,
-            num_views=num_views,
-        )
-        pack.to_cuda()
-        pack.multiview_transfer_ar_metadata = {
-            "current_frame_start": chunk_start,
-            "frames_per_view": frames_per_view,
-            "frames_per_chunk": self.config.teacher_forcing_frames_per_chunk,
-            "current_role": current_role,
-            "memory_layout": memory_layout,
-        }
-        if current_role == "clean_target":
-            if pack.vision is None:
-                raise ValueError("Multiview transfer clean-history packing requires vision tokens.")
-            mark_modality_as_clean_condition(pack.vision)
-        self._cast_generated_tokens_to_precision(pack)
-        return pack
-
-    def _capture_multiview_transfer_ar_memory(
-        self,
-        *,
-        pack: PackedSequence,
-        cache: list[tuple[torch.Tensor, torch.Tensor] | None],
-        memory_seq_len: int,
-        write_indexes: torch.Tensor,
-        write_offset: int,
-        cache_write_indexes: torch.Tensor | None = None,
-    ) -> None:
-        """Run one clean pass and commit selected GEN K/V into the multiview transfer cache."""
-        memory = FlexARMemoryState(
-            num_layers=self.net.num_hidden_layers,
-            memory_seq_len=memory_seq_len,
-            cache=cache,
-            write_indexes=write_indexes,
-            write_offset=write_offset,
-            cache_write_indexes=cache_write_indexes,
-        )
-        self.denoise(data_batch_packed=pack, memory=memory)
-
-    @staticmethod
-    def _merge_multiview_transfer_ar_memory(
-        *,
-        destination: list[tuple[torch.Tensor, torch.Tensor] | None],
-        source: list[tuple[torch.Tensor, torch.Tensor] | None],
-        cache_indexes: torch.Tensor,
-    ) -> None:
-        """Copy selected fixed-slot K/V from a no-memory clean pass."""
-        if len(destination) != len(source):
-            raise ValueError(f"Expected matching cache layers, got {len(destination)} and {len(source)}.")
-        for layer_idx, source_kv in enumerate(source):
-            if source_kv is None:
-                raise ValueError(f"Clean replay did not capture K/V for layer {layer_idx}.")
-            source_k, source_v = source_kv
-            destination_kv = destination[layer_idx]
-            if destination_kv is None:
-                destination_k = torch.zeros_like(source_k)  # [1,S_memory,H_kv,D]
-                destination_v = torch.zeros_like(source_v)  # [1,S_memory,H_kv,D]
-                destination[layer_idx] = (destination_k, destination_v)
-            else:
-                destination_k, destination_v = destination_kv
-            layer_cache_indexes = cache_indexes.to(device=source_k.device, dtype=torch.long)  # [S_write]
-            selected_k = torch.index_select(source_k, 1, layer_cache_indexes)  # [1,S_write,H_kv,D]
-            selected_v = torch.index_select(source_v, 1, layer_cache_indexes)  # [1,S_write,H_kv,D]
-            destination_k.index_copy_(1, layer_cache_indexes, selected_k)  # [1,S_memory,H_kv,D]
-            destination_v.index_copy_(1, layer_cache_indexes, selected_v)  # [1,S_memory,H_kv,D]
+    def _make_multiview_transfer_ar_backend(self) -> MultiviewTransferARBackend:
+        """Return the shared backend used by inference and distillation rollouts."""
+        return MultiviewTransferARBackend(self)
 
     def _generate_multiview_transfer_ar_chunk(
         self,
@@ -2348,31 +2233,19 @@ class OmniMoTCausalModel(OmniMoTModel):
             seed = _broadcast_seed([seed], self.parallel_dims.cfgp_mesh.get_group(), self.parallel_dims.cfgp_rank)[0]
         cfg_active = guidance != 1.0 or cfgp_enabled
         fps_vision = gen_data_clean.fps_vision.tolist() if gen_data_clean.fps_vision is not None else [24.0]
+        backend = self._make_multiview_transfer_ar_backend()
 
         def build_prefill_pack(
             text_tokens: list[int],
             *,
             materialized_target_frame_ranges: Sequence[tuple[int, int]] | None = None,
         ) -> PackedSequence:
-            pack = self._pack_input_sequence(
-                sequence_plans,
-                [text_tokens],
-                gen_data_clean,
-                torch.zeros(1, dtype=torch.float32),  # [1]
+            return backend.build_prefill_pack(
+                sequence_plans=sequence_plans,
+                gen_data_clean=gen_data_clean,
+                text_tokens=text_tokens,
+                materialized_target_frame_ranges=materialized_target_frame_ranges,
             )
-            if pack.vision is None:
-                raise ValueError("Multiview transfer AR prefill requires packed vision data.")
-            original_masks = [mask.clone() for mask in pack.vision.condition_mask]  # list[[latent_t]]
-            pack.teacher_forcing_pass = "clean"
-            pack.teacher_forcing_original_condition_masks_vision = original_masks
-            if materialized_target_frame_ranges is not None:
-                # Keep the full two-item geometry so control and target-condition
-                # queries interact in one forward, while the replay mask hides
-                # ungenerated target suffix values from every real query.
-                pack.teacher_forcing_materialized_target_frame_ranges = tuple(materialized_target_frame_ranges)
-            pack.to_cuda()
-            self._cast_generated_tokens_to_precision(pack)
-            return pack
 
         cond_prefill = build_prefill_pack(
             cond_text_tokens[0],
@@ -2380,14 +2253,6 @@ class OmniMoTCausalModel(OmniMoTModel):
         )
         assert cond_prefill.vision is not None
         target_condition_mask = cond_prefill.vision.condition_mask[1]  # [V*T,1,1]
-        flex_backend = getattr(self.net, "flex_backend", None)
-        if flex_backend is None:
-            raise ValueError("Multiview transfer AR requires an initialized FlexAttention backend.")
-        control_shape, target_shape = cond_prefill.vision.token_shapes
-        total_memory_tokens = control_shape[0] * control_shape[1] * control_shape[2]
-        total_memory_tokens += target_shape[0] * target_shape[1] * target_shape[2]
-        kv_alignment = flex_backend.block_size[1]
-        memory_seq_len = ((total_memory_tokens + kv_alignment - 1) // kv_alignment) * kv_alignment
         condition_count = _multiview_conditioned_prefix_length(
             target_condition_mask,
             num_views=num_views,
@@ -2395,55 +2260,18 @@ class OmniMoTCausalModel(OmniMoTModel):
         )
         generated_target = target_latent.to(**self.tensor_kwargs).clone()  # [1,C,V*T,H,W]
         gen_data_clean.x0_tokens_vision[1] = generated_target
-        history_ranges: list[tuple[int, int]] = []
-        control_ranges: list[tuple[int, int]] = []
         materialized_condition_count = min(condition_count, output_frames)
-        target_condition_ranges = [(0, materialized_condition_count)] if materialized_condition_count else []
-        num_layers = self.net.num_hidden_layers
-        cond_cache: list[tuple[torch.Tensor, torch.Tensor] | None] = [None] * num_layers
-        uncond_cache: list[tuple[torch.Tensor, torch.Tensor] | None] | None = (
-            [None] * num_layers if cfg_active and not cfgp_enabled else None
+        session = backend.create_session(
+            prefill_pack=cond_prefill,
+            num_views=num_views,
+            frames_per_view=frames_per_view,
+            condition_count=materialized_condition_count,
+            cfg_active=cfg_active,
+            cfgp_enabled=cfgp_enabled,
         )
-
-        def build_memory_layout() -> MultiviewTransferARMemoryLayout:
-            return build_multiview_transfer_ar_memory_layout(
-                token_shapes=cond_prefill.vision.token_shapes,
-                target_condition_mask=target_condition_mask,
-                num_views=num_views,
-                frames_per_chunk=self.config.teacher_forcing_frames_per_chunk,
-                control_frame_ranges=control_ranges,
-                target_condition_frame_ranges=target_condition_ranges,
-                history_frame_ranges=history_ranges,
-                memory_seq_len=memory_seq_len,
-                device=target_condition_mask.device,
-            )
-
-        def capture_clean_prefill(
-            *,
-            pack: PackedSequence,
-            destination: list[tuple[torch.Tensor, torch.Tensor] | None],
-            memory_layout: MultiviewTransferARMemoryLayout,
-        ) -> None:
-            """Capture a full clean pass without reading partially-built AR memory."""
-            scratch_cache: list[tuple[torch.Tensor, torch.Tensor] | None] = [None] * num_layers
-            self._capture_multiview_transfer_ar_memory(
-                pack=pack,
-                cache=scratch_cache,
-                memory_seq_len=memory_seq_len,
-                write_indexes=memory_layout.prefill_source_token_indexes,
-                write_offset=0,
-                cache_write_indexes=memory_layout.prefill_cache_token_indexes,
-            )
-            self._merge_multiview_transfer_ar_memory(
-                destination=destination,
-                source=scratch_cache,
-                cache_indexes=memory_layout.prefill_cache_token_indexes,
-            )
 
         controls_read_rgb = self._get_teacher_forcing_replay_policy().controls_read_strict_past_clean_rgb
         if not controls_read_rgb:
-            control_ranges.append((0, frames_per_view))
-            initial_memory_layout = build_memory_layout()
             uncond_prefill = None
             if cfg_active:
                 assert uncond_text_tokens is not None
@@ -2451,27 +2279,11 @@ class OmniMoTCausalModel(OmniMoTModel):
                     uncond_text_tokens[0],
                     materialized_target_frame_ranges=[],
                 )
-            if cfgp_enabled:
-                local_prefill = cond_prefill if self.parallel_dims.cfgp_rank == 0 else uncond_prefill
-                assert local_prefill is not None
-                capture_clean_prefill(
-                    pack=local_prefill,
-                    destination=cond_cache,
-                    memory_layout=initial_memory_layout,
-                )
-            else:
-                capture_clean_prefill(
-                    pack=cond_prefill,
-                    destination=cond_cache,
-                    memory_layout=initial_memory_layout,
-                )
-                if uncond_cache is not None:
-                    assert uncond_prefill is not None
-                    capture_clean_prefill(
-                        pack=uncond_prefill,
-                        destination=uncond_cache,
-                        memory_layout=initial_memory_layout,
-                    )
+            backend.capture_control_cache(
+                session=session,
+                conditional_pack=cond_prefill,
+                unconditional_pack=uncond_prefill,
+            )
 
         conditioned_prefix = _submit_multiview_conditioned_prefix(
             generated_target,
@@ -2489,43 +2301,14 @@ class OmniMoTCausalModel(OmniMoTModel):
         ):
             chunk_len = chunk_end - chunk_start
             if controls_read_rgb:
-                control_ranges[:] = [(0, frames_per_view)]
-                refreshed_memory_layout = build_memory_layout()
-                refreshed_cond_prefill = build_prefill_pack(
-                    cond_text_tokens[0],
-                    materialized_target_frame_ranges=history_ranges,
+                backend.prime_control_cache(
+                    session=session,
+                    sequence_plans=sequence_plans,
+                    gen_data_clean=gen_data_clean,
+                    conditional_text_tokens=cond_text_tokens[0],
+                    unconditional_text_tokens=uncond_text_tokens[0] if uncond_text_tokens is not None else None,
                 )
-                refreshed_uncond_prefill = None
-                if cfg_active:
-                    assert uncond_text_tokens is not None
-                    refreshed_uncond_prefill = build_prefill_pack(
-                        uncond_text_tokens[0],
-                        materialized_target_frame_ranges=history_ranges,
-                    )
-                if cfgp_enabled:
-                    local_prefill = (
-                        refreshed_cond_prefill if self.parallel_dims.cfgp_rank == 0 else refreshed_uncond_prefill
-                    )
-                    assert local_prefill is not None
-                    capture_clean_prefill(
-                        pack=local_prefill,
-                        destination=cond_cache,
-                        memory_layout=refreshed_memory_layout,
-                    )
-                else:
-                    capture_clean_prefill(
-                        pack=refreshed_cond_prefill,
-                        destination=cond_cache,
-                        memory_layout=refreshed_memory_layout,
-                    )
-                    if uncond_cache is not None:
-                        assert refreshed_uncond_prefill is not None
-                        capture_clean_prefill(
-                            pack=refreshed_uncond_prefill,
-                            destination=uncond_cache,
-                            memory_layout=refreshed_memory_layout,
-                        )
-            memory_layout = build_memory_layout()
+            memory_layout = backend.build_memory_layout(session)
             noise_generator = torch.Generator(device=target_latent.device).manual_seed(seed + chunk_start)
             chunk_noise = torch.empty(
                 (
@@ -2538,7 +2321,7 @@ class OmniMoTCausalModel(OmniMoTModel):
                 device=target_latent.device,
                 dtype=self.tensor_kwargs["dtype"],
             ).normal_(generator=noise_generator)  # [1,C,V*chunk_len,H,W]
-            cond_pack = self._build_multiview_transfer_ar_pack(
+            cond_pack = backend.build_current_pack(
                 vision_latent=chunk_noise,
                 text_tokens=cond_text_tokens[0],
                 fps_vision=fps_vision,
@@ -2549,7 +2332,7 @@ class OmniMoTCausalModel(OmniMoTModel):
                 current_role="current_target",
             )
             uncond_pack = (
-                self._build_multiview_transfer_ar_pack(
+                backend.build_current_pack(
                     vision_latent=chunk_noise,
                     text_tokens=uncond_text_tokens[0],
                     fps_vision=fps_vision,
@@ -2565,8 +2348,8 @@ class OmniMoTCausalModel(OmniMoTModel):
             denoised_chunk = self._generate_multiview_transfer_ar_chunk(
                 cond_pack=cond_pack,
                 uncond_pack=uncond_pack,
-                cond_cache=cond_cache,
-                uncond_cache=uncond_cache,
+                cond_cache=session.conditional_cache,
+                uncond_cache=session.unconditional_cache,
                 curr_vision_latent=chunk_noise,
                 guidance=guidance,
                 num_steps=num_steps,
@@ -2577,81 +2360,29 @@ class OmniMoTCausalModel(OmniMoTModel):
                 normalize_cfg=normalize_cfg,
                 sampler_mode=sampler_mode,
                 distilled_num_steps=distilled_num_steps,
-                memory_seq_len=memory_seq_len,
+                memory_seq_len=session.memory_seq_len,
             )
-            for view_idx in range(num_views):
-                source_start = view_idx * chunk_len
-                target_start = view_idx * frames_per_view + chunk_start
-                generated_target[:, :, target_start : target_start + chunk_len].copy_(
-                    denoised_chunk[:, :, source_start : source_start + chunk_len]
-                )  # [1,C,chunk_len,H,W]
+            backend.scatter_chunk(
+                generated_target,
+                denoised_chunk,
+                num_views=num_views,
+                frames_per_view=frames_per_view,
+                chunk_start=chunk_start,
+                chunk_end=chunk_end,
+            )
             if on_clean_vision_chunk is not None:
                 on_clean_vision_chunk(denoised_chunk)
 
             if chunk_end < output_frames:
-                clean_cond_pack = self._build_multiview_transfer_ar_pack(
-                    vision_latent=denoised_chunk.to(**self.tensor_kwargs),
-                    text_tokens=cond_text_tokens[0],
-                    fps_vision=fps_vision,
-                    num_views=num_views,
-                    frames_per_view=frames_per_view,
+                backend.commit_clean_chunk(
+                    session=session,
+                    denoised_chunk=denoised_chunk.to(**self.tensor_kwargs),  # [1,C,V*chunk_len,H,W]
                     chunk_start=chunk_start,
-                    memory_layout=memory_layout,
-                    current_role="clean_target",
+                    chunk_end=chunk_end,
+                    conditional_text_tokens=cond_text_tokens[0],
+                    unconditional_text_tokens=uncond_text_tokens[0] if uncond_text_tokens is not None else None,
+                    fps_vision=fps_vision,
                 )
-                clean_uncond_pack = (
-                    self._build_multiview_transfer_ar_pack(
-                        vision_latent=denoised_chunk.to(**self.tensor_kwargs),
-                        text_tokens=uncond_text_tokens[0],
-                        fps_vision=fps_vision,
-                        num_views=num_views,
-                        frames_per_view=frames_per_view,
-                        chunk_start=chunk_start,
-                        memory_layout=memory_layout,
-                        current_role="clean_target",
-                    )
-                    if cfg_active
-                    else None
-                )
-                spatial_tokens = target_shape[1] * target_shape[2]
-                chunk_token_count = num_views * chunk_len * spatial_tokens
-                write_indexes = torch.arange(
-                    chunk_token_count, device=target_condition_mask.device, dtype=torch.long
-                )  # [chunk_tokens]
-                cache_write_indexes = memory_layout.target_cache_token_indexes(
-                    (chunk_start, chunk_end)
-                )  # [chunk_tokens]
-                if cfgp_enabled:
-                    local_clean_pack = clean_cond_pack if self.parallel_dims.cfgp_rank == 0 else clean_uncond_pack
-                    assert local_clean_pack is not None
-                    self._capture_multiview_transfer_ar_memory(
-                        pack=local_clean_pack,
-                        cache=cond_cache,
-                        memory_seq_len=memory_seq_len,
-                        write_indexes=write_indexes,
-                        write_offset=0,
-                        cache_write_indexes=cache_write_indexes,
-                    )
-                else:
-                    self._capture_multiview_transfer_ar_memory(
-                        pack=clean_cond_pack,
-                        cache=cond_cache,
-                        memory_seq_len=memory_seq_len,
-                        write_indexes=write_indexes,
-                        write_offset=0,
-                        cache_write_indexes=cache_write_indexes,
-                    )
-                    if uncond_cache is not None:
-                        assert clean_uncond_pack is not None
-                        self._capture_multiview_transfer_ar_memory(
-                            pack=clean_uncond_pack,
-                            cache=uncond_cache,
-                            memory_seq_len=memory_seq_len,
-                            write_indexes=write_indexes,
-                            write_offset=0,
-                            cache_write_indexes=cache_write_indexes,
-                        )
-                history_ranges.append((chunk_start, chunk_end))
 
             # Expose progress after the chunk is ready for future AR steps. Each
             # event represents one latent time step across every synchronized view.

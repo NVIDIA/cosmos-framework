@@ -26,8 +26,9 @@ from cosmos_framework.model.generator.mot.context_parallel_utils import (
     get_context_parallel_sharded_sequence,
 )
 from cosmos_framework.model.generator.mot.flex_attention import (
+    CaptionMaskItem,
     FlexBackend,
-    MaskItem,
+    SensorMaskItem,
     build_multiview_block_mask,
     resolve_flex_backend,
 )
@@ -1281,6 +1282,7 @@ class Cosmos3VFMNetwork(PreTrainedModel):
             full_seq_alignment=self.flex_backend.full_seq_alignment if self.flex_backend else 1,
             causal_seq_alignment=self.flex_backend.causal_seq_alignment if self.flex_backend else 1,
             prepared_metadata=prepared_sequence_pack_metadata,
+            text_caption_lens=packed_seq.text_caption_lens,
         )
 
         # Non-None exactly when use_multiview_flex_attention is on, per the resolution in __init__.
@@ -1297,7 +1299,20 @@ class Cosmos3VFMNetwork(PreTrainedModel):
                 )
             if packed_seq.vision is None and packed_seq.lidar is None:
                 raise ValueError("Multiview FlexAttention needs a vision or LiDAR generation stream.")
-            mask_items = _multiview_mask_items(packed_seq)
+            sensor_mask_items = _multiview_sensor_mask_items(packed_seq)
+            caption_mask_items = _multiview_caption_mask_items(packed_seq)
+            if caption_mask_items is not None and input_pack.get("_caption_seq_offsets") is None:
+                # The mask narrows which captions a GEN token reads; the pack's caption offsets
+                # are what keep the captions from attending each other. A pack carrying the
+                # first without the second would train per-view captions that all see one
+                # another, with nothing else to show for it -- so refuse rather than mask half
+                # the layout. Reached only if the pack's metadata was built without its caption
+                # layout (PackedSequence.prepare_sequence_pack_metadata passes it).
+                raise ValueError(
+                    "This pack carries per-view captions but its sequence-pack metadata has no "
+                    "caption boundaries, so the captions would attend one another. Rebuild the "
+                    "metadata via PackedSequence.prepare_sequence_pack_metadata."
+                )
             full_only_seq, full_q_offsets = get_full_only_seq(input_pack)
             causal_seq, causal_offsets = get_causal_seq(input_pack)
             # The mask is built here, outside the compiled and activation-checkpointed
@@ -1311,7 +1326,8 @@ class Cosmos3VFMNetwork(PreTrainedModel):
             attention_meta.flex_block_mask = build_multiview_block_mask(
                 seq_len=full_only_seq.shape[0],
                 full_q_offsets=full_q_offsets,
-                items_per_sample=mask_items,
+                sensor_mask_items=sensor_mask_items,
+                caption_mask_items=caption_mask_items,
                 device=full_only_seq.device,
                 block_size=self.flex_backend.block_size,
                 num_und=causal_seq.shape[0],
@@ -1414,6 +1430,20 @@ def _annotate_multi_control_ranges(attention_meta: SplitInfo, packed_seq: Packed
     if not has_multiple_controls:
         return
 
+    # Same hazard as the flex mask above, for the caption boundaries. Setting the ranges routes
+    # the pack to multi_control_two_way_attention, which reads the per-sample causal offsets
+    # (``get_causal_seq``) and never the per-caption ones, so every caption would attend every
+    # other -- exactly what per-view captions exist to prevent, and it would raise nothing and
+    # show no wrong-looking loss. Refuse here, where the routing is decided, rather than plumb
+    # caption boundaries through a path no per-view experiment uses yet.
+    if _multiview_caption_mask_items(packed_seq) is not None:
+        raise ValueError(
+            "This pack carries per-view captions and multiple control streams. Multi-control "
+            "attention keys each caption against the whole causal split, so the captions would "
+            "attend one another. Use a single control stream per sample, or turn off "
+            "separate_view_text_tokenization."
+        )
+
     # For multi-control, each sample must have N controls + 1 noisy item
     # (items 0..N-2 are controls, item N-1 is the noisy target).
     # Only batch_size=1 is supported; assert to catch misuse early.
@@ -1443,7 +1473,37 @@ def _annotate_multi_control_ranges(attention_meta: SplitInfo, packed_seq: Packed
     attention_meta.control_weights = weights
 
 
-def _multiview_mask_items(packed_seq: PackedSequence) -> list[list[MaskItem]]:
+def _multiview_caption_mask_items(packed_seq: PackedSequence) -> list[list[CaptionMaskItem]] | None:
+    """Describe each sample's captions to the multiview mask, or ``None`` for the usual layout.
+
+    ``None`` whenever every sample packs a single caption, which is what a batch without
+    ``separate_view_text_tokenization`` packs: the mask then labels every UND token as a
+    sample-level caption and the gen->und pass stays unrestricted, exactly as before per-view
+    captions existed.
+
+    The two lists the packer records run in step by construction -- ``pack_text_tokens_per_view``
+    appends to both -- so this pairs them positionally and lets the mask builder check the
+    captions against the sample's actual camera views.
+    """
+    caption_lens = packed_seq.text_caption_lens
+    caption_view_ids = packed_seq.text_caption_view_ids
+    if not caption_lens or all(len(sample_lens) <= 1 for sample_lens in caption_lens):
+        return None
+    if len(caption_lens) != len(caption_view_ids):
+        raise ValueError(
+            f"The pack records {len(caption_lens)} samples of caption lengths but "
+            f"{len(caption_view_ids)} of caption view ids."
+        )
+    return [
+        [
+            CaptionMaskItem(view_id=view_id, num_tokens=num_tokens)
+            for view_id, num_tokens in zip(sample_views, sample_lens)
+        ]
+        for sample_views, sample_lens in zip(caption_view_ids, caption_lens)
+    ]
+
+
+def _multiview_sensor_mask_items(packed_seq: PackedSequence) -> list[list[SensorMaskItem]]:
     """Describe each sample to the multiview mask as its vision items, then its LiDAR items.
 
     The packer lays a sample out in exactly that order, so walking the two streams sample by
@@ -1454,7 +1514,9 @@ def _multiview_mask_items(packed_seq: PackedSequence) -> list[list[MaskItem]]:
     latent with the sweep that happens to share its frame index -- two different instants,
     since the streams run at different latent rates. A batch with no LiDAR, or a LiDAR-only
     batch, leaves every item on view 0, so its mask is bit-identical to the single-stream
-    one.
+    one. That same "not one of the cameras" reading is why LiDAR items are the ones marked
+    ``reads_every_caption``: no caption is written for their view, so under the per-view
+    caption layout they read every camera's instead.
 
     Control items are marked per stream, not per sample: within each of the two streams,
     every item but the last is a control item conditioning the one that follows it, which
@@ -1503,16 +1565,16 @@ def _multiview_mask_items(packed_seq: PackedSequence) -> list[list[MaskItem]]:
     # Step past the widest camera item so no LiDAR item can land on a camera's view.
     lidar_view_offset = max(views_per_vision_item, default=0)
 
-    items_per_sample: list[list[MaskItem]] = []
+    sensor_mask_items: list[list[SensorMaskItem]] = []
     vision_cursor = 0
     lidar_cursor = 0
     for sample_idx in range(num_samples):
-        sample_items: list[MaskItem] = []
+        sample_items: list[SensorMaskItem] = []
         num_vision, num_lidar = vision_counts[sample_idx], lidar_counts[sample_idx]
         if vision is not None:
             for item_in_stream in range(num_vision):
                 sample_items.append(
-                    MaskItem(
+                    SensorMaskItem(
                         token_shape=vision.token_shapes[vision_cursor],
                         condition_mask=vision.condition_mask[vision_cursor],
                         num_views=views_per_vision_item[vision_cursor],
@@ -1525,18 +1587,23 @@ def _multiview_mask_items(packed_seq: PackedSequence) -> list[list[MaskItem]]:
         if lidar is not None:
             for item_in_stream in range(num_lidar):
                 sample_items.append(
-                    MaskItem(
+                    SensorMaskItem(
                         token_shape=lidar.token_shapes[lidar_cursor],
                         condition_mask=lidar.condition_mask[lidar_cursor],
                         num_views=1,
                         view_offset=lidar_view_offset,
                         is_control=item_in_stream < num_lidar - 1,
                         seconds_per_frame=lidar.seconds_per_frame[lidar_cursor],
+                        # A sweep is not one of the rig's cameras: it fuses the whole rig, so
+                        # under per-view captions every camera's caption describes part of what
+                        # it sees and it reads all of them. Ignored when the sample packs a
+                        # single caption, which every item reaches anyway.
+                        reads_every_caption=True,
                     )
                 )
                 lidar_cursor += 1
-        items_per_sample.append(sample_items)
-    return items_per_sample
+        sensor_mask_items.append(sample_items)
+    return sensor_mask_items
 
 
 def _apply_timestep_embeds_to_noisy_tokens(
