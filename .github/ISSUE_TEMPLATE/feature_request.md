@@ -12,11 +12,7 @@ labels: 'enhancement'
 
 ## Proposed Feature
 
-<!-- What feature/capability would you like to have? -->
-
-## Alternatives Considered
-
-<!-- Workarounds you've tried -->
+<!-- What feature or improvement would you like to have? -->
 
 ## Affected Area
 
