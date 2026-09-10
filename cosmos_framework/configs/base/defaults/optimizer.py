@@ -222,6 +222,16 @@ def register_schedulers(lambdacosine_kwargs: dict[str, Any]) -> None:
             f_min=0.1,
         ),
     )
+    # Constant scheduler: multiplier is always 1 (no-op) for the entire run.
+    cs.store(
+        group="scheduler",
+        package="scheduler",
+        name="constant",
+        node=L(build_lr_scheduler)(
+            optimizer=PLACEHOLDER,
+            lr_scheduler_type="constant",
+        ),
+    )
 
 
 def register_optimizer() -> None:

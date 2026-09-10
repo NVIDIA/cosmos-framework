@@ -25,8 +25,11 @@ from cosmos_framework.utils import distributed, log, misc
 from cosmos_framework.utils.easy_io import easy_io
 from cosmos_framework.tools.visualize.video import save_img_or_video
 
+from cosmos_framework.data.generator.augmentors.text_tokenizer import (
+    _SYSTEM_PROMPT_TRANSFER,
+    TEXT_SYSTEM_PROMPT_KEY,
+)
 from cosmos_framework.model.generator.mot.context_parallel_utils import broadcast_context_parallel_object
-from cosmos_framework.model.generator.reasoner.qwen3_vl.utils import _SYSTEM_PROMPT_TRANSFER
 from cosmos_framework.utils.generator.data_utils import slice_data_batch
 from cosmos_framework.utils.generator.multiview import (
     decode_multiview_latent_per_view,
@@ -130,12 +133,19 @@ class TransferGeneration:
     rank enters the callback-level NCCL barrier.
     """
 
-    latents: list[list[torch.Tensor]]  # per guidance scale, one entry per generated vision item
+    # Per guidance scale, one entry per requested stream. Fully conditioned streams keep
+    # their position with ``None`` so a later sensor cannot slide into the wrong decoder.
+    latents: list[list[torch.Tensor | None]]
     stop: MultiviewTransferSampleResult | None = None
 
     def item_latents(self, item_index: int) -> list[torch.Tensor]:
-        """Latents of one generated vision item, one per guidance scale."""
-        return [per_guidance[item_index] for per_guidance in self.latents]
+        """Latents of one generated item, or none when that item is fully conditioned."""
+        item_latents = [per_guidance[item_index] for per_guidance in self.latents]  # list[[B,C,T,H,W] | None]
+        if not item_latents or all(latent is None for latent in item_latents):
+            return []
+        if any(latent is None for latent in item_latents):
+            raise ValueError(f"Generated item {item_index} is missing at only some guidance scales.")
+        return [latent for latent in item_latents if latent is not None]  # list[[B,C,T,H,W]]
 
 
 def _flatten_int_metadata(value: Any) -> list[int] | None:
@@ -985,14 +995,29 @@ class EveryNDrawSample(EveryN):
         runs that produced good zero-shot output.
         """
         should_materialize_sample = self._should_materialize_sample()
-        expected_keys = ["vision"]
-        latents: list[list[torch.Tensor]] = []
+        expected_streams = [("vision", True)]
+        latents: list[list[torch.Tensor | None]] = []
         generation_batch = slice_data_batch(data_batch, start=0, limit=1)
-        # The transfer dataset tokenizer adds this task prompt internally without storing it in
-        # the batch. Preserve an explicit caller-provided prompt, but otherwise restore the same
-        # prompt before train-sample inference re-tokenizes the raw caption. The fixed multiview
-        # validation callback applies the same default when it constructs its batch.
-        generation_batch.setdefault("system_prompt", _SYSTEM_PROMPT_TRANSFER)
+        # LiDAR dropout deliberately leaves an empty list in the training batch so collation
+        # remains sample-aligned. The selected plan is authoritative: remove that empty carrier
+        # before inference so the camera-only callback does not mistake it for a LiDAR stream.
+        plans = generation_batch.get("sequence_plan")
+        if plans and not getattr(plans[0], "has_lidar", False):
+            generation_batch.pop("lidar", None)
+            generation_batch.pop("num_lidar_items_per_sample", None)
+        # Preserve an explicit caller-provided prompt. Otherwise restore the exact prompt recorded
+        # by the training tokenizer before train-sample inference re-tokenizes the raw caption.
+        text_system_prompt = generation_batch.pop(TEXT_SYSTEM_PROMPT_KEY, None)
+        if isinstance(text_system_prompt, (list, tuple)):
+            if len(text_system_prompt) != 1:
+                raise ValueError(
+                    f"{TEXT_SYSTEM_PROMPT_KEY} must contain one value after batch slicing, "
+                    f"got {len(text_system_prompt)}."
+                )
+            text_system_prompt = text_system_prompt[0]
+        if text_system_prompt is not None and not isinstance(text_system_prompt, str):
+            raise TypeError(f"{TEXT_SYSTEM_PROMPT_KEY} must be a string, got {type(text_system_prompt).__name__}.")
+        generation_batch.setdefault("system_prompt", text_system_prompt or _SYSTEM_PROMPT_TRANSFER)
         for guidance in self.guidance:
             sample = model.generate_samples_from_batch(
                 generation_batch,
@@ -1002,9 +1027,21 @@ class EveryNDrawSample(EveryN):
                 has_negative_prompt=True if self.use_negative_prompt else False,
                 seed=[iteration],
             )
-            per_stream: list[torch.Tensor] = []
-            for key in expected_keys:
-                generated = sample.get(key, [])
+            per_stream: list[torch.Tensor | None] = []
+            for key, is_generation_target in expected_streams:
+                generated = sample.get(key, [])  # list[[B,C,T,H,W]]
+                if not is_generation_target:
+                    if generated:
+                        return TransferGeneration(
+                            latents=[],
+                            stop=self._skip_multiview_visualization(
+                                f"expected no generated {key} tensor for a fully conditioned stream, got {len(generated)}",
+                                metadata,
+                                iteration,
+                            ),
+                        )
+                    per_stream.append(None)
+                    continue
                 if len(generated) != 1:
                     return TransferGeneration(
                         latents=[],
@@ -1014,10 +1051,11 @@ class EveryNDrawSample(EveryN):
                             iteration,
                         ),
                     )
-                per_stream.append(generated[0])
+                per_stream.append(generated[0])  # [B,C,T,H,W]
             if should_materialize_sample:
                 latents.append(
-                    [item.clone() for item in per_stream]  # each [1,C,V*T_latent,H,W] or [C,V*T_latent,H,W]
+                    # One [B,C,T,H,W] tensor or None per sensor stream.
+                    [item.clone() if item is not None else None for item in per_stream]
                 )
 
         # Sampling drives CP/FSDP collectives, so every rank must finish every guidance call

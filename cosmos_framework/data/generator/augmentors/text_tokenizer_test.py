@@ -30,12 +30,14 @@ def _make_transfer_tokenizer(
     cfg_dropout_rate: float = 0.0,
     tokenize_separately: bool = True,
     task: str | None = None,
+    emit_system_prompt: bool = False,
 ) -> text_tokenizer.TextTokenizerTransformForTransfer:
     monkeypatch.setattr(text_tokenizer, "lazy_instantiate", lambda _config: processor)
     args: dict[str, object] = {
         "tokenizer_config": object(),
         "cfg_dropout_rate": cfg_dropout_rate,
         "tokenize_separately": tokenize_separately,
+        "emit_system_prompt": emit_system_prompt,
     }
     if task is not None:
         args["task"] = task
@@ -66,7 +68,12 @@ def test_transfer_tokenizer_tokenizes_each_view_independently(monkeypatch: pytes
 
 def test_transfer_tokenizer_accepts_av_multiview_system_prompt(monkeypatch: pytest.MonkeyPatch) -> None:
     processor = _FakeProcessor()
-    tokenizer = _make_transfer_tokenizer(monkeypatch, processor, task="av_multiview_transfer")
+    tokenizer = _make_transfer_tokenizer(
+        monkeypatch,
+        processor,
+        task="av_multiview_transfer",
+        emit_system_prompt=True,
+    )
 
     result = tokenizer({"ai_caption": ["front view", "rear view"], "sample_n_views": 2})
 
@@ -75,6 +82,7 @@ def test_transfer_tokenizer_accepts_av_multiview_system_prompt(monkeypatch: pyte
         call_kwargs["system_prompt"] == text_tokenizer._SYSTEM_PROMPT_AV_MULTIVIEW_TRANSFER
         for _, call_kwargs in processor.calls
     )
+    assert result[text_tokenizer.TEXT_SYSTEM_PROMPT_KEY] == text_tokenizer._SYSTEM_PROMPT_AV_MULTIVIEW_TRANSFER
 
 
 def test_separate_transfer_tokenizer_applies_cfg_dropout_once_per_sample(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -108,6 +116,21 @@ def test_transfer_tokenizer_keeps_legacy_scalar_contract(monkeypatch: pytest.Mon
     assert result["ai_caption"] == json.dumps(caption)
     assert isinstance(result["text_token_ids"], torch.Tensor)
     assert "text_token_lengths" not in result
+    assert text_tokenizer.TEXT_SYSTEM_PROMPT_KEY not in result
+
+
+def test_transfer_tokenizer_can_record_general_system_prompt(monkeypatch: pytest.MonkeyPatch) -> None:
+    tokenizer = _make_transfer_tokenizer(
+        monkeypatch,
+        _FakeProcessor(),
+        tokenize_separately=False,
+        emit_system_prompt=True,
+    )
+
+    result = tokenizer({"ai_caption": "front view"})
+
+    assert result is not None
+    assert result[text_tokenizer.TEXT_SYSTEM_PROMPT_KEY] == text_tokenizer._SYSTEM_PROMPT_TRANSFER
 
 
 def test_single_view_separate_tokenization_matches_legacy_token_values(monkeypatch: pytest.MonkeyPatch) -> None:

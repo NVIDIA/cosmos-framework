@@ -46,7 +46,7 @@ class DiffusionExpertConfig:
 
     patch_spatial: int = 2
     max_vae_latent_side_after_patchify: int = (
-        20  # Max dimension (h or w) of the VAE latent after patchification (320/(8*2))
+        52  # Max h/w of the VAE latent after patchification; 52 -> up to ~1664px square (52*32). Was 20 (=640px).
     )
     # Vision/action/sound position information is always provided through
     # Qwen3VL-style 3D mRoPE attention IDs.

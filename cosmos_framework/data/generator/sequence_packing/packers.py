@@ -74,6 +74,7 @@ def is_item_generated(
 def expand_multiview_condition_frame_indexes(
     condition_frame_indexes_vision: list[int],
     *,
+    condition_view_indexes_vision: list[int] | None,
     num_views: int,
     latent_t: int,
 ) -> list[int]:
@@ -83,10 +84,25 @@ def expand_multiview_condition_frame_indexes(
     ``[view0 frames | view1 frames | ...]``. ``SequencePlan.condition_frame_indexes_vision``
     stores the same per-view-local indexes used for single-view transfer (e.g. ``[0]`` for
     one conditioning frame). When ``num_views > 1``, expand so each listed local frame is
-    conditioned for every selected camera.
+    conditioned for every selected camera. Complete camera views listed in
+    ``condition_view_indexes_vision`` are then unioned into the resulting flat indexes.
     """
-    if num_views <= 1 or not condition_frame_indexes_vision:
+    condition_view_indexes_vision = condition_view_indexes_vision or []
+    if len(condition_view_indexes_vision) != len(set(condition_view_indexes_vision)):
+        raise ValueError(
+            "condition_view_indexes_vision must not contain duplicate camera indexes: "
+            f"got {condition_view_indexes_vision}."
+        )
+    invalid_view_indexes = [idx for idx in condition_view_indexes_vision if not (0 <= idx < num_views)]
+    if invalid_view_indexes:
+        raise ValueError(
+            "condition_view_indexes_vision contains camera indexes outside the sampled view range "
+            f"[0, {num_views}): {invalid_view_indexes}."
+        )
+    if num_views <= 1 and not condition_view_indexes_vision:
         return condition_frame_indexes_vision
+    if not condition_frame_indexes_vision and not condition_view_indexes_vision:
+        return []
     if latent_t % num_views != 0:
         raise ValueError(
             "Multiview vision conditioning requires latent_t divisible by num_views: "
@@ -100,6 +116,12 @@ def expand_multiview_condition_frame_indexes(
         if not (0 <= local_frame_idx < frames_per_view):
             continue
         for view_idx in range(num_views):
+            flat_idx = view_idx * frames_per_view + local_frame_idx
+            if flat_idx not in seen:
+                seen.add(flat_idx)
+                expanded.append(flat_idx)
+    for view_idx in condition_view_indexes_vision:
+        for local_frame_idx in range(frames_per_view):
             flat_idx = view_idx * frames_per_view + local_frame_idx
             if flat_idx not in seen:
                 seen.add(flat_idx)
@@ -223,6 +245,9 @@ def pack_input_sequence(
         and gen_data_clean.num_views_per_vision_item is not None
         and any(num_views > 1 for num_views in gen_data_clean.num_views_per_vision_item)
     )
+    has_view_conditioning = any(plan.condition_view_indexes_vision for plan in sequence_plans)
+    if has_view_conditioning and video_temporal_causal:
+        raise NotImplementedError("View completion is not supported by video_temporal_causal packing.")
     if has_multiview_vision_items and video_temporal_causal:
         raise NotImplementedError("video_temporal_causal=True is not wired for multiview vision items yet.")
     if explicit_vision_temporal_positions_active:
@@ -514,6 +539,11 @@ def pack_input_sequence(
                     num_views = 1
                     if gen_data_clean.num_views_per_vision_item is not None:
                         num_views = gen_data_clean.num_views_per_vision_item[flat_vision_idx]
+                    elif sequence_plan.condition_view_indexes_vision:
+                        raise ValueError(
+                            "condition_view_indexes_vision requires per-camera VAE metadata in "
+                            "gen_data_clean.num_views_per_vision_item."
+                        )
                     latent_t = input_vision_tokens.shape[2]
                     temporal_position_period: int | None = None
                     if num_views > 1:
@@ -525,6 +555,7 @@ def pack_input_sequence(
                         temporal_position_period = latent_t // num_views
                     item_condition_frames = expand_multiview_condition_frame_indexes(
                         item_condition_frames,
+                        condition_view_indexes_vision=sequence_plan.condition_view_indexes_vision,
                         num_views=num_views,
                         latent_t=latent_t,
                     )
