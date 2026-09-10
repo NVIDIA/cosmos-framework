@@ -1325,6 +1325,11 @@ class SequencePlan:
             separately-encoded images), this applies to each vision item individually.
             The number of items per sample is tracked by
             ``GenerationDataClean.num_vision_items_per_sample``.
+        condition_view_indexes_vision: Local camera indexes whose complete latent videos are
+            clean/conditioning. Indexes refer to the sampled camera-major view order. This is
+            combined with ``condition_frame_indexes_vision`` by the sequence packer, allowing
+            temporal-prefix conditioning on every view and full-video conditioning on selected
+            views to share the existing vision condition mask.
         share_vision_temporal_positions: Whether all vision items in this sample share
             the same temporal mRoPE grid.
         vision_temporal_position_groups: Optional integer group ID per vision item. Items
@@ -1353,6 +1358,7 @@ class SequencePlan:
     # -- vision modality --
     has_vision: bool = False
     condition_frame_indexes_vision: list[int] = field(default_factory=list)
+    condition_view_indexes_vision: list[int] = field(default_factory=list)
     # If True, all vision items in this sample share the same temporal mRoPE grid
     # (controlnet-style transfer: target frame i is spatio-temporally aligned with
     # control frame i). Each item gets the same temporal_offset; spatial reset
@@ -1387,6 +1393,7 @@ class SequencePlan:
             "has_action": self.has_action,
             "has_sound": self.has_sound,
             "condition_frame_indexes_vision": self.condition_frame_indexes_vision,
+            "condition_view_indexes_vision": self.condition_view_indexes_vision,
             "condition_frame_indexes_lidar": self.condition_frame_indexes_lidar,
             "condition_frame_indexes_action": self.condition_frame_indexes_action,
             "condition_frame_indexes_sound": self.condition_frame_indexes_sound,

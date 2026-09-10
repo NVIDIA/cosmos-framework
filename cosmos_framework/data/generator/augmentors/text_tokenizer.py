@@ -15,6 +15,7 @@ from cosmos_framework.utils.lazy_config import instantiate as lazy_instantiate
 from cosmos_framework.utils.generator.data_utils import read_positive_int_metadata
 
 _MAX_NUM_TOKENS = 4096
+TEXT_SYSTEM_PROMPT_KEY = "text_system_prompt"
 
 
 def _tokenize_captions_separately(
@@ -146,6 +147,7 @@ class TextTokenizerTransformForEditing(Augmentor):
         tokenizer_config = self.args["tokenizer_config"]
         self.cfg_dropout_rate = self.args.get("cfg_dropout_rate", 0.0)
         self.tokenize_separately: bool = self.args.get("tokenize_separately", False)
+        self.emit_system_prompt: bool = self.args.get("emit_system_prompt", False)
         task = self.args.get("task", "editing")
         self._system_prompt = _SYSTEM_PROMPTS.get(task, _SYSTEM_PROMPTS["editing"])
 
@@ -155,6 +157,9 @@ class TextTokenizerTransformForEditing(Augmentor):
         self._processor = lazy_instantiate(tokenizer_config)
 
     def __call__(self, data_dict: dict) -> dict | None:
+        if self.emit_system_prompt:
+            data_dict[TEXT_SYSTEM_PROMPT_KEY] = self._system_prompt
+
         if self.tokenize_separately:
             assert self.output_keys is not None
             return _tokenize_captions_separately(

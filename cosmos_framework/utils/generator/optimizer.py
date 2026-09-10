@@ -14,6 +14,7 @@ from torch.distributed.checkpoint.stateful import Stateful
 from torch.optim.lr_scheduler import LambdaLR, LRScheduler
 
 from cosmos_framework.utils.functional.lr_scheduler import (
+    ConstantScheduler,
     LambdaLinearScheduler,
     LambdaWarmUpCosineScheduler,
     WSDScheduler,
@@ -586,7 +587,7 @@ def build_optimizer(
 def _lr_scheduler_cls(
     lr_scheduler_type: str,
     **lr_scheduler_kwargs: Any,
-) -> LambdaLinearScheduler | LambdaWarmUpCosineScheduler | WSDScheduler | WSFDScheduler:
+) -> LambdaLinearScheduler | LambdaWarmUpCosineScheduler | WSDScheduler | WSFDScheduler | ConstantScheduler:
     """Instantiate a lambda-style scheduler whose ``.schedule(step)`` returns an LR multiplier.
 
     Both returned classes expose a ``schedule(step) -> float`` callable that
@@ -594,7 +595,8 @@ def _lr_scheduler_cls(
     to drive each optimizer's param-group LRs.  ``lr_scheduler_type`` matching is
     case-insensitive; valid values are ``"lambdalinear"`` (linear decay),
     ``"lambdacosine"`` (warmup + cosine decay), ``"wsd"``
-    (warmup-stable-decay), and ``"wsfd"`` (warmup-slow-decay-fast-decay).
+    (warmup-stable-decay), ``"wsfd"`` (warmup-slow-decay-fast-decay), and
+    ``"constant"`` (fixed multiplier for the entire run).
     Any other value raises ``NotImplementedError``.
     All remaining ``**lr_scheduler_kwargs`` are forwarded verbatim to the
     underlying scheduler constructor (e.g. ``warm_up_steps``, ``cycle_lengths``,
@@ -609,6 +611,8 @@ def _lr_scheduler_cls(
         lr_scheduler = WSDScheduler(**lr_scheduler_kwargs)
     elif lr_scheduler_type.lower() == "wsfd":
         lr_scheduler = WSFDScheduler(**lr_scheduler_kwargs)
+    elif lr_scheduler_type.lower() == "constant":
+        lr_scheduler = ConstantScheduler(**lr_scheduler_kwargs)
     else:
         raise NotImplementedError(f"LR Scheduler {lr_scheduler_type} not found.")
     return lr_scheduler

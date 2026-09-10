@@ -21,7 +21,9 @@ from cosmos_framework.model.generator.tokenizers.dc_ae.dc_ae_v import (
 from cosmos_framework.model.generator.tokenizers.interface import VideoTokenizerInterface
 from cosmos_framework.utils.generator.data_utils import get_vision_data_resolution
 
-DEFAULT_MODEL_NAME = "dcae4x32x32_c64_t120_256p_fps_all_encoder_causal_decoder_chunk_causal_4_nogan_cosmos_pad_7_v0.2"
+DEFAULT_MODEL_NAME = (
+    "dcae4x32x32_c128_t120_256p_fps_all_encoder_causal_decoder_chunk_causal_4_nogan_cosmos_pad_3_v0.23_lcr"
+)
 
 
 def _get_warmup_spatial_shapes(

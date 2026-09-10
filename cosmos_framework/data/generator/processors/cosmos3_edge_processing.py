@@ -29,12 +29,11 @@ import torch
 from torchvision.transforms.v2 import functional as F
 from transformers.feature_extraction_utils import BatchFeature
 from transformers.image_processing_utils_fast import SizeDict
-from transformers.image_utils import ChannelDimension, ImageInput, PILImageResampling
+from transformers.image_utils import ChannelDimension, ImageInput, PILImageResampling, get_image_size
 from transformers.models.auto.tokenization_auto import AutoTokenizer
 from transformers.models.qwen3_vl.video_processing_qwen3_vl import (
     Qwen3VLVideoProcessor,
     Qwen3VLVideoProcessorInitKwargs,
-    get_image_size,
     smart_resize,
 )
 from transformers.models.siglip2.image_processing_siglip2_fast import (
