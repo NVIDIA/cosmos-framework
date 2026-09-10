@@ -10,19 +10,49 @@ from unittest.mock import Mock
 import pytest
 
 
-def test_diffusion_cache_max_consecutive_cached_override(monkeypatch: pytest.MonkeyPatch) -> None:
+def _diffusion_cache_setup_args(**overrides: Any) -> SimpleNamespace:
+    fields: dict[str, Any] = dict(
+        diffusion_cache=True,
+        diffusion_cache_thresh=None,
+        diffusion_cache_residual_order=None,
+        diffusion_cache_max_consecutive_cached=None,
+        quantization_method=None,
+    )
+    fields.update(overrides)
+    return SimpleNamespace(**fields)
+
+
+def _bf16_model() -> Any:
+    torch = pytest.importorskip("torch")
+    return torch.nn.Sequential(torch.nn.Linear(4, 4), torch.nn.Linear(4, 4))
+
+
+def _modelopt_fp8_model() -> Any:
+    torch = pytest.importorskip("torch")
+    from cosmos_framework.utils.generator.quantization import _ModelOptFloat8Linear
+
+    # The loader swaps ModelOpt FP8 targets to this module type; its presence is
+    # what marks a loaded model as W8A8-quantized.
+    return torch.nn.Sequential(torch.nn.Linear(4, 4), _ModelOptFloat8Linear(4, 4, bias=False))
+
+
+def _patch_cache_install(monkeypatch: pytest.MonkeyPatch) -> tuple[Mock, Mock]:
     from cosmos_framework.inference import inference
     from cosmos_framework.model.generator.mot import diffusion_cache
 
     install = Mock()
+    warning = Mock()
     monkeypatch.setattr(diffusion_cache, "install_diffusion_cache", install)
-    pipe = SimpleNamespace()
-    setup_args = SimpleNamespace(
-        diffusion_cache=True,
-        diffusion_cache_thresh=None,
-        diffusion_cache_residual_order=None,
-        diffusion_cache_max_consecutive_cached=3,
-    )
+    monkeypatch.setattr(inference.log, "warning", warning)
+    return install, warning
+
+
+def test_diffusion_cache_max_consecutive_cached_override(monkeypatch: pytest.MonkeyPatch) -> None:
+    from cosmos_framework.inference import inference
+
+    install, _warning = _patch_cache_install(monkeypatch)
+    pipe = SimpleNamespace(model=_bf16_model())
+    setup_args = _diffusion_cache_setup_args(diffusion_cache_max_consecutive_cached=3)
 
     inference.OmniInference._maybe_install_diffusion_cache(pipe, setup_args)
 
@@ -32,6 +62,59 @@ def test_diffusion_cache_max_consecutive_cached_override(monkeypatch: pytest.Mon
         sample_args_list=[],
         config_overrides={"max_consecutive_cached": 3},
     )
+
+
+def test_diffusion_cache_is_disabled_by_default_for_modelopt_fp8_model(monkeypatch: pytest.MonkeyPatch) -> None:
+    from cosmos_framework.inference import inference
+
+    install, warning = _patch_cache_install(monkeypatch)
+    pipe = SimpleNamespace(model=_modelopt_fp8_model())
+
+    inference.OmniInference._maybe_install_diffusion_cache(pipe, _diffusion_cache_setup_args())
+
+    install.assert_not_called()
+    warning.assert_called_once()
+    assert "diffusion cache" in warning.call_args.args[0].lower()
+    assert "modelopt-fp8" in warning.call_args.args[0]
+
+
+def test_diffusion_cache_is_disabled_by_default_for_runtime_quantization(monkeypatch: pytest.MonkeyPatch) -> None:
+    from cosmos_framework.inference import inference
+
+    install, warning = _patch_cache_install(monkeypatch)
+    pipe = SimpleNamespace(model=_bf16_model())
+
+    inference.OmniInference._maybe_install_diffusion_cache(
+        pipe, _diffusion_cache_setup_args(quantization_method="nvfp4")
+    )
+
+    install.assert_not_called()
+    warning.assert_called_once()
+    assert "nvfp4" in warning.call_args.args[0]
+
+
+def test_diffusion_cache_warns_when_already_off_for_quantized_model(monkeypatch: pytest.MonkeyPatch) -> None:
+    from cosmos_framework.inference import inference
+
+    install, warning = _patch_cache_install(monkeypatch)
+    pipe = SimpleNamespace(model=_modelopt_fp8_model())
+
+    inference.OmniInference._maybe_install_diffusion_cache(pipe, _diffusion_cache_setup_args(diffusion_cache=False))
+
+    install.assert_not_called()
+    warning.assert_called_once()
+
+
+def test_diffusion_cache_unchanged_for_unquantized_model(monkeypatch: pytest.MonkeyPatch) -> None:
+    from cosmos_framework.inference import inference
+
+    install, warning = _patch_cache_install(monkeypatch)
+    pipe = SimpleNamespace(model=_bf16_model())
+
+    inference.OmniInference._maybe_install_diffusion_cache(pipe, _diffusion_cache_setup_args())
+
+    install.assert_called_once_with(pipe=pipe, enabled=True, sample_args_list=[], config_overrides=None)
+    warning.assert_not_called()
 
 
 def test_finalize_data_batch_does_not_mutate_reusable_video_list() -> None:

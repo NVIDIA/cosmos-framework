@@ -58,6 +58,7 @@ from cosmos_framework.model.generator.upsampler.prompts import is_upsampled_prom
 from cosmos_framework.tools.visualize.video import save_img_or_video
 from cosmos_framework.utils import log
 from cosmos_framework.utils.checkpoint_db import CheckpointDirHf
+from cosmos_framework.utils.generator.quantization import collect_modelopt_fp8_params
 
 if TYPE_CHECKING:
     from cosmos_framework.configs.base.defaults.model_config import OmniMoTModelConfig
@@ -1131,6 +1132,23 @@ class SampleDataset(Dataset):
         return sample_args, data_batch
 
 
+def _quantized_inference_kind(pipe: Any, setup_args: SetupArgs) -> str | None:
+    """Return what makes this run quantized for the diffusion-cache policy, or ``None``.
+
+    Runtime PTQ (``--quantization-method``) is read from the setup args. ModelOpt
+    FP8 checkpoints are recognized from the loaded network rather than from the
+    ``checkpoint_path`` string: by now the loader has swapped the quantized linears
+    to ``_ModelOptFloat8Linear``, so registry names, local directories and DCP
+    paths all resolve the same way.
+    """
+    if setup_args.quantization_method is not None:
+        return str(setup_args.quantization_method)
+    model = getattr(pipe, "model", None)
+    if isinstance(model, torch.nn.Module) and collect_modelopt_fp8_params(model):
+        return "modelopt-fp8"
+    return None
+
+
 @dataclass
 class OmniInference(Inference):
     # pyrefly: ignore[bad-override]
@@ -1354,9 +1372,23 @@ class OmniInference(Inference):
     def _maybe_install_diffusion_cache(pipe: "OmniInference", setup_args: SetupArgs) -> None:
         """Install SeaCache on ``pipe.model`` when ``setup_args.diffusion_cache`` is set.
 
+        Quantized inference (ModelOpt FP8 checkpoints, mxfp8/nvfp4 runtime PTQ) keeps
+        the cache off and logs a warning: SeaCache extrapolates the language_model
+        residual across skipped steps from the difference of the last full evaluations,
+        and W8A8 activation quantization adds input-dependent noise of the same order
+        as that difference, which shows up as frame-to-frame flicker. Weight-only
+        error (BF16, W8A16) is smooth in the input and cancels in the difference.
+
         ``num_steps`` is adopted per ``generate_samples_from_batch`` call via
         ``begin_generation``, so install-time ``sample_args_list`` can be empty.
         """
+        quantization = _quantized_inference_kind(pipe, setup_args)
+        if quantization is not None:
+            log.warning(
+                f"Diffusion cache is disabled for quantized inference ({quantization}): SeaCache residual "
+                "extrapolation amplifies activation-quantization noise into visible flicker."
+            )
+            return
         if not setup_args.diffusion_cache:
             return
         from cosmos_framework.model.generator.mot.diffusion_cache import install_diffusion_cache
