@@ -16,9 +16,16 @@ scales into TorchAO tensor subclasses without calibration or re-quantization.
 This is an inference-only path: the ``quantize_`` PTQ configs have no backward
 support. Module selection is delegated to the filter built by
 :func:`_get_filter_fn`.
+
+The ``int8_sim`` / ``fp8_sim`` methods are torchao-free quantize-dequantize
+(Q/DQ) simulations built on :class:`QdqSimLinear`: weights are fake-quantized
+once at install time, input activations on every call, and the GEMM itself stays
+a dense compute-dtype (bf16) matmul. They reuse the exact same module selection
+as the torchao methods, so the quantized module set is identical by construction.
 """
 
 import gc
+import hashlib
 import json
 import re
 from collections.abc import Callable
@@ -29,8 +36,8 @@ from torch import nn
 from torch.distributed.tensor import DTensor, distribute_tensor
 from torch.nn import functional as F
 
-from cosmos_framework.utils import log
 from cosmos_framework.configs.base.defaults.quantization import QuantizationConfig
+from cosmos_framework.utils import log
 
 # NOTE: ``torchao`` is imported lazily inside the functions below rather than at
 # module top level. These two helpers are the only torchao consumers, but this
@@ -653,6 +660,198 @@ def apply_modelopt_fp8_checkpoint_inplace(
     return converted_fqns
 
 
+# Symmetric INT8 keeps the range at +-127 (the -128 code is unused), matching the
+# TensorRT / ModelOpt convention, so quantization is sign-symmetric.
+_INT8_QMAX = 127.0
+# Largest finite E4M3 magnitude; values are clamped here before the cast because
+# torch's float32 -> float8_e4m3fn conversion does not saturate (it yields NaN).
+_FP8_E4M3_MAX = float(torch.finfo(torch.float8_e4m3fn).max)
+_QDQ_SIM_METHODS = ("int8_sim", "fp8_sim")
+
+
+def _qdq_scale(values: torch.Tensor, qmax: float, *, per_row: bool) -> torch.Tensor:
+    """Absmax scale so that ``qmax`` maps to the largest magnitude.
+
+    ``per_row`` reduces over the last dimension only, giving one scale per row:
+    per output channel for a ``(N, K)`` weight, per token for a ``(..., K)``
+    activation. Otherwise a single scale covers the whole tensor. The floor keeps
+    an all-zero row from dividing by zero (its values then quantize to 0).
+    """
+    amax = values.abs().amax(dim=-1, keepdim=True) if per_row else values.abs().amax()
+    return (amax / qmax).clamp_(min=torch.finfo(torch.float32).tiny)
+
+
+def _grouped_view(values32: torch.Tensor, group_size: int) -> torch.Tensor:
+    """Split the last (K) dimension into ``group_size`` blocks: ``(..., K) -> (..., K/g, g)``.
+
+    A per-row absmax over this view is then one scale per block of ``g``
+    consecutive K elements of each row (weight output channel / activation token).
+    """
+    k = values32.shape[-1]
+    if group_size <= 0 or k % group_size:
+        raise ValueError(f"Q/DQ group size {group_size} must be > 0 and divide the input dimension K={k}")
+    return values32.reshape(*values32.shape[:-1], k // group_size, group_size)
+
+
+def fake_quant_int8(values: torch.Tensor, *, per_row: bool = True, group_size: int = 0) -> torch.Tensor:
+    """Symmetric INT8 quantize-dequantize in float32, returned in the input dtype.
+
+    ``per_row=True`` is the common "per-channel weight / per-token activation"
+    recipe (one absmax scale per row of the last dimension). ``group_size=g > 0``
+    refines that to one scale per ``g`` consecutive elements of each row (K must
+    be divisible by ``g``). Rounding is round-half-to-even (``torch.round``),
+    the same as TensorRT / ModelOpt.
+    """
+    values32 = values.float()
+    work = _grouped_view(values32, group_size) if group_size else values32
+    scale = _qdq_scale(work, _INT8_QMAX, per_row=per_row or bool(group_size))
+    quantized = torch.round(work / scale).clamp_(-_INT8_QMAX, _INT8_QMAX)
+    return (quantized * scale).reshape(values.shape).to(values.dtype)
+
+
+def fake_quant_fp8(values: torch.Tensor, *, per_row: bool = True, group_size: int = 0) -> torch.Tensor:
+    """E4M3 quantize-dequantize in float32, returned in the input dtype.
+
+    Scales are absmax -> 448 per row (``per_row=True``), per tensor, or per
+    ``group_size`` block of each row when ``group_size > 0``; the scaled values
+    are cast through ``torch.float8_e4m3fn`` (round to nearest even, mantissa
+    truncated to 3 bits) and back.
+    """
+    values32 = values.float()
+    work = _grouped_view(values32, group_size) if group_size else values32
+    scale = _qdq_scale(work, _FP8_E4M3_MAX, per_row=per_row or bool(group_size))
+    quantized = (work / scale).clamp_(-_FP8_E4M3_MAX, _FP8_E4M3_MAX).to(torch.float8_e4m3fn).float()
+    return (quantized * scale).reshape(values.shape).to(values.dtype)
+
+
+def _fake_quant(values: torch.Tensor, method: str, *, per_row: bool, group_size: int = 0) -> torch.Tensor:
+    if method == "int8_sim":
+        return fake_quant_int8(values, per_row=per_row, group_size=group_size)
+    if method == "fp8_sim":
+        return fake_quant_fp8(values, per_row=per_row, group_size=group_size)
+    raise ValueError(f"Unsupported Q/DQ simulation method: {method}")
+
+
+def _qdq_granularity_name(per_row: bool, group_size: int) -> str:
+    if group_size:
+        return f"group{group_size}_along_K(weight_row_blocks/token_blocks)"
+    return "per_channel_weight/per_token_act" if per_row else "per_tensor"
+
+
+class QdqSimLinear(nn.Linear):
+    """``nn.Linear`` running a quantize-dequantize (Q/DQ) simulation of W8A8.
+
+    The weight is fake-quantized once when the module is installed (after the
+    checkpoint has been loaded), the input activation is fake-quantized on every
+    call with dynamically computed scales, and the GEMM is the ordinary dense
+    ``F.linear`` in the compute dtype. The result therefore carries the
+    rounding/clipping error of the low-precision format while needing no
+    low-precision kernel, which makes it a format-only comparison baseline.
+
+    ``qdq_per_row`` selects per-output-channel weight + per-token activation
+    scales (``True``) or a single scale per tensor (``False``); ``qdq_group_size``
+    > 0 blocks both operands along K in groups of that size instead.
+    """
+
+    qdq_method: str = "int8_sim"
+    qdq_per_row: bool = True
+    qdq_group_size: int = 0
+    # Set by the installer after the loaded weight has been fake-quantized. A
+    # forward before that would silently run the simulation against the wrong
+    # (unquantized or uninitialized) weight, so it is rejected instead.
+    _qdq_weight_finalized: bool = False
+
+    def forward(self, inputs: torch.Tensor) -> torch.Tensor:
+        if not self._qdq_weight_finalized:
+            raise RuntimeError(
+                "QdqSimLinear weight has not been fake-quantized; install it via apply_quantization_inplace "
+                "after the checkpoint is loaded"
+            )
+        if inputs.numel() == 0:
+            return F.linear(inputs, self.weight, self.bias)
+        quantized_inputs = _fake_quant(
+            inputs, self.qdq_method, per_row=self.qdq_per_row, group_size=self.qdq_group_size
+        )
+        return F.linear(quantized_inputs, self.weight, self.bias)
+
+    def extra_repr(self) -> str:
+        granularity = _qdq_granularity_name(self.qdq_per_row, self.qdq_group_size)
+        return f"{super().extra_repr()}, qdq={self.qdq_method}({granularity})"
+
+
+def swap_qdq_sim_linears(
+    model: nn.Module, target_fqns: list[str], *, method: str, per_row: bool, group_size: int = 0
+) -> list[str]:
+    """Replace the given loaded linears with :class:`QdqSimLinear` and fake-quantize their weights in place.
+
+    Must run *after* the checkpoint weights are loaded: the weight tensor is
+    rewritten with its Q/DQ image, so quantizing an uninitialized or later
+    overwritten weight would leave a dense bf16 linear pretending to be INT8.
+    The replacement reuses the original ``weight`` / ``bias`` parameter objects
+    (no copies, state-dict keys unchanged); only plain-tensor (unsharded)
+    parameters are supported, matching the other runtime PTQ paths.
+
+    Returns:
+        Sorted FQNs that were swapped.
+    """
+    if method not in _QDQ_SIM_METHODS:
+        raise ValueError(f"Unsupported Q/DQ simulation method: {method}")
+    swapped_fqns: list[str] = []
+    for target_module_fqn in sorted(target_fqns):
+        module = model.get_submodule(target_module_fqn)
+        if not isinstance(module, nn.Linear):
+            raise KeyError(f"Q/DQ simulation target {target_module_fqn!r} is not an nn.Linear module")
+        if isinstance(module, QdqSimLinear):
+            raise ValueError(f"Q/DQ simulation target is already quantized: {target_module_fqn}")
+        if isinstance(module.weight, DTensor):
+            raise ValueError(
+                f"Q/DQ simulation target is an FSDP shard, not a plain parameter: {target_module_fqn}. "
+                "Runtime quantization requires dp_shard_size == 1."
+            )
+
+        replacement = QdqSimLinear(
+            module.in_features,
+            module.out_features,
+            bias=module.bias is not None,
+            device="meta",
+            dtype=module.weight.dtype,
+        )
+        replacement.qdq_method = method
+        replacement.qdq_per_row = per_row
+        replacement.qdq_group_size = group_size
+        replacement.weight = module.weight
+        replacement.bias = module.bias
+        replacement.train(module.training)
+        with torch.no_grad():
+            # Weight rows are output channels, so per_row here is per-output-channel
+            # and group blocks run along K within each output channel.
+            replacement.weight.copy_(_fake_quant(replacement.weight, method, per_row=per_row, group_size=group_size))
+        replacement._qdq_weight_finalized = True
+
+        parent_fqn, _, child_name = target_module_fqn.rpartition(".")
+        parent = model.get_submodule(parent_fqn) if parent_fqn else model
+        setattr(parent, child_name, replacement)
+        swapped_fqns.append(target_module_fqn)
+    return swapped_fqns
+
+
+def _canonical_fqn(name: str) -> str:
+    """Drop the ``_orig_mod`` components torch.compile inserts into module FQNs."""
+    return ".".join(part for part in name.split(".") if part != "_orig_mod")
+
+
+def _target_fqn_aliases(canonical_name: str) -> tuple[str, ...]:
+    """Forms under which a module FQN may appear in ``QuantizationConfig.target_fqns``.
+
+    Runtime quantization is applied to the ``OmniMoTModel`` (FQNs ``net.…``),
+    while ModelOpt target lists are relative to the VFM network (``language_model.…``);
+    accept both spellings so a list derived from one can drive the other.
+    """
+    if canonical_name.startswith("net."):
+        return (canonical_name, canonical_name.removeprefix("net."))
+    return (canonical_name,)
+
+
 def _get_filter_fn(quantization_config: QuantizationConfig) -> Callable[[nn.Module, str], bool]:
     """Build a module-selection predicate from the quantization config.
 
@@ -685,8 +884,14 @@ def _get_filter_fn(quantization_config: QuantizationConfig) -> Callable[[nn.Modu
         except re.error as error:
             raise ValueError(f"Invalid exclude_regex pattern {pattern!r}: {error}") from error
 
+    target_fqns = set(quantization_config.target_fqns)
+
     def _filter_fn(mod: nn.Module, name: str) -> bool:
         """Decide whether a single module should be quantized.
+
+        When ``target_fqns`` is set the regex policy is bypassed entirely: an
+        ``nn.Linear`` is selected iff its canonical FQN (or its VFM-network-
+        relative alias) is in the list, which pins the module set exactly.
 
         Used by preflight and torchao as each walks the model recursively. A
         module is selected only when ALL of the following hold:
@@ -714,7 +919,11 @@ def _get_filter_fn(quantization_config: QuantizationConfig) -> Callable[[nn.Modu
             True if the module should be quantized, False otherwise.
         """
         # torch.compile inserts `_orig_mod` into FQNs; hide it from user-facing regex matching.
-        canonical_name = ".".join(part for part in name.split(".") if part != "_orig_mod")
+        canonical_name = _canonical_fqn(name)
+        if target_fqns:
+            return isinstance(mod, nn.Linear) and any(
+                alias in target_fqns for alias in _target_fqn_aliases(canonical_name)
+            )
         return (
             isinstance(mod, nn.Linear)
             and (not include_patterns or any(pattern.search(canonical_name) for pattern in include_patterns))
@@ -724,8 +933,18 @@ def _get_filter_fn(quantization_config: QuantizationConfig) -> Callable[[nn.Modu
     return _filter_fn
 
 
-def _get_validated_quantization_fqns(model: nn.Module, filter_fn: Callable[[nn.Module, str], bool]) -> list[str]:
-    """Validate the selected modules and return their sorted FQNs."""
+def _get_validated_quantization_fqns(
+    model: nn.Module,
+    filter_fn: Callable[[nn.Module, str], bool],
+    *,
+    target_fqns: list[str] | None = None,
+) -> list[str]:
+    """Validate the selected modules and return their sorted FQNs.
+
+    With ``target_fqns`` every listed FQN must have been matched; an entry that
+    names no module, or a module that is not an ``nn.Linear``, is an error rather
+    than a silent shrink of the module set.
+    """
     matched_modules = sorted(
         ((name, module) for name, module in model.named_modules() if filter_fn(module, name)),
         key=lambda item: item[0],
@@ -733,10 +952,49 @@ def _get_validated_quantization_fqns(model: nn.Module, filter_fn: Callable[[nn.M
     if not matched_modules:
         raise ValueError("No nn.Linear modules matched the quantization selection")
     matched_fqns = [name for name, _ in matched_modules]
-    already_quantized_fqns = [name for name, module in matched_modules if type(module.weight) is not nn.Parameter]
+    already_quantized_fqns = [
+        name
+        for name, module in matched_modules
+        if type(module.weight) is not nn.Parameter or isinstance(module, QdqSimLinear)
+    ]
     if already_quantized_fqns:
         raise ValueError(f"Quantization targets are already quantized: {', '.join(already_quantized_fqns)}")
+    if target_fqns:
+        matched_aliases = {alias for name in matched_fqns for alias in _target_fqn_aliases(_canonical_fqn(name))}
+        missing = sorted(set(target_fqns) - matched_aliases)
+        if missing:
+            all_aliases = {
+                alias for name, _ in model.named_modules() for alias in _target_fqn_aliases(_canonical_fqn(name))
+            }
+            not_linear = [fqn for fqn in missing if fqn in all_aliases]
+            not_found = [fqn for fqn in missing if fqn not in all_aliases]
+            details = []
+            if not_linear:
+                details.append(f"not nn.Linear modules: {not_linear}")
+            if not_found:
+                details.append(f"not found in the model: {not_found}")
+            raise ValueError(f"{len(missing)} quantization target_fqns did not match ({'; '.join(details)})")
     return matched_fqns
+
+
+def _dump_matched_fqns(matched_fqns: list[str], dump_path: str | None) -> str:
+    """Log a digest of the quantized module set and optionally write it to ``dump_path``.
+
+    The digest (and the file) is what two runs are compared on to prove they
+    quantized the identical set of linears; FQNs are canonicalized so a
+    torch.compile-wrapped model hashes the same as a plain one.
+    """
+    canonical = [_canonical_fqn(name) for name in matched_fqns]
+    digest = hashlib.sha256("\n".join(canonical).encode("utf-8")).hexdigest()[:16]
+    log.info(f"Quantized module set: count={len(canonical)} sha256={digest}")
+    if dump_path is not None:
+        distributed = torch.distributed
+        if not (distributed.is_available() and distributed.is_initialized()) or distributed.get_rank() == 0:
+            path = Path(dump_path)
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text("".join(f"{name}\n" for name in canonical), encoding="utf-8")
+            log.info(f"Wrote quantized module FQNs to {path}")
+    return digest
 
 
 def apply_quantization_inplace(model: nn.Module, quantization_config: QuantizationConfig) -> list[str]:
@@ -763,7 +1021,27 @@ def apply_quantization_inplace(model: nn.Module, quantization_config: Quantizati
         return []
 
     filter_fn = _get_filter_fn(quantization_config)
-    matched_fqns = _get_validated_quantization_fqns(model, filter_fn)
+    matched_fqns = _get_validated_quantization_fqns(model, filter_fn, target_fqns=quantization_config.target_fqns)
+
+    if quantization_config.method in _QDQ_SIM_METHODS:
+        # Torchao-free Q/DQ simulation: same selection as above, dense bf16 GEMMs.
+        # int8_sim is always per-channel weight / per-token activation; fp8_sim
+        # follows fp8_granularity like the torchao ``fp8`` recipe does.
+        per_row = quantization_config.method == "int8_sim" or quantization_config.fp8_granularity == "per_row"
+        group_size = quantization_config.qdq_group_size
+        if group_size and not per_row:
+            raise ValueError("qdq_group_size requires fp8_granularity='per_row' (blocks refine rows, not tensors)")
+        swap_qdq_sim_linears(
+            model, matched_fqns, method=quantization_config.method, per_row=per_row, group_size=group_size
+        )
+        granularity = _qdq_granularity_name(per_row, group_size)
+        log.info(
+            f"Applied runtime Q/DQ simulation method={quantization_config.method} granularity={granularity}, "
+            f"matched_count={len(matched_fqns)}"
+        )
+        log.debug(f"Runtime PTQ matched_fqns={matched_fqns}")
+        _dump_matched_fqns(matched_fqns, quantization_config.matched_fqns_dump_path)
+        return matched_fqns
 
     from torchao.prototype.mx_formats import (
         MXDynamicActivationMXWeightConfig,
@@ -832,4 +1110,5 @@ def apply_quantization_inplace(model: nn.Module, quantization_config: Quantizati
     _reclaim_and_log_gpu_memory("after quantization")
     log.info(f"Applied runtime PTQ method={quantization_config.method}, matched_count={len(matched_fqns)}")
     log.debug(f"Runtime PTQ matched_fqns={matched_fqns}")
+    _dump_matched_fqns(matched_fqns, quantization_config.matched_fqns_dump_path)
     return matched_fqns

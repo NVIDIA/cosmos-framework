@@ -86,17 +86,23 @@ def _build_public_export_model_config(model_dict: dict[str, Any]) -> dict[str, A
             "modelopt_fp8_target_fqns": [],
             "mixed_precision_first_steps": 0,
             "mixed_precision_last_steps": 0,
+            "target_fqns": [],
         }
         # ``fp8_granularity`` is inert when quantization is disabled (method=None),
         # and the mixed-precision policy/cache selectors are inert while
         # first/last steps are 0; ignore them so a disabled config still matches.
         # Keys absent from an older checkpoint's config are tolerated; unknown
         # extra keys are not.
-        inert_keys = {"fp8_granularity", "mixed_precision_reasoner_policy", "mixed_precision_w8a16_cache"}
+        inert_keys = {
+            "fp8_granularity",
+            "matched_fqns_dump_path",
+            "qdq_group_size",
+            "mixed_precision_reasoner_policy",
+            "mixed_precision_w8a16_cache",
+        }
         comparable = {key: value for key, value in quantization_values.items() if key not in inert_keys}
         if any(
-            key not in disabled_quantization or value != disabled_quantization[key]
-            for key, value in comparable.items()
+            key not in disabled_quantization or value != disabled_quantization[key] for key, value in comparable.items()
         ):
             raise ValueError(
                 "Cannot export an enabled or non-default internal quantization config to the public Cosmos3 schema: "

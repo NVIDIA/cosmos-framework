@@ -8,30 +8,55 @@ import attrs
 class QuantizationConfig:
     """Configuration for low-precision quantization of model parameters.
 
-    Controls which quantization method is applied (mxfp8, nvfp4, fp8), and which
-    parameters are selected for quantization via include/exclude key filters.
-    When ``method`` is None, quantization is disabled and all other fields are
-    inert.
+    Controls which quantization method is applied (mxfp8, nvfp4, fp8, int8_sim,
+    fp8_sim), and which parameters are selected for quantization via
+    include/exclude key filters or an exact ``target_fqns`` list. When ``method``
+    is None, quantization is disabled and all other fields are inert.
 
     ``mxfp8`` and ``nvfp4`` use block-scaled MX / NVFP4 formats that require
     Blackwell (sm_100) tensor cores. ``fp8`` is plain e4m3 dynamic-activation +
     fp8-weight quantization that also runs on Hopper (sm_90) and Ada (sm_89).
+    These three run real low-precision GEMMs through torchao.
+
+    ``int8_sim`` and ``fp8_sim`` are quantize-dequantize (Q/DQ) *simulations*:
+    the selected linears keep dense GEMMs in the compute dtype (bf16), but their
+    weights are fake-quantized once at load time and their input activations
+    are fake-quantized dynamically on every call, so the output carries exactly
+    the rounding/clipping error of the low-precision format without needing any
+    low-precision kernel (or torchao). ``int8_sim`` is symmetric INT8 with
+    per-output-channel weight scales and per-token activation scales (the common
+    "per-channel weight / per-row activation" recipe). ``fp8_sim`` is E4M3 with
+    ``fp8_granularity`` scales (per_row = per-output-channel weight + per-token
+    activation; per_tensor = one scale per weight and one per activation
+    tensor). All methods share the same module selection, so an ``int8_sim`` and
+    an ``fp8``/``fp8_sim`` run with identical selection settings quantize
+    exactly the same set of linears.
     """
 
     # Quantization method for the model.
     method: str | None = attrs.field(
         default=None,
-        validator=attrs.validators.optional(attrs.validators.in_({"mxfp8", "nvfp4", "fp8"})),
+        validator=attrs.validators.optional(attrs.validators.in_({"mxfp8", "nvfp4", "fp8", "int8_sim", "fp8_sim"})),
     )
 
-    # Scaling granularity for the ``fp8`` method: ``per_row`` (rowwise scales,
-    # better accuracy) or ``per_tensor`` (single scale per tensor, slightly
-    # faster/simpler). Both are supported on Hopper (sm_90) and Ada (sm_89).
-    # Ignored by ``mxfp8`` / ``nvfp4``, which use fixed block-scaled formats.
+    # Scaling granularity for the ``fp8`` and ``fp8_sim`` methods: ``per_row``
+    # (rowwise scales, better accuracy) or ``per_tensor`` (single scale per
+    # tensor, slightly faster/simpler). Both are supported on Hopper (sm_90) and
+    # Ada (sm_89). Ignored by ``mxfp8`` / ``nvfp4``, which use fixed block-scaled
+    # formats, and by ``int8_sim``, which is always per-channel/per-token.
     fp8_granularity: str = attrs.field(
         default="per_row",
         validator=attrs.validators.in_({"per_row", "per_tensor"}),
     )
+
+    # ``int8_sim`` / ``fp8_sim`` only: block size along the input-feature (K)
+    # dimension for both operands. 0 (default) keeps one scale per whole row
+    # (per output channel for the weight, per token for the activation); ``g``
+    # > 0 gives one scale per ``g`` consecutive K elements of every weight row and
+    # of every activation token, i.e. the two operands are blocked along the same
+    # reduction dimension (like MX formats, but with a free block size). K must
+    # be divisible by ``g``. Incompatible with ``fp8_granularity="per_tensor"``.
+    qdq_group_size: int = attrs.field(default=0, validator=[attrs.validators.instance_of(int), attrs.validators.ge(0)])
 
     # How to select parameters to select for the quantization. Each key is a
     # regular expression matched against a module's fully-qualified name with
@@ -44,6 +69,23 @@ class QuantizationConfig:
     # considered as excluded.
     include_regex: list[str] = attrs.field(factory=list)
     exclude_regex: list[str] = attrs.field(factory=list)
+
+    # Exact module selection. When non-empty this replaces the regex filters: a
+    # Linear is quantized iff its FQN is listed here, and every listed FQN must
+    # resolve to an ``nn.Linear`` in the model (missing or non-Linear entries are
+    # an error, so a run can never silently quantize a different set than the
+    # one it was handed). FQNs may be given relative to the ``OmniMoTModel``
+    # (``net.language_model.model.layers...``) or to the VFM network
+    # (``language_model.model.layers...``, the form ModelOpt targets use). Use
+    # this to pin two methods (e.g. ``fp8`` and ``int8_sim``) to one
+    # identical module set.
+    target_fqns: list[str] = attrs.field(factory=list)
+
+    # Optional file the sorted list of actually-quantized module FQNs is written
+    # to (one per line) when runtime quantization is applied. Lets two runs be
+    # diffed for module-set identity. The inference CLI points this at
+    # ``<output_dir>/quantization_matched_fqns.txt``.
+    matched_fqns_dump_path: str | None = attrs.field(default=None)
 
     # Local root of a ModelOpt static-FP8 diffusers checkpoint. When set, the
     # linears named by ``modelopt_fp8_target_fqns`` are swapped to FP8 modules on

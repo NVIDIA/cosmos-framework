@@ -285,6 +285,40 @@ To use your own default values instead of the built-in presets, pass a JSON file
 
 The custom defaults file has the same format as the built-in presets. Fields you set explicitly in the sample argument file still take precedence over the custom defaults file.
 
+## Quantization
+
+Runtime post-training quantization (PTQ) is applied to the loaded model with `--quantization-method`; it works on Hugging Face and DCP checkpoints alike and requires the replicated layout (`--dp-shard-size=1`).
+
+| Method | What it is | Needs |
+| --- | --- | --- |
+| `mxfp8`, `nvfp4` | torchao block-scaled MX / NVFP4 GEMMs | Blackwell + torchao |
+| `fp8` | torchao E4M3 dynamic-activation + FP8-weight GEMMs (`torch._scaled_mm`), `--quantization-fp8-granularity {per_row,per_tensor}` | Hopper+ + torchao |
+| `int8_sim` | quantize-dequantize **simulation** of symmetric INT8, per-output-channel weight scales + per-token activation scales, executed as dense bf16 GEMMs | any GPU, no torchao |
+| `fp8_sim` | quantize-dequantize **simulation** of E4M3 with `--quantization-fp8-granularity` scales, dense bf16 GEMMs | any GPU, no torchao |
+
+`--quantization-group-size g` (sim methods only) switches both operands from whole-row scales to one scale per `g` consecutive input (K) elements: per weight output channel per block, and per activation token per block. `--quantization-group-size 64` therefore gives the classic INT8 "per-token / per-channel, block 64 along K" recipe.
+
+The `*_sim` methods reproduce the number-format rounding/clipping error only (no low-precision kernel, no speedup) and are meant for accuracy studies against the bf16 baseline.
+
+**Module selection is shared by every method**, so two runs with the same selection flags quantize exactly the same set of linears:
+
+- `--quantization-include-regex` / `--quantization-exclude-regex` (default include `language_model.model.layers`; e.g. `--quantization-include-regex _moe_gen` restricts to the generation pathway).
+- `--quantization-target-fqns-file FILE` pins an exact list (one FQN per line, `#` comments allowed); the run fails if any entry is missing or not a Linear.
+- Every quantized run writes the sorted list of quantized module FQNs to `<output_dir>/quantization_matched_fqns.txt` and logs a `sha256` digest of it, so module-set identity between runs can be verified with `diff`.
+
+```shell
+# INT8 W8A8 simulation on the generation-pathway linears only
+python -m cosmos_framework.scripts.inference --parallelism-preset=latency \
+    -i inputs/omni/t2i.json -o outputs/t2i_int8sim --checkpoint-path Cosmos3-Nano --seed=0 \
+    --quantization-method int8_sim --quantization-include-regex _moe_gen
+
+# FP8 per-tensor simulation on the identical module set
+python -m cosmos_framework.scripts.inference --parallelism-preset=latency \
+    -i inputs/omni/t2i.json -o outputs/t2i_fp8sim --checkpoint-path Cosmos3-Nano --seed=0 \
+    --quantization-method fp8_sim --quantization-fp8-granularity per_tensor \
+    --quantization-target-fqns-file outputs/t2i_int8sim/quantization_matched_fqns.txt
+```
+
 ## Guardrails
 
 Inference ships with guardrails enabled by default, sourced from [nvidia/Cosmos-Guardrail1](https://huggingface.co/nvidia/Cosmos-Guardrail1). Active filters: text blocklist (better-profanity + fuzzy match), text safety classifier ([Qwen/Qwen3Guard-Gen-0.6B](https://huggingface.co/Qwen/Qwen3Guard-Gen-0.6B)), video content-safety classifier, and RetinaFace face-blur post-processor. Pass `--no-guardrails` to disable, or `--offload-guardrail-models` to keep them on CPU between calls (saves GPU memory, adds latency).

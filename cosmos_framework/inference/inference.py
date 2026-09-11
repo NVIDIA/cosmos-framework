@@ -1162,12 +1162,34 @@ class OmniInference(Inference):
             compile_dynamic=setup_args.compile_dynamic,
         )
 
+    @staticmethod
+    def _read_target_fqns_file(path: str) -> list[str]:
+        """One FQN per line; blank lines and ``#`` comments are ignored."""
+        fqns: list[str] = []
+        for raw_line in Path(path).read_text(encoding="utf-8").splitlines():
+            line = raw_line.split("#", 1)[0].strip()
+            if line:
+                fqns.append(line)
+        if not fqns:
+            raise ValueError(f"Quantization target FQN file is empty: {path}")
+        return fqns
+
     @classmethod
     def _get_quantization_config(cls, setup_args: SetupArgs) -> QuantizationConfig:
+        target_fqns: list[str] = []
+        if setup_args.quantization_target_fqns_file:
+            target_fqns = cls._read_target_fqns_file(setup_args.quantization_target_fqns_file)
+        matched_fqns_dump_path: str | None = None
+        if setup_args.quantization_method is not None and setup_args.output_dir is not None:
+            matched_fqns_dump_path = str(Path(setup_args.output_dir) / "quantization_matched_fqns.txt")
         return QuantizationConfig(
             method=setup_args.quantization_method,
+            fp8_granularity=setup_args.quantization_fp8_granularity,
+            qdq_group_size=setup_args.quantization_group_size,
             include_regex=list(setup_args.quantization_include_regex),
             exclude_regex=list(setup_args.quantization_exclude_regex),
+            target_fqns=target_fqns,
+            matched_fqns_dump_path=matched_fqns_dump_path,
             mixed_precision_first_steps=setup_args.mixed_precision_first_steps,
             mixed_precision_last_steps=setup_args.mixed_precision_last_steps,
             mixed_precision_reasoner_policy=setup_args.mixed_precision_reasoner_policy,

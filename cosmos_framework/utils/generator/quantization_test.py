@@ -9,8 +9,13 @@ import safetensors.torch
 import torch
 from torch import nn
 
+from cosmos_framework.configs.base.defaults.quantization import QuantizationConfig
 from cosmos_framework.utils.generator.quantization import (
+    QdqSimLinear,
     apply_modelopt_fp8_checkpoint_inplace,
+    apply_quantization_inplace,
+    fake_quant_fp8,
+    fake_quant_int8,
     is_modelopt_fp8_checkpoint,
 )
 
@@ -226,3 +231,250 @@ def test_apply_modelopt_fp8_checkpoint_uses_torchao_linear_dispatch(tmp_path: Pa
     assert torch.isfinite(compiled_reasoning_output).all()
     assert empty_output.shape == (0, 16)
     assert model.selected.weight.act_quant_scale.shape == (1, 1)
+
+
+# --------------------------------------------------------------------------
+# int8_sim / fp8_sim quantize-dequantize simulation (torchao-free, CPU-testable)
+# --------------------------------------------------------------------------
+
+
+class TinyMixedModel(nn.Module):
+    """Two linears plus a non-linear module, all on CPU, for selection tests."""
+
+    def __init__(self, dtype: torch.dtype = torch.bfloat16) -> None:
+        super().__init__()
+        self.selected = nn.Linear(32, 16, bias=True, dtype=dtype)
+        self.unselected = nn.Linear(32, 16, bias=False, dtype=dtype)
+        self.norm = nn.LayerNorm(32, dtype=dtype)
+
+    def forward(self, inputs: torch.Tensor) -> torch.Tensor:  # inputs: [B,32], returns: [B,16]
+        return self.selected(self.norm(inputs)) + self.unselected(inputs)  # [B,16]
+
+
+def _reference_int8_per_row(values: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+    values32 = values.float()
+    scale = values32.abs().amax(dim=-1, keepdim=True) / 127.0
+    quantized = torch.round(values32 / scale).clamp(-127, 127)
+    return quantized, scale
+
+
+def test_fake_quant_int8_per_row_is_symmetric_per_row_absmax() -> None:
+    torch.manual_seed(0)
+    values = (torch.randn(8, 64) * torch.tensor([[0.01], [1.0], [100.0], [3.0], [0.5], [7.0], [1e-3], [42.0]])).to(
+        torch.bfloat16
+    )
+    dequantized = fake_quant_int8(values, per_row=True)
+    assert dequantized.dtype == values.dtype
+    quantized, scale = _reference_int8_per_row(values)
+    # Every output lies on its row's integer grid, within bf16 output rounding.
+    codes = dequantized.float() / scale
+    assert torch.allclose(codes, torch.round(codes), atol=0.51)
+    assert codes.abs().max() <= 127.0 + 0.51
+    # The row absmax is a grid point: it round-trips to +-127 * scale exactly (up to bf16).
+    row_absmax_idx = values.float().abs().argmax(dim=-1)
+    row_absmax = values.float().gather(1, row_absmax_idx[:, None])
+    assert torch.allclose(dequantized.float().gather(1, row_absmax_idx[:, None]), row_absmax, rtol=2**-7)
+    # Q/DQ error is bounded by half a step of the row's own scale (plus bf16 output rounding).
+    error = (dequantized.float() - values.float()).abs()
+    assert bool((error <= scale / 2 + values.float().abs() * 2**-7 + 1e-9).all())
+    torch.testing.assert_close(dequantized.float(), (quantized * scale).to(values.dtype).float())
+
+
+def test_fake_quant_int8_per_row_scales_rows_independently() -> None:
+    small = torch.full((1, 16), 1e-3)
+    large = torch.full((1, 16), 100.0)
+    small[0, 0] = 2e-3
+    values = torch.cat([small, large])
+    per_row = fake_quant_int8(values, per_row=True)
+    per_tensor = fake_quant_int8(values, per_row=False)
+    # Per-row: the small row keeps its own 127-level grid, so 1e-3 vs 2e-3 stay distinct.
+    assert per_row[0, 0] > per_row[0, 1] > 0
+    assert torch.allclose(per_row[0], small[0], rtol=1e-2)
+    # Per-tensor: one scale from the 100.0 row (step ~0.79) flushes the small row to zero.
+    assert torch.all(per_tensor[0] == 0)
+
+
+def test_fake_quant_fp8_snaps_to_e4m3_grid() -> None:
+    torch.manual_seed(1)
+    values = (torch.randn(4, 32) * 5).to(torch.bfloat16)
+    for per_row in (True, False):
+        dequantized = fake_quant_fp8(values, per_row=per_row)
+        assert dequantized.dtype == values.dtype
+        values32 = values.float()
+        amax = values32.abs().amax(dim=-1, keepdim=True) if per_row else values32.abs().amax()
+        scale = amax / 448.0
+        expected = (values32 / scale).to(torch.float8_e4m3fn).float() * scale
+        torch.testing.assert_close(dequantized.float(), expected.to(values.dtype).float())
+        assert torch.isfinite(dequantized.float()).all()
+
+
+def test_apply_quantization_inplace_int8_sim_swaps_only_selected_linears() -> None:
+    torch.manual_seed(2)
+    model = TinyMixedModel()
+    original_selected_weight = model.selected.weight.detach().clone()
+    original_bias = model.selected.bias
+    inputs = torch.randn(5, 32).to(torch.bfloat16)
+    expected_unselected = model.unselected(inputs)
+    normed = model.norm(inputs)
+
+    matched = apply_quantization_inplace(model, QuantizationConfig(method="int8_sim", include_regex=["^selected$"]))
+
+    assert matched == ["selected"]
+    assert isinstance(model.selected, QdqSimLinear)
+    assert type(model.unselected) is nn.Linear
+    assert model.selected.qdq_method == "int8_sim" and model.selected.qdq_per_row
+    # Same parameter objects, weight rewritten to its per-output-channel Q/DQ image.
+    assert model.selected.bias is original_bias
+    torch.testing.assert_close(model.selected.weight.float(), fake_quant_int8(original_selected_weight).float())
+    assert not torch.equal(model.selected.weight, original_selected_weight)
+    # Forward = dense bf16 GEMM over per-token fake-quantized activations.
+    expected_selected = nn.functional.linear(fake_quant_int8(normed), model.selected.weight, model.selected.bias)
+    torch.testing.assert_close(model(inputs), expected_selected + expected_unselected)
+
+
+def test_apply_quantization_inplace_fp8_sim_honors_granularity() -> None:
+    torch.manual_seed(3)
+    for granularity, per_row in (("per_row", True), ("per_tensor", False)):
+        model = TinyMixedModel()
+        original_weight = model.selected.weight.detach().clone()
+        apply_quantization_inplace(
+            model, QuantizationConfig(method="fp8_sim", fp8_granularity=granularity, include_regex=["^selected$"])
+        )
+        assert isinstance(model.selected, QdqSimLinear)
+        assert model.selected.qdq_method == "fp8_sim" and model.selected.qdq_per_row is per_row
+        torch.testing.assert_close(
+            model.selected.weight.float(), fake_quant_fp8(original_weight, per_row=per_row).float()
+        )
+
+
+def test_apply_quantization_inplace_int8_sim_and_fp8_sim_quantize_identical_module_sets(tmp_path: Path) -> None:
+    dumps: dict[str, list[str]] = {}
+    matched: dict[str, list[str]] = {}
+    for method in ("int8_sim", "fp8_sim"):
+        model = TinyMixedModel()
+        dump_path = tmp_path / f"{method}.txt"
+        matched[method] = apply_quantization_inplace(
+            model,
+            QuantizationConfig(
+                method=method,
+                include_regex=["selected", "unselected"],
+                exclude_regex=["norm"],
+                matched_fqns_dump_path=str(dump_path),
+            ),
+        )
+        dumps[method] = dump_path.read_text(encoding="utf-8").splitlines()
+    assert matched["int8_sim"] == matched["fp8_sim"] == ["selected", "unselected"]
+    assert dumps["int8_sim"] == dumps["fp8_sim"] == ["selected", "unselected"]
+
+
+def test_apply_quantization_inplace_target_fqns_pin_exact_set() -> None:
+    model = TinyMixedModel()
+    # Regexes are ignored once target_fqns is set.
+    matched = apply_quantization_inplace(
+        model, QuantizationConfig(method="int8_sim", include_regex=[".*"], target_fqns=["unselected"])
+    )
+    assert matched == ["unselected"]
+    assert type(model.selected) is nn.Linear
+    assert isinstance(model.unselected, QdqSimLinear)
+
+
+def test_apply_quantization_inplace_target_fqns_accept_vfm_relative_alias() -> None:
+    class Outer(nn.Module):
+        def __init__(self) -> None:
+            super().__init__()
+            self.net = TinyMixedModel()
+
+    outer = Outer()
+    matched = apply_quantization_inplace(
+        outer, QuantizationConfig(method="int8_sim", target_fqns=["selected", "net.unselected"])
+    )
+    assert matched == ["net.selected", "net.unselected"]
+
+
+@pytest.mark.parametrize(
+    ("target_fqns", "message"),
+    [
+        (["selected", "does_not_exist"], "not found in the model"),
+        (["selected", "norm"], "not nn.Linear"),
+    ],
+)
+def test_apply_quantization_inplace_target_fqns_reject_missing_or_non_linear(
+    target_fqns: list[str], message: str
+) -> None:
+    model = TinyMixedModel()
+    with pytest.raises(ValueError, match=message):
+        apply_quantization_inplace(model, QuantizationConfig(method="int8_sim", target_fqns=target_fqns))
+    # Validation happens before any swap, so the model is untouched.
+    assert type(model.selected) is nn.Linear
+
+
+def test_apply_quantization_inplace_rejects_double_quantization() -> None:
+    model = TinyMixedModel()
+    config = QuantizationConfig(method="int8_sim", include_regex=["^selected$"])
+    apply_quantization_inplace(model, config)
+    with pytest.raises(ValueError, match="already quantized"):
+        apply_quantization_inplace(model, config)
+
+
+def test_qdq_sim_linear_rejects_forward_before_weight_finalized() -> None:
+    linear = QdqSimLinear(8, 4, dtype=torch.bfloat16)
+    with pytest.raises(RuntimeError, match="not been fake-quantized"):
+        linear(torch.zeros(2, 8, dtype=torch.bfloat16))
+
+
+def test_fake_quant_int8_group_size_scales_each_k_block_independently() -> None:
+    torch.manual_seed(4)
+    # Two rows x 128 columns; block 1 of row 0 is 1000x larger than block 0.
+    values = torch.randn(2, 128)
+    values[0, :64] *= 1e-3
+    values[0, 64:] *= 1.0
+    grouped = fake_quant_int8(values, group_size=64)
+    per_row = fake_quant_int8(values, per_row=True)
+    # Group-wise: block 0 keeps its own grid (relative error ~< 1/127).
+    small_block = values[0, :64]
+    assert torch.allclose(grouped[0, :64], small_block, atol=small_block.abs().max() / 127 / 2 + 1e-9)
+    # Per-row: block 0 is crushed by block 1's scale (error ~ step of the big block).
+    assert (per_row[0, :64] - small_block).abs().max() > 10 * (grouped[0, :64] - small_block).abs().max()
+    # Every block's absmax is a grid point and every value lies on its block grid.
+    blocks = values.reshape(2, 2, 64)
+    scale = blocks.abs().amax(dim=-1, keepdim=True) / 127.0
+    codes = grouped.reshape(2, 2, 64) / scale
+    assert torch.allclose(codes, torch.round(codes), atol=1e-4)
+    assert codes.abs().max() <= 127.0 + 1e-4
+
+
+def test_fake_quant_group_size_must_divide_k() -> None:
+    with pytest.raises(ValueError, match="divide the input dimension"):
+        fake_quant_int8(torch.randn(2, 100), group_size=64)
+    with pytest.raises(ValueError, match="divide the input dimension"):
+        fake_quant_fp8(torch.randn(2, 100), group_size=64)
+
+
+def test_apply_quantization_inplace_int8_sim_group_size_blocks_weight_and_activation_along_k() -> None:
+    torch.manual_seed(5)
+    model = TinyMixedModel()  # in_features=32 -> 2 blocks of 16
+    original_weight = model.selected.weight.detach().clone()
+    apply_quantization_inplace(
+        model, QuantizationConfig(method="int8_sim", qdq_group_size=16, include_regex=["^selected$"])
+    )
+    assert isinstance(model.selected, QdqSimLinear)
+    assert model.selected.qdq_group_size == 16
+    assert "group16" in repr(model.selected)
+    # Weight: one scale per (output channel, 16-wide K block).
+    torch.testing.assert_close(model.selected.weight.float(), fake_quant_int8(original_weight, group_size=16).float())
+    # Activation: one scale per (token, 16-wide K block), applied per call.
+    inputs = torch.randn(3, 32).to(torch.bfloat16)
+    normed = model.norm(inputs)
+    expected = nn.functional.linear(fake_quant_int8(normed, group_size=16), model.selected.weight, model.selected.bias)
+    torch.testing.assert_close(model.selected(normed), expected)
+
+
+def test_apply_quantization_inplace_group_size_rejects_per_tensor_fp8() -> None:
+    model = TinyMixedModel()
+    with pytest.raises(ValueError, match="requires fp8_granularity='per_row'"):
+        apply_quantization_inplace(
+            model,
+            QuantizationConfig(
+                method="fp8_sim", fp8_granularity="per_tensor", qdq_group_size=16, include_regex=["^selected$"]
+            ),
+        )

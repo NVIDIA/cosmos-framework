@@ -47,6 +47,7 @@ from cosmos_framework.utils import misc
 from cosmos_framework.utils.flags import SMOKE
 from cosmos_framework.utils.generator.quantization import (
     apply_modelopt_fp8_checkpoint_inplace,
+    apply_quantization_inplace,
     is_modelopt_fp8_checkpoint,
     plan_modelopt_fp8_targets,
 )
@@ -690,6 +691,17 @@ class Cosmos3OmniModel(transformers.PreTrainedModel):
             raise ValueError(
                 "A ModelOpt FP8 checkpoint is already quantized; do not also request runtime quantization."
             )
+        if quantization_config.method is not None and parallelism_config.data_parallel_shard_degree > 1:
+            raise ValueError("Runtime quantization is not supported for DP sharded models (use dp_shard_size=1).")
+
+        def _apply_runtime_quantization(loaded_model: "Cosmos3OmniModel") -> None:
+            # Runtime PTQ (torchao recipes and the int8_sim / fp8_sim Q/DQ
+            # simulations) must see the *loaded* weights, so it runs after the
+            # checkpoint is in place. Applied to the OmniMoTModel so FQNs
+            # (``net.language_model...``) match the DCP loader path.
+            if quantization_config.method is not None:
+                apply_quantization_inplace(loaded_model.model, quantization_config)
+
         if modelopt_checkpoint and not _is_diffusers_checkpoint(checkpoint_path):
             raise ValueError(f"ModelOpt FP8 loading requires a diffusers-format checkpoint layout: {checkpoint_path}")
         _validate_mixed_precision_load(
@@ -757,6 +769,7 @@ class Cosmos3OmniModel(transformers.PreTrainedModel):
                         )
 
                         install_mixed_precision_runtime(model.model.net, quantization_config)
+                    _apply_runtime_quantization(model)
                     return model
                 state_dict = get_model_state_dict(model)
                 _raise_on_missing_vision_keys(checkpoint_path, state_dict)
@@ -764,6 +777,7 @@ class Cosmos3OmniModel(transformers.PreTrainedModel):
             case _:
                 assert_never(checkpoint_type)
         dcp.load(state_dict=state_dict, storage_reader=storage_reader)
+        _apply_runtime_quantization(model)
         return model
 
     @classmethod

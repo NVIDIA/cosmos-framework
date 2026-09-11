@@ -482,8 +482,7 @@ class CheckpointType(StrEnum):
         transformer_path = path / "transformer"
         has_root_hf_weights = any(path.glob("*.safetensors")) or any(path.glob("*.safetensors.index.json"))
         has_diffusers_hf_weights = (path / "model_index.json").is_file() and (
-            any(transformer_path.glob("*.safetensors"))
-            or any(transformer_path.glob("*.safetensors.index.json"))
+            any(transformer_path.glob("*.safetensors")) or any(transformer_path.glob("*.safetensors.index.json"))
         )
         has_hf_weights = has_root_hf_weights or has_diffusers_hf_weights
         if has_hf_weights:
@@ -723,20 +722,24 @@ CfgpSize = Annotated[int, pydantic.Field(ge=1, le=2)]
 CompiledRegion = Literal["all", "language"]
 
 # Low-precision quantization method to apply to the model at load time.
-# One of ``mxfp8`` / ``nvfp4``, or ``None`` (default) to disable.
-# Routed to the VFM model loader, which selects an FSDP-compatible
-# (module-swap) path when sharded (``dp_shard_size > 1``) and an in-place
-# path when replicated (``dp_shard_size == 1``). Note ``mxfp8`` / ``nvfp4``
-# are only supported on the replicated path.
-QuantizationMethod = Literal["mxfp8", "nvfp4"]
+# ``mxfp8`` / ``nvfp4`` / ``fp8`` run real low-precision GEMMs through torchao;
+# ``int8_sim`` / ``fp8_sim`` are torchao-free quantize-dequantize simulations
+# that keep dense bf16 GEMMs (see ``QuantizationConfig``). ``None`` (default)
+# disables. All runtime methods require the replicated layout
+# (``dp_shard_size == 1``).
+QuantizationMethod = Literal["mxfp8", "nvfp4", "fp8", "int8_sim", "fp8_sim"]
+Fp8Granularity = Literal["per_row", "per_tensor"]
 
 
 class QuantizationArgs(ArgsBase):
     """Low-precision quantization arguments applied to the model at load time."""
 
     quantization_method: QuantizationMethod | None
+    quantization_fp8_granularity: Fp8Granularity
+    quantization_group_size: int
     quantization_include_regex: list[str]
     quantization_exclude_regex: list[str]
+    quantization_target_fqns_file: str | None
     mixed_precision_first_steps: int
     mixed_precision_last_steps: int
     mixed_precision_reasoner_policy: Literal["high_precision", "base_precision"]
@@ -745,15 +748,33 @@ class QuantizationArgs(ArgsBase):
 
 class QuantizationOverrides(OverridesBase):
     quantization_method: QuantizationMethod | None = None
-    """Quantization method (``mxfp8`` / ``nvfp4``), or ``None`` to disable.
+    """Runtime quantization method, or ``None`` to disable.
 
     Post-training quantization (PTQ) is applied in-place to the model at load
-    time. Only supported on Blackwell architectures and when FSDP sharding is disabled.
+    time; FSDP sharding must be disabled (``dp_shard_size == 1``). ``mxfp8`` /
+    ``nvfp4`` need Blackwell tensor cores and torchao; ``fp8`` (torchao
+    ``torch._scaled_mm``) also runs on Hopper/Ada. ``int8_sim`` (symmetric INT8,
+    per-channel weight + per-token activation) and ``fp8_sim`` (E4M3, see
+    ``--quantization-fp8-granularity``) are quantize-dequantize simulations
+    executed as dense bf16 GEMMs: they reproduce the number-format error without
+    low-precision kernels or torchao, and share the module selection with the
+    other methods so the quantized module set is identical across methods.
     """
+    quantization_fp8_granularity: Fp8Granularity = "per_row"
+    """Scale granularity for ``fp8`` / ``fp8_sim``: ``per_row`` (per-output-channel weight +
+    per-token activation) or ``per_tensor`` (one scale per weight and per activation tensor)."""
+    quantization_group_size: int = pydantic.Field(default=0, ge=0)
+    """``int8_sim`` / ``fp8_sim`` only: block size along the input dimension K for both operands. 0 = one
+    scale per weight output channel / per activation token; g > 0 = one scale per g consecutive K elements
+    of each weight row and of each token (K must be divisible by g; not with ``per_tensor``)."""
     quantization_include_regex: list[str] = ["language_model.model.layers"]
     """Regexes matched against module FQNs; a Linear is quantized only if it matches one (empty = all)."""
     quantization_exclude_regex: list[str] = pydantic.Field(default_factory=list)
     """Regexes matched against module FQNs; a Linear is skipped if it matches any."""
+    quantization_target_fqns_file: str | None = None
+    """Text file with one module FQN per line (``#`` comments and blank lines ignored). When set it
+    replaces the include/exclude regexes: exactly these Linears are quantized, and the run fails if any
+    listed FQN is missing or not a Linear. Pins two methods to one identical module set."""
     mixed_precision_first_steps: int = pydantic.Field(default=0, ge=0)
     """ModelOpt FP8 checkpoints only: run the first N diffusion steps with 16-bit
     activations (W8A16) instead of FP8 activations (W8A8). 0 disables."""
