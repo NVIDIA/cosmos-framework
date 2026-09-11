@@ -47,7 +47,7 @@ _BASE_SKIP_TOKENS = (
     "norm_moe_gen|rotary_emb|action2llm|llm2action|sound2llm|llm2sound"
 )
 _BASE_SKIP_TOKENS_NO_LM = (
-    "time_embedder|vae2llm|llm2vae|embed_tokens|"
+    "visual|lm_head|time_embedder|vae2llm|llm2vae|embed_tokens|"
     "norm_q|norm_k|input_layernorm|post_attention_layernorm|"
     "norm_moe_gen|rotary_emb|action2llm|llm2action|sound2llm|llm2sound"
 )
