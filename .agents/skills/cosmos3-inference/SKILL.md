@@ -27,6 +27,7 @@ All paths below are relative to the cosmos3 package root (`../../../` from this 
 | User question                                                           | Go to                                                                                   |
 | ----------------------------------------------------------------------- | --------------------------------------------------------------------------------------- |
 | How do I run inference? (single-GPU, multi-GPU)                         | `README.md` § Inference                                                                 |
+| How do I run transfer / multi-transfer inference?                       | `../cosmos3-transfer-inference/SKILL.md`, then `cosmos_framework/inference/transfer.py` |
 | Which model should I use? (Nano vs Super, memory, shift)                | `README.md` § Models                                                                    |
 | Which modality? (t2i, t2v, i2v, examples)                               | `README.md` § Modalities                                                                |
 | What parallelism preset? (latency vs throughput)                        | `README.md` § Inference                                                                 |
@@ -48,11 +49,13 @@ All paths below are relative to the cosmos3 package root (`../../../` from this 
 - **Resume**: interrupted runs can be resumed by re-running the same command — existing outputs are skipped automatically.
 - **`--keep-going`**: continues processing remaining samples after a per-sample failure (e.g. guardrail rejection). Used in online serving by default.
 - **Unique names**: every sample in a run must have a unique `name` field, or the script will error.
+- **Transfer routing**: for edge/blur/depth/seg/wsm transfer or multi-transfer, use `../cosmos3-transfer-inference/SKILL.md`; transfer has extra sample fields and single-sample generation rules that are not covered by generic inference docs.
 
 ## Related skills
 
-| Skill                                  | When to use                                    |
-| -------------------------------------- | ---------------------------------------------- |
-| `../cosmos3-setup/SKILL.md`            | Installation and environment setup             |
-| `../cosmos3-codebase-nav/SKILL.md`     | Finding files, parameters, and configs in code |
-| `../cosmos3-env-troubleshoot/SKILL.md` | Debugging environment and runtime errors       |
+| Skill                                    | When to use                                    |
+| ---------------------------------------- | ---------------------------------------------- |
+| `../cosmos3-setup/SKILL.md`              | Installation and environment setup             |
+| `../cosmos3-codebase-nav/SKILL.md`       | Finding files, parameters, and configs in code |
+| `../cosmos3-env-troubleshoot/SKILL.md`   | Debugging environment and runtime errors       |
+| `../cosmos3-transfer-inference/SKILL.md` | Transfer and multi-transfer control inference  |
