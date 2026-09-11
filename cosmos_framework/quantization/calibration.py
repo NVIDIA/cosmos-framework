@@ -137,9 +137,10 @@ def apply_legacy_attention(model, *, text_width: int = 512) -> None:
 
     from cosmos_framework.data.generator.sequence_packing.runtime import (
         from_mode_splits,
-        get_causal_seq_padded,
-        get_full_only_seq_padded,
+        get_causal_seq,
+        get_full_only_seq,
         get_gen_seq,
+        get_num_real_samples,
         get_num_real_tokens,
         get_und_seq,
     )
@@ -150,7 +151,7 @@ def apply_legacy_attention(model, *, text_width: int = 512) -> None:
             or attention_mask.control_stream_token_ranges is not None
             or attention_mask.flex_block_mask is not None
             or kwargs.get("memory_value") is not None
-            or query_pack["sample_offsets"].shape[0] != 2
+            or get_num_real_samples(query_pack) != 1
         ):
             raise ValueError(
                 "legacy calibration behavior supports only single-sample, "
@@ -163,9 +164,9 @@ def apply_legacy_attention(model, *, text_width: int = 512) -> None:
         def flatten_heads(tensor: torch.Tensor) -> torch.Tensor:
             return tensor.squeeze(0).transpose(0, 1).flatten(-2, -1)
 
-        causal_q, _, _ = get_causal_seq_padded(query_pack)
-        causal_k, _, _ = get_causal_seq_padded(key_pack)
-        causal_v, _, _ = get_causal_seq_padded(value_pack)
+        causal_q, _ = get_causal_seq(query_pack)
+        causal_k, _ = get_causal_seq(key_pack)
+        causal_v, _ = get_causal_seq(value_pack)
         causal_output = F.scaled_dot_product_attention(
             heads_first(causal_q),
             heads_first(causal_k),
@@ -184,7 +185,7 @@ def apply_legacy_attention(model, *, text_width: int = 512) -> None:
         key_gen = get_gen_seq(generation_key_pack)[:num_gen]
         value_und = get_und_seq(value_pack)[:num_und]
         value_gen = get_gen_seq(value_pack)[:num_gen]
-        full_q, _, _ = get_full_only_seq_padded(query_pack)
+        full_q, _ = get_full_only_seq(query_pack)
         zero_k = key_und.new_zeros((padding_rows, *key_und.shape[1:]))
         zero_v = value_und.new_zeros((padding_rows, *value_und.shape[1:]))
         generation_output = F.scaled_dot_product_attention(
