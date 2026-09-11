@@ -20,7 +20,12 @@ import torch
 from cosmos_framework.model.attention import attention
 from cosmos_framework.model.generator.mot.attention import SplitInfo, dispatch_attention
 from cosmos_framework.model.generator.utils.memory import KVToStore, MemoryState, MemoryValue
-from cosmos_framework.data.generator.sequence_packing.runtime import SequencePack, from_und_gen_splits, get_gen_seq
+from cosmos_framework.data.generator.sequence_packing.runtime import (
+    SequencePack,
+    drop_pad_segment,
+    from_und_gen_splits,
+    get_gen_seq,
+)
 
 
 class UndKVCache:
@@ -79,8 +84,17 @@ class InferenceTextKVMemoryState(MemoryState):
         # Precompute the multi-sample layout outside the compiled decoder layers.
         # Doing this here avoids converting CUDA offsets to Python lists and
         # rebuilding the same chunked K/V layout once per layer.
+        # Real-sample offsets. Everything below counts samples off these -- the ``numel() > 2``
+        # multi-sample test, the per-sample lengths, and the varlen ranges handed to attention --
+        # and the towers carry the trailing padding as one extra segment, which would read as a
+        # further sample: a single-sample pack would take the multi-sample path and give the
+        # padding its own varlen range.
         und_off = hidden_states.get("_causal_seq_offsets")
         gen_off = hidden_states.get("_full_only_seq_offsets")
+        if isinstance(und_off, torch.Tensor):
+            und_off = drop_pad_segment(hidden_states, und_off)
+        if isinstance(gen_off, torch.Tensor):
+            gen_off = drop_pad_segment(hidden_states, gen_off)
         if isinstance(und_off, torch.Tensor) and isinstance(gen_off, torch.Tensor) and und_off.shape != gen_off.shape:
             raise RuntimeError(f"und/gen sample counts disagree: und={und_off.numel() - 1} gen={gen_off.numel() - 1}")
         if isinstance(und_off, torch.Tensor) and isinstance(gen_off, torch.Tensor) and und_off.numel() > 2:

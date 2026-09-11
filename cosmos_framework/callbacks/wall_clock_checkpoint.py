@@ -70,9 +70,9 @@ whose entire purpose is to avoid a tail event: the run above wrote in 84s and in
 844s within the same hour, and anything centred between the two clears a
 five-minute gap that the slow write would then stall for nine minutes.  The
 assumed floor covers the case where nothing has been measured yet, which is not
-an edge case -- async completion is only reported when the next save drains the
-previous one, so the first wall-clock decision after a start or resume routinely
-has no sample at all, and on a preempted job that first cycle comes around often.
+an edge case -- a duration is only known once a write of this process has landed,
+so the first wall-clock decision after a start or resume has no sample at all, and
+on a preempted job that first cycle comes around often.
 
 The consequence is worth stating plainly: a job whose milestones are closer
 together than roughly the interval plus the assumed write time will run on its
@@ -91,11 +91,12 @@ never a ``save_iter`` milestone, so tooling that assumes checkpoints persist
 promotion to the permanent bucket -- is unaffected.
 
 Deletion is asynchronous out of necessity, not as an optimization.
-``on_save_checkpoint_success`` is dispatched from
-``_wait_for_previous_async_checkpoint()``, which runs on the main thread at
-the top of the *next* ``save()``, so any blocking work there stalls the
-training step.  Removing a checkpoint means thousands of individual object
-deletions, so it is handed to a background thread on rank 0.
+``on_save_checkpoint_success`` is dispatched on the main thread -- by the
+checkpointer's per-step poll of the background writer, or by the blocking
+drain at the top of the next ``save()``, whichever reaches the finished write
+first -- so any blocking work there stalls the training step.  Removing a
+checkpoint means thousands of individual object deletions, so it is handed to
+a background thread on rank 0.
 
 Because that thread is a daemon, an interpreter exit can abandon a deletion
 midway.  A ``.deleting`` marker is therefore written before the first object
@@ -427,10 +428,9 @@ class WallClockCheckpoint(Callback):
         844s within the hour, and any statistic sitting between the two clears a
         five-minute gap the slow write would stall for nine minutes.
 
-        The floor carries the cold start. Async completion is only reported when the
-        next save drains the previous one, so the first decision after a start or
-        resume has nothing measured yet, and it is also the decision most likely to
-        sit near a milestone.
+        The floor carries the cold start. A write's duration is only known once one has
+        landed, so the first decision after a start or resume has nothing measured yet,
+        and it is also the decision most likely to sit near a milestone.
         """
         return max(self._assumed_write_seconds, max(self._write_samples, default=0.0))
 

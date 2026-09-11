@@ -136,6 +136,18 @@ class AbstractCheckpointer(ABC):
     ) -> int:
         pass
 
+    def poll_async_save(self) -> None:
+        """Report an asynchronous save that has since finished, without blocking on one that has not.
+
+        Called once per optimizer step by
+        :class:`cosmos_framework.utils.callback.ConfirmAsyncCheckpoint`. Checkpointers that write in
+        the background override this to dispatch ``on_save_checkpoint_success`` as soon as the
+        write lands, instead of deferring it to the next save or to ``finalize()`` -- a job
+        killed abnormally in between would otherwise never confirm a checkpoint that is
+        already durable on disk. Synchronous checkpointers have nothing in flight, so the
+        default does nothing.
+        """
+
     @property
     def save_bucket(self):
         """Get the bucket name for saving checkpoints."""

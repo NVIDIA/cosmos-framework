@@ -16,6 +16,7 @@ from typing import Callable
 
 import torch
 import torch.nn as nn
+from torch._dynamo.decorators import mark_unbacked
 from torch.distributed.algorithms._checkpoint.checkpoint_wrapper import (
     checkpoint_wrapper as ptd_checkpoint_wrapper,
 )
@@ -160,6 +161,146 @@ def apply_ac(
         layers.register_module(layer_id, transformer_block)
 
 
+# Sequence packing hands each transformer block a fresh ``causal_seq`` /
+# ``full_only_seq`` token count (and the offset / sample-id tensors that
+# describe them) on essentially every step, since the pack layout depends on
+# which samples got packed together. Dynamo 0/1-specializes the first shape
+# it traces for these and Inductor further specializes codegen (32-bit
+# indexing, broadcast layout) on that concrete value, so the next batch with
+# a different count fails those guards and forces a recompile. Production
+# logs show exactly this: repeated ``Recompiling function forward in
+# .../checkpoint_wrapper.py`` with guards like
+# ``2 <= causal_seq.storage_offset()``, ``(...) // head_dim != 1``, and
+# ``_causal_sample_ids size mismatch (expected 1, actual 45)`` — all
+# instances of Dynamo treating a dim it first saw as 0/1 or a fixed value as
+# guaranteed to stay that way. These are the dim-0 (token-count) tensors
+# that vary per pack; everything else in a ``SequencePack`` (mode lists, the
+# ``max_*_len`` bounds, etc.) is a Python scalar or list, which Dynamo
+# specializes on regardless of anything done here.
+#
+# All three offset tensors carry their pad segment in place (see
+# ``runtime.has_pad_segment``), so marking them covers the padded path -- the
+# common one in production, since alignment and CUDA-graph bucketing pad most
+# packs -- without any separate entries.
+_PACK_DYNAMIC_LEN_KEYS: tuple[str, ...] = (
+    "causal_seq",
+    "full_only_seq",
+    "_causal_sample_ids",
+    "_full_only_sample_ids",
+    "_causal_indices",
+    "_full_indices",
+    "_causal_seq_offsets",
+    "_full_only_seq_offsets",
+    "sample_offsets",
+)
+
+
+def _mark_pack_unbacked(pack: SequencePack) -> None:
+    """Mark ``pack``'s per-step-varying dim-0 tensors as unbacked before a compiled call.
+
+    Must run on every call (not once at compile time): each training step builds a brand new
+    ``SequencePack`` with brand new tensor objects, and Dynamo's unbacked marking is stored as
+    an attribute on the tensor object itself, not learned from previous calls.
+
+    ``mark_unbacked`` makes the compiler report dim 0's size as "always not equal to zero or
+    one" (see ``torch._dynamo.decorators.mark_unbacked``'s docstring) -- a hard-coded assumption,
+    not a guess it falls back from. ``sequence_packing/runtime.py`` documents that this dimension
+    *can* legitimately be 0 for some real batches (e.g. AR no-text packs carry full splits only,
+    so their ``causal_seq`` is empty), so marking a genuinely 0/1-sized tensor here would violate
+    that assumption and risk silently wrong compiled output instead of a guard failure. Skip those
+    and let Dynamo fall back to its normal backed/specialized handling for that one call --
+    correctness over avoiding an occasional recompile.
+
+    Deliberately without ``strict=True``, despite how its docstring reads. ``strict`` does not
+    strengthen the marking -- it replaces it. ``mark_unbacked`` returns early under ``strict``,
+    recording the index in ``_dynamo_strict_unbacked_indices`` and never in
+    ``_dynamo_unbacked_indices``, and only the latter selects ``DimDynamic.UNBACKED`` in
+    ``_dynamo/variables/builder.py``. The dim instead falls through to ordinary automatic-dynamic
+    and gets a *backed* symbol, which carries a hint -- and a hint is exactly what lets Inductor
+    answer size questions in ``broadcast_symbolic_shapes`` and ``scheduler.can_fuse`` and install
+    the guards whose failures caused the recompiles this marking exists to remove. What ``strict``
+    does supply is a constraint that raises if the dim is *constant-folded*, which is a narrower
+    event than being guarded on, so it never fired while the recompiles continued. Measured
+    identically on torch 2.9 and 2.13: ``mark_unbacked(x, 0)`` yields ``u0``, ``strict=True``
+    yields ``s77``.
+
+    Consumers must therefore be data-dependent-friendly, since an unbacked dim has no value to
+    settle a branch or a comparison with. Three kinds of site need care, all of them reached from
+    the compiled block: a plain ``if`` on one of these lengths (use ``guard_or_true`` /
+    ``guard_or_false``), an invariant the attention stack re-derives and guards on internally
+    (state it with ``torch._check``), and an ``int()`` coercion, which demands a concrete value
+    outright and has no friendly form; leave the length symbolic instead.
+
+    A consumer that derives a *smaller* count from one of these lengths and uses it as a tensor
+    dimension needs the 0/1 exclusion to shift with it, because PyTorch specializes the derived
+    dim, not the one marked here: a size-1 derived dim is specialized to the constant 1, which
+    pins the marked length to a constant too. ``sample_offsets`` is the one such key -- it carries
+    ``N + 1`` offsets for ``N`` samples -- and its consumer,
+    ``unified_mot._get_local_sample_ids``, avoids the whole situation by reading the pad-segment
+    length instead, so no shifted exclusion is needed here.
+
+    Marks unconditionally: whether a given call should mark at all is
+    :func:`_wrap_forward_with_unbacked_pack`'s decision, since both of the conditions that answer it
+    are properties of the call rather than of the pack.
+    """
+    for key in _PACK_DYNAMIC_LEN_KEYS:
+        tensor = pack.get(key)
+        if not isinstance(tensor, torch.Tensor) or tensor.dim() == 0:
+            continue
+        if tensor.shape[0] in (0, 1):
+            continue
+        mark_unbacked(tensor, 0)
+
+
+def _wrap_forward_with_unbacked_pack(forward: Callable) -> Callable:
+    """Wrap a compiled block's ``forward`` to mark its packed-sequence args unbacked first.
+
+    ``input`` is the block's own packed sequence; ``packed_position_embeddings`` is the
+    ``(cos, sin)`` pair of packs describing RoPE embeddings over the same layout, so it varies in
+    lockstep with ``input`` and needs the same treatment.
+
+    Packs whose ``attention_mask`` carries a FlexAttention block mask are left alone, because that
+    path cannot currently be compiled with unbacked lengths. The obstruction is not in this repo:
+    the generator's full attention runs over a fused ``[UND | GEN]`` stream, whose outer stride is
+    ``heads * head_dim * (u_und + u_gen)``, and Inductor's layout pass sorts strides through
+    ``ir.get_fill_order``, which falls back to a plain ``sorted()`` whenever its caller passes no
+    ShapeEnv. Comparing that stride against a constant inside ``sorted()`` raises
+    ``GuardOnDataDependentSymNode`` from the middle of an Inductor pass. Nothing in this
+    repo can annotate a comparison there: ``torch._check`` relates whole lengths, and the ShapeEnv
+    does not substitute such a relation back into a stride expression already built from the
+    individual terms.
+
+    Marking is also confined to training via ``torch.is_grad_enabled``, on the same reasoning that
+    gates ``attention._use_varlen``'s dense shortcut: the recompiles it removes come from batch
+    composition varying between training steps, while inference holds its pack layout fixed across
+    the denoising loop. Marking there buys nothing and breaks compilation outright, because an
+    unbacked length used as a slice offset makes the resulting view's ``storage_offset``
+    data-dependent -- ``heads * head_dim * u0`` for the heads-flattened attention output that
+    ``o_proj`` consumes.
+
+    Both conditions are tested here, per call, and neither can move to ``apply_compile`` beside
+    ``CompileConfig.mark_unbacked``. That flag is read once at setup; these two are properties of
+    the individual call. Grad state in particular flips within one process -- the periodic sampling
+    callbacks drive these same compiled blocks under ``torch.no_grad`` -- so a setup-time reading
+    would say "training" forever and mark straight through the first sampling callback.
+    """
+
+    def wrapped(
+        input: SequencePack,
+        attention_mask,
+        packed_position_embeddings: tuple[SequencePack, SequencePack],
+        *args,
+        **kwargs,
+    ):
+        if torch.is_grad_enabled() and getattr(attention_mask, "flex_block_mask", None) is None:
+            _mark_pack_unbacked(input)
+            for pos_emb_pack in packed_position_embeddings:
+                _mark_pack_unbacked(pos_emb_pack)
+        return forward(input, attention_mask, packed_position_embeddings, *args, **kwargs)
+
+    return wrapped
+
+
 def apply_compile(model: nn.Module, config: CompileConfig) -> None:
     """
     Apply torch.compile to each TransformerBlock, which makes compilation efficient due to
@@ -179,6 +320,16 @@ def apply_compile(model: nn.Module, config: CompileConfig) -> None:
             mode="reduce-overhead" if config.use_cuda_graphs else None,
             options=compile_options or None,
         )
+        # Instance-attribute override, not a subclass/wrapper module: OptimizedModule already
+        # installs ``forward`` as an instance attribute (see torch._dynamo.eval_frame), so this
+        # replaces only the call path and leaves module structure (children, state_dict) untouched.
+        #
+        # Skipping the wrapper entirely, rather than gating inside it, is what makes
+        # ``mark_unbacked=False`` a true restoration of the pre-marking behavior: the block is then
+        # the compiled module itself, with no extra frame between it and the caller. This is also
+        # the only place the marking is installed, so the flag disables it everywhere.
+        if config.mark_unbacked:
+            block.forward = _wrap_forward_with_unbacked_pack(block.forward)
         model.model.layers.register_module(layer_id, block)
 
 

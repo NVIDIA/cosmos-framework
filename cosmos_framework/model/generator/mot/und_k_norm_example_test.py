@@ -272,7 +272,7 @@ def test_two_way_gen_output_independent_of_raw_und_key_scale():
     """Gen output must be identical when raw K_und scale changes but normed keys are fixed.
 
     When packed_key_states_normalized is provided, two_way_attention routes gen full-attention
-    through get_all_seq(packed_key_states_normalized), not packed_key_states.  So regardless
+    through get_all_seq_unpadded(packed_key_states_normalized), not packed_key_states.  So regardless
     of whether packed_key_states has 1x or 100x K_und, the gen output is the same.
     Reasoner output (causal path) uses packed_key_states and therefore differs.
     """

@@ -578,6 +578,13 @@ def load_config(
         except ImportError:
             pass
 
+    if TRAINING:
+        # Imported here for the same reason ``TrainerConfig.callbacks`` is declared under
+        # TRAINING: the callback stack it pulls in is training-only.
+        from cosmos_framework.utils.callback import ensure_async_checkpoint_confirmation
+
+        config = ensure_async_checkpoint_confirmation(config)
+
     t2 = time.monotonic_ns()
     logging.debug(f"total time to load config: {(t2 - t1) / 1e6:.2f}ms")
     return config

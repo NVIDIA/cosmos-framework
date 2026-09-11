@@ -26,10 +26,10 @@ from cosmos_framework.model.generator.mot.flex_attention import FlexBackend, fle
 from cosmos_framework.model.generator.utils.memory import KVToStore, MemoryValue
 from cosmos_framework.data.generator.sequence_packing.runtime import (
     SequencePack,
+    drop_pad_segment,
     from_mode_splits,
     from_und_gen_splits,
     get_causal_seq,
-    get_causal_seq_padded,
     get_full_only_seq,
     get_gen_seq,
 )
@@ -328,7 +328,10 @@ def three_way_attention_no_memory_ac_safe(
 
     if attention_meta is not None and attention_meta.null_action_supertokens:
         full_v = full_v.clone()  # [N_gen,H_kv,D]
-        starts = full_q_offsets[:-1].long()  # [B]
+        # Real-sample offsets: full_q_offsets carries the padding as a trailing segment, whose
+        # start is not a sample's. Stepping num_action_tokens_per_supertoken forward from it can
+        # run past the end of full_v, since the pad segment is only guaranteed non-empty.
+        starts = drop_pad_segment(packed_query_states, full_q_offsets)[:-1].long()  # [B]
         null_positions = (
             starts.unsqueeze(1) + torch.arange(attention_meta.num_action_tokens_per_supertoken, device=starts.device)
         ).reshape(-1)  # [B*N_null]
@@ -450,9 +453,10 @@ def two_way_flex_attention_with_memory(
     packed_key_normalized = (
         packed_key_states_normalized if packed_key_states_normalized is not None else packed_key_states
     )
-    causal_q, causal_q_offsets, max_causal_len = get_causal_seq_padded(packed_query_states)  # [N_und,H,D], [B+1 or B+2]
-    causal_k, causal_k_offsets, _ = get_causal_seq_padded(packed_key_states)  # [N_und,H,D], [B+1 or B+2]
-    causal_v, _, _ = get_causal_seq_padded(packed_value_states)  # [N_und,H,D], [B+1 or B+2]
+    causal_q, causal_q_offsets = get_causal_seq(packed_query_states)  # [N_und,H,D], [B+1 or B+2]
+    causal_k, causal_k_offsets = get_causal_seq(packed_key_states)  # [N_und,H,D], [B+1 or B+2]
+    causal_v, _ = get_causal_seq(packed_value_states)  # [N_und,H,D], [B+1 or B+2]
+    max_causal_len = packed_query_states["max_causal_len"]
     full_q, _ = get_full_only_seq(packed_query_states)  # [N_gen,H,D], [B+1]
 
     use_dont_care_mask = causal_q_offsets is causal_k_offsets
@@ -1707,6 +1711,91 @@ def attention_AR_gen_only(
     q_gen = get_gen_seq(packed_query_states)  # [S_curr, H, D]
     k_gen = get_gen_seq(packed_key_states)  # [S_curr, H_kv, D]
     v_gen = get_gen_seq(packed_value_states)  # [S_curr, H_kv, D]
+
+    if memory_value.batch_size > 1:
+        if memory_value.for_cuda_graphs or memory_value.post_saturation_static_compile:
+            raise ValueError("Batched AR attention supports only the eager dynamic-shape path")
+        if len(memory_value.gen_lens) != memory_value.batch_size:
+            raise ValueError(f"Expected {memory_value.batch_size} generation lengths, got {memory_value.gen_lens}")
+        if len(memory_value.und_lens) != memory_value.batch_size:
+            raise ValueError(f"Expected {memory_value.batch_size} understanding lengths, got {memory_value.und_lens}")
+
+        total_gen_len = sum(memory_value.gen_lens)
+        q_gen_real = q_gen[:total_gen_len]  # [N_q,H,D]
+        k_gen_real = k_gen[:total_gen_len]  # [N_q,H_kv,D]
+        v_gen_real = v_gen[:total_gen_len]  # [N_q,H_kv,D]
+        k_samples = list(torch.split(k_gen_real, memory_value.gen_lens, dim=0))  # list of [S_q_i,H_kv,D]
+        v_samples = list(torch.split(v_gen_real, memory_value.gen_lens, dim=0))  # list of [S_q_i,H_kv,D]
+
+        history_len = 0 if memory_value.gen_k_hist is None else memory_value.gen_k_hist.shape[1]
+        kv_lens = [
+            memory_value.und_lens[sample_idx] + history_len + memory_value.gen_lens[sample_idx]
+            for sample_idx in range(memory_value.batch_size)
+        ]
+        packed_k_flat = k_gen_real.new_empty((sum(kv_lens), *k_gen_real.shape[1:]))  # [N_kv,H_kv,D]
+        packed_v_flat = v_gen_real.new_empty((sum(kv_lens), *v_gen_real.shape[1:]))  # [N_kv,H_kv,D]
+        write_offset = 0
+        for sample_idx in range(memory_value.batch_size):
+            if memory_value.und_k_cached is not None:
+                assert memory_value.und_v_cached is not None
+                und_len = memory_value.und_lens[sample_idx]
+                packed_k_flat[write_offset : write_offset + und_len].copy_(
+                    memory_value.und_k_cached[sample_idx, :und_len]
+                )  # [S_und_i,H_kv,D]
+                packed_v_flat[write_offset : write_offset + und_len].copy_(
+                    memory_value.und_v_cached[sample_idx, :und_len]
+                )  # [S_und_i,H_kv,D]
+                write_offset += und_len
+            if memory_value.gen_k_hist is not None:
+                assert memory_value.gen_v_hist is not None
+                packed_k_flat[write_offset : write_offset + history_len].copy_(
+                    memory_value.gen_k_hist[sample_idx]
+                )  # [S_hist,H_kv,D]
+                packed_v_flat[write_offset : write_offset + history_len].copy_(
+                    memory_value.gen_v_hist[sample_idx]
+                )  # [S_hist,H_kv,D]
+                write_offset += history_len
+            current_len = memory_value.gen_lens[sample_idx]
+            packed_k_flat[write_offset : write_offset + current_len].copy_(k_samples[sample_idx])  # [S_q_i,H_kv,D]
+            packed_v_flat[write_offset : write_offset + current_len].copy_(v_samples[sample_idx])  # [S_q_i,H_kv,D]
+            write_offset += current_len
+        if write_offset != sum(kv_lens):
+            raise AssertionError(f"Packed {write_offset} K/V tokens, expected {sum(kv_lens)}")
+
+        packed_k = packed_k_flat.unsqueeze(0)  # [1,N_kv,H_kv,D]
+        packed_v = packed_v_flat.unsqueeze(0)  # [1,N_kv,H_kv,D]
+        q_offsets = [0]
+        kv_offsets = [0]
+        for q_len, kv_len in zip(memory_value.gen_lens, kv_lens, strict=True):
+            q_offsets.append(q_offsets[-1] + q_len)
+            kv_offsets.append(kv_offsets[-1] + kv_len)
+        cu_seqlens_q = torch.tensor(q_offsets, device=q_gen.device, dtype=torch.int32)  # [B+1]
+        cu_seqlens_kv = torch.tensor(kv_offsets, device=q_gen.device, dtype=torch.int32)  # [B+1]
+        attn_result = attention(
+            query=q_gen_real.unsqueeze(0),  # [1,N_q,H,D]
+            key=packed_k,
+            value=packed_v,
+            cumulative_seqlen_Q=cu_seqlens_q,
+            cumulative_seqlen_KV=cu_seqlens_kv,
+            max_seqlen_Q=max(memory_value.gen_lens),
+            max_seqlen_KV=max(kv_lens),
+            is_causal=False,
+            return_lse=False,
+            backend="natten",
+        )  # [1,N_q,H,D]
+        assert isinstance(attn_result, torch.Tensor)
+        gen_out_real = attn_result.squeeze(0).flatten(-2, -1)  # [N_q,H*D]
+        if q_gen.shape[0] == total_gen_len:
+            gen_out = gen_out_real  # [N_q,H*D]
+        else:
+            gen_out = q_gen.new_zeros((q_gen.shape[0], gen_out_real.shape[-1]))  # [N_q_padded,H*D]
+            gen_out[:total_gen_len] = gen_out_real  # [N_q,H*D]
+        output = from_und_gen_splits(
+            gen_out.new_empty(0, gen_out.shape[-1]),
+            gen_out,
+            packed_query_states,
+        )
+        return output, None
 
     gen_len = memory_value.gen_len
     k_gen_real = k_gen[:gen_len]  # [S_gen_real, H_kv, D]

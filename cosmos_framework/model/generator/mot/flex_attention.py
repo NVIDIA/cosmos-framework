@@ -248,24 +248,25 @@ def _build_stream_sample_ids(
     seq_len: int,
     device: torch.device,
 ) -> torch.Tensor:
-    """Per-token sample id for one packed stream in packed order (``-1`` for padding).
+    """Per-token sample id for one packed stream in packed order.
 
     ``offsets`` is the cumulative per-sample offset array for the stream (shape
-    ``[num_samples + 1]``), so ``searchsorted`` maps every position to its sample.
-    Positions at or beyond the last real token (``offsets[-1]``) are marked ``-1`` so
-    that (a) real queries never attend to padding and (b) padded queries attend only
-    to other padding, avoiding an empty-softmax NaN. Uses only tensor ops (no host
-    sync) so it stays inside a compiled graph.
+    ``[num_samples + 1]``), so ``searchsorted`` maps every position to its sample. Positions at or
+    beyond the last offset land on ``num_samples``, an id no real sample holds, which is what makes
+    padding its own pseudo-sample: (a) real queries never attend to it and (b) padded queries
+    attend only to each other, avoiding an empty-softmax NaN. Both properties fall out of the
+    ``same_sample`` equality in :func:`_multiview_pair_predicate`, so nothing has to test for
+    padding explicitly, and it holds whether or not ``offsets`` carries a trailing pad segment.
+    Uses only tensor ops (no host sync) so it stays inside a compiled graph.
 
     Both streams of the fused key layout go through this: the GEN offsets give the
-    query-side ids, the UND (causal) offsets the ids of the key prefix.
+    query-side ids, the UND (causal) offsets the ids of the key prefix. They are held to the same
+    sample count, so their padding shares one id and pads attend across the two.
 
     Returns a ``[seq_len]`` ``int64`` tensor.
     """
-    real_count = offsets[-1]  # 0-dim tensor; no .item() / host sync.
     positions = torch.arange(seq_len, device=device)  # [seq_len]
-    sample_id = torch.searchsorted(offsets[1:].contiguous(), positions, right=True)  # [seq_len]
-    return torch.where(positions < real_count, sample_id, -1).to(torch.long)  # [seq_len]
+    return torch.searchsorted(offsets[1:].contiguous(), positions, right=True)  # [seq_len]
 
 
 def _und_flags(metadata: FlexMetadata) -> torch.Tensor:
@@ -761,14 +762,14 @@ def build_multiview_flex_metadata(
     *,
     seq_len: int,
     full_q_offsets: torch.Tensor,
-    sensor_mask_items: Sequence[Sequence[SensorMaskItem]],
-    caption_mask_items: Sequence[Sequence[CaptionMaskItem]] | None,
-    device: torch.device,
     num_und: int,
     causal_offsets: torch.Tensor | None,
     attention_scope: AttentionScope,
     decomposed_temporal_window_seconds: float | None,
     control_attends_sensor: bool,
+    sensor_mask_items: Sequence[Sequence[SensorMaskItem]],
+    caption_mask_items: Sequence[Sequence[CaptionMaskItem]] | None,
+    device: torch.device,
 ) -> FlexMetadata:
     """Build key-stream metadata for camera-major multiview transfer items.
 
@@ -792,10 +793,6 @@ def build_multiview_flex_metadata(
         full_q_offsets: cumulative per-sample GEN offsets, ``[len(sensor_mask_items) + 1]``;
             ``full_q_offsets[-1]`` is the real (unpadded) GEN token count, which the items'
             own token counts have to add up to.
-        sensor_mask_items: the items each sample owns, in packed order. See
-            :class:`SensorMaskItem` for what one describes and which of its fields the mask
-            rules read.
-        device: device for the returned tensors.
         num_und: block-padded UND (causal) stream length, which prefixes the key
             stream. 0 leaves the metadata GEN-only, for a square self-attention mask.
         causal_offsets: cumulative per-sample UND offsets, ``[num_samples + 1]``;
@@ -822,6 +819,9 @@ def build_multiview_flex_metadata(
         control_attends_sensor: whether a control query may attend to every non-control sensor
             key in its own view, across all frames and noise states. False preserves the existing
             one-way sensor-to-control connectivity. Applies equally to camera and LiDAR streams.
+        sensor_mask_items: the items each sample owns, in packed order. See
+            :class:`SensorMaskItem` for what one describes and which of its fields the mask
+            rules read.
         caption_mask_items: the captions each sample's UND stream carries, in packed order,
             each naming the camera view it describes -- see :class:`CaptionMaskItem`. ``None`` (the
             default) labels every UND token ``-1``, i.e. one caption for the whole rig,
@@ -830,6 +830,7 @@ def build_multiview_flex_metadata(
             unrestricted as it was. Supplying it requires a UND stream (``num_und`` non-zero),
             and each sample's captions must cover its camera views exactly once; see
             :func:`_build_und_view_ids`.
+        device: device for the returned tensors.
 
     Returns:
         :class:`FlexMetadata` whose per-token fields are each ``[num_und + seq_len]``: the
@@ -935,9 +936,13 @@ def build_multiview_flex_metadata(
     # These counts come from token_shapes while the offsets come from the packer's full splits.
     # If they disagree, _build_stream_sample_ids draws the padding boundary somewhere else than
     # this metadata does, so real tokens read as padding or padding reads as a real conditioning
-    # token. Reading the last offset costs one device sync per forward, which is affordable
-    # because this runs outside the compiled decoder layers.
-    packed_token_count = int(full_q_offsets[-1])
+    # token. Reading one offset costs one device sync per forward, which is affordable because
+    # this runs outside the compiled decoder layers.
+    #
+    # Indexed by sample count rather than from the end, so it reads the last *real* offset whether
+    # or not the caller's offsets carry a trailing pad segment. Both forms arrive here: the packer
+    # folds the segment into the tower offsets, while the unit cases below build pad-free ones.
+    packed_token_count = int(full_q_offsets[len(sensor_mask_items)])
     if real_token_count != packed_token_count:
         raise ValueError(
             f"Multiview metadata covers {real_token_count} GEN tokens but the pack holds "
@@ -1329,15 +1334,15 @@ def build_multiview_block_mask(
     *,
     seq_len: int,
     full_q_offsets: torch.Tensor,
-    sensor_mask_items: Sequence[Sequence[SensorMaskItem]],
-    caption_mask_items: Sequence[Sequence[CaptionMaskItem]] | None,
-    device: torch.device,
-    block_size: tuple[int, int],
     num_und: int,
     causal_offsets: torch.Tensor | None,
     attention_scope: AttentionScope,
     decomposed_temporal_window_seconds: float | None,
     control_attends_sensor: bool,
+    sensor_mask_items: Sequence[Sequence[SensorMaskItem]],
+    caption_mask_items: Sequence[Sequence[CaptionMaskItem]] | None,
+    block_size: tuple[int, int],
+    device: torch.device,
 ) -> BlockMask:
     """Build the GEN-tower :class:`BlockMask` for camera-major multiview items.
 
@@ -1358,14 +1363,14 @@ def build_multiview_block_mask(
     metadata = build_multiview_flex_metadata(
         seq_len=seq_len,
         full_q_offsets=full_q_offsets,
-        sensor_mask_items=sensor_mask_items,
-        caption_mask_items=caption_mask_items,
-        device=device,
         num_und=num_und,
         causal_offsets=causal_offsets,
         attention_scope=attention_scope,
         decomposed_temporal_window_seconds=decomposed_temporal_window_seconds,
         control_attends_sensor=control_attends_sensor,
+        sensor_mask_items=sensor_mask_items,
+        caption_mask_items=caption_mask_items,
+        device=device,
     )
     return build_block_mask(metadata, device, block_size)
 

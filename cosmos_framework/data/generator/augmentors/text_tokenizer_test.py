@@ -85,6 +85,25 @@ def test_transfer_tokenizer_accepts_av_multiview_system_prompt(monkeypatch: pyte
     assert result[text_tokenizer.TEXT_SYSTEM_PROMPT_KEY] == text_tokenizer._SYSTEM_PROMPT_AV_MULTIVIEW_TRANSFER
 
 
+def test_transfer_tokenizer_accepts_av_joint_camera_lidar_system_prompt(monkeypatch: pytest.MonkeyPatch) -> None:
+    processor = _FakeProcessor()
+    tokenizer = _make_transfer_tokenizer(
+        monkeypatch,
+        processor,
+        task="av_joint_camera_lidar_transfer",
+        emit_system_prompt=True,
+    )
+
+    result = tokenizer({"ai_caption": ["front view", "rear view"], "sample_n_views": 2})
+
+    assert result is not None
+    assert all(
+        call_kwargs["system_prompt"] == text_tokenizer._SYSTEM_PROMPT_AV_JOINT_CAMERA_LIDAR_TRANSFER
+        for _, call_kwargs in processor.calls
+    )
+    assert result[text_tokenizer.TEXT_SYSTEM_PROMPT_KEY] == text_tokenizer._SYSTEM_PROMPT_AV_JOINT_CAMERA_LIDAR_TRANSFER
+
+
 def test_separate_transfer_tokenizer_applies_cfg_dropout_once_per_sample(monkeypatch: pytest.MonkeyPatch) -> None:
     processor = _FakeProcessor()
     tokenizer = _make_transfer_tokenizer(monkeypatch, processor, cfg_dropout_rate=0.5)

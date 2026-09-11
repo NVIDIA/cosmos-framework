@@ -36,7 +36,7 @@ from cosmos_framework.data.generator.sequence_packing.runtime import (
     SequencePack,
     from_all_seq,
     from_mode_splits,
-    get_all_seq,
+    get_all_seq_unpadded,
     get_gen_seq,
     get_und_seq,
     sequence_pack_from_packed_sequence,
@@ -578,7 +578,7 @@ def test_context_parallel_attention_two_way():
     # Verify global pack has full 32-sample metadata
     if rank == 0:
         print(f"\n=== DEBUG: Global Pack Metadata ===")
-        all_seq = get_all_seq(global_q_pack)
+        all_seq = get_all_seq_unpadded(global_q_pack)
         print(f"global_q_pack all_seq shape: {all_seq.shape}")
         print(f"global_q_pack all_seq first 5: {all_seq[0:5, 0, 0]}")
         print(f"global_q_pack all_seq last 5: {all_seq[-5:, 0, 0]}")
@@ -824,7 +824,7 @@ def simple_packed_test():
         packed_gen_token_indexes=global_packed_data.vision.sequence_indexes,
     )
     print(f"\n=== DEBUG: Global Pack Metadata ===")
-    all_seq = get_all_seq(factored_q_pack)
+    all_seq = get_all_seq_unpadded(factored_q_pack)
     print(f"global_q_pack all_seq shape: {all_seq.shape}")
     print(f"local_pack all_seq first 5: {all_seq[0:5, 0, 0]}")
     print(f"local_pack all_seq last 5: {all_seq[-5:, 0, 0]}")
@@ -853,7 +853,7 @@ def simple_packed_test():
     merged_pack = from_mode_splits(merged_text_seq, merged_gen_seq, factored_q_pack, is_sharded=False)
 
     print(f"\n=== DEBUG: Local Pack Metadata ===")
-    all_seq = get_all_seq(merged_pack)
+    all_seq = get_all_seq_unpadded(merged_pack)
     print(f"local_pack all_seq shape: {all_seq.shape}")
     print(f"local_pack all_seq first 5: {all_seq[0:5, 0, 0]}")
     print(f"local_pack all_seq last 5: {all_seq[-5:, 0, 0]}")

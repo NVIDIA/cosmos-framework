@@ -421,6 +421,6 @@ class GradClip(Callback):
                     key = f"clip_grad_norm/{mesh_str}"
                 log_dict[key] = avg
                 if mesh_str == "global":
-                    log.info(f"{key}: {avg:.5f} (iteration {iteration})", rank0_only=False)
+                    log.info(f"{key}: {avg:.5f} (iteration {iteration})")
         if wandb.run:
             wandb.log(log_dict, step=iteration)

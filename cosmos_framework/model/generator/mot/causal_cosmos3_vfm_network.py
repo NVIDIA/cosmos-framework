@@ -135,8 +135,8 @@ class InteractiveCosmos3VFMNetwork(Cosmos3VFMNetwork):
         if not args or not isinstance(args[0], dict):
             raise TypeError("The interactive network expected a SequencePack as the language-model input.")
         input_pack: SequencePack = args[0]
-        full_only_seq, full_q_offsets = get_full_only_seq(input_pack)  # [N_gen,H,D], [B+1]
-        causal_seq, causal_offsets = get_causal_seq(input_pack)  # [N_und,H], [B+1]
+        full_only_seq, full_q_offsets = get_full_only_seq(input_pack)  # [N_gen,H,D], [B+1 or B+2]
+        causal_seq, causal_offsets = get_causal_seq(input_pack)  # [N_und,H], [B+1 or B+2]
         global_gen_seq_len, global_und_seq_len = _global_flex_stream_lengths(
             input_pack,
             local_gen_seq_len=full_only_seq.shape[0],

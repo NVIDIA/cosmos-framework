@@ -117,10 +117,13 @@ def _metadata_from_tokens(
     Each token dict has ``s`` (sample), ``t`` (frame), ``v`` (view), ``noisy`` (bool),
     and optionally ``control`` (bool, defaults ``False``) marking a control (e.g. WSM)
     token and ``ts`` (float, defaults to ``t``) marking its real capture time. Positions
-    beyond ``len(tokens)`` are padding and get the ``-1`` / ``-1.0`` / ``False`` sentinels.
+    beyond ``len(tokens)`` are padding and get the ``-1`` / ``-1.0`` / ``False`` sentinels --
+    except ``sample_id``, where padding takes the first id past the real samples, as
+    :func:`_build_stream_sample_ids` does, so padding forms its own pseudo-sample.
 
     ``und_samples`` prepends the UND half of the fused key stream: one sample id per
-    UND token, ``-1`` for UND padding. That id is the only field the gen->und rule
+    UND token, and that same pseudo-sample id for UND padding. That id is the only field the
+    gen->und rule
     reads, so the multiview fields are sentinels there. Left ``None``, the metadata is
     GEN-only and the mask it drives is square.
 
@@ -168,7 +171,9 @@ def _metadata_from_tokens(
     return FlexMetadata(
         seq_len=num_und + seq_len,
         sample_id=torch.tensor(
-            und_samples + [tok["s"] for tok in tokens] + [-1] * pad, dtype=torch.long, device=device
+            und_samples + [tok["s"] for tok in tokens] + [max((tok["s"] for tok in tokens), default=-1) + 1] * pad,
+            dtype=torch.long,
+            device=device,
         ),
         frame_id=col("t"),
         # The UND half of view_id names the view each caption describes; the GEN half names
@@ -188,14 +193,17 @@ def _metadata_from_tokens(
 
 
 def _und_samples(*sample_lens: int, length: int) -> list[int]:
-    """One padded UND prefix: ``sample_lens[i]`` tokens of sample ``i``, then ``-1`` padding.
+    """One padded UND prefix: ``sample_lens[i]`` tokens of sample ``i``, then padding.
+
+    Padding takes the first id past the real samples, matching :func:`_build_stream_sample_ids`,
+    so UND padding and GEN padding share one pseudo-sample and reach each other.
 
     ``length`` is the key block the prefix answers to, so that the UND/GEN boundary lands on a
     block boundary of whichever backend runs the mask.
     """
     ids = [sample for sample, count in enumerate(sample_lens) for _ in range(count)]
     assert len(ids) <= length
-    return ids + [-1] * (length - len(ids))
+    return ids + [len(sample_lens)] * (length - len(ids))
 
 
 def _make_multiview_tokens() -> list[dict]:
@@ -250,7 +258,8 @@ def _reference_visibility(
     """Ground-truth ``[seq_len, num_und + seq_len]`` bool ``M[q, k] = q attends to k``.
 
     Encodes exactly the documented multiview rules; padding positions (index >=
-    len(tokens)) share the ``-1`` sample so they only attend to each other. With
+    len(tokens)) share one pseudo-sample id past the real ones so they only attend to each
+    other. With
     ``und_samples`` the matrix gains the gen->und columns on the left, where the rule is
     "same sample" alone, and is rectangular as the fused mask is.
 
@@ -268,11 +277,15 @@ def _reference_visibility(
     """
     und_samples = list(und_samples or [])
     num_und = len(und_samples)
+    # Padding takes the first id past the real samples, as _build_stream_sample_ids does, so
+    # padded queries and keys share a pseudo-sample and reach only each other. The UND ids handed
+    # in come from the same rule, which is what lets padding match across the two streams.
+    pad_sample = max((token["s"] for token in tokens), default=-1) + 1
 
     def desc(i: int) -> dict:
         if i < len(tokens):
             return tokens[i]
-        return dict(s=-1, t=-1, v=-1, ts=-1.0, noisy=False, control=False)
+        return dict(s=pad_sample, t=-1, v=-1, ts=-1.0, noisy=False, control=False)
 
     def in_scope(dq: dict, dk: dict) -> bool:
         if attention_scope == "all_views":
@@ -610,9 +623,10 @@ def test_build_block_mask_rejects_unaligned_seq_len(backend: FlexBackend) -> Non
 
 @pytest.mark.L0
 def test_build_stream_sample_ids_marks_padding() -> None:
+    """Padding lands on an id no real sample holds, so it forms its own pseudo-sample."""
     offsets = torch.tensor([0, 3, 7], dtype=torch.long)
     sample_id = _build_stream_sample_ids(offsets, seq_len=10, device=torch.device("cpu"))
-    expected = torch.tensor([0, 0, 0, 1, 1, 1, 1, -1, -1, -1], dtype=torch.long)
+    expected = torch.tensor([0, 0, 0, 1, 1, 1, 1, 2, 2, 2], dtype=torch.long)
     assert torch.equal(sample_id, expected)
 
 
@@ -929,7 +943,9 @@ def test_multiview_mask_mod_padding_isolated() -> None:
 # right half, and the left half is the gen->und pass, where the only rule is "same
 # sample". The three UND tokens of sample 0, two of sample 1 and one padding row below
 # are the miniature of what the packer's padded causal stream holds.
-_UND_SAMPLES = [0, 0, 0, 1, 1, -1]
+# Two real samples, so the trailing UND padding takes id 2 -- the same pseudo-sample the GEN
+# padding gets, which is what keeps a padded query's softmax non-empty.
+_UND_SAMPLES = [0, 0, 0, 1, 1, 2]
 
 
 @pytest.mark.L0
@@ -1492,7 +1508,8 @@ def test_build_multiview_flex_metadata_camera_major_layout() -> None:
     )
     # A single-item sample has no control item: is_control is all False.
     assert not metadata.is_control.any()
-    assert torch.equal(metadata.sample_id, torch.tensor([0] * 8 + [-1] * 4))
+    # One real sample, so its padding takes id 1.
+    assert torch.equal(metadata.sample_id, torch.tensor([0] * 8 + [1] * 4))
 
     assert metadata.sample_id.dtype == torch.long
     assert metadata.frame_id.dtype == torch.long
@@ -1669,7 +1686,10 @@ def test_build_multiview_flex_metadata_pads_with_sentinels() -> None:
     tail = slice(num_real, metadata.seq_len)
 
     sentinel = torch.full((pad,), -1)
-    assert torch.equal(metadata.sample_id[tail], sentinel)
+    # sample_id is the exception: padding is its own pseudo-sample, one past the real ids, which
+    # is what lets padded queries reach each other instead of forming an empty softmax.
+    num_samples = int(metadata.sample_id[:num_real].max()) + 1
+    assert torch.equal(metadata.sample_id[tail], torch.full((pad,), num_samples))
     assert torch.equal(metadata.frame_id[tail], sentinel)
     assert torch.equal(metadata.view_id[tail], sentinel)
     assert not metadata.is_noisy[tail].any()
@@ -1975,7 +1995,9 @@ def test_build_multiview_flex_metadata_prepends_the_und_stream() -> None:
     )
 
     assert (fused.num_und, fused.q_len, fused.seq_len) == (num_und, gen_only.seq_len, num_und + gen_only.seq_len)
-    assert torch.equal(fused.sample_id[:num_und], torch.tensor([0, 0, 0, 1, 1, -1, -1, -1]))
+    # Two real samples, so UND padding takes id 2 -- the same pseudo-sample GEN padding gets,
+    # which is what lets padded GEN queries reach the padded UND keys.
+    assert torch.equal(fused.sample_id[:num_und], torch.tensor([0, 0, 0, 1, 1, 2, 2, 2]))
     for field in (fused.frame_id, fused.view_id):
         assert torch.equal(field[:num_und], torch.full((num_und,), -1))
     assert not fused.is_noisy[:num_und].any()
@@ -2518,7 +2540,8 @@ _WIRING_NUM_VIEWS = [4, 3]
 
 def _reference_stream_sample_ids(offsets: torch.Tensor, length: int) -> torch.Tensor:
     """Per-token sample ids for one padded stream, derived independently of the builder."""
-    ids = torch.full((length,), -1, dtype=torch.long)
+    # Padding takes the first id past the real samples, matching the builder's searchsorted.
+    ids = torch.full((length,), len(offsets) - 1, dtype=torch.long)
     for sample in range(len(offsets) - 1):
         ids[int(offsets[sample]) : int(offsets[sample + 1])] = sample
     return ids
@@ -2682,11 +2705,11 @@ def test_network_wiring_gives_the_dense_same_sample_mask_without_conditioning(ba
     _, full_q_offsets = get_full_only_seq(pack)
     causal_seq, causal_offsets = get_causal_seq(pack)
 
-    # The pack keeps its padding in separate `_pad_segment` offsets, so these hold one
-    # entry per sample boundary. Were a trailing pad entry to appear here, the reference
-    # below would silently start treating padding as a real sample.
-    assert len(causal_offsets) == len(_WIRING_UND_LENS) + 1
-    assert len(full_q_offsets) == len(_WIRING_UND_LENS) + 1
+    # The towers carry the padding as one trailing segment, so one entry per sample boundary plus
+    # the terminator plus that segment. The builder indexes by sample count, so it reads the real
+    # boundary out of these unchanged.
+    assert len(causal_offsets) == len(_WIRING_UND_LENS) + 2
+    assert len(full_q_offsets) == len(_WIRING_UND_LENS) + 2
 
     block_mask = _wiring_block_mask(pack, block_size=backend.block_size, condition_frames=[[], []])
     q_len, kv_len = block_mask.shape[-2:]

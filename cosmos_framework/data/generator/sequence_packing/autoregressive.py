@@ -303,3 +303,118 @@ def pack_input_sequence_autoregressive(
     )
 
     return packed_seq
+
+
+def pack_input_sequence_autoregressive_batch(
+    vision_latent: torch.Tensor,  # [B,C,T,H,W]
+    text_tokens: list[list[int]] | None,
+    timestep: float,
+    fps_vision: list[float],
+    special_tokens: dict[str, int],
+    *,
+    latent_patch_size: int = 1,
+    condition_frame_indexes_vision: list[int] | None = None,
+    frame_idx: int = 0,
+    temporal_compression_factor: int = 4,
+    video_temporal_causal: bool = True,
+    enable_fps_modulation: bool = True,
+    base_fps: float = 24.0,
+    cached_text_offsets: list[int] | None = None,
+    unified_3d_mrope_temporal_modality_margin: int = 0,
+) -> PackedSequence:  # vision items: B * [1,C,T,H,W]
+    """Pack one homogeneous autoregressive vision unit for multiple samples.
+
+    This is the batch-safe Transfer counterpart of
+    :func:`pack_input_sequence_autoregressive`. Each row owns one vision item,
+    while text lengths and their cached mRoPE offsets may differ. The returned
+    packed sequence retains per-sample offsets so attention remains block
+    diagonal across independent videos.
+
+    Args:
+        vision_latent: Current clean or noisy vision unit ``[B,C,T,H,W]``.
+        text_tokens: One prompt-token sequence per sample for the first control
+            unit, or ``None`` after text K/V has been cached.
+        timestep: Shared diffusion timestep for this unit.
+        fps_vision: One FPS value per sample.
+        special_tokens: MoT special-token mapping.
+        latent_patch_size: Spatial latent patch size.
+        condition_frame_indexes_vision: Clean latent indexes within the unit.
+        frame_idx: Absolute latent index of the unit's first frame.
+        temporal_compression_factor: Vision VAE temporal compression factor.
+        video_temporal_causal: Enable temporal-causal supertoken packing.
+        enable_fps_modulation: Enable training-compatible FPS positions.
+        base_fps: Training reference FPS.
+        cached_text_offsets: Per-sample cached text lengths when text is omitted.
+        unified_3d_mrope_temporal_modality_margin: Text-to-vision position margin.
+
+    Returns:
+        A packed multi-sample autoregressive sequence.
+    """
+    if vision_latent.ndim != 5:
+        raise ValueError(f"vision_latent must have shape [B,C,T,H,W], got {tuple(vision_latent.shape)}")
+    batch_size = vision_latent.shape[0]
+    if batch_size < 1:
+        raise ValueError("vision_latent batch must not be empty")
+    if len(fps_vision) != batch_size:
+        raise ValueError(f"fps_vision must contain {batch_size} values, got {len(fps_vision)}")
+    if any(fps <= 0 for fps in fps_vision):
+        raise ValueError(f"fps_vision values must be positive, got {fps_vision}")
+    if not enable_fps_modulation:
+        raise ValueError("enable_fps_modulation must be True for autoregressive packing")
+
+    has_text = text_tokens is not None
+    if text_tokens is not None and len(text_tokens) != batch_size:
+        raise ValueError(f"text_tokens must contain {batch_size} sequences, got {len(text_tokens)}")
+    if cached_text_offsets is not None and len(cached_text_offsets) != batch_size:
+        raise ValueError(f"cached_text_offsets must contain {batch_size} values, got {len(cached_text_offsets)}")
+    if has_text and cached_text_offsets is not None:
+        raise ValueError("cached_text_offsets must be omitted while text tokens are packed inline")
+    if not has_text and cached_text_offsets is None:
+        raise ValueError("cached_text_offsets are required after text tokens have been cached")
+
+    sequence_plans = [
+        SequencePlan(
+            has_text=has_text,
+            has_vision=True,
+            has_action=False,
+            condition_frame_indexes_vision=condition_frame_indexes_vision or [],
+        )
+        for _ in range(batch_size)
+    ]
+    vision_items = [vision_latent[i : i + 1] for i in range(batch_size)]  # list of [1,C,T,H,W]
+    fps_vision_t = torch.as_tensor(fps_vision, dtype=torch.float32)  # [B]
+    gen_data_clean = GenerationDataClean(
+        batch_size=batch_size,
+        is_image_batch=False,
+        raw_state_vision=None,
+        x0_tokens_vision=vision_items,
+        fps_vision=fps_vision_t,
+    )
+    input_text_indexes = text_tokens if text_tokens is not None else [[] for _ in range(batch_size)]
+    input_timesteps = torch.full((batch_size,), timestep, dtype=torch.float32)  # [B]
+
+    initial_offsets: list[int | float] = []
+    for sample_idx, fps in enumerate(fps_vision):
+        frame_stride = base_fps / fps
+        text_offset = (
+            0
+            if cached_text_offsets is None
+            else cached_text_offsets[sample_idx] + unified_3d_mrope_temporal_modality_margin
+        )
+        initial_offsets.append(text_offset + frame_idx * frame_stride)
+
+    return pack_input_sequence(
+        sequence_plans=sequence_plans,
+        input_text_indexes=input_text_indexes,
+        gen_data_clean=gen_data_clean,
+        input_timesteps=input_timesteps,
+        special_tokens=special_tokens,
+        latent_patch_size=latent_patch_size,
+        skip_text_tokens=not has_text,
+        unified_3d_mrope_temporal_modality_margin=unified_3d_mrope_temporal_modality_margin,
+        enable_fps_modulation=enable_fps_modulation,
+        base_fps=base_fps,
+        temporal_compression_factor=temporal_compression_factor,
+        video_temporal_causal=video_temporal_causal,
+        initial_mrope_temporal_offset=initial_offsets,
+    )

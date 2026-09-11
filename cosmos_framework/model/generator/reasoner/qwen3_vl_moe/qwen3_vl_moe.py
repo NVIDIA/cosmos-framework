@@ -635,7 +635,11 @@ class Qwen3VLMoeTextSparseMoeBlock(nn.Module):
                 influence neither the output, nor the gradients, nor the load balancing. ``None``
                 treats every row as a real token.
             sample_ids (torch.Tensor | None): (num_tokens) sample assignment for each token.
-            num_samples (int | None): Number of packed samples, excluding the padding sentinel.
+            num_samples (int | None): Number of LBL buckets to retain, which is one *more* than
+                the pack's real sample count: callers pass the padded layout's segment count
+                (``N`` real samples plus the pad segment), so bucket ``N`` is retained and stays
+                empty while index ``num_samples`` = ``N + 1`` serves as the discarded sentinel
+                this method drains masked rows into.
 
         Returns:
             torch.Tensor: (num_tokens, hidden_size)
@@ -743,6 +747,15 @@ class Qwen3VLMoeTextSparseMoeBlock(nn.Module):
             assert num_samples is not None
             if token_mask is not None:
                 # Route padding to the extra sample bucket that compute_sample_lbl_stats discards.
+                #
+                # Load-bearing, despite looking redundant: the packer already stamps padding rows
+                # with sample id ``N`` (``runtime._pad_sample_ids``), and ``num_samples``
+                # is ``N + 1`` because ``unified_mot._get_local_sample_ids`` counts the padded
+                # layout's segments. So ``N`` is a bucket compute_sample_lbl_stats *keeps*, and
+                # only this re-route moves the padding out to the sentinel it discards. Drop it
+                # and every padded pack contributes its padding as an extra pseudo-sample with a
+                # non-zero token count, which the loss's ``sample_num_tokens > 0`` mask then fails
+                # to filter.
                 sample_ids = torch.where(
                     token_mask,
                     sample_ids,
