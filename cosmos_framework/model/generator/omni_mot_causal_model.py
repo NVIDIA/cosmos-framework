@@ -14,8 +14,8 @@ from __future__ import annotations
 
 import contextlib
 import itertools
-from collections.abc import Callable, Generator, Sequence
-from typing import Any, Literal
+from collections.abc import Callable, Generator, Iterable, Sequence
+from typing import Any, Literal, cast
 from unittest.mock import patch
 
 import attrs
@@ -67,7 +67,10 @@ from cosmos_framework.model.generator.utils.kv_cache import (
 )
 from cosmos_framework.model.generator.utils.kv_storage_backend import validate_kv_cache_dtype
 from cosmos_framework.model.generator.utils.nvfp4 import resolve_legacy_nvfp4_mode
-from cosmos_framework.data.generator.sequence_packing.autoregressive import pack_input_sequence_autoregressive
+from cosmos_framework.data.generator.sequence_packing.autoregressive import (
+    pack_input_sequence_autoregressive,
+    pack_input_sequence_autoregressive_batch,
+)
 from cosmos_framework.utils.generator.data_batch import condition_frame_indexes_vision_from_batch
 
 _ARBranch = Literal["conditional", "unconditional"]
@@ -1180,6 +1183,7 @@ class OmniMoTCausalModel(OmniMoTModel):
         stage_gen_cache_writes: bool = memory_info.get("stage_gen_cache_writes", False)
         transfer_history_sink_tokens: int = memory_info.get("transfer_history_sink_tokens", 0)
         transfer_history_max_tokens: int | None = memory_info.get("transfer_history_max_tokens")
+        batched_ar: bool = memory_info.get("batched_ar", False)
         dual_kv_cache: list[DualKVCache] | None = memory_info["dual_kv_cache"]
         frame_idx: int = memory_info["frame_idx"]
         write_gen_cache: bool = memory_info.get("write_gen_cache", True)
@@ -1195,6 +1199,8 @@ class OmniMoTCausalModel(OmniMoTModel):
         if dual_kv_cache is not None:
             vision_token_shapes = packed_seq.vision.token_shapes if packed_seq.vision else None
             if use_ar_rolling:
+                if batched_ar:
+                    raise ValueError("Batched AR does not support the compiled rolling-cache path")
                 # Static-shape AR inference at frame >= 1 (compile + CG).
                 # ``for_cuda_graphs=True`` makes ``read_for_layer`` return
                 # the full preallocated gen buffer + a real-length scalar
@@ -1238,6 +1244,7 @@ class OmniMoTCausalModel(OmniMoTModel):
                 stage_gen_cache_writes=stage_gen_cache_writes,
                 transfer_history_sink_tokens=transfer_history_sink_tokens,
                 transfer_history_max_tokens=transfer_history_max_tokens,
+                batched=batched_ar,
             )
 
         # If not using a KV-cache.
@@ -1292,6 +1299,314 @@ class OmniMoTCausalModel(OmniMoTModel):
     # ------------------------------------------------------------------
     # Autoregressive generation (moved from OmniMoTModel)
     # ------------------------------------------------------------------
+
+    @torch.no_grad()
+    def iter_samples_from_batch_autoregressive_streaming_transfer(
+        self,
+        *,
+        data_batch: dict[str, Any],
+        control_latent_chunks: Iterable[torch.Tensor],  # items: [B,C,T,H,W]
+        num_frames: int,
+        seeds: list[int],
+        guidance: float = 1.0,
+        num_steps: int = 35,
+        shift: float = 5.0,
+        normalize_cfg: bool = False,
+        sampler_mode: str = "distilled",
+        distilled_num_steps: int | None = None,
+        on_clean_vision_chunk: Callable[[torch.Tensor], None] | None = None,
+        has_negative_prompt: bool = False,
+    ) -> Generator[dict[str, torch.Tensor], None, None]:
+        """Generate a homogeneous batch from incrementally encoded controls.
+
+        Text is tokenized once for the whole batch. The caller owns the causal
+        VAE encoder session and yields one control-latent unit at a time, with
+        partition ``[1,C,C,...]``. All DiT forwards are packed across samples;
+        per-sample prompt and generation histories remain isolated by variable-
+        length attention metadata.
+        """
+        if num_frames < 1:
+            raise ValueError(f"num_frames must be positive, got {num_frames}")
+        batch_size = len(seeds)
+        if batch_size < 1:
+            raise ValueError("seeds must not be empty")
+        captions = data_batch.get(self.input_caption_key)
+        if not isinstance(captions, list) or len(captions) != batch_size:
+            raise ValueError(f"Expected {batch_size} captions, got {captions!r}")
+        if sampler_mode != "distilled":
+            raise ValueError("Batched streaming Transfer currently requires the distilled sampler")
+        replay_policy = self._get_teacher_forcing_replay_policy()
+        if (
+            replay_policy.control_visibility != "causal"
+            or not replay_policy.controls_read_strict_past_clean_rgb
+            or replay_policy.clean_pass_causality != "frame"
+        ):
+            raise ValueError(
+                "Batched streaming Transfer requires teacher_forcing_replay_policy.control_visibility='causal', "
+                "controls_read_strict_past_clean_rgb=True, and clean_pass_causality='frame'"
+            )
+        if self.config.compile.enabled:
+            raise ValueError("Batched streaming Transfer requires eager attention")
+        if self.parallel_dims is not None and (
+            getattr(self.parallel_dims, "cp_enabled", False) or getattr(self.parallel_dims, "cfgp_enabled", False)
+        ):
+            raise ValueError("Batched streaming Transfer requires context_parallel_size=1 and cfgp_size=1")
+        if self.config.kv_cache_dtype is not None:
+            raise ValueError("Batched streaming Transfer requires BF16 KV-cache storage")
+
+        chunk_size = int(self.config.teacher_forcing_frames_per_chunk)
+        if chunk_size < 1:
+            raise ValueError(f"teacher_forcing_frames_per_chunk must be positive, got {chunk_size}")
+        transfer_window = self.config.kv_cache_inference_size
+        _validate_attention_sink_config(transfer_window, self.config.attention_sink_size)
+        if transfer_window is not None and chunk_size != 1:
+            raise ValueError("Finite-window batched streaming Transfer currently requires chunk_size=1")
+
+        reset_ar_post_saturation_runtime_for_generation(self)
+        has_negative_prompt = has_negative_prompt or f"neg_{self.input_caption_key}" in data_batch
+        cond_text_tokens, uncond_text_tokens = self._get_inference_text_tokens(data_batch, has_negative_prompt)
+        if len(cond_text_tokens) != batch_size or len(uncond_text_tokens) != batch_size:
+            raise ValueError("Tokenized prompt batch size does not match seeds")
+        margin = self.config.diffusion_expert_config.unified_3d_mrope_temporal_modality_margin
+        cond_cached_text_offsets = [
+            compute_text_split_length(len(tokens), self.llm_special_tokens, has_generation=True)
+            for tokens in cond_text_tokens
+        ]
+        uncond_cached_text_offsets = [
+            compute_text_split_length(len(tokens), self.llm_special_tokens, has_generation=True)
+            for tokens in uncond_text_tokens
+        ]
+
+        cfg_active = guidance != 1.0
+        num_layers: int = self.net.num_hidden_layers  # type: ignore
+        if transfer_window is not None:
+            gen_cache_size = 2 * transfer_window
+            physical_attention_sink_size = 2 * self.config.attention_sink_size
+        else:
+            gen_cache_size = 2 * num_frames + 1
+            physical_attention_sink_size = 0
+        dual_kv_cache = [
+            DualKVCache(
+                gen_cache_size=gen_cache_size,
+                kv_cache_dtype=self.config.kv_cache_dtype,
+                kv_cache_kernel_impl=self.config.kv_cache_kernel_impl,
+                attention_sink_size=physical_attention_sink_size,
+            )
+            for _ in range(num_layers)
+        ]
+        dual_kv_cache_uncond = (
+            [
+                DualKVCache(
+                    gen_cache_size=gen_cache_size,
+                    kv_cache_dtype=self.config.kv_cache_dtype,
+                    kv_cache_kernel_impl=self.config.kv_cache_kernel_impl,
+                    attention_sink_size=physical_attention_sink_size,
+                )
+                for _ in range(num_layers)
+            ]
+            if cfg_active
+            else None
+        )
+
+        fps_value = data_batch.get("fps")
+        if isinstance(fps_value, torch.Tensor):
+            fps_vision_list = [float(value) for value in fps_value.cpu().tolist()]
+        elif isinstance(fps_value, list):
+            fps_vision_list = [float(value) for value in fps_value]
+        else:
+            fps_vision_list = [24.0] * batch_size
+        if len(fps_vision_list) != batch_size:
+            raise ValueError(f"Expected {batch_size} FPS values, got {len(fps_vision_list)}")
+        gen_data_clean = GenerationDataClean(
+            batch_size=batch_size,
+            is_image_batch=False,
+            fps_vision=torch.tensor(fps_vision_list, dtype=torch.float32),  # [B]
+        )
+
+        tcf = int(self.tokenizer_vision_gen.temporal_compression_factor or 4)
+        patch_size = int(self.config.diffusion_expert_config.patch_spatial)
+        video_temporal_causal = bool(self.config.video_temporal_causal)
+        enable_fps_modulation = bool(self.config.diffusion_expert_config.enable_fps_modulation)
+        base_fps = float(self.config.diffusion_expert_config.base_fps)
+        control_chunks = iter(control_latent_chunks)
+        transfer_history_cache_idx = 0
+        transfer_history_sink_tokens = 0
+        transfer_history_control_max_tokens: int | None = None
+        transfer_history_target_max_tokens: int | None = None
+
+        for chunk_start, chunk_end in _iter_ar_chunk_ranges(0, num_frames, chunk_size):
+            chunk_len = chunk_end - chunk_start
+            try:
+                control_latent = next(control_chunks).to(**self.tensor_kwargs)  # [B,C,chunk_len,H,W]
+            except StopIteration as error:
+                raise ValueError(f"Missing streamed control chunk for frames [{chunk_start}, {chunk_end})") from error
+            if control_latent.ndim != 5 or control_latent.shape[0] != batch_size:
+                raise ValueError(
+                    f"Expected control latent [B,C,T,H,W] with B={batch_size}, got {tuple(control_latent.shape)}"
+                )
+            if control_latent.shape[2] != chunk_len:
+                raise ValueError(
+                    f"Control chunk [{chunk_start}, {chunk_end}) has latent length {control_latent.shape[2]}"
+                )
+
+            if chunk_start == 0 and transfer_window is not None:
+                latent_h, latent_w = control_latent.shape[-2:]
+                patch_h = (latent_h + patch_size - 1) // patch_size
+                patch_w = (latent_w + patch_size - 1) // patch_size
+                tokens_per_frame = patch_h * patch_w
+                recent_past_frames = transfer_window - self.config.attention_sink_size - 1
+                transfer_history_sink_tokens = 2 * self.config.attention_sink_size * tokens_per_frame
+                transfer_history_control_max_tokens = 2 * recent_past_frames * tokens_per_frame
+                transfer_history_target_max_tokens = (2 * recent_past_frames + 1) * tokens_per_frame
+
+            include_text = transfer_history_cache_idx == 0
+            self._seed_frame_into_kv_cache(
+                frame_latent=control_latent,
+                frame_idx=transfer_history_cache_idx,
+                position_frame_idx=chunk_start,
+                dual_kv_cache=dual_kv_cache,
+                dual_kv_cache_uncond=dual_kv_cache_uncond,
+                cond_text_tokens=cond_text_tokens if include_text else None,
+                uncond_text_tokens=uncond_text_tokens if include_text else None,
+                cond_cached_text_offset=cond_cached_text_offsets,
+                uncond_cached_text_offset=uncond_cached_text_offsets,
+                curr_action_latent=None,
+                action_domain_id=None,
+                gen_data_clean=gen_data_clean,
+                fps_vision_list=fps_vision_list,
+                fps_action_list=[24.0] * batch_size,
+                seed=seeds,
+                cfg_active=cfg_active,
+                cfgp_enabled=False,
+                tcf=tcf,
+                patch_size=patch_size,
+                action_dim=self.config.max_action_dim,
+                video_tc=video_temporal_causal,
+                enable_fps_mod=enable_fps_modulation,
+                base_fps=base_fps,
+                modality_margin=margin,
+                condition_frame_indexes_vision=list(range(chunk_len)),
+                transfer_history_sink_tokens=transfer_history_sink_tokens,
+                transfer_history_max_tokens=transfer_history_control_max_tokens,
+                batched_ar=True,
+            )
+            transfer_history_cache_idx += 1
+
+            noise_rows = []
+            for sample_idx, seed in enumerate(seeds):
+                generator = torch.Generator(device=control_latent.device).manual_seed(seed + chunk_start)
+                noise_row = torch.empty_like(control_latent[sample_idx]).normal_(generator=generator)  # [C,T,H,W]
+                noise_rows.append(noise_row)
+            curr_vision_latent = torch.stack(noise_rows, dim=0)  # [B,C,T,H,W]
+            packed_seq = pack_input_sequence_autoregressive_batch(
+                vision_latent=curr_vision_latent,
+                text_tokens=None,
+                timestep=0.0,
+                fps_vision=fps_vision_list,
+                special_tokens=self.llm_special_tokens,
+                latent_patch_size=patch_size,
+                condition_frame_indexes_vision=[],
+                frame_idx=chunk_start,
+                temporal_compression_factor=tcf,
+                video_temporal_causal=video_temporal_causal,
+                enable_fps_modulation=enable_fps_modulation,
+                base_fps=base_fps,
+                cached_text_offsets=cond_cached_text_offsets,
+                unified_3d_mrope_temporal_modality_margin=margin,
+            )
+            packed_seq_uncond = (
+                pack_input_sequence_autoregressive_batch(
+                    vision_latent=curr_vision_latent,
+                    text_tokens=None,
+                    timestep=0.0,
+                    fps_vision=fps_vision_list,
+                    special_tokens=self.llm_special_tokens,
+                    latent_patch_size=patch_size,
+                    condition_frame_indexes_vision=[],
+                    frame_idx=chunk_start,
+                    temporal_compression_factor=tcf,
+                    video_temporal_causal=video_temporal_causal,
+                    enable_fps_modulation=enable_fps_modulation,
+                    base_fps=base_fps,
+                    cached_text_offsets=uncond_cached_text_offsets,
+                    unified_3d_mrope_temporal_modality_margin=margin,
+                )
+                if cfg_active
+                else None
+            )
+            denoised_chunk = self.generate_next_frame(
+                packed_seq=packed_seq,
+                packed_seq_uncond=packed_seq_uncond,
+                curr_vision_latent=curr_vision_latent,
+                curr_action_latent=None,
+                cond_text_tokens=cond_text_tokens,
+                uncond_text_tokens=uncond_text_tokens,
+                gen_data_clean=gen_data_clean,
+                dual_kv_cache=dual_kv_cache,
+                dual_kv_cache_uncond=dual_kv_cache_uncond,
+                frame_idx=chunk_start,
+                cache_frame_idx=transfer_history_cache_idx,
+                num_frames=num_frames,
+                guidance=guidance,
+                num_steps=num_steps,
+                shift=shift,
+                seed=seeds,
+                normalize_cfg=normalize_cfg,
+                sampler_mode=sampler_mode,
+                distilled_num_steps=distilled_num_steps,
+                fps_vision_list=fps_vision_list,
+                fps_action_list=[24.0] * batch_size,
+                use_ar_rolling_path=False,
+                transfer_history_sink_tokens=transfer_history_sink_tokens,
+                transfer_history_max_tokens=transfer_history_target_max_tokens,
+                batched_ar=True,
+            )  # [B,C,chunk_len,H,W]
+            if on_clean_vision_chunk is not None:
+                on_clean_vision_chunk(denoised_chunk)
+
+            for local_idx in range(chunk_len):
+                frame_idx = chunk_start + local_idx
+                if frame_idx < num_frames - 1:
+                    frame_latent = denoised_chunk[:, :, local_idx : local_idx + 1].to(
+                        **self.tensor_kwargs
+                    )  # [B,C,1,H,W]
+                    self._seed_frame_into_kv_cache(
+                        frame_latent=frame_latent,
+                        frame_idx=transfer_history_cache_idx,
+                        position_frame_idx=frame_idx,
+                        dual_kv_cache=dual_kv_cache,
+                        dual_kv_cache_uncond=dual_kv_cache_uncond,
+                        cond_text_tokens=None,
+                        uncond_text_tokens=None,
+                        cond_cached_text_offset=cond_cached_text_offsets,
+                        uncond_cached_text_offset=uncond_cached_text_offsets,
+                        curr_action_latent=None,
+                        action_domain_id=None,
+                        gen_data_clean=gen_data_clean,
+                        fps_vision_list=fps_vision_list,
+                        fps_action_list=[24.0] * batch_size,
+                        seed=seeds,
+                        cfg_active=cfg_active,
+                        cfgp_enabled=False,
+                        tcf=tcf,
+                        patch_size=patch_size,
+                        action_dim=self.config.max_action_dim,
+                        video_tc=video_temporal_causal,
+                        enable_fps_mod=enable_fps_modulation,
+                        base_fps=base_fps,
+                        modality_margin=margin,
+                        transfer_history_sink_tokens=transfer_history_sink_tokens,
+                        transfer_history_max_tokens=transfer_history_target_max_tokens,
+                        batched_ar=True,
+                    )
+                    transfer_history_cache_idx += 1
+                yield {"vision": denoised_chunk[:, :, local_idx : local_idx + 1]}  # [B,C,1,H,W]
+
+        try:
+            extra_chunk = next(control_chunks)  # [B,C,T,H,W]
+        except StopIteration:
+            return
+        raise ValueError(f"Received an extra streamed control chunk with shape {tuple(extra_chunk.shape)}")
 
     @torch.no_grad()
     def iter_samples_from_batch_autoregressive(
@@ -2406,20 +2721,20 @@ class OmniMoTCausalModel(OmniMoTModel):
     @torch.no_grad()
     def _seed_frame_into_kv_cache(
         self,
-        frame_latent: torch.Tensor,  # [1,C,T,H,W]
+        frame_latent: torch.Tensor,  # [B,C,T,H,W]
         frame_idx: int,
         dual_kv_cache: list[DualKVCache],
         dual_kv_cache_uncond: list[DualKVCache] | None,
-        cond_text_tokens: list[int] | None,
-        uncond_text_tokens: list[int] | None,
-        cond_cached_text_offset: int,
-        uncond_cached_text_offset: int,
+        cond_text_tokens: list[int] | list[list[int]] | None,
+        uncond_text_tokens: list[int] | list[list[int]] | None,
+        cond_cached_text_offset: int | list[int],
+        uncond_cached_text_offset: int | list[int],
         curr_action_latent: torch.Tensor | None,
         action_domain_id: torch.Tensor | None,
         gen_data_clean: GenerationDataClean,
         fps_vision_list: list[float],
         fps_action_list: list[float],
-        seed: int,
+        seed: int | list[int],
         cfg_active: bool,
         cfgp_enabled: bool,
         tcf: int,
@@ -2434,6 +2749,7 @@ class OmniMoTCausalModel(OmniMoTModel):
         condition_frame_indexes_vision: list[int] | None = None,
         transfer_history_sink_tokens: int = 0,
         transfer_history_max_tokens: int | None = None,
+        batched_ar: bool = False,
     ) -> None:
         """Run one forward pass that writes ``frame_latent``'s K/V into
         ``dual_kv_cache[layer].gen_cache[frame_idx]``, under the strategy-appropriate
@@ -2474,6 +2790,9 @@ class OmniMoTCausalModel(OmniMoTModel):
         strategy = self.config.causal_training_strategy
 
         if strategy == "diffusion_forcing":
+            if batched_ar:
+                raise ValueError("Batched Transfer cache seeding does not support diffusion_forcing")
+            assert isinstance(seed, int)
             sigma = self.config.sigma_diffusion_forcing
             # Deterministic ε shared across cond/uncond packs.
             g = torch.Generator(device=frame_latent.device).manual_seed(seed + position_frame_idx)
@@ -2494,7 +2813,31 @@ class OmniMoTCausalModel(OmniMoTModel):
         else:
             raise ValueError(f"Unknown causal_training_strategy: {strategy!r}")
 
-        def _build_pack(text_tokens: list[int] | None, cached_text_offset: int) -> PackedSequence:
+        def _build_pack(
+            text_tokens: list[int] | list[list[int]] | None,
+            cached_text_offset: int | list[int],
+        ) -> PackedSequence:
+            if batched_ar:
+                if curr_action_latent is not None:
+                    raise ValueError("Batched Transfer cache seeding does not support action tokens")
+                batch_text_tokens = text_tokens if text_tokens is None else cast(list[list[int]], text_tokens)
+                batch_cached_offsets = None if text_tokens is not None else cast(list[int], cached_text_offset)
+                return pack_input_sequence_autoregressive_batch(
+                    vision_latent=frame_in,
+                    text_tokens=batch_text_tokens,
+                    timestep=timestep_val,
+                    fps_vision=fps_vision_list,
+                    special_tokens=self.llm_special_tokens,
+                    latent_patch_size=patch_size,
+                    condition_frame_indexes_vision=condition_vision,
+                    frame_idx=position_frame_idx,
+                    temporal_compression_factor=tcf,
+                    video_temporal_causal=video_tc,
+                    enable_fps_modulation=enable_fps_mod,
+                    base_fps=base_fps,
+                    cached_text_offsets=batch_cached_offsets,
+                    unified_3d_mrope_temporal_modality_margin=modality_margin,
+                )
             raw_action_dim = OmniMoTCausalModel._first_raw_action_dim(gen_data_clean)
             return pack_input_sequence_autoregressive(
                 vision_latent=frame_in,
@@ -2543,6 +2886,7 @@ class OmniMoTCausalModel(OmniMoTModel):
             "write_gen_cache": True,
             "transfer_history_sink_tokens": transfer_history_sink_tokens,
             "transfer_history_max_tokens": transfer_history_max_tokens,
+            "batched_ar": batched_ar,
         }
 
         if cfgp_enabled:
@@ -2585,6 +2929,7 @@ class OmniMoTCausalModel(OmniMoTModel):
                 "write_gen_cache": True,
                 "transfer_history_sink_tokens": transfer_history_sink_tokens,
                 "transfer_history_max_tokens": transfer_history_max_tokens,
+                "batched_ar": batched_ar,
             }
             if post_saturation_cuda_graph:
                 run_ar_post_saturation_cuda_graph(
@@ -2628,13 +2973,13 @@ class OmniMoTCausalModel(OmniMoTModel):
     def _run_distilled_ar_sampler(
         self,
         velocity_fn: Any,
-        initial_noise: torch.Tensor,
+        initial_noise: torch.Tensor,  # [B,N_tokens_flat]
         *,
-        seed: int,
+        seed: int | list[int],
         frame_idx: int,
         num_frames: int | None = None,
         distilled_num_steps: int | None = None,
-    ) -> torch.Tensor:
+    ) -> torch.Tensor:  # [B,N_tokens_flat]
         """Sample one AR latent frame from ``fixed_step_sampler_config.t_list``."""
         full_t_list = self._get_ar_distilled_timestep_schedule(
             distilled_num_steps,
@@ -2664,9 +3009,20 @@ class OmniMoTCausalModel(OmniMoTModel):
             elif sample_type == "sde":
                 # Use a mixed seed so different frame/step pairs cannot collide
                 # (e.g. frame 0 step 1 vs frame 1 step 0).
-                step_seed = int(seed) + int(frame_idx) * 1_000_003 + int(step_idx) * 9_176
-                generator = torch.Generator(device=x.device).manual_seed(step_seed)
-                noise = torch.empty_like(x).normal_(generator=generator)  # [B,N_tokens_flat]
+                if isinstance(seed, list):
+                    if len(seed) != x.shape[0]:
+                        raise ValueError(f"Expected {x.shape[0]} seeds, got {len(seed)}")
+                    noise_rows = []
+                    for sample_idx, sample_seed in enumerate(seed):
+                        step_seed = int(sample_seed) + int(frame_idx) * 1_000_003 + int(step_idx) * 9_176
+                        generator = torch.Generator(device=x.device).manual_seed(step_seed)
+                        noise_row = torch.empty_like(x[sample_idx]).normal_(generator=generator)  # [N_tokens_flat]
+                        noise_rows.append(noise_row)
+                    noise = torch.stack(noise_rows, dim=0)  # [B,N_tokens_flat]
+                else:
+                    step_seed = int(seed) + int(frame_idx) * 1_000_003 + int(step_idx) * 9_176
+                    generator = torch.Generator(device=x.device).manual_seed(step_seed)
+                    noise = torch.empty_like(x).normal_(generator=generator)  # [B,N_tokens_flat]
                 x = (1.0 - sigma_next_tensor) * x0_pred + sigma_next_tensor * noise  # [B,N_tokens_flat]
             else:
                 raise ValueError(f"Unsupported distilled sample_type: {sample_type!r}")
@@ -2677,10 +3033,22 @@ class OmniMoTCausalModel(OmniMoTModel):
         packed_seq: PackedSequence,
         vision_latent: torch.Tensor,  # [B,C,T,H,W]
         timestep: torch.Tensor,  # [B,1]
+        *,
+        batched: bool = False,
     ) -> None:
-        """Set one noisy vision item and its shared diffusion timestep."""
-        assert packed_seq.vision is not None and len(packed_seq.vision.tokens) == 1
-        packed_seq.vision.tokens = [vision_latent.to(**self.tensor_kwargs)]  # list[[B,C,T,H,W]]
+        """Set noisy vision items and their shared diffusion timestep."""
+        assert packed_seq.vision is not None
+        expected_items = vision_latent.shape[0] if batched else 1
+        assert len(packed_seq.vision.tokens) == expected_items, (
+            f"AR packing: expected {expected_items} vision items, got {len(packed_seq.vision.tokens)}"
+        )
+        if batched:
+            packed_seq.vision.tokens = [
+                vision_latent[sample_idx : sample_idx + 1].to(**self.tensor_kwargs)
+                for sample_idx in range(vision_latent.shape[0])
+            ]  # list of [1,C,T,H,W]
+        else:
+            packed_seq.vision.tokens = [vision_latent.to(**self.tensor_kwargs)]  # list[[B,C,T,H,W]]
         n_vision_patches = len(packed_seq.vision.mse_loss_indexes)
         packed_seq.vision.timesteps = (
             timestep.flatten()[0].repeat(n_vision_patches).to(device=self.tensor_kwargs["device"], dtype=torch.float32)
@@ -2699,7 +3067,10 @@ class OmniMoTCausalModel(OmniMoTModel):
         run_branch: _ARBranchRunner,
     ) -> torch.Tensor:  # [B,N_tokens_flat]
         """Run conditional branches and combine them with CFG."""
-        assert timestep.shape == (1, 1), f"Expected timestep shape (1, 1), got {tuple(timestep.shape)}."
+        expected_timestep_shape = (vision_shape[0], 1)
+        assert timestep.shape == expected_timestep_shape, (
+            f"Expected timestep shape {expected_timestep_shape}, got {tuple(timestep.shape)}."
+        )
         noise_vision = noise_x.reshape(vision_shape)  # [B,C,T,H,W]
         cfgp_enabled = self.parallel_dims is not None and self.parallel_dims.cfgp_enabled
         if cfgp_enabled:
@@ -2743,7 +3114,7 @@ class OmniMoTCausalModel(OmniMoTModel):
         sampler_mode: str,
         num_steps: int,
         shift: float,
-        seed: int,
+        seed: int | list[int],
         sample_idx: int,
         num_frames: int | None,
         distilled_num_steps: int | None,
@@ -2758,6 +3129,8 @@ class OmniMoTCausalModel(OmniMoTModel):
                 num_frames=num_frames,
                 distilled_num_steps=distilled_num_steps,
             )  # [B,N_tokens_flat]
+        if isinstance(seed, list):
+            raise ValueError("Batched AR currently supports only the distilled sampler")
         if sampler_mode == "rf" and self.config.rectified_flow_inference_config.scheduler_type == "unipc":
             return self.sampler(
                 velocity_fn,
@@ -2789,17 +3162,17 @@ class OmniMoTCausalModel(OmniMoTModel):
         self,
         packed_seq: PackedSequence,
         packed_seq_uncond: PackedSequence | None,
-        curr_vision_latent: torch.Tensor,
-        curr_action_latent: torch.Tensor | None,
-        cond_text_tokens: list[int],
-        uncond_text_tokens: list[int],
+        curr_vision_latent: torch.Tensor,  # [B,C,T,H,W]
+        curr_action_latent: torch.Tensor | None,  # [TCF,D] or None
+        cond_text_tokens: list[int] | list[list[int]],
+        uncond_text_tokens: list[int] | list[list[int]],
         gen_data_clean: GenerationDataClean,
         dual_kv_cache: list[DualKVCache],
         dual_kv_cache_uncond: list[DualKVCache] | None,
         guidance: float,
         num_steps: int,
         shift: float,
-        seed: int,
+        seed: int | list[int],
         fps_vision_list: list[float],
         fps_action_list: list[float],
         frame_idx: int | None = None,
@@ -2811,6 +3184,7 @@ class OmniMoTCausalModel(OmniMoTModel):
         use_ar_rolling_path: bool = False,
         transfer_history_sink_tokens: int = 0,
         transfer_history_max_tokens: int | None = None,
+        batched_ar: bool = False,
     ) -> torch.Tensor:
         """
         Denoise a single frame using AR generation with cumulative pack.
@@ -2821,7 +3195,7 @@ class OmniMoTCausalModel(OmniMoTModel):
 
         Args:
             packed_seq: PackedSequence containing [text][v0]...[v{frame_idx}] with current frame noisy
-            curr_vision_latent: Current frame to denoise. Shape: (1, C, 1, H, W)
+            curr_vision_latent: Current frame or chunk to denoise. Shape: (B, C, T, H, W).
             curr_action_latent: Action for current frame. Shape: (tcf, D) or None
             cond_text_tokens: Conditional text tokens for CFG
             uncond_text_tokens: Unconditional text tokens for CFG
@@ -2849,7 +3223,7 @@ class OmniMoTCausalModel(OmniMoTModel):
                 or maximum total suffix when no sink tokens are configured.
 
         Returns:
-            Denoised frame latent. Shape: (1, C, 1, H, W)
+            Denoised frame or chunk latent. Shape: (B, C, T, H, W).
         """
         # Handle None frame_idx as 0
         if frame_idx is None:
@@ -2870,12 +3244,18 @@ class OmniMoTCausalModel(OmniMoTModel):
         # ``chunk_len`` frames (chunkwise); the whole chunk shares one timestep.
         def set_pack_noise(
             pack: PackedSequence,
-            noise_x_vision: torch.Tensor,
-            timestep: torch.Tensor,
+            noise_x_vision: torch.Tensor,  # [B,C,T,H,W]
+            timestep: torch.Tensor,  # [B,1]
         ) -> None:
             """Set noisy latents for the current frame/chunk in the pack (one vision item)."""
             if pack.vision is not None:
-                OmniMoTCausalModel._set_ar_vision_noise(self, pack, noise_x_vision, timestep)
+                OmniMoTCausalModel._set_ar_vision_noise(
+                    self,
+                    pack,
+                    noise_x_vision,
+                    timestep,
+                    batched=batched_ar,
+                )
 
             if curr_action_latent is not None and pack.action is not None:
                 # For action, we keep it clean (condition) - no noise added
@@ -2898,7 +3278,10 @@ class OmniMoTCausalModel(OmniMoTModel):
 
         # Define velocity function for denoising
         # KV cache enabled: retrieve previous frames' K/V, don't store until final step
-        def velocity_fn(noise_x: torch.Tensor, timestep: torch.Tensor) -> torch.Tensor:
+        def velocity_fn(
+            noise_x: torch.Tensor,  # [B,N_tokens_flat]
+            timestep: torch.Tensor,  # [B,1]
+        ) -> torch.Tensor:  # [B,N_tokens_flat]
             """
             Velocity function for sampler.
 
@@ -2930,10 +3313,10 @@ class OmniMoTCausalModel(OmniMoTModel):
 
             def run_branch(
                 pack: PackedSequence,
-                noise_vision: torch.Tensor,  # [B,C,1,H,W]
-                branch_timestep: torch.Tensor,  # [1,1]
+                noise_vision: torch.Tensor,  # [B,C,T,H,W]
+                branch_timestep: torch.Tensor,  # [B,1]
                 branch: _ARBranch,
-            ) -> torch.Tensor:  # [B,C,1,H,W]
+            ) -> torch.Tensor:  # [B,C,T,H,W]
                 set_pack_noise(pack, noise_vision, branch_timestep)
                 if cfgp_enabled or branch == "conditional":
                     branch_cache = dual_kv_cache
@@ -2954,6 +3337,7 @@ class OmniMoTCausalModel(OmniMoTModel):
                     "write_gen_cache": False,
                     "transfer_history_sink_tokens": transfer_history_sink_tokens,
                     "transfer_history_max_tokens": transfer_history_max_tokens,
+                    "batched_ar": batched_ar,
                 }
                 if not cfgp_enabled and post_saturation_cuda_graph:
                     output = run_ar_post_saturation_cuda_graph(
@@ -2967,7 +3351,7 @@ class OmniMoTCausalModel(OmniMoTModel):
                     torch.compiler.cudagraph_mark_step_begin()
                     memory = self.build_memory_state(pack, memory_info)
                     output = self.denoise(data_batch_packed=pack, memory=memory)
-                return torch.stack(output["preds_vision"])  # [B,C,1,H,W]
+                return torch.stack(output["preds_vision"])  # [B,C,T,H,W]
 
             return OmniMoTCausalModel._predict_ar_velocity_with_cfg(
                 self,
@@ -2998,6 +3382,6 @@ class OmniMoTCausalModel(OmniMoTModel):
         )  # [B,N_tokens_flat]
 
         # Reshape to frame shape
-        denoised_frame = denoised_flat.reshape(curr_vision_latent.shape)  # [B,C,1,H,W]
+        denoised_frame = denoised_flat.reshape(curr_vision_latent.shape)  # [B,C,T,H,W]
 
         return denoised_frame

@@ -167,7 +167,7 @@ def pack_input_sequence(
     vision_temporal_position_mode: str = "latent_index",
     video_temporal_causal: bool = False,
     action_dim: int = 32,
-    initial_mrope_temporal_offset: int | float = 0,
+    initial_mrope_temporal_offset: int | float | list[int | float] = 0,
     lidar_temporal_compression_factor: int | None = None,
 ) -> PackedSequence:
     """
@@ -213,8 +213,10 @@ def pack_input_sequence(
             supertokens instead of separate modality blocks.
         action_dim: Action feature dimension used when temporal-causal packing creates
             null action tokens.
-        initial_mrope_temporal_offset: Initial temporal cursor for each sample, used by
-            autoregressive inference to seed mRoPE positions.
+        initial_mrope_temporal_offset: Initial temporal cursor used by autoregressive
+            inference to seed mRoPE positions. A scalar applies to every sample; a
+            list supplies one offset per sample for batched prompts with different
+            cached text lengths.
         lidar_temporal_compression_factor: Temporal compression of the LiDAR VAE, obtained
             from the LiDAR tokenizer at runtime. With the sweep rate in
             ``gen_data_clean.fps_lidar`` it places LiDAR latents on the same real-time axis
@@ -282,6 +284,12 @@ def pack_input_sequence(
 
     use_float_mrope_positions = enable_fps_modulation or explicit_vision_temporal_positions_active
 
+    if isinstance(initial_mrope_temporal_offset, list) and len(initial_mrope_temporal_offset) != len(sequence_plans):
+        raise ValueError(
+            "initial_mrope_temporal_offset must contain one value per sequence plan, "
+            f"got {len(initial_mrope_temporal_offset)} offsets for {len(sequence_plans)} plans."
+        )
+
     # Initialize mutable builder state for sequence construction.
     seq_builder = PackedSequenceBuilder(uses_single_timestep=uses_single_timestep(input_timesteps))
 
@@ -308,7 +316,12 @@ def pack_input_sequence(
 
         # mRoPE temporal offset resets per sample.
         # initial_mrope_temporal_offset is non-zero only for AR inference (frame N seeds at N*tcf).
-        seq_builder.begin_sample(initial_mrope_temporal_offset)
+        sample_initial_mrope_temporal_offset = (
+            initial_mrope_temporal_offset[sample_idx]
+            if isinstance(initial_mrope_temporal_offset, list)
+            else initial_mrope_temporal_offset
+        )
+        seq_builder.begin_sample(sample_initial_mrope_temporal_offset)
 
         _ts = input_timesteps[sample_idx]
         input_timestep = _ts.item() if _ts.numel() == 1 else _ts  # float (TF) or Tensor(T_max,) (DF)

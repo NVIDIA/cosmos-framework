@@ -180,8 +180,8 @@ _DEFAULT_ATOL = 1e-3
 #
 #     train/loss_avg: 1.32225 (iteration 0)
 #
-# ``GradClip`` emits the global grad-norm via every rank, prefixed with
-# ``[RANK X]``. Key is ``clip_grad_norm/global`` for VLM.
+# ``GradClip`` may emit the global grad-norm from every rank with a ``[RANK X]``
+# prefix, or rank 0 only without a prefix. Key is ``clip_grad_norm/global`` for VLM.
 _VLM_LOSS_RE = re.compile(r"train/loss_avg:\s+(?P<loss>[0-9.eE+-]+)\s+\(iteration\s+\d+\)")
 # VFM logs per-rank loss via the IterSpeed callback's on_training_step_end:
 #     [RANK 0] Iteration 1: Hit counter: 1/50 | Loss: 0.2515 | Time: 120.42s
@@ -192,7 +192,11 @@ _VFM_LOSS_RE = re.compile(
     r"(?:\[RANK\s+(?P<rank>\d+)\]\s+)?Iteration\s+\d+:\s+Hit counter:[^|]+\|\s+Loss:\s+(?P<loss>[0-9.eE+-]+)"
 )
 _GRAD_NORM_RE = re.compile(
-    r"\[RANK\s+0\][^\n]*clip_grad_norm/(?:[^/]+/)?global:\s+([0-9.eE+-]+)\s+\(iteration\s+\d+\)"
+    # Accept both all-rank logs (where only the explicitly prefixed rank 0 line
+    # counts) and rank-0-only logs (which have no rank prefix).
+    r"(?:\[RANK\s+0\][^\n]*|^(?![^\n]*\[RANK\s+\d+\])[^\n]*)"
+    r"clip_grad_norm/(?:[^/]+/)?global:\s+([0-9.eE+-]+)\s+\(iteration\s+\d+\)",
+    re.MULTILINE,
 )
 
 

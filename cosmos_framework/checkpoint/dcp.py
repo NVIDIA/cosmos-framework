@@ -43,6 +43,7 @@ import dataclasses
 import enum
 import multiprocessing
 import os
+import queue
 import re
 import socket
 import time
@@ -750,6 +751,9 @@ class DistributedCheckpointer(AbstractCheckpointer):
             self.staging_ckpt_file = None
             self.staging_stream = torch.cuda.Stream()
             self.checkpoint_in_progress = False
+            # A failed result that the per-step poll took off the queue and deliberately did
+            # not act on, held for the blocking wait to raise. See poll_async_save().
+            self.deferred_save_failure: SaveDone | None = None
 
     def keys_to_resume_during_load(self) -> tuple[set[str], CheckpointLoadSource | None]:
         """
@@ -1020,10 +1024,92 @@ class DistributedCheckpointer(AbstractCheckpointer):
         self.checkpoint_in_progress = True
         log.info(f"Submitted checkpoint to background process")
 
+    def _report_save_result(self, save_done: SaveDone) -> bool:
+        """Hand a finished background save to the callbacks, and report whether it succeeded.
+
+        Clearing ``checkpoint_in_progress`` here is what makes the two paths that can pick up
+        a result interchangeable: whichever of :meth:`poll_async_save` and
+        :meth:`_wait_for_previous_async_checkpoint` reaches the queue first consumes the
+        result and dispatches it, and the other then has nothing left to do.
+        """
+        log.info(f"Received checkpoint save result: {save_done}")
+
+        if self.callbacks is not None and save_done.succeeded:
+            self.callbacks.on_save_checkpoint_success(
+                iteration=save_done.iteration, elapsed_time=save_done.elapsed_time
+            )
+        self.checkpoint_in_progress = False
+        return save_done.succeeded
+
+    def poll_async_save(self) -> None:
+        """Confirm a background save that has already finished, without waiting for one that has not.
+
+        A save is only confirmed once its result is taken off the queue, and that is what
+        dispatches ``on_save_checkpoint_success`` -- which drives OneLogger's
+        ``train_iterations_productive_end`` and lets wall-clock retention advance. Left to
+        :meth:`_wait_for_previous_async_checkpoint` alone, the confirmation waits for the
+        *next* save to drain this one, or for :meth:`finalize` on a graceful exit. A job
+        killed abnormally in between -- preemption, cancellation, timeout, node failure --
+        therefore threw away credit for a checkpoint that had been durable on disk for as
+        long as the gap between saves. Job 1881483 wrote iteration 58500 successfully at
+        10:52:04 and was preempted at 11:32:56 having reached 58856, yet still reported
+        58000 as its last productive iteration.
+
+        Polling once per optimizer step narrows that window to the write itself plus one
+        iteration.
+
+        Unlike the blocking wait, this never adjudicates a result that has not arrived: an
+        empty queue means the write is still running, and a queue that cannot be read is
+        left to the blocking wait at the next save, which has the timeout needed to tell a
+        slow save from a dead background process.
+
+        Nor does it ever end the job -- only success is acted on here. Every rank runs its
+        own background writer and reads its own queue, so a failed save surfaces at a
+        different step on each rank, and a rank that raised while its peers were still
+        writing would drop out of the next collective and hang them rather than bring the
+        job down coherently. The writers' own process group tolerates a stalled save for
+        ``BACKGROUND_SAVE_TIMEOUT``, so the spread between two ranks' results can be most
+        of an hour. A failure is therefore logged here for promptness and left in
+        ``deferred_save_failure`` for :meth:`_wait_for_previous_async_checkpoint`, which
+        every rank reaches together at the next save or at :meth:`finalize` -- the same
+        place, and the same iteration, as before this poll existed.
+        """
+        if (
+            self.async_mode != AsyncMode.ASYNC_WITH_PINNED_MEM
+            or not self.checkpoint_in_progress
+            or self.deferred_save_failure is not None
+        ):
+            return
+
+        try:
+            save_done: SaveDone = self.mp_queue_recv.get_nowait()
+        except queue.Empty:
+            return
+        except Exception as e:
+            log.error(f"Error polling for checkpoint save result: {e}", rank0_only=False)
+            return
+
+        if save_done.succeeded:
+            self._report_save_result(save_done)
+            return
+
+        # Leaving ``checkpoint_in_progress`` set is what keeps the blocking wait engaged, so
+        # the verdict is still reached -- just where all ranks reach it at once.
+        log.error(
+            f"Checkpoint save failed in the background process: {save_done}. "
+            f"Training will stop at the next checkpoint milestone.",
+            rank0_only=False,
+        )
+        self.deferred_save_failure = save_done
+
     def _wait_for_previous_async_checkpoint(self) -> None:
         """
         Gets the results of previously submitted checkpoints.
         Pass them to callbacks if checkpoint succeeded.
+
+        Also the single place a failed save is allowed to stop the job, because every rank
+        arrives here at the same iteration; :meth:`poll_async_save` defers failures it
+        picked up mid-step rather than raising off-step.
         """
         assert self.async_mode == AsyncMode.ASYNC_WITH_PINNED_MEM, "Async mode must be AsyncMode.ASYNC_WITH_PINNED_MEM"
 
@@ -1032,20 +1118,17 @@ class DistributedCheckpointer(AbstractCheckpointer):
 
         success = False
         try:
-            log.info(f"Waiting for checkpoint save result")
+            if self.deferred_save_failure is not None:
+                save_done: SaveDone = self.deferred_save_failure
+                self.deferred_save_failure = None
+            else:
+                log.info(f"Waiting for checkpoint save result")
 
-            # Bounded so the main process never blocks indefinitely. Kept above
-            # BACKGROUND_SAVE_TIMEOUT so the background process reports the real failure first.
-            save_done: SaveDone = self.mp_queue_recv.get(timeout=SAVE_RESULT_TIMEOUT.total_seconds())
+                # Bounded so the main process never blocks indefinitely. Kept above
+                # BACKGROUND_SAVE_TIMEOUT so the background process reports the real failure first.
+                save_done = self.mp_queue_recv.get(timeout=SAVE_RESULT_TIMEOUT.total_seconds())
 
-            log.info(f"Received checkpoint save result: {save_done}")
-
-            if self.callbacks is not None and save_done.succeeded:
-                self.callbacks.on_save_checkpoint_success(
-                    iteration=save_done.iteration, elapsed_time=save_done.elapsed_time
-                )
-            self.checkpoint_in_progress = False
-            success = save_done.succeeded
+            success = self._report_save_result(save_done)
 
         except Exception as e:
             log.error(f"Error waiting for checkpoint save result: {e}", rank0_only=False)

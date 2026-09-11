@@ -83,6 +83,7 @@ from cosmos_framework.data.generator.sequence_packing.runtime import (
     get_gen_seq,
     get_num_real_tokens,
     get_und_seq,
+    has_pad_segment,
     set_gen_seq,
     set_und_seq,
     zeros_like,
@@ -91,6 +92,54 @@ from cosmos_framework.data.generator.sequence_packing.runtime import (
 # Torch optimization settings
 torch._dynamo.config.cache_size_limit = 512
 torch._dynamo.config.accumulated_cache_size_limit = 4096
+
+
+def _pad_packed_tokens_by_sample(
+    tokens: torch.Tensor,  # [N_padded,H,D]
+    sample_ids: torch.Tensor,  # [N_padded]
+    num_real_tokens: int,
+    batch_size: int,
+) -> tuple[torch.Tensor, tuple[int, ...]]:  # ([B,S_max,H,D], tuple[B])
+    """Restore the batch dimension needed to store packed K/V in the AR cache.
+
+    Attention projects one flat, sample-major token stream, but the batched
+    cache stores independent ``[B,S,H,D]`` rows. A leading ``unsqueeze(0)``
+    would merge all samples into one history; a reshape cannot handle unequal
+    prompt lengths. This helper copies each sample's tokens into its own row
+    and zero-pads shorter rows to the longest sequence in this pathway.
+
+    ``sample_ids`` are SequencePack's batch-local row ordinals, not persistent
+    dataset or request IDs. The real prefix must already be grouped in
+    increasing sample order, with IDs in ``[0,batch_size)``; this function
+    counts boundaries but does not sort or gather interleaved samples. The
+    caller must keep the same batch-row order while reusing the AR cache.
+
+    Args:
+        tokens: Packed K or V, ``[N_padded,H,D]``. Only the leading
+            ``num_real_tokens`` entries are copied; alignment padding is ignored.
+        sample_ids: Integer row ordinal for each token, ``[N_padded]``.
+        num_real_tokens: Length of the real token prefix shared by both inputs.
+        batch_size: Number of cache rows, including samples empty in this pathway.
+
+    Returns:
+        Zero-padded ``[B,S_max,H,D]`` tokens and the ``B`` real sequence lengths.
+        Padding is storage only: attention must use real lengths, not attend
+        to the zero tails. ``ARMemoryState`` obtains the same lengths from the
+        pack and carries them alongside the cache.
+    """
+    real_sample_ids = sample_ids[:num_real_tokens]  # [N]
+    lengths_tensor = torch.bincount(real_sample_ids, minlength=batch_size)  # [B]
+    lengths = tuple(int(length) for length in lengths_tensor.tolist())
+    max_length = max(lengths, default=0)
+    padded = tokens.new_zeros((batch_size, max_length, *tokens.shape[1:]))  # [B,S_max,H,D]
+    offset = 0
+    for sample_idx, length in enumerate(lengths):
+        padded[sample_idx, :length] = tokens[offset : offset + length]  # [S_i,H,D]
+        offset += length
+    if offset != num_real_tokens:
+        raise AssertionError(f"Packed token lengths sum to {offset}, expected {num_real_tokens}")
+    return padded, lengths
+
 
 # -----------------------------------------------------------------------------
 # Unified MoT (Mixture of Transformers) implementation supporting:
@@ -736,12 +785,34 @@ class PackedAttentionMoT(nn.Module):
             # of raw k_und_.  Without the norm, k_und_for_gen_ is not defined, so
             # fall back to k_und_.
             k_und_to_store = k_und_for_gen_ if self.k_norm_und_for_gen is not None else k_und_
-            kv_to_store = (
-                k_gen_[:gen_len].unsqueeze(0),
-                v_gen[:gen_len].unsqueeze(0),
-                k_und_to_store[:und_len].unsqueeze(0),
-                v_und[:und_len].unsqueeze(0),
-            )
+            memory_batch_size = int(getattr(memory_value, "batch_size", 1))
+            if memory_batch_size > 1:
+                # Undo sample packing before cache writes: batch row i must keep
+                # sample i's history across AR steps. UND prompt lengths may
+                # differ, so pad each pathway independently; ARMemoryState uses
+                # the pack's real per-row lengths to exclude padding on reads.
+                gen_k_batched, gen_lengths = _pad_packed_tokens_by_sample(
+                    k_gen_, pack["_full_only_sample_ids"], gen_len, memory_batch_size
+                )  # [B,S_gen,H,D], tuple[B]
+                gen_v_batched, gen_v_lengths = _pad_packed_tokens_by_sample(
+                    v_gen, pack["_full_only_sample_ids"], gen_len, memory_batch_size
+                )  # [B,S_gen,H,D], tuple[B]
+                und_k_batched, und_lengths = _pad_packed_tokens_by_sample(
+                    k_und_to_store, pack["_causal_sample_ids"], und_len, memory_batch_size
+                )  # [B,S_und_max,H,D], tuple[B]
+                und_v_batched, und_v_lengths = _pad_packed_tokens_by_sample(
+                    v_und, pack["_causal_sample_ids"], und_len, memory_batch_size
+                )  # [B,S_und_max,H,D], tuple[B]
+                if gen_lengths != gen_v_lengths or und_lengths != und_v_lengths:
+                    raise AssertionError("Packed K/V sample lengths differ")
+                kv_to_store = (gen_k_batched, gen_v_batched, und_k_batched, und_v_batched)
+            else:
+                kv_to_store = (
+                    k_gen_[:gen_len].unsqueeze(0),
+                    v_gen[:gen_len].unsqueeze(0),
+                    k_und_to_store[:und_len].unsqueeze(0),
+                    v_und[:und_len].unsqueeze(0),
+                )
 
         # Attention compute is local-head under both sequence-sharded and
         # replicated attention I/O layouts.  The difference here is the output
@@ -1078,7 +1149,14 @@ def _run_mlp(
     MLP is row-wise, so it takes the padded rows as they come.
     """
     if sample_ids is not None:
-        assert sample_ids.shape == (input.shape[0],)
+        # torch._check rather than a bare assert: this runs inside the compiled decoder layer, and
+        # ``sample_ids`` (``_causal_sample_ids`` / ``_full_only_sample_ids``) and the stream
+        # ``input`` came from are marked unbacked separately by
+        # ``parallelize_unified_mot._mark_pack_unbacked``, so they carry two different symbols and
+        # comparing them has no answer Dynamo can reach. They are one id per token by
+        # construction, which is what this states -- and stating it keeps the check as a runtime
+        # assert rather than dropping it.
+        torch._check(sample_ids.shape[0] == input.shape[0])
     if isinstance(mlp, Qwen3VLMoeTextSparseMoeBlock):
         (
             output_tensor,
@@ -1101,11 +1179,46 @@ def _run_mlp(
 
 
 def _get_local_sample_ids(pack: SequencePack, pathway: str) -> tuple[torch.Tensor, int]:
-    """Return per-token sample IDs and the global sample count for a packed pathway."""
+    """Return per-token sample IDs and the LBL bucket count for a packed pathway.
+
+    The count comes from the pad-segment offsets rather than the plain ``sample_offsets``, and is
+    therefore one *more* than the number of real samples: it counts the padded layout's segments,
+    the ``N`` real ones plus the trailing pad segment. Both are read for their length only -- the
+    offset values describe the unsharded stream and are stale on a context-parallel local shard
+    (which is why :func:`get_causal_seq` refuses them there), but the segment count they
+    encode is the same on every rank.
+
+    That extra bucket is what keeps this compile-friendly. ``compute_sample_lbl_stats`` sizes
+    tensors by this count, and ``sample_offsets.shape[0] - 1`` is 1 for a pack holding a single
+    sample -- a size-1 dim, which PyTorch always specializes to a constant, in turn pinning
+    ``sample_offsets.shape[0]`` itself to 2 and breaking the "never specialize" contract that
+    ``parallelize_unified_mot._mark_pack_unbacked`` marks these tensors under. Reading the
+    pad-segment length instead makes the count ``N + 1``, which is never 0 or 1, so nothing
+    downstream specializes and the block compiles once for every pack shape.
+
+    The extra bucket stays empty and costs nothing: padding tokens carry sample id ``N`` from the
+    packer, but ``Qwen3VLMoeTextSparseMoeBlock.forward`` re-routes every masked row to bucket
+    ``num_samples`` (= ``N + 1``), which ``compute_sample_lbl_stats`` discards as its sentinel. So
+    bucket ``N`` receives no tokens, and ``compute_load_balancing_loss`` drops it through the
+    ``valid_samples = sample_num_tokens > 0`` mask it already applies to zero-token CP shards.
+
+    Asserted rather than silently falling back to ``sample_offsets``: the fallback would restore
+    the specialization above on exactly the packs that took it, and a fallback branch keyed on a
+    pack field is itself a recompile source. Every config that enables sample LBL today packs one
+    causal and one full split per sample, which is what makes the pad segment present (see
+    ``sequence_pack_from_packed_sequence``); a layout that breaks that pairing has to decide what
+    its LBL buckets mean before it can run this loss.
+    """
     assert pathway in ("und", "gen")
     sample_ids_key = "_causal_sample_ids" if pathway == "und" else "_full_only_sample_ids"
     sample_ids = pack[sample_ids_key]  # [N_pathway]
-    num_samples = pack["sample_offsets"].shape[0] - 1
+    if not has_pad_segment(pack):
+        raise ValueError(
+            "Sample LBL needs the pack's pad segment, which only exists when every sample "
+            "contributes both a causal and a full split. This pack carries none, so it cannot be one "
+            "of the two-way layouts sample LBL is defined for."
+        )
+    num_samples = pack["sample_offsets"].shape[0] - 1  # N real samples + 1 pad segment
     return sample_ids, num_samples
 
 
@@ -1192,6 +1305,16 @@ class MoTDecoderLayer(nn.Module):
         if include_gen_pathway:
             self.post_attention_layernorm_moe_gen = layer_types.rms_norm(config.hidden_size, eps=config.rms_norm_eps)
         self.lbl_config: LBLConfig = lbl_config or LBLConfig()
+
+        # Resolve the two sample-LBL predicates here rather than in ``forward``. When sample LBL is
+        # on, ``omni_mot_model`` passes ``self.config.lbl`` straight through, which is an OmegaConf
+        # ``DictConfig`` rather than an ``LBLConfig`` -- and ``forward`` is both compiled and
+        # activation-checkpointed. Dynamo traces into ``DictConfig.__getattr__``, whose internals
+        # raise, and OmegaConf's error formatter then reaches ``re.Pattern.sub`` with a callable
+        # argument, which Dynamo cannot trace ("constant-like method call with non-constant args").
+        # These are plain bools, so the compiled forward branches on a constant instead.
+        self._sample_lbl_und: bool = self.lbl_config.method == "sample" and self.lbl_config.coeff_und is not None
+        self._sample_lbl_gen: bool = self.lbl_config.method == "sample" and self.lbl_config.coeff_gen is not None
 
     def forward(
         self,
@@ -1281,7 +1404,7 @@ class MoTDecoderLayer(nn.Module):
         lbl_metadata_dict: dict[str, LBLMetadata] = dict()
         gen_sample_ids = None
         gen_num_samples = None
-        if self.lbl_config.method == "sample" and self.lbl_config.coeff_gen is not None:
+        if self._sample_lbl_gen:
             gen_sample_ids, gen_num_samples = _get_local_sample_ids(input, "gen")
 
         if gen_only:
@@ -1324,8 +1447,9 @@ class MoTDecoderLayer(nn.Module):
 
             und_sample_ids = None
             und_num_samples = None
-            if self.lbl_config.method == "sample" and self.lbl_config.coeff_und is not None:
+            if self._sample_lbl_und:
                 und_sample_ids, und_num_samples = _get_local_sample_ids(input, "und")
+
             mlp_out_und, lbl_metadata_und = _run_mlp(
                 self.mlp,
                 ln_out_und,

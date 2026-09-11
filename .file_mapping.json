@@ -1,7 +1,7 @@
 {
-  "_source_commit": "209e01b7b8f97a5db144899a3fbb6d15642ca469-dirty",
-  "_dest_commit": "26aeac85505fe92a3a8d25c15d052f871623a9b4",
-  "_generated_at": "2026-09-10T05:52:48Z",
+  "_source_commit": "116a1414e2fb10bc7416ca860ad67f517ef9371f-dirty",
+  "_dest_commit": "ffa9c6b60a6b04b2fae337577bc6cbd8a93c39f5",
+  "_generated_at": "2026-09-11T05:52:11Z",
   "files": {
     "imaginaire/__init__.py": "cosmos_framework/__init__.py",
     "imaginaire/attention/__init__.py": "cosmos_framework/model/attention/__init__.py",
@@ -377,6 +377,7 @@
     "projects/cosmos3/cosmos3/models/mot/modeling_utils.py": "cosmos_framework/model/generator/mot/modeling_utils.py",
     "projects/cosmos3/cosmos3/models/mot/modeling_utils_test.py": "cosmos_framework/model/generator/mot/modeling_utils_test.py",
     "projects/cosmos3/cosmos3/models/mot/parallelize_unified_mot.py": "cosmos_framework/model/generator/mot/parallelize_unified_mot.py",
+    "projects/cosmos3/cosmos3/models/mot/parallelize_unified_mot_test.py": "cosmos_framework/model/generator/mot/parallelize_unified_mot_test.py",
     "projects/cosmos3/cosmos3/models/mot/parallelize_vfm_network.py": "cosmos_framework/model/generator/mot/parallelize_vfm_network.py",
     "projects/cosmos3/cosmos3/models/mot/und_k_norm_example_test.py": "cosmos_framework/model/generator/mot/und_k_norm_example_test.py",
     "projects/cosmos3/cosmos3/models/mot/unified_mot.py": "cosmos_framework/model/generator/mot/unified_mot.py",

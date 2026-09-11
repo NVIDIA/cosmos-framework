@@ -126,12 +126,21 @@ _SYSTEM_PROMPT_AV_MULTIVIEW_TRANSFER = (
     "observations of the same driving scene, preserving each camera's viewpoint, shared ego motion, road layout, "
     "object identity and motion, weather, lighting, and cross-view consistency."
 )
+_SYSTEM_PROMPT_AV_JOINT_CAMERA_LIDAR_TRANSFER = (
+    "You are a helpful assistant that jointly generates temporally synchronized, geometrically consistent "
+    "autonomous-driving camera videos and LiDAR range-view sequences from per-camera scene descriptions and provided "
+    "control signals, including camera controls and an HD-map control for LiDAR. Treat all camera views and LiDAR "
+    "sweeps as synchronized observations of the same driving scene, preserving each camera's viewpoint, shared ego "
+    "motion, road layout, object identity and motion, weather, lighting, cross-view consistency, and camera-LiDAR "
+    "alignment."
+)
 
 _SYSTEM_PROMPTS = {
     "editing": _SYSTEM_PROMPT_IMAGE_EDITING,
     "video_editing": _SYSTEM_PROMPT_VIDEO_EDITING,
     "transfer": _SYSTEM_PROMPT_TRANSFER,
     "av_multiview_transfer": _SYSTEM_PROMPT_AV_MULTIVIEW_TRANSFER,
+    "av_joint_camera_lidar_transfer": _SYSTEM_PROMPT_AV_JOINT_CAMERA_LIDAR_TRANSFER,
 }
 
 

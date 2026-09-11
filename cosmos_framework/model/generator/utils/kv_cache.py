@@ -301,9 +301,15 @@ class UndKVCache:
         self.k_und: torch.Tensor | None = None
         self.v_und: torch.Tensor | None = None
         self.cached_len: int = 0
+        self.cached_lens: tuple[int, ...] = ()
         self.is_initialized = False
 
-    def store(self, k: torch.Tensor, v: torch.Tensor) -> None:
+    def store(
+        self,
+        k: torch.Tensor,  # [B,S_und,H,D]
+        v: torch.Tensor,  # [B,S_und,H,D]
+        lengths: tuple[int, ...] | None = None,
+    ) -> None:
         """Store und K/V tensors.
 
         The new caption will overwrite the existing caption in the cache.
@@ -312,12 +318,21 @@ class UndKVCache:
             k: Key tensor with RoPE applied [B,S_und,H,D].
                 S_und is the number of understanding (text) tokens.
             v: Value tensor [B,S_und,H,D].
+            lengths: Real text-token length for every batch row. When omitted,
+                every row is assumed to occupy the full sequence dimension.
         """
+        if lengths is None:
+            lengths = (k.shape[1],) * k.shape[0]
+        if len(lengths) != k.shape[0]:
+            raise ValueError(f"Expected {k.shape[0]} understanding lengths, got {len(lengths)}")
+        if any(length < 0 or length > k.shape[1] for length in lengths):
+            raise ValueError(f"Understanding lengths {lengths} exceed cached tensor shape {tuple(k.shape)}")
         # Detach to prevent gradient flow (same as KVCache).
         # Clone to escape CUDA-graph-managed storage (see KVCache.store_kv).
         self.k_und = k.detach().clone()  # [B,S_und,H,D]
         self.v_und = v.detach().clone()  # [B,S_und,H,D]
         self.cached_len = k.shape[1]
+        self.cached_lens = lengths
         self.is_initialized = True
 
     def get(self) -> tuple[torch.Tensor, torch.Tensor]:
@@ -380,6 +395,7 @@ class UndKVCache:
         self.k_und = None
         self.v_und = None
         self.cached_len = 0
+        self.cached_lens = ()
         self.is_initialized = False
 
 
@@ -1510,6 +1526,9 @@ class ARMemoryValue(MemoryValue):
     gen_v_hist: torch.Tensor | None
     frame_idx: int
     gen_len: int
+    batch_size: int = 1
+    gen_lens: tuple[int, ...] = ()
+    und_lens: tuple[int, ...] = ()
     gen_k_buf_full: torch.Tensor | None = None
     gen_v_buf_full: torch.Tensor | None = None
     real_gen_cache_len_t: torch.Tensor | None = None
@@ -1616,6 +1635,7 @@ class ARMemoryState(MemoryState):
         stage_gen_cache_writes: bool = False,
         transfer_history_sink_tokens: int = 0,
         transfer_history_max_tokens: int | None = None,
+        batched: bool = False,
     ) -> None:
         self.dual_kv_cache = dual_kv_cache
         self.frame_idx = frame_idx
@@ -1633,6 +1653,10 @@ class ARMemoryState(MemoryState):
         self.stage_gen_cache_writes: bool = stage_gen_cache_writes
         self.transfer_history_sink_tokens: int = transfer_history_sink_tokens
         self.transfer_history_max_tokens: int | None = transfer_history_max_tokens
+        self.batched: bool = batched
+        self._batch_size: int = 1
+        self._gen_lens: tuple[int, ...] = ()
+        self._current_und_lens: tuple[int, ...] = ()
         self._staged_gen_kv: list[tuple[torch.Tensor, torch.Tensor] | None] = [None] * len(dual_kv_cache)
         self._coarse_padded_und_kv: list[tuple[torch.Tensor, torch.Tensor] | None] = [None] * len(dual_kv_cache)
         if for_cuda_graphs:
@@ -1652,6 +1676,8 @@ class ARMemoryState(MemoryState):
                 raise ValueError(f"transfer_history_max_tokens must be >= 0, got {transfer_history_max_tokens}")
             if for_cuda_graphs or post_saturation_static_compile:
                 raise ValueError("transfer history limiting supports only dynamic-shape AR inference")
+        if batched and (for_cuda_graphs or post_saturation_static_compile or coarse_cuda_graph):
+            raise ValueError("Batched AR memory supports only eager dynamic-shape inference")
         if kv_head_shard_size > 1:
             assert not for_cuda_graphs, "local KV-head cache storage does not support CUDA graph static-cache mode"
             assert num_kv_heads is not None, "local KV-head cache storage requires num_kv_heads"
@@ -1672,7 +1698,21 @@ class ARMemoryState(MemoryState):
         self._dtype: torch.dtype = torch.float32
 
     def init(self, hidden_states: dict, device: torch.device) -> None:
-        self._gen_len = hidden_states["_num_full_tokens"]
+        if self.batched:
+            self._batch_size = int(hidden_states["sample_offsets"].shape[0] - 1)
+            full_sample_ids = hidden_states["_full_only_sample_ids"][: hidden_states["_num_full_tokens"]]  # [N_gen]
+            causal_sample_ids = hidden_states["_causal_sample_ids"][: hidden_states["_num_causal_tokens"]]  # [N_und]
+            gen_counts = torch.bincount(full_sample_ids, minlength=self._batch_size)  # [B]
+            und_counts = torch.bincount(causal_sample_ids, minlength=self._batch_size)  # [B]
+            self._gen_lens = tuple(int(length) for length in gen_counts.tolist())
+            self._current_und_lens = tuple(int(length) for length in und_counts.tolist())
+            if any(length <= 0 for length in self._gen_lens):
+                raise ValueError(f"Every batched AR sample must contain generation tokens, got {self._gen_lens}")
+            if len(set(self._gen_lens)) != 1:
+                raise ValueError(f"Batched AR requires equal generation lengths, got {self._gen_lens}")
+            self._gen_len = self._gen_lens[0]
+        else:
+            self._gen_len = hidden_states["_num_full_tokens"]
         if self.post_saturation_static_compile:
             assert self.static_und_cache_max_len is not None
             s_und = self.dual_kv_cache[0].und_cache.cached_len
@@ -1864,6 +1904,9 @@ class ARMemoryState(MemoryState):
                 gen_v_hist=gen_v_hist,
                 frame_idx=self.frame_idx,
                 gen_len=self._gen_len,
+                batch_size=self._batch_size,
+                gen_lens=self._gen_lens,
+                und_lens=(cache.und_cache.cached_lens if cache.und_cache.is_initialized else self._current_und_lens),
                 for_cuda_graphs=False,
                 post_saturation_static_compile=self.post_saturation_static_compile,
             )
@@ -1948,7 +1991,11 @@ class ARMemoryState(MemoryState):
         if not cache.und_cache.is_initialized:
             und_k_to_store = self._slice_to_local_kv_heads(und_k)  # [B,S,H_local,D]
             und_v_to_store = self._slice_to_local_kv_heads(und_v)  # [B,S,H_local,D]
-            cache.und_cache.store(und_k_to_store, und_v_to_store)
+            cache.und_cache.store(
+                und_k_to_store,
+                und_v_to_store,
+                lengths=self._current_und_lens if self.batched else None,
+            )
 
     def prepare_for_coarse_cuda_graph_replay(self, frame_idx: int) -> None:
         """Refresh fixed-address history buffers before replaying a coarse graph."""

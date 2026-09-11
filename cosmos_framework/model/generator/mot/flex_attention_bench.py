@@ -955,7 +955,7 @@ def run_scenario(
 
         Reads the same buffers as the flex rows, with the key stream taken per sample rather
         than per stream: the offsets treat it as ``[und | gen]`` runs, which is the order
-        ``get_all_seq`` produces for this pass and is the same bytes for a single sample.
+        ``get_all_seq_unpadded`` produces for this pass and is the same bytes for a single sample.
         Only the segment lengths matter to a timing baseline, so the row order does not.
         """
 

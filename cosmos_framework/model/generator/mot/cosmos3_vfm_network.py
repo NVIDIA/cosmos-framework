@@ -1326,15 +1326,15 @@ class Cosmos3VFMNetwork(PreTrainedModel):
             attention_meta.flex_block_mask = build_multiview_block_mask(
                 seq_len=full_only_seq.shape[0],
                 full_q_offsets=full_q_offsets,
-                sensor_mask_items=sensor_mask_items,
-                caption_mask_items=caption_mask_items,
-                device=full_only_seq.device,
-                block_size=self.flex_backend.block_size,
                 num_und=causal_seq.shape[0],
                 causal_offsets=causal_offsets,
                 attention_scope=self.config.attention_scope,
                 control_attends_sensor=self.config.control_attends_sensor,
                 decomposed_temporal_window_seconds=self.config.decomposed_temporal_window_seconds,
+                sensor_mask_items=sensor_mask_items,
+                caption_mask_items=caption_mask_items,
+                block_size=self.flex_backend.block_size,
+                device=full_only_seq.device,
             )
             # Carried with the mask because its kernels are only valid for the block size the
             # mask was built at; two_way_attention hands both to flex_attention, which

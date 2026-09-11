@@ -100,6 +100,14 @@ class Checkpointer:
         # Please check logs from on_save_checkpoint_success() for better accuracy
         self.callbacks.on_save_checkpoint_end(model=None, iteration=iteration)
 
+    def poll_async_save(self) -> None:
+        """Nothing to poll: the save worker dispatches ``on_save_checkpoint_success`` itself.
+
+        Mirrors :meth:`cosmos_framework.checkpoint.base.AbstractCheckpointer.poll_async_save`, which
+        this class predates and does not inherit, so
+        :class:`cosmos_framework.utils.callback.ConfirmAsyncCheckpoint` can call it unconditionally.
+        """
+
     @misc.timer("checkpoint saving (local)")
     def _save_worker_local(self, state_dict: dict[str, torch.Tensor], checkpoint_file: str, rank: int = 0) -> None:
         """Worker to save checkpoint to local disk, spawned with a child thread (runs in parallel with the training).

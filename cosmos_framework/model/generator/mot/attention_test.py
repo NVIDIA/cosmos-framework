@@ -31,11 +31,13 @@ from cosmos_framework.model.generator.mot.flex_attention_test import _FLASH_UNAV
 from cosmos_framework.data.generator.sequence_packing.sequence import PackedSequence
 from cosmos_framework.data.generator.sequence_packing.runtime import (
     SequencePack,
+    get_all_seq_unpadded,
+    has_pad_segment,
     get_all_seq,
-    get_all_seq_padded,
     get_causal_seq,
     get_full_only_seq,
     get_gen_seq,
+    get_num_real_samples,
     get_und_seq,
     prepare_sequence_pack_metadata,
     sequence_pack_from_packed_sequence,
@@ -339,25 +341,37 @@ def _test_attention_impls(
 
     # Independent packs for the same implementation should be the same.
     torch.testing.assert_close(
-        get_all_seq(output1_factored)[:real_len], get_all_seq(output1_joint)[:real_len], atol=atol_self, rtol=rtol_self
+        get_all_seq_unpadded(output1_factored)[:real_len],
+        get_all_seq_unpadded(output1_joint)[:real_len],
+        atol=atol_self,
+        rtol=rtol_self,
     )
     torch.testing.assert_close(
-        get_all_seq(output2_factored)[:real_len], get_all_seq(output2_joint)[:real_len], atol=atol_self, rtol=rtol_self
+        get_all_seq_unpadded(output2_factored)[:real_len],
+        get_all_seq_unpadded(output2_joint)[:real_len],
+        atol=atol_self,
+        rtol=rtol_self,
     )
 
     # impl 1 vs impl 2. needs more tolerance
     torch.testing.assert_close(
-        get_all_seq(output2_factored)[:real_len], get_all_seq(output1_factored)[:real_len], atol=atol_cmp, rtol=rtol_cmp
+        get_all_seq_unpadded(output2_factored)[:real_len],
+        get_all_seq_unpadded(output1_factored)[:real_len],
+        atol=atol_cmp,
+        rtol=rtol_cmp,
     )
     torch.testing.assert_close(
-        get_all_seq(output2_joint)[:real_len], get_all_seq(output1_joint)[:real_len], atol=atol_cmp, rtol=rtol_cmp
+        get_all_seq_unpadded(output2_joint)[:real_len],
+        get_all_seq_unpadded(output1_joint)[:real_len],
+        atol=atol_cmp,
+        rtol=rtol_cmp,
     )
 
     if test_backward:
-        get_all_seq(output1_joint)[:real_len].sum().backward()
-        get_all_seq(output2_joint)[:real_len].sum().backward()
-        get_all_seq(output1_factored)[:real_len].sum().backward()
-        get_all_seq(output2_factored)[:real_len].sum().backward()
+        get_all_seq_unpadded(output1_joint)[:real_len].sum().backward()
+        get_all_seq_unpadded(output2_joint)[:real_len].sum().backward()
+        get_all_seq_unpadded(output1_factored)[:real_len].sum().backward()
+        get_all_seq_unpadded(output2_factored)[:real_len].sum().backward()
 
         # should be close but not necessarily exactly the same because of aggregation order in bwd
         torch.testing.assert_close(
@@ -380,43 +394,46 @@ def test_two_way_attention_vs_three_way_attention():
 
 
 class _SampleCountTripwire:
-    """Stands in for ``sample_offsets`` and fails whatever reads the sample count off it."""
+    """Stands in for the sample count and fails whatever compares it.
 
-    @property
-    def shape(self) -> tuple[int, ...]:
-        raise AssertionError("the sample count was read, which specializes the compiled graph on it")
+    Obtaining the count is free; it is the comparison against a constant that specializes the
+    compiled graph, so that is what this catches.
+    """
+
+    def __gt__(self, other: object) -> bool:
+        raise AssertionError("the sample count was compared, which specializes the compiled graph on it")
 
 
-def _use_varlen_with(sample_offsets: object, *, has_caption_offsets: bool = False) -> bool:
+def _use_varlen_with(num_samples: object, *, has_caption_offsets: bool = False) -> bool:
     return attention._use_varlen(
-        cast(torch.Tensor, sample_offsets),
+        cast(int, num_samples),
         has_caption_offsets=has_caption_offsets,
     )
 
 
 @pytest.mark.L0
-def test_use_varlen_does_not_read_the_sample_count_while_training() -> None:
-    """A pack's sample count varies from step to step, so reading it costs a recompile.
+def test_use_varlen_does_not_compare_the_sample_count_while_training() -> None:
+    """A pack's sample count varies from step to step, so comparing it costs a recompile.
 
     ``_use_varlen`` only wants the count to take a dense-attention shortcut that is gated to
     inference, and short-circuit evaluation is what keeps training away from it: the grad-mode
-    test is the left operand of an ``or``, so training never reaches the count at all.
+    test is the left operand of an ``or``, so training never reaches the comparison at all.
     """
     assert _use_varlen_with(_SampleCountTripwire()) is True
 
 
 @pytest.mark.L0
 def test_use_varlen_takes_the_dense_path_for_a_single_sample_without_grad() -> None:
-    # [0, 4] is one sample, so the varlen ranges would describe the whole tensor and buy nothing.
+    # One sample, so the varlen ranges would describe the whole tensor and buy nothing.
     with torch.no_grad():
-        assert _use_varlen_with(torch.tensor([0, 4], dtype=torch.int32)) is False
+        assert _use_varlen_with(1) is False
 
 
 @pytest.mark.L0
 def test_use_varlen_stays_varlen_for_several_samples_without_grad() -> None:
-    # [0, 2, 4] is two samples, which the dense API has no way to keep apart.
+    # Two samples, which the dense API has no way to keep apart.
     with torch.no_grad():
-        assert _use_varlen_with(torch.tensor([0, 2, 4], dtype=torch.int32)) is True
+        assert _use_varlen_with(2) is True
 
 
 @pytest.mark.L0
@@ -540,7 +557,7 @@ def test_prepared_sequence_pack_metadata_is_reused() -> None:
 
     assert first_pack["_causal_indices"] is metadata.causal_indices
     assert second_pack["_causal_indices"] is metadata.causal_indices
-    torch.testing.assert_close(get_all_seq(first_pack), get_all_seq(second_pack))
+    torch.testing.assert_close(get_all_seq_unpadded(first_pack), get_all_seq_unpadded(second_pack))
 
 
 @pytest.mark.L0
@@ -1126,12 +1143,12 @@ def test_two_way_attention_flex_matches_dense_across_batch_shapes(
             with _flex_lowering_or_skip(backend):
                 flex_pack = compiled_flex_two_way(*flex_batch.packs, attention_meta)
 
-            # get_all_seq gathers the two towers back into packed token order, the form the decoder
+            # get_all_seq_unpadded gathers the two towers back into packed token order, the form the decoder
             # layer passes on. Real tokens only: the dense full branch leaves the padding rows
             # unwritten (its varlen offsets stop at the last real token) where the flex branch
             # writes them from the -1 sentinel, so they are neither comparable nor read downstream.
-            dense_out = get_all_seq(dense_pack)[: shape.real_len].float()
-            flex_out = get_all_seq(flex_pack)[: shape.real_len].float()
+            dense_out = get_all_seq_unpadded(dense_pack)[: shape.real_len].float()
+            flex_out = get_all_seq_unpadded(flex_pack)[: shape.real_len].float()
             torch.testing.assert_close(
                 flex_out,
                 dense_out,
@@ -1264,7 +1281,7 @@ def _stage_poisoned_blocks(
 
     The addresses come back because staging the blocks is not the same as the kernel *getting*
     one. Everything else the call allocates on the way -- the causal pass's own output, the
-    ``get_all_seq`` gather, the key concatenations -- competes for the same size class, so the
+    ``get_all_seq_unpadded`` gather, the key concatenations -- competes for the same size class, so the
     output buffer may well be a block none of this ever touched. A test that assumed otherwise
     would read a freshly-zeroed page as proof that the kernel wrote it. :func:`_assert_from_a
     _staged_block` is what turns that assumption into a check.
@@ -1326,7 +1343,7 @@ def test_varlen_attention_writes_query_rows_past_its_cumulative_ranges(backend: 
 
     # Two samples covering [0, 96); rows 96..127 of q are outside every range. Only the query
     # stream is padded, which is the shape the two-way dense full pass has: its keys come from
-    # get_all_seq, which holds real tokens only.
+    # get_all_seq_unpadded, which holds real tokens only.
     offsets = torch.tensor([0, 48, real], device=device, dtype=torch.int32)
 
     # Retried for the same reason the backward companion is: whether the staged block reaches the
@@ -1544,9 +1561,9 @@ def test_natten_varlen_attention_writes_rows_past_its_token_layouts() -> None:
 def test_two_way_dense_gen_pass_writes_its_padded_query_rows() -> None:
     """Every row of the dense GEN pass's output is written, padding included.
 
-    ``two_way_attention``'s causal pass switches to ``_causal_seq_offsets_pad_segment`` when the
+    ``two_way_attention``'s causal pass reads the pad segment folded into ``_causal_seq_offsets`` when the
     pack carries one, so its padding is covered by a trailing segment and the kernel writes it.
-    The GEN pass does not: it keys against ``get_all_seq``, which holds real tokens only and
+    The GEN pass does not: it keys against ``get_all_seq_unpadded``, which holds real tokens only and
     whose ``sample_offsets`` have no matching extra segment, so it runs on the plain
     ``_full_only_seq_offsets``. Those stop at the last real GEN token while ``full_q`` is the
     padded stream, leaving the tail rows outside every cumulative range.
@@ -1661,7 +1678,7 @@ def test_two_way_dense_full_pass_covers_its_padded_queries() -> None:
     does, NATTEN does not), so the pack has to cover them either way -- and covering them takes a
     segment on *both* sides, since a query range with no matching key range is an empty softmax.
 
-    Before ``_sample_offsets_pad_segment`` the causal pass had that pairing and the dense full
+    Before ``sample_offsets`` carried a pad segment the causal pass had that pairing and the dense full
     pass did not, which is the asymmetry this pins: its keys come from the interleaved stream,
     whose ``sample_offsets`` had no pad segment to pair the GEN queries' one against.
     """
@@ -1678,12 +1695,12 @@ def test_two_way_dense_full_pass_covers_its_padded_queries() -> None:
         "Both streams have to be padded for the pad segments to exist at all."
     )
 
-    assert "_sample_offsets_pad_segment" in pack, (
+    assert has_pad_segment(pack), (
         "A padded two-way pack needs the interleaved stream's pad segment, or the dense full pass "
         "has nothing to pair its padded GEN queries against."
     )
-    q_offsets = pack["_full_only_seq_offsets_pad_segment"]
-    kv_offsets = pack["_sample_offsets_pad_segment"]
+    q_offsets = pack["_full_only_seq_offsets"]
+    kv_offsets = pack["sample_offsets"]
 
     # The query ranges reach the end of the padded GEN stream, the key ranges the end of the
     # padded interleaved stream, so no row of either sits outside every range.
@@ -1693,7 +1710,7 @@ def test_two_way_dense_full_pass_covers_its_padded_queries() -> None:
     assert int(kv_offsets[-1]) == padded_und + padded_gen, (
         f"The key ranges stop at {int(kv_offsets[-1])} but the interleaved stream holds {padded_und + padded_gen} rows."
     )
-    padded_all_seq, _, _ = get_all_seq_padded(pack)
+    padded_all_seq, _, _ = get_all_seq(pack)
     assert padded_all_seq.shape[0] == int(kv_offsets[-1]), (
         "The padded interleaved stream and the offsets describing it have to agree on their length."
     )
@@ -1708,8 +1725,56 @@ def test_two_way_dense_full_pass_covers_its_padded_queries() -> None:
     assert int(kv_offsets[-1]) > int(kv_offsets[-2]), "The interleaved pad segment is empty."
 
     # max_seqlen has to cover the pad segment too: a varlen kernel tiles up to it.
-    assert pack["max_full_len_pad_segment"] >= padded_gen - sum(gen_lens)
-    assert pack["max_sample_len_pad_segment"] >= (padded_und - sum(und_lens)) + (padded_gen - sum(gen_lens))
+    assert pack["max_full_len"] >= padded_gen - sum(gen_lens)
+    assert pack["max_sample_len"] >= (padded_und - sum(und_lens)) + (padded_gen - sum(gen_lens))
+
+
+@pytest.mark.L0
+@pytest.mark.CPU
+def test_get_num_real_samples_excludes_the_pad_segment() -> None:
+    """The pad segment is a pseudo-sample and must not be counted as one.
+
+    ``sample_offsets`` describes it as a segment like any other, so the raw segment count is one
+    too many on a padded pack. That difference is load-bearing: ``_use_varlen`` branches on this
+    count, and counting the segment would take a one-sample pack to two and put it on the varlen
+    path instead of the dense one.
+    """
+    device = torch.device("cpu")
+    und_lens, gen_lens = (12, 20), (100, 140)
+    x = torch.randn(sum(und_lens) + sum(gen_lens), 4, 64, device=device)
+    pack = _two_way_pack(x, und_lens, gen_lens, full_seq_alignment=128, causal_seq_alignment=128)
+
+    assert has_pad_segment(pack)
+    assert pack["sample_offsets"].shape[0] - 1 == len(und_lens) + 1, (
+        "the offsets should describe one segment per sample plus the pad segment"
+    )
+    assert get_num_real_samples(pack) == len(und_lens)
+
+
+@pytest.mark.L0
+@pytest.mark.CPU
+def test_get_num_real_samples_counts_every_segment_without_a_pad_segment() -> None:
+    """With no pad segment every segment is a real sample, so nothing is subtracted."""
+    device = torch.device("cpu")
+    gen_len = 100
+    x = torch.randn(gen_len, 4, 64, device=device)
+    pack = build_packed_sequence(
+        "two_way",
+        packed_sequence=x,
+        attn_modes=["full"],
+        split_lens=[gen_len],
+        sample_lens=[gen_len],
+        packed_und_token_indexes=cast(torch.LongTensor, torch.empty(0, dtype=torch.long, device=device)),
+        packed_gen_token_indexes=cast(torch.LongTensor, torch.arange(gen_len, dtype=torch.long, device=device)),
+        num_heads=x.shape[-2],
+        head_dim=x.shape[-1],
+        num_layers=1,
+        full_seq_alignment=1,
+        causal_seq_alignment=1,
+    )[0]
+
+    assert not has_pad_segment(pack)
+    assert get_num_real_samples(pack) == 1
 
 
 @pytest.mark.L0
@@ -1728,40 +1793,29 @@ def test_pad_segments_are_emitted_as_a_complete_set() -> None:
     x = torch.randn(sum(und_lens) + sum(gen_lens), 4, 64, device=device)
     pack = _two_way_pack(x, und_lens, gen_lens, full_seq_alignment=128, causal_seq_alignment=128)
 
-    pad_segment_keys = [
-        "_causal_seq_offsets_pad_segment",
-        "max_causal_len_pad_segment",
-        "_full_only_seq_offsets_pad_segment",
-        "max_full_len_pad_segment",
-        "_sample_offsets_pad_segment",
-        "max_sample_len_pad_segment",
-    ]
-    present = [key for key in pad_segment_keys if key in pack]
-    assert present == pad_segment_keys, f"Padded pack carries only {present}."
+    present = [key for key in _PAD_SEGMENT_KEYS if key in pack]
+    assert present == list(_PAD_SEGMENT_KEYS), f"Padded pack carries only {present}."
 
     # The three offset tensors describe the same number of segments, so every pass pairs its
-    # query segments one to one with its key segments, pad segment included.
+    # query segments one to one with its key segments, pad segment included. The two towers hold
+    # theirs folded into their own offsets; only the interleaved stream keeps a separate key,
+    # because ``sample_offsets`` still has to describe get_all_seq_unpadded's real-tokens-only stream.
     assert (
-        pack["_causal_seq_offsets_pad_segment"].shape[0]
-        == pack["_full_only_seq_offsets_pad_segment"].shape[0]
-        == pack["_sample_offsets_pad_segment"].shape[0]
+        pack["_causal_seq_offsets"].shape[0]
+        == pack["_full_only_seq_offsets"].shape[0]
+        == pack["sample_offsets"].shape[0]
     )
     # And the max lengths are ints, not the tensors they sit beside -- the pairing that a typo
     # here would silently swap, since both are just dict entries.
-    for key in ("max_causal_len_pad_segment", "max_full_len_pad_segment", "max_sample_len_pad_segment"):
+    for key in ("max_causal_len", "max_full_len", "max_sample_len"):
         assert isinstance(pack[key], int), f"{key} should be an int, got {type(pack[key]).__name__}."
-    for key in ("_causal_seq_offsets_pad_segment", "_full_only_seq_offsets_pad_segment", "_sample_offsets_pad_segment"):
+    for key in ("_causal_seq_offsets", "_full_only_seq_offsets", "sample_offsets"):
         assert isinstance(pack[key], torch.Tensor), f"{key} should be a tensor, got {type(pack[key]).__name__}."
 
 
-_PAD_SEGMENT_KEYS = (
-    "_causal_seq_offsets_pad_segment",
-    "max_causal_len_pad_segment",
-    "_full_only_seq_offsets_pad_segment",
-    "max_full_len_pad_segment",
-    "_sample_offsets_pad_segment",
-    "max_sample_len_pad_segment",
-)
+# Every offsets array folds its pad segment in, so no key name records the fold any more; this
+# flag is what ``runtime.has_pad_segment`` reads.
+_PAD_SEGMENT_KEYS = ("_has_pad_segment",)
 
 
 @pytest.mark.L0
@@ -1789,8 +1843,8 @@ def test_paired_splits_always_reserve_a_pad_segment() -> None:
     # segment each pad offset describes is non-empty and no row sits outside every range.
     assert get_und_seq(pack).shape[0] > sum(und_lens)
     assert get_gen_seq(pack).shape[0] > sum(gen_lens)
-    assert int(pack["_causal_seq_offsets_pad_segment"][-1]) == get_und_seq(pack).shape[0]
-    assert int(pack["_full_only_seq_offsets_pad_segment"][-1]) == get_gen_seq(pack).shape[0]
+    assert int(pack["_causal_seq_offsets"][-1]) == get_und_seq(pack).shape[0]
+    assert int(pack["_full_only_seq_offsets"][-1]) == get_gen_seq(pack).shape[0]
 
 
 @pytest.mark.L0
@@ -1801,7 +1855,7 @@ def test_pack_without_paired_splits_carries_no_pad_segments() -> None:
     The pad segment pairs the two streams segment for segment, so it only applies when every
     sample contributes both a causal and a full split. An AR no-text pack carries full splits
     only (see ``test_prepare_sequence_pack_metadata_no_causal_splits``), leaving the causal side
-    with nothing to pair against, so the constructor emits none of the six fields.
+    with nothing to pair against, so the constructor emits no pad segment at all.
     """
     device = torch.device("cpu")
     gen_len = 100
@@ -1823,6 +1877,11 @@ def test_pack_without_paired_splits_carries_no_pad_segments() -> None:
 
     for key in _PAD_SEGMENT_KEYS:
         assert key not in pack, f"A pack with no causal splits should not carry {key}."
+
+    # And the towers keep pad-free offsets: one entry per split plus the terminator, with the last
+    # entry at the real token count rather than the padded one.
+    assert pack["_full_only_seq_offsets"].shape[0] == 2
+    assert int(pack["_full_only_seq_offsets"][-1]) == gen_len
 
 
 if __name__ == "__main__":
