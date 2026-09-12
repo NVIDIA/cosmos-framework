@@ -4,7 +4,7 @@
 from __future__ import annotations
 
 import os
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Literal, cast
 
 import attrs
 import wandb
@@ -43,13 +43,22 @@ def init_wandb(config: Config, model: ImaginaireModel) -> None:
     if isinstance(config.job, DictConfig):
         from cosmos_framework.utils.config import JobConfig
 
-        config_job = JobConfig(**config.job)
+        # `job.path` / `job.path_local` are JobConfig @property values, not attrs fields;
+        # some experiment configs stash resolved copies of them onto the DictConfig
+        # (e.g. `config.job.path = ...`), so filter to fields JobConfig actually accepts.
+        job_fields = {f.name for f in attrs.fields(JobConfig)}
+        config_job = JobConfig(**{str(k): v for k, v in config.job.items() if k in job_fields})
     else:
         config_job = config.job
     config_checkpoint = config.checkpoint
     wandb_project = get_wandb_project(config_job.project)
-    # Try to fetch the W&B job ID for resuming training.
-    wandb_id = _read_wandb_id(config_job, config_checkpoint)
+    wandb_force_new_id = config_job.wandb_mode == "online_force_new_id"
+    wandb_mode = cast(
+        Literal["online", "offline", "disabled", "shared"],
+        "online" if wandb_force_new_id else config_job.wandb_mode,
+    )
+    # Try to fetch the W&B job ID for resuming training, unless a fresh run was requested.
+    wandb_id = None if wandb_force_new_id else _read_wandb_id(config_job, config_checkpoint)
     if wandb_id is None:
         # Generate a new W&B job ID.
         wandb_id = generate_id()
@@ -78,7 +87,7 @@ def init_wandb(config: Config, model: ImaginaireModel) -> None:
             config=config_resolved,
             dir=config_job.path_local,
             resume="allow",
-            mode=config_job.wandb_mode,
+            mode=wandb_mode,
         )
     except Exception as e:
         # Detect common permission / upload errors from wandb and recover
@@ -101,7 +110,7 @@ def init_wandb(config: Config, model: ImaginaireModel) -> None:
                 name=config_job.name,
                 config=config_resolved,
                 dir=config_job.path_local,
-                mode=config_job.wandb_mode,
+                mode=wandb_mode,
             )
         elif "returned error 401" in msg or "user is not logged in" in msg:
             log.warning("W&B authentication failed (401); falling back to offline mode. Error: %s", msg)
