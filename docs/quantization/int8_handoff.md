@@ -85,6 +85,16 @@ A1 Q/K 全键 8.60 | A2 text bf16 8.54 | A3 +离群键 8.52 | A4 +Q 去均值 8.
 g128（CUTLASS SM90 blockwise / DeepGEMM 的原生 K 粒度）比 g64 平均低约 1 dB、最差图低 3 dB，保住张数相同；g32 再高 0.26 dB。
 如果 kernel 现货只有 128 粒度，精度代价可接受但要接受更差的尾部；g64 是精度/kernel 复杂度的折中点。
 
+### 3.5 Policy（动作）任务（2026-09-12 补测）
+`inputs/omni/action_policy_robot.json`（bridge 样例，model_mode wam，30 步），8 个 seed，动作块 16×10（平移 3、6D 旋转 6、夹爪 1）。
+指标：对同 seed bf16 动作的 MSE；参照 bf16 自身 seed 间 MSE 0.150。工具 `tools/compare_actions.py`，产物 `outputs/policy/`。
+| 配置 | MSE 对 bf16 | 占 seed 间差异 | rel-L2 | 夹爪开合一致率 | 最差 seed |
+| --- | --- | --- | --- | --- | --- |
+| 官方 FP8 | 0.0113 | 7.5% | 18% | 97.7% | 0.0595 |
+| S0 g64 | 0.00166 | 1.1% | 7% | 99.2% | 0.0082 |
+| S0 g128 | 0.00164 | 1.1% | 6.9% | 99.2% | 0.0071 |
+S0 比官方 FP8 离 bf16 近约 7 倍；g64 与 g128 在动作上无差别。样例自带的 golden 动作文件框架并不评估，bf16 对它 MSE 0.2，不可作参照。
+
 ### 3.3 速度
 - t2i（901 token）：bf16 11.0 ms/forward，GEMM 73%，attention 15%。e2e bf16 13.8 it/s，官方 FP8 11.7 it/s（0.85×，host-bound）；开 CUDA graphs bf16 33.0、FP8 26.9；S0 模拟路径 22～30。
 - t2v 720p×189 帧×35 步（约 4.2 万 gen token，text cond 2107 / uncond 24）：bf16 2.29 s/步，官方 FP8 1.96 s/步（1.16×，到落盘 1.14×，与 NIM 表 1.11～1.14× 一致）。kernel 时间：attention 740→731 ms/forward（65%→75%），GEMM 339→160 ms（2.13×），量化 kernel 净增 30 ms（3.1%）。GPU 占用 99.5%。
