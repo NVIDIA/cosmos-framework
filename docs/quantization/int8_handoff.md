@@ -155,3 +155,19 @@ CLI：`--quantization-sim-edges {gemm_out,residual,attn_qkv,attn_pv,und_kv}`、`
 - 模拟器用的是当步精确统计（K/Q 均值、平衡系数）；单遍 kernel 若用上一步统计，精度有待验证。
 - 12 图的"保住构图"计数有 ±2 张噪声，36 图为准；跨 prompt 的敏感度差异大（desk 只保 8/12，即便 S0）。
 - Q4a 里 text K 每步重量化的 kernel 成本未计入（预计可忽略）。
+
+## 7. 开源生态对 g64 / g128 的支持（2026-09-12 调研，详见 docs/quantization/g64_oss_survey.md）
+
+- **INT8 g64（双操作数、K 方向分组、mainloop 内缩放）**：没有任何开源栈有现货。唯一能跑的是 SGLang 的 Triton `_w8a8_block_int8_matmul`
+  （`block_size=[n,64]`，需显式 `BLOCK_SIZE_N>=16`；数值已验证精确），无 64 的调优配置。cuBLASLt 无 INT8 缩放模式；cuDNN Graph 能表达但走通用 sm80 kernel；
+  CUTLASS SM90 blockwise 是 FP8-only 且 K 粒度 >=128，SM100 blockwise 的 scale 类型绑成累加器类型（INT8 → int32）且 kind::i8 只在 sm_100a/101a/110a 开启。
+- **INT8 g128**：同样只有 Triton。SGLang dense + fused-MoE kernel 有 A100/A800/H20 的 [128,128] 调优配置，为 DeepSeek-R1 Block-INT8 checkpoint 量产过
+  （SGLang PR #3730：R1 在 A100×16×2 上吞吐 +33% vs BF16，GSM8K 95.8 对 95.5）；vLLM 的 dense INT8 块封装已删（MoE Triton 有但未接线）。
+  CUTLASS / DeepGEMM / TRT-LLM / FlashInfer / sgl-kernel(CUDA) 的 INT8 全是 per-token/per-channel epilogue 缩放，SM100/SM120 上抛不支持。
+- **FP8 g128**：生态标准（CUTLASS SM90/100/120、DeepGEMM SM90、vLLM、FlashInfer、sgl-kernel、TRT-LLM、torch `_scaled_mm` 1x128 仅 SM90），全部硬编码 1×128 / 128×128。
+- **FP8 g64**：CUTLASS SM100 blockwise collective 原生支持（K 粒度只需是 32 的倍数且整除 TileK，单测有 64×64×64），但所有上层封装只派发 128；
+  FlashInfer 加 64 约 10～20 行。这是 GB300 上 FP8 孪生的最短路径。
+- 其他：llama.cpp 的 Q8_0×Q8_1 MMQ 是唯一长期量产的双侧 INT8 K-group kernel（组固定 32，消费卡向）；Atom 有 INT4 组 128 的双侧缩放（研究代码）。
+- **精度上 g128 的代价已量过**（3.4 节）：t2i 比 g64 低约 1 dB、最差图低 3 dB、保住张数相同；policy 无差别。
+- **建议路径**：目标机上先用 SGLang Triton INT8 g128（小时级接入、有调优配置）拿到相对 per-tensor FP8/INT8 的真实速度；要逼近 per-tensor 速率则 fork CUTLASS
+  SM90 blockwise 改 INT8（int32 临时累加器 + fp32 主累加器），g64 与 g128 工作量相近（2～3 人周）。GB300 上用 CUTLASS SM100 FP8 blockwise <1,1,64> 做孪生。
