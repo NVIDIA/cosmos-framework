@@ -74,6 +74,17 @@ A1 Q/K 全键 8.60 | A2 text bf16 8.54 | A3 +离群键 8.52 | A4 +Q 去均值 8.
 按层敏感度：Q/K 误差集中在 L3、L0；V 误差集中在 L31～L35。Hadamard 把 K 的原位舍入误差从 0.95% 降到 0.46%。
 产物：`outputs/tf_t2i/*/tf/sample0.pt`、`attn_err.csv`、`summary*.txt`、`tf_t2i_curves*.png`。
 
+### 3.4 Group size 对比（2026-09-12 补测，compile 路径 36 图 PSNR 对 bf16；保住 = ≥ 22 dB）
+| 配置 | 单步误差 | 36 图均值 | 最低 | 保住/36 | robot / desk / street |
+| --- | --- | --- | --- | --- | --- |
+| S0 g32 | 7.25% | 26.46 | 19.3 | 30 | 25.1 / 30.0 / 24.3 |
+| S0 g64 | 7.73% | 26.20 | 19.9 | 28 | 25.7 / 28.1 / 24.9 |
+| S0 g128 | 8.37% | 25.01 | 16.3 | 28 | 23.7 / 28.2 / 23.2 |
+| S0 g64 + Q4a | 8.06% | 25.15 | 18.3 | 28 | 25.4 / 26.8 / 23.2 |
+| S0 g128 + Q4a | 8.60% | 24.28 | 15.1 | 28 | 23.5 / 26.7 / 22.6 |
+g128（CUTLASS SM90 blockwise / DeepGEMM 的原生 K 粒度）比 g64 平均低约 1 dB、最差图低 3 dB，保住张数相同；g32 再高 0.26 dB。
+如果 kernel 现货只有 128 粒度，精度代价可接受但要接受更差的尾部；g64 是精度/kernel 复杂度的折中点。
+
 ### 3.3 速度
 - t2i（901 token）：bf16 11.0 ms/forward，GEMM 73%，attention 15%。e2e bf16 13.8 it/s，官方 FP8 11.7 it/s（0.85×，host-bound）；开 CUDA graphs bf16 33.0、FP8 26.9；S0 模拟路径 22～30。
 - t2v 720p×189 帧×35 步（约 4.2 万 gen token，text cond 2107 / uncond 24）：bf16 2.29 s/步，官方 FP8 1.96 s/步（1.16×，到落盘 1.14×，与 NIM 表 1.11～1.14× 一致）。kernel 时间：attention 740→731 ms/forward（65%→75%），GEMM 339→160 ms（2.13×），量化 kernel 净增 30 ms（3.1%）。GPU 占用 99.5%。
