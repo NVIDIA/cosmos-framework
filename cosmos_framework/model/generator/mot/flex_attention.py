@@ -1423,12 +1423,12 @@ def flex_attention(
         ``(out, lse)`` where ``lse`` has shape ``[1, N_full, heads]``.
 
     Raises:
+        RuntimeError: if ``return_lse`` is requested with a torch version that does not
+            provide ``torch.nn.attention.flex_attention.AuxRequest``.
         ValueError: if either length is not a multiple of the corresponding block size of
             the mask, if k and v disagree on length, if ``block_mask`` was built for
             different lengths, or if it was built at a block size other than ``backend``'s.
     """
-    from torch.nn.attention.flex_attention import AuxRequest
-
     q_seq_len = full_q.shape[1]
     kv_seq_len = full_k.shape[1]
     num_q_heads = full_q.shape[2]
@@ -1475,13 +1475,22 @@ def flex_attention(
         # return_aux rather than the deprecated return_lse: the latter records a
         # FutureWarning in a module-level set, which Dynamo rejects as an unsafe
         # side effect inside the activation-checkpointing HOP.
+        try:
+            from torch.nn.attention.flex_attention import AuxRequest as aux_request_cls
+        except ImportError:
+            aux_request_cls = None
+        if aux_request_cls is None:
+            raise RuntimeError(
+                "return_lse=True requires torch.nn.attention.flex_attention.AuxRequest, "
+                f"which is unavailable in torch {torch.__version__}."
+            )
         attn_out, aux = _COMPILED_FLEX_ATTENTION(
             q,
             k,
             v,
             block_mask=block_mask,
             enable_gqa=num_q_heads != num_kv_heads,
-            return_aux=AuxRequest(lse=True),
+            return_aux=aux_request_cls(lse=True),
             kernel_options=backend.kernel_options,
         )  # attn_out: [1,num_q_heads,N_full,head_dim], aux.lse: [1,num_q_heads,N_full]
         # Convert to the heads-last layout ([1,S,H,D] / [1,S,H]) that from_mode_splits

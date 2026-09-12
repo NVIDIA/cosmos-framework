@@ -7,10 +7,71 @@ import torch
 from cosmos_framework.utils.generator.multiview import (
     build_camera_major_video,
     generated_multiview_condition_frames,
+    iter_multiview_video_by_view,
     normalize_multiview_control_weights,
     pad_multiview_view_video,
     slice_multiview_view_frames,
 )
+
+# ---------------------------------------------------------------------------
+# iter_multiview_video_by_view
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.L0
+@pytest.mark.CPU
+@pytest.mark.parametrize("with_batch_dim", [False, True])
+@pytest.mark.parametrize("noncontiguous", [False, True])
+def test_iter_multiview_video_by_view_yields_shared_camera_views(
+    with_batch_dim: bool,
+    noncontiguous: bool,
+) -> None:
+    video_storage = torch.arange(3 * 6 * 2 * 4, dtype=torch.float32).reshape(3, 6, 2, 4)  # [C,V*F,H,2*W]
+    video_cthw = video_storage[:, :, :, ::2] if noncontiguous else video_storage[:, :, :, :2]  # [C,V*F,H,W]
+    video = video_cthw.unsqueeze(0) if with_batch_dim else video_cthw  # [B,C,V*F,H,W] or [C,V*F,H,W]
+
+    views = list(
+        iter_multiview_video_by_view(
+            video,
+            sample_n_views=3,
+            num_video_frames_per_view=2,
+        )
+    )  # list[[C,F,H,W]]
+
+    assert len(views) == 3
+    assert all(tuple(view.shape) == (3, 2, 2, 2) for view in views)
+    assert all(view.untyped_storage().data_ptr() == video.untyped_storage().data_ptr() for view in views)
+    round_trip = torch.cat(views, dim=1)  # [C,V*F,H,W]
+    assert torch.equal(round_trip, video_cthw)
+
+
+@pytest.mark.L0
+@pytest.mark.CPU
+@pytest.mark.parametrize(
+    ("video_shape", "sample_n_views", "num_video_frames_per_view"),
+    [
+        ((2, 3, 6, 2, 2), 3, 2),
+        ((3, 5, 2, 2), 3, 2),
+        ((3, 2, 2), 1, 2),
+        ((3, 6, 2, 2), 0, 2),
+    ],
+)
+def test_iter_multiview_video_by_view_rejects_invalid_shape(
+    video_shape: tuple[int, ...],
+    sample_n_views: int,
+    num_video_frames_per_view: int,
+) -> None:
+    video = torch.zeros(video_shape)  # invalid multiview shape
+
+    with pytest.raises(ValueError, match="Expected"):
+        list(
+            iter_multiview_video_by_view(
+                video,
+                sample_n_views=sample_n_views,
+                num_video_frames_per_view=num_video_frames_per_view,
+            )
+        )
+
 
 # ---------------------------------------------------------------------------
 # pad_multiview_view_video
