@@ -3469,15 +3469,20 @@ class OmniMoTModel(ImaginaireModel):
 
             try:
                 if isinstance(sampler, FixedStepSampler) or scheduler_type == "unipc":
-                    latents = sampler(
-                        velocity_fn,
-                        initial_noise,
-                        num_steps=num_steps,
-                        shift=shift,
-                        seed=seed,
-                        step_callback=_step_callback,
-                        **fixed_step_sampler_kwargs,
-                    )
+                    from cosmos_framework.utils.generator.teacher_forcing import teacher_forcing_session
+
+                    # COSMOS_TF_MODE=dump|replay records / teacher-forces the per-step network
+                    # inputs and outputs (local-error measurement); a no-op when unset.
+                    with teacher_forcing_session(self) as _tf:
+                        latents = sampler(
+                            _tf.wrap(velocity_fn),
+                            initial_noise,
+                            num_steps=num_steps,
+                            shift=shift,
+                            seed=seed,
+                            step_callback=_step_callback,
+                            **fixed_step_sampler_kwargs,
+                        )
                     if _extra_num_steps > 0:
                         # Dummy sampler call to issue (_extra_num_steps × per-step)
                         # FSDP allgathers; output discarded so `latents` keeps the

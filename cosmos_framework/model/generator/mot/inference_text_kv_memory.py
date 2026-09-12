@@ -10,14 +10,14 @@ them on later steps within the same request. Intentionally self-contained in
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 
 import torch
 
-from cosmos_framework.model.attention import attention
+from cosmos_framework.data.generator.sequence_packing.runtime import SequencePack, from_und_gen_splits, get_gen_seq
 from cosmos_framework.model.generator.mot.attention import SplitInfo, dispatch_attention
 from cosmos_framework.model.generator.utils.memory import KVToStore, MemoryState, MemoryValue
-from cosmos_framework.data.generator.sequence_packing.runtime import SequencePack, from_und_gen_splits, get_gen_seq
 
 
 class UndKVCache:
@@ -30,8 +30,11 @@ class UndKVCache:
 
     def store(self, k: torch.Tensor, v: torch.Tensor) -> None:
         """Store und K/V. ``k``/``v``: [B,S_und,H,D]."""
-        self.k_und = k.detach().clone()
-        self.v_und = v.detach().clone()
+        from cosmos_framework.utils.generator.qdq_sim_edges import quantize_cached_kv
+
+        # Q/DQ simulation edge ``und_kv``: the text K/V are quantized once, when cached
+        # (K per (token, head), V per (head, channel) over the cached keys).
+        self.k_und, self.v_und = quantize_cached_kv(k.detach().clone(), v.detach().clone())
         self.is_initialized = True
 
     def get(self) -> tuple[torch.Tensor, torch.Tensor]:
@@ -82,6 +85,8 @@ class InferenceTextKVMemoryState(MemoryState):
         if cache.is_initialized:
             return
         _gen_k, _gen_v, und_k, und_v = kv_to_store  # gen [1,N_gen,H_kv,D], und [1,N_und,H_kv,D]
+        if os.environ.get("QDQ_SIM_DEBUG") == "1" and layer_idx == 0:
+            print(f"[qdq-sim debug store] layer0 und_k={tuple(und_k.shape)} gen_k={tuple(_gen_k.shape)}", flush=True)
         cache.store(und_k, und_v)
 
     def is_gen_only(self) -> bool:
@@ -114,18 +119,28 @@ def _attention_gen_with_cached_text(
 
     kv_parts_k = [k_curr]
     kv_parts_v = [v_curr]
+    n_und = 0
     if memory_value.und_k_cached is not None:
         assert memory_value.und_v_cached is not None
         kv_parts_k.insert(0, memory_value.und_k_cached)
         kv_parts_v.insert(0, memory_value.und_v_cached)
+        n_und = int(memory_value.und_k_cached.shape[1])
 
     k_full = torch.cat(kv_parts_k, dim=1)  # [1, S_total, H_kv, D]
     v_full = torch.cat(kv_parts_v, dim=1)  # [1, S_total, H_kv, D]
 
-    attn_result = attention(
-        query=q_gen.unsqueeze(0),  # [1, S_curr, H, D]
-        key=k_full,
-        value=v_full,
+    from cosmos_framework.utils.generator.qdq_sim_edges import sim_attention
+
+    # ``attn_qkv`` / ``attn_pv`` simulation edges are applied here, on the full und + gen K/V;
+    # the cached text keys are the first ``n_und`` rows (``attn_k_scope`` gen/und splits on this).
+    und_key_mask = torch.zeros(k_full.shape[1], dtype=torch.bool, device=k_full.device)
+    und_key_mask[:n_und] = True
+    attn_result = sim_attention(
+        q_gen.unsqueeze(0),  # [1, S_curr, H, D]
+        k_full,
+        v_full,
+        und_key_mask=und_key_mask,
+        n_und=n_und,
         is_causal=False,
         return_lse=False,
     )

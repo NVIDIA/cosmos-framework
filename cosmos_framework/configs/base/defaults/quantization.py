@@ -36,7 +36,9 @@ class QuantizationConfig:
     # Quantization method for the model.
     method: str | None = attrs.field(
         default=None,
-        validator=attrs.validators.optional(attrs.validators.in_({"mxfp8", "nvfp4", "fp8", "int8_sim", "fp8_sim"})),
+        validator=attrs.validators.optional(
+            attrs.validators.in_({"mxfp8", "nvfp4", "fp8", "int8_sim", "fp8_sim", "int8_speed"})
+        ),
     )
 
     # Scaling granularity for the ``fp8`` and ``fp8_sim`` methods: ``per_row``
@@ -69,6 +71,36 @@ class QuantizationConfig:
     # considered as excluded.
     include_regex: list[str] = attrs.field(factory=list)
     exclude_regex: list[str] = attrs.field(factory=list)
+
+    # ``int8_sim`` / ``fp8_sim`` only: also fake-quantize the non-GEMM tensors of
+    # the *generation tower* so an end-to-end 8-bit pipeline can be simulated and
+    # its accuracy cost attributed edge by edge. Any subset of
+    # ``{"gemm_out", "residual", "attn_qkv", "attn_pv", "und_kv"}`` (see
+    # ``utils/generator/qdq_sim_edges.py``). Requires ``qdq_group_size > 0``; every
+    # edge uses that group size along the tensor's last dimension. Empty = off.
+    sim_edges: list[str] = attrs.field(factory=list)
+    # ``residual`` edge overrides: its own group size (0 = ``qdq_group_size``) and bit
+    # width (8 or 16), so the residual stream can be probed at a finer grid than
+    # the GEMM operands.
+    sim_residual_group_size: int = attrs.field(
+        default=0, validator=[attrs.validators.instance_of(int), attrs.validators.ge(0)]
+    )
+    sim_residual_bits: int = attrs.field(default=8, validator=attrs.validators.in_({8, 16}))
+    # ``attn_pv`` edge: V scale per (head, channel) over all keys (0) or per block of this
+    # many keys; ``attn_qkv``/``attn_pv``: subtract the per-channel key mean from K and V
+    # before quantizing (softmax-invariant for K; added back to O for V).
+    sim_attn_v_block_size: int = attrs.field(
+        default=0, validator=[attrs.validators.instance_of(int), attrs.validators.ge(0)]
+    )
+    sim_attn_smoothing: bool = attrs.field(default=True)
+    # ``attn_pv`` edge operand formats: V int8 / fp8 (E4M3) / none (bf16); P uint8 / fp8 / none.
+    sim_attn_v_format: str = attrs.field(default="int8", validator=attrs.validators.in_({"int8", "fp8", "none"}))
+    sim_attn_p_format: str = attrs.field(default="uint8", validator=attrs.validators.in_({"uint8", "fp8", "none"}))
+    # ``attn_pv`` edge: P·V accumulator precision (fp16 = SageAttention v1 style FP16 MMA accumulation).
+    sim_attn_pv_accum: str = attrs.field(default="fp32", validator=attrs.validators.in_({"fp32", "fp16"}))
+    # ``attn_qkv`` edge scope: all = Q + text and gen keys; gen = Q + gen keys only (text keys stay
+    # bf16); und = text keys only (Q and gen keys stay bf16). Isolates the text-K contribution.
+    sim_attn_k_scope: str = attrs.field(default="all", validator=attrs.validators.in_({"all", "gen", "und"}))
 
     # Exact module selection. When non-empty this replaces the regex filters: a
     # Linear is quantized iff its FQN is listed here, and every listed FQN must

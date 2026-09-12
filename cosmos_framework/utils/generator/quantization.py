@@ -756,6 +756,8 @@ class QdqSimLinear(nn.Linear):
     qdq_method: str = "int8_sim"
     qdq_per_row: bool = True
     qdq_group_size: int = 0
+    # ``gemm_out`` edge: also fake-quantize this linear's output (set by the installer).
+    qdq_output: bool = False
     # Set by the installer after the loaded weight has been fake-quantized. A
     # forward before that would silently run the simulation against the wrong
     # (unquantized or uninitialized) weight, so it is rejected instead.
@@ -772,7 +774,10 @@ class QdqSimLinear(nn.Linear):
         quantized_inputs = _fake_quant(
             inputs, self.qdq_method, per_row=self.qdq_per_row, group_size=self.qdq_group_size
         )
-        return F.linear(quantized_inputs, self.weight, self.bias)
+        outputs = F.linear(quantized_inputs, self.weight, self.bias)
+        if self.qdq_output:
+            outputs = _fake_quant(outputs, self.qdq_method, per_row=self.qdq_per_row, group_size=self.qdq_group_size)
+        return outputs
 
     def extra_repr(self) -> str:
         granularity = _qdq_granularity_name(self.qdq_per_row, self.qdq_group_size)
@@ -1023,6 +1028,16 @@ def apply_quantization_inplace(model: nn.Module, quantization_config: Quantizati
     filter_fn = _get_filter_fn(quantization_config)
     matched_fqns = _get_validated_quantization_fqns(model, filter_fn, target_fqns=quantization_config.target_fqns)
 
+    if quantization_config.method == "int8_speed":
+        # Real INT8 GEMMs (torch._int_mm, per-channel W / per-token A): a speed proxy, not the
+        # accuracy plan's group-64 scheme. Weights are stored as INT8.
+        from cosmos_framework.utils.generator.int8_speed import swap_int8_speed_linears
+
+        swap_int8_speed_linears(model, matched_fqns)
+        log.info(f"Applied int8_speed (torch._int_mm W8A8, per-channel/per-token), matched_count={len(matched_fqns)}")
+        _dump_matched_fqns(matched_fqns, quantization_config.matched_fqns_dump_path)
+        return matched_fqns
+
     if quantization_config.method in _QDQ_SIM_METHODS:
         # Torchao-free Q/DQ simulation: same selection as above, dense bf16 GEMMs.
         # int8_sim is always per-channel weight / per-token activation; fp8_sim
@@ -1031,10 +1046,45 @@ def apply_quantization_inplace(model: nn.Module, quantization_config: Quantizati
         group_size = quantization_config.qdq_group_size
         if group_size and not per_row:
             raise ValueError("qdq_group_size requires fp8_granularity='per_row' (blocks refine rows, not tensors)")
-        swap_qdq_sim_linears(
+        swapped = swap_qdq_sim_linears(
             model, matched_fqns, method=quantization_config.method, per_row=per_row, group_size=group_size
         )
+        # Non-GEMM edges of the generation tower (residual stream, attention I/O, ...).
+        from cosmos_framework.utils.generator.qdq_sim_edges import configure_sim_edges
+
+        configure_sim_edges(
+            quantization_config.sim_edges,
+            method=quantization_config.method,
+            group_size=group_size,
+            residual_group_size=quantization_config.sim_residual_group_size,
+            residual_bits=quantization_config.sim_residual_bits,
+            attn_v_block_size=quantization_config.sim_attn_v_block_size,
+            attn_smoothing=quantization_config.sim_attn_smoothing,
+            attn_v_format=quantization_config.sim_attn_v_format,
+            attn_p_format=quantization_config.sim_attn_p_format,
+            attn_pv_accum=quantization_config.sim_attn_pv_accum,
+            attn_k_scope=quantization_config.sim_attn_k_scope,
+        )
+        if "gemm_out" in quantization_config.sim_edges:
+            for fqn in swapped:
+                model.get_submodule(fqn).qdq_output = True
         granularity = _qdq_granularity_name(per_row, group_size)
+        if quantization_config.sim_edges:
+            granularity += f" + edges={sorted(quantization_config.sim_edges)}"
+            if {"attn_qkv", "attn_pv"} & set(quantization_config.sim_edges):
+                granularity += (
+                    f" attn(Q/K per token-head, V per channel"
+                    f"{'/block' + str(quantization_config.sim_attn_v_block_size) if quantization_config.sim_attn_v_block_size else ''}"
+                    f", smoothing={quantization_config.sim_attn_smoothing}"
+                    f", V={quantization_config.sim_attn_v_format}, P={quantization_config.sim_attn_p_format}"
+                    f", PV accum={quantization_config.sim_attn_pv_accum}"
+                    f", K scope={quantization_config.sim_attn_k_scope})"
+                )
+            if "residual" in quantization_config.sim_edges:
+                granularity += (
+                    f" residual=int{quantization_config.sim_residual_bits}"
+                    f"/g{quantization_config.sim_residual_group_size or group_size}"
+                )
         log.info(
             f"Applied runtime Q/DQ simulation method={quantization_config.method} granularity={granularity}, "
             f"matched_count={len(matched_fqns)}"

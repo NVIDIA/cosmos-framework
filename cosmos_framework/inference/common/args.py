@@ -727,7 +727,7 @@ CompiledRegion = Literal["all", "language"]
 # that keep dense bf16 GEMMs (see ``QuantizationConfig``). ``None`` (default)
 # disables. All runtime methods require the replicated layout
 # (``dp_shard_size == 1``).
-QuantizationMethod = Literal["mxfp8", "nvfp4", "fp8", "int8_sim", "fp8_sim"]
+QuantizationMethod = Literal["mxfp8", "nvfp4", "fp8", "int8_sim", "fp8_sim", "int8_speed"]
 Fp8Granularity = Literal["per_row", "per_tensor"]
 
 
@@ -737,6 +737,15 @@ class QuantizationArgs(ArgsBase):
     quantization_method: QuantizationMethod | None
     quantization_fp8_granularity: Fp8Granularity
     quantization_group_size: int
+    quantization_sim_edges: list[str]
+    quantization_residual_group_size: int
+    quantization_residual_bits: Literal[8, 16]
+    quantization_attn_v_block_size: int
+    quantization_attn_smoothing: bool
+    quantization_attn_v_format: Literal["int8", "fp8", "none"]
+    quantization_attn_p_format: Literal["uint8", "fp8", "none"]
+    quantization_attn_pv_accum: Literal["fp32", "fp16"]
+    quantization_attn_k_scope: Literal["all", "gen", "und"]
     quantization_include_regex: list[str]
     quantization_exclude_regex: list[str]
     quantization_target_fqns_file: str | None
@@ -767,6 +776,29 @@ class QuantizationOverrides(OverridesBase):
     """``int8_sim`` / ``fp8_sim`` only: block size along the input dimension K for both operands. 0 = one
     scale per weight output channel / per activation token; g > 0 = one scale per g consecutive K elements
     of each weight row and of each token (K must be divisible by g; not with ``per_tensor``)."""
+    quantization_sim_edges: list[str] = pydantic.Field(default_factory=list)
+    """``int8_sim`` / ``fp8_sim`` only: also fake-quantize non-GEMM tensors of the generation tower. Any of
+    ``gemm_out`` (linear outputs), ``residual`` (stream after each residual add), ``attn_qkv`` (Q/K after
+    RoPE and V), ``attn_pv`` (uint8 softmax probabilities and V inside P·V, via a dense reference attention),
+    ``und_kv`` (cached text K/V). Uses ``--quantization-group-size`` along each tensor's last dim."""
+    quantization_residual_group_size: int = pydantic.Field(default=0, ge=0)
+    """``residual`` sim edge only: group size for the residual stream (0 = same as --quantization-group-size)."""
+    quantization_residual_bits: Literal[8, 16] = 8
+    """``residual`` sim edge only: integer bit width used for the residual stream (8 or 16)."""
+    quantization_attn_v_block_size: int = pydantic.Field(default=0, ge=0)
+    """``attn_pv`` sim edge: V scale per (head, channel) over all keys (0) or per block of this many keys."""
+    quantization_attn_smoothing: bool = True
+    """``attn_qkv``/``attn_pv`` sim edges: subtract the per-channel key mean from K (softmax-invariant) and
+    from V (added back after P·V) before quantizing, as in SageAttention."""
+    quantization_attn_v_format: Literal["int8", "fp8", "none"] = "int8"
+    """``attn_pv`` sim edge: V format inside P·V (per-channel scale): int8, fp8 (E4M3) or none (keep bf16)."""
+    quantization_attn_p_format: Literal["uint8", "fp8", "none"] = "uint8"
+    """``attn_pv`` sim edge: softmax P format: uint8 (scale per row/key-block), fp8 (E4M3, fixed scale) or none."""
+    quantization_attn_pv_accum: Literal["fp32", "fp16"] = "fp32"
+    """``attn_pv`` sim edge: P·V accumulator precision; fp16 rounds the running sum after every 16 keys (HMMA)."""
+    quantization_attn_k_scope: Literal["all", "gen", "und"] = "all"
+    """``attn_qkv`` sim edge scope: all = Q + every key; gen = Q + gen keys only (cached/joint text keys stay bf16);
+    und = text keys only (Q and gen keys stay bf16)."""
     quantization_include_regex: list[str] = ["language_model.model.layers"]
     """Regexes matched against module FQNs; a Linear is quantized only if it matches one (empty = all)."""
     quantization_exclude_regex: list[str] = pydantic.Field(default_factory=list)

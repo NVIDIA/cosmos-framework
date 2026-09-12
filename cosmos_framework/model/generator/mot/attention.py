@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import os
 from collections.abc import Sequence
 from typing import Any
 
@@ -113,7 +114,6 @@ def _is_split_info_compatible(attention_mask: object) -> bool:
 _dotproduct_attention_cache = {}
 
 
-from cosmos_framework.model.generator.mot.flex_attention import FlexBackend, flex_attention
 from cosmos_framework.data.generator.sequence_packing.natten import (
     generate_natten_metadata,
     generate_temporal_causal_natten_metadata,
@@ -130,6 +130,7 @@ from cosmos_framework.data.generator.sequence_packing.runtime import (
     get_full_only_seq_padded,
     sequence_pack_from_packed_sequence,
 )
+from cosmos_framework.model.generator.mot.flex_attention import FlexBackend, flex_attention
 
 
 def _use_varlen(sample_offsets: torch.Tensor) -> bool:
@@ -312,12 +313,40 @@ def two_way_attention(
             sample_v = get_all_seq(packed_value_states)
             full_varlen_kwargs = dict()
 
-        full_res = attention(
-            full_q.unsqueeze(0),  # [1,N_full,heads,head_dim]
-            sample_k.unsqueeze(0),  # [1,N_all,heads,head_dim]  normed und K for gen
-            sample_v.unsqueeze(0),  # [1,N_all,heads,head_dim]
-            **full_varlen_kwargs,
-        )  # [1,N_full,heads,head_dim]
+        from cosmos_framework.utils.generator.qdq_sim_edges import edge_enabled, sim_attention
+
+        if edge_enabled("attn_qkv") or edge_enabled("attn_pv"):
+            # Q/DQ simulation edges on the generator's full attention (Q/K per (token, head)
+            # with K smoothing; 8-bit P and per-channel V via a dense reference).
+            if use_varlen:
+                raise NotImplementedError("attention Q/DQ simulation supports a single packed sample (no varlen)")
+            # get_all_seq scatters the causal (text) tokens to ``_causal_indices`` of the joint
+            # key stream; mark them so ``attn_k_scope`` can keep the text keys in bf16.
+            und_key_mask = torch.zeros(sample_k.shape[0], dtype=torch.bool, device=sample_k.device)
+            und_key_mask[packed_key_normalized["_causal_indices"]] = True
+            if os.environ.get("QDQ_SIM_DEBUG") == "1" and not torch.compiler.is_compiling():
+                pk = packed_key_normalized
+                print(
+                    f"[qdq-sim debug two_way] N_all={sample_k.shape[0]} causal_idx={int(pk['_causal_indices'].shape[0])} "
+                    f"full_idx={int(pk['_full_indices'].shape[0])} num_causal={pk.get('_num_causal_tokens')} "
+                    f"num_full={pk.get('_num_full_tokens')} causal_seq={tuple(pk['causal_seq'].shape)} "
+                    f"full_only_seq={tuple(pk['full_only_seq'].shape)} full_q={tuple(full_q.shape)}",
+                    flush=True,
+                )
+            full_res = sim_attention(
+                full_q.unsqueeze(0),
+                sample_k.unsqueeze(0),
+                sample_v.unsqueeze(0),
+                und_key_mask=und_key_mask,
+                n_und=int(packed_key_normalized["_causal_indices"].shape[0]),
+            )  # [1,N_full,heads,head_dim]
+        else:
+            full_res = attention(
+                full_q.unsqueeze(0),  # [1,N_full,heads,head_dim]
+                sample_k.unsqueeze(0),  # [1,N_all,heads,head_dim]  normed und K for gen
+                sample_v.unsqueeze(0),  # [1,N_all,heads,head_dim]
+                **full_varlen_kwargs,
+            )  # [1,N_full,heads,head_dim]
 
     # [1,N_full,heads,head_dim] -> [N_full,heads,head_dim] -> [N_full,heads*head_dim]
     full_out = full_res.squeeze(0).flatten(-2, -1)  # type: ignore  # [N_full,heads*head_dim]

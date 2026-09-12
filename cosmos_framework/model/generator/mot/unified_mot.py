@@ -15,6 +15,8 @@ from torch.distributed import ProcessGroup
 from cosmos_framework.model.attention import attention as imaginaire_attention
 from cosmos_framework.model.attention.masks import CausalType
 from cosmos_framework.utils import log
+from cosmos_framework.utils.generator.qdq_sim_edges import fake_quant_edge
+from cosmos_framework.utils.generator.qdq_sim_edges import set_layer as _qdq_set_layer
 from cosmos_framework.model.generator.mot.attention import (
     AttentionMaskType,
     dispatch_attention,
@@ -1005,6 +1007,7 @@ def _impl_forward(
     for i, decoder_layer in enumerate(self.layers):
         # MemoryState: produce read-only MemoryValue for this layer (outside compile)
         memory_value = memory.read_for_layer(i) if memory is not None else None
+        _qdq_set_layer(i)  # Q/DQ attention simulation: current layer (outside compile)
 
         hidden_states, lbl_metadata_dict, kv_to_store = decoder_layer(
             hidden_states,
@@ -1229,7 +1232,7 @@ class MoTDecoderLayer(nn.Module):
             # No residual_und here: the gen_only MLP branch below builds its own
             # length-0 und sequence for ``mlp_out_und_seq``; carrying one through
             # this branch is dead code.
-            residual_gen = get_gen_seq(input) + gen_attn_out
+            residual_gen = fake_quant_edge(get_gen_seq(input) + gen_attn_out, "residual")
         else:
             # STANDARD PATH: Process both und and gen tokens
             pack_attn_out, kv_to_store = self.self_attn(
@@ -1240,7 +1243,9 @@ class MoTDecoderLayer(nn.Module):
                 memory_value=memory_value,
             )
             residual_und = get_und_seq(input) + get_und_seq(pack_attn_out)  # [N_und,hidden_size]
-            residual_gen = get_gen_seq(input) + get_gen_seq(pack_attn_out)  # [N_gen,hidden_size]
+            residual_gen = fake_quant_edge(
+                get_gen_seq(input) + get_gen_seq(pack_attn_out), "residual"
+            )  # [N_gen,hidden_size]
 
         # Pre-MLP layernorm and processing
         lbl_metadata_dict: dict[str, LBLMetadata] = dict()
@@ -1274,7 +1279,7 @@ class MoTDecoderLayer(nn.Module):
 
             # Final output with residual (gen only)
             mlp_out_und_seq = residual_gen.new_empty(0, residual_gen.shape[-1])
-            mlp_out_gen_seq = residual_gen + mlp_out_gen
+            mlp_out_gen_seq = fake_quant_edge(residual_gen + mlp_out_gen, "residual")
         else:
             # STANDARD PATH: Process both und and gen tokens
             ln_out_und = self.post_attention_layernorm(residual_und)  # [N_und,hidden_size]
@@ -1314,7 +1319,7 @@ class MoTDecoderLayer(nn.Module):
                 lbl_metadata_dict["gen"] = lbl_metadata_gen
 
             mlp_out_und_seq = residual_und + mlp_out_und  # [N_und,hidden_size]
-            mlp_out_gen_seq = residual_gen + mlp_out_gen  # [N_gen,hidden_size]
+            mlp_out_gen_seq = fake_quant_edge(residual_gen + mlp_out_gen, "residual")  # [N_gen,hidden_size]
 
         return from_und_gen_splits(mlp_out_und_seq, mlp_out_gen_seq, input), lbl_metadata_dict, kv_to_store
 
