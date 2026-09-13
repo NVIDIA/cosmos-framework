@@ -16,6 +16,7 @@ ties validation + override-build + Hydra-compose together lives in
 
 from __future__ import annotations
 
+import re
 from typing import Any
 
 
@@ -181,14 +182,19 @@ def _emit_with_remap(
     out.append(f"{'.'.join(new_path)}={_hydra_format(value)}")
 
 
-def _hydra_format(v: Any, in_list: bool = False) -> str:
-    """Convert a Python value to a Hydra CLI override RHS.
+def _hydra_quote(s: str) -> str:
+    """Single-quote a string for a Hydra override RHS.
 
-    ``in_list=True`` indicates the value is being emitted inside a list
-    literal (``[a,b,c]``); strings then get single-quoted unconditionally
-    so numeric-looking entries like ``"480"`` stay strings rather than
-    being coerced to int by Hydra's list parser.
+    Inside quotes Hydra keeps backslashes literally except where they precede a
+    quote or end the string, so only those runs are doubled; quotes are escaped.
     """
+    s = re.sub(r"(\\*)'", lambda m: m.group(1) * 2 + "\\'", s)
+    s = re.sub(r"(\\+)$", lambda m: m.group(1) * 2, s)
+    return f"'{s}'"
+
+
+def _hydra_format(v: Any) -> str:
+    """Convert a Python value to a Hydra CLI override RHS."""
     if v is None:
         return "null"
     if isinstance(v, bool):
@@ -196,17 +202,13 @@ def _hydra_format(v: Any, in_list: bool = False) -> str:
     if isinstance(v, (int, float)):
         return str(v)
     if isinstance(v, list):
-        return "[" + ",".join(_hydra_format(x, in_list=True) for x in v) + "]"
+        return "[" + ",".join(_hydra_format(x) for x in v) + "]"
     if isinstance(v, str):
-        # Inside a list literal, always quote so numeric-looking strings
-        # ("480") aren't parsed as int. At top level, quote only when the
-        # string contains characters Hydra would otherwise interpret —
-        # commas (sweep / list marker) or whitespace. Env-interpolation
-        # strings like ``${oc.env:NAME}`` are safe unquoted because Hydra
-        # recognizes the ``${...}`` form even with a colon inside.
-        if in_list or "," in v or " " in v:
-            return f"'{v}'"
-        return v
+        # Always quote. Hydra re-types an unquoted RHS, so a string field set to
+        # "20260913", "true" or "null" would arrive as int/bool/None, and one
+        # containing "=", "(", "[" or "#" is rejected by the override grammar.
+        # Quoted values still resolve ``${oc.env:NAME}`` interpolation.
+        return _hydra_quote(v)
     return str(v)
 
 

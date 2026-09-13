@@ -101,6 +101,50 @@ class TestBuildHydraOverrides:
         assert "experiment=vision_sft_nano" in overrides
         assert any(o.startswith("optimizer.lr=") for o in overrides), overrides
 
+    @pytest.mark.parametrize(
+        "value",
+        ["20260913", "1e-4", "true", "null", "lr=1e-5", "run(v2)", "run[1]", "exp#3", "bob's run", "a\\'b", "ends\\"],
+    )
+    def test_string_value_reaches_hydra_as_the_same_string(self, value: str) -> None:
+        """A TOML string must not be re-typed (int/float/bool/None) or rejected by the override grammar."""
+        from hydra.core.override_parser.overrides_parser import OverridesParser
+
+        raw = {"job": {"task": "vfm", "experiment": "vision_sft_nano", "name": value}}
+        (override,) = [o for o in build_hydra_overrides(raw) if o.startswith("job.name=")]
+        parsed = OverridesParser.create().parse_override(override).value()
+        assert isinstance(parsed, str) and parsed == value, override
+
+    def test_string_list_items_reach_hydra_as_the_same_strings(self) -> None:
+        from hydra.core.override_parser.overrides_parser import OverridesParser
+
+        warmup = ["480", "bob's"]
+        raw = {
+            "job": {"task": "vfm", "experiment": "vision_sft_nano"},
+            "trainer": {"callbacks": {"compile_tokenizer": {"warmup_resolutions": warmup}}},
+        }
+        (override,) = [o for o in build_hydra_overrides(raw) if "warmup_resolutions=" in o]
+        assert OverridesParser.create().parse_override(override).value() == warmup, override
+
+    def test_non_string_values_keep_their_types(self) -> None:
+        """Numbers, bools, lists, ``${...}`` interpolation and the ``???`` skip are unchanged."""
+        from hydra.core.override_parser.overrides_parser import OverridesParser
+
+        raw = {
+            "job": {"task": "vfm", "experiment": "vision_sft_nano"},
+            "optimizer": {"lr": 1.0e-5, "betas": [0.9, 0.99]},
+            "trainer": {"max_iter": 200},
+            "model": {"ema": {"enabled": False}, "tokenizer": {"vae_path": "${oc.env:WAN_VAE_PATH}"}},
+            "checkpoint": {"load_path": "???"},
+        }
+        overrides = OverridesParser.create().parse_overrides(build_hydra_overrides(raw)[1:])
+        parsed = {o.key_or_group: o.value() for o in overrides}
+        assert parsed["optimizer.lr"] == 1.0e-5
+        assert parsed["optimizer.betas"] == [0.9, 0.99]
+        assert parsed["trainer.max_iter"] == 200 and isinstance(parsed["trainer.max_iter"], int)
+        assert parsed["model.config.ema.enabled"] is False
+        assert parsed["model.config.tokenizer.vae_path"] == "${oc.env:WAN_VAE_PATH}"
+        assert "checkpoint.load_path" not in parsed
+
 
 # --------------------------------------------------------------------------- #
 # 3. end-to-end load_experiment_from_toml on the shipped vision_sft_nano recipe #
