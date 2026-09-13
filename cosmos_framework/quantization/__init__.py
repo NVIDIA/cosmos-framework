@@ -126,6 +126,7 @@ def quantize_fp8_checkpoint(
     i2v_cond_dataset: str | None = None,
     keep_model: bool = False,
     calibration_behavior: Literal["framework", "legacy"] = "framework",
+    mixed_precision_steps: int = 3,
 ):
     """Quantize a diffusers-layout Cosmos3 checkpoint to FP8 and write a drop-in dir.
 
@@ -140,6 +141,9 @@ def quantize_fp8_checkpoint(
     recipe that restores the historical scheduler, numeric bridges, and attention
     behavior to pursue legacy-equivalent FP8 calibration. Returns the assembled
     ``output_dir`` (and, if ``keep_model``, the calibrated model for inspection).
+
+    ``mixed_precision_steps`` controls the symmetric first/last denoising-step
+    A16 policy written to ``transformer/config.json`` for vLLM-Omni.
     """
     input_dir, output_dir = resolve_checkpoint_path(model_name_or_path), Path(output_dir)
     if profile not in ("t2v", "t2i", "i2v"):
@@ -214,7 +218,12 @@ def quantize_fp8_checkpoint(
     mtq.print_quant_summary(model)
 
     staging_dir = output_dir.parent / f".quantized_transformer_{profile}.tmp"
-    _export.export_quantized_transformer(model, staging_dir, transformer_dir)
+    _export.export_quantized_transformer(
+        model,
+        staging_dir,
+        transformer_dir,
+        mixed_precision_steps=mixed_precision_steps,
+    )
     _export.assemble_output_dir(input_dir, output_dir, staging_dir)
 
     print(f"[done] {output_dir}")

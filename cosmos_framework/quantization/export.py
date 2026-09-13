@@ -9,8 +9,8 @@ preserves non-quantized projections, modality towers, and the language-model hea
 The resulting drop-in checkpoint has a new ``transformer/`` and links the remaining
 components back to the quantization source directory.
 
-FP8 only — the NIM pipeline's NVFP4 exporter and mixed-precision recipes are out of
-scope for the cookbook.
+FP8 only — the NIM pipeline's NVFP4 exporter is out of scope for the cookbook.
+The exported transformer config includes the vLLM-Omni inference-time A16 policy.
 """
 
 from __future__ import annotations
@@ -133,6 +133,31 @@ _DIFFUSERS_IGNORE_MODULES = [
     "model.visual*",
     "visual*",
 ]
+
+
+def add_diffusion_step_policy(config: dict, mixed_precision_steps: int) -> None:
+    """Add vLLM-Omni's symmetric first/last-step A16 policy in place.
+
+    The policy belongs to the Diffusers transformer's ``quantization_config``;
+    root-level Transformers metadata intentionally does not carry it.
+    """
+    quantization_config = config.get("quantization_config")
+    if not isinstance(quantization_config, dict):
+        raise ValueError("Transformer config must contain a 'quantization_config' object before adding the policy.")
+
+    quantization_config["runtime"] = {
+        "diffusion_step_policy": {
+            "schema_version": 1,
+            "type": "first_last_n",
+            "index_space": "denoising_loop_iteration",
+            "scope": ["transformer"],
+            "default_mode": "native",
+            "first_steps": {"count": mixed_precision_steps, "mode": "a16"},
+            "last_steps": {"count": mixed_precision_steps, "mode": "a16"},
+            "overlap": "a16",
+            "reasoner": "a16",
+        }
+    }
 
 
 class Fp8DiffusersExporter:
@@ -308,7 +333,14 @@ class Fp8DiffusersExporter:
         )
         return merged
 
-    def export(self, mdl, transformer_export_dir: Path, src_transformer_dir: Path, dtype=torch.bfloat16) -> None:
+    def export(
+        self,
+        mdl,
+        transformer_export_dir: Path,
+        src_transformer_dir: Path,
+        dtype=torch.bfloat16,
+        mixed_precision_steps: int = 3,
+    ) -> None:
         net = mdl.net
         transformer_export_dir.mkdir(parents=True, exist_ok=True)
 
@@ -341,6 +373,7 @@ class Fp8DiffusersExporter:
         with open(src_config, encoding="utf-8") as f:
             config = json.load(f)
         config["quantization_config"] = self.build_quant_config_json()
+        add_diffusion_step_policy(config, mixed_precision_steps)
         with open(transformer_export_dir / "config.json", "w") as f:
             json.dump(config, f, indent=4)
         self.write_diffusers_modelopt_state(config, merged, transformer_export_dir)
@@ -348,9 +381,21 @@ class Fp8DiffusersExporter:
         print(f"[export] wrote {len(merged)} tensors (fp8) to {transformer_export_dir}")
 
 
-def export_quantized_transformer(mdl, transformer_export_dir: Path, src_transformer_dir: Path, dtype=torch.bfloat16):
+def export_quantized_transformer(
+    mdl,
+    transformer_export_dir: Path,
+    src_transformer_dir: Path,
+    dtype=torch.bfloat16,
+    mixed_precision_steps: int = 3,
+):
     """Export the FP8-quantized DiT as a vllm-omni-loadable diffusers checkpoint dir."""
-    Fp8DiffusersExporter().export(mdl, Path(transformer_export_dir), Path(src_transformer_dir), dtype)
+    Fp8DiffusersExporter().export(
+        mdl,
+        Path(transformer_export_dir),
+        Path(src_transformer_dir),
+        dtype=dtype,
+        mixed_precision_steps=mixed_precision_steps,
+    )
 
 
 def _write_root_hf_quant_config(root_dir: Path, transformer_dir: Path) -> None:
@@ -364,6 +409,8 @@ def _write_root_hf_quant_config(root_dir: Path, transformer_dir: Path) -> None:
         quant_config = json.load(f).get("quantization_config")
     if quant_config is None:
         raise ValueError(f"No 'quantization_config' in {transformer_dir}/config.json.")
+    quant_config = copy.deepcopy(quant_config)
+    quant_config.pop("runtime", None)
     with open(root_dir / "hf_quant_config.json", "w", encoding="utf-8") as f:
         json.dump(quant_config, f, indent=4)
     print(f"[assemble] wrote {root_dir / 'hf_quant_config.json'} for upstream-vLLM discovery")
