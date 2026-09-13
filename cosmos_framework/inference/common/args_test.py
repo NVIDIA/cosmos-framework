@@ -9,18 +9,45 @@ import pytest
 
 from cosmos_framework.inference.args import DEFAULT_CHECKPOINT, DEFAULT_CHECKPOINT_NAME, OmniSetupOverrides
 from cosmos_framework.inference.common.args import (
+    ArgsBase,
     CheckpointConfig,
     CheckpointOverrides,
     CheckpointType,
     ConfigArgs,
     ConfigFileType,
     download_file,
+    from_files,
 )
 from cosmos_framework.inference.common.config import deserialize_config_dict
 
 CHECKPOINTS: dict[str, CheckpointConfig] = {
     DEFAULT_CHECKPOINT_NAME: DEFAULT_CHECKPOINT,
 }
+
+
+class _NamedSample(ArgsBase):
+    name: str
+
+
+def test_from_files_expands_glob_patterns(tmp_path: Path) -> None:
+    """Matching patterns load every match; a missing literal path raises."""
+    (tmp_path / "t2v.json").write_text(json.dumps({"name": "t2v"}), encoding="utf-8")
+    (tmp_path / "i2v.json").write_text(json.dumps({"name": "i2v"}), encoding="utf-8")
+
+    assert [s.name for s in from_files(_NamedSample, [tmp_path / "*.json"])] == ["i2v", "t2v"]
+    with pytest.raises(FileNotFoundError):
+        from_files(_NamedSample, [tmp_path / "v2v.json"])
+
+
+def test_from_files_raises_when_a_glob_matches_nothing(tmp_path: Path) -> None:
+    """A pattern with no matches fails like a missing path, instead of loading zero samples."""
+    (tmp_path / "t2v.json").write_text(json.dumps({"name": "t2v"}), encoding="utf-8")
+
+    with pytest.raises(ValueError, match=r"No inference parameter files match"):
+        from_files(_NamedSample, [tmp_path / "*.jsnol"])
+    # One unmatched pattern is an error even when another pattern matches.
+    with pytest.raises(ValueError, match=r"No inference parameter files match"):
+        from_files(_NamedSample, [tmp_path / "*.json", tmp_path / "*.jsnol"])
 
 # Enough of a Cosmos3 'model' section for config resolution; not a loadable architecture.
 MODEL_SECTION = {"_target": "omni_mot_model", "config": {"_type": "omni_mot_model_config"}}

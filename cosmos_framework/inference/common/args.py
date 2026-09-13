@@ -1128,7 +1128,11 @@ def _from_files(
     for path in paths:
         pattern = str(path)
         if "*" in pattern:
-            expanded_paths.extend(Path(g) for g in glob.glob(pattern, recursive=True))
+            matches = glob.glob(pattern, recursive=True)
+            if not matches:
+                # Fail like a missing literal path would, rather than loading zero samples.
+                raise ValueError(f"No inference parameter files match '{pattern}'")
+            expanded_paths.extend(Path(g) for g in matches)
         else:
             expanded_paths.append(path)
     paths = sorted(set(expanded_paths))
