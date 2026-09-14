@@ -112,6 +112,16 @@ policy 走 two_way attention 路径，1517 个 gen token + 110 个 text 键，�
 kernel 侧代价：per-col 的 promotion 是 blockwise 的 2 倍 FMA（H100 上 per-col g128 约占 FMA 管线 50%，per-col g64 约 100%）；
 现成先例是 CUTLASS SM100 blockwise 的 ScaleGranularityN=1 和 DeepGEMM 1D1D。可分离 scale s_w[n,g]=s_w[n]·c[g]（promotion 与 blockwise 同价）尚未测。
 
+### 3.7 Cosmos3-Edge（2026-09-14 补测）
+Edge：28 层、hidden 2048、16 个 Q head × 128、8 个 KV head，gen 塔 168 个线性层（q/k/v/o + MLP up/down，无 gate），公开无 fp8 分支。
+t2i 12 图（3 prompt × 4 seed，compile 路径），PSNR 对 Edge bf16：
+| 配置（只量 gen 塔） | 平均 | 最低 | 保住/12 |
+| --- | --- | --- | --- |
+| INT8 per-row 激活 / per-col 权重，无 K 分组 | 20.8 | 14.2 | 5 |
+| INT8 g64 | **29.3** | 23.9 | **12** |
+| INT8 g128 | 26.2 | 17.9 | 10 |
+结论与 Nano 一致且更明显：无分组的 per-row/per-col 不够用，K 分组是精度的来源；Edge 上 g64 全部保住构图，g128 掉 3 dB。
+
 ### 3.3 速度
 - t2i（901 token）：bf16 11.0 ms/forward，GEMM 73%，attention 15%。e2e bf16 13.8 it/s，官方 FP8 11.7 it/s（0.85×，host-bound）；开 CUDA graphs bf16 33.0、FP8 26.9；S0 模拟路径 22～30。
 - t2v 720p×189 帧×35 步（约 4.2 万 gen token，text cond 2107 / uncond 24）：bf16 2.29 s/步，官方 FP8 1.96 s/步（1.16×，到落盘 1.14×，与 NIM 表 1.11～1.14× 一致）。kernel 时间：attention 740→731 ms/forward（65%→75%），GEMM 339→160 ms（2.13×），量化 kernel 净增 30 ms（3.1%）。GPU 占用 99.5%。
