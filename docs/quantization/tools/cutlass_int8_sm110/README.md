@@ -579,6 +579,11 @@ bias from an 8-register constant with one non-unrolled `tcgen05.st.x8` loop, the
 count()-based accumulate flag and the consumers' first-`Stages` register add stay as they are. Expected per-col g128: ~230 TFLOPS
 (floor 264 issue clk per 128x128x128 block vs 256 MMA clk; the extra stage turnaround of 2-stage TMEM ring costs some of it).
 
+## Consolidated report
+
+All of the day's measurements (per-tensor, power, row x col, g128 layouts, g256, microbenchmarks, TMEM pre-bias status) are summarised
+in one place: `results/THOR_INT8_REPORT_20260914.md` (Chinese).
+
 ## Continuing on another machine (state as of 2026-09-14 evening)
 
 Everything needed is in this directory plus a CUTLASS checkout; nothing depends on the Thor box's home directory.
