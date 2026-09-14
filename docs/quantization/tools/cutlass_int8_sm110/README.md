@@ -338,6 +338,12 @@ Before the Thor changes (GB200 patch as-is, M=1520 4096x4096): INT8 W-block 154,
 History of the per-K-block cost (clk per 128x128x128 block per SM, M=1520 4096x4096, from K sweeps): delivery floor 490 (per-tensor
 256x128 tile); INT8 W-block 669 -> 527 (setmaxnreg + PIPE2); INT8 per-col 1510 -> 955 (epilogue tile 128x16) -> 745 (setmaxnreg).
 
+Same-condition re-measurement with speedup ratios (baselines re-run at the padded M, `bench_g128_summary.py` ->
+`results/g128_summary_20260914_101555.md`): 4096x4096 INT8 g128 W-block = 1.61 / 1.39 / 1.28x cuBLASLt bf16 and 0.75 / 0.74 / 0.66x
+cuBLASLt FP8 per-tensor at M = 904 / 1520 / 1804; per-col 1.15 / 0.99 / 0.91x bf16; 1024x4096 all g128 variants 0.65-1.08x bf16.
+The FP8 g128 W-block and the CUTLASS FP8 per-tensor 256x256 kernel take the same time (250 / 324 us): both FP8 kernels sit on the same
+power cap, so INT8 g128 W-block (268 us) is within 7 % of CUTLASS FP8 per-tensor and only trails cuBLASLt's more power-efficient FP8 kernel.
+
 Reading (4096x4096, M=1520, the compute-bound target case):
 - **INT8 g128 with 128x128 weight blocks: 190 TFLOPS = 1.44x cuBLASLt bf16 (120 W) and ~1.2x bf16 at MAXN (160), 0.76x cuBLASLt FP8
   per-tensor, 0.59x INT8 per-tensor.** It sits at 527 clk per K block against the 490-clk delivery floor of its 256x128 tile, i.e.

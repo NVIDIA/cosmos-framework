@@ -485,7 +485,9 @@ M ∈ {901, 1517, 1802, 4096}；MLP 形状与视频级 M 只有部分数据（`r
 (3) TMEM 读三缓冲、每两个子块等一次（W 块 1.12×）。Thor 没有 FFMA2（f32x2 被 ptxas 拆开），per-col 每元素每 128-K 三条 FP 指令是硬地板。
 结果（热 A 冷 W 持续，4096×4096 M=1520，TFLOPS）：INT8 g128 W 128×128 块 **190**（bf16 的 1.44×，MAXN bf16 160 的 ~1.2×，cuBLASLt FP8 per-tensor 249 的 0.76×，
 离该 256×128 tile 结构的天花板 226 只差 8%）；INT8 g128 per-col **135**（≈ bf16，FP8 per-tensor 的 0.54×）；FP8 g128 孪生 206 / 163。1024×4096 上 g128 全部低于 bf16（4 MB 权重流、tile 太少）。
-要再上一层只有结构性改动：256×256 tile 需要把 fp32 全累加器分到 8 个提升 warp（kernel 级 fork），per-col 另需可分离权重 scale s_w[n,g]=s_w[n]·c[g]（精度待模拟器评估）。表：`results/g128_thor_20260914.md`。
+要再上一层只有结构性改动：256×256 tile 需要把 fp32 全累加器分到 8 个提升 warp（kernel 级 fork），per-col 另需可分离权重 scale s_w[n,g]=s_w[n]·c[g]（精度待模拟器评估）。同条件对比表（基线在同样的 M=904/1520/1804 上重测，含加速比）：`results/g128_summary_20260914_101555.md`（脚本 `bench_g128_summary.py`）——
+4096×4096 上 INT8 g128 W 块对 bf16 1.61/1.39/1.28×、对 cuBLASLt FP8 per-tensor 0.75/0.74/0.66×；per-col 对 bf16 1.15/0.99/0.91×；1024×4096 上 g128 均不如 bf16（权重流 + tile 太少，应走 per-tensor 或 QKV 合并）。
+FP8 g128 W 块与 CUTLASS FP8 per-tensor 256×256 时间完全相同（250/324 µs，同一功耗上限），INT8 g128 W 块与其只差 7%。
 
 ### 11.3 下一步
 per-row × per-col scale 的 EVT 变体和 torch 扩展绑定接入 cosmos-framework；g64/g128 blockwise INT8 移植到 SM100 blockwise collective（builder 接受 int8 但 scale 类型绑成 int32 累加器，需和 SM90 移植同样解耦）；
