@@ -490,10 +490,85 @@ no FFMA2 on Thor, so the remaining levers are instruction-level scheduling of th
 FP8), and fusing QKV / gate+up so every layer is in the wide-N regime. All bf16 / INT8 numbers for the hidden-1536 shapes
 (per-tensor, W-block, separable, per-col, both tile sizes) are collected in `results/h1536_bf16_int8_table.md`.
 
+### Per-token x per-channel INT8 (row x col epilogue scale; `pertensor_gemm --scale=rowcol`, cfg 2/3; `results/rowcol_standing_20260914.md`)
+
+D = bf16(acc * sa[m] * sb[n]) with both scales as fp32 device vectors applied in the epilogue (`Sm90ColBroadcast` x `Sm90RowBroadcast`
+EVT, `PerTensorGemm<..., RowCol_ = true>`, TUs `rccfg_*.cu`); the mainloop is the per-tensor kernel. Verified against the fp32 reference
+(rel-L2 1.66e-3 = bf16 rounding floor) on all shapes. Same conditions as the g128 tables (`results/g128_summary_rowcol_20260914_142705.md`):
+
+| N x K | INT8 row x col 256x256 TFLOPS (M=904/1520/1804) | INT8 per-tensor 256x256 | cuBLASLt bf16 | vs bf16 | vs cuBLASLt FP8 pt | vs INT8 per-tensor | FP8 row x col 256x256 |
+|---|---|---|---|---|---|---|---|
+| 4096x4096 | 275 / 327 / 290 | 276 / 328 / 290 | 107 / 142 / 136 | 2.57 / 2.30 / 2.13 | 1.19 / 1.26 / 1.28 | 1.00 / 1.00 / 1.00 | 239 / 204 / 186 |
+| 1024x4096 | 206 / 249 / 231 | 206 / 249 / 232 | 143 / 160 / 157 | 1.43 / 1.57 / 1.48 | 0.84 / 0.88 / 0.78 | 1.00 / 1.00 / 1.00 | 206 / 249 / 231 |
+| 6144x4096 | 282 / 334 / 302 | 282 / 332 / 303 | 154 / 135 / 136 | 1.83 / 2.47 / 2.22 | 1.05 / 1.48 / 1.20 | 0.99 / 1.01 / 1.00 | 182 / 208 / 186 |
+| 24576x4096 | 300 / 327 / 308 | 300 / 334 / 307 | 128 / 127 / 124 | 2.33 / 2.58 / 2.47 | 1.25 / 1.64 / 1.39 | 1.00 / 0.98 / 1.00 | 193 / 219 / 195 |
+| 1536x1536 | 174 / 235 / 220 | 176 / 236 / 230 | 123 / 125 / 149 | 1.46 / 1.84 / 1.46 | 0.92 / 1.06 / 0.95 | 1.00 / 0.97 / 0.95 | 175 / 235 / 220 |
+| 512x1536 | 100 / 132 / 154 | 101 / 132 / 156 | 89 / 108 / 117 | 1.14 / 1.22 / 1.33 | 0.93 / 0.83 / 0.89 | 1.00 / 1.00 / 1.00 | 100 / 132 / 152 |
+| 6144x1536 | 261 / 226 / 233 | 268 / 225 / 234 | 132 / 133 / 139 | 1.98 / 1.69 / 1.68 | 1.12 / 1.06 / 1.14 | 0.98 / 1.01 / 1.00 | 246 / 212 / 179 |
+| 1536x6144 | 238 / 255 / 233 | 239 / 257 / 234 | 142 / 117 / 132 | 1.67 / 2.20 / 1.77 | 0.99 / 1.31 / 1.22 | 0.99 / 1.00 / 1.00 | 238 / 256 / 226 |
+| 4608x1536 | 243 / 234 / 233 | 250 / 224 / 229 | 145 / 131 / 133 | 1.66 / 1.79 / 1.74 | 1.04 / 1.13 / 1.06 | 0.96 / 1.04 / 1.02 | 242 / 229 / 173 |
+| 12288x1536 | 193 / 233 / 237 | 194 / 232 / 235 | 128 / 125 / 110 | 1.51 / 1.85 / 2.15 | 1.02 / 1.13 / 1.24 | 0.99 / 1.00 / 1.01 | 176 / 204 / 186 |
+
+The epilogue vectors cost nothing measurable: INT8 row x col runs at 0.96-1.04x the per-tensor kernel on every shape, i.e. 1.1-2.6x
+cuBLASLt bf16 and 0.8-1.6x cuBLASLt FP8 per-tensor (below 1 only on 1024x4096 and 512x1536, where the vendor FP8 kernel's tile choice
+wins). The FP8 twin with the same epilogue is power-limited on the large shapes exactly like FP8 per-tensor (4096x4096 M=1520: 204 vs
+327 TFLOPS). This is the speed ceiling for any INT8 scheme whose scales stay out of the mainloop; the accuracy question for it is the
+simulator's (per pzeren, per-row x per-col does not meet the accuracy target).
+
+### Where the g128 promotion cost comes from: issue rates on Thor (`microbench/`, 2026-09-14)
+
+| Thor, 1386 MHz | measured |
+|---|---|
+| FFMA / FMUL / FADD | 128 per clk per SM (full rate) |
+| **I2F (int32 -> fp32, `I2FP.F32.S32`)** | **64 per clk per SM (half rate)** |
+| F2I | 16 per clk per SM (not in the GEMM path) |
+| FFMA2 (`fma.rn.f32x2`) | split into 2 FFMA (no packed FP32) |
+| legacy `mma.sync` s8 (register accumulator) | 112.7 TOPS = 1/4 of tcgen05; bf16 56 TOPS |
+| per-col promotion I2F + FMUL + FFMA | 3.27 issue clk per element |
+| W-block promotion I2F + FFMA | 2.04 |
+| per-col with a TMEM-pre-biased accumulator (2 FFMA, no I2F) | 2.06 |
+
+So (a) the accumulator cannot be moved to registers on Blackwell -- tcgen05.mma writes TMEM only, wgmma does not exist on sm_100/110,
+and the only register-accumulator tensor instruction runs at a quarter of the tcgen05 rate, below bf16 tcgen05; (b) TMEM is not the
+bottleneck (one tcgen05.ld per 64 elements), the per-element FP issue count is, and the half-rate I2F is the one instruction that can be
+removed: pre-store 0x4B400000 in the int32 TMEM accumulator so the loaded bits are already float(1.5*2^23 + x) (exact for the whole INT8
+g128/g256 range), then t = fma(fb, s_a, -M*s_a), acc = fma(t, s_w, acc). Per 128x128x128 K block per SMSP the per-col floor drops from
+418 to 264 issue clk against the 256-clk MMA time (see `microbench/README.md`; not implemented yet). W-block gains nothing from it
+(its I2F already overlaps the FFMA).
+
+### g256 per-col: promotion every 256 K (cfg20 = 2SM 256x256x256, sf<1,1,256>; `results/g256_percol_standing_20260914.md`)
+
+Since the per-col kernel is bound by the per-element promotion (3.27 issue clk per element per K group, above), halving the number
+of K groups halves that cost: per 128x128x128 K block per SMSP the floor goes from 418 to 209 issue clk, under the 256-clk MMA time,
+so the promotion hides. The collective only needs a scale layout with ScaleGranularityK = 256 and TileK = 256 (TileK % GK == 0). The
+int32 partial sums stay exact (|x| <= 256*127*127 = 4.1e6 < 2^31, and < 2^22 so the TMEM-bias trick would still apply). Verified
+against the fp64/fp32 blockwise reference (PASS on all shapes). Same conditions as the other tables:
+
+| N x K | INT8 g256 per-col (cfg20) TFLOPS M=904/1520/1804 | INT8 g128 per-col (cfg16) | g256 vs g128 | vs cuBLASLt bf16 | vs cuBLASLt FP8 pt | vs INT8 per-tensor |
+|---|---|---|---|---|---|---|
+| 4096x4096 | 224 / 268 / 248 | 134 / 158 / 145 | 1.68 / 1.69 / 1.71 | 2.10 / 1.91 / 1.77 | 0.98 / 1.05 / 1.30 | 0.81 / 0.82 / 0.86 |
+| 1024x4096 | 168 / 196 / 185 | 106 / 125 / 112 | 1.60 / 1.57 / 1.65 | 1.18 / 1.32 / 1.09 | 0.69 / 0.69 / 0.61 | 0.82 / 0.78 / 0.79 |
+| 6144x4096 | 229 / 271 / 244 | 141 / 159 / 143 | 1.62 / 1.70 / 1.71 | 1.56 / 2.00 / 1.87 | 0.89 / 1.07 / 0.98 | 0.81 / 0.81 / 0.81 |
+| 24576x4096 | 244 / 230 / 211 | 147 / 167 / 149 | 1.66 / 1.38 / 1.42 | 1.90 / 1.77 / 1.74 | 1.26 / 1.08 / 0.99 | 0.82 / 0.69 / 0.72 |
+| 1536x1536 | 130 / 167 / 166 | 91 / 117 / 116 | 1.42 / 1.42 / 1.45 | 1.06 / 1.33 / 1.12 | 0.67 / 0.77 / 0.73 | 0.73 / 0.70 / 0.75 |
+| 512x1536 | 87 / 98 / 116 | 70 / 69 / 82 | 1.25 / 1.40 / 1.40 | 1.00 / 0.88 / 0.96 | 0.88 / 0.64 / 0.64 | 0.88 / 0.72 / 0.72 |
+| 6144x1536 | 181 / 195 / 182 | 121 / 138 / 125 | 1.50 / 1.41 / 1.46 | 1.37 / 1.48 / 1.24 | 0.77 / 0.85 / 0.89 | 0.69 / 0.86 / 0.78 |
+| 1536x6144 | 199 / 222 / 207 | 117 / 148 / 136 | 1.70 / 1.50 / 1.52 | 1.31 / 2.02 / 1.57 | 0.69 / 1.14 / 1.10 | 0.83 / 0.88 / 0.89 |
+| 4608x1536 | 169 / 190 / 177 | 112 / 137 / 123 | 1.51 / 1.38 / 1.44 | 1.16 / 1.52 / 1.38 | 0.72 / 0.99 / 0.80 | 0.67 / 0.82 / 0.78 |
+| 12288x1536 | 171 / 202 / 185 | 124 / 144 / 129 | 1.37 / 1.40 / 1.43 | 1.34 / 1.60 / 1.70 | 0.91 / 0.98 / 0.96 | 0.90 / 0.88 / 0.77 |
+
+g256 per-col is 1.4-1.7x the g128 per-col kernel and lands at 0.7-0.9x the INT8 per-tensor kernel: 1.1-2.1x cuBLASLt bf16 on every
+shape except 512x1536 (~1.0x); against cuBLASLt FP8 per-tensor it is 0.9-1.3x on the N >= 4096 shapes (parity at 4096x4096: 0.98 /
+1.05 / 1.30), 0.9-1.0x on the fused 1536 shapes and 0.6-0.9x on the small 1536 layers and 1024x4096. (24576x4096 M=1520 measured
+230 TFLOPS in this run and 262 in an earlier one -- the wide shape is sensitive to the weight-stream state.) Whether g256 (per-token 1x256, per-channel 1x256) meets the accuracy target is for the simulator;
+the alternative that keeps g128 accuracy is the TMEM-bias promotion (2 FFMA per element, same 209-264 clk floor), not yet implemented.
+
 ## Continuing on another machine (state as of 2026-09-14 evening)
 
 Everything needed is in this directory plus a CUTLASS checkout; nothing depends on the Thor box's home directory.
-Priority for the next machine: the per-col g128 kernel (cfg16) -- see "Layout decision" above; W-block / separable are reference points only.
+Priority for the next machine: the per-col kernel -- either g256 (cfg20, measured, needs the simulator's accuracy verdict) or g128 with the
+TMEM-pre-biased promotion (`microbench/README.md`, not implemented); W-block / separable are reference points only. `--scale=rowcol`
+(per-token x per-channel, per-tensor speed) is the ceiling reference.
 
 ```bash
 git clone --branch pzeren/int8-sim-group-quant --single-branch https://github.com/NVIDIA/cosmos-framework.git

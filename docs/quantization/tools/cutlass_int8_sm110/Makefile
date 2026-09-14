@@ -12,7 +12,7 @@ NVFLAGS  = -O3 -std=c++17 -arch=$(ARCH) -I$(G128_INC) -I$(CUTLASS)/include -I$(C
            --expt-relaxed-constexpr -DNDEBUG -Xcompiler -Wno-psabi -diag-suppress 177,20012
 BWFLAGS  = $(NVFLAGS) $(G128_OPT)
 
-CFG_SRCS := $(wildcard cfg_*.cu)
+CFG_SRCS := $(wildcard cfg_*.cu) $(wildcard rccfg_*.cu)
 CFG_OBJS := $(patsubst %.cu,$(BUILD)/%.o,$(CFG_SRCS))
 BWCFG_SRCS := $(wildcard bwcfg_*.cu)
 BWCFG_OBJS := $(patsubst %.cu,$(BUILD)/%.o,$(BWCFG_SRCS))
@@ -33,6 +33,9 @@ pertensor_gemm: $(BUILD)/pertensor_gemm.o $(CFG_OBJS)
 	$(NVCC) -arch=$(ARCH) -o $@ $^
 
 $(BUILD)/cfg_%.o: cfg_%.cu pertensor_gemm.cuh configs.h cfg_select.h | $(BUILD)
+	$(NVCC) $(NVFLAGS) -c $< -o $@
+
+$(BUILD)/rccfg_%.o: rccfg_%.cu pertensor_gemm.cuh configs.h cfg_select.h | $(BUILD)
 	$(NVCC) $(NVFLAGS) -c $< -o $@
 
 $(BUILD)/pertensor_gemm.o: pertensor_gemm.cu pertensor_gemm.cuh configs.h bench_util.cuh | $(BUILD)

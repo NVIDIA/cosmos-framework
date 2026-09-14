@@ -1,6 +1,7 @@
 // Benchmark / correctness driver for the CUTLASS per-tensor FP8 and INT8 GEMMs on Thor (sm_110a).
 // Usage: ./pertensor_gemm --dtype=int8|fp8 --cfg=0 --m=4096 --n=4096 --k=4096 [--iters=50 --warmup=10 --flush=1 --verify=1
-//                         --sa=0.0123 --sb=0.0456 --swizzle=auto|<int> --raster=H|M|N --device_scale=0 --nw=1]   |  --list
+//                         --sa=0.0123 --sb=0.0456 --swizzle=auto|<int> --raster=H|M|N --device_scale=0 --nw=1
+//                         --scale=tensor|rowcol]   |  --list      (rowcol: D = acc * sa[m] * sb[n], fp32 vectors, cfg 2/3 only)
 // --nw=N: allocate N distinct weight copies and rotate through them, one per timed iteration. --flush=0 --nw=8 models the
 // production layer loop on Thor (activations hot in the 32 MB L2, every layer's weight cold in DRAM); --flush=1 is all-cold.
 // swizzle=auto: 1 (off) when W = N*K bytes <= 16 MiB (fits L2, swizzle measured as a no-op or slightly negative); otherwise the largest
@@ -21,6 +22,10 @@
 #define DECL_F8(I, TM, TN, TK, CM, CN, S, E, D) THOR_DECL(fp8, I)
 THOR_CFG_LIST(DECL_I8)
 THOR_CFG_LIST(DECL_F8)
+#define DECL_RC_I8(I, TM, TN, TK, CM, CN, S, E, D) THOR_DECL_RC(int8, I)
+#define DECL_RC_F8(I, TM, TN, TK, CM, CN, S, E, D) THOR_DECL_RC(fp8, I)
+THOR_RC_CFG_LIST(DECL_RC_I8)
+THOR_RC_CFG_LIST(DECL_RC_F8)
 
 using Factory = thor::GemmHandle* (*)();
 static Factory kInt8[] = {
@@ -31,6 +36,18 @@ static Factory kFp8[] = {
 #define F_F8(I, TM, TN, TK, CM, CN, S, E, D) thor_make_fp8_##I,
     THOR_CFG_LIST(F_F8)
 };
+static Factory rc_factory(bool is_int8, int cfg) {
+  switch (cfg) {
+#define RC_CASE(I, TM, TN, TK, CM, CN, S, E, D) case I: return is_int8 ? thor_make_rc_int8_##I : thor_make_rc_fp8_##I;
+    THOR_RC_CFG_LIST(RC_CASE)
+    default: return nullptr;
+  }
+}
+// ref[i, j] *= sa[i] * sb[j]
+__global__ void scale_rowcol_kernel(float* ref, int rows, int N, const float* sa, const float* sb) {
+  size_t i = blockIdx.x * (size_t)blockDim.x + threadIdx.x;
+  if (i < (size_t)rows * N) ref[i] *= sa[i / N] * sb[i % N];
+}
 static const char* kDesc[] = {
 #define D_(I, TM, TN, TK, CM, CN, S, E, D) D,
     THOR_CFG_LIST(D_)
@@ -53,6 +70,9 @@ int main(int argc, char** argv) {
   std::string swz = args.get("swizzle", "auto"), ras = args.get("raster", "H");
   int raster = ras == "M" ? 1 : ras == "N" ? 2 : 0;
   float sa = std::stof(args.get("sa", "0.0123")), sb = std::stof(args.get("sb", "0.0456"));
+  std::string scale = args.get("scale", "tensor");  // tensor: D = acc*sa*sb | rowcol: D = acc*sa[m]*sb[n] (fp32 device vectors)
+  bool rowcol = scale == "rowcol";
+  if (!rowcol && scale != "tensor") { fprintf(stderr, "scale must be tensor|rowcol\n"); return 1; }
   if (cfg < 0 || cfg >= THOR_NUM_CFGS) { fprintf(stderr, "bad cfg\n"); return 1; }
   bool is_int8 = dtype == "int8";
   if (!is_int8 && dtype != "fp8") { fprintf(stderr, "dtype must be int8|fp8\n"); return 1; }
@@ -68,6 +88,13 @@ int main(int argc, char** argv) {
   CUDA_OK(cudaMalloc(&d_scales, 2 * sizeof(float)));
   float h_scales[2] = {sa, sb};
   CUDA_OK(cudaMemcpy(d_scales, h_scales, sizeof(h_scales), cudaMemcpyHostToDevice));
+  float *d_sa_vec = nullptr, *d_sb_vec = nullptr;   // row x col scale vectors (sa[m], sb[n])
+  if (rowcol) {
+    CUDA_OK(cudaMalloc(&d_sa_vec, (size_t)M * sizeof(float)));
+    CUDA_OK(cudaMalloc(&d_sb_vec, (size_t)N * sizeof(float)));
+    bench::fill_scales(d_sa_vec, M, 0x77u);
+    bench::fill_scales(d_sb_vec, N, 0x99u);
+  }
   if (zeros) {
     CUDA_OK(cudaMemset(A, 0, nA));
     CUDA_OK(cudaMemset(Ball, 0, nB * nw));
@@ -90,7 +117,9 @@ int main(int argc, char** argv) {
 
   // one handle per weight copy (same kernel, different B pointer); h = handle 0
   std::vector<std::unique_ptr<thor::GemmHandle>> hs;
-  for (int w = 0; w < nw; ++w) hs.emplace_back((is_int8 ? kInt8 : kFp8)[cfg]());
+  Factory fac = rowcol ? rc_factory(is_int8, cfg) : (is_int8 ? kInt8 : kFp8)[cfg];
+  if (!fac) { fprintf(stderr, "cfg%d is not instantiated with --scale=rowcol (see THOR_RC_CFG_LIST)\n", cfg); return 1; }
+  for (int w = 0; w < nw; ++w) hs.emplace_back(fac());
   thor::GemmHandle* h = hs[0].get();
   int swizzle = 0;
   if (swz == "auto") {
@@ -106,8 +135,8 @@ int main(int argc, char** argv) {
   }
   try {
     for (int w = 0; w < nw; ++w)
-      hs[w]->init(A, (char*)Ball + (size_t)w * nB, D, M, N, K, sa, sb, device_scale ? d_scales : nullptr,
-                  device_scale ? d_scales + 1 : nullptr, swizzle, raster, 0);
+      hs[w]->init(A, (char*)Ball + (size_t)w * nB, D, M, N, K, sa, sb, rowcol ? d_sa_vec : device_scale ? d_scales : nullptr,
+                  rowcol ? d_sb_vec : device_scale ? d_scales + 1 : nullptr, swizzle, raster, 0);
     h->run(0);
     CUDA_OK(cudaDeviceSynchronize());
   } catch (std::exception const& e) {
@@ -127,10 +156,15 @@ int main(int argc, char** argv) {
     CUDA_OK(cudaMalloc(&ref, (size_t)std::max(r0, r1) * N * sizeof(float)));
     bench::ErrStats e0, e1;
     auto run_ref = [&](int row0, int rows) {
+      float alpha = rowcol ? 1.f : sa * sb;
       if (is_int8)
-        bench::ref_gemm_int8((int8_t*)A + (size_t)row0 * K, (int8_t*)B, ref, rows, N, K, sa * sb);
+        bench::ref_gemm_int8((int8_t*)A + (size_t)row0 * K, (int8_t*)B, ref, rows, N, K, alpha);
       else
-        bench::ref_gemm_e4m3((__nv_fp8_e4m3*)A + (size_t)row0 * K, (__nv_fp8_e4m3*)B, ref, rows, N, K, sa * sb);
+        bench::ref_gemm_e4m3((__nv_fp8_e4m3*)A + (size_t)row0 * K, (__nv_fp8_e4m3*)B, ref, rows, N, K, alpha);
+      if (rowcol) {
+        size_t n = (size_t)rows * N;
+        scale_rowcol_kernel<<<(unsigned)((n + 255) / 256), 256>>>(ref, rows, N, d_sa_vec + row0, d_sb_vec);
+      }
       CUDA_OK(cudaDeviceSynchronize());
       return bench::compare_bf16_vs_f32(D + (size_t)row0 * N, ref, (size_t)rows * N);
     };
@@ -154,14 +188,16 @@ int main(int argc, char** argv) {
   }
   double flop = 2.0 * M * N * K;
   printf("lib=cutlass\tdtype=%s\tcfg=%d\tM=%d\tN=%d\tK=%d\tmedian_us=%.2f\tmean_us=%.2f\tmin_us=%.2f\ttflops=%.1f\tclk_before=%d\tclk_after=%d\t"
-         "verify=%s rel_l2=%.2e\tswizzle=%d\traster=%s\tflush=%d\tnw=%d\tdist=%s\twarmup_ms=%.0f\ttj_c=%.1f\tdesc=%s\n",
+         "verify=%s rel_l2=%.2e\tswizzle=%d\traster=%s\tflush=%d\tnw=%d\tdist=%s\twarmup_ms=%.0f\ttj_c=%.1f\tscale=%s\tdesc=%s\n",
          dtype.c_str(), cfg, M, N, K, t.median_us, t.mean_us, t.min_us, bench::tflops(flop, t.median_us), t.clock_mhz_before,
          t.clock_mhz_after, vstr.c_str(), rel_l2, swizzle, ras.c_str(), flush, nw, zeros ? "zeros" : dist.c_str(), warmup_ms,
-         bench::gpu_temp_mc() / 1000.0, kDesc[cfg]);
+         bench::gpu_temp_mc() / 1000.0, scale.c_str(), h->desc().c_str());
   hs.clear();
   CUDA_OK(cudaFree(A));
   CUDA_OK(cudaFree(Ball));
   CUDA_OK(cudaFree(D));
   CUDA_OK(cudaFree(d_scales));
+  if (d_sa_vec) CUDA_OK(cudaFree(d_sa_vec));
+  if (d_sb_vec) CUDA_OK(cudaFree(d_sb_vec));
   return vstr == "FAIL" ? 3 : 0;
 }

@@ -22,3 +22,8 @@
   X(13, 128, 256, 128, 2, 2, Sched1Sm, Epi1Sm, "1SM 128x256x128 cluster2x2x1 (A+B multicast, 4 CTAs)")
 
 #define THOR_NUM_CFGS 14
+
+// Configs also instantiated with the per-row x per-col epilogue scale (rccfg_*.cu; driver flag --scale=rowcol).
+#define THOR_RC_CFG_LIST(X)                                                                        \
+  X(2, 256, 128, 128, 2, 1, Sched2Sm, Epi2Sm, "2SM 256x128x128 cluster2x1x1")                     \
+  X(3, 256, 256, 128, 2, 1, Sched2Sm, Epi2Sm, "2SM 256x256x128 cluster2x1x1")

@@ -526,9 +526,21 @@ per-col −2%（158→155，cfg18 还溢出 48 B），所以 per-col 保持 cfg1
 1024×4096 / 512×1536 / 1536×1536 慢于 bf16；对 cuBLASLt FP8 per-tensor 为 0.4～0.7×。硬地板是提升循环每元素每 128-K 三条 FP 指令（I2F、FMUL、FFMA）且 Thor 无 FFMA2。
 1536 档全部 bf16 / INT8 数字（per-tensor、W 块、可分离、per-col、两种 tile）：`results/h1536_bf16_int8_table.md`。
 
+**per-token × per-channel（row × col epilogue 缩放）、指令发射率与 g256（2026-09-14 下午晚些）**：
+(1) `pertensor_gemm --scale=rowcol`（D = bf16(acc·s_a[m]·s_w[n])，`Sm90ColBroadcast × Sm90RowBroadcast` EVT，主循环即 per-tensor kernel）在全部 10 个形状上与 per-tensor 速度相同（0.96～1.04×）：
+对 cuBLASLt bf16 1.1～2.6×、对 cuBLASLt FP8 per-tensor 0.8～1.6×（只在 1024×4096、512×1536 低于 1）；FP8 孪生在大形状上照样被功耗上限压住（4096² M=1520 204 对 INT8 327）。这是 scale 不进主循环的 INT8 方案的速度上限；精度按 pzeren 判断不达标。表：`results/rowcol_standing_20260914.md`。
+(2) 微基准（`tools/cutlass_int8_sm110/microbench/`）：Thor 上 FFMA/FMUL/FADD 128/拍/SM，**I2F（int32→fp32）只有 64/拍/SM（半速）**，F2I 16，FFMA2 被拆成两条；老的寄存器累加 `mma.sync` s8 只有 112.7 TOPS = tcgen05 的 1/4，
+所以累加器放不到寄存器（tcgen05.mma 的 D 只能在 TMEM，sm_100/110 无 wgmma），TMEM 也不是瓶颈（每 64 元素一条 tcgen05.ld），瓶颈是每元素每 K 组的 FP 发射数：per-col I2F+FMUL+FFMA 实测 3.27 拍/元素，W 块 I2F+FFMA 2.04。
+砍掉 I2F 的办法：把 TMEM int32 累加器预置成 0x4B400000（1.5·2²³ 的位型），读回的位型直接是 float(1.5·2²³+x)（|x| ≤ 128·127² 精确，穷举验证），提升变成 2 条 FFMA（2.06 拍/元素，−37%），W 块无收益；未实现。
+(3) **g256 per-col（cfg20：2SM 256×256×256，sf<1,1,256>，每 256 K 提升一次）**：提升次数减半后每块发射地板 418→209 拍，低于 256 拍的 MMA 时间，提升被藏住。同条件实测（TFLOPS，M=904/1520/1804）：
+4096×4096 **224/268/248**（g128 per-col 的 1.7×，bf16 的 2.1/1.9/1.8×，**cuBLASLt FP8 per-tensor 的 0.98/1.05/1.30×**，INT8 per-tensor 的 0.81～0.86×）；6144×4096 229/271/244（FP8 pt 0.89/1.07/0.98×）；24576×4096 M=1520 230～262（两次运行，FP8 pt 1.08～1.31×）；
+12288×1536 171/202/185（FP8 pt 0.91～0.98×）；6144×1536 181/195/182；1536×1536 130/167/166（bf16 1.06～1.33×，FP8 pt 0.67～0.77×）；1024×4096 168/196/185（bf16 1.1～1.3×）。
+全表：`results/g256_percol_standing_20260914.md`。g256（per-token 1×256、per-channel 1×256）的精度需模拟器判定；若必须保 g128，则走 TMEM 预偏置提升（同一发射地板）。
+
 ### 11.3 下一步
 （以 per-col g128 为唯一可接受布局重排）
-1. 模拟器精度：先确认 per-col g128（S0）达标；可分离 / W 块两种布局预计不达标，不再作为性能主线。
+1. 模拟器精度：先确认 per-col g128（S0）达标，并评估 **g256 per-col**（Thor 上 g256 已追平 cuBLASLt FP8 per-tensor，g128 只有其 0.6×）；可分离 / W 块两种布局预计不达标，不再作为性能主线。
+1b. 若必须保 g128：实现 TMEM 预偏置提升（去掉半速 I2F，2 条 FFMA/元素，`microbench/README.md`），预期 per-col g128 从 159 到 ~230～260 TFLOPS。
 2. per-col kernel 继续调：MAXN 下重测（g128 不受功耗上限约束，应随 1575/1386 频率放大，FP8 per-tensor 不会）；提升循环的指令级调度（scale 的 ld.shared 与 TMEM 读交错；每 K 块 3 条 FP 指令是地板）；保持 cfg16 / TileK=128。
 3. 模型侧：QKV / gate-up 合并成一次 GEMM（per-col g128 只在宽 N 上快于 bf16）；小 N 层（1024×4096、512×1536、1536×1536）若精度允许留 bf16。
 4. torch 扩展绑定接入 cosmos-framework；INT8 attention（Q·Kᵀ、P·V）是把 INT8 优势延伸到非 GEMM 部分的下一处。

@@ -25,9 +25,12 @@
 namespace thor {
 using namespace cute;
 
+// RowCol_ = true: D = bf16( acc * sa[m] * sb[n] ) -- per-token (activation row) x per-channel (weight column) scales, both fp32
+// device vectors applied in the epilogue (Sm90ColBroadcast x Sm90RowBroadcast); the mainloop is identical to the per-tensor kernel.
 template <class ElementAB_, class ElementAcc_, class MmaTile_, class Cluster_, class KernelSchedule_, class EpiSchedule_,
-          class TileScheduler_ = void>
+          class TileScheduler_ = void, bool RowCol_ = false>
 struct PerTensorGemm {
+  static constexpr bool RowCol = RowCol_;
   using ElementA = ElementAB_;  using LayoutA = cutlass::layout::RowMajor;     static constexpr int AlignA = 16;
   using ElementB = ElementAB_;  using LayoutB = cutlass::layout::ColumnMajor;  static constexpr int AlignB = 16;
   using ElementD = cutlass::bfloat16_t; using LayoutD = cutlass::layout::RowMajor; static constexpr int AlignD = 8;
@@ -36,11 +39,22 @@ struct PerTensorGemm {
   using MmaTile = MmaTile_;
   using Cluster = Cluster_;
 
-  // EVT: D = bf16( acc * (sa * sb) )
+  // EVT (per-tensor): D = bf16( acc * (sa * sb) )
   using Scale = cutlass::epilogue::fusion::Sm90ScalarBroadcast<float, Stride<_0, _0, _0>, 2, cutlass::multiplies>;
   using Mul = cutlass::epilogue::fusion::Sm90Compute<cutlass::multiplies, ElementD, ElementCompute,
                                                      cutlass::FloatRoundStyle::round_to_nearest>;
-  using EVT = cutlass::epilogue::fusion::Sm90EVT<Mul, Scale, cutlass::epilogue::fusion::Sm90AccFetch>;
+  using EVTScalar = cutlass::epilogue::fusion::Sm90EVT<Mul, Scale, cutlass::epilogue::fusion::Sm90AccFetch>;
+  // EVT (row x col): D = bf16( sb[n] * (sa[m] * acc) ); the fusion visitors take the CTA tile (M/2 of the MMA tile for 2SM schedules).
+  static constexpr bool Is2Sm = cute::is_same_v<EpiSchedule_, cutlass::epilogue::TmaWarpSpecialized2Sm>;
+  using CtaTile = Shape<Int<decltype(size<0>(MmaTile{}))::value / (Is2Sm ? 2 : 1)>, Int<decltype(size<1>(MmaTile{}))::value>,
+                        Int<decltype(size<2>(MmaTile{}))::value>>;
+  using RowScale = cutlass::epilogue::fusion::Sm90ColBroadcast<0, CtaTile, float, float, Stride<_1, _0, _0>>;   // sa[m]
+  using ColScale = cutlass::epilogue::fusion::Sm90RowBroadcast<0, CtaTile, float, float, Stride<_0, _1, _0>>;   // sb[n]
+  using MulF = cutlass::epilogue::fusion::Sm90Compute<cutlass::multiplies, ElementCompute, ElementCompute,
+                                                      cutlass::FloatRoundStyle::round_to_nearest>;
+  using EVTRowCol = cutlass::epilogue::fusion::Sm90EVT<Mul, ColScale,
+                      cutlass::epilogue::fusion::Sm90EVT<MulF, RowScale, cutlass::epilogue::fusion::Sm90AccFetch>>;
+  using EVT = cute::conditional_t<RowCol_, EVTRowCol, EVTScalar>;
 
   using CollectiveEpilogue = typename cutlass::epilogue::collective::CollectiveBuilder<
       cutlass::arch::Sm100, cutlass::arch::OpClassTensorOp, MmaTile, Cluster,
@@ -70,8 +84,13 @@ struct PerTensorGemm {
     typename Gemm::Arguments args{cutlass::gemm::GemmUniversalMode::kGemm, {M, N, K, 1},
                                   {A, stride_A, B, stride_B},
                                   {{}, nullptr, stride_D, D, stride_D}};
-    // EVT arguments: {Scale{scalars, scalar_ptrs, dScalar}, AccFetch{}, Mul{}}
-    args.epilogue.thread = {{{sa, sb}, {sa_ptr, sb_ptr}, {}}, {}, {}};
+    if constexpr (RowCol_) {
+      // {ColScale{ptr_row(n), null_default, dRow}, {RowScale{ptr_col(m), null_default, dCol}, AccFetch{}, MulF{}}, Mul{}}
+      args.epilogue.thread = {{sb_ptr, 1.f, {}}, {{sa_ptr, 1.f, {}}, {}, {}}, {}};
+    } else {
+      // EVT arguments: {Scale{scalars, scalar_ptrs, dScalar}, AccFetch{}, Mul{}}
+      args.epilogue.thread = {{{sa, sb}, {sa_ptr, sb_ptr}, {}}, {}, {}};
+    }
     args.scheduler.max_swizzle_size = swizzle;
     using RO = cutlass::gemm::kernel::detail::RasterOrderOptions;
     args.scheduler.raster_order = raster == 1 ? RO::AlongM : raster == 2 ? RO::AlongN : RO::Heuristic;
@@ -92,6 +111,7 @@ struct GemmHandle {
   virtual int tile_k() const = 0;
   virtual int stages() const = 0;
   virtual size_t smem_bytes() const = 0;
+  virtual bool rowcol() const = 0;
 };
 
 template <class G>
@@ -131,6 +151,7 @@ struct HandleImpl : GemmHandle {
   int tile_k() const override { return size<2>(typename G::MmaTile{}); }
   int stages() const override { return G::CollectiveMainloop::DispatchPolicy::Stages; }
   size_t smem_bytes() const override { return sizeof(typename G::GemmKernel::SharedStorage); }
+  bool rowcol() const override { return G::RowCol; }
 };
 
 using Sched1Sm = cutlass::gemm::KernelTmaWarpSpecialized1SmSm100;
@@ -149,4 +170,13 @@ using EpiAuto = cutlass::epilogue::collective::EpilogueScheduleAuto;
     using G = thor::PerTensorGemm<ELEM, ACC, cute::Shape<cute::Int<TM>, cute::Int<TN>, cute::Int<TK>>,                        \
                                   cute::Shape<cute::Int<CM>, cute::Int<CN>, cute::_1>, thor::SCHED, thor::EPI>;               \
     return new thor::HandleImpl<G>(DESC);                                                                                      \
+  }
+
+// Row x col scaled variant (see THOR_RC_CFG_LIST in configs.h / rccfg_*.cu).
+#define THOR_DECL_RC(DT, I) thor::GemmHandle* thor_make_rc_##DT##_##I();
+#define THOR_DEF_RC(DT, ELEM, ACC, I, TM, TN, TK, CM, CN, SCHED, EPI, DESC)                                                    \
+  thor::GemmHandle* thor_make_rc_##DT##_##I() {                                                                                \
+    using G = thor::PerTensorGemm<ELEM, ACC, cute::Shape<cute::Int<TM>, cute::Int<TN>, cute::Int<TK>>,                        \
+                                  cute::Shape<cute::Int<CM>, cute::Int<CN>, cute::_1>, thor::SCHED, thor::EPI, void, true>;   \
+    return new thor::HandleImpl<G>(DESC " [row x col scale]");                                                                 \
   }
