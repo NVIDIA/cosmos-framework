@@ -133,6 +133,8 @@ t2i 12 图（3 prompt × 4 seed，compile 路径），PSNR 对 Edge bf16：
 | g128（无 SmoothQuant） | 26.2 | 17.9 | 10 |
 | g64（无 SmoothQuant） | 29.3 | 23.9 | 12 |
 SmoothQuant 能补回约 4 dB，但仍不及最粗的 K 分组 g128；离群通道迁移不如按 K 分组直接给离群位置独立 scale。
+Nano 上同一实验（12 图，对 compile bf16；modules=252 act channel max/median ratio: median 9.6, max 14225.6）：per-row/per-col 无分组 20.0（4/12）→ + SmoothQuant α=0.5 **20.2（4/12）**，几乎无增益；S0 g64 25.8（10/12），官方 FP8 17.8（2/12）。
+Edge 上 SmoothQuant 补回 3.8 dB，Nano 上只有 0.15 dB：两个模型的离群结构不同，通道迁移的收益不可迁移，K 分组在两者上都稳定有效。
 
 ### 3.3 速度
 - t2i（901 token）：bf16 11.0 ms/forward，GEMM 73%，attention 15%。e2e bf16 13.8 it/s，官方 FP8 11.7 it/s（0.85×，host-bound）；开 CUDA graphs bf16 33.0、FP8 26.9；S0 模拟路径 22～30。
