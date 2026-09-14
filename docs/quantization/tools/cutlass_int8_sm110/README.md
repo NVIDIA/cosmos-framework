@@ -364,7 +364,12 @@ Separable weight scale (cfg12, `results/g128_separable_20260914.md`): s_w[n,g] =
 scales and s_w[n] applied per output element in the epilogue (`Sm90RowBroadcast`). It runs the W-block mainloop, so INT8 reaches
 164 / 182 / 168 TFLOPS on 4096x4096 (M = 904 / 1520 / 1804) = 1.34x the per-col kernel, 0.96x the W-block kernel, 1.22-1.53x bf16,
 0.63-0.71x cuBLASLt FP8 per-tensor, with per-output-channel scale structure. Its precision (the rank-1 constraint on the N x K/128
-scale matrix) still has to be measured in the simulator.
+scale matrix) still has to be measured in the simulator. The same cfg12 kernel also runs the strictly finer combined layout
+s_w[n,g] = s_w[n] * c[nb,g] (per-channel factor x one factor per (128-channel block, 128-K block)) at the same speed: pass c[nb,g] as the
+mainloop's sfb tensor instead of ones. Degrees of freedom: per-col N*K/128 > combined N + (N/128)(K/128) > separable N + K/128;
+W 128x128 blocks (N/128)(K/128) is not comparable to separable (neither contains the other). The 4 % gap to the W-block kernel is the
+epilogue's per-column scale load from global memory (Sm90RowBroadcast) serialised with the promotion warps; prefetching the vector
+into smem would remove it.
 
 Not done / next: MAXN re-measurement of the g128 kernels (they are not power-bound, so they should scale with the 1575/1386 clock
 while FP8 per-tensor does not); the 8-warp 256x256 restructure; the separable-scale variant (kernel side = cfg8 + a per-column EVT

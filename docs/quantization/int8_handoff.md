@@ -490,7 +490,8 @@ M ∈ {901, 1517, 1802, 4096}；MLP 形状与视频级 M 只有部分数据（`r
 FP8 g128 W 块与 CUTLASS FP8 per-tensor 256×256 时间完全相同（250/324 µs，同一功耗上限），INT8 g128 W 块与其只差 7%。
 
 可分离权重 scale 的 kernel 已实现（cfg12：W 块主循环 + epilogue 按通道乘 s_w[n]，c[g] 并入激活 scale）：INT8 164/182/168 TFLOPS（4096×4096，M=904/1520/1804），
-= per-col 的 1.34×、W 块的 0.96×、bf16 的 1.22～1.53×、cuBLASLt FP8 per-tensor 的 0.63～0.71×；精度（N×K/128 scale 矩阵的秩 1 约束）待模拟器评估。表：`results/g128_separable_20260914.md`。
+= per-col 的 1.34×、W 块的 0.96×、bf16 的 1.22～1.53×、cuBLASLt FP8 per-tensor 的 0.63～0.71×；精度（N×K/128 scale 矩阵的秩 1 约束）待模拟器评估。同一 kernel 还能零成本跑更细的组合布局 s_w[n]·c[nb,g]（每通道因子 × 每 (128 通道块, K 块) 因子，把 c[nb,g] 当主循环的 sfb 传入），
+自由度 N + (N/128)(K/128)，严格细于可分离和 W 128×128 块；建议三种布局在模拟器里一起评估。表：`results/g128_separable_20260914.md`。
 
 ### 11.3 下一步
 per-row × per-col scale 的 EVT 变体和 torch 扩展绑定接入 cosmos-framework；g64/g128 blockwise INT8 移植到 SM100 blockwise collective（builder 接受 int8 但 scale 类型绑成 int32 累加器，需和 SM90 移植同样解耦）；
