@@ -2,7 +2,7 @@
 
 日期：2026-09-12。工作机：GB300 工作站 `pmgb300ws-0083`（单卡 GB300，sm_103，aarch64）。
 代码：分支 `pzeren/int8-sim-group-quant`（GitHub 上已含全部代码提交：`493b0a1` GEMM 模拟 + CLI，`369427a` attention 模拟器、teacher forcing、int8_speed；其后均为 docs 提交）。
-2026-09-13 补充：第 8 节为 H100 真 kernel GEMM 基准结果（aws-iad-cs-002，`users/pzeren/int8_bench`）。
+2026-09-13 补充：第 8 节为 H100 真 kernel GEMM 基准结果（aws-iad-cs-002，`users/pzeren/int8_bench`）；8.5 为 GB200 上 CUTLASS per-tensor INT8/FP8/bf16 绝对吞吐补测。
 运行笔记（含所有中间数字）：`~/gb300/COSMOS_SETUP.md`。产物在 `~/gb300/outputs`（软链到 NVMe `/var/tmp/pzeren_workdir/outputs`）。
 
 ---
@@ -227,6 +227,101 @@ CLI：`--quantization-sim-edges {gemm_out,residual,attn_qkv,attn_pv,und_kv}`、`
 - 目标平台若是 H100，INT8 路线（S0 + Q4a 的 GEMM 部分）应放弃，转向 FP8 g128（DeepGEMM）或 FP8 g64（需改 CUTLASS）。前提是先在模拟器中补测 FP8 分组量化的精度，并查清第 6 节"FP8 模拟 g64 比 per-row 还差"的原因。
 - INT8 g64 的精度优势只能在 INT8 速率真正 ≥ FP8 或无 FP8 的平台（A100、Thor、Ada）上换成速度；那些平台需要重新做本节测量。
 - 注意事项：时钟无法锁定，20 个 case 中 11 个的 bf16 基线在 case 末尾复测漂移 +2.3%～+16.7%，M ≤ 1802 时 5%～10% 以内的差异应视为噪声；冲 L2 的计时在小 M 下偏保守。
+
+### 8.5 GB200 补测：CUTLASS per-tensor INT8 孪生 kernel 的绝对吞吐（2026-09-13/14）
+
+目的：验证 8.3 第 3 条"INT8 没有对 FP8 的速率优势"是库还是硬件的问题。做法：取 CUTLASS `examples/70_blackwell_gemm/70_blackwell_fp8_gemm.cu`
+（SM100 tcgen05 2SM UMMA + TMEM，per-tensor scale_a·scale_b 在 epilogue 融合），只把 A/B 换成 int8、累加器换成 int32，其余不动；
+代码、脚本与原始数据在 `docs/quantization/tools/cutlass_pertensor_gemm/`（README 有方法与结论；作业 2158916 / 2159012）。
+环境：1× GB200（sm_100a，148 SM，2062 MHz 全程不限频），imaginaire4_v12.1.0 容器（torch 2.13.0a0 nv26.07，nvcc 13.3），CUTLASS 4.4.2。
+计时口径与 8.1 相同：512 MB memset 冲 L2 后逐次 cudaEvent，50 次中位数；CUTLASS 每行对 fp64 精确参考采样校验 PASS。
+
+结论：
+- 同一 tile 下 INT8 与 FP8 的 CUTLASS kernel 同速（20 个 case 的 INT8/FP8 比 0.92～1.07，中位 1.00）；两者大方阵峰值都是约 3.4 PTOPS（名义 5 POPS 的 68%），bf16 约 1.6 PF。
+- 最好的 INT8 配置（256x256x128 或 256x128x128，集群 2x1）在 M ≥ 4096 为 cuBLASLt FP8 per-tensor 的 1.02～1.15×，M ≤ 1802 为 0.75～1.01×（N=1024 最差）；
+  更小 tile、2x2/4x1 集群都无收益，小 M 需要 stream-K/split-K（SM100 stream-K 归约模式目前挂起，未解）。
+- GB200 上 cuBLASLt 有专门的 INT8 IMMA kernel（`_int_mm` 3.1～3.6 PTOPS，与其 FP8 相当或略高），所以 8.3 的 H100 结论（cuBLASLt INT8 = FP8 的 0.58～0.73×）
+  应是 SM90 库 kernel 的问题而非硬件上限；同一源码 `make ARCH=90` 已能编出 sm_90a 二进制（cooperative / pingpong），待在 H100 上实测。
+
+#### q/o_proj 4096x4096（N×K）
+
+| kernel | M=901 | M=1802 | M=4096 | M=16384 | M=42240 |
+|---|---|---|---|---|---|
+| bf16 cuBLAS | 1077 | 1359 | 1407 | 1670 | 1771 |
+| FP8 cuBLASLt per-tensor (_scaled_mm) | 1380 | 2155 | 2611 | 3059 | 3332 |
+| FP8 CUTLASS 128x128x128 c1x1 | 1263 | 1716 | 2422 | 2848 | 3006 |
+| FP8 CUTLASS 128x256x128 c1x1 | 1199 | 1498 | 2151 | 2850 | 3094 |
+| FP8 CUTLASS 256x128x64 c2x2 | 1263 | 1822 | 2246 | 2762 | 2961 |
+| FP8 CUTLASS 256x128x128 c2x1 | 1440 | 1876 | 2611 | 3202 | 3348 |
+| FP8 CUTLASS 256x256x128 c2x1 | 1449 | 1942 | 2563 | 3326 | 3610 |
+| INT8 cuBLASLt (_int_mm, int32 out) | 1261 | 1667 | 2422 | 3132 | 3535 |
+| INT8 CUTLASS 128x128x128 c1x1 | 1318 | 1668 | 2422 | 2824 | 2961 |
+| INT8 CUTLASS 128x256x128 c1x1 | 1162 | 1538 | 2118 | 2834 | 3080 |
+| INT8 CUTLASS 256x128x64 c2x2 | 1263 | 1769 | 2223 | 2747 | 2924 |
+| INT8 CUTLASS 256x128x128 c2x1 | 1379 | 1865 | 2679 | 3202 | 3372 |
+| INT8 CUTLASS 256x256x128 c2x1 | 1379 | 1942 | 2576 | 3368 | 3645 |
+
+#### k/v_proj 1024x4096（N×K）
+
+| kernel | M=901 | M=1802 | M=4096 | M=16384 | M=42240 |
+|---|---|---|---|---|---|
+| bf16 cuBLAS | 480 | 842 | 1141 | 1378 | 1549 |
+| FP8 cuBLASLt per-tensor (_scaled_mm) | 645 | 1101 | 1724 | 2466 | 2804 |
+| FP8 CUTLASS 128x128x128 c1x1 | 479 | 902 | 1498 | 2260 | 2537 |
+| FP8 CUTLASS 128x256x128 c1x1 | 320 | 632 | 1377 | 1970 | 2501 |
+| FP8 CUTLASS 256x128x64 c2x2 | 509 | 903 | 1500 | 2185 | 2570 |
+| FP8 CUTLASS 256x128x128 c2x1 | 512 | 902 | 1624 | 2513 | 2804 |
+| FP8 CUTLASS 256x256x128 c2x1 | 380 | 760 | 1644 | 2422 | 3025 |
+| INT8 cuBLASLt (_int_mm, int32 out) | 552 | 848 | 1495 | 2278 | 2850 |
+| INT8 CUTLASS 128x128x128 c1x1 | 483 | 902 | 1500 | 2292 | 2518 |
+| INT8 CUTLASS 128x256x128 c1x1 | 315 | 640 | 1375 | 1971 | 2500 |
+| INT8 CUTLASS 256x128x64 c2x2 | 480 | 903 | 1483 | 2185 | 2519 |
+| INT8 CUTLASS 256x128x128 c2x1 | 480 | 900 | 1568 | 2513 | 2827 |
+| INT8 CUTLASS 256x256x128 c2x1 | 401 | 724 | 1556 | 2417 | 3025 |
+
+#### gate/up 12288x4096（N×K）
+
+| kernel | M=901 | M=1802 | M=4096 | M=16384 | M=42240 |
+|---|---|---|---|---|---|
+| bf16 cuBLAS | 1312 | 1287 | 1601 | 1696 | 1461 |
+| FP8 cuBLASLt per-tensor (_scaled_mm) | 2368 | 2381 | 2888 | 3238 | 3105 |
+| FP8 CUTLASS 128x128x128 c1x1 | 1754 | 2318 | 2713 | 2947 | 2978 |
+| FP8 CUTLASS 128x256x128 c1x1 | 1571 | 2176 | 2659 | 3054 | 3186 |
+| FP8 CUTLASS 256x128x64 c2x2 | 1867 | 2258 | 2695 | 2953 | 2897 |
+| FP8 CUTLASS 256x128x128 c2x1 | 1909 | 2384 | 3018 | 3066 | 3318 |
+| FP8 CUTLASS 256x256x128 c2x1 | 2009 | 2381 | 3112 | 3521 | 3405 |
+| INT8 cuBLASLt (_int_mm, int32 out) | 1951 | 2288 | 2930 | 3567 | 3474 |
+| INT8 CUTLASS 128x128x128 c1x1 | 1722 | 2288 | 2713 | 2900 | 2942 |
+| INT8 CUTLASS 128x256x128 c1x1 | 1570 | 2195 | 2676 | 3065 | 3095 |
+| INT8 CUTLASS 256x128x64 c2x2 | 1843 | 2231 | 2694 | 2910 | 2683 |
+| INT8 CUTLASS 256x128x128 c2x1 | 1909 | 2413 | 3041 | 3054 | 3086 |
+| INT8 CUTLASS 256x256x128 c2x1 | 1996 | 2412 | 3136 | 3582 | 3575 |
+
+#### down 4096x12288（N×K）
+
+| kernel | M=901 | M=1802 | M=4096 | M=16384 | M=42240 |
+|---|---|---|---|---|---|
+| bf16 cuBLAS | 1276 | 1501 | 1589 | 1718 | 1524 |
+| FP8 cuBLASLt per-tensor (_scaled_mm) | 2248 | 2707 | 2808 | 3264 | 3152 |
+| FP8 CUTLASS 128x128x128 c1x1 | 1703 | 2004 | 2676 | 2982 | 2984 |
+| FP8 CUTLASS 128x256x128 c1x1 | 1545 | 1800 | 2270 | 2837 | 2963 |
+| FP8 CUTLASS 256x128x64 c2x2 | 1910 | 2177 | 2558 | 3066 | 2931 |
+| FP8 CUTLASS 256x128x128 c2x1 | 1940 | 2231 | 2974 | 3402 | 3123 |
+| FP8 CUTLASS 256x256x128 c2x1 | 1953 | 2411 | 2875 | 3522 | 3641 |
+| INT8 cuBLASLt (_int_mm, int32 out) | 2139 | 2412 | 2808 | 3580 | 3572 |
+| INT8 CUTLASS 128x128x128 c1x1 | 1692 | 2012 | 2660 | 2986 | 2749 |
+| INT8 CUTLASS 128x256x128 c1x1 | 1539 | 1800 | 2261 | 2808 | 2993 |
+| INT8 CUTLASS 256x128x64 c2x2 | 1907 | 2177 | 2554 | 3060 | 3135 |
+| INT8 CUTLASS 256x128x128 c2x1 | 1909 | 2260 | 2974 | 3400 | 3082 |
+| INT8 CUTLASS 256x256x128 c2x1 | 1952 | 2412 | 2882 | 3506 | 3491 |
+
+#### 大方阵峰值（作业 2159012，热 L2 / 冲 L2，30 次中位数）
+
+| M×N×K | bf16 cuBLAS | FP8 cuBLASLt | FP8 CUTLASS 256x256x128 | FP8 CUTLASS 256x128x128 | INT8 cuBLASLt | INT8 CUTLASS 256x256x128 | INT8 CUTLASS 256x128x128 |
+|---|---|---|---|---|---|---|---|
+| 8192×8192×8192 | 1624 / 1587 | 3040 / 3134 | 3373 / 3247 | 3148 / 3097 | 3112 / 3349 | 3356 / 3238 | 3100 / 3045 |
+| 16384×8192×8192 | 1532 / 1495 | 3097 / 2971 | 3429 / 3427 | 3274 / 3260 | 3098 / 3248 | 3410 / 3416 | 3207 / 3207 |
+| 16384×16384×8192 | 1456 / 1401 | 3142 / 2806 | 3048 / 3023 | 2060 / 2046 | 3269 / 3147 | 2907 / 2987 | 2042 / 2030 |
 
 ## 9. 自写 CUTLASS SM90 INT8 kernel：per-tensor 对齐 + g128 分组缩放进主循环（2026-09-14）
 
