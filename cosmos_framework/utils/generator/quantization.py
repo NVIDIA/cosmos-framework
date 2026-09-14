@@ -725,6 +725,28 @@ def fake_quant_fp8(values: torch.Tensor, *, per_row: bool = True, group_size: in
     return (quantized * scale).reshape(values.shape).to(values.dtype)
 
 
+def fake_quant_int8_clipsearch(weight: torch.Tensor, *, group_size: int = 0, ratios=None) -> torch.Tensor:
+    """Symmetric INT8 Q/DQ with the scale chosen per row (or per K group) by an MSE search over clipping ratios
+    r * absmax, r in ``ratios`` (default 1.0 down to 0.5 in steps of 0.05). Returns the dequantized weight."""
+    ratios = ratios or [1.0 - 0.05 * i for i in range(11)]
+    w32 = weight.float()
+    work = _grouped_view(w32, group_size) if group_size else w32  # [..., g]
+    amax = work.abs().amax(dim=-1, keepdim=True)
+    best_err = None
+    best = None
+    for r in ratios:
+        scale = (amax * r / _INT8_QMAX).clamp_(min=torch.finfo(torch.float32).tiny)
+        q = torch.round(work / scale).clamp_(-_INT8_QMAX, _INT8_QMAX) * scale
+        err = ((q - work) ** 2).sum(dim=-1, keepdim=True)
+        if best is None:
+            best, best_err = q, err
+        else:
+            better = err < best_err
+            best = torch.where(better, q, best)
+            best_err = torch.minimum(best_err, err)
+    return best.reshape(weight.shape).to(weight.dtype)
+
+
 def fake_quant_weight_blocks(weight: torch.Tensor, method: str, *, block_n: int, block_k: int) -> torch.Tensor:
     """DeepSeek-style weight block scaling: one scale per (``block_n`` output channels x ``block_k`` K elements).
 
@@ -790,9 +812,13 @@ class QdqSimLinear(nn.Linear):
     # SmoothQuant: per-input-channel factor s [K]; inputs are divided by s before quantization and the weight
     # columns were multiplied by s at install time (F.linear(x/s, W*s) == F.linear(x, W)). None = off.
     qdq_smooth: torch.Tensor | None = None
-    # calibration mode: pass through unquantized and accumulate per-input-channel |x| max into ``_calib_amax``
+    # calibration mode: pass through unquantized and accumulate per-input-channel |x| max / min / max
     qdq_calib: bool = False
     _calib_amax: torch.Tensor | None = None
+    _calib_min: torch.Tensor | None = None
+    _calib_max: torch.Tensor | None = None
+    # per-input-channel shift delta [K] (AffineQuant-style): inputs - delta before smoothing/quantization; W*delta folded into bias
+    qdq_shift: torch.Tensor | None = None
 
     def forward(self, inputs: torch.Tensor) -> torch.Tensor:
         if not self._qdq_weight_finalized:
@@ -803,9 +829,14 @@ class QdqSimLinear(nn.Linear):
         if inputs.numel() == 0:
             return F.linear(inputs, self.weight, self.bias)
         if self.qdq_calib:
-            amax = inputs.detach().abs().reshape(-1, inputs.shape[-1]).amax(dim=0).float()
+            flat = inputs.detach().reshape(-1, inputs.shape[-1]).float()
+            amax, cmin, cmax = flat.abs().amax(dim=0), flat.amin(dim=0), flat.amax(dim=0)
             self._calib_amax = amax if self._calib_amax is None else torch.maximum(self._calib_amax, amax)
+            self._calib_min = cmin if self._calib_min is None else torch.minimum(self._calib_min, cmin)
+            self._calib_max = cmax if self._calib_max is None else torch.maximum(self._calib_max, cmax)
             return F.linear(inputs, self.weight, self.bias)
+        if self.qdq_shift is not None:
+            inputs = (inputs.float() - self.qdq_shift).to(inputs.dtype)
         if self.qdq_smooth is not None:
             inputs = (inputs.float() / self.qdq_smooth).to(inputs.dtype)
         quantized_inputs = _fake_quant(
@@ -834,7 +865,11 @@ def _register_calib_dump(path: str, fqn: str, module: "QdqSimLinear") -> None:
 
         def _dump() -> None:
             stats = {
-                f.replace("._orig_mod", ""): m._calib_amax.cpu()
+                f.replace("._orig_mod", ""): {
+                    "amax": m._calib_amax.cpu(),
+                    "min": m._calib_min.cpu(),
+                    "max": m._calib_max.cpu(),
+                }
                 for f, m in _CALIB_REGISTRY.items()
                 if m._calib_amax is not None
             }
@@ -918,7 +953,23 @@ def swap_qdq_sim_linears(
                 stats_key = target_module_fqn.replace("._orig_mod", "")  # torch.compile wraps modules as ``_orig_mod``
                 if stats_key not in stats:
                     raise KeyError(f"SmoothQuant stats missing for {stats_key} in {path}")
-                a_max = stats[stats_key].to(device=replacement.weight.device, dtype=torch.float32)
+                entry = stats[stats_key]
+                dev = replacement.weight.device
+                if isinstance(entry, dict):
+                    a_max = entry["amax"].to(device=dev, dtype=torch.float32)
+                    if os.environ.get("QDQ_SIM_SHIFT", "") == "1":
+                        # AffineQuant-style per-channel shift to the mid-range: x' = x - delta; W*delta goes into the bias
+                        cmin, cmax = entry["min"].to(dev, torch.float32), entry["max"].to(dev, torch.float32)
+                        delta = 0.5 * (cmin + cmax)
+                        a_max = 0.5 * (cmax - cmin)
+                        fold = replacement.weight.float() @ delta
+                        if replacement.bias is None:
+                            replacement.bias = nn.Parameter(fold.to(replacement.weight.dtype), requires_grad=False)
+                        else:
+                            replacement.bias.copy_((replacement.bias.float() + fold).to(replacement.bias.dtype))
+                        replacement.qdq_shift = delta
+                else:
+                    a_max = entry.to(device=dev, dtype=torch.float32)
                 w_max = replacement.weight.float().abs().amax(dim=0)  # per input channel k
                 s_vec = (a_max.clamp_min(1e-5) ** alpha) / (w_max.clamp_min(1e-5) ** (1.0 - alpha))
                 s_vec = s_vec.clamp(1e-2, 1e2)
@@ -935,6 +986,9 @@ def swap_qdq_sim_linears(
                     fake_quant_weight_blocks(replacement.weight, method, block_n=weight_block_n, block_k=group_size)
                 )
                 replacement.qdq_weight_block_n = weight_block_n
+            elif os.environ.get("QDQ_SIM_WCLIP", "") == "1" and method == "int8_sim" and per_row:
+                # MSE clipping search for the weight scales (per output channel, per K group if any)
+                replacement.weight.copy_(fake_quant_int8_clipsearch(replacement.weight, group_size=group_size))
             else:
                 replacement.weight.copy_(
                     _fake_quant(replacement.weight, method, per_row=per_row, group_size=group_size)

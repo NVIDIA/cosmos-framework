@@ -530,3 +530,26 @@ def test_smoothquant_is_exact_without_rounding_and_helps_with_outliers() -> None
     m(x[:100])
     m(x[100:])
     torch.testing.assert_close(m._calib_amax, a_max)
+
+
+def test_clipsearch_never_worse_than_absmax_and_shift_folds_into_bias() -> None:
+    from cosmos_framework.utils.generator.quantization import QdqSimLinear, fake_quant_int8, fake_quant_int8_clipsearch
+
+    torch.manual_seed(14)
+    w = torch.randn(64, 256)
+    w[5, :8] *= 4.0  # a heavy-tailed row: clipping a few large weights buys resolution for the other 248
+    e_abs = ((fake_quant_int8(w, per_row=True) - w) ** 2).sum(dim=1)
+    e_clip = ((fake_quant_int8_clipsearch(w) - w) ** 2).sum(dim=1)
+    assert torch.all(e_clip <= e_abs + 1e-6)  # MSE search is never worse than absmax (at 8 bits it rarely clips at all)
+    lin = torch.nn.Linear(256, 64, bias=False)
+    x = torch.randn(50, 256) + 3.0
+    delta = x.mean(dim=0)
+    y = torch.nn.functional.linear(x - delta, lin.weight) + lin.weight @ delta
+    torch.testing.assert_close(y, lin(x), atol=1e-4, rtol=1e-4)
+    m = QdqSimLinear(256, 64, bias=False)
+    m.weight = lin.weight
+    m.qdq_calib = True
+    m._qdq_weight_finalized = True
+    m(x)
+    torch.testing.assert_close(m._calib_min, x.amin(dim=0))
+    torch.testing.assert_close(m._calib_max, x.amax(dim=0))

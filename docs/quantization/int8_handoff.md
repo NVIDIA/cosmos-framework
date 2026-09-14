@@ -137,6 +137,9 @@ Nano 上同一实验（12 图，对 compile bf16；modules=252 act channel max/m
 Edge 上 SmoothQuant 补回 3.8 dB，Nano 上只有 0.15 dB：两个模型的离群结构不同，通道迁移的收益不可迁移，K 分组在两者上都稳定有效。
 Nano 上再补 g256（12 图）：g256 22.9（8/12，最低 14.8）→ **g256 + SmoothQuant α=0.5 23.8（10/12，最低 19.8）**；对照 g128 23.9（9/12）、g64 25.8（10/12）。
 有 K 分组之后 SmoothQuant 开始起作用（g256 上 +0.9 dB、最差图 +5 dB、多保 2 张），g256+SQ 与 g128 相当；无分组时它救不回来。
+零 kernel 代价的两招（Nano，12 图，无分组 per-row/per-col 为基线 20.0 / 4 张）：**权重 scale 的 MSE 裁剪搜索 +1.0 dB（21.0，5 张，最低 14.4→16.5）**，8 bit 下裁剪很少触发，收益小但免费；
+**逐通道静态 shift（折进 bias）明显有害**：无分组 + SQ + shift 17.3（0 张），g256 + SQ + shift + 裁剪 18.4（0 张，对照 g256 + SQ 23.8）。原因是激活用的是 per-token 动态 scale，
+静态的全局中点 δ 把多数 token 推离零点、抬高了每个 token 的 absmax；且校准显示通道本就近似对称（|max+min|/(max−min) 中位 0.067）。shift 只在静态激活 scale 的方案里才有意义。
 
 ### 3.3 速度
 - t2i（901 token）：bf16 11.0 ms/forward，GEMM 73%，attention 15%。e2e bf16 13.8 it/s，官方 FP8 11.7 it/s（0.85×，host-bound）；开 CUDA graphs bf16 33.0、FP8 26.9；S0 模拟路径 22～30。
