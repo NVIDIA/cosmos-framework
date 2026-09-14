@@ -179,7 +179,7 @@ int main(int argc, char const** argv) {
   cudaDeviceProp props; int dev = 0;
   CUDA_CHECK(cudaGetDevice(&dev));
   CUDA_CHECK(cudaGetDeviceProperties(&props, dev));
-  if (props.major != 10) { std::fprintf(stderr, "needs an SM100 GPU, got sm_%d%d\n", props.major, props.minor); return 2; }
+  if (props.major != 10 && props.major != 11) { std::fprintf(stderr, "needs a Blackwell-family GPU (sm_100a/101a/110a), got sm_%d%d\n", props.major, props.minor); return 2; }
   int const M_true = opt.m, N = opt.n, K = opt.k;
   if (K % kSFK) { std::fprintf(stderr, "K must be a multiple of %d\n", kSFK); return 2; }
   // Per-row scale factors are copied with 16-byte cp.async, so the SFA layout requires M % 4 == 0 (cuBLASLt blockwise

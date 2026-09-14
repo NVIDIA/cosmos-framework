@@ -3,8 +3,9 @@
 .DEFAULT_GOAL := all
 CUTLASS ?= $(HOME)/cutlass
 NVCC    ?= nvcc
+ARCH    ?= 100      # Blackwell family: 100 (GB200/B200), 101, 110 (Thor). INT8 tcgen05 is not available on 103 (GB300).
 OUT     ?= build
-NVCCFLAGS = $(EXTRA) -std=c++17 -O3 -arch=sm_100a --expt-relaxed-constexpr -DCUTLASS_ENABLE_GDC_FOR_SM100=1 \
+NVCCFLAGS = $(EXTRA) -std=c++17 -O3 -arch=sm_$(ARCH)a --expt-relaxed-constexpr -DCUTLASS_ENABLE_GDC_FOR_SM100=1 \
             -I./include -I$(CUTLASS)/include -I$(CUTLASS)/tools/util/include -lcuda -Xcompiler -Wno-psabi -diag-suppress 177
 CONFIGS ?= 256x128x128_c2x1_sfn1 256x128x128_c2x1_sfn128
 KINDS   ?= fp8

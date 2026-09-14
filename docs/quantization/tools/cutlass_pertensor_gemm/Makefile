@@ -1,4 +1,5 @@
-# Builds one binary per (kind, config). Usage: make -j10 CUTLASS=~/cutlass [ARCH=100|90] [CONFIGS=...] [KINDS=...]
+# Builds one binary per (kind, config). Usage: make -j10 CUTLASS=~/cutlass [ARCH=100|101|110|90] [CONFIGS=...] [KINDS=...]
+# ARCH=110 targets Thor (sm_110a); INT8 tcgen05 is enabled by CUTLASS on sm_100a/101a/110a (cute/arch/config.hpp), not on sm_103a (GB300).
 # config name: TMxTNxTK_cCMxCN[_sk|_pp]   (_sk = stream-K tile scheduler, _pp = SM90 pingpong schedule)
 .DEFAULT_GOAL := all
 CUTLASS ?= $(HOME)/cutlass

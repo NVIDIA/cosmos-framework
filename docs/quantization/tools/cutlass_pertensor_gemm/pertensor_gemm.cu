@@ -42,9 +42,9 @@
 using namespace cute;
 
 #ifndef ARCH
-#define ARCH 100            // 100 = Blackwell SM100 (tcgen05, 1SM/2SM UMMA); 90 = Hopper SM90 (wgmma)
+#define ARCH 100            // 100/101/110 = Blackwell family (tcgen05 UMMA; 110 = Thor); 90 = Hopper SM90 (wgmma)
 #endif
-#if ARCH == 100 && !defined(CUTLASS_ARCH_MMA_SM100_SUPPORTED)
+#if ARCH >= 100 && !defined(CUTLASS_ARCH_MMA_SM100_SUPPORTED)
 #error "needs CUDA >= 12.8 and -arch=sm_100a"
 #endif
 
@@ -90,7 +90,7 @@ using ElementBias    = cutlass::bfloat16_t;
 using MmaTileShape_MNK = Shape<Int<TM>, Int<TN>, Int<TK>>;   // SM100: MMA tile (2SM if CM % 2 == 0); SM90: CTA tile
 using ClusterShape_MNK = Shape<Int<CM>, Int<CN>, _1>;
 
-#if ARCH == 100
+#if ARCH >= 100
 using ArchTag          = cutlass::arch::Sm100;
 #if defined(STREAMK)
 // Stream-K needs the explicit (static-cluster) 1SM/2SM schedules, as in example 74 and the SM100 stream-K unit
