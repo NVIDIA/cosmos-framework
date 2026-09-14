@@ -5,9 +5,16 @@ CUTLASS kernels (cuBLASLt fills uniform), 50 timed iterations, M padded to a mul
 Writes results/g128_summary_<stamp>.md and prints it."""
 import subprocess, re, datetime, os, sys
 HERE = os.path.dirname(os.path.abspath(__file__))
-SHAPES = [(4096, 4096), (1024, 4096)]
-MS = [904, 1520, 1804]
+import argparse
+_ap = argparse.ArgumentParser()
+_ap.add_argument("--shapes", default="4096x4096,1024x4096", help="comma list of NxK")
+_ap.add_argument("--Ms", default="904,1520,1804")
+_ap.add_argument("--tag", default="")
+_a = _ap.parse_args()
+SHAPES = [tuple(int(v) for v in x.split("x")) for x in _a.shapes.split(",")]
+MS = [int(x) for x in _a.Ms.split(",")]
 COMMON = ["--iters=50", "--warmup_ms=1500", "--flush=0", "--nw=8", "--verify=0"]
+def _shape_k(M, N, K): return K
 def run(cmd):
     p = subprocess.run(cmd, capture_output=True, text=True, cwd=HERE)
     m = re.search(r"median_us=([0-9.]+).*?tflops=([0-9.]+)", p.stdout)
@@ -31,11 +38,12 @@ for (N, K) in SHAPES:
     for M in MS:
         for label, mk in ROWS:
             res[(label, N, K, M)] = run(mk(M, N, K) + [f"--m={M}", f"--n={N}", f"--k={K}"])
+            if res[(label, N, K, M)][0] is None: print(f"  (no result: {label} {N}x{K} M={M})", file=sys.stderr)
             print(f"{label:36s} {N}x{K} M={M}: {res[(label,N,K,M)]}", file=sys.stderr, flush=True)
 stamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
 L = [f"# g128 vs baselines, same conditions ({stamp})", "",
-     "Thor, 120 W mode, activations L2-hot / weights cold (--flush=0 --nw=8), >= 1.5 s sustained warm-up, 50 iterations, K=4096, M padded to a multiple of 4. "
-     "CUTLASS kernels use per-tensor-quantized Gaussian operands, cuBLASLt uniform. TFLOPS = 2MNK/median; INT8 counted as TFLOPS.", ""]
+     "Thor, 120 W mode, activations L2-hot / weights cold (--flush=0 --nw=8), >= 1.5 s sustained warm-up, 50 iterations, M padded to a multiple of 4. "
+     "CUTLASS kernels use per-tensor-quantized Gaussian operands, cuBLASLt uniform. TFLOPS = 2MNK/median; INT8 counted as TFLOPS.", "", f"Shapes: {_a.shapes}; K per shape as given.", ""]
 for (N, K) in SHAPES:
     L += [f"## {N}x{K} (N x K)", "", "| kernel | " + " | ".join(f"M={M} us (TFLOPS)" for M in MS) + " |", "|---|" + "---:|" * len(MS)]
     for label, _ in ROWS:
@@ -55,5 +63,5 @@ for (N, K) in SHAPES:
                 cells.append(f"{a / b:.2f}" if a and b else "n/a")
             L.append(f"| {label} | {base} | " + " | ".join(cells) + " |")
     L.append("")
-out = os.path.join(HERE, "results", f"g128_summary_{stamp}.md")
+out = os.path.join(HERE, "results", f"g128_summary_{_a.tag + '_' if _a.tag else ''}{stamp}.md")
 open(out, "w").write("\n".join(L) + "\n"); print("\n".join(L)); print("wrote", out, file=sys.stderr)
