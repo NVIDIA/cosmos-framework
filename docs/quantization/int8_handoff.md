@@ -499,6 +499,8 @@ FP8 g128 W 块与 CUTLASS FP8 per-tensor 256×256 时间完全相同（250/324 �
 结果（热 A 冷 W 持续，4096×4096，M=904/1520/1804，TFLOPS）：**INT8 g128 W 128×128 块 190/229/210 = cuBLASLt bf16 的 1.62～1.68×、cuBLASLt FP8 per-tensor 的 0.84/0.97/0.86×（M=1520 基本追平）**、
 INT8 per-tensor 的 0.70×；INT8 g128 per-col 133/159/146（bf16 的 1.12～1.18×，FP8 pt 的 0.59～0.67×）；可分离布局在 256×128 上 168/187/173（256×256 版溢出待调）。
 1024×4096 上 W 块 1.04～1.08× bf16。同条件表：`results/g128_summary_20260914_114605.md`，目标形状表 `results/g128_8warp_targets_20260914.txt`。
+hidden_size=1536 的形状（1536×1536 / 6144×1536 / 1536×6144 / 512×1536）：权重全在 L2、tile 数少，W 块 g128 对 bf16 为 0.95～1.42×（MLP 1.1～1.4×）、对 cuBLASLt FP8 per-tensor 0.58～0.83×，
+per-col 与 bf16 持平或更慢；这一档最值钱的是 QKV / gate-up 合并成一次 GEMM。表：`results/g128_summary_h1536_*.md`。
 接续说明（另一台机器如何编译/运行/未完事项）见 `tools/cutlass_int8_sm110/README.md` 末节。
 
 ### 11.3 下一步

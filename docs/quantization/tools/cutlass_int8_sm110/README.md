@@ -422,6 +422,22 @@ Not done / next: MAXN re-measurement of the g128 kernels (they are not power-bou
 while FP8 per-tensor does not); the 8-warp 256x256 restructure; the separable-scale variant (kernel side = cfg8 + a per-column EVT
 scale); torch binding.
 
+### hidden_size = 1536 shapes (`results/g128_summary_h1536_*.md`; assumed q/o 1536x1536, gate/up 6144x1536, down 1536x6144, k/v 512x1536)
+
+Same conditions, M = 904 / 1520 / 1804, TFLOPS and time ratios:
+
+| N x K | INT8 g128 W-block 256x256 | vs bf16 | vs cuBLASLt FP8 pt | INT8 g128 per-col 256x256 | vs bf16 |
+| --- | --- | --- | --- | --- | --- |
+| 1536x1536 | 117 / 160 / 152 | 0.95 / 1.27 / 1.03 | 0.62 / 0.73 / 0.66 | 91 / 117 / 113 | 0.74 / 0.93 / 0.76 |
+| 6144x1536 | 166 / 180 / 167 | 1.26 / 1.35 / 1.11 | 0.70 / 0.77 / 0.83 | 121 / 138 / 125 | 0.91 / 1.03 / 0.82 |
+| 1536x6144 | 167 / 198 / 185 | 1.15 / 1.42 / 1.35 | 0.58 / 0.62 / 0.60 | 117 / 148 / 138 | 0.81 / 1.07 / 1.01 |
+| 512x1536 | 88 / 90 / 107 | 1.01 / 0.84 / 0.92 | 0.81 / 0.60 / 0.61 | 70 / 69 / 82 | 0.80 / 0.65 / 0.70 |
+
+Weights of 2-9 MB stay L2-resident, so the GEMM is compute/promotion bound, and N = 1536 gives only 6 N tiles of 256 (24-42 tiles on
+10 CTA pairs). W-block g128 is still 1.1-1.4x bf16 on the MLP shapes and ~bf16 to 1.27x on q/o; per-col is at or below bf16;
+512x1536 is launch/tail dominated (use per-tensor or fuse into QKV). 256x128 tiles do not help here. The biggest lever for this
+model size is fusing QKV / gate+up into one GEMM (N = 4608 / 12288), which fixes both the tail waves and the promotion/MMA ratio.
+
 ## Continuing on another machine (state as of 2026-09-14 evening)
 
 Everything needed is in this directory plus a CUTLASS checkout; nothing depends on the Thor box's home directory.
