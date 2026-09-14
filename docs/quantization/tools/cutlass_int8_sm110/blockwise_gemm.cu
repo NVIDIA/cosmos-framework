@@ -88,8 +88,13 @@ int main(int argc, char** argv) {
     if (dist == "normal") { bench::fill_e4m3_normal((__nv_fp8_e4m3*)A, nA, 0x1234u); for (int w = 0; w < nw; ++w) bench::fill_e4m3_normal((__nv_fp8_e4m3*)Ball + (size_t)w * nB, nB, 0x5678u + 977u * w); }
     else { bench::fill_e4m3((__nv_fp8_e4m3*)A, nA, 0x1234u); for (int w = 0; w < nw; ++w) bench::fill_e4m3((__nv_fp8_e4m3*)Ball + (size_t)w * nB, nB, 0x5678u + 977u * w); }
   }
-  bench::fill_scales(sfa, nSFA, 0xabcdu);
+  bench::fill_scales(sfa, nSFA, 0xabcdu);   // for the separable kernel these are sfa'[m,g] = sfa[m,g]*c[g] (folded at quantization time)
   for (int w = 0; w < nw; ++w) bench::fill_scales(sfball + (size_t)w * nSFB, nSFB, 0xdcbau + 31u * w);
+  float* colscale = nullptr;  // separable variant: per-output-channel factor s_w[n], applied in the epilogue
+  if (h->colscale_epi()) {
+    CUDA_OK(cudaMalloc(&colscale, (size_t)N * nw * sizeof(float)));
+    for (int w = 0; w < nw; ++w) bench::fill_scales(colscale + (size_t)w * N, N, 0x7777u + 13u * w, 0.5f, 2.0f);
+  }
   CUDA_OK(cudaMemset(D, 0, nD * sizeof(__nv_bfloat16)));
   CUDA_OK(cudaDeviceSynchronize());
 
@@ -99,7 +104,8 @@ int main(int argc, char** argv) {
   } else swizzle = std::stoi(swz);
   try {
     for (int w = 0; w < nw; ++w)
-      hs[w]->init(A, (char*)Ball + (size_t)w * nB, sfa, sfball + (size_t)w * nSFB, D, M, N, K, swizzle, raster, 0);
+      hs[w]->init(A, (char*)Ball + (size_t)w * nB, sfa, sfball + (size_t)w * nSFB, D, M, N, K, swizzle, raster, 0,
+                  colscale ? colscale + (size_t)w * N : nullptr);
     h->run(0);
     CUDA_OK(cudaDeviceSynchronize());
   } catch (std::exception const& e) {
@@ -118,9 +124,9 @@ int main(int argc, char** argv) {
     auto run_ref = [&](int row0, int rows) {
       // rows [row0, row0+rows): pass A/sfa offsets; the reference indexes sfa by m/GM, so shift by row0 (GM == 1 here; general: row0 % GM == 0 required)
       if (is_int8)
-        bench::ref_gemm_blockscaled<int8_t, int32_t>((int8_t*)A + (size_t)row0 * K, (int8_t*)Ball, sfa + row0 / GM, sfball, ref, rows, N, K, GM, GN, GK, MB, NB);
+        bench::ref_gemm_blockscaled<int8_t, int32_t>((int8_t*)A + (size_t)row0 * K, (int8_t*)Ball, sfa + row0 / GM, sfball, ref, rows, N, K, GM, GN, GK, MB, NB, colscale);
       else
-        bench::ref_gemm_blockscaled<__nv_fp8_e4m3, float>((__nv_fp8_e4m3*)A + (size_t)row0 * K, (__nv_fp8_e4m3*)Ball, sfa + row0 / GM, sfball, ref, rows, N, K, GM, GN, GK, MB, NB);
+        bench::ref_gemm_blockscaled<__nv_fp8_e4m3, float>((__nv_fp8_e4m3*)A + (size_t)row0 * K, (__nv_fp8_e4m3*)Ball, sfa + row0 / GM, sfball, ref, rows, N, K, GM, GN, GK, MB, NB, colscale);
       CUDA_OK(cudaDeviceSynchronize());
       return bench::compare_bf16_vs_f32(D + (size_t)row0 * N, ref, (size_t)rows * N);
     };
@@ -139,12 +145,13 @@ int main(int argc, char** argv) {
   delete fl;
   if (!dump.empty()) { FILE* f = fopen(dump.c_str(), "w"); if (f) { for (double v : t.all_us) fprintf(f, "%.2f\n", v); fclose(f); } }
   double flop = 2.0 * M * N * K;
-  printf("lib=cutlass_bw\tdtype=%s\tcfg=%d\tgran=%dx%dx%d\tM=%d\tN=%d\tK=%d\tmedian_us=%.2f\tmean_us=%.2f\tmin_us=%.2f\ttflops=%.1f\tclk_before=%d\tclk_after=%d\t"
+  printf("lib=cutlass_bw\tdtype=%s\tcfg=%d\tgran=%dx%dx%d%s\tM=%d\tN=%d\tK=%d\tmedian_us=%.2f\tmean_us=%.2f\tmin_us=%.2f\ttflops=%.1f\tclk_before=%d\tclk_after=%d\t"
          "verify=%s rel_l2=%.2e\tswizzle=%d\traster=%s\tflush=%d\tnw=%d\tdist=%s\twarmup_ms=%.0f\ttj_c=%.1f\tdesc=%s\n",
-         dtype.c_str(), cfg, GM, GN, GK, M, N, K, t.median_us, t.mean_us, t.min_us, bench::tflops(flop, t.median_us), t.clock_mhz_before,
+         dtype.c_str(), cfg, GM, GN, GK, h->colscale_epi() ? "+colscale" : "", M, N, K, t.median_us, t.mean_us, t.min_us, bench::tflops(flop, t.median_us), t.clock_mhz_before,
          t.clock_mhz_after, vstr.c_str(), rel_l2, swizzle, ras.c_str(), flush, nw, zeros ? "zeros" : dist.c_str(), warmup_ms,
          bench::gpu_temp_mc() / 1000.0, kDesc[cfg]);
   hs.clear();
+  if (colscale) CUDA_OK(cudaFree(colscale));
   CUDA_OK(cudaFree(A)); CUDA_OK(cudaFree(Ball)); CUDA_OK(cudaFree(sfa)); CUDA_OK(cudaFree(sfball)); CUDA_OK(cudaFree(D));
   return vstr == "FAIL" ? 3 : 0;
 }

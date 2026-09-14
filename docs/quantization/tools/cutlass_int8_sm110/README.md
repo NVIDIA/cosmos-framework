@@ -360,6 +360,12 @@ Reading (4096x4096, M=1520, the compute-bound target case):
   structure at W-block cost: c[g] folded into the A scales in the mainloop, s_w[n] applied in the epilogue; precision to be evaluated
   in the simulator) or accepting W 128x128 blocks.
 
+Separable weight scale (cfg12, `results/g128_separable_20260914.md`): s_w[n,g] = s_w[n]*c[g] with c[g] folded into the activation
+scales and s_w[n] applied per output element in the epilogue (`Sm90RowBroadcast`). It runs the W-block mainloop, so INT8 reaches
+164 / 182 / 168 TFLOPS on 4096x4096 (M = 904 / 1520 / 1804) = 1.34x the per-col kernel, 0.96x the W-block kernel, 1.22-1.53x bf16,
+0.63-0.71x cuBLASLt FP8 per-tensor, with per-output-channel scale structure. Its precision (the rank-1 constraint on the N x K/128
+scale matrix) still has to be measured in the simulator.
+
 Not done / next: MAXN re-measurement of the g128 kernels (they are not power-bound, so they should scale with the 1575/1386 clock
 while FP8 per-tensor does not); the 8-warp 256x256 restructure; the separable-scale variant (kernel side = cfg8 + a per-column EVT
 scale); torch binding.

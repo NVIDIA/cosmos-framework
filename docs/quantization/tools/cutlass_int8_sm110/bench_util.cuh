@@ -213,7 +213,7 @@ inline void ref_gemm_bf16(const __nv_bfloat16* A, const __nv_bfloat16* W, float*
 // The per-block partial sum is exact in int32 for int8 (|sum| <= 128*127*127 < 2^24 so float(part) is exact too); fp32 for fp8.
 template <class TIn, class TAcc>
 __global__ void ref_gemm_blockscaled_kernel(const TIn* A, const TIn* W, const float* sa, const float* sb, float* D, int M, int N, int K,
-                                            int GM, int GN, int GK, int sa_ld, int sb_ld) {
+                                            int GM, int GN, int GK, int sa_ld, int sb_ld, const float* colscale) {
   int n = blockIdx.x * blockDim.x + threadIdx.x;
   int m = blockIdx.y * blockDim.y + threadIdx.y;
   if (m >= M || n >= N) return;
@@ -225,13 +225,13 @@ __global__ void ref_gemm_blockscaled_kernel(const TIn* A, const TIn* W, const fl
     for (int k = kb * GK; k < (kb + 1) * GK; ++k) part += TAcc(float(a[k])) * TAcc(float(w[k]));
     acc += sa[m / GM + kb * sa_ld] * sb[n / GN + kb * sb_ld] * float(part);
   }
-  D[(size_t)m * N + n] = acc;
+  D[(size_t)m * N + n] = colscale ? acc * colscale[n] : acc;
 }
 template <class TIn, class TAcc>
 inline void ref_gemm_blockscaled(const TIn* A, const TIn* W, const float* sa, const float* sb, float* D, int M, int N, int K, int GM,
-                                 int GN, int GK, int sa_ld, int sb_ld) {
+                                 int GN, int GK, int sa_ld, int sb_ld, const float* colscale = nullptr) {
   dim3 b(32, 8), g((N + 31) / 32, (M + 7) / 8);
-  ref_gemm_blockscaled_kernel<TIn, TAcc><<<g, b>>>(A, W, sa, sb, D, M, N, K, GM, GN, GK, sa_ld, sb_ld);
+  ref_gemm_blockscaled_kernel<TIn, TAcc><<<g, b>>>(A, W, sa, sb, D, M, N, K, GM, GN, GK, sa_ld, sb_ld, colscale);
   CUDA_OK(cudaGetLastError());
 }
 __global__ void fill_scales_kernel(float* p, size_t n, uint32_t seed, float lo, float hi) {

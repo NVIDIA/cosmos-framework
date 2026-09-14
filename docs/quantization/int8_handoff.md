@@ -489,6 +489,9 @@ M ∈ {901, 1517, 1802, 4096}；MLP 形状与视频级 M 只有部分数据（`r
 4096×4096 上 INT8 g128 W 块对 bf16 1.61/1.39/1.28×、对 cuBLASLt FP8 per-tensor 0.75/0.74/0.66×；per-col 对 bf16 1.15/0.99/0.91×；1024×4096 上 g128 均不如 bf16（权重流 + tile 太少，应走 per-tensor 或 QKV 合并）。
 FP8 g128 W 块与 CUTLASS FP8 per-tensor 256×256 时间完全相同（250/324 µs，同一功耗上限），INT8 g128 W 块与其只差 7%。
 
+可分离权重 scale 的 kernel 已实现（cfg12：W 块主循环 + epilogue 按通道乘 s_w[n]，c[g] 并入激活 scale）：INT8 164/182/168 TFLOPS（4096×4096，M=904/1520/1804），
+= per-col 的 1.34×、W 块的 0.96×、bf16 的 1.22～1.53×、cuBLASLt FP8 per-tensor 的 0.63～0.71×；精度（N×K/128 scale 矩阵的秩 1 约束）待模拟器评估。表：`results/g128_separable_20260914.md`。
+
 ### 11.3 下一步
 per-row × per-col scale 的 EVT 变体和 torch 扩展绑定接入 cosmos-framework；g64/g128 blockwise INT8 移植到 SM100 blockwise collective（builder 接受 int8 但 scale 类型绑成 int32 累加器，需和 SM90 移植同样解耦）；
 k/v_proj 小 M 的 stream-K；QKV / gate-up 融合 GEMM 摊薄权重流。

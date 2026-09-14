@@ -14,6 +14,7 @@
   X(8, 256, 128, 256, 2, 1, BwSched2Sm, Epi2Sm, 1, 128, 128, "2SM 256x128x256 c2x1 sf<1,128,128> (TileK 256)")               \
   X(9, 256, 128, 256, 2, 1, BwSched2Sm, Epi2Sm16, 1, 1, 128, "2SM 256x128x256 c2x1 sf<1,1,128> per-col, epi tile 128x16") \
   X(10, 256, 128, 256, 2, 1, BwSched2Sm, Epi2Sm16, 1, 128, 128, "2SM 256x128x256 c2x1 sf<1,128,128>, epi tile 128x16") \
-  X(11, 256, 128, 256, 2, 1, BwSched2Sm, Epi2Sm64, 1, 1, 128, "2SM 256x128x256 c2x1 sf<1,1,128> per-col, epi tile 128x64")
+  X(11, 256, 128, 256, 2, 1, BwSched2Sm, Epi2Sm64, 1, 1, 128, "2SM 256x128x256 c2x1 sf<1,1,128> per-col, epi tile 128x64")   \
+  X(12, 256, 128, 256, 2, 1, BwSched2Sm, Epi2SmSep, 1, 128, 128, "2SM 256x128x256 c2x1 SEPARABLE: sf<1,128,128> mainloop (c[g] folded into A scales) + per-col s_w[n] in the epilogue")
 
-#define THOR_NUM_BW_CFGS 12
+#define THOR_NUM_BW_CFGS 13

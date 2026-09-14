@@ -37,8 +37,12 @@ struct BlockwiseMainloop {
 };
 
 template <class ElementAB_, class ElementAcc_, class MmaTile_, class Cluster_, class KernelSchedule_, class EpiSchedule_, int GranM, int GranN,
-          int GranK, class EpiTile_ = cutlass::epilogue::collective::EpilogueTileAuto>
+          int GranK, class EpiTile_ = cutlass::epilogue::collective::EpilogueTileAuto, bool ColScaleEpi_ = false>
 struct BlockwiseGemm {
+  // ColScaleEpi_: "separable weight scale" variant s_w[n,g] = s_w[n] * c[g]. The mainloop only sees the per-K-block factor
+  // (c[g] is folded into the activation scales sfa'[m,g] = sfa[m,g]*c[g] at quantization time, sfb is passed as all-ones or
+  // c[g]), and the per-output-channel factor s_w[n] is applied once per output element in the epilogue (Sm90RowBroadcast).
+  static constexpr bool ColScaleEpi = ColScaleEpi_;
   using ElementA = ElementAB_;  using LayoutA = cutlass::layout::RowMajor;
   using ElementB = ElementAB_;  using LayoutB = cutlass::layout::ColumnMajor;
   using ElementD = cutlass::bfloat16_t; using LayoutD = cutlass::layout::RowMajor; static constexpr int AlignD = 8;
@@ -52,7 +56,9 @@ struct BlockwiseGemm {
   // The epilogue always sees fp32 (the full accumulator after in-mainloop scaling).
   using ElementEpiAcc = float;
 
-  using Scale = cutlass::epilogue::fusion::Sm90ScalarBroadcast<float, Stride<_0, _0, _0>, 2, cutlass::multiplies>;
+  using ScaleScalar = cutlass::epilogue::fusion::Sm90ScalarBroadcast<float, Stride<_0, _0, _0>, 2, cutlass::multiplies>;
+  using ScaleCol = cutlass::epilogue::fusion::Sm90RowBroadcast<0, MmaTile, float, float, Stride<_0, _1, _0>>;   // one fp32 per output column n
+  using Scale = cute::conditional_t<ColScaleEpi, ScaleCol, ScaleScalar>;
   using Mul = cutlass::epilogue::fusion::Sm90Compute<cutlass::multiplies, ElementD, ElementCompute, cutlass::FloatRoundStyle::round_to_nearest>;
   using EVT = cutlass::epilogue::fusion::Sm90EVT<Mul, Scale, cutlass::epilogue::fusion::Sm90AccFetch>;
 
@@ -71,7 +77,7 @@ struct BlockwiseGemm {
   using ElementSF = cute::remove_cv_t<cute::remove_pointer_t<decltype(typename CollectiveMainloop::Arguments{}.ptr_SFA)>>;
 
   static typename Gemm::Arguments make_args(ElementA const* A, ElementB const* B, ElementSF const* sfa, ElementSF const* sfb, ElementD* D,
-                                            int M, int N, int K, int swizzle, int raster) {
+                                            int M, int N, int K, int swizzle, int raster, float const* colscale = nullptr) {
     using StrideA = typename GemmKernel::StrideA;
     using StrideB = typename GemmKernel::StrideB;
     using StrideD = typename GemmKernel::StrideD;
@@ -83,7 +89,11 @@ struct BlockwiseGemm {
     typename Gemm::Arguments args{cutlass::gemm::GemmUniversalMode::kGemm, {M, N, K, 1},
                                   {A, stride_A, B, stride_B, sfa, layout_SFA, sfb, layout_SFB},
                                   {{}, nullptr, stride_D, D, stride_D}};
-    args.epilogue.thread = {{{1.f, 1.f}, {nullptr, nullptr}, {}}, {}, {}};
+    if constexpr (ColScaleEpi) {
+      args.epilogue.thread = {{colscale, 1.f, {}}, {}, {}};   // RowBroadcast: {ptr, null_default, dRow}
+    } else {
+      args.epilogue.thread = {{{1.f, 1.f}, {nullptr, nullptr}, {}}, {}, {}};
+    }
     args.scheduler.max_swizzle_size = swizzle;
     using RO = cutlass::gemm::kernel::detail::RasterOrderOptions;
     args.scheduler.raster_order = raster == 1 ? RO::AlongM : raster == 2 ? RO::AlongN : RO::Heuristic;
@@ -94,7 +104,8 @@ struct BlockwiseGemm {
 struct BwHandle {
   virtual ~BwHandle() = default;
   virtual void init(void const* A, void const* B, void const* sfa, void const* sfb, void* D, int M, int N, int K, int swizzle, int raster,
-                    cudaStream_t stream) = 0;
+                    cudaStream_t stream, float const* colscale = nullptr) = 0;
+  virtual bool colscale_epi() const = 0;
   virtual void run(cudaStream_t stream) = 0;
   virtual std::string desc() const = 0;
   virtual int tile_m() const = 0;
@@ -118,10 +129,10 @@ struct BwHandleImpl : BwHandle {
   explicit BwHandleImpl(std::string desc_) : d(std::move(desc_)) {}
   ~BwHandleImpl() override { if (workspace) cudaFree(workspace); }
   void init(void const* A, void const* B, void const* sfa, void const* sfb, void* D, int M, int N, int K, int swizzle, int raster,
-            cudaStream_t stream) override {
+            cudaStream_t stream, float const* colscale = nullptr) override {
     auto args = G::make_args(reinterpret_cast<typename G::ElementA const*>(A), reinterpret_cast<typename G::ElementB const*>(B),
                              reinterpret_cast<typename G::ElementSF const*>(sfa), reinterpret_cast<typename G::ElementSF const*>(sfb),
-                             reinterpret_cast<typename G::ElementD*>(D), M, N, K, swizzle, raster);
+                             reinterpret_cast<typename G::ElementD*>(D), M, N, K, swizzle, raster, colscale);
     cutlass::Status st = gemm.can_implement(args);
     if (st != cutlass::Status::kSuccess) throw std::runtime_error(std::string("can_implement failed: ") + cutlassGetStatusString(st));
     size_t ws = Gemm::get_workspace_size(args);
@@ -147,6 +158,7 @@ struct BwHandleImpl : BwHandle {
   int stages() const override { return G::CollectiveMainloop::DispatchPolicy::Stages; }
   size_t smem_bytes() const override { return sizeof(typename G::GemmKernel::SharedStorage); }
   int sf_bytes() const override { return (int)sizeof(typename G::ElementSF); }
+  bool colscale_epi() const override { return G::ColScaleEpi; }
 };
 
 using BwSchedAuto = cutlass::gemm::KernelScheduleSm100Blockwise;
@@ -162,8 +174,11 @@ using EpiAuto = cutlass::epilogue::collective::EpilogueScheduleAuto;
 // load fragments in the promotion loop => lower register pressure).
 namespace thor {
 template <class Sched, int N> struct EpiTileN { using sched = Sched; using tile = cute::Shape<cute::_128, cute::Int<N>>; };
-template <class E> struct EpiTraits { using sched = E; using tile = cutlass::epilogue::collective::EpilogueTileAuto; };
-template <class S, int N> struct EpiTraits<EpiTileN<S, N>> { using sched = S; using tile = cute::Shape<cute::_128, cute::Int<N>>; };
+template <class E> struct EpiTraits { using sched = E; using tile = cutlass::epilogue::collective::EpilogueTileAuto; static constexpr bool colscale = false; };
+template <class S, int N> struct EpiTraits<EpiTileN<S, N>> { using sched = S; using tile = cute::Shape<cute::_128, cute::Int<N>>; static constexpr bool colscale = false; };
+template <class E> struct EpiSep { using inner = E; };   // wrap an epilogue tag: separable-scale variant (per-column scale in the epilogue)
+template <class E> struct EpiTraits<EpiSep<E>> { using sched = typename EpiTraits<E>::sched; using tile = typename EpiTraits<E>::tile; static constexpr bool colscale = true; };
+using Epi2SmSep = EpiSep<Epi2Sm>;
 using Epi2Sm16 = EpiTileN<Epi2Sm, 16>;   // comma-free aliases for the X-macro config list
 using Epi2Sm64 = EpiTileN<Epi2Sm, 64>;
 using Epi1Sm16 = EpiTileN<Epi1Sm, 16>;
@@ -172,6 +187,7 @@ using Epi1Sm16 = EpiTileN<Epi1Sm, 16>;
   thor::BwHandle* thor_bw_make_##DT##_##I() {                                                                                       \
     using G = thor::BlockwiseGemm<ELEM, ACC, cute::Shape<cute::Int<TM>, cute::Int<TN>, cute::Int<TK>>,                             \
                                   cute::Shape<cute::Int<CM>, cute::Int<CN>, cute::_1>, thor::SCHED,                                 \
-                                  typename thor::EpiTraits<thor::EPI>::sched, GM, GN, GK, typename thor::EpiTraits<thor::EPI>::tile>; \
+                                  typename thor::EpiTraits<thor::EPI>::sched, GM, GN, GK, typename thor::EpiTraits<thor::EPI>::tile,       \
+                                  thor::EpiTraits<thor::EPI>::colscale>;                                                                  \
     return new thor::BwHandleImpl<G>(DESC);                                                                                         \
   }
