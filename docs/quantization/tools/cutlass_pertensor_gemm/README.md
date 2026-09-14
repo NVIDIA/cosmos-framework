@@ -88,8 +88,8 @@ INT8/FP8 TFLOPS 比（20 个 case：4 形状 × M∈{901,1802,4096,16384,42240}�
 （cooperative 128x128x128 c1x2 / 128x256x128 c1x2 / 128x128x128 c2x1，pingpong 64x128x128 c1x2 / 64x256x128 c1x2；
 FP8 版用 `KernelTmaWarpSpecializedCooperativeFP8FastAccum`，与 cuBLASLt `use_fast_accum` 口径一致）。
 在 H100 机器上运行：容器内 `make -j10 CUTLASS=<cutlass> ARCH=90 CONFIGS="..."` 后
-`python3 bench.py --bin-dir build_sm90 --tag h100_<date>`。handoff 第 8 节记录的 H100 cuBLASLt INT8 只有 FP8 的 0.58～0.73×，
-这组二进制就是用来判定那是库的问题还是硬件上限。
+`python3 bench.py --bin-dir build_sm90 --tag h100_<date>`。handoff §9 已用独立的 SM90 kernel 证实 H100 上 INT8 = FP8 速率（cuBLASLt 慢是库落到 Ampere 时代 kernel）；
+这组二进制可作交叉验证。Thor（sm_110a）用 `make ARCH=110`。
 
 ## 已知问题
 

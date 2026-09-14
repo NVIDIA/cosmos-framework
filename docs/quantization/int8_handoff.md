@@ -17,6 +17,8 @@
 - **H100 真 kernel 实测（2026-09-13，第 8 节）**：现货 INT8 g64 kernel（SGLang Triton）只有 bf16 cuBLAS 的 0.4～0.56×、官方 per-tensor FP8 的 0.21～0.35×；INT8 g128 也只到 bf16 的 0.75～0.96×。
   连 cuBLASLt 的 per-tensor INT8 都只有 bf16 的 1.1～1.4×，低于 FP8 per-tensor 的 1.6～2.0×，"H100 上 INT8 = FP8 速率"的假设不成立。FP8 g128（DeepGEMM）达到 per-tensor FP8 的 0.91～1.03×，是 H100 上唯一兼得分组缩放与速度的现货路径。
 - **自写 CUTLASS SM90 INT8 kernel（2026-09-14，第 9 节）**：per-tensor INT8 达到 FP8 per-tensor 的 0.90～1.06×（cuBLASLt 慢是因为没有 Hopper INT8 kernel，不是硬件）；g128 分组缩放做进主循环后约 1000 TFLOPS = bf16 的 1.35×、per-tensor 的 0.70×，H100 上 INT8 分组量化首次拿到正收益。
+- **GB200 / Blackwell（2026-09-14，第 8.5/8.6/10 节）**：per-tensor INT8 = FP8 = 约 3.4 PTOPS（bf16 的 2 倍）；但 g128 分组缩放（无论 INT8/FP8、无论 W per-col 还是 128×128 块）
+  只有 1.1～1.6 PTOPS，不高于 bf16，是 Blackwell tensor core 与 CUDA core 吞吐比（约 64:1，Hopper 约 15:1）决定的结构性上限。Thor 同为 Blackwell 家族，按规格比值相同，结论预计适用（待实测）。
 - **尚未实测**：视频上的精度；PSNR 之外的指标；FP8 分组量化（g64/g128）的精度（第 6 节的 FP8 g64 异常未查）。
 
 ## 2. 推荐方案（S0 + Q4a）
@@ -240,7 +242,7 @@ CLI：`--quantization-sim-edges {gemm_out,residual,attn_qkv,attn_pv,und_kv}`、`
 - 同一 tile 下 INT8 与 FP8 的 CUTLASS kernel 同速（20 个 case 的 INT8/FP8 比 0.92～1.07，中位 1.00）；两者大方阵峰值都是约 3.4 PTOPS（名义 5 POPS 的 68%），bf16 约 1.6 PF。
 - 最好的 INT8 配置（256x256x128 或 256x128x128，集群 2x1）在 M ≥ 4096 为 cuBLASLt FP8 per-tensor 的 1.02～1.15×，M ≤ 1802 为 0.75～1.01×（N=1024 最差）；
   更小 tile、2x2/4x1 集群都无收益，小 M 需要 stream-K/split-K（SM100 stream-K 归约模式目前挂起，未解）。
-- GB200 上 cuBLASLt 有专门的 INT8 IMMA kernel（`_int_mm` 3.1～3.6 PTOPS，与其 FP8 相当或略高），所以 8.3 的 H100 结论（cuBLASLt INT8 = FP8 的 0.58～0.73×）
+- GB200 上 cuBLASLt 有专门的 INT8 IMMA kernel（`_int_mm` 3.1～3.6 PTOPS，与其 FP8 相当或略高）；H100 上 cuBLASLt INT8 只有 FP8 的 0.58～0.73× 是库落到 Ampere 时代 kernel 的问题，§9 已用自写 SM90 kernel 证实（per-tensor INT8 = FP8 的 0.90～1.06×）。
   应是 SM90 库 kernel 的问题而非硬件上限；同一源码 `make ARCH=90` 已能编出 sm_90a 二进制（cooperative / pingpong），待在 H100 上实测。
 
 #### q/o_proj 4096x4096（N×K）
@@ -435,3 +437,27 @@ K 从 4096 扫到 32768（输出大小不变）INT8 cuBLASLt 只从 848 升到 9
 - g64：collective 断言 `ScalePromotionInterval % 4 == 0`（g64 对应间隔 2，k32 wgmma × 2），需要改主循环的提升节奏（每 64-K 提升一次，FFMA 数翻倍）；survey 预估相对 g128 再降 10%～15%。
 - 性能调优：先在 g128 上试 cluster 2×1、stage 数、光栅顺序，目标是 DeepGEMM FP8 g128 的 1300 量级；小 M 补一个 64×128 pingpong 实例。
 - 激活侧：per-token-per-128 的 INT8 动态量化 Triton kernel 已在 int8_bench（约 11 µs @ 901×4096），与本 kernel 的 `[K/128, M]` scale 布局直接对接。
+
+## 10. 跨架构总结：INT8 GEMM 在 H100 / GB200 / Thor 上的位置（2026-09-14，给 Blackwell 平台同事）
+
+全部数字为 GEMM-only、冲 L2、中位数；"per-tensor" 泛指 scale 在 epilogue 一次性施加的路径（含 per-token×per-channel），"g128" 指 scale 沿 K 每 128 元素变化、必须在主循环内逐 K-tile 提升的路径。
+
+| | H100 SXM（sm_90a，§8/§9） | GB200（sm_100a，§8.5/§8.6） | Thor（sm_110a，Blackwell 家族） |
+| --- | --- | --- | --- |
+| bf16 cuBLAS | 0.67～0.77 PF | 1.4～1.8 PF | 未测 |
+| per-tensor FP8 | 1.1～1.46 PF（cuBLASLt） | 3.0～3.4 PF（cuBLASLt / CUTLASS） | 未测 |
+| per-tensor INT8 | 自写 CUTLASS SM90 = FP8 的 0.90～1.06×；cuBLASLt 只有 0.6～0.7×（落到 Ampere 时代 kernel） | CUTLASS = FP8 的 0.92～1.07×，3.4 PTOPS；cuBLASLt `_int_mm` 亦达 3.1～3.6 | CUTLASS INT8 tcgen05 在 sm_110a 开启，同一源码 `make ARCH=110` |
+| g128 INT8（W 128×128 块） | 约 1000 TFLOPS = bf16 的 1.35×、per-tensor 的 0.70× | 1.3～1.6 PTOPS = bf16 的 0.9～1.0×、per-tensor 的 0.45× | 预计同 GB200（见下） |
+| g128 INT8（W per-col 1×128，S0 布局） | 未做（寄存器预算，128×128 tile 之外需另设计） | 1.1～1.3 PTOPS = bf16 的 0.7～0.85×、per-tensor 的 0.36～0.43× | 预计同 GB200 |
+| g128 FP8 | DeepGEMM = per-tensor 的 0.91～1.03× | 块 1.5～1.9 / per-col 1.2～1.5 PTOPS，同样在 bf16 附近 | — |
+| 结论 | INT8 g128 有正收益，g64 待做（§9.3） | g128 不是速度方案；只有 per-tensor 级缩放能吃到 INT8 速率 | 需实测，但结构相同 |
+
+原因（详见 §8.6）：软件 block-scaling 每个输出元素每 128-K 要在 CUDA core 上做 1（块）～2（per-col）次 FP32 运算；tensor core 与 CUDA core 的吞吐比 Hopper 约 15:1、GB200 约 64:1
+（8192 MAC/clk/SM 对 128 FMA/clk/SM），所以同一段提升代码在 Hopper 上只占 MMA 时间的约 20%，在 Blackwell 上 ≥ 100%，MMA 只能等它。Blackwell 的硬件答案是 MXFP8/NVFP4 的块缩放 MMA（32 元素 UE8M0 scale），INT8 没有对应指令。
+Thor：公开规格 2560 CUDA core、稠密 INT8 517 TOPS，比值同样约 64:1，因此预计与 GB200 同一结论；`docs/quantization/tools/cutlass_pertensor_gemm/` 与 `cutlass_g128_gemm/` 两个工具
+都可用 `make ARCH=110` 编 sm_110a 二进制在 Thor 上直接重跑（本集群无 Thor，只做了 sm_110a 编译检查）。
+
+对 Blackwell 平台（GB200 / Thor）的选择：
+1. 要速度：per-token×per-channel（epilogue 缩放）INT8，3.4 PTOPS 级、bf16 的 2 倍；精度需要在模拟器里对 S0（g64/g128）重新评估。
+2. 要保 g128 精度：接受 ≈bf16 的速度（不划算），或改可分离权重 scale s_w[n,g]=s_w[n]·c[g]（§3.6 已列、精度未测），把 per-col 成本降到块缩放档（仍 ≈bf16）。
+3. FP8 路线可以用硬件 MXFP8（32 元素块缩放 MMA），INT8 没有等价物。

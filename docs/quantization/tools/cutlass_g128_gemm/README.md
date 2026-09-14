@@ -92,4 +92,5 @@ A[M,K] int8 行主；SFA fp32 [M, K/128]      W[N,K] int8 行主；SFB fp32 [N/S
 - M 需为 4 的倍数（MN-major SFA 的 16B cp.async）；改用 K-major scale 布局（`Sm100BlockwiseScaleConfig<1,SFN,128,Major::K,Major::K>`）可去掉 pad 且直接吃 torch 的 `[M,K/128]` 布局，未做。
 - 校验是采样 + 1.5e-2 容差（bf16 ULP 级），不是逐位；bit-exact 参考需按 kernel 的 FMUL→FFMA、K 顺序模拟。
 - shadow 头文件靠 -I 顺序生效；CUTLASS 升级会静默回退到错误的 int32 scale 运算，需重打 patch 并重跑校验。array（grouped）变体未打补丁。
-- INT8 tcgen05 只在 sm_100a/101a/110a 开启（GB300 sm_103a 没有）。
+- INT8 tcgen05 只在 sm_100a/101a/110a 开启（GB300 sm_103a 没有）。Thor（sm_110a）用 `make ARCH=110 ...` 编译；本集群无 Thor，只做了编译检查（`run_compile_check_sm110.sbatch`）。
+- H100 上的对应工作（SM90 collective 的 INT8 移植，W 128×128 块，约 1000 TFLOPS）见 handoff §9 与 `tools/cutlass_int8_sm90/`。
