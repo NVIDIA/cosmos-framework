@@ -84,8 +84,10 @@ A[M,K] int8 行主；SFA fp32 [M, K/128]      W[N,K] int8 行主；SFB fp32 [N/S
 - GB200 tensor core : CUDA core 吞吐比约 64:1（8192 MAC/clk vs 128 FMA/clk）。每个输出元素每 128-K 至少 1 FFMA（blockwise，scale 乘积可按行复用）或 FMUL+FFMA（per-col），
   在 128×128 CTA tile 上 = 128～256 条 warp 指令/线程 ≈ 256～512 clk，等于或超过该 K-tile 的 MMA 时间（256 clk）。软件 block-scaling 的上限因此约为 per-tensor 的 50%（blockwise）/33%（per-col），
   实测 45% / 36%。Hopper 上这个比值是 ~15:1，所以 DeepGEMM 在 H100 能贴近 per-tensor（H100 报告 0.91～1.03×）。Blackwell 对此的硬件答案是 MXFP8/NVFP4 的块缩放 MMA（32 元素 UE8M0 scale），INT8 没有对应指令。
-- 要在 GB200 上既保 g128 精度又要速度，必须把逐元素提升从 CUDA core 里拿掉，例如：权重 scale 可分离 s_w[n,g]=s_w[n]·c[g]（c[g] 折进激活 scale，per-col 退化为 blockwise 成本 1.3～1.6 PF，精度未测，handoff §3.6 已列）；
-  或 per-token × per-channel 的 epilogue 缩放（3.3 PTOPS，即 per-tensor 路径，精度是 S0 之外的另一档）。
+- 本目录的实现是 4 个提升 warp、256×128 tile、g128。Thor 侧（`tools/cutlass_int8_sm110/`，handoff §11.2）在同一 collective 补丁上又做了三件事，GB200 上尚未试：
+  第二个提升 warpgroup（warp 8-11）+ 256×256 tile（W 块 g128 到 cuBLASLt FP8 per-tensor 的 0.97×）、g256 per-col（提升次数减半，追平 FP8 pt）、TMEM 预偏置去 I2F。
+  所以"GB200 上 g128 ≈ bf16"是本实现的结论，不是 Blackwell 的上限；下一步应把 `cutlass_int8_sm110` 以 `ARCH=sm_100a` 编译重跑 §8.6 的形状。
+- 精度侧（handoff §3.9）：可分离 s_w[n]·c[g]（`ls_noclip`）的 e2e PSNR 与 per-col g128 在噪声内持平、远好于 128×128 块；逐列 g256 比 g128 掉约 0.5 dB。
 
 
 ## 已知限制 / 待办
