@@ -193,12 +193,17 @@ struct CollectiveMma<
   // then acc = fma(t, sb, acc). Two FFMA per element instead of I2F + FMUL + FFMA. Only for integer accumulators with per-column
   // weight scales (the W-block path gains nothing: its I2F already overlaps the FFMA).
 #if defined(G128_OPT_BIAS)
+#if !defined(G128_OPT_PIPE2)
+#error "G128_OPT_BIAS requires G128_OPT_PIPE2: the bias-aware promotion (register bias add, fma(fb, sa, -1.5*2^23*sa)) exists only in the PIPE2 branch of accum()"
+#endif
   static constexpr bool UseBias = cute::is_same_v<ElementAccumulator, int32_t> && ScaleGranularityN == 1;
 #else
   static constexpr bool UseBias = false;
 #endif
   static constexpr int32_t BiasBits = 0x4B400000;
   static constexpr float   BiasF    = 12582912.f;
+  // 1.5*2^23 + x must stay in [2^23, 2^24) for the bit pattern to equal the float value: |x| <= GK * 128 * 128 <= 2^22 -> GK <= 256.
+  static_assert(!UseBias || ScaleGranularityK <= 256, "TMEM bias trick needs a K group of at most 256 int8 products");
   using GmemTiledCopyA = cute::remove_cvref_t<decltype(get<0>(GmemTiledCopyPairA_{}))>;
   using GmemTiledCopySFA = cute::remove_cvref_t<decltype(get<1>(GmemTiledCopyPairA_{}))>;
   using GmemTiledCopyB = cute::remove_cvref_t<decltype(get<0>(GmemTiledCopyPairB_{}))>;

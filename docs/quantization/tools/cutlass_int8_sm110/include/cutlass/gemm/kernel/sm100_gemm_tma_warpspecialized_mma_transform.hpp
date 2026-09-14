@@ -580,8 +580,10 @@ public:
 
     // Sync allocation status between MMA and epilogue warps within CTA
     arch::NamedBarrier tmem_allocation_result_barrier(NumMMAThreads + NumAccumWarpGroups * NumEpilogueThreads, cutlass::arch::ReservedNamedBarriers::TmemAllocBarrier);
-    constexpr uint32_t HandoffBarrierA = static_cast<uint32_t>(cutlass::arch::ReservedNamedBarriers::FirstUserBarrier);      // both groups done reading the last stage
-    constexpr uint32_t HandoffBarrierB = static_cast<uint32_t>(cutlass::arch::ReservedNamedBarriers::FirstUserBarrier) + 1;  // accum2's half stored to TMEM
+    // NamedBarrier::sync/arrive(uint32_t) add ReservedNamedBarrierCount (8) themselves, so pass user-relative ids: hardware ids 8 / 9.
+    // (Review 2026-09-14: FirstUserBarrier + 0/1 here resolved to 16/17, outside the legal 0..15 range.)
+    constexpr uint32_t HandoffBarrierA = 0;   // both groups done reading the last stage
+    constexpr uint32_t HandoffBarrierB = 1;   // accum2's half stored to TMEM
     constexpr uint32_t HandoffBarrierC = static_cast<uint32_t>(cutlass::arch::ReservedNamedBarriers::FirstUserBarrier) + 2;  // epilogue group has read accum2's half (bias re-arm)
     // Sync deallocation status between MMA warps of peer CTAs
     arch::ClusterBarrier& tmem_deallocation_result_barrier = shared_storage.pipelines.tmem_dealloc;
