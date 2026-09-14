@@ -438,6 +438,21 @@ Weights of 2-9 MB stay L2-resident, so the GEMM is compute/promotion bound, and 
 512x1536 is launch/tail dominated (use per-tensor or fuse into QKV). 256x128 tiles do not help here. The biggest lever for this
 model size is fusing QKV / gate+up into one GEMM (N = 4608 / 12288), which fixes both the tail waves and the promotion/MMA ratio.
 
+### Fused-GEMM shapes (QKV and gate+up as one GEMM; `results/g128_summary_fused_*.md`)
+
+Same conditions, M = 904 / 1520 / 1804, time ratios of the 8-warp 256x256 kernels:
+
+| N x K | INT8 g128 W-block vs bf16 | vs cuBLASLt FP8 pt | INT8 g128 per-col vs bf16 | vs cuBLASLt FP8 pt |
+| --- | --- | --- | --- | --- |
+| 6144x4096 (QKV, hidden 4096) | 1.30 / 1.68 / 1.56 | 0.74 / 0.87 / 0.90 | 0.90 / 1.16 / 1.08 | 0.51 / 0.60 / 0.62 |
+| 24576x4096 (gate+up, hidden 4096) | 1.66 / 1.89 / 1.74 | 0.93 / **1.22** / 0.96 | 1.15 / 1.30 / 1.20 | 0.64 / 0.84 / 0.66 |
+| 4608x1536 (QKV, hidden 1536) | 1.07 / 1.37 / 1.28 | 0.66 / 0.78 / 0.79 | 0.79 / 1.06 / 0.96 | 0.48 / 0.60 / 0.59 |
+| 12288x1536 (gate+up, hidden 1536) | 1.30 / 1.53 / 1.57 | 0.89 / 0.90 / 0.90 | 1.01 / 1.17 / 1.18 | 0.69 / 0.68 / 0.67 |
+
+Fusing the projections is the model-side lever: it removes the small-N shapes where the g128 kernels lose to bf16 (1024x4096,
+512x1536) and moves the work into the wide-N regime where W-block g128 is 1.3-1.9x bf16 and reaches / exceeds cuBLASLt FP8
+per-tensor on the widest shape (24576x4096: 242 TFLOPS vs 199), and per-col g128 is 1.0-1.3x bf16.
+
 ## Continuing on another machine (state as of 2026-09-14 evening)
 
 Everything needed is in this directory plus a CUTLASS checkout; nothing depends on the Thor box's home directory.

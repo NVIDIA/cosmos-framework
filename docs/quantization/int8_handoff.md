@@ -501,6 +501,8 @@ INT8 per-tensor 的 0.70×；INT8 g128 per-col 133/159/146（bf16 的 1.12～1.1
 1024×4096 上 W 块 1.04～1.08× bf16。同条件表：`results/g128_summary_20260914_114605.md`，目标形状表 `results/g128_8warp_targets_20260914.txt`。
 hidden_size=1536 的形状（1536×1536 / 6144×1536 / 1536×6144 / 512×1536）：权重全在 L2、tile 数少，W 块 g128 对 bf16 为 0.95～1.42×（MLP 1.1～1.4×）、对 cuBLASLt FP8 per-tensor 0.58～0.83×，
 per-col 与 bf16 持平或更慢；这一档最值钱的是 QKV / gate-up 合并成一次 GEMM。表：`results/g128_summary_h1536_*.md`。
+合并 GEMM 形状（QKV 6144×4096、gate+up 24576×4096；1536 档 4608×1536、12288×1536）：W 块 g128 对 bf16 1.07～1.89×、对 cuBLASLt FP8 per-tensor 0.66～1.22×（24576×4096 M=1520 达 1.22×）；
+per-col g128 对 bf16 0.79～1.30×——合并投影是让 INT8 g128 在所有层都快于 bf16 的模型侧手段。表：`results/g128_summary_fused_*.md`。
 接续说明（另一台机器如何编译/运行/未完事项）见 `tools/cutlass_int8_sm110/README.md` 末节。
 
 ### 11.3 下一步
