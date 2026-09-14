@@ -3,6 +3,7 @@
 日期：2026-09-12。工作机：GB300 工作站 `pmgb300ws-0083`（单卡 GB300，sm_103，aarch64）。
 代码：分支 `pzeren/int8-sim-group-quant`（GitHub 上已含全部代码提交：`493b0a1` GEMM 模拟 + CLI，`369427a` attention 模拟器、teacher forcing、int8_speed；其后均为 docs 提交）。
 2026-09-13 补充：第 8 节为 H100 真 kernel GEMM 基准结果（aws-iad-cs-002，`users/pzeren/int8_bench`）；8.5 为 GB200 上 CUTLASS per-tensor INT8/FP8/bf16 绝对吞吐补测；8.6 为 GB200 上 INT8 g128（per-col）真 kernel 的结果与结构性结论。
+2026-09-14 补充：第 11 节为 Thor（sm_110a）上 per-tensor INT8 对齐 FP8 与功耗限流的结论（代码与数据在 `docs/quantization/tools/cutlass_int8_sm110/`）。
 运行笔记（含所有中间数字）：`~/gb300/COSMOS_SETUP.md`。产物在 `~/gb300/outputs`（软链到 NVMe `/var/tmp/pzeren_workdir/outputs`）。
 
 ---
@@ -461,3 +462,23 @@ Thor：公开规格 2560 CUDA core、稠密 INT8 517 TOPS，比值同样约 64:1
 1. 要速度：per-token×per-channel（epilogue 缩放）INT8，3.4 PTOPS 级、bf16 的 2 倍；精度需要在模拟器里对 S0（g64/g128）重新评估。
 2. 要保 g128 精度：接受 ≈bf16 的速度（不划算），或改可分离权重 scale s_w[n,g]=s_w[n]·c[g]（§3.6 已列、精度未测），把 per-col 成本降到块缩放档（仍 ≈bf16）。
 3. FP8 路线可以用硬件 MXFP8（32 元素块缩放 MMA），INT8 没有等价物。
+
+## 11. Thor（Jetson AGX Thor，sm_110a）实测：per-tensor INT8 对齐 FP8 + 功耗结论（2026-09-14）
+
+第 10 节对 Thor 的预测（"需实测，但结构相同"）在此实测。代码与全部原始数据：`docs/quantization/tools/cutlass_int8_sm110/`（README 为完整报告）。纯 CUDA C++（无 torch 依赖），CUTLASS 4.8 `70_blackwell_fp8_gemm.cu` 为模板，
+同一个模板实例化 FP8（e4m3，fp32 累加）和 INT8（s8，int32 累加），epilogue 用 EVT 融合 `sa*sb` 输出 bf16；cuBLASLt 基线（bf16 / FP8 per-tensor / INT8 s32 输出）、
+带宽微基准、功耗探针脚本。机器：20 SM、L2 32 MB、DRAM 235 GB/s、默认 120W 模式 GPU 上限 1386 MHz（MAXN 1575）。目标形状按要求只保留 q/o（4096×4096）和 k/v（1024×4096），
+M ∈ {901, 1517, 1802, 4096}；MLP 形状与视频级 M 只有部分数据（`results/full_v1_*`）。
+
+### 11.1 结论
+- **per-tensor INT8 已对齐 FP8**：同结构（2SM 256×256×128 tcgen05、cluster 2×1、CLC 调度）下 INT8 ≥ FP8；生产状态（激活热、权重冷、持续运行）q/o_proj 上 INT8 = 同结构 FP8 的 1.44～1.58×、
+  cuBLASLt FP8 的 1.19～1.30×、cuBLASLt bf16 的 2.0～2.45×（M=901/1517/1802：110/158/209 µs）。k/v_proj 是纯权重流（4 MB），INT8 = FP8，两者为 cuBLASLt FP8 的 0.79～0.88×（16～64 个 tile 的尾波，stream-K 待做）。
+- **FP8 MMA 在 Thor 上受功耗限流，INT8 基本不受**：GPU 电源轨上限约 99 W（root tegrastats VDD_GPU 实测），时钟锁死 1575 MHz 时依然如此；全零输入两者都 ~390 TOPS，真实数据 FP8 217 / INT8 345；
+  限流约 0.5 s 后触发（逐次迭代时间序列）。**同功耗下 INT8 每次 GEMM 少 35～40% 能量（算力受限），或同时间下低 18～29% 功率（内存受限）**；不是"功耗低 30%"。
+- Thor 特性：cluster 大小 ≤ 2 才能用满 20 SM（4-CTA cluster 只驻留 4 个）；L2→SMEM 约 1.5 TB/s 决定要用最大 tile；权重 > L2 时必须开 raster swizzle（MLP 形状 3×），权重 ≤ 16 MB 时关掉；
+  FP8 基准必须 ≥ 1.5 s 持续预热，且不能在迭代间冲 L2（1 ms 空隙让限流恢复，会得到"FP8 = INT8"的假象）。
+- cuBLASLt INT8 没有带 scale 的 bf16 epilogue，int32 输出 + 单独 rescale 只有 cuBLASLt FP8 的 0.62～0.76×；与 H100 一样，INT8 可用的前提是自写融合 epilogue 的 kernel。
+
+### 11.2 下一步
+per-row × per-col scale 的 EVT 变体和 torch 扩展绑定接入 cosmos-framework；g64/g128 blockwise INT8 移植到 SM100 blockwise collective（builder 接受 int8 但 scale 类型绑成 int32 累加器，需和 SM90 移植同样解耦）；
+k/v_proj 小 M 的 stream-K；QKV / gate-up 融合 GEMM 摊薄权重流。

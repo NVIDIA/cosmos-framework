@@ -1,0 +1,65 @@
+[4096x4096 M=901] clk=1386 MHz  cublaslt/bf16=113.6  cublaslt/fp8=230.8  cublaslt/int8=215.0  cublaslt/int8+rescale=172.8  cutlass/fp8/c3/s1=264.0  cutlass/int8/c3/s1=274.0
+[4096x4096 M=1517] clk=1386 MHz  cublaslt/bf16=131.7  cublaslt/fp8=249.4  cublaslt/int8=278.0  cublaslt/int8+rescale=163.6  cutlass/fp8/c3/s1=203.8  cutlass/int8/c3/s1=323.0
+[4096x4096 M=1802] clk=1386 MHz  cublaslt/bf16=136.7  cublaslt/fp8=237.4  cublaslt/int8=275.3  cublaslt/int8+rescale=156.2  cutlass/fp8/c3/s1=186.8  cutlass/int8/c3/s1=289.5
+[4096x4096 M=4096] clk=1386 MHz  cublaslt/bf16=148.4  cublaslt/fp8=243.0  cublaslt/int8=263.8  cublaslt/int8+rescale=151.2  cutlass/fp8/c3/s1=204.0  cutlass/int8/c3/s1=294.3
+[1024x4096 M=901] clk=1386 MHz  cublaslt/bf16=142.3  cublaslt/fp8=246.5  cublaslt/int8=194.4  cublaslt/int8+rescale=160.7  cutlass/fp8/c3/s1=205.3  cutlass/int8/c3/s1=205.4
+[1024x4096 M=1517] clk=1386 MHz  cublaslt/bf16=159.6  cublaslt/fp8=282.4  cublaslt/int8=238.4  cublaslt/int8+rescale=197.4  cutlass/fp8/c3/s1=248.9  cutlass/int8/c3/s1=248.5
+[1024x4096 M=1802] clk=1386 MHz  cublaslt/bf16=171.7  cublaslt/fp8=295.3  cublaslt/int8=224.2  cublaslt/int8+rescale=185.1  cutlass/fp8/c3/s1=231.6  cutlass/int8/c3/s1=232.2
+[1024x4096 M=4096] clk=1386 MHz  cublaslt/bf16=137.6  cublaslt/fp8=220.9  cublaslt/int8=212.5  cublaslt/int8+rescale=167.0  cutlass/fp8/c3/s1=191.2  cutlass/int8/c3/s1=302.5
+# full run 20260914_084644
+
+iters=50 warmup=10 warmup_ms=1500 flush_L2=0 nw=8 dist=normal -> activations hot, weights cold (8 rotating weight copies); cell = TFLOPS (median us); GPU clock sampled after each cell in the CSV.
+
+| N x K | M | cublaslt bf16 | cublaslt fp8 | cublaslt int8 | cublaslt int8+rescale | cutlass fp8 cfg3 swz1 | cutlass int8 cfg3 swz1 |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| 4096x4096 | 901 | 114 (266) | 231 (131) | 215 (141) | 173 (175) | 264 (115) | 274 (110) |
+| 4096x4096 | 1517 | 132 (387) | 249 (204) | 278 (183) | 164 (311) | 204 (250) | 323 (158) |
+| 4096x4096 | 1802 | 137 (442) | 237 (255) | 275 (220) | 156 (387) | 187 (324) | 290 (209) |
+| 4096x4096 | 4096 | 148 (926) | 243 (566) | 264 (521) | 151 (909) | 204 (674) | 294 (467) |
+| 1024x4096 | 901 | 142 (53) | 246 (31) | 194 (39) | 161 (47) | 205 (37) | 205 (37) |
+| 1024x4096 | 1517 | 160 (80) | 282 (45) | 238 (53) | 197 (64) | 249 (51) | 248 (51) |
+| 1024x4096 | 1802 | 172 (88) | 295 (51) | 224 (67) | 185 (82) | 232 (65) | 232 (65) |
+| 1024x4096 | 4096 | 138 (250) | 221 (156) | 212 (162) | 167 (206) | 191 (180) | 302 (114) |
+
+## Summary: best CUTLASS per dtype vs cuBLASLt (TFLOPS = 2MNK / median time; INT8 counted as TFLOPS)
+
+| N x K | M | cuBLASLt bf16 | cuBLASLt FP8 pt | cuBLASLt INT8 (s32 out) | cuBLASLt INT8+rescale | CUTLASS FP8 pt (cfg/swz) | CUTLASS INT8 pt (cfg/swz) | INT8/FP8 (CUTLASS) | INT8/cuBLASLt FP8 | INT8/bf16 |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| 4096x4096 | 901 | 114 (266 us) | 231 (131 us) | 215 (141 us) | 173 (175 us) | 264 (115 us; c3/s1) | 274 (110 us; c3/s1) | 1.04 | 1.19 | 2.41 |
+| 4096x4096 | 1517 | 132 (387 us) | 249 (204 us) | 278 (183 us) | 164 (311 us) | 204 (250 us; c3/s1) | 323 (158 us; c3/s1) | 1.58 | 1.30 | 2.45 |
+| 4096x4096 | 1802 | 137 (442 us) | 237 (255 us) | 275 (220 us) | 156 (387 us) | 187 (324 us; c3/s1) | 290 (209 us; c3/s1) | 1.55 | 1.22 | 2.12 |
+| 4096x4096 | 4096 | 148 (926 us) | 243 (566 us) | 264 (521 us) | 151 (909 us) | 204 (674 us; c3/s1) | 294 (467 us; c3/s1) | 1.44 | 1.21 | 1.98 |
+| 1024x4096 | 901 | 142 (53 us) | 246 (31 us) | 194 (39 us) | 161 (47 us) | 205 (37 us; c3/s1) | 205 (37 us; c3/s1) | 1.00 | 0.83 | 1.44 |
+| 1024x4096 | 1517 | 160 (80 us) | 282 (45 us) | 238 (53 us) | 197 (64 us) | 249 (51 us; c3/s1) | 248 (51 us; c3/s1) | 1.00 | 0.88 | 1.56 |
+| 1024x4096 | 1802 | 172 (88 us) | 295 (51 us) | 224 (67 us) | 185 (82 us) | 232 (65 us; c3/s1) | 232 (65 us; c3/s1) | 1.00 | 0.79 | 1.35 |
+| 1024x4096 | 4096 | 138 (250 us) | 221 (156 us) | 212 (162 us) | 167 (206 us) | 191 (180 us; c3/s1) | 302 (114 us; c3/s1) | 1.58 | 1.37 | 2.20 |
+
+## CUTLASS fp8: best cfg per case
+
+| N x K | M | best cfg | swizzle | TFLOPS | desc |
+|---|---:|---:|---:|---:|---|
+| 4096x4096 | 901 | 3 | 1 | 264 | 2SM 256x256x128 cluster2x1x1 |
+| 4096x4096 | 1517 | 3 | 1 | 204 | 2SM 256x256x128 cluster2x1x1 |
+| 4096x4096 | 1802 | 3 | 1 | 187 | 2SM 256x256x128 cluster2x1x1 |
+| 4096x4096 | 4096 | 3 | 1 | 204 | 2SM 256x256x128 cluster2x1x1 |
+| 1024x4096 | 901 | 3 | 1 | 205 | 2SM 256x256x128 cluster2x1x1 |
+| 1024x4096 | 1517 | 3 | 1 | 249 | 2SM 256x256x128 cluster2x1x1 |
+| 1024x4096 | 1802 | 3 | 1 | 232 | 2SM 256x256x128 cluster2x1x1 |
+| 1024x4096 | 4096 | 3 | 1 | 191 | 2SM 256x256x128 cluster2x1x1 |
+
+## CUTLASS int8: best cfg per case
+
+| N x K | M | best cfg | swizzle | TFLOPS | desc |
+|---|---:|---:|---:|---:|---|
+| 4096x4096 | 901 | 3 | 1 | 274 | 2SM 256x256x128 cluster2x1x1 |
+| 4096x4096 | 1517 | 3 | 1 | 323 | 2SM 256x256x128 cluster2x1x1 |
+| 4096x4096 | 1802 | 3 | 1 | 290 | 2SM 256x256x128 cluster2x1x1 |
+| 4096x4096 | 4096 | 3 | 1 | 294 | 2SM 256x256x128 cluster2x1x1 |
+| 1024x4096 | 901 | 3 | 1 | 205 | 2SM 256x256x128 cluster2x1x1 |
+| 1024x4096 | 1517 | 3 | 1 | 248 | 2SM 256x256x128 cluster2x1x1 |
+| 1024x4096 | 1802 | 3 | 1 | 232 | 2SM 256x256x128 cluster2x1x1 |
+| 1024x4096 | 4096 | 3 | 1 | 302 | 2SM 256x256x128 cluster2x1x1 |
+
+wrote /home/pzeren/thor/cosmos-framework/docs/quantization/tools/cutlass_int8_sm110/results/full_modeB_sustained_20260914_084644.csv
+      /home/pzeren/thor/cosmos-framework/docs/quantization/tools/cutlass_int8_sm110/results/full_modeB_sustained_20260914_084644.md
+      /home/pzeren/thor/cosmos-framework/docs/quantization/tools/cutlass_int8_sm110/results/full_modeB_sustained_20260914_084644.log
