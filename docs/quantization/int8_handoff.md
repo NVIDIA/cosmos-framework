@@ -1,9 +1,8 @@
 # Cosmos3-Nano INT8 量化：结论与实验交接（handoff）
 
 日期：2026-09-12。工作机：GB300 工作站 `pmgb300ws-0083`（单卡 GB300，sm_103，aarch64）。
-代码：`~/cosmos-framework`，分支 `pzeren/int8-sim-group-quant`，最新提交 `369427a`
-（上一提交 `493b0a1` 已推到 GitHub；`369427a` 是本地提交，含 attention 模拟器、teacher forcing 工具和全部 CLI 接线，
-推送命令：`cd ~/cosmos-framework && git push origin pzeren/int8-sim-group-quant`）。
+代码：分支 `pzeren/int8-sim-group-quant`（GitHub 上已含全部代码提交：`493b0a1` GEMM 模拟 + CLI，`369427a` attention 模拟器、teacher forcing、int8_speed；其后均为 docs 提交）。
+2026-09-13 补充：第 8 节为 H100 真 kernel GEMM 基准结果（aws-iad-cs-002，`users/pzeren/int8_bench`）。
 运行笔记（含所有中间数字）：`~/gb300/COSMOS_SETUP.md`。产物在 `~/gb300/outputs`（软链到 NVMe `/var/tmp/pzeren_workdir/outputs`）。
 
 ---
@@ -15,7 +14,9 @@
 - **速度**：GEMM 部分与官方 per-tensor FP8 同一 MMA 速率（INT8 = FP8 的平台：H100、GB200、Thor、Ada、RTX PRO；A100 只有 INT8），
   额外多出 Q·Kᵀ INT8（t2i 约 +4%，t2v 约 +12%）和可进 CUDA graph 的普通模块路径（官方 FP8 的 torchao subclass 路径在 t2i 上比 bf16 还慢 15%）。
   **GB300 / Rubin 把 INT8 tensor core 砍了约 30 倍，这套方案在这两代上不成立**（本机 `torch._int_mm` 实测 75 TOPS，bf16 1.8 PF，FP8 3.4 PF）。
-- **尚未实测**：INT8 全速机器上的真 kernel 速度；视频上的精度；PSNR 之外的指标。
+- **H100 真 kernel 实测（2026-09-13，第 8 节）**：现货 INT8 g64 kernel（SGLang Triton）只有 bf16 cuBLAS 的 0.4～0.56×、官方 per-tensor FP8 的 0.21～0.35×；INT8 g128 也只到 bf16 的 0.75～0.96×。
+  连 cuBLASLt 的 per-tensor INT8 都只有 bf16 的 1.1～1.4×，低于 FP8 per-tensor 的 1.6～2.0×，"H100 上 INT8 = FP8 速率"的假设不成立。FP8 g128（DeepGEMM）达到 per-tensor FP8 的 0.91～1.03×，是 H100 上唯一兼得分组缩放与速度的现货路径。
+- **尚未实测**：视频上的精度；PSNR 之外的指标；FP8 分组量化（g64/g128）的精度（第 6 节的 FP8 g64 异常未查）。
 
 ## 2. 推荐方案（S0 + Q4a）
 
@@ -154,7 +155,7 @@ CLI：`--quantization-sim-edges {gemm_out,residual,attn_qkv,attn_pv,und_kv}`、`
 `~/gb300/tools/ref/`：SGLang / vLLM / lmdeploy / TensorRT-LLM / ModelOpt / DeepGEMM 的相关源码副本，cuDNN g64 建图探针 `cudnn_probes/`。
 
 ## 5. 到 INT8 全速机器上要做的事（建议顺序）
-1. **GEMM 真 kernel**：SGLang block-INT8 Triton kernel（group_n=1, group_k=64）对 cuBLAS bf16、per-tensor FP8 在 7 个模型形状 × M∈{901, 4096, 42240} 上计时；有条件再上 CUTLASS SM90 blockwise（需把 K 粒度 128 的约束改成 64，或接受 128）。目标：确认 INT8 g64 与 per-tensor FP8 的差距在 10% 以内。
+1. ~~**GEMM 真 kernel**~~ **已完成（2026-09-13，第 8 节）**：结论是差距不在 10% 以内，而是 INT8 g64 慢 2.8～4.8×；CUTLASS SM90 blockwise 未做，因为 cuBLASLt per-tensor INT8 本身就低于 FP8 per-tensor，INT8 分组路线在 H100 上没有速度上限支撑。
 2. **Attention 真 kernel**：SageAttention v1 Triton kernel 改 per-token scale，量化 kernel 里加 K/Q 去均值、平衡、Hadamard；对 FA2/FA3 bf16 计时；用 teacher forcing 验证 kernel 输出与模拟一致。
 3. **e2e**：S0 + Q4a 的真 kernel 路径开 CUDA graphs，对 bf16 和官方 FP8 计时（t2i 和 t2v）。
 4. **视频精度**：在 t2v 上重复 teacher forcing + 若干视频的逐帧 PSNR（模拟器已支持长序列：V-only/QK-only 走融合 kernel，P 量化才走稠密参考）。
@@ -181,3 +182,47 @@ CLI：`--quantization-sim-edges {gemm_out,residual,attn_qkv,attn_pv,und_kv}`、`
 - **精度上 g128 的代价已量过**（3.4 节）：t2i 比 g64 低约 1 dB、最差图低 3 dB、保住张数相同；policy 无差别。
 - **建议路径**：目标机上先用 SGLang Triton INT8 g128（小时级接入、有调优配置）拿到相对 per-tensor FP8/INT8 的真实速度；要逼近 per-tensor 速率则 fork CUTLASS
   SM90 blockwise 改 INT8（int32 临时累加器 + fp32 主累加器），g64 与 g128 工作量相近（2～3 人周）。GB300 上用 CUTLASS SM100 FP8 blockwise <1,1,64> 做孪生。
+
+## 8. H100 真 kernel GEMM 基准（2026-09-13）
+
+机器：aws-iad-cs-002 节点 pool0-0977，1× H100 SXM 80GB HBM3，驱动 575.57 + CUDA 13.0 前向兼容 libcuda 580；容器 imaginaire4_v12.1.0（torch 2.13.0a0 nv26.07 / CUDA 13.3 / Triton 3.7.1）。
+基准代码与全部数据：`/lustre/fsw/portfolios/cosmos/projects/cosmos_base_training/users/pzeren/int8_bench/`（`results/bench_final.{json,md}` 400 行原始数据、`results/tuned_configs.json`、`results/probe_report.md`）；
+完整中文报告已随本提交放入 `docs/quantization/h100_gemm_bench_2026-09-13.md`。
+
+### 8.1 方法
+- GEMM：Y[M,N] = A[M,K]·W[N,K]ᵀ，bf16 输出。形状 = Nano gen 塔 4 个唯一形状（q/o 4096×4096、k/v 1024×4096、gate/up 12288×4096、down 4096×12288），M ∈ {901, 1802, 4096, 16384, 42240}。
+- 计时统一用 `triton.testing.do_bench` 中位数（每次重复前冲掉 L2，warmup 25 ms / rep 100 ms），对所有 kernel 一致；每行记录 nvidia-smi 时钟。
+- 正确性：每个 kernel 的输出对**同一组量化后操作数**的 fp64 精确参考 Y = Σ_g s_a s_w (qa·qw) 比较，400 行全部通过（非 fast-accum 路径 rel-L2 1.65e-3～1.70e-3 = bf16 输出舍入下限；fast-accum FP8 2.0e-3～3.9e-3；`_int_mm` int32 位精确）。Triton 激活分组量化 kernel（rint + clamp ±127，absmax/127 fp32）与 `fake_quant_int8` 的数学位精确一致。
+- Triton 块缩放 kernel 取自 SGLang @22e4b3a（`_w8a8_block_int8_matmul` / `_w8a8_block_fp8_matmul`，数学未改），每个 (kernel 族, 形状, M) 独立调优 116～198 个配置（约束 BLOCK_K ≤ group_k 且 group_k % BLOCK_K == 0）。
+- 对照：cuBLAS bf16；cuBLASLt FP8 per-tensor（`torch._scaled_mm`，fast_accum，= ModelOpt 官方 checkpoint 路径）；cuBLASLt FP8 rowwise（torchao 运行时默认）；cuBLASLt INT8 `torch._int_mm`；cuBLASLt FP8 分块 g128（`torch.nn.functional.scaled_mm`，1×128 / 128×128，SM90 仅此粒度、要求 M % 4 == 0）；DeepGEMM SM90 FP8 g128（commit 66081d4，树内编译）。
+
+### 8.2 主要结果（TFLOPS，中位数；q/o_proj 4096×4096）
+| kernel | M=901 | M=4096 | M=42240 |
+| --- | --- | --- | --- |
+| bf16 cuBLAS | 670 | 729 | 693 |
+| FP8 per-tensor cuBLASLt（官方） | 1111 | 1348 | 1347 |
+| FP8 rowwise cuBLASLt | 830 | 1318 | 1363 |
+| INT8 cuBLASLt `_int_mm`（per-tensor 缩放，int32 输出） | 663 | 839 | 838 |
+| FP8 g128 cuBLASLt 1×128 / 128×128 | 894 | 1176 | 1143 |
+| FP8 g128 DeepGEMM | 966 | 1301 | 1273 |
+| **INT8 g64 Triton，W 逐通道（S0 方案）** | **283** | **342** | **357** |
+| INT8 g64 Triton，W 128×64 块 | 325 | 395 | 421 |
+| INT8 g128 Triton，W 逐通道 | 410 | 505 | 528 |
+| INT8 g128 Triton，W 128×128 块 | 501 | 619 | 646 |
+| FP8 g64 / g128 Triton | 286 / 516 | 349 / 647 | 369 / 606 |
+| bf16 Triton（校准点，未调优） | 579 | 697 | 648 |
+
+其余三个形状趋势一致（M ≥ 4096 全形状范围：bf16 665～737；FP8 per-tensor 1137～1407；INT8 `_int_mm` 756～975；DeepGEMM FP8 g128 1029～1412；INT8 g64 Triton 323～363；INT8 g128 Triton 553～646）。
+激活动态分组量化（Triton 融合 kernel）的额外开销：M=901、K=4096 约 11 µs；M=42240、K=4096 约 193 µs（2.7～2.8 TB/s）。
+
+### 8.3 结论
+1. **INT8 g64 在 H100 上是负收益。** 现货 kernel（Triton）为 bf16 的 0.40～0.56×、官方 per-tensor FP8 的 0.21～0.35×（慢 2.8～4.8×）。第 5 节"10% 以内"的目标没有达到。
+2. **瓶颈不是 Triton 代码生成。** Triton bf16 与 cuBLAS bf16 相当（≤10% 差距），Triton 3.7.1 的 INT8 `tl.dot` 在 sm90 上确认走 wgmma（SASS 为 IGMMA m64n128k32.s8），裸 INT8 探针 4096³ 达 880～1061 TOPS。慢在块缩放 mainloop 的结构：BLOCK_K 被钉在 ≤64，每个 K tile 做一次 fp32 外积重缩放。g128 比 g64 快 1.4～1.6×（survey 预估的 5%～15% 偏乐观），W 128 块比逐通道快 1.1～1.3×。同结构的 Triton FP8 g128 比 DeepGEMM FP8 g128 又慢约 2×。
+3. **H100 上 INT8 本身没有对 FP8 的速率优势。** cuBLASLt per-tensor INT8 只有 bf16 的 1.1～1.4×（838～975 TOPS），低于 FP8 per-tensor 的 1.6～2.0×；部分原因是持续负载下 700 W 功耗上限使 SM 时钟落到 1155～1500 MHz。第 1 节"INT8 = FP8 的平台"的假设对 H100 不成立。即便把 DeepGEMM 结构移植成 INT8 g64，按效率比折算约 750～880 TFLOPS，仍低于 per-tensor FP8。int8_speed.py 的 `[K,N]` 行主权重布局比 `W.t()` 视图慢 4～7×，如需继续用 `_int_mm` 必须改布局。
+4. **FP8 g128 几乎免费。** DeepGEMM 达到 per-tensor FP8 的 0.91～1.03×，cuBLASLt 分块 0.81～0.92×。分组缩放本身不是障碍，缺的是 CUTLASS/DeepGEMM 级 INT8 kernel，而 INT8 在 H100 上又没有速率上限支撑。
+5. **FP8 g64 没有快 kernel。** cuBLASLt 无 64 粒度配方；CUTLASS SM90 collective 需改 `ScalePromotionInterval % 4` 断言，预计为 g128 的 85%～90%，未验证。
+
+### 8.4 对方案的影响
+- 目标平台若是 H100，INT8 路线（S0 + Q4a 的 GEMM 部分）应放弃，转向 FP8 g128（DeepGEMM）或 FP8 g64（需改 CUTLASS）。前提是先在模拟器中补测 FP8 分组量化的精度，并查清第 6 节"FP8 模拟 g64 比 per-row 还差"的原因。
+- INT8 g64 的精度优势只能在 INT8 速率真正 ≥ FP8 或无 FP8 的平台（A100、Thor、Ada）上换成速度；那些平台需要重新做本节测量。
+- 注意事项：时钟无法锁定，20 个 case 中 11 个的 bf16 基线在 case 末尾复测漂移 +2.3%～+16.7%，M ≤ 1802 时 5%～10% 以内的差异应视为噪声；冲 L2 的计时在小 M 下偏保守。
