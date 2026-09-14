@@ -18,10 +18,13 @@ ROWS = [  # (label, command builder)
     ("CUTLASS FP8 per-tensor (256x256)",   lambda M,N,K: ["./pertensor_gemm", "--dtype=fp8", "--cfg=3", "--dist=normal"] + COMMON),
     ("CUTLASS INT8 per-tensor (256x256)",  lambda M,N,K: ["./pertensor_gemm", "--dtype=int8", "--cfg=3", "--dist=normal"] + COMMON),
     ("CUTLASS INT8 per-tensor (256x128)",  lambda M,N,K: ["./pertensor_gemm", "--dtype=int8", "--cfg=2", "--dist=normal"] + COMMON),
-    ("FP8 g128 W-block (cfg8)",            lambda M,N,K: ["./blockwise_gemm", "--dtype=fp8", "--cfg=8", "--dist=normal"] + COMMON),
-    ("FP8 g128 per-col (cfg9)",            lambda M,N,K: ["./blockwise_gemm", "--dtype=fp8", "--cfg=9", "--dist=normal"] + COMMON),
-    ("INT8 g128 W-block (cfg8)",           lambda M,N,K: ["./blockwise_gemm", "--dtype=int8", "--cfg=8", "--dist=normal"] + COMMON),
-    ("INT8 g128 per-col (cfg9)",           lambda M,N,K: ["./blockwise_gemm", "--dtype=int8", "--cfg=9", "--dist=normal"] + COMMON),
+    ("FP8 g128 W-block 256x256 (cfg13)",   lambda M,N,K: ["./blockwise_gemm", "--dtype=fp8", "--cfg=13", "--dist=normal"] + COMMON),
+    ("FP8 g128 per-col 256x256 (cfg16)",   lambda M,N,K: ["./blockwise_gemm", "--dtype=fp8", "--cfg=16", "--dist=normal"] + COMMON),
+    ("INT8 g128 W-block 256x256 (cfg13)",  lambda M,N,K: ["./blockwise_gemm", "--dtype=int8", "--cfg=13", "--dist=normal"] + COMMON),
+    ("INT8 g128 separable 256x256 (cfg17)",lambda M,N,K: ["./blockwise_gemm", "--dtype=int8", "--cfg=17", "--dist=normal"] + COMMON),
+    ("INT8 g128 per-col 256x256 (cfg16)",  lambda M,N,K: ["./blockwise_gemm", "--dtype=int8", "--cfg=16", "--dist=normal"] + COMMON),
+    ("INT8 g128 W-block 256x128 (cfg8)",   lambda M,N,K: ["./blockwise_gemm", "--dtype=int8", "--cfg=8", "--dist=normal"] + COMMON),
+    ("INT8 g128 per-col 256x128 (cfg9)",   lambda M,N,K: ["./blockwise_gemm", "--dtype=int8", "--cfg=9", "--dist=normal"] + COMMON),
 ]
 res = {}
 for (N, K) in SHAPES:
@@ -43,7 +46,7 @@ for (N, K) in SHAPES:
         L.append(f"| {label} | " + " | ".join(cells) + " |")
     L += ["", f"### Speedups (time ratio baseline / kernel; >1 = kernel faster)", "",
           "| kernel | vs | " + " | ".join(f"M={M}" for M in MS) + " |", "|---|---|" + "---:|" * len(MS)]
-    for label in ["INT8 g128 W-block (cfg8)", "INT8 g128 per-col (cfg9)", "FP8 g128 W-block (cfg8)", "CUTLASS INT8 per-tensor (256x256)"]:
+    for label in ["INT8 g128 W-block 256x256 (cfg13)", "INT8 g128 separable 256x256 (cfg17)", "INT8 g128 per-col 256x256 (cfg16)", "FP8 g128 W-block 256x256 (cfg13)", "CUTLASS INT8 per-tensor (256x256)"]:
         for base in ["cuBLASLt bf16", "cuBLASLt FP8 per-tensor", "CUTLASS INT8 per-tensor (256x256)"]:
             if base == label: continue
             cells = []

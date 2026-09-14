@@ -1101,7 +1101,10 @@ struct CollectiveMma<
       CtaTileCoord cta_tile_coord,
       CopyOpT2R,
       EpilogueTile,
-      int k_tile_count) {
+      int k_tile_count,
+      int part_idx = 0,      // THOR PATCH (8-warp promotion): this warpgroup promotes epilogue sub-tiles
+      int num_parts = 1) {   //   [NSUB*part_idx/num_parts, NSUB*(part_idx+1)/num_parts); with num_parts > 1 the last
+                             //   accumulator stage of the tile is NOT released (the kernel does the TMEM hand-off first).
 
     static_assert(size<0>(EpilogueTile{}) <= size<0>(CtaShape_MNK{}), "Restrict epilogue tile to be smaller than or equal to CTA Tile");
     static_assert(size<1>(EpilogueTile{}) <= size<1>(CtaShape_MNK{}), "Restrict epilogue tile to be smaller than or equal to CTA Tile");
@@ -1165,8 +1168,16 @@ struct CollectiveMma<
     Layout tTR_rSFA_layout = make_layout(tTR_sSFA_epi(_,_,_,_,_,_,_0{}).shape(), tTR_rSFA_compact.stride());
     Layout tTR_rSFB_layout = make_layout(tTR_sSFB_epi(_,_,_,_,_,_,_0{}).shape(), tTR_rSFB_compact.stride());
 
-    // Zero our accumulator
-    clear(tTR_FullAcc);
+    // Zero our accumulator (only the sub-tiles this warpgroup owns, so the other half stays dead in the register allocator)
+    {
+      constexpr int EPI_M0 = decltype(size<2>(tAcc_epi))::value;
+      constexpr int EPI_N0 = decltype(size<3>(tAcc_epi))::value;
+      constexpr int NSUB0  = EPI_M0 * EPI_N0;
+      CUTLASS_PRAGMA_UNROLL
+      for (int s = 0; s < NSUB0; ++s) {
+        if (s * num_parts >= NSUB0 * part_idx && s * num_parts < NSUB0 * (part_idx + 1)) clear(tTR_FullAcc(_,_,_,s / EPI_N0,s % EPI_N0));
+      }
+    }
 
     auto [accumulator_pipeline, mainloop_sf_pipeline] = pipelines;
     auto [accumulator_pipe_state, mainloop_sf_pipe_state] = consumer_states;
@@ -1217,14 +1228,18 @@ struct CollectiveMma<
           Tensor P1 = make_tensor<ElementAccumulator>(shape(tTR_rAcc_epi(_,_,_,_0{},_0{})));
           Tensor P2 = make_tensor<ElementAccumulator>(shape(tTR_rAcc_epi(_,_,_,_0{},_0{})));
           auto load_sub = [&](int s, auto& dst) { copy(tiled_t2r_epi, tTR_tAcc(_,_,_,s / EPI_N, s % EPI_N), dst); };
-          load_sub(0, P0);
-          if constexpr (NSUB > 1) load_sub(1, P1);
+          int const s_begin = NSUB * part_idx / num_parts;
+          int const s_end   = NSUB * (part_idx + 1) / num_parts;
+          load_sub(s_begin, P0);
+          if (s_begin + 1 < s_end) load_sub(s_begin + 1, P1);
           cutlass::arch::fence_view_async_tmem_load();
           CUTLASS_PRAGMA_UNROLL
-          for (int s = 0; s < NSUB; ++s) {
-            auto& cur = (s % 3 == 0) ? P0 : (s % 3 == 1) ? P1 : P2;
-            if (s + 2 < NSUB) {
-              auto& nxt2 = ((s + 2) % 3 == 0) ? P0 : ((s + 2) % 3 == 1) ? P1 : P2;
+          for (int s0 = 0; s0 < NSUB; ++s0) {
+            int const s = s0 + s_begin;            // s0 is the compile-time-unrolled index relative to the range start
+            if (s0 >= s_end - s_begin) break;
+            auto& cur = (s0 % 3 == 0) ? P0 : (s0 % 3 == 1) ? P1 : P2;
+            if (s + 2 < s_end) {
+              auto& nxt2 = ((s0 + 2) % 3 == 0) ? P0 : ((s0 + 2) % 3 == 1) ? P1 : P2;
               load_sub(s + 2, nxt2);
             }
             int const epi_m = s / EPI_N;
@@ -1256,7 +1271,7 @@ struct CollectiveMma<
               ElementPromoted scale = scale_a(i) * scale_b(i);
               full_acc(i) += scale * static_cast<ElementPromoted>(cur(i));
             }
-            if ((s % 2 == 1) || (s + 1 == NSUB)) cutlass::arch::fence_view_async_tmem_load();   // loads s+1 (if odd) and s+2 landed
+            if ((s0 % 2 == 1) || (s + 1 == s_end)) cutlass::arch::fence_view_async_tmem_load();   // loads s+1 (if odd) and s+2 landed
           }
         }
 #elif defined(G128_OPT_PIPELINE)
@@ -1380,9 +1395,11 @@ struct CollectiveMma<
         }
 #endif
         cutlass::arch::fence_view_async_tmem_load();
-        accumulator_pipeline.consumer_release(accumulator_pipe_state);
-        // release acc
-        ++accumulator_pipe_state;
+        if (!(num_parts > 1 && k_tile_count == 1 && k_block == ScaleKsPerTile - 1)) {   // THOR PATCH: keep the last stage for the hand-off
+          accumulator_pipeline.consumer_release(accumulator_pipe_state);
+          // release acc
+          ++accumulator_pipe_state;
+        }
       }
 #if defined(G128_OPT_PROMOTION)
       mainloop_sf_pipeline.consumer_release(mainloop_sf_pipe_state);
@@ -1394,6 +1411,51 @@ struct CollectiveMma<
 
     return cute::make_tuple(tTR_FullAcc, tiled_t2r_epi, cute::make_tuple(accumulator_pipe_state, mainloop_sf_pipe_state));
  }
+
+  // THOR PATCH (8-warp promotion): hand the second warpgroup's half of the fp32 full accumulator to the epilogue warpgroup
+  // through the TMEM stage that held the tile's last partial (both groups have finished reading it; it is released afterwards).
+  template <class TmemStorage, class AccumulatorPipelineState, class FrgEngine, class FrgLayout, class CopyOpT2R, class EpilogueTile>
+  CUTLASS_DEVICE void
+  handoff_store(TmemStorage tmem_storage, AccumulatorPipelineState const& state, cute::Tensor<FrgEngine, FrgLayout>& tTR_FullAcc,
+                CopyOpT2R, EpilogueTile, int part_idx, int num_parts) {
+    Tensor acc = get<0>(slice_accumulator(tmem_storage, state.index()));
+    Tensor tAcc = acc(make_coord(_,_),_0{},_0{});
+    Tensor tAcc_epi = flat_divide(tAcc, EpilogueTile{});
+    auto tiled_r2t = make_tmem_copy(cute::TMEM::tmem_load_to_store(CopyOpT2R{}), tAcc_epi(_,_,_0{},_0{}));
+    auto thr_r2t = tiled_r2t.get_slice(threadIdx.x % size(tiled_r2t));
+    Tensor tTR_tAcc = thr_r2t.partition_D(tAcc_epi);                                       // (T2R,T2R_M,T2R_N,EPI_M,EPI_N)
+    constexpr int EPI_N = decltype(size<3>(tAcc_epi))::value;
+    constexpr int NSUB  = decltype(size<2>(tAcc_epi))::value * EPI_N;
+    CUTLASS_PRAGMA_UNROLL
+    for (int s = 0; s < NSUB; ++s) {
+      if (s * num_parts >= NSUB * part_idx && s * num_parts < NSUB * (part_idx + 1)) {
+        Tensor src = recast<ElementAccumulator>(tTR_FullAcc(_,_,_,s / EPI_N,s % EPI_N));   // same 32-bit width, raw bits
+        copy(tiled_r2t, src, tTR_tAcc(_,_,_,s / EPI_N,s % EPI_N));
+      }
+    }
+    cutlass::arch::fence_view_async_tmem_store();
+  }
+
+  template <class TmemStorage, class AccumulatorPipelineState, class FrgEngine, class FrgLayout, class TiledCopyT2R, class EpilogueTile>
+  CUTLASS_DEVICE void
+  handoff_load(TmemStorage tmem_storage, AccumulatorPipelineState const& state, cute::Tensor<FrgEngine, FrgLayout>& tTR_FullAcc,
+               TiledCopyT2R tiled_t2r_epi, EpilogueTile, int part_idx, int num_parts) {
+    Tensor acc = get<0>(slice_accumulator(tmem_storage, state.index()));
+    Tensor tAcc = acc(make_coord(_,_),_0{},_0{});
+    Tensor tAcc_epi = flat_divide(tAcc, EpilogueTile{});
+    auto thr_t2r = tiled_t2r_epi.get_slice(threadIdx.x % size(tiled_t2r_epi));
+    Tensor tTR_tAcc = thr_t2r.partition_S(tAcc_epi);
+    constexpr int EPI_N = decltype(size<3>(tAcc_epi))::value;
+    constexpr int NSUB  = decltype(size<2>(tAcc_epi))::value * EPI_N;
+    CUTLASS_PRAGMA_UNROLL
+    for (int s = 0; s < NSUB; ++s) {
+      if (s * num_parts >= NSUB * part_idx && s * num_parts < NSUB * (part_idx + 1)) {
+        Tensor dst = recast<ElementAccumulator>(tTR_FullAcc(_,_,_,s / EPI_N,s % EPI_N));
+        copy(tiled_t2r_epi, tTR_tAcc(_,_,_,s / EPI_N,s % EPI_N), dst);
+      }
+    }
+    cutlass::arch::fence_view_async_tmem_load();
+  }
 
 protected:
 

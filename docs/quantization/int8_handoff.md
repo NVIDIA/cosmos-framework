@@ -493,6 +493,14 @@ FP8 g128 W 块与 CUTLASS FP8 per-tensor 256×256 时间完全相同（250/324 �
 = per-col 的 1.34×、W 块的 0.96×、bf16 的 1.22～1.53×、cuBLASLt FP8 per-tensor 的 0.63～0.71×；精度（N×K/128 scale 矩阵的秩 1 约束）待模拟器评估。同一 kernel 还能零成本跑更细的组合布局 s_w[n]·c[nb,g]（每通道因子 × 每 (128 通道块, K 块) 因子，把 c[nb,g] 当主循环的 sfb 传入），
 自由度 N + (N/128)(K/128)，严格细于可分离和 W 128×128 块；建议三种布局在模拟器里一起评估。表：`results/g128_separable_20260914.md`。
 
+**8-warp 提升 kernel + 256×256 tile（下午晚些，shadow kernel `include/cutlass/gemm/kernel/sm100_gemm_tma_warpspecialized_mma_transform.hpp`）**：
+把闲置的 warp 8-11 变成第二个提升 warpgroup（scale 装载挪到 warp 3，仅支持 C 为 void），两组各管一半 epilogue 子块，tile 结束时第二组经 TMEM 把半个 fp32 全累加器交给 epilogue 组
+（两个 named barrier），寄存器 48/216/216（232 恰好占满 64K 会让 `setmaxnreg.inc` 永久等待——挂死；224 反而溢出）。这样 fp32 全累加器每线程 128 个寄存器，256×256 tile 成为可能。
+结果（热 A 冷 W 持续，4096×4096，M=904/1520/1804，TFLOPS）：**INT8 g128 W 128×128 块 190/229/210 = cuBLASLt bf16 的 1.62～1.68×、cuBLASLt FP8 per-tensor 的 0.84/0.97/0.86×（M=1520 基本追平）**、
+INT8 per-tensor 的 0.70×；INT8 g128 per-col 133/159/146（bf16 的 1.12～1.18×，FP8 pt 的 0.59～0.67×）；可分离布局在 256×128 上 168/187/173（256×256 版溢出待调）。
+1024×4096 上 W 块 1.04～1.08× bf16。同条件表：`results/g128_summary_20260914_114605.md`，目标形状表 `results/g128_8warp_targets_20260914.txt`。
+接续说明（另一台机器如何编译/运行/未完事项）见 `tools/cutlass_int8_sm110/README.md` 末节。
+
 ### 11.3 下一步
 per-row × per-col scale 的 EVT 变体和 torch 扩展绑定接入 cosmos-framework；g64/g128 blockwise INT8 移植到 SM100 blockwise collective（builder 接受 int8 但 scale 类型绑成 int32 累加器，需和 SM90 移植同样解耦）；
 k/v_proj 小 M 的 stream-K；QKV / gate-up 融合 GEMM 摊薄权重流。

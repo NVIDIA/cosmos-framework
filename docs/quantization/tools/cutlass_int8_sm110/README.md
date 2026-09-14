@@ -371,7 +371,77 @@ W 128x128 blocks (N/128)(K/128) is not comparable to separable (neither contains
 epilogue's per-column scale load from global memory (Sm90RowBroadcast) serialised with the promotion warps; prefetching the vector
 into smem would remove it.
 
+### Step 3: 8-warp promotion kernel + 256x256 tiles (shadow `include/cutlass/gemm/kernel/sm100_gemm_tma_warpspecialized_mma_transform.hpp`)
+
+The blockwise kernel promoted with the 4 epilogue warps (1 per SMSP) and kept the fp32 full accumulator in their registers, which
+(a) capped the tile at 256x128 (a 128x256 CTA tile needs 256 registers per thread) and (b) left one warp per SMSP to hide TMEM and
+shared-memory latency. The shadow kernel turns the idle warps 8-11 into a second 128-thread promotion warpgroup:
+
+- warp roles: 0 MMA, 1 sched, 2 TMA A/B, **3 scale-factor loads** (was the epilogue-load warp; C must be void), 4-7 promotion
+  part 0 + epilogue store, **8-11 promotion part 1**; registers 48 / 224 / 224 (`setmaxnreg`; 232 = exact 64K fit hangs the
+  `setmaxnreg.inc`, 216 spills on 256x256).
+- both groups consume every accumulator stage (consumer counts x2 on the accumulator, scale and CLC pipelines, TMEM-alloc barrier
+  9 warps); each promotes half of the epilogue sub-tiles (`accum(..., part_idx, num_parts)` in the collective, only its own half of
+  `tTR_FullAcc` is live); the tile's last TMEM stage is kept until group 1 has written its half of the full accumulator into it
+  (`handoff_store`, `tcgen05.st`) and group 0 has read it back (`handoff_load`), synchronised with two named barriers (ids 8/9); then
+  both release the stage and group 0 runs the unchanged epilogue store.
+- 256x256 tiles (cfg 13-17): 2 TMEM partial stages instead of 4, per-tensor-like operand delivery (the 256x256 per-tensor kernel is
+  the 323-TFLOPS one).
+
+Results (hot-A / cold-W sustained, Gaussian operands, 120 W, K=4096; `results/g128_8warp_targets_20260914.txt`, same-condition
+baselines and ratios in `results/g128_summary_20260914_114605.md`):
+
+| kernel (8-warp promotion kernel) | 4096x4096 M=904 | M=1520 | M=1804 | 1024x4096 M=904 | M=1520 | M=1804 |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| **INT8 g128 W 128x128 blocks, 2SM 256x256x128 (cfg13)** | **190** | **229** | **210** | 148 | 173 | 161 |
+| INT8 g128 W-block, 2SM 256x128x256 (cfg8) | 185 | 208 | 192 | 137 | 184 | 158 |
+| INT8 g128 separable s_w[n]*c[g], 256x128 (cfg12) | 168 | 187 | 173 | 128 | 173 | 147 |
+| INT8 g128 separable, 256x256 (cfg17; spills 416 B, needs tuning) | 111 | 130 | 117 | 88 | 104 | 95 |
+| **INT8 g128 per-col (S0 layout), 256x256, epi 128x32 (cfg16)** | **133** | **159** | **146** | 106 | 125 | 113 |
+| INT8 g128 per-col, 256x128, epi 128x16 (cfg9) | 128 | 142 | 130 | 97 | 133 | 114 |
+| FP8 g128 W-block 256x256 (cfg13) | 183-188 | 203-214 | 189-196 | 143-147 | 173 | 161-164 |
+| FP8 g128 per-col 256x256 (cfg16) | 138 | 163 | 150 | 110 | 128-129 | 119 |
+| cuBLASLt bf16 (same run) | 113 | 142 | 124 | 143 | 160 | 154 |
+| cuBLASLt FP8 per-tensor (same run) | 227 | 236 | 244 | 233 | 283 | 296 |
+| CUTLASS INT8 per-tensor 256x256 (same run) | 275 | 328 | 293 | 206 | 249 | 232 |
+
+Speedups (time ratios, same run), 4096x4096 M = 904 / 1520 / 1804:
+- **INT8 g128 W-block (cfg13): 1.68 / 1.62 / 1.68x cuBLASLt bf16; 0.84 / 0.97 / 0.86x cuBLASLt FP8 per-tensor; 0.70x INT8 per-tensor.**
+  At M=1520 this is parity with the vendor FP8 per-tensor kernel; before the 8-warp kernel it was 0.74x.
+- INT8 g128 per-col (cfg16): 1.12-1.18x bf16, 0.59-0.67x cuBLASLt FP8 per-tensor (was 0.53x).
+- 1024x4096: W-block 1.04-1.08x bf16, 0.54-0.64x cuBLASLt FP8 (4 MB weight stream, 16 tiles); per-col 0.73-0.78x bf16.
+- Per K block (M=1520 4096^2): W-block 256x256 runs at ~424 clk per 128x128x128-equivalent against the ~327 of the 256x256 per-tensor
+  kernel (77 %); the remaining gap is the promotion's TMEM reads + FMAs no longer fully hidden behind the faster MMA.
+
+What the 8 warps bought at 256x128 (same tile): W-block 190 -> 208, per-col 135 -> 142 -- i.e. the per-col loop was not primarily
+latency-bound; the 256x256 tile (delivery efficiency) is where the gain came from. The separable variant at 256x256 spills (its
+epilogue column-scale fragment on top of the 128-register accumulator) and needs the epilogue-load-warp prefetch before it can use
+the big tile; at 256x128 it is 0.96x the W-block kernel as before.
+
 Not done / next: MAXN re-measurement of the g128 kernels (they are not power-bound, so they should scale with the 1575/1386 clock
 while FP8 per-tensor does not); the 8-warp 256x256 restructure; the separable-scale variant (kernel side = cfg8 + a per-column EVT
 scale); torch binding.
 
+## Continuing on another machine (state as of 2026-09-14 evening)
+
+Everything needed is in this directory plus a CUTLASS checkout; nothing depends on the Thor box's home directory.
+
+```bash
+git clone --branch pzeren/int8-sim-group-quant --single-branch https://github.com/NVIDIA/cosmos-framework.git
+git clone --depth 1 https://github.com/NVIDIA/cutlass.git          # 4.8.0 main @147295a was used; Sm100 arch tag covers sm_110a
+cd cosmos-framework/docs/quantization/tools/cutlass_int8_sm110
+make -j14 CUTLASS=/path/to/cutlass ARCH=sm_110a                    # Thor; ARCH=sm_100a for GB200 (untested there)
+./blockwise_gemm --list; ./blockwise_gemm --dtype=int8 --cfg=13 --m=1520 --n=4096 --k=4096      # verify + time
+python3 bench_g128_summary.py                                        # same-condition table vs cuBLASLt / per-tensor
+```
+
+- `include/` (must precede the CUTLASS include path, the Makefile does this) holds the three shadow headers: the INT8 blockwise
+  collective (GB200 patch + Thor changes: `G128_OPT_PIPE2`, `G128_OPT_SBVEC`, `accum(part_idx, num_parts)`, `handoff_store/load`),
+  the 8-warp kernel (`gemm/kernel/sm100_gemm_tma_warpspecialized_mma_transform.hpp`, valid only for C = void), and
+  `arch/reg_reconfig.h` (enables `setmaxnreg` on sm_110a). Everything else is stock CUTLASS 4.8.
+- Known constraints: M % 4 == 0 (MN-major A scales); the 8-warp kernel requires a void C operand; register split 48/216/216.
+- Open items, in the order I would do them: (1) precision of the separable / combined weight-scale layouts in the simulator
+  (handoff 3.6 recipe; kernel cfg17/cfg12 ready); (2) torch extension binding of cfg13 (W-block) / cfg16 (per-col) with the
+  `[K/128][M]` / `[K/128][N/{1|128}]` scale layouts (or switch to K-major scale layouts to drop the M % 4 padding); (3) the
+  1024x4096 shape: fuse into QKV or use per-tensor; (4) MAXN re-measurement (`sudo nvpmodel -m 0`, `power_probe.sh`); (5) the
+  epilogue-load-warp scale prefetch for the separable variant; (6) report the `reg_reconfig.h` sm_110a omission to CUTLASS.

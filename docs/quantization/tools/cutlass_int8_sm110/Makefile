@@ -23,7 +23,7 @@ all: pertensor_gemm blockwise_gemm cublaslt_bench $(BUILD)/membw
 blockwise_gemm: $(BUILD)/blockwise_gemm.o $(BWCFG_OBJS)
 	$(NVCC) -arch=$(ARCH) -o $@ $^
 
-$(BUILD)/bwcfg_%.o: bwcfg_%.cu blockwise_gemm.cuh bw_configs.h bw_cfg_select.h $(wildcard $(G128_INC)/cutlass/gemm/collective/*.hpp) | $(BUILD)
+$(BUILD)/bwcfg_%.o: bwcfg_%.cu blockwise_gemm.cuh bw_configs.h bw_cfg_select.h $(wildcard $(G128_INC)/cutlass/gemm/collective/*.hpp) $(wildcard $(G128_INC)/cutlass/gemm/kernel/*.hpp) $(wildcard $(G128_INC)/cutlass/arch/*.h) | $(BUILD)
 	$(NVCC) $(BWFLAGS) -c $< -o $@
 
 $(BUILD)/blockwise_gemm.o: blockwise_gemm.cu blockwise_gemm.cuh bw_configs.h bench_util.cuh | $(BUILD)
