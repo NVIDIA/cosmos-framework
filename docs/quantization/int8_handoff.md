@@ -659,7 +659,7 @@ per-col −2%（158→155，cfg18 还溢出 48 B），所以 per-col 保持 cfg1
 
 | 角色 | 方案 | 依据 |
 | --- | --- | --- |
-| **主线** | **per-col g256 + SmoothQuant α=0.5**（激活 per-token 每 256 K 一个 scale，权重每输出通道每 256 K 一个 scale，SmoothQuant 折进权重与前一层 norm，需一次校准） | Thor：g256 per-col 224～268 TFLOPS，追平 cuBLASLt FP8 per-tensor（0.98～1.30×），bf16 的 1.8～2.1×（§11.2）；Nano t2i 12 图 23.8 dB / 保住 10/12，与 g128 持平，比官方 FP8 高 6 dB（§3.8） |
+| **主线** | **per-col g256**（激活 per-token 每 256 K 一个 scale，权重每输出通道每 256 K 一个 scale；SmoothQuant 见 12.1，改为可选） | Thor：g256 per-col 224～268 TFLOPS，追平 cuBLASLt FP8 per-tensor（0.98～1.30×），bf16 的 1.8～2.1×（§11.2）；Nano t2i 12 图 23.8 dB / 保住 10/12，与 g128 持平，比官方 FP8 高 6 dB（§3.8） |
 | 拿掉 | g64 | kernel 每 64 K 提升一次，H100 上 FMA 预算约 100%，Thor 上无性能出路；精度（Nano 25.8、Edge 29.3）只作上限参照 |
 | 拿掉 | g128 | Thor 上只有 bf16 的 1.1～1.2×、cuBLASLt FP8 pt 的 0.6～0.7×；精度与 g256+SQ 持平，没有保留理由 |
 | 拿掉 | W 128×128 块、可分离 s_w[n]·c[g] | 精度不达标（§3.6、§3.9）；只作 INT8 主循环速度上界 |
@@ -667,4 +667,13 @@ per-col −2%（158→155，cfg18 还溢出 48 B），所以 per-col 保持 cfg1
 | 模型侧配合 | QKV / gate-up 合并成宽 GEMM；窄 N 层（k/v_proj 1024×4096、1536 档小层）分组不划算时留 bf16 | Thor 窄 N 层任何分组都不如 bf16（§11.2） |
 | attention | Q/K INT8（Sage-v1 版式 + Hadamard + 通道平衡，Q4a）只在 attention 为 MMA 瓶颈的平台（H100、A100）有收益；GB200/Thor 受 exp2 吞吐限制，暂不做 | §3.3、第 10 节 |
 
-定稿前待补：Edge 与 policy 上的 g256 + SQ、Nano 36 图复核、SmoothQuant 校准稳健性（跨任务/分辨率）、视频精度。
+### 12.1 主线验证结果（2026-09-14 晚）
+| 任务 | g256（无 SQ） | g256 + SmoothQuant α=0.5 | g128 | g64 | 官方 FP8 |
+| --- | --- | --- | --- | --- | --- |
+| Nano t2i，36 图 PSNR / 保住 | 23.9 / 21 | **24.5 / 26** | 25.0 / 28 | 26.2 / 28 | 18.6 / 5 |
+| Edge t2i，12 图 PSNR / 保住 | **26.7 / 12**（最低 22.8） | 25.2 / 9（最低 16.1） | 26.2 / 10 | 29.3 / 12 | — |
+| Policy，动作 MSE 对 bf16（占 seed 间差异） | **0.00075（0.5%）** | 0.0031（2.1%，t2i 校准）/ 0.0085（5.7%，policy 校准） | 0.0016（1.1%） | 0.0017（1.1%） | 0.0113（7.5%） |
+结论：**SmoothQuant 不稳健**——Nano t2i 上 +0.6 dB、多保 5 张，Edge 上 −1.5 dB、少保 3 张，policy 上误差放大 4～11 倍（用 policy 自身校准更糟）。
+因此主线改为 **per-col g256、不做 SmoothQuant**（无校准、无跨任务依赖，kernel 相同）；SmoothQuant 降为按模型/按任务可选、必须逐项验证的开关。
+g256 相对 g128 的代价集中在 Nano t2i（−1.1 dB、少保 7/36），Edge 与 policy 上 g256 反而最好。
+仍待补：SmoothQuant 为何在 Edge/policy 上有害（推测：s 拉大了权重侧的动态范围，K 分组后权重量化误差反超激活收益）、视频精度。
