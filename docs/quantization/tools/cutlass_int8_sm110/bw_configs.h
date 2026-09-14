@@ -25,6 +25,7 @@
   X(17, 256, 256, 128, 2, 1, BwSched2Sm, Epi2SmSep, 1, 128, 128, "2SM 256x256x128 c2x1 SEPARABLE s_w[n]*c[nb,g] (W-block mainloop + per-col epilogue)") \
   X(18, 256, 256, 256, 2, 1, BwSched2Sm, Epi2Sm, 1, 1, 128, "2SM 256x256x256 c2x1 sf<1,1,128> per-col, epi 128x32 (TileK 256)")   \
   X(19, 256, 256, 256, 2, 1, BwSched2Sm, Epi2Sm, 1, 128, 128, "2SM 256x256x256 c2x1 sf<1,128,128> W-block (TileK 256)")   \
-  X(20, 256, 256, 256, 2, 1, BwSched2Sm, Epi2Sm, 1, 1, 256, "2SM 256x256x256 c2x1 sf<1,1,256> per-col g256 (TileK 256; promotion every 256 K)")
+  X(20, 256, 256, 256, 2, 1, BwSched2Sm, Epi2Sm, 1, 1, 256, "2SM 256x256x256 c2x1 sf<1,1,256> per-col g256 (TileK 256; promotion every 256 K)")   \
+  X(21, 256, 256, 256, 2, 1, BwSched2Sm, Epi2Sm16, 1, 1, 256, "2SM 256x256x256 c2x1 sf<1,1,256> per-col g256, epi tile 128x16")
 
-#define THOR_NUM_BW_CFGS 21
+#define THOR_NUM_BW_CFGS 22

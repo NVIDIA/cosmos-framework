@@ -185,6 +185,20 @@ struct CollectiveMma<
   static constexpr bool IsRuntimeDataType = IsRuntimeDataTypeA && IsRuntimeDataTypeB;
 
   using ElementAccumulator = typename TiledMma::ValTypeC;
+  // THOR PATCH (bias): pre-biased int32 accumulator. Every accumulator stage is kept filled with BiasBits = 0x4B400000 (the bit
+  // pattern of 1.5*2^23) by the promotion warps before it is released, and the MMA accumulates onto it instead of overwriting.
+  // The int32 partial sum x then reads back from TMEM as the fp32 bit pattern of (1.5*2^23 + x) -- exact for |x| < 2^22, which
+  // covers g128 (128*127*127) and g256 (256*127*127) -- so the half-rate I2F disappears: t = fma(fb, sa, -1.5*2^23*sa) == x*sa
+  // (bit-identical to FMUL(float(x), sa) when 1.5*2^23*sa is exact, i.e. sa's two low mantissa bits are 0; the kernel clears them),
+  // then acc = fma(t, sb, acc). Two FFMA per element instead of I2F + FMUL + FFMA. Only for integer accumulators with per-column
+  // weight scales (the W-block path gains nothing: its I2F already overlaps the FFMA).
+#if defined(G128_OPT_BIAS)
+  static constexpr bool UseBias = cute::is_same_v<ElementAccumulator, int32_t> && ScaleGranularityN == 1;
+#else
+  static constexpr bool UseBias = false;
+#endif
+  static constexpr int32_t BiasBits = 0x4B400000;
+  static constexpr float   BiasF    = 12582912.f;
   using GmemTiledCopyA = cute::remove_cvref_t<decltype(get<0>(GmemTiledCopyPairA_{}))>;
   using GmemTiledCopySFA = cute::remove_cvref_t<decltype(get<1>(GmemTiledCopyPairA_{}))>;
   using GmemTiledCopyB = cute::remove_cvref_t<decltype(get<0>(GmemTiledCopyPairB_{}))>;
@@ -1063,7 +1077,17 @@ struct CollectiveMma<
         static_assert(rank(remove_cvref_t<decltype(acc)>{}) == 3, "Accumulator must be MMA-partitioned: (MMA, MMA_M, MMA_N)");
 
         // for each set of scale_k_blocks we zero the accumulator
-        tiled_mma.accumulate_ = UMMA::ScaleOut::Zero;
+        if constexpr (UseBias) {
+          // THOR PATCH (bias): a stage that has been consumed once holds the bias written by the promotion warps -> accumulate onto
+          // it. The first `Stages` acquisitions of the kernel see uninitialised TMEM -> overwrite (the consumer adds the bias itself).
+          #if defined(CUTLASS_ARCH_TCGEN_ENABLED)
+          asm volatile("tcgen05.fence::after_thread_sync;" ::: "memory");
+#endif
+          tiled_mma.accumulate_ = accumulator_pipe_producer_state.count() >= cute::remove_cvref_t<decltype(accumulator_pipeline)>::Stages
+                                      ? UMMA::ScaleOut::One : UMMA::ScaleOut::Zero;
+        } else {
+          tiled_mma.accumulate_ = UMMA::ScaleOut::Zero;
+        }
         // Unroll the K mode manually so we can set scale C to 1
         CUTLASS_PRAGMA_UNROLL
         for (int k_block = 0; k_block < size<2>(tCrA); ++k_block) {
@@ -1209,6 +1233,9 @@ struct CollectiveMma<
       for (int k_block = 0; k_block < ScaleKsPerTile; ++k_block) {
 
         accumulator_pipeline.consumer_wait(accumulator_pipe_state);
+        // THOR PATCH (bias): the first `Stages` stages a CTA consumes were overwritten by the MMA (no bias yet); later ones carry it.
+        bool const pre_biased = UseBias && accumulator_pipe_state.count() >= cute::remove_cvref_t<decltype(accumulator_pipeline)>::Stages;
+        bool const keep_stage = num_parts > 1 && k_tile_count == 1 && k_block == ScaleKsPerTile - 1;   // kept for the hand-off
 
         Tensor acc = get<0>(slice_accumulator(tmem_storage, accumulator_pipe_state.index()));
         Tensor tAcc = acc(make_coord(_,_),_0{},_0{});
@@ -1240,6 +1267,7 @@ struct CollectiveMma<
             auto& cur = (s0 % 3 == 0) ? P0 : (s0 % 3 == 1) ? P1 : P2;
             if (s + 2 < s_end) {
               auto& nxt2 = ((s0 + 2) % 3 == 0) ? P0 : ((s0 + 2) % 3 == 1) ? P1 : P2;
+              if constexpr (UseBias) cutlass::arch::fence_view_async_tmem_store();   // nxt2's registers fed the previous sub-tile's bias stores
               load_sub(s + 2, nxt2);
             }
             int const epi_m = s / EPI_N;
@@ -1266,10 +1294,37 @@ struct CollectiveMma<
             }
             Tensor scale_b = make_tensor(rSFB_sub_compact.data(), make_layout(shape(sSFB_sub), rSFB_sub_compact.stride()));
             Tensor full_acc = tTR_FullAcc(_,_,_,epi_m,epi_n);
-            CUTLASS_PRAGMA_UNROLL
-            for (int i = 0; i < size(full_acc); ++i) {
-              ElementPromoted scale = scale_a(i) * scale_b(i);
-              full_acc(i) += scale * static_cast<ElementPromoted>(cur(i));
+            if constexpr (UseBias) {
+              // THOR PATCH (bias): see UseBias. Row scales of this thread (one per distinct row; zero strides along N).
+              if (!pre_biased) {
+                CUTLASS_PRAGMA_UNROLL
+                for (int i = 0; i < size(cur); ++i) cur(i) += BiasBits;
+              }
+              auto sa_c = filter_zeros(scale_a);
+              Tensor sa_m = make_fragment_like<ElementPromoted>(sa_c);   // sa with the 2 low mantissa bits cleared (exact -M*sa)
+              Tensor c_m  = make_fragment_like<ElementPromoted>(sa_c);   // -1.5*2^23 * sa
+              CUTLASS_PRAGMA_UNROLL
+              for (int r = 0; r < size(sa_c); ++r) {
+                sa_m(r) = __uint_as_float(__float_as_uint(static_cast<float>(sa_c(r))) & ~3u);
+                c_m(r)  = -BiasF * sa_m(r);
+              }
+              Tensor sa_t = make_tensor(sa_m.data(), make_layout(shape(scale_a), sa_m.stride()));
+              Tensor c_t  = make_tensor(c_m.data(),  make_layout(shape(scale_a), c_m.stride()));
+              CUTLASS_PRAGMA_UNROLL
+              for (int i = 0; i < size(full_acc); ++i) {
+                float const fb = __int_as_float(cur(i));                       // = 1.5*2^23 + x exactly
+                float const t  = fmaf(fb, sa_t(i), c_t(i));                    // = x * sa, rounded once
+                full_acc(i) = fmaf(t, static_cast<float>(scale_b(i)), full_acc(i));
+              }
+              // Re-arm this sub-tile with the bias, sourcing the stores from the just-consumed fragment's own registers (no extra
+              // register pressure: the promotion warps have none to spare). Part 1 leaves the hand-off stage to the kernel.
+              if (!(keep_stage && part_idx == 1)) bias_rearm_subtile(tmem_storage, accumulator_pipe_state, cur, CopyOpT2R{}, EpilogueTile{}, s);
+            } else {
+              CUTLASS_PRAGMA_UNROLL
+              for (int i = 0; i < size(full_acc); ++i) {
+                ElementPromoted scale = scale_a(i) * scale_b(i);
+                full_acc(i) += scale * static_cast<ElementPromoted>(cur(i));
+              }
             }
             if ((s0 % 2 == 1) || (s + 1 == s_end)) cutlass::arch::fence_view_async_tmem_load();   // loads s+1 (if odd) and s+2 landed
           }
@@ -1395,7 +1450,17 @@ struct CollectiveMma<
         }
 #endif
         cutlass::arch::fence_view_async_tmem_load();
-        if (!(num_parts > 1 && k_tile_count == 1 && k_block == ScaleKsPerTile - 1)) {   // THOR PATCH: keep the last stage for the hand-off
+        if constexpr (UseBias) {
+          // THOR PATCH (bias): the sub-tiles were re-armed one by one in the loop above; make the stores visible before the release.
+          // For the stage kept for the hand-off, part 1's sub-tiles are re-armed by the kernel after the epilogue group has read them.
+          if (!keep_stage || part_idx == 0) {
+            cutlass::arch::fence_view_async_tmem_store();                       // bias stores of this stage have landed
+#if defined(CUTLASS_ARCH_TCGEN_ENABLED)
+            asm volatile("tcgen05.fence::before_thread_sync;" ::: "memory");
+#endif
+          }
+        }
+        if (!keep_stage) {   // THOR PATCH: keep the last stage for the hand-off
           accumulator_pipeline.consumer_release(accumulator_pipe_state);
           // release acc
           ++accumulator_pipe_state;
@@ -1455,6 +1520,76 @@ struct CollectiveMma<
       }
     }
     cutlass::arch::fence_view_async_tmem_load();
+  }
+
+  // THOR PATCH (bias): re-arm epilogue sub-tile s of accumulator stage `state` with BiasBits, storing from the first registers of the
+  // consumed TMEM fragment `cur` (they are dead after the promotion; the caller waits with fence_view_async_tmem_store() before that
+  // fragment is reloaded). 8-column stores in a non-unrolled loop: ptxas gives every static tcgen05.st its own source register block.
+  template <class TmemStorage, class AccumulatorPipelineState, class CurEngine, class CurLayout, class CopyOpT2R, class EpilogueTile>
+  CUTLASS_DEVICE void
+  bias_rearm_subtile(TmemStorage tmem_storage, AccumulatorPipelineState const& state, cute::Tensor<CurEngine, CurLayout>& cur,
+                     CopyOpT2R, EpilogueTile, int s) {
+    Tensor acc = get<0>(slice_accumulator(tmem_storage, state.index()));
+    Tensor tAcc = acc(make_coord(_,_),_0{},_0{});
+    Tensor tAcc_epi = flat_divide(tAcc, EpilogueTile{});
+    auto tiled_st = make_tmem_copy(SM100_TMEM_STORE_32dp32b8x{}, tAcc_epi(_,_,_0{},_0{}));
+    auto thr_st = tiled_st.get_slice(threadIdx.x % size(tiled_st));
+    Tensor tST = thr_st.partition_D(tAcc_epi);                                               // TMEM side  (V_tmem,ST_M,ST_N,EPI_M,EPI_N)
+    Tensor tRS = thr_st.partition_S(make_identity_tensor(shape(tAcc_epi)));                 // register side (V_reg,ST_M,ST_N,EPI_M,EPI_N)
+    constexpr int EPI_N = decltype(size<3>(tAcc_epi))::value;
+    constexpr int NV = decltype(size(tRS(_,_0{},_0{},_0{},_0{})))::value;
+    static_assert(NV <= decltype(size(cur))::value, "fragment too small for the bias store");
+    CUTLASS_PRAGMA_UNROLL
+    for (int i = 0; i < NV; ++i) cur(i) = ElementAccumulator(BiasBits);
+    Tensor src = make_tensor(cur.data(), shape(tRS(_,_0{},_0{},_0{},_0{})));
+    CUTLASS_PRAGMA_UNROLL
+    for (int m = 0; m < size<1>(tST); ++m) {
+      CUTLASS_PRAGMA_NO_UNROLL
+      for (int n = 0; n < size<2>(tST); ++n) copy(tiled_st, src, tST(_,m,n,s / EPI_N,s % EPI_N));
+    }
+  }
+
+  // THOR PATCH (bias): write BiasBits into this warpgroup's epilogue sub-tiles (part_idx of num_parts, as in accum) of accumulator
+  // stage `state`: 8-column TMEM stores from an 8-register constant fragment. The caller issues fence_view_async_tmem_store()
+  // before handing the stage back to the MMA.
+  template <class TmemStorage, class AccumulatorPipelineState, class FrgEngine, class FrgLayout, class CopyOpT2R, class EpilogueTile>
+  CUTLASS_DEVICE void
+  bias_refill(TmemStorage tmem_storage, AccumulatorPipelineState const& state, cute::Tensor<FrgEngine, FrgLayout> const&,
+              CopyOpT2R, EpilogueTile, int part_idx, int num_parts) {
+    Tensor acc = get<0>(slice_accumulator(tmem_storage, state.index()));
+    Tensor tAcc = acc(make_coord(_,_),_0{},_0{});
+    Tensor tAcc_epi = flat_divide(tAcc, EpilogueTile{});
+#if !defined(G128_BIAS_ST_WIDTH)
+#define G128_BIAS_ST_WIDTH 16
+#endif
+    using BiasStOp = cute::conditional_t<G128_BIAS_ST_WIDTH == 8, SM100_TMEM_STORE_32dp32b8x,
+                     cute::conditional_t<G128_BIAS_ST_WIDTH == 16, SM100_TMEM_STORE_32dp32b16x, SM100_TMEM_STORE_32dp32b32x>>;
+    auto tiled_st = make_tmem_copy(BiasStOp{}, tAcc_epi(_,_,_0{},_0{}));
+    auto thr_st = tiled_st.get_slice(threadIdx.x % size(tiled_st));
+    Tensor tST = thr_st.partition_D(tAcc_epi);                                               // TMEM side  (V_tmem,ST_M,ST_N,EPI_M,EPI_N)
+    Tensor tRS = thr_st.partition_S(make_identity_tensor(shape(tAcc_epi)));                 // register side (V_reg,ST_M,ST_N,EPI_M,EPI_N)
+    constexpr int EPI_N = decltype(size<3>(tAcc_epi))::value;
+    constexpr int NSUB  = decltype(size<2>(tAcc_epi))::value * EPI_N;
+    Tensor cst = make_tensor<ElementAccumulator>(shape(tRS(_,_0{},_0{},_0{},_0{})));
+    // Opaque constants: with a plain immediate nvcc materialises a fresh register block for every tcgen05.st operand list and
+    // hoists all of them out of the loop (16 stores x 8 = 128 live registers -> 1 KB of spills). One block, reused by all stores.
+    CUTLASS_PRAGMA_UNROLL
+    for (int i = 0; i < size(cst); ++i) {
+      int32_t v;
+      asm volatile("mov.b32 %0, 0x4B400000;" : "=r"(v));
+      cst(i) = ElementAccumulator(v);
+    }
+    // Not unrolled on purpose: ptxas gives every static tcgen05.st its own source register block (16 unrolled stores x 8 regs =
+    // 128 registers -> 1 KB of spills, even with wait::st between them); one store instruction in a runtime loop uses one block.
+    int const s_lo = NSUB * part_idx / num_parts, s_hi = NSUB * (part_idx + 1) / num_parts;
+    CUTLASS_PRAGMA_NO_UNROLL
+    for (int s = s_lo; s < s_hi; ++s) {
+      CUTLASS_PRAGMA_UNROLL
+      for (int m = 0; m < size<1>(tST); ++m) {
+        CUTLASS_PRAGMA_NO_UNROLL                       // also one static store instruction across the column groups
+        for (int n = 0; n < size<2>(tST); ++n) copy(tiled_st, cst, tST(_,m,n,s / EPI_N,s % EPI_N));
+      }
+    }
   }
 
 protected:

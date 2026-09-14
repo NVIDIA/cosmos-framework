@@ -563,6 +563,22 @@ shape except 512x1536 (~1.0x); against cuBLASLt FP8 per-tensor it is 0.9-1.3x on
 230 TFLOPS in this run and 262 in an earlier one -- the wide shape is sensitive to the weight-stream state.) Whether g256 (per-token 1x256, per-channel 1x256) meets the accuracy target is for the simulator;
 the alternative that keeps g128 accuracy is the TMEM-bias promotion (2 FFMA per element, same 209-264 clk floor), not yet implemented.
 
+### TMEM pre-bias promotion for per-col g128/g256: status (2026-09-14 evening, `-DG128_OPT_BIAS`, off by default)
+
+Implemented in the shadow collective/kernel (`UseBias`, `bias_rearm_subtile`, `bias_refill`, `HandoffBarrierC`): the MMA accumulates onto a
+stage pre-filled with 0x4B400000 (accumulate=One once a stage has been consumed once, `PipelineState::count() >= Stages`), the promotion
+is two FFMAs per element (no I2F), and the consumers re-arm the stage with `tcgen05.st` before releasing it. **Numerically verified**
+(PASS, rel-L2 1.66e-3 on cfg15/16/20/21, W-block and FP8 paths untouched) but **slower**: 4096x4096 M=1520 per-col g128 cfg16 158 -> 58
+TFLOPS, g256 cfg20 272 -> 104, epi-16 variants cfg15 131 -> 112, cfg21 (g256, epi 16) 199. Cause (ptxas -v / SASS): every static
+`tcgen05.st` gets its own pinned source register block, and the promotion warps have no register headroom (128 fp32 accumulator + 3 x 32
+TMEM fragments already fill the 216-register budget), so any re-arm store from those warps evicts accumulator elements to local memory
+(0.8-1.1 KB of spills; also with opaque constants, non-unrolled store loops, 8/16/32-column stores, or sourcing the stores from the
+consumed fragment). The re-arm must therefore not be done by the promotion warps. Next design (not implemented): a dedicated re-arm
+warpgroup (the idle warps 12-15, one per TMEM lane quadrant) that waits on a new per-stage mbarrier the consumers arrive on, stores the
+bias from an 8-register constant with one non-unrolled `tcgen05.st.x8` loop, then performs the accumulator `consumer_release`; the MMA
+count()-based accumulate flag and the consumers' first-`Stages` register add stay as they are. Expected per-col g128: ~230 TFLOPS
+(floor 264 issue clk per 128x128x128 block vs 256 MMA clk; the extra stage turnaround of 2-stage TMEM ring costs some of it).
+
 ## Continuing on another machine (state as of 2026-09-14 evening)
 
 Everything needed is in this directory plus a CUTLASS checkout; nothing depends on the Thor box's home directory.

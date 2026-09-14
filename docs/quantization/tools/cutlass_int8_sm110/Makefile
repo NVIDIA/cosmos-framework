@@ -8,6 +8,8 @@ BUILD   ?= build
 # accumulators, from ../cutlass_g128_gemm, GB200 work). It must precede the CUTLASS include path. G128_OPT: its optimisation flags.
 G128_INC ?= ./include
 G128_OPT ?= -DG128_OPT_PROMOTION -DG128_OPT_PIPE2 -DG128_OPT_SBVEC
+# G128_OPT_BIAS: TMEM pre-biased promotion (per-col INT8, no I2F). Correct (verify PASS) but the tcgen05.st re-arm pins registers
+# in the promotion warps and spills (~0.8 KB), so it is 2-3x SLOWER as of 2026-09-14; see README "TMEM pre-bias: status". Off by default.
 NVFLAGS  = -O3 -std=c++17 -arch=$(ARCH) -I$(G128_INC) -I$(CUTLASS)/include -I$(CUTLASS)/tools/util/include \
            --expt-relaxed-constexpr -DNDEBUG -Xcompiler -Wno-psabi -diag-suppress 177,20012
 BWFLAGS  = $(NVFLAGS) $(G128_OPT)

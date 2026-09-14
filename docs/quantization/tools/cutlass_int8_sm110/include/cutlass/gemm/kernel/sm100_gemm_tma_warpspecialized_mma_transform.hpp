@@ -582,6 +582,7 @@ public:
     arch::NamedBarrier tmem_allocation_result_barrier(NumMMAThreads + NumAccumWarpGroups * NumEpilogueThreads, cutlass::arch::ReservedNamedBarriers::TmemAllocBarrier);
     constexpr uint32_t HandoffBarrierA = static_cast<uint32_t>(cutlass::arch::ReservedNamedBarriers::FirstUserBarrier);      // both groups done reading the last stage
     constexpr uint32_t HandoffBarrierB = static_cast<uint32_t>(cutlass::arch::ReservedNamedBarriers::FirstUserBarrier) + 1;  // accum2's half stored to TMEM
+    constexpr uint32_t HandoffBarrierC = static_cast<uint32_t>(cutlass::arch::ReservedNamedBarriers::FirstUserBarrier) + 2;  // epilogue group has read accum2's half (bias re-arm)
     // Sync deallocation status between MMA warps of peer CTAs
     arch::ClusterBarrier& tmem_deallocation_result_barrier = shared_storage.pipelines.tmem_dealloc;
     [[maybe_unused]] uint32_t dealloc_barrier_phase = 0;
@@ -1017,6 +1018,11 @@ public:
         arch::NamedBarrier::sync(NumAccumWarpGroups * NumEpilogueThreads, HandoffBarrierB);
         collective_mainloop.handoff_load(tmem_storage, get<0>(next_state), accum, tiled_t2r,
                                          typename CollectiveEpilogue::EpilogueTile{}, /*part_idx=*/1, NumAccumWarpGroups);
+        if constexpr (CollectiveMainloop::UseBias) {
+          // THOR PATCH (bias): accum2 re-arms its half of the hand-off stage once we have read it (HandoffBarrierC); our half was
+          // re-armed in accum(). Keeps the constant fragment out of this group's register peak.
+          arch::NamedBarrier::arrive(NumAccumWarpGroups * NumEpilogueThreads, HandoffBarrierC);
+        }
         accumulator_pipeline.consumer_release(get<0>(next_state));
         ++get<0>(next_state);
         states = next_state;
@@ -1096,6 +1102,15 @@ public:
         collective_mainloop.handoff_store(tmem_storage, get<0>(next_state), accum, typename CollectiveEpilogue::CopyOpT2R{},
                                           typename CollectiveEpilogue::EpilogueTile{}, /*part_idx=*/1, NumAccumWarpGroups);
         arch::NamedBarrier::sync(NumAccumWarpGroups * NumEpilogueThreads, HandoffBarrierB);
+        if constexpr (CollectiveMainloop::UseBias) {
+          arch::NamedBarrier::sync(NumAccumWarpGroups * NumEpilogueThreads, HandoffBarrierC);   // epilogue group has read our half
+          collective_mainloop.bias_refill(tmem_storage, get<0>(next_state), accum, typename CollectiveEpilogue::CopyOpT2R{},
+                                          typename CollectiveEpilogue::EpilogueTile{}, /*part_idx=*/1, NumAccumWarpGroups);
+          cutlass::arch::fence_view_async_tmem_store();
+#if defined(CUTLASS_ARCH_TCGEN_ENABLED)
+          asm volatile("tcgen05.fence::before_thread_sync;" ::: "memory");
+#endif
+        }
         accumulator_pipeline.consumer_release(get<0>(next_state));
         ++get<0>(next_state);
         states = next_state;
