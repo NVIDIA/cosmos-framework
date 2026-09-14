@@ -770,6 +770,48 @@ def fake_quant_weight_blocks(weight: torch.Tensor, method: str, *, block_n: int,
     return q.permute(0, 2, 1, 3).reshape(n, k).to(weight.dtype)
 
 
+def fake_quant_weight_separable(
+    weight: torch.Tensor, method: str, *, group_size: int, fit: str = "noclip"
+) -> torch.Tensor:
+    """Weight Q/DQ with a *separable* per-(channel, K-group) scale ``s[n, g] = s_w[n] * c[g]``.
+
+    Experiment knob (handoff 3.6 / 8.6): a rank-1 scale lets a kernel apply ``c[g]`` as one scalar per
+    K block inside the mainloop (blockwise cost) and ``s_w[n]`` once per output channel in the epilogue,
+    while keeping per-channel resolution. ``fit="noclip"``: ``s_w[n] = max_g A[n,g]``,
+    ``c[g] = max_n A[n,g] / s_w[n]`` so ``s[n,g] >= A[n,g]`` everywhere (no clipping, some resolution
+    loss where the K-profile differs between channels). ``fit="ls"``: rank-1 least-squares fit of
+    ``log A`` (row/column log-means), values are clamped to the INT8/FP8 range (clipping allowed).
+    Same rounding as :func:`fake_quant_int8` / :func:`fake_quant_fp8` (fp32 math, round-half-even).
+    """
+    if group_size <= 0:
+        raise ValueError("fake_quant_weight_separable needs group_size > 0")
+    n_out, k_in = weight.shape
+    if k_in % group_size:
+        raise ValueError(f"K={k_in} is not divisible by group_size={group_size}")
+    qmax = _INT8_QMAX if method == "int8_sim" else _FP8_E4M3_MAX
+    w32 = weight.float().reshape(n_out, k_in // group_size, group_size)
+    amax = w32.abs().amax(dim=-1).clamp_min(torch.finfo(torch.float32).tiny)  # [N, G]
+    if fit == "noclip":
+        s_w = amax.amax(dim=1, keepdim=True)  # [N, 1]
+        c = (amax / s_w).amax(dim=0, keepdim=True)  # [1, G], <= 1
+    elif fit in ("ls", "ls_noclip"):
+        log_a = amax.log2()
+        log_sw = log_a.mean(dim=1, keepdim=True)
+        log_c = (log_a - log_sw).mean(dim=0, keepdim=True)  # common K-profile (rank-1 log-LS)
+        s_w, c = log_sw.exp2(), log_c.exp2()
+        if fit == "ls_noclip":
+            # keep the LS K-profile, but lift every channel's factor to the smallest value without clipping
+            s_w = (amax / c).amax(dim=1, keepdim=True)
+    else:
+        raise ValueError(f"unknown separable fit {fit!r} (expected 'noclip', 'ls' or 'ls_noclip')")
+    scale = (s_w * c / qmax).unsqueeze(-1)  # [N, G, 1]
+    if method == "int8_sim":
+        q = torch.round(w32 / scale).clamp_(-_INT8_QMAX, _INT8_QMAX)
+    else:
+        q = (w32 / scale).clamp_(-_FP8_E4M3_MAX, _FP8_E4M3_MAX).to(torch.float8_e4m3fn).float()
+    return (q * scale).reshape(n_out, k_in).to(weight.dtype)
+
+
 def _fake_quant(values: torch.Tensor, method: str, *, per_row: bool, group_size: int = 0) -> torch.Tensor:
     if method == "int8_sim":
         return fake_quant_int8(values, per_row=per_row, group_size=group_size)
@@ -978,7 +1020,19 @@ def swap_qdq_sim_linears(
             # Weight rows are output channels, so per_row here is per-output-channel
             # and group blocks run along K within each output channel.
             weight_block_n = int(os.environ.get("QDQ_SIM_WEIGHT_BLOCK_N", "0") or 0)
-            if weight_block_n > 0:
+            weight_scale_mode = os.environ.get("QDQ_SIM_WEIGHT_SCALE", "").strip().lower()
+            if weight_scale_mode in ("separable", "separable_noclip", "separable_ls", "separable_ls_noclip"):
+                # experiment knob: rank-1 (separable) per-channel x per-K-group weight scale, see fake_quant_weight_separable
+                if not group_size:
+                    raise ValueError("QDQ_SIM_WEIGHT_SCALE=separable needs qdq_group_size > 0 (the K block)")
+                replacement.weight.copy_(
+                    fake_quant_weight_separable(
+                        replacement.weight, method, group_size=group_size,
+                        fit={"separable_ls": "ls", "separable_ls_noclip": "ls_noclip"}.get(weight_scale_mode, "noclip"),
+                    )
+                )
+                replacement.qdq_weight_scale_mode = weight_scale_mode
+            elif weight_block_n > 0:
                 # experiment knob: DeepSeek-style (block_n x group_size) weight blocks instead of per-channel K groups
                 if not group_size:
                     raise ValueError("QDQ_SIM_WEIGHT_BLOCK_N needs qdq_group_size > 0 (the K block)")

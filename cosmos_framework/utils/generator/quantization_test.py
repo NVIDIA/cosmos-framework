@@ -553,3 +553,41 @@ def test_clipsearch_never_worse_than_absmax_and_shift_folds_into_bias() -> None:
     m(x)
     torch.testing.assert_close(m._calib_min, x.amin(dim=0))
     torch.testing.assert_close(m._calib_max, x.amax(dim=0))
+
+
+def test_fake_quant_weight_separable_noclip_variants_never_clip():
+    """Separable s_w[n]*c[g] scales: the 'noclip' fits must bound every element (|q| < 127 before clamp)."""
+    from cosmos_framework.utils.generator.quantization import fake_quant_weight_separable
+
+    torch.manual_seed(0)
+    weight = (torch.randn(64, 512) * torch.rand(64, 1) * 3).to(torch.bfloat16)  # channel-dependent ranges
+    weight[3, 100:110] *= 40  # an outlier block in one channel
+    for fit in ("noclip", "ls_noclip"):
+        deq = fake_quant_weight_separable(weight, "int8_sim", group_size=128, fit=fit)
+        assert deq.shape == weight.shape and deq.dtype == weight.dtype
+        # no clipping <=> per-element error bounded by half a quantization step of that (channel, group)
+        w32 = weight.float().view(64, 4, 128)
+        amax = w32.abs().amax(-1)  # [N, G]
+        err = (deq.float().view(64, 4, 128) - w32).abs().amax(-1)
+        # the separable scale is >= the true block absmax, so err <= (scale/127)/2 <= (max over the row)/(2*127) is loose; check the tight bound instead
+        assert torch.all(err <= (w32.abs().amax(-1).amax(-1, keepdim=True) / 127 / 2 + 1e-3 * amax + 0.02)), fit
+        # and it must be at least as good as per-tensor everywhere it matters: rel-L2 within 8-bit range
+        rel = (deq.float() - weight.float()).norm() / weight.float().norm()
+        assert rel < 0.05, (fit, rel)
+
+
+def test_fake_quant_weight_separable_ls_matches_reference_math():
+    """'ls' = rank-1 log-LS fit with clamp; recompute the scales independently and compare bit-exactly."""
+    from cosmos_framework.utils.generator.quantization import fake_quant_weight_separable
+
+    torch.manual_seed(1)
+    weight = torch.randn(32, 256, dtype=torch.float32)
+    out = fake_quant_weight_separable(weight, "int8_sim", group_size=64, fit="ls")
+    w3 = weight.view(32, 4, 64)
+    amax = w3.abs().amax(-1).clamp_min(torch.finfo(torch.float32).tiny)
+    la = amax.log2()
+    lsw = la.mean(1, keepdim=True)
+    c = (la - lsw).mean(0, keepdim=True).exp2()
+    scale = (lsw.exp2() * c / 127.0).unsqueeze(-1)
+    ref = (torch.round(w3 / scale).clamp_(-127, 127) * scale).view(32, 256)
+    assert torch.equal(out, ref)

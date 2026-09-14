@@ -1,0 +1,95 @@
+"""Kernel configuration table for the DeepGEMM INT8 port. Each entry becomes one cfg_XX.cu (parallel nvcc jobs) and one row of
+configs.h. Fields: (block_m, block_n, stages or None=max that fits, num_tma_multicast, multicast_on_a, compiled N or 0, compiled K or 0[, variant]).
+variant '' (default) = the default kernel (launcher.cuh); 'db' = the double-buffered-accumulator mainloop (launcher_db.cuh, gen_kernel_db.py,
+BLOCK_M in {64, 128} only; name suffix " DB").
+Re-run `python gen.py` after editing CONFIGS, then rebuild (delete the build dir or let ninja pick up the changed sources)."""
+import os
+HERE = os.path.dirname(os.path.abspath(__file__))
+SMEM_CAPACITY = 232448
+
+def ceil_div(a, b): return (a + b - 1) // b
+def align(a, b): return ceil_div(a, b) * b
+
+def max_stages(bm, bn, k=12288):
+    smem_cd = align(bm * bn * 2, 1024)
+    per_stage = bm * 128 + bn * 128 + align(bm * 4, 128)
+    extra_sfb = align(ceil_div(k, 128) * 4 * (1 if 128 % bn == 0 else 2), 8)
+    return min(16, (SMEM_CAPACITY - smem_cd - 256 - extra_sfb) // per_stage)
+
+# (block_m, block_n, stages, mcast, on_a, shape_n, shape_k)
+CONFIGS = [
+    # dynamic-shape kernels (SHAPE_N = SHAPE_K = 0). NOTE: for cluster 1x1 DeepGEMM passes kIsTMAMulticastOnA = (cluster_n > 1) = false,
+    # which also selects the scheduler's L2-swizzle grouping (groups along M) -- mirrored here.
+    (256, 128, None, 2, True, 0, 0),    # 0: DeepGEMM heuristic pick for all large shapes (3 stages, cluster (1,2): A multicast)
+    (256, 128, None, 1, False, 0, 0),   # 1: same without multicast (DeepGEMM pick when the grid is a single wave, e.g. M=901)
+    (128, 64, None, 1, False, 0, 0),    # 2: DeepGEMM pick for M=901, N=1024 (8 stages)
+    (128, 128, None, 1, False, 0, 0),   # 3: 5 stages
+    (128, 128, None, 2, False, 0, 0),   # 4: 2-CTA cluster multicasting B (cluster_m = 2)
+    (128, 192, None, 2, True, 0, 0),    # 5: BLOCK_N > 128 exercises the two-SFB-column path
+    (64, 128, None, 1, False, 0, 0),    # 6: single math warpgroup, small M
+    (256, 96, None, 2, True, 0, 0),     # 7: narrower N tile for N=1024 shapes
+    # shape-compiled kernels (DeepGEMM's default compiled_dims="nk": SHAPE_N/SHAPE_K are template constants)
+    (256, 128, None, 2, True, 4096, 4096),     # 8
+    (256, 128, None, 2, True, 1024, 4096),     # 9
+    (256, 128, None, 2, True, 12288, 4096),    # 10
+    (256, 128, None, 2, True, 4096, 12288),    # 11
+    (256, 128, None, 1, False, 4096, 4096),    # 12
+    (256, 128, None, 1, False, 1024, 4096),    # 13
+    (256, 128, None, 1, False, 12288, 4096),   # 14
+    (256, 128, None, 1, False, 4096, 12288),   # 15
+    (128, 64, None, 1, False, 1024, 4096),     # 16: DeepGEMM pick for M=901, N=1024
+    (128, 128, None, 2, True, 4096, 4096),     # 17: 128x128 c1x2 compiled
+    (128, 128, None, 2, False, 4096, 4096),    # 18: 128x128 c2x1 compiled
+    # DB variant (double-buffered int32 accumulators, promotion of k-block k overlapped with the WGMMAs of k+1), gen_kernel_db.py
+    (128, 128, None, 2, True, 4096, 4096, 'db'),     # 19: 128x128 s5 c1x2 N4096K4096 DB
+    (128, 128, None, 2, False, 4096, 4096, 'db'),    # 20: 128x128 s5 c2x1 N4096K4096 DB
+    (128, 128, None, 1, False, 4096, 4096, 'db'),    # 21: 128x128 s5 c1x1 N4096K4096 DB
+    (128, 128, 4, 2, True, 4096, 4096, 'db'),        # 22: 128x128 s4 c1x2 N4096K4096 DB (stage-count comparison)
+    (128, 128, None, 2, True, 12288, 4096, 'db'),    # 23: 128x128 s5 c1x2 N12288K4096 DB
+    (128, 128, None, 2, True, 4096, 12288, 'db'),    # 24: 128x128 s5 c1x2 N4096K12288 DB
+    (128, 128, None, 2, True, 1024, 4096, 'db'),     # 25: 128x128 s5 c1x2 N1024K4096 DB
+    (128, 64, None, 1, False, 1024, 4096, 'db'),     # 26: 128x64 s8 c1x1 N1024K4096 DB (DeepGEMM pick for M=901, N=1024)
+    (64, 128, None, 1, False, 0, 0, 'db'),           # 27: 64x128 s8 c1x1 DB (single math warpgroup, skinny M)
+    (128, 128, None, 1, False, 0, 0, 'db'),          # 28: 128x128 s5 c1x1 DB dynamic shape
+    (128, 128, None, 2, True, 0, 0, 'db'),           # 29: 128x128 s5 c1x2 DB dynamic shape
+]
+
+def cfg_rows():
+    rows = []
+    for i, cfg in enumerate(CONFIGS):
+        bm, bn, st, mc, on_a, sn, sk = cfg[:7]; variant = cfg[7] if len(cfg) > 7 else ''
+        st = max_stages(bm, bn) if st is None else st
+        assert st >= 1 and bm in (64, 128, 256) and bn % 16 == 0 and 16 <= bn <= 256 and mc in (1, 2) and variant in ('', 'db')
+        assert variant != 'db' or bm <= 128, "DB mainloop needs one 64-row wave per math warpgroup (BLOCK_M in {64, 128})"
+        name = f"{bm}x{bn} s{st} c{'1x2' if (mc == 2 and on_a) else '2x1' if mc == 2 else '1x1'}" + (f" N{sn}K{sk}" if sn or sk else "") + (" DB" if variant == 'db' else "")
+        rows.append(dict(i=i, bm=bm, bn=bn, st=st, mc=mc, on_a=on_a, sn=sn, sk=sk, mt=128 if bm <= 64 else 256, name=name, variant=variant))
+    return rows
+
+def main():
+    rows = cfg_rows()
+    for r in rows:
+        open(os.path.join(HERE, f"cfg_{r['i']:02d}.cu"), "w").write(
+            '// generated by gen.py -- one kernel instantiation per translation unit so ninja compiles them in parallel\n'
+            + ('#include "launcher_db.cuh"\n' if r['variant'] == 'db' else '#include "launcher.cuh"\n')
+            + f"void dgint8_run_{r['i']}(const dgint8::Args& args) {{\n"
+            + f"    dgint8::{'launch_db' if r['variant'] == 'db' else 'launch'}<{r['sn']}u, {r['sk']}u, {r['bm']}u, {r['bn']}u, {r['st']}u, {r['mc']}u, {'true' if r['on_a'] else 'false'}>(args);\n"
+            + "}\n")
+    for f in os.listdir(HERE):   # drop stale cfg files
+        if f.startswith("cfg_") and f.endswith(".cu") and int(f[4:6]) >= len(rows):
+            os.remove(os.path.join(HERE, f))
+    with open(os.path.join(HERE, "configs.h"), "w") as f:
+        f.write('// generated by gen.py\n#pragma once\n#include "dgint8_args.h"\n')
+        for r in rows:
+            f.write(f"void dgint8_run_{r['i']}(const dgint8::Args& args);\n")
+        f.write("static const dgint8::CfgInfo kDgInt8Cfgs[] = {\n")
+        for r in rows:
+            f.write(f"    {{{r['bm']}, {r['bn']}, {r['st']}, {r['mc']}, {int(r['on_a'])}, {r['sn']}, {r['sk']}, {r['mt']}, 0, \"{r['name']}\"}},\n")
+        f.write("};\ntypedef void (*dgint8_run_fn)(const dgint8::Args&);\nstatic const dgint8_run_fn kDgInt8Runs[] = {\n")
+        for r in rows:
+            f.write(f"    dgint8_run_{r['i']},\n")
+        f.write("};\n")
+        f.write(f"static const int kDgInt8NumCfgs = {len(rows)};\n")
+    print("\n".join(f"cfg {r['i']}: {r['name']}" for r in rows))
+
+if __name__ == "__main__":
+    main()
