@@ -378,8 +378,8 @@ The blockwise kernel promoted with the 4 epilogue warps (1 per SMSP) and kept th
 shared-memory latency. The shadow kernel turns the idle warps 8-11 into a second 128-thread promotion warpgroup:
 
 - warp roles: 0 MMA, 1 sched, 2 TMA A/B, **3 scale-factor loads** (was the epilogue-load warp; C must be void), 4-7 promotion
-  part 0 + epilogue store, **8-11 promotion part 1**; registers 48 / 224 / 224 (`setmaxnreg`; 232 = exact 64K fit hangs the
-  `setmaxnreg.inc`, 216 spills on 256x256).
+  part 0 + epilogue store, **8-11 promotion part 1**; registers 48 / 216 / 216 (`setmaxnreg`; 232 = exact 64K fit hangs the
+  `setmaxnreg.inc`, 224 spills on the 256x256 W-block config).
 - both groups consume every accumulator stage (consumer counts x2 on the accumulator, scale and CLC pipelines, TMEM-alloc barrier
   9 warps); each promotes half of the epilogue sub-tiles (`accum(..., part_idx, num_parts)` in the collective, only its own half of
   `tTR_FullAcc` is live); the tile's last TMEM stage is kept until group 1 has written its half of the full accumulator into it
@@ -419,8 +419,7 @@ epilogue column-scale fragment on top of the 128-register accumulator) and needs
 the big tile; at 256x128 it is 0.96x the W-block kernel as before.
 
 Not done / next: MAXN re-measurement of the g128 kernels (they are not power-bound, so they should scale with the 1575/1386 clock
-while FP8 per-tensor does not); the 8-warp 256x256 restructure; the separable-scale variant (kernel side = cfg8 + a per-column EVT
-scale); torch binding.
+while FP8 per-tensor does not); per-col promotion-loop tuning (see the layout decision below); torch binding.
 
 ### hidden_size = 1536 shapes (`results/g128_summary_h1536_*.md`; assumed q/o 1536x1536, gate/up 6144x1536, down 1536x6144, k/v 512x1536)
 
@@ -453,9 +452,48 @@ Fusing the projections is the model-side lever: it removes the small-N shapes wh
 512x1536) and moves the work into the wide-N regime where W-block g128 is 1.3-1.9x bf16 and reaches / exceeds cuBLASLt FP8
 per-tensor on the widest shape (24576x4096: 242 TFLOPS vs 199), and per-col g128 is 1.0-1.3x bf16.
 
+### TileK = 256 on the 256x256 kernels (cfg19 W-block, cfg18 per-col; `results/g128_tilek256_20260914.md`)
+
+| shape, M | W-block TK128 (cfg13) us (TFLOPS) | W-block TK256 (cfg19) | per-col TK128 (cfg16) | per-col TK256 (cfg18) |
+|---|---:|---:|---:|---:|
+| 4096x4096, 1520 | 223.2 (228.5) | **215.0 (237.2)** | **322.0 (158.4)** | 329.7 (154.7) |
+| 4096x4096, 904 | 159.4 (190.3) | **153.5 (197.6)** | **227.3 (133.5)** | 233.4 (130.0) |
+| 24576x4096, 1520 | 1263.6 (242.2) | **1219.5 (250.9)** | **1837.0 (166.6)** | 1878.8 (162.9) |
+
+W-block gains 4 % (half the stage hand-offs per K), per-col loses 2 % (promotion-bound; the longer stage delays each promotion and
+exposes the 2-deep TMEM ring; cfg18 also spills 48 B). cfg19 is the fastest W-block config; per-col stays on cfg16 (TileK = 128).
+
+### Layout decision (2026-09-14 evening): per-col g128 is the layout to carry
+
+Per pzeren, the separable s_w[n]*c[g] layout and the weight-blockwise 128x128 layout are expected to fail the accuracy target in the
+simulator, so the W-block numbers above are an upper bound on what the INT8 mainloop can do, not a deployable option. The layout
+that has to be carried forward is **per-col g128 (S0: s_a[m,g], s_w[n,g]; cfg16, 8-warp 256x256 kernel, epi 128x32)**. Its standing
+under identical conditions (`results/percol_standing_20260914.md`):
+
+| N x K | INT8 g128 per-col 256x256 (cfg16) TFLOPS, M=904/1520/1804 | cuBLASLt bf16 TFLOPS | vs bf16 (time ratio) | vs cuBLASLt FP8 per-tensor |
+|---|---|---|---|---|
+| 4096x4096 | 133 / 159 / 145 | 113 / 142 / 124 | 1.18 / 1.12 / 1.16 | 0.59 / 0.67 / 0.59 |
+| 1024x4096 | 106 / 124 / 112 | 143 / 160 / 154 | 0.75 / 0.78 / 0.73 | 0.46 / 0.44 / 0.38 |
+| 6144x4096 | 141 / 159 / 143 | 156 / 138 / 132 | 0.91 / 1.16 / 1.08 | 0.51 / 0.60 / 0.62 |
+| 24576x4096 | 147 / 167 / 149 | 129 / 128 / 124 | 1.14 / 1.30 / 1.20 | 0.64 / 0.84 / 0.66 |
+| 1536x1536 | 91 / 117 / 113 | 123 / 125 / 149 | 0.74 / 0.93 / 0.75 | 0.47 / 0.54 / 0.49 |
+| 512x1536 | 70 / 69 / 82 | 88 / 107 / 117 | 0.80 / 0.63 / 0.69 | 0.65 / 0.46 / 0.46 |
+| 6144x1536 | 121 / 138 / 125 | 132 / 134 / 151 | 0.91 / 1.03 / 0.82 | 0.51 / 0.59 / 0.62 |
+| 1536x6144 | 117 / 148 / 138 | 145 / 139 / 137 | 0.81 / 1.06 / 1.00 | 0.41 / 0.46 / 0.45 |
+| 4608x1536 | 112 / 137 / 123 | 142 / 129 / 128 | 0.78 / 1.06 / 0.96 | 0.48 / 0.60 / 0.59 |
+| 12288x1536 | 124 / 144 / 129 | 123 / 123 / 109 | 1.01 / 1.17 / 1.18 | 0.69 / 0.68 / 0.67 |
+
+Per-col g128 is faster than bf16 only on wide N (4096x4096, 6144x4096, 24576x4096, 12288x1536: 1.0-1.3x); on the unfused
+hidden-1536 layers it is at bf16 (0.8-1.1x) and on 1024x4096 / 512x1536 / 1536x1536 it is slower than bf16. Against cuBLASLt FP8
+per-tensor it is 0.4-0.7x. The hard floor is the promotion: 3 FP instructions per element per 128-K block (I2F, FMUL, FFMA) with
+no FFMA2 on Thor, so the remaining levers are instruction-level scheduling of that loop, running at MAXN (not power-bound, unlike
+FP8), and fusing QKV / gate+up so every layer is in the wide-N regime. All bf16 / INT8 numbers for the hidden-1536 shapes
+(per-tensor, W-block, separable, per-col, both tile sizes) are collected in `results/h1536_bf16_int8_table.md`.
+
 ## Continuing on another machine (state as of 2026-09-14 evening)
 
 Everything needed is in this directory plus a CUTLASS checkout; nothing depends on the Thor box's home directory.
+Priority for the next machine: the per-col g128 kernel (cfg16) -- see "Layout decision" above; W-block / separable are reference points only.
 
 ```bash
 git clone --branch pzeren/int8-sim-group-quant --single-branch https://github.com/NVIDIA/cosmos-framework.git
