@@ -1,7 +1,6 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: OpenMDW-1.1
 
-import torch
 from hydra.core.config_store import ConfigStore
 
 from cosmos_framework.utils.lazy_config import PLACEHOLDER, LazyDict
@@ -177,10 +176,6 @@ def register_tokenizer() -> None:
     # Wan2pt1 and Wan2pt2 tokenizers
     cs.store(group="tokenizer", package="model.config.tokenizer", name="wan2pt1_tokenizer", node=Wan2pt1VAEConfig)
     cs.store(group="tokenizer", package="model.config.tokenizer", name="wan2pt2_tokenizer", node=Wan2pt2VAEConfig)
-    # LiDAR VAEs are deliberately absent from this group: a range clip is its own modality
-    # with its own projections into the sequence, so it is registered under
-    # ``model.config.lidar_tokenizer`` by ``register_lidar_tokenizer`` below. Installing one
-    # here would displace the camera tokenizer and route rangemaps through the vision heads.
     # UniAE tokenizer
     cs.store(
         group="tokenizer",
@@ -199,34 +194,6 @@ def register_tokenizer() -> None:
     )
 
 
-def register_lidar_tokenizer() -> None:
-    """Register LiDAR tokenizers under ``model.config.lidar_tokenizer``.
-
-    A joint camera + LiDAR recipe holds two vision tokenizers at once, so the LiDAR one needs
-    its own package: registering it under ``model.config.tokenizer`` would displace the camera
-    tokenizer. With this group in place, the dataloader's per-sensor token accounting can
-    interpolate ``${model.config.lidar_tokenizer.temporal_compression_factor}`` the same way
-    it already reads the camera factors off ``model.config.tokenizer``.
-    """
-    cs = ConfigStore.instance()
-    cs.store(
-        group="lidar_tokenizer",
-        package="model.config.lidar_tokenizer",
-        name="lidar_tokenizer_v0",
-        node=LidarTokenizerV0Config,
-    )
-    cs.store(
-        group="lidar_tokenizer",
-        package="model.config.lidar_tokenizer",
-        name="lidar_tokenizer_v1_r105_b1800_symmetric",
-        node=LidarTokenizerV1R105B1800SymmetricConfig,
-    )
-    cs.store(
-        group="lidar_tokenizer",
-        package="model.config.lidar_tokenizer",
-        name="lidar_tokenizer_v1p2_r105_b1800",
-        node=LidarTokenizerV1P2R105B1800Config,
-    )
 
 
 def register_sound_tokenizer() -> None:

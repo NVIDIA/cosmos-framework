@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: OpenMDW-1.1
 
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from pathlib import Path
 from typing import Any, Literal, cast
 
@@ -74,13 +74,59 @@ def split_multiview_video_by_view(
     return [video_by_view[view_idx].contiguous() for view_idx in range(sample_n_views)]  # list[[C,F,H,W]]
 
 
+def iter_multiview_video_by_view(
+    video: torch.Tensor,
+    *,
+    sample_n_views: int,
+    num_video_frames_per_view: int,
+) -> Iterator[torch.Tensor]:  # video: [B,C,V*F,H,W] or [C,V*F,H,W], yields [C,F,H,W]
+    """Yield camera views without materializing a contiguous copy of the full video."""
+    if sample_n_views <= 0 or num_video_frames_per_view <= 0:
+        raise ValueError(
+            "Expected positive sample_n_views and num_video_frames_per_view, "
+            f"got sample_n_views={sample_n_views}, "
+            f"num_video_frames_per_view={num_video_frames_per_view}."
+        )
+    if video.dim() == 5:
+        if video.shape[0] != 1:
+            raise ValueError(
+                "Expected multiview tensor shape [B,C,V*F,H,W] with B=1 or [C,V*F,H,W], "
+                f"got shape={tuple(video.shape)}, sample_n_views={sample_n_views}, "
+                f"num_video_frames_per_view={num_video_frames_per_view}."
+            )
+        video_cthw = video[0]  # [C,V*F,H,W]
+    elif video.dim() == 4:
+        video_cthw = video  # [C,V*F,H,W]
+    else:
+        raise ValueError(
+            "Expected multiview tensor shape [B,C,V*F,H,W] with B=1 or [C,V*F,H,W], "
+            f"got shape={tuple(video.shape)}, sample_n_views={sample_n_views}, "
+            f"num_video_frames_per_view={num_video_frames_per_view}."
+        )
+
+    expected_num_frames = sample_n_views * num_video_frames_per_view
+    if video_cthw.shape[1] != expected_num_frames:
+        raise ValueError(
+            "Expected multiview tensor shape [B,C,V*F,H,W] with B=1 or [C,V*F,H,W], "
+            f"got shape={tuple(video.shape)}, sample_n_views={sample_n_views}, "
+            f"num_video_frames_per_view={num_video_frames_per_view}."
+        )
+
+    for view_index in range(sample_n_views):
+        frame_start = view_index * num_video_frames_per_view
+        frame_end = frame_start + num_video_frames_per_view
+        yield video_cthw[:, frame_start:frame_end]  # [C,F,H,W]
+
+
 def decode_multiview_latent_per_view(
     decode: Callable[[torch.Tensor], torch.Tensor],
     latent: torch.Tensor,
     sample_n_views: int,
     num_video_frames_per_view: int,
+    *,
+    assemble_on_cpu: bool = False,
 ) -> torch.Tensor:  # latent: [B,C,V*T_latent,H,W] or [C,V*T_latent,H,W], returns same rank with T=V*F
-    """Decode camera-major latent clips independently and concatenate their pixels."""
+    """Decode camera-major latent clips independently and assemble their pixels."""
     if latent.ndim not in (4, 5):
         raise ValueError(
             f"Multiview latents must have shape [B,C,T,H,W] or [C,T,H,W], got shape {tuple(latent.shape)}."
@@ -96,6 +142,7 @@ def decode_multiview_latent_per_view(
 
     latent_frames_per_view = num_latent_frames // sample_n_views
     decoded_views: list[torch.Tensor] = []
+    decoded_output: torch.Tensor | None = None
     for view_idx in range(sample_n_views):
         view_latent = latent.narrow(  # [B,C,T_latent,H,W] or [C,T_latent,H,W]
             temporal_dim,
@@ -113,7 +160,27 @@ def decode_multiview_latent_per_view(
                 "Decoded camera clip length must match num_video_frames_per_view: "
                 f"got T={decoded_view.shape[temporal_dim]}, expected {num_video_frames_per_view}."
             )
-        decoded_views.append(decoded_view)
+        if assemble_on_cpu:
+            if decoded_output is None:
+                output_shape = list(decoded_view.shape)
+                output_shape[temporal_dim] = sample_n_views * num_video_frames_per_view
+                decoded_output = torch.empty(
+                    output_shape,
+                    dtype=decoded_view.dtype,
+                    device="cpu",
+                )  # [B,C,V*F,H_pixel,W_pixel] or [C,V*F,H_pixel,W_pixel]
+            output_view = decoded_output.narrow(  # [B,C,F,H_pixel,W_pixel] or [C,F,H_pixel,W_pixel]
+                temporal_dim,
+                view_idx * num_video_frames_per_view,
+                num_video_frames_per_view,
+            )
+            output_view.copy_(decoded_view)  # [B,C,F,H_pixel,W_pixel] or [C,F,H_pixel,W_pixel]
+            del decoded_view
+        else:
+            decoded_views.append(decoded_view)
+
+    if decoded_output is not None:
+        return decoded_output
 
     return torch.cat(decoded_views, dim=temporal_dim)  # [B,C,V*F,H_pixel,W_pixel] or [C,V*F,H_pixel,W_pixel]
 
