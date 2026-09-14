@@ -654,3 +654,17 @@ per-col −2%（158→155，cfg18 还溢出 48 B），所以 per-col 保持 cfg1
 3. 模型侧：QKV / gate-up 合并成一次 GEMM（per-col g128 只在宽 N 上快于 bf16）；小 N 层（1024×4096、512×1536、1536×1536）若精度允许留 bf16。
 4. torch 扩展绑定接入 cosmos-framework；INT8 attention（Q·Kᵀ、P·V）是把 INT8 优势延伸到非 GEMM 部分的下一处。
 5. 向 CUTLASS 上游报告 `arch/reg_reconfig.h` 缺 sm_110a（`setmaxnreg` 被编译成空）。
+
+## 12. 方案定稿（2026-09-14，pzeren 决定）
+
+| 角色 | 方案 | 依据 |
+| --- | --- | --- |
+| **主线** | **per-col g256 + SmoothQuant α=0.5**（激活 per-token 每 256 K 一个 scale，权重每输出通道每 256 K 一个 scale，SmoothQuant 折进权重与前一层 norm，需一次校准） | Thor：g256 per-col 224～268 TFLOPS，追平 cuBLASLt FP8 per-tensor（0.98～1.30×），bf16 的 1.8～2.1×（§11.2）；Nano t2i 12 图 23.8 dB / 保住 10/12，与 g128 持平，比官方 FP8 高 6 dB（§3.8） |
+| 拿掉 | g64 | kernel 每 64 K 提升一次，H100 上 FMA 预算约 100%，Thor 上无性能出路；精度（Nano 25.8、Edge 29.3）只作上限参照 |
+| 拿掉 | g128 | Thor 上只有 bf16 的 1.1～1.2×、cuBLASLt FP8 pt 的 0.6～0.7×；精度与 g256+SQ 持平，没有保留理由 |
+| 拿掉 | W 128×128 块、可分离 s_w[n]·c[g] | 精度不达标（§3.6、§3.9）；只作 INT8 主循环速度上界 |
+| 参照 | 官方 FP8 per-tensor | 精度下限（t2i 17.8～18.6 dB，policy 7.5% seed 间差异） |
+| 模型侧配合 | QKV / gate-up 合并成宽 GEMM；窄 N 层（k/v_proj 1024×4096、1536 档小层）分组不划算时留 bf16 | Thor 窄 N 层任何分组都不如 bf16（§11.2） |
+| attention | Q/K INT8（Sage-v1 版式 + Hadamard + 通道平衡，Q4a）只在 attention 为 MMA 瓶颈的平台（H100、A100）有收益；GB200/Thor 受 exp2 吞吐限制，暂不做 | §3.3、第 10 节 |
+
+定稿前待补：Edge 与 policy 上的 g256 + SQ、Nano 36 图复核、SmoothQuant 校准稳健性（跨任务/分辨率）、视频精度。
