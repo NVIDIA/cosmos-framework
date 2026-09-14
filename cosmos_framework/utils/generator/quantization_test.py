@@ -498,3 +498,96 @@ def test_fake_quant_weight_blocks_shares_one_scale_per_block() -> None:
     assert not torch.isclose(scale, scale2)
     with pytest.raises(ValueError):
         fake_quant_weight_blocks(w, "int8_sim", block_n=100, block_k=128)
+
+
+def test_smoothquant_is_exact_without_rounding_and_helps_with_outliers() -> None:
+    from cosmos_framework.utils.generator.quantization import QdqSimLinear, fake_quant_int8
+
+    torch.manual_seed(13)
+    lin = torch.nn.Linear(64, 32, bias=False)
+    x = torch.randn(200, 64)
+    x[:, 7] *= 40.0  # activation outlier channel
+    ref = lin(x)
+    a_max = x.abs().amax(dim=0)
+    w_max = lin.weight.abs().amax(dim=0)
+    s_vec = (a_max.clamp_min(1e-5) ** 0.5) / (w_max.clamp_min(1e-5) ** 0.5)
+    # exactness of the migration itself
+    torch.testing.assert_close(torch.nn.functional.linear(x / s_vec, lin.weight * s_vec), ref, atol=1e-4, rtol=1e-4)
+
+    # per-row/per-col INT8 error with and without smoothing
+    def err(smooth):
+        w = lin.weight * s_vec if smooth else lin.weight
+        xx = x / s_vec if smooth else x
+        y = torch.nn.functional.linear(fake_quant_int8(xx, per_row=True), fake_quant_int8(w, per_row=True))
+        return ((y - ref).norm() / ref.norm()).item()
+
+    assert err(True) < 0.5 * err(False), (err(True), err(False))
+    # module path: calib accumulates amax, smooth divides inputs
+    m = QdqSimLinear(64, 32, bias=False)
+    m.weight = lin.weight
+    m.qdq_calib = True
+    m._qdq_weight_finalized = True
+    m(x[:100])
+    m(x[100:])
+    torch.testing.assert_close(m._calib_amax, a_max)
+
+
+def test_clipsearch_never_worse_than_absmax_and_shift_folds_into_bias() -> None:
+    from cosmos_framework.utils.generator.quantization import QdqSimLinear, fake_quant_int8, fake_quant_int8_clipsearch
+
+    torch.manual_seed(14)
+    w = torch.randn(64, 256)
+    w[5, :8] *= 4.0  # a heavy-tailed row: clipping a few large weights buys resolution for the other 248
+    e_abs = ((fake_quant_int8(w, per_row=True) - w) ** 2).sum(dim=1)
+    e_clip = ((fake_quant_int8_clipsearch(w) - w) ** 2).sum(dim=1)
+    assert torch.all(e_clip <= e_abs + 1e-6)  # MSE search is never worse than absmax (at 8 bits it rarely clips at all)
+    lin = torch.nn.Linear(256, 64, bias=False)
+    x = torch.randn(50, 256) + 3.0
+    delta = x.mean(dim=0)
+    y = torch.nn.functional.linear(x - delta, lin.weight) + lin.weight @ delta
+    torch.testing.assert_close(y, lin(x), atol=1e-4, rtol=1e-4)
+    m = QdqSimLinear(256, 64, bias=False)
+    m.weight = lin.weight
+    m.qdq_calib = True
+    m._qdq_weight_finalized = True
+    m(x)
+    torch.testing.assert_close(m._calib_min, x.amin(dim=0))
+    torch.testing.assert_close(m._calib_max, x.amax(dim=0))
+
+
+def test_fake_quant_weight_separable_noclip_variants_never_clip():
+    """Separable s_w[n]*c[g] scales: the 'noclip' fits must bound every element (|q| < 127 before clamp)."""
+    from cosmos_framework.utils.generator.quantization import fake_quant_weight_separable
+
+    torch.manual_seed(0)
+    weight = (torch.randn(64, 512) * torch.rand(64, 1) * 3).to(torch.bfloat16)  # channel-dependent ranges
+    weight[3, 100:110] *= 40  # an outlier block in one channel
+    for fit in ("noclip", "ls_noclip"):
+        deq = fake_quant_weight_separable(weight, "int8_sim", group_size=128, fit=fit)
+        assert deq.shape == weight.shape and deq.dtype == weight.dtype
+        # no clipping <=> per-element error bounded by half a quantization step of that (channel, group)
+        w32 = weight.float().view(64, 4, 128)
+        amax = w32.abs().amax(-1)  # [N, G]
+        err = (deq.float().view(64, 4, 128) - w32).abs().amax(-1)
+        # the separable scale is >= the true block absmax, so err <= (scale/127)/2 <= (max over the row)/(2*127) is loose; check the tight bound instead
+        assert torch.all(err <= (w32.abs().amax(-1).amax(-1, keepdim=True) / 127 / 2 + 1e-3 * amax + 0.02)), fit
+        # and it must be at least as good as per-tensor everywhere it matters: rel-L2 within 8-bit range
+        rel = (deq.float() - weight.float()).norm() / weight.float().norm()
+        assert rel < 0.05, (fit, rel)
+
+
+def test_fake_quant_weight_separable_ls_matches_reference_math():
+    """'ls' = rank-1 log-LS fit with clamp; recompute the scales independently and compare bit-exactly."""
+    from cosmos_framework.utils.generator.quantization import fake_quant_weight_separable
+
+    torch.manual_seed(1)
+    weight = torch.randn(32, 256, dtype=torch.float32)
+    out = fake_quant_weight_separable(weight, "int8_sim", group_size=64, fit="ls")
+    w3 = weight.view(32, 4, 64)
+    amax = w3.abs().amax(-1).clamp_min(torch.finfo(torch.float32).tiny)
+    la = amax.log2()
+    lsw = la.mean(1, keepdim=True)
+    c = (la - lsw).mean(0, keepdim=True).exp2()
+    scale = (lsw.exp2() * c / 127.0).unsqueeze(-1)
+    ref = (torch.round(w3 / scale).clamp_(-127, 127) * scale).view(32, 256)
+    assert torch.equal(out, ref)

@@ -20,14 +20,14 @@ struct GmmaInt8Accumulation {
   CUTLASS_DEVICE float& main(int i) { return reinterpret_cast<float&>(accum_(i)); }
   template <class EA, class LA, class EB, class LB>
   CUTLASS_DEVICE void scale_core(cute::Tensor<EA, LA> const& sA, cute::Tensor<EB, LB> const& sB) {
-    static_assert(LayoutAccum{}.shape() == LA{}.shape(), "Accumulator and scaleA must have same shape.");
-    static_assert(LayoutAccum{}.shape() == LB{}.shape(), "Accumulator and scaleB must have same shape.");
+    static_assert(cute::size(LayoutAccum{}) == cute::size(LA{}), "Accumulator and scaleA must have same size.");  // shapes may differ in mode nesting (e.g. (16,2) vs 32) when ScaleNsPerTile > 1; linear order is identical
+    static_assert(cute::size(LayoutAccum{}) == cute::size(LB{}), "Accumulator and scaleB must have same size.");
     CUTLASS_PRAGMA_UNROLL
     for (int i = 0; i < size(accum_); ++i) main(i) += static_cast<float>(accum_temp_(i)) * (sA(i) * sB(i));
   }
   template <class E, class L>
   CUTLASS_DEVICE void scale_core(cute::Tensor<E, L> const& s) {
-    static_assert(LayoutAccum{}.shape() == L{}.shape(), "Accumulator and scale must have same shape.");
+    static_assert(cute::size(LayoutAccum{}) == cute::size(L{}), "Accumulator and scale must have same size.");
     CUTLASS_PRAGMA_UNROLL
     for (int i = 0; i < size(accum_); ++i) main(i) += static_cast<float>(accum_temp_(i)) * s(i);
   }
