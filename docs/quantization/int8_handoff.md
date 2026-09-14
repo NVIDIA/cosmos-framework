@@ -98,6 +98,16 @@ g128（CUTLASS SM90 blockwise / DeepGEMM 的原生 K 粒度）比 g64 平均低�
 S0 比官方 FP8 离 bf16 近约 7 倍；g64 与 g128 在动作上无差别；加上 Q4a attention 几乎不增加误差（非夹爪维 MSE 0.00063 对 0.00064）。
 policy 走 two_way attention 路径，1517 个 gen token + 110 个 text 键，无 CFG。样例自带的 golden 动作文件框架并不评估，bf16 对它 MSE 0.2，不可作参照。
 
+### 3.6 权重 scale 布局：per-col g128 对 DeepSeek blockwise 128×128（2026-09-14 补测，激活都是 per-token g128）
+| 权重 scale | t2i 36 图均值 | 保住/36 | +Q4a 均值 | +Q4a 保住 | policy MSE 对 bf16 | +Q4a policy MSE |
+| --- | --- | --- | --- | --- | --- | --- |
+| per-col g128（每通道 × 128 K） | 25.01 | 28 | 24.28 | 28 | 0.00164 | 0.00214 |
+| W 128×128 blockwise | 23.05 | 25 | 22.62 | 21 | 0.00875 | 0.00898 |
+| 官方 FP8 | 18.58 | 5 | | | 0.0113 | |
+每输出通道独立的权重 scale 是精度的支柱：放粗到 128 通道共用一个 scale，t2i 掉约 2 dB，policy 的动作误差回到官方 FP8 的水平（夹爪 MSE 0.036 对 0.039）。
+kernel 侧代价：per-col 的 promotion 是 blockwise 的 2 倍 FMA（H100 上 per-col g128 约占 FMA 管线 50%，per-col g64 约 100%）；
+现成先例是 CUTLASS SM100 blockwise 的 ScaleGranularityN=1 和 DeepGEMM 1D1D。可分离 scale s_w[n,g]=s_w[n]·c[g]（promotion 与 blockwise 同价）尚未测。
+
 ### 3.3 速度
 - t2i（901 token）：bf16 11.0 ms/forward，GEMM 73%，attention 15%。e2e bf16 13.8 it/s，官方 FP8 11.7 it/s（0.85×，host-bound）；开 CUDA graphs bf16 33.0、FP8 26.9；S0 模拟路径 22～30。
 - t2v 720p×189 帧×35 步（约 4.2 万 gen token，text cond 2107 / uncond 24）：bf16 2.29 s/步，官方 FP8 1.96 s/步（1.16×，到落盘 1.14×，与 NIM 表 1.11～1.14× 一致）。kernel 时间：attention 740→731 ms/forward（65%→75%），GEMM 339→160 ms（2.13×），量化 kernel 净增 30 ms（3.1%）。GPU 占用 99.5%。

@@ -478,3 +478,23 @@ def test_apply_quantization_inplace_group_size_rejects_per_tensor_fp8() -> None:
                 method="fp8_sim", fp8_granularity="per_tensor", qdq_group_size=16, include_regex=["^selected$"]
             ),
         )
+
+
+def test_fake_quant_weight_blocks_shares_one_scale_per_block() -> None:
+    from cosmos_framework.utils.generator.quantization import fake_quant_weight_blocks
+
+    torch.manual_seed(12)
+    w = torch.randn(256, 256)
+    w[3, 5] = 50.0  # one outlier -> the whole (128 x 128) block containing it shares its scale
+    q = fake_quant_weight_blocks(w, "int8_sim", block_n=128, block_k=128)
+    blk = q[:128, :128]
+    scale = w[:128, :128].abs().amax() / 127.0
+    codes = blk / scale
+    assert torch.allclose(codes, torch.round(codes), atol=1e-3)
+    assert torch.equal(q[128:, 128:], q[128:, 128:])  # sanity: deterministic
+    other = q[128:, :128]
+    scale2 = w[128:, :128].abs().amax() / 127.0
+    assert torch.allclose(other / scale2, torch.round(other / scale2), atol=1e-3)
+    assert not torch.isclose(scale, scale2)
+    with pytest.raises(ValueError):
+        fake_quant_weight_blocks(w, "int8_sim", block_n=100, block_k=128)

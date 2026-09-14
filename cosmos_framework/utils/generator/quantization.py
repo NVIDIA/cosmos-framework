@@ -27,6 +27,7 @@ as the torchao methods, so the quantized module set is identical by construction
 import gc
 import hashlib
 import json
+import os
 import re
 from collections.abc import Callable
 from pathlib import Path
@@ -724,6 +725,29 @@ def fake_quant_fp8(values: torch.Tensor, *, per_row: bool = True, group_size: in
     return (quantized * scale).reshape(values.shape).to(values.dtype)
 
 
+def fake_quant_weight_blocks(weight: torch.Tensor, method: str, *, block_n: int, block_k: int) -> torch.Tensor:
+    """DeepSeek-style weight block scaling: one scale per (``block_n`` output channels x ``block_k`` K elements).
+
+    ``weight``: [N, K] with N % block_n == 0 and K % block_k == 0. Symmetric INT8 (qmax 127) or FP8 (E4M3, amax/448),
+    round half to even, fp32 scale math, returned in the input dtype. Contrast with ``fake_quant_int8(per_row=True,
+    group_size=g)`` where every output channel has its own K-group scales (per-col + g).
+    """
+    n, k = weight.shape
+    if n % block_n or k % block_k:
+        raise ValueError(f"weight [{n}, {k}] not divisible by block ({block_n}, {block_k})")
+    w32 = weight.float().reshape(n // block_n, block_n, k // block_k, block_k).permute(0, 2, 1, 3)  # [nb, kb, bn, bk]
+    amax = w32.abs().amax(dim=(-1, -2), keepdim=True)
+    if method == "fp8_sim":
+        scale = (amax / 448.0).clamp_(min=torch.finfo(torch.float32).tiny)
+        q = (w32 / scale).to(torch.float8_e4m3fn).float() * scale
+    elif method == "int8_sim":
+        scale = (amax / _INT8_QMAX).clamp_(min=torch.finfo(torch.float32).tiny)
+        q = torch.round(w32 / scale).clamp_(-_INT8_QMAX, _INT8_QMAX) * scale
+    else:
+        raise ValueError(f"Unsupported Q/DQ simulation method: {method}")
+    return q.permute(0, 2, 1, 3).reshape(n, k).to(weight.dtype)
+
+
 def _fake_quant(values: torch.Tensor, method: str, *, per_row: bool, group_size: int = 0) -> torch.Tensor:
     if method == "int8_sim":
         return fake_quant_int8(values, per_row=per_row, group_size=group_size)
@@ -762,6 +786,7 @@ class QdqSimLinear(nn.Linear):
     # forward before that would silently run the simulation against the wrong
     # (unquantized or uninitialized) weight, so it is rejected instead.
     _qdq_weight_finalized: bool = False
+    qdq_weight_block_n: int = 0  # >0: weights use (block_n x group_size) block scales (DeepSeek layout)
 
     def forward(self, inputs: torch.Tensor) -> torch.Tensor:
         if not self._qdq_weight_finalized:
@@ -781,6 +806,8 @@ class QdqSimLinear(nn.Linear):
 
     def extra_repr(self) -> str:
         granularity = _qdq_granularity_name(self.qdq_per_row, self.qdq_group_size)
+        if self.qdq_weight_block_n:
+            granularity += f", weight_blocks={self.qdq_weight_block_n}x{self.qdq_group_size}"
         return f"{super().extra_repr()}, qdq={self.qdq_method}({granularity})"
 
 
@@ -830,7 +857,19 @@ def swap_qdq_sim_linears(
         with torch.no_grad():
             # Weight rows are output channels, so per_row here is per-output-channel
             # and group blocks run along K within each output channel.
-            replacement.weight.copy_(_fake_quant(replacement.weight, method, per_row=per_row, group_size=group_size))
+            weight_block_n = int(os.environ.get("QDQ_SIM_WEIGHT_BLOCK_N", "0") or 0)
+            if weight_block_n > 0:
+                # experiment knob: DeepSeek-style (block_n x group_size) weight blocks instead of per-channel K groups
+                if not group_size:
+                    raise ValueError("QDQ_SIM_WEIGHT_BLOCK_N needs qdq_group_size > 0 (the K block)")
+                replacement.weight.copy_(
+                    fake_quant_weight_blocks(replacement.weight, method, block_n=weight_block_n, block_k=group_size)
+                )
+                replacement.qdq_weight_block_n = weight_block_n
+            else:
+                replacement.weight.copy_(
+                    _fake_quant(replacement.weight, method, per_row=per_row, group_size=group_size)
+                )
         replacement._qdq_weight_finalized = True
 
         parent_fqn, _, child_name = target_module_fqn.rpartition(".")
