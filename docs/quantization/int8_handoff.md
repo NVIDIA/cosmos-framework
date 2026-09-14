@@ -16,6 +16,7 @@
   **GB300 / Rubin 把 INT8 tensor core 砍了约 30 倍，这套方案在这两代上不成立**（本机 `torch._int_mm` 实测 75 TOPS，bf16 1.8 PF，FP8 3.4 PF）。
 - **H100 真 kernel 实测（2026-09-13，第 8 节）**：现货 INT8 g64 kernel（SGLang Triton）只有 bf16 cuBLAS 的 0.4～0.56×、官方 per-tensor FP8 的 0.21～0.35×；INT8 g128 也只到 bf16 的 0.75～0.96×。
   连 cuBLASLt 的 per-tensor INT8 都只有 bf16 的 1.1～1.4×，低于 FP8 per-tensor 的 1.6～2.0×，"H100 上 INT8 = FP8 速率"的假设不成立。FP8 g128（DeepGEMM）达到 per-tensor FP8 的 0.91～1.03×，是 H100 上唯一兼得分组缩放与速度的现货路径。
+- **自写 CUTLASS SM90 INT8 kernel（2026-09-14，第 9 节）**：per-tensor INT8 达到 FP8 per-tensor 的 0.90～1.06×（cuBLASLt 慢是因为没有 Hopper INT8 kernel，不是硬件）；g128 分组缩放做进主循环后约 1000 TFLOPS = bf16 的 1.35×、per-tensor 的 0.70×，H100 上 INT8 分组量化首次拿到正收益。
 - **尚未实测**：视频上的精度；PSNR 之外的指标；FP8 分组量化（g64/g128）的精度（第 6 节的 FP8 g64 异常未查）。
 
 ## 2. 推荐方案（S0 + Q4a）
@@ -218,7 +219,7 @@ CLI：`--quantization-sim-edges {gemm_out,residual,attn_qkv,attn_pv,und_kv}`、`
 ### 8.3 结论
 1. **INT8 g64 在 H100 上是负收益。** 现货 kernel（Triton）为 bf16 的 0.40～0.56×、官方 per-tensor FP8 的 0.21～0.35×（慢 2.8～4.8×）。第 5 节"10% 以内"的目标没有达到。
 2. **瓶颈不是 Triton 代码生成。** Triton bf16 与 cuBLAS bf16 相当（≤10% 差距），Triton 3.7.1 的 INT8 `tl.dot` 在 sm90 上确认走 wgmma（SASS 为 IGMMA m64n128k32.s8），裸 INT8 探针 4096³ 达 880～1061 TOPS。慢在块缩放 mainloop 的结构：BLOCK_K 被钉在 ≤64，每个 K tile 做一次 fp32 外积重缩放。g128 比 g64 快 1.4～1.6×（survey 预估的 5%～15% 偏乐观），W 128 块比逐通道快 1.1～1.3×。同结构的 Triton FP8 g128 比 DeepGEMM FP8 g128 又慢约 2×。
-3. **H100 上 INT8 本身没有对 FP8 的速率优势。** cuBLASLt per-tensor INT8 只有 bf16 的 1.1～1.4×（838～975 TOPS），低于 FP8 per-tensor 的 1.6～2.0×；部分原因是持续负载下 700 W 功耗上限使 SM 时钟落到 1155～1500 MHz。第 1 节"INT8 = FP8 的平台"的假设对 H100 不成立。即便把 DeepGEMM 结构移植成 INT8 g64，按效率比折算约 750～880 TFLOPS，仍低于 per-tensor FP8。int8_speed.py 的 `[K,N]` 行主权重布局比 `W.t()` 视图慢 4～7×，如需继续用 `_int_mm` 必须改布局。
+3. **cuBLASLt 的 INT8 没有 Hopper 原生 kernel（2026-09-14 更正）。** cuBLASLt per-tensor INT8 只有 bf16 的 1.1～1.4×（838～975 TOPS），低于 FP8 per-tensor 的 1.6～2.0×。第 9 节查明原因：`torch._int_mm` 落到 Ampere 时代的 CUTLASS 2.x sm80 mma.sync kernel，而 bf16/FP8 走 sm90 nvjet wgmma kernel；int32 输出带宽和降频都已排除。自写的 CUTLASS SM90 INT8 kernel 达到 FP8 per-tensor 的 0.90～1.06×，说明"INT8 = FP8 速率"的硬件假设成立，第 1 节的相关表述以第 9 节为准。int8_speed.py 的 `[K,N]` 行主权重布局比 `W.t()` 视图慢 4～7×，如需继续用 `_int_mm` 必须改布局。
 4. **FP8 g128 几乎免费。** DeepGEMM 达到 per-tensor FP8 的 0.91～1.03×，cuBLASLt 分块 0.81～0.92×。分组缩放本身不是障碍，缺的是 CUTLASS/DeepGEMM 级 INT8 kernel，而 INT8 在 H100 上又没有速率上限支撑。
 5. **FP8 g64 没有快 kernel。** cuBLASLt 无 64 粒度配方；CUTLASS SM90 collective 需改 `ScalePromotionInterval % 4` 断言，预计为 g128 的 85%～90%，未验证。
 
@@ -226,3 +227,57 @@ CLI：`--quantization-sim-edges {gemm_out,residual,attn_qkv,attn_pv,und_kv}`、`
 - 目标平台若是 H100，INT8 路线（S0 + Q4a 的 GEMM 部分）应放弃，转向 FP8 g128（DeepGEMM）或 FP8 g64（需改 CUTLASS）。前提是先在模拟器中补测 FP8 分组量化的精度，并查清第 6 节"FP8 模拟 g64 比 per-row 还差"的原因。
 - INT8 g64 的精度优势只能在 INT8 速率真正 ≥ FP8 或无 FP8 的平台（A100、Thor、Ada）上换成速度；那些平台需要重新做本节测量。
 - 注意事项：时钟无法锁定，20 个 case 中 11 个的 bf16 基线在 case 末尾复测漂移 +2.3%～+16.7%，M ≤ 1802 时 5%～10% 以内的差异应视为噪声；冲 L2 的计时在小 M 下偏保守。
+
+## 9. 自写 CUTLASS SM90 INT8 kernel：per-tensor 对齐 + g128 分组缩放进主循环（2026-09-14）
+
+背景：第 8 节发现 cuBLASLt 的 INT8 只有 FP8 per-tensor 的 0.6～0.7×。profiler 显示原因不在硬件：`torch._int_mm` 在 H100 上落到的是 Ampere 时代的
+CUTLASS 2.x kernel `cutlass_80_tensorop_i16832gemm_s8_128x256_128x3_tn_align16`（mma.sync），而 bf16/FP8 走的是 Hopper 的 `nvjet_sm90_*` wgmma kernel。
+K 从 4096 扫到 32768（输出大小不变）INT8 cuBLASLt 只从 848 升到 959 TFLOPS，FP8 始终约 1400，排除 int32 输出带宽；INT8 行采样到的 SM 时钟反而更高，排除降频。
+一个未调优的 Triton INT8 wgmma kernel（bf16 输出）在同时钟下已达 1100～1160 TOPS。于是用 CUTLASS 3.x 自己写 Hopper 原生 INT8 kernel。
+源码随本提交放在 `docs/quantization/tools/cutlass_int8_sm90/`（torch cpp_extension 编译，依赖 CUTLASS 4.2.1 头文件），基准脚本与日志在 `users/pzeren/int8_bench/`（`logs/bw_full.log`）。
+
+### 9.1 per-tensor INT8（CollectiveBuilder，int8×int8→int32，TMA warp-specialized）
+- 构造：`CollectiveBuilder<Sm90, OpClassTensorOp, int8_t RowMajor, int8_t ColumnMajor(=W[N,K] 行主), int32_t, TileShape, ClusterShape, StageCountAutoCarveout, KernelTmaWarpSpecializedCooperative>`，
+  尾声 Sm90 EVT：D = bf16(acc · sa[m] · sb[n])（Sm90ColBroadcast × Sm90RowBroadcast，per-tensor 即把标量填成向量）。CUTLASS 4.x 的调度器标签是 `cutlass::gemm::PersistentScheduler`。
+- 7 个 tile/cluster/调度配置试编（4096×4096，M=4096，TFLOPS）：128×128×128 c1×2 coop 1185；128×256×128 c1×1 coop 1320；128×128×128 c2×1 coop 1257；256×128×128 c1×1 coop 1319；
+  64×128×128 pingpong 693；128×128×256 c1×2 coop 1193；**128×256×128 c2×1 coop 1400**。按"只编一个算子"的要求只保留最后一个。
+- 结果（下表"INT8 pt"列）：M ≥ 4096 时 1104～1537 TFLOPS，为 cuBLASLt FP8 per-tensor（1155～1463）的 0.90～1.06×，是 cuBLASLt 自带 INT8（838～975）的 1.5～1.7×。
+  M=901 时 128×256 的 tile 在 1024×4096 上只发 32 个 CTA（273 对 FP8 528），其他形状为 FP8 的 0.88～0.91×；小 M 需要第二个实例（64×128 pingpong）。
+- 结论：**H100 的 INT8 与 FP8 MMA 速率在硬件上确实相同，缺的只是 cuBLASLt 里的 Hopper INT8 kernel。** 第 8.3 节第 3 条的"部分原因是功耗降频"据此更正。
+
+### 9.2 g128 分组缩放进主循环（CUTLASS FP8 blockwise collective 的 INT8 移植）
+- 结构：复制 CUTLASS 4.2.1 `sm90_mma_tma_gmma_ss_warpspecialized_fp8_blockwise_scaling.hpp`，新策略类型 `MainloopSm90TmaGmmaWarpSpecializedBlockwiseInt8`；
+  `ElementBlockScale` 与累加器类型解耦为 fp32；`GmmaFP8Accumulation` 换成 `GmmaInt8Accumulation`：wgmma s8·s8 累加到 int32 临时累加器，每个 128-K tile（4 条 k32 wgmma）后转 fp32（精确：|和| ≤ 128·127² < 2²⁴）
+  乘 `sa[m,kb]·sb[nb,kb]` 累进 fp32 主累加器；主累加器复用 kernel 传入的 int32 寄存器片段（按位重解释），尾声用自定义 EVT 叶子 `Sm90AccFetchBitcastF32` 按位取回。
+  builder 断言 FP8 输入，因此 TiledMma / TMA copy / smem atom / stage 数按 builder 逻辑手工拼装。scale 布局 = `Sm90BlockwiseScaleConfig<1,128,128, MN, K>`（A：每行每 128-K 一个，torch `[K/128, M]`；W：每 128×128 块一个，torch `[N/128, K/128]`），
+  与 3.6 节新加的 `QDQ_SIM_WEIGHT_BLOCK_N=128` 模拟选项一致；TMA 加载 A 的 scale 要求 M % 4 == 0（Python 侧补零行）。单实例 128×128×128、cluster 1×2、cooperative、6 级流水。
+- **踩坑（约 1 小时）**：kernel 首次运行静默挂死。用 CUTLASS 自带 example 67（同一 collective 经 builder）做对照正常，把未修改的 FP8 collective 接进我的封装也挂死，定位到 cooperative kernel 的
+  `IsMainloopAuxiliaryLoadNeeded = detail::HasAuxiliaryLoad_v<DispatchPolicy>`：负责 cp.async 加载 scale 的 `MainloopAux` producer warp 只在该 trait 为真时启用，CUTLASS 只对自己的 FP8 blockwise 策略特化了它。
+  自定义策略必须补 `template<...> struct kernel::detail::HasAuxiliaryLoad<MyPolicy<...>> : cute::true_type {};`，否则 consumer 永远等不到屏障。
+- 正确性：6 个形状（N,K ∈ {1024×4096, 4096×12288}，M ∈ {901, 1802, 4096}）对 fp64 精确分块数学的 rel-L2 全为 1.66e-3（bf16 输出舍入下限），max|d|/max|ref| ≤ 3.4e-3。
+- 结果（TFLOPS，do_bench 中位数、冲 L2，同一次运行 `logs/bw_full.log`；时钟未锁定，噪声约 5%）：
+
+| 形状 N×K | M | bf16 | FP8 pt | INT8 pt | INT8 g128 分块 | DeepGEMM FP8 g128 | 分块/bf16 | 分块/FP8 pt | 分块/INT8 pt |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| 4096×4096 | 901 | 686 | 1109 | 1006 | 747 | 887 | 1.09 | 0.67 | 0.74 |
+| 4096×4096 | 4096 | 730 | 1391 | 1407 | 977 | 1294 | 1.34 | 0.70 | 0.69 |
+| 4096×4096 | 42240 | 729 | 1385 | 1456 | 1001 | 1316 | 1.37 | 0.72 | 0.69 |
+| 1024×4096 | 901 | 351 | 528 | 273 | 323 | 329 | 0.92 | 0.61 | 1.18 |
+| 1024×4096 | 4096 | 716 | 1155 | 1104 | 844 | 950 | 1.18 | 0.73 | 0.76 |
+| 1024×4096 | 42240 | 735 | 1408 | 1464 | 1028 | 1304 | 1.40 | 0.73 | 0.70 |
+| 4096×12288 | 901 | 744 | 1438 | 1292 | 884 | 1074 | 1.19 | 0.61 | 0.68 |
+| 4096×12288 | 4096 | 747 | 1451 | 1537 | 997 | 1344 | 1.33 | 0.69 | 0.65 |
+| 4096×12288 | 42240 | 771 | 1463 | 1479 | 974 | 1353 | 1.26 | 0.67 | 0.66 |
+| 12288×4096 | 901 | 713 | 1321 | 1192 | 847 | 1116 | 1.19 | 0.64 | 0.71 |
+| 12288×4096 | 4096 | 716 | 1410 | 1451 | 1007 | 1262 | 1.41 | 0.71 | 0.69 |
+| 12288×4096 | 42240 | 746 | 1422 | 1278 | 911 | 1278 | 1.22 | 0.64 | 0.71 |
+
+- 解读：**INT8 g128 分块 kernel 达到约 1000 TFLOPS，是 bf16 的 1.35×，per-tensor FP8/INT8 的 0.70×，DeepGEMM FP8 g128 的 0.75×，SGLang Triton INT8 g128（第 8 节 646）的 1.5×。这是 H100 上 INT8 分组量化第一次跑出正收益。**
+  与 per-tensor 的 30% 差距由两部分构成：分块结构本身（同为 128×128 c1×2 时 per-tensor 1185 对分块 977，约 16%）和只能用 128×128 tile（fp32 主累加器 + int32 临时累加器把寄存器翻倍，128×256 会溢出 cooperative 的 232 寄存器预算）。
+  同结构的 DeepGEMM FP8 g128 高 25%，说明流水/调度还有空间（cluster 2×1、stage 数、光栅顺序、TMA multicast）。
+
+### 9.3 对方案的影响与下一步
+- 第 8.4 节"INT8 路线应放弃"需要修正为：**INT8 g128 在 H100 上可以拿到 1.35× bf16 的 GEMM 收益**，精度按 3.4/3.6 节 g128 + 权重 128×128 块的模拟结果评估；仍低于 FP8 per-tensor，但保住 INT8 的精度优势。
+- g64：collective 断言 `ScalePromotionInterval % 4 == 0`（g64 对应间隔 2，k32 wgmma × 2），需要改主循环的提升节奏（每 64-K 提升一次，FFMA 数翻倍）；survey 预估相对 g128 再降 10%～15%。
+- 性能调优：先在 g128 上试 cluster 2×1、stage 数、光栅顺序，目标是 DeepGEMM FP8 g128 的 1300 量级；小 M 补一个 64×128 pingpong 实例。
+- 激活侧：per-token-per-128 的 INT8 动态量化 Triton kernel 已在 int8_bench（约 11 µs @ 901×4096），与本 kernel 的 `[K/128, M]` scale 布局直接对接。
