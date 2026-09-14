@@ -2,7 +2,7 @@
 
 日期：2026-09-12。工作机：GB300 工作站 `pmgb300ws-0083`（单卡 GB300，sm_103，aarch64）。
 代码：分支 `pzeren/int8-sim-group-quant`（GitHub 上已含全部代码提交：`493b0a1` GEMM 模拟 + CLI，`369427a` attention 模拟器、teacher forcing、int8_speed；其后均为 docs 提交）。
-2026-09-13 补充：第 8 节为 H100 真 kernel GEMM 基准结果（aws-iad-cs-002，`users/pzeren/int8_bench`）；8.5 为 GB200 上 CUTLASS per-tensor INT8/FP8/bf16 绝对吞吐补测。
+2026-09-13 补充：第 8 节为 H100 真 kernel GEMM 基准结果（aws-iad-cs-002，`users/pzeren/int8_bench`）；8.5 为 GB200 上 CUTLASS per-tensor INT8/FP8/bf16 绝对吞吐补测；8.6 为 GB200 上 INT8 g128（per-col）真 kernel 的结果与结构性结论。
 运行笔记（含所有中间数字）：`~/gb300/COSMOS_SETUP.md`。产物在 `~/gb300/outputs`（软链到 NVMe `/var/tmp/pzeren_workdir/outputs`）。
 
 ---
@@ -322,6 +322,65 @@ CLI：`--quantization-sim-edges {gemm_out,residual,attn_qkv,attn_pv,und_kv}`、`
 | 8192×8192×8192 | 1624 / 1587 | 3040 / 3134 | 3373 / 3247 | 3148 / 3097 | 3112 / 3349 | 3356 / 3238 | 3100 / 3045 |
 | 16384×8192×8192 | 1532 / 1495 | 3097 / 2971 | 3429 / 3427 | 3274 / 3260 | 3098 / 3248 | 3410 / 3416 | 3207 / 3207 |
 | 16384×16384×8192 | 1456 / 1401 | 3142 / 2806 | 3048 / 3023 | 2060 / 2046 | 3269 / 3147 | 2907 / 2987 | 2042 / 2030 |
+
+### 8.6 GB200 补测：INT8 g128（per-col）真 kernel（2026-09-14）
+
+按 §2.1/§3.6 的 g128 per-col 定义（A per-token 1×128、W per-col 1×128、fp32 scale、组内 int32 精确点积、组间 fp32 累加、bf16 输出），
+以 CUTLASS 示例 81 groupwise（SM100 blockwise-scaling collective）为基础做了 INT8 版：上游把 scale 与提升累加器类型绑成 MMA 累加器类型（int8 时是 int32，会静默按整数位模式乘），
+用一份 shadow 头文件解耦为 fp32，并优化了 per-col 的 promotion（SFB 子块载入、TMEM 读取流水、TileK 256）。代码、patch、脚本、原始数据：`docs/quantization/tools/cutlass_g128_gemm/`（README 有方法与全部数字）。
+
+结论：**GB200 上 g128 不是速度方案。** INT8 g128 per-col 优化后 1.09～1.32 PTOPS（M≥4096），是 bf16 cuBLAS 的 0.7～0.85×、同 tile per-tensor INT8（2.7～3.4）的 0.36～0.43×；
+W 放粗到 128×128 blockwise 也只到 1.31～1.61（≈bf16）；FP8 孪生同样（per-col 1.24～1.49，blockwise 1.47～1.86）。原因是结构性的：GB200 tensor core 与 CUDA core 吞吐比约 64:1，
+每元素每 128-K 的 FMUL+FFMA 提升 ≈ 该 K-tile 的 MMA 时间，Hopper 上这个比值是 ~15:1（所以 DeepGEMM 在 H100 能到 per-tensor 的 0.9～1.0×，见 8.2）。
+要在 GB200 上保住 g128 精度并拿到速度，只能把逐元素提升从 CUDA core 拿掉：可分离权重 scale（s_w[n,g]=s_w[n]·c[g]，§3.6 已列、精度未测）或 per-token×per-channel 的 epilogue 缩放（=per-tensor 速率 3.3 PTOPS）。
+
+#### q/o_proj 4096x4096（N×K）
+
+| kernel | M=901 | M=1802 | M=4096 | M=16384 | M=42240 |
+|---|---|---|---|---|---|
+| bf16 cuBLAS | 1077 | 1359 | 1407 | 1670 | 1771 |
+| INT8 per-tensor CUTLASS 256x128x128 | 1379 | 1865 | 2679 | 3202 | 3372 |
+| INT8 g128 per-col, stock CUTLASS promotion | 367 | 398 | 524 | 553 | 561 |
+| INT8 g128 per-col, opt (TileK 256) | 665 | 804 | 1092 | 1187 | 1224 |
+| INT8 g128 W 128x128 blockwise, opt | 769 | 946 | 1311 | 1430 | 1489 |
+| FP8 g128 per-col, opt (TileK 256) | 768 | 876 | 1238 | 1337 | 1388 |
+| FP8 g128 W 128x128 blockwise (=示例 81 布局) | 859 | 1064 | 1468 | 1640 | 1702 |
+
+#### k/v_proj 1024x4096（N×K）
+
+| kernel | M=901 | M=1802 | M=4096 | M=16384 | M=42240 |
+|---|---|---|---|---|---|
+| bf16 cuBLAS | 480 | 842 | 1141 | 1378 | 1549 |
+| INT8 per-tensor CUTLASS 256x128x128 | 480 | 900 | 1568 | 2513 | 2827 |
+| INT8 g128 per-col, stock CUTLASS promotion | 170 | 332 | 417 | 522 | 544 |
+| INT8 g128 per-col, opt (TileK 256) | 302 | 559 | 756 | 1079 | 1163 |
+| INT8 g128 W 128x128 blockwise, opt | 328 | 606 | 874 | 1298 | 1393 |
+| FP8 g128 per-col, opt (TileK 256) | 329 | 605 | 874 | 1216 | 1313 |
+| FP8 g128 W 128x128 blockwise (=示例 81 布局) | 362 | 690 | 976 | 1468 | 1592 |
+
+#### gate/up 12288x4096（N×K）
+
+| kernel | M=901 | M=1802 | M=4096 | M=16384 | M=42240 |
+|---|---|---|---|---|---|
+| bf16 cuBLAS | 1312 | 1287 | 1601 | 1696 | 1461 |
+| INT8 per-tensor CUTLASS 256x128x128 | 1909 | 2413 | 3041 | 3054 | 3086 |
+| INT8 g128 per-col, stock CUTLASS promotion | 415 | 457 | 546 | 562 | 567 |
+| INT8 g128 per-col, opt (TileK 256) | 841 | 970 | 1172 | 1218 | 1232 |
+| INT8 g128 W 128x128 blockwise, opt | 1002 | 1155 | 1410 | 1441 | 1489 |
+| FP8 g128 per-col, opt (TileK 256) | 948 | 1082 | 1319 | 1380 | 1396 |
+| FP8 g128 W 128x128 blockwise (=示例 81 布局) | 1130 | 1308 | 1614 | 1675 | 1714 |
+
+#### down 4096x12288（N×K）
+
+| kernel | M=901 | M=1802 | M=4096 | M=16384 | M=42240 |
+|---|---|---|---|---|---|
+| bf16 cuBLAS | 1276 | 1501 | 1589 | 1718 | 1524 |
+| INT8 per-tensor CUTLASS 256x128x128 | 1909 | 2260 | 2974 | 3400 | 3082 |
+| INT8 g128 per-col, stock CUTLASS promotion | 404 | 426 | 553 | 574 | 582 |
+| INT8 g128 per-col, opt (TileK 256) | 848 | 939 | 1234 | 1283 | 1315 |
+| INT8 g128 W 128x128 blockwise, opt | 1013 | 1145 | 1488 | 1571 | 1609 |
+| FP8 g128 per-col, opt (TileK 256) | 980 | 1058 | 1396 | 1458 | 1493 |
+| FP8 g128 W 128x128 blockwise (=示例 81 布局) | 1159 | 1315 | 1711 | 1830 | 1860 |
 
 ## 9. 自写 CUTLASS SM90 INT8 kernel：per-tensor 对齐 + g128 分组缩放进主循环（2026-09-14）
 
