@@ -1,0 +1,166 @@
+--- /home/pzeren/cutlass/include/cutlass/gemm/collective/sm100_mma_warpspecialized_blockwise_scaling.hpp	2026-03-09 23:39:34.673781000 -0700
++++ include/cutlass/gemm/collective/sm100_mma_warpspecialized_blockwise_scaling.hpp	2026-09-14 00:55:46.000000000 -0700
+@@ -30,6 +30,13 @@
+  **************************************************************************************************/
+ 
+ #pragma once
++// ---------------------------------------------------------------------------------------------------------------
++// LOCAL PATCH (cosmos-framework docs/quantization/tools/cutlass_g128_gemm): INT8 support for the SM100 blockwise-scaling
++// mainloop. Upstream ties the scale-factor type and the promoted (running) accumulator type to TiledMma::ValTypeC, which
++// is int32 for kind::i8 MMAs. This copy decouples them: the MMA still accumulates in ValTypeC (TMEM), while scale factors
++// and the promoted accumulator are fp32 whenever ValTypeC is an integer type. For floating-point MMAs the file is
++// behaviourally identical to upstream. Shadowed via -I ordering (this directory precedes the CUTLASS include dir).
++// ---------------------------------------------------------------------------------------------------------------
+ 
+ #include "cutlass/cutlass.h"
+ #include "cutlass/detail/collective.hpp"
+@@ -103,6 +110,9 @@
+   //
+   using TiledMma = TiledMma_;
+   using AtomThrShapeMNK = Shape<decltype(shape<0>(typename TiledMma::ThrLayoutVMNK{})), _1, _1>;
++  // LOCAL PATCH: fp32 scales / promoted accumulator for integer MMA accumulators (see banner).
++  using ElementPromoted = cute::conditional_t<cute::is_integral_v<typename TiledMma::ValTypeC>, float, typename TiledMma::ValTypeC>;
++  using ElementSF = ElementPromoted;
+ 
+   using DispatchPolicy = MainloopSm100TmaUmmaWarpSpecializedBlockwiseScaling<
+                           Stages,
+@@ -115,12 +125,12 @@
+   using ElementAMma = typename TiledMma::ValTypeA;
+   using StrideA = cute::remove_cvref_t<decltype(get<0>(StridePairA_{}))>;
+   using LayoutSFA = cute::remove_cvref_t<decltype(get<1>(StridePairA_{}))>;
+-  using ElementSFA = typename TiledMma::ValTypeC;
++  using ElementSFA = ElementSF;
+   using ElementB = ElementB_;
+   using ElementBMma = typename TiledMma::ValTypeB;
+   using StrideB = cute::remove_cvref_t<decltype(get<0>(StridePairB_{}))>;
+   using LayoutSFB = cute::remove_cvref_t<decltype(get<1>(StridePairB_{}))>;
+-  using ElementSFB = typename TiledMma::ValTypeC;
++  using ElementSFB = ElementSF;
+ 
+   static constexpr bool IsDynamicCluster = not cute::is_static_v<ClusterShape>;
+ 
+@@ -200,8 +210,8 @@
+                                   AtomThrShapeMNK>;
+   using AccumulatorPipelineState = typename AccumulatorPipeline::PipelineState;
+ 
+-  static constexpr int CopyAlignmentSFA = GmemTiledCopySFA::AtomNumVal::value * sizeof(typename GmemTiledCopySFA::ValType) / sizeof(ElementAccumulator);
+-  static constexpr int CopyAlignmentSFB = GmemTiledCopySFB::AtomNumVal::value * sizeof(typename GmemTiledCopySFB::ValType) / sizeof(ElementAccumulator);
++  static constexpr int CopyAlignmentSFA = GmemTiledCopySFA::AtomNumVal::value * sizeof(typename GmemTiledCopySFA::ValType) / sizeof(ElementSF);
++  static constexpr int CopyAlignmentSFB = GmemTiledCopySFB::AtomNumVal::value * sizeof(typename GmemTiledCopySFB::ValType) / sizeof(ElementSF);
+ 
+   static constexpr int AlignmentSFA = CopyAlignmentSFA * (GmemTiledCopySFA::AtomNumVal::value > 1 ?
+       (size<0,1>(LayoutSFA{}.stride()) == 1 ? ScaleGranularityM : ScaleGranularityK) : 1);
+@@ -286,8 +296,8 @@
+     struct TensorStorage : cute::aligned_struct<128, _0> {
+       cute::ArrayEngine<SmemAllocTypeA, cute::cosize_v<SmemLayoutA>> smem_A;
+       cute::ArrayEngine<SmemAllocTypeB, cute::cosize_v<SmemLayoutB>> smem_B;
+-      cute::ArrayEngine<ElementAccumulator, cute::cosize_v<SmemLayoutScaleA>> smem_SFA;
+-      cute::ArrayEngine<ElementAccumulator, cute::cosize_v<SmemLayoutScaleB>> smem_SFB;
++      cute::ArrayEngine<ElementSF, cute::cosize_v<SmemLayoutScaleA>> smem_SFA;
++      cute::ArrayEngine<ElementSF, cute::cosize_v<SmemLayoutScaleB>> smem_SFB;
+     } tensors;
+ 
+     using PipelineABStorage = typename MainloopABPipeline::SharedStorage;
+@@ -415,9 +425,9 @@
+     StrideA dA{};
+     ArrayElementB const* ptr_B{nullptr};
+     StrideB dB{};
+-    ElementAccumulator const* ptr_SFA{nullptr};
++    ElementSF const* ptr_SFA{nullptr};
+     LayoutSFA layout_SFA{};
+-    ElementAccumulator const* ptr_SFB{nullptr};
++    ElementSF const* ptr_SFB{nullptr};
+     LayoutSFB layout_SFB{};
+     RuntimeDataTypeA runtime_data_type_a{};
+     RuntimeDataTypeB runtime_data_type_b{};
+@@ -454,9 +464,9 @@
+     RuntimeDataTypeA runtime_data_type_a;
+     RuntimeDataTypeB runtime_data_type_b;
+ 
+-    ElementAccumulator const* ptr_SFA;
++    ElementSF const* ptr_SFA;
+     LayoutSFA layout_SFA;
+-    ElementAccumulator const* ptr_SFB;
++    ElementSF const* ptr_SFB;
+     LayoutSFB layout_SFB;
+   };
+ 
+@@ -1145,11 +1155,11 @@
+ 
+     static_assert(rank(decltype(tTR_sSFA_epi){}) == 7);
+ 
+-    Tensor tTR_FullAcc = make_tensor<ElementAccumulator>(shape(tTR_rAcc_epi));
++    Tensor tTR_FullAcc = make_tensor<ElementPromoted>(shape(tTR_rAcc_epi));
+     Tensor tTR_PartAcc = make_tensor<ElementAccumulator>(shape(tTR_rAcc_epi(_,_,_,_0{},_0{})));
+ 
+-    Tensor tTR_rSFA_compact = make_fragment_like<ElementAccumulator>(filter_zeros(tTR_sSFA_epi(_,_,_,_,_,_,_0{})));
+-    Tensor tTR_rSFB_compact = make_fragment_like<ElementAccumulator>(filter_zeros(tTR_sSFB_epi(_,_,_,_,_,_,_0{})));
++    Tensor tTR_rSFA_compact = make_fragment_like<ElementSF>(filter_zeros(tTR_sSFA_epi(_,_,_,_,_,_,_0{})));
++    Tensor tTR_rSFB_compact = make_fragment_like<ElementSF>(filter_zeros(tTR_sSFB_epi(_,_,_,_,_,_,_0{})));
+ 
+     Layout tTR_rSFA_layout = make_layout(tTR_sSFA_epi(_,_,_,_,_,_,_0{}).shape(), tTR_rSFA_compact.stride());
+     Layout tTR_rSFB_layout = make_layout(tTR_sSFB_epi(_,_,_,_,_,_,_0{}).shape(), tTR_rSFB_compact.stride());
+@@ -1167,16 +1177,21 @@
+       int read_idx = mainloop_sf_pipe_state.index();
+ 
+       copy(filter_zeros(tTR_sSFA_epi(_,_,_,_,_,_,read_idx)), tTR_rSFA_compact);
+-      copy(filter_zeros(tTR_sSFB_epi(_,_,_,_,_,_,read_idx)), tTR_rSFB_compact);
+-
+       CUTE_STATIC_ASSERT_V(cosize(tTR_rSFA_layout) == size(tTR_rSFA_compact));
+-      CUTE_STATIC_ASSERT_V(cosize(tTR_rSFB_layout) == size(tTR_rSFB_compact));
+-
+       Tensor tTR_rSFA = make_tensor(tTR_rSFA_compact.data(), tTR_rSFA_layout);
++#if defined(G128_OPT_PROMOTION)
++      // LOCAL PATCH (opt): with per-column weight scales (ScaleGranularityN == 1) the per-thread SFB fragment holds one
++      // fp32 per column of the tile (128-256 registers) and spills. In the T2R layout all lanes of a warp own the same
++      // columns, so read SFB straight from smem (warp-uniform broadcast loads) and keep the stage until the loop is done.
++      Tensor tTR_rSFB = tTR_sSFB_epi(_,_,_,_,_,_,read_idx);
++#else
++      copy(filter_zeros(tTR_sSFB_epi(_,_,_,_,_,_,read_idx)), tTR_rSFB_compact);
++      CUTE_STATIC_ASSERT_V(cosize(tTR_rSFB_layout) == size(tTR_rSFB_compact));
+       Tensor tTR_rSFB = make_tensor(tTR_rSFB_compact.data(), tTR_rSFB_layout);
+ 
+       mainloop_sf_pipeline.consumer_release(mainloop_sf_pipe_state);
+       ++mainloop_sf_pipe_state;
++#endif
+ 
+       CUTLASS_PRAGMA_UNROLL
+       for (int k_block = 0; k_block < ScaleKsPerTile; ++k_block) {
+@@ -1194,7 +1209,15 @@
+           for (int epi_n = 0; epi_n < size<3>(tAcc_epi); ++epi_n) {
+ 
+             auto scale_a = tTR_rSFA(_,_,_,epi_m,epi_n,k_block * ScaleGranularityK);
++#if defined(G128_OPT_PROMOTION)
++            // LOCAL PATCH (opt): stage only this sub-tile's column scales (<= 32 fp32) from smem into registers.
++            auto sSFB_sub = tTR_rSFB(_,_,_,epi_m,epi_n,k_block * ScaleGranularityK);
++            Tensor rSFB_sub_compact = make_fragment_like<ElementSF>(filter_zeros(sSFB_sub));
++            copy(filter_zeros(sSFB_sub), rSFB_sub_compact);
++            Tensor scale_b = make_tensor(rSFB_sub_compact.data(), make_layout(shape(sSFB_sub), rSFB_sub_compact.stride()));
++#else
+             auto scale_b = tTR_rSFB(_,_,_,epi_m,epi_n,k_block * ScaleGranularityK);
++#endif
+ 
+             Tensor full_acc = tTR_FullAcc(_,_,_,epi_m,epi_n);
+             // Compute tmem load predication if necessary
+@@ -1203,8 +1226,8 @@
+ 
+             CUTLASS_PRAGMA_UNROLL
+             for (int i = 0; i < size(full_acc); ++i) {
+-              ElementAccumulator scale = scale_a(i) * scale_b(i);
+-              full_acc(i) += scale * tTR_PartAcc(i);
++              ElementPromoted scale = scale_a(i) * scale_b(i);
++              full_acc(i) += scale * static_cast<ElementPromoted>(tTR_PartAcc(i));   // LOCAL PATCH: int32 -> fp32 for INT8
+             }
+           }
+         }
+@@ -1213,6 +1236,10 @@
+         // release acc
+         ++accumulator_pipe_state;
+       }
++#if defined(G128_OPT_PROMOTION)
++      mainloop_sf_pipeline.consumer_release(mainloop_sf_pipe_state);
++      ++mainloop_sf_pipe_state;
++#endif
+ 
+       --k_tile_count;
+     }

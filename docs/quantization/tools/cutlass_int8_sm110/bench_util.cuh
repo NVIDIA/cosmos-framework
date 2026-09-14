@@ -207,6 +207,45 @@ inline void ref_gemm_bf16(const __nv_bfloat16* A, const __nv_bfloat16* W, float*
   CUDA_OK(cudaGetLastError());
 }
 
+// ---------------------------------------------------------------- block-scaled reference (g128-style):
+// D[m,n] = sum_kb  sa[m/GM + kb*ceil(M/GM)] * sb[n/GN + kb*ceil(N/GN)] * sum_{k in block kb} A[m,k] * W[n,k]
+// Scale tensors use the CUTLASS Sm100BlockwiseScaleConfig MN-major layout: [K/GK][ceil(M/GM)] for A, [K/GK][ceil(N/GN)] for W.
+// The per-block partial sum is exact in int32 for int8 (|sum| <= 128*127*127 < 2^24 so float(part) is exact too); fp32 for fp8.
+template <class TIn, class TAcc>
+__global__ void ref_gemm_blockscaled_kernel(const TIn* A, const TIn* W, const float* sa, const float* sb, float* D, int M, int N, int K,
+                                            int GM, int GN, int GK, int sa_ld, int sb_ld) {
+  int n = blockIdx.x * blockDim.x + threadIdx.x;
+  int m = blockIdx.y * blockDim.y + threadIdx.y;
+  if (m >= M || n >= N) return;
+  const TIn* a = A + (size_t)m * K;
+  const TIn* w = W + (size_t)n * K;
+  float acc = 0.f;
+  for (int kb = 0; kb < K / GK; ++kb) {
+    TAcc part = TAcc(0);
+    for (int k = kb * GK; k < (kb + 1) * GK; ++k) part += TAcc(float(a[k])) * TAcc(float(w[k]));
+    acc += sa[m / GM + kb * sa_ld] * sb[n / GN + kb * sb_ld] * float(part);
+  }
+  D[(size_t)m * N + n] = acc;
+}
+template <class TIn, class TAcc>
+inline void ref_gemm_blockscaled(const TIn* A, const TIn* W, const float* sa, const float* sb, float* D, int M, int N, int K, int GM,
+                                 int GN, int GK, int sa_ld, int sb_ld) {
+  dim3 b(32, 8), g((N + 31) / 32, (M + 7) / 8);
+  ref_gemm_blockscaled_kernel<TIn, TAcc><<<g, b>>>(A, W, sa, sb, D, M, N, K, GM, GN, GK, sa_ld, sb_ld);
+  CUDA_OK(cudaGetLastError());
+}
+__global__ void fill_scales_kernel(float* p, size_t n, uint32_t seed, float lo, float hi) {
+  size_t i = blockIdx.x * (size_t)blockDim.x + threadIdx.x;
+  if (i >= n) return;
+  uint32_t x = (uint32_t)i * 2654435761u ^ seed;
+  x ^= x >> 13; x *= 0x5bd1e995u; x ^= x >> 15;
+  p[i] = lo + (hi - lo) * (float)(x & 0xffffff) / 16777216.f;
+}
+inline void fill_scales(float* p, size_t n, uint32_t seed, float lo = 0.5e-2f, float hi = 2.0e-2f) {
+  fill_scales_kernel<<<(unsigned)((n + 255) / 256), 256>>>(p, n, seed, lo, hi);
+  CUDA_OK(cudaGetLastError());
+}
+
 // rel-L2 and max-abs error of bf16 output vs fp32 reference (computed on host).
 struct ErrStats { double rel_l2 = 0, max_abs = 0, ref_max_abs = 0; };
 inline ErrStats compare_bf16_vs_f32(const __nv_bfloat16* d_out, const float* d_ref, size_t n) {

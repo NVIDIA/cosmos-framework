@@ -29,6 +29,8 @@ tool in `../cutlass_int8_sm90/pertensor/`); not instantiated here yet.
 | `membw.cu` | L2 / DRAM read bandwidth microbenchmark |
 | `bench_thor.py` | sweep over the Nano gen-tower shapes, CSV + markdown with INT8/FP8/bf16 ratios |
 | `power_probe.sh`, `power_probe_long.sh` | FP8 vs INT8 probes under the current nvpmodel mode with clock / Tj / tegrastats VDD_GPU sampling per case (long = >= 3 s of kernels per case, energy per GEMM) |
+| `blockwise_gemm.cuh/.cu`, `bw_configs.h`, `bw_cfg_select.h`, `bwcfg_*.cu` | g128 block-scaled FP8/INT8 GEMM (scales applied in the mainloop) + driver; INT8 via the shadow collective in `include/` |
+| `include/cutlass/...` | shadow CUTLASS headers (must precede the CUTLASS include path): the INT8-patched SM100 blockwise collective (from `../cutlass_g128_gemm`, with Thor changes) and `arch/reg_reconfig.h` enabling `setmaxnreg` on sm_110a |
 | `results/` | raw logs / CSV / markdown of every run quoted below: `full_smallM_*` (mode A), `full_hotA_coldW_*` (mode B, 50 it), `full_modeB_sustained_*` (mode B, 1.5 s warm-up = headline), `modeB_sustained_120w.md`, `kv_nw32_sustained_120w.md`, `power_probe_*` (GPU power), `fp8_limiter_onset_*` (time series), `adhoc_probes_*` (membw, cluster residency, swizzle sweep, autotune, torch), `full_v1_*` (large-M / MLP shapes, partial) |
 
 ## Build and run
@@ -289,3 +291,70 @@ iteration (the 256 MB flush), so its FP8 == INT8 result is partly the limiter ne
 - (done) MAXN re-run: the FP8 limiter is power-mode independent; see the MAXN section.
 - Review follow-ups not done: separate the flush-gap and DRAM effects in mode A (smaller read-based flush + `--gap_us`); percentiles /
   bimodality flag in the timing output; stream-K instance for k/v_proj.
+
+## g128 block-scaled INT8 on Thor (2026-09-14, second step)
+
+Goal set by the user: INT8 g128 (scales per token x 128 K for A; per output channel x 128 K = "per-col", or 128x128 blocks =
+"W-block" for W) faster than bf16 (~160 TFLOPS at MAXN) and as close to per-tensor FP8 (cuBLASLt 249 sustained) as possible.
+
+Code: `blockwise_gemm.cuh/.cu`, `bw_configs.h`, `bwcfg_*.cu`; the INT8 mainloop is the GB200 shadow-header patch of CUTLASS's SM100
+blockwise collective (`../cutlass_g128_gemm`, fp32 scales + fp32 register full accumulator for int32 MMA accumulators), copied to
+`include/cutlass/gemm/collective/` with Thor-specific changes, plus `include/cutlass/arch/reg_reconfig.h`. Scale layouts are
+CUTLASS `Sm100BlockwiseScaleConfig<1,{1|128},128>` MN-major: `[K/128][M]` for A and `[K/128][N/{1|128}]` for W; **M must be a
+multiple of 4** (16-byte cp.async of the A scales), so M=1517 is padded to 1520 (TFLOPS reported on the padded M).
+
+### What limited the stock kernel on Thor and what was changed
+
+| finding | evidence | fix / consequence |
+| --- | --- | --- |
+| **`setmaxnreg` was compiled out on sm_110a**: CUTLASS `arch/reg_reconfig.h` gates `CUDA_CTA_RECONFIG_ACTIVATED` on sm_90a/100a/101a/103a/120a/121a only, so `warpgroup_reg_alloc<256>()` in the blockwise kernel's promotion warps did nothing and ptxas kept the 384-thread launch-bound budget of 168 registers for the 128-register fp32 full accumulator + TMEM fragments + scales | SASS: `USETMAXREG` count 0, max register R165, STACK 48-224 B of spills, column scales loaded one 16-byte quad at a time with 4 MOVs each | shadow `reg_reconfig.h` adds `CUTLASS_ARCH_MMA_SM110A/F_ENABLED` -> `USETMAXREG` present, max register R252, no spills: per-col 686 -> 371 us, W-block 301 -> 268 us (M=1520, 4096x4096x4096, hot-A/cold-W sustained) |
+| Thor has no packed FP32 (`FFMA2`): `fma.rn.f32x2` PTX is split into two `FFMA` by ptxas | identical SASS/timing with `G128_OPT_PACKED` | per element per 128-K block the promotion costs 2 FP issues (W-block: I2FP + FFMA) or 3 (per-col: I2FP + FMUL + FFMA) -- a hard floor of 256 / 384 issue slots per SMSP per K block against the 256-clk MMA time |
+| The 256x128 (2SM) tile is L2->SMEM delivery bound at ~490 clk per 128x128x128 K block (per-tensor INT8 with the same tile: 226-231 TFLOPS sustained); the promotion (loads + math) only has to hide under that | K-sweep slopes; ablations with the FMA loop or the TMEM loads removed both give ~500 clk | ceiling of this structure ~226 TFLOPS = 0.9x cuBLASLt FP8 per-tensor; W-block reaches ~527 clk (PIPE2), per-col ~745 |
+| TMEM load latency (~120 clk) exposed 4-8x per K block by the distance-1 double buffer (`tcgen05.wait::ld` waits for all outstanding loads) | epilogue tile 128x16 (16-register fragments) 1.48x for per-col; triple buffer + wait every 2nd sub-tile (`G128_OPT_PIPE2`) 1.12x for W-block once registers were available | `Epi2Sm16` configs (cfg 9/10) and `G128_OPT_PIPE2` |
+| per-col column scales: 32 `LDS` per sub-tile, software-pipelined by ptxas with 4 `MOV` per quad | 128 MOVs per K block | 128-bit `ld.shared.v4` into the compact fragment, prefetched one sub-tile ahead (`G128_OPT_SBVEC`) |
+
+Build flags (Makefile `G128_OPT`): `-DG128_OPT_PROMOTION -DG128_OPT_PIPE2 -DG128_OPT_SBVEC`; experiment knobs `G128_EXP_NO_FMA` /
+`G128_EXP_NO_LOAD` (ablations), `G128_OPT_PACKED` (no effect on Thor).
+
+### Results
+
+All rows verified against the fp32 block-scaled reference (rel-L2 1.66e-3 = bf16 output rounding).
+
+| kernel | 4096x4096 M=904 | M=1520 | M=1804 | 1024x4096 M=904 | M=1520 | M=1804 |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| **INT8 g128, W 128x128 blocks, cfg8 (2SM 256x128x256, epi tile 128x32, PIPE2)** | **172** | **190** | **175** | 128 | 173 | 148 |
+| INT8 g128, W 128x128 blocks, cfg10 (epi tile 128x16) | 151 | 168 | 154 | 112 | 156 | 132 |
+| **INT8 g128, per-col W (S0 layout), cfg9 (2SM 256x128x256, epi tile 128x16)** | **122** | **135** | **124** | 93 | 127 | 110 |
+| INT8 g128, per-col W, cfg7 (epi tile 128x32) | 95 | 106 | 96 | 74 | 101 | 86 |
+| FP8 g128, W 128x128 blocks, cfg8 | 180 | 206 | 187 | 135 | 178 | 156 |
+| FP8 g128, per-col W, cfg9 | 147 | 163 | 149 | 109 | 152 | 128 |
+| cuBLASLt bf16 (results/full_modeB_sustained_*) | 114 | 132 | 137 | 142 | 160 | 172 |
+| cuBLASLt FP8 per-tensor | 231 | 249 | 237 | 246 | 282 | 295 |
+| CUTLASS INT8 per-tensor (cfg3 256x256) | 274 | 323 | 290 | 205 | 248 | 232 |
+| CUTLASS INT8 per-tensor with the g128 kernels' 256x128 tile (structure ceiling) | - | 226 | - | - | - | - |
+
+Before the Thor changes (GB200 patch as-is, M=1520 4096x4096): INT8 W-block 154, INT8 per-col 73, FP8 W-block 196.
+
+History of the per-K-block cost (clk per 128x128x128 block per SM, M=1520 4096x4096, from K sweeps): delivery floor 490 (per-tensor
+256x128 tile); INT8 W-block 669 -> 527 (setmaxnreg + PIPE2); INT8 per-col 1510 -> 955 (epilogue tile 128x16) -> 745 (setmaxnreg).
+
+Reading (4096x4096, M=1520, the compute-bound target case):
+- **INT8 g128 with 128x128 weight blocks: 190 TFLOPS = 1.44x cuBLASLt bf16 (120 W) and ~1.2x bf16 at MAXN (160), 0.76x cuBLASLt FP8
+  per-tensor, 0.59x INT8 per-tensor.** It sits at 527 clk per K block against the 490-clk delivery floor of its 256x128 tile, i.e.
+  within 8 % of this structure's ceiling (226 TFLOPS).
+- **INT8 g128 per-col (the S0 precision layout): 135 TFLOPS = 1.03x bf16 (120 W), below bf16 at MAXN, 0.54x FP8 per-tensor.** 745 clk
+  per K block; its promotion needs 3 FP issues per element (384 per SMSP per block, Thor has no FFMA2) plus loads, so even perfect
+  scheduling caps it around the floor (~200 TFLOPS). The FP8 twin with the identical structure is 1.2x faster (no I2FP).
+- 1024x4096 (k/v_proj): all g128 variants trail bf16 -- the problem is a 4 MB weight stream with 16-64 output tiles; a 256x128 tile
+  gives 32 tiles on 10 CTA pairs and the promotion cannot hide behind DRAM stalls it does not have.
+- Every fix above is generic (register budget, TMEM double buffering, scale loads); the remaining gap to FP8 per-tensor is structural:
+  (a) the 256x128 tile ceiling (226) -> needs the 256x256 tile whose fp32 full accumulator (256 registers/thread) only fits if the
+  promotion is spread over 8 warps (the kernel has 4 idle warps; a kernel-level fork of `sm100_gemm_tma_warpspecialized_mma_transform`),
+  and (b) for per-col the 3-issue-per-element floor -> either the separable weight scale s_w[n,g] = s_w[n]*c[g] (per-col precision
+  structure at W-block cost: c[g] folded into the A scales in the mainloop, s_w[n] applied in the epilogue; precision to be evaluated
+  in the simulator) or accepting W 128x128 blocks.
+
+Not done / next: MAXN re-measurement of the g128 kernels (they are not power-bound, so they should scale with the 1575/1386 clock
+while FP8 per-tensor does not); the 8-warp 256x256 restructure; the separable-scale variant (kernel side = cfg8 + a per-column EVT
+scale); torch binding.
+

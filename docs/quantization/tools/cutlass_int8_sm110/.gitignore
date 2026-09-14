@@ -1,3 +1,4 @@
 build/
 pertensor_gemm
+blockwise_gemm
 cublaslt_bench

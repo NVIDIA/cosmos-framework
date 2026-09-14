@@ -479,6 +479,14 @@ M ∈ {901, 1517, 1802, 4096}；MLP 形状与视频级 M 只有部分数据（`r
   FP8 基准必须 ≥ 1.5 s 持续预热，且不能在迭代间冲 L2（1 ms 空隙让限流恢复，会得到"FP8 = INT8"的假象）。
 - cuBLASLt INT8 没有带 scale 的 bf16 epilogue，int32 输出 + 单独 rescale 只有 cuBLASLt FP8 的 0.62～0.76×；与 H100 一样，INT8 可用的前提是自写融合 epilogue 的 kernel。
 
-### 11.2 下一步
+### 11.2 g128 分组缩放（2026-09-14 下午，`tools/cutlass_int8_sm110/blockwise_gemm.*`）
+复用第 10 节 GB200 的 INT8 blockwise collective 补丁，在 Thor 上加了三处通用修正：(1) CUTLASS `arch/reg_reconfig.h` 没有 sm_110a，`setmaxnreg` 被编译成空，
+提升 warp 被卡在 168 寄存器（溢出、scale 逐 16B 装载）——shadow 头补上后 per-col 686→371 µs、W 块 301→268 µs；(2) epilogue 子块 128×16 降低 TMEM 片段寄存器占用（per-col 1.48×）；
+(3) TMEM 读三缓冲、每两个子块等一次（W 块 1.12×）。Thor 没有 FFMA2（f32x2 被 ptxas 拆开），per-col 每元素每 128-K 三条 FP 指令是硬地板。
+结果（热 A 冷 W 持续，4096×4096 M=1520，TFLOPS）：INT8 g128 W 128×128 块 **190**（bf16 的 1.44×，MAXN bf16 160 的 ~1.2×，cuBLASLt FP8 per-tensor 249 的 0.76×，
+离该 256×128 tile 结构的天花板 226 只差 8%）；INT8 g128 per-col **135**（≈ bf16，FP8 per-tensor 的 0.54×）；FP8 g128 孪生 206 / 163。1024×4096 上 g128 全部低于 bf16（4 MB 权重流、tile 太少）。
+要再上一层只有结构性改动：256×256 tile 需要把 fp32 全累加器分到 8 个提升 warp（kernel 级 fork），per-col 另需可分离权重 scale s_w[n,g]=s_w[n]·c[g]（精度待模拟器评估）。表：`results/g128_thor_20260914.md`。
+
+### 11.3 下一步
 per-row × per-col scale 的 EVT 变体和 torch 扩展绑定接入 cosmos-framework；g64/g128 blockwise INT8 移植到 SM100 blockwise collective（builder 接受 int8 但 scale 类型绑成 int32 累加器，需和 SM90 移植同样解耦）；
 k/v_proj 小 M 的 stream-K；QKV / gate-up 融合 GEMM 摊薄权重流。
