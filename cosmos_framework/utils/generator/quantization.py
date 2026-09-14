@@ -787,6 +787,12 @@ class QdqSimLinear(nn.Linear):
     # (unquantized or uninitialized) weight, so it is rejected instead.
     _qdq_weight_finalized: bool = False
     qdq_weight_block_n: int = 0  # >0: weights use (block_n x group_size) block scales (DeepSeek layout)
+    # SmoothQuant: per-input-channel factor s [K]; inputs are divided by s before quantization and the weight
+    # columns were multiplied by s at install time (F.linear(x/s, W*s) == F.linear(x, W)). None = off.
+    qdq_smooth: torch.Tensor | None = None
+    # calibration mode: pass through unquantized and accumulate per-input-channel |x| max into ``_calib_amax``
+    qdq_calib: bool = False
+    _calib_amax: torch.Tensor | None = None
 
     def forward(self, inputs: torch.Tensor) -> torch.Tensor:
         if not self._qdq_weight_finalized:
@@ -796,6 +802,12 @@ class QdqSimLinear(nn.Linear):
             )
         if inputs.numel() == 0:
             return F.linear(inputs, self.weight, self.bias)
+        if self.qdq_calib:
+            amax = inputs.detach().abs().reshape(-1, inputs.shape[-1]).amax(dim=0).float()
+            self._calib_amax = amax if self._calib_amax is None else torch.maximum(self._calib_amax, amax)
+            return F.linear(inputs, self.weight, self.bias)
+        if self.qdq_smooth is not None:
+            inputs = (inputs.float() / self.qdq_smooth).to(inputs.dtype)
         quantized_inputs = _fake_quant(
             inputs, self.qdq_method, per_row=self.qdq_per_row, group_size=self.qdq_group_size
         )
@@ -809,6 +821,38 @@ class QdqSimLinear(nn.Linear):
         if self.qdq_weight_block_n:
             granularity += f", weight_blocks={self.qdq_weight_block_n}x{self.qdq_group_size}"
         return f"{super().extra_repr()}, qdq={self.qdq_method}({granularity})"
+
+
+_CALIB_REGISTRY: dict = {}
+
+
+def _register_calib_dump(path: str, fqn: str, module: "QdqSimLinear") -> None:
+    """Collect calibration modules; write {fqn: amax[K]} with torch.save when the process exits."""
+    import atexit
+
+    if not _CALIB_REGISTRY:
+
+        def _dump() -> None:
+            stats = {
+                f.replace("._orig_mod", ""): m._calib_amax.cpu()
+                for f, m in _CALIB_REGISTRY.items()
+                if m._calib_amax is not None
+            }
+            os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
+            torch.save(stats, path)
+            print(f"[qdq-sim] saved SmoothQuant calibration stats for {len(stats)} modules to {path}", flush=True)
+
+        atexit.register(_dump)
+    _CALIB_REGISTRY[fqn] = module
+
+
+_CALIB_CACHE: dict = {}
+
+
+def _load_calib_stats(path: str) -> dict:
+    if path not in _CALIB_CACHE:
+        _CALIB_CACHE[path] = torch.load(path, map_location="cpu")
+    return _CALIB_CACHE[path]
 
 
 def swap_qdq_sim_linears(
@@ -854,7 +898,32 @@ def swap_qdq_sim_linears(
         replacement.weight = module.weight
         replacement.bias = module.bias
         replacement.train(module.training)
+        calib_dump = os.environ.get("QDQ_SIM_CALIB_DUMP", "")
+        smooth_spec = os.environ.get("QDQ_SIM_SMOOTH", "")  # "stats.pt" or "stats.pt:alpha"
         with torch.no_grad():
+            if calib_dump:
+                # calibration run: no quantization, record per-input-channel activation |x| max (saved at exit)
+                replacement.qdq_calib = True
+                _register_calib_dump(calib_dump, target_module_fqn, replacement)
+                replacement._qdq_weight_finalized = True
+                parent_fqn, _, child_name = target_module_fqn.rpartition(".")
+                parent = model.get_submodule(parent_fqn) if parent_fqn else model
+                setattr(parent, child_name, replacement)
+                swapped_fqns.append(target_module_fqn)
+                continue
+            if smooth_spec:
+                path, _, alpha = smooth_spec.partition(":")
+                alpha = float(alpha) if alpha else 0.5
+                stats = _load_calib_stats(path)
+                stats_key = target_module_fqn.replace("._orig_mod", "")  # torch.compile wraps modules as ``_orig_mod``
+                if stats_key not in stats:
+                    raise KeyError(f"SmoothQuant stats missing for {stats_key} in {path}")
+                a_max = stats[stats_key].to(device=replacement.weight.device, dtype=torch.float32)
+                w_max = replacement.weight.float().abs().amax(dim=0)  # per input channel k
+                s_vec = (a_max.clamp_min(1e-5) ** alpha) / (w_max.clamp_min(1e-5) ** (1.0 - alpha))
+                s_vec = s_vec.clamp(1e-2, 1e2)
+                replacement.weight.copy_((replacement.weight.float() * s_vec).to(replacement.weight.dtype))
+                replacement.qdq_smooth = s_vec
             # Weight rows are output channels, so per_row here is per-output-channel
             # and group blocks run along K within each output channel.
             weight_block_n = int(os.environ.get("QDQ_SIM_WEIGHT_BLOCK_N", "0") or 0)

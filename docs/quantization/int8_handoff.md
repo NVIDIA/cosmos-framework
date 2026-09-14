@@ -122,6 +122,18 @@ t2i 12 图（3 prompt × 4 seed，compile 路径），PSNR 对 Edge bf16：
 | INT8 g128 | 26.2 | 17.9 | 10 |
 结论与 Nano 一致且更明显：无分组的 per-row/per-col 不够用，K 分组是精度的来源；Edge 上 g64 全部保住构图，g128 掉 3 dB。
 
+### 3.8 SmoothQuant 对无分组 per-row/per-col INT8 的作用（Cosmos3-Edge，2026-09-14 补测）
+校准：3 个 prompt × 1 seed 的 bf16 直通推理，记录 168 个 gen 线性层每个输入通道的 |x| 最大值（通道最大/中位比：中位 6.7，最大 11279）。
+迁移 s_k = max|X_k|^α / max|W_k|^(1−α)，激活除以 s、权重列乘 s，再做 per-row/per-col INT8（无 K 分组）。开关 `QDQ_SIM_CALIB_DUMP` / `QDQ_SIM_SMOOTH=stats.pt:alpha`。
+| 配置（Edge t2i 12 图，对 bf16） | 平均 | 最低 | 保住/12 |
+| --- | --- | --- | --- |
+| per-row/per-col，无 SmoothQuant | 20.8 | 14.2 | 5 |
+| + SmoothQuant α=0.5 | 24.6 | 15.4 | 8 |
+| + SmoothQuant α=0.75 | 22.2 | 15.6 | 8 |
+| g128（无 SmoothQuant） | 26.2 | 17.9 | 10 |
+| g64（无 SmoothQuant） | 29.3 | 23.9 | 12 |
+SmoothQuant 能补回约 4 dB，但仍不及最粗的 K 分组 g128；离群通道迁移不如按 K 分组直接给离群位置独立 scale。
+
 ### 3.3 速度
 - t2i（901 token）：bf16 11.0 ms/forward，GEMM 73%，attention 15%。e2e bf16 13.8 it/s，官方 FP8 11.7 it/s（0.85×，host-bound）；开 CUDA graphs bf16 33.0、FP8 26.9；S0 模拟路径 22～30。
 - t2v 720p×189 帧×35 步（约 4.2 万 gen token，text cond 2107 / uncond 24）：bf16 2.29 s/步，官方 FP8 1.96 s/步（1.16×，到落盘 1.14×，与 NIM 表 1.11～1.14× 一致）。kernel 时间：attention 740→731 ms/forward（65%→75%），GEMM 339→160 ms（2.13×），量化 kernel 净增 30 ms（3.1%）。GPU 占用 99.5%。

@@ -498,3 +498,35 @@ def test_fake_quant_weight_blocks_shares_one_scale_per_block() -> None:
     assert not torch.isclose(scale, scale2)
     with pytest.raises(ValueError):
         fake_quant_weight_blocks(w, "int8_sim", block_n=100, block_k=128)
+
+
+def test_smoothquant_is_exact_without_rounding_and_helps_with_outliers() -> None:
+    from cosmos_framework.utils.generator.quantization import QdqSimLinear, fake_quant_int8
+
+    torch.manual_seed(13)
+    lin = torch.nn.Linear(64, 32, bias=False)
+    x = torch.randn(200, 64)
+    x[:, 7] *= 40.0  # activation outlier channel
+    ref = lin(x)
+    a_max = x.abs().amax(dim=0)
+    w_max = lin.weight.abs().amax(dim=0)
+    s_vec = (a_max.clamp_min(1e-5) ** 0.5) / (w_max.clamp_min(1e-5) ** 0.5)
+    # exactness of the migration itself
+    torch.testing.assert_close(torch.nn.functional.linear(x / s_vec, lin.weight * s_vec), ref, atol=1e-4, rtol=1e-4)
+
+    # per-row/per-col INT8 error with and without smoothing
+    def err(smooth):
+        w = lin.weight * s_vec if smooth else lin.weight
+        xx = x / s_vec if smooth else x
+        y = torch.nn.functional.linear(fake_quant_int8(xx, per_row=True), fake_quant_int8(w, per_row=True))
+        return ((y - ref).norm() / ref.norm()).item()
+
+    assert err(True) < 0.5 * err(False), (err(True), err(False))
+    # module path: calib accumulates amax, smooth divides inputs
+    m = QdqSimLinear(64, 32, bias=False)
+    m.weight = lin.weight
+    m.qdq_calib = True
+    m._qdq_weight_finalized = True
+    m(x[:100])
+    m(x[100:])
+    torch.testing.assert_close(m._calib_amax, a_max)
