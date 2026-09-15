@@ -20,7 +20,13 @@ from torch._dynamo.decorators import mark_unbacked
 from torch.distributed.algorithms._checkpoint.checkpoint_wrapper import (
     checkpoint_wrapper as ptd_checkpoint_wrapper,
 )
-from torch.distributed.fsdp import MixedPrecisionPolicy, fully_shard, register_fsdp_forward_method
+from torch.distributed.fsdp import (
+    CPUOffloadPolicy,
+    MixedPrecisionPolicy,
+    OffloadPolicy,
+    fully_shard,
+    register_fsdp_forward_method,
+)
 from torch.utils.checkpoint import (
     CheckpointPolicy,
     create_selective_checkpoint_contexts,
@@ -34,6 +40,38 @@ from cosmos_framework.model.generator.utils.memory import KVToStore, MemoryValue
 from cosmos_framework.data.generator.sequence_packing.runtime import SequencePack
 from cosmos_framework.utils.generator.parallelism import ParallelDims, fsdp_mesh
 from cosmos_framework.model.generator.mot.replicated_io import apply_replicated_attention_io_cp
+
+
+def _to_empty_preserving_buffers(
+    module: nn.Module,
+    *,
+    device: torch.device | str,
+    recurse: bool,
+) -> None:
+    """Materialize a module without discarding buffers that already hold valid values."""
+    descendants = module.modules() if recurse else (module,)
+    buffers = [
+        (descendant, name, buffer)
+        for descendant in descendants
+        for name, buffer in descendant.named_buffers(recurse=False)
+        if not buffer.is_meta
+    ]
+    module.to_empty(device=device, recurse=recurse)  # parameters and buffers: [*shape]
+    for descendant, name, buffer in buffers:
+        setattr(descendant, name, buffer)
+
+
+def materialize_non_offloaded_state(module: nn.Module, *, device: torch.device | str) -> None:
+    """Materialize remaining meta state without revisiting CPU-offloaded FSDP units."""
+    if getattr(module, "_fsdp_cpu_offloaded", False):
+        # Each marked decoder block was materialized as one bounded CUDA unit
+        # before fully_shard() converted it into FSDP-owned CPU DTensor shards.
+        # A later device conversion would disturb that established placement.
+        return
+
+    _to_empty_preserving_buffers(module, device=device, recurse=False)
+    for child in module.children():
+        materialize_non_offloaded_state(child, device=device)
 
 
 class ContextParallelDispatch(nn.Module):
@@ -375,7 +413,7 @@ def apply_fsdp(
     model: nn.Module,
     parallel_dims: ParallelDims,
     mp_policy: MixedPrecisionPolicy | None = None,
-):
+) -> None:
     """
     Apply data parallelism (via FSDP2) to the model.
 
@@ -393,6 +431,11 @@ def apply_fsdp(
     is 2-D even when ``dp_replicate == 1``, which silently puts a pure-FSDP run on FSDP2's
     HSDP path and pays a one-rank ``all_reduce`` per block per step.
 
+    For CPU offload, each complete decoder block is materialized on the compute
+    device immediately before it is wrapped. ``CPUOffloadPolicy`` then creates
+    the FSDP-owned CPU-local shards before the next block is materialized, which
+    bounds construction-time CUDA parameter memory to one decoder block.
+
     Args:
         model (nn.Module): The model to apply data parallelism to.
         parallel_dims (ParallelDims): The device mesh to use for data parallelism and expert parallel.
@@ -409,11 +452,25 @@ def apply_fsdp(
     """
     mesh = fsdp_mesh(parallel_dims)
     for _, block in model.model.layers.named_children():
+        if parallel_dims.fsdp_cpu_offload:
+            parameters = list(block.parameters())
+            meta_parameters = [parameter for parameter in parameters if parameter.is_meta]
+            if meta_parameters:
+                if len(meta_parameters) != len(parameters):
+                    raise ValueError("FSDP CPU-offload blocks must be entirely meta or entirely materialized.")
+                compute_device = torch.device(mesh.device_type)
+                if compute_device.type == "cuda":
+                    compute_device = torch.device("cuda", torch.cuda.current_device())
+                _to_empty_preserving_buffers(block, device=compute_device, recurse=True)
+        offload_policy = CPUOffloadPolicy() if parallel_dims.fsdp_cpu_offload else OffloadPolicy()
         fully_shard(
             module=block,
             mesh=mesh,
             mp_policy=mp_policy or MixedPrecisionPolicy(),
+            offload_policy=offload_policy,
+            reshard_after_forward=True,
         )
+        setattr(block, "_fsdp_cpu_offloaded", parallel_dims.fsdp_cpu_offload)
         register_fsdp_forward_method(block, "reasoner_forward")
 
 

@@ -30,7 +30,7 @@ Use cases
 ---------
 - VLM training      — ``dp_shard`` (+ optional ``dp_replicate``); cp=cfgp=1.
 - VFM training      — ``dp_shard`` (+ optional ``dp_replicate``) + optional cp.
-- VFM inference     — ``dp_shard`` + cfgp/cp overlays; replicate forced to 1.
+- VFM inference     — ``dp_shard`` (optionally replicated) + cfgp/cp overlays.
 
 FSDP wrapping for VLM ``HFModel`` instances lives in
 ``cosmos_framework.model.generator.parallelize_vlm``; MoT wrapping lives in
@@ -79,10 +79,15 @@ class ParallelDims:
                                Only needs to divide ``world_size``, with no relation to
                                cp or cfgp required.
         enable_inference_mode: Selects inference-time semantics — ``cfgp`` may
-                               be >1 and ``dp_enabled`` becomes degree-based
-                               (``dp_shard > 1``, ignoring ``dp_replicate``) rather than
-                               training's unconditional True (matches the legacy VFM
-                               inference path).
+                               be >1, and FSDP is enabled when sharding is requested
+                               (``dp_shard > 1``) or when CPU offload requires FSDP
+                               lifecycle hooks. Both may be enabled together. During
+                               training, FSDP is enabled unconditionally (matching the
+                               legacy VFM training path).
+        fsdp_cpu_offload:      Inference-only. Keep each FSDP2 decoder-layer shard
+                               on CPU between forward calls. This also forces FSDP2
+                               wrapping when ``dp_shard == 1`` and requires a
+                               checkpoint load that initializes every parameter.
     """
 
     world_size: int
@@ -92,6 +97,7 @@ class ParallelDims:
     cfgp: int = 1
     lb: int = 1
     enable_inference_mode: bool = False
+    fsdp_cpu_offload: bool = False
     _meshes: dict = field(default_factory=dict, init=False, repr=False)
 
     def __post_init__(self) -> None:
@@ -99,6 +105,8 @@ class ParallelDims:
 
     def _validate(self) -> None:
         # --- overlay range checks (run before division below) ---
+        if self.fsdp_cpu_offload and not self.enable_inference_mode:
+            raise ValueError("fsdp_cpu_offload is supported only in inference mode")
         if self.cp < 1 or self.cp > _MAX_CP:
             raise ValueError(f"CP (Context Parallelism) must be in [1, {_MAX_CP}]. got {self.cp}")
         if self.cfgp not in (1, 2):
@@ -199,7 +207,9 @@ class ParallelDims:
                 dims=[self.dp_replicate, self.dp_shard],
                 names=["dp_replicate", "dp_shard"],
             )
-            if self.dp_shard_enabled:
+            # Pure FSDP uses a 1-D mesh, including the singleton CPU-offload
+            # case. Passing the full 2-D (1, N) mesh selects FSDP2's HSDP path.
+            if self.dp_shard_enabled or not self.dp_replicate_enabled:
                 self._meshes["dp_shard"] = self._meshes["dp"]["dp_shard"]
             if self.dp_replicate_enabled:
                 self._meshes["dp_replicate"] = self._meshes["dp"]["dp_replicate"]
@@ -236,7 +246,7 @@ class ParallelDims:
 
     @property
     def dp_shard_mesh(self) -> "DeviceMesh | None":
-        """1-D ``dp_shard`` mesh, or None if dp_shard is not enabled."""
+        """1-D mesh for pure FSDP, including a singleton FSDP unit, else None."""
         return self._meshes.get("dp_shard")
 
     @property
@@ -266,11 +276,11 @@ class ParallelDims:
         wrap is also what installs the ``MixedPrecisionPolicy``, so skipping it where there
         is no cross-rank sharding to gain would leave nothing to cast the master parameters
         down to the compute dtype, silently making the master dtype the compute dtype.
-        Inference installs no policy, so it keeps the degree-based test rather than pay for
-        DTensor parameters it cannot use, and ignores ``dp_replicate``.
+        Inference installs no policy unless CPU offload is requested, so it keeps the
+        degree-based test rather than pay for DTensor parameters it cannot use.
         """
         if self.enable_inference_mode:
-            return self.dp_shard > 1
+            return self.dp_shard > 1 or self.fsdp_cpu_offload
         return True
 
     @property
@@ -336,9 +346,9 @@ def fsdp_mesh(parallel_dims: ParallelDims) -> "DeviceMesh | None":
     Use this instead of reaching for a mesh attribute directly at a ``fully_shard`` call site.
 
     Returns:
-        ``dp_shard_mesh`` (1-D) when there is no replicate axis to reduce over, else
-        ``dp_mesh`` (2-D). ``None`` when dp is disabled entirely, which callers are expected
-        to have already excluded.
+        ``dp_mesh`` (2-D) when there is a real replicate axis, otherwise
+        ``dp_shard_mesh`` (1-D), including singleton CPU offload. ``None`` when
+        dp is disabled entirely, which callers are expected to have excluded.
     """
     if parallel_dims.dp_replicate_enabled:
         return parallel_dims.dp_mesh

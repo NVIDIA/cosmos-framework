@@ -165,6 +165,7 @@ def custom_collate_fn(batch: list[dict[str, Any]] | dict[str, Any]) -> dict[str,
         "action_valid_mask",
         "image_size",
         "action_processing_record",
+        "camera_geometry",
         # Like "video": a per-sample list of range clips, which default_collate would try to
         # stack even though the two sensors' clips differ in length and resolution.
         "lidar",
@@ -181,7 +182,7 @@ def custom_collate_fn(batch: list[dict[str, Any]] | dict[str, Any]) -> dict[str,
     # remaining sound tensors mis-aligned with the plans whose ``has_sound``
     # flag was set BEFORE collation, causing ``sequence_packing`` to index
     # past the end of ``x0_tokens_sound``.
-    sparse_data_keys = {"sound"}
+    sparse_data_keys = {"sound", "camera_geometry"}
 
     # Handle the case where the batch is already a dictionary (e.g. column-wise batching)
     if isinstance(batch, dict):

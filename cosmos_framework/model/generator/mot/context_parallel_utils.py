@@ -121,7 +121,6 @@ def broadcast_context_parallel_object(
 
 
 def get_context_parallel_sharded_sequence(
-    attn_implementation: str,
     input_pack: SequencePack,
     position_ids: torch.Tensor,
     parallel_dims: ParallelDims | None,
@@ -132,10 +131,6 @@ def get_context_parallel_sharded_sequence(
     if parallel_dims is None or not parallel_dims.cp_enabled:
         return input_pack, position_ids
 
-    assert attn_implementation in ("two_way", "three_way"), (
-        f"Context parallel is only supported for two_way and three_way joint attention modes, "
-        f"got {attn_implementation!r}"
-    )
     cp_mesh = parallel_dims.cp_mesh
     cp_group = cp_mesh.get_group()
     rank = dist.get_rank(cp_group)

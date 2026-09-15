@@ -30,6 +30,8 @@ def flash3_attention_check(
     causal_type: CausalType,
     is_varlen: bool,
     deterministic: bool = False,
+    return_lse: bool = False,
+    is_compiling: bool = False,
     raise_error: bool = False,
 ) -> bool:
     """

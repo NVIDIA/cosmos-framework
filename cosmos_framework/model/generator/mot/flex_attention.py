@@ -43,6 +43,10 @@ coarser query block, so the returned :class:`FlexBackend` carries the block size
 padding multiple alongside the kernel options rather than leaving the three to be matched
 up by hand. ``flex_attention_bench`` times both backends and documents the install.
 
+:func:`flex_attention` always runs as a complete attention with no log-sum-exp request:
+it has nothing to merge with another attention term, and the FlashAttention-4 backward
+refuses to differentiate through one anyway.
+
 The supertoken rules :func:`build_block_mask` enforces, all within a sample: every non-control
 sensor token reaches every non-control sensor token within whatever view footprint
 ``attention_scope`` admits (every view by default). Control tokens -- a WSM (World Scenario
@@ -53,15 +57,6 @@ own view, across all frames and noise states. Every GEN token, conditioning or n
 to every UND token of its own sample, as the dense gen->und pass does. See
 :func:`_multiview_pair_predicate` for the rules themselves; richer patterns mean more metadata
 fields and a longer ``mask_mod``, not new varlen bookkeeping.
-
-LSE convention
---------------
-``AuxRequest(lse=True)`` returns the log-sum-exp of the scaled scores in **natural log**, at
-the default ``1/sqrt(head_dim)`` scale, in the ``[B, H, S]`` layout -- identical to
-``cosmos_framework.model.attention(..., return_lse=True)`` once transposed to heads-last ``[B, S, H]``,
-so a caller that does want to merge this output with another attention term can. The fused
-path does not ask for it: it is a complete attention, and the gradient the request puts in
-the graph is what the FlashAttention-4 backward refuses to lower.
 """
 
 from __future__ import annotations
@@ -74,9 +69,9 @@ import torch
 from torch.nn.attention.flex_attention import BlockMask
 from torch.nn.attention.flex_attention import flex_attention as torch_flex_attention
 
-from cosmos_framework.configs.base.defaults.flex_attention import (
+from cosmos_framework.configs.base.defaults.multiview_attention import (
     ATTENTION_SCOPES,
-    FLEX_BACKEND_PREFERENCES,
+    FLEX_GEOMETRY_PREFERENCES,
     AttentionScope,
 )
 from cosmos_framework.model.generator.mot.flex_attention_utils import (
@@ -653,7 +648,7 @@ def _camera_views_of_sample(sample_items: Sequence[SensorMaskItem]) -> set[int]:
 def _build_und_view_ids(
     sensor_mask_items: Sequence[Sequence[SensorMaskItem]],
     caption_mask_items: Sequence[Sequence[CaptionMaskItem]] | None,
-    num_und: int,
+    und_seq_len: int,
     device: torch.device,
 ) -> torch.Tensor:
     """The UND prefix of ``view_id``: the view each caption describes, ``-1`` when sample-level.
@@ -674,7 +669,7 @@ def _build_und_view_ids(
     quadrant), so they are rejected here rather than masked into silence.
     """
     if caption_mask_items is None:
-        return torch.full((num_und,), -1, device=device, dtype=torch.long)  # [num_und]
+        return torch.full((und_seq_len,), -1, device=device, dtype=torch.long)  # [und_seq_len]
 
     if len(caption_mask_items) != len(sensor_mask_items):
         raise ValueError(
@@ -705,14 +700,16 @@ def _build_und_view_ids(
 
     caption_view_id = torch.cat(view_id_runs)  # [caption_token_count]
     caption_token_count = caption_view_id.shape[0]
-    if caption_token_count > num_und:
-        raise ValueError(f"The captions cover {caption_token_count} UND tokens, exceeding the UND stream's {num_und}.")
-    if caption_token_count < num_und:
+    if caption_token_count > und_seq_len:
+        raise ValueError(
+            f"The captions cover {caption_token_count} UND tokens, exceeding the UND stream's {und_seq_len}."
+        )
+    if caption_token_count < und_seq_len:
         # The UND stream's trailing pad, which carries the same -1 every other field pads with.
         caption_view_id = torch.cat(
-            (caption_view_id, torch.full((num_und - caption_token_count,), -1, device=device, dtype=torch.long))
-        )  # [num_und]
-    return caption_view_id  # [num_und]
+            (caption_view_id, torch.full((und_seq_len - caption_token_count,), -1, device=device, dtype=torch.long))
+        )  # [und_seq_len]
+    return caption_view_id  # [und_seq_len]
 
 
 def _check_view_grids_agree(sensor_mask_items: Sequence[Sequence[SensorMaskItem]]) -> None:
@@ -760,9 +757,9 @@ def _check_view_grids_agree(sensor_mask_items: Sequence[Sequence[SensorMaskItem]
 
 def build_multiview_flex_metadata(
     *,
-    seq_len: int,
+    gen_seq_len: int,
     full_q_offsets: torch.Tensor,
-    num_und: int,
+    und_seq_len: int,
     causal_offsets: torch.Tensor | None,
     attention_scope: AttentionScope,
     decomposed_temporal_window_seconds: float | None,
@@ -787,16 +784,16 @@ def build_multiview_flex_metadata(
     view 1. See :func:`_check_view_grids_agree`.
 
     Args:
-        seq_len: block-padded GEN sequence length, i.e. the query count. The returned
-            fields are ``[num_und + seq_len]``, covering the fused ``[UND | GEN]`` key
+        gen_seq_len: block-padded GEN sequence length, i.e. the query count. The returned
+            fields are ``[und_seq_len + gen_seq_len]``, covering the fused ``[UND | GEN]`` key
             stream.
         full_q_offsets: cumulative per-sample GEN offsets, ``[len(sensor_mask_items) + 1]``;
             ``full_q_offsets[-1]`` is the real (unpadded) GEN token count, which the items'
             own token counts have to add up to.
-        num_und: block-padded UND (causal) stream length, which prefixes the key
+        und_seq_len: block-padded UND (causal) stream length, which prefixes the key
             stream. 0 leaves the metadata GEN-only, for a square self-attention mask.
         causal_offsets: cumulative per-sample UND offsets, ``[num_samples + 1]``;
-            required when ``num_und`` is non-zero, since the UND rule is "same sample"
+            required when ``und_seq_len`` is non-zero, since the UND rule is "same sample"
             and nothing else. ``causal_offsets[-1]`` is the real UND token count, so
             everything past it is padding.
         attention_scope: which same-kind (sensor) tokens of its sample a token reaches --
@@ -827,13 +824,13 @@ def build_multiview_flex_metadata(
             default) labels every UND token ``-1``, i.e. one caption for the whole rig,
             reachable from every view, which is the layout a batch without
             ``separate_view_text_tokenization`` packs and leaves the gen->und pass exactly as
-            unrestricted as it was. Supplying it requires a UND stream (``num_und`` non-zero),
+            unrestricted as it was. Supplying it requires a UND stream (``und_seq_len`` non-zero),
             and each sample's captions must cover its camera views exactly once; see
             :func:`_build_und_view_ids`.
         device: device for the returned tensors.
 
     Returns:
-        :class:`FlexMetadata` whose per-token fields are each ``[num_und + seq_len]``: the
+        :class:`FlexMetadata` whose per-token fields are each ``[und_seq_len + gen_seq_len]``: the
         UND tokens (sample ids only, ``-1`` / ``False`` in every multiview field), then the
         real GEN tokens in packed order, each stream followed by ``-1`` / ``-1.0`` sentinels
         (``False`` for ``is_noisy`` and ``is_control``) across its trailing pad.
@@ -841,14 +838,14 @@ def build_multiview_flex_metadata(
     Raises:
         ValueError: if the items of one sample sharing a view offset disagree on the
             ``(num_views, frames_per_view)`` grid or on ``seconds_per_frame``, if the items'
-            token counts do not add up to ``full_q_offsets[-1]`` or exceed ``seq_len``, if
-            ``num_und`` is non-zero without ``causal_offsets``, or if ``attention_scope`` is
+            token counts do not add up to ``full_q_offsets[-1]`` or exceed ``gen_seq_len``, if
+            ``und_seq_len`` is non-zero without ``causal_offsets``, or if ``attention_scope`` is
             ``"decomposed"`` with more than one view offset present and
             ``decomposed_temporal_window_seconds`` is ``None``.
     """
-    if num_und and causal_offsets is None:
+    if und_seq_len and causal_offsets is None:
         raise ValueError(
-            f"A fused key stream with {num_und} UND tokens needs causal_offsets to label them by "
+            f"A fused key stream with {und_seq_len} UND tokens needs causal_offsets to label them by "
             "sample; without it every UND key would look like padding to the mask."
         )
     # The two streams label their tokens with sample ids drawn from their own offsets, and the
@@ -948,61 +945,63 @@ def build_multiview_flex_metadata(
             f"Multiview metadata covers {real_token_count} GEN tokens but the pack holds "
             f"{packed_token_count}; the items and the packed full-attention splits disagree."
         )
-    if real_token_count > seq_len:
-        raise ValueError(f"Multiview metadata has {real_token_count} tokens, exceeding GEN sequence length {seq_len}.")
+    if real_token_count > gen_seq_len:
+        raise ValueError(
+            f"Multiview metadata has {real_token_count} tokens, exceeding GEN sequence length {gen_seq_len}."
+        )
 
-    pad = seq_len - real_token_count
+    pad = gen_seq_len - real_token_count
     if pad:
         sentinel = torch.full((pad,), -1, device=device, dtype=torch.long)  # [pad]
         timestamp_sentinel = torch.full((pad,), -1.0, device=device, dtype=torch.float32)  # [pad]
-        frame_id = torch.cat((frame_id, sentinel))  # [seq_len]
-        view_id = torch.cat((view_id, sentinel))  # [seq_len]
-        timestamp = torch.cat((timestamp, timestamp_sentinel))  # [seq_len]
-        is_noisy = torch.cat((is_noisy, torch.zeros(pad, device=device, dtype=torch.bool)))  # [seq_len], bool
-        is_control = torch.cat((is_control, torch.zeros(pad, device=device, dtype=torch.bool)))  # [seq_len], bool
+        frame_id = torch.cat((frame_id, sentinel))  # [gen_seq_len]
+        view_id = torch.cat((view_id, sentinel))  # [gen_seq_len]
+        timestamp = torch.cat((timestamp, timestamp_sentinel))  # [gen_seq_len]
+        is_noisy = torch.cat((is_noisy, torch.zeros(pad, device=device, dtype=torch.bool)))  # [gen_seq_len], bool
+        is_control = torch.cat((is_control, torch.zeros(pad, device=device, dtype=torch.bool)))  # [gen_seq_len], bool
         reads_every_caption = torch.cat(
             (reads_every_caption, torch.zeros(pad, device=device, dtype=torch.bool))
-        )  # [seq_len], bool
+        )  # [gen_seq_len], bool
 
-    sample_id = _build_stream_sample_ids(full_q_offsets, seq_len, device)  # [seq_len]
+    sample_id = _build_stream_sample_ids(full_q_offsets, gen_seq_len, device)  # [gen_seq_len]
 
-    if num_und:
+    if und_seq_len:
         assert causal_offsets is not None  # guarded above; narrows the type for the checker.
         # UND keys join the front of the stream carrying their sample and, on ``view_id``, the
         # view their caption describes. Every other multiview field is what the GEN rules match
         # on, and holding those at -1 / False is what keeps them from firing on this quadrant.
-        und_sentinel = torch.full((num_und,), -1, device=device, dtype=torch.long)  # [num_und]
-        und_timestamp_sentinel = torch.full((num_und,), -1.0, device=device, dtype=torch.float32)  # [num_und]
-        sample_id = torch.cat((_build_stream_sample_ids(causal_offsets, num_und, device), sample_id))
-        frame_id = torch.cat((und_sentinel, frame_id))  # [num_und+seq_len]
+        und_sentinel = torch.full((und_seq_len,), -1, device=device, dtype=torch.long)  # [und_seq_len]
+        und_timestamp_sentinel = torch.full((und_seq_len,), -1.0, device=device, dtype=torch.float32)  # [und_seq_len]
+        sample_id = torch.cat((_build_stream_sample_ids(causal_offsets, und_seq_len, device), sample_id))
+        frame_id = torch.cat((und_sentinel, frame_id))  # [und_seq_len+gen_seq_len]
         view_id = torch.cat(
-            (_build_und_view_ids(sensor_mask_items, caption_mask_items, num_und, device), view_id)
-        )  # [num_und+seq_len]
-        timestamp = torch.cat((und_timestamp_sentinel, timestamp))  # [num_und+seq_len]
-        is_noisy = torch.cat((torch.zeros(num_und, device=device, dtype=torch.bool), is_noisy))  # bool
-        is_control = torch.cat((torch.zeros(num_und, device=device, dtype=torch.bool), is_control))  # bool
+            (_build_und_view_ids(sensor_mask_items, caption_mask_items, und_seq_len, device), view_id)
+        )  # [und_seq_len+gen_seq_len]
+        timestamp = torch.cat((und_timestamp_sentinel, timestamp))  # [und_seq_len+gen_seq_len]
+        is_noisy = torch.cat((torch.zeros(und_seq_len, device=device, dtype=torch.bool), is_noisy))  # bool
+        is_control = torch.cat((torch.zeros(und_seq_len, device=device, dtype=torch.bool), is_control))  # bool
         reads_every_caption = torch.cat(
-            (torch.zeros(num_und, device=device, dtype=torch.bool), reads_every_caption)
+            (torch.zeros(und_seq_len, device=device, dtype=torch.bool), reads_every_caption)
         )  # bool
     elif caption_mask_items is not None:
         raise ValueError(
             "caption_mask_items describes the UND stream's captions, but this metadata is "
-            "GEN-only (num_und=0), so there is no UND stream to label."
+            "GEN-only (und_seq_len=0), so there is no UND stream to label."
         )
 
     return FlexMetadata(
-        seq_len=num_und + seq_len,
-        sample_id=sample_id,  # [num_und+seq_len]
-        frame_id=frame_id,  # [num_und+seq_len]
-        view_id=view_id,  # [num_und+seq_len]
-        is_noisy=is_noisy,  # [num_und+seq_len], bool
-        is_control=is_control,  # [num_und+seq_len], bool
-        timestamp=timestamp,  # [num_und+seq_len], float
-        num_und=num_und,
+        seq_len=und_seq_len + gen_seq_len,
+        sample_id=sample_id,  # [und_seq_len+gen_seq_len]
+        frame_id=frame_id,  # [und_seq_len+gen_seq_len]
+        view_id=view_id,  # [und_seq_len+gen_seq_len]
+        is_noisy=is_noisy,  # [und_seq_len+gen_seq_len], bool
+        is_control=is_control,  # [und_seq_len+gen_seq_len], bool
+        timestamp=timestamp,  # [und_seq_len+gen_seq_len], float
+        num_und=und_seq_len,
         attention_scope=attention_scope,
         decomposed_temporal_window_seconds=decomposed_temporal_window_seconds,
         control_attends_sensor=control_attends_sensor,
-        reads_every_caption=reads_every_caption,  # [num_und+seq_len], bool
+        reads_every_caption=reads_every_caption,  # [und_seq_len+gen_seq_len], bool
     )
 
 
@@ -1151,7 +1150,7 @@ def flash_backend_unavailable_reason(device: torch.device) -> str | None:
     This does not attempt to predict the checks Inductor makes on the traced graph itself
     (dtypes, head widths, scalars captured by the ``mask_mod``). The multiview mask and
     bf16 q/k/v satisfy them; if a future caller does not, the lowering raises with torch's
-    own explanation of what to do, and ``flex_attention_backend="triton"`` pins the run
+    own explanation of what to do, and ``multiview_attention_backend="flex_triton"`` pins the run
     back to Triton in the meantime.
     """
     try:
@@ -1176,34 +1175,30 @@ def flash_backend_unavailable_reason(device: torch.device) -> str | None:
 
 
 def resolve_flex_backend(device: torch.device, preference: str = "auto") -> FlexBackend:
-    """The backend the multiview FlexAttention path should run on, and its mask geometry.
+    """The mask geometry alone, for callers that build a mask and never a decomposition.
 
-    ``preference`` is a run's policy, not its outcome:
-
-    * ``"auto"`` takes FlashAttention-4 wherever it is available and Triton elsewhere.
-      This is the default, so a host that has the kernels installed uses them; the flip
-      side is that the same config on a host without them runs different kernels, at a
-      different padded length, with different rounding. A run that has to stay
-      bit-comparable with another should pin the backend rather than rely on the
-      environments matching.
-    * ``"triton"`` pins FlexAttention's Triton kernels, ignoring what is installed.
-    * ``"flash"`` demands FA4 and raises if it cannot be used, for a benchmark or a test
-      that is meaningless on the other backend.
+    ``"auto"`` here means "FA4 where the host has it", which is the *flex* half of
+    :func:`resolve_multiview_backend`'s ``"auto"`` and not that function's dense-first rule.
+    ``"dense"`` is not a geometry and is rejected: ask ``resolve_multiview_backend`` for the
+    pair instead.
 
     Raises:
-        ValueError: for an unknown ``preference``, or for ``"flash"`` when the backend is
-            unavailable -- with the reason from :func:`flash_backend_unavailable_reason`.
+        ValueError: for a preference that is not a flex backend, or for ``"flex_flash"`` when
+            FA4 is unavailable -- with the reason from :func:`flash_backend_unavailable_reason`.
     """
-    if preference not in FLEX_BACKEND_PREFERENCES:
-        raise ValueError(f"Unknown flex_attention_backend {preference!r}; expected one of {FLEX_BACKEND_PREFERENCES}.")
-    if preference == "triton":
+    if preference not in FLEX_GEOMETRY_PREFERENCES:
+        raise ValueError(
+            f"Unknown flex backend {preference!r}; expected one of {FLEX_GEOMETRY_PREFERENCES}. "
+            "'dense' is an attention pattern rather than a mask geometry -- use resolve_multiview_backend."
+        )
+    if preference == "flex_triton":
         return _get_triton_flex_backend()
     reason = flash_backend_unavailable_reason(device)
     if reason is None:
         return _get_flash_flex_backend(device)
-    if preference == "flash":
+    if preference == "flex_flash":
         raise ValueError(
-            f"flex_attention_backend='flash' requires FlexAttention's FlashAttention-4 backend, but {reason}. "
+            f"backend='flex_flash' requires FlexAttention's FlashAttention-4 backend, but {reason}. "
             "Use 'auto' to fall back to Triton where it is unavailable."
         )
     return _get_triton_flex_backend()
@@ -1332,9 +1327,9 @@ def build_block_mask(
 
 def build_multiview_block_mask(
     *,
-    seq_len: int,
+    gen_seq_len: int,
     full_q_offsets: torch.Tensor,
-    num_und: int,
+    und_seq_len: int,
     causal_offsets: torch.Tensor | None,
     attention_scope: AttentionScope,
     decomposed_temporal_window_seconds: float | None,
@@ -1351,7 +1346,7 @@ def build_multiview_block_mask(
     the caller only handles the mask. See :class:`SensorMaskItem` for what one item describes,
     and those two functions for the token layout the metadata encodes, for why the mask has
     to be built outside the decoder layers, for what ``block_size`` selects, for what
-    ``num_und`` / ``causal_offsets`` add, for what ``attention_scope`` lets same-kind
+    ``und_seq_len`` / ``causal_offsets`` add, for what ``attention_scope`` lets same-kind
     (sensor) tokens reach, for what ``decomposed_temporal_window_seconds`` changes about the
     ``"decomposed"`` scope's temporal half, for what
     ``control_attends_sensor`` adds to control queries, and for what
@@ -1361,9 +1356,9 @@ def build_multiview_block_mask(
     CPU in the unit tests, independently of the block-mask construction.
     """
     metadata = build_multiview_flex_metadata(
-        seq_len=seq_len,
+        gen_seq_len=gen_seq_len,
         full_q_offsets=full_q_offsets,
-        num_und=num_und,
+        und_seq_len=und_seq_len,
         causal_offsets=causal_offsets,
         attention_scope=attention_scope,
         decomposed_temporal_window_seconds=decomposed_temporal_window_seconds,
@@ -1381,8 +1376,7 @@ def flex_attention(
     full_v: torch.Tensor,
     block_mask: BlockMask,
     backend: FlexBackend,
-    return_lse: bool = False,
-) -> torch.Tensor | tuple[torch.Tensor, torch.Tensor]:
+) -> torch.Tensor:
     """The generator's attention over its own sample, via a single FlexAttention call.
 
     Drop-in replacement for the dense full branch of ``two_way_attention``: GEN tokens
@@ -1412,19 +1406,13 @@ def flex_attention(
             that backend's block size and silently wrong for any other -- so passing it lets
             the check below compare the two. Dynamo guards on the ``kernel_options`` dict, so
             each distinct value compiles its own kernel.
-        return_lse: when ``True`` also return the log-sum-exp, for a caller that merges
-            this output with another attention term. The fused path does not, and asking
-            for it costs the FlashAttention-4 backward, which cannot differentiate it.
 
     Returns:
         The attention output, ``[1, N_full, heads, head_dim]`` -- the heads-last layout
         ``from_mode_splits`` expects, with the sequence length matching ``full_q`` (pack
-        padding preserved). When ``return_lse`` is ``True``, returns the tuple
-        ``(out, lse)`` where ``lse`` has shape ``[1, N_full, heads]``.
+        padding preserved).
 
     Raises:
-        RuntimeError: if ``return_lse`` is requested with a torch version that does not
-            provide ``torch.nn.attention.flex_attention.AuxRequest``.
         ValueError: if either length is not a multiple of the corresponding block size of
             the mask, if k and v disagree on length, if ``block_mask`` was built for
             different lengths, or if it was built at a block size other than ``backend``'s.
@@ -1470,32 +1458,6 @@ def flex_attention(
     q = _to_flex_layout(full_q)  # [1,num_q_heads,N_full,head_dim]
     k = _to_flex_layout(full_k)  # [1,num_kv_heads,N_und+N_full,head_dim]
     v = _to_flex_layout(full_v)  # [1,num_kv_heads,N_und+N_full,head_dim]
-
-    if return_lse:
-        # return_aux rather than the deprecated return_lse: the latter records a
-        # FutureWarning in a module-level set, which Dynamo rejects as an unsafe
-        # side effect inside the activation-checkpointing HOP.
-        try:
-            from torch.nn.attention.flex_attention import AuxRequest as aux_request_cls
-        except ImportError:
-            aux_request_cls = None
-        if aux_request_cls is None:
-            raise RuntimeError(
-                "return_lse=True requires torch.nn.attention.flex_attention.AuxRequest, "
-                f"which is unavailable in torch {torch.__version__}."
-            )
-        attn_out, aux = _COMPILED_FLEX_ATTENTION(
-            q,
-            k,
-            v,
-            block_mask=block_mask,
-            enable_gqa=num_q_heads != num_kv_heads,
-            return_aux=aux_request_cls(lse=True),
-            kernel_options=backend.kernel_options,
-        )  # attn_out: [1,num_q_heads,N_full,head_dim], aux.lse: [1,num_q_heads,N_full]
-        # Convert to the heads-last layout ([1,S,H,D] / [1,S,H]) that from_mode_splits
-        # expects, and that a caller merging this output would need.
-        return _from_flex_layout(attn_out), _from_flex_layout(aux.lse)  # [1,N_full,heads,head_dim], [1,N_full,heads]
 
     attn_out = _COMPILED_FLEX_ATTENTION(
         q,

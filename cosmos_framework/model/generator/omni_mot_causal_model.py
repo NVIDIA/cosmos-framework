@@ -563,17 +563,17 @@ class OmniMoTCausalModel(OmniMoTModel):
         # a second teacher-forcing API.
         video_temporal_causal = self.config.video_temporal_causal
         joint_attn_implementation = self.config.joint_attn_implementation
-        flex_attention_enabled = self.config.flex_attention.enabled
-        attention_scope = self.config.flex_attention.mask.attention_scope
-        decomposed_temporal_window_seconds = self.config.flex_attention.mask.decomposed_temporal_window_seconds
-        self.config.joint_attn_implementation = "two_way" if uses_multiview_flex_kv else "three_way"
-        self.config.flex_attention.enabled = uses_multiview_flex_kv
+        attention_scope = self.config.multiview_attention.mask.attention_scope
+        decomposed_temporal_window_seconds = self.config.multiview_attention.mask.decomposed_temporal_window_seconds
+        # One knob rather than two that had to agree: the pathway is what selects multiview
+        # attention, so there is no second flag to save and restore alongside it.
+        self.config.joint_attn_implementation = "multiview" if uses_multiview_flex_kv else "three_way"
         if uses_multiview_flex_kv:
             # Core validates temporal causality as a three-way-only layout. The
             # replay mask supplies causality for this two-way path.
             self.config.video_temporal_causal = False
-            self.config.flex_attention.mask.attention_scope = replay_policy.multiview_attention_scope
-            self.config.flex_attention.mask.decomposed_temporal_window_seconds = (
+            self.config.multiview_attention.mask.attention_scope = replay_policy.multiview_attention_scope
+            self.config.multiview_attention.mask.decomposed_temporal_window_seconds = (
                 replay_policy.decomposed_temporal_window_seconds
             )
         try:
@@ -589,9 +589,8 @@ class OmniMoTCausalModel(OmniMoTModel):
         finally:
             self.config.video_temporal_causal = video_temporal_causal
             self.config.joint_attn_implementation = joint_attn_implementation
-            self.config.flex_attention.enabled = flex_attention_enabled
-            self.config.flex_attention.mask.attention_scope = attention_scope
-            self.config.flex_attention.mask.decomposed_temporal_window_seconds = decomposed_temporal_window_seconds
+            self.config.multiview_attention.mask.attention_scope = attention_scope
+            self.config.multiview_attention.mask.decomposed_temporal_window_seconds = decomposed_temporal_window_seconds
 
         if uses_multiview_flex_kv:
             net.config.video_temporal_causal = video_temporal_causal
@@ -606,11 +605,14 @@ class OmniMoTCausalModel(OmniMoTModel):
         Call once after the checkpoint has loaded (DCP needs plain ``nn.Linear`` at load time;
         see the config field). No-op when unset. The ``COSMOS3_NVFP4=1`` env var is honored as a
         fallback so existing env-based runs keep working, but ``config.nvfp4_linears`` takes
-        precedence and is the intended interface.
+        precedence and is the intended interface. FSDP CPU offload is rejected before conversion
+        because its decoder weights are CPU-resident DTensors rather than CUDA tensors.
         """
         mode = resolve_legacy_nvfp4_mode(self.config.nvfp4_linears)
         if mode is None:
             return
+        if self.config.parallelism.fsdp_cpu_offload:
+            raise ValueError("NVFP4 linear conversion is not supported with FSDP CPU offload")
         from cosmos_framework.model.generator.utils.nvfp4 import convert_decoder_linears_to_nvfp4
 
         log.info(

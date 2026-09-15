@@ -9,7 +9,7 @@ import inspect
 import json
 import time
 from contextlib import contextmanager
-from typing import Any, Callable, Dict, Mapping, Optional, Tuple
+from typing import Any, Callable, Dict, Mapping, Optional, Tuple, get_args
 
 import numpy as np
 import torch
@@ -34,6 +34,7 @@ from cosmos_framework.model.generator.algorithm.loss.flow_matching import (
     compute_flow_matching_loss,
 )
 from cosmos_framework.model.generator.algorithm.loss.load_balancing import compute_load_balancing_loss
+from cosmos_framework.configs.base.defaults.joint_attention import JointAttnImplementation
 from cosmos_framework.configs.base.defaults.model_config import OmniMoTModelConfig
 from cosmos_framework.configs.base.defaults.parallelism import PRECISION_TO_TORCH_DTYPE
 from cosmos_framework.data.generator.action.utils.action_processing import (
@@ -59,6 +60,7 @@ from cosmos_framework.model.generator.mot.inference_text_kv_memory import (
     restore_inference_attention_dispatch,
 )
 from cosmos_framework.model.generator.mot.modeling_utils import has_noisy_tokens
+from cosmos_framework.model.generator.mot.parallelize_unified_mot import materialize_non_offloaded_state
 from cosmos_framework.model.generator.mot.parallelize_vfm_network import parallelize_vfm_network
 from cosmos_framework.model.generator.reasoner.qwen3_vl.utils import tokenize_caption
 from cosmos_framework.model.generator.utils.data_and_condition import (
@@ -445,11 +447,7 @@ class OmniMoTModel(ImaginaireModel):
                 action_gen=self.config.action_gen,
                 sound_gen=self.config.sound_gen,
                 joint_attn_implementation=self.config.joint_attn_implementation,
-                use_multiview_flex_attention=self.config.flex_attention.enabled,
-                flex_attention_backend=self.config.flex_attention.backend,
-                attention_scope=self.config.flex_attention.mask.attention_scope,
-                control_attends_sensor=self.config.flex_attention.mask.control_attends_sensor,
-                decomposed_temporal_window_seconds=self.config.flex_attention.mask.decomposed_temporal_window_seconds,
+                multiview_attention_config=self.config.multiview_attention,
                 timestep_scale=1.0 / float(num_train_timesteps) * self.config.diffusion_expert_config.timestep_range,
                 action_dim=self.config.max_action_dim,
                 num_embodiment_domains=self.config.num_embodiment_domains,
@@ -500,6 +498,14 @@ class OmniMoTModel(ImaginaireModel):
         # would leave ``mp_policy.reduce_dtype`` disagreeing with the sharded params.
         net = net.to(dtype=dtype)
 
+        if self.config.parallelism.fsdp_cpu_offload and DEVICE == Device.CUDA:
+            # Initialize nonpersistent buffers before FSDP wrapping. Parameters
+            # are still meta; apply_fsdp() materializes one decoder block at a
+            # time, bounding the construction peak to one complete block. Their
+            # storage is intentionally uninitialized until the required complete
+            # checkpoint load populates every parameter.
+            net.init_weights(buffer_device=DEVICE)
+
         net = parallelize_vfm_network(
             net,
             parallel_dims=self.parallel_dims,
@@ -510,12 +516,16 @@ class OmniMoTModel(ImaginaireModel):
         )
 
         with misc.timer("meta to cuda and broadcast model states"):
-            net.to_empty(device=DEVICE)
+            if self.config.parallelism.fsdp_cpu_offload:
+                materialize_non_offloaded_state(net, device=DEVICE)
+            else:
+                net.to_empty(device=DEVICE)  # parameters and buffers: [*shape]
             if DEVICE == Device.CUDA:
                 # Weight initialization is not needed for other devices (cpu,
                 # meta), since they are only for checkpoint conversion and smoke
                 # tests.
-                net.init_weights(buffer_device=DEVICE)
+                if not self.config.parallelism.fsdp_cpu_offload:
+                    net.init_weights(buffer_device=DEVICE)
                 if lora_enabled:
                     self._init_lora_weights_post_materialization(net)
 
@@ -669,8 +679,10 @@ class OmniMoTModel(ImaginaireModel):
         """Set up the fsdp for the model."""
         self.parallel_dims = ParallelDims(
             enable_inference_mode=self.config.parallelism.enable_inference_mode,
+            fsdp_cpu_offload=self.config.parallelism.fsdp_cpu_offload,
             world_size=torch.distributed.get_world_size() if torch.distributed.is_initialized() else 1,
             dp_shard=self.config.parallelism.data_parallel_shard_degree,
+            dp_replicate=self.config.parallelism.data_parallel_replicate_degree,
             cfgp=self.config.parallelism.cfg_parallel_shard_degree,
             cp=self.config.parallelism.context_parallel_shard_degree,
             lb=self.config.parallelism.vae_load_balance_group_size,
@@ -789,8 +801,8 @@ class OmniMoTModel(ImaginaireModel):
 
     def _derive_include_end_of_generation_token(self) -> bool:
         impl = self.config.joint_attn_implementation
-        assert impl in ("two_way", "three_way"), (
-            f"Invalid joint_attn_implementation: {impl}. Must be 'two_way' or 'three_way'."
+        assert impl in get_args(JointAttnImplementation), (
+            f"Invalid joint_attn_implementation: {impl}. Must be one of {get_args(JointAttnImplementation)}."
         )
         return False
 
@@ -1935,17 +1947,13 @@ class OmniMoTModel(ImaginaireModel):
         obviously wrong loss -- so refuse it here instead, where the config that has to change
         can be named.
         """
-        if not self.config.flex_attention.enabled:
+        if self.config.joint_attn_implementation != "multiview":
             raise ValueError(
                 "This batch carries per-view captions (separate_view_text_tokenization), which "
-                "only attend view-scoped under the multiview mask. Set "
-                "model.config.flex_attention.enabled=True, or turn off "
-                "separate_view_text_tokenization on the dataset."
-            )
-        if self.config.joint_attn_implementation != "two_way":
-            raise ValueError(
-                "Per-view captions need joint_attn_implementation='two_way': it is the only path "
-                "that applies the multiview mask and the per-caption causal boundaries, and got "
+                "attend view-scoped only on the multiview pathway -- it is the one that applies "
+                "the view-scoped key sets and the per-caption causal boundaries. Set "
+                "model.config.joint_attn_implementation='multiview', or turn off "
+                "separate_view_text_tokenization on the dataset. Got "
                 f"{self.config.joint_attn_implementation!r}."
             )
 
@@ -2837,6 +2845,8 @@ class OmniMoTModel(ImaginaireModel):
         # and remains excluded pending separate validation.
         if self.parallel_dims is not None and self.parallel_dims.cp_enabled:
             return False
+        # The ordinary pathway only: "multiview" runs different attention per layer, which this
+        # cache has not been validated against, and "three_way" a different pack shape.
         if self.config.joint_attn_implementation != "two_way":
             return False
         if self.config.video_temporal_causal:

@@ -1,8 +1,10 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: OpenMDW-1.1
 
-import random  # noqa: I001 - release import rewriting changes the package sort order.
 import contextlib
+import math
+import random  # noqa: I001 - release import rewriting changes the package sort order.
+import re
 from collections.abc import Iterator, Sequence
 from dataclasses import dataclass
 from types import SimpleNamespace
@@ -18,6 +20,8 @@ from cosmos_framework.model.attention import multi_dimensional_attention_varlen
 from cosmos_framework.model.attention.natten import NATTEN_SUPPORTED
 from cosmos_framework.model.attention.varlen import generate_multi_dim_varlen_parameters
 from cosmos_framework.utils.misc import set_torch_compile_options
+from cosmos_framework.model.generator.mot import multiview_attention as multiview_attention_module
+from cosmos_framework.model.generator.mot import multiview_dense_attention
 from cosmos_framework.model.generator.mot.attention import (
     build_packed_sequence,
 )
@@ -28,23 +32,25 @@ from cosmos_framework.model.generator.mot.flex_attention import (
     resolve_flex_backend,
 )
 from cosmos_framework.model.generator.mot.flex_attention_test import _FLASH_UNAVAILABLE_MARKERS
-from cosmos_framework.data.generator.sequence_packing.sequence import PackedSequence
+from cosmos_framework.model.generator.mot.multiview_attention import multiview_attention
 from cosmos_framework.data.generator.sequence_packing.runtime import (
     SequencePack,
-    get_all_seq_unpadded,
-    has_pad_segment,
     get_all_seq,
+    get_all_seq_unpadded,
+    get_caption_seq_offsets,
     get_causal_seq,
     get_full_only_seq,
     get_gen_seq,
     get_num_real_samples,
     get_und_seq,
+    has_pad_segment,
     prepare_sequence_pack_metadata,
     sequence_pack_from_packed_sequence,
     set_gen_seq,
     set_und_seq,
     zeros_like,
 )
+from cosmos_framework.data.generator.sequence_packing.sequence import PackedSequence
 
 MAX_SEQ_LEN = 24
 SEQS_PER_BATCH = 4
@@ -175,7 +181,7 @@ def _test_attention_impls(
     packed_gen_idx_t = cast(torch.LongTensor, torch.tensor(packed_gen_token_indexes, device=device, dtype=torch.long))
 
     # Builders: return only the pack; retrieve the attention_meta explicitly when needed
-    def _make_pack_decomposed(x, impl: str):
+    def _make_pack_multiview_dense(x, impl: str):
         return build_packed_sequence(
             impl,
             packed_sequence=x,
@@ -191,10 +197,10 @@ def _test_attention_impls(
         )[0]
 
     def make_pack_two_way(x):
-        return _make_pack_decomposed(x, "two_way")
+        return _make_pack_multiview_dense(x, "two_way")
 
     def make_pack_three_way(x):
-        return _make_pack_decomposed(x, "three_way")
+        return _make_pack_multiview_dense(x, "three_way")
 
     IMPL_TO_MAKE_PACK = {
         "two_way": make_pack_two_way,
@@ -443,10 +449,15 @@ def test_use_varlen_stays_varlen_for_caption_offsets_without_grad() -> None:
 
 
 @pytest.mark.L0
-def test_two_way_attention_passes_caption_boundaries_during_single_sample_inference(
+def test_und_self_attention_passes_caption_boundaries_during_single_sample_inference(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """The no-grad B=1 fast path still hands all caption ranges to causal attention."""
+    """The no-grad B=1 fast path still hands all caption ranges to causal attention.
+
+    Asked of the multiview pathway's shared UND pass, which is where per-view captions live:
+    a pack only carries their boundaries under separate_view_text_tokenization, and that is
+    admitted on the multiview pathway alone.
+    """
     caption_lens = [[3, 5]]
     und_indexes = torch.arange(8, dtype=torch.long)  # [N_und]
     gen_indexes = torch.arange(8, 16, dtype=torch.long)  # [N_gen]
@@ -483,21 +494,20 @@ def test_two_way_attention_passes_caption_boundaries_during_single_sample_infere
         calls.append(kwargs)
         return torch.zeros_like(query)
 
-    monkeypatch.setattr(attention, "attention", fake_attention)
+    monkeypatch.setattr(multiview_attention_module, "attention", fake_attention)
     qkv = torch.zeros(3, 16, 1, 2)  # [QKV,N,heads,head_dim]
     packs = tuple(make_pack(qkv[index]) for index in range(3))
 
     with torch.no_grad():
-        attention.two_way_attention(*packs)
+        multiview_attention_module.und_self_attention(*packs)
 
-    assert len(calls) == 2
+    assert len(calls) == 1
     # The last range is the packer's trailing padding segment; the first two are the
     # independent caption ranges whose loss in the old dense shortcut caused cross-caption
     # attention.
     assert calls[0]["cumulative_seqlen_Q"].tolist() == [0, 3, 8, 9]
     assert calls[0]["cumulative_seqlen_KV"].tolist() == [0, 3, 8, 9]
     assert calls[0]["max_seqlen_Q"] == 5
-    assert "cumulative_seqlen_Q" in calls[1], "caption offsets select varlen for both attention passes"
 
 
 @pytest.mark.L0
@@ -911,7 +921,7 @@ def _multiview_block_mask(pack: SequencePack, shape: _MultiviewShape, *, block_s
     full_only_seq, full_q_offsets = get_full_only_seq(pack)
     causal_seq, causal_offsets = get_causal_seq(pack)
     return build_multiview_block_mask(
-        seq_len=full_only_seq.shape[0],
+        gen_seq_len=full_only_seq.shape[0],
         full_q_offsets=full_q_offsets,
         sensor_mask_items=[
             # One item per sample, none of it conditioning.
@@ -927,7 +937,7 @@ def _multiview_block_mask(pack: SequencePack, shape: _MultiviewShape, *, block_s
         caption_mask_items=None,
         device=full_only_seq.device,
         block_size=block_size,
-        num_und=causal_seq.shape[0],
+        und_seq_len=causal_seq.shape[0],
         causal_offsets=causal_offsets,
         attention_scope="all_views",
         decomposed_temporal_window_seconds=None,
@@ -1003,8 +1013,8 @@ def _flex_two_way(
     packed_value_states: SequencePack,
     attention_meta: _FlexAttentionMeta,
 ) -> SequencePack:
-    """``two_way_attention`` on the flex path, reading the mask off the metadata as production does."""
-    return attention.two_way_attention(
+    """The multiview pathway on its masked backend, reading the mask off the metadata as production does."""
+    return multiview_attention(
         packed_query_states,
         packed_key_states,
         packed_value_states,
@@ -1098,7 +1108,7 @@ def _flex_lowering_or_skip(backend: FlexBackend) -> Iterator[None]:
         pytest.param(False, id="compile-static", marks=pytest.mark.L1),
     ],
 )
-@pytest.mark.parametrize("backend_preference", ["triton", "flash"])
+@pytest.mark.parametrize("backend_preference", ["flex_triton", "flex_flash"])
 def test_two_way_attention_flex_matches_dense_across_batch_shapes(
     backend_preference: str, compile_dynamic: bool
 ) -> None:
@@ -1882,6 +1892,1050 @@ def test_pack_without_paired_splits_carries_no_pad_segments() -> None:
     # entry at the real token count rather than the padded one.
     assert pack["_full_only_seq_offsets"].shape[0] == 2
     assert int(pack["_full_only_seq_offsets"][-1]) == gen_len
+
+
+@dataclass(frozen=True)
+class _MultiviewDenseBatch:
+    """A single-sample multiview pack, plus the real (unpadded) tensors a reference needs."""
+
+    packs: tuple[SequencePack, SequencePack, SequencePack]
+    gen_q: torch.Tensor  # [V*F*S,heads,head_dim]
+    gen_k: torch.Tensor  # [V*F*S,kv_heads,head_dim]
+    gen_v: torch.Tensor  # [V*F*S,kv_heads,head_dim]
+    und_k: torch.Tensor  # [N_und,kv_heads,head_dim]
+    und_v: torch.Tensor  # [N_und,kv_heads,head_dim]
+
+
+def _multiview_dense_batch(
+    *,
+    und_len: int,
+    token_shape: tuple[int, int, int],
+    num_views: int,
+    num_q_heads: int,
+    num_kv_heads: int,
+    head_dim: int,
+    device: torch.device,
+    seed: int,
+) -> _MultiviewDenseBatch:
+    """Pack one camera-major multiview sample the way the network packs one.
+
+    The streams are padded to the Triton backend's 128-token blocks even though this path
+    needs no alignment at all: a production pack is padded (for CUDA graphs, or for the flex
+    mask), and the trailing rows are what the dense passes have to trim rather than attend.
+    ``num_kv_heads`` below the query head count is the grouped-query layout the models run,
+    which the view fold has to keep aligned.
+    """
+    torch.manual_seed(seed)
+    gen_len = token_shape[0] * token_shape[1] * token_shape[2]
+    real_len = und_len + gen_len
+    q = torch.randn(real_len, num_q_heads, head_dim, device=device, dtype=torch.bfloat16)
+    k = torch.randn(real_len, num_kv_heads, head_dim, device=device, dtype=torch.bfloat16)
+    v = torch.randn(real_len, num_kv_heads, head_dim, device=device, dtype=torch.bfloat16)
+
+    shape = _MultiviewShape(und_lens=(und_len,), token_shapes=(token_shape,), num_views=(num_views,))
+    backend = resolve_flex_backend(device, "flex_triton")
+    packs = (
+        _multiview_pack(q, shape, backend),
+        _multiview_pack(k, shape, backend),
+        _multiview_pack(v, shape, backend),
+    )
+    return _MultiviewDenseBatch(
+        packs=cast(tuple[SequencePack, SequencePack, SequencePack], packs),
+        gen_q=q[und_len:],
+        gen_k=k[und_len:],
+        gen_v=v[und_len:],
+        und_k=k[:und_len],
+        und_v=v[:und_len],
+    )
+
+
+def _padded_gen_tokens(pack: SequencePack) -> int:
+    """The GEN stream's padded length, which a plan's partitions have to cover.
+
+    The plan addresses the pack's stream as it stands, padding included, so this is part of the
+    geometry it describes rather than something the attention path works out per call.
+    """
+    return int(get_full_only_seq(pack)[0].shape[0])
+
+
+def _plan(
+    num_views: int,
+    token_shape: tuple[int, int, int],
+    device: torch.device,
+    padded: int | None = None,
+    attention_scope: str = "decomposed",
+):
+    """The single-sample plan."""
+    return multiview_dense_attention.build_multiview_dense_plan(
+        [num_views], [token_shape], device=device, padded_gen_tokens=padded, attention_scope=attention_scope
+    )
+
+
+def _multiview_dense_reference(
+    batch: _MultiviewDenseBatch,
+    *,
+    num_views: int,
+    frames_per_view: int,
+    spatial_tokens: int,
+    cross_view: bool = True,
+) -> torch.Tensor:
+    """What merging the three passes has to come out as, in float64.
+
+    ``merge_attentions`` merges as if the passes' key sets had been concatenated, so a GEN key
+    that is both in the query's view and at its frame appears twice in that concatenation. Two
+    copies of one key with one score is the same distribution as one copy carrying twice the
+    weight, which is what the multiplicity below encodes: 2 on the query's own ``(view, frame)``
+    cell, 1 on the rest of its view and the rest of its frame, 0 elsewhere, and 1 on every
+    caption token. The overlap is deliberate -- see ``multiview_dense_attention``.
+    """
+    gen_q = batch.gen_q.double()  # [N_gen,heads,head_dim]
+    heads, head_dim = gen_q.shape[1], gen_q.shape[2]
+    # Grouped-query attention: every key head serves a contiguous run of query heads.
+    group_size = heads // batch.gen_k.shape[1]
+    gen_k = batch.gen_k.double().repeat_interleave(group_size, dim=1)  # [N_gen,heads,head_dim]
+    gen_v = batch.gen_v.double().repeat_interleave(group_size, dim=1)  # [N_gen,heads,head_dim]
+    und_k = batch.und_k.double().repeat_interleave(group_size, dim=1)  # [N_und,heads,head_dim]
+    und_v = batch.und_v.double().repeat_interleave(group_size, dim=1)  # [N_und,heads,head_dim]
+
+    device = gen_q.device
+    # Camera-major ids: view-outer, frame-inner, spatial-innermost.
+    view_id = torch.arange(num_views, device=device).repeat_interleave(frames_per_view * spatial_tokens)  # [N_gen]
+    frame_id = torch.arange(frames_per_view, device=device).repeat_interleave(spatial_tokens).repeat(num_views)
+    same_view = view_id[:, None] == view_id[None, :]  # [N_gen,N_gen]
+    same_frame = frame_id[:, None] == frame_id[None, :]  # [N_gen,N_gen]
+    # ``cross_view=False`` is the single-view case: the instant groups sit inside the one view
+    # group, so the pass is skipped and each key is counted once, as the mask counts it.
+    multiplicity = same_view.double()  # [N_gen,N_gen]
+    if cross_view:
+        multiplicity = multiplicity + same_frame.double()
+
+    scale = head_dim**-0.5
+    gen_scores = torch.einsum("ihd,jhd->hij", gen_q, gen_k) * scale  # [heads,N_gen,N_gen]
+    und_scores = torch.einsum("ihd,jhd->hij", gen_q, und_k) * scale  # [heads,N_gen,N_und]
+    peak = torch.maximum(gen_scores.max(dim=-1).values, und_scores.max(dim=-1).values)  # [heads,N_gen]
+    gen_weights = multiplicity[None] * torch.exp(gen_scores - peak[..., None])  # [heads,N_gen,N_gen]
+    und_weights = torch.exp(und_scores - peak[..., None])  # [heads,N_gen,N_und]
+
+    numerator = torch.einsum("hij,jhd->ihd", gen_weights, gen_v) + torch.einsum(
+        "hij,jhd->ihd", und_weights, und_v
+    )  # [N_gen,heads,head_dim]
+    denominator = gen_weights.sum(-1) + und_weights.sum(-1)  # [heads,N_gen]
+    return numerator / denominator.transpose(0, 1)[..., None]  # [N_gen,heads,head_dim]
+
+
+@pytest.mark.L0
+@pytest.mark.GPU
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="The attention kernels require a GPU.")
+@pytest.mark.skipif(not NATTEN_SUPPORTED, reason="merge_attentions requires NATTEN.")
+@pytest.mark.parametrize(
+    "num_q_heads,num_kv_heads",
+    [
+        pytest.param(4, 4, id="mha"),
+        # Both folds reshape q, k and v by axes the head count is not one of, so a grouped-query
+        # layout has to survive them untouched -- and the cross-view fold does copy. This is the
+        # case that catches a fold that mixed the head axis into the reshape.
+        pytest.param(4, 2, id="gqa"),
+    ],
+)
+@torch.no_grad()
+def test_multiview_dense_attention_matches_a_dense_reference(num_q_heads: int, num_kv_heads: int) -> None:
+    """The three merged passes come out as one softmax over their concatenated key sets.
+
+    The reference is that concatenation written densely in float64 (``_multiview_dense_reference``),
+    which is what pins both folds at once: a view fold that crossed views, or a frame fold that
+    crossed frames, changes which keys a query sums over and no tolerance would hide it.
+    """
+    device = torch.device("cuda")
+    num_views, frames_per_view, patch_h, patch_w = 3, 2, 2, 3
+    token_shape = (num_views * frames_per_view, patch_h, patch_w)
+    batch = _multiview_dense_batch(
+        und_len=5,
+        token_shape=token_shape,
+        num_views=num_views,
+        num_q_heads=num_q_heads,
+        num_kv_heads=num_kv_heads,
+        head_dim=64,
+        device=device,
+        seed=0,
+    )
+
+    out_pack = multiview_attention(
+        *batch.packs, dense_plan=_plan(num_views, token_shape, device, _padded_gen_tokens(batch.packs[0]))
+    )
+
+    gen_out = get_gen_seq(out_pack)  # [N_full,heads*head_dim]
+    num_gen_tokens = batch.gen_q.shape[0]
+    expected = _multiview_dense_reference(
+        batch,
+        num_views=num_views,
+        frames_per_view=frames_per_view,
+        spatial_tokens=patch_h * patch_w,
+    ).flatten(-2, -1)  # [N_gen,heads*head_dim]
+
+    # bf16 q/k/v against a float64 reference: the observed gap is ~3e-3 at worst on a 0.16-rms
+    # output, i.e. rounding. Anything that actually folded the wrong axis moves whole keys in
+    # and out of the sum and lands orders of magnitude outside this.
+    torch.testing.assert_close(gen_out[:num_gen_tokens].double(), expected, atol=1e-2, rtol=1e-2)
+    # The pack was padded to the backend's block, and those rows belong to no view: the passes
+    # trim them, so what lands there is the zero the re-pad writes rather than a stale row.
+    assert torch.equal(gen_out[num_gen_tokens:], torch.zeros_like(gen_out[num_gen_tokens:]))
+
+
+@pytest.mark.L0
+@pytest.mark.GPU
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="The attention kernels require a GPU.")
+@pytest.mark.skipif(not NATTEN_SUPPORTED, reason="merge_attentions requires NATTEN.")
+@pytest.mark.parametrize(
+    "num_q_heads,num_kv_heads",
+    [pytest.param(4, 4, id="mha"), pytest.param(4, 2, id="gqa")],
+)
+@torch.no_grad()
+def test_multiview_dense_attention_same_view_scope_matches_a_dense_reference(
+    num_q_heads: int, num_kv_heads: int
+) -> None:
+    """``"same_view"`` is the view fold alone, and counts every key exactly once.
+
+    The reference is the same concatenation as the decomposed case with the frame fold dropped
+    (``cross_view=False``), which leaves a multiplicity of 1 across the query's own view and 0
+    elsewhere. That is the mask's own counting, so unlike ``"decomposed"`` this scope is not a
+    distinct attention pattern -- one partition cannot overlap itself, so there is no own-cell
+    double weight for inclusion-exclusion to subtract back out.
+    """
+    device = torch.device("cuda")
+    num_views, frames_per_view, patch_h, patch_w = 3, 2, 2, 3
+    token_shape = (num_views * frames_per_view, patch_h, patch_w)
+    batch = _multiview_dense_batch(
+        und_len=5,
+        token_shape=token_shape,
+        num_views=num_views,
+        num_q_heads=num_q_heads,
+        num_kv_heads=num_kv_heads,
+        head_dim=64,
+        device=device,
+        seed=0,
+    )
+    plan = _plan(
+        num_views,
+        token_shape,
+        device,
+        _padded_gen_tokens(batch.packs[0]),
+        attention_scope="same_view",
+    )
+    # The cross-instant partition is not built at all, rather than built and merged at no
+    # weight: the second kernel never runs, which is the whole cost difference between the two.
+    assert plan.cross_view_empty
+    assert plan.cross_view_gather is None
+    assert plan.attention_scope == "same_view"
+
+    out_pack = multiview_attention(*batch.packs, dense_plan=plan)
+
+    gen_out = get_gen_seq(out_pack)  # [N_full,heads*head_dim]
+    num_gen_tokens = batch.gen_q.shape[0]
+    expected = _multiview_dense_reference(
+        batch,
+        num_views=num_views,
+        frames_per_view=frames_per_view,
+        spatial_tokens=patch_h * patch_w,
+        cross_view=False,
+    ).flatten(-2, -1)  # [N_gen,heads*head_dim]
+
+    torch.testing.assert_close(gen_out[:num_gen_tokens].double(), expected, atol=1e-2, rtol=1e-2)
+    assert torch.equal(gen_out[num_gen_tokens:], torch.zeros_like(gen_out[num_gen_tokens:]))
+
+
+@pytest.mark.L0
+def test_multiview_dense_plan_rejects_a_scope_the_folds_do_not_express() -> None:
+    """``"all_views"`` is one pass per sample, not a partition of one, so it is not built here."""
+    with pytest.raises(ValueError, match="attention_scope='all_views' is not one this fold expresses"):
+        multiview_dense_attention.build_multiview_dense_plan(
+            [2], [(4, 1, 1)], device=torch.device("cpu"), attention_scope="all_views"
+        )
+
+
+@pytest.mark.L0
+@pytest.mark.GPU
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="The attention kernels require a GPU.")
+@pytest.mark.skipif(not NATTEN_SUPPORTED, reason="merge_attentions requires NATTEN.")
+@pytest.mark.parametrize(
+    "num_q_heads,num_kv_heads",
+    [pytest.param(4, 4, id="mha"), pytest.param(4, 2, id="gqa")],
+)
+def test_multiview_dense_attention_gradients_match_a_dense_reference(num_q_heads: int, num_kv_heads: int) -> None:
+    """The merged backward is the reference's backward, which is what the bridges buy.
+
+    ``merge_attentions`` fixes each branch's backward by writing the merged output and LSE into
+    the storage the branch's kernel saved, found by data pointer. Every autograd node between
+    kernel and merge defeats that -- a copying permute, and a storage-sharing reshape just as
+    much, since what the merge patches is the node's output and not the kernel's saved pair.
+    Both fold-backs therefore run through ``MergeAttentionsBridge``.
+
+    Without them the forward is unchanged and only the gradients move, so a forward-only test
+    cannot see it: measured, the two sensor branches land ~100% off this reference while
+    gen->und stays right, because that branch is the one with no reshape. The tolerance is the
+    forward test's, for the same bf16 reason.
+    """
+    device = torch.device("cuda")
+    num_views, frames_per_view, patch_h, patch_w = 3, 2, 2, 3
+    token_shape = (num_views * frames_per_view, patch_h, patch_w)
+    und_len = 5
+    batch = _multiview_dense_batch(
+        und_len=und_len,
+        token_shape=token_shape,
+        num_views=num_views,
+        num_q_heads=num_q_heads,
+        num_kv_heads=num_kv_heads,
+        head_dim=64,
+        device=device,
+        seed=0,
+    )
+    num_gen_tokens = batch.gen_q.shape[0]
+    torch.manual_seed(1)
+    seed_grad = torch.randn(num_gen_tokens, num_q_heads * 64, device=device, dtype=torch.bfloat16)
+
+    # The pack's own streams are the leaves, so the gradient measured is the one the decoder
+    # layer would hand back to the projections that produced them.
+    leaves: dict[str, torch.Tensor] = {}
+    for name, pack in zip("qkv", batch.packs):
+        for key in ("causal_seq", "full_only_seq"):
+            pack[key].requires_grad_(True)
+            leaves[f"{name}.{key}"] = pack[key]
+
+    out_pack = multiview_attention(
+        *batch.packs, dense_plan=_plan(num_views, token_shape, device, _padded_gen_tokens(batch.packs[0]))
+    )
+    get_gen_seq(out_pack)[:num_gen_tokens].backward(seed_grad)
+
+    reference_leaves = {name: leaf.detach().clone().requires_grad_(True) for name, leaf in leaves.items()}
+    reference = _multiview_dense_reference(
+        _MultiviewDenseBatch(
+            packs=batch.packs,
+            gen_q=reference_leaves["q.full_only_seq"][:num_gen_tokens],
+            gen_k=reference_leaves["k.full_only_seq"][:num_gen_tokens],
+            gen_v=reference_leaves["v.full_only_seq"][:num_gen_tokens],
+            und_k=reference_leaves["k.causal_seq"][:und_len],
+            und_v=reference_leaves["v.causal_seq"][:und_len],
+        ),
+        num_views=num_views,
+        frames_per_view=frames_per_view,
+        spatial_tokens=patch_h * patch_w,
+    )
+    reference.flatten(-2, -1).backward(seed_grad.double())
+
+    # The query's causal stream takes no gradient: only the GEN rows were seeded, and the
+    # reasoner's own self-attention output is not among them.
+    assert leaves["q.causal_seq"].grad is None
+    for name in ("q.full_only_seq", "k.full_only_seq", "v.full_only_seq", "k.causal_seq", "v.causal_seq"):
+        actual, expected = leaves[name].grad, reference_leaves[name].grad
+        assert actual is not None and expected is not None
+        # Both cast up: the reference computes in float64 but its gradient lands back on a
+        # bf16 leaf, so `expected` is bf16 too and the comparison is bf16-vs-bf16 either way.
+        torch.testing.assert_close(
+            actual.double(), expected.double(), atol=1e-2, rtol=1e-2, msg=lambda m, n=name: f"{n}: {m}"
+        )
+
+
+@pytest.mark.L0
+@pytest.mark.GPU
+@pytest.mark.parametrize(
+    "save_ops_regex",
+    [
+        pytest.param(["fmha"], id="save_fmha"),
+        pytest.param([], id="recompute_all"),
+    ],
+)
+def test_multiview_dense_attention_gradients_survive_activation_checkpointing(
+    save_ops_regex: list[str],
+) -> None:
+    """The merge's backward still lands on the tensors the kernels read, under selective AC.
+
+    ``merge_attentions`` repairs each branch by overwriting the storage that branch's kernel
+    saved, and ``MergeAttentionsBridge`` restores that link across the folds' reshapes. Both
+    rest on the patch reaching the tensor the kernel will read -- and activation checkpointing
+    decides separately whether that tensor was stashed during the forward or is regenerated
+    during the backward. Nothing makes PyTorch's checkpointing respect an in-place patch of a
+    saved tensor, and when this contract broke before it moved gradients ~70% off with no error
+    and nothing odd in the loss, so it is checked rather than reasoned about.
+
+    Both policies are covered because both are live. ``["fmha"]`` is what the AV multiview
+    recipes configure (``config_factory`` sets ``mode="selective"`` and that regex is the
+    default), and it makes all four attention calls MUST_SAVE -- the three sensor passes plus
+    the causal one -- against the mask's one, which is where this path's extra memory goes. The
+    empty list recomputes them instead, the change that would recover it.
+
+    The reference is the same module compiled *without* checkpointing, so the only variable is
+    the checkpointing itself and the comparison can be exact. It is compiled because that is
+    how a decoder layer runs: eager + non-reentrant checkpointing raises ``CheckpointError``
+    outright, since NATTEN's merge backward reads ``ctx.saved_tensors`` three times
+    (``natten/attn_merge.py:175-177``) and the saved-tensor hooks allow one unpack.
+    """
+    from torch.distributed.algorithms._checkpoint.checkpoint_wrapper import (
+        checkpoint_wrapper as ptd_checkpoint_wrapper,
+    )
+    from torch.utils.checkpoint import CheckpointPolicy, create_selective_checkpoint_contexts
+
+    device = torch.device("cuda")
+    num_views, frames_per_view, patch_h, patch_w = 3, 2, 2, 3
+    token_shape = (num_views * frames_per_view, patch_h, patch_w)
+    patterns = [re.compile(pattern) for pattern in save_ops_regex]
+
+    def _policy(ctx, func, *args, **kwargs):
+        name = getattr(func, "__name__", str(func))
+        if any(pattern.search(name) for pattern in patterns):
+            return CheckpointPolicy.MUST_SAVE
+        return CheckpointPolicy.MUST_RECOMPUTE
+
+    def _grads(checkpointed: bool) -> dict[str, torch.Tensor]:
+        batch = _multiview_dense_batch(
+            und_len=5,
+            token_shape=token_shape,
+            num_views=num_views,
+            num_q_heads=8,
+            num_kv_heads=4,
+            head_dim=64,
+            device=device,
+            seed=0,
+        )
+        leaves: dict[str, torch.Tensor] = {}
+        for name, pack in zip("qkv", batch.packs):
+            for key in ("causal_seq", "full_only_seq"):
+                pack[key].requires_grad_(True)
+                leaves[f"{name}.{key}"] = pack[key]
+        plan = _plan(num_views, token_shape, device, _padded_gen_tokens(batch.packs[0]))
+        num_gen_tokens = batch.gen_q.shape[0]
+
+        class _Layer(torch.nn.Module):
+            def forward(self) -> torch.Tensor:
+                out = multiview_attention(*batch.packs, dense_plan=plan)
+                return get_gen_seq(out)[:num_gen_tokens]
+
+        layer: torch.nn.Module = _Layer()
+        if checkpointed:
+            # The wrapper parallelize_unified_mot puts around a decoder layer.
+            layer = ptd_checkpoint_wrapper(
+                layer,
+                context_fn=lambda: create_selective_checkpoint_contexts(_policy),
+                preserve_rng_state=False,
+            )
+        torch.manual_seed(1)
+        seed_grad = torch.randn(num_gen_tokens, 8 * 64, device=device, dtype=torch.bfloat16)
+        torch.compile(layer)().backward(seed_grad)
+        return {name: leaf.grad for name, leaf in leaves.items() if leaf.grad is not None}
+
+    expected = _grads(checkpointed=False)
+    actual = _grads(checkpointed=True)
+
+    assert expected, "no leaf took a gradient, so this would pass vacuously"
+    assert set(expected) == set(actual), "checkpointing changed which leaves take a gradient"
+    for name, want in expected.items():
+        # Exact: recomputation reruns the same kernels on the same inputs, so any difference is
+        # the patch having missed its tensor rather than arithmetic.
+        torch.testing.assert_close(
+            actual[name].double(), want.double(), atol=0, rtol=0, msg=lambda m, n=name: f"{n}: {m}"
+        )
+
+
+@pytest.mark.L0
+@pytest.mark.CPU
+@torch.no_grad()
+def test_multiview_dense_attention_rejects_a_geometry_the_pack_contradicts() -> None:
+    """A token count or view count the pack does not carry is refused, not folded into.
+
+    The folds are pure reshapes, so a wrong geometry does not fail on its own: it would carve
+    the same tokens into different cells and attend across the wrong ones. Both halves of the
+    geometry are therefore checked against the pack.
+    """
+    device = torch.device("cpu")
+    token_shape = (4, 2, 2)
+    batch = _multiview_dense_batch(
+        und_len=5,
+        token_shape=token_shape,
+        num_views=2,
+        num_q_heads=4,
+        num_kv_heads=4,
+        head_dim=64,
+        device=device,
+        seed=0,
+    )
+    with pytest.raises(ValueError, match="not divisible by num_views"):
+        _plan(3, token_shape, device)
+    with pytest.raises(ValueError, match="but the pack holds"):
+        multiview_attention(*batch.packs, dense_plan=_plan(2, (4, 2, 3), device))
+
+
+@pytest.mark.L0
+@pytest.mark.CPU
+@torch.no_grad()
+def test_multiview_dense_attention_rejects_a_plan_the_pack_contradicts() -> None:
+    """A plan describing a different batch than the pack holds is refused, not folded into."""
+    device = torch.device("cpu")
+    shape = _MultiviewShape(und_lens=(5, 7), token_shapes=((4, 2, 2), (4, 2, 2)), num_views=(2, 2))
+    x = torch.randn(shape.real_len, 4, 64, device=device, dtype=torch.bfloat16)
+    backend = resolve_flex_backend(device, "flex_triton")
+    packs = tuple(_multiview_pack(x, shape, backend) for _ in range(3))
+
+    one_sample = multiview_dense_attention.build_multiview_dense_plan([2], [(4, 2, 2)], device=device)
+    with pytest.raises(ValueError, match="samples but the pack holds"):
+        multiview_attention(*packs, dense_plan=one_sample)
+
+    wrong_tokens = multiview_dense_attention.build_multiview_dense_plan([2, 2], [(4, 2, 2), (4, 2, 3)], device=device)
+    with pytest.raises(ValueError, match="but the pack holds"):
+        multiview_attention(*packs, dense_plan=wrong_tokens)
+
+
+@pytest.mark.L0
+@pytest.mark.GPU
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="The attention kernels require a GPU.")
+@pytest.mark.skipif(not NATTEN_SUPPORTED, reason="merge_attentions requires NATTEN.")
+@pytest.mark.parametrize(
+    "num_q_heads,num_kv_heads",
+    [pytest.param(4, 4, id="mha"), pytest.param(4, 2, id="gqa")],
+)
+@torch.no_grad()
+def test_multiview_dense_attention_folds_a_ragged_batch(num_q_heads: int, num_kv_heads: int) -> None:
+    """Samples differing in views, frames and resolution each attend within themselves.
+
+    The ragged path cannot use the batch axis -- the groups are different lengths -- so it
+    addresses them with varlen ranges, and reaches the cross-view groups through a gather. Both
+    are pure index math, which is exactly the kind of thing that fails silently: a gather off by
+    one sample's base, or offsets that ran the partitions together, still produces a plausible
+    tensor. The reference is each sample's own dense answer, computed independently and
+    concatenated, so any leakage across the sample boundary shows up immediately.
+    """
+    device = torch.device("cuda")
+    # (num_views, token_shape), deliberately unequal. The third is the single-view shape every
+    # LiDAR sample takes: its same-view group is the whole sample, so its cross-view pass adds
+    # nothing but the own-frame double-count -- which the reference models, and which is the
+    # distortion the V=1 neutralisation is meant to remove.
+    samples = ((2, (4, 2, 2)), (3, (6, 2, 3)), (1, (3, 2, 2)))
+    und_lens = (5, 7, 4)
+    shape = _MultiviewShape(
+        und_lens=und_lens,
+        token_shapes=tuple(token_shape for _, token_shape in samples),
+        num_views=tuple(views for views, _ in samples),
+    )
+    torch.manual_seed(0)
+    qkv = [
+        torch.randn(shape.real_len, heads, 64, device=device, dtype=torch.bfloat16)
+        for heads in (num_q_heads, num_kv_heads, num_kv_heads)
+    ]
+    backend = resolve_flex_backend(device, "flex_triton")
+    packs = cast(
+        tuple[SequencePack, SequencePack, SequencePack],
+        tuple(_multiview_pack(tensor, shape, backend) for tensor in qkv),
+    )
+    plan = multiview_dense_attention.build_multiview_dense_plan(
+        shape.num_views, shape.token_shapes, device=device, padded_gen_tokens=_padded_gen_tokens(packs[0])
+    )
+
+    out_pack = multiview_attention(*packs, dense_plan=plan)
+    gen_out = get_gen_seq(out_pack)  # [N_full,heads*head_dim]
+
+    # The pack lays each sample down as its UND run then its GEN run; the GEN stream the
+    # attention path sees is those GEN runs concatenated, which is the order to rebuild here.
+    und_starts, gen_starts, cursor = [], [], 0
+    for und_len, gen_len in zip(shape.und_lens, shape.gen_lens):
+        und_starts.append(cursor)
+        gen_starts.append(cursor + und_len)
+        cursor += und_len + gen_len
+
+    gen_cursor = 0
+    for index, ((views, (latent_t, patch_h, patch_w)), und_len) in enumerate(zip(samples, und_lens)):
+        gen_len = shape.gen_lens[index]
+        sample = _MultiviewDenseBatch(
+            packs=packs,
+            gen_q=qkv[0][gen_starts[index] : gen_starts[index] + gen_len],
+            gen_k=qkv[1][gen_starts[index] : gen_starts[index] + gen_len],
+            gen_v=qkv[2][gen_starts[index] : gen_starts[index] + gen_len],
+            und_k=qkv[1][und_starts[index] : und_starts[index] + und_len],
+            und_v=qkv[2][und_starts[index] : und_starts[index] + und_len],
+        )
+        expected = _multiview_dense_reference(
+            sample,
+            num_views=views,
+            frames_per_view=latent_t // views,
+            spatial_tokens=patch_h * patch_w,
+            # A single-view sample owns one view group, so its cross-instant pass is skipped.
+            cross_view=views > 1,
+        ).flatten(-2, -1)  # [N_gen_i,heads*head_dim]
+        actual = gen_out[gen_cursor : gen_cursor + gen_len]
+        torch.testing.assert_close(actual.double(), expected, atol=1e-2, rtol=1e-2)
+        gen_cursor += gen_len
+
+    assert torch.equal(gen_out[gen_cursor:], torch.zeros_like(gen_out[gen_cursor:]))
+
+
+@pytest.mark.L0
+@pytest.mark.GPU
+@torch.no_grad()
+def test_multiview_dense_attention_compiles_with_the_pack_as_an_input() -> None:
+    """Compile it the way a decoder layer does: packs arriving as arguments, not as a closure.
+
+    A closure over the packs lets Dynamo specialise their contents, so a host-side read of a
+    value *inside* a pack tensor is folded to a constant and nothing complains. As a graph
+    input the same read is an unbacked symbol, and comparing one against a Python int is a
+    data-dependent guard Dynamo refuses outright:
+
+        Could not guard on data-dependent expression Ne(u0, 549120)
+
+    which is how it reached a 16-node run rather than a test. The counts this needs are host
+    side in the pack (``get_num_real_tokens``); this pins that they are read from there.
+
+    A ragged batch with padding, because that is what makes the counts differ from the stream
+    lengths at all.
+    """
+    device = torch.device("cuda")
+    samples = ((2, (4, 2, 2)), (3, (6, 2, 3)))
+    shape = _MultiviewShape(
+        und_lens=(5, 7),
+        token_shapes=tuple(token_shape for _, token_shape in samples),
+        num_views=tuple(views for views, _ in samples),
+    )
+    torch.manual_seed(0)
+    qkv = [torch.randn(shape.real_len, heads, 64, device=device, dtype=torch.bfloat16) for heads in (8, 4, 4)]
+    backend = resolve_flex_backend(device, "flex_triton")
+    packs = cast(
+        tuple[SequencePack, SequencePack, SequencePack],
+        tuple(_multiview_pack(tensor, shape, backend) for tensor in qkv),
+    )
+    plan = multiview_dense_attention.build_multiview_dense_plan(
+        shape.num_views, shape.token_shapes, device=device, padded_gen_tokens=_padded_gen_tokens(packs[0])
+    )
+
+    expected = get_gen_seq(multiview_attention(*packs, dense_plan=plan))
+    compiled = torch.compile(multiview_attention)
+    actual = get_gen_seq(compiled(*packs, dense_plan=plan))
+
+    torch.testing.assert_close(actual, expected, atol=1e-2, rtol=1e-2)
+
+
+@pytest.mark.L0
+@pytest.mark.GPU
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="The attention kernels require a GPU.")
+@pytest.mark.skipif(not NATTEN_SUPPORTED, reason="merge_attentions requires NATTEN.")
+@torch.no_grad()
+def test_multiview_dense_attention_joins_a_camera_and_a_lidar_item_by_capture_time() -> None:
+    """A joint sample attends across sensors by quantised capture time, not by frame index.
+
+    Camera at 7.5Hz latent against sweeps at 10Hz: the rates do not share an index, so each
+    token's frame *midpoint* is quantised onto the camera's grid and the cross-instant partition
+    groups by that. The reference recomputes those group ids from the two rates directly rather
+    than reading them off the plan, so a plan that quantised differently -- by frame start, or
+    onto the wrong anchor -- fails here even though its shapes stay valid.
+
+    Note what the multiplicity captures: two sweeps landing on one camera instant are in both
+    partitions at once (same range item, same instant), so they double-weight each other exactly
+    as a camera token double-weights its own (view, frame) cell.
+    """
+    device = torch.device("cuda")
+    num_q_heads, num_kv_heads, head_dim = 4, 2, 64
+    cam_views, cam_frames, lidar_frames, spatial = 2, 3, 4, 1
+    cam_rate, lidar_rate = 1.0 / 7.5, 1.0 / 10.0
+    cam_tokens, lidar_tokens = cam_views * cam_frames * spatial, lidar_frames * spatial
+    gen_len, und_len = cam_tokens + lidar_tokens, 5
+
+    # One sample, one causal split then one full split holding both items back to back -- the
+    # layout the packer produces for a joint sample. The token_shape here only has to multiply
+    # out to the sample's GEN length; the real per-item geometry goes to the plan.
+    shape = _MultiviewShape(und_lens=(und_len,), token_shapes=((gen_len, 1, 1),), num_views=(1,))
+    torch.manual_seed(0)
+    qkv = [
+        torch.randn(shape.real_len, heads, head_dim, device=device, dtype=torch.bfloat16)
+        for heads in (num_q_heads, num_kv_heads, num_kv_heads)
+    ]
+    backend = resolve_flex_backend(device, "flex_triton")
+    packs = cast(
+        tuple[SequencePack, SequencePack, SequencePack],
+        tuple(_multiview_pack(tensor, shape, backend) for tensor in qkv),
+    )
+    plan = multiview_dense_attention.build_multiview_dense_plan(
+        [cam_views, 1],
+        [(cam_views * cam_frames, 1, spatial), (lidar_frames, 1, spatial)],
+        device=device,
+        padded_gen_tokens=_padded_gen_tokens(packs[0]),
+        seconds_per_frame=[cam_rate, lidar_rate],
+        items_per_sample=[2],
+        view_axis=[0, 1],  # a camera's view 0 and the sweep's only view are not the same view
+    )
+    assert plan.num_gen_tokens == gen_len
+
+    out_pack = multiview_attention(*packs, dense_plan=plan)
+    gen_out = get_gen_seq(out_pack)[:gen_len]  # [N_gen,heads*head_dim]
+
+    # ── the reference: group ids rebuilt from the two rates ────────────────────
+    same_view, instant = [], []
+    for view in range(cam_views):  # camera item: view-outer, frame-inner, spatial-innermost
+        for frame in range(cam_frames):
+            for _ in range(spatial):
+                same_view.append(("cam", view))
+                instant.append(math.floor((frame + 0.5) * cam_rate / cam_rate))
+    for sweep in range(lidar_frames):  # range item: one view over its own grid
+        for _ in range(spatial):
+            same_view.append(("lidar", 0))
+            instant.append(math.floor((sweep + 0.5) * lidar_rate / cam_rate))
+    assert instant == [0, 1, 2, 0, 1, 2, 0, 1, 1, 2], "7.5Hz vs 10Hz puts two sweeps on instant 1."
+
+    group = 1.0 / head_dim**0.5
+    gen_q = qkv[0][und_len : und_len + gen_len].double()  # [N_gen,heads,head_dim]
+    repeat = num_q_heads // num_kv_heads
+    gen_k = qkv[1][und_len : und_len + gen_len].double().repeat_interleave(repeat, dim=1)
+    gen_v = qkv[2][und_len : und_len + gen_len].double().repeat_interleave(repeat, dim=1)
+    und_k = qkv[1][:und_len].double().repeat_interleave(repeat, dim=1)
+    und_v = qkv[2][:und_len].double().repeat_interleave(repeat, dim=1)
+
+    multiplicity = torch.tensor(
+        [
+            [float(same_view[i] == same_view[j]) + float(instant[i] == instant[j]) for j in range(gen_len)]
+            for i in range(gen_len)
+        ],
+        device=device,
+        dtype=torch.float64,
+    )  # [N_gen,N_gen]
+    gen_scores = torch.einsum("ihd,jhd->hij", gen_q, gen_k) * group
+    und_scores = torch.einsum("ihd,jhd->hij", gen_q, und_k) * group
+    peak = torch.maximum(gen_scores.max(dim=-1).values, und_scores.max(dim=-1).values)
+    gen_weights = multiplicity[None] * torch.exp(gen_scores - peak[..., None])
+    und_weights = torch.exp(und_scores - peak[..., None])
+    numerator = torch.einsum("hij,jhd->ihd", gen_weights, gen_v) + torch.einsum("hij,jhd->ihd", und_weights, und_v)
+    expected = numerator / (gen_weights.sum(-1) + und_weights.sum(-1)).transpose(0, 1)[..., None]
+
+    torch.testing.assert_close(gen_out.double(), expected.flatten(-2, -1), atol=1e-2, rtol=1e-2)
+
+
+@pytest.mark.L0
+@pytest.mark.GPU
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="The attention kernels require a GPU.")
+@pytest.mark.skipif(not NATTEN_SUPPORTED, reason="merge_attentions requires NATTEN.")
+@torch.no_grad()
+def test_multiview_dense_attention_takes_wsm_and_hdmap_control_items() -> None:
+    """A joint transfer sample: WSM control + RGB target, HD-map control + LiDAR target.
+
+    Every control rule in the mask is a *view* rule and never an instant one, so a control token
+    joins its target's view groups and is absent from the cross-instant partition entirely --
+    sliced out as a key and as a query alike, which is what keeps a sensor query from reaching a
+    control key through the instant rule. Under ``control_attends_sensor`` the four view rules
+    (sensor->sensor, sensor->control, control->control, control->sensor) fill in the whole
+    square, so one unmasked pass over ``(sample, axis, view)`` expresses all of them.
+
+    The reference states that as a multiplicity: one for sharing a view, one more for sharing an
+    instant, the latter only between two sensor tokens.
+    """
+    device = torch.device("cuda")
+    num_q_heads, num_kv_heads, head_dim = 4, 2, 64
+    cam_rate, lidar_rate = 1.0 / 7.5, 1.0 / 10.0
+    # WSM control and RGB target on 2 camera views x 2 frames; HD-map control and LiDAR target
+    # on the range axis' single view x 3 sweeps. One spatial token each, to keep the reference
+    # readable -- the folds never look at the spatial axis except to size a cell.
+    items = [
+        dict(views=2, latent_t=4, rate=cam_rate, control=True, axis=0),  # WSM
+        dict(views=2, latent_t=4, rate=cam_rate, control=False, axis=0),  # RGB target
+        dict(views=1, latent_t=3, rate=lidar_rate, control=True, axis=1),  # HD-map rangemap
+        dict(views=1, latent_t=3, rate=lidar_rate, control=False, axis=1),  # LiDAR target
+    ]
+    gen_len, und_len = sum(int(i["latent_t"]) for i in items), 5
+
+    shape = _MultiviewShape(und_lens=(und_len,), token_shapes=((gen_len, 1, 1),), num_views=(1,))
+    torch.manual_seed(0)
+    qkv = [
+        torch.randn(shape.real_len, heads, head_dim, device=device, dtype=torch.bfloat16)
+        for heads in (num_q_heads, num_kv_heads, num_kv_heads)
+    ]
+    backend = resolve_flex_backend(device, "flex_triton")
+    packs = cast(
+        tuple[SequencePack, SequencePack, SequencePack],
+        tuple(_multiview_pack(tensor, shape, backend) for tensor in qkv),
+    )
+    plan = multiview_dense_attention.build_multiview_dense_plan(
+        [int(i["views"]) for i in items],
+        [(int(i["latent_t"]), 1, 1) for i in items],
+        device=device,
+        seconds_per_frame=[float(i["rate"]) for i in items],
+        items_per_sample=[len(items)],
+        is_control=[bool(i["control"]) for i in items],
+        view_axis=[int(i["axis"]) for i in items],
+        padded_gen_tokens=_padded_gen_tokens(packs[0]),
+    )
+    assert plan.same_view_gather is not None, "A control item splits a view into two runs."
+
+    out_pack = multiview_attention(*packs, dense_plan=plan)
+    gen_out = get_gen_seq(out_pack)[:gen_len]  # [N_gen,heads*head_dim]
+
+    # ── the reference: per-token view id, sensor flag and instant, rebuilt from the geometry ──
+    view_of, sensor_of, instant_of = [], [], []
+    anchor_rate = float(items[0]["rate"])
+    for spec in items:
+        views, frames = int(spec["views"]), int(spec["latent_t"]) // int(spec["views"])
+        for view in range(views):  # view-outer, frame-inner
+            for frame in range(frames):
+                view_of.append((int(spec["axis"]), view))
+                sensor_of.append(not bool(spec["control"]))
+                instant_of.append(math.floor((frame + 0.5) * float(spec["rate"]) / anchor_rate + 1e-6))
+    assert sensor_of.count(True) == 4 + 3, "Only the two target items are sensors."
+
+    multiplicity = torch.tensor(
+        [
+            [
+                float(view_of[i] == view_of[j])
+                + float(sensor_of[i] and sensor_of[j] and instant_of[i] == instant_of[j])
+                for j in range(gen_len)
+            ]
+            for i in range(gen_len)
+        ],
+        device=device,
+        dtype=torch.float64,
+    )  # [N_gen,N_gen]
+
+    scale = 1.0 / head_dim**0.5
+    repeat = num_q_heads // num_kv_heads
+    gen_q = qkv[0][und_len : und_len + gen_len].double()
+    gen_k = qkv[1][und_len : und_len + gen_len].double().repeat_interleave(repeat, dim=1)
+    gen_v = qkv[2][und_len : und_len + gen_len].double().repeat_interleave(repeat, dim=1)
+    und_k = qkv[1][:und_len].double().repeat_interleave(repeat, dim=1)
+    und_v = qkv[2][:und_len].double().repeat_interleave(repeat, dim=1)
+    gen_scores = torch.einsum("ihd,jhd->hij", gen_q, gen_k) * scale
+    und_scores = torch.einsum("ihd,jhd->hij", gen_q, und_k) * scale
+    peak = torch.maximum(gen_scores.max(dim=-1).values, und_scores.max(dim=-1).values)
+    gen_weights = multiplicity[None] * torch.exp(gen_scores - peak[..., None])
+    und_weights = torch.exp(und_scores - peak[..., None])
+    numerator = torch.einsum("hij,jhd->ihd", gen_weights, gen_v) + torch.einsum("hij,jhd->ihd", und_weights, und_v)
+    expected = numerator / (gen_weights.sum(-1) + und_weights.sum(-1)).transpose(0, 1)[..., None]
+
+    torch.testing.assert_close(gen_out.double(), expected.flatten(-2, -1), atol=1e-2, rtol=1e-2)
+
+
+@pytest.mark.L0
+@pytest.mark.GPU
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="The attention kernels require a GPU.")
+@pytest.mark.skipif(not NATTEN_SUPPORTED, reason="merge_attentions requires NATTEN.")
+@torch.no_grad()
+def test_multiview_dense_attention_reads_one_caption_per_view() -> None:
+    """Each camera view attends the caption written for it and no other.
+
+    The gen->und pass borrows the same-view partition for its queries, so its key set is per
+    view rather than per sample. That is what per-view captions need and what a single pass over
+    the whole causal run cannot give: without it a view would read its neighbour's caption,
+    which produces a perfectly plausible tensor and no error at all.
+
+    The reference states the rule as a mask over caption keys -- a GEN token weights the
+    captions of its own view at one and every other at zero -- beside the usual GEN
+    multiplicity. A pass keying every token against the whole run would put ones everywhere in
+    that block and land far outside the tolerance.
+    """
+    device = torch.device("cuda")
+    num_q_heads, num_kv_heads, head_dim = 4, 2, 64
+    views, frames, spatial = 2, 2, 1
+    caption_lens = [3, 2]  # view 0 gets three caption tokens, view 1 gets two
+    gen_len, und_len = views * frames * spatial, sum(caption_lens)
+
+    torch.manual_seed(0)
+    qkv = [
+        torch.randn(und_len + gen_len, heads, head_dim, device=device, dtype=torch.bfloat16)
+        for heads in (num_q_heads, num_kv_heads, num_kv_heads)
+    ]
+
+    def _pack(tensor: torch.Tensor) -> SequencePack:
+        return build_packed_sequence(
+            "two_way",
+            packed_sequence=tensor,
+            attn_modes=["causal", "full"],
+            split_lens=[und_len, gen_len],
+            sample_lens=[und_len + gen_len],
+            packed_und_token_indexes=cast(torch.LongTensor, torch.arange(und_len, dtype=torch.long, device=device)),
+            packed_gen_token_indexes=cast(
+                torch.LongTensor, torch.arange(und_len, und_len + gen_len, dtype=torch.long, device=device)
+            ),
+            num_heads=tensor.shape[-2],
+            head_dim=head_dim,
+            num_layers=1,
+            text_caption_lens=[caption_lens],
+        )[0]
+
+    packs = cast(tuple[SequencePack, SequencePack, SequencePack], tuple(_pack(t) for t in qkv))
+    assert get_caption_seq_offsets(packs[0]) is not None, "Per-view captions need their boundaries."
+    plan = multiview_dense_attention.build_multiview_dense_plan(
+        [views],
+        [(views * frames, 1, spatial)],
+        device=device,
+        captions=[[(0, caption_lens[0]), (1, caption_lens[1])]],
+        padded_gen_tokens=_padded_gen_tokens(packs[0]),
+    )
+    assert plan.caption_gather is not None
+    # One run per same-view group, plus a zero-length one for the group the pack's padding
+    # forms: padding reads no caption, and the merge gives those rows no weight.
+    assert torch.diff(plan.caption_offsets).tolist() == [*caption_lens, 0]
+
+    out_pack = multiview_attention(*packs, dense_plan=plan)
+    gen_out = get_gen_seq(out_pack)[:gen_len]  # [N_gen,heads*head_dim]
+
+    # ── the reference ─────────────────────────────────────────────────────────
+    view_of = [view for view in range(views) for _ in range(frames * spatial)]
+    instant_of = [frame for _ in range(views) for frame in range(frames) for _ in range(spatial)]
+    caption_view_of = [view for view, length in enumerate(caption_lens) for _ in range(length)]
+
+    scale = 1.0 / head_dim**0.5
+    repeat = num_q_heads // num_kv_heads
+    gen_q = qkv[0][und_len:].double()
+    gen_k = qkv[1][und_len:].double().repeat_interleave(repeat, dim=1)
+    gen_v = qkv[2][und_len:].double().repeat_interleave(repeat, dim=1)
+    und_k = qkv[1][:und_len].double().repeat_interleave(repeat, dim=1)
+    und_v = qkv[2][:und_len].double().repeat_interleave(repeat, dim=1)
+
+    gen_mult = torch.tensor(
+        [
+            [float(view_of[i] == view_of[j]) + float(instant_of[i] == instant_of[j]) for j in range(gen_len)]
+            for i in range(gen_len)
+        ],
+        device=device,
+        dtype=torch.float64,
+    )
+    und_mult = torch.tensor(
+        [[float(view_of[i] == caption_view_of[j]) for j in range(und_len)] for i in range(gen_len)],
+        device=device,
+        dtype=torch.float64,
+    )
+
+    gen_scores = torch.einsum("ihd,jhd->hij", gen_q, gen_k) * scale
+    und_scores = torch.einsum("ihd,jhd->hij", gen_q, und_k) * scale
+    peak = torch.maximum(gen_scores.max(dim=-1).values, und_scores.max(dim=-1).values)
+    gen_weights = gen_mult[None] * torch.exp(gen_scores - peak[..., None])
+    und_weights = und_mult[None] * torch.exp(und_scores - peak[..., None])
+    numerator = torch.einsum("hij,jhd->ihd", gen_weights, gen_v) + torch.einsum("hij,jhd->ihd", und_weights, und_v)
+    expected = numerator / (gen_weights.sum(-1) + und_weights.sum(-1)).transpose(0, 1)[..., None]
+
+    torch.testing.assert_close(gen_out.double(), expected.flatten(-2, -1), atol=1e-2, rtol=1e-2)
+
+
+@pytest.mark.L0
+@pytest.mark.GPU
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="The attention kernels require a GPU.")
+@pytest.mark.skipif(not NATTEN_SUPPORTED, reason="merge_attentions requires NATTEN.")
+@pytest.mark.parametrize("num_views", [pytest.param(1, id="single_view"), pytest.param(3, id="multi_view")])
+@torch.no_grad()
+def test_multiview_dense_attention_counts_a_single_view_sample_once(num_views: int) -> None:
+    """A single-view sample attends each key once, as the mask does; a multi-view one does not.
+
+    With one view the cross-instant groups sit inside the one view group, so merging them would
+    weight the query's own instant twice and buy nothing -- there is no second view to reach.
+    That sample is sliced out of the pass entirely, which leaves it attending its item uniformly,
+    exactly what ``attention_scope="decomposed"`` degenerates to at one view.
+
+    Parametrised against three views so the assertion is a contrast rather than a claim about
+    this implementation: the same code must double-count there, since the two passes then admit
+    genuinely different keys and the shared cell is the documented price of that.
+    """
+    device = torch.device("cuda")
+    frames_per_view, patch_h, patch_w = 3, 2, 2
+    token_shape = (num_views * frames_per_view, patch_h, patch_w)
+    batch = _multiview_dense_batch(
+        und_len=5,
+        token_shape=token_shape,
+        num_views=num_views,
+        num_q_heads=4,
+        num_kv_heads=4,
+        head_dim=64,
+        device=device,
+        seed=0,
+    )
+    plan = multiview_dense_attention.build_multiview_dense_plan(
+        [num_views], [token_shape], device=device, padded_gen_tokens=_padded_gen_tokens(batch.packs[0])
+    )
+    assert plan.cross_view_empty == (num_views == 1)
+
+    out_pack = multiview_attention(*batch.packs, dense_plan=plan)
+    num_gen_tokens = batch.gen_q.shape[0]
+    expected = _multiview_dense_reference(
+        batch,
+        num_views=num_views,
+        frames_per_view=frames_per_view,
+        spatial_tokens=patch_h * patch_w,
+        cross_view=num_views > 1,
+    ).flatten(-2, -1)
+
+    torch.testing.assert_close(get_gen_seq(out_pack)[:num_gen_tokens].double(), expected, atol=1e-2, rtol=1e-2)
+
+
+@pytest.mark.L1
+@pytest.mark.GPU
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="The attention kernels require a GPU.")
+@pytest.mark.skipif(not NATTEN_SUPPORTED, reason="merge_attentions requires NATTEN.")
+@pytest.mark.skipif(
+    torch.cuda.is_available() and torch.cuda.get_device_properties(0).total_memory < 60 * 1024**3,
+    reason="The stream this sizes is ~20GB of q/k/v and outputs.",
+)
+@torch.no_grad()
+def test_multiview_dense_attention_runs_a_gen_stream_past_the_varlen_index_limit() -> None:
+    """A GEN stream long enough to overflow a varlen sequence index still runs.
+
+    The gen->und pass keys the whole stream as one range, so its ``max_seqlen_Q`` is that
+    stream's length -- and the varlen kernels index a sequence with int32, which overflows once
+    ``max_seqlen * heads * head_dim`` reaches 2**31: 524288 queries at 32 heads of 128 wide.
+    Past that the kernel takes an illegal address rather than raising, and asynchronously, so it
+    surfaces at whatever synchronises next and reads as a fault in an unrelated op.
+
+    One sample never needs the ranges, so the pass takes the dense form and the limit does not
+    apply. This pins that: a transfer sample doubles its own GEN stream, and 11 views of 26
+    frames at 920 tokens a cell is 526240 -- just past the line, which is how the benchmark
+    found it. Sized to the real recipe rather than to the threshold so it stays a description of
+    something that runs in production.
+    """
+    device = torch.device("cuda")
+    views, frames, spatial, items = 11, 26, 920, 2
+    latent_t = views * frames
+    gen_len, und_len = latent_t * spatial * items, 2048
+    assert gen_len * 32 * 128 >= 2**31, "This case only means anything past the int32 limit."
+
+    shape = _MultiviewShape(und_lens=(und_len,), token_shapes=((gen_len, 1, 1),), num_views=(1,))
+    torch.manual_seed(0)
+    qkv = [torch.randn(shape.real_len, heads, 128, device=device, dtype=torch.bfloat16) for heads in (32, 8, 8)]
+    backend = resolve_flex_backend(device, "flex_triton")
+    packs = cast(
+        tuple[SequencePack, SequencePack, SequencePack],
+        tuple(_multiview_pack(tensor, shape, backend) for tensor in qkv),
+    )
+    plan = multiview_dense_attention.build_multiview_dense_plan(
+        [views] * items,
+        [(latent_t, 23, 40)] * items,
+        device=device,
+        items_per_sample=[items],
+        is_control=[index < items - 1 for index in range(items)],
+        view_axis=[0] * items,
+    )
+
+    out_pack = multiview_attention(*packs, dense_plan=plan)
+    torch.cuda.synchronize()  # the fault this guards against is asynchronous
+
+    gen_out = get_gen_seq(out_pack)[:gen_len]
+    assert torch.isfinite(gen_out.float()).all()
+
+
+@pytest.mark.L0
+@pytest.mark.GPU
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="The attention kernels require a GPU.")
+@pytest.mark.skipif(not NATTEN_SUPPORTED, reason="merge_attentions requires NATTEN.")
+@torch.no_grad()
+def test_multiview_dense_plan_gather_is_a_permutation() -> None:
+    """The cross-view gather and its inverse undo each other, over a ragged batch.
+
+    Cheap to state and the thing every ragged fold rests on: if these are not inverses, the
+    bridge's backward writes the merged output into the wrong rows and nothing raises.
+    """
+    device = torch.device("cuda")
+    plan = multiview_dense_attention.build_multiview_dense_plan(
+        [2, 3, 1], [(4, 2, 2), (6, 2, 3), (3, 1, 4)], device=device
+    )
+    gather = plan.cross_view_gather
+    assert gather is not None
+    # The cross-instant pass covers the samples that own more than one view group, each of their
+    # tokens exactly once. The third sample here is single-view, so its instant groups would sit
+    # inside its one view group and it is sliced out -- 16 + 36 tokens in, its 12 out.
+    covered = 4 * 2 * 2 + 6 * 2 * 3
+    assert plan.num_gen_tokens == covered + 3 * 1 * 4
+    assert torch.equal(gather.sort().values, torch.arange(covered, device=device))
+    # One item per view axis per sample leaves a view's tokens contiguous, so the same-view
+    # groups already tile the packed stream and that pass needs no gather at all.
+    assert plan.same_view_gather is None
+    # Every group boundary lands where the lengths say, and the partitions cover the stream.
+    assert int(plan.same_view_offsets[-1]) == plan.num_gen_tokens
+    assert int(plan.cross_view_offsets[-1]) == covered
 
 
 if __name__ == "__main__":

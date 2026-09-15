@@ -372,7 +372,7 @@ def build_teacher_forcing_multiview_flex_metadata(
     if materialized_target_frame_ranges is not None and pass_kind != "clean":
         raise ValueError("Materialized target ranges are only supported by the AR clean-prefill pass.")
     base = build_multiview_flex_metadata(
-        seq_len=seq_len,
+        gen_seq_len=seq_len,
         full_q_offsets=full_q_offsets,
         sensor_mask_items=sensor_mask_items,
         # Replay packs carry one sample-level caption per sample -- per-view captions are
@@ -380,7 +380,7 @@ def build_teacher_forcing_multiview_flex_metadata(
         # per-camera caption for the gen->und pass to narrow to.
         caption_mask_items=None,
         device=device,
-        num_und=num_und,
+        und_seq_len=num_und,
         causal_offsets=causal_offsets,
         attention_scope=teacher_forcing_replay_policy.multiview_attention_scope,
         decomposed_temporal_window_seconds=teacher_forcing_replay_policy.decomposed_temporal_window_seconds,
@@ -687,14 +687,14 @@ def build_multiview_transfer_ar_flex_metadata(
             f"is outside {frames_per_view} frames per view."
         )
     base = build_multiview_flex_metadata(
-        seq_len=seq_len,
+        gen_seq_len=seq_len,
         full_q_offsets=full_q_offsets,
         sensor_mask_items=sensor_mask_items,
         # As in the teacher-forcing pass above: one sample-level caption, and the replay
         # policy owns control visibility rather than the base metadata.
         caption_mask_items=None,
         device=device,
-        num_und=num_und,
+        und_seq_len=num_und,
         causal_offsets=causal_offsets,
         attention_scope=teacher_forcing_replay_policy.multiview_attention_scope,
         decomposed_temporal_window_seconds=teacher_forcing_replay_policy.decomposed_temporal_window_seconds,

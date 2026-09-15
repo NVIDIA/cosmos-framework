@@ -103,6 +103,8 @@ def cudnn_attention_check(
     causal_type: CausalType,
     is_varlen: bool,
     deterministic: bool = False,
+    return_lse: bool = False,
+    is_compiling: bool = False,
     raise_error: bool = False,
 ) -> bool:
     """
@@ -151,6 +153,35 @@ def cudnn_attention_check(
 
     if deterministic:
         target_fn("cuDNN Attention does not support deterministic mode.", exception=RuntimeError)
+        return False
+
+    if requires_grad and return_lse and is_compiling:
+        # cuDNN's backward reads back the log-sum-exp its forward saved, as the Stats tensor, and
+        # its frontend requires that tensor's last dimension to be unit-strided. Under
+        # torch.compile a returned LSE stops being cuDNN's own tensor as soon as anything else
+        # consumes it: functionalisation turns the consumer's reads and writes into an Inductor
+        # buffer laid out for that consumer, handed to the backward through reinterpret_tensor
+        # with stride 0 on its trailing size-1 dimension. cuDNN validates that literally and
+        # takes an illegal address rather than raising -- asynchronously, so it surfaces at
+        # whatever synchronises next and reads as a fault in an unrelated op.
+        #
+        # Eager is left alone, and is why this is not simply "requires_grad and return_lse":
+        # there ``merge_attentions`` patches cuDNN's own saved tensors in place, which preserves
+        # their layout, and ``merge_test.test_cudnn_merge_fast`` covers that combination.
+        #
+        # ``is_compiling`` arrives as a parameter rather than a call to ``is_torch_compiling()``
+        # here because ``choose_backend`` is lru_cached: read inside, the tracing state would be
+        # captured from whichever context asked first and silently reused in the other.
+        #
+        # Declining here rather than at the call site keeps the fallback narrow. The workaround
+        # this replaces was I4_ATTN_BACKENDS=-cudnn, which bans cuDNN for every call in the
+        # process, including the many that never ask for a log-sum-exp.
+        target_fn(
+            "cuDNN Attention cannot return a log-sum-exp for a differentiable call under "
+            "torch.compile: its backward requires the saved Stats tensor to be unit-strided in "
+            "its last dimension, which does not survive the log-sum-exp being consumed.",
+            exception=RuntimeError,
+        )
         return False
 
     # cuDNN Attention supports both the forward (inference) and backward (training) passes: it runs on

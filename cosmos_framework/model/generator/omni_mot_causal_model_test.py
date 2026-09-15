@@ -19,7 +19,7 @@ Bugs patched:
 """
 
 from types import SimpleNamespace
-from typing import Literal
+from typing import Literal, cast
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -85,6 +85,42 @@ def test_attention_sink_size_field_defaults_to_zero() -> None:
     fields = {f.name: f for f in attrs.fields(OmniMoTCausalModelConfig)}
     assert "attention_sink_size" in fields
     assert fields["attention_sink_size"].default == 0
+
+
+@pytest.mark.L0
+@pytest.mark.CPU
+@pytest.mark.parametrize(
+    ("config_mode", "environment"),
+    [
+        pytest.param("w4a4", {}, id="config-w4a4"),
+        pytest.param("w4a16", {}, id="config-w4a16"),
+        pytest.param(None, {"COSMOS3_NVFP4": "1"}, id="environment-w4a4"),
+        pytest.param(None, {"COSMOS3_W4A16_TORCHAO": "1"}, id="environment-w4a16"),
+    ],
+)
+def test_nvfp4_conversion_rejects_fsdp_cpu_offload(
+    monkeypatch: pytest.MonkeyPatch,
+    config_mode: str | None,
+    environment: dict[str, str],
+) -> None:
+    from cosmos_framework.model.generator.omni_mot_causal_model import OmniMoTCausalModel
+
+    monkeypatch.delenv("COSMOS3_NVFP4", raising=False)
+    monkeypatch.delenv("COSMOS3_W4A16_TORCHAO", raising=False)
+    for name, value in environment.items():
+        monkeypatch.setenv(name, value)
+    model = cast(
+        OmniMoTCausalModel,
+        SimpleNamespace(
+            config=SimpleNamespace(
+                nvfp4_linears=config_mode,
+                parallelism=SimpleNamespace(fsdp_cpu_offload=True),
+            )
+        ),
+    )
+
+    with pytest.raises(ValueError, match="NVFP4 linear conversion is not supported with FSDP CPU offload"):
+        OmniMoTCausalModel.maybe_convert_linears_to_nvfp4(model)
 
 
 @pytest.mark.L0
@@ -188,14 +224,13 @@ def test_multiview_flex_selection_does_not_infer_from_backend_knobs(causal_train
         causal_training_strategy=causal_training_strategy,
         teacher_forcing_kv_implementation="multiview_flex_kv",
         joint_attn_implementation="three_way",
-        flex_attention=SimpleNamespace(enabled=False),
+        multiview_attention=SimpleNamespace(enabled=False),
     )
 
     assert model._uses_multiview_flex_kv() is True
     del model._teacher_forcing_kv_implementation_runtime
     model.config.teacher_forcing_kv_implementation = "singleview_threeway_kv"
-    model.config.joint_attn_implementation = "two_way"
-    model.config.flex_attention.enabled = True
+    model.config.joint_attn_implementation = "multiview"
     assert model._uses_multiview_flex_kv() is False
 
 
@@ -244,7 +279,7 @@ def test_teacher_forcing_dcm_build_routes_multiview_flex_selector() -> None:
         teacher_forcing_frames_per_chunk=4,
         video_temporal_causal=True,
         joint_attn_implementation="three_way",
-        flex_attention=SimpleNamespace(
+        multiview_attention=SimpleNamespace(
             enabled=False,
             mask=SimpleNamespace(
                 attention_scope="all_views",
@@ -264,8 +299,7 @@ def test_teacher_forcing_dcm_build_routes_multiview_flex_selector() -> None:
         assert mp_policy is None
         assert lora_enabled is None
         assert causal_model_module.omni_mot_model_module.Cosmos3VFMNetwork is InteractiveCosmos3VFMNetwork
-        assert model.config.joint_attn_implementation == "two_way"
-        assert model.config.flex_attention.enabled is True
+        assert model.config.joint_attn_implementation == "multiview"
         return network
 
     with patch.object(OmniMoTModel, "build_net", side_effect=_fake_base_build):
@@ -277,9 +311,9 @@ def test_teacher_forcing_dcm_build_routes_multiview_flex_selector() -> None:
     assert network.teacher_forcing_replay_policy is replay_policy
     assert network.teacher_forcing_frames_per_chunk == 4
     assert model.config.joint_attn_implementation == "three_way"
-    assert model.config.flex_attention.enabled is False
-    assert model.config.flex_attention.mask.attention_scope == "all_views"
-    assert model.config.flex_attention.mask.decomposed_temporal_window_seconds is None
+    assert model.config.joint_attn_implementation != "multiview"
+    assert model.config.multiview_attention.mask.attention_scope == "all_views"
+    assert model.config.multiview_attention.mask.decomposed_temporal_window_seconds is None
 
 
 class TestTeacherForcingTransferControlDropout:

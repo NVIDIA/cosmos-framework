@@ -17,6 +17,7 @@ from cosmos_framework.model.generator.algorithm.loss.load_balancing import compu
 from cosmos_framework.data.generator.joint_dataloader import IterativeJointDataLoader
 from cosmos_framework.model.generator.mot.attention import (
     SplitInfo,
+    build_packed_sequence,
     dispatch_attention,
 )
 from cosmos_framework.model.generator.mot.context_parallel_utils import (
@@ -37,6 +38,7 @@ from cosmos_framework.data.generator.sequence_packing.runtime import (
     from_all_seq,
     from_mode_splits,
     get_all_seq_unpadded,
+    get_full_only_seq,
     get_gen_seq,
     get_und_seq,
     sequence_pack_from_packed_sequence,
@@ -646,9 +648,9 @@ def test_context_parallel_attention_two_way():
     world_size = torch.distributed.get_world_size(cp_mesh.get_group())
 
     position_ids = global_packed_data.position_ids.to(device)
-    local_q_pack, _ = get_context_parallel_sharded_sequence("two_way", global_q_pack, position_ids, parallel_dims)
-    local_k_pack, _ = get_context_parallel_sharded_sequence("two_way", global_k_pack, position_ids, parallel_dims)
-    local_v_pack, _ = get_context_parallel_sharded_sequence("two_way", global_v_pack, position_ids, parallel_dims)
+    local_q_pack, _ = get_context_parallel_sharded_sequence(global_q_pack, position_ids, parallel_dims)
+    local_k_pack, _ = get_context_parallel_sharded_sequence(global_k_pack, position_ids, parallel_dims)
+    local_v_pack, _ = get_context_parallel_sharded_sequence(global_v_pack, position_ids, parallel_dims)
 
     # Verify local und/gen shapes
     print(
@@ -1147,6 +1149,164 @@ def test_sample_lbl_hsdp_weighting_matches_global_sample_mean() -> None:
     dist.barrier()
 
 
+def _multiview_dense_cp_case(
+    samples: list[tuple[int, int, int]],
+    *,
+    items_per_sample: int,
+    per_view_captions: bool,
+    cp_size: int,
+    device: torch.device,
+    parallel_dims: ParallelDims,
+) -> None:
+    """Run one multiview batch through the decomposition at CP=1 and at ``cp_size``, and compare.
+
+    Context parallelism here is Ulysses, not ring: ``context_parallel_attention`` all-to-alls the
+    sharded pack back to the whole sequence over a slice of the heads before calling into
+    attention. The decomposition's folds therefore address the same global token grid they do at
+    CP=1, and the two runs agree exactly rather than to a tolerance -- no partial softmax is
+    recombined across ranks, so there is no reassociation to lose bits to.
+    """
+    from cosmos_framework.model.generator.mot.multiview_dense_attention import build_multiview_dense_plan
+
+    q_heads, kv_heads, head_dim, patch_h, patch_w = 8, 4, 128, 2, 2
+    spatial = patch_h * patch_w
+
+    und_lens = [caption_tokens for _, _, caption_tokens in samples]
+    gen_lens = [views * frames * spatial * items_per_sample for views, frames, _ in samples]
+
+    split_lens: list[int] = []
+    und_indexes: list[int] = []
+    gen_indexes: list[int] = []
+    start = 0
+    for und_len, gen_len in zip(und_lens, gen_lens):
+        split_lens.extend((und_len, gen_len))
+        und_indexes.extend(range(start, start + und_len))
+        gen_indexes.extend(range(start + und_len, start + und_len + gen_len))
+        start += und_len + gen_len
+
+    # Per-view captions tile each sample's causal split across its views, which is the layout
+    # ``_build_caption_offsets`` checks; one caption per sample leaves the pass on its per-sample
+    # form. The budget is split rather than grown so both layouts pack the same UND length.
+    caption_lens: list[list[int]] | None = None
+    if per_view_captions:
+        caption_lens = []
+        for (views, _, _), und_len in zip(samples, und_lens):
+            base, extra = divmod(und_len, views)
+            caption_lens.append([base + (1 if index < extra else 0) for index in range(views)])
+
+    torch.manual_seed(1234)  # every rank builds the same global batch
+
+    def _pack(num_heads: int) -> SequencePack:
+        tokens = torch.randn(start, num_heads, head_dim, device=device, dtype=torch.bfloat16)
+        return build_packed_sequence(
+            "two_way",
+            packed_sequence=tokens,
+            attn_modes=["causal", "full"] * len(samples),
+            split_lens=split_lens,
+            sample_lens=[und + gen for und, gen in zip(und_lens, gen_lens)],
+            packed_und_token_indexes=cast(torch.LongTensor, torch.tensor(und_indexes, dtype=torch.long, device=device)),
+            packed_gen_token_indexes=cast(torch.LongTensor, torch.tensor(gen_indexes, dtype=torch.long, device=device)),
+            num_heads=num_heads,
+            head_dim=head_dim,
+            num_layers=1,
+            cp_world_size=cp_size,
+            full_seq_alignment=1,
+            causal_seq_alignment=1,
+            text_caption_lens=caption_lens,
+        )[0]
+
+    packs = [_pack(q_heads), _pack(kv_heads), _pack(kv_heads)]
+    for pack in packs:
+        for getter, setter in ((get_und_seq, set_und_seq), (get_gen_seq, set_gen_seq)):
+            setter(pack, getter(pack).detach().clone().requires_grad_(True))
+
+    plan = build_multiview_dense_plan(
+        [views for views, _, _ in samples for _ in range(items_per_sample)],
+        [(views * frames, patch_h, patch_w) for views, frames, _ in samples for _ in range(items_per_sample)],
+        device=device,
+        items_per_sample=[items_per_sample] * len(samples),
+        # Within a stream every item but the last conditions the one after it, which is what a
+        # transfer pack's control item is.
+        is_control=[index < items_per_sample - 1 for _ in samples for index in range(items_per_sample)],
+        view_axis=[0] * (items_per_sample * len(samples)),
+        captions=([list(enumerate(sample_lens)) for sample_lens in caption_lens] if caption_lens is not None else None),
+        padded_gen_tokens=int(get_full_only_seq(packs[0])[0].shape[0]),
+    )
+
+    def _mask() -> SplitInfo:
+        info = SplitInfo(
+            split_lens=split_lens,
+            attn_modes=["causal", "full"] * len(samples),
+            sample_lens=[und + gen for und, gen in zip(und_lens, gen_lens)],
+            actual_len=start,
+        )
+        info.multiview_dense = plan
+        return info
+
+    total_gen = sum(gen_lens)
+    reference_pack, _ = dispatch_attention(*packs, _mask())
+    reference_out = get_gen_seq(reference_pack)[:total_gen]
+
+    position_ids = torch.arange(start, device=device)
+    local_packs = []
+    for pack in packs:
+        local_pack, _ = get_context_parallel_sharded_sequence(pack, position_ids, parallel_dims)
+        for getter, setter in ((get_und_seq, set_und_seq), (get_gen_seq, set_gen_seq)):
+            setter(local_pack, getter(local_pack).detach().clone().requires_grad_(True))
+        local_packs.append(local_pack)
+
+    cp_mesh = parallel_dims.cp_mesh
+    output_pack, _ = context_parallel_attention(cp_mesh, *local_packs, _mask(), attention_function=dispatch_attention)
+    local_gen = get_gen_seq(output_pack)
+    # The shard is a contiguous slice of the GEN stream, so concatenating in rank order rebuilds
+    # it -- the same partition ``get_context_parallel_sharded_sequence`` took it apart on.
+    assert local_gen.shape[0] * cp_size == get_gen_seq(packs[0]).shape[0]
+
+    def _gathered(local: torch.Tensor) -> torch.Tensor:
+        buffer = [torch.empty_like(local) for _ in range(cp_size)]
+        dist.all_gather(buffer, local.contiguous(), group=cp_mesh.get_group())
+        return torch.cat(buffer, dim=0)[:total_gen]
+
+    # Both forwards are compared before either backward runs. ``merge_attentions`` reaches its
+    # branches' saved tensors by data pointer on the way back, and the caching allocator is free
+    # to have recycled one of those addresses into a tensor still in use -- so a value read after
+    # a backward is not necessarily the value the forward produced.
+    torch.testing.assert_close(_gathered(local_gen), reference_out, rtol=0, atol=0)
+
+    reference_out.sum().backward()
+    reference_grads = [get_gen_seq(pack).grad[:total_gen].clone() for pack in packs]
+    local_gen.sum().backward()
+    for local_pack, reference_grad in zip(local_packs, reference_grads):
+        torch.testing.assert_close(_gathered(get_gen_seq(local_pack).grad), reference_grad, rtol=0, atol=0)
+
+
+def test_context_parallel_multiview_dense():
+    """The decomposition under context parallelism is the decomposition without it.
+
+    Three layouts, because they take different paths through the plan: one sample of one item,
+    a ragged batch whose samples differ in views, frames and caption length, beside a control
+    item, and per-view captions (the caption gather). Each is checked forward and backward.
+
+    The CP degree is whatever the launcher supplied, so ``--nproc_per_node`` chooses it. Worth
+    running at more than 2: the all-to-all divides the query heads by the CP degree, and at 4
+    the local KV head count reaches 1, which is a launch shape 2 does not cover.
+    """
+    rank, world_size = setup_distributed_environment()
+    cp_size = world_size
+    if cp_size < 2:
+        pytest.skip(f"requires at least 2 GPUs, got {world_size}")
+    device = torch.device("cuda", rank)
+    parallel_dims = ParallelDims(enable_inference_mode=False, world_size=world_size, dp_shard=1, cp=cp_size)
+    parallel_dims.build_meshes("cuda")
+
+    case = dict(cp_size=cp_size, device=device, parallel_dims=parallel_dims)
+    _multiview_dense_cp_case([(3, 4, 16)], items_per_sample=1, per_view_captions=False, **case)
+    _multiview_dense_cp_case([(3, 4, 16), (2, 6, 8), (1, 5, 24)], items_per_sample=2, per_view_captions=False, **case)
+    _multiview_dense_cp_case([(3, 4, 18), (2, 6, 8)], items_per_sample=1, per_view_captions=True, **case)
+    dist.barrier()
+
+
 if __name__ == "__main__":
     test_context_parallel_attention_two_way()
     test_get_context_parallel_sharded_sequence_three_way()
+    test_context_parallel_multiview_dense()

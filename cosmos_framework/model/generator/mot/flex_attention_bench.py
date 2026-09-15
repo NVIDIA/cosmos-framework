@@ -213,7 +213,7 @@ from torch import Tensor
 from torch.nn.attention.flex_attention import BlockMask
 
 from cosmos_framework.model.attention import attention
-from cosmos_framework.configs.base.defaults.flex_attention import AttentionScope
+from cosmos_framework.configs.base.defaults.multiview_attention import AttentionScope
 from cosmos_framework.model.generator.mot.flex_attention import (
     FlexBackend,
     SensorMaskItem,
@@ -855,13 +855,13 @@ def run_scenario(
 
         def build() -> BlockMask:
             return build_multiview_block_mask(
-                seq_len=scenario.seq_len,
+                gen_seq_len=scenario.seq_len,
                 full_q_offsets=pack.full_q_offsets,
                 sensor_mask_items=pack.sensor_mask_items,
                 caption_mask_items=None,
                 device=device,
                 block_size=block_size,
-                num_und=scenario.causal_seq_len,
+                und_seq_len=scenario.causal_seq_len,
                 causal_offsets=pack.causal_offsets,
                 attention_scope=scenario.attention_scope,
                 decomposed_temporal_window_seconds=None,
