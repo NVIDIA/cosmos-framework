@@ -2898,6 +2898,9 @@ def test_multiview_dense_attention_runs_a_gen_stream_past_the_varlen_index_limit
         items_per_sample=[items],
         is_control=[index < items - 1 for index in range(items)],
         view_axis=[0] * items,
+        # The pack rounds the GEN stream up to the backend's block, and the plan addresses the
+        # stream as packed: 526240 real tokens sit in 526336 padded ones on Triton's 128.
+        padded_gen_tokens=_padded_gen_tokens(packs[0]),
     )
 
     out_pack = multiview_attention(*packs, dense_plan=plan)
