@@ -900,15 +900,13 @@ def _make_factored_pack(
 
 @pytest.mark.L0
 def test_get_context_parallel_sharded_sequence_three_way():
-    """get_context_parallel_sharded_sequence() accepts three_way attn_implementation.
+    """Both streams shard to 1/world_size tokens per rank.
 
-    The causal_8b_480p config uses joint_attn_implementation="three_way" (required by
-    video_temporal_causal=True).  The sharding logic is identical to "two_way" — it
-    operates on the SequencePack (und/gen split), not on the attention pattern —
-    so "three_way" must not be rejected by the assertion.
-
-    Verifies that both und and gen sequences are sharded to 1/world_size tokens per rank,
-    and that the output position_ids are the corresponding local slice.
+    This once pinned that the "three_way" mode causal_8b_480p needs (it comes with
+    video_temporal_causal=True) was not turned away by an ``attn_implementation``
+    assertion. That parameter is gone: the split operates on the SequencePack's und/gen
+    partition and never looked at the attention pattern, so there is nothing left to
+    reject. What remains is the claim the assertion was standing in front of.
     """
     rank, world_size = setup_distributed_environment()
     if world_size < 2:
@@ -929,9 +927,7 @@ def test_get_context_parallel_sharded_sequence_three_way():
 
     input_pack = _make_factored_pack(und_seq, gen_seq, S_und, S_gen, device, is_sharded=False)
 
-    # Must not raise — "three_way" should be accepted just like "two_way"
     local_pack, local_pos_ids = get_context_parallel_sharded_sequence(
-        attn_implementation="three_way",
         input_pack=input_pack,
         position_ids=position_ids,
         parallel_dims=parallel_dims,
@@ -987,7 +983,6 @@ def test_sample_lbl_cp_matches_unsharded_baseline() -> None:
     )
     position_ids = torch.arange(num_tokens, device=device, dtype=torch.int64)  # [N]
     local_pack, _ = get_context_parallel_sharded_sequence(
-        attn_implementation="two_way",
         input_pack=input_pack,
         position_ids=position_ids,
         parallel_dims=parallel_dims,
