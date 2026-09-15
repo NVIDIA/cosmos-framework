@@ -6,6 +6,13 @@
 2026-09-14 补充：第 11 节为 Thor（sm_110a）上 per-tensor INT8 对齐 FP8 与功耗限流的结论（代码与数据在 `docs/quantization/tools/cutlass_int8_sm110/`）。
 运行笔记（含所有中间数字）：`~/gb300/COSMOS_SETUP.md`。产物在 `~/gb300/outputs`（软链到 NVMe `/var/tmp/pzeren_workdir/outputs`）。
 
+
+> **仓库与协作约定（2026-09-14 起）**
+> - 本工作的主仓库是 **https://github.com/nvidia-cosmos/cosmos-int8-gemm**（私有，默认分支 `main`）。各平台（H100 / GB200 / Thor / 其他 Blackwell）的 kernel、脚本、结果与文档**直接推送到该仓库**：
+>   小改动直推 `main`，大块工作开 `<platform>/<topic>` 分支后合入；每个工具放 `docs/quantization/tools/<tool>/`，数据放其 `results/`，`logs/`、`build*/` 不入库；本文按节号追加各平台结论。
+> - `NVIDIA/cosmos-framework` 的分支 `pzeren/int8-sim-group-quant` 到 f379a8e 为止与本仓库同内容，之后不再同步；需要回合到 cosmos-framework 时从本仓库 cherry-pick。
+> - 目录索引见 `docs/quantization/tools/README.md`。
+
 ---
 
 ## 1. 一句话结论

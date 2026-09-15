@@ -1,3 +1,6 @@
+> **cosmos-int8-gemm**：本仓库是 `NVIDIA/cosmos-framework` 分支 `pzeren/int8-sim-group-quant` 的私有快照，用于 Cosmos3 INT8 GEMM / 量化工作（GB200、Thor、H100）。
+> 入口：[`docs/quantization/int8_handoff.md`](docs/quantization/int8_handoff.md)（结论与各平台章节）、[`docs/quantization/tools/README.md`](docs/quantization/tools/README.md)（工具目录索引）。各平台直接向本仓库 `main` 推送。
+
 <p align="center">
     <img src="https://github.com/user-attachments/assets/28f2d612-bbd6-44a3-8795-833d05e9f05f" width="274" alt="NVIDIA Cosmos"/>
 </p>
