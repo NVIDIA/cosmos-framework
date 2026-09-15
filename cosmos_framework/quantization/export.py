@@ -28,9 +28,7 @@ import torch
 from modelopt.torch.export.diffusers_utils import hide_quantizers_from_state_dict
 from modelopt.torch.export.unified_export_hf import _process_quantized_modules
 
-from cosmos_framework.inference.model import _diffusers_to_net_key
-
-from .checkpoint_io import load_sharded_safetensors, save_sharded_safetensors
+from .modelopt_state import build_reasoner_modelopt_state
 from .safetensors_index import build_root_index
 
 
@@ -70,6 +68,8 @@ def _build_net_to_diffusers_key_map(bf16_state_dict: dict[str, torch.Tensor]) ->
     framework map against that set keeps FP8 export aligned with framework loading,
     including future changes to the MoT network's internal module names.
     """
+    from cosmos_framework.inference.model import _diffusers_to_net_key
+
     net_to_diffusers: dict[str, str] = {}
     for diffusers_key in bf16_state_dict:
         net_key = _diffusers_to_net_key(diffusers_key, "transformer/weights.safetensors")
@@ -335,7 +335,7 @@ class Fp8DiffusersExporter:
         bf16_state_dict: dict[str, torch.Tensor],
         exported_state_dict: dict[str, torch.Tensor],
         export_dir: Path,
-    ) -> None:
+    ) -> dict:
         """Write component graph state remapped from the compressed framework model."""
         component_state = _remap_framework_modelopt_state(
             state,
@@ -351,71 +351,17 @@ class Fp8DiffusersExporter:
             f"{len(metadata['q_tensor_state'])} FP8 / {len(metadata['real_quantizer_state'])} total linears"
         )
 
-    def write_transformers_modelopt_state(self, state: dict, export_dir: Path) -> None:
-        """Write ModelOpt graph state using the Transformers model's module names."""
-        modes = {name: mode_state for name, mode_state in state["modelopt_state_dict"]}
-        quantizer_state = modes["quantize"]["metadata"]["quantizer_state"]
-        remapped = {}
-        for name, value in quantizer_state.items():
-            if name.startswith("net.language_model.model.layers.") and "_moe_gen." not in name:
-                new_name = name.replace(
-                    "net.language_model.model.layers.",
-                    "model.language_model.layers.",
-                    1,
-                )
-            elif name.startswith("net.language_model.visual."):
-                new_name = name.replace("net.language_model.visual.", "model.visual.", 1)
-            elif name.startswith("net.language_model.lm_head."):
-                new_name = name.replace("net.language_model.lm_head.", "lm_head.", 1)
-            else:
-                continue
-            remapped[new_name] = value
-        disabled_state = next(
-            copy.deepcopy(value) for name, value in remapped.items() if name.endswith("output_quantizer")
-        )
-        attention_names = {
-            name.rsplit(".", 2)[0]
-            for name in remapped
-            if name.endswith(("self_attn.q_proj.input_quantizer", "attn.qkv.input_quantizer"))
-        }
-        for attention_name in attention_names:
-            for quantizer_name in ("q_bmm_quantizer", "k_bmm_quantizer", "v_bmm_quantizer", "softmax_quantizer"):
-                remapped[f"{attention_name}.{quantizer_name}"] = copy.deepcopy(disabled_state)
-        modes["quantize"]["config"] = self.build_quant_config_json()["modelopt_config"]
-        for name, value in remapped.items():
-            if name.endswith("weight_quantizer"):
-                value["_fake_quant"] = False
-            if name.startswith(("model.visual.", "lm_head.")):
-                value["_disabled"] = True
-                value["_pytorch_state_metadata"]["buffers"].clear()
-            if name.endswith("input_quantizer") and not value["_disabled"]:
-                value["_pytorch_state_metadata"]["buffers"]["_amax"] = {
-                    "shape": torch.Size([]),
-                    "dtype": torch.float32,
-                }
-        modes["quantize"]["metadata"]["quantizer_state"] = remapped
+        return component_state
 
-        real_quantize = modes["real_quantize"]
-        for key in ("real_quantizer_state", "q_tensor_state"):
-            real_quantize["metadata"][key] = {
-                (
-                    name.replace("net.language_model.model.layers.", "model.language_model.layers.", 1)
-                    if name.startswith("net.language_model.model.layers.")
-                    else "lm_head"
-                ): value
-                for name, value in real_quantize["metadata"][key].items()
-                if (name.startswith("net.language_model.model.layers.") and "_moe_gen" not in name)
-                or name == "net.language_model.lm_head"
-            }
-        for value in real_quantize["metadata"]["real_quantizer_state"].values():
-            for buffer in value["_pytorch_state_metadata"]["buffers"].values():
-                buffer["dtype"] = torch.float32
-        state["modelopt_state_dict"] = [
-            ("quantize", modes["quantize"]),
-            ("real_quantize", real_quantize),
-        ]
-        torch.save(state, export_dir / "transformers_modelopt_state.pth")
-        print(f"[export] wrote Transformers ModelOpt graph state for {len(remapped)} quantizers")
+    def write_transformers_modelopt_state(self, component_state: dict, export_dir: Path, checkpoint_dir: Path) -> None:
+        """Write root state from the actual reasoner graph and compressed DiT state."""
+        state = build_reasoner_modelopt_state(component_state, checkpoint_dir)
+        state_path = export_dir / "modelopt_state.pth"
+        if state_path.is_symlink():
+            state_path.unlink()
+        torch.save(state, state_path)
+        quantizers = dict(state["modelopt_state_dict"])["quantize"]["metadata"]["quantizer_state"]
+        print(f"[export] wrote Transformers ModelOpt graph state for {len(quantizers)} quantizers")
 
     def overlay(self, bf16: dict, quantized: dict) -> dict:
         merged = dict(bf16)
@@ -469,6 +415,8 @@ class Fp8DiffusersExporter:
         dtype=torch.bfloat16,
         mixed_precision_steps: int = 3,
     ) -> None:
+        from .checkpoint_io import load_sharded_safetensors, save_sharded_safetensors
+
         net = mdl.net
         transformer_export_dir.mkdir(parents=True, exist_ok=True)
 
@@ -505,7 +453,6 @@ class Fp8DiffusersExporter:
         with open(transformer_export_dir / "config.json", "w") as f:
             json.dump(config, f, indent=4)
         self.write_diffusers_modelopt_state(framework_modelopt_state, bf16, merged, transformer_export_dir)
-        self.write_transformers_modelopt_state(framework_modelopt_state, transformer_export_dir)
         print(f"[export] wrote {len(merged)} tensors (fp8) to {transformer_export_dir}")
 
 
@@ -539,7 +486,10 @@ def _write_root_hf_quant_config(root_dir: Path, transformer_dir: Path) -> None:
         raise ValueError(f"No 'quantization_config' in {transformer_dir}/config.json.")
     quant_config = copy.deepcopy(quant_config)
     quant_config.pop("runtime", None)
-    with open(root_dir / "hf_quant_config.json", "w", encoding="utf-8") as f:
+    config_path = root_dir / "hf_quant_config.json"
+    if config_path.is_symlink():
+        config_path.unlink()
+    with open(config_path, "w", encoding="utf-8") as f:
         json.dump(quant_config, f, indent=4)
     print(f"[assemble] wrote {root_dir / 'hf_quant_config.json'} for upstream-vLLM discovery")
 
@@ -570,7 +520,7 @@ def assemble_output_dir(input_dir: Path, output_dir: Path, quantized_transformer
 
     # Wire everything except transformer/ + the stale root index as relative symlinks
     # back to input_dir (relative links survive bind-mount path differences).
-    _SKIP_LINK = {"transformer", "model.safetensors.index.json", "modelopt_state.pth"}
+    _SKIP_LINK = {"transformer", "model.safetensors.index.json", "modelopt_state.pth", "hf_quant_config.json"}
     input_dir_abs = input_dir.absolute()
     for entry in input_dir.iterdir():
         if entry.name in _SKIP_LINK:
@@ -586,6 +536,7 @@ def assemble_output_dir(input_dir: Path, output_dir: Path, quantized_transformer
         print(f"[assemble] linking {entry.name} -> {rel_src}")
         dst.symlink_to(rel_src)
     _write_root_weight_index(output_dir)
-    shutil.move(str(target_transformer / "transformers_modelopt_state.pth"), str(output_dir / "modelopt_state.pth"))
+    component_state = torch.load(target_transformer / "modelopt_state.pth", map_location="cpu", weights_only=False)
+    Fp8DiffusersExporter().write_transformers_modelopt_state(component_state, output_dir, output_dir)
     _write_root_hf_quant_config(output_dir, target_transformer)
     print(f"[assemble] drop-in dir ready at {output_dir}")
