@@ -28,6 +28,10 @@ import torch
 from modelopt.torch.export.diffusers_utils import hide_quantizers_from_state_dict
 from modelopt.torch.export.unified_export_hf import _process_quantized_modules
 
+<<<<<<< Updated upstream
+=======
+from .metadata import METADATA_FILENAME
+>>>>>>> Stashed changes
 from .modelopt_state import build_reasoner_modelopt_state
 from .safetensors_index import build_root_index
 
@@ -520,7 +524,17 @@ def assemble_output_dir(input_dir: Path, output_dir: Path, quantized_transformer
 
     # Wire everything except transformer/ + the stale root index as relative symlinks
     # back to input_dir (relative links survive bind-mount path differences).
+<<<<<<< Updated upstream
     _SKIP_LINK = {"transformer", "model.safetensors.index.json", "modelopt_state.pth", "hf_quant_config.json"}
+=======
+    _SKIP_LINK = {
+        "transformer",
+        "model.safetensors.index.json",
+        "modelopt_state.pth",
+        "hf_quant_config.json",
+        METADATA_FILENAME,
+    }
+>>>>>>> Stashed changes
     input_dir_abs = input_dir.absolute()
     for entry in input_dir.iterdir():
         if entry.name in _SKIP_LINK:

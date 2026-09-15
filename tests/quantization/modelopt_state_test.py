@@ -227,6 +227,10 @@ def test_assembly_keeps_distinct_states_and_source_config(export_modules, tmp_pa
     # Also cover a stale output symlink from an earlier assembly.
     (output / "hf_quant_config.json").symlink_to(source_config)
     (source / "modelopt_state.pth").write_bytes(b"source state")
+<<<<<<< Updated upstream
+=======
+    (source / "quantization_metadata.json").write_text('{"previous_export": true}')
+>>>>>>> Stashed changes
     _, component = compressed_dit()
     torch.save(component, staging / "modelopt_state.pth")
     tiny_reasoner().config.save_pretrained(source)
@@ -244,6 +248,10 @@ def test_assembly_keeps_distinct_states_and_source_config(export_modules, tmp_pa
     assert torch.load(output / "transformer/modelopt_state.pth", weights_only=False) == component
     assert not (output / "transformer/transformers_modelopt_state.pth").exists()
     assert (source / "modelopt_state.pth").read_bytes() == b"source state"
+<<<<<<< Updated upstream
+=======
+    assert not (output / "quantization_metadata.json").exists()
+>>>>>>> Stashed changes
     assert json.loads((output / "model.safetensors.index.json").read_text())["weight_map"] == {
         "weight": "transformer/model.safetensors",
     }
@@ -396,3 +404,40 @@ def test_diffusers_load_preserves_buffers_and_qtensor_wrappers(export_modules, t
     assert loaded.state_dict().keys() == saved.keys()
     for name, tensor in loaded.state_dict().items():
         torch.testing.assert_close(tensor.float(), saved[name].float(), rtol=0, atol=0)
+<<<<<<< Updated upstream
+=======
+
+
+def test_quantization_metadata_records_runtime_and_preserves_source(export_modules, tmp_path):
+    from importlib.metadata import version
+
+    helper, _ = export_modules
+    provenance = importlib.import_module(f"{helper.__package__}.metadata")
+    source = tmp_path / "snapshots" / ("a" * 40)
+    source.mkdir(parents=True)
+    (source / "generation_config.json").write_text('{"transformers_version": "4.56.0"}')
+    source_metadata = source / provenance.METADATA_FILENAME
+    source_metadata.write_text('{"previous_export": true}')
+    recipe = {"seed": 0, "sampler": {"num_inference_steps": 20}}
+    prompts = ["A robotic arm reaches for a red block."]
+    metadata = provenance.collect_quantization_metadata(
+        source="nvidia/Cosmos3-Nano", input_dir=source, recipe=recipe, prompts=prompts
+    )
+    recipe["sampler"]["num_inference_steps"] = 50
+    prompts.clear()
+    output = tmp_path / "output"
+    output.mkdir()
+    (output / provenance.METADATA_FILENAME).symlink_to(source_metadata)
+    provenance.write_quantization_metadata(output, metadata)
+    saved = json.loads((output / provenance.METADATA_FILENAME).read_text())
+    assert saved["environment"]["packages"]["transformers"] == version("transformers")
+    assert saved["environment"]["packages"]["nvidia-modelopt"] == version("nvidia-modelopt")
+    assert saved["source"]["configs"]["generation_config.json"]["transformers_version"] == "4.56.0"
+    assert saved["source"]["snapshot_revision"] == "a" * 40
+    assert saved["recipe"]["sampler"]["num_inference_steps"] == 20
+    assert saved["calibration_prompts"] == ["A robotic arm reaches for a red block."]
+    assert saved["framework"]["quantization_source_sha256"]["export.py"]
+    assert source_metadata.read_text() == '{"previous_export": true}'
+    assert (source / "generation_config.json").read_text() == '{"transformers_version": "4.56.0"}'
+    assert not (output / provenance.METADATA_FILENAME).is_symlink()
+>>>>>>> Stashed changes
