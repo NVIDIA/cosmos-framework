@@ -2855,11 +2855,6 @@ def test_multiview_dense_attention_counts_a_single_view_sample_once(num_views: i
 
 @pytest.mark.L1
 @pytest.mark.GPU
-# The one marker the co-located runner reads: an unmarked test is capped at a fraction of the
-# device (conftest.pytest_runtest_setup, 1/8 by default) so that several can share it, and this
-# one's ~20GB of q/k/v and outputs does not fit in such a share of any GPU that satisfies the
-# 60GB floor below. gpus(1) hands it the whole device instead.
-@pytest.mark.gpus(1)
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="The attention kernels require a GPU.")
 @pytest.mark.skipif(not NATTEN_SUPPORTED, reason="merge_attentions requires NATTEN.")
 @pytest.mark.skipif(
@@ -2903,9 +2898,6 @@ def test_multiview_dense_attention_runs_a_gen_stream_past_the_varlen_index_limit
         items_per_sample=[items],
         is_control=[index < items - 1 for index in range(items)],
         view_axis=[0] * items,
-        # The pack rounds the GEN stream up to the backend's block, and the plan addresses the
-        # stream as packed: 526240 real tokens sit in 526336 padded ones on Triton's 128.
-        padded_gen_tokens=_padded_gen_tokens(packs[0]),
     )
 
     out_pack = multiview_attention(*packs, dense_plan=plan)
