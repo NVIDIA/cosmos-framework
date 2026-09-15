@@ -10,7 +10,7 @@
 3. **g128 per-col（S0 布局，精度可接受的最细方案）目前 133 / 159 / 145 TFLOPS**（4096²）= bf16 的 1.1～1.2×、cuBLASLt FP8 pt 的 0.6～0.7×；1536 档未合并层与 bf16 持平或更慢。瓶颈是每元素每 K 组的 3 条 FP 指令（I2F 半速 + FMUL + FFMA），Thor 无 FFMA2。
 4. **g256 per-col 把提升次数减半后达到 224 / 268 / 248 TFLOPS**（4096²）= g128 per-col 的 1.7×、bf16 的 1.8～2.1×、**cuBLASLt FP8 per-tensor 的 0.98 / 1.05 / 1.30×（追平）**、INT8 per-tensor 的 0.8～0.86×；除 512×1536 外全部形状快于 bf16。精度（per-token 1×256 / per-channel 1×256）需模拟器判定。
 5. W 128×128 块和可分离 s_w[n]·c[g] 布局更快（W 块 190 / 229 / 210，= cuBLASLt FP8 pt 的 0.84～0.97×），但按 pzeren 判断精度多半不达标，只作为 INT8 主循环的上界参考。
-6. **TMEM 预偏置去 I2F 的 g128 方案：数值已验证正确（逐位等价），但当前实现更慢**（提升 warp 无寄存器余量，tcgen05.st 的源寄存器被 ptxas 钉住导致累加器溢出到本地内存）；需改由空闲的 warp 12-15 做回写，设计已写在 README，未实现。
+6. **TMEM 预偏置去 I2F 的 g128 方案：已完整实现并验证正确（逐位等价、全部 PASS），但没有收益**——完整版 106 TFLOPS 对 I2F 版 158。消融实验说明 per-col 提升循环不是 FP 发射受限：去掉 per-col 的 scale 广播 LDS 后 I2F 版到 185、两条 FFMA 版只有 171；FP8 per-col（本来就没有 I2F）也只有 178。真正的瓶颈是每列 scale 的 32 路广播 smem 读（−25%）、两级 TMEM 环对释放路径额外一跳的敏感（−14%）和 tcgen05.st 回写量。g256 快 1.7× 是因为把这些每 K 组的开销一起减半。
 
 条件说明：120 W 模式、GPU 1386 MHz、热激活 / 冷权重持续模式（`--flush=0 --nw=8`，8 份轮换权重，≥1.5 s 预热），高斯分布量化数据，M 补到 4 的倍数（901/1517/1802 → 904/1520/1804），TFLOPS = 2MNK / 中位时间（INT8 按 TFLOPS 计）。同一表内的数字来自同一次运行；不同表之间同条件但非同次运行（差异 ≤ 3%）。
 
@@ -83,12 +83,22 @@
 - tcgen05.mma 的 D 只能在 TMEM，sm_100/110 无 wgmma，寄存器累加器只有 1/4 速率的 mma.sync → 走不通。TMEM 读不是瓶颈（每 64 元素一条 tcgen05.ld），每元素的 FP 发射数才是。
 - 结构性原因（对比 H100）：Hopper 每 SM 每拍 ~3.8K INT8 MAC，Blackwell/Thor ~8.2K，CUDA core 都是 128 FP32/拍。同一段提升代码在 H100 藏在 MMA 底下（384 拍 vs 554 拍 MMA），在 Thor 上 MMA 等它（384+ vs 256）。
 
-## 5. TMEM 预偏置 g128（`-DG128_OPT_BIAS`，默认关闭）的状态
+## 5. TMEM 预偏置 g128（`-DG128_OPT_BIAS`，默认关闭）：实现、验证、消融
 
-- 原理：TMEM int32 累加器预置 0x4B400000（1.5·2²³ 的位型），MMA 累加后读回的位型即 float(1.5·2²³ + x)，对 |x| ≤ 128·127² / 256·127² 精确（穷举验证）；提升变为 t = fma(fb, s_a, −1.5·2²³·s_a)、acc = fma(t, s_w, acc)，与现算法逐位一致（s_a 尾数低两位清零）。
-- 实现：MMA 在 stage 被消费过一次后改为累加模式（PipelineState::count() ≥ Stages），消费者用 2 条 FFMA 提升，消费后用 tcgen05.st 回写偏置再释放 stage。cfg15/16/20/21、W 块、FP8 全部 verify PASS（rel-L2 1.66e-3 = bf16 输出舍入下限）。
-- 结果：更慢——4096² M=1520 g128 per-col 158→58，g256 272→104，epi-16 变体 cfg15 131→112、cfg21（g256, epi16）199。SASS 显示 ptxas 给每条静态 tcgen05.st 单独钉一块源寄存器，而提升 warp（128 个 fp32 累加器 + 3×32 TMEM 片段 = 216 预算已满）没有余量，任何回写都把累加器挤到本地内存（0.8～1.1 KB 溢出；不透明常量、不展开循环、8/16/32 列存储、用消费完的片段做源都无效）。
-- 下一步设计（未实现，见 README "TMEM pre-bias promotion: status"）：由空闲的 warp 12-15（每个 warp 对应一个 TMEM lane 四分区）组成回写 warpgroup，等消费者到达新的每 stage mbarrier 后用一条不展开的 tcgen05.st.x8 循环写偏置，再代替消费者做 accumulator consumer_release；MMA 侧和消费者侧逻辑不变。预期 g128 per-col ~230 TFLOPS。
+- 原理：TMEM int32 累加器预置 0x4B400000，MMA 在其上累加；读回位型即 float(1.5·2²³ + x)（|x| < 2²²，K 组 ≤ 256，已穷举验证并加 static_assert）；提升 = fma(fb, s_a, −1.5·2²³·s_a) 再 fma(·, s_w, acc)，与原算法逐位一致。
+- 实现：MMA 在 stage 被消费过一次后改为累加（count() ≥ Stages）；提升 warp 用两条 FFMA 的循环体（两份实例、每 stage 选一次，热循环无分支）；新增回写 warpgroup（warp 12-15，各管一个 TMEM lane 四分区，24 寄存器，CTA 扩到 16 warp），等两组提升 warp 到达每 stage 的 `rearm_full` mbarrier 后用一条不展开的 tcgen05.st.x8 循环写偏置，再做 accumulator consumer_release。中间踩坑：提升 warp 自己回写会溢出 ~1 KB（ptxas 给每条静态 tcgen05.st 单独钉源寄存器块）；12 warp 的 CTA 里 TMEM 分配屏障多算了 4 个不存在的 warp → 挂死。
+- 结果（4096² M=1520，`results/g128_bias_rearm_experiments_20260914.md`）：
+
+| 变体 | TFLOPS |
+|---|---:|
+| I2F 版（现状） | 157.6 |
+| **预偏置完整版（PASS）** | **106.5** |
+| 去掉 per-col scale 读（结果错，仅测时间）：I2F 版 / 两 FFMA 版 | 184.7 / 170.6 |
+| 去掉 scale 读 + 回写协议但不存储 | 159.7 |
+| FP8 per-col：现状 / 去掉 scale 读 | 178.0 / 220.5 |
+
+- 结论：per-col 循环不受 FP 发射限制，I2F 不是瓶颈（微基准里的 3.27→2.06 拍/元素没有转化为 kernel 收益）。瓶颈是每列 scale 的 32 路广播 `ld.shared.v4`（每 stage 每 CTA 512 个 wavefront，与 MMA 的 smem 操作数读争用，−25%）、两级 TMEM 环对释放路径延迟的敏感（−14%）、以及 tcgen05.st 回写量。g256 的 1.7× 来自把这些每 K 组开销一起减半。
+- 下一步的杠杆是 scale 的分发方式：让 warp 的 lane 跨列的 TMEM 读布局（s_w 读不再是 32 路广播）、fp16 打包 scale（wavefront 减半）、或 TMEM 常驻 scale（UTCCP 广播，256×128 tile 才有 TMEM 余量）。
 
 ## 6. 功耗（详见 README "FP8 tensor-core throughput on Thor is data/power dependent"）
 

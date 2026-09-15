@@ -647,7 +647,7 @@ per-col −2%（158→155，cfg18 还溢出 48 B），所以 per-col 保持 cfg1
 ### 11.3 下一步
 （以 per-col g128 为唯一可接受布局重排）
 1. 模拟器精度：先确认 per-col g128（S0）达标，并评估 **g256 per-col**（Thor 上 g256 已追平 cuBLASLt FP8 per-tensor，g128 只有其 0.6×）；可分离 / W 块两种布局预计不达标，不再作为性能主线。
-1b. 若必须保 g128：实现 TMEM 预偏置提升（去掉半速 I2F，2 条 FFMA/元素，`microbench/README.md`），预期 per-col g128 从 159 到 ~230～260 TFLOPS。
+1b. TMEM 预偏置提升已实现并验证（逐位一致），**无收益**（106 对 158）：per-col 不是 FP 发射受限，瓶颈是每列 scale 的 32 路广播 smem 读（去掉后 +25%）和两级 TMEM 环的释放延迟；下一步应改 scale 分发方式（lane 跨列的 TMEM 读布局 / fp16 scale / TMEM 常驻 scale）。详见 `results/g128_bias_rearm_experiments_20260914.md`。
 2. per-col kernel 继续调：MAXN 下重测（g128 不受功耗上限约束，应随 1575/1386 频率放大，FP8 per-tensor 不会）；提升循环的指令级调度（scale 的 ld.shared 与 TMEM 读交错；每 K 块 3 条 FP 指令是地板）；保持 cfg16 / TileK=128。
 3. 模型侧：QKV / gate-up 合并成一次 GEMM（per-col g128 只在宽 N 上快于 bf16）；小 N 层（1024×4096、512×1536、1536×1536）若精度允许留 bf16。
 4. torch 扩展绑定接入 cosmos-framework；INT8 attention（Q·Kᵀ、P·V）是把 INT8 优势延伸到非 GEMM 部分的下一处。

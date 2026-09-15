@@ -4,6 +4,11 @@
 // Epi2SmSep = separable weight scale (per-column s_w[n] applied in the epilogue, mainloop sees c[nb,g] or 1).
 // All configs run on the 8-warp-promotion shadow kernel (include/cutlass/gemm/kernel/...); 256x256 tiles need it (128 fp32 regs/thread).
 #pragma once
+#if defined(THOR_BW_DEBUG_ONLY16)
+// debug build: a single config (cfg16) so the driver links with only bwcfg_{int8,fp8}_16.o
+#define THOR_BW_CFG_LIST(X) X(16, 256, 256, 128, 2, 1, BwSched2Sm, Epi2Sm, 1, 1, 128, "2SM 256x256x128 c2x1 sf<1,1,128> per-col, epi tile 128x32")
+#define THOR_NUM_BW_CFGS 1
+#else
 #define THOR_BW_CFG_LIST(X)                                                                                             \
   X(0, 128, 128, 128, 1, 1, BwSched1Sm, Epi1Sm, 1, 128, 128, "1SM 128x128x128 c1x1 sf<1,128,128>")                   \
   X(1, 256, 128, 128, 2, 1, BwSched2Sm, Epi2Sm, 1, 128, 128, "2SM 256x128x128 c2x1 sf<1,128,128> (example 81)")      \
@@ -29,3 +34,4 @@
   X(21, 256, 256, 256, 2, 1, BwSched2Sm, Epi2Sm16, 1, 1, 256, "2SM 256x256x256 c2x1 sf<1,1,256> per-col g256, epi tile 128x16")
 
 #define THOR_NUM_BW_CFGS 22
+#endif

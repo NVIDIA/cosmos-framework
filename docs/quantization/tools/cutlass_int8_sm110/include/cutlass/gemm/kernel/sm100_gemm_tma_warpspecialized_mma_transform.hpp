@@ -143,7 +143,8 @@ public:
   static constexpr uint32_t MaxThreadsPerBlock = cute::round_up(NumSchedThreads +
                                                  NumMainloopABLoadThreads + NumMMAThreads +
                                                  NumEpilogueLoadThreads + NumEpilogueThreads + 
-                                                 NumMainloopSFLoadThreads, 128);
+                                                 NumMainloopSFLoadThreads, 128)
+                                                 + (CollectiveMainloop::UseBias ? 4 * NumThreadsPerWarp : 0);   // THOR PATCH (bias): + re-arm warps 12-15 (CTA = 16 warps -> 128 launch regs)
   static constexpr uint32_t MinBlocksPerMultiprocessor = 1;
 
   static constexpr uint32_t NumEpilogueSubTiles = CollectiveEpilogue::get_load_pipe_increment(CtaShape_MNK{});
@@ -184,7 +185,14 @@ public:
   static constexpr uint32_t GenericRegisterRequirement = 48;
   // THOR PATCH (8-warp promotion): two 128-thread promotion warpgroups (warps 4-7 = epilogue, 8-11 = accum2); the scale-factor
   // load moves to warp 3 (the epilogue-load warp; only valid when C is void). Register split 48 / 232 / 232 = 64K.
-  static constexpr uint32_t AccumRegisterRequirement = 216;   // 48 + 216 + 216 = 480 -> 61440 regs. 232 (exact 64K fit) hangs setmaxnreg.inc; 224 made ptxas spill on the 256x256 W-block config (228 -> 211 TFLOPS)
+  static constexpr uint32_t AccumRegisterRequirement = 216;
+  static constexpr uint32_t RearmRegisterRequirement = 24;    // THOR PATCH (bias): warps 12-15; 4*48 + 8*216 + 4*24 = 2016 <= 2048 (exact fit hangs)
+  static constexpr uint32_t NumRearmThreads = 4 * NumThreadsPerWarp;
+#if defined(G128_DBG_REARM_PASSIVE)
+  static constexpr bool RearmActive = false;   // debug: warps 12-15 exist but the old release protocol is used (results wrong)
+#else
+  static constexpr bool RearmActive = CollectiveMainloop::UseBias;
+#endif   // 48 + 216 + 216 = 480 -> 61440 regs. 232 (exact 64K fit) hangs setmaxnreg.inc; 224 made ptxas spill on the 256x256 W-block config (228 -> 211 TFLOPS)
   static constexpr uint32_t NumAccumWarpGroups = 2;
 
   // Kernel level shared memory storage
@@ -204,6 +212,7 @@ public:
       alignas(16) CLCThrottlePipelineStorage clc_throttle;
       alignas(16) arch::ClusterBarrier tmem_dealloc;
       alignas(16) arch::ClusterBarrier epilogue_throttle;
+      alignas(16) arch::ClusterBarrier rearm_full[AccumulatorPipeline::Stages];   // THOR PATCH (bias): stage consumed by both promotion groups
     } pipelines;
 
     alignas(16) typename TileScheduler::CLCResponse clc_response[SchedulerPipelineStageCount];
@@ -248,6 +257,7 @@ public:
     Epilogue       = 4,   // 4 warps: promotion part 0 + epilogue store
     Accum2         = 8,   // 4 warps: promotion part 1 (THOR PATCH)
     EpilogueLoad   = 12,  // unreachable
+    Rearm          = 12,  // THOR PATCH (bias): 4 warps (12-15, one per TMEM lane quadrant) re-arm consumed accumulator stages
     Unused         = 13,
   };
 
@@ -260,6 +270,7 @@ public:
     uint32_t main_sf_load = false;
     uint32_t unused       = false;
     uint32_t accum2       = false;
+    uint32_t rearm        = false;
   };
 
   //
@@ -425,6 +436,9 @@ public:
       else if (warp_idx < static_cast<int>(WarpCategory::Accum2) + 4) {
         return WarpCategory::Accum2;   // THOR PATCH
       }
+      else if (CollectiveMainloop::UseBias && warp_idx < static_cast<int>(WarpCategory::Rearm) + 4) {
+        return WarpCategory::Rearm;    // THOR PATCH (bias)
+      }
       else {
         return WarpCategory::Unused;
       }
@@ -462,7 +476,8 @@ public:
       (warp_category == WarpCategory::Epilogue),                            // epilogue
       (warp_category == WarpCategory::MainloopSFLoad),                      // main_sf_load
       (warp_category == WarpCategory::Unused),                              // unused
-      (warp_category == WarpCategory::Accum2)                               // accum2 (THOR PATCH)
+      (warp_category == WarpCategory::Accum2),                              // accum2 (THOR PATCH)
+      (warp_category == WarpCategory::Rearm)                                // rearm (THOR PATCH, bias)
     };
 
     // Mainloop Load pipeline
@@ -535,7 +550,8 @@ public:
     clc_pipeline_params.producer_arv_count = 1;
     clc_pipeline_params.consumer_arv_count = NumSchedThreads + cluster_size *
                                                  (NumMainloopABLoadThreads + NumAccumWarpGroups * NumEpilogueThreads +
-                                                  NumMMAThreads + NumMainloopSFLoadThreads);
+                                                  NumMMAThreads + NumMainloopSFLoadThreads +
+                                                  (RearmActive ? NumRearmThreads : 0));
     if (is_epi_load_needed) {
       clc_pipeline_params.consumer_arv_count += cluster_size * NumEpilogueLoadThreads;
     }
@@ -548,12 +564,12 @@ public:
     if (WarpCategory::MMA == warp_category) {
       accumulator_pipeline_params.role = AccumulatorPipeline::ThreadCategory::Producer;
     }
-    if (WarpCategory::Epilogue == warp_category || WarpCategory::Accum2 == warp_category) {
+    if (WarpCategory::Epilogue == warp_category || WarpCategory::Accum2 == warp_category || WarpCategory::Rearm == warp_category) {
       accumulator_pipeline_params.role = AccumulatorPipeline::ThreadCategory::Consumer;
     }
     // Only one producer thread arrives on this barrier.
     accumulator_pipeline_params.producer_arv_count = 1;
-    accumulator_pipeline_params.consumer_arv_count = size(AtomThrShapeMNK{}) * NumAccumWarpGroups * NumEpilogueThreads;
+    accumulator_pipeline_params.consumer_arv_count = size(AtomThrShapeMNK{}) * (RearmActive ? NumRearmThreads : NumAccumWarpGroups * NumEpilogueThreads);
     accumulator_pipeline_params.initializing_warp = 2;
     AccumulatorPipeline accumulator_pipeline(shared_storage.pipelines.mainloop.pipeline_accum,
                                                  accumulator_pipeline_params,
@@ -579,18 +595,29 @@ public:
     TmemAllocator tmem_allocator{};
 
     // Sync allocation status between MMA and epilogue warps within CTA
-    arch::NamedBarrier tmem_allocation_result_barrier(NumMMAThreads + NumAccumWarpGroups * NumEpilogueThreads, cutlass::arch::ReservedNamedBarriers::TmemAllocBarrier);
+#if defined(G128_DBG_REARM_EXIT_NOBAR)
+    constexpr bool RearmInTmemBar = false;
+#else
+    constexpr bool RearmInTmemBar = CollectiveMainloop::UseBias;
+#endif
+    arch::NamedBarrier tmem_allocation_result_barrier(NumMMAThreads + NumAccumWarpGroups * NumEpilogueThreads + (RearmInTmemBar ? NumRearmThreads : 0),
+                                                      cutlass::arch::ReservedNamedBarriers::TmemAllocBarrier);
     // NamedBarrier::sync/arrive(uint32_t) add ReservedNamedBarrierCount (8) themselves, so pass user-relative ids: hardware ids 8 / 9.
     // (Review 2026-09-14: FirstUserBarrier + 0/1 here resolved to 16/17, outside the legal 0..15 range.)
     constexpr uint32_t HandoffBarrierA = 0;   // both groups done reading the last stage
     constexpr uint32_t HandoffBarrierB = 1;   // accum2's half stored to TMEM
-    constexpr uint32_t HandoffBarrierC = static_cast<uint32_t>(cutlass::arch::ReservedNamedBarriers::FirstUserBarrier) + 2;  // epilogue group has read accum2's half (bias re-arm)
     // Sync deallocation status between MMA warps of peer CTAs
     arch::ClusterBarrier& tmem_deallocation_result_barrier = shared_storage.pipelines.tmem_dealloc;
     [[maybe_unused]] uint32_t dealloc_barrier_phase = 0;
     
     if (WarpCategory::MMA == warp_category && has_mma_peer_cta && lane_predicate) {
       tmem_deallocation_result_barrier.init(NumMMAThreads);
+    }
+    if constexpr (CollectiveMainloop::UseBias) {
+      if (WarpCategory::MMA == warp_category && lane_predicate) {
+        CUTLASS_PRAGMA_UNROLL
+        for (int i = 0; i < int(AccumulatorPipeline::Stages); ++i) shared_storage.pipelines.rearm_full[i].init(NumAccumWarpGroups * NumEpilogueThreads);
+      }
     }
 
 
@@ -1013,19 +1040,18 @@ public:
           typename CollectiveEpilogue::CopyOpT2R{},
           typename CollectiveEpilogue::EpilogueTile{},
           k_tile_count,
-          /*part_idx=*/0, /*num_parts=*/NumAccumWarpGroups
+          /*part_idx=*/0, /*num_parts=*/NumAccumWarpGroups, RearmActive ? &shared_storage.pipelines.rearm_full[0] : nullptr
         );
         // THOR PATCH: collect the second warpgroup's half of the full accumulator through the last TMEM stage, then release it
         arch::NamedBarrier::sync(NumAccumWarpGroups * NumEpilogueThreads, HandoffBarrierA);
         arch::NamedBarrier::sync(NumAccumWarpGroups * NumEpilogueThreads, HandoffBarrierB);
         collective_mainloop.handoff_load(tmem_storage, get<0>(next_state), accum, tiled_t2r,
                                          typename CollectiveEpilogue::EpilogueTile{}, /*part_idx=*/1, NumAccumWarpGroups);
-        if constexpr (CollectiveMainloop::UseBias) {
-          // THOR PATCH (bias): accum2 re-arms its half of the hand-off stage once we have read it (HandoffBarrierC); our half was
-          // re-armed in accum(). Keeps the constant fragment out of this group's register peak.
-          arch::NamedBarrier::arrive(NumAccumWarpGroups * NumEpilogueThreads, HandoffBarrierC);
+        if constexpr (RearmActive) {
+          shared_storage.pipelines.rearm_full[get<0>(next_state).index()].arrive();   // THOR PATCH (bias): consumed -> re-arm warps
+        } else {
+          accumulator_pipeline.consumer_release(get<0>(next_state));
         }
-        accumulator_pipeline.consumer_release(get<0>(next_state));
         ++get<0>(next_state);
         states = next_state;
 
@@ -1099,27 +1125,66 @@ public:
         auto [accum, tiled_t2r, next_state] = collective_mainloop.accum(
           pipelines, states, tmem_storage, accum_inputs, cta_coord_mnkl,
           typename CollectiveEpilogue::CopyOpT2R{}, typename CollectiveEpilogue::EpilogueTile{}, k_tile_count,
-          /*part_idx=*/1, /*num_parts=*/NumAccumWarpGroups);
+          /*part_idx=*/1, /*num_parts=*/NumAccumWarpGroups, RearmActive ? &shared_storage.pipelines.rearm_full[0] : nullptr);
         arch::NamedBarrier::sync(NumAccumWarpGroups * NumEpilogueThreads, HandoffBarrierA);
         collective_mainloop.handoff_store(tmem_storage, get<0>(next_state), accum, typename CollectiveEpilogue::CopyOpT2R{},
                                           typename CollectiveEpilogue::EpilogueTile{}, /*part_idx=*/1, NumAccumWarpGroups);
         arch::NamedBarrier::sync(NumAccumWarpGroups * NumEpilogueThreads, HandoffBarrierB);
-        if constexpr (CollectiveMainloop::UseBias) {
-          arch::NamedBarrier::sync(NumAccumWarpGroups * NumEpilogueThreads, HandoffBarrierC);   // epilogue group has read our half
-          collective_mainloop.bias_refill(tmem_storage, get<0>(next_state), accum, typename CollectiveEpilogue::CopyOpT2R{},
-                                          typename CollectiveEpilogue::EpilogueTile{}, /*part_idx=*/1, NumAccumWarpGroups);
-          cutlass::arch::fence_view_async_tmem_store();
-#if defined(CUTLASS_ARCH_TCGEN_ENABLED)
-          asm volatile("tcgen05.fence::before_thread_sync;" ::: "memory");
-#endif
+        if constexpr (RearmActive) {
+          shared_storage.pipelines.rearm_full[get<0>(next_state).index()].arrive();   // THOR PATCH (bias): consumed -> re-arm warps
+        } else {
+          accumulator_pipeline.consumer_release(get<0>(next_state));
         }
-        accumulator_pipeline.consumer_release(get<0>(next_state));
         ++get<0>(next_state);
         states = next_state;
         work_tile_info = next_work_tile_info;
         cta_coord_mnkl = scheduler.work_tile_to_cta_coord(work_tile_info);
       } while (work_tile_info.is_valid());
-    } else {
+    }
+    else if (is_participant.rearm) {
+      // THOR PATCH (bias): re-arm warpgroup (warps 12-15). For every accumulator stage, in consumption order: wait until both
+      // promotion groups have consumed it (rearm_full), write the promotion bias into it (each warp its own TMEM lane quadrant),
+      // then perform the accumulator consumer_release that hands the stage back to the MMA.
+      arch::warpgroup_reg_dealloc<RearmRegisterRequirement>();
+#if defined(G128_DBG_REARM_EXIT_NOBAR)
+      if constexpr (true) { /* debug: leave immediately, like Unused */ } else
+#else
+      tmem_allocation_result_barrier.arrive_and_wait();
+#endif
+      {
+      uint32_t tmem_base_ptr = shared_storage.tmem_base_ptr;
+      collective_mainloop.set_tmem_offsets(tmem_storage, tmem_base_ptr);
+      AccumulatorPipelineState rearm_state = accumulator_pipe_consumer_state;
+#if defined(G128_DBG_REARM_EXIT_BAR) || defined(G128_DBG_REARM_EXIT_NOBAR)
+      if constexpr (false)
+#else
+      if constexpr (RearmActive)
+#endif
+      do {
+        auto k_tile_count = TileScheduler::get_work_k_tile_count(work_tile_info, problem_shape_MNKL, CtaShape_MNK{});
+        auto [next_work_tile_info, increment_pipe] = scheduler.fetch_next_work(work_tile_info, clc_pipeline, clc_pipe_consumer_state);
+        if (increment_pipe) {
+          ++clc_pipe_consumer_state;
+        }
+        int const num_stages = k_tile_count * CollectiveMainloop::ScaleKsPerTile;
+        CUTLASS_PRAGMA_NO_UNROLL
+        for (int i = 0; i < num_stages; ++i) {
+          shared_storage.pipelines.rearm_full[rearm_state.index()].wait(rearm_state.phase());
+#if !defined(G128_DBG_REARM_NOSTORE)
+          collective_mainloop.bias_rearm_stage(tmem_storage, rearm_state.index());
+#endif
+          cutlass::arch::fence_view_async_tmem_store();
+#if defined(CUTLASS_ARCH_TCGEN_ENABLED)
+          asm volatile("tcgen05.fence::before_thread_sync;" ::: "memory");
+#endif
+          accumulator_pipeline.consumer_release(rearm_state);
+          ++rearm_state;
+        }
+        work_tile_info = next_work_tile_info;
+      } while (work_tile_info.is_valid());
+      }
+    }
+    else {
       // Register reconfiguration
       arch::warpgroup_reg_dealloc<GenericRegisterRequirement>();
     }

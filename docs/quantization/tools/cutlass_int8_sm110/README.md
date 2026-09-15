@@ -563,21 +563,26 @@ shape except 512x1536 (~1.0x); against cuBLASLt FP8 per-tensor it is 0.9-1.3x on
 230 TFLOPS in this run and 262 in an earlier one -- the wide shape is sensitive to the weight-stream state.) Whether g256 (per-token 1x256, per-channel 1x256) meets the accuracy target is for the simulator;
 the alternative that keeps g128 accuracy is the TMEM-bias promotion (2 FFMA per element, same 209-264 clk floor), not yet implemented.
 
-### TMEM pre-bias promotion for per-col g128/g256: status (2026-09-14 evening, `-DG128_OPT_BIAS`, off by default)
+### TMEM pre-bias promotion for per-col g128/g256: implemented, verified, no gain (`-DG128_OPT_BIAS`, off by default)
 
-Implemented in the shadow collective/kernel (`UseBias`, `bias_rearm_subtile`, `bias_refill`, `HandoffBarrierC`): the MMA accumulates onto a
-stage pre-filled with 0x4B400000 (accumulate=One once a stage has been consumed once, `PipelineState::count() >= Stages`), the promotion
-is two FFMAs per element (no I2F), and the consumers re-arm the stage with `tcgen05.st` before releasing it. **Numerically verified**
-(PASS, rel-L2 1.66e-3 on cfg15/16/20/21, W-block and FP8 paths untouched) but **slower**: 4096x4096 M=1520 per-col g128 cfg16 158 -> 58
-TFLOPS, g256 cfg20 272 -> 104, epi-16 variants cfg15 131 -> 112, cfg21 (g256, epi 16) 199. Cause (ptxas -v / SASS): every static
-`tcgen05.st` gets its own pinned source register block, and the promotion warps have no register headroom (128 fp32 accumulator + 3 x 32
-TMEM fragments already fill the 216-register budget), so any re-arm store from those warps evicts accumulator elements to local memory
-(0.8-1.1 KB of spills; also with opaque constants, non-unrolled store loops, 8/16/32-column stores, or sourcing the stores from the
-consumed fragment). The re-arm must therefore not be done by the promotion warps. Next design (not implemented): a dedicated re-arm
-warpgroup (the idle warps 12-15, one per TMEM lane quadrant) that waits on a new per-stage mbarrier the consumers arrive on, stores the
-bias from an 8-register constant with one non-unrolled `tcgen05.st.x8` loop, then performs the accumulator `consumer_release`; the MMA
-count()-based accumulate flag and the consumers' first-`Stages` register add stay as they are. Expected per-col g128: ~230 TFLOPS
-(floor 264 issue clk per 128x128x128 block vs 256 MMA clk; the extra stage turnaround of 2-stage TMEM ring costs some of it).
+Idea: keep the int32 TMEM accumulator stage pre-filled with 0x4B400000 (bit pattern of 1.5*2^23) so the MMA's partial sum reads back
+as the fp32 value 1.5*2^23 + x (exact for |x| < 2^22, i.e. K groups <= 256) and the promotion is two FFMAs per element instead of
+I2F (half rate on Thor) + FMUL + FFMA. Implementation (shadow collective + kernel, `UseBias`): MMA accumulates onto the stage once it
+has been consumed once (`PipelineState::count() >= Stages`), the promotion warps use the two-FFMA body (stage body instantiated twice,
+selected once per stage so the hot loop is branch-free), and a dedicated **re-arm warpgroup** (warps 12-15, one per TMEM lane
+quadrant, 24 registers, CTA grows to 16 warps) waits on a per-stage `rearm_full` mbarrier that both promotion groups arrive on, writes
+the bias with one non-unrolled `tcgen05.st.x8` loop and performs the accumulator `consumer_release`. (A first version that stored the
+bias from the promotion warps spilled ~1 KB: ptxas pins a separate source register block for every static `tcgen05.st`, and those
+warps have no headroom; a version with 12 warps hung because the TMEM-alloc named barrier counted 4 warps that did not exist.)
+
+Result (`results/g128_bias_rearm_experiments_20260914.md`): numerically correct (PASS everywhere, bit-identical promotion), **but
+106 TFLOPS vs 158 for the I2F kernel** (4096x4096 M=1520). Ablations show why: the per-col promotion is not FP-issue bound. With the
+per-column scale loads removed the I2F kernel reaches 185 and the two-FFMA body only 171; FP8 per-col (no I2F at all) is 178 vs INT8
+158. What limits per-col is (1) the 32-way warp-broadcast `ld.shared.v4` of s_w[n,g] -- 512 wavefronts per stage per CTA competing
+with the MMA's operand reads (-25 %), (2) the 2-stage TMEM ring's sensitivity to any extra hop on the release path (-14 % for the
+re-arm protocol alone), (3) the tcgen05.st re-arm volume (128 KB per stage per CTA). g256 gained 1.7x because it halves all of these
+at once. Next lever for per-col g128 is the scale distribution, not the conversion: a TMEM-load layout whose lanes span columns, fp16
+scales, or TMEM-resident scales (UTCCP broadcast) where the TMEM budget allows.
 
 ## Consolidated report
 
@@ -587,8 +592,8 @@ in one place: `results/THOR_INT8_REPORT_20260914.md` (Chinese).
 ## Continuing on another machine (state as of 2026-09-14 evening)
 
 Everything needed is in this directory plus a CUTLASS checkout; nothing depends on the Thor box's home directory.
-Priority for the next machine: the per-col kernel -- either g256 (cfg20, measured, needs the simulator's accuracy verdict) or g128 with the
-TMEM-pre-biased promotion (`microbench/README.md`, not implemented); W-block / separable are reference points only. `--scale=rowcol`
+Priority for the next machine: the per-col kernel -- g256 (cfg20, measured, needs the simulator's accuracy verdict), or g128 with a cheaper
+per-column scale distribution (see the pre-bias section: the conversion is not the bottleneck); W-block / separable are reference points only. `--scale=rowcol`
 (per-token x per-channel, per-tensor speed) is the ceiling reference.
 
 ```bash
