@@ -199,6 +199,14 @@ def pytest_runtest_setup(item: pytest.Item):
         device_end = device_start + gpus
         os.environ["CUDA_VISIBLE_DEVICES"] = ",".join(map(str, range(device_start, device_end)))
         os.environ["NUM_GPUS"] = str(gpus)
+
+        # A test that asks for whole GPUs gets their whole memory. Stated rather than left
+        # alone because the fraction below is process-global and outlives the test that set
+        # it: without this, a gpus(n) test inherits the 1/N budget of whichever unmarked test
+        # happened to run before it in this process, which in a whole-suite run is all of them.
+        os.environ["DEVICE_MEMORY_FRACTION"] = "1"
+        if torch.cuda.is_available():
+            torch.cuda.set_per_process_memory_fraction(1.0)
     else:
         device = 0
         os.environ["CUDA_VISIBLE_DEVICES"] = str(device)

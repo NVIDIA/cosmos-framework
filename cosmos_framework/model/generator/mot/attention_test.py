@@ -2855,6 +2855,11 @@ def test_multiview_dense_attention_counts_a_single_view_sample_once(num_views: i
 
 @pytest.mark.L1
 @pytest.mark.GPU
+# The one marker the co-located runner reads: an unmarked test is capped at a fraction of the
+# device (conftest.pytest_runtest_setup, 1/8 by default) so that several can share it, and this
+# one's ~20GB of q/k/v and outputs does not fit in such a share of any GPU that satisfies the
+# 60GB floor below. gpus(1) hands it the whole device instead.
+@pytest.mark.gpus(1)
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="The attention kernels require a GPU.")
 @pytest.mark.skipif(not NATTEN_SUPPORTED, reason="merge_attentions requires NATTEN.")
 @pytest.mark.skipif(
