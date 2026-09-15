@@ -1,3 +1,19 @@
+# docs/quantization/tools — 目录索引与协作约定
+
+主仓库：**https://github.com/nvidia-cosmos/cosmos-int8-gemm**（私有，`main`）。各平台直接在这里推送代码与结果；结论按节号写进 `../int8_handoff.md`。
+
+| 目录 | 平台 | 内容 |
+| --- | --- | --- |
+| `cutlass_pertensor_gemm/` | GB200 sm_100a（`ARCH=110` 可编 Thor） | CUTLASS 示例 70 改 INT8 的 per-tensor GEMM + bf16/FP8/INT8 绝对吞吐（handoff §8.5） |
+| `cutlass_g128_gemm/` | GB200 sm_100a | INT8 g128 per-col：SM100 blockwise collective 的 shadow 补丁（fp32 scale/提升）、promotion 优化、结果（§8.6） |
+| `cutlass_int8_sm110/` | Thor sm_110a | per-tensor 对齐 FP8 + 功耗研究、g128/g256 分组缩放、8-warp 提升 kernel、微基准、汇总报告（§11） |
+| `cutlass_int8_sm90/` | H100 sm_90a | 自写 SM90 INT8 per-tensor 与 g128 blockwise kernel（§9） |
+| `deepgemm_int8_sm90/` | H100 sm_90a | DeepGEMM 结构的 INT8 g128 移植与提升/MMA 重叠实验（§9.4） |
+| `int8_sim_precision/` | 任意（模拟器） | 权重 scale 布局精度研究：per-col / 块 / 可分离 / g256（§3.9） |
+| `mufu_exp2_bench.*` | 任意 | 下方的 MUFU.EX2 / FFMA 微基准 |
+
+约定：每个工具目录自带 README（构建、运行、数据口径）与 `results/`；`logs/`、`build*/`、`__pycache__/` 用 `.gitignore` 排除；计时统一为冲 L2 后逐次 cudaEvent 取中位数（Thor 为热 A 冷 W 持续，见 §11）。
+
 # Microbenchmarks
 
 ## MUFU.EX2 (exp2) / FFMA throughput per SM per clock
