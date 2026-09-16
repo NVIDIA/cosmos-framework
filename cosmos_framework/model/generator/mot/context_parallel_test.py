@@ -1144,7 +1144,7 @@ def test_sample_lbl_hsdp_weighting_matches_global_sample_mean() -> None:
     dist.barrier()
 
 
-def _multiview_dense_cp_case(
+def _multiview_maskless_cp_case(
     samples: list[tuple[int, int, int]],
     *,
     items_per_sample: int,
@@ -1161,7 +1161,7 @@ def _multiview_dense_cp_case(
     CP=1, and the two runs agree exactly rather than to a tolerance -- no partial softmax is
     recombined across ranks, so there is no reassociation to lose bits to.
     """
-    from cosmos_framework.model.generator.mot.multiview_dense_attention import build_multiview_dense_plan
+    from cosmos_framework.model.generator.mot.multiview_maskless_attention import build_multiview_maskless_plan
 
     q_heads, kv_heads, head_dim, patch_h, patch_w = 8, 4, 128, 2, 2
     spatial = patch_h * patch_w
@@ -1215,7 +1215,7 @@ def _multiview_dense_cp_case(
         for getter, setter in ((get_und_seq, set_und_seq), (get_gen_seq, set_gen_seq)):
             setter(pack, getter(pack).detach().clone().requires_grad_(True))
 
-    plan = build_multiview_dense_plan(
+    plan = build_multiview_maskless_plan(
         [views for views, _, _ in samples for _ in range(items_per_sample)],
         [(views * frames, patch_h, patch_w) for views, frames, _ in samples for _ in range(items_per_sample)],
         device=device,
@@ -1235,7 +1235,7 @@ def _multiview_dense_cp_case(
             sample_lens=[und + gen for und, gen in zip(und_lens, gen_lens)],
             actual_len=start,
         )
-        info.multiview_dense = plan
+        info.multiview_maskless = plan
         return info
 
     total_gen = sum(gen_lens)
@@ -1275,7 +1275,7 @@ def _multiview_dense_cp_case(
         torch.testing.assert_close(_gathered(get_gen_seq(local_pack).grad), reference_grad, rtol=0, atol=0)
 
 
-def test_context_parallel_multiview_dense():
+def test_context_parallel_multiview_maskless():
     """The decomposition under context parallelism is the decomposition without it.
 
     Three layouts, because they take different paths through the plan: one sample of one item,
@@ -1295,13 +1295,15 @@ def test_context_parallel_multiview_dense():
     parallel_dims.build_meshes("cuda")
 
     case = dict(cp_size=cp_size, device=device, parallel_dims=parallel_dims)
-    _multiview_dense_cp_case([(3, 4, 16)], items_per_sample=1, per_view_captions=False, **case)
-    _multiview_dense_cp_case([(3, 4, 16), (2, 6, 8), (1, 5, 24)], items_per_sample=2, per_view_captions=False, **case)
-    _multiview_dense_cp_case([(3, 4, 18), (2, 6, 8)], items_per_sample=1, per_view_captions=True, **case)
+    _multiview_maskless_cp_case([(3, 4, 16)], items_per_sample=1, per_view_captions=False, **case)
+    _multiview_maskless_cp_case(
+        [(3, 4, 16), (2, 6, 8), (1, 5, 24)], items_per_sample=2, per_view_captions=False, **case
+    )
+    _multiview_maskless_cp_case([(3, 4, 18), (2, 6, 8)], items_per_sample=1, per_view_captions=True, **case)
     dist.barrier()
 
 
 if __name__ == "__main__":
     test_context_parallel_attention_two_way()
     test_get_context_parallel_sharded_sequence_three_way()
-    test_context_parallel_multiview_dense()
+    test_context_parallel_multiview_maskless()

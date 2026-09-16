@@ -33,10 +33,14 @@ from cosmos_framework.model.generator.mot.flex_attention import (
     build_multiview_block_mask,
 )
 from cosmos_framework.model.generator.mot.modeling_utils import TimestepEmbedder, has_noisy_tokens
-from cosmos_framework.model.generator.mot.multiview_attention import resolve_multiview_backend
-from cosmos_framework.model.generator.mot.multiview_dense_attention import (
-    MultiviewDensePlan,
-    build_multiview_dense_plan,
+from cosmos_framework.model.generator.mot.multiview_attention import (
+    reject_mixed_caption_layouts,
+    reject_samples_reading_no_caption,
+    resolve_multiview_backend,
+)
+from cosmos_framework.model.generator.mot.multiview_maskless_attention import (
+    MultiviewMasklessPlan,
+    build_multiview_maskless_plan,
 )
 from cosmos_framework.model.generator.utils.memory import MemoryState
 from cosmos_framework.data.generator.sequence_packing import ModalityData, PackedSequence
@@ -118,7 +122,7 @@ class Cosmos3VFMNetworkConfig(PretrainedConfig):
         self.predict_text_tokens = predict_text_tokens
         self.joint_attn_implementation = joint_attn_implementation
         # One object rather than five fields flattened out of it: the mask reads its scope and
-        # window, the folds read all of it through ``dense_unavailable_reason``, and a copy of
+        # window, the folds read all of it through ``maskless_unavailable_reason``, and a copy of
         # each on this config could disagree with the other.
         self.multiview_attention_config = multiview_attention_config or MultiviewAttentionConfig()
         self.temporal_compression_factor_vision = temporal_compression_factor_vision
@@ -207,10 +211,10 @@ class Cosmos3VFMNetwork(PreTrainedModel):
                 multiview.backend,
                 config=multiview,
             )
-            if self.multiview_backend == "dense":
+            if self.multiview_backend == "maskless":
                 log.info(
                     "Multiview attention is the maskless three-pass decomposition "
-                    f"(backend={multiview.backend!r} -> 'dense'). It builds "
+                    f"(backend={multiview.backend!r} -> 'maskless'). It builds "
                     "no mask, so it imposes no alignment on the GEN stream: its partitions cover "
                     "whatever padding the pack has."
                 )
@@ -1164,6 +1168,7 @@ class Cosmos3VFMNetwork(PreTrainedModel):
         packed_seq: PackedSequence,
         memory: MemoryState | None = None,
         video_temporal_causal: bool | None = None,
+        correct_cp_gradients: bool = False,
     ) -> dict:
         """
         Forward pass for Cosmos3VFMNetwork.
@@ -1176,6 +1181,7 @@ class Cosmos3VFMNetwork(PreTrainedModel):
                 ``OmniMoTModel.build_memory_state()``.
             video_temporal_causal: Per-call attention-mode override; ``None``
                 (default) uses the config-selected ``self.video_temporal_causal``.
+            correct_cp_gradients: Sum CP output gradients before FSDP/DDP averaging.
 
         Returns:
             dict with keys:
@@ -1320,7 +1326,15 @@ class Cosmos3VFMNetwork(PreTrainedModel):
             if packed_seq.vision is None and packed_seq.lidar is None:
                 raise ValueError("Multiview FlexAttention needs a vision or LiDAR generation stream.")
 
-            sensor_mask_items = _multiview_sensor_mask_items(packed_seq)
+            # Before anything is built from the captions -- the mask's items, the folds' plan --
+            # because which layout the pack is in decides how every one of its tokens is keyed
+            # against them, and a pack carrying both kinds has no one answer to give.
+            reject_mixed_caption_layouts(packed_seq.text_caption_view_ids)
+
+            sensor_mask_items = _multiview_sensor_mask_items(
+                packed_seq,
+                lidar_attends_captions=self.config.multiview_attention_config.mask.lidar_attends_captions,
+            )
             caption_mask_items = _multiview_caption_mask_items(packed_seq)
             if caption_mask_items is not None and get_caption_seq_offsets(input_pack) is None:
                 # The mask narrows which captions a GEN token reads; the pack's caption offsets
@@ -1334,22 +1348,24 @@ class Cosmos3VFMNetwork(PreTrainedModel):
                     "caption boundaries, so the captions would attend one another. Rebuild the "
                     "metadata via PackedSequence.prepare_sequence_pack_metadata."
                 )
+            reject_samples_reading_no_caption(sensor_mask_items)
 
-            if self.multiview_backend == "dense":
+            if self.multiview_backend == "maskless":
                 # The maskless folds' plan, asked for only when this run resolved to them.
                 # Decided here rather than in the attention path because the eligibility is a
                 # property of the batch -- its samples, its items, its captions -- which the
                 # packed tensors downstream no longer distinguish. A pack the folds cannot serve
                 # raises rather than taking the mask.
-                attention_meta.multiview_dense = _multiview_dense_geometry(
+                attention_meta.multiview_maskless = _multiview_maskless_geometry(
                     packed_seq,
+                    sensor_mask_items=sensor_mask_items,
                     caption_mask_items=caption_mask_items,
                     gen_seq_len=int(input_pack["full_only_seq"].shape[0]),
                     attention_scope=self.config.multiview_attention_config.mask.attention_scope,
                     device=input_pack["full_only_seq"].device,
                 )
             else:
-                # Every backend but "dense" is a mask, and only a mask has a geometry, so the two
+                # Every backend but "maskless" is a mask, and only a mask has a geometry, so the two
                 # are non-None together -- see resolve_multiview_backend.
                 assert self.flex_backend is not None
                 full_only_seq, full_q_offsets = get_full_only_seq(input_pack)
@@ -1431,6 +1447,7 @@ class Cosmos3VFMNetwork(PreTrainedModel):
         last_hidden_state = get_context_parallel_last_hidden_state(
             packed_outputs=packed_outputs,
             parallel_dims=sequence_shard_parallel_dims,
+            correct_cp_gradients=correct_cp_gradients,
         )  # [N_total,hidden_size]
         output_dict = dict()
 
@@ -1513,24 +1530,25 @@ def _annotate_multi_control_ranges(attention_meta: SplitInfo, packed_seq: Packed
     attention_meta.control_weights = weights
 
 
-_DENSE_REFUSAL = "dense_attention is set, but this batch cannot be served by the decomposition: "
-_DENSE_REFUSAL_TAIL = (
+_MASKLESS_REFUSAL = "backend='maskless' is set, but this batch cannot be served by the decomposition: "
+_MASKLESS_REFUSAL_TAIL = (
     " The decomposition and the attention_scope='decomposed' mask are deliberately different"
     " attention -- the two sensor passes overlap on the query's own (view, frame) cell -- so"
     " falling back to the mask would train a different distribution under the same config."
-    " Turn dense_attention off to use the mask, or keep this layout out of the batch."
+    " Move the backend off 'maskless' to use the mask, or keep this layout out of the batch."
 )
 
 
-def _multiview_dense_geometry(
+def _multiview_maskless_geometry(
     packed_seq: PackedSequence,
     *,
+    sensor_mask_items: Sequence[Sequence[SensorMaskItem]],
     caption_mask_items: Sequence[Sequence[CaptionMaskItem]] | None,
     gen_seq_len: int,
     attention_scope: str,
     device: torch.device,
-) -> MultiviewDensePlan:
-    """The plan :func:`~...attention.multiview_dense_attention` folds this batch by.
+) -> MultiviewMasklessPlan:
+    """The plan :func:`~...multiview_maskless_attention.multiview_maskless_gen_attention` folds this batch by.
 
     ``None`` only when the config did not ask for the decomposition, which is what keeps the
     FlexAttention mask. With the flag on, a batch the decomposition cannot serve raises rather
@@ -1539,14 +1557,14 @@ def _multiview_dense_geometry(
     fallback would train a distribution the config did not ask for, and would do it per pack,
     so a run could alternate between the two between steps with nothing to show for it but
     slightly noisier loss. Training and inference are treated alike --
-    the decomposition's backward is correct (see ``multiview_dense_attention``), so grad
+    the decomposition's backward is correct (see ``multiview_maskless_attention``), so grad
     mode is not one of the conditions below, and neither is the sample count: samples may differ
     in views, frames and resolution, and the plan carries the ragged case's index tensors.
 
     Every condition below is one the three-pass decomposition cannot express, not a preference,
     and each raises with the layout that tripped it. They are all properties of the *batch*: what
     the config rules out -- its scope, a temporal window, ``control_attends_sensor`` -- is settled
-    once by ``dense_unavailable_reason`` before a batch ever arrives, so none of it is re-checked
+    once by ``maskless_unavailable_reason`` before a batch ever arrives, so none of it is re-checked
     here.
 
     * at most one item per sensor stream per sample, and no control stream, action or sound.
@@ -1567,6 +1585,12 @@ def _multiview_dense_geometry(
 
     Args:
         packed_seq: the batch, which is what carries the item and caption structure.
+        sensor_mask_items: the same items the mask is described with, in the same order -- the
+            packer's, its vision items then its LiDAR ones per sample. Taken rather than
+            rebuilt, for the reason ``caption_mask_items`` is: what each item is to its sample's
+            captions (:data:`CaptionAccess`) is one fact about the batch, and the two backends
+            working it out separately is how the folds came to ignore
+            ``lidar_attends_captions`` while the mask honoured it.
         caption_mask_items: the batch's caption layout, or ``None`` where every sample packs a
             single caption. Taken rather than recomputed: the caller derives it for the mask
             already, and the two paths describing the same layout differently is a way for them
@@ -1589,8 +1613,8 @@ def _multiview_dense_geometry(
     vision, lidar = packed_seq.vision, packed_seq.lidar
     if vision is None and lidar is None:
         raise ValueError(
-            f"{_DENSE_REFUSAL}it carries neither a vision nor a LiDAR generation stream, so "
-            "there is no sensor grid to fold." + _DENSE_REFUSAL_TAIL
+            f"{_MASKLESS_REFUSAL}it carries neither a vision nor a LiDAR generation stream, so "
+            "there is no sensor grid to fold." + _MASKLESS_REFUSAL_TAIL
         )
 
     # Items per sample, per stream, in the order the packer lays a sample down: its vision items
@@ -1600,8 +1624,8 @@ def _multiview_dense_geometry(
     lidar_counts = (packed_seq.num_lidar_items_per_sample or [1] * num_samples) if lidar else [0] * num_samples
     if len(vision_counts) != num_samples or len(lidar_counts) != num_samples:
         raise ValueError(
-            f"{_DENSE_REFUSAL}it records {len(vision_counts)} vision and "
-            f"{len(lidar_counts)} LiDAR item counts for {num_samples} samples." + _DENSE_REFUSAL_TAIL
+            f"{_MASKLESS_REFUSAL}it records {len(vision_counts)} vision and "
+            f"{len(lidar_counts)} LiDAR item counts for {num_samples} samples." + _MASKLESS_REFUSAL_TAIL
         )
     # At most one item per stream per sample, and at least one overall. A sample owning a camera
     # item beside a range item is the joint case: the two sensors run at different rates, so the
@@ -1610,19 +1634,19 @@ def _multiview_dense_geometry(
     # serve; ``control_weights`` catches most of those and this catches the rest.
     if any(v > 2 or r > 2 or v + r < 1 for v, r in zip(vision_counts, lidar_counts)):
         raise ValueError(
-            f"{_DENSE_REFUSAL}its per-sample item counts are vision={list(vision_counts)}, "
+            f"{_MASKLESS_REFUSAL}its per-sample item counts are vision={list(vision_counts)}, "
             f"lidar={list(lidar_counts)}. Each sample takes at most one item per stream beside "
             "its control item, and at least one overall; more is an image-editing layout this "
-            "path does not serve." + _DENSE_REFUSAL_TAIL
+            "path does not serve." + _MASKLESS_REFUSAL_TAIL
         )
 
     views_per_vision_item = packed_seq.num_views_per_vision_item or []
     if vision is not None and len(views_per_vision_item) != len(vision.token_shapes):
         # Camera items need the per-camera VAE metadata to say where one view's frames end.
         raise ValueError(
-            f"{_DENSE_REFUSAL}it records {len(views_per_vision_item)} per-item view counts "
+            f"{_MASKLESS_REFUSAL}it records {len(views_per_vision_item)} per-item view counts "
             f"for {len(vision.token_shapes)} vision items, so there is nothing to say where one "
-            "view's frames end." + _DENSE_REFUSAL_TAIL
+            "view's frames end." + _MASKLESS_REFUSAL_TAIL
         )
 
     num_views: list[int] = []
@@ -1667,6 +1691,15 @@ def _multiview_dense_geometry(
     # caller built for these same items before reaching here, and again by the plan builder.
     # Captions as (view_id, num_tokens) per sample, the two parallel lists the packer records.
     # None keeps the gen->und pass on its per-sample form, which is what a single caption wants.
+    # Flattened in the same order this walked the items above -- per sample, its vision items
+    # then its LiDAR ones -- which is the order the packer lays a sample down and the order
+    # _multiview_sensor_mask_items builds in. The count check is what holds the two together.
+    caption_accesses = [item.caption_access for sample_items in sensor_mask_items for item in sample_items]
+    if len(caption_accesses) != len(num_views):
+        raise ValueError(
+            f"{_MASKLESS_REFUSAL}the mask describes {len(caption_accesses)} items for this batch and "
+            f"the folds derive {len(num_views)}; the two read the same pack and must agree." + _MASKLESS_REFUSAL_TAIL
+        )
     captions = (
         [
             list(zip(view_ids, lens))
@@ -1675,7 +1708,7 @@ def _multiview_dense_geometry(
         if caption_mask_items is not None
         else None
     )
-    return build_multiview_dense_plan(
+    return build_multiview_maskless_plan(
         num_views,
         token_shapes,
         device=device,
@@ -1685,6 +1718,10 @@ def _multiview_dense_geometry(
         view_axis=view_axis,
         captions=captions,
         attention_scope=attention_scope,
+        # The items' own account of themselves, which the mask is built from too. A
+        # "no_captions" item's group takes an empty run of captions under the per-view layout
+        # and leaves the gen->und pass under the sample-level one.
+        caption_access=caption_accesses,
         # The stream's padded length, which only the built pack knows: the plan's partitions
         # cover the padding rather than stopping at the batch's real tokens, so that the folds
         # and the pack share one set of coordinates.
@@ -1703,6 +1740,9 @@ def _multiview_caption_mask_items(packed_seq: PackedSequence) -> list[list[Capti
     The two lists the packer records run in step by construction -- ``pack_text_tokens_per_view``
     appends to both -- so this pairs them positionally and lets the mask builder check the
     captions against the sample's actual camera views.
+
+    That the pack is in one layout rather than both is settled before this is reached, by
+    :func:`reject_mixed_caption_layouts` in the caller.
     """
     caption_lens = packed_seq.text_caption_lens
     caption_view_ids = packed_seq.text_caption_view_ids
@@ -1722,7 +1762,9 @@ def _multiview_caption_mask_items(packed_seq: PackedSequence) -> list[list[Capti
     ]
 
 
-def _multiview_sensor_mask_items(packed_seq: PackedSequence) -> list[list[SensorMaskItem]]:
+def _multiview_sensor_mask_items(
+    packed_seq: PackedSequence, *, lidar_attends_captions: bool = True
+) -> list[list[SensorMaskItem]]:
     """Describe each sample to the multiview mask as its vision items, then its LiDAR items.
 
     The packer lays a sample out in exactly that order, so walking the two streams sample by
@@ -1734,8 +1776,12 @@ def _multiview_sensor_mask_items(packed_seq: PackedSequence) -> list[list[Sensor
     since the streams run at different latent rates. A batch with no LiDAR, or a LiDAR-only
     batch, leaves every item on view 0, so its mask is bit-identical to the single-stream
     one. That same "not one of the cameras" reading is why LiDAR items are the ones marked
-    ``reads_every_caption``: no caption is written for their view, so under the per-view
-    caption layout they read every camera's instead.
+    ``caption_access="all_captions"``: no caption is written for their view, so they read every
+    camera's instead. ``lidar_attends_captions=False`` makes that ``"no_captions"``, cutting them
+    off from the text entirely: the gen->und pass drops for their tokens, leaving a sweep
+    conditioned on the cameras and its own control stream alone. The camera items keep the
+    default ``"camera"`` either way, which is also what says the per-view captions have to cover
+    their views and not the sweep's.
 
     Control items are marked per stream, not per sample: within each of the two streams,
     every item but the last is a control item conditioning the one that follows it, which
@@ -1800,6 +1846,8 @@ def _multiview_sensor_mask_items(packed_seq: PackedSequence) -> list[list[Sensor
                         view_offset=0,
                         is_control=item_in_stream < num_vision - 1,
                         seconds_per_frame=vision.seconds_per_frame[vision_cursor],
+                        # One of the rig's cameras, which is what the captions are written for.
+                        caption_access="camera",
                     )
                 )
                 vision_cursor += 1
@@ -1814,10 +1862,9 @@ def _multiview_sensor_mask_items(packed_seq: PackedSequence) -> list[list[Sensor
                         is_control=item_in_stream < num_lidar - 1,
                         seconds_per_frame=lidar.seconds_per_frame[lidar_cursor],
                         # A sweep is not one of the rig's cameras: it fuses the whole rig, so
-                        # under per-view captions every camera's caption describes part of what
-                        # it sees and it reads all of them. Ignored when the sample packs a
-                        # single caption, which every item reaches anyway.
-                        reads_every_caption=True,
+                        # every camera's caption describes part of what it sees and it reads all
+                        # of them -- or, cut off from the text, none.
+                        caption_access="all_captions" if lidar_attends_captions else "no_captions",
                     )
                 )
                 lidar_cursor += 1

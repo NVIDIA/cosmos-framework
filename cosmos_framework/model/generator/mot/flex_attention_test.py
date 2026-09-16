@@ -15,6 +15,9 @@ from torch.nn.attention.flex_attention import BlockMask, create_block_mask
 
 from cosmos_framework.configs.base.defaults.multiview_attention import (
     ATTENTION_SCOPES,
+    CAPTION_SCOPE_ALL,
+    CAPTION_SCOPE_NONE,
+    CAPTION_SCOPE_SAME_VIEW,
     AttentionScope,
     MultiviewAttentionConfig,
     MultiviewAttentionMaskConfig,
@@ -39,6 +42,10 @@ from cosmos_framework.model.generator.mot.flex_attention import (
     flex_attention,
     resolve_flex_backend,
     triton_backend_block_size,
+)
+from cosmos_framework.model.generator.mot.multiview_attention import (
+    reject_mixed_caption_layouts,
+    reject_samples_reading_no_caption,
 )
 from cosmos_framework.data.generator.sequence_packing.runtime import (
     SequencePack,
@@ -73,6 +80,27 @@ _NOISY_SCOPES = pytest.mark.parametrize("attention_scope", ATTENTION_SCOPES)
 # block both backends step for the UND prefix.
 _GEN_ALIGNMENT = math.lcm(_TRITON_BACKEND.full_seq_alignment, _FLASH_BACKEND.full_seq_alignment)
 _UND_ALIGNMENT = math.lcm(_TRITON_BACKEND.causal_seq_alignment, _FLASH_BACKEND.causal_seq_alignment)
+
+
+def _sensor_item(**overrides) -> SensorMaskItem:
+    """A :class:`SensorMaskItem` with neutral values for whatever a case does not vary.
+
+    The type takes no defaults, deliberately: every field changes what the mask admits, so a
+    production caller states each one. A case here is stating a *shape*, and spelling all seven
+    at each of these would bury the one or two it varies, so the neutral values live in one
+    place -- a single camera on the rig's own view axis, a target rather than a control stream,
+    a frame a second, and a camera as far as the captions go.
+    """
+    return SensorMaskItem(
+        **{
+            "num_views": 1,
+            "view_offset": 0,
+            "is_control": False,
+            "seconds_per_frame": 1.0,
+            "caption_access": "camera",
+            **overrides,
+        }
+    )
 
 
 @pytest.mark.L0
@@ -133,7 +161,10 @@ def _metadata_from_tokens(
     token, ``-1`` for a sample-level caption and for UND padding. Left ``None``, every UND
     token is a sample-level caption, which is the layout without per-view captions. A GEN
     token opts into reading every caption of its sample -- what a LiDAR sweep does -- with
-    ``every_caption`` in its descriptor.
+    ``every_caption`` in its descriptor, and out of reading any caption at all with
+    ``no_captions``. A token saying neither is a camera, which resolves the way
+    ``build_multiview_flex_metadata`` resolves one: reading every caption where the UND stream
+    is a single sample-level one, and only its own view's where the captions are per-view.
 
     ``attention_scope`` is typed loosely here so the case below that hands it an
     unrecognised scope can reach the metadata's own check.
@@ -162,12 +193,25 @@ def _metadata_from_tokens(
         dtype=torch.float32,
         device=device,
     )
+    per_view_captions = und_caption_views is not None
     if und_caption_views is None:
         und_caption_views = [-1] * num_und
     assert len(und_caption_views) == num_und
-    reads_every_caption = torch.tensor(
-        [False] * num_und + [tok.get("every_caption", False) for tok in tokens] + [False] * pad,
-        dtype=torch.bool,
+    # A camera's scope is the layout's: one sample-level caption is read whole, per-view
+    # captions only where the view matches. ALL on the UND prefix and on padding, the permissive
+    # value this field pads with -- it is read on the query side only.
+    camera_scope = CAPTION_SCOPE_SAME_VIEW if per_view_captions else CAPTION_SCOPE_ALL
+
+    def _scope(tok: dict) -> int:
+        if tok.get("no_captions", False):
+            return CAPTION_SCOPE_NONE
+        if tok.get("every_caption", False):
+            return CAPTION_SCOPE_ALL
+        return camera_scope
+
+    caption_scope = torch.tensor(
+        [CAPTION_SCOPE_ALL] * num_und + [_scope(tok) for tok in tokens] + [CAPTION_SCOPE_ALL] * pad,
+        dtype=torch.long,
         device=device,
     )  # [num_und+seq_len]
     return FlexMetadata(
@@ -190,7 +234,7 @@ def _metadata_from_tokens(
         attention_scope=cast(AttentionScope, attention_scope),
         control_attends_sensor=control_attends_sensor,
         decomposed_temporal_window_seconds=decomposed_temporal_window_seconds,
-        reads_every_caption=reads_every_caption,
+        caption_scope=caption_scope,
     )
 
 
@@ -594,10 +638,10 @@ def test_resolve_flex_backend_rejects_an_unknown_preference() -> None:
 
 
 @pytest.mark.L0
-def test_resolve_flex_backend_rejects_dense_as_a_geometry() -> None:
-    """``"dense"`` names an attention pattern; asking this function for it is a category error."""
-    with pytest.raises(ValueError, match="'dense' is an attention pattern rather than a mask geometry"):
-        resolve_flex_backend(torch.device("cpu"), "dense")
+def test_resolve_flex_backend_rejects_maskless_as_a_geometry() -> None:
+    """``"maskless"`` names an attention pattern; asking this function for it is a category error."""
+    with pytest.raises(ValueError, match="'maskless' is an attention pattern rather than a mask geometry"):
+        resolve_flex_backend(torch.device("cpu"), "maskless")
 
 
 @pytest.mark.L0
@@ -619,6 +663,42 @@ def test_build_block_mask_covers_padding_only_blocks(backend: FlexBackend) -> No
     real_q = torch.tensor([True, False])
     real_kv = real_q.repeat_interleave(q_block // kv_block)
     assert torch.equal(computed, real_q.unsqueeze(-1) == real_kv.unsqueeze(0))
+
+
+@pytest.mark.L0
+@_GEOMETRIES
+@pytest.mark.parametrize("caption_scope", [True, False])
+def test_build_block_mask_skips_the_caption_block_for_a_text_free_stream(
+    backend: FlexBackend, caption_scope: bool
+) -> None:
+    """The block collapsing agrees with the predicate about a stream that reads no caption.
+
+    The two are built from the same fields but reduced differently -- the kernel calls
+    ``mask_mod`` per pair, the collapsing evaluates one representative per run -- so the
+    gen->und quadrant going empty has to show up as a skipped block, not just as a masked pair.
+    A disagreement would not raise: a block the collapsing calls fully unmasked is one the
+    kernel never calls ``mask_mod`` on at all.
+    """
+    q_block, kv_block = backend.block_size
+    num_und = kv_block
+    token = dict(s=0, t=0, v=1, noisy=True, every_caption=True)
+    if not caption_scope:
+        token["no_captions"] = True
+    metadata = _metadata_from_tokens(
+        [token] * q_block,
+        seq_len=q_block,
+        und_samples=_und_samples(num_und, length=num_und),
+    )
+    num_kv_blocks = metadata.seq_len // kv_block
+
+    block_mask = build_block_mask(metadata, torch.device("cpu"), backend.block_size)
+    assert block_mask.full_kv_num_blocks is not None
+    computed = _blocks_to_dense(block_mask.kv_num_blocks, block_mask.kv_indices, 1, num_kv_blocks) | _blocks_to_dense(
+        block_mask.full_kv_num_blocks, block_mask.full_kv_indices, 1, num_kv_blocks
+    )
+    # Key block 0 is the UND stream; the rest are the sweep's own tokens, which it reads either way.
+    assert bool(computed[0, 0]) is caption_scope
+    assert computed[0, 1:].all()
 
 
 @pytest.mark.L0
@@ -1039,6 +1119,77 @@ def test_per_view_captions_let_lidar_read_every_caption() -> None:
     assert not m[lidar, 4], "but not the UND padding"
 
 
+# The same sample with the sweep cut off from the text, which is what
+# ``lidar_attends_captions=False`` produces.
+_TEXT_FREE_LIDAR_TOKENS = [
+    dict(token, no_captions=True) if token.get("every_caption") else token for token in _PER_VIEW_CAPTION_TOKENS
+]
+
+
+@pytest.mark.L0
+def test_lidar_that_attends_no_captions_reads_none_of_them() -> None:
+    """``CAPTION_SCOPE_NONE`` drops the gen->und pass for the sweep entirely."""
+    metadata = _metadata_from_tokens(
+        _TEXT_FREE_LIDAR_TOKENS,
+        und_samples=[0, 0, 0, 0, -1],
+        und_caption_views=_PER_VIEW_CAPTION_UND,
+    )
+    m = _mask_mod_to_dense(metadata)
+
+    lidar = 3
+    num_und = metadata.num_und
+    assert not m[lidar, :num_und].any(), "the sweep reads no caption of its sample"
+    # It is cut off from the text, not from the rig: the sensor rules are untouched, so its
+    # row is non-empty and no softmax goes empty.
+    assert m[lidar, num_und:].any(), "the sweep still reads the sensor stream"
+
+
+@pytest.mark.L0
+def test_lidar_that_attends_no_captions_leaves_the_cameras_reading_theirs() -> None:
+    """The flag is per item: cutting the sweep off does not touch the camera streams."""
+    metadata = _metadata_from_tokens(
+        _TEXT_FREE_LIDAR_TOKENS,
+        und_samples=[0, 0, 0, 0, -1],
+        und_caption_views=_PER_VIEW_CAPTION_UND,
+    )
+    m = _mask_mod_to_dense(metadata)
+
+    view_0_camera, view_1_camera = 0, 1
+    assert m[view_0_camera, 0:2].all() and not m[view_0_camera, 2:4].any()
+    assert m[view_1_camera, 2:4].all() and not m[view_1_camera, 0:2].any()
+
+
+@pytest.mark.L0
+def test_lidar_that_attends_no_captions_skips_the_sample_level_caption_too() -> None:
+    """The gate is on the query, so the one-caption layout drops for the sweep as well."""
+    metadata = _metadata_from_tokens(
+        _TEXT_FREE_LIDAR_TOKENS,
+        und_samples=[0, 0, 0, 0, -1],
+        und_caption_views=None,  # every UND token is a sample-level caption
+    )
+    m = _mask_mod_to_dense(metadata)
+
+    assert not m[3, :4].any(), "the sweep reads no part of the rig's single caption"
+    assert m[:3, 0:4].all(), "every camera token still reads the whole caption"
+
+
+@pytest.mark.L0
+def test_metadata_groups_separate_a_text_free_lidar_from_a_reading_one() -> None:
+    """Two sweeps agreeing on every other field still need their own runs.
+
+    The block collapsing evaluates the predicate once per run, so a run holding both would
+    answer for both -- and they differ exactly on the gen->und quadrant.
+    """
+    tokens = [
+        {"s": 0, "t": 0, "v": 1, "noisy": True, "every_caption": True},
+        {"s": 0, "t": 0, "v": 1, "noisy": True, "every_caption": True, "no_captions": True},
+    ]
+    metadata = _metadata_from_tokens(tokens, und_samples=[0, 0])
+    group_id, _representatives = _metadata_groups(metadata, torch.device("cpu"))
+
+    assert group_id[metadata.num_und] != group_id[metadata.num_und + 1]
+
+
 @pytest.mark.L0
 def test_per_view_captions_are_still_blocked_across_samples() -> None:
     """View scoping narrows within a sample; it never reaches another sample's matching view."""
@@ -1245,7 +1396,65 @@ def test_mask_items_mark_lidar_as_reading_every_caption() -> None:
     items = _multiview_mask_items_for_test(_mask_items_pack(num_views=2, with_lidar=True))
 
     # The sample reads [camera, camera, lidar, lidar], the order the packer lays down.
-    assert [item.reads_every_caption for item in items[0]] == [False, False, True, True]
+    assert [item.caption_access for item in items[0]] == ["camera", "camera", "all_captions", "all_captions"]
+
+
+@pytest.mark.L0
+def test_mask_items_cut_lidar_off_from_the_captions_when_asked() -> None:
+    """``lidar_attends_captions=False`` marks only the LiDAR items."""
+    pytest.importorskip("transformers", reason="cosmos3_vfm_network requires the Cosmos3 network dependencies.")
+    from cosmos_framework.model.generator.mot.cosmos3_vfm_network import _multiview_sensor_mask_items
+
+    pack = _mask_items_pack(num_views=2, with_lidar=True)
+    items = _multiview_sensor_mask_items(pack, lidar_attends_captions=False)[0]
+
+    # The sweeps stop reading captions; the cameras stay cameras, which is what keeps the
+    # per-view coverage check asking about their views and not the sweeps'.
+    assert [item.caption_access for item in items] == ["camera", "camera", "no_captions", "no_captions"]
+
+
+def _lidar_item(caption_scope: bool) -> SensorMaskItem:
+    """One range clip, on its own view axis past the cameras."""
+    return _sensor_item(
+        token_shape=(1, 1, 1),
+        condition_mask=torch.ones(1),
+        num_views=1,
+        view_offset=1,
+        caption_access="all_captions" if caption_scope else "no_captions",
+    )
+
+
+@pytest.mark.L0
+def test_a_sample_whose_every_item_reads_no_caption_is_refused() -> None:
+    """A LiDAR-only sample under the flag would train unconditioned, which is a config error.
+
+    Refused before a backend is chosen, so the answer does not depend on which one the run
+    resolved to: the mask would express it by masking every gen->und edge away and the folds by
+    leaving that pass no rows, and both are silent.
+    """
+    with pytest.raises(ValueError, match="no text conditioning at all"):
+        reject_samples_reading_no_caption([[_lidar_item(caption_scope=False)]])
+
+
+@pytest.mark.L0
+def test_a_sample_keeping_one_caption_reader_is_allowed() -> None:
+    """The joint pack the flag is for: the cameras still read their captions, so it stands."""
+    camera = _sensor_item(token_shape=(2, 1, 1), condition_mask=torch.ones(2), num_views=2)
+    reject_samples_reading_no_caption([[camera, _lidar_item(caption_scope=False)]])
+
+
+@pytest.mark.L0
+def test_a_lidar_only_sample_is_allowed_while_it_still_reads_its_captions() -> None:
+    """The refusal is about the flag, not about LiDAR: the default layout is untouched."""
+    reject_samples_reading_no_caption([[_lidar_item(caption_scope=True)]])
+
+
+@pytest.mark.L0
+def test_mask_items_let_lidar_attend_the_captions_by_default() -> None:
+    """The default is the existing behaviour: every item reads its sample's captions."""
+    items = _multiview_mask_items_for_test(_mask_items_pack(num_views=2, with_lidar=True))
+
+    assert all(item.caption_access != "no_captions" for item in items[0])
 
 
 @pytest.mark.L0
@@ -1267,6 +1476,52 @@ def test_caption_items_carry_the_packed_caption_layout() -> None:
 
     caption_items = _multiview_caption_items_for_test(pack)
     assert caption_items == [[CaptionMaskItem(view_id=0, num_tokens=4), CaptionMaskItem(view_id=1, num_tokens=3)]]
+
+
+@pytest.mark.L0
+@pytest.mark.parametrize(
+    "caption_view_ids",
+    [
+        pytest.param([[-1], [-1]], id="every-sample-level"),
+        # A single-camera sample packs one caption and still names its view, which is the
+        # per-view layout rather than the sample-level one.
+        pytest.param([[0, 1], [0]], id="every-per-view"),
+    ],
+)
+def test_a_uniform_caption_layout_is_accepted(caption_view_ids) -> None:
+    """Both layouts pass on their own; only carrying the two at once is refused."""
+    reject_mixed_caption_layouts(caption_view_ids)
+
+
+@pytest.mark.L0
+def test_a_pack_captioned_both_ways_is_refused() -> None:
+    """A pack is captioned per view or per sample, and the answer is the whole pack's.
+
+    Nothing that packs a sequence produces this -- ``_apply_per_view_caption_plan`` sets the
+    layout for every sample of the batch or none of them -- so this pins the refusal where a
+    hand-built or future pack would meet it, rather than letting the folds serve the
+    sample-level caption to every view while the mask refuses that sample outright.
+    """
+    with pytest.raises(ValueError, match="mixes caption layouts"):
+        reject_mixed_caption_layouts([[-1], [0, 1]])
+
+
+@pytest.mark.L0
+def test_a_sample_captioned_both_ways_is_refused() -> None:
+    """The same mix inside one sample, which no caption list should be able to state."""
+    with pytest.raises(ValueError, match="carries both a sample-level caption"):
+        reject_mixed_caption_layouts([[-1, 0]])
+
+
+@pytest.mark.L0
+def test_a_sample_with_no_caption_states_no_layout() -> None:
+    """An empty caption list is neither layout, so it is not what makes a pack mixed.
+
+    Whether a sample may carry no caption at all is the backends' own question -- the mask
+    refuses it in ``_build_und_view_ids`` -- and answering it here would report the wrong
+    reason for it.
+    """
+    reject_mixed_caption_layouts([[-1], []])
 
 
 @pytest.mark.L0
@@ -1403,8 +1658,21 @@ def test_mask_items_reject_a_pack_with_neither_stream() -> None:
         _multiview_mask_items_for_test(PackedSequence(sample_lens=[1], vision=None, lidar=None))
 
 
-def _multiview_dense_geometry_for_test(packed_seq: PackedSequence, **kwargs):
-    """``_multiview_dense_geometry`` over ``packed_seq``, on CPU unless a test says otherwise.
+def _sensor_mask_items_if_derivable(packed_seq: PackedSequence):
+    """The pack's mask items, or ``[]`` where the pack is too malformed to describe."""
+    from cosmos_framework.model.generator.mot.cosmos3_vfm_network import _multiview_sensor_mask_items
+
+    try:
+        return _multiview_sensor_mask_items(packed_seq)
+    except (ValueError, IndexError):
+        # IndexError as well as ValueError: a pack whose per-item metadata is shorter than its
+        # item counts runs off the end of that list rather than being checked for, which is one
+        # of the malformed shapes these cases hand over.
+        return []
+
+
+def _multiview_maskless_geometry_for_test(packed_seq: PackedSequence, **kwargs):
+    """``_multiview_maskless_geometry`` over ``packed_seq``, on CPU unless a test says otherwise.
 
     The GEN length defaults to exactly the tokens the batch's items describe -- a pack with no
     padding -- because these tests are about eligibility rather than about what the partitions
@@ -1413,15 +1681,22 @@ def _multiview_dense_geometry_for_test(packed_seq: PackedSequence, **kwargs):
     pytest.importorskip("transformers", reason="cosmos3_vfm_network requires the Cosmos3 network dependencies.")
     from cosmos_framework.model.generator.mot.cosmos3_vfm_network import (
         _multiview_caption_mask_items,
-        _multiview_dense_geometry,
+        _multiview_maskless_geometry,
     )
 
     options: dict = dict(
         device=torch.device("cpu"),
         attention_scope="decomposed",
-        # Derived here the way ``forward`` derives it, so these tests describe the same layout
-        # the production caller would hand in.
+        # Both derived here the way ``forward`` derives them, so these tests describe the same
+        # batch the production caller would hand in -- and, for the items, hand to the mask too.
         caption_mask_items=_multiview_caption_mask_items(packed_seq),
+        # A pack these tests expect the folds to refuse can be malformed enough that the mask's
+        # own item builder refuses it first -- no per-camera view metadata, no stream at all. In
+        # ``forward`` that is the error the run gets, and rightly; here it would hide the
+        # folds' own account of the pack, which is what each of these cases is about. So the
+        # items come along when they can be built, and the folds answer for the pack when they
+        # cannot: their structural refusals all fire before anything reads the items.
+        sensor_mask_items=_sensor_mask_items_if_derivable(packed_seq),
         gen_seq_len=sum(
             int(latent_t) * int(patch_h) * int(patch_w)
             for modality in (packed_seq.vision, packed_seq.lidar)
@@ -1430,10 +1705,10 @@ def _multiview_dense_geometry_for_test(packed_seq: PackedSequence, **kwargs):
         ),
     )
     options.update(kwargs)
-    return _multiview_dense_geometry(packed_seq, **options)
+    return _multiview_maskless_geometry(packed_seq, **options)
 
 
-def _multiview_dense_pack(**overrides) -> PackedSequence:
+def _multiview_maskless_pack(**overrides) -> PackedSequence:
     """The one pack shape the decomposition accepts: one sample, one camera item, nothing else."""
     fields = dict(
         sample_lens=[1],
@@ -1452,9 +1727,9 @@ def _multiview_dense_pack(**overrides) -> PackedSequence:
 
 @pytest.mark.L0
 @torch.no_grad()
-def test_multiview_dense_geometry_reads_the_single_camera_item_it_accepts() -> None:
+def test_multiview_maskless_geometry_reads_the_single_camera_item_it_accepts() -> None:
     """The accepted pack yields the item's own view count and token shape, unchanged."""
-    plan = _multiview_dense_geometry_for_test(_multiview_dense_pack())
+    plan = _multiview_maskless_geometry_for_test(_multiview_maskless_pack())
 
     assert plan is not None
     assert plan.num_views == (3,)
@@ -1468,7 +1743,7 @@ def test_multiview_dense_geometry_reads_the_single_camera_item_it_accepts() -> N
 
 
 @pytest.mark.L0
-def test_multiview_dense_geometry_accepts_a_training_step() -> None:
+def test_multiview_maskless_geometry_accepts_a_training_step() -> None:
     """Grad mode is not a gate: the decomposition's backward is correct, so training takes it too.
 
     It was a gate while the merged branches' gradients were wrong. Both fold-backs now go
@@ -1476,7 +1751,7 @@ def test_multiview_dense_geometry_accepts_a_training_step() -> None:
     float64 reference, so the only thing left deciding this batch is its shape.
     """
     with torch.enable_grad():
-        assert _multiview_dense_geometry_for_test(_multiview_dense_pack()) is not None
+        assert _multiview_maskless_geometry_for_test(_multiview_maskless_pack()) is not None
 
 
 @pytest.mark.L0
@@ -1489,14 +1764,14 @@ def test_multiview_dense_geometry_accepts_a_training_step() -> None:
         pytest.param(dict(num_views_per_vision_item=None), "no per-camera view counts", id="no_view_metadata"),
     ],
 )
-def test_multiview_dense_geometry_refuses_a_pack_it_cannot_express(overrides: dict, reason: str) -> None:
+def test_multiview_maskless_geometry_refuses_a_pack_it_cannot_express(overrides: dict, reason: str) -> None:
     """A pack the decomposition cannot serve raises, rather than quietly taking the mask.
 
     The two are deliberately different attention, so a fallback would train a distribution the
     config did not ask for -- and per pack, so a run could alternate between them between steps.
     """
     with pytest.raises(ValueError, match="cannot be served by the decomposition"):
-        _multiview_dense_geometry_for_test(_multiview_dense_pack(**overrides))
+        _multiview_maskless_geometry_for_test(_multiview_maskless_pack(**overrides))
 
 
 def _lidar_stream(token_shapes: list[tuple[int, int, int]], seconds_per_frame: float = 1.0) -> ModalityData:
@@ -1511,15 +1786,15 @@ def _lidar_stream(token_shapes: list[tuple[int, int, int]], seconds_per_frame: f
 
 @pytest.mark.L0
 @torch.no_grad()
-def test_multiview_dense_geometry_accepts_a_lidar_only_sample() -> None:
+def test_multiview_maskless_geometry_accepts_a_lidar_only_sample() -> None:
     """A sweep is one "view" over its own grid, which the folds take on the same terms as a camera.
 
     The plan is per-sample and the passes do not read which sensor produced a token, so a range
     item needs nothing of the attention path -- only that the gate stop refusing it. The view
     count is 1, matching what ``_multiview_sensor_mask_items`` gives a range item.
     """
-    plan = _multiview_dense_geometry_for_test(
-        _multiview_dense_pack(
+    plan = _multiview_maskless_geometry_for_test(
+        _multiview_maskless_pack(
             vision=None,
             num_vision_items_per_sample=None,
             num_views_per_vision_item=None,
@@ -1536,7 +1811,7 @@ def test_multiview_dense_geometry_accepts_a_lidar_only_sample() -> None:
 
 @pytest.mark.L0
 @torch.no_grad()
-def test_multiview_dense_geometry_reads_a_mixed_camera_and_lidar_batch() -> None:
+def test_multiview_maskless_geometry_reads_a_mixed_camera_and_lidar_batch() -> None:
     """Camera samples and range samples in one batch, each described on its own terms.
 
     The packer lays a sample down as its vision items then its LiDAR ones, so walking the two
@@ -1546,7 +1821,7 @@ def test_multiview_dense_geometry_reads_a_mixed_camera_and_lidar_batch() -> None
     """
     # Two range samples, on deliberately different grids: with one, a walk that ignored the
     # cursor and always read the first item would still pass.
-    pack = _multiview_dense_pack(
+    pack = _multiview_maskless_pack(
         sample_lens=[1, 1, 1],
         num_vision_items_per_sample=[1, 0, 0],
         num_views_per_vision_item=[3],
@@ -1554,7 +1829,7 @@ def test_multiview_dense_geometry_reads_a_mixed_camera_and_lidar_batch() -> None
         num_lidar_items_per_sample=[0, 1, 1],
     )
 
-    plan = _multiview_dense_geometry_for_test(pack)
+    plan = _multiview_maskless_geometry_for_test(pack)
 
     assert plan is not None
     assert plan.num_views == (3, 1, 1)
@@ -1564,7 +1839,7 @@ def test_multiview_dense_geometry_reads_a_mixed_camera_and_lidar_batch() -> None
 
 @pytest.mark.L0
 @torch.no_grad()
-def test_multiview_dense_geometry_takes_a_joint_camera_and_lidar_sample() -> None:
+def test_multiview_maskless_geometry_takes_a_joint_camera_and_lidar_sample() -> None:
     """One sample owning both streams is served by quantising capture time onto the camera grid.
 
     Camera frames and LiDAR sweeps do not correspond by index -- 7.5Hz latent frames against
@@ -1572,7 +1847,7 @@ def test_multiview_dense_geometry_takes_a_joint_camera_and_lidar_sample() -> Non
     real time instead. The camera item comes first, which makes it the anchor, so its tokens
     keep the frame indices a camera-only sample gives them.
     """
-    pack = _multiview_dense_pack(
+    pack = _multiview_maskless_pack(
         vision=ModalityData(
             tokens=[torch.zeros(1)],  # list[[1]]
             token_shapes=[(4, 1, 1)],
@@ -1584,7 +1859,7 @@ def test_multiview_dense_geometry_takes_a_joint_camera_and_lidar_sample() -> Non
         num_lidar_items_per_sample=[1],
     )
 
-    plan = _multiview_dense_geometry_for_test(pack)
+    plan = _multiview_maskless_geometry_for_test(pack)
 
     assert plan is not None
     assert plan.items_per_sample == (2,)
@@ -1598,7 +1873,7 @@ def test_multiview_dense_geometry_takes_a_joint_camera_and_lidar_sample() -> Non
 
 @pytest.mark.L0
 @torch.no_grad()
-def test_multiview_dense_geometry_takes_a_transfer_sample() -> None:
+def test_multiview_maskless_geometry_takes_a_transfer_sample() -> None:
     """Two items on a stream is a control conditioning the target that follows it.
 
     That is the convention ``_multiview_sensor_mask_items`` marks ``is_control`` by, and the
@@ -1606,7 +1881,7 @@ def test_multiview_dense_geometry_takes_a_transfer_sample() -> None:
     cross-instant one. A view then spans two runs of the packed stream, which is what costs the
     same-view pass its gather.
     """
-    pack = _multiview_dense_pack(
+    pack = _multiview_maskless_pack(
         vision=ModalityData(
             tokens=[torch.zeros(1), torch.zeros(1)],  # list[[1]]
             token_shapes=[(6, 2, 3), (6, 2, 3)],
@@ -1617,7 +1892,7 @@ def test_multiview_dense_geometry_takes_a_transfer_sample() -> None:
         num_views_per_vision_item=[3, 3],
     )
 
-    plan = _multiview_dense_geometry_for_test(pack)
+    plan = _multiview_maskless_geometry_for_test(pack)
 
     assert plan is not None
     assert plan.is_control == (True, False), "The first item of a stream conditions the second."
@@ -1628,9 +1903,9 @@ def test_multiview_dense_geometry_takes_a_transfer_sample() -> None:
 
 @pytest.mark.L0
 @torch.no_grad()
-def test_multiview_dense_geometry_takes_a_joint_transfer_sample() -> None:
+def test_multiview_maskless_geometry_takes_a_joint_transfer_sample() -> None:
     """WSM control + RGB target beside HD-map control + LiDAR target: four items, two axes."""
-    pack = _multiview_dense_pack(
+    pack = _multiview_maskless_pack(
         vision=ModalityData(
             tokens=[torch.zeros(1), torch.zeros(1)],  # list[[1]]
             token_shapes=[(4, 1, 1), (4, 1, 1)],
@@ -1643,7 +1918,7 @@ def test_multiview_dense_geometry_takes_a_joint_transfer_sample() -> None:
         num_lidar_items_per_sample=[2],
     )
 
-    plan = _multiview_dense_geometry_for_test(pack)
+    plan = _multiview_maskless_geometry_for_test(pack)
 
     assert plan is not None
     assert plan.items_per_sample == (4,)
@@ -1659,14 +1934,14 @@ def test_multiview_dense_geometry_takes_a_joint_transfer_sample() -> None:
 
 @pytest.mark.L0
 @torch.no_grad()
-def test_multiview_dense_geometry_serves_a_control_item() -> None:
+def test_multiview_maskless_geometry_serves_a_control_item() -> None:
     """A control item shares its target's view groups, which is the transfer layout.
 
-    Whether that is licensed is settled once by ``dense_unavailable_reason`` -- which requires
+    Whether that is licensed is settled once by ``maskless_unavailable_reason`` -- which requires
     ``control_attends_sensor`` unconditionally -- rather than per batch here, so by the time a
     pack reaches this function the question is already answered.
     """
-    pack = _multiview_dense_pack(
+    pack = _multiview_maskless_pack(
         vision=ModalityData(
             tokens=[torch.zeros(1), torch.zeros(1)],  # list[[1]]
             token_shapes=[(6, 2, 3), (6, 2, 3)],
@@ -1677,14 +1952,14 @@ def test_multiview_dense_geometry_serves_a_control_item() -> None:
         num_views_per_vision_item=[3, 3],
     )
 
-    plan = _multiview_dense_geometry_for_test(pack)
+    plan = _multiview_maskless_geometry_for_test(pack)
     assert plan is not None
     assert plan.is_control == (True, False), "The item before the target conditions it."
 
 
 @pytest.mark.L0
 @torch.no_grad()
-def test_multiview_dense_geometry_takes_a_single_control_weight() -> None:
+def test_multiview_maskless_geometry_takes_a_single_control_weight() -> None:
     """One control weight is the layout this path serves, not the multi-control one.
 
     The multiview validation callback records ``[[1.0]]`` on a WSM transfer sample. Only more
@@ -1692,7 +1967,7 @@ def test_multiview_dense_geometry_takes_a_single_control_weight() -> None:
     never applied by anything -- refusing it would put a run's validation samples on different
     attention from its training steps.
     """
-    pack = _multiview_dense_pack(
+    pack = _multiview_maskless_pack(
         vision=ModalityData(
             tokens=[torch.zeros(1), torch.zeros(1)],  # list[[1]]
             token_shapes=[(6, 2, 3), (6, 2, 3)],
@@ -1704,12 +1979,12 @@ def test_multiview_dense_geometry_takes_a_single_control_weight() -> None:
         control_weights=[[1.0]],
     )
 
-    assert _multiview_dense_geometry_for_test(pack) is not None
+    assert _multiview_maskless_geometry_for_test(pack) is not None
 
 
 @pytest.mark.L0
 @torch.no_grad()
-def test_multiview_dense_geometry_refuses_a_multi_control_pack() -> None:
+def test_multiview_maskless_geometry_refuses_a_multi_control_pack() -> None:
     """The multi-control layout is refused by its item count, which is what makes it one.
 
     N controls beside their target is N+1 vision items, so two controls is three -- past the one
@@ -1723,7 +1998,7 @@ def test_multiview_dense_geometry_refuses_a_multi_control_pack() -> None:
         condition_mask=[torch.ones(6)] * 3,  # list[[T]]
         seconds_per_frame=[1.0] * 3,
     )
-    pack = _multiview_dense_pack(
+    pack = _multiview_maskless_pack(
         vision=three_items,
         num_vision_items_per_sample=[3],
         num_views_per_vision_item=[3, 3, 3],
@@ -1731,12 +2006,12 @@ def test_multiview_dense_geometry_refuses_a_multi_control_pack() -> None:
     )
 
     with pytest.raises(ValueError, match="per-sample item counts"):
-        _multiview_dense_geometry_for_test(pack)
+        _multiview_maskless_geometry_for_test(pack)
 
 
 @pytest.mark.L0
 @torch.no_grad()
-def test_multiview_dense_geometry_refuses_three_items_on_one_stream() -> None:
+def test_multiview_maskless_geometry_refuses_three_items_on_one_stream() -> None:
     """More than one control on a stream is the weighted multi-control layout, not this path."""
     three = ModalityData(
         tokens=[torch.zeros(1)] * 3,  # list[[1]]
@@ -1744,22 +2019,22 @@ def test_multiview_dense_geometry_refuses_three_items_on_one_stream() -> None:
         condition_mask=[torch.ones(6)] * 3,  # list[[T]]
         seconds_per_frame=[1.0] * 3,
     )
-    pack = _multiview_dense_pack(vision=three, num_vision_items_per_sample=[3], num_views_per_vision_item=[3, 3, 3])
+    pack = _multiview_maskless_pack(vision=three, num_vision_items_per_sample=[3], num_views_per_vision_item=[3, 3, 3])
 
     with pytest.raises(ValueError, match="per-sample item counts"):
-        _multiview_dense_geometry_for_test(pack)
+        _multiview_maskless_geometry_for_test(pack)
 
 
 @pytest.mark.L0
 @torch.no_grad()
-def test_multiview_dense_geometry_takes_per_view_captions() -> None:
+def test_multiview_maskless_geometry_takes_per_view_captions() -> None:
     """A camera view reads its own caption; a range clip reads every caption of its sample.
 
     The gen->und pass borrows the same-view partition for its queries, so a key set per view is
     expressible where a key set per token would not be. The plan records which captions each
     group reads as one contiguous run, in that partition's order.
     """
-    pack = _multiview_dense_pack(
+    pack = _multiview_maskless_pack(
         vision=ModalityData(
             tokens=[torch.zeros(1)],  # list[[1]]
             token_shapes=[(2, 1, 1)],
@@ -1773,7 +2048,7 @@ def test_multiview_dense_geometry_takes_per_view_captions() -> None:
     pack.text_caption_lens = [[4, 3]]
     pack.text_caption_view_ids = [[0, 1]]
 
-    plan = _multiview_dense_geometry_for_test(pack)
+    plan = _multiview_maskless_geometry_for_test(pack)
 
     assert plan is not None
     assert plan.caption_gather is not None
@@ -1785,15 +2060,15 @@ def test_multiview_dense_geometry_takes_per_view_captions() -> None:
 
 @pytest.mark.L0
 @torch.no_grad()
-def test_multiview_dense_geometry_leaves_a_single_caption_on_the_per_sample_pass() -> None:
+def test_multiview_maskless_geometry_leaves_a_single_caption_on_the_per_sample_pass() -> None:
     """One caption per sample needs no per-view keys, so nothing is replicated for it."""
-    plan = _multiview_dense_geometry_for_test(_multiview_dense_pack())
+    plan = _multiview_maskless_geometry_for_test(_multiview_maskless_pack())
 
     assert plan is not None
     assert plan.caption_gather is None
 
 
-def _multiview_dense_network(*, dense_attention: bool, multiview: bool = True):
+def _multiview_maskless_network(*, maskless_attention: bool, multiview: bool = True):
     """The smallest network that resolves the multiview attention config, and nothing else."""
     pytest.importorskip("transformers", reason="cosmos3_vfm_network requires the Cosmos3 network dependencies.")
     from cosmos_framework.model.generator.mot.cosmos3_vfm_network import Cosmos3VFMNetwork, Cosmos3VFMNetworkConfig
@@ -1816,7 +2091,7 @@ def _multiview_dense_network(*, dense_attention: bool, multiview: bool = True):
         max_latent_t=1,
         joint_attn_implementation="multiview" if multiview else "two_way",
         multiview_attention_config=MultiviewAttentionConfig(
-            backend="dense" if dense_attention else "flex_triton",
+            backend="maskless" if maskless_attention else "flex_triton",
             mask=MultiviewAttentionMaskConfig(attention_scope="decomposed", control_attends_sensor=True),
         ),
     )
@@ -1824,15 +2099,15 @@ def _multiview_dense_network(*, dense_attention: bool, multiview: bool = True):
 
 
 @pytest.mark.L0
-def test_network_resolving_to_dense_carries_no_mask_geometry() -> None:
-    """ "dense" builds no mask, so there is no block size or alignment to carry with it.
+def test_network_resolving_to_maskless_carries_no_mask_geometry() -> None:
+    """ "maskless" builds no mask, so there is no block size or alignment to carry with it.
 
     The folds' partitions cover whatever padding the pack has, which is why nothing here
     imposes one -- see resolve_multiview_backend.
     """
-    network = _multiview_dense_network(dense_attention=True)
+    network = _multiview_maskless_network(maskless_attention=True)
 
-    assert network.multiview_backend == "dense"
+    assert network.multiview_backend == "maskless"
     assert network.flex_backend is None
 
 
@@ -1840,11 +2115,11 @@ def test_network_resolving_to_dense_carries_no_mask_geometry() -> None:
 def test_the_backend_is_not_read_off_the_ordinary_pathway() -> None:
     """``backend`` describes how multiview attention runs, never whether -- the pathway says that.
 
-    So a config naming "dense" on ``joint_attn_implementation="two_way"`` resolves no multiview
+    So a config naming "maskless" on ``joint_attn_implementation="two_way"`` resolves no multiview
     attention at all rather than contradicting itself, which is what having one selector instead
     of two buys: there is no pair left to disagree.
     """
-    network = _multiview_dense_network(dense_attention=True, multiview=False)
+    network = _multiview_maskless_network(maskless_attention=True, multiview=False)
 
     assert network.multiview_backend is None
     assert network.flex_backend is None
@@ -1911,7 +2186,7 @@ def _case_items(case: dict) -> list[list[SensorMaskItem]]:
     view_offsets = case.get("view_offsets_per_item") or [0] * num_items
     is_control = case.get("is_control_per_item") or [False] * num_items
     items = [
-        SensorMaskItem(
+        _sensor_item(
             token_shape=case["token_shapes"][idx],
             condition_mask=_condition_mask(case["token_shapes"][idx][0], case["condition_frames"][idx]),
             num_views=case["num_views_per_item"][idx],
@@ -1986,15 +2261,15 @@ def _caption_metadata(
     Each camera item is ``num_views`` views x 1 frame x 1 spatial token, so the GEN stream is
     one token per view; a LiDAR item adds one more on the view past the cameras.
     """
-    items = [SensorMaskItem(token_shape=(num_views, 1, 1), condition_mask=torch.ones(num_views), num_views=num_views)]
+    items = [_sensor_item(token_shape=(num_views, 1, 1), condition_mask=torch.ones(num_views), num_views=num_views)]
     if with_lidar:
         items.append(
-            SensorMaskItem(
+            _sensor_item(
                 token_shape=(1, 1, 1),
                 condition_mask=torch.ones(1),
                 num_views=1,
                 view_offset=num_views,
-                reads_every_caption=True,
+                caption_access="all_captions",
             )
         )
     num_gen = sum(item.num_tokens for item in items)
@@ -2023,7 +2298,8 @@ def test_build_multiview_flex_metadata_defaults_every_und_token_to_a_sample_leve
     metadata = _caption_metadata(None)
 
     assert (metadata.view_id[: metadata.num_und] == -1).all(), "every caption is sample-level"
-    assert not metadata.reads_every_caption.any()
+    # One caption for the rig is read whole by every token, cameras included.
+    assert (metadata.caption_scope == CAPTION_SCOPE_ALL).all()
 
 
 @pytest.mark.L0
@@ -2034,8 +2310,56 @@ def test_build_multiview_flex_metadata_marks_lidar_as_reading_every_caption() ->
         with_lidar=True,
     )
 
-    gen = metadata.reads_every_caption[metadata.num_und :]
-    assert torch.equal(gen, torch.tensor([False, False, True])), "two camera views, then the sweep"
+    gen = metadata.caption_scope[metadata.num_und :]
+    expected = torch.tensor([CAPTION_SCOPE_SAME_VIEW, CAPTION_SCOPE_SAME_VIEW, CAPTION_SCOPE_ALL])
+    assert torch.equal(gen, expected), "two camera views scoped to their own caption, then the sweep"
+
+
+@pytest.mark.L0
+def test_build_multiview_flex_metadata_carries_a_text_free_lidar_item_through() -> None:
+    """``caption_scope`` lands on the item's GEN tokens and on nothing else.
+
+    The UND prefix and the padding take the permissive ``ALL``: the field is read on the query
+    side, and neither of those is ever a real query.
+    """
+    items = [
+        _sensor_item(token_shape=(2, 1, 1), condition_mask=torch.ones(2), num_views=2),
+        _sensor_item(
+            token_shape=(1, 1, 1),
+            condition_mask=torch.ones(1),
+            num_views=1,
+            view_offset=2,
+            caption_access="no_captions",
+        ),
+    ]
+    num_gen = sum(item.num_tokens for item in items)
+    metadata = _build_metadata(
+        gen_seq_len=num_gen + 2,  # two GEN pad tokens
+        full_q_offsets=torch.tensor([0, num_gen]),
+        sensor_mask_items=[items],
+        device=torch.device("cpu"),
+        und_seq_len=4,
+        causal_offsets=torch.tensor([0, 4]),
+        caption_mask_items=None,
+    )
+
+    # A sample-level caption here (caption_mask_items=None), so the cameras read it whole.
+    assert torch.equal(
+        metadata.caption_scope,
+        torch.tensor(
+            [CAPTION_SCOPE_ALL] * 4
+            + [CAPTION_SCOPE_ALL, CAPTION_SCOPE_ALL, CAPTION_SCOPE_NONE]
+            + [CAPTION_SCOPE_ALL] * 2
+        ),
+    ), "UND prefix, two camera views, the sweep, then the GEN padding"
+
+
+@pytest.mark.L0
+def test_build_multiview_flex_metadata_defaults_every_item_to_attending_captions() -> None:
+    """Nothing opts out unless a caller says so, so the default build is the old one."""
+    metadata = _caption_metadata(None, with_lidar=True)
+
+    assert (metadata.caption_scope == CAPTION_SCOPE_ALL).all()
 
 
 @pytest.mark.L0
@@ -2081,7 +2405,7 @@ def test_build_multiview_flex_metadata_rejects_captions_without_an_und_stream() 
         _build_metadata(
             gen_seq_len=2,
             full_q_offsets=torch.tensor([0, 2]),
-            sensor_mask_items=[[SensorMaskItem(token_shape=(2, 1, 1), condition_mask=torch.ones(2), num_views=2)]],
+            sensor_mask_items=[[_sensor_item(token_shape=(2, 1, 1), condition_mask=torch.ones(2), num_views=2)]],
             caption_mask_items=[[CaptionMaskItem(view_id=0, num_tokens=1), CaptionMaskItem(view_id=1, num_tokens=1)]],
             device=torch.device("cpu"),
         )
@@ -2234,7 +2558,7 @@ def test_build_multiview_flex_metadata_accepts_flat_bool_condition_mask() -> Non
         full_q_offsets=_case_offsets(case),
         sensor_mask_items=[
             [
-                SensorMaskItem(
+                _sensor_item(
                     token_shape=case["token_shapes"][0],
                     condition_mask=torch.tensor([True, False, True, False]),
                     num_views=case["num_views_per_item"][0],
@@ -2252,14 +2576,14 @@ def test_build_multiview_flex_metadata_accepts_flat_bool_condition_mask() -> Non
 def test_mask_item_rejects_bad_view_count(num_views: int) -> None:
     """An item whose latent axis does not divide into its views is malformed on its own."""
     with pytest.raises(ValueError, match="not divisible by num_views"):
-        SensorMaskItem(token_shape=(4, 1, 2), condition_mask=_condition_mask(4, []), num_views=num_views)
+        _sensor_item(token_shape=(4, 1, 2), condition_mask=_condition_mask(4, []), num_views=num_views)
 
 
 @pytest.mark.L0
 def test_mask_item_rejects_condition_mask_length() -> None:
     """A mask that does not cover the item's latent axis is malformed on its own."""
     with pytest.raises(ValueError, match="expected 4"):
-        SensorMaskItem(token_shape=(4, 1, 2), condition_mask=_condition_mask(3, []), num_views=2)
+        _sensor_item(token_shape=(4, 1, 2), condition_mask=_condition_mask(3, []), num_views=2)
 
 
 @pytest.mark.L0
@@ -2269,8 +2593,8 @@ def test_build_multiview_flex_metadata_rejects_items_disagreeing_on_seconds_per_
     shape = (2, 1, 1)
     items = [
         [
-            SensorMaskItem(token_shape=shape, condition_mask=_condition_mask(2, []), seconds_per_frame=1.0 / 7.5),
-            SensorMaskItem(token_shape=shape, condition_mask=_condition_mask(2, []), seconds_per_frame=1.0 / 10.0),
+            _sensor_item(token_shape=shape, condition_mask=_condition_mask(2, []), seconds_per_frame=1.0 / 7.5),
+            _sensor_item(token_shape=shape, condition_mask=_condition_mask(2, []), seconds_per_frame=1.0 / 10.0),
         ]
     ]
     with pytest.raises(ValueError, match="seconds_per_frame"):
@@ -2288,8 +2612,8 @@ def test_build_multiview_flex_metadata_tolerates_float_noise_in_seconds_per_fram
     shape = (2, 1, 1)
     items = [
         [
-            SensorMaskItem(token_shape=shape, condition_mask=_condition_mask(2, []), seconds_per_frame=1.0 / 7.5),
-            SensorMaskItem(token_shape=shape, condition_mask=_condition_mask(2, []), seconds_per_frame=4.0 / 30.0),
+            _sensor_item(token_shape=shape, condition_mask=_condition_mask(2, []), seconds_per_frame=1.0 / 7.5),
+            _sensor_item(token_shape=shape, condition_mask=_condition_mask(2, []), seconds_per_frame=4.0 / 30.0),
         ]
     ]
     metadata = _build_metadata(
@@ -2308,7 +2632,7 @@ def test_build_multiview_flex_metadata_rejects_packed_token_count_mismatch() -> 
             gen_seq_len=16,
             full_q_offsets=torch.tensor([0, 7], dtype=torch.int32),  # item contributes 8
             sensor_mask_items=[
-                [SensorMaskItem(token_shape=(4, 1, 2), condition_mask=_condition_mask(4, []), num_views=2)]
+                [_sensor_item(token_shape=(4, 1, 2), condition_mask=_condition_mask(4, []), num_views=2)]
             ],
             device=torch.device("cpu"),
         )
@@ -2323,8 +2647,8 @@ def test_build_multiview_flex_metadata_rejects_mixed_grids_in_a_sample() -> None
             # Same token count, but 2 views x 2 frames against 1 view x 4 frames.
             sensor_mask_items=[
                 [
-                    SensorMaskItem(token_shape=(4, 1, 2), condition_mask=_condition_mask(4, [0]), num_views=2),
-                    SensorMaskItem(token_shape=(4, 1, 2), condition_mask=_condition_mask(4, [0, 1, 2, 3]), num_views=1),
+                    _sensor_item(token_shape=(4, 1, 2), condition_mask=_condition_mask(4, [0]), num_views=2),
+                    _sensor_item(token_shape=(4, 1, 2), condition_mask=_condition_mask(4, [0, 1, 2, 3]), num_views=1),
                 ]
             ],
             device=torch.device("cpu"),
@@ -2346,9 +2670,9 @@ def test_build_multiview_flex_metadata_rejects_mixed_grids_within_one_view_range
             # The first two share view offset 0 and disagree: 2 views x 2 frames against 1 x 4.
             sensor_mask_items=[
                 [
-                    SensorMaskItem(token_shape=(4, 1, 2), condition_mask=_condition_mask(4, [0]), num_views=2),
-                    SensorMaskItem(token_shape=(4, 1, 2), condition_mask=_condition_mask(4, [0, 1, 2, 3]), num_views=1),
-                    SensorMaskItem(
+                    _sensor_item(token_shape=(4, 1, 2), condition_mask=_condition_mask(4, [0]), num_views=2),
+                    _sensor_item(token_shape=(4, 1, 2), condition_mask=_condition_mask(4, [0, 1, 2, 3]), num_views=1),
+                    _sensor_item(
                         token_shape=(4, 1, 2), condition_mask=_condition_mask(4, []), num_views=1, view_offset=2
                     ),
                 ]
@@ -2476,7 +2800,7 @@ def test_build_multiview_flex_metadata_requires_causal_offsets_for_a_fused_strea
             gen_seq_len=16,
             full_q_offsets=torch.tensor([0, 8], dtype=torch.int32),
             sensor_mask_items=[
-                [SensorMaskItem(token_shape=(4, 1, 2), condition_mask=_condition_mask(4, []), num_views=2)]
+                [_sensor_item(token_shape=(4, 1, 2), condition_mask=_condition_mask(4, []), num_views=2)]
             ],
             device=torch.device("cpu"),
             und_seq_len=8,
@@ -2490,7 +2814,7 @@ def test_build_multiview_flex_metadata_rejects_overlong_metadata() -> None:
             gen_seq_len=4,  # smaller than the 8 tokens the item contributes
             full_q_offsets=torch.tensor([0, 8], dtype=torch.int32),
             sensor_mask_items=[
-                [SensorMaskItem(token_shape=(4, 1, 2), condition_mask=_condition_mask(4, []), num_views=2)]
+                [_sensor_item(token_shape=(4, 1, 2), condition_mask=_condition_mask(4, []), num_views=2)]
             ],
             device=torch.device("cpu"),
         )
@@ -2870,7 +3194,7 @@ def test_build_multiview_block_mask_matches_create_block_mask_on_a_camera_pack(
         full_q_offsets=torch.tensor([0, 2 * item_tokens], dtype=torch.int32),
         sensor_mask_items=[
             [
-                SensorMaskItem(
+                _sensor_item(
                     token_shape=(latent_t, spatial_tokens, 1),
                     condition_mask=_condition_mask(latent_t, frames),
                     num_views=num_views,
@@ -2931,7 +3255,7 @@ def test_a_noisy_scope_reaches_the_block_mask_as_sparsity(
         full_q_offsets=torch.tensor([0, item_tokens], dtype=torch.int32),
         sensor_mask_items=[
             [
-                SensorMaskItem(
+                _sensor_item(
                     token_shape=(latent_t, spatial_tokens, 1),
                     condition_mask=_condition_mask(latent_t, []),
                     num_views=num_views,
@@ -3017,13 +3341,13 @@ def test_build_multiview_block_mask_propagates_control_attends_sensor_option(bac
     target_condition = torch.tensor([1.0, 0.0, 0.0]).view(latent_t, 1, 1)  # [T,1,1]
     items = [
         [
-            SensorMaskItem(
+            _sensor_item(
                 token_shape=(latent_t, cell_tokens, 1),
                 condition_mask=control_condition,
                 num_views=1,
                 is_control=True,
             ),
-            SensorMaskItem(
+            _sensor_item(
                 token_shape=(latent_t, cell_tokens, 1),
                 condition_mask=target_condition,
                 num_views=1,
@@ -3102,7 +3426,7 @@ def _wiring_block_mask(
         sensor_mask_items=[
             # One item per sample, which is what the wiring pack carries.
             [
-                SensorMaskItem(
+                _sensor_item(
                     token_shape=token_shape,
                     condition_mask=_condition_mask(token_shape[0], frames),
                     num_views=num_views,

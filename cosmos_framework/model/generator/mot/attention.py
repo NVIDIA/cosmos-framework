@@ -17,7 +17,7 @@ from cosmos_framework.model.attention import (
 )
 from cosmos_framework.model.attention.masks import CausalType
 from cosmos_framework.model.generator.mot.multiview_attention import multiview_attention
-from cosmos_framework.model.generator.mot.multiview_dense_attention import MultiviewDensePlan
+from cosmos_framework.model.generator.mot.multiview_maskless_attention import MultiviewMasklessPlan
 from cosmos_framework.model.generator.utils.memory import KVToStore, MemoryValue
 
 
@@ -85,12 +85,12 @@ class SplitInfo:
         # block size, which is also what the packer padded the two streams to.
         self.flex_backend: FlexBackend | None = None
         # Set post-construction in cosmos3_vfm_network.py, for the single-sample inference
-        # packs the dense decomposed path accepts. When populated, dispatch_attention sends
-        # the pack to multiview_dense_attention instead of two_way_attention, and no
+        # packs the maskless decomposed path accepts. When populated, dispatch_attention sends
+        # the pack to multiview_maskless_attention instead of two_way_attention, and no
         # flex mask is built: that path is three unmasked kernels merged by log-sum-exp, and
         # it is its own attention pattern rather than a reproduction of the flex
-        # attention_scope="decomposed" mask -- see multiview_dense_attention.
-        self.multiview_dense: MultiviewDensePlan | None = None
+        # attention_scope="decomposed" mask -- see multiview_maskless_attention.
+        self.multiview_maskless: MultiviewMasklessPlan | None = None
 
 
 AttentionMaskType = SplitInfo
@@ -747,18 +747,18 @@ def multi_control_two_way_attention(
 
 def _multiview_gen_description(
     attention_mask: SplitInfo,
-) -> tuple[MultiviewDensePlan | None, BlockMask | None, FlexBackend | None] | None:
+) -> tuple[MultiviewMasklessPlan | None, BlockMask | None, FlexBackend | None] | None:
     """How this pack's GEN pass is described, or ``None`` when it is not a multiview pack.
 
     ``getattr`` throughout because ``_is_split_info_compatible`` also accepts duck-typed metadata
     that predates these fields. Exactly one of the two descriptions is ever set: the run resolved
     which multiview attention it takes once, in the network's constructor.
     """
-    dense_plan = getattr(attention_mask, "multiview_dense", None)
+    maskless_plan = getattr(attention_mask, "multiview_maskless", None)
     flex_block_mask = getattr(attention_mask, "flex_block_mask", None)
-    if dense_plan is None and flex_block_mask is None:
+    if maskless_plan is None and flex_block_mask is None:
         return None
-    return dense_plan, flex_block_mask, getattr(attention_mask, "flex_backend", None)
+    return maskless_plan, flex_block_mask, getattr(attention_mask, "flex_backend", None)
 
 
 def dispatch_attention(
@@ -794,13 +794,13 @@ def dispatch_attention(
         )
     elif (multiview_gen := _multiview_gen_description(attention_mask)) is not None:
         # The multiview pathway. Its UND half is shared and its GEN half is whichever of the two
-        # (flex vs dense w/ LSE merge)the run resolved to.
-        dense_plan, flex_block_mask, flex_backend = multiview_gen
+        # (flex vs maskless w/ LSE merge)the run resolved to.
+        maskless_plan, flex_block_mask, flex_backend = multiview_gen
         output = multiview_attention(
             packed_query_states,
             packed_key_states,
             packed_value_states,
-            dense_plan=dense_plan,
+            maskless_plan=maskless_plan,
             flex_block_mask=flex_block_mask,
             flex_backend=flex_backend,
             packed_key_states_normalized=packed_key_states_normalized,

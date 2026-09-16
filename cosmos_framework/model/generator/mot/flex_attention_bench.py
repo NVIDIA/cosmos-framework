@@ -506,7 +506,11 @@ def build_pack_inputs(scenario: MultiviewScenario, device: torch.device) -> Pack
             token_shape=scenario.token_shape,
             condition_mask=condition_mask,
             num_views=scenario.num_views,
+            view_offset=0,
             is_control=is_control,
+            # One camera rig on one clock, which is what these scenarios time.
+            seconds_per_frame=1.0,
+            caption_access="camera",
         )
 
     sensor_mask_items: list[list[SensorMaskItem]] = []

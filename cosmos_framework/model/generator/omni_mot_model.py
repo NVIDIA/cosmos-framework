@@ -5723,6 +5723,7 @@ class OmniMoTModel(ImaginaireModel):
             packed_seq=data_batch_packed,
             memory=memory,
             video_temporal_causal=video_temporal_causal,
+            correct_cp_gradients=self.config.correct_cp_gradients,
         )
         output_dict = dict()
         output_dict["preds_vision"] = out_net["preds_vision"]

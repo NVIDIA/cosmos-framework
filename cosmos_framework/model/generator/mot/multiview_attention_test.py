@@ -19,14 +19,14 @@ from cosmos_framework.configs.base.defaults.multiview_attention import (
 )
 from cosmos_framework.model.generator.mot.flex_attention import triton_backend_block_size
 from cosmos_framework.model.generator.mot.multiview_attention import resolve_multiview_backend
-from cosmos_framework.model.generator.mot.multiview_dense_attention import (
-    DENSE_ATTENTION_SCOPES,
-    dense_unavailable_reason,
+from cosmos_framework.model.generator.mot.multiview_maskless_attention import (
+    MASKLESS_ATTENTION_SCOPES,
+    maskless_unavailable_reason,
 )
 
 
 def _config(scope: AttentionScope, **mask_kwargs) -> MultiviewAttentionConfig:
-    """A config "dense" can serve, unless a keyword here takes that away.
+    """A config "maskless" can serve, unless a keyword here takes that away.
 
     Whether multiview attention runs at all is the pathway's business, not this config's, so
     there is nothing here to turn on -- only the description of how its GEN pass runs.
@@ -40,8 +40,8 @@ def test_resolve_multiview_backend_auto_never_takes_the_folds() -> None:
     """ "auto" ranks the masks first, so it chooses kernels and never which attention runs.
 
     The config here is one the folds *could* serve -- decomposed scope, no window, the flag on
-    -- which is exactly the case where the old dense-first ordering would have switched what the
-    run trains. Triton always resolves, so the folds rank last and are never reached: "dense" is
+    -- which is exactly the case where the old folds-first ordering would have switched what the
+    run trains. Triton always resolves, so the folds rank last and are never reached: "maskless" is
     opt-in, by name.
     """
     backend, geometry = resolve_multiview_backend(torch.device("cpu"), "auto", config=_config("decomposed"))
@@ -51,7 +51,7 @@ def test_resolve_multiview_backend_auto_never_takes_the_folds() -> None:
 
 
 @pytest.mark.L0
-def test_resolve_multiview_backend_auto_takes_a_mask_when_the_config_rules_dense_out() -> None:
+def test_resolve_multiview_backend_auto_takes_a_mask_when_the_config_rules_maskless_out() -> None:
     """The verdict changes nothing under "auto", which was taking a mask either way."""
     backend, _ = resolve_multiview_backend(
         torch.device("cpu"), "auto", config=_config("decomposed", decomposed_temporal_window_seconds=0.4)
@@ -61,11 +61,11 @@ def test_resolve_multiview_backend_auto_takes_a_mask_when_the_config_rules_dense
 
 
 @pytest.mark.L0
-def test_resolve_multiview_backend_demanding_dense_reports_why_the_config_rules_it_out() -> None:
-    """Pinning "dense" and silently getting a mask would train a different distribution."""
+def test_resolve_multiview_backend_demanding_maskless_reports_why_the_config_rules_it_out() -> None:
+    """Pinning "maskless" and silently getting a mask would train a different distribution."""
     with pytest.raises(ValueError, match="asks for the maskless folds, but decomposed_temporal_window_seconds"):
         resolve_multiview_backend(
-            torch.device("cpu"), "dense", config=_config("decomposed", decomposed_temporal_window_seconds=0.4)
+            torch.device("cpu"), "maskless", config=_config("decomposed", decomposed_temporal_window_seconds=0.4)
         )
 
 
@@ -77,7 +77,7 @@ def test_resolve_multiview_backend_demanding_flash_reports_why_it_is_unavailable
 
 
 @pytest.mark.L0
-def test_resolve_multiview_backend_pins_a_mask_even_where_dense_is_available() -> None:
+def test_resolve_multiview_backend_pins_a_mask_even_where_maskless_is_available() -> None:
     """An explicit flex backend is a choice of attention, not merely of kernels."""
     backend, geometry = resolve_multiview_backend(torch.device("cpu"), "flex_triton", config=_config("decomposed"))
 
@@ -89,26 +89,26 @@ def test_resolve_multiview_backend_pins_a_mask_even_where_dense_is_available() -
 
 @pytest.mark.L0
 def test_resolve_multiview_backend_rejects_an_unknown_preference() -> None:
-    with pytest.raises(ValueError, match="Unknown multiview attention backend 'DENSE'"):
-        resolve_multiview_backend(torch.device("cpu"), "DENSE", config=_config("decomposed"))
+    with pytest.raises(ValueError, match="Unknown multiview attention backend 'MASKLESS'"):
+        resolve_multiview_backend(torch.device("cpu"), "MASKLESS", config=_config("decomposed"))
 
 
 @pytest.mark.L0
-@pytest.mark.parametrize("scope", DENSE_ATTENTION_SCOPES)
-def test_dense_is_available_for_the_scopes_the_folds_express(scope: AttentionScope) -> None:
+@pytest.mark.parametrize("scope", MASKLESS_ATTENTION_SCOPES)
+def test_maskless_is_available_for_the_scopes_the_folds_express(scope: AttentionScope) -> None:
     """Both are a partition of the GEN stream, which is what an unmasked pass needs."""
-    assert dense_unavailable_reason(_config(scope)) is None
+    assert maskless_unavailable_reason(_config(scope)) is None
 
 
 @pytest.mark.L0
-def test_dense_is_unavailable_for_all_views() -> None:
-    """The default scope, and the one a "dense" config is most likely to land on by accident.
+def test_maskless_is_unavailable_for_all_views() -> None:
+    """The default scope, and the one a "maskless" config is most likely to land on by accident.
 
     Without this the folds would run and quietly ignore the scope, training the decomposed
     pattern under a config that asked for the full square -- the silent substitution every other
     condition here refuses.
     """
-    reason = dense_unavailable_reason(_config("all_views"))
+    reason = maskless_unavailable_reason(_config("all_views"))
 
     assert reason is not None
     assert "all_views" in reason
@@ -123,14 +123,14 @@ def test_auto_takes_a_mask_for_a_scope_the_folds_do_not_express() -> None:
 
 
 @pytest.mark.L0
-def test_demanding_dense_under_all_views_reports_the_scope_as_the_reason() -> None:
+def test_demanding_maskless_under_all_views_reports_the_scope_as_the_reason() -> None:
     with pytest.raises(ValueError, match="all_views"):
-        resolve_multiview_backend(torch.device("cpu"), "dense", config=_config("all_views"))
+        resolve_multiview_backend(torch.device("cpu"), "maskless", config=_config("all_views"))
 
 
 @pytest.mark.L0
-def test_dense_is_unavailable_without_control_attends_sensor() -> None:
-    """Required unconditionally, and the flag defaults off, so "dense" is an opt-in pairing.
+def test_maskless_is_unavailable_without_control_attends_sensor() -> None:
+    """Required unconditionally, and the flag defaults off, so "maskless" is an opt-in pairing.
 
     A control item shares its target's view group, so with the flag off a control query would
     need a narrower key set than a sensor query on the same view. Which batches carry a control
@@ -138,7 +138,7 @@ def test_dense_is_unavailable_without_control_attends_sensor() -> None:
     wait to find out: a batch without one loses nothing, since the flag only ever widens a
     control query's reach and such a batch has no control queries.
     """
-    reason = dense_unavailable_reason(_config("decomposed", control_attends_sensor=False))
+    reason = maskless_unavailable_reason(_config("decomposed", control_attends_sensor=False))
 
     assert reason is not None
     assert "control_attends_sensor is off" in reason
@@ -157,10 +157,10 @@ def test_auto_keeps_a_mask_without_control_attends_sensor() -> None:
 
 
 @pytest.mark.L0
-def test_demanding_dense_without_control_attends_sensor_reports_the_flag() -> None:
+def test_demanding_maskless_without_control_attends_sensor_reports_the_flag() -> None:
     with pytest.raises(ValueError, match="control_attends_sensor is off"):
         resolve_multiview_backend(
             torch.device("cpu"),
-            "dense",
+            "maskless",
             config=_config("decomposed", control_attends_sensor=False),
         )

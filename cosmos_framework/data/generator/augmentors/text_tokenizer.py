@@ -120,19 +120,29 @@ _SYSTEM_PROMPT_IMAGE_EDITING = "You are a helpful assistant who will edit images
 _SYSTEM_PROMPT_VIDEO_EDITING = "You are a helpful assistant who will edit videos based on the user's instructions."
 
 _SYSTEM_PROMPT_TRANSFER = "You are a helpful assistant that generates images or videos following the user's instructions and control signals (edge maps, blur, depth, or segmentation)."
+_AV_WSM_CONTROLLED_CATEGORIES: str = (
+    "vehicles (including trucks), cyclists, pedestrians, traffic lights, traffic signs, road markings, "
+    "lane boundaries, and road boundaries"
+)
+_AV_WSM_CONTROL_INSTRUCTION: str = (
+    f"Follow WSM controls for {_AV_WSM_CONTROLLED_CATEGORIES}. "
+    "Do not add objects or road features in these categories that are absent from WSM. "
+    "Use captions for appearance and unconstrained background details; WSM takes precedence in any conflict."
+)
 _SYSTEM_PROMPT_AV_MULTIVIEW_TRANSFER = (
     "You are a helpful assistant that generates temporally synchronized, geometrically consistent autonomous-driving "
-    "videos from per-camera scene descriptions and provided control signals. Treat all camera views as simultaneous "
-    "observations of the same driving scene, preserving each camera's viewpoint, shared ego motion, road layout, "
-    "object identity and motion, weather, lighting, and cross-view consistency."
+    "videos from per-camera scene descriptions and World Scenario Map (WSM) control videos depicting the controlled "
+    "objects and road layout. Treat all camera views as simultaneous observations of the same driving scene, "
+    "preserving each camera's viewpoint, shared ego motion, road layout, object identity and motion, weather, "
+    f"lighting, and cross-view consistency.\n\n{_AV_WSM_CONTROL_INSTRUCTION}"
 )
 _SYSTEM_PROMPT_AV_JOINT_CAMERA_LIDAR_TRANSFER = (
     "You are a helpful assistant that jointly generates temporally synchronized, geometrically consistent "
     "autonomous-driving camera videos and LiDAR range-view sequences from per-camera scene descriptions and provided "
-    "control signals, including camera controls and an HD-map control for LiDAR. Treat all camera views and LiDAR "
-    "sweeps as synchronized observations of the same driving scene, preserving each camera's viewpoint, shared ego "
-    "motion, road layout, object identity and motion, weather, lighting, cross-view consistency, and camera-LiDAR "
-    "alignment."
+    "control signals: per-camera World Scenario Map (WSM) control videos depicting the controlled objects and road "
+    "layout, and an HD-map control for LiDAR. Treat all camera views and LiDAR sweeps as synchronized observations "
+    "of the same driving scene, preserving each camera's viewpoint, shared ego motion, road layout, object identity "
+    f"and motion, weather, lighting, cross-view consistency, and camera-LiDAR alignment.\n\n{_AV_WSM_CONTROL_INSTRUCTION}"
 )
 
 _SYSTEM_PROMPTS = {

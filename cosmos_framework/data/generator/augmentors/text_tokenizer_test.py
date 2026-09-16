@@ -104,6 +104,37 @@ def test_transfer_tokenizer_accepts_av_joint_camera_lidar_system_prompt(monkeypa
     assert result[text_tokenizer.TEXT_SYSTEM_PROMPT_KEY] == text_tokenizer._SYSTEM_PROMPT_AV_JOINT_CAMERA_LIDAR_TRANSFER
 
 
+@pytest.mark.parametrize("task", ["av_multiview_transfer", "av_joint_camera_lidar_transfer"])
+@pytest.mark.parametrize("tokenize_separately", [False, True])
+def test_av_transfer_tokenizer_prioritizes_wsm_objects(
+    monkeypatch: pytest.MonkeyPatch, task: str, tokenize_separately: bool
+) -> None:
+    processor = _FakeProcessor()
+    tokenizer = _make_transfer_tokenizer(
+        monkeypatch,
+        processor,
+        task=task,
+        tokenize_separately=tokenize_separately,
+        emit_system_prompt=True,
+    )
+
+    result = tokenizer(
+        {"ai_caption": ["front view", "rear view"] if tokenize_separately else "driving scene", "sample_n_views": 2}
+    )
+
+    expected_instruction = (
+        "Follow WSM controls for vehicles (including trucks), cyclists, pedestrians, traffic lights, traffic signs, "
+        "road markings, lane boundaries, and road boundaries. "
+        "Do not add objects or road features in these categories that are absent from WSM. "
+        "Use captions for appearance and unconstrained background details; WSM takes precedence in any conflict."
+    )
+    assert result is not None
+    system_prompt = result[text_tokenizer.TEXT_SYSTEM_PROMPT_KEY]
+    assert "World Scenario Map (WSM) control videos" in system_prompt.split("\n\n", 1)[0]
+    assert system_prompt.endswith("\n\n" + expected_instruction)
+    assert all(call_kwargs["system_prompt"] == system_prompt for _, call_kwargs in processor.calls)
+
+
 def test_separate_transfer_tokenizer_applies_cfg_dropout_once_per_sample(monkeypatch: pytest.MonkeyPatch) -> None:
     processor = _FakeProcessor()
     tokenizer = _make_transfer_tokenizer(monkeypatch, processor, cfg_dropout_rate=0.5)
@@ -150,6 +181,10 @@ def test_transfer_tokenizer_can_record_general_system_prompt(monkeypatch: pytest
 
     assert result is not None
     assert result[text_tokenizer.TEXT_SYSTEM_PROMPT_KEY] == text_tokenizer._SYSTEM_PROMPT_TRANSFER
+    assert result[text_tokenizer.TEXT_SYSTEM_PROMPT_KEY] == (
+        "You are a helpful assistant that generates images or videos following the user's instructions and control "
+        "signals (edge maps, blur, depth, or segmentation)."
+    )
 
 
 def test_single_view_separate_tokenization_matches_legacy_token_values(monkeypatch: pytest.MonkeyPatch) -> None:

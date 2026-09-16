@@ -36,7 +36,7 @@ from typing import Any, Callable
 import torch
 import torch.distributed as dist
 from torch.distributed.device_mesh import DeviceMesh
-from torch.distributed.tensor import DTensor, Replicate, Shard
+from torch.distributed.tensor import DTensor, Partial, Replicate, Shard
 from torch.fx.experimental.symbolic_shapes import guard_or_false
 
 from cosmos_framework.utils import distributed
@@ -197,7 +197,9 @@ def get_context_parallel_sharded_sequence(
 def get_context_parallel_last_hidden_state(
     packed_outputs: SequencePack,
     parallel_dims: ParallelDims | None,
-) -> torch.Tensor:
+    *,
+    correct_cp_gradients: bool = False,
+) -> torch.Tensor:  # packed_outputs streams: [N_local,hidden_size], returns: [N,hidden_size]
     if parallel_dims is None or not parallel_dims.cp_enabled:
         return get_all_seq_unpadded(packed_outputs)
 
@@ -207,10 +209,10 @@ def get_context_parallel_last_hidden_state(
     gen_hidden_seq = get_gen_seq(packed_outputs)  # [gen_shard_len,hidden_size]
 
     gathered_und_seq = all_gather_tensor(
-        und_hidden_seq, gather_dim=0, cp_mesh=parallel_dims.cp_mesh
+        und_hidden_seq, gather_dim=0, cp_mesh=parallel_dims.cp_mesh, correct_cp_gradients=correct_cp_gradients
     )  # [text_len,hidden_size]
     gathered_gen_seq = all_gather_tensor(
-        gen_hidden_seq, gather_dim=0, cp_mesh=parallel_dims.cp_mesh
+        gen_hidden_seq, gather_dim=0, cp_mesh=parallel_dims.cp_mesh, correct_cp_gradients=correct_cp_gradients
     )  # [gen_len,hidden_size]
 
     gathered_hidden_pack = from_mode_splits(gathered_und_seq, gathered_gen_seq, packed_outputs, is_sharded=False)
@@ -265,20 +267,24 @@ def all_gather_tensor(
     local_input: torch.Tensor,
     gather_dim: int,
     cp_mesh: "DeviceMesh",
-) -> torch.Tensor:
+    *,
+    correct_cp_gradients: bool = False,
+) -> torch.Tensor:  # local_input: [*local_shape], returns: [*global_shape]
     """
     All-gather via DTensor redistribute.
     Input placement: Shard(gather_dim) -> The dimension we are about to gather was split.
     Output placement: Replicate() -> Full copy on each rank.
+
+    correct_cp_gradients compensates for FSDP/DDP averaging without scaling downstream head gradients.
     """
     # Wrap local tensor as DTensor with current placement
-    global_dt = DTensor.from_local(local_input, cp_mesh, [Shard(gather_dim)], run_check=False)
+    global_dt = DTensor.from_local(local_input, cp_mesh, [Shard(gather_dim)], run_check=False)  # [*global_shape]
 
     # Redistribute to new placement (Replicate)
-    new_dt = global_dt.redistribute(cp_mesh, [Replicate()])
+    new_dt = global_dt.redistribute(cp_mesh, [Replicate()])  # [*global_shape]
 
-    # Convert back to local
-    return new_dt.to_local()
+    # Convert back to local; Partial sums gradients in backward, while None preserves legacy slicing.
+    return new_dt.to_local(grad_placements=[Partial()] if correct_cp_gradients else None)  # [*global_shape]
 
 
 def gather_seq_scatter_heads(

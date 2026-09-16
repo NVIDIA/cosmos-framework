@@ -4,7 +4,7 @@
 """Keep ``merge_attentions``' data-pointer contract across a shape change.
 
 Its own module because two unrelated attention paths need it -- the interactive tree's
-``three_way_attention_with_kv_cache`` and ``dense_attention``'s two folds -- and because
+``three_way_attention_with_kv_cache`` and ``multiview_maskless_attention``'s two folds -- and because
 putting it in either one would make the other import that one for a utility that belongs to
 neither.
 """

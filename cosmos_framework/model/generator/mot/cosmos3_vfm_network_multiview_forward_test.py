@@ -4,8 +4,8 @@
 """``Cosmos3VFMNetwork.forward`` over a real multiview pack, down both attention routes.
 
 The branch this covers decides, per batch, whether the multiview GEN attention runs as the
-FlexAttention mask or as ``multiview_dense_attention``'s three merged passes. Its two
-halves are each unit-tested -- ``_multiview_dense_geometry`` for the decision and
+FlexAttention mask or as ``multiview_maskless_attention``'s three merged passes. Its two
+halves are each unit-tested -- ``_multiview_maskless_geometry`` for the decision and
 ``dispatch_attention`` for the routing -- but nothing joined them: the geometry the network
 reads off a ``PackedSequence`` had never been handed to the attention function that folds by
 it. A test built on hand-written packs cannot join them either, since the thing at risk is
@@ -111,7 +111,7 @@ def _multiview_packed_sequence() -> PackedSequence:
     the field the whole multiview attention path keys off: without it the network cannot say
     where one camera's latent frames end, and both the mask and the decomposition refuse the
     pack. The item's latent axis is camera-major, ``num_views * frames_per_view``, which is the
-    layout ``multiview_dense_attention`` folds by.
+    layout ``multiview_maskless_attention`` folds by.
 
     Packed on CPU and moved with ``to_cuda`` afterwards, which is the order ``OmniMoTModel``
     packs in: the packer builds its index tensors on the host (it rejects CUDA text indexes
@@ -149,7 +149,7 @@ def _multiview_packed_sequence() -> PackedSequence:
     return packed_seq
 
 
-def _multiview_network(*, dense_attention: bool, device: torch.device):
+def _multiview_network(*, maskless_attention: bool, device: torch.device):
     """The network under test, on the stub reasoner, with the multiview mask configured."""
     from cosmos_framework.configs.base.defaults.multiview_attention import (
         MultiviewAttentionConfig,
@@ -174,12 +174,12 @@ def _multiview_network(*, dense_attention: bool, device: torch.device):
         multiview_attention_config=MultiviewAttentionConfig(
             # Pinned rather than "auto" so the stream padding and the mask's block size are the
             # same on every host this runs on, FlashAttention-4 present or not.
-            backend="dense" if dense_attention else "flex_triton",
+            backend="maskless" if maskless_attention else "flex_triton",
             mask=MultiviewAttentionMaskConfig(
                 # The scope the folds are the maskless alternative to, so the flex route this
                 # harness compares against is the one a caller would be choosing between.
                 attention_scope="decomposed",
-                # "dense" requires it, and it is inert on a batch with no control item.
+                # "maskless" requires it, and it is inert on a batch with no control item.
                 control_attends_sensor=True,
             ),
         ),
@@ -187,9 +187,9 @@ def _multiview_network(*, dense_attention: bool, device: torch.device):
     return Cosmos3VFMNetwork(language_model, config).to(device=device, dtype=torch.float32)
 
 
-def _run_forward(*, dense_attention: bool, device: torch.device) -> tuple[dict, SplitInfo]:
+def _run_forward(*, maskless_attention: bool, device: torch.device) -> tuple[dict, SplitInfo]:
     """One inference forward, returning its outputs and the metadata the reasoner was handed."""
-    network = _multiview_network(dense_attention=dense_attention, device=device)
+    network = _multiview_network(maskless_attention=maskless_attention, device=device)
     packed_seq = _multiview_packed_sequence()
     with torch.no_grad():
         output_dict = network(packed_seq)
@@ -210,12 +210,12 @@ def test_forward_routes_a_multiview_inference_pack_through_the_decomposition() -
     run and nothing would fail.
     """
     device = torch.device("cuda")
-    output_dict, attention_mask = _run_forward(dense_attention=True, device=device)
+    output_dict, attention_mask = _run_forward(maskless_attention=True, device=device)
 
-    assert attention_mask.multiview_dense is not None
+    assert attention_mask.multiview_maskless is not None
     # Per-sample tuples: this batch holds one sample.
-    assert attention_mask.multiview_dense.num_views == (NUM_VIEWS,)
-    assert attention_mask.multiview_dense.token_shapes == (
+    assert attention_mask.multiview_maskless.num_views == (NUM_VIEWS,)
+    assert attention_mask.multiview_maskless.token_shapes == (
         (LATENT_T, LATENT_HW // PATCH_SPATIAL, LATENT_HW // PATCH_SPATIAL),
     )
     assert attention_mask.flex_block_mask is None, "The decomposition needs no mask, so none is built."
@@ -236,9 +236,9 @@ def test_forward_routes_a_multiview_inference_pack_through_the_decomposition() -
 def test_forward_keeps_the_flex_mask_when_the_decomposition_is_off() -> None:
     """The same pack with the flag off takes the mask, which is the fallback every other pack takes."""
     device = torch.device("cuda")
-    output_dict, attention_mask = _run_forward(dense_attention=False, device=device)
+    output_dict, attention_mask = _run_forward(maskless_attention=False, device=device)
 
-    assert attention_mask.multiview_dense is None
+    assert attention_mask.multiview_maskless is None
     assert attention_mask.flex_block_mask is not None
     assert attention_mask.flex_backend is not None
     assert output_dict["preds_vision"][0].shape == (1, LATENT_CHANNELS, LATENT_T, LATENT_HW, LATENT_HW)
@@ -258,21 +258,21 @@ def test_the_two_routes_are_different_attention_over_the_same_pack() -> None:
     The size of the gap is the ``(view, frame)`` cell both sensor passes take, which the merge
     keeps twice and the mask counts once. On this 2x2 rig that cell is a large share of the key
     set, so the two disagree by tens of percent rather than by rounding -- the same reason
-    ``multiview_dense_attention`` documents itself as unable to serve a checkpoint trained
+    ``multiview_maskless_attention`` documents itself as unable to serve a checkpoint trained
     under the mask.
     """
     device = torch.device("cuda")
     torch.manual_seed(0)
-    dense, _ = _run_forward(dense_attention=True, device=device)
+    maskless, _ = _run_forward(maskless_attention=True, device=device)
     torch.manual_seed(0)
-    flex, _ = _run_forward(dense_attention=False, device=device)
+    flex, _ = _run_forward(maskless_attention=False, device=device)
 
-    dense_preds, flex_preds = dense["preds_vision"][0], flex["preds_vision"][0]
-    assert dense_preds.shape == flex_preds.shape
-    relative_gap = (dense_preds - flex_preds).abs().mean() / flex_preds.abs().mean()
+    maskless_preds, flex_preds = maskless["preds_vision"][0], flex["preds_vision"][0]
+    assert maskless_preds.shape == flex_preds.shape
+    relative_gap = (maskless_preds - flex_preds).abs().mean() / flex_preds.abs().mean()
     assert relative_gap > 0.05, (
         f"The two routes came out {float(relative_gap):.1%} apart, which is close enough that the "
-        "the dense annotation may not have reached a kernel at all."
+        "the maskless annotation may not have reached a kernel at all."
     )
 
 
@@ -290,7 +290,7 @@ def test_forward_trains_through_the_decomposition() -> None:
     somewhere in the fold.
     """
     device = torch.device("cuda")
-    network = _multiview_network(dense_attention=True, device=device)
+    network = _multiview_network(maskless_attention=True, device=device)
     packed_seq = _multiview_packed_sequence()
 
     with torch.enable_grad():
@@ -299,7 +299,7 @@ def test_forward_trains_through_the_decomposition() -> None:
 
     attention_mask = network.language_model.seen_attention_mask
     assert isinstance(attention_mask, SplitInfo)
-    assert attention_mask.multiview_dense is not None, "Training takes the decomposition too."
+    assert attention_mask.multiview_maskless is not None, "Training takes the decomposition too."
     assert attention_mask.flex_block_mask is None
 
     # vae2llm feeds the GEN tokens the two sensor passes attend, so a fold that dropped the

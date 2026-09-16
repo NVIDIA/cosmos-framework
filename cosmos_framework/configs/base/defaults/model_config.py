@@ -194,6 +194,9 @@ class OmniMoTModelConfig:
     # Tensor layout at the attention boundary when context parallelism is enabled.
     attention_io_layout: AttentionIOLayout = "sequence_sharded"
 
+    # Opt in to summed CP output gradients; keep legacy scaling for existing optimizer state.
+    correct_cp_gradients: bool = False
+
     # torch.compile knobs (enabled, compiled_region, dynamic, ...).
     compile: CompileConfig = CompileConfig()
 
