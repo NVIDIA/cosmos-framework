@@ -133,6 +133,7 @@ _DIFFUSERS_IGNORE_MODULES = [
     "lm_head",
     "model.visual*",
     "visual*",
+    "projector*",
 ]
 
 # Canonical module names consumed by Diffusers' ModelOpt loader.  These are
@@ -148,6 +149,7 @@ _DIFFUSERS_MODULES_TO_NOT_CONVERT = [
     "action_proj_out",
     "lm_head",
     "visual",
+    "projector",
 ]
 
 
