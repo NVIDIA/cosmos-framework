@@ -227,10 +227,7 @@ def test_assembly_keeps_distinct_states_and_source_config(export_modules, tmp_pa
     # Also cover a stale output symlink from an earlier assembly.
     (output / "hf_quant_config.json").symlink_to(source_config)
     (source / "modelopt_state.pth").write_bytes(b"source state")
-<<<<<<< Updated upstream
-=======
     (source / "quantization_metadata.json").write_text('{"previous_export": true}')
->>>>>>> Stashed changes
     _, component = compressed_dit()
     torch.save(component, staging / "modelopt_state.pth")
     tiny_reasoner().config.save_pretrained(source)
@@ -248,10 +245,7 @@ def test_assembly_keeps_distinct_states_and_source_config(export_modules, tmp_pa
     assert torch.load(output / "transformer/modelopt_state.pth", weights_only=False) == component
     assert not (output / "transformer/transformers_modelopt_state.pth").exists()
     assert (source / "modelopt_state.pth").read_bytes() == b"source state"
-<<<<<<< Updated upstream
-=======
     assert not (output / "quantization_metadata.json").exists()
->>>>>>> Stashed changes
     assert json.loads((output / "model.safetensors.index.json").read_text())["weight_map"] == {
         "weight": "transformer/model.safetensors",
     }
@@ -309,7 +303,9 @@ def test_root_writer_uses_export_config_and_local_architecture(export_modules, t
 @pytest.mark.parametrize("cosmos_config", [True, False])
 def test_cosmos_shim_loads_shards(export_modules, tmp_path, quantized, flat, cosmos_config):
     helper, exporter = export_modules
-    model_path = Path(__file__).resolve().parents[2] / "packages/transformers-cosmos3/transformers_cosmos3/model.py"
+    transformers_cosmos3_path = Path(__file__).resolve().parents[2] / "packages/transformers-cosmos3"
+    sys.path.append(str(transformers_cosmos3_path))
+    model_path = transformers_cosmos3_path / "transformers_cosmos3/model.py"
     spec = importlib.util.spec_from_file_location("cosmos_transformers_shim", model_path)
     shim = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(shim)
@@ -404,8 +400,6 @@ def test_diffusers_load_preserves_buffers_and_qtensor_wrappers(export_modules, t
     assert loaded.state_dict().keys() == saved.keys()
     for name, tensor in loaded.state_dict().items():
         torch.testing.assert_close(tensor.float(), saved[name].float(), rtol=0, atol=0)
-<<<<<<< Updated upstream
-=======
 
 
 def test_quantization_metadata_records_runtime_and_preserves_source(export_modules, tmp_path):
@@ -440,4 +434,3 @@ def test_quantization_metadata_records_runtime_and_preserves_source(export_modul
     assert source_metadata.read_text() == '{"previous_export": true}'
     assert (source / "generation_config.json").read_text() == '{"transformers_version": "4.56.0"}'
     assert not (output / provenance.METADATA_FILENAME).is_symlink()
->>>>>>> Stashed changes
