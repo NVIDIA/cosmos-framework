@@ -163,10 +163,18 @@ def _apply_full_ac(
     )
 
 
-def _apply_ac_to_transformer_block(
+def apply_ac_to_module(
     module: nn.Module,
     config: ActivationCheckpointingConfig,
 ) -> nn.Module:
+    """Wrap one module in the checkpoint wrapper that ``config.mode`` selects.
+
+    Nothing here is specific to a transformer block, so the VFM side reuses it
+    for the standalone modules that sit outside ``model.layers`` (see
+    ``parallelize_vfm_network``). ``config.mode == "none"`` is rejected rather
+    than treated as a no-op: the callers decide whether AC applies at all, and
+    silently returning an unwrapped module would hide a miswired policy.
+    """
     if config.mode == "full":
         return _apply_full_ac(module, config)
     elif config.mode == "selective":
@@ -192,7 +200,7 @@ def apply_ac(
 
     layers = model.model.layers
     for layer_id, transformer_block in layers.named_children():
-        transformer_block = _apply_ac_to_transformer_block(
+        transformer_block = apply_ac_to_module(
             transformer_block,
             config,
         )

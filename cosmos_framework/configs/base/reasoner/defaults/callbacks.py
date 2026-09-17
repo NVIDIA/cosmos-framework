@@ -23,7 +23,7 @@ from cosmos_framework.callbacks.sampled_media_recorder import SampledMediaRecord
 from cosmos_framework.callbacks.tokens_per_sec import VLMTokensPerSec
 from cosmos_framework.callbacks.wandb_log import WandbCallback as WandBCallbackMultiplier
 from cosmos_framework.callbacks.wandb_vis import VisualizationLoggingCallback
-from cosmos_framework.configs.base.defaults.callbacks import JOB_MONITOR_CALLBACKS
+from cosmos_framework.configs.base.defaults.job_monitor import JOB_MONITOR_CALLBACKS
 
 # from cosmos_framework.utils.callback import NVTXCallback
 

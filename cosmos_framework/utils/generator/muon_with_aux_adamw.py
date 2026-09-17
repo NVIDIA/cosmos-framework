@@ -52,6 +52,7 @@ orthogonalizes a *different* matrix in parallel (see its module docstring).
 """
 
 import math
+from numbers import Real
 
 import torch
 import torch.distributed as dist
@@ -129,6 +130,30 @@ class MuonWithAuxAdamW(torch.optim.Optimizer):
         max_moe_expert_ns_matrices: int = 0,
         **kwargs,  # Absorb VFM-specific args (fused, keys_to_select, etc.)
     ):
+        if (
+            isinstance(muon_momentum, bool)
+            or not isinstance(muon_momentum, Real)
+            or not math.isfinite(float(muon_momentum))
+            or not 0.0 <= float(muon_momentum) < 1.0
+        ):
+            raise ValueError(f"muon_momentum must be a finite real in [0, 1), got {muon_momentum!r}")
+        if isinstance(ns_steps, bool) or not isinstance(ns_steps, int) or ns_steps < 1:
+            raise ValueError(f"ns_steps must be a positive integer, got {ns_steps!r}")
+        if (
+            isinstance(muon_lr_scale, bool)
+            or not isinstance(muon_lr_scale, Real)
+            or not math.isfinite(float(muon_lr_scale))
+            or muon_lr_scale <= 0.0
+        ):
+            raise ValueError(f"muon_lr_scale must be a finite positive real, got {muon_lr_scale!r}")
+        if (
+            isinstance(max_moe_expert_ns_matrices, bool)
+            or not isinstance(max_moe_expert_ns_matrices, int)
+            or max_moe_expert_ns_matrices < 0
+        ):
+            raise ValueError(
+                f"max_moe_expert_ns_matrices must be a non-negative integer, got {max_moe_expert_ns_matrices!r}"
+            )
         if "master_weights" in kwargs:
             # Not silently ignored: a caller asking for master weights is asking for
             # precision this optimizer no longer provides that way, and would otherwise
@@ -151,9 +176,6 @@ class MuonWithAuxAdamW(torch.optim.Optimizer):
                 warnings.warn(f"MuonWithAuxAdamW ignoring unexpected kwargs: {unexpected}")
 
         validate_split_expert_ns_config(split_expert_gate_up, batch_split_expert_ns)
-        if max_moe_expert_ns_matrices < 0:
-            raise ValueError(f"max_moe_expert_ns_matrices must be >= 0, got {max_moe_expert_ns_matrices}")
-
         # Store shared hyperparameters
         # Note: lr is accessed via property that reads from param_groups
         # to support LR schedulers (which update param_groups[X]["lr"])

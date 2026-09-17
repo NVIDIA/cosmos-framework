@@ -30,6 +30,10 @@ class DataSetting:
     qwen_max_video_token_length: int = 8192
     qwen_max_image_token_length: int = 8192
     qwen_target_fps: float = 4.0
+    qwen_video_temporal_mode: str = attrs.field(
+        default="native", validator=attrs.validators.in_({"native", "framewise"})
+    )
+    qwen_drop_over_max_length: bool = False
     text_chat_order: str = attrs.field(
         default="text_end",
         validator=attrs.validators.in_({"text_end", "text_start", "random"}),

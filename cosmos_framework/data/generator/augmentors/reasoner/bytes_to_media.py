@@ -15,14 +15,13 @@ from typing import Dict, Optional
 import numpy as np
 import torch
 from PIL import Image, UnidentifiedImageError
-from torchcodec.decoders import AudioDecoder
+from torchcodec.decoders import AudioDecoder, VideoDecoder
 
 from cosmos_framework.data.imaginaire.webdataset.augmentors.augmentor import Augmentor
 from cosmos_framework.utils import log
-from cosmos_framework.data.generator.reasoner.video_decoder_qwen import _video_decoder_qwen_func
+from cosmos_framework.data.generator.reasoner.video_decoder_qwen import VideoTemporalMode, _video_decoder_qwen_func
 from cosmos_framework.data.generator.processors.qwen3vl_processor import Qwen3VLProcessor
 from cosmos_framework.utils.generator.video_preprocess import tensor_to_pil_images
-from cosmos_framework.utils.generator.torchcodec_video import probe_video
 
 
 class BytesToMedia(Augmentor):
@@ -56,6 +55,7 @@ class BytesToMedia(Augmentor):
         processor: Qwen3VLProcessor = None,
         extract_audio: bool = False,
         audio_sample_rate: int = 16_000,
+        video_temporal_mode: VideoTemporalMode = "native",
     ) -> None:
         """
         Args:
@@ -76,6 +76,8 @@ class BytesToMedia(Augmentor):
         """
         self.input_key = input_key
         self.output_key = output_key
+        if video_temporal_mode not in ("native", "framewise"):
+            raise ValueError(f"Unsupported video_temporal_mode: {video_temporal_mode!r}")
         self.video_decoder_params = {
             "min_fps_thres": min_fps_thres,
             "max_fps_thres": max_fps_thres,
@@ -85,6 +87,7 @@ class BytesToMedia(Augmentor):
             "num_threads": num_threads,
             "random_augmentation": random_augmentation,
             "frame_count_random_range": frame_count_random_range,
+            "video_temporal_mode": video_temporal_mode,
         }
         self.is_input_pickle_byptes = is_input_pickle_byptes
         self.use_start_frame_end_frame = use_start_frame_end_frame
@@ -127,7 +130,9 @@ class BytesToMedia(Augmentor):
                 num_channels=1,
             )
             if start_frame is not None and end_frame is not None:
-                video_metadata = probe_video(media_bytes, num_threads=self.video_decoder_params["num_threads"])
+                video_metadata = VideoDecoder(
+                    media_bytes, num_ffmpeg_threads=self.video_decoder_params["num_threads"]
+                ).metadata
                 samples = decoder.get_samples_played_in_range(
                     start_seconds=start_frame / video_metadata.average_fps,
                     stop_seconds=end_frame / video_metadata.average_fps,
@@ -148,7 +153,7 @@ class BytesToMedia(Augmentor):
     ) -> float | None:
         """Probe the effective video duration in seconds used for proportional budget allocation."""
         try:
-            metadata = probe_video(video_bytes, num_threads=self.video_decoder_params["num_threads"])
+            metadata = VideoDecoder(video_bytes, num_ffmpeg_threads=self.video_decoder_params["num_threads"]).metadata
             frame_count = (
                 max(end_frame - start_frame, 0)
                 if start_frame is not None and end_frame is not None

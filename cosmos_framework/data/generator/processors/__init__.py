@@ -106,6 +106,16 @@ def _download_llm_tokenizer(
     )
 
 
+def _is_local_qwen35_snapshot(path: str) -> bool:
+    """Recognize pinned Qwen3.5 snapshots whose directory name is only a revision."""
+    config_path = os.path.join(path, "config.json")
+    if not os.path.isfile(config_path):
+        return False
+    with open(config_path) as config_file:
+        config = json.load(config_file)
+    return config.get("model_type") in {"qwen3_5", "qwen3_5_moe"}
+
+
 def build_processor(
     tokenizer_type: str,
     config_variant: Optional[str] = None,
@@ -137,7 +147,13 @@ def build_processor(
         raise ValueError("Provide either config_variant or (credentials, bucket), not both")
     if "Qwen/Qwen3-VL" in tokenizer_type and "Nemo-Chat" in tokenizer_type:
         return Qwen3VLNemoChatProcessor(tokenizer_type, credentials=credentials, bucket=bucket, cache_dir=cache_dir)
-    elif "Qwen/Qwen3-VL" in tokenizer_type or "Siglip2-Qwen3-1.7B" in tokenizer_type:
+    elif (
+        "Qwen/Qwen3-VL" in tokenizer_type
+        or "Siglip2-Qwen3-1.7B" in tokenizer_type
+        or "qwen3.5" in tokenizer_type.lower()
+        or "qwen3_5" in tokenizer_type.lower()
+        or _is_local_qwen35_snapshot(tokenizer_type)
+    ):
         return Qwen3VLProcessor(tokenizer_type, credentials=credentials, bucket=bucket, cache_dir=cache_dir)
     elif "nvidia/NVIDIA-Nemotron-Nano-12B-v2-VL-BF16" in tokenizer_type:
         return NemotronVLProcessor(tokenizer_type, credentials=credentials, bucket=bucket, cache_dir=cache_dir)

@@ -3,6 +3,8 @@
 
 """Autoregressive sequence packing for framewise and chunkwise AR generation."""
 
+from typing import cast
+
 import torch
 
 from cosmos_framework.model.generator.utils.data_and_condition import GenerationDataClean
@@ -16,7 +18,7 @@ from cosmos_framework.data.generator.sequence_packing import (
 def pack_input_sequence_autoregressive(
     vision_latent: torch.Tensor | None,
     action_latent: torch.Tensor | None,
-    text_tokens: list[int] | None,
+    text_tokens: list[int] | list[list[int]] | None,
     timestep: float,
     fps_vision: list[float],
     fps_action: list[float] | None,
@@ -37,6 +39,7 @@ def pack_input_sequence_autoregressive(
     raw_action_dim: torch.Tensor | int | None = None,
     vision_temporal_positions: torch.Tensor | None = None,
     num_views: int | None = None,
+    text_view_ids: list[int] | None = None,
 ) -> PackedSequence:
     """
     Pack input sequence for autoregressive video generation (one AR unit at a time).
@@ -62,7 +65,9 @@ def pack_input_sequence_autoregressive(
         action_latent: Action latent for the current AR unit. Temporal causal: (T*tcf, D)
             (T action frames a_{N-1}..a_{N+T-2}, tcf sub-tokens each). Standard: (1, 1, D).
             Or None.
-        text_tokens: List of text token IDs, or None for units after frame 0
+        text_tokens: One text token sequence, one sequence per camera view, or
+            None for units after frame 0. Per-view sequences require
+            ``text_view_ids``.
         timestep: Diffusion timestep for noise schedule (single float)
         fps_vision: FPS for vision modality (list with single element)
         fps_action: FPS for action modality (list with single element), or None
@@ -105,6 +110,8 @@ def pack_input_sequence_autoregressive(
             training item while packing only the current chunk.
         num_views: Number of camera views concatenated along the latent temporal
             axis. Required by multiview FlexAttention metadata.
+        text_view_ids: Camera-view ID for every entry in a nested ``text_tokens``
+            payload. ``None`` keeps one sample-level caption visible to all views.
 
     Returns:
         Finalized PackedSequence containing the supertoken(s) for this AR unit
@@ -172,6 +179,20 @@ def pack_input_sequence_autoregressive(
         raise ValueError("vision_temporal_positions requires vision_latent.")
     if num_views is not None and num_views < 1:
         raise ValueError(f"num_views must be >= 1, got {num_views}.")
+    if text_view_ids is not None:
+        if text_tokens is None or not all(isinstance(tokens, list) for tokens in text_tokens):
+            raise ValueError("text_view_ids requires one nested text token sequence per view.")
+        if len(text_tokens) != len(text_view_ids):
+            raise ValueError(f"Per-view AR text carries {len(text_tokens)} captions but {len(text_view_ids)} view IDs.")
+        if num_views is None:
+            raise ValueError("Per-view AR text requires num_views metadata.")
+        expected_view_ids = list(range(num_views))
+        if text_view_ids != expected_view_ids:
+            raise ValueError(
+                f"Per-view AR text must cover the current camera-major views {expected_view_ids}, got {text_view_ids}."
+            )
+    elif text_tokens is not None and any(isinstance(token, list) for token in text_tokens):
+        raise ValueError("Nested AR text tokens require text_view_ids so attention can scope every caption.")
     if action_latent is not None:
         if video_temporal_causal:
             assert action_latent.dim() == 2, (
@@ -194,6 +215,7 @@ def pack_input_sequence_autoregressive(
 
     sequence_plan = SequencePlan(
         has_text=has_text,
+        text_view_ids=list(text_view_ids) if text_view_ids is not None else None,
         has_vision=has_vision,
         has_action=has_action,
         condition_frame_indexes_vision=condition_frame_indexes_vision or [],
@@ -241,7 +263,12 @@ def pack_input_sequence_autoregressive(
     )
 
     # Prepare text indexes
-    input_text_indexes = [text_tokens] if has_text else [[]]  # Empty list for no text
+    if not has_text:
+        input_text_indexes: list[list[int]] = [[]]  # Empty list for no text
+    elif text_view_ids is not None:
+        input_text_indexes = cast(list[list[int]], text_tokens)
+    else:
+        input_text_indexes = [cast(list[int], text_tokens)]
 
     # Prepare timestep
     input_timesteps = torch.tensor([timestep], dtype=torch.float32)  # [1]

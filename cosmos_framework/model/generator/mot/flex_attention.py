@@ -89,7 +89,9 @@ from cosmos_framework.model.generator.mot.flex_attention_utils import (
 # *data* changes per step, which does not trigger recompilation either way. torch's
 # entry point is imported under an alias because this module's own,
 # :func:`flex_attention`, takes that name.
-_COMPILED_FLEX_ATTENTION = torch.compile(torch_flex_attention, dynamic=True)
+# Training and inference disable duck shaping so mask lengths do not alias token
+# lengths. The public wrapper handles head specialization and checkpoint tracing.
+_COMPILED_FLEX_ATTENTION = torch.compile(torch_flex_attention, dynamic=True, fullgraph=True)
 
 # A FlexAttention mask predicate: (b, h, q_idx, kv_idx) -> bool tensor.
 MaskMod = Callable[[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor], torch.Tensor]

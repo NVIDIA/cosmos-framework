@@ -63,7 +63,7 @@ def get_vae_pixel_shapes(
 
 
 def normalize_uint8_item(state: torch.Tensor, fp32_kwargs: dict[str, Any]) -> torch.Tensor:
-    """Convert one GPU-resident uint8 vision item to fp32 and normalize to ``[-1,1]``.
+    """Move one uint8 vision item to the requested device as fp32 and normalize it to ``[-1,1]``.
 
     A module function rather than a method because both encode paths need it: the local
     per-item encode on ``OmniMoTModel``, and the unit building here.

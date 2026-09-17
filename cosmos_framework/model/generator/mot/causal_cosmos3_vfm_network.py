@@ -39,23 +39,11 @@ from cosmos_framework.model.generator.mot.causal_flex_attention import (
 def build_interactive_multiview_mask_items(
     packed_seq: PackedSequence,
     *,
+    lidar_attends_captions: bool = True,
     condition_masks: Sequence[torch.Tensor] | None = None,
 ) -> list[list[SensorMaskItem]]:
-    """Build base mask items, optionally restoring pre-replay condition masks.
-
-    Refuses a pack carrying per-view captions. One caption per camera only means something
-    if a camera reads its own and not its neighbours', and the replay masks built from these
-    items describe the GEN stream only -- they key every GEN token against the whole UND
-    stream, with no notion of which caption belongs to which view. Running anyway would read
-    all of a sample's captions indiscriminately, at no error and no obviously wrong loss.
-    """
-    if _multiview_caption_mask_items(packed_seq) is not None:
-        raise ValueError(
-            "This pack carries per-view captions (separate_view_text_tokenization), which the "
-            "interactive replay masks cannot scope to a camera. Turn off "
-            "separate_view_text_tokenization on the dataset for interactive replay."
-        )
-    sensor_mask_items = _multiview_sensor_mask_items(packed_seq)
+    """Build base sensor mask items, optionally restoring pre-replay condition masks."""
+    sensor_mask_items = _multiview_sensor_mask_items(packed_seq, lidar_attends_captions=lidar_attends_captions)
     if condition_masks is None:
         return sensor_mask_items
     flat_items = [item for sample_items in sensor_mask_items for item in sample_items]
@@ -167,7 +155,11 @@ class InteractiveCosmos3VFMNetwork(Cosmos3VFMNetwork):
             flex_metadata = build_multiview_transfer_ar_flex_metadata(
                 seq_len=global_gen_seq_len,
                 full_q_offsets=full_q_offsets,
-                sensor_mask_items=build_interactive_multiview_mask_items(packed_seq),
+                sensor_mask_items=build_interactive_multiview_mask_items(
+                    packed_seq,
+                    lidar_attends_captions=self.config.multiview_attention_config.mask.lidar_attends_captions,
+                ),
+                caption_mask_items=_multiview_caption_mask_items(packed_seq),
                 device=full_only_seq.device,
                 num_und=global_und_seq_len,
                 causal_offsets=causal_offsets,
@@ -191,16 +183,21 @@ class InteractiveCosmos3VFMNetwork(Cosmos3VFMNetwork):
                 or isinstance(materialized_target_frame_ranges, (str, bytes))
             ):
                 raise TypeError("teacher_forcing_materialized_target_frame_ranges must be a sequence of ranges.")
-            original_masks = getattr(packed_seq, "teacher_forcing_original_condition_masks_vision", None)
+            original_masks = getattr(packed_seq, "teacher_forcing_original_condition_masks_sensors", None)
             if original_masks is None:
-                raise ValueError("Flex teacher forcing requires the original vision condition masks.")
+                # RGB-only AR callers created before the joint replay path use this name.
+                original_masks = getattr(packed_seq, "teacher_forcing_original_condition_masks_vision", None)
+            if original_masks is None:
+                raise ValueError("Flex teacher forcing requires the original sensor condition masks.")
             flex_metadata = build_teacher_forcing_multiview_flex_metadata(
                 seq_len=global_gen_seq_len,
                 full_q_offsets=full_q_offsets,
                 sensor_mask_items=build_interactive_multiview_mask_items(
                     packed_seq,
+                    lidar_attends_captions=self.config.multiview_attention_config.mask.lidar_attends_captions,
                     condition_masks=original_masks,
                 ),
+                caption_mask_items=_multiview_caption_mask_items(packed_seq),
                 device=full_only_seq.device,
                 num_und=global_und_seq_len,
                 causal_offsets=causal_offsets,
@@ -230,6 +227,7 @@ class InteractiveCosmos3VFMNetwork(Cosmos3VFMNetwork):
         packed_seq: PackedSequence,
         memory: Any | None = None,
         video_temporal_causal: bool | None = None,
+        **kwargs: Any,
     ) -> dict[str, Any]:
         """Expose the active pack to the instance-local language-model hook."""
         previous_packed_seq = self._active_packed_seq
@@ -239,6 +237,7 @@ class InteractiveCosmos3VFMNetwork(Cosmos3VFMNetwork):
                 packed_seq=packed_seq,
                 memory=memory,
                 video_temporal_causal=video_temporal_causal,
+                **kwargs,
             )
         finally:
             self._active_packed_seq = previous_packed_seq

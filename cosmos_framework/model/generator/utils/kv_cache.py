@@ -20,6 +20,7 @@ import torch.nn.functional as F
 
 # Re-exported from memory.py for backward compatibility.
 from cosmos_framework.model.generator.utils.memory import KVToStore, MemoryState, MemoryValue
+from cosmos_framework.data.generator.sequence_packing.runtime import get_num_real_samples
 from cosmos_framework.configs.base.defaults.replay_attention import TeacherForcingReplayPolicyConfig
 from cosmos_framework.model.generator.utils.kv_storage_backend import (
     BF16StorageBackend,
@@ -1699,7 +1700,7 @@ class ARMemoryState(MemoryState):
 
     def init(self, hidden_states: dict, device: torch.device) -> None:
         if self.batched:
-            self._batch_size = int(hidden_states["sample_offsets"].shape[0] - 1)
+            self._batch_size = int(get_num_real_samples(hidden_states))
             full_sample_ids = hidden_states["_full_only_sample_ids"][: hidden_states["_num_full_tokens"]]  # [N_gen]
             causal_sample_ids = hidden_states["_causal_sample_ids"][: hidden_states["_num_causal_tokens"]]  # [N_und]
             gen_counts = torch.bincount(full_sample_ids, minlength=self._batch_size)  # [B]

@@ -36,6 +36,9 @@ class PolicyConfig:
     # Extra model config
     lora: Union[str, None] = None
     enable_liger_kernel: bool = False
+    # Dense Qwen3.5 caption opt-ins; other recipes retain the standard logits loss.
+    enable_fused_weighted_ce: bool = False
+    qwen35_fp32_recurrent_a_log: bool = False
     trainable_map: Union[str, None] = None
     monkey_patch_for_text_only_data: bool = False
 

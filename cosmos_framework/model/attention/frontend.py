@@ -234,6 +234,11 @@ def attention(
         )
 
     assert compatible_backend in BACKEND_MAP
+    # Dynamo rejects repeated Tensor inputs to NATTEN's autograd.Function.
+    # A separate KV view preserves each sequence's offsets without copying their data.
+    if is_torch_compiling() and is_varlen:
+        assert cumulative_seqlen_KV is not None
+        cumulative_seqlen_KV = cumulative_seqlen_KV.view_as(cumulative_seqlen_KV)  # [B+1]
     return BACKEND_MAP[compatible_backend](
         query=query,
         key=key,

@@ -141,13 +141,24 @@ def get_context_parallel_sharded_sequence(
     assert text_seq.shape[0] % world_size == 0, "text_seq.shape[0] must be divisible by world_size"
     assert gen_seq.shape[0] % world_size == 0, "gen_seq.shape[0] must be divisible by world_size"
 
+    # The two hidden-state streams are cloned rather than left as views. Narrowing dim 0 of a
+    # contiguous tensor yields a tensor that is still contiguous, so the shard would alias the full
+    # padded stream and keep it alive as its base for as long as the shard lives -- which is the
+    # whole transformer stack, since this pack is what the stack runs on. Sharding to 1/cp would
+    # then cost the caller nothing in residency, which defeats the point. ``.contiguous()`` cannot
+    # express this: it is a no-op on an already-contiguous narrow. The copy is 1/cp of the stream,
+    # paid once per forward, against the full stream freed for the stack's duration.
+    #
+    # Only these two are worth it. The sample-id and position-id shards below stay views: their
+    # bases are a couple of int64 rows per token rather than ``hidden_size`` of them, so what they
+    # pin is measured in tens of megabytes.
     text_len = text_seq.shape[0]
     text_shard_len = text_len // world_size
-    text_shard = text_seq.narrow(0, rank * text_shard_len, text_shard_len)
+    text_shard = text_seq.narrow(0, rank * text_shard_len, text_shard_len).clone()
 
     gen_len = gen_seq.shape[0]
     gen_shard_len = gen_len // world_size
-    gen_shard = gen_seq.narrow(0, rank * gen_shard_len, gen_shard_len)
+    gen_shard = gen_seq.narrow(0, rank * gen_shard_len, gen_shard_len).clone()
 
     # SequencePack keeps all per-token metadata aligned with its padded streams.
     text_sample_ids = input_pack["_causal_sample_ids"]  # [text_len]

@@ -12,12 +12,18 @@ from typing import Literal, get_args
 import torch
 from torch.nn.attention.flex_attention import BlockMask
 
-from cosmos_framework.model.generator.mot.flex_attention import (
-    FlexMetadata as BaseFlexMetadata,
+from cosmos_framework.configs.base.defaults.multiview_attention import (
+    CAPTION_SCOPE_ALL,
+    CAPTION_SCOPE_NONE,
+    CAPTION_SCOPE_SAME_VIEW,
 )
 from cosmos_framework.model.generator.mot.flex_attention import (
+    CaptionMaskItem,
     SensorMaskItem,
     build_multiview_flex_metadata,
+)
+from cosmos_framework.model.generator.mot.flex_attention import (
+    FlexMetadata as BaseFlexMetadata,
 )
 from cosmos_framework.model.generator.mot.flex_attention_utils import (
     build_block_mask_from_metadata_runs,
@@ -49,6 +55,7 @@ class FlexQueryMetadata:
     timestamp: torch.Tensor  # [Q]
     is_noisy: torch.Tensor  # [Q]
     is_control: torch.Tensor  # [Q]
+    caption_scope: torch.Tensor  # [Q]
     token_role_id: torch.Tensor  # [Q]
     causal_step_id: torch.Tensor  # [Q]
 
@@ -63,6 +70,7 @@ class TeacherForcingFlexMetadata:
     timestamp: torch.Tensor  # [KV]
     is_noisy: torch.Tensor  # [KV]
     is_control: torch.Tensor  # [KV]
+    caption_scope: torch.Tensor  # [KV]
     token_role_id: torch.Tensor  # [KV]
     causal_step_id: torch.Tensor  # [KV]
     num_und: int
@@ -79,6 +87,7 @@ class TeacherForcingFlexMetadata:
             "timestamp",
             "is_noisy",
             "is_control",
+            "caption_scope",
             "token_role_id",
             "causal_step_id",
         ):
@@ -193,6 +202,7 @@ class _StreamFields:
     timestamp: torch.Tensor  # [S]
     is_noisy: torch.Tensor  # [S]
     is_control: torch.Tensor  # [S]
+    caption_scope: torch.Tensor  # [S]
     token_role_id: torch.Tensor  # [S]
     causal_step_id: torch.Tensor  # [S]
 
@@ -206,6 +216,7 @@ def _key_stream_fields(metadata: TeacherForcingFlexMetadata) -> _StreamFields:
         timestamp=metadata.timestamp,
         is_noisy=metadata.is_noisy,
         is_control=metadata.is_control,
+        caption_scope=metadata.caption_scope,
         token_role_id=metadata.token_role_id,
         causal_step_id=metadata.causal_step_id,
     )
@@ -221,6 +232,7 @@ def _query_stream_fields(metadata: TeacherForcingFlexMetadata) -> _StreamFields:
         timestamp=query.timestamp,
         is_noisy=query.is_noisy,
         is_control=query.is_control,
+        caption_scope=query.caption_scope,
         token_role_id=query.token_role_id,
         causal_step_id=query.causal_step_id,
     )
@@ -246,11 +258,14 @@ def build_teacher_forcing_clean_target_token_indexes(
     token_offset = 0
     for sample_idx, sample_items in enumerate(sensor_mask_items):
         target_items = [item for item in sample_items if not item.is_control]
-        if len(target_items) != 1:
-            raise ValueError(
-                f"Teacher forcing requires exactly one target item per sample; sample {sample_idx} has "
-                f"{len(target_items)}."
-            )
+        if not target_items:
+            raise ValueError(f"Teacher forcing requires a target sensor item; sample {sample_idx} has none.")
+        target_views: set[int] = set()
+        for target in target_items:
+            views = set(range(target.view_offset, target.view_offset + target.num_views))
+            if target_views & views:
+                raise ValueError(f"Teacher forcing requires one target per sensor view in sample {sample_idx}.")
+            target_views.update(views)
         for item_idx, item in enumerate(sample_items):
             condition_mask = item.condition_mask.to(device=device, dtype=torch.bool).reshape(-1)  # [T]
             generated_tokens = (~condition_mask).repeat_interleave(item.spatial_tokens)  # [N_item]
@@ -265,11 +280,14 @@ def build_teacher_forcing_clean_target_token_indexes(
     return torch.cat(selected_indexes)  # [N_clean]
 
 
-def _stream_membership(base: BaseFlexMetadata) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+def _stream_membership(
+    base: BaseFlexMetadata, num_real_samples: int
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     """Return positions plus real-UND and real-GEN flags from base metadata."""
     stream_len = base.seq_len
     positions = torch.arange(stream_len, device=base.sample_id.device)  # [S]
-    is_real = base.sample_id >= 0  # [S]
+    # Base packing uses the next sample id for padding; explicit AR memory uses -1.
+    is_real = (base.sample_id >= 0) & (base.sample_id < num_real_samples)  # [S]
     is_und = (positions < base.num_und) & is_real  # [S]
     is_gen = (positions >= base.num_und) & is_real  # [S]
     return positions, is_und, is_gen
@@ -279,9 +297,10 @@ def _base_token_roles(
     base: BaseFlexMetadata,
     *,
     pass_kind: str,
+    num_real_samples: int,
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     """Build training role ids plus real-UND and real-GEN flags from base metadata."""
-    positions, is_und, is_gen = _stream_membership(base)
+    positions, is_und, is_gen = _stream_membership(base, num_real_samples)  # [S], [S], [S]
     stream_len = base.seq_len
     is_target_condition = is_gen & (~base.is_noisy) & (~base.is_control)  # [S]
     is_target_generated = is_gen & base.is_noisy & (~base.is_control)  # [S]
@@ -345,6 +364,38 @@ def _teacher_forcing_materialized_stream_mask(
     return torch.cat((materialized_und, materialized_gen))  # [UND+GEN]
 
 
+def _sensor_causal_steps(
+    *,
+    frame_id: torch.Tensor,
+    timestamp: torch.Tensor,
+    sample_id: torch.Tensor,
+    sensor_mask_items: Sequence[Sequence[SensorMaskItem]],
+    frames_per_chunk: int,
+) -> torch.Tensor:
+    """Put joint sensor streams on the RGB chunk clock without changing RGB masks.
+
+    Frame zero is a singleton. Later chunks end at C, 2C, ... RGB latent
+    intervals. A 10 Hz LiDAR sweep and a 7.5 Hz RGB latent at the same time
+    must enter the same chunk, even though their frame indexes differ.
+    """
+    steps = _causal_steps_from_frames(frame_id, frames_per_chunk)  # [S]
+    for sample_index, items in enumerate(sensor_mask_items):
+        if not items:
+            continue
+        reference_interval = items[0].seconds_per_frame
+        if all(item.seconds_per_frame == reference_interval for item in items):
+            continue
+        if reference_interval <= 0:
+            raise ValueError("Joint teacher forcing requires a positive RGB latent frame interval")
+        chunk_seconds = frames_per_chunk * reference_interval
+        # Float32 timestamps can straddle an exact shared sensor boundary by a
+        # few ULPs. The tolerance is in chunk units, well below a sensor tick.
+        timed_steps = torch.ceil(timestamp / chunk_seconds - 1e-5).to(torch.long)  # [S]
+        selected = (sample_id == sample_index) & (frame_id >= 0)  # [S]
+        steps = torch.where(selected, timed_steps, steps)  # [S]
+    return steps
+
+
 def build_teacher_forcing_multiview_flex_metadata(
     *,
     seq_len: int,
@@ -358,6 +409,7 @@ def build_teacher_forcing_multiview_flex_metadata(
     teacher_forcing_replay_policy: TeacherForcingReplayPolicyConfig,
     materialized_target_frame_ranges: Sequence[tuple[int, int]] | None = None,
     clean_memory_seq_len: int = 0,
+    caption_mask_items: Sequence[Sequence[CaptionMaskItem]] | None = None,
 ) -> TeacherForcingFlexMetadata:
     """Build metadata for clean replay or noisy replay with a clean K/V suffix.
 
@@ -375,10 +427,7 @@ def build_teacher_forcing_multiview_flex_metadata(
         gen_seq_len=seq_len,
         full_q_offsets=full_q_offsets,
         sensor_mask_items=sensor_mask_items,
-        # Replay packs carry one sample-level caption per sample -- per-view captions are
-        # refused upstream in ``build_interactive_multiview_mask_items`` -- so there is no
-        # per-camera caption for the gen->und pass to narrow to.
-        caption_mask_items=None,
+        caption_mask_items=caption_mask_items,
         device=device,
         und_seq_len=num_und,
         causal_offsets=causal_offsets,
@@ -389,13 +438,16 @@ def build_teacher_forcing_multiview_flex_metadata(
         # Letting the base add its own control->sensor edges would double-specify it.
         control_attends_sensor=False,
     )
-    token_role_id, _is_und, _is_gen = _base_token_roles(base, pass_kind=pass_kind)
+    token_role_id, _is_und, _is_gen = _base_token_roles(
+        base, pass_kind=pass_kind, num_real_samples=len(sensor_mask_items)
+    )  # [S], [S], [S]
     sample_id = base.sample_id  # [S]
     frame_id = base.frame_id  # [S]
     view_id = base.view_id  # [S]
     timestamp = base.timestamp  # [S]
     is_noisy = base.is_noisy  # [S]
     is_control = base.is_control  # [S]
+    caption_scope = base.caption_scope  # [S]
     if materialized_target_frame_ranges is not None:
         materialized = _teacher_forcing_materialized_stream_mask(
             sensor_mask_items=sensor_mask_items,
@@ -412,12 +464,19 @@ def build_teacher_forcing_multiview_flex_metadata(
         timestamp = torch.where(materialized, timestamp, timestamp_sentinel)  # [S]
         is_noisy = is_noisy & materialized  # [S]
         is_control = is_control & materialized  # [S]
+        caption_scope = torch.where(materialized, caption_scope, CAPTION_SCOPE_NONE)  # [S]
         token_role_id = torch.where(
             materialized,
             token_role_id,
             torch.full_like(token_role_id, _ROLE_PADDING),
         )  # [S]
-    causal_step_id = _causal_steps_from_frames(frame_id, frames_per_chunk)  # [S]
+    causal_step_id = _sensor_causal_steps(
+        frame_id=frame_id,
+        timestamp=timestamp,
+        sample_id=sample_id,
+        sensor_mask_items=sensor_mask_items,
+        frames_per_chunk=frames_per_chunk,
+    )  # [S]
     query = FlexQueryMetadata(
         sample_id=sample_id[num_und:].clone(),  # [Q]
         frame_id=frame_id[num_und:].clone(),  # [Q]
@@ -425,6 +484,7 @@ def build_teacher_forcing_multiview_flex_metadata(
         timestamp=timestamp[num_und:].clone(),  # [Q]
         is_noisy=is_noisy[num_und:].clone(),  # [Q]
         is_control=is_control[num_und:].clone(),  # [Q]
+        caption_scope=caption_scope[num_und:].clone(),  # [Q]
         token_role_id=token_role_id[num_und:].clone(),  # [Q]
         causal_step_id=causal_step_id[num_und:].clone(),  # [Q]
     )
@@ -461,6 +521,10 @@ def build_teacher_forcing_multiview_flex_metadata(
         causal_step_id = torch.cat((causal_step_id, clean_step_id))  # [KV]
         is_noisy = torch.cat((is_noisy, torch.zeros(clean_memory_seq_len, device=device, dtype=torch.bool)))  # [KV]
         is_control = torch.cat((is_control, torch.zeros(clean_memory_seq_len, device=device, dtype=torch.bool)))  # [KV]
+        clean_memory_caption_scope = torch.full(
+            (clean_memory_seq_len,), CAPTION_SCOPE_NONE, device=device, dtype=torch.long
+        )  # [M]
+        caption_scope = torch.cat((caption_scope, clean_memory_caption_scope))  # [KV]
         clean_roles = torch.where(
             clean_sample_id >= 0,
             torch.full_like(clean_sample_id, _ROLE_CLEAN_TARGET),
@@ -475,6 +539,7 @@ def build_teacher_forcing_multiview_flex_metadata(
         timestamp=timestamp,
         is_noisy=is_noisy,
         is_control=is_control,
+        caption_scope=caption_scope,
         token_role_id=token_role_id,
         causal_step_id=causal_step_id,
         num_und=num_und,
@@ -654,6 +719,7 @@ def build_multiview_transfer_ar_flex_metadata(
     current_role: MultiviewTransferARCurrentRole,
     teacher_forcing_replay_policy: TeacherForcingReplayPolicyConfig,
     memory_layout: MultiviewTransferARMemoryLayout,
+    caption_mask_items: Sequence[Sequence[CaptionMaskItem]] | None = None,
 ) -> TeacherForcingFlexMetadata:
     """Build replay metadata for one explicitly typed multiview AR chunk."""
     if current_role not in MULTIVIEW_TRANSFER_AR_CURRENT_ROLES:
@@ -690,9 +756,7 @@ def build_multiview_transfer_ar_flex_metadata(
         gen_seq_len=seq_len,
         full_q_offsets=full_q_offsets,
         sensor_mask_items=sensor_mask_items,
-        # As in the teacher-forcing pass above: one sample-level caption, and the replay
-        # policy owns control visibility rather than the base metadata.
-        caption_mask_items=None,
+        caption_mask_items=caption_mask_items,
         device=device,
         und_seq_len=num_und,
         causal_offsets=causal_offsets,
@@ -700,7 +764,7 @@ def build_multiview_transfer_ar_flex_metadata(
         decomposed_temporal_window_seconds=teacher_forcing_replay_policy.decomposed_temporal_window_seconds,
         control_attends_sensor=False,
     )
-    positions, is_und, is_gen = _stream_membership(base)
+    positions, is_und, is_gen = _stream_membership(base, len(sensor_mask_items))  # [S], [S], [S]
     current_role_id = {
         "control": _ROLE_CONTROL,
         "target_condition": _ROLE_TARGET_CONDITION,
@@ -735,10 +799,14 @@ def build_multiview_transfer_ar_flex_metadata(
         timestamp=global_timestamp[num_und:].clone(),  # [Q]
         is_noisy=current_is_noisy[num_und:].clone(),  # [Q]
         is_control=current_is_control[num_und:].clone(),  # [Q]
+        caption_scope=base.caption_scope[num_und:].clone(),  # [Q]
         token_role_id=token_role_id[num_und:].clone(),  # [Q]
         causal_step_id=causal_step_id[num_und:].clone(),  # [Q]
     )
     del positions, is_und
+    memory_caption_scope = torch.full(
+        (memory_layout.seq_len,), CAPTION_SCOPE_NONE, device=device, dtype=torch.long
+    )  # [M]
     return TeacherForcingFlexMetadata(
         sample_id=torch.cat((base.sample_id, memory_layout.sample_id)),  # [KV]
         frame_id=torch.cat((global_frame_id, memory_layout.frame_id)),  # [KV]
@@ -746,6 +814,7 @@ def build_multiview_transfer_ar_flex_metadata(
         timestamp=torch.cat((global_timestamp, memory_timestamp)),  # [KV]
         is_noisy=torch.cat((current_is_noisy, memory_layout.is_noisy)),  # [KV]
         is_control=torch.cat((current_is_control, memory_layout.is_control)),  # [KV]
+        caption_scope=torch.cat((base.caption_scope, memory_caption_scope)),  # [KV]
         token_role_id=torch.cat((token_role_id, memory_layout.token_role_id)),  # [KV]
         causal_step_id=torch.cat((causal_step_id, memory_layout.causal_step_id)),  # [KV]
         num_und=num_und,
@@ -761,6 +830,8 @@ def _teacher_forcing_pair_predicate(
 ) -> MaskMod:
     """Return replayed teacher-forcing visibility in query/key coordinates."""
     device = q_fields.view_id.device
+    scope_all = torch.tensor(CAPTION_SCOPE_ALL, device=device)  # []
+    scope_same_view = torch.tensor(CAPTION_SCOPE_SAME_VIEW, device=device)  # []
     control_is_global = torch.tensor(teacher_forcing_replay_policy.control_visibility == "global", device=device)  # []
     control_is_causal = torch.tensor(teacher_forcing_replay_policy.control_visibility == "causal", device=device)  # []
     control_is_current = torch.tensor(
@@ -803,7 +874,7 @@ def _teacher_forcing_pair_predicate(
             timestamp_gap <= temporal_window + temporal_window_eps
         )  # [Q,KV]
         reaches_own_instant = is_decomposed & torch.where(
-            has_temporal_window, within_temporal_window, same_frame
+            has_temporal_window, within_temporal_window, timestamp_gap.abs() <= temporal_window_eps
         )  # [Q,KV]
         in_scope = reaches_every_view | same_view | reaches_own_instant  # [Q,KV]
         q_step = q_fields.causal_step_id[q_idx]  # [Q,1]
@@ -820,8 +891,12 @@ def _teacher_forcing_pair_predicate(
         control_step_allowed = (
             control_is_global | (control_is_causal & (kv_step <= q_step)) | (control_is_current & (kv_step == q_step))
         )  # [Q,KV]
-        target_to_und = q_is_target & (kv_role == _ROLE_UND)  # [Q,KV]
-        condition_to_und = q_is_condition & (kv_role == _ROLE_UND)  # [Q,KV]
+        query_caption_scope = q_fields.caption_scope[q_idx]  # [Q,1]
+        caption_reaches_query = (query_caption_scope == scope_all) | (
+            (query_caption_scope == scope_same_view) & same_view
+        )  # [Q,KV]
+        target_to_und = q_is_target & (kv_role == _ROLE_UND) & caption_reaches_query  # [Q,KV]
+        condition_to_und = q_is_condition & (kv_role == _ROLE_UND) & caption_reaches_query  # [Q,KV]
         control_to_control = q_is_control & (kv_role == _ROLE_CONTROL) & same_view & control_step_allowed  # [Q,KV]
         control_to_clean_rgb_history = (
             q_is_control & controls_read_clean_history & kv_is_clean_rgb & (kv_step < q_step) & in_scope
@@ -839,7 +914,7 @@ def _teacher_forcing_pair_predicate(
         target_to_current = q_is_current & (kv_role == _ROLE_CURRENT_TARGET) & (kv_step == q_step) & in_scope  # [Q,KV]
         clean_pass_causal = torch.where(
             clean_pass_is_frame_causal,
-            kv_frame <= q_frame,
+            timestamp_gap >= -temporal_window_eps,
             kv_step <= q_step,
         )  # [Q,KV]
         clean_step_allowed = (q_is_current & (kv_step < q_step)) | ((~q_is_current) & clean_pass_causal)  # [Q,KV]

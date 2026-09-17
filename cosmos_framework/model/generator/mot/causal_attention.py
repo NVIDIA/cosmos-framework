@@ -29,6 +29,7 @@ from cosmos_framework.data.generator.sequence_packing.runtime import (
     drop_pad_segment,
     from_mode_splits,
     from_und_gen_splits,
+    get_caption_seq_offsets,
     get_causal_seq,
     get_full_only_seq,
     get_gen_seq,
@@ -368,6 +369,14 @@ def two_way_flex_attention_with_memory(
     causal_v, _ = get_causal_seq(packed_value_states)  # [N_und,H,D], [B+1 or B+2]
     max_causal_len = packed_query_states["max_causal_len"]
     full_q, _ = get_full_only_seq(packed_query_states)  # [N_gen,H,D], [B+1]
+
+    # TF/AR memory changes GEN visibility, but captions remain independent causal
+    # documents. Reuse the same caption-offset tensor for Q/K to preserve the
+    # base attention path's DontCare identity contract and trailing pad segment.
+    caption_offsets = get_caption_seq_offsets(packed_query_states)
+    if caption_offsets is not None:
+        causal_q_offsets, max_causal_len = caption_offsets  # [N_captions+1], int
+        causal_k_offsets = causal_q_offsets  # [N_captions+1]
 
     use_dont_care_mask = causal_q_offsets is causal_k_offsets
     causal_res = attention(

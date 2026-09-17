@@ -340,7 +340,13 @@ class TimeStampWithSubjectTracking(Augmentor):
         media_data = data_dict[self.input_key]
         for k, v in media_data.items():
             if "video" in k:
-                video_frames_with_timestamp, timestamps = overlay_text(v["videos"], v["fps"], processor=self.processor)
+                video_frames_with_timestamp, timestamps = overlay_text(
+                    v["videos"],
+                    v["fps"],
+                    processor=self.processor,
+                    source_frames_indices=v.get("source_frames_indices"),
+                    source_fps=v.get("source_fps"),
+                )
                 media_data[k]["videos"] = video_frames_with_timestamp
 
         if self.output_format == "random":

@@ -405,8 +405,8 @@ class Profiling:
     # Set `record_shape` and `profile_memory` to False to reduce profile size.
     record_shape: bool = False
     profile_memory: bool = False
-    with_stack: bool = True
-    with_modules: bool = True
+    with_stack: bool = False
+    with_modules: bool = False
 
 
 @make_freezable

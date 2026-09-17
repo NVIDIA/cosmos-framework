@@ -11,6 +11,7 @@ Changes:
 """
 
 import json
+import math
 import random
 from copy import deepcopy
 from typing import Dict, List, Literal, Tuple
@@ -75,6 +76,9 @@ def overlay_text(
     font_color: str = "white",
     processor=None,
     debug=False,
+    *,
+    source_frames_indices: list[int] | None = None,
+    source_fps: float | None = None,
 ) -> Tuple[List[Image.Image], List[float]]:
     """
     Overlay text on a list of PIL images with black border.
@@ -87,14 +91,29 @@ def overlay_text(
         temporal_path_size: Number of positions to cycle through (default: 2)
         font_size: Font size for the text (default: 20)
         font_color: Color of the text (default: "white")
+        source_frames_indices: Clip-relative decoded frame indices for framewise video
+        source_fps: Source-frame clock, before sampling or temporal tubelet expansion
 
     Returns:
         List of PIL images with text overlay
         List of timestamps
     """
+    if (source_frames_indices is None) != (source_fps is None):
+        raise ValueError("Framewise timestamps require both source_frames_indices and source_fps")
+    if source_frames_indices is not None:
+        if len(source_frames_indices) != len(images):
+            raise ValueError("Framewise timestamps require one source index per decoded frame")
+        if source_fps is None or not math.isfinite(source_fps) or source_fps <= 0:
+            raise ValueError("Framewise timestamps require a positive finite source_fps")
+        # Each source frame becomes one repeated tubelet in TokenizeData, so
+        # its timestamp is index / source FPS, rounded as in the Qwen processor.
+        timestamps = [float(f"{index / source_fps:.1f}") for index in source_frames_indices]
+    else:
+        timestamps = [compute_timestamps(i, fps, processor) for i in range(len(images))]
+
     if not check_if_need_overlay_text(processor) and not debug:
         # if debug is True, we still need to overlay text for visualization purpose
-        return images, [compute_timestamps(i, fps, processor) for i in range(len(images))]
+        return images, timestamps
 
     # Try to use DejaVu Sans Mono font for better readability
     font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf", font_size)
@@ -119,7 +138,7 @@ def overlay_text(
         draw = ImageDraw.Draw(new_image)
 
         # Calculate timestamp for current frame
-        total_seconds = compute_timestamps(i, fps, processor)
+        total_seconds = timestamps[i]
         text = f"{total_seconds:.2f}s"
 
         # Get text dimensions
@@ -151,7 +170,7 @@ def overlay_text(
 
         processed_images.append(new_image)
 
-    return processed_images, [compute_timestamps(i, fps, processor) for i in range(len(images))]
+    return processed_images, timestamps
 
 
 def markdown_to_list(conversation_data: str | List[Dict]) -> List[Dict]:
@@ -450,7 +469,13 @@ class TimeStamp(Augmentor):
         media_data = data_dict[self.input_key]
         for k, v in media_data.items():
             if "video" in k:
-                video_frames_with_timestamp, timestamps = overlay_text(v["videos"], v["fps"], processor=self.processor)
+                video_frames_with_timestamp, timestamps = overlay_text(
+                    v["videos"],
+                    v["fps"],
+                    processor=self.processor,
+                    source_frames_indices=v.get("source_frames_indices"),
+                    source_fps=v.get("source_fps"),
+                )
                 media_data[k]["videos"] = video_frames_with_timestamp
 
         if self.output_format == "random":

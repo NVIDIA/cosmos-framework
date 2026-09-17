@@ -20,7 +20,7 @@ Phase 3 — init_flash_attn_meta ported to vfm/utils/flash_attn.py;
 import os
 import re
 from collections import OrderedDict
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterator, Mapping
 from functools import partial
 from typing import Any
 
@@ -38,6 +38,10 @@ from cosmos_framework.configs.base.defaults.reasoner import validate_sound_under
 from cosmos_framework.configs.base.reasoner.defaults.policy_config import VLMModelConfig
 from cosmos_framework.model.generator.hf_model import HFModel
 from cosmos_framework.model.generator.parallelize_vlm import parallelize
+from cosmos_framework.model.generator.reasoner.qwen35_caption import (
+    Qwen35CaptionLoss,
+    named_parameters_with_qwen35_decay,
+)
 from cosmos_framework.model.generator.utils.moe_utils import collect_hf_moe_lbl_metadata, set_hf_moe_token_mask
 from cosmos_framework.model.generator.utils.safetensors_loader import load_vlm_model
 from cosmos_framework.utils.generator.input_probe import (
@@ -66,7 +70,7 @@ from cosmos_framework.utils.generator.reasoner.true_packing import (
 # family helper below is wired for them, and load_vlm_model loads their fused
 # ``mlp.experts.*`` tensors through the dense dim-0 shard rule (dim 0 is the
 # expert axis). Removing ``qwen3_vl_moe`` here would regress the family helpers.
-_QWEN_VL_TYPES = {"qwen2_5_vl", "qwen3_vl", "qwen3_vl_moe"}
+_QWEN_VL_TYPES = {"qwen2_5_vl", "qwen3_vl", "qwen3_vl_moe", "qwen3_5"}
 # InternVL variants register both "internvl" and "internvl_chat" as model_type
 # in the upstream InternVL HF policy registry.
 _INTERNVL_TYPES = {"internvl", "internvl_chat"}
@@ -181,6 +185,9 @@ def _get_overlay_config(model_type: str) -> tuple[list[str], Callable[[str], boo
 
 
 def _get_vision_encoder_modules(model: nn.Module, model_type: str) -> list:
+    if model_type == "qwen3_5":
+        visual = model.model.visual
+        return [visual.patch_embed, visual.blocks, visual.pos_embed]
     if model_type in _QWEN_VL_TYPES:
         # NOTE: intentional semantic change from `model_utils.get_model_vision_encoder`,
         # which returns only [patch_embed, blocks]. Qwen3-VL adds a learnable `pos_embed`
@@ -198,6 +205,8 @@ def _get_vision_encoder_modules(model: nn.Module, model_type: str) -> list:
 
 
 def _get_mm_projector_modules(model: nn.Module, model_type: str) -> list:
+    if model_type == "qwen3_5":
+        return [model.model.visual.merger]
     if model_type == "qwen2_5_vl":
         return [model.visual.merger]
     elif model_type in {"qwen3_vl", "qwen3_vl_moe"}:
@@ -216,6 +225,8 @@ def _get_mm_projector_modules(model: nn.Module, model_type: str) -> list:
 
 
 def _get_llm_modules(model: nn.Module, model_type: str) -> list:
+    if model_type == "qwen3_5":
+        return [model.model.language_model, model.lm_head]
     if model_type in _QWEN_VL_TYPES:
         # model.language_model is a @property on Qwen3VLForConditionalGeneration /
         # Qwen2_5_VLForConditionalGeneration that delegates to self.model.language_model
@@ -311,6 +322,11 @@ class VLMModel(ImaginaireModel):
 
     emits_exact_validation_stats: bool = True
 
+    def named_parameters(
+        self, prefix: str = "", recurse: bool = True, remove_duplicate: bool = True
+    ) -> Iterator[tuple[str, nn.Parameter]]:
+        return named_parameters_with_qwen35_decay(self, prefix, recurse, remove_duplicate)
+
     def __init__(self, config: VLMModelConfig, checkpoint):
         super().__init__()
         from cosmos_framework.utils.generator.flash_attn import init_flash_attn_meta
@@ -321,6 +337,8 @@ class VLMModel(ImaginaireModel):
         self.precision = getattr(torch, config.precision)
         self._parity_probe_step: int = 0
         init_flash_attn_meta(config.deterministic)
+        if config.policy.enable_fused_weighted_ce and not config.policy.use_weighted_ce:
+            raise ValueError("enable_fused_weighted_ce requires policy.use_weighted_ce=True")
         self._init_vlm(config, checkpoint)
 
         # Apply freeze before the optimizer is built — ``build_optimizer`` reads
@@ -368,13 +386,13 @@ class VLMModel(ImaginaireModel):
                 loss_scaling_factor=1.0,
                 ignore_index=IGNORE_INDEX,
             )
-        # Dense weighted CE is normalized once over the whole gradient-accumulation window.
+        # Dense Qwen3-VL and Qwen3.5 weighted CE normalize once over the whole accumulation window.
         # The trainer averages microbatch losses by K; training_step therefore backprops the
         # unnormalized WORLD numerator and this hook applies K / sum(global denominator).
         self._window_normalize_weighted_ce = bool(
             config.policy.use_weighted_ce
             and config.policy.normalize_weighted_ce_over_accumulation_window
-            and self.hf_config.model_type == "qwen3_vl"
+            and self.hf_config.model_type in {"qwen3_vl", "qwen3_5"}
         )
         self._weighted_ce_window_denominator: torch.Tensor | None = None
         self._weighted_ce_window_microbatches: int = 0
@@ -423,6 +441,9 @@ class VLMModel(ImaginaireModel):
             # Token policy needs the configured identity because local_path is
             # a cache directory and no longer identifies the Edge Reasoner.
             configured_model_name_or_path=policy.backbone.model_name,
+            qwen35_fp32_recurrent_a_log=policy.qwen35_fp32_recurrent_a_log,
+            enable_fused_weighted_ce=policy.enable_fused_weighted_ce,
+            weighted_ce_exponent=policy.weighted_ce_exponent,
         )
         # ── b.1. Early family-gate for backbone.pretrained_weights ──
         # Fail-fast on unsupported VLM families BEFORE any expensive work
@@ -857,7 +878,10 @@ class VLMModel(ImaginaireModel):
         maybe_dump_model_inputs(data, iteration, tag="i4", labels=labels)
         self._parity_probe_step = iteration
 
-        logits = self.model(_probe_step=iteration, _probe_tag="i4", **data)
+        forward_loss_kwargs = (
+            {"labels": labels} if getattr(self.config.policy, "enable_fused_weighted_ce", False) else {}
+        )
+        logits = self.model(_probe_step=iteration, _probe_tag="i4", **forward_loss_kwargs, **data)
         loss_kwargs: dict[str, Any] = {}
         if self.config.policy.use_weighted_ce:
             loss_kwargs = {
@@ -865,11 +889,10 @@ class VLMModel(ImaginaireModel):
                 "probe_tag": "i4",
                 "cu_seq_lens": data.get("cu_seq_lens_q"),
             }
-        loss_result = self._loss_fn(
-            logits,
-            labels,
-            return_stats=True,
-            **loss_kwargs,
+        loss_result = (
+            logits
+            if isinstance(logits, Qwen35CaptionLoss)
+            else self._loss_fn(logits, labels, return_stats=True, **loss_kwargs)
         )
         if not isinstance(loss_result, tuple):
             raise TypeError("training loss must return statistics when return_stats=True")
@@ -891,7 +914,9 @@ class VLMModel(ImaginaireModel):
         if load_balancing_loss is not None:
             loss = loss + load_balancing_loss
             backward_loss = backward_loss + load_balancing_loss
-        maybe_dump_forward_result(logits, {"ce_loss": ce_loss, "total_loss": loss}, iteration, tag="i4")
+        if not isinstance(logits, Qwen35CaptionLoss):
+            # The fused path deliberately never creates vocabulary logits for a probe.
+            maybe_dump_forward_result(logits, {"ce_loss": ce_loss, "total_loss": loss}, iteration, tag="i4")
 
         # Callbacks accumulate these primitives on every microbatch and reduce over WORLD only at
         # logging cadence. With explicit window normalization they are the local ratio-of-sums
@@ -930,11 +955,18 @@ class VLMModel(ImaginaireModel):
         self._prepare_true_packing(data)
         labels = data.pop("labels")
         self._set_moe_token_mask(data.get("attention_mask"))
-        logits = self.model(**data)
+        forward_loss_kwargs = (
+            {"labels": labels} if getattr(self.config.policy, "enable_fused_weighted_ce", False) else {}
+        )
+        logits = self.model(**forward_loss_kwargs, **data)
         loss_kwargs: dict[str, Any] = {}
         if self.config.policy.use_weighted_ce:
             loss_kwargs["cu_seq_lens"] = data.get("cu_seq_lens_q")
-        loss_result = self._loss_fn(logits, labels, return_stats=True, **loss_kwargs)
+        loss_result = (
+            logits
+            if isinstance(logits, Qwen35CaptionLoss)
+            else self._loss_fn(logits, labels, return_stats=True, **loss_kwargs)
+        )
         if not isinstance(loss_result, tuple):
             raise TypeError("validation loss must return (loss, LossStatistics) when return_stats=True")
         loss, stats = loss_result

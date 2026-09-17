@@ -42,6 +42,7 @@ from dataclasses import dataclass
 import torch
 import torch.distributed as dist
 import torch.nn.functional as F
+from torch.distributed.tensor import DTensor
 
 from cosmos_framework.utils.generator.input_probe import maybe_dump_loss_reduction
 from cosmos_framework.utils.generator.reasoner.constant import IGNORE_INDEX
@@ -207,3 +208,68 @@ def weighted_cross_entropy_loss(
             valid_token_count=valid.sum().detach(),
         )
     return loss
+
+
+def _fused_linear_ce_sum(
+    hidden: torch.Tensor, weight: torch.Tensor, labels: torch.Tensor, ignore_index: int
+) -> torch.Tensor:
+    """Use Liger's scalar reduction; reduction='none' has incompatible backward semantics."""
+    from liger_kernel.ops.fused_linear_cross_entropy import LigerFusedLinearCrossEntropyFunction
+
+    loss, _, _ = LigerFusedLinearCrossEntropyFunction.apply(
+        hidden, weight, labels, None, None, ignore_index, 0.0, 0.0, "sum", None, False, torch.float32, False, False
+    )
+    return loss
+
+
+def fused_weighted_cross_entropy_loss(
+    hidden_states: torch.Tensor,
+    labels: torch.Tensor,
+    lm_head_weight: torch.Tensor,
+    *,
+    exponent: float,
+    ignore_index: int = IGNORE_INDEX,
+) -> tuple[torch.Tensor, LossStatistics]:
+    """Compute the unified weighted objective without allocating [B,T,vocabulary] logits.
+
+    Called inside the FSDP model forward, while the lm_head weight is gathered.
+    Each sample uses a scalar fused CE call, as in MR !11447. The denominator
+    spans the unified trainer's whole DP world, including HSDP replicas.
+    """
+    if hidden_states.ndim != 3 or labels.shape != hidden_states.shape[:2]:
+        raise ValueError("Fused CE requires aligned hidden states [B,T,H] and labels [B,T]")
+    if hidden_states.shape[0] < 1 or hidden_states.shape[1] < 2:
+        raise ValueError("Fused CE needs at least one sample with two tokens")
+    if not 0.0 <= exponent <= 1.0:
+        raise ValueError("Weighted CE exponent must be in [0,1]")
+    if isinstance(lm_head_weight, DTensor):
+        raise ValueError("Fused CE must execute inside the FSDP root with its gathered lm_head weight")
+    weight = lm_head_weight.to(hidden_states.dtype)
+    targets = labels[:, 1:].contiguous()
+    counts = (targets != ignore_index).sum(dim=1).to(torch.float32)
+    losses = []
+    for index in range(labels.shape[0]):
+        if bool(counts[index] > 0):
+            losses.append(
+                _fused_linear_ce_sum(hidden_states[index, :-1].contiguous(), weight, targets[index], ignore_index)
+            )
+        else:
+            # Empty slices keep both branches in autograd without reducing the large weight matrix.
+            losses.append(hidden_states[index, :0].sum() + weight[:0].sum())
+    loss_sums = torch.stack(losses).float()
+    has_valid = counts > 0
+    numerator = (loss_sums / counts.clamp(min=1).pow(exponent)).sum()
+    denominator = torch.where(has_valid, counts.clamp(min=1).pow(1 - exponent), 0.0).sum()
+    global_denominator = denominator.detach().clone()
+    world_size = 1
+    if dist.is_available() and dist.is_initialized():
+        dist.all_reduce(global_denominator, op=dist.ReduceOp.SUM)
+        world_size = dist.get_world_size()
+    loss = numerator / global_denominator.clamp(min=1) * world_size
+    return loss, LossStatistics(
+        objective_numerator=numerator.detach(),
+        objective_denominator=denominator.detach(),
+        global_objective_denominator=global_denominator.detach(),
+        token_ce_sum=loss_sums.sum().detach(),
+        valid_token_count=counts.sum().detach(),
+    )

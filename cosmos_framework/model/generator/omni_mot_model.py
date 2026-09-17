@@ -229,6 +229,9 @@ def _densify_action_family(
     return result if len(result) == expected_rows else None
 
 
+INFERENCE_RAW_VISION_RETAINED_ITEMS_KEY = "_inference_raw_vision_retained_items"
+
+
 class OmniMoTModel(ImaginaireModel):
     """
     Mixture of Transformers (MoT) model to be trained with the flow matching objective
@@ -2556,6 +2559,8 @@ class OmniMoTModel(ImaginaireModel):
                 gen_data_clean.batch_size,
             )
 
+        self._release_inference_raw_vision(data_batch, gen_data_clean)
+
         num_items_per_sample = gen_data_clean.num_vision_items_per_sample  # None for standard T2I/T2V
 
         # 3. Tokenize text (similar to training's _load_and_tokenize_text_data)
@@ -2810,6 +2815,36 @@ class OmniMoTModel(ImaginaireModel):
             condition_mask,
             has_noisy_actions,
         )
+
+    def _release_inference_raw_vision(
+        self,
+        data_batch: dict[str, Any],
+        gen_data_clean: GenerationDataClean,
+    ) -> None:
+        """Release opted-in raw vision tensors after VAE encoding.
+
+        Inference callers provide the exact CPU items needed for output bookkeeping;
+        every other raw item is discarded. Encoded vision latents and their shape
+        metadata remain on the inference device for sequence packing and denoising.
+        """
+        retained_items = data_batch.pop(INFERENCE_RAW_VISION_RETAINED_ITEMS_KEY, None)
+        if retained_items is None:
+            return
+        if not isinstance(retained_items, list) or not all(
+            isinstance(item, torch.Tensor) and item.device.type == "cpu" for item in retained_items
+        ):
+            raise TypeError(f"{INFERENCE_RAW_VISION_RETAINED_ITEMS_KEY} must be a list of CPU vision tensors.")
+
+        media_key = self.input_image_key if gen_data_clean.is_image_batch else self.input_video_key
+        raw_items = data_batch.get(media_key)
+        if not isinstance(raw_items, list):
+            raise TypeError(f"Expected data_batch[{media_key!r}] to be a list before releasing raw vision tensors.")
+
+        # Prompt upsampling can shallow-copy data_batch before this point. Mutate the
+        # shared finalized media list in place so the caller's batch, which is used
+        # later for output saving, observes the cleanup.
+        raw_items[:] = retained_items
+        gen_data_clean.raw_state_vision = None
 
     def _can_reuse_inference_pack_templates(
         self,
@@ -4390,7 +4425,7 @@ class OmniMoTModel(ImaginaireModel):
         return self.tokenizer_lidar_gen
 
     def _normalize_uint8_vision_item(self, state: torch.Tensor) -> torch.Tensor:
-        """Convert one GPU-resident uint8 vision item to fp32 and normalize to ``[-1,1]``."""
+        """Move one uint8 vision item to the model device as fp32 and normalize it to ``[-1,1]``."""
         return normalize_uint8_item(state, self.tensor_kwargs_fp32)
 
     def _encode_vision_item(

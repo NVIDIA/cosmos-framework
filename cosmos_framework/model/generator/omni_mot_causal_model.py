@@ -27,7 +27,7 @@ from typing_extensions import override
 
 import cosmos_framework.model.generator.omni_mot_model as omni_mot_model_module
 from cosmos_framework.configs.base.defaults.model_config import OmniMoTModelConfig
-from cosmos_framework.model.generator.omni_mot_model import OmniMoTModel, _broadcast_seed
+from cosmos_framework.model.generator.omni_mot_model import OmniMoTModel, _broadcast_seed, _per_view_caption_groups
 from cosmos_framework.model.generator.utils.data_and_condition import GenerationDataClean
 from cosmos_framework.model.generator.utils.memory import MemoryState
 from cosmos_framework.data.generator.sequence_packing import PackedSequence, build_sequence_plans_from_data_batch
@@ -38,6 +38,7 @@ from cosmos_framework.configs.base.defaults.replay_attention import (
     TeacherForcingReplayPolicyConfig,
 )
 from cosmos_framework.model.generator.attention_io_layout import AttentionIOLayout
+from cosmos_framework.model.generator.joint_transfer_ar import sample_joint_transfer_ar
 from cosmos_framework.model.generator.mot.causal_attention import dispatch_attention_with_memory
 from cosmos_framework.model.generator.mot.causal_cosmos3_vfm_network import (
     InteractiveCosmos3VFMNetwork,
@@ -983,6 +984,10 @@ class OmniMoTCausalModel(OmniMoTModel):
         """Cast generated-modality tokens to the model precision before denoising."""
         if packed_sequence.vision is not None:
             packed_sequence.vision.tokens = [token.to(dtype=self.precision) for token in packed_sequence.vision.tokens]
+        if packed_sequence.lidar is not None:
+            packed_sequence.lidar.tokens = [
+                token.to(dtype=self.precision) for token in packed_sequence.lidar.tokens
+            ]  # list of [1,C,T,H,W]
         if packed_sequence.action is not None and packed_sequence.action.tokens:
             packed_sequence.action.tokens = [token.to(dtype=self.precision) for token in packed_sequence.action.tokens]
         if packed_sequence.sound is not None and packed_sequence.sound.tokens:
@@ -1001,11 +1006,15 @@ class OmniMoTCausalModel(OmniMoTModel):
         if self._uses_multiview_flex_kv():
             if packed_sequence.vision is None or packed_sequence.num_views_per_vision_item is None:
                 raise ValueError("Two-way Flex teacher forcing requires multiview vision metadata.")
+            # Match the packer's per-sample order: RGB items, then LiDAR items.
+            # A clean LiDAR target must keep its original role in the replay mask.
             original_condition_masks = [
-                mask.clone() for mask in packed_sequence.vision.condition_mask
-            ]  # list of [latent_t]
+                item.condition_mask.clone()
+                for sample_items in build_interactive_multiview_mask_items(packed_sequence)
+                for item in sample_items
+            ]  # list of [sensor_latent_t]
             clean_target_indexes = build_teacher_forcing_clean_target_token_indexes(
-                items_per_sample=build_interactive_multiview_mask_items(
+                sensor_mask_items=build_interactive_multiview_mask_items(
                     packed_sequence,
                     condition_masks=original_condition_masks,
                 ),
@@ -1019,7 +1028,7 @@ class OmniMoTCausalModel(OmniMoTModel):
                 (clean_target_indexes.numel() + kv_alignment - 1) // kv_alignment
             ) * kv_alignment
             packed_sequence.teacher_forcing_pass = "noisy"
-            packed_sequence.teacher_forcing_original_condition_masks_vision = original_condition_masks
+            packed_sequence.teacher_forcing_original_condition_masks_sensors = original_condition_masks
             packed_sequence.teacher_forcing_selected_clean_target_padded_capacity = (
                 selected_clean_target_padded_capacity
             )
@@ -1052,7 +1061,7 @@ class OmniMoTCausalModel(OmniMoTModel):
             raise ValueError("Teacher-forcing replay requires video_temporal_causal=True.")
         if self._uses_multiview_flex_kv():
             if packed_seq.vision is None or packed_seq.action is not None or packed_seq.sound is not None:
-                raise ValueError("Two-way Flex teacher forcing supports vision-only generation batches.")
+                raise ValueError("Two-way Flex teacher forcing supports RGB and optional LiDAR generation batches.")
             if packed_seq.num_views_per_vision_item is None:
                 raise ValueError(
                     "Two-way Flex teacher forcing requires per-camera VAE metadata; enable "
@@ -1753,7 +1762,9 @@ class OmniMoTCausalModel(OmniMoTModel):
         gen_data_clean = self.get_data_and_condition(
             data_batch,
             vision_condition_indexes=[condition_frame_indexes] if condition_frame_indexes else None,
+            retain_raw_state_vision=(omni_mot_model_module.INFERENCE_RAW_VISION_RETAINED_ITEMS_KEY not in data_batch),
         )
+        self._release_inference_raw_vision(data_batch, gen_data_clean)
 
         batch_size = gen_data_clean.batch_size
         vision_items = gen_data_clean.x0_tokens_vision
@@ -2396,6 +2407,54 @@ class OmniMoTCausalModel(OmniMoTModel):
                 else:
                     yield payload
 
+    @torch.no_grad()
+    def generate_joint_samples_from_batch_autoregressive(
+        self,
+        data_batch: dict[str, Any],
+        *,
+        guidance: float = 3.0,
+        seed: int = 0,
+        num_steps: int = 35,
+        shift: float = 5.0,
+        has_negative_prompt: bool = False,
+    ) -> dict[str, list[torch.Tensor]]:  # vision: [1,Cv,V*Tv,Hv,Wv], lidar: [1,Cl,Tl,Hl,Wl]
+        """Generate both joint transfer targets using the training replay semantics.
+
+        This reference path recomputes a complete causal prefix per chunk. It
+        preserves the existing optimized RGB-only sampler and supports the
+        serial-CFG, context-parallel inference configuration.
+        """
+        plans = build_sequence_plans_from_data_batch(
+            data_batch=data_batch,
+            input_video_key=self.input_video_key,
+            input_image_key=self.input_image_key,
+        )
+        if len(plans) != 1 or not plans[0].has_lidar or not plans[0].has_vision:
+            raise ValueError("Joint AR requires exactly one RGB+LiDAR sample")
+        caption_groups = _per_view_caption_groups(data_batch[self.input_caption_key])
+        self._apply_inference_caption_plan(plans, caption_groups)
+        data = self.get_data_and_condition(
+            data_batch,
+            vision_condition_indexes=[plans[0].condition_frame_indexes_vision],
+            retain_raw_state_vision=False,
+        )
+        conditional_text, unconditional_text = self._get_inference_text_tokens(
+            data_batch, has_negative_prompt, caption_groups
+        )
+        if self.parallel_dims is not None and self.parallel_dims.cp_enabled:
+            seed = _broadcast_seed([seed], self.parallel_dims.cp_mesh.get_group(), self.parallel_dims.cp_rank)[0]
+        return sample_joint_transfer_ar(
+            self,
+            plans=plans,
+            data=data,
+            conditional_text=conditional_text,
+            unconditional_text=unconditional_text,
+            guidance=guidance,
+            seed=seed,
+            num_steps=num_steps,
+            shift=shift,
+        )
+
     def _make_multiview_transfer_ar_backend(self) -> MultiviewTransferARBackend:
         """Return the shared backend used by inference and distillation rollouts."""
         return MultiviewTransferARBackend(self)
@@ -2507,12 +2566,15 @@ class OmniMoTCausalModel(OmniMoTModel):
         )
         if len(sequence_plans) != 1:
             raise ValueError(f"Multiview transfer AR requires batch_size=1, got {len(sequence_plans)} samples.")
+        caption_groups = _per_view_caption_groups(data_batch[self.input_caption_key])
+        self._apply_inference_caption_plan(sequence_plans, caption_groups)
         vision_condition_indexes = [sequence_plans[0].condition_frame_indexes_vision]
         gen_data_clean = self.get_data_and_condition(
             data_batch,
             vision_condition_indexes=vision_condition_indexes,
             retain_raw_state_vision=False,
         )
+        self._release_inference_raw_vision(data_batch, gen_data_clean)
         if gen_data_clean.x0_tokens_vision is None or len(gen_data_clean.x0_tokens_vision) != 2:
             num_items = 0 if gen_data_clean.x0_tokens_vision is None else len(gen_data_clean.x0_tokens_vision)
             raise ValueError(f"Multiview transfer AR requires [control, target], got {num_items} vision items.")
@@ -2544,7 +2606,11 @@ class OmniMoTCausalModel(OmniMoTModel):
             dist.all_reduce(frame_count, op=dist.ReduceOp.MIN, group=sync_process_group)
             output_frames = int(frame_count.item())
 
-        cond_text_tokens, uncond_text_tokens = self._get_inference_text_tokens(data_batch, has_negative_prompt)
+        cond_text_tokens, uncond_text_tokens = self._get_inference_text_tokens(
+            data_batch,
+            has_negative_prompt,
+            caption_groups,
+        )
         cfgp_enabled = self.parallel_dims is not None and self.parallel_dims.cfgp_enabled
         if cfgp_enabled:
             seed = _broadcast_seed([seed], self.parallel_dims.cfgp_mesh.get_group(), self.parallel_dims.cfgp_rank)[0]
@@ -2553,7 +2619,7 @@ class OmniMoTCausalModel(OmniMoTModel):
         backend = self._make_multiview_transfer_ar_backend()
 
         def build_prefill_pack(
-            text_tokens: list[int],
+            text_tokens: list[list[int]],
             *,
             materialized_target_frame_ranges: Sequence[tuple[int, int]] | None = None,
         ) -> PackedSequence:
@@ -2565,7 +2631,7 @@ class OmniMoTCausalModel(OmniMoTModel):
             )
 
         cond_prefill = build_prefill_pack(
-            cond_text_tokens[0],
+            cond_text_tokens,
             materialized_target_frame_ranges=[],
         )
         assert cond_prefill.vision is not None
@@ -2585,6 +2651,7 @@ class OmniMoTCausalModel(OmniMoTModel):
             condition_count=materialized_condition_count,
             cfg_active=cfg_active,
             cfgp_enabled=cfgp_enabled,
+            text_view_ids=sequence_plans[0].text_view_ids,
         )
 
         controls_read_rgb = self._get_teacher_forcing_replay_policy().controls_read_strict_past_clean_rgb
@@ -2593,7 +2660,7 @@ class OmniMoTCausalModel(OmniMoTModel):
             if cfg_active:
                 assert uncond_text_tokens is not None
                 uncond_prefill = build_prefill_pack(
-                    uncond_text_tokens[0],
+                    uncond_text_tokens,
                     materialized_target_frame_ranges=[],
                 )
             backend.capture_control_cache(
@@ -2622,8 +2689,8 @@ class OmniMoTCausalModel(OmniMoTModel):
                     session=session,
                     sequence_plans=sequence_plans,
                     gen_data_clean=gen_data_clean,
-                    conditional_text_tokens=cond_text_tokens[0],
-                    unconditional_text_tokens=uncond_text_tokens[0] if uncond_text_tokens is not None else None,
+                    conditional_text_tokens=cond_text_tokens,
+                    unconditional_text_tokens=uncond_text_tokens,
                 )
             memory_layout = backend.build_memory_layout(session)
             noise_generator = torch.Generator(device=target_latent.device).manual_seed(seed + chunk_start)
@@ -2640,7 +2707,8 @@ class OmniMoTCausalModel(OmniMoTModel):
             ).normal_(generator=noise_generator)  # [1,C,V*chunk_len,H,W]
             cond_pack = backend.build_current_pack(
                 vision_latent=chunk_noise,
-                text_tokens=cond_text_tokens[0],
+                text_tokens=cond_text_tokens,
+                text_view_ids=session.text_view_ids,
                 fps_vision=fps_vision,
                 num_views=num_views,
                 frames_per_view=frames_per_view,
@@ -2651,7 +2719,8 @@ class OmniMoTCausalModel(OmniMoTModel):
             uncond_pack = (
                 backend.build_current_pack(
                     vision_latent=chunk_noise,
-                    text_tokens=uncond_text_tokens[0],
+                    text_tokens=uncond_text_tokens,
+                    text_view_ids=session.text_view_ids,
                     fps_vision=fps_vision,
                     num_views=num_views,
                     frames_per_view=frames_per_view,
@@ -2696,8 +2765,8 @@ class OmniMoTCausalModel(OmniMoTModel):
                     denoised_chunk=denoised_chunk.to(**self.tensor_kwargs),  # [1,C,V*chunk_len,H,W]
                     chunk_start=chunk_start,
                     chunk_end=chunk_end,
-                    conditional_text_tokens=cond_text_tokens[0],
-                    unconditional_text_tokens=uncond_text_tokens[0] if uncond_text_tokens is not None else None,
+                    conditional_text_tokens=cond_text_tokens,
+                    unconditional_text_tokens=uncond_text_tokens,
                     fps_vision=fps_vision,
                 )
 
@@ -3011,18 +3080,20 @@ class OmniMoTCausalModel(OmniMoTModel):
             elif sample_type == "sde":
                 # Use a mixed seed so different frame/step pairs cannot collide
                 # (e.g. frame 0 step 1 vs frame 1 step 0).
+                # Start reinjection steps at one to avoid reusing the initial
+                # frame-0 noise, which is also generated from ``seed``.
                 if isinstance(seed, list):
                     if len(seed) != x.shape[0]:
                         raise ValueError(f"Expected {x.shape[0]} seeds, got {len(seed)}")
                     noise_rows = []
                     for sample_idx, sample_seed in enumerate(seed):
-                        step_seed = int(sample_seed) + int(frame_idx) * 1_000_003 + int(step_idx) * 9_176
+                        step_seed = int(sample_seed) + int(frame_idx) * 1_000_003 + (int(step_idx) + 1) * 9_176
                         generator = torch.Generator(device=x.device).manual_seed(step_seed)
                         noise_row = torch.empty_like(x[sample_idx]).normal_(generator=generator)  # [N_tokens_flat]
                         noise_rows.append(noise_row)
                     noise = torch.stack(noise_rows, dim=0)  # [B,N_tokens_flat]
                 else:
-                    step_seed = int(seed) + int(frame_idx) * 1_000_003 + int(step_idx) * 9_176
+                    step_seed = int(seed) + int(frame_idx) * 1_000_003 + (int(step_idx) + 1) * 9_176
                     generator = torch.Generator(device=x.device).manual_seed(step_seed)
                     noise = torch.empty_like(x).normal_(generator=generator)  # [B,N_tokens_flat]
                 x = (1.0 - sigma_next_tensor) * x0_pred + sigma_next_tensor * noise  # [B,N_tokens_flat]

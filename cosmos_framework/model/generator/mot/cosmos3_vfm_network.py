@@ -46,6 +46,7 @@ from cosmos_framework.model.generator.utils.memory import MemoryState
 from cosmos_framework.data.generator.sequence_packing import ModalityData, PackedSequence
 from cosmos_framework.data.generator.sequence_packing.natten import verify_natten_parameter_list
 from cosmos_framework.data.generator.sequence_packing.runtime import (
+    SequencePack,
     get_caption_seq_offsets,
     get_causal_seq,
     get_full_only_seq,
@@ -1163,6 +1164,111 @@ class Cosmos3VFMNetwork(PreTrainedModel):
             )  # list of [C,T] per sample
             output_dict.update(preds_sound=preds_sound)
 
+    def _prepare_multiview_attention(
+        self,
+        packed_seq: PackedSequence,
+        input_pack: SequencePack,
+        attention_meta: SplitInfo,
+    ) -> None:
+        """Build multiview attention metadata in a short-lived frame.
+
+        Do not return or store hidden-state tensors from ``input_pack``. Local aliases must
+        expire before the caller replaces the full pack with its CP-local shard; otherwise,
+        they pin the full backing allocations across the transformer stack.
+        """
+        # Non-None exactly when multiview attention is enabled. The resolved backend rather than the
+        # geometry, because what this gates is whether the stream is multiview-aware at all -- both
+        # folds and mask are inside.
+        if self.multiview_backend is None:
+            return
+
+        # No pathway check here: ``multiview_backend`` is non-None exactly when
+        # ``joint_attn_implementation == "multiview"``, so the two cannot disagree.
+        # natten_metadata_list is always None here (only the three-way packer builds it).
+        if self.natten_parameter_list:
+            raise ValueError("Multiview FlexAttention and NATTEN cannot be enabled together.")
+
+        if packed_seq.action is not None or packed_seq.sound is not None:
+            raise ValueError(
+                "Multiview FlexAttention supports vision and LiDAR generation batches, not action or sound."
+            )
+
+        if packed_seq.vision is None and packed_seq.lidar is None:
+            raise ValueError("Multiview FlexAttention needs a vision or LiDAR generation stream.")
+
+        # Before anything is built from the captions -- the mask's items, the folds' plan --
+        # because which layout the pack is in decides how every one of its tokens is keyed
+        # against them, and a pack carrying both kinds has no one answer to give.
+        reject_mixed_caption_layouts(packed_seq.text_caption_view_ids)
+
+        sensor_mask_items = _multiview_sensor_mask_items(
+            packed_seq,
+            lidar_attends_captions=self.config.multiview_attention_config.mask.lidar_attends_captions,
+        )
+        caption_mask_items = _multiview_caption_mask_items(packed_seq)
+        if caption_mask_items is not None and get_caption_seq_offsets(input_pack) is None:
+            # The mask narrows which captions a GEN token reads; the pack's caption offsets
+            # are what keep the captions from attending each other. A pack carrying the
+            # first without the second would train per-view captions that all see one
+            # another, with nothing else to show for it -- so refuse rather than mask half
+            # the layout. Reached only if the pack's metadata was built without its caption
+            # layout (PackedSequence.prepare_sequence_pack_metadata passes it).
+            raise ValueError(
+                "This pack carries per-view captions but its sequence-pack metadata has no "
+                "caption boundaries, so the captions would attend one another. Rebuild the "
+                "metadata via PackedSequence.prepare_sequence_pack_metadata."
+            )
+        reject_samples_reading_no_caption(sensor_mask_items)
+
+        if self.multiview_backend == "maskless":
+            # The maskless folds' plan, asked for only when this run resolved to them.
+            # Decided here rather than in the attention path because the eligibility is a
+            # property of the batch -- its samples, its items, its captions -- which the
+            # packed tensors downstream no longer distinguish. A pack the folds cannot serve
+            # raises rather than taking the mask.
+            attention_meta.multiview_maskless = _multiview_maskless_geometry(
+                packed_seq,
+                sensor_mask_items=sensor_mask_items,
+                caption_mask_items=caption_mask_items,
+                gen_seq_len=int(input_pack["full_only_seq"].shape[0]),
+                attention_scope=self.config.multiview_attention_config.mask.attention_scope,
+                device=input_pack["full_only_seq"].device,
+            )
+            return
+
+        # Every backend but "maskless" is a mask, and only a mask has a geometry, so the two
+        # are non-None together -- see resolve_multiview_backend.
+        assert self.flex_backend is not None
+        full_only_seq, full_q_offsets = get_full_only_seq(input_pack)  # [N_gen,D], [B+1]
+        causal_seq, causal_offsets = get_causal_seq(input_pack)  # [N_und,D], [B+1]
+        # The mask is built here, outside the compiled and activation-checkpointed
+        # decoder layers, because the build syncs with the host on a data-dependent
+        # group count, which Dynamo cannot trace inside the checkpoint HOP. All
+        # layers then share the one mask, which is all the attention path needs.
+        #
+        # GEN tokens are the queries and [UND | GEN] the keys, so the UND stream's
+        # padded length and per-sample offsets come along: they are what labels a UND
+        # key with its sample, which is the whole of the gen->und rule.
+        attention_meta.flex_block_mask = build_multiview_block_mask(
+            gen_seq_len=full_only_seq.shape[0],
+            full_q_offsets=full_q_offsets,
+            und_seq_len=causal_seq.shape[0],
+            causal_offsets=causal_offsets,
+            attention_scope=self.config.multiview_attention_config.mask.attention_scope,
+            control_attends_sensor=self.config.multiview_attention_config.mask.control_attends_sensor,
+            decomposed_temporal_window_seconds=(
+                self.config.multiview_attention_config.mask.decomposed_temporal_window_seconds
+            ),
+            sensor_mask_items=sensor_mask_items,
+            caption_mask_items=caption_mask_items,
+            block_size=self.flex_backend.block_size,
+            device=full_only_seq.device,
+        )
+        # Carried with the mask because its kernels are only valid for the block size the
+        # mask was built at; two_way_attention hands both to flex_attention, which
+        # checks that agreement before running them.
+        attention_meta.flex_backend = self.flex_backend
+
     def forward(
         self,
         packed_seq: PackedSequence,
@@ -1307,96 +1413,21 @@ class Cosmos3VFMNetwork(PreTrainedModel):
             prepared_metadata=prepared_sequence_pack_metadata,
             text_caption_lens=packed_seq.text_caption_lens,
         )
+        # ``packed_sequence`` is spent here. ``sequence_pack_from_packed_sequence`` splits it with
+        # ``packed_sequence[_causal_indices]`` and ``[_full_indices]``, and advanced indexing
+        # copies, so the pack owns its streams either way; whether ``_pad`` runs afterwards only
+        # decides how many copies deep they sit. Nothing below reads the name again -- the encoders
+        # that filled it in place have all run by now, and the stack runs on ``input_pack``. What
+        # keeps it resident is this frame's reference alone, and this frame does not return until
+        # after the decode, so without the ``del`` a full-sequence ``[N_total,hidden_size]`` buffer
+        # stays live across the entire transformer for nothing.
+        del packed_sequence
 
-        # Non-None exactly when multiview attention is enabled. The resolved backend rather than the
-        # geometry, because what this gates is whether the stream is multiview-aware at all -- both
-        # folds and mask are inside.
-        if self.multiview_backend is not None:
-            # No pathway check here: ``multiview_backend`` is non-None exactly when
-            # ``joint_attn_implementation == "multiview"``, so the two cannot disagree.
-            # natten_metadata_list is always None here (only the three-way packer builds it).
-            if self.natten_parameter_list:
-                raise ValueError("Multiview FlexAttention and NATTEN cannot be enabled together.")
-
-            if packed_seq.action is not None or packed_seq.sound is not None:
-                raise ValueError(
-                    "Multiview FlexAttention supports vision and LiDAR generation batches, not action or sound."
-                )
-
-            if packed_seq.vision is None and packed_seq.lidar is None:
-                raise ValueError("Multiview FlexAttention needs a vision or LiDAR generation stream.")
-
-            # Before anything is built from the captions -- the mask's items, the folds' plan --
-            # because which layout the pack is in decides how every one of its tokens is keyed
-            # against them, and a pack carrying both kinds has no one answer to give.
-            reject_mixed_caption_layouts(packed_seq.text_caption_view_ids)
-
-            sensor_mask_items = _multiview_sensor_mask_items(
-                packed_seq,
-                lidar_attends_captions=self.config.multiview_attention_config.mask.lidar_attends_captions,
-            )
-            caption_mask_items = _multiview_caption_mask_items(packed_seq)
-            if caption_mask_items is not None and get_caption_seq_offsets(input_pack) is None:
-                # The mask narrows which captions a GEN token reads; the pack's caption offsets
-                # are what keep the captions from attending each other. A pack carrying the
-                # first without the second would train per-view captions that all see one
-                # another, with nothing else to show for it -- so refuse rather than mask half
-                # the layout. Reached only if the pack's metadata was built without its caption
-                # layout (PackedSequence.prepare_sequence_pack_metadata passes it).
-                raise ValueError(
-                    "This pack carries per-view captions but its sequence-pack metadata has no "
-                    "caption boundaries, so the captions would attend one another. Rebuild the "
-                    "metadata via PackedSequence.prepare_sequence_pack_metadata."
-                )
-            reject_samples_reading_no_caption(sensor_mask_items)
-
-            if self.multiview_backend == "maskless":
-                # The maskless folds' plan, asked for only when this run resolved to them.
-                # Decided here rather than in the attention path because the eligibility is a
-                # property of the batch -- its samples, its items, its captions -- which the
-                # packed tensors downstream no longer distinguish. A pack the folds cannot serve
-                # raises rather than taking the mask.
-                attention_meta.multiview_maskless = _multiview_maskless_geometry(
-                    packed_seq,
-                    sensor_mask_items=sensor_mask_items,
-                    caption_mask_items=caption_mask_items,
-                    gen_seq_len=int(input_pack["full_only_seq"].shape[0]),
-                    attention_scope=self.config.multiview_attention_config.mask.attention_scope,
-                    device=input_pack["full_only_seq"].device,
-                )
-            else:
-                # Every backend but "maskless" is a mask, and only a mask has a geometry, so the two
-                # are non-None together -- see resolve_multiview_backend.
-                assert self.flex_backend is not None
-                full_only_seq, full_q_offsets = get_full_only_seq(input_pack)
-                causal_seq, causal_offsets = get_causal_seq(input_pack)
-                # The mask is built here, outside the compiled and activation-checkpointed
-                # decoder layers, because the build syncs with the host on a data-dependent
-                # group count, which Dynamo cannot trace inside the checkpoint HOP. All
-                # layers then share the one mask, which is all the attention path needs.
-                #
-                # GEN tokens are the queries and [UND | GEN] the keys, so the UND stream's
-                # padded length and per-sample offsets come along: they are what labels a UND
-                # key with its sample, which is the whole of the gen->und rule.
-                attention_meta.flex_block_mask = build_multiview_block_mask(
-                    gen_seq_len=full_only_seq.shape[0],
-                    full_q_offsets=full_q_offsets,
-                    und_seq_len=causal_seq.shape[0],
-                    causal_offsets=causal_offsets,
-                    attention_scope=self.config.multiview_attention_config.mask.attention_scope,
-                    control_attends_sensor=self.config.multiview_attention_config.mask.control_attends_sensor,
-                    decomposed_temporal_window_seconds=(
-                        self.config.multiview_attention_config.mask.decomposed_temporal_window_seconds
-                    ),
-                    sensor_mask_items=sensor_mask_items,
-                    caption_mask_items=caption_mask_items,
-                    block_size=self.flex_backend.block_size,
-                    device=full_only_seq.device,
-                )
-                # Carried with the mask because its kernels are only valid for the block size the
-                # mask was built at; two_way_attention hands both to flex_attention, which
-                # checks that agreement before running them.
-                attention_meta.flex_backend = self.flex_backend
+        # Keep multiview preparation in a separate frame. Mask construction temporarily aliases
+        # the full padded hidden-state streams; those aliases must leave scope before input_pack is
+        # replaced by its cloned CP-local pack, or they will pin the full backing allocations
+        # across the transformer stack.
+        self._prepare_multiview_attention(packed_seq, input_pack, attention_meta)
 
         # ── Multi-control transfer: annotate SplitInfo with per-item ranges ──────
         # This block is entered for any pack carrying control_weights, single-control

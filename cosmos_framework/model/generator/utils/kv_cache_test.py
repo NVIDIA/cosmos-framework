@@ -8,7 +8,13 @@ import torch
 
 from cosmos_framework.model.attention import attention
 from cosmos_framework.model.generator.mot.attention import SplitInfo
-from cosmos_framework.data.generator.sequence_packing.runtime import SequencePack, get_gen_seq
+from cosmos_framework.data.generator.sequence_packing.runtime import (
+    SequencePack,
+    get_gen_seq,
+    get_num_real_samples,
+    has_pad_segment,
+    sequence_pack_from_packed_sequence,
+)
 from cosmos_framework.configs.base.defaults.replay_attention import TeacherForcingReplayPolicyConfig
 from cosmos_framework.model.generator.mot.causal_attention import (
     attention_AR_gen_only,
@@ -2253,3 +2259,30 @@ def test_ar_memory_state_local_kv_head_cache_requires_divisible_kv_heads() -> No
             head_dim=5,
             kv_head_shard_size=3,
         )
+
+
+@pytest.mark.L0
+@pytest.mark.CPU
+@pytest.mark.parametrize("batch_size", (1, 2))
+@pytest.mark.parametrize("with_text", (False, True))
+def test_batched_ar_counts_real_samples_in_runtime_pack(batch_size: int, with_text: bool) -> None:
+    """Inline prompt padding is not a cache row; later no-text packs keep the same rows."""
+    text_lengths = [3 + index for index in range(batch_size)] if with_text else [0] * batch_size
+    split_lengths = [length for text_length in text_lengths for length in ([text_length, 4] if with_text else [4])]
+    sample_lengths = [text_length + 4 for text_length in text_lengths]
+    tokens = torch.zeros(sum(sample_lengths), 4)  # [N_tokens,D]
+    runtime_pack = sequence_pack_from_packed_sequence(
+        packed_sequence=tokens,
+        attn_modes=["causal", "full"] * batch_size if with_text else ["full"] * batch_size,
+        split_lens=split_lengths,
+        sample_lens=sample_lengths,
+        packed_und_token_indexes=torch.empty(0, dtype=torch.long),  # [0]
+        packed_gen_token_indexes=torch.empty(0, dtype=torch.long),  # [0]
+    )
+    assert has_pad_segment(runtime_pack) == with_text
+    assert get_num_real_samples(runtime_pack) == batch_size
+    state = ARMemoryState(dual_kv_cache=[], frame_idx=0, batched=True)
+    state.init(runtime_pack, torch.device("cpu"))
+    assert state._batch_size == batch_size
+    assert state._gen_lens == (4,) * batch_size
+    assert state._current_und_lens == tuple(text_lengths)

@@ -127,15 +127,20 @@ class ResolutionTextInfo(Augmentor):
         elif isinstance(caption, dict):
             # Case 2: Caption is a dictionary. This is for the json caption case.
             # In this case, we add resolution and aspect ratio in json fields
-            aspect_ratio = data_dict["__url__"].meta.opts["aspect_ratio"]
+            # Training keeps the source URL's metadata; inference supplies it directly
+            # when there is no source URL.
+            aspect_ratio = (
+                data_dict["__url__"].meta.opts["aspect_ratio"] if "__url__" in data_dict else data_dict["aspect_ratio"]
+            )
             height = int(data_dict["image_size"][0])
             width = int(data_dict["image_size"][1])
             data_dict[self.caption_key].update(
                 {
                     "resolution": {"H": height, "W": width},
-                    "aspect_ratio": aspect_ratio,
                 }
             )
+            if aspect_ratio is not None or "__url__" in data_dict:
+                data_dict[self.caption_key]["aspect_ratio"] = aspect_ratio
 
         else:
             raise ValueError(f"Unsupported caption type: {type(caption)}")

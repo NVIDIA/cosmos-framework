@@ -900,7 +900,7 @@ def _make_factored_pack(
 
 @pytest.mark.L0
 def test_get_context_parallel_sharded_sequence_three_way():
-    """Both streams shard to 1/world_size tokens per rank.
+    """Both streams shard to independently owned 1/world_size tensors per rank.
 
     This once pinned that the "three_way" mode causal_8b_480p needs (it comes with
     video_temporal_causal=True) was not turned away by an ``attn_implementation``
@@ -939,9 +939,18 @@ def test_get_context_parallel_sharded_sequence_three_way():
     # Each rank receives its contiguous shard
     expected_und = und_seq[rank * s_und_per_rank : (rank + 1) * s_und_per_rank]  # [S_und/cp, H]
     expected_gen = gen_seq[rank * s_gen_per_rank : (rank + 1) * s_gen_per_rank]  # [S_gen/cp, H]
+    local_und = get_und_seq(local_pack)  # [S_und/cp,H]
+    local_gen = get_gen_seq(local_pack)  # [S_gen/cp,H]
 
-    torch.testing.assert_close(get_und_seq(local_pack), expected_und, msg=f"rank {rank}: und shard mismatch")
-    torch.testing.assert_close(get_gen_seq(local_pack), expected_gen, msg=f"rank {rank}: gen shard mismatch")
+    torch.testing.assert_close(local_und, expected_und, msg=f"rank {rank}: und shard mismatch")
+    torch.testing.assert_close(local_gen, expected_gen, msg=f"rank {rank}: gen shard mismatch")
+
+    # Compare storage pointers rather than tensor data pointers: a nonzero-offset view has a
+    # different tensor pointer while still retaining its source's complete backing allocation.
+    assert local_und.untyped_storage().data_ptr() != und_seq.untyped_storage().data_ptr()
+    assert local_gen.untyped_storage().data_ptr() != gen_seq.untyped_storage().data_ptr()
+    assert local_und.untyped_storage().nbytes() == local_und.numel() * local_und.element_size()
+    assert local_gen.untyped_storage().nbytes() == local_gen.numel() * local_gen.element_size()
 
     dist.barrier()
     if rank == 0:

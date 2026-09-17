@@ -77,6 +77,7 @@ class MultiviewTransferARSession:
     unconditional_cache: MultiviewTransferARKVCache | None  # K/V: [1,M,H_kv,D] or None
     cfg_active: bool
     cfgp_enabled: bool
+    text_view_ids: tuple[int, ...] | None = None
 
 
 @dataclass(frozen=True)
@@ -92,8 +93,9 @@ class MultiviewTransferARReplayContext:
     condition_count: int
     history_frame_ranges: tuple[tuple[int, int], ...]
     memory_seq_len: int
-    text_tokens: tuple[int, ...]
+    text_tokens: tuple[tuple[int, ...], ...]
     fps_vision: tuple[float, ...]
+    text_view_ids: tuple[int, ...] | None = None
 
 
 class MultiviewTransferARBackend:
@@ -107,19 +109,23 @@ class MultiviewTransferARBackend:
         *,
         sequence_plans: list[SequencePlan],
         gen_data_clean: GenerationDataClean,
-        text_tokens: list[int],
+        text_tokens: list[list[int]],
         materialized_target_frame_ranges: Sequence[tuple[int, int]] | None = None,
     ) -> PackedSequence:
         """Build one full-geometry clean prefill pack for cache capture."""
         pack = self.host._pack_input_sequence(
             sequence_plans,
-            [text_tokens],
+            text_tokens,
             gen_data_clean,
             torch.zeros(1, dtype=torch.float32),  # [1]
         )
         if pack.vision is None:
             raise ValueError("Multiview transfer AR prefill requires packed vision data.")
         original_masks = [mask.clone() for mask in pack.vision.condition_mask]  # list[[V*T,1,1]]
+        # Clean prefill must not add a diffusion embedding to materialized RGB history.
+        # Keep the original conditioning mask for prefix validation and cache geometry.
+        mark_modality_as_clean_condition(pack.vision)
+        pack.vision.condition_mask = original_masks
         pack.teacher_forcing_pass = "clean"
         pack.teacher_forcing_original_condition_masks_vision = original_masks
         if materialized_target_frame_ranges is not None:
@@ -139,6 +145,7 @@ class MultiviewTransferARBackend:
         condition_count: int,
         cfg_active: bool,
         cfgp_enabled: bool,
+        text_view_ids: list[int] | None = None,
     ) -> MultiviewTransferARSession:
         """Allocate backend state from a validated prefill pack."""
         if prefill_pack.vision is None or len(prefill_pack.vision.token_shapes) != 2:
@@ -146,6 +153,11 @@ class MultiviewTransferARBackend:
         flex_backend = getattr(self.host.net, "flex_backend", None)
         if flex_backend is None:
             raise ValueError("Multiview transfer AR requires an initialized FlexAttention backend.")
+        if text_view_ids is not None and text_view_ids != list(range(num_views)):
+            raise ValueError(
+                f"Multiview transfer AR text must cover camera-major views {list(range(num_views))}, "
+                f"got {text_view_ids}."
+            )
         control_shape, target_shape = prefill_pack.vision.token_shapes
         total_memory_tokens = control_shape[0] * control_shape[1] * control_shape[2]
         total_memory_tokens += target_shape[0] * target_shape[1] * target_shape[2]
@@ -168,7 +180,24 @@ class MultiviewTransferARBackend:
             unconditional_cache=[None] * num_layers if cfg_active and not cfgp_enabled else None,
             cfg_active=cfg_active,
             cfgp_enabled=cfgp_enabled,
+            text_view_ids=tuple(text_view_ids) if text_view_ids is not None else None,
         )
+
+    @staticmethod
+    def _current_pack_text_tokens(
+        text_tokens: list[list[int]],
+        text_view_ids: tuple[int, ...] | None,
+    ) -> list[int] | list[list[int]]:
+        """Restore the sample-level or per-view AR text payload shape."""
+        if text_view_ids is None:
+            if len(text_tokens) != 1:
+                raise ValueError(f"Sample-level multiview AR text requires one caption, got {len(text_tokens)}.")
+            return text_tokens[0]
+        if len(text_tokens) != len(text_view_ids):
+            raise ValueError(
+                f"Per-view multiview AR text carries {len(text_tokens)} captions but {len(text_view_ids)} view IDs."
+            )
+        return text_tokens
 
     @staticmethod
     def build_memory_layout(session: MultiviewTransferARSession) -> MultiviewTransferARMemoryLayout:
@@ -189,7 +218,8 @@ class MultiviewTransferARBackend:
         self,
         *,
         vision_latent: torch.Tensor,  # [1,C,V*chunk_len,H,W]
-        text_tokens: list[int],
+        text_tokens: list[list[int]],
+        text_view_ids: tuple[int, ...] | None,
         fps_vision: list[float],
         num_views: int,
         frames_per_view: int,
@@ -197,26 +227,22 @@ class MultiviewTransferARBackend:
         memory_layout: MultiviewTransferARMemoryLayout,
         current_role: MultiviewTransferARCurrentRole,
     ) -> PackedSequence:
-        """Pack one synchronized chunk at its absolute camera-major mRoPE positions."""
+        """Pack one synchronized chunk at its shared camera-local mRoPE positions."""
         if vision_latent.shape[2] % num_views != 0:
             raise ValueError(
                 f"Multiview transfer chunk latent_t={vision_latent.shape[2]} must be divisible by num_views={num_views}."
             )
         chunk_len = vision_latent.shape[2] // num_views
-        temporal_positions = torch.cat(
-            [
-                torch.arange(
-                    view_idx * frames_per_view + chunk_start,
-                    view_idx * frames_per_view + chunk_start + chunk_len,
-                    dtype=torch.float32,
-                )
-                for view_idx in range(num_views)
-            ]
-        )  # [V*chunk_len]
+        temporal_positions = torch.arange(
+            chunk_start,
+            chunk_start + chunk_len,
+            dtype=torch.float32,
+        ).repeat(num_views)  # [V*chunk_len]
+        ar_text_tokens = self._current_pack_text_tokens(text_tokens, text_view_ids)
         pack = pack_input_sequence_autoregressive(
             vision_latent=vision_latent,
             action_latent=None,
-            text_tokens=text_tokens,
+            text_tokens=ar_text_tokens,
             timestep=0.0,
             fps_vision=fps_vision,
             fps_action=None,
@@ -234,6 +260,7 @@ class MultiviewTransferARBackend:
             ),
             vision_temporal_positions=temporal_positions,
             num_views=num_views,
+            text_view_ids=list(text_view_ids) if text_view_ids is not None else None,
         )
         pack.to_cuda()
         pack.multiview_transfer_ar_metadata = {
@@ -328,8 +355,8 @@ class MultiviewTransferARBackend:
         session: MultiviewTransferARSession,
         sequence_plans: list[SequencePlan],
         gen_data_clean: GenerationDataClean,
-        conditional_text_tokens: list[int],
-        unconditional_text_tokens: list[int] | None,
+        conditional_text_tokens: list[list[int]],
+        unconditional_text_tokens: list[list[int]] | None,
     ) -> None:
         """Capture control/condition K/V against the currently materialized target history."""
         session.control_frame_ranges[:] = [(0, session.frames_per_view)]
@@ -427,8 +454,8 @@ class MultiviewTransferARBackend:
         denoised_chunk: torch.Tensor,  # [1,C,V*chunk_len,H,W]
         chunk_start: int,
         chunk_end: int,
-        conditional_text_tokens: list[int],
-        unconditional_text_tokens: list[int] | None,
+        conditional_text_tokens: list[list[int]],
+        unconditional_text_tokens: list[list[int]] | None,
         fps_vision: list[float],
     ) -> None:
         """Write one finalized target chunk into branch caches and advance history."""
@@ -436,6 +463,7 @@ class MultiviewTransferARBackend:
         conditional_pack = self.build_current_pack(
             vision_latent=denoised_chunk,
             text_tokens=conditional_text_tokens,
+            text_view_ids=session.text_view_ids,
             fps_vision=fps_vision,
             num_views=session.num_views,
             frames_per_view=session.frames_per_view,
@@ -450,6 +478,7 @@ class MultiviewTransferARBackend:
             unconditional_pack = self.build_current_pack(
                 vision_latent=denoised_chunk,
                 text_tokens=unconditional_text_tokens,
+                text_view_ids=session.text_view_ids,
                 fps_vision=fps_vision,
                 num_views=session.num_views,
                 frames_per_view=session.frames_per_view,
@@ -558,7 +587,7 @@ class MultiviewTransferARBackend:
     def snapshot_replay_context(
         session: MultiviewTransferARSession,
         *,
-        text_tokens: list[int],
+        text_tokens: list[list[int]],
         fps_vision: list[float],
     ) -> MultiviewTransferARReplayContext:
         """Snapshot layout metadata while sharing the detached cache storage."""
@@ -572,8 +601,9 @@ class MultiviewTransferARBackend:
             condition_count=session.condition_count,
             history_frame_ranges=tuple(session.history_frame_ranges),
             memory_seq_len=session.memory_seq_len,
-            text_tokens=tuple(text_tokens),
+            text_tokens=tuple(tuple(tokens) for tokens in text_tokens),
             fps_vision=tuple(fps_vision),
+            text_view_ids=session.text_view_ids,
         )
 
     def build_replay_pack_and_memory(
@@ -599,7 +629,8 @@ class MultiviewTransferARBackend:
         )
         pack = self.build_current_pack(
             vision_latent=vision_latent,
-            text_tokens=list(context.text_tokens),
+            text_tokens=[list(tokens) for tokens in context.text_tokens],
+            text_view_ids=context.text_view_ids,
             fps_vision=list(context.fps_vision),
             num_views=context.num_views,
             frames_per_view=context.frames_per_view,

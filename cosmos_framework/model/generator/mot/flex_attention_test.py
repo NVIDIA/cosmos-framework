@@ -11,8 +11,10 @@ from typing import cast
 
 import pytest
 import torch
+from torch.fx.experimental import _config as fx_config
 from torch.nn.attention.flex_attention import BlockMask, create_block_mask
 
+from cosmos_framework.configs.base.defaults.activation_checkpointing import ActivationCheckpointingConfig
 from cosmos_framework.configs.base.defaults.multiview_attention import (
     ATTENTION_SCOPES,
     CAPTION_SCOPE_ALL,
@@ -47,6 +49,7 @@ from cosmos_framework.model.generator.mot.multiview_attention import (
     reject_mixed_caption_layouts,
     reject_samples_reading_no_caption,
 )
+from cosmos_framework.model.generator.mot.parallelize_unified_mot import _apply_full_ac, _apply_selective_ac
 from cosmos_framework.data.generator.sequence_packing.runtime import (
     SequencePack,
     get_causal_seq,
@@ -2892,6 +2895,30 @@ def _reference_attention(
     return out.unsqueeze(0), lse.transpose(0, 1).unsqueeze(0)
 
 
+@pytest.fixture
+def _trainer_compile_settings(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Match training and inference, then restore the process-wide shape policy."""
+    monkeypatch.setattr(fx_config, "use_duck_shape", False)
+
+
+class _FlexAttentionModule(torch.nn.Module):
+    def forward(
+        self,
+        query: torch.Tensor,  # [B,Q,H,D]
+        key: torch.Tensor,  # [B,K,Hkv,D]
+        value: torch.Tensor,  # [B,K,Hkv,Dv]
+        block_mask: BlockMask,
+        backend: FlexBackend,
+    ) -> torch.Tensor:  # [B,Q,H,Dv]
+        return flex_attention(query, key, value, block_mask, backend)  # [B,Q,H,Dv]
+
+
+def _checkpointed_flex_attention(selective: bool) -> torch.nn.Module:
+    config = ActivationCheckpointingConfig(mode="selective" if selective else "full")
+    wrap = _apply_selective_ac if selective else _apply_full_ac
+    return wrap(_FlexAttentionModule(), config)
+
+
 @pytest.mark.L0
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="FlexAttention kernels require a GPU.")
 @pytest.mark.parametrize("num_kv_heads", [4, 1])
@@ -2926,7 +2953,13 @@ def test_flex_attention_matches_reference(num_kv_heads: int) -> None:
 
 @pytest.mark.L0
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="FlexAttention kernels require a GPU.")
-def test_flex_attention_fused_gradients_match_dense_reference() -> None:
+@pytest.mark.usefixtures("_trainer_compile_settings")
+@pytest.mark.parametrize("compiled_checkpoint", [False, True])
+@pytest.mark.parametrize("selective_checkpoint", [False, True])
+@pytest.mark.parametrize("kv_heads", [1, 4])
+def test_flex_attention_fused_gradients_match_dense_reference(
+    compiled_checkpoint: bool, selective_checkpoint: bool, kv_heads: int
+) -> None:
     """The fused call must match a dense attention over ``[UND | GEN]``, forward and backward.
 
     This is what ``two_way_attention``'s full branch computes: one kernel, one softmax, GEN
@@ -2959,15 +2992,22 @@ def test_flex_attention_fused_gradients_match_dense_reference() -> None:
         return torch.randn(*shape, device=device, dtype=torch.float32, generator=generator).requires_grad_(True)
 
     q = _leaf(1, seq_len, num_heads, head_dim)  # [1,N_full,H,D]
-    k = _leaf(1, metadata.seq_len, num_heads, head_dim)  # [1,N_und+N_full,H,D]
-    v = _leaf(1, metadata.seq_len, num_heads, head_dim)
+    k = _leaf(1, metadata.seq_len, kv_heads, head_dim)  # [1,N_und+N_full,Hkv,D]
+    v = _leaf(1, metadata.seq_len, kv_heads, head_dim)  # [1,N_und+N_full,Hkv,D]
     leaves = [q, k, v]
 
     # Every query row carries a loss, padding included: the reference runs the very same
     # mask, so padded rows are not a special case here.
     grad_seed = torch.randn(1, seq_len, num_heads, head_dim, device=device, generator=generator)
 
-    got = flex_attention(q, k, v, block_mask, _TRITON_BACKEND)
+    attention_call = (
+        _checkpointed_flex_attention(selective_checkpoint)
+        if compiled_checkpoint or selective_checkpoint
+        else flex_attention
+    )
+    if compiled_checkpoint:
+        attention_call = torch.compile(attention_call, dynamic=True, fullgraph=True)
+    got = attention_call(q, k, v, block_mask, _TRITON_BACKEND)  # [1,N_full,H,D]
     expected, _lse = _reference_attention(q, k, v, mask)
     assert got.shape == expected.shape == (1, seq_len, num_heads, head_dim)
     torch.testing.assert_close(got, expected, atol=2e-2, rtol=2e-2)
@@ -3043,6 +3083,7 @@ def _flash_fused_case(device: torch.device) -> tuple[FlexMetadata, BlockMask, Fl
 
 @pytest.mark.L0
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="FlexAttention kernels require a GPU.")
+@pytest.mark.usefixtures("_trainer_compile_settings")
 def test_flash_backend_forward_matches_dense_reference() -> None:
     """FlashAttention-4's forward over the fused ``[UND | GEN]`` stream must match a dense reference.
 
@@ -3081,7 +3122,13 @@ def test_flash_backend_forward_matches_dense_reference() -> None:
 
 @pytest.mark.L0
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="FlexAttention kernels require a GPU.")
-def test_flash_backend_gradients_match_dense_reference() -> None:
+@pytest.mark.usefixtures("_trainer_compile_settings")
+@pytest.mark.parametrize("compiled_checkpoint", [False, True])
+@pytest.mark.parametrize("selective_checkpoint", [False, True])
+@pytest.mark.parametrize("kv_heads", [1, 4])
+def test_flash_backend_gradients_match_dense_reference(
+    compiled_checkpoint: bool, selective_checkpoint: bool, kv_heads: int
+) -> None:
     """FlashAttention-4's backward over the fused ``[UND | GEN]`` stream must match a dense reference.
 
     This is the shape training takes: GEN queries against the concatenated key stream, no
@@ -3101,13 +3148,13 @@ def test_flash_backend_gradients_match_dense_reference() -> None:
     metadata, block_mask, backend = _flash_fused_case(device)
     generator = torch.Generator(device=device).manual_seed(7)
 
-    def _leaf(seq_len: int) -> torch.Tensor:
-        tensor = torch.randn(1, seq_len, num_heads, head_dim, device=device, dtype=torch.bfloat16, generator=generator)
+    def _leaf(seq_len: int, heads: int) -> torch.Tensor:
+        tensor = torch.randn(1, seq_len, heads, head_dim, device=device, dtype=torch.bfloat16, generator=generator)
         return tensor.requires_grad_(True)
 
-    q = _leaf(metadata.q_len)  # [1,N_full,H,D]
-    k = _leaf(metadata.seq_len)  # [1,N_und+N_full,H,D]
-    v = _leaf(metadata.seq_len)
+    q = _leaf(metadata.q_len, num_heads)  # [1,N_full,H,D]
+    k = _leaf(metadata.seq_len, kv_heads)  # [1,N_und+N_full,Hkv,D]
+    v = _leaf(metadata.seq_len, kv_heads)  # [1,N_und+N_full,Hkv,D]
     leaves = [q, k, v]
     # The reference differentiates fp32 copies rather than these bf16 leaves, so its
     # gradients are not rounded twice on the way out.
@@ -3122,8 +3169,15 @@ def test_flash_backend_gradients_match_dense_reference() -> None:
     ).float()
 
     mask = _mask_mod_to_dense(metadata).to(device)  # [q_len, num_und+q_len] bool
+    attention_call = (
+        _checkpointed_flex_attention(selective_checkpoint)
+        if compiled_checkpoint or selective_checkpoint
+        else flex_attention
+    )
+    if compiled_checkpoint:
+        attention_call = torch.compile(attention_call, dynamic=True, fullgraph=True)
     with _flash_backend_or_skip():
-        got = flex_attention(q, k, v, block_mask, backend)
+        got = attention_call(q, k, v, block_mask, backend)  # [1,N_full,H,D]
     expected, _lse = _reference_attention(ref_q, ref_k, ref_v, mask)
     assert got.shape == expected.shape == (1, metadata.q_len, num_heads, head_dim)
     torch.testing.assert_close(got.float(), expected, atol=2e-2, rtol=2e-2)
