@@ -27,7 +27,7 @@ from cosmos_framework.inference.vision import (
 )
 from cosmos_framework.utils import log
 from cosmos_framework.data.generator.sequence_packing import SequencePlan
-from cosmos_framework.model.generator.omni_mot_model import OmniMoTModel
+from cosmos_framework.model.generator.omni_mot_model import OmniMoTModel, VelocityPostprocess
 from cosmos_framework.model.generator.utils.data_and_condition import GenerationDataClean
 from cosmos_framework.model.generator.reasoner.qwen3_vl.utils import _SYSTEM_PROMPT_TRANSFER
 
@@ -336,14 +336,46 @@ def build_control_cfg_postprocess(
                 raise ValueError(f"control_guidance_interval must be [lo, hi], got {control_guidance_interval}")
             control_guidance_bounds = (control_guidance_interval[0], control_guidance_interval[1])
 
+        def control_active(timestep: torch.Tensor) -> bool:  # timestep: [B,1]
+            return control_guidance_bounds is None or (
+                control_guidance_bounds[0] < timestep[0].item() < control_guidance_bounds[1]
+            )
+
+        def prepare(noise_x: list[torch.Tensor], timestep: torch.Tensor) -> None:  # list[[D]], [B,1]
+            cache = getattr(model, "_diffusion_cache", None)
+            if cache is None or not gen_data_clean.x0_tokens_vision:
+                return
+            # Match _get_velocity: vision items are the prefix of each sample;
+            # the last vision item is the noisy target.
+            full_latents: list[torch.Tensor] = []
+            target_latents: list[torch.Tensor] = []
+            templates = iter(gen_data_clean.x0_tokens_vision)
+            counts = gen_data_clean.num_vision_items_per_sample
+            for i, nx in enumerate(noise_x):
+                offset = 0
+                count = counts[i] if counts is not None else 1
+                for j in range(count):
+                    template = next(templates)  # [C,T,H,W]
+                    size = template.numel()
+                    latent = nx[offset : offset + size].reshape(template.shape).to(**model.tensor_kwargs)
+                    full_latents.append(latent)
+                    if j == count - 1:
+                        target_latents.append(latent)
+                    offset += size
+            # Keep the negative branch at cfg2 even outside the control interval.
+            branches = {"cfg0": full_latents}
+            if control_active(timestep):
+                branches["cfg1"] = target_latents
+            branches["cfg2"] = full_latents
+            cache.prepare_control_cfg_step(branches, float(timestep[0].item()))
+
         def postprocess(
             cond_v_full: list[torch.Tensor],
             noise_x: list[torch.Tensor],
             timestep: torch.Tensor,
         ) -> list[torch.Tensor]:
-            if control_guidance_bounds is not None:
-                if not (control_guidance_bounds[0] < timestep[0].item() < control_guidance_bounds[1]):
-                    return cond_v_full
+            if not control_active(timestep):
+                return cond_v_full
 
             noise_x_nc = [nx[c:] for nx, c in zip(noise_x, ctrl_dims, strict=True)]  # [[N_target],...]
             cond_v_nc = model._get_velocity(
@@ -370,7 +402,7 @@ def build_control_cfg_postprocess(
                 mixed.append(torch.cat([v_full_i[:c], mixed_suffix], dim=0))  # [N_full]
             return mixed
 
-        return postprocess
+        return VelocityPostprocess(apply=postprocess, prepare=prepare)
 
     return builder
 

@@ -232,6 +232,22 @@ def _densify_action_family(
 INFERENCE_RAW_VISION_RETAINED_ITEMS_KEY = "_inference_raw_vision_retained_items"
 
 
+@dataclasses.dataclass(frozen=True)
+class VelocityPostprocess:
+    """A velocity transform with a preparation hook before any branch executes."""
+
+    apply: Callable[[list[torch.Tensor], list[torch.Tensor], torch.Tensor], list[torch.Tensor]]
+    prepare: Callable[[list[torch.Tensor], torch.Tensor], None]
+
+    def __call__(
+        self,
+        velocity: list[torch.Tensor],  # list[[D]]
+        noise_x: list[torch.Tensor],  # list[[D]]
+        timestep: torch.Tensor,  # [B,1]
+    ) -> list[torch.Tensor]:  # list[[D]]
+        return self.apply(velocity, noise_x, timestep)
+
+
 class OmniMoTModel(ImaginaireModel):
     """
     Mixture of Transformers (MoT) model to be trained with the flow matching objective
@@ -3866,6 +3882,9 @@ class OmniMoTModel(ImaginaireModel):
 
                 # Conditional forward, then per-step postprocess hook. Hook runs
                 # sequentially; cfgp parallelism not used on this path.
+                # Preflight control-CFG cache decisions before any branch runs.
+                if isinstance(velocity_postprocess, VelocityPostprocess):
+                    velocity_postprocess.prepare(noise_x, timestep)
                 cond_v_full = _single_velocity_fn(cond_tokens, skip_text_tokens=False)
                 cond_v = velocity_postprocess(cond_v_full, noise_x, timestep)
 
