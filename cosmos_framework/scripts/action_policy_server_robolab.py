@@ -31,6 +31,7 @@ import socket
 import threading
 import time
 from dataclasses import dataclass
+from datetime import timedelta
 from pathlib import Path
 from typing import Any, Literal
 
@@ -53,6 +54,7 @@ from cosmos_framework.data.generator.joint_dataloader import IterativeJointDataL
 from cosmos_framework.inference.args import GuidanceInterval, OmniSetupArgs, OmniSetupOverrides
 from cosmos_framework.inference.common.args import ConfigFileType, ConfigOverrides, tyro_cli
 from cosmos_framework.inference.common.config import deserialize_config, deserialize_config_dict, load_config
+from cosmos_framework.inference.common.inference import _download_on_rank0
 from cosmos_framework.inference.common.init import init_output_dir
 from cosmos_framework.inference.inference import OmniInference
 from cosmos_framework.scripts.action_policy_server_utils import (
@@ -78,6 +80,7 @@ _CONCAT_VIEW_DESCRIPTION = (
     "sides, with the robot visible."
 )
 _DEFAULT_HF_REVISION = "main"
+_CONTROL_GROUP_TIMEOUT = timedelta(days=365)
 _ROBOLAB_POLICY_HF_REPOSITORIES = {
     "Cosmos3-Nano-Policy-DROID": "nvidia/Cosmos3-Nano-Policy-DROID",
     "nvidia/Cosmos3-Nano-Policy-DROID": "nvidia/Cosmos3-Nano-Policy-DROID",
@@ -148,7 +151,11 @@ def _resolve_checkpoint_path(checkpoint_path: str, *, hf_revision: str) -> str:
         f"[robolab-policy-server] downloading consolidated checkpoint from Hugging Face: "
         f"repository={repository!r} revision={hf_revision!r}"
     )
-    return CheckpointDirHf(repository=repository, revision=hf_revision).download()
+    return str(
+        _download_on_rank0(
+            CheckpointDirHf(repository=repository, revision=hf_revision).download,
+        )
+    )
 
 
 def _validate_checkpoint(checkpoint_path: str, *, allow_dcp_checkpoint: bool) -> None:
@@ -177,8 +184,10 @@ def _validate_checkpoint(checkpoint_path: str, *, allow_dcp_checkpoint: bool) ->
     has_config = (checkpoint_dir / "config.json").exists()
     has_consolidated_safetensors = any(checkpoint_dir.glob("*.safetensors"))
     has_diffusers_safetensors_index = (checkpoint_dir / "model.safetensors.index.json").exists()
-    if not checkpoint_dir.is_dir() or not has_config or not (
-        has_consolidated_safetensors or has_diffusers_safetensors_index
+    if (
+        not checkpoint_dir.is_dir()
+        or not has_config
+        or not (has_consolidated_safetensors or has_diffusers_safetensors_index)
     ):
         raise ValueError(f"Invalid safetensors checkpoint directory: {checkpoint_dir}")
 
@@ -368,29 +377,54 @@ class RobolabServerArgs(pydantic.BaseModel):
     """Use exactly two ranks for CFG parallelism without FSDP or context parallelism."""
 
 
-def _resolve_parallelism_overrides(*, cfg_parallel: bool, world_size: int) -> dict[str, int]:
+def _resolve_parallelism_overrides(*, cfg_parallel: bool, world_size: int, guidance: float) -> dict[str, int]:
     if cfg_parallel:
         if world_size != 2:
             raise ValueError(f"--cfg-parallel requires exactly 2 ranks, got world size {world_size}")
-        return {"dp_shard_size": 1, "cfgp_size": 2, "cp_size": 1}
+        if guidance == 1.0:
+            raise ValueError("--cfg-parallel requires --guidance to differ from 1.0 so the CFG branch is active")
+        # The latency preset derives cfgp_size=2, cp_size=1, and
+        # dp_replicate_size=2 for a two-rank launch. Only disable FSDP.
+        return {"dp_shard_size": 1}
 
     if world_size != 1:
         raise ValueError(
             f"A {world_size}-rank RoboLab server requires --cfg-parallel; non-CFG multi-rank serving is unsupported"
         )
-    return {"dp_shard_size": 1, "cfgp_size": 1, "cp_size": 1}
+    return {"dp_shard_size": 1}
+
+
+def _build_control_group() -> dist.ProcessGroup:
+    """Build a long-lived Gloo control group separate from NCCL generation."""
+    if not (dist.is_available() and dist.is_initialized() and dist.get_world_size() == 2):
+        raise RuntimeError("The RoboLab control group requires an initialized two-rank process group")
+
+    # Both ranks create this group during synchronized startup. The long timeout
+    # allows rank 1 to wait for requests without occupying the NCCL model group.
+    return dist.new_group(
+        ranks=[0, 1],
+        backend="gloo",
+        timeout=_CONTROL_GROUP_TIMEOUT,
+    )
 
 
 class RobolabPolicyService:
     def __init__(self, args: RobolabServerArgs) -> None:
         if not torch.cuda.is_available():
             raise RuntimeError("CUDA is required for OmniMoTModel inference in this repo.")
+        maybe_init_distributed()
+        world_size = dist.get_world_size() if dist.is_available() and dist.is_initialized() else 1
+        parallelism_overrides = _resolve_parallelism_overrides(
+            cfg_parallel=args.cfg_parallel,
+            world_size=world_size,
+            guidance=float(args.guidance),
+        )
+
         resolved_checkpoint_path = _resolve_checkpoint_path(args.checkpoint_path, hf_revision=args.hf_revision)
         args = args.model_copy(update={"checkpoint_path": resolved_checkpoint_path})
         _validate_checkpoint(args.checkpoint_path, allow_dcp_checkpoint=args.allow_dcp_checkpoint)
-        maybe_init_distributed()
 
-        setup_args = self._build_setup_args(args)
+        setup_args = self._build_setup_args(args, parallelism_overrides)
         log.info(
             f"[robolab-policy-server] loading model: checkpoint_path={setup_args.checkpoint_path!r} "
             f"config_file={setup_args.config_file!r} experiment={setup_args.experiment!r}"
@@ -435,6 +469,8 @@ class RobolabPolicyService:
 
         self._lock = threading.Lock()
         self._rng = np.random.default_rng(self.cfg.seed)
+        self._control_group = _build_control_group() if self._distributed_enabled() else None
+        self._control_request_id = 0
         log.info(
             f"[robolab-policy-server] ready domain={self.cfg.domain_name!r} resolution={self.cfg.resolution!r} "
             f"action_space={self.cfg.action_space} action_dim={self.cfg.action_dim} "
@@ -445,13 +481,7 @@ class RobolabPolicyService:
             f"seed={self.cfg.seed} deterministic_seed={self.cfg.deterministic_seed}"
         )
 
-    def _build_setup_args(self, args: RobolabServerArgs) -> OmniSetupArgs:
-        world_size = dist.get_world_size() if dist.is_available() and dist.is_initialized() else 1
-        parallelism_overrides = _resolve_parallelism_overrides(
-            cfg_parallel=args.cfg_parallel,
-            world_size=world_size,
-        )
-
+    def _build_setup_args(self, args: RobolabServerArgs, parallelism_overrides: dict[str, int]) -> OmniSetupArgs:
         # RoboLab calls the model directly and never runs OmniInference's output
         # guardrails. Avoid constructing and downloading unused guardrail models
         # independently on every distributed rank.
@@ -608,14 +638,12 @@ class RobolabPolicyService:
             sample["ai_caption"] = json.dumps(sample["ai_caption"])
         return sample
 
-    def _infer_impl(self, obs: dict[str, Any], seed: int) -> dict[str, Any]:
-        start_time = time.monotonic()
-        sample = self._build_sample(obs)
+    def _generate(self, sample: dict[str, Any], seed: int) -> dict[str, Any]:
         data_batch = _build_data_batch_from_sample(sample)
         log.info(f"[robolab-policy-server] prompt={data_batch['ai_caption'][0]!r} seed={seed}")
 
         with torch.inference_mode():
-            samples = self.model.generate_samples_from_batch(
+            return self.model.generate_samples_from_batch(
                 data_batch,
                 guidance=self.cfg.guidance,
                 guidance_interval=(
@@ -626,6 +654,13 @@ class RobolabPolicyService:
                 shift=self.cfg.shift,
             )
 
+    def _format_outputs(
+        self,
+        obs: dict[str, Any],
+        samples: dict[str, Any],
+        *,
+        start_time: float,
+    ) -> dict[str, Any]:
         action = samples["action"][0][:, : self.cfg.action_dim]  # [T,D]
         action = action[self.cfg.history_length :]  # [T2,D]
         action_np = action.detach().cpu().numpy()  # [T2,D]
@@ -664,28 +699,54 @@ class RobolabPolicyService:
     def _distributed_enabled() -> bool:
         return dist.is_available() and dist.is_initialized() and dist.get_world_size() > 1
 
-    @staticmethod
-    def _broadcast_request(request: dict[str, Any] | None) -> dict[str, Any]:
-        payload: list[Any] = [request]
-        dist.broadcast_object_list(
-            payload,
-            src=0,
-            device=torch.device("cuda", torch.cuda.current_device()),
-        )
+    def _broadcast_control_message(self, message: dict[str, Any] | None, *, src: int) -> dict[str, Any]:
+        if self._control_group is None:
+            raise RuntimeError("Distributed control group is not initialized")
+        payload: list[Any] = [message]
+        dist.broadcast_object_list(payload, src=src, group=self._control_group)
         received = payload[0]
         if not isinstance(received, dict):
-            raise TypeError(f"Expected a distributed request dict, got {type(received).__name__}")
+            raise TypeError(f"Expected a distributed control dict, got {type(received).__name__}")
         return received
 
+    def _send_control_request(self, request_id: int, request: dict[str, Any]) -> None:
+        self._broadcast_control_message({"request_id": request_id, **request}, src=0)
+
+    def _receive_control_request(self, request_id: int) -> dict[str, Any]:
+        request = self._broadcast_control_message(None, src=0)
+        if request.get("request_id") != request_id:
+            raise RuntimeError(f"Expected distributed request {request_id}, got {request.get('request_id')!r}")
+        return request
+
+    def _send_worker_ready(self, request_id: int, *, error: str | None = None) -> None:
+        self._broadcast_control_message({"request_id": request_id, "error": error}, src=1)
+
+    def _wait_worker_ready(self, request_id: int) -> None:
+        response = self._broadcast_control_message(None, src=1)
+        if response.get("request_id") != request_id:
+            raise RuntimeError(
+                f"Expected readiness for distributed request {request_id}, got {response.get('request_id')!r}"
+            )
+        error = response.get("error")
+        if error is not None:
+            raise RuntimeError(f"Distributed worker rejected request {request_id}: {error}")
+
     def infer(self, obs: dict[str, Any]) -> dict[str, Any]:
-        # The WebSocket server may dispatch requests from multiple threads. Keep
-        # the broadcast and distributed model call in one globally ordered
-        # critical section so every rank executes collectives in the same order.
+        # Serialize request dispatch and CFGP generation so every rank enters
+        # the model collectives in the same order.
         with self._lock:
+            start_time = time.monotonic()
+            # Reject malformed client input before dispatching anything to the
+            # worker. The worker therefore remains ready for the next request.
+            sample = self._build_sample(obs)
             seed = self._next_seed()
             if self._distributed_enabled():
-                self._broadcast_request({"obs": obs, "seed": seed})
-            return self._infer_impl(obs, seed)
+                request_id = self._control_request_id
+                self._send_control_request(request_id, {"kind": "infer", "obs": obs, "seed": seed})
+                self._control_request_id += 1
+                self._wait_worker_ready(request_id)
+            samples = self._generate(sample, seed)
+            return self._format_outputs(obs, samples, start_time=start_time)
 
     def worker_loop(self) -> None:
         """Run distributed inference work on non-server ranks."""
@@ -698,16 +759,54 @@ class RobolabPolicyService:
             rank0_only=False,
         )
         while True:
-            request = self._broadcast_request(None)
+            request_id = self._control_request_id
+            request = self._receive_control_request(request_id)
+            self._control_request_id += 1
+            kind = request.get("kind")
+            if kind == "shutdown":
+                self._send_worker_ready(request_id)
+                log.info(
+                    f"[robolab-policy-server] rank {rank} received shutdown",
+                    rank0_only=False,
+                )
+                return
+            if kind != "infer":
+                error = f"Unsupported distributed request kind: {kind!r}"
+                self._send_worker_ready(request_id, error=error)
+                log.error(f"[robolab-policy-server] rank {rank}: {error}", rank0_only=False)
+                continue
+
             obs = request.get("obs")
             seed = request.get("seed")
-            if not isinstance(obs, dict):
-                raise TypeError(f"Distributed request 'obs' must be a dict, got {type(obs).__name__}")
-            if not isinstance(seed, int):
-                raise TypeError(f"Distributed request 'seed' must be an int, got {type(seed).__name__}")
-            # The result is intentionally discarded. This rank participates in
-            # the CFGP/FSDP collectives; rank 0 returns the response to RoboLab.
-            self._infer_impl(obs, seed)
+            try:
+                if not isinstance(obs, dict):
+                    raise TypeError(f"Distributed request 'obs' must be a dict, got {type(obs).__name__}")
+                if not isinstance(seed, int):
+                    raise TypeError(f"Distributed request 'seed' must be an int, got {type(seed).__name__}")
+                sample = self._build_sample(obs)
+            except Exception as exc:
+                error = f"{type(exc).__name__}: {exc}"
+                self._send_worker_ready(request_id, error=error)
+                log.exception(
+                    f"[robolab-policy-server] rank {rank} rejected distributed request {request_id}",
+                    rank0_only=False,
+                )
+                continue
+
+            self._send_worker_ready(request_id)
+            # Only CFGP generation runs on this rank. Rank 0 formats and returns
+            # the response to RoboLab.
+            self._generate(sample, seed)
+
+    def shutdown_worker(self) -> None:
+        """Ask the non-server rank to leave its control loop cleanly."""
+        if not self._distributed_enabled() or dist.get_rank() != 0:
+            return
+        with self._lock:
+            request_id = self._control_request_id
+            self._send_control_request(request_id, {"kind": "shutdown"})
+            self._control_request_id += 1
+            self._wait_worker_ready(request_id)
 
 
 def serve(args: RobolabServerArgs) -> None:
@@ -724,8 +823,14 @@ def serve(args: RobolabServerArgs) -> None:
     local_ip = get_local_ip()
     log.info(f"[robolab-policy-server] Server accessible at: ws://{local_ip}:{int(args.port)}/")
     log.info(f"[robolab-policy-server] Health check: http://{local_ip}:{int(args.port)}/healthz")
-    server_cls = _load_openpi_websocket_policy_server()
-    server_cls(policy=service, host=args.host, port=int(args.port), metadata={}).serve_forever()
+    try:
+        server_cls = _load_openpi_websocket_policy_server()
+        server_cls(policy=service, host=args.host, port=int(args.port), metadata={}).serve_forever()
+    finally:
+        try:
+            service.shutdown_worker()
+        except Exception as exc:
+            log.warning(f"[robolab-policy-server] failed to stop distributed worker cleanly: {exc}")
 
 
 def main() -> None:
