@@ -6,9 +6,10 @@
 from __future__ import annotations
 
 import sys
+import threading
 from pathlib import Path
 from typing import Any
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 import numpy as np
 import pytest
@@ -35,12 +36,20 @@ def test_resolve_public_hf_policy_checkpoint(monkeypatch: pytest.MonkeyPatch, tm
         calls.append((checkpoint.repository, checkpoint.revision))
         return str(downloaded_path)
 
+    rank0_downloads: list[Any] = []
+
+    def fake_download_on_rank0(download: Any) -> Path:
+        rank0_downloads.append(download)
+        return Path(download())
+
     monkeypatch.setattr(robolab_server.CheckpointDirHf, "download", fake_download)
+    monkeypatch.setattr(robolab_server, "_download_on_rank0", fake_download_on_rank0)
 
     resolved = robolab_server._resolve_checkpoint_path("Cosmos3-Nano-Policy-DROID", hf_revision="test-revision")
 
     assert resolved == str(downloaded_path)
     assert calls == [("nvidia/Cosmos3-Nano-Policy-DROID", "test-revision")]
+    assert len(rank0_downloads) == 1
 
 
 def test_resolve_checkpoint_keeps_existing_local_path(tmp_path: Path) -> None:
@@ -105,19 +114,25 @@ def test_server_args_accept_guidance_interval() -> None:
 
 
 @pytest.mark.parametrize(
-    ("cfg_parallel", "world_size", "expected"),
+    ("cfg_parallel", "world_size", "guidance", "expected"),
     [
-        (False, 1, {"dp_shard_size": 1, "cfgp_size": 1, "cp_size": 1}),
-        (True, 2, {"dp_shard_size": 1, "cfgp_size": 2, "cp_size": 1}),
+        (False, 1, 1.0, {"dp_shard_size": 1}),
+        (True, 2, 3.0, {"dp_shard_size": 1}),
     ],
 )
 def test_resolve_parallelism_overrides(
     cfg_parallel: bool,
     world_size: int,
+    guidance: float,
     expected: dict[str, int],
 ) -> None:
     assert (
-        robolab_server._resolve_parallelism_overrides(cfg_parallel=cfg_parallel, world_size=world_size) == expected
+        robolab_server._resolve_parallelism_overrides(
+            cfg_parallel=cfg_parallel,
+            world_size=world_size,
+            guidance=guidance,
+        )
+        == expected
     )
 
 
@@ -127,7 +142,144 @@ def test_resolve_parallelism_overrides_rejects_unsupported_launches(
     world_size: int,
 ) -> None:
     with pytest.raises(ValueError):
-        robolab_server._resolve_parallelism_overrides(cfg_parallel=cfg_parallel, world_size=world_size)
+        robolab_server._resolve_parallelism_overrides(
+            cfg_parallel=cfg_parallel,
+            world_size=world_size,
+            guidance=3.0,
+        )
+
+
+def test_resolve_parallelism_overrides_rejects_cfg_parallel_without_cfg() -> None:
+    with pytest.raises(ValueError, match="guidance"):
+        robolab_server._resolve_parallelism_overrides(
+            cfg_parallel=True,
+            world_size=2,
+            guidance=1.0,
+        )
+
+
+def test_build_control_group_uses_gloo_with_long_idle_timeout() -> None:
+    control_group = Mock()
+    with (
+        patch.object(robolab_server.dist, "is_available", return_value=True),
+        patch.object(robolab_server.dist, "is_initialized", return_value=True),
+        patch.object(robolab_server.dist, "get_world_size", return_value=2),
+        patch.object(robolab_server.dist, "new_group", return_value=control_group) as new_group,
+    ):
+        assert robolab_server._build_control_group() is control_group
+
+    new_group.assert_called_once_with(
+        ranks=[0, 1],
+        backend="gloo",
+        timeout=robolab_server._CONTROL_GROUP_TIMEOUT,
+    )
+
+
+def test_control_messages_use_the_gloo_group() -> None:
+    service = object.__new__(robolab_server.RobolabPolicyService)
+    service._control_group = Mock()
+    message = {"request_id": 3, "kind": "infer"}
+
+    with patch.object(robolab_server.dist, "broadcast_object_list") as broadcast:
+        assert service._broadcast_control_message(message, src=0) is message
+
+    broadcast.assert_called_once_with([message], src=0, group=service._control_group)
+
+
+def test_invalid_launch_is_rejected_before_checkpoint_resolution() -> None:
+    args = robolab_server.RobolabServerArgs(cfg_parallel=True)
+    with (
+        patch.object(robolab_server.torch.cuda, "is_available", return_value=True),
+        patch.object(robolab_server, "maybe_init_distributed"),
+        patch.object(robolab_server.dist, "is_available", return_value=True),
+        patch.object(robolab_server.dist, "is_initialized", return_value=True),
+        patch.object(robolab_server.dist, "get_world_size", return_value=4),
+        patch.object(robolab_server, "_resolve_checkpoint_path") as resolve_checkpoint,
+        pytest.raises(ValueError, match="exactly 2 ranks"),
+    ):
+        robolab_server.RobolabPolicyService(args)
+
+    resolve_checkpoint.assert_not_called()
+
+
+def test_infer_rejects_invalid_observation_before_distributed_dispatch() -> None:
+    service = object.__new__(robolab_server.RobolabPolicyService)
+    service._lock = threading.Lock()
+    service._build_sample = Mock(side_effect=ValueError("bad observation"))
+    service._next_seed = Mock()
+    service._send_control_request = Mock()
+
+    with pytest.raises(ValueError, match="bad observation"):
+        service.infer({"prompt": "missing image and state"})
+
+    service._next_seed.assert_not_called()
+    service._send_control_request.assert_not_called()
+
+
+def test_infer_waits_for_worker_then_formats_rank0_output() -> None:
+    service = object.__new__(robolab_server.RobolabPolicyService)
+    service._lock = threading.Lock()
+    service._control_request_id = 0
+    service._build_sample = Mock(return_value={"sample": "prepared"})
+    service._next_seed = Mock(return_value=17)
+    service._distributed_enabled = Mock(return_value=True)
+    service._send_control_request = Mock()
+    service._wait_worker_ready = Mock()
+    service._generate = Mock(return_value={"samples": "generated"})
+    service._format_outputs = Mock(return_value={"action": "formatted"})
+    obs = {"prompt": "move"}
+
+    assert service.infer(obs) == {"action": "formatted"}
+
+    service._send_control_request.assert_called_once_with(
+        0,
+        {"kind": "infer", "obs": obs, "seed": 17},
+    )
+    service._wait_worker_ready.assert_called_once_with(0)
+    service._generate.assert_called_once_with({"sample": "prepared"}, 17)
+    service._format_outputs.assert_called_once()
+
+
+def test_worker_reports_preparation_error_then_processes_next_request() -> None:
+    service = object.__new__(robolab_server.RobolabPolicyService)
+    service._control_request_id = 0
+    service._distributed_enabled = Mock(return_value=True)
+    service._receive_control_request = Mock(
+        side_effect=[
+            {"kind": "infer", "obs": {"bad": True}, "seed": 7},
+            {"kind": "infer", "obs": {"good": True}, "seed": 8},
+            {"kind": "shutdown"},
+        ]
+    )
+    service._build_sample = Mock(side_effect=[ValueError("bad sample"), {"sample": "valid"}])
+    service._generate = Mock(return_value={})
+    service._send_worker_ready = Mock()
+
+    with patch.object(robolab_server.dist, "get_rank", return_value=1):
+        service.worker_loop()
+
+    assert service._send_worker_ready.call_args_list[0].args == (0,)
+    assert service._send_worker_ready.call_args_list[0].kwargs == {"error": "ValueError: bad sample"}
+    assert service._send_worker_ready.call_args_list[1].args == (1,)
+    assert service._send_worker_ready.call_args_list[1].kwargs == {}
+    assert service._send_worker_ready.call_args_list[2].args == (2,)
+    assert service._send_worker_ready.call_args_list[2].kwargs == {}
+    service._generate.assert_called_once_with({"sample": "valid"}, 8)
+
+
+def test_shutdown_worker_uses_next_control_request_and_waits_for_ack() -> None:
+    service = object.__new__(robolab_server.RobolabPolicyService)
+    service._lock = threading.Lock()
+    service._control_request_id = 4
+    service._distributed_enabled = Mock(return_value=True)
+    service._send_control_request = Mock()
+    service._wait_worker_ready = Mock()
+
+    with patch.object(robolab_server.dist, "get_rank", return_value=0):
+        service.shutdown_worker()
+
+    service._send_control_request.assert_called_once_with(4, {"kind": "shutdown"})
+    service._wait_worker_ready.assert_called_once_with(4)
 
 
 def test_joint_pos_observation_preprocessing_matches_internal_layout() -> None:
