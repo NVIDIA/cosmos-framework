@@ -717,18 +717,35 @@ class Cosmos3VFMNetwork(PreTrainedModel):
         )
         return packed_sequence, packed_text_embedding.dtype
 
-    def _embed_packed_timesteps(self, timesteps: torch.Tensor, packed_seq: PackedSequence) -> torch.Tensor:
-        """Embed noised-token timesteps, reusing work when packing proves they share one scalar."""
+    def _embed_packed_timesteps(
+        self,
+        timesteps: torch.Tensor,
+        packed_seq: PackedSequence,
+        target_dtype: torch.dtype,
+    ) -> torch.Tensor:
+        """Embed noised-token timesteps in ``target_dtype``, reusing work when packing proves they
+        share one scalar.
+
+        The dtype is taken here rather than left to the caller because of where the cast falls. The
+        single-timestep branch embeds one row and then materialises a copy of it per noisy token, so
+        a caller casting the result afterwards holds that full-length stream twice over: once in the
+        embedder's float32 and once in the model dtype. Casting the single row first leaves the
+        materialised buffer as the only full-length one. At multiview sizes the float32 copy alone
+        runs to several gigabytes and was setting the peak on its own.
+        """
         if packed_seq.uses_single_timestep and timesteps.numel() > 1:
             timestep = timesteps[:1]  # [1]
             with torch.autocast("cuda", enabled=True, dtype=torch.float32):
                 timestep_embed = self.time_embedder(timestep)  # [1,hidden_size]
-            # Materialize: expand() aliases storage; in-place ops on a float32 no-op .to() would corrupt all rows.
+            timestep_embed = timestep_embed.to(target_dtype)  # [1,hidden_size]
+            # Materialize: expand() aliases storage, and with the cast now behind us there is no
+            # longer even the chance of a dtype conversion downstream to copy it, so an in-place
+            # write by any caller would land on all rows at once.
             return timestep_embed.expand(timesteps.shape[0], -1).contiguous()  # [N_noisy_frames,hidden_size]
 
         # Timesteps are computed in FP32 for numerical stability.
         with torch.autocast("cuda", enabled=True, dtype=torch.float32):
-            return self.time_embedder(timesteps)  # [N_noisy_frames,hidden_size]
+            return self.time_embedder(timesteps).to(target_dtype)  # [N_noisy_frames,hidden_size]
 
     def _encode_vision(
         self,
@@ -825,8 +842,9 @@ class Cosmos3VFMNetwork(PreTrainedModel):
 
         if modality.mse_loss_indexes.numel() > 0:
             timesteps = modality.timesteps.to(dtype=torch.float32) * self.timestep_scale  # [N_noisy_frames]
-            packed_timestep_embeds = self._embed_packed_timesteps(timesteps, packed_seq)  # [N_noisy_frames,hidden_size]
-            packed_timestep_embeds = packed_timestep_embeds.to(target_dtype)  # [N_noisy_frames,hidden_size]
+            packed_timestep_embeds = self._embed_packed_timesteps(
+                timesteps, packed_seq, target_dtype
+            )  # [N_noisy_frames,hidden_size]
 
             packed_tokens = _apply_timestep_embeds_to_noisy_tokens(
                 packed_tokens=packed_tokens,
@@ -976,10 +994,7 @@ class Cosmos3VFMNetwork(PreTrainedModel):
         if has_noisy_actions:
             timesteps_action = action.timesteps * self.timestep_scale  # [N_noisy_frames_action]
             packed_timestep_embeds_action = self._embed_packed_timesteps(
-                timesteps_action, packed_seq
-            )  # [N_noisy_frames_action,hidden_size]
-            packed_timestep_embeds_action = packed_timestep_embeds_action.to(
-                target_dtype
+                timesteps_action, packed_seq, target_dtype
             )  # [N_noisy_frames_action,hidden_size]
 
             packed_tokens_action = _apply_timestep_embeds_to_noisy_tokens(
@@ -1099,10 +1114,7 @@ class Cosmos3VFMNetwork(PreTrainedModel):
         if has_noisy_sound:
             timesteps_sound = sound.timesteps * self.timestep_scale  # [N_noisy_frames_sound]
             packed_timestep_embeds_sound = self._embed_packed_timesteps(
-                timesteps_sound, packed_seq
-            )  # [N_noisy_frames_sound,hidden_size]
-            packed_timestep_embeds_sound = packed_timestep_embeds_sound.to(
-                target_dtype
+                timesteps_sound, packed_seq, target_dtype
             )  # [N_noisy_frames_sound,hidden_size]
 
             packed_tokens_sound = _apply_timestep_embeds_to_noisy_tokens(
@@ -1924,7 +1936,7 @@ def _apply_timestep_embeds_to_noisy_tokens(
             shaped like ``(T, ...)`` where trailing dimensions represent the spatial grid.
 
     Returns:
-        The packed tokens with timestep embeddings applied to the noisy tokens.
+        ``packed_tokens``, with timestep embeddings added to the noisy tokens in place.
     """
 
     # Handle variable token shapes by processing each sample's noisy_frame_indexes individually.
@@ -1966,7 +1978,13 @@ def _apply_timestep_embeds_to_noisy_tokens(
         packed_tokens.shape[1],
     )  # [total_noisy_patches,hidden_size]
 
-    return packed_tokens.scatter_add(
+    # In place, and the return value is ``packed_tokens`` itself. Out-of-place would allocate a
+    # second full-length stream while the caller still holds the first, which at multiview sizes
+    # is where the denoising peak sat. Every caller passes a freshly projected stream -- the output
+    # of ``vae2llm``, ``action2llm`` or ``sound2llm``, or of adding a modality embedding to one --
+    # so nothing else aliases it. Safe with autograd too: those projections save their input and
+    # weight for backward, never their output, so overwriting the output invalidates nothing.
+    return packed_tokens.scatter_add_(
         dim=0,
         index=flattened_noisy_frame_indexes,
         src=packed_timestep_embeds,

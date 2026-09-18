@@ -203,6 +203,11 @@ class OmniMoTCausalModelConfig(OmniMoTModelConfig):
     # teacher forcing at the cost of 2x memory/compute for the clean pass.
     teacher_forcing_detach_clean_kv: bool = False
 
+    # Skip the understanding pathway and the control rows in the noisy replay
+    # pass. Clean Pass-1 K/V remain attached when detach_clean_kv=False, so the
+    # optimized path preserves gradients through clean video and text context.
+    teacher_forcing_target_only_no_text_pass2: bool = False
+
     # Chunkwise teacher forcing: number of latent frames per causal chunk.
     # The chunk partition is [1, C, C, ...] -- latent frame 0 is always its own
     # singleton chunk (mirroring the VAE's first-frame encoding), so the I2V
@@ -488,6 +493,24 @@ class OmniMoTCausalModel(OmniMoTModel):
         # structured DictConfig would immediately coerce it back to DictConfig.
         implementation = _resolve_teacher_forcing_kv_implementation(config.teacher_forcing_kv_implementation)
         _validate_teacher_forcing_kv_strategy(implementation, config.causal_training_strategy)
+        if config.teacher_forcing_target_only_no_text_pass2 and (
+            config.causal_training_strategy not in {"teacher_forcing", "teacher_forcing_dcm"}
+            or implementation != "singleview_threeway_kv"
+        ):
+            raise ValueError(
+                "teacher_forcing_target_only_no_text_pass2 requires causal_training_strategy='teacher_forcing' "
+                "or 'teacher_forcing_dcm', and teacher_forcing_kv_implementation='singleview_threeway_kv'."
+            )
+        if (
+            config.teacher_forcing_target_only_no_text_pass2
+            and config.compile.enabled
+            and not config.parallelism.enable_inference_mode
+        ):
+            raise ValueError("teacher_forcing_target_only_no_text_pass2 currently requires compile.enabled=False.")
+        if config.teacher_forcing_target_only_no_text_pass2 and config.teacher_forcing_detach_clean_kv:
+            raise ValueError(
+                "teacher_forcing_target_only_no_text_pass2 requires teacher_forcing_detach_clean_kv=False."
+            )
         self._teacher_forcing_kv_implementation_runtime = implementation
         self._teacher_forcing_replay_policy_runtime = _resolve_teacher_forcing_replay_policy(
             config.teacher_forcing_replay_policy
@@ -1059,6 +1082,24 @@ class OmniMoTCausalModel(OmniMoTModel):
         """Fail early for TF layouts unsupported by the replayed K/V path."""
         if not self.config.video_temporal_causal:
             raise ValueError("Teacher-forcing replay requires video_temporal_causal=True.")
+        if self.config.teacher_forcing_target_only_no_text_pass2:
+            if packed_seq.action is not None or packed_seq.sound is not None or packed_seq.lidar is not None:
+                raise ValueError("teacher_forcing_target_only_no_text_pass2 supports vision-only generation batches.")
+            expected_items = [2] if packed_seq.vision is not None and len(packed_seq.vision.token_shapes) == 2 else [1]
+            # Single-target packs, including control dropout, use implicit item grouping.
+            implicit_single_target = (
+                packed_seq.num_vision_items_per_sample is None
+                and packed_seq.vision is not None
+                and len(packed_seq.vision.token_shapes) == 1
+            )
+            if len(packed_seq.sample_lens) != 1 or (
+                not implicit_single_target and packed_seq.num_vision_items_per_sample != expected_items
+            ):
+                raise ValueError(
+                    "teacher_forcing_target_only_no_text_pass2 supports one logical sample with one target "
+                    f"or aligned [control, target] items; got {packed_seq.num_vision_items_per_sample} "
+                    f"with {len(packed_seq.sample_lens)} logical samples."
+                )
         if self._uses_multiview_flex_kv():
             if packed_seq.vision is None or packed_seq.action is not None or packed_seq.sound is not None:
                 raise ValueError("Two-way Flex teacher forcing supports RGB and optional LiDAR generation batches.")
@@ -1112,6 +1153,14 @@ class OmniMoTCausalModel(OmniMoTModel):
         """Construct a ``TeacherForcingMemoryState`` for the two-pass training path."""
         net = self.net if net is None else net
         detach_clean_kv = self.config.teacher_forcing_detach_clean_kv if detach_clean_kv is None else detach_clean_kv
+        predict_text_tokens = bool(getattr(net, "predict_text_tokens", False)) or bool(
+            getattr(getattr(net, "config", None), "predict_text_tokens", False)
+        )
+        if self.config.teacher_forcing_target_only_no_text_pass2 and predict_text_tokens:
+            raise ValueError(
+                "teacher_forcing_target_only_no_text_pass2 requires predict_text_tokens=False because Pass 2 "
+                "does not evolve or decode text rows."
+            )
         vision_token_shapes = packed_sequence.vision.token_shapes if packed_sequence.vision else None
         assert vision_token_shapes is not None
 
@@ -1143,6 +1192,12 @@ class OmniMoTCausalModel(OmniMoTModel):
             context_parallel_size=context_parallel_size,
             selected_clean_gen_token_indexes=selected_clean_gen_token_indexes,
             selected_clean_gen_padded_capacity=selected_clean_gen_padded_capacity,
+            target_only_no_text_pass2=self.config.teacher_forcing_target_only_no_text_pass2,
+            allow_detached_target_only_clean_kv=(
+                self.config.causal_training_strategy == "teacher_forcing_dcm"
+                and detach_clean_kv
+                and net is getattr(self, "net_teacher", None)
+            ),
         )
 
     @override

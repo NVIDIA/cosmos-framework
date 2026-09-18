@@ -9,6 +9,8 @@ types.  The dispatch is installed on each attention layer by
 ``OmniMoTCausalModel.install_attention_dispatch()``.
 """
 
+from typing import Any
+
 import torch
 from torch.nn.attention.flex_attention import BlockMask
 
@@ -42,6 +44,61 @@ from cosmos_framework.model.generator.utils.kv_cache import (
     TFNoisyMemoryValue,
     TFReplayCleanMemoryValue,
 )
+
+
+class ConcatenateAttentionsBridge(torch.autograd.Function):
+    """Join two disjoint query ranges without breaking merge storage patching.
+
+    The control and target halves of transfer attention have independent local
+    attention components.  Those components can first be LSE-merged at their
+    item length, then concatenated into one full-video component for the shared
+    text merge.  A plain ``torch.cat`` would hide the local merged tensors from
+    the outer merge's ``.data.copy_()`` backward.  This bridge copies the
+    patched full-video output/LSE back into both local halves before their
+    respective merge backward functions run.
+
+    Like :class:`MergeAttentionsBridge`, ``ctx.saved_tensors`` is read exactly
+    once so non-reentrant activation checkpointing can unpack each saved tensor
+    once.
+    """
+
+    @staticmethod
+    def forward(
+        ctx: Any,
+        control_out: torch.Tensor,  # [1,item_len,H,D]
+        control_lse: torch.Tensor,  # [1,item_len,H]
+        target_out: torch.Tensor,  # [1,item_len,H,D]
+        target_lse: torch.Tensor,  # [1,item_len,H]
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        full_out = torch.cat([control_out, target_out], dim=1).contiguous()  # [1,2*item_len,H,D]
+        full_lse = torch.cat([control_lse, target_lse], dim=1).contiguous()  # [1,2*item_len,H]
+        ctx.save_for_backward(control_out, control_lse, target_out, target_lse, full_out, full_lse)
+        return full_out, full_lse
+
+    @staticmethod
+    def backward(
+        ctx: Any,
+        grad_full_out: torch.Tensor,  # [1,2*item_len,H,D]
+        grad_full_lse: torch.Tensor,  # [1,2*item_len,H]
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+        saved = ctx.saved_tensors
+        control_out, control_lse, target_out, target_lse, full_out, full_lse = saved
+        item_len = control_out.shape[1]
+
+        # The downstream merge patched full_out/full_lse with its globally
+        # merged values.  Restore each slice into the corresponding item-local
+        # merge output before that merge's backward patches its kernel outputs.
+        control_out.data.copy_(full_out.data[:, :item_len])
+        control_lse.data.copy_(full_lse.data[:, :item_len])
+        target_out.data.copy_(full_out.data[:, item_len:])
+        target_lse.data.copy_(full_lse.data[:, item_len:])
+
+        return (
+            grad_full_out[:, :item_len],  # [1,item_len,H,D]
+            grad_full_lse[:, :item_len],  # [1,item_len,H]
+            grad_full_out[:, item_len:],  # [1,item_len,H,D]
+            grad_full_lse[:, item_len:],  # [1,item_len,H]
+        )
 
 
 def _bridge_lse_with_neg_inf_mask(
@@ -811,6 +868,88 @@ def _pad_transfer_item_component(
     return MergeAttentionsBridge.apply(out, lse, _forward, _inverse)
 
 
+def _reshape_transfer_item_component(
+    out: torch.Tensor,  # [1,item_len,H,D] or a reshape-compatible layout
+    lse: torch.Tensor,  # [1,item_len,H] or a reshape-compatible layout
+    *,
+    item_len: int,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Flatten an item component while preserving merge storage patching."""
+    num_heads = out.shape[-2]
+    head_dim = out.shape[-1]
+    expected_out_elements = item_len * num_heads * head_dim
+    expected_lse_elements = item_len * num_heads
+    if out.numel() != expected_out_elements or lse.numel() != expected_lse_elements:
+        raise ValueError(
+            "Transfer attention component has an incompatible shape: "
+            f"out={tuple(out.shape)}, lse={tuple(lse.shape)}, item_len={item_len}."
+        )
+    original_out_shape = out.shape
+    original_lse_shape = lse.shape
+
+    def _forward(
+        item_out: torch.Tensor,  # reshape-compatible with [1,item_len,H,D]
+        item_lse: torch.Tensor,  # reshape-compatible with [1,item_len,H]
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        return (
+            item_out.reshape(1, item_len, num_heads, head_dim),  # [1,item_len,H,D]
+            item_lse.reshape(1, item_len, num_heads),  # [1,item_len,H]
+        )
+
+    def _inverse(
+        flat_out: torch.Tensor,  # [1,item_len,H,D]
+        flat_lse: torch.Tensor,  # [1,item_len,H]
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        return (
+            flat_out.reshape(original_out_shape),  # original out layout
+            flat_lse.reshape(original_lse_shape),  # original LSE layout
+        )
+
+    return MergeAttentionsBridge.apply(out, lse, _forward, _inverse)
+
+
+def _merge_transfer_item_components(
+    components: list[tuple[torch.Tensor, torch.Tensor]],
+    *,
+    item_len: int,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """LSE-merge all receptive-field components at one item's length."""
+    if not components:
+        raise ValueError("Transfer attention needs at least one component per item.")
+
+    flat_components = [_reshape_transfer_item_component(out, lse, item_len=item_len) for out, lse in components]
+    if len(flat_components) == 1:
+        return flat_components[0]
+    return merge_attentions_ac_safe(
+        outputs=[out for out, _lse in flat_components],
+        lse_tensors=[lse for _out, lse in flat_components],
+    )
+
+
+def _merge_and_concatenate_transfer_components(
+    control_components: list[tuple[torch.Tensor, torch.Tensor]],
+    target_components: list[tuple[torch.Tensor, torch.Tensor]],
+    *,
+    item_len: int,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Merge each transfer item locally, then concatenate the two query ranges."""
+    control_out, control_lse = _merge_transfer_item_components(  # [1,item_len,H,D], [1,item_len,H]
+        control_components,
+        item_len=item_len,
+    )
+    target_out, target_lse = _merge_transfer_item_components(  # [1,item_len,H,D], [1,item_len,H]
+        target_components,
+        item_len=item_len,
+    )
+    if control_out.shape != target_out.shape or control_lse.shape != target_lse.shape:
+        raise ValueError(
+            "Aligned transfer items must produce matching attention shapes; "
+            f"control={tuple(control_out.shape)}/{tuple(control_lse.shape)}, "
+            f"target={tuple(target_out.shape)}/{tuple(target_lse.shape)}."
+        )
+    return ConcatenateAttentionsBridge.apply(control_out, control_lse, target_out, target_lse)
+
+
 def _current_chunk_attention_components(
     query: torch.Tensor,  # [1,T,S,H,D]
     key: torch.Tensor,  # [1,T,S,H_kv,D]
@@ -945,17 +1084,32 @@ def _inclusive_chunk_causal_attention_components(
     value: torch.Tensor,  # [1,T,S,H_kv,D]
     frames_per_chunk: int,
 ) -> list[tuple[torch.Tensor, torch.Tensor]]:
-    """Attend each query chunk to aligned K/V chunks up to and including itself."""
+    """Attend each query chunk to aligned K/V chunks up to and including itself.
+
+    The framewise case is exactly temporal-causal, spatially dense attention,
+    so it can run as one NATTEN kernel.  Larger chunks retain the split
+    current-chunk and strictly-past formulation because their partition starts
+    with a singleton frame followed by fixed-size body chunks.
+    """
     if frames_per_chunk < 1:
         raise ValueError(f"frames_per_chunk must be >= 1, got {frames_per_chunk}.")
+    if frames_per_chunk == 1:
+        inclusive_out, inclusive_lse = multi_dimensional_attention(  # [1,T,S,H,D], [1,T,S,H]
+            query,
+            key,
+            value,
+            is_causal=(True, False),
+            return_lse=True,
+            backend="natten",
+        )
+        return [(inclusive_out, inclusive_lse)]
+
     _, num_frames, spatial_tokens, _num_heads, _head_dim = query.shape
     num_kv_heads = key.shape[-2]
     head_dim = key.shape[-1]
     flat_key = key.reshape(1, num_frames * spatial_tokens, num_kv_heads, head_dim)  # [1,T*S,H_kv,D]
     flat_value = value.reshape(1, num_frames * spatial_tokens, num_kv_heads, head_dim)  # [1,T*S,H_kv,D]
-    if frames_per_chunk > 1:
-        return _tf_gen_attention_chunkwise(query, key, value, flat_key, flat_value, frames_per_chunk)
-    return _tf_gen_attention_framewise(query, key, value, flat_key, flat_value)
+    return _tf_gen_attention_chunkwise(query, key, value, flat_key, flat_value, frames_per_chunk)
 
 
 def _control_visibility_attention_components(
@@ -1018,9 +1172,14 @@ def teacher_forcing_transfer_attention(
     *,
     target_shape: tuple[int, int, int],
 ) -> list[tuple[torch.Tensor, torch.Tensor]]:
-    """Build control-conditioned temporal-causal TF components for aligned transfer items.
+    """Build one control-conditioned temporal-causal TF component for aligned items.
 
-    Each returned pair is shaped ``[1,2*T*S,H,D]`` and ``[1,2*T*S,H]``.
+    The returned list contains one pair shaped ``[1,2*T*S,H,D]`` and
+    ``[1,2*T*S,H]``.  Control and target receptive-field components are
+    independently LSE-merged at ``T*S`` length, then concatenated once for the
+    shared text merge.  Keeping intermediate components item-local avoids
+    materializing every component at the full two-item stream length.
+
     ``control_visibility`` applies identically to control self-attention and
     target-to-control attention: ``global`` exposes the full control clip,
     ``causal`` exposes all control chunks through the current chunk, and
@@ -1053,18 +1212,6 @@ def teacher_forcing_transfer_attention(
         memory_value.frames_per_chunk,
     )
 
-    components: list[tuple[torch.Tensor, torch.Tensor]] = []
-    for control_out, control_lse in control_components:
-        components.append(
-            _pad_transfer_item_component(
-                control_out,
-                control_lse,
-                item_idx=0,
-                item_len=item_len,
-                total_len=total_len,
-            )
-        )
-
     target_q_2d = target_q.reshape(1, num_frames, spatial_tokens, num_heads, head_dim)  # [1,T,S,H,D]
     target_k_2d = target_k.reshape(  # [1,T,S,H_kv,D]
         1, num_frames, spatial_tokens, num_kv_heads, head_dim
@@ -1092,16 +1239,7 @@ def teacher_forcing_transfer_attention(
             clean_target_v_2d,
             frames_per_chunk=memory_value.frames_per_chunk,
         )
-        for control_rgb_history_out, control_rgb_history_lse in control_rgb_history_components:
-            components.append(
-                _pad_transfer_item_component(
-                    control_rgb_history_out,
-                    control_rgb_history_lse,
-                    item_idx=0,
-                    item_len=item_len,
-                    total_len=total_len,
-                )
-            )
+        control_components.extend(control_rgb_history_components)
 
     if isinstance(memory_value, TFNoisyMemoryValue):
         target_components = teacher_forcing_gen_attention(
@@ -1120,17 +1258,6 @@ def teacher_forcing_transfer_attention(
             target_v_2d,
             policy,
             memory_value.frames_per_chunk,
-        )
-
-    for target_out, target_lse in target_components:
-        components.append(
-            _pad_transfer_item_component(
-                target_out,
-                target_lse,
-                item_idx=1,
-                item_len=item_len,
-                total_len=total_len,
-            )
         )
 
     # Use Pass-1 clean control K/V during the noisy pass so target representations
@@ -1155,17 +1282,124 @@ def teacher_forcing_transfer_attention(
         memory_value.frames_per_chunk,
     )
 
-    for target_control_out, target_control_lse in target_control_components:
-        components.append(
-            _pad_transfer_item_component(
-                target_control_out,
-                target_control_lse,
-                item_idx=1,
-                item_len=item_len,
-                total_len=total_len,
+    target_components.extend(target_control_components)
+    transfer_out, transfer_lse = _merge_and_concatenate_transfer_components(  # [1,2*T*S,H,D], [1,2*T*S,H]
+        control_components,
+        target_components,
+        item_len=item_len,
+    )
+    return [(transfer_out, transfer_lse)]
+
+
+def teacher_forcing_target_only_attention(
+    target_q: torch.Tensor,  # [T*S,H,D]
+    target_k: torch.Tensor,  # [T*S,H_kv,D]
+    target_v: torch.Tensor,  # [T*S,H_kv,D]
+    memory_value: TFNoisyMemoryValue,
+) -> tuple[torch.Tensor, torch.Tensor]:  # ([T*S,H*D], [0,H*D])
+    """Run noisy replay attention for target rows using attached Pass-1 context.
+
+    The selected transfer recipe has one logical sample with aligned control
+    and target items. Pass 2 does not need live control or text hidden states:
+    its target queries read attached clean control, target-history, and text
+    K/V captured in Pass 1. A single-item target layout omits the control
+    component and otherwise follows the same path.
+    """
+    if not memory_value.target_only_no_text:
+        raise ValueError("teacher_forcing_target_only_attention requires target_only_no_text=True.")
+    if memory_value.cached_clean_und_k is None or memory_value.cached_clean_und_v is None:
+        raise ValueError("Target-only teacher forcing requires attached clean text K/V from Pass 1.")
+    if memory_value.num_action_tokens_per_supertoken != 0:
+        raise ValueError("Target-only teacher forcing currently supports vision-only GEN rows.")
+
+    num_frames, height, width = memory_value.vision_token_shapes[-1]
+    spatial_tokens = height * width
+    target_len = num_frames * spatial_tokens
+    if target_len != memory_value.target_gen_length or target_q.shape[0] != target_len:
+        raise ValueError(
+            "Target-only teacher forcing received inconsistent target lengths: "
+            f"shape implies {target_len}, memory carries {memory_value.target_gen_length}, "
+            f"and live Q has {target_q.shape[0]} rows."
+        )
+    target_start = memory_value.target_gen_start
+    target_end = target_start + target_len
+    if memory_value.cached_clean_gen_k.shape[1] < target_end:
+        raise ValueError(
+            f"Clean GEN K/V has {memory_value.cached_clean_gen_k.shape[1]} rows, "
+            f"but target range [{target_start}, {target_end}) is required."
+        )
+
+    num_heads = target_q.shape[-2]
+    num_kv_heads = target_k.shape[-2]
+    head_dim = target_q.shape[-1]
+    target_q_2d = target_q.reshape(1, num_frames, spatial_tokens, num_heads, head_dim)  # [1,T,S,H,D]
+    target_k_2d = target_k.reshape(  # [1,T,S,H_kv,D]
+        1, num_frames, spatial_tokens, num_kv_heads, head_dim
+    )
+    target_v_2d = target_v.reshape(  # [1,T,S,H_kv,D]
+        1, num_frames, spatial_tokens, num_kv_heads, head_dim
+    )
+    clean_target_k = memory_value.cached_clean_gen_k[:, target_start:target_end]  # [1,T*S,H_kv,D]
+    clean_target_v = memory_value.cached_clean_gen_v[:, target_start:target_end]  # [1,T*S,H_kv,D]
+    target_components = teacher_forcing_gen_attention(
+        target_q_2d,
+        target_k_2d,
+        target_v_2d,
+        memory_value,
+        memory_value.frames_per_chunk,
+        cached_clean_gen_k=clean_target_k,
+        cached_clean_gen_v=clean_target_v,
+    )
+
+    if target_start > 0:
+        control_shape = memory_value.vision_token_shapes[0]
+        if control_shape != memory_value.vision_token_shapes[-1] or target_start != target_len:
+            raise ValueError(
+                "Target-only transfer teacher forcing requires aligned control and target token shapes; "
+                f"got {memory_value.vision_token_shapes}."
+            )
+        clean_control_k = memory_value.cached_clean_gen_k[:, :target_start].reshape(  # [1,T,S,H_kv,D]
+            1, num_frames, spatial_tokens, num_kv_heads, head_dim
+        )
+        clean_control_v = memory_value.cached_clean_gen_v[:, :target_start].reshape(  # [1,T,S,H_kv,D]
+            1, num_frames, spatial_tokens, num_kv_heads, head_dim
+        )
+        target_components.extend(
+            _control_visibility_attention_components(
+                target_q_2d,
+                clean_control_k,
+                clean_control_v,
+                memory_value.teacher_forcing_replay_policy,
+                memory_value.frames_per_chunk,
             )
         )
-    return components
+
+    target_video_out, target_video_lse = _merge_transfer_item_components(  # [1,T*S,H,D], [1,T*S,H]
+        target_components,
+        item_len=target_len,
+    )
+
+    target_q_flat = target_q.unsqueeze(0)  # [1,T*S,H,D]
+    text_out, text_lse = dispatch_varlen_cross_attention(  # [1,T*S,H,D], [1,T*S,H]
+        target_q_flat,
+        memory_value.cached_clean_und_k,
+        memory_value.cached_clean_und_v,
+        cumulative_seqlen_Q=memory_value.gen_q_offsets,
+        cumulative_seqlen_KV=memory_value.und_kv_offsets,
+        max_seqlen_Q=target_len,
+        max_seqlen_KV=memory_value.cached_clean_und_k.shape[1],
+        has_real=memory_value.has_caption,
+        clamp_empty_varlen_kv=memory_value.clamp_empty_varlen_kv,
+    )
+    # Match the full Pass-2 merge topology, including its intermediate output
+    # cast: video receptive fields merge first, then video merges with text.
+    target_res, _ = _merge_transfer_item_components(  # [1,T*S,H,D], [1,T*S,H]
+        [(target_video_out, target_video_lse), (text_out, text_lse)],
+        item_len=target_len,
+    )
+    target_out = target_res.squeeze(0).flatten(-2, -1)  # [T*S,H*D]
+    empty_text_out = target_out.new_empty((0, target_out.shape[-1]))  # [0,H*D]
+    return target_out, empty_text_out
 
 
 def three_way_attention_with_kv_cache(
@@ -1217,6 +1451,10 @@ def three_way_attention_with_kv_cache(
     video_q, video_pack_q_offsets = get_full_only_seq(packed_query_states)
     video_k, _video_pack_k_offsets = get_full_only_seq(packed_key_states)
     video_v, _ = get_full_only_seq(packed_value_states)
+
+    if isinstance(memory_value, TFNoisyMemoryValue) and memory_value.target_only_no_text:
+        video_out, text_out = teacher_forcing_target_only_attention(video_q, video_k, video_v, memory_value)
+        return from_mode_splits(text_out, video_out, packed_query_states)
 
     if attention_meta is not None and attention_meta.null_action_supertokens:
         video_v = video_v.clone()
@@ -1320,22 +1558,28 @@ def three_way_attention_with_kv_cache(
     video_q_flat = video_q.unsqueeze(0)  # [1, S_video, H, D]
 
     # -- Video cross-attention to KV-cache.  (Compile-stable path). ---
-    cached_video_k = memory_value.cached_gen_k
-    cached_video_v = memory_value.cached_gen_v
+    # Replay teacher forcing always starts at segment zero and consumes its
+    # clean Pass-1 K/V through the components above, so it has no rolling
+    # generated-video history to attend to and explicitly disables this component.
+    # Generic teacher forcing, ordinary KV-cache training, and AR inference retain
+    # supplied history through ``uses_rolling_gen_cache=True``.
+    if memory_value.uses_rolling_gen_cache:
+        cached_video_k = memory_value.cached_gen_k
+        cached_video_v = memory_value.cached_gen_v
 
-    video_ca_cached, video_ca_cached_lse = dispatch_varlen_cross_attention(
-        video_q_flat,
-        cached_video_k,
-        cached_video_v,
-        cumulative_seqlen_Q=video_q_offsets,
-        cumulative_seqlen_KV=memory_value.gen_ca_cached_kv_offsets,
-        max_seqlen_Q=video_len,
-        max_seqlen_KV=memory_value.max_gen_cache_tokens,
-        has_real=has_cached_video,
-        clamp_empty_varlen_kv=clamp_empty_varlen_kv,
-    )
-    attn_outputs.append(video_ca_cached)
-    lse_outputs.append(video_ca_cached_lse)
+        video_ca_cached, video_ca_cached_lse = dispatch_varlen_cross_attention(  # [1,S_video,H,D], [1,S_video,H]
+            video_q_flat,
+            cached_video_k,
+            cached_video_v,
+            cumulative_seqlen_Q=video_q_offsets,
+            cumulative_seqlen_KV=memory_value.gen_ca_cached_kv_offsets,
+            max_seqlen_Q=video_len,
+            max_seqlen_KV=memory_value.max_gen_cache_tokens,
+            has_real=has_cached_video,
+            clamp_empty_varlen_kv=clamp_empty_varlen_kv,
+        )
+        attn_outputs.append(video_ca_cached)
+        lse_outputs.append(video_ca_cached_lse)
 
     # --- Video cross-attention to text K/V ---
     # Naming: ``live_*`` = freshly projected from the current pack;

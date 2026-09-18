@@ -208,6 +208,7 @@ def test_teacher_forcing_kv_implementation_default_and_validation() -> None:
 
     default_config = OmniMoTCausalModelConfig()
     assert default_config.teacher_forcing_kv_implementation == "singleview_threeway_kv"
+    assert default_config.teacher_forcing_target_only_no_text_pass2 is False
     assert default_config.teacher_forcing_replay_policy.control_visibility == "global"
     assert (
         OmniMoTCausalModelConfig(
@@ -217,6 +218,172 @@ def test_teacher_forcing_kv_implementation_default_and_validation() -> None:
     )
     with pytest.raises(ValueError):
         OmniMoTCausalModelConfig(teacher_forcing_kv_implementation="unknown")
+
+
+@pytest.mark.L0
+@pytest.mark.CPU
+@pytest.mark.parametrize("strategy", ["teacher_forcing", "teacher_forcing_dcm"])
+@pytest.mark.parametrize("compile_enabled", [False, True])
+@pytest.mark.parametrize("inference_mode", [False, True])
+def test_target_only_compile_restriction_applies_only_to_training(
+    strategy: str, compile_enabled: bool, inference_mode: bool
+) -> None:
+    """Checkpoint replay settings must not reject default compiled inference."""
+    from cosmos_framework.model.generator.omni_mot_model import OmniMoTModel
+    from cosmos_framework.configs.base.defaults.replay_attention import TeacherForcingReplayPolicyConfig
+    from cosmos_framework.model.generator.omni_mot_causal_model import OmniMoTCausalModel
+
+    config = SimpleNamespace(
+        causal_training_strategy=strategy,
+        teacher_forcing_kv_implementation="singleview_threeway_kv",
+        teacher_forcing_target_only_no_text_pass2=True,
+        teacher_forcing_detach_clean_kv=False,
+        teacher_forcing_replay_policy=TeacherForcingReplayPolicyConfig(),
+        compile=SimpleNamespace(enabled=compile_enabled),
+        parallelism=SimpleNamespace(enable_inference_mode=inference_mode),
+        enable_moba=False,
+    )
+
+    def fake_base_init(model: OmniMoTCausalModel, model_config: SimpleNamespace) -> None:
+        torch.nn.Module.__init__(model)
+        model.config = model_config
+
+    with patch.object(OmniMoTModel, "__init__", fake_base_init):
+        if compile_enabled and not inference_mode:
+            with pytest.raises(ValueError, match="requires compile.enabled=False"):
+                OmniMoTCausalModel(config)
+        else:
+            model = OmniMoTCausalModel(config)
+            assert model.config.compile.enabled is compile_enabled
+            assert model.config.parallelism.enable_inference_mode is inference_mode
+
+
+@pytest.mark.L0
+@pytest.mark.CPU
+@pytest.mark.parametrize(
+    ("num_items", "item_counts", "sample_lens", "valid"),
+    [
+        (1, None, [6], True),
+        (1, [1], [6], True),
+        (1, None, [3, 3], False),
+        (1, [1], [3, 3], False),
+        (2, None, [6], False),
+        (2, [1, 1], [3, 3], False),
+        (2, [2], [6], True),
+        (2, [2], [3, 3], False),
+    ],
+)
+def test_target_only_teacher_forcing_requires_one_logical_sample(
+    num_items: int, item_counts: list[int] | None, sample_lens: list[int], valid: bool
+) -> None:
+    """Implicit single-target grouping is valid; multiple logical samples are not."""
+    from cosmos_framework.data.generator.sequence_packing.sequence import ModalityData, PackedSequence
+    from cosmos_framework.model.generator.omni_mot_causal_model import OmniMoTCausalModel
+
+    model = MagicMock()
+    model.config.video_temporal_causal = True
+    model.config.teacher_forcing_target_only_no_text_pass2 = True
+    model._uses_multiview_flex_kv.return_value = False
+    packed_sequence = PackedSequence(
+        sample_lens=sample_lens,
+        vision=ModalityData(
+            token_shapes=[(2, 1, 1)] * num_items,
+            condition_mask=[torch.ones(2)] * num_items,  # list[[T]]
+        ),
+        num_vision_items_per_sample=item_counts,
+        vision_item_split_lens=[[2] * num_items],
+    )
+
+    if valid:
+        OmniMoTCausalModel._validate_teacher_forcing_pack(model, packed_sequence)
+    else:
+        with pytest.raises(ValueError, match="supports one logical sample"):
+            OmniMoTCausalModel._validate_teacher_forcing_pack(model, packed_sequence)
+
+
+@pytest.mark.L0
+@pytest.mark.CPU
+def test_target_only_teacher_forcing_rejects_lidar_rows() -> None:
+    """Target slicing must not silently reinterpret LiDAR rows as vision."""
+    from cosmos_framework.model.generator.omni_mot_causal_model import OmniMoTCausalModel
+
+    model = object.__new__(OmniMoTCausalModel)
+    torch.nn.Module.__init__(model)
+    model.config = SimpleNamespace(
+        video_temporal_causal=True,
+        teacher_forcing_target_only_no_text_pass2=True,
+    )
+    packed_sequence = SimpleNamespace(
+        action=None,
+        sound=None,
+        lidar=object(),
+    )
+
+    with pytest.raises(ValueError, match="vision-only generation batches"):
+        model._validate_teacher_forcing_pack(packed_sequence)
+
+
+@pytest.mark.L0
+@pytest.mark.CPU
+def test_target_only_teacher_forcing_rejects_text_prediction() -> None:
+    """The optimized Pass 2 cannot produce text logits or text gradients."""
+    from cosmos_framework.model.generator.omni_mot_causal_model import OmniMoTCausalModel
+
+    model = object.__new__(OmniMoTCausalModel)
+    torch.nn.Module.__init__(model)
+    model.config = SimpleNamespace(
+        teacher_forcing_detach_clean_kv=False,
+        teacher_forcing_target_only_no_text_pass2=True,
+    )
+    network = SimpleNamespace(predict_text_tokens=True)
+
+    with pytest.raises(ValueError, match="predict_text_tokens=False"):
+        model._build_tf_memory_state(SimpleNamespace(), {}, net=network)
+
+
+@pytest.mark.L0
+@pytest.mark.CPU
+def test_detached_target_only_cache_is_allowed_only_for_tfdcm_teacher(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A future detached student cache must not bypass target-only gradient safety."""
+    from cosmos_framework.model.generator import omni_mot_causal_model
+    from cosmos_framework.model.generator.omni_mot_causal_model import OmniMoTCausalModel
+
+    model = object.__new__(OmniMoTCausalModel)
+    torch.nn.Module.__init__(model)
+    model.config = SimpleNamespace(
+        teacher_forcing_detach_clean_kv=False,
+        teacher_forcing_target_only_no_text_pass2=True,
+        causal_training_strategy="teacher_forcing_dcm",
+        clamp_empty_varlen_kv=True,
+        teacher_forcing_frames_per_chunk=1,
+    )
+    student = SimpleNamespace(
+        predict_text_tokens=False,
+        config=SimpleNamespace(predict_text_tokens=False),
+        num_hidden_layers=1,
+        num_kv_heads=1,
+        head_dim=8,
+    )
+    teacher = SimpleNamespace(**vars(student))
+    model.net = student
+    model.net_teacher = teacher
+    model.parallel_dims = None
+    model._get_teacher_forcing_replay_policy = MagicMock(return_value=SimpleNamespace())
+    packed_sequence = SimpleNamespace(
+        vision=SimpleNamespace(token_shapes=[(2, 2, 2)]),
+        num_action_tokens_per_supertoken=0,
+        null_action_supertokens=None,
+    )
+    constructor = MagicMock(side_effect=lambda **kwargs: kwargs)
+    monkeypatch.setattr(omni_mot_causal_model, "TeacherForcingMemoryState", constructor)
+
+    student_state = model._build_tf_memory_state(packed_sequence, {}, net=student, detach_clean_kv=True)
+    teacher_state = model._build_tf_memory_state(packed_sequence, {}, net=teacher, detach_clean_kv=True)
+
+    assert student_state["allow_detached_target_only_clean_kv"] is False
+    assert teacher_state["allow_detached_target_only_clean_kv"] is True
 
 
 @pytest.mark.L0
@@ -400,6 +567,38 @@ class TestTeacherForcingTransferControlDropout:
             num_views_per_vision_item=[1, 1],
             control_weights=[[1.0]],
         )
+
+    @pytest.mark.L0
+    @pytest.mark.CPU
+    @pytest.mark.parametrize("dropout_rate", [0.0, 1.0])
+    def test_target_only_replay_accepts_pack_after_control_dropout(self, dropout_rate: float) -> None:
+        """Keep the grouping returned by real control dropout when validating replay."""
+        from cosmos_framework.data.generator.sequence_packing.sequence import ModalityData, PackedSequence
+        from cosmos_framework.model.generator.omni_mot_causal_model import OmniMoTCausalModel
+
+        model = self._make_model(dropout_rate)
+        model.config.video_temporal_causal = True
+        model.config.teacher_forcing_target_only_no_text_pass2 = True
+        model._uses_multiview_flex_kv.return_value = False
+        gen_data_clean = self._make_data()
+        result = OmniMoTCausalModel._maybe_drop_teacher_forcing_transfer_control(
+            model, gen_data_clean, {"dataset_name": ["video_transfer_4modality_480"]}
+        )
+        num_items = len(result.x0_tokens_vision)
+        condition_masks = [torch.ones(5), torch.zeros(5)][-num_items:]  # list[[T]]
+        packed_sequence = PackedSequence(
+            sample_lens=[2 + 20 * num_items],
+            vision=ModalityData(
+                tokens=result.x0_tokens_vision,  # list[[B,C,T,H,W]]
+                token_shapes=[(5, 2, 2)] * num_items,
+                condition_mask=condition_masks,
+            ),
+            num_vision_items_per_sample=result.num_vision_items_per_sample,
+            vision_item_split_lens=[[20] * num_items],
+        )
+
+        OmniMoTCausalModel._validate_teacher_forcing_pack(model, packed_sequence)
+        assert num_items == (1 if dropout_rate else 2)
 
     @pytest.mark.L0
     @pytest.mark.CPU
@@ -616,6 +815,8 @@ def test_three_way_teacher_forcing_memory_state_does_not_require_flex_metadata()
     model = object.__new__(OmniMoTCausalModel)
     torch.nn.Module.__init__(model)
     model.config = SimpleNamespace(
+        causal_training_strategy="teacher_forcing",
+        teacher_forcing_target_only_no_text_pass2=False,
         teacher_forcing_detach_clean_kv=True,
         clamp_empty_varlen_kv=True,
         teacher_forcing_frames_per_chunk=4,
@@ -661,6 +862,7 @@ def test_multiview_clean_tf_cache_selects_target_tokens_and_preserves_condition_
         causal_training_strategy=causal_training_strategy,
         teacher_forcing_kv_implementation="multiview_flex_kv",
         teacher_forcing_detach_clean_kv=False,
+        teacher_forcing_target_only_no_text_pass2=False,
         clamp_empty_varlen_kv=True,
         teacher_forcing_frames_per_chunk=1,
         teacher_forcing_replay_policy=TeacherForcingReplayPolicyConfig(),
@@ -2983,6 +3185,7 @@ class TestBidirectionalStepMixing:
             causal_training_strategy="teacher_forcing",
             natten_parameter_list=None,
             teacher_forcing_detach_clean_kv=False,
+            teacher_forcing_target_only_no_text_pass2=False,
         )
         for key, value in config_overrides.items():
             setattr(config, key, value)
@@ -3085,6 +3288,7 @@ class TestBidirectionalStepMixing:
             causal_training_strategy="diffusion_forcing",
             natten_parameter_list=None,
             teacher_forcing_kv_implementation="singleview_threeway_kv",
+            teacher_forcing_target_only_no_text_pass2=False,
             teacher_forcing_replay_policy=TeacherForcingReplayPolicyConfig(),
         )
         with patch.object(OmniMoTModel, "__init__", _fake_base_init):

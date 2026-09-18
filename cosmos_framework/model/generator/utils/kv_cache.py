@@ -811,6 +811,10 @@ class KVTrainMemoryValue(MemoryValue):
             as a Python ``int`` (not a tensor) because Dynamo specializes
             on it as a compile-time constant; it never changes after
             ``KVCacheTrainMemoryState`` initialization.
+        uses_rolling_gen_cache: Python bool indicating whether attention
+            should execute the cached-video component. Replay teacher forcing
+            disables this explicitly because it starts without generated history
+            and uses Pass-1 clean K/V directly.
     """
 
     vision_token_shapes: list[tuple[int, int, int]]
@@ -829,6 +833,7 @@ class KVTrainMemoryValue(MemoryValue):
     cached_gen_v: torch.Tensor
     max_gen_cache_tokens: int
     clamp_empty_varlen_kv: bool
+    uses_rolling_gen_cache: bool = field(default=True, kw_only=True)
 
     @property
     def supports_context_parallel_attention(self) -> bool:
@@ -850,6 +855,8 @@ class TFReplayCleanMemoryValue(KVTrainMemoryValue):
         default_factory=TeacherForcingReplayPolicyConfig
     )
     frames_per_chunk: int = 1
+    # Replay starts at segment zero; generic teacher forcing may carry history.
+    uses_rolling_gen_cache: bool = field(default=False, kw_only=True)
 
     @property
     def supports_context_parallel_attention(self) -> bool:
@@ -860,12 +867,16 @@ class TFReplayCleanMemoryValue(KVTrainMemoryValue):
 class TFNoisyMemoryValue(KVTrainMemoryValue):
     """Read-only container for Pass 2 of teacher forcing.
 
-    Inherits all rolling-cache and text-cache fields from ``KVTrainMemoryValue``.
-    Adds the current-segment clean gen K/V captured during Pass 1.
+    Inherits the rolling-cache and text-cache fields from ``KVTrainMemoryValue``
+    and adds the current-segment clean gen K/V captured during Pass 1. Replay
+    callers explicitly disable rolling history and use one-token placeholders
+    for that unused cache; generic teacher forcing retains supplied history.
     """
 
     cached_clean_gen_k: torch.Tensor  # [1, S_clean, H_kv, D]
     cached_clean_gen_v: torch.Tensor  # [1, S_clean, H_kv, D]
+    cached_clean_und_k: torch.Tensor | None = None  # [1,S_text,H_kv,D]
+    cached_clean_und_v: torch.Tensor | None = None  # [1,S_text,H_kv,D]
     # Latent frames per causal chunk (chunk partition is [1, C, C, ...]; the
     # first chunk is always a single frame).  1 == framewise teacher forcing.
     frames_per_chunk: int = 1
@@ -873,6 +884,11 @@ class TFNoisyMemoryValue(KVTrainMemoryValue):
     teacher_forcing_replay_policy: TeacherForcingReplayPolicyConfig = field(
         default_factory=TeacherForcingReplayPolicyConfig
     )
+    # The optimized noisy pass projects only the target item's GEN rows. The
+    # original full GEN layout is restored after each decoder layer.
+    target_only_no_text: bool = False
+    target_gen_start: int = 0
+    target_gen_length: int = 0
 
     @property
     def supports_context_parallel_attention(self) -> bool:
@@ -1158,11 +1174,9 @@ class KVCacheTrainMemoryState(MemoryState):
 class TeacherForcingMemoryState(KVCacheTrainMemoryState):
     """Memory state for the two-pass teacher forcing training path.
 
-    Pass 1: behaves identically to ``KVCacheTrainMemoryState`` (temporal-causal
-    attention on clean data) and captures gen K/V per layer in
-    ``_clean_gen_kv``. The legacy three-way path also writes the rolling cache;
-    the two-way Flex path stores only the selected clean target K/V and skips
-    the otherwise-unused full rolling-cache copy.
+    Pass 1 captures clean gen K/V per layer in ``_clean_gen_kv`` and caches
+    text K/V for reuse. Replay teacher forcing always starts at segment zero,
+    so it does not allocate or write the rolling generated-video cache.
 
     Pass 2: ``read_for_layer`` returns ``TFNoisyMemoryValue`` (with the clean
     gen K/V attached).  ``write_for_layer`` is a no-op (clean data already
@@ -1185,6 +1199,8 @@ class TeacherForcingMemoryState(KVCacheTrainMemoryState):
         context_parallel_size: int = 1,
         selected_clean_gen_token_indexes: torch.Tensor | None = None,
         selected_clean_gen_padded_capacity: int = 0,
+        target_only_no_text_pass2: bool = False,
+        allow_detached_target_only_clean_kv: bool = False,
     ) -> None:
         super().__init__(
             vision_token_shapes=vision_token_shapes,
@@ -1217,17 +1233,81 @@ class TeacherForcingMemoryState(KVCacheTrainMemoryState):
             )
         self.selected_clean_gen_token_indexes = selected_clean_gen_token_indexes
         self.selected_clean_gen_padded_capacity = selected_clean_gen_padded_capacity
+        if target_only_no_text_pass2 and detach_clean_kv and not allow_detached_target_only_clean_kv:
+            raise ValueError(
+                "teacher_forcing_target_only_no_text_pass2 requires detach_clean_kv=False to preserve "
+                "gradients through clean GEN and text K/V, unless the caller explicitly allows a detached "
+                "frozen-teacher cache."
+            )
+        if target_only_no_text_pass2 and context_parallel_size != 1:
+            raise ValueError(
+                "teacher_forcing_target_only_no_text_pass2 currently requires context_parallel_size=1; "
+                f"got {context_parallel_size}."
+            )
+        if target_only_no_text_pass2 and selected_clean_gen_token_indexes is not None:
+            raise ValueError("teacher_forcing_target_only_no_text_pass2 does not support multiview Flex K/V selection.")
+        if target_only_no_text_pass2 and len(vision_token_shapes) not in (1, 2):
+            raise ValueError(
+                "teacher_forcing_target_only_no_text_pass2 requires one target item or aligned "
+                f"[control, target] items; got {len(vision_token_shapes)} items."
+            )
+        if target_only_no_text_pass2 and num_action_tokens_per_supertoken != 0:
+            raise ValueError("teacher_forcing_target_only_no_text_pass2 currently supports vision-only GEN rows.")
+        self.target_only_no_text_pass2 = target_only_no_text_pass2
+        self.target_gen_length = self._vision_item_num_tokens(vision_token_shapes[-1])
+        self.target_gen_start = (
+            self._vision_item_num_tokens(vision_token_shapes[0]) if len(vision_token_shapes) == 2 else 0
+        )
+        self._target_gen_q_offsets: torch.Tensor | None = None
         self._clean_gen_kv: list[tuple[torch.Tensor, torch.Tensor] | None] = [None] * len(dual_kv_cache)
+        self._clean_und_kv: list[tuple[torch.Tensor, torch.Tensor] | None] = [None] * len(dual_kv_cache)
 
-    def _read_flex_base_value(self) -> KVTrainMemoryValue:
-        """Build the shape-minimal base fields unused by two-way Flex attention."""
+    def _vision_item_num_tokens(self, shape: tuple[int, int, int]) -> int:
+        """Return one vision item's flattened GEN length."""
+        num_frames, height, width = shape
+        return num_frames * (self.num_action_tokens_per_supertoken + height * width)
+
+    def init(self, hidden_states: dict, device: torch.device) -> None:
+        """Initialize replay metadata and validate the target-only GEN layout."""
+        super().init(hidden_states, device)
+        self._target_gen_q_offsets = None
+        if not self.target_only_no_text_pass2:
+            return
+
+        expected_gen_tokens = self.target_gen_start + self.target_gen_length
+        actual_gen_tokens = int(hidden_states["_num_full_tokens"])
+        if actual_gen_tokens != expected_gen_tokens:
+            raise ValueError(
+                "Target-only teacher forcing requires the real GEN stream to contain exactly control plus target "
+                f"vision rows; expected {expected_gen_tokens}, got {actual_gen_tokens}."
+            )
+        if self.pass_number == 2:
+            self._target_gen_q_offsets = torch.tensor(
+                [0, self.target_gen_length],
+                device=device,
+                dtype=torch.int32,
+            )  # [2]
+
+    def _read_teacher_forcing_base_value(self, layer_idx: int) -> KVTrainMemoryValue:
+        """Read cached text K/V and build a one-token placeholder for unused video history."""
         assert self.has_new_caption is not None
         assert self.has_caption is not None
         assert self.has_cached_gen is not None
         assert self.und_kv_offsets is not None
         assert self.gen_q_offsets is not None
         assert self.gen_ca_cached_kv_offsets is not None
-        dummy_kv = torch.zeros(
+
+        cached_und_k, cached_und_v = self.dual_kv_cache[layer_idx].und_cache.get_padded(
+            self._padded_causal_len,
+            num_heads=self.num_kv_heads,
+            head_dim=self.head_dim,
+            device=self._device,
+            dtype=self._dtype,
+        )  # [1,S_text,H_kv,D] each
+        torch._dynamo.mark_static(cached_und_k, 1)
+        torch._dynamo.mark_static(cached_und_v, 1)
+
+        dummy_gen_kv = torch.zeros(
             1,
             1,
             self.num_kv_heads,
@@ -1235,6 +1315,7 @@ class TeacherForcingMemoryState(KVCacheTrainMemoryState):
             device=self._device,
             dtype=self._dtype,
         )  # [1,1,H_kv,D]
+        torch._dynamo.mark_static(dummy_gen_kv, 1)
         return KVTrainMemoryValue(
             vision_token_shapes=self.vision_token_shapes,
             num_action_tokens_per_supertoken=self.num_action_tokens_per_supertoken,
@@ -1244,21 +1325,17 @@ class TeacherForcingMemoryState(KVCacheTrainMemoryState):
             und_kv_offsets=self.und_kv_offsets,
             gen_q_offsets=self.gen_q_offsets,
             gen_ca_cached_kv_offsets=self.gen_ca_cached_kv_offsets,
-            cached_und_k=dummy_kv,
-            cached_und_v=dummy_kv,
-            cached_gen_k=dummy_kv,
-            cached_gen_v=dummy_kv,
+            cached_und_k=cached_und_k,
+            cached_und_v=cached_und_v,
+            cached_gen_k=dummy_gen_kv,
+            cached_gen_v=dummy_gen_kv,
             max_gen_cache_tokens=1,
             clamp_empty_varlen_kv=self.clamp_empty_varlen_kv,
         )
 
     def read_for_layer(self, layer_idx: int) -> KVTrainMemoryValue | TFNoisyMemoryValue:
         if self.pass_number == 1:
-            base_value = (
-                self._read_flex_base_value()
-                if self.selected_clean_gen_token_indexes is not None
-                else super().read_for_layer(layer_idx)
-            )
+            base_value = self._read_teacher_forcing_base_value(layer_idx)
             return TFReplayCleanMemoryValue(
                 vision_token_shapes=base_value.vision_token_shapes,
                 num_action_tokens_per_supertoken=base_value.num_action_tokens_per_supertoken,
@@ -1279,14 +1356,47 @@ class TeacherForcingMemoryState(KVCacheTrainMemoryState):
             )
 
         # Pass 2: wrap the parent's KVTrainMemoryValue with clean gen K/V.
-        base_value = (
-            self._read_flex_base_value()
-            if self.selected_clean_gen_token_indexes is not None
-            else super().read_for_layer(layer_idx)
-        )
         clean_kv = self._clean_gen_kv[layer_idx]
         assert clean_kv is not None, f"Clean gen K/V not captured for layer {layer_idx}"
         clean_k, clean_v = clean_kv
+        clean_und_kv = self._clean_und_kv[layer_idx]
+        if self.target_only_no_text_pass2:
+            assert clean_und_kv is not None, f"Clean und K/V not captured for layer {layer_idx}"
+            clean_und_k, clean_und_v = clean_und_kv
+            assert self.has_new_caption is not None
+            assert self.has_caption is not None
+            assert self.has_cached_gen is not None
+            assert self.und_kv_offsets is not None
+            assert self.gen_ca_cached_kv_offsets is not None
+            assert self._target_gen_q_offsets is not None, "Target-only Pass 2 offsets were not initialized"
+            return TFNoisyMemoryValue(
+                vision_token_shapes=self.vision_token_shapes,
+                num_action_tokens_per_supertoken=self.num_action_tokens_per_supertoken,
+                has_new_caption=self.has_new_caption,
+                has_caption=self.has_caption,
+                has_cached_gen=self.has_cached_gen,
+                und_kv_offsets=self.und_kv_offsets,
+                gen_q_offsets=self._target_gen_q_offsets,
+                gen_ca_cached_kv_offsets=self.gen_ca_cached_kv_offsets,
+                cached_und_k=clean_und_k,
+                cached_und_v=clean_und_v,
+                cached_gen_k=clean_k[:, :1],
+                cached_gen_v=clean_v[:, :1],
+                max_gen_cache_tokens=1,
+                clamp_empty_varlen_kv=self.clamp_empty_varlen_kv,
+                cached_clean_gen_k=clean_k,
+                cached_clean_gen_v=clean_v,
+                cached_clean_und_k=clean_und_k,
+                cached_clean_und_v=clean_und_v,
+                frames_per_chunk=self.frames_per_chunk,
+                teacher_forcing_replay_policy=self.teacher_forcing_replay_policy,
+                uses_rolling_gen_cache=False,
+                target_only_no_text=True,
+                target_gen_start=self.target_gen_start,
+                target_gen_length=self.target_gen_length,
+            )
+
+        base_value = self._read_teacher_forcing_base_value(layer_idx)
         return TFNoisyMemoryValue(
             vision_token_shapes=base_value.vision_token_shapes,
             num_action_tokens_per_supertoken=base_value.num_action_tokens_per_supertoken,
@@ -1304,8 +1414,14 @@ class TeacherForcingMemoryState(KVCacheTrainMemoryState):
             clamp_empty_varlen_kv=base_value.clamp_empty_varlen_kv,
             cached_clean_gen_k=clean_k,
             cached_clean_gen_v=clean_v,
+            cached_clean_und_k=None,
+            cached_clean_und_v=None,
             frames_per_chunk=self.frames_per_chunk,
             teacher_forcing_replay_policy=self.teacher_forcing_replay_policy,
+            uses_rolling_gen_cache=False,
+            target_only_no_text=False,
+            target_gen_start=self.target_gen_start,
+            target_gen_length=self.target_gen_length,
         )
 
     def write_for_layer(self, layer_idx: int, kv_to_store: KVToStore) -> None:
@@ -1332,15 +1448,38 @@ class TeacherForcingMemoryState(KVCacheTrainMemoryState):
                 self.null_action_supertokens,
             )  # [B,S,H,D]
             self._clean_gen_kv[layer_idx] = (clean_gen_k, clean_gen_v)
-            if self.selected_clean_gen_token_indexes is not None:
-                return
-            super().write_for_layer(layer_idx, kv_to_store)
+            if self.target_only_no_text_pass2:
+                if self.detach_clean_kv:
+                    clean_und_k = _und_k.detach().clone()  # [B,S_text,H,D]
+                    clean_und_v = _und_v.detach().clone()  # [B,S_text,H,D]
+                else:
+                    clean_und_k = _und_k.clone()  # [B,S_text,H,D]
+                    clean_und_v = _und_v.clone()  # [B,S_text,H,D]
+                clean_und_capacity = max(self._padded_causal_len, 1 if self.clamp_empty_varlen_kv else 0)
+                clean_und_pad = clean_und_capacity - clean_und_k.shape[1]
+                if clean_und_pad < 0:
+                    raise ValueError(
+                        f"Clean text K/V has {clean_und_k.shape[1]} rows, exceeding padded capacity "
+                        f"{clean_und_capacity}."
+                    )
+                if clean_und_pad:
+                    clean_und_k = F.pad(  # [B,S_text_padded,H,D]
+                        clean_und_k, (0, 0, 0, 0, 0, clean_und_pad)
+                    )
+                    clean_und_v = F.pad(  # [B,S_text_padded,H,D]
+                        clean_und_v, (0, 0, 0, 0, 0, clean_und_pad)
+                    )
+                self._clean_und_kv[layer_idx] = (clean_und_k, clean_und_v)
+            if self.has_new_caption_py:
+                real_und_k = _und_k[:, : self.new_und_len]  # [B,S_text,H,D]
+                real_und_v = _und_v[:, : self.new_und_len]  # [B,S_text,H,D]
+                self.dual_kv_cache[layer_idx].und_cache.store(real_und_k, real_und_v)
             return
 
         # Pass 2: no-op. Clean KV already written in Pass 1.
 
     def is_gen_only(self) -> bool:
-        return False
+        return self.pass_number == 2 and self.target_only_no_text_pass2
 
 
 @dataclass

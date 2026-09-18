@@ -8,9 +8,10 @@ Models" (https://arxiv.org/pdf/2602.18993).  See :class:`DiffusionCache`.
 
 Installs three hooks:
 
-* ``model.generate_samples_from_batch`` — resets cache state and adopts the
+* ``model.generate_samples_from_batch`` — resets cache state, adopts the
   call's local diffusion-step count (so ``cutoff_from_end`` is correct when
-  samples use fewer steps than the install-time max).
+  samples use fewer steps than the install-time max), and finalizes the last
+  sample after generation returns.
 * ``model.denoise`` — tracks step / sample / CFG-pass, computes the SEA
   indicator, and decides skip-vs-full.
 * ``net.language_model.forward`` — on full, caches und output as-is and the gen
@@ -528,7 +529,13 @@ class DiffusionCache:
 
         def patched_generate(self_model: Any, *args: Any, **kwargs: Any) -> Any:
             self.begin_generation(_resolve_generation_num_steps(self_model, kwargs))
-            return original_generate(*args, **kwargs)
+            try:
+                return original_generate(*args, **kwargs)
+            finally:
+                # No later denoise call exists to detect the final sample boundary.
+                # Finalize here so its summary is emitted and residual state cannot
+                # leak into the next generation request, including after failures.
+                self.reset()
 
         def patched_denoise(self_model: Any, *args: Any, **kwargs: Any) -> Any:
             del self_model
@@ -730,12 +737,16 @@ class DiffusionCache:
         return total / len(cur)
 
     def _extract_indicator(self, data_batch_packed: Any, timestep_key: float | None) -> list[torch.Tensor] | None:
-        """SEA-filtered noisy-latent indicator, one filtered tensor per sample.
+        """SEA-filtered noisy-latent indicator, one tensor per noised vision item.
 
-        Reads the per-sample noisy vision latents ``[C,T,H,W]`` from the packed
-        batch, moves the channel to the last axis, and applies the SEA Wiener
-        filter over the ``(T,H,W)`` axes.  Returns ``None`` (⇒ force a full
-        eval) when vision latents are unavailable.
+        Reads vision latents ``[C,T,H,W]`` from the packed batch, excludes items
+        whose condition mask is entirely clean, moves the channel to the last
+        axis, and applies the SEA Wiener filter over the ``(T,H,W)`` axes.  This
+        keeps Transfer's full-control and no-control CFG branches comparable:
+        the former packs a fully conditioned control item before the same noisy
+        target carried by the latter. Partially conditioned targets remain in
+        the indicator. Packs without condition-mask metadata retain the legacy
+        all-item behavior; malformed masks force a full evaluation.
         """
         vision = getattr(data_batch_packed, "vision", None)
         if vision is None:
@@ -743,6 +754,11 @@ class DiffusionCache:
         tokens = getattr(vision, "tokens", None)
         shapes = getattr(vision, "token_shapes", None)
         if tokens is None or not shapes:
+            return None
+        condition_masks = getattr(vision, "condition_mask", None)
+        if condition_masks is not None and (
+            not isinstance(condition_masks, list) or len(condition_masks) != len(tokens)
+        ):
             return None
 
         if timestep_key is None:
@@ -752,9 +768,17 @@ class DiffusionCache:
             )
         a, b = self._sea_ab(timestep_key)
         filtered: list[torch.Tensor] = []
-        for latent in tokens:
+        for item_idx, latent in enumerate(tokens):
             if not isinstance(latent, torch.Tensor):
                 return None
+            if condition_masks is not None:
+                condition_mask = condition_masks[item_idx]  # [T,1,1]
+                if not isinstance(condition_mask, torch.Tensor) or condition_mask.numel() == 0:
+                    return None
+                conditioned_frames = condition_mask != 0  # [T,1,1]
+                fully_conditioned = torch.all(conditioned_frames)  # []
+                if bool(fully_conditioned.item()):
+                    continue
             lat = latent.squeeze(0) if latent.dim() == 5 else latent  # [C,T,H,W]
             if lat.dim() != 4:
                 return None
@@ -765,9 +789,9 @@ class DiffusionCache:
                 b,
                 power_exp=self.config.power_exp,
                 dims=(-4, -3, -2),
-            )
+            )  # [T,H,W,C]
             filtered.append(filt)
-        return filtered
+        return filtered or None
 
     def _sea_ab(self, timestep_key: float) -> tuple[float, float]:
         """Flow-matching signal / noise mixing coefficients ``(a, b) = (1-σ, σ)``.

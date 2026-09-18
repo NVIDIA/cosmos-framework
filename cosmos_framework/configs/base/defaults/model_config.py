@@ -175,6 +175,14 @@ class OmniMoTModelConfig:
     projections in the network, so ``lidar_state_ch`` must be set to the same value.
     """
 
+    radar_tokenizer: LazyDict | None = None
+    """VAE for the radar/map polar-grid stream, alongside the camera VAE in ``tokenizer``.
+
+    Radar and map share this tokenizer: both are 6-channel range×azimuth clips.
+    There is no published checkpoint yet, so the Hydra default keeps
+    ``load_checkpoint=False`` until a trained iterate is exported.
+    """
+
     lidar_state_ch: int | None = None
     """LiDAR VAE latent channel count, i.e. the width of the network's LiDAR heads."""
 
