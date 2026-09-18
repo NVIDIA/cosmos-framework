@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any
 
 import torch
+import torch.nn.functional as F
 from torch import nn
 from torch.distributed import ProcessGroup
 
@@ -657,6 +658,54 @@ class PackedAttentionMoT(nn.Module):
             and not getattr(memory_value, "for_cuda_graphs", False)
         )
 
+    def _forward_target_only_no_text(
+        self,
+        pack: SequencePack,
+        attention_mask: AttentionMaskType,
+        packed_position_embeddings: tuple[SequencePack, SequencePack],
+        memory_value: MemoryValue,
+    ) -> tuple[SequencePack, None]:
+        """Project and attend only target GEN rows in optimized TF Pass 2."""
+        gen_hidden = get_gen_seq(pack)  # [N_target,hidden_size]
+        q_gen_in = self.q_proj_moe_gen(gen_hidden)  # [N_target,num_heads*head_dim]
+        k_gen_in = self.k_proj_moe_gen(gen_hidden)  # [N_target,num_kv_heads*head_dim]
+        v_gen_in = self.v_proj_moe_gen(gen_hidden)  # [N_target,num_kv_heads*head_dim]
+        q_gen = q_gen_in.view(-1, self.num_attention_heads, self.head_dim)  # [N_target,num_heads,head_dim]
+        k_gen = k_gen_in.view(-1, self.num_key_value_heads, self.head_dim)  # [N_target,num_kv_heads,head_dim]
+        v_gen = v_gen_in.view(-1, self.num_key_value_heads, self.head_dim)  # [N_target,num_kv_heads,head_dim]
+        if torch.compiler.is_compiling():
+            for head_split in (q_gen, k_gen, v_gen):
+                torch._dynamo.mark_static(head_split, 1)
+        q_gen = self.q_norm_moe_gen(q_gen)  # [N_target,num_heads,head_dim]
+        k_gen = self.k_norm_moe_gen(k_gen)  # [N_target,num_kv_heads,head_dim]
+        packed_cos, packed_sin = packed_position_embeddings
+        q_gen_, k_gen_ = self._apply_rotary_pos_emb(
+            q_gen,
+            k_gen,
+            get_gen_seq(packed_cos),
+            get_gen_seq(packed_sin),
+            unsqueeze_dim=1,
+        )  # q_gen_: [N_target,num_heads,head_dim], k_gen_: [N_target,num_kv_heads,head_dim]
+        empty_q_und = q_gen_.new_empty((0, self.num_attention_heads, self.head_dim))  # [0,num_heads,head_dim]
+        empty_kv_und = k_gen_.new_empty((0, self.num_key_value_heads, self.head_dim))  # [0,num_kv_heads,head_dim]
+        packed_query_states = from_und_gen_splits(empty_q_und, q_gen_, pack)
+        packed_key_states = from_und_gen_splits(empty_kv_und, k_gen_, pack)
+        packed_value_states = from_und_gen_splits(empty_kv_und, v_gen, pack)
+        packed_attn_output, kv_to_store = self.dispatch_attention_fn(
+            packed_query_states,
+            packed_key_states,
+            packed_value_states,
+            attention_mask,
+            natten_metadata=None,
+            memory_value=memory_value,
+            packed_key_states_normalized=None,
+        )
+        if kv_to_store is not None:
+            raise ValueError("Target-only teacher-forcing attention must not return K/V to store.")
+        gen_seq = self.o_proj_moe_gen(get_gen_seq(packed_attn_output))  # [N_target,hidden_size]
+        empty_und = gen_seq.new_empty((0, self.hidden_size))  # [0,hidden_size]
+        return from_und_gen_splits(empty_und, gen_seq, pack), None
+
     def forward(
         self,
         pack: SequencePack,
@@ -684,6 +733,16 @@ class PackedAttentionMoT(nn.Module):
             natten_metadata: Optional NATTEN metadata for neighborhood attention.
             memory_value: Optional read-only tensor container for memory-augmented attention.
         """
+
+        if memory_value is not None and bool(getattr(memory_value, "target_only_no_text", False)):
+            if natten_metadata is not None:
+                raise ValueError("Target-only teacher forcing does not support context-parallel NATTEN metadata.")
+            return self._forward_target_only_no_text(
+                pack,
+                attention_mask,
+                packed_position_embeddings,
+                memory_value,
+            )
 
         q_und_in = self.q_proj(get_und_seq(pack))  # [N_und,num_heads*head_dim]
         q_gen_in = self.q_proj_moe_gen(get_gen_seq(pack))  # [N_gen,num_heads*head_dim]
@@ -777,7 +836,11 @@ class PackedAttentionMoT(nn.Module):
         # Gradient detach is NOT done here; each MemoryState.write_for_layer()
         # decides its own gradient policy (e.g. detach for truncated BPTT,
         # keep gradients for teacher forcing).
-        if memory_value is not None and kv_to_store is None:
+        if (
+            memory_value is not None
+            and kv_to_store is None
+            and not bool(getattr(memory_value, "target_only_no_text", False))
+        ):
             und_len = pack["_num_causal_tokens"]
             gen_len = pack["_num_full_tokens"]
             # When und K-norm is active, AR frame 1+ gen→und cross-attention uses
@@ -1340,12 +1403,69 @@ class MoTDecoderLayer(nn.Module):
             natten_metadata: Optional NATTEN metadata for neighborhood attention.
             memory_value: Read-only tensor container from MemoryState.read_for_layer().
             gen_only: When True, skip the understanding pathway (und K/V come from cache).
+                Target-only teacher forcing also slices away control GEN rows
+                before every decoder operation and restores the full layout on return.
         """
+        target_only_no_text = gen_only and bool(getattr(memory_value, "target_only_no_text", False))
+        layer_input = input
+        layer_position_embeddings = packed_position_embeddings
+        target_start = 0
+        target_end = 0
+        if target_only_no_text:
+            if natten_metadata is not None:
+                raise ValueError("Target-only teacher forcing does not support context-parallel NATTEN metadata.")
+            if self._sample_lbl_und or self._sample_lbl_gen:
+                raise ValueError("Target-only teacher forcing does not support sample load-balancing metadata.")
+            if isinstance(self.mlp, Qwen3VLMoeTextSparseMoeBlock) or isinstance(
+                self.mlp_moe_gen, Qwen3VLMoeTextSparseMoeBlock
+            ):
+                raise ValueError("Target-only teacher forcing currently supports dense decoder MLPs only.")
+            target_start = int(getattr(memory_value, "target_gen_start", 0))
+            target_length = int(getattr(memory_value, "target_gen_length", 0))
+            target_end = target_start + target_length
+            full_gen_input = get_gen_seq(input)  # [N_gen,hidden_size]
+            full_gen_real_tokens = int(input["_num_full_tokens"])
+            if full_gen_real_tokens != target_end:
+                raise ValueError(
+                    "Target-only teacher forcing requires the real GEN stream to end at the target range; "
+                    f"range ends at {target_end}, but the pack reports {full_gen_real_tokens} real rows."
+                )
+            if target_start < 0 or target_length <= 0 or target_end > full_gen_input.shape[0]:
+                raise ValueError(
+                    "Target-only teacher forcing received an invalid GEN range "
+                    f"[{target_start}, {target_end}) for {full_gen_input.shape[0]} rows."
+                )
+            target_gen_input = full_gen_input[target_start:target_end]  # [N_target,hidden_size]
+            empty_und_input = target_gen_input.new_empty((0, target_gen_input.shape[-1]))  # [0,hidden_size]
+            layer_input = from_und_gen_splits(empty_und_input, target_gen_input, input)
+            layer_input["_num_causal_tokens"] = 0
+            layer_input["_num_full_tokens"] = target_length
+            if "_causal_sample_ids" in layer_input:
+                layer_input["_causal_sample_ids"] = layer_input["_causal_sample_ids"][:0]  # [0]
+            if "_full_only_sample_ids" in layer_input:
+                layer_input["_full_only_sample_ids"] = layer_input["_full_only_sample_ids"][
+                    target_start:target_end
+                ]  # [N_target]
+
+            full_cos, full_sin = packed_position_embeddings
+            target_cos = get_gen_seq(full_cos)[target_start:target_end]  # [N_target,head_dim]
+            target_sin = get_gen_seq(full_sin)[target_start:target_end]  # [N_target,head_dim]
+            empty_und_cos = target_cos.new_empty((0, target_cos.shape[-1]))  # [0,head_dim]
+            empty_und_sin = target_sin.new_empty((0, target_sin.shape[-1]))  # [0,head_dim]
+            layer_position_embeddings = (
+                from_und_gen_splits(empty_und_cos, target_cos, full_cos),
+                from_und_gen_splits(empty_und_sin, target_sin, full_sin),
+            )
+
         # Pre-Attention layernorm
+        if target_only_no_text:
+            norm_und = get_und_seq(layer_input)  # [0,hidden_size]
+        else:
+            norm_und = self.input_layernorm(get_und_seq(layer_input))  # [N_und,hidden_size]
         pack_norm_out = from_und_gen_splits(
-            self.input_layernorm(get_und_seq(input)),  # [N_und,hidden_size]
-            self.input_layernorm_moe_gen(get_gen_seq(input)),  # [N_gen,hidden_size]
-            input,
+            norm_und,
+            self.input_layernorm_moe_gen(get_gen_seq(layer_input)),  # [N_gen,hidden_size]
+            layer_input,
         )  # [N_und+N_gen,hidden_size]
 
         # Self Attention + Residual
@@ -1368,7 +1488,7 @@ class MoTDecoderLayer(nn.Module):
             # onto a length-0 ``q_und`` / ``k_und`` and crash.  When the
             # outer pack is unpadded (eager AR path), the und cos/sin
             # already have length 0 and this slice is a no-op.
-            _cos, _sin = packed_position_embeddings
+            _cos, _sin = layer_position_embeddings
             _empty_cos_und = get_und_seq(_cos)[:0]
             _empty_sin_und = get_und_seq(_sin)[:0]
             gen_position_embeddings = (
@@ -1387,25 +1507,25 @@ class MoTDecoderLayer(nn.Module):
             # No residual_und here: the gen_only MLP branch below builds its own
             # length-0 und sequence for ``mlp_out_und_seq``; carrying one through
             # this branch is dead code.
-            residual_gen = get_gen_seq(input) + gen_attn_out
+            residual_gen = get_gen_seq(layer_input) + gen_attn_out
         else:
             # STANDARD PATH: Process both und and gen tokens
             pack_attn_out, kv_to_store = self.self_attn(
                 pack_norm_out,
                 attention_mask,
-                packed_position_embeddings,
+                layer_position_embeddings,
                 natten_metadata=natten_metadata,
                 memory_value=memory_value,
             )
-            residual_und = get_und_seq(input) + get_und_seq(pack_attn_out)  # [N_und,hidden_size]
-            residual_gen = get_gen_seq(input) + get_gen_seq(pack_attn_out)  # [N_gen,hidden_size]
+            residual_und = get_und_seq(layer_input) + get_und_seq(pack_attn_out)  # [N_und,hidden_size]
+            residual_gen = get_gen_seq(layer_input) + get_gen_seq(pack_attn_out)  # [N_gen,hidden_size]
 
         # Pre-MLP layernorm and processing
         lbl_metadata_dict: dict[str, LBLMetadata] = dict()
         gen_sample_ids = None
         gen_num_samples = None
         if self._sample_lbl_gen:
-            gen_sample_ids, gen_num_samples = _get_local_sample_ids(input, "gen")
+            gen_sample_ids, gen_num_samples = _get_local_sample_ids(layer_input, "gen")
 
         if gen_only:
             # gen_only: skip und, compute gen tokens only
@@ -1448,7 +1568,7 @@ class MoTDecoderLayer(nn.Module):
             und_sample_ids = None
             und_num_samples = None
             if self._sample_lbl_und:
-                und_sample_ids, und_num_samples = _get_local_sample_ids(input, "und")
+                und_sample_ids, und_num_samples = _get_local_sample_ids(layer_input, "und")
 
             mlp_out_und, lbl_metadata_und = _run_mlp(
                 self.mlp,
@@ -1475,7 +1595,16 @@ class MoTDecoderLayer(nn.Module):
             mlp_out_und_seq = residual_und + mlp_out_und  # [N_und,hidden_size]
             mlp_out_gen_seq = residual_gen + mlp_out_gen  # [N_gen,hidden_size]
 
-        return from_und_gen_splits(mlp_out_und_seq, mlp_out_gen_seq, input), lbl_metadata_dict, kv_to_store
+        layer_output = from_und_gen_splits(mlp_out_und_seq, mlp_out_gen_seq, layer_input)
+        if target_only_no_text:
+            full_gen_len = get_gen_seq(input).shape[0]
+            restored_gen = F.pad(  # [N_gen,hidden_size]
+                get_gen_seq(layer_output),
+                (0, 0, target_start, full_gen_len - target_end),
+            )
+            restored_und = get_und_seq(input).new_zeros(get_und_seq(input).shape)  # [N_und,hidden_size]
+            layer_output = from_und_gen_splits(restored_und, restored_gen, input)
+        return layer_output, lbl_metadata_dict, kv_to_store
 
     def reasoner_forward(
         self,

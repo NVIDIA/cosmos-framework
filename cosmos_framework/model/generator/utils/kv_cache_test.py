@@ -1672,10 +1672,11 @@ def test_teacher_forcing_memory_state_supports_cp_head_sharded_cache() -> None:
 
     assert isinstance(pass1_value, TFReplayCleanMemoryValue)
     assert pass1_value.supports_context_parallel_attention
+    assert not pass1_value.uses_rolling_gen_cache
     assert pass1_value.frames_per_chunk == 4
     assert pass1_value.teacher_forcing_replay_policy is replay_policy
     assert pass1_value.cached_und_k.shape == (1, padded_causal_len, local_num_kv_heads, head_dim)
-    assert pass1_value.cached_gen_k.shape == (1, tokens_per_seg, local_num_kv_heads, head_dim)
+    assert pass1_value.cached_gen_k.shape == (1, 1, local_num_kv_heads, head_dim)
 
     gen_k = torch.randn(
         1, tokens_per_seg, local_num_kv_heads, head_dim, device=device, dtype=dtype
@@ -1696,6 +1697,7 @@ def test_teacher_forcing_memory_state_supports_cp_head_sharded_cache() -> None:
 
     assert isinstance(pass2_value, TFNoisyMemoryValue)
     assert pass2_value.supports_context_parallel_attention
+    assert not pass2_value.uses_rolling_gen_cache
     assert pass2_value.frames_per_chunk == 4
     assert pass2_value.teacher_forcing_replay_policy is replay_policy
     assert pass2_value.cached_clean_gen_k.shape == (1, tokens_per_seg, local_num_kv_heads, head_dim)

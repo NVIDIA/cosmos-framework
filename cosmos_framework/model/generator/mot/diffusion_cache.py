@@ -8,9 +8,10 @@ Models" (https://arxiv.org/pdf/2602.18993).  See :class:`DiffusionCache`.
 
 Installs three hooks:
 
-* ``model.generate_samples_from_batch`` — resets cache state and adopts the
+* ``model.generate_samples_from_batch`` — resets cache state, adopts the
   call's local diffusion-step count (so ``cutoff_from_end`` is correct when
-  samples use fewer steps than the install-time max).
+  samples use fewer steps than the install-time max), and finalizes the last
+  sample after generation returns.
 * ``model.denoise`` — tracks step / sample / CFG-pass, computes the SEA
   indicator, and decides skip-vs-full.
 * ``net.language_model.forward`` — on full, caches und output as-is and the gen
@@ -51,7 +52,6 @@ DenoiseOutput: TypeAlias = dict[str, Any]
 """Output of ``model.denoise``: ``preds_vision`` (``list[Tensor[C,T,H,W]]``),
 optional ``preds_action`` / ``preds_sound``, plus passthrough
 ``lbl_metadata_*`` entries."""
-
 
 # -----------------------------------------------------------------------------
 # helper functions: rank-0 logging, denoise-call tracking.
@@ -395,7 +395,7 @@ class DiffusionCache:
     und hidden is reused as-is and the cached gen residual is re-applied to the
     current step's fresh gen input, so the decode heads still produce an
     input-adaptive prediction.  Three hooks are
-    installed (see :meth:`install`), with no model-source changes:
+    installed at runtime (see :meth:`install`):
 
     * ``model.generate_samples_from_batch`` resets cache state and adopts the
       call's local ``num_steps`` (needed for ``cutoff_from_end``).
@@ -407,6 +407,9 @@ class DiffusionCache:
 
     Each CFG pass of a step is tracked as an independent pathway, keyed
     positionally (``cfg0``, ``cfg1``).
+    Control guidance adds another pathway; the model automatically applies
+    ``prepare_control_cfg_step`` before any branch runs. Only unanimous skips
+    are accepted; residual histories remain separate.
     Caching is disabled for AR generation memory states (see ``_disables_caching``)
     and for packs without noisy vision (see ``_batch_supports_diffusion_cache``).
     """
@@ -492,6 +495,8 @@ class DiffusionCache:
         # True only when this denoise call may skip / refresh residual history.
         # Cleared for unsupported modalities and AR memory before ``language_model``.
         self._cache_active = False
+        self._control_cfg_pending: list[tuple[str, bool]] = []
+        self._control_cfg_active: bool = False
         # Per-sample step counters (reset on sample boundaries and end-of-run).
         self._step_full = 0
         self._step_skipped = 0
@@ -506,7 +511,8 @@ class DiffusionCache:
         ``model.denoise`` is patched to drive a :class:`_DenoiseStepTracker`
         (step / sample / CFG-pass boundaries), compute the SEA indicator, and
         record the skip-vs-full decision; ``net.language_model.forward`` is patched
-        to execute that decision via residual reuse.  No model source is modified.
+        to execute that decision via residual reuse. The model calls
+        ``prepare_control_cfg_step`` before control-guided velocity predictions.
         """
         model = getattr(pipe, "model", None)
         if model is None:
@@ -528,7 +534,13 @@ class DiffusionCache:
 
         def patched_generate(self_model: Any, *args: Any, **kwargs: Any) -> Any:
             self.begin_generation(_resolve_generation_num_steps(self_model, kwargs))
-            return original_generate(*args, **kwargs)
+            try:
+                return original_generate(*args, **kwargs)
+            finally:
+                # No later denoise call exists to detect the final sample boundary.
+                # Finalize here so its summary is emitted and residual state cannot
+                # leak into the next generation request, including after failures.
+                self.reset()
 
         def patched_denoise(self_model: Any, *args: Any, **kwargs: Any) -> Any:
             del self_model
@@ -536,6 +548,8 @@ class DiffusionCache:
             memory = kwargs.get("memory")
             # Default off until the vision-diffusing path proves caching is safe.
             self._cache_active = False
+            prepared = self._control_cfg_pending.pop(0) if self._control_cfg_pending else None
+            self._control_cfg_active = prepared is not None
 
             # AR / KV-cache first: bypass before any vision.timestep tracking so a
             # missing vision timestep cannot raise before the documented disable.
@@ -555,19 +569,21 @@ class DiffusionCache:
                 return original_denoise(*args, **kwargs)
 
             tk = _extract_timestep_key(batch)
-            is_new_step, is_new_sample = self._tracker.advance(tk)
-            if is_new_step:
-                if is_new_sample or self._tracker.step >= self.num_steps:
-                    self.reset()
-                    self._tracker.reset_for_new_sample()
-                self.state.step = self._tracker.step
-
-            pathway = self._tracker.pass_name
-            self.state.pathway = pathway
+            if prepared is not None:
+                if tk != self._tracker.last_timestep_key:
+                    raise RuntimeError("Control-CFG preflight timestep does not match denoise")
+                cfg_pathway, compute = prepared
+                self._tracker.pass_idx = int(cfg_pathway.removeprefix("cfg"))
+            else:
+                self._advance_step(tk)
+                cfg_pathway = self._tracker.pass_name
+                indicator = self._extract_indicator(batch, tk)
+                compute = self._synchronize_compute(
+                    self._should_compute(cfg_pathway, indicator),
+                    cfg_pathway,
+                )
+            self.state.pathway = cfg_pathway
             self._cache_active = True
-            indicator = self._extract_indicator(batch, tk)
-            compute = self._should_compute(pathway, indicator)
-            compute = self._synchronize_compute(compute, pathway)
             if compute:
                 self.state.calc_type = "full"
                 self._step_full += 1
@@ -588,6 +604,8 @@ class DiffusionCache:
             if caching and self.state.calc_type == "cache":
                 shape_requires_full = self._synchronize_compute(not history_matches, pathway)
                 if shape_requires_full:
+                    if self._control_cfg_active:
+                        raise RuntimeError("Control-CFG cache layout changed after preflight; cannot reuse residuals")
                     self.state.calc_type = "full"
                     self._step_skipped -= 1
                     self._step_full += 1
@@ -637,10 +655,50 @@ class DiffusionCache:
         self.state = self.State(num_steps=num_steps)
         self._tracker = _DenoiseStepTracker()
 
+    def _advance_step(self, timestep_key: float | None) -> None:
+        is_new_step, is_new_sample = self._tracker.advance(timestep_key)
+        if is_new_step:
+            if is_new_sample or self._tracker.step >= self.num_steps:
+                self.reset()
+                self._tracker.reset_for_new_sample()
+            self.state.step = self._tracker.step
+
+    def prepare_control_cfg_step(
+        self,
+        branch_latents: dict[str, list[torch.Tensor]],  # pathway -> vision items: list[[C,T,H,W]]
+        timestep_key: float,
+    ) -> None:
+        """Decide all branches before denoising: full if any branch or FSDP rank needs it.
+
+        Inputs follow execution order (positive/control, positive/no-control when
+        active, negative/control), with stable keys across guidance intervals.
+        Each pathway updates its indicator once and retains its own residual
+        history. The denoise hooks consume these decisions
+        without repeating the indicator calculation or running speculative forwards.
+        """
+        if self._control_cfg_pending:
+            raise RuntimeError("Previous control-CFG preflight was not fully consumed")
+        if not branch_latents:
+            raise ValueError("Control-CFG preflight requires at least one branch")
+        self._advance_step(timestep_key)
+        cfg_pathways = list(branch_latents)
+        # Evaluate every pathway: _should_compute also updates its indicator/budget.
+        decisions = [
+            self._should_compute(pathway, self._filter_latents(latents, timestep_key))
+            for pathway, latents in branch_latents.items()
+        ]
+        compute = self._synchronize_compute(any(decisions), cfg_pathways[0])
+        if compute:
+            for pathway in cfg_pathways:
+                self._pathways[pathway].accumulated = 0.0
+        self._control_cfg_pending = [(pathway, compute) for pathway in cfg_pathways]
+
     def reset(self) -> None:
         """Drop all cached state.  Called on sample boundaries and end-of-run."""
         self._log_sample_summary()
         self._pathways = {}
+        self._control_cfg_pending = []
+        self._control_cfg_active = False
         self.state = self.State(num_steps=self.num_steps)
         self._cache_active = False
         self._step_full = 0
@@ -730,12 +788,16 @@ class DiffusionCache:
         return total / len(cur)
 
     def _extract_indicator(self, data_batch_packed: Any, timestep_key: float | None) -> list[torch.Tensor] | None:
-        """SEA-filtered noisy-latent indicator, one filtered tensor per sample.
+        """SEA-filtered noisy-latent indicator, one tensor per noised vision item.
 
-        Reads the per-sample noisy vision latents ``[C,T,H,W]`` from the packed
-        batch, moves the channel to the last axis, and applies the SEA Wiener
-        filter over the ``(T,H,W)`` axes.  Returns ``None`` (⇒ force a full
-        eval) when vision latents are unavailable.
+        Reads vision latents ``[C,T,H,W]`` from the packed batch, excludes items
+        whose condition mask is entirely clean, moves the channel to the last
+        axis, and applies the SEA Wiener filter over the ``(T,H,W)`` axes.  This
+        keeps Transfer's full-control and no-control CFG branches comparable:
+        the former packs a fully conditioned control item before the same noisy
+        target carried by the latter. Partially conditioned targets remain in
+        the indicator. Packs without condition-mask metadata retain the legacy
+        all-item behavior; malformed masks force a full evaluation.
         """
         vision = getattr(data_batch_packed, "vision", None)
         if vision is None:
@@ -744,7 +806,23 @@ class DiffusionCache:
         shapes = getattr(vision, "token_shapes", None)
         if tokens is None or not shapes:
             return None
+        condition_masks = getattr(vision, "condition_mask", None)
+        if condition_masks is not None and (
+            not isinstance(condition_masks, list) or len(condition_masks) != len(tokens)
+        ):
+            return None
 
+        return self._filter_latents(tokens, timestep_key, condition_masks)
+
+    def _filter_latents(
+        self,
+        tokens: list[torch.Tensor],  # list[[C,T,H,W]]
+        timestep_key: float | None,
+        condition_masks: list[torch.Tensor] | None = None,  # list[[T,1,1]]
+    ) -> list[torch.Tensor] | None:  # list[[T,H,W,C]]
+        """Shared indicator calculation for packed denoise inputs and CFG preflight."""
+        if not tokens:
+            return None
         if timestep_key is None:
             raise ValueError(
                 "Diffusion cache requires a resolved timestep to build the SEA indicator, "
@@ -752,9 +830,17 @@ class DiffusionCache:
             )
         a, b = self._sea_ab(timestep_key)
         filtered: list[torch.Tensor] = []
-        for latent in tokens:
+        for item_idx, latent in enumerate(tokens):
             if not isinstance(latent, torch.Tensor):
                 return None
+            if condition_masks is not None:
+                condition_mask = condition_masks[item_idx]  # [T,1,1]
+                if not isinstance(condition_mask, torch.Tensor) or condition_mask.numel() == 0:
+                    return None
+                conditioned_frames = condition_mask != 0  # [T,1,1]
+                fully_conditioned = torch.all(conditioned_frames)  # []
+                if bool(fully_conditioned.item()):
+                    continue
             lat = latent.squeeze(0) if latent.dim() == 5 else latent  # [C,T,H,W]
             if lat.dim() != 4:
                 return None
@@ -765,9 +851,9 @@ class DiffusionCache:
                 b,
                 power_exp=self.config.power_exp,
                 dims=(-4, -3, -2),
-            )
+            )  # [T,H,W,C]
             filtered.append(filt)
-        return filtered
+        return filtered or None
 
     def _sea_ab(self, timestep_key: float) -> tuple[float, float]:
         """Flow-matching signal / noise mixing coefficients ``(a, b) = (1-σ, σ)``.

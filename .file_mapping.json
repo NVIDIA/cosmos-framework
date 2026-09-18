@@ -1,7 +1,7 @@
 {
-  "_source_commit": "52a3cb4ba8cac9083fa3161f2c02e43defa46d1a-dirty",
-  "_dest_commit": "efba2076c80648663a89a7fdbc92eb262fae39ac",
-  "_generated_at": "2026-09-17T12:55:02Z",
+  "_source_commit": "2962eb13e76ad641803d5f498c2822555c88e79c-dirty",
+  "_dest_commit": "6c9d3916e0c5b62f8bed9694ae805d3d4c04c454",
+  "_generated_at": "2026-09-18T13:40:26Z",
   "files": {
     "imaginaire/__init__.py": "cosmos_framework/__init__.py",
     "imaginaire/attention/__init__.py": "cosmos_framework/model/attention/__init__.py",
@@ -484,6 +484,8 @@
     "projects/cosmos3/cosmos3/processors/qwen3vl_nemo_chat_processor.py": "cosmos_framework/data/generator/processors/qwen3vl_nemo_chat_processor.py",
     "projects/cosmos3/cosmos3/processors/qwen3vl_nemo_chat_processor_test.py": "cosmos_framework/data/generator/processors/qwen3vl_nemo_chat_processor_test.py",
     "projects/cosmos3/cosmos3/processors/qwen3vl_processor.py": "cosmos_framework/data/generator/processors/qwen3vl_processor.py",
+    "projects/cosmos3/cosmos3/scripts/multiview_auto/multiview_collage.py": "cosmos_framework/scripts/multiview_collage.py",
+    "projects/cosmos3/cosmos3/scripts/multiview_auto/multiview_collage_test.py": "cosmos_framework/scripts/multiview_collage_test.py",
     "projects/cosmos3/cosmos3/sequence_packing/__init__.py": "cosmos_framework/data/generator/sequence_packing/__init__.py",
     "projects/cosmos3/cosmos3/sequence_packing/modality.py": "cosmos_framework/data/generator/sequence_packing/modality.py",
     "projects/cosmos3/cosmos3/sequence_packing/mrope.py": "cosmos_framework/data/generator/sequence_packing/mrope.py",

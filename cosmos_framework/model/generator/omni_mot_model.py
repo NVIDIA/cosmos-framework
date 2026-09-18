@@ -232,6 +232,23 @@ def _densify_action_family(
 INFERENCE_RAW_VISION_RETAINED_ITEMS_KEY = "_inference_raw_vision_retained_items"
 
 
+@dataclasses.dataclass(frozen=True)
+class VelocityPostprocess:
+    """A velocity transform with a preparation hook before any branch executes."""
+
+    apply: Callable[[list[torch.Tensor], list[torch.Tensor], torch.Tensor, float], list[torch.Tensor]]
+    prepare: Callable[[list[torch.Tensor], torch.Tensor], None]
+
+    def __call__(
+        self,
+        velocity: list[torch.Tensor],  # list[[D]]
+        noise_x: list[torch.Tensor],  # list[[D]]
+        timestep: torch.Tensor,  # [B,1]
+        text_guidance_scale: float,
+    ) -> list[torch.Tensor]:  # list[[D]]
+        return self.apply(velocity, noise_x, timestep, text_guidance_scale)
+
+
 class OmniMoTModel(ImaginaireModel):
     """
     Mixture of Transformers (MoT) model to be trained with the flow matching objective
@@ -3388,7 +3405,8 @@ class OmniMoTModel(ImaginaireModel):
         guidance_interval: Optional[list[float]] = None,
         velocity_postprocess_builder: Optional[
             Callable[
-                ..., Optional[Callable[[list[torch.Tensor], list[torch.Tensor], torch.Tensor], list[torch.Tensor]]]
+                ...,
+                Optional[Callable[[list[torch.Tensor], list[torch.Tensor], torch.Tensor, float], list[torch.Tensor]]],
             ]
         ] = None,
         seed: list[int] | int = 1,
@@ -3577,10 +3595,12 @@ class OmniMoTModel(ImaginaireModel):
         # that receives the prepared inference state. The returned callable (if
         # any) is invoked after the conditional forward on every step and can
         # modify the conditional velocity (e.g. inject control-CFG, attention
-        # weighting, etc.). The model itself stays agnostic of what the hook
-        # does — all transfer/edit-specific logic lives in the caller.
+        # weighting, etc.). It also receives the text guidance scale active for
+        # that step so independently composed guidance is not multiplied twice.
+        # The model itself stays agnostic of what the hook does — all
+        # transfer/edit-specific logic lives in the caller.
         velocity_postprocess: Optional[
-            Callable[[list[torch.Tensor], list[torch.Tensor], torch.Tensor], list[torch.Tensor]]
+            Callable[[list[torch.Tensor], list[torch.Tensor], torch.Tensor, float], list[torch.Tensor]]
         ] = None
         if velocity_postprocess_builder is not None:
             velocity_postprocess = velocity_postprocess_builder(
@@ -3866,10 +3886,16 @@ class OmniMoTModel(ImaginaireModel):
 
                 # Conditional forward, then per-step postprocess hook. Hook runs
                 # sequentially; cfgp parallelism not used on this path.
-                cond_v_full = _single_velocity_fn(cond_tokens, skip_text_tokens=False)
-                cond_v = velocity_postprocess(cond_v_full, noise_x, timestep)
+                # Preflight control-CFG cache decisions before any branch runs.
+                if isinstance(velocity_postprocess, VelocityPostprocess):
+                    velocity_postprocess.prepare(noise_x, timestep)
+                cond_v_full = _single_velocity_fn(cond_tokens, skip_text_tokens=False)  # list of [N_i]
+                text_guidance_scale = guidance if needs_text_cfg else 1.0
+                cond_v = velocity_postprocess(cond_v_full, noise_x, timestep, text_guidance_scale)  # list of [N_i]
 
-                uncond_v = _single_velocity_fn(uncond_tokens, skip_text_tokens=skip_text_tokens_for_cfg)
+                uncond_v = _single_velocity_fn(
+                    uncond_tokens, skip_text_tokens=skip_text_tokens_for_cfg
+                )  # list of [N_i]
                 if not needs_text_cfg:
                     # Same alignment story as above for the postprocess branch.
                     return cond_v

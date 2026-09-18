@@ -8,12 +8,6 @@ from typing import Dict, Literal
 
 from cosmos_framework.data.imaginaire.webdataset.augmentors.augmentor import Augmentor
 
-REASONING_SUFFIX = (
-    "\nAnswer the question using the following format:\n\n"
-    "<think>\nYour reasoning.\n</think>\n\n"
-    "Write your final answer immediately after the </think> tag."
-)
-
 
 class PromptFormat(Augmentor):
     def __init__(
@@ -63,13 +57,8 @@ class PromptFormat(Augmentor):
                 message["reasoning_content"] = [{"type": "text", "text": message["reasoning_content"]}]
 
         # Merge reasoning_content into assistant message content
-        for i, message in enumerate(selected_conversation):
+        for message in selected_conversation:
             if message.get("role") == "assistant" and message.get("reasoning_content"):
-                # Append reasoning instruction to the preceding user message
-                for j in range(i - 1, -1, -1):
-                    if selected_conversation[j].get("role") == "user":
-                        selected_conversation[j]["content"].append({"type": "text", "text": REASONING_SUFFIX})
-                        break
                 # Wrap reasoning items in <think>...</think> tags
                 reasoning_items = message["reasoning_content"]
                 think_start = [{"type": "text", "text": "<think>\n"}]

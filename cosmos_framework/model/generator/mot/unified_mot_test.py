@@ -41,6 +41,7 @@ import math
 import os
 import subprocess
 from collections.abc import Iterator
+from types import SimpleNamespace
 
 import pytest
 import torch
@@ -55,6 +56,7 @@ from cosmos_framework.model.generator.mot.attention import build_packed_sequence
 from cosmos_framework.model.generator.mot.parallelize_unified_mot import parallelize_unified_mot
 from cosmos_framework.model.generator.mot.unified_mot import (
     LayerTypes,
+    MoTDecoderLayer,
     Nemotron3DenseVLMoTConfig,
     Qwen3VLMoTConfig,
     Qwen3VLTextForCausalLM,
@@ -70,6 +72,7 @@ from cosmos_framework.model.generator.reasoner.nemotron_3_dense_vl.nemotron_3_de
     Nemotron3DenseVLMLP,
     Nemotron3DenseVLRMSNorm,
 )
+from cosmos_framework.model.generator.reasoner.qwen3_vl.configuration_qwen3_vl import Qwen3VLTextConfig
 from cosmos_framework.model.generator.reasoner.qwen3_vl.qwen3_vl import (
     Qwen3VLTextMLP,
     Qwen3VLTextRMSNorm,
@@ -78,12 +81,125 @@ from cosmos_framework.model.generator.reasoner.qwen3_vl_moe.qwen3_vl_moe import 
     Qwen3VLMoeTextMLP,
     Qwen3VLMoeTextRMSNorm,
 )
-from cosmos_framework.data.generator.sequence_packing.runtime import get_gen_seq, get_und_seq
+from cosmos_framework.data.generator.sequence_packing.runtime import (
+    SequencePack,
+    from_und_gen_splits,
+    get_gen_seq,
+    get_und_seq,
+)
 from cosmos_framework.utils.generator.parallelism import ParallelDims
 
 # -----------------------------------------------------------------------------
 # ReasonerKVCache
 # -----------------------------------------------------------------------------
+
+
+@pytest.mark.L0
+@pytest.mark.CPU
+def test_decoder_target_only_path_skips_und_and_control_then_restores_full_layout() -> None:
+    """Target-only Pass 2 runs modules on target rows and scatters them back."""
+    hidden_size = 8
+    head_dim = 4
+    num_und = 3
+    item_len = 4
+    padded_gen_len = 10
+    target_start = item_len
+    target_end = target_start + item_len
+    config = Qwen3VLTextConfig(
+        hidden_size=hidden_size,
+        intermediate_size=16,
+        num_attention_heads=2,
+        num_key_value_heads=2,
+        head_dim=head_dim,
+        num_hidden_layers=1,
+    )
+    layer = MoTDecoderLayer(
+        config,
+        layer_idx=0,
+        layer_types=LayerTypes("qwen3_vl_dense"),
+        qk_norm_for_text=True,
+        qk_norm_for_diffusion=True,
+    )
+
+    class _RecordingTargetAttention(torch.nn.Module):
+        def __init__(self) -> None:
+            super().__init__()
+            self.seen_shapes: tuple[torch.Size, torch.Size] | None = None
+
+        def forward(
+            self,
+            pack: SequencePack,
+            attention_mask: object,
+            packed_position_embeddings: tuple[SequencePack, SequencePack],
+            natten_metadata: dict | None = None,
+            memory_value: object | None = None,
+        ) -> tuple[SequencePack, None]:
+            del attention_mask, natten_metadata, memory_value
+            cos, _sin = packed_position_embeddings
+            self.seen_shapes = (get_und_seq(pack).shape, get_gen_seq(pack).shape)
+            assert get_und_seq(cos).shape[0] == 0
+            assert get_gen_seq(cos).shape[0] == item_len
+            target_attn = 2.0 * get_gen_seq(pack)  # [N_target,hidden_size]
+            empty_und = target_attn.new_empty((0, hidden_size))  # [0,hidden_size]
+            return from_und_gen_splits(empty_und, target_attn, pack), None
+
+    recording_attention = _RecordingTargetAttention()
+    layer.self_attn = recording_attention
+    layer.input_layernorm = torch.nn.Identity()
+    layer.input_layernorm_moe_gen = torch.nn.Identity()
+    layer.post_attention_layernorm = torch.nn.Identity()
+    layer.post_attention_layernorm_moe_gen = torch.nn.Identity()
+    layer.mlp_moe_gen = torch.nn.Identity()
+
+    und = torch.randn(num_und, hidden_size, requires_grad=True)  # [N_und,hidden_size]
+    gen = torch.randn(padded_gen_len, hidden_size, requires_grad=True)  # [N_gen,hidden_size]
+    pack: SequencePack = {
+        "causal_seq": und,
+        "full_only_seq": gen,
+        "is_sharded": False,
+        "sample_offsets": torch.tensor([0, num_und + 2 * item_len], dtype=torch.int32),  # [2]
+        "max_sample_len": num_und + 2 * item_len,
+        "max_causal_len": num_und,
+        "max_full_len": 2 * item_len,
+        "_causal_indices": torch.arange(num_und),  # [N_und]
+        "_full_indices": torch.arange(num_und, num_und + 2 * item_len),  # [2*N_item]
+        "_causal_seq_offsets": torch.tensor([0, num_und], dtype=torch.int32),  # [2]
+        "_full_only_seq_offsets": torch.tensor([0, 2 * item_len], dtype=torch.int32),  # [2]
+        "_causal_sample_ids": torch.zeros(num_und, dtype=torch.long),  # [N_und]
+        "_full_only_sample_ids": torch.zeros(padded_gen_len, dtype=torch.long),  # [N_gen]
+        "_num_causal_tokens": num_und,
+        "_num_full_tokens": 2 * item_len,
+    }
+    cos = torch.ones(num_und, head_dim)  # [N_und,head_dim]
+    gen_cos = torch.ones(padded_gen_len, head_dim)  # [N_gen,head_dim]
+    position_pack = from_und_gen_splits(cos, gen_cos, pack)
+    memory_value = SimpleNamespace(
+        target_only_no_text=True,
+        target_gen_start=target_start,
+        target_gen_length=item_len,
+    )
+
+    output, metadata, kv_to_store = layer(
+        pack,
+        attention_mask=object(),
+        packed_position_embeddings=(position_pack, position_pack),
+        memory_value=memory_value,
+        gen_only=True,
+    )
+    assert metadata == {}
+    assert kv_to_store is None
+    assert recording_attention.seen_shapes == (torch.Size([0, hidden_size]), torch.Size([item_len, hidden_size]))
+    output_gen = get_gen_seq(output)  # [N_gen,hidden_size]
+    torch.testing.assert_close(output_gen[:target_start], torch.zeros_like(output_gen[:target_start]))
+    torch.testing.assert_close(output_gen[target_start:target_end], 6.0 * gen[target_start:target_end])
+    torch.testing.assert_close(output_gen[target_end:], torch.zeros_like(output_gen[target_end:]))
+    torch.testing.assert_close(get_und_seq(output), torch.zeros_like(und))
+
+    output_gen.sum().backward()
+    expected_gen_grad = torch.zeros_like(gen)  # [N_gen,hidden_size]
+    expected_gen_grad[target_start:target_end] = 6.0
+    torch.testing.assert_close(gen.grad, expected_gen_grad)
+    assert und.grad is None
 
 
 @pytest.mark.L0
