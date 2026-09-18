@@ -295,7 +295,10 @@ def build_control_cfg_postprocess(
     control_guidance: float,
     control_guidance_interval: Optional[list[float]] = None,
 ) -> Optional[
-    Callable[..., Optional[Callable[[list[torch.Tensor], list[torch.Tensor], torch.Tensor], list[torch.Tensor]]]]
+    Callable[
+        ...,
+        Optional[Callable[[list[torch.Tensor], list[torch.Tensor], torch.Tensor, float], list[torch.Tensor]]],
+    ]
 ]:
     """Return a ``velocity_postprocess_builder`` that injects control-CFG.
 
@@ -318,7 +321,9 @@ def build_control_cfg_postprocess(
         cond_tokens: list[list[int]],
         sequence_plans: list[SequencePlan],
         gen_data_clean: GenerationDataClean,
-    ) -> Optional[Callable[[list[torch.Tensor], list[torch.Tensor], torch.Tensor], list[torch.Tensor]]]:
+    ) -> Optional[
+        Callable[[list[torch.Tensor], list[torch.Tensor], torch.Tensor, float], list[torch.Tensor]]
+    ]:
         nc_state = _build_no_control_inference_state(sequence_plans, gen_data_clean)
         if nc_state is None:
             log.warning(
@@ -340,6 +345,7 @@ def build_control_cfg_postprocess(
             cond_v_full: list[torch.Tensor],
             noise_x: list[torch.Tensor],
             timestep: torch.Tensor,
+            text_guidance_scale: float,
         ) -> list[torch.Tensor]:
             if control_guidance_bounds is not None:
                 if not (control_guidance_bounds[0] < timestep[0].item() < control_guidance_bounds[1]):
@@ -361,12 +367,21 @@ def build_control_cfg_postprocess(
             # of cond_v_full is already zeroed by the model's velocity mask
             # (control items are fully conditioned), so leave it untouched.
             mixed: list[torch.Tensor] = []
+            # The caller applies text CFG after this hook. Divide the requested
+            # control scale by that outer scale so the final control delta is
+            # ``control_guidance * (v_full - v_no_control)`` rather than being
+            # multiplied by text guidance a second time. A zero text scale
+            # already discards the conditional branch entirely, so retain the
+            # legacy finite scale in that degenerate case.
+            effective_control_guidance = (
+                control_guidance / text_guidance_scale if text_guidance_scale != 0.0 else control_guidance
+            )
             for v_full_i, v_nc_i, c in zip(cond_v_full, cond_v_nc, ctrl_dims, strict=True):
                 suffix_full = v_full_i[c:]  # [N_target]
                 assert suffix_full.shape == v_nc_i.shape, (
                     f"shape mismatch in control-CFG mix: full suffix {suffix_full.shape} vs no-control {v_nc_i.shape}"
                 )
-                mixed_suffix = v_nc_i + control_guidance * (suffix_full - v_nc_i)  # [N_target]
+                mixed_suffix = v_nc_i + effective_control_guidance * (suffix_full - v_nc_i)  # [N_target]
                 mixed.append(torch.cat([v_full_i[:c], mixed_suffix], dim=0))  # [N_full]
             return mixed
 
