@@ -146,6 +146,39 @@ def _inject_lora_inplace(
     return replaced
 
 
+def set_only_lora_trainable(network: torch.nn.Module) -> int:
+    """Make adapter tensors the only trainable parameters and return their count.
+
+    This is deliberately idempotent. VLM initialization calls it immediately
+    before optimizer construction, so a pre-existing freeze configuration can
+    neither re-enable base weights nor freeze the adapters by accident.
+    """
+    trainable_tensors = 0
+    lora_numel = 0
+    frozen_numel = 0
+    for name, param in network.named_parameters():
+        is_lora = ".lora_A." in f".{name}" or ".lora_B." in f".{name}"
+        param.requires_grad_(is_lora)
+        if is_lora:
+            trainable_tensors += 1
+            lora_numel += param.numel()
+        else:
+            frozen_numel += param.numel()
+
+    if trainable_tensors == 0:
+        raise RuntimeError(
+            "LoRA is enabled but no adapter parameters were injected; check "
+            "lora_target_modules and lora_exclude_path_regex against the backbone's module names."
+        )
+
+    log.info(
+        f"LoRA-only training: {trainable_tensors} adapter tensors / {lora_numel:,} parameters trainable, "
+        f"{frozen_numel:,} base parameters frozen "
+        f"({100 * lora_numel / max(1, lora_numel + frozen_numel):.3f}% trainable)"
+    )
+    return trainable_tensors
+
+
 def inject_lora_pre_fsdp(
     network: torch.nn.Module,
     *,
@@ -207,24 +240,10 @@ def inject_lora_pre_fsdp(
         raise RuntimeError(f"Failed to inject LoRA adapters into model: {e}") from e
 
     if replaced == 0:
-        log.warning(f"LoRA injection replaced 0 modules — check lora_target_modules={lora_target_modules!r}")
+        raise RuntimeError(f"LoRA injection replaced 0 modules; check lora_target_modules={lora_target_modules!r}")
 
-    lora_params = 0
-    frozen_params = 0
-    for name, param in network.named_parameters():
-        if "lora_" in name:
-            param.requires_grad_(True)
-            lora_params += param.numel()
-        else:
-            param.requires_grad_(False)
-            frozen_params += param.numel()
-
-    log.info(
-        f"LoRA injection successful: {replaced} modules wrapped, "
-        f"{lora_params:,} trainable LoRA params, "
-        f"{frozen_params:,} frozen base params "
-        f"({100 * lora_params / max(1, lora_params + frozen_params):.3f}% trainable)"
-    )
+    set_only_lora_trainable(network)
+    log.info(f"LoRA injection successful: {replaced} modules wrapped")
     return network
 
 

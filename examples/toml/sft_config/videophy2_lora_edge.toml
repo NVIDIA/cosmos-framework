@@ -6,10 +6,10 @@
 # model_type cosmos3_edge — native HF metadata, no remote code).
 # Base config = cosmos_framework/configs/base/reasoner/config.py (selected by [job].task="vlm").
 #
-# LoRA counterpart of videophy2_sft_edge. Same dataset, dataflow, backbone and
-# freeze config (the SigLIP2 tower is frozen by regex in the experiment, since
-# freeze_vision_encoder=True only supports Qwen/Intern towers); the delta is the
-# adapter injection plus a LoRA-scale LR.
+# LoRA counterpart of videophy2_sft_edge. Same dataset, dataflow and backbone;
+# LoRA mode makes adapter-only trainability authoritative and therefore bypasses
+# the full-FT experiment's freeze config. The remaining deltas are adapter
+# injection plus a LoRA-scale LR.
 #
 # Reasoner weights load DIRECTLY from the nvidia/Cosmos3-Edge snapshot resolved
 # via model_name — no converter step, no required weights env var.
@@ -43,7 +43,7 @@ precision           = "bfloat16"
 #   LLM attention (modeling_cosmos3_edge.py):  self_attn.{q_proj,k_proj,v_proj,o_proj}
 #   SigLIP2 ViT   (vision_siglip2.py):         self_attn.{q_proj,k_proj,v_proj,out_proj}
 # Three of the four names collide, so name matching alone would also adapt the
-# vision tower — which this recipe freezes (frozen_params=["model\.visual\."]).
+# vision tower (all base parameters are frozen automatically in LoRA mode).
 # Adapters landing there is NOT caught by the zero-adapter assertion: they would
 # still be trainable, so the run would look healthy while training the wrong
 # subnetwork. lora_exclude_path_regex keeps them in the LLM.

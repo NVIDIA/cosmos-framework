@@ -172,6 +172,10 @@ LoRA counterparts of the VideoPhy-2 recipes above: same dataset and dataflow, bu
 frozen and only rank-16 adapters on the LLM attention projections train
 (`optimizer.keys_to_select = ["lora_"]`). Optimizer state is adapter-sized rather than
 backbone-sized, which is what lets the 32B Super tier sit comfortably on a 4-GPU allocation.
+On the VLM path, `lora_enabled=true` makes adapter-only trainability authoritative immediately
+before optimizer construction; legacy `model.config.freeze` rules are not applied, so a broad
+`trainable_params=[".*"]` cannot silently turn the run back into a full fine-tune. Injection also
+fails fast if the target/exclusion combination produces no adapters.
 
 Both select the **full-fine-tune** experiment (`[job].experiment = "videophy2_sft_{super,edge}"`) and switch
 LoRA on through TOML overrides — there is no separate LoRA experiment to register.

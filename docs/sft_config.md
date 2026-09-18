@@ -96,6 +96,11 @@ Top-level model knobs. Lands at `model.config.*` on VFM and on VLM; sub-tree pat
 | `lora_exclude_path_regex`      | `""` (disabled)                                                 | Skip any module whose dotted path matches this regex (searched, not fullmatched), applied **after** target matching. Needed when name matching alone cannot separate two towers: Cosmos3-Edge names its LLM projections `q_proj`/`k_proj`/`v_proj`/`o_proj` and its SigLIP2 vision projections `q_proj`/`k_proj`/`v_proj`/`out_proj` — three of four collide, so `"^model\\.visual\\."` is what keeps the adapters out of the frozen vision tower. **VLM only** (VFM's single tower needs no path scoping). |
 | `precision`                    | `"bfloat16"`                                                    | Compute dtype for forward/backward (`MixedPrecisionPolicy.param_dtype`). `"bfloat16"` is standard for Hopper/Blackwell. (Was `[model.parallelism].precision` before the `ParallelismConfig` split.)                                                                                                                                                                                                                                                                                                         |
 
+For VLM, enabling LoRA makes adapter-only `requires_grad` state authoritative immediately before
+optimizer construction. Legacy `model.config.freeze` rules are bypassed on that path, and startup
+fails if no adapter survives target matching and path exclusion. With LoRA disabled (the default),
+the existing freeze path is unchanged.
+
 ### `[model.ema]`
 
 Exponential Moving Average of generation-pathway weights. Lands at `model.config.ema.*` on both VFM and VLM. When enabled, the trainer keeps a second fp32 copy of trainable params updated as `ema_w = (1 - rate^k) · w_curr + rate^k · ema_w_prev`. EMA weights are used for inference; live weights keep training.
