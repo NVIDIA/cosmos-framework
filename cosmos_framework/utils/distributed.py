@@ -36,6 +36,16 @@ if TYPE_CHECKING:
     from cosmos_framework.utils.config import DDPConfig
 
 
+def _set_gpu_cpu_affinity(device: Device) -> None:
+    """Prefer GPU-local CPUs within the process's existing allocation."""
+    allocated_cpus = os.sched_getaffinity(0)
+    preferred_cpus = allocated_cpus.intersection(device.get_cpu_affinity())
+    if preferred_cpus:
+        os.sched_setaffinity(0, preferred_cpus)
+    else:
+        log.warning("No GPU-local CPU is available in the current CPU affinity; retaining the allocated set.")
+
+
 def init(store: dist.Store | None = None, backend: str | None = None) -> int | None:
     """Initialize distributed training.
 
@@ -58,7 +68,7 @@ def init(store: dist.Store | None = None, backend: str | None = None) -> int | N
     local_rank = int(os.getenv("LOCAL_RANK", 0))
     try:
         device = Device(local_rank)
-        os.sched_setaffinity(0, device.get_cpu_affinity())
+        _set_gpu_cpu_affinity(device)
     except pynvml.NVMLError as e:
         log.warning(f"Failed to set device affinity: {e}")
     # Set up distributed communication. CPU checkpoint conversion needs Gloo

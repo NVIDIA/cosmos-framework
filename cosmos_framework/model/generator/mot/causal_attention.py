@@ -9,8 +9,6 @@ types.  The dispatch is installed on each attention layer by
 ``OmniMoTCausalModel.install_attention_dispatch()``.
 """
 
-from collections.abc import Callable
-
 import torch
 from torch.nn.attention.flex_attention import BlockMask
 
@@ -23,13 +21,16 @@ from cosmos_framework.model.attention.masks import CausalType
 from cosmos_framework.model.generator.mot.attention import SplitInfo, two_way_attention
 from cosmos_framework.model.generator.mot.attention import dispatch_attention as vfm_dispatch_attention
 from cosmos_framework.model.generator.mot.flex_attention import FlexBackend, flex_attention
+from cosmos_framework.model.generator.mot.merge_bridge import MergeAttentionsBridge
+from cosmos_framework.model.generator.mot.multiview_attention import multiview_attention
 from cosmos_framework.model.generator.utils.memory import KVToStore, MemoryValue
 from cosmos_framework.data.generator.sequence_packing.runtime import (
     SequencePack,
+    drop_pad_segment,
     from_mode_splits,
     from_und_gen_splits,
+    get_caption_seq_offsets,
     get_causal_seq,
-    get_causal_seq_padded,
     get_full_only_seq,
     get_gen_seq,
 )
@@ -41,105 +42,6 @@ from cosmos_framework.model.generator.utils.kv_cache import (
     TFNoisyMemoryValue,
     TFReplayCleanMemoryValue,
 )
-
-BridgeFn = Callable[[torch.Tensor, torch.Tensor], tuple[torch.Tensor, torch.Tensor]]
-
-
-class MergeAttentionsBridge(torch.autograd.Function):
-    """Autograd bridge that preserves ``merge_attentions``' data-pointer
-    contract across an arbitrary invertible shape-changing op.
-
-    ``merge_attentions`` (NATTEN's ``MergeAttentionsAutogradFn``, see
-    ``data_local/attn_merge.py``) implements its backward via a hack:
-    instead of computing real gradients w.r.t. its inputs, it writes the
-    *merged* output and LSE back into each input tensor's storage via
-    ``.data.copy_()`` and returns the upstream gradient unchanged.  The
-    attention kernel that produced the input then reads the patched
-    storage as its saved ``O`` / ``LSE`` during its own backward, and its
-    standard backward formula then computes the gradient *as if* the
-    kernel had produced the merged output.
-
-    This contract is broken whenever a tensor-allocating op (e.g.
-    ``torch.cat`` to insert a zero-padded frame 0) sits between the
-    attention kernel and ``merge_attentions``: the op's result has its
-    own storage, so ``merge_attentions``' ``.data.copy_()`` patches the
-    op's output storage, not the kernel's saved output → the kernel's
-    backward then runs against unpatched data and produces gradients
-    that don't account for the merge.
-
-    This Function rebridges the contract across any invertible action
-    on the inner ``(out, lse)`` pair.  The action is supplied as two
-    callables:
-
-    - ``forward_fn(out_inner, lse_inner) -> (out_full, lse_full)``: the
-      invertible action applied in the forward pass (e.g. cat-pad a
-      frame, permute, scatter, …).  ``out_full`` / ``lse_full`` are the
-      tensors that ``merge_attentions`` will receive (and later patch in
-      its backward).
-    - ``inverse_fn(out_full, lse_full) -> (out_inner, lse_inner)``: the
-      exact inverse — undoes ``forward_fn`` so that ``inverse_fn ∘
-      forward_fn`` is the identity on the inner tensors.
-
-    For ``forward_fn`` that is linear with constant-fill (cat-pad,
-    permutation, scatter with zeros, …), the *gradient* w.r.t. the
-    inner input is also ``inverse_fn`` applied to the upstream gradient
-    — so the same callable serves both backward roles below.  If your
-    forward is not in this class (e.g. it has trainable parameters, or
-    is non-linear), do not use this bridge.
-
-    Backward:
-      Runs *after* ``merge_attentions``' backward (autograd is
-      reverse-order), at which point the outer tensors have already
-      been patched.  We then apply ``inverse_fn`` to the patched outer
-      data and ``.data.copy_()`` it into the inner kernel's saved
-      output / LSE storage.  When the inner kernel's backward runs
-      next, it reads the patched data and produces gradients relative
-      to the merged attention.  We also return ``inverse_fn`` of the
-      upstream gradient as the gradient w.r.t. the inner inputs.
-    """
-
-    @staticmethod
-    def forward(
-        ctx,
-        out_inner: torch.Tensor,
-        lse_inner: torch.Tensor,
-        forward_fn: BridgeFn,
-        inverse_fn: BridgeFn,
-    ) -> tuple[torch.Tensor, torch.Tensor]:
-        out_full, lse_full = forward_fn(out_inner, lse_inner)
-        out_full = out_full.contiguous()
-        lse_full = lse_full.contiguous()
-        # Save BOTH the inner kernel outputs (target of the .data.copy_ back)
-        # AND the outer tensors (source of the patched data, as patched
-        # by merge_attentions.backward before our backward runs).
-        ctx.save_for_backward(out_inner, lse_inner, out_full, lse_full)
-        ctx.inverse_fn = inverse_fn
-        return out_full, lse_full
-
-    @staticmethod
-    def backward(
-        ctx,
-        grad_out_full: torch.Tensor,
-        grad_lse_full: torch.Tensor,
-    ) -> tuple[torch.Tensor, torch.Tensor, None, None]:
-        out_inner, lse_inner, out_full, lse_full = ctx.saved_tensors
-        inverse_fn: BridgeFn = ctx.inverse_fn
-        # By now merge_attentions.backward has already run and patched
-        # out_full.data / lse_full.data with the merged output / LSE.
-        # Apply inverse_fn to recover the data corresponding to the inner
-        # attention's range and write it into the inner kernel's saved
-        # output / LSE so the kernel's backward (which runs after ours)
-        # reads the merged data.
-        patched_out_inner, patched_lse_inner = inverse_fn(out_full, lse_full)
-        out_inner.data.copy_(patched_out_inner.data)
-        lse_inner.data.copy_(patched_lse_inner.data)
-        # For linear-with-constant-fill forward_fn (cat-pad, permute,
-        # scatter-with-zeros, …), the backward gradient operator equals
-        # inverse_fn.  (Constant rows added by forward_fn are not
-        # functions of the inner inputs, so their gradient does not flow
-        # back; the remaining rows pass through.)
-        grad_out_inner, grad_lse_inner = inverse_fn(grad_out_full, grad_lse_full)
-        return grad_out_inner, grad_lse_inner, None, None
 
 
 def _bridge_lse_with_neg_inf_mask(
@@ -328,7 +230,10 @@ def three_way_attention_no_memory_ac_safe(
 
     if attention_meta is not None and attention_meta.null_action_supertokens:
         full_v = full_v.clone()  # [N_gen,H_kv,D]
-        starts = full_q_offsets[:-1].long()  # [B]
+        # Real-sample offsets: full_q_offsets carries the padding as a trailing segment, whose
+        # start is not a sample's. Stepping num_action_tokens_per_supertoken forward from it can
+        # run past the end of full_v, since the pad segment is only guaranteed non-empty.
+        starts = drop_pad_segment(packed_query_states, full_q_offsets)[:-1].long()  # [B]
         null_positions = (
             starts.unsqueeze(1) + torch.arange(attention_meta.num_action_tokens_per_supertoken, device=starts.device)
         ).reshape(-1)  # [B*N_null]
@@ -413,13 +318,22 @@ def dispatch_attention_no_memory_ac_safe(
             packed_key_states_normalized=packed_key_states_normalized,
         )
     if isinstance(attention_mask, SplitInfo):
+        # A mask means the multiview pathway, whose UND half is shared with the maskless folds
+        # and so lives with them rather than in ``two_way_attention``.
+        if attention_mask.flex_block_mask is not None:
+            return multiview_attention(
+                packed_query_states,
+                packed_key_states,
+                packed_value_states,
+                flex_block_mask=attention_mask.flex_block_mask,
+                flex_backend=attention_mask.flex_backend,
+                packed_key_states_normalized=packed_key_states_normalized,
+            )
         return two_way_attention(
             packed_query_states,
             packed_key_states,
             packed_value_states,
             packed_key_states_normalized=packed_key_states_normalized,
-            flex_block_mask=attention_mask.flex_block_mask,
-            flex_backend=attention_mask.flex_backend,
         )
     output, _ = vfm_dispatch_attention(
         packed_query_states,
@@ -450,10 +364,19 @@ def two_way_flex_attention_with_memory(
     packed_key_normalized = (
         packed_key_states_normalized if packed_key_states_normalized is not None else packed_key_states
     )
-    causal_q, causal_q_offsets, max_causal_len = get_causal_seq_padded(packed_query_states)  # [N_und,H,D], [B+1 or B+2]
-    causal_k, causal_k_offsets, _ = get_causal_seq_padded(packed_key_states)  # [N_und,H,D], [B+1 or B+2]
-    causal_v, _, _ = get_causal_seq_padded(packed_value_states)  # [N_und,H,D], [B+1 or B+2]
+    causal_q, causal_q_offsets = get_causal_seq(packed_query_states)  # [N_und,H,D], [B+1 or B+2]
+    causal_k, causal_k_offsets = get_causal_seq(packed_key_states)  # [N_und,H,D], [B+1 or B+2]
+    causal_v, _ = get_causal_seq(packed_value_states)  # [N_und,H,D], [B+1 or B+2]
+    max_causal_len = packed_query_states["max_causal_len"]
     full_q, _ = get_full_only_seq(packed_query_states)  # [N_gen,H,D], [B+1]
+
+    # TF/AR memory changes GEN visibility, but captions remain independent causal
+    # documents. Reuse the same caption-offset tensor for Q/K to preserve the
+    # base attention path's DontCare identity contract and trailing pad segment.
+    caption_offsets = get_caption_seq_offsets(packed_query_states)
+    if caption_offsets is not None:
+        causal_q_offsets, max_causal_len = caption_offsets  # [N_captions+1], int
+        causal_k_offsets = causal_q_offsets  # [N_captions+1]
 
     use_dont_care_mask = causal_q_offsets is causal_k_offsets
     causal_res = attention(
@@ -1707,6 +1630,91 @@ def attention_AR_gen_only(
     q_gen = get_gen_seq(packed_query_states)  # [S_curr, H, D]
     k_gen = get_gen_seq(packed_key_states)  # [S_curr, H_kv, D]
     v_gen = get_gen_seq(packed_value_states)  # [S_curr, H_kv, D]
+
+    if memory_value.batch_size > 1:
+        if memory_value.for_cuda_graphs or memory_value.post_saturation_static_compile:
+            raise ValueError("Batched AR attention supports only the eager dynamic-shape path")
+        if len(memory_value.gen_lens) != memory_value.batch_size:
+            raise ValueError(f"Expected {memory_value.batch_size} generation lengths, got {memory_value.gen_lens}")
+        if len(memory_value.und_lens) != memory_value.batch_size:
+            raise ValueError(f"Expected {memory_value.batch_size} understanding lengths, got {memory_value.und_lens}")
+
+        total_gen_len = sum(memory_value.gen_lens)
+        q_gen_real = q_gen[:total_gen_len]  # [N_q,H,D]
+        k_gen_real = k_gen[:total_gen_len]  # [N_q,H_kv,D]
+        v_gen_real = v_gen[:total_gen_len]  # [N_q,H_kv,D]
+        k_samples = list(torch.split(k_gen_real, memory_value.gen_lens, dim=0))  # list of [S_q_i,H_kv,D]
+        v_samples = list(torch.split(v_gen_real, memory_value.gen_lens, dim=0))  # list of [S_q_i,H_kv,D]
+
+        history_len = 0 if memory_value.gen_k_hist is None else memory_value.gen_k_hist.shape[1]
+        kv_lens = [
+            memory_value.und_lens[sample_idx] + history_len + memory_value.gen_lens[sample_idx]
+            for sample_idx in range(memory_value.batch_size)
+        ]
+        packed_k_flat = k_gen_real.new_empty((sum(kv_lens), *k_gen_real.shape[1:]))  # [N_kv,H_kv,D]
+        packed_v_flat = v_gen_real.new_empty((sum(kv_lens), *v_gen_real.shape[1:]))  # [N_kv,H_kv,D]
+        write_offset = 0
+        for sample_idx in range(memory_value.batch_size):
+            if memory_value.und_k_cached is not None:
+                assert memory_value.und_v_cached is not None
+                und_len = memory_value.und_lens[sample_idx]
+                packed_k_flat[write_offset : write_offset + und_len].copy_(
+                    memory_value.und_k_cached[sample_idx, :und_len]
+                )  # [S_und_i,H_kv,D]
+                packed_v_flat[write_offset : write_offset + und_len].copy_(
+                    memory_value.und_v_cached[sample_idx, :und_len]
+                )  # [S_und_i,H_kv,D]
+                write_offset += und_len
+            if memory_value.gen_k_hist is not None:
+                assert memory_value.gen_v_hist is not None
+                packed_k_flat[write_offset : write_offset + history_len].copy_(
+                    memory_value.gen_k_hist[sample_idx]
+                )  # [S_hist,H_kv,D]
+                packed_v_flat[write_offset : write_offset + history_len].copy_(
+                    memory_value.gen_v_hist[sample_idx]
+                )  # [S_hist,H_kv,D]
+                write_offset += history_len
+            current_len = memory_value.gen_lens[sample_idx]
+            packed_k_flat[write_offset : write_offset + current_len].copy_(k_samples[sample_idx])  # [S_q_i,H_kv,D]
+            packed_v_flat[write_offset : write_offset + current_len].copy_(v_samples[sample_idx])  # [S_q_i,H_kv,D]
+            write_offset += current_len
+        if write_offset != sum(kv_lens):
+            raise AssertionError(f"Packed {write_offset} K/V tokens, expected {sum(kv_lens)}")
+
+        packed_k = packed_k_flat.unsqueeze(0)  # [1,N_kv,H_kv,D]
+        packed_v = packed_v_flat.unsqueeze(0)  # [1,N_kv,H_kv,D]
+        q_offsets = [0]
+        kv_offsets = [0]
+        for q_len, kv_len in zip(memory_value.gen_lens, kv_lens, strict=True):
+            q_offsets.append(q_offsets[-1] + q_len)
+            kv_offsets.append(kv_offsets[-1] + kv_len)
+        cu_seqlens_q = torch.tensor(q_offsets, device=q_gen.device, dtype=torch.int32)  # [B+1]
+        cu_seqlens_kv = torch.tensor(kv_offsets, device=q_gen.device, dtype=torch.int32)  # [B+1]
+        attn_result = attention(
+            query=q_gen_real.unsqueeze(0),  # [1,N_q,H,D]
+            key=packed_k,
+            value=packed_v,
+            cumulative_seqlen_Q=cu_seqlens_q,
+            cumulative_seqlen_KV=cu_seqlens_kv,
+            max_seqlen_Q=max(memory_value.gen_lens),
+            max_seqlen_KV=max(kv_lens),
+            is_causal=False,
+            return_lse=False,
+            backend="natten",
+        )  # [1,N_q,H,D]
+        assert isinstance(attn_result, torch.Tensor)
+        gen_out_real = attn_result.squeeze(0).flatten(-2, -1)  # [N_q,H*D]
+        if q_gen.shape[0] == total_gen_len:
+            gen_out = gen_out_real  # [N_q,H*D]
+        else:
+            gen_out = q_gen.new_zeros((q_gen.shape[0], gen_out_real.shape[-1]))  # [N_q_padded,H*D]
+            gen_out[:total_gen_len] = gen_out_real  # [N_q,H*D]
+        output = from_und_gen_splits(
+            gen_out.new_empty(0, gen_out.shape[-1]),
+            gen_out,
+            packed_query_states,
+        )
+        return output, None
 
     gen_len = memory_value.gen_len
     k_gen_real = k_gen[:gen_len]  # [S_gen_real, H_kv, D]

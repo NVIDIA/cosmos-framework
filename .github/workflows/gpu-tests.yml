@@ -341,19 +341,37 @@ jobs:
       - name: Sync environment (cu128-train)
         run: uv sync --all-extras --group=cu128-train
 
-      # Run the whole co-located suite (CPU + GPU). Tests that load internal
+      # Run the whole co-located suite (CPU + GPU) at level 0. Tests that load internal
       # pretrained weights from S3 skip themselves when credentials/pretrained.secret
       # is absent (via RunIf / pytest.skip guards), so this is green without
       # internal credentials; provide the credential file on the runner to
-      # exercise them. New tests are picked up automatically (no markers/lists).
+      # exercise them. New tests are picked up automatically (no lists to maintain).
       # Cache downloaded input assets in a persistent dir (outside the repo tree,
       # so the cleanup step keeps it) and reuse it across runs.
+      #
+      # ``-m "not L1 and not L2"`` mirrors upstream: this suite arrives from i4 through
+      # .file_mapping.json, its level markers are i4's, and i4's own CI runs it with
+      # ``--L0``. Level 1 is where it puts the cases sized to production geometry --
+      # hundreds of thousands of tokens, tens of GB of activations, minutes apiece --
+      # which are written against that runner (whole GPUs per xdist worker, its NATTEN
+      # build, its 60s per-test timeout) rather than against this one. Running them here
+      # tests this environment more than it tests the code.
+      #
+      # Phrased as a pair of exclusions rather than as "L0", and deliberately not identical
+      # to upstream here: i4's conftest skips a test carrying no level marker at all, which
+      # would take 30 of this repo's own test files -- scripts/, inference/, inference2/,
+      # none of them upstream's to mark -- out of CI. Excluding L1 and L2 by name keeps
+      # them. L2 is named although nothing here carries it yet, since the levels arrive
+      # with the files and the first L2 case would otherwise run here and nowhere else.
+      #
+      # The cost of the filter is that an L1 or L2 case is executed in neither repo, so a
+      # defect in one surfaces only when someone runs it by hand.
       - name: Unit tests
         run: |
           export LD_LIBRARY_PATH=
           export COSMOS_DOWNLOAD_CACHE_DIR="$RUNNER_WORKSPACE/cosmos_input_cache"
           uv run --all-extras --group=cu128-train python -m pytest -v -s \
-            cosmos_framework/ -o addopts= \
+            cosmos_framework/ -o addopts= -m "not L1 and not L2" \
             --deselect cosmos_framework/model/generator/mot/attention_test.py::test_two_way_attention_flex_matches_dense_across_batch_shapes
 
       # Deselected above and run here instead, in a process of its own.
@@ -390,7 +408,7 @@ jobs:
             exit 0
           fi
           uv run --all-extras --group=cu128-train python -m pytest -v -s \
-            "$test_file::$test_name" -o addopts=
+            "$test_file::$test_name" -o addopts= -m "not L1 and not L2"
 
       # The cfgp_ar / context_parallel tests call dist.init_process_group and
       # skip under plain pytest (world_size 1); they must be launched with
@@ -404,13 +422,13 @@ jobs:
         run: |
           export LD_LIBRARY_PATH=
           uv run --all-extras --group=cu128-train torchrun --nproc_per_node=2 -m pytest -v \
-            cosmos_framework/model/generator/mot/cfgp_ar_test.py -o addopts=
+            cosmos_framework/model/generator/mot/cfgp_ar_test.py -o addopts= -m "not L1 and not L2"
 
       - name: Distributed unit tests - context_parallel (torchrun, 4 ranks)
         run: |
           export LD_LIBRARY_PATH=
           uv run --all-extras --group=cu128-train torchrun --nproc_per_node=4 -m pytest -v \
-            cosmos_framework/model/generator/mot/context_parallel_test.py -o addopts=
+            cosmos_framework/model/generator/mot/context_parallel_test.py -o addopts= -m "not L1 and not L2"
 
       # Clear everything the suite writes into the working tree (all gitignored
       # scratch): pytest tmp dirs (DCP checkpoint, logs), the script-test

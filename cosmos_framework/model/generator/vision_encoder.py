@@ -63,7 +63,7 @@ def get_vae_pixel_shapes(
 
 
 def normalize_uint8_item(state: torch.Tensor, fp32_kwargs: dict[str, Any]) -> torch.Tensor:
-    """Convert one GPU-resident uint8 vision item to fp32 and normalize to ``[-1,1]``.
+    """Move one uint8 vision item to the requested device as fp32 and normalize it to ``[-1,1]``.
 
     A module function rather than a method because both encode paths need it: the local
     per-item encode on ``OmniMoTModel``, and the unit building here.
@@ -73,17 +73,6 @@ def normalize_uint8_item(state: torch.Tensor, fp32_kwargs: dict[str, Any]) -> to
     normalized_state = state.to(**fp32_kwargs)  # [...,C,T,H,W]
     normalized_state.div_(127.5).sub_(1.0)  # [...,C,T,H,W]
     return normalized_state
-
-
-def validate_multiview_length(state: torch.Tensor, *, num_views: int, frames_per_view: int) -> None:
-    """Check a camera-major multiview item packs exactly ``num_views`` clips along its T axis."""
-    actual_frames = int(state.shape[state.ndim - 3])
-    expected_frames = num_views * frames_per_view
-    if actual_frames != expected_frames:
-        raise ValueError(
-            "Multiview vision length must equal num_views * frames_per_view: "
-            f"got T={actual_frames}, num_views={num_views}, frames_per_view={frames_per_view}."
-        )
 
 
 def regroup_vision_latents(
@@ -162,36 +151,39 @@ class VisionEncoder:
         self,
         raw_state_vision: list[torch.Tensor],
         num_views_per_vision_item: list[int],
-        frames_per_vision_item: list[int | None],
     ) -> list[VisionEncodeUnit]:
         """Split vision items into the individual encode calls they require.
 
-        Mirrors ``OmniMoTModel._encode_vision_item``'s own structure: a plain item
-        contributes its tensor unchanged, and a multiview item contributes one normalized
-        camera view each.
+        Mirrors ``OmniMoTModel._encode_vision_item``'s own structure: each item contributes
+        one unit per camera view, uint8 pixels normalized to ``[-1,1]``. A single-view item
+        contributes one unit whose tensor is a full-extent (no-op) narrow of the original.
 
         Views are normalized here rather than one-at-a-time during encoding because a unit
         may be shipped to a peer rank to encode, so it has to hold a real tensor rather than
         a promise. That trades :meth:`encode_item`'s peak-memory behaviour (which materializes
         a single normalized view at a time) for the ability to balance multiview work at all;
         it applies only when balancing is on.
+
+        ``num_views_per_vision_item`` is trusted as-is: callers derive it from
+        ``OmniMoTModel._validate_and_get_num_views``, which has already checked each entry is
+        positive and divides its item's frame count evenly.
         """
         units: list[VisionEncodeUnit] = []
-        for item_index, (state, num_views, frames_per_view) in enumerate(
-            zip(raw_state_vision, num_views_per_vision_item, frames_per_vision_item, strict=True)
-        ):
-            if frames_per_view is None:
-                if num_views != 1:
-                    raise ValueError("frames_per_view is required when num_views is greater than one.")
-                units.append(VisionEncodeUnit(item_index=item_index, tensor=state))
-                continue
-
+        for item_index, (state, num_views) in enumerate(zip(raw_state_vision, num_views_per_vision_item, strict=True)):
             temporal_dim = state.ndim - 3
-            validate_multiview_length(state, num_views=num_views, frames_per_view=frames_per_view)
+            num_frames = int(state.shape[temporal_dim])
+            frames_per_view = num_frames // num_views
             for view_idx in range(num_views):
                 view_state = state.narrow(temporal_dim, view_idx * frames_per_view, frames_per_view)
                 units.append(
-                    VisionEncodeUnit(item_index=item_index, tensor=normalize_uint8_item(view_state, self._fp32_kwargs))
+                    VisionEncodeUnit(
+                        item_index=item_index,
+                        tensor=(
+                            view_state
+                            if torch.is_floating_point(view_state)
+                            else normalize_uint8_item(view_state, self._fp32_kwargs)
+                        ),
+                    )
                 )
         return units
 
@@ -199,7 +191,6 @@ class VisionEncoder:
         self,
         raw_state_vision: list[torch.Tensor],
         num_views_per_vision_item: list[int],
-        frames_per_vision_item: list[int | None],
     ) -> list[torch.Tensor]:
         """Encode every vision item with the work spread across the ``lb`` group.
 
@@ -212,7 +203,7 @@ class VisionEncoder:
         Callers must check :meth:`balancing_available` first -- this enters collectives
         unconditionally, which is what keeps every rank of the group in step.
         """
-        units = self._build_units(raw_state_vision, num_views_per_vision_item, frames_per_vision_item)
+        units = self._build_units(raw_state_vision, num_views_per_vision_item)
         unit_tensors = [unit.tensor for unit in units]
         latents = offload_encode(
             local_tensors=unit_tensors,

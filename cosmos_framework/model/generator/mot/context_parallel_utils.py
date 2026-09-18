@@ -36,7 +36,8 @@ from typing import Any, Callable
 import torch
 import torch.distributed as dist
 from torch.distributed.device_mesh import DeviceMesh
-from torch.distributed.tensor import DTensor, Replicate, Shard
+from torch.distributed.tensor import DTensor, Partial, Replicate, Shard
+from torch.fx.experimental.symbolic_shapes import guard_or_false
 
 from cosmos_framework.utils import distributed
 from cosmos_framework.model.generator.mot.attention import SplitInfo
@@ -44,9 +45,7 @@ from cosmos_framework.model.generator.utils.memory import KVToStore, MemoryValue
 from cosmos_framework.data.generator.sequence_packing.runtime import (
     SequencePack,
     from_mode_splits,
-    get_all_seq,
-    get_causal_seq,
-    get_full_only_seq,
+    get_all_seq_unpadded,
     get_gen_position_ids,
     get_gen_seq,
     get_und_position_ids,
@@ -122,7 +121,6 @@ def broadcast_context_parallel_object(
 
 
 def get_context_parallel_sharded_sequence(
-    attn_implementation: str,
     input_pack: SequencePack,
     position_ids: torch.Tensor,
     parallel_dims: ParallelDims | None,
@@ -133,10 +131,6 @@ def get_context_parallel_sharded_sequence(
     if parallel_dims is None or not parallel_dims.cp_enabled:
         return input_pack, position_ids
 
-    assert attn_implementation in ("two_way", "three_way"), (
-        f"Context parallel is only supported for two_way and three_way joint attention modes, "
-        f"got {attn_implementation!r}"
-    )
     cp_mesh = parallel_dims.cp_mesh
     cp_group = cp_mesh.get_group()
     rank = dist.get_rank(cp_group)
@@ -147,13 +141,24 @@ def get_context_parallel_sharded_sequence(
     assert text_seq.shape[0] % world_size == 0, "text_seq.shape[0] must be divisible by world_size"
     assert gen_seq.shape[0] % world_size == 0, "gen_seq.shape[0] must be divisible by world_size"
 
+    # The two hidden-state streams are cloned rather than left as views. Narrowing dim 0 of a
+    # contiguous tensor yields a tensor that is still contiguous, so the shard would alias the full
+    # padded stream and keep it alive as its base for as long as the shard lives -- which is the
+    # whole transformer stack, since this pack is what the stack runs on. Sharding to 1/cp would
+    # then cost the caller nothing in residency, which defeats the point. ``.contiguous()`` cannot
+    # express this: it is a no-op on an already-contiguous narrow. The copy is 1/cp of the stream,
+    # paid once per forward, against the full stream freed for the stack's duration.
+    #
+    # Only these two are worth it. The sample-id and position-id shards below stay views: their
+    # bases are a couple of int64 rows per token rather than ``hidden_size`` of them, so what they
+    # pin is measured in tens of megabytes.
     text_len = text_seq.shape[0]
     text_shard_len = text_len // world_size
-    text_shard = text_seq.narrow(0, rank * text_shard_len, text_shard_len)
+    text_shard = text_seq.narrow(0, rank * text_shard_len, text_shard_len).clone()
 
     gen_len = gen_seq.shape[0]
     gen_shard_len = gen_len // world_size
-    gen_shard = gen_seq.narrow(0, rank * gen_shard_len, gen_shard_len)
+    gen_shard = gen_seq.narrow(0, rank * gen_shard_len, gen_shard_len).clone()
 
     # SequencePack keeps all per-token metadata aligned with its padded streams.
     text_sample_ids = input_pack["_causal_sample_ids"]  # [text_len]
@@ -203,9 +208,11 @@ def get_context_parallel_sharded_sequence(
 def get_context_parallel_last_hidden_state(
     packed_outputs: SequencePack,
     parallel_dims: ParallelDims | None,
-) -> torch.Tensor:
+    *,
+    correct_cp_gradients: bool = False,
+) -> torch.Tensor:  # packed_outputs streams: [N_local,hidden_size], returns: [N,hidden_size]
     if parallel_dims is None or not parallel_dims.cp_enabled:
-        return get_all_seq(packed_outputs)
+        return get_all_seq_unpadded(packed_outputs)
 
     # since unpatchify assumes full images, for now using all_gather to gather the predictions from all context parallel ranks
     # This step can be removed once we make unpatchify work with context parallel local sequences
@@ -213,14 +220,14 @@ def get_context_parallel_last_hidden_state(
     gen_hidden_seq = get_gen_seq(packed_outputs)  # [gen_shard_len,hidden_size]
 
     gathered_und_seq = all_gather_tensor(
-        und_hidden_seq, gather_dim=0, cp_mesh=parallel_dims.cp_mesh
+        und_hidden_seq, gather_dim=0, cp_mesh=parallel_dims.cp_mesh, correct_cp_gradients=correct_cp_gradients
     )  # [text_len,hidden_size]
     gathered_gen_seq = all_gather_tensor(
-        gen_hidden_seq, gather_dim=0, cp_mesh=parallel_dims.cp_mesh
+        gen_hidden_seq, gather_dim=0, cp_mesh=parallel_dims.cp_mesh, correct_cp_gradients=correct_cp_gradients
     )  # [gen_len,hidden_size]
 
     gathered_hidden_pack = from_mode_splits(gathered_und_seq, gathered_gen_seq, packed_outputs, is_sharded=False)
-    last_hidden_state = get_all_seq(gathered_hidden_pack)
+    last_hidden_state = get_all_seq_unpadded(gathered_hidden_pack)
     return last_hidden_state
 
 
@@ -235,6 +242,27 @@ def all_to_all_tensor(
     Input placement: Shard(gather_dim) -> The dimension we are about to gather was split.
     Output placement: Shard(scatter_dim) -> The dimension we are about to scatter will be split.
     """
+    # Both the wrap and the redistribute below decide how to split a dimension across the mesh, and
+    # each decision includes asking whether that dimension is empty. One of the two is the sequence
+    # dimension, which ``_mark_pack_unbacked`` has made unbacked -- ``gather_seq_scatter_heads``
+    # gathers it, this shape's ``gather_dim``, and ``gather_heads_scatter_seq`` scatters it, the
+    # ``scatter_dim``. The question then has no answer and Dynamo raises rather than guarding. The
+    # other of the two is the head dimension, whose size is static, so its own question answers
+    # itself; covering both keeps this correct whichever direction the caller asked for.
+    #
+    # Asserted only where the length is *not* already known to be zero, because zero is a real
+    # length here: AR inference with a KV cache skips the und tokens and hands this an empty
+    # causal stream (see the note in ``context_parallel_attention``), and an unconditional
+    # ``!= 0`` would refuse the gen-only frames outright. Such a stream is concretely empty rather
+    # than symbolic -- ``_mark_pack_unbacked`` declines to mark a length of 0 or 1 -- so
+    # ``guard_or_false`` resolves it statically and skips, leaving that path exactly as it was.
+    # What remains asserted is the unbacked case, where the length is at least 2 for the same
+    # reason, which is the case the compiler cannot settle for itself.
+    for dim in (scatter_dim, gather_dim):
+        size = local_input.shape[dim]
+        if not guard_or_false(size == 0):
+            torch._check(size != 0)
+
     # Wrap local tensor as DTensor with current placement
     # gather_dim is the dimension that is currently sharded locally (so we can gather it to full)
     global_dt = DTensor.from_local(local_input, cp_mesh, [Shard(gather_dim)], run_check=False)
@@ -250,20 +278,24 @@ def all_gather_tensor(
     local_input: torch.Tensor,
     gather_dim: int,
     cp_mesh: "DeviceMesh",
-) -> torch.Tensor:
+    *,
+    correct_cp_gradients: bool = False,
+) -> torch.Tensor:  # local_input: [*local_shape], returns: [*global_shape]
     """
     All-gather via DTensor redistribute.
     Input placement: Shard(gather_dim) -> The dimension we are about to gather was split.
     Output placement: Replicate() -> Full copy on each rank.
+
+    correct_cp_gradients compensates for FSDP/DDP averaging without scaling downstream head gradients.
     """
     # Wrap local tensor as DTensor with current placement
-    global_dt = DTensor.from_local(local_input, cp_mesh, [Shard(gather_dim)], run_check=False)
+    global_dt = DTensor.from_local(local_input, cp_mesh, [Shard(gather_dim)], run_check=False)  # [*global_shape]
 
     # Redistribute to new placement (Replicate)
-    new_dt = global_dt.redistribute(cp_mesh, [Replicate()])
+    new_dt = global_dt.redistribute(cp_mesh, [Replicate()])  # [*global_shape]
 
-    # Convert back to local
-    return new_dt.to_local()
+    # Convert back to local; Partial sums gradients in backward, while None preserves legacy slicing.
+    return new_dt.to_local(grad_placements=[Partial()] if correct_cp_gradients else None)  # [*global_shape]
 
 
 def gather_seq_scatter_heads(
@@ -363,12 +395,15 @@ def context_parallel_attention(
     cp_group = cp_mesh.get_group()
     cp_world_size = torch.distributed.get_world_size(cp_group)
     assert cp_world_size > 1, "Context parallel world size must be greater than 1"
-    q_und_seq, _ = get_causal_seq(packed_query_states)  # [text_shard_len,H,head_dim]
-    q_gen_seq, _ = get_full_only_seq(packed_query_states)  # [gen_shard_len,H,head_dim]
-    k_und_seq, _ = get_causal_seq(packed_key_states)  # [text_shard_len,H,head_dim]
-    k_gen_seq, _ = get_full_only_seq(packed_key_states)  # [gen_shard_len,H,head_dim]
-    v_und_seq, _ = get_causal_seq(packed_value_states)  # [text_shard_len,H,head_dim]
-    v_gen_seq, _ = get_full_only_seq(packed_value_states)  # [gen_shard_len,H,head_dim]
+    # The streams only. These packs are context parallel local shards, and the tower offsets
+    # ``get_causal_seq`` would hand out alongside them describe the unsharded stream they were cut
+    # from. Nothing below wants them: this pass rebuilds its own ranges from the gathered lengths.
+    q_und_seq = packed_query_states["causal_seq"]  # [text_shard_len,H,head_dim]
+    q_gen_seq = packed_query_states["full_only_seq"]  # [gen_shard_len,H,head_dim]
+    k_und_seq = packed_key_states["causal_seq"]  # [text_shard_len,H,head_dim]
+    k_gen_seq = packed_key_states["full_only_seq"]  # [gen_shard_len,H,head_dim]
+    v_und_seq = packed_value_states["causal_seq"]  # [text_shard_len,H,head_dim]
+    v_gen_seq = packed_value_states["full_only_seq"]  # [gen_shard_len,H,head_dim]
 
     # The head counts are fixed by the model config, and PackedAttentionMoT is marked static so they
     # stay concrete under torch.compile with dynamic shapes. That matters here because the all-to-all
@@ -438,6 +473,13 @@ def context_parallel_attention(
     if memory_value is not None:
         und_len = packed_key_states["_num_causal_tokens"]
         gen_len = packed_key_states["_num_full_tokens"]
+        # Concrete real-token counts off the metadata, sliced out of gathered streams whose lengths
+        # are unbacked -- so the same clamp question as the trim below, and the same answer: the
+        # gathered stream carries every real token plus whatever padding, never fewer.
+        torch._check(und_len <= k_und_seq.shape[0])
+        torch._check(gen_len <= k_gen_seq.shape[0])
+        torch._check(und_len <= v_und_seq.shape[0])
+        torch._check(gen_len <= v_gen_seq.shape[0])
         kv_to_store = (
             k_gen_seq[:gen_len].unsqueeze(0),
             v_gen_seq[:gen_len].unsqueeze(0),
@@ -457,7 +499,7 @@ def context_parallel_attention(
     # gathered above), so no second all-to-all is needed for it.
     packed_key_states_normalized_: SequencePack | None = None
     if packed_key_states_normalized is not None:
-        k_und_normalized_seq, _ = get_causal_seq(packed_key_states_normalized)  # [text_shard_len,H_kv,head_dim]
+        k_und_normalized_seq = packed_key_states_normalized["causal_seq"]  # [text_shard_len,H_kv,head_dim]
         if kv_head_repeats > 1:
             k_und_normalized_seq = _repeat_kv_heads_for_cp(k_und_normalized_seq, kv_head_repeats)
         k_und_normalized_seq = gather_seq_scatter_heads(
@@ -478,6 +520,12 @@ def context_parallel_attention(
 
     attn_output_und_hp = get_und_seq(attn_output_pack_hp)  # [text_len,H_local,head_dim]
     attn_output_gen_hp = get_gen_seq(attn_output_pack_hp)  # [gen_len,H_local,head_dim]
+
+    # Trimming back to the query lengths, which is a slice whose bound and whose tensor are both
+    # unbacked once ``_mark_pack_unbacked`` has run: the bound is the gathered query length read
+    # above, the tensor is whatever the attention returned for that tower.
+    torch._check(q_und_seq_len <= attn_output_und_hp.shape[0])
+    torch._check(q_gen_seq_len <= attn_output_gen_hp.shape[0])
 
     attn_output_und_hp = attn_output_und_hp[:q_und_seq_len].contiguous()  # [text_len,H_local,head_dim]
     attn_output_gen_hp = attn_output_gen_hp[:q_gen_seq_len].contiguous()  # [gen_len,H_local,head_dim]

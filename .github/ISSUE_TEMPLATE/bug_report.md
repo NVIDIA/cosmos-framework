@@ -4,8 +4,8 @@ about: Report a reproducible bug or unexpected behavior
 title: "[BUG] <short description>"
 labels: 'bug'
 assignees:
-    - spectralflight
-    - jeanachoi
+    - lfengad
+    - foreverlms
 
 ---
 

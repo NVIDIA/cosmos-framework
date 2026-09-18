@@ -12,7 +12,7 @@ import random
 import re
 from concurrent.futures import ThreadPoolExecutor
 from functools import partial
-from typing import Callable, Optional
+from typing import Callable, Literal, Optional
 
 import torch
 from PIL import Image
@@ -29,6 +29,16 @@ Image.MAX_IMAGE_PIXELS = 933120000
 _VIDEO_EXTENSIONS = "mp4 avi webm mov".split()
 
 VIDEO_DECODER_OPTIONS = {}
+VideoTemporalMode = Literal["native", "framewise"]
+
+
+def get_effective_temporal_patch_size(temporal_patch_size: int, video_temporal_mode: VideoTemporalMode) -> int:
+    """Return the temporal token-budget factor without changing the ViT tubelet kernel."""
+    if video_temporal_mode == "native":
+        return temporal_patch_size
+    if video_temporal_mode == "framewise":
+        return 1
+    raise ValueError(f"Unsupported video_temporal_mode: {video_temporal_mode!r}")
 
 
 def token_to_pixels(token_length: int, patch_size: int = 14, temporal_patch_size: int = 2, merge_size: int = 2) -> int:
@@ -61,6 +71,7 @@ def video_decoder_qwen(
     max_video_token_length: int = 8192,
     random_augmentation: bool = False,
     frame_count_random_range: Optional[list[int]] = None,
+    video_temporal_mode: VideoTemporalMode = "native",
     **kwargs,
 ) -> Callable:
     """
@@ -93,6 +104,7 @@ def video_decoder_qwen(
         max_video_token_length=max_video_token_length,
         random_augmentation=random_augmentation,
         frame_count_random_range=frame_count_random_range,
+        video_temporal_mode=video_temporal_mode,
     )
 
     return video_decoder_configured
@@ -112,6 +124,7 @@ def _video_decoder_qwen_func(
     fps_random_range: list[float] = [0.5, 1.5],
     max_video_token_length_random_range: list[float] = [0.75, 1.25],
     frame_count_random_range: Optional[list[int]] = None,
+    video_temporal_mode: VideoTemporalMode = "native",
     start_frame: Optional[int] = None,
     end_frame: Optional[int] = None,
     decoding_timeout: int = 60,
@@ -160,7 +173,9 @@ def _video_decoder_qwen_func(
     if total_frames is None or video_fps is None:
         raise ValueError(f"torchcodec missing metadata (num_frames={total_frames}, average_fps={video_fps}), skipping")
 
+    source_frame_offset = 0
     if start_frame is not None and end_frame is not None:
+        source_frame_offset = start_frame
         total_frames = end_frame - start_frame
 
     if video_fps < 1:
@@ -194,7 +209,7 @@ def _video_decoder_qwen_func(
 
     patch_size = processor.patch_size
     min_height_width = processor.min_height_width
-    temporal_patch_size = processor.temporal_patch_size
+    temporal_patch_size = get_effective_temporal_patch_size(processor.temporal_patch_size, video_temporal_mode)
     merge_size = processor.merge_size
     min_pixels: int = token_to_pixels(min_video_token_length, patch_size, temporal_patch_size, merge_size)
     max_pixels: int = token_to_pixels(max_video_token_length, patch_size, temporal_patch_size, merge_size)
@@ -253,4 +268,11 @@ def _video_decoder_qwen_func(
         ).float()  # [T,C,H,W]
     video_frames = video_frames.permute(1, 0, 2, 3)  # [C,T,H,W]
 
-    return dict(videos=video_frames, fps=sample_fps)
+    output = dict(videos=video_frames, fps=sample_fps)
+    if video_temporal_mode == "framewise":
+        output.update(
+            source_fps=video_fps,
+            source_frames_indices=[frame_index - source_frame_offset for frame_index in idx],
+            source_total_num_frames=total_frames,
+        )
+    return output

@@ -66,9 +66,17 @@ def maybe_parse_video_content(
                         log.critical(
                             f"fps is None for video {sub_content}. Better to set the fps explicitly", rank0_only=False
                         )
+                    frames_indices = sub_content.get("frames_indices")
+                    if frames_indices is None:
+                        frames_indices = list(range(len(sub_content["video"])))
+                    if len(frames_indices) != len(sub_content["video"]):
+                        raise ValueError(
+                            "Video frame metadata must contain one index per provided frame: "
+                            f"{len(frames_indices)} indices for {len(sub_content['video'])} frames"
+                        )
                     video_fps.append(fps)
-                    video_total_num_frames.append(len(sub_content["video"]))
-                    video_frames_indices.append(list(range(video_total_num_frames[-1])))
+                    video_total_num_frames.append(sub_content.get("total_num_frames", len(sub_content["video"])))
+                    video_frames_indices.append(frames_indices)
     return num_video, video_fps, video_total_num_frames, video_frames_indices
 
 

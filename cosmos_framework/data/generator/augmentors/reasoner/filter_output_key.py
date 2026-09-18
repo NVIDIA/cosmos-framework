@@ -24,6 +24,7 @@ class FilterOutputKey(Augmentor):
             "input_ids",
             "token_mask",
             "attention_mask",
+            "mm_token_type_ids",
             "pixel_values_videos",
             "video_grid_thw",
             "second_per_grid_ts",

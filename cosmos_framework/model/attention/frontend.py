@@ -26,7 +26,7 @@ from cosmos_framework.model.attention.flash2 import flash2_attention
 from cosmos_framework.model.attention.flash3 import flash3_attention
 from cosmos_framework.model.attention.masks import CausalType
 from cosmos_framework.model.attention.natten import natten_attention, natten_multi_dim_attention
-from cosmos_framework.model.attention.utils.environment import filter_attention_merge_backends
+from cosmos_framework.model.attention.utils.environment import filter_attention_merge_backends, is_torch_compiling
 from cosmos_framework.model.attention.utils.safe_ops import log
 
 # Map backend names to their frontend attention API
@@ -215,6 +215,8 @@ def attention(
         causal_type=causal_type,
         is_varlen=is_varlen,
         deterministic=deterministic,
+        return_lse=return_lse,
+        is_compiling=is_torch_compiling(),
         backend=backend,
         raise_error=False,
     )
@@ -232,6 +234,11 @@ def attention(
         )
 
     assert compatible_backend in BACKEND_MAP
+    # Dynamo rejects repeated Tensor inputs to NATTEN's autograd.Function.
+    # A separate KV view preserves each sequence's offsets without copying their data.
+    if is_torch_compiling() and is_varlen:
+        assert cumulative_seqlen_KV is not None
+        cumulative_seqlen_KV = cumulative_seqlen_KV.view_as(cumulative_seqlen_KV)  # [B+1]
     return BACKEND_MAP[compatible_backend](
         query=query,
         key=key,

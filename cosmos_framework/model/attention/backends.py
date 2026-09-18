@@ -47,6 +47,8 @@ def is_backend_compatible(
     causal_type: CausalType | None,
     is_varlen: bool,
     deterministic: bool = False,
+    return_lse: bool = False,
+    is_compiling: bool = False,
     raise_error: bool = False,
 ) -> bool:
     """
@@ -103,6 +105,8 @@ def is_backend_compatible(
         causal_type=causal_type,
         is_varlen=is_varlen,
         deterministic=deterministic,
+        return_lse=return_lse,
+        is_compiling=is_compiling,
         raise_error=raise_error,
     )
 
@@ -173,6 +177,8 @@ def choose_backend(
     causal_type: CausalType | None,
     is_varlen: bool,
     deterministic: bool = False,
+    return_lse: bool = False,
+    is_compiling: bool = False,
     backend: str | None = None,
     raise_error: bool = True,
 ) -> str | None:
@@ -226,6 +232,8 @@ def choose_backend(
             causal_type=causal_type,
             is_varlen=is_varlen,
             deterministic=deterministic,
+            return_lse=return_lse,
+            is_compiling=is_compiling,
             raise_error=raise_error,
         ):
             return backend
@@ -246,6 +254,8 @@ def choose_backend(
             causal_type=causal_type,
             is_varlen=is_varlen,
             deterministic=deterministic,
+            return_lse=return_lse,
+            is_compiling=is_compiling,
             raise_error=False,
         ):
             return backend

@@ -12,7 +12,11 @@ from PIL import Image
 
 from cosmos_framework.data.imaginaire.webdataset.augmentors.augmentor import Augmentor
 from cosmos_framework.utils import log
-from cosmos_framework.data.generator.reasoner.video_decoder_qwen import token_to_pixels
+from cosmos_framework.data.generator.reasoner.video_decoder_qwen import (
+    VideoTemporalMode,
+    get_effective_temporal_patch_size,
+    token_to_pixels,
+)
 from cosmos_framework.data.generator.processors import build_audio_processor
 from cosmos_framework.data.generator.processors.audio_utils import (
     AUDIO_END_TOKEN,
@@ -42,6 +46,23 @@ class _AudioProcessor(Protocol):
     ) -> dict[str, torch.Tensor]: ...
 
     def get_token_timestamps(self, audio_feature_length: int) -> list[float]: ...
+
+
+def expand_video_frames_for_framewise(
+    videos: list,
+    frames_indices: list[int],
+    temporal_patch_size: int,
+) -> tuple[list, list[int]]:
+    """Repeat each source frame across the pretrained temporal tubelet."""
+    if temporal_patch_size <= 0:
+        raise ValueError(f"temporal_patch_size must be positive, got {temporal_patch_size}")
+    if len(videos) != len(frames_indices):
+        raise ValueError(
+            f"Expected one source index per video frame, got {len(frames_indices)} indices for {len(videos)} frames"
+        )
+    expanded_videos = [frame for frame in videos for _ in range(temporal_patch_size)]
+    expanded_indices = [index for index in frames_indices for _ in range(temporal_patch_size)]
+    return expanded_videos, expanded_indices
 
 
 def maybe_subsample_frames(model_name_or_path, list_of_pil_image, max_video_token_length, processor):
@@ -137,6 +158,7 @@ class TokenizeData(Augmentor):
         audio_end_token: str = AUDIO_END_TOKEN,
         audio_timestamp_fps: float = DEFAULT_REASONER_VIDEO_FPS,
         audio_layout: str = "separate_with_timestamps",
+        video_temporal_mode: VideoTemporalMode = "native",
     ) -> None:
         """
         Args:
@@ -154,6 +176,12 @@ class TokenizeData(Augmentor):
         self.max_image_token_length = max_image_token_length
         self.custom_system_prompt = custom_system_prompt
         self.strip_original_system_prompt = strip_original_system_prompt
+        self.video_temporal_mode: VideoTemporalMode = video_temporal_mode
+        self.effective_temporal_patch_size: int = get_effective_temporal_patch_size(
+            getattr(self.processor, "temporal_patch_size", 2), video_temporal_mode
+        )
+        if sound_und and video_temporal_mode == "framewise":
+            raise ValueError("Framewise video with sound_und requires a shared audio/video timestamp clock")
         if not isinstance(sound_und, bool):
             raise TypeError(f"sound_und must be a bool, got {type(sound_und).__name__}")
         if not sound_und and audio_processor is not None:
@@ -356,7 +384,10 @@ class TokenizeData(Augmentor):
 
                     elif content["type"] == "video":
                         # as tokenization will NOT upsample the video, we can use a larger value here at the cost of multiple video having 1.5x token length
-                        max_total_pixels = token_to_pixels(self.max_video_token_length * 1.5, temporal_patch_size=2)
+                        max_total_pixels = token_to_pixels(
+                            self.max_video_token_length * 1.5,
+                            temporal_patch_size=self.effective_temporal_patch_size,
+                        )
                         media_key = content["video"]
                         # Add each video to the content list
                         if "media" not in data_dict:
@@ -370,13 +401,14 @@ class TokenizeData(Augmentor):
                                 f"[TokenizerDataError]video {media_key} not found in media, available keys: {data_dict['media'].keys()}. url: {url}"
                             )
                             return None
-                        if "videos" not in data_dict["media"][media_key]:
+                        video_media = data_dict["media"][media_key]
+                        if "videos" not in video_media:
                             log.info(
-                                f"[TokenizerDataError]videos not found in media[{media_key}], available keys: {data_dict['media'][media_key].keys()}. url: {url}"
+                                f"[TokenizerDataError]videos not found in media[{media_key}], available keys: {video_media.keys()}. url: {url}"
                             )
                             return None
-                        videos = data_dict["media"][media_key]["videos"]  # list of PIL images
-                        fps = data_dict["media"][media_key]["fps"]
+                        videos = video_media["videos"]  # list of PIL images
+                        fps = video_media["fps"]
                         # this is because videos are decoded to be around "max_video_token_length" tokens
 
                         videos = maybe_subsample_frames(
@@ -385,10 +417,23 @@ class TokenizeData(Augmentor):
                         if len(videos) == 0:
                             log.info(f"[TokenizerDataError]video {media_key} has no decoded frames. url: {url}")
                             return None
-                        content["video"] = videos
-
                         max_pixels_per_image = max_total_pixels // total_videos // len(videos)
-                        content["fps"] = fps
+                        if self.video_temporal_mode == "framewise":
+                            source_indices = video_media.get("source_frames_indices", list(range(len(videos))))
+                            if len(source_indices) != len(videos):
+                                log.critical(
+                                    f"[TokenizerDataError]video frame metadata length {len(source_indices)} does not "
+                                    f"match decoded frames {len(videos)}. url: {url}"
+                                )
+                                return None
+                            content["video"], content["frames_indices"] = expand_video_frames_for_framewise(
+                                videos, source_indices, self.processor.temporal_patch_size
+                            )
+                            content["fps"] = video_media.get("source_fps", fps)
+                            content["total_num_frames"] = video_media.get("source_total_num_frames", len(videos))
+                        else:
+                            content["video"] = videos
+                            content["fps"] = fps
                         content["max_pixels"] = max_pixels_per_image
                         if message_has_audio:
                             active_video_timestamps = get_qwen_video_timestamps(
@@ -583,6 +628,17 @@ class TokenizeData(Augmentor):
         for key in PROCESSOR_KEYS_TO_ADD:
             if key in tokenizer_output:
                 data_dict[key] = tokenizer_output[key]
+        if (
+            "mm_token_type_ids" in data_dict
+            and data_dict["mm_token_type_ids"].shape != input_ids.shape
+            and hasattr(self.processor, "build_mm_token_type_ids")
+        ):
+            log.warning(
+                "Tokenized mm_token_type_ids with shape "
+                f"{data_dict['mm_token_type_ids'].shape} do not align with input_ids shape {input_ids.shape}; "
+                "rebuilding modality IDs"
+            )
+            data_dict["mm_token_type_ids"] = self.processor.build_mm_token_type_ids(input_ids)
         labels = tokenizer_output["input_ids"].clone()  # [N_token]
         labels[~token_mask] = IGNORE_INDEX
         data_dict["labels"] = labels

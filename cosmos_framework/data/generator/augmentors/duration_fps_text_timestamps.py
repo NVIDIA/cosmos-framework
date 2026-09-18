@@ -46,6 +46,8 @@ class DurationFPSTextTimeStamps(Augmentor):
             - num_frames_key (str): Key holding the frame count to derive duration from. Required for
               multiview samples, whose video tensor concatenates views along the temporal axis so that
               ``video.shape[1]`` is num_views * frames_per_view. Default: None (use the video tensor).
+            - fractional_duration (bool): Preserve fractional seconds instead of truncating to whole
+              seconds. This is an explicit opt-in; existing recipes use whole seconds. Default: False.
     """
 
     def __init__(
@@ -64,6 +66,7 @@ class DurationFPSTextTimeStamps(Augmentor):
         self.skip_on_error = args.get("skip_on_error", True) if args else True
         self.num_multiplier_key = args.get("num_multiplier_key", "num_multiplier") if args else "num_multiplier"
         self.num_frames_key = args.get("num_frames_key", None) if args else None
+        self.fractional_duration: bool = args.get("fractional_duration", False) if args else False
 
     def __call__(self, data_dict: dict) -> dict | None:
         """
@@ -132,7 +135,7 @@ class DurationFPSTextTimeStamps(Augmentor):
 
         # Compute duration and append to caption
         if fps > 0:
-            duration = int(num_frames / fps)
+            duration = num_frames / fps if self.fractional_duration else int(num_frames / fps)
             if isinstance(caption, str):
                 # Case 1: Caption is a string (existing behavior).
                 metadata_text = self.template.format(duration=duration, fps=fps)
@@ -149,7 +152,7 @@ class DurationFPSTextTimeStamps(Augmentor):
                 # Case 2: Caption is JSON. Add structured duration/FPS fields.
                 data_dict[self.caption_key].update(
                     {
-                        "duration": str(duration) + "s",
+                        "duration": f"{duration:g}s" if self.fractional_duration else f"{duration}s",
                         "fps": fps,
                     }
                 )

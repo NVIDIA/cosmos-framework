@@ -9,7 +9,8 @@ from cosmos_framework.utils.lazy_config import LazyDict
 from cosmos_framework.configs.base.defaults.activation_checkpointing import ActivationCheckpointingConfig
 from cosmos_framework.configs.base.defaults.compile import CompileConfig
 from cosmos_framework.configs.base.defaults.ema import EMAConfig
-from cosmos_framework.configs.base.defaults.flex_attention import FlexAttentionConfig
+from cosmos_framework.configs.base.defaults.joint_attention import JointAttnImplementation
+from cosmos_framework.configs.base.defaults.multiview_attention import MultiviewAttentionConfig
 from cosmos_framework.configs.base.defaults.parallelism import ParallelismConfig
 from cosmos_framework.configs.base.defaults.quantization import QuantizationConfig
 from cosmos_framework.configs.base.defaults.reasoner import VLMConfig
@@ -46,7 +47,7 @@ class DiffusionExpertConfig:
 
     patch_spatial: int = 2
     max_vae_latent_side_after_patchify: int = (
-        20  # Max dimension (h or w) of the VAE latent after patchification (320/(8*2))
+        52  # Max h/w of the VAE latent after patchification; 52 -> up to ~1664px square (52*32). Was 20 (=640px).
     )
     # Vision/action/sound position information is always provided through
     # Qwen3VL-style 3D mRoPE attention IDs.
@@ -60,8 +61,6 @@ class DiffusionExpertConfig:
     # - "latent_index": use latent-frame indexes, optionally shared across camera views.
     # - "uniae_source_right_edge": use UniAE padded-patch right-edge source-frame coordinates.
     vision_temporal_position_mode: str = "latent_index"
-    # Whether camera-major views reuse the same local temporal mRoPE coordinates.
-    align_temporal_positions_across_views: bool = False
     # For unified_3d_mrope: whether spatial (H, W) indices reset to 0 for each vision segment
     unified_3d_mrope_reset_spatial_ids: bool = True
     # Setting the temporal gap on the boundary of the different modalities, default is 0, using a value greater than 0 will add an additional offset on the accumulated temporal offset.
@@ -195,6 +194,9 @@ class OmniMoTModelConfig:
     # Tensor layout at the attention boundary when context parallelism is enabled.
     attention_io_layout: AttentionIOLayout = "sequence_sharded"
 
+    # Opt in to summed CP output gradients; keep legacy scaling for existing optimizer state.
+    correct_cp_gradients: bool = False
+
     # torch.compile knobs (enabled, compiled_region, dynamic, ...).
     compile: CompileConfig = CompileConfig()
 
@@ -244,14 +246,24 @@ class OmniMoTModelConfig:
     resolution: str = "512"
     max_num_tokens_after_packing: int = 13312  # Final num tokens after sequence packing
 
-    # Attention implementation for joint understanding + generation
-    # Note "two_way" and "three_way" disallow and remove "End-of-Vision" or other text token in the generation tower.
-    # "three_way" must only be used when introducing sparsity
-    joint_attn_implementation: str = "two_way"  # "two_way" or "three_way"
+    # Which joint understanding + generation attention pathway a run takes. Note that every
+    # value disallows and removes "End-of-Vision" or other text tokens in the generation tower.
+    #
+    # * "two_way": the ordinary dense within-sample GEN attention.
+    # * "three_way": the split the NATTEN sparsity path needs; use it only for that.
+    # * "multiview": the multiview-aware GEN attention, whose UND pass is shared and whose GEN
+    #   pass runs as ``multiview_attention.backend`` selects -- a masked FlexAttention call or
+    #   the maskless folds. This is what turns multiview attention on; there is no second flag.
+    #
+    # Naming the *pathway* is not the same as naming the pack shape, and the two are read
+    # separately: "multiview" packs exactly as "two_way" does, which ``packing_layout`` below is
+    # what says so. Compare against this field where the pathway is the question, and go through
+    # ``packing_layout`` where the packing or the context-parallel shard is.
+    joint_attn_implementation: JointAttnImplementation = "two_way"
 
-    # Whether the within-sample GEN attention runs as one masked FlexAttention call, and under
-    # what mask and kernels.
-    flex_attention: FlexAttentionConfig = FlexAttentionConfig()
+    # Whether the within-sample GEN attention is multiview-aware, which attention it runs as
+    # (the maskless decomposition or a masked FlexAttention call), and under what mask.
+    multiview_attention: MultiviewAttentionConfig = MultiviewAttentionConfig()
 
     # Per-layer NATTEN parameters
     # Must use "three_way" attention if used.

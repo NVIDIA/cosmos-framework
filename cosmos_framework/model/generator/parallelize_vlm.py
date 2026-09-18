@@ -36,6 +36,7 @@ from cosmos_framework.configs.base.defaults.parallelism import (
     ParallelismConfig,
 )
 from cosmos_framework.model.generator.hf_model import HFModel
+from cosmos_framework.model.generator.reasoner.qwen35_caption import qwen35_fp32_decay_modules
 from cosmos_framework.utils.generator.parallelism import ParallelDims, fsdp_mesh
 
 # (parent, attribute name, module) — the module currently registered at that slot, plus what
@@ -445,8 +446,21 @@ def apply_fsdp(
     # required: the AC and compile passes replaced each block with a wrapper, and fully_shard
     # swaps each block's __class__ as it goes — any of those defeats a typename match (see
     # _collect_repeated_blocks).
+    for module in qwen35_fp32_decay_modules(inner):
+        fully_shard(
+            module,
+            mesh=fsdp_kwargs["mesh"],
+            mp_policy=MixedPrecisionPolicy(
+                param_dtype=torch.float32, reduce_dtype=torch.float32, cast_forward_inputs=False
+            ),
+        )
+    # Qwen3.5 can invoke vision zero, one or two times for text/image/video mixtures.
+    # Keep its vision parameters in the always-entered root unit so modality choice
+    # cannot change the sequence of FSDP collectives across ranks.
+    root_vision_blocks = set(inner.model.visual.blocks) if model.hf_config.model_type == "qwen3_5" else set()
     for _, _, block in reversed(slots):
-        fully_shard(block, **fsdp_kwargs)
+        if block not in root_vision_blocks:
+            fully_shard(block, **fsdp_kwargs)
     log.info(f"Wrapped {len(slots)} sub-modules.")
 
     # Wrap the full inner model to cover remaining parameters

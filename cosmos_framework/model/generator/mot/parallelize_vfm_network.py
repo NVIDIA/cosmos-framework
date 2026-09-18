@@ -6,7 +6,10 @@ from torch.distributed.fsdp import MixedPrecisionPolicy, fully_shard, register_f
 
 from cosmos_framework.configs.base.defaults.activation_checkpointing import ActivationCheckpointingConfig
 from cosmos_framework.configs.base.defaults.compile import CompileConfig
-from cosmos_framework.model.generator.mot.parallelize_unified_mot import parallelize_unified_mot
+from cosmos_framework.model.generator.mot.parallelize_unified_mot import (
+    apply_ac_to_module,
+    parallelize_unified_mot,
+)
 from cosmos_framework.utils.generator.parallelism import ParallelDims, fsdp_mesh
 
 
@@ -42,6 +45,39 @@ def apply_compile(model: torch.nn.Module, config: CompileConfig):
     return model
 
 
+# Modules outside ``language_model`` that are worth recomputing rather than
+# saving. ``apply_ac`` in ``parallelize_unified_mot`` only reaches the repeated
+# decoder blocks, so anything named here would otherwise keep every
+# intermediate activation alive from its forward until its backward.
+#
+# ``time_embedder``: its MLP is two ``[N, hidden]`` matmuls over *one row per
+# noised token*, run under a float32 autocast. At the 45k-token-per-rank
+# packing budgets used for multiview AV training that is ~0.6M rows, the
+# ``nn.Linear`` output and the ``nn.SiLU`` output are ~8.8 GiB *each* in fp32,
+# and several packs' worth are live at once across the microbatch. Recomputing
+# them costs two small matmuls -- tens of milliseconds against a step measured
+# in seconds.
+_AC_MODULE_ATTRS = ("time_embedder",)
+
+
+def apply_ac(model: torch.nn.Module, config: ActivationCheckpointingConfig) -> None:
+    """Checkpoint the VFM-level modules listed in ``_AC_MODULE_ATTRS``, in place.
+
+    The ``language_model`` blocks are handled separately by
+    ``parallelize_unified_mot.apply_ac``; this covers what that pass cannot see.
+    Attributes are optional because the heads they belong to are conditional --
+    ``time_embedder`` only exists when ``config.vision_gen`` is set.
+    """
+    if config.mode == "none":
+        return
+
+    for attr in _AC_MODULE_ATTRS:
+        module = getattr(model, attr, None)
+        if module is None:
+            continue
+        setattr(model, attr, apply_ac_to_module(module, config))
+
+
 def parallelize_vfm_network(
     model: torch.nn.Module,
     parallel_dims: ParallelDims | None,
@@ -64,10 +100,10 @@ def parallelize_vfm_network(
             without which the parameters would be computed with in their storage dtype
             rather than cast down.
         compile_config: Compile switches (enabled, compiled_region, etc.).
-        ac_config: Selective activation-checkpointing policy, typically
-            ``OmniMoTModelConfig.sac``. Forwarded to
-            ``parallelize_unified_mot``; ``None`` falls back to the
-            ``ActivationCheckpointingConfig`` defaults.
+        ac_config: Activation-checkpointing policy, typically
+            ``OmniMoTModelConfig.activation_checkpointing``. Forwarded to
+            ``parallelize_unified_mot`` for the decoder blocks, and applied here
+            to the VFM-level modules in ``_AC_MODULE_ATTRS``.
         attention_io_layout: Tensor layout at the attention boundary under CP.
         mp_policy: FSDP2 mixed-precision policy applied to every FSDP unit (the
             per-decoder-layer ones inside ``parallelize_unified_mot`` and the root wrap
@@ -90,6 +126,7 @@ def parallelize_vfm_network(
         attention_io_layout=attention_io_layout,
         mp_policy=mp_policy,
     )
+    apply_ac(model, ac_config)
 
     if compile_config.enabled and compile_config.compiled_region == "all":
         model = apply_compile(model, compile_config)

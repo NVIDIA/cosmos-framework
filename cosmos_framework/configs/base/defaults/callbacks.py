@@ -11,12 +11,10 @@ from cosmos_framework.utils.lazy_config import LazyCall as L
 from cosmos_framework.utils.callback import LowPrecisionCallback, WandBCallback
 from cosmos_framework.callbacks.compile_tokenizer import CompileTokenizer
 
-from cosmos_framework.callbacks.device_monitor import DeviceMonitor
 from cosmos_framework.callbacks.dit_image_sample import DiTImageSampleCallback
 from cosmos_framework.callbacks.every_n_draw_sample import EveryNDrawSample
 from cosmos_framework.callbacks.expert_heatmap import ExpertHeatmap
 from cosmos_framework.callbacks.grad_clip import GradClip
-from cosmos_framework.callbacks.heart_beat import HeartBeat
 from cosmos_framework.callbacks.iter_speed import IterSpeed
 from cosmos_framework.callbacks.load_pretrained import LoadPretrained
 from cosmos_framework.callbacks.mfu import MFUCallback
@@ -34,9 +32,9 @@ from cosmos_framework.callbacks.sequence_packing_padding import SequencePackingP
 from cosmos_framework.callbacks.sigma_loss_analysis import SigmaLossAnalysis
 from cosmos_framework.callbacks.skip_nan_step import SkipNaNStep
 from cosmos_framework.callbacks.training_stats import TrainingStatsCallback
-from cosmos_framework.callbacks.wall_clock_checkpoint import WallClockCheckpoint
 from cosmos_framework.callbacks.wandb_log import WandbCallback as WandBCallbackMultiplier
 from cosmos_framework.callbacks.wandb_log_eval import WandbCallback as WandBCallbackEval
+from cosmos_framework.configs.base.defaults.job_monitor import JOB_MONITOR_CALLBACKS as JOB_MONITOR_CALLBACKS
 
 MOE_DIAGNOSTICS_EVERY_N = 250
 
@@ -128,21 +126,6 @@ BASIC_LLM_CALLBACKS = dict(
 # DiT-safe subset for LLM-backed rectified-flow image training.
 BASIC_DIT_CALLBACKS = dict(BASIC_LLM_CALLBACKS)
 
-JOB_MONITOR_CALLBACKS = dict(
-    heart_beat=L(HeartBeat)(
-        every_n=200,
-        update_interval_in_minute=20,
-        save_s3="${upload_reproducible_setup}",
-    ),
-    device_monitor=L(DeviceMonitor)(
-        every_n=200,
-        save_s3="${upload_reproducible_setup}",
-        upload_every_n_mul=5,
-    ),
-    # Interval comes from the environment, so submitting to a cluster that enforces a
-    # wall-clock bound turns this on without every experiment config opting in.
-    wall_clock_checkpoint=L(WallClockCheckpoint)(),
-)
 
 OPTIMIZATION_CALLBACKS = dict(
     skip_nan_step=L(SkipNaNStep)(max_consecutive_nan=100),

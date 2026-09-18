@@ -74,6 +74,7 @@ def is_item_generated(
 def expand_multiview_condition_frame_indexes(
     condition_frame_indexes_vision: list[int],
     *,
+    condition_view_indexes_vision: list[int] | None,
     num_views: int,
     latent_t: int,
 ) -> list[int]:
@@ -83,10 +84,25 @@ def expand_multiview_condition_frame_indexes(
     ``[view0 frames | view1 frames | ...]``. ``SequencePlan.condition_frame_indexes_vision``
     stores the same per-view-local indexes used for single-view transfer (e.g. ``[0]`` for
     one conditioning frame). When ``num_views > 1``, expand so each listed local frame is
-    conditioned for every selected camera.
+    conditioned for every selected camera. Complete camera views listed in
+    ``condition_view_indexes_vision`` are then unioned into the resulting flat indexes.
     """
-    if num_views <= 1 or not condition_frame_indexes_vision:
+    condition_view_indexes_vision = condition_view_indexes_vision or []
+    if len(condition_view_indexes_vision) != len(set(condition_view_indexes_vision)):
+        raise ValueError(
+            "condition_view_indexes_vision must not contain duplicate camera indexes: "
+            f"got {condition_view_indexes_vision}."
+        )
+    invalid_view_indexes = [idx for idx in condition_view_indexes_vision if not (0 <= idx < num_views)]
+    if invalid_view_indexes:
+        raise ValueError(
+            "condition_view_indexes_vision contains camera indexes outside the sampled view range "
+            f"[0, {num_views}): {invalid_view_indexes}."
+        )
+    if num_views <= 1 and not condition_view_indexes_vision:
         return condition_frame_indexes_vision
+    if not condition_frame_indexes_vision and not condition_view_indexes_vision:
+        return []
     if latent_t % num_views != 0:
         raise ValueError(
             "Multiview vision conditioning requires latent_t divisible by num_views: "
@@ -100,6 +116,12 @@ def expand_multiview_condition_frame_indexes(
         if not (0 <= local_frame_idx < frames_per_view):
             continue
         for view_idx in range(num_views):
+            flat_idx = view_idx * frames_per_view + local_frame_idx
+            if flat_idx not in seen:
+                seen.add(flat_idx)
+                expanded.append(flat_idx)
+    for view_idx in condition_view_indexes_vision:
+        for local_frame_idx in range(frames_per_view):
             flat_idx = view_idx * frames_per_view + local_frame_idx
             if flat_idx not in seen:
                 seen.add(flat_idx)
@@ -143,10 +165,9 @@ def pack_input_sequence(
     sound_base_temporal_compression_factor: int | None = None,
     temporal_compression_factor: int = 4,
     vision_temporal_position_mode: str = "latent_index",
-    align_temporal_positions_across_views: bool = False,
     video_temporal_causal: bool = False,
     action_dim: int = 32,
-    initial_mrope_temporal_offset: int | float = 0,
+    initial_mrope_temporal_offset: int | float | list[int | float] = 0,
     lidar_temporal_compression_factor: int | None = None,
 ) -> PackedSequence:
     """
@@ -188,15 +209,14 @@ def pack_input_sequence(
         vision_temporal_position_mode: Temporal coordinates used for unified_3d_mrope vision tokens.
             "latent_index" uses latent-frame indexes; "uniae_source_right_edge" uses
             per-latent positions from gen_data_clean.temporal_positions_vision.
-        align_temporal_positions_across_views: If True, camera-major views within one
-            vision item reuse the same local temporal coordinates. Disabled by default and requires
-            gen_data_clean.num_views_per_vision_item to identify multiview items.
         video_temporal_causal: If True, pack vision and optional action as temporal-causal
             supertokens instead of separate modality blocks.
         action_dim: Action feature dimension used when temporal-causal packing creates
             null action tokens.
-        initial_mrope_temporal_offset: Initial temporal cursor for each sample, used by
-            autoregressive inference to seed mRoPE positions.
+        initial_mrope_temporal_offset: Initial temporal cursor used by autoregressive
+            inference to seed mRoPE positions. A scalar applies to every sample; a
+            list supplies one offset per sample for batched prompts with different
+            cached text lengths.
         lidar_temporal_compression_factor: Temporal compression of the LiDAR VAE, obtained
             from the LiDAR tokenizer at runtime. With the sweep rate in
             ``gen_data_clean.fps_lidar`` it places LiDAR latents on the same real-time axis
@@ -227,6 +247,9 @@ def pack_input_sequence(
         and gen_data_clean.num_views_per_vision_item is not None
         and any(num_views > 1 for num_views in gen_data_clean.num_views_per_vision_item)
     )
+    has_view_conditioning = any(plan.condition_view_indexes_vision for plan in sequence_plans)
+    if has_view_conditioning and video_temporal_causal:
+        raise NotImplementedError("View completion is not supported by video_temporal_causal packing.")
     if has_multiview_vision_items and video_temporal_causal:
         raise NotImplementedError("video_temporal_causal=True is not wired for multiview vision items yet.")
     if explicit_vision_temporal_positions_active:
@@ -261,6 +284,12 @@ def pack_input_sequence(
 
     use_float_mrope_positions = enable_fps_modulation or explicit_vision_temporal_positions_active
 
+    if isinstance(initial_mrope_temporal_offset, list) and len(initial_mrope_temporal_offset) != len(sequence_plans):
+        raise ValueError(
+            "initial_mrope_temporal_offset must contain one value per sequence plan, "
+            f"got {len(initial_mrope_temporal_offset)} offsets for {len(sequence_plans)} plans."
+        )
+
     # Initialize mutable builder state for sequence construction.
     seq_builder = PackedSequenceBuilder(uses_single_timestep=uses_single_timestep(input_timesteps))
 
@@ -287,28 +316,51 @@ def pack_input_sequence(
 
         # mRoPE temporal offset resets per sample.
         # initial_mrope_temporal_offset is non-zero only for AR inference (frame N seeds at N*tcf).
-        seq_builder.begin_sample(initial_mrope_temporal_offset)
+        sample_initial_mrope_temporal_offset = (
+            initial_mrope_temporal_offset[sample_idx]
+            if isinstance(initial_mrope_temporal_offset, list)
+            else initial_mrope_temporal_offset
+        )
+        seq_builder.begin_sample(sample_initial_mrope_temporal_offset)
 
         _ts = input_timesteps[sample_idx]
         input_timestep = _ts.item() if _ts.numel() == 1 else _ts  # float (TF) or Tensor(T_max,) (DF)
 
         # Pack text tokens if has_text=True and not skipped
         if sequence_plan.has_text and not skip_text_tokens:
-            text_ids = input_text_indexes[idx_text]
-            idx_text += 1
-
             has_generation_for_sample = (
                 sequence_plan.has_vision
                 or sequence_plan.has_lidar
                 or sequence_plan.has_action
                 or sequence_plan.has_sound
             )
-            text_sample_len = seq_builder.pack_text_tokens(
-                text_ids,
-                special_tokens,
-                has_generation=has_generation_for_sample,
-                use_float_positions=use_float_mrope_positions,
-            )
+            if sequence_plan.text_view_ids is None:
+                text_ids = input_text_indexes[idx_text]
+                idx_text += 1
+                text_sample_len = seq_builder.pack_text_tokens(
+                    text_ids,
+                    special_tokens,
+                    has_generation=has_generation_for_sample,
+                    use_float_positions=use_float_mrope_positions,
+                )
+            else:
+                # Per-view captions: the sample owns one caption per camera, laid consecutively
+                # in input_text_indexes, and they share the sample's single causal split.
+                num_captions = len(sequence_plan.text_view_ids)
+                text_ids_per_view = input_text_indexes[idx_text : idx_text + num_captions]
+                if len(text_ids_per_view) != num_captions:
+                    raise ValueError(
+                        f"Sample {sample_idx} declares {num_captions} per-view captions but only "
+                        f"{len(text_ids_per_view)} remain in input_text_indexes."
+                    )
+                idx_text += num_captions
+                text_sample_len = seq_builder.pack_text_tokens_per_view(
+                    text_ids_per_view,
+                    sequence_plan.text_view_ids,
+                    special_tokens,
+                    has_generation=has_generation_for_sample,
+                    use_float_positions=use_float_mrope_positions,
+                )
             sample_len += text_sample_len
 
             # End of text modality, add an offset as the boundary between text and vision.
@@ -500,9 +552,14 @@ def pack_input_sequence(
                     num_views = 1
                     if gen_data_clean.num_views_per_vision_item is not None:
                         num_views = gen_data_clean.num_views_per_vision_item[flat_vision_idx]
+                    elif sequence_plan.condition_view_indexes_vision:
+                        raise ValueError(
+                            "condition_view_indexes_vision requires per-camera VAE metadata in "
+                            "gen_data_clean.num_views_per_vision_item."
+                        )
                     latent_t = input_vision_tokens.shape[2]
                     temporal_position_period: int | None = None
-                    if align_temporal_positions_across_views and num_views > 1:
+                    if num_views > 1:
                         if latent_t % num_views != 0:
                             raise ValueError(
                                 "Aligning temporal positions across views requires latent_t divisible by num_views: "
@@ -511,6 +568,7 @@ def pack_input_sequence(
                         temporal_position_period = latent_t // num_views
                     item_condition_frames = expand_multiview_condition_frame_indexes(
                         item_condition_frames,
+                        condition_view_indexes_vision=sequence_plan.condition_view_indexes_vision,
                         num_views=num_views,
                         latent_t=latent_t,
                     )

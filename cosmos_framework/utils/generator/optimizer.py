@@ -14,6 +14,7 @@ from torch.distributed.checkpoint.stateful import Stateful
 from torch.optim.lr_scheduler import LambdaLR, LRScheduler
 
 from cosmos_framework.utils.functional.lr_scheduler import (
+    ConstantScheduler,
     LambdaLinearScheduler,
     LambdaWarmUpCosineScheduler,
     WSDScheduler,
@@ -586,7 +587,7 @@ def build_optimizer(
 def _lr_scheduler_cls(
     lr_scheduler_type: str,
     **lr_scheduler_kwargs: Any,
-) -> LambdaLinearScheduler | LambdaWarmUpCosineScheduler | WSDScheduler | WSFDScheduler:
+) -> LambdaLinearScheduler | LambdaWarmUpCosineScheduler | WSDScheduler | WSFDScheduler | ConstantScheduler:
     """Instantiate a lambda-style scheduler whose ``.schedule(step)`` returns an LR multiplier.
 
     Both returned classes expose a ``schedule(step) -> float`` callable that
@@ -594,7 +595,8 @@ def _lr_scheduler_cls(
     to drive each optimizer's param-group LRs.  ``lr_scheduler_type`` matching is
     case-insensitive; valid values are ``"lambdalinear"`` (linear decay),
     ``"lambdacosine"`` (warmup + cosine decay), ``"wsd"``
-    (warmup-stable-decay), and ``"wsfd"`` (warmup-slow-decay-fast-decay).
+    (warmup-stable-decay), ``"wsfd"`` (warmup-slow-decay-fast-decay), and
+    ``"constant"`` (fixed multiplier for the entire run).
     Any other value raises ``NotImplementedError``.
     All remaining ``**lr_scheduler_kwargs`` are forwarded verbatim to the
     underlying scheduler constructor (e.g. ``warm_up_steps``, ``cycle_lengths``,
@@ -609,6 +611,8 @@ def _lr_scheduler_cls(
         lr_scheduler = WSDScheduler(**lr_scheduler_kwargs)
     elif lr_scheduler_type.lower() == "wsfd":
         lr_scheduler = WSFDScheduler(**lr_scheduler_kwargs)
+    elif lr_scheduler_type.lower() == "constant":
+        lr_scheduler = ConstantScheduler(**lr_scheduler_kwargs)
     else:
         raise NotImplementedError(f"LR Scheduler {lr_scheduler_type} not found.")
     return lr_scheduler
@@ -706,9 +710,9 @@ class LRSchedulersContainer(Stateful):
                 raise ValueError(
                     f"LRSchedulersContainer.load_state_dict: checkpoint holds a single "
                     f"scheduler's state, but this container has {len(self.schedulers)}. "
-                    "Resume from a checkpoint saved with a matching number of schedulers, "
-                    "or add the scheduler to `checkpoint.keys_not_to_resume` to start "
-                    "scheduler state fresh."
+                    "For same-job resume, use a checkpoint saved with a matching number of schedulers. "
+                    "To start scheduler state fresh instead, create a new run with this checkpoint as "
+                    "`checkpoint.load_path` and add `scheduler` to `checkpoint.keys_not_to_resume`."
                 )
             self.schedulers[0].load_state_dict(copy.deepcopy(state_dict))
             return
@@ -717,9 +721,10 @@ class LRSchedulersContainer(Stateful):
             raise ValueError(
                 f"LRSchedulersContainer.load_state_dict: checkpoint has state for "
                 f"{len(per_scheduler_states)} schedulers, but this container has "
-                f"{len(self.schedulers)}. Resume from a checkpoint with a matching number "
-                "of schedulers, or add the scheduler to `checkpoint.keys_not_to_resume` to "
-                "start scheduler state fresh."
+                f"{len(self.schedulers)}. For same-job resume, use a checkpoint saved with a matching "
+                "number of schedulers. To start scheduler state fresh instead, create a new run with "
+                "this checkpoint as `checkpoint.load_path` and add `scheduler` to "
+                "`checkpoint.keys_not_to_resume`."
             )
         for scheduler, sub_state in zip(self.schedulers, per_scheduler_states):
             # Deepcopy so nested mutable values (lists) are not aliased across

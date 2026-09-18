@@ -347,6 +347,16 @@ required-environments = [
   "sys_platform == 'linux' and platform_machine == 'aarch64'",
 ]
 
+# These CUDA groups use CPython 3.13-only wheels (NATTEN, FlashAttention,
+# and Transformer Engine). Restrict the groups rather than the base package.
+[tool.uv.dependency-groups]
+cu128 = {requires-python = "==3.13.*"}
+cu128-train = {requires-python = "==3.13.*"}
+cu130 = {requires-python = "==3.13.*"}
+cu130-train = {requires-python = "==3.13.*"}
+cu130-torch213 = {requires-python = "==3.13.*"}
+cu130-torch213-train = {requires-python = "==3.13.*"}
+
 [tool.uv.sources]
 flash-attn = { index = "cosmos"}
 flash-attn-3-nv = { index = "cosmos" }

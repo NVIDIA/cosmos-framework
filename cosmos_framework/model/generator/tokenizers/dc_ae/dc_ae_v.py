@@ -1416,33 +1416,21 @@ def dc_ae_v_f32t4_encoder_causal_decoder_chunk_causal_4(
     name: str,
     pretrained_path: Optional[str],
 ) -> DCAEVConfig:
-    if name in [
-        "dcae4x32x32_c64_t120_256p_fps_all_encoder_causal_decoder_chunk_causal_4_nogan_cosmos_pad_7_v0.1",
-    ]:
-        latent_channels, num_pad_frames, temporal_remainder, scaling_factor = 64, 7, 1, 0.7103
-        encoder_width_list = [128, 256, 512, 512, 1024, 1024, 1024]
-    elif name in [
-        "dcae4x32x32_c32_t120_256p_fps_all_encoder_causal_decoder_chunk_causal_4_nogan_cosmos_pad_11_v0.1",
-    ]:
-        latent_channels, num_pad_frames, temporal_remainder, scaling_factor = 32, 11, 1, 0.6774
-        encoder_width_list = [128, 256, 512, 512, 1024, 1024, 1024]
-    elif name in [
-        "dcae4x32x32_c64_t120_256p_fps_all_encoder_causal_decoder_chunk_causal_4_nogan_cosmos_pad_7_v0.2",
-    ]:
-        latent_channels, num_pad_frames, temporal_remainder, scaling_factor = 64, 7, 1, 0.5704
-        encoder_width_list = [0, 64, 128, 512, 1024, 1024, 1024]
-    elif name in [
-        "dcae4x32x32_c96_t120_256p_fps_all_encoder_causal_decoder_chunk_causal_4_nogan_cosmos_pad_7_v0.2_lcr",
-    ]:
-        latent_channels, num_pad_frames, temporal_remainder, scaling_factor = 96, 7, 1, 0.4766
-        encoder_width_list = [0, 64, 128, 512, 1024, 1024, 1024]
-    elif name in [
-        "dcae4x32x32_c128_t120_256p_fps_all_encoder_causal_decoder_chunk_causal_4_nogan_cosmos_pad_7_v0.2_lcr",
-    ]:
-        latent_channels, num_pad_frames, temporal_remainder, scaling_factor = 128, 7, 1, 0.5637
-        encoder_width_list = [0, 64, 128, 512, 1024, 1024, 1024]
-    else:
+    # model_name -> (latent_channels, num_pad_frames, temporal_remainder, scaling_factor, encoder_width_list)
+    # num_pad_frames is 3 (= tcf - 1): the only non-zero pad the causal decoder's
+    # image-reconstruction path supports.
+    specs = {
+        "dcae4x32x32_c128_t120_256p_fps_all_encoder_causal_decoder_chunk_causal_4_nogan_cosmos_pad_3_v0.23_lcr": (
+            128,
+            3,
+            1,
+            0.3627,
+            [0, 64, 128, 512, 1024, 1024, 1024],
+        ),
+    }
+    if name not in specs:
         raise ValueError(f"model {name} is not supported")
+    latent_channels, num_pad_frames, temporal_remainder, scaling_factor, encoder_width_list = specs[name]
 
     def causal_downsample(sf, tf):
         return SampleBlockConfig(

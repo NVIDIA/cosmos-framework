@@ -61,6 +61,7 @@ from cosmos_framework.model.generator.mot.unified_mot import (
     ReasonerKVCache,
     _all_ranks_finished,
     _MoTConfigBase,
+    _pad_packed_tokens_by_sample,
     _real_token_mask,
     _run_mlp,
     _sample_next_token,
@@ -83,6 +84,46 @@ from cosmos_framework.utils.generator.parallelism import ParallelDims
 # -----------------------------------------------------------------------------
 # ReasonerKVCache
 # -----------------------------------------------------------------------------
+
+
+@pytest.mark.L0
+@pytest.mark.CPU
+def test_pad_packed_tokens_by_sample_supports_unequal_prompt_lengths() -> None:
+    """Sample-major packed prompts become independent padded cache rows."""
+    tokens = torch.arange(8 * 2 * 3, dtype=torch.float32).reshape(8, 2, 3)  # [S_padded,H,D]
+    sample_ids = torch.tensor([0, 0, 1, 1, 1, 1, 0, 1])  # [S_padded]
+
+    padded, lengths = _pad_packed_tokens_by_sample(
+        tokens,
+        sample_ids,
+        num_real_tokens=6,
+        batch_size=2,
+    )  # [B,S_max,H,D], tuple[B]
+
+    assert lengths == (2, 4)
+    assert padded.shape == (2, 4, 2, 3)
+    torch.testing.assert_close(padded[0, :2], tokens[:2])
+    assert torch.count_nonzero(padded[0, 2:]) == 0
+    torch.testing.assert_close(padded[1], tokens[2:6])
+
+
+@pytest.mark.L0
+@pytest.mark.CPU
+def test_pad_packed_tokens_by_sample_preserves_single_sample_layout() -> None:
+    """B=1 produces the same leading-token tensor as the legacy unsqueeze path."""
+    tokens = torch.arange(7 * 2 * 3, dtype=torch.float32).reshape(7, 2, 3)  # [S_padded,H,D]
+    sample_ids = torch.zeros(7, dtype=torch.long)  # [S_padded]
+
+    padded, lengths = _pad_packed_tokens_by_sample(
+        tokens,
+        sample_ids,
+        num_real_tokens=5,
+        batch_size=1,
+    )  # [1,S_real,H,D], tuple[1]
+    legacy = tokens[:5].unsqueeze(0)  # [1,S_real,H,D]
+
+    assert lengths == (5,)
+    torch.testing.assert_close(padded, legacy)
 
 
 def _kv(batch: int, seqlen: int, num_kv_heads: int = 2, head_dim: int = 4) -> torch.Tensor:

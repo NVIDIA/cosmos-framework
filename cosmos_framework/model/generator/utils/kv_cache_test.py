@@ -8,7 +8,13 @@ import torch
 
 from cosmos_framework.model.attention import attention
 from cosmos_framework.model.generator.mot.attention import SplitInfo
-from cosmos_framework.data.generator.sequence_packing.runtime import SequencePack, get_gen_seq
+from cosmos_framework.data.generator.sequence_packing.runtime import (
+    SequencePack,
+    get_gen_seq,
+    get_num_real_samples,
+    has_pad_segment,
+    sequence_pack_from_packed_sequence,
+)
 from cosmos_framework.configs.base.defaults.replay_attention import TeacherForcingReplayPolicyConfig
 from cosmos_framework.model.generator.mot.causal_attention import (
     attention_AR_gen_only,
@@ -179,6 +185,59 @@ def test_und_kv_cache_lifecycle():
     assert not cache.is_initialized
     with pytest.raises(AssertionError):
         cache.get()
+
+
+@pytest.mark.L0
+@pytest.mark.CPU
+def test_und_kv_cache_tracks_unequal_batch_lengths_and_clears_them_on_reset() -> None:
+    """UndKVCache retains each row's real prompt length alongside padded K/V."""
+    cache = UndKVCache()
+    k = torch.arange(2 * 5 * 2 * 3, dtype=torch.float32).reshape(2, 5, 2, 3)  # [B,S_und,H,D]
+    v = k + 100.0  # [B,S_und,H,D]
+
+    cache.store(k, v, lengths=(3, 5))
+
+    assert cache.cached_len == 5
+    assert cache.cached_lens == (3, 5)
+    cached_k, cached_v = cache.get()  # [B,S_und,H,D] each
+    torch.testing.assert_close(cached_k, k)
+    torch.testing.assert_close(cached_v, v)
+
+    cache.reset()
+    assert cache.cached_len == 0
+    assert cache.cached_lens == ()
+
+
+@pytest.mark.L0
+@pytest.mark.CPU
+def test_und_kv_cache_default_length_preserves_single_sample_behavior() -> None:
+    """Omitting lengths keeps the original B=1 storage contract."""
+    cache = UndKVCache()
+    k = torch.arange(4 * 2 * 3, dtype=torch.float32).reshape(1, 4, 2, 3)  # [1,S_und,H,D]
+    v = k + 10.0  # [1,S_und,H,D]
+
+    cache.store(k, v)
+
+    cached_k, cached_v = cache.get()  # [1,S_und,H,D] each
+    assert cache.cached_len == 4
+    assert cache.cached_lens == (4,)
+    assert cached_k.shape == k.shape
+    assert cached_v.shape == v.shape
+    torch.testing.assert_close(cached_k, k)
+    torch.testing.assert_close(cached_v, v)
+
+
+@pytest.mark.L0
+@pytest.mark.CPU
+@pytest.mark.parametrize("lengths", [(2,), (2, 6), (-1, 4)])
+def test_und_kv_cache_rejects_invalid_batch_lengths(lengths: tuple[int, ...]) -> None:
+    """Per-row prompt lengths must match the batch and padded sequence extent."""
+    cache = UndKVCache()
+    k = torch.zeros(2, 5, 1, 1)  # [B,S_und,H,D]
+    v = torch.ones_like(k)  # [B,S_und,H,D]
+
+    with pytest.raises(ValueError, match="understanding lengths|Understanding lengths"):
+        cache.store(k, v, lengths=lengths)
 
 
 @pytest.mark.L0
@@ -1100,6 +1159,112 @@ def test_ar_memory_state_read_for_layer():
     state_f2.write_for_layer(0, (gen_k_dummy, gen_v_dummy, dummy_und_k, dummy_und_k))
     current_und_k, _ = caches[0].und_cache.get()
     assert torch.equal(current_und_k, original_und_k), "und K/V must not be overwritten after frame 0"
+
+
+@pytest.mark.L0
+@pytest.mark.CPU
+def test_batched_ar_memory_state_tracks_unequal_prompt_lengths_per_sample() -> None:
+    """Batched AR memory carries per-row prompt lengths without mixing cache rows."""
+    batch_size, gen_len, max_und_len, num_heads, head_dim = 2, 3, 4, 1, 2
+    cache = DualKVCache(gen_cache_size=4)
+    hidden_states = {
+        "sample_offsets": torch.tensor([0, 5, 12]),  # [B+1]
+        "_full_only_sample_ids": torch.tensor([0, 0, 0, 1, 1, 1]),  # [B*S_gen]
+        "_num_full_tokens": batch_size * gen_len,
+        "_causal_sample_ids": torch.tensor([0, 0, 1, 1, 1, 1]),  # [S_und_total]
+        "_num_causal_tokens": 6,
+    }
+    state = ARMemoryState([cache], frame_idx=0, batched=True)
+    state.init(hidden_states, torch.device("cpu"))
+
+    empty_memory = state.read_for_layer(0)
+    assert empty_memory.batch_size == batch_size
+    assert empty_memory.gen_len == gen_len
+    assert empty_memory.gen_lens == (gen_len, gen_len)
+    assert empty_memory.und_lens == (2, 4)
+    assert empty_memory.und_k_cached is None
+    assert empty_memory.gen_k_hist is None
+
+    gen_k = torch.arange(batch_size * gen_len * num_heads * head_dim, dtype=torch.float32).reshape(
+        batch_size, gen_len, num_heads, head_dim
+    )  # [B,S_gen,H,D]
+    gen_v = gen_k + 100.0  # [B,S_gen,H,D]
+    und_k = torch.zeros(batch_size, max_und_len, num_heads, head_dim)  # [B,S_und_max,H,D]
+    und_v = torch.zeros_like(und_k)  # [B,S_und_max,H,D]
+    und_k[0, :2] = 10.0  # [S_und_0,H,D]
+    und_k[0, 2:] = 999.0  # [S_pad,H,D]
+    und_k[1] = 20.0  # [S_und_1,H,D]
+    und_v.copy_(und_k + 1.0)  # [B,S_und_max,H,D]
+    state.write_for_layer(0, (gen_k, gen_v, und_k, und_v))
+
+    assert cache.und_cache.cached_lens == (2, 4)
+    next_state = ARMemoryState([cache], frame_idx=1, batched=True)
+    next_state.init(hidden_states, torch.device("cpu"))
+    memory = next_state.read_for_layer(0)
+    assert memory.batch_size == batch_size
+    assert memory.gen_lens == (gen_len, gen_len)
+    assert memory.und_lens == (2, 4)
+    assert memory.und_k_cached is not None
+    assert memory.und_v_cached is not None
+    assert memory.gen_k_hist is not None
+    assert memory.gen_v_hist is not None
+    assert memory.und_k_cached.shape == (batch_size, max_und_len, num_heads, head_dim)
+    assert memory.gen_k_hist.shape == (batch_size, gen_len, num_heads, head_dim)
+    torch.testing.assert_close(memory.und_k_cached, und_k)
+    torch.testing.assert_close(memory.und_v_cached, und_v)
+    torch.testing.assert_close(memory.gen_k_hist, gen_k)
+    torch.testing.assert_close(memory.gen_v_hist, gen_v)
+
+
+@pytest.mark.L0
+@pytest.mark.CPU
+def test_batched_ar_memory_state_rejects_unequal_generation_lengths() -> None:
+    """Every row in one batched DiT step must have the same generation-token count."""
+    cache = DualKVCache(gen_cache_size=4)
+    hidden_states = {
+        "sample_offsets": torch.tensor([0, 4, 9]),  # [B+1]
+        "_full_only_sample_ids": torch.tensor([0, 0, 1, 1, 1]),  # [S_gen_total]
+        "_num_full_tokens": 5,
+        "_causal_sample_ids": torch.tensor([0, 1]),  # [S_und_total]
+        "_num_causal_tokens": 2,
+    }
+    state = ARMemoryState([cache], frame_idx=0, batched=True)
+
+    with pytest.raises(ValueError, match="equal generation lengths"):
+        state.init(hidden_states, torch.device("cpu"))
+
+
+@pytest.mark.L0
+@pytest.mark.CPU
+def test_single_sample_ar_memory_state_keeps_legacy_metadata_contract() -> None:
+    """The default non-batched path still needs only the original token-count metadata."""
+    gen_len, und_len, num_heads, head_dim = 3, 2, 1, 2
+    cache = DualKVCache(gen_cache_size=4)
+    state = ARMemoryState([cache], frame_idx=0)
+    state.init({"_num_full_tokens": gen_len}, torch.device("cpu"))
+
+    memory = state.read_for_layer(0)
+    assert memory.batch_size == 1
+    assert memory.gen_len == gen_len
+    assert memory.gen_lens == ()
+    assert memory.und_lens == ()
+
+    gen_k = torch.arange(gen_len * num_heads * head_dim, dtype=torch.float32).reshape(
+        1, gen_len, num_heads, head_dim
+    )  # [1,S_gen,H,D]
+    gen_v = gen_k + 100.0  # [1,S_gen,H,D]
+    und_k = torch.arange(und_len * num_heads * head_dim, dtype=torch.float32).reshape(
+        1, und_len, num_heads, head_dim
+    )  # [1,S_und,H,D]
+    und_v = und_k + 200.0  # [1,S_und,H,D]
+    state.write_for_layer(0, (gen_k, gen_v, und_k, und_v))
+
+    cached_und_k, cached_und_v = cache.und_cache.get()  # [1,S_und,H,D] each
+    cached_gen_k, cached_gen_v = cache.gen_cache.fetch_kv(frame_idx=1)  # [1,S_gen,H,D] each
+    torch.testing.assert_close(cached_und_k, und_k)
+    torch.testing.assert_close(cached_und_v, und_v)
+    torch.testing.assert_close(cached_gen_k, gen_k)
+    torch.testing.assert_close(cached_gen_v, gen_v)
 
 
 @pytest.mark.L0
@@ -2094,3 +2259,30 @@ def test_ar_memory_state_local_kv_head_cache_requires_divisible_kv_heads() -> No
             head_dim=5,
             kv_head_shard_size=3,
         )
+
+
+@pytest.mark.L0
+@pytest.mark.CPU
+@pytest.mark.parametrize("batch_size", (1, 2))
+@pytest.mark.parametrize("with_text", (False, True))
+def test_batched_ar_counts_real_samples_in_runtime_pack(batch_size: int, with_text: bool) -> None:
+    """Inline prompt padding is not a cache row; later no-text packs keep the same rows."""
+    text_lengths = [3 + index for index in range(batch_size)] if with_text else [0] * batch_size
+    split_lengths = [length for text_length in text_lengths for length in ([text_length, 4] if with_text else [4])]
+    sample_lengths = [text_length + 4 for text_length in text_lengths]
+    tokens = torch.zeros(sum(sample_lengths), 4)  # [N_tokens,D]
+    runtime_pack = sequence_pack_from_packed_sequence(
+        packed_sequence=tokens,
+        attn_modes=["causal", "full"] * batch_size if with_text else ["full"] * batch_size,
+        split_lens=split_lengths,
+        sample_lens=sample_lengths,
+        packed_und_token_indexes=torch.empty(0, dtype=torch.long),  # [0]
+        packed_gen_token_indexes=torch.empty(0, dtype=torch.long),  # [0]
+    )
+    assert has_pad_segment(runtime_pack) == with_text
+    assert get_num_real_samples(runtime_pack) == batch_size
+    state = ARMemoryState(dual_kv_cache=[], frame_idx=0, batched=True)
+    state.init(runtime_pack, torch.device("cpu"))
+    assert state._batch_size == batch_size
+    assert state._gen_lens == (4,) * batch_size
+    assert state._current_und_lens == tuple(text_lengths)

@@ -15,6 +15,7 @@ from cosmos_framework.utils.lazy_config import instantiate as lazy_instantiate
 from cosmos_framework.utils.generator.data_utils import read_positive_int_metadata
 
 _MAX_NUM_TOKENS = 4096
+TEXT_SYSTEM_PROMPT_KEY = "text_system_prompt"
 
 
 def _tokenize_captions_separately(
@@ -119,18 +120,44 @@ _SYSTEM_PROMPT_IMAGE_EDITING = "You are a helpful assistant who will edit images
 _SYSTEM_PROMPT_VIDEO_EDITING = "You are a helpful assistant who will edit videos based on the user's instructions."
 
 _SYSTEM_PROMPT_TRANSFER = "You are a helpful assistant that generates images or videos following the user's instructions and control signals (edge maps, blur, depth, or segmentation)."
+_AV_WSM_CONTROLLED_CATEGORIES: str = (
+    "vehicles (including trucks), cyclists, pedestrians, traffic lights, traffic signs, road markings, "
+    "lane boundaries, and road boundaries"
+)
+_AV_WSM_CONTROL_INSTRUCTION: str = (
+    f"Follow WSM controls for {_AV_WSM_CONTROLLED_CATEGORIES}. "
+    "Do not add objects or road features in these categories that are absent from WSM. "
+    "Use captions for appearance and unconstrained background details; WSM takes precedence in any conflict."
+)
+_SYSTEM_PROMPT_AV_MULTIVIEW_TRANSFER = (
+    "You are a helpful assistant that generates temporally synchronized, geometrically consistent autonomous-driving "
+    "videos from per-camera scene descriptions and World Scenario Map (WSM) control videos depicting the controlled "
+    "objects and road layout. Treat all camera views as simultaneous observations of the same driving scene, "
+    "preserving each camera's viewpoint, shared ego motion, road layout, object identity and motion, weather, "
+    f"lighting, and cross-view consistency.\n\n{_AV_WSM_CONTROL_INSTRUCTION}"
+)
+_SYSTEM_PROMPT_AV_JOINT_CAMERA_LIDAR_TRANSFER = (
+    "You are a helpful assistant that jointly generates temporally synchronized, geometrically consistent "
+    "autonomous-driving camera videos and LiDAR range-view sequences from per-camera scene descriptions and provided "
+    "control signals: per-camera World Scenario Map (WSM) control videos depicting the controlled objects and road "
+    "layout, and an HD-map control for LiDAR. Treat all camera views and LiDAR sweeps as synchronized observations "
+    "of the same driving scene, preserving each camera's viewpoint, shared ego motion, road layout, object identity "
+    f"and motion, weather, lighting, cross-view consistency, and camera-LiDAR alignment.\n\n{_AV_WSM_CONTROL_INSTRUCTION}"
+)
 
 _SYSTEM_PROMPTS = {
     "editing": _SYSTEM_PROMPT_IMAGE_EDITING,
     "video_editing": _SYSTEM_PROMPT_VIDEO_EDITING,
     "transfer": _SYSTEM_PROMPT_TRANSFER,
+    "av_multiview_transfer": _SYSTEM_PROMPT_AV_MULTIVIEW_TRANSFER,
+    "av_joint_camera_lidar_transfer": _SYSTEM_PROMPT_AV_JOINT_CAMERA_LIDAR_TRANSFER,
 }
 
 
 class TextTokenizerTransformForEditing(Augmentor):
     """Tokenizer augmentor for interleaved tasks: image editing or transfer (control-conditioned generation).
 
-    Uses a task-specific system prompt. Pass args["task"] = "editing" (default) or "transfer".
+    Uses a task-specific system prompt selected from ``_SYSTEM_PROMPTS``.
     """
 
     def __init__(self, input_keys: list, output_keys: Optional[list] = None, args: Optional[dict] = None) -> None:
@@ -139,6 +166,7 @@ class TextTokenizerTransformForEditing(Augmentor):
         tokenizer_config = self.args["tokenizer_config"]
         self.cfg_dropout_rate = self.args.get("cfg_dropout_rate", 0.0)
         self.tokenize_separately: bool = self.args.get("tokenize_separately", False)
+        self.emit_system_prompt: bool = self.args.get("emit_system_prompt", False)
         task = self.args.get("task", "editing")
         self._system_prompt = _SYSTEM_PROMPTS.get(task, _SYSTEM_PROMPTS["editing"])
 
@@ -148,6 +176,9 @@ class TextTokenizerTransformForEditing(Augmentor):
         self._processor = lazy_instantiate(tokenizer_config)
 
     def __call__(self, data_dict: dict) -> dict | None:
+        if self.emit_system_prompt:
+            data_dict[TEXT_SYSTEM_PROMPT_KEY] = self._system_prompt
+
         if self.tokenize_separately:
             assert self.output_keys is not None
             return _tokenize_captions_separately(
@@ -176,5 +207,5 @@ class TextTokenizerTransformForTransfer(TextTokenizerTransformForEditing):
 
     def __init__(self, input_keys: list, output_keys: Optional[list] = None, args: Optional[dict] = None) -> None:
         args = dict(args) if args else {}
-        args["task"] = "transfer"
+        args.setdefault("task", "transfer")
         super().__init__(input_keys, output_keys, args)
