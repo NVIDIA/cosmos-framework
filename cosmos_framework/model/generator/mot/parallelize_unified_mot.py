@@ -34,6 +34,7 @@ from torch.utils.checkpoint import (
 
 from cosmos_framework.configs.base.defaults.activation_checkpointing import ActivationCheckpointingConfig
 from cosmos_framework.configs.base.defaults.compile import CompileConfig
+from cosmos_framework.model.generator.mot.activation_marks import enable_marking, is_mark_op
 from cosmos_framework.model.generator.mot.attention import SplitInfo, dispatch_attention
 from cosmos_framework.model.generator.mot.context_parallel_utils import context_parallel_attention
 from cosmos_framework.model.generator.utils.memory import KVToStore, MemoryValue
@@ -127,25 +128,60 @@ class ContextParallelDispatch(nn.Module):
         )
 
 
+def make_selective_ac_policy(save_ops_regex: "list[re.Pattern]", save_only_marked_ops: bool = False):
+    """The policy selective AC consults for every op inside a checkpointed block.
+
+    ``save_ops_regex`` says which ops are eligible to be kept. With
+    ``save_only_marked_ops``, an eligible op is kept only where the model asked for it
+    with :func:`~cosmos_framework.model.generator.mot.activation_marks.mark_next_activation`
+    -- which is how four calls running the same kernel can be told apart, since a
+    name cannot tell them apart. Without it every eligible op is kept, which is
+    what every existing config does.
+
+    A pending mark is consumed by the next *eligible* op rather than the next op.
+    At the real call site, the gathers for Q and V and the clone made by the attention
+    frontend all dispatch between the marker and the kernel; consuming the mark on
+    the next op of any kind puts the mark on a gather, not the kernel.
+    """
+    # Per region: ``context_fn`` is called once per checkpointed forward, so a
+    # mark cannot leak from one block into the next.
+    marked = {"armed": False}
+
+    def wrapped_policy(ctx, func, *args, **kwargs) -> CheckpointPolicy:
+        op_name = getattr(func, "__name__", str(func))
+        if is_mark_op(op_name):
+            marked["armed"] = True
+            # The marker is a copy, not something worth keeping.
+            return CheckpointPolicy.MUST_RECOMPUTE
+        if not any(pattern.search(op_name) for pattern in save_ops_regex):
+            return CheckpointPolicy.MUST_RECOMPUTE
+        if not save_only_marked_ops:
+            return CheckpointPolicy.MUST_SAVE
+        if marked["armed"]:
+            marked["armed"] = False
+            return CheckpointPolicy.MUST_SAVE
+        return CheckpointPolicy.MUST_RECOMPUTE
+
+    return wrapped_policy
+
+
 def _apply_selective_ac(
     module: nn.Module,
     ac: ActivationCheckpointingConfig,
 ) -> nn.Module:
     """Apply per-op selective activation checkpointing to ``module``."""
     save_ops_regex = [re.compile(pattern) for pattern in ac.save_ops_regex]
-
-    def _get_custom_policy():
-        def wrapped_policy(ctx, func, *args, **kwargs) -> CheckpointPolicy:
-            op_name = getattr(func, "__name__", str(func))
-            if any(pattern.search(op_name) for pattern in save_ops_regex):
-                return CheckpointPolicy.MUST_SAVE
-            return CheckpointPolicy.MUST_RECOMPUTE
-
-        return wrapped_policy
+    if ac.save_only_marked_ops:
+        # Here rather than at the call sites: this is the one place that knows the
+        # policy wants marks, and it runs before the first forward, so the marker is
+        # a pass-through for every model that does not ask for it.
+        enable_marking()
 
     return ptd_checkpoint_wrapper(
         module,
-        context_fn=lambda: create_selective_checkpoint_contexts(_get_custom_policy()),
+        context_fn=lambda: create_selective_checkpoint_contexts(
+            make_selective_ac_policy(save_ops_regex, save_only_marked_ops=ac.save_only_marked_ops)
+        ),
         preserve_rng_state=ac.preserve_rng_state,
         determinism_check=ac.determinism_check,
     )

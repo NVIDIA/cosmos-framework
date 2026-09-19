@@ -127,10 +127,11 @@ def build_processor(
     # (e.g. the top level of nvidia/Cosmos3-Nano, which ships its own
     # preprocessor_config.json, tokenizer.json, etc). Avoids the redundant
     # upstream Qwen/Qwen3-VL-*-Instruct fetch. Qwen3-VL Nemo Chat variants use
-    # their specialized loss-mask wrapper. Renewed Cosmos3-Edge snapshots use
-    # the Nemotron bridge; other local artifacts use Qwen3VLProcessor.
+    # their specialized loss-mask wrapper. Nemotron3-Dense-VL and renewed
+    # Cosmos3-Edge snapshots use the Nemotron bridge; other local artifacts use
+    # Qwen3VLProcessor.
     if os.path.isdir(tokenizer_type):
-        if is_cosmos3_edge_native_snapshot(tokenizer_type):
+        if is_cosmos3_edge_native_snapshot(tokenizer_type) or "NVIDIA-Nemotron-3-Dense-VL" in tokenizer_type:
             return Nemotron3DenseVLProcessor(tokenizer_type, cache_dir=cache_dir)
         if "Qwen/Qwen3-VL" in tokenizer_type and "Nemo-Chat" in tokenizer_type:
             return Qwen3VLNemoChatProcessor(tokenizer_type, cache_dir=cache_dir)

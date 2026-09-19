@@ -28,6 +28,7 @@ from cosmos_framework.configs.base.defaults.multiview_attention import (
     MultiviewAttentionConfig,
     resolve_caption_scope,
 )
+from cosmos_framework.model.generator.mot.activation_marks import mark_next_activation
 from cosmos_framework.model.generator.mot.merge_bridge import BridgeFn, MergeAttentionsBridge
 from cosmos_framework.data.generator.sequence_packing.runtime import (
     SequencePack,
@@ -813,9 +814,16 @@ def multiview_maskless_gen_attention(
     # and the kernel's own output is that order -- no gather, no bridge. A control item puts a
     # view's tokens in two runs instead, which costs the gather and the bridge back.
     view_gather = plan.same_view_gather
+    # Keep this fold's output under selective AC rather than recomputing it: it is
+    # ~96% of forward attention time and ~94% of backward, against three other
+    # calls running the same kernel that a name-matching policy cannot tell apart.
+    # The mark goes on K because it is the smallest operand the call takes -- 32 query
+    # heads against 8 KV heads, 2 against 1 per rank under CP16 -- and marking copies
+    # what it marks.
+    same_view_k = mark_next_activation((k if view_gather is None else k[view_gather]).unsqueeze(0))
     same_view_out, same_view_lse = attention(
         (q if view_gather is None else q[view_gather]).unsqueeze(0),  # [1,N_gen,heads,head_dim]
-        (k if view_gather is None else k[view_gather]).unsqueeze(0),  # [1,N_gen,kv_heads,head_dim]
+        same_view_k,  # [1,N_gen,kv_heads,head_dim]
         (v if view_gather is None else v[view_gather]).unsqueeze(0),  # [1,N_gen,kv_heads,head_dim]
         cumulative_seqlen_Q=plan.same_view_offsets,
         cumulative_seqlen_KV=plan.same_view_offsets,

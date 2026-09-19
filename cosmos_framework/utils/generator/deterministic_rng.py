@@ -22,6 +22,9 @@ def sample_identity_seed(root: object, key: object, epoch: int = 0) -> int:
 def sample_seed(data: dict[str, Any]) -> int:
     url = data.get("__url__", "")
     root = getattr(url, "root", url)
+    local_data_prefix = getattr(getattr(url, "meta", None), "opts", {}).get("local_data_prefix")
+    if isinstance(root, str) and isinstance(local_data_prefix, str):
+        root = root.removeprefix(local_data_prefix.rstrip("/") + "/")
     sample_meta = getattr(url, "sample_meta", None)
     epoch = int(data.get("sample_epoch", getattr(sample_meta, "sample_epoch", 0)))
     return sample_identity_seed(root, data.get("__key__", ""), epoch)
