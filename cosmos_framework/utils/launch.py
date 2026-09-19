@@ -5,9 +5,10 @@ import argparse
 import os
 import sys
 import time
+from collections.abc import Mapping
 
 import torch
-from omegaconf import OmegaConf
+import yaml
 
 from cosmos_framework.utils.config import Config
 from cosmos_framework.utils import distributed, log
@@ -18,6 +19,12 @@ from cosmos_framework.utils.wandb_util import set_wandb_job_info
 
 # Global variable to track S3 readiness
 S3_READY = False
+
+
+def _save_reproducibility_yaml(data: Mapping[str, object], path: str) -> None:
+    """Save metadata as literal YAML without interpreting OmegaConf interpolation syntax."""
+    with open(path, "w") as file:
+        yaml.safe_dump(data, file, sort_keys=False, default_flow_style=False, allow_unicode=True)
 
 
 def log_reproducible_setup(config: Config, args: argparse.Namespace) -> None:
@@ -49,7 +56,7 @@ def log_reproducible_setup(config: Config, args: argparse.Namespace) -> None:
           (like saving configurations) are restricted to the main node (rank 0).
         - It uses the 'easy_io' module for interacting with S3, ensuring files are written and
           read correctly from the object store.
-        - It leverages OmegaConf for saving YAML configurations
+        - It saves metadata as literal YAML so shell syntax in captured git diffs remains unchanged.
         - git information is read from 'git_commit.txt' and 'git_branch.txt' files if they exist.
         - snapshot codebase is saved as 'codebase.zip' if it exists in the current directory.
 
@@ -114,10 +121,8 @@ def log_reproducible_setup(config: Config, args: argparse.Namespace) -> None:
                 job_info["git_diff"] = f.read().strip()
                 log.critical(f"git diff: {job_info['git_diff']}")
 
-        with open(f"{job_local_path}/job_env.yaml", "w") as f:
-            OmegaConf.save(job_info, f)
-        with open(f"{job_local_path}/launch_info.yaml", "w") as f:
-            OmegaConf.save(launch_info, f)
+        _save_reproducibility_yaml(job_info, f"{job_local_path}/job_env.yaml")
+        _save_reproducibility_yaml(launch_info, f"{job_local_path}/launch_info.yaml")
         set_wandb_job_info(job_info)
 
         # by default, we upload run in ngc and slurm

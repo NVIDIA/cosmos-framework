@@ -420,6 +420,34 @@ class TextTransformForVideoTransferChunkedFrames(TextTransformForVideoTransferFu
         # The parser still needs metadata for fps/resolution after this transform.
         self.keep_metas = self.args.get("keep_metas", True)
         self.min_num_frames = int(self.args.get("min_num_frames", 5))
+        self.target_num_frames: int | None = self.args.get("target_num_frames")
+
+    def _supports_target_length(self, start_frame: int, end_frame: int, option: dict, meta_dict: dict) -> bool:
+        """Keep complete caption windows that can be resampled without duplicating frames."""
+        if self.target_num_frames is None:
+            return True
+        if self.target_num_frames < 1 or end_frame - start_frame < self.target_num_frames:
+            return False
+        try:
+            source_num_frames = int(meta_dict["nb_frames"])
+            source_fps = float(meta_dict["framerate"])
+        except (KeyError, TypeError, ValueError):
+            return False
+        if start_frame < 0 or end_frame > source_num_frames:
+            return False
+        if self.target_num_frames == 1:
+            # A single generated frame cannot represent an entire multi-frame
+            # caption window, even when VAE alignment maps it to one latent.
+            if end_frame - start_frame != 1:
+                return False
+            stride = 1.0
+        else:
+            stride = (end_frame - start_frame - 1) / (self.target_num_frames - 1)
+        min_stride = int(option.get("min_stride", self.args.get("min_stride", 1)))
+        max_stride = max(int(self.args.get("max_stride", 3)), min_stride)
+        min_fps = float(self.args.get("min_fps", 0.0))
+        max_fps = float(self.args.get("max_fps", float("inf")))
+        return min_stride <= stride <= max_stride and min_fps <= source_fps / stride <= max_fps
 
     def __call__(self, data_dict: dict) -> dict | None:
         meta_dict = data_dict.get(self.meta_key)
@@ -472,7 +500,9 @@ class TextTransformForVideoTransferChunkedFrames(TextTransformForVideoTransferFu
                     end_frame = int(chunk["end_frame"])
                 except (KeyError, TypeError, ValueError):
                     continue
-                if end_frame - start_frame >= self.min_num_frames:
+                if end_frame - start_frame >= self.min_num_frames and self._supports_target_length(
+                    start_frame, end_frame, sampled_caption_option, meta_dict
+                ):
                     eligible_chunk_keys.append(chunk_key)
 
             if not eligible_chunk_keys:
@@ -488,6 +518,14 @@ class TextTransformForVideoTransferChunkedFrames(TextTransformForVideoTransferFu
             chunk_start_frame = int(sampled_chunk["start_frame"])
             chunk_end_frame = int(sampled_chunk["end_frame"])
             structured = json.loads(sampled_chunk["caption"])
+            if self.target_num_frames is not None and not isinstance(structured, dict):
+                raise ValueError("Exact target lengths require a structured caption dictionary.")
+            if self.target_num_frames is not None:
+                # Remove source metadata before the downstream augmentor appends
+                # the sampled clip's duration/FPS. Keep the teacher's established
+                # serialized-caption format and preserve all narrative fields.
+                structured.pop("duration", None)
+                structured.pop("fps", None)
         except Exception as e:
             log.warning(
                 f"TextTransformForVideoTransferChunkedFrames: failed to decode {sampled_caption_key}.{self.CAPTION_FIELD}. "

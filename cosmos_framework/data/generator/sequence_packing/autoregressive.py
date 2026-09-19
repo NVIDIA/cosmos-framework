@@ -3,16 +3,42 @@
 
 """Autoregressive sequence packing for framewise and chunkwise AR generation."""
 
-from typing import cast
+from typing import Any, cast
 
 import torch
 
+from cosmos_framework.data.generator.augmentors.text_tokenizer import TEXT_SYSTEM_PROMPT_KEY
 from cosmos_framework.model.generator.utils.data_and_condition import GenerationDataClean
 from cosmos_framework.data.generator.sequence_packing import (
     PackedSequence,
     SequencePlan,
     pack_input_sequence,
 )
+
+
+def resolve_text_system_prompt(data_batch: dict[str, Any]) -> Any:
+    """Read tokenizer metadata, falling back to the legacy key only when absent."""
+    return data_batch.get(TEXT_SYSTEM_PROMPT_KEY, data_batch.get("system_prompt"))
+
+
+def caption_system_prompts(sequence_plans: list[SequencePlan], data_batch: dict[str, Any]) -> list[str | None]:
+    """Expand exact per-sample tokenizer prompts over the packed caption slots."""
+    value = resolve_text_system_prompt(data_batch)
+    if value is None or isinstance(value, str):
+        prompts = [value] * len(sequence_plans)
+    elif isinstance(value, (list, tuple)):
+        if len(value) != len(sequence_plans):
+            raise ValueError("Tokenizer system prompts must have one entry per sample.")
+        prompts = list(value)
+    else:
+        raise TypeError("Tokenizer system prompts must be strings or a per-sample sequence.")
+    if any(prompt is not None and not isinstance(prompt, str) for prompt in prompts):
+        raise TypeError("Each tokenizer system prompt must be a string or None.")
+    return [
+        prompt
+        for plan, prompt in zip(sequence_plans, prompts)
+        for _ in range(len(plan.text_view_ids) if plan.text_view_ids is not None else 1)
+    ]
 
 
 def pack_input_sequence_autoregressive(

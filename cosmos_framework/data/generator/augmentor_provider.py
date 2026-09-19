@@ -1519,3 +1519,136 @@ def image_basic_augmentor_json_caption(
     }
 
     return augmentation
+
+
+def _insert_relative(augmentors: dict, anchor: str, new_key: str, new_value, *, after: bool) -> dict:
+    """Return a copy of ``augmentors`` with ``new_key`` inserted right before or right after ``anchor``."""
+    if anchor not in augmentors:
+        raise KeyError(f"{anchor!r} not found in pipeline; cannot insert {new_key}")
+    out: dict = {}
+    for key, value in augmentors.items():
+        if key == anchor and not after:
+            out[new_key] = new_value
+        out[key] = value
+        if key == anchor and after:
+            out[new_key] = new_value
+    return out
+
+
+def _insert_before(augmentors: dict, anchor_keys: tuple[str, ...], new_key: str, new_value) -> dict:
+    """Return a copy of ``augmentors`` with ``new_key`` inserted before the first present anchor key."""
+    anchor = next((k for k in anchor_keys if k in augmentors), None)
+    if anchor is None:
+        raise KeyError(f"None of {anchor_keys} found in pipeline; cannot insert {new_key}")
+    return _insert_relative(augmentors, anchor, new_key, new_value, after=False)
+
+
+def _insert_low_res_stage(augmentors: dict, add_low_res) -> dict:
+    """Place ``AddLowRes`` so the LR is derived from exactly the HR frame the model will see.
+
+    - Reflection-padding path (causal VAE): LR is made from the *unpadded* frame, before ``reflection_padding``;
+      ``SRToTrainingFormat`` pads LR separately to half the HR bucket, so LR and HR stay aligned at the top-left.
+    - Crop path (non-causal / UniAE, ``crop_to_multiple``): LR is made *after* the centre crop. Making it before
+      would derive LR from pixels the HR no longer contains (spatial misalignment) and, when the crop changes the
+      size, a larger LR than the target that ``SRToTrainingFormat`` cannot pad down.
+    """
+    if "reflection_padding" in augmentors:
+        return _insert_relative(augmentors, "reflection_padding", "add_low_res", add_low_res, after=False)
+    if "crop_to_multiple" in augmentors:
+        return _insert_relative(augmentors, "crop_to_multiple", "add_low_res", add_low_res, after=True)
+    raise KeyError("Pipeline has neither reflection_padding nor crop_to_multiple; cannot place add_low_res")
+
+
+@augmentor_register("video_basic_augmentor_v3_json_caption_sr")
+def get_video_augmentor_v3_json_caption_sr(
+    resolution: str,
+    sr_scale: float = 2.0,
+    sr_profiles: dict[str, float] | str = "p1_first_order",
+    sr_seed_salt: str = "",
+    sr_chunk_frames: int = 8,
+    sr_device: str = "cpu",
+    sr_jpeg_backend: str = "auto",
+    sr_poisson_mode: str = "auto",
+    sr_share_vision_temporal_positions: bool = False,
+    **kwargs: object,
+) -> dict[str, object]:
+    """``video_basic_augmentor_v3_json_caption`` plus an on-the-fly HR-to-LR conditioning stream.
+
+    Adds ``AddLowRes`` (writes ``video_lr`` at ``1/sr_scale`` of the HR frame, uint8) right before
+    reflection padding, and ``SRToTrainingFormat`` as the last stage, which pads LR to half the HR
+    bucket and packs ``video = [lr, hr]`` with per-item ``image_size`` and a two-item SequencePlan.
+    All other stages (caption, chunked decode, sequence plan, sound) are inherited unchanged.
+    """
+    from cosmos_framework.data.generator.augmentors.hr_lr_degradation import augmentor as sr_augmentor
+
+    augmentors = get_video_augmentor_v3_json_caption(resolution=resolution, **kwargs)
+    add_low_res = L(sr_augmentor.AddLowRes)(
+        input_keys=["video"],
+        output_keys=["video_lr"],
+        args={
+            "scale": sr_scale,
+            "profiles": sr_profiles,
+            "seed_salt": sr_seed_salt,
+            "modality": "video",
+            "chunk_frames": sr_chunk_frames,
+            "device": sr_device,
+            "jpeg_backend": sr_jpeg_backend,
+            "poisson_mode": sr_poisson_mode,
+        },
+    )
+    augmentors = _insert_low_res_stage(augmentors, add_low_res)
+    augmentors["sr_to_training_format"] = L(sr_augmentor.SRToTrainingFormat)(
+        input_keys=["video", "video_lr"],
+        args={
+            "media_key": "video",
+            "lr_key": "video_lr",
+            "scale": sr_scale,
+            "share_vision_temporal_positions": sr_share_vision_temporal_positions,
+            "dataset_name": "video_sr",
+        },
+    )
+    return augmentors
+
+
+@augmentor_register("image_basic_augmentor_with_tokenization_sr")
+def image_basic_augmentor_with_tokenization_sr(
+    resolution: str,
+    sr_scale: float = 2.0,
+    sr_profiles: dict[str, float] | str = "p1_first_order",
+    sr_seed_salt: str = "",
+    sr_device: str = "cpu",
+    sr_jpeg_backend: str = "auto",
+    sr_poisson_mode: str = "auto",
+    **kwargs: object,
+) -> dict[str, object]:
+    """``image_basic_augmentor_with_tokenization`` plus an on-the-fly HR-to-LR conditioning image.
+
+    ``AddLowRes`` runs before ``reflection_padding`` (on the resized uint8 image), the LR copy gets
+    its own ``Normalize`` so both items reach the model as float in [-1, 1], and
+    ``SRToTrainingFormat`` packs ``images = [lr, hr]`` with per-item ``image_size``.
+    """
+    from cosmos_framework.data.generator.augmentors.hr_lr_degradation import augmentor as sr_augmentor
+
+    augmentors = image_basic_augmentor_with_tokenization(resolution=resolution, **kwargs)
+    add_low_res = L(sr_augmentor.AddLowRes)(
+        input_keys=["images"],
+        output_keys=["images_lr"],
+        args={
+            "scale": sr_scale,
+            "profiles": sr_profiles,
+            "seed_salt": sr_seed_salt,
+            "modality": "image",
+            "chunk_frames": 1,
+            "device": sr_device,
+            "jpeg_backend": sr_jpeg_backend,
+            "poisson_mode": sr_poisson_mode,
+        },
+    )
+    augmentors = _insert_before(augmentors, ("reflection_padding",), "add_low_res", add_low_res)
+    normalize_lr = L(normalize.Normalize)(input_keys=["images_lr"], args={"mean": 0.5, "std": 0.5})
+    augmentors = _insert_before(augmentors, ("text_transform",), "normalize_lr", normalize_lr)
+    augmentors["sr_to_training_format"] = L(sr_augmentor.SRToTrainingFormat)(
+        input_keys=["images", "images_lr"],
+        args={"media_key": "images", "lr_key": "images_lr", "scale": sr_scale, "dataset_name": "image_sr"},
+    )
+    return augmentors

@@ -27,6 +27,7 @@ from typing_extensions import override
 
 import cosmos_framework.model.generator.omni_mot_model as omni_mot_model_module
 from cosmos_framework.configs.base.defaults.model_config import OmniMoTModelConfig
+from cosmos_framework.data.generator.augmentors.text_tokenizer import TEXT_SYSTEM_PROMPT_KEY
 from cosmos_framework.model.generator.omni_mot_model import OmniMoTModel, _broadcast_seed, _per_view_caption_groups
 from cosmos_framework.model.generator.utils.data_and_condition import GenerationDataClean
 from cosmos_framework.model.generator.utils.memory import MemoryState
@@ -71,6 +72,7 @@ from cosmos_framework.model.generator.utils.nvfp4 import resolve_legacy_nvfp4_mo
 from cosmos_framework.data.generator.sequence_packing.autoregressive import (
     pack_input_sequence_autoregressive,
     pack_input_sequence_autoregressive_batch,
+    resolve_text_system_prompt,
 )
 from cosmos_framework.utils.generator.data_batch import condition_frame_indexes_vision_from_batch
 
@@ -652,7 +654,7 @@ class OmniMoTCausalModel(OmniMoTModel):
     def memory_init_training(
         self,
         gen_data_clean: GenerationDataClean,
-        data_batch: dict[str, torch.Tensor],
+        data_batch: dict[str, Any],
         input_text_indexes: list[list[int]],
     ) -> tuple[GenerationDataClean, dict]:
         """Prepare per-step memory info for causal training.
@@ -673,7 +675,13 @@ class OmniMoTCausalModel(OmniMoTModel):
             gen_data_clean = self._truncate_for_chunkwise_tf(gen_data_clean)
             self._assert_chunkwise_tf_shape(gen_data_clean)
 
+        # Keep the exact tokenizer task with its CP owner's cached training payload.
+        # Later CP window slots ignore the rank-local raw batch entirely.
+        text_system_prompt = resolve_text_system_prompt(data_batch)
+        if isinstance(text_system_prompt, (list, tuple)):
+            text_system_prompt = list(text_system_prompt)
         return gen_data_clean, {
+            TEXT_SYSTEM_PROMPT_KEY: text_system_prompt,
             "skip_text": False,
             "initial_temporal_offset": 0,
             "dual_kv_cache": None,

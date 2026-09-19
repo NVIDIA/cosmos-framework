@@ -506,6 +506,12 @@ class VideoTransferAlignedChunkedFramesParsing(VideoTransferAlignedFullFramesPar
         assert self.teacher_forcing_frames_per_chunk >= 1, (
             f"teacher_forcing_frames_per_chunk must be >= 1, got {self.teacher_forcing_frames_per_chunk}"
         )
+        self.target_num_frames: int | None = self.args.get("target_num_frames")
+        if self.target_num_frames is not None:
+            if not self.min_num_frames <= self.target_num_frames <= self.args.get("max_num_frames", 1000):
+                raise ValueError("target_num_frames must lie between min_num_frames and max_num_frames.")
+            if self.target_num_frames < 1 or (self.target_num_frames - 1) % (4 * self.teacher_forcing_frames_per_chunk):
+                raise ValueError("target_num_frames must contain complete VAE/teacher-forcing chunks after frame one.")
 
     def _sample_frame_indices_for_chunk(
         self,
@@ -513,7 +519,27 @@ class VideoTransferAlignedChunkedFramesParsing(VideoTransferAlignedFullFramesPar
         chunk_start: int,
         chunk_end: int,
         min_stride_override: int | None = None,
-    ) -> tuple[list[int], int]:
+    ) -> tuple[list[int], float]:
+        if self.target_num_frames is not None:
+            # A caption describes its complete window. Resample that whole span,
+            # rather than retaining its narrative after an unrelated prefix crop.
+            if chunk_start < 0 or chunk_end > decoder_len or chunk_end - chunk_start < self.target_num_frames:
+                return [], 0
+            if self.target_num_frames == 1:
+                # Only a one-frame caption window is faithful to a one-frame
+                # output; never collapse a multi-frame narrative into a still.
+                if chunk_end - chunk_start != 1:
+                    return [], 0
+                effective_stride = 1.0
+            else:
+                effective_stride = (chunk_end - chunk_start - 1) / (self.target_num_frames - 1)
+            min_stride = int(min_stride_override) if min_stride_override is not None else self.min_stride
+            max_stride = max(self.max_stride, min_stride)
+            if not min_stride <= effective_stride <= max_stride:
+                return [], effective_stride
+            frame_indices = [chunk_start + round(frame * effective_stride) for frame in range(self.target_num_frames)]
+            return frame_indices, effective_stride
+
         chunk_start = max(0, min(chunk_start, decoder_len))
         chunk_end = max(chunk_start, min(chunk_end, decoder_len))
         if chunk_end <= chunk_start:
@@ -594,6 +620,12 @@ class VideoTransferAlignedChunkedFramesParsing(VideoTransferAlignedFullFramesPar
                     f"url: {data_dict['__url__']}, key: {data_dict['__key__']}",
                     rank0_only=False,
                 )
+                return None
+            if self.target_num_frames is not None and not (
+                self.args.get("min_fps", 0.0)
+                <= meta_dict["framerate"] / stride
+                <= self.args.get("max_fps", float("inf"))
+            ):
                 return None
 
             video_frames = self._decode_frames_at(video, frame_indices, rgb_transform)  # [C,T,H,W]
