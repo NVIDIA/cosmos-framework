@@ -138,6 +138,23 @@ def _find_non_causal_text_token_idx(
     return out
 
 
+def to_device_nonblocking(tensor: torch.Tensor, device: torch.device | str) -> torch.Tensor:
+    """Move ``tensor`` to ``device`` without stalling the host.
+
+    A pageable host->device copy (``tensor.cuda()`` / ``torch.tensor(list, device="cuda")``)
+    blocks the CPU until every kernel already queued on the device has finished, which keeps
+    the CPU from running ahead of the GPU in per-frame inference loops.  Staging the bytes
+    through pinned memory makes the same copy asynchronous; the values are identical and the
+    caching host allocator keeps the staging block alive until the copy has completed.
+    """
+    target = torch.device(device)
+    if tensor.device == target or tensor.numel() == 0:
+        return tensor.to(target)
+    if target.type == "cuda" and tensor.device.type == "cpu" and not tensor.is_pinned():
+        tensor = tensor.pin_memory()
+    return tensor.to(target, non_blocking=True)
+
+
 def _compute_mode_indices_and_offsets(
     split_lens: torch.Tensor | List[int], attn_modes: List[str], mode: str, device: torch.device
 ) -> tuple[torch.Tensor, torch.Tensor]:
@@ -160,8 +177,8 @@ def _compute_mode_indices_and_offsets(
         start += split_len
 
     return (
-        torch.tensor(indices, dtype=torch.int32, device=device),
-        torch.tensor(offsets, dtype=torch.int32, device=device),
+        to_device_nonblocking(torch.tensor(indices, dtype=torch.int32), device),
+        to_device_nonblocking(torch.tensor(offsets, dtype=torch.int32), device),
     )  # [N_mode_tokens], [N_mode_splits+1]
 
 
@@ -318,9 +335,9 @@ def _build_sequence_pack_metadata(
     _max_causal_len = max((split_lens[i] for i in range(len(split_lens)) if attn_modes[i] == "causal"), default=0)
     _max_full_len = max((split_lens[i] for i in range(len(split_lens)) if attn_modes[i] == "full"), default=0)
 
-    sample_lens_cu = torch.tensor([0] + sample_lens, device=device, dtype=torch.int32)  # [N_samples+1]
+    sample_lens_cu = to_device_nonblocking(torch.tensor([0] + sample_lens, dtype=torch.int32), device)  # [N_samples+1]
     _sample_offsets = torch.cumsum(sample_lens_cu, dim=0, dtype=torch.int32)  # [N_samples+1]
-    sample_lens_tensor = torch.tensor(sample_lens, device=device, dtype=torch.int64)  # [N_samples]
+    sample_lens_tensor = to_device_nonblocking(torch.tensor(sample_lens, dtype=torch.int64), device)  # [N_samples]
     sample_ids = torch.repeat_interleave(
         torch.arange(len(sample_lens), device=device, dtype=torch.int64),
         sample_lens_tensor,

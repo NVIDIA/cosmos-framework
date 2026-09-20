@@ -264,12 +264,12 @@ def test_sanitize_student_public_model_config_removes_internal_loaders() -> None
         "config": {
             "tokenizer": {
                 "bucket_name": "bucket",
-                "object_store_credential_path_pretrained": "",
+                "object_store_credential_path_pretrained": None,
                 "vae_path": "pretrained/tokenizers/video/wan2pt2/Wan2.2_VAE.pth",
             },
             "sound_tokenizer": {
                 "bucket_name": "bucket",
-                "object_store_credential_path_pretrained": "",
+                "object_store_credential_path_pretrained": None,
                 "avae_path": "pretrained/tokenizers/audio/avae/avae.ckpt",
             },
             "vlm_config": {
@@ -477,3 +477,58 @@ def test_resolve_student_base_model_tolerates_missing_config() -> None:
     model_cls, _ = distillation_export.resolve_student_base_model({}, default_base_model=_DefaultBaseModel)
 
     assert model_cls is _DefaultBaseModel
+
+
+@pytest.mark.L0
+@pytest.mark.CPU
+def test_public_export_removes_every_lidar_internal_path() -> None:
+    """vae_path goes to the published location; any other object-store path loses its bucket.
+
+    V0 adds latent_stats_path, pointing at the same internal bucket, so rewriting vae_path alone
+    published it through a field nobody had listed.
+    """
+    from cosmos_framework.inference.common.distillation_export import sanitize_student_public_model_config
+
+    model = {
+        "config": {
+            "lidar_tokenizer": {
+                "bucket_name": "an-internal-bucket",
+                "object_store_credential_path_pretrained": "credentials/secret.secret",
+                "vae_path": "s3://an-internal-bucket/lidar/tokenizer/v0/checkpoints/iter_1.pt",
+                "latent_stats_path": "s3://an-internal-bucket/lidar/tokenizer/latent_stats.pt",
+            }
+        }
+    }
+    sanitize_student_public_model_config(model)
+    lidar = model["config"]["lidar_tokenizer"]
+    assert lidar["bucket_name"] == "bucket"
+    # None, not "": VideoTokenizerInterface reads None as "no credentials" and anything else as
+    # a path, so an empty string is a path that does not exist and it raises at load time. The
+    # published artifact only surfaced this end to end -- this assertion had the wrong value too.
+    assert lidar["object_store_credential_path_pretrained"] is None
+    assert lidar["vae_path"] == "pretrained/tokenizers/lidar/diffusion_pytorch_model.safetensors"
+    assert lidar["latent_stats_path"] == "s3://bucket/lidar/tokenizer/latent_stats.pt"
+    assert "an-internal-bucket" not in str(model)
+
+
+@pytest.mark.L0
+@pytest.mark.CPU
+def test_public_export_leaves_relative_lidar_fields_alone() -> None:
+    """A value with no scheme carries no bucket. vae_path is rewritten regardless, because the
+    internal name carries a training iteration and the published artifact is safetensors."""
+    from cosmos_framework.inference.common.distillation_export import sanitize_student_public_model_config
+
+    model = {
+        "config": {
+            "lidar_tokenizer": {
+                "vae_path": "tokenizer/v1p2/iter_000030000.pt",
+                "latent_stats_path": "tokenizer/latent_stats.pt",
+                "dtype": "float32",
+            }
+        }
+    }
+    sanitize_student_public_model_config(model)
+    lidar = model["config"]["lidar_tokenizer"]
+    assert lidar["vae_path"] == "pretrained/tokenizers/lidar/diffusion_pytorch_model.safetensors"
+    assert lidar["latent_stats_path"] == "tokenizer/latent_stats.pt"
+    assert lidar["dtype"] == "float32"

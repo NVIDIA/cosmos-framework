@@ -97,49 +97,37 @@ torch._dynamo.config.accumulated_cache_size_limit = 4096
 
 def _pad_packed_tokens_by_sample(
     tokens: torch.Tensor,  # [N_padded,H,D]
-    sample_ids: torch.Tensor,  # [N_padded]
+    lengths: tuple[int, ...],
     num_real_tokens: int,
-    batch_size: int,
-) -> tuple[torch.Tensor, tuple[int, ...]]:  # ([B,S_max,H,D], tuple[B])
+) -> torch.Tensor:  # [B,S_max,H,D]
     """Restore the batch dimension needed to store packed K/V in the AR cache.
 
-    Attention projects one flat, sample-major token stream, but the batched
-    cache stores independent ``[B,S,H,D]`` rows. A leading ``unsqueeze(0)``
-    would merge all samples into one history; a reshape cannot handle unequal
-    prompt lengths. This helper copies each sample's tokens into its own row
-    and zero-pads shorter rows to the longest sequence in this pathway.
-
-    ``sample_ids`` are SequencePack's batch-local row ordinals, not persistent
-    dataset or request IDs. The real prefix must already be grouped in
-    increasing sample order, with IDs in ``[0,batch_size)``; this function
-    counts boundaries but does not sort or gather interleaved samples. The
-    caller must keep the same batch-row order while reusing the AR cache.
-
-    Args:
-        tokens: Packed K or V, ``[N_padded,H,D]``. Only the leading
-            ``num_real_tokens`` entries are copied; alignment padding is ignored.
-        sample_ids: Integer row ordinal for each token, ``[N_padded]``.
-        num_real_tokens: Length of the real token prefix shared by both inputs.
-        batch_size: Number of cache rows, including samples empty in this pathway.
-
-    Returns:
-        Zero-padded ``[B,S_max,H,D]`` tokens and the ``B`` real sequence lengths.
-        Padding is storage only: attention must use real lengths, not attend
-        to the zero tails. ``ARMemoryState`` obtains the same lengths from the
-        pack and carries them alongside the cache.
+    Attention projects one flat, sample-major token stream, but the cache stores independent
+    ``[B,S,H,D]`` rows.  ``lengths`` are the per-sample token counts of this pathway, taken from
+    the pack's host-side layout (``per_sample_pathway_lengths``), so no device->host sync happens
+    inside the compiled block.  Equal lengths (every AR generation split, and ``B=1``) are a pure
+    view of the real prefix; unequal prompt lengths are copied into a zero-padded tensor whose
+    padding is storage only -- readers must use the real lengths.
     """
-    real_sample_ids = sample_ids[:num_real_tokens]  # [N]
-    lengths_tensor = torch.bincount(real_sample_ids, minlength=batch_size)  # [B]
-    lengths = tuple(int(length) for length in lengths_tensor.tolist())
-    max_length = max(lengths, default=0)
+    if sum(lengths) != num_real_tokens:
+        raise AssertionError(f"Packed token lengths {lengths} sum to {sum(lengths)}, expected {num_real_tokens}")
+    batch_size = len(lengths)
+    if batch_size == 1:
+        # The legacy single-sample path, kept literally: no shape arithmetic on lengths, which are
+        # symbolic under dynamic-shape compilation and may disagree with the (possibly empty)
+        # traced stream (e.g. the und stream of a gen-only frame).
+        return tokens[:num_real_tokens].unsqueeze(0)  # [1,S,H,D]
+    # Traced under torch.compile with symbolic lengths (dynamic shapes): keep to builtins Dynamo
+    # handles on SymInts (no ``max(..., default=)``).
+    max_length = max(lengths) if lengths else 0
+    if all(length == max_length for length in lengths):
+        return tokens[:num_real_tokens].view(batch_size, max_length, *tokens.shape[1:])  # [B,S,H,D]
     padded = tokens.new_zeros((batch_size, max_length, *tokens.shape[1:]))  # [B,S_max,H,D]
     offset = 0
     for sample_idx, length in enumerate(lengths):
         padded[sample_idx, :length] = tokens[offset : offset + length]  # [S_i,H,D]
         offset += length
-    if offset != num_real_tokens:
-        raise AssertionError(f"Packed token lengths sum to {offset}, expected {num_real_tokens}")
-    return padded, lengths
+    return padded
 
 
 # -----------------------------------------------------------------------------
@@ -848,34 +836,28 @@ class PackedAttentionMoT(nn.Module):
             # of raw k_und_.  Without the norm, k_und_for_gen_ is not defined, so
             # fall back to k_und_.
             k_und_to_store = k_und_for_gen_ if self.k_norm_und_for_gen is not None else k_und_
+            # Undo sample packing before cache writes: batch row i must keep sample i's history
+            # across AR steps.  One construction for every batch size and no device->host sync
+            # inside the compiled block: AR packs give every sample the same generation split, so
+            # the gen rows are a view of the real prefix (B=1 included); prompt lengths come from
+            # the memory state, which read them on the host at frame 0.  Unequal prompts are
+            # zero-padded and ARMemoryState excludes the padding on reads.
             memory_batch_size = int(getattr(memory_value, "batch_size", 1))
-            if memory_batch_size > 1:
-                # Undo sample packing before cache writes: batch row i must keep
-                # sample i's history across AR steps. UND prompt lengths may
-                # differ, so pad each pathway independently; ARMemoryState uses
-                # the pack's real per-row lengths to exclude padding on reads.
-                gen_k_batched, gen_lengths = _pad_packed_tokens_by_sample(
-                    k_gen_, pack["_full_only_sample_ids"], gen_len, memory_batch_size
-                )  # [B,S_gen,H,D], tuple[B]
-                gen_v_batched, gen_v_lengths = _pad_packed_tokens_by_sample(
-                    v_gen, pack["_full_only_sample_ids"], gen_len, memory_batch_size
-                )  # [B,S_gen,H,D], tuple[B]
-                und_k_batched, und_lengths = _pad_packed_tokens_by_sample(
-                    k_und_to_store, pack["_causal_sample_ids"], und_len, memory_batch_size
-                )  # [B,S_und_max,H,D], tuple[B]
-                und_v_batched, und_v_lengths = _pad_packed_tokens_by_sample(
-                    v_und, pack["_causal_sample_ids"], und_len, memory_batch_size
-                )  # [B,S_und_max,H,D], tuple[B]
-                if gen_lengths != gen_v_lengths or und_lengths != und_v_lengths:
-                    raise AssertionError("Packed K/V sample lengths differ")
-                kv_to_store = (gen_k_batched, gen_v_batched, und_k_batched, und_v_batched)
+            if gen_len % memory_batch_size:
+                raise AssertionError(f"{gen_len} generation tokens do not split evenly over {memory_batch_size} rows")
+            gen_lengths = (gen_len // memory_batch_size,) * memory_batch_size
+            if und_len == 0:
+                und_lengths = (0,) * memory_batch_size
+            elif memory_batch_size == 1:
+                und_lengths = (und_len,)
             else:
-                kv_to_store = (
-                    k_gen_[:gen_len].unsqueeze(0),
-                    v_gen[:gen_len].unsqueeze(0),
-                    k_und_to_store[:und_len].unsqueeze(0),
-                    v_und[:und_len].unsqueeze(0),
-                )
+                und_lengths = tuple(memory_value.und_lens)
+            kv_to_store = (
+                _pad_packed_tokens_by_sample(k_gen_, gen_lengths, gen_len),  # [B,S_gen,H,D]
+                _pad_packed_tokens_by_sample(v_gen, gen_lengths, gen_len),  # [B,S_gen,H,D]
+                _pad_packed_tokens_by_sample(k_und_to_store, und_lengths, und_len),  # [B,S_und_max,H,D]
+                _pad_packed_tokens_by_sample(v_und, und_lengths, und_len),  # [B,S_und_max,H,D]
+            )
 
         # Attention compute is local-head under both sequence-sharded and
         # replicated attention I/O layouts.  The difference here is the output

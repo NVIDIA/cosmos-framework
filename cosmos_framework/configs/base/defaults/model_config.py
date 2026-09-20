@@ -16,6 +16,7 @@ from cosmos_framework.configs.base.defaults.quantization import QuantizationConf
 from cosmos_framework.configs.base.defaults.reasoner import VLMConfig
 from cosmos_framework.model.generator.mot.action_io_projector import ACTION_IO_PROJECTOR_TYPES
 from cosmos_framework.model.generator.utils.load_balancing_stats import LBLConfig
+from cosmos_framework.model.generator.utils.sr_latent_noise import SRLatentConditionNoiseConfig
 
 # Mirrors ``cosmos3.common.args.AttentionIOLayout``. Defined locally on purpose: importing
 # the ``cosmos3`` workspace package at module scope makes the whole cosmos3 config tree
@@ -350,6 +351,10 @@ class OmniMoTModelConfig:
     sound_tokenizer: LazyDict | None = None  # Sound tokenizer config (e.g., AVAE)
     sound_dim: int | None = None  # Sound latent channel size (e.g., 64 for AVAE 48kHz)
     sound_latent_fps: int = 25  # Sound tokenizer's latent rate (e.g., 48kHz / 1920 hop = 25 Hz)
+
+    # Super-resolution: Gaussian noise on the LR conditioning latent of SR samples during training (L1).
+    # None disables it. See cosmos_framework/model/generator/utils/sr_latent_noise.py.
+    sr_latent_condition_noise: SRLatentConditionNoiseConfig | None = None
 
     # When False, removes bias from vae2llm, sound2llm, and the two Linear layers inside
     # time_embedder.  These biases seem to inject token-constant DC offsets that dominate

@@ -1910,6 +1910,44 @@ class _MultiviewMasklessBatch:
     und_v: torch.Tensor  # [N_und,kv_heads,head_dim]
 
 
+def _natten_is_the_varlen_backend() -> bool:
+    """Whether a varlen GQA call on this device dispatches NATTEN's FMHA.
+
+    The selective-AC policy matches ops by name, and ``["fmha"]`` only matches where
+    NATTEN is the *selected* backend: on Blackwell cuDNN and flash2 both refuse varlen
+    and NATTEN wins, while on Hopper flash3 outranks it and nothing is named "fmha".
+    ``NATTEN_SUPPORTED`` says only that it is importable, which is true on both, so it
+    does not gate these -- the H200 CI runner is exactly where that distinction bit.
+    """
+    if not torch.cuda.is_available():
+        return False
+    try:
+        from cosmos_framework.model.attention.backends import choose_backend
+
+        return (
+            choose_backend(
+                query_shape=torch.Size((1, 128, 8, 64)),
+                key_shape=torch.Size((1, 128, 4, 64)),
+                value_shape=torch.Size((1, 128, 4, 64)),
+                dtype=torch.bfloat16,
+                device=torch.device("cuda"),
+                requires_grad=True,
+                is_causal=False,
+                causal_type=None,
+                is_varlen=True,
+                return_lse=True,
+                raise_error=False,
+            )
+            == "natten"
+        )
+    except Exception:  # noqa: BLE001 - a gate that cannot answer should skip, not error.
+        return False
+
+
+_NATTEN_IS_VARLEN_BACKEND = _natten_is_the_varlen_backend()
+_NOT_NATTEN_REASON = "The op-name policy only matches where NATTEN is the selected varlen backend."
+
+
 def _multiview_maskless_batch(
     *,
     und_len: int,
@@ -2626,6 +2664,456 @@ def test_multiview_maskless_attention_gradients_survive_activation_checkpointing
     for name, want in expected.items():
         # Exact: recomputation reruns the same kernels on the same inputs, so any difference is
         # the patch having missed its tensor rather than arithmetic.
+        torch.testing.assert_close(
+            actual[name].double(), want.double(), atol=0, rtol=0, msg=lambda m, n=name: f"{n}: {m}"
+        )
+
+
+@pytest.mark.L0
+@pytest.mark.GPU
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="The attention kernels require a GPU.")
+@pytest.mark.skipif(not NATTEN_SUPPORTED, reason="merge_attentions requires NATTEN.")
+@pytest.mark.parametrize("save_only_marked_ops", [False, True])
+def test_marking_keeps_one_maskless_fold_where_the_regex_keeps_all_four(save_only_marked_ops: bool) -> None:
+    """On the real folds, the mark separates calls ``["fmha"]`` cannot tell apart.
+
+    The three sensor passes and the causal one dispatch the same op, so the regex keeps
+    all four or none, while the same-view fold is the only one worth keeping -- ~96% of
+    forward attention time and ~94% of backward, the others cheap to recompute. That is
+    why ``multiview_maskless_attention`` marks that fold at its call site, and why the
+    cam+LiDAR arm configuring ``save_only_marked_ops`` gets selective AC back instead of
+    the ``mode="full"`` its siblings fell back to.
+
+    Run against the real folds rather than a stand-in because the mark has to survive
+    what this call site puts between it and the kernel: the gathers for Q and V are
+    evaluated after the mark line and the attention frontend reshapes internally, so
+    several ops dispatch in between. An earlier version that gave the mark to the next
+    op of any kind put it on a gather, and the fold it was meant for was recomputed
+    anyway.
+
+    Counted as a ratio because the compiled region is traced more than once and the
+    policy object is shared across those traces, so the absolute count is a multiple of
+    the four folds rather than four.
+    """
+    from torch.distributed.algorithms._checkpoint.checkpoint_wrapper import (
+        checkpoint_wrapper as ptd_checkpoint_wrapper,
+    )
+    from torch.utils.checkpoint import CheckpointPolicy, create_selective_checkpoint_contexts
+
+    from cosmos_framework.configs.base.defaults.activation_checkpointing import (
+        ATTENTION_FORWARD_OPS_REGEX,
+    )
+    from cosmos_framework.model.generator.mot.activation_marks import enable_marking, reset_marking_for_tests
+    from cosmos_framework.model.generator.mot.parallelize_unified_mot import make_selective_ac_policy
+
+    device = torch.device("cuda")
+    num_views, frames_per_view, patch_h, patch_w = 3, 2, 2, 3
+    token_shape = (num_views * frames_per_view, patch_h, patch_w)
+
+    # What ``_apply_selective_ac`` does at setup, and it has to happen before anything
+    # traces: ``context_fn`` runs after the region is traced, so flipping it there would
+    # leave the marker a pass-through in the compiled graph.
+    if save_only_marked_ops:
+        enable_marking()
+
+    # The shipped policy, wrapped only to record its verdicts. A reimplementation here
+    # would be free to agree with a policy production no longer runs.
+    eligible = [re.compile(pattern) for pattern in ATTENTION_FORWARD_OPS_REGEX]
+    real_policy = make_selective_ac_policy(eligible, save_only_marked_ops=save_only_marked_ops)
+
+    def _is_attention(op_name: str) -> bool:
+        # The same test the policy applies. Filtering on "fmha" here instead would make
+        # the assertions NATTEN-only while the policy is not, so on an arch where flash3
+        # serves these folds every one of them would be invisible and the test would fail
+        # for having found nothing rather than for anything about marking.
+        return any(pattern.search(op_name) for pattern in eligible)
+
+    verdicts: list[tuple[str, bool]] = []
+
+    def _policy(ctx, func, *args, **kwargs):
+        verdict = real_policy(ctx, func, *args, **kwargs)
+        verdicts.append((getattr(func, "__name__", str(func)), verdict == CheckpointPolicy.MUST_SAVE))
+        return verdict
+
+    batch = _multiview_maskless_batch(
+        und_len=5,
+        token_shape=token_shape,
+        num_views=num_views,
+        num_q_heads=8,
+        num_kv_heads=4,
+        head_dim=64,
+        device=device,
+        seed=0,
+    )
+    for pack in batch.packs:
+        for key in ("causal_seq", "full_only_seq"):
+            pack[key].requires_grad_(True)
+    plan = _plan(num_views, token_shape, device, _padded_gen_tokens(batch.packs[0]))
+    num_gen_tokens = batch.gen_q.shape[0]
+
+    class _Layer(torch.nn.Module):
+        def forward(self) -> torch.Tensor:
+            return get_gen_seq(multiview_attention(*batch.packs, maskless_plan=plan))[:num_gen_tokens]
+
+    layer = ptd_checkpoint_wrapper(
+        _Layer(),
+        context_fn=lambda: create_selective_checkpoint_contexts(_policy),
+        preserve_rng_state=False,
+    )
+    torch.manual_seed(1)
+    seed_grad = torch.randn(num_gen_tokens, 8 * 64, device=device, dtype=torch.bfloat16)
+    try:
+        # Compiled for the neighbouring test's reason: eager + non-reentrant checkpointing
+        # raises CheckpointError on this path, since NATTEN's merge backward unpacks thrice.
+        torch.compile(layer)().backward(seed_grad)
+    finally:
+        reset_marking_for_tests()
+
+    folds = [saved for name, saved in verdicts if _is_attention(name)]
+    assert folds and len(folds) % 4 == 0, f"expected whole passes over the four folds, saw {len(folds)}"
+    # One mark per pass. A second marked call site would double what each layer keeps,
+    # and every other assertion here would still hold.
+    marks = [name for name, _ in verdicts if "keep_next_activation" in name]
+    expected_marks = len(folds) // 4 if save_only_marked_ops else 0
+    assert len(marks) == expected_marks, f"expected {expected_marks} marks, saw {len(marks)}"
+    assert not any(saved for name, saved in verdicts if not _is_attention(name)), (
+        f"a non-attention op was kept: {sorted({name for name, saved in verdicts if saved and not _is_attention(name)})}"
+    )
+    saved_per_pass = 4 * sum(folds) / len(folds)
+    if save_only_marked_ops:
+        assert saved_per_pass == 1, f"expected the marked fold alone, kept {saved_per_pass} of 4"
+    else:
+        # The behaviour every existing config relies on: the regex decides alone, and it
+        # matches all four folds.
+        assert saved_per_pass == 4, f"the regex should keep all four folds, kept {saved_per_pass}"
+
+
+@pytest.mark.L0
+@pytest.mark.GPU
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="The attention kernels require a GPU.")
+@pytest.mark.skipif(not NATTEN_SUPPORTED, reason="merge_attentions requires NATTEN.")
+def test_the_marked_maskless_fold_is_the_same_view_pass(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Which of the four folds is marked, not merely that one of them is.
+
+    Keeping one fold only pays if it is the expensive one. The same-view pass is ~96%
+    of forward attention time and ~94% of backward; the other three are cheap to
+    recompute, so marking one of *those* would spend a clone and a stashed activation
+    to save almost nothing. Every other test here would still pass.
+
+    Checked by identity rather than by shape or position: three of the four folds run
+    on the same token count here, so nothing about the tensor says which pass it
+    belongs to.
+    """
+    from cosmos_framework.model.generator.mot import multiview_maskless_attention as maskless_module
+    from cosmos_framework.model.generator.mot.activation_marks import enable_marking, reset_marking_for_tests
+
+    device = torch.device("cuda")
+    num_views, frames_per_view, patch_h, patch_w = 3, 2, 2, 3
+    token_shape = (num_views * frames_per_view, patch_h, patch_w)
+
+    marked: list[torch.Tensor] = []
+    keys: list[torch.Tensor] = []
+    real_mark, real_attention = maskless_module.mark_next_activation, maskless_module.attention
+
+    def _spy_mark(tensor: torch.Tensor) -> torch.Tensor:
+        result = real_mark(tensor)
+        marked.append(result)
+        return result
+
+    def _spy_attention(query, key, value, **kwargs):
+        keys.append(key)
+        return real_attention(query, key, value, **kwargs)
+
+    monkeypatch.setattr(maskless_module, "mark_next_activation", _spy_mark)
+    monkeypatch.setattr(maskless_module, "attention", _spy_attention)
+
+    batch = _multiview_maskless_batch(
+        und_len=5,
+        token_shape=token_shape,
+        num_views=num_views,
+        num_q_heads=8,
+        num_kv_heads=4,
+        head_dim=64,
+        device=device,
+        seed=0,
+    )
+    plan = _plan(num_views, token_shape, device, _padded_gen_tokens(batch.packs[0]))
+    try:
+        enable_marking()
+        multiview_attention(*batch.packs, maskless_plan=plan)
+    finally:
+        reset_marking_for_tests()
+
+    assert len(marked) == 1, f"expected one marked call site, found {len(marked)}"
+    assert len(keys) > 1, "the decomposition should run several attention calls"
+    # Pass 1 of ``multiview_maskless_gen_attention`` is the same-view fold.
+    took_the_mark = [index for index, key in enumerate(keys) if key is marked[0]]
+    assert took_the_mark == [0], f"the mark reached folds {took_the_mark}, not the same-view pass"
+
+
+@pytest.mark.L0
+@pytest.mark.GPU
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="The attention kernels require a GPU.")
+@pytest.mark.skipif(not NATTEN_SUPPORTED, reason="merge_attentions requires NATTEN.")
+def test_a_marked_maskless_layer_is_stable_across_steps() -> None:
+    """Training runs thousands of steps, and this one has to repeat itself.
+
+    Under compile the policy is consulted while tracing and not again, so a later step
+    can only be read off its results. Gradients that stay put say the partitioner keeps
+    making the same choice; flat memory says the kept fold and the marker's copy go with
+    the graph instead of accumulating -- the failure that would show up on a cluster as
+    a slow climb into OOM rather than as a wrong number.
+
+    Against a measured floor rather than bitwise: NATTEN's backward is not
+    deterministic, so two runs of one configuration already differ slightly.
+    """
+    import gc
+
+    from torch.distributed.algorithms._checkpoint.checkpoint_wrapper import (
+        checkpoint_wrapper as ptd_checkpoint_wrapper,
+    )
+    from torch.utils.checkpoint import create_selective_checkpoint_contexts
+
+    from cosmos_framework.configs.base.defaults.activation_checkpointing import (
+        ATTENTION_FORWARD_OPS_REGEX,
+    )
+    from cosmos_framework.model.generator.mot.activation_marks import enable_marking, reset_marking_for_tests
+    from cosmos_framework.model.generator.mot.parallelize_unified_mot import make_selective_ac_policy
+
+    device = torch.device("cuda")
+    num_views, frames_per_view, patch_h, patch_w = 3, 2, 2, 3
+    token_shape = (num_views * frames_per_view, patch_h, patch_w)
+
+    batch = _multiview_maskless_batch(
+        und_len=5,
+        token_shape=token_shape,
+        num_views=num_views,
+        num_q_heads=8,
+        num_kv_heads=4,
+        head_dim=64,
+        device=device,
+        seed=0,
+    )
+    leaf = batch.packs[0]["full_only_seq"]
+    leaf.requires_grad_(True)
+    plan = _plan(num_views, token_shape, device, _padded_gen_tokens(batch.packs[0]))
+    num_gen_tokens = batch.gen_q.shape[0]
+
+    class _Layer(torch.nn.Module):
+        def forward(self) -> torch.Tensor:
+            return get_gen_seq(multiview_attention(*batch.packs, maskless_plan=plan))[:num_gen_tokens]
+
+    try:
+        enable_marking()
+        layer = torch.compile(
+            ptd_checkpoint_wrapper(
+                _Layer(),
+                context_fn=lambda: create_selective_checkpoint_contexts(
+                    make_selective_ac_policy(
+                        [re.compile(pattern) for pattern in ATTENTION_FORWARD_OPS_REGEX], save_only_marked_ops=True
+                    )
+                ),
+                preserve_rng_state=False,
+            )
+        )
+        torch.manual_seed(1)
+        seed_grad = torch.randn(num_gen_tokens, 8 * 64, device=device, dtype=torch.bfloat16)
+
+        layer().backward(seed_grad)
+        first = leaf.grad.clone()
+        leaf.grad = None
+        layer().backward(seed_grad)
+        # The same step twice: what these differ by is the backward's own noise, and any
+        # later drift has to clear it to mean anything.
+        floor = torch.maximum((leaf.grad - first).abs().max() * 2, first.abs().max() * 2**-8)
+        leaf.grad = None
+        torch.cuda.synchronize()
+        gc.collect()
+        torch.cuda.empty_cache()
+        baseline = torch.cuda.memory_allocated()
+
+        resident = []
+        for step in range(3):
+            layer().backward(seed_grad)
+            drift = (leaf.grad - first).abs().max()
+            assert drift <= floor, f"step {step} drifted by {drift}, floor {floor}"
+            leaf.grad = None
+            torch.cuda.synchronize()
+            gc.collect()
+            resident.append(torch.cuda.memory_allocated() - baseline)
+    finally:
+        reset_marking_for_tests()
+
+    assert len(set(resident)) == 1, f"memory accumulated across steps: {resident}"
+
+
+@pytest.mark.skipif(not _NATTEN_IS_VARLEN_BACKEND, reason=_NOT_NATTEN_REASON)
+@pytest.mark.L0
+@pytest.mark.GPU
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="The attention kernels require a GPU.")
+@pytest.mark.skipif(not NATTEN_SUPPORTED, reason="merge_attentions requires NATTEN.")
+def test_marking_costs_less_memory_than_keeping_every_maskless_fold() -> None:
+    """The reason the AV recipes can turn selective AC back on, measured on the real folds.
+
+    These recipes fell back to ``mode="full"`` because ``["fmha"]`` kept all four folds.
+    Keeping the marked one has to cost less than that, with the marker's copy inside the
+    measurement, or the config change makes things worse rather than better.
+    """
+    import gc
+
+    from torch.distributed.algorithms._checkpoint.checkpoint_wrapper import (
+        checkpoint_wrapper as ptd_checkpoint_wrapper,
+    )
+    from torch.utils.checkpoint import create_selective_checkpoint_contexts
+
+    from cosmos_framework.configs.base.defaults.activation_checkpointing import (
+        ATTENTION_FORWARD_OPS_REGEX,
+    )
+    from cosmos_framework.model.generator.mot.activation_marks import enable_marking, reset_marking_for_tests
+    from cosmos_framework.model.generator.mot.parallelize_unified_mot import make_selective_ac_policy
+
+    device = torch.device("cuda")
+    num_views, frames_per_view, patch_h, patch_w = 3, 2, 2, 3
+    token_shape = (num_views * frames_per_view, patch_h, patch_w)
+
+    def _peak(save_only_marked_ops: bool) -> int:
+        torch._dynamo.reset()
+        if save_only_marked_ops:
+            enable_marking()
+        else:
+            reset_marking_for_tests()
+        batch = _multiview_maskless_batch(
+            und_len=5,
+            token_shape=token_shape,
+            num_views=num_views,
+            num_q_heads=8,
+            num_kv_heads=4,
+            head_dim=64,
+            device=device,
+            seed=0,
+        )
+        for pack in batch.packs:
+            for key in ("causal_seq", "full_only_seq"):
+                pack[key].requires_grad_(True)
+        plan = _plan(num_views, token_shape, device, _padded_gen_tokens(batch.packs[0]))
+        num_gen_tokens = batch.gen_q.shape[0]
+
+        class _Layer(torch.nn.Module):
+            def forward(self) -> torch.Tensor:
+                return get_gen_seq(multiview_attention(*batch.packs, maskless_plan=plan))[:num_gen_tokens]
+
+        layer = torch.compile(
+            ptd_checkpoint_wrapper(
+                _Layer(),
+                context_fn=lambda: create_selective_checkpoint_contexts(
+                    make_selective_ac_policy(
+                        [re.compile(pattern) for pattern in ATTENTION_FORWARD_OPS_REGEX],
+                        save_only_marked_ops=save_only_marked_ops,
+                    )
+                ),
+                preserve_rng_state=False,
+            )
+        )
+        torch.manual_seed(1)
+        seed_grad = torch.randn(num_gen_tokens, 8 * 64, device=device, dtype=torch.bfloat16)
+        gc.collect()
+        torch.cuda.empty_cache()
+        torch.cuda.reset_peak_memory_stats()
+        layer().backward(seed_grad)
+        torch.cuda.synchronize()
+        return torch.cuda.max_memory_allocated()
+
+    try:
+        marked = _peak(save_only_marked_ops=True)
+        keep_all = _peak(save_only_marked_ops=False)
+    finally:
+        reset_marking_for_tests()
+
+    assert marked < keep_all, f"marked peaked at {marked}, keeping every fold at {keep_all}"
+
+
+@pytest.mark.L0
+@pytest.mark.GPU
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="The attention kernels require a GPU.")
+@pytest.mark.skipif(not NATTEN_SUPPORTED, reason="merge_attentions requires NATTEN.")
+def test_marking_a_maskless_fold_does_not_change_its_gradients() -> None:
+    """Marking decides what is kept, never what is computed.
+
+    Not implied by the unmarked checkpointing test above: the mark clones K before the
+    kernel, so the kernel saves the clone, and ``merge_attentions`` repairs a branch by
+    finding the storage its kernel saved *by data pointer*. An extra tensor between the
+    call site and the kernel is exactly the shape of thing that has broken that link
+    before, silently and by ~70%.
+
+    Exact against an uncheckpointed reference, for that test's reason: recompute reruns
+    the same kernels on the same inputs, so a difference is a missed patch rather than
+    arithmetic.
+    """
+    from torch.distributed.algorithms._checkpoint.checkpoint_wrapper import (
+        checkpoint_wrapper as ptd_checkpoint_wrapper,
+    )
+    from torch.utils.checkpoint import create_selective_checkpoint_contexts
+
+    from cosmos_framework.configs.base.defaults.activation_checkpointing import (
+        ATTENTION_FORWARD_OPS_REGEX,
+    )
+    from cosmos_framework.model.generator.mot.activation_marks import enable_marking, reset_marking_for_tests
+    from cosmos_framework.model.generator.mot.parallelize_unified_mot import make_selective_ac_policy
+
+    device = torch.device("cuda")
+    num_views, frames_per_view, patch_h, patch_w = 3, 2, 2, 3
+    token_shape = (num_views * frames_per_view, patch_h, patch_w)
+
+    def _grads(checkpointed: bool) -> dict[str, torch.Tensor]:
+        batch = _multiview_maskless_batch(
+            und_len=5,
+            token_shape=token_shape,
+            num_views=num_views,
+            num_q_heads=8,
+            num_kv_heads=4,
+            head_dim=64,
+            device=device,
+            seed=0,
+        )
+        leaves: dict[str, torch.Tensor] = {}
+        for name, pack in zip("qkv", batch.packs):
+            for key in ("causal_seq", "full_only_seq"):
+                pack[key].requires_grad_(True)
+                leaves[f"{name}.{key}"] = pack[key]
+        plan = _plan(num_views, token_shape, device, _padded_gen_tokens(batch.packs[0]))
+        num_gen_tokens = batch.gen_q.shape[0]
+
+        class _Layer(torch.nn.Module):
+            def forward(self) -> torch.Tensor:
+                return get_gen_seq(multiview_attention(*batch.packs, maskless_plan=plan))[:num_gen_tokens]
+
+        layer: torch.nn.Module = _Layer()
+        # Set before the region is traced, as ``_apply_selective_ac`` does. The reference
+        # leaves it off, so it also confirms the marked graph and the plain one agree.
+        if checkpointed:
+            enable_marking()
+            policy = make_selective_ac_policy(
+                [re.compile(pattern) for pattern in ATTENTION_FORWARD_OPS_REGEX], save_only_marked_ops=True
+            )
+            layer = ptd_checkpoint_wrapper(
+                layer,
+                context_fn=lambda: create_selective_checkpoint_contexts(policy),
+                preserve_rng_state=False,
+            )
+        torch.manual_seed(1)
+        seed_grad = torch.randn(num_gen_tokens, 8 * 64, device=device, dtype=torch.bfloat16)
+        torch.compile(layer)().backward(seed_grad)
+        return {name: leaf.grad for name, leaf in leaves.items() if leaf.grad is not None}
+
+    try:
+        expected = _grads(checkpointed=False)
+        actual = _grads(checkpointed=True)
+    finally:
+        reset_marking_for_tests()
+
+    assert expected, "no leaf took a gradient, so this would pass vacuously"
+    assert set(expected) == set(actual), "marked checkpointing changed which leaves take a gradient"
+    for name, want in expected.items():
         torch.testing.assert_close(
             actual[name].double(), want.double(), atol=0, rtol=0, msg=lambda m, n=name: f"{n}: {m}"
         )

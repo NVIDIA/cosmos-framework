@@ -3,6 +3,8 @@
 
 """Tests for KV cache and non-CP AR inference logic."""
 
+from unittest.mock import patch
+
 import pytest
 import torch
 
@@ -27,6 +29,7 @@ from cosmos_framework.model.generator.utils.kv_cache import (
     FlexARMemoryState,
     FlexARMemoryValue,
     GenKVCache,
+    KVBufferPool,
     KVCache,
     KVCacheTrainMemoryState,
     TeacherForcingMemoryState,
@@ -1168,10 +1171,13 @@ def test_batched_ar_memory_state_tracks_unequal_prompt_lengths_per_sample() -> N
     batch_size, gen_len, max_und_len, num_heads, head_dim = 2, 3, 4, 1, 2
     cache = DualKVCache(gen_cache_size=4)
     hidden_states = {
-        "sample_offsets": torch.tensor([0, 5, 12]),  # [B+1]
+        "sample_offsets": torch.tensor([0, 5, 12, 15]),  # [B+1] plus a trailing CUDA-graph pad segment
+        "_has_pad_segment": True,
         "_full_only_sample_ids": torch.tensor([0, 0, 0, 1, 1, 1]),  # [B*S_gen]
+        "_full_only_seq_offsets": torch.tensor([0, 3, 6, 8]),  # [B+1] plus the pad segment
         "_num_full_tokens": batch_size * gen_len,
         "_causal_sample_ids": torch.tensor([0, 0, 1, 1, 1, 1]),  # [S_und_total]
+        "_causal_seq_offsets": torch.tensor([0, 2, 6, 7]),  # [B+1] plus the pad segment
         "_num_causal_tokens": 6,
     }
     state = ARMemoryState([cache], frame_idx=0, batched=True)
@@ -1224,8 +1230,10 @@ def test_batched_ar_memory_state_rejects_unequal_generation_lengths() -> None:
     hidden_states = {
         "sample_offsets": torch.tensor([0, 4, 9]),  # [B+1]
         "_full_only_sample_ids": torch.tensor([0, 0, 1, 1, 1]),  # [S_gen_total]
+        "_full_only_seq_offsets": torch.tensor([0, 2, 5]),  # generation splits of 2 and 3 tokens
         "_num_full_tokens": 5,
         "_causal_sample_ids": torch.tensor([0, 1]),  # [S_und_total]
+        "_causal_seq_offsets": torch.tensor([0, 1, 2]),
         "_num_causal_tokens": 2,
     }
     state = ARMemoryState([cache], frame_idx=0, batched=True)
@@ -2013,8 +2021,8 @@ def test_ar_memory_state_static_shape_init_and_read():
        tensors after ``init`` (constant shape across frames is the prerequisite
        for a single CUDA-graph capture).
     3. Return an ``ARMemoryValue(for_cuda_graphs=True)`` with constant-shape
-       ``gen_k_buf_full`` / ``gen_v_buf_full`` (``[1, max_gen_cache_tokens, H, D]``)
-       across every frame.
+       ``kv_k_static`` / ``kv_v_static`` (``[1, S_und + gen_len + max_gen_cache_tokens, H, D]``,
+       laid out ``[und | curr | hist | pad]``) across every frame.
     4. Carry the und K/V cached at frame 0 unchanged into frames 1+.
     5. Match the dynamic-shape flavor's ``frame_idx``, ``gen_len``, and
        ``und_k/v_cached`` fields exactly (they're shared by both branches).
@@ -2088,17 +2096,24 @@ def test_ar_memory_state_static_shape_init_and_read():
     assert isinstance(mv_static, ARMemoryValue)
     assert mv_static.for_cuda_graphs is True
     assert mv_static.gen_k_hist is None and mv_static.gen_v_hist is None
+    assert mv_static.kv_k_static is not None and mv_static.kv_v_static is not None
     assert mv_static.gen_k_buf_full is not None and mv_static.gen_v_buf_full is not None
     assert mv_static.gen_k_buf_full.shape == (B, expected_max_gen_tokens, H, D)
-    assert mv_static.gen_v_buf_full.shape == (B, expected_max_gen_tokens, H, D)
+    s_und = und_k.shape[1]
+    assert mv_static.static_curr_offset == s_und and mv_static.static_hist_offset == s_und + S_gen
+    assert mv_static.kv_k_static.shape == (B, s_und + S_gen + expected_max_gen_tokens, H, D)
+    assert mv_static.kv_v_static.shape == (B, s_und + S_gen + expected_max_gen_tokens, H, D)
+    assert mv_static.max_seqlen_KV == mv_static.kv_k_static.shape[1]
     assert mv_static.real_gen_cache_len_t is not None
     assert mv_static.real_gen_cache_len_t.shape == (1,)
     assert mv_static.real_gen_cache_len_t.item() == 1 * S_gen  # 1 prior frame
 
-    # und K/V cached at frame 0 carried unchanged into frame 1.
+    # und K/V cached at frame 0 carried unchanged into frame 1 (primed into the und region;
+    # ``und_k_cached`` is a view of that region).
     assert mv_static.und_k_cached is not None and mv_static.und_v_cached is not None
     assert torch.equal(mv_static.und_k_cached, und_k)
-    assert torch.equal(mv_static.und_v_cached, und_v)
+    assert torch.equal(mv_static.kv_k_static[:, :s_und], und_k)
+    assert torch.equal(mv_static.kv_v_static[:, :s_und], und_v)
 
     # Shared fields match dynamic flavor exactly.
     mv_dyn = state_dyn.read_for_layer(0)
@@ -2107,13 +2122,16 @@ def test_ar_memory_state_static_shape_init_and_read():
     assert mv_static.gen_len == mv_dyn.gen_len == S_gen
     assert mv_dyn.und_k_cached is not None
     torch.testing.assert_close(mv_static.und_k_cached, mv_dyn.und_k_cached)
-    torch.testing.assert_close(mv_static.und_v_cached, mv_dyn.und_v_cached)
+    torch.testing.assert_close(mv_static.kv_k_static[:, :s_und], mv_dyn.und_k_cached)
+    torch.testing.assert_close(mv_static.kv_v_static[:, :s_und], mv_dyn.und_v_cached)
 
-    # Static buffer's real prefix must match dynamic gen_k_hist exactly.
+    # Static buffer's history region must match dynamic gen_k_hist exactly.
     real_len = mv_static.real_gen_cache_len_t.item()
+    hist = mv_static.static_hist_offset
     assert mv_dyn.gen_k_hist is not None and mv_dyn.gen_v_hist is not None
     torch.testing.assert_close(mv_static.gen_k_buf_full[:, :real_len], mv_dyn.gen_k_hist)
-    torch.testing.assert_close(mv_static.gen_v_buf_full[:, :real_len], mv_dyn.gen_v_hist)
+    torch.testing.assert_close(mv_static.kv_k_static[:, hist : hist + real_len], mv_dyn.gen_k_hist)
+    torch.testing.assert_close(mv_static.kv_v_static[:, hist : hist + real_len], mv_dyn.gen_v_hist)
     # The padded tail is intentionally unspecified: static AR attention uses
     # ``cu_seqlens_kv_t`` to exclude it from the varlen kernel.
 
@@ -2121,7 +2139,7 @@ def test_ar_memory_state_static_shape_init_and_read():
 @pytest.mark.L0
 def test_ar_memory_state_static_shape_constant_across_frames():
     """The whole point of the static-shape flavor is shape constancy across
-    frames: ``cu_seqlens_*`` and ``gen_k_buf_full`` shapes must not change as
+    frames: ``cu_seqlens_*``, ``kv_k_static`` and ``gen_k_buf_full`` shapes must not change as
     ``frame_idx`` advances; only the *values* in ``cu_seqlens_kv_t`` and
     ``real_gen_cache_len_t`` should update.
 
@@ -2155,8 +2173,10 @@ def test_ar_memory_state_static_shape_constant_across_frames():
         )
         state.init({"_num_full_tokens": S_gen}, torch.device("cpu"))
         mv = state.read_for_layer(0)
+        assert mv.kv_k_static is not None
         assert mv.gen_k_buf_full is not None
         shapes = {
+            "kv_k_static": tuple(mv.kv_k_static.shape),
             "gen_k_buf_full": tuple(mv.gen_k_buf_full.shape),
             "cu_seqlens_q_t": tuple(state._cu_seqlens_q_t.shape),  # type: ignore[union-attr]
             "cu_seqlens_kv_t": tuple(state._cu_seqlens_kv_t.shape),  # type: ignore[union-attr]
@@ -2288,3 +2308,955 @@ def test_batched_ar_counts_real_samples_in_runtime_pack(batch_size: int, with_te
     assert state._batch_size == batch_size
     assert state._gen_lens == (4,) * batch_size
     assert state._current_und_lens == tuple(text_lengths)
+
+
+@pytest.mark.L0
+@pytest.mark.CPU
+def test_gen_kv_cache_transfer_history_frame_indices_pins_sink_and_keeps_recent_entries() -> None:
+    """Entry-level Transfer history: logical sink pairs stay, then the newest ``max_recent`` entries."""
+    tokens_per_entry = 2
+    cache = GenKVCache(cache_size=6, attention_sink_size=2)  # W=3, S=1 -> 2W slots, 2S pinned
+    for entry_idx in range(9):
+        entry = torch.zeros(1, tokens_per_entry, 1, 1)  # [B,S_entry,H,D]
+        cache.store_kv(entry, entry, frame_idx=entry_idx)
+
+    # Ring-native history at idx 8: pinned [0, 1] + rolling tail [5, 6, 7].
+    assert cache._history_frame_indices(8) == [0, 1, 5, 6, 7]
+    # Control seed (even idx) sees 2*recent = 2 recent entries: drop the orphan RGB entry 5.
+    assert cache.transfer_history_frame_indices(8, sink_entries=2, max_recent_entries=2) == [0, 1, 6, 7]
+    # Target denoise / RGB seed (odd idx) sees 2*recent+1 = 3 recent entries.
+    assert cache.transfer_history_frame_indices(9, sink_entries=2, max_recent_entries=3) == [0, 1, 6, 7, 8]
+    # max_recent_entries == 0 keeps only the sink.
+    assert cache.transfer_history_frame_indices(9, sink_entries=2, max_recent_entries=0) == [0, 1]
+    # Before saturation nothing is dropped.
+    assert cache.transfer_history_frame_indices(2, sink_entries=2, max_recent_entries=2) == [0, 1]
+    assert cache.transfer_history_frame_indices(3, sink_entries=2, max_recent_entries=3) == [0, 1, 2]
+    # Frame 0 has no history.
+    assert cache.transfer_history_frame_indices(0, sink_entries=2, max_recent_entries=2) == []
+
+    no_sink = GenKVCache(cache_size=4)
+    for entry_idx in range(7):
+        entry = torch.zeros(1, tokens_per_entry, 1, 1)  # [B,S_entry,H,D]
+        no_sink.store_kv(entry, entry, frame_idx=entry_idx)
+    # Legacy total-suffix behaviour when there is no sink.
+    assert no_sink.transfer_history_frame_indices(7, sink_entries=0, max_recent_entries=2) == [5, 6]
+    assert no_sink.transfer_history_frame_indices(7, sink_entries=0, max_recent_entries=0) == []
+
+    with pytest.raises(ValueError, match="sink_entries must be >= 0"):
+        cache.transfer_history_frame_indices(8, sink_entries=-1, max_recent_entries=2)
+    with pytest.raises(ValueError, match="max_recent_entries must be >= 0"):
+        cache.transfer_history_frame_indices(8, sink_entries=2, max_recent_entries=-1)
+
+
+@pytest.mark.L0
+@pytest.mark.CPU
+def test_gen_kv_cache_static_fetch_honours_explicit_history_indices_and_rebuilds_on_change() -> None:
+    """Explicit logical indices select the copied entries; identical indices reuse the buffer."""
+    batch_size, tokens_per_entry, num_heads, head_dim = 1, 2, 1, 1
+    cache = GenKVCache(cache_size=8)
+    entries: list[tuple[torch.Tensor, torch.Tensor]] = []
+    for entry_idx in range(6):
+        key = torch.full((batch_size, tokens_per_entry, num_heads, head_dim), float(entry_idx))  # [B,S_entry,H,D]
+        value = key + 100.0  # [B,S_entry,H,D]
+        entries.append((key, value))
+        cache.store_kv(key, value, frame_idx=entry_idx)
+    max_tokens = 7 * tokens_per_entry
+    kwargs = dict(num_heads=num_heads, head_dim=head_dim, device=torch.device("cpu"), dtype=torch.float32)
+
+    k_buf, v_buf, real_len = cache.fetch_kv_static(
+        6, max_tokens, tokens_per_entry, history_frame_indices=[0, 1, 4, 5], **kwargs
+    )
+    assert real_len == 4 * tokens_per_entry
+    assert k_buf.shape == (1, max_tokens, num_heads, head_dim)
+    torch.testing.assert_close(k_buf[:, :real_len], torch.cat([entries[i][0] for i in (0, 1, 4, 5)], dim=1))
+    torch.testing.assert_close(v_buf[:, :real_len], torch.cat([entries[i][1] for i in (0, 1, 4, 5)], dim=1))
+    assert cache._static_history_indices == (0, 1, 4, 5)
+
+    with patch.object(GenKVCache, "_rebuild_static_history", wraps=cache._rebuild_static_history) as rebuild:
+        cache.fetch_kv_static(6, max_tokens, tokens_per_entry, history_frame_indices=[0, 1, 4, 5], **kwargs)
+        assert rebuild.call_count == 0  # same frame, same indices: no rebuild
+        k_buf2, _, real_len2 = cache.fetch_kv_static(
+            6, max_tokens, tokens_per_entry, history_frame_indices=[0, 1, 3, 4, 5], **kwargs
+        )
+        assert rebuild.call_count == 1  # same frame, different indices: rebuild
+    assert real_len2 == 5 * tokens_per_entry
+    assert k_buf2.data_ptr() == k_buf.data_ptr()  # persistent buffer, same address
+    torch.testing.assert_close(k_buf2[:, :real_len2], torch.cat([entries[i][0] for i in (0, 1, 3, 4, 5)], dim=1))
+
+    _, _, empty_len = cache.fetch_kv_static(6, max_tokens, tokens_per_entry, history_frame_indices=[], **kwargs)
+    assert empty_len == 0
+    assert cache._static_history_indices == ()
+
+    # Switching back to the ring-native history (no explicit indices) must rebuild too.
+    _, _, native_len = cache.fetch_kv_static(6, max_tokens, tokens_per_entry, **kwargs)
+    assert native_len == 6 * tokens_per_entry
+    assert cache._static_history_indices is None
+
+    cache.reset()
+    assert cache._static_history_indices is None
+
+
+def _assert_transfer_static_matches_dynamic(
+    window: int, sink: int, tokens_per_entry: int = 2, **cache_kwargs: object
+) -> None:
+    """Static Transfer buffer real prefix == dynamic Transfer history for both forward kinds, every frame."""
+    batch_size, num_heads, head_dim, s_und = 1, 1, 1, 3
+    cache = DualKVCache(gen_cache_size=2 * window, attention_sink_size=2 * sink, **cache_kwargs)  # type: ignore[arg-type]
+    cache.und_cache.store(
+        torch.randn(batch_size, s_und, num_heads, head_dim),  # [B,S_und,H,D]
+        torch.randn(batch_size, s_und, num_heads, head_dim),  # [B,S_und,H,D]
+    )
+    recent = window - sink - 1
+    sink_tokens = 2 * sink * tokens_per_entry
+    kinds = {
+        "control": 2 * recent * tokens_per_entry,
+        "target": (2 * recent + 1) * tokens_per_entry,
+        "sink_only": 0,
+    }
+    expected_buf_tokens = (2 * window - 1) * tokens_per_entry
+    for frame_idx in range(1, 4 * window):  # runs well past saturation and ring wraparound
+        key = torch.full((batch_size, tokens_per_entry, num_heads, head_dim), float(frame_idx - 1))  # [B,S_entry,H,D]
+        cache.gen_cache.store_kv(key, key + 100.0, frame_idx=frame_idx - 1)
+        for kind, max_tokens in kinds.items():
+            dynamic = ARMemoryState(
+                [cache],
+                frame_idx=frame_idx,
+                transfer_history_sink_tokens=sink_tokens,
+                transfer_history_max_tokens=max_tokens,
+            )
+            dynamic.init({"_num_full_tokens": tokens_per_entry}, torch.device("cpu"))
+            dynamic_value = dynamic.read_for_layer(0)
+            static = ARMemoryState(
+                [cache],
+                frame_idx=frame_idx,
+                vision_token_shapes=[(1, 1, tokens_per_entry)],
+                for_cuda_graphs=True,
+                num_kv_heads=num_heads,
+                head_dim=head_dim,
+                transfer_history_sink_tokens=sink_tokens,
+                transfer_history_max_tokens=max_tokens,
+            )
+            static.init({"_num_full_tokens": tokens_per_entry}, torch.device("cpu"))
+            static_value = static.read_for_layer(0)
+            expected_len = 0 if dynamic_value.gen_k_hist is None else dynamic_value.gen_k_hist.shape[1]
+            context = (window, sink, frame_idx, kind)
+            assert static_value.for_cuda_graphs is True, context
+            assert static_value.kv_k_static is not None and static_value.kv_v_static is not None, context
+            hist = static_value.static_hist_offset
+            assert hist == s_und + tokens_per_entry, context
+            assert static_value.kv_k_static.shape == (1, hist + expected_buf_tokens, num_heads, head_dim), context
+            assert static_value.real_gen_cache_len_t is not None and static_value.cu_seqlens_kv_t is not None, context
+            real_len = int(static_value.real_gen_cache_len_t.item())
+            assert real_len == expected_len, context
+            assert int(static_value.cu_seqlens_kv_t[1].item()) == s_und + tokens_per_entry + expected_len, context
+            assert static_value.max_seqlen_KV == s_und + tokens_per_entry + expected_buf_tokens, context
+            if expected_len:
+                assert dynamic_value.gen_v_hist is not None
+                torch.testing.assert_close(
+                    static_value.kv_k_static[:, hist : hist + real_len], dynamic_value.gen_k_hist
+                )
+                torch.testing.assert_close(
+                    static_value.kv_v_static[:, hist : hist + real_len], dynamic_value.gen_v_hist
+                )
+
+
+@pytest.mark.L0
+@pytest.mark.CPU
+def test_ar_memory_state_transfer_static_matches_dynamic_with_sink() -> None:
+    """W=3, S=1: pinned control/RGB pair plus pair-aligned recent history, static == dynamic."""
+    _assert_transfer_static_matches_dynamic(window=3, sink=1)
+
+
+@pytest.mark.L0
+@pytest.mark.CPU
+def test_ar_memory_state_transfer_static_matches_dynamic_without_sink() -> None:
+    """W=4, S=0: legacy total-suffix limiting, static == dynamic."""
+    _assert_transfer_static_matches_dynamic(window=4, sink=0)
+
+
+@pytest.mark.L0
+@pytest.mark.CPU
+def test_ar_memory_state_transfer_static_flavor_construction_rules() -> None:
+    """Transfer limiting is allowed with CUDA-graph static shapes but not with post-saturation compile."""
+    tokens_per_entry = 2
+    cache = DualKVCache(gen_cache_size=6, attention_sink_size=2)
+    cache.und_cache.store(torch.randn(1, 3, 1, 1), torch.randn(1, 3, 1, 1))  # [B,S_und,H,D] each
+    cache.gen_cache.store_kv(
+        torch.zeros(1, tokens_per_entry, 1, 1), torch.zeros(1, tokens_per_entry, 1, 1), frame_idx=0
+    )  # [B,S_entry,H,D] each
+
+    state = ARMemoryState(
+        [cache],
+        frame_idx=1,
+        vision_token_shapes=[(1, 1, tokens_per_entry)],
+        for_cuda_graphs=True,
+        num_kv_heads=1,
+        head_dim=1,
+        transfer_history_sink_tokens=2 * tokens_per_entry,
+        transfer_history_max_tokens=2 * tokens_per_entry,
+    )
+    state.init({"_num_full_tokens": tokens_per_entry}, torch.device("cpu"))
+    assert state._static_history_indices == (0,)
+
+    with pytest.raises(ValueError, match="post-saturation"):
+        ARMemoryState(
+            [cache],
+            frame_idx=1,
+            post_saturation_static_compile=True,
+            static_und_cache_max_len=8,
+            transfer_history_sink_tokens=2 * tokens_per_entry,
+            transfer_history_max_tokens=2 * tokens_per_entry,
+        )
+
+    ragged = ARMemoryState(
+        [cache],
+        frame_idx=1,
+        vision_token_shapes=[(1, 1, tokens_per_entry)],
+        for_cuda_graphs=True,
+        num_kv_heads=1,
+        head_dim=1,
+        transfer_history_sink_tokens=2 * tokens_per_entry,
+        transfer_history_max_tokens=3,  # not a whole number of entries
+    )
+    with pytest.raises(ValueError, match="whole cache entries"):
+        ragged.init({"_num_full_tokens": tokens_per_entry}, torch.device("cpu"))
+
+
+@pytest.mark.L0
+@pytest.mark.CPU
+def test_kv_buffer_pool_reuses_matching_buffers_and_marks_static_address_once(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Same key + shape returns the same tensor (stable address); marking happens only on allocation."""
+    marked: list[tuple[int, bool]] = []
+    monkeypatch.setattr(
+        torch._dynamo, "mark_static_address", lambda t, guard=False: marked.append((t.data_ptr(), guard))
+    )
+    pool = KVBufferPool()
+    first = pool.acquire(
+        "static_k", 3, (1, 8, 2, 4), dtype=torch.float32, device=torch.device("cpu"), static_address=True
+    )
+    again = pool.acquire(
+        "static_k", 3, (1, 8, 2, 4), dtype=torch.float32, device=torch.device("cpu"), static_address=True
+    )
+    assert again is first
+    # guard=False like module parameters: an identity guard would recompile once per layer (shared code object).
+    assert marked == [(first.data_ptr(), False)]
+
+    other_slot = pool.acquire(
+        "static_k", 4, (1, 8, 2, 4), dtype=torch.float32, device=torch.device("cpu"), static_address=True
+    )
+    assert other_slot is not first
+    resized = pool.acquire(
+        "static_k", 3, (1, 16, 2, 4), dtype=torch.float32, device=torch.device("cpu"), static_address=True
+    )
+    assert resized is not first and resized.shape == (1, 16, 2, 4)
+    assert len(marked) == 3
+
+    ring = pool.acquire("ring_k", 3, (6, 1, 2, 2, 4), dtype=torch.float32, device=torch.device("cpu"))
+    assert ring.shape == (6, 1, 2, 2, 4)
+    assert len(marked) == 3  # rings are never CUDA-graph inputs: no marking
+    pool.clear()
+    assert pool.acquire("ring_k", 3, (6, 1, 2, 2, 4), dtype=torch.float32, device=torch.device("cpu")) is not ring
+
+
+@pytest.mark.L0
+@pytest.mark.CPU
+def test_gen_kv_cache_preallocated_ring_matches_clone_storage_across_wraparound() -> None:
+    """Ring slots are written in place and exposed as views; history reads equal the clone-based cache."""
+    batch_size, tokens_per_entry, num_heads, head_dim = 1, 2, 1, 1
+    clone_cache = GenKVCache(cache_size=6, attention_sink_size=2)
+    ring_cache = GenKVCache(cache_size=6, attention_sink_size=2, preallocate_ring=True)
+    for entry_idx in range(9):  # wraps the 4 rolling slots twice
+        key = torch.full((batch_size, tokens_per_entry, num_heads, head_dim), float(entry_idx))  # [B,S_entry,H,D]
+        value = key + 100.0  # [B,S_entry,H,D]
+        clone_cache.store_kv(key, value, frame_idx=entry_idx)
+        ring_cache.store_kv(key.clone(), value.clone(), frame_idx=entry_idx)
+        for frame_idx in range(1, entry_idx + 2):
+            expected_k, expected_v = clone_cache.fetch_kv(frame_idx)
+            got_k, got_v = ring_cache.fetch_kv(frame_idx)
+            assert expected_k is not None and got_k is not None
+            torch.testing.assert_close(got_k, expected_k)
+            torch.testing.assert_close(got_v, expected_v)
+
+    assert ring_cache._ring_k is not None and ring_cache._ring_v is not None
+    assert ring_cache._ring_k.shape == (6, batch_size, tokens_per_entry, num_heads, head_dim)
+    for slot in range(6):
+        entry = ring_cache.k_cache[slot]
+        assert isinstance(entry, torch.Tensor)
+        assert entry._base is ring_cache._ring_k  # a view into the ring, not a clone
+    # Overwriting a source tensor after the store must not leak into the cache (copy, not alias).
+    source = torch.zeros(batch_size, tokens_per_entry, num_heads, head_dim)  # [B,S_entry,H,D]
+    ring_cache.store_kv(source, source, frame_idx=9)
+    source.fill_(-1.0)
+    stored = ring_cache.k_cache[ring_cache._cache_index(9)]
+    assert isinstance(stored, torch.Tensor) and torch.all(stored == 0.0)
+
+
+@pytest.mark.L0
+@pytest.mark.CPU
+def test_gen_kv_cache_ring_is_skipped_for_unbounded_fp8_or_variable_entries() -> None:
+    """The ring needs a finite BF16 cache with uniform entries; everything else keeps per-entry clones."""
+    entry = torch.zeros(1, 2, 1, 1)  # [B,S_entry,H,D]
+    unbounded = GenKVCache(cache_size=None, preallocate_ring=True)
+    unbounded.store_kv(entry, entry, frame_idx=0)
+    assert unbounded._ring_k is None
+    assert unbounded.k_cache[0] is not entry  # still cloned
+
+    fp8 = GenKVCache(cache_size=6, backend=FP8StorageBackend(kernel_impl="torch"), preallocate_ring=True)
+    fp8.store_kv(entry, entry, frame_idx=0)
+    assert fp8._ring_k is None
+    assert isinstance(fp8.k_cache[0], tuple)
+
+    ragged = GenKVCache(cache_size=6, preallocate_ring=True)
+    ragged.store_kv(entry, entry, frame_idx=0)
+    assert ragged._ring_k is not None
+    wider = torch.ones(1, 3, 1, 1)  # [B,S_entry+1,H,D]: different token count
+    ragged.store_kv(wider, wider, frame_idx=1)
+    assert ragged._ring_disabled is True
+    assert isinstance(ragged.k_cache[1], torch.Tensor) and ragged.k_cache[1]._base is not ragged._ring_k
+    k_hist, _ = ragged.fetch_kv(2)
+    assert k_hist is not None and k_hist.shape[1] == 5  # 2 + 3 tokens, mixed storage still concatenates
+
+
+@pytest.mark.L0
+@pytest.mark.CPU
+def test_gen_kv_cache_pool_shares_ring_and_static_workspaces_across_generations() -> None:
+    """A second generation's cache reuses the pooled tensors (same addresses) yet reads only its own entries."""
+    batch_size, tokens_per_entry, num_heads, head_dim = 1, 2, 1, 1
+    pool = KVBufferPool()
+    kwargs = dict(num_heads=num_heads, head_dim=head_dim, device=torch.device("cpu"), dtype=torch.float32)
+    max_tokens = 5 * tokens_per_entry
+
+    first = GenKVCache(cache_size=6, buffer_pool=pool, pool_slot=7, preallocate_ring=True)
+    for entry_idx in range(4):
+        key = torch.full((batch_size, tokens_per_entry, num_heads, head_dim), float(entry_idx))  # [B,S_entry,H,D]
+        first.store_kv(key, key + 100.0, frame_idx=entry_idx)
+    first_k_buf, _, first_len = first.fetch_kv_static(4, max_tokens, tokens_per_entry, **kwargs)
+    assert first_len == 4 * tokens_per_entry
+
+    first_ring_k = first._ring_k
+    first.reset()  # the previous generation's cache releases its slots (as when its generator finishes)
+    second = GenKVCache(cache_size=6, buffer_pool=pool, pool_slot=7, preallocate_ring=True)
+    key = torch.full((batch_size, tokens_per_entry, num_heads, head_dim), 42.0)  # [B,S_entry,H,D]
+    second.store_kv(key, key + 100.0, frame_idx=0)
+    assert second._ring_k is first_ring_k  # pooled ring
+    second_k_buf, _, second_len = second.fetch_kv_static(1, max_tokens, tokens_per_entry, **kwargs)
+    assert second_k_buf is first_k_buf  # pooled static buffer: address stable across generations
+    assert second_len == tokens_per_entry
+    torch.testing.assert_close(second_k_buf[:, :second_len], key)  # rebuilt from the new generation, not stale
+
+    unrelated = GenKVCache(cache_size=6, buffer_pool=pool, pool_slot=8, preallocate_ring=True)
+    unrelated.store_kv(key, key, frame_idx=0)
+    assert unrelated._ring_k is not first._ring_k
+
+
+@pytest.mark.L0
+@pytest.mark.CPU
+def test_ar_memory_state_transfer_static_matches_dynamic_with_pooled_ring_cache() -> None:
+    """The static/dynamic equivalence holds with in-place ring storage and pooled workspaces."""
+    _assert_transfer_static_matches_dynamic(
+        window=3, sink=1, buffer_pool=KVBufferPool(), pool_slot=0, preallocate_ring=True
+    )
+
+
+@pytest.mark.L0
+@pytest.mark.CPU
+def test_kv_buffer_pool_refuses_to_share_a_slot_between_live_caches() -> None:
+    """Two live caches on one slot would silently corrupt each other; the pool fails loudly instead."""
+    tokens_per_entry = 2
+    pool = KVBufferPool()
+    entry = torch.zeros(1, tokens_per_entry, 1, 1)  # [B,S_entry,H,D]
+    first = GenKVCache(cache_size=6, buffer_pool=pool, pool_slot=3, preallocate_ring=True)
+    first.store_kv(entry, entry, frame_idx=0)
+    second = GenKVCache(cache_size=6, buffer_pool=pool, pool_slot=3, preallocate_ring=True)
+    with pytest.raises(RuntimeError, match="still owned"):
+        second.store_kv(entry, entry, frame_idx=0)
+    # Releasing the first cache (reset or garbage collection) frees the slot.
+    first.reset()
+    second.store_kv(entry, entry, frame_idx=0)
+    assert second._ring_k is not None
+    third = GenKVCache(cache_size=6, buffer_pool=pool, pool_slot=3, preallocate_ring=True)
+    del second
+    third.store_kv(entry, entry, frame_idx=0)  # previous owner is gone
+    assert third._ring_k is not None
+
+
+@pytest.mark.L0
+@pytest.mark.CPU
+def test_gen_kv_cache_releases_pooled_ring_when_entries_turn_ragged() -> None:
+    """Falling back to clone storage must not leave a dead ring pinned in the pool."""
+    pool = KVBufferPool()
+    cache = GenKVCache(cache_size=6, buffer_pool=pool, pool_slot=0, preallocate_ring=True)
+    cache.store_kv(torch.zeros(1, 2, 1, 1), torch.zeros(1, 2, 1, 1), frame_idx=0)  # [B,S_entry,H,D]
+    assert ("ring_k", 0) in pool._buffers
+    cache.store_kv(torch.ones(1, 3, 1, 1), torch.ones(1, 3, 1, 1), frame_idx=1)  # different token count
+    assert cache._ring_disabled is True
+    assert ("ring_k", 0) not in pool._buffers and ("ring_v", 0) not in pool._buffers
+    k_hist, _ = cache.fetch_kv(2)
+    assert k_hist is not None and k_hist.shape[1] == 5  # entry 0 stays readable through its own storage
+
+
+@pytest.mark.L0
+@pytest.mark.CPU
+def test_kv_buffer_pool_tensors_are_not_inference_tensors() -> None:
+    """Buffers allocated under inference_mode must stay usable (in-place) from a later no_grad generation."""
+    pool = KVBufferPool()
+    with torch.inference_mode():
+        buf = pool.acquire("static_k", 0, (1, 4, 1, 1), dtype=torch.float32, device=torch.device("cpu"))
+    assert not buf.is_inference()
+    with torch.no_grad():
+        buf[:, :2].copy_(torch.ones(1, 2, 1, 1))  # would raise on an inference tensor
+    assert float(buf[0, 0, 0, 0]) == 1.0
+
+
+@pytest.mark.L0
+@pytest.mark.CPU
+def test_ar_memory_state_static_flavor_coarse_replay_updates_offsets_in_place_and_matches_dynamic() -> None:
+    """Forward-scope CUDA graphs: offset tensors keep their identity across init calls and replays,
+    KV writes are staged until commit, and the replay-time rebuild reproduces the dynamic transfer history."""
+    window, sink, tokens_per_entry, num_heads, head_dim, s_und = 3, 1, 2, 1, 1, 3
+    pool = KVBufferPool()
+    cache = DualKVCache(
+        gen_cache_size=2 * window, attention_sink_size=2 * sink, buffer_pool=pool, pool_slot=0, preallocate_ring=True
+    )
+    und_k = torch.randn(1, s_und, num_heads, head_dim)  # [B,S_und,H,D]
+    und_v = torch.randn(1, s_und, num_heads, head_dim)  # [B,S_und,H,D]
+    cache.und_cache.store(und_k, und_v)
+    recent = window - sink - 1
+    sink_tokens = 2 * sink * tokens_per_entry
+    target_tokens = (2 * recent + 1) * tokens_per_entry
+    for entry_idx in range(3):
+        key = torch.full((1, tokens_per_entry, num_heads, head_dim), float(entry_idx))  # [B,S_entry,H,D]
+        cache.gen_cache.store_kv(key, key + 100.0, frame_idx=entry_idx)
+    hidden = {"_num_full_tokens": tokens_per_entry}
+    device = torch.device("cpu")
+
+    state = ARMemoryState(
+        [cache],
+        frame_idx=3,
+        vision_token_shapes=[(1, 1, tokens_per_entry)],
+        for_cuda_graphs=True,
+        num_kv_heads=num_heads,
+        head_dim=head_dim,
+        write_gen_cache=True,
+        coarse_cuda_graph=True,
+        stage_gen_cache_writes=True,
+        transfer_history_sink_tokens=sink_tokens,
+        transfer_history_max_tokens=target_tokens,
+    )
+    state.init(hidden, device)  # warmup forward #1
+    cu_kv, cu_q, real_len_t = state._cu_seqlens_kv_t, state._cu_seqlens_q_t, state._real_gen_cache_len_t
+    assert cu_kv is not None and cu_q is not None and real_len_t is not None
+    first = state.read_for_layer(0)
+    assert first.kv_k_static is not None
+    buffer_ptr = first.kv_k_static.data_ptr()
+    hist = first.static_hist_offset
+    assert hist == s_und + tokens_per_entry
+    assert torch.equal(first.kv_k_static[:, :s_und], und_k)  # und region primed once
+
+    state.init(hidden, device)  # warmup forward #2 / capture: same tensors, values left to prepare()
+    assert (
+        state._cu_seqlens_kv_t is cu_kv and state._cu_seqlens_q_t is cu_q and state._real_gen_cache_len_t is real_len_t
+    )
+    assert int(real_len_t.item()) == 3 * tokens_per_entry
+    assert int(cu_kv[1].item()) == s_und + tokens_per_entry + 3 * tokens_per_entry
+
+    key3 = torch.full((1, tokens_per_entry, num_heads, head_dim), 3.0)  # [B,S_entry,H,D]
+    state.write_for_layer(0, (key3, key3 + 100.0, und_k, und_v))
+    assert cache.gen_cache.k_cache[cache.gen_cache._cache_index(3)] is None  # staged, not stored during capture
+    state.commit_staged_gen_cache(frame_idx=3)
+    stored = cache.gen_cache.k_cache[cache.gen_cache._cache_index(3)]
+    assert isinstance(stored, torch.Tensor) and torch.equal(stored, key3)
+
+    # Replay for the next target frame: same tensors and buffer address, values and contents for frame 4.
+    state.prepare_for_coarse_cuda_graph_replay(frame_idx=4)
+    dynamic = ARMemoryState(
+        [cache], frame_idx=4, transfer_history_sink_tokens=sink_tokens, transfer_history_max_tokens=target_tokens
+    )
+    dynamic.init(hidden, device)
+    dynamic_value = dynamic.read_for_layer(0)
+    assert dynamic_value.gen_k_hist is not None and dynamic_value.gen_v_hist is not None
+    expected_len = dynamic_value.gen_k_hist.shape[1]
+    assert int(real_len_t.item()) == expected_len
+    assert int(cu_kv[1].item()) == s_und + tokens_per_entry + expected_len
+    replayed = state.read_for_layer(0)
+    assert replayed.kv_k_static is not None and replayed.kv_v_static is not None
+    assert replayed.kv_k_static.data_ptr() == buffer_ptr
+    assert replayed.real_gen_cache_len_t is real_len_t and replayed.cu_seqlens_kv_t is cu_kv
+    torch.testing.assert_close(replayed.kv_k_static[:, hist : hist + expected_len], dynamic_value.gen_k_hist)
+    torch.testing.assert_close(replayed.kv_v_static[:, hist : hist + expected_len], dynamic_value.gen_v_hist)
+    assert torch.equal(replayed.kv_k_static[:, :s_und], und_k)  # und region untouched by rebuilds
+
+
+@pytest.mark.L0
+@pytest.mark.CPU
+def test_ar_memory_state_coarse_static_init_leaves_offset_values_to_prepare() -> None:
+    """A whole-forward capture records ``init()``; it must not write offset values that every replay
+    would then re-apply over the per-frame refresh done by ``prepare_for_coarse_cuda_graph_replay``."""
+    tokens_per_entry, num_heads, head_dim, s_und = 2, 1, 1, 3
+    cache = DualKVCache(gen_cache_size=4)
+    cache.und_cache.store(torch.randn(1, s_und, num_heads, head_dim), torch.randn(1, s_und, num_heads, head_dim))
+    for entry_idx in range(3):
+        key = torch.full((1, tokens_per_entry, num_heads, head_dim), float(entry_idx))  # [B,S_entry,H,D]
+        cache.gen_cache.store_kv(key, key, frame_idx=entry_idx)
+    hidden = {"_num_full_tokens": tokens_per_entry}
+    device = torch.device("cpu")
+    state = ARMemoryState(
+        [cache],
+        frame_idx=1,
+        vision_token_shapes=[(1, 1, tokens_per_entry)],
+        for_cuda_graphs=True,
+        num_kv_heads=num_heads,
+        head_dim=head_dim,
+        coarse_cuda_graph=True,
+        stage_gen_cache_writes=False,
+    )
+    state.init(hidden, device)  # warmup #1 (outside capture) creates the tensors with frame-1 values
+    real_len_t, cu_kv = state._real_gen_cache_len_t, state._cu_seqlens_kv_t
+    assert real_len_t is not None and cu_kv is not None
+    assert int(real_len_t.item()) == tokens_per_entry
+
+    state.prepare_for_coarse_cuda_graph_replay(frame_idx=3)  # replay-time refresh for frame 3
+    assert int(real_len_t.item()) == 3 * tokens_per_entry
+
+    # The recorded forward ran ``init()`` with the capture frame; replaying it must not clobber frame 3.
+    state.frame_idx = 1
+    state.init(hidden, device)
+    assert state._real_gen_cache_len_t is real_len_t and state._cu_seqlens_kv_t is cu_kv
+    assert int(real_len_t.item()) == 3 * tokens_per_entry
+    assert int(cu_kv[1].item()) == s_und + tokens_per_entry + 3 * tokens_per_entry
+
+    # Per-block CUDA graphs (non-coarse) rebuild the state every forward and keep refreshing in init().
+    per_block = ARMemoryState(
+        [cache],
+        frame_idx=1,
+        vision_token_shapes=[(1, 1, tokens_per_entry)],
+        for_cuda_graphs=True,
+        num_kv_heads=num_heads,
+        head_dim=head_dim,
+    )
+    per_block.init(hidden, device)
+    per_block.frame_idx = 3
+    per_block.init(hidden, device)
+    assert per_block._real_gen_cache_len_t is not None
+    assert int(per_block._real_gen_cache_len_t.item()) == 3 * tokens_per_entry
+
+
+@pytest.mark.L0
+@pytest.mark.CPU
+def test_static_kv_workspaces_are_zero_filled_on_allocation() -> None:
+    """The varlen FMHA reads each sequence's last KV tile in full and masks the overrun; padding past
+    the real prefix must therefore be finite.  Pooled and plain workspaces start zeroed."""
+    pooled = KVBufferPool().acquire("static_k", 0, (1, 8, 2, 4), dtype=torch.float32, device=torch.device("cpu"))
+    assert torch.equal(pooled, torch.zeros_like(pooled))
+    cache = GenKVCache(cache_size=3)
+    cache.store_kv(torch.ones(1, 2, 2, 4), torch.ones(1, 2, 2, 4), frame_idx=0)
+    k_buf, v_buf, real_len = cache.fetch_kv_static(
+        1, 4, 2, num_heads=2, head_dim=4, device=torch.device("cpu"), dtype=torch.float32
+    )
+    assert real_len == 2
+    assert torch.equal(k_buf[:, real_len:], torch.zeros_like(k_buf[:, real_len:]))
+    assert torch.equal(v_buf[:, real_len:], torch.zeros_like(v_buf[:, real_len:]))
+
+
+@pytest.mark.L0
+@pytest.mark.CPU
+def test_gen_kv_cache_composite_static_buffer_single_pass_rebuild_with_wraparound() -> None:
+    """The ``[und | curr | hist | pad]`` buffer: und primed once, history rebuilt straight from the
+    ring in physical-slot runs (sink run + wrapped recent runs), byte-identical to the dynamic history."""
+    cache_size, sink, tokens, num_heads, head_dim, s_und, gen_len = 6, 2, 2, 1, 1, 3, 2
+    pool = KVBufferPool()
+    cache = GenKVCache(
+        cache_size=cache_size, attention_sink_size=sink, buffer_pool=pool, pool_slot=0, preallocate_ring=True
+    )
+    for entry_idx in range(9):  # wraps the 4 rolling slots twice
+        key = torch.full((1, tokens, num_heads, head_dim), float(entry_idx))  # [B,S_entry,H,D]
+        cache.store_kv(key, key + 100.0, frame_idx=entry_idx)
+    und_k = torch.randn(1, s_und, num_heads, head_dim)  # [B,S_und,H,D]
+    und_v = torch.randn(1, s_und, num_heads, head_dim)  # [B,S_und,H,D]
+    max_tokens = (cache_size - 1) * tokens
+    prefix = s_und + gen_len
+
+    k_buf, v_buf, real_len = cache.fetch_kv_static(
+        8,
+        max_tokens,
+        tokens,
+        num_heads=num_heads,
+        head_dim=head_dim,
+        device=torch.device("cpu"),
+        dtype=torch.float32,
+        prefix_tokens=prefix,
+        und_kv=(und_k, und_v),
+    )
+    assert k_buf.shape == (1, prefix + max_tokens, num_heads, head_dim)
+    slots = [cache._cache_index(i) for i in cache._history_frame_indices(8)]
+    assert len(GenKVCache._coalesce_slot_runs(slots)) == 3  # sink run + rolling run split by the wrap
+    k_dyn, v_dyn = cache.fetch_kv(8)
+    assert k_dyn is not None and v_dyn is not None and real_len == k_dyn.shape[1]
+    assert torch.equal(k_buf[:, :s_und], und_k) and torch.equal(v_buf[:, :s_und], und_v)
+    assert torch.equal(k_buf[:, prefix : prefix + real_len], k_dyn)
+    assert torch.equal(v_buf[:, prefix : prefix + real_len], v_dyn)
+
+    # Same und tensors: the region is not rewritten (a scribble survives); new und tensors re-prime it.
+    k_buf[:, :s_und].fill_(-7.0)
+    cache.fetch_kv_static(
+        8,
+        max_tokens,
+        tokens,
+        num_heads=num_heads,
+        head_dim=head_dim,
+        device=torch.device("cpu"),
+        dtype=torch.float32,
+        prefix_tokens=prefix,
+        und_kv=(und_k, und_v),
+    )
+    assert torch.all(k_buf[:, :s_und] == -7.0)
+    und_k2 = torch.randn(1, s_und, num_heads, head_dim)  # [B,S_und,H,D]
+    cache.fetch_kv_static(
+        8,
+        max_tokens,
+        tokens,
+        num_heads=num_heads,
+        head_dim=head_dim,
+        device=torch.device("cpu"),
+        dtype=torch.float32,
+        prefix_tokens=prefix,
+        und_kv=(und_k2, und_v),
+    )
+    assert torch.equal(k_buf[:, :s_und], und_k2)
+    # A store invalidates the history region only; the und region and buffer address survive.
+    ptr = k_buf.data_ptr()
+    key9 = torch.full((1, tokens, num_heads, head_dim), 9.0)  # [B,S_entry,H,D]
+    cache.store_kv(key9, key9 + 100.0, frame_idx=9)
+    k_buf2, _, real_len2 = cache.fetch_kv_static(
+        10,
+        max_tokens,
+        tokens,
+        num_heads=num_heads,
+        head_dim=head_dim,
+        device=torch.device("cpu"),
+        dtype=torch.float32,
+        prefix_tokens=prefix,
+        und_kv=(und_k2, und_v),
+    )
+    k_dyn2, _ = cache.fetch_kv(10)
+    assert k_buf2.data_ptr() == ptr and k_dyn2 is not None
+    assert torch.equal(k_buf2[:, prefix : prefix + real_len2], k_dyn2)
+    assert torch.equal(k_buf2[:, :s_und], und_k2)
+
+
+@pytest.mark.L0
+@pytest.mark.CPU
+def test_gen_kv_cache_composite_buffer_holds_one_row_per_batched_sample() -> None:
+    """B rows at a fixed stride: und right-aligned per row, history copied per row from the ring, pads zero."""
+    cache_size, tokens, num_heads, head_dim, rows, und_cap, gen_len = 5, 2, 1, 2, 2, 4, 2
+    cache = GenKVCache(cache_size=cache_size, buffer_pool=KVBufferPool(), pool_slot=0, preallocate_ring=True)
+    for entry_idx in range(6):  # wraps the 5-slot ring
+        key = torch.randn(rows, tokens, num_heads, head_dim)  # [B,S_entry,H,D]
+        cache.store_kv(key, key * 2, frame_idx=entry_idx)
+    und_k = torch.randn(rows, und_cap, num_heads, head_dim)  # [B,U,H,D]
+    und_v = torch.randn(rows, und_cap, num_heads, head_dim)  # [B,U,H,D]
+    und_lens = (3, 4)
+    max_tokens = (cache_size - 1) * tokens
+    prefix = und_cap + gen_len
+    stride = prefix + max_tokens
+
+    k_buf, v_buf, real_len = cache.fetch_kv_static(
+        6,
+        max_tokens,
+        tokens,
+        num_heads=num_heads,
+        head_dim=head_dim,
+        device=torch.device("cpu"),
+        dtype=torch.float32,
+        prefix_tokens=prefix,
+        und_kv=(und_k, und_v),
+        batch_rows=rows,
+        und_lens=und_lens,
+    )
+    assert k_buf.shape == (1, rows * stride, num_heads, head_dim)
+    k_dyn, v_dyn = cache.fetch_kv(6)  # [B,S_hist,H,D]
+    assert k_dyn is not None and v_dyn is not None and real_len == k_dyn.shape[1]
+    for row in range(rows):
+        base = row * stride
+        u = und_lens[row]
+        assert torch.equal(k_buf[0, base + und_cap - u : base + und_cap], und_k[row, :u])
+        assert torch.equal(v_buf[0, base + und_cap - u : base + und_cap], und_v[row, :u])
+        assert torch.all(k_buf[0, base : base + und_cap - u] == 0)  # lead pad
+        assert torch.equal(k_buf[0, base + prefix : base + prefix + real_len], k_dyn[row])
+        assert torch.equal(v_buf[0, base + prefix : base + prefix + real_len], v_dyn[row])
+        assert torch.all(k_buf[0, base + prefix + real_len : base + stride] == 0)  # tail pad
+    # A store of B rows invalidates and the rebuild stays per row.
+    key = torch.randn(rows, tokens, num_heads, head_dim)  # [B,S_entry,H,D]
+    cache.store_kv(key, key, frame_idx=6)
+    k_buf2, _, real_len2 = cache.fetch_kv_static(
+        7,
+        max_tokens,
+        tokens,
+        num_heads=num_heads,
+        head_dim=head_dim,
+        device=torch.device("cpu"),
+        dtype=torch.float32,
+        prefix_tokens=prefix,
+        und_kv=(und_k, und_v),
+        batch_rows=rows,
+        und_lens=und_lens,
+    )
+    k_dyn2, _ = cache.fetch_kv(7)
+    assert k_dyn2 is not None and k_buf2.data_ptr() == k_buf.data_ptr()
+    for row in range(rows):
+        base = row * stride
+        assert torch.equal(k_buf2[0, base + prefix : base + prefix + real_len2], k_dyn2[row])
+
+
+@pytest.mark.L0
+@pytest.mark.CPU
+def test_ar_memory_state_static_flavor_batched_rows_match_dynamic_batched_flavor() -> None:
+    """Static flavor with B=2: [2B] offsets with zero-query gap entries and per-row regions equal
+    to what the dynamic batched flavor reads for each sample."""
+    rows, gen_len, und_cap, num_heads, head_dim, cache_size = 2, 2, 4, 1, 2, 4
+    und_lens = (3, 4)
+    pool = KVBufferPool()
+    cache = DualKVCache(gen_cache_size=cache_size, buffer_pool=pool, pool_slot=0, preallocate_ring=True)
+    und_k = torch.randn(rows, und_cap, num_heads, head_dim)  # [B,U,H,D]
+    und_v = torch.randn(rows, und_cap, num_heads, head_dim)  # [B,U,H,D]
+    cache.und_cache.store(und_k, und_v, lengths=und_lens)
+    for entry_idx in range(2):
+        key = torch.randn(rows, gen_len, num_heads, head_dim)  # [B,S_gen,H,D]
+        cache.gen_cache.store_kv(key, key + 1.0, frame_idx=entry_idx)
+    hidden = {
+        "sample_offsets": torch.tensor([0, 2, 4]),
+        "_num_full_tokens": rows * gen_len,
+        "_num_causal_tokens": 0,
+    }
+    common = dict(vision_token_shapes=[(1, 1, gen_len)], num_kv_heads=num_heads, head_dim=head_dim, batched=True)
+    static = ARMemoryState([cache], frame_idx=2, for_cuda_graphs=True, **common)
+    static.init(hidden, torch.device("cpu"))
+    dynamic = ARMemoryState([cache], frame_idx=2, batched=True)
+    dynamic.init(hidden, torch.device("cpu"))
+
+    sv, dv = static.read_for_layer(0), dynamic.read_for_layer(0)
+    hist_len = dv.gen_k_hist.shape[1]
+    stride = und_cap + gen_len + (cache_size - 1) * gen_len
+    assert sv.batch_size == rows and sv.gen_len == gen_len and sv.static_row_stride == stride
+    assert (
+        sv.max_seqlen_KV == stride and sv.static_curr_offset == und_cap and sv.static_hist_offset == und_cap + gen_len
+    )
+    assert sv.kv_k_static is not None and sv.kv_k_static.shape == (1, rows * stride, num_heads, head_dim)
+    assert sv.cu_seqlens_q_t.tolist() == [0, gen_len, gen_len, 2 * gen_len]
+    expected_kv = []
+    for row in range(rows):
+        expected_kv += [row * stride + und_cap - und_lens[row], row * stride + und_cap + gen_len + hist_len]
+    assert sv.cu_seqlens_kv_t.tolist() == expected_kv
+    for row in range(rows):
+        base = row * stride
+        u = und_lens[row]
+        assert torch.equal(sv.kv_k_static[0, base + und_cap - u : base + und_cap], dv.und_k_cached[row, :u])
+        hist = base + und_cap + gen_len
+        assert torch.equal(sv.kv_k_static[0, hist : hist + hist_len], dv.gen_k_hist[row])
+        assert torch.equal(sv.kv_v_static[0, hist : hist + hist_len], dv.gen_v_hist[row])
+
+    # Coarse replay flavor: offsets keep their identity, values follow the frame.
+    coarse = ARMemoryState(
+        [cache], frame_idx=2, for_cuda_graphs=True, coarse_cuda_graph=True, stage_gen_cache_writes=True, **common
+    )
+    coarse.init(hidden, torch.device("cpu"))
+    cu_kv = coarse._cu_seqlens_kv_t
+    key = torch.randn(rows, gen_len, num_heads, head_dim)  # [B,S_gen,H,D]
+    cache.gen_cache.store_kv(key, key, frame_idx=2)
+    coarse.prepare_for_coarse_cuda_graph_replay(frame_idx=3)
+    assert coarse._cu_seqlens_kv_t is cu_kv
+    assert cu_kv.tolist()[1] == und_cap + gen_len + 3 * gen_len  # row 0 now sees 3 history entries
+    assert cu_kv.tolist()[3] == stride + und_cap + gen_len + 3 * gen_len
+
+
+def _fresh_single_row_history(
+    entries: list[tuple[torch.Tensor, torch.Tensor]],
+    cache_size: int,
+    sink: int,
+    frame: int,
+    sink_entries: int,
+    recent: int,
+):
+    """Reference: a brand-new single-row cache fed the same entries; returns (k_hist, v_hist) at ``frame``."""
+    fresh = GenKVCache(
+        cache_size=cache_size, attention_sink_size=sink, buffer_pool=KVBufferPool(), preallocate_ring=True
+    )
+    for idx, (k, v) in enumerate(entries):
+        fresh.store_kv(k, v, frame_idx=idx)
+    plan = fresh.transfer_history_frame_indices(frame, sink_entries, recent)
+    tokens = entries[0][0].shape[1]
+    k_buf, v_buf, real_len = fresh.fetch_kv_static(
+        frame,
+        (cache_size - 1) * tokens,
+        tokens,
+        num_heads=k.shape[2],
+        head_dim=k.shape[3],
+        device=torch.device("cpu"),
+        dtype=torch.float32,
+        history_frame_indices=plan,
+    )
+    return k_buf[0, :real_len].clone(), v_buf[0, :real_len].clone()
+
+
+@pytest.mark.L0
+@pytest.mark.CPU
+def test_gen_kv_cache_row_restart_reads_a_fresh_cache_history_for_that_row_only() -> None:
+    """Row 1 restarts at global frame 3: its plan/history equal a fresh single-row cache started there
+    (sink entries mirrored into its pinned slots), row 0 is untouched, and only tensor values changed."""
+    cache_size, sink, tokens, num_heads, head_dim, rows = 8, 2, 2, 1, 2, 2
+    sink_entries, recent = 2, 3
+    cache = GenKVCache(
+        cache_size=cache_size, attention_sink_size=sink, buffer_pool=KVBufferPool(), preallocate_ring=True
+    )
+    entries = [
+        (torch.randn(rows, tokens, num_heads, head_dim), torch.randn(rows, tokens, num_heads, head_dim))
+        for _ in range(12)
+    ]
+    restart_at = 3
+    for idx, (k, v) in enumerate(entries):
+        if idx == restart_at:
+            cache.reset_rows([1], at_frame_idx=restart_at)
+        cache.store_kv(k, v, frame_idx=idx)
+    frame = 12
+    max_tokens = (cache_size - 1) * tokens
+    plan_row0 = cache.row_history_slots(0, frame, sink_entries, recent)
+    plan_row1 = cache.row_history_slots(1, frame, sink_entries, recent)
+    # Row 0: the shared plan, unchanged by the other row's restart.
+    assert plan_row0 == [
+        cache._cache_index(i) for i in cache.transfer_history_frame_indices(frame, sink_entries, recent)
+    ]
+    # Row 1: a fresh cache's plan in its local clock; its sink lives in the mirrored pinned slots.
+    assert plan_row1[:sink_entries] == [0, 1]
+    k_buf, v_buf, _ = cache.fetch_kv_static(
+        frame,
+        max_tokens,
+        tokens,
+        num_heads=num_heads,
+        head_dim=head_dim,
+        device=torch.device("cpu"),
+        dtype=torch.float32,
+        batch_rows=rows,
+        row_slot_lists=[plan_row0, plan_row1],
+    )
+    stride = max_tokens
+    row0_ref = _fresh_single_row_history(
+        [(k[0:1], v[0:1]) for k, v in entries], cache_size, sink, frame, sink_entries, recent
+    )
+    row1_ref = _fresh_single_row_history(
+        [(k[1:2], v[1:2]) for k, v in entries[restart_at:]], cache_size, sink, frame - restart_at, sink_entries, recent
+    )
+    assert torch.equal(k_buf[0, 0 : row0_ref[0].shape[0]], row0_ref[0])
+    assert torch.equal(k_buf[0, stride : stride + row1_ref[0].shape[0]], row1_ref[0])
+    assert torch.equal(v_buf[0, stride : stride + row1_ref[1].shape[0]], row1_ref[1])
+    assert cache._static_real_lens == (row0_ref[0].shape[0], row1_ref[0].shape[0])
+    # Right after the restart the row has an empty history, then grows like a fresh cache.
+    assert cache.row_history_slots(1, restart_at, sink_entries, recent) == []
+    assert len(cache.row_history_slots(1, restart_at + 1, sink_entries, recent)) == 1
+
+
+@pytest.mark.L0
+@pytest.mark.CPU
+def test_ar_memory_state_static_batched_offsets_follow_per_row_restarts() -> None:
+    """cu_seqlens_kv row ends shrink for a restarted row; addresses stay; B=1 without restarts keeps the shared plan."""
+    rows, gen_len, und_cap, num_heads, head_dim, cache_size, sink = 2, 2, 3, 1, 2, 8, 2
+    pool = KVBufferPool()
+    cache = DualKVCache(
+        gen_cache_size=cache_size, attention_sink_size=sink, buffer_pool=pool, pool_slot=0, preallocate_ring=True
+    )
+    cache.und_cache.store(
+        torch.randn(rows, und_cap, num_heads, head_dim), torch.randn(rows, und_cap, num_heads, head_dim)
+    )
+    for idx in range(5):
+        key = torch.randn(rows, gen_len, num_heads, head_dim)
+        if idx == 3:
+            cache.gen_cache.reset_rows([1], at_frame_idx=3)
+        cache.gen_cache.store_kv(key, key, frame_idx=idx)
+    hidden = {"sample_offsets": torch.tensor([0, 2, 4]), "_num_full_tokens": rows * gen_len, "_num_causal_tokens": 0}
+    state = ARMemoryState(
+        [cache],
+        frame_idx=5,
+        vision_token_shapes=[(1, 1, gen_len)],
+        for_cuda_graphs=True,
+        num_kv_heads=num_heads,
+        head_dim=head_dim,
+        batched=True,
+        coarse_cuda_graph=True,
+        stage_gen_cache_writes=True,
+        transfer_history_sink_tokens=2 * gen_len,
+        transfer_history_max_tokens=3 * gen_len,
+    )
+    state.init(hidden, torch.device("cpu"))
+    stride = und_cap + gen_len + (cache_size - 1) * gen_len
+    cu_kv = state._cu_seqlens_kv_t.tolist()
+    assert cu_kv[1] == und_cap + gen_len + 5 * gen_len  # row 0: sink 2 + recent 3 entries
+    assert cu_kv[3] == stride + und_cap + gen_len + 2 * gen_len  # row 1: 2 entries since its restart at 3
+    value = state.read_for_layer(0)
+    assert value.kv_k_static is not None and state._static_row_slots is not None
+    assert len(state._static_row_slots[1]) == 2
+    kv_t = state._cu_seqlens_kv_t
+    key = torch.randn(rows, gen_len, num_heads, head_dim)
+    cache.gen_cache.store_kv(key, key, frame_idx=5)
+    state.prepare_for_coarse_cuda_graph_replay(frame_idx=6)
+    assert state._cu_seqlens_kv_t is kv_t
+    assert kv_t.tolist()[3] == stride + und_cap + gen_len + 3 * gen_len
+
+
+@pytest.mark.L0
+@pytest.mark.CPU
+def test_gen_kv_cache_static_rebuild_generic_path_matches_ring_path() -> None:
+    """Clone storage (no ring) takes the decode_many path; both layouts agree with the dynamic history."""
+    cache_size, sink, tokens, num_heads, head_dim, prefix = 5, 1, 3, 2, 2, 4
+    ring = GenKVCache(
+        cache_size=cache_size, attention_sink_size=sink, buffer_pool=KVBufferPool(), preallocate_ring=True
+    )
+    clone = GenKVCache(cache_size=cache_size, attention_sink_size=sink)
+    for entry_idx in range(7):
+        key = torch.randn(1, tokens, num_heads, head_dim)  # [B,S_entry,H,D]
+        ring.store_kv(key, key * 2, frame_idx=entry_idx)
+        clone.store_kv(key, key * 2, frame_idx=entry_idx)
+    common = dict(num_heads=num_heads, head_dim=head_dim, device=torch.device("cpu"), dtype=torch.float32)
+    k_ring, v_ring, len_ring = ring.fetch_kv_static(
+        7, (cache_size - 1) * tokens, tokens, prefix_tokens=prefix, **common
+    )
+    k_clone, v_clone, len_clone = clone.fetch_kv_static(
+        7, (cache_size - 1) * tokens, tokens, prefix_tokens=prefix, **common
+    )
+    k_dyn, v_dyn = clone.fetch_kv(7)
+    assert k_dyn is not None and v_dyn is not None and len_ring == len_clone == k_dyn.shape[1]
+    assert torch.equal(k_ring[:, prefix : prefix + len_ring], k_dyn)
+    assert torch.equal(k_clone[:, prefix : prefix + len_clone], k_dyn)
+    assert torch.equal(v_ring[:, prefix : prefix + len_ring], v_dyn)
+    assert torch.equal(v_clone[:, prefix : prefix + len_clone], v_dyn)
+
+
+@pytest.mark.L0
+@pytest.mark.CPU
+def test_ar_memory_state_static_flavor_coarse_replay_without_transfer_limits() -> None:
+    """The plain (non-Transfer) static flavor replays with the ring-native history length."""
+    tokens_per_entry, num_heads, head_dim, s_und = 2, 1, 1, 3
+    cache = DualKVCache(gen_cache_size=4)
+    cache.und_cache.store(torch.randn(1, s_und, num_heads, head_dim), torch.randn(1, s_und, num_heads, head_dim))
+    for entry_idx in range(3):
+        key = torch.full((1, tokens_per_entry, num_heads, head_dim), float(entry_idx))  # [B,S_entry,H,D]
+        cache.gen_cache.store_kv(key, key, frame_idx=entry_idx)
+    state = ARMemoryState(
+        [cache],
+        frame_idx=1,
+        vision_token_shapes=[(1, 1, tokens_per_entry)],
+        for_cuda_graphs=True,
+        num_kv_heads=num_heads,
+        head_dim=head_dim,
+        coarse_cuda_graph=True,
+        stage_gen_cache_writes=False,
+    )
+    state.init({"_num_full_tokens": tokens_per_entry}, torch.device("cpu"))
+    assert state._real_gen_cache_len_t is not None and int(state._real_gen_cache_len_t.item()) == tokens_per_entry
+    state.prepare_for_coarse_cuda_graph_replay(frame_idx=3)
+    assert int(state._real_gen_cache_len_t.item()) == 3 * tokens_per_entry  # min(3, cache_size-1) entries
+    value = state.read_for_layer(0)
+    assert value.kv_k_static is not None
+    hist = value.static_hist_offset
+    torch.testing.assert_close(
+        value.kv_k_static[:, hist : hist + 3 * tokens_per_entry],
+        torch.cat([torch.full((1, tokens_per_entry, num_heads, head_dim), float(i)) for i in range(3)], dim=1),
+    )

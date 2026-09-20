@@ -30,10 +30,16 @@ def apply_compile(model: torch.nn.Module, config: CompileConfig):
     if config.coordinate_descent_tuning:
         inductor_options["coordinate_descent_tuning"] = True
 
+    # Whole-forward CUDA graphs (``cuda_graph_scope="forward"``) capture these heads inside the
+    # recorded AR forward: per-region CUDA-graph trees cannot replay inside that capture, and a
+    # symbolic-shape wrapper would stage host values through pinned memory that a replay later
+    # reads after it is freed.  That scope therefore compiles the heads like the decoder blocks
+    # (inductor only, static shapes); every other configuration keeps the dynamic single graph.
+    forward_scope_capture = config.use_cuda_graphs and config.cuda_graph_scope == "forward"
     compile_options = {
         "fullgraph": True,
-        "dynamic": True,
-        "mode": "reduce-overhead" if config.use_cuda_graphs else None,
+        "dynamic": not forward_scope_capture,
+        "mode": "reduce-overhead" if (config.use_cuda_graphs and not forward_scope_capture) else None,
         "options": inductor_options or None,
     }
 

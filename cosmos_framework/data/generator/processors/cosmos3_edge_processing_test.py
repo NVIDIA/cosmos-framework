@@ -15,6 +15,8 @@ vision features with these checkpoint weights; see
 import hashlib
 import json
 import os
+from pathlib import Path
+from unittest.mock import Mock
 
 import numpy as np
 import pytest
@@ -96,6 +98,24 @@ def test_detection_rule_rejects_non_edge_dirs(tmp_path) -> None:
     assert not is_cosmos3_edge_native_snapshot(str(tmp_path / "missing"))
     (tmp_path / "config.json").write_text(json.dumps({"model_type": "nemotron_siglip2"}))
     assert not is_cosmos3_edge_native_snapshot(str(tmp_path))
+
+
+@pytest.mark.L0
+@pytest.mark.CPU
+def test_build_processor_routes_local_nemotron3_dense_dir(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import cosmos_framework.data.generator.processors as processors
+
+    model_dir = tmp_path / "nvidia" / "NVIDIA-Nemotron-3-Dense-VL-2B-BF16-Alignment"
+    model_dir.mkdir(parents=True)
+    expected_processor = object()
+    processor_factory = Mock(return_value=expected_processor)
+    monkeypatch.setattr(processors, "Nemotron3DenseVLProcessor", processor_factory)
+
+    assert processors.build_processor(str(model_dir)) is expected_processor
+    processor_factory.assert_called_once_with(str(model_dir), cache_dir=None)
 
 
 @requires_snapshot

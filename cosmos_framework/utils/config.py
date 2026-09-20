@@ -463,6 +463,8 @@ class TrainerConfig:
     run_validation: bool = True
     # How often we evaluate on the validation set.
     validation_iter: int = 999999999
+    # Keep a bounded validation iterator alive so its worker can prefetch between validation calls.
+    prefetch_validation: bool = False
     # Whether to run the validation on the start of the training.
     run_validation_on_start: bool = False
     # Kill the process after N seconds since the last iteration (usually means dead job).

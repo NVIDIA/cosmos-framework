@@ -68,6 +68,7 @@ from cosmos_framework.model.generator.utils.data_and_condition import (
     GenerationDataNoised,
     _expand_per_sample_to_per_vision_item,
     build_dense_sound_schedule,
+    select_target_image_sizes,
     unwrap_and_densify,
 )
 from cosmos_framework.model.generator.utils.load_balancing_stats import LBLConfig
@@ -82,6 +83,10 @@ from cosmos_framework.model.generator.utils.moe_utils import (
 )
 from cosmos_framework.model.generator.utils.safetensors_loader import (
     load_language_model as load_language_model_safetensors,
+)
+from cosmos_framework.model.generator.utils.sr_latent_noise import (
+    apply_sr_latent_condition_noise,
+    sr_sample_mask,
 )
 from cosmos_framework.model.generator.vision_encoder import (
     VisionEncoder,
@@ -1138,8 +1143,13 @@ class OmniMoTModel(ImaginaireModel):
         # image_size[i] may be (1, 4) from IterativeJointDataLoader or (4,) from custom_collate_fn.
         if "image_size" in data_batch:
             data_resolutions: list[str] | str | None = []
+            # Multi-item samples (transfer, SR) carry one image_size per vision item; the noise
+            # schedule must follow the generated (last) item of each sample.
+            target_image_sizes = select_target_image_sizes(
+                data_batch["image_size"], gen_data_clean.num_vision_items_per_sample, gen_data_clean.batch_size
+            )
             for i in range(gen_data_clean.batch_size):
-                img_size = data_batch["image_size"][i]
+                img_size = target_image_sizes[i]
                 if img_size.dim() == 2:
                     img_size = img_size[0]
                 target_h = int(img_size[0].item())
@@ -1695,6 +1705,7 @@ class OmniMoTModel(ImaginaireModel):
 
         rf_cfg = self.config.rectified_flow_training_config
         normalize_by_active = rf_cfg.normalize_loss_by_active
+        exclude_fully_conditioned_items = self.config.causal_training_strategy == "teacher_forcing"
         if self.config.vision_gen:
             # Only a batch that generates no camera stream, as the LiDAR-only recipe does, may
             # arrive with vision unpacked; for anything else that would silently sink the vision
@@ -1719,8 +1730,7 @@ class OmniMoTModel(ImaginaireModel):
                 rectified_flow=rectified_flow_vision,
                 tensor_kwargs_fp32=self.tensor_kwargs_fp32,
                 normalize_by_active=normalize_by_active,
-                exclude_fully_conditioned_items=getattr(self.config, "causal_training_strategy", None)
-                == "teacher_forcing",
+                exclude_fully_conditioned_items=exclude_fully_conditioned_items,
             )
             loss_scale = (
                 rf_cfg.image_loss_scale if is_image_batch and rf_cfg.image_loss_scale is not None else rf_cfg.loss_scale
@@ -1739,6 +1749,8 @@ class OmniMoTModel(ImaginaireModel):
                     "LiDAR condition mask must be a list of tensors for loss computation"
                 )
                 assert gen_data_noised.vt_target_lidar is not None, "LiDAR targets required when the batch has LiDAR"
+                # Match vision teacher forcing's target-item normalization. Clean HD-map
+                # controls must not dilute the LiDAR mean and change the sensor loss mix.
                 fm_loss_lidar, _ = compute_flow_matching_loss(
                     pred=out_net["preds_lidar"],
                     target=gen_data_noised.vt_target_lidar,
@@ -1748,6 +1760,7 @@ class OmniMoTModel(ImaginaireModel):
                     rectified_flow=self.rectified_flow_video,
                     tensor_kwargs_fp32=self.tensor_kwargs_fp32,
                     normalize_by_active=normalize_by_active,
+                    exclude_fully_conditioned_items=exclude_fully_conditioned_items,
                 )
                 lidar_loss_scale = rf_cfg.lidar_loss_scale if rf_cfg.lidar_loss_scale is not None else rf_cfg.loss_scale
                 total_loss += fm_loss_lidar * lidar_loss_scale  # []
@@ -3076,7 +3089,7 @@ class OmniMoTModel(ImaginaireModel):
                     offset += lidar_dim
                 lidar_offset += n_lidar
 
-            if has_noisy_actions and noise_x_action is not None:
+            if has_noisy_actions and noise_x_action is not None and sequence_plans[i].has_action:
                 assert gen_data_clean.x0_tokens_action is not None
                 action_shape = gen_data_clean.x0_tokens_action[idx_action].shape
                 action_dim = int(torch.prod(torch.tensor(action_shape)))
@@ -4768,6 +4781,7 @@ class OmniMoTModel(ImaginaireModel):
 
         sample_vision_list = data_batch[media_key]
 
+        # NOTE: as we assume that the vision items will be passed as a List[List[Tensor]],
         # we should always get this information here during training. If we can read this field
         # from data_batch it means we are in the visualization callback:
         if "num_vision_items_per_sample" not in data_batch:
@@ -4780,6 +4794,7 @@ class OmniMoTModel(ImaginaireModel):
             num_vision_items_per_sample: list[int] | None = (
                 [len(v) for v in sample_vision_list] if has_multiple_vision_per_sample else None
             )
+            # NOTE: we need to add this information back into the data_batch, because this
             # information is only stored in the GenerationDataClean object which will be discarded
             # outside the training loop. Error will be raised when the data batch is passed to the
             # visualization callbacks.
@@ -4848,6 +4863,14 @@ class OmniMoTModel(ImaginaireModel):
         frame_size = data_batch.get("image_size", None)
         if frame_size is not None:
             x0_tokens_vision = self._remove_padding_from_latent(x0_tokens_vision, frame_size)
+
+        sr_noise_cfg = getattr(self.config, "sr_latent_condition_noise", None)
+        if sr_noise_cfg is not None and self.training and torch.is_grad_enabled():
+            # L1: noise the LR conditioning latent of SR samples only (never the generated item).
+            eligible = sr_sample_mask(data_batch.get("dataset_name"), batch_size, sr_noise_cfg.dataset_names)
+            x0_tokens_vision, _ = apply_sr_latent_condition_noise(
+                x0_tokens_vision, num_vision_items_per_sample, eligible, sr_noise_cfg
+            )
 
         temporal_positions_vision = self._get_temporal_positions_vision(
             raw_state_vision=raw_state_vision,

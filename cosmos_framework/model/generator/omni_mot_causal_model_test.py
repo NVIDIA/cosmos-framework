@@ -18,7 +18,7 @@ Bugs patched:
       uninitialized.
 """
 
-from types import SimpleNamespace
+from types import MethodType, SimpleNamespace
 from typing import Literal, cast
 from unittest.mock import MagicMock, patch
 
@@ -2415,6 +2415,139 @@ class TestARGenerationLoopLogic:
 
     @pytest.mark.L0
     @pytest.mark.CPU
+    def test_video_transfer_with_cuda_graphs_routes_cached_forwards_to_the_rolling_path(self) -> None:
+        """compile + CUDA graphs: control seeds, RGB seeds and denoise all get use_ar_rolling_path=True."""
+        model = self._make_model_mock()
+        model.config.compile.enabled = True
+        model.config.compile.use_cuda_graphs = True
+        model.config.compile.ar_post_saturation_mode = "default"
+        model.config.kv_cache_inference_size = 3
+        model.config.attention_sink_size = 1
+
+        result, _ = self._run(model, "video_transfer")
+
+        assert result["vision"].shape == (1, self.C, self.T, self.H, self.W)
+        seed_calls = model._seed_frame_into_kv_cache.call_args_list
+        assert len(seed_calls) == 2 * self.T - 1  # T control seeds + (T-1) RGB refreshes
+        assert all(call.kwargs["use_ar_rolling_path"] is True for call in seed_calls)
+        target_calls = model.generate_next_frame.call_args_list
+        assert len(target_calls) == self.T
+        assert all(call.kwargs["use_ar_rolling_path"] is True for call in target_calls)
+
+    @pytest.mark.L0
+    @pytest.mark.CPU
+    def test_video_transfer_with_compile_but_no_cuda_graphs_stays_on_the_dynamic_path(self) -> None:
+        """compile without CUDA graphs is allowed and keeps every forward dynamic-shape."""
+        model = self._make_model_mock()
+        model.config.compile.enabled = True
+        model.config.compile.use_cuda_graphs = False
+        model.config.compile.ar_post_saturation_mode = "default"
+
+        self._run(model, "video_transfer")
+
+        seed_calls = model._seed_frame_into_kv_cache.call_args_list
+        assert seed_calls and all(call.kwargs["use_ar_rolling_path"] is False for call in seed_calls)
+        target_calls = model.generate_next_frame.call_args_list
+        assert target_calls and all(call.kwargs["use_ar_rolling_path"] is False for call in target_calls)
+
+    @pytest.mark.L0
+    @pytest.mark.CPU
+    def test_ar_caches_use_the_model_buffer_pool_and_preallocated_rings(self) -> None:
+        """Finite AR caches get the model-owned pool, per-layer slots (CFG branch offset) and in-place rings."""
+        from cosmos_framework.model.generator.omni_mot_causal_model import OmniMoTCausalModel
+        from cosmos_framework.model.generator.utils.kv_cache import KVBufferPool
+
+        model = self._make_model_mock()
+        model._ar_kv_buffer_pool_for_generation = MethodType(
+            OmniMoTCausalModel._ar_kv_buffer_pool_for_generation, model
+        )
+        model.config.kv_cache_inference_size = 3
+        model.config.attention_sink_size = 1
+        model._ar_kv_buffer_pool = None  # a real model starts without a pool; the loop creates one lazily
+        model.get_data_and_condition.return_value = self._make_gen_data("video_transfer")
+        model._get_inference_text_tokens.return_value = ([[1, 2, 3]], [[7, 8, 9]])
+        data_batch = {"caption": ["a prompt"], "neg_caption": ["avoid artifacts"]}
+
+        with patch(_PATCH_PACK, MagicMock()), patch(_PATCH_KV) as dual_cache_cls:
+            list(
+                OmniMoTCausalModel.iter_samples_from_batch_autoregressive(
+                    model, data_batch, mode="video_transfer", guidance=7.0, has_negative_prompt=True
+                )
+            )
+        calls = dual_cache_cls.call_args_list
+        assert len(calls) == 2 * model.net.num_hidden_layers  # cond + uncond caches
+        pools = {id(call.kwargs["buffer_pool"]) for call in calls}
+        assert len(pools) == 1 and isinstance(calls[0].kwargs["buffer_pool"], KVBufferPool)
+        assert model._ar_kv_buffer_pool is calls[0].kwargs["buffer_pool"]
+        assert [call.kwargs["pool_slot"] for call in calls] == list(range(2 * model.net.num_hidden_layers))
+        assert all(call.kwargs["preallocate_ring"] is True for call in calls)
+
+        # A second generation reuses the same pool object.
+        with patch(_PATCH_PACK, MagicMock()), patch(_PATCH_KV) as dual_cache_cls_2:
+            list(
+                OmniMoTCausalModel.iter_samples_from_batch_autoregressive(
+                    model, data_batch, mode="video_transfer", guidance=7.0, has_negative_prompt=True
+                )
+            )
+        assert dual_cache_cls_2.call_args_list[0].kwargs["buffer_pool"] is model._ar_kv_buffer_pool
+
+    @pytest.mark.L0
+    @pytest.mark.CPU
+    def test_chunkwise_transfer_caches_do_not_preallocate_rings(self) -> None:
+        """Chunkwise transfer stores entries of different token counts; the ring needs uniform entries."""
+        from cosmos_framework.model.generator.omni_mot_causal_model import OmniMoTCausalModel
+
+        model = self._make_model_mock()
+        model._ar_kv_buffer_pool = None
+        model.config.teacher_forcing_frames_per_chunk = 4
+        num_frames = 9
+        control = torch.ones(1, self.C, num_frames, self.H, self.W)  # [B,C,T,H,W]
+        model.get_data_and_condition.return_value = SimpleNamespace(
+            batch_size=1,
+            x0_tokens_vision=[control, torch.zeros_like(control)],
+            num_vision_items_per_sample=[2],
+            x0_tokens_action=None,
+            fps_vision=torch.tensor([24.0]),  # [B]
+            fps_action=None,
+            action_domain_id=None,
+            raw_action_dim=None,
+        )
+        model._get_inference_text_tokens.return_value = ([[1, 2, 3]], None)
+        model.generate_next_frame.side_effect = lambda **kwargs: torch.zeros_like(kwargs["curr_vision_latent"])
+        with patch(_PATCH_PACK, MagicMock()), patch(_PATCH_KV) as dual_cache_cls:
+            list(OmniMoTCausalModel.iter_samples_from_batch_autoregressive(model, {}, mode="video_transfer"))
+        assert dual_cache_cls.call_args_list
+        assert all(call.kwargs["preallocate_ring"] is False for call in dual_cache_cls.call_args_list)
+
+    @pytest.mark.L0
+    @pytest.mark.CPU
+    def test_unbounded_ar_caches_do_not_preallocate_rings(self) -> None:
+        """text2video without kv_cache_inference_size keeps the lazily grown clone storage."""
+        from cosmos_framework.model.generator.omni_mot_causal_model import OmniMoTCausalModel
+
+        model = self._make_model_mock()
+        model._ar_kv_buffer_pool = None
+        with patch(_PATCH_PACK, MagicMock()), patch(_PATCH_KV) as dual_cache_cls:
+            model.get_data_and_condition.return_value = self._make_gen_data("text2video")
+            model._get_inference_text_tokens.return_value = ([[1, 2, 3]], None)
+            list(OmniMoTCausalModel.iter_samples_from_batch_autoregressive(model, {}, mode="text2video"))
+        assert dual_cache_cls.call_args_list
+        assert all(call.kwargs["gen_cache_size"] is None for call in dual_cache_cls.call_args_list)
+        assert all(call.kwargs["preallocate_ring"] is False for call in dual_cache_cls.call_args_list)
+
+    @pytest.mark.L0
+    @pytest.mark.CPU
+    def test_multiview_transfer_with_compile_still_requires_eager_attention(self) -> None:
+        """The multiview flex path keeps its eager-only guard."""
+        model = self._make_model_mock()
+        model.config.compile.enabled = True
+        model._uses_multiview_flex_kv.return_value = True
+
+        with pytest.raises(ValueError, match="Multiview transfer AR requires eager attention"):
+            self._run(model, "video_transfer")
+
+    @pytest.mark.L0
+    @pytest.mark.CPU
     def test_video_transfer_chunkwise_generation_matches_training_partition(self) -> None:
         """Legacy C=4 transfer uses [1,4,4] chunks and interleaved RGB history."""
         self.T = 9
@@ -3131,6 +3264,36 @@ class TestDistilledARSampler:
 
     @pytest.mark.L0
     @pytest.mark.CPU
+    def test_distilled_sde_sampler_per_row_frame_indices_restart_the_noise_stream(self) -> None:
+        """A restarted row (episode-local frame 0) draws the same SDE noise as a fresh single-row run."""
+        from cosmos_framework.model.generator.omni_mot_causal_model import OmniMoTCausalModel
+
+        model = SimpleNamespace(
+            config=SimpleNamespace(
+                fixed_step_sampler_config=SimpleNamespace(t_list=[0.5, 0.25], sample_type="sde"),
+                rectified_flow_inference_config=SimpleNamespace(num_train_timesteps=1000),
+            )
+        )
+        self._attach_distilled_schedule_helper(model, OmniMoTCausalModel)
+
+        def velocity_fn(x: torch.Tensor, timestep: torch.Tensor) -> torch.Tensor:  # noqa: ARG001
+            return torch.zeros_like(x)  # [B,N]
+
+        batched = OmniMoTCausalModel._run_distilled_ar_sampler(
+            model, velocity_fn, torch.ones(2, 3), seed=[10, 10], frame_idx=[3, 0]
+        )  # [2,N]
+        row0 = OmniMoTCausalModel._run_distilled_ar_sampler(
+            model, velocity_fn, torch.ones(1, 3), seed=[10], frame_idx=[3]
+        )
+        row1 = OmniMoTCausalModel._run_distilled_ar_sampler(
+            model, velocity_fn, torch.ones(1, 3), seed=[10], frame_idx=[0]
+        )
+        torch.testing.assert_close(batched[0:1], row0)
+        torch.testing.assert_close(batched[1:2], row1)
+        assert not torch.equal(batched[0], batched[1])
+
+    @pytest.mark.L0
+    @pytest.mark.CPU
     def test_distilled_sde_sampler_uses_distinct_frame_seeds(self) -> None:
         from cosmos_framework.model.generator.omni_mot_causal_model import OmniMoTCausalModel
 
@@ -3485,3 +3648,162 @@ def test_teacher_forcing_replay_policy_still_rejects_unknown_real_fields() -> No
 
     with pytest.raises(TypeError, match="control_visibilty"):
         _resolve_teacher_forcing_replay_policy({"_type": "x", "control_visibilty": "current"})
+
+
+def _forward_graph_model_mock() -> MagicMock:
+    model = MagicMock()
+    model.config.causal_training_strategy = "none"
+    model.config.compile.enabled = True
+    model.config.compile.use_cuda_graphs = True
+    model.config.compile.cuda_graph_scope = "forward"
+    model.config.compile.ar_post_saturation_mode = "default"
+    model.config.rectified_flow_inference_config.scheduler_type = "unipc"
+    model.parallel_dims = None
+    from cosmos_framework.model.generator.omni_mot_causal_model import OmniMoTCausalModel
+
+    # Real validation/reset logic on the mock (the loop calls it through ``self``).
+    model._reset_ar_forward_cuda_graph_runtime_for_generation = MethodType(
+        OmniMoTCausalModel._reset_ar_forward_cuda_graph_runtime_for_generation, model
+    )
+    return model
+
+
+@pytest.mark.L0
+@pytest.mark.CPU
+@pytest.mark.parametrize("frame_idx", [0, 2])
+def test_seed_routes_static_frames_to_the_forward_cuda_graph(frame_idx: int) -> None:
+    """cuda_graph_scope="forward": cache idx >= 1 seeds replay a whole-forward graph, idx 0 stays eager."""
+    from cosmos_framework.model.generator.omni_mot_causal_model import OmniMoTCausalModel
+
+    model = _forward_graph_model_mock()
+    cond_pack = MagicMock(name="cond_pack")
+    with (
+        patch(_PATCH_PACK, MagicMock(return_value=cond_pack)),
+        patch("cosmos_framework.model.generator.omni_mot_causal_model.run_ar_forward_cuda_graph") as run_graph,
+    ):
+        OmniMoTCausalModel._seed_frame_into_kv_cache(
+            model,
+            frame_latent=torch.zeros(1, 4, 1, 2, 2),  # [B,C,T,H,W]
+            frame_idx=frame_idx,
+            dual_kv_cache=[MagicMock()],
+            dual_kv_cache_uncond=None,
+            cond_text_tokens=None,
+            uncond_text_tokens=None,
+            cond_cached_text_offset=0,
+            uncond_cached_text_offset=0,
+            curr_action_latent=None,
+            action_domain_id=None,
+            gen_data_clean=SimpleNamespace(fps_vision=None, fps_action=None),
+            fps_vision_list=[24.0],
+            fps_action_list=[24.0],
+            seed=42,
+            cfg_active=False,
+            cfgp_enabled=False,
+            tcf=4,
+            patch_size=1,
+            action_dim=8,
+            video_tc=False,
+            enable_fps_mod=False,
+            base_fps=24.0,
+            modality_margin=0,
+            use_ar_rolling_path=True,
+            transfer_history_sink_tokens=8,
+            transfer_history_max_tokens=12,
+        )
+    if frame_idx == 0:
+        run_graph.assert_not_called()
+        model.denoise.assert_called_once()
+    else:
+        model.denoise.assert_not_called()
+        run_graph.assert_called_once()
+        kwargs = run_graph.call_args.kwargs
+        assert kwargs["kind"] == "refresh:12"
+        assert kwargs["branch"] == "conditional"
+        assert kwargs["packed_seq"] is cond_pack
+        assert kwargs["memory_info"]["use_ar_rolling"] is True
+        assert kwargs["memory_info"]["write_gen_cache"] is True
+        assert kwargs["memory_info"]["transfer_history_max_tokens"] == 12
+
+
+@pytest.mark.L0
+@pytest.mark.CPU
+def test_denoise_routes_static_frames_to_the_forward_cuda_graph() -> None:
+    """cuda_graph_scope="forward": the sampler's velocity forwards replay the denoise graph."""
+    from cosmos_framework.model.generator.omni_mot_causal_model import OmniMoTCausalModel
+
+    model = _forward_graph_model_mock()
+    cond_pack = MagicMock(name="cond_pack")
+    cond_pack.vision = None
+    cond_pack.action = None
+
+    def sampler(velocity_fn: object, initial_noise: torch.Tensor, **_kwargs: object) -> torch.Tensor:
+        return velocity_fn(initial_noise, torch.ones(1, 1))  # type: ignore[operator]
+
+    model.sampler = sampler
+    graph_output = {"preds_vision": [torch.full((1, 1, 1, 1), 3.0)]}  # [C,T,H,W]
+    with patch(
+        "cosmos_framework.model.generator.omni_mot_causal_model.run_ar_forward_cuda_graph",
+        return_value=graph_output,
+    ) as run_graph:
+        denoised = OmniMoTCausalModel.generate_next_frame(
+            model,
+            packed_seq=cond_pack,
+            packed_seq_uncond=None,
+            curr_vision_latent=torch.zeros(1, 1, 1, 1, 1),  # [B,C,T,H,W]
+            curr_action_latent=None,
+            cond_text_tokens=[1],
+            uncond_text_tokens=[],
+            gen_data_clean=SimpleNamespace(),
+            dual_kv_cache=[MagicMock()],
+            dual_kv_cache_uncond=None,
+            guidance=1.0,
+            num_steps=1,
+            shift=1.0,
+            seed=7,
+            fps_vision_list=[24.0],
+            fps_action_list=[],
+            frame_idx=1,
+            cache_frame_idx=1,
+            use_ar_rolling_path=True,
+            transfer_history_sink_tokens=8,
+            transfer_history_max_tokens=12,
+        )
+    torch.testing.assert_close(denoised, torch.full((1, 1, 1, 1, 1), 3.0))
+    model.denoise.assert_not_called()
+    kwargs = run_graph.call_args.kwargs
+    assert kwargs["kind"] == "denoise:12"
+    assert kwargs["branch"] == "conditional"
+    assert kwargs["memory_info"]["use_ar_rolling"] is True
+    assert kwargs["memory_info"]["write_gen_cache"] is False
+
+
+@pytest.mark.L0
+@pytest.mark.CPU
+def test_forward_cuda_graph_kind_variants_are_accepted() -> None:
+    """Graph keys may carry a variant suffix (e.g. the transfer history limit) after the base kind."""
+    from cosmos_framework.model.generator.mot.post_saturation.cuda_graph import ARPostSaturationCUDAGraphManager
+
+    assert ARPostSaturationCUDAGraphManager._base_kind("refresh:12") == "refresh"
+    assert ARPostSaturationCUDAGraphManager._base_kind("denoise") == "denoise"
+    with pytest.raises(ValueError, match="Unsupported post-saturation CUDA Graph kind"):
+        ARPostSaturationCUDAGraphManager._base_kind("prefill:3")
+
+
+@pytest.mark.L0
+@pytest.mark.CPU
+def test_forward_cuda_graph_scope_requires_the_static_path() -> None:
+    """scope=forward without CUDA graphs (or with a post-saturation mode) is a configuration error."""
+    from cosmos_framework.model.generator.omni_mot_causal_model import OmniMoTCausalModel
+
+    model = _forward_graph_model_mock()
+    model.config.compile.ar_post_saturation_mode = "cuda-graph"
+    model._uses_multiview_flex_kv.return_value = False
+    with pytest.raises(ValueError, match="cuda_graph_scope='forward'"):
+        list(OmniMoTCausalModel.iter_samples_from_batch_autoregressive(model, {}, mode="text2video"))
+
+    # CFG parallelism bypasses the whole-forward graphs and would recompile the static blocks per frame.
+    model = _forward_graph_model_mock()
+    model._uses_multiview_flex_kv.return_value = False
+    model.parallel_dims = MagicMock(cfgp_enabled=True)
+    with pytest.raises(ValueError, match="requires cfgp_size=1"):
+        list(OmniMoTCausalModel.iter_samples_from_batch_autoregressive(model, {}, mode="text2video"))

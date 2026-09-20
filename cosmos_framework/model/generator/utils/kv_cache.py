@@ -12,6 +12,8 @@ and streaming inference patterns.
 
 from __future__ import annotations
 
+import weakref
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -20,7 +22,7 @@ import torch.nn.functional as F
 
 # Re-exported from memory.py for backward compatibility.
 from cosmos_framework.model.generator.utils.memory import KVToStore, MemoryState, MemoryValue
-from cosmos_framework.data.generator.sequence_packing.runtime import get_num_real_samples
+from cosmos_framework.data.generator.sequence_packing.runtime import get_num_real_samples, to_device_nonblocking
 from cosmos_framework.configs.base.defaults.replay_attention import TeacherForcingReplayPolicyConfig
 from cosmos_framework.model.generator.utils.kv_storage_backend import (
     BF16StorageBackend,
@@ -58,6 +60,86 @@ def zero_null_action_values(
     null_positions = (starts_tensor.unsqueeze(1) + action_offsets.unsqueeze(0)).reshape(-1)  # [B*A]
     gen_v[:, null_positions] = 0
     return gen_v  # [B,S,H,D]
+
+
+class KVBufferPool:
+    """Process-lifetime pool of reusable KV workspaces keyed by ``(name, slot)``.
+
+    AR inference creates fresh caches for every generation.  Handing their large
+    workspaces (per-layer K/V rings and the static history buffers read by the
+    CUDA-graph path) out of one pool keeps the tensors, and therefore their
+    addresses, stable across generations.  A stable address is what lets
+    ``torch._dynamo.mark_static_address`` tell CUDA-graph trees to read a buffer
+    in place instead of copying it into graph-owned inputs on every replay.
+
+    The marking uses ``guard=False``, the same treatment Dynamo gives module
+    parameters: a ``guard=True`` mark adds an object-identity guard, and since
+    all decoder layers share one compiled code object while each layer owns a
+    distinct buffer, that would force one recompile per layer and trip the
+    recompile limit.  Without the guard, CUDA-graph trees still select the
+    recorded graph by matching static-input addresses (per layer) and the
+    tensor shape/dtype guards still cover reallocation.  A buffer is only ever
+    reallocated when the requested shape, dtype or device changes, so a live
+    address never silently moves.  Contents are never trusted across
+    acquisitions: callers rewrite what they read.
+    """
+
+    def __init__(self) -> None:
+        self._buffers: dict[tuple[str, int], torch.Tensor] = {}
+        # Live owner per key so two concurrently active caches can never share a slot silently.
+        self._owners: dict[tuple[str, int], weakref.ReferenceType[object]] = {}
+
+    def acquire(
+        self,
+        name: str,
+        slot: int,
+        shape: tuple[int, ...],
+        *,
+        dtype: torch.dtype,
+        device: torch.device,
+        static_address: bool = False,
+        owner: object | None = None,
+    ) -> torch.Tensor:
+        key = (name, int(slot))
+        current_owner_ref = self._owners.get(key)
+        current_owner = current_owner_ref() if current_owner_ref is not None else None
+        if owner is not None and current_owner is not None and current_owner is not owner:
+            raise RuntimeError(
+                f"KV buffer {name!r} slot {slot} is still owned by a live cache; concurrent AR generations on one "
+                "model need distinct pool slots (release the previous generation's caches first)"
+            )
+        buffer = self._buffers.get(key)
+        if buffer is None or tuple(buffer.shape) != tuple(shape) or buffer.dtype != dtype or buffer.device != device:
+            # A plain (non-inference) tensor stays writable in place from both
+            # ``torch.inference_mode`` and ``torch.no_grad`` generations.
+            with torch.inference_mode(mode=False):
+                # Zero-filled on purpose: the varlen FMHA reads each sequence's last 128-token KV tile in
+                # full and masks the overrun, so padding past ``cu_seqlens`` must hold finite values
+                # (0 x finite = 0, 0 x NaN poisons the row).  One memset per allocation.
+                buffer = torch.zeros(tuple(shape), dtype=dtype, device=device)
+            if static_address:
+                torch._dynamo.mark_static_address(buffer, guard=False)
+            self._buffers[key] = buffer
+        if owner is not None:
+            self._owners[key] = weakref.ref(owner)
+        return buffer
+
+    def release_owner(self, owner: object) -> None:
+        """Drop ``owner``'s claim on its slots (buffers stay pooled for the next generation)."""
+        for key, ref in list(self._owners.items()):
+            holder = ref()
+            if holder is None or holder is owner:
+                del self._owners[key]
+
+    def discard(self, name: str, slot: int) -> None:
+        """Forget a buffer so its memory is freed once no cache references it."""
+        key = (name, int(slot))
+        self._buffers.pop(key, None)
+        self._owners.pop(key, None)
+
+    def clear(self) -> None:
+        self._buffers.clear()
+        self._owners.clear()
 
 
 class KVCache:
@@ -428,7 +510,26 @@ class GenKVCache(KVCache):
         cache_size: int | None = None,
         backend: KVStorageBackend | None = None,
         attention_sink_size: int = 0,
+        *,
+        buffer_pool: KVBufferPool | None = None,
+        pool_slot: int = 0,
+        preallocate_ring: bool = False,
     ) -> None:
+        """Args beyond ``KVCache``:
+        buffer_pool: Optional pool that owns this cache's large workspaces so
+            they are reused across generations (stable addresses).
+        pool_slot: Pool key for this cache (one per layer and CFG branch).
+        preallocate_ring: Store entries in place into one preallocated ring
+            tensor per K and V (no per-entry clone, no allocator churn).
+            Only used with a finite cache, the BF16 backend and uniform entry
+            shapes; otherwise the per-entry clone path is kept.
+        """
+        self._buffer_pool = buffer_pool
+        self._pool_slot = int(pool_slot)
+        self._preallocate_ring = preallocate_ring
+        self._ring_k: torch.Tensor | None = None
+        self._ring_v: torch.Tensor | None = None
+        self._ring_disabled = False
         # initialize static KV cache used or AR inference use case.
         # This buffer hosts materialization of the rolling window in chronological order.
         self._static_k_buf: torch.Tensor | None = None
@@ -436,25 +537,187 @@ class GenKVCache(KVCache):
         self._static_valid_frame_idx: int | None = None
         self._static_real_len: int = 0
         self._static_tokens_per_frame: int = 0
+        # The ``history_frame_indices`` request behind the current buffer contents (None = ring-native).
+        self._static_history_indices: tuple[int, ...] | None = None
+        # Composite layout: ``prefix_tokens`` = und + current-frame tokens ahead of the history region,
+        # and the identity of the und K/V last copied into the und region (None = not primed).
+        self._static_prefix_tokens: int = 0
+        self._static_batch_rows: int = 1
+        self._static_und_key: tuple | None = None
+        self._static_real_lens: tuple[int, ...] = ()
+        # Per-row episode restarts (batched Transfer): the global cache index at which row r last
+        # restarted, or None when no row ever did.  A restarted row keeps storing into the shared
+        # global slots but reads a fresh-cache history plan expressed in its local frame count, with
+        # its first ``attention_sink_size`` local entries mirrored into the pinned sink slots of its
+        # own ring row (see ``row_history_slots``).
+        self._row_reset_frame: list[int] | None = None
         super().__init__(cache_size=cache_size, backend=backend, attention_sink_size=attention_sink_size)
 
     def reset(self) -> None:
-        """Reset cache state and discard static inference workspaces."""
+        """Reset cache state, discard static inference workspaces and release pooled slots."""
         super().reset()
         self._static_k_buf = None
         self._static_v_buf = None
         self._static_valid_frame_idx = None
         self._static_real_len = 0
         self._static_tokens_per_frame = 0
+        self._static_history_indices = None
+        self._static_prefix_tokens = 0
+        self._static_batch_rows = 1
+        self._static_und_key = None
+        self._static_real_lens = ()
+        self._row_reset_frame = None
+        self._ring_k = None
+        self._ring_v = None
+        self._ring_disabled = False
+        if self._buffer_pool is not None:
+            self._buffer_pool.release_owner(self)
 
     def store_kv(self, k: torch.Tensor, v: torch.Tensor, frame_idx: int) -> None:
         """Store K/V and invalidate static read workspaces."""
-        super().store_kv(k, v, frame_idx)
+        if not self._store_kv_in_ring(k, v, frame_idx):
+            super().store_kv(k, v, frame_idx)
         # A store can change the chronological history for the next AR frame,
         # and can also overwrite a physical ring-buffer slot that the static
         # buffer previously copied from.  Mark the workspace stale.
         # refresh happens once on the next static read.
         self._static_valid_frame_idx = None
+
+    def _store_kv_in_ring(self, k: torch.Tensor, v: torch.Tensor, frame_idx: int) -> bool:
+        """Write ``k``/``v`` in place into the preallocated ring; ``False`` = use the clone path."""
+        if not self._preallocate_ring or self._ring_disabled:
+            return False
+        if self.cache_size >= MAX_CACHE_SIZE or not isinstance(self.backend, BF16StorageBackend):
+            return False
+        if k.shape != v.shape or k.dtype != v.dtype or k.device != v.device:
+            return False
+        ring_shape = (self.cache_size, *k.shape)
+        if self._ring_k is None:
+            if self._buffer_pool is not None:
+                self._ring_k = self._buffer_pool.acquire(
+                    "ring_k", self._pool_slot, ring_shape, dtype=k.dtype, device=k.device, owner=self
+                )
+                self._ring_v = self._buffer_pool.acquire(
+                    "ring_v", self._pool_slot, ring_shape, dtype=k.dtype, device=k.device, owner=self
+                )
+            else:
+                with torch.inference_mode(mode=False):
+                    self._ring_k = torch.empty(ring_shape, dtype=k.dtype, device=k.device)  # [slots,B,S,H,D]
+                    self._ring_v = torch.empty(ring_shape, dtype=k.dtype, device=k.device)  # [slots,B,S,H,D]
+        assert self._ring_k is not None and self._ring_v is not None
+        if tuple(self._ring_k.shape) != ring_shape or self._ring_k.dtype != k.dtype or self._ring_k.device != k.device:
+            # Variable-size entries: keep the already-stored views (they hold the
+            # ring alive) and fall back to per-entry clones for the rest of this
+            # cache's lifetime.  Drop the ring from the pool so it is not pinned
+            # for later generations that will never use it either.
+            self._ring_disabled = True
+            if self._buffer_pool is not None:
+                self._buffer_pool.discard("ring_k", self._pool_slot)
+                self._buffer_pool.discard("ring_v", self._pool_slot)
+            return False
+        index = self._cache_index(int(frame_idx))
+        # In-place copy: detached from autograd and independent of the source
+        # storage (which may live in a CUDA-graph pool), same as the clone path.
+        self._ring_k[index].copy_(k.detach())
+        self._ring_v[index].copy_(v.detach())
+        self._mirror_reset_row_sinks(index, int(frame_idx))
+        k_entry = self._ring_k[index]  # [B,S,H,D] view into the ring
+        v_entry = self._ring_v[index]  # [B,S,H,D] view into the ring
+        self.k_cache[index] = k_entry
+        self.v_cache[index] = v_entry
+        self.backend.update_cached_kv_metadata(index, k_entry, v_entry)
+        return True
+
+    def transfer_history_frame_indices(
+        self,
+        frame_idx: int,
+        sink_entries: int,
+        max_recent_entries: int,
+    ) -> list[int]:
+        """Return the logical cache entries a Transfer forward at ``frame_idx`` may attend to.
+
+        Entry-level mirror of the token slicing in ``ARMemoryState.read_for_layer``:
+        the first ``sink_entries`` entries of the ring history stay pinned (complete
+        logical Transfer sink frames, one control + one RGB entry each) and only the
+        newest ``max_recent_entries`` of the remaining history are kept.  Control seeds
+        pass ``2 * recent`` and target forwards ``2 * recent + 1`` so that ``R_t`` also
+        sees its aligned ``C_t``.  Requires every cached entry to hold the same token
+        count (framewise Transfer), which the static AR path asserts when it copies.
+        """
+        if sink_entries < 0:
+            raise ValueError(f"sink_entries must be >= 0, got {sink_entries}")
+        if max_recent_entries < 0:
+            raise ValueError(f"max_recent_entries must be >= 0, got {max_recent_entries}")
+        history = self._history_frame_indices(int(frame_idx))
+        sink = history[:sink_entries]
+        rest = history[sink_entries:]
+        recent = rest[-max_recent_entries:] if max_recent_entries > 0 else []
+        return sink + recent
+
+    def reset_rows(self, rows: Sequence[int], at_frame_idx: int) -> None:
+        """Restart the episodes of ``rows`` at global cache index ``at_frame_idx`` (batched Transfer).
+
+        The row keeps storing into the shared global ring slots (all rows step in lockstep) but its
+        visible history becomes that of a fresh cache whose logical frame ``l`` is global
+        ``at_frame_idx + l``; its first ``attention_sink_size`` entries are additionally mirrored
+        into the pinned sink slots of its own ring row so the fresh-cache sink survives eviction.
+        Only tensor values change afterwards, so captured CUDA graphs keep replaying.
+        """
+        if not self._preallocate_ring or self._ring_disabled or self.cache_size is None:
+            raise RuntimeError("per-row resets require the in-place K/V ring (finite cache, BF16 storage)")
+        if self._ring_k is not None:
+            batch_rows = int(self._ring_k.shape[1])
+            for row in rows:
+                if row < 0 or row >= batch_rows:
+                    raise IndexError(f"reset row {row} outside [0, {batch_rows})")
+        if self._row_reset_frame is None:
+            self._row_reset_frame = []
+        for row in rows:
+            while len(self._row_reset_frame) <= row:
+                self._row_reset_frame.append(0)
+            self._row_reset_frame[row] = int(at_frame_idx)
+        self._static_valid_frame_idx = None
+
+    def row_reset_frame(self, row: int) -> int:
+        """Global cache index at which ``row`` last restarted (0 = never)."""
+        if self._row_reset_frame is None or row >= len(self._row_reset_frame):
+            return 0
+        return self._row_reset_frame[row]
+
+    @property
+    def has_row_resets(self) -> bool:
+        return self._row_reset_frame is not None and any(self._row_reset_frame)
+
+    def _mirror_reset_row_sinks(self, slot: int, frame_idx: int) -> None:
+        """After storing global entry ``frame_idx`` at ``slot``, copy restarted rows' early entries into their sink slots."""
+        if self._row_reset_frame is None or self._ring_k is None or self._ring_v is None:
+            return
+        for row, reset_frame in enumerate(self._row_reset_frame):
+            if reset_frame <= 0:
+                continue
+            local = frame_idx - reset_frame
+            if 0 <= local < self.attention_sink_size and local != slot:
+                self._ring_k[local, row].copy_(self._ring_k[slot, row])
+                self._ring_v[local, row].copy_(self._ring_v[slot, row])
+
+    def row_history_slots(self, row: int, frame_idx: int, sink_entries: int, max_recent_entries: int) -> list[int]:
+        """Physical ring slots row ``row`` may attend to at global ``frame_idx`` (Transfer visibility).
+
+        Without a restart this is ``transfer_history_frame_indices`` mapped through ``_cache_index``.
+        After a restart the plan is that of a fresh cache at the row's local frame: its sink entries
+        live in the pinned sink slots (mirrored at store time), the rest at the global slots.
+        """
+        reset_frame = self.row_reset_frame(row)
+        local_frame = int(frame_idx) - reset_frame
+        if local_frame < 0:
+            raise ValueError(f"row {row} restarted at {reset_frame}, after frame {frame_idx}")
+        slots: list[int] = []
+        for logical_local in self.transfer_history_frame_indices(local_frame, sink_entries, max_recent_entries):
+            if reset_frame > 0 and logical_local < self.attention_sink_size:
+                slots.append(logical_local)  # mirrored sink slot of this row
+            else:
+                slots.append(self._cache_index(reset_frame + logical_local))
+        return slots
 
     def _ensure_static_history_buffer_allocated(
         self,
@@ -464,17 +727,29 @@ class GenKVCache(KVCache):
         head_dim: int,
         device: torch.device | None,
         dtype: torch.dtype | None,
+        prefix_tokens: int = 0,
+        batch_rows: int = 1,
     ) -> None:
-        """Allocate the fixed-size history buffer used by Cuda Graph AR inference."""
+        """Allocate the fixed-size K/V buffer used by CUDA Graph AR inference.
+
+        ``prefix_tokens`` reserves ``[und | curr]`` room ahead of the ``max_tokens`` history
+        region so the compiled block reads one contiguous ``[und | curr | hist | pad]`` buffer.
+        ``batch_rows`` rows of that layout are laid end to end with a fixed row stride
+        ``prefix_tokens + max_tokens`` (one row per batched sample; ``B=1`` is today's buffer).
+        """
         if device is None:
             raise ValueError("device is required when allocating static gen KV buffers")
         if dtype is None:
             raise ValueError("dtype is required when allocating static gen KV buffers")
+        if batch_rows < 1:
+            raise ValueError(f"batch_rows must be >= 1, got {batch_rows}")
 
-        expected_shape = (1, max_tokens, num_heads, head_dim)
+        expected_shape = (1, batch_rows * (prefix_tokens + max_tokens), num_heads, head_dim)
         needs_alloc = (
             self._static_k_buf is None
             or self._static_v_buf is None
+            or self._static_prefix_tokens != prefix_tokens
+            or self._static_batch_rows != batch_rows
             or tuple(self._static_k_buf.shape) != expected_shape
             or tuple(self._static_v_buf.shape) != expected_shape
             or self._static_k_buf.device != device
@@ -485,11 +760,39 @@ class GenKVCache(KVCache):
         if not needs_alloc:
             return
 
-        self._static_k_buf = torch.empty(expected_shape, device=device, dtype=dtype)  # [1,S_max,H,D]
-        self._static_v_buf = torch.empty(expected_shape, device=device, dtype=dtype)  # [1,S_max,H,D]
+        if self._buffer_pool is not None:
+            # Pooled + static address: the compiled AR block reads these in place
+            # on every CUDA-graph replay instead of copying them into graph inputs.
+            self._static_k_buf = self._buffer_pool.acquire(
+                "static_k",
+                self._pool_slot,
+                expected_shape,
+                dtype=dtype,
+                device=device,
+                static_address=True,
+                owner=self,
+            )  # [1,S_max,H,D]
+            self._static_v_buf = self._buffer_pool.acquire(
+                "static_v",
+                self._pool_slot,
+                expected_shape,
+                dtype=dtype,
+                device=device,
+                static_address=True,
+                owner=self,
+            )  # [1,S_max,H,D]
+        else:
+            with torch.inference_mode(mode=False):
+                # Zero-filled: the attention kernel reads past the real prefix within the last KV tile.
+                self._static_k_buf = torch.zeros(expected_shape, device=device, dtype=dtype)  # [1,S_max,H,D]
+                self._static_v_buf = torch.zeros(expected_shape, device=device, dtype=dtype)  # [1,S_max,H,D]
         self._static_valid_frame_idx = None
         self._static_real_len = 0
         self._static_tokens_per_frame = 0
+        self._static_history_indices = None
+        self._static_prefix_tokens = prefix_tokens
+        self._static_batch_rows = batch_rows
+        self._static_und_key = None
 
     def _first_cached_history_k(self, frame_idx: int) -> torch.Tensor | None:
         """Return the first cached K tensor that will contribute to ``frame_idx``."""
@@ -506,28 +809,55 @@ class GenKVCache(KVCache):
                 return self.backend.decode(k_entry)  # [B,S_frame,H,D]
         return None
 
-    def _rebuild_static_history(self, frame_idx: int, max_tokens: int, tokens_per_frame: int) -> int:
-        """Rebuild the fixed history buffer from the list-backed circular cache."""
+    def _rebuild_static_history(
+        self,
+        frame_idx: int,
+        max_tokens: int,
+        tokens_per_frame: int,
+        history_frame_indices: list[int] | None = None,
+        row_slot_lists: list[list[int]] | None = None,
+    ) -> int:
+        """Rebuild the fixed history buffer from the list-backed circular cache.
+
+        ``history_frame_indices`` overrides the ring-native chronological history
+        with an explicit list of logical entries (Transfer sink + recent selection).
+        ``row_slot_lists`` gives every buffer row its own physical slot list instead
+        (batched Transfer with per-row episode restarts); rows may then differ in length.
+        """
         assert self._static_k_buf is not None
         assert self._static_v_buf is not None
+        if self._static_k_buf.is_cuda and torch.cuda.is_current_stream_capturing():
+            # The copies below read the ring slots of *this* frame; recorded into a graph they
+            # would replay the same slots for every later frame.  Callers refresh the buffer
+            # before capture/replay (``prepare_for_coarse_cuda_graph_replay``).
+            raise RuntimeError("static AR history rebuild requested inside a CUDA graph capture")
 
         current_idx = int(frame_idx)
-        if current_idx <= 0:
-            # Frame 0 has no gen history.  The returned buffer may contain
+        if row_slot_lists is not None:
+            return self._rebuild_static_history_rows(current_idx, max_tokens, tokens_per_frame, row_slot_lists)
+        requested_indices = None if history_frame_indices is None else tuple(history_frame_indices)
+        logical_indices = (
+            list(history_frame_indices)
+            if history_frame_indices is not None
+            else (self._history_frame_indices(current_idx) if current_idx > 0 else [])
+        )
+        if not logical_indices:
+            # No visible gen history.  The returned buffer may contain
             # uninitialized tail data, but real_len=0 and the static AR path
             # will not expose any history tokens to attention.
             self._static_valid_frame_idx = current_idx
             self._static_real_len = 0
             self._static_tokens_per_frame = tokens_per_frame
+            self._static_history_indices = requested_indices
             return 0
 
-        # Chronological logical frames in history.  This mirrors ``fetch_kv``
-        # exactly, including the cache_size-1 history limit that leaves one
-        # slot available for the current frame after it is stored.
+        # Chronological logical frames in history.  Without an override this
+        # mirrors ``fetch_kv`` exactly, including the cache_size-1 history limit
+        # that leaves one slot available for the current frame after it is stored.
         history_indices: list[int] = []
         history_k_entries: list[object] = []
         history_v_entries: list[object] = []
-        for logical_idx in self._history_frame_indices(current_idx):
+        for logical_idx in logical_indices:
             # Map logical frame indices to ring-buffer slots.  At wraparound,
             # this copies frames in logical order even though physical storage
             # is no longer contiguous.
@@ -551,31 +881,141 @@ class GenKVCache(KVCache):
             history_k_entries.append(k_entry)
             history_v_entries.append(v_entry)
 
-        # Decode/concatenate the whole chronological window at once.  This
-        # avoids launching two copies per cached frame while staging inputs for
-        # a coarse graph replay.
-        k_history, v_history = self.backend.decode_many(
-            history_k_entries,
-            history_v_entries,
-            slots=history_indices,
-        )  # [B,S_hist,H,D] each
         dst_end = len(history_indices) * tokens_per_frame
-        if k_history.shape[1] != dst_end or v_history.shape[1] != dst_end:
-            raise AssertionError(
-                f"Static AR cache requires {tokens_per_frame} tokens per frame: "
-                f"expected total={dst_end}, got k={k_history.shape[1]}, v={v_history.shape[1]}"
-            )
         if dst_end > max_tokens:
             raise AssertionError(f"Static AR cache overflow: trying to write {dst_end} tokens into {max_tokens}")
-        # Copy only the real chronological prefix.  The padded suffix is
-        # deliberately left untouched and excluded by ``cu_seqlens_kv_t``.
-        self._static_k_buf[:, :dst_end].copy_(k_history.detach())  # [1,S_hist,H,D]
-        self._static_v_buf[:, :dst_end].copy_(v_history.detach())  # [1,S_hist,H,D]
+        # Row r's history region starts at ``r*R + prefix`` (R = row stride); only the real
+        # chronological prefix of it is written.  The padded suffix is deliberately left
+        # untouched (zero-filled at allocation) and excluded by ``cu_seqlens_kv_t``.
+        rows = self._static_batch_rows
+        row_stride = self._static_prefix_tokens + max_tokens
+        hist_start = self._static_prefix_tokens
+        if self._ring_slot_runs_copyable(history_indices, history_k_entries, history_v_entries):
+            # Single pass straight from the ring ``[slots,B,S,H,D]``: each run of consecutive
+            # physical slots is one copy per row.  Same bytes in the same order as concatenating
+            # the entries; at B=1 the source run is contiguous.
+            assert self._ring_k is not None and self._ring_v is not None
+            _, _, _, num_heads, head_dim = self._ring_k.shape
+            for row in range(rows):
+                offset = row * row_stride + hist_start
+                for slot_start, slot_end in self._coalesce_slot_runs(history_indices):
+                    run_entries = slot_end - slot_start
+                    run_tokens = run_entries * tokens_per_frame
+                    self._static_k_buf[0, offset : offset + run_tokens].view(
+                        run_entries, tokens_per_frame, num_heads, head_dim
+                    ).copy_(self._ring_k[slot_start:slot_end, row])  # [n,S,H,D]
+                    self._static_v_buf[0, offset : offset + run_tokens].view(
+                        run_entries, tokens_per_frame, num_heads, head_dim
+                    ).copy_(self._ring_v[slot_start:slot_end, row])  # [n,S,H,D]
+                    offset += run_tokens
+        else:
+            # Generic path (FP8 entries, clone storage, ragged rings): decode the whole
+            # chronological window at once, then copy each row into its history region.
+            k_history, v_history = self.backend.decode_many(
+                history_k_entries,
+                history_v_entries,
+                slots=history_indices,
+            )  # [B,S_hist,H,D] each
+            if k_history.shape[1] != dst_end or v_history.shape[1] != dst_end:
+                raise AssertionError(
+                    f"Static AR cache requires {tokens_per_frame} tokens per frame: "
+                    f"expected total={dst_end}, got k={k_history.shape[1]}, v={v_history.shape[1]}"
+                )
+            if k_history.shape[0] != rows:
+                raise AssertionError(f"Static AR cache holds {rows} rows but the history has {k_history.shape[0]}")
+            for row in range(rows):
+                offset = row * row_stride + hist_start
+                self._static_k_buf[0, offset : offset + dst_end].copy_(k_history[row].detach())  # [S_hist,H,D]
+                self._static_v_buf[0, offset : offset + dst_end].copy_(v_history[row].detach())  # [S_hist,H,D]
 
         self._static_valid_frame_idx = current_idx
         self._static_real_len = dst_end
+        self._static_real_lens = (dst_end,) * rows
         self._static_tokens_per_frame = tokens_per_frame
+        # Remember the *request* (None = ring-native) so a later call with a different
+        # request at the same frame rebuilds, including switching back to native.
+        self._static_history_indices = requested_indices
         return dst_end
+
+    def _rebuild_static_history_rows(
+        self,
+        current_idx: int,
+        max_tokens: int,
+        tokens_per_frame: int,
+        row_slot_lists: list[list[int]],
+    ) -> int:
+        """Per-row rebuild: row r copies its own physical slots (single pass from the ring)."""
+        assert self._static_k_buf is not None and self._static_v_buf is not None
+        rows = self._static_batch_rows
+        if len(row_slot_lists) != rows:
+            raise AssertionError(f"{len(row_slot_lists)} slot lists for {rows} rows")
+        if self._ring_k is None or self._ring_v is None or self._ring_disabled or self._ring_k.shape[1] != rows:
+            raise RuntimeError("per-row static history requires the in-place K/V ring with one ring row per buffer row")
+        _, _, ring_tokens, num_heads, head_dim = self._ring_k.shape
+        if ring_tokens != tokens_per_frame:
+            raise AssertionError(f"ring entries hold {ring_tokens} tokens, expected {tokens_per_frame}")
+        row_stride = self._static_prefix_tokens + max_tokens
+        real_lens: list[int] = []
+        for row, slots in enumerate(row_slot_lists):
+            for slot in slots:
+                if self.k_cache[slot] is None or self.v_cache[slot] is None:
+                    raise AssertionError(f"K/V cache slot {slot} is empty (row {row}, frame_idx={current_idx})")
+            dst_end = len(slots) * tokens_per_frame
+            if dst_end > max_tokens:
+                raise AssertionError(f"Static AR cache overflow: trying to write {dst_end} tokens into {max_tokens}")
+            offset = row * row_stride + self._static_prefix_tokens
+            for slot_start, slot_end in self._coalesce_slot_runs(list(slots)):
+                run_entries = slot_end - slot_start
+                run_tokens = run_entries * tokens_per_frame
+                self._static_k_buf[0, offset : offset + run_tokens].view(
+                    run_entries, tokens_per_frame, num_heads, head_dim
+                ).copy_(self._ring_k[slot_start:slot_end, row])  # [n,S,H,D]
+                self._static_v_buf[0, offset : offset + run_tokens].view(
+                    run_entries, tokens_per_frame, num_heads, head_dim
+                ).copy_(self._ring_v[slot_start:slot_end, row])  # [n,S,H,D]
+                offset += run_tokens
+            real_lens.append(dst_end)
+        self._static_valid_frame_idx = current_idx
+        self._static_real_len = real_lens[0] if real_lens else 0
+        self._static_real_lens = tuple(real_lens)
+        self._static_tokens_per_frame = tokens_per_frame
+        self._static_history_indices = tuple(tuple(slots) for slots in row_slot_lists)
+        return self._static_real_len
+
+    def _ring_slot_runs_copyable(
+        self,
+        slots: list[int],
+        k_entries: list[object],
+        v_entries: list[object],
+    ) -> bool:
+        """True when every entry is the ring view of its slot (BF16, in-place ring, one ring row per buffer row)."""
+        if (
+            self._ring_k is None
+            or self._ring_v is None
+            or self._ring_disabled
+            or self._ring_k.shape[1] != self._static_batch_rows
+        ):
+            return False
+        for slot, k_entry, v_entry in zip(slots, k_entries, v_entries, strict=True):
+            if not isinstance(k_entry, torch.Tensor) or not isinstance(v_entry, torch.Tensor):
+                return False
+            if (
+                k_entry.data_ptr() != self._ring_k[slot].data_ptr()
+                or v_entry.data_ptr() != self._ring_v[slot].data_ptr()
+            ):
+                return False
+        return True
+
+    @staticmethod
+    def _coalesce_slot_runs(slots: list[int]) -> list[tuple[int, int]]:
+        """Group consecutive physical slots into ``[start, end)`` runs, preserving order."""
+        runs: list[tuple[int, int]] = []
+        for slot in slots:
+            if runs and runs[-1][1] == slot:
+                runs[-1] = (runs[-1][0], slot + 1)
+            else:
+                runs.append((slot, slot + 1))
+        return runs
 
     def fetch_kv_static(
         self,
@@ -587,22 +1027,44 @@ class GenKVCache(KVCache):
         head_dim: int,
         device: torch.device | None,
         dtype: torch.dtype | None,
+        history_frame_indices: list[int] | None = None,
+        prefix_tokens: int = 0,
+        und_kv: tuple[torch.Tensor, torch.Tensor] | None = None,
+        batch_rows: int = 1,
+        und_lens: tuple[int, ...] | None = None,
+        row_slot_lists: list[list[int]] | None = None,
     ) -> tuple[torch.Tensor, torch.Tensor, int]:
         """Fetch cached K/V history from a persistent fixed-size buffer.
 
         Unlike ``fetch_kv_padded``, this does not ``cat`` and ``pad`` on every
-        read.  It rebuilds the persistent buffer only when the requested frame
-        changes or the cache is invalidated by a store/reset.
+        read.  It rebuilds the persistent buffer only when the requested frame or
+        the explicit ``history_frame_indices`` change, or the cache is invalidated
+        by a store/reset.
+
+        With ``prefix_tokens`` every row is ``[und | curr | hist | pad]`` with stride
+        ``R = prefix_tokens + max_tokens`` and the buffer is ``[1, batch_rows * R, H, D]``; the
+        history of row ``r`` lives at ``r*R + prefix_tokens``.  ``und_kv`` (``[B,U,H,D]`` each,
+        ``U`` = padded und length) is copied once per distinct und tensor pair into the und
+        region of each row, right-aligned so that it ends at ``r*R + U`` (``und_lens`` gives the
+        real per-row lengths; default: every row full).  The returned ``real_len`` counts history
+        tokens per row.
         """
-        first_k = self._first_cached_history_k(frame_idx)  # [B,S_frame,H,D] or None
-        if first_k is not None:
-            # Prefer the cached tensor metadata over caller-provided defaults.
-            # This preserves CP/head-sharded cache shapes and also picks up the
-            # actual device/dtype after the first frame is cached.
-            num_heads = first_k.shape[2]
-            head_dim = first_k.shape[3]
-            device = first_k.device
-            dtype = first_k.dtype
+        if self._ring_k is not None and not self._ring_disabled:
+            # The ring carries the cached shape/device/dtype without walking the history.
+            num_heads = self._ring_k.shape[3]
+            head_dim = self._ring_k.shape[4]
+            device = self._ring_k.device
+            dtype = self._ring_k.dtype
+        else:
+            first_k = self._first_cached_history_k(frame_idx)  # [B,S_frame,H,D] or None
+            if first_k is not None:
+                # Prefer the cached tensor metadata over caller-provided defaults.
+                # This preserves CP/head-sharded cache shapes and also picks up the
+                # actual device/dtype after the first frame is cached.
+                num_heads = first_k.shape[2]
+                head_dim = first_k.shape[3]
+                device = first_k.device
+                dtype = first_k.dtype
 
         self._ensure_static_history_buffer_allocated(
             max_tokens,
@@ -610,9 +1072,52 @@ class GenKVCache(KVCache):
             head_dim=head_dim,
             device=device,
             dtype=dtype,
+            prefix_tokens=prefix_tokens,
+            batch_rows=batch_rows,
         )
-        if self._static_valid_frame_idx != int(frame_idx) or self._static_tokens_per_frame != tokens_per_frame:
-            self._rebuild_static_history(frame_idx, max_tokens, tokens_per_frame)
+        if und_kv is not None:
+            k_und, v_und = und_kv
+            und_capacity = int(k_und.shape[1])
+            lens = tuple(und_lens) if und_lens is not None else (und_capacity,) * batch_rows
+            und_key = (k_und.data_ptr(), v_und.data_ptr(), und_capacity, lens)
+            if self._static_und_key != und_key:
+                assert self._static_k_buf is not None and self._static_v_buf is not None
+                if self._static_k_buf.is_cuda and torch.cuda.is_current_stream_capturing():
+                    raise RuntimeError("static AR und-region priming requested inside a CUDA graph capture")
+                if und_capacity > prefix_tokens:
+                    raise AssertionError(
+                        f"und length {und_capacity} exceeds the static prefix of {prefix_tokens} tokens"
+                    )
+                if k_und.shape[0] != batch_rows or len(lens) != batch_rows:
+                    raise AssertionError(
+                        f"und K/V carry {k_und.shape[0]} rows / {len(lens)} lengths for {batch_rows} rows"
+                    )
+                row_stride = prefix_tokens + max_tokens
+                for row, real_len in enumerate(lens):
+                    if real_len < 0 or real_len > und_capacity:
+                        raise AssertionError(f"und length {real_len} outside [0, {und_capacity}] for row {row}")
+                    end = row * row_stride + und_capacity
+                    # Right-aligned: every row's current frame starts at the same offset ``U``.
+                    self._static_k_buf[0, end - real_len : end].copy_(k_und[row, :real_len])  # [u_r,H,D]
+                    self._static_v_buf[0, end - real_len : end].copy_(v_und[row, :real_len])  # [u_r,H,D]
+                self._static_und_key = und_key
+        if row_slot_lists is not None:
+            requested_indices: tuple | None = tuple(tuple(slots) for slots in row_slot_lists)
+        else:
+            requested_indices = None if history_frame_indices is None else tuple(history_frame_indices)
+        needs_rebuild = (
+            self._static_valid_frame_idx != int(frame_idx)
+            or self._static_tokens_per_frame != tokens_per_frame
+            or self._static_history_indices != requested_indices
+        )
+        if needs_rebuild:
+            self._rebuild_static_history(
+                frame_idx,
+                max_tokens,
+                tokens_per_frame,
+                history_frame_indices=history_frame_indices,
+                row_slot_lists=row_slot_lists,
+            )
 
         assert self._static_k_buf is not None
         assert self._static_v_buf is not None
@@ -698,6 +1203,10 @@ class DualKVCache:
         kv_cache_dtype: str | None = None,
         kv_cache_kernel_impl: str = "triton",
         attention_sink_size: int = 0,
+        *,
+        buffer_pool: KVBufferPool | None = None,
+        pool_slot: int = 0,
+        preallocate_ring: bool = False,
     ) -> None:
         """Initialize dual cache.
 
@@ -710,6 +1219,7 @@ class DualKVCache:
                 "triton" is the default fused decode path; "torch" uses the
                 reference path. FP8 encode always uses the torch path.
             attention_sink_size: Number of initial gen frames to pin in cache.
+            buffer_pool / pool_slot / preallocate_ring: See ``GenKVCache``.
         """
         self.und_cache = UndKVCache()
         if kv_cache_dtype is None:
@@ -722,6 +1232,9 @@ class DualKVCache:
             cache_size=gen_cache_size,
             backend=backend,
             attention_sink_size=attention_sink_size,
+            buffer_pool=buffer_pool,
+            pool_slot=pool_slot,
+            preallocate_ring=preallocate_ring,
         )
 
     def reset(self) -> None:
@@ -1611,6 +2124,26 @@ class ARMemoryValue(MemoryValue):
        ``cumulative_seqlen_KV`` kwarg, giving CUDA Graphs a single
        capture that replays for every frame.
 
+    The static flavor hands the block one pooled buffer per K and V,
+    ``kv_k_static`` / ``kv_v_static`` ``[1, S_und + gen_len + S_hist_max, H_kv, D]``,
+    laid out ``[und | curr | hist | pad]``: the und K/V are copied in once per
+    generation, the block writes the current frame in place at
+    ``static_curr_offset`` (= ``S_und``) and the history is rebuilt outside the
+    compiled region at ``static_hist_offset`` (= ``S_und + gen_len``).  This is
+    the same token order the block used to materialise with ``cat`` every
+    forward, so attention reads identical bytes without the 81 MB copy.  For a
+    single sample ``und_k_cached`` / ``gen_k_buf_full`` stay populated as *views* of
+    that buffer (the und prefix and the ``[hist | pad]`` window of ``max_gen_tokens``),
+    so readers of the pre-composite layout see the same bytes; a hand-built value with
+    ``kv_k_static=None`` and those two set still takes the legacy ``cat`` path in
+    ``attention_AR_gen_only``.  With ``batch_size > 1``
+    the buffer holds one such row per sample at stride ``static_row_stride`` (``[1, B*R, H, D]``),
+    the und of row ``r`` right-aligned to end at ``r*R + static_curr_offset``, and
+    ``cu_seqlens_q_t`` / ``cu_seqlens_kv_t`` are ``[2B]``: entry ``2r`` is row ``r`` and entry
+    ``2r+1`` a zero-query dummy sequence that owns the gap up to the next row (the varlen
+    kernel wants adjacent sequences and skips zero-query entries).  ``B=1`` collapses to the
+    ``[2]`` tensors above.
+
     All tensor sequence dimensions are fixed per-step.  For Context
     Parallelism the head dimension is ``H/cp`` (head-sharded); otherwise ``H``.
 
@@ -1671,6 +2204,11 @@ class ARMemoryValue(MemoryValue):
     und_lens: tuple[int, ...] = ()
     gen_k_buf_full: torch.Tensor | None = None
     gen_v_buf_full: torch.Tensor | None = None
+    kv_k_static: torch.Tensor | None = None
+    kv_v_static: torch.Tensor | None = None
+    static_curr_offset: int = 0
+    static_hist_offset: int = 0
+    static_row_stride: int = 0
     real_gen_cache_len_t: torch.Tensor | None = None
     real_und_cache_len_t: torch.Tensor | None = None
     cu_seqlens_q_t: torch.Tensor | None = None
@@ -1750,6 +2288,10 @@ class ARMemoryState(MemoryState):
             positive ``transfer_history_sink_tokens`` this limits only the
             recent suffix after the pinned prefix. With no sink tokens it keeps
             the legacy behavior of limiting the complete history to a suffix.
+            Supported on the dynamic-shape and the CUDA-graph static-shape
+            flavors (the static flavor selects whole cache entries via
+            ``GenKVCache.transfer_history_frame_indices``); rejected with
+            post-saturation static compile.
     """
 
     def requires_natten_metadata(self) -> bool:
@@ -1808,16 +2350,22 @@ class ARMemoryState(MemoryState):
                 "post_saturation_static_compile=True requires static_und_cache_max_len"
             )
         if coarse_cuda_graph:
-            assert post_saturation_static_compile, "coarse_cuda_graph=True requires post-saturation static compile"
+            assert post_saturation_static_compile or for_cuda_graphs, (
+                "coarse_cuda_graph=True requires post-saturation static compile or the static-shape "
+                "(for_cuda_graphs=True) flavor"
+            )
         if transfer_history_sink_tokens < 0:
             raise ValueError(f"transfer_history_sink_tokens must be >= 0, got {transfer_history_sink_tokens}")
         if transfer_history_max_tokens is not None:
             if transfer_history_max_tokens < 0:
                 raise ValueError(f"transfer_history_max_tokens must be >= 0, got {transfer_history_max_tokens}")
-            if for_cuda_graphs or post_saturation_static_compile:
-                raise ValueError("transfer history limiting supports only dynamic-shape AR inference")
-        if batched and (for_cuda_graphs or post_saturation_static_compile or coarse_cuda_graph):
-            raise ValueError("Batched AR memory supports only eager dynamic-shape inference")
+            if post_saturation_static_compile:
+                raise ValueError(
+                    "transfer history limiting supports dynamic-shape and CUDA-graph static-shape AR inference, "
+                    "not post-saturation static compile"
+                )
+        if batched and post_saturation_static_compile:
+            raise ValueError("Batched AR memory does not support post-saturation static compile")
         if kv_head_shard_size > 1:
             assert not for_cuda_graphs, "local KV-head cache storage does not support CUDA graph static-cache mode"
             assert num_kv_heads is not None, "local KV-head cache storage requires num_kv_heads"
@@ -1834,18 +2382,43 @@ class ARMemoryState(MemoryState):
         self._cu_seqlens_kv_t: torch.Tensor | None = None
         self._real_und_cache_len_t: torch.Tensor | None = None
         self._max_seqlen_KV: int = 0
+        # Explicit logical history entries for the static Transfer path (None = ring-native history).
+        self._static_history_indices: tuple[int, ...] | None = None
+        # ``[und | curr]`` tokens ahead of the history region in the composite static buffer.
+        self._static_prefix_tokens: int = 0
+        # Per-row physical slot plans (batched Transfer / per-row restarts); None = shared plan.
+        self._static_row_slots: list[list[int]] | None = None
         self._device: torch.device = torch.device("cpu")
         self._dtype: torch.dtype = torch.float32
 
     def init(self, hidden_states: dict, device: torch.device) -> None:
         if self.batched:
-            self._batch_size = int(get_num_real_samples(hidden_states))
-            full_sample_ids = hidden_states["_full_only_sample_ids"][: hidden_states["_num_full_tokens"]]  # [N_gen]
-            causal_sample_ids = hidden_states["_causal_sample_ids"][: hidden_states["_num_causal_tokens"]]  # [N_und]
-            gen_counts = torch.bincount(full_sample_ids, minlength=self._batch_size)  # [B]
-            und_counts = torch.bincount(causal_sample_ids, minlength=self._batch_size)  # [B]
-            self._gen_lens = tuple(int(length) for length in gen_counts.tolist())
-            self._current_und_lens = tuple(int(length) for length in und_counts.tolist())
+            # ``get_num_real_samples`` excludes the trailing CUDA-graph pad segment.  AR packs give
+            # every sample one generation split of the same size, so the gen lengths follow from the
+            # total without touching device memory.  Prompt lengths are read from the split offsets
+            # only while the pack carries text (frame 0, the dynamic path); gen-only frames see no
+            # sync, which keeps init() legal inside a capture.
+            num_samples = int(get_num_real_samples(hidden_states))
+            self._batch_size = num_samples
+            num_full = int(hidden_states["_num_full_tokens"])
+            if num_samples <= 0 or num_full <= 0 or num_full % num_samples:
+                raise ValueError(
+                    f"Batched AR requires equal generation lengths: {num_full} tokens over {num_samples} rows"
+                )
+            self._gen_lens = (num_full // num_samples,) * num_samples
+            num_causal = int(hidden_states["_num_causal_tokens"])
+            if num_causal == 0:
+                self._current_und_lens = (0,) * num_samples
+            else:
+                causal_offsets = hidden_states["_causal_seq_offsets"][: num_samples + 1]  # [B+1]
+                full_offsets = hidden_states["_full_only_seq_offsets"][: num_samples + 1]  # [B+1]
+                if causal_offsets.is_cuda and torch.cuda.is_current_stream_capturing():
+                    raise RuntimeError("batched AR prompt lengths cannot be read inside a CUDA graph capture")
+                self._current_und_lens = tuple(int(x) for x in torch.diff(causal_offsets).tolist())
+                if tuple(int(x) for x in torch.diff(full_offsets).tolist()) != self._gen_lens:
+                    raise ValueError(
+                        f"Batched AR requires equal generation lengths, got {torch.diff(full_offsets).tolist()}"
+                    )
             if any(length <= 0 for length in self._gen_lens):
                 raise ValueError(f"Every batched AR sample must contain generation tokens, got {self._gen_lens}")
             if len(set(self._gen_lens)) != 1:
@@ -1899,34 +2472,126 @@ class ARMemoryState(MemoryState):
         cache_size = self.dual_kv_cache[0].gen_cache.cache_size
         self._max_gen_cache_tokens = (cache_size - 1) * T * S_super
         self._tokens_per_frame = T * S_super
-
-        # Real (non-padding) length of the cached gen history at this
-        # frame.  Same rolling-buffer math as KVCacheTrainMemoryState.
-        # Held as an int32 tensor of shape ``[1]`` so its *value* can vary
-        # across CUDA-graph replays while the *shape* stays static.
-        real_len = min(self.frame_idx, cache_size - 1) * T * S_super
-        self._real_gen_cache_len_t = torch.tensor([real_len], device=device, dtype=torch.int32)
-
         self._device = device
         # Match the dtype of the populated und cache (set by the eager
         # frame-0 prefill).  At AR loop entry the und cache is always
         # initialized; for safety fall back to float32 if not.
         und_k = self.dual_kv_cache[0].und_cache.k_und
         self._dtype = und_k.dtype if und_k is not None else torch.float32
+        self._static_prefix_tokens = self.dual_kv_cache[0].und_cache.cached_len + self._gen_len
+        if self.coarse_cuda_graph and self._real_gen_cache_len_t is not None:
+            # Whole-forward capture: ``init()`` runs inside the recorded region.  The
+            # per-frame offset values are owned by ``prepare_for_coarse_cuda_graph_replay``;
+            # a ``fill_`` recorded here would replay the capture-time constants over them.
+            return
+        self._refresh_static_offsets(self.frame_idx, device)
 
-        # Pre-build varlen offsets *outside* the compiled region.  Doing the
-        # construction inside the captured graph forces Dynamo to specialize
-        # on the contained Python ints (gen_len, S_und, ...) and emit
-        # value-specific guards (e.g. ``memory_value.frame_idx == N``) — every
-        # frame retraces and blows past the recompile limit.  Building them
-        # here keeps the captured region's view as plain ``[2]`` tensor inputs
-        # whose values change per frame but whose shapes/addresses Dynamo
-        # never inspects.
-        s_und = self.dual_kv_cache[0].und_cache.cached_len
-        real_total_kv_len = s_und + self._gen_len + real_len
-        self._cu_seqlens_q_t = torch.tensor([0, self._gen_len], device=device, dtype=torch.int32)
-        self._cu_seqlens_kv_t = torch.tensor([0, real_total_kv_len], device=device, dtype=torch.int32)
-        self._max_seqlen_KV = s_und + self._gen_len + self._max_gen_cache_tokens
+    def _static_history_plan(self, frame_idx: int) -> tuple[tuple[int, ...] | None, int]:
+        """Return ``(explicit history entries or None, real history tokens)`` for ``frame_idx``.
+
+        Transfer limits select whole cache entries (pinned sink pairs plus the newest
+        ``max_tokens`` worth) so the static buffer copies exactly what the dynamic
+        branch slices; otherwise the ring-native chronological window applies.
+        """
+        cache_size = self.dual_kv_cache[0].gen_cache.cache_size
+        tokens_per_frame = self._tokens_per_frame
+        if self.transfer_history_max_tokens is None:
+            return None, min(int(frame_idx), cache_size - 1) * tokens_per_frame
+        if (
+            self.transfer_history_sink_tokens % tokens_per_frame != 0
+            or self.transfer_history_max_tokens % tokens_per_frame != 0
+        ):
+            raise ValueError(
+                "Transfer history limits must be whole cache entries on the static AR path: "
+                f"sink_tokens={self.transfer_history_sink_tokens}, "
+                f"max_tokens={self.transfer_history_max_tokens}, tokens_per_frame={tokens_per_frame}"
+            )
+        history_indices = self.dual_kv_cache[0].gen_cache.transfer_history_frame_indices(
+            frame_idx,
+            sink_entries=self.transfer_history_sink_tokens // tokens_per_frame,
+            max_recent_entries=self.transfer_history_max_tokens // tokens_per_frame,
+        )
+        return tuple(history_indices), len(history_indices) * tokens_per_frame
+
+    def _static_history_plan_rows(self, frame_idx: int) -> tuple[list[list[int]], list[int]] | None:
+        """Per-row physical slot plans for batched Transfer (``None`` when the shared plan applies).
+
+        Rows get their own plan when there is more than one row or any row restarted its episode
+        (``GenKVCache.reset_rows``); each row's plan is a fresh-cache plan in its local frame count.
+        """
+        gen_cache = self.dual_kv_cache[0].gen_cache
+        if self.transfer_history_max_tokens is None or (self._batch_size == 1 and not gen_cache.has_row_resets):
+            return None
+        tokens_per_frame = self._tokens_per_frame
+        sink_entries = self.transfer_history_sink_tokens // tokens_per_frame
+        max_recent_entries = self.transfer_history_max_tokens // tokens_per_frame
+        row_slots = [
+            gen_cache.row_history_slots(row, frame_idx, sink_entries, max_recent_entries)
+            for row in range(self._batch_size)
+        ]
+        return row_slots, [len(slots) * tokens_per_frame for slots in row_slots]
+
+    def _refresh_static_offsets(self, frame_idx: int, device: torch.device) -> None:
+        """(Re)compute the static-flavor history plan and the varlen offset tensors for ``frame_idx``.
+
+        The ``[1]`` / ``[2]`` int32 tensors are created once and afterwards updated in
+        place: their *addresses* are baked into CUDA graphs (per-block trees or a
+        forward-scope capture) and only their *values* change per frame.  The update
+        must run *outside* any whole-forward capture: a recorded ``fill_`` replays its
+        capture-time constants, so the coarse flavor refreshes only from
+        ``prepare_for_coarse_cuda_graph_replay``.
+        """
+        self._static_history_indices, real_len = self._static_history_plan(frame_idx)
+        self._static_row_slots = None
+        real_lens = [real_len] * self._batch_size
+        row_plan = self._static_history_plan_rows(frame_idx)
+        if row_plan is not None:
+            self._static_row_slots, real_lens = row_plan
+            real_len = real_lens[0]
+        und_cache = self.dual_kv_cache[0].und_cache
+        s_und = und_cache.cached_len  # padded und length U (= the single prompt length at B=1)
+        rows = self._batch_size
+        row_stride = s_und + self._gen_len + self._max_gen_cache_tokens
+        self._max_seqlen_KV = row_stride
+        shared_single_row = rows == 1 and self._static_row_slots is None
+        if shared_single_row:
+            real_total_kv_len = s_und + self._gen_len + real_len
+            cu_q_values = [0, self._gen_len]
+            cu_kv_values = [0, real_total_kv_len]
+        else:
+            # Row r: [pad | und_r right-aligned to r*R+U | curr at r*R+U | hist_r | pad]; entry 2r is the
+            # row, entry 2r+1 the zero-query dummy that owns the gap to the next row.
+            und_lens = und_cache.cached_lens if len(und_cache.cached_lens) == rows else (s_und,) * rows
+            cu_q_values, cu_kv_values = [0], []
+            for row in range(rows):
+                cu_kv_values += [
+                    row * row_stride + s_und - und_lens[row],
+                    row * row_stride + s_und + self._gen_len + real_lens[row],
+                ]
+                cu_q_values += [(row + 1) * self._gen_len] if row == rows - 1 else [(row + 1) * self._gen_len] * 2
+        if self._real_gen_cache_len_t is None or self._cu_seqlens_q_t is None or self._cu_seqlens_kv_t is None:
+            # Pre-build varlen offsets *outside* the compiled region.  Doing the
+            # construction inside the captured graph forces Dynamo to specialize
+            # on the contained Python ints (gen_len, S_und, ...) and emit
+            # value-specific guards -- every frame retraces and blows past the
+            # recompile limit.  Building them here keeps the captured region's
+            # view as plain tensor inputs whose values change per frame but whose
+            # shapes/addresses Dynamo never inspects.
+            self._real_gen_cache_len_t = to_device_nonblocking(
+                torch.tensor([real_len], dtype=torch.int32), device
+            )  # [1]
+            self._cu_seqlens_q_t = to_device_nonblocking(torch.tensor(cu_q_values, dtype=torch.int32), device)  # [2B]
+            self._cu_seqlens_kv_t = to_device_nonblocking(torch.tensor(cu_kv_values, dtype=torch.int32), device)  # [2B]
+        else:
+            self._real_gen_cache_len_t.fill_(real_len)
+            if shared_single_row:
+                self._cu_seqlens_q_t[1:].fill_(self._gen_len)
+                self._cu_seqlens_kv_t[1:].fill_(real_total_kv_len)
+            else:
+                # Same addresses, new values: an asynchronous copy from pinned host memory.
+                self._cu_seqlens_kv_t.copy_(
+                    to_device_nonblocking(torch.tensor(cu_kv_values, dtype=torch.int32), device)
+                )
 
     def read_for_layer(self, layer_idx: int) -> ARMemoryValue:
         cache = self.dual_kv_cache[layer_idx]
@@ -2051,17 +2716,25 @@ class ARMemoryState(MemoryState):
                 post_saturation_static_compile=self.post_saturation_static_compile,
             )
 
-        # Static-shape branch: hand the layer the full preallocated gen
-        # buffer + a scalar real-length tensor.  Shapes are constant
-        # across frames so a single CUDA-graph capture replays.
-        assert und_k_cached is not None, (
+        # Static-shape branch: hand the layer one composite ``[und | curr | hist | pad]``
+        # buffer per K and V plus the varlen offset tensors.  Shapes and addresses are
+        # constant across frames so a single CUDA-graph capture replays; the und region
+        # is primed once per generation and the history region rebuilt per frame here
+        # (per-block graphs) or in ``prepare_for_coarse_cuda_graph_replay`` (forward scope).
+        assert und_k_cached is not None and und_v_cached is not None, (
             "ARMemoryState(for_cuda_graphs=True) requires the und cache to be "
             "populated by frame-0 prefill before entering the AR loop"
         )
         assert self._real_gen_cache_len_t is not None
         assert self._num_kv_heads is not None
         assert self._head_dim is not None
-        gen_k_buf, gen_v_buf, _ = cache.gen_cache.fetch_kv_static(
+        s_und = cache.und_cache.cached_len
+        assert s_und + self._gen_len == self._static_prefix_tokens, (
+            f"static prefix mismatch: und={s_und} gen={self._gen_len} prefix={self._static_prefix_tokens}"
+        )
+        rows = self._batch_size
+        und_lens = cache.und_cache.cached_lens if len(cache.und_cache.cached_lens) == rows else None
+        kv_k_static, kv_v_static, _ = cache.gen_cache.fetch_kv_static(
             self.frame_idx,
             self._max_gen_cache_tokens,
             self._tokens_per_frame,
@@ -2069,18 +2742,43 @@ class ARMemoryState(MemoryState):
             head_dim=self._head_dim,
             device=self._device,
             dtype=self._dtype,
+            history_frame_indices=(
+                None if self._static_history_indices is None else list(self._static_history_indices)
+            ),
+            prefix_tokens=self._static_prefix_tokens,
+            und_kv=(und_k_cached, und_v_cached),
+            batch_rows=rows,
+            und_lens=und_lens,
+            row_slot_lists=self._static_row_slots,
         )
-        torch._dynamo.mark_static(gen_k_buf, 1)
-        torch._dynamo.mark_static(gen_v_buf, 1)
+        torch._dynamo.mark_static(kv_k_static, 1)
+        torch._dynamo.mark_static(kv_v_static, 1)
+        # Legacy single-sample views of the composite buffer: the und prefix and the
+        # ``[hist | pad]`` window.  No copies; the block itself reads ``kv_k_static``.
+        # Batched rows keep them ``None`` (per-row right-aligned und, strided rows).
+        hist_start = self._static_prefix_tokens
+        hist_end = hist_start + self._max_gen_cache_tokens
+        legacy_und_k = kv_k_static[:, :s_und] if rows == 1 and s_und > 0 else None  # [1,S_und,H_kv,D]
+        legacy_und_v = kv_v_static[:, :s_und] if rows == 1 and s_und > 0 else None  # [1,S_und,H_kv,D]
+        legacy_gen_k = kv_k_static[:, hist_start:hist_end] if rows == 1 else None  # [1,max_gen_tokens,H_kv,D]
+        legacy_gen_v = kv_v_static[:, hist_start:hist_end] if rows == 1 else None  # [1,max_gen_tokens,H_kv,D]
         return ARMemoryValue(
-            und_k_cached=und_k_cached,
-            und_v_cached=und_v_cached,
+            und_k_cached=legacy_und_k,
+            und_v_cached=legacy_und_v,
             gen_k_hist=None,
             gen_v_hist=None,
             frame_idx=self.frame_idx,
             gen_len=self._gen_len,
-            gen_k_buf_full=gen_k_buf,
-            gen_v_buf_full=gen_v_buf,
+            batch_size=rows,
+            gen_lens=self._gen_lens,
+            und_lens=(cache.und_cache.cached_lens if self.batched else ()),
+            gen_k_buf_full=legacy_gen_k,
+            gen_v_buf_full=legacy_gen_v,
+            kv_k_static=kv_k_static,
+            kv_v_static=kv_v_static,
+            static_curr_offset=s_und,
+            static_hist_offset=self._static_prefix_tokens,
+            static_row_stride=(self._max_seqlen_KV if rows > 1 else 0),
             real_gen_cache_len_t=self._real_gen_cache_len_t,
             cu_seqlens_q_t=self._cu_seqlens_q_t,
             cu_seqlens_kv_t=self._cu_seqlens_kv_t,
@@ -2138,12 +2836,14 @@ class ARMemoryState(MemoryState):
             )
 
     def prepare_for_coarse_cuda_graph_replay(self, frame_idx: int) -> None:
-        """Refresh fixed-address history buffers before replaying a coarse graph."""
+        """Refresh fixed-address history buffers (and, on the static flavor, the offset tensors) before replay."""
         if not self.coarse_cuda_graph:
             raise RuntimeError("prepare_for_coarse_cuda_graph_replay requires coarse_cuda_graph=True")
         assert self._num_kv_heads is not None
         assert self._head_dim is not None
         self.frame_idx = frame_idx
+        if self.for_cuda_graphs:
+            self._refresh_static_offsets(frame_idx, self._device)
         for cache in self.dual_kv_cache:
             cache.gen_cache.fetch_kv_static(
                 frame_idx,
@@ -2153,6 +2853,18 @@ class ARMemoryState(MemoryState):
                 head_dim=self._head_dim,
                 device=self._device,
                 dtype=self._dtype,
+                history_frame_indices=(
+                    None if self._static_history_indices is None else list(self._static_history_indices)
+                ),
+                prefix_tokens=self._static_prefix_tokens if self.for_cuda_graphs else 0,
+                und_kv=cache.und_cache.get() if self.for_cuda_graphs else None,
+                batch_rows=self._batch_size if self.for_cuda_graphs else 1,
+                und_lens=(
+                    cache.und_cache.cached_lens
+                    if self.for_cuda_graphs and len(cache.und_cache.cached_lens) == self._batch_size
+                    else None
+                ),
+                row_slot_lists=self._static_row_slots if self.for_cuda_graphs else None,
             )
 
     def commit_staged_gen_cache(self, frame_idx: int) -> None:
@@ -2178,6 +2890,7 @@ __all__ = [
     "KVCache",
     "UndKVCache",
     "GenKVCache",
+    "KVBufferPool",
     "DualKVCache",
     "KVCacheTrainMemoryState",
     "KVTrainMemoryValue",

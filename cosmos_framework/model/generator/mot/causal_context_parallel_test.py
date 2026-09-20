@@ -1056,16 +1056,25 @@ def _cp_attention_ar_gen_static(
     cu_seqlens_kv_t = torch.tensor([0, real_total_kv_len], device=device, dtype=torch.int32)
     real_gen_cache_len_t = torch.tensor([real_len], device=device, dtype=torch.int32)
     max_seqlen_KV = s_und + gen_len + max_gen_cache_tokens
+    # Composite ``[und | curr | hist | pad]`` buffer; the attention writes ``curr`` in place.
+    curr_room_k = gen_k_buf.new_zeros((1, gen_len, gen_k_buf.shape[2], gen_k_buf.shape[3]))
+    curr_room_v = gen_v_buf.new_zeros((1, gen_len, gen_v_buf.shape[2], gen_v_buf.shape[3]))
+    kv_k_static = torch.cat([und_k_cached, curr_room_k, gen_k_buf], dim=1).contiguous()
+    kv_v_static = torch.cat([und_v_cached, curr_room_v, gen_v_buf], dim=1).contiguous()
 
     mv = ARMemoryValue(
-        und_k_cached=und_k_cached,
-        und_v_cached=und_v_cached,
+        und_k_cached=None,
+        und_v_cached=None,
         gen_k_hist=None,
         gen_v_hist=None,
         frame_idx=frame_idx,
         gen_len=gen_len,
-        gen_k_buf_full=gen_k_buf,
-        gen_v_buf_full=gen_v_buf,
+        gen_k_buf_full=None,
+        gen_v_buf_full=None,
+        kv_k_static=kv_k_static,
+        kv_v_static=kv_v_static,
+        static_curr_offset=s_und,
+        static_hist_offset=s_und + gen_len,
         real_gen_cache_len_t=real_gen_cache_len_t,
         cu_seqlens_q_t=cu_seqlens_q_t,
         cu_seqlens_kv_t=cu_seqlens_kv_t,

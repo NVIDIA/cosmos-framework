@@ -562,7 +562,7 @@ def multi_dimensional_attention_varlen(
         value (Tensor): 4-D value tensor with sequence-packed layout
             (`[1, seqlen_total, heads_kv, head_dim_v]`)
 
-        metadata (dict): Pre-computed varlen metadata from `cosmos_framework.varlen.generate_multi_dim_varlen_parameters`.
+        metadata (dict): Pre-computed varlen metadata from `cosmos_framework.model.attention.varlen.generate_multi_dim_varlen_parameters`.
 
         scale (float | None): Attention scale. Defaults to head_dim ** -0.5.
 

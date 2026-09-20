@@ -8,6 +8,18 @@ from collections.abc import Callable
 from pathlib import Path, PurePath
 from typing import Any
 
+_PLACEHOLDER_BUCKET = "bucket"
+
+
+def _placeholder_object_store_uri(value: str) -> str:
+    """Replace the bucket in a ``scheme://bucket/key`` URI, keeping the key."""
+    scheme, _, remainder = value.partition("://")
+    _, _, key = remainder.partition("/")
+    return f"{scheme}://{_PLACEHOLDER_BUCKET}/{key}" if key else f"{scheme}://{_PLACEHOLDER_BUCKET}"
+
+
+# Where the LiDAR VAE lives inside a published artifact. One per artifact, so no filename map.
+_PUBLIC_LIDAR_VAE_PATH = "pretrained/tokenizers/lidar/diffusion_pytorch_model.safetensors"
 _PUBLIC_WAN_VAE_PATHS = {
     "Wan2.2_VAE.pth": "pretrained/tokenizers/video/wan2pt2/Wan2.2_VAE.pth",
 }
@@ -176,20 +188,32 @@ def sanitize_student_public_model_config(
     if not isinstance(config, dict):
         raise TypeError("Expected model config to be a dictionary.")
 
-    for tokenizer_key in ("tokenizer", "sound_tokenizer"):
+    for tokenizer_key in ("tokenizer", "sound_tokenizer", "lidar_tokenizer"):
         tokenizer_config = config.get(tokenizer_key)
         if not isinstance(tokenizer_config, dict):
             continue
         if "bucket_name" in tokenizer_config:
             tokenizer_config["bucket_name"] = "bucket"
         if "object_store_credential_path_pretrained" in tokenizer_config:
-            tokenizer_config["object_store_credential_path_pretrained"] = ""
+            # None, not "": VideoTokenizerInterface treats None as "no credentials" and anything
+            # else as a path, so an empty string is a path that does not exist and it raises.
+            tokenizer_config["object_store_credential_path_pretrained"] = None
         if tokenizer_key == "tokenizer" and "vae_path" in tokenizer_config:
             tokenizer_config["vae_path"] = _normalize_public_dependency_path(
                 tokenizer_config["vae_path"],
                 field_name="tokenizer.vae_path",
                 public_paths=_PUBLIC_WAN_VAE_PATHS,
             )
+        if tokenizer_key == "lidar_tokenizer":
+            # Swept rather than listed: V0 adds latent_stats_path on the same bucket, and the
+            # next such field would be missed again.
+            for field, value in list(tokenizer_config.items()):
+                if field != "vae_path" and isinstance(value, str) and "://" in value:
+                    tokenizer_config[field] = _placeholder_object_store_uri(value)
+        if tokenizer_key == "lidar_tokenizer" and "vae_path" in tokenizer_config:
+            # The internal LiDAR path is a full URI, so the bucket rides inside the value and
+            # a filename map would not remove it. Rewrite to the published location.
+            tokenizer_config["vae_path"] = _PUBLIC_LIDAR_VAE_PATH
 
     vlm_config = config.get("vlm_config")
     if not isinstance(vlm_config, dict):

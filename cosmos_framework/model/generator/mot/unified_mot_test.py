@@ -207,16 +207,9 @@ def test_decoder_target_only_path_skips_und_and_control_then_restores_full_layou
 def test_pad_packed_tokens_by_sample_supports_unequal_prompt_lengths() -> None:
     """Sample-major packed prompts become independent padded cache rows."""
     tokens = torch.arange(8 * 2 * 3, dtype=torch.float32).reshape(8, 2, 3)  # [S_padded,H,D]
-    sample_ids = torch.tensor([0, 0, 1, 1, 1, 1, 0, 1])  # [S_padded]
 
-    padded, lengths = _pad_packed_tokens_by_sample(
-        tokens,
-        sample_ids,
-        num_real_tokens=6,
-        batch_size=2,
-    )  # [B,S_max,H,D], tuple[B]
+    padded = _pad_packed_tokens_by_sample(tokens, (2, 4), num_real_tokens=6)  # [B,S_max,H,D]
 
-    assert lengths == (2, 4)
     assert padded.shape == (2, 4, 2, 3)
     torch.testing.assert_close(padded[0, :2], tokens[:2])
     assert torch.count_nonzero(padded[0, 2:]) == 0
@@ -228,18 +221,64 @@ def test_pad_packed_tokens_by_sample_supports_unequal_prompt_lengths() -> None:
 def test_pad_packed_tokens_by_sample_preserves_single_sample_layout() -> None:
     """B=1 produces the same leading-token tensor as the legacy unsqueeze path."""
     tokens = torch.arange(7 * 2 * 3, dtype=torch.float32).reshape(7, 2, 3)  # [S_padded,H,D]
-    sample_ids = torch.zeros(7, dtype=torch.long)  # [S_padded]
 
-    padded, lengths = _pad_packed_tokens_by_sample(
-        tokens,
-        sample_ids,
-        num_real_tokens=5,
-        batch_size=1,
-    )  # [1,S_real,H,D], tuple[1]
+    padded = _pad_packed_tokens_by_sample(tokens, (5,), num_real_tokens=5)  # [1,S_real,H,D]
     legacy = tokens[:5].unsqueeze(0)  # [1,S_real,H,D]
 
-    assert lengths == (5,)
     torch.testing.assert_close(padded, legacy)
+    assert padded.data_ptr() == tokens.data_ptr()  # a view, like the legacy unsqueeze
+
+
+@pytest.mark.L0
+@pytest.mark.CPU
+def test_pad_packed_tokens_by_sample_single_sample_is_the_legacy_unsqueeze() -> None:
+    """B=1 must not reshape by length: under dynamic shapes the length is symbolic and the traced
+    und stream of a gen-only frame is empty, where ``view(1, n, ...)`` fails while ``unsqueeze`` is exact."""
+    import torch._dynamo
+
+    empty = torch.empty(0, 2, 3)  # [0,H,D] und stream of a gen-only frame
+    out = _pad_packed_tokens_by_sample(empty, (0,), num_real_tokens=0)
+    assert out.shape == (1, 0, 2, 3)
+
+    def split(tokens: torch.Tensor, und_len: torch.Tensor) -> torch.Tensor:
+        n = int(und_len.shape[0])  # symbolic under dynamic=True, like pack["_num_causal_tokens"]
+        return _pad_packed_tokens_by_sample(tokens[:n], (n,), n)
+
+    compiled = torch.compile(split, backend="eager", dynamic=True, fullgraph=True)
+    tokens = torch.arange(5 * 2 * 3, dtype=torch.float32).reshape(5, 2, 3)
+    for n in (5, 3, 0):
+        torch.testing.assert_close(compiled(tokens, torch.zeros(n)), tokens[:n].unsqueeze(0))
+    torch._dynamo.reset()
+
+
+@pytest.mark.L0
+@pytest.mark.CPU
+def test_pad_packed_tokens_by_sample_traces_with_symbolic_lengths() -> None:
+    """Per-block CUDA graphs compile the block with dynamic shapes: the row split must trace with SymInt lengths."""
+    import torch._dynamo
+
+    def split_rows(tokens: torch.Tensor, rows: int) -> torch.Tensor:
+        gen_len = tokens.shape[0] - 3  # symbolic under dynamic=True (3 padding rows)
+        return _pad_packed_tokens_by_sample(tokens, (gen_len // rows,) * rows, gen_len)
+
+    compiled = torch.compile(split_rows, backend="eager", dynamic=True, fullgraph=True)
+    for n_real, rows in ((6, 1), (8, 2), (12, 3)):
+        tokens = torch.arange((n_real + 3) * 2 * 3, dtype=torch.float32).reshape(n_real + 3, 2, 3)  # [S_padded,H,D]
+        torch.testing.assert_close(compiled(tokens, rows), tokens[:n_real].view(rows, n_real // rows, 2, 3))
+    torch._dynamo.reset()
+
+
+@pytest.mark.L0
+@pytest.mark.CPU
+def test_pad_packed_tokens_by_sample_equal_lengths_are_a_view() -> None:
+    """Equal per-sample lengths (every AR generation split) need no copy."""
+    tokens = torch.arange(9 * 2 * 3, dtype=torch.float32).reshape(9, 2, 3)  # [S_padded,H,D]
+    batched = _pad_packed_tokens_by_sample(tokens, (3, 3), num_real_tokens=6)  # [2,3,H,D]
+    assert batched.shape == (2, 3, 2, 3)
+    assert batched.data_ptr() == tokens.data_ptr()
+    torch.testing.assert_close(batched[1], tokens[3:6])
+    with pytest.raises(AssertionError):
+        _pad_packed_tokens_by_sample(tokens, (3, 2), num_real_tokens=6)
 
 
 def _kv(batch: int, seqlen: int, num_kv_heads: int = 2, head_dim: int = 4) -> torch.Tensor:

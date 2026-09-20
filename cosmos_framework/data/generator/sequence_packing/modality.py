@@ -7,6 +7,8 @@ from dataclasses import dataclass, field
 
 import torch
 
+from cosmos_framework.data.generator.sequence_packing.runtime import to_device_nonblocking
+
 
 def _empty_long_tensor() -> torch.Tensor:
     return torch.empty(0, dtype=torch.long)  # [0]
@@ -121,19 +123,23 @@ class ModalityData:
         assert isinstance(self.mse_loss_indexes, torch.Tensor), "ModalityData.mse_loss_indexes must be finalized"
 
     def to_cuda(self) -> None:
-        """Move all tensor fields to CUDA in-place."""
-        self.sequence_indexes = self.sequence_indexes.cuda()
-        self.timesteps = self.timesteps.cuda()
-        self.mse_loss_indexes = self.mse_loss_indexes.cuda()
-        self.tokens = [token.cuda() for token in self.tokens]
-        self.condition_mask = [cm.cuda() for cm in self.condition_mask]
-        self.noisy_frame_indexes = [ni.cuda() for ni in self.noisy_frame_indexes]
-        self.domain_id = [d.cuda() for d in self.domain_id]
+        """Move all tensor fields to CUDA in-place (asynchronous pinned copies, identical values)."""
+        self.sequence_indexes = to_device_nonblocking(self.sequence_indexes, "cuda")
+        self.timesteps = to_device_nonblocking(self.timesteps, "cuda")
+        self.mse_loss_indexes = to_device_nonblocking(self.mse_loss_indexes, "cuda")
+        self.tokens = [to_device_nonblocking(token, "cuda") for token in self.tokens]
+        self.condition_mask = [to_device_nonblocking(cm, "cuda") for cm in self.condition_mask]
+        self.noisy_frame_indexes = [to_device_nonblocking(ni, "cuda") for ni in self.noisy_frame_indexes]
+        self.domain_id = [to_device_nonblocking(d, "cuda") for d in self.domain_id]
         # raw_action_dim is optional (e.g., when action-channel masking is disabled).
         if self.raw_action_dim is not None:
-            self.raw_action_dim = [d.cuda() if d is not None else None for d in self.raw_action_dim]
+            self.raw_action_dim = [
+                to_device_nonblocking(d, "cuda") if d is not None else None for d in self.raw_action_dim
+            ]
         if self.action_valid_mask is not None:
-            self.action_valid_mask = [m.cuda() if m is not None else None for m in self.action_valid_mask]
+            self.action_valid_mask = [
+                to_device_nonblocking(m, "cuda") if m is not None else None for m in self.action_valid_mask
+            ]
 
 
 def prepare_attention_mask_per_sample(split_lens, attn_modes, device="cpu"):

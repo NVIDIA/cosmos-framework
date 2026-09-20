@@ -19,6 +19,7 @@ from cosmos_framework.data.generator.sequence_packing.mrope import (
 from cosmos_framework.data.generator.sequence_packing.runtime import (
     SequencePackMetadata,
     prepare_sequence_pack_metadata,
+    to_device_nonblocking,
 )
 
 if TYPE_CHECKING:
@@ -1256,16 +1257,24 @@ class PackedSequence:
             )
 
     def to_cuda(self) -> None:
-        """Move all tensor fields to CUDA in-place."""
-        self.text_ids = self.text_ids.cuda()
-        self.text_indexes = self.text_indexes.cuda()
-        self.position_ids = self.position_ids.cuda()
+        """Move all tensor fields to CUDA in-place.
+
+        Copies are asynchronous (pinned staging, see ``to_device_nonblocking``) so a per-frame
+        inference loop never waits for the GPU here.  The layout metadata depends only on the
+        host-side lengths, so it is built from the host ``text_indexes`` before they move and
+        is kept when the pack already lives on CUDA (AR callers swap device-resident noise and
+        timesteps into the pack and call ``to_cuda`` again every denoising step).
+        """
+        host_text_indexes = self.text_indexes if self.text_indexes.device.type == "cpu" else None
+        self.text_ids = to_device_nonblocking(self.text_ids, "cuda")
+        self.text_indexes = to_device_nonblocking(self.text_indexes, "cuda")
+        self.position_ids = to_device_nonblocking(self.position_ids, "cuda")
         if isinstance(self.label_ids, torch.Tensor):
-            self.label_ids = self.label_ids.cuda()
+            self.label_ids = to_device_nonblocking(self.label_ids, "cuda")
         if isinstance(self.ce_loss_indexes, torch.Tensor):
-            self.ce_loss_indexes = self.ce_loss_indexes.cuda()
+            self.ce_loss_indexes = to_device_nonblocking(self.ce_loss_indexes, "cuda")
         if isinstance(self.ce_loss_weights, torch.Tensor):
-            self.ce_loss_weights = self.ce_loss_weights.cuda()
+            self.ce_loss_weights = to_device_nonblocking(self.ce_loss_weights, "cuda")
         if self.vision is not None:
             self.vision.to_cuda()
         if self.lidar is not None:
@@ -1274,15 +1283,22 @@ class PackedSequence:
             self.action.to_cuda()
         if self.sound is not None:
             self.sound.to_cuda()
-        self.prepare_sequence_pack_metadata()
+        if host_text_indexes is None and self._sequence_pack_metadata is not None:
+            return  # already prepared on CUDA; the layout has not changed
+        self.prepare_sequence_pack_metadata(host_text_indexes=host_text_indexes)
 
-    def prepare_sequence_pack_metadata(self) -> None:
-        """Validate and prepare device-specific metadata for this layout."""
+    def prepare_sequence_pack_metadata(self, host_text_indexes: torch.Tensor | None = None) -> None:
+        """Validate and prepare device-specific metadata for this layout.
+
+        ``host_text_indexes`` (a CPU copy of ``text_indexes``) avoids a device->host read of the
+        indexes when the pack has just been moved to CUDA.
+        """
+        indexes = host_text_indexes if host_text_indexes is not None else self.text_indexes
         self._sequence_pack_metadata = prepare_sequence_pack_metadata(
             sample_lens=self.sample_lens,
             split_lens=self.split_lens,
             attn_modes=self.attn_modes,
-            packed_und_token_indexes=self.text_indexes,
+            packed_und_token_indexes=indexes,
             device=self.text_indexes.device,
             text_caption_lens=self.text_caption_lens,
         )

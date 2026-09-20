@@ -3,16 +3,43 @@
 
 """Autoregressive sequence packing for framewise and chunkwise AR generation."""
 
-from typing import cast
+from collections.abc import Sequence
+from typing import Any, cast
 
 import torch
 
+from cosmos_framework.data.generator.augmentors.text_tokenizer import TEXT_SYSTEM_PROMPT_KEY
 from cosmos_framework.model.generator.utils.data_and_condition import GenerationDataClean
 from cosmos_framework.data.generator.sequence_packing import (
     PackedSequence,
     SequencePlan,
     pack_input_sequence,
 )
+
+
+def resolve_text_system_prompt(data_batch: dict[str, Any]) -> Any:
+    """Read tokenizer metadata, falling back to the legacy key only when absent."""
+    return data_batch.get(TEXT_SYSTEM_PROMPT_KEY, data_batch.get("system_prompt"))
+
+
+def caption_system_prompts(sequence_plans: list[SequencePlan], data_batch: dict[str, Any]) -> list[str | None]:
+    """Expand exact per-sample tokenizer prompts over the packed caption slots."""
+    value = resolve_text_system_prompt(data_batch)
+    if value is None or isinstance(value, str):
+        prompts = [value] * len(sequence_plans)
+    elif isinstance(value, (list, tuple)):
+        if len(value) != len(sequence_plans):
+            raise ValueError("Tokenizer system prompts must have one entry per sample.")
+        prompts = list(value)
+    else:
+        raise TypeError("Tokenizer system prompts must be strings or a per-sample sequence.")
+    if any(prompt is not None and not isinstance(prompt, str) for prompt in prompts):
+        raise TypeError("Each tokenizer system prompt must be a string or None.")
+    return [
+        prompt
+        for plan, prompt in zip(sequence_plans, prompts)
+        for _ in range(len(plan.text_view_ids) if plan.text_view_ids is not None else 1)
+    ]
 
 
 def pack_input_sequence_autoregressive(
@@ -341,7 +368,7 @@ def pack_input_sequence_autoregressive_batch(
     *,
     latent_patch_size: int = 1,
     condition_frame_indexes_vision: list[int] | None = None,
-    frame_idx: int = 0,
+    frame_idx: int | Sequence[int] = 0,
     temporal_compression_factor: int = 4,
     video_temporal_causal: bool = True,
     enable_fps_modulation: bool = True,
@@ -420,6 +447,8 @@ def pack_input_sequence_autoregressive_batch(
     input_text_indexes = text_tokens if text_tokens is not None else [[] for _ in range(batch_size)]
     input_timesteps = torch.full((batch_size,), timestep, dtype=torch.float32)  # [B]
 
+    if isinstance(frame_idx, Sequence) and len(frame_idx) != batch_size:
+        raise ValueError(f"Expected {batch_size} per-sample frame indices, got {len(frame_idx)}")
     initial_offsets: list[int | float] = []
     for sample_idx, fps in enumerate(fps_vision):
         frame_stride = base_fps / fps
@@ -428,7 +457,8 @@ def pack_input_sequence_autoregressive_batch(
             if cached_text_offsets is None
             else cached_text_offsets[sample_idx] + unified_3d_mrope_temporal_modality_margin
         )
-        initial_offsets.append(text_offset + frame_idx * frame_stride)
+        row_frame_idx = frame_idx[sample_idx] if isinstance(frame_idx, Sequence) else frame_idx
+        initial_offsets.append(text_offset + row_frame_idx * frame_stride)
 
     return pack_input_sequence(
         sequence_plans=sequence_plans,

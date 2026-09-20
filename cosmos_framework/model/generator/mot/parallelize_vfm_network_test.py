@@ -13,12 +13,17 @@ it, and the recompute is bit-exact under the float32 autocast the timestep path
 runs in) alongside the memory it is there to buy.
 """
 
+from types import SimpleNamespace
+from unittest.mock import patch
+
 import pytest
 import torch
 from torch import nn
 
 from cosmos_framework.utils.helper_test import RunIf
 from cosmos_framework.configs.base.defaults.activation_checkpointing import ActivationCheckpointingConfig
+from cosmos_framework.configs.base.defaults.compile import CompileConfig
+from cosmos_framework.model.generator.mot import parallelize_vfm_network as module
 from cosmos_framework.model.generator.mot.modeling_utils import TimestepEmbedder
 from cosmos_framework.model.generator.mot.parallelize_vfm_network import apply_ac
 
@@ -188,3 +193,36 @@ def test_frees_the_timestep_activations_across_the_trunk(mode: str) -> None:
     # The float32 [N, HIDDEN] intermediates inside the MLP (the first Linear's
     # output and the SiLU's) are what stop being pinned; assert at least both.
     assert saved >= 2 * one_activation, f"only freed {saved / 2**20:.0f} MiB"
+
+
+@pytest.mark.CPU
+@pytest.mark.parametrize(
+    "use_cuda_graphs,scope,expected_mode,expected_dynamic",
+    [
+        (False, "block", None, True),
+        (True, "block", "reduce-overhead", True),
+        (True, "forward", None, False),
+    ],
+)
+def test_vfm_heads_follow_the_cuda_graph_scope(
+    use_cuda_graphs: bool, scope: str, expected_mode: str | None, expected_dynamic: bool
+) -> None:
+    """Forward-scope capture records the heads inside the AR forward: no nested CUDA-graph trees,
+    static shapes (no host staging in the wrapper); other configurations keep the dynamic graph."""
+    heads = ["_encode_text", "_encode_vision", "_encode_action", "_decode_vision", "_decode_action"]
+    model = SimpleNamespace(**{name: object() for name in heads})
+    seen: list[dict] = []
+
+    def fake_compile(fn, **kwargs):
+        seen.append(kwargs)
+        return fn
+
+    with patch.object(module.torch, "compile", fake_compile):
+        module.apply_compile(
+            model, CompileConfig(enabled=True, use_cuda_graphs=use_cuda_graphs, cuda_graph_scope=scope)
+        )
+
+    assert len(seen) == len(heads)
+    assert all(kwargs["mode"] == expected_mode for kwargs in seen)
+    assert all(kwargs["dynamic"] is expected_dynamic for kwargs in seen)
+    assert all(kwargs["fullgraph"] is True for kwargs in seen)

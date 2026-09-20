@@ -15,6 +15,7 @@ from __future__ import annotations
 import contextlib
 import itertools
 from collections.abc import Callable, Generator, Iterable, Sequence
+from dataclasses import dataclass
 from typing import Any, Literal, cast
 from unittest.mock import patch
 
@@ -27,11 +28,13 @@ from typing_extensions import override
 
 import cosmos_framework.model.generator.omni_mot_model as omni_mot_model_module
 from cosmos_framework.configs.base.defaults.model_config import OmniMoTModelConfig
+from cosmos_framework.data.generator.augmentors.text_tokenizer import TEXT_SYSTEM_PROMPT_KEY
 from cosmos_framework.model.generator.omni_mot_model import OmniMoTModel, _broadcast_seed, _per_view_caption_groups
 from cosmos_framework.model.generator.utils.data_and_condition import GenerationDataClean
 from cosmos_framework.model.generator.utils.memory import MemoryState
 from cosmos_framework.data.generator.sequence_packing import PackedSequence, build_sequence_plans_from_data_batch
 from cosmos_framework.data.generator.sequence_packing.modality import compute_text_split_length
+from cosmos_framework.data.generator.sequence_packing.runtime import to_device_nonblocking
 from cosmos_framework.configs.base.defaults.causal_flex_attention import CausalFlexAttentionConfig
 from cosmos_framework.configs.base.defaults.replay_attention import (
     TeacherForcingKVImplementation,
@@ -47,6 +50,7 @@ from cosmos_framework.model.generator.mot.causal_cosmos3_vfm_network import (
 from cosmos_framework.model.generator.mot.causal_flex_attention import build_teacher_forcing_clean_target_token_indexes
 from cosmos_framework.model.generator.mot.post_saturation.installer import install_ar_post_saturation_mode
 from cosmos_framework.model.generator.mot.post_saturation.runtime import (
+    ARPostSaturationRuntime,
     is_ar_post_saturation_cuda_graph_frame,
     is_ar_post_saturation_static_compile_frame,
     reset_ar_post_saturation_runtime_for_generation,
@@ -64,6 +68,7 @@ from cosmos_framework.model.generator.utils.kv_cache import (
     ARMemoryState,
     DualKVCache,
     FlexARMemoryState,
+    KVBufferPool,
     TeacherForcingMemoryState,
 )
 from cosmos_framework.model.generator.utils.kv_storage_backend import validate_kv_cache_dtype
@@ -71,6 +76,7 @@ from cosmos_framework.model.generator.utils.nvfp4 import resolve_legacy_nvfp4_mo
 from cosmos_framework.data.generator.sequence_packing.autoregressive import (
     pack_input_sequence_autoregressive,
     pack_input_sequence_autoregressive_batch,
+    resolve_text_system_prompt,
 )
 from cosmos_framework.utils.generator.data_batch import condition_frame_indexes_vision_from_batch
 
@@ -414,6 +420,64 @@ def _validate_kv_cache_dtype_supports_cuda_graphs(kv_cache_dtype: str | None, cu
         )
 
 
+def uses_ar_forward_cuda_graph(model: Any) -> bool:
+    """Whether AR frames on the static-shape path replay one explicit CUDA graph per whole forward.
+
+    ``compile.cuda_graph_scope == "forward"`` compiles the decoder blocks without inductor's
+    per-block CUDA-graph trees (see ``apply_compile``) and instead captures ``denoise`` for
+    cache index >= 1 through :class:`ARPostSaturationRuntime`; the machinery is the one the
+    post-saturation ``"cuda-graph"`` mode uses, so the two are mutually exclusive.
+    """
+    compile_config = model.config.compile
+    return bool(
+        compile_config.enabled
+        and compile_config.use_cuda_graphs
+        and compile_config.cuda_graph_scope == "forward"
+        and compile_config.ar_post_saturation_mode == "default"
+    )
+
+
+def get_ar_forward_cuda_graph_runtime(model: Any) -> ARPostSaturationRuntime:
+    """Return the model-owned coarse-graph runtime for ``cuda_graph_scope="forward"`` (created lazily)."""
+    runtime = getattr(model, "_ar_forward_cuda_graph_runtime", None)
+    if not isinstance(runtime, ARPostSaturationRuntime):
+        runtime = ARPostSaturationRuntime()
+        model._ar_forward_cuda_graph_runtime = runtime
+    return runtime
+
+
+def run_ar_forward_cuda_graph(
+    model: Any,
+    *,
+    kind: str,
+    branch: str,
+    packed_seq: PackedSequence,
+    memory_info: dict[str, Any],
+) -> dict[str, Any]:
+    """Capture on first use, then replay, one whole-forward CUDA graph keyed by ``(kind, branch)``."""
+    return get_ar_forward_cuda_graph_runtime(model).run_cuda_graph(
+        model=model,
+        kind=kind,
+        branch=branch,
+        packed_seq=packed_seq,
+        memory_info=memory_info,
+    )
+
+
+@dataclass(frozen=True)
+class StreamingTransferStep:
+    """One control chunk of the batched streaming Transfer loop, with optional per-row episode restarts.
+
+    ``reset_rows`` restart those rows at this step: their K/V history and mRoPE frame clock start
+    over and, when ``seeds`` is given, so does their noise stream.  Prompts are kept.  Only tensor
+    values change, so compiled kernels and captured CUDA graphs keep running.
+    """
+
+    control: torch.Tensor  # [B,C,T,H,W]
+    reset_rows: tuple[int, ...] = ()
+    seeds: tuple[int, ...] | None = None  # per reset row, same order as ``reset_rows``
+
+
 def _validate_attention_sink_config(kv_cache_inference_size: int | None, attention_sink_size: int) -> None:
     """Validate AR-inference attention-sink cache settings."""
     if attention_sink_size < 0:
@@ -652,7 +716,7 @@ class OmniMoTCausalModel(OmniMoTModel):
     def memory_init_training(
         self,
         gen_data_clean: GenerationDataClean,
-        data_batch: dict[str, torch.Tensor],
+        data_batch: dict[str, Any],
         input_text_indexes: list[list[int]],
     ) -> tuple[GenerationDataClean, dict]:
         """Prepare per-step memory info for causal training.
@@ -673,7 +737,13 @@ class OmniMoTCausalModel(OmniMoTModel):
             gen_data_clean = self._truncate_for_chunkwise_tf(gen_data_clean)
             self._assert_chunkwise_tf_shape(gen_data_clean)
 
+        # Keep the exact tokenizer task with its CP owner's cached training payload.
+        # Later CP window slots ignore the rank-local raw batch entirely.
+        text_system_prompt = resolve_text_system_prompt(data_batch)
+        if isinstance(text_system_prompt, (list, tuple)):
+            text_system_prompt = list(text_system_prompt)
         return gen_data_clean, {
+            TEXT_SYSTEM_PROMPT_KEY: text_system_prompt,
             "skip_text": False,
             "initial_temporal_offset": 0,
             "dual_kv_cache": None,
@@ -1265,8 +1335,6 @@ class OmniMoTCausalModel(OmniMoTModel):
         if dual_kv_cache is not None:
             vision_token_shapes = packed_seq.vision.token_shapes if packed_seq.vision else None
             if use_ar_rolling:
-                if batched_ar:
-                    raise ValueError("Batched AR does not support the compiled rolling-cache path")
                 # Static-shape AR inference at frame >= 1 (compile + CG).
                 # ``for_cuda_graphs=True`` makes ``read_for_layer`` return
                 # the full preallocated gen buffer + a real-length scalar
@@ -1290,8 +1358,11 @@ class OmniMoTCausalModel(OmniMoTModel):
                     write_gen_cache=write_gen_cache,
                     kv_head_shard_rank=kv_head_shard_rank,
                     kv_head_shard_size=kv_head_shard_size,
+                    coarse_cuda_graph=coarse_cuda_graph,
+                    stage_gen_cache_writes=stage_gen_cache_writes,
                     transfer_history_sink_tokens=transfer_history_sink_tokens,
                     transfer_history_max_tokens=transfer_history_max_tokens,
+                    batched=batched_ar,
                 )
             return ARMemoryState(
                 dual_kv_cache=dual_kv_cache,
@@ -1371,7 +1442,7 @@ class OmniMoTCausalModel(OmniMoTModel):
         self,
         *,
         data_batch: dict[str, Any],
-        control_latent_chunks: Iterable[torch.Tensor],  # items: [B,C,T,H,W]
+        control_latent_chunks: Iterable[torch.Tensor | StreamingTransferStep],  # items: [B,C,T,H,W]
         num_frames: int,
         seeds: list[int],
         guidance: float = 1.0,
@@ -1411,8 +1482,14 @@ class OmniMoTCausalModel(OmniMoTModel):
                 "Batched streaming Transfer requires teacher_forcing_replay_policy.control_visibility='causal', "
                 "controls_read_strict_past_clean_rgb=True, and clean_pass_causality='frame'"
             )
-        if self.config.compile.enabled:
-            raise ValueError("Batched streaming Transfer requires eager attention")
+        # Compile + CUDA graphs run the same static-shape path as single-view Transfer, with one
+        # buffer row per sample; compile without CUDA graphs runs the dynamic-shape path.
+        use_ar_rolling_path = (
+            self.config.compile.enabled
+            and self.config.compile.use_cuda_graphs
+            and self.config.compile.ar_post_saturation_mode == "default"
+        )
+        _validate_kv_cache_dtype_supports_cuda_graphs(self.config.kv_cache_dtype, use_ar_rolling_path)
         if self.parallel_dims is not None and (
             getattr(self.parallel_dims, "cp_enabled", False) or getattr(self.parallel_dims, "cfgp_enabled", False)
         ):
@@ -1429,6 +1506,7 @@ class OmniMoTCausalModel(OmniMoTModel):
             raise ValueError("Finite-window batched streaming Transfer currently requires chunk_size=1")
 
         reset_ar_post_saturation_runtime_for_generation(self)
+        self._reset_ar_forward_cuda_graph_runtime_for_generation()
         has_negative_prompt = has_negative_prompt or f"neg_{self.input_caption_key}" in data_batch
         cond_text_tokens, uncond_text_tokens = self._get_inference_text_tokens(data_batch, has_negative_prompt)
         if len(cond_text_tokens) != batch_size or len(uncond_text_tokens) != batch_size:
@@ -1451,14 +1529,19 @@ class OmniMoTCausalModel(OmniMoTModel):
         else:
             gen_cache_size = 2 * num_frames + 1
             physical_attention_sink_size = 0
+        kv_buffer_pool = self._ar_kv_buffer_pool_for_generation()
+        preallocate_ring = chunk_size == 1  # rings need uniform entry sizes; the cache is always finite here
         dual_kv_cache = [
             DualKVCache(
                 gen_cache_size=gen_cache_size,
                 kv_cache_dtype=self.config.kv_cache_dtype,
                 kv_cache_kernel_impl=self.config.kv_cache_kernel_impl,
                 attention_sink_size=physical_attention_sink_size,
+                buffer_pool=kv_buffer_pool,
+                pool_slot=layer_idx,
+                preallocate_ring=preallocate_ring,
             )
-            for _ in range(num_layers)
+            for layer_idx in range(num_layers)
         ]
         dual_kv_cache_uncond = (
             [
@@ -1467,8 +1550,11 @@ class OmniMoTCausalModel(OmniMoTModel):
                     kv_cache_dtype=self.config.kv_cache_dtype,
                     kv_cache_kernel_impl=self.config.kv_cache_kernel_impl,
                     attention_sink_size=physical_attention_sink_size,
+                    buffer_pool=kv_buffer_pool,
+                    pool_slot=num_layers + layer_idx,
+                    preallocate_ring=preallocate_ring,
                 )
-                for _ in range(num_layers)
+                for layer_idx in range(num_layers)
             ]
             if cfg_active
             else None
@@ -1495,6 +1581,8 @@ class OmniMoTCausalModel(OmniMoTModel):
         enable_fps_modulation = bool(self.config.diffusion_expert_config.enable_fps_modulation)
         base_fps = float(self.config.diffusion_expert_config.base_fps)
         control_chunks = iter(control_latent_chunks)
+        seeds = list(seeds)
+        row_position_base = [0] * batch_size  # per-row mRoPE frame clock origin (episode start)
         transfer_history_cache_idx = 0
         transfer_history_sink_tokens = 0
         transfer_history_control_max_tokens: int | None = None
@@ -1503,9 +1591,32 @@ class OmniMoTCausalModel(OmniMoTModel):
         for chunk_start, chunk_end in _iter_ar_chunk_ranges(0, num_frames, chunk_size):
             chunk_len = chunk_end - chunk_start
             try:
-                control_latent = next(control_chunks).to(**self.tensor_kwargs)  # [B,C,chunk_len,H,W]
+                step = next(control_chunks)
             except StopIteration as error:
                 raise ValueError(f"Missing streamed control chunk for frames [{chunk_start}, {chunk_end})") from error
+            reset_rows: tuple[int, ...] = ()
+            if isinstance(step, StreamingTransferStep):
+                reset_rows = tuple(step.reset_rows)
+                control_latent = step.control.to(**self.tensor_kwargs)  # [B,C,chunk_len,H,W]
+                if reset_rows:
+                    if not use_ar_rolling_path:
+                        raise ValueError("Per-row episode restarts require the compiled CUDA-graph AR path")
+                    if chunk_start == 0:
+                        raise ValueError("Rows cannot restart at the first step; they start fresh there already")
+                    if step.seeds is not None and len(step.seeds) != len(reset_rows):
+                        raise ValueError(f"Expected {len(reset_rows)} seeds for the reset rows, got {len(step.seeds)}")
+                    for position, row in enumerate(reset_rows):
+                        if row < 0 or row >= batch_size:
+                            raise IndexError(f"reset row {row} outside [0, {batch_size})")
+                        row_position_base[row] = chunk_start
+                        if step.seeds is not None:
+                            seeds[row] = int(step.seeds[position])
+                    for cache_list in (dual_kv_cache, dual_kv_cache_uncond or []):
+                        for cache in cache_list:
+                            cache.gen_cache.reset_rows(reset_rows, at_frame_idx=transfer_history_cache_idx)
+            else:
+                control_latent = step.to(**self.tensor_kwargs)  # [B,C,chunk_len,H,W]
+            row_positions = [chunk_start - base for base in row_position_base]  # per-row episode-local frame
             if control_latent.ndim != 5 or control_latent.shape[0] != batch_size:
                 raise ValueError(
                     f"Expected control latent [B,C,T,H,W] with B={batch_size}, got {tuple(control_latent.shape)}"
@@ -1529,7 +1640,7 @@ class OmniMoTCausalModel(OmniMoTModel):
             self._seed_frame_into_kv_cache(
                 frame_latent=control_latent,
                 frame_idx=transfer_history_cache_idx,
-                position_frame_idx=chunk_start,
+                position_frame_idx=row_positions,
                 dual_kv_cache=dual_kv_cache,
                 dual_kv_cache_uncond=dual_kv_cache_uncond,
                 cond_text_tokens=cond_text_tokens if include_text else None,
@@ -1555,12 +1666,13 @@ class OmniMoTCausalModel(OmniMoTModel):
                 transfer_history_sink_tokens=transfer_history_sink_tokens,
                 transfer_history_max_tokens=transfer_history_control_max_tokens,
                 batched_ar=True,
+                use_ar_rolling_path=use_ar_rolling_path,
             )
             transfer_history_cache_idx += 1
 
             noise_rows = []
             for sample_idx, seed in enumerate(seeds):
-                generator = torch.Generator(device=control_latent.device).manual_seed(seed + chunk_start)
+                generator = torch.Generator(device=control_latent.device).manual_seed(seed + row_positions[sample_idx])
                 noise_row = torch.empty_like(control_latent[sample_idx]).normal_(generator=generator)  # [C,T,H,W]
                 noise_rows.append(noise_row)
             curr_vision_latent = torch.stack(noise_rows, dim=0)  # [B,C,T,H,W]
@@ -1572,7 +1684,7 @@ class OmniMoTCausalModel(OmniMoTModel):
                 special_tokens=self.llm_special_tokens,
                 latent_patch_size=patch_size,
                 condition_frame_indexes_vision=[],
-                frame_idx=chunk_start,
+                frame_idx=row_positions,
                 temporal_compression_factor=tcf,
                 video_temporal_causal=video_temporal_causal,
                 enable_fps_modulation=enable_fps_modulation,
@@ -1589,7 +1701,7 @@ class OmniMoTCausalModel(OmniMoTModel):
                     special_tokens=self.llm_special_tokens,
                     latent_patch_size=patch_size,
                     condition_frame_indexes_vision=[],
-                    frame_idx=chunk_start,
+                    frame_idx=row_positions,
                     temporal_compression_factor=tcf,
                     video_temporal_causal=video_temporal_causal,
                     enable_fps_modulation=enable_fps_modulation,
@@ -1610,7 +1722,7 @@ class OmniMoTCausalModel(OmniMoTModel):
                 gen_data_clean=gen_data_clean,
                 dual_kv_cache=dual_kv_cache,
                 dual_kv_cache_uncond=dual_kv_cache_uncond,
-                frame_idx=chunk_start,
+                frame_idx=row_positions,
                 cache_frame_idx=transfer_history_cache_idx,
                 num_frames=num_frames,
                 guidance=guidance,
@@ -1622,7 +1734,7 @@ class OmniMoTCausalModel(OmniMoTModel):
                 distilled_num_steps=distilled_num_steps,
                 fps_vision_list=fps_vision_list,
                 fps_action_list=[24.0] * batch_size,
-                use_ar_rolling_path=False,
+                use_ar_rolling_path=use_ar_rolling_path,
                 transfer_history_sink_tokens=transfer_history_sink_tokens,
                 transfer_history_max_tokens=transfer_history_target_max_tokens,
                 batched_ar=True,
@@ -1639,7 +1751,7 @@ class OmniMoTCausalModel(OmniMoTModel):
                     self._seed_frame_into_kv_cache(
                         frame_latent=frame_latent,
                         frame_idx=transfer_history_cache_idx,
-                        position_frame_idx=frame_idx,
+                        position_frame_idx=[frame_idx - base for base in row_position_base],
                         dual_kv_cache=dual_kv_cache,
                         dual_kv_cache_uncond=dual_kv_cache_uncond,
                         cond_text_tokens=None,
@@ -1664,6 +1776,7 @@ class OmniMoTCausalModel(OmniMoTModel):
                         transfer_history_sink_tokens=transfer_history_sink_tokens,
                         transfer_history_max_tokens=transfer_history_target_max_tokens,
                         batched_ar=True,
+                        use_ar_rolling_path=use_ar_rolling_path,
                     )
                     transfer_history_cache_idx += 1
                 yield {"vision": denoised_chunk[:, :, local_idx : local_idx + 1]}  # [B,C,1,H,W]
@@ -1673,6 +1786,29 @@ class OmniMoTCausalModel(OmniMoTModel):
         except StopIteration:
             return
         raise ValueError(f"Received an extra streamed control chunk with shape {tuple(extra_chunk.shape)}")
+
+    def _reset_ar_forward_cuda_graph_runtime_for_generation(self) -> None:
+        """Validate the whole-forward CUDA-graph scope and drop last generation's captures."""
+        if self.config.compile.cuda_graph_scope == "forward" and self.config.compile.enabled:
+            if not self.config.compile.use_cuda_graphs or self.config.compile.ar_post_saturation_mode != "default":
+                raise ValueError(
+                    "compile.cuda_graph_scope='forward' requires compile.use_cuda_graphs=True and "
+                    "ar_post_saturation_mode='default' (it captures the static-shape AR forward itself)."
+                )
+            if self.parallel_dims is not None and self.parallel_dims.cfgp_enabled:
+                # CFG parallelism bypasses the whole-forward graphs, and the static-shape blocks
+                # (compiled with dynamic=False for capture) would recompile per frame.
+                raise ValueError("compile.cuda_graph_scope='forward' requires cfgp_size=1.")
+            # Graphs are bound to this generation's KV caches (und cache addresses); recapture per generation.
+            get_ar_forward_cuda_graph_runtime(self).reset_for_new_generation()
+
+    def _ar_kv_buffer_pool_for_generation(self) -> KVBufferPool:
+        """Model-owned pool for the per-layer K/V workspaces (stable addresses across generations)."""
+        kv_buffer_pool = getattr(self, "_ar_kv_buffer_pool", None)
+        if not isinstance(kv_buffer_pool, KVBufferPool):
+            kv_buffer_pool = KVBufferPool()
+            self._ar_kv_buffer_pool = kv_buffer_pool
+        return kv_buffer_pool
 
     @torch.no_grad()
     def iter_samples_from_batch_autoregressive(
@@ -1781,6 +1917,7 @@ class OmniMoTCausalModel(OmniMoTModel):
         )
         if sampler_mode not in ("rf", "distilled"):
             raise ValueError(f"sampler_mode must be 'rf' or 'distilled', got {sampler_mode!r}")
+        self._reset_ar_forward_cuda_graph_runtime_for_generation()
         reset_ar_post_saturation_runtime_for_generation(self)
 
         if mode == "video_transfer" and self._uses_multiview_flex_kv():
@@ -1941,14 +2078,16 @@ class OmniMoTCausalModel(OmniMoTModel):
         # ``use_ar_rolling_path`` enables the static-shape AR path
         # (``ARMemoryState(for_cuda_graphs=True)``) at frame >= 1; gated
         # by the velocity_fn on ``frame_idx > 0`` so frame 0 stays on
-        # the dynamic-shape branch.
+        # the dynamic-shape branch.  Single-view video_transfer uses the
+        # same path from cache idx 1 (first target denoise) onward; its
+        # sink/recent history limits are applied per cache entry inside
+        # ``ARMemoryState.init`` so the padded buffer's real prefix equals
+        # the dynamic branch's sliced history.
         use_ar_rolling_path = (
             self.config.compile.enabled
             and self.config.compile.use_cuda_graphs
             and self.config.compile.ar_post_saturation_mode == "default"
         )
-        if is_transfer and self.config.compile.enabled:
-            raise ValueError("video_transfer AR inference requires eager attention; run with --no-use-torch-compile.")
         _validate_kv_cache_dtype_supports_cuda_graphs(self.config.kv_cache_dtype, use_ar_rolling_path)
 
         # Chunkwise AR: generate ``chunk_size`` latent frames jointly per AR step
@@ -2001,14 +2140,23 @@ class OmniMoTCausalModel(OmniMoTModel):
             physical_attention_sink_size = self.config.attention_sink_size
         if gen_cache_size is None and use_ar_rolling_path:
             gen_cache_size = num_frames
+        # Large per-layer workspaces (in-place K/V rings and the CUDA-graph
+        # static history buffers) come from a model-owned pool so they keep
+        # their addresses across generations; see ``KVBufferPool``.  Rings need
+        # a finite cache; unbounded caches keep the lazily grown clone storage.
+        kv_buffer_pool = self._ar_kv_buffer_pool_for_generation()
+        preallocate_ring = gen_cache_size is not None and chunk_size == 1  # rings need uniform entry sizes
         dual_kv_cache = [
             DualKVCache(
                 gen_cache_size=gen_cache_size,
                 kv_cache_dtype=self.config.kv_cache_dtype,
                 kv_cache_kernel_impl=self.config.kv_cache_kernel_impl,
                 attention_sink_size=physical_attention_sink_size,
+                buffer_pool=kv_buffer_pool,
+                pool_slot=layer_idx,
+                preallocate_ring=preallocate_ring,
             )
-            for _ in range(num_layers)
+            for layer_idx in range(num_layers)
         ]
         dual_kv_cache_uncond = (
             [
@@ -2017,8 +2165,11 @@ class OmniMoTCausalModel(OmniMoTModel):
                     kv_cache_dtype=self.config.kv_cache_dtype,
                     kv_cache_kernel_impl=self.config.kv_cache_kernel_impl,
                     attention_sink_size=physical_attention_sink_size,
+                    buffer_pool=kv_buffer_pool,
+                    pool_slot=num_layers + layer_idx,
+                    preallocate_ring=preallocate_ring,
                 )
-                for _ in range(num_layers)
+                for layer_idx in range(num_layers)
             ]
             if cfg_active and not cfgp_enabled
             else None
@@ -2218,7 +2369,9 @@ class OmniMoTCausalModel(OmniMoTModel):
                     enable_fps_mod=_enable_fps_mod,
                     base_fps=_base_fps,
                     modality_margin=_margin,
-                    use_ar_rolling_path=False,
+                    # Cache idx 0 (text + first control) stays dynamic inside the
+                    # seed; every later control seed shares the static-shape path.
+                    use_ar_rolling_path=use_ar_rolling_path,
                     condition_frame_indexes_vision=list(range(chunk_len)),
                     transfer_history_sink_tokens=transfer_history_sink_tokens,
                     transfer_history_max_tokens=transfer_history_control_max_tokens,
@@ -2871,7 +3024,7 @@ class OmniMoTCausalModel(OmniMoTModel):
         base_fps: float,
         modality_margin: int,
         use_ar_rolling_path: bool = False,
-        position_frame_idx: int | None = None,
+        position_frame_idx: int | list[int] | None = None,
         condition_frame_indexes_vision: list[int] | None = None,
         transfer_history_sink_tokens: int = 0,
         transfer_history_max_tokens: int | None = None,
@@ -2921,6 +3074,8 @@ class OmniMoTCausalModel(OmniMoTModel):
             assert isinstance(seed, int)
             sigma = self.config.sigma_diffusion_forcing
             # Deterministic ε shared across cond/uncond packs.
+            if isinstance(position_frame_idx, list):
+                raise ValueError("diffusion_forcing seeding does not support per-row frame indices")
             g = torch.Generator(device=frame_latent.device).manual_seed(seed + position_frame_idx)
             eps = torch.empty_like(frame_latent).normal_(generator=g)  # [1,C,T,H,W]
             frame_in = sigma * eps + (1.0 - sigma) * frame_latent  # [1,C,T,H,W]
@@ -3003,6 +3158,10 @@ class OmniMoTCausalModel(OmniMoTModel):
         use_ar_rolling = use_ar_rolling_path and frame_idx > 0
         post_saturation_static_compile = is_ar_post_saturation_static_compile_frame(self, frame_idx)
         post_saturation_cuda_graph = is_ar_post_saturation_cuda_graph_frame(self, frame_idx)
+        # Whole-forward graph per (kind, branch); the Transfer history limit joins the key
+        # because control seeds and RGB refreshes see different history lengths.
+        forward_cuda_graph = use_ar_rolling and not cfgp_enabled and uses_ar_forward_cuda_graph(self)
+        forward_graph_kind = f"refresh:{transfer_history_max_tokens}"
         memory_info = {
             "dual_kv_cache": dual_kv_cache,
             "use_rolling_kv_cache": False,
@@ -3036,6 +3195,14 @@ class OmniMoTCausalModel(OmniMoTModel):
                 packed_seq=cond_pack,
                 memory_info=memory_info,
             )
+        elif forward_cuda_graph:
+            run_ar_forward_cuda_graph(
+                self,
+                kind=forward_graph_kind,
+                branch="conditional",
+                packed_seq=cond_pack,
+                memory_info=memory_info,
+            )
         else:
             torch.compiler.cudagraph_mark_step_begin()
             memory = self.build_memory_state(cond_pack, memory_info)
@@ -3061,6 +3228,14 @@ class OmniMoTCausalModel(OmniMoTModel):
                 run_ar_post_saturation_cuda_graph(
                     self,
                     kind="refresh",
+                    branch="unconditional",
+                    packed_seq=uncond_pack,
+                    memory_info=memory_info_uncond,
+                )
+            elif forward_cuda_graph:
+                run_ar_forward_cuda_graph(
+                    self,
+                    kind=forward_graph_kind,
                     branch="unconditional",
                     packed_seq=uncond_pack,
                     memory_info=memory_info_uncond,
@@ -3102,7 +3277,7 @@ class OmniMoTCausalModel(OmniMoTModel):
         initial_noise: torch.Tensor,  # [B,N_tokens_flat]
         *,
         seed: int | list[int],
-        frame_idx: int,
+        frame_idx: int | list[int],
         num_frames: int | None = None,
         distilled_num_steps: int | None = None,
     ) -> torch.Tensor:  # [B,N_tokens_flat]
@@ -3115,6 +3290,14 @@ class OmniMoTCausalModel(OmniMoTModel):
         sample_type = self.config.fixed_step_sampler_config.sample_type
         max_timestep = float(self.config.rectified_flow_inference_config.num_train_timesteps)
         x = initial_noise.float()  # [B,N_tokens_flat]
+        # One asynchronous copy of the schedule instead of a synchronising host->device scalar per
+        # step (same float32 rounding of the same Python values; the deltas are formed in double
+        # precision exactly as the previous per-step ``torch.as_tensor(sigma_next - sigma_cur)``).
+        sigmas = to_device_nonblocking(torch.tensor(full_t_list, dtype=torch.float32), x.device)  # [N_steps+1]
+        sigma_deltas = to_device_nonblocking(
+            torch.tensor([nxt - cur for cur, nxt in zip(full_t_list[:-1], full_t_list[1:])], dtype=torch.float32),
+            x.device,
+        )  # [N_steps]
         for step_idx, (sigma_cur, sigma_next) in enumerate(zip(full_t_list[:-1], full_t_list[1:])):
             timestep = torch.full(
                 (x.shape[0], 1),
@@ -3123,14 +3306,14 @@ class OmniMoTCausalModel(OmniMoTModel):
                 device=x.device,
             )  # [B,1]
             velocity = velocity_fn(x, timestep).float()  # [B,N_tokens_flat]
-            sigma_cur_tensor = torch.as_tensor(sigma_cur, dtype=torch.float32, device=x.device)  # []
+            sigma_cur_tensor = sigmas[step_idx]  # []
             x0_pred = x - sigma_cur_tensor * velocity  # [B,N_tokens_flat]
             if sigma_next == 0.0:
                 x = x0_pred  # [B,N_tokens_flat]
                 continue
-            sigma_next_tensor = torch.as_tensor(sigma_next, dtype=torch.float32, device=x.device)  # []
+            sigma_next_tensor = sigmas[step_idx + 1]  # []
             if sample_type == "ode":
-                delta_sigma = torch.as_tensor(sigma_next - sigma_cur, dtype=torch.float32, device=x.device)  # []
+                delta_sigma = sigma_deltas[step_idx]  # []
                 x = x + delta_sigma * velocity  # [B,N_tokens_flat]
             elif sample_type == "sde":
                 # Use a mixed seed so different frame/step pairs cannot collide
@@ -3142,12 +3325,15 @@ class OmniMoTCausalModel(OmniMoTModel):
                         raise ValueError(f"Expected {x.shape[0]} seeds, got {len(seed)}")
                     noise_rows = []
                     for sample_idx, sample_seed in enumerate(seed):
-                        step_seed = int(sample_seed) + int(frame_idx) * 1_000_003 + (int(step_idx) + 1) * 9_176
+                        row_frame = frame_idx[sample_idx] if isinstance(frame_idx, (list, tuple)) else frame_idx
+                        step_seed = int(sample_seed) + int(row_frame) * 1_000_003 + (int(step_idx) + 1) * 9_176
                         generator = torch.Generator(device=x.device).manual_seed(step_seed)
                         noise_row = torch.empty_like(x[sample_idx]).normal_(generator=generator)  # [N_tokens_flat]
                         noise_rows.append(noise_row)
                     noise = torch.stack(noise_rows, dim=0)  # [B,N_tokens_flat]
                 else:
+                    if isinstance(frame_idx, (list, tuple)):
+                        raise ValueError("Per-row frame indices require a per-row seed list")
                     step_seed = int(seed) + int(frame_idx) * 1_000_003 + (int(step_idx) + 1) * 9_176
                     generator = torch.Generator(device=x.device).manual_seed(step_seed)
                     noise = torch.empty_like(x).normal_(generator=generator)  # [B,N_tokens_flat]
@@ -3243,7 +3429,7 @@ class OmniMoTCausalModel(OmniMoTModel):
         num_steps: int,
         shift: float,
         seed: int | list[int],
-        sample_idx: int,
+        sample_idx: int | list[int],
         num_frames: int | None,
         distilled_num_steps: int | None,
     ) -> torch.Tensor:  # [B,N_tokens_flat]
@@ -3303,7 +3489,7 @@ class OmniMoTCausalModel(OmniMoTModel):
         seed: int | list[int],
         fps_vision_list: list[float],
         fps_action_list: list[float],
-        frame_idx: int | None = None,
+        frame_idx: int | list[int] | None = None,
         cache_frame_idx: int | None = None,
         num_frames: int | None = None,
         normalize_cfg: bool = False,
@@ -3357,6 +3543,8 @@ class OmniMoTCausalModel(OmniMoTModel):
         if frame_idx is None:
             frame_idx = 0
         if cache_frame_idx is None:
+            if isinstance(frame_idx, list):
+                raise ValueError("Per-row frame indices require an explicit cache_frame_idx")
             cache_frame_idx = frame_idx
 
         # packed_seq now passed as parameter, containing all frames up to current
@@ -3438,6 +3626,7 @@ class OmniMoTCausalModel(OmniMoTModel):
             use_ar_rolling = use_ar_rolling_path and cache_frame_idx > 0
             post_saturation_static_compile = is_ar_post_saturation_static_compile_frame(self, cache_frame_idx)
             post_saturation_cuda_graph = is_ar_post_saturation_cuda_graph_frame(self, cache_frame_idx)
+            forward_cuda_graph = use_ar_rolling and not cfgp_enabled and uses_ar_forward_cuda_graph(self)
 
             def run_branch(
                 pack: PackedSequence,
@@ -3471,6 +3660,14 @@ class OmniMoTCausalModel(OmniMoTModel):
                     output = run_ar_post_saturation_cuda_graph(
                         self,
                         kind="denoise",
+                        branch=branch,
+                        packed_seq=pack,
+                        memory_info=memory_info,
+                    )
+                elif forward_cuda_graph:
+                    output = run_ar_forward_cuda_graph(
+                        self,
+                        kind=f"denoise:{transfer_history_max_tokens}",
                         branch=branch,
                         packed_seq=pack,
                         memory_info=memory_info,

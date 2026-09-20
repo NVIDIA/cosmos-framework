@@ -39,6 +39,18 @@ class CompileConfig:
     # Whether to use CUDA graphs for faster inference. This option does not work during training.
     use_cuda_graphs: bool = False
 
+    # Granularity of CUDA-graph capture for AR inference (only with ``enabled`` and
+    # ``use_cuda_graphs``).  "block": every decoder block is compiled with
+    # ``torch.compile(mode="reduce-overhead")`` and replays its own CUDA-graph tree, so a
+    # forward still pays one graph launch per block plus the Python between blocks.
+    # "forward": blocks are compiled without CUDA-graph trees and the AR loop captures one
+    # explicit graph per whole forward (denoise / KV-refresh × CFG branch) on the
+    # static-shape KV path from cache index 1 onward.
+    cuda_graph_scope: Literal["block", "forward"] = attrs.field(
+        default="block",
+        validator=attrs.validators.in_({"block", "forward"}),
+    )
+
     # AR-inference-specific behavior once the rolling KV window saturates.
     # "default" uses the global compile settings for the entire generation.
     # "static-compile" keeps the normal pre-saturation path, then uses dedicated

@@ -389,3 +389,62 @@ class TestFSDPCPUOffload:
             parallelize_unified_mot(model, parallel_dims, compile_config, SimpleNamespace())
 
         assert calls == ["ac", "compile", "fsdp"]
+
+
+class TestCudaGraphScope:
+    """``cuda_graph_scope`` decides whether inductor's CUDA-graph trees wrap each block.
+
+    With scope "forward" the AR loop captures one explicit graph around the whole forward, and a
+    capture cannot nest the per-block graph trees, so the blocks must compile with ``mode=None``.
+    """
+
+    @staticmethod
+    def _model_with_one_layer() -> torch.nn.Module:
+        block = torch.nn.Identity()
+        layers = torch.nn.Module()
+        layers.register_module("0", block)
+        inner = torch.nn.Module()
+        inner.layers = layers
+        model = torch.nn.Module()
+        model.model = inner
+        return model
+
+    @pytest.mark.parametrize(
+        ("use_cuda_graphs", "scope", "expected_mode"),
+        [(True, "block", "reduce-overhead"), (True, "forward", None), (False, "block", None), (False, "forward", None)],
+    )
+    def test_block_scope_alone_uses_reduce_overhead(self, use_cuda_graphs: bool, scope: str, expected_mode) -> None:
+        model = self._model_with_one_layer()
+        seen_modes: list[object] = []
+
+        def fake_compile(block, **kwargs):
+            seen_modes.append(kwargs["mode"])
+            return block
+
+        with patch("cosmos_framework.model.generator.mot.parallelize_unified_mot.torch.compile", fake_compile):
+            apply_compile(model, CompileConfig(enabled=True, use_cuda_graphs=use_cuda_graphs, cuda_graph_scope=scope))
+
+        assert seen_modes == [expected_mode]
+
+    @pytest.mark.parametrize("scope", ["block", "forward"])
+    def test_forward_scope_forces_static_shapes(self, scope: str) -> None:
+        model = self._model_with_one_layer()
+        seen_dynamic: list[object] = []
+
+        def fake_compile(block, **kwargs):
+            seen_dynamic.append(kwargs["dynamic"])
+            return block
+
+        with patch("cosmos_framework.model.generator.mot.parallelize_unified_mot.torch.compile", fake_compile):
+            apply_compile(
+                model, CompileConfig(enabled=True, use_cuda_graphs=True, cuda_graph_scope=scope, compile_dynamic=True)
+            )
+
+        # Symbolic shapes stage Python floats through pinned host memory inside the compiled wrapper,
+        # which a whole-forward capture would replay from freed memory; forward scope pins static shapes.
+        assert seen_dynamic == [scope == "block"]
+
+    def test_scope_is_validated_and_defaults_to_block(self) -> None:
+        assert CompileConfig().cuda_graph_scope == "block"
+        with pytest.raises(ValueError):
+            CompileConfig(cuda_graph_scope="whole")  # type: ignore[arg-type]
