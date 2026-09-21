@@ -1,7 +1,8 @@
 # Decoupling the frozen Reasoner from Nano generator SFT
 
-Status: Phase 1 and the Phase 2 offline extraction MVP are implemented; an
-eight-H20 short-run FSDP/EMA A/B is complete, while full-corpus and
+Status: Phase 1, the Phase 2 offline extraction MVP, and the Phase 3 remote
+transport MVP are implemented; an eight-H20 short-run offline FSDP/EMA A/B is
+complete, while real-GPU remote capacity tests, full-corpus extraction, and
 compile-enabled production validation remain pending
 
 Target recipe: `vision_sft_nano` and later Nano multiview SFT variants
@@ -31,15 +32,19 @@ Implemented in this branch:
 - strict external-backend fingerprints plus cache/model layer, KV-head, and
   head-dimension validation before FSDP materialization;
 - offline-provider submission before noising and synchronized failure handling
-  before the FSDP forward; and
+  before the FSDP forward;
+- a shared Reasoner-only runtime, versioned gRPC protocol, asynchronous remote
+  provider, bounded single-GPU service, layer/K/V chunk streaming, end-to-end
+  checksums, strict startup handshake, deadlines, and transient retries; and
 - CPU contract/storage tests plus a tiny H20 CUDA test comparing all generator
   outputs and gradients between the full cached model and the structurally
   pruned model.
 
 Not implemented yet:
 
-- remote and read-through clients/services (the backend names and `endpoint`
-  field are reserved, but selecting either backend currently fails explicitly);
+- the `read_through` cache/service composition and persistent miss writes;
+- token-bucket dynamic batching inside a Reasoner replica (the remote MVP has a
+  bounded queue but deliberately executes variable-length requests serially);
 - layerwise H2D staging (`layerwise_h2d=true` is rejected);
 - automatic content-digest derivation for Reasoner/tokenizer/dataset artifacts;
   the CLI currently requires the three pinned fingerprints explicitly; and
@@ -56,11 +61,11 @@ cross-attention K/V tensors. The configuration contract names these backends:
 2. `inline` captures Reasoner K/V locally, then runs a second cached GEN-only pass;
    it is the numerical-reference path.
 3. `offline` reads precomputed immutable Reasoner K/V shards and is implemented.
-4. `remote` will obtain the same tensors asynchronously from dedicated Reasoner workers.
+4. `remote` obtains the same tensors asynchronously from dedicated Reasoner workers.
 5. `read_through` will check the offline cache first and send misses to remote workers.
 
-Only `joint`, `inline`, and `offline` are executable today. `remote` and
-`read_through` intentionally raise `NotImplementedError` during provider creation.
+`joint`, `inline`, `offline`, and `remote` are executable today. `read_through`
+intentionally raises `NotImplementedError` during provider creation.
 
 For a fixed SFT corpus, `offline` should be the default. It removes the Reasoner from
 every training rank, is deterministic, and turns Reasoner work into a one-time dataset
@@ -144,12 +149,12 @@ bytes per UND token
 ```
 
 | Framed UND tokens | BF16 K/V per example |
-|---:|---:|
-| 256 | 36 MiB |
-| 512 | 72 MiB |
-| 1,024 | 144 MiB |
-| 1,790 | 251.7 MiB |
-| 2,048 | 288 MiB |
+| ----------------: | -------------------: |
+|               256 |               36 MiB |
+|               512 |               72 MiB |
+|             1,024 |              144 MiB |
+|             1,790 |            251.7 MiB |
+|             2,048 |              288 MiB |
 
 The local full BridgeData manifest has 1,222 examples. With the recipe's real Qwen
 tokenization, it has 1,082 framed tokens on average (p50 1,004, p95 1,586, maximum
@@ -159,12 +164,12 @@ remote or read-through backend becomes attractive.
 
 The Nano language model contains approximately:
 
-| Component | Parameters | BF16 logical size |
-|---|---:|---:|
-| GEN layer pathway | 6.946B | 12.94 GiB |
-| UND layer pathway | 6.946B | 12.94 GiB |
-| UND embeddings + LM head + final norm | 1.245B | 2.32 GiB |
-| Total removable Reasoner | 8.191B | 15.26 GiB |
+| Component                             | Parameters | BF16 logical size |
+| ------------------------------------- | ---------: | ----------------: |
+| GEN layer pathway                     |     6.946B |         12.94 GiB |
+| UND layer pathway                     |     6.946B |         12.94 GiB |
+| UND embeddings + LM head + final norm |     1.245B |          2.32 GiB |
+| Total removable Reasoner              |     8.191B |         15.26 GiB |
 
 A real Nano meta-model audit measured 15,136,811,008 parameters in the full
 language model and 6,946,075,648 after pruning: 8,190,735,360 parameters
@@ -202,16 +207,21 @@ class ReasonerFeatureBatch:
     fingerprints: tuple[str, ...] = ()
 
 class ReasonerFeatureProvider(Protocol):
+    @property
+    def signature(self) -> ReasonerFeatureSignature: ...
+
     def submit(
         self, requests: Sequence[ReasonerFeatureRequest]
     ) -> Future[ReasonerFeatureBatch]: ...
 ```
 
-`submit` is a future-shaped contract for every provider. The current offline provider
-performs its local read synchronously and returns an already-completed future. The
-training path submits after final sequence packing and before noising, then resolves
-the future before entering the FSDP forward. A future asynchronous provider can use
-the same seam to overlap provider work with noising or other preparation.
+`submit` is a future-shaped contract for every provider. The offline provider performs
+its local read synchronously and returns an already-completed future; the remote
+provider snapshots the small CPU request tensors and immediately schedules a streaming
+RPC on a private worker thread. The training path submits after final sequence packing
+and before noising, then resolves the future before entering the FSDP forward. This
+currently overlaps noising and packed-sequence H2D only; VAE encode has already
+completed. Moving request construction before VAE encode is a later performance step.
 
 `extract_reasoner_feature_batch(causal_lm, requests)` is the current UND-only
 reference extractor. The immutable cache APIs are in
@@ -347,13 +357,14 @@ cannot prove whether EMA was loaded or left randomly initialized.
 The shipped full Nano DCP was audited against the pruned vision-SFT target: all
 405 target tensors (397 language-model GEN tensors plus 8 VFM tensors) exist with
 matching shapes, and strict DCP subset loading succeeds while ignoring source-only
-UND tensors. This validates the model-only warm-start shape contract; a distributed
-generator-only save/optimizer/resume integration test is still pending.
+UND tensors. Phase 3 additionally completed a real seven-rank remote-conditioning
+optimizer step, wrote a generator-only DCP, and loaded that DCP through a
+resume-only reshard gate. Resume-and-continue parity is still pending.
 
 Still to validate before production use:
 
-- full-checkpoint to generator-only warm start for both DCP and safetensors;
-- generator-only save/resume while preserving immutable cache identity;
+- full-checkpoint to generator-only warm start from safetensors;
+- generator-only resume-and-continue while preserving immutable cache identity;
 - reconstruction of a full inference model from the generator checkpoint and pinned
   Reasoner; and
 - mismatched generator-checkpoint/cache provenance rejection on resume.
@@ -479,8 +490,9 @@ Cache the exact text feature, not only a video UUID. For the current SFT dataset
 
 ## Remote backend
 
-This section is a design target. No remote transport, client, service, or
-read-through write path is implemented in the current branch.
+The remote MVP is implemented. The read-through write path, TLS/authentication,
+content-addressed server cache, dynamic batching, and production load-balancer
+deployment remain future work.
 
 Run Reasoner workers as a separate service allocation, not as ranks in the generator's
 FSDP/DDP process group. Mixing service ranks into the training world size would make
@@ -491,29 +503,94 @@ Recommended data flow:
 ```text
 generator rank -- submit(token IDs, positions, fingerprint) --> request queue
        |                                                    reasoner replica
-       +-- VAE encode + noise + pack (overlap)                    |
-       |<----------- per-layer K/V or cache URI -----------------+
+       +-- noise + packed H2D (limited overlap)                   |
+       |<------ checksummed layer/K/V chunks over gRPC -----------+
        +-- validate fingerprint --> GEN-only forward/backward
 ```
+
+The service is one independent process with one complete Reasoner replica and no
+PyTorch process group. `GetInfo` performs a fail-closed protocol, identity, dtype, and
+tensor-geometry handshake before the Generator model is materialized. `Generate` is a
+server-streaming RPC: its header pins request order and offsets, each tensor chunk has a
+SHA-256 digest, and the trailer covers raw tensors in canonical
+`K0 || V0 || K1 || V1 ...` order. The client discards every partial response.
+
+The v1 wire request preserves the complete `causal_offsets` array so later per-view
+captions do not require a protocol redesign. The current runtime advertises only the
+`single_document` capability and explicitly rejects multi-document requests; 7/11-view
+cached attention and per-view-caption parity remain Phase 4 work.
+
+Install the optional transport dependency and start one service replica only after its
+Reasoner checkpoint has been made locally available:
+
+```bash
+uv sync --extra train --extra reasoner-remote
+
+CUDA_VISIBLE_DEVICES=0 LD_LIBRARY_PATH='' \
+python -m cosmos_framework.scripts.serve_reasoner_features \
+  --sft-toml examples/toml/sft_config/vision_sft_nano.toml \
+  --checkpoint /shared/checkpoints/iter_000000100 \
+  --checkpoint-source regular \
+  --reasoner-fingerprint <reasoner-content-digest> \
+  --tokenizer-fingerprint <tokenizer-content-digest> \
+  --framing-fingerprint <framing-content-digest> \
+  --host 127.0.0.1 --port 50051
+```
+
+The service loader resolves only the Reasoner-relevant part of the SFT recipe.
+It prunes the unused training dataloaders, video VAE, and trainer checkpoint
+input before OmegaConf resolution, so `DATASET_PATH`, `WAN_VAE_PATH`, and
+`BASE_CHECKPOINT_PATH` are not required for this command. `--checkpoint` is the
+only checkpoint path used by the service runtime.
+
+The MVP transport uses insecure gRPC and has no client authentication. It binds
+to loopback by default; use a non-loopback `--host` only inside an isolated,
+trusted network. Checksums detect corrupted payloads but do not protect against
+tampering or unauthorized requests. TLS and authentication are required before
+exposing a service across hosts or behind a production load balancer.
+
+Point the Generator recipe at that service:
+
+```toml
+[model.reasoner_conditioning]
+backend = "remote"
+endpoint = "reasoner-lb.example:50051"
+reasoner_fingerprint = "<same-reasoner-content-digest>"
+tokenizer_fingerprint = "<same-tokenizer-content-digest>"
+framing_fingerprint = "<same-framing-content-digest>"
+strict_fingerprint = true
+connect_timeout_s = 30.0
+request_timeout_s = 300.0
+request_max_retries = 2
+retry_backoff_s = 0.25
+```
+
+Retries are bounded by one absolute request deadline and apply only to gRPC
+`UNAVAILABLE` and `RESOURCE_EXHAUSTED`. Identity, protocol, fingerprint, checksum,
+shape, and dtype failures are terminal. There is no silent fallback to a joint
+Reasoner.
 
 Operational requirements:
 
 - replicate the 8B Reasoner one per service GPU; prefer replica/data parallelism over
   tensor parallelism because Nano fits on one modern accelerator;
-- dynamic-batch requests by total UND tokens, not request count;
+- admit and queue by total UND tokens, not request count; the MVP serializes GPU
+  execution, and a later dynamic batcher must preserve variable-length causal isolation;
 - use immutable request IDs, bounded queues, backpressure, deadlines, and idempotent
   retries;
-- keep a memory and/or NVMe content-addressed cache in front of Reasoner execution;
-- expose queue time, Reasoner compute time, serialization time, bytes sent, cache-hit
-  rate, and client wait time; and
-- fail closed on version mismatches. An unavailable service may fall back to an exact
-  disk hit, but not silently to a different Reasoner or quantization.
+- add a memory and/or NVMe content-addressed cache in front of Reasoner execution;
+- expose queue time, Reasoner compute time, D2H time, CPU stream-preparation time, and
+  bytes through the response trailer; production percentile export and cache-hit metrics are
+  still pending; and
+- fail closed on version mismatches. A future read-through provider may use an exact
+  disk hit, but must not silently switch to a different Reasoner or quantization.
 
 For a 1,024-token prompt the BF16 response is 144 MiB. At `R` examples/s, required
 payload bandwidth is approximately `144 * R MiB/s`, before transport framing. This is
 usually modest relative to long-video generator step time, but it must be measured at
 the intended number of training ranks. Start with a simple streaming RPC into pinned
-CPU buffers plus asynchronous H2D copies. Add CUDA IPC/NVLink for same-node workers or
+CPU buffers. Pinned staging and layerwise asynchronous H2D are not yet implemented.
+Add CUDA IPC/NVLink for same-node workers or
 CUDA-aware UCX/RDMA for cross-node workers only if profiling shows transport on the
 critical path.
 
@@ -527,25 +604,29 @@ generator nodes.
 Keep the feature contract in training/model code; a training job must not import Ray or
 other heavyweight inference-only dependencies.
 
-| Area | Current status |
-|---|---|
-| `configs/base/defaults/model_config.py` | Implemented typed runtime configuration and compatibility validation. |
-| `configs/toml_config/sft_config.py` | Implemented the flat `[model.reasoner_conditioning]` TOML schema. |
-| `model/generator/mot/unified_mot.py` | Implemented optional UND construction, GEN-only execution, and `prune_und_pathway_`. |
-| `model/generator/mot/cosmos3_vfm_network.py` | Implemented generator-only packed layout without text embedding. |
-| `model/generator/omni_mot_model.py` | Implemented inline/offline lifecycle, pre-noise submission, synchronized resolution, structural pruning, and startup guards. Remote/read-through remain pending. |
-| `model/generator/reasoner_features.py` | Implemented request/result types, UND-only extraction, inline/static memory, and exact two-way external-K/V attention. |
-| `model/generator/reasoner_feature_cache.py` | Implemented immutable cache identity, fingerprints, bounded/resumable sharded writers, distributed finalization, manifest validation, and offline provider. |
-| `model/generator/mot/multiview_attention.py` | Pending cache-aware per-view/maskless/Flex support. |
-| `data/generator/local_datasets/sft_reasoner_documents.py` | Implemented finite deterministic standard-SFT document enumeration with training framing parity. |
-| `data/generator/` | Centralized multi-batch prefetch/cache-handle plumbing remains pending. |
-| `checkpoint/reasoner_only.py` | Implemented strict regular/EMA Reasoner-only local-DCP loading with independent reads and safe Generator/visual source-leaf omission; generator resume/composition validation remains pending. |
-| `scripts/extract_reasoner_features.py` | Implemented resumable distributed shared-POSIX cache extraction and atomic publication without NCCL collectives. |
-| `examples/toml/sft_config/` | Pending opt-in Nano cached-Reasoner recipe after full-scale parity passes. |
+| Area                                                      | Current status                                                                                                                                                                                                                                         |
+| --------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `configs/base/defaults/model_config.py`                   | Implemented typed runtime configuration and compatibility validation.                                                                                                                                                                                  |
+| `configs/toml_config/sft_config.py`                       | Implemented the flat `[model.reasoner_conditioning]` TOML schema.                                                                                                                                                                                      |
+| `model/generator/mot/unified_mot.py`                      | Implemented optional UND construction, GEN-only execution, and `prune_und_pathway_`.                                                                                                                                                                   |
+| `model/generator/mot/cosmos3_vfm_network.py`              | Implemented generator-only packed layout without text embedding.                                                                                                                                                                                       |
+| `model/generator/omni_mot_model.py`                       | Implemented inline/offline/remote lifecycle, pre-noise submission, synchronized resolution, structural pruning, and provider-neutral startup signature guards. Read-through remains pending.                                                           |
+| `model/generator/reasoner_features.py`                    | Implemented identity/fingerprint/signature/request/result types, UND-only extraction, inline/static memory, and exact two-way external-K/V attention.                                                                                                  |
+| `model/generator/reasoner_feature_cache.py`               | Implemented immutable cache identity, fingerprints, bounded/resumable sharded writers, distributed finalization, manifest validation, and offline provider.                                                                                            |
+| `model/generator/reasoner_runtime.py`                     | Implemented shared Reasoner-only construction, strict DCP restore, request admission/fingerprint validation, and serialized execution for offline extraction and serving.                                                                              |
+| `model/generator/reasoner_remote.py`                      | Implemented tensor codec, protocol validation, streaming response assembly, checksums, asynchronous client, deadlines, and bounded transient retries.                                                                                                  |
+| `model/generator/reasoner_remote_server.py`               | Implemented one-replica token-bounded gRPC service, single-GPU execution, timing metadata, backpressure, and unhealthy-after-OOM/runtime-invariant behavior.                                                                                           |
+| `protos/reasoner_features/v1/`                            | Implemented versioned `GetInfo` and server-streaming `Generate` protobuf schema and generated Python bindings.                                                                                                                                         |
+| `model/generator/mot/multiview_attention.py`              | Pending cache-aware per-view/maskless/Flex support.                                                                                                                                                                                                    |
+| `data/generator/local_datasets/sft_reasoner_documents.py` | Implemented finite deterministic standard-SFT document enumeration with training framing parity.                                                                                                                                                       |
+| `data/generator/`                                         | Centralized multi-batch prefetch/cache-handle plumbing remains pending.                                                                                                                                                                                |
+| `checkpoint/reasoner_only.py`                             | Implemented strict regular/EMA Reasoner-only local-DCP loading with independent reads, safe Generator/visual source-leaf omission, and a seven-rank generator-only save/resume-load smoke; resume-and-continue/composition validation remains pending. |
+| `scripts/extract_reasoner_features.py`                    | Implemented resumable distributed shared-POSIX cache extraction and atomic publication without NCCL collectives.                                                                                                                                       |
+| `scripts/serve_reasoner_features.py`                      | Implemented one-process/one-GPU remote service launch after load-before-listen readiness.                                                                                                                                                              |
+| `examples/toml/sft_config/`                               | Pending opt-in Nano cached-Reasoner recipe after full-scale parity passes.                                                                                                                                                                             |
 
-An optional remote server can live under the inference/serving tree, but it should
-implement the neutral wire schema without making the training client depend on that
-server implementation.
+The training model imports only the provider/client module when `backend="remote"`;
+it does not import the server implementation or Ray/vLLM inference infrastructure.
 
 ## Implementation sequence
 
@@ -613,13 +694,60 @@ offline reduced mean step time by 17.05%, increased aggregate token throughput b
 the expected direction and magnitude, but the hot 1.18-GiB cache is not a proxy for
 full-corpus shared-filesystem behavior.
 
-### Phase 3: remote/read-through provider — pending
+### Phase 3: remote provider — MVP implemented; read-through pending
 
-1. Reuse the implemented request/result and fingerprint schema.
-2. Add remote client/service transport and asynchronous prefetch.
-3. Benchmark one service GPU against increasing generator-rank counts and scale
-   replicas based on measured queueing, not a fixed assumed ratio.
-4. Add persistent read-through writes only after cache-key and atomicity tests pass.
+Completed:
+
+1. Reused the provider-neutral request/result, signature, and fingerprint schema.
+2. Added a versioned protobuf handshake and chunked server-streaming gRPC transport.
+3. Added the asynchronous client/provider, absolute deadlines, bounded transient
+   retries, strict integrity validation, and synchronized distributed failure surface.
+4. Added a shared Reasoner runtime and one-process/one-GPU service with token-bounded
+   backpressure and no Generator process-group membership.
+5. Added CPU codec/corruption/retry tests and a localhost in-process gRPC end-to-end
+   test.
+6. Loaded the real 36-layer Nano DCP into independent H20 replicas and verified all K/V
+   tensors bitwise across direct extraction and the localhost remote service.
+7. Added all-rank fail-closed gates for provider startup, full feature-signature
+   validation, synchronous request construction/submission, and asynchronous
+   resolution before any rank enters the corresponding FSDP collective.
+8. Completed one real optimizer step with one dedicated Reasoner H20 and seven
+   Generator FSDP H20s, including warm start, forward/backward, optimizer/EMA,
+   and a generator-only checkpoint save.
+
+Still pending:
+
+1. Benchmark one service GPU against 1/2/4/8 Generator ranks and scale replicas from
+   measured queue, compute, D2H, network, client-wait, and Generator-step percentiles.
+2. Repeat parity and throughput with representative/max-length prompts and batched
+   requests rather than the short correctness smoke.
+3. Move request submission early enough to overlap VAE work, then re-run throughput
+   parity.
+4. Implement token-budget dynamic batching only after variable-length output parity.
+5. Add persistent read-through writes only after cache-key and atomicity tests pass.
+
+The real-model correctness smoke used one H20 for the service and a second H20 for the
+direct reference, the shipped `Cosmos3-Nano` regular DCP, BF16, and a 10-token framed
+request. Every K/V tensor across 36 layers was bitwise equal. Direct extraction took
+0.293 s; localhost remote round-trip took 0.326 s. The server reported 0.288 s compute,
+2.0 ms D2H, 3.0 ms CPU stream preparation, and negligible queue time. The service
+allocated about 15.26 GiB after loading and peaked at about 15.40 GiB reserved. These numbers
+validate the transport and runtime, not capacity: the prompt was intentionally short,
+the network path was loopback, and there were no concurrent Generator ranks.
+
+The end-to-end training smoke reserved physical GPU 0 for the Reasoner and ran a
+seven-rank Generator FSDP job on GPUs 1--7 with a 16,384-token packing cap. One
+optimizer step completed at loss 0.2512 with no CUDA OOM or RPC error. Generator
+CUDA allocator peaks were 20.41--20.46 GiB allocated and 21.47--21.51 GiB reserved;
+physical peaks were 23.20--25.11 GiB. The Reasoner peaked at 18.49 GiB. The reported
+71.79-second iteration included a 31.37-second, 104-GiB checkpoint save, so it is
+not comparable to the earlier steady-state eight-rank benchmark. The saved model
+contains only 405 live plus 405 EMA Generator leaves and no Reasoner embedding,
+LM-head, or UND-expert leaves. Raw logs and telemetry are under
+`outputs/nano_sft_reasoner_benchmark/remote_smoke_7gpu_1step_20260922_v1`.
+After the final all-rank signature gate was added, the same seven-rank topology
+also completed a resume-only load of that checkpoint in 38.70 seconds without
+an error or additional checkpoint write.
 
 ### Phase 4: broaden support — pending
 
@@ -635,17 +763,22 @@ Validated in the current implementation:
 - inline capture followed by static GEN-only replay;
 - tiny dense Qwen output and all-generator-gradient parity between the full cached
   model and `prune_und_pathway_` model on one H20;
-- absence of UND parameters from the structurally pruned state dict; and
+- absence of UND parameters from the structurally pruned state dict;
 - immutable-cache round trips, batching across shards, content-addressed prompt
   reuse, cache misses, stale fingerprints, malformed manifests, and corrupt shard
-  checksums.
+  checksums; and
+- remote BF16 tensor codec and multi-chunk round trips, corrupt checksum/order
+  rejection, idempotent transient retry behavior, identity mismatch rejection, and a
+  localhost gRPC provider/service end-to-end test.
 
 Remaining correctness gates:
 
 - one optimizer step produces equivalent selected weights;
 - normal prompt, CFG-null prompt, maximum-length prompt, and per-view captions;
 - full checkpoint to generator-only warm start, generator-only resume, and full-model
-  inference composition; and
+  inference composition;
+- representative/max-length remote K/V parity, service restart/OOM behavior, and
+  capacity scaling; and
 - end-to-end stale cache/config provenance is rejected during distributed startup
   and resume, before any FSDP forward.
 

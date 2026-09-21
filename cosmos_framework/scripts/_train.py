@@ -30,15 +30,16 @@ from cosmos_framework.inference.common.config import (
     structure_config,
 )
 from cosmos_framework.inference.common.init import init_output_dir, is_rank0
-from cosmos_framework.utils.flags import SMOKE
+from cosmos_framework.model._base import close_model
 from cosmos_framework.trainer import ImaginaireTrainer
 from cosmos_framework.utils import log
+from cosmos_framework.utils.flags import SMOKE
 
 if TYPE_CHECKING:
     from torch.utils.data import DataLoader
 
-    from cosmos_framework.utils.config import Config
     from cosmos_framework.model.generator.omni_mot_model import OmniMoTModel
+    from cosmos_framework.utils.config import Config
 
 
 def _validate_config_file(v: Path) -> Path:
@@ -145,18 +146,25 @@ def train(args: Args) -> None:
         # Trainer init sets the rank-local CUDA device before tokenizers allocate weights.
         trainer: "ImaginaireTrainer" = config.trainer.type(config)
         model: "OmniMoTModel" = hydra.utils.instantiate(config.model)
-        dataloader_train: "DataLoader" = hydra.utils.instantiate(config.dataloader_train)
-        dataloader_val: "DataLoader" = hydra.utils.instantiate(config.dataloader_val)
+        try:
+            dataloader_train: "DataLoader" = hydra.utils.instantiate(config.dataloader_train)
+            dataloader_val: "DataLoader" = hydra.utils.instantiate(config.dataloader_val)
 
-    if args.dry_run:
-        return
+            if args.dry_run:
+                close_model(model)
+                return
 
-    # Start training
-    trainer.train(
-        model=model,
-        dataloader_train=dataloader_train,
-        dataloader_val=dataloader_val,
-    )
+            # Start training
+            trainer.train(
+                model=model,
+                dataloader_train=dataloader_train,
+                dataloader_val=dataloader_val,
+            )
+        except BaseException as error:
+            close_model(model, primary_error=error)
+            raise
+        else:
+            close_model(model)
 
 
 def main() -> None:

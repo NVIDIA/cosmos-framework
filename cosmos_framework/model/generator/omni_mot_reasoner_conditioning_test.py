@@ -8,6 +8,7 @@ from unittest.mock import MagicMock
 import pytest
 import torch
 
+import cosmos_framework.model.generator.omni_mot_model as omni_mot_model_module
 from cosmos_framework.callbacks.load_pretrained import (
     _warm_start_partially_skips_ema,
     _warm_start_skips_complete_ema,
@@ -16,18 +17,20 @@ from cosmos_framework.data.generator.sequence_packing import PackedSequence
 from cosmos_framework.model.generator.omni_mot_model import (
     REASONER_FEATURE_BATCH_KEY,
     REASONER_FEATURE_FUTURE_KEY,
+    REASONER_SAMPLE_KEYS_KEY,
     OmniMoTModel,
+    _create_external_reasoner_provider_fail_closed,
     _reasoner_cache_identity,
     _validate_reasoner_conditioning,
 )
 from cosmos_framework.model.generator.reasoner_feature_cache import (
-    OfflineReasonerFeatureProvider,
     ReasonerFeatureCacheIdentity,
     build_reasoner_feature_requests,
 )
 from cosmos_framework.model.generator.reasoner_features import (
     CapturingReasonerKVMemoryState,
     ReasonerFeatureBatch,
+    ReasonerFeatureSignature,
     ReasonerLayerKV,
     StaticReasonerKVMemoryState,
 )
@@ -111,6 +114,79 @@ def test_non_external_backend_ignores_partial_cache_identity() -> None:
 
 @pytest.mark.level(0)
 @pytest.mark.gpus(0)
+def test_external_provider_startup_preserves_non_distributed_failure(monkeypatch: pytest.MonkeyPatch) -> None:
+    startup_error = ValueError("identity mismatch")
+    create_provider = MagicMock(side_effect=startup_error)
+    monkeypatch.setattr(torch.distributed, "is_initialized", lambda: False)
+
+    with pytest.raises(ValueError) as raised:
+        _create_external_reasoner_provider_fail_closed(create_provider)
+
+    assert raised.value is startup_error
+
+
+@pytest.mark.level(0)
+@pytest.mark.gpus(0)
+def test_external_provider_startup_synchronizes_local_failure(monkeypatch: pytest.MonkeyPatch) -> None:
+    startup_error = ValueError("identity mismatch")
+    create_provider = MagicMock(side_effect=startup_error)
+    monkeypatch.setattr(torch.distributed, "is_initialized", lambda: True)
+    monkeypatch.setattr(torch.distributed, "get_world_size", lambda: 2)
+
+    def gather(messages: list[str | None], local_message: str | None) -> None:
+        assert local_message == "ValueError: identity mismatch"
+        messages[:] = [local_message, None]
+
+    monkeypatch.setattr(torch.distributed, "all_gather_object", gather)
+
+    with pytest.raises(RuntimeError, match="rank 0: ValueError: identity mismatch") as raised:
+        _create_external_reasoner_provider_fail_closed(create_provider)
+
+    assert raised.value.__cause__ is startup_error
+
+
+@pytest.mark.level(0)
+@pytest.mark.gpus(0)
+def test_external_provider_startup_closes_local_provider_on_remote_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    provider = MagicMock()
+    monkeypatch.setattr(torch.distributed, "is_initialized", lambda: True)
+    monkeypatch.setattr(torch.distributed, "get_world_size", lambda: 2)
+
+    def gather(messages: list[str | None], local_message: str | None) -> None:
+        assert local_message is None
+        messages[:] = [None, "RuntimeError: GetInfo unavailable"]
+
+    monkeypatch.setattr(torch.distributed, "all_gather_object", gather)
+
+    with pytest.raises(RuntimeError, match="rank 1: RuntimeError: GetInfo unavailable"):
+        _create_external_reasoner_provider_fail_closed(lambda: provider)
+
+    provider.close.assert_called_once_with()
+
+
+@pytest.mark.level(0)
+@pytest.mark.gpus(0)
+def test_external_provider_startup_returns_provider_when_all_ranks_succeed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    provider = MagicMock()
+    monkeypatch.setattr(torch.distributed, "is_initialized", lambda: True)
+    monkeypatch.setattr(torch.distributed, "get_world_size", lambda: 2)
+
+    def gather(messages: list[str | None], local_message: str | None) -> None:
+        assert local_message is None
+        messages[:] = [None, None]
+
+    monkeypatch.setattr(torch.distributed, "all_gather_object", gather)
+
+    assert _create_external_reasoner_provider_fail_closed(lambda: provider) is provider
+    provider.close.assert_not_called()
+
+
+@pytest.mark.level(0)
+@pytest.mark.gpus(0)
 def test_causal_model_rejects_uncomposed_reasoner_feature_dispatch() -> None:
     from cosmos_framework.model.generator.omni_mot_causal_model import OmniMoTCausalModel
 
@@ -140,15 +216,66 @@ def test_non_base_model_subclass_rejects_uncomposed_reasoner_lifecycle() -> None
 @pytest.mark.gpus(0)
 def test_offline_cache_signature_is_checked_before_model_materialization() -> None:
     model = object.__new__(OmniMoTModel)
-    provider = MagicMock(spec=OfflineReasonerFeatureProvider)
-    provider.manifest = SimpleNamespace(num_layers=3, num_kv_heads=2, head_dim=8)
+    provider = SimpleNamespace(signature=ReasonerFeatureSignature(3, 2, 8, torch.bfloat16))
     model.reasoner_feature_provider = provider
+    model.config = SimpleNamespace(precision="bfloat16")
     net = SimpleNamespace(num_hidden_layers=3, num_kv_heads=2, head_dim=8)
 
     model._validate_reasoner_feature_signature(net)
-    provider.manifest.num_layers = 2
+    provider.signature = ReasonerFeatureSignature(2, 2, 8, torch.bfloat16)
     with pytest.raises(ValueError, match="architecture mismatch"):
         model._validate_reasoner_feature_signature(net)
+
+
+@pytest.mark.level(0)
+@pytest.mark.gpus(0)
+def test_signature_validation_synchronizes_local_mismatch_before_fsdp(monkeypatch: pytest.MonkeyPatch) -> None:
+    model = object.__new__(OmniMoTModel)
+    provider = MagicMock()
+    provider.signature = ReasonerFeatureSignature(2, 2, 8, torch.bfloat16)
+    model.reasoner_feature_provider = provider
+    model.config = SimpleNamespace(precision="bfloat16")
+    net = SimpleNamespace(num_hidden_layers=3, num_kv_heads=2, head_dim=8)
+    monkeypatch.setattr(torch.distributed, "is_initialized", lambda: True)
+    monkeypatch.setattr(torch.distributed, "get_world_size", lambda: 2)
+
+    def gather(messages: list[str | None], local_message: str | None) -> None:
+        assert local_message is not None and "architecture mismatch" in local_message
+        messages[:] = [local_message, None]
+
+    monkeypatch.setattr(torch.distributed, "all_gather_object", gather)
+
+    with pytest.raises(RuntimeError, match="rank 0: ValueError:.*architecture mismatch") as raised:
+        model._validate_reasoner_feature_signature(net)
+
+    assert isinstance(raised.value.__cause__, ValueError)
+    provider.close.assert_called_once_with()
+    assert model.reasoner_feature_provider is None
+
+
+@pytest.mark.level(0)
+@pytest.mark.gpus(0)
+def test_signature_validation_closes_peer_provider_on_remote_mismatch(monkeypatch: pytest.MonkeyPatch) -> None:
+    model = object.__new__(OmniMoTModel)
+    provider = MagicMock()
+    provider.signature = ReasonerFeatureSignature(3, 2, 8, torch.bfloat16)
+    model.reasoner_feature_provider = provider
+    model.config = SimpleNamespace(precision="bfloat16")
+    net = SimpleNamespace(num_hidden_layers=3, num_kv_heads=2, head_dim=8)
+    monkeypatch.setattr(torch.distributed, "is_initialized", lambda: True)
+    monkeypatch.setattr(torch.distributed, "get_world_size", lambda: 2)
+
+    def gather(messages: list[str | None], local_message: str | None) -> None:
+        assert local_message is None
+        messages[:] = [None, "ValueError: architecture mismatch"]
+
+    monkeypatch.setattr(torch.distributed, "all_gather_object", gather)
+
+    with pytest.raises(RuntimeError, match="rank 1: ValueError: architecture mismatch"):
+        model._validate_reasoner_feature_signature(net)
+
+    provider.close.assert_called_once_with()
+    assert model.reasoner_feature_provider is None
 
 
 class _MemoryBuilder:
@@ -367,6 +494,92 @@ class _FeatureResolver:
         self.config = SimpleNamespace(reasoner_conditioning={"request_timeout_s": 1.0})
 
 
+class _FeatureSubmitter(_FeatureResolver):
+    pre_noise_memory_hook = OmniMoTModel.pre_noise_memory_hook
+
+    def __init__(self, provider: object) -> None:
+        super().__init__()
+        self.reasoner_conditioning_backend = "remote"
+        self.reasoner_feature_provider = provider
+        self.reasoner_cache_identity = ReasonerFeatureCacheIdentity("reasoner", "tokenizer", "framing")
+
+
+class _MemoryInitializer(_FeatureResolver):
+    memory_init_training = OmniMoTModel.memory_init_training
+    pre_noise_memory_hook = OmniMoTModel.pre_noise_memory_hook
+
+    def __init__(self, provider: object) -> None:
+        super().__init__()
+        self.reasoner_conditioning_backend = "remote"
+        self.reasoner_feature_provider = provider
+        self.reasoner_cache_identity = ReasonerFeatureCacheIdentity("reasoner", "tokenizer", "framing")
+
+
+@pytest.mark.level(0)
+@pytest.mark.gpus(0)
+@pytest.mark.parametrize(
+    ("data_batch", "batch_size", "error_match"),
+    (
+        ({}, 1, "requires a per-sample '__key__' field"),
+        ({"__key__": ["only-one"]}, 2, "Expected 2 non-empty Reasoner sample keys"),
+    ),
+)
+def test_sample_key_failure_is_deferred_to_distributed_resolution_gate(
+    data_batch: dict[str, object],
+    batch_size: int,
+    error_match: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    provider = MagicMock()
+    model = _MemoryInitializer(provider)
+    gen_data_clean = SimpleNamespace(batch_size=batch_size)
+
+    returned, memory_info = model.memory_init_training(gen_data_clean, data_batch, [])
+
+    assert returned is gen_data_clean
+    assert REASONER_SAMPLE_KEYS_KEY not in memory_info
+    failed_future = memory_info[REASONER_FEATURE_FUTURE_KEY]
+    assert isinstance(failed_future, Future)
+    assert failed_future.done()
+    assert isinstance(failed_future.exception(), ValueError)
+
+    # The pre-noise hook must preserve the failed Future rather than replacing
+    # it with a later provider submission.
+    assert model.pre_noise_memory_hook(object(), object(), memory_info) is memory_info
+    assert memory_info[REASONER_FEATURE_FUTURE_KEY] is failed_future
+    provider.submit.assert_not_called()
+
+    monkeypatch.setattr(torch.distributed, "is_initialized", lambda: True)
+    monkeypatch.setattr(torch.distributed, "get_world_size", lambda: 2)
+
+    def gather(messages: list[str | None], local_message: str | None) -> None:
+        assert local_message is not None and error_match in local_message
+        messages[:] = [local_message, None]
+
+    monkeypatch.setattr(torch.distributed, "all_gather_object", gather)
+    with pytest.raises(RuntimeError, match="failed before FSDP forward") as raised:
+        model._resolve_reasoner_feature_batch(memory_info)
+
+    assert error_match in str(raised.value)
+    assert raised.value.__cause__ is failed_future.exception()
+
+
+@pytest.mark.level(0)
+@pytest.mark.gpus(0)
+def test_sample_key_extraction_preserves_base_exception(monkeypatch: pytest.MonkeyPatch) -> None:
+    provider = MagicMock()
+    model = _MemoryInitializer(provider)
+    gen_data_clean = SimpleNamespace(batch_size=1)
+    monkeypatch.setattr(
+        omni_mot_model_module,
+        "_reasoner_sample_keys",
+        MagicMock(side_effect=KeyboardInterrupt("stop")),
+    )
+
+    with pytest.raises(KeyboardInterrupt, match="stop"):
+        model.memory_init_training(gen_data_clean, {"__key__": ["sample"]}, [])
+
+
 @pytest.mark.level(0)
 @pytest.mark.gpus(0)
 def test_resolve_reasoner_features_consumes_future_and_surfaces_failure() -> None:
@@ -388,3 +601,75 @@ def test_resolve_reasoner_features_consumes_future_and_surfaces_failure() -> Non
     failed.set_exception(KeyError("missing"))
     with pytest.raises(RuntimeError, match="failed before FSDP forward"):
         _FeatureResolver()._resolve_reasoner_feature_batch({REASONER_FEATURE_FUTURE_KEY: failed})
+
+
+@pytest.mark.level(0)
+@pytest.mark.gpus(0)
+@pytest.mark.parametrize("failure_stage", ("provider", "identity", "sample_keys", "build", "submit"))
+def test_synchronous_reasoner_submission_failure_reaches_distributed_resolution_gate(
+    failure_stage: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    provider = MagicMock()
+    build_requests = MagicMock(return_value=(object(),))
+    if failure_stage == "build":
+        build_requests.side_effect = ValueError("build failed")
+    else:
+        provider.submit.side_effect = ValueError("submit failed") if failure_stage == "submit" else None
+    monkeypatch.setattr(omni_mot_model_module, "build_reasoner_feature_requests", build_requests)
+
+    submitter = _FeatureSubmitter(provider)
+    memory_info = {REASONER_SAMPLE_KEYS_KEY: ("sample",)}
+    if failure_stage == "provider":
+        submitter.reasoner_feature_provider = None
+    elif failure_stage == "identity":
+        submitter.reasoner_cache_identity = None
+    elif failure_stage == "sample_keys":
+        memory_info.clear()
+    assert submitter.pre_noise_memory_hook(object(), object(), memory_info) is memory_info
+    future = memory_info[REASONER_FEATURE_FUTURE_KEY]
+    assert isinstance(future, Future)
+    assert future.done()
+    deferred_error = future.exception()
+    assert isinstance(deferred_error, Exception)
+    local_message = f"{type(deferred_error).__name__}: {deferred_error}"
+
+    monkeypatch.setattr(torch.distributed, "is_initialized", lambda: True)
+    monkeypatch.setattr(torch.distributed, "get_world_size", lambda: 2)
+
+    def gather(messages: list[str | None], gathered_local_message: str | None) -> None:
+        assert gathered_local_message == local_message
+        messages[:] = [gathered_local_message, None]
+
+    monkeypatch.setattr(torch.distributed, "all_gather_object", gather)
+    with pytest.raises(RuntimeError, match="failed before FSDP forward") as raised:
+        submitter._resolve_reasoner_feature_batch(memory_info)
+
+    assert f"rank 0: {local_message}" in str(raised.value)
+    assert raised.value.__cause__ is deferred_error
+    if failure_stage in {"provider", "identity", "sample_keys", "build"}:
+        provider.submit.assert_not_called()
+    else:
+        provider.submit.assert_called_once()
+
+
+@pytest.mark.level(0)
+@pytest.mark.gpus(0)
+@pytest.mark.parametrize("failure_stage", ("build", "submit"))
+def test_reasoner_submission_preserves_base_exception_control_flow(
+    failure_stage: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    provider = MagicMock()
+    build_requests = MagicMock(return_value=(object(),))
+    if failure_stage == "build":
+        build_requests.side_effect = KeyboardInterrupt("stop")
+    else:
+        provider.submit.side_effect = KeyboardInterrupt("stop")
+    monkeypatch.setattr(omni_mot_model_module, "build_reasoner_feature_requests", build_requests)
+
+    memory_info = {REASONER_SAMPLE_KEYS_KEY: ("sample",)}
+    with pytest.raises(KeyboardInterrupt, match="stop"):
+        _FeatureSubmitter(provider).pre_noise_memory_hook(object(), object(), memory_info)
+
+    assert REASONER_FEATURE_FUTURE_KEY not in memory_info

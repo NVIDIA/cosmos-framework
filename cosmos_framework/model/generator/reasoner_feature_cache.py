@@ -40,7 +40,10 @@ from cosmos_framework.data.generator.sequence_packing import PackedSequence
 from cosmos_framework.data.generator.sequence_packing.sequence import PackedSequenceBuilder
 from cosmos_framework.model.generator.reasoner_features import (
     ReasonerFeatureBatch,
+    ReasonerFeatureIdentity,
     ReasonerFeatureRequest,
+    ReasonerFeatureSignature,
+    compute_reasoner_feature_fingerprint,
 )
 
 REASONER_FEATURE_CACHE_SCHEMA_VERSION = 1
@@ -55,18 +58,7 @@ _INCREMENTAL_SIDECAR_SUFFIX = ".index.json"
 _CacheSignature = tuple[int, int, int, str]
 
 
-@dataclass(frozen=True)
-class ReasonerFeatureCacheIdentity:
-    """Immutable global identity of every record in one cache."""
-
-    reasoner: str
-    tokenizer: str
-    framing: str
-
-    def __post_init__(self) -> None:
-        for field_name, value in asdict(self).items():
-            if not isinstance(value, str) or not value:
-                raise ValueError(f"Cache identity field {field_name!r} must be a non-empty string")
+ReasonerFeatureCacheIdentity = ReasonerFeatureIdentity
 
 
 @dataclass(frozen=True)
@@ -256,33 +248,6 @@ def _signature_from_dict(value: Any, *, field: str) -> _CacheSignature:
         _require_positive_int(raw.get("head_dim"), field=f"{field}.head_dim"),
         dtype,
     )
-
-
-def compute_reasoner_feature_fingerprint(
-    token_ids: torch.Tensor,
-    position_ids: torch.Tensor,
-    causal_offsets: torch.Tensor,
-    *,
-    identity: ReasonerFeatureCacheIdentity,
-) -> str:
-    """Hash the exact framed Reasoner input plus its immutable global identity."""
-
-    digest = hashlib.sha256()
-    digest.update(f"{_FORMAT_NAME}:{REASONER_FEATURE_CACHE_SCHEMA_VERSION}\n".encode())
-    digest.update(json.dumps(asdict(identity), sort_keys=True, separators=(",", ":")).encode())
-    for name, tensor in (
-        ("token_ids", token_ids),
-        ("position_ids", position_ids),
-        ("causal_offsets", causal_offsets),
-    ):
-        if not isinstance(tensor, torch.Tensor) or tensor.device.type == "meta":
-            raise TypeError(f"{name} must be a materialized torch.Tensor")
-        value = tensor.detach().to(device="cpu").contiguous()
-        digest.update(name.encode())
-        digest.update(str(value.dtype).encode())
-        digest.update(json.dumps(list(value.shape), separators=(",", ":")).encode())
-        digest.update(value.view(torch.uint8).numpy().tobytes())
-    return digest.hexdigest()
 
 
 def build_reasoner_feature_requests(
@@ -1508,6 +1473,15 @@ class OfflineReasonerFeatureProvider:
     def cache_fingerprint(self) -> str:
         return self.manifest.cache_fingerprint
 
+    @property
+    def signature(self) -> ReasonerFeatureSignature:
+        return ReasonerFeatureSignature(
+            num_layers=self.manifest.num_layers,
+            num_kv_heads=self.manifest.num_kv_heads,
+            head_dim=self.manifest.head_dim,
+            dtype=getattr(torch, self.manifest.dtype),
+        )
+
     def submit(self, requests: Sequence[ReasonerFeatureRequest]) -> Future[ReasonerFeatureBatch]:
         future: Future[ReasonerFeatureBatch] = Future()
         try:
@@ -1515,6 +1489,9 @@ class OfflineReasonerFeatureProvider:
         except BaseException as error:
             future.set_exception(error)
         return future
+
+    def close(self) -> None:
+        """Match the provider lifecycle contract; immutable local caches own no live resources."""
 
     def _verify_shard(self, shard: _Shard) -> Path:
         path = self.cache_root / shard.path

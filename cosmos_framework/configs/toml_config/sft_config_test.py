@@ -146,6 +146,34 @@ class TestSchemaValidation:
                 }
             )
 
+    def test_remote_reasoner_transport_controls_are_validated(self) -> None:
+        raw = {
+            "job": {"task": "vfm", "experiment": "vision_sft_nano"},
+            "model": {
+                "reasoner_conditioning": {
+                    "backend": "remote",
+                    "endpoint": "dns:///reasoner:50051",
+                    "reasoner_fingerprint": "reasoner",
+                    "tokenizer_fingerprint": "tokenizer",
+                    "framing_fingerprint": "framing",
+                    "connect_timeout_s": 7.5,
+                    "request_timeout_s": 90.0,
+                    "request_max_retries": 4,
+                    "retry_backoff_s": 0.5,
+                }
+            },
+        }
+
+        conditioning = SFTExperimentConfig.model_validate(raw).model.reasoner_conditioning
+        assert conditioning.connect_timeout_s == 7.5
+        assert conditioning.request_timeout_s == 90.0
+        assert conditioning.request_max_retries == 4
+        assert conditioning.retry_backoff_s == 0.5
+
+        raw["model"]["reasoner_conditioning"]["request_max_retries"] = -1
+        with pytest.raises(ValidationError):
+            SFTExperimentConfig.model_validate(raw)
+
 
 # --------------------------------------------------------------------------- #
 # 2. build_hydra_overrides must NOT emit [custom] as per-leaf overrides        #

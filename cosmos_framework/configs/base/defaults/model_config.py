@@ -178,6 +178,9 @@ class ReasonerConditioningConfig:
     prefetch_batches: int = attrs.field(default=2, validator=attrs.validators.ge(0))
     layerwise_h2d: bool = False
     request_timeout_s: float = attrs.field(default=300.0, validator=attrs.validators.gt(0.0))
+    connect_timeout_s: float = attrs.field(default=30.0, validator=attrs.validators.gt(0.0))
+    request_max_retries: int = attrs.field(default=2, validator=attrs.validators.ge(0))
+    retry_backoff_s: float = attrs.field(default=0.25, validator=attrs.validators.ge(0.0))
 
     def __attrs_post_init__(self) -> None:
         if self.backend in {"offline", "read_through"} and not self.cache_root:

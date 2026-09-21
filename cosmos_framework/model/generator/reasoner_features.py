@@ -16,8 +16,10 @@ restrictive mask.
 
 from __future__ import annotations
 
+import hashlib
+import json
 from concurrent.futures import Future
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from typing import Mapping, Protocol, Sequence
 
 import torch
@@ -36,6 +38,49 @@ from cosmos_framework.model.generator.utils.memory import KVToStore, MemoryState
 _CACHE_CROSS_K = "cross_k"
 _CACHE_CROSS_V = "cross_v"
 _CACHE_CAUSAL_OFFSETS = "causal_offsets"
+_REASONER_FEATURE_INPUT_FORMAT = "cosmos3-reasoner-kv"
+REASONER_FEATURE_INPUT_SCHEMA_VERSION = 1
+
+
+@dataclass(frozen=True)
+class ReasonerFeatureIdentity:
+    """Pinned model, tokenizer, and prompt-framing identity for Reasoner inputs."""
+
+    reasoner: str
+    tokenizer: str
+    framing: str
+
+    def __post_init__(self) -> None:
+        for field_name, value in asdict(self).items():
+            if not isinstance(value, str) or not value:
+                raise ValueError(f"Reasoner identity field {field_name!r} must be a non-empty string")
+
+
+def compute_reasoner_feature_fingerprint(
+    token_ids: torch.Tensor,
+    position_ids: torch.Tensor,
+    causal_offsets: torch.Tensor,
+    *,
+    identity: ReasonerFeatureIdentity,
+) -> str:
+    """Hash the exact framed Reasoner input plus its immutable global identity."""
+
+    digest = hashlib.sha256()
+    digest.update(f"{_REASONER_FEATURE_INPUT_FORMAT}:{REASONER_FEATURE_INPUT_SCHEMA_VERSION}\n".encode())
+    digest.update(json.dumps(asdict(identity), sort_keys=True, separators=(",", ":")).encode())
+    for name, tensor in (
+        ("token_ids", token_ids),
+        ("position_ids", position_ids),
+        ("causal_offsets", causal_offsets),
+    ):
+        if not isinstance(tensor, torch.Tensor) or tensor.device.type == "meta":
+            raise TypeError(f"{name} must be a materialized torch.Tensor")
+        value = tensor.detach().to(device="cpu").contiguous()
+        digest.update(name.encode())
+        digest.update(str(value.dtype).encode())
+        digest.update(json.dumps(list(value.shape), separators=(",", ":")).encode())
+        digest.update(value.view(torch.uint8).numpy().tobytes())
+    return digest.hexdigest()
 
 
 def _detached_tensor(value: torch.Tensor, *, name: str) -> torch.Tensor:
@@ -320,10 +365,33 @@ class ReasonerFeatureBatch:
         )
 
 
+@dataclass(frozen=True)
+class ReasonerFeatureSignature:
+    """Provider-visible architecture and dtype of canonical Reasoner K/V."""
+
+    num_layers: int
+    num_kv_heads: int
+    head_dim: int
+    dtype: torch.dtype
+
+    def __post_init__(self) -> None:
+        for name in ("num_layers", "num_kv_heads", "head_dim"):
+            value = getattr(self, name)
+            if not isinstance(value, int) or isinstance(value, bool) or value <= 0:
+                raise ValueError(f"{name} must be a positive integer, got {value!r}")
+        if self.dtype not in (torch.bfloat16, torch.float16, torch.float32):
+            raise TypeError(f"Unsupported Reasoner feature dtype: {self.dtype}")
+
+
 class ReasonerFeatureProvider(Protocol):
     """Asynchronous provider contract shared by inline/offline/remote backends."""
 
+    @property
+    def signature(self) -> ReasonerFeatureSignature: ...
+
     def submit(self, requests: Sequence[ReasonerFeatureRequest]) -> Future[ReasonerFeatureBatch]: ...
+
+    def close(self) -> None: ...
 
 
 @torch.inference_mode()

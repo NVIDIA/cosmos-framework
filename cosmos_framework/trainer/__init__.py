@@ -13,9 +13,13 @@ import torch
 import torch.distributed as dist
 import torch.utils.data
 
-from cosmos_framework.utils.flags import INTERNAL
 from cosmos_framework.utils.context_managers import distributed_init
-from cosmos_framework.utils.profiling import maybe_enable_memory_snapshot, maybe_enable_nsys_profiling, maybe_enable_profiling
+from cosmos_framework.utils.flags import INTERNAL
+from cosmos_framework.utils.profiling import (
+    maybe_enable_memory_snapshot,
+    maybe_enable_nsys_profiling,
+    maybe_enable_profiling,
+)
 
 try:
     from megatron.core import parallel_state
@@ -25,12 +29,11 @@ except ImportError:
     USE_MEGATRON = False
 
 
-from cosmos_framework.utils.lazy_config import LazyConfig, instantiate
-from cosmos_framework.model._base import ImaginaireModel
+from cosmos_framework.model._base import ImaginaireModel, close_model
 from cosmos_framework.utils import callback, distributed, ema, log, misc
 from cosmos_framework.utils.checkpointer import Checkpointer
+from cosmos_framework.utils.lazy_config import LazyConfig, instantiate
 from cosmos_framework.utils.misc import StragglerDetectorV2
-
 
 
 @dataclass
@@ -263,6 +266,22 @@ class ImaginaireTrainer:
         return (microsteps + cp_size - 1) // cp_size
 
     def train(
+        self,
+        model: ImaginaireModel,
+        dataloader_train: torch.utils.data.DataLoader,
+        dataloader_val: torch.utils.data.DataLoader,
+    ) -> None:
+        """Run training and always release model-owned external resources."""
+
+        try:
+            self._train(model, dataloader_train, dataloader_val)
+        except BaseException as error:
+            close_model(model, primary_error=error)
+            raise
+        else:
+            close_model(model)
+
+    def _train(
         self,
         model: ImaginaireModel,
         dataloader_train: torch.utils.data.DataLoader,

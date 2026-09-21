@@ -273,6 +273,13 @@ class ReasonerConditioningConfig(BaseModel):
         description="Stage K/V one layer at a time instead of keeping the entire batch resident on GPU.",
     )
     request_timeout_s: float = Field(default=300.0, gt=0.0, description="Remote request deadline in seconds.")
+    connect_timeout_s: float = Field(default=30.0, gt=0.0, description="Remote startup handshake deadline in seconds.")
+    request_max_retries: int = Field(
+        default=2,
+        ge=0,
+        description="Retries for transient remote UNAVAILABLE/RESOURCE_EXHAUSTED failures.",
+    )
+    retry_backoff_s: float = Field(default=0.25, ge=0.0, description="Initial remote retry backoff in seconds.")
 
     @model_validator(mode="after")
     def validate_backend_inputs(self) -> "ReasonerConditioningConfig":

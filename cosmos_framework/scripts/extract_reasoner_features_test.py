@@ -19,6 +19,7 @@ from cosmos_framework.scripts.extract_reasoner_features import (
     ExtractionStats,
     _atomic_write_json,
     _commit_rank_result,
+    _extraction_max_total_tokens,
     _find_sft_dataset_config,
     _initialize_distributed,
     _iter_rank_requests,
@@ -96,6 +97,31 @@ def test_rank_requests_frame_tokens_and_deduplicate_standard_cfg_null(monkeypatc
     assert requests[0].token_ids.tolist() == [8, 9, 10]
     assert requests[1].token_ids.tolist() == [7, 9, 10]
     assert all(request.position_ids.dtype == torch.float32 for request in requests)
+
+
+@pytest.mark.level(0)
+@pytest.mark.gpus(0)
+def test_extraction_token_limit_is_derived_from_dataset_and_framing() -> None:
+    dataset = SimpleNamespace(max_caption_tokens=8_192)
+
+    assert (
+        _extraction_max_total_tokens(  # type: ignore[arg-type]
+            dataset,
+            {"eos_token_id": 1, "start_of_generation": 2},
+        )
+        == 8_194
+    )
+    assert (
+        _extraction_max_total_tokens(  # type: ignore[arg-type]
+            dataset,
+            {"bos_token_id": 0, "eos_token_id": 1, "start_of_generation": 2},
+        )
+        == 8_195
+    )
+
+    dataset.max_caption_tokens = 0
+    with pytest.raises(ValueError, match="max_caption_tokens must be a positive integer"):
+        _extraction_max_total_tokens(dataset, {})  # type: ignore[arg-type]
 
 
 def _config() -> SimpleNamespace:

@@ -34,15 +34,12 @@ import tempfile
 import time
 import traceback
 from collections.abc import Iterator, Mapping, Sequence
-from contextlib import contextmanager
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
 import torch
-from omegaconf import open_dict
 
-from cosmos_framework.checkpoint.reasoner_only import load_reasoner_only_dcp
 from cosmos_framework.configs.toml_config.sft_config import load_experiment_from_toml
 from cosmos_framework.data.generator.local_datasets.sft_dataset import (
     SFTDataset,
@@ -52,7 +49,7 @@ from cosmos_framework.data.generator.local_datasets.sft_dataset import (
 from cosmos_framework.data.generator.local_datasets.sft_reasoner_documents import (
     iter_sft_reasoner_documents,
 )
-from cosmos_framework.data.generator.sequence_packing.modalities import add_special_tokens
+from cosmos_framework.data.generator.sequence_packing.modalities import add_special_tokens, compute_text_split_length
 from cosmos_framework.model.generator.reasoner_feature_cache import (
     IncrementalReasonerFeatureCacheWriter,
     OfflineReasonerFeatureProvider,
@@ -63,7 +60,11 @@ from cosmos_framework.model.generator.reasoner_feature_cache import (
 )
 from cosmos_framework.model.generator.reasoner_features import (
     ReasonerFeatureRequest,
-    extract_reasoner_feature_batch,
+)
+from cosmos_framework.model.generator.reasoner_runtime import (
+    ReasonerFeatureRuntime,
+    ReasonerRuntimeSpec,
+    prepare_reasoner_model_config,
 )
 from cosmos_framework.utils.lazy_config import instantiate as lazy_instantiate
 
@@ -165,54 +166,8 @@ def _validate_extraction_config(config: object) -> None:
         raise ValueError(f"Reasoner extraction MVP supports the Nano Qwen3VLTextForCausalLM target, got {target_name}")
 
 
-def _prepare_reasoner_model_config(config: object) -> object:
-    """Return a lazy Nano LM config that cannot instantiate the Generator or ViT."""
-
-    model = getattr(getattr(config, "model"), "config")
-    model_instance = copy.deepcopy(model.vlm_config.model_instance)
-    nested_config = model_instance["config"]
-    if isinstance(nested_config, dict):
-        nested_config.update(
-            include_gen_pathway=False,
-            include_und_pathway=True,
-            include_visual=False,
-        )
-    else:
-        with open_dict(nested_config):
-            nested_config.include_gen_pathway = False
-            nested_config.include_und_pathway = True
-            nested_config.include_visual = False
-    return model_instance
-
-
-@contextmanager
-def _temporary_default_dtype(dtype: torch.dtype) -> Iterator[None]:
-    previous = torch.get_default_dtype()
-    torch.set_default_dtype(dtype)
-    try:
-        yield
-    finally:
-        torch.set_default_dtype(previous)
-
-
-def _build_reasoner(config: object, *, device: torch.device, dtype: torch.dtype) -> torch.nn.Module:
-    """Construct a materialized Reasoner replica directly in its compute dtype.
-
-    Direct construction intentionally avoids meta ``to_empty`` here: HuggingFace
-    rotary buffers are non-persistent and therefore absent from DCP. Constructing
-    on the final device initializes those buffers correctly before parameters are
-    overwritten by the strict Reasoner-only checkpoint load.
-    """
-
-    model_instance = _prepare_reasoner_model_config(config)
-    with _temporary_default_dtype(dtype), torch.device(device):
-        reasoner = lazy_instantiate(model_instance)
-    generation_parameters = [name for name, _ in reasoner.named_parameters() if "moe_gen" in name]
-    if generation_parameters:
-        raise RuntimeError(f"Reasoner-only construction retained Generator parameters: {generation_parameters}")
-    reasoner.requires_grad_(False)
-    reasoner.eval()
-    return reasoner
+# Backward-compatible private alias retained for tests and downstream scripts.
+_prepare_reasoner_model_config = prepare_reasoner_model_config
 
 
 def _special_tokens(dataset: SFTDataset) -> dict[str, int]:
@@ -221,6 +176,15 @@ def _special_tokens(dataset: SFTDataset) -> dict[str, int]:
     if eos_token_id is None:
         raise ValueError("SFT tokenizer must define eos_token_id")
     return {**special_tokens, "eos_token_id": int(eos_token_id)}
+
+
+def _extraction_max_total_tokens(dataset: SFTDataset, special_tokens: Mapping[str, int]) -> int:
+    """Derive the largest framed request from the dataset's caption limit."""
+
+    max_caption_tokens = dataset.max_caption_tokens
+    if not isinstance(max_caption_tokens, int) or isinstance(max_caption_tokens, bool) or max_caption_tokens <= 0:
+        raise ValueError(f"SFT max_caption_tokens must be a positive integer, got {max_caption_tokens!r}")
+    return compute_text_split_length(max_caption_tokens, dict(special_tokens), has_generation=True)
 
 
 def _rank_dataset(dataset: SFTDataset, *, rank: int, world_size: int) -> SFTDataset:
@@ -245,6 +209,7 @@ def _iter_rank_requests(
     world_size: int,
     use_float_positions: bool,
     max_documents_per_rank: int | None,
+    special_tokens: Mapping[str, int] | None = None,
 ) -> Iterator[ReasonerFeatureRequest]:
     """Yield framed requests for one deterministic metadata slice.
 
@@ -253,7 +218,7 @@ def _iter_rank_requests(
     is published. Other requests stay attached to their diagnostic sample key.
     """
 
-    tokens = _special_tokens(dataset)
+    tokens = dict(special_tokens) if special_tokens is not None else _special_tokens(dataset)
     produced = 0
     if dataset.cfg_dropout_rate > 0 and not dataset.cfg_dropout_keep_metadata:
         null_text_ids, _ = dataset._tokenize_caption("")
@@ -341,7 +306,7 @@ def _initialize_distributed(coordination_run_id: str | None = None) -> Distribut
 
 def _extract_rank(
     *,
-    reasoner: torch.nn.Module,
+    runtime: ReasonerFeatureRuntime,
     requests: Iterator[ReasonerFeatureRequest],
     writer: IncrementalReasonerFeatureCacheWriter,
     context: DistributedContext,
@@ -354,7 +319,7 @@ def _extract_rank(
         if writer.contains(request.sample_key, request.fingerprint):
             stats.cache_hits += 1
             continue
-        features = extract_reasoner_feature_batch(reasoner, [request])
+        features = runtime.execute([request])
         stats.extracted_tokens += request.token_ids.numel()
         if not writer.append(ReasonerFeatureCacheEntry(request.sample_key, features)):
             raise RuntimeError(f"Writer unexpectedly rejected newly extracted record {request.sample_key!r}")
@@ -524,6 +489,8 @@ def _run(args: argparse.Namespace, context: DistributedContext) -> Path:
         return manifest
 
     dataset = _instantiate_sft_dataset(config)
+    special_tokens = _special_tokens(dataset)
+    max_total_tokens = _extraction_max_total_tokens(dataset, special_tokens)
     writer = IncrementalReasonerFeatureCacheWriter.resume(
         output,
         identity=identity,
@@ -540,28 +507,33 @@ def _run(args: argparse.Namespace, context: DistributedContext) -> Path:
         world_size=context.world_size,
         use_float_positions=use_float_positions,
         max_documents_per_rank=args.max_documents_per_rank,
+        special_tokens=special_tokens,
     )
 
     torch.cuda.reset_peak_memory_stats(context.device)
-    torch.cuda.synchronize(context.device)
-    reasoner_construction_started = time.perf_counter()
-    reasoner = _build_reasoner(config, device=context.device, dtype=dtype)
-    torch.cuda.synchronize(context.device)
-    reasoner_construction_seconds = time.perf_counter() - reasoner_construction_started
-    torch.cuda.synchronize(context.device)
-    checkpoint_load_started = time.perf_counter()
-    load_reasoner_only_dcp(reasoner, args.checkpoint, source=args.checkpoint_source)
-    torch.cuda.synchronize(context.device)
-    checkpoint_load_seconds = time.perf_counter() - checkpoint_load_started
+    runtime = ReasonerFeatureRuntime.load(
+        config,
+        ReasonerRuntimeSpec(
+            checkpoint=args.checkpoint,
+            checkpoint_source=args.checkpoint_source,
+            device=context.device,
+            dtype=dtype,
+            identity=identity,
+            max_requests=1,
+            max_total_tokens=max_total_tokens,
+        ),
+    )
     publishable = args.max_documents_per_rank is None
     stats = _extract_rank(
-        reasoner=reasoner,
+        runtime=runtime,
         requests=requests,
         writer=writer,
         context=context,
     )
-    stats.reasoner_construction_seconds = reasoner_construction_seconds
-    stats.checkpoint_load_seconds = checkpoint_load_seconds
+    if runtime.load_stats is None:
+        raise RuntimeError("Loaded Reasoner runtime did not report startup statistics")
+    stats.reasoner_construction_seconds = runtime.load_stats.construction_seconds
+    stats.checkpoint_load_seconds = runtime.load_stats.checkpoint_load_seconds
     _commit_rank_result(writer, stats, context=context, publishable=publishable)
 
     if not publishable:
