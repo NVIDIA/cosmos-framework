@@ -9,6 +9,8 @@ import json
 import os
 import random
 import tempfile
+from collections.abc import Callable
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Optional
 
@@ -63,6 +65,68 @@ CAPTION_TYPES = list(CAPTION_TYPES_AND_WEIGHTS.keys())
 CAPTION_WEIGHTS = list(CAPTION_TYPES_AND_WEIGHTS.values())
 
 
+@dataclass(frozen=True)
+class SFTWindowFraming:
+    """Deterministic frame geometry shared by SFT loading and Reasoner extraction."""
+
+    sample_key: str
+    window_index: int
+    original_fps: float
+    total_frames: int
+    start_frame: int
+    end_frame: int
+    temporal_interval: int
+    num_frames: int
+    target_height: int
+    target_width: int
+
+
+def sft_metadata_sort_key(metadata: dict[str, Any]) -> str:
+    """Return the stable ordering key used for SFT metadata."""
+
+    return hashlib.sha256(metadata["uuid"].encode("utf-8")).hexdigest()
+
+
+def _format_caption(t2w_window: dict, caption_key: str) -> tuple[str, str, bool]:
+    """Normalize one selected caption exactly as the training path expects."""
+
+    raw = t2w_window[caption_key]
+    if isinstance(raw, dict):
+        return caption_key, caption_json_to_prompt(raw), True
+    if caption_key == CAPTION_JSON_KEY:
+        return caption_key, str(raw).strip(), True
+    return caption_key, raw.strip().rstrip(".") + ".", False
+
+
+def enumerate_sft_captions(t2w_window: dict) -> tuple[tuple[str, str, bool], ...]:
+    """Return every caption selection reachable by :func:`_select_caption`.
+
+    Priority captions shadow all fallbacks. When training reaches the weighted
+    caption family, only positive-weight choices are reachable and they are
+    returned in the same stable order as ``CAPTION_TYPES``.
+    """
+
+    for caption_key in (CAPTION_JSON_KEY, "qwen3_32b_rewrite-dense", "caption"):
+        if caption_key in t2w_window:
+            return (_format_caption(t2w_window, caption_key),)
+
+    available_types = [
+        caption_type
+        for caption_type in CAPTION_TYPES
+        if caption_type in t2w_window and CAPTION_TYPES_AND_WEIGHTS[caption_type] > 0
+    ]
+    if available_types:
+        return tuple(_format_caption(t2w_window, caption_type) for caption_type in available_types)
+
+    zero_weight_types = [caption_type for caption_type in CAPTION_TYPES if caption_type in t2w_window]
+    if zero_weight_types:
+        raise ValueError(
+            "SFT window only contains zero-weight caption types, so training cannot select a caption: "
+            f"{zero_weight_types}"
+        )
+    return ()
+
+
 def _select_caption(t2w_window: dict) -> tuple[str, str, bool] | None:
     """Pick a window's caption: ``(caption_key, caption_text, used_structured_json)``.
 
@@ -74,25 +138,163 @@ def _select_caption(t2w_window: dict) -> tuple[str, str, bool] | None:
     which would append a stray ``.`` after the closing ``}``.  Returns ``None`` when
     the window has no known caption key.
     """
-    if CAPTION_JSON_KEY in t2w_window:
-        caption_key = CAPTION_JSON_KEY
-    elif "qwen3_32b_rewrite-dense" in t2w_window:
-        caption_key = "qwen3_32b_rewrite-dense"
-    elif "caption" in t2w_window:
-        caption_key = "caption"
-    else:
-        available_types = [ct for ct in CAPTION_TYPES if ct in t2w_window]
-        if not available_types:
-            return None
-        available_weights = [CAPTION_TYPES_AND_WEIGHTS[ct] for ct in available_types]
-        caption_key = random.choices(available_types, weights=available_weights, k=1)[0]
+    for caption_key in (CAPTION_JSON_KEY, "qwen3_32b_rewrite-dense", "caption"):
+        if caption_key in t2w_window:
+            return _format_caption(t2w_window, caption_key)
 
-    raw = t2w_window[caption_key]
-    if isinstance(raw, dict):
-        return caption_key, caption_json_to_prompt(raw), True
-    if caption_key == CAPTION_JSON_KEY:
-        return caption_key, str(raw).strip(), True
-    return caption_key, raw.strip().rstrip(".") + ".", False
+    available_types = [caption_type for caption_type in CAPTION_TYPES if caption_type in t2w_window]
+    if not available_types:
+        return None
+    caption_key = random.choices(
+        available_types,
+        weights=[CAPTION_TYPES_AND_WEIGHTS[caption_type] for caption_type in available_types],
+        k=1,
+    )[0]
+    return _format_caption(t2w_window, caption_key)
+
+
+def resolve_sft_window_framing(
+    metadata: dict[str, Any],
+    window_index: int,
+    *,
+    original_fps: float,
+    total_frames: int,
+    decoded_total_frames: int | None = None,
+    num_video_frames: int,
+    temporal_interval_mode: str,
+    frame_selection_mode: str,
+    temporal_compression_factor: int,
+    target_height: int,
+    target_width: int,
+    random_frame_selector: Callable[[int, int], int] | None = None,
+) -> SFTWindowFraming | None:
+    """Resolve one retained SFT window without decoding video pixels.
+
+    ``total_frames`` is the ffprobe count used for the training window
+    selection. ``decoded_total_frames`` optionally bounds the retained-frame
+    count to what ffmpeg actually yielded; keeping those values separate avoids
+    changing fixed-window selection when ffprobe overestimates a damaged/VFR
+    video. ``None`` mirrors the training path's insufficient/empty-window skip.
+    A caller using ``frame_selection_mode='random'`` must explicitly provide
+    the selector; deterministic offline enumeration intentionally does not draw
+    from global random state.
+    """
+
+    if not 0 <= window_index < len(metadata["t2w_windows"]):
+        raise IndexError(f"window_index={window_index} is out of range for {metadata['uuid']!r}")
+    if original_fps <= 0:
+        raise ValueError(f"original_fps must be positive, got {original_fps}")
+    if temporal_compression_factor < 1:
+        raise ValueError(f"temporal_compression_factor must be >= 1, got {temporal_compression_factor}")
+    if total_frames <= 0:
+        return None
+
+    t2w_window = metadata["t2w_windows"][window_index]
+    window_start = int(t2w_window["start_frame"])
+    window_end = int(t2w_window["end_frame"])
+    actual_end = min(window_end, total_frames - 1)
+    frames_in_window = actual_end - window_start + 1
+    if frames_in_window <= 0:
+        return None
+
+    if num_video_frames == -1:
+        temporal_interval = int(t2w_window["temporal_interval"])
+        start_frame = window_start
+        end_frame = actual_end
+    else:
+        if frames_in_window < num_video_frames:
+            return None
+        if temporal_interval_mode == "force_one":
+            temporal_interval = 1
+        elif temporal_interval_mode == "max_30fps":
+            temporal_interval = max(1, int(original_fps / 30.0))
+        elif temporal_interval_mode == "entire_chunk":
+            temporal_interval = max(1, frames_in_window // num_video_frames)
+        else:
+            raise ValueError(f"Unknown temporal_interval_mode: {temporal_interval_mode}")
+
+        num_frames_before_downsample = (num_video_frames - 1) * temporal_interval + 1
+        if frame_selection_mode == "first":
+            start_frame = window_start
+        elif frame_selection_mode == "center":
+            start_frame = window_start + (frames_in_window - num_frames_before_downsample) // 2
+        elif frame_selection_mode == "random":
+            if random_frame_selector is None:
+                raise ValueError("frame_selection_mode='random' requires an explicit random_frame_selector")
+            max_offset = frames_in_window - num_frames_before_downsample
+            start_frame = window_start + random_frame_selector(0, max(0, max_offset))
+        else:
+            raise ValueError(f"Unknown frame_selection_mode: {frame_selection_mode}")
+        end_frame = start_frame + num_frames_before_downsample - 1
+
+    if temporal_interval <= 0:
+        raise ValueError(f"temporal_interval must be positive, got {temporal_interval}")
+    decode_frame_count = total_frames if decoded_total_frames is None else decoded_total_frames
+    if decode_frame_count <= 0:
+        return None
+    decode_end = min(end_frame, decode_frame_count - 1)
+    first_decoded_frame = start_frame
+    if first_decoded_frame < 0:
+        first_decoded_frame += (-first_decoded_frame + temporal_interval - 1) // temporal_interval * temporal_interval
+    if first_decoded_frame > decode_end:
+        return None
+    sampled_frames = (decode_end - first_decoded_frame) // temporal_interval + 1
+    num_frames = (sampled_frames - 1) // temporal_compression_factor * temporal_compression_factor + 1
+    return SFTWindowFraming(
+        sample_key=f"{metadata['uuid']}_w{window_index}",
+        window_index=window_index,
+        original_fps=original_fps,
+        total_frames=total_frames,
+        start_frame=start_frame,
+        end_frame=end_frame,
+        temporal_interval=temporal_interval,
+        num_frames=num_frames,
+        target_height=target_height,
+        target_width=target_width,
+    )
+
+
+def render_sft_caption(
+    caption: str,
+    *,
+    used_structured_json: bool,
+    cfg_dropped: bool,
+    cfg_dropout_keep_metadata: bool,
+    caption_suffix: str,
+    append_duration_fps_timestamps: bool,
+    append_resolution_info: bool,
+    num_frames: int,
+    conditioning_fps: float,
+    target_height: int,
+    target_width: int,
+) -> str:
+    """Apply the training caption suffix, CFG and metadata framing deterministically."""
+
+    if caption_suffix and not used_structured_json:
+        caption = (caption + " " + caption_suffix).strip()
+    if cfg_dropout_keep_metadata and cfg_dropped:
+        caption = ""
+
+    if append_duration_fps_timestamps and not used_structured_json:
+        duration = num_frames / conditioning_fps
+        caption = caption + " " + _DURATION_TEMPLATE.format(duration=duration, fps=conditioning_fps)
+    if append_resolution_info and not used_structured_json:
+        caption = caption + " " + _RESOLUTION_TEMPLATE.format(height=target_height, width=target_width)
+    caption = caption.strip()
+
+    if not cfg_dropout_keep_metadata and cfg_dropped:
+        caption = ""
+    return caption
+
+
+def enumerate_sft_cfg_variants(cfg_dropout_rate: float) -> tuple[bool, ...]:
+    """Return reachable ``cfg_dropped`` states in deterministic order."""
+
+    if cfg_dropout_rate <= 0:
+        return (False,)
+    if cfg_dropout_rate >= 1:
+        return (True,)
+    return False, True
 
 
 class SFTDataset(torch.utils.data.IterableDataset):
@@ -184,8 +386,6 @@ class SFTDataset(torch.utils.data.IterableDataset):
         windows = metadata["t2w_windows"]
         win_idx = random.randrange(len(windows))
         t2w_window = windows[win_idx]
-        window_start = t2w_window["start_frame"]
-        window_end = t2w_window["end_frame"]
 
         # Compute output resolution
         input_w, input_h = metadata["width"], metadata["height"]
@@ -207,47 +407,25 @@ class SFTDataset(torch.utils.data.IterableDataset):
             video_info = get_video_metadata(input_video_path)
             original_fps = video_info["fps"]
             total_frames = video_info["total_frames"]
-
-            # Constrain to the t2w window
-            actual_end = min(window_end, total_frames - 1)
-            frames_in_window = actual_end - window_start + 1
-
-            if self.num_video_frames == -1:
-                # Native chunk mode: use start/end/interval directly from the window
-                temporal_interval = t2w_window["temporal_interval"]
-                start_frame = window_start
-                end_frame = actual_end
-            else:
-                if frames_in_window < self.num_video_frames:
-                    log.warning(
-                        f"Not enough frames in window: {metadata['uuid']}, "
-                        f"frames_in_window: {frames_in_window}, required: {self.num_video_frames}"
-                    )
-                    return None
-
-                # Compute temporal interval
-                if self.temporal_interval_mode == "force_one":
-                    temporal_interval = 1
-                elif self.temporal_interval_mode == "max_30fps":
-                    temporal_interval = max(1, int(original_fps / 30.0))
-                elif self.temporal_interval_mode == "entire_chunk":
-                    temporal_interval = frames_in_window // self.num_video_frames
-                    temporal_interval = max(1, temporal_interval)
-                else:
-                    raise ValueError(f"Unknown temporal_interval_mode: {self.temporal_interval_mode}")
-
-                num_frames_before_downsample = (self.num_video_frames - 1) * temporal_interval + 1
-                if self.frame_selection_mode == "first":
-                    start_frame = window_start
-                elif self.frame_selection_mode == "center":
-                    start_frame = window_start + (frames_in_window - num_frames_before_downsample) // 2
-                elif self.frame_selection_mode == "random":
-                    max_offset = frames_in_window - num_frames_before_downsample
-                    start_frame = window_start + random.randint(0, max(0, max_offset))
-                else:
-                    raise ValueError(f"Unknown frame_selection_mode: {self.frame_selection_mode}")
-                end_frame = start_frame + num_frames_before_downsample - 1
-
+            framing = resolve_sft_window_framing(
+                metadata,
+                win_idx,
+                original_fps=original_fps,
+                total_frames=total_frames,
+                num_video_frames=self.num_video_frames,
+                temporal_interval_mode=self.temporal_interval_mode,
+                frame_selection_mode=self.frame_selection_mode,
+                temporal_compression_factor=self.temporal_compression_factor,
+                target_height=target_h,
+                target_width=target_w,
+                random_frame_selector=random.randint if self.frame_selection_mode == "random" else None,
+            )
+            if framing is None:
+                log.warning(f"Window is empty or too short: {metadata['uuid']}_w{win_idx}")
+                return None
+            temporal_interval = framing.temporal_interval
+            start_frame = framing.start_frame
+            end_frame = framing.end_frame
             fps = original_fps / temporal_interval
 
             video_chunk = []
@@ -298,36 +476,24 @@ class SFTDataset(torch.utils.data.IterableDataset):
         if self.conditioning_fps_noise_std > 0:
             noise_factor = np.exp(np.random.randn() * self.conditioning_fps_noise_std)
             cond_fps = cond_fps * noise_factor
-
-        if self.caption_suffix and not used_structured_json:
-            caption = (caption + " " + self.caption_suffix).strip()
-
-        # CFG dropout: when cfg_dropout_keep_metadata is True, dropout fires
-        # before appending resolution/duration/FPS so that metadata text is
-        # preserved even under unconditional guidance.
-        if self.cfg_dropout_keep_metadata and self.cfg_dropout_rate > 0:
-            if random.random() < self.cfg_dropout_rate:
-                caption = ""
-
-        # Structured-JSON captions already carry duration/fps/resolution inside the
-        # JSON, so skip the natural-language metadata suffixes for them. This also
-        # makes the training prompt byte-match the inference prompt.
-        if self.append_duration_fps_timestamps and not used_structured_json:
-            duration = num_decoded_frames / cond_fps
-            suffix = _DURATION_TEMPLATE.format(duration=duration, fps=cond_fps)
-            caption = caption + " " + suffix
-        if self.append_resolution_info and not used_structured_json:
-            suffix = _RESOLUTION_TEMPLATE.format(height=target_h, width=target_w)
-            caption = caption + " " + suffix
-        caption = caption.strip()
-
-        if not self.cfg_dropout_keep_metadata and self.cfg_dropout_rate > 0:
-            if random.random() < self.cfg_dropout_rate:
-                caption = ""
+        cfg_dropped = self.cfg_dropout_rate > 0 and random.random() < self.cfg_dropout_rate
+        caption = render_sft_caption(
+            caption,
+            used_structured_json=used_structured_json,
+            cfg_dropped=cfg_dropped,
+            cfg_dropout_keep_metadata=self.cfg_dropout_keep_metadata,
+            caption_suffix=self.caption_suffix,
+            append_duration_fps_timestamps=self.append_duration_fps_timestamps,
+            append_resolution_info=self.append_resolution_info,
+            num_frames=num_decoded_frames,
+            conditioning_fps=cond_fps,
+            target_height=target_h,
+            target_width=target_w,
+        )
         text_ids, caption = self._tokenize_caption(caption)
 
         ret = dict(
-            __key__=f"{metadata['uuid']}_w{win_idx}",
+            __key__=framing.sample_key,
             __url__=metadata["vision_path"],
             fps=original_fps,
             n_orig_video_frames=total_frames,
@@ -688,7 +854,7 @@ def get_sft_dataset(
         log.info(f"sample_by_window=True: flattened to {len(metadata_list)} samples (one per window)")
 
     # Deterministic shuffle based on the sha256 hash of uuid
-    metadata_list.sort(key=lambda x: hashlib.sha256(x["uuid"].encode("utf-8")).hexdigest())
+    metadata_list.sort(key=sft_metadata_sort_key)
 
     dataset = SFTDataset(
         metadata=metadata_list,

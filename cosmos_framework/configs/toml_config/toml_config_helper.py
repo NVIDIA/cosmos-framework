@@ -18,7 +18,6 @@ from __future__ import annotations
 
 from typing import Any
 
-
 # Maps ``job.task`` to the base Hydra config that ``make_config()`` lives in.
 TASK_TO_BASE_CONFIG: dict[str, str] = {
     "vfm": "cosmos_framework/configs/base/config.py",
@@ -51,11 +50,16 @@ PATH_REMAPS: dict[str, dict[tuple[str, ...], "tuple[str, ...] | None"]] = {
         # not config.job.* — hoist it out of the job section.
         ("job", "upload_reproducible_setup"): ("upload_reproducible_setup",),
         ("model", "attn_implementation"): None,
-        ("model", "backbone"): None,                                           # VLM-only — VFM has no model.config.backbone
+        ("model", "backbone"): None,  # VLM-only — VFM has no model.config.backbone
         # Per-caption token cap lives on the nested SFT dataset, not a top-level
         # dataloader scalar — route it to the get_sft_dataset node.
         ("dataloader_train", "max_caption_tokens"): (
-            "dataloader_train", "dataloader", "datasets", "video", "dataset", "max_caption_tokens",
+            "dataloader_train",
+            "dataloader",
+            "datasets",
+            "video",
+            "dataset",
+            "max_caption_tokens",
         ),
         ("model",): ("model", "config"),
     },
@@ -76,11 +80,16 @@ PATH_REMAPS: dict[str, dict[tuple[str, ...], "tuple[str, ...] | None"]] = {
         ("model", "lora_rank"): None,
         ("model", "lora_alpha"): None,
         ("model", "lora_target_modules"): None,
-        ("model", "tokenizer"): None,                                          # blocks model.tokenizer.*
+        ("model", "reasoner_conditioning"): None,
+        ("model", "tokenizer"): None,  # blocks model.tokenizer.*
         ("dataloader_train", "seed"): None,
-        ("optimizer", "eps"): None,                                            # VLM_OPTIMIZER_KWARGS has no eps field
-        ("scheduler", "verbosity_interval"): None,                             # VLM_LAMBDACOSINE_KWARGS has no verbosity_interval
-        ("trainer", "callbacks", "compile_tokenizer"): None,                   # VFM-only callback (VLM has no torch.compile of the tokenizer)
+        ("optimizer", "eps"): None,  # VLM_OPTIMIZER_KWARGS has no eps field
+        ("scheduler", "verbosity_interval"): None,  # VLM_LAMBDACOSINE_KWARGS has no verbosity_interval
+        (
+            "trainer",
+            "callbacks",
+            "compile_tokenizer",
+        ): None,  # VFM-only callback (VLM has no torch.compile of the tokenizer)
         # Rename / re-route to the VLM path
         ("model", "attn_implementation"): ("model", "config", "policy", "attn_implementation"),
         ("model", "ema"): ("model", "config", "ema"),
@@ -89,7 +98,7 @@ PATH_REMAPS: dict[str, dict[tuple[str, ...], "tuple[str, ...] | None"]] = {
         # PoolPackingBatcher (dataloader_train.batcher.*), not flat on the loader.
         ("dataloader_train", "max_samples_per_batch"): ("dataloader_train", "batcher", "max_batch_size"),
         ("dataloader_train", "max_sequence_length"): ("dataloader_train", "batcher", "max_tokens"),
-        ("dataloader_train", "max_caption_tokens"): None,                       # VFM-only knob — VLM packer caps via max_sequence_length
+        ("dataloader_train", "max_caption_tokens"): None,  # VFM-only knob — VLM packer caps via max_sequence_length
         # Catch-all for any other model.* sub-keys
         ("model",): ("model", "config"),
     },
@@ -136,10 +145,7 @@ def build_hydra_overrides(toml_dict: dict) -> list[str]:
     overrides.append(f"experiment={experiment_name}")
 
     if task not in PATH_REMAPS:
-        raise ValueError(
-            f"[job].task={task!r} has no remap rules. "
-            f"Valid values: {sorted(PATH_REMAPS)}"
-        )
+        raise ValueError(f"[job].task={task!r} has no remap rules. Valid values: {sorted(PATH_REMAPS)}")
     rules = PATH_REMAPS[task]
 
     overlay = dict(toml_dict)
@@ -208,5 +214,3 @@ def _hydra_format(v: Any, in_list: bool = False) -> str:
             return f"'{v}'"
         return v
     return str(v)
-
-

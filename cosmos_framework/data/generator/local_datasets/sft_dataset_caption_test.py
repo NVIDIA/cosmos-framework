@@ -4,6 +4,7 @@
 
 import json
 
+from cosmos_framework.data.generator.local_datasets import sft_dataset as sft_dataset_module
 from cosmos_framework.data.generator.local_datasets.sft_dataset import _select_caption
 from cosmos_framework.inference.structured_caption import CAPTION_JSON_KEY
 
@@ -49,6 +50,23 @@ def test_weighted_caption_types_fallback():
     key, text, used_json = _select_caption({"qwen3_235b_dense": "some dense caption"})
     assert key == "qwen3_235b_dense" and used_json is False
     assert text.endswith(".")
+
+
+def test_weighted_selection_only_formats_the_chosen_caption(monkeypatch):
+    monkeypatch.setattr(
+        sft_dataset_module.random,
+        "choices",
+        lambda *_args, **_kwargs: ["qwen3_235b_dense"],
+    )
+
+    key, text, used_json = _select_caption(
+        {
+            "qwen3_235b_dense": "valid caption",
+            "qwen3_32b_dense": None,
+        }
+    )
+
+    assert (key, text, used_json) == ("qwen3_235b_dense", "valid caption.", False)
 
 
 def test_no_known_caption_key_returns_none():

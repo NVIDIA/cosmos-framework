@@ -13,9 +13,20 @@ import torch.nn.functional as F
 from torch import nn
 from torch.distributed import ProcessGroup
 
+from cosmos_framework.data.generator.sequence_packing.runtime import (
+    SequencePack,
+    from_all_seq,
+    from_und_gen_splits,
+    get_gen_seq,
+    get_num_real_tokens,
+    get_und_seq,
+    has_pad_segment,
+    set_gen_seq,
+    set_und_seq,
+    zeros_like,
+)
 from cosmos_framework.model.attention import attention as imaginaire_attention
 from cosmos_framework.model.attention.masks import CausalType
-from cosmos_framework.utils import log
 from cosmos_framework.model.generator.mot.attention import (
     AttentionMaskType,
     dispatch_attention,
@@ -77,18 +88,7 @@ from cosmos_framework.model.generator.utils.load_balancing_stats import (
     LBLMetadata,
 )
 from cosmos_framework.model.generator.utils.memory import KVToStore, MemoryState, MemoryValue
-from cosmos_framework.data.generator.sequence_packing.runtime import (
-    SequencePack,
-    from_all_seq,
-    from_und_gen_splits,
-    get_gen_seq,
-    get_num_real_tokens,
-    get_und_seq,
-    has_pad_segment,
-    set_gen_seq,
-    set_und_seq,
-    zeros_like,
-)
+from cosmos_framework.utils import log
 
 # Torch optimization settings
 torch._dynamo.config.cache_size_limit = 512
@@ -278,6 +278,7 @@ class _MoTConfigBase(object):
         qk_norm_for_diffusion: bool = True,
         include_visual: bool = False,
         include_gen_pathway: bool = True,
+        include_und_pathway: bool = True,
         gen_noisy_gating: bool = False,
         gen_cosine_router_config: CosineRouterConfig | None = None,
         gen_aux_loss_free_load_balancing_config: AuxLossFreeLoadBalancingConfig | None = None,
@@ -295,6 +296,10 @@ class _MoTConfigBase(object):
         # Build the MoT generation tower (the ``*_moe_gen`` duplicates).  Reasoner-only
         # inference disables this; every other caller keeps the default and is unchanged.
         self.include_gen_pathway = include_gen_pathway
+        # Build the understanding/reasoner tower. Generator-only training can disable
+        # this after supplying the per-layer UND K/V from an external feature provider.
+        # The default deliberately preserves the historical full dual-pathway model.
+        self.include_und_pathway = include_und_pathway
         # Noisy top-k gating on the generation-tower MoE blocks (Shazeer 2017).
         # Gen-tower only; the understanding tower never receives this flag.
         self.gen_noisy_gating = gen_noisy_gating
@@ -542,10 +547,12 @@ class PackedAttentionMoT(nn.Module):
         qk_norm_for_diffusion: bool,
         use_und_k_norm_for_gen: bool = False,
         include_gen_pathway: bool = True,
+        include_und_pathway: bool = True,
     ):
         super().__init__()
         self.config = config
         self.include_gen_pathway = include_gen_pathway
+        self.include_und_pathway = include_und_pathway
         self.layer_idx = layer_idx
         self.head_dim = getattr(config, "head_dim", config.hidden_size // config.num_attention_heads)
         self.hidden_size = config.hidden_size
@@ -557,19 +564,29 @@ class PackedAttentionMoT(nn.Module):
 
         eps = config.rms_norm_eps
 
-        # Understanding pathway projections
-        self.q_proj = nn.Linear(self.hidden_size, self.num_attention_heads * self.head_dim, bias=config.attention_bias)
-        self.k_proj = nn.Linear(self.hidden_size, self.num_key_value_heads * self.head_dim, bias=config.attention_bias)
-        self.v_proj = nn.Linear(self.hidden_size, self.num_key_value_heads * self.head_dim, bias=config.attention_bias)
-        self.o_proj = nn.Linear(self.num_attention_heads * self.head_dim, self.hidden_size, bias=config.attention_bias)
+        # Understanding pathway projections and QK norm. These modules are
+        # intentionally absent (rather than frozen) in a generator-only model,
+        # so FSDP and EMA never see or materialize their parameters.
+        if include_und_pathway:
+            self.q_proj = nn.Linear(
+                self.hidden_size, self.num_attention_heads * self.head_dim, bias=config.attention_bias
+            )
+            self.k_proj = nn.Linear(
+                self.hidden_size, self.num_key_value_heads * self.head_dim, bias=config.attention_bias
+            )
+            self.v_proj = nn.Linear(
+                self.hidden_size, self.num_key_value_heads * self.head_dim, bias=config.attention_bias
+            )
+            self.o_proj = nn.Linear(
+                self.num_attention_heads * self.head_dim, self.hidden_size, bias=config.attention_bias
+            )
 
-        # Understanding pathway QK norm
-        if qk_norm_for_text:
-            self.q_norm = layer_types.rms_norm(self.head_dim, eps=eps)
-            self.k_norm = layer_types.rms_norm(self.head_dim, eps=eps)
-        else:
-            self.q_norm = nn.Identity()
-            self.k_norm = nn.Identity()
+            if qk_norm_for_text:
+                self.q_norm = layer_types.rms_norm(self.head_dim, eps=eps)
+                self.k_norm = layer_types.rms_norm(self.head_dim, eps=eps)
+            else:
+                self.q_norm = nn.Identity()
+                self.k_norm = nn.Identity()
 
         # Generation pathway QK norm.  Everything below this point belongs to the
         # generation tower and is skipped wholesale when it is not built.
@@ -590,7 +607,13 @@ class PackedAttentionMoT(nn.Module):
         # When both pathways share the same QK norm (or neither has one) k_norm_und_for_gen
         # is None and the standard packed K tensor is used for all paths unchanged.
         # It serves the generation pathway only, so it is None whenever that tower is absent.
-        if include_gen_pathway and use_und_k_norm_for_gen and qk_norm_for_diffusion and not qk_norm_for_text:
+        if (
+            include_gen_pathway
+            and include_und_pathway
+            and use_und_k_norm_for_gen
+            and qk_norm_for_diffusion
+            and not qk_norm_for_text
+        ):
             self.k_norm_und_for_gen: nn.Module | None = layer_types.rms_norm(self.head_dim, eps=eps)
         else:
             self.k_norm_und_for_gen = None
@@ -732,22 +755,33 @@ class PackedAttentionMoT(nn.Module):
                 memory_value,
             )
 
-        q_und_in = self.q_proj(get_und_seq(pack))  # [N_und,num_heads*head_dim]
+        if not self.include_und_pathway and memory_value is None:
+            raise RuntimeError(
+                "PackedAttentionMoT was built without the understanding pathway; "
+                "its forward requires generator-only memory containing external UND K/V."
+            )
+
         q_gen_in = self.q_proj_moe_gen(get_gen_seq(pack))  # [N_gen,num_heads*head_dim]
-
-        k_und_in = self.k_proj(get_und_seq(pack))  # [N_und,num_kv_heads*head_dim]
         k_gen_in = self.k_proj_moe_gen(get_gen_seq(pack))  # [N_gen,num_kv_heads*head_dim]
-
-        v_und_in = self.v_proj(get_und_seq(pack))  # [N_und,num_kv_heads*head_dim]
         v_gen_in = self.v_proj_moe_gen(get_gen_seq(pack))  # [N_gen,num_kv_heads*head_dim]
-
-        q_und = q_und_in.view(-1, self.num_attention_heads, self.head_dim)  # [N_und,num_heads,head_dim]
-        k_und = k_und_in.view(-1, self.num_key_value_heads, self.head_dim)  # [N_und,num_kv_heads,head_dim]
-        v_und = v_und_in.view(-1, self.num_key_value_heads, self.head_dim)  # [N_und,num_kv_heads,head_dim]
 
         q_gen = q_gen_in.view(-1, self.num_attention_heads, self.head_dim)  # [N_gen,num_heads,head_dim]
         k_gen = k_gen_in.view(-1, self.num_key_value_heads, self.head_dim)  # [N_gen,num_kv_heads,head_dim]
         v_gen = v_gen_in.view(-1, self.num_key_value_heads, self.head_dim)  # [N_gen,num_kv_heads,head_dim]
+
+        if self.include_und_pathway:
+            q_und_in = self.q_proj(get_und_seq(pack))  # [N_und,num_heads*head_dim]
+            k_und_in = self.k_proj(get_und_seq(pack))  # [N_und,num_kv_heads*head_dim]
+            v_und_in = self.v_proj(get_und_seq(pack))  # [N_und,num_kv_heads*head_dim]
+            q_und = q_und_in.view(-1, self.num_attention_heads, self.head_dim)  # [N_und,num_heads,head_dim]
+            k_und = k_und_in.view(-1, self.num_key_value_heads, self.head_dim)  # [N_und,num_kv_heads,head_dim]
+            v_und = v_und_in.view(-1, self.num_key_value_heads, self.head_dim)  # [N_und,num_kv_heads,head_dim]
+        else:
+            # External-memory attention supplies the per-layer UND K/V. Keep an
+            # empty UND split in the live pack so only generator projections run.
+            q_und = q_gen.new_empty((0, self.num_attention_heads, self.head_dim))
+            k_und = k_gen.new_empty((0, self.num_key_value_heads, self.head_dim))
+            v_und = v_gen.new_empty((0, self.num_key_value_heads, self.head_dim))
 
         # The sequence length is the only size that varies between steps, but Dynamo lifts the int
         # attributes of a module into SymInts, so the head counts reach the views above as symbols.
@@ -761,22 +795,24 @@ class PackedAttentionMoT(nn.Module):
             for head_split in (q_und, k_und, v_und, q_gen, k_gen, v_gen):
                 torch._dynamo.mark_static(head_split, 1)
 
-        q_und = self.q_norm(q_und)  # [N_und,num_heads,head_dim]
-        k_und = self.k_norm(k_und)  # [N_und,num_kv_heads,head_dim]
-
         q_gen = self.q_norm_moe_gen(q_gen)  # [N_gen,num_heads,head_dim]
         k_gen = self.k_norm_moe_gen(k_gen)  # [N_gen,num_kv_heads,head_dim]
 
         packed_cos = packed_position_embeddings[0]
         packed_sin = packed_position_embeddings[1]
 
-        q_und_, k_und_ = self._apply_rotary_pos_emb(
-            q_und,
-            k_und,
-            get_und_seq(packed_cos),
-            get_und_seq(packed_sin),
-            unsqueeze_dim=1,
-        )  # q_und_: [N_und,num_heads,head_dim], k_und_: [N_und,num_kv_heads,head_dim]
+        if self.include_und_pathway:
+            q_und = self.q_norm(q_und)  # [N_und,num_heads,head_dim]
+            k_und = self.k_norm(k_und)  # [N_und,num_kv_heads,head_dim]
+            q_und_, k_und_ = self._apply_rotary_pos_emb(
+                q_und,
+                k_und,
+                get_und_seq(packed_cos),
+                get_und_seq(packed_sin),
+                unsqueeze_dim=1,
+            )  # q_und_: [N_und,num_heads,head_dim], k_und_: [N_und,num_kv_heads,head_dim]
+        else:
+            q_und_, k_und_ = q_und, k_und
         q_gen_, k_gen_ = self._apply_rotary_pos_emb(
             q_gen,
             k_gen,
@@ -829,7 +865,10 @@ class PackedAttentionMoT(nn.Module):
             and kv_to_store is None
             and not bool(getattr(memory_value, "target_only_no_text", False))
         ):
-            und_len = pack["_num_causal_tokens"]
+            # A generator-only structural model carries the original prompt
+            # layout in metadata for the external K/V provider, but it has no
+            # live UND projections to write back from this call.
+            und_len = pack["_num_causal_tokens"] if self.include_und_pathway else 0
             gen_len = pack["_num_full_tokens"]
             # When und K-norm is active, AR frame 1+ gen→und cross-attention uses
             # the normalised K, so cache k_und_for_gen_ (RMSNorm+RoPE applied) instead
@@ -890,7 +929,10 @@ class PackedAttentionMoT(nn.Module):
                 cp_group,
             )  # [N_gen,hidden_size]
         else:
-            und_seq = self.o_proj(get_und_seq(packed_attn_output))  # [N_und,hidden_size]
+            if self.include_und_pathway:
+                und_seq = self.o_proj(get_und_seq(packed_attn_output))  # [N_und,hidden_size]
+            else:
+                und_seq = get_gen_seq(packed_attn_output).new_empty((0, self.hidden_size))
             gen_seq = self.o_proj_moe_gen(get_gen_seq(packed_attn_output))  # [N_gen,hidden_size]
         return from_und_gen_splits(und_seq, gen_seq, pack), kv_to_store  # [N_und+N_gen,hidden_size]
 
@@ -924,6 +966,8 @@ class PackedAttentionMoT(nn.Module):
         Multi-token incremental prefill on top of an existing cache is not
         supported here — ``_impl_generate_reasoner_text`` never triggers it.
         """
+        if not self.include_und_pathway:
+            raise RuntimeError("reasoner_forward is unavailable because include_und_pathway=False.")
         B, T, _ = hidden_states.shape
         H = self.num_attention_heads
         H_kv = self.num_key_value_heads
@@ -983,6 +1027,7 @@ def _impl_init(
     gen_moe_shared_expert_intermediate_scale: int = 1,
     gen_moe_top_k: int | None = None,
     include_gen_pathway: bool = True,
+    include_und_pathway: bool = True,
 ) -> None:
     """Shared ``__init__`` body for the three MoT text-model variants.
 
@@ -995,8 +1040,10 @@ def _impl_init(
     # Read back by ``_impl_forward``'s guard: the joint generation forward cannot
     # run on a model built without the generation tower.
     self.include_gen_pathway = include_gen_pathway
+    self.include_und_pathway = include_und_pathway
 
-    self.embed_tokens = nn.Embedding(config.vocab_size, config.hidden_size, self.padding_idx)
+    if include_und_pathway:
+        self.embed_tokens = nn.Embedding(config.vocab_size, config.hidden_size, self.padding_idx)
 
     self.layers = nn.ModuleList()
     for layer_idx in range(config.num_hidden_layers):
@@ -1016,11 +1063,13 @@ def _impl_init(
                 gen_moe_shared_expert_intermediate_scale=gen_moe_shared_expert_intermediate_scale,
                 gen_moe_top_k=gen_moe_top_k,
                 include_gen_pathway=include_gen_pathway,
+                include_und_pathway=include_und_pathway,
             )
         )
 
     # Reasoner-pathway final norm.
-    self.norm = layer_types.rms_norm(config.hidden_size, eps=config.rms_norm_eps)
+    if include_und_pathway:
+        self.norm = layer_types.rms_norm(config.hidden_size, eps=config.rms_norm_eps)
     if include_gen_pathway:
         # Generation-pathway final norm (parallel to ``self.norm``).
         self.norm_moe_gen = layer_types.rms_norm(config.hidden_size, eps=config.rms_norm_eps)
@@ -1142,6 +1191,11 @@ def _impl_forward(
 
     # Derive gen_only once (outside compile) if using MemoryState
     memory_gen_only = memory.is_gen_only() if memory is not None else False
+    if not getattr(self, "include_und_pathway", True) and not memory_gen_only:
+        raise RuntimeError(
+            "The joint generation forward was built with include_und_pathway=False and therefore requires "
+            "a MemoryState whose is_gen_only() is True and whose per-layer values provide external UND K/V."
+        )
 
     for i, decoder_layer in enumerate(self.layers):
         # MemoryState: produce read-only MemoryValue for this layer (outside compile)
@@ -1166,9 +1220,14 @@ def _impl_forward(
     # Dense models produce no metadata. MoE models produce one stacked entry per pathway.
     final_lbl_metadata = _stack_lbl_metadata(lbl_metadata_all)
 
-    hidden_states_out = zeros_like(hidden_states)
-    set_und_seq(hidden_states_out, self.norm(get_und_seq(hidden_states)))  # [N_und,hidden_size]
-    set_gen_seq(hidden_states_out, self.norm_moe_gen(get_gen_seq(hidden_states)))  # [N_gen,hidden_size]
+    if getattr(self, "include_und_pathway", True):
+        hidden_states_out = zeros_like(hidden_states)
+        set_und_seq(hidden_states_out, self.norm(get_und_seq(hidden_states)))  # [N_und,hidden_size]
+        set_gen_seq(hidden_states_out, self.norm_moe_gen(get_gen_seq(hidden_states)))  # [N_gen,hidden_size]
+    else:
+        gen_seq = self.norm_moe_gen(get_gen_seq(hidden_states))  # [N_gen,hidden_size]
+        empty_und = gen_seq.new_empty((0, gen_seq.shape[-1]))
+        hidden_states_out = from_und_gen_splits(empty_und, gen_seq, hidden_states)
 
     return hidden_states_out, final_lbl_metadata
 
@@ -1303,10 +1362,12 @@ class MoTDecoderLayer(nn.Module):
         gen_moe_shared_expert_intermediate_scale: int = 1,
         gen_moe_top_k: int | None = None,
         include_gen_pathway: bool = True,
+        include_und_pathway: bool = True,
     ) -> None:
         super().__init__()
         self.hidden_size = config.hidden_size
         self.include_gen_pathway = include_gen_pathway
+        self.include_und_pathway = include_und_pathway
         self.self_attn = PackedAttentionMoT(
             config,
             layer_types=layer_types,
@@ -1315,6 +1376,7 @@ class MoTDecoderLayer(nn.Module):
             qk_norm_for_diffusion=qk_norm_for_diffusion,
             use_und_k_norm_for_gen=use_und_k_norm_for_gen,
             include_gen_pathway=include_gen_pathway,
+            include_und_pathway=include_und_pathway,
         )
 
         if (
@@ -1322,7 +1384,8 @@ class MoTDecoderLayer(nn.Module):
             and (layer_idx not in config.mlp_only_layers)
             and (config.num_experts > 0 and (layer_idx + 1) % config.decoder_sparse_step == 0)
         ):
-            self.mlp = Qwen3VLMoeTextSparseMoeBlock(config)
+            if include_und_pathway:
+                self.mlp = Qwen3VLMoeTextSparseMoeBlock(config)
             if include_gen_pathway:
                 # Noisy gating, the cosine router, aux-loss-free load balancing,
                 # the shared expert, and the top-k override are gen-tower only.
@@ -1336,17 +1399,20 @@ class MoTDecoderLayer(nn.Module):
                     top_k=gen_moe_top_k,
                 )
         else:
-            self.mlp = layer_types.mlp(config)
+            if include_und_pathway:
+                self.mlp = layer_types.mlp(config)
             if include_gen_pathway:
                 self.mlp_moe_gen = layer_types.mlp(config)
 
         # Each ``*_moe_gen`` norm stays registered next to its und counterpart so the
         # module (and therefore state-dict) order is byte-for-byte the previous one
         # whenever the generation pathway is built.
-        self.input_layernorm = layer_types.rms_norm(config.hidden_size, eps=config.rms_norm_eps)
+        if include_und_pathway:
+            self.input_layernorm = layer_types.rms_norm(config.hidden_size, eps=config.rms_norm_eps)
         if include_gen_pathway:
             self.input_layernorm_moe_gen = layer_types.rms_norm(config.hidden_size, eps=config.rms_norm_eps)
-        self.post_attention_layernorm = layer_types.rms_norm(config.hidden_size, eps=config.rms_norm_eps)
+        if include_und_pathway:
+            self.post_attention_layernorm = layer_types.rms_norm(config.hidden_size, eps=config.rms_norm_eps)
         if include_gen_pathway:
             self.post_attention_layernorm_moe_gen = layer_types.rms_norm(config.hidden_size, eps=config.rms_norm_eps)
         self.lbl_config: LBLConfig = lbl_config or LBLConfig()
@@ -1388,6 +1454,11 @@ class MoTDecoderLayer(nn.Module):
                 Target-only teacher forcing also slices away control GEN rows
                 before every decoder operation and restores the full layout on return.
         """
+        if not self.include_und_pathway and not gen_only:
+            raise RuntimeError(
+                "MoTDecoderLayer was built with include_und_pathway=False; forward requires gen_only=True "
+                "with external UND K/V supplied through memory_value."
+            )
         target_only_no_text = gen_only and bool(getattr(memory_value, "target_only_no_text", False))
         layer_input = input
         layer_position_embeddings = packed_position_embeddings
@@ -1398,9 +1469,8 @@ class MoTDecoderLayer(nn.Module):
                 raise ValueError("Target-only teacher forcing does not support context-parallel NATTEN metadata.")
             if self._sample_lbl_und or self._sample_lbl_gen:
                 raise ValueError("Target-only teacher forcing does not support sample load-balancing metadata.")
-            if isinstance(self.mlp, Qwen3VLMoeTextSparseMoeBlock) or isinstance(
-                self.mlp_moe_gen, Qwen3VLMoeTextSparseMoeBlock
-            ):
+            und_mlp_is_sparse = self.include_und_pathway and isinstance(self.mlp, Qwen3VLMoeTextSparseMoeBlock)
+            if und_mlp_is_sparse or isinstance(self.mlp_moe_gen, Qwen3VLMoeTextSparseMoeBlock):
                 raise ValueError("Target-only teacher forcing currently supports dense decoder MLPs only.")
             target_start = int(getattr(memory_value, "target_gen_start", 0))
             target_length = int(getattr(memory_value, "target_gen_length", 0))
@@ -1440,8 +1510,8 @@ class MoTDecoderLayer(nn.Module):
             )
 
         # Pre-Attention layernorm
-        if target_only_no_text:
-            norm_und = get_und_seq(layer_input)  # [0,hidden_size]
+        if gen_only:
+            norm_und = get_und_seq(layer_input)[:0]  # [0,hidden_size]
         else:
             norm_und = self.input_layernorm(get_und_seq(layer_input))  # [N_und,hidden_size]
         pack_norm_out = from_und_gen_splits(
@@ -1621,6 +1691,8 @@ class MoTDecoderLayer(nn.Module):
         single-rank settings the registration is a no-op and this
         method just runs the und pathway directly.
         """
+        if not self.include_und_pathway:
+            raise RuntimeError("reasoner_forward is unavailable because include_und_pathway=False.")
         residual = hidden_states
         h = self.input_layernorm(hidden_states)
         attn_out = self.self_attn.reasoner_forward(h, cos, sin, cache, layer_idx)
@@ -1655,6 +1727,7 @@ class Qwen3VLTextModel(Qwen3VLPreTrainedModel):
         qk_norm_for_diffusion: bool,
         use_und_k_norm_for_gen: bool,
         include_gen_pathway: bool = True,
+        include_und_pathway: bool = True,
     ):
         super().__init__(config)
         _impl_init(
@@ -1665,6 +1738,7 @@ class Qwen3VLTextModel(Qwen3VLPreTrainedModel):
             qk_norm_for_diffusion=qk_norm_for_diffusion,
             use_und_k_norm_for_gen=use_und_k_norm_for_gen,
             include_gen_pathway=include_gen_pathway,
+            include_und_pathway=include_und_pathway,
         )
 
     def forward(self, *args, **kwargs):
@@ -1696,6 +1770,7 @@ class Qwen3VLMoeTextModel(Qwen3VLMoePreTrainedModel):
         gen_moe_shared_expert_intermediate_scale: int = 1,
         gen_moe_top_k: int | None = None,
         include_gen_pathway: bool = True,
+        include_und_pathway: bool = True,
     ) -> None:
         super().__init__(config)
         _impl_init(
@@ -1713,6 +1788,7 @@ class Qwen3VLMoeTextModel(Qwen3VLMoePreTrainedModel):
             gen_moe_shared_expert_intermediate_scale=gen_moe_shared_expert_intermediate_scale,
             gen_moe_top_k=gen_moe_top_k,
             include_gen_pathway=include_gen_pathway,
+            include_und_pathway=include_und_pathway,
         )
 
     def forward(self, *args, **kwargs):
@@ -1737,6 +1813,7 @@ class Nemotron3DenseVLTextModel(Nemotron3DenseVLPreTrainedModel):
         qk_norm_for_diffusion: bool,
         use_und_k_norm_for_gen: bool,
         include_gen_pathway: bool = True,
+        include_und_pathway: bool = True,
     ):
         super().__init__(config)
         _impl_init(
@@ -1747,6 +1824,7 @@ class Nemotron3DenseVLTextModel(Nemotron3DenseVLPreTrainedModel):
             qk_norm_for_diffusion=qk_norm_for_diffusion,
             use_und_k_norm_for_gen=use_und_k_norm_for_gen,
             include_gen_pathway=include_gen_pathway,
+            include_und_pathway=include_und_pathway,
         )
 
     def forward(self, *args, **kwargs):
@@ -1873,6 +1951,8 @@ def _impl_reasoner_forward(
             ``inputs_embeds.dtype``; the canonical producer
             ``prepare_multimodal_reasoner_inputs`` aligns both.
     """
+    if not getattr(self, "include_und_pathway", True):
+        raise RuntimeError("reasoner_forward is unavailable because include_und_pathway=False.")
     if (input_ids is None) == (inputs_embeds is None):
         raise ValueError("Specify exactly one of input_ids or inputs_embeds.")
 
@@ -2177,6 +2257,8 @@ def _impl_generate_reasoner_text(
         ``return_only_new_tokens=True``).  ``T_new <= max_new_tokens``;
         early termination only occurs when every sample emits EOS.
     """
+    if not getattr(causal_lm.model, "include_und_pathway", True):
+        raise RuntimeError("generate_reasoner_text is unavailable because include_und_pathway=False.")
     if input_ids.dim() != 2 or input_ids.shape[1] < 1:
         raise ValueError(f"input_ids must have shape [B, T_prompt>=1], got {tuple(input_ids.shape)}")
     if max_new_tokens < 0:
@@ -2419,15 +2501,20 @@ class Qwen3VLTextForCausalLM(Qwen3VLPreTrainedModel):
         super().__init__(config.full_config)
 
         text_config = config.text_config
+        include_und_pathway = getattr(config, "include_und_pathway", True)
         self.model = Qwen3VLTextModel(
             text_config,
             qk_norm_for_text=config.qk_norm_for_text,
             qk_norm_for_diffusion=config.qk_norm_for_diffusion,
             use_und_k_norm_for_gen=getattr(config, "use_und_k_norm_for_gen", False),
             include_gen_pathway=getattr(config, "include_gen_pathway", True),
+            include_und_pathway=include_und_pathway,
         )
         self.vocab_size = text_config.vocab_size
-        self.lm_head = nn.Linear(text_config.hidden_size, text_config.vocab_size, bias=False)
+        if include_und_pathway:
+            self.lm_head = nn.Linear(text_config.hidden_size, text_config.vocab_size, bias=False)
+        else:
+            self._tied_weights_keys = []
 
         # The wrapper's ``vision_config`` property gates on
         # ``include_visual`` and materializes the HF vision config from
@@ -2451,6 +2538,8 @@ class Qwen3VLTextForCausalLM(Qwen3VLPreTrainedModel):
         keep their default ``ones`` init and we just skip the copy rather
         than raising.
         """
+        if not self.model.include_und_pathway:
+            raise RuntimeError("init_moe requires the understanding pathway, but include_und_pathway=False.")
         state_dict = self.state_dict()
         for name, param in self.named_parameters():
             if "moe_gen" not in name:
@@ -2467,9 +2556,13 @@ class Qwen3VLTextForCausalLM(Qwen3VLPreTrainedModel):
         # via `base_model_prefix="model"`, but defining the method here is
         # the canonical HF idiom and removes a hidden dependency on
         # `base_model_prefix` being correctly set.
+        if not self.model.include_und_pathway:
+            raise RuntimeError("Input embeddings are unavailable because include_und_pathway=False.")
         return self.model.embed_tokens
 
     def set_input_embeddings(self, value: nn.Embedding) -> None:
+        if not self.model.include_und_pathway:
+            raise RuntimeError("Cannot set input embeddings because include_und_pathway=False.")
         self.model.embed_tokens = value
 
     def forward(
@@ -2569,12 +2662,14 @@ class Qwen3VLMoeTextForCausalLM(Qwen3VLMoePreTrainedModel):
         super().__init__(config.full_config)
 
         text_config = config.text_config
+        include_und_pathway = getattr(config, "include_und_pathway", True)
         self.model = Qwen3VLMoeTextModel(
             text_config,
             qk_norm_for_text=config.qk_norm_for_text,
             qk_norm_for_diffusion=config.qk_norm_for_diffusion,
             use_und_k_norm_for_gen=getattr(config, "use_und_k_norm_for_gen", False),
             include_gen_pathway=getattr(config, "include_gen_pathway", True),
+            include_und_pathway=include_und_pathway,
             gen_noisy_gating=config.gen_noisy_gating,
             gen_cosine_router_config=getattr(config, "gen_cosine_router_config", None),
             gen_aux_loss_free_load_balancing_config=config.gen_aux_loss_free_load_balancing_config,
@@ -2588,7 +2683,10 @@ class Qwen3VLMoeTextForCausalLM(Qwen3VLMoePreTrainedModel):
             gen_moe_top_k=getattr(config, "gen_moe_top_k", None),
         )
         self.vocab_size = text_config.vocab_size
-        self.lm_head = nn.Linear(text_config.hidden_size, text_config.vocab_size, bias=False)
+        if include_und_pathway:
+            self.lm_head = nn.Linear(text_config.hidden_size, text_config.vocab_size, bias=False)
+        else:
+            self._tied_weights_keys = []
 
         # The wrapper's ``vision_config`` property gates on
         # ``include_visual`` and materializes the HF vision config from
@@ -2606,6 +2704,8 @@ class Qwen3VLMoeTextForCausalLM(Qwen3VLMoePreTrainedModel):
         See :meth:`Qwen3VLTextForCausalLM.init_moe` for the q_norm/k_norm
         Identity-tower handling shared with the dense variant.
         """
+        if not self.model.include_und_pathway:
+            raise RuntimeError("init_moe requires the understanding pathway, but include_und_pathway=False.")
         state_dict = self.state_dict()
         for name, param in self.named_parameters():
             if "moe_gen" not in name:
@@ -2634,9 +2734,13 @@ class Qwen3VLMoeTextForCausalLM(Qwen3VLMoePreTrainedModel):
 
     def get_input_embeddings(self) -> nn.Embedding:
         # See note on `Qwen3VLTextForCausalLM.get_input_embeddings`.
+        if not self.model.include_und_pathway:
+            raise RuntimeError("Input embeddings are unavailable because include_und_pathway=False.")
         return self.model.embed_tokens
 
     def set_input_embeddings(self, value: nn.Embedding) -> None:
+        if not self.model.include_und_pathway:
+            raise RuntimeError("Cannot set input embeddings because include_und_pathway=False.")
         self.model.embed_tokens = value
 
     def forward(
@@ -2773,15 +2877,18 @@ class Nemotron3DenseVLTextForCausalLM(Nemotron3DenseVLPreTrainedModel):
         super().__init__(config.full_config)
 
         text_config = config.text_config
+        include_und_pathway = getattr(config, "include_und_pathway", True)
         self.model = Nemotron3DenseVLTextModel(
             text_config,
             qk_norm_for_text=config.qk_norm_for_text,
             qk_norm_for_diffusion=config.qk_norm_for_diffusion,
             use_und_k_norm_for_gen=getattr(config, "use_und_k_norm_for_gen", False),
             include_gen_pathway=getattr(config, "include_gen_pathway", True),
+            include_und_pathway=include_und_pathway,
         )
         self.vocab_size = text_config.vocab_size
-        self.lm_head = nn.Linear(text_config.hidden_size, text_config.vocab_size, bias=False)
+        if include_und_pathway:
+            self.lm_head = nn.Linear(text_config.hidden_size, text_config.vocab_size, bias=False)
 
         assert config.vision_config is None, "Nemotron 3 Dense VL has no vision config"
 
@@ -2789,6 +2896,8 @@ class Nemotron3DenseVLTextForCausalLM(Nemotron3DenseVLPreTrainedModel):
 
     def init_moe(self) -> None:
         """Copy understanding-pathway weights into the generation-pathway parameters."""
+        if not self.model.include_und_pathway:
+            raise RuntimeError("init_moe requires the understanding pathway, but include_und_pathway=False.")
         state_dict = self.state_dict()
         for name, param in self.named_parameters():
             if "moe_gen" not in name:
@@ -2805,9 +2914,13 @@ class Nemotron3DenseVLTextForCausalLM(Nemotron3DenseVLPreTrainedModel):
 
     def get_input_embeddings(self) -> nn.Embedding:
         # See note on `Qwen3VLTextForCausalLM.get_input_embeddings`.
+        if not self.model.include_und_pathway:
+            raise RuntimeError("Input embeddings are unavailable because include_und_pathway=False.")
         return self.model.embed_tokens
 
     def set_input_embeddings(self, value: nn.Embedding) -> None:
+        if not self.model.include_und_pathway:
+            raise RuntimeError("Cannot set input embeddings because include_und_pathway=False.")
         self.model.embed_tokens = value
 
     def forward(
@@ -3002,3 +3115,57 @@ class Nemotron3DenseVLTextForCausalLM(Nemotron3DenseVLPreTrainedModel):
         self.config.video_token_id = top_cfg["video_token_id"]
         self.config.vision_start_token_id = top_cfg["vision_start_token_id"]
         self.config.vision_config = SimpleNamespace(spatial_merge_size=pc["spatial_merge_size"])
+
+
+def prune_und_pathway_(causal_lm: nn.Module) -> nn.Module:
+    """Remove the frozen understanding tower before materialization/FSDP.
+
+    The operation is in-place and idempotent. It is intended for a complete
+    ``*TextForCausalLM`` wrapper constructed on the meta device: pruning there
+    prevents the deleted parameters from ever being allocated, sharded, or
+    copied into EMA. Generation-tower module names are not rewritten, so their
+    checkpoint FQNs stay compatible with the full model.
+
+    After pruning, joint forward is valid only with a generator-only
+    :class:`MemoryState` that supplies external per-layer UND K/V.
+    """
+    model = getattr(causal_lm, "model", None)
+    layers = getattr(model, "layers", None)
+    if model is None or layers is None:
+        raise TypeError("prune_und_pathway_ expects a *TextForCausalLM wrapper with model.layers.")
+    if not getattr(model, "include_gen_pathway", True):
+        raise ValueError("Cannot prune the understanding pathway from a model without a generation pathway.")
+
+    def _delete(module: nn.Module, *names: str) -> None:
+        for name in names:
+            if hasattr(module, name):
+                delattr(module, name)
+
+    # ``visual`` is the optional Reasoner-side image/video encoder. External
+    # text K/V makes it as unnecessary as the token embedding and LM head.
+    _delete(causal_lm, "lm_head", "visual")
+    _delete(model, "embed_tokens", "norm")
+    model.include_und_pathway = False
+    if hasattr(model, "config"):
+        model.config.include_und_pathway = False
+
+    for layer in layers:
+        _delete(layer, "mlp", "input_layernorm", "post_attention_layernorm")
+        layer.include_und_pathway = False
+
+        self_attn = layer.self_attn
+        _delete(self_attn, "q_proj", "k_proj", "v_proj", "o_proj", "q_norm", "k_norm")
+        # This optional normalizer acts only on newly projected UND K. External
+        # features already contain the generator-facing normalized/RoPE K.
+        self_attn.k_norm_und_for_gen = None
+        self_attn.include_und_pathway = False
+
+    if hasattr(causal_lm, "config"):
+        causal_lm.config.include_und_pathway = False
+        if hasattr(causal_lm.config, "include_visual"):
+            causal_lm.config.include_visual = False
+    # Qwen wrappers declare the reasoner embedding/head tie at class level.
+    # Shadow it on this generator-only instance so save/load utilities do not
+    # look for a pair that was deliberately removed.
+    causal_lm._tied_weights_keys = []
+    return causal_lm
