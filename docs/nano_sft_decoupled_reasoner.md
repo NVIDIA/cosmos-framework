@@ -357,14 +357,25 @@ cannot prove whether EMA was loaded or left randomly initialized.
 The shipped full Nano DCP was audited against the pruned vision-SFT target: all
 405 target tensors (397 language-model GEN tensors plus 8 VFM tensors) exist with
 matching shapes, and strict DCP subset loading succeeds while ignoring source-only
-UND tensors. Phase 3 additionally completed a real seven-rank remote-conditioning
-optimizer step, wrote a generator-only DCP, and loaded that DCP through a
-resume-only reshard gate. Resume-and-continue parity is still pending.
+UND tensors. Phase 3 first completed a seven-rank remote execution smoke whose
+scheduled optimizer call used effective LR 0. That run produced gradients and
+Adam moment state, wrote a generator-only DCP, and passed a resume-only reshard
+gate, but 0/405 live Generator tensors changed. It validated the execution and
+checkpoint structure, not a learned parameter update.
+
+A subsequent two-iteration run performed its first nonzero-LR update at `2e-6`;
+all 405 live Generator tensors changed relative to the warm-start checkpoint. The
+same job then restored model, optimizer, scheduler, and trainer state from
+iteration 2 and continued through iteration 3 at LR `4e-6`; all 405 live tensors
+changed again. Operational resume-and-continue is therefore validated. The run
+did not restore a dataloader cursor because no dataloader checkpoint was written,
+so exact datastream-position resume and uninterrupted-versus-resumed numerical
+parity remain pending.
 
 Still to validate before production use:
 
 - full-checkpoint to generator-only warm start from safetensors;
-- generator-only resume-and-continue while preserving immutable cache identity;
+- exact datastream-position resume and uninterrupted-versus-resumed numerical parity;
 - reconstruction of a full inference model from the generator checkpoint and pinned
   Reasoner; and
 - mismatched generator-checkpoint/cache provenance rejection on resume.
@@ -604,26 +615,26 @@ generator nodes.
 Keep the feature contract in training/model code; a training job must not import Ray or
 other heavyweight inference-only dependencies.
 
-| Area                                                      | Current status                                                                                                                                                                                                                                         |
-| --------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `configs/base/defaults/model_config.py`                   | Implemented typed runtime configuration and compatibility validation.                                                                                                                                                                                  |
-| `configs/toml_config/sft_config.py`                       | Implemented the flat `[model.reasoner_conditioning]` TOML schema.                                                                                                                                                                                      |
-| `model/generator/mot/unified_mot.py`                      | Implemented optional UND construction, GEN-only execution, and `prune_und_pathway_`.                                                                                                                                                                   |
-| `model/generator/mot/cosmos3_vfm_network.py`              | Implemented generator-only packed layout without text embedding.                                                                                                                                                                                       |
-| `model/generator/omni_mot_model.py`                       | Implemented inline/offline/remote lifecycle, pre-noise submission, synchronized resolution, structural pruning, and provider-neutral startup signature guards. Read-through remains pending.                                                           |
-| `model/generator/reasoner_features.py`                    | Implemented identity/fingerprint/signature/request/result types, UND-only extraction, inline/static memory, and exact two-way external-K/V attention.                                                                                                  |
-| `model/generator/reasoner_feature_cache.py`               | Implemented immutable cache identity, fingerprints, bounded/resumable sharded writers, distributed finalization, manifest validation, and offline provider.                                                                                            |
-| `model/generator/reasoner_runtime.py`                     | Implemented shared Reasoner-only construction, strict DCP restore, request admission/fingerprint validation, and serialized execution for offline extraction and serving.                                                                              |
-| `model/generator/reasoner_remote.py`                      | Implemented tensor codec, protocol validation, streaming response assembly, checksums, asynchronous client, deadlines, and bounded transient retries.                                                                                                  |
-| `model/generator/reasoner_remote_server.py`               | Implemented one-replica token-bounded gRPC service, single-GPU execution, timing metadata, backpressure, and unhealthy-after-OOM/runtime-invariant behavior.                                                                                           |
-| `protos/reasoner_features/v1/`                            | Implemented versioned `GetInfo` and server-streaming `Generate` protobuf schema and generated Python bindings.                                                                                                                                         |
-| `model/generator/mot/multiview_attention.py`              | Pending cache-aware per-view/maskless/Flex support.                                                                                                                                                                                                    |
-| `data/generator/local_datasets/sft_reasoner_documents.py` | Implemented finite deterministic standard-SFT document enumeration with training framing parity.                                                                                                                                                       |
-| `data/generator/`                                         | Centralized multi-batch prefetch/cache-handle plumbing remains pending.                                                                                                                                                                                |
-| `checkpoint/reasoner_only.py`                             | Implemented strict regular/EMA Reasoner-only local-DCP loading with independent reads, safe Generator/visual source-leaf omission, and a seven-rank generator-only save/resume-load smoke; resume-and-continue/composition validation remains pending. |
-| `scripts/extract_reasoner_features.py`                    | Implemented resumable distributed shared-POSIX cache extraction and atomic publication without NCCL collectives.                                                                                                                                       |
-| `scripts/serve_reasoner_features.py`                      | Implemented one-process/one-GPU remote service launch after load-before-listen readiness.                                                                                                                                                              |
-| `examples/toml/sft_config/`                               | Pending opt-in Nano cached-Reasoner recipe after full-scale parity passes.                                                                                                                                                                             |
+| Area                                                      | Current status                                                                                                                                                                                                                                                                                                               |
+| --------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `configs/base/defaults/model_config.py`                   | Implemented typed runtime configuration and compatibility validation.                                                                                                                                                                                                                                                        |
+| `configs/toml_config/sft_config.py`                       | Implemented the flat `[model.reasoner_conditioning]` TOML schema.                                                                                                                                                                                                                                                            |
+| `model/generator/mot/unified_mot.py`                      | Implemented optional UND construction, GEN-only execution, and `prune_und_pathway_`.                                                                                                                                                                                                                                         |
+| `model/generator/mot/cosmos3_vfm_network.py`              | Implemented generator-only packed layout without text embedding.                                                                                                                                                                                                                                                             |
+| `model/generator/omni_mot_model.py`                       | Implemented inline/offline/remote lifecycle, pre-noise submission, synchronized resolution, structural pruning, and provider-neutral startup signature guards. Read-through remains pending.                                                                                                                                 |
+| `model/generator/reasoner_features.py`                    | Implemented identity/fingerprint/signature/request/result types, UND-only extraction, inline/static memory, and exact two-way external-K/V attention.                                                                                                                                                                        |
+| `model/generator/reasoner_feature_cache.py`               | Implemented immutable cache identity, fingerprints, bounded/resumable sharded writers, distributed finalization, manifest validation, and offline provider.                                                                                                                                                                  |
+| `model/generator/reasoner_runtime.py`                     | Implemented shared Reasoner-only construction, strict DCP restore, request admission/fingerprint validation, and serialized execution for offline extraction and serving.                                                                                                                                                    |
+| `model/generator/reasoner_remote.py`                      | Implemented tensor codec, protocol validation, streaming response assembly, checksums, asynchronous client, deadlines, and bounded transient retries.                                                                                                                                                                        |
+| `model/generator/reasoner_remote_server.py`               | Implemented one-replica token-bounded gRPC service, single-GPU execution, timing metadata, backpressure, and unhealthy-after-OOM/runtime-invariant behavior.                                                                                                                                                                 |
+| `protos/reasoner_features/v1/`                            | Implemented versioned `GetInfo` and server-streaming `Generate` protobuf schema and generated Python bindings.                                                                                                                                                                                                               |
+| `model/generator/mot/multiview_attention.py`              | Pending cache-aware per-view/maskless/Flex support.                                                                                                                                                                                                                                                                          |
+| `data/generator/local_datasets/sft_reasoner_documents.py` | Implemented finite deterministic standard-SFT document enumeration with training framing parity.                                                                                                                                                                                                                             |
+| `data/generator/`                                         | Centralized multi-batch prefetch/cache-handle plumbing remains pending.                                                                                                                                                                                                                                                      |
+| `checkpoint/reasoner_only.py`                             | Implemented strict regular/EMA Reasoner-only local-DCP loading with independent reads, safe Generator/visual source-leaf omission, seven-rank generator-only save/resume-load, a nonzero-LR update smoke, and operational resume-and-continue; dataloader-cursor parity and full-model inference composition remain pending. |
+| `scripts/extract_reasoner_features.py`                    | Implemented resumable distributed shared-POSIX cache extraction and atomic publication without NCCL collectives.                                                                                                                                                                                                             |
+| `scripts/serve_reasoner_features.py`                      | Implemented one-process/one-GPU remote service launch after load-before-listen readiness.                                                                                                                                                                                                                                    |
+| `examples/toml/sft_config/`                               | Pending opt-in Nano cached-Reasoner recipe after full-scale parity passes.                                                                                                                                                                                                                                                   |
 
 The training model imports only the provider/client module when `backend="remote"`;
 it does not import the server implementation or Ray/vLLM inference infrastructure.
@@ -711,9 +722,13 @@ Completed:
 7. Added all-rank fail-closed gates for provider startup, full feature-signature
    validation, synchronous request construction/submission, and asynchronous
    resolution before any rank enters the corresponding FSDP collective.
-8. Completed one real optimizer step with one dedicated Reasoner H20 and seven
-   Generator FSDP H20s, including warm start, forward/backward, optimizer/EMA,
-   and a generator-only checkpoint save.
+8. Completed a seven-rank remote forward/backward and checkpoint smoke. Its initial
+   optimizer call used effective LR 0, so it did not change Generator weights.
+9. Completed a fresh two-iteration run whose second optimizer call used LR `2e-6`;
+   an exhaustive audit found all 405 live Generator tensors changed.
+10. Restored model, optimizer, scheduler, and trainer state from iteration 2 and
+    continued the same job through iteration 3 at LR `4e-6`; all 405 live tensors
+    changed again. Dataloader-cursor and uninterrupted-run parity remain pending.
 
 Still pending:
 
@@ -735,19 +750,39 @@ allocated about 15.26 GiB after loading and peaked at about 15.40 GiB reserved. 
 validate the transport and runtime, not capacity: the prompt was intentionally short,
 the network path was loopback, and there were no concurrent Generator ranks.
 
-The end-to-end training smoke reserved physical GPU 0 for the Reasoner and ran a
-seven-rank Generator FSDP job on GPUs 1--7 with a 16,384-token packing cap. One
-optimizer step completed at loss 0.2512 with no CUDA OOM or RPC error. Generator
-CUDA allocator peaks were 20.41--20.46 GiB allocated and 21.47--21.51 GiB reserved;
-physical peaks were 23.20--25.11 GiB. The Reasoner peaked at 18.49 GiB. The reported
-71.79-second iteration included a 31.37-second, 104-GiB checkpoint save, so it is
-not comparable to the earlier steady-state eight-rank benchmark. The saved model
-contains only 405 live plus 405 EMA Generator leaves and no Reasoner embedding,
-LM-head, or UND-expert leaves. Raw logs and telemetry are under
-`outputs/nano_sft_reasoner_benchmark/remote_smoke_7gpu_1step_20260922_v1`.
-After the final all-rank signature gate was added, the same seven-rank topology
-also completed a resume-only load of that checkpoint in 38.70 seconds without
-an error or additional checkpoint write.
+The first end-to-end execution smoke reserved physical GPU 0 for the Reasoner and
+ran a seven-rank Generator FSDP job on GPUs 1--7 with a 16,384-token packing cap.
+Its only scheduled optimizer call used effective LR 0. The pass completed at loss
+0.2512 with global gradient norm 0.49541 and no CUDA OOM or RPC error, but an
+exhaustive audit found 0/405 live Generator tensors changed. Generator CUDA
+allocator peaks were 20.41--20.46 GiB allocated and 21.47--21.51 GiB reserved;
+physical peaks were 23.20--25.11 GiB. The Reasoner peaked at 18.49 GiB. The
+reported 71.79-second iteration included a 31.37-second, 104-GiB checkpoint save,
+so it is not comparable to the earlier steady-state eight-rank benchmark. Its
+saved model contains only 405 live plus 405 EMA Generator leaves and no Reasoner
+embedding, LM-head, or UND-expert leaves. Raw logs and telemetry are under
+`outputs/nano_sft_reasoner_benchmark/remote_smoke_7gpu_1step_20260922_v1`. After
+the final all-rank signature gate was added, the same topology completed a
+resume-only load in 38.70 seconds without an additional training step.
+
+A fresh two-iteration run then exercised a real update: its optimizer calls used
+LR 0 and `2e-6`. All 405 live Generator tensors changed relative to the shipped
+warm-start DCP, covering 96.3922% of their elements with maximum absolute delta
+`2.026557922e-6` and no NaN or Inf. Its two iterations reported 41.21 and 52.28
+seconds; the latter included a 32.02-second checkpoint save. Physical peaks were
+18.577 GiB on the Reasoner GPU and 30.007--31.718 GiB on the Generator GPUs. This
+run used the recipe-default CFG dropout and modality-conditioning distribution,
+so its loss and timing are not a paired A/B comparison with the first smoke.
+
+The same job then restarted the service, loaded its iteration-2 model, optimizer,
+scheduler, and trainer state in 10.49 seconds, and completed iteration 3 at the
+restored LR of `4e-6`. The saved optimizer steps all advanced from 2 to 3, and an
+iter-2-to-iter-3 audit found all 405 live tensors changed, with maximum absolute
+delta `4.053115845e-6` and no NaN or Inf. The dataloader subtree was absent and
+explicitly skipped, so this proves operational training-state continuation rather
+than exact datastream-position or uninterrupted-versus-resumed parity. The fresh
+and resumed artifacts are under
+`outputs/nano_sft_reasoner_benchmark/remote_smoke_7gpu_2step_20260922_v2`.
 
 ### Phase 4: broaden support — pending
 
@@ -764,6 +799,9 @@ Validated in the current implementation:
 - tiny dense Qwen output and all-generator-gradient parity between the full cached
   model and `prune_und_pathway_` model on one H20;
 - absence of UND parameters from the structurally pruned state dict;
+- full Nano DCP subset warm start, a real nonzero-LR update of all 405 selected
+  Generator tensors, and seven-rank model/optimizer/scheduler/trainer continuation
+  from a generator-only checkpoint;
 - immutable-cache round trips, batching across shards, content-addressed prompt
   reuse, cache misses, stale fingerprints, malformed manifests, and corrupt shard
   checksums; and
@@ -773,12 +811,15 @@ Validated in the current implementation:
 
 Remaining correctness gates:
 
-- one optimizer step produces equivalent selected weights;
+- loss, gradients, and post-update selected weights match an identically configured
+  `joint`, `inline`, or `offline` run;
+- a resumed update matches an uninterrupted run with identical data, persisted
+  dataloader position, and RNG state;
 - normal prompt, CFG-null prompt, maximum-length prompt, and per-view captions;
-- full checkpoint to generator-only warm start, generator-only resume, and full-model
-  inference composition;
-- representative/max-length remote K/V parity, service restart/OOM behavior, and
-  capacity scaling; and
+- safetensors full-checkpoint to generator-only warm start and full-model inference
+  composition;
+- representative/max-length remote K/V parity, real-service OOM recovery, and capacity
+  scaling; and
 - end-to-end stale cache/config provenance is rejected during distributed startup
   and resume, before any FSDP forward.
 
@@ -788,7 +829,8 @@ Distributed gates:
   mode; compile-enabled validation remains pending;
 - no Reasoner parameter appears in either regular or EMA model state on training ranks;
 - no collective divergence when a cache/service request fails; and
-- deterministic sample-to-feature association across resume and dataloader workers.
+- deterministic sample-to-feature association across dataloader workers, including a
+  persisted cursor on resume, remains pending.
 
 Performance report:
 
