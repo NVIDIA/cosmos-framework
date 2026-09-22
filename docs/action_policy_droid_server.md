@@ -14,6 +14,7 @@ ______________________________________________________________________
 **Table of Contents**
 
 - [Policy Server](#policy-server)
+  - [Two-rank CFG parallelism](#two-rank-cfg-parallelism)
 - [Simulation Client](#simulation-client)
 
 ______________________________________________________________________
