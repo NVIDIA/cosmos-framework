@@ -80,7 +80,7 @@ _CONCAT_VIEW_DESCRIPTION = (
     "sides, with the robot visible."
 )
 _DEFAULT_HF_REVISION = "main"
-_CONTROL_GROUP_TIMEOUT = timedelta(days=365)
+_CONTROL_GROUP_TIMEOUT = timedelta(hours=3)
 _ROBOLAB_POLICY_HF_REPOSITORIES = {
     "Cosmos3-Nano-Policy-DROID": "nvidia/Cosmos3-Nano-Policy-DROID",
     "nvidia/Cosmos3-Nano-Policy-DROID": "nvidia/Cosmos3-Nano-Policy-DROID",
@@ -731,20 +731,66 @@ class RobolabPolicyService:
         if error is not None:
             raise RuntimeError(f"Distributed worker rejected request {request_id}: {error}")
 
+    def _exchange_preparation_status(self, request_id: int, *, error: str | None) -> dict[int, str]:
+        if self._control_group is None:
+            raise RuntimeError("Distributed control group is not initialized")
+
+        status = {"request_id": request_id, "rank": dist.get_rank(), "error": error}
+        gathered_statuses: list[Any] = [None] * dist.get_world_size(group=self._control_group)
+        dist.all_gather_object(gathered_statuses, status, group=self._control_group)
+
+        errors: dict[int, str] = {}
+        for gathered_status in gathered_statuses:
+            if not isinstance(gathered_status, dict):
+                raise TypeError(f"Expected a distributed preparation status dict, got {type(gathered_status).__name__}")
+            if gathered_status.get("request_id") != request_id:
+                raise RuntimeError(
+                    f"Expected preparation status for request {request_id}, got {gathered_status.get('request_id')!r}"
+                )
+            rank = gathered_status.get("rank")
+            if not isinstance(rank, int):
+                raise TypeError(f"Expected preparation status rank to be an int, got {type(rank).__name__}")
+            gathered_error = gathered_status.get("error")
+            if gathered_error is not None:
+                if not isinstance(gathered_error, str):
+                    raise TypeError(
+                        f"Expected preparation status error to be a string, got {type(gathered_error).__name__}"
+                    )
+                errors[rank] = gathered_error
+        return errors
+
     def infer(self, obs: dict[str, Any]) -> dict[str, Any]:
         # Serialize request dispatch and CFGP generation so every rank enters
         # the model collectives in the same order.
         with self._lock:
             start_time = time.monotonic()
-            # Reject malformed client input before dispatching anything to the
-            # worker. The worker therefore remains ready for the next request.
-            sample = self._build_sample(obs)
             seed = self._next_seed()
+            request_id: int | None = None
             if self._distributed_enabled():
                 request_id = self._control_request_id
                 self._send_control_request(request_id, {"kind": "infer", "obs": obs, "seed": seed})
                 self._control_request_id += 1
-                self._wait_worker_ready(request_id)
+
+            sample: dict[str, Any] | None = None
+            preparation_exception: Exception | None = None
+            try:
+                sample = self._build_sample(obs)
+            except Exception as exc:
+                preparation_exception = exc
+
+            if request_id is not None:
+                error = None
+                if preparation_exception is not None:
+                    error = f"{type(preparation_exception).__name__}: {preparation_exception}"
+                preparation_errors = self._exchange_preparation_status(request_id, error=error)
+                if preparation_errors:
+                    if preparation_exception is not None:
+                        raise preparation_exception
+                    raise RuntimeError(f"Distributed request {request_id} preparation failed: {preparation_errors}")
+            elif preparation_exception is not None:
+                raise preparation_exception
+
+            assert sample is not None
             samples = self._generate(sample, seed)
             return self._format_outputs(obs, samples, start_time=start_time)
 
@@ -774,10 +820,12 @@ class RobolabPolicyService:
                 error = f"Unsupported distributed request kind: {kind!r}"
                 self._send_worker_ready(request_id, error=error)
                 log.error(f"[robolab-policy-server] rank {rank}: {error}", rank0_only=False)
-                continue
+                raise RuntimeError(error)
 
             obs = request.get("obs")
             seed = request.get("seed")
+            sample: dict[str, Any] | None = None
+            preparation_exception: Exception | None = None
             try:
                 if not isinstance(obs, dict):
                     raise TypeError(f"Distributed request 'obs' must be a dict, got {type(obs).__name__}")
@@ -785,17 +833,24 @@ class RobolabPolicyService:
                     raise TypeError(f"Distributed request 'seed' must be an int, got {type(seed).__name__}")
                 sample = self._build_sample(obs)
             except Exception as exc:
-                error = f"{type(exc).__name__}: {exc}"
-                self._send_worker_ready(request_id, error=error)
-                log.exception(
-                    f"[robolab-policy-server] rank {rank} rejected distributed request {request_id}",
+                preparation_exception = exc
+
+            error = None
+            if preparation_exception is not None:
+                error = f"{type(preparation_exception).__name__}: {preparation_exception}"
+            preparation_errors = self._exchange_preparation_status(request_id, error=error)
+            if preparation_errors:
+                log.error(
+                    f"[robolab-policy-server] rank {rank} rejected distributed request {request_id}: "
+                    f"{preparation_errors}",
                     rank0_only=False,
                 )
                 continue
 
-            self._send_worker_ready(request_id)
             # Only CFGP generation runs on this rank. Rank 0 formats and returns
             # the response to RoboLab.
+            assert sample is not None
+            assert isinstance(seed, int)
             self._generate(sample, seed)
 
     def shutdown_worker(self) -> None:

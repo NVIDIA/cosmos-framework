@@ -158,7 +158,7 @@ def test_resolve_parallelism_overrides_rejects_cfg_parallel_without_cfg() -> Non
         )
 
 
-def test_build_control_group_uses_gloo_with_long_idle_timeout() -> None:
+def test_build_control_group_uses_gloo_with_three_hour_timeout() -> None:
     control_group = Mock()
     with (
         patch.object(robolab_server.dist, "is_available", return_value=True),
@@ -173,6 +173,7 @@ def test_build_control_group_uses_gloo_with_long_idle_timeout() -> None:
         backend="gloo",
         timeout=robolab_server._CONTROL_GROUP_TIMEOUT,
     )
+    assert robolab_server._CONTROL_GROUP_TIMEOUT.total_seconds() == 3 * 60 * 60
 
 
 def test_control_messages_use_the_gloo_group() -> None:
@@ -202,21 +203,47 @@ def test_invalid_launch_is_rejected_before_checkpoint_resolution() -> None:
     resolve_checkpoint.assert_not_called()
 
 
-def test_infer_rejects_invalid_observation_before_distributed_dispatch() -> None:
+def test_preparation_status_exchange_uses_the_gloo_group() -> None:
+    service = object.__new__(robolab_server.RobolabPolicyService)
+    service._control_group = Mock()
+
+    def gather_statuses(output: list[Any], status: dict[str, Any], *, group: Any) -> None:
+        assert group is service._control_group
+        output[:] = [status, {"request_id": 3, "rank": 1, "error": "ValueError: worker failed"}]
+
+    with (
+        patch.object(robolab_server.dist, "get_rank", return_value=0),
+        patch.object(robolab_server.dist, "get_world_size", return_value=2),
+        patch.object(robolab_server.dist, "all_gather_object", side_effect=gather_statuses) as all_gather,
+    ):
+        errors = service._exchange_preparation_status(3, error=None)
+
+    assert errors == {1: "ValueError: worker failed"}
+    all_gather.assert_called_once()
+
+
+def test_infer_dispatches_invalid_observation_then_exchanges_error_status() -> None:
     service = object.__new__(robolab_server.RobolabPolicyService)
     service._lock = threading.Lock()
+    service._control_request_id = 0
     service._build_sample = Mock(side_effect=ValueError("bad observation"))
-    service._next_seed = Mock()
+    service._next_seed = Mock(return_value=17)
+    service._distributed_enabled = Mock(return_value=True)
     service._send_control_request = Mock()
+    service._exchange_preparation_status = Mock(
+        return_value={0: "ValueError: bad observation", 1: "ValueError: bad observation"}
+    )
+    obs = {"prompt": "missing image and state"}
 
     with pytest.raises(ValueError, match="bad observation"):
-        service.infer({"prompt": "missing image and state"})
+        service.infer(obs)
 
-    service._next_seed.assert_not_called()
-    service._send_control_request.assert_not_called()
+    service._send_control_request.assert_called_once_with(0, {"kind": "infer", "obs": obs, "seed": 17})
+    service._exchange_preparation_status.assert_called_once_with(0, error="ValueError: bad observation")
+    assert service._control_request_id == 1
 
 
-def test_infer_waits_for_worker_then_formats_rank0_output() -> None:
+def test_infer_exchanges_preparation_status_then_formats_rank0_output() -> None:
     service = object.__new__(robolab_server.RobolabPolicyService)
     service._lock = threading.Lock()
     service._control_request_id = 0
@@ -224,7 +251,7 @@ def test_infer_waits_for_worker_then_formats_rank0_output() -> None:
     service._next_seed = Mock(return_value=17)
     service._distributed_enabled = Mock(return_value=True)
     service._send_control_request = Mock()
-    service._wait_worker_ready = Mock()
+    service._exchange_preparation_status = Mock(return_value={})
     service._generate = Mock(return_value={"samples": "generated"})
     service._format_outputs = Mock(return_value={"action": "formatted"})
     obs = {"prompt": "move"}
@@ -235,9 +262,49 @@ def test_infer_waits_for_worker_then_formats_rank0_output() -> None:
         0,
         {"kind": "infer", "obs": obs, "seed": 17},
     )
-    service._wait_worker_ready.assert_called_once_with(0)
+    service._exchange_preparation_status.assert_called_once_with(0, error=None)
     service._generate.assert_called_once_with({"sample": "prepared"}, 17)
     service._format_outputs.assert_called_once()
+
+
+def test_infer_skips_generation_when_worker_preparation_fails() -> None:
+    service = object.__new__(robolab_server.RobolabPolicyService)
+    service._lock = threading.Lock()
+    service._control_request_id = 0
+    service._build_sample = Mock(return_value={"sample": "prepared"})
+    service._next_seed = Mock(return_value=17)
+    service._distributed_enabled = Mock(return_value=True)
+    service._send_control_request = Mock()
+    service._exchange_preparation_status = Mock(return_value={1: "ValueError: worker failed"})
+    service._generate = Mock()
+
+    with pytest.raises(RuntimeError, match="worker failed"):
+        service.infer({"prompt": "move"})
+
+    service._generate.assert_not_called()
+
+
+def test_worker_acknowledges_unsupported_request_then_raises() -> None:
+    service = object.__new__(robolab_server.RobolabPolicyService)
+    service._control_request_id = 0
+    service._distributed_enabled = Mock(return_value=True)
+    service._receive_control_request = Mock(return_value={"kind": "unsupported"})
+    service._send_worker_ready = Mock()
+    service._build_sample = Mock()
+
+    with (
+        patch.object(robolab_server.dist, "get_rank", return_value=1),
+        pytest.raises(RuntimeError, match="Unsupported distributed request kind: 'unsupported'"),
+    ):
+        service.worker_loop()
+
+    service._send_worker_ready.assert_called_once_with(
+        0,
+        error="Unsupported distributed request kind: 'unsupported'",
+    )
+    service._receive_control_request.assert_called_once_with(0)
+    assert service._control_request_id == 1
+    service._build_sample.assert_not_called()
 
 
 def test_worker_reports_preparation_error_then_processes_next_request() -> None:
@@ -254,17 +321,40 @@ def test_worker_reports_preparation_error_then_processes_next_request() -> None:
     service._build_sample = Mock(side_effect=[ValueError("bad sample"), {"sample": "valid"}])
     service._generate = Mock(return_value={})
     service._send_worker_ready = Mock()
+    service._exchange_preparation_status = Mock(side_effect=[{1: "ValueError: bad sample"}, {}])
 
     with patch.object(robolab_server.dist, "get_rank", return_value=1):
         service.worker_loop()
 
-    assert service._send_worker_ready.call_args_list[0].args == (0,)
-    assert service._send_worker_ready.call_args_list[0].kwargs == {"error": "ValueError: bad sample"}
-    assert service._send_worker_ready.call_args_list[1].args == (1,)
-    assert service._send_worker_ready.call_args_list[1].kwargs == {}
-    assert service._send_worker_ready.call_args_list[2].args == (2,)
-    assert service._send_worker_ready.call_args_list[2].kwargs == {}
+    assert service._exchange_preparation_status.call_args_list[0].args == (0,)
+    assert service._exchange_preparation_status.call_args_list[0].kwargs == {"error": "ValueError: bad sample"}
+    assert service._exchange_preparation_status.call_args_list[1].args == (1,)
+    assert service._exchange_preparation_status.call_args_list[1].kwargs == {"error": None}
+    service._send_worker_ready.assert_called_once_with(2)
     service._generate.assert_called_once_with({"sample": "valid"}, 8)
+
+
+def test_worker_skips_generation_when_rank0_preparation_fails() -> None:
+    service = object.__new__(robolab_server.RobolabPolicyService)
+    service._control_request_id = 0
+    service._distributed_enabled = Mock(return_value=True)
+    service._receive_control_request = Mock(
+        side_effect=[
+            {"kind": "infer", "obs": {"valid": True}, "seed": 7},
+            {"kind": "shutdown"},
+        ]
+    )
+    service._build_sample = Mock(return_value={"sample": "valid"})
+    service._generate = Mock()
+    service._send_worker_ready = Mock()
+    service._exchange_preparation_status = Mock(return_value={0: "ValueError: server failed"})
+
+    with patch.object(robolab_server.dist, "get_rank", return_value=1):
+        service.worker_loop()
+
+    service._exchange_preparation_status.assert_called_once_with(0, error=None)
+    service._generate.assert_not_called()
+    service._send_worker_ready.assert_called_once_with(1)
 
 
 def test_shutdown_worker_uses_next_control_request_and_waits_for_ack() -> None:
