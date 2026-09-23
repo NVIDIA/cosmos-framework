@@ -783,6 +783,74 @@ def test_multi_control_range_annotation_rejects_inconsistent_token_count() -> No
         _annotate_multi_control_ranges_for_test(attention_meta, packed_seq, n_gen=9)
 
 
+@pytest.mark.L0
+@torch.no_grad()
+def test_multi_control_dynamic_compile_does_not_read_token_counts_from_device(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Keep the per-control slices free of data-dependent device-scalar reads.
+
+    The real Blackwell failure occurs later in cuDNN's Inductor lowering, when the unbacked
+    sequence-length symint from ``int(offsets[-1])`` reaches a stride comparison. Compiling the
+    whole path with a pure-Torch attention stub is enough to catch the source of that symint on
+    CPU: Dynamo rejects the device-scalar conversion before backend lowering. The pack already
+    carries the same counts as host-side ints, which is what this test requires the path to use.
+    """
+    text_tokens = 3
+    control_tokens = (2, 3)
+    noisy_tokens = 4
+    full_tokens = sum(control_tokens) + noisy_tokens
+    total_tokens = text_tokens + full_tokens
+    und_indexes = torch.arange(text_tokens, dtype=torch.long)
+    gen_indexes = torch.arange(text_tokens, total_tokens, dtype=torch.long)
+
+    def make_pack(values: torch.Tensor) -> SequencePack:
+        return sequence_pack_from_packed_sequence(
+            packed_sequence=values,
+            attn_modes=["causal", "full"],
+            split_lens=[text_tokens, full_tokens],
+            sample_lens=[total_tokens],
+            packed_und_token_indexes=und_indexes,
+            packed_gen_token_indexes=gen_indexes,
+        )
+
+    query = make_pack(torch.randn(total_tokens, 4, 8))
+    key = make_pack(torch.randn(total_tokens, 2, 8))
+    value = make_pack(torch.randn(total_tokens, 2, 8))
+    split_info = attention.SplitInfo(
+        split_lens=[text_tokens, full_tokens],
+        attn_modes=["causal", "full"],
+        sample_lens=[total_tokens],
+        actual_len=total_tokens,
+    )
+    first_control_end = control_tokens[0]
+    controls_end = sum(control_tokens)
+    split_info.control_stream_token_ranges = [(0, first_control_end), (first_control_end, controls_end)]
+    split_info.noisy_token_range = (controls_end, full_tokens)
+    split_info.control_weights = [0.4, 0.6]
+
+    def fake_attention(
+        query_states: torch.Tensor,
+        key_states: torch.Tensor,
+        value_states: torch.Tensor,
+        **kwargs: Any,
+    ) -> torch.Tensor:
+        del key_states, kwargs
+        return query_states.new_zeros((*query_states.shape[:-1], value_states.shape[-1]))
+
+    monkeypatch.setattr(attention, "attention", fake_attention)
+
+    def run(query_pack: SequencePack, key_pack: SequencePack, value_pack: SequencePack) -> torch.Tensor:
+        result = attention.multi_control_two_way_attention(query_pack, key_pack, value_pack, split_info)
+        return result["full_only_seq"]
+
+    torch.compiler.reset()
+    compiled = torch.compile(run, fullgraph=True, dynamic=True, backend="eager")
+    output = compiled(query, key, value)
+
+    assert output.shape == (query["full_only_seq"].shape[0], 4 * 8)
+
+
 # ── two_way_attention on the multiview FlexAttention mask ────────────────────
 # The generator's full attention has two implementations of "every GEN token attends to
 # its whole sample": the dense varlen kernel, and a single FlexAttention call over the
