@@ -478,6 +478,7 @@ class OmniMoTModel(ImaginaireModel):
             network_config = Cosmos3VFMNetworkConfig(
                 vlm_config=language_model.config,
                 latent_patch_size=self.config.diffusion_expert_config.patch_spatial,
+                lidar_patch_spatial_hw=self.config.diffusion_expert_config.lidar_patch_spatial_hw,
                 latent_downsample_factor=self.config.latent_downsample_factor,
                 latent_channel_size=self.config.state_ch,
                 lidar_latent_channel_size=self.config.lidar_state_ch,
@@ -930,6 +931,7 @@ class OmniMoTModel(ImaginaireModel):
             input_timesteps=input_timesteps,
             special_tokens=self.llm_special_tokens,
             latent_patch_size=self.config.diffusion_expert_config.patch_spatial,
+            lidar_patch_spatial_hw=self.config.diffusion_expert_config.lidar_patch_spatial_hw,
             skip_text_tokens=skip_text_tokens,
             include_end_of_generation_token=include_end_of_generation_token,
             unified_3d_mrope_reset_spatial_ids=self.config.diffusion_expert_config.unified_3d_mrope_reset_spatial_ids,

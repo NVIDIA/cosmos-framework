@@ -169,6 +169,7 @@ def pack_input_sequence(
     action_dim: int = 32,
     initial_mrope_temporal_offset: int | float | list[int | float] = 0,
     lidar_temporal_compression_factor: int | None = None,
+    lidar_patch_spatial_hw: int | tuple[int, int] | None = None,
 ) -> PackedSequence:
     """
     Pack a sequence of input strings and VAE latents into a packed tensor format.
@@ -189,7 +190,8 @@ def pack_input_sequence(
             sample as a float (numel==1) or Tensor(T_max,) for per-frame indexing.
         special_tokens: Dictionary containing special token IDs (eos_token_id, start_of_generation, end_of_generation)
         max_num_tokens: Maximum number of tokens in the packed sequence
-        latent_patch_size: Patch size used by the network to pack latents
+        latent_patch_size: Patch size used by the network to pack camera latents.
+        lidar_patch_spatial_hw: LiDAR patch side or (height, width); None inherits latent_patch_size.
         skip_text_tokens: If True, skip packing text tokens
         include_end_of_generation_token: If True, append end-of-generation token
         unified_3d_mrope_reset_spatial_ids: If True (default), spatial (H, W) indices
@@ -702,7 +704,9 @@ def pack_input_sequence(
                         input_lidar_tokens=input_lidar_tokens,
                         condition_frame_indexes_lidar=item_condition_frames,
                         input_timestep=input_timestep,
-                        latent_patch_size=latent_patch_size,
+                        latent_patch_size=(
+                            latent_patch_size if lidar_patch_spatial_hw is None else lidar_patch_spatial_hw
+                        ),
                         lidar_fps=sample_lidar_fps,
                         enable_fps_modulation=enable_fps_modulation,
                         base_fps=base_fps,
