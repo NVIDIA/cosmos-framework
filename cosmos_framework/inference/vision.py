@@ -84,14 +84,13 @@ def decode_video_thwc_uint8(path: Path) -> tuple[torch.Tensor, float]:
     ``pytorch.vision.fb.io.video`` under ``except ImportError: pass``, so ``import
     torchvision.io`` still succeeds but calling ``read_video`` raises ``AttributeError``.
     """
-    from cosmos_framework.utils.generator.torchcodec_video import decode_frames_nhwc_uint8, probe_video
+    from cosmos_framework.utils.generator.torchcodec_video import decode_all_frames_nhwc_uint8
 
     # torchcodec's core ops are CPU-only. Force CPU tensor creation so an active default-CUDA
     # device context (torch.set_default_device during generation) doesn't route torchcodec's
     # internal frame-index tensor to CUDA and raise NotImplementedError.
     with torch.device("cpu"):
-        num_frames = probe_video(path).num_frames
-        frames_nhwc, meta = decode_frames_nhwc_uint8(path, list(range(num_frames)))
+        frames_nhwc, meta = decode_all_frames_nhwc_uint8(path)
     return torch.from_numpy(frames_nhwc), float(meta.average_fps)
 
 
