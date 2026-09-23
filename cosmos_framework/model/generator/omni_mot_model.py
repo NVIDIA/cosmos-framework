@@ -52,6 +52,7 @@ from cosmos_framework.model.generator.mot.context_parallel_utils import (
     context_parallel_broadcast_tensor_list,
 )
 from cosmos_framework.model.generator.mot.cosmos3_vfm_network import Cosmos3VFMNetwork, Cosmos3VFMNetworkConfig
+from cosmos_framework.model.generator.mot.diffusion_cache import _velocity_pathways
 from cosmos_framework.model.generator.mot.inference_text_kv_memory import (
     InferenceTextKVMemoryState,
     UndKVCache,
@@ -109,6 +110,10 @@ from cosmos_framework.utils.generator.model_weights_stats import WeightTrainingS
 from cosmos_framework.utils.generator.parallelism import ParallelDims
 from cosmos_framework.utils.generator.quantization import swap_modelopt_fp8_linears_on_meta
 
+# "LIDA" in ASCII: fixed domain tag separating joint LiDAR noise from RGB.
+# Changing this value changes all joint LiDAR inference noise.
+_LIDAR_NOISE_DOMAIN_TAG: int = 0x4C494441
+
 
 def _all_group_ranks_allow(
     local_eligible: bool,
@@ -127,13 +132,31 @@ def _any_dp_shard_rank_needs_guidance_path(
     local_needs_guidance_path: bool,
     dp_shard_group: torch.distributed.ProcessGroup | None,
     device: torch.device | str | None,
+    num_postprocess_forwards: int = 0,
 ) -> bool:
-    """Enter the guidance path on every FSDP shard rank when any rank needs it."""
+    """Enter guidance together and reject mismatched extra forwards before any branch runs."""
     if dp_shard_group is None:
         return local_needs_guidance_path
-    needed = torch.tensor([local_needs_guidance_path], device=device, dtype=torch.uint8)
-    torch.distributed.all_reduce(needed, op=torch.distributed.ReduceOp.MAX, group=dp_shard_group)
-    return bool(needed.item())
+    # Gather guidance flags and forward counts so every shard checks the same schedules.
+    schedule = torch.tensor(
+        [int(local_needs_guidance_path), num_postprocess_forwards],
+        device=device,
+        dtype=torch.int32,
+    )  # [2]
+    gathered = [
+        torch.empty_like(schedule) for _ in range(torch.distributed.get_world_size(dp_shard_group))
+    ]  # list[[2]]
+    torch.distributed.all_gather(gathered, schedule, group=dp_shard_group)  # list[[2]]
+    schedules = [rank_schedule.tolist() for rank_schedule in gathered]
+    forward_counts = [count for _, count in schedules]
+    if len(set(forward_counts)) != 1:
+        raise ValueError(
+            "FSDP shard ranks have different control-guidance branch schedules: "
+            f"postprocess forward counts by shard rank are {forward_counts}. "
+            "Use matching control-guidance activation schedules within each dp_shard group "
+            "or place these samples in independent shard groups."
+        )
+    return any(needs_guidance for needs_guidance, _ in schedules)
 
 
 def _uses_lidar_primary_tokenizer(data_batch: dict[str, Any]) -> bool:
@@ -239,10 +262,11 @@ INFERENCE_RAW_VISION_RETAINED_ITEMS_KEY = "_inference_raw_vision_retained_items"
 
 @dataclasses.dataclass(frozen=True)
 class VelocityPostprocess:
-    """A velocity transform with a preparation hook before any branch executes."""
+    """A velocity transform that declares its CFG branches before execution."""
 
     apply: Callable[[list[torch.Tensor], list[torch.Tensor], torch.Tensor, float], list[torch.Tensor]]
-    prepare: Callable[[list[torch.Tensor], torch.Tensor], None]
+    cfg_branches: Callable[[torch.Tensor], tuple[str, ...]]
+    """Return the CFG branch names this postprocessor will execute, in order, at timestep [B,1]."""
 
     def __call__(
         self,
@@ -2658,7 +2682,17 @@ class OmniMoTModel(ImaginaireModel):
             assert packed_sequence.lidar is not None, "Packed LiDAR data required when the batch carries LiDAR"
             assert isinstance(packed_sequence.lidar.condition_mask, list), "LiDAR condition mask required"
             lidar_counts = gen_data_clean.num_lidar_items_per_sample or [1] * n_sample
-            seed_lidar = [seed[sample_idx] for sample_idx, count in enumerate(lidar_counts) for _ in range(count)]
+            # arch_invariant_rand restarts its RNG on every call. Joint RGB/LiDAR
+            # therefore need distinct streams, even when their tensor shapes differ.
+            # Derive from sample identity, never batch position or distributed rank;
+            # preserve existing RGB noise and standalone LiDAR reproducibility.
+            seed_lidar = [
+                int(np.random.SeedSequence([seed[sample_idx], _LIDAR_NOISE_DOMAIN_TAG, item_idx]).generate_state(1)[0])
+                if sequence_plans[sample_idx].has_vision
+                else seed[sample_idx]
+                for sample_idx, count in enumerate(lidar_counts)
+                for item_idx in range(count)
+            ]
             noise_lidar_list = []
             for i, (x0_token, cond_mask) in enumerate(
                 zip(gen_data_clean.x0_tokens_lidar, packed_sequence.lidar.condition_mask, strict=True)
@@ -3710,7 +3744,7 @@ class OmniMoTModel(ImaginaireModel):
         #
         # In throughput-preset inference each rank holds a different sample,
         # and different samples can diverge on (a) whether text CFG or a
-        # velocity postprocess hook requires a second forward, (b) whether
+        # velocity postprocess hook requires additional forwards, (b) whether
         # the fused batched path is locally eligible, and (c) ``num_steps``.
         # Any divergence makes the FSDP allgather sequence misalign across
         # ranks, deadlocking NCCL at the 30-min watchdog timeout.
@@ -3718,9 +3752,10 @@ class OmniMoTModel(ImaginaireModel):
         # We align in three places:
         #   1. Before velocity_fn: MIN-reduce fused-path eligibility so every
         #      rank agrees on batched versus sequential CFG.
-        #   2. Inside velocity_fn (per call): MAX-reduce whether any rank
-        #      needs CFG/postprocessing; if so, every rank performs the same
-        #      forward sequence. Ranks whose local decision was "no CFG" return
+        #   2. Inside velocity_fn (per call): all_gather text-CFG flags and
+        #      postprocess counts to detect any guidance need and reject mismatched counts;
+        #      every rank then performs the same forward sequence.
+        #      Ranks whose local decision was "no CFG" return
         #      ``cond_v`` directly — bit-identical to the original no-CFG path.
         #   3. Around the sampler call: all_reduce the local num_steps;
         #      ranks with local < max issue a dummy sampler call with the
@@ -3754,6 +3789,8 @@ class OmniMoTModel(ImaginaireModel):
         # Request-scoped: install only for this generate call and restore afterward so we
         # never permanently shadow another dispatch_attention_fn on the model.
         previous_attention_dispatch = None
+        diffusion_cache = getattr(self, "_diffusion_cache", None)
+        cache_step_index: int | None = None
         try:
             if reuse_text_kv:
                 target_net = net or self.net
@@ -3822,18 +3859,37 @@ class OmniMoTModel(ImaginaireModel):
                     needs_text_cfg = t_lo < timestep[0].item() < t_hi
 
                 # FSDP alignment: if ANY rank in the shard group needs a second
-                # forward for text CFG or a velocity postprocess hook, every rank
+                # forward for text CFG, every rank
                 # must issue two sequential forwards (or one globally eligible
                 # batched forward) so the allgather sequence stays aligned.
-                needs_guidance_path = needs_text_cfg or velocity_postprocess is not None
+                # Postprocessors declare extra branches; the sampler owns cache bookkeeping.
+                cfg_branches: tuple[str, ...] = ()
+                if isinstance(velocity_postprocess, VelocityPostprocess):
+                    cfg_branches = velocity_postprocess.cfg_branches(timestep)
                 _any_needs_guidance_path = _any_dp_shard_rank_needs_guidance_path(
-                    needs_guidance_path,
+                    needs_text_cfg,
                     _dp_shard_group,
                     _align_device,
+                    num_postprocess_forwards=len(cfg_branches),
                 )
+                if diffusion_cache is not None and cache_step_index is not None:
+                    cfgp_rank = (
+                        self.parallel_dims.cfgp_rank
+                        if velocity_postprocess is None
+                        and self.parallel_dims is not None
+                        and self.parallel_dims.cfgp_enabled
+                        else None
+                    )
+                    pathways = _velocity_pathways(
+                        _any_needs_guidance_path,
+                        cfg_branches=cfg_branches,
+                        batched_cfg=batched_cfg_fast_path,
+                        cfgp_rank=cfgp_rank,
+                    )
+                    diffusion_cache.begin_step(cache_step_index, pathways)
 
                 # Fast path: no rank needs CFG or postprocessing — single forward.
-                if not _any_needs_guidance_path:
+                if not _any_needs_guidance_path and velocity_postprocess is None:
                     return _single_velocity_fn(cond_tokens, skip_text_tokens=False)
 
                 # Batched-CFG fast path (opt-in): run cond + uncond as one forward of
@@ -3899,13 +3955,12 @@ class OmniMoTModel(ImaginaireModel):
 
                 # Conditional forward, then per-step postprocess hook. Hook runs
                 # sequentially; cfgp parallelism not used on this path.
-                # Preflight control-CFG cache decisions before any branch runs.
-                if isinstance(velocity_postprocess, VelocityPostprocess):
-                    velocity_postprocess.prepare(noise_x, timestep)
                 cond_v_full = _single_velocity_fn(cond_tokens, skip_text_tokens=False)  # list of [N_i]
                 text_guidance_scale = guidance if needs_text_cfg else 1.0
                 cond_v = velocity_postprocess(cond_v_full, noise_x, timestep, text_guidance_scale)  # list of [N_i]
 
+                if not _any_needs_guidance_path:
+                    return cond_v
                 uncond_v = _single_velocity_fn(
                     uncond_tokens, skip_text_tokens=skip_text_tokens_for_cfg
                 )  # list of [N_i]
@@ -3957,11 +4012,16 @@ class OmniMoTModel(ImaginaireModel):
                     "condition_mask": condition_mask,
                 }
 
-            # Mixed-precision diffusion steps: select W8A16/W8A8 once per
-            # sampler step; reset (trace + staging cleanup) when the request
-            # ends, including on error.
+            # Explicit sampler steps drive both cache indexing and mixed precision.
+            # Select W8A16/W8A8 once per sampler step; reset (trace + staging cleanup)
+            # when the request ends, including on error.
             _mixed_precision_runtime = getattr(self.net, "_mixed_precision_runtime", None)
-            _step_callback = _mixed_precision_runtime.set_step if _mixed_precision_runtime is not None else None
+
+            def _step_callback(step_index: int, step_count: int) -> None:
+                nonlocal cache_step_index
+                cache_step_index = step_index
+                if _mixed_precision_runtime is not None:
+                    _mixed_precision_runtime.set_step(step_index, step_count)
 
             try:
                 if isinstance(sampler, FixedStepSampler) or scheduler_type == "unipc":
@@ -3975,6 +4035,8 @@ class OmniMoTModel(ImaginaireModel):
                         **fixed_step_sampler_kwargs,
                     )
                     if _extra_num_steps > 0:
+                        # Unregistered padding calls bypass caching on every shard rank.
+                        cache_step_index = None
                         # Dummy sampler call to issue (_extra_num_steps × per-step)
                         # FSDP allgathers; output discarded so `latents` keeps the
                         # real result captured above. Slow ranks have _extra_num_steps==0
@@ -4024,6 +4086,8 @@ class OmniMoTModel(ImaginaireModel):
                         step_callback=_step_callback,
                     )
                     if _extra_num_steps > 0:
+                        # Unregistered padding calls bypass caching on every shard rank.
+                        cache_step_index = None
                         # Pad the FSDP allgather sequence with ``_extra_num_steps``
                         # direct ``x0_fn`` calls instead of a second EDM sampler
                         # run. Avoids two EDM-specific footguns:
@@ -4038,7 +4102,7 @@ class OmniMoTModel(ImaginaireModel):
                         #       case would need num_steps=0 to balance the count.
                         # Direct ``x0_fn`` calls bypass both: each call routes
                         # through the same ``velocity_fn`` closure (so the
-                        # per-call CFG all_reduce still aligns ranks), issues
+                        # per-call CFG all_gather still aligns ranks), issues
                         # exactly one model forward, and discards its return.
                         # ``latents`` is the catted single tensor at this point;
                         # the dummy sigma value is irrelevant for collective

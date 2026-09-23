@@ -215,7 +215,9 @@ class Cosmos3VFMNetwork(PreTrainedModel):
             if self.multiview_backend == "maskless":
                 log.info(
                     "Multiview attention is the maskless three-pass decomposition "
-                    f"(backend={multiview.backend!r} -> 'maskless'). It builds "
+                    f"(backend={multiview.backend!r} -> 'maskless') under scope "
+                    f"{multiview.mask.attention_scope!r} with "
+                    f"control_attends_sensor={multiview.mask.control_attends_sensor}. It builds "
                     "no mask, so it imposes no alignment on the GEN stream: its partitions cover "
                     "whatever padding the pack has."
                 )
@@ -1244,6 +1246,7 @@ class Cosmos3VFMNetwork(PreTrainedModel):
                 caption_mask_items=caption_mask_items,
                 gen_seq_len=int(input_pack["full_only_seq"].shape[0]),
                 attention_scope=self.config.multiview_attention_config.mask.attention_scope,
+                control_attends_sensor=self.config.multiview_attention_config.mask.control_attends_sensor,
                 device=input_pack["full_only_seq"].device,
             )
             return
@@ -1589,6 +1592,7 @@ def _multiview_maskless_geometry(
     caption_mask_items: Sequence[Sequence[CaptionMaskItem]] | None,
     gen_seq_len: int,
     attention_scope: str,
+    control_attends_sensor: bool,
     device: torch.device,
 ) -> MultiviewMasklessPlan:
     """The plan :func:`~...multiview_maskless_attention.multiview_maskless_gen_attention` folds this batch by.
@@ -1604,17 +1608,20 @@ def _multiview_maskless_geometry(
     mode is not one of the conditions below, and neither is the sample count: samples may differ
     in views, frames and resolution, and the plan carries the ragged case's index tensors.
 
-    Every condition below is one the three-pass decomposition cannot express, not a preference,
-    and each raises with the layout that tripped it. They are all properties of the *batch*: what
-    the config rules out -- its scope, a temporal window, ``control_attends_sensor`` -- is settled
-    once by ``maskless_unavailable_reason`` before a batch ever arrives, so none of it is re-checked
-    here.
+    Every condition below is one the decomposition cannot express, not a preference, and each
+    raises with the layout that tripped it. They are all properties of the *batch*: what the
+    config rules out -- its scope, a temporal window -- is settled once by
+    ``maskless_unavailable_reason`` before a batch ever arrives, so none of it is re-checked
+    here. ``control_attends_sensor`` is not among those: the folds express both answers, so it is
+    passed down as a description of the attention rather than tested as a condition.
 
-    * at most one item per sensor stream per sample, and no control stream, action or sound.
-      A camera item, a range item, or one of each: a joint sample is served by quantising both
-      streams' capture times onto the camera's frame grid, so the two need not share a frame
-      index. A second item from the *same* stream is a control stream or an image-editing
-      layout, which this path does not serve.
+    * at most one sensor item per stream per sample, beside its control item, and no action or
+      sound. A camera item, a range item, or one of each: a joint sample is served by
+      quantising both streams' capture times onto the camera's frame grid, so the two need not
+      share a frame index. A control item ahead of either is served too -- it joins its
+      target's view groups, and ``control_attends_sensor`` decides whether that group is one
+      varlen segment or two. A *third* item on one stream is an image-editing layout, which
+      this path does not serve.
     * per-view captions are served, but only alongside the pack's per-caption boundaries: the
       gen->und pass then keys each *view's* GEN tokens against the caption written for that
       view -- and a range clip against every caption of its sample, since a sweep fuses the rig
@@ -1643,6 +1650,11 @@ def _multiview_maskless_geometry(
             tensors, and the batch's structure -- its items, its captions -- comes from
             ``packed_seq``.
         attention_scope: the attention scope to use for the plan.
+        control_attends_sensor: the mask flag of that name, passed through rather than defaulted
+            because it decides what a control query reaches and the folds express both answers:
+            with it on a same-view group is one pass over itself, with it off that pass splits in
+            two. A batch marking no control item is the same attention either way, and the plan
+            builder refuses one that marks a control item without being told.
         device: where the plan's index tensors belong, i.e. where the batch will attend.
 
     Returns:
@@ -1670,11 +1682,12 @@ def _multiview_maskless_geometry(
             f"{_MASKLESS_REFUSAL}it records {len(vision_counts)} vision and "
             f"{len(lidar_counts)} LiDAR item counts for {num_samples} samples." + _MASKLESS_REFUSAL_TAIL
         )
-    # At most one item per stream per sample, and at least one overall. A sample owning a camera
-    # item beside a range item is the joint case: the two sensors run at different rates, so the
-    # plan quantises both onto the camera's frame grid by capture time. A second item from the
-    # *same* stream is a control stream or an image-editing layout, which this path does not
-    # serve; ``control_weights`` catches most of those and this catches the rest.
+    # At most one sensor item per stream per sample beside its control item, and at least one
+    # item overall. A sample owning a camera item beside a range item is the joint case: the two
+    # sensors run at different rates, so the plan quantises both onto the camera's frame grid by
+    # capture time. The *second* item on a stream is that stream's control item, which the folds
+    # serve; a third is an image-editing layout, which this path does not -- ``control_weights``
+    # catches most of those and this catches the rest.
     if any(v > 2 or r > 2 or v + r < 1 for v, r in zip(vision_counts, lidar_counts)):
         raise ValueError(
             f"{_MASKLESS_REFUSAL}its per-sample item counts are vision={list(vision_counts)}, "
@@ -1758,6 +1771,7 @@ def _multiview_maskless_geometry(
         seconds_per_frame=rates,
         items_per_sample=items_per_sample,
         is_control=is_control,
+        control_attends_sensor=control_attends_sensor,
         view_axis=view_axis,
         captions=captions,
         attention_scope=attention_scope,

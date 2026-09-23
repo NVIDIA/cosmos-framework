@@ -7,6 +7,7 @@ import random  # noqa: I001 - release import rewriting changes the package sort 
 import re
 from collections.abc import Iterator, Sequence
 from dataclasses import dataclass
+from dataclasses import fields as dataclass_fields
 from types import SimpleNamespace
 from typing import Any, cast
 
@@ -16,7 +17,7 @@ from torch.nn.attention.flex_attention import BlockMask
 
 import cosmos_framework.model.generator.mot.attention as attention
 from cosmos_framework.model.attention import attention as imaginaire_attention
-from cosmos_framework.model.attention import multi_dimensional_attention_varlen
+from cosmos_framework.model.attention import merge_attentions, multi_dimensional_attention_varlen
 from cosmos_framework.model.attention.natten import NATTEN_SUPPORTED
 from cosmos_framework.model.attention.varlen import generate_multi_dim_varlen_parameters
 from cosmos_framework.utils.misc import set_torch_compile_options
@@ -3388,39 +3389,105 @@ def test_multiview_maskless_attention_joins_a_camera_and_a_lidar_item_by_capture
     torch.testing.assert_close(gen_out.double(), expected.flatten(-2, -1), atol=1e-2, rtol=1e-2)
 
 
-@pytest.mark.L0
-@pytest.mark.GPU
-@pytest.mark.skipif(not torch.cuda.is_available(), reason="The attention kernels require a GPU.")
-@pytest.mark.skipif(not NATTEN_SUPPORTED, reason="merge_attentions requires NATTEN.")
-@torch.no_grad()
-def test_multiview_maskless_attention_takes_wsm_and_hdmap_control_items() -> None:
-    """A joint transfer sample: WSM control + RGB target, HD-map control + LiDAR target.
+# A joint transfer sample: WSM control and RGB target on 2 camera views x 2 frames, HD-map
+# control and LiDAR target on the range axis' single view x 3 sweeps. One spatial token each, to
+# keep the references below readable -- the folds never look at the spatial axis except to size a
+# cell. The two streams run at different rates on purpose, so the cross-instant partition has to
+# quantise capture time rather than compare frame indexes.
+_TRANSFER_ITEMS = [
+    dict(views=2, latent_t=4, rate=1.0 / 7.5, control=True, axis=0),  # WSM
+    dict(views=2, latent_t=4, rate=1.0 / 7.5, control=False, axis=0),  # RGB target
+    dict(views=1, latent_t=3, rate=1.0 / 10.0, control=True, axis=1),  # HD-map rangemap
+    dict(views=1, latent_t=3, rate=1.0 / 10.0, control=False, axis=1),  # LiDAR target
+]
+_TRANSFER_GEN_LEN = sum(int(item["latent_t"]) for item in _TRANSFER_ITEMS)
+_TRANSFER_UND_LEN = 5
 
-    Every control rule in the mask is a *view* rule and never an instant one, so a control token
-    joins its target's view groups and is absent from the cross-instant partition entirely --
-    sliced out as a key and as a query alike, which is what keeps a sensor query from reaching a
-    control key through the instant rule. Under ``control_attends_sensor`` the four view rules
-    (sensor->sensor, sensor->control, control->control, control->sensor) fill in the whole
-    square, so one unmasked pass over ``(sample, axis, view)`` expresses all of them.
 
-    The reference states that as a multiplicity: one for sharing a view, one more for sharing an
-    instant, the latter only between two sensor tokens.
+def _transfer_plan(device: torch.device, *, control_attends_sensor: bool, padded_gen_tokens: int):
+    """The plan for :data:`_TRANSFER_ITEMS` under either control rule."""
+    return multiview_maskless_attention.build_multiview_maskless_plan(
+        [int(item["views"]) for item in _TRANSFER_ITEMS],
+        [(int(item["latent_t"]), 1, 1) for item in _TRANSFER_ITEMS],
+        device=device,
+        seconds_per_frame=[float(item["rate"]) for item in _TRANSFER_ITEMS],
+        items_per_sample=[len(_TRANSFER_ITEMS)],
+        is_control=[bool(item["control"]) for item in _TRANSFER_ITEMS],
+        control_attends_sensor=control_attends_sensor,
+        view_axis=[int(item["axis"]) for item in _TRANSFER_ITEMS],
+        padded_gen_tokens=padded_gen_tokens,
+    )
+
+
+def _transfer_multiplicity(device: torch.device, *, control_attends_sensor: bool) -> torch.Tensor:
+    """What each GEN key is worth to each GEN query, as the merged passes weight it.
+
+    Rebuilt from the geometry rather than from the plan, so it pins the plan rather than
+    restating it: one for sharing a view group, one more for sharing an instant -- the latter
+    only between two sensor tokens, every control rule in the mask being a view rule and never an
+    instant one. ``control_attends_sensor=False`` takes the view term away from a control query
+    reaching a *sensor* key and leaves every other pair alone, which is the whole of the flag.
     """
-    device = torch.device("cuda")
-    num_q_heads, num_kv_heads, head_dim = 4, 2, 64
-    cam_rate, lidar_rate = 1.0 / 7.5, 1.0 / 10.0
-    # WSM control and RGB target on 2 camera views x 2 frames; HD-map control and LiDAR target
-    # on the range axis' single view x 3 sweeps. One spatial token each, to keep the reference
-    # readable -- the folds never look at the spatial axis except to size a cell.
-    items = [
-        dict(views=2, latent_t=4, rate=cam_rate, control=True, axis=0),  # WSM
-        dict(views=2, latent_t=4, rate=cam_rate, control=False, axis=0),  # RGB target
-        dict(views=1, latent_t=3, rate=lidar_rate, control=True, axis=1),  # HD-map rangemap
-        dict(views=1, latent_t=3, rate=lidar_rate, control=False, axis=1),  # LiDAR target
-    ]
-    gen_len, und_len = sum(int(i["latent_t"]) for i in items), 5
+    view_of, sensor_of, instant_of = [], [], []
+    anchor_rate = float(_TRANSFER_ITEMS[0]["rate"])
+    for spec in _TRANSFER_ITEMS:
+        views, frames = int(spec["views"]), int(spec["latent_t"]) // int(spec["views"])
+        for view in range(views):  # view-outer, frame-inner
+            for frame in range(frames):
+                view_of.append((int(spec["axis"]), view))
+                sensor_of.append(not bool(spec["control"]))
+                instant_of.append(math.floor((frame + 0.5) * float(spec["rate"]) / anchor_rate + 1e-6))
+    assert sensor_of.count(True) == 4 + 3, "Only the two target items are sensors."
 
-    shape = _MultiviewShape(und_lens=(und_len,), token_shapes=((gen_len, 1, 1),), num_views=(1,))
+    return torch.tensor(
+        [
+            [
+                float(view_of[i] == view_of[j] and (control_attends_sensor or sensor_of[i] or not sensor_of[j]))
+                + float(sensor_of[i] and sensor_of[j] and instant_of[i] == instant_of[j])
+                for j in range(_TRANSFER_GEN_LEN)
+            ]
+            for i in range(_TRANSFER_GEN_LEN)
+        ],
+        device=device,
+        dtype=torch.float64,
+    )  # [N_gen,N_gen]
+
+
+def _weighted_softmax_reference(
+    gen_q: torch.Tensor,
+    gen_k: torch.Tensor,
+    gen_v: torch.Tensor,
+    und_k: torch.Tensor,
+    und_v: torch.Tensor,
+    multiplicity: torch.Tensor,
+) -> torch.Tensor:
+    """One float64 softmax over the GEN keys at their multiplicity, plus every caption at one.
+
+    The same shape of reference as :func:`_multiview_maskless_reference`, taking the multiplicity
+    as an argument instead of deriving it from a single item's view and frame ids -- which a
+    batch of four items on two view axes has no single-item form of.
+    """
+    heads = gen_q.shape[1]
+    group_size = heads // gen_k.shape[1]
+    gen_k = gen_k.double().repeat_interleave(group_size, dim=1)  # [N_gen,heads,head_dim]
+    gen_v = gen_v.double().repeat_interleave(group_size, dim=1)  # [N_gen,heads,head_dim]
+    und_k = und_k.double().repeat_interleave(group_size, dim=1)  # [N_und,heads,head_dim]
+    und_v = und_v.double().repeat_interleave(group_size, dim=1)  # [N_und,heads,head_dim]
+    gen_q = gen_q.double()  # [N_gen,heads,head_dim]
+
+    scale = gen_q.shape[2] ** -0.5
+    gen_scores = torch.einsum("ihd,jhd->hij", gen_q, gen_k) * scale  # [heads,N_gen,N_gen]
+    und_scores = torch.einsum("ihd,jhd->hij", gen_q, und_k) * scale  # [heads,N_gen,N_und]
+    peak = torch.maximum(gen_scores.max(dim=-1).values, und_scores.max(dim=-1).values)  # [heads,N_gen]
+    gen_weights = multiplicity[None] * torch.exp(gen_scores - peak[..., None])  # [heads,N_gen,N_gen]
+    und_weights = torch.exp(und_scores - peak[..., None])  # [heads,N_gen,N_und]
+    numerator = torch.einsum("hij,jhd->ihd", gen_weights, gen_v) + torch.einsum("hij,jhd->ihd", und_weights, und_v)
+    return numerator / (gen_weights.sum(-1) + und_weights.sum(-1)).transpose(0, 1)[..., None]
+
+
+def _transfer_packs(device: torch.device, num_q_heads: int, num_kv_heads: int, head_dim: int):
+    """The transfer sample's q/k/v, packed the way the network packs a multiview batch."""
+    shape = _MultiviewShape(und_lens=(_TRANSFER_UND_LEN,), token_shapes=((_TRANSFER_GEN_LEN, 1, 1),), num_views=(1,))
     torch.manual_seed(0)
     qkv = [
         torch.randn(shape.real_len, heads, head_dim, device=device, dtype=torch.bfloat16)
@@ -3431,62 +3498,224 @@ def test_multiview_maskless_attention_takes_wsm_and_hdmap_control_items() -> Non
         tuple[SequencePack, SequencePack, SequencePack],
         tuple(_multiview_pack(tensor, shape, backend) for tensor in qkv),
     )
-    plan = multiview_maskless_attention.build_multiview_maskless_plan(
-        [int(i["views"]) for i in items],
-        [(int(i["latent_t"]), 1, 1) for i in items],
-        device=device,
-        seconds_per_frame=[float(i["rate"]) for i in items],
-        items_per_sample=[len(items)],
-        is_control=[bool(i["control"]) for i in items],
-        view_axis=[int(i["axis"]) for i in items],
+    return qkv, packs
+
+
+@pytest.mark.L0
+@pytest.mark.GPU
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="The attention kernels require a GPU.")
+@pytest.mark.skipif(not NATTEN_SUPPORTED, reason="merge_attentions requires NATTEN.")
+@pytest.mark.parametrize("control_attends_sensor", [True, False])
+@torch.no_grad()
+def test_multiview_maskless_attention_takes_wsm_and_hdmap_control_items(control_attends_sensor: bool) -> None:
+    """A joint transfer sample: WSM control + RGB target, HD-map control + LiDAR target.
+
+    Every control rule in the mask is a *view* rule and never an instant one, so a control token
+    joins its target's view groups and is absent from the cross-instant partition entirely --
+    sliced out as a key and as a query alike, which is what keeps a sensor query from reaching a
+    control key through the instant rule. Under ``control_attends_sensor`` the four view rules
+    (sensor->sensor, sensor->control, control->control, control->sensor) fill in the whole
+    square, so one varlen segment over ``(sample, axis, view)`` expresses all of them.
+
+    With the flag off the fourth rule is withheld and the square is no longer one key set: the
+    group's sensor tokens keep it whole while its control tokens keep only the control half, so
+    it becomes two varlen segments of the same pass. This is the test that would catch a split
+    keying either segment against the wrong half -- a wrong key set produces a perfectly
+    plausible tensor and no error at all.
+    """
+    device = torch.device("cuda")
+    num_q_heads, num_kv_heads, head_dim = 4, 2, 64
+    qkv, packs = _transfer_packs(device, num_q_heads, num_kv_heads, head_dim)
+    plan = _transfer_plan(
+        device,
+        control_attends_sensor=control_attends_sensor,
         padded_gen_tokens=_padded_gen_tokens(packs[0]),
     )
     assert plan.same_view_gather is not None, "A control item splits a view into two runs."
+    # The flag's whole effect on the plan: a group is one varlen segment or two.
+    assert (plan.same_view_q_gather is None) == control_attends_sensor
 
     out_pack = multiview_attention(*packs, maskless_plan=plan)
-    gen_out = get_gen_seq(out_pack)[:gen_len]  # [N_gen,heads*head_dim]
+    gen_out = get_gen_seq(out_pack)[:_TRANSFER_GEN_LEN]  # [N_gen,heads*head_dim]
 
-    # ── the reference: per-token view id, sensor flag and instant, rebuilt from the geometry ──
-    view_of, sensor_of, instant_of = [], [], []
-    anchor_rate = float(items[0]["rate"])
-    for spec in items:
-        views, frames = int(spec["views"]), int(spec["latent_t"]) // int(spec["views"])
-        for view in range(views):  # view-outer, frame-inner
-            for frame in range(frames):
-                view_of.append((int(spec["axis"]), view))
-                sensor_of.append(not bool(spec["control"]))
-                instant_of.append(math.floor((frame + 0.5) * float(spec["rate"]) / anchor_rate + 1e-6))
-    assert sensor_of.count(True) == 4 + 3, "Only the two target items are sensors."
-
-    multiplicity = torch.tensor(
-        [
-            [
-                float(view_of[i] == view_of[j])
-                + float(sensor_of[i] and sensor_of[j] and instant_of[i] == instant_of[j])
-                for j in range(gen_len)
-            ]
-            for i in range(gen_len)
-        ],
-        device=device,
-        dtype=torch.float64,
-    )  # [N_gen,N_gen]
-
-    scale = 1.0 / head_dim**0.5
-    repeat = num_q_heads // num_kv_heads
-    gen_q = qkv[0][und_len : und_len + gen_len].double()
-    gen_k = qkv[1][und_len : und_len + gen_len].double().repeat_interleave(repeat, dim=1)
-    gen_v = qkv[2][und_len : und_len + gen_len].double().repeat_interleave(repeat, dim=1)
-    und_k = qkv[1][:und_len].double().repeat_interleave(repeat, dim=1)
-    und_v = qkv[2][:und_len].double().repeat_interleave(repeat, dim=1)
-    gen_scores = torch.einsum("ihd,jhd->hij", gen_q, gen_k) * scale
-    und_scores = torch.einsum("ihd,jhd->hij", gen_q, und_k) * scale
-    peak = torch.maximum(gen_scores.max(dim=-1).values, und_scores.max(dim=-1).values)
-    gen_weights = multiplicity[None] * torch.exp(gen_scores - peak[..., None])
-    und_weights = torch.exp(und_scores - peak[..., None])
-    numerator = torch.einsum("hij,jhd->ihd", gen_weights, gen_v) + torch.einsum("hij,jhd->ihd", und_weights, und_v)
-    expected = numerator / (gen_weights.sum(-1) + und_weights.sum(-1)).transpose(0, 1)[..., None]
+    expected = _weighted_softmax_reference(
+        qkv[0][_TRANSFER_UND_LEN:],
+        qkv[1][_TRANSFER_UND_LEN:],
+        qkv[2][_TRANSFER_UND_LEN:],
+        qkv[1][:_TRANSFER_UND_LEN],
+        qkv[2][:_TRANSFER_UND_LEN],
+        _transfer_multiplicity(device, control_attends_sensor=control_attends_sensor),
+    )
 
     torch.testing.assert_close(gen_out.double(), expected.flatten(-2, -1), atol=1e-2, rtol=1e-2)
+
+
+@pytest.mark.L0
+@pytest.mark.GPU
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="The attention kernels require a GPU.")
+@pytest.mark.skipif(not NATTEN_SUPPORTED, reason="merge_attentions requires NATTEN.")
+@pytest.mark.parametrize("control_attends_sensor", [True, False])
+def test_multiview_maskless_control_rule_gradients_match_a_dense_reference(control_attends_sensor: bool) -> None:
+    """The split's backward, which its forward cannot see.
+
+    Two things about the same-view pass change when the flag is off, and neither shows up in the
+    forward. Its query gather stops being the same-view partition and becomes a permutation cut
+    by what a token *is*, so the bridge that keeps ``merge_attentions``' data-pointer contract is
+    handed a different map to invert. And its key gather starts repeating rows -- a group's
+    control tokens are keys of both its segments -- which is only correct if the backward
+    accumulates into a repeated index rather than overwriting it.
+    """
+    device = torch.device("cuda")
+    num_q_heads, num_kv_heads, head_dim = 4, 2, 64
+    qkv, packs = _transfer_packs(device, num_q_heads, num_kv_heads, head_dim)
+    torch.manual_seed(1)
+    seed_grad = torch.randn(_TRANSFER_GEN_LEN, num_q_heads * head_dim, device=device, dtype=torch.bfloat16)
+
+    leaves: dict[str, torch.Tensor] = {}
+    for name, pack in zip("qkv", packs):
+        for key in ("causal_seq", "full_only_seq"):
+            pack[key].requires_grad_(True)
+            leaves[f"{name}.{key}"] = pack[key]
+
+    plan = _transfer_plan(
+        device,
+        control_attends_sensor=control_attends_sensor,
+        padded_gen_tokens=_padded_gen_tokens(packs[0]),
+    )
+    out_pack = multiview_attention(*packs, maskless_plan=plan)
+    get_gen_seq(out_pack)[:_TRANSFER_GEN_LEN].backward(seed_grad)
+
+    reference_leaves = {name: leaf.detach().clone().requires_grad_(True) for name, leaf in leaves.items()}
+    reference = _weighted_softmax_reference(
+        reference_leaves["q.full_only_seq"][:_TRANSFER_GEN_LEN],
+        reference_leaves["k.full_only_seq"][:_TRANSFER_GEN_LEN],
+        reference_leaves["v.full_only_seq"][:_TRANSFER_GEN_LEN],
+        reference_leaves["k.causal_seq"][:_TRANSFER_UND_LEN],
+        reference_leaves["v.causal_seq"][:_TRANSFER_UND_LEN],
+        _transfer_multiplicity(device, control_attends_sensor=control_attends_sensor),
+    )
+    reference.flatten(-2, -1).backward(seed_grad.double())
+
+    for name in ("q.full_only_seq", "k.full_only_seq", "v.full_only_seq", "k.causal_seq", "v.causal_seq"):
+        actual, expected = leaves[name].grad, reference_leaves[name].grad
+        assert actual is not None and expected is not None
+        torch.testing.assert_close(
+            actual.double(), expected.double(), atol=1e-2, rtol=1e-2, msg=lambda m, n=name: f"{n}: {m}"
+        )
+
+
+@pytest.mark.L0
+@pytest.mark.CPU
+def test_multiview_maskless_control_split_is_a_permutation_keyed_segment_for_segment() -> None:
+    """The split's two structural invariants, which the dense references cannot state.
+
+    That the query side is a *permutation* of the padded stream is what makes every row of the
+    pass written exactly once -- a subset would leave rows at ``finfo.min`` and a repetition
+    would merge a row into itself. That the two sides agree in segment count is what the varlen
+    kernel requires of any pass keying gathered queries against differently gathered keys.
+    """
+    device = torch.device("cpu")
+    padded = _TRANSFER_GEN_LEN + 3  # a pad group of its own, which the split has to cover
+    plan = _transfer_plan(device, control_attends_sensor=False, padded_gen_tokens=padded)
+
+    assert plan.same_view_q_gather is not None and plan.same_view_kv_gather is not None
+    assert torch.equal(torch.sort(plan.same_view_q_gather).values, torch.arange(padded, device=device))
+    assert plan.same_view_q_offsets is not None and plan.same_view_kv_offsets is not None
+    assert plan.same_view_q_offsets.shape == plan.same_view_kv_offsets.shape
+    assert int(plan.same_view_q_offsets[-1]) == padded
+    # A group's control tokens are keys of both its segments, so the key side is longer than the
+    # stream by exactly the control tokens -- the one place this pass reads a row twice.
+    control_tokens = sum(int(item["latent_t"]) for item in _TRANSFER_ITEMS if item["control"])
+    assert int(plan.same_view_kv_offsets[-1]) == padded + control_tokens
+    # The three whole-partition fields stay the whole partition: the gen->und pass borrows them
+    # for its own queries, and a control token reads its captions whatever this flag says.
+    assert plan.same_view_gather is not None and plan.same_view_gather.shape[0] == padded
+
+
+@pytest.mark.L0
+@pytest.mark.GPU
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="merge_attentions requires a GPU.")
+@pytest.mark.skipif(not NATTEN_SUPPORTED, reason="merge_attentions requires NATTEN.")
+@torch.no_grad()
+def test_merge_attentions_destroys_a_row_its_first_branch_does_not_cover() -> None:
+    """Why the same-view pass is merged first, and why the control split stays inside it.
+
+    ``merge_attentions`` accumulates as ``lse0 - logsigmoid(lse0 - lse1)``. That is exact
+    arithmetic for real log-sum-exps, but at ``lse0 = finfo.min`` -- the fill
+    ``_scatter_to_packed`` gives a row its branch did not cover -- the difference rounds back to
+    ``lse0`` in float32, ``logsigmoid`` returns it unchanged, and the subtraction cancels to
+    ``0.0``. The real branches are not out-weighed, they are erased, and the wrong log-sum-exp is
+    then written back into every branch's saved LSE and rescales their gradients too.
+
+    Pinned here rather than left to the folds because it is what makes "the first branch covers
+    every row" a correctness property of this module: it is the reason a
+    ``control_attends_sensor=False`` batch cuts the same-view pass into two varlen *segments*
+    rather than running two passes, neither of which would be total.
+    """
+    device = torch.device("cuda")
+    sentinel = torch.finfo(torch.float32).min
+
+    def merged(lses: list[float], outs: list[float]) -> tuple[float, float]:
+        out, lse = merge_attentions(
+            outputs=[torch.full((1, 1, 1, 1), value, device=device) for value in outs],
+            lse_tensors=[torch.full((1, 1, 1), value, device=device) for value in lses],
+            torch_compile=False,
+        )
+        return float(out.reshape(-1)[0]), float(lse.reshape(-1)[0])
+
+    # Two real branches, weights softmax([-5, -3]) over outputs 1.0 and 2.0.
+    expected_out = 1.8807970779778823
+    expected_lse = float(torch.logaddexp(torch.tensor(-5.0), torch.tensor(-3.0)))
+
+    covered_out, covered_lse = merged([-5.0, sentinel, -3.0], [1.0, 0.0, 2.0])
+    assert covered_out == pytest.approx(expected_out, abs=1e-5)
+    assert covered_lse == pytest.approx(expected_lse, abs=1e-5)
+
+    # The same three branches with the sentinel moved to the front. Not a rounding difference.
+    uncovered_out, uncovered_lse = merged([sentinel, -5.0, -3.0], [0.0, 1.0, 2.0])
+    assert abs(uncovered_out - expected_out) > 0.5
+    assert uncovered_lse > 0.0
+
+
+@pytest.mark.L0
+@pytest.mark.CPU
+def test_control_attends_sensor_is_a_no_op_for_a_batch_with_no_control_item() -> None:
+    """Which is why the flag may be left unstated there, and must not be anywhere else.
+
+    The flag only ever decides what a *control* query reaches, so a batch with none is the same
+    attention under either value -- and the builder says so by folding the same plan rather than
+    by asserting it. Every field but the recorded flag itself: that one is what the caller
+    stated, so that a plan says which attention its run means even where the fold cannot tell.
+    """
+    device = torch.device("cpu")
+    plans = {
+        flag: multiview_maskless_attention.build_multiview_maskless_plan(
+            [2, 1], [(4, 2, 2), (3, 2, 2)], device=device, items_per_sample=[1, 1], control_attends_sensor=flag
+        )
+        for flag in (True, False, None)
+    }
+    for flag, plan in plans.items():
+        assert plan.same_view_q_gather is None, f"{flag} split a batch with nothing to withhold."
+    assert plans[None].control_attends_sensor is True, "Unstated is recorded as the permissive rule."
+    assert plans[False].control_attends_sensor is False, "A stated rule is recorded as stated."
+    for field in dataclass_fields(plans[True]):
+        if field.name == "control_attends_sensor":
+            continue
+        left, right = getattr(plans[True], field.name), getattr(plans[False], field.name)
+        if isinstance(left, torch.Tensor):
+            assert torch.equal(left, right), field.name
+        else:
+            assert left == right, field.name
+
+
+@pytest.mark.L0
+@pytest.mark.CPU
+def test_multiview_maskless_plan_refuses_a_control_item_without_the_control_rule() -> None:
+    """A default here is a silently wider or narrower key set for the tokens the flag is about."""
+    with pytest.raises(ValueError, match="marks a control item, so control_attends_sensor"):
+        multiview_maskless_attention.build_multiview_maskless_plan(
+            [1, 1], [(2, 1, 1), (2, 1, 1)], device=torch.device("cpu"), items_per_sample=[2], is_control=[True, False]
+        )
 
 
 @pytest.mark.L0
@@ -3685,7 +3914,9 @@ def test_multiview_maskless_attention_runs_a_gen_stream_past_the_varlen_index_li
         device=device,
         items_per_sample=[items],
         is_control=[index < items - 1 for index in range(items)],
+        control_attends_sensor=True,
         view_axis=[0] * items,
+        padded_gen_tokens=_padded_gen_tokens(packs[0]),
     )
 
     out_pack = multiview_attention(*packs, maskless_plan=plan)

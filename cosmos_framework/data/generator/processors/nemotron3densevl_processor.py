@@ -13,6 +13,7 @@ from cosmos_framework.data.generator.processors.base import (
     convert_string_content_to_list_content,
     maybe_parse_video_content,
 )
+from cosmos_framework.utils.generator.source_video_timing import SOURCE_VIDEO_TIMING_KEY, require_source_pts_processor
 
 
 class Nemotron3DenseVLProcessor(
@@ -24,6 +25,7 @@ class Nemotron3DenseVLProcessor(
     # leave ``vision_end_id`` unset (None) rather than the legacy ``</img>``
     # which silently resolved to the UNK token id.
     VISION_END_TOKEN: Optional[str] = None
+    USES_SOURCE_VIDEO_TIMESTAMPS: bool = True
 
     def __init__(
         self,
@@ -31,8 +33,15 @@ class Nemotron3DenseVLProcessor(
         credentials: str = "./credentials/s3_training.secret",
         bucket: str = "bucket4",
         cache_dir: Optional[str] = None,
-    ):
-        super().__init__(name=name, credentials=credentials, bucket=bucket, cache_dir=cache_dir)
+        use_native_edge_processor: bool = False,
+    ) -> None:
+        super().__init__(
+            name=name,
+            credentials=credentials,
+            bucket=bucket,
+            cache_dir=cache_dir,
+            use_native_edge_processor=use_native_edge_processor,
+        )
         # Helper attributes consumed by the dataloader video decoding path.
         shortest_edge = self.processor.image_processor.size["shortest_edge"]
         self.min_height_width = int(np.sqrt(shortest_edge))
@@ -62,6 +71,13 @@ class Nemotron3DenseVLProcessor(
         assert return_tensors == "pt", "return_tensors must be pt"
         # Note: this tokenizer does not support "content": str, it always expect "content" entry to be a list of dicts
         messages = convert_string_content_to_list_content(messages)
+        if any(
+            SOURCE_VIDEO_TIMING_KEY in item
+            for message in messages
+            for item in message["content"]
+            if isinstance(item, dict)
+        ):
+            require_source_pts_processor(self)
         kwargs = {}
         # Pre-resize images per-message using smart_resize so the resulting
         # token count matches the configured min/max-pixel budget.

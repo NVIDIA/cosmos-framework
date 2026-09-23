@@ -22,6 +22,8 @@ from cosmos_framework.data.generator.augmentors.reasoner.timestamp import (
     overlay_text,
     timestamp_convertor,
 )
+from cosmos_framework.utils.generator.source_video_timing import reject_source_pts_temporal_augmentation
+from cosmos_framework.utils.generator.video_source_metadata import VIDEO_METADATA_KEY
 
 
 def snap_timestamps_to_existing(assistant_message: List[Dict], existing_timestamps: List[float]) -> List[Dict]:
@@ -255,6 +257,7 @@ class TimeStampWithoutEndTime(Augmentor):
             return data_dict
 
         media_data = data_dict[self.input_key]
+        reject_source_pts_temporal_augmentation(media_data)
         for k, v in media_data.items():
             if "video" in k:
                 video_frames_with_timestamp, timestamps = overlay_text(
@@ -263,6 +266,7 @@ class TimeStampWithoutEndTime(Augmentor):
                     processor=self.processor,
                     source_frames_indices=v.get("source_frames_indices"),
                     source_fps=v.get("source_fps"),
+                    video_metadata=v.get(VIDEO_METADATA_KEY),
                 )
                 media_data[k]["videos"] = video_frames_with_timestamp
 

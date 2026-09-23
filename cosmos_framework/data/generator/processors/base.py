@@ -16,6 +16,7 @@ This module hosts the parts that were truly common across subclasses so the
 concrete files only contain model-specific logic.
 """
 
+import json
 import os
 from typing import Dict, List, Optional
 
@@ -28,6 +29,10 @@ from cosmos_framework.data.generator.processors.cosmos3_edge_processing import (
     is_cosmos3_edge_native_snapshot,
 )
 from cosmos_framework.utils.generator.reasoner.pretrained_models_downloader import maybe_download_hf_model_from_s3
+from cosmos_framework.utils.generator.video_source_metadata import (
+    VIDEO_METADATA_KEY,
+    validate_source_video_metadata,
+)
 
 
 def convert_string_content_to_list_content(messages: List[Dict]) -> List[Dict]:
@@ -50,7 +55,8 @@ def maybe_parse_video_content(
     """Scan messages for video entries and return their decoding metadata.
 
     Returns ``(num_video, fps_per_video, total_frames_per_video, frame_indices_per_video)``.
-    Logs a critical warning when a video entry omits ``fps``.
+    Source metadata takes precedence over sampled FPS. Without source metadata,
+    use the legacy local frame-sequence clock and warn when ``fps`` is omitted.
     """
     num_video = 0
     video_fps: list[float] = []
@@ -61,6 +67,14 @@ def maybe_parse_video_content(
             for sub_content in message["content"]:
                 if sub_content.get("type", "") == "video" and isinstance(sub_content["video"], list):
                     num_video += 1
+                    if VIDEO_METADATA_KEY in sub_content:
+                        metadata = validate_source_video_metadata(
+                            sub_content[VIDEO_METADATA_KEY], len(sub_content["video"])
+                        )
+                        video_fps.append(metadata["fps"])
+                        video_total_num_frames.append(metadata["total_num_frames"])
+                        video_frames_indices.append(metadata["frames_indices"])
+                        continue
                     fps = sub_content.get("fps", None)
                     if fps is None:
                         log.critical(
@@ -114,6 +128,7 @@ class BaseVLMProcessor:
     # ``vision_end_id`` will then be set to None and downstream consumers
     # (e.g. ``debug_data_qwen.py``) will skip the check.
     VISION_END_TOKEN: Optional[str] = None
+    USES_SOURCE_VIDEO_TIMESTAMPS: bool = False
 
     def __init__(
         self,
@@ -121,7 +136,22 @@ class BaseVLMProcessor:
         credentials: str = "./credentials/s3_training.secret",
         bucket: str = "bucket4",
         cache_dir: Optional[str] = None,
+        use_native_edge_processor: bool = False,
     ) -> None:
+        if not isinstance(use_native_edge_processor, bool):
+            raise TypeError("use_native_edge_processor must be a bool")
+        if use_native_edge_processor:
+            if not os.path.isdir(name):
+                raise ValueError("Explicit native Edge processing requires staged local processor metadata")
+            with open(os.path.join(name, "config.json")) as stream:
+                model_type = json.load(stream).get("model_type")
+            with open(os.path.join(name, "preprocessor_config.json")) as stream:
+                processor_class = json.load(stream).get("processor_class")
+            if model_type not in {"cosmos3_edge", "nemotron_siglip2"} or processor_class not in {
+                "Cosmos3EdgeProcessor",
+                "NemotronNanoV3BridgeProcessor",
+            }:
+                raise ValueError("Explicit native Edge processing requires compatible Cosmos3 Edge metadata")
         self.name = name
         if os.path.isdir(name):
             model_name_or_path_local = name
@@ -130,7 +160,7 @@ class BaseVLMProcessor:
                 name, credentials, bucket, include_model_weights=False, cache_dir=cache_dir
             )
 
-        if is_cosmos3_edge_native_snapshot(model_name_or_path_local):
+        if use_native_edge_processor or is_cosmos3_edge_native_snapshot(model_name_or_path_local):
             # AutoProcessor on transformers 4.x silently degrades to a bare tokenizer
             # for renewed (no remote code) Cosmos3-Edge snapshots; use the native port.
             self.processor = build_cosmos3_edge_processor(model_name_or_path_local)

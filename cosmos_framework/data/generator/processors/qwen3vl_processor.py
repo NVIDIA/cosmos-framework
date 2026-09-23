@@ -25,6 +25,7 @@ class Qwen3VLProcessor(
     # leave ``vision_end_id`` unset (None) rather than the legacy ``</img>``,
     # which silently resolved to the UNK token id.
     VISION_END_TOKEN: Optional[str] = None
+    USES_SOURCE_VIDEO_TIMESTAMPS: bool = True
 
     def __init__(
         self,

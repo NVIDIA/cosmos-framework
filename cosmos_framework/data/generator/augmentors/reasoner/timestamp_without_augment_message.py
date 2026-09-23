@@ -14,6 +14,8 @@ from typing import Dict, List, Literal, Tuple
 
 from cosmos_framework.data.imaginaire.webdataset.augmentors.augmentor import Augmentor
 from cosmos_framework.data.generator.augmentors.reasoner.timestamp import overlay_text
+from cosmos_framework.utils.generator.source_video_timing import reject_source_pts_temporal_augmentation
+from cosmos_framework.utils.generator.video_source_metadata import VIDEO_METADATA_KEY
 
 
 def list_to_markdown(conversation_data: List[Dict]) -> str:
@@ -205,6 +207,7 @@ class TimeStampWithoutAugmentMessage(Augmentor):
             return data_dict
 
         media_data = data_dict[self.input_key]
+        reject_source_pts_temporal_augmentation(media_data)
         for k, v in media_data.items():
             if "video" in k:
                 video_frames_with_timestamp, timestamps = overlay_text(
@@ -213,6 +216,7 @@ class TimeStampWithoutAugmentMessage(Augmentor):
                     processor=self.processor,
                     source_frames_indices=v.get("source_frames_indices"),
                     source_fps=v.get("source_fps"),
+                    video_metadata=v.get(VIDEO_METADATA_KEY),
                 )
                 media_data[k]["videos"] = video_frames_with_timestamp
         return data_dict

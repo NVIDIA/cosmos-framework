@@ -54,6 +54,10 @@ EMBODIMENT_TO_DOMAIN_ID: dict[str, int] = {
     # RoboCasa PandaOmron mobile manipulation (10/15/20D raw action per
     # ``use_base_action`` / ``base_encoding``); appended above the maximum.
     "robocasa": 30,
+    # embodiment_b nvidia-20260828 ingestion: a new one-shot dataset, distinct from
+    # "embodiment_b" (domain 9, an earlier unrelated sample drop with its own 30D
+    # contract).
+    "embodiment_b_20260828": 32,
 }
 
 
@@ -88,6 +92,7 @@ EMBODIMENT_TO_RAW_ACTION_DIM: dict[str, int] = {
     "so101-bimanual-midtrain-conditional": 20,
     "geniesim3_g2a": 29,
     "geniesim3_g2a_joint": 16,
+    "embodiment_b_20260828": 50,
     # NOTE: ``libero`` (7/10/13 depending on ``rotation_space``), ``hand_pose``
     # (variable with ``keypoint_option`` and ``rotation_format``) and ``robocasa``
     # (10 arm-only, 15/20 with the mobile base, per ``use_base_action`` /

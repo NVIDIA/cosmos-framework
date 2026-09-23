@@ -11,6 +11,8 @@ from typing import Protocol
 
 import torch
 
+from cosmos_framework.utils.generator.video_source_metadata import calculate_video_timestamps
+
 AUDIO_START_TOKEN: str = "<audio_start>"
 AUDIO_PAD_TOKEN: str = "<audio_pad>"
 AUDIO_END_TOKEN: str = "<audio_end>"
@@ -249,14 +251,25 @@ def expand_audio_placeholders_in_text(
     return "".join(expanded_parts)
 
 
-def get_qwen_video_timestamps(*, num_frames: int, fps: float, temporal_patch_size: int) -> list[float]:
-    """Mirror Transformers Qwen3-VL's ``_calculate_timestamps`` formula."""
+def get_qwen_video_timestamps(
+    *, num_frames: int, fps: float, temporal_patch_size: int, frame_indices: Sequence[int] | None = None
+) -> list[float]:
+    """Mirror Qwen3-VL timestamps, using source indices when supplied.
+
+    Without indices, ``fps`` describes an already sampled frame sequence. With
+    indices, it is the source FPS and any source crop offset is preserved.
+    """
     if isinstance(num_frames, bool) or not isinstance(num_frames, int) or num_frames < 1:
         raise ValueError(f"num_frames must be a positive integer, got {num_frames!r}")
     if isinstance(fps, bool) or not isinstance(fps, (int, float)) or not math.isfinite(float(fps)) or fps <= 0:
         raise ValueError(f"fps must be a positive finite number, got {fps!r}")
     if isinstance(temporal_patch_size, bool) or not isinstance(temporal_patch_size, int) or temporal_patch_size < 1:
         raise ValueError(f"temporal_patch_size must be a positive integer, got {temporal_patch_size!r}")
+
+    if frame_indices is not None:
+        if len(frame_indices) != num_frames:
+            raise ValueError("frame_indices must align with every selected video frame")
+        return calculate_video_timestamps(frame_indices, fps, temporal_patch_size)
 
     frame_indices = list(range(num_frames))
     remainder = len(frame_indices) % temporal_patch_size
@@ -313,8 +326,8 @@ def get_audio_segment_token_lengths(
         timestamp = float(timestamp)
         if not math.isfinite(timestamp) or timestamp < 0:
             raise ValueError(f"Audio timestamps must be finite and non-negative, got {timestamp!r}")
-        if timestamp <= previous_timestamp:
-            raise ValueError("Audio timestamps must be strictly increasing")
+        if timestamp < previous_timestamp:
+            raise ValueError("Audio timestamps must be nondecreasing")
         normalized_timestamps.append(timestamp)
         previous_timestamp = timestamp
 

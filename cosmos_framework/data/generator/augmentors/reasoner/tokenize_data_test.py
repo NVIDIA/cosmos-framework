@@ -224,6 +224,37 @@ def test_bytes_to_media_extracts_video_audio_only_when_requested(
 
 @pytest.mark.L0
 @pytest.mark.CPU
+def test_tokenize_data_strips_original_system_prompt_before_injecting_replacement() -> None:
+    vlm_processor = _FakeVLMProcessor()
+    tokenize = TokenizeData(
+        processor=vlm_processor,
+        custom_system_prompt="Replacement system prompt",
+        strip_original_system_prompt=True,
+    )
+    data = {
+        "__key__": "system-prompt-strip",
+        "__url__": SimpleNamespace(root="root", path="path"),
+        "conversation": [
+            {"role": "system", "content": [{"type": "text", "text": "Original system prompt"}]},
+            {"role": "user", "content": [{"type": "text", "text": "before"}]},
+            {"role": "assistant", "content": [{"type": "text", "text": "answer"}]},
+        ],
+        "media": {},
+    }
+
+    output = tokenize(data)
+
+    assert output is not None
+    assert vlm_processor.last_conversation is not None
+    assert vlm_processor.last_conversation == [
+        {"role": "system", "content": "Replacement system prompt"},
+        {"role": "user", "content": [{"type": "text", "text": "before"}]},
+        {"role": "assistant", "content": [{"type": "text", "text": "answer"}]},
+    ]
+
+
+@pytest.mark.L0
+@pytest.mark.CPU
 def test_tokenize_data_preserves_interleaved_audio_order_and_processor_outputs() -> None:
     vlm_processor = _FakeVLMProcessor()
     audio_processor = _FakeAudioProcessor()
