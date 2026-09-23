@@ -343,7 +343,18 @@ class VLMModel(ImaginaireModel):
 
         # Apply freeze before the optimizer is built — ``build_optimizer`` reads
         # ``requires_grad`` off ``named_parameters``.
-        n_trainable = _apply_freeze_config(self.model.model, self.hf_config.model_type, self.config.freeze)
+        if config.policy.lora_enabled:
+            # LoRA-only trainability is authoritative. Applying a legacy
+            # ``trainable_params=[".*"]`` freeze config here would silently
+            # turn an adapter run back into a full fine-tune; a broad
+            # ``frozen_params`` expression could freeze the adapters instead.
+            # The injector already froze the base, and this idempotent call
+            # verifies that invariant immediately before optimizer creation.
+            from cosmos_framework.utils.generator.lora import set_only_lora_trainable
+
+            n_trainable = set_only_lora_trainable(self.model.model)
+        else:
+            n_trainable = _apply_freeze_config(self.model.model, self.hf_config.model_type, self.config.freeze)
         if config.sound_und:
             # The standalone artifact is the sole source of encoder weights.
             # Keep it immutable even when a broad trainable_params expression
@@ -454,6 +465,23 @@ class VLMModel(ImaginaireModel):
         if policy.backbone.pretrained_weights.backbone_path:
             _get_overlay_config(hf_model.hf_config.model_type)
 
+        # ── b.2. Inject LoRA adapters (still on meta, still pre-FSDP) ──
+        # Ordering is load-bearing: the injector must see UNSHARDED nn.Linear
+        # shapes. Injecting after ``parallelize()`` builds ``lora_B`` at the
+        # per-rank shard size (e.g. 8192/4=2048) and crashes at forward time.
+        # ``lora_A``/``lora_B`` stay uninitialized on meta here; step g.3
+        # initializes them once the tensors are real.
+        if policy.lora_enabled:
+            from cosmos_framework.utils.generator.lora import inject_lora_pre_fsdp
+
+            inject_lora_pre_fsdp(
+                hf_model.model,
+                lora_rank=policy.lora_rank,
+                lora_alpha=policy.lora_alpha,
+                lora_target_modules=policy.lora_target_modules,
+                lora_exclude_path_regex=policy.lora_exclude_path_regex or None,
+            )
+
         # ── c. Build ParallelDims + device mesh ──
         # Overlay-mesh design (see vfm/utils/parallelism.py): cp/cfgp do NOT
         # consume FSDP rank slots, so dp_replicate * dp_shard == world_size
@@ -536,6 +564,13 @@ class VLMModel(ImaginaireModel):
         hf_model.tie_embeddings()
 
         # ── g. Load pretrain weights ──
+        # LoRA adapters exist on the model but never in a pretrained checkpoint.
+        # ``load_vlm_model``'s Phase-6 completeness check raises on any model key
+        # the checkpoint lacks, so the adapter keys must be tolerated explicitly.
+        # Patterns are applied with ``re.fullmatch`` against the resolved model
+        # key, hence the leading ``.*``.
+        lora_skip_patterns = [r".*\.lora_[AB]\.weight"] if policy.lora_enabled else []
+
         if load_pretrain_weights:
             if policy.backbone.safetensors_path:
                 safetensors_local_path = maybe_download_hf_model_from_s3(
@@ -551,6 +586,7 @@ class VLMModel(ImaginaireModel):
                 checkpoint_path=safetensors_local_path,
                 credential_path=None,  # local path after download
                 parallel_dims=parallel_dims if torch.distributed.is_initialized() else None,
+                extra_skip_patterns=lora_skip_patterns or None,
             )
 
             # ── g.2. Optional LLM overlay (backbone.pretrained_weights) ──
@@ -576,7 +612,7 @@ class VLMModel(ImaginaireModel):
                     checkpoint_path=llm_local_path,
                     credential_path=None,
                     parallel_dims=parallel_dims if torch.distributed.is_initialized() else None,
-                    extra_skip_patterns=overlay_skip_patterns,
+                    extra_skip_patterns=overlay_skip_patterns + lora_skip_patterns,
                 )
                 lm_loaded = {k for k in keys_loaded if is_lm_key(k)}
                 if not lm_loaded:
@@ -587,6 +623,15 @@ class VLMModel(ImaginaireModel):
                         "VLM; check model-family / layer-count compatibility."
                     )
                 log.info(f"VLMModel: overlaid {len(lm_loaded)} language-model params from {llm_path}")
+
+        # ── g.3. Initialize LoRA adapters ──
+        # Must run after materialization and every pretrained-weight load. The
+        # zero-initialized B projection keeps the first forward identical to the
+        # pretrained model. The audio artifact below cannot overwrite adapters.
+        if policy.lora_enabled:
+            from cosmos_framework.utils.generator.lora import init_lora_weights_post_materialization
+
+            init_lora_weights_post_materialization(hf_model.model)
 
         # ── h. Load the immutable standalone audio encoder artifact ──
         # This runs for both fresh starts and DCP resumes. On resume, DCP may
