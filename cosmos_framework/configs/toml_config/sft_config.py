@@ -11,10 +11,10 @@ override list, ``PATH_REMAPS``, etc.) lives in ``toml_config_helper.py``.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Literal, Optional
 
 import tomllib
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from cosmos_framework.configs.toml_config.toml_config_helper import (
     TASK_TO_BASE_CONFIG,
@@ -245,6 +245,61 @@ class ActivationCheckpointingConfig(BaseModel):
     )
 
 
+class ReasonerConditioningConfig(BaseModel):
+    """Frozen Reasoner feature source for VFM generator SFT."""
+
+    model_config = _PYDANTIC_MODEL_CONFIG
+
+    backend: Literal["joint", "inline", "offline", "remote", "read_through"] = Field(
+        default="joint",
+        description=(
+            "'joint' preserves the current dual-path forward; 'inline' captures Reasoner K/V locally for parity; "
+            "'offline' reads a precomputed cache; 'remote' calls dedicated Reasoner workers; 'read_through' "
+            "uses the cache first and sends misses to the service."
+        ),
+    )
+    cache_root: Optional[str] = Field(default=None, description="Root of the immutable Reasoner K/V cache.")
+    endpoint: Optional[str] = Field(default=None, description="Reasoner feature-service endpoint.")
+    reasoner_fingerprint: Optional[str] = Field(default=None, description="Pinned Reasoner checkpoint digest.")
+    tokenizer_fingerprint: Optional[str] = Field(default=None, description="Pinned tokenizer/special-token digest.")
+    framing_fingerprint: Optional[str] = Field(default=None, description="Pinned prompt-framing/schema digest.")
+    strict_fingerprint: bool = Field(
+        default=True,
+        description="Reject feature entries whose model/tokenizer/framing fingerprint does not match.",
+    )
+    prefetch_batches: int = Field(default=2, ge=0, description="Number of future batches to prefetch.")
+    layerwise_h2d: bool = Field(
+        default=False,
+        description="Stage K/V one layer at a time instead of keeping the entire batch resident on GPU.",
+    )
+    request_timeout_s: float = Field(default=300.0, gt=0.0, description="Remote request deadline in seconds.")
+    connect_timeout_s: float = Field(default=30.0, gt=0.0, description="Remote startup handshake deadline in seconds.")
+    request_max_retries: int = Field(
+        default=2,
+        ge=0,
+        description="Retries for transient remote UNAVAILABLE/RESOURCE_EXHAUSTED failures.",
+    )
+    retry_backoff_s: float = Field(default=0.25, ge=0.0, description="Initial remote retry backoff in seconds.")
+
+    @model_validator(mode="after")
+    def validate_backend_inputs(self) -> "ReasonerConditioningConfig":
+        if self.backend in {"offline", "read_through"} and not self.cache_root:
+            raise ValueError(f"backend={self.backend!r} requires cache_root")
+        if self.backend in {"remote", "read_through"} and not self.endpoint:
+            raise ValueError(f"backend={self.backend!r} requires endpoint")
+        if self.backend in {"offline", "remote", "read_through"} and not self.strict_fingerprint:
+            raise ValueError(f"backend={self.backend!r} requires strict_fingerprint=true")
+        if self.backend in {"offline", "remote", "read_through"}:
+            missing = [
+                name
+                for name in ("reasoner_fingerprint", "tokenizer_fingerprint", "framing_fingerprint")
+                if not getattr(self, name)
+            ]
+            if missing:
+                raise ValueError(f"backend={self.backend!r} with strict_fingerprint=true requires {missing}")
+        return self
+
+
 class ModelTokenizerConfig(BaseModel):
     """Video tokenizer (VAE) settings. VFM only — VLM skips this sub-tree."""
 
@@ -357,8 +412,7 @@ class ModelConfig(BaseModel):
     lora_rank: int = Field(
         default=16,
         description=(
-            "LoRA rank `r`. Adapter shape is (rank × hidden_dim) per target "
-            "module. Standard values are 4, 8, 16, 32."
+            "LoRA rank `r`. Adapter shape is (rank × hidden_dim) per target module. Standard values are 4, 8, 16, 32."
         ),
     )
     lora_alpha: int = Field(
@@ -379,9 +433,8 @@ class ModelConfig(BaseModel):
     ema: EMAConfig = Field(default_factory=EMAConfig)
     parallelism: ParallelismConfig = Field(default_factory=ParallelismConfig)
     compile: CompileConfig = Field(default_factory=CompileConfig)
-    activation_checkpointing: ActivationCheckpointingConfig = Field(
-        default_factory=ActivationCheckpointingConfig
-    )
+    activation_checkpointing: ActivationCheckpointingConfig = Field(default_factory=ActivationCheckpointingConfig)
+    reasoner_conditioning: ReasonerConditioningConfig = Field(default_factory=ReasonerConditioningConfig)
     tokenizer: ModelTokenizerConfig = Field(default_factory=ModelTokenizerConfig)
     backbone: BackboneConfig = Field(default_factory=BackboneConfig)
 
@@ -473,15 +526,12 @@ class SchedulerConfig(BaseModel):
     )
     f_start: list[float] = Field(
         default_factory=lambda: [1.0e-6],
-        description=(
-            "Initial LR multiplier at step 0, before warmup ramps up."
-        ),
+        description=("Initial LR multiplier at step 0, before warmup ramps up."),
     )
     verbosity_interval: int = Field(
         default=0,
         description=(
-            "How often the scheduler logs the current LR (in optimizer "
-            "steps). 0 = silent. VFM only — skipped on VLM."
+            "How often the scheduler logs the current LR (in optimizer steps). 0 = silent. VFM only — skipped on VLM."
         ),
     )
     warm_up_steps: list[int] = Field(
@@ -533,8 +583,7 @@ class GradClipCallback(BaseModel):
     clip_norm: float = Field(
         default=1.0,
         description=(
-            "Maximum global L2 norm of the gradient. Steps with a larger "
-            "norm are rescaled so ||grad|| ≤ clip_norm."
+            "Maximum global L2 norm of the gradient. Steps with a larger norm are rescaled so ||grad|| ≤ clip_norm."
         ),
     )
     force_finite: bool = Field(
@@ -567,8 +616,7 @@ class TrainerConfig(BaseModel):
     distributed_parallelism: str = Field(
         default="fsdp",
         description=(
-            "Distributed strategy. 'fsdp' (the only supported value today) "
-            "routes through cosmos's FSDP wrapper."
+            "Distributed strategy. 'fsdp' (the only supported value today) routes through cosmos's FSDP wrapper."
         ),
     )
     grad_accum_iter: int = Field(
@@ -658,10 +706,7 @@ class DataloaderTrainConfig(BaseModel):
     )
     seed: int = Field(
         default=42,
-        description=(
-            "Dataloader RNG seed. Skipped on VLM (CosmosDataLoader has "
-            "no seed ctor kwarg there)."
-        ),
+        description=("Dataloader RNG seed. Skipped on VLM (CosmosDataLoader has no seed ctor kwarg there)."),
     )
 
 
@@ -746,8 +791,7 @@ def load_experiment_from_toml(
         base_config_path = TASK_TO_BASE_CONFIG[task]
     except KeyError as e:
         raise ValueError(
-            f"{toml_path}: [job].task={task!r} is not supported. "
-            f"Valid values: {sorted(TASK_TO_BASE_CONFIG)}"
+            f"{toml_path}: [job].task={task!r} is not supported. Valid values: {sorted(TASK_TO_BASE_CONFIG)}"
         ) from e
 
     overrides = build_hydra_overrides(raw)
@@ -759,10 +803,7 @@ def load_experiment_from_toml(
             if not o or o == "--":
                 continue
             if "=" not in o:
-                raise ValueError(
-                    f"extra override {o!r} must be Hydra dotted-path syntax "
-                    f"(e.g. 'optimizer.lr=1e-5')."
-                )
+                raise ValueError(f"extra override {o!r} must be Hydra dotted-path syntax (e.g. 'optimizer.lr=1e-5').")
             overrides.append(o)
 
     # Import lazily so this module stays cheap to import in non-training contexts.

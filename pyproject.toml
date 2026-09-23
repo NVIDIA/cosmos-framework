@@ -60,6 +60,10 @@ guardrail = [
 ]
 interactive = [
 ]
+reasoner-remote = [
+  "grpcio>=1.78",
+  "protobuf>=6.31.1",
+]
 serve = [
   "fastapi",
   "httpx",

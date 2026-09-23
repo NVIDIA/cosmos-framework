@@ -1,0 +1,149 @@
+// SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// SPDX-License-Identifier: OpenMDW-1.1
+
+syntax = "proto3";
+
+package cosmos.reasoner_features.v1;
+
+// DType describes the exact little-endian representation stored in a tensor's
+// bytes field. Implementations must reject an unspecified or unsupported dtype.
+enum DType {
+  DTYPE_UNSPECIFIED = 0;
+  DTYPE_INT32 = 1;
+  DTYPE_INT64 = 2;
+  DTYPE_FLOAT16 = 3;
+  DTYPE_BFLOAT16 = 4;
+  DTYPE_FLOAT32 = 5;
+  DTYPE_FLOAT64 = 6;
+}
+
+enum TensorKind {
+  TENSOR_KIND_UNSPECIFIED = 0;
+  TENSOR_KIND_CROSS_K = 1;
+  TENSOR_KIND_CROSS_V = 2;
+}
+
+// TensorPayload is used for the comparatively small request tensors and
+// response offsets. Large Reasoner K/V tensors use TensorChunk below.
+message TensorPayload {
+  DType dtype = 1;
+  repeated uint64 shape = 2;
+  bytes data = 3;
+}
+
+message CacheIdentity {
+  string reasoner = 1;
+  string tokenizer = 2;
+  string framing = 3;
+}
+
+message FeatureSignature {
+  DType dtype = 1;
+  uint32 num_layers = 2;
+  uint32 num_kv_heads = 3;
+  uint32 head_dim = 4;
+}
+
+// Capability names are stable, lower-case identifiers. Version lets a service
+// advertise later extensions without changing the GetInfo envelope.
+message Capability {
+  string name = 1;
+  uint32 version = 2;
+}
+
+message GetInfoRequest {
+  uint32 protocol_version = 1;
+}
+
+message GetInfoResponse {
+  uint32 protocol_version = 1;
+  string service_instance_id = 2;
+  CacheIdentity identity = 3;
+  FeatureSignature signature = 4;
+  repeated Capability capabilities = 5;
+  uint64 max_batch_tokens = 6;
+  uint64 max_queued_tokens = 7;
+  uint32 max_chunk_bytes = 8;
+  bool ready = 9;
+  uint32 max_requests = 10;
+}
+
+// One logical Reasoner input. causal_offsets partitions this request's token
+// stream into independent causal documents. It is [0, S] for an ordinary
+// sample, and can contain more boundaries for per-view captions. The service
+// must preserve document isolation during Reasoner execution.
+message ReasonerFeatureRequest {
+  string sample_key = 1;
+  TensorPayload token_ids = 2;
+  TensorPayload position_ids = 3;
+  TensorPayload causal_offsets = 4;
+  string fingerprint = 5;
+}
+
+message GenerateRequest {
+  uint32 protocol_version = 1;
+  // Stable across an idempotent retry of exactly the same ordered payload.
+  string request_id = 2;
+  CacheIdentity identity = 3;
+  repeated ReasonerFeatureRequest requests = 4;
+}
+
+message GenerateHeader {
+  uint32 protocol_version = 1;
+  string request_id = 2;
+  CacheIdentity identity = 3;
+  FeatureSignature signature = 4;
+  // Ordered exactly like GenerateRequest.requests.
+  repeated string fingerprints = 5;
+  // Partitions the returned unpadded K/V stream by request, not by the causal
+  // documents inside each request.
+  TensorPayload causal_offsets = 6;
+  uint64 total_tensor_bytes = 7;
+  string service_instance_id = 8;
+}
+
+// Chunks are streamed in canonical order: for every layer from zero upward,
+// all CROSS_K chunks followed by all CROSS_V chunks. chunk_index is global to
+// the response and byte_offset is local to the described tensor. sha256 is the
+// raw 32-byte digest of data.
+message TensorChunk {
+  uint64 chunk_index = 1;
+  TensorKind kind = 2;
+  uint32 layer_index = 3;
+  DType dtype = 4;
+  repeated uint64 shape = 5;
+  uint64 byte_offset = 6;
+  uint64 total_bytes = 7;
+  bytes data = 8;
+  bytes sha256 = 9;
+}
+
+message ServerTiming {
+  uint64 queue_ns = 1;
+  uint64 compute_ns = 2;
+  uint64 device_to_host_ns = 3;
+  uint64 serialization_ns = 4;
+}
+
+message GenerateTrailer {
+  uint64 total_chunks = 1;
+  uint64 total_tensor_bytes = 2;
+  // SHA-256 over raw tensors in canonical K0 || V0 || K1 || V1 ... order.
+  bytes response_sha256 = 3;
+  ServerTiming timing = 4;
+  uint64 cache_hits = 5;
+  uint64 cache_misses = 6;
+}
+
+message GenerateResponse {
+  oneof body {
+    GenerateHeader header = 1;
+    TensorChunk tensor_chunk = 2;
+    GenerateTrailer trailer = 3;
+  }
+}
+
+service ReasonerFeatureService {
+  rpc GetInfo(GetInfoRequest) returns (GetInfoResponse);
+  rpc Generate(GenerateRequest) returns (stream GenerateResponse);
+}

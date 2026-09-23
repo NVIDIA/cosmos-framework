@@ -5,7 +5,6 @@ from typing import Any, Literal
 
 import attrs
 
-from cosmos_framework.utils.lazy_config import LazyDict
 from cosmos_framework.configs.base.defaults.activation_checkpointing import ActivationCheckpointingConfig
 from cosmos_framework.configs.base.defaults.compile import CompileConfig
 from cosmos_framework.configs.base.defaults.ema import EMAConfig
@@ -17,6 +16,7 @@ from cosmos_framework.configs.base.defaults.reasoner import VLMConfig
 from cosmos_framework.model.generator.mot.action_io_projector import ACTION_IO_PROJECTOR_TYPES
 from cosmos_framework.model.generator.utils.load_balancing_stats import LBLConfig
 from cosmos_framework.model.generator.utils.sr_latent_noise import SRLatentConditionNoiseConfig
+from cosmos_framework.utils.lazy_config import LazyDict
 
 # Mirrors ``cosmos3.common.args.AttentionIOLayout``. Defined locally on purpose: importing
 # the ``cosmos3`` workspace package at module scope makes the whole cosmos3 config tree
@@ -24,6 +24,7 @@ from cosmos_framework.model.generator.utils.sr_latent_noise import SRLatentCondi
 # ``cosmos3``), which breaks the benchmark-request config-check CI job. Keep in sync with
 # ``packages/cosmos3/cosmos3/common/args.py``.
 AttentionIOLayout = Literal["sequence_sharded", "replicated"]
+ReasonerConditioningBackend = Literal["joint", "inline", "offline", "remote", "read_through"]
 
 
 @attrs.define(slots=False)
@@ -153,6 +154,53 @@ class FixedStepSamplerConfig:
     sample_type: str = "sde"
 
 
+@attrs.define(slots=False)
+class ReasonerConditioningConfig:
+    """How frozen Reasoner features are supplied to generator SFT.
+
+    ``joint`` preserves the existing one-pass MoT forward. ``inline`` is the
+    two-pass numerical-reference path that captures Reasoner K/V locally and
+    then executes the generator-only path. The remaining backends remove the
+    Reasoner parameters from training ranks and obtain the same per-layer K/V
+    tensors from storage and/or a dedicated service.
+    """
+
+    backend: ReasonerConditioningBackend = attrs.field(
+        default="joint",
+        validator=attrs.validators.in_({"joint", "inline", "offline", "remote", "read_through"}),
+    )
+    cache_root: str | None = None
+    endpoint: str | None = None
+    reasoner_fingerprint: str | None = None
+    tokenizer_fingerprint: str | None = None
+    framing_fingerprint: str | None = None
+    strict_fingerprint: bool = True
+    prefetch_batches: int = attrs.field(default=2, validator=attrs.validators.ge(0))
+    layerwise_h2d: bool = False
+    request_timeout_s: float = attrs.field(default=300.0, validator=attrs.validators.gt(0.0))
+    connect_timeout_s: float = attrs.field(default=30.0, validator=attrs.validators.gt(0.0))
+    request_max_retries: int = attrs.field(default=2, validator=attrs.validators.ge(0))
+    retry_backoff_s: float = attrs.field(default=0.25, validator=attrs.validators.ge(0.0))
+
+    def __attrs_post_init__(self) -> None:
+        if self.backend in {"offline", "read_through"} and not self.cache_root:
+            raise ValueError(f"reasoner_conditioning.backend={self.backend!r} requires cache_root")
+        if self.backend in {"remote", "read_through"} and not self.endpoint:
+            raise ValueError(f"reasoner_conditioning.backend={self.backend!r} requires endpoint")
+        if self.backend in {"offline", "remote", "read_through"} and not self.strict_fingerprint:
+            raise ValueError(f"reasoner_conditioning.backend={self.backend!r} requires strict_fingerprint=true")
+        if self.backend in {"offline", "remote", "read_through"}:
+            missing = [
+                name
+                for name in ("reasoner_fingerprint", "tokenizer_fingerprint", "framing_fingerprint")
+                if not getattr(self, name)
+            ]
+            if missing:
+                raise ValueError(
+                    f"reasoner_conditioning.backend={self.backend!r} with strict_fingerprint=true requires {missing}"
+                )
+
+
 # Don't have any defaults and init only in config file.
 @attrs.define(slots=False)
 class OmniMoTModelConfig:
@@ -239,6 +287,10 @@ class OmniMoTModelConfig:
 
     # Optional fixed-step sampler for distilled models (None for base models).
     fixed_step_sampler_config: FixedStepSamplerConfig | None = None
+
+    # Frozen Reasoner decoupling. The default keeps the existing joint model
+    # and is intentionally a no-op for every current recipe.
+    reasoner_conditioning: ReasonerConditioningConfig = ReasonerConditioningConfig()
 
     # Model configs
     vlm_config: VLMConfig = VLMConfig()

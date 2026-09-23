@@ -1,11 +1,29 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: OpenMDW-1.1
 
+import logging
 from typing import Any
 
 import torch
 
 from cosmos_framework.utils.lazy_config import LazyDict, instantiate
+
+_LOG = logging.getLogger(__name__)
+
+
+def close_model(model: "ImaginaireModel", *, primary_error: BaseException | None = None) -> None:
+    """Close a model without replacing an already-active primary failure."""
+
+    try:
+        model.close()
+    except BaseException as close_error:
+        if primary_error is None:
+            raise
+        note = f"Model cleanup also failed with {type(close_error).__name__}: {close_error}"
+        add_note = getattr(primary_error, "add_note", None)
+        if add_note is not None:
+            add_note(note)
+        _LOG.exception(note)
 
 
 class ImaginaireModel(torch.nn.Module):
@@ -127,4 +145,13 @@ class ImaginaireModel(torch.nn.Module):
         Args:
             iteration (int): Current iteration number.
         """
+        pass
+
+    def close(self) -> None:
+        """Release non-module resources owned by the model.
+
+        Training entry points call this hook on successful and failed exits.
+        Implementations must be idempotent because ownership guards may nest.
+        """
+
         pass

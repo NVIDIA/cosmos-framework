@@ -10,11 +10,18 @@ from torch import nn
 from transformers.configuration_utils import PretrainedConfig
 from transformers.modeling_utils import PreTrainedModel
 
-from cosmos_framework.utils import log
 from cosmos_framework.configs.base.defaults.joint_attention import packing_layout
 from cosmos_framework.configs.base.defaults.multiview_attention import (
     MultiviewAttentionConfig,
     ResolvedBackend,
+)
+from cosmos_framework.data.generator.sequence_packing import ModalityData, PackedSequence
+from cosmos_framework.data.generator.sequence_packing.natten import verify_natten_parameter_list
+from cosmos_framework.data.generator.sequence_packing.runtime import (
+    SequencePack,
+    get_caption_seq_offsets,
+    get_causal_seq,
+    get_full_only_seq,
 )
 from cosmos_framework.model.generator.mot.action_io_projector import (
     ACTION_IO_PROJECTOR_DOMAIN_AWARE,
@@ -43,14 +50,7 @@ from cosmos_framework.model.generator.mot.multiview_maskless_attention import (
     build_multiview_maskless_plan,
 )
 from cosmos_framework.model.generator.utils.memory import MemoryState
-from cosmos_framework.data.generator.sequence_packing import ModalityData, PackedSequence
-from cosmos_framework.data.generator.sequence_packing.natten import verify_natten_parameter_list
-from cosmos_framework.data.generator.sequence_packing.runtime import (
-    SequencePack,
-    get_caption_seq_offsets,
-    get_causal_seq,
-    get_full_only_seq,
-)
+from cosmos_framework.utils import log
 
 
 class Cosmos3VFMNetworkConfig(PretrainedConfig):
@@ -702,7 +702,12 @@ class Cosmos3VFMNetwork(PreTrainedModel):
         self,
         packed_seq: PackedSequence,
     ) -> tuple[torch.Tensor, torch.dtype]:
-        """Embed text tokens and initialize packed_sequence.
+        """Embed text tokens and initialize ``packed_sequence``.
+
+        A generator-only model receives the Reasoner's per-layer K/V through a
+        ``MemoryState`` and deliberately has no token-embedding table. In that
+        mode the causal rows are zero placeholders used only to preserve the
+        existing packed layout; decoder layers never consume them.
 
         Args:
             packed_seq: PackedSequence containing text_ids and text_indexes.
@@ -710,7 +715,19 @@ class Cosmos3VFMNetwork(PreTrainedModel):
         Returns:
             tuple of (packed_sequence, target_dtype) where packed_sequence has text embeddings filled in.
         """
-        packed_text_embedding = self.language_model.model.embed_tokens(packed_seq.text_ids)  # [N_text,hidden_size]
+        language_model = self.language_model.model
+        if not getattr(language_model, "include_und_pathway", True):
+            if not hasattr(language_model, "norm_moe_gen"):
+                raise RuntimeError("A generator-only language model must retain norm_moe_gen.")
+            reference_param = next(language_model.norm_moe_gen.parameters())
+            packed_sequence = torch.zeros(
+                (packed_seq.sequence_length, self.hidden_size),
+                device=packed_seq.text_ids.device,
+                dtype=reference_param.dtype,
+            )
+            return packed_sequence, reference_param.dtype
+
+        packed_text_embedding = language_model.embed_tokens(packed_seq.text_ids)  # [N_text,hidden_size]
         packed_sequence = packed_text_embedding.new_zeros(
             size=(packed_seq.sequence_length, self.hidden_size)
         )  # [N_total,hidden_size]

@@ -8,6 +8,7 @@ import dataclasses
 import inspect
 import json
 import time
+from concurrent.futures import Future
 from contextlib import contextmanager
 from typing import Any, Callable, Dict, Mapping, Optional, Tuple, get_args
 
@@ -20,20 +21,6 @@ from torch.distributed.device_mesh import DeviceMesh
 from torch.distributed.fsdp import MixedPrecisionPolicy
 from torch.nn.modules.module import _IncompatibleKeys
 
-from cosmos_framework.utils.flags import DEVICE, Device
-from cosmos_framework.utils.lazy_config import LazyDict
-from cosmos_framework.utils.lazy_config import instantiate as lazy_instantiate
-from cosmos_framework.utils.lazy_config.registry import locate
-from cosmos_framework.model._base import ImaginaireModel
-from cosmos_framework.utils import log, misc
-from cosmos_framework.utils.count_params import count_params
-from cosmos_framework.model.generator.algorithm.loss.flow_matching import (
-    ACTION_SLOT_SAMPLE_COUNT_KEY,
-    ACTION_SLOT_SAMPLE_LOSS_KEY,
-    ActionSlotLossStats,
-    compute_flow_matching_loss,
-)
-from cosmos_framework.model.generator.algorithm.loss.load_balancing import compute_load_balancing_loss
 from cosmos_framework.configs.base.defaults.joint_attention import JointAttnImplementation
 from cosmos_framework.configs.base.defaults.model_config import OmniMoTModelConfig
 from cosmos_framework.configs.base.defaults.parallelism import PRECISION_TO_TORCH_DTYPE
@@ -42,7 +29,23 @@ from cosmos_framework.data.generator.action.utils.action_processing import (
     get_action_processing_records,
 )
 from cosmos_framework.data.generator.action.utils.unified_action_schema import UNIFIED_ACTION_SLOT_GROUPS
+from cosmos_framework.data.generator.sequence_packing import (
+    PackedSequence,
+    SequencePlan,
+    build_sequence_plans_from_data_batch,
+    pack_input_sequence,
+)
+from cosmos_framework.data.generator.sequence_packing.modality import add_special_tokens
+from cosmos_framework.data.generator.sequence_packing.packers import is_item_generated, uses_single_timestep
 from cosmos_framework.data.generator.utils import IMAGE_RES_SIZE_INFO, VIDEO_RES_SIZE_INFO
+from cosmos_framework.model._base import ImaginaireModel, close_model
+from cosmos_framework.model.generator.algorithm.loss.flow_matching import (
+    ACTION_SLOT_SAMPLE_COUNT_KEY,
+    ACTION_SLOT_SAMPLE_LOSS_KEY,
+    ActionSlotLossStats,
+    compute_flow_matching_loss,
+)
+from cosmos_framework.model.generator.algorithm.loss.load_balancing import compute_load_balancing_loss
 from cosmos_framework.model.generator.diffusion.rectified_flow import RectifiedFlow
 from cosmos_framework.model.generator.diffusion.samplers.edm import EDMSampler
 from cosmos_framework.model.generator.diffusion.samplers.fixed_step import FixedStepSampler
@@ -63,7 +66,23 @@ from cosmos_framework.model.generator.mot.inference_text_kv_memory import (
 from cosmos_framework.model.generator.mot.modeling_utils import has_noisy_tokens
 from cosmos_framework.model.generator.mot.parallelize_unified_mot import materialize_non_offloaded_state
 from cosmos_framework.model.generator.mot.parallelize_vfm_network import parallelize_vfm_network
+from cosmos_framework.model.generator.mot.unified_mot import prune_und_pathway_
 from cosmos_framework.model.generator.reasoner.qwen3_vl.utils import tokenize_caption
+from cosmos_framework.model.generator.reasoner_feature_cache import (
+    OfflineReasonerFeatureProvider,
+    ReasonerFeatureCacheIdentity,
+    build_reasoner_feature_requests,
+)
+from cosmos_framework.model.generator.reasoner_features import (
+    CapturingReasonerKVMemoryState,
+    ReasonerFeatureBatch,
+    ReasonerFeatureProvider,
+    ReasonerFeatureSignature,
+    StaticReasonerKVMemoryState,
+    install_reasoner_feature_attention_dispatch,
+)
+from cosmos_framework.model.generator.tokenizers.interface import VideoTokenizerInterface
+from cosmos_framework.model.generator.upsampler.prompts import build_messages, clean_response
 from cosmos_framework.model.generator.utils.data_and_condition import (
     GenerationDataClean,
     GenerationDataNoised,
@@ -94,21 +113,17 @@ from cosmos_framework.model.generator.vision_encoder import (
     get_vae_pixel_shapes,
     normalize_uint8_item,
 )
-from cosmos_framework.data.generator.sequence_packing import (
-    PackedSequence,
-    SequencePlan,
-    build_sequence_plans_from_data_batch,
-    pack_input_sequence,
-)
-from cosmos_framework.data.generator.sequence_packing.modality import add_special_tokens
-from cosmos_framework.data.generator.sequence_packing.packers import is_item_generated, uses_single_timestep
-from cosmos_framework.model.generator.tokenizers.interface import VideoTokenizerInterface
-from cosmos_framework.model.generator.upsampler.prompts import build_messages, clean_response
+from cosmos_framework.utils import log, misc
+from cosmos_framework.utils.count_params import count_params
+from cosmos_framework.utils.flags import DEVICE, Device
 from cosmos_framework.utils.generator.data_utils import get_vision_data_resolution, read_positive_int_metadata
 from cosmos_framework.utils.generator.dtensor_helper import DTensorFastEmaModelUpdater
 from cosmos_framework.utils.generator.model_weights_stats import WeightTrainingStat
 from cosmos_framework.utils.generator.parallelism import ParallelDims
 from cosmos_framework.utils.generator.quantization import swap_modelopt_fp8_linears_on_meta
+from cosmos_framework.utils.lazy_config import LazyDict
+from cosmos_framework.utils.lazy_config import instantiate as lazy_instantiate
+from cosmos_framework.utils.lazy_config.registry import locate
 
 # "LIDA" in ASCII: fixed domain tag separating joint LiDAR noise from RGB.
 # Changing this value changes all joint LiDAR inference noise.
@@ -258,6 +273,161 @@ def _densify_action_family(
 
 
 INFERENCE_RAW_VISION_RETAINED_ITEMS_KEY = "_inference_raw_vision_retained_items"
+REASONER_FEATURE_BATCH_KEY = "reasoner_feature_batch"
+REASONER_FEATURE_FUTURE_KEY = "reasoner_feature_future"
+REASONER_SAMPLE_KEYS_KEY = "reasoner_sample_keys"
+
+_EXTERNAL_REASONER_BACKENDS = frozenset({"offline", "remote", "read_through"})
+_REASONER_FEATURE_BACKENDS = frozenset({"inline", *_EXTERNAL_REASONER_BACKENDS})
+
+
+def _reasoner_conditioning_backend(config: OmniMoTModelConfig) -> str:
+    conditioning = getattr(config, "reasoner_conditioning", None)
+    if conditioning is None:
+        return "joint"
+    if isinstance(conditioning, Mapping):
+        return str(conditioning.get("backend", "joint"))
+    return str(getattr(conditioning, "backend", "joint"))
+
+
+def _conditioning_value(config: OmniMoTModelConfig, name: str, default: Any = None) -> Any:
+    conditioning = getattr(config, "reasoner_conditioning", None)
+    if conditioning is None:
+        return default
+    if isinstance(conditioning, Mapping):
+        return conditioning.get(name, default)
+    return getattr(conditioning, name, default)
+
+
+def _reasoner_cache_identity(config: OmniMoTModelConfig) -> ReasonerFeatureCacheIdentity | None:
+    if _reasoner_conditioning_backend(config) not in _EXTERNAL_REASONER_BACKENDS:
+        return None
+    values = {
+        "reasoner": _conditioning_value(config, "reasoner_fingerprint"),
+        "tokenizer": _conditioning_value(config, "tokenizer_fingerprint"),
+        "framing": _conditioning_value(config, "framing_fingerprint"),
+    }
+    if all(value is None for value in values.values()):
+        return None
+    missing = [name for name, value in values.items() if not value]
+    if missing:
+        raise ValueError(f"Incomplete Reasoner cache identity; missing {missing}")
+    return ReasonerFeatureCacheIdentity(**values)
+
+
+def _create_external_reasoner_provider_fail_closed(
+    create_provider: Callable[[], ReasonerFeatureProvider | None],
+) -> ReasonerFeatureProvider | None:
+    """Create one rank-local provider, then make startup an all-rank gate.
+
+    A remote provider performs its GetInfo/identity handshake in the
+    constructor.  Without this gate, one rank can fail that handshake while
+    peers proceed into FSDP collectives and hang.  Only serializable error text
+    crosses the process group; the originating rank retains the real exception
+    as the synchronized failure's cause.
+    """
+
+    provider: ReasonerFeatureProvider | None = None
+    local_error: Exception | None = None
+    try:
+        provider = create_provider()
+    except Exception as error:
+        if not dist.is_initialized():
+            raise
+        local_error = error
+
+    if not dist.is_initialized():
+        return provider
+
+    local_message = None if local_error is None else f"{type(local_error).__name__}: {local_error}"
+    all_messages: list[str | None] = [None] * dist.get_world_size()
+    try:
+        dist.all_gather_object(all_messages, local_message)
+    except BaseException as collective_error:
+        if provider is not None:
+            try:
+                provider.close()
+            except BaseException as close_error:
+                note = f"Reasoner provider cleanup also failed with {type(close_error).__name__}: {close_error}"
+                add_note = getattr(collective_error, "add_note", None)
+                if add_note is not None:
+                    add_note(note)
+                log.exception(note, rank0_only=False)
+        raise
+
+    failures = [f"rank {rank}: {message}" for rank, message in enumerate(all_messages) if message is not None]
+    if not failures:
+        return provider
+
+    synchronized_error = RuntimeError(
+        "Reasoner feature provider failed during distributed startup: " + "; ".join(failures)
+    )
+    if provider is not None:
+        try:
+            provider.close()
+        except BaseException as close_error:
+            note = f"Reasoner provider cleanup also failed with {type(close_error).__name__}: {close_error}"
+            add_note = getattr(synchronized_error, "add_note", None)
+            if add_note is not None:
+                add_note(note)
+            log.exception(note, rank0_only=False)
+    if local_error is not None:
+        raise synchronized_error from local_error
+    raise synchronized_error
+
+
+def _validate_reasoner_conditioning(config: OmniMoTModelConfig) -> str:
+    """Validate the deliberately narrow first implementation of external K/V."""
+    backend = _reasoner_conditioning_backend(config)
+    supported = {"joint", *_REASONER_FEATURE_BACKENDS}
+    if backend not in supported:
+        raise ValueError(f"Unsupported reasoner_conditioning.backend={backend!r}; expected one of {sorted(supported)}")
+    if backend == "joint":
+        return backend
+
+    if config.joint_attn_implementation != "two_way":
+        raise ValueError(
+            f"reasoner_conditioning.backend={backend!r} currently requires joint_attn_implementation='two_way'"
+        )
+    if config.parallelism.context_parallel_shard_degree != 1:
+        raise ValueError(f"reasoner_conditioning.backend={backend!r} currently requires context parallel degree 1")
+    if config.video_temporal_causal:
+        raise ValueError(f"reasoner_conditioning.backend={backend!r} does not yet support temporal-causal training")
+    if getattr(config, "causal_training_strategy", "none") != "none":
+        raise ValueError(
+            f"reasoner_conditioning.backend={backend!r} currently requires causal_training_strategy='none'"
+        )
+
+    cache_root = _conditioning_value(config, "cache_root")
+    endpoint = _conditioning_value(config, "endpoint")
+    if backend in {"offline", "read_through"} and not cache_root:
+        raise ValueError(f"reasoner_conditioning.backend={backend!r} requires cache_root")
+    if backend in {"remote", "read_through"} and not endpoint:
+        raise ValueError(f"reasoner_conditioning.backend={backend!r} requires endpoint")
+    if backend in _EXTERNAL_REASONER_BACKENDS and not bool(_conditioning_value(config, "strict_fingerprint", True)):
+        raise ValueError(f"reasoner_conditioning.backend={backend!r} requires strict_fingerprint=true")
+    if backend in _EXTERNAL_REASONER_BACKENDS:
+        if _reasoner_cache_identity(config) is None:
+            raise ValueError(
+                f"reasoner_conditioning.backend={backend!r} with strict_fingerprint=true requires "
+                "reasoner_fingerprint, tokenizer_fingerprint, and framing_fingerprint"
+            )
+    if bool(_conditioning_value(config, "layerwise_h2d", False)):
+        raise ValueError("reasoner_conditioning.layerwise_h2d is reserved for a later implementation")
+    return backend
+
+
+def _reasoner_sample_keys(data_batch: Mapping[str, Any], batch_size: int) -> tuple[str, ...]:
+    raw_keys = data_batch.get("__key__")
+    if isinstance(raw_keys, str):
+        keys = (raw_keys,)
+    elif isinstance(raw_keys, (list, tuple)):
+        keys = tuple(str(key) for key in raw_keys)
+    else:
+        raise ValueError("External Reasoner conditioning requires a per-sample '__key__' field in the data batch")
+    if len(keys) != batch_size or any(not key for key in keys):
+        raise ValueError(f"Expected {batch_size} non-empty Reasoner sample keys, got {keys!r}")
+    return keys
 
 
 @dataclasses.dataclass(frozen=True)
@@ -293,25 +463,148 @@ class OmniMoTModel(ImaginaireModel):
         # each successful training step and returns to 0 for the next window.
         self._cp_window_slot: int = 0
         self.config = config
-        log.info(f"OmniMoTModel: config {self.config}")
+        self.reasoner_conditioning_backend = _validate_reasoner_conditioning(config)
+        if self.reasoner_conditioning_backend != "joint" and type(self) is not OmniMoTModel:
+            raise ValueError(
+                f"{type(self).__name__} does not yet compose its overridden lifecycle with "
+                f"reasoner_conditioning.backend={self.reasoner_conditioning_backend!r}; "
+                "use the base OmniMoTModel Nano SFT path."
+            )
+        self.reasoner_cache_identity = _reasoner_cache_identity(config)
+        self.reasoner_feature_provider: ReasonerFeatureProvider | None = None
+        try:
+            create_provider = self._create_reasoner_feature_provider
+            if self.reasoner_conditioning_backend in _EXTERNAL_REASONER_BACKENDS:
+                self.reasoner_feature_provider = _create_external_reasoner_provider_fail_closed(create_provider)
+            else:
+                self.reasoner_feature_provider = create_provider()
+            if self.reasoner_cache_identity is None and isinstance(
+                self.reasoner_feature_provider, OfflineReasonerFeatureProvider
+            ):
+                self.reasoner_cache_identity = self.reasoner_feature_provider.manifest.identity
+            log.info(f"OmniMoTModel: config {self.config}")
 
-        # 0. Set up precision
-        self.set_precision()
+            # 0. Set up precision
+            self.set_precision()
 
-        # 1. Set data keys and data information
-        self.set_up_data_key()
+            # 1. Set data keys and data information
+            self.set_up_data_key()
 
-        # 2. Text, vision, audio, action tokenizers
-        self.set_up_tokenizers()
+            # 2. Text, vision, audio, action tokenizers
+            self.set_up_tokenizers()
 
-        # 3. FSDP setup. Note: call this before building the model.
-        self.set_up_parallelism()
+            # 3. FSDP setup. Note: call this before building the model.
+            self.set_up_parallelism()
 
-        # 4. Build the denoiser network
-        self.set_up_model()
+            # 4. Build the denoiser network
+            self.set_up_model()
 
-        # 5. Set up training time scheduler and inference time sampler
-        self.set_up_scheduler_and_sampler()
+            # 5. Set up training time scheduler and inference time sampler
+            self.set_up_scheduler_and_sampler()
+        except BaseException as error:
+            close_model(self, primary_error=error)
+            raise
+
+    def close(self) -> None:
+        """Release the external Reasoner provider, if this model owns one."""
+
+        provider = self.reasoner_feature_provider
+        self.reasoner_feature_provider = None
+        if provider is not None:
+            provider.close()
+
+    def _create_reasoner_feature_provider(self) -> ReasonerFeatureProvider | None:
+        if self.reasoner_conditioning_backend in {"joint", "inline"}:
+            return None
+        if self.reasoner_conditioning_backend == "offline":
+            cache_root = _conditioning_value(self.config, "cache_root")
+            assert cache_root
+            return OfflineReasonerFeatureProvider(
+                cache_root,
+                expected_identity=self.reasoner_cache_identity,
+                expected_dtype=PRECISION_TO_TORCH_DTYPE[self.config.precision],
+                strict_fingerprint=bool(_conditioning_value(self.config, "strict_fingerprint", True)),
+            )
+        if self.reasoner_conditioning_backend == "remote":
+            # Keep grpc/protobuf optional for joint/inline/offline training.
+            from cosmos_framework.model.generator.reasoner_remote import RemoteReasonerFeatureProvider
+
+            endpoint = _conditioning_value(self.config, "endpoint")
+            assert endpoint
+            if self.reasoner_cache_identity is None:
+                raise ValueError("Remote Reasoner conditioning requires a complete pinned identity")
+            return RemoteReasonerFeatureProvider(
+                endpoint,
+                expected_identity=self.reasoner_cache_identity,
+                expected_dtype=PRECISION_TO_TORCH_DTYPE[self.config.precision],
+                connect_timeout_s=float(_conditioning_value(self.config, "connect_timeout_s", 30.0)),
+                request_timeout_s=float(_conditioning_value(self.config, "request_timeout_s", 300.0)),
+                request_max_retries=int(_conditioning_value(self.config, "request_max_retries", 2)),
+                retry_backoff_s=float(_conditioning_value(self.config, "retry_backoff_s", 0.25)),
+            )
+        raise NotImplementedError(
+            f"reasoner_conditioning.backend={self.reasoner_conditioning_backend!r} is reserved by the common "
+            "feature contract, but read-through composition has not been implemented yet; "
+            "use 'offline', 'remote', or 'inline'."
+        )
+
+    def _validate_reasoner_feature_signature(self, net: torch.nn.Module) -> None:
+        """Reject provider features for a different decoder before FSDP/materialization.
+
+        Provider endpoints can sit behind a load balancer, so ranks may receive
+        different replicas even after every GetInfo call succeeds.  Synchronize
+        the complete architecture signature result before any rank is allowed
+        to enter ``parallelize_vfm_network`` collectives.
+        """
+
+        if self.reasoner_feature_provider is None:
+            return
+
+        local_error: Exception | None = None
+        try:
+            signature = self.reasoner_feature_provider.signature
+            if not isinstance(signature, ReasonerFeatureSignature):
+                raise TypeError(
+                    "Reasoner feature provider signature must be a ReasonerFeatureSignature, "
+                    f"got {type(signature).__name__}"
+                )
+            expected = ReasonerFeatureSignature(
+                num_layers=int(net.num_hidden_layers),
+                num_kv_heads=int(net.num_kv_heads),
+                head_dim=int(net.head_dim),
+                dtype=PRECISION_TO_TORCH_DTYPE[self.config.precision],
+            )
+            if signature != expected:
+                raise ValueError(
+                    f"Reasoner feature provider/model architecture mismatch: provider={signature!r}, model={expected!r}"
+                )
+        except Exception as error:
+            if not dist.is_initialized():
+                raise
+            local_error = error
+
+        if not dist.is_initialized():
+            return
+
+        local_message = None if local_error is None else f"{type(local_error).__name__}: {local_error}"
+        all_messages: list[str | None] = [None] * dist.get_world_size()
+        try:
+            dist.all_gather_object(all_messages, local_message)
+        except BaseException as collective_error:
+            close_model(self, primary_error=collective_error)
+            raise
+
+        failures = [f"rank {rank}: {message}" for rank, message in enumerate(all_messages) if message is not None]
+        if not failures:
+            return
+
+        synchronized_error = RuntimeError(
+            "Reasoner feature provider signature validation failed before FSDP: " + "; ".join(failures)
+        )
+        close_model(self, primary_error=synchronized_error)
+        if local_error is not None:
+            raise synchronized_error from local_error
+        raise synchronized_error
 
     def set_precision(self) -> None:
         self.precision = PRECISION_TO_TORCH_DTYPE[self.config.precision]
@@ -431,7 +724,6 @@ class OmniMoTModel(ImaginaireModel):
         else:
             self.tokenizer_sound_gen = None
 
-
     def build_net(
         self,
         dtype: torch.dtype,
@@ -520,6 +812,16 @@ class OmniMoTModel(ImaginaireModel):
             )
             net.pad_for_cuda_graphs = self.config.compile.use_cuda_graphs
 
+            self._validate_reasoner_feature_signature(net)
+
+            # External providers make the Reasoner structurally unnecessary on
+            # training ranks. Prune while every parameter is still on meta, so
+            # the deleted weights are never materialized, FSDP-sharded, or
+            # duplicated into EMA. ``inline`` intentionally retains both towers
+            # as a numerical-reference/capture mode.
+            if self.reasoner_conditioning_backend in _EXTERNAL_REASONER_BACKENDS:
+                prune_und_pathway_(net.language_model)
+
             # Inject LoRA BEFORE FSDP wrap, while still on meta device. The
             # injector must see unsharded Linear shapes; injecting post-FSDP causes
             # lora_B to be created at the per-rank shard size and crashes at
@@ -541,6 +843,8 @@ class OmniMoTModel(ImaginaireModel):
             swap_modelopt_fp8_linears_on_meta(net, self.config.quantization.modelopt_fp8_target_fqns)
 
         self.install_attention_dispatch(net)
+        if self.reasoner_conditioning_backend in _REASONER_FEATURE_BACKENDS:
+            install_reasoner_feature_attention_dispatch(net)
 
         # Cast while still on meta (free -- no data to convert) and BEFORE sharding: each
         # FSDP2 unit records its parameters' dtype as it is built, so a cast afterwards
@@ -585,6 +889,9 @@ class OmniMoTModel(ImaginaireModel):
         *,
         has_resumable_checkpoint: bool,
         has_load_path: bool,
+        warm_start_ema_skipped: bool = False,
+        warm_start_ema_partially_skipped: bool = False,
+        warm_start_strict_resume: bool = True,
     ) -> None:
         """Conditionally seed pretrained understanding/reasoner weights at startup.
 
@@ -608,6 +915,16 @@ class OmniMoTModel(ImaginaireModel):
                 still re-seeded from HF (e.g. to swap Qwen3-VL -> Cosmos-Reason),
                 but the understanding->generation copy is skipped because the
                 generation pathway was already populated from ``load_path``.
+            warm_start_ema_skipped: The warm-start DCP planner deliberately skipped
+                the complete ``net_ema`` subtree. External generator-only models
+                initialize EMA from the loaded regular generator only in this case.
+            warm_start_ema_partially_skipped: The warm-start DCP planner skipped
+                only some ``net_ema`` leaves. External generator-only models reject
+                this state because it would mix restored and random EMA weights.
+            warm_start_strict_resume: Whether DCP rejects missing warm-start keys.
+                With non-strict loading and no complete EMA skip, the caller cannot
+                prove whether EMA was loaded or left randomly initialized, so the
+                external path fails closed.
 
         The gates combine into three startup scenarios:
           1. Fresh init (neither gate set): seed understanding weights from HF and
@@ -622,6 +939,53 @@ class OmniMoTModel(ImaginaireModel):
         # the generation pathway is already populated, so the understanding->
         # generation copy further below must be skipped.
         has_checkpoint = has_resumable_checkpoint or has_load_path
+
+        if self.reasoner_conditioning_backend in _EXTERNAL_REASONER_BACKENDS:
+            if self.config.diffusion_expert_config.load_weights_from_pretrained and not has_checkpoint:
+                raise ValueError(
+                    f"reasoner_conditioning.backend={self.reasoner_conditioning_backend!r} removed the "
+                    "understanding pathway, so it cannot initialize generator weights by copying from the "
+                    "Reasoner. Set checkpoint.load_path to a generator checkpoint (or explicitly set "
+                    "diffusion_expert_config.load_weights_from_pretrained=false for random initialization)."
+                )
+            # External backends build a structurally generator-only network, so
+            # the regular warm-start checkpoint is the source of truth for every
+            # parameter that remains. Nano warm starts intentionally skip
+            # ``net_ema.*``; without this copy, EMA would retain the random state
+            # captured in ``set_up_model`` before DCP loaded ``net.*``. Do not do
+            # this on same-job resume: that path restores the real EMA trajectory
+            # and must not overwrite it with regular weights.
+            if (
+                has_load_path
+                and not has_resumable_checkpoint
+                and self.config.ema.enabled
+                and warm_start_ema_partially_skipped
+            ):
+                raise ValueError(
+                    "External Reasoner conditioning with EMA cannot use a warm start whose "
+                    "checkpoint.keys_to_skip_loading matches only part of the 'net_ema.' subtree. "
+                    "Load all EMA leaves or skip the complete EMA subtree."
+                )
+            if (
+                has_load_path
+                and not has_resumable_checkpoint
+                and self.config.ema.enabled
+                and not warm_start_ema_skipped
+                and not warm_start_strict_resume
+            ):
+                raise ValueError(
+                    "External Reasoner conditioning with EMA cannot safely use a non-strict warm start unless "
+                    "checkpoint.keys_to_skip_loading covers the complete 'net_ema.' subtree. Otherwise it is "
+                    "ambiguous whether EMA was loaded or left randomly initialized."
+                )
+            if has_load_path and not has_resumable_checkpoint and warm_start_ema_skipped and self.config.ema.enabled:
+                self.net_ema_worker.copy_to(src_model=self.net, tgt_model=self.net_ema)
+                log.info("Initialized external-backend EMA from warm-started generator weights.")
+            log.info(
+                "Skipping Reasoner checkpoint loading for structurally generator-only backend "
+                f"{self.reasoner_conditioning_backend}."
+            )
+            return
 
         pretrained_weights = self.vlm_config.pretrained_weights
 
@@ -1081,10 +1445,23 @@ class OmniMoTModel(ImaginaireModel):
             ``(gen_data_clean, memory_info)`` where *memory_info* is a dict with keys:
             ``skip_text``, ``initial_temporal_offset``
         """
-        return gen_data_clean, {
+        memory_info: dict[str, Any] = {
             "skip_text": False,
             "initial_temporal_offset": 0,
         }
+        if self.reasoner_conditioning_backend in _EXTERNAL_REASONER_BACKENDS:
+            try:
+                memory_info[REASONER_SAMPLE_KEYS_KEY] = _reasoner_sample_keys(data_batch, gen_data_clean.batch_size)
+            except Exception as error:
+                # Sample-key validity is data dependent, so one DP rank can fail
+                # while its peers have valid batches. Defer the local failure to
+                # _resolve_reasoner_feature_batch(), where every rank participates
+                # in the same pre-FSDP all-gather error gate. BaseException is
+                # deliberately not captured so process-control signals propagate.
+                future: Future[ReasonerFeatureBatch] = Future()
+                future.set_exception(error)
+                memory_info[REASONER_FEATURE_FUTURE_KEY] = future
+        return gen_data_clean, memory_info
 
     def build_memory_state(
         self,
@@ -1105,7 +1482,91 @@ class OmniMoTModel(ImaginaireModel):
                 (for the training path) or constructed by the AR inference
                 caller.  See ``memory_init_training()`` for the base keys.
         """
-        return None
+        del packed_seq
+        if self.reasoner_conditioning_backend == "joint":
+            return None
+        if self.reasoner_conditioning_backend == "inline":
+            return CapturingReasonerKVMemoryState(len(self.net.language_model.model.layers))
+
+        feature_batch = memory_info.get(REASONER_FEATURE_BATCH_KEY)
+        if not isinstance(feature_batch, ReasonerFeatureBatch):
+            raise RuntimeError(
+                f"reasoner_conditioning.backend={self.reasoner_conditioning_backend!r} requires "
+                f"memory_info[{REASONER_FEATURE_BATCH_KEY!r}] to contain a ReasonerFeatureBatch. "
+                "The offline/remote provider must populate it before denoise()."
+            )
+        return StaticReasonerKVMemoryState(feature_batch)
+
+    def _denoise_training_with_reasoner_conditioning(
+        self,
+        packed_sequence: PackedSequence,
+        memory_info: dict,
+    ) -> dict:
+        """Run the training denoiser with the configured Reasoner feature source."""
+        if self.reasoner_conditioning_backend in _EXTERNAL_REASONER_BACKENDS:
+            self._resolve_reasoner_feature_batch(memory_info)
+        memory = self.build_memory_state(packed_sequence, memory_info)
+        if self.reasoner_conditioning_backend == "inline":
+            if not isinstance(memory, CapturingReasonerKVMemoryState):
+                raise TypeError("The inline Reasoner backend requires CapturingReasonerKVMemoryState")
+            # The first pass is a frozen feature extraction reference. Its
+            # generator outputs are discarded and captured UND K/V are
+            # detached, so retaining an autograd graph only wastes memory.
+            with torch.no_grad(), misc.timer("inline reasoner K/V capture"):
+                capture_output = self.denoise(
+                    data_batch_packed=packed_sequence,
+                    memory=memory,
+                )
+            del capture_output
+            if not memory.is_gen_only():
+                raise RuntimeError("Inline Reasoner K/V capture did not populate every decoder layer")
+
+        return self.denoise(
+            data_batch_packed=packed_sequence,
+            memory=memory,
+        )
+
+    def _resolve_reasoner_feature_batch(self, memory_info: dict[str, Any]) -> ReasonerFeatureBatch:
+        existing = memory_info.get(REASONER_FEATURE_BATCH_KEY)
+        if isinstance(existing, ReasonerFeatureBatch):
+            return existing
+        future = memory_info.get(REASONER_FEATURE_FUTURE_KEY)
+        if not isinstance(future, Future):
+            raise RuntimeError(
+                f"memory_info[{REASONER_FEATURE_FUTURE_KEY!r}] is missing; "
+                "pre_noise_memory_hook() must submit the provider request before denoising"
+            )
+
+        result: ReasonerFeatureBatch | None = None
+        local_error: Exception | None = None
+        try:
+            timeout = float(_conditioning_value(self.config, "request_timeout_s", 300.0))
+            with misc.timer("reasoner feature provider wait", debug=True):
+                candidate = future.result(timeout=timeout)
+            if not isinstance(candidate, ReasonerFeatureBatch):
+                raise TypeError(f"Reasoner feature provider returned {type(candidate).__name__}")
+            result = candidate
+        except Exception as error:
+            local_error = error
+
+        local_message = None if local_error is None else f"{type(local_error).__name__}: {local_error}"
+        all_messages = [local_message]
+        if dist.is_initialized():
+            all_messages = [None] * dist.get_world_size()
+            dist.all_gather_object(all_messages, local_message)
+        failures = [f"rank {rank}: {message}" for rank, message in enumerate(all_messages) if message is not None]
+        if failures:
+            synchronized_error = RuntimeError(
+                "Reasoner feature provider failed before FSDP forward: " + "; ".join(failures)
+            )
+            if local_error is not None:
+                raise synchronized_error from local_error
+            raise synchronized_error
+        if result is None:
+            raise RuntimeError("Reasoner feature provider returned no result without reporting an error")
+        memory_info[REASONER_FEATURE_BATCH_KEY] = result
+        memory_info.pop(REASONER_FEATURE_FUTURE_KEY, None)
+        return result
 
     def pre_noise_memory_hook(
         self,
@@ -1118,6 +1579,31 @@ class OmniMoTModel(ImaginaireModel):
         The packed sequence still contains clean tokens at this point.
         Override in subclasses to run a clean forward pass (e.g. for teacher forcing).
         """
+        if self.reasoner_conditioning_backend in _EXTERNAL_REASONER_BACKENDS:
+            if REASONER_FEATURE_BATCH_KEY in memory_info or REASONER_FEATURE_FUTURE_KEY in memory_info:
+                return memory_info
+            try:
+                if self.reasoner_feature_provider is None or self.reasoner_cache_identity is None:
+                    raise RuntimeError(
+                        f"reasoner_conditioning.backend={self.reasoner_conditioning_backend!r} has no feature provider"
+                    )
+                sample_keys = memory_info.get(REASONER_SAMPLE_KEYS_KEY)
+                if not isinstance(sample_keys, (list, tuple)):
+                    raise RuntimeError(f"memory_info[{REASONER_SAMPLE_KEYS_KEY!r}] is missing")
+                requests = build_reasoner_feature_requests(
+                    packed_sequence,
+                    tuple(str(key) for key in sample_keys),
+                    self.reasoner_cache_identity,
+                )
+                future = self.reasoner_feature_provider.submit(requests)
+            except Exception as error:
+                # External request setup and remote submit perform rank-local
+                # validation synchronously. Preserve those failures in the
+                # provider contract so every rank reaches the synchronized
+                # resolution gate instead of leaving peers in FSDP collectives.
+                future = Future()
+                future.set_exception(error)
+            memory_info[REASONER_FEATURE_FUTURE_KEY] = future
         return memory_info
 
     def _prepare_training_data(
@@ -1522,11 +2008,7 @@ class OmniMoTModel(ImaginaireModel):
         packed_sequence.to_cuda()
 
         # Network forward pass
-        memory = self.build_memory_state(packed_sequence, memory_info)  # pylint: disable=assignment-from-none
-        out_net = self.denoise(
-            data_batch_packed=packed_sequence,
-            memory=memory,
-        )
+        out_net = self._denoise_training_with_reasoner_conditioning(packed_sequence, memory_info)
 
         loss, losses_dict = self._compute_losses(
             out_net=out_net,

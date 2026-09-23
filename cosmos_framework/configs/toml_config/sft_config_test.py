@@ -76,6 +76,104 @@ class TestSchemaValidation:
                 }
             )
 
+    @pytest.mark.parametrize(
+        ("backend", "fields"),
+        [
+            ("joint", {}),
+            ("inline", {}),
+            (
+                "offline",
+                {
+                    "cache_root": "/features",
+                    "reasoner_fingerprint": "reasoner",
+                    "tokenizer_fingerprint": "tokenizer",
+                    "framing_fingerprint": "framing",
+                },
+            ),
+            (
+                "remote",
+                {
+                    "endpoint": "dns:///reasoner:50051",
+                    "reasoner_fingerprint": "reasoner",
+                    "tokenizer_fingerprint": "tokenizer",
+                    "framing_fingerprint": "framing",
+                },
+            ),
+            (
+                "read_through",
+                {
+                    "cache_root": "/features",
+                    "endpoint": "dns:///reasoner:50051",
+                    "reasoner_fingerprint": "reasoner",
+                    "tokenizer_fingerprint": "tokenizer",
+                    "framing_fingerprint": "framing",
+                },
+            ),
+        ],
+    )
+    def test_reasoner_conditioning_valid_backends(self, backend: str, fields: dict[str, str]) -> None:
+        raw = {
+            "job": {"task": "vfm", "experiment": "vision_sft_nano"},
+            "model": {"reasoner_conditioning": {"backend": backend, **fields}},
+        }
+        cfg = SFTExperimentConfig.model_validate(raw)
+        assert cfg.model.reasoner_conditioning.backend == backend
+
+    @pytest.mark.parametrize(
+        "settings",
+        [
+            {"backend": "offline"},
+            {"backend": "remote"},
+            {"backend": "read_through", "cache_root": "/features"},
+            {"backend": "read_through", "endpoint": "dns:///reasoner:50051"},
+            {"backend": "offline", "cache_root": "/features"},
+            {
+                "backend": "offline",
+                "cache_root": "/features",
+                "reasoner_fingerprint": "reasoner",
+                "tokenizer_fingerprint": "tokenizer",
+                "framing_fingerprint": "framing",
+                "strict_fingerprint": False,
+            },
+        ],
+    )
+    def test_reasoner_conditioning_requires_backend_inputs(self, settings: dict[str, str]) -> None:
+        with pytest.raises(ValidationError):
+            SFTExperimentConfig.model_validate(
+                {
+                    "job": {"task": "vfm", "experiment": "vision_sft_nano"},
+                    "model": {"reasoner_conditioning": settings},
+                }
+            )
+
+    def test_remote_reasoner_transport_controls_are_validated(self) -> None:
+        raw = {
+            "job": {"task": "vfm", "experiment": "vision_sft_nano"},
+            "model": {
+                "reasoner_conditioning": {
+                    "backend": "remote",
+                    "endpoint": "dns:///reasoner:50051",
+                    "reasoner_fingerprint": "reasoner",
+                    "tokenizer_fingerprint": "tokenizer",
+                    "framing_fingerprint": "framing",
+                    "connect_timeout_s": 7.5,
+                    "request_timeout_s": 90.0,
+                    "request_max_retries": 4,
+                    "retry_backoff_s": 0.5,
+                }
+            },
+        }
+
+        conditioning = SFTExperimentConfig.model_validate(raw).model.reasoner_conditioning
+        assert conditioning.connect_timeout_s == 7.5
+        assert conditioning.request_timeout_s == 90.0
+        assert conditioning.request_max_retries == 4
+        assert conditioning.retry_backoff_s == 0.5
+
+        raw["model"]["reasoner_conditioning"]["request_max_retries"] = -1
+        with pytest.raises(ValidationError):
+            SFTExperimentConfig.model_validate(raw)
+
 
 # --------------------------------------------------------------------------- #
 # 2. build_hydra_overrides must NOT emit [custom] as per-leaf overrides        #
@@ -100,6 +198,32 @@ class TestBuildHydraOverrides:
         overrides = build_hydra_overrides(raw)
         assert "experiment=vision_sft_nano" in overrides
         assert any(o.startswith("optimizer.lr=") for o in overrides), overrides
+
+    def test_reasoner_conditioning_routes_only_to_vfm(self) -> None:
+        settings = {
+            "backend": "offline",
+            "cache_root": "/features",
+            "strict_fingerprint": True,
+            "reasoner_fingerprint": "reasoner",
+            "tokenizer_fingerprint": "tokenizer",
+            "framing_fingerprint": "framing",
+        }
+        vfm = build_hydra_overrides(
+            {
+                "job": {"task": "vfm", "experiment": "vision_sft_nano"},
+                "model": {"reasoner_conditioning": settings},
+            }
+        )
+        assert "model.config.reasoner_conditioning.backend=offline" in vfm
+        assert "model.config.reasoner_conditioning.cache_root=/features" in vfm
+
+        vlm = build_hydra_overrides(
+            {
+                "job": {"task": "vlm", "experiment": "dummy"},
+                "model": {"reasoner_conditioning": settings},
+            }
+        )
+        assert all("reasoner_conditioning" not in override for override in vlm)
 
 
 # --------------------------------------------------------------------------- #

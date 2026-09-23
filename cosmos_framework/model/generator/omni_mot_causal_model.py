@@ -27,19 +27,21 @@ from omegaconf import OmegaConf
 from typing_extensions import override
 
 import cosmos_framework.model.generator.omni_mot_model as omni_mot_model_module
-from cosmos_framework.configs.base.defaults.model_config import OmniMoTModelConfig
-from cosmos_framework.data.generator.augmentors.text_tokenizer import TEXT_SYSTEM_PROMPT_KEY
-from cosmos_framework.model.generator.omni_mot_model import OmniMoTModel, _broadcast_seed, _per_view_caption_groups
-from cosmos_framework.model.generator.utils.data_and_condition import GenerationDataClean
-from cosmos_framework.model.generator.utils.memory import MemoryState
-from cosmos_framework.data.generator.sequence_packing import PackedSequence, build_sequence_plans_from_data_batch
-from cosmos_framework.data.generator.sequence_packing.modality import compute_text_split_length
-from cosmos_framework.data.generator.sequence_packing.runtime import to_device_nonblocking
 from cosmos_framework.configs.base.defaults.causal_flex_attention import CausalFlexAttentionConfig
+from cosmos_framework.configs.base.defaults.model_config import OmniMoTModelConfig
 from cosmos_framework.configs.base.defaults.replay_attention import (
     TeacherForcingKVImplementation,
     TeacherForcingReplayPolicyConfig,
 )
+from cosmos_framework.data.generator.augmentors.text_tokenizer import TEXT_SYSTEM_PROMPT_KEY
+from cosmos_framework.data.generator.sequence_packing import PackedSequence, build_sequence_plans_from_data_batch
+from cosmos_framework.data.generator.sequence_packing.autoregressive import (
+    pack_input_sequence_autoregressive,
+    pack_input_sequence_autoregressive_batch,
+    resolve_text_system_prompt,
+)
+from cosmos_framework.data.generator.sequence_packing.modality import compute_text_split_length
+from cosmos_framework.data.generator.sequence_packing.runtime import to_device_nonblocking
 from cosmos_framework.model.generator.attention_io_layout import AttentionIOLayout
 from cosmos_framework.model.generator.joint_transfer_ar import sample_joint_transfer_ar
 from cosmos_framework.model.generator.mot.causal_attention import dispatch_attention_with_memory
@@ -61,9 +63,11 @@ from cosmos_framework.model.generator.mot.post_saturation.static_compile import 
     validate_ar_static_und_cache_lengths,
 )
 from cosmos_framework.model.generator.multiview_transfer_ar import MultiviewTransferARBackend
+from cosmos_framework.model.generator.omni_mot_model import OmniMoTModel, _broadcast_seed, _per_view_caption_groups
 from cosmos_framework.model.generator.teacher_forcing import (
     make_teacher_forcing_clean_pack,
 )
+from cosmos_framework.model.generator.utils.data_and_condition import GenerationDataClean
 from cosmos_framework.model.generator.utils.kv_cache import (
     ARMemoryState,
     DualKVCache,
@@ -72,12 +76,8 @@ from cosmos_framework.model.generator.utils.kv_cache import (
     TeacherForcingMemoryState,
 )
 from cosmos_framework.model.generator.utils.kv_storage_backend import validate_kv_cache_dtype
+from cosmos_framework.model.generator.utils.memory import MemoryState
 from cosmos_framework.model.generator.utils.nvfp4 import resolve_legacy_nvfp4_mode
-from cosmos_framework.data.generator.sequence_packing.autoregressive import (
-    pack_input_sequence_autoregressive,
-    pack_input_sequence_autoregressive_batch,
-    resolve_text_system_prompt,
-)
 from cosmos_framework.utils.generator.data_batch import condition_frame_indexes_vision_from_batch
 
 _ARBranch = Literal["conditional", "unconditional"]
@@ -552,6 +552,13 @@ class OmniMoTCausalModel(OmniMoTModel):
     _teacher_forcing_replay_policy_runtime: TeacherForcingReplayPolicyConfig
 
     def __init__(self, config: OmniMoTCausalModelConfig):
+        reasoner_backend = omni_mot_model_module._reasoner_conditioning_backend(config)
+        if reasoner_backend != "joint":
+            raise ValueError(
+                "OmniMoTCausalModel currently supports only reasoner_conditioning.backend='joint'; "
+                f"got {reasoner_backend!r}. Its AR/teacher-forcing memory dispatcher is not yet composable "
+                "with inline or external Reasoner K/V conditioning."
+            )
         # LazyCall deliberately keeps nested config values as DictConfig. Hold
         # the validated attrs object separately: assigning it back into the
         # structured DictConfig would immediately coerce it back to DictConfig.
