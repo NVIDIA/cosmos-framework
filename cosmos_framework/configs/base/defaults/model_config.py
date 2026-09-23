@@ -47,6 +47,10 @@ class DiffusionExpertConfig:
     enable_sound_modality_embedding: bool = True
 
     patch_spatial: int = 2
+    # None preserves the shared camera/LiDAR patch size used by existing checkpoints.
+    # An int selects square patches; (height, width) selects rectangular patches.
+    # Any is required here because OmegaConf rejects unions containing tuples.
+    lidar_patch_spatial_hw: Any = None
     max_vae_latent_side_after_patchify: int = (
         52  # Max h/w of the VAE latent after patchification; 52 -> up to ~1664px square (52*32). Was 20 (=640px).
     )

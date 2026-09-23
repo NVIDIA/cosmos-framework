@@ -21,6 +21,7 @@ from cosmos_framework.data.generator.sequence_packing.runtime import (
     prepare_sequence_pack_metadata,
     to_device_nonblocking,
 )
+from cosmos_framework.utils.generator.spatial_patch import normalize_spatial_patch_hw
 
 if TYPE_CHECKING:
     from cosmos_framework.model.generator.utils.data_and_condition import GenerationDataClean
@@ -412,7 +413,7 @@ class PackedSequenceBuilder:
         input_lidar_tokens: torch.Tensor,
         condition_frame_indexes_lidar: list[int],
         input_timestep: float | torch.Tensor,
-        latent_patch_size: int,
+        latent_patch_size: int | tuple[int, int],
         lidar_fps: float,
         enable_fps_modulation: bool,
         base_fps: float,
@@ -431,7 +432,7 @@ class PackedSequenceBuilder:
             input_lidar_tokens: LiDAR latent tokens (C, T, H, W).
             condition_frame_indexes_lidar: Indexes of conditioning sweeps.
             input_timestep: Diffusion timestep, as in ``pack_vision_tokens``.
-            latent_patch_size: Patch size for latent patchification.
+            latent_patch_size: Patch side or (height, width).
             lidar_fps: Sweep rate of the LiDAR data. Used when enable_fps_modulation=True.
             enable_fps_modulation: If True, scale temporal position IDs based on FPS.
             base_fps: Base FPS for normalization.
@@ -465,7 +466,7 @@ class PackedSequenceBuilder:
         input_tokens: torch.Tensor,
         condition_frame_indexes: list[int],
         input_timestep: float | torch.Tensor,
-        latent_patch_size: int,
+        latent_patch_size: int | tuple[int, int],
         fps: float | None,
         enable_fps_modulation: bool,
         base_fps: float,
@@ -485,11 +486,10 @@ class PackedSequenceBuilder:
         """
         # Compute position IDs for image patches
         _, _, latent_t, latent_h, latent_w = input_tokens.shape
-        if latent_patch_size < 1:
-            raise ValueError(f"latent_patch_size must be >= 1, got {latent_patch_size}")
+        patch_height, patch_width = normalize_spatial_patch_hw(latent_patch_size)
         # Use ceil to support latent dims not divisible by patch size (padding handled in network)
-        patch_h = math.ceil(latent_h / latent_patch_size)
-        patch_w = math.ceil(latent_w / latent_patch_size)
+        patch_h = math.ceil(latent_h / patch_height)
+        patch_w = math.ceil(latent_w / patch_width)
         modality.token_shapes.append((latent_t, patch_h, patch_w))
         modality.tokens.append(input_tokens)
         payload_index = len(modality.tokens) - 1

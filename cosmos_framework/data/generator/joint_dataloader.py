@@ -33,6 +33,7 @@ from cosmos_framework.model.generator.tokenizers.uniae.frame_math import (
     normalize_uniae_chunk_frames,
 )
 from cosmos_framework.utils.generator.data_utils import read_positive_int_metadata
+from cosmos_framework.utils.generator.spatial_patch import normalize_spatial_patch_hw
 
 _BATCH_TIMING_KEYS = {
     "_worker_batch_time",
@@ -461,6 +462,7 @@ class JointDataLoader(webdataset.WebLoader):
         lazy_initialize_child_iterators: bool = False,
         iteration_time_budget: IterationTimeBudgetConfig | None = None,
         forkserver_preload_modules: list[str] | None = None,
+        lidar_patch_spatial_hw: int | tuple[int, int] | None = None,
     ) -> None:
         """
         Initialize the JointDataLoader with multiple datasets.
@@ -479,6 +481,7 @@ class JointDataLoader(webdataset.WebLoader):
             tokenizer_spatial_compression_factor: The spatial compression factor of the tokenizer.
             tokenizer_temporal_compression_factor: The temporal compression factor of the tokenizer.
             patch_spatial: Spatial pathification factor.
+            lidar_patch_spatial_hw: LiDAR patch side or (height, width); None inherits patch_spatial.
             max_samples_per_batch: Max number of samples per packed batch (alternative to max_sequence_length).
             lidar_spatial_compression: ``(height, width)`` compression of the LiDAR VAE. Required only
                 for streams whose samples carry a ``lidar`` key, whose clips are costed with the
@@ -543,6 +546,9 @@ class JointDataLoader(webdataset.WebLoader):
                 f"lidar_temporal_compression_factor must be positive, got {self.lidar_temporal_compression_factor}"
             )
         self.patch_spatial = patch_spatial
+        self.lidar_patch_spatial_hw: tuple[int, int] = normalize_spatial_patch_hw(
+            patch_spatial if lidar_patch_spatial_hw is None else lidar_patch_spatial_hw
+        )
         self.max_sequence_length = max_sequence_length
         self.max_samples_per_batch = max_samples_per_batch
         self.sound_latent_fps = sound_latent_fps
@@ -668,8 +674,8 @@ class JointDataLoader(webdataset.WebLoader):
         num_tokens = 0
         for clip in clips:
             _, T, H, W = clip.shape
-            patch_h = math.ceil(H // spatial_h / self.patch_spatial)
-            patch_w = math.ceil(W // spatial_w / self.patch_spatial)
+            patch_h = math.ceil(H // spatial_h / self.lidar_patch_spatial_hw[0])
+            patch_w = math.ceil(W // spatial_w / self.lidar_patch_spatial_hw[1])
             latent_t = 1 + (T - 1) // self.lidar_temporal_compression_factor
             num_tokens += patch_h * patch_w * latent_t
         return num_tokens
@@ -1138,6 +1144,7 @@ class IterativeJointDataLoader(JointDataLoader):
         iteration_time_budget: IterationTimeBudgetConfig | None = None,
         token_mix_control: TokenMixControlConfig | None = None,
         forkserver_preload_modules: list[str] | None = None,
+        lidar_patch_spatial_hw: int | tuple[int, int] | None = None,
     ) -> None:
         if async_batch_building_timeout_s <= 0:
             raise ValueError(f"async_batch_building_timeout_s must be positive, got {async_batch_building_timeout_s}.")
@@ -1189,6 +1196,7 @@ class IterativeJointDataLoader(JointDataLoader):
             lazy_initialize_child_iterators=lazy_initialize_child_iterators,
             iteration_time_budget=iteration_time_budget,
             forkserver_preload_modules=forkserver_preload_modules,
+            lidar_patch_spatial_hw=lidar_patch_spatial_hw,
         )
 
         self.seed = seed

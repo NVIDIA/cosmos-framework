@@ -51,6 +51,7 @@ from cosmos_framework.data.generator.sequence_packing.runtime import (
     get_causal_seq,
     get_full_only_seq,
 )
+from cosmos_framework.utils.generator.spatial_patch import normalize_spatial_patch_hw
 
 
 class Cosmos3VFMNetworkConfig(PretrainedConfig):
@@ -93,12 +94,16 @@ class Cosmos3VFMNetworkConfig(PretrainedConfig):
         temporal_compression_factor_sound=1,
         sound_latent_fps: int = 25,
         enable_input_bias: bool = True,
+        lidar_patch_spatial_hw: int | tuple[int, int] | None = None,
         **kwargs,
     ):
         self.vision_gen = vision_gen
         self.sound_gen = sound_gen
         self.vlm_config = vlm_config
         self.latent_patch_size = latent_patch_size
+        self.lidar_patch_spatial_hw: tuple[int, int] = normalize_spatial_patch_hw(
+            latent_patch_size if lidar_patch_spatial_hw is None else lidar_patch_spatial_hw
+        )
         self.latent_downsample_factor = latent_downsample_factor
         self.latent_channel_size = latent_channel_size
         self.lidar_latent_channel_size = lidar_latent_channel_size
@@ -232,6 +237,7 @@ class Cosmos3VFMNetwork(PreTrainedModel):
 
         if config.vision_gen:
             self.latent_patch_size = config.latent_patch_size
+            self.lidar_patch_spatial_hw: tuple[int, int] = config.lidar_patch_spatial_hw
             self.timestep_shift = config.timestep_shift
             self.timestep_scale = config.timestep_scale
             self.latent_downsample = config.latent_downsample_factor * config.latent_patch_size
@@ -249,11 +255,13 @@ class Cosmos3VFMNetwork(PreTrainedModel):
             # LiDAR is its own modality: a range clip enters and leaves the sequence through
             # its own pair of projections, the way action and sound do. Its VAE is wider than
             # the camera's (128 vs 48), and these two matrices are what that costs -- a patch
-            # count follows T, H and W, not channels, so the streams agree on everything else
-            # and share the grid packing, patchify and timestep machinery below.
+            # count follows T, H and W, not channels. Each stream can choose its patch size
+            # while sharing the grid packing, patchify and timestep machinery below.
             self.lidar_latent_channel = config.lidar_latent_channel_size
             if self.lidar_latent_channel is not None:
-                self.lidar_patch_latent_dim = self.latent_patch_size**2 * self.lidar_latent_channel
+                self.lidar_patch_latent_dim = (
+                    self.lidar_patch_spatial_hw[0] * self.lidar_patch_spatial_hw[1] * self.lidar_latent_channel
+                )
                 self.lidar2llm = nn.Linear(self.lidar_patch_latent_dim, self.hidden_size, bias=_input_bias)
                 self.llm2lidar = nn.Linear(self.hidden_size, self.lidar_patch_latent_dim)
             if config.enable_vision_modality_embeddings:
@@ -436,8 +444,10 @@ class Cosmos3VFMNetwork(PreTrainedModel):
         tokens_vision: torch.Tensor,
         token_shapes_vision: Sequence[tuple[int, ...]],
         latent_channel: int | None = None,
+        patch_size: int | tuple[int, int] | None = None,
     ) -> tuple[torch.Tensor, List[Tuple[int, int, int]]]:
-        p = self.latent_patch_size
+        patch = self.latent_patch_size if patch_size is None else patch_size
+        ph, pw = normalize_spatial_patch_hw(patch)
         # One channel count per call: the caller passes its stream's width, since patches of
         # different widths cannot pack into one tensor.
         latent_channel = self.latent_channel if latent_channel is None else latent_channel
@@ -453,11 +463,11 @@ class Cosmos3VFMNetwork(PreTrainedModel):
             _, t_actual, h_actual, w_actual = latent.shape
             original_latent_shapes.append((t_actual, h_actual, w_actual))
 
-            # Compute padded dimensions (must be divisible by p)
-            h_padded = ((h_actual + p - 1) // p) * p
-            w_padded = ((w_actual + p - 1) // p) * p
+            # Compute padded dimensions (must be divisible by each patch side)
+            h_padded = ((h_actual + ph - 1) // ph) * ph
+            w_padded = ((w_actual + pw - 1) // pw) * pw
 
-            # Zero-pad if dimensions are not divisible by p
+            # Zero-pad if dimensions are not divisible by their patch sides
             if h_padded != h_actual or w_padded != w_actual:
                 padded = torch.zeros(
                     (latent_channel, t_actual, h_padded, w_padded),
@@ -468,15 +478,15 @@ class Cosmos3VFMNetwork(PreTrainedModel):
                 latent = padded  # [C,T,H_padded,W_padded]
 
             # Compute number of patches after padding
-            h_patches = h_padded // p
-            w_patches = w_padded // p
+            h_patches = h_padded // ph
+            w_patches = w_padded // pw
 
             # Patchify
             latent = latent.reshape(
-                latent_channel, t_actual, h_patches, p, w_patches, p
-            )  # [C,T,h_patches,p,w_patches,p]
+                latent_channel, t_actual, h_patches, ph, w_patches, pw
+            )  # [C,T,h_patches,ph,w_patches,pw]
             latent = torch.einsum("cthpwq->thwpqc", latent).reshape(
-                -1, p * p * latent_channel
+                -1, ph * pw * latent_channel
             )  # [T*h_patches*w_patches,patch_latent_dim]
             packed_latent.append(latent)
 
@@ -491,8 +501,10 @@ class Cosmos3VFMNetwork(PreTrainedModel):
         noisy_frame_indexes_vision: list[torch.Tensor],
         original_latent_shapes: List[Tuple[int, int, int]] | None = None,
         latent_channel: int | None = None,
+        patch_size: int | tuple[int, int] | None = None,
     ) -> list[torch.Tensor]:
-        p = self.latent_patch_size
+        patch = self.latent_patch_size if patch_size is None else patch_size
+        ph, pw = normalize_spatial_patch_hw(patch)
         # One channel count per call, as in ``patchify_and_pack_latents``.
         latent_channel = self.latent_channel if latent_channel is None else latent_channel
         unpatchified_latents = []
@@ -504,13 +516,13 @@ class Cosmos3VFMNetwork(PreTrainedModel):
             if original_latent_shapes is not None:
                 t_orig, h_orig, w_orig = original_latent_shapes[i]
                 # Compute padded dimensions used during patchify
-                h_padded = ((h_orig + p - 1) // p) * p
-                w_padded = ((w_orig + p - 1) // p) * p
-                h_patches = h_padded // p
-                w_patches = w_padded // p
+                h_padded = ((h_orig + ph - 1) // ph) * ph
+                w_padded = ((w_orig + pw - 1) // pw) * pw
+                h_patches = h_padded // ph
+                w_patches = w_padded // pw
             else:
                 # Fallback: use token shapes directly (assumes no padding was needed)
-                t_orig, h_orig, w_orig = t_c, h_c * p, w_c * p
+                t_orig, h_orig, w_orig = t_c, h_c * ph, w_c * pw
                 h_patches, w_patches = h_c, w_c
 
             # noisy_frame_indexes_vision is a list of tensors, each with shape (T,),
@@ -529,14 +541,16 @@ class Cosmos3VFMNetwork(PreTrainedModel):
                 end_idx = start_idx + num_patches
                 # Extract patches for this latent
                 latent_patches = packed_mse_preds[start_idx:end_idx]  # [num_patches,patch_latent_dim]
-                # Reshape back to [t_n, h_patches, w_patches, p, p, channels]
+                # Reshape back to [t_n, h_patches, w_patches, ph, pw, channels]
                 latent_patches = latent_patches.reshape(
-                    t_n, h_patches, w_patches, p, p, latent_channel
-                )  # [T_n,h_patches,w_patches,p,p,C]
+                    t_n, h_patches, w_patches, ph, pw, latent_channel
+                )  # [T_n,h_patches,w_patches,ph,pw,C]
                 # Invert the einsum operation: "thwpqc->cthpwq"
-                latent = torch.einsum("thwpqc->cthpwq", latent_patches)  # [C,T_n,h_patches,p,w_patches,p]
+                latent = torch.einsum("thwpqc->cthpwq", latent_patches)  # [C,T_n,h_patches,ph,w_patches,pw]
                 # Reshape back to [channels, t_n, h_padded, w_padded]
-                latent = latent.reshape(latent_channel, t_n, h_patches * p, w_patches * p)  # [C,T_n,H_padded,W_padded]
+                latent = latent.reshape(
+                    latent_channel, t_n, h_patches * ph, w_patches * pw
+                )  # [C,T_n,H_padded,W_padded]
 
                 # Crop to original dimensions (unpad the zeros)
                 latent = latent[:, :, :h_orig, :w_orig]  # [C,T_n,H_orig,W_orig]
@@ -799,6 +813,7 @@ class Cosmos3VFMNetwork(PreTrainedModel):
             packed_sequence,
             vae2llm=self.lidar2llm,
             latent_channel=self.lidar_latent_channel,
+            patch_size=self.lidar_patch_spatial_hw,
             modality_embed=None,
             target_dtype=target_dtype,
         )
@@ -813,6 +828,7 @@ class Cosmos3VFMNetwork(PreTrainedModel):
         latent_channel: int,
         modality_embed: torch.Tensor | None,
         target_dtype: torch.dtype,
+        patch_size: int | tuple[int, int] | None = None,
     ) -> List[Tuple[int, int, int]] | None:
         """Patchify, project and scatter one stream of VAE latent grids.
 
@@ -836,7 +852,7 @@ class Cosmos3VFMNetwork(PreTrainedModel):
         assert isinstance(modality.mse_loss_indexes, torch.Tensor)
 
         packed_patches, original_latent_shapes = self.patchify_and_pack_latents(
-            modality.tokens, modality.token_shapes, latent_channel=latent_channel
+            modality.tokens, modality.token_shapes, latent_channel=latent_channel, patch_size=patch_size
         )  # [total_patches,patch_latent_dim]
         packed_tokens = vae2llm(packed_patches.to(target_dtype))  # [total_patches,hidden_size]
         if modality_embed is not None:
@@ -903,6 +919,7 @@ class Cosmos3VFMNetwork(PreTrainedModel):
                 llm2vae=self.llm2lidar,
                 latent_channel=self.lidar_latent_channel,
                 patch_latent_dim=self.lidar_patch_latent_dim,
+                patch_size=self.lidar_patch_spatial_hw,
                 original_latent_shapes=original_latent_shapes,
             )
         )
@@ -917,6 +934,7 @@ class Cosmos3VFMNetwork(PreTrainedModel):
         latent_channel: int,
         patch_latent_dim: int,
         original_latent_shapes: List[Tuple[int, int, int]] | None,
+        patch_size: int | tuple[int, int] | None = None,
     ) -> list[torch.Tensor]:
         """Read one stream's noisy patches back out of the hidden states.
 
@@ -958,6 +976,7 @@ class Cosmos3VFMNetwork(PreTrainedModel):
             noisy_frame_indexes_vision=modality.noisy_frame_indexes,
             original_latent_shapes=original_latent_shapes,
             latent_channel=latent_channel,
+            patch_size=patch_size,
         )
 
     def _encode_action(
