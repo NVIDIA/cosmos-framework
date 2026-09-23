@@ -122,7 +122,14 @@ def build_processor(
     credentials: Optional[str] = None,
     bucket: Optional[str] = None,
     cache_dir: Optional[str] = None,
+    use_native_edge_processor: bool = False,
 ):
+    if not isinstance(use_native_edge_processor, bool):
+        raise TypeError("use_native_edge_processor must be a bool")
+    if use_native_edge_processor:
+        if not os.path.isdir(tokenizer_type):
+            raise ValueError("Explicit native Edge processing requires a staged local processor metadata directory")
+        return Nemotron3DenseVLProcessor(tokenizer_type, cache_dir=cache_dir, use_native_edge_processor=True)
     # Local artifact path: source the processor from a bundled directory
     # (e.g. the top level of nvidia/Cosmos3-Nano, which ships its own
     # preprocessor_config.json, tokenizer.json, etc). Avoids the redundant

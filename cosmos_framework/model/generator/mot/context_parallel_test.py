@@ -1232,6 +1232,7 @@ def _multiview_maskless_cp_case(
         # Within a stream every item but the last conditions the one after it, which is what a
         # transfer pack's control item is.
         is_control=[index < items_per_sample - 1 for _ in samples for index in range(items_per_sample)],
+        control_attends_sensor=True,
         view_axis=[0] * (items_per_sample * len(samples)),
         captions=([list(enumerate(sample_lens)) for sample_lens in caption_lens] if caption_lens is not None else None),
         padded_gen_tokens=int(get_full_only_seq(packs[0])[0].shape[0]),

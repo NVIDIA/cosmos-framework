@@ -37,6 +37,7 @@ def create_data_augmentor_config() -> dict[str, Any]:
             max_fps_thres=60,
             target_fps="${data_setting.qwen_target_fps}",  # type: ignore
             video_temporal_mode="${data_setting.qwen_video_temporal_mode}",
+            video_timestamp_mode="${data_setting.video_timestamp_mode}",
             max_video_token_length="${data_setting.qwen_max_video_token_length}",  # type: ignore
             processor=processor,
             extract_audio="${model.config.sound_und}",
@@ -45,6 +46,7 @@ def create_data_augmentor_config() -> dict[str, Any]:
         "prompt_format": L(PromptFormat)(  # takes text_keys and output "conversation"
             input_keys=["texts"],
             text_chat_order="${data_setting.text_chat_order}",
+            strip_thinking_prob="${data_setting.strip_thinking_prob}",
         ),
         "shuffle_text_media_order": L(ShuffleTextMediaOrder)(),
         "format_hot_fixes": L(FormatHotFixes)(),
@@ -130,6 +132,7 @@ def create_data_augmentor_config() -> dict[str, Any]:
             custom_system_prompt="${data_setting.custom_system_prompt}",
             strip_original_system_prompt="${data_setting.strip_original_system_prompt}",
             video_temporal_mode="${data_setting.qwen_video_temporal_mode}",
+            video_timestamp_mode="${data_setting.video_timestamp_mode}",
             text_only=False,
             sound_und="${model.config.sound_und}",
             audio_encoder_type="${model.config.sound_und_config.audio_encoder_type}",
@@ -168,6 +171,7 @@ def create_data_augmentor_config() -> dict[str, Any]:
 
 processor = L(build_processor_lazy)(
     tokenizer_type="${model.config.policy.backbone.model_name}",
+    use_native_edge_processor="${data_setting.use_native_edge_processor}",
     credentials="${checkpoint.load_from_object_store.credentials}",
     bucket="${checkpoint.load_from_object_store.bucket}",
 )

@@ -31,7 +31,6 @@ def _config(scope: AttentionScope, **mask_kwargs) -> MultiviewAttentionConfig:
     Whether multiview attention runs at all is the pathway's business, not this config's, so
     there is nothing here to turn on -- only the description of how its GEN pass runs.
     """
-    mask_kwargs.setdefault("control_attends_sensor", True)
     return MultiviewAttentionConfig(mask=MultiviewAttentionMaskConfig(attention_scope=scope, **mask_kwargs))
 
 
@@ -39,10 +38,10 @@ def _config(scope: AttentionScope, **mask_kwargs) -> MultiviewAttentionConfig:
 def test_resolve_multiview_backend_auto_never_takes_the_folds() -> None:
     """ "auto" ranks the masks first, so it chooses kernels and never which attention runs.
 
-    The config here is one the folds *could* serve -- decomposed scope, no window, the flag on
-    -- which is exactly the case where the old folds-first ordering would have switched what the
-    run trains. Triton always resolves, so the folds rank last and are never reached: "maskless" is
-    opt-in, by name.
+    The config here is one the folds *could* serve -- decomposed scope, no window -- which is
+    exactly the case where the old folds-first ordering would have switched what the run trains.
+    Triton always resolves, so the folds rank last and are never reached: "maskless" is opt-in,
+    by name.
     """
     backend, geometry = resolve_multiview_backend(torch.device("cpu"), "auto", config=_config("decomposed"))
 
@@ -129,24 +128,28 @@ def test_demanding_maskless_under_all_views_reports_the_scope_as_the_reason() ->
 
 
 @pytest.mark.L0
-def test_maskless_is_unavailable_without_control_attends_sensor() -> None:
-    """Required unconditionally, and the flag defaults off, so "maskless" is an opt-in pairing.
+@pytest.mark.parametrize("scope", MASKLESS_ATTENTION_SCOPES)
+@pytest.mark.parametrize("control_attends_sensor", [True, False])
+def test_maskless_serves_either_control_rule(scope: AttentionScope, control_attends_sensor: bool) -> None:
+    """The flag used to rule the folds out and no longer does, at either scope.
 
-    A control item shares its target's view group, so with the flag off a control query would
-    need a narrower key set than a sensor query on the same view. Which batches carry a control
-    item is the dataloader's business rather than this config's, so the requirement does not
-    wait to find out: a batch without one loses nothing, since the flag only ever widens a
-    control query's reach and such a batch has no control queries.
+    A control item shares its target's view group, so with the flag off a control query needs a
+    narrower key set than a sensor query on the same view -- which one varlen segment over that
+    group cannot give. The folds cut the group into two segments instead, a sensor one keyed
+    against the whole group and a control one keyed against its control tokens, so both values
+    of the flag are an unmasked pass. See ``build_multiview_maskless_plan``.
     """
-    reason = maskless_unavailable_reason(_config("decomposed", control_attends_sensor=False))
+    config = _config(scope, control_attends_sensor=control_attends_sensor)
 
-    assert reason is not None
-    assert "control_attends_sensor is off" in reason
+    assert maskless_unavailable_reason(config) is None
 
 
 @pytest.mark.L0
 def test_auto_keeps_a_mask_without_control_attends_sensor() -> None:
-    """The default config -- all_views, flag off -- is a mask run, as any config is under "auto"."""
+    """The default config -- all_views, flag off -- is a mask run, as any config is under "auto".
+
+    The scope is what keeps it one now; the flag no longer rules anything out on its own.
+    """
     backend, _ = resolve_multiview_backend(
         torch.device("cpu"),
         "auto",
@@ -157,10 +160,14 @@ def test_auto_keeps_a_mask_without_control_attends_sensor() -> None:
 
 
 @pytest.mark.L0
-def test_demanding_maskless_without_control_attends_sensor_reports_the_flag() -> None:
-    with pytest.raises(ValueError, match="control_attends_sensor is off"):
-        resolve_multiview_backend(
-            torch.device("cpu"),
-            "maskless",
-            config=_config("decomposed", control_attends_sensor=False),
-        )
+def test_demanding_maskless_without_control_attends_sensor_is_served() -> None:
+    """Pinning "maskless" with the flag off is a config the folds express, not a refusal."""
+    backend, geometry = resolve_multiview_backend(
+        torch.device("cpu"),
+        "maskless",
+        config=_config("decomposed", control_attends_sensor=False),
+    )
+
+    assert backend == "maskless"
+    # The folds build no mask, so they carry no block geometry -- with the flag off as without.
+    assert geometry is None

@@ -12,10 +12,12 @@ Installs three hooks:
   call's local diffusion-step count (so ``cutoff_from_end`` is correct when
   samples use fewer steps than the install-time max), and finalizes the last
   sample after generation returns.
-* ``model.denoise`` — tracks step / sample / CFG-pass, computes the SEA
-  indicator, and decides skip-vs-full.
-* ``net.language_model.forward`` — on full, caches und output as-is and the gen
-  residual (``out - in``); on skip, returns the cached und and ``input + gen_residual``.
+* ``model.denoise`` — captures the batch, memory, and registered branch identity
+  for the duration of the call.
+* ``net.language_model.forward`` — checks eligibility, residual-shape compatibility,
+  and SEA, then synchronizes one bypass/full/cache decision; on full, caches und output
+  as-is and the gen residual (``out - in``); on skip, returns the cached und and
+  ``input + gen_residual``.
 
 The decode heads run after ``language_model`` in ``net.forward``, so they re-run
 every step and a skipped step still reflects the fresh input.  Caching is
@@ -23,13 +25,15 @@ auto-disabled for autoregressive / KV-cache generation (see ``_disables_caching`
 the static text-K/V reuse of ``InferenceTextKVMemoryState`` stays compatible, with
 skipped steps reproducing its gen-only output shape (see ``_is_gen_only``).
 
-The SEA indicator and step tracker use noisy vision only
-(``_batch_supports_diffusion_cache``). Joint video+sound/action still caches;
-packs without noisy vision disable it.
+The sampler supplies explicit step indices and branch identities via ``begin_step``.
+The SEA indicator uses noisy vision only (``_batch_supports_diffusion_cache``).
+Joint video+sound/action still caches; packs without noisy vision disable it.
 
 Under FSDP ``dp_shard > 1`` each rank denoises a different sample, so the skip
 decision is reduced across the ``dp_shard`` group (run a full eval if *any* rank
 needs one) to keep the collective ``language_model`` all-gather deadlock-free.
+Cache eligibility participates in the same reduction before any local bypass;
+one unsupported rank disables caching for the entire shard group on that denoise call.
 
 """
 
@@ -54,7 +58,7 @@ optional ``preds_action`` / ``preds_sound``, plus passthrough
 ``lbl_metadata_*`` entries."""
 
 # -----------------------------------------------------------------------------
-# helper functions: rank-0 logging, denoise-call tracking.
+# helper functions: rank-0 logging, CFG branch naming, packed-input inspection.
 # -----------------------------------------------------------------------------
 
 
@@ -79,6 +83,23 @@ def _resolve_dp_shard_group(parallel_dims: Any) -> Any:
     if mesh is None:
         return None
     return mesh.get_group()
+
+
+def _velocity_pathways(
+    needs_guidance: bool,
+    *,
+    cfg_branches: tuple[str, ...] = (),
+    batched_cfg: bool = False,
+    cfgp_rank: int | None = None,
+) -> tuple[str, ...]:
+    """Name the denoise calls executed locally after guidance alignment."""
+    if needs_guidance and batched_cfg:
+        return ("batched_cfg",)
+    if needs_guidance and cfgp_rank is not None:
+        # Both peers must change names at interval boundaries so their histories
+        # reset together. Residuals remain local to each peer's cond/uncond model call.
+        return ("cfgp",)
+    return ("cond", *cfg_branches, *(("uncond",) if needs_guidance else ()))
 
 
 def _modality_has_noisy_tokens(modality: Any) -> bool:
@@ -125,11 +146,10 @@ def _unsupported_modality_reason(data_batch_packed: Any) -> str:
 def _extract_timestep_key(data_batch_packed: Any) -> float | None:
     """Best-effort scalar key for the current **vision** diffusion timestep.
 
-    Used to detect step boundaries (timestep changes) and sample boundaries
-    (timestep direction reversals) from successive ``denoise`` calls.
-    Returns ``None`` if the vision timestep cannot be located.  Callers must
-    gate on ``_batch_supports_diffusion_cache`` first so action-/sound-only
-    packs never reach :meth:`_DenoiseStepTracker.advance` with ``None``.
+    Used only to derive SEA filter coefficients. Returns ``None`` when no
+    vision timestep is available. Callers must first check
+    ``_batch_supports_diffusion_cache``; packed batches without noisy vision
+    bypass SEA indicator computation.
     """
     if data_batch_packed is None:
         return None
@@ -170,75 +190,6 @@ def _resolve_generation_num_steps(model: Any, kwargs: dict[str, Any]) -> int:
     if t_list is not None and type(sampler).__name__ == "FixedStepSampler":
         num_steps = len(t_list) - 1
     return num_steps
-
-
-@dataclass(slots=True)
-class _DenoiseStepTracker:
-    """Tracks step / sample / CFG-pass boundaries from successive denoise calls.
-
-    Assumes a flow-matching sampler that decreases the timestep
-    monotonically within a sample (1 → 0); an upward jump in timestep
-    indicates the previous sample finished and a new one started.  Repeated
-    calls at the same timestep are treated as successive CFG passes within the
-    step and indexed positionally (``pass_idx`` 0, 1, ...).  The passes are
-    kept deliberately generic: which physical branch (conditional /
-    unconditional) maps to which index depends on the sampler and on CFG
-    parallelism, so the tracker only guarantees that a given index consistently
-    identifies the same pass within a run, not that index 0 is "conditional".
-    """
-
-    last_timestep_key: float | None = None
-    step: int = -1
-    pass_idx: int = 0  # positional CFG-pass index within the current step
-
-    def advance(self, timestep_key: float | None) -> tuple[bool, bool]:
-        """Advance the tracker by one denoise call (mutates internal state).
-
-        Returns ``(is_new_step, is_new_sample)`` describing what kind of
-        boundary, if any, this call crossed.  A repeated ``timestep_key``
-        is interpreted as the next CFG pass within the current step (no
-        boundary); a fresh value steps the counter forward, and an upward
-        jump additionally flags a new sample.
-
-        ``timestep_key`` must be a resolved **vision** timestep.  A ``None``
-        (no ``vision.timesteps``) is a programming error and raises
-        ``ValueError`` up front rather than being silently absorbed; the denoise
-        hook must not call ``advance`` unless ``_batch_supports_diffusion_cache``
-        is true.  Exact float equality identifies same-step CFG passes, which is
-        reliable because the sampler reuses the identical timestep tensor across
-        the CFG passes of a step.
-        """
-        if timestep_key is None:
-            raise ValueError("_DenoiseStepTracker.advance requires a resolved timestep, got None")
-
-        # First-ever call: no previous timestep to compare against.
-        if self.last_timestep_key is None:
-            self.last_timestep_key = timestep_key
-            self.step += 1
-            self.pass_idx = 0
-            return True, False
-
-        # Same timestep ⇒ another CFG pass within the current step.
-        if timestep_key == self.last_timestep_key:
-            self.pass_idx += 1
-            return False, False
-
-        # Different timestep ⇒ a new step; an upward jump means the previous
-        # sample finished (flow-matching decreases the timestep 1 → 0).
-        is_new_sample = timestep_key > self.last_timestep_key
-        self.last_timestep_key = timestep_key
-        self.step += 1
-        self.pass_idx = 0
-        return True, is_new_sample
-
-    def reset_for_new_sample(self) -> None:
-        """Re-seed the step counter for a new sample (timestep history kept)."""
-        self.step = 0
-
-    @property
-    def pass_name(self) -> str:
-        # Generic positional key ("cfg0", "cfg1";
-        return f"cfg{self.pass_idx}"
 
 
 # -----------------------------------------------------------------------------
@@ -399,17 +350,19 @@ class DiffusionCache:
 
     * ``model.generate_samples_from_batch`` resets cache state and adopts the
       call's local ``num_steps`` (needed for ``cutoff_from_end``).
-    * ``model.denoise`` decides skip-vs-full per call (step / sample / CFG-pass
-      tracking + SEA indicator + accumulated rel-L1).
-    * ``net.language_model.forward`` executes it: on a full step cache und as-is
-      and ``gen_out - gen_in``; on a skip return the cached und and
+    * ``model.denoise`` captures the batch, memory, and registered branch identity.
+    * ``net.language_model.forward`` checks eligibility, residual shapes, and SEA,
+      then synchronizes one bypass/full/cache decision: on a full step cache und
+      as-is and ``gen_out - gen_in``; on a skip return the cached und and
       ``gen_in + gen_residual``.
 
-    Each CFG pass of a step is tracked as an independent pathway, keyed
-    positionally (``cfg0``, ``cfg1``).
-    Control guidance adds another pathway; the model automatically applies
-    ``prepare_control_cfg_step`` before any branch runs. Only unanimous skips
-    are accepted; residual histories remain separate.
+    The sampler calls ``begin_step`` with its step index and the named pathways
+    it will execute (conditional, unconditional, optional postprocess branches,
+    batched CFG, or CFG-parallel mode). CFG-parallel peers use the same mode name
+    so entering or leaving a guidance interval resets both peers' histories.
+    All control-CFG branches use the same noisy-target indicator, excluding fully
+    conditioned control items. Residual histories remain separate and restart
+    whenever the executed pathways change, including ordinary text CFG.
     Caching is disabled for AR generation memory states (see ``_disables_caching``)
     and for packs without noisy vision (see ``_batch_supports_diffusion_cache``).
     """
@@ -459,7 +412,7 @@ class DiffusionCache:
 
     @dataclass(slots=True)
     class _PathwayState:
-        """Per-CFG-pass (``cfg0`` / ``cfg1`` ) diffusion-time inference cache bookkeeping.
+        """Per-branch diffusion-time inference cache bookkeeping.
 
         ``history`` holds the most recent full-eval cache entries as
         ``(step_index, (und_out, gen_delta))``, chronologically, bounded to the
@@ -475,28 +428,29 @@ class DiffusionCache:
 
     @dataclass(slots=True)
     class State:
-        step: int = 0
+        step: int = -1
         num_steps: int = 0
         calc_type: CalculationType = "full"
-        pathway: str = "cfg0"
-        """CFG-pass key for the denoise call in flight (``cfg0`` / ``cfg1``)."""
+        pathway: str = "cond"
+        """Named pathway for the denoise call in flight."""
 
     def __init__(self, num_steps: int, config: dict[str, Any] | None = None) -> None:
         self.num_steps = num_steps
         self.config = self.Config.from_overrides(config)
         self.state = self.State(num_steps=num_steps)
-        self._tracker = _DenoiseStepTracker()
-        # Per-pathway ("cfg0" / "cfg1") diffusion-time inference cache state.
+        # Per-pathway diffusion-time inference cache state.
         self._pathways: dict[str, DiffusionCache._PathwayState] = {}
         # FSDP ``dp_shard`` process group. When set (dp_shard > 1), the skip
         # decision is reduced across the group so every rank runs / skips the
-        # language_model in lockstep (see :meth:`_synchronize_compute`).
+        # language_model in lockstep (see :meth:`_synchronize_decision`).
         self._dp_shard_group: Any = None
         # True only when this denoise call may skip / refresh residual history.
-        # Cleared for unsupported modalities and AR memory before ``language_model``.
+        # Set by the LM hook after synchronizing eligibility and the compute decision.
         self._cache_active = False
-        self._control_cfg_pending: list[tuple[str, bool]] = []
-        self._control_cfg_active: bool = False
+        # Batch, memory, and branch identity captured only for the current denoise call.
+        self._denoise_context: tuple[Any, Any, str | None] | None = None
+        self._pending_pathways: list[str] = []
+        self._active_pathways: tuple[str, ...] = ()
         # Per-sample step counters (reset on sample boundaries and end-of-run).
         self._step_full = 0
         self._step_skipped = 0
@@ -508,11 +462,11 @@ class DiffusionCache:
 
         ``model.generate_samples_from_batch`` is patched to call
         :meth:`begin_generation` with the call's local step count;
-        ``model.denoise`` is patched to drive a :class:`_DenoiseStepTracker`
-        (step / sample / CFG-pass boundaries), compute the SEA indicator, and
-        record the skip-vs-full decision; ``net.language_model.forward`` is patched
-        to execute that decision via residual reuse. The model calls
-        ``prepare_control_cfg_step`` before control-guided velocity predictions.
+        ``model.denoise`` only captures the batch, memory, and registered branch;
+        ``net.language_model.forward`` owns eligibility, SEA, residual compatibility,
+        and one synchronized bypass/full/cache decision. The model calls
+        ``begin_step`` before each registered sampler velocity evaluation, including
+        no-CFG steps. Dummy padding calls remain unregistered and bypass caching.
         """
         model = getattr(pipe, "model", None)
         if model is None:
@@ -537,107 +491,100 @@ class DiffusionCache:
             try:
                 return original_generate(*args, **kwargs)
             finally:
-                # No later denoise call exists to detect the final sample boundary.
-                # Finalize here so its summary is emitted and residual state cannot
+                # Finalize the explicit generation lifetime so its summary is
+                # emitted and residual state cannot
                 # leak into the next generation request, including after failures.
                 self.reset()
 
         def patched_denoise(self_model: Any, *args: Any, **kwargs: Any) -> Any:
             del self_model
-            batch = kwargs.get("data_batch_packed")
-            memory = kwargs.get("memory")
-            # Default off until the vision-diffusing path proves caching is safe.
-            self._cache_active = False
-            prepared = self._control_cfg_pending.pop(0) if self._control_cfg_pending else None
-            self._control_cfg_active = prepared is not None
-
-            # AR / KV-cache first: bypass before any vision.timestep tracking so a
-            # missing vision timestep cannot raise before the documented disable.
-            if _disables_caching(memory):
-                self.state.calc_type = "full"
-                self._log_disabled_once(
-                    f"denoise carries {type(memory).__name__} "
-                    "(autoregressive / KV-cache generation runs the language_model every step)"
-                )
+            pathway = self._pending_pathways.pop(0) if self._pending_pathways else None
+            self._denoise_context = (kwargs.get("data_batch_packed"), kwargs.get("memory"), pathway)
+            try:
                 return original_denoise(*args, **kwargs)
-
-            if not _batch_supports_diffusion_cache(batch):
-                # Action-/sound-only (or conditioning-only vision): do not read
-                # vision.timesteps / vision.tokens for step tracking or SEA.
-                self.state.calc_type = "full"
-                self._log_disabled_once(_unsupported_modality_reason(batch))
-                return original_denoise(*args, **kwargs)
-
-            tk = _extract_timestep_key(batch)
-            if prepared is not None:
-                if tk != self._tracker.last_timestep_key:
-                    raise RuntimeError("Control-CFG preflight timestep does not match denoise")
-                cfg_pathway, compute = prepared
-                self._tracker.pass_idx = int(cfg_pathway.removeprefix("cfg"))
-            else:
-                self._advance_step(tk)
-                cfg_pathway = self._tracker.pass_name
-                indicator = self._extract_indicator(batch, tk)
-                compute = self._synchronize_compute(
-                    self._should_compute(cfg_pathway, indicator),
-                    cfg_pathway,
-                )
-            self.state.pathway = cfg_pathway
-            self._cache_active = True
-            if compute:
-                self.state.calc_type = "full"
-                self._step_full += 1
-            else:
-                self.state.calc_type = "cache"
-                self._step_skipped += 1
-            return original_denoise(*args, **kwargs)
+            finally:
+                self._denoise_context = None
 
         def patched_lm_forward(self_lm: Any, pack: Any, *args: Any, **kwargs: Any) -> Any:
             del self_lm
-            memory = kwargs.get("memory")
-            pathway = self.state.pathway
-            ps = self._pathways.setdefault(pathway, self._PathwayState())
-            in_causal, in_full = pack["causal_seq"], pack["full_only_seq"]
-            caching = self._cache_active and not _disables_caching(memory)
-            gen_only = caching and _is_gen_only(memory)
-            history_matches = bool(ps.history and _cache_entry_matches(ps.history[-1][1], in_causal, in_full, gen_only))
-            if caching and self.state.calc_type == "cache":
-                shape_requires_full = self._synchronize_compute(not history_matches, pathway)
-                if shape_requires_full:
-                    if self._control_cfg_active:
-                        raise RuntimeError("Control-CFG cache layout changed after preflight; cannot reuse residuals")
-                    self.state.calc_type = "full"
-                    self._step_skipped -= 1
-                    self._step_full += 1
-                    ps.accumulated = 0.0
-            if caching and ps.history and not history_matches:
-                # Guidance-interval boundaries can switch the internal batch
-                # between N and 2N. Start a fresh extrapolation history so a
-                # later cache hit never combines residuals with different shapes.
-                ps.history.clear()
-                ps.consecutive_cached = 0
+            batch, memory, pathway = self._denoise_context or (None, kwargs.get("memory"), None)
+            in_causal, in_full = pack["causal_seq"], pack["full_only_seq"]  # [N_und,D], [N_gen,D]
+            # Default off until the vision-diffusing path proves caching is safe.
+            self._cache_active = False
+            memory_disables_cache = _disables_caching(memory)
+            batch_supports_cache = _batch_supports_diffusion_cache(batch)
+            eligible = not memory_disables_cache and batch_supports_cache and pathway is not None
+            gen_only = eligible and _is_gen_only(memory)
+            ps = None
+            compute = True
+            if eligible:
+                assert pathway is not None
+                self.state.pathway = pathway
+                ps = self._pathways.setdefault(pathway, self._PathwayState())
+                if ps.history and not _cache_entry_matches(ps.history[-1][1], in_causal, in_full, gen_only):
+                    # Guidance-interval boundaries can switch the internal batch
+                    # between N and 2N. Start a fresh extrapolation history so a
+                    # later cache hit never combines residuals with different shapes.
+                    ps.history.clear()
+                    ps.consecutive_cached = 0
+                # AR / KV-cache and unsupported modalities never reach SEA extraction.
+                tk = _extract_timestep_key(batch)
+                indicator = self._extract_indicator(batch, tk)  # list[[T,H,W,C]] | None
+                # Missing or incompatible history forces full in _should_compute.
+                compute = self._should_compute(pathway, indicator)
 
-            reuse = caching and self.state.calc_type == "cache" and history_matches
-            if reuse:
+            # Every shard rank must enter this collective before taking a local bypass.
+            # Otherwise a peer's cache reduction can collide with the model's all-gather.
+            caching, compute = self._synchronize_decision(eligible, compute, in_full.device)
+            self._cache_active = caching
+            self.state.calc_type = "full" if compute else "cache"
+            if not caching:
+                # A bypass does not refresh residuals; discard history before caching resumes.
+                self._pathways.clear()
+                # AR / KV-cache eligibility is checked before vision.timestep tracking,
+                # so a missing vision timestep cannot raise before the documented disable.
+                if memory_disables_cache:
+                    self._log_disabled_once(
+                        f"denoise carries {type(memory).__name__} "
+                        "(autoregressive / KV-cache generation runs the language_model every step)"
+                    )
+                elif not batch_supports_cache:
+                    # Action-/sound-only (or conditioning-only vision): do not read
+                    # vision.timesteps / vision.tokens for step tracking or SEA.
+                    self._log_disabled_once(_unsupported_modality_reason(batch))
+                elif pathway is None:
+                    self._log_disabled_once("the sampler did not register a diffusion step and branch")
+                else:
+                    self._log_disabled_once("a peer in the FSDP shard group cannot use diffusion caching")
+                return original_lm_forward(pack, *args, **kwargs)
+
+            assert ps is not None
+            if not compute:
+                self._step_skipped += 1
                 ps.consecutive_cached += 1
-                und_out = ps.history[-1][1][0]  # understanding: absolute reuse (not a residual)
-                gen_delta = _extrapolate_gen(ps.history, self.state.step, self.config.residual_order)
+                und_out = ps.history[-1][1][0]  # [N_und,D] | None; understanding is reused as-is (not a residual)
+                gen_delta = _extrapolate_gen(ps.history, self.state.step, self.config.residual_order)  # [N_gen,D]
                 out_pack = dict(pack)
                 # Match the shape the real forward would have produced: gen-only layers
                 # emit an empty und split instead of an updated one.
-                out_pack["causal_seq"] = in_causal.new_empty(0, in_causal.shape[-1]) if gen_only else und_out
-                out_pack["full_only_seq"] = in_full + gen_delta
+                out_pack["causal_seq"] = (
+                    in_causal.new_empty(0, in_causal.shape[-1]) if gen_only else und_out
+                )  # [N_und_out,D]
+                out_pack["full_only_seq"] = in_full + gen_delta  # [N_gen,D]
                 return out_pack, {}
 
+            self._step_full += 1
+            # A peer may override a local skip; any full eval refreshes the residual
+            # and resets its accumulated error budget.
+            ps.accumulated = 0.0
+            ps.consecutive_cached = 0
             outputs = original_lm_forward(pack, *args, **kwargs)
-            if caching:
-                ps.consecutive_cached = 0
-                out_pack = outputs[0] if isinstance(outputs, tuple) else outputs
-                entry = _lm_cache_entry(in_causal, in_full, out_pack["causal_seq"], out_pack["full_only_seq"])
-                ps.history.append((self.state.step, entry))
-                max_history = self.config.residual_order + 1
-                if len(ps.history) > max_history:
-                    ps.history = ps.history[-max_history:]
+            out_pack = outputs[0] if isinstance(outputs, tuple) else outputs
+            entry = _lm_cache_entry(in_causal, in_full, out_pack["causal_seq"], out_pack["full_only_seq"])
+            ps.history.append((self.state.step, entry))
+            max_history = self.config.residual_order + 1
+            if len(ps.history) > max_history:
+                ps.history = ps.history[-max_history:]
             return outputs
 
         model.generate_samples_from_batch = types.MethodType(patched_generate, model)
@@ -653,54 +600,38 @@ class DiffusionCache:
         self.reset()
         self.num_steps = num_steps
         self.state = self.State(num_steps=num_steps)
-        self._tracker = _DenoiseStepTracker()
 
-    def _advance_step(self, timestep_key: float | None) -> None:
-        is_new_step, is_new_sample = self._tracker.advance(timestep_key)
-        if is_new_step:
-            if is_new_sample or self._tracker.step >= self.num_steps:
-                self.reset()
-                self._tracker.reset_for_new_sample()
-            self.state.step = self._tracker.step
+    def begin_step(self, step_index: int, pathways: tuple[str, ...]) -> None:
+        """Register the explicit sampler step and its branches in execution order.
 
-    def prepare_control_cfg_step(
-        self,
-        branch_latents: dict[str, list[torch.Tensor]],  # pathway -> vision items: list[[C,T,H,W]]
-        timestep_key: float,
-    ) -> None:
-        """Decide all branches before denoising: full if any branch or FSDP rank needs it.
-
-        Inputs follow execution order (positive/control, positive/no-control when
-        active, negative/control), with stable keys across guidance intervals.
-        Each pathway updates its indicator once and retains its own residual
-        history. The denoise hooks consume these decisions
-        without repeating the indicator calculation or running speculative forwards.
+        Restart histories whenever an interval changes the active branches so a
+        returning branch has the same indicator budget and reuse count as its
+        peers. Multiple velocity evaluations within one solver step also restart
+        history: their residuals must not be extrapolated at duplicate step indices.
+        Generation boundaries are handled by ``begin_generation``, never inferred
+        from timestep values. Unregistered calls, including FSDP padding, bypass caching.
         """
-        if self._control_cfg_pending:
-            raise RuntimeError("Previous control-CFG preflight was not fully consumed")
-        if not branch_latents:
-            raise ValueError("Control-CFG preflight requires at least one branch")
-        self._advance_step(timestep_key)
-        cfg_pathways = list(branch_latents)
-        # Evaluate every pathway: _should_compute also updates its indicator/budget.
-        decisions = [
-            self._should_compute(pathway, self._filter_latents(latents, timestep_key))
-            for pathway, latents in branch_latents.items()
-        ]
-        compute = self._synchronize_compute(any(decisions), cfg_pathways[0])
-        if compute:
-            for pathway in cfg_pathways:
-                self._pathways[pathway].accumulated = 0.0
-        self._control_cfg_pending = [(pathway, compute) for pathway in cfg_pathways]
+        if self._pending_pathways:
+            raise RuntimeError("Previous diffusion evaluation still has pending branches")
+        if not pathways:
+            raise ValueError("Diffusion step requires at least one branch")
+        if step_index < 0 or step_index < self.state.step:
+            raise ValueError("Sampler step indices must be nonnegative and nondecreasing within a generation")
+        if pathways != self._active_pathways or step_index == self.state.step:
+            self._pathways.clear()
+        self.state.step = step_index
+        self._active_pathways = pathways
+        self._pending_pathways = list(pathways)
 
     def reset(self) -> None:
-        """Drop all cached state.  Called on sample boundaries and end-of-run."""
+        """Drop all cached state at explicit generation boundaries."""
         self._log_sample_summary()
         self._pathways = {}
-        self._control_cfg_pending = []
-        self._control_cfg_active = False
+        self._pending_pathways = []
+        self._active_pathways = ()
         self.state = self.State(num_steps=self.num_steps)
         self._cache_active = False
+        self._denoise_context = None
         self._step_full = 0
         self._step_skipped = 0
 
@@ -742,34 +673,25 @@ class DiffusionCache:
         ps.accumulated = 0.0
         return True
 
-    def _synchronize_compute(self, compute: bool, pathway: str) -> bool:
-        """Reduce the skip-vs-full decision across the FSDP ``dp_shard`` group.
+    def _synchronize_decision(self, eligible: bool, compute: bool, device: torch.device | str) -> tuple[bool, bool]:
+        """Return group-wide (caching_enabled, compute) with one reduction.
 
         Under FSDP ``dp_shard > 1`` each rank denoises a different sample, so
         their per-rank skip decisions can diverge.  The ``language_model``
         parameter all-gather is collective, so a rank that skips (no all-gather)
         while a peer computes (all-gather) would deadlock.  We make the decision
-        global with an OR reduction: run a full eval if *any* rank needs one, and
-        skip only when *all* ranks agree to skip — the conservative choice that
-        never reuses a residual a peer considers stale.
-
-        When a rank is overridden from skip to full it performs a real eval and
-        refreshes its residual, so its accumulator is reset to 0 like any other
-        full step.  No-op (returns ``compute`` unchanged) when ``dp_shard`` is
-        disabled.
+        global with an OR reduction of both bypass and compute flags: bypass
+        caching if any rank is ineligible; otherwise run full if any rank needs
+        it, and skip only when all ranks agree. The LM hook resets the error
+        budget whenever this decision requires a full evaluation.
         """
         group = self._dp_shard_group
         if group is None:
-            return compute
-        device = "cuda" if torch.cuda.is_available() else "cpu"
-        flag = torch.tensor([1 if compute else 0], device=device, dtype=torch.int32)
-        torch.distributed.all_reduce(flag, op=torch.distributed.ReduceOp.MAX, group=group)
-        global_compute = bool(flag.item() > 0)
-        if global_compute and not compute:
-            # Locally wanted to skip but a peer forces a full eval; this refreshes
-            # our residual, so reset the accumulator like any other full step.
-            self._pathways.setdefault(pathway, self._PathwayState()).accumulated = 0.0
-        return global_compute
+            return eligible, not eligible or compute
+        flags = torch.tensor([not eligible, compute], device=device, dtype=torch.int32)  # [2]
+        torch.distributed.all_reduce(flags, op=torch.distributed.ReduceOp.MAX, group=group)  # [2]
+        bypass, compute = flags.tolist()
+        return not bool(bypass), bool(bypass or compute)
 
     def _indicator_distance(self, cur: list[torch.Tensor] | None, prev: list[torch.Tensor] | None) -> float:
         """Mean per-sample relative-L1 distance between two SEA indicators.
@@ -812,15 +734,6 @@ class DiffusionCache:
         ):
             return None
 
-        return self._filter_latents(tokens, timestep_key, condition_masks)
-
-    def _filter_latents(
-        self,
-        tokens: list[torch.Tensor],  # list[[C,T,H,W]]
-        timestep_key: float | None,
-        condition_masks: list[torch.Tensor] | None = None,  # list[[T,1,1]]
-    ) -> list[torch.Tensor] | None:  # list[[T,H,W,C]]
-        """Shared indicator calculation for packed denoise inputs and CFG preflight."""
         if not tokens:
             return None
         if timestep_key is None:
@@ -908,12 +821,14 @@ def install_diffusion_cache(
     accessible after installation via ``pipe.model._diffusion_cache``.
 
     FSDP ``dp_shard > 1`` is supported: different ``dp_shard`` ranks denoise
-    different samples, so :meth:`DiffusionCache._synchronize_compute` reduces the
-    skip decision across the ``dp_shard`` group (run a full eval if *any* rank
-    needs one), keeping the collective ``language_model`` all-gather deadlock-free.
-    Context / tensor / CFG parallelism need no reduction (their inputs are
-    replicated across the collective group, so the decision is already identical
-    on every rank).
+    different samples, so :meth:`DiffusionCache._synchronize_decision` reduces
+    eligibility and the skip decision together across the ``dp_shard`` group
+    (run a full eval if *any* rank needs one), keeping the collective
+    ``language_model`` all-gather deadlock-free.
+    Context / tensor parallelism use replicated noisy-vision inputs for SEA.
+    CFG-parallel peers also share those inputs, while their prompts and residuals
+    differ. They register the same ``cfgp`` mode during guidance and ``cond`` outside
+    it, resetting histories on both peers at each boundary without a CFG-cache reduction.
     """
     if not enabled:
         return None

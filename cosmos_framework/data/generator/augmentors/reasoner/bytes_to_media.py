@@ -21,7 +21,14 @@ from cosmos_framework.data.imaginaire.webdataset.augmentors.augmentor import Aug
 from cosmos_framework.utils import log
 from cosmos_framework.data.generator.reasoner.video_decoder_qwen import VideoTemporalMode, _video_decoder_qwen_func
 from cosmos_framework.data.generator.processors.qwen3vl_processor import Qwen3VLProcessor
+from cosmos_framework.utils.generator.source_video_timing import (
+    SOURCE_VIDEO_TIMING_KEY,
+    require_source_pts_processor,
+    validate_source_video_timing,
+    validate_video_timestamp_mode,
+)
 from cosmos_framework.utils.generator.video_preprocess import tensor_to_pil_images
+from cosmos_framework.utils.generator.video_source_metadata import VIDEO_METADATA_KEY
 
 
 class BytesToMedia(Augmentor):
@@ -55,6 +62,7 @@ class BytesToMedia(Augmentor):
         processor: Qwen3VLProcessor = None,
         extract_audio: bool = False,
         audio_sample_rate: int = 16_000,
+        video_timestamp_mode: str = "qwen_index",
         video_temporal_mode: VideoTemporalMode = "native",
     ) -> None:
         """
@@ -74,6 +82,12 @@ class BytesToMedia(Augmentor):
             extract_audio (bool): Whether to decode the audio stream from video containers.
             audio_sample_rate (int): Target sample rate for decoded mono audio.
         """
+        validate_video_timestamp_mode(video_timestamp_mode)
+        self.video_timestamp_mode: str = video_timestamp_mode
+        if video_timestamp_mode == "source_pts":
+            require_source_pts_processor(processor)
+            if extract_audio:
+                raise ValueError("source_pts does not support audio extraction")
         self.input_key = input_key
         self.output_key = output_key
         if video_temporal_mode not in ("native", "framewise"):
@@ -94,6 +108,7 @@ class BytesToMedia(Augmentor):
         self.processor = processor
         self.extract_audio = extract_audio
         self.audio_sample_rate = audio_sample_rate
+        self.video_decoder_params["video_timestamp_mode"] = video_timestamp_mode
 
     def _is_video_key(self, name: str) -> bool:
         """Returns whether the media key will be decoded as video."""
@@ -236,11 +251,17 @@ class BytesToMedia(Augmentor):
                 ),
             )
             if result is None:
+                if self.video_timestamp_mode == "source_pts":
+                    raise ValueError("source_pts decoder returned no frames or timing record")
                 log.warning(f"Skipping item '{identifier}': Video decoder returned None.")
                 return None
+            if self.video_timestamp_mode == "source_pts":
+                validate_source_video_timing(result.get(SOURCE_VIDEO_TIMING_KEY), result["videos"].shape[1])
             result["videos"] = tensor_to_pil_images(result["videos"])  # 3,T,H,W -> list of PIL images
             return result
         except Exception as e:
+            if self.video_timestamp_mode == "source_pts":
+                raise ValueError(f"source_pts failed to decode and align video {identifier!r}") from e
             log.warning(f"Skipping item '{identifier}': Error decoding video bytes: {e}")
             return None
 
@@ -303,6 +324,8 @@ class BytesToMedia(Augmentor):
         output_data = {}
 
         if isinstance(data, dict):
+            if self.video_timestamp_mode == "source_pts" and any(self._is_audio_key(name) for name in data):
+                raise ValueError("source_pts does not support audio media")
             video_count = sum(1 for name, item in data.items() if isinstance(item, bytes) and self._is_video_key(name))
             video_durations = self._get_video_durations(data, data_dict) if video_count > 1 else {}
             total_video_duration = sum(video_durations.values()) if video_durations else None
@@ -352,6 +375,8 @@ class BytesToMedia(Augmentor):
                                 )
                                 if audio is not None:
                                     result["audio"] = audio
+                                    if VIDEO_METADATA_KEY in result:
+                                        result["audio_start_seconds"] = start_frame / result[VIDEO_METADATA_KEY]["fps"]
                             output_data[name] = result
 
                     elif (

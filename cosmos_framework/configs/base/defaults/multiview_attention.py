@@ -78,8 +78,11 @@ def resolve_caption_scope(access: CaptionAccess, *, per_view_captions: bool) -> 
 #   ``decomposed_temporal_window_seconds`` is set: the two streams do not share a frame
 #   index, but they do share real capture time, which the window compares instead.
 #
-# Read by the ``flex_*`` backends only. The ``"maskless"`` backend is its own attention pattern
-# and does not take a scope -- see ``BackendPreference``.
+# Read by every backend, but not the same way. A ``flex_*`` backend expresses the scope as a mask.
+# The ``"maskless"`` backend expresses ``"same_view"`` and ``"decomposed"`` as partitions of the
+# GEN stream and refuses ``"all_views"``, which is not a partition at all -- so there the scope
+# decides whether the cross-instant pass exists rather than describing one attention two ways. See
+# ``BackendPreference`` and ``models.mot.multiview_maskless_attention.MASKLESS_ATTENTION_SCOPES``.
 AttentionScope = Literal["all_views", "same_view", "decomposed"]
 
 # The scopes of ``AttentionScope`` at runtime, which the annotation itself is not.

@@ -1690,6 +1690,11 @@ def _multiview_maskless_geometry_for_test(packed_seq: PackedSequence, **kwargs):
     options: dict = dict(
         device=torch.device("cpu"),
         attention_scope="decomposed",
+        # The folds serve either control rule, so this is a description of the attention rather
+        # than a condition on the batch. ``True`` keeps a control item in its target's view group
+        # as one varlen segment, which is what these eligibility tests were written against; a
+        # test about the other rule passes it.
+        control_attends_sensor=True,
         # Both derived here the way ``forward`` derives them, so these tests describe the same
         # batch the production caller would hand in -- and, for the items, hand to the mask too.
         caption_mask_items=_multiview_caption_mask_items(packed_seq),
