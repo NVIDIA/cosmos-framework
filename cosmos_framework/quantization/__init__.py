@@ -10,7 +10,7 @@ with a different :class:`Sampler`.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Literal
 
@@ -26,6 +26,7 @@ from .checkpoint_io import (
     resolve_checkpoint_path,
     save_sharded_safetensors,
 )
+from .metadata import collect_quantization_metadata, write_quantization_metadata
 
 FP8_E4M3_MAX = 448.0
 
@@ -126,6 +127,7 @@ def quantize_fp8_checkpoint(
     i2v_cond_dataset: str | None = None,
     keep_model: bool = False,
     calibration_behavior: Literal["framework", "legacy"] = "framework",
+    mixed_precision_steps: int = 3,
 ):
     """Quantize a diffusers-layout Cosmos3 checkpoint to FP8 and write a drop-in dir.
 
@@ -140,6 +142,11 @@ def quantize_fp8_checkpoint(
     recipe that restores the historical scheduler, numeric bridges, and attention
     behavior to pursue legacy-equivalent FP8 calibration. Returns the assembled
     ``output_dir`` (and, if ``keep_model``, the calibrated model for inspection).
+
+    ``mixed_precision_steps`` controls the symmetric first/last denoising-step
+    A16 policy written to ``transformer/config.json`` for vLLM-Omni.
+    ``quantization_metadata.json`` records the producing environment, source
+    identity, and calibration recipe independently of inherited source configs.
     """
     input_dir, output_dir = resolve_checkpoint_path(model_name_or_path), Path(output_dir)
     if profile not in ("t2v", "t2i", "i2v"):
@@ -180,6 +187,32 @@ def quantize_fp8_checkpoint(
             shape.num_frames,
         )
 
+    explicit_sigmas = sampler.explicit_sigmas or _calib.resolve_distilled_sigmas(input_dir)
+    metadata = collect_quantization_metadata(
+        source=model_name_or_path,
+        input_dir=input_dir,
+        recipe={
+            "format": "fp8",
+            "profile": profile,
+            "shape": asdict(shape),
+            "sampler": asdict(sampler),
+            "scheduler_class": f"{type(scheduler).__module__}.{type(scheduler).__qualname__}",
+            "resolved_explicit_sigmas": explicit_sigmas,
+            "num_samples": num_samples,
+            "quant_algo": quant_algo,
+            "seed": seed,
+            "negative_prompt": negative_prompt,
+            "fps": fps,
+            "quantize_language_model": quantize_language_model,
+            "calibration_behavior": calibration_behavior,
+            "mixed_precision_steps": mixed_precision_steps,
+            "i2v_cond_dir": str(i2v_cond_dir) if i2v_cond_dir is not None else None,
+            "i2v_cond_dataset": i2v_cond_dataset,
+        },
+        prompts=prompts,
+    )
+    metadata["environment"]["torch_cuda"] = torch.version.cuda
+
     forward_loop = _calib.make_forward_loop(
         vae=vae,
         scheduler=scheduler,
@@ -198,7 +231,7 @@ def quantize_fp8_checkpoint(
         use_flow_sigmas=sampler.use_flow_sigmas,
         i2v=i2v,
         cond_latents=cond_latents,
-        explicit_sigmas=sampler.explicit_sigmas or _calib.resolve_distilled_sigmas(input_dir),
+        explicit_sigmas=explicit_sigmas,
         use_legacy_scheduler=legacy_behavior,
     )
 
@@ -214,8 +247,14 @@ def quantize_fp8_checkpoint(
     mtq.print_quant_summary(model)
 
     staging_dir = output_dir.parent / f".quantized_transformer_{profile}.tmp"
-    _export.export_quantized_transformer(model, staging_dir, transformer_dir)
+    _export.export_quantized_transformer(
+        model,
+        staging_dir,
+        transformer_dir,
+        mixed_precision_steps=mixed_precision_steps,
+    )
     _export.assemble_output_dir(input_dir, output_dir, staging_dir)
+    write_quantization_metadata(output_dir, metadata)
 
     print(f"[done] {output_dir}")
     return (output_dir, model) if keep_model else output_dir

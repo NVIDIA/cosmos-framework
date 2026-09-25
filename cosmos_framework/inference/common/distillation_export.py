@@ -8,6 +8,18 @@ from collections.abc import Callable
 from pathlib import Path, PurePath
 from typing import Any
 
+_PLACEHOLDER_BUCKET = "bucket"
+
+
+def _placeholder_object_store_uri(value: str) -> str:
+    """Replace the bucket in a ``scheme://bucket/key`` URI, keeping the key."""
+    scheme, _, remainder = value.partition("://")
+    _, _, key = remainder.partition("/")
+    return f"{scheme}://{_PLACEHOLDER_BUCKET}/{key}" if key else f"{scheme}://{_PLACEHOLDER_BUCKET}"
+
+
+# Where the LiDAR VAE lives inside a published artifact. One per artifact, so no filename map.
+_PUBLIC_LIDAR_VAE_PATH = "pretrained/tokenizers/lidar/diffusion_pytorch_model.safetensors"
 _PUBLIC_WAN_VAE_PATHS = {
     "Wan2.2_VAE.pth": "pretrained/tokenizers/video/wan2pt2/Wan2.2_VAE.pth",
 }
@@ -86,6 +98,57 @@ def build_student_checkpoint_metadata(*, use_ema_weights: bool) -> dict[str, str
     }
 
 
+def _migrate_legacy_transfer_replay_config(config: dict[str, Any], *, base_config_field_names: set[str]) -> None:
+    """Preserve pre-replay-policy Transfer connectivity when projecting a student."""
+    legacy_key = "transfer_control_attention_mode"
+    if legacy_key not in config:
+        return
+
+    required_fields = {"teacher_forcing_replay_policy", "teacher_forcing_kv_implementation"}
+    if not required_fields <= base_config_field_names:
+        raise ValueError("Legacy Transfer attention requires a causal base config with teacher-forcing replay support.")
+
+    legacy_modes = {
+        "global_control": ("global", False),
+        "causal_control": ("causal", False),
+        "current_only_control": ("current", False),
+        "causal_control_with_rgb_history": ("causal", True),
+        "current_only_control_with_rgb_history": ("current", True),
+    }
+    legacy_mode = config[legacy_key]
+    if not isinstance(legacy_mode, str) or legacy_mode not in legacy_modes:
+        raise ValueError(f"Unsupported legacy {legacy_key}: {legacy_mode!r}.")
+    control_visibility, controls_read_rgb = legacy_modes[legacy_mode]
+    expected_policy = {
+        "control_visibility": control_visibility,
+        "controls_read_strict_past_clean_rgb": controls_read_rgb,
+        "clean_pass_causality": "frame",
+        "multiview_attention_scope": "all_views",
+        "decomposed_temporal_window_seconds": None,
+    }
+    policy = config.get("teacher_forcing_replay_policy", {})
+    if not isinstance(policy, dict):
+        raise TypeError("Expected teacher_forcing_replay_policy to be a dictionary during legacy Transfer migration.")
+    for key, expected in expected_policy.items():
+        if key in policy and policy[key] != expected:
+            raise ValueError(
+                f"Legacy {legacy_key}={legacy_mode!r} conflicts with teacher_forcing_replay_policy.{key}={policy[key]!r}; "
+                f"expected {expected!r}."
+            )
+
+    # The legacy Transfer implementation used three-way single-view attention.
+    # An explicit different implementation must not silently replace that kernel.
+    implementation = config.get("teacher_forcing_kv_implementation", "singleview_threeway_kv")
+    if implementation != "singleview_threeway_kv":
+        raise ValueError(
+            f"Legacy {legacy_key} conflicts with teacher_forcing_kv_implementation={implementation!r}; "
+            "expected 'singleview_threeway_kv'."
+        )
+    config["teacher_forcing_replay_policy"] = {**policy, **expected_policy}
+    config["teacher_forcing_kv_implementation"] = implementation
+    del config[legacy_key]
+
+
 def sanitize_student_model_config(
     model_dict: dict[str, Any],
     *,
@@ -97,6 +160,10 @@ def sanitize_student_model_config(
     config = model_dict.get("config")
     if not isinstance(config, dict):
         raise TypeError("Expected model config to be a dictionary.")
+
+    # Migrate before filtering out training-only fields: dropping the legacy
+    # selector first would silently restore global controls without RGB history.
+    _migrate_legacy_transfer_replay_config(config, base_config_field_names=base_config_field_names)
 
     model_dict["_target_"] = base_model_target
     config["_type"] = base_config_type
@@ -121,20 +188,32 @@ def sanitize_student_public_model_config(
     if not isinstance(config, dict):
         raise TypeError("Expected model config to be a dictionary.")
 
-    for tokenizer_key in ("tokenizer", "sound_tokenizer"):
+    for tokenizer_key in ("tokenizer", "sound_tokenizer", "lidar_tokenizer"):
         tokenizer_config = config.get(tokenizer_key)
         if not isinstance(tokenizer_config, dict):
             continue
         if "bucket_name" in tokenizer_config:
             tokenizer_config["bucket_name"] = "bucket"
         if "object_store_credential_path_pretrained" in tokenizer_config:
-            tokenizer_config["object_store_credential_path_pretrained"] = ""
+            # None, not "": VideoTokenizerInterface treats None as "no credentials" and anything
+            # else as a path, so an empty string is a path that does not exist and it raises.
+            tokenizer_config["object_store_credential_path_pretrained"] = None
         if tokenizer_key == "tokenizer" and "vae_path" in tokenizer_config:
             tokenizer_config["vae_path"] = _normalize_public_dependency_path(
                 tokenizer_config["vae_path"],
                 field_name="tokenizer.vae_path",
                 public_paths=_PUBLIC_WAN_VAE_PATHS,
             )
+        if tokenizer_key == "lidar_tokenizer":
+            # Swept rather than listed: V0 adds latent_stats_path on the same bucket, and the
+            # next such field would be missed again.
+            for field, value in list(tokenizer_config.items()):
+                if field != "vae_path" and isinstance(value, str) and "://" in value:
+                    tokenizer_config[field] = _placeholder_object_store_uri(value)
+        if tokenizer_key == "lidar_tokenizer" and "vae_path" in tokenizer_config:
+            # The internal LiDAR path is a full URI, so the bucket rides inside the value and
+            # a filename map would not remove it. Rewrite to the published location.
+            tokenizer_config["vae_path"] = _PUBLIC_LIDAR_VAE_PATH
 
     vlm_config = config.get("vlm_config")
     if not isinstance(vlm_config, dict):

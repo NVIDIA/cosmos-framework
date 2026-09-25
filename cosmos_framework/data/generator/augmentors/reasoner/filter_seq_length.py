@@ -31,9 +31,12 @@ class FilterSeqLength(Augmentor):
         audio_start_token: str = AUDIO_START_TOKEN,
         audio_pad_token: str = AUDIO_PAD_TOKEN,
         audio_end_token: str = AUDIO_END_TOKEN,
+        drop_over_max_length: bool = False,
     ) -> None:
         self.max_token_length = max_token_length
         self.processor = processor
+        self.drop_over_max_length: bool = drop_over_max_length
+        self._strict_drop_count: int = 0
         self.audio_pad_token_id: int | None = None
         if sound_und:
             self.audio_pad_token_id = add_reasoner_audio_special_tokens(
@@ -46,7 +49,7 @@ class FilterSeqLength(Augmentor):
 
     def __call__(self, data_dict: Dict) -> Dict:
         input_ids = data_dict["input_ids"]
-        if input_ids.shape[-1] > self.max_token_length:
+        if input_ids.shape[-1] > self.max_token_length and not self.drop_over_max_length:
             # check if there is pixel values or pixel value videos in the remaining tokens, if not truncate the input ids
             input_ids_extra = input_ids[self.max_token_length :]
             has_video_tokens = sum(input_ids_extra == self.processor.video_token_id) > 0
@@ -58,10 +61,9 @@ class FilterSeqLength(Augmentor):
                 log.debug(
                     f"Truncating input_ids from {input_ids.shape[-1]} to {self.max_token_length} because there are no video, image, or audio tokens in the remaining tokens | __url__: path={data_dict['__url__'].path} root={data_dict['__url__'].root} | __key__: {data_dict['__key__']} | dialog_str: {data_dict.get('dialog_str', '')}"
                 )
-                data_dict["input_ids"] = data_dict["input_ids"][: self.max_token_length]
-                data_dict["token_mask"] = data_dict["token_mask"][: self.max_token_length]
-                data_dict["attention_mask"] = data_dict["attention_mask"][: self.max_token_length]
-                data_dict["labels"] = data_dict["labels"][: self.max_token_length]
+                for key in ("input_ids", "token_mask", "attention_mask", "labels", "mm_token_type_ids"):
+                    if key in data_dict:
+                        data_dict[key] = data_dict[key][: self.max_token_length]
                 return data_dict
 
         if input_ids.shape[-1] > self.max_token_length:
@@ -70,6 +72,14 @@ class FilterSeqLength(Augmentor):
                 msg += f" | pixel_values: {data_dict['pixel_values'].shape}"
             if "pixel_values_videos" in data_dict:
                 msg += f" | pixel_values_videos: {data_dict['pixel_values_videos'].shape}"
-            log.critical(msg, rank0_only=False)
+            if self.drop_over_max_length:
+                self._strict_drop_count += 1
+                if self._strict_drop_count <= 5 or self._strict_drop_count % 1000 == 0:
+                    log.warning(
+                        f"Strictly dropping over-length sample (drop_count={self._strict_drop_count}): {msg}",
+                        rank0_only=False,
+                    )
+            else:
+                log.critical(msg, rank0_only=False)
             return None
         return data_dict

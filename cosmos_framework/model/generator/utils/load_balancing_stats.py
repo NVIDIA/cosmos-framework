@@ -44,7 +44,28 @@ def compute_sample_lbl_stats(
     sample_ids: torch.Tensor,  # [N]
     num_samples: int,
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-    """Aggregate router statistics independently for each sample in a packed sequence."""
+    """Aggregate router statistics independently for each sample in a packed sequence.
+
+    Args:
+        routing_probabilities: ``[N,E]`` per-token router probabilities over experts.
+        expert_indices: ``[N,K]`` experts selected per token.
+        sample_ids: ``[N]`` bucket assignment per token. Every id must lie in
+            ``[0, num_samples]`` inclusive -- ``num_samples`` itself is legal and names the
+            sentinel below.
+        num_samples: how many leading buckets to *retain*, not how many real samples exist.
+            This function allocates ``num_samples + 1`` buckets and returns the first
+            ``num_samples`` of them, so index ``num_samples`` is a sentinel that is always
+            discarded. Callers use it as the drain for tokens that must not reach any statistic
+            (padding); see ``Qwen3VLMoeTextSparseMoeBlock.forward``, which redirects masked rows
+            there. Retained buckets may legitimately come out empty -- a caller that reserves a
+            slot it does not fill -- and ``compute_load_balancing_loss`` drops those via its
+            ``sample_num_tokens > 0`` mask rather than this function pruning them, which
+            would make the returned shapes data-dependent.
+
+    Returns:
+        ``(sample_num_tokens_per_expert [B,E], sample_num_tokens [B,1],
+        sample_router_prob_sum_per_expert [B,E])`` where ``B == num_samples``.
+    """
     assert sample_ids.shape == (routing_probabilities.shape[0],)
     num_experts = routing_probabilities.shape[-1]
     num_buckets = num_samples + 1

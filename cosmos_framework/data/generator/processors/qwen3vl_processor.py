@@ -5,6 +5,8 @@ from typing import Optional
 
 import numpy as np
 import torch
+import transformers
+from packaging.version import Version
 
 from cosmos_framework.data.generator.processors.base import (
     BaseVLMProcessor,
@@ -23,6 +25,7 @@ class Qwen3VLProcessor(
     # leave ``vision_end_id`` unset (None) rather than the legacy ``</img>``,
     # which silently resolved to the UNK token id.
     VISION_END_TOKEN: Optional[str] = None
+    USES_SOURCE_VIDEO_TIMESTAMPS: bool = True
 
     def __init__(
         self,
@@ -39,6 +42,8 @@ class Qwen3VLProcessor(
         self.temporal_patch_size = self.processor.video_processor.temporal_patch_size
         self.merge_size = self.processor.video_processor.merge_size
         self.use_smart_resize = True
+        normalized_name = f"{name} {type(self.processor).__name__}".lower()
+        self.retain_mm_token_type_ids: bool = "qwen3.5" in normalized_name or "qwen3_5" in normalized_name
 
     def apply_chat_template(
         self,
@@ -87,20 +92,43 @@ class Qwen3VLProcessor(
                 "do_sample_frames": False,
                 "video_metadata": video_metadata[0] if num_video == 1 else video_metadata,
             }
+        chat_template_kwargs = (
+            {"processor_kwargs": kwargs} if Version(transformers.__version__) >= Version("5.0") else kwargs
+        )
         inputs = self.processor.apply_chat_template(
             messages,
             tokenize=tokenize,
             add_generation_prompt=add_generation_prompt,
             return_dict=True,
             return_tensors=return_tensors,
-            **kwargs,
+            **chat_template_kwargs,
         )
 
         # Convert batch features into single features
         # By default, the processor returns a batch of features, but we use processor in dataloader, so we need to convert it to single features
-        inputs["input_ids"] = inputs["input_ids"][0]  # [N_token]
-        inputs["attention_mask"] = inputs["attention_mask"][0]  # [N_token]
+        sequence_keys = ["input_ids", "attention_mask"]
+        if getattr(self, "retain_mm_token_type_ids", False):
+            sequence_keys.append("mm_token_type_ids")
+        else:
+            inputs.pop("mm_token_type_ids", None)
+        for key in sequence_keys:
+            if key in inputs:
+                inputs[key] = inputs[key][0]  # [N_token]
+        if getattr(self, "retain_mm_token_type_ids", False) and (
+            "mm_token_type_ids" not in inputs or inputs["mm_token_type_ids"].shape != inputs["input_ids"].shape
+        ):
+            # Rebuild after the HF processor expands media placeholders into tokens.
+            inputs["mm_token_type_ids"] = self.build_mm_token_type_ids(inputs["input_ids"])
         return inputs
+
+    def build_mm_token_type_ids(self, input_ids: torch.Tensor) -> torch.Tensor:
+        """Identify text, image and video tokens in the final expanded sequence."""
+        mm_token_type_ids = torch.zeros_like(input_ids, dtype=torch.long)
+        if self.image_token_id is not None:
+            mm_token_type_ids[input_ids == self.image_token_id] = 1
+        if self.video_token_id is not None:
+            mm_token_type_ids[input_ids == self.video_token_id] = 2
+        return mm_token_type_ids
 
     def add_assistant_tokens_mask(self, tokens):
         """

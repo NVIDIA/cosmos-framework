@@ -166,6 +166,36 @@ class LambdaLinearScheduler(LambdaWarmUpCosineScheduler):
             return f
 
 
+class ConstantScheduler:
+    """Learning rate scheduler that always returns a multiplier of 1 (no-op).
+
+    The optimizer's configured ``lr`` is used unchanged for the entire run.
+
+    Examples:
+        >>> scheduler = ConstantScheduler()
+        >>> for step in range(50000):
+        >>>     lr_multiplier = scheduler(step)  # always 1.0
+    """
+
+    def __init__(self):
+        self.last_f = 1.0
+        self._model = None
+
+    @property
+    def model(self):
+        return self._model
+
+    @model.setter
+    def model(self, model):
+        self._model = model
+
+    def schedule(self, n, **kwargs):
+        return 1.0
+
+    def __call__(self, n, **kwargs):
+        return self.schedule(n, **kwargs)
+
+
 class WSDScheduler:
     """Warmup-Stable-Decay (WSD) learning rate scheduler for LLM pretraining.
 

@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any
 
 import torch
+import torch.nn.functional as F
 from torch import nn
 from torch.distributed import ProcessGroup
 
@@ -83,6 +84,7 @@ from cosmos_framework.data.generator.sequence_packing.runtime import (
     get_gen_seq,
     get_num_real_tokens,
     get_und_seq,
+    has_pad_segment,
     set_gen_seq,
     set_und_seq,
     zeros_like,
@@ -91,6 +93,42 @@ from cosmos_framework.data.generator.sequence_packing.runtime import (
 # Torch optimization settings
 torch._dynamo.config.cache_size_limit = 512
 torch._dynamo.config.accumulated_cache_size_limit = 4096
+
+
+def _pad_packed_tokens_by_sample(
+    tokens: torch.Tensor,  # [N_padded,H,D]
+    lengths: tuple[int, ...],
+    num_real_tokens: int,
+) -> torch.Tensor:  # [B,S_max,H,D]
+    """Restore the batch dimension needed to store packed K/V in the AR cache.
+
+    Attention projects one flat, sample-major token stream, but the cache stores independent
+    ``[B,S,H,D]`` rows.  ``lengths`` are the per-sample token counts of this pathway, taken from
+    the pack's host-side layout (``per_sample_pathway_lengths``), so no device->host sync happens
+    inside the compiled block.  Equal lengths (every AR generation split, and ``B=1``) are a pure
+    view of the real prefix; unequal prompt lengths are copied into a zero-padded tensor whose
+    padding is storage only -- readers must use the real lengths.
+    """
+    if sum(lengths) != num_real_tokens:
+        raise AssertionError(f"Packed token lengths {lengths} sum to {sum(lengths)}, expected {num_real_tokens}")
+    batch_size = len(lengths)
+    if batch_size == 1:
+        # The legacy single-sample path, kept literally: no shape arithmetic on lengths, which are
+        # symbolic under dynamic-shape compilation and may disagree with the (possibly empty)
+        # traced stream (e.g. the und stream of a gen-only frame).
+        return tokens[:num_real_tokens].unsqueeze(0)  # [1,S,H,D]
+    # Traced under torch.compile with symbolic lengths (dynamic shapes): keep to builtins Dynamo
+    # handles on SymInts (no ``max(..., default=)``).
+    max_length = max(lengths) if lengths else 0
+    if all(length == max_length for length in lengths):
+        return tokens[:num_real_tokens].view(batch_size, max_length, *tokens.shape[1:])  # [B,S,H,D]
+    padded = tokens.new_zeros((batch_size, max_length, *tokens.shape[1:]))  # [B,S_max,H,D]
+    offset = 0
+    for sample_idx, length in enumerate(lengths):
+        padded[sample_idx, :length] = tokens[offset : offset + length]  # [S_i,H,D]
+        offset += length
+    return padded
+
 
 # -----------------------------------------------------------------------------
 # Unified MoT (Mixture of Transformers) implementation supporting:
@@ -608,6 +646,54 @@ class PackedAttentionMoT(nn.Module):
             and not getattr(memory_value, "for_cuda_graphs", False)
         )
 
+    def _forward_target_only_no_text(
+        self,
+        pack: SequencePack,
+        attention_mask: AttentionMaskType,
+        packed_position_embeddings: tuple[SequencePack, SequencePack],
+        memory_value: MemoryValue,
+    ) -> tuple[SequencePack, None]:
+        """Project and attend only target GEN rows in optimized TF Pass 2."""
+        gen_hidden = get_gen_seq(pack)  # [N_target,hidden_size]
+        q_gen_in = self.q_proj_moe_gen(gen_hidden)  # [N_target,num_heads*head_dim]
+        k_gen_in = self.k_proj_moe_gen(gen_hidden)  # [N_target,num_kv_heads*head_dim]
+        v_gen_in = self.v_proj_moe_gen(gen_hidden)  # [N_target,num_kv_heads*head_dim]
+        q_gen = q_gen_in.view(-1, self.num_attention_heads, self.head_dim)  # [N_target,num_heads,head_dim]
+        k_gen = k_gen_in.view(-1, self.num_key_value_heads, self.head_dim)  # [N_target,num_kv_heads,head_dim]
+        v_gen = v_gen_in.view(-1, self.num_key_value_heads, self.head_dim)  # [N_target,num_kv_heads,head_dim]
+        if torch.compiler.is_compiling():
+            for head_split in (q_gen, k_gen, v_gen):
+                torch._dynamo.mark_static(head_split, 1)
+        q_gen = self.q_norm_moe_gen(q_gen)  # [N_target,num_heads,head_dim]
+        k_gen = self.k_norm_moe_gen(k_gen)  # [N_target,num_kv_heads,head_dim]
+        packed_cos, packed_sin = packed_position_embeddings
+        q_gen_, k_gen_ = self._apply_rotary_pos_emb(
+            q_gen,
+            k_gen,
+            get_gen_seq(packed_cos),
+            get_gen_seq(packed_sin),
+            unsqueeze_dim=1,
+        )  # q_gen_: [N_target,num_heads,head_dim], k_gen_: [N_target,num_kv_heads,head_dim]
+        empty_q_und = q_gen_.new_empty((0, self.num_attention_heads, self.head_dim))  # [0,num_heads,head_dim]
+        empty_kv_und = k_gen_.new_empty((0, self.num_key_value_heads, self.head_dim))  # [0,num_kv_heads,head_dim]
+        packed_query_states = from_und_gen_splits(empty_q_und, q_gen_, pack)
+        packed_key_states = from_und_gen_splits(empty_kv_und, k_gen_, pack)
+        packed_value_states = from_und_gen_splits(empty_kv_und, v_gen, pack)
+        packed_attn_output, kv_to_store = self.dispatch_attention_fn(
+            packed_query_states,
+            packed_key_states,
+            packed_value_states,
+            attention_mask,
+            natten_metadata=None,
+            memory_value=memory_value,
+            packed_key_states_normalized=None,
+        )
+        if kv_to_store is not None:
+            raise ValueError("Target-only teacher-forcing attention must not return K/V to store.")
+        gen_seq = self.o_proj_moe_gen(get_gen_seq(packed_attn_output))  # [N_target,hidden_size]
+        empty_und = gen_seq.new_empty((0, self.hidden_size))  # [0,hidden_size]
+        return from_und_gen_splits(empty_und, gen_seq, pack), None
+
     def forward(
         self,
         pack: SequencePack,
@@ -635,6 +721,16 @@ class PackedAttentionMoT(nn.Module):
             natten_metadata: Optional NATTEN metadata for neighborhood attention.
             memory_value: Optional read-only tensor container for memory-augmented attention.
         """
+
+        if memory_value is not None and bool(getattr(memory_value, "target_only_no_text", False)):
+            if natten_metadata is not None:
+                raise ValueError("Target-only teacher forcing does not support context-parallel NATTEN metadata.")
+            return self._forward_target_only_no_text(
+                pack,
+                attention_mask,
+                packed_position_embeddings,
+                memory_value,
+            )
 
         q_und_in = self.q_proj(get_und_seq(pack))  # [N_und,num_heads*head_dim]
         q_gen_in = self.q_proj_moe_gen(get_gen_seq(pack))  # [N_gen,num_heads*head_dim]
@@ -728,7 +824,11 @@ class PackedAttentionMoT(nn.Module):
         # Gradient detach is NOT done here; each MemoryState.write_for_layer()
         # decides its own gradient policy (e.g. detach for truncated BPTT,
         # keep gradients for teacher forcing).
-        if memory_value is not None and kv_to_store is None:
+        if (
+            memory_value is not None
+            and kv_to_store is None
+            and not bool(getattr(memory_value, "target_only_no_text", False))
+        ):
             und_len = pack["_num_causal_tokens"]
             gen_len = pack["_num_full_tokens"]
             # When und K-norm is active, AR frame 1+ gen→und cross-attention uses
@@ -736,11 +836,27 @@ class PackedAttentionMoT(nn.Module):
             # of raw k_und_.  Without the norm, k_und_for_gen_ is not defined, so
             # fall back to k_und_.
             k_und_to_store = k_und_for_gen_ if self.k_norm_und_for_gen is not None else k_und_
+            # Undo sample packing before cache writes: batch row i must keep sample i's history
+            # across AR steps.  One construction for every batch size and no device->host sync
+            # inside the compiled block: AR packs give every sample the same generation split, so
+            # the gen rows are a view of the real prefix (B=1 included); prompt lengths come from
+            # the memory state, which read them on the host at frame 0.  Unequal prompts are
+            # zero-padded and ARMemoryState excludes the padding on reads.
+            memory_batch_size = int(getattr(memory_value, "batch_size", 1))
+            if gen_len % memory_batch_size:
+                raise AssertionError(f"{gen_len} generation tokens do not split evenly over {memory_batch_size} rows")
+            gen_lengths = (gen_len // memory_batch_size,) * memory_batch_size
+            if und_len == 0:
+                und_lengths = (0,) * memory_batch_size
+            elif memory_batch_size == 1:
+                und_lengths = (und_len,)
+            else:
+                und_lengths = tuple(memory_value.und_lens)
             kv_to_store = (
-                k_gen_[:gen_len].unsqueeze(0),
-                v_gen[:gen_len].unsqueeze(0),
-                k_und_to_store[:und_len].unsqueeze(0),
-                v_und[:und_len].unsqueeze(0),
+                _pad_packed_tokens_by_sample(k_gen_, gen_lengths, gen_len),  # [B,S_gen,H,D]
+                _pad_packed_tokens_by_sample(v_gen, gen_lengths, gen_len),  # [B,S_gen,H,D]
+                _pad_packed_tokens_by_sample(k_und_to_store, und_lengths, und_len),  # [B,S_und_max,H,D]
+                _pad_packed_tokens_by_sample(v_und, und_lengths, und_len),  # [B,S_und_max,H,D]
             )
 
         # Attention compute is local-head under both sequence-sharded and
@@ -1078,7 +1194,14 @@ def _run_mlp(
     MLP is row-wise, so it takes the padded rows as they come.
     """
     if sample_ids is not None:
-        assert sample_ids.shape == (input.shape[0],)
+        # torch._check rather than a bare assert: this runs inside the compiled decoder layer, and
+        # ``sample_ids`` (``_causal_sample_ids`` / ``_full_only_sample_ids``) and the stream
+        # ``input`` came from are marked unbacked separately by
+        # ``parallelize_unified_mot._mark_pack_unbacked``, so they carry two different symbols and
+        # comparing them has no answer Dynamo can reach. They are one id per token by
+        # construction, which is what this states -- and stating it keeps the check as a runtime
+        # assert rather than dropping it.
+        torch._check(sample_ids.shape[0] == input.shape[0])
     if isinstance(mlp, Qwen3VLMoeTextSparseMoeBlock):
         (
             output_tensor,
@@ -1101,11 +1224,46 @@ def _run_mlp(
 
 
 def _get_local_sample_ids(pack: SequencePack, pathway: str) -> tuple[torch.Tensor, int]:
-    """Return per-token sample IDs and the global sample count for a packed pathway."""
+    """Return per-token sample IDs and the LBL bucket count for a packed pathway.
+
+    The count comes from the pad-segment offsets rather than the plain ``sample_offsets``, and is
+    therefore one *more* than the number of real samples: it counts the padded layout's segments,
+    the ``N`` real ones plus the trailing pad segment. Both are read for their length only -- the
+    offset values describe the unsharded stream and are stale on a context-parallel local shard
+    (which is why :func:`get_causal_seq` refuses them there), but the segment count they
+    encode is the same on every rank.
+
+    That extra bucket is what keeps this compile-friendly. ``compute_sample_lbl_stats`` sizes
+    tensors by this count, and ``sample_offsets.shape[0] - 1`` is 1 for a pack holding a single
+    sample -- a size-1 dim, which PyTorch always specializes to a constant, in turn pinning
+    ``sample_offsets.shape[0]`` itself to 2 and breaking the "never specialize" contract that
+    ``parallelize_unified_mot._mark_pack_unbacked`` marks these tensors under. Reading the
+    pad-segment length instead makes the count ``N + 1``, which is never 0 or 1, so nothing
+    downstream specializes and the block compiles once for every pack shape.
+
+    The extra bucket stays empty and costs nothing: padding tokens carry sample id ``N`` from the
+    packer, but ``Qwen3VLMoeTextSparseMoeBlock.forward`` re-routes every masked row to bucket
+    ``num_samples`` (= ``N + 1``), which ``compute_sample_lbl_stats`` discards as its sentinel. So
+    bucket ``N`` receives no tokens, and ``compute_load_balancing_loss`` drops it through the
+    ``valid_samples = sample_num_tokens > 0`` mask it already applies to zero-token CP shards.
+
+    Asserted rather than silently falling back to ``sample_offsets``: the fallback would restore
+    the specialization above on exactly the packs that took it, and a fallback branch keyed on a
+    pack field is itself a recompile source. Every config that enables sample LBL today packs one
+    causal and one full split per sample, which is what makes the pad segment present (see
+    ``sequence_pack_from_packed_sequence``); a layout that breaks that pairing has to decide what
+    its LBL buckets mean before it can run this loss.
+    """
     assert pathway in ("und", "gen")
     sample_ids_key = "_causal_sample_ids" if pathway == "und" else "_full_only_sample_ids"
     sample_ids = pack[sample_ids_key]  # [N_pathway]
-    num_samples = pack["sample_offsets"].shape[0] - 1
+    if not has_pad_segment(pack):
+        raise ValueError(
+            "Sample LBL needs the pack's pad segment, which only exists when every sample "
+            "contributes both a causal and a full split. This pack carries none, so it cannot be one "
+            "of the two-way layouts sample LBL is defined for."
+        )
+    num_samples = pack["sample_offsets"].shape[0] - 1  # N real samples + 1 pad segment
     return sample_ids, num_samples
 
 
@@ -1193,6 +1351,16 @@ class MoTDecoderLayer(nn.Module):
             self.post_attention_layernorm_moe_gen = layer_types.rms_norm(config.hidden_size, eps=config.rms_norm_eps)
         self.lbl_config: LBLConfig = lbl_config or LBLConfig()
 
+        # Resolve the two sample-LBL predicates here rather than in ``forward``. When sample LBL is
+        # on, ``omni_mot_model`` passes ``self.config.lbl`` straight through, which is an OmegaConf
+        # ``DictConfig`` rather than an ``LBLConfig`` -- and ``forward`` is both compiled and
+        # activation-checkpointed. Dynamo traces into ``DictConfig.__getattr__``, whose internals
+        # raise, and OmegaConf's error formatter then reaches ``re.Pattern.sub`` with a callable
+        # argument, which Dynamo cannot trace ("constant-like method call with non-constant args").
+        # These are plain bools, so the compiled forward branches on a constant instead.
+        self._sample_lbl_und: bool = self.lbl_config.method == "sample" and self.lbl_config.coeff_und is not None
+        self._sample_lbl_gen: bool = self.lbl_config.method == "sample" and self.lbl_config.coeff_gen is not None
+
     def forward(
         self,
         input: SequencePack,
@@ -1217,12 +1385,69 @@ class MoTDecoderLayer(nn.Module):
             natten_metadata: Optional NATTEN metadata for neighborhood attention.
             memory_value: Read-only tensor container from MemoryState.read_for_layer().
             gen_only: When True, skip the understanding pathway (und K/V come from cache).
+                Target-only teacher forcing also slices away control GEN rows
+                before every decoder operation and restores the full layout on return.
         """
+        target_only_no_text = gen_only and bool(getattr(memory_value, "target_only_no_text", False))
+        layer_input = input
+        layer_position_embeddings = packed_position_embeddings
+        target_start = 0
+        target_end = 0
+        if target_only_no_text:
+            if natten_metadata is not None:
+                raise ValueError("Target-only teacher forcing does not support context-parallel NATTEN metadata.")
+            if self._sample_lbl_und or self._sample_lbl_gen:
+                raise ValueError("Target-only teacher forcing does not support sample load-balancing metadata.")
+            if isinstance(self.mlp, Qwen3VLMoeTextSparseMoeBlock) or isinstance(
+                self.mlp_moe_gen, Qwen3VLMoeTextSparseMoeBlock
+            ):
+                raise ValueError("Target-only teacher forcing currently supports dense decoder MLPs only.")
+            target_start = int(getattr(memory_value, "target_gen_start", 0))
+            target_length = int(getattr(memory_value, "target_gen_length", 0))
+            target_end = target_start + target_length
+            full_gen_input = get_gen_seq(input)  # [N_gen,hidden_size]
+            full_gen_real_tokens = int(input["_num_full_tokens"])
+            if full_gen_real_tokens != target_end:
+                raise ValueError(
+                    "Target-only teacher forcing requires the real GEN stream to end at the target range; "
+                    f"range ends at {target_end}, but the pack reports {full_gen_real_tokens} real rows."
+                )
+            if target_start < 0 or target_length <= 0 or target_end > full_gen_input.shape[0]:
+                raise ValueError(
+                    "Target-only teacher forcing received an invalid GEN range "
+                    f"[{target_start}, {target_end}) for {full_gen_input.shape[0]} rows."
+                )
+            target_gen_input = full_gen_input[target_start:target_end]  # [N_target,hidden_size]
+            empty_und_input = target_gen_input.new_empty((0, target_gen_input.shape[-1]))  # [0,hidden_size]
+            layer_input = from_und_gen_splits(empty_und_input, target_gen_input, input)
+            layer_input["_num_causal_tokens"] = 0
+            layer_input["_num_full_tokens"] = target_length
+            if "_causal_sample_ids" in layer_input:
+                layer_input["_causal_sample_ids"] = layer_input["_causal_sample_ids"][:0]  # [0]
+            if "_full_only_sample_ids" in layer_input:
+                layer_input["_full_only_sample_ids"] = layer_input["_full_only_sample_ids"][
+                    target_start:target_end
+                ]  # [N_target]
+
+            full_cos, full_sin = packed_position_embeddings
+            target_cos = get_gen_seq(full_cos)[target_start:target_end]  # [N_target,head_dim]
+            target_sin = get_gen_seq(full_sin)[target_start:target_end]  # [N_target,head_dim]
+            empty_und_cos = target_cos.new_empty((0, target_cos.shape[-1]))  # [0,head_dim]
+            empty_und_sin = target_sin.new_empty((0, target_sin.shape[-1]))  # [0,head_dim]
+            layer_position_embeddings = (
+                from_und_gen_splits(empty_und_cos, target_cos, full_cos),
+                from_und_gen_splits(empty_und_sin, target_sin, full_sin),
+            )
+
         # Pre-Attention layernorm
+        if target_only_no_text:
+            norm_und = get_und_seq(layer_input)  # [0,hidden_size]
+        else:
+            norm_und = self.input_layernorm(get_und_seq(layer_input))  # [N_und,hidden_size]
         pack_norm_out = from_und_gen_splits(
-            self.input_layernorm(get_und_seq(input)),  # [N_und,hidden_size]
-            self.input_layernorm_moe_gen(get_gen_seq(input)),  # [N_gen,hidden_size]
-            input,
+            norm_und,
+            self.input_layernorm_moe_gen(get_gen_seq(layer_input)),  # [N_gen,hidden_size]
+            layer_input,
         )  # [N_und+N_gen,hidden_size]
 
         # Self Attention + Residual
@@ -1245,7 +1470,7 @@ class MoTDecoderLayer(nn.Module):
             # onto a length-0 ``q_und`` / ``k_und`` and crash.  When the
             # outer pack is unpadded (eager AR path), the und cos/sin
             # already have length 0 and this slice is a no-op.
-            _cos, _sin = packed_position_embeddings
+            _cos, _sin = layer_position_embeddings
             _empty_cos_und = get_und_seq(_cos)[:0]
             _empty_sin_und = get_und_seq(_sin)[:0]
             gen_position_embeddings = (
@@ -1264,25 +1489,25 @@ class MoTDecoderLayer(nn.Module):
             # No residual_und here: the gen_only MLP branch below builds its own
             # length-0 und sequence for ``mlp_out_und_seq``; carrying one through
             # this branch is dead code.
-            residual_gen = get_gen_seq(input) + gen_attn_out
+            residual_gen = get_gen_seq(layer_input) + gen_attn_out
         else:
             # STANDARD PATH: Process both und and gen tokens
             pack_attn_out, kv_to_store = self.self_attn(
                 pack_norm_out,
                 attention_mask,
-                packed_position_embeddings,
+                layer_position_embeddings,
                 natten_metadata=natten_metadata,
                 memory_value=memory_value,
             )
-            residual_und = get_und_seq(input) + get_und_seq(pack_attn_out)  # [N_und,hidden_size]
-            residual_gen = get_gen_seq(input) + get_gen_seq(pack_attn_out)  # [N_gen,hidden_size]
+            residual_und = get_und_seq(layer_input) + get_und_seq(pack_attn_out)  # [N_und,hidden_size]
+            residual_gen = get_gen_seq(layer_input) + get_gen_seq(pack_attn_out)  # [N_gen,hidden_size]
 
         # Pre-MLP layernorm and processing
         lbl_metadata_dict: dict[str, LBLMetadata] = dict()
         gen_sample_ids = None
         gen_num_samples = None
-        if self.lbl_config.method == "sample" and self.lbl_config.coeff_gen is not None:
-            gen_sample_ids, gen_num_samples = _get_local_sample_ids(input, "gen")
+        if self._sample_lbl_gen:
+            gen_sample_ids, gen_num_samples = _get_local_sample_ids(layer_input, "gen")
 
         if gen_only:
             # gen_only: skip und, compute gen tokens only
@@ -1324,8 +1549,9 @@ class MoTDecoderLayer(nn.Module):
 
             und_sample_ids = None
             und_num_samples = None
-            if self.lbl_config.method == "sample" and self.lbl_config.coeff_und is not None:
-                und_sample_ids, und_num_samples = _get_local_sample_ids(input, "und")
+            if self._sample_lbl_und:
+                und_sample_ids, und_num_samples = _get_local_sample_ids(layer_input, "und")
+
             mlp_out_und, lbl_metadata_und = _run_mlp(
                 self.mlp,
                 ln_out_und,
@@ -1351,7 +1577,16 @@ class MoTDecoderLayer(nn.Module):
             mlp_out_und_seq = residual_und + mlp_out_und  # [N_und,hidden_size]
             mlp_out_gen_seq = residual_gen + mlp_out_gen  # [N_gen,hidden_size]
 
-        return from_und_gen_splits(mlp_out_und_seq, mlp_out_gen_seq, input), lbl_metadata_dict, kv_to_store
+        layer_output = from_und_gen_splits(mlp_out_und_seq, mlp_out_gen_seq, layer_input)
+        if target_only_no_text:
+            full_gen_len = get_gen_seq(input).shape[0]
+            restored_gen = F.pad(  # [N_gen,hidden_size]
+                get_gen_seq(layer_output),
+                (0, 0, target_start, full_gen_len - target_end),
+            )
+            restored_und = get_und_seq(input).new_zeros(get_und_seq(input).shape)  # [N_und,hidden_size]
+            layer_output = from_und_gen_splits(restored_und, restored_gen, input)
+        return layer_output, lbl_metadata_dict, kv_to_store
 
     def reasoner_forward(
         self,

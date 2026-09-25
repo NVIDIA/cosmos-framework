@@ -8,6 +8,8 @@ Unified implementation for all Attention implementations.
 Frontend APIs
 """
 
+from math import prod
+
 import torch
 from torch import Tensor
 
@@ -26,7 +28,7 @@ from cosmos_framework.model.attention.flash2 import flash2_attention
 from cosmos_framework.model.attention.flash3 import flash3_attention
 from cosmos_framework.model.attention.masks import CausalType
 from cosmos_framework.model.attention.natten import natten_attention, natten_multi_dim_attention
-from cosmos_framework.model.attention.utils.environment import filter_attention_merge_backends
+from cosmos_framework.model.attention.utils.environment import filter_attention_merge_backends, is_torch_compiling
 from cosmos_framework.model.attention.utils.safe_ops import log
 
 # Map backend names to their frontend attention API
@@ -215,6 +217,8 @@ def attention(
         causal_type=causal_type,
         is_varlen=is_varlen,
         deterministic=deterministic,
+        return_lse=return_lse,
+        is_compiling=is_torch_compiling(),
         backend=backend,
         raise_error=False,
     )
@@ -232,6 +236,11 @@ def attention(
         )
 
     assert compatible_backend in BACKEND_MAP
+    # Dynamo rejects repeated Tensor inputs to NATTEN's autograd.Function.
+    # A separate KV view preserves each sequence's offsets without copying their data.
+    if is_torch_compiling() and is_varlen:
+        assert cumulative_seqlen_KV is not None
+        cumulative_seqlen_KV = cumulative_seqlen_KV.view_as(cumulative_seqlen_KV)  # [B+1]
     return BACKEND_MAP[compatible_backend](
         query=query,
         key=key,
@@ -553,7 +562,7 @@ def multi_dimensional_attention_varlen(
         value (Tensor): 4-D value tensor with sequence-packed layout
             (`[1, seqlen_total, heads_kv, head_dim_v]`)
 
-        metadata (dict): Pre-computed varlen metadata from `cosmos_framework.varlen.generate_multi_dim_varlen_parameters`.
+        metadata (dict): Pre-computed varlen metadata from `cosmos_framework.model.attention.varlen.generate_multi_dim_varlen_parameters`.
 
         scale (float | None): Attention scale. Defaults to head_dim ** -0.5.
 
@@ -575,6 +584,164 @@ def multi_dimensional_attention_varlen(
         logsumexp (Tensor): logsumexp tensor (`[1, seqlen_total, heads]`).
             Only returned when return_lse is True.
     """
+    from cosmos_framework.model.attention.varlen import NATTEN_FIXED_MULTI_DIM_FALLBACK_KEY
+
+    if metadata.get(NATTEN_FIXED_MULTI_DIM_FALLBACK_KEY, False):
+        if query.requires_grad or key.requires_grad or value.requires_grad:
+            raise RuntimeError(
+                "Fixed multi-dimensional NATTEN fallback is inference-only and does not support gradients."
+            )
+        if backend is not None and backend != "natten":
+            raise ValueError(
+                f"Fixed multi-dimensional fallback currently only supports 'natten' backend, got {backend=}."
+            )
+        token_layout_list = metadata["token_layout_list"]
+        window_size_list = metadata["window_size_list"]
+        stride_list = metadata["stride_list"]
+        dilation_list = metadata["dilation_list"]
+        is_causal = metadata["is_causal"]
+        if not token_layout_list:
+            raise ValueError("Fixed multi-dimensional fallback requires at least one token layout.")
+
+        token_counts = [prod(layout) for layout in token_layout_list]
+        expected_tokens = sum(token_counts)
+        if query.shape[0] != 1 or key.shape[0] != 1 or value.shape[0] != 1:
+            raise ValueError(
+                "Fixed multi-dimensional fallback expects sequence-packed tensors with batch size 1; "
+                f"got {query.shape[0]=}, {key.shape[0]=}, {value.shape[0]=}."
+            )
+        if query.shape[1] != key.shape[1] or query.shape[1] != value.shape[1]:
+            raise ValueError(
+                "Fixed multi-dimensional fallback requires matching QKV lengths; "
+                f"got query={query.shape[1]}, key={key.shape[1]}, value={value.shape[1]}."
+            )
+        if query.shape[1] < expected_tokens:
+            raise ValueError(
+                "Fixed multi-dimensional fallback token layouts exceed the QKV length; "
+                f"layouts require {expected_tokens} tokens, but QKV contain {query.shape[1]}."
+            )
+        padding_tokens = query.shape[1] - expected_tokens
+        query_real = query[:, :expected_tokens]  # [1,S_real,H,D]
+        key_real = key[:, :expected_tokens]  # [1,S_real,H_KV,D]
+        value_real = value[:, :expected_tokens]  # [1,S_real,H_KV,D_V]
+
+        def _parameter_at(parameter_list: tuple | None, index: int, default: int) -> tuple | int:
+            return default if parameter_list is None else parameter_list[index]
+
+        parameter_sets = [
+            (
+                token_layout,
+                _parameter_at(window_size_list, index, -1),
+                _parameter_at(stride_list, index, 1),
+                _parameter_at(dilation_list, index, 1),
+            )
+            for index, token_layout in enumerate(token_layout_list)
+        ]
+        if all(parameters == parameter_sets[0] for parameters in parameter_sets):
+            token_layout, window_size, stride, dilation = parameter_sets[0]
+            fallback_batch = len(token_layout_list)
+            query_fixed = query_real.reshape(
+                fallback_batch, *token_layout, query.shape[-2], query.shape[-1]
+            )  # [B,*X,H,D]
+            key_fixed = key_real.reshape(fallback_batch, *token_layout, key.shape[-2], key.shape[-1])  # [B,*X,H_KV,D]
+            value_fixed = value_real.reshape(
+                fallback_batch, *token_layout, value.shape[-2], value.shape[-1]
+            )  # [B,*X,H_KV,D_V]
+            result = multi_dimensional_attention(
+                query=query_fixed,
+                key=key_fixed,
+                value=value_fixed,
+                window_size=window_size,
+                stride=stride,
+                dilation=dilation,
+                is_causal=is_causal,
+                scale=scale,
+                backend="natten",
+                return_lse=return_lse,
+                backend_kwargs=backend_kwargs,
+                deterministic=deterministic,
+            )
+            if return_lse:
+                output_fixed, lse_fixed = result
+                output = output_fixed.reshape(
+                    1, expected_tokens, output_fixed.shape[-2], output_fixed.shape[-1]
+                )  # [1,S,H,D_V]
+                lse = lse_fixed.reshape(1, expected_tokens, lse_fixed.shape[-1])  # [1,S,H]
+            else:
+                assert isinstance(result, Tensor)
+                output = result.reshape(1, expected_tokens, result.shape[-2], result.shape[-1])  # [1,S_real,H,D_V]
+        else:
+            outputs: list[Tensor] = []
+            lse_tensors: list[Tensor] = []
+            token_start = 0
+            for token_count, (token_layout, window_size, stride, dilation) in zip(
+                token_counts, parameter_sets, strict=True
+            ):
+                token_end = token_start + token_count
+                query_fixed = query_real[:, token_start:token_end].reshape(
+                    1, *token_layout, query.shape[-2], query.shape[-1]
+                )  # [1,*X,H,D]
+                key_fixed = key_real[:, token_start:token_end].reshape(
+                    1, *token_layout, key.shape[-2], key.shape[-1]
+                )  # [1,*X,H_KV,D]
+                value_fixed = value_real[:, token_start:token_end].reshape(
+                    1, *token_layout, value.shape[-2], value.shape[-1]
+                )  # [1,*X,H_KV,D_V]
+                result = multi_dimensional_attention(
+                    query=query_fixed,
+                    key=key_fixed,
+                    value=value_fixed,
+                    window_size=window_size,
+                    stride=stride,
+                    dilation=dilation,
+                    is_causal=is_causal,
+                    scale=scale,
+                    backend="natten",
+                    return_lse=return_lse,
+                    backend_kwargs=backend_kwargs,
+                    deterministic=deterministic,
+                )
+                if return_lse:
+                    output_fixed, lse_fixed = result
+                    outputs.append(
+                        output_fixed.reshape(1, token_count, output_fixed.shape[-2], output_fixed.shape[-1])
+                    )  # [1,S_i,H,D_V]
+                    lse_tensors.append(lse_fixed.reshape(1, token_count, lse_fixed.shape[-1]))  # [1,S_i,H]
+                else:
+                    assert isinstance(result, Tensor)
+                    outputs.append(result.reshape(1, token_count, result.shape[-2], result.shape[-1]))  # [1,S_i,H,D_V]
+                token_start = token_end
+            output = torch.cat(outputs, dim=1)  # [1,S_real,H,D_V]
+            if return_lse:
+                lse = torch.cat(lse_tensors, dim=1)  # [1,S_real,H]
+
+        if padding_tokens:
+            query_padding = query[:, expected_tokens:]  # [1,S_padding,H,D]
+            key_padding = key[:, expected_tokens:]  # [1,S_padding,H_KV,D]
+            value_padding = value[:, expected_tokens:]  # [1,S_padding,H_KV,D_V]
+            padding_result = attention(
+                query=query_padding,
+                key=key_padding,
+                value=value_padding,
+                scale=scale,
+                backend="natten",
+                return_lse=return_lse,
+                backend_kwargs=backend_kwargs,
+                deterministic=deterministic,
+            )
+            if return_lse:
+                padding_output, padding_lse = padding_result
+                padding_lse = padding_lse.squeeze(-1)  # [1,S_padding,H]
+                output = torch.cat([output, padding_output], dim=1)  # [1,S,H,D_V]
+                lse = torch.cat([lse, padding_lse], dim=1)  # [1,S,H]
+            else:
+                assert isinstance(padding_result, Tensor)
+                output = torch.cat([output, padding_result], dim=1)  # [1,S,H,D_V]
+
+        if return_lse:
+            return output, lse
+        return output
+
     # For now, NATTEN is the only backend that supports varlen multi-dimensional attention
     from cosmos_framework.model.attention.natten import natten_supported
 

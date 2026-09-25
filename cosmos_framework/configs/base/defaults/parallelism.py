@@ -25,9 +25,9 @@ class ParallelismConfig:
     # auto-infers to world_size at runtime via ParallelDims.
     data_parallel_shard_degree: int = -1
 
-    # Number of ranks for replicating the model weights (HSDP outer dim).
-    # data_parallel_replicate_degree x data_parallel_shard_degree must divide
-    # world_size when both are explicitly set.
+    # Number of ranks for replicating the model weights (HSDP outer dim). The
+    # default -1 auto-infers to world_size // data_parallel_shard_degree at
+    # runtime. Explicit degrees are validated strictly against world_size.
     #
     # Pair with data_parallel_shard_degree=1 (and -1 here, which auto-infers to
     # world_size) for a replicate-only run: parameters are not sharded and
@@ -35,7 +35,7 @@ class ParallelismConfig:
     # fully_shard a (dp_replicate, 1) mesh rather than by a separate DDP wrapper.
     # Note that both degrees default such that shard-only is what you get if you
     # set neither.
-    data_parallel_replicate_degree: int = 1
+    data_parallel_replicate_degree: int = -1
 
     # Number of ranks for context parallelism.
     context_parallel_shard_degree: int = 1
@@ -56,6 +56,11 @@ class ParallelismConfig:
 
     # Inference-mode mesh toggle for ParallelDims.
     enable_inference_mode: bool = False
+
+    # Keep per-decoder-layer FSDP shards on CPU between forward calls. This is
+    # inference-only, forces FSDP wrapping even for a singleton shard axis, and
+    # requires a checkpoint load that initializes every parameter.
+    fsdp_cpu_offload: bool = False
 
     # Dtype of the FSDP-sharded "master" parameter copy: what nn.Parameter.data
     # holds on each rank, what the optimizer reads/writes against, and what the

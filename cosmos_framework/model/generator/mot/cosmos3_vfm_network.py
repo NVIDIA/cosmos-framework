@@ -11,9 +11,10 @@ from transformers.configuration_utils import PretrainedConfig
 from transformers.modeling_utils import PreTrainedModel
 
 from cosmos_framework.utils import log
-from cosmos_framework.configs.base.defaults.flex_attention import (
-    AttentionScope,
-    FlexBackendPreference,
+from cosmos_framework.configs.base.defaults.joint_attention import packing_layout
+from cosmos_framework.configs.base.defaults.multiview_attention import (
+    MultiviewAttentionConfig,
+    ResolvedBackend,
 )
 from cosmos_framework.model.generator.mot.action_io_projector import (
     ACTION_IO_PROJECTOR_DOMAIN_AWARE,
@@ -26,16 +27,30 @@ from cosmos_framework.model.generator.mot.context_parallel_utils import (
     get_context_parallel_sharded_sequence,
 )
 from cosmos_framework.model.generator.mot.flex_attention import (
+    CaptionMaskItem,
     FlexBackend,
-    MaskItem,
+    SensorMaskItem,
     build_multiview_block_mask,
-    resolve_flex_backend,
 )
 from cosmos_framework.model.generator.mot.modeling_utils import TimestepEmbedder, has_noisy_tokens
+from cosmos_framework.model.generator.mot.multiview_attention import (
+    reject_mixed_caption_layouts,
+    reject_samples_reading_no_caption,
+    resolve_multiview_backend,
+)
+from cosmos_framework.model.generator.mot.multiview_maskless_attention import (
+    MultiviewMasklessPlan,
+    build_multiview_maskless_plan,
+)
 from cosmos_framework.model.generator.utils.memory import MemoryState
 from cosmos_framework.data.generator.sequence_packing import ModalityData, PackedSequence
 from cosmos_framework.data.generator.sequence_packing.natten import verify_natten_parameter_list
-from cosmos_framework.data.generator.sequence_packing.runtime import get_causal_seq, get_full_only_seq
+from cosmos_framework.data.generator.sequence_packing.runtime import (
+    SequencePack,
+    get_caption_seq_offsets,
+    get_causal_seq,
+    get_full_only_seq,
+)
 
 
 class Cosmos3VFMNetworkConfig(PretrainedConfig):
@@ -65,10 +80,7 @@ class Cosmos3VFMNetworkConfig(PretrainedConfig):
         timestep_scale=0.001,
         predict_text_tokens=False,
         joint_attn_implementation="two_way",
-        use_multiview_flex_attention: bool = False,
-        flex_attention_backend: FlexBackendPreference = "auto",
-        attention_scope: AttentionScope = "all_views",
-        decomposed_temporal_window_seconds: float | None = None,
+        multiview_attention_config: MultiviewAttentionConfig | None = None,
         action_dim=32,
         num_embodiment_domains=32,
         action_io_projector_type: str = ACTION_IO_PROJECTOR_DOMAIN_AWARE,
@@ -81,7 +93,6 @@ class Cosmos3VFMNetworkConfig(PretrainedConfig):
         temporal_compression_factor_sound=1,
         sound_latent_fps: int = 25,
         enable_input_bias: bool = True,
-        control_attends_sensor: bool = False,
         **kwargs,
     ):
         self.vision_gen = vision_gen
@@ -111,11 +122,10 @@ class Cosmos3VFMNetworkConfig(PretrainedConfig):
         self.timestep_scale = timestep_scale
         self.predict_text_tokens = predict_text_tokens
         self.joint_attn_implementation = joint_attn_implementation
-        self.use_multiview_flex_attention = use_multiview_flex_attention
-        self.flex_attention_backend = flex_attention_backend
-        self.attention_scope: AttentionScope = attention_scope
-        self.control_attends_sensor: bool = control_attends_sensor
-        self.decomposed_temporal_window_seconds = decomposed_temporal_window_seconds
+        # One object rather than five fields flattened out of it: the mask reads its scope and
+        # window, the folds read all of it through ``maskless_unavailable_reason``, and a copy of
+        # each on this config could disagree with the other.
+        self.multiview_attention_config = multiview_attention_config or MultiviewAttentionConfig()
         self.temporal_compression_factor_vision = temporal_compression_factor_vision
         self.natten_parameter_list = natten_parameter_list
         self.video_temporal_causal = video_temporal_causal
@@ -183,29 +193,42 @@ class Cosmos3VFMNetwork(PreTrainedModel):
         self.video_temporal_causal = config.video_temporal_causal
         self.pad_for_cuda_graphs = False
 
-        # Which kernels the multiview FlexAttention path runs on, and the mask geometry that
-        # forces. Resolved here rather than per forward because the answer depends on the host
-        # and not on the batch, so a run's log records it once.
+        # Which multiview attention this run takes, and the mask geometry that forces. Resolved
+        # here rather than per forward because the answer depends on the config and the host and
+        # not on the batch, so a run's log records it once and what it trains cannot change
+        # under it mid-run.
         self.flex_backend: FlexBackend | None = None
-        if config.use_multiview_flex_attention:
+        self.multiview_backend: ResolvedBackend | None = None
+        if config.joint_attn_implementation == "multiview":
             # The device is only read for the GPU architecture the FlashAttention-4 block size
             # follows from, which is the same for every device in this process, so the local one
             # stands in for the one the batch will arrive on.
             device = (
                 torch.device("cuda", torch.cuda.current_device()) if torch.cuda.is_available() else torch.device("cpu")
             )
-            self.flex_backend = resolve_flex_backend(device, config.flex_attention_backend)
-            temporal_window = config.decomposed_temporal_window_seconds
-            temporal_window_note = (
-                f", with a {temporal_window}s decomposed temporal window" if temporal_window is not None else ""
+            multiview = config.multiview_attention_config
+            self.multiview_backend, self.flex_backend = resolve_multiview_backend(
+                device,
+                multiview.backend,
+                config=multiview,
             )
-            log.info(
-                f"Multiview FlexAttention is running on the {self.flex_backend.name} backend "
-                f"(flex_attention_backend={config.flex_attention_backend!r}), with a "
-                f"{self.flex_backend.block_size} block mask over a GEN stream padded to "
-                f"{self.flex_backend.full_seq_alignment} tokens. Noisy tokens attend to the "
-                f"noisy tokens of their sample under scope {config.attention_scope!r}{temporal_window_note}."
-            )
+            if self.multiview_backend == "maskless":
+                log.info(
+                    "Multiview attention is the maskless three-pass decomposition "
+                    f"(backend={multiview.backend!r} -> 'maskless') under scope "
+                    f"{multiview.mask.attention_scope!r} with "
+                    f"control_attends_sensor={multiview.mask.control_attends_sensor}. It builds "
+                    "no mask, so it imposes no alignment on the GEN stream: its partitions cover "
+                    "whatever padding the pack has."
+                )
+            else:
+                log.info(
+                    f"Multiview attention is the {self.flex_backend.name} mask "
+                    f"(backend={multiview.backend!r} -> {self.multiview_backend!r}), with a "
+                    f"{self.flex_backend.block_size} block mask over a GEN stream padded to "
+                    f"{self.flex_backend.full_seq_alignment} tokens. Noisy tokens attend to the "
+                    f"noisy tokens of their sample under scope {multiview.mask.attention_scope!r}."
+                )
 
         if config.vision_gen:
             self.latent_patch_size = config.latent_patch_size
@@ -696,18 +719,35 @@ class Cosmos3VFMNetwork(PreTrainedModel):
         )
         return packed_sequence, packed_text_embedding.dtype
 
-    def _embed_packed_timesteps(self, timesteps: torch.Tensor, packed_seq: PackedSequence) -> torch.Tensor:
-        """Embed noised-token timesteps, reusing work when packing proves they share one scalar."""
+    def _embed_packed_timesteps(
+        self,
+        timesteps: torch.Tensor,
+        packed_seq: PackedSequence,
+        target_dtype: torch.dtype,
+    ) -> torch.Tensor:
+        """Embed noised-token timesteps in ``target_dtype``, reusing work when packing proves they
+        share one scalar.
+
+        The dtype is taken here rather than left to the caller because of where the cast falls. The
+        single-timestep branch embeds one row and then materialises a copy of it per noisy token, so
+        a caller casting the result afterwards holds that full-length stream twice over: once in the
+        embedder's float32 and once in the model dtype. Casting the single row first leaves the
+        materialised buffer as the only full-length one. At multiview sizes the float32 copy alone
+        runs to several gigabytes and was setting the peak on its own.
+        """
         if packed_seq.uses_single_timestep and timesteps.numel() > 1:
             timestep = timesteps[:1]  # [1]
             with torch.autocast("cuda", enabled=True, dtype=torch.float32):
                 timestep_embed = self.time_embedder(timestep)  # [1,hidden_size]
-            # Materialize: expand() aliases storage; in-place ops on a float32 no-op .to() would corrupt all rows.
+            timestep_embed = timestep_embed.to(target_dtype)  # [1,hidden_size]
+            # Materialize: expand() aliases storage, and with the cast now behind us there is no
+            # longer even the chance of a dtype conversion downstream to copy it, so an in-place
+            # write by any caller would land on all rows at once.
             return timestep_embed.expand(timesteps.shape[0], -1).contiguous()  # [N_noisy_frames,hidden_size]
 
         # Timesteps are computed in FP32 for numerical stability.
         with torch.autocast("cuda", enabled=True, dtype=torch.float32):
-            return self.time_embedder(timesteps)  # [N_noisy_frames,hidden_size]
+            return self.time_embedder(timesteps).to(target_dtype)  # [N_noisy_frames,hidden_size]
 
     def _encode_vision(
         self,
@@ -804,8 +844,9 @@ class Cosmos3VFMNetwork(PreTrainedModel):
 
         if modality.mse_loss_indexes.numel() > 0:
             timesteps = modality.timesteps.to(dtype=torch.float32) * self.timestep_scale  # [N_noisy_frames]
-            packed_timestep_embeds = self._embed_packed_timesteps(timesteps, packed_seq)  # [N_noisy_frames,hidden_size]
-            packed_timestep_embeds = packed_timestep_embeds.to(target_dtype)  # [N_noisy_frames,hidden_size]
+            packed_timestep_embeds = self._embed_packed_timesteps(
+                timesteps, packed_seq, target_dtype
+            )  # [N_noisy_frames,hidden_size]
 
             packed_tokens = _apply_timestep_embeds_to_noisy_tokens(
                 packed_tokens=packed_tokens,
@@ -955,10 +996,7 @@ class Cosmos3VFMNetwork(PreTrainedModel):
         if has_noisy_actions:
             timesteps_action = action.timesteps * self.timestep_scale  # [N_noisy_frames_action]
             packed_timestep_embeds_action = self._embed_packed_timesteps(
-                timesteps_action, packed_seq
-            )  # [N_noisy_frames_action,hidden_size]
-            packed_timestep_embeds_action = packed_timestep_embeds_action.to(
-                target_dtype
+                timesteps_action, packed_seq, target_dtype
             )  # [N_noisy_frames_action,hidden_size]
 
             packed_tokens_action = _apply_timestep_embeds_to_noisy_tokens(
@@ -1078,10 +1116,7 @@ class Cosmos3VFMNetwork(PreTrainedModel):
         if has_noisy_sound:
             timesteps_sound = sound.timesteps * self.timestep_scale  # [N_noisy_frames_sound]
             packed_timestep_embeds_sound = self._embed_packed_timesteps(
-                timesteps_sound, packed_seq
-            )  # [N_noisy_frames_sound,hidden_size]
-            packed_timestep_embeds_sound = packed_timestep_embeds_sound.to(
-                target_dtype
+                timesteps_sound, packed_seq, target_dtype
             )  # [N_noisy_frames_sound,hidden_size]
 
             packed_tokens_sound = _apply_timestep_embeds_to_noisy_tokens(
@@ -1143,11 +1178,118 @@ class Cosmos3VFMNetwork(PreTrainedModel):
             )  # list of [C,T] per sample
             output_dict.update(preds_sound=preds_sound)
 
+    def _prepare_multiview_attention(
+        self,
+        packed_seq: PackedSequence,
+        input_pack: SequencePack,
+        attention_meta: SplitInfo,
+    ) -> None:
+        """Build multiview attention metadata in a short-lived frame.
+
+        Do not return or store hidden-state tensors from ``input_pack``. Local aliases must
+        expire before the caller replaces the full pack with its CP-local shard; otherwise,
+        they pin the full backing allocations across the transformer stack.
+        """
+        # Non-None exactly when multiview attention is enabled. The resolved backend rather than the
+        # geometry, because what this gates is whether the stream is multiview-aware at all -- both
+        # folds and mask are inside.
+        if self.multiview_backend is None:
+            return
+
+        # No pathway check here: ``multiview_backend`` is non-None exactly when
+        # ``joint_attn_implementation == "multiview"``, so the two cannot disagree.
+        # natten_metadata_list is always None here (only the three-way packer builds it).
+        if self.natten_parameter_list:
+            raise ValueError("Multiview FlexAttention and NATTEN cannot be enabled together.")
+
+        if packed_seq.action is not None or packed_seq.sound is not None:
+            raise ValueError(
+                "Multiview FlexAttention supports vision and LiDAR generation batches, not action or sound."
+            )
+
+        if packed_seq.vision is None and packed_seq.lidar is None:
+            raise ValueError("Multiview FlexAttention needs a vision or LiDAR generation stream.")
+
+        # Before anything is built from the captions -- the mask's items, the folds' plan --
+        # because which layout the pack is in decides how every one of its tokens is keyed
+        # against them, and a pack carrying both kinds has no one answer to give.
+        reject_mixed_caption_layouts(packed_seq.text_caption_view_ids)
+
+        sensor_mask_items = _multiview_sensor_mask_items(
+            packed_seq,
+            lidar_attends_captions=self.config.multiview_attention_config.mask.lidar_attends_captions,
+        )
+        caption_mask_items = _multiview_caption_mask_items(packed_seq)
+        if caption_mask_items is not None and get_caption_seq_offsets(input_pack) is None:
+            # The mask narrows which captions a GEN token reads; the pack's caption offsets
+            # are what keep the captions from attending each other. A pack carrying the
+            # first without the second would train per-view captions that all see one
+            # another, with nothing else to show for it -- so refuse rather than mask half
+            # the layout. Reached only if the pack's metadata was built without its caption
+            # layout (PackedSequence.prepare_sequence_pack_metadata passes it).
+            raise ValueError(
+                "This pack carries per-view captions but its sequence-pack metadata has no "
+                "caption boundaries, so the captions would attend one another. Rebuild the "
+                "metadata via PackedSequence.prepare_sequence_pack_metadata."
+            )
+        reject_samples_reading_no_caption(sensor_mask_items)
+
+        if self.multiview_backend == "maskless":
+            # The maskless folds' plan, asked for only when this run resolved to them.
+            # Decided here rather than in the attention path because the eligibility is a
+            # property of the batch -- its samples, its items, its captions -- which the
+            # packed tensors downstream no longer distinguish. A pack the folds cannot serve
+            # raises rather than taking the mask.
+            attention_meta.multiview_maskless = _multiview_maskless_geometry(
+                packed_seq,
+                sensor_mask_items=sensor_mask_items,
+                caption_mask_items=caption_mask_items,
+                gen_seq_len=int(input_pack["full_only_seq"].shape[0]),
+                attention_scope=self.config.multiview_attention_config.mask.attention_scope,
+                control_attends_sensor=self.config.multiview_attention_config.mask.control_attends_sensor,
+                device=input_pack["full_only_seq"].device,
+            )
+            return
+
+        # Every backend but "maskless" is a mask, and only a mask has a geometry, so the two
+        # are non-None together -- see resolve_multiview_backend.
+        assert self.flex_backend is not None
+        full_only_seq, full_q_offsets = get_full_only_seq(input_pack)  # [N_gen,D], [B+1]
+        causal_seq, causal_offsets = get_causal_seq(input_pack)  # [N_und,D], [B+1]
+        # The mask is built here, outside the compiled and activation-checkpointed
+        # decoder layers, because the build syncs with the host on a data-dependent
+        # group count, which Dynamo cannot trace inside the checkpoint HOP. All
+        # layers then share the one mask, which is all the attention path needs.
+        #
+        # GEN tokens are the queries and [UND | GEN] the keys, so the UND stream's
+        # padded length and per-sample offsets come along: they are what labels a UND
+        # key with its sample, which is the whole of the gen->und rule.
+        attention_meta.flex_block_mask = build_multiview_block_mask(
+            gen_seq_len=full_only_seq.shape[0],
+            full_q_offsets=full_q_offsets,
+            und_seq_len=causal_seq.shape[0],
+            causal_offsets=causal_offsets,
+            attention_scope=self.config.multiview_attention_config.mask.attention_scope,
+            control_attends_sensor=self.config.multiview_attention_config.mask.control_attends_sensor,
+            decomposed_temporal_window_seconds=(
+                self.config.multiview_attention_config.mask.decomposed_temporal_window_seconds
+            ),
+            sensor_mask_items=sensor_mask_items,
+            caption_mask_items=caption_mask_items,
+            block_size=self.flex_backend.block_size,
+            device=full_only_seq.device,
+        )
+        # Carried with the mask because its kernels are only valid for the block size the
+        # mask was built at; two_way_attention hands both to flex_attention, which
+        # checks that agreement before running them.
+        attention_meta.flex_backend = self.flex_backend
+
     def forward(
         self,
         packed_seq: PackedSequence,
         memory: MemoryState | None = None,
         video_temporal_causal: bool | None = None,
+        correct_cp_gradients: bool = False,
     ) -> dict:
         """
         Forward pass for Cosmos3VFMNetwork.
@@ -1160,6 +1302,7 @@ class Cosmos3VFMNetwork(PreTrainedModel):
                 ``OmniMoTModel.build_memory_state()``.
             video_temporal_causal: Per-call attention-mode override; ``None``
                 (default) uses the config-selected ``self.video_temporal_causal``.
+            correct_cp_gradients: Sum CP output gradients before FSDP/DDP averaging.
 
         Returns:
             dict with keys:
@@ -1257,7 +1400,9 @@ class Cosmos3VFMNetwork(PreTrainedModel):
         prepared_sequence_pack_metadata = packed_seq.get_sequence_pack_metadata()
 
         input_pack, attention_meta, natten_metadata_list = build_packed_sequence(
-            self.config.joint_attn_implementation,
+            # The pack shape, not the pathway: "multiview" lays a pack down exactly as "two_way"
+            # does, and the packer knows only the two shapes.
+            packing_layout(self.config.joint_attn_implementation),
             packed_sequence=packed_sequence,
             attn_modes=packed_seq.attn_modes,
             split_lens=packed_seq.split_lens,
@@ -1281,49 +1426,23 @@ class Cosmos3VFMNetwork(PreTrainedModel):
             full_seq_alignment=self.flex_backend.full_seq_alignment if self.flex_backend else 1,
             causal_seq_alignment=self.flex_backend.causal_seq_alignment if self.flex_backend else 1,
             prepared_metadata=prepared_sequence_pack_metadata,
+            text_caption_lens=packed_seq.text_caption_lens,
         )
+        # ``packed_sequence`` is spent here. ``sequence_pack_from_packed_sequence`` splits it with
+        # ``packed_sequence[_causal_indices]`` and ``[_full_indices]``, and advanced indexing
+        # copies, so the pack owns its streams either way; whether ``_pad`` runs afterwards only
+        # decides how many copies deep they sit. Nothing below reads the name again -- the encoders
+        # that filled it in place have all run by now, and the stack runs on ``input_pack``. What
+        # keeps it resident is this frame's reference alone, and this frame does not return until
+        # after the decode, so without the ``del`` a full-sequence ``[N_total,hidden_size]`` buffer
+        # stays live across the entire transformer for nothing.
+        del packed_sequence
 
-        # Non-None exactly when use_multiview_flex_attention is on, per the resolution in __init__.
-        if self.flex_backend is not None:
-            if self.config.joint_attn_implementation != "two_way":
-                raise ValueError("Multiview FlexAttention requires joint_attn_implementation='two_way'.")
-            # natten_metadata_list is always None here (only the three-way packer builds it), so the
-            # conflict to catch is the configured one: NATTEN parameters would be silently ignored.
-            if self.natten_parameter_list:
-                raise ValueError("Multiview FlexAttention and NATTEN cannot be enabled together.")
-            if packed_seq.action is not None or packed_seq.sound is not None:
-                raise ValueError(
-                    "Multiview FlexAttention supports vision and LiDAR generation batches, not action or sound."
-                )
-            if packed_seq.vision is None and packed_seq.lidar is None:
-                raise ValueError("Multiview FlexAttention needs a vision or LiDAR generation stream.")
-            mask_items = _multiview_mask_items(packed_seq)
-            full_only_seq, full_q_offsets = get_full_only_seq(input_pack)
-            causal_seq, causal_offsets = get_causal_seq(input_pack)
-            # The mask is built here, outside the compiled and activation-checkpointed
-            # decoder layers, because the build syncs with the host on a data-dependent
-            # group count, which Dynamo cannot trace inside the checkpoint HOP. All
-            # layers then share the one mask, which is all the attention path needs.
-            #
-            # GEN tokens are the queries and [UND | GEN] the keys, so the UND stream's
-            # padded length and per-sample offsets come along: they are what labels a UND
-            # key with its sample, which is the whole of the gen->und rule.
-            attention_meta.flex_block_mask = build_multiview_block_mask(
-                seq_len=full_only_seq.shape[0],
-                full_q_offsets=full_q_offsets,
-                items_per_sample=mask_items,
-                device=full_only_seq.device,
-                block_size=self.flex_backend.block_size,
-                num_und=causal_seq.shape[0],
-                causal_offsets=causal_offsets,
-                attention_scope=self.config.attention_scope,
-                control_attends_sensor=self.config.control_attends_sensor,
-                decomposed_temporal_window_seconds=self.config.decomposed_temporal_window_seconds,
-            )
-            # Carried with the mask because its kernels are only valid for the block size the
-            # mask was built at; two_way_attention hands both to flex_attention, which
-            # checks that agreement before running them.
-            attention_meta.flex_backend = self.flex_backend
+        # Keep multiview preparation in a separate frame. Mask construction temporarily aliases
+        # the full padded hidden-state streams; those aliases must leave scope before input_pack is
+        # replaced by its cloned CP-local pack, or they will pin the full backing allocations
+        # across the transformer stack.
+        self._prepare_multiview_attention(packed_seq, input_pack, attention_meta)
 
         # ── Multi-control transfer: annotate SplitInfo with per-item ranges ──────
         # This block is entered for any pack carrying control_weights, single-control
@@ -1359,7 +1478,6 @@ class Cosmos3VFMNetwork(PreTrainedModel):
             _annotate_multi_control_ranges(attention_meta, packed_seq, n_gen=n_gen)
 
         input_pack, packed_position_ids = get_context_parallel_sharded_sequence(
-            attn_implementation=self.config.joint_attn_implementation,
             input_pack=input_pack,
             position_ids=packed_seq.position_ids,
             parallel_dims=sequence_shard_parallel_dims,
@@ -1375,6 +1493,7 @@ class Cosmos3VFMNetwork(PreTrainedModel):
         last_hidden_state = get_context_parallel_last_hidden_state(
             packed_outputs=packed_outputs,
             parallel_dims=sequence_shard_parallel_dims,
+            correct_cp_gradients=correct_cp_gradients,
         )  # [N_total,hidden_size]
         output_dict = dict()
 
@@ -1414,6 +1533,20 @@ def _annotate_multi_control_ranges(attention_meta: SplitInfo, packed_seq: Packed
     if not has_multiple_controls:
         return
 
+    # Same hazard as the flex mask above, for the caption boundaries. Setting the ranges routes
+    # the pack to multi_control_two_way_attention, which reads the per-sample causal offsets
+    # (``get_causal_seq``) and never the per-caption ones, so every caption would attend every
+    # other -- exactly what per-view captions exist to prevent, and it would raise nothing and
+    # show no wrong-looking loss. Refuse here, where the routing is decided, rather than plumb
+    # caption boundaries through a path no per-view experiment uses yet.
+    if _multiview_caption_mask_items(packed_seq) is not None:
+        raise ValueError(
+            "This pack carries per-view captions and multiple control streams. Multi-control "
+            "attention keys each caption against the whole causal split, so the captions would "
+            "attend one another. Use a single control stream per sample, or turn off "
+            "separate_view_text_tokenization."
+        )
+
     # For multi-control, each sample must have N controls + 1 noisy item
     # (items 0..N-2 are controls, item N-1 is the noisy target).
     # Only batch_size=1 is supported; assert to catch misuse early.
@@ -1443,7 +1576,252 @@ def _annotate_multi_control_ranges(attention_meta: SplitInfo, packed_seq: Packed
     attention_meta.control_weights = weights
 
 
-def _multiview_mask_items(packed_seq: PackedSequence) -> list[list[MaskItem]]:
+_MASKLESS_REFUSAL = "backend='maskless' is set, but this batch cannot be served by the decomposition: "
+_MASKLESS_REFUSAL_TAIL = (
+    " The decomposition and the attention_scope='decomposed' mask are deliberately different"
+    " attention -- the two sensor passes overlap on the query's own (view, frame) cell -- so"
+    " falling back to the mask would train a different distribution under the same config."
+    " Move the backend off 'maskless' to use the mask, or keep this layout out of the batch."
+)
+
+
+def _multiview_maskless_geometry(
+    packed_seq: PackedSequence,
+    *,
+    sensor_mask_items: Sequence[Sequence[SensorMaskItem]],
+    caption_mask_items: Sequence[Sequence[CaptionMaskItem]] | None,
+    gen_seq_len: int,
+    attention_scope: str,
+    control_attends_sensor: bool,
+    device: torch.device,
+) -> MultiviewMasklessPlan:
+    """The plan :func:`~...multiview_maskless_attention.multiview_maskless_gen_attention` folds this batch by.
+
+    ``None`` only when the config did not ask for the decomposition, which is what keeps the
+    FlexAttention mask. With the flag on, a batch the decomposition cannot serve raises rather
+    than quietly taking the mask instead: the two are deliberately different attention -- the
+    sensor passes overlap on the query's own (view, frame) cell and the mask does not -- so a
+    fallback would train a distribution the config did not ask for, and would do it per pack,
+    so a run could alternate between the two between steps with nothing to show for it but
+    slightly noisier loss. Training and inference are treated alike --
+    the decomposition's backward is correct (see ``multiview_maskless_attention``), so grad
+    mode is not one of the conditions below, and neither is the sample count: samples may differ
+    in views, frames and resolution, and the plan carries the ragged case's index tensors.
+
+    Every condition below is one the decomposition cannot express, not a preference, and each
+    raises with the layout that tripped it. They are all properties of the *batch*: what the
+    config rules out -- its scope, a temporal window -- is settled once by
+    ``maskless_unavailable_reason`` before a batch ever arrives, so none of it is re-checked
+    here. ``control_attends_sensor`` is not among those: the folds express both answers, so it is
+    passed down as a description of the attention rather than tested as a condition.
+
+    * at most one sensor item per stream per sample, beside its control item, and no action or
+      sound. A camera item, a range item, or one of each: a joint sample is served by
+      quantising both streams' capture times onto the camera's frame grid, so the two need not
+      share a frame index. A control item ahead of either is served too -- it joins its
+      target's view groups, and ``control_attends_sensor`` decides whether that group is one
+      varlen segment or two. A *third* item on one stream is an image-editing layout, which
+      this path does not serve.
+    * per-view captions are served, but only alongside the pack's per-caption boundaries: the
+      gen->und pass then keys each *view's* GEN tokens against the caption written for that
+      view -- and a range clip against every caption of its sample, since a sweep fuses the rig
+      rather than covering one of its cameras. A pack carrying the captions without the
+      boundaries is refused, since its captions would attend one another.
+    Context parallelism needs no condition here. CP in this path is Ulysses, not ring:
+    ``context_parallel_attention`` all-to-alls the sharded pack back to the whole sequence over a
+    slice of the heads before calling into attention, and rebuilds its packs with
+    ``is_sharded=False``. Every fold therefore addresses the same global token grid it does at
+    CP=1, off the same global offsets, which is also why the mask is built on global lengths.
+
+    Args:
+        packed_seq: the batch, which is what carries the item and caption structure.
+        sensor_mask_items: the same items the mask is described with, in the same order -- the
+            packer's, its vision items then its LiDAR ones per sample. Taken rather than
+            rebuilt, for the reason ``caption_mask_items`` is: what each item is to its sample's
+            captions (:data:`CaptionAccess`) is one fact about the batch, and the two backends
+            working it out separately is how the folds came to ignore
+            ``lidar_attends_captions`` while the mask honoured it.
+        caption_mask_items: the batch's caption layout, or ``None`` where every sample packs a
+            single caption. Taken rather than recomputed: the caller derives it for the mask
+            already, and the two paths describing the same layout differently is a way for them
+            to disagree.
+        gen_seq_len: the GEN stream's padded length, which the plan's partitions have to cover.
+            The length rather than the pack it comes from: it is all this reads of the packed
+            tensors, and the batch's structure -- its items, its captions -- comes from
+            ``packed_seq``.
+        attention_scope: the attention scope to use for the plan.
+        control_attends_sensor: the mask flag of that name, passed through rather than defaulted
+            because it decides what a control query reaches and the folds express both answers:
+            with it on a same-view group is one pass over itself, with it off that pass splits in
+            two. A batch marking no control item is the same attention either way, and the plan
+            builder refuses one that marks a control item without being told.
+        device: where the plan's index tensors belong, i.e. where the batch will attend.
+
+    Returns:
+        The batch's plan. Asked only of a run that resolved to the folds, so there is no "did
+        not ask" answer to give: a batch they cannot serve raises.
+
+    Raises:
+        ValueError: when this batch cannot be served by the folds.
+    """
+    num_samples = len(packed_seq.sample_lens)
+    vision, lidar = packed_seq.vision, packed_seq.lidar
+    if vision is None and lidar is None:
+        raise ValueError(
+            f"{_MASKLESS_REFUSAL}it carries neither a vision nor a LiDAR generation stream, so "
+            "there is no sensor grid to fold." + _MASKLESS_REFUSAL_TAIL
+        )
+
+    # Items per sample, per stream, in the order the packer lays a sample down: its vision items
+    # then its LiDAR ones. ``None`` means one item of that stream per sample, which is what the
+    # counts record for every batch that is not image-editing or transfer.
+    vision_counts = (packed_seq.num_vision_items_per_sample or [1] * num_samples) if vision else [0] * num_samples
+    lidar_counts = (packed_seq.num_lidar_items_per_sample or [1] * num_samples) if lidar else [0] * num_samples
+    if len(vision_counts) != num_samples or len(lidar_counts) != num_samples:
+        raise ValueError(
+            f"{_MASKLESS_REFUSAL}it records {len(vision_counts)} vision and "
+            f"{len(lidar_counts)} LiDAR item counts for {num_samples} samples." + _MASKLESS_REFUSAL_TAIL
+        )
+    # At most one sensor item per stream per sample beside its control item, and at least one
+    # item overall. A sample owning a camera item beside a range item is the joint case: the two
+    # sensors run at different rates, so the plan quantises both onto the camera's frame grid by
+    # capture time. The *second* item on a stream is that stream's control item, which the folds
+    # serve; a third is an image-editing layout, which this path does not -- ``control_weights``
+    # catches most of those and this catches the rest.
+    if any(v > 2 or r > 2 or v + r < 1 for v, r in zip(vision_counts, lidar_counts)):
+        raise ValueError(
+            f"{_MASKLESS_REFUSAL}its per-sample item counts are vision={list(vision_counts)}, "
+            f"lidar={list(lidar_counts)}. Each sample takes at most one item per stream beside "
+            "its control item, and at least one overall; more is an image-editing layout this "
+            "path does not serve." + _MASKLESS_REFUSAL_TAIL
+        )
+
+    views_per_vision_item = packed_seq.num_views_per_vision_item or []
+    if vision is not None and len(views_per_vision_item) != len(vision.token_shapes):
+        # Camera items need the per-camera VAE metadata to say where one view's frames end.
+        raise ValueError(
+            f"{_MASKLESS_REFUSAL}it records {len(views_per_vision_item)} per-item view counts "
+            f"for {len(vision.token_shapes)} vision items, so there is nothing to say where one "
+            "view's frames end." + _MASKLESS_REFUSAL_TAIL
+        )
+
+    num_views: list[int] = []
+    token_shapes: list[tuple[int, int, int]] = []
+    rates: list[float] = []
+    items_per_sample: list[int] = []
+    is_control: list[bool] = []
+    view_axis: list[int] = []
+    vision_cursor = lidar_cursor = 0
+    for vision_count, lidar_count in zip(vision_counts, lidar_counts):
+        items_per_sample.append(vision_count + lidar_count)
+        # The camera item first, which is the order the packer lays a sample down and the order
+        # the plan anchors on: a joint sample quantises capture time onto its *first* item's
+        # frame grid, so anchoring on the camera keeps its tokens on the frame indices a
+        # camera-only sample would give them.
+        # Within a stream every item but the last conditions the one after it, which is the
+        # convention _multiview_sensor_mask_items marks is_control by and the packer forces
+        # fully clean. Camera items share one view axis and range items another, so a camera's
+        # view 0 and a sweep are never the same view -- the plan's counterpart to the view
+        # offset the mask gives a range clip.
+        for index in range(vision_count):
+            assert vision is not None
+            num_views.append(views_per_vision_item[vision_cursor])
+            token_shapes.append(tuple(vision.token_shapes[vision_cursor]))  # type: ignore[arg-type]
+            rates.append(float(vision.seconds_per_frame[vision_cursor]))
+            is_control.append(index < vision_count - 1)
+            view_axis.append(0)
+            vision_cursor += 1
+        for index in range(lidar_count):
+            assert lidar is not None
+            # A sweep fuses the whole rig rather than covering one of its cameras, so a range
+            # item is one "view" over its own grid -- the same count _multiview_sensor_mask_items
+            # gives it. The folds do not otherwise care which sensor produced the tokens.
+            num_views.append(1)
+            token_shapes.append(tuple(lidar.token_shapes[lidar_cursor]))  # type: ignore[arg-type]
+            rates.append(float(lidar.seconds_per_frame[lidar_cursor]))
+            is_control.append(index < lidar_count - 1)
+            view_axis.append(1)
+            lidar_cursor += 1
+
+    # The divisibility of each latent_t by its view count is checked by SensorMaskItem, which the
+    # caller built for these same items before reaching here, and again by the plan builder.
+    # Captions as (view_id, num_tokens) per sample, the two parallel lists the packer records.
+    # None keeps the gen->und pass on its per-sample form, which is what a single caption wants.
+    # Flattened in the same order this walked the items above -- per sample, its vision items
+    # then its LiDAR ones -- which is the order the packer lays a sample down and the order
+    # _multiview_sensor_mask_items builds in. The count check is what holds the two together.
+    caption_accesses = [item.caption_access for sample_items in sensor_mask_items for item in sample_items]
+    if len(caption_accesses) != len(num_views):
+        raise ValueError(
+            f"{_MASKLESS_REFUSAL}the mask describes {len(caption_accesses)} items for this batch and "
+            f"the folds derive {len(num_views)}; the two read the same pack and must agree." + _MASKLESS_REFUSAL_TAIL
+        )
+    captions = (
+        [
+            list(zip(view_ids, lens))
+            for view_ids, lens in zip(packed_seq.text_caption_view_ids, packed_seq.text_caption_lens)
+        ]
+        if caption_mask_items is not None
+        else None
+    )
+    return build_multiview_maskless_plan(
+        num_views,
+        token_shapes,
+        device=device,
+        seconds_per_frame=rates,
+        items_per_sample=items_per_sample,
+        is_control=is_control,
+        control_attends_sensor=control_attends_sensor,
+        view_axis=view_axis,
+        captions=captions,
+        attention_scope=attention_scope,
+        # The items' own account of themselves, which the mask is built from too. A
+        # "no_captions" item's group takes an empty run of captions under the per-view layout
+        # and leaves the gen->und pass under the sample-level one.
+        caption_access=caption_accesses,
+        # The stream's padded length, which only the built pack knows: the plan's partitions
+        # cover the padding rather than stopping at the batch's real tokens, so that the folds
+        # and the pack share one set of coordinates.
+        padded_gen_tokens=gen_seq_len,
+    )
+
+
+def _multiview_caption_mask_items(packed_seq: PackedSequence) -> list[list[CaptionMaskItem]] | None:
+    """Describe each sample's captions to the multiview mask, or ``None`` for the usual layout.
+
+    ``None`` whenever every sample packs a single caption, which is what a batch without
+    ``separate_view_text_tokenization`` packs: the mask then labels every UND token as a
+    sample-level caption and the gen->und pass stays unrestricted, exactly as before per-view
+    captions existed.
+
+    The two lists the packer records run in step by construction -- ``pack_text_tokens_per_view``
+    appends to both -- so this pairs them positionally and lets the mask builder check the
+    captions against the sample's actual camera views.
+
+    That the pack is in one layout rather than both is settled before this is reached, by
+    :func:`reject_mixed_caption_layouts` in the caller.
+    """
+    caption_lens = packed_seq.text_caption_lens
+    caption_view_ids = packed_seq.text_caption_view_ids
+    if not caption_lens or all(len(sample_lens) <= 1 for sample_lens in caption_lens):
+        return None
+    if len(caption_lens) != len(caption_view_ids):
+        raise ValueError(
+            f"The pack records {len(caption_lens)} samples of caption lengths but "
+            f"{len(caption_view_ids)} of caption view ids."
+        )
+    return [
+        [
+            CaptionMaskItem(view_id=view_id, num_tokens=num_tokens)
+            for view_id, num_tokens in zip(sample_views, sample_lens)
+        ]
+        for sample_views, sample_lens in zip(caption_view_ids, caption_lens)
+    ]
+
+
+def _multiview_sensor_mask_items(
+    packed_seq: PackedSequence, *, lidar_attends_captions: bool = True
+) -> list[list[SensorMaskItem]]:
     """Describe each sample to the multiview mask as its vision items, then its LiDAR items.
 
     The packer lays a sample out in exactly that order, so walking the two streams sample by
@@ -1454,7 +1832,13 @@ def _multiview_mask_items(packed_seq: PackedSequence) -> list[list[MaskItem]]:
     latent with the sweep that happens to share its frame index -- two different instants,
     since the streams run at different latent rates. A batch with no LiDAR, or a LiDAR-only
     batch, leaves every item on view 0, so its mask is bit-identical to the single-stream
-    one.
+    one. That same "not one of the cameras" reading is why LiDAR items are the ones marked
+    ``caption_access="all_captions"``: no caption is written for their view, so they read every
+    camera's instead. ``lidar_attends_captions=False`` makes that ``"no_captions"``, cutting them
+    off from the text entirely: the gen->und pass drops for their tokens, leaving a sweep
+    conditioned on the cameras and its own control stream alone. The camera items keep the
+    default ``"camera"`` either way, which is also what says the per-view captions have to cover
+    their views and not the sweep's.
 
     Control items are marked per stream, not per sample: within each of the two streams,
     every item but the last is a control item conditioning the one that follows it, which
@@ -1503,40 +1887,46 @@ def _multiview_mask_items(packed_seq: PackedSequence) -> list[list[MaskItem]]:
     # Step past the widest camera item so no LiDAR item can land on a camera's view.
     lidar_view_offset = max(views_per_vision_item, default=0)
 
-    items_per_sample: list[list[MaskItem]] = []
+    sensor_mask_items: list[list[SensorMaskItem]] = []
     vision_cursor = 0
     lidar_cursor = 0
     for sample_idx in range(num_samples):
-        sample_items: list[MaskItem] = []
+        sample_items: list[SensorMaskItem] = []
         num_vision, num_lidar = vision_counts[sample_idx], lidar_counts[sample_idx]
         if vision is not None:
             for item_in_stream in range(num_vision):
                 sample_items.append(
-                    MaskItem(
+                    SensorMaskItem(
                         token_shape=vision.token_shapes[vision_cursor],
                         condition_mask=vision.condition_mask[vision_cursor],
                         num_views=views_per_vision_item[vision_cursor],
                         view_offset=0,
                         is_control=item_in_stream < num_vision - 1,
                         seconds_per_frame=vision.seconds_per_frame[vision_cursor],
+                        # One of the rig's cameras, which is what the captions are written for.
+                        caption_access="camera",
                     )
                 )
                 vision_cursor += 1
         if lidar is not None:
             for item_in_stream in range(num_lidar):
                 sample_items.append(
-                    MaskItem(
+                    SensorMaskItem(
                         token_shape=lidar.token_shapes[lidar_cursor],
                         condition_mask=lidar.condition_mask[lidar_cursor],
                         num_views=1,
                         view_offset=lidar_view_offset,
                         is_control=item_in_stream < num_lidar - 1,
                         seconds_per_frame=lidar.seconds_per_frame[lidar_cursor],
+                        # A sweep is not one of the rig's cameras: it fuses the whole rig, so
+                        # every camera's caption describes part of what it sees and it reads all
+                        # of them -- or, cut off from the text, none.
+                        caption_access="all_captions" if lidar_attends_captions else "no_captions",
                     )
                 )
                 lidar_cursor += 1
-        items_per_sample.append(sample_items)
-    return items_per_sample
+        sensor_mask_items.append(sample_items)
+    return sensor_mask_items
 
 
 def _apply_timestep_embeds_to_noisy_tokens(
@@ -1560,7 +1950,7 @@ def _apply_timestep_embeds_to_noisy_tokens(
             shaped like ``(T, ...)`` where trailing dimensions represent the spatial grid.
 
     Returns:
-        The packed tokens with timestep embeddings applied to the noisy tokens.
+        ``packed_tokens``, with timestep embeddings added to the noisy tokens in place.
     """
 
     # Handle variable token shapes by processing each sample's noisy_frame_indexes individually.
@@ -1602,7 +1992,13 @@ def _apply_timestep_embeds_to_noisy_tokens(
         packed_tokens.shape[1],
     )  # [total_noisy_patches,hidden_size]
 
-    return packed_tokens.scatter_add(
+    # In place, and the return value is ``packed_tokens`` itself. Out-of-place would allocate a
+    # second full-length stream while the caller still holds the first, which at multiview sizes
+    # is where the denoising peak sat. Every caller passes a freshly projected stream -- the output
+    # of ``vae2llm``, ``action2llm`` or ``sound2llm``, or of adding a modality embedding to one --
+    # so nothing else aliases it. Safe with autograd too: those projections save their input and
+    # weight for backward, never their output, so overwriting the output invalidates nothing.
+    return packed_tokens.scatter_add_(
         dim=0,
         index=flattened_noisy_frame_indexes,
         src=packed_timestep_embeds,

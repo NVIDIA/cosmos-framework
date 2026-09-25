@@ -29,12 +29,11 @@ import torch
 from torchvision.transforms.v2 import functional as F
 from transformers.feature_extraction_utils import BatchFeature
 from transformers.image_processing_utils_fast import SizeDict
-from transformers.image_utils import ChannelDimension, ImageInput, PILImageResampling
+from transformers.image_utils import ChannelDimension, ImageInput, PILImageResampling, get_image_size
 from transformers.models.auto.tokenization_auto import AutoTokenizer
 from transformers.models.qwen3_vl.video_processing_qwen3_vl import (
     Qwen3VLVideoProcessor,
     Qwen3VLVideoProcessorInitKwargs,
-    get_image_size,
     smart_resize,
 )
 from transformers.models.siglip2.image_processing_siglip2_fast import (
@@ -45,6 +44,12 @@ from transformers.processing_utils import MultiModalData, ProcessingKwargs, Proc
 from transformers.tokenization_utils_base import PreTokenizedInput, TextInput
 from transformers.utils import TensorType, logging
 from transformers.video_utils import VideoInput, group_videos_by_shape, reorder_videos
+
+from cosmos_framework.utils.generator.source_video_timing import (
+    SOURCE_VIDEO_TIMING_KEY,
+    SourceVideoTiming,
+    validate_source_video_timing,
+)
 
 logger = logging.get_logger(__name__)
 
@@ -394,12 +399,23 @@ class NemotronNanoV3BridgeProcessor(ProcessorMixin):
             conversations = [conversation]
 
         per_image_kwargs: list = []
+        source_video_timing: list[SourceVideoTiming | None] = []
+        has_audio = False
         for conv in conversations:
             for message in conv:
                 content = message.get("content")
                 if not isinstance(content, list):
                     continue
                 for item in content:
+                    if item.get("type") == "audio":
+                        has_audio = True
+                    if item.get("type") == "video":
+                        timing = item.get(SOURCE_VIDEO_TIMING_KEY)
+                        if timing is not None:
+                            if not isinstance(item.get("video"), list):
+                                raise ValueError("source_pts requires the already-decoded frame list")
+                            validate_source_video_timing(timing, len(item["video"]))
+                        source_video_timing.append(timing)
                     if item.get("type") != "image":
                         continue
                     img_override = {}
@@ -412,6 +428,13 @@ class NemotronNanoV3BridgeProcessor(ProcessorMixin):
         if any(v is not None for v in per_image_kwargs):
             kwargs["per_image_kwargs"] = per_image_kwargs
 
+        if any(timing is not None for timing in source_video_timing):
+            if has_audio or any(timing is None for timing in source_video_timing):
+                raise ValueError("source_pts requires timing on every video and does not support audio")
+            if "source_video_timing" in kwargs:
+                raise ValueError("Provide source_pts timing in video content only, not twice")
+            kwargs["source_video_timing"] = source_video_timing
+
         return super().apply_chat_template(conversation, **kwargs)
 
     def __call__(
@@ -419,16 +442,26 @@ class NemotronNanoV3BridgeProcessor(ProcessorMixin):
         images: ImageInput = None,
         text: Union[TextInput, PreTokenizedInput, list[TextInput], list[PreTokenizedInput]] = None,
         videos: VideoInput = None,
+        source_video_timing: list[SourceVideoTiming] | None = None,
         **kwargs: Unpack[Qwen3VLProcessorKwargs],
     ) -> BatchFeature:
         """Tokenize text and process images/videos into one [`BatchFeature`]:
         ``input_ids``/``attention_mask``, plus ``pixel_values`` + ``image_grid_thw``
         and/or ``pixel_values_videos`` + ``video_grid_thw`` when vision inputs are given."""
+        if source_video_timing is not None and any(
+            kwargs.get(key) is not None for key in ("audio", "audios", "audio_kwargs")
+        ):
+            raise ValueError("source_pts does not support audio processor inputs")
         output_kwargs = self._merge_kwargs(
             Qwen3VLProcessorKwargs,
             tokenizer_init_kwargs=self.tokenizer.init_kwargs,
             **kwargs,
         )
+        if source_video_timing is not None:
+            if videos is None or output_kwargs["videos_kwargs"].get("do_sample_frames") is not False:
+                raise ValueError("source_pts requires videos with do_sample_frames=False")
+            if self.video_processor.temporal_patch_size != 1:
+                raise ValueError("source_pts requires Edge temporal_patch_size=1")
         if images is not None:
             image_inputs = self.image_processor(images=images, **output_kwargs["images_kwargs"])
             pixel_values = image_inputs.pop("pixel_values")
@@ -470,12 +503,20 @@ class NemotronNanoV3BridgeProcessor(ProcessorMixin):
                 text[i] = text[i].replace("<|placeholder|>", self.image_token)
 
         if video_grid_thw is not None:
+            source_timestamps = None
+            if source_video_timing is not None:
+                if len(source_video_timing) != len(video_grid_thw):
+                    raise ValueError("source_pts timing count must equal the number of processed videos")
+                source_timestamps = [
+                    validate_source_video_timing(timing, int(grid[0]))
+                    for timing, grid in zip(source_video_timing, video_grid_thw, strict=True)  # grid: [3]
+                ]
             merge_length = self.video_processor.merge_size**2
             index = 0
             for i in range(len(text)):
                 while self.video_token in text[i]:
                     metadata = video_metadata[index]
-                    if metadata.fps is None:
+                    if source_timestamps is None and metadata.fps is None:
                         logger.warning_once(
                             "Qwen3VL requires frame timestamps to construct prompts, but the `fps` of the input video "
                             "could not be inferred. Probably `video_metadata` was missing from inputs and you passed "
@@ -484,10 +525,14 @@ class NemotronNanoV3BridgeProcessor(ProcessorMixin):
                         )
                         metadata.fps = 24 if metadata.fps is None else metadata.fps
 
-                    curr_timestamp = self._calculate_timestamps(
-                        metadata.frames_indices,
-                        metadata.fps,
-                        merge_size=1,
+                    curr_timestamp = (
+                        source_timestamps[index]
+                        if source_timestamps is not None
+                        else self._calculate_timestamps(
+                            metadata.frames_indices,
+                            metadata.fps,
+                            merge_size=1,
+                        )
                     )
 
                     video_placeholder = ""
@@ -508,6 +553,9 @@ class NemotronNanoV3BridgeProcessor(ProcessorMixin):
                     index += 1
 
                 text[i] = text[i].replace("<|placeholder|>", self.video_token)
+
+            if source_timestamps is not None and index != len(source_timestamps):
+                raise ValueError("source_pts requires exactly one text placeholder per processed video")
 
         return_tensors = output_kwargs["text_kwargs"].pop("return_tensors", None)
         return_mm_token_type_ids = output_kwargs["text_kwargs"].pop("return_mm_token_type_ids", None)

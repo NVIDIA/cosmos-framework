@@ -5,7 +5,6 @@ import numpy as np
 
 from cosmos_framework.auxiliary.guardrail.blocklist.blocklist import Blocklist
 from cosmos_framework.auxiliary.guardrail.common.core import GuardrailRunner
-from cosmos_framework.auxiliary.guardrail.face_blur_filter.face_blur_filter import RetinaFaceFilter
 from cosmos_framework.auxiliary.guardrail.qwen3guard.qwen3guard import Qwen3Guard
 from cosmos_framework.utils import log
 
@@ -22,6 +21,8 @@ def create_text_guardrail_runner(offload_model_to_cpu: bool = False) -> Guardrai
 
 def create_video_guardrail_runner(offload_model_to_cpu: bool = False) -> GuardrailRunner:
     """Create the video guardrail runner."""
+    from cosmos_framework.auxiliary.guardrail.face_blur_filter.face_blur_filter import RetinaFaceFilter
+
     safety_models = [
         # VideoContentSafetyFilter(offload_model_to_cpu=offload_model_to_cpu)
         # Too many false positives, add back when fixed

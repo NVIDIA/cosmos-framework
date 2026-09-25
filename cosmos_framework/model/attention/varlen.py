@@ -13,6 +13,8 @@ from torch import Tensor
 
 from cosmos_framework.model.attention.utils import is_torch_compiling
 
+NATTEN_FIXED_MULTI_DIM_FALLBACK_KEY = "_imaginaire_natten_fixed_multi_dim_fallback"
+
 
 def generate_varlen_parameters(
     query: Tensor,  # [1,S_total_Q,H,D]
@@ -177,10 +179,32 @@ def generate_multi_dim_varlen_parameters(
         raise RuntimeError("generate_multi_dim_varlen_parameters requires NATTEN.")
 
     if not natten_version_satisfies(NATTEN_VARLEN_MULTI_DIM_VERSION):
-        raise RuntimeError(
-            f"generate_multi_dim_varlen_parameters requires NATTEN >= {NATTEN_VARLEN_MULTI_DIM_VERSION}. "
-            "Please upgrade NATTEN to use varlen/varsized attention features."
-        )
+        if requires_grad:
+            raise RuntimeError(
+                f"generate_multi_dim_varlen_parameters requires NATTEN >= {NATTEN_VARLEN_MULTI_DIM_VERSION} "
+                "when gradients are enabled. Please upgrade NATTEN to use varlen/varsized attention features."
+            )
+        num_layouts = len(token_layout_list)
+        for parameter_name, parameter_list in (
+            ("window_size_list", window_size_list),
+            ("stride_list", stride_list),
+            ("dilation_list", dilation_list),
+        ):
+            if parameter_list is not None and len(parameter_list) != num_layouts:
+                raise ValueError(
+                    f"{parameter_name} must have one entry per token layout; got "
+                    f"{len(parameter_list)} entries for {num_layouts} layouts."
+                )
+        return {
+            NATTEN_FIXED_MULTI_DIM_FALLBACK_KEY: True,
+            "token_layout_list": tuple(tuple(layout) for layout in token_layout_list),
+            "window_size_list": None
+            if window_size_list is None
+            else tuple(tuple(window_size) for window_size in window_size_list),
+            "stride_list": None if stride_list is None else tuple(tuple(stride) for stride in stride_list),
+            "dilation_list": None if dilation_list is None else tuple(tuple(dilation) for dilation in dilation_list),
+            "is_causal": is_causal,
+        }
 
     from natten.varlen import configure_varlen
 

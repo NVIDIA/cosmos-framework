@@ -12,7 +12,7 @@ authors = [
   {name = "NVIDIA Corporation"},
 ]
 description = "Cosmos-Framework: Cosmos3 World Foundation Model (WFM)"
-requires-python = ">=3.10"
+requires-python = ">=3.10,<3.14"
 license = {text = "OpenMDW-1.1"}
 classifiers = [
   "Development Status :: 4 - Beta",
@@ -24,7 +24,10 @@ classifiers = [
 ]
 dependencies = [
   "accelerate",
-  "av",
+  # hr_lr_degradation/codec.py calls VideoFrame.reformat(threads=...), added in PyAV 17;
+  # PyAV 18 (Python >=3.11) matches the imaginaire4 images the shared code is developed on.
+  "av>=17,<18; python_version < '3.11'",
+  "av>=18,<19; python_version >= '3.11'",
   "cattrs",
   "diffusers>=0.39.0",
   "einops",
@@ -346,6 +349,16 @@ required-environments = [
   "sys_platform == 'linux' and platform_machine == 'x86_64'",
   "sys_platform == 'linux' and platform_machine == 'aarch64'",
 ]
+
+# These CUDA groups use CPython 3.13-only wheels (NATTEN, FlashAttention,
+# and Transformer Engine). Restrict the groups rather than the base package.
+[tool.uv.dependency-groups]
+cu128 = {requires-python = "==3.13.*"}
+cu128-train = {requires-python = "==3.13.*"}
+cu130 = {requires-python = "==3.13.*"}
+cu130-train = {requires-python = "==3.13.*"}
+cu130-torch213 = {requires-python = "==3.13.*"}
+cu130-torch213-train = {requires-python = "==3.13.*"}
 
 [tool.uv.sources]
 flash-attn = { index = "cosmos"}

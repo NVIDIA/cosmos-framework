@@ -9,6 +9,7 @@ import io
 import json
 import math
 import pickle
+import random
 from typing import Any
 
 import torch
@@ -21,6 +22,15 @@ from cosmos_framework.utils import log
 from cosmos_framework.data.generator.sequence_packing import SequencePlan
 from cosmos_framework.utils.generator.image_resize import get_max_pixels_resized_size
 from cosmos_framework.utils.generator.torchcodec_video import VideoMetadata, decode_frames_tchw_uint8, probe_video
+
+_ADD_REMOVE_DIRECTIONS: tuple[str, ...] = ("add", "remove")
+_CAPTION_VARIANTS: tuple[str, ...] = ("original", "short", "medium", "long")
+_DEFAULT_CAPTION_VARIANT_PROBABILITIES: dict[str, float] = {
+    "original": 0.1,
+    "short": 0.1,
+    "medium": 0.1,
+    "long": 0.7,
+}
 
 
 def valid_video_frame_count(available_frames: int, max_num_frames: int) -> int:
@@ -102,6 +112,115 @@ def parse_video_editing_conversation(payload: object) -> tuple[str, str, str]:
     """Return the legacy source, target, and instruction tuple."""
     source_key, target_key, _, instruction = parse_video_editing_conversation_with_references(payload)
     return source_key, target_key, instruction
+
+
+def _video_editing_conversation(source_key: str, target_key: str, instruction: str) -> dict[str, object]:
+    """Build one paired-video editing conversation from selected media roles."""
+    return {
+        "content": [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "video", "video": source_key},
+                    {"type": "text", "text": instruction},
+                ],
+            },
+            {
+                "role": "assistant",
+                "content": [{"type": "video", "video": target_key}],
+            },
+        ]
+    }
+
+
+class SelectAddRemoveVideoEditingCaption(Augmentor):
+    """Sample an edit direction and caption variant from an augmentation JSON payload.
+
+    Curated SVOR pairs always run from an object-present source video to an
+    object-removed edited video. Removal examples preserve those roles. Addition
+    examples reverse them so the object-removed video conditions generation of
+    the original object-present video.
+    """
+
+    def __init__(
+        self,
+        input_keys: list | None = None,
+        *,
+        caption_augmentation_key: str = "caption_augmentation",
+        media_key: str = "media",
+        conversation_key: str = "texts",
+        source_video_key: str = "source_video",
+        edited_video_key: str = "edited_video",
+        add_probability: float = 0.5,
+        caption_variant_probabilities: dict[str, float] | None = None,
+        args: dict | None = None,
+    ) -> None:
+        super().__init__(input_keys or [], None, args)
+        if not 0.0 <= add_probability <= 1.0:
+            raise ValueError("add_probability must be in [0, 1]")
+        probabilities = dict(
+            _DEFAULT_CAPTION_VARIANT_PROBABILITIES
+            if caption_variant_probabilities is None
+            else caption_variant_probabilities
+        )
+        if set(probabilities) != set(_CAPTION_VARIANTS):
+            raise ValueError(f"caption_variant_probabilities must contain exactly {_CAPTION_VARIANTS}")
+        normalized_probabilities = {name: float(probabilities[name]) for name in _CAPTION_VARIANTS}
+        if any(not math.isfinite(value) or value < 0.0 for value in normalized_probabilities.values()):
+            raise ValueError("caption variant probabilities must be finite and non-negative")
+        if not math.isclose(sum(normalized_probabilities.values()), 1.0, rel_tol=0.0, abs_tol=1e-6):
+            raise ValueError("caption variant probabilities must sum to 1")
+        if source_video_key == edited_video_key:
+            raise ValueError("source_video_key and edited_video_key must differ")
+
+        self.caption_augmentation_key: str = caption_augmentation_key
+        self.media_key: str = media_key
+        self.conversation_key: str = conversation_key
+        self.source_video_key: str = source_video_key
+        self.edited_video_key: str = edited_video_key
+        self.add_probability: float = add_probability
+        self.caption_variant_probabilities: dict[str, float] = normalized_probabilities
+
+    def __call__(self, data_dict: dict) -> dict | None:
+        sample_key = data_dict.get("__key__", "unknown")
+        try:
+            payload = _decode_json_payload(data_dict[self.caption_augmentation_key])
+            if not isinstance(payload, dict):
+                raise ValueError("caption augmentation must decode to a dictionary")
+            if set(payload) != set(_ADD_REMOVE_DIRECTIONS):
+                raise ValueError(f"caption augmentation must contain exactly {_ADD_REMOVE_DIRECTIONS}")
+            media = data_dict[self.media_key]
+            if not isinstance(media, dict) or any(
+                key not in media for key in (self.source_video_key, self.edited_video_key)
+            ):
+                raise ValueError("media must contain the configured source and edited videos")
+
+            direction = "add" if random.random() < self.add_probability else "remove"
+            variants = payload[direction]
+            if not isinstance(variants, dict) or set(variants) != set(_CAPTION_VARIANTS):
+                raise ValueError(f"caption augmentation {direction!r} must contain exactly {_CAPTION_VARIANTS}")
+            caption_variant = random.choices(
+                _CAPTION_VARIANTS,
+                weights=[self.caption_variant_probabilities[name] for name in _CAPTION_VARIANTS],
+                k=1,
+            )[0]
+            instruction = variants[caption_variant]
+            if not isinstance(instruction, str) or not instruction.strip():
+                raise ValueError(f"caption augmentation {direction}.{caption_variant} must be a non-empty string")
+
+            source_key = self.edited_video_key if direction == "add" else self.source_video_key
+            target_key = self.source_video_key if direction == "add" else self.edited_video_key
+            data_dict[self.conversation_key] = _video_editing_conversation(
+                source_key,
+                target_key,
+                instruction.strip(),
+            )
+            data_dict["selected_edit_direction"] = direction
+            data_dict["selected_caption_variant"] = caption_variant
+            return data_dict
+        except (KeyError, TypeError, ValueError) as error:
+            log.warning(f"Rejecting add/remove caption payload {sample_key}: {error}", rank0_only=False)
+            return None
 
 
 class PairedVideoEditingToTrainingFormat(Augmentor):

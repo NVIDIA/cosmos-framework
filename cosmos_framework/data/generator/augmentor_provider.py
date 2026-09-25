@@ -695,7 +695,7 @@ def get_video_augmentor_v3(
     return augmentors
 
 
-# Use video_basic_augmentor_v3_json_caption instead.
+# Deprecated: sound is trained only with json caption; use video_basic_augmentor_v3_json_caption instead.
 @augmentor_register("video_basic_augmentor_v3_with_audio")
 def get_video_augmentor_v3_with_audio(
     resolution: str,
@@ -1519,3 +1519,27 @@ def image_basic_augmentor_json_caption(
     }
 
     return augmentation
+
+
+def _insert_relative(augmentors: dict, anchor: str, new_key: str, new_value, *, after: bool) -> dict:
+    """Return a copy of ``augmentors`` with ``new_key`` inserted right before or right after ``anchor``."""
+    if anchor not in augmentors:
+        raise KeyError(f"{anchor!r} not found in pipeline; cannot insert {new_key}")
+    out: dict = {}
+    for key, value in augmentors.items():
+        if key == anchor and not after:
+            out[new_key] = new_value
+        out[key] = value
+        if key == anchor and after:
+            out[new_key] = new_value
+    return out
+
+
+def _insert_before(augmentors: dict, anchor_keys: tuple[str, ...], new_key: str, new_value) -> dict:
+    """Return a copy of ``augmentors`` with ``new_key`` inserted before the first present anchor key."""
+    anchor = next((k for k in anchor_keys if k in augmentors), None)
+    if anchor is None:
+        raise KeyError(f"None of {anchor_keys} found in pipeline; cannot insert {new_key}")
+    return _insert_relative(augmentors, anchor, new_key, new_value, after=False)
+
+

@@ -21,6 +21,12 @@ from cosmos_framework.utils import log
 from cosmos_framework.utils.generator.cost_model.budget import IterationTimeBudget, IterationTimeBudgetConfig
 from cosmos_framework.data.generator.drop_sample_contract import DROP_SAMPLE_KEY, DROP_SAMPLE_REASON_KEY
 from cosmos_framework.data.generator.token_mix_control import TokenMixControlConfig, TokenMixController
+from cosmos_framework.data.generator.worker_timing import (
+    _TIMING_KEYS as _TIMING_KEYS,
+)
+from cosmos_framework.data.generator.worker_timing import (
+    _aggregate_worker_timing as _aggregate_worker_timing,
+)
 from cosmos_framework.model.generator.tokenizers.uniae.frame_math import (
     get_uniae_chunk_frames,
     get_uniae_latent_num_frames,
@@ -28,7 +34,6 @@ from cosmos_framework.model.generator.tokenizers.uniae.frame_math import (
 )
 from cosmos_framework.utils.generator.data_utils import read_positive_int_metadata
 
-_TIMING_KEYS = {"_sample_time", "_aug_time", "_pre_aug_time", "_aug_step_times"}
 _BATCH_TIMING_KEYS = {
     "_worker_batch_time",
     "_worker_aug_time",
@@ -165,6 +170,7 @@ def custom_collate_fn(batch: list[dict[str, Any]] | dict[str, Any]) -> dict[str,
         "action_valid_mask",
         "image_size",
         "action_processing_record",
+        "camera_geometry",
         # Like "video": a per-sample list of range clips, which default_collate would try to
         # stack even though the two sensors' clips differ in length and resolution.
         "lidar",
@@ -181,7 +187,7 @@ def custom_collate_fn(batch: list[dict[str, Any]] | dict[str, Any]) -> dict[str,
     # remaining sound tensors mis-aligned with the plans whose ``has_sound``
     # flag was set BEFORE collation, causing ``sequence_packing`` to index
     # past the end of ``x0_tokens_sound``.
-    sparse_data_keys = {"sound"}
+    sparse_data_keys = {"sound", "camera_geometry"}
 
     # Handle the case where the batch is already a dictionary (e.g. column-wise batching)
     if isinstance(batch, dict):
@@ -242,27 +248,6 @@ def custom_collate_fn(batch: list[dict[str, Any]] | dict[str, Any]) -> dict[str,
         return result
     else:
         return default_collate(batch)
-
-
-def _aggregate_worker_timing(samples: list[dict]) -> dict:
-    """Extract per-sample timing keys, aggregate into per-batch scalars."""
-    info: dict[str, float | int] = {}
-    if "_sample_time" in samples[0]:
-        info["_worker_batch_time"] = sum(s.get("_sample_time", 0.0) for s in samples)
-    if "_aug_time" in samples[0]:
-        aug_total = sum(s.get("_aug_time", 0.0) for s in samples)
-        info["_worker_aug_time"] = aug_total
-        if "_worker_batch_time" in info:
-            info["_worker_io_time"] = info["_worker_batch_time"] - aug_total
-    if "_aug_step_times" in samples[0]:
-        agg: dict[str, float] = {}
-        for s in samples:
-            for step_name, t in s.get("_aug_step_times", {}).items():
-                agg[step_name] = agg.get(step_name, 0.0) + t
-        info["_worker_aug_step_times"] = agg
-    worker_info = torch.utils.data.get_worker_info()
-    info["_worker_id"] = worker_info.id if worker_info is not None else 0
-    return info
 
 
 @dataclass

@@ -15,7 +15,7 @@ def make_teacher_forcing_clean_pack(
 ) -> PackedSequence:
     """Return a clean replay pack with generated modalities treated as conditions."""
     clean_pack = copy.deepcopy(packed_seq)
-    for modality in (clean_pack.vision, clean_pack.action, clean_pack.sound):
+    for modality in (clean_pack.vision, clean_pack.lidar, clean_pack.action, clean_pack.sound):
         if modality is not None:
             mark_modality_as_clean_condition(modality)
     return clean_pack

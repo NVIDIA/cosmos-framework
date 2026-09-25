@@ -387,26 +387,16 @@ class ConvLayer3d(nn.Module):
                 idx = feat_idx[0]
                 pad = self.custom_padding[4]
                 cached = feature_cache[idx]
-                tail = x[:, :, -pad:]
-                # The head (pad region) and the tail kept for the next chunk only stay
-                # disjoint while the chunk is at least twice the padding, which is what
-                # makes it safe to read the old cache out before overwriting it.
-                if cached is not None and x.shape[2] >= 2 * pad and cached.shape == tail.shape:
-                    assert cached.dtype == x.dtype, (
-                        f"Feature cache dtype {cached.dtype} does not match activation dtype {x.dtype}"
-                    )
-                    # Updating in place keeps the cache at a static address, which is what
-                    # lets CUDA graphs capture it without the caller cloning the whole
-                    # cache for every chunk.
+                tail = x[:, :, -pad:]  # [B,C,pad,H,W]
+                # Keep the outgoing tail independent from both the head replacement and
+                # the compiled graph's mutable cache input. The caller copies this rebound
+                # entry into its static slot after the encoder returns. Avoiding the in-place
+                # cross-dtype cache write is what fixes the compiled-encoder NaN under the
+                # v12.0.0 (cuDNN 9.23) stack. See logs/dcae_ab_p0_sequential/DEBUG_unstable_count.md.
+                cache = tail.clone().detach()  # [B,C,pad,H,W]
+                if cached is not None:
                     x[:, :, :pad] = cached
-                    cached.copy_(tail.detach())
-                else:
-                    # Overlapping head and tail: the tail has to be snapshotted before the
-                    # head is replaced. This rebinds the slot, which the caller reconciles.
-                    cache = tail.clone().detach()
-                    if cached is not None:
-                        x[:, :, :pad] = cached
-                    feature_cache[idx] = cache
+                feature_cache[idx] = cache
                 feat_idx[0] += 1
             x = self.conv(x)
         else:

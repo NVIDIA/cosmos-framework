@@ -45,9 +45,14 @@ def flash2_supported() -> bool:
 
     flash2_version_str = None
     if not hasattr(flash_attn, "__version__"):
-        from importlib.metadata import version
+        from importlib.metadata import PackageNotFoundError, version
 
-        flash2_version_str = version("flash_attn")
+        try:
+            flash2_version_str = version("flash_attn")
+        except PackageNotFoundError:
+            # FlashAttention 4 also provides this namespace, without the FA2 distribution.
+            log.debug("Flash Attention v2 is not supported because its distribution was not found.")
+            return False
     else:
         flash2_version_str = flash_attn.__version__
 

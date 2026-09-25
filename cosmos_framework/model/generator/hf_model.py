@@ -22,6 +22,7 @@ owns via ``ptd_checkpoint_wrapper`` rather than HF's
 """
 
 import inspect
+from collections.abc import Iterator
 from typing import TYPE_CHECKING
 
 import torch
@@ -31,6 +32,11 @@ from transformers import AutoConfig, AutoModel, AutoModelForCausalLM, AutoModelF
 
 import cosmos_framework.model.generator.reasoner.cosmos3_edge  # noqa: F401  registers cosmos3_edge with transformers Auto classes
 from cosmos_framework.utils import log
+from cosmos_framework.model.generator.reasoner.qwen35_caption import (
+    Qwen35CaptionLoss,
+    configure_qwen35_caption_model,
+    named_parameters_with_qwen35_decay,
+)
 from cosmos_framework.model.generator.utils.safetensors_loader import load_language_model, load_vlm_model
 from cosmos_framework.utils.generator.input_probe import maybe_dump_pre_forward
 from cosmos_framework.utils.generator.parallelism import ParallelDims
@@ -94,6 +100,11 @@ class HFModel(nn.Module):
     ``vfm/models/parallelize_vlm.py``.
     """
 
+    def named_parameters(
+        self, prefix: str = "", recurse: bool = True, remove_duplicate: bool = True
+    ) -> Iterator[tuple[str, nn.Parameter]]:
+        return named_parameters_with_qwen35_decay(self, prefix, recurse, remove_duplicate)
+
     def __init__(
         self,
         model_name_or_path: str,
@@ -103,6 +114,9 @@ class HFModel(nn.Module):
         sound_und: bool = False,
         sound_und_config: "SoundUnderstandingConfig | None" = None,
         configured_model_name_or_path: str | None = None,
+        qwen35_fp32_recurrent_a_log: bool = False,
+        enable_fused_weighted_ce: bool = False,
+        weighted_ce_exponent: float = 0.5,
     ):
         super().__init__()
         self.model_name_or_path = model_name_or_path
@@ -116,6 +130,8 @@ class HFModel(nn.Module):
             raise ValueError("sound_und_config is required when sound_und=True")
         hf_config = AutoConfig.from_pretrained(model_name_or_path, trust_remote_code=trust_remote_code)
         self.hf_config = hf_config
+        if (qwen35_fp32_recurrent_a_log or enable_fused_weighted_ce) and hf_config.model_type != "qwen3_5":
+            raise ValueError("Caption FP32/fused loss options require dense qwen3_5")
 
         # Register cosmos before from_config validates it. Gated so non-cosmos
         # paths don't import cosmos_framework.model.attention.
@@ -230,6 +246,14 @@ class HFModel(nn.Module):
                     n_cast += 1
         if n_cast:
             log.info(f"HFModel: normalized {n_cast} param(s) to {dtype} post-from_config")
+
+        if hf_config.model_type == "qwen3_5":
+            configure_qwen35_caption_model(
+                self.model,
+                fp32_recurrent_a_log=qwen35_fp32_recurrent_a_log,
+                fused_weighted_ce=enable_fused_weighted_ce,
+                weighted_ce_exponent=weighted_ce_exponent,
+            )
 
         # Patch Qwen3-VL / Qwen3-VL-MoE forward for text-only batches (no pixel_values /
         # image_grid_thw). Required to avoid errors when a batch contains only text: every
@@ -476,7 +500,7 @@ class HFModel(nn.Module):
             self._forward_keys_cache = frozenset(declared | self._FORWARD_KWARGS_PASSTHROUGHS)
         return self._forward_keys_cache
 
-    def forward(self, **kwargs) -> torch.Tensor:
+    def forward(self, **kwargs) -> torch.Tensor | Qwen35CaptionLoss:
         """Pass-through forward. Returns logits (B, T, V).
 
         Forwards only the keys in :attr:`_forward_keys` and drops the rest, logging the
@@ -520,4 +544,4 @@ class HFModel(nn.Module):
         filtered["use_cache"] = False
         maybe_dump_pre_forward(self.model, filtered, probe_step, probe_tag)
         out = self.model(**filtered)
-        return out.logits
+        return out if isinstance(out, Qwen35CaptionLoss) else out.logits

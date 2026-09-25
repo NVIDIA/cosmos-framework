@@ -9,7 +9,7 @@ types.  The dispatch is installed on each attention layer by
 ``OmniMoTCausalModel.install_attention_dispatch()``.
 """
 
-from collections.abc import Callable
+from typing import Any
 
 import torch
 from torch.nn.attention.flex_attention import BlockMask
@@ -23,13 +23,16 @@ from cosmos_framework.model.attention.masks import CausalType
 from cosmos_framework.model.generator.mot.attention import SplitInfo, two_way_attention
 from cosmos_framework.model.generator.mot.attention import dispatch_attention as vfm_dispatch_attention
 from cosmos_framework.model.generator.mot.flex_attention import FlexBackend, flex_attention
+from cosmos_framework.model.generator.mot.merge_bridge import MergeAttentionsBridge
+from cosmos_framework.model.generator.mot.multiview_attention import multiview_attention
 from cosmos_framework.model.generator.utils.memory import KVToStore, MemoryValue
 from cosmos_framework.data.generator.sequence_packing.runtime import (
     SequencePack,
+    drop_pad_segment,
     from_mode_splits,
     from_und_gen_splits,
+    get_caption_seq_offsets,
     get_causal_seq,
-    get_causal_seq_padded,
     get_full_only_seq,
     get_gen_seq,
 )
@@ -42,104 +45,60 @@ from cosmos_framework.model.generator.utils.kv_cache import (
     TFReplayCleanMemoryValue,
 )
 
-BridgeFn = Callable[[torch.Tensor, torch.Tensor], tuple[torch.Tensor, torch.Tensor]]
 
+class ConcatenateAttentionsBridge(torch.autograd.Function):
+    """Join two disjoint query ranges without breaking merge storage patching.
 
-class MergeAttentionsBridge(torch.autograd.Function):
-    """Autograd bridge that preserves ``merge_attentions``' data-pointer
-    contract across an arbitrary invertible shape-changing op.
+    The control and target halves of transfer attention have independent local
+    attention components.  Those components can first be LSE-merged at their
+    item length, then concatenated into one full-video component for the shared
+    text merge.  A plain ``torch.cat`` would hide the local merged tensors from
+    the outer merge's ``.data.copy_()`` backward.  This bridge copies the
+    patched full-video output/LSE back into both local halves before their
+    respective merge backward functions run.
 
-    ``merge_attentions`` (NATTEN's ``MergeAttentionsAutogradFn``, see
-    ``data_local/attn_merge.py``) implements its backward via a hack:
-    instead of computing real gradients w.r.t. its inputs, it writes the
-    *merged* output and LSE back into each input tensor's storage via
-    ``.data.copy_()`` and returns the upstream gradient unchanged.  The
-    attention kernel that produced the input then reads the patched
-    storage as its saved ``O`` / ``LSE`` during its own backward, and its
-    standard backward formula then computes the gradient *as if* the
-    kernel had produced the merged output.
-
-    This contract is broken whenever a tensor-allocating op (e.g.
-    ``torch.cat`` to insert a zero-padded frame 0) sits between the
-    attention kernel and ``merge_attentions``: the op's result has its
-    own storage, so ``merge_attentions``' ``.data.copy_()`` patches the
-    op's output storage, not the kernel's saved output → the kernel's
-    backward then runs against unpatched data and produces gradients
-    that don't account for the merge.
-
-    This Function rebridges the contract across any invertible action
-    on the inner ``(out, lse)`` pair.  The action is supplied as two
-    callables:
-
-    - ``forward_fn(out_inner, lse_inner) -> (out_full, lse_full)``: the
-      invertible action applied in the forward pass (e.g. cat-pad a
-      frame, permute, scatter, …).  ``out_full`` / ``lse_full`` are the
-      tensors that ``merge_attentions`` will receive (and later patch in
-      its backward).
-    - ``inverse_fn(out_full, lse_full) -> (out_inner, lse_inner)``: the
-      exact inverse — undoes ``forward_fn`` so that ``inverse_fn ∘
-      forward_fn`` is the identity on the inner tensors.
-
-    For ``forward_fn`` that is linear with constant-fill (cat-pad,
-    permutation, scatter with zeros, …), the *gradient* w.r.t. the
-    inner input is also ``inverse_fn`` applied to the upstream gradient
-    — so the same callable serves both backward roles below.  If your
-    forward is not in this class (e.g. it has trainable parameters, or
-    is non-linear), do not use this bridge.
-
-    Backward:
-      Runs *after* ``merge_attentions``' backward (autograd is
-      reverse-order), at which point the outer tensors have already
-      been patched.  We then apply ``inverse_fn`` to the patched outer
-      data and ``.data.copy_()`` it into the inner kernel's saved
-      output / LSE storage.  When the inner kernel's backward runs
-      next, it reads the patched data and produces gradients relative
-      to the merged attention.  We also return ``inverse_fn`` of the
-      upstream gradient as the gradient w.r.t. the inner inputs.
+    Like :class:`MergeAttentionsBridge`, ``ctx.saved_tensors`` is read exactly
+    once so non-reentrant activation checkpointing can unpack each saved tensor
+    once.
     """
 
     @staticmethod
     def forward(
-        ctx,
-        out_inner: torch.Tensor,
-        lse_inner: torch.Tensor,
-        forward_fn: BridgeFn,
-        inverse_fn: BridgeFn,
+        ctx: Any,
+        control_out: torch.Tensor,  # [1,item_len,H,D]
+        control_lse: torch.Tensor,  # [1,item_len,H]
+        target_out: torch.Tensor,  # [1,item_len,H,D]
+        target_lse: torch.Tensor,  # [1,item_len,H]
     ) -> tuple[torch.Tensor, torch.Tensor]:
-        out_full, lse_full = forward_fn(out_inner, lse_inner)
-        out_full = out_full.contiguous()
-        lse_full = lse_full.contiguous()
-        # Save BOTH the inner kernel outputs (target of the .data.copy_ back)
-        # AND the outer tensors (source of the patched data, as patched
-        # by merge_attentions.backward before our backward runs).
-        ctx.save_for_backward(out_inner, lse_inner, out_full, lse_full)
-        ctx.inverse_fn = inverse_fn
-        return out_full, lse_full
+        full_out = torch.cat([control_out, target_out], dim=1).contiguous()  # [1,2*item_len,H,D]
+        full_lse = torch.cat([control_lse, target_lse], dim=1).contiguous()  # [1,2*item_len,H]
+        ctx.save_for_backward(control_out, control_lse, target_out, target_lse, full_out, full_lse)
+        return full_out, full_lse
 
     @staticmethod
     def backward(
-        ctx,
-        grad_out_full: torch.Tensor,
-        grad_lse_full: torch.Tensor,
-    ) -> tuple[torch.Tensor, torch.Tensor, None, None]:
-        out_inner, lse_inner, out_full, lse_full = ctx.saved_tensors
-        inverse_fn: BridgeFn = ctx.inverse_fn
-        # By now merge_attentions.backward has already run and patched
-        # out_full.data / lse_full.data with the merged output / LSE.
-        # Apply inverse_fn to recover the data corresponding to the inner
-        # attention's range and write it into the inner kernel's saved
-        # output / LSE so the kernel's backward (which runs after ours)
-        # reads the merged data.
-        patched_out_inner, patched_lse_inner = inverse_fn(out_full, lse_full)
-        out_inner.data.copy_(patched_out_inner.data)
-        lse_inner.data.copy_(patched_lse_inner.data)
-        # For linear-with-constant-fill forward_fn (cat-pad, permute,
-        # scatter-with-zeros, …), the backward gradient operator equals
-        # inverse_fn.  (Constant rows added by forward_fn are not
-        # functions of the inner inputs, so their gradient does not flow
-        # back; the remaining rows pass through.)
-        grad_out_inner, grad_lse_inner = inverse_fn(grad_out_full, grad_lse_full)
-        return grad_out_inner, grad_lse_inner, None, None
+        ctx: Any,
+        grad_full_out: torch.Tensor,  # [1,2*item_len,H,D]
+        grad_full_lse: torch.Tensor,  # [1,2*item_len,H]
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+        saved = ctx.saved_tensors
+        control_out, control_lse, target_out, target_lse, full_out, full_lse = saved
+        item_len = control_out.shape[1]
+
+        # The downstream merge patched full_out/full_lse with its globally
+        # merged values.  Restore each slice into the corresponding item-local
+        # merge output before that merge's backward patches its kernel outputs.
+        control_out.data.copy_(full_out.data[:, :item_len])
+        control_lse.data.copy_(full_lse.data[:, :item_len])
+        target_out.data.copy_(full_out.data[:, item_len:])
+        target_lse.data.copy_(full_lse.data[:, item_len:])
+
+        return (
+            grad_full_out[:, :item_len],  # [1,item_len,H,D]
+            grad_full_lse[:, :item_len],  # [1,item_len,H]
+            grad_full_out[:, item_len:],  # [1,item_len,H,D]
+            grad_full_lse[:, item_len:],  # [1,item_len,H]
+        )
 
 
 def _bridge_lse_with_neg_inf_mask(
@@ -328,7 +287,10 @@ def three_way_attention_no_memory_ac_safe(
 
     if attention_meta is not None and attention_meta.null_action_supertokens:
         full_v = full_v.clone()  # [N_gen,H_kv,D]
-        starts = full_q_offsets[:-1].long()  # [B]
+        # Real-sample offsets: full_q_offsets carries the padding as a trailing segment, whose
+        # start is not a sample's. Stepping num_action_tokens_per_supertoken forward from it can
+        # run past the end of full_v, since the pad segment is only guaranteed non-empty.
+        starts = drop_pad_segment(packed_query_states, full_q_offsets)[:-1].long()  # [B]
         null_positions = (
             starts.unsqueeze(1) + torch.arange(attention_meta.num_action_tokens_per_supertoken, device=starts.device)
         ).reshape(-1)  # [B*N_null]
@@ -413,13 +375,22 @@ def dispatch_attention_no_memory_ac_safe(
             packed_key_states_normalized=packed_key_states_normalized,
         )
     if isinstance(attention_mask, SplitInfo):
+        # A mask means the multiview pathway, whose UND half is shared with the maskless folds
+        # and so lives with them rather than in ``two_way_attention``.
+        if attention_mask.flex_block_mask is not None:
+            return multiview_attention(
+                packed_query_states,
+                packed_key_states,
+                packed_value_states,
+                flex_block_mask=attention_mask.flex_block_mask,
+                flex_backend=attention_mask.flex_backend,
+                packed_key_states_normalized=packed_key_states_normalized,
+            )
         return two_way_attention(
             packed_query_states,
             packed_key_states,
             packed_value_states,
             packed_key_states_normalized=packed_key_states_normalized,
-            flex_block_mask=attention_mask.flex_block_mask,
-            flex_backend=attention_mask.flex_backend,
         )
     output, _ = vfm_dispatch_attention(
         packed_query_states,
@@ -450,10 +421,19 @@ def two_way_flex_attention_with_memory(
     packed_key_normalized = (
         packed_key_states_normalized if packed_key_states_normalized is not None else packed_key_states
     )
-    causal_q, causal_q_offsets, max_causal_len = get_causal_seq_padded(packed_query_states)  # [N_und,H,D], [B+1 or B+2]
-    causal_k, causal_k_offsets, _ = get_causal_seq_padded(packed_key_states)  # [N_und,H,D], [B+1 or B+2]
-    causal_v, _, _ = get_causal_seq_padded(packed_value_states)  # [N_und,H,D], [B+1 or B+2]
+    causal_q, causal_q_offsets = get_causal_seq(packed_query_states)  # [N_und,H,D], [B+1 or B+2]
+    causal_k, causal_k_offsets = get_causal_seq(packed_key_states)  # [N_und,H,D], [B+1 or B+2]
+    causal_v, _ = get_causal_seq(packed_value_states)  # [N_und,H,D], [B+1 or B+2]
+    max_causal_len = packed_query_states["max_causal_len"]
     full_q, _ = get_full_only_seq(packed_query_states)  # [N_gen,H,D], [B+1]
+
+    # TF/AR memory changes GEN visibility, but captions remain independent causal
+    # documents. Reuse the same caption-offset tensor for Q/K to preserve the
+    # base attention path's DontCare identity contract and trailing pad segment.
+    caption_offsets = get_caption_seq_offsets(packed_query_states)
+    if caption_offsets is not None:
+        causal_q_offsets, max_causal_len = caption_offsets  # [N_captions+1], int
+        causal_k_offsets = causal_q_offsets  # [N_captions+1]
 
     use_dont_care_mask = causal_q_offsets is causal_k_offsets
     causal_res = attention(
@@ -888,6 +868,88 @@ def _pad_transfer_item_component(
     return MergeAttentionsBridge.apply(out, lse, _forward, _inverse)
 
 
+def _reshape_transfer_item_component(
+    out: torch.Tensor,  # [1,item_len,H,D] or a reshape-compatible layout
+    lse: torch.Tensor,  # [1,item_len,H] or a reshape-compatible layout
+    *,
+    item_len: int,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Flatten an item component while preserving merge storage patching."""
+    num_heads = out.shape[-2]
+    head_dim = out.shape[-1]
+    expected_out_elements = item_len * num_heads * head_dim
+    expected_lse_elements = item_len * num_heads
+    if out.numel() != expected_out_elements or lse.numel() != expected_lse_elements:
+        raise ValueError(
+            "Transfer attention component has an incompatible shape: "
+            f"out={tuple(out.shape)}, lse={tuple(lse.shape)}, item_len={item_len}."
+        )
+    original_out_shape = out.shape
+    original_lse_shape = lse.shape
+
+    def _forward(
+        item_out: torch.Tensor,  # reshape-compatible with [1,item_len,H,D]
+        item_lse: torch.Tensor,  # reshape-compatible with [1,item_len,H]
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        return (
+            item_out.reshape(1, item_len, num_heads, head_dim),  # [1,item_len,H,D]
+            item_lse.reshape(1, item_len, num_heads),  # [1,item_len,H]
+        )
+
+    def _inverse(
+        flat_out: torch.Tensor,  # [1,item_len,H,D]
+        flat_lse: torch.Tensor,  # [1,item_len,H]
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        return (
+            flat_out.reshape(original_out_shape),  # original out layout
+            flat_lse.reshape(original_lse_shape),  # original LSE layout
+        )
+
+    return MergeAttentionsBridge.apply(out, lse, _forward, _inverse)
+
+
+def _merge_transfer_item_components(
+    components: list[tuple[torch.Tensor, torch.Tensor]],
+    *,
+    item_len: int,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """LSE-merge all receptive-field components at one item's length."""
+    if not components:
+        raise ValueError("Transfer attention needs at least one component per item.")
+
+    flat_components = [_reshape_transfer_item_component(out, lse, item_len=item_len) for out, lse in components]
+    if len(flat_components) == 1:
+        return flat_components[0]
+    return merge_attentions_ac_safe(
+        outputs=[out for out, _lse in flat_components],
+        lse_tensors=[lse for _out, lse in flat_components],
+    )
+
+
+def _merge_and_concatenate_transfer_components(
+    control_components: list[tuple[torch.Tensor, torch.Tensor]],
+    target_components: list[tuple[torch.Tensor, torch.Tensor]],
+    *,
+    item_len: int,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Merge each transfer item locally, then concatenate the two query ranges."""
+    control_out, control_lse = _merge_transfer_item_components(  # [1,item_len,H,D], [1,item_len,H]
+        control_components,
+        item_len=item_len,
+    )
+    target_out, target_lse = _merge_transfer_item_components(  # [1,item_len,H,D], [1,item_len,H]
+        target_components,
+        item_len=item_len,
+    )
+    if control_out.shape != target_out.shape or control_lse.shape != target_lse.shape:
+        raise ValueError(
+            "Aligned transfer items must produce matching attention shapes; "
+            f"control={tuple(control_out.shape)}/{tuple(control_lse.shape)}, "
+            f"target={tuple(target_out.shape)}/{tuple(target_lse.shape)}."
+        )
+    return ConcatenateAttentionsBridge.apply(control_out, control_lse, target_out, target_lse)
+
+
 def _current_chunk_attention_components(
     query: torch.Tensor,  # [1,T,S,H,D]
     key: torch.Tensor,  # [1,T,S,H_kv,D]
@@ -1022,17 +1084,32 @@ def _inclusive_chunk_causal_attention_components(
     value: torch.Tensor,  # [1,T,S,H_kv,D]
     frames_per_chunk: int,
 ) -> list[tuple[torch.Tensor, torch.Tensor]]:
-    """Attend each query chunk to aligned K/V chunks up to and including itself."""
+    """Attend each query chunk to aligned K/V chunks up to and including itself.
+
+    The framewise case is exactly temporal-causal, spatially dense attention,
+    so it can run as one NATTEN kernel.  Larger chunks retain the split
+    current-chunk and strictly-past formulation because their partition starts
+    with a singleton frame followed by fixed-size body chunks.
+    """
     if frames_per_chunk < 1:
         raise ValueError(f"frames_per_chunk must be >= 1, got {frames_per_chunk}.")
+    if frames_per_chunk == 1:
+        inclusive_out, inclusive_lse = multi_dimensional_attention(  # [1,T,S,H,D], [1,T,S,H]
+            query,
+            key,
+            value,
+            is_causal=(True, False),
+            return_lse=True,
+            backend="natten",
+        )
+        return [(inclusive_out, inclusive_lse)]
+
     _, num_frames, spatial_tokens, _num_heads, _head_dim = query.shape
     num_kv_heads = key.shape[-2]
     head_dim = key.shape[-1]
     flat_key = key.reshape(1, num_frames * spatial_tokens, num_kv_heads, head_dim)  # [1,T*S,H_kv,D]
     flat_value = value.reshape(1, num_frames * spatial_tokens, num_kv_heads, head_dim)  # [1,T*S,H_kv,D]
-    if frames_per_chunk > 1:
-        return _tf_gen_attention_chunkwise(query, key, value, flat_key, flat_value, frames_per_chunk)
-    return _tf_gen_attention_framewise(query, key, value, flat_key, flat_value)
+    return _tf_gen_attention_chunkwise(query, key, value, flat_key, flat_value, frames_per_chunk)
 
 
 def _control_visibility_attention_components(
@@ -1095,9 +1172,14 @@ def teacher_forcing_transfer_attention(
     *,
     target_shape: tuple[int, int, int],
 ) -> list[tuple[torch.Tensor, torch.Tensor]]:
-    """Build control-conditioned temporal-causal TF components for aligned transfer items.
+    """Build one control-conditioned temporal-causal TF component for aligned items.
 
-    Each returned pair is shaped ``[1,2*T*S,H,D]`` and ``[1,2*T*S,H]``.
+    The returned list contains one pair shaped ``[1,2*T*S,H,D]`` and
+    ``[1,2*T*S,H]``.  Control and target receptive-field components are
+    independently LSE-merged at ``T*S`` length, then concatenated once for the
+    shared text merge.  Keeping intermediate components item-local avoids
+    materializing every component at the full two-item stream length.
+
     ``control_visibility`` applies identically to control self-attention and
     target-to-control attention: ``global`` exposes the full control clip,
     ``causal`` exposes all control chunks through the current chunk, and
@@ -1130,18 +1212,6 @@ def teacher_forcing_transfer_attention(
         memory_value.frames_per_chunk,
     )
 
-    components: list[tuple[torch.Tensor, torch.Tensor]] = []
-    for control_out, control_lse in control_components:
-        components.append(
-            _pad_transfer_item_component(
-                control_out,
-                control_lse,
-                item_idx=0,
-                item_len=item_len,
-                total_len=total_len,
-            )
-        )
-
     target_q_2d = target_q.reshape(1, num_frames, spatial_tokens, num_heads, head_dim)  # [1,T,S,H,D]
     target_k_2d = target_k.reshape(  # [1,T,S,H_kv,D]
         1, num_frames, spatial_tokens, num_kv_heads, head_dim
@@ -1169,16 +1239,7 @@ def teacher_forcing_transfer_attention(
             clean_target_v_2d,
             frames_per_chunk=memory_value.frames_per_chunk,
         )
-        for control_rgb_history_out, control_rgb_history_lse in control_rgb_history_components:
-            components.append(
-                _pad_transfer_item_component(
-                    control_rgb_history_out,
-                    control_rgb_history_lse,
-                    item_idx=0,
-                    item_len=item_len,
-                    total_len=total_len,
-                )
-            )
+        control_components.extend(control_rgb_history_components)
 
     if isinstance(memory_value, TFNoisyMemoryValue):
         target_components = teacher_forcing_gen_attention(
@@ -1197,17 +1258,6 @@ def teacher_forcing_transfer_attention(
             target_v_2d,
             policy,
             memory_value.frames_per_chunk,
-        )
-
-    for target_out, target_lse in target_components:
-        components.append(
-            _pad_transfer_item_component(
-                target_out,
-                target_lse,
-                item_idx=1,
-                item_len=item_len,
-                total_len=total_len,
-            )
         )
 
     # Use Pass-1 clean control K/V during the noisy pass so target representations
@@ -1232,17 +1282,124 @@ def teacher_forcing_transfer_attention(
         memory_value.frames_per_chunk,
     )
 
-    for target_control_out, target_control_lse in target_control_components:
-        components.append(
-            _pad_transfer_item_component(
-                target_control_out,
-                target_control_lse,
-                item_idx=1,
-                item_len=item_len,
-                total_len=total_len,
+    target_components.extend(target_control_components)
+    transfer_out, transfer_lse = _merge_and_concatenate_transfer_components(  # [1,2*T*S,H,D], [1,2*T*S,H]
+        control_components,
+        target_components,
+        item_len=item_len,
+    )
+    return [(transfer_out, transfer_lse)]
+
+
+def teacher_forcing_target_only_attention(
+    target_q: torch.Tensor,  # [T*S,H,D]
+    target_k: torch.Tensor,  # [T*S,H_kv,D]
+    target_v: torch.Tensor,  # [T*S,H_kv,D]
+    memory_value: TFNoisyMemoryValue,
+) -> tuple[torch.Tensor, torch.Tensor]:  # ([T*S,H*D], [0,H*D])
+    """Run noisy replay attention for target rows using attached Pass-1 context.
+
+    The selected transfer recipe has one logical sample with aligned control
+    and target items. Pass 2 does not need live control or text hidden states:
+    its target queries read attached clean control, target-history, and text
+    K/V captured in Pass 1. A single-item target layout omits the control
+    component and otherwise follows the same path.
+    """
+    if not memory_value.target_only_no_text:
+        raise ValueError("teacher_forcing_target_only_attention requires target_only_no_text=True.")
+    if memory_value.cached_clean_und_k is None or memory_value.cached_clean_und_v is None:
+        raise ValueError("Target-only teacher forcing requires attached clean text K/V from Pass 1.")
+    if memory_value.num_action_tokens_per_supertoken != 0:
+        raise ValueError("Target-only teacher forcing currently supports vision-only GEN rows.")
+
+    num_frames, height, width = memory_value.vision_token_shapes[-1]
+    spatial_tokens = height * width
+    target_len = num_frames * spatial_tokens
+    if target_len != memory_value.target_gen_length or target_q.shape[0] != target_len:
+        raise ValueError(
+            "Target-only teacher forcing received inconsistent target lengths: "
+            f"shape implies {target_len}, memory carries {memory_value.target_gen_length}, "
+            f"and live Q has {target_q.shape[0]} rows."
+        )
+    target_start = memory_value.target_gen_start
+    target_end = target_start + target_len
+    if memory_value.cached_clean_gen_k.shape[1] < target_end:
+        raise ValueError(
+            f"Clean GEN K/V has {memory_value.cached_clean_gen_k.shape[1]} rows, "
+            f"but target range [{target_start}, {target_end}) is required."
+        )
+
+    num_heads = target_q.shape[-2]
+    num_kv_heads = target_k.shape[-2]
+    head_dim = target_q.shape[-1]
+    target_q_2d = target_q.reshape(1, num_frames, spatial_tokens, num_heads, head_dim)  # [1,T,S,H,D]
+    target_k_2d = target_k.reshape(  # [1,T,S,H_kv,D]
+        1, num_frames, spatial_tokens, num_kv_heads, head_dim
+    )
+    target_v_2d = target_v.reshape(  # [1,T,S,H_kv,D]
+        1, num_frames, spatial_tokens, num_kv_heads, head_dim
+    )
+    clean_target_k = memory_value.cached_clean_gen_k[:, target_start:target_end]  # [1,T*S,H_kv,D]
+    clean_target_v = memory_value.cached_clean_gen_v[:, target_start:target_end]  # [1,T*S,H_kv,D]
+    target_components = teacher_forcing_gen_attention(
+        target_q_2d,
+        target_k_2d,
+        target_v_2d,
+        memory_value,
+        memory_value.frames_per_chunk,
+        cached_clean_gen_k=clean_target_k,
+        cached_clean_gen_v=clean_target_v,
+    )
+
+    if target_start > 0:
+        control_shape = memory_value.vision_token_shapes[0]
+        if control_shape != memory_value.vision_token_shapes[-1] or target_start != target_len:
+            raise ValueError(
+                "Target-only transfer teacher forcing requires aligned control and target token shapes; "
+                f"got {memory_value.vision_token_shapes}."
+            )
+        clean_control_k = memory_value.cached_clean_gen_k[:, :target_start].reshape(  # [1,T,S,H_kv,D]
+            1, num_frames, spatial_tokens, num_kv_heads, head_dim
+        )
+        clean_control_v = memory_value.cached_clean_gen_v[:, :target_start].reshape(  # [1,T,S,H_kv,D]
+            1, num_frames, spatial_tokens, num_kv_heads, head_dim
+        )
+        target_components.extend(
+            _control_visibility_attention_components(
+                target_q_2d,
+                clean_control_k,
+                clean_control_v,
+                memory_value.teacher_forcing_replay_policy,
+                memory_value.frames_per_chunk,
             )
         )
-    return components
+
+    target_video_out, target_video_lse = _merge_transfer_item_components(  # [1,T*S,H,D], [1,T*S,H]
+        target_components,
+        item_len=target_len,
+    )
+
+    target_q_flat = target_q.unsqueeze(0)  # [1,T*S,H,D]
+    text_out, text_lse = dispatch_varlen_cross_attention(  # [1,T*S,H,D], [1,T*S,H]
+        target_q_flat,
+        memory_value.cached_clean_und_k,
+        memory_value.cached_clean_und_v,
+        cumulative_seqlen_Q=memory_value.gen_q_offsets,
+        cumulative_seqlen_KV=memory_value.und_kv_offsets,
+        max_seqlen_Q=target_len,
+        max_seqlen_KV=memory_value.cached_clean_und_k.shape[1],
+        has_real=memory_value.has_caption,
+        clamp_empty_varlen_kv=memory_value.clamp_empty_varlen_kv,
+    )
+    # Match the full Pass-2 merge topology, including its intermediate output
+    # cast: video receptive fields merge first, then video merges with text.
+    target_res, _ = _merge_transfer_item_components(  # [1,T*S,H,D], [1,T*S,H]
+        [(target_video_out, target_video_lse), (text_out, text_lse)],
+        item_len=target_len,
+    )
+    target_out = target_res.squeeze(0).flatten(-2, -1)  # [T*S,H*D]
+    empty_text_out = target_out.new_empty((0, target_out.shape[-1]))  # [0,H*D]
+    return target_out, empty_text_out
 
 
 def three_way_attention_with_kv_cache(
@@ -1294,6 +1451,10 @@ def three_way_attention_with_kv_cache(
     video_q, video_pack_q_offsets = get_full_only_seq(packed_query_states)
     video_k, _video_pack_k_offsets = get_full_only_seq(packed_key_states)
     video_v, _ = get_full_only_seq(packed_value_states)
+
+    if isinstance(memory_value, TFNoisyMemoryValue) and memory_value.target_only_no_text:
+        video_out, text_out = teacher_forcing_target_only_attention(video_q, video_k, video_v, memory_value)
+        return from_mode_splits(text_out, video_out, packed_query_states)
 
     if attention_meta is not None and attention_meta.null_action_supertokens:
         video_v = video_v.clone()
@@ -1397,22 +1558,28 @@ def three_way_attention_with_kv_cache(
     video_q_flat = video_q.unsqueeze(0)  # [1, S_video, H, D]
 
     # -- Video cross-attention to KV-cache.  (Compile-stable path). ---
-    cached_video_k = memory_value.cached_gen_k
-    cached_video_v = memory_value.cached_gen_v
+    # Replay teacher forcing always starts at segment zero and consumes its
+    # clean Pass-1 K/V through the components above, so it has no rolling
+    # generated-video history to attend to and explicitly disables this component.
+    # Generic teacher forcing, ordinary KV-cache training, and AR inference retain
+    # supplied history through ``uses_rolling_gen_cache=True``.
+    if memory_value.uses_rolling_gen_cache:
+        cached_video_k = memory_value.cached_gen_k
+        cached_video_v = memory_value.cached_gen_v
 
-    video_ca_cached, video_ca_cached_lse = dispatch_varlen_cross_attention(
-        video_q_flat,
-        cached_video_k,
-        cached_video_v,
-        cumulative_seqlen_Q=video_q_offsets,
-        cumulative_seqlen_KV=memory_value.gen_ca_cached_kv_offsets,
-        max_seqlen_Q=video_len,
-        max_seqlen_KV=memory_value.max_gen_cache_tokens,
-        has_real=has_cached_video,
-        clamp_empty_varlen_kv=clamp_empty_varlen_kv,
-    )
-    attn_outputs.append(video_ca_cached)
-    lse_outputs.append(video_ca_cached_lse)
+        video_ca_cached, video_ca_cached_lse = dispatch_varlen_cross_attention(  # [1,S_video,H,D], [1,S_video,H]
+            video_q_flat,
+            cached_video_k,
+            cached_video_v,
+            cumulative_seqlen_Q=video_q_offsets,
+            cumulative_seqlen_KV=memory_value.gen_ca_cached_kv_offsets,
+            max_seqlen_Q=video_len,
+            max_seqlen_KV=memory_value.max_gen_cache_tokens,
+            has_real=has_cached_video,
+            clamp_empty_varlen_kv=clamp_empty_varlen_kv,
+        )
+        attn_outputs.append(video_ca_cached)
+        lse_outputs.append(video_ca_cached_lse)
 
     # --- Video cross-attention to text K/V ---
     # Naming: ``live_*`` = freshly projected from the current pack;
@@ -1675,9 +1842,10 @@ def attention_AR_gen_only(
       und K/V is padded to ``S_und_max`` while the rolling gen history is
       already fixed-size.  The real und prefix is compacted with gen K/V so
       varlen attention ignores only the padded text suffix.
-    - **Static-shape** (``gen_k_buf_full`` set, ``gen_k_hist`` ``None``):
-      cat ``[und || curr || gen_buf]`` (real positions contiguous from
-      offset 0; padding in the gen-buf tail) and call ``attention()``
+    - **Static-shape** (``kv_k_static`` set, ``gen_k_hist`` ``None``):
+      write the current frame in place into the pooled ``[und | curr | hist |
+      pad]`` buffer (real positions contiguous from offset 0; padding in the
+      tail) and call ``attention()`` on that buffer
       with the varlen kwargs ``cumulative_seqlen_Q`` /
       ``cumulative_seqlen_KV`` pre-built outside the captured region in
       ``ARMemoryState.init`` (see ``ARMemoryValue.cu_seqlens_q_t`` /
@@ -1708,6 +1876,91 @@ def attention_AR_gen_only(
     k_gen = get_gen_seq(packed_key_states)  # [S_curr, H_kv, D]
     v_gen = get_gen_seq(packed_value_states)  # [S_curr, H_kv, D]
 
+    if memory_value.batch_size > 1 and not memory_value.for_cuda_graphs:
+        if memory_value.post_saturation_static_compile:
+            raise ValueError("Batched AR attention does not support post-saturation static compile")
+        if len(memory_value.gen_lens) != memory_value.batch_size:
+            raise ValueError(f"Expected {memory_value.batch_size} generation lengths, got {memory_value.gen_lens}")
+        if len(memory_value.und_lens) != memory_value.batch_size:
+            raise ValueError(f"Expected {memory_value.batch_size} understanding lengths, got {memory_value.und_lens}")
+
+        total_gen_len = sum(memory_value.gen_lens)
+        q_gen_real = q_gen[:total_gen_len]  # [N_q,H,D]
+        k_gen_real = k_gen[:total_gen_len]  # [N_q,H_kv,D]
+        v_gen_real = v_gen[:total_gen_len]  # [N_q,H_kv,D]
+        k_samples = list(torch.split(k_gen_real, memory_value.gen_lens, dim=0))  # list of [S_q_i,H_kv,D]
+        v_samples = list(torch.split(v_gen_real, memory_value.gen_lens, dim=0))  # list of [S_q_i,H_kv,D]
+
+        history_len = 0 if memory_value.gen_k_hist is None else memory_value.gen_k_hist.shape[1]
+        kv_lens = [
+            memory_value.und_lens[sample_idx] + history_len + memory_value.gen_lens[sample_idx]
+            for sample_idx in range(memory_value.batch_size)
+        ]
+        packed_k_flat = k_gen_real.new_empty((sum(kv_lens), *k_gen_real.shape[1:]))  # [N_kv,H_kv,D]
+        packed_v_flat = v_gen_real.new_empty((sum(kv_lens), *v_gen_real.shape[1:]))  # [N_kv,H_kv,D]
+        write_offset = 0
+        for sample_idx in range(memory_value.batch_size):
+            if memory_value.und_k_cached is not None:
+                assert memory_value.und_v_cached is not None
+                und_len = memory_value.und_lens[sample_idx]
+                packed_k_flat[write_offset : write_offset + und_len].copy_(
+                    memory_value.und_k_cached[sample_idx, :und_len]
+                )  # [S_und_i,H_kv,D]
+                packed_v_flat[write_offset : write_offset + und_len].copy_(
+                    memory_value.und_v_cached[sample_idx, :und_len]
+                )  # [S_und_i,H_kv,D]
+                write_offset += und_len
+            if memory_value.gen_k_hist is not None:
+                assert memory_value.gen_v_hist is not None
+                packed_k_flat[write_offset : write_offset + history_len].copy_(
+                    memory_value.gen_k_hist[sample_idx]
+                )  # [S_hist,H_kv,D]
+                packed_v_flat[write_offset : write_offset + history_len].copy_(
+                    memory_value.gen_v_hist[sample_idx]
+                )  # [S_hist,H_kv,D]
+                write_offset += history_len
+            current_len = memory_value.gen_lens[sample_idx]
+            packed_k_flat[write_offset : write_offset + current_len].copy_(k_samples[sample_idx])  # [S_q_i,H_kv,D]
+            packed_v_flat[write_offset : write_offset + current_len].copy_(v_samples[sample_idx])  # [S_q_i,H_kv,D]
+            write_offset += current_len
+        if write_offset != sum(kv_lens):
+            raise AssertionError(f"Packed {write_offset} K/V tokens, expected {sum(kv_lens)}")
+
+        packed_k = packed_k_flat.unsqueeze(0)  # [1,N_kv,H_kv,D]
+        packed_v = packed_v_flat.unsqueeze(0)  # [1,N_kv,H_kv,D]
+        q_offsets = [0]
+        kv_offsets = [0]
+        for q_len, kv_len in zip(memory_value.gen_lens, kv_lens, strict=True):
+            q_offsets.append(q_offsets[-1] + q_len)
+            kv_offsets.append(kv_offsets[-1] + kv_len)
+        cu_seqlens_q = torch.tensor(q_offsets, device=q_gen.device, dtype=torch.int32)  # [B+1]
+        cu_seqlens_kv = torch.tensor(kv_offsets, device=q_gen.device, dtype=torch.int32)  # [B+1]
+        attn_result = attention(
+            query=q_gen_real.unsqueeze(0),  # [1,N_q,H,D]
+            key=packed_k,
+            value=packed_v,
+            cumulative_seqlen_Q=cu_seqlens_q,
+            cumulative_seqlen_KV=cu_seqlens_kv,
+            max_seqlen_Q=max(memory_value.gen_lens),
+            max_seqlen_KV=max(kv_lens),
+            is_causal=False,
+            return_lse=False,
+            backend="natten",
+        )  # [1,N_q,H,D]
+        assert isinstance(attn_result, torch.Tensor)
+        gen_out_real = attn_result.squeeze(0).flatten(-2, -1)  # [N_q,H*D]
+        if q_gen.shape[0] == total_gen_len:
+            gen_out = gen_out_real  # [N_q,H*D]
+        else:
+            gen_out = q_gen.new_zeros((q_gen.shape[0], gen_out_real.shape[-1]))  # [N_q_padded,H*D]
+            gen_out[:total_gen_len] = gen_out_real  # [N_q,H*D]
+        output = from_und_gen_splits(
+            gen_out.new_empty(0, gen_out.shape[-1]),
+            gen_out,
+            packed_query_states,
+        )
+        return output, None
+
     gen_len = memory_value.gen_len
     k_gen_real = k_gen[:gen_len]  # [S_gen_real, H_kv, D]
     v_gen_real = v_gen[:gen_len]  # [S_gen_real, H_kv, D]
@@ -1716,24 +1969,75 @@ def attention_AR_gen_only(
     v_curr = v_gen_real.unsqueeze(0)  # [1, S_gen_real, H_kv, D]
 
     if memory_value.for_cuda_graphs:
-        # Static-shape branch.  Real positions live in [0, S_und + gen_len +
-        # real_gen_cache_len); the gen-buffer tail is zero-padding to a
-        # fixed max size.  Putting the current frame *before* the gen
-        # buffer keeps real positions contiguous from offset 0, so a
-        # single ``cumulative_seqlen_KV = [0, real_total_kv_len]``
-        # restricts the kernel to the real prefix without any padding
-        # hole.  RoPE was applied to each K vector at projection time,
-        # so order within the seq dim is irrelevant for correctness.
-        assert memory_value.und_k_cached is not None and memory_value.und_v_cached is not None, (
-            "static-shape branch requires the und cache to be populated"
-        )
-        assert memory_value.gen_k_buf_full is not None
-        assert memory_value.gen_v_buf_full is not None
+        # Static-shape branch.  ``kv_k_static`` / ``kv_v_static`` are one pooled
+        # ``[und | curr | hist | pad]`` buffer per K and V: real positions live in
+        # [0, S_und + gen_len + real_gen_cache_len) and the tail is padding to a
+        # fixed max size, so a single ``cumulative_seqlen_KV = [0,
+        # real_total_kv_len]`` restricts the kernel to the real prefix without any
+        # padding hole.  The und region was primed once per generation and the
+        # history region rebuilt outside the compiled region; only the current
+        # frame is written here, in place, instead of materialising the whole
+        # sequence with ``cat`` on every forward.  RoPE was applied to each K
+        # vector at projection time, so order within the seq dim is irrelevant
+        # for correctness.
         assert memory_value.cu_seqlens_q_t is not None
         assert memory_value.cu_seqlens_kv_t is not None
+        if memory_value.kv_k_static is None:
+            # Legacy static layout: separate ``und_k_cached`` / ``gen_k_buf_full`` buffers
+            # (real history prefix + padded tail) materialised as ``[und | curr |
+            # gen_buf_full]`` per forward.  Kept for callers that build ``ARMemoryValue``
+            # by hand; the production state hands the block the composite buffer below.
+            assert memory_value.und_k_cached is not None and memory_value.und_v_cached is not None, (
+                "static-shape branch requires the und cache to be populated"
+            )
+            assert memory_value.gen_k_buf_full is not None and memory_value.gen_v_buf_full is not None, (
+                "static-shape branch requires either kv_k_static or gen_k_buf_full"
+            )
+            k_legacy = torch.cat([memory_value.und_k_cached, k_curr, memory_value.gen_k_buf_full], dim=1)
+            v_legacy = torch.cat([memory_value.und_v_cached, v_curr, memory_value.gen_v_buf_full], dim=1)
+            attn_result = attention(
+                query=q_gen.unsqueeze(0),  # [1, S_curr, H, D]
+                key=k_legacy,  # [1, KV_LEN_MAX, H_kv, D]
+                value=v_legacy,
+                cumulative_seqlen_Q=memory_value.cu_seqlens_q_t,
+                cumulative_seqlen_KV=memory_value.cu_seqlens_kv_t,
+                max_seqlen_Q=gen_len,
+                max_seqlen_KV=memory_value.max_seqlen_KV,
+                is_causal=False,
+                return_lse=False,
+                backend="natten",
+            )
+            assert isinstance(attn_result, torch.Tensor)
+            gen_out = attn_result.squeeze(0).flatten(-2, -1)  # [S_curr, H*D]
+            output = from_und_gen_splits(gen_out.new_empty(0, gen_out.shape[-1]), gen_out, packed_query_states)
+            return output, None
+        assert memory_value.kv_v_static is not None, "static-shape branch requires both composite K and V buffers"
+        batch_rows = memory_value.batch_size
+        assert memory_value.kv_k_static.shape[1] == batch_rows * memory_value.max_seqlen_KV, (
+            f"static K/V buffer holds {memory_value.kv_k_static.shape[1]} tokens, "
+            f"expected {batch_rows} x max_seqlen_KV={memory_value.max_seqlen_KV}"
+        )
 
-        k_full = torch.cat([memory_value.und_k_cached, k_curr, memory_value.gen_k_buf_full], dim=1)
-        v_full = torch.cat([memory_value.und_v_cached, v_curr, memory_value.gen_v_buf_full], dim=1)
+        k_full = memory_value.kv_k_static  # [1, B*R, H_kv, D]
+        v_full = memory_value.kv_v_static  # [1, B*R, H_kv, D]
+        curr_start = memory_value.static_curr_offset
+        if batch_rows == 1:
+            # Literally the single-row write; kept as-is so the B=1 compiled graph is unchanged.
+            k_full[:, curr_start : curr_start + gen_len].copy_(k_curr)
+            v_full[:, curr_start : curr_start + gen_len].copy_(v_curr)
+        else:
+            # Row r's current frame sits at r*R + curr_start; one strided copy for all rows.  The
+            # packed gen stream is sample-major with ``gen_len`` tokens per row.
+            row_stride = memory_value.static_row_stride
+            num_kv_heads, head_dim = k_gen.shape[-2], k_gen.shape[-1]
+            k_rows = k_gen[: batch_rows * gen_len].view(batch_rows, gen_len, num_kv_heads, head_dim)  # [B,g,H_kv,D]
+            v_rows = v_gen[: batch_rows * gen_len].view(batch_rows, gen_len, num_kv_heads, head_dim)  # [B,g,H_kv,D]
+            k_full.view(batch_rows, row_stride, num_kv_heads, head_dim)[:, curr_start : curr_start + gen_len].copy_(
+                k_rows
+            )
+            v_full.view(batch_rows, row_stride, num_kv_heads, head_dim)[:, curr_start : curr_start + gen_len].copy_(
+                v_rows
+            )
 
         # ``cu_seqlens_q_t`` and ``cu_seqlens_kv_t`` are pre-built outside
         # the captured region (in ``ARMemoryState.init``) as ``[2]`` int32

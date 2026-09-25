@@ -260,14 +260,8 @@ class DistributedCheckpointer(AbstractCheckpointer):
                     resume_keys.append("model")
                     if self.only_load_scheduler_state:
                         resume_keys.append("scheduler")
-        if len(self.keys_not_to_resume) > 0:
-            for key in self.keys_not_to_resume:
-                assert key in self.KEYS_TO_SAVE, f"Invalid key to resume: {key} not in {self.KEYS_TO_SAVE}"
-            resume_keys = [key for key in resume_keys if key not in self.keys_not_to_resume]
-
-        # Ensure that resume_keys does not have duplicates.
-        assert len(set(resume_keys)) == len(resume_keys)
-        return resume_keys, source
+        resume_keys = self._filter_resume_keys(set(resume_keys), self.KEYS_TO_SAVE, source)
+        return sorted(resume_keys), source
 
     @misc.timer("checkpoint loading")
     def load(

@@ -369,7 +369,8 @@ def load_model_from_checkpoint(
             For DCP this is forwarded as-is to ``CustomLoadPlanner`` (substring match).  For
             safetensors each substring is escaped and wrapped as ``.*<substring>.*`` so that
             ``load_vfm_model``'s ``re.fullmatch``-based ``skip_patterns`` reproduces the
-            substring semantics one-for-one.
+            substring semantics one-for-one. This option is incompatible with FSDP CPU offload,
+            which requires the checkpoint load to initialize every parameter.
 
     Returns:
         The loaded model and config
@@ -399,6 +400,12 @@ def load_model_from_checkpoint(
                 setattr(config.model.config.parallelism, key, value)
             else:
                 raise ValueError(f"Key {key} not found in config.model.config.parallelism")
+
+    if getattr(config.model.config.parallelism, "fsdp_cpu_offload", False) and keys_to_skip_loading:
+        raise ValueError(
+            "fsdp_cpu_offload requires the checkpoint load to initialize every parameter; "
+            "keys_to_skip_loading is not supported"
+        )
 
     if compile_config is not None:
         for key, value in compile_config.items():
@@ -442,7 +449,11 @@ def load_model_from_checkpoint(
     torch.backends.cudnn.benchmark = config.trainer.cudnn.benchmark
 
     with misc.timer("instantiate model"):
-        model = instantiate(config.model).cuda()  # type: ignore
+        model = instantiate(config.model)
+        # FSDP CPU offload establishes mixed placement during construction;
+        # recursively moving the model would corrupt its CPU-shard DTensor aliases.
+        if not getattr(config.model.config.parallelism, "fsdp_cpu_offload", False):
+            model = model.cuda()  # type: ignore
         model.on_train_start()
 
     if is_safetensors:

@@ -3,7 +3,11 @@
 
 """Load the understanding tower of a Cosmos3 checkpoint."""
 
+import re
+
 from transformers import Qwen3VLForConditionalGeneration
+
+from transformers_cosmos3.config import Cosmos3OmniConfig
 
 DROP_PATTERNS: tuple[str, ...] = (
     # Generation
@@ -56,9 +60,36 @@ KEY_MAPPING: dict[str, str] = {
 
 
 class Cosmos3ForConditionalGeneration(Qwen3VLForConditionalGeneration):
+    # Match the root model_type. Qwen3VLConfig.from_pretrained otherwise selects
+    # Cosmos's nested vision_config (also tagged qwen3_vl) as the whole config.
+    config_class = Cosmos3OmniConfig
+
     # Drop-pattern keys don't match any model parameter after rename -- the
     # loader skips them; these patterns silence the resulting warning.
     _keys_to_ignore_on_load_unexpected = list(DROP_PATTERNS)
+
+    def _get_key_renaming_mapping(
+        self,
+        checkpoint_keys: list[str],
+        key_mapping: dict[str, str] | None = None,
+        loading_base_model_from_task_state_dict: bool = False,
+        loading_task_model_from_base_state_dict: bool = False,
+    ) -> dict[str, str]:
+        """Compose attention and namespace renames on Transformers 4.57.
+
+        Its default implementation stops after the first matching rule. A flat
+        ``layers.N.self_attn.to_q`` key needs both the projection rename and the
+        ``model.language_model`` prefix, including for ModelOpt scale buffers.
+        Cosmos supplies the complete task checkpoint (including lm_head), even
+        with flat names, so these mappings already include the full prefix.
+        """
+        mapping = {}
+        for key in checkpoint_keys:
+            renamed, _ = self._fix_state_dict_key_on_load(key)
+            for pattern, replacement in (key_mapping or KEY_MAPPING).items():
+                renamed = re.sub(pattern, replacement, renamed)
+            mapping[key] = renamed
+        return mapping
 
     @classmethod
     def from_pretrained(cls, *args: object, **kwargs: object) -> "Cosmos3ForConditionalGeneration":

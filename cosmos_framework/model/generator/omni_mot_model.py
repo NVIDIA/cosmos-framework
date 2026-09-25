@@ -9,7 +9,7 @@ import inspect
 import json
 import time
 from contextlib import contextmanager
-from typing import Any, Callable, Dict, Mapping, Optional, Tuple
+from typing import Any, Callable, Dict, Mapping, Optional, Tuple, get_args
 
 import numpy as np
 import torch
@@ -34,6 +34,7 @@ from cosmos_framework.model.generator.algorithm.loss.flow_matching import (
     compute_flow_matching_loss,
 )
 from cosmos_framework.model.generator.algorithm.loss.load_balancing import compute_load_balancing_loss
+from cosmos_framework.configs.base.defaults.joint_attention import JointAttnImplementation
 from cosmos_framework.configs.base.defaults.model_config import OmniMoTModelConfig
 from cosmos_framework.configs.base.defaults.parallelism import PRECISION_TO_TORCH_DTYPE
 from cosmos_framework.data.generator.action.utils.action_processing import (
@@ -51,6 +52,7 @@ from cosmos_framework.model.generator.mot.context_parallel_utils import (
     context_parallel_broadcast_tensor_list,
 )
 from cosmos_framework.model.generator.mot.cosmos3_vfm_network import Cosmos3VFMNetwork, Cosmos3VFMNetworkConfig
+from cosmos_framework.model.generator.mot.diffusion_cache import _velocity_pathways
 from cosmos_framework.model.generator.mot.inference_text_kv_memory import (
     InferenceTextKVMemoryState,
     UndKVCache,
@@ -59,6 +61,7 @@ from cosmos_framework.model.generator.mot.inference_text_kv_memory import (
     restore_inference_attention_dispatch,
 )
 from cosmos_framework.model.generator.mot.modeling_utils import has_noisy_tokens
+from cosmos_framework.model.generator.mot.parallelize_unified_mot import materialize_non_offloaded_state
 from cosmos_framework.model.generator.mot.parallelize_vfm_network import parallelize_vfm_network
 from cosmos_framework.model.generator.reasoner.qwen3_vl.utils import tokenize_caption
 from cosmos_framework.model.generator.utils.data_and_condition import (
@@ -66,6 +69,7 @@ from cosmos_framework.model.generator.utils.data_and_condition import (
     GenerationDataNoised,
     _expand_per_sample_to_per_vision_item,
     build_dense_sound_schedule,
+    select_target_image_sizes,
     unwrap_and_densify,
 )
 from cosmos_framework.model.generator.utils.load_balancing_stats import LBLConfig
@@ -81,11 +85,14 @@ from cosmos_framework.model.generator.utils.moe_utils import (
 from cosmos_framework.model.generator.utils.safetensors_loader import (
     load_language_model as load_language_model_safetensors,
 )
+from cosmos_framework.model.generator.utils.sr_latent_noise import (
+    apply_sr_latent_condition_noise,
+    sr_sample_mask,
+)
 from cosmos_framework.model.generator.vision_encoder import (
     VisionEncoder,
     get_vae_pixel_shapes,
     normalize_uint8_item,
-    validate_multiview_length,
 )
 from cosmos_framework.data.generator.sequence_packing import (
     PackedSequence,
@@ -102,6 +109,10 @@ from cosmos_framework.utils.generator.dtensor_helper import DTensorFastEmaModelU
 from cosmos_framework.utils.generator.model_weights_stats import WeightTrainingStat
 from cosmos_framework.utils.generator.parallelism import ParallelDims
 from cosmos_framework.utils.generator.quantization import swap_modelopt_fp8_linears_on_meta
+
+# "LIDA" in ASCII: fixed domain tag separating joint LiDAR noise from RGB.
+# Changing this value changes all joint LiDAR inference noise.
+_LIDAR_NOISE_DOMAIN_TAG: int = 0x4C494441
 
 
 def _all_group_ranks_allow(
@@ -121,13 +132,31 @@ def _any_dp_shard_rank_needs_guidance_path(
     local_needs_guidance_path: bool,
     dp_shard_group: torch.distributed.ProcessGroup | None,
     device: torch.device | str | None,
+    num_postprocess_forwards: int = 0,
 ) -> bool:
-    """Enter the guidance path on every FSDP shard rank when any rank needs it."""
+    """Enter guidance together and reject mismatched extra forwards before any branch runs."""
     if dp_shard_group is None:
         return local_needs_guidance_path
-    needed = torch.tensor([local_needs_guidance_path], device=device, dtype=torch.uint8)
-    torch.distributed.all_reduce(needed, op=torch.distributed.ReduceOp.MAX, group=dp_shard_group)
-    return bool(needed.item())
+    # Gather guidance flags and forward counts so every shard checks the same schedules.
+    schedule = torch.tensor(
+        [int(local_needs_guidance_path), num_postprocess_forwards],
+        device=device,
+        dtype=torch.int32,
+    )  # [2]
+    gathered = [
+        torch.empty_like(schedule) for _ in range(torch.distributed.get_world_size(dp_shard_group))
+    ]  # list[[2]]
+    torch.distributed.all_gather(gathered, schedule, group=dp_shard_group)  # list[[2]]
+    schedules = [rank_schedule.tolist() for rank_schedule in gathered]
+    forward_counts = [count for _, count in schedules]
+    if len(set(forward_counts)) != 1:
+        raise ValueError(
+            "FSDP shard ranks have different control-guidance branch schedules: "
+            f"postprocess forward counts by shard rank are {forward_counts}. "
+            "Use matching control-guidance activation schedules within each dp_shard group "
+            "or place these samples in independent shard groups."
+        )
+    return any(needs_guidance for needs_guidance, _ in schedules)
 
 
 def _uses_lidar_primary_tokenizer(data_batch: dict[str, Any]) -> bool:
@@ -155,6 +184,54 @@ def _vision_condition_masks(packed_sequence: PackedSequence) -> list[torch.Tenso
     return packed_sequence.vision.condition_mask
 
 
+def _per_view_caption_groups(captions: Any) -> list[list[str]] | None:
+    """Return one caption list per sample when a batch carries per-view captions.
+
+    Under ``separate_view_text_tokenization`` the multiview dataset keeps its captions as a
+    list per sample -- one per camera, in the camera-major order the video layout uses --
+    instead of joining them into a single prompt (``multiview_dataset``'s ``ai_caption``),
+    and the collate preserves that nesting. ``None`` for the single-caption-per-sample
+    batch every other dataset and every hand-written inference prompt emits.
+    """
+    if not isinstance(captions, (list, tuple)) or not captions:
+        return None
+    nested = [isinstance(sample_captions, (list, tuple)) for sample_captions in captions]
+    if not any(nested):
+        return None
+    if not all(nested):
+        raise ValueError(
+            "Captions mix per-view lists with single strings across the batch; the packer "
+            "needs one caption layout for the whole pack."
+        )
+    return [list(sample_captions) for sample_captions in captions]
+
+
+def _expand_negative_captions(negative_captions: Any, caption_groups: list[list[str]] | None) -> list[str]:
+    """Line the negative prompts up one-for-one with the conditional captions.
+
+    Both CFG branches pack against the same plans, so the unconditional side has to supply
+    exactly as many captions per sample as the conditional side. A per-view batch normally
+    still carries one negative prompt per sample, which stands in for each of that sample's
+    views; a caller that wrote one negative prompt per view is taken as it is.
+    """
+    if caption_groups is None:
+        return list(negative_captions)
+    negative_groups = _per_view_caption_groups(negative_captions)
+    if negative_groups is None:
+        if len(negative_captions) != len(caption_groups):
+            raise ValueError(
+                f"The batch carries {len(negative_captions)} negative prompts but "
+                f"{len(caption_groups)} samples of per-view captions."
+            )
+        return [caption for caption, group in zip(negative_captions, caption_groups) for _ in group]
+    if [len(group) for group in negative_groups] != [len(group) for group in caption_groups]:
+        raise ValueError(
+            f"Per-view negative prompts count {[len(g) for g in negative_groups]} per sample but the "
+            f"conditional captions count {[len(g) for g in caption_groups]}."
+        )
+    return [caption for group in negative_groups for caption in group]
+
+
 def _densify_action_family(
     raw_actions: list | torch.Tensor | None, raw_families: str | list | tuple | None, expected_rows: int
 ) -> list[str] | None:
@@ -178,6 +255,27 @@ def _densify_action_family(
             return None
         result.append(family)
     return result if len(result) == expected_rows else None
+
+
+INFERENCE_RAW_VISION_RETAINED_ITEMS_KEY = "_inference_raw_vision_retained_items"
+
+
+@dataclasses.dataclass(frozen=True)
+class VelocityPostprocess:
+    """A velocity transform that declares its CFG branches before execution."""
+
+    apply: Callable[[list[torch.Tensor], list[torch.Tensor], torch.Tensor, float], list[torch.Tensor]]
+    cfg_branches: Callable[[torch.Tensor], tuple[str, ...]]
+    """Return the CFG branch names this postprocessor will execute, in order, at timestep [B,1]."""
+
+    def __call__(
+        self,
+        velocity: list[torch.Tensor],  # list[[D]]
+        noise_x: list[torch.Tensor],  # list[[D]]
+        timestep: torch.Tensor,  # [B,1]
+        text_guidance_scale: float,
+    ) -> list[torch.Tensor]:  # list[[D]]
+        return self.apply(velocity, noise_x, timestep, text_guidance_scale)
 
 
 class OmniMoTModel(ImaginaireModel):
@@ -398,11 +496,7 @@ class OmniMoTModel(ImaginaireModel):
                 action_gen=self.config.action_gen,
                 sound_gen=self.config.sound_gen,
                 joint_attn_implementation=self.config.joint_attn_implementation,
-                use_multiview_flex_attention=self.config.flex_attention.enabled,
-                flex_attention_backend=self.config.flex_attention.backend,
-                attention_scope=self.config.flex_attention.mask.attention_scope,
-                control_attends_sensor=self.config.flex_attention.mask.control_attends_sensor,
-                decomposed_temporal_window_seconds=self.config.flex_attention.mask.decomposed_temporal_window_seconds,
+                multiview_attention_config=self.config.multiview_attention,
                 timestep_scale=1.0 / float(num_train_timesteps) * self.config.diffusion_expert_config.timestep_range,
                 action_dim=self.config.max_action_dim,
                 num_embodiment_domains=self.config.num_embodiment_domains,
@@ -453,6 +547,14 @@ class OmniMoTModel(ImaginaireModel):
         # would leave ``mp_policy.reduce_dtype`` disagreeing with the sharded params.
         net = net.to(dtype=dtype)
 
+        if self.config.parallelism.fsdp_cpu_offload and DEVICE == Device.CUDA:
+            # Initialize nonpersistent buffers before FSDP wrapping. Parameters
+            # are still meta; apply_fsdp() materializes one decoder block at a
+            # time, bounding the construction peak to one complete block. Their
+            # storage is intentionally uninitialized until the required complete
+            # checkpoint load populates every parameter.
+            net.init_weights(buffer_device=DEVICE)
+
         net = parallelize_vfm_network(
             net,
             parallel_dims=self.parallel_dims,
@@ -463,12 +565,16 @@ class OmniMoTModel(ImaginaireModel):
         )
 
         with misc.timer("meta to cuda and broadcast model states"):
-            net.to_empty(device=DEVICE)
+            if self.config.parallelism.fsdp_cpu_offload:
+                materialize_non_offloaded_state(net, device=DEVICE)
+            else:
+                net.to_empty(device=DEVICE)  # parameters and buffers: [*shape]
             if DEVICE == Device.CUDA:
                 # Weight initialization is not needed for other devices (cpu,
                 # meta), since they are only for checkpoint conversion and smoke
                 # tests.
-                net.init_weights(buffer_device=DEVICE)
+                if not self.config.parallelism.fsdp_cpu_offload:
+                    net.init_weights(buffer_device=DEVICE)
                 if lora_enabled:
                     self._init_lora_weights_post_materialization(net)
 
@@ -622,8 +728,10 @@ class OmniMoTModel(ImaginaireModel):
         """Set up the fsdp for the model."""
         self.parallel_dims = ParallelDims(
             enable_inference_mode=self.config.parallelism.enable_inference_mode,
+            fsdp_cpu_offload=self.config.parallelism.fsdp_cpu_offload,
             world_size=torch.distributed.get_world_size() if torch.distributed.is_initialized() else 1,
             dp_shard=self.config.parallelism.data_parallel_shard_degree,
+            dp_replicate=self.config.parallelism.data_parallel_replicate_degree,
             cfgp=self.config.parallelism.cfg_parallel_shard_degree,
             cp=self.config.parallelism.context_parallel_shard_degree,
             lb=self.config.parallelism.vae_load_balance_group_size,
@@ -742,8 +850,8 @@ class OmniMoTModel(ImaginaireModel):
 
     def _derive_include_end_of_generation_token(self) -> bool:
         impl = self.config.joint_attn_implementation
-        assert impl in ("two_way", "three_way"), (
-            f"Invalid joint_attn_implementation: {impl}. Must be 'two_way' or 'three_way'."
+        assert impl in get_args(JointAttnImplementation), (
+            f"Invalid joint_attn_implementation: {impl}. Must be one of {get_args(JointAttnImplementation)}."
         )
         return False
 
@@ -834,9 +942,6 @@ class OmniMoTModel(ImaginaireModel):
                 self.tokenizer_lidar_gen.temporal_compression_factor if self.tokenizer_lidar_gen is not None else None
             ),
             vision_temporal_position_mode=self.config.diffusion_expert_config.vision_temporal_position_mode,
-            align_temporal_positions_across_views=(
-                self.config.diffusion_expert_config.align_temporal_positions_across_views
-            ),
             video_temporal_causal=self.config.video_temporal_causal,
             action_dim=self.config.max_action_dim,
             initial_mrope_temporal_offset=initial_mrope_temporal_offset,
@@ -847,7 +952,6 @@ class OmniMoTModel(ImaginaireModel):
         raw_state_vision: list[torch.Tensor],
         x0_tokens_vision: list[torch.Tensor],
         num_views_per_vision_item: list[int] | None = None,
-        frames_per_vision_item: list[int] | None = None,
     ) -> list[torch.Tensor] | None:
         """Return optional per-latent temporal coordinates for vision tokens.
 
@@ -867,29 +971,17 @@ class OmniMoTModel(ImaginaireModel):
             )
 
         assert self.tokenizer_vision_gen is not None
-        if (num_views_per_vision_item is None) != (frames_per_vision_item is None):
-            raise ValueError("num_views_per_vision_item and frames_per_vision_item must be provided together.")
+        # Alignment with the vision items was checked by _validate_and_get_num_views against
+        # the same list raw_state_vision is built one-to-one from; the strict zip below is
+        # the backstop for any other caller.
         if num_views_per_vision_item is None:
             num_views_per_vision_item = [1] * len(raw_state_vision)
-            frames_per_vision_item_optional: list[int | None] = [None] * len(raw_state_vision)
-        else:
-            assert frames_per_vision_item is not None
-            if len(num_views_per_vision_item) != len(raw_state_vision) or len(frames_per_vision_item) != len(
-                raw_state_vision
-            ):
-                raise ValueError(
-                    "Multiview temporal-position metadata must align with flattened vision items: "
-                    f"got {len(num_views_per_vision_item)} view counts, {len(frames_per_vision_item)} frame "
-                    f"counts, and {len(raw_state_vision)} vision items."
-                )
-            frames_per_vision_item_optional = list(frames_per_vision_item)
 
         temporal_positions_vision: list[torch.Tensor] = []
-        for raw_state_vision_i, x0_tokens_vision_i, num_views, frames_per_view in zip(
+        for raw_state_vision_i, x0_tokens_vision_i, num_views in zip(
             raw_state_vision,
             x0_tokens_vision,
             num_views_per_vision_item,
-            frames_per_vision_item_optional,
             strict=True,
         ):
             if raw_state_vision_i.dim() == 5:
@@ -907,15 +999,15 @@ class OmniMoTModel(ImaginaireModel):
             resolution = get_vision_data_resolution((frame_h, frame_w))
 
             if num_views > 1:
-                if frames_per_view is None:
-                    raise ValueError("frames_per_view is required when num_views is greater than one.")
-                expected_pixel_frames = num_views * frames_per_view
-                if num_pixel_frames != expected_pixel_frames:
+                # Views are camera-major along T and all equal length, so the per-view pixel
+                # count follows from the item itself; get_data_and_condition has already
+                # cross-checked that split against the dataloader's num_video_frames_per_view.
+                if num_pixel_frames % num_views != 0:
                     raise ValueError(
-                        "Multiview vision length must equal num_views * frames_per_view when computing temporal "
-                        f"positions: got T={num_pixel_frames}, num_views={num_views}, "
-                        f"frames_per_view={frames_per_view}."
+                        "Multiview vision length must be divisible by num_views when computing temporal "
+                        f"positions: got T={num_pixel_frames}, num_views={num_views}."
                     )
+                frames_per_view = num_pixel_frames // num_views
                 if num_latent_frames % num_views != 0:
                     raise ValueError(
                         "Multiview latent length must be divisible by num_views when computing temporal positions: "
@@ -1060,6 +1152,7 @@ class OmniMoTModel(ImaginaireModel):
             input_video_key=self.input_video_key,
             input_image_key=self.input_image_key,
         )
+        self._apply_per_view_caption_plan(data_batch, sequence_plans)
         per_camera_vae_encoding = "enable_per_camera_vae_encoding" in data_batch
         gen_data_clean = self.get_data_and_condition(
             data_batch,
@@ -1074,8 +1167,13 @@ class OmniMoTModel(ImaginaireModel):
         # image_size[i] may be (1, 4) from IterativeJointDataLoader or (4,) from custom_collate_fn.
         if "image_size" in data_batch:
             data_resolutions: list[str] | str | None = []
+            # Multi-item samples (transfer, SR) carry one image_size per vision item; the noise
+            # schedule must follow the generated (last) item of each sample.
+            target_image_sizes = select_target_image_sizes(
+                data_batch["image_size"], gen_data_clean.num_vision_items_per_sample, gen_data_clean.batch_size
+            )
             for i in range(gen_data_clean.batch_size):
-                img_size = data_batch["image_size"][i]
+                img_size = target_image_sizes[i]
                 if img_size.dim() == 2:
                     img_size = img_size[0]
                 target_h = int(img_size[0].item())
@@ -1179,9 +1277,9 @@ class OmniMoTModel(ImaginaireModel):
         """
         cp_enabled = self.parallel_dims is not None and self.parallel_dims.cp_enabled
         if not cp_enabled:
-            if self.parallel_dims is None or self.parallel_dims.cp_rank == 0:
-                self._update_train_stats(data_batch)
-            return self._prepare_training_data(data_batch, iteration)
+            local_training_data = self._prepare_training_data(data_batch, iteration)
+            self._update_train_stats(local_training_data[2])
+            return local_training_data
 
         cp_size = self.parallel_dims.cp_mesh.size()
         cp_window_slot = self._cp_window_slot
@@ -1201,15 +1299,13 @@ class OmniMoTModel(ImaginaireModel):
         )
         if not isinstance(payload, dict):
             raise TypeError(f"Expected a dictionary CP training payload, got {type(payload).__name__}.")
-        input_text_indexes, sequence_plans, gen_data_clean, memory_info, data_resolutions, vae_pixel_shapes = (
-            self._unpack_training_payload(payload)
-        )
+        local_training_data = self._unpack_training_payload(payload)
         if cp_window_slot == cp_size - 1:
             self._cp_local_training_payload = None
         if self.parallel_dims.cp_rank == 0:
-            self._update_train_stats_from_processed_batch(gen_data_clean)
+            self._update_train_stats(local_training_data[2])
         self._cp_window_slot = (cp_window_slot + 1) % cp_size
-        return input_text_indexes, sequence_plans, gen_data_clean, memory_info, data_resolutions, vae_pixel_shapes
+        return local_training_data
 
     def training_step(
         self, data_batch: dict[str, torch.Tensor], iteration: int
@@ -1633,6 +1729,7 @@ class OmniMoTModel(ImaginaireModel):
 
         rf_cfg = self.config.rectified_flow_training_config
         normalize_by_active = rf_cfg.normalize_loss_by_active
+        exclude_fully_conditioned_items = self.config.causal_training_strategy == "teacher_forcing"
         if self.config.vision_gen:
             # Only a batch that generates no camera stream, as the LiDAR-only recipe does, may
             # arrive with vision unpacked; for anything else that would silently sink the vision
@@ -1657,8 +1754,7 @@ class OmniMoTModel(ImaginaireModel):
                 rectified_flow=rectified_flow_vision,
                 tensor_kwargs_fp32=self.tensor_kwargs_fp32,
                 normalize_by_active=normalize_by_active,
-                exclude_fully_conditioned_items=getattr(self.config, "causal_training_strategy", None)
-                == "teacher_forcing",
+                exclude_fully_conditioned_items=exclude_fully_conditioned_items,
             )
             loss_scale = (
                 rf_cfg.image_loss_scale if is_image_batch and rf_cfg.image_loss_scale is not None else rf_cfg.loss_scale
@@ -1677,6 +1773,8 @@ class OmniMoTModel(ImaginaireModel):
                     "LiDAR condition mask must be a list of tensors for loss computation"
                 )
                 assert gen_data_noised.vt_target_lidar is not None, "LiDAR targets required when the batch has LiDAR"
+                # Match vision teacher forcing's target-item normalization. Clean HD-map
+                # controls must not dilute the LiDAR mean and change the sensor loss mix.
                 fm_loss_lidar, _ = compute_flow_matching_loss(
                     pred=out_net["preds_lidar"],
                     target=gen_data_noised.vt_target_lidar,
@@ -1686,6 +1784,7 @@ class OmniMoTModel(ImaginaireModel):
                     rectified_flow=self.rectified_flow_video,
                     tensor_kwargs_fp32=self.tensor_kwargs_fp32,
                     normalize_by_active=normalize_by_active,
+                    exclude_fully_conditioned_items=exclude_fully_conditioned_items,
                 )
                 lidar_loss_scale = rf_cfg.lidar_loss_scale if rf_cfg.lidar_loss_scale is not None else rf_cfg.loss_scale
                 total_loss += fm_loss_lidar * lidar_loss_scale  # []
@@ -1820,29 +1919,8 @@ class OmniMoTModel(ImaginaireModel):
 
         return total_loss, losses_dict
 
-    def _update_train_stats(self, data_batch: dict[str, torch.Tensor]) -> None:
-        if not isinstance(self.net, WeightTrainingStat):
-            return
-
-        is_image = self.is_image_batch(data_batch)
-        if self._has_vision_stream(data_batch):
-            input_key = self.input_image_key if is_image else self.input_video_key
-            value = data_batch[input_key]
-            # For image editing data_batch[input_key] is a list-of-lists, not a tensor.
-            sample_count = len(value) if isinstance(value, list) else value.shape[0]
-        else:
-            # The LiDAR-only stream still contributes samples on the video clock. Prefer
-            # per-sample item counts after encoding has flattened the LiDAR item list.
-            lidar_counts = data_batch.get("num_lidar_items_per_sample")
-            sample_count = len(lidar_counts) if lidar_counts is not None else len(data_batch["lidar"])
-
-        if is_image:
-            self.net.accum_image_sample_counter += sample_count
-        else:
-            self.net.accum_video_sample_counter += sample_count
-
-    def _update_train_stats_from_processed_batch(self, gen_data_clean: GenerationDataClean) -> None:
-        """Update rank-zero sample counters from the CP-shared processed payload."""
+    def _update_train_stats(self, gen_data_clean: GenerationDataClean) -> None:
+        """Update sample counters from a processed ``GenerationDataClean`` payload."""
         if not isinstance(self.net, WeightTrainingStat):
             return
         if gen_data_clean.is_image_batch:
@@ -1866,18 +1944,75 @@ class OmniMoTModel(ImaginaireModel):
             list[torch.Tensor]: The input text tokens.
         """
         if "text_token_lengths" in data_batch:
-            raise NotImplementedError(
-                "Per-view text tokenization requires grouped sequence-packing and attention support. "
-                "Disable separate_view_text_tokenization until that follow-up lands."
-            )
+            self._check_per_view_captions_supported()
+
         input_text_tokens = data_batch["text_token_ids"]
         if isinstance(input_text_tokens, list):
-            # Convert text tokens to list of lists of ints
+            # Convert text tokens to list of lists of ints. Per-view captions arrive as one
+            # ragged inner list per sample (one caption per camera) and flatten the same way a
+            # multi-item vision sample does: the packer reads them back per sample using the
+            # caption counts on each SequencePlan.
             input_text_tokens = [tokens.tolist() for x in input_text_tokens for tokens in x]
         else:
             input_text_tokens = [tokens.squeeze(0).tolist() for tokens in input_text_tokens]
 
         return input_text_tokens
+
+    @staticmethod
+    def _apply_per_view_caption_plan(
+        data_batch: dict[str, Any],
+        sequence_plans: list[Any],
+    ) -> None:
+        """Tell each plan how many captions its sample owns, and which camera each describes.
+
+        A no-op for every batch without ``separate_view_text_tokenization``: the plans keep
+        ``text_view_ids=None`` and the packer consumes one caption per sample as it always has.
+
+        The mapping is positional, and that is the dataset's own contract: it keeps the caption
+        list in camera order, "matching the camera-major video layout" (``multiview_dataset``'s
+        ``ai_caption``), which is the same order the mask numbers a camera item's views in
+        (``view_offset + 0, 1, ...``). So caption ``i`` describes view ``i``, and
+        ``build_multiview_flex_metadata`` re-checks that the resulting set covers the sample's
+        actual camera views rather than taking this on faith.
+
+        Done here rather than in the dataset because this is where the per-sample caption counts
+        (``text_token_lengths``) and the plans meet; the dataset builds plans without knowing
+        whether the tokenizer ran in separate-view mode.
+        """
+        caption_lengths_per_sample = data_batch.get("text_token_lengths")
+        if caption_lengths_per_sample is None:
+            return
+        if len(caption_lengths_per_sample) != len(sequence_plans):
+            raise ValueError(
+                f"text_token_lengths covers {len(caption_lengths_per_sample)} samples but the batch "
+                f"has {len(sequence_plans)} sequence plans."
+            )
+        for sample_idx, (caption_lengths, plan) in enumerate(zip(caption_lengths_per_sample, sequence_plans)):
+            num_captions = len(caption_lengths)
+            if num_captions < 1:
+                raise ValueError(f"Sample {sample_idx} carries no per-view caption.")
+            plan.text_view_ids = list(range(num_captions))
+
+    def _check_per_view_captions_supported(self) -> None:
+        """Reject a per-view caption batch the attention path cannot scope by view.
+
+        One caption per camera only means something if a camera reads its own and not its
+        neighbours', and the multiview mask is the only thing that expresses that: the plain
+        dense GEN pass keys every GEN token against the whole ``[UND | GEN]`` stream of its
+        sample and has no notion of a view at all. Training that way would burn the extra
+        captions into a model that reads them all indiscriminately, at no error and no
+        obviously wrong loss -- so refuse it here instead, where the config that has to change
+        can be named.
+        """
+        if self.config.joint_attn_implementation != "multiview":
+            raise ValueError(
+                "This batch carries per-view captions (separate_view_text_tokenization), which "
+                "attend view-scoped only on the multiview pathway -- it is the one that applies "
+                "the view-scoped key sets and the per-caption causal boundaries. Set "
+                "model.config.joint_attn_implementation='multiview', or turn off "
+                "separate_view_text_tokenization on the dataset. Got "
+                f"{self.config.joint_attn_implementation!r}."
+            )
 
     def _get_train_noise_level_vision(
         self,
@@ -2325,8 +2460,38 @@ class OmniMoTModel(ImaginaireModel):
             packed_sequence.sound.tokens = gen_data_noised.xt_tokens_sound
 
     # ------------------------ Inference Utils ------------------------
+    def _apply_inference_caption_plan(
+        self,
+        sequence_plans: list[SequencePlan],
+        caption_groups: list[list[str]] | None,
+    ) -> None:
+        """Tell each plan how many captions *this* call packs for its sample.
+
+        The inference counterpart of :meth:`_apply_per_view_caption_plan`, and it sets
+        ``text_view_ids`` unconditionally -- ``None`` included -- rather than leaving whatever
+        is already on the plan. The plans belong to the data batch
+        (``build_sequence_plans_from_data_batch`` hands back the batch's own objects), and the
+        sampling callbacks sample from the batch the training step just ran, so a per-view
+        layout written by that step would otherwise outlive it here and declare more captions
+        than the captions tokenized below can fill.
+        """
+        if caption_groups is None:
+            for plan in sequence_plans:
+                plan.text_view_ids = None
+            return
+        self._check_per_view_captions_supported()
+        if len(caption_groups) != len(sequence_plans):
+            raise ValueError(
+                f"The batch carries per-view captions for {len(caption_groups)} samples but has "
+                f"{len(sequence_plans)} sequence plans."
+            )
+        for sample_idx, (sample_captions, plan) in enumerate(zip(caption_groups, sequence_plans)):
+            if not sample_captions:
+                raise ValueError(f"Sample {sample_idx} carries no per-view caption.")
+            plan.text_view_ids = list(range(len(sample_captions)))
+
     def _get_inference_text_tokens(
-        self, data_batch: dict, has_negative_prompt: bool
+        self, data_batch: dict, has_negative_prompt: bool, caption_groups: list[list[str]] | None = None
     ) -> tuple[list[list[int]], list[list[int]]]:
         """Tokenize conditional and unconditional captions for inference.
 
@@ -2334,12 +2499,22 @@ class OmniMoTModel(ImaginaireModel):
         :meth:`_tokenize_captions` (the same helper backing the public
         :meth:`tokenize_text`) so there is a single source of truth for
         how raw captions become token ids.
+
+        ``caption_groups`` (from :func:`_per_view_caption_groups`) flattens a per-view batch
+        sample by sample, camera by camera -- the order the packer reads captions back in,
+        consuming each sample's ``text_view_ids`` count.
         """
         use_system_prompt = self.vlm_config.use_system_prompt
         system_prompt: str | None = data_batch.get("system_prompt")
 
+        cond_captions = (
+            [caption for sample_captions in caption_groups for caption in sample_captions]
+            if caption_groups is not None
+            else data_batch[self.input_caption_key]
+        )
+
         cond_tokens = self._tokenize_captions(
-            data_batch[self.input_caption_key],
+            cond_captions,
             use_system_prompt=use_system_prompt,
             system_prompt=system_prompt,
             is_video=False,
@@ -2349,7 +2524,7 @@ class OmniMoTModel(ImaginaireModel):
             neg_key = "neg_" + self.input_caption_key
             if neg_key not in data_batch:
                 raise ValueError(f"Negative prompt ({neg_key}) not found")
-            uncond_captions = data_batch[neg_key]
+            uncond_captions = _expand_negative_captions(data_batch[neg_key], caption_groups)
         else:
             uncond_captions = [""] * len(cond_tokens)
 
@@ -2438,10 +2613,19 @@ class OmniMoTModel(ImaginaireModel):
                 gen_data_clean.batch_size,
             )
 
+        self._release_inference_raw_vision(data_batch, gen_data_clean)
+
         num_items_per_sample = gen_data_clean.num_vision_items_per_sample  # None for standard T2I/T2V
 
         # 3. Tokenize text (similar to training's _load_and_tokenize_text_data)
-        cond_text_tokens, uncond_text_tokens = self._get_inference_text_tokens(data_batch, has_negative_prompt)
+        # Read the caption layout off the captions this call actually packs, and record it on
+        # the plans before packing, so a per-view batch keeps one caption per camera here the
+        # way training does instead of collapsing to a single sample-level prompt.
+        caption_groups = _per_view_caption_groups(data_batch[self.input_caption_key])
+        self._apply_inference_caption_plan(sequence_plans, caption_groups)
+        cond_text_tokens, uncond_text_tokens = self._get_inference_text_tokens(
+            data_batch, has_negative_prompt, caption_groups
+        )
 
         # 4. Build packed sequence to fetch conditioning masks
         mask_timesteps = torch.zeros((gen_data_clean.batch_size,), dtype=torch.float32)  # [B]
@@ -2498,7 +2682,17 @@ class OmniMoTModel(ImaginaireModel):
             assert packed_sequence.lidar is not None, "Packed LiDAR data required when the batch carries LiDAR"
             assert isinstance(packed_sequence.lidar.condition_mask, list), "LiDAR condition mask required"
             lidar_counts = gen_data_clean.num_lidar_items_per_sample or [1] * n_sample
-            seed_lidar = [seed[sample_idx] for sample_idx, count in enumerate(lidar_counts) for _ in range(count)]
+            # arch_invariant_rand restarts its RNG on every call. Joint RGB/LiDAR
+            # therefore need distinct streams, even when their tensor shapes differ.
+            # Derive from sample identity, never batch position or distributed rank;
+            # preserve existing RGB noise and standalone LiDAR reproducibility.
+            seed_lidar = [
+                int(np.random.SeedSequence([seed[sample_idx], _LIDAR_NOISE_DOMAIN_TAG, item_idx]).generate_state(1)[0])
+                if sequence_plans[sample_idx].has_vision
+                else seed[sample_idx]
+                for sample_idx, count in enumerate(lidar_counts)
+                for item_idx in range(count)
+            ]
             noise_lidar_list = []
             for i, (x0_token, cond_mask) in enumerate(
                 zip(gen_data_clean.x0_tokens_lidar, packed_sequence.lidar.condition_mask, strict=True)
@@ -2686,6 +2880,36 @@ class OmniMoTModel(ImaginaireModel):
             has_noisy_actions,
         )
 
+    def _release_inference_raw_vision(
+        self,
+        data_batch: dict[str, Any],
+        gen_data_clean: GenerationDataClean,
+    ) -> None:
+        """Release opted-in raw vision tensors after VAE encoding.
+
+        Inference callers provide the exact CPU items needed for output bookkeeping;
+        every other raw item is discarded. Encoded vision latents and their shape
+        metadata remain on the inference device for sequence packing and denoising.
+        """
+        retained_items = data_batch.pop(INFERENCE_RAW_VISION_RETAINED_ITEMS_KEY, None)
+        if retained_items is None:
+            return
+        if not isinstance(retained_items, list) or not all(
+            isinstance(item, torch.Tensor) and item.device.type == "cpu" for item in retained_items
+        ):
+            raise TypeError(f"{INFERENCE_RAW_VISION_RETAINED_ITEMS_KEY} must be a list of CPU vision tensors.")
+
+        media_key = self.input_image_key if gen_data_clean.is_image_batch else self.input_video_key
+        raw_items = data_batch.get(media_key)
+        if not isinstance(raw_items, list):
+            raise TypeError(f"Expected data_batch[{media_key!r}] to be a list before releasing raw vision tensors.")
+
+        # Prompt upsampling can shallow-copy data_batch before this point. Mutate the
+        # shared finalized media list in place so the caller's batch, which is used
+        # later for output saving, observes the cleanup.
+        raw_items[:] = retained_items
+        gen_data_clean.raw_state_vision = None
+
     def _can_reuse_inference_pack_templates(
         self,
         sequence_plans: list[SequencePlan],
@@ -2720,6 +2944,8 @@ class OmniMoTModel(ImaginaireModel):
         # and remains excluded pending separate validation.
         if self.parallel_dims is not None and self.parallel_dims.cp_enabled:
             return False
+        # The ordinary pathway only: "multiview" runs different attention per layer, which this
+        # cache has not been validated against, and "three_way" a different pack shape.
         if self.config.joint_attn_implementation != "two_way":
             return False
         if self.config.video_temporal_causal:
@@ -2897,7 +3123,7 @@ class OmniMoTModel(ImaginaireModel):
                     offset += lidar_dim
                 lidar_offset += n_lidar
 
-            if has_noisy_actions and noise_x_action is not None:
+            if has_noisy_actions and noise_x_action is not None and sequence_plans[i].has_action:
                 assert gen_data_clean.x0_tokens_action is not None
                 action_shape = gen_data_clean.x0_tokens_action[idx_action].shape
                 action_dim = int(torch.prod(torch.tensor(action_shape)))
@@ -3226,7 +3452,8 @@ class OmniMoTModel(ImaginaireModel):
         guidance_interval: Optional[list[float]] = None,
         velocity_postprocess_builder: Optional[
             Callable[
-                ..., Optional[Callable[[list[torch.Tensor], list[torch.Tensor], torch.Tensor], list[torch.Tensor]]]
+                ...,
+                Optional[Callable[[list[torch.Tensor], list[torch.Tensor], torch.Tensor, float], list[torch.Tensor]]],
             ]
         ] = None,
         seed: list[int] | int = 1,
@@ -3415,10 +3642,12 @@ class OmniMoTModel(ImaginaireModel):
         # that receives the prepared inference state. The returned callable (if
         # any) is invoked after the conditional forward on every step and can
         # modify the conditional velocity (e.g. inject control-CFG, attention
-        # weighting, etc.). The model itself stays agnostic of what the hook
-        # does — all transfer/edit-specific logic lives in the caller.
+        # weighting, etc.). It also receives the text guidance scale active for
+        # that step so independently composed guidance is not multiplied twice.
+        # The model itself stays agnostic of what the hook does — all
+        # transfer/edit-specific logic lives in the caller.
         velocity_postprocess: Optional[
-            Callable[[list[torch.Tensor], list[torch.Tensor], torch.Tensor], list[torch.Tensor]]
+            Callable[[list[torch.Tensor], list[torch.Tensor], torch.Tensor, float], list[torch.Tensor]]
         ] = None
         if velocity_postprocess_builder is not None:
             velocity_postprocess = velocity_postprocess_builder(
@@ -3515,7 +3744,7 @@ class OmniMoTModel(ImaginaireModel):
         #
         # In throughput-preset inference each rank holds a different sample,
         # and different samples can diverge on (a) whether text CFG or a
-        # velocity postprocess hook requires a second forward, (b) whether
+        # velocity postprocess hook requires additional forwards, (b) whether
         # the fused batched path is locally eligible, and (c) ``num_steps``.
         # Any divergence makes the FSDP allgather sequence misalign across
         # ranks, deadlocking NCCL at the 30-min watchdog timeout.
@@ -3523,9 +3752,10 @@ class OmniMoTModel(ImaginaireModel):
         # We align in three places:
         #   1. Before velocity_fn: MIN-reduce fused-path eligibility so every
         #      rank agrees on batched versus sequential CFG.
-        #   2. Inside velocity_fn (per call): MAX-reduce whether any rank
-        #      needs CFG/postprocessing; if so, every rank performs the same
-        #      forward sequence. Ranks whose local decision was "no CFG" return
+        #   2. Inside velocity_fn (per call): all_gather text-CFG flags and
+        #      postprocess counts to detect any guidance need and reject mismatched counts;
+        #      every rank then performs the same forward sequence.
+        #      Ranks whose local decision was "no CFG" return
         #      ``cond_v`` directly — bit-identical to the original no-CFG path.
         #   3. Around the sampler call: all_reduce the local num_steps;
         #      ranks with local < max issue a dummy sampler call with the
@@ -3559,6 +3789,8 @@ class OmniMoTModel(ImaginaireModel):
         # Request-scoped: install only for this generate call and restore afterward so we
         # never permanently shadow another dispatch_attention_fn on the model.
         previous_attention_dispatch = None
+        diffusion_cache = getattr(self, "_diffusion_cache", None)
+        cache_step_index: int | None = None
         try:
             if reuse_text_kv:
                 target_net = net or self.net
@@ -3627,18 +3859,37 @@ class OmniMoTModel(ImaginaireModel):
                     needs_text_cfg = t_lo < timestep[0].item() < t_hi
 
                 # FSDP alignment: if ANY rank in the shard group needs a second
-                # forward for text CFG or a velocity postprocess hook, every rank
+                # forward for text CFG, every rank
                 # must issue two sequential forwards (or one globally eligible
                 # batched forward) so the allgather sequence stays aligned.
-                needs_guidance_path = needs_text_cfg or velocity_postprocess is not None
+                # Postprocessors declare extra branches; the sampler owns cache bookkeeping.
+                cfg_branches: tuple[str, ...] = ()
+                if isinstance(velocity_postprocess, VelocityPostprocess):
+                    cfg_branches = velocity_postprocess.cfg_branches(timestep)
                 _any_needs_guidance_path = _any_dp_shard_rank_needs_guidance_path(
-                    needs_guidance_path,
+                    needs_text_cfg,
                     _dp_shard_group,
                     _align_device,
+                    num_postprocess_forwards=len(cfg_branches),
                 )
+                if diffusion_cache is not None and cache_step_index is not None:
+                    cfgp_rank = (
+                        self.parallel_dims.cfgp_rank
+                        if velocity_postprocess is None
+                        and self.parallel_dims is not None
+                        and self.parallel_dims.cfgp_enabled
+                        else None
+                    )
+                    pathways = _velocity_pathways(
+                        _any_needs_guidance_path,
+                        cfg_branches=cfg_branches,
+                        batched_cfg=batched_cfg_fast_path,
+                        cfgp_rank=cfgp_rank,
+                    )
+                    diffusion_cache.begin_step(cache_step_index, pathways)
 
                 # Fast path: no rank needs CFG or postprocessing — single forward.
-                if not _any_needs_guidance_path:
+                if not _any_needs_guidance_path and velocity_postprocess is None:
                     return _single_velocity_fn(cond_tokens, skip_text_tokens=False)
 
                 # Batched-CFG fast path (opt-in): run cond + uncond as one forward of
@@ -3704,10 +3955,15 @@ class OmniMoTModel(ImaginaireModel):
 
                 # Conditional forward, then per-step postprocess hook. Hook runs
                 # sequentially; cfgp parallelism not used on this path.
-                cond_v_full = _single_velocity_fn(cond_tokens, skip_text_tokens=False)
-                cond_v = velocity_postprocess(cond_v_full, noise_x, timestep)
+                cond_v_full = _single_velocity_fn(cond_tokens, skip_text_tokens=False)  # list of [N_i]
+                text_guidance_scale = guidance if needs_text_cfg else 1.0
+                cond_v = velocity_postprocess(cond_v_full, noise_x, timestep, text_guidance_scale)  # list of [N_i]
 
-                uncond_v = _single_velocity_fn(uncond_tokens, skip_text_tokens=skip_text_tokens_for_cfg)
+                if not _any_needs_guidance_path:
+                    return cond_v
+                uncond_v = _single_velocity_fn(
+                    uncond_tokens, skip_text_tokens=skip_text_tokens_for_cfg
+                )  # list of [N_i]
                 if not needs_text_cfg:
                     # Same alignment story as above for the postprocess branch.
                     return cond_v
@@ -3756,11 +4012,16 @@ class OmniMoTModel(ImaginaireModel):
                     "condition_mask": condition_mask,
                 }
 
-            # Mixed-precision diffusion steps: select W8A16/W8A8 once per
-            # sampler step; reset (trace + staging cleanup) when the request
-            # ends, including on error.
+            # Explicit sampler steps drive both cache indexing and mixed precision.
+            # Select W8A16/W8A8 once per sampler step; reset (trace + staging cleanup)
+            # when the request ends, including on error.
             _mixed_precision_runtime = getattr(self.net, "_mixed_precision_runtime", None)
-            _step_callback = _mixed_precision_runtime.set_step if _mixed_precision_runtime is not None else None
+
+            def _step_callback(step_index: int, step_count: int) -> None:
+                nonlocal cache_step_index
+                cache_step_index = step_index
+                if _mixed_precision_runtime is not None:
+                    _mixed_precision_runtime.set_step(step_index, step_count)
 
             try:
                 if isinstance(sampler, FixedStepSampler) or scheduler_type == "unipc":
@@ -3774,6 +4035,8 @@ class OmniMoTModel(ImaginaireModel):
                         **fixed_step_sampler_kwargs,
                     )
                     if _extra_num_steps > 0:
+                        # Unregistered padding calls bypass caching on every shard rank.
+                        cache_step_index = None
                         # Dummy sampler call to issue (_extra_num_steps × per-step)
                         # FSDP allgathers; output discarded so `latents` keeps the
                         # real result captured above. Slow ranks have _extra_num_steps==0
@@ -3823,6 +4086,8 @@ class OmniMoTModel(ImaginaireModel):
                         step_callback=_step_callback,
                     )
                     if _extra_num_steps > 0:
+                        # Unregistered padding calls bypass caching on every shard rank.
+                        cache_step_index = None
                         # Pad the FSDP allgather sequence with ``_extra_num_steps``
                         # direct ``x0_fn`` calls instead of a second EDM sampler
                         # run. Avoids two EDM-specific footguns:
@@ -3837,7 +4102,7 @@ class OmniMoTModel(ImaginaireModel):
                         #       case would need num_steps=0 to balance the count.
                         # Direct ``x0_fn`` calls bypass both: each call routes
                         # through the same ``velocity_fn`` closure (so the
-                        # per-call CFG all_reduce still aligns ranks), issues
+                        # per-call CFG all_gather still aligns ranks), issues
                         # exactly one model forward, and discards its return.
                         # ``latents`` is the catted single tensor at this point;
                         # the dummy sigma value is irrelevant for collective
@@ -4167,14 +4432,40 @@ class OmniMoTModel(ImaginaireModel):
         return num_views
 
     @staticmethod
-    def _get_multiview_vae_metadata(
+    def _unwrap_vision_item(item: Any) -> torch.Tensor:
+        """Return the tensor backing one flattened vision item.
+
+        Samples owning several vision items are flattened upstream, but a sample owning
+        exactly one can still arrive wrapped in a length-1 list: that flattening is decided
+        batch-wide, so it does not run unless some sample has more than one item.
+        """
+        if isinstance(item, (list, tuple)):
+            if len(item) != 1:
+                raise ValueError(
+                    f"Single-item multiview samples must contain exactly one vision tensor, got {len(item)}."
+                )
+            item = item[0]
+        if not isinstance(item, torch.Tensor):
+            raise TypeError(f"Multiview vision items must be tensors, got {type(item).__name__}.")
+        return item
+
+    @staticmethod
+    def _validate_and_get_num_views(
         data_batch: dict[str, Any],
+        media_key: str,
         num_vision_items_per_sample: list[int] | None,
         batch_size: int,
-    ) -> tuple[list[int] | None, list[int] | None]:
-        """Align per-sample multiview metadata with flattened vision items."""
+    ) -> list[int] | None:
+        """Align per-sample camera counts with flattened vision items, or None if not multiview.
+
+        This is where the dataloader's declared ``num_video_frames_per_view`` meets the actual
+        pixels. Everything downstream derives a view's length as ``T // num_views``, which this
+        check makes exact; without it a stale per-view length would silently misalign latents
+        against the mRoPE grid that sequence packing builds from that same field. Validating
+        here also fails before any VAE work rather than partway through encoding a batch.
+        """
         if "enable_per_camera_vae_encoding" not in data_batch:
-            return None, None
+            return None
 
         sample_n_views = read_positive_int_metadata(data_batch, "sample_n_views", expected_count=batch_size)
         sample_frames_per_view = read_positive_int_metadata(
@@ -4203,7 +4494,29 @@ class OmniMoTModel(ImaginaireModel):
                 raise ValueError(f"Vision item counts must be positive, got {vision_item_counts}.")
             num_views_per_vision_item.extend([sample_n_views[sample_idx]] * num_vision_items)
             frames_per_vision_item.extend([sample_frames_per_view[sample_idx]] * num_vision_items)
-        return num_views_per_vision_item, frames_per_vision_item
+
+        vision_items = data_batch[media_key]
+        if len(num_views_per_vision_item) != len(vision_items):
+            raise ValueError(
+                "Multiview VAE metadata must align with the flattened vision items: "
+                f"got {len(num_views_per_vision_item)} view counts for {len(vision_items)} vision items."
+            )
+        for item, num_views, frames_per_view in zip(
+            vision_items,
+            num_views_per_vision_item,
+            frames_per_vision_item,
+            strict=True,
+        ):
+            # T is the first of the trailing (T, H, W) dims for both the [C,V*T,H,W] and
+            # [B,C,V*T,H,W] layouts an item can still be in at this point.
+            state = OmniMoTModel._unwrap_vision_item(item)
+            actual_frames = int(state.shape[state.ndim - 3])
+            if actual_frames != num_views * frames_per_view:
+                raise ValueError(
+                    "Multiview vision length must equal num_views * frames_per_view: "
+                    f"got T={actual_frames}, num_views={num_views}, frames_per_view={frames_per_view}."
+                )
+        return num_views_per_vision_item
 
     def _require_lidar_tokenizer(self) -> VideoTokenizerInterface:
         """Return the LiDAR VAE, or say which config knob is missing."""
@@ -4215,7 +4528,7 @@ class OmniMoTModel(ImaginaireModel):
         return self.tokenizer_lidar_gen
 
     def _normalize_uint8_vision_item(self, state: torch.Tensor) -> torch.Tensor:
-        """Convert one GPU-resident uint8 vision item to fp32 and normalize to ``[-1,1]``."""
+        """Move one uint8 vision item to the model device as fp32 and normalize it to ``[-1,1]``."""
         return normalize_uint8_item(state, self.tensor_kwargs_fp32)
 
     def _encode_vision_item(
@@ -4223,36 +4536,39 @@ class OmniMoTModel(ImaginaireModel):
         state: torch.Tensor,
         *,
         num_views: int,
-        frames_per_view: int | None,
     ) -> torch.Tensor:  # state: [B,C,T,H,W] or [C,T,H,W], returns [...,C_latent,T_latent,H_latent,W_latent]
-        """Encode one vision item, normalizing camera-major views independently when requested.
+        """Encode one vision item, normalizing camera-major views independently.
 
-        When ``frames_per_view`` is present, ``state`` contains ``num_views``
-        complete clips concatenated along T. uint8 camera clips are converted to
-        fp32 and normalized per view so the full multiview tensor is never
-        materialized. Floating-point LiDAR clips (V0 range+intensity or V1 metric
-        three-channel) are already tokenizer-native and are encoded as-is.
+        ``state`` packs ``num_views`` equal-length clips along T, so each view's pixel
+        length is ``T // num_views``; ``get_data_and_condition`` has already cross-checked
+        that split against the dataloader's ``num_video_frames_per_view``. uint8 camera
+        clips are converted to fp32 and normalized per view so the full multiview tensor is
+        never materialized. Floating-point clips are already tokenizer-native and are
+        encoded as-is: pre-normalized single-view items, and LiDAR range clips (V0
+        range+intensity or V1 metric three-channel).
 
         Kept on the model rather than moved onto :class:`VisionEncoder` because it is a
         monkeypatch seam: ``posttrain``'s seeded-validation context manager replaces this
         attribute to give each vision item a deterministic RNG seed, so every unbalanced
         encode has to keep flowing through it.
+
+        ``num_views`` is trusted as-is: callers derive it from ``_validate_and_get_num_views``,
+        which has already checked it is positive and divides the item's frame count evenly.
         """
-        if frames_per_view is None:
-            if num_views != 1:
-                raise ValueError("frames_per_view is required when num_views is greater than one.")
-            return self.encode(state).contiguous().float()  # [...,C_latent,T_latent,H_latent,W_latent]
+        if num_views == 1:
+            # Single view: encode the item directly, no split/concat needed.
+            encode_input = (  # [...,C,T,H,W]
+                state if torch.is_floating_point(state) else self._normalize_uint8_vision_item(state)
+            )
+            return self.encode(encode_input).contiguous().float()  # [...,C_latent,T_latent,H_latent,W_latent]
 
         temporal_dim = state.ndim - 3
-        validate_multiview_length(state, num_views=num_views, frames_per_view=frames_per_view)
+        num_frames = int(state.shape[temporal_dim])
+        frames_per_view = num_frames // num_views
 
         encoded_views: list[torch.Tensor] = []
         for view_idx in range(num_views):
-            view_state = state.narrow(  # [...,C,T_v,H,W]
-                temporal_dim,
-                view_idx * frames_per_view,
-                frames_per_view,
-            )
+            view_state = state.narrow(temporal_dim, view_idx * frames_per_view, frames_per_view)  # [...,C,T_v,H,W]
             # Camera pixels arrive as uint8 levels and need the [-1,1] map. A LiDAR
             # clip arrives float in the units its own tokenizer normalizes from, so
             # it is already tokenizer-native and is encoded as-is.
@@ -4289,7 +4605,6 @@ class OmniMoTModel(ImaginaireModel):
         num_vision_items_per_sample: list[int] | None,
         vision_condition_indexes: list[list[int]] | None,
         num_views_per_vision_item: list[int] | None = None,
-        frames_per_vision_item: list[int] | None = None,
         balance_vae_encode: bool = False,
     ) -> list[torch.Tensor]:
         """Encode vision items into x0 latent tokens, optionally splitting camera views.
@@ -4302,42 +4617,26 @@ class OmniMoTModel(ImaginaireModel):
 
         Inference optimization: when ``vision_condition_indexes`` is provided (one
         conditioning-frame-index list per sample, from each ``SequencePlan``) and the
-        vision tokenizer is temporally causal, only the pixel-frame prefix required to
-        reconstruct the highest conditioned latent frame is encoded. The remaining
-        latent frames are generated (pure-noise) positions that the ``condition_mask``
-        blend discards, so they are zero-filled instead of encoded. Under a causal VAE
-        the kept latents are identical to the corresponding frames of a full-clip
-        encode, while the encode processes far fewer frames (e.g. 1 pixel frame instead
-        of the full clip for WAM / forward-dynamics modes that only condition latent
-        frame 0). Inverse-dynamics conditions every latent frame, so it keeps the full
-        encode automatically.
+        vision tokenizer is temporally causal, encoding is delegated to
+        :meth:`_encode_vision_x0_tokens_prefix`, which encodes only the pixel-frame prefix
+        the conditioning latents need (e.g. 1 pixel frame instead of the full clip for WAM
+        / forward-dynamics modes that condition latent frame 0 only). Inverse-dynamics
+        conditions every latent frame, so it keeps the full encode automatically.
 
-        The optimization falls back to a full encode for multi-vision samples,
-        multiview items, non-causal tokenizers, samples with no conditioning frames,
-        and any item whose full clip is already the minimal prefix.
+        The optimization is declined here for multi-vision samples, multiview items and
+        non-causal tokenizers; the per-item fallbacks live in that method.
 
         ``balance_vae_encode`` spreads the full-encode path's work across the ``lb`` group
         (see :meth:`VisionEncoder.encode_balanced`). It is ignored on the prefix-encode path above,
         which is inference-only, and only training opts in.
         """
 
+        # Alignment with the vision items was checked by _validate_and_get_num_views against
+        # the same list raw_state_vision is built one-to-one from; the strict zips below are
+        # the backstop for any other caller.
         has_multiview_metadata = num_views_per_vision_item is not None
-        if has_multiview_metadata != (frames_per_vision_item is not None):
-            raise ValueError("num_views_per_vision_item and frames_per_vision_item must be provided together.")
         if num_views_per_vision_item is None:
             num_views_per_vision_item = [1] * len(raw_state_vision)
-            frames_per_vision_item_optional: list[int | None] = [None] * len(raw_state_vision)
-        else:
-            assert frames_per_vision_item is not None
-            if len(num_views_per_vision_item) != len(raw_state_vision) or len(frames_per_vision_item) != len(
-                raw_state_vision
-            ):
-                raise ValueError(
-                    "Multiview VAE metadata must align with flattened vision items: "
-                    f"got {len(num_views_per_vision_item)} view counts, {len(frames_per_vision_item)} frame "
-                    f"counts, and {len(raw_state_vision)} vision items."
-                )
-            frames_per_vision_item_optional = list(frames_per_vision_item)
 
         # Only opt in when a caller supplied per-sample conditioning indexes, the
         # samples map 1:1 to single-view vision items (no multi-vision flattening),
@@ -4351,29 +4650,42 @@ class OmniMoTModel(ImaginaireModel):
             and self.tokenizer_vision_gen.is_causal
             and len(vision_condition_indexes) == len(raw_state_vision)
         )
-        if not optimization_applicable:
-            # Training does not provide vision_condition_indexes, so it fully
-            # encodes each item in the flattened control/target list.
-            if balance_vae_encode:
-                # Built only here: callers that never balance (inference, the visualization
-                # callbacks) should not need a tokenizer or an lb mesh to encode.
-                encoder = self._vision_encoder()
-                if encoder.balancing_available():
-                    return encoder.encode_balanced(
-                        raw_state_vision,
-                        num_views_per_vision_item,
-                        frames_per_vision_item_optional,
-                    )
-            return [
-                self._encode_vision_item(state, num_views=num_views, frames_per_view=frames_per_view)
-                for state, num_views, frames_per_view in zip(
-                    raw_state_vision,
-                    num_views_per_vision_item,
-                    frames_per_vision_item_optional,
-                    strict=True,
-                )
-            ]
 
+        if optimization_applicable:
+            return self._encode_vision_x0_tokens_prefix(raw_state_vision, vision_condition_indexes)
+
+        # Training does not provide vision_condition_indexes, so it fully
+        # encodes each item in the flattened control/target list.
+        if balance_vae_encode:
+            # Built only here: callers that never balance (inference, the visualization
+            # callbacks) should not need a tokenizer or an lb mesh to encode.
+            encoder = self._vision_encoder()
+            if encoder.balancing_available():
+                return encoder.encode_balanced(raw_state_vision, num_views_per_vision_item)
+
+        return [
+            self._encode_vision_item(state, num_views=num_views)
+            for state, num_views in zip(raw_state_vision, num_views_per_vision_item, strict=True)
+        ]
+
+    def _encode_vision_x0_tokens_prefix(
+        self,
+        raw_state_vision: list[torch.Tensor],
+        vision_condition_indexes: list[list[int]],
+    ) -> list[torch.Tensor]:
+        """Encode only the pixel prefix each item's conditioning latents need.
+
+        Inference-only companion to :meth:`_encode_vision_x0_tokens`, reached only through
+        that method's ``optimization_applicable`` gate: per-sample conditioning indexes,
+        single-view single-item samples, and a temporally causal vision tokenizer. Under a
+        causal VAE the kept latents are identical to the corresponding frames of a full-clip
+        encode, so the only difference is how many pixel frames the VAE has to process.
+
+        Falls back to a full encode per item whenever the prefix would save nothing or
+        cannot be derived exactly: items with no conditioning frames, tokenizers whose
+        pixel<->latent frame map has no positive inverse for the requested latent count,
+        and conditioning that already spans the whole clip.
+        """
         # The prefix-encode optimization zero-fills the generated (pure-noise) latent
         # frames that the condition_mask blend later discards. That is only valid when
         # no gradient is required: torch.is_grad_enabled() is False under both
@@ -4386,7 +4698,6 @@ class OmniMoTModel(ImaginaireModel):
             )
 
         tokenizer = self.tokenizer_vision_gen
-        assert vision_condition_indexes is not None  # narrowed by optimization_applicable above
         x0_tokens_vision: list[torch.Tensor] = []
         for raw_state_vision_i, condition_indexes in zip(
             raw_state_vision,
@@ -4404,7 +4715,7 @@ class OmniMoTModel(ImaginaireModel):
             if not valid_condition:
                 # No conditioning frames to preserve (e.g. fully generated T2V item):
                 # keep the full encode so behavior is unchanged for non-action items.
-                x0_tokens_vision.append(self._encode_vision_item(raw_state_vision_i, num_views=1, frames_per_view=None))
+                x0_tokens_vision.append(self._encode_vision_item(raw_state_vision_i, num_views=1))
                 continue
 
             needed_latent_frames = max(valid_condition) + 1
@@ -4418,7 +4729,7 @@ class OmniMoTModel(ImaginaireModel):
                 # one observed image to two latent slots, but slot 1 is causal
                 # padding that remains generated rather than a second clean
                 # observation, so its condition indexes intentionally stay [0].
-                x0_tokens_vision.append(self._encode_vision_item(raw_state_vision_i, num_views=1, frames_per_view=None))
+                x0_tokens_vision.append(self._encode_vision_item(raw_state_vision_i, num_views=1))
                 continue
             assert needed_pixel_frames <= num_pixel_frames, (
                 f"needed_pixel_frames ({needed_pixel_frames}) cannot be greater than "
@@ -4426,15 +4737,11 @@ class OmniMoTModel(ImaginaireModel):
             )
             if needed_pixel_frames == num_pixel_frames:
                 # The conditioning already spans (nearly) the whole clip; no work saved.
-                x0_tokens_vision.append(self._encode_vision_item(raw_state_vision_i, num_views=1, frames_per_view=None))
+                x0_tokens_vision.append(self._encode_vision_item(raw_state_vision_i, num_views=1))
                 continue
 
             prefix = raw_state_vision_i.narrow(temporal_dim, 0, needed_pixel_frames)  # [...,T_prefix,H,W]
-            prefix_latent = self._encode_vision_item(  # [...,T_latent_prefix,H_latent,W_latent]
-                prefix,
-                num_views=1,
-                frames_per_view=None,
-            )
+            prefix_latent = self._encode_vision_item(prefix, num_views=1)  # [...,T_latent_prefix,H,W]
 
             # The scatter below assumes the pixel->latent round trip is exact, i.e. that
             # encoding ``needed_pixel_frames`` yields exactly ``needed_latent_frames``
@@ -4534,8 +4841,11 @@ class OmniMoTModel(ImaginaireModel):
         # Detect whether any sample has multiple vision items (e.g. image editing).
         # If so, track the count per sample before all vision items from this batch are flattened into a list.
         is_image_batch = self.is_image_batch(data_batch)
-        sample_vision_list = data_batch[self.input_image_key if is_image_batch else self.input_video_key]
+        media_key = self.input_video_key if not is_image_batch else self.input_image_key
 
+        sample_vision_list = data_batch[media_key]
+
+        # NOTE: as we assume that the vision items will be passed as a List[List[Tensor]],
         # we should always get this information here during training. If we can read this field
         # from data_batch it means we are in the visualization callback:
         if "num_vision_items_per_sample" not in data_batch:
@@ -4548,6 +4858,7 @@ class OmniMoTModel(ImaginaireModel):
             num_vision_items_per_sample: list[int] | None = (
                 [len(v) for v in sample_vision_list] if has_multiple_vision_per_sample else None
             )
+            # NOTE: we need to add this information back into the data_batch, because this
             # information is only stored in the GenerationDataClean object which will be discarded
             # outside the training loop. Error will be raised when the data batch is passed to the
             # visualization callbacks.
@@ -4556,9 +4867,14 @@ class OmniMoTModel(ImaginaireModel):
             # if has_multiple_vision_per_sample, this means that the input media is a list
             # of lists of tensors, we need to flatten it to a list of tensors
             if has_multiple_vision_per_sample:
-                media_key = self.input_video_key if not is_image_batch else self.input_image_key
                 data_batch[media_key] = [item.unsqueeze(0) for sublist in sample_vision_list for item in sublist]
-                if data_batch[media_key][0].dtype == torch.float32 and not is_image_batch:
+                vision_dtypes = {item.dtype for item in data_batch[media_key]}
+                if len(vision_dtypes) > 1:
+                    raise ValueError(
+                        f"Mixed dtypes {vision_dtypes} across vision items in a multi-vision batch; "
+                        "is_preprocessed cannot be determined for the batch as a whole."
+                    )
+                if vision_dtypes == {torch.float32} and not is_image_batch:
                     # For video batch, is_preprocessed = True means the video data is normalized.
                     # For the image batch, is_preprocessed = True means the image data is
                     # normalized and augmented with a temporal dimension.
@@ -4570,14 +4886,14 @@ class OmniMoTModel(ImaginaireModel):
             len(sample_vision_list) if num_vision_items_per_sample is None else len(num_vision_items_per_sample)
         )
 
-        num_views_per_vision_item, frames_per_vision_item = self._get_multiview_vae_metadata(
+        num_views_per_vision_item = self._validate_and_get_num_views(
             data_batch,
+            media_key,
             num_vision_items_per_sample,
             batch_size,
         )
 
         # Vision (image/video) raw state and tokenized latent state.
-        media_key = self.input_image_key if is_image_batch else self.input_video_key
         if num_views_per_vision_item is None:
             # Legacy VFM/image path: normalize the complete input when needed and
             # preserve the existing image batch-dimension handling.
@@ -4587,17 +4903,11 @@ class OmniMoTModel(ImaginaireModel):
 
         else:
             # Per-camera multiview path: preserve camera-major uint8 pixels here;
-            # _encode_vision_item normalizes only one camera at a time.
+            # _encode_vision_item normalizes only one camera at a time. Lengths were already
+            # checked against the metadata by _validate_and_get_num_views.
             raw_state_vision = []
             for item in data_batch[media_key]:
-                if isinstance(item, (list, tuple)):
-                    if len(item) != 1:
-                        raise ValueError(
-                            f"Single-item multiview samples must contain exactly one vision tensor, got {len(item)}."
-                        )
-                    item = item[0]
-                if not isinstance(item, torch.Tensor):
-                    raise TypeError(f"Multiview vision items must be tensors, got {type(item).__name__}.")
+                item = self._unwrap_vision_item(item)
                 if item.dim() == 4:  # Unbatched camera-major pixels: [C,V*T,H,W]
                     item = item.unsqueeze(0)  # [1,C,V*T,H,W]
                 elif item.dim() != 5:  # Batched camera-major pixels: [B,C,V*T,H,W]
@@ -4611,7 +4921,6 @@ class OmniMoTModel(ImaginaireModel):
             num_vision_items_per_sample,
             vision_condition_indexes,
             num_views_per_vision_item,
-            frames_per_vision_item,
             balance_vae_encode=balance_vae_encode,
         )
 
@@ -4619,11 +4928,18 @@ class OmniMoTModel(ImaginaireModel):
         if frame_size is not None:
             x0_tokens_vision = self._remove_padding_from_latent(x0_tokens_vision, frame_size)
 
+        sr_noise_cfg = getattr(self.config, "sr_latent_condition_noise", None)
+        if sr_noise_cfg is not None and self.training and torch.is_grad_enabled():
+            # L1: noise the LR conditioning latent of SR samples only (never the generated item).
+            eligible = sr_sample_mask(data_batch.get("dataset_name"), batch_size, sr_noise_cfg.dataset_names)
+            x0_tokens_vision, _ = apply_sr_latent_condition_noise(
+                x0_tokens_vision, num_vision_items_per_sample, eligible, sr_noise_cfg
+            )
+
         temporal_positions_vision = self._get_temporal_positions_vision(
             raw_state_vision=raw_state_vision,
             x0_tokens_vision=x0_tokens_vision,
             num_views_per_vision_item=num_views_per_vision_item,
-            frames_per_vision_item=frames_per_vision_item,
         )
 
         # LiDAR range clips: their own VAE, so they never travel among the vision items.
@@ -5555,6 +5871,7 @@ class OmniMoTModel(ImaginaireModel):
             packed_seq=data_batch_packed,
             memory=memory,
             video_temporal_causal=video_temporal_causal,
+            correct_cp_gradients=self.config.correct_cp_gradients,
         )
         output_dict = dict()
         output_dict["preds_vision"] = out_net["preds_vision"]

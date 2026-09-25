@@ -956,7 +956,8 @@ class SetupOverrides(ABC, CheckpointOverrides, ParallelismOverrides, Quantizatio
     it by default; pass ``--no-diffusion-cache`` to disable it. Caching is based on
     SeaCache: Spectral-Evolution-Aware Cache for Accelerating Diffusion Models
     (https://arxiv.org/abs/2602.18993). Autoregressive and KV-cache generation
-    bypass the cache automatically.
+    bypass the cache automatically. Quantized inference (ModelOpt FP8 checkpoints,
+    ``--quantization-method`` mxfp8/nvfp4) keeps the cache off and logs a warning.
     """
     diffusion_cache_thresh: float | None = None
     """Accumulated relative-L1 threshold (``diffusion_cache_thresh``), shared by the

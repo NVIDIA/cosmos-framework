@@ -213,10 +213,10 @@ from torch import Tensor
 from torch.nn.attention.flex_attention import BlockMask
 
 from cosmos_framework.model.attention import attention
-from cosmos_framework.configs.base.defaults.flex_attention import AttentionScope
+from cosmos_framework.configs.base.defaults.multiview_attention import AttentionScope
 from cosmos_framework.model.generator.mot.flex_attention import (
     FlexBackend,
-    MaskItem,
+    SensorMaskItem,
     _get_flash_flex_backend,
     _get_triton_flex_backend,
     build_multiview_block_mask,
@@ -404,7 +404,7 @@ class MultiviewScenario:
         return self.num_views * self.latent_frames_per_view
 
     @property
-    def items_per_sample(self) -> int:
+    def sensor_mask_items(self) -> int:
         return self.num_noisy_items + self.num_cond_items
 
     @property
@@ -413,7 +413,7 @@ class MultiviewScenario:
 
     @property
     def tokens_per_sample(self) -> int:
-        return self.items_per_sample * self.tokens_per_item
+        return self.sensor_mask_items * self.tokens_per_item
 
     @property
     def real_tokens(self) -> int:
@@ -470,7 +470,7 @@ class MultiviewScenario:
 class PackInputs:
     """The mask-building arguments a packed batch of this scenario would carry."""
 
-    items_per_sample: list[list[MaskItem]]  # control items first, then the generated ones
+    sensor_mask_items: list[list[SensorMaskItem]]  # control items first, then the generated ones
     full_q_offsets: Tensor  # [num_samples+1], int32: cumulative per-sample GEN offsets
     causal_offsets: Tensor  # [num_samples+1], int32: cumulative per-sample UND offsets
     dense_q_offsets: Tensor  # [num_samples+1], int32: GEN queries per sample
@@ -501,15 +501,19 @@ def build_pack_inputs(scenario: MultiviewScenario, device: torch.device) -> Pack
     to the counts below, and they keep every output row written.
     """
 
-    def _item(condition_mask: Tensor, is_control: bool) -> MaskItem:
-        return MaskItem(
+    def _item(condition_mask: Tensor, is_control: bool) -> SensorMaskItem:
+        return SensorMaskItem(
             token_shape=scenario.token_shape,
             condition_mask=condition_mask,
             num_views=scenario.num_views,
+            view_offset=0,
             is_control=is_control,
+            # One camera rig on one clock, which is what these scenarios time.
+            seconds_per_frame=1.0,
+            caption_access="camera",
         )
 
-    items_per_sample: list[list[MaskItem]] = []
+    sensor_mask_items: list[list[SensorMaskItem]] = []
     for _ in range(scenario.num_samples):
         sample_items = [
             _item(torch.ones(scenario.latent_t, dtype=torch.bool, device=device), is_control=True)
@@ -525,7 +529,7 @@ def build_pack_inputs(scenario: MultiviewScenario, device: torch.device) -> Pack
                     start = view_idx * frames_per_view
                     mask[start : start + scenario.noisy_cond_frames_per_view] = True
             sample_items.append(_item(mask, is_control=False))
-        items_per_sample.append(sample_items)
+        sensor_mask_items.append(sample_items)
 
     offsets = [scenario.tokens_per_sample * i for i in range(scenario.num_samples + 1)]
     causal_offsets = [scenario.num_causal_tokens * i for i in range(scenario.num_samples + 1)]
@@ -538,7 +542,7 @@ def build_pack_inputs(scenario: MultiviewScenario, device: torch.device) -> Pack
         return max(end - start for start, end in zip(cumulative, cumulative[1:]))
 
     return PackInputs(
-        items_per_sample=items_per_sample,
+        sensor_mask_items=sensor_mask_items,
         full_q_offsets=torch.tensor(offsets, dtype=torch.int32, device=device),  # [num_samples+1]
         causal_offsets=torch.tensor(causal_offsets, dtype=torch.int32, device=device),  # [num_samples+1]
         dense_q_offsets=torch.tensor(dense_q_offsets, dtype=torch.int32, device=device),  # [num_samples+1]
@@ -855,14 +859,17 @@ def run_scenario(
 
         def build() -> BlockMask:
             return build_multiview_block_mask(
-                seq_len=scenario.seq_len,
+                gen_seq_len=scenario.seq_len,
                 full_q_offsets=pack.full_q_offsets,
-                items_per_sample=pack.items_per_sample,
+                sensor_mask_items=pack.sensor_mask_items,
+                caption_mask_items=None,
                 device=device,
                 block_size=block_size,
-                num_und=scenario.causal_seq_len,
+                und_seq_len=scenario.causal_seq_len,
                 causal_offsets=pack.causal_offsets,
                 attention_scope=scenario.attention_scope,
+                decomposed_temporal_window_seconds=None,
+                control_attends_sensor=False,
             )
 
         latencies, peak, error = time_call(
@@ -952,7 +959,7 @@ def run_scenario(
 
         Reads the same buffers as the flex rows, with the key stream taken per sample rather
         than per stream: the offsets treat it as ``[und | gen]`` runs, which is the order
-        ``get_all_seq`` produces for this pass and is the same bytes for a single sample.
+        ``get_all_seq_unpadded`` produces for this pass and is the same bytes for a single sample.
         Only the segment lengths matter to a timing baseline, so the row order does not.
         """
 

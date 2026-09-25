@@ -8,10 +8,9 @@ EMBODIMENT_TO_DOMAIN_ID: dict[str, int] = {
     "av": 1,
     "camera_pose": 2,
     "hand_pose": 3,
-    # Alias for the WebHumanAction (Action100M) Lance hand adapter. Same domain
-    # as "hand_pose" (shared with embodiment_a) so it reuses the same action2llm/llm2action
-    # DomainAwareLinear weights rather than training a fresh encoder/decoder.
-    "webhumanaction_hand": 3,
+    # WebHumanAction omits the camera prefix from its 48D native hand layout,
+    # so it must not reuse hand_pose/embodiment_a's camera-inclusive domain 3 projector.
+    "webhumanaction_hand": 31,
     "pusht": 4,
     "libero": 5,
     "umi": 6,
@@ -36,7 +35,7 @@ EMBODIMENT_TO_DOMAIN_ID: dict[str, int] = {
     "behavior1k_lerobot": 22,  # BEHAVIOR-1K R1Pro mobile bimanual (23D joint action)
     "maniparena": 23,  # ManipArena x2robot/ex001_6r dual-arm; own 20D EE-direct action projection
     # New dedicated slot (not reusing agibot's domain 15): WebHumanAction body
-    # (camera+head+wrists, yesCam 36D) trains its own action2llm/llm2action
+    # (ego/head+wrists+fingertips, no camera action, 57D) trains its own action2llm/llm2action
     # DomainAwareLinear weights from scratch instead of continuing agibot's.
     "webhumanaction_body": 24,
     "so101-molmo-midtrain-15hz": 25,
@@ -55,6 +54,10 @@ EMBODIMENT_TO_DOMAIN_ID: dict[str, int] = {
     # RoboCasa PandaOmron mobile manipulation (10/15/20D raw action per
     # ``use_base_action`` / ``base_encoding``); appended above the maximum.
     "robocasa": 30,
+    # embodiment_b nvidia-20260828 ingestion: a new one-shot dataset, distinct from
+    # "embodiment_b" (domain 9, an earlier unrelated sample drop with its own 30D
+    # contract).
+    "embodiment_b_20260828": 32,
 }
 
 
@@ -72,7 +75,7 @@ EMBODIMENT_TO_RAW_ACTION_DIM: dict[str, int] = {
     "agibotworld": 29,
     "embodiment_c_gripper": 29,
     "embodiment_c_gripper_ext": 29,
-    "webhumanaction_body": 36,  # camera(9) + head(9) + R_wrist(9) + L_wrist(9)
+    "webhumanaction_body": 57,  # ego/head(9) + [R_wrist(9)+R_fingertips(15)] + [L_wrist(9)+L_fingertips(15)]
     "xdof_yam": 20,
     "molmoact2_yam": 20,
     "abc_yam": 20,
@@ -89,6 +92,7 @@ EMBODIMENT_TO_RAW_ACTION_DIM: dict[str, int] = {
     "so101-bimanual-midtrain-conditional": 20,
     "geniesim3_g2a": 29,
     "geniesim3_g2a_joint": 16,
+    "embodiment_b_20260828": 50,
     # NOTE: ``libero`` (7/10/13 depending on ``rotation_space``), ``hand_pose``
     # (variable with ``keypoint_option`` and ``rotation_format``) and ``robocasa``
     # (10 arm-only, 15/20 with the mobile base, per ``use_base_action`` /

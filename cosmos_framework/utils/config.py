@@ -302,9 +302,9 @@ class CheckpointConfig:
     # Path of model weights to resume the checkpoint from.
     load_path: str = ""
 
-    # The following 3 flags (load_training_state, only_load_scheduler_state, keys_to_skip_loading)
-    # only take effect when the checkpoints are loaded from `load_path`. If loading happens from
-    # the previous checkpoint of the same model, these flags are ignored.
+    # The following flags (load_training_state, only_load_scheduler_state, keys_to_skip_loading,
+    # keys_not_to_resume) only take effect when checkpoints are loaded from `load_path`.
+    # If loading happens from the previous checkpoint of the same model, these flags are ignored.
 
     # Whether to load the training states (optimizer/scheduler/grad-scaler) from the checkpoint path.
     load_training_state: bool = False
@@ -329,7 +329,8 @@ class CheckpointConfig:
     # Print detailed information during checkpoint saving/loading.
     verbose: bool = True
 
-    # Keys not to resume from the checkpoint, choices: ["model", "optim", "scheduler", "trainer", "dataloader"]
+    # Checkpoint components not to resume when warm-starting from `load_path`.
+    # Choices: ["model", "optim", "scheduler", "trainer", "dataloader"]
     keys_not_to_resume: list[str] = []
 
     # Whether to use the local filesystem for broadcasting checkpoint data (used for Tensor Parallel Checkpointer).
@@ -404,8 +405,8 @@ class Profiling:
     # Set `record_shape` and `profile_memory` to False to reduce profile size.
     record_shape: bool = False
     profile_memory: bool = False
-    with_stack: bool = True
-    with_modules: bool = True
+    with_stack: bool = False
+    with_modules: bool = False
 
 
 @make_freezable
@@ -462,6 +463,8 @@ class TrainerConfig:
     run_validation: bool = True
     # How often we evaluate on the validation set.
     validation_iter: int = 999999999
+    # Keep a bounded validation iterator alive so its worker can prefetch between validation calls.
+    prefetch_validation: bool = False
     # Whether to run the validation on the start of the training.
     run_validation_on_start: bool = False
     # Kill the process after N seconds since the last iteration (usually means dead job).
@@ -576,6 +579,13 @@ def load_config(
             logging.debug(f"override_one_logger_callback: took {(ol_t2 - ol_t1) / 1e6:.2f}ms")
         except ImportError:
             pass
+
+    if TRAINING:
+        # Imported here for the same reason ``TrainerConfig.callbacks`` is declared under
+        # TRAINING: the callback stack it pulls in is training-only.
+        from cosmos_framework.utils.callback import ensure_async_checkpoint_confirmation
+
+        config = ensure_async_checkpoint_confirmation(config)
 
     t2 = time.monotonic_ns()
     logging.debug(f"total time to load config: {(t2 - t1) / 1e6:.2f}ms")

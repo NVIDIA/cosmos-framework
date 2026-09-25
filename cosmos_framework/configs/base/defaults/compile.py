@@ -39,6 +39,18 @@ class CompileConfig:
     # Whether to use CUDA graphs for faster inference. This option does not work during training.
     use_cuda_graphs: bool = False
 
+    # Granularity of CUDA-graph capture for AR inference (only with ``enabled`` and
+    # ``use_cuda_graphs``).  "block": every decoder block is compiled with
+    # ``torch.compile(mode="reduce-overhead")`` and replays its own CUDA-graph tree, so a
+    # forward still pays one graph launch per block plus the Python between blocks.
+    # "forward": blocks are compiled without CUDA-graph trees and the AR loop captures one
+    # explicit graph per whole forward (denoise / KV-refresh × CFG branch) on the
+    # static-shape KV path from cache index 1 onward.
+    cuda_graph_scope: Literal["block", "forward"] = attrs.field(
+        default="block",
+        validator=attrs.validators.in_({"block", "forward"}),
+    )
+
     # AR-inference-specific behavior once the rolling KV window saturates.
     # "default" uses the global compile settings for the entire generation.
     # "static-compile" keeps the normal pre-saturation path, then uses dedicated
@@ -65,3 +77,21 @@ class CompileConfig:
     # config and explores nearby configs by adjusting one parameter at a time.
     # Requires max_autotune_pointwise=True to have effect on reduction kernels.
     coordinate_descent_tuning: bool = False
+
+    # Master switch for unbacked sequence-packing shapes. ``apply_compile`` is the only thing that
+    # installs the marking, and ``parallelize_unified_mot._mark_pack_unbacked`` holds the only
+    # ``torch._dynamo.decorators.mark_unbacked`` call in the repo, so this switch governs the
+    # functionality outright rather than muting one of several paths.
+    #
+    # What it buys when on: sequence packing hands each block a different token count almost every
+    # step, and a backed length gets specialized on the first one traced, so every new pack shape
+    # is a recompile. Marking the length unbacked removes the hint the guards are built from, and
+    # with it the recompiles.
+    #
+    # Why it is off by default: an unbacked length has no value, so anything that needs one --
+    # rather than merely a relation between two of them -- has nothing to work with. Context
+    # parallelism is the case that matters. Its all-to-all goes through DTensor
+    # (``context_parallel_utils.all_to_all_tensor``), whose ``redistribute`` computes chunk sizes
+    # for the sharded dimension, and under ``gather_heads_scatter_seq`` that dimension is the
+    # sequence -- the very one marked here.
+    mark_unbacked: bool = False

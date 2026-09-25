@@ -11,17 +11,30 @@ Changes:
 """
 
 import json
+import math
 import random
 from copy import deepcopy
-from typing import Dict, List, Literal, Tuple
+from typing import Dict, List, Literal, Protocol, Tuple
 
 from PIL import Image, ImageDraw, ImageFont
 
 from cosmos_framework.data.imaginaire.webdataset.augmentors.augmentor import Augmentor
 from cosmos_framework.utils import log
+from cosmos_framework.utils.generator.source_video_timing import reject_source_pts_temporal_augmentation
+from cosmos_framework.utils.generator.video_source_metadata import (
+    VIDEO_METADATA_KEY,
+    calculate_video_timestamps,
+    validate_source_video_metadata,
+)
 
 
-def compute_timestamps(frame_index: int, fps: float, processor) -> float:
+class _TimestampProcessor(Protocol):
+    name: str
+    merge_size: int
+    temporal_patch_size: int
+
+
+def compute_timestamps(frame_index: int, fps: float, processor: _TimestampProcessor | None) -> float:
     if processor is not None and "Qwen3" in processor.name:
         frame_index_start = frame_index // processor.merge_size * processor.merge_size
         frame_index_end = frame_index_start + processor.merge_size - 1
@@ -52,7 +65,9 @@ def convert_timestamp(seconds: float | str, format: str = "hh:mm:ss") -> str:
         raise ValueError(f"Invalid format: {format}")
 
 
-def check_if_need_overlay_text(processor):
+def check_if_need_overlay_text(processor: _TimestampProcessor | None) -> bool:
+    if getattr(processor, "USES_SOURCE_VIDEO_TIMESTAMPS", False):
+        return False
     if processor is not None and ("Qwen3" in processor.name or "Nemotron" in processor.name):
         return False
     return True
@@ -67,15 +82,19 @@ timestamp_convertor = {
 
 
 def overlay_text(
-    images: List[Image.Image],
+    images: list[Image.Image],
     fps: float,
     border_height: int = 28,  # this is due to patch size of 28
     temporal_path_size: int = 2,  # Number of positions to cycle through
     font_size: int = 20,
     font_color: str = "white",
-    processor=None,
-    debug=False,
-) -> Tuple[List[Image.Image], List[float]]:
+    processor: _TimestampProcessor | None = None,
+    debug: bool = False,
+    video_metadata: object | None = None,
+    *,
+    source_frames_indices: list[int] | None = None,
+    source_fps: float | None = None,
+) -> tuple[list[Image.Image], list[float]]:
     """
     Overlay text on a list of PIL images with black border.
     The timestamp position cycles through available positions.
@@ -87,14 +106,39 @@ def overlay_text(
         temporal_path_size: Number of positions to cycle through (default: 2)
         font_size: Font size for the text (default: 20)
         font_color: Color of the text (default: "white")
+        video_metadata: Optional original frame indices and source FPS, shared with video prompt timestamps.
+        source_frames_indices: Clip-relative decoded frame indices for framewise video
+        source_fps: Source-frame clock, before sampling or temporal tubelet expansion
 
     Returns:
         List of PIL images with text overlay
         List of timestamps
     """
+    if (source_frames_indices is None) != (source_fps is None):
+        raise ValueError("Framewise timestamps require both source_frames_indices and source_fps")
+    if source_frames_indices is not None:
+        if len(source_frames_indices) != len(images):
+            raise ValueError("Framewise timestamps require one source index per decoded frame")
+        if source_fps is None or not math.isfinite(source_fps) or source_fps <= 0:
+            raise ValueError("Framewise timestamps require a positive finite source_fps")
+    if video_metadata is not None:
+        metadata = validate_source_video_metadata(video_metadata, len(images))
+        if processor is None:
+            raise ValueError("Source video timestamps require a processor's temporal_patch_size")
+        temporal_patch_size = 1 if source_frames_indices is not None else processor.temporal_patch_size
+        patch_timestamps = calculate_video_timestamps(metadata["frames_indices"], metadata["fps"], temporal_patch_size)
+        # Every frame in a temporal patch has the same displayed time and label-snapping target.
+        timestamps = [float(f"{patch_timestamps[i // temporal_patch_size]:.1f}") for i in range(len(images))]
+    elif source_frames_indices is not None:
+        # Each source frame becomes one repeated tubelet in TokenizeData, so
+        # its timestamp is index / source FPS, rounded as in the Qwen processor.
+        timestamps = [float(f"{index / source_fps:.1f}") for index in source_frames_indices]
+    else:
+        timestamps = [compute_timestamps(i, fps, processor) for i in range(len(images))]
+
     if not check_if_need_overlay_text(processor) and not debug:
         # if debug is True, we still need to overlay text for visualization purpose
-        return images, [compute_timestamps(i, fps, processor) for i in range(len(images))]
+        return images, timestamps
 
     # Try to use DejaVu Sans Mono font for better readability
     font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf", font_size)
@@ -119,7 +163,7 @@ def overlay_text(
         draw = ImageDraw.Draw(new_image)
 
         # Calculate timestamp for current frame
-        total_seconds = compute_timestamps(i, fps, processor)
+        total_seconds = timestamps[i]
         text = f"{total_seconds:.2f}s"
 
         # Get text dimensions
@@ -151,7 +195,7 @@ def overlay_text(
 
         processed_images.append(new_image)
 
-    return processed_images, [compute_timestamps(i, fps, processor) for i in range(len(images))]
+    return processed_images, timestamps
 
 
 def markdown_to_list(conversation_data: str | List[Dict]) -> List[Dict]:
@@ -448,9 +492,17 @@ class TimeStamp(Augmentor):
             return data_dict
 
         media_data = data_dict[self.input_key]
+        reject_source_pts_temporal_augmentation(media_data)
         for k, v in media_data.items():
             if "video" in k:
-                video_frames_with_timestamp, timestamps = overlay_text(v["videos"], v["fps"], processor=self.processor)
+                video_frames_with_timestamp, timestamps = overlay_text(
+                    v["videos"],
+                    v["fps"],
+                    processor=self.processor,
+                    source_frames_indices=v.get("source_frames_indices"),
+                    source_fps=v.get("source_fps"),
+                    video_metadata=v.get(VIDEO_METADATA_KEY),
+                )
                 media_data[k]["videos"] = video_frames_with_timestamp
 
         if self.output_format == "random":

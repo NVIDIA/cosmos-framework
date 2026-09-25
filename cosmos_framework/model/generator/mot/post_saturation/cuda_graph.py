@@ -189,6 +189,18 @@ class ARPostSaturationCUDAGraphManager:
         self._capture_stream: torch.cuda.Stream | None = None
         self._graph_pool: Any | None = None
 
+    @staticmethod
+    def _base_kind(kind: str) -> str:
+        """Validate ``kind`` = ``"denoise" | "refresh"`` with an optional ``":<variant>"`` suffix.
+
+        The variant (e.g. the Transfer history limit of a seed) keys separate graphs whose
+        captured ``memory_info`` differs while the forward structure is the same.
+        """
+        base_kind = kind.split(":", 1)[0]
+        if base_kind not in {"denoise", "refresh"}:
+            raise ValueError(f"Unsupported post-saturation CUDA Graph kind={kind!r}")
+        return base_kind
+
     def reset_for_new_generation(self) -> None:
         """Discard graphs bound to the previous generation's cache storage."""
         had_captures = bool(self._runners)
@@ -208,8 +220,7 @@ class ARPostSaturationCUDAGraphManager:
         memory_info: dict[str, Any],
     ) -> dict[str, Any]:
         """Capture on first use, then replay a branch-specific coarse graph."""
-        if kind not in {"denoise", "refresh"}:
-            raise ValueError(f"Unsupported post-saturation CUDA Graph kind={kind!r}")
+        self._base_kind(kind)
         key = (kind, branch)
         runner = self._runners.get(key)
         if runner is None:

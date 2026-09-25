@@ -28,6 +28,7 @@ EmbodimentMappings: dict[Embodiment, str] = {
 ViewComposition = Literal[
     "front",
     "above",
+    "third_person",
     "wrist",
     "ego_head",
     "static_single",
@@ -41,6 +42,7 @@ ViewComposition = Literal[
 ViewCompositionMappings: dict[ViewComposition, str] = {
     "front": "This video is captured from a dynamic front-facing perspective looking at the scene.",
     "above": "This video is captured from a third-person perspective looking towards the agent from above.",
+    "third_person": "This video is captured from a third-person perspective looking towards the robot.",
     "wrist": "This video is captured from a wrist-mounted camera.",
     "ego_head": "This video is captured from a head-mounted camera showing an egocentric view of the scene.",
     "static_single": "This video is captured from a static perspective looking towards the actor.",
@@ -164,6 +166,7 @@ class ActionCaptionAttributeAdapter:
         fps: float,
         observation_count: int,
         view_count: int,
+        view_composition: ViewComposition | None = None,
     ) -> dict[str, ActionCaptionAttributeValue]:
         """Return deterministic attributes for one loaded training window."""
         try:
@@ -176,16 +179,17 @@ class ActionCaptionAttributeAdapter:
             raise ValueError(f"observation_count must be positive, got {observation_count}.")
         if view_count < 1:
             raise ValueError(f"view_count must be positive, got {view_count}.")
+        resolved_view_composition = view_composition or protocol.view_composition
         action_transition_count = observation_count - 1
         return {
             "dataset_name": dataset_name,
             "domain": protocol.domain,
             "embodiment": protocol.embodiment,
-            "view_composition": protocol.view_composition,
+            "view_composition": resolved_view_composition,
             "caption_subject": protocol.caption_subject,
             "domain_postfix": DomainMappings[protocol.domain],
             "embodiment_postfix": EmbodimentMappings[protocol.embodiment],
-            "view_postfix": ViewCompositionMappings[protocol.view_composition],
+            "view_postfix": ViewCompositionMappings[resolved_view_composition],
             "subject_postfix": CaptionSubjectMappings[protocol.caption_subject],
             "fps": float(fps),
             "duration_seconds": action_transition_count / float(fps),
@@ -223,6 +227,9 @@ ACTION_CAPTION_ATTRIBUTE_ADAPTER = ActionCaptionAttributeAdapter(
         "molmoact2_yam": P("real", "dual_arm", "above_over_wrists", "dual_arm_end_effectors"),
         "xdof_yam_v5": P("real", "dual_arm", "above_over_wrists", "dual_arm_end_effectors"),
         "xdof_yam_annotated": P("real", "dual_arm", "above_over_wrists", "dual_arm_end_effectors"),
+        "so100_midtrain_15hz": P("real", "single_arm", "third_person", "right_arm_end_effector"),
+        "so101_midtrain_15hz": P("real", "single_arm", "third_person", "right_arm_end_effector"),
+        "biso101_midtrain_15hz": P("real", "dual_arm", "third_person", "dual_arm_end_effectors"),
         "web_human_action_hand": P("real", "human", "static_single", "human_wrists_and_fingertips"),
         "web_human_action_body": P("real", "human", "static_single", "human_head_and_wrists"),
         "vitra_ego4d": P("real", "human", "ego_head", "human_head_wrists_and_fingertips"),

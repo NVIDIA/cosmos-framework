@@ -858,6 +858,9 @@ class OneLoggerUtils:
         metrics_to_log = {
             "app_train_loop_finish_time": self.timer.get("app_train_loop").get("finish") * 1000,
         }
+        # Publish completed counters even when training ends between periodic logging steps.
+        metrics_to_log.update(self._get_metrics_on_train_batch_end())
+        metrics_to_log.update(self._get_metrics_on_train_step_end())
         self._log_metrics(metrics_to_log)
 
     @_check_enabled

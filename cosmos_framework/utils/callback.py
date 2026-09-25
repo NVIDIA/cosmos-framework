@@ -15,7 +15,7 @@ import torch.utils.data
 import tqdm
 import wandb
 
-from cosmos_framework.utils.lazy_config import instantiate
+from cosmos_framework.utils.lazy_config import LazyCall, instantiate
 from cosmos_framework.utils import distributed, log, misc, wandb_util
 from cosmos_framework.utils.misc import get_local_tensor_if_DTensor
 
@@ -700,6 +700,87 @@ class NVTXCallback(Callback):
 
     def on_after_dataloading(self, iteration: int = 0) -> None:
         torch.cuda.nvtx.range_pop()
+
+
+class ConfirmAsyncCheckpoint(Callback):
+    """Reaps the background checkpoint writer's result once per optimizer step.
+
+    A background save counts as confirmed only once the main process takes the writer's
+    result off the queue, because that is what dispatches ``on_save_checkpoint_success`` --
+    the hook behind OneLogger's ``train_iterations_productive_end`` and wall-clock
+    checkpoint retention. Without a per-step poll, that only happens at the next ``save()``
+    or at ``finalize()``, so a job killed abnormally in between reports nothing for a
+    checkpoint that is already durable on disk. See
+    :meth:`cosmos_framework.checkpoint.dcp.DistributedCheckpointer.poll_async_save`
+    for the full account, including the job it was measured on.
+
+    Ordering within the callback group does not matter. Reaping before a wall-clock save
+    leaves that save's own blocking drain with nothing to collect; reaping after it means
+    the drain already collected the result and the poll finds an empty queue.
+    """
+
+    def on_training_step_end(
+        self,
+        model: ImaginaireModel,
+        data_batch: dict[str, torch.Tensor],
+        output_batch: dict[str, torch.Tensor],
+        loss: torch.Tensor,
+        iteration: int = 0,
+    ) -> None:
+        del model, data_batch, output_batch, loss, iteration
+        self.trainer.checkpointer.poll_async_save()
+
+
+#: Key :class:`ConfirmAsyncCheckpoint` is registered under in ``config.trainer.callbacks``.
+CONFIRM_ASYNC_CHECKPOINT_KEY = "confirm_async_checkpoint"
+
+
+def _has_confirm_async_checkpoint(callbacks: object) -> bool:
+    """Whether :class:`ConfirmAsyncCheckpoint` already appears in a callback collection."""
+    entries = callbacks if isinstance(callbacks, (list, omegaconf.ListConfig)) else callbacks.values()
+    return any(
+        isinstance(entry, (dict, omegaconf.DictConfig)) and entry.get("_target_") is ConfirmAsyncCheckpoint
+        for entry in entries
+    )
+
+
+def ensure_async_checkpoint_confirmation(config: Config) -> Config:
+    """Add :class:`ConfirmAsyncCheckpoint` to ``config.trainer.callbacks`` if it is absent.
+
+    Merged in at config load rather than registered in a callback group, following the
+    same route as :class:`OneLoggerCallback`. Groups are selected per experiment and the
+    jobs that need this do not agree on one: the cosmos3 VFM default is ``[basic,
+    optimization, job_monitor, generation]`` while the reasoner experiments run
+    ``[basic_vlm, basic_log]`` against the same checkpointer. Spreading the callback over
+    every group would leave the guarantee one config edit away from lapsing, and a lapse
+    is invisible -- the metric is merely low, and only on the runs that were killed.
+    """
+    # Both lookups have to tolerate absence. ``load_config`` is not reached only by full
+    # training configs -- projects declare their own Config classes, and the serialization
+    # tests round-trip minimal ones with no ``trainer`` section at all. Either way, a
+    # missing or empty collection means ``CallBackGroup`` runs nothing, so there is no
+    # dispatch of ``on_save_checkpoint_success`` left to make prompt.
+    callbacks = getattr(getattr(config, "trainer", None), "callbacks", None)
+    if not callbacks or _has_confirm_async_checkpoint(callbacks):
+        return config
+
+    lazy_callback = LazyCall(ConfirmAsyncCheckpoint)()
+    if isinstance(callbacks, (list, omegaconf.ListConfig)):
+        callbacks.append(lazy_callback)
+    elif isinstance(callbacks, omegaconf.DictConfig):
+        # Struct mode rejects unknown keys, so it comes off for the assignment and goes back
+        # exactly as it was. Restoring rather than forcing it on matters because this runs
+        # for every training config: a config whose callbacks were mutable before would
+        # otherwise start rejecting callbacks that callers add after load_config(). The flag
+        # is tri-state -- None means inherited -- and set_struct round-trips that faithfully.
+        was_struct = omegaconf.OmegaConf.is_struct(callbacks)
+        omegaconf.OmegaConf.set_struct(callbacks, False)
+        callbacks[CONFIRM_ASYNC_CHECKPOINT_KEY] = lazy_callback
+        omegaconf.OmegaConf.set_struct(callbacks, was_struct)
+    else:
+        callbacks[CONFIRM_ASYNC_CHECKPOINT_KEY] = lazy_callback
+
+    return config
 
 
 # End of callback definitions.

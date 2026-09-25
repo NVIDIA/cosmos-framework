@@ -3,6 +3,7 @@
 
 import collections
 import copy
+import math
 import re
 from typing import Any, Iterator, NamedTuple
 
@@ -14,6 +15,7 @@ from torch.distributed.checkpoint.stateful import Stateful
 from torch.optim.lr_scheduler import LambdaLR, LRScheduler
 
 from cosmos_framework.utils.functional.lr_scheduler import (
+    ConstantScheduler,
     LambdaLinearScheduler,
     LambdaWarmUpCosineScheduler,
     WSDScheduler,
@@ -34,10 +36,19 @@ _AUX_ADAMW_OPTIMIZERS = ("muonwithauxadamw", "dion2withauxadamw")
 # the kwarg rather than ignoring it.
 _MASTER_WEIGHT_OPTIMIZERS = ("fusedadam",)
 
+# Preserve each optimizer constructor's default when callers omit weight_decay.
+_DEFAULT_WEIGHT_DECAY_BY_OPTIMIZER = {
+    "adam": 0.0,
+    "adamw": 0.01,
+    "fusedadam": 0.0,
+    "muonwithauxadamw": 0.1,
+    "dion2withauxadamw": 0.1,
+}
+
 
 class ParamMetadata(NamedTuple):
     lr: float
-    enable_weight_decay: bool
+    weight_decay: float
 
 
 def _convert_omegaconf_to_python(obj: Any) -> Any:
@@ -193,10 +204,12 @@ def _build_params_with_metadata(
     keys_to_select: list[str],
     lr_multipliers: dict[str, float],
     base_lr: float,
+    base_weight_decay: float,
     disable_weight_decay_for_1d_params: bool,
     weight_decay_skip_patterns: tuple[str, ...] = (),
+    weight_decay_multipliers_for_1d_params: dict[str, float] | None = None,
 ) -> list[tuple[nn.Parameter, ParamMetadata]]:
-    """Filter trainable parameters and tag each with its effective LR and weight-decay flag.
+    """Filter trainable parameters and tag each with its effective LR and weight decay.
 
     Walks ``model.named_parameters()`` once and produces one
     ``(param, ParamMetadata)`` entry per parameter that survives the
@@ -216,14 +229,13 @@ def _build_params_with_metadata(
         parameter name (iteration order of the dict is significant); defaults
         to ``1.0`` if no pattern matches.
 
-    Weight-decay flag:
-        ``ParamMetadata.enable_weight_decay`` is ``False`` exactly when
-        ``disable_weight_decay_for_1d_params`` is True AND the parameter has
-        fewer than two dimensions (the standard heuristic for norm weights,
-        biases, and other 1-D tensors).  Otherwise it is ``True``.  The flag is
-        consumed downstream by :func:`_build_optimizer_internal`, which
-        materializes the ``weight_decay=0.0`` override on the corresponding
-        param group.
+    Effective weight decay:
+        Every parameter starts with ``base_weight_decay``. Regexes in
+        ``weight_decay_multipliers_for_1d_params`` apply only to parameters
+        with exactly one dimension and scale the base value. Every configured
+        multiplier pattern must apply to at least one selected parameter.
+        Explicit skip patterns and ``disable_weight_decay_for_1d_params`` set
+        the value to zero.
 
     Args:
         model: Module whose ``named_parameters()`` to scan.  Only parameters
@@ -235,15 +247,23 @@ def _build_params_with_metadata(
             First match wins per parameter.
         base_lr: Base learning rate; each parameter's effective LR is
             ``base_lr * matched_multiplier``.
+        base_weight_decay: Base optimizer weight decay; one-dimensional
+            multiplier rules scale this value.
         disable_weight_decay_for_1d_params: When ``True``, 1-D parameters are
-            tagged ``enable_weight_decay=False``.
+            tagged with ``weight_decay=0.0``. Mutually exclusive with
+            ``weight_decay_multipliers_for_1d_params``.
         weight_decay_skip_patterns: Regex patterns matched (``re.search``) against
             each parameter's dotted name. Any parameter whose name matches is tagged
-            ``enable_weight_decay=False`` (its group gets ``weight_decay=0.0``). This
+            with ``weight_decay=0.0``. This
             is the general, name-based way to exclude specific weights from weight
             decay -- e.g. ``r"\\.gate\\.weight$"`` for MoE router/gate weights. Empty
             (default) skips nothing. Applied in addition to the shape-based
             ``disable_weight_decay_for_1d_params`` rule.
+        weight_decay_multipliers_for_1d_params: Mapping from parameter-name
+            regex to a non-negative multiplier on ``base_weight_decay``. Rules
+            apply only to parameters with exactly one dimension. Matching
+            rules must be disjoint for every selected parameter, and every
+            pattern must apply to at least one selected parameter.
 
     Returns:
         List of ``(nn.Parameter, ParamMetadata)`` pairs covering every kept
@@ -255,8 +275,27 @@ def _build_params_with_metadata(
     net_params = dict(model.net.named_parameters())
     param_dict = {pn: p for pn, p in net_params.items() if p.requires_grad}
 
-    # Precompile the weight-decay-skip regexes once.
+    weight_decay_multipliers_for_1d_params = weight_decay_multipliers_for_1d_params or {}
+    if disable_weight_decay_for_1d_params and weight_decay_multipliers_for_1d_params:
+        raise ValueError(
+            "`disable_weight_decay_for_1d_params=True` cannot be combined with "
+            "`weight_decay_multipliers_for_1d_params`; the former would force every 1-D weight decay to zero."
+        )
+    for pattern, multiplier in weight_decay_multipliers_for_1d_params.items():
+        if not math.isfinite(multiplier) or multiplier < 0:
+            raise ValueError(
+                f"Weight-decay multiplier for pattern {pattern!r} must be finite and non-negative, got {multiplier}."
+            )
+
+    # Precompile the weight-decay regexes once.
     skip_res = [re.compile(pat) for pat in weight_decay_skip_patterns]
+    multiplier_res = [
+        (pattern, re.compile(pattern), multiplier)
+        for pattern, multiplier in weight_decay_multipliers_for_1d_params.items()
+    ]
+    matched_params_by_multiplier_pattern: dict[str, list[str]] = {
+        pattern: [] for pattern in weight_decay_multipliers_for_1d_params
+    }
 
     params_with_metadata: list[tuple[nn.Parameter, ParamMetadata]] = []
 
@@ -272,26 +311,54 @@ def _build_params_with_metadata(
                 matched_mult = mult
                 break
 
-        # Weight-decay enablement: disabled for 1-D params (norms/biases) via the
-        # shape-based rule, and for any parameter whose name matches one of
-        # ``weight_decay_skip_patterns`` (general, name-based -- e.g. MoE router/gate
-        # weights via r"\.gate\.weight$"). The ``weight_decay=0.0`` override this
-        # produces is honored by AdamW and Muon/Dion2 alike.
-        if disable_weight_decay_for_1d_params and p.dim() < 2:
-            enable_weight_decay = False
-        elif any(r.search(pn) for r in skip_res):
-            enable_weight_decay = False
-        else:
-            enable_weight_decay = True
+        # Skip rules take priority. Layer-wise multipliers apply only to 1-D
+        # parameters, which hybrid Muon/Dion2 optimizers route through their
+        # auxiliary AdamW branch; matrix parameters retain the base weight decay.
+        effective_weight_decay = base_weight_decay
+        if any(r.search(pn) for r in skip_res):
+            effective_weight_decay = 0.0
+        elif disable_weight_decay_for_1d_params and p.dim() < 2:
+            effective_weight_decay = 0.0
+        elif p.dim() == 1:
+            matching_rules = [
+                (pattern, multiplier) for pattern, regex, multiplier in multiplier_res if regex.search(pn)
+            ]
+            if len(matching_rules) > 1:
+                matching_patterns = [pattern for pattern, _ in matching_rules]
+                raise ValueError(
+                    f"1-D parameter {pn!r} matches multiple weight-decay multiplier patterns: "
+                    f"{matching_patterns}. Make the patterns disjoint."
+                )
+            if matching_rules:
+                pattern, multiplier = matching_rules[0]
+                matched_params_by_multiplier_pattern[pattern].append(pn)
+                effective_weight_decay *= multiplier
 
         params_with_metadata.append(
             (
                 p,
                 ParamMetadata(
                     lr=base_lr * matched_mult,
-                    enable_weight_decay=enable_weight_decay,
+                    weight_decay=effective_weight_decay,
                 ),
             )
+        )
+
+    unmatched_multiplier_patterns = [
+        pattern for pattern, matched_params in matched_params_by_multiplier_pattern.items() if not matched_params
+    ]
+    if unmatched_multiplier_patterns:
+        raise ValueError(
+            "Weight-decay multiplier patterns did not apply to any selected 1-D parameter: "
+            f"{unmatched_multiplier_patterns}."
+        )
+    for pattern, multiplier in weight_decay_multipliers_for_1d_params.items():
+        matched_params = matched_params_by_multiplier_pattern[pattern]
+        log.info(
+            f"Applying weight-decay multiplier {multiplier}x "
+            f"(effective weight_decay={base_weight_decay * multiplier}) for pattern {pattern!r} "
+            f"to {len(matched_params)} selected 1-D parameters: {matched_params}",
+            rank0_only=True,
         )
 
     log.info(
@@ -311,11 +378,9 @@ def _build_optimizer_internal(
     """Bucket per-parameter metadata into PyTorch param groups and instantiate the optimizer.
 
     Parameters sharing the same ``ParamMetadata`` (i.e. identical effective LR
-    *and* identical weight-decay enablement) are collapsed into a single
-    ``torch.optim`` param group.  Each resulting group carries an explicit
-    ``"lr"``; groups whose metadata has ``enable_weight_decay=False`` also
-    receive an explicit ``"weight_decay": 0.0`` override that suppresses the
-    optimizer-wide ``weight_decay`` kwarg for those parameters only.
+    and effective weight decay) are collapsed into a single ``torch.optim``
+    param group. Each resulting group carries explicit ``"lr"`` and
+    ``"weight_decay"`` values.
 
     Args:
         params_with_metadata: Output of :func:`_build_params_with_metadata` —
@@ -337,13 +402,15 @@ def _build_optimizer_internal(
     param_groups: list[dict[str, Any]] = []
     for metadata, params in sorted(params_by_metadata.items()):
         log.info(
-            f"Param group (lr={metadata.lr}, WD={metadata.enable_weight_decay}): "
+            f"Param group (lr={metadata.lr}, weight_decay={metadata.weight_decay}): "
             f"{len(params):,} tensors, {sum(p.numel() for p in params):,} elements"
         )
 
-        param_group: dict[str, Any] = {"params": params, "lr": metadata.lr}
-        if not metadata.enable_weight_decay:
-            param_group["weight_decay"] = 0.0
+        param_group: dict[str, Any] = {
+            "params": params,
+            "lr": metadata.lr,
+            "weight_decay": metadata.weight_decay,
+        }
         param_groups.append(param_group)
 
     return _optimizer_cls(param_groups, optimizer_type, **optimizer_kwargs)
@@ -403,6 +470,9 @@ class OptimizersContainer(Stateful):
                   Muon/Dion2 alike). General, name-based way to exclude specific
                   weights from weight decay -- e.g. ``r"\\.gate\\.weight$"`` for MoE
                   router/gate weights. Independent of the router-to-AdamW routing.
+                - ``weight_decay_multipliers_for_1d_params`` (optional, default
+                  ``{}``): Regex-to-multiplier mapping applied to the base weight
+                  decay for matching 1-D parameters only.
         """
         self.model = model
         self.optimizers: list[torch.optim.Optimizer] = []
@@ -416,6 +486,9 @@ class OptimizersContainer(Stateful):
         keys_to_select = optimizer_kwargs.pop("keys_to_select", [])
         lr_multipliers: dict[str, float] = optimizer_kwargs.pop("lr_multipliers", {})
         disable_weight_decay_for_1d_params = optimizer_kwargs.pop("disable_weight_decay_for_1d_params", False)
+        weight_decay_multipliers_for_1d_params: dict[str, float] = optimizer_kwargs.pop(
+            "weight_decay_multipliers_for_1d_params", {}
+        )
         # General, name-based weight-decay exclusion (regexes matched against param
         # names). Factory-only, so a plain pop. Normalize to a tuple of str.
         weight_decay_skip_patterns = tuple(optimizer_kwargs.pop("weight_decay_skip_patterns", None) or ())
@@ -431,13 +504,26 @@ class OptimizersContainer(Stateful):
             raise ValueError("`lr` is required in optimizer_kwargs (used as the base for per-group LR multipliers).")
 
         base_lr = optimizer_kwargs["lr"]
+        if "weight_decay" in optimizer_kwargs:
+            base_weight_decay = optimizer_kwargs["weight_decay"]
+        else:
+            try:
+                base_weight_decay = _DEFAULT_WEIGHT_DECAY_BY_OPTIMIZER[optimizer_type.lower()]
+            except KeyError as error:
+                raise ValueError(
+                    f"No default weight_decay is registered for optimizer {optimizer_type!r}. "
+                    "Add its constructor default to _DEFAULT_WEIGHT_DECAY_BY_OPTIMIZER or configure "
+                    "weight_decay explicitly."
+                ) from error
         params_with_metadata = _build_params_with_metadata(
             model,
             keys_to_select=keys_to_select,
             lr_multipliers=lr_multipliers,
             base_lr=base_lr,
+            base_weight_decay=base_weight_decay,
             disable_weight_decay_for_1d_params=disable_weight_decay_for_1d_params,
             weight_decay_skip_patterns=weight_decay_skip_patterns,
+            weight_decay_multipliers_for_1d_params=weight_decay_multipliers_for_1d_params,
         )
 
         if optimizer_type.lower() in _AUX_ADAMW_OPTIMIZERS:
@@ -488,6 +574,12 @@ class OptimizersContainer(Stateful):
                 )
                 self.optimizers.append(optimizer)
 
+        self._configured_weight_decay_by_param_id = {
+            id(param): float(param_group["weight_decay"])
+            for optimizer in self.optimizers
+            for param_group in optimizer.param_groups
+            for param in param_group["params"]
+        }
         log.info(f"Created {len(self.optimizers)} optimizers")
 
     def __iter__(self) -> Iterator[torch.optim.Optimizer]:
@@ -529,6 +621,17 @@ class OptimizersContainer(Stateful):
             optim_state_dict=state_dict,
             options=StateDictOptions(flatten_optimizer_state_dict=True),
         )
+        for optimizer in self.optimizers:
+            for param_group in optimizer.param_groups:
+                configured_values = {
+                    self._configured_weight_decay_by_param_id[id(param)] for param in param_group["params"]
+                }
+                if len(configured_values) != 1:
+                    raise ValueError(
+                        "Checkpoint loading merged parameters with different configured weight decays into "
+                        f"one optimizer group: {sorted(configured_values)}."
+                    )
+                param_group["weight_decay"] = configured_values.pop()
 
 
 def build_optimizer(
@@ -572,6 +675,10 @@ def build_optimizer(
               ``False``): If true, one-dimensional parameters such as norm
               weights and biases get ``weight_decay=0.0`` in their param group
               regardless of the optimizer-wide ``weight_decay``.
+            - ``weight_decay_multipliers_for_1d_params`` (optional, default
+              ``{}``): Regex-to-multiplier mapping applied only to 1-D
+              parameters. Matching parameters use
+              ``weight_decay * multiplier``.
 
     Returns:
         An :class:`OptimizersContainer` wrapping one ``torch.optim.Optimizer``
@@ -586,7 +693,7 @@ def build_optimizer(
 def _lr_scheduler_cls(
     lr_scheduler_type: str,
     **lr_scheduler_kwargs: Any,
-) -> LambdaLinearScheduler | LambdaWarmUpCosineScheduler | WSDScheduler | WSFDScheduler:
+) -> LambdaLinearScheduler | LambdaWarmUpCosineScheduler | WSDScheduler | WSFDScheduler | ConstantScheduler:
     """Instantiate a lambda-style scheduler whose ``.schedule(step)`` returns an LR multiplier.
 
     Both returned classes expose a ``schedule(step) -> float`` callable that
@@ -594,7 +701,8 @@ def _lr_scheduler_cls(
     to drive each optimizer's param-group LRs.  ``lr_scheduler_type`` matching is
     case-insensitive; valid values are ``"lambdalinear"`` (linear decay),
     ``"lambdacosine"`` (warmup + cosine decay), ``"wsd"``
-    (warmup-stable-decay), and ``"wsfd"`` (warmup-slow-decay-fast-decay).
+    (warmup-stable-decay), ``"wsfd"`` (warmup-slow-decay-fast-decay), and
+    ``"constant"`` (fixed multiplier for the entire run).
     Any other value raises ``NotImplementedError``.
     All remaining ``**lr_scheduler_kwargs`` are forwarded verbatim to the
     underlying scheduler constructor (e.g. ``warm_up_steps``, ``cycle_lengths``,
@@ -609,6 +717,8 @@ def _lr_scheduler_cls(
         lr_scheduler = WSDScheduler(**lr_scheduler_kwargs)
     elif lr_scheduler_type.lower() == "wsfd":
         lr_scheduler = WSFDScheduler(**lr_scheduler_kwargs)
+    elif lr_scheduler_type.lower() == "constant":
+        lr_scheduler = ConstantScheduler(**lr_scheduler_kwargs)
     else:
         raise NotImplementedError(f"LR Scheduler {lr_scheduler_type} not found.")
     return lr_scheduler
@@ -670,6 +780,7 @@ class LRSchedulersContainer(Stateful):
         lr_scheduler = _lr_scheduler_cls(lr_scheduler_type, **lr_scheduler_kwargs)
 
         self.schedulers = [LambdaLR(optimizer, lr_scheduler.schedule) for optimizer in optimizers]
+        self._configured_base_lrs = [list(scheduler.base_lrs) for scheduler in self.schedulers]
         log.info(f"Created {len(self.schedulers)} schedulers")
 
     def __iter__(self) -> Iterator[LRScheduler]:
@@ -706,25 +817,51 @@ class LRSchedulersContainer(Stateful):
                 raise ValueError(
                     f"LRSchedulersContainer.load_state_dict: checkpoint holds a single "
                     f"scheduler's state, but this container has {len(self.schedulers)}. "
-                    "Resume from a checkpoint saved with a matching number of schedulers, "
-                    "or add the scheduler to `checkpoint.keys_not_to_resume` to start "
-                    "scheduler state fresh."
+                    "For same-job resume, use a checkpoint saved with a matching number of schedulers. "
+                    "To start scheduler state fresh instead, create a new run with this checkpoint as "
+                    "`checkpoint.load_path` and add `scheduler` to `checkpoint.keys_not_to_resume`."
                 )
-            self.schedulers[0].load_state_dict(copy.deepcopy(state_dict))
+            self._load_scheduler_state(self.schedulers[0], state_dict, self._configured_base_lrs[0])
             return
 
         if len(per_scheduler_states) != len(self.schedulers):
             raise ValueError(
                 f"LRSchedulersContainer.load_state_dict: checkpoint has state for "
                 f"{len(per_scheduler_states)} schedulers, but this container has "
-                f"{len(self.schedulers)}. Resume from a checkpoint with a matching number "
-                "of schedulers, or add the scheduler to `checkpoint.keys_not_to_resume` to "
-                "start scheduler state fresh."
+                f"{len(self.schedulers)}. For same-job resume, use a checkpoint saved with a matching "
+                "number of schedulers. To start scheduler state fresh instead, create a new run with "
+                "this checkpoint as `checkpoint.load_path` and add `scheduler` to "
+                "`checkpoint.keys_not_to_resume`."
             )
-        for scheduler, sub_state in zip(self.schedulers, per_scheduler_states):
-            # Deepcopy so nested mutable values (lists) are not aliased across
-            # schedulers after ``LambdaLR.__dict__.update``.
-            scheduler.load_state_dict(copy.deepcopy(sub_state))
+        for scheduler, sub_state, configured_base_lrs in zip(
+            self.schedulers, per_scheduler_states, self._configured_base_lrs
+        ):
+            self._load_scheduler_state(scheduler, sub_state, configured_base_lrs)
+
+    def _load_scheduler_state(
+        self,
+        scheduler: LRScheduler,
+        state_dict: dict[str, Any],
+        configured_base_lrs: list[float],
+    ) -> None:
+        """Load scheduler progress while retaining current per-group LR configuration."""
+        current_group_count = len(scheduler.optimizer.param_groups)
+        if len(configured_base_lrs) != current_group_count:
+            raise ValueError(
+                f"Configured scheduler has {len(configured_base_lrs)} base LRs for "
+                f"{current_group_count} optimizer parameter groups."
+            )
+
+        migrated_state = copy.deepcopy(state_dict)
+        migrated_state["base_lrs"] = list(configured_base_lrs)
+        migrated_state["lr_lambdas"] = scheduler.state_dict()["lr_lambdas"]
+        last_epoch = int(migrated_state["last_epoch"])
+        migrated_state["_last_lr"] = [
+            base_lr * lr_lambda(last_epoch) for base_lr, lr_lambda in zip(configured_base_lrs, scheduler.lr_lambdas)
+        ]
+        scheduler.load_state_dict(migrated_state)
+        for param_group, lr in zip(scheduler.optimizer.param_groups, migrated_state["_last_lr"]):
+            param_group["lr"] = lr
 
     def get_last_lr(self) -> list[float | torch.Tensor]:
         # Concatenate the per-optimizer ``get_last_lr()`` lists.  Each

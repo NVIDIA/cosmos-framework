@@ -7,7 +7,7 @@ from typing import Literal, get_args
 
 import attrs
 
-from cosmos_framework.configs.base.defaults.flex_attention import (
+from cosmos_framework.configs.base.defaults.multiview_attention import (
     ATTENTION_SCOPES,
     AttentionScope,
 )

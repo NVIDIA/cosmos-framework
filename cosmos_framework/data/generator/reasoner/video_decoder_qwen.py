@@ -8,27 +8,46 @@ Changes:
 2: support skipping smart resize, since it may resize the video frames to be smaller than model input and frames will get resized up later in processor
 """
 
+import hashlib
 import random
 import re
 from concurrent.futures import ThreadPoolExecutor
 from functools import partial
-from typing import Callable, Optional
+from typing import Callable, Literal, Optional
 
 import torch
 from PIL import Image
 from qwen_vl_utils.vision_process import smart_resize
+from torchcodec import FrameBatch
 from torchcodec.decoders import VideoDecoder
 from torchvision import transforms
 from torchvision.transforms import InterpolationMode
 
 from cosmos_framework.utils import log
 from cosmos_framework.data.generator.processors.qwen3vl_processor import Qwen3VLProcessor
+from cosmos_framework.utils.generator.source_video_timing import (
+    SOURCE_VIDEO_TIMING_KEY,
+    build_source_video_timing,
+    require_source_pts_processor,
+    validate_video_timestamp_mode,
+)
 from cosmos_framework.utils.generator.video_frame_sampling import smart_nframes_with_factor
+from cosmos_framework.utils.generator.video_source_metadata import VIDEO_METADATA_KEY, validate_source_video_metadata
 
 Image.MAX_IMAGE_PIXELS = 933120000
 _VIDEO_EXTENSIONS = "mp4 avi webm mov".split()
 
 VIDEO_DECODER_OPTIONS = {}
+VideoTemporalMode = Literal["native", "framewise"]
+
+
+def get_effective_temporal_patch_size(temporal_patch_size: int, video_temporal_mode: VideoTemporalMode) -> int:
+    """Return the temporal token-budget factor without changing the ViT tubelet kernel."""
+    if video_temporal_mode == "native":
+        return temporal_patch_size
+    if video_temporal_mode == "framewise":
+        return 1
+    raise ValueError(f"Unsupported video_temporal_mode: {video_temporal_mode!r}")
 
 
 def token_to_pixels(token_length: int, patch_size: int = 14, temporal_patch_size: int = 2, merge_size: int = 2) -> int:
@@ -61,6 +80,8 @@ def video_decoder_qwen(
     max_video_token_length: int = 8192,
     random_augmentation: bool = False,
     frame_count_random_range: Optional[list[int]] = None,
+    video_timestamp_mode: str = "qwen_index",
+    video_temporal_mode: VideoTemporalMode = "native",
     **kwargs,
 ) -> Callable:
     """
@@ -78,11 +99,16 @@ def video_decoder_qwen(
         num_threads: Number of threads for the torchcodec video decoder
         random_augmentation: Whether to randomize the FPS and max_video_token_length
         frame_count_random_range: Random frame count range
+        video_timestamp_mode: Qwen source index/FPS for supported processors, or legacy synthetic FPS.
+            Source PTS requires the native SFT BytesToMedia path.
 
     Returns:
         dict with video frames tensor and target FPS
     """
 
+    validate_video_timestamp_mode(video_timestamp_mode)
+    if video_timestamp_mode == "source_pts":
+        raise ValueError("source_pts requires the native SFT BytesToMedia path with its verified Edge processor")
     video_decoder_configured = partial(
         _video_decoder_qwen_func,
         min_fps_thres=min_fps_thres,
@@ -93,6 +119,8 @@ def video_decoder_qwen(
         max_video_token_length=max_video_token_length,
         random_augmentation=random_augmentation,
         frame_count_random_range=frame_count_random_range,
+        video_timestamp_mode=video_timestamp_mode,
+        video_temporal_mode=video_temporal_mode,
     )
 
     return video_decoder_configured
@@ -112,9 +140,11 @@ def _video_decoder_qwen_func(
     fps_random_range: list[float] = [0.5, 1.5],
     max_video_token_length_random_range: list[float] = [0.75, 1.25],
     frame_count_random_range: Optional[list[int]] = None,
+    video_temporal_mode: VideoTemporalMode = "native",
     start_frame: Optional[int] = None,
     end_frame: Optional[int] = None,
     decoding_timeout: int = 60,
+    video_timestamp_mode: str = "qwen_index",
     **kwargs,
 ) -> dict | None:
     """Actual video decoder function.
@@ -135,14 +165,22 @@ def _video_decoder_qwen_func(
         start_frame (Optional[int], optional): Start frame. Defaults to None. If both start_frame and end_frame are provided, the video will be decoded from start_frame to end_frame.
         end_frame (Optional[int], optional): End frame. Defaults to None. If both start_frame and end_frame are provided, the video will be decoded from start_frame to end_frame.
         decoding_timeout (int, optional): Timeout in seconds. Defaults to 60.
+        video_timestamp_mode: Use Qwen source index/FPS by default for supported processors,
+            legacy synthetic FPS, or actual selected FrameBatch presentation timestamps.
     Raises:
         ValueError: Video fps lower than 1, skipping
         ValueError: Video fps lower than min_fps_thres, skipping
         ValueError: Video fps higher than max_fps_thres, skipping
 
     Returns:
-        dict | None: Dictionary with video frames tensor and target FPS
+        dict | None: Dictionary with video frames, effective sampled FPS, and source video_metadata
+            for processors that render Qwen-style timestamps. Selected source indices retain crop offsets.
     """
+    validate_video_timestamp_mode(video_timestamp_mode)
+    if video_timestamp_mode == "source_pts":
+        require_source_pts_processor(processor)
+        if (start_frame is None) != (end_frame is None):
+            raise ValueError("source_pts requires both start_frame and end_frame, or neither")
     # Check video extension
     extension = re.sub(r".*[.]", "", key)
     if extension.lower() not in _VIDEO_EXTENSIONS:
@@ -160,7 +198,19 @@ def _video_decoder_qwen_func(
     if total_frames is None or video_fps is None:
         raise ValueError(f"torchcodec missing metadata (num_frames={total_frames}, average_fps={video_fps}), skipping")
 
+    source_frame_offset = 0
+    source_total_frames = total_frames
+    uses_source_timestamps = video_timestamp_mode == "qwen_index" and getattr(
+        processor, "USES_SOURCE_VIDEO_TIMESTAMPS", False
+    )
+    if uses_source_timestamps and (start_frame is None) != (end_frame is None):
+        raise ValueError("Source video timing requires both start_frame and end_frame, or neither")
     if start_frame is not None and end_frame is not None:
+        if video_timestamp_mode == "source_pts" and not 0 <= start_frame < end_frame <= total_frames:
+            raise ValueError("source_pts requires an in-bounds nonempty source frame interval [start_frame,end_frame)")
+        if uses_source_timestamps and not 0 <= start_frame < end_frame <= source_total_frames:
+            raise ValueError("Source video crop must be an in-bounds interval [start_frame, end_frame)")
+        source_frame_offset = start_frame
         total_frames = end_frame - start_frame
 
     if video_fps < 1:
@@ -194,7 +244,7 @@ def _video_decoder_qwen_func(
 
     patch_size = processor.patch_size
     min_height_width = processor.min_height_width
-    temporal_patch_size = processor.temporal_patch_size
+    temporal_patch_size = get_effective_temporal_patch_size(processor.temporal_patch_size, video_temporal_mode)
     merge_size = processor.merge_size
     min_pixels: int = token_to_pixels(min_video_token_length, patch_size, temporal_patch_size, merge_size)
     max_pixels: int = token_to_pixels(max_video_token_length, patch_size, temporal_patch_size, merge_size)
@@ -211,20 +261,36 @@ def _video_decoder_qwen_func(
     else:
         idx = torch.linspace(0, total_frames - 1, nframes).round().long().tolist()  # [nframes]
 
-    def _decode_video() -> torch.Tensor:
-        return video_reader.get_frames_at(indices=idx).data  # [T, C, H, W] uint8
+    def _decode_video() -> torch.Tensor | FrameBatch:  # pixels: [T,C,H,W]; times: [T]
+        frame_batch = video_reader.get_frames_at(indices=idx)  # pixels: [T,C,H,W]; times: [T]
+        return frame_batch if video_timestamp_mode == "source_pts" else frame_batch.data  # [T,C,H,W] uint8
 
     # Use ThreadPoolExecutor to run video decoding with a timeout.
     # If the thread is stuck, abandon it immediately.
     executor = ThreadPoolExecutor(max_workers=1)
     future = executor.submit(_decode_video)
     try:
-        video_frames = future.result(timeout=decoding_timeout)
+        decoded = future.result(timeout=decoding_timeout)  # pixels: [T,C,H,W]; optional times: [T]
         executor.shutdown(wait=False)
     except TimeoutError as e:
         log.warning(f"[{key}] Video decoding timed out after {decoding_timeout} seconds")
         executor.shutdown(wait=False)
         return None
+
+    timing = None
+    if video_timestamp_mode == "source_pts":
+        if not isinstance(decoded, FrameBatch):
+            raise ValueError("source_pts requires TorchCodec FrameBatch presentation metadata")
+        timing = build_source_video_timing(
+            idx,
+            decoded.pts_seconds,  # [T]
+            decoded.duration_seconds,  # [T]
+            hashlib.sha256(data).hexdigest(),
+        )
+        video_frames = decoded.data  # [T,C,H,W]
+    else:
+        assert isinstance(decoded, torch.Tensor)
+        video_frames = decoded  # [T,C,H,W]
 
     sample_fps = nframes / max(total_frames, 1e-6) * video_fps
 
@@ -253,4 +319,20 @@ def _video_decoder_qwen_func(
         ).float()  # [T,C,H,W]
     video_frames = video_frames.permute(1, 0, 2, 3)  # [C,T,H,W]
 
-    return dict(videos=video_frames, fps=sample_fps)
+    result = dict(videos=video_frames, fps=sample_fps)
+    if timing is not None:
+        result[SOURCE_VIDEO_TIMING_KEY] = timing
+    if uses_source_timestamps:
+        # Match qwen-vl-utils: retain source indices and source FPS even after sampling/cropping.
+        # The sampled FPS remains available for callers that do not render source timestamps.
+        result[VIDEO_METADATA_KEY] = validate_source_video_metadata(
+            {"fps": video_fps, "total_num_frames": source_total_frames, "frames_indices": idx},
+            video_frames.shape[1],
+        )
+    if video_temporal_mode == "framewise":
+        result.update(
+            source_fps=video_fps,
+            source_frames_indices=[frame_index - source_frame_offset for frame_index in idx],
+            source_total_num_frames=total_frames,
+        )
+    return result

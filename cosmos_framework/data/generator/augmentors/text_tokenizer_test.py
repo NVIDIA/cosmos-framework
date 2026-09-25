@@ -29,16 +29,22 @@ def _make_transfer_tokenizer(
     *,
     cfg_dropout_rate: float = 0.0,
     tokenize_separately: bool = True,
+    task: str | None = None,
+    emit_system_prompt: bool = False,
 ) -> text_tokenizer.TextTokenizerTransformForTransfer:
     monkeypatch.setattr(text_tokenizer, "lazy_instantiate", lambda _config: processor)
+    args: dict[str, object] = {
+        "tokenizer_config": object(),
+        "cfg_dropout_rate": cfg_dropout_rate,
+        "tokenize_separately": tokenize_separately,
+        "emit_system_prompt": emit_system_prompt,
+    }
+    if task is not None:
+        args["task"] = task
     return text_tokenizer.TextTokenizerTransformForTransfer(
         input_keys=["ai_caption"],
         output_keys=["text_token_ids", "text_token_lengths"] if tokenize_separately else ["text_token_ids"],
-        args={
-            "tokenizer_config": object(),
-            "cfg_dropout_rate": cfg_dropout_rate,
-            "tokenize_separately": tokenize_separately,
-        },
+        args=args,
     )
 
 
@@ -58,6 +64,75 @@ def test_transfer_tokenizer_tokenizes_each_view_independently(monkeypatch: pytes
     assert all(
         call_kwargs["system_prompt"] == text_tokenizer._SYSTEM_PROMPT_TRANSFER for _, call_kwargs in processor.calls
     )
+
+
+def test_transfer_tokenizer_accepts_av_multiview_system_prompt(monkeypatch: pytest.MonkeyPatch) -> None:
+    processor = _FakeProcessor()
+    tokenizer = _make_transfer_tokenizer(
+        monkeypatch,
+        processor,
+        task="av_multiview_transfer",
+        emit_system_prompt=True,
+    )
+
+    result = tokenizer({"ai_caption": ["front view", "rear view"], "sample_n_views": 2})
+
+    assert result is not None
+    assert all(
+        call_kwargs["system_prompt"] == text_tokenizer._SYSTEM_PROMPT_AV_MULTIVIEW_TRANSFER
+        for _, call_kwargs in processor.calls
+    )
+    assert result[text_tokenizer.TEXT_SYSTEM_PROMPT_KEY] == text_tokenizer._SYSTEM_PROMPT_AV_MULTIVIEW_TRANSFER
+
+
+def test_transfer_tokenizer_accepts_av_joint_camera_lidar_system_prompt(monkeypatch: pytest.MonkeyPatch) -> None:
+    processor = _FakeProcessor()
+    tokenizer = _make_transfer_tokenizer(
+        monkeypatch,
+        processor,
+        task="av_joint_camera_lidar_transfer",
+        emit_system_prompt=True,
+    )
+
+    result = tokenizer({"ai_caption": ["front view", "rear view"], "sample_n_views": 2})
+
+    assert result is not None
+    assert all(
+        call_kwargs["system_prompt"] == text_tokenizer._SYSTEM_PROMPT_AV_JOINT_CAMERA_LIDAR_TRANSFER
+        for _, call_kwargs in processor.calls
+    )
+    assert result[text_tokenizer.TEXT_SYSTEM_PROMPT_KEY] == text_tokenizer._SYSTEM_PROMPT_AV_JOINT_CAMERA_LIDAR_TRANSFER
+
+
+@pytest.mark.parametrize("task", ["av_multiview_transfer", "av_joint_camera_lidar_transfer"])
+@pytest.mark.parametrize("tokenize_separately", [False, True])
+def test_av_transfer_tokenizer_prioritizes_wsm_objects(
+    monkeypatch: pytest.MonkeyPatch, task: str, tokenize_separately: bool
+) -> None:
+    processor = _FakeProcessor()
+    tokenizer = _make_transfer_tokenizer(
+        monkeypatch,
+        processor,
+        task=task,
+        tokenize_separately=tokenize_separately,
+        emit_system_prompt=True,
+    )
+
+    result = tokenizer(
+        {"ai_caption": ["front view", "rear view"] if tokenize_separately else "driving scene", "sample_n_views": 2}
+    )
+
+    expected_instruction = (
+        "Follow WSM controls for vehicles (including trucks), cyclists, pedestrians, traffic lights, traffic signs, "
+        "road markings, lane boundaries, and road boundaries. "
+        "Do not add objects or road features in these categories that are absent from WSM. "
+        "Use captions for appearance and unconstrained background details; WSM takes precedence in any conflict."
+    )
+    assert result is not None
+    system_prompt = result[text_tokenizer.TEXT_SYSTEM_PROMPT_KEY]
+    assert "World Scenario Map (WSM) control videos" in system_prompt.split("\n\n", 1)[0]
+    assert system_prompt.endswith("\n\n" + expected_instruction)
+    assert all(call_kwargs["system_prompt"] == system_prompt for _, call_kwargs in processor.calls)
 
 
 def test_separate_transfer_tokenizer_applies_cfg_dropout_once_per_sample(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -91,6 +166,25 @@ def test_transfer_tokenizer_keeps_legacy_scalar_contract(monkeypatch: pytest.Mon
     assert result["ai_caption"] == json.dumps(caption)
     assert isinstance(result["text_token_ids"], torch.Tensor)
     assert "text_token_lengths" not in result
+    assert text_tokenizer.TEXT_SYSTEM_PROMPT_KEY not in result
+
+
+def test_transfer_tokenizer_can_record_general_system_prompt(monkeypatch: pytest.MonkeyPatch) -> None:
+    tokenizer = _make_transfer_tokenizer(
+        monkeypatch,
+        _FakeProcessor(),
+        tokenize_separately=False,
+        emit_system_prompt=True,
+    )
+
+    result = tokenizer({"ai_caption": "front view"})
+
+    assert result is not None
+    assert result[text_tokenizer.TEXT_SYSTEM_PROMPT_KEY] == text_tokenizer._SYSTEM_PROMPT_TRANSFER
+    assert result[text_tokenizer.TEXT_SYSTEM_PROMPT_KEY] == (
+        "You are a helpful assistant that generates images or videos following the user's instructions and control "
+        "signals (edge maps, blur, depth, or segmentation)."
+    )
 
 
 def test_single_view_separate_tokenization_matches_legacy_token_values(monkeypatch: pytest.MonkeyPatch) -> None:

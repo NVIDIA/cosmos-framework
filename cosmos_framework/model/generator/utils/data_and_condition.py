@@ -201,3 +201,41 @@ def build_dense_sound_schedule(
 
     idx_sound = torch.tensor(sound_sample_indices, dtype=torch.long, device=timesteps.device)  # [n_sound]
     return timesteps[idx_sound], sigmas[idx_sound]  # [n_sound,...], [n_sound,...]
+
+
+def select_target_image_sizes(
+    image_sizes: list[torch.Tensor],
+    num_vision_items_per_sample: list[int] | None,
+    batch_size: int,
+) -> list[torch.Tensor]:
+    """Pick one ``image_size`` per sample, the size of the generated (last) vision item.
+
+    Single-item batches carry one ``image_size`` per sample. Multi-item samples (transfer, SR) carry
+    one entry per vision item, flattened by the joint dataloader in item order. Resolution-dependent
+    settings such as the rectified-flow shift must follow the target item, not the conditioning
+    item, so this selects the last item of each sample.
+
+    Args:
+        image_sizes: flattened list of ``[4]`` or ``[1,4]`` tensors ``[target_h, target_w, orig_h, orig_w]``.
+        num_vision_items_per_sample: items per sample, or None for one item per sample.
+        batch_size: number of samples.
+
+    Returns:
+        list of ``batch_size`` tensors.
+    """
+    if num_vision_items_per_sample is None or len(image_sizes) == batch_size:
+        return list(image_sizes[:batch_size])
+    if len(num_vision_items_per_sample) != batch_size:
+        raise ValueError(
+            f"num_vision_items_per_sample has {len(num_vision_items_per_sample)} entries for batch_size {batch_size}"
+        )
+    if sum(num_vision_items_per_sample) != len(image_sizes):
+        raise ValueError(
+            f"image_size has {len(image_sizes)} entries but samples declare {sum(num_vision_items_per_sample)} items"
+        )
+    selected: list[torch.Tensor] = []
+    offset = 0
+    for num_items in num_vision_items_per_sample:
+        offset += num_items
+        selected.append(image_sizes[offset - 1])
+    return selected

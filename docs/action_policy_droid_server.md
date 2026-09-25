@@ -14,6 +14,7 @@ ______________________________________________________________________
 **Table of Contents**
 
 - [Policy Server](#policy-server)
+  - [Two-rank CFG parallelism](#two-rank-cfg-parallelism)
 - [Simulation Client](#simulation-client)
 
 ______________________________________________________________________
@@ -86,6 +87,28 @@ Inside the container, start the policy server:
    The guidance interval applies classifier-free guidance only to denoising
    timesteps in the inclusive range `[960, 1001]`. Omit
    `--guidance-interval` to apply guidance at every denoising step.
+
+### Two-rank CFG parallelism
+
+To serve with classifier-free guidance parallelized across two local GPUs, launch
+exactly two processes and pass `--cfg-parallel`. Set `OMP_NUM_THREADS` to the
+number of physical CPU cores available to the job divided by the two local
+ranks. Without an explicit value, `torchrun` defaults each process to one OpenMP
+thread, which can make request preprocessing slower.
+
+For example, on a host where the job has 32 physical CPU cores available:
+
+```bash
+OMP_NUM_THREADS=16 torchrun --nproc-per-node=2 \
+  -m cosmos_framework.scripts.action_policy_server_robolab \
+  --cfg-parallel \
+  --port 8000
+```
+
+Use cores assigned to the job rather than the host-wide CPU count when running
+inside a container, CPU set, or scheduler allocation. The ratio is a starting
+point; benchmark a few nearby values if CPU preprocessing is important to
+end-to-end latency.
 
 ## Simulation Client
 

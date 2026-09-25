@@ -15,9 +15,10 @@ from torch.utils.hooks import RemovableHandle
 from cosmos_framework.model.generator.mot.attention import SplitInfo
 from cosmos_framework.model.generator.mot.cosmos3_vfm_network import (
     Cosmos3VFMNetwork,
-    _multiview_mask_items,
+    _multiview_caption_mask_items,
+    _multiview_sensor_mask_items,
 )
-from cosmos_framework.model.generator.mot.flex_attention import MaskItem
+from cosmos_framework.model.generator.mot.flex_attention import SensorMaskItem
 from cosmos_framework.data.generator.sequence_packing import PackedSequence
 from cosmos_framework.data.generator.sequence_packing.runtime import (
     SequencePack,
@@ -38,13 +39,14 @@ from cosmos_framework.model.generator.mot.causal_flex_attention import (
 def build_interactive_multiview_mask_items(
     packed_seq: PackedSequence,
     *,
+    lidar_attends_captions: bool = True,
     condition_masks: Sequence[torch.Tensor] | None = None,
-) -> list[list[MaskItem]]:
-    """Build base mask items, optionally restoring pre-replay condition masks."""
-    items_per_sample = _multiview_mask_items(packed_seq)
+) -> list[list[SensorMaskItem]]:
+    """Build base sensor mask items, optionally restoring pre-replay condition masks."""
+    sensor_mask_items = _multiview_sensor_mask_items(packed_seq, lidar_attends_captions=lidar_attends_captions)
     if condition_masks is None:
-        return items_per_sample
-    flat_items = [item for sample_items in items_per_sample for item in sample_items]
+        return sensor_mask_items
+    flat_items = [item for sample_items in sensor_mask_items for item in sample_items]
     if len(flat_items) != len(condition_masks):
         raise ValueError(
             f"Teacher-forcing condition masks contain {len(condition_masks)} items, but the pack contains "
@@ -52,7 +54,7 @@ def build_interactive_multiview_mask_items(
         )
     mask_iter = iter(condition_masks)
     return [
-        [replace(item, condition_mask=next(mask_iter)) for item in sample_items] for sample_items in items_per_sample
+        [replace(item, condition_mask=next(mask_iter)) for item in sample_items] for sample_items in sensor_mask_items
     ]
 
 
@@ -121,8 +123,8 @@ class InteractiveCosmos3VFMNetwork(Cosmos3VFMNetwork):
         if not args or not isinstance(args[0], dict):
             raise TypeError("The interactive network expected a SequencePack as the language-model input.")
         input_pack: SequencePack = args[0]
-        full_only_seq, full_q_offsets = get_full_only_seq(input_pack)  # [N_gen,H,D], [B+1]
-        causal_seq, causal_offsets = get_causal_seq(input_pack)  # [N_und,H], [B+1]
+        full_only_seq, full_q_offsets = get_full_only_seq(input_pack)  # [N_gen,H,D], [B+1 or B+2]
+        causal_seq, causal_offsets = get_causal_seq(input_pack)  # [N_und,H], [B+1 or B+2]
         global_gen_seq_len, global_und_seq_len = _global_flex_stream_lengths(
             input_pack,
             local_gen_seq_len=full_only_seq.shape[0],
@@ -153,7 +155,11 @@ class InteractiveCosmos3VFMNetwork(Cosmos3VFMNetwork):
             flex_metadata = build_multiview_transfer_ar_flex_metadata(
                 seq_len=global_gen_seq_len,
                 full_q_offsets=full_q_offsets,
-                items_per_sample=build_interactive_multiview_mask_items(packed_seq),
+                sensor_mask_items=build_interactive_multiview_mask_items(
+                    packed_seq,
+                    lidar_attends_captions=self.config.multiview_attention_config.mask.lidar_attends_captions,
+                ),
+                caption_mask_items=_multiview_caption_mask_items(packed_seq),
                 device=full_only_seq.device,
                 num_und=global_und_seq_len,
                 causal_offsets=causal_offsets,
@@ -177,16 +183,21 @@ class InteractiveCosmos3VFMNetwork(Cosmos3VFMNetwork):
                 or isinstance(materialized_target_frame_ranges, (str, bytes))
             ):
                 raise TypeError("teacher_forcing_materialized_target_frame_ranges must be a sequence of ranges.")
-            original_masks = getattr(packed_seq, "teacher_forcing_original_condition_masks_vision", None)
+            original_masks = getattr(packed_seq, "teacher_forcing_original_condition_masks_sensors", None)
             if original_masks is None:
-                raise ValueError("Flex teacher forcing requires the original vision condition masks.")
+                # RGB-only AR callers created before the joint replay path use this name.
+                original_masks = getattr(packed_seq, "teacher_forcing_original_condition_masks_vision", None)
+            if original_masks is None:
+                raise ValueError("Flex teacher forcing requires the original sensor condition masks.")
             flex_metadata = build_teacher_forcing_multiview_flex_metadata(
                 seq_len=global_gen_seq_len,
                 full_q_offsets=full_q_offsets,
-                items_per_sample=build_interactive_multiview_mask_items(
+                sensor_mask_items=build_interactive_multiview_mask_items(
                     packed_seq,
+                    lidar_attends_captions=self.config.multiview_attention_config.mask.lidar_attends_captions,
                     condition_masks=original_masks,
                 ),
+                caption_mask_items=_multiview_caption_mask_items(packed_seq),
                 device=full_only_seq.device,
                 num_und=global_und_seq_len,
                 causal_offsets=causal_offsets,
@@ -216,6 +227,7 @@ class InteractiveCosmos3VFMNetwork(Cosmos3VFMNetwork):
         packed_seq: PackedSequence,
         memory: Any | None = None,
         video_temporal_causal: bool | None = None,
+        **kwargs: Any,
     ) -> dict[str, Any]:
         """Expose the active pack to the instance-local language-model hook."""
         previous_packed_seq = self._active_packed_seq
@@ -225,6 +237,7 @@ class InteractiveCosmos3VFMNetwork(Cosmos3VFMNetwork):
                 packed_seq=packed_seq,
                 memory=memory,
                 video_temporal_causal=video_temporal_causal,
+                **kwargs,
             )
         finally:
             self._active_packed_seq = previous_packed_seq

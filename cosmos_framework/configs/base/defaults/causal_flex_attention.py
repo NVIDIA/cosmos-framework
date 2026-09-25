@@ -5,19 +5,19 @@
 
 import attrs
 
-from cosmos_framework.configs.base.defaults.flex_attention import (
-    FlexAttentionConfig,
-    FlexAttentionMaskConfig,
+from cosmos_framework.configs.base.defaults.multiview_attention import (
+    MultiviewAttentionConfig,
+    MultiviewAttentionMaskConfig,
 )
 
 
 @attrs.define(slots=False)
-class CausalFlexAttentionMaskConfig(FlexAttentionMaskConfig):
+class CausalFlexAttentionMaskConfig(MultiviewAttentionMaskConfig):
     """Keep interactive Flex mask defaults separate from replay policy."""
 
 
 @attrs.define(slots=False)
-class CausalFlexAttentionConfig(FlexAttentionConfig):
+class CausalFlexAttentionConfig(MultiviewAttentionConfig):
     """Interactive FlexAttention config; replay connectivity is backend-neutral."""
 
     mask: CausalFlexAttentionMaskConfig = CausalFlexAttentionMaskConfig()

@@ -4,32 +4,34 @@
 """Visual-Text Transformations or Augmentations."""
 
 import random
-from typing import Dict, Literal
+import re
+from typing import Any, Literal
 
 from cosmos_framework.data.imaginaire.webdataset.augmentors.augmentor import Augmentor
 
-REASONING_SUFFIX = (
-    "\nAnswer the question using the following format:\n\n"
-    "<think>\nYour reasoning.\n</think>\n\n"
-    "Write your final answer immediately after the </think> tag."
-)
+_THINK_RE = re.compile(r"<think>.*?</think>\s*|<think>.*\Z", re.DOTALL)
 
 
 class PromptFormat(Augmentor):
     def __init__(
         self,
-        input_keys: list = ["texts"],
+        input_keys: list[str] = ["texts"],
         text_chat_order: Literal["text_end", "text_start", "random"] = "text_end",
+        strip_thinking_prob: float = 0.0,
     ) -> None:
         """
         Args:
-            input_keys (list): List of input keys.
-            text_chat_order (Literal["text_end", "text_start", "random"]): Order of text items in user messages.
+            input_keys: List of input keys.
+            text_chat_order: Order of text items in user messages.
+            strip_thinking_prob: Per-sample probability of dropping assistant thinking traces.
         """
+        if not 0.0 <= strip_thinking_prob <= 1.0:
+            raise ValueError(f"strip_thinking_prob must be in [0, 1], got {strip_thinking_prob}")
         self.input_keys = input_keys
         self.text_chat_order = text_chat_order
+        self.strip_thinking_prob = strip_thinking_prob
 
-    def __call__(self, data_dict: Dict) -> Dict:
+    def __call__(self, data_dict: dict[str, Any]) -> dict[str, Any] | None:
         conversation_key = self.input_keys[0]
 
         # retrive conversations from dict
@@ -62,21 +64,48 @@ class PromptFormat(Augmentor):
             if "reasoning_content" in message and isinstance(message["reasoning_content"], str):
                 message["reasoning_content"] = [{"type": "text", "text": message["reasoning_content"]}]
 
-        # Merge reasoning_content into assistant message content
-        for i, message in enumerate(selected_conversation):
-            if message.get("role") == "assistant" and message.get("reasoning_content"):
-                # Append reasoning instruction to the preceding user message
-                for j in range(i - 1, -1, -1):
-                    if selected_conversation[j].get("role") == "user":
-                        selected_conversation[j]["content"].append({"type": "text", "text": REASONING_SUFFIX})
-                        break
-                # Wrap reasoning items in <think>...</think> tags
-                reasoning_items = message["reasoning_content"]
-                think_start = [{"type": "text", "text": "<think>\n"}]
-                think_end = [{"type": "text", "text": "\n</think>\n\n"}]
-                message["content"] = think_start + reasoning_items + think_end + message["content"]
-                del message["reasoning_content"]
+        is_thinking_stripped = False
+        if random.random() < self.strip_thinking_prob:
+            for message in selected_conversation:
+                if message.get("role") != "assistant":
+                    continue
+                if message.pop("reasoning_content", None):
+                    is_thinking_stripped = True
+                content = message.get("content", [])
+                for item in content:
+                    if not isinstance(item, dict) or item.get("type") != "text":
+                        continue
+                    text = item.get("text")
+                    if not isinstance(text, str):
+                        continue
+                    stripped_text = _THINK_RE.sub("", text).lstrip()
+                    if stripped_text != text:
+                        is_thinking_stripped = True
+                    item["text"] = stripped_text
+                has_text = any(
+                    isinstance(item, dict)
+                    and item.get("type") == "text"
+                    and isinstance(item.get("text"), str)
+                    and item["text"].strip()
+                    for item in content
+                )
+                has_media = any(
+                    isinstance(item, dict) and item.get("type") in ("image", "video", "audio") for item in content
+                )
+                if not has_text and not has_media:
+                    return None
+        else:
+            # Merge reasoning_content into assistant message content
+            for message in selected_conversation:
+                if message.get("role") == "assistant" and message.get("reasoning_content"):
+                    # Wrap reasoning items in <think>...</think> tags
+                    reasoning_items = message["reasoning_content"]
+                    think_start = [{"type": "text", "text": "<think>\n"}]
+                    think_end = [{"type": "text", "text": "\n</think>\n\n"}]
+                    message["content"] = think_start + reasoning_items + think_end + message["content"]
+                    del message["reasoning_content"]
 
+        data_dict["is_thinking_stripped"] = is_thinking_stripped
         data_dict["conversation"] = selected_conversation
 
         del data_dict[conversation_key]
@@ -86,7 +115,7 @@ class PromptFormat(Augmentor):
 
         return data_dict
 
-    def _enforce_text_chat_order(self, conversation: list) -> None:
+    def _enforce_text_chat_order(self, conversation: list[dict[str, Any]]) -> None:
         """
         Reorder text content within user messages based on text_chat_order setting.
         NOTE (maxzhaoshuol): this does NOT work for interleaved data!!!!!!
