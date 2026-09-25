@@ -45,9 +45,9 @@ class WandbAnimation(NamedTuple):
 
 
 # What a clip is previewed as in W&B: one still grid, one panel per sampled
-# frame, or an animation of every frame.
+# frame, an animation of every frame, or direct interactive point-cloud media.
 WandbClipPreview = Literal["grid", "frames", "animation"]
-WandbMedia = str | dict[str, str | WandbAnimation] | WandbAnimation
+WandbMedia = str | WandbAnimation | list[wandb.Object3D] | dict[str, "WandbMedia"]
 
 
 def resize_image(image: torch.Tensor, size: int = 1024) -> torch.Tensor:
@@ -292,10 +292,10 @@ def _decode_transfer_pixel_row(
 ) -> torch.Tensor | None:  # [V,C,F,H,W] or None
     """Decode one latent into a host-side pixel row without display conversion.
 
-    ``decode`` defaults to the model's main VAE; a joint camera + LiDAR sample passes
-    ``model.decode_lidar`` for range clips because the two streams have separate VAEs.
-    LiDAR callers pass ``decode_per_view=False``: V0 and V1 are both 1x temporal on a
-    single range view, not 4x camera-major WAN clips.
+    ``decode`` defaults to the model's main VAE; a joint camera + LiDAR sample
+    passes ``model.decode_lidar`` for those clips because the streams have
+    separate VAEs. LiDAR callers pass ``decode_per_view=False``: the rangemap
+    is 1x temporal on a single view, not 4x camera-major WAN clips.
     """
     decode = decode if decode is not None else model.decode
     if decode_per_view is None:
@@ -565,6 +565,10 @@ def _add_wandb_media(
 ) -> None:
     if media is None:
         return
+    if isinstance(media, list):
+        if media:
+            info[key_prefix] = media
+        return
     if isinstance(media, WandbAnimation):
         info[key_prefix] = wandb.Video(media.path, caption=f"{caption} | {media.num_frames} frames")
         return
@@ -747,6 +751,13 @@ class EveryNDrawSample(EveryN):
         use_negative_prompt (bool, optional): whether to use negative prompt. Defaults to False.
         fps (int, optional): frames per second when saving the video. Defaults to 16.
         wandb_log_image_size (int, optional): max side length for W&B JPEG/GIF previews. Defaults to 1024.
+        log_lidar_point_clouds (bool, optional): also log separate real/generated LiDAR point-cloud panels. Defaults to True.
+        point_cloud_max_frames (int | None, optional): preview scans per row, starting at the first generated scan.
+            None keeps all scans, including labelled conditioning inputs. Defaults to 3.
+        point_cloud_max_points (int, optional): points per cloud, at most 300000. Defaults to 300000.
+        point_cloud_color_by (str, optional): BEV height colors or grayscale intensity. Defaults to "height".
+        point_cloud_include_conditioned_frames (bool, optional): sample across the full clip, including labelled
+            conditioning inputs, when bounding the preview scan count. Defaults to False.
     """
 
     def __init__(
@@ -1005,6 +1016,9 @@ class EveryNDrawSample(EveryN):
         if plans and not getattr(plans[0], "has_lidar", False):
             generation_batch.pop("lidar", None)
             generation_batch.pop("num_lidar_items_per_sample", None)
+        if plans and not getattr(plans[0], "has_radar", False):
+            generation_batch.pop("radar", None)
+            generation_batch.pop("num_radar_items_per_sample", None)
         # Preserve an explicit caller-provided prompt. Otherwise restore the exact prompt recorded
         # by the training tokenizer before train-sample inference re-tokenizes the raw caption.
         text_system_prompt = generation_batch.pop(TEXT_SYSTEM_PROMPT_KEY, None)

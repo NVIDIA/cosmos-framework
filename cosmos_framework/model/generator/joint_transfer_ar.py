@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING
 
 import torch
 
+from cosmos_framework.model.generator.mot.context_parallel_utils import context_parallel_broadcast_tensor_list
 from cosmos_framework.model.generator.utils.data_and_condition import GenerationDataClean
 from cosmos_framework.data.generator.sequence_packing import PackedSequence, SequencePlan
 from cosmos_framework.model.generator.utils.kv_cache import TeacherForcingMemoryState
@@ -165,7 +166,7 @@ def sample_joint_transfer_ar(
         raise ValueError("Joint AR requires exactly one RGB+LiDAR sequence")
     if plans[0].has_action or plans[0].has_sound:
         raise ValueError("Joint AR supports only RGB and LiDAR targets")
-    if not host._uses_multiview_flex_kv() or host.config.compile.enabled:
+    if not host._uses_multiview_replay_kv() or host.config.compile.enabled:
         raise ValueError("Joint AR requires eager multiview Flex teacher forcing")
     if host.parallel_dims is not None and host.parallel_dims.cfgp_enabled:
         raise ValueError("Joint AR currently uses serial CFG branches; set cfg_parallel_shard_degree=1")
@@ -191,6 +192,14 @@ def sample_joint_transfer_ar(
         raise ValueError("Joint AR guidance requires unconditional captions")
     if seed < 0 or num_steps < 1 or not math.isfinite(guidance) or not math.isfinite(shift) or shift <= 0:
         raise ValueError("Joint AR requires a nonnegative seed and finite valid sampling settings")
+
+    # Rank-local VAE encoding can differ even with identical pixels and seeds.
+    # CP shards must read one canonical set of controls and conditioned targets
+    # before the initial pack and every subsequent clean/noisy replay.
+    # Keep the existing Flex inference input behavior unchanged.
+    if host._get_teacher_forcing_kv_implementation() == "multiview_maskless_kv":
+        context_parallel_broadcast_tensor_list(data.x0_tokens_vision, host.parallel_dims)  # each [1,Cv,V*Tv,Hv,Wv]
+        context_parallel_broadcast_tensor_list(data.x0_tokens_lidar, host.parallel_dims)  # each [1,Cl,Tl,Hl,Wl]
 
     initial_pack = host._pack_input_sequence(plans, conditional_text, data, torch.zeros(1))  # timestep: [1]
     if initial_pack.vision is None or initial_pack.lidar is None:

@@ -225,7 +225,9 @@ class PKLToMedia(Augmentor):
                 data=video_bytes,
                 **self.video_decoder_params,
             )
-            result["videos"] = tensor_to_pil_images(result["videos"])  # 3,T,H,W -> list of PIL images
+            result["videos"] = tensor_to_pil_images(
+                result["videos"], channels_first=True
+            )  # 3,T,H,W -> list of PIL images
             if result is not None:
                 return result
             else:

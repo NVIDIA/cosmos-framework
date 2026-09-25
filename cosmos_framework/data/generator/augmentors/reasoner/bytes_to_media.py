@@ -257,7 +257,9 @@ class BytesToMedia(Augmentor):
                 return None
             if self.video_timestamp_mode == "source_pts":
                 validate_source_video_timing(result.get(SOURCE_VIDEO_TIMING_KEY), result["videos"].shape[1])
-            result["videos"] = tensor_to_pil_images(result["videos"])  # 3,T,H,W -> list of PIL images
+            result["videos"] = tensor_to_pil_images(
+                result["videos"], channels_first=True
+            )  # 3,T,H,W -> list of PIL images
             return result
         except Exception as e:
             if self.video_timestamp_mode == "source_pts":

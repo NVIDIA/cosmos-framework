@@ -1117,7 +1117,8 @@ def _impl_forward(
     _meta_tensor = get_gen_seq(pack)  # [S_gen,D]
     device = _meta_tensor.device
     cos, sin = self.rotary_emb(
-        _meta_tensor, position_ids=position_ids.unsqueeze(0) if position_ids.ndim == 1 else position_ids.unsqueeze(1)
+        _meta_tensor,
+        position_ids=position_ids.unsqueeze(0) if position_ids.ndim == 1 else position_ids.unsqueeze(1),
     )  # if ndim == 2, the mrope position_ids is (3, seq_len); inject the batch dim in the
     # middle to get (3, 1, seq_len) so the rotary_emb's mrope branch broadcasts correctly.
     # In both branches Qwen3VLTextRotaryEmbedding.apply_interleaved_mrope collapses the
@@ -1128,7 +1129,6 @@ def _impl_forward(
         from_all_seq(cos, pack),
         from_all_seq(sin, pack),
     )
-
     # Tracking the load balancing loss across all layers. For dense models, lbl_metadata_all
     # will be a dictionary with empty lists for each pathway. For MoE models, the lists
     # for each pathway will be populated with the load balancing loss metadata for each layer.

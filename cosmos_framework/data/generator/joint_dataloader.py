@@ -33,6 +33,7 @@ from cosmos_framework.model.generator.tokenizers.uniae.frame_math import (
     normalize_uniae_chunk_frames,
 )
 from cosmos_framework.utils.generator.data_utils import read_positive_int_metadata
+from cosmos_framework.utils.generator.spatial_patch import normalize_spatial_patch_hw
 
 _BATCH_TIMING_KEYS = {
     "_worker_batch_time",
@@ -174,6 +175,10 @@ def custom_collate_fn(batch: list[dict[str, Any]] | dict[str, Any]) -> dict[str,
         # Like "video": a per-sample list of range clips, which default_collate would try to
         # stack even though the two sensors' clips differ in length and resolution.
         "lidar",
+        # The BEV pair is [control, target]. Outside this set it goes to default_collate,
+        # which transposes it into a list of stacked tensors rather than failing; the
+        # per-sample split then yields one 5-D tensor where a list of clips is expected.
+        "radar",
         DROP_SAMPLE_KEY,
         DROP_SAMPLE_REASON_KEY,
         *_ACTION_SAMPLER_METADATA_KEYS,
@@ -450,6 +455,8 @@ class JointDataLoader(webdataset.WebLoader):
         max_samples_per_batch: int | None,
         lidar_spatial_compression: Sequence[int] | None = None,
         lidar_temporal_compression_factor: int | None = None,
+        radar_spatial_compression: Sequence[int] | None = None,
+        radar_temporal_compression_factor: int | None = None,
         sound_latent_fps: float = 0,
         audio_sample_rate: int = 48000,
         prewarm: bool = True,
@@ -461,6 +468,8 @@ class JointDataLoader(webdataset.WebLoader):
         lazy_initialize_child_iterators: bool = False,
         iteration_time_budget: IterationTimeBudgetConfig | None = None,
         forkserver_preload_modules: list[str] | None = None,
+        lidar_patch_spatial_hw: int | tuple[int, int] | None = None,
+        radar_patch_spatial_hw: int | tuple[int, int] | None = None,
     ) -> None:
         """
         Initialize the JointDataLoader with multiple datasets.
@@ -479,12 +488,20 @@ class JointDataLoader(webdataset.WebLoader):
             tokenizer_spatial_compression_factor: The spatial compression factor of the tokenizer.
             tokenizer_temporal_compression_factor: The temporal compression factor of the tokenizer.
             patch_spatial: Spatial pathification factor.
+            lidar_patch_spatial_hw: LiDAR patch side or (height, width); None inherits patch_spatial.
+            radar_patch_spatial_hw: Radar patch side or (height, width); None inherits patch_spatial.
             max_samples_per_batch: Max number of samples per packed batch (alternative to max_sequence_length).
             lidar_spatial_compression: ``(height, width)`` compression of the LiDAR VAE. Required only
                 for streams whose samples carry a ``lidar`` key, whose clips are costed with the
                 LiDAR VAE rather than the camera's — the two compress time differently (4x versus
                 1x), and an item costed with the wrong factor silently over-packs the batch.
             lidar_temporal_compression_factor: Temporal compression of the LiDAR VAE.
+            radar_spatial_compression: ``(height, width)`` compression of the radar VAE. Required only
+                for streams whose samples carry a ``radar`` key. Radar cannot borrow the LiDAR pair
+                even on a run that carries both sensors: the two VAEs read different grids (a square
+                BEV versus a range image) and the recipes pick their tokenizer versions
+                independently, so one pair of factors cannot price both streams.
+            radar_temporal_compression_factor: Temporal compression of the radar VAE.
             sound_latent_fps: Sound tokenizer latent rate in Hz (e.g. 25). If 0, sound tokens are not counted.
             audio_sample_rate: Audio sample rate in Hz (e.g. 48000). Used with sound_latent_fps to estimate
                 sound token count.
@@ -542,7 +559,32 @@ class JointDataLoader(webdataset.WebLoader):
             raise ValueError(
                 f"lidar_temporal_compression_factor must be positive, got {self.lidar_temporal_compression_factor}"
             )
+        self.radar_spatial_compression = (
+            tuple(int(factor) for factor in radar_spatial_compression)
+            if radar_spatial_compression is not None
+            else None
+        )
+        if self.radar_spatial_compression is not None and (
+            len(self.radar_spatial_compression) != 2 or any(factor <= 0 for factor in self.radar_spatial_compression)
+        ):
+            raise ValueError(
+                "radar_spatial_compression must contain two positive factors "
+                f"(height, width), got {self.radar_spatial_compression}"
+            )
+        self.radar_temporal_compression_factor = (
+            int(radar_temporal_compression_factor) if radar_temporal_compression_factor is not None else None
+        )
+        if self.radar_temporal_compression_factor is not None and self.radar_temporal_compression_factor <= 0:
+            raise ValueError(
+                f"radar_temporal_compression_factor must be positive, got {self.radar_temporal_compression_factor}"
+            )
         self.patch_spatial = patch_spatial
+        self.lidar_patch_spatial_hw: tuple[int, int] = normalize_spatial_patch_hw(
+            patch_spatial if lidar_patch_spatial_hw is None else lidar_patch_spatial_hw
+        )
+        self.radar_patch_spatial_hw: tuple[int, int] = normalize_spatial_patch_hw(
+            patch_spatial if radar_patch_spatial_hw is None else radar_patch_spatial_hw
+        )
         self.max_sequence_length = max_sequence_length
         self.max_samples_per_batch = max_samples_per_batch
         self.sound_latent_fps = sound_latent_fps
@@ -668,9 +710,36 @@ class JointDataLoader(webdataset.WebLoader):
         num_tokens = 0
         for clip in clips:
             _, T, H, W = clip.shape
-            patch_h = math.ceil(H // spatial_h / self.patch_spatial)
-            patch_w = math.ceil(W // spatial_w / self.patch_spatial)
+            patch_h = math.ceil(H // spatial_h / self.lidar_patch_spatial_hw[0])
+            patch_w = math.ceil(W // spatial_w / self.lidar_patch_spatial_hw[1])
             latent_t = 1 + (T - 1) // self.lidar_temporal_compression_factor
+            num_tokens += patch_h * patch_w * latent_t
+        return num_tokens
+
+    def _num_radar_tokens(self, data_batch: Mapping[str, Any]) -> int:
+        """Cost the sample's radar BEV clips with the radar VAE's own compression.
+
+        Same arithmetic as the sweeps over a square BEV grid rather than a range image: the
+        radar VAE does not compress time either, so one scan is one latent frame and the
+        camera's 4x would undercount a clip fourfold. Radar is the more expensive of the two
+        sensors per second of clip -- it cycles at ~20 Hz against LiDAR's 10 and each scan
+        carries more latents -- so an underpriced clip over-packs the batch by more here.
+        """
+        clips = data_batch.get("radar")
+        if not clips:
+            return 0
+        if self.radar_spatial_compression is None or self.radar_temporal_compression_factor is None:
+            raise ValueError(
+                "This batch carries a radar stream, but the loader has no radar compression factors. "
+                "Set radar_spatial_compression and radar_temporal_compression_factor."
+            )
+        spatial_h, spatial_w = self.radar_spatial_compression
+        num_tokens = 0
+        for clip in clips:
+            _, T, H, W = clip.shape
+            patch_h = math.ceil(H // spatial_h / self.radar_patch_spatial_hw[0])
+            patch_w = math.ceil(W // spatial_w / self.radar_patch_spatial_hw[1])
+            latent_t = 1 + (T - 1) // self.radar_temporal_compression_factor
             num_tokens += patch_h * patch_w * latent_t
         return num_tokens
 
@@ -904,6 +973,11 @@ class JointDataLoader(webdataset.WebLoader):
         # gen_tokens so the iteration-time cost model sees the sweeps.
         gen_tokens += self._num_lidar_tokens(data_batch)
 
+        # Radar part: a third VAE and a third pair of factors, charged the same way. A joint
+        # camera + radar sample carries no sweeps and a joint camera + LiDAR one no scans, so
+        # each of the two calls prices nothing on the other's recipe.
+        gen_tokens += self._num_radar_tokens(data_batch)
+
         # Action part: each action time step is 1 token.
         # Action tensor shape is (T_action, D) per sample; stored as a single-element list.
         if "action" in data_batch:
@@ -1123,6 +1197,8 @@ class IterativeJointDataLoader(JointDataLoader):
         max_samples_per_batch: int | None = None,
         lidar_spatial_compression: Sequence[int] | None = None,
         lidar_temporal_compression_factor: int | None = None,
+        radar_spatial_compression: Sequence[int] | None = None,
+        radar_temporal_compression_factor: int | None = None,
         sound_latent_fps: float = 0,
         audio_sample_rate: int = 48000,
         seed: int | None = 42,
@@ -1138,6 +1214,8 @@ class IterativeJointDataLoader(JointDataLoader):
         iteration_time_budget: IterationTimeBudgetConfig | None = None,
         token_mix_control: TokenMixControlConfig | None = None,
         forkserver_preload_modules: list[str] | None = None,
+        lidar_patch_spatial_hw: int | tuple[int, int] | None = None,
+        radar_patch_spatial_hw: int | tuple[int, int] | None = None,
     ) -> None:
         if async_batch_building_timeout_s <= 0:
             raise ValueError(f"async_batch_building_timeout_s must be positive, got {async_batch_building_timeout_s}.")
@@ -1178,6 +1256,8 @@ class IterativeJointDataLoader(JointDataLoader):
             max_samples_per_batch,
             lidar_spatial_compression=lidar_spatial_compression,
             lidar_temporal_compression_factor=lidar_temporal_compression_factor,
+            radar_spatial_compression=radar_spatial_compression,
+            radar_temporal_compression_factor=radar_temporal_compression_factor,
             sound_latent_fps=sound_latent_fps,
             audio_sample_rate=audio_sample_rate,
             prewarm=prewarm,
@@ -1189,6 +1269,8 @@ class IterativeJointDataLoader(JointDataLoader):
             lazy_initialize_child_iterators=lazy_initialize_child_iterators,
             iteration_time_budget=iteration_time_budget,
             forkserver_preload_modules=forkserver_preload_modules,
+            lidar_patch_spatial_hw=lidar_patch_spatial_hw,
+            radar_patch_spatial_hw=radar_patch_spatial_hw,
         )
 
         self.seed = seed

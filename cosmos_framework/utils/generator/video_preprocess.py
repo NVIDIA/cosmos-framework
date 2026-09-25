@@ -6,18 +6,22 @@ import torch
 from PIL import Image
 
 
-def tensor_to_pil_images(video_tensor: torch.Tensor) -> list[Image.Image]:
+def tensor_to_pil_images(video_tensor: torch.Tensor, *, channels_first: bool | None = None) -> list[Image.Image]:
     """Convert a video tensor of shape (C, T, H, W) or (T, C, H, W) into a list of PIL images.
 
     Args:
         video_tensor: Video tensor with shape (C, T, H, W) or (T, C, H, W).
+        channels_first: Specify the layout when it cannot be inferred, such as for three-frame RGB videos.
+            If omitted, the helper retains its original layout inference.
 
     Returns:
         One PIL image per frame.
     """
+    if channels_first is None:
+        channels_first = video_tensor.shape[0] == 3 and video_tensor.shape[1] > 3
     # (C, T, H, W) -> (T, C, H, W)
-    if video_tensor.shape[0] == 3 and video_tensor.shape[1] > 3:
-        video_tensor = video_tensor.permute(1, 0, 2, 3)
+    if channels_first:
+        video_tensor = video_tensor.permute(1, 0, 2, 3)  # [T,C,H,W]
 
     # (T, C, H, W) -> (T, H, W, C) and detach to CPU numpy.
     video_np = video_tensor.permute(0, 2, 3, 1).cpu().numpy()
