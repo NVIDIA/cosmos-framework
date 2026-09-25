@@ -184,6 +184,13 @@ class MultiviewAttentionMaskConfig:
     # ._multiview_pair_predicate.
     lidar_attends_captions: bool = True
 
+    # The same switch for the radar stream of a joint camera + radar pack, read the same way.
+    # Radar has a stronger prior claim to needing it than LiDAR does: the captions describe what
+    # the cameras see, and a BEV occupancy grid shares even less of that vocabulary than a range
+    # image does. Independent of ``lidar_attends_captions`` so a three-sensor pack can drop text
+    # for one stream and keep it for the other.
+    radar_attends_captions: bool = True
+
 
 @attrs.define(slots=False)
 class MultiviewAttentionConfig:

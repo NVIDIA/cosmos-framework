@@ -37,6 +37,12 @@ from cosmos_framework.data.generator.sequence_packing.runtime import (
     get_gen_seq,
 )
 from cosmos_framework.configs.base.defaults.replay_attention import TeacherForcingReplayPolicyConfig
+from cosmos_framework.model.generator.mot.maskless_attention import (
+    ReplayMasklessPlan,
+    cat_replay_kv,
+    replay_maskless_attention,
+)
+from cosmos_framework.model.generator.mot.merge_attention import merge_attentions_ac_safe
 from cosmos_framework.model.generator.utils.kv_cache import (
     ARMemoryValue,
     FlexARMemoryValue,
@@ -410,12 +416,13 @@ def two_way_flex_attention_with_memory(
     packed_value_states: SequencePack,
     *,
     packed_key_states_normalized: SequencePack | None,
-    flex_block_mask: BlockMask,
-    flex_backend: FlexBackend,
+    flex_block_mask: BlockMask | None,
+    flex_backend: FlexBackend | None,
     flex_memory_k: torch.Tensor | None,
     flex_memory_v: torch.Tensor | None,
+    maskless_plan: ReplayMasklessPlan | None = None,
 ) -> SequencePack:
-    """Run two-way attention with an optional key-only Flex K/V suffix."""
+    """Run two-way replay attention with an optional key-only K/V suffix."""
     if (flex_memory_k is None) != (flex_memory_v is None):
         raise ValueError("flex_memory_k and flex_memory_v must be provided together.")
     packed_key_normalized = (
@@ -434,6 +441,12 @@ def two_way_flex_attention_with_memory(
     if caption_offsets is not None:
         causal_q_offsets, max_causal_len = caption_offsets  # [N_captions+1], int
         causal_k_offsets = causal_q_offsets  # [N_captions+1]
+
+    if maskless_plan is not None and torch.compiler.is_compiling():
+        # NATTEN validates these bounds with Python branches. State the caption
+        # packing contract explicitly when CP stream lengths are unbacked.
+        torch._check(max_causal_len <= causal_q.shape[0])
+        torch._check(max_causal_len <= causal_k.shape[0])
 
     use_dont_care_mask = causal_q_offsets is causal_k_offsets
     causal_res = attention(
@@ -459,17 +472,30 @@ def two_way_flex_attention_with_memory(
     value_parts = [und_v, gen_v]
     if flex_memory_k is not None:
         assert flex_memory_v is not None
+        if maskless_plan is not None and torch.compiler.is_compiling():
+            torch._check(flex_memory_k.shape[1] == flex_memory_v.shape[1])
         key_parts.append(flex_memory_k.squeeze(0))  # [N_memory,H,D]
         value_parts.append(flex_memory_v.squeeze(0))  # [N_memory,H,D]
-    flex_keys = torch.cat(key_parts).unsqueeze(0)  # [1,N_und+N_gen+N_memory,H,D]
-    flex_values = torch.cat(value_parts).unsqueeze(0)  # [1,N_und+N_gen+N_memory,H,D]
-    full_res = flex_attention(
-        full_q.unsqueeze(0),  # [1,N_gen,H,D]
-        flex_keys,
-        flex_values,
-        flex_block_mask,
-        flex_backend,
-    )  # [1,N_gen,H,D]
+    concatenate = cat_replay_kv if maskless_plan is not None and flex_memory_k is not None else torch.cat
+    flex_keys = concatenate(key_parts).unsqueeze(0)  # [1,N_und+N_gen+N_memory,H,D]
+    flex_values = concatenate(value_parts).unsqueeze(0)  # [1,N_und+N_gen+N_memory,H,D]
+    if maskless_plan is not None:
+        full_res = replay_maskless_attention(
+            full_q.unsqueeze(0),
+            flex_keys,
+            flex_values,
+            maskless_plan,  # [1,N_gen,H,D], [1,KV,H,D], [1,KV,H,D]
+        )  # [1,N_gen,H,D]
+    else:
+        if flex_block_mask is None or flex_backend is None:
+            raise ValueError("Two-way Flex replay requires its mask and backend.")
+        full_res = flex_attention(
+            full_q.unsqueeze(0),  # [1,N_gen,H,D]
+            flex_keys,
+            flex_values,
+            flex_block_mask,
+            flex_backend,
+        )  # [1,N_gen,H,D]
     full_out = full_res.squeeze(0).flatten(-2, -1)  # [N_gen,H*D]
     return from_mode_splits(causal_out, full_out, packed_query_states)
 
@@ -1661,102 +1687,6 @@ def three_way_attention_with_kv_cache(
     return from_mode_splits(text_out, video_out, packed_query_states)
 
 
-class _ACSafeMergeAttentionsFn(torch.autograd.Function):
-    """AC-compatible drop-in for NATTEN's ``MergeAttentionsAutogradFn``.
-
-    NATTEN's backward indexes ``ctx.saved_tensors`` in multiple slices
-    (``[:2]``, ``[2 : N+2]``, ``[N+2:]``), and each indexing access fires
-    the non-reentrant ``torch.utils.checkpoint`` unpack hook for *every*
-    saved tensor. The hook only permits one unpack per saved tensor, so
-    activation checkpointing + NATTEN merge_attentions raises
-    ``CheckpointError: Unpack is being triggered for a tensor that was
-    already unpacked once`` (see the replayed-LSE + AC=full long-video
-    TF path).
-
-    This version preserves the same forward math and the same
-    storage-patching backward contract (see :class:`MergeAttentionsBridge`
-    docstring for the full description), but reads ``ctx.saved_tensors``
-    exactly once.  Numerics match ``naive_merge_attentions`` (iterative
-    pairwise LSE rescale) — which is what NATTEN's kernel implements up
-    to reduction order.
-    """
-
-    @staticmethod
-    def forward(
-        ctx,
-        num_components: int,
-        *tensors: torch.Tensor,
-    ) -> tuple[torch.Tensor, torch.Tensor]:
-        outputs = tensors[:num_components]
-        lses = tensors[num_components:]
-        output_dtype = outputs[0].dtype
-        normalized_lses = [lse.squeeze(-1) if lse.ndim == 4 else lse for lse in lses]
-
-        merged_lse = normalized_lses[0]
-        merged_out = outputs[0]
-        for i in range(1, num_components):
-            new_lse = torch.logaddexp(merged_lse, normalized_lses[i])
-            w_old = torch.exp(merged_lse - new_lse).unsqueeze(-1)
-            w_new = torch.exp(normalized_lses[i] - new_lse).unsqueeze(-1)
-            merged_out = w_old * merged_out + w_new * outputs[i]
-            merged_lse = new_lse
-        merged_out = merged_out.to(output_dtype)
-
-        ctx.save_for_backward(merged_out, merged_lse, *outputs, *lses)
-        ctx.num_components = num_components
-        return merged_out, merged_lse
-
-    @staticmethod
-    def backward(
-        ctx,
-        grad_merged_out: torch.Tensor,
-        grad_merged_lse: torch.Tensor,
-    ) -> tuple[torch.Tensor | None, ...]:
-        # Single access — avoid retriggering the AC unpack hook for any saved tensor.
-        saved = ctx.saved_tensors
-        merged_out = saved[0]
-        merged_lse = saved[1]
-        num = ctx.num_components
-        outputs = saved[2 : 2 + num]
-        lses = saved[2 + num : 2 + 2 * num]
-
-        # Patch each component's storage with the merged O / LSE.  The
-        # upstream attention kernel's backward will read these as its
-        # saved O / LSE and compute gradients as if it had produced the
-        # merged output.  The original LSE shape is preserved (the
-        # forward squeezes a trailing singleton, so we re-broadcast).
-        for o in outputs:
-            o.data.copy_(merged_out.data)
-        for l in lses:
-            if l.ndim == merged_lse.ndim + 1 and l.shape[-1] == 1:
-                l.data.copy_(merged_lse.data.unsqueeze(-1))
-            else:
-                l.data.copy_(merged_lse.data)
-
-        # Same upstream-grad contract as NATTEN: dL/dO_i = dL/dO_merged
-        # for every component; dL/dLSE_i is forwarded unchanged for
-        # parity (i4 attention treats LSE as non-differentiable, so this
-        # gradient is silently dropped at the kernel boundary).
-        grads = (None,) + (grad_merged_out,) * num + (grad_merged_lse,) * num
-        return grads
-
-
-def merge_attentions_ac_safe(
-    outputs: list[torch.Tensor],
-    lse_tensors: list[torch.Tensor],
-) -> tuple[torch.Tensor, torch.Tensor]:
-    """AC-safe drop-in for ``cosmos_framework.model.attention.merge_attentions``.
-
-    Use at call sites that live inside an activation-checkpointed module
-    boundary.  Matches NATTEN's storage-patching backward contract so
-    upstream i4 attention kernels (whose LSE is not differentiable)
-    still receive correct gradients via their own saved O / LSE
-    backward formulas.
-    """
-    assert len(outputs) == len(lse_tensors) >= 2
-    return _ACSafeMergeAttentionsFn.apply(len(outputs), *outputs, *lse_tensors)
-
-
 def naive_merge_attentions(
     outputs: list[torch.Tensor],
     lse_tensors: list[torch.Tensor],
@@ -2159,14 +2089,24 @@ def dispatch_attention_with_memory(
     - ``ARMemoryValue`` with ``frame_idx == 0`` → interactive no-memory dispatch
     - ``None`` → interactive no-memory dispatch
     """
+    maskless_plan = getattr(attention_mask, "replay_maskless_plan", None)
+    if maskless_plan is not None and not isinstance(maskless_plan, ReplayMasklessPlan):
+        raise TypeError("Replay attention requires a ReplayMasklessPlan.")
     if (
-        isinstance(memory_value, (TFReplayCleanMemoryValue, TFNoisyMemoryValue, FlexARMemoryValue))
+        (
+            isinstance(memory_value, (TFReplayCleanMemoryValue, TFNoisyMemoryValue, FlexARMemoryValue))
+            or maskless_plan is not None
+        )
         and isinstance(attention_mask, SplitInfo)
         and not attention_mask.is_three_way
-        and attention_mask.flex_block_mask is not None
+        and (attention_mask.flex_block_mask is not None or maskless_plan is not None)
     ):
-        if attention_mask.flex_backend is None:
-            raise ValueError("Two-way Flex memory attention requires a FlexBackend.")
+        if (
+            maskless_plan is not None
+            and memory_value is not None
+            and not isinstance(memory_value, (TFReplayCleanMemoryValue, TFNoisyMemoryValue, FlexARMemoryValue))
+        ):
+            raise TypeError("Maskless multiview replay received an incompatible memory layout.")
         output = two_way_flex_attention_with_memory(
             packed_query_states,
             packed_key_states,
@@ -2174,6 +2114,7 @@ def dispatch_attention_with_memory(
             packed_key_states_normalized=packed_key_states_normalized,
             flex_block_mask=attention_mask.flex_block_mask,
             flex_backend=attention_mask.flex_backend,
+            maskless_plan=maskless_plan,
             flex_memory_k=(
                 memory_value.cached_clean_gen_k
                 if isinstance(memory_value, TFNoisyMemoryValue)

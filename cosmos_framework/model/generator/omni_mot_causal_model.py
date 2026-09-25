@@ -13,6 +13,7 @@
 from __future__ import annotations
 
 import contextlib
+import copy
 import itertools
 from collections.abc import Callable, Generator, Iterable, Sequence
 from dataclasses import dataclass
@@ -133,14 +134,14 @@ class OmniMoTCausalModelConfig(OmniMoTModelConfig):
 
     # Select the replay implementation through one causal-model input instead
     # of reconstructing it from lower-level attention settings. The model
-    # resolves this selector to the internal two-way FlexAttention or three-way
+    # resolves this selector to the internal two-way Flex/maskless or three-way
     # attention layout while it builds the network.
     teacher_forcing_kv_implementation: TeacherForcingKVImplementation = attrs.field(
         default="singleview_threeway_kv",
-        validator=attrs.validators.in_(("multiview_flex_kv", "singleview_threeway_kv")),
+        validator=attrs.validators.in_(("multiview_flex_kv", "multiview_maskless_kv", "singleview_threeway_kv")),
     )
 
-    # Backend-neutral connectivity for clean replay and transfer control. Both
+    # Backend-neutral connectivity for clean replay and transfer control. All
     # replay implementations consume the same policy object.
     teacher_forcing_replay_policy: TeacherForcingReplayPolicyConfig = attrs.Factory(TeacherForcingReplayPolicyConfig)
 
@@ -515,7 +516,7 @@ def _resolve_teacher_forcing_replay_policy(value: Any) -> TeacherForcingReplayPo
 
 def _resolve_teacher_forcing_kv_implementation(value: Any) -> TeacherForcingKVImplementation:
     """Validate the public replay selector after LazyConfig resolution."""
-    supported_implementations = ("multiview_flex_kv", "singleview_threeway_kv")
+    supported_implementations = ("multiview_flex_kv", "multiview_maskless_kv", "singleview_threeway_kv")
     if value not in supported_implementations:
         raise ValueError(
             f"teacher_forcing_kv_implementation must be one of {supported_implementations}, got {value!r}."
@@ -528,9 +529,12 @@ def _validate_teacher_forcing_kv_strategy(
     causal_training_strategy: str,
 ) -> None:
     """Reject selectors that cannot be honored by the configured training strategy."""
-    if implementation == "multiview_flex_kv" and causal_training_strategy not in _TEACHER_FORCING_REPLAY_STRATEGIES:
+    if (
+        implementation != "singleview_threeway_kv"
+        and causal_training_strategy not in _TEACHER_FORCING_REPLAY_STRATEGIES
+    ):
         raise ValueError(
-            "teacher_forcing_kv_implementation='multiview_flex_kv' requires causal_training_strategy "
+            f"teacher_forcing_kv_implementation={implementation!r} requires causal_training_strategy "
             f"to be one of {_TEACHER_FORCING_REPLAY_STRATEGIES}, got {causal_training_strategy!r}."
         )
 
@@ -640,7 +644,7 @@ class OmniMoTCausalModel(OmniMoTModel):
         lora_enabled: bool | None = None,
     ) -> torch.nn.Module:
         """Resolve the selected teacher-forcing KV implementation and build it."""
-        uses_multiview_flex_kv = self._uses_multiview_flex_kv()
+        uses_multiview_replay_kv = self._uses_multiview_replay_kv()
         if self.config.causal_training_strategy not in _TEACHER_FORCING_REPLAY_STRATEGIES:
             return super().build_net(dtype, mp_policy=mp_policy, lora_enabled=lora_enabled)
 
@@ -653,10 +657,14 @@ class OmniMoTCausalModel(OmniMoTModel):
         joint_attn_implementation = self.config.joint_attn_implementation
         attention_scope = self.config.multiview_attention.mask.attention_scope
         decomposed_temporal_window_seconds = self.config.multiview_attention.mask.decomposed_temporal_window_seconds
+        multiview_backend = self.config.multiview_attention.backend
+        maskless_replay = (
+            video_temporal_causal and self._get_teacher_forcing_kv_implementation() == "multiview_maskless_kv"
+        )
         # One knob rather than two that had to agree: the pathway is what selects multiview
         # attention, so there is no second flag to save and restore alongside it.
-        self.config.joint_attn_implementation = "multiview" if uses_multiview_flex_kv else "three_way"
-        if uses_multiview_flex_kv:
+        self.config.joint_attn_implementation = "multiview" if uses_multiview_replay_kv else "three_way"
+        if uses_multiview_replay_kv:
             # Core validates temporal causality as a three-way-only layout. The
             # replay mask supplies causality for this two-way path.
             self.config.video_temporal_causal = False
@@ -664,8 +672,14 @@ class OmniMoTCausalModel(OmniMoTModel):
             self.config.multiview_attention.mask.decomposed_temporal_window_seconds = (
                 replay_policy.decomposed_temporal_window_seconds
             )
+            if maskless_replay:
+                self.config.multiview_attention.backend = "maskless"
+                # Core's bidirectional geometry has no sliding-window fold.
+                # Replay replaces that geometry with its own same-instant
+                # visibility plan before decoder execution.
+                self.config.multiview_attention.mask.decomposed_temporal_window_seconds = None
         try:
-            if uses_multiview_flex_kv:
+            if uses_multiview_replay_kv:
                 with patch.object(
                     omni_mot_model_module,
                     "Cosmos3VFMNetwork",
@@ -674,17 +688,23 @@ class OmniMoTCausalModel(OmniMoTModel):
                     net = super().build_net(dtype, mp_policy=mp_policy, lora_enabled=lora_enabled)
             else:
                 net = super().build_net(dtype, mp_policy=mp_policy, lora_enabled=lora_enabled)
+            if maskless_replay:
+                # Each network owns the resolved backend geometry, independently
+                # of the student/teacher selectors restored on the model below.
+                net.config.multiview_attention_config = copy.deepcopy(self.config.multiview_attention)
         finally:
             self.config.video_temporal_causal = video_temporal_causal
             self.config.joint_attn_implementation = joint_attn_implementation
             self.config.multiview_attention.mask.attention_scope = attention_scope
             self.config.multiview_attention.mask.decomposed_temporal_window_seconds = decomposed_temporal_window_seconds
+            self.config.multiview_attention.backend = multiview_backend
 
-        if uses_multiview_flex_kv:
+        if uses_multiview_replay_kv:
             net.config.video_temporal_causal = video_temporal_causal
             net.video_temporal_causal = video_temporal_causal
             setattr(net, "teacher_forcing_replay_policy", replay_policy)
             setattr(net, "teacher_forcing_frames_per_chunk", self.config.teacher_forcing_frames_per_chunk)
+            setattr(net, "teacher_forcing_maskless", maskless_replay)
         return net
 
     def maybe_convert_linears_to_nvfp4(self) -> None:
@@ -733,7 +753,7 @@ class OmniMoTCausalModel(OmniMoTModel):
         # The legacy chunkwise path requires divisibility and therefore drops
         # trailing latent frames in lockstep across modalities. The multiview Flex
         # path represents camera-major partial tails explicitly in its mask metadata.
-        if not self._uses_multiview_flex_kv():
+        if not self._uses_multiview_replay_kv():
             gen_data_clean = self._truncate_for_chunkwise_tf(gen_data_clean)
             self._assert_chunkwise_tf_shape(gen_data_clean)
 
@@ -826,19 +846,19 @@ class OmniMoTCausalModel(OmniMoTModel):
             "teacher_forcing_dcm",
         )
 
-    def _uses_multiview_flex_kv(self) -> bool:
-        """Whether this run selected replayed multiview Flex K/V."""
+    def _uses_multiview_replay_kv(self) -> bool:
+        """Whether this run selected the shared two-way multiview replay layout."""
         implementation = self._get_teacher_forcing_kv_implementation()
         _validate_teacher_forcing_kv_strategy(implementation, self.config.causal_training_strategy)
-        return (
-            self.config.causal_training_strategy in _TEACHER_FORCING_REPLAY_STRATEGIES
-            and implementation == "multiview_flex_kv"
+        return self.config.causal_training_strategy in _TEACHER_FORCING_REPLAY_STRATEGIES and implementation in (
+            "multiview_flex_kv",
+            "multiview_maskless_kv",
         )
 
     @override
     def _pack_input_sequence(self, *args: Any, **kwargs: Any) -> PackedSequence:
-        """Keep the standard multiview layout when Flex supplies causality."""
-        if not self._uses_multiview_flex_kv():
+        """Keep the standard multiview layout when replay supplies causality."""
+        if not self._uses_multiview_replay_kv():
             return super()._pack_input_sequence(*args, **kwargs)
         video_temporal_causal = self.config.video_temporal_causal
         self.config.video_temporal_causal = False
@@ -1096,7 +1116,7 @@ class OmniMoTCausalModel(OmniMoTModel):
     ) -> TeacherForcingMemoryState:
         """Build replayed clean K/V for one denoiser network."""
         clean_target_indexes: torch.Tensor | None = None
-        if self._uses_multiview_flex_kv():
+        if self._uses_multiview_replay_kv():
             if packed_sequence.vision is None or packed_sequence.num_views_per_vision_item is None:
                 raise ValueError("Two-way Flex teacher forcing requires multiview vision metadata.")
             # Match the packer's per-sample order: RGB items, then LiDAR items.
@@ -1114,9 +1134,10 @@ class OmniMoTCausalModel(OmniMoTModel):
                 device=packed_sequence.text_ids.device,
             )  # [S_clean_real]
             flex_backend = getattr(net, "flex_backend", None)
-            if flex_backend is None:
+            maskless_replay = getattr(net, "teacher_forcing_maskless", False)
+            if flex_backend is None and not maskless_replay:
                 raise ValueError("Two-way Flex teacher forcing requires the network FlexAttention backend.")
-            kv_alignment = flex_backend.block_size[1]
+            kv_alignment = 1 if maskless_replay else flex_backend.block_size[1]
             selected_clean_target_padded_capacity = (
                 (clean_target_indexes.numel() + kv_alignment - 1) // kv_alignment
             ) * kv_alignment
@@ -1134,7 +1155,7 @@ class OmniMoTCausalModel(OmniMoTModel):
             selected_clean_gen_token_indexes=clean_target_indexes,
         )
         clean_pack = make_teacher_forcing_clean_pack(packed_sequence)
-        if self._uses_multiview_flex_kv():
+        if self._uses_multiview_replay_kv():
             clean_pack.teacher_forcing_pass = "clean"
         ctx = torch.no_grad() if detach_clean_kv else contextlib.nullcontext()
         with ctx:
@@ -1170,7 +1191,7 @@ class OmniMoTCausalModel(OmniMoTModel):
                     f"or aligned [control, target] items; got {packed_seq.num_vision_items_per_sample} "
                     f"with {len(packed_seq.sample_lens)} logical samples."
                 )
-        if self._uses_multiview_flex_kv():
+        if self._uses_multiview_replay_kv():
             if packed_seq.vision is None or packed_seq.action is not None or packed_seq.sound is not None:
                 raise ValueError("Two-way Flex teacher forcing supports RGB and optional LiDAR generation batches.")
             if packed_seq.num_views_per_vision_item is None:
@@ -1920,7 +1941,7 @@ class OmniMoTCausalModel(OmniMoTModel):
         self._reset_ar_forward_cuda_graph_runtime_for_generation()
         reset_ar_post_saturation_runtime_for_generation(self)
 
-        if mode == "video_transfer" and self._uses_multiview_flex_kv():
+        if mode == "video_transfer" and self._uses_multiview_replay_kv():
             if self.config.compile.enabled:
                 raise ValueError("Multiview transfer AR requires eager attention; run with --no-use-torch-compile.")
             yield from self._iter_samples_multiview_transfer_autoregressive(
@@ -2763,7 +2784,7 @@ class OmniMoTCausalModel(OmniMoTModel):
         has_negative_prompt: bool,
     ) -> Generator[dict[str, Any], torch.Tensor | None, None]:
         """Generate the target for a two-item camera-major multiview transfer sample."""
-        if not self._uses_multiview_flex_kv():
+        if not self._uses_multiview_replay_kv():
             raise ValueError("Multiview transfer AR requires replayed two-way Flex teacher-forcing configuration.")
         if self.config.action_gen or self.config.sound_gen:
             raise ValueError("Multiview transfer AR supports vision-only models.")

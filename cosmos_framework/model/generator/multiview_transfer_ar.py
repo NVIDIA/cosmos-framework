@@ -151,7 +151,8 @@ class MultiviewTransferARBackend:
         if prefill_pack.vision is None or len(prefill_pack.vision.token_shapes) != 2:
             raise ValueError("Multiview transfer AR requires packed [control, target] vision metadata.")
         flex_backend = getattr(self.host.net, "flex_backend", None)
-        if flex_backend is None:
+        maskless_replay = getattr(self.host.net, "teacher_forcing_maskless", False)
+        if flex_backend is None and not maskless_replay:
             raise ValueError("Multiview transfer AR requires an initialized FlexAttention backend.")
         if text_view_ids is not None and text_view_ids != list(range(num_views)):
             raise ValueError(
@@ -161,7 +162,7 @@ class MultiviewTransferARBackend:
         control_shape, target_shape = prefill_pack.vision.token_shapes
         total_memory_tokens = control_shape[0] * control_shape[1] * control_shape[2]
         total_memory_tokens += target_shape[0] * target_shape[1] * target_shape[2]
-        kv_alignment = int(flex_backend.block_size[1])
+        kv_alignment = 1 if maskless_replay else int(flex_backend.block_size[1])
         memory_seq_len = ((total_memory_tokens + kv_alignment - 1) // kv_alignment) * kv_alignment
         target_condition_ranges = [(0, condition_count)] if condition_count else []
         num_layers = int(self.host.net.num_hidden_layers)  # type: ignore[attr-defined]
