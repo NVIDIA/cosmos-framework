@@ -10,6 +10,7 @@ from typing import Any
 from cosmos_framework.data.generator.multiview.camera_attributes import MADS_CAMERA_ATTRIBUTES
 from cosmos_framework.data.generator.multiview.caption_format import (
     DEFAULT_CAPTION_PREFIXES,
+    first_caption_paragraph,
     format_multiview_caption,
     format_separate_view_captions,
     format_view_caption,
@@ -209,6 +210,7 @@ def load_multiview_caption_chunks_per_view(
     views: Sequence[Any],
     *,
     first_only: bool = False,
+    first_caption_paragraph_only: bool = False,
 ) -> list[MultiviewCaptionChunk]:
     """Read every camera's caption file and assemble one prompt per chunk.
 
@@ -216,6 +218,9 @@ def load_multiview_caption_chunks_per_view(
     and ``view_prompts`` is one caption per camera for a checkpoint trained with
     ``separate_view_text_tokenization``. Which one is packed is decided at generation time from the
     checkpoint's own recorded layout, not here.
+
+    ``first_caption_paragraph_only`` matches short-window LiDAR training. It trims
+    the raw text before adding camera headers; the default preserves full captions.
 
     Chunkwise rollout generates all cameras together and slices the model output by one shared
     frame count, so the cameras have to agree on the chunk boundaries: a caption file written
@@ -258,6 +263,8 @@ def load_multiview_caption_chunks_per_view(
         # current-camera headers as the training dataloader. Which one is packed is decided at
         # generation time from the checkpoint's own training config.
         view_captions = [chunk.prompt for chunk in view_chunks]
+        if first_caption_paragraph_only:
+            view_captions = [first_caption_paragraph(caption) for caption in view_captions]
         labeled = label_view_captions(view_captions, camera_keys=camera_keys)
         separate_view_captions = format_separate_view_captions(
             view_captions,

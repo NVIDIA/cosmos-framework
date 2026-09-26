@@ -767,17 +767,32 @@ def _check_view_grids_agree(sensor_mask_items: Sequence[Sequence[SensorMaskItem]
     grid of another shape (and its own frame rate) on the next.
     """
     for sample_idx, sample_items in enumerate(sensor_mask_items):
-        grid_by_view_offset: dict[int, tuple[int, int]] = {}
+        # Split rather than one (num_views, frames_per_view) tuple: an action control item
+        # carries one step per raw frame transition rather than per latent frame, so it
+        # shares its view offset's view count while its frame count differs from the vision
+        # item it conditions. No control rule reads a control's frame, so only non-control
+        # items have to agree on it.
+        num_views_by_view_offset: dict[int, int] = {}
+        frames_per_view_by_view_offset: dict[int, int] = {}
         seconds_per_frame_by_view_offset: dict[int, float] = {}
         for item_idx, item in enumerate(sample_items):
-            # setdefault records the offset's first grid and returns it thereafter, so every
-            # later item at that offset is compared against the one that established it.
-            expected_grid = grid_by_view_offset.setdefault(item.view_offset, item.view_grid)
-            if item.view_grid != expected_grid:
+            expected_num_views = num_views_by_view_offset.setdefault(item.view_offset, item.num_views)
+            if item.num_views != expected_num_views:
                 raise ValueError(
                     "All items of a sample sharing a view offset must share the same "
                     f"(num_views, frames_per_view) grid: item {item_idx} of sample {sample_idx} at view "
-                    f"offset {item.view_offset} has {item.view_grid}, expected {expected_grid}."
+                    f"offset {item.view_offset} has {item.view_grid}, expected "
+                    f"({expected_num_views}, frames_per_view)."
+                )
+            if item.is_control:
+                continue
+            expected_frames_per_view = frames_per_view_by_view_offset.setdefault(item.view_offset, item.frames_per_view)
+            if item.frames_per_view != expected_frames_per_view:
+                raise ValueError(
+                    "All items of a sample sharing a view offset must share the same "
+                    f"(num_views, frames_per_view) grid: item {item_idx} of sample {sample_idx} at view "
+                    f"offset {item.view_offset} has {item.view_grid}, expected "
+                    f"({expected_num_views}, {expected_frames_per_view})."
                 )
             expected_seconds_per_frame = seconds_per_frame_by_view_offset.setdefault(
                 item.view_offset, item.seconds_per_frame

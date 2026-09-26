@@ -46,6 +46,7 @@ from cosmos_framework.model.generator.mot.flex_attention import (
     triton_backend_block_size,
 )
 from cosmos_framework.model.generator.mot.multiview_attention import (
+    is_single_camera_pack,
     reject_mixed_caption_layouts,
     reject_samples_reading_no_caption,
 )
@@ -1588,6 +1589,39 @@ def _mask_items_pack(*, num_views: int, with_lidar: bool, with_view_metadata: bo
     )
 
 
+def _mask_items_action_pack(
+    *,
+    num_views: int,
+    with_view_metadata: bool = True,
+    with_action_view_metadata: bool = True,
+) -> PackedSequence:
+    """A one-sample pack with one camera item and one camera-pose action item.
+
+    The two metadata flags are separate so a test can drop the action counts while the
+    vision counts stay present, which is the only way to reach the action-specific gate:
+    the vision one is checked first.
+    """
+    vision_shape = (2 * num_views, 1, 1)
+    action_shape = (3 * num_views,)
+    return PackedSequence(
+        sample_lens=[vision_shape[0] + action_shape[0]],
+        vision=ModalityData(
+            tokens=[torch.zeros(1)],  # list[[1]]
+            token_shapes=[vision_shape],
+            condition_mask=[torch.zeros(vision_shape)],  # list[[T,H,W]]
+            seconds_per_frame=[1.0],
+        ),
+        action=ModalityData(
+            tokens=[torch.zeros(1)],  # list[[1]]
+            token_shapes=[action_shape],
+            condition_mask=[torch.ones(action_shape[0], 1)],  # list[[T_action,1]]
+            seconds_per_frame=[1.0],
+        ),
+        num_views_per_vision_item=[num_views] if with_view_metadata else None,
+        num_views_per_action_item=[num_views] if with_view_metadata and with_action_view_metadata else None,
+    )
+
+
 @pytest.mark.L0
 def test_mask_items_leave_a_camera_only_pack_on_view_zero() -> None:
     """No LiDAR means every item stays on view 0, which keeps the camera mask untouched."""
@@ -1624,10 +1658,138 @@ def test_mask_items_read_a_joint_pack_without_per_camera_metadata_as_single_came
 
 
 @pytest.mark.L0
-def test_mask_items_reject_a_camera_only_pack_without_per_camera_metadata() -> None:
-    """Without a second stream to vouch for one view per item, a missing count stays an error."""
-    with pytest.raises(ValueError, match="per-camera VAE metadata"):
-        _multiview_mask_items_for_test(_mask_items_pack(num_views=1, with_lidar=False, with_view_metadata=False))
+def test_mask_items_read_a_camera_only_pack_without_per_camera_metadata_as_single_camera() -> None:
+    """A single-view stream carries no per-camera counts, because only a multiview one writes them.
+
+    Absent counts are therefore read as one view per item -- a single-camera grid, whose
+    scopes collapse to attention within that view, so no cross-view pair can be drawn wrong.
+    """
+    items = _multiview_mask_items_for_test(_mask_items_pack(num_views=1, with_lidar=False, with_view_metadata=False))
+
+    assert [item.num_views for item in items[0]] == [1, 1]
+    assert [item.view_offset for item in items[0]] == [0, 0]
+
+
+def _mask_items_partly_posed_action_pack(
+    *,
+    num_views: int,
+    num_action_items_per_sample: tuple[int, ...] = (0, 1),
+) -> PackedSequence:
+    """A two-sample pack where only the second sample carries a camera-pose action item.
+
+    What a multiview stream packs when only part of it ships pose sidecars. The counts
+    are a parameter so a test can hand over ones that do not describe the pack.
+    """
+    vision_shape = (2 * num_views, 1, 1)
+    action_shape = (3 * num_views,)
+
+    def stream(token_shapes: list[tuple[int, ...]], *, mask_rows: bool) -> ModalityData:
+        return ModalityData(
+            tokens=[torch.zeros(1) for _ in token_shapes],  # list[[1]]
+            token_shapes=token_shapes,
+            condition_mask=[
+                torch.ones(shape[0], 1) if mask_rows else torch.zeros(shape)  # [T,1] / [T,H,W]
+                for shape in token_shapes
+            ],
+            seconds_per_frame=[1.0 for _ in token_shapes],
+        )
+
+    return PackedSequence(
+        sample_lens=[vision_shape[0], vision_shape[0] + action_shape[0]],
+        vision=stream([vision_shape, vision_shape], mask_rows=False),
+        action=stream([action_shape], mask_rows=True),
+        num_views_per_vision_item=[num_views, num_views],
+        num_views_per_action_item=[num_views],
+        num_action_items_per_sample=list(num_action_items_per_sample),
+    )
+
+
+@pytest.mark.L0
+def test_mask_items_give_the_action_control_to_the_sample_that_packed_it() -> None:
+    """A pack mixing posed and unposed samples describes each by what it actually owns."""
+    items = _multiview_mask_items_for_test(_mask_items_partly_posed_action_pack(num_views=2))
+
+    # The unposed sample reads [vision]; the posed one reads [vision, action].
+    assert [len(sample_items) for sample_items in items] == [1, 2]
+    assert [item.is_control for item in items[0]] == [False]
+    assert [item.is_control for item in items[1]] == [False, True]
+    # The action item keeps its own view grid.
+    assert items[1][1].num_views == 2
+
+
+@pytest.mark.L0
+def test_mask_items_reject_action_counts_that_do_not_account_for_every_item() -> None:
+    """Counts claiming no sample owns the packed action item leave it unattributed."""
+    with pytest.raises(ValueError, match="account for every packed action item"):
+        _multiview_mask_items_for_test(
+            _mask_items_partly_posed_action_pack(num_views=2, num_action_items_per_sample=(0, 0))
+        )
+
+
+@pytest.mark.L0
+def test_mask_items_reject_more_than_one_action_item_for_a_sample() -> None:
+    """An action item is its sample's camera control, so a second one has no target."""
+    with pytest.raises(ValueError, match="a sample takes at most one"):
+        _multiview_mask_items_for_test(
+            _mask_items_partly_posed_action_pack(num_views=2, num_action_items_per_sample=(0, 2))
+        )
+
+
+@pytest.mark.L0
+def test_mask_items_reject_action_counts_that_miss_a_sample() -> None:
+    """One entry per sample is what makes the counts readable as a grouping."""
+    with pytest.raises(ValueError, match="one entry per sample"):
+        _multiview_mask_items_for_test(
+            _mask_items_partly_posed_action_pack(num_views=2, num_action_items_per_sample=(1,))
+        )
+
+
+@pytest.mark.L0
+def test_mask_items_reject_an_action_pack_without_per_action_view_metadata() -> None:
+    """On a pack whose cameras span a rig, the action stream's own view counts stay required."""
+    with pytest.raises(ValueError, match="num_views_per_action_item"):
+        _multiview_mask_items_for_test(_mask_items_action_pack(num_views=2, with_action_view_metadata=False))
+
+
+@pytest.mark.L0
+def test_mask_items_read_a_single_view_action_pack_as_one_view_per_item() -> None:
+    """A single-view Action stream carries one view per item, which its control edges need."""
+    items = _multiview_mask_items_for_test(_mask_items_action_pack(num_views=1, with_view_metadata=False))
+
+    # The sample reads [vision, action], the order the packer lays down.
+    assert [item.num_views for item in items[0]] == [1, 1]
+    # Action items are always control streams for their matching vision item.
+    assert [item.is_control for item in items[0]] == [False, True]
+
+
+@pytest.mark.L0
+@pytest.mark.parametrize(
+    "pack, expected",
+    [
+        # No per-camera counts at all: only a multiview dataset writes them, so their
+        # absence is what a single-view stream looks like.
+        (_mask_items_pack(num_views=1, with_lidar=False, with_view_metadata=False), True),
+        (_mask_items_pack(num_views=1, with_lidar=False), True),
+        (_mask_items_pack(num_views=2, with_lidar=False), False),
+        # A zero-view item is malformed, not single-camera: it has to reach the mask
+        # builder's own check rather than a fallback that skips it.
+        (_mask_items_pack(num_views=0, with_lidar=False), False),
+        # LiDAR takes a view offset of its own, which is scoping worth keeping however
+        # many cameras ride with it.
+        (_mask_items_pack(num_views=1, with_lidar=True, with_view_metadata=False), False),
+        (_mask_items_pack(num_views=1, with_lidar=True), False),
+    ],
+)
+def test_single_camera_packs_are_the_ones_a_view_scoped_mask_would_say_nothing_about(
+    pack: PackedSequence, expected: bool
+) -> None:
+    assert is_single_camera_pack(pack) is expected
+
+
+@pytest.mark.L0
+def test_mask_items_reject_a_vision_item_spanning_no_views() -> None:
+    with pytest.raises(ValueError, match="num_views=0"):
+        _multiview_mask_items_for_test(_mask_items_pack(num_views=0, with_lidar=False))
 
 
 @pytest.mark.L0
@@ -2527,6 +2689,59 @@ def test_build_multiview_flex_metadata_reaches_the_control_item_by_view() -> Non
 
 
 @pytest.mark.L0
+def test_build_multiview_flex_metadata_allows_control_items_with_different_frame_counts() -> None:
+    """Same-view control streams can tick on a different grid than target RGB."""
+    items = [
+        [
+            _sensor_item(token_shape=(4, 1, 1), condition_mask=_condition_mask(4, []), num_views=2),
+            _sensor_item(
+                token_shape=(6, 1, 1),
+                condition_mask=_condition_mask(6, list(range(6))),
+                num_views=2,
+                is_control=True,
+                seconds_per_frame=1.0 / 30.0,
+            ),
+        ]
+    ]
+    metadata = _build_metadata(
+        gen_seq_len=10,
+        full_q_offsets=torch.tensor([0, 10], dtype=torch.int32),  # [2]
+        sensor_mask_items=items,
+        device=torch.device("cpu"),
+    )
+
+    assert metadata.seq_len == 10
+
+
+@pytest.mark.L0
+def test_mask_items_build_action_control_attention_by_view() -> None:
+    """Vision tokens attend all vision views, and only same-view action controls."""
+    items = _multiview_mask_items_for_test(_mask_items_action_pack(num_views=2))
+    assert [item.is_control for item in items[0]] == [False, True]
+    assert [item.num_views for item in items[0]] == [2, 2]
+
+    metadata = _build_metadata(
+        gen_seq_len=10,
+        full_q_offsets=torch.tensor([0, 10], dtype=torch.int32),  # [2]
+        sensor_mask_items=items,
+        attention_scope="all_views",
+        device=torch.device("cpu"),
+    )
+    m = _mask_mod_to_dense(metadata)  # [seq_len,seq_len]
+
+    vision_v0f0 = 0
+    vision_v1f0 = 2
+    vision_v1f1 = 3
+    action_v0_step0 = 4
+    action_v1_step0 = 7
+    action_v1_step2 = 9
+    assert m[vision_v1f0, vision_v0f0], "all_views should keep cross-view vision attention"
+    assert m[vision_v1f1, action_v1_step0], "vision should see same-view action control tokens"
+    assert m[vision_v1f0, action_v1_step2], "a view's whole action stream is readable from each of its frames"
+    assert not m[vision_v1f1, action_v0_step0], "vision must not see another view's action controls"
+
+
+@pytest.mark.L0
 def test_build_multiview_flex_metadata_expands_the_control_flags_over_each_items_tokens() -> None:
     """``is_control_per_item`` is per item; the field it drives is per token."""
     metadata, _ = _build_case_metadata(_MULTIVIEW_CASES["transfer_two_items_two_samples"])
@@ -2922,6 +3137,37 @@ def _checkpointed_flex_attention(selective: bool) -> torch.nn.Module:
     config = ActivationCheckpointingConfig(mode="selective" if selective else "full")
     wrap = _apply_selective_ac if selective else _apply_full_ac
     return wrap(_FlexAttentionModule(), config)
+
+
+@pytest.mark.L0
+def test_flex_attention_uses_precompiled_callable_outside_dynamo(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Eager calls keep the precompiled FlexAttention wrapper for fused kernels."""
+    seq_len = _TRITON_BACKEND.full_seq_alignment
+    metadata = _metadata_from_tokens(_make_multiview_tokens(), seq_len=seq_len)
+    block_mask = _eager_block_mask(metadata, _TRITON_BACKEND.block_size)
+
+    def fail_raw(*_args: object, **_kwargs: object) -> torch.Tensor:
+        raise AssertionError("raw torch FlexAttention should only run inside an enclosing Dynamo trace.")
+
+    def fake_compiled(
+        query: torch.Tensor,
+        _key: torch.Tensor,
+        _value: torch.Tensor,
+        **_kwargs: object,
+    ) -> torch.Tensor:
+        return query  # [1,H,S,D]
+
+    monkeypatch.setattr(flex_attention_module, "torch_flex_attention", fail_raw)
+    monkeypatch.setattr(flex_attention_module, "_COMPILED_FLEX_ATTENTION", fake_compiled)
+
+    q = torch.randn(1, seq_len, 2, 8)  # [1,S,H,D]
+    k = torch.randn(1, seq_len, 2, 8)  # [1,S,H,D]
+    v = torch.randn(1, seq_len, 2, 8)  # [1,S,H,D]
+
+    out = flex_attention(q, k, v, block_mask, _TRITON_BACKEND)
+
+    assert isinstance(out, torch.Tensor)
+    torch.testing.assert_close(out, q)
 
 
 @pytest.mark.L0
