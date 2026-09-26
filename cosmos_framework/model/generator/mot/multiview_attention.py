@@ -19,6 +19,9 @@ properties a pack has to have before either is chosen: that its captions state a
 (``reject_mixed_caption_layouts``) and that no sample of it is cut off from the captions
 entirely (``reject_samples_reading_no_caption``). Both are properties of the pack rather than of
 the attention either backend runs, and both would otherwise be answered twice, differently.
+The same holds for what a pack's streams and per-item metadata must satisfy before its items
+can be described at all (``validate_multiview_pack``), and for whether it holds a single camera
+(``is_single_camera_pack``), which decides when a view-scoped mask is needed in the first place.
 
 Its own module because the choice spans them: ``"maskless"`` is
 :mod:`~...models.mot.multiview_maskless_attention`'s maskless folds and the ``flex_*`` backends are
@@ -30,7 +33,7 @@ imports this back -- and only through its public surface, so the two stay separa
 """
 
 from collections.abc import Sequence
-from typing import Any
+from typing import Any, NamedTuple
 
 import torch
 from torch.nn.attention.flex_attention import BlockMask
@@ -54,6 +57,7 @@ from cosmos_framework.model.generator.mot.multiview_maskless_attention import (
     maskless_unavailable_reason,
     multiview_maskless_gen_attention,
 )
+from cosmos_framework.data.generator.sequence_packing import PackedSequence
 from cosmos_framework.data.generator.sequence_packing.runtime import (
     SequencePack,
     from_mode_splits,
@@ -140,6 +144,111 @@ def reject_samples_reading_no_caption(sensor_mask_items: Sequence[Sequence[Senso
                 "data, or pack the LiDAR stream alongside the camera stream it was captured "
                 "with."
             )
+
+
+def is_single_camera_pack(packed_seq: PackedSequence) -> bool:
+    """Whether a pack holds a single camera, so a view-scoped mask would say nothing.
+
+    A pack with no per-camera view counts is single-camera by construction: only a multiview
+    dataset writes them, via ``enable_per_camera_vae_encoding``. One that does carry them is
+    single-camera only if every item reports exactly one view. A vision item always spans at
+    least one view, so a zero count is malformed rather than single-camera: it is left to the
+    mask builder, whose ``SensorMaskItem`` refuses ``num_views < 1``, instead of being waved
+    through a fallback that would skip that check.
+
+    A LiDAR or radar stream disqualifies a pack whatever the cameras say. Range and BEV clips
+    take a view offset of their own precisely so the view rules tell them from a camera
+    sharing their frame index, which is scoping a single-camera reading would discard.
+    """
+    if packed_seq.lidar is not None or packed_seq.radar is not None:
+        return False
+    view_counts = packed_seq.num_views_per_vision_item
+    if view_counts is None:
+        return True
+    return all(int(count) == 1 for count in view_counts)
+
+
+class ActionMaskMetadata(NamedTuple):
+    """The action stream's per-item metadata, as the mask builder needs it.
+
+    Empty throughout for a pack with no action stream, so the builder walks the same fields
+    either way.
+    """
+
+    counts_per_sample: list[int]
+    views_per_item: list[int]
+
+
+def validate_multiview_pack(packed_seq: PackedSequence) -> ActionMaskMetadata:
+    """Reject a pack the multiview mask cannot describe, and resolve its action metadata.
+
+    Returns the action metadata rather than only raising because each check here is a check
+    *on* a value this resolves: the packer's per-item lists are optional, each defaulting to
+    the layout a stream packing one item per sample produces. Validating the raw fields and
+    defaulting them elsewhere would either duplicate those defaults or check something other
+    than what the mask goes on to read.
+    """
+    num_samples = len(packed_seq.sample_lens)
+    vision = packed_seq.vision
+    lidar = packed_seq.lidar
+    radar = packed_seq.radar
+    action = packed_seq.action
+
+    if vision is None and lidar is None and radar is None:
+        raise ValueError("Multiview FlexAttention needs a vision or LiDAR or radar generation stream.")
+    if action is None:
+        return ActionMaskMetadata([0] * num_samples, [])
+
+    if vision is None:
+        raise ValueError("Multiview FlexAttention requires vision tokens for action controls.")
+    if lidar is not None or radar is not None:
+        raise ValueError("Multiview FlexAttention does not support joint LiDAR/radar and action-control batches.")
+
+    num_action_items = len(action.token_shapes)
+    if packed_seq.num_views_per_action_item is None:
+        # Absent action view counts read as one view only where the cameras say the pack has
+        # one. On a pack whose vision items span a rig, the same fallback would put every
+        # action item on view 0, pointing a trajectory that describes the whole rig at a
+        # single camera -- so that pack fails rather than trains a silent mismatch.
+        if not is_single_camera_pack(packed_seq):
+            raise ValueError(
+                "Multiview FlexAttention action controls require num_views_per_action_item "
+                "metadata on a pack carrying more than one camera: without it every action "
+                "item would be placed on view 0."
+            )
+        views_per_item = [1] * num_action_items
+    else:
+        views_per_item = list(packed_seq.num_views_per_action_item)
+    if len(views_per_item) != num_action_items:
+        raise ValueError(
+            "num_views_per_action_item must have one entry per packed action item: "
+            f"got {len(views_per_item)} entries for {num_action_items} action item(s)."
+        )
+
+    # A sample owns at most one action item, and may own none: a pose-derived action
+    # control is only packed for a row whose camera poses were found, so a multiview
+    # batch mixes samples carrying one with samples carrying none. The packer's
+    # per-sample counts are the only record of which sample each flattened item
+    # belongs to; without them the fallback is the one-each layout every single-view
+    # action stream packs.
+    counts_per_sample = list(packed_seq.num_action_items_per_sample or [1] * num_samples)
+    if len(counts_per_sample) != num_samples:
+        raise ValueError(
+            "num_action_items_per_sample must have one entry per sample: "
+            f"got {len(counts_per_sample)} entries for {num_samples} sample(s)."
+        )
+    if any(count < 0 or count > 1 for count in counts_per_sample):
+        raise ValueError(
+            "Multiview FlexAttention describes an action item as the control stream of its "
+            f"sample's camera item, so a sample takes at most one; got counts {counts_per_sample}."
+        )
+    if sum(counts_per_sample) != num_action_items:
+        raise ValueError(
+            "num_action_items_per_sample must account for every packed action item: "
+            f"got counts summing to {sum(counts_per_sample)} for {num_action_items} action item(s)."
+        )
+
+    return ActionMaskMetadata(counts_per_sample, views_per_item)
 
 
 def resolve_multiview_backend(

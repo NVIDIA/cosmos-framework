@@ -3,8 +3,23 @@
 
 from typing import Optional
 
+import torch
+
 from cosmos_framework.data.imaginaire.webdataset.augmentors.augmentor import Augmentor
 from cosmos_framework.utils import log
+
+
+class NonRigVideoMetadata(Augmentor):
+    """Explicitly identify a general single-view video without a physical rig camera."""
+
+    def __call__(self, data_dict: dict) -> dict:
+        if "view_indices_selection" in data_dict:
+            raise ValueError("Non-rig video metadata must not overwrite physical camera IDs")
+        # -1 bypasses the rig embedding without adding a checkpoint parameter or
+        # borrowing the identity of a real AV camera. Use a tensor so collation
+        # preserves the sample axis rather than transposing a Python list.
+        data_dict["view_indices_selection"] = torch.tensor([-1], dtype=torch.long)  # [1]
+        return data_dict
 
 
 class KeyRenamer(Augmentor):

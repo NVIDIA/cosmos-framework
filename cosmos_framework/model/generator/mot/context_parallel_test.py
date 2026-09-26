@@ -10,6 +10,9 @@ from typing import Any, cast
 import pytest
 import torch
 import torch.distributed as dist
+from torch._dynamo.decorators import mark_unbacked
+from torch.distributed.device_mesh import init_device_mesh
+from torch.utils.checkpoint import checkpoint
 
 from cosmos_framework.trainer import ContextParallelDataWindow, ImaginaireTrainer
 from cosmos_framework.utils import distributed
@@ -28,6 +31,7 @@ from cosmos_framework.model.generator.mot.context_parallel_utils import (
 
 from cosmos_framework.model.generator.utils.data_and_condition import GenerationDataClean
 from cosmos_framework.model.generator.utils.load_balancing_stats import LBLMetadata, compute_sample_lbl_stats
+from cosmos_framework.model.generator.utils.memory import MemoryValue
 from cosmos_framework.data.generator.sequence_packing import (
     PackedSequence,
     build_sequence_plans_from_data_batch,
@@ -1150,6 +1154,89 @@ def test_sample_lbl_hsdp_weighting_matches_global_sample_mean() -> None:
     dist.all_reduce(global_sample_count, op=dist.ReduceOp.SUM)
     expected_gradient = global_loss_derivative_sum / global_sample_count  # []
     torch.testing.assert_close(averaged_gradient, expected_gradient)
+    dist.barrier()
+
+
+@pytest.mark.L0
+@pytest.mark.parametrize("gen_tokens,kv_heads", [(17, 16), (17, 2), (64, 2)])
+@pytest.mark.parametrize("full_ac", [False, True])
+def test_cp_memory_unbacked_cache_gradients(
+    monkeypatch: pytest.MonkeyPatch, gen_tokens: int, kv_heads: int, full_ac: bool
+) -> None:
+    """Compile real CP cache extraction without specializing its padded stream lengths."""
+    if not torch.cuda.is_available() or int(os.environ.get("WORLD_SIZE", "1")) != 4:
+        pytest.skip("Requires four distributed CUDA ranks.")
+    torch.cuda.set_device(int(os.environ["LOCAL_RANK"]))
+    if not dist.is_initialized():
+        dist.init_process_group("nccl")
+    mesh = init_device_mesh("cuda", (4,))
+    monkeypatch.setattr(torch.fx.experimental._config, "use_duck_shape", False)
+    torch.compiler.reset()
+    torch.manual_seed(47 + dist.get_rank())
+    und_tokens = 11
+    tokens = torch.randn(und_tokens + gen_tokens, 16, 8, device="cuda")  # [U+G,16,8]
+    metadata, mask, _ = build_packed_sequence(
+        "two_way",
+        packed_sequence=tokens,
+        attn_modes=["causal", "full"],
+        split_lens=[und_tokens, gen_tokens],
+        sample_lens=[und_tokens + gen_tokens],
+        packed_und_token_indexes=cast(torch.LongTensor, torch.arange(und_tokens, device="cuda")),  # [U]
+        packed_gen_token_indexes=cast(
+            torch.LongTensor, torch.arange(und_tokens, und_tokens + gen_tokens, device="cuda")
+        ),  # [G]
+        num_heads=16,
+        head_dim=8,
+        num_layers=1,
+        cp_world_size=4,
+        full_seq_alignment=4,
+        causal_seq_alignment=4,
+    )
+    assert isinstance(mask, SplitInfo)
+    memory = MemoryValue()
+
+    def attention(
+        q: SequencePack, k: SequencePack, v: SequencePack, attention_mask: SplitInfo, **kwargs: Any
+    ) -> tuple[SequencePack, None]:
+        # Isolate the CP exchange and cache boundary from the attention kernel itself.
+        und = q["causal_seq"] + k["causal_seq"] + v["causal_seq"]  # [U_padded,4,8]
+        gen = q["full_only_seq"] + k["full_only_seq"] + v["full_only_seq"]  # [G_padded,4,8]
+        return from_mode_splits(und, gen, q), None
+
+    def forward(und: torch.Tensor, gen: torch.Tensor) -> tuple[torch.Tensor, ...]:
+        # Inputs: [U_padded/4,16,8], [G_padded/4,16,8]. Outputs include both streams and real-token caches.
+        q = from_mode_splits(und, gen, metadata, is_sharded=True)
+        k = from_mode_splits(
+            (und * 2)[:, :kv_heads], (gen * 2)[:, :kv_heads], metadata, is_sharded=True
+        )  # [U_padded/4,H_KV,8], [G_padded/4,H_KV,8]
+        v = from_mode_splits(
+            (und * 3)[:, :kv_heads], (gen * 3)[:, :kv_heads], metadata, is_sharded=True
+        )  # [U_padded/4,H_KV,8], [G_padded/4,H_KV,8]
+        result, stored = context_parallel_attention(
+            mesh, q, k, v, mask, attention_function=attention, memory_value=memory
+        )
+        assert stored is not None
+        return (result["causal_seq"], result["full_only_seq"], *stored)  # CP streams and [1,S,H_KV_local,8] caches
+
+    def wrapped(und: torch.Tensor, gen: torch.Tensor) -> tuple[torch.Tensor, ...]:
+        # Inputs and outputs have the same shapes as forward.
+        return checkpoint(forward, und, gen, use_reentrant=False) if full_ac else forward(und, gen)
+
+    inputs = [
+        torch.randn(metadata[key].shape[0] // 4, 16, 8, device="cuda", requires_grad=True)
+        for key in ("causal_seq", "full_only_seq")
+    ]  # [U_padded/4,16,8], [G_padded/4,16,8]
+    reference = [value.detach().clone().requires_grad_() for value in inputs]  # same input shapes
+    expected = forward(*reference)  # CP streams and four cache tensors
+    torch.stack([value.square().mean() for value in expected]).sum().backward()  # scalar loss
+    for value in inputs:
+        mark_unbacked(value, 0)
+    actual = torch.compile(wrapped, fullgraph=True, dynamic=True)(*inputs)  # CP streams and four cache tensors
+    torch.stack([value.square().mean() for value in actual]).sum().backward()  # scalar loss
+    for actual_value, expected_value in zip(actual, expected):  # matching output shapes
+        torch.testing.assert_close(actual_value, expected_value, rtol=1e-5, atol=1e-5)
+    for actual_value, expected_value in zip(inputs, reference):  # matching input shapes
+        torch.testing.assert_close(actual_value.grad, expected_value.grad, rtol=1e-5, atol=1e-5)
     dist.barrier()
 
 

@@ -169,6 +169,9 @@ def pack_input_sequence(
     action_dim: int = 32,
     initial_mrope_temporal_offset: int | float | list[int | float] = 0,
     lidar_temporal_compression_factor: int | None = None,
+    radar_temporal_compression_factor: int | None = None,
+    lidar_patch_spatial_hw: int | tuple[int, int] | None = None,
+    radar_patch_spatial_hw: int | tuple[int, int] | None = None,
 ) -> PackedSequence:
     """
     Pack a sequence of input strings and VAE latents into a packed tensor format.
@@ -181,6 +184,7 @@ def pack_input_sequence(
         gen_data_clean: GenerationDataClean containing vision, LiDAR, action, and sound tensors.
             - x0_tokens_vision: Vision tensors for samples where has_vision=True
             - x0_tokens_lidar: LiDAR tensors for samples where has_lidar=True
+            - x0_tokens_radar: Radar tensors for samples where has_radar=True
             - x0_tokens_action: Action tensors for samples where has_action=True
             - x0_tokens_sound: Sound tensors (list of [C, T]) for samples where has_sound=True
         input_timesteps: Diffusion timesteps for each sample. Shape (B,) or (B, 1) for
@@ -189,7 +193,9 @@ def pack_input_sequence(
             sample as a float (numel==1) or Tensor(T_max,) for per-frame indexing.
         special_tokens: Dictionary containing special token IDs (eos_token_id, start_of_generation, end_of_generation)
         max_num_tokens: Maximum number of tokens in the packed sequence
-        latent_patch_size: Patch size used by the network to pack latents
+        latent_patch_size: Patch size used by the network to pack camera latents.
+        lidar_patch_spatial_hw: LiDAR patch side or (height, width); None inherits latent_patch_size.
+        radar_patch_spatial_hw: Radar patch side or (height, width); None inherits latent_patch_size.
         skip_text_tokens: If True, skip packing text tokens
         include_end_of_generation_token: If True, append end-of-generation token
         unified_3d_mrope_reset_spatial_ids: If True (default), spatial (H, W) indices
@@ -250,8 +256,23 @@ def pack_input_sequence(
     has_view_conditioning = any(plan.condition_view_indexes_vision for plan in sequence_plans)
     if has_view_conditioning and video_temporal_causal:
         raise NotImplementedError("View completion is not supported by video_temporal_causal packing.")
+    num_action_items = sum(1 for plan in sequence_plans if plan.has_action)
+    num_views_per_action_item = gen_data_clean.num_views_per_action_item
+    if num_views_per_action_item is not None:
+        if len(num_views_per_action_item) != num_action_items:
+            raise ValueError(
+                "num_views_per_action_item must have one entry per dense action item: "
+                f"got {len(num_views_per_action_item)} entries for {num_action_items} action item(s)."
+            )
+        if any(num_views <= 0 for num_views in num_views_per_action_item):
+            raise ValueError(f"num_views_per_action_item values must be positive, got {num_views_per_action_item}.")
+    has_multiview_action_items = num_views_per_action_item is not None and any(
+        num_views > 1 for num_views in num_views_per_action_item
+    )
     if has_multiview_vision_items and video_temporal_causal:
         raise NotImplementedError("video_temporal_causal=True is not wired for multiview vision items yet.")
+    if has_multiview_action_items and video_temporal_causal:
+        raise NotImplementedError("video_temporal_causal=True is not wired for multiview action items yet.")
     if explicit_vision_temporal_positions_active:
         if gen_data_clean.temporal_positions_vision is None:
             raise ValueError(
@@ -281,6 +302,11 @@ def pack_input_sequence(
             raise ValueError("A sequence plan sets has_lidar, but gen_data_clean.x0_tokens_lidar is None.")
         if video_temporal_causal:
             raise NotImplementedError("Temporal-causal packing is not wired for the LiDAR stream yet.")
+    if any(plan.has_radar for plan in sequence_plans):
+        if gen_data_clean.x0_tokens_radar is None:
+            raise ValueError("A sequence plan sets has_radar, but gen_data_clean.x0_tokens_radar is None.")
+        if video_temporal_causal:
+            raise NotImplementedError("Temporal-causal packing is not wired for the radar stream yet.")
 
     use_float_mrope_positions = enable_fps_modulation or explicit_vision_temporal_positions_active
 
@@ -300,6 +326,7 @@ def pack_input_sequence(
     idx_text = 0
     idx_vision = 0
     idx_lidar = 0
+    idx_radar = 0
     idx_action = 0
     idx_sound = 0
     null_action_flags: list[bool] = []  # collected from TC path; asserted consistent after the loop
@@ -331,6 +358,7 @@ def pack_input_sequence(
             has_generation_for_sample = (
                 sequence_plan.has_vision
                 or sequence_plan.has_lidar
+                or sequence_plan.has_radar
                 or sequence_plan.has_action
                 or sequence_plan.has_sound
             )
@@ -466,6 +494,7 @@ def pack_input_sequence(
             sample_len += vision_split_len
             action_split_len = 0  # Already absorbed into vision_split_len
             lidar_split_len = 0  # Temporal-causal packing rejects LiDAR above
+            radar_split_len = 0  # Temporal-causal packing rejects radar above
 
         else:
             # Standard path: vision and action packed separately
@@ -702,7 +731,9 @@ def pack_input_sequence(
                         input_lidar_tokens=input_lidar_tokens,
                         condition_frame_indexes_lidar=item_condition_frames,
                         input_timestep=input_timestep,
-                        latent_patch_size=latent_patch_size,
+                        latent_patch_size=(
+                            latent_patch_size if lidar_patch_spatial_hw is None else lidar_patch_spatial_hw
+                        ),
                         lidar_fps=sample_lidar_fps,
                         enable_fps_modulation=enable_fps_modulation,
                         base_fps=base_fps,
@@ -716,10 +747,67 @@ def pack_input_sequence(
             else:
                 lidar_split_len = 0
 
+            # Pack radar tokens if has_radar=True. They follow this sample's LiDAR items, so
+            # the packed stream reads [camera items | LiDAR items | radar items] and the
+            # multiview mask still sees one item list per sample.
+            if sequence_plan.has_radar:
+                num_radar = (
+                    gen_data_clean.num_radar_items_per_sample[sample_idx]
+                    if gen_data_clean.num_radar_items_per_sample is not None
+                    else 1
+                )
+                if radar_temporal_compression_factor is None:
+                    raise ValueError("radar_temporal_compression_factor must be set when has_radar=True")
+
+                sample_radar_fps = _get_optional_fps(gen_data_clean.fps_radar, sample_idx)
+                if sample_radar_fps is None:
+                    raise ValueError("sample_radar_fps must be set when has_radar=True")
+
+                # Radar was cut from the same window as the other sensors, so each radar item
+                # starts where the vision items started and only extends the sample's clock if
+                # its scans outlast them.
+                streams_end_offset = seq_builder.mrope_temporal_offset
+
+                radar_split_len = 0
+                for item_idx in range(num_radar):
+                    input_radar_tokens = gen_data_clean.x0_tokens_radar[idx_radar]  # [1,C,T,H,W]
+                    idx_radar += 1
+
+                    item_condition_frames = resolve_item_condition_frames(
+                        sequence_plan.condition_frame_indexes_radar,
+                        item_idx=item_idx,
+                        num_items=num_radar,
+                        latent_t=input_radar_tokens.shape[2],
+                    )
+
+                    seq_builder.set_mrope_temporal_offset(vision_start_temporal_offset)
+                    radar_split_len += seq_builder.pack_radar_tokens(
+                        input_radar_tokens=input_radar_tokens,
+                        condition_frame_indexes_radar=item_condition_frames,
+                        input_timestep=input_timestep,
+                        latent_patch_size=(
+                            latent_patch_size if radar_patch_spatial_hw is None else radar_patch_spatial_hw
+                        ),
+                        radar_fps=sample_radar_fps,
+                        enable_fps_modulation=enable_fps_modulation,
+                        base_fps=base_fps,
+                        temporal_compression_factor=radar_temporal_compression_factor,
+                        base_temporal_compression_factor=temporal_compression_factor,
+                    )
+                    streams_end_offset = max(streams_end_offset, seq_builder.mrope_temporal_offset)
+
+                seq_builder.set_mrope_temporal_offset(streams_end_offset)
+                sample_len += radar_split_len
+            else:
+                radar_split_len = 0
+
             # Pack action tokens if has_action=True
             if sequence_plan.has_action:
-                input_action_tokens = gen_data_clean.x0_tokens_action[idx_action]
+                input_action_tokens = gen_data_clean.x0_tokens_action[idx_action]  # [T_action,D]
                 action_fps = _get_optional_fps(gen_data_clean.fps_action, idx_action)
+                action_num_views = 1
+                if num_views_per_action_item is not None:
+                    action_num_views = num_views_per_action_item[idx_action]
                 idx_action += 1
 
                 action_split_len = seq_builder.pack_action_tokens(
@@ -732,6 +820,7 @@ def pack_input_sequence(
                     action_fps=action_fps,
                     base_temporal_compression_factor=temporal_compression_factor,
                     action_start_frame_offset=sequence_plan.action_start_frame_offset,
+                    num_views=action_num_views,
                 )
                 sample_len += action_split_len
             else:
@@ -760,7 +849,11 @@ def pack_input_sequence(
         # Add end-of-generation token if needed
         eov_len = 0
         has_any_generation = (
-            sequence_plan.has_vision or sequence_plan.has_lidar or sequence_plan.has_action or sequence_plan.has_sound
+            sequence_plan.has_vision
+            or sequence_plan.has_lidar
+            or sequence_plan.has_radar
+            or sequence_plan.has_action
+            or sequence_plan.has_sound
         )
         if include_end_of_generation_token and has_any_generation:
             eov_len = seq_builder.append_end_of_generation_token(
@@ -769,7 +862,9 @@ def pack_input_sequence(
             )
             sample_len += eov_len
 
-        combined_split_len = vision_split_len + lidar_split_len + action_split_len + sound_split_len + eov_len
+        combined_split_len = (
+            vision_split_len + lidar_split_len + radar_split_len + action_split_len + sound_split_len + eov_len
+        )
         seq_builder.finish_sample(combined_split_len, sample_len)
 
     # Assert consistent null_action_supertokens across all TC samples, then set once

@@ -920,8 +920,11 @@ def _teacher_forcing_pair_predicate(
         clean_step_allowed = (q_is_current & (kv_step < q_step)) | ((~q_is_current) & clean_pass_causal)  # [Q,KV]
         target_to_clean = q_is_target & (kv_role == _ROLE_CLEAN_TARGET) & clean_step_allowed & in_scope  # [Q,KV]
         target_to_control = q_is_target & (kv_role == _ROLE_CONTROL) & same_view & control_step_allowed  # [Q,KV]
+        # Observed sensor targets follow the configured target view/time scope.
+        # Initial LiDAR can read simultaneous RGB conditions; control ownership
+        # and the replay-chunk guard remain unchanged.
         target_to_condition = (
-            q_is_target & (kv_role == _ROLE_TARGET_CONDITION) & same_view & (kv_step <= q_step)
+            q_is_target & (kv_role == _ROLE_TARGET_CONDITION) & in_scope & (kv_step <= q_step)
         )  # [Q,KV]
         padding_to_padding = (q_role == _ROLE_PADDING) & (kv_role == _ROLE_PADDING)  # [Q,KV]
         allowed = (
