@@ -1,0 +1,7 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-License-Identifier: Apache-2.0
+# Isolated overlay: do not install these into the training environment.
+llmcompressor @ git+https://github.com/vllm-project/llm-compressor.git@6e459ed
+transformers @ git+https://github.com/huggingface/transformers.git@def9a7ef057b13d04aeeaa150e3ce63afa151d4e
+compressed-tensors==0.14.0
+huggingface-hub==1.0.0rc6
