@@ -1,0 +1,10 @@
+# Local build targets, not published registry images.
+# Build Framework with the root Dockerfile. Supply a registry image/digest for remote
+# platforms, or an explicitly materialized SQSH for SLURM.
+images:
+  containers:
+    pyt: cosmos-framework:local
+    deploy: cosmos-framework:local
+    data_services: cosmos-framework:local
+    deft_pas_data_services: cosmos-framework:local
+    cosmos_framework: cosmos-framework:local

@@ -1,0 +1,5 @@
+pytest>=8
+PyYAML>=6
+jsonschema>=4
+pandas>=2
+pyarrow>=15
