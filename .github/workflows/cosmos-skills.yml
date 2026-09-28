@@ -1,0 +1,31 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-License-Identifier: OpenMDW-1.1
+name: Cosmos skills
+on:
+  pull_request:
+    paths:
+      - tools/cosmos_workflows/**
+      - .agents/skills/**
+      - .claude/skills/**
+      - .github/workflows/cosmos-skills.yml
+  push:
+    branches: [main]
+    paths:
+      - tools/cosmos_workflows/**
+      - .agents/skills/**
+      - .claude/skills/**
+      - .github/workflows/cosmos-skills.yml
+jobs:
+  cpu-contracts:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: tools/cosmos_workflows
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+      - run: python -m pip install -r requirements-test.txt
+      - run: python -m pytest --confcutdir=. -q
+      - run: python scripts/stamp_versions.py --check

@@ -1,0 +1,615 @@
+{
+  "source_repository": "NVIDIA-TAO/tao-skill-bank",
+  "source_commit": "b4d3ccbe0e82143135e81c9ef705acce738980da",
+  "files": [
+    {
+      "source": "LICENSE",
+      "destination": "LICENSE",
+      "source_sha256": "4f321b887d0350e672e06c8a8bc85cff17ee2d1f3c360617079041ceee324c81"
+    },
+    {
+      "source": "scripts/check_tao_launch_preflight.py",
+      "destination": "scripts/check_cosmos_launch_preflight.py",
+      "source_sha256": "363946208b17be46ac41bc15b573b81acfcfac4e9abef206eeb2a8651b588f8b"
+    },
+    {
+      "source": "scripts/nccl_allreduce_probe.py",
+      "destination": "scripts/nccl_allreduce_probe.py",
+      "source_sha256": "f357d68a8dfc9de6ef739f209f7570e5b4ab0a612fd056d493042ca845d8bb1b"
+    },
+    {
+      "source": "scripts/redact_secrets.py",
+      "destination": "scripts/redact_secrets.py",
+      "source_sha256": "06b7fb4530c97b2829bd68b8bdcae101869ab34b3000e8ec94f9920569c2698f"
+    },
+    {
+      "source": "scripts/resolve_tao_image.py",
+      "destination": "scripts/resolve_cosmos_image.py",
+      "source_sha256": "a74863d7d8bcf8b8171f3c48a7a0cdf92957c5d844f4a73a1365f515e94280c3"
+    },
+    {
+      "source": "scripts/resolve_tao_model.py",
+      "destination": "scripts/resolve_cosmos_model.py",
+      "source_sha256": "de138f20356fba6fc3dbe588145c90da35e35d1a4b2a461857f88167435435dd"
+    },
+    {
+      "source": "scripts/resolve_versions_key.py",
+      "destination": "scripts/resolve_versions_key.py",
+      "source_sha256": "17d51215bf949a61bab9e10755a6d06979c62c6c3a20fb2ffa804237f1e3b07c"
+    },
+    {
+      "source": "scripts/stamp_versions.py",
+      "destination": "scripts/stamp_versions.py",
+      "source_sha256": "e60d0c9e98c3a051ac3d7f4e6a28cbd362db9375d5c3dc93157df513eb2d12b2"
+    },
+    {
+      "source": "scripts/tao_job_record.py",
+      "destination": "scripts/cosmos_job_record.py",
+      "source_sha256": "332fd6638cef01f22eef0f27faa1842ec5fea2a80070b6f346b7113ee8432ac1"
+    },
+    {
+      "source": "scripts/tao_slurm_stage.py",
+      "destination": "scripts/cosmos_slurm_stage.py",
+      "source_sha256": "010d5a8a1a07ac42db0bef242ccf429b4b67c5421884d235b307d00e3e791320"
+    },
+    {
+      "source": "scripts/tests/test_cosmos_evaluation_workflow.py",
+      "destination": "scripts/tests/test_cosmos_evaluation_workflow.py",
+      "source_sha256": "ab8106cd3f9082fd1089095dd7af1056894beef7c973b1a82941a855a8296e8f"
+    },
+    {
+      "source": "scripts/tests/test_cosmos_skill_workflow.py",
+      "destination": "scripts/tests/test_cosmos_skill_workflow.py",
+      "source_sha256": "f1c505a0510eed94bd32a28d08946a7641db72da1b0195de4857e2fc55639ff3"
+    },
+    {
+      "source": "scripts/tests/test_gpu_host_setup.py",
+      "destination": "scripts/tests/test_gpu_host_setup.py",
+      "source_sha256": "cd39e072cbb09d2fb8e6f988da64c20f2e9fe012b3b8d2b02f2111706dd707aa"
+    },
+    {
+      "source": "scripts/tests/test_k8s_action_renderer.py",
+      "destination": "scripts/tests/test_k8s_action_renderer.py",
+      "source_sha256": "1e9e8602bbd55a505d7a55b24f37d5f2f307bd50b5525ac534ef7b9a06c78945"
+    },
+    {
+      "source": "scripts/tests/test_launch_preflight.py",
+      "destination": "scripts/tests/test_launch_preflight.py",
+      "source_sha256": "8fc9f6a3100887d752a1b40e6a2d6385c6e76fdf0289888f254da5181ec962f6"
+    },
+    {
+      "source": "scripts/tests/test_nccl_probe.py",
+      "destination": "scripts/tests/test_nccl_probe.py",
+      "source_sha256": "1b0cf7e6b27f7a7e55af16e8c82f87c586d2e2a316b62eb95d8d318036a3c318"
+    },
+    {
+      "source": "scripts/tests/test_platform_contract.py",
+      "destination": "scripts/tests/test_platform_contract.py",
+      "source_sha256": "4eeaeafc3a3fee9593fa229bdd98c448daf0bc2cb59bf9794c55c755059e064c"
+    },
+    {
+      "source": "scripts/tests/test_redact_secrets.py",
+      "destination": "scripts/tests/test_redact_secrets.py",
+      "source_sha256": "22e8b5bde7bf4e2c245760c426817843c3a463481dea03404d12b5ad2676f18f"
+    },
+    {
+      "source": "scripts/tests/test_resolve_tao_image.py",
+      "destination": "scripts/tests/test_resolve_cosmos_image.py",
+      "source_sha256": "60fbb65d7ab15a4844bc647183ad307bb4dc11a9a541580d2c53566a0cc0f9eb"
+    },
+    {
+      "source": "scripts/tests/test_tao_job_record.py",
+      "destination": "scripts/tests/test_cosmos_job_record.py",
+      "source_sha256": "066f9db6f1dcfba8345912b22ca30a630601ce4d43a81df0e1227add12d8734d"
+    },
+    {
+      "source": "skills/applications/tao-run-inference-service/SKILL.md",
+      "destination": "inference-service/guide.md",
+      "source_sha256": "748e4d986d75c0ee14c6dc9e6a6997749e5d20209263c049ce118751755e69b9"
+    },
+    {
+      "source": "skills/applications/tao-run-inference-service/references/request.yaml",
+      "destination": "inference-service/references/request.yaml",
+      "source_sha256": "23c0b912679d0b4748678c77b96cc80112c0057826e811c0af8a898e9dfb298c"
+    },
+    {
+      "source": "skills/applications/tao-run-inference-service/references/service.yaml",
+      "destination": "inference-service/references/service.yaml",
+      "source_sha256": "4adce52b50fd4b22dac3cd7fec5d6af8d7bc10ae33f1bcd02b3e44d8f388530a"
+    },
+    {
+      "source": "skills/applications/tao-run-inference-service/references/skill_info.yaml",
+      "destination": "inference-service/references/skill_info.yaml",
+      "source_sha256": "08a666d8902a771f55b474eef57c3a4e01cd5e1a529132388b7cea02a211a2d8"
+    },
+    {
+      "source": "skills/core/tao-artifacts/SKILL.md",
+      "destination": "execution/artifacts/guide.md",
+      "source_sha256": "188bed2dc479775f260a87c330d96807448a0c25dbbca00283d1bfc1ee80a4a4"
+    },
+    {
+      "source": "skills/core/tao-artifacts/references/job_record.schema.json",
+      "destination": "execution/artifacts/references/job_record.schema.json",
+      "source_sha256": "539958a7aa4eebc77f8e89f1ed0149c7d12a5f25b2ab05717af081725998a72d"
+    },
+    {
+      "source": "skills/core/tao-artifacts/references/results_dir.contract.md",
+      "destination": "execution/artifacts/references/results_dir.contract.md",
+      "source_sha256": "a9d1c3f2c176d02867ce65abf066454efbb2c561b0d64a420145ecd434edac34"
+    },
+    {
+      "source": "skills/core/tao-artifacts/references/spec_bundle.schema.json",
+      "destination": "execution/artifacts/references/spec_bundle.schema.json",
+      "source_sha256": "f833d7d79c2c832650b02bb6ccdb0a8986c4498df96180f0bb6c28fe3cefe838"
+    },
+    {
+      "source": "skills/core/tao-artifacts/references/tests/test_artifact_schemas.py",
+      "destination": "execution/artifacts/references/tests/test_artifact_schemas.py",
+      "source_sha256": "294bb114041d559873b51f37c71053b23c1820a49067c723d53e1ed8cd9363fb"
+    },
+    {
+      "source": "skills/core/tao-launch-workflow/SKILL.md",
+      "destination": "execution/guide.md",
+      "source_sha256": "43304974f48e369d4a8fbd5032ec6bd988e7c3bb091136a71f8df8b816ba8087"
+    },
+    {
+      "source": "skills/core/tao-launch-workflow/references/external-platforms.md",
+      "destination": "execution/references/external-platforms.md",
+      "source_sha256": "e9813756a456792ac8366a92a1e24bf5453ed4b4ef49c79e0b513a46c99bf4b7"
+    },
+    {
+      "source": "skills/core/tao-launch-workflow/references/failure-analysis-retry.md",
+      "destination": "execution/references/failure-analysis-retry.md",
+      "source_sha256": "6bbdcb01d0ada6598f153d19c28572b2ae81837a0c119a6960cf54935c98b497"
+    },
+    {
+      "source": "skills/core/tao-launch-workflow/references/intake-prompts.md",
+      "destination": "execution/references/intake-prompts.md",
+      "source_sha256": "9c843c5bdc081ac7e2c133d84abdb01740466643da3d9530d55193bb0e706773"
+    },
+    {
+      "source": "skills/core/tao-launch-workflow/references/platform-preflight.md",
+      "destination": "execution/references/platform-preflight.md",
+      "source_sha256": "7de32829412d25dc182341492fe12d7e51919cda2f48be829dcf26de93b9b493"
+    },
+    {
+      "source": "skills/models/tao-finetune-cosmos-reason/SKILL.md",
+      "destination": "models/cosmos3-reasoner/guide.md",
+      "source_sha256": "eed10c7a33e033c63b15f2101e9ba299e57abe625c7fb02abdedc4740f7d7d08"
+    },
+    {
+      "source": "skills/models/tao-finetune-cosmos-reason/references/cosmos-backend-operations.md",
+      "destination": "models/cosmos3-reasoner/references/cosmos-backend-operations.md",
+      "source_sha256": "df4f31170b4b5f83349e4601e8b154a5c0d13216c54a2dc3a016dd648bd3a56a"
+    },
+    {
+      "source": "skills/models/tao-finetune-cosmos-reason/references/cosmos-data-specs.md",
+      "destination": "models/cosmos3-reasoner/references/cosmos-data-specs.md",
+      "source_sha256": "7d290307155a513cd81ac8440307f711787ea1d0dc5675e6ef210271c874e09a"
+    },
+    {
+      "source": "skills/models/tao-finetune-cosmos-reason/references/cosmos-framework-backend.yaml",
+      "destination": "models/cosmos3-reasoner/references/cosmos-framework-backend.yaml",
+      "source_sha256": "79e383c72dac216a7adf4ae3f0596f9fa919e10d08a0039c63192adf5b1e6476"
+    },
+    {
+      "source": "skills/models/tao-finetune-cosmos-reason/references/cosmos-reason-evaluate.md",
+      "destination": "models/cosmos3-reasoner/references/cosmos-reason-evaluate.md",
+      "source_sha256": "8e08b6ffbef17e53c0dae6fdd2d4962997495c722b7dbfa8e6110823580f5689"
+    },
+    {
+      "source": "skills/models/tao-finetune-cosmos-reason/references/cosmos-reason-parameters.md",
+      "destination": "models/cosmos3-reasoner/references/cosmos-reason-parameters.md",
+      "source_sha256": "35616428277c4c08f4612d781c8a534e73ec36f82edcc75b2c033f694e35c5f1"
+    },
+    {
+      "source": "skills/models/tao-finetune-cosmos-reason/references/cosmos-reason-single-gpu-video.md",
+      "destination": "models/cosmos3-reasoner/references/cosmos-reason-single-gpu-video.md",
+      "source_sha256": "c1ae8758deb556dcd4853aa2db47ac19a1923acdb00b77aa2543c0d1d060b6e9"
+    },
+    {
+      "source": "skills/models/tao-finetune-cosmos-reason/references/cosmos-reproducibility-gates.md",
+      "destination": "models/cosmos3-reasoner/references/cosmos-reproducibility-gates.md",
+      "source_sha256": "dac6f0a1ba23ba3e74c0c8b5f8bdb5694fc8bcd5182a891033aa98466b6406f3"
+    },
+    {
+      "source": "skills/models/tao-finetune-cosmos-reason/references/skill_info.yaml",
+      "destination": "models/cosmos3-reasoner/references/skill_info.yaml",
+      "source_sha256": "9ec15f86fc69e69888bcd9c1b04f3711d91091685c50bb87eff066b204912fa9"
+    },
+    {
+      "source": "skills/models/tao-finetune-cosmos-reason/references/spec_template_evaluate.yaml",
+      "destination": "models/cosmos3-reasoner/references/spec_template_evaluate.yaml",
+      "source_sha256": "4d3f74c0a2478a94cb56e0e92d7a45583ebf0a3d916641811e93ed4934e72cfe"
+    },
+    {
+      "source": "skills/models/tao-finetune-cosmos-reason/references/spec_template_inference.yaml",
+      "destination": "models/cosmos3-reasoner/references/spec_template_inference.yaml",
+      "source_sha256": "51c82ed408bea7b484078307520d748a2acb448525ee47c4f36a49e6092f5e93"
+    },
+    {
+      "source": "skills/models/tao-finetune-cosmos-reason/references/spec_template_quantize.yaml",
+      "destination": "models/cosmos3-reasoner/references/spec_template_quantize.yaml",
+      "source_sha256": "c159df8b66e0923a9a35c58763a10c8dd0f8c9ccc499348f94db433805cfadf7"
+    },
+    {
+      "source": "skills/models/tao-finetune-cosmos-reason/schemas/cosmos-job-metadata.schema.json",
+      "destination": "models/cosmos3-reasoner/schemas/cosmos-job-metadata.schema.json",
+      "source_sha256": "8ed7594264d31686cadcf4d3d08299034c08c9c3efd934486504381fa74ab9b8"
+    },
+    {
+      "source": "skills/models/tao-finetune-cosmos-reason/schemas/train_request.schema.json",
+      "destination": "models/cosmos3-reasoner/schemas/train_request.schema.json",
+      "source_sha256": "7865e645751280c38b509c1d93005efc78e4f68ae03f4a2fc913a318e716db35"
+    },
+    {
+      "source": "skills/models/tao-finetune-cosmos-reason/scripts/cosmos_common.py",
+      "destination": "models/cosmos3-reasoner/scripts/cosmos_common.py",
+      "source_sha256": "0ed83e8b0d55f74042cf7e1119512f81e14bf06b05e8d83cd02c5ce3b0a3aa39"
+    },
+    {
+      "source": "skills/models/tao-finetune-cosmos-reason/scripts/cosmos_workflow.py",
+      "destination": "models/cosmos3-reasoner/scripts/cosmos_workflow.py",
+      "source_sha256": "5a775106013a9f2e022a0900a40d5d2926537ba358702cfa48661ea190c96a7f"
+    },
+    {
+      "source": "skills/models/tao-finetune-cosmos-reason/scripts/evaluate_video_conversation_single_gpu.py",
+      "destination": "models/cosmos3-reasoner/scripts/evaluate_video_conversation_single_gpu.py",
+      "source_sha256": "aa0408eee5093d566533f51dfe84d5cfef0637109df46d669a6423cc8452ad39"
+    },
+    {
+      "source": "skills/models/tao-finetune-cosmos-reason/scripts/evaluation_workflow.py",
+      "destination": "models/cosmos3-reasoner/scripts/evaluation_workflow.py",
+      "source_sha256": "3d89427e8085c57f1682b9fca988bde0a990772123e6417ed5333603e31bdbee"
+    },
+    {
+      "source": "skills/models/tao-finetune-cosmos-reason/scripts/extract_cosmos_metrics.py",
+      "destination": "models/cosmos3-reasoner/scripts/extract_cosmos_metrics.py",
+      "source_sha256": "df3829de762d5669553335eb2129d826701366d308fbd77bc8cc5fffdc061483"
+    },
+    {
+      "source": "skills/models/tao-finetune-cosmos-reason/scripts/framework_checkpoint_action.py",
+      "destination": "models/cosmos3-reasoner/scripts/framework_checkpoint_action.py",
+      "source_sha256": "628ea81d7280c3af20fd34703c6a6a4e037ddcc1bc77ab5747197da6fb1e0da2"
+    },
+    {
+      "source": "skills/models/tao-finetune-cosmos-reason/scripts/framework_evaluation_image_preflight.py",
+      "destination": "models/cosmos3-reasoner/scripts/framework_evaluation_image_preflight.py",
+      "source_sha256": "f16ad189496942875d01df4a9dec34073a4ffa56d06080e547f68e685b20fb3d"
+    },
+    {
+      "source": "skills/models/tao-finetune-cosmos-reason/scripts/gate_docker_train_evaluate.py",
+      "destination": "models/cosmos3-reasoner/scripts/gate_docker_train_evaluate.py",
+      "source_sha256": "401583fc961dfe8c5119bc1c656a114fed1b9960c49f18ea390af5a2845f37b2"
+    },
+    {
+      "source": "skills/models/tao-finetune-cosmos-reason/scripts/prepare_cosmos3_vlm_checkpoint.py",
+      "destination": "models/cosmos3-reasoner/scripts/prepare_cosmos3_vlm_checkpoint.py",
+      "source_sha256": "1472291b18493b245508f3b4b132ed00729bd87da6f41627976375fbb7e8ea1d"
+    },
+    {
+      "source": "skills/models/tao-finetune-cosmos-reason/tests/test_gate_docker_train_evaluate.py",
+      "destination": "models/cosmos3-reasoner/tests/test_gate_docker_train_evaluate.py",
+      "source_sha256": "6111cb2a3c2a7018d3239565220428e1240b84e69c54763e8682ae0720b89062"
+    },
+    {
+      "source": "skills/models/tao-finetune-cosmos-reason/tests/test_runtime_preflight_contract.py",
+      "destination": "models/cosmos3-reasoner/tests/test_runtime_preflight_contract.py",
+      "source_sha256": "0e4bff8188e1780fd03a0ea81715c5744094b1ce2bb97fd7a1476e64b9c36792"
+    },
+    {
+      "source": "skills/platform/tao-data-io/SKILL.md",
+      "destination": "execution/data-io/guide.md",
+      "source_sha256": "f9d003bb4c8258992307c43e873ceeb1ddfced389464ca624f764ed1401dd58f"
+    },
+    {
+      "source": "skills/platform/tao-data-io/references/selective_download.py",
+      "destination": "execution/data-io/references/selective_download.py",
+      "source_sha256": "40a740c84549c5aa8eadb635f3cd96f1d15fa4e2dea77616ec869dab65500815"
+    },
+    {
+      "source": "skills/platform/tao-data-io/references/tests/test_selective_download.py",
+      "destination": "execution/data-io/references/tests/test_selective_download.py",
+      "source_sha256": "c24ab1284df2729bd18990741606cca6cf8f2c7522fa93fc76c7a46f22c7b634"
+    },
+    {
+      "source": "skills/platform/tao-run-on-brev/SKILL.md",
+      "destination": "execution/platforms/brev/guide.md",
+      "source_sha256": "fc0cc42415f89d69b72b514c459de6b88b144235a55d4e3cdaea1dc97bcf8643"
+    },
+    {
+      "source": "skills/platform/tao-run-on-brev/references/skill_info.yaml",
+      "destination": "execution/platforms/brev/references/skill_info.yaml",
+      "source_sha256": "7ea5ec8668eb14a756bfac4156a5e66ff2f593f0a802e907e3d329cd32676f13"
+    },
+    {
+      "source": "skills/platform/tao-run-on-docker/SKILL.md",
+      "destination": "execution/platforms/docker/guide.md",
+      "source_sha256": "bcf21f4eaae43b826ddbdfbc92d0988e921b52a64c1c3560b29a7622dd9344be"
+    },
+    {
+      "source": "skills/platform/tao-run-on-docker/references/skill_info.yaml",
+      "destination": "execution/platforms/docker/references/skill_info.yaml",
+      "source_sha256": "94d00ce7da988ccf31e6aea5dd5927b53ad33208f3b80d4838f850525e4ae8a9"
+    },
+    {
+      "source": "skills/platform/tao-run-on-kubernetes/SKILL.md",
+      "destination": "execution/platforms/kubernetes/guide.md",
+      "source_sha256": "5aea2bbd3d3eed55fbdf968c32e1a5463a44cad2ff20791ffdab00705ff37a46"
+    },
+    {
+      "source": "skills/platform/tao-run-on-kubernetes/config.json",
+      "destination": "execution/platforms/kubernetes/config.json",
+      "source_sha256": "0a4633719d029de036465375ff7a2c03ee1200337542fafddb06845708aeccc1"
+    },
+    {
+      "source": "skills/platform/tao-run-on-kubernetes/references/action-request.md",
+      "destination": "execution/platforms/kubernetes/references/action-request.md",
+      "source_sha256": "9202c2b49b48c2522e2e523cf0ee05fc586d6783ebe90894b30b72f277c24cd3"
+    },
+    {
+      "source": "skills/platform/tao-run-on-kubernetes/references/local-cluster.md",
+      "destination": "execution/platforms/kubernetes/references/local-cluster.md",
+      "source_sha256": "19fefa61905635f2e8150d636e6ca65347600febf70a9728e8680b7755158060"
+    },
+    {
+      "source": "skills/platform/tao-run-on-kubernetes/references/skill_info.yaml",
+      "destination": "execution/platforms/kubernetes/references/skill_info.yaml",
+      "source_sha256": "05a2e11c1c3db4e739622a34a9fb5aa9bb1d8e3e375578573fb12b8f478c2937"
+    },
+    {
+      "source": "skills/platform/tao-run-on-kubernetes/scripts/render_action_job.py",
+      "destination": "execution/platforms/kubernetes/scripts/render_action_job.py",
+      "source_sha256": "7c34403afa10cadcc957f088e8d285dadab914256460c9e41e16ce4ed0748e48"
+    },
+    {
+      "source": "skills/platform/tao-run-on-slurm/SKILL.md",
+      "destination": "execution/platforms/slurm/guide.md",
+      "source_sha256": "8193806ce87bc9b20c3f62362d6299eb682e9bf9d7ec6217a8e635cc02eba707"
+    },
+    {
+      "source": "skills/platform/tao-run-on-slurm/references/cosmos-slurm-guardrails.md",
+      "destination": "execution/platforms/slurm/references/cosmos-slurm-guardrails.md",
+      "source_sha256": "ee492e169050e3358649c0c8a6e669a4272c5ecfb60fda18d33747854c29495d"
+    },
+    {
+      "source": "skills/platform/tao-run-on-slurm/references/detailed-guide.md",
+      "destination": "execution/platforms/slurm/references/detailed-guide.md",
+      "source_sha256": "1bb62079ec4bf0d6bcb5e93590d80511f29db984ea89e6630a352ed85fd513ef"
+    },
+    {
+      "source": "skills/platform/tao-run-on-slurm/references/skill_info.yaml",
+      "destination": "execution/platforms/slurm/references/skill_info.yaml",
+      "source_sha256": "5891bb787de87ecda542581d1f5a10e9124276d868dbb47b0dc30be67d45344b"
+    },
+    {
+      "source": "skills/platform/tao-run-on-slurm/references/slurm-container-execution.md",
+      "destination": "execution/platforms/slurm/references/slurm-container-execution.md",
+      "source_sha256": "1e356b62ee077b22c17515b7e92d2aae866734ad500cf9105dcddb33d83b9cae"
+    },
+    {
+      "source": "skills/platform/tao-run-on-slurm/references/slurm-preflight-storage.md",
+      "destination": "execution/platforms/slurm/references/slurm-preflight-storage.md",
+      "source_sha256": "a2cb4f7257d88b0da1457e028913996004551b0b59751d50227e6f4224176bff"
+    },
+    {
+      "source": "skills/platform/tao-run-on-slurm/references/slurm-ssh-credentials.md",
+      "destination": "execution/platforms/slurm/references/slurm-ssh-credentials.md",
+      "source_sha256": "e1ac0d59f939b3390bb09f48b59e4df1ad67cf16476ffd4fde90cc1ed321ac70"
+    },
+    {
+      "source": "skills/platform/tao-run-on-virtualenv/SKILL.md",
+      "destination": "execution/platforms/virtualenv/guide.md",
+      "source_sha256": "88c47293884253005d161e9a903b6ee972a0615e10947247422695284e8e6069"
+    },
+    {
+      "source": "skills/platform/tao-run-on-virtualenv/references/skill_info.yaml",
+      "destination": "execution/platforms/virtualenv/references/skill_info.yaml",
+      "source_sha256": "dc89777d91189fe2b0f3bd5f20431d2b9f0e1ea43289a64d3a619d4691403fca"
+    },
+    {
+      "source": "skills/platform/tao-run-on-virtualenv/references/tests/test_virtualenv_runner.py",
+      "destination": "execution/platforms/virtualenv/references/tests/test_virtualenv_runner.py",
+      "source_sha256": "731cb637a0fac5d45de60f5345683780f93bac3af9adf868b75ab2f8f93f9a49"
+    },
+    {
+      "source": "skills/platform/tao-run-on-virtualenv/references/virtualenv_runner.py",
+      "destination": "execution/platforms/virtualenv/references/virtualenv_runner.py",
+      "source_sha256": "79633f192162f607923d046ce1781a4bd2666c9d20d038fdf15cb42e4f251b62"
+    },
+    {
+      "source": "skills/platform/tao-setup-nvidia-gpu-host/SKILL.md",
+      "destination": "execution/gpu-host/guide.md",
+      "source_sha256": "bc3b2a18db46a64dc6f60e604d115adfdedc764cb8c29777ab5a12bdaeff603e"
+    },
+    {
+      "source": "skills/platform/tao-setup-nvidia-gpu-host/references/skill_info.yaml",
+      "destination": "execution/gpu-host/references/skill_info.yaml",
+      "source_sha256": "299e7aaf584db59e67fb87ec886bb5502788954a76a8fb112dd0132eeb583fd2"
+    },
+    {
+      "source": "skills/platform/tao-setup-nvidia-gpu-host/scripts/setup-nvidia-gpu-host.sh",
+      "destination": "execution/gpu-host/scripts/setup-nvidia-gpu-host.sh",
+      "source_sha256": "b8fa35e8f00badd6126563665cbabc21df08dc7e95ef9cf9a9c75118bbc7b9e3"
+    },
+    {
+      "source": "templates/k8s/action-job.yaml.tmpl",
+      "destination": "templates/k8s/action-job.yaml.tmpl",
+      "source_sha256": "87beafe17716af41ca23c20bf1f1e91f172406cd2bbd5d3cfa19f36a86f77b8a"
+    },
+    {
+      "source": "templates/k8s/indexed-job.yaml.tmpl",
+      "destination": "templates/k8s/indexed-job.yaml.tmpl",
+      "source_sha256": "08e8bc74e838e31c96502f563b6bc74c5e69f9adacd6efa54f80b3973a01df5f"
+    },
+    {
+      "source": "templates/k8s/single-pod-job.yaml.tmpl",
+      "destination": "templates/k8s/single-pod-job.yaml.tmpl",
+      "source_sha256": "29a88f5a178b7ba0fcf1fa80b54daaa481f00ada0747ab159f60a0212eae92a3"
+    },
+    {
+      "source": "templates/slurm/multinode.sbatch.tmpl",
+      "destination": "templates/slurm/multinode.sbatch.tmpl",
+      "source_sha256": "f2a348ab92b72ef3cfad8bc860c2462f2e826757a2c5556e017f8a49c0cd0862"
+    },
+    {
+      "source": "templates/slurm/singlenode.sbatch.tmpl",
+      "destination": "templates/slurm/singlenode.sbatch.tmpl",
+      "source_sha256": "420c244982491f14372252aa5348b64b39985ea6be25ae7bf1823e5ef5599a6a"
+    },
+    {
+      "source": "templates/tests/test_k8s_singlepod_template.py",
+      "destination": "templates/tests/test_k8s_singlepod_template.py",
+      "source_sha256": "81029a89431da5e1272382bbc246d04427c1c8c8fa625054e6336416a987de66"
+    },
+    {
+      "source": "templates/tests/test_multinode_templates.py",
+      "destination": "templates/tests/test_multinode_templates.py",
+      "source_sha256": "5fce090e842e77e0675a72189116f884dd6ba3180c4ad91a5883193e96901e65"
+    },
+    {
+      "source": "templates/tests/test_slurm_singlenode_template.py",
+      "destination": "templates/tests/test_slurm_singlenode_template.py",
+      "source_sha256": "6dae3800416d74623db835339c3e74d5be12b3ccd3f9b10314fcfc81bbdeae1e"
+    },
+    {
+      "source": "versions.yaml",
+      "destination": "versions.yaml",
+      "source_sha256": "e2fec6bb63efac56cc80115e9d1e28476fa1c6ab00ae797d711ed77cbf4e180f"
+    },
+    {
+      "source": "skills/data/tao-convert-dataset-format/SKILL.md",
+      "destination": "models/cosmos3-reasoner/references/dataset-convert.md",
+      "source_sha256": "26fef280f51400710425f6e55b883224559f55bffccfe05c684f348650baf91b"
+    },
+    {
+      "source": "skills/data/tao-validate-dataset-format/SKILL.md",
+      "destination": "models/cosmos3-reasoner/references/dataset-validate.md",
+      "source_sha256": "62b5266a67fa028a2c223efa0b3f9d57c6f61166ba011ed053b9cd2b3689e290"
+    }
+  ],
+  "skill_routes": {
+    "tao-finetune-cosmos-reason": "cosmos3-post-training",
+    "tao-run-inference-service": "cosmos3-inference",
+    "tao-artifacts": "cosmos3-setup",
+    "tao-launch-workflow": "cosmos3-setup",
+    "tao-list-capabilities": "cosmos3-setup",
+    "tao-setup": "cosmos3-setup",
+    "tao-data-io": "cosmos3-setup",
+    "tao-run-on-brev": "cosmos3-setup",
+    "tao-run-on-docker": "cosmos3-setup",
+    "tao-run-on-kubernetes": "cosmos3-setup",
+    "tao-run-on-slurm": "cosmos3-setup",
+    "tao-run-on-virtualenv": "cosmos3-setup",
+    "tao-setup-nvidia-gpu-host": "cosmos3-setup",
+    "tao-convert-dataset-format": "cosmos3-post-training",
+    "tao-validate-dataset-format": "cosmos3-post-training"
+  },
+  "replaced_resources": [
+    {
+      "source": "skills/applications/tao-run-inference-service/references/code-templates.yaml",
+      "destination": "inference-service/references/code-templates.yaml",
+      "source_sha256": "d41d93db1cfb0d94c0c73498f7262bc594c7e4a1ab30637e7f6e8fbc43f0a6aa",
+      "replacement": "inference-service/guide.md"
+    },
+    {
+      "source": "skills/applications/tao-run-inference-service/references/tao-dataservices.config.json",
+      "destination": "inference-service/references/tao-dataservices.config.json",
+      "source_sha256": "91555de257f4921570ff9908bfe08bba4958873f6a7e30b34214a3205bc29942",
+      "replacement": "inference-service/guide.md"
+    }
+  ],
+  "runtime_provenance": "../../cosmos_framework/licenses/workflows/provenance.json",
+  "excluded_resources": [
+    {
+      "source": "skills/applications/tao-run-inference-service/references/cosmos-predict2.5.config.json",
+      "source_sha256": "97d2f4e62e43055913a0413bbe3d92474893aae0796b55a9175c87f8eaab07d1",
+      "reason": "Predict 2.5 serving is outside the migration scope."
+    },
+    {
+      "source": "scripts/tests/test_cosmos_rl_evaluation_handoff.py",
+      "source_sha256": "c1006e88b88c16b0bd66aff4fce43d5a507ea6377c285ca7f18329c12ddff228",
+      "reason": "Alternate runtime support is outside the Framework-only migration."
+    },
+    {
+      "source": "skills/models/tao-finetune-cosmos-reason/references/cosmos-rl-backend.yaml",
+      "source_sha256": "cb1214f0fc471c1ef596a660ea9b8164b3e685eaaff8076a66ac66f08c541785",
+      "reason": "Alternate runtime support is outside the Framework-only migration."
+    },
+    {
+      "source": "skills/models/tao-finetune-cosmos-reason/references/spec_template_train.yaml",
+      "source_sha256": "4afface6906e8ec832096c9c8a84be91960a186d4a0a59adb53d3925050ce6c1",
+      "reason": "Alternate runtime support is outside the Framework-only migration."
+    },
+    {
+      "source": "skills/models/tao-finetune-cosmos-reason/scripts/cosmos_rl_checkpoint_action.py",
+      "source_sha256": "454353c9ed27b5b955acd276aa6457867e887d3e58e65c288eb9ce21319d326f",
+      "reason": "Alternate runtime support is outside the Framework-only migration."
+    },
+    {
+      "source": "skills/models/tao-finetune-cosmos-reason/scripts/train_video_conversation_single_gpu.py",
+      "source_sha256": "cfd08a5f4dd0e3c067adc753ff78d05dcc0d99aeab7bff24755decdafafcaf40",
+      "reason": "Alternate runtime support is outside the Framework-only migration."
+    },
+    {
+      "source": "skills/data/paidf-cosmos-predict/SKILL.md",
+      "source_sha256": "85d5cded477565c66795a32c437fae526236051e9dfbdf29eb70f61b0ca70725",
+      "reason": "PAIDF Predict generation is a separate workstream outside Cosmos training scope."
+    },
+    {
+      "source": "skills/data/paidf-cosmos-predict/assets/default_generation_settings.json",
+      "source_sha256": "4c4c7c9c3d38e5324c181fcd8f4c00306d13140a66df3561779c3da8e27bd974",
+      "reason": "PAIDF Predict generation is a separate workstream outside Cosmos training scope."
+    },
+    {
+      "source": "skills/data/paidf-cosmos-predict/assets/paidf_config_template.yaml",
+      "source_sha256": "b173282906a2039fa50c77c0157de686cd2ce45bf81a105d01f84795683e632f",
+      "reason": "PAIDF Predict generation is a separate workstream outside Cosmos training scope."
+    },
+    {
+      "source": "skills/data/paidf-cosmos-predict/scripts/paidf_common.py",
+      "source_sha256": "ecd6f96aada66c6c83b26e84a3ccab381609917f29359b96e6549c5035b1bbfa",
+      "reason": "PAIDF Predict generation is a separate workstream outside Cosmos training scope."
+    },
+    {
+      "source": "skills/data/paidf-cosmos-predict/scripts/prepare_paidf_config.py",
+      "source_sha256": "eab277031b4b6bcc5033d3748f1b7867311a14e3529c477e7e06b35ece9c6d15",
+      "reason": "PAIDF Predict generation is a separate workstream outside Cosmos training scope."
+    },
+    {
+      "source": "skills/data/paidf-cosmos-predict/scripts/test_paidf_cosmos_predict.py",
+      "source_sha256": "5770be71f1b46e4f876f9538900100c7c052131a74ccd5084ce050b8784ab4ab",
+      "reason": "PAIDF Predict generation is a separate workstream outside Cosmos training scope."
+    },
+    {
+      "source": "skills/data/paidf-cosmos-predict/scripts/verify_vlm_captioning_base_url.py",
+      "source_sha256": "5043e012dc5d67b0e2d346567f0a2e2ce87e63c217ea74b299fa1524add283cd",
+      "reason": "PAIDF Predict generation is a separate workstream outside Cosmos training scope."
+    },
+    {
+      "source": "skills/data/paidf-cosmos-predict/scripts/write_paidf_handoff.py",
+      "source_sha256": "a9587ca907971efae8865e5dacab85a7b7c5f8aa1c414e98ac62ecd0e89d3d5c",
+      "reason": "PAIDF Predict generation is a separate workstream outside Cosmos training scope."
+    },
+    {
+      "source": "skills/data/tao-generate-video-reasoning-annotations/SKILL.md",
+      "source_sha256": "17a68b52369c382c8ae2a63490f5d1aa990196fd380739aeafdc73bdd5176aae",
+      "reason": "Video reasoning-QA annotation is a separate data-generation workstream outside Cosmos training scope."
+    },
+    {
+      "source": "skills/data/tao-generate-video-reasoning-annotations/references/configuration.md",
+      "source_sha256": "164d6bcb95fab19c22b9a7b5d79ef070c57d2a1d9633f456def0140fc39c3fba",
+      "reason": "Video reasoning-QA annotation is a separate data-generation workstream outside Cosmos training scope."
+    },
+    {
+      "source": "skills/data/tao-generate-video-reasoning-annotations/references/domain_adaptation.md",
+      "source_sha256": "d06cdf605a0013429df638dc5f709b17bb78e7ebb773ce3731dc0b90ff62b8e6",
+      "reason": "Video reasoning-QA annotation is a separate data-generation workstream outside Cosmos training scope."
+    },
+    {
+      "source": "skills/data/tao-generate-video-reasoning-annotations/references/skill_info.yaml",
+      "source_sha256": "ed07fdb6d524630735cae97da9ededeeeccebffb7c60f51b1ac6f5d07d741f8d",
+      "reason": "Video reasoning-QA annotation is a separate data-generation workstream outside Cosmos training scope."
+    }
+  ]
+}
