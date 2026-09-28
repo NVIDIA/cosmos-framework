@@ -1,0 +1,12 @@
+name: cosmos-inference-service
+type: application
+owner_skill: cosmos3-inference
+required_credentials: []
+conditional_credentials:
+  HF_TOKEN: only for explicitly approved gated model downloads
+supported_platforms: [docker, slurm, kubernetes, brev, virtualenv]
+prerequisites:
+  required: [service, model, platform, gpu_environment]
+  optional: [media_roots, host, port]
+service_contract: service.yaml
+request_examples: request.yaml

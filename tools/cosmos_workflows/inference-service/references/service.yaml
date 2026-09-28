@@ -1,0 +1,18 @@
+schema_version: 1
+name: cosmos-inference-service
+supported_platforms: [docker, slurm, kubernetes, brev, virtualenv]
+valid_network_arch_config_basenames: [cosmos-reasoner, openai-compatible-vllm]
+model_path_protocols: [local_path, huggingface_model_id]
+services:
+  cosmos-reasoner:
+    command: cosmos-reasoner-serve
+    implementation: cosmos_framework.inference.reasoner.service
+    checkpoint: complete_hf_export
+    image: containers.cosmos_framework
+    optional_extra: workflows
+    endpoints: [/health, /info, /v1/models, /infer, /v1/chat/completions]
+security:
+  host_default: 127.0.0.1
+  authentication: required_at_ingress_for_external_access
+  local_media: explicitly_allowed_roots
+  credentials: environment_only

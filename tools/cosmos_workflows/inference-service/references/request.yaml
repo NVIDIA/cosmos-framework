@@ -1,0 +1,18 @@
+# Concrete native API examples; no job-management envelope is accepted.
+reasoner:
+  chat:
+    model: cosmos
+    messages:
+    - role: user
+      content:
+      - type: text
+        text: Describe the action.
+      - type: video_url
+        video_url: {url: /data/clip.mp4}
+    max_tokens: 512
+    seed: 42
+  infer:
+    media: [/data/clip.mp4]
+    prompt: Describe the action.
+    num_frames: 8
+    seed: 42
