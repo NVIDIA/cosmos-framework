@@ -3,7 +3,8 @@ name: cosmos3-env-troubleshoot
 description: >
   Diagnose and fix Cosmos3 environment, installation, and runtime errors.
   Use when the user encounters an ImportError, ModuleNotFoundError, CUDA error,
-  Docker error, checkpoint download failure, or any traceback during setup or inference.
+  Docker error, checkpoint download failure, managed-job failure, or any traceback
+  during setup, training, evaluation, or inference.
 ---
 
 # Cosmos3 Environment Troubleshooting
@@ -20,6 +21,18 @@ description: >
 All paths below are relative to this file's location (`.claude/skills/cosmos3-env-troubleshoot/`).
 
 ## Step 1: Match against known errors
+
+For managed container or scheduler jobs, first collect the selected platform's
+native status/logs using `cosmos3-setup`'s platform reference. A scheduler's
+`COMPLETED` is not sufficient: inspect the child exit code, structured terminal
+state, and expected outputs. Preserve partial artifacts and redact credentials.
+
+Use [failure classification and retry](../../../tools/cosmos_workflows/execution/references/failure-analysis-retry.md)
+to distinguish infrastructure errors from model/data/source failures. Reasoner
+runtime-specific cases are in the [parameter/error reference](../../../tools/cosmos_workflows/models/cosmos3-reasoner/references/cosmos-reason-parameters.md).
+Respect the user's diagnosis-versus-fix scope. Do not patch a live image, alter
+the source checkpoint, retry a paid job, or install drivers without applicable
+authorization; a retry gets its own job record and preserves the original result.
 
 Check the error message against the table below. Each row links to the canonical fix in the docs.
 
