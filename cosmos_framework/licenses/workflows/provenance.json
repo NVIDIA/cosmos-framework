@@ -4,6 +4,10 @@
     "cosmos-rl": {
       "commit": "219d8e8cf5a6ab34db548f460644150ab5536936",
       "source_worktree_dirty": false
+    },
+    "data-adapters": {
+      "commit": "07a520b7deef725badbea6d26dd7c9ecdf2bed85",
+      "source_worktree_dirty": false
     }
   },
   "runtime_implementations": [
@@ -83,6 +87,11 @@
       "source_sha256": "b2caa2a6e9eea382e6b33f8c1fd41663fc49b8591cfb0ff07cae7ade623a55c6"
     },
     {
+      "source": "cosmos_rl/inference/inference.py",
+      "destination": "cosmos_framework/scripts/inference_reasoner.py",
+      "source_sha256": "1f96997903bf63569bf650e626b09a98da6fd7893e1f1343bfef4001d526ea70"
+    },
+    {
       "source": "cosmos_rl/utils/framework_torchcodec_video.py",
       "destination": "cosmos_framework/inference/reasoner/framework_torchcodec_video.py",
       "source_sha256": "d1c0c84edc874d578eafaed14390913d2fc014b2fa25e505658f04483daa1b46"
@@ -98,6 +107,16 @@
       "source_sha256": "6ce068829178c1c80bfb4fc1d2b03e73274a875ed0b9c2b33daf67806158451a"
     },
     {
+      "source": "cosmos_rl/utils/video_override_artifacts.py",
+      "destination": "cosmos_framework/inference/reasoner/video_override_artifacts.py",
+      "source_sha256": "9b7adfba1af51ce0ab4fe760f4a3cc2d63c698c33fee9d9124ee53d95bcc7f43"
+    },
+    {
+      "source": "cosmos_rl/utils/validate_video_override_artifacts.py",
+      "destination": "cosmos_framework/inference/reasoner/validate_video_override_artifacts.py",
+      "source_sha256": "1b199db801ead0f66a9468cac358eff7aa41a44f7c852bde476c17fb84ff8204"
+    },
+    {
       "source": "cosmos_rl/utils/lora_utils.py",
       "destination": "cosmos_framework/checkpoint/lora.py",
       "source_sha256": "d81505b87771d1fd68422899abf16e143dcd2a317a3da6964cc07ad53e630ce9"
@@ -107,6 +126,242 @@
       "source": "cosmos_rl/utils/system_pyav_video_reader.py",
       "destination": "cosmos_framework/inference/reasoner/system_pyav_video_reader.py",
       "source_sha256": "a1b03b60eed0c02792dd5be0684a658d3e9deb333e4bc5e8265de31a5630ef06"
+    },
+    {
+      "source": "cosmos_rl/quantization/quantize.py",
+      "destination": "cosmos_framework/scripts/quantize_reasoner.py",
+      "source_sha256": "7e2067df0a7eace3c12db50f0af5d6eb4fdca53093848fc7490822329cfd6585"
+    },
+    {
+      "repository": "data-adapters",
+      "source": "src/nvidia_tao_daft/converters/base.py",
+      "destination": "cosmos_framework/data/reasoner/formats/conversion.py",
+      "source_sha256": "e575afbb27e5001a247bad2770f742c6797e439c47a3298c16e9334003c72e78"
+    },
+    {
+      "repository": "data-adapters",
+      "source": "src/nvidia_tao_daft/converters/pairs/metropolis_v3_0_to_cosmos_reason_v1_0.py",
+      "destination": "cosmos_framework/data/reasoner/formats/metropolis_to_conversations.py",
+      "source_sha256": "d9e4b35467cdeab44381e25988c2355da407c5e154474715e7bf454c0e9925dd"
+    },
+    {
+      "repository": "data-adapters",
+      "source": "src/nvidia_tao_daft/converters/pairs/metropolis_v3_0_to_tao_vl_reason_v1_0.py",
+      "destination": "cosmos_framework/data/reasoner/formats/metropolis_to_reasoning.py",
+      "source_sha256": "a9d59f7619a3341cf443436296b6a6125844061e33a305a835fb682ee2c237e9"
+    },
+    {
+      "repository": "data-adapters",
+      "source": "src/nvidia_tao_daft/utils/utils.py",
+      "destination": "cosmos_framework/data/reasoner/formats/utils.py",
+      "source_sha256": "7bfbeeec0a48d146f9efff472f5c67f3600bd4a4760b747c7f6520ba5c9e0d24"
+    },
+    {
+      "repository": "data-adapters",
+      "source": "src/nvidia_tao_daft/utils/metropolis_v3_0.py",
+      "destination": "cosmos_framework/data/reasoner/formats/metropolis.py",
+      "source_sha256": "6c89e09f27d78ad2eef1e1bab0fde0ba05f6acad21c0563bffed006f64397914"
+    },
+    {
+      "repository": "data-adapters",
+      "source": "src/nvidia_tao_daft/utils/cosmos_reason_v1_0.py",
+      "destination": "cosmos_framework/data/reasoner/formats/conversation.py",
+      "source_sha256": "f29cf89455cb98eeed847b60174fe786156ed19eae618cbdeb8471fa88d237d8"
+    },
+    {
+      "repository": "data-adapters",
+      "source": "src/nvidia_tao_daft/utils/tao_vl_reason_v1_0.py",
+      "destination": "cosmos_framework/data/reasoner/formats/reasoning.py",
+      "source_sha256": "259ce1467562ba0cbb0eeca008d4fdd2d2352743712b25133fc26b9ac81c79b0"
+    },
+    {
+      "repository": "data-adapters",
+      "source": "src/nvidia_tao_daft/validators/base.py",
+      "destination": "cosmos_framework/data/reasoner/formats/validation.py",
+      "source_sha256": "bd3f4138aa49657d0c0242ed6b9413a610227878ba98b0d1474dfadcd4dc5962"
+    },
+    {
+      "repository": "data-adapters",
+      "source": "src/nvidia_tao_daft/validators/common.py",
+      "destination": "cosmos_framework/data/reasoner/formats/validation_result.py",
+      "source_sha256": "9fd9ea2d78f3a0933e35cf8853b4a08e21e9437c092560c8c3cd47faf1c0a45e"
+    },
+    {
+      "repository": "data-adapters",
+      "source": "src/nvidia_tao_daft/validators/metropolis_v3_0/validator.py",
+      "destination": "cosmos_framework/data/reasoner/formats/validate_metropolis.py",
+      "source_sha256": "d24e4ffee1d8f74f9ee39d183ff893d80274c898a3354afb5f01beef613131d0"
+    },
+    {
+      "repository": "data-adapters",
+      "source": "src/nvidia_tao_daft/validators/cosmos_reason_v1_0/validator.py",
+      "destination": "cosmos_framework/data/reasoner/formats/validate_conversation.py",
+      "source_sha256": "b5717d82d9a10cca8b6fbe585bfb1a71a315dae8e521836c403b9990fcc2f380"
+    },
+    {
+      "repository": "data-adapters",
+      "source": "src/nvidia_tao_daft/validators/tao_vl_reason_v1_0/validator.py",
+      "destination": "cosmos_framework/data/reasoner/formats/validate_reasoning.py",
+      "source_sha256": "76b7b831ba2b3f0e15fe3c7375e1dfb8b5e99a95b2216c05597f38d4c2d0c3cb"
+    },
+    {
+      "repository": "data-adapters",
+      "source": "src/nvidia_tao_daft/formats/tao-vl-reason-v1.0/schemas/tao_vl_reason.schema.json",
+      "destination": "cosmos_framework/data/reasoner/formats/schemas.json",
+      "resource_key": "cosmos-video-reasoning-v1.0/reasoning.schema.json",
+      "source_sha256": "224166770eb9ced5f81d20535de6e17e37381b50525214d4bf471617161e64de"
+    },
+    {
+      "repository": "data-adapters",
+      "source": "src/nvidia_tao_daft/formats/cosmos-reason-v1.0/schemas/meta.schema.json",
+      "destination": "cosmos_framework/data/reasoner/formats/schemas.json",
+      "resource_key": "cosmos-reason-v1.0/meta.schema.json",
+      "source_sha256": "56dd455e39c0bc3517c5cabdc720aab2598ebd84818392ebb18922ed61c74b30"
+    },
+    {
+      "repository": "data-adapters",
+      "source": "src/nvidia_tao_daft/formats/cosmos-reason-v1.0/schemas/conversation.schema.json",
+      "destination": "cosmos_framework/data/reasoner/formats/schemas.json",
+      "resource_key": "cosmos-reason-v1.0/conversation.schema.json",
+      "source_sha256": "a3bfda1a6475318cb737a239b9e3becb009286b269945186f56cc72bbed2ea3c"
+    },
+    {
+      "repository": "data-adapters",
+      "source": "src/nvidia_tao_daft/formats/metropolis-v3.0/schemas/tasks/video_summarization.schema.json",
+      "destination": "cosmos_framework/data/reasoner/formats/schemas.json",
+      "resource_key": "metropolis-v3.0/tasks/video_summarization.schema.json",
+      "source_sha256": "d21c19fb3bf9ff140ce31376e782867c13fa294143b53bae262c9b364d99e9a1"
+    },
+    {
+      "repository": "data-adapters",
+      "source": "src/nvidia_tao_daft/formats/metropolis-v3.0/schemas/tasks/causal_linkage.schema.json",
+      "destination": "cosmos_framework/data/reasoner/formats/schemas.json",
+      "resource_key": "metropolis-v3.0/tasks/causal_linkage.schema.json",
+      "source_sha256": "aa73e76d7297517284b18d5bb55660334d7fc77acef9093fec7905c4f8b8edf1"
+    },
+    {
+      "repository": "data-adapters",
+      "source": "src/nvidia_tao_daft/formats/metropolis-v3.0/schemas/tasks/temporal_description.schema.json",
+      "destination": "cosmos_framework/data/reasoner/formats/schemas.json",
+      "resource_key": "metropolis-v3.0/tasks/temporal_description.schema.json",
+      "source_sha256": "816f972af14c125818e4ee03b55966c7a39bd43ba6a7d71c0a16b15126145c14"
+    },
+    {
+      "repository": "data-adapters",
+      "source": "src/nvidia_tao_daft/formats/metropolis-v3.0/schemas/tasks/bcq.schema.json",
+      "destination": "cosmos_framework/data/reasoner/formats/schemas.json",
+      "resource_key": "metropolis-v3.0/tasks/bcq.schema.json",
+      "source_sha256": "e3d051bdb5efed5a0f94f08418dd91a36006782407663b4cc40afca8963aa7d5"
+    },
+    {
+      "repository": "data-adapters",
+      "source": "src/nvidia_tao_daft/formats/metropolis-v3.0/schemas/tasks/bcq_openended.schema.json",
+      "destination": "cosmos_framework/data/reasoner/formats/schemas.json",
+      "resource_key": "metropolis-v3.0/tasks/bcq_openended.schema.json",
+      "source_sha256": "5a5a15101245c66159c9f45b3dece6669a17b9359db3dea3e94a82cb2841738a"
+    },
+    {
+      "repository": "data-adapters",
+      "source": "src/nvidia_tao_daft/formats/metropolis-v3.0/schemas/tasks/open_qa.schema.json",
+      "destination": "cosmos_framework/data/reasoner/formats/schemas.json",
+      "resource_key": "metropolis-v3.0/tasks/open_qa.schema.json",
+      "source_sha256": "5da992664ba964cb5973897c23ea86889f5d911a1822645d82345fde9fc16f82"
+    },
+    {
+      "repository": "data-adapters",
+      "source": "src/nvidia_tao_daft/formats/metropolis-v3.0/schemas/tasks/mcq_openended.schema.json",
+      "destination": "cosmos_framework/data/reasoner/formats/schemas.json",
+      "resource_key": "metropolis-v3.0/tasks/mcq_openended.schema.json",
+      "source_sha256": "7174e1788d92615770c7fa0491e29e15e6872593864754465d58e9a94521e0be"
+    },
+    {
+      "repository": "data-adapters",
+      "source": "src/nvidia_tao_daft/formats/metropolis-v3.0/schemas/tasks/scene_description.schema.json",
+      "destination": "cosmos_framework/data/reasoner/formats/schemas.json",
+      "resource_key": "metropolis-v3.0/tasks/scene_description.schema.json",
+      "source_sha256": "51666d414929d3a820123e654d9cccb4460d64bbb3816cd6063f6aba631b2222"
+    },
+    {
+      "repository": "data-adapters",
+      "source": "src/nvidia_tao_daft/formats/metropolis-v3.0/schemas/tasks/temporal_localization.schema.json",
+      "destination": "cosmos_framework/data/reasoner/formats/schemas.json",
+      "resource_key": "metropolis-v3.0/tasks/temporal_localization.schema.json",
+      "source_sha256": "04aff387f4ae5fad5aeb07c2e80262a8b9692d7e56e280b49a0a4e20f272a717"
+    },
+    {
+      "repository": "data-adapters",
+      "source": "src/nvidia_tao_daft/formats/metropolis-v3.0/schemas/tasks/mcq.schema.json",
+      "destination": "cosmos_framework/data/reasoner/formats/schemas.json",
+      "resource_key": "metropolis-v3.0/tasks/mcq.schema.json",
+      "source_sha256": "4433832e0a357c835db81af7486b4a237d48042f904acbf641d754a76209b5b2"
+    },
+    {
+      "repository": "data-adapters",
+      "source": "src/nvidia_tao_daft/formats/metropolis-v3.0/schemas/contextual/chunks.schema.json",
+      "destination": "cosmos_framework/data/reasoner/formats/schemas.json",
+      "resource_key": "metropolis-v3.0/contextual/chunks.schema.json",
+      "source_sha256": "e6d7e1b6041dbba02225d3d48d8d17556b9f227b8fa93e15b49c6ee334250d7f"
+    },
+    {
+      "repository": "data-adapters",
+      "source": "src/nvidia_tao_daft/formats/metropolis-v3.0/schemas/contextual/msted.schema.json",
+      "destination": "cosmos_framework/data/reasoner/formats/schemas.json",
+      "resource_key": "metropolis-v3.0/contextual/msted.schema.json",
+      "source_sha256": "6b4b59ad3a3d4b203df6c5e003bd275699f50c5d8e9873d9353ed855a3800318"
+    },
+    {
+      "repository": "data-adapters",
+      "source": "src/nvidia_tao_daft/formats/metropolis-v3.0/schemas/contextual/video.schema.json",
+      "destination": "cosmos_framework/data/reasoner/formats/schemas.json",
+      "resource_key": "metropolis-v3.0/contextual/video.schema.json",
+      "source_sha256": "6546b2542d29193d991bb5dd25cef18d64ea52ade897ab24db37847e5d6ed3cf"
+    },
+    {
+      "repository": "data-adapters",
+      "source": "src/nvidia_tao_daft/formats/metropolis-v3.0/schemas/contextual/image.schema.json",
+      "destination": "cosmos_framework/data/reasoner/formats/schemas.json",
+      "resource_key": "metropolis-v3.0/contextual/image.schema.json",
+      "source_sha256": "e9148683d9cbb212cb8e3559e655983559dd9fef9d4cf0c4167b71ee07f91115"
+    },
+    {
+      "repository": "data-adapters",
+      "source": "src/nvidia_tao_daft/formats/metropolis-v3.0/schemas/contextual/events.schema.json",
+      "destination": "cosmos_framework/data/reasoner/formats/schemas.json",
+      "resource_key": "metropolis-v3.0/contextual/events.schema.json",
+      "source_sha256": "f536dce596a54b5b7f2f8d41faa11970da7821358df2f7bbe65563a792fa288c"
+    },
+    {
+      "repository": "data-adapters",
+      "source": "src/nvidia_tao_daft/formats/metropolis-v3.0/schemas/contextual/calibration.schema.json",
+      "destination": "cosmos_framework/data/reasoner/formats/schemas.json",
+      "resource_key": "metropolis-v3.0/contextual/calibration.schema.json",
+      "source_sha256": "04582ac93a604ea6e315a8e2f0e51813fdc229593fa60b3a0227814ab589e583"
+    },
+    {
+      "repository": "data-adapters",
+      "source": "src/nvidia_tao_daft/formats/metropolis-v3.0/schemas/contextual/objects.schema.json",
+      "destination": "cosmos_framework/data/reasoner/formats/schemas.json",
+      "resource_key": "metropolis-v3.0/contextual/objects.schema.json",
+      "source_sha256": "750c9a1b07a3db1c9928f8fa2e46a1fb5563146f61bb55677f5468caad6cd371"
+    },
+    {
+      "repository": "data-adapters",
+      "source": "src/nvidia_tao_daft/formats/metropolis-v3.0/schemas/contextual/tracking.schema.json",
+      "destination": "cosmos_framework/data/reasoner/formats/schemas.json",
+      "resource_key": "metropolis-v3.0/contextual/tracking.schema.json",
+      "source_sha256": "b9e77b17e7715a57c09d8c4c8ca968112d4d6a5d838509ed4961cff1c89ae771"
+    },
+    {
+      "repository": "data-adapters",
+      "source": "src/nvidia_tao_daft/formats/metropolis-v3.0/schemas/contextual/instances.schema.json",
+      "destination": "cosmos_framework/data/reasoner/formats/schemas.json",
+      "resource_key": "metropolis-v3.0/contextual/instances.schema.json",
+      "source_sha256": "9eaa77c8e7c3ece0f749bbaee9990b3a30e180199945a7c2d69ef58792eaa401"
+    },
+    {
+      "source": "requirements-quantize.txt",
+      "destination": "docker/requirements-quantize.txt",
+      "source_sha256": "c9e8c200b6710978038e31713ee707e664841eeb5a69eef55c0bea1617645a62"
     }
   ]
 }
