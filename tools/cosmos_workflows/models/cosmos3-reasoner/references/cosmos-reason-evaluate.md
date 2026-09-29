@@ -32,12 +32,12 @@ selected only when the single validation annotation SHA256 matches exactly.
 All use maximum 1,024 generated tokens, temperature zero, repetition penalty
 one, and zero presence/frequency penalties.
 
-| Annotation SHA256 | Profile | Answer/batch/seed |
-|---|---|---|
-| `c33afc26f979cbdb488b8f1aefdc65604992cd7552d5e75ea782e4565fdc21e1` | `VALIDATION_C33AFC26` | letter / 1 / 42 |
-| `6a30babb1921af59155dfe45cf766465597b57cafa1e0e83663a159d89289b6a` | `VALIDATION_6A30BABB` | freeform / 1 / 42 |
-| `f828a63f1bbdd45197e1f3393fb94f76ebfdfc785402617aa8c1397b0b47c555` | `VALIDATION_F828A63F` | letter / 1 / 42 |
-| `f120ca66f28e3e5b5a01a3ace93d16c856cf13098faf61b44263a4afc449c709` | `PEFT_HPO_VALIDATION_F120CA66` | freeform / 8 / 1 |
+| Annotation SHA256                                                  | Profile                        | Answer/batch/seed |
+| ------------------------------------------------------------------ | ------------------------------ | ----------------- |
+| `c33afc26f979cbdb488b8f1aefdc65604992cd7552d5e75ea782e4565fdc21e1` | `VALIDATION_C33AFC26`          | letter / 1 / 42   |
+| `6a30babb1921af59155dfe45cf766465597b57cafa1e0e83663a159d89289b6a` | `VALIDATION_6A30BABB`          | freeform / 1 / 42 |
+| `f828a63f1bbdd45197e1f3393fb94f76ebfdfc785402617aa8c1397b0b47c555` | `VALIDATION_F828A63F`          | letter / 1 / 42   |
+| `f120ca66f28e3e5b5a01a3ace93d16c856cf13098faf61b44263a4afc449c709` | `PEFT_HPO_VALIDATION_F120CA66` | freeform / 8 / 1  |
 
 Framework uses its sealed
 `torchcodec-cuda-on-demand` profile. Report that identity separately from the

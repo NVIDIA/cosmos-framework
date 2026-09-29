@@ -25,12 +25,12 @@ the installed container-toolkit package version (via `dpkg`/`rpm`/the
 Installation must be explicitly authorized by the user and rerun with
 `--install`. The install path is automated for these distro families:
 
-| Family | Tested distros | Manager | Notes |
-|---|---|---|---|
-| debian | Ubuntu 22.04 / 24.04, Debian 12 (and derivatives Pop!_OS, Mint, Zorin, Raspbian, KDE Neon, etc. via `UBUNTU_CODENAME` / `VERSION_CODENAME`) | `apt-get` | Adds NVIDIA `cuda-keyring` + Container Toolkit `.list`. Docker via `docker.io` (override `$DOCKER_PACKAGE_DEBIAN`). |
-| rhel | Fedora 39+, RHEL / Rocky / AlmaLinux 9 and 10 | `dnf` (or `yum`) | Adds NVIDIA `cuda-<distro>.repo` + Container Toolkit `.repo`. Docker via Fedora `moby-engine` when available, otherwise `docker-ce` from `download.docker.com`. |
-| suse | openSUSE Leap 15, SLES 15 | `zypper` | Adds the same NVIDIA `.repo` files. Docker via the distribution `docker` package. |
-| other (Arch, Alpine, Gentoo, NixOS, FreeBSD, …) | n/a | n/a | `--install` exits with a clear error listing the version targets and the NVIDIA install-guide URLs. Install manually, then rerun `--check-only`. |
+| Family                                          | Tested distros                                                                                                                              | Manager          | Notes                                                                                                                                                           |
+| ----------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- | ---------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| debian                                          | Ubuntu 22.04 / 24.04, Debian 12 (and derivatives Pop!_OS, Mint, Zorin, Raspbian, KDE Neon, etc. via `UBUNTU_CODENAME` / `VERSION_CODENAME`) | `apt-get`        | Adds NVIDIA `cuda-keyring` + Container Toolkit `.list`. Docker via `docker.io` (override `$DOCKER_PACKAGE_DEBIAN`).                                             |
+| rhel                                            | Fedora 39+, RHEL / Rocky / AlmaLinux 9 and 10                                                                                               | `dnf` (or `yum`) | Adds NVIDIA `cuda-<distro>.repo` + Container Toolkit `.repo`. Docker via Fedora `moby-engine` when available, otherwise `docker-ce` from `download.docker.com`. |
+| suse                                            | openSUSE Leap 15, SLES 15                                                                                                                   | `zypper`         | Adds the same NVIDIA `.repo` files. Docker via the distribution `docker` package.                                                                               |
+| other (Arch, Alpine, Gentoo, NixOS, FreeBSD, …) | n/a                                                                                                                                         | n/a              | `--install` exits with a clear error listing the version targets and the NVIDIA install-guide URLs. Install manually, then rerun `--check-only`.                |
 
 ## Quick Start
 
@@ -126,13 +126,13 @@ Common steps (all families):
 
 Family-specific package selections:
 
-| Step | debian-family | rhel-family | suse-family |
-|---|---|---|---|
-| Kernel headers | `linux-headers-$(uname -r)` | `kernel-devel-$(uname -r)`, `kernel-headers-$(uname -r)` | `kernel-default-devel` |
-| Driver | current `nvidia-open` (override: `$NVIDIA_DRIVER_PACKAGE_DEBIAN`) | current `nvidia-driver-cuda`, `kmod-nvidia-open-dkms` (override: `$NVIDIA_DRIVER_PACKAGE_RHEL`, `$NVIDIA_DRIVER_KMOD_RHEL`) | current `nvidia-open-driver-G06-signed-kmp-default` (override: `$NVIDIA_DRIVER_PACKAGE_SUSE`) |
-| CUDA toolkit | package derived from the active minimum, such as `cuda-toolkit-13-0` | same | same |
-| Container Toolkit | current `nvidia-container-toolkit` + base/tools/libs, then minimum-version validation | same | same |
-| Docker | `docker.io` (override: `$DOCKER_PACKAGE_DEBIAN`) | `moby-engine`+`moby-cli` on Fedora when available, else `docker-ce docker-ce-cli containerd.io` from `download.docker.com` | `docker` |
+| Step              | debian-family                                                                         | rhel-family                                                                                                                 | suse-family                                                                                   |
+| ----------------- | ------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------- |
+| Kernel headers    | `linux-headers-$(uname -r)`                                                           | `kernel-devel-$(uname -r)`, `kernel-headers-$(uname -r)`                                                                    | `kernel-default-devel`                                                                        |
+| Driver            | current `nvidia-open` (override: `$NVIDIA_DRIVER_PACKAGE_DEBIAN`)                     | current `nvidia-driver-cuda`, `kmod-nvidia-open-dkms` (override: `$NVIDIA_DRIVER_PACKAGE_RHEL`, `$NVIDIA_DRIVER_KMOD_RHEL`) | current `nvidia-open-driver-G06-signed-kmp-default` (override: `$NVIDIA_DRIVER_PACKAGE_SUSE`) |
+| CUDA toolkit      | package derived from the active minimum, such as `cuda-toolkit-13-0`                  | same                                                                                                                        | same                                                                                          |
+| Container Toolkit | current `nvidia-container-toolkit` + base/tools/libs, then minimum-version validation | same                                                                                                                        | same                                                                                          |
+| Docker            | `docker.io` (override: `$DOCKER_PACKAGE_DEBIAN`)                                      | `moby-engine`+`moby-cli` on Fedora when available, else `docker-ce docker-ce-cli containerd.io` from `download.docker.com`  | `docker`                                                                                      |
 
 ## Verification
 

@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
 type: platform
 required_credentials: []  # Auth via kubeconfig (~/.kube/config) or in-cluster service account
 optional_credentials:

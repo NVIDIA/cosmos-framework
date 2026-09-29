@@ -65,10 +65,12 @@ one waits forever. Three options, in increasing fidelity:
    the resource key, limits, and node selection, though nothing CUDA runs.
 3. **Real GPUs** — on a Linux host with a GPU and the NVIDIA Container Toolkit,
    minikube passes them through:
+
    ```bash
    minikube start --driver=docker --container-runtime=docker --gpus all
    kubectl get nodes -o jsonpath='{.items[*].status.allocatable.nvidia\.com/gpu}'
    ```
+
    This is why a single GPU box is enough for a GPU-real k8s smoke — no managed
    cluster required. Verify the allocatable count is non-zero before concluding
    the passthrough worked.
@@ -82,6 +84,7 @@ minikube. The order matters — the first masks the second:
    scheduler reports `persistentvolumeclaim "<name>" not found`, and that fires
    *before* any GPU complaint. minikube's default StorageClass binds a plain
    claim immediately:
+
    ```bash
    kubectl create -f - <<'EOF'
    apiVersion: v1
@@ -90,6 +93,7 @@ minikube. The order matters — the first masks the second:
    spec: {accessModes: [ReadWriteOnce], resources: {requests: {storage: 1Gi}}}
    EOF
    ```
+
 2. **GPU capacity must be advertised.** With the PVC satisfied, a Job requesting
    `nvidia.com/gpu` on a GPU-less cluster reports
    `0/1 nodes are available: 1 Insufficient nvidia.com/gpu` and waits forever.

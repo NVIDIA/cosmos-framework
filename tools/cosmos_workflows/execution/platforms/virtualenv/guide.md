@@ -54,14 +54,17 @@ in the job record's `results_dir`, which IS the runner's `--job-dir`.
    dicts, never flat dotted keys — and **lint** the assembled command with
    `redact_secrets.py lint`.
 2. **Open the record — mints the id, binds `results_dir` BEFORE launch:**
+
    ```bash
    JOB_ID=$("$BANK/scripts/cosmos_job_record.py" open --platform virtualenv \
      --image "$VENV/bin/python" --network-arch "$ARCH" --action "$ACTION" \
      --storage-tier A --results-root "$RESULTS_ROOT")
    RESULTS_DIR="$RESULTS_ROOT/$JOB_ID"
    ```
+
 3. **Launch detached** (the runner writes a durable wrapper that gates start,
    records identity, and cleans up the process group on exit):
+
    ```bash
    set -a; source /path/to/.env; set +a   # omit if already exported
    python3 "$RUNNER" submit --job-dir "$RESULTS_DIR" --venv "$VENV" \
@@ -69,11 +72,13 @@ in the job record's `results_dir`, which IS the runner's `--job-dir`.
      --arg train --arg=--config={config_path} --arg=--out={results_dir} \
      --gpu-ids 0 -e HF_TOKEN
    ```
+
    Placeholders `{config_path}` `{results_dir}` `{job_id}` render inside
    `--arg` tokens. **A token starting with `-` must use the `--arg=TOKEN`
    form** (argparse). `--gpu-ids` sets `CUDA_VISIBLE_DEVICES`; `--gpus 0`
    hides GPUs; neither reserves anything.
 4. **Record RUNNING** with the pid the runner printed:
+
    ```bash
    "$BANK/scripts/cosmos_job_record.py" mark "$JOB_ID" --state RUNNING --backend-ref "pid:<pid>"
    ```

@@ -68,12 +68,14 @@ platform skills); nothing else is platform-specific.
   **frame mismatch** (remote URIs, cross-host paths, PTM fetches, tier-C result
   uploads). Then lint the assembled command with `redact_secrets.py lint` and
   **open the record and launch, in that order**:
+
   ```bash
   JOB_ID=$("$BANK/scripts/cosmos_job_record.py" open --platform <p> --image <img> \
     --network-arch <arch> --action <action> --storage-tier <A|B|C> --results-root <root>)
   # <native launch, naming the backend object after $JOB_ID>
   "$BANK/scripts/cosmos_job_record.py" mark "$JOB_ID" --state RUNNING --backend-ref <ref>
   ```
+
 - **status(id)** — poll the native backend, map to the fixed vocabulary
   `PENDING RUNNING COMPLETE ERROR CANCELED UNKNOWN`; the native sub-state
   (`ImagePullBackOff`, `PENDING`-resources, slurm `COMPLETING`) rides in the

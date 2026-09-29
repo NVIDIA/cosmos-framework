@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
 type: platform
 # Docker-free local Python execution in an existing venv. No credential is
 # required by the platform itself, so the launch preflight's credential gate is

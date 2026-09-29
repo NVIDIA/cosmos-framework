@@ -69,7 +69,7 @@ file is in place, both the SQSH pre-conversion job (which runs on
 `sqsh_conversion_partition`) and the actual training job's Pyxis pull will
 authenticate as `$oauthtoken` against `nvcr.io`.
 
-# SLURM
+## SLURM
 
 Remote GPU compute platform for clusters managed by SLURM. Jobs are submitted
 from the launch host to a login node over SSH, staged on a shared
@@ -80,7 +80,7 @@ storage, and scheduler-owned GPU allocation. Do not use SLURM for local files
 that exist only on the agent machine; data and outputs must be reachable from
 the cluster.
 
-## Prerequisites
+### Prerequisites
 
 Before any SLURM job can be submitted or any runner script is generated, the
 launch host must be able to log in to at least one host
@@ -110,6 +110,7 @@ Set this up once per (host, login node, user) tuple:
      'mkdir -p ~/.ssh && chmod 700 ~/.ssh && \
       cat >> ~/.ssh/authorized_keys && chmod 600 ~/.ssh/authorized_keys'
    ```
+
 3. Trust the host key so SSH does not stall on the "authenticity of host" prompt
    inside the handler. Either log in once interactively to accept the prompt,
    or pre-populate `~/.ssh/known_hosts` with `ssh-keyscan -H <login-host> >> ~/.ssh/known_hosts`.
@@ -144,7 +145,7 @@ not enough; coordinate with the cluster admin to allow key-only auth from the
 service host or use an SSH agent with cached credentials and expose it to the
 handler via `SSH_AUTH_SOCK`.
 
-## Credentials
+### Credentials
 
 - **SLURM_USER** (required): SSH username for the login node. In microservices
   workspace metadata this is `cloud_specific_details.slurm_user`.
@@ -169,7 +170,7 @@ Do not ask for `SLURM_ACCOUNT` or `SLURM_BASE_RESULTS_DIR` in the initial
 intake unless the user says their site requires an account, wants a custom
 results root, or the workflow cannot proceed without overriding defaults.
 
-## Backend Details
+### Backend Details
 
 Use `backend_details.backend_type = "slurm"` when routing a job to this
 platform. Supported backend details from the microservices schema:
@@ -186,7 +187,7 @@ Runtime metadata is stored under `backend_details.slurm_metadata`, especially
 `slurm_job_id` and `job_dir`. Do not invent these values. They are written
 after `sbatch` returns a scheduler job id.
 
-## Storage
+### Storage
 
 SLURM jobs run on the cluster, so local paths from the API host are not valid
 dataset paths. Prefer shared filesystem URIs:
@@ -218,7 +219,7 @@ If the remote `test -e` fails, stop and ask for corrected paths or for the data
 to be staged onto shared cluster storage. Do not create runner scripts that will
 fail inside the first training job.
 
-## SSH Failure Remediation Prompt
+### SSH Failure Remediation Prompt
 
 When passwordless SSH fails, use this concise prompt:
 

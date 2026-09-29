@@ -133,13 +133,13 @@ The rendered multi-node `sbatch` script has:
 
 Then exports the rendezvous env vars before `srun --container-image=...` launches the container on each node. The supplied command invokes native torchrun explicitly:
 
-| Env var | Value | Read by |
-|---|---|---|
-| `NNODES` | `N` (= node count, the container entrypoint convention) | model container entrypoint |
-| `NPROC_PER_NODE` | `G` | model container entrypoint |
-| `NODE_RANK` | `$SLURM_NODEID` | model container entrypoint, torchrun |
-| `MASTER_ADDR` | first hostname from `scontrol show hostname $SLURM_JOB_NODELIST` | model container entrypoint, torchrun |
-| `MASTER_PORT` | `29500` | model container entrypoint, torchrun |
+| Env var          | Value                                                            | Read by                              |
+| ---------------- | ---------------------------------------------------------------- | ------------------------------------ |
+| `NNODES`         | `N` (= node count, the container entrypoint convention)          | model container entrypoint           |
+| `NPROC_PER_NODE` | `G`                                                              | model container entrypoint           |
+| `NODE_RANK`      | `$SLURM_NODEID`                                                  | model container entrypoint, torchrun |
+| `MASTER_ADDR`    | first hostname from `scontrol show hostname $SLURM_JOB_NODELIST` | model container entrypoint, torchrun |
+| `MASTER_PORT`    | `29500`                                                          | model container entrypoint, torchrun |
 
 ```bash
 export NNODES=N

@@ -80,6 +80,7 @@ Set this up once per (host, login node, user) tuple:
      'mkdir -p ~/.ssh && chmod 700 ~/.ssh && \
       cat >> ~/.ssh/authorized_keys && chmod 600 ~/.ssh/authorized_keys'
    ```
+
 3. Trust the host key so SSH does not stall on the "authenticity of host" prompt
    inside the handler. Either log in once interactively to accept the prompt,
    or pre-populate `~/.ssh/known_hosts` with `ssh-keyscan -H <login-host> >> ~/.ssh/known_hosts`.

@@ -70,14 +70,17 @@ below, with the raw state carried in the transition `message`. `$BANK` =
 2. **Lint** the assembled command — `redact_secrets.py lint` must pass (no inline
    secrets; pass creds as `-e VAR` with no value).
 3. **Open the record — this mints the id and binds `results_dir` BEFORE launch:**
+
    ```bash
    JOB_ID=$("$BANK/scripts/cosmos_job_record.py" open \
      --platform docker --image "$IMAGE" \
      --network-arch "$ARCH" --action "$ACTION" \
      --storage-tier "$TIER" --results-root "$RESULTS_ROOT")
    ```
+
 4. **Launch detached**, naming the container after the id so the other verbs find
    it (keep `--rm` OFF so an exited container stays inspectable):
+
    ```bash
    set -a; source /path/to/.env; set +a   # omit if already exported
    CID=$(docker run -d --name "$JOB_ID" --label "cosmos-job=$JOB_ID" \
@@ -86,6 +89,7 @@ below, with the raw state carried in the transition `message`. `$BANK` =
      -e AWS_ACCESS_KEY_ID -e AWS_SECRET_ACCESS_KEY -e HF_TOKEN -e NGC_KEY \
      "$IMAGE" <bundle command, reading /workspace/spec.yaml>)
    ```
+
 5. **Record RUNNING:**
    `"$BANK/scripts/cosmos_job_record.py" mark "$JOB_ID" --state RUNNING --backend-ref "$CID"`.
 
@@ -98,13 +102,13 @@ record-then-launch invariant.
 read -r st code < <(docker inspect --format '{{.State.Status}} {{.State.ExitCode}}' "$JOB_ID" 2>/dev/null) || st=missing
 ```
 
-| docker state | vocab |
-|---|---|
-| `created` / `restarting` | `PENDING` |
-| `running` / `paused` | `RUNNING` |
-| `exited`, code 0 | `COMPLETE` |
-| `exited`, code ≠ 0 | `ERROR` |
-| `dead` / missing | `UNKNOWN` (confirm via `docker ps -a`) |
+| docker state             | vocab                                  |
+| ------------------------ | -------------------------------------- |
+| `created` / `restarting` | `PENDING`                              |
+| `running` / `paused`     | `RUNNING`                              |
+| `exited`, code 0         | `COMPLETE`                             |
+| `exited`, code ≠ 0       | `ERROR`                                |
+| `dead` / missing         | `UNKNOWN` (confirm via `docker ps -a`) |
 
 On a terminal state, `mark` it — and for **tier C**, `execution/data-io/guide.md` uploads
 results **before** you `docker rm` (the container is the only copy).

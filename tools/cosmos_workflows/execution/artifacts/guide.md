@@ -7,11 +7,11 @@ The shared artifacts for Cosmos jobs are defined **here and nowhere else** —
 producers (model/data skills) and consumers (platform skills)
 both validate against this reference's `references/`.
 
-| Artifact | Schema | Produced by → consumed by |
-|---|---|---|
-| **spec-bundle** | `references/spec_bundle.schema.json` | model/data skill → platform skill (at the submit seam) |
-| **job-record** | `references/job_record.schema.json` | `scripts/cosmos_job_record.py` (the ONLY writer) → any re-attaching agent/poller |
-| **results_dir layout** | `references/results_dir.contract.md` | platform skill at submit → whoever collects outputs |
+| Artifact               | Schema                               | Produced by → consumed by                                                        |
+| ---------------------- | ------------------------------------ | -------------------------------------------------------------------------------- |
+| **spec-bundle**        | `references/spec_bundle.schema.json` | model/data skill → platform skill (at the submit seam)                           |
+| **job-record**         | `references/job_record.schema.json`  | `scripts/cosmos_job_record.py` (the ONLY writer) → any re-attaching agent/poller |
+| **results_dir layout** | `references/results_dir.contract.md` | platform skill at submit → whoever collects outputs                              |
 
 ## Quick Start — validate an artifact
 

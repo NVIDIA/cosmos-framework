@@ -82,6 +82,7 @@ instance to stop billing. `$BANK` = `${COSMOS_WORKFLOWS_ROOT}`.
     --backend-ref "<instance>/$JOB_ID"       # instance is part of the ref: the
                                              # container is unreachable without it
   ```
+
 - **status / logs** — `brev exec <instance> "docker inspect $JOB_ID"` /
   `brev exec <instance> "docker logs $JOB_ID"`, mapped to the vocab exactly as
   the docker verbs do. Recover `<instance>` from the record's `backend-ref`.

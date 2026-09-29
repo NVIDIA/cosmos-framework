@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
 # Dataset-neutral shape template. Do not submit directly: zero/empty semantic
 # fields must be resolved by scripts/evaluation_workflow.py from a sealed
 # fine-tuning plan or explicit current-run intake.

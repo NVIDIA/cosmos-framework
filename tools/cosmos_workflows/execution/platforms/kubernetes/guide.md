@@ -94,10 +94,12 @@ jobs are submitted with plain `kubectl apply`.
 
 1. **GPU-capacity gate — hard-fail first** (no gang scheduling → a too-big Job
    sits `Pending` forever):
+
    ```bash
    ALLOC=$(kubectl get nodes -o jsonpath='{range .items[*]}{.status.allocatable.nvidia\.com/gpu}{"\n"}{end}' | awk '{s+=$1} END{print s+0}')
    [ "${ALLOC:-0}" -ge "$NUM_GPUS" ] || { echo "insufficient GPUs: need $NUM_GPUS, allocatable $ALLOC"; exit 1; }
    ```
+
 2. **Storage tier** (via `execution/data-io/guide.md`): **A** = mount a bound PVC/NFS holding the
    data (author the mount paths, no fetch — the air-gap answer, and what the
    packaged template does); **C** = ephemeral: an initContainer fetches from S3
@@ -117,10 +119,12 @@ jobs are submitted with plain `kubectl apply`.
    pod receives a verified read-only config mount. The legacy single-root
    template cannot represent that contract.
 3. **Open the record — mints the id, binds `results_dir`, before launch:**
+
    ```bash
    JOB_ID=$("$BANK/scripts/cosmos_job_record.py" open --platform kubernetes --image "$IMAGE" \
      --network-arch "$ARCH" --action "$ACTION" --storage-tier "$TIER" --results-dir "$RESULTS_DIR")
    ```
+
    `results_dir` must be a **mounted (surviving) volume path or an S3 prefix** —
    `ttlSecondsAfterFinished` deletes the Job and its logs after it ends, so
    nothing is recoverable from the Job object later.
@@ -145,13 +149,13 @@ kubectl get job "$K8S_JOB_NAME" -n "$NAMESPACE" \
   -o jsonpath='{.status.conditions[0].type} {.status.active} {.status.succeeded} {.status.failed}'
 ```
 
-| kubectl signal | vocab |
-|---|---|
-| no pods scheduled | `PENDING` (`kubectl get pods -n "$NAMESPACE" -l job-name="$K8S_JOB_NAME"` → `ImagePullBackOff` / `Insufficient nvidia.com/gpu` in `message`) |
-| `active` ≥ 1 | `RUNNING` |
-| condition `Complete` | `COMPLETE` |
-| condition `Failed` | `ERROR` (classify from the pod's terminated reason — `OOMKilled` → `ERR_INFRA`) |
-| Job/pod not found | `UNKNOWN` (may be TTL-deleted — the job-record is the source of truth) |
+| kubectl signal       | vocab                                                                                                                                        |
+| -------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
+| no pods scheduled    | `PENDING` (`kubectl get pods -n "$NAMESPACE" -l job-name="$K8S_JOB_NAME"` → `ImagePullBackOff` / `Insufficient nvidia.com/gpu` in `message`) |
+| `active` ≥ 1         | `RUNNING`                                                                                                                                    |
+| condition `Complete` | `COMPLETE`                                                                                                                                   |
+| condition `Failed`   | `ERROR` (classify from the pod's terminated reason — `OOMKilled` → `ERR_INFRA`)                                                              |
+| Job/pod not found    | `UNKNOWN` (may be TTL-deleted — the job-record is the source of truth)                                                                       |
 
 ### logs
 
@@ -232,7 +236,7 @@ helm repo update
 helm install --wait gpu-operator -n gpu-operator --create-namespace nvidia/gpu-operator
 ```
 
-Full guide: https://docs.nvidia.com/datacenter/cloud-native/gpu-operator/latest/getting-started.html
+Full guide: <https://docs.nvidia.com/datacenter/cloud-native/gpu-operator/latest/getting-started.html>
 
 ## Multi-node training (distributed)
 
@@ -244,13 +248,13 @@ steps above) to run distributed training across N pods. Rendering
 2. An **Indexed Job** with `parallelism = completions = num_nodes`, `completionMode: Indexed`. Each pod gets `JOB_COMPLETION_INDEX` injected by k8s automatically (= the node rank).
 3. A **command wrapper** that exports the rendezvous env vars before invoking the user command. Two naming conventions are exported simultaneously:
 
-   | Env var | Value | Read by |
-   |---|---|---|
-   | `NNODES` | `num_nodes` | `torchrun` and PyTorch-standard rendezvous |
-   | `NPROC_PER_NODE` | `gpu_count` | `torchrun` |
-   | `NODE_RANK` | `$JOB_COMPLETION_INDEX` | both |
-   | `MASTER_ADDR` | `<job-name>-0.<job-name>` (pod-0's DNS) | both |
-   | `MASTER_PORT` | `29500` | both (the container default) |
+   | Env var          | Value                                   | Read by                                    |
+   | ---------------- | --------------------------------------- | ------------------------------------------ |
+   | `NNODES`         | `num_nodes`                             | `torchrun` and PyTorch-standard rendezvous |
+   | `NPROC_PER_NODE` | `gpu_count`                             | `torchrun`                                 |
+   | `NODE_RANK`      | `$JOB_COMPLETION_INDEX`                 | both                                       |
+   | `MASTER_ADDR`    | `<job-name>-0.<job-name>` (pod-0's DNS) | both                                       |
+   | `MASTER_PORT`    | `29500`                                 | both (the container default)               |
 
    Both naming conventions are set so packaged entrypoints (`dino train`, etc.) and raw `torchrun` commands work without modification.
 
@@ -276,7 +280,7 @@ The capacity check sums across nodes: `gpu_count × num_nodes` ≤ cluster's all
 ### Reference reading
 
 - Kubernetes Indexed Job: <https://kubernetes.io/docs/concepts/workloads/controllers/job/#completion-mode>
-- Indexed Job for batch ML: <https://kubernetes.io/blog/2022/06/01/indexed-jobs-mpi/>
+- Indexed Jobs for batch ML: <https://kubernetes.io/docs/concepts/workloads/controllers/job/#completion-mode>
 - PyTorch distributed (env-var rendezvous): <https://pytorch.org/docs/stable/elastic/run.html>
 - NCCL networking tuning (NCCL_SOCKET_IFNAME, NCCL_IB_HCA): <https://docs.nvidia.com/deeplearning/nccl/user-guide/docs/env.html>
 
@@ -298,6 +302,7 @@ This skill's Indexed Job path is intentionally simple and dependency-free; if yo
 **`ImagePullBackOff` / `ErrImagePull`** — the cluster can't pull the image. For nvcr.io: pre-create an image-pull secret in the namespace and reference it as the pod's `imagePullSecrets` in the rendered manifest:
 Feed the key over stdin — `--docker-password=$NGC_KEY` would put the secret in
 argv, where it is visible in the host's process table and shell history:
+
 ```bash
 set -a; source /path/to/.env; set +a   # omit if already exported
 kubectl create secret generic ngc-pull-secret -n cosmos-jobs \

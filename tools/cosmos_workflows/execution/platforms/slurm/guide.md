@@ -66,15 +66,19 @@ timeout kills GPU-idle jobs and bills the wasted time). `$BANK` =
    template shred it on exit; NGC image pulls use the one-time
    `~/.config/enroot/.credentials` (see `references/slurm-ssh-credentials.md`),
    not the job env:
+
    ```bash
    set -a; source /path/to/.env; set +a   # omit if already exported
    printf 'export HF_TOKEN=%s\n' "$HF_TOKEN" | ssh $LOGIN "umask 077; cat > <job_dir>/job_$JOB_ID.env"
    ```
+
 3. **Open the record — mints the id, binds `results_dir` on Lustre, before launch:**
+
    ```bash
    JOB_ID=$("$BANK/scripts/cosmos_job_record.py" open --platform slurm --image "$IMAGE" \
      --network-arch "$ARCH" --action "$ACTION" --storage-tier A --results-root "$SLURM_BASE_RESULTS_DIR")
    ```
+
 4. **Consume the optional model lifecycle.** If the validated spec-bundle has
    `execution`, preserve its order and semantics while mapping distributed
    intent to native SLURM/Pyxis. Stage only its checksum-closed
@@ -88,6 +92,7 @@ timeout kills GPU-idle jobs and bills the wasted time). `$BANK` =
    **Lint + syntax-check before submit:** `redact_secrets.py lint <sbatch>` must
    pass and `bash -n <sbatch>` must succeed.
 6. **Submit + record RUNNING:**
+
    ```bash
    SLURM_ID=$(ssh $LOGIN "sbatch --parsable <job_dir>/sbatch/job_$JOB_ID.sbatch")
    "$BANK/scripts/cosmos_job_record.py" mark "$JOB_ID" --state RUNNING --backend-ref "$SLURM_ID"
@@ -106,15 +111,15 @@ st=$(ssh $LOGIN "sacct -j $SLURM_ID -X -n -o State%30" | awk '{print $1}' | tr -
 # (use squeue while the job is still PENDING; sacct lags briefly after submit)
 ```
 
-| SLURM state | vocab |
-|---|---|
-| `PENDING` | `PENDING` |
-| `RUNNING` / `COMPLETING` | `RUNNING` |
-| `COMPLETED` | `COMPLETE` (confirm `status.json` in `results_dir`) |
-| `FAILED` / `TIMEOUT` / `OUT_OF_MEMORY` | `ERROR` (infra-vs-program classify → retry, M6) |
-| `NODE_FAIL` / `BOOT_FAIL` | `ERROR`, `err_class=ERR_INFRA` (`--requeue` re-queues these) |
-| `CANCELLED` / `PREEMPTED` / `REVOKED` | `CANCELED` |
-| (not found) | `UNKNOWN` |
+| SLURM state                            | vocab                                                        |
+| -------------------------------------- | ------------------------------------------------------------ |
+| `PENDING`                              | `PENDING`                                                    |
+| `RUNNING` / `COMPLETING`               | `RUNNING`                                                    |
+| `COMPLETED`                            | `COMPLETE` (confirm `status.json` in `results_dir`)          |
+| `FAILED` / `TIMEOUT` / `OUT_OF_MEMORY` | `ERROR` (infra-vs-program classify → retry, M6)              |
+| `NODE_FAIL` / `BOOT_FAIL`              | `ERROR`, `err_class=ERR_INFRA` (`--requeue` re-queues these) |
+| `CANCELLED` / `PREEMPTED` / `REVOKED`  | `CANCELED`                                                   |
+| (not found)                            | `UNKNOWN`                                                    |
 
 Native sub-state rides in the transition `message`. Poll at the chosen interval;
 long queue waits are normal — do not stop on elapsed time.

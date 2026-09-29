@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
 type: platform
 # Local Docker daemon (or a remote box via DOCKER_HOST=ssh://). No credential is
 # required to run — hence required_credentials is empty and the launch preflight's
