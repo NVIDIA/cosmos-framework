@@ -30,12 +30,10 @@ All paths below are relative to the cosmos3 package root (`../../../` from this 
 Keep native batch generation and Ray/Gradio on the entrypoints below. For
 reasoner QA evaluation, use `cosmos3-post-training`'s
 [reasoner evaluation contract](../../../tools/cosmos_workflows/models/cosmos3-reasoner/references/cosmos-reason-evaluate.md).
-The helpers use Framework by default and reject unsupported runtimes; no
-backend-selection flag is needed.
 
 For a containerized reasoner HTTP microservice,
 read the [service reference](../../../tools/cosmos_workflows/inference-service/guide.md).
-Resolve the model/backend before selecting its image. Framework DCP inputs
+Resolve the model action before selecting its image. Framework DCP inputs
 use the packaged checkpoint `plan`/`prepare`/`verify` helper; native generation
 can continue using DCP directly. Preserve the distinction between those routes.
 Read the selected platform reference through `cosmos3-setup` before launching,

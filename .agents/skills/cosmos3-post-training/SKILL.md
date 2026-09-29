@@ -44,11 +44,9 @@ It supplies Framework planners, dataset validation, dense/PEFT contracts,
 automatic checkpoint preparation, and structured completion checks. Do not
 impose those gates on ordinary native generator recipes.
 
-- The helpers use the repository-owned Framework runtime by default; no
-  backend-selection flag is needed. Unsupported runtime requests fail closed.
 - For Nano, collect the explicit `qwen3_vl` versus `cosmos3_omni` checkpoint
   choice, frame sampling, train/validation inputs, and dense/PEFT settings.
-  The selected backend owns checkpoint conversion; preserve the source.
+  Framework's native converter prepares the checkpoint; preserve the source.
 - For evaluation, use `evaluation_workflow.py` beside the planner. Inherit
   training inputs, ask only for its unresolved fields, and submit only a
   checksum-valid `ready=true` plan after approval.

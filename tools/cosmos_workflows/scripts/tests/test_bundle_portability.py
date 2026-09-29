@@ -38,7 +38,7 @@ def run_helper(bundle: Path, script: str, *args: str) -> subprocess.CompletedPro
     environment = os.environ.copy()
     for name in ("COSMOS_WORKFLOWS_ROOT", "COSMOS_SKILLS_ROOT", "PYTHONPATH"):
         environment.pop(name, None)
-    environment["COSMOS_SKILL_BANK_PATH"] = "/nonexistent/deprecated-skill-bank"
+    environment["TAO_SKILL_BANK_PATH"] = "/nonexistent/source-checkout"
     return subprocess.run(
         [sys.executable, str(bundle / script), *args],
         cwd=bundle.parent,
@@ -50,15 +50,8 @@ def run_helper(bundle: Path, script: str, *args: str) -> subprocess.CompletedPro
     )
 
 
-@pytest.mark.parametrize(
-    ("model", "backend", "expected"),
-    [
-        ("nvidia/Cosmos3-Nano", "cosmos-framework", "cosmos-framework"),
-        ("nvidia/Cosmos3-Nano", "auto", "cosmos-framework"),
-        ("nvidia/Cosmos3-Edge", "auto", "cosmos-framework"),
-    ],
-)
-def test_relocated_resolver_routes_to_existing_skill(relocated, model, backend, expected):
+@pytest.mark.parametrize("model", ["nvidia/Cosmos3-Nano", "nvidia/Cosmos3-Edge"])
+def test_relocated_resolver_routes_to_existing_skill(relocated, model):
     result = json.loads(
         run_helper(
             relocated,
@@ -67,15 +60,13 @@ def test_relocated_resolver_routes_to_existing_skill(relocated, model, backend, 
             model,
             "--action",
             "train",
-            "--backend",
-            backend,
             "--format",
             "json",
         ).stdout
     )
-    assert result["selected_backend"] == expected
+    assert "selected_backend" not in result
     assert Path(result["skill_path"]) == relocated.parents[1] / ".agents/skills/cosmos3-post-training/SKILL.md"
-    for key in ("skill_path", "guide_path", "metadata_path", "backend_contract_path"):
+    for key in ("skill_path", "guide_path", "metadata_path", "training_contract_path"):
         assert Path(result[key]).is_file(), result
         assert Path(result[key]).is_relative_to(relocated.parents[1])
 
@@ -89,7 +80,7 @@ def test_relocated_resolver_routes_to_existing_skill(relocated, model, backend, 
         ("inference_microservice", "cosmos3-inference"),
     ],
 )
-def test_reasoner_action_ownership_preserves_framework_choice(relocated, action, owner):
+def test_reasoner_action_routes_to_existing_skill(relocated, action, owner):
     result = json.loads(
         run_helper(
             relocated,
@@ -98,13 +89,10 @@ def test_reasoner_action_ownership_preserves_framework_choice(relocated, action,
             "nvidia/Cosmos3-Nano",
             "--action",
             action,
-            "--backend",
-            "cosmos-framework",
             "--format",
             "json",
         ).stdout
     )
-    assert result["selected_backend"] == "cosmos-framework"
     assert Path(result["skill_path"]).parent.name == owner
     assert Path(result["skill_path"]).is_file()
 
@@ -119,7 +107,7 @@ def test_reasoner_action_ownership_preserves_framework_choice(relocated, action,
         "models/cosmos3-reasoner/scripts/framework_checkpoint_action.py",
     ],
 )
-def test_helper_imports_without_runtime_or_old_skill_bank(relocated, helper):
+def test_helper_imports_without_gpu_dependencies_or_source_checkout(relocated, helper):
     assert "usage:" in run_helper(relocated, helper, "--help").stdout.lower()
 
 
@@ -141,6 +129,32 @@ def test_env_setup_is_relocatable_and_preserves_working_directory(relocated):
         check=True,
     )
     assert result.stdout.splitlines() == [str(relocated), str(relocated.parent)]
+
+
+def test_version_stamps_resolve_from_any_working_directory(relocated):
+    result = run_helper(relocated, "scripts/stamp_versions.py", "--check", "--strict-strays")
+    assert "0 stray warning(s)" in result.stdout
+
+
+@pytest.mark.parametrize(
+    "helper,args",
+    [
+        ("scripts/resolve_cosmos_model.py", []),
+        ("scripts/resolve_cosmos_image.py", []),
+        ("models/cosmos3-reasoner/scripts/cosmos_workflow.py", ["resolve"]),
+        ("models/cosmos3-reasoner/scripts/cosmos_workflow.py", ["plan"]),
+        ("models/cosmos3-reasoner/scripts/prepare_cosmos3_vlm_checkpoint.py", []),
+        ("models/cosmos3-reasoner/scripts/extract_cosmos_metrics.py", []),
+    ],
+)
+def test_model_helpers_have_no_target_selector(relocated, helper, args):
+    help_text = run_helper(relocated, helper, *args, "--help").stdout
+    assert "--backend" not in help_text
+    assert "--workload" not in help_text
+    assert "--skill-bank" not in help_text
+    assert "--video-override" not in help_text
+    assert "--max-checkpoints" not in help_text
+    assert "--processor-revision" not in help_text
 
 
 def test_migration_adds_no_new_skill_entrypoints(relocated):

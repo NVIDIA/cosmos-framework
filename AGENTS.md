@@ -80,9 +80,8 @@ Agent skills (codebase navigation, env troubleshooting, inference, post-training
 The existing post-training, inference, setup, and troubleshooting skills also
 cover managed Cosmos workflows. Their supporting contracts and tested helpers
 live in [`tools/cosmos_workflows/`](./tools/cosmos_workflows/README.md) and resolve
-directly from this checkout and add no new skill entrypoints. Preserve
-native Framework routing; the helpers default to the repository-owned runtime
-and reject foreign runtime requests.
+directly from this checkout and add no new skill entrypoints. The helpers call
+native Framework training, checkpoint, evaluation, and inference entrypoints.
 
 ## Common Tasks
 

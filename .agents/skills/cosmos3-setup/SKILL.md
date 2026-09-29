@@ -41,8 +41,8 @@ The canonical setup reference is `docs/setup.md`. The README (`README.md` § Set
 
 ### Managed workflow execution
 
-Native installation still follows the steps below. For a managed reasoner,
-Embed, Predict, or annotation action, shared helpers live in
+Native installation still follows the steps below. For a managed reasoner
+training, evaluation, checkpoint, or inference action, shared helpers live in
 `tools/cosmos_workflows`; no Skill Bank plugin or separate skill registry is needed.
 From the repository root, `source tools/cosmos_workflows/env.sh` sets
 `COSMOS_WORKFLOWS_ROOT`. Re-source it in each shell call that needs it; commands
@@ -50,9 +50,9 @@ inside the following references are relative to that helper root unless stated
 otherwise. Read only the references needed for the selected action.
 
 - [Launch review and job lifecycle](../../../tools/cosmos_workflows/execution/guide.md):
-  before managed submission, resolve the model/backend/action, select the
+  before managed submission, resolve the model action, select the
   platform, preflight, review the concrete run, and obtain launch approval.
-  An explicit Framework request remains Framework. Planning is not approval
+  Planning is not approval
   for downloads, image builds/pulls, GPU jobs, or host changes.
 - Platform procedures: [Docker](../../../tools/cosmos_workflows/execution/platforms/docker/guide.md),
   [SLURM](../../../tools/cosmos_workflows/execution/platforms/slurm/guide.md),
