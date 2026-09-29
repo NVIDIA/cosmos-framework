@@ -35,17 +35,14 @@ evaluation:
     enabled: true
     f1_threshold: 0.8
 vision:
-  # evaluation_workflow.py replaces num_frames with fps for FPS-sampled
-  # parents and also inherits min/max_frames, clip times, resize dimensions,
-  # and min/max/total pixel bounds when recorded.
+  # The native CUDA TorchCodec evaluator uses fixed-count frame sampling.
+  # evaluation_workflow.py resolves this and the pixel bounds from the plan.
   num_frames: 0
   min_pixels: 0
   max_pixels: 0
-  video_decoder: pynvvideocodec
+  video_decoder: torchcodec-cuda-on-demand
   video_cache_size: 0
-  frame_transfer: host_rgb
   process_threads: 8
-  decoder_cache_size: 4
   decoder_threads: 1
   decoder_device: cuda
   dataloader_num_workers: 1

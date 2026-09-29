@@ -17,7 +17,7 @@ import tomllib
 import yaml
 
 REPO = Path(__file__).resolve().parents[2]
-PAS_DS_IMAGE = "cosmos-framework:local"  # versions-key: images.containers.deft_pas_data_services
+FRAMEWORK_IMAGE = "cosmos-framework:local"  # versions-key: images.containers.cosmos_framework
 SCRIPT = REPO / "execution/platforms/kubernetes/scripts/render_action_job.py"
 SPEC = importlib.util.spec_from_file_location("render_action_job", SCRIPT)
 assert SPEC and SPEC.loader
@@ -25,31 +25,34 @@ renderer = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(renderer)
 
 
-RESULTS = "/localhome/user/workspace/results/run_pas_k8s"
+RESULTS = "/workspace/results/inference_k8s"
 CONFIG = RESULTS + "/config"
 PATCHES = "/opt/cosmos-workflow/runtime-support"
-CACHE = "/localhome/user/workspace/cache"
+CACHE = "/workspace/cache"
 
 
-def pas_pool_embed_request():
-    """The five-mount shape emitted for a real PAS pool_embed action."""
-    output = RESULTS + "/embeddings/source/embeddings.parquet"
+def inference_request():
+    """Framework inference with explicit input, output, and cache mounts."""
+    output = RESULTS + "/sample.mp4"
     return {
         "schema_version": "1",
         "platform": "kubernetes",
-        "workload_image": PAS_DS_IMAGE,
+        "workload_image": FRAMEWORK_IMAGE,
         "spec_bundle": {
-            "network_arch": "deft-pas",
-            "action": "deft-pas-pool_embed-abc123",
-            "image": PAS_DS_IMAGE,
+            "network_arch": "cosmos3",
+            "action": "inference",
+            "image": FRAMEWORK_IMAGE,
             "mode": "args",
-            "command": "embedding",
+            "command": "python -m cosmos_framework.scripts.inference",
             "args": [
-                "text_embeddings",
-                "-e",
-                "/specs/text_embed_spec.yaml",
-                "input_parquet=/results/embeddings/source/source_pool.parquet",
-                "output_parquet=/results/embeddings/source/embeddings.parquet",
+                "-i",
+                "/specs/input.json",
+                "-o",
+                "/results",
+                "--checkpoint-path",
+                "/cache/model",
+                "--seed",
+                "42",
             ],
             "compute_shape": {"gpus": 1, "nodes": 1},
         },
@@ -71,7 +74,7 @@ def pas_pool_embed_request():
     }
 
 
-def pas_staging_map():
+def inference_staging_map():
     return {
         "schema_version": "1",
         "sources": [
@@ -83,9 +86,9 @@ def pas_staging_map():
     }
 
 
-def config_request(config_format="yaml", command="visual_changenet train -e {config_path}"):
-    """A producer-owned mode=config request, as emitted by DEFT stages."""
-    request = pas_pool_embed_request()
+def config_request(config_format="toml", command="python -m cosmos_framework.scripts.train --sft-toml {config_path}"):
+    """A producer-owned mode=config request, using a Framework SFT recipe."""
+    request = inference_request()
     bundle = request["spec_bundle"]
     bundle.pop("args")
     bundle.update(
@@ -94,8 +97,8 @@ def config_request(config_format="yaml", command="visual_changenet train -e {con
             "command": command,
             "config_format": config_format,
             "spec": {
-                "dataset": {"batch_size": 4, "class_names": ["OK", "NG"]},
-                "train": {"num_epochs": 2, "use_amp": True},
+                "job": {"task": "vlm", "experiment": "cosmos_video_conversation"},
+                "trainer": {"num_epochs": 2},
             },
         }
     )
@@ -104,7 +107,7 @@ def config_request(config_format="yaml", command="visual_changenet train -e {con
 
 def materialize_and_stage(tmp_path, request):
     source = renderer.materialize_config(request, tmp_path / "rendered-configs")
-    staging = pas_staging_map()
+    staging = inference_staging_map()
     staging["sources"].append(
         {
             "source": str(source),
@@ -116,8 +119,8 @@ def materialize_and_stage(tmp_path, request):
 
 def render(request=None, staging=None, **kwargs):
     return renderer.render_action_job(
-        request or pas_pool_embed_request(),
-        staging or pas_staging_map(),
+        request or inference_request(),
+        staging or inference_staging_map(),
         job_id="cosmos-job-abc123",
         namespace="cosmos-jobs",
         pvc_claim="cosmos-workspace",
@@ -130,7 +133,7 @@ def container(manifest):
     return job, job["spec"]["template"]["spec"]["containers"][0]
 
 
-def test_pas_five_mount_request_preserves_aliases_and_access_modes():
+def test_inference_five_mount_request_preserves_aliases_and_access_modes():
     job, action = container(render())
     mounts = {item["mountPath"]: item for item in action["volumeMounts"]}
 
@@ -151,8 +154,8 @@ def test_pas_five_mount_request_preserves_aliases_and_access_modes():
     assert mounts["/specs"]["readOnly"] is True
     assert mounts["/patches"]["readOnly"] is True
     assert mounts["/cache"]["readOnly"] is False
-    assert action["command"] == ["embedding"]
-    assert action["args"] == pas_pool_embed_request()["spec_bundle"]["args"]
+    assert action["command"] == ["python", "-m", "cosmos_framework.scripts.inference"]
+    assert action["args"] == inference_request()["spec_bundle"]["args"]
     assert action["resources"]["limits"]["nvidia.com/gpu"] == "1"
 
 
@@ -164,7 +167,7 @@ def test_no_credentials_or_registry_secret_means_no_dangling_secret_refs():
 
 
 def test_forwarded_credentials_are_secret_references_not_inline_values():
-    request = pas_pool_embed_request()
+    request = inference_request()
     request["forward_env"] = ["HF_TOKEN"]
     manifest = render(
         request=request,
@@ -187,7 +190,7 @@ def test_forwarded_credentials_are_secret_references_not_inline_values():
 
 
 def test_secret_projects_only_explicitly_forwarded_names():
-    request = pas_pool_embed_request()
+    request = inference_request()
     request["forward_env"] = ["HF_TOKEN", "AWS_ACCESS_KEY_ID"]
     _, action = container(render(request=request, credential_secret="shared-credential-secret"))
 
@@ -203,7 +206,7 @@ def test_secret_projects_only_explicitly_forwarded_names():
 
 
 def test_forwarded_credentials_require_a_secret():
-    request = pas_pool_embed_request()
+    request = inference_request()
     request["forward_env"] = ["HF_TOKEN"]
     with pytest.raises(renderer.RenderError, match="credential-secret"):
         render(request=request)
@@ -215,7 +218,7 @@ def test_credential_secret_is_rejected_when_no_names_are_approved():
 
 
 def test_inline_and_forwarded_name_collision_is_rejected():
-    request = pas_pool_embed_request()
+    request = inference_request()
     request["environment"]["HF_TOKEN"] = "must-not-be-inline"
     request["forward_env"] = ["HF_TOKEN"]
     with pytest.raises(renderer.RenderError, match="must not be present"):
@@ -224,7 +227,7 @@ def test_inline_and_forwarded_name_collision_is_rejected():
 
 @pytest.mark.parametrize("schema_version", [None, "0", "2", 1])
 def test_unsupported_request_schema_version_is_rejected(schema_version):
-    request = pas_pool_embed_request()
+    request = inference_request()
     if schema_version is None:
         request.pop("schema_version")
     else:
@@ -234,15 +237,15 @@ def test_unsupported_request_schema_version_is_rejected(schema_version):
 
 
 def test_command_tokens_are_not_interpolated_into_a_shell_string():
-    request = pas_pool_embed_request()
+    request = inference_request()
     request["spec_bundle"]["args"].append("literal=$(do-not-run); 'quoted'")
     _, action = container(render(request=request))
-    assert action["command"] == ["embedding"]
+    assert action["command"] == ["python", "-m", "cosmos_framework.scripts.inference"]
     assert action["args"][-1] == "literal=$(do-not-run); 'quoted'"
 
 
 def test_explicit_args_mode_shell_is_rendered_as_native_argv():
-    request = pas_pool_embed_request()
+    request = inference_request()
     request["spec_bundle"]["command"] = "bash -lc"
     request["spec_bundle"]["args"] = ["printf '%s\\n' \"$HOME\""]
     _, action = container(render(request=request))
@@ -262,8 +265,8 @@ def test_config_mode_materializes_stages_and_mounts_the_exact_spec(tmp_path):
         )
     )
 
-    expected = "/cosmos-action-config/spec-" + source.stem.removeprefix("cosmos-action-config-") + ".yaml"
-    assert action["command"] == ["visual_changenet", "train", "-e", expected]
+    expected = "/cosmos-action-config/spec-" + source.stem.removeprefix("cosmos-action-config-") + ".toml"
+    assert action["command"] == ["python", "-m", "cosmos_framework.scripts.train", "--sft-toml", expected]
     assert action["args"] == []
     assert "{config_path}" not in json.dumps(action)
     config_mount = next(mount for mount in action["volumeMounts"] if mount["mountPath"] == expected)
@@ -273,7 +276,7 @@ def test_config_mode_materializes_stages_and_mounts_the_exact_spec(tmp_path):
         "subPath": f"jobs/abc123/config/{source.name}",
         "readOnly": True,
     }
-    assert yaml.safe_load(source.read_text(encoding="utf-8")) == request["spec_bundle"]["spec"]
+    assert tomllib.loads(source.read_text(encoding="utf-8")) == request["spec_bundle"]["spec"]
 
 
 @pytest.mark.parametrize("config_format", ["json", "yaml"])
@@ -290,8 +293,8 @@ def test_json_compatible_config_materialization_is_canonical_and_idempotent(tmp_
 
 
 def test_toml_config_materialization_preserves_nested_values(tmp_path):
-    request = config_request("toml", "cosmos-rl --config {config_path} train.py")
-    request["spec_bundle"]["spec"]["train"]["schedulers"] = [
+    request = config_request("toml", "python -m cosmos_framework.scripts.train --sft-toml {config_path}")
+    request["spec_bundle"]["spec"]["trainer"]["schedulers"] = [
         {"name": "warmup", "steps": 5},
         {"name": "cosine", "steps": 20},
     ]
@@ -303,7 +306,7 @@ def test_toml_config_materialization_preserves_nested_values(tmp_path):
 
 def test_toml_rejects_null_instead_of_silently_changing_it(tmp_path):
     request = config_request("toml")
-    request["spec_bundle"]["spec"]["train"]["optional"] = None
+    request["spec_bundle"]["spec"]["trainer"]["optional"] = None
     with pytest.raises(renderer.RenderError, match="NoneType"):
         renderer.materialize_config(request, tmp_path / "configs")
 
@@ -339,7 +342,7 @@ def test_config_source_symlink_is_rejected(tmp_path):
 
 
 def test_config_command_must_contain_the_contract_placeholder(tmp_path):
-    request = config_request(command="visual_changenet train")
+    request = config_request(command="python -m cosmos_framework.scripts.train")
     source, staging = materialize_and_stage(tmp_path, request)
     with pytest.raises(renderer.RenderError, match=r"requires \{config_path\}"):
         render(request=request, staging=staging, config_source=source)
@@ -348,17 +351,17 @@ def test_config_command_must_contain_the_contract_placeholder(tmp_path):
 def test_args_mode_rejects_a_config_source(tmp_path):
     source = tmp_path / "unexpected.yaml"
     source.write_text("{}\n", encoding="utf-8")
-    staging = pas_staging_map()
+    staging = inference_staging_map()
     staging["sources"].append({"source": str(source), "sub_path": "jobs/abc123/unexpected.yaml"})
     with pytest.raises(renderer.RenderError, match="only for spec_bundle.mode=config"):
         render(staging=staging, config_source=source)
 
 
-def test_config_shell_script_is_preserved_for_cosmos_rl(tmp_path):
+def test_config_shell_script_is_preserved_for_framework(tmp_path):
     command = (
-        "hook=$(python -c 'import cosmos_rl; print(cosmos_rl.__file__)')\n"
+        "hook=$(python -c 'import cosmos_framework; print(cosmos_framework.__file__)')\n"
         'test -n "$hook"\n'
-        'exec cosmos-rl --config {config_path} "$hook"'
+        "exec python -m cosmos_framework.scripts.train --sft-toml={config_path}"
     )
     request = config_request("toml", command)
     source, staging = materialize_and_stage(tmp_path, request)
@@ -372,7 +375,7 @@ def test_config_shell_script_is_preserved_for_cosmos_rl(tmp_path):
 
 
 def test_empty_argument_and_environment_value_are_preserved():
-    request = pas_pool_embed_request()
+    request = inference_request()
     request["spec_bundle"]["args"].append("")
     request["environment"]["OPTIONAL_SETTING"] = ""
     _, action = container(render(request=request))
@@ -390,14 +393,14 @@ def test_duplicate_source_aliases_need_only_one_staging_entry():
 
 
 def test_missing_staging_mapping_is_rejected():
-    staging = pas_staging_map()
+    staging = inference_staging_map()
     staging["sources"] = [row for row in staging["sources"] if row["source"] != PATCHES]
     with pytest.raises(renderer.RenderError, match="no staged PVC subPath"):
         render(staging=staging)
 
 
 def test_undeclared_staging_mapping_is_rejected():
-    staging = pas_staging_map()
+    staging = inference_staging_map()
     staging["sources"].append({"source": "/undeclared/input", "sub_path": "jobs/abc123/extra"})
     with pytest.raises(renderer.RenderError, match="undeclared mount sources"):
         render(staging=staging)
@@ -405,21 +408,21 @@ def test_undeclared_staging_mapping_is_rejected():
 
 @pytest.mark.parametrize("sub_path", ["/absolute", "../escape", "a/../escape", ".", "a\\b"])
 def test_unsafe_pvc_subpaths_are_rejected(sub_path):
-    staging = pas_staging_map()
+    staging = inference_staging_map()
     staging["sources"][0]["sub_path"] = sub_path
     with pytest.raises(renderer.RenderError, match="sub_path|subPath|relative|traversal"):
         render(staging=staging)
 
 
 def test_duplicate_mount_target_is_rejected():
-    request = pas_pool_embed_request()
+    request = inference_request()
     request["mounts"][1]["target"] = "/results"
     with pytest.raises(renderer.RenderError, match="repeats Kubernetes mount target"):
         render(request=request)
 
 
 def test_fresh_outputs_require_a_writable_covering_mount():
-    request = pas_pool_embed_request()
+    request = inference_request()
     request["mounts"][0]["read_only"] = True
     request["mounts"][1]["read_only"] = True
     with pytest.raises(renderer.RenderError, match="not covered by a writable"):
@@ -427,24 +430,24 @@ def test_fresh_outputs_require_a_writable_covering_mount():
 
 
 def test_staging_map_rejects_duplicate_sources():
-    staging = pas_staging_map()
+    staging = inference_staging_map()
     staging["sources"].append(dict(staging["sources"][0]))
     with pytest.raises(renderer.RenderError, match="repeats source"):
         render(staging=staging)
 
 
 def test_distinct_sources_cannot_share_one_exact_pvc_subpath():
-    staging = pas_staging_map()
+    staging = inference_staging_map()
     staging["sources"][1]["sub_path"] = staging["sources"][0]["sub_path"]
     with pytest.raises(renderer.RenderError, match="one PVC subPath"):
         render(staging=staging)
 
 
-def test_real_pas_job_record_id_is_normalized_without_losing_identity():
-    job_id = "data-services-deft-pas-pool_embed-0123456789abcdef-1234567890abcdef-abcdef"
+def test_long_job_record_id_is_normalized_without_losing_identity():
+    job_id = "cosmos3-long-inference_run-0123456789abcdef-1234567890abcdef-abcdef"
     manifest = renderer.render_action_job(
-        pas_pool_embed_request(),
-        pas_staging_map(),
+        inference_request(),
+        inference_staging_map(),
         job_id=job_id,
         namespace="cosmos-jobs",
         pvc_claim="cosmos-workspace",
@@ -467,8 +470,8 @@ def test_normalized_names_cannot_collide_after_character_replacement():
 def test_cli_renders_the_same_contract(tmp_path):
     request_path = tmp_path / "action.json"
     staging_path = tmp_path / "staging.json"
-    request_path.write_text(json.dumps(pas_pool_embed_request()), encoding="utf-8")
-    staging_path.write_text(json.dumps(pas_staging_map()), encoding="utf-8")
+    request_path.write_text(json.dumps(inference_request()), encoding="utf-8")
+    staging_path.write_text(json.dumps(inference_staging_map()), encoding="utf-8")
     completed = subprocess.run(
         [
             sys.executable,
@@ -516,7 +519,7 @@ def test_cli_materializes_then_renders_a_config_mode_request(tmp_path):
     )
     assert materialized.returncode == 0, materialized.stderr
     source = Path(materialized.stdout.strip())
-    staging = pas_staging_map()
+    staging = inference_staging_map()
     staging["sources"].append(
         {
             "source": str(source),
@@ -550,16 +553,16 @@ def test_cli_materializes_then_renders_a_config_mode_request(tmp_path):
     )
     assert rendered.returncode == 0, rendered.stderr
     _, action = container(rendered.stdout)
-    assert action["command"][:3] == ["visual_changenet", "train", "-e"]
+    assert action["command"][:4] == ["python", "-m", "cosmos_framework.scripts.train", "--sft-toml"]
     assert action["volumeMounts"][-1]["readOnly"] is True
 
 
 def test_name_cli_returns_backend_object_name():
     completed = subprocess.run(
-        [sys.executable, str(SCRIPT), "name", "--job-id", "PAS.pool_embed_01"],
+        [sys.executable, str(SCRIPT), "name", "--job-id", "Cosmos3.inference_01"],
         text=True,
         capture_output=True,
         check=False,
     )
     assert completed.returncode == 0, completed.stderr
-    assert completed.stdout.strip() == renderer.kubernetes_job_name("PAS.pool_embed_01")
+    assert completed.stdout.strip() == renderer.kubernetes_job_name("Cosmos3.inference_01")

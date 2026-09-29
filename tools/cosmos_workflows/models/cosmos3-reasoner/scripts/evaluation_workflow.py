@@ -133,8 +133,8 @@ def _verify_training_plan(path: Path) -> dict[str, Any]:
         raise WorkflowError(
             f"sealed training plan checksum mismatch: expected {expected or '<missing>'}, found {actual}"
         )
-    if plan.get("action") != "train" or plan.get("backend") not in {"cosmos-framework"}:
-        raise WorkflowError("training_plan must be a Cosmos train plan with an explicit backend")
+    if plan.get("action") != "train":
+        raise WorkflowError("training_plan must be a sealed training plan")
     required = ("training", "datasets", "model", "compute")
     missing = [key for key in required if not isinstance(plan.get(key), Mapping)]
     if missing:
@@ -326,10 +326,10 @@ def _framework_runtime_preflight(config: Mapping[str, Any]) -> str:
     return "/workspace/.venv/bin/python -c " + shlex.quote(probe)
 
 
-def _evaluation_spec_bundle(plan: Mapping[str, Any], backend: str, config: Mapping[str, Any]) -> dict[str, Any]:
+def _evaluation_spec_bundle(plan: Mapping[str, Any], config: Mapping[str, Any]) -> dict[str, Any]:
     image = _selected_image(plan)
     if not image:
-        raise WorkflowError("sealed training plan does not record the selected backend image")
+        raise WorkflowError("sealed training plan does not record the training image")
     total_gpus = int(config.get("num_gpus") or 0)
     compute = plan.get("compute") if isinstance(plan.get("compute"), Mapping) else {}
     gpus_per_node = int(compute.get("gpus_per_node") or total_gpus)
@@ -399,11 +399,7 @@ def _verify_framework_checkpoint_manifest(
     action_model_path: str,
 ) -> dict[str, Any]:
     manifest = _load_json(manifest_path.expanduser().resolve())
-    if (
-        manifest.get("schema_version") != 1
-        or manifest.get("status") != "VERIFIED"
-        or manifest.get("backend") != "cosmos-framework"
-    ):
+    if manifest.get("schema_version") != 1 or manifest.get("status") != "VERIFIED":
         raise WorkflowError("Framework checkpoint action manifest is not terminal VERIFIED schema version 1")
     expected = {
         "source_checkpoint": source_checkpoint,
@@ -445,7 +441,6 @@ def _verified_evaluator_profile(validation: Mapping[str, Any]) -> dict[str, Any]
 def resolve(args: argparse.Namespace) -> dict[str, Any]:
     training_plan_path = args.training_plan.expanduser().resolve()
     plan = _verify_training_plan(training_plan_path)
-    backend = str(plan["backend"])
     training = plan["training"]
     validation = plan["datasets"]["validation"]
     evaluation_contract = plan.get("evaluation_contract", {})
@@ -612,7 +607,7 @@ def resolve(args: argparse.Namespace) -> dict[str, Any]:
     elif generation_contract.get("max_tokens") is not None:
         max_tokens = int(generation_contract["max_tokens"])
         provenance["generation.max_tokens"] = _source(max_tokens, "sealed_training_plan.evaluation_contract")
-    elif backend == "cosmos-framework" and (answer_type == "letter" or task_type in {"binary", "mcq"}):
+    elif answer_type == "letter" or task_type in {"binary", "mcq"}:
         # The Framework evaluator extracts a bounded classification label and
         # already clamps letter generation to ten tokens at runtime. Resolve
         # that same bound during planning instead of asking the user for an
@@ -653,7 +648,7 @@ def resolve(args: argparse.Namespace) -> dict[str, Any]:
 
     action_model_path = args.action_model_path
     action_checkpoint_manifest: dict[str, Any] | None = None
-    if backend == "cosmos-framework" and checkpoint and not action_model_path:
+    if checkpoint and not action_model_path:
         automated_actions.append(
             {
                 "action": "framework_checkpoint_pre_action",
@@ -664,7 +659,7 @@ def resolve(args: argparse.Namespace) -> dict[str, Any]:
                 "user_input": False,
             }
         )
-    if backend == "cosmos-framework" and action_model_path and checkpoint:
+    if action_model_path and checkpoint:
         action_model_manifest_path = getattr(args, "action_model_manifest", None)
         if not action_model_manifest_path:
             raise WorkflowError(
@@ -677,14 +672,14 @@ def resolve(args: argparse.Namespace) -> dict[str, Any]:
             action_model_path=action_model_path,
         )
     model_name = action_model_path if action_model_path and checkpoint else (checkpoint)
-    if backend == "cosmos-framework" and action_model_path:
+    if action_model_path:
         provenance["model.model_name"] = _source(action_model_path, "framework_checkpoint_pre_action")
     elif model_name:
         provenance["model.model_name"] = _source(model_name, "selected_checkpoint")
 
     enable_lora = False  # Framework exports merged inference checkpoints.
     base_model_path = ""
-    provenance["model.enable_lora"] = _source(enable_lora, "sealed_training_plan.training_mode_and_backend")
+    provenance["model.enable_lora"] = _source(enable_lora, "merged_checkpoint_export")
     provenance["model.base_model_path"] = _source(base_model_path, "sealed_training_plan.model_preparation")
 
     inherited_vision = evaluation_contract.get("vision")
@@ -699,7 +694,6 @@ def resolve(args: argparse.Namespace) -> dict[str, Any]:
     if unsupported_sampling:
         raise WorkflowError(f"unsupported Framework evaluation sampling fields: {unsupported_sampling}")
     frames = int(inherited_vision.get("nframes") or evaluation_contract.get("frames") or training.get("frames") or 0)
-    fps = inherited_vision.get("fps")
     if args.max_video_pixels is not None:
         max_video_pixels = args.max_video_pixels
         provenance["vision.max_pixels"] = _source(max_video_pixels, "user")
@@ -743,11 +737,8 @@ def resolve(args: argparse.Namespace) -> dict[str, Any]:
         "evaluation.seed": seed,
         "evaluation.batch_size": batch_size,
         "num_gpus": num_gpus,
+        "vision.num_frames": frames,
     }
-    if fps is not None:
-        inherited_values["vision.fps"] = fps
-    else:
-        inherited_values["vision.num_frames"] = frames
     for field, value in inherited_values.items():
         provenance[field] = _source(value, "sealed_training_plan")
         if value in {"", None} or (value == 0 and field != "evaluation.seed"):
@@ -770,11 +761,7 @@ def resolve(args: argparse.Namespace) -> dict[str, Any]:
     shard_strategy = requested_shard_strategy or (
         "media_balanced" if validation_family in {"video_conversation", "task_aware_video_reasoning"} else "stride"
     )
-    optimized_framework_media_profile = (
-        backend == "cosmos-framework"
-        and validation_family == "video_conversation"
-        and shard_strategy == "media_balanced"
-    )
+    optimized_framework_media_profile = validation_family == "video_conversation" and shard_strategy == "media_balanced"
     provenance["evaluation.shard_strategy"] = _source(
         shard_strategy,
         "user" if requested_shard_strategy is not None else "dataset_profile",
@@ -830,11 +817,9 @@ def resolve(args: argparse.Namespace) -> dict[str, Any]:
     if framework_workers not in (0, 1):
         raise WorkflowError("Framework evaluation dataloader_num_workers must be zero or one")
     prefetch_override = getattr(args, "framework_dataloader_prefetch_factor", None)
-    framework_prefetch = (
-        (0 if framework_workers == 0 else int(framework_runtime["dataloader_prefetch_factor"]))
-        if prefetch_override is None
-        else int(prefetch_override)
-    )
+    # The inference preprocessor has its own bounded loader contract. Training
+    # conversation recipes use prefetch four, but evaluation requires two.
+    framework_prefetch = (0 if framework_workers == 0 else 2) if prefetch_override is None else int(prefetch_override)
     if framework_workers == 0 and framework_prefetch != 0:
         raise WorkflowError("Framework evaluation prefetch factor must be zero when workers are zero")
     if framework_workers == 1 and framework_prefetch != 2:
@@ -881,7 +866,7 @@ def resolve(args: argparse.Namespace) -> dict[str, Any]:
     )
     provenance["vision.dataloader_prefetch_factor"] = _source(
         vision["dataloader_prefetch_factor"],
-        "sealed_training_plan.framework_video_runtime"
+        "framework_evaluation_loader"
         if prefetch_override is None and framework_workers > 0
         else "derived_zero_worker_profile"
         if prefetch_override is None
@@ -988,7 +973,7 @@ def resolve(args: argparse.Namespace) -> dict[str, Any]:
         provenance["model.attn_implementation"] = _source(str(requested_attention), "optimization_candidate")
 
     blockers = list(required_user_inputs)
-    if backend == "cosmos-framework" and checkpoint and not action_model_path:
+    if checkpoint and not action_model_path:
         blockers.append(
             {
                 "field": "model.model_name",
@@ -1007,11 +992,10 @@ def resolve(args: argparse.Namespace) -> dict[str, Any]:
                 }
             )
     ready = not blockers
-    spec_bundle = _evaluation_spec_bundle(plan, backend, config) if ready else None
+    spec_bundle = _evaluation_spec_bundle(plan, config) if ready else None
     result = {
         "schema_version": 1,
         "ready": ready,
-        "backend": backend,
         "training_plan": {
             "path": str(training_plan_path),
             "sha256": sha256_file(training_plan_path),

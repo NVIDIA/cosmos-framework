@@ -10,7 +10,7 @@ registry. This directory adds no new skill entrypoints.
   ordering, and backend-reported terminal state. Keep external runtime identifiers
   exact; framework-owned helper names use the Cosmos namespace.
 - Read only the selected model/platform references. Native recipes need not use
-  the managed-job layer; helpers support only the repository-owned runtime.
+  the managed-job layer; helpers call Framework's native entrypoints.
 - Keep helper tests CPU-only: `python -m pytest --confcutdir=. -q` here.
 - Update both existing skill copies for routing changes.
 - Keep source provenance in `migration.json` when moving or removing resources.

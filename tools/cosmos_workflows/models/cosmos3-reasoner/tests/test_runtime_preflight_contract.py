@@ -34,7 +34,6 @@ def _video_args() -> SimpleNamespace:
         gradient_clip=1.0,
         precision="bfloat16",
         async_checkpoint=False,
-        max_checkpoints=2,
         validation_batch_size=1,
         seed=42,
         sequence_length=40960,
@@ -56,7 +55,6 @@ def _video_args() -> SimpleNamespace:
         system_prompt="You are a helpful assistant.",
         container_cache_dir="/cache",
         run_mode="smoke",
-        video_override_map="",
         cosmos_job_id="video-smoke",
         container_results_dir="/results",
         nccl_debug="INFO",
@@ -134,7 +132,6 @@ def test_slurm_renderer_creates_writable_mount_roots_before_pyxis() -> None:
         {
             "environment": {},
             "command": "true",
-            "decoder_artifact": {"required": False, "enabled": False},
         },
     )
 
@@ -188,7 +185,7 @@ def _omni_model() -> dict[str, object]:
 
 def test_docker_model_preparation_resolves_digest_without_placeholder() -> None:
     args = _omni_preparation_args("docker")
-    _, preparation = MODULE._model_preparation(args, _omni_model(), "cosmos-framework")
+    _, preparation = MODULE._model_preparation(args, _omni_model())
 
     command = preparation["command"]
     assert isinstance(command, str)
@@ -203,14 +200,14 @@ def test_docker_model_preparation_resolves_digest_without_placeholder() -> None:
 
 def test_slurm_model_preparation_resolves_authoritative_sqsh_digest() -> None:
     args = _omni_preparation_args("slurm")
-    _, preparation = MODULE._model_preparation(args, _omni_model(), "cosmos-framework")
+    _, preparation = MODULE._model_preparation(args, _omni_model())
     action = preparation["platform_action"]
     assert isinstance(action, dict)
 
     container_command = action["container_command"]
     assert "<" + "RESOLVE_AFTER_CLEAN_BUILD" + ">" not in container_command
     assert container_command.count("--runtime-image-digest") == 1
-    assert "COSMOS_COSMOS_PREPARATION_IMAGE_DIGEST" in container_command
+    assert "COSMOS_PREPARATION_IMAGE_DIGEST" in container_command
     assert "/images/cosmos-framework.sqsh" in container_command
 
     args.partition = "polar3"
@@ -232,80 +229,13 @@ def test_slurm_model_preparation_resolves_authoritative_sqsh_digest() -> None:
         {
             "environment": {},
             "command": "true",
-            "decoder_artifact": {"required": False, "enabled": False},
             "model_preparation": preparation,
         },
     )
 
     assert "sha256sum -- /images/cosmos-framework.sqsh" in script
     assert "unable to resolve runtime image digest" in script
-    assert ("--container-env=HF_TOKEN,HUGGING_FACE_HUB_TOKEN,COSMOS_COSMOS_PREPARATION_IMAGE_DIGEST") in script
-
-
-def _decoder_args(**overrides: object) -> SimpleNamespace:
-    values = {
-        "video_override_max_macroblocks": 8192,
-        "video_override_workers": 16,
-        "video_override_map": "",
-        "video_override_manifest": "",
-        "video_override_fingerprint": "",
-        "video_override_force_video": [],
-        "processor_revision": "packaged",
-        "cache_dir": "/cache",
-        "cosmos_integration_commit": "a" * 40,
-        "train_annotation": ["/data/train.json"],
-        "train_media_root": ["/data/train"],
-        "validation_annotation": ["/data/val.json"],
-        "validation_media_root": ["/data/val"],
-        "dataset_family": "task_aware_video_reasoning",
-    }
-    values.update(overrides)
-    return SimpleNamespace(**values)
-
-
-def test_framework_task_aware_data_uses_native_runtime_without_external_artifact() -> None:
-    artifact = MODULE._decoder_artifact_plan(
-        _decoder_args(),
-        backend="cosmos-framework",
-        model={"fingerprint": "b" * 64},
-        model_profile={"frames": 8},
-        train_data={"dataset_fingerprint": "c" * 64},
-        val_data={"dataset_fingerprint": "d" * 64},
-    )
-
-    assert artifact["required"] is False
-    assert artifact["enabled"] is False
-    assert artifact["preparation_module"] is None
-    assert artifact["validation_module"] is None
-    assert artifact["policy"] == {
-        "macroblock_scan": False,
-        "force_all_validation_media": False,
-        "forced_runtime_sources": [],
-        "gpu_random_access_validation_required": False,
-        "selection_basis": "framework_native_torchcodec_cuda_on_demand",
-    }
-
-
-def test_framework_rejects_external_video_override_artifact() -> None:
-    args = _decoder_args(
-        video_override_map="/cache/map.json",
-        video_override_manifest="/cache/manifest.json",
-        video_override_fingerprint="e" * 64,
-    )
-
-    try:
-        MODULE._decoder_artifact_plan(
-            args,
-            backend="cosmos-framework",
-            model={"fingerprint": "b" * 64},
-            model_profile={"frames": 8},
-            train_data={"dataset_fingerprint": "c" * 64},
-            val_data={"dataset_fingerprint": "d" * 64},
-        )
-    except MODULE.WorkflowError as exc:
-        assert "external video override artifacts" in str(exc)
-    else:
-        raise AssertionError("Framework accepted a external video override artifact")
+    assert ("--container-env=HF_TOKEN,HUGGING_FACE_HUB_TOKEN,COSMOS_PREPARATION_IMAGE_DIGEST") in script
 
 
 def _framework_spec_args(
@@ -346,7 +276,13 @@ def test_framework_validation_batch_derives_exact_padded_rank_iterations() -> No
         _framework_spec_args(validation_batch_size=5),
         train_count=8,
         val_count=2676,
-        contract={"epochs": 1, "train_sample_multiplier": 1, "lora": None},
+        contract={
+            "epochs": 1,
+            "train_sample_multiplier": 1,
+            "lora": None,
+            "minimum_lr_factor": 0.0,
+            "loss_spike_rollback": 0.0,
+        },
     )
 
     # 2,676 records are padded to 2,680 across 8 ranks: 335/rank. Batch 5
@@ -461,7 +397,13 @@ def test_framework_media_grouped_validation_allows_equal_partial_final_batch() -
         _framework_spec_args(validation_batch_size=8),
         train_count=8,
         val_count=2676,
-        contract={"epochs": 1, "train_sample_multiplier": 1, "lora": None},
+        contract={
+            "epochs": 1,
+            "train_sample_multiplier": 1,
+            "lora": None,
+            "minimum_lr_factor": 0.0,
+            "loss_spike_rollback": 0.0,
+        },
     )
 
     # Every rank receives 335 records and emits 41 full batches plus one
@@ -478,7 +420,13 @@ def test_framework_infinite_validation_rejects_next_epoch_spill() -> None:
             ),
             train_count=8,
             val_count=2676,
-            contract={"epochs": 1, "train_sample_multiplier": 1, "lora": None},
+            contract={
+                "epochs": 1,
+                "train_sample_multiplier": 1,
+                "lora": None,
+                "minimum_lr_factor": 0.0,
+                "loss_spike_rollback": 0.0,
+            },
         )
     except MODULE.WorkflowError as exc:
         assert "335 records/rank is not divisible by batch 16" in str(exc)
@@ -488,7 +436,6 @@ def test_framework_infinite_validation_rejects_next_epoch_spill() -> None:
 
 def test_framework_v12_preflight_requires_finite_validation_stream() -> None:
     args = _video_args()
-    args.backend = "cosmos-framework"
     args.gpus_per_node = 8
     args.framework_baked_overlay_pythonpath = "/cosmos-patches-framework-c312482-evalval-lab-v12/site-packages"
     args.framework_baked_overlay_module_prefix = "/cosmos-patches-framework-c312482-evalval-lab-v12/modules"
@@ -514,7 +461,6 @@ def test_framework_v12_preflight_requires_finite_validation_stream() -> None:
 
     preflight = MODULE._preflight_contract(
         args,
-        "cosmos-framework",
         {"tag": "example.invalid/cosmos-framework:test"},
         "/models/cosmos3",
         "/data/video.mp4",
@@ -531,7 +477,6 @@ def test_framework_v12_preflight_requires_finite_validation_stream() -> None:
 
 def test_framework_validation_cache_preflight_attests_inherited_and_new_modules() -> None:
     args = _video_args()
-    args.backend = "cosmos-framework"
     args.gpus_per_node = 8
     args.framework_baked_overlay_pythonpath = "/cosmos-patches-framework-c312482-evalval-lab-v18/site-packages"
     args.framework_baked_overlay_module_prefix = "/cosmos-patches-framework-c312482-evalval-lab-v18/modules"
@@ -557,7 +502,6 @@ def test_framework_validation_cache_preflight_attests_inherited_and_new_modules(
 
     preflight = MODULE._preflight_contract(
         args,
-        "cosmos-framework",
         {"tag": "example.invalid/cosmos-framework:test"},
         "/models/cosmos3",
         "/data/video.mp4",
@@ -575,7 +519,6 @@ def test_framework_validation_cache_preflight_attests_inherited_and_new_modules(
     args.framework_baked_overlay_module_prefix = "/cosmos-patches-framework-c312482-evalval-lab-v19/modules"
     preflight = MODULE._preflight_contract(
         args,
-        "cosmos-framework",
         {"tag": "example.invalid/cosmos-framework:test"},
         "/models/cosmos3",
         "/data/video.mp4",
@@ -588,7 +531,6 @@ def test_framework_validation_cache_preflight_attests_inherited_and_new_modules(
     args.framework_baked_overlay_module_prefix = "/cosmos-patches-framework-c312482-evalval-lab-v20/modules"
     preflight = MODULE._preflight_contract(
         args,
-        "cosmos-framework",
         {"tag": "example.invalid/cosmos-framework:test"},
         "/models/cosmos3",
         "/data/video.mp4",
@@ -601,7 +543,6 @@ def test_framework_validation_cache_preflight_attests_inherited_and_new_modules(
     args.framework_baked_overlay_module_prefix = "/cosmos-patches-framework-c312482-evalval-lab-v21/modules"
     preflight = MODULE._preflight_contract(
         args,
-        "cosmos-framework",
         {"tag": "example.invalid/cosmos-framework:test"},
         "/models/cosmos3",
         "/data/video.mp4",

@@ -20,7 +20,7 @@ CONFIG_RENDER_ARGS=()
 if [ "$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["spec_bundle"]["mode"])' \
     "$ACTION_REQUEST")" = "config" ]; then
   CONFIG_SOURCE=$(python3 \
-    "$BANK/execution/platforms/kubernetes/scripts/render_action_job.py" \
+    "$COSMOS_WORKFLOWS_ROOT/execution/platforms/kubernetes/scripts/render_action_job.py" \
     materialize-config --request "$ACTION_REQUEST" \
     --output-dir "$WORKSPACE/.cosmos/action-configs")
   CONFIG_RENDER_ARGS+=(--config-source "$CONFIG_SOURCE")
@@ -69,7 +69,7 @@ original record id in an annotation:
 
 ```bash
 K8S_JOB_NAME=$(python3 \
-  "$BANK/execution/platforms/kubernetes/scripts/render_action_job.py" \
+  "$COSMOS_WORKFLOWS_ROOT/execution/platforms/kubernetes/scripts/render_action_job.py" \
   name --job-id "$JOB_ID")
 ```
 
@@ -119,12 +119,12 @@ if [ -n "${IMAGE_PULL_SECRET:-}" ]; then
   RENDER_ARGS+=(--image-pull-secret "$IMAGE_PULL_SECRET")
 fi
 
-python3 "$BANK/execution/platforms/kubernetes/scripts/render_action_job.py" \
+python3 "$COSMOS_WORKFLOWS_ROOT/execution/platforms/kubernetes/scripts/render_action_job.py" \
   render --request "$ACTION_REQUEST" --staging-map "$STAGING_MAP" \
   --job-id "$JOB_ID" --namespace "$NAMESPACE" --pvc-claim "$PVC_CLAIM" \
   "${CONFIG_RENDER_ARGS[@]}" "${RENDER_ARGS[@]}" >"$MANIFEST"
 
-"$BANK/scripts/redact_secrets.py" lint "$MANIFEST"
+"$COSMOS_WORKFLOWS_ROOT/scripts/redact_secrets.py" lint "$MANIFEST"
 kubectl apply --dry-run=server -f "$MANIFEST"
 ```
 
@@ -139,7 +139,7 @@ K8S_OBJECT=$(kubectl apply -f "$MANIFEST" -o name)
   echo "unexpected Kubernetes object: $K8S_OBJECT" >&2
   exit 1
 }
-"$BANK/scripts/cosmos_job_record.py" mark "$JOB_ID" --state RUNNING \
+"$COSMOS_WORKFLOWS_ROOT/scripts/cosmos_job_record.py" mark "$JOB_ID" --state RUNNING \
   --backend-ref "$NAMESPACE/$K8S_JOB_NAME"
 ```
 

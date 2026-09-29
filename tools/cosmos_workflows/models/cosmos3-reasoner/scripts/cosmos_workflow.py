@@ -2,7 +2,7 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Build reproducible Cosmos3 Cosmos plans from runtime-only inputs."""
+"""Plan reproducible Cosmos Framework reasoner training and checkpoint preparation."""
 
 from __future__ import annotations
 
@@ -49,17 +49,7 @@ from cosmos_common import (
 SKILL_DIR = Path(__file__).resolve().parents[1]
 REFERENCES = SKILL_DIR / "references"
 SKILL_INFO = REFERENCES / "skill_info.yaml"
-BACKEND_FILES = {
-    "cosmos-framework": REFERENCES / "cosmos-framework-backend.yaml",
-}
-SUPPORTED_ACTIONS = {
-    "train",
-    "export",
-    "evaluate",
-    "inference",
-    "inference_microservice",
-    "quantize",
-}
+TRAINING_CONTRACT = REFERENCES / "training-contract.yaml"
 PLAN_ARTIFACT_SCHEMA_VERSION = 1
 _PLAN_ARTIFACT_TRANSIENT_ARGS = {"verb", "format", "plan_artifact", "render_output"}
 DEFAULT_NANO_VLM_ARCHITECTURE_MODEL = "Qwen/Qwen3-VL-8B-Instruct"
@@ -71,7 +61,7 @@ FRAMEWORK_VALIDATION_FEATURE_CACHE_MODEL_TYPES = frozenset({"qwen3_vl"})
 
 def _huggingface_repo_id(value: str) -> str | None:
     """Return a Hub model ID for the supported user-facing URI forms."""
-    if Path(value).expanduser().exists():
+    if Path(value).expanduser().exists() or Path(value).expanduser().is_absolute():
         return None
     if value.startswith(("https://huggingface.co/", "http://huggingface.co/")):
         parts = urllib.parse.urlparse(value).path.strip("/").split("/")
@@ -233,7 +223,6 @@ def resolve_model_name(
 def resolve_model_profile(
     args: argparse.Namespace,
     tier: str,
-    backend: str,
     train_dataset: Mapping[str, Any],
     validation_dataset: Mapping[str, Any],
 ) -> dict[str, Any]:
@@ -375,29 +364,11 @@ def model_tier(model: str) -> str:
     raise WorkflowError(f"unsupported Cosmos family: {model!r}")
 
 
-def select_backend(
-    *,
-    model: str,
-    action: str,
-    backend: str = "cosmos-framework",
-    workload: str = "training",
-) -> tuple[str, str]:
-    """Resolve the repository-owned runtime; reject foreign implementation requests."""
-    model_tier(model)
-    action = action.casefold()
-    if action not in SUPPORTED_ACTIONS:
-        raise WorkflowError(f"unsupported Cosmos action: {action}")
-    if backend.casefold() not in {"auto", "framework", "cosmos_framework", "cosmos-framework"}:
-        raise WorkflowError("this repository supports only the cosmos-framework runtime")
-    if workload not in {"", "training"}:
-        raise WorkflowError("only the Framework training workflow is supported")
-    contract = load_yaml(BACKEND_FILES["cosmos-framework"])
-    action_contract = contract.get("actions", {}).get(action, {})
-    if not action_contract.get("supported"):
-        raise WorkflowError(
-            f"cosmos-framework does not support {action}: {action_contract.get('reason', 'unsupported')}"
-        )
-    return "cosmos-framework", "repository-owned Cosmos Framework runtime"
+def validate_action(action: str) -> None:
+    """Validate model capabilities before constructing an action."""
+    contract = load_yaml(SKILL_INFO).get("actions", {}).get(action, {})
+    if not contract or not contract.get("supported", True):
+        raise WorkflowError(f"unsupported Cosmos action {action!r}: {contract.get('reason', 'not declared')}")
 
 
 def _toml_scalar(value: Any) -> str:
@@ -455,7 +426,7 @@ def _needs_remote_inspection(args: argparse.Namespace) -> bool:
     if args.platform != "slurm":
         return False
     values = [
-        args.base_model_path_or_uri,
+        args.base_model_path_or_uri if not _huggingface_repo_id(args.base_model_path_or_uri) else "",
         args.prepared_checkpoint_path,
         args.results_dir,
         args.checkpoint_dir,
@@ -465,9 +436,6 @@ def _needs_remote_inspection(args: argparse.Namespace) -> bool:
         # exist yet. Its sqsh_cache_dir determines whether remote inspection is
         # needed. An explicit existing SQSH remains a required input.
         args.sqsh_path if getattr(args, "image_runtime_mode", "auto") == "existing-sqsh" else "",
-        args.model_preparation_sqsh_path,
-        args.video_override_map,
-        args.video_override_manifest,
         *args.train_annotation,
         *args.train_media_root,
         *args.validation_annotation,
@@ -520,7 +488,6 @@ def _remote_inspection(args: argparse.Namespace) -> dict[str, Any]:
         ("cache_dir", args.cache_dir),
         ("sqsh_cache_dir", args.sqsh_cache_dir),
         ("sqsh_path", args.sqsh_path),
-        ("model_preparation_sqsh_path", args.model_preparation_sqsh_path),
     ):
         if value:
             remote_args.extend(["--runtime-path", f"{label}={value}"])
@@ -796,6 +763,23 @@ def _align_container_runtime_paths(args: argparse.Namespace) -> None:
 
 
 def _training_contract(args: argparse.Namespace) -> dict[str, Any]:
+    if args.optimizer not in {"AdamW", "FusedAdam"} or args.scheduler not in {"linear", "cosine", "constant"}:
+        raise WorkflowError("unsupported optimizer or scheduler; see plan --help")
+    epochs = 1 if args.run_mode == "smoke" else args.epochs
+    if not math.isfinite(args.warmup) or not 0 <= args.warmup <= epochs:
+        raise WorkflowError("warmup must be between zero and the training epoch count")
+    minimum_lr_factor = getattr(args, "minimum_lr_factor", None)
+    if minimum_lr_factor is None:
+        minimum_lr_factor = 1.0 if args.scheduler == "constant" else 0.0
+    if not math.isfinite(minimum_lr_factor) or not 0 <= minimum_lr_factor <= 1:
+        raise WorkflowError("minimum LR factor must be between zero and one")
+    if args.scheduler == "constant" and minimum_lr_factor != 1:
+        raise WorkflowError("constant scheduler requires minimum LR factor 1")
+    rollback = getattr(args, "loss_spike_rollback", None)
+    if rollback is None:
+        rollback = 10.0 if args.training_mode == "peft" else 0.0
+    if not math.isfinite(rollback) or rollback < 0:
+        raise WorkflowError("loss-spike rollback factor must be nonnegative; zero disables it")
     lora: dict[str, Any] | None = None
     if args.training_mode == "peft":
         missing = [name for name, value in (("rank", args.lora_rank), ("alpha", args.lora_alpha)) if not value]
@@ -822,13 +806,15 @@ def _training_contract(args: argparse.Namespace) -> dict[str, Any]:
         raise WorkflowError("dense SFT must not include an active LoRA configuration")
     return {
         "training_mode": args.training_mode,
-        "epochs": 1 if args.run_mode == "smoke" else args.epochs,
+        "epochs": epochs,
         "effective_global_batch": args.effective_global_batch,
         "optimizer": args.optimizer,
         "learning_rate": args.learning_rate,
         "optimizer_epsilon": args.optimizer_epsilon,
         "scheduler": args.scheduler,
         "warmup": args.warmup,
+        "minimum_lr_factor": minimum_lr_factor,
+        "loss_spike_rollback": rollback,
         "weight_decay": args.weight_decay,
         "gradient_clip": args.gradient_clip,
         "precision": args.precision,
@@ -945,7 +931,6 @@ def _framework_spec(
         },
         "optimizer": {
             "betas": [0.9, 0.999],
-            "eps": args.optimizer_epsilon,
             "fused": True,
             "lr": args.learning_rate,
             "weight_decay": args.weight_decay,
@@ -959,10 +944,10 @@ def _framework_spec(
         "scheduler": {
             "cycle_lengths": [steps * epochs],
             "f_max": [1.0],
-            "f_min": [1.0 if args.scheduler == "constant" else 0.0],
+            "f_min": [contract["minimum_lr_factor"]],
             "f_start": [0.0 if args.warmup else 1.0],
             "verbosity_interval": 0,
-            "warm_up_steps": [steps * args.warmup],
+            "warm_up_steps": [math.ceil(steps * args.warmup)],
         },
         "trainer": {
             "distributed_parallelism": "fsdp",
@@ -979,6 +964,10 @@ def _framework_spec(
             "callbacks": {
                 "compile_tokenizer": {"compile_after_iterations": 3, "enabled": False},
                 "grad_clip": {"clip_norm": args.gradient_clip, "force_finite": False},
+                "loss_spike_rollback": {
+                    "enabled": bool(contract["loss_spike_rollback"]),
+                    "grad_norm_factor": contract["loss_spike_rollback"] or 10.0,
+                },
                 "workflow_status": {
                     "enabled": True,
                     "experiment_name": args.experiment_id,
@@ -1178,7 +1167,6 @@ def _framework_video_runtime(
 
 def _env(
     args: argparse.Namespace,
-    backend: str,
     prepared_model: str,
     train_annotations: Sequence[str],
     train_media: Sequence[str],
@@ -1203,8 +1191,6 @@ def _env(
         "COSMOS_API_RESULTS_DIR": args.container_results_dir,
         "COSMOS_STATUS_FILE": status_path,
     }
-    if args.video_override_map:
-        common["COSMOS_VIDEO_OVERRIDE_MAP"] = _containerize(args, args.video_override_map)
     if not framework_video_runtime:
         raise WorkflowError("Cosmos Framework video runtime was not resolved")
     framework_train_media = list(train_media) * len(train_annotations) if len(train_media) == 1 else list(train_media)
@@ -1239,8 +1225,6 @@ def _env(
             "COSMOS_VIDEO_VAL_MEDIA": val_media[0],
             "COSMOS_VIDEO_VAL_MEDIA_ROOTS": json.dumps(framework_val_media),
             "COSMOS_VIDEO_NUM_FRAMES": str(args.frames),
-            "COSMOS_VIDEO_FRAME_WIDTH": str(resolved_profile["frame_width"]),
-            "COSMOS_VIDEO_FRAME_HEIGHT": str(resolved_profile["frame_height"]),
             "COSMOS_VIDEO_SYSTEM_PROMPT": args.system_prompt,
             "COSMOS_VIDEO_CACHE_SIZE": str(framework_video_runtime["video_cache_size"]),
             "COSMOS_FRAMEWORK_SFT_PROCESS_THREADS": str(framework_video_runtime["sft_process_threads"]),
@@ -1277,7 +1261,7 @@ def _env(
     return common
 
 
-def _command(args: argparse.Namespace, backend: str) -> str:
+def _command(args: argparse.Namespace) -> str:
     parts = [
         "/workspace/.venv/bin/torchrun",
         f"--nproc_per_node={args.gpus_per_node}",
@@ -1287,13 +1271,18 @@ def _command(args: argparse.Namespace, backend: str) -> str:
         "--master_port=${MASTER_PORT:-29500}",
         "-m",
         "cosmos_framework.scripts.train",
-        f"--sft-toml={args.container_spec_path}",
+        f"--sft-toml={shlex.quote(args.container_spec_path)}",
         "--",
+        f"optimizer={'adamw' if args.optimizer == 'AdamW' else 'fusedadamw'}",
+        f"scheduler={'lambdacosine' if args.scheduler == 'cosine' else 'lambdalinear'}",
+        # VLM TOML translation intentionally skips eps; the native factory accepts
+        # it through a Hydra override (the VLM group does not declare the field).
+        f"++optimizer.eps={args.optimizer_epsilon}",
     ]
     return " ".join(parts)
 
 
-def _source_commits(args: argparse.Namespace, backend: str) -> dict[str, str]:
+def _source_commits(args: argparse.Namespace) -> dict[str, str]:
     required = {"cosmos-framework": args.cosmos_framework_commit}
     missing = [key for key, value in required.items() if not re.fullmatch(r"[0-9a-fA-F]{40}", value or "")]
     if missing:
@@ -1301,18 +1290,12 @@ def _source_commits(args: argparse.Namespace, backend: str) -> dict[str, str]:
     return required
 
 
-def _packaged_container_image(backend: str) -> str:
-    """Return the exact backend image owned by the shared skill metadata."""
-    skill_info = load_yaml(SKILL_INFO)
-    declarations = skill_info.get("backend_contracts", {})
-    declaration = declarations.get(backend) if isinstance(declarations, Mapping) else None
-    configured = declaration.get("container_image") if isinstance(declaration, Mapping) else None
+def _packaged_container_image() -> str:
+    """Read the model image from the canonical action metadata."""
+    configured = load_yaml(SKILL_INFO).get("container_image")
     if isinstance(configured, str) and configured.strip():
         return configured.strip()
-    raise WorkflowError(
-        f"{backend} has no packaged container image in {SKILL_INFO}; this is a skill-package defect, "
-        "not a request for source repositories or build provenance"
-    )
+    raise WorkflowError(f"missing container_image in {SKILL_INFO}")
 
 
 def _sqsh_name_for_image(image: str) -> str:
@@ -1341,7 +1324,7 @@ def _enroot_image_reference(image: str) -> str:
     return f"docker://{registry}#{repository}"
 
 
-def _resolve_image_runtime_inputs(args: argparse.Namespace, backend: str) -> None:
+def _resolve_image_runtime_inputs(args: argparse.Namespace) -> None:
     """Resolve runtime artifacts without turning ordinary runs into builds."""
     if not hasattr(args, "image_tag_was_supplied"):
         args.image_tag_was_supplied = bool(args.image_tag)
@@ -1361,10 +1344,10 @@ def _resolve_image_runtime_inputs(args: argparse.Namespace, backend: str) -> Non
             args.image_tag = args.sqsh_path
     elif mode == "packaged-image":
         if not args.image_tag:
-            args.image_tag = _packaged_container_image(backend)
+            args.image_tag = _packaged_container_image()
         if args.platform == "slurm" and not args.sqsh_path:
             if not args.sqsh_cache_dir:
-                raise WorkflowError("sqsh_cache_dir is required to materialize the packaged backend image on SLURM")
+                raise WorkflowError("sqsh_cache_dir is required to materialize the packaged image on SLURM")
             args.sqsh_path = str(Path(args.sqsh_cache_dir).expanduser() / _sqsh_name_for_image(args.image_tag))
     elif mode == "source-build":
         # The source-build planner performs the strict repository and image
@@ -1377,13 +1360,12 @@ def _resolve_image_runtime_inputs(args: argparse.Namespace, backend: str) -> Non
 
 def _runtime_image_plan(
     args: argparse.Namespace,
-    backend: str,
     remote_inspection: Mapping[str, Any] | None,
 ) -> dict[str, Any]:
     mode = args.image_runtime_mode
     if mode == "source-build":
-        commits = _source_commits(args, backend)
-        return _source_build_image_plan(args, backend, commits)
+        commits = _source_commits(args)
+        return _source_build_image_plan(args, commits)
 
     remote_paths = remote_inspection.get("runtime_paths", {}) if remote_inspection else {}
     sqsh_identity = remote_paths.get("sqsh_path") if args.sqsh_path else None
@@ -1410,7 +1392,7 @@ def _runtime_image_plan(
             if mode == "existing-sqsh"
             else "explicit_image_tag"
             if getattr(args, "image_tag_was_supplied", False)
-            else "packaged_backend_default"
+            else "packaged_image"
         ),
         "dockerfile": None,
         "build_context": None,
@@ -1428,7 +1410,7 @@ def _runtime_image_plan(
             "exists": sqsh_exists,
             "conversion_required": conversion_required,
             "command": conversion_command,
-            "consumer": "cosmos-run-on-slurm" if args.platform == "slurm" else None,
+            "consumer": "slurm" if args.platform == "slurm" else None,
             "verification": (
                 "verify the exact user-supplied SQSH is compute-node-readable; no source or checksum gate"
                 if mode == "existing-sqsh"
@@ -1438,16 +1420,14 @@ def _runtime_image_plan(
     }
 
 
-def _source_build_image_plan(args: argparse.Namespace, backend: str, commits: Mapping[str, str]) -> dict[str, Any]:
+def _source_build_image_plan(args: argparse.Namespace, commits: Mapping[str, str]) -> dict[str, Any]:
     framework = path_identity(args.cosmos_framework_repo)
-    framework_tree = args.framework_tree or (args.native_tree)
+    framework_tree = args.framework_tree
     trees = {"cosmos-framework": framework_tree}
     repositories = {"cosmos-framework": framework}
     base_image = args.cosmos_framework_base_image
     if not args.image_tag or not args.build_timestamp or not base_image:
-        raise WorkflowError("image_tag, build_timestamp, and a backend base image are required")
-    if "/tao/" in base_image or "tao-toolkit" in base_image:
-        raise WorkflowError("select an independent CUDA/PyTorch base image")
+        raise WorkflowError("image_tag, build_timestamp, and a base image are required")
     dockerfile = "Dockerfile"
     build_args = {
         "BASE_IMAGE": base_image,
@@ -1490,7 +1470,7 @@ def _source_build_image_plan(args: argparse.Namespace, backend: str, commits: Ma
     }
 
 
-_MODEL_PREPARATION_IMAGE_DIGEST_ENV = "COSMOS_COSMOS_PREPARATION_IMAGE_DIGEST"
+_MODEL_PREPARATION_IMAGE_DIGEST_ENV = "COSMOS_PREPARATION_IMAGE_DIGEST"
 
 
 def _model_preparation_command_with_digest(command: Sequence[str]) -> str:
@@ -1540,7 +1520,6 @@ def _docker_model_preparation_command(command: Sequence[str], preparation_image:
 def _model_preparation(
     args: argparse.Namespace,
     model: Mapping[str, Any],
-    backend: str,
 ) -> tuple[str, dict[str, Any]]:
     supplied_format = args.base_model_format
     detected = str(model.get("format") or "unknown")
@@ -1599,6 +1578,22 @@ def _model_preparation(
     output = str((Path(args.checkpoint_dir).expanduser() / "prepared" / model["fingerprint"][:16]).resolve())
     source_download_value = str(model.get("revision_resolution", {}).get("repo_id") or args.base_model_path_or_uri)
     if supplied_format in {"qwen3_vl", "cosmos3_edge"}:
+        snapshot_action = None
+        if args.platform == "slurm":
+            output_container = _containerize(args, output)
+            snapshot_code = (
+                "from huggingface_hub import snapshot_download; "
+                f"snapshot_download({source_download_value!r}, revision={args.base_model_revision!r}, "
+                f"local_dir={output_container!r}, cache_dir={args.container_cache_dir + '/huggingface'!r})"
+            )
+            snapshot_action = {
+                "consumer": "slurm",
+                "verbs": ["submit", "status", "logs", "cancel"],
+                "execution": "first_step_inside_requested_training_allocation",
+                "container_image": args.sqsh_path,
+                "container_command": "python -c " + shlex.quote(snapshot_code),
+                "output_container_path": output_container,
+            }
         command = " ".join(
             [
                 "docker run --rm --entrypoint python",
@@ -1621,7 +1616,10 @@ def _model_preparation(
             "required": True,
             "kind": "immutable_public_checkpoint_snapshot",
             "output": path_identity(output, required=False),
-            "command": command,
+            "command": command if args.platform == "docker" else None,
+            "platform_action": snapshot_action,
+            "execution_platform": args.platform,
+            "preparation_sqsh_path": args.sqsh_path if args.platform == "slurm" else None,
             "provenance": "fingerprint model/tokenizer/processor after download; do not modify checkpoint files",
             "runtime_model_source": "prepared_checkpoint_output",
         }
@@ -1656,8 +1654,6 @@ def _model_preparation(
         args.cache_dir,
         "--runtime-image",
         preparation_image,
-        "--backend",
-        backend,
     ]
     if args.base_model_revision:
         command.extend(["--base-model-revision", args.base_model_revision])
@@ -1705,8 +1701,6 @@ def _model_preparation(
             args.container_cache_dir,
             "--runtime-image",
             preparation_sqsh,
-            "--backend",
-            backend,
         ]
         if args.base_model_revision:
             container_command.extend(["--base-model-revision", args.base_model_revision])
@@ -1718,7 +1712,7 @@ def _model_preparation(
                 ]
             )
         platform_action = {
-            "consumer": "cosmos-run-on-slurm",
+            "consumer": "slurm",
             "verbs": ["submit", "status", "logs", "cancel"],
             "execution": "first_step_inside_requested_training_allocation",
             "container_image": preparation_sqsh,
@@ -1739,14 +1733,14 @@ def _model_preparation(
         "provenance": "cosmos_conversion_provenance.json plus exact tensor/config validation",
         "runtime_model_source": "prepared_checkpoint_output",
         "conversion_notice_required": True,
-        "conversion_owner": backend,
+        "converter": "cosmos_framework.scripts.convert_model_to_vlm_safetensors",
         "preparation_image": preparation_image,
         "preparation_sqsh_path": preparation_sqsh or None,
         "execution_platform": args.platform,
         "execution_contract": (
-            f"cosmos-run-on-slurm submit/status/logs/cancel with Pyxis and the selected {backend} SQSH"
+            "SLURM submit/status/logs/cancel with Pyxis and the selected SQSH"
             if args.platform == "slurm"
-            else f"cosmos-run-on-docker submit/status/logs/cancel with the selected {backend} image"
+            else "Docker submit/status/logs/cancel with the selected image"
         ),
         "platform_action": platform_action,
     }
@@ -1754,14 +1748,11 @@ def _model_preparation(
 
 def _preflight_contract(
     args: argparse.Namespace,
-    backend: str,
     plan_image: Mapping[str, Any],
     prepared_model: str,
     representative_media: str,
-    decoder_artifact: Mapping[str, Any] | None = None,
     framework_video_runtime: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
-    decoder_artifact = decoder_artifact or {"enabled": False}
     python = "/workspace/.venv/bin/python"
     imports = [
         "import torch",
@@ -1785,7 +1776,7 @@ def _preflight_contract(
             "from cosmos_framework.data.generator.dataflow import ContiguousBatcher",
             "from cosmos_framework.data.generator.dataflow import CosmosDataLoader",
             "from cosmos_framework.configs.base.reasoner.experiment.video_sft import VideoSFTProcessor",
-            "import importlib; framework_video_recipe=importlib.import_module('cosmos_framework.configs.base.reasoner.experiment.' + 'w' + 'ts_vlm')",
+            "import importlib; framework_video_recipe=importlib.import_module(VideoSFTProcessor.__module__)",
             "import cosmos_framework.model.generator.hf_model as framework_hf_model",
             "import cosmos_framework.data.generator.dataflow.loader as framework_dataflow_loader",
             "from cosmos_framework.scripts.export_vlm_dcp import export_vlm_dcp",
@@ -1854,14 +1845,6 @@ def _preflight_contract(
         ]
     )
     container_checks = [f"{python} -c {shlex.quote('; '.join(imports))}"]
-    if decoder_artifact["enabled"]:
-        validator = [
-            python,
-            "-m",
-            "cosmos_framework.inference.reasoner.validate_video_override_artifacts",
-            *decoder_artifact["validation_arguments"],
-        ]
-        container_checks.append(shlex.join(validator))
     container_check = " && ".join(container_checks)
     path_values = [
         prepared_model,
@@ -1946,70 +1929,6 @@ def _preflight_contract(
             "shared Omni preparation entrypoint and pinned native Framework converter",
             "384 GiB free result/checkpoint space",
         ],
-    }
-
-
-def _decoder_artifact_plan(
-    args: argparse.Namespace,
-    *,
-    backend: str,
-    model: Mapping[str, Any],
-    model_profile: Mapping[str, Any],
-    train_data: Mapping[str, Any],
-    val_data: Mapping[str, Any],
-) -> dict[str, Any]:
-    if args.video_override_max_macroblocks < 1 or args.video_override_workers < 1:
-        raise WorkflowError("video_override_max_macroblocks and video_override_workers must be positive")
-    supplied = (
-        bool(args.video_override_map),
-        bool(args.video_override_manifest),
-        bool(args.video_override_fingerprint),
-    )
-    if any(supplied) and not all(supplied):
-        raise WorkflowError(
-            "video_override_map, video_override_manifest, and video_override_fingerprint must be supplied together"
-        )
-    if args.video_override_fingerprint and not re.fullmatch(r"[0-9a-f]{64}", args.video_override_fingerprint):
-        raise WorkflowError("video_override_fingerprint must be a lowercase SHA256 digest")
-
-    dataset_fingerprint = stable_hash(
-        {
-            "train": train_data["dataset_fingerprint"],
-            "validation": val_data["dataset_fingerprint"],
-        }
-    )
-    processor_fingerprint = stable_hash(
-        {
-            "revision": args.processor_revision,
-            "profile": model_profile,
-        }
-    )
-    if any(supplied):
-        raise WorkflowError("external video override artifacts must not be supplied to cosmos-framework")
-    return {
-        "required": False,
-        "enabled": False,
-        "path": None,
-        "manifest": None,
-        "sha256": None,
-        "input_fingerprints": {
-            "dataset": dataset_fingerprint,
-            "model": model["fingerprint"],
-            "processor": processor_fingerprint,
-        },
-        "policy": {
-            "macroblock_scan": False,
-            "force_all_validation_media": False,
-            "forced_runtime_sources": [],
-            "gpu_random_access_validation_required": False,
-            "selection_basis": "framework_native_torchcodec_cuda_on_demand",
-        },
-        "preparation_module": None,
-        "preparation_arguments": [],
-        "preparation_command": None,
-        "validation_module": None,
-        "validation_arguments": [],
-        "validation_command": None,
     }
 
 
@@ -2208,22 +2127,8 @@ def build_plan(
         if args.platform != "docker":
             raise WorkflowError("--gpus-per-node is required when the target platform is not docker")
     args.docker_gpu_ids = docker_gpu_ids
-    try:
-        runtime_model_hint = resolve_model_name(args.model, args.base_model_path_or_uri)
-    except WorkflowError:
-        if args.base_model_format in {"qwen3_vl", "cosmos3_omni"}:
-            runtime_model_hint = "nvidia/Cosmos3-Nano"
-        elif args.base_model_format == "cosmos3_edge":
-            runtime_model_hint = "nvidia/Cosmos3-Edge"
-        else:
-            raise
-    runtime_backend, _ = select_backend(
-        model=runtime_model_hint,
-        action=args.action,
-        backend=args.backend,
-        workload=args.workload,
-    )
-    _resolve_image_runtime_inputs(args, runtime_backend)
+    validate_action(args.action)
+    _resolve_image_runtime_inputs(args)
     revision_resolution = resolve_model_revisions(args)
     if args.platform == "slurm":
         if not args.results_dir:
@@ -2240,20 +2145,9 @@ def build_plan(
     node_exclusions = _slurm_node_exclusion_contract(args)
     inspected_model = remote_inspection["model"] if remote_inspection else None
     args.model = resolve_model_name(args.model, args.base_model_path_or_uri, inspected_model)
-    backend, reason = select_backend(
-        model=args.model,
-        action=args.action,
-        backend=args.backend,
-        workload=args.workload,
-    )
-    if backend != runtime_backend:
-        raise WorkflowError(
-            "backend changed after input inspection; refusing to reuse a runtime selected for "
-            f"{runtime_backend} as {backend}"
-        )
     if args.action != "train":
         raise WorkflowError(
-            "this planner currently materializes training; use the backend action contract for non-train actions"
+            "this planner currently materializes training; use the model action contract for non-train actions"
         )
     tier = model_tier(args.model)
     if args.train_sample_limit < 0 or args.validation_sample_limit < 0:
@@ -2290,7 +2184,7 @@ def build_plan(
     revision_resolution["vlm_architecture_model"] = architecture_resolution
     revision_resolution["vlm_architecture_source"] = architecture_source
     model["vlm_architecture_revision_resolution"] = architecture_resolution
-    prepared_model, model_preparation = _model_preparation(args, model, backend)
+    prepared_model, model_preparation = _model_preparation(args, model)
     model_preparation["vlm_architecture_revision_resolution"] = revision_resolution["vlm_architecture_model"]
     model_preparation["vlm_architecture_source"] = revision_resolution["vlm_architecture_source"]
     train_annotations, train_media = _annotation_args(args, "train")
@@ -2318,7 +2212,7 @@ def build_plan(
     args.dataset_family = train_data["dataset_family"]
     if args.dataset_family == "video_conversation" and (len(train_annotations) != 1 or len(val_annotations) != 1):
         raise WorkflowError("video_conversation requires exactly one annotation file per split")
-    model_profile = resolve_model_profile(args, tier, backend, train_data, val_data)
+    model_profile = resolve_model_profile(args, tier, train_data, val_data)
     args.frames = model_profile["frames"]
     args.sequence_length = model_profile["sequence_length"]
     assert_no_overlap(train_data, val_data)
@@ -2351,7 +2245,7 @@ def build_plan(
             "optimizer_updates": math.ceil(exposed_train_samples / args.effective_global_batch) * contract["epochs"],
         }
     )
-    image = _runtime_image_plan(args, backend, remote_inspection)
+    image = _runtime_image_plan(args, remote_inspection)
     framework_module_prefix = getattr(args, "framework_baked_overlay_module_prefix", "")
     if framework_module_prefix:
         module_prefix = Path(framework_module_prefix)
@@ -2363,14 +2257,6 @@ def build_plan(
         else str(model_preparation.get("selected_input_model_type") or "unknown")
     )
     framework_video_runtime = _framework_video_runtime(args, train_data, val_data, framework_runtime_model_type)
-    decoder_artifact = _decoder_artifact_plan(
-        args,
-        backend=backend,
-        model=model,
-        model_profile=model_profile,
-        train_data=train_data,
-        val_data=val_data,
-    )
     prepared_model_container = _containerize(args, prepared_model)
     train_annotations_container = [_containerize(args, value) for value in train_annotations]
     train_media_container = [_containerize(args, value) for value in train_media]
@@ -2391,7 +2277,6 @@ def build_plan(
     )
     environment = _env(
         args,
-        backend,
         prepared_model_container,
         train_annotations_container,
         train_media_container,
@@ -2400,17 +2285,7 @@ def build_plan(
         framework_video_runtime,
         model_profile,
     )
-    command = _command(args, backend)
-    if decoder_artifact["enabled"]:
-        python = "/workspace/.venv/bin/python"
-        runtime_validation = [
-            python,
-            "-m",
-            decoder_artifact["validation_module"],
-            *decoder_artifact["validation_arguments"],
-            "--skip-file-hashes",
-        ]
-        command = f"{shlex.join(runtime_validation)} &&\n{command}"
+    command = _command(args)
     remote_paths = remote_inspection.get("runtime_paths", {}) if remote_inspection else {}
 
     def runtime_path(label: str, value: str, *, required: bool = True) -> dict[str, Any]:
@@ -2449,17 +2324,13 @@ def build_plan(
         "model_name": args.model,
         "model": model,
         "action": args.action,
-        "workflow": args.workload,
         "dataset_family": args.dataset_family,
-        "backend": backend,
         "model_preparation": model_preparation,
         "prepared_model_container_path": prepared_model_container,
-        "backend_selection_reason": reason,
-        "backend_contract": str(BACKEND_FILES[backend]),
+        "training_contract": str(TRAINING_CONTRACT),
         "run_mode": args.run_mode,
         "training": contract,
         "processor_profile": model_profile,
-        "decoder_artifact": decoder_artifact,
         "framework_video_runtime": framework_video_runtime,
         "datasets": {"train": train_data, "validation": val_data},
         "input_frame": {
@@ -2555,11 +2426,9 @@ def build_plan(
     representative_media = _containerize(args, train_data["media_manifest"][0]["path"])
     plan["preflight"] = _preflight_contract(
         args,
-        backend,
         image,
         prepared_model,
         representative_media,
-        decoder_artifact,
         framework_video_runtime,
     )
     return plan
@@ -2580,7 +2449,7 @@ def write_spec(
     materializations: list[dict[str, Any]] = []
 
     preparation_action = plan.get("model_preparation", {}).get("platform_action")
-    if isinstance(preparation_action, Mapping):
+    if isinstance(preparation_action, Mapping) and preparation_action.get("helper_source_path"):
         helper_source = Path(str(preparation_action["helper_source_path"]))
         helper_target = Path(str(preparation_action["helper_host_path"]))
         helper_content = helper_source.read_text(encoding="utf-8")
@@ -2677,7 +2546,7 @@ def verify_model_preparation_helper(
     plan: Mapping[str, Any],
 ) -> None:
     action = plan.get("model_preparation", {}).get("platform_action")
-    if not isinstance(action, Mapping):
+    if not isinstance(action, Mapping) or not action.get("helper_source_path"):
         return
     path = str(action.get("helper_host_path") or "")
     expected = str(action.get("helper_sha256") or "")
@@ -2784,8 +2653,6 @@ def load_plan_artifact(
     request = plan.get("planner_request")
     if not isinstance(request, dict) or not request:
         raise WorkflowError("approved plan artifact has no resolved planner request")
-    if plan.get("backend") != "cosmos-framework" or request.get("backend") not in {"auto", "cosmos-framework"}:
-        raise WorkflowError("approved plan must target the repository-owned cosmos-framework runtime")
     args = argparse.Namespace(**copy.deepcopy(request))
     args.verb = current_args.verb
     args.format = current_args.format
@@ -2903,9 +2770,7 @@ def build_retry_plan(args: argparse.Namespace) -> dict[str, object]:
         raise WorkflowError("prior plan has an unsupported artifact schema")
     if not expected or expected != actual:
         raise WorkflowError(f"prior plan checksum mismatch: expected {expected or '<missing>'}, found {actual}")
-    if prior.get("action") != "train" or prior.get("backend") not in {
-        "cosmos-framework",
-    }:
+    if prior.get("action") != "train":
         raise WorkflowError("retry preparation requires a sealed Cosmos training plan")
 
     request = copy.deepcopy(prior.get("planner_request"))
@@ -2977,7 +2842,6 @@ def build_retry_plan(args: argparse.Namespace) -> dict[str, object]:
     return {
         "schema_version": 1,
         "job_id": args.job_id,
-        "backend": plan["backend"],
         "output": str(args.output.expanduser().resolve()),
         "config": plan["config"],
         "node_exclusions": plan["slurm_node_exclusions"],
@@ -3016,11 +2880,6 @@ def render_slurm(args: argparse.Namespace, plan: Mapping[str, Any]) -> str:
     if args.use_requeue:
         raise WorkflowError("requeue is disabled by default and is not validated for Cosmos training")
     runtime_environment = _render_environment(args, plan)
-    if plan["decoder_artifact"]["required"] and not plan["decoder_artifact"]["enabled"]:
-        raise WorkflowError(
-            "Cosmos training requires a complete fingerprinted decoder compatibility "
-            "artifact for the resolved hardware video profile"
-        )
     try:
         timeout_hours, timeout_minutes, timeout_seconds = (int(value) for value in args.timeout.split(":"))
     except (ValueError, AttributeError) as exc:
@@ -3065,7 +2924,7 @@ def render_slurm(args: argparse.Namespace, plan: Mapping[str, Any]) -> str:
             [
                 "set -Eeuo pipefail",
                 preparation_native,
-                'echo "COSMOS_COSMOS_MODEL_PREPARATION_OK"',
+                'echo "COSMOS_MODEL_PREPARATION_OK"',
             ]
         )
         preparation_srun = " ".join(
@@ -3100,7 +2959,7 @@ def render_slurm(args: argparse.Namespace, plan: Mapping[str, Any]) -> str:
             '  echo "Cosmos packaged runtime startup check failed with exit code $runtime_preflight_rc" >&2',
             '  exit "$runtime_preflight_rc"',
             "fi",
-            'echo "COSMOS_COSMOS_PACKAGED_RUNTIME_STARTUP_OK"',
+            'echo "COSMOS_PACKAGED_RUNTIME_STARTUP_OK"',
         ]
     wrapped = "\n".join(
         [
@@ -3239,7 +3098,6 @@ def initial_metadata(args: argparse.Namespace, plan: Mapping[str, Any]) -> dict[
         "experiment_id": plan["experiment_id"],
         "dataset": plan["dataset_family"],
         "training_mode": plan["training"]["training_mode"],
-        "backend": plan["backend"],
         "cosmos_job_id": args.cosmos_job_id,
         "slurm": {
             "job_id": None,
@@ -3390,12 +3248,6 @@ def local_preflight(
                         future.result()
                     except WorkflowError as exc:
                         errors.append(str(exc))
-    decoder_artifact = plan["decoder_artifact"]
-    if decoder_artifact["required"] and not decoder_artifact["enabled"]:
-        errors.append(
-            "the resolved hardware video profile requires video_override_map, "
-            "video_override_manifest, and video_override_fingerprint"
-        )
 
     def check_repository(name: str, identity: Mapping[str, Any], commit: str, tree: str) -> None:
         if not identity.get("exists") or identity.get("kind") != "directory":
@@ -3429,7 +3281,7 @@ def local_preflight(
         elif dirty.stdout.strip():
             errors.append(f"repository must be clean before image build: {name}")
 
-    # Ordinary runtime selection consumes packaged code only. Host worktrees
+    # Prebuilt images supply the packaged code. Host worktrees
     # are neither mounted nor read, so source provenance is checked exclusively
     # for an explicit source-build plan.
     sqsh_exists = False
@@ -3495,14 +3347,14 @@ def local_preflight(
             elif image.get("sqsh", {}).get("conversion_required"):
                 warnings.append(
                     "the packaged image SQSH is absent and must be converted once through "
-                    "cosmos-run-on-slurm before the GPU job is submitted"
+                    "slurm before the GPU job is submitted"
                 )
             else:
                 errors.append("planned SQSH is inaccessible on the target compute frame")
         if preparation_sqsh and not preparation_sqsh.endswith(".sqsh"):
             errors.append("model_preparation_sqsh_path must name a .sqsh artifact")
         elif preparation_sqsh and not preparation_sqsh_exists:
-            errors.append("selected backend model-preparation SQSH is inaccessible")
+            errors.append("model-preparation SQSH is inaccessible")
         elif preparation_sqsh and plan.get("model_preparation", {}).get("kind") == "cosmos3_omni_to_exact_qwen3_vl":
             inspection_host = verified_host or args.slurm_host[0]
             try:
@@ -3517,7 +3369,7 @@ def local_preflight(
             else:
                 if missing_entries:
                     errors.append(
-                        "selected backend SQSH lacks the packaged Cosmos3 Omni "
+                        "selected SQSH lacks the packaged Cosmos3 Omni "
                         "preparation contract; rebuild it from this Framework repository: " + ", ".join(missing_entries)
                     )
         if not args.container_mount:
@@ -3548,18 +3400,18 @@ def local_preflight(
         "ok": not errors,
         "errors": errors,
         "warnings": warnings,
-        "backend": plan["backend"],
     }
 
 
 def add_arguments(parser: argparse.ArgumentParser, *, require_inputs: bool) -> None:
     parser.add_argument("--model", default="auto")
     parser.add_argument("--experiment-id", default="")
-    parser.add_argument("--action", choices=sorted(SUPPORTED_ACTIONS), default="train")
+    actions = load_yaml(SKILL_INFO)["actions"]
     parser.add_argument(
-        "--backend", choices=("auto", "cosmos-framework"), default="cosmos-framework", help=argparse.SUPPRESS
+        "--action",
+        choices=sorted(name for name, contract in actions.items() if contract.get("supported", True)),
+        default="train",
     )
-    parser.add_argument("--workload", choices=("training",), default="training")
     parser.add_argument(
         "--dataset-family",
         choices=("auto", "video_conversation", "task_aware_video_reasoning"),
@@ -3586,16 +3438,6 @@ def add_arguments(parser: argparse.ArgumentParser, *, require_inputs: bool) -> N
     )
     parser.add_argument(
         "--vlm-architecture-model-revision",
-        default="",
-        help=argparse.SUPPRESS,
-    )
-    parser.add_argument(
-        "--model-preparation-image-tag",
-        default="",
-        help=argparse.SUPPRESS,
-    )
-    parser.add_argument(
-        "--model-preparation-sqsh-path",
         default="",
         help=argparse.SUPPRESS,
     )
@@ -3725,11 +3567,13 @@ def add_arguments(parser: argparse.ArgumentParser, *, require_inputs: bool) -> N
         ),
     )
     parser.add_argument("--validation-batch-size", type=int, default=1)
-    parser.add_argument("--optimizer", default="AdamW")
+    parser.add_argument("--optimizer", choices=("AdamW", "FusedAdam"), default="AdamW")
     parser.add_argument("--learning-rate", type=float, default=1e-5)
     parser.add_argument("--optimizer-epsilon", type=float, default=1e-8)
-    parser.add_argument("--scheduler", default="linear")
-    parser.add_argument("--warmup", type=float, default=0)
+    parser.add_argument("--scheduler", choices=("linear", "cosine", "constant"), default="linear")
+    parser.add_argument(
+        "--warmup", type=float, default=0, help="Warmup in epochs, rounded up to whole optimizer steps."
+    )
     parser.add_argument("--minimum-lr-factor", type=float, default=None)
     parser.add_argument("--weight-decay", type=float, default=0.01)
     parser.add_argument("--gradient-clip", type=float, default=1.0)
@@ -3738,8 +3582,8 @@ def add_arguments(parser: argparse.ArgumentParser, *, require_inputs: bool) -> N
         type=float,
         default=None,
         help=(
-            "Rewind to the last healthy step when the gradient norm or loss "
-            "exceeds this multiple of its rolling median. Omit to enable it at "
+            "Rewind past a spike when gradient norm exceeds this multiple of its "
+            "rolling median; zero disables the guard. Omit to enable it at "
             "10.0 for PEFT and leave it off for dense training, where the "
             "snapshots would not fit."
         ),
@@ -3751,17 +3595,9 @@ def add_arguments(parser: argparse.ArgumentParser, *, require_inputs: bool) -> N
     parser.add_argument("--video-max-pixels", type=int, default=0)
     parser.add_argument("--video-frame-width", type=int, default=0)
     parser.add_argument("--video-frame-height", type=int, default=0)
-    parser.add_argument("--video-override-map", default="")
-    parser.add_argument("--video-override-manifest", default="")
-    parser.add_argument("--video-override-fingerprint", default="")
-    parser.add_argument("--video-override-force-video", action="append", default=[])
-    parser.add_argument("--video-override-max-macroblocks", type=int, default=8192)
-    parser.add_argument("--video-override-workers", type=int, default=16)
     parser.add_argument("--system-prompt", default="")
     parser.add_argument("--attention-implementation", default="auto")
-    parser.add_argument("--processor-revision", default="packaged")
     parser.add_argument("--run-mode", choices=("smoke", "diagnostic", "full"), default="full")
-    parser.add_argument("--skip-smoke", action="store_true")
     parser.add_argument("--smoke-train-samples", type=int, default=16)
     parser.add_argument("--smoke-validation-samples", type=int, default=8)
     parser.add_argument("--train-sample-limit", type=int, default=0)
@@ -3776,14 +3612,12 @@ def add_arguments(parser: argparse.ArgumentParser, *, require_inputs: bool) -> N
         ),
     )
     parser.add_argument("--async-checkpoint", action="store_true")
-    parser.add_argument("--max-checkpoints", type=int, default=2)
     parser.add_argument("--results-dir", default="")
     parser.add_argument("--checkpoint-dir", default="")
     parser.add_argument("--cache-dir", default="")
     parser.add_argument("--sqsh-cache-dir", default="")
     parser.add_argument("--ssh-key-path", default="")
     parser.add_argument("--cosmos-framework-repo", default="")
-    parser.add_argument("--build-context", default="")
     parser.add_argument("--image-tag", default="")
     parser.add_argument("--sqsh-path", default="")
     parser.add_argument(
@@ -3791,15 +3625,12 @@ def add_arguments(parser: argparse.ArgumentParser, *, require_inputs: bool) -> N
         choices=("auto", "existing-sqsh", "packaged-image", "source-build"),
         default="auto",
         help=(
-            "auto uses an explicitly supplied SLURM SQSH, otherwise the packaged backend image; "
+            "auto uses an explicitly supplied SLURM SQSH, otherwise the packaged image; "
             "source-build is the only mode that requests repository/build provenance"
         ),
     )
-    parser.add_argument("--cosmos-framework-source-repository", default="")
-    parser.add_argument("--cosmos-framework-source-branch", default="")
     parser.add_argument("--cosmos-framework-base-image", default="")
     parser.add_argument("--cosmos-framework-commit", default="")
-    parser.add_argument("--native-tree", default="")
     parser.add_argument("--framework-tree", default="")
     parser.add_argument("--build-timestamp", default="")
     parser.add_argument("--write-spec", default="")
@@ -3927,9 +3758,7 @@ def _text(data: Mapping[str, Any]) -> str:
     return "\n".join(
         [
             "Cosmos launch plan:",
-            f"- backend: {data['backend']}",
-            f"- reason: {data['backend_selection_reason']}",
-            f"- contract: {data['backend_contract']}",
+            f"- training contract: {data['training_contract']}",
         ]
     )
 
@@ -3972,18 +3801,11 @@ def main(argv: list[str] | None = None) -> int:
             result = build_retry_plan(args)
         elif args.verb == "resolve":
             args.model = resolve_model_name(args.model, args.base_model_path_or_uri)
-            backend, reason = select_backend(
-                model=args.model,
-                action=args.action,
-                backend=args.backend,
-                workload=args.workload,
-            )
+            validate_action(args.action)
             result = {
                 "schema_version": 2,
                 "model": args.model,
-                "backend": backend,
-                "backend_selection_reason": reason,
-                "backend_contract": str(BACKEND_FILES[backend]),
+                "training_contract": str(TRAINING_CONTRACT),
             }
         else:
             if args.plan_artifact and args.verb != "plan":

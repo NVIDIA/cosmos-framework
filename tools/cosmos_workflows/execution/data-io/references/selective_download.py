@@ -9,9 +9,7 @@ files by relative path in one or more columns, resolve the *exact* set of
 referenced files and download only those from an S3 source prefix into a local
 staging directory.
 
-This replaces the in-container selective-download logic of the former
-``cosmos_sdk.script_runner`` — host-side, using ``boto3`` directly. There is no
-``cosmos_sdk`` import and no ``fsspec``/``s3fs`` dependency.
+Runs host-side using ``boto3`` directly; no ``fsspec``/``s3fs`` dependency.
 
 Correctness note: a mis-parse here silently drops training samples, so key
 extraction is deterministic and exhaustively unit-tested

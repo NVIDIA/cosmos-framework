@@ -19,7 +19,7 @@ Resolve fields in this order:
 2. Apply a packaged fingerprint-locked evaluator profile when the exact
    annotation bytes match one.
 3. Otherwise inherit exact values from the selected fine-tuning plan.
-4. Run deterministic checkpoint pre-actions owned by the backend.
+4. Prepare and verify the checkpoint with the native Framework exporter.
 5. Ask the user only for fields that remain absent or ambiguous.
 
 Do not use a template value, nearby directory, historical run, checkpoint
@@ -57,7 +57,7 @@ For the original validation split, inherit these without asking again:
   plus precision, seed, and validation batch size;
 - training sequence limit and evaluator tensor-parallel degree (one model replica per rank);
 - task/answer/metric semantics when validation inspection proved them;
-- backend, training mode, base-model identity/fingerprint, and GPU count;
+- training mode, base-model identity/fingerprint, and GPU count;
 - dense versus PEFT behavior and the prepared base model required for native
   Framework export.
 
@@ -126,7 +126,7 @@ training status before consuming a checkpoint.
 
 ## Framework DCP pre-action
 
-When `backend=cosmos-framework`, never pass native DCP directly to the shared
+Prepare native DCP before passing a checkpoint to the
 evaluator and never ask the user to export it. `evaluation_workflow.py` emits a
 `framework_checkpoint_pre_action` entry. Run
 `scripts/framework_checkpoint_action.py plan`, then `prepare` in the clean
@@ -173,12 +173,11 @@ the evaluator child starts. Never invent FPS metadata, rewrite annotations, or s
 decoding.
 
 Use `torchrun` data parallelism according to the resolved GPU count. Keep one
-model replica per rank unless the selected backend contract explicitly
-requires another topology. Full evaluation uses `limit=-1`; the repository
+model replica per rank. Full evaluation uses `limit=-1`; the repository
 evaluator owns its rank-aware outputs and scoring.
 
 The READY evaluation plan contains a validated `spec_bundle`. Its
-`execution` lifecycle owns backend CLI selection, non-secret runtime
+`execution` lifecycle owns the native action command, non-secret runtime
 environment, and Framework in-image capability attestation. It does not add a
 post-evaluation prediction-ID, annotation-envelope, or rank-shard gate after
 the evaluator returns its metric.
@@ -192,7 +191,7 @@ per-rank shards as a complete evaluation.
 Run `scripts/framework_evaluation_image_preflight.py` against a selected
 Framework SQSH before opening/submitting the evaluation record. A missing
 baked Framework preprocessor is an immutable-image incompatibility, not a
-reason to stage source or change runtimes.
+reason to inject source into the image.
 
 ## Completion and results
 

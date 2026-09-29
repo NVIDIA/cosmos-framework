@@ -1,19 +1,19 @@
 # Cosmos Framework reasoner workflows
 
 This guide supports the existing `cosmos3-post-training` and
-`cosmos3-inference` skills. Helpers use the repository-owned Framework runtime
-by default; no backend flag is needed. Foreign runtime requests and plans are
-rejected. Native generator recipes do not require this managed workflow layer.
+`cosmos3-inference` skills. Helpers plan Framework reasoner training,
+checkpoint preparation, and evaluation. Native generator recipes do not require
+this managed workflow layer.
 
 ## Read on demand
 
 - [Data contracts](references/cosmos-data-specs.md): conversation and task-aware annotations.
 - [Training parameters](references/cosmos-reason-parameters.md): native TOML and dense/PEFT settings.
-- [Runtime operations](references/cosmos-backend-operations.md): image, checkpoint, decoder, and distributed contracts.
+- [Runtime operations](references/operations.md): image, checkpoint, decoder, and distributed contracts.
 - [Evaluation](references/cosmos-reason-evaluate.md): sealed-plan inheritance, export, metrics, and completion.
 - [Reproducibility gates](references/cosmos-reproducibility-gates.md): provenance and failure checks.
 - [Single-GPU workflow](references/cosmos-reason-single-gpu-video.md): the same planner with one GPU.
-- [Structured contract](references/skill_info.yaml) and [Framework runtime](references/cosmos-framework-backend.yaml).
+- [Structured contract](references/skill_info.yaml) and [Framework runtime](references/training-contract.yaml).
 
 ## Intake and planning
 
@@ -91,6 +91,20 @@ evaluator-loadable; PEFT exports are merged by the native exporter.
 
 Submit only a checksum-valid `ready=true` plan. Pass its `spec_bundle.execution`
 unchanged to the platform. Native reasoner inference and serving use the same
-verified HF checkpoint handoff. The Framework planner does not advertise a
+verified HF checkpoint handoff. Invoke `cosmos-reasoner-inference` with native
+CLI arguments, not a separate inference TOML:
+
+```bash
+cosmos-reasoner-inference --model_path /checkpoints/verified-hf \
+  --media /data/example.mp4 --type video --prompt "Describe this video." \
+  --num_frames 8 --max_new_tokens 128 --results_dir /results/inference
+```
+
+`--media` accepts an extracted file or directory, not a tar archive. For direct
+native DCP inference outside the managed handoff, the same CLI exposes
+`--config_file`, `--export_dir`, and `--vit_checkpoint_path`. PEFT checkpoints
+are merged during export; do not request an inference-time LoRA merge.
+
+The Framework planner does not advertise a
 validated checkpoint quantization route; do not infer one from the standalone
 quantization command's presence.

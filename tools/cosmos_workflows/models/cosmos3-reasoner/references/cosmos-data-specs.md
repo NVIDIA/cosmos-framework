@@ -11,7 +11,7 @@ have a media field and at least two
 conversation turns. Validation checks the complete manifest, all referenced
 media, unique logical records, nonempty splits, train/validation overlap, and
 record/media fingerprints. A directory name alone is not enough: annotation
-and media mappings must be explicit in the generated backend spec.
+and media mappings must be explicit in the generated plan.
 
 ## Structural family: task-aware video reasoning
 
@@ -24,7 +24,7 @@ Supported task names are `bcq`, `mcq`, `bcq_openended`, `mcq_openended`,
 `open_qa`, `scene_description`, `video_summarization`,
 `temporal_localization`, `temporal_description`, and `causal_linkage`.
 Prompts and response targets come from the versioned task-aware adapter in the
-selected backend runtime. Frame sampling and pixel budgets come from the
+Framework dataset implementation. Frame sampling and pixel budgets come from the
 model/dataset profile or explicit user overrides.
 
 Tasks whose metadata declares `accuracy` or `exact_match_accuracy` participate

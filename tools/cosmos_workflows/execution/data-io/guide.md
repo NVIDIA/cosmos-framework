@@ -6,7 +6,7 @@
 Get data to and from the compute container. Decide the storage tier first —
 under **strategy A (pre-positioned mount) no bytes move at all** — and when a
 fetch is needed, move it **host-side** with `aws`/`s5cmd`/`boto3`/`huggingface-cli`/`ngc`
-directly — no SDK or in-container control runtime. Other platform skills
+directly. Other platform guides
 call this reference to stage inputs before launch and sync outputs after. It never
 launches a container itself. The chosen tier is stamped into the job-record at
 submit.

@@ -4,7 +4,6 @@
 schema_version: 1
 name: cosmos-inference-service
 supported_platforms: [docker, slurm, kubernetes, brev, virtualenv]
-valid_network_arch_config_basenames: [cosmos-reasoner, openai-compatible-vllm]
 model_path_protocols: [local_path, huggingface_model_id]
 services:
   cosmos-reasoner:

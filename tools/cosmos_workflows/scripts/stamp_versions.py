@@ -2,15 +2,15 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Stamp versions.yaml values into skill files, or verify they are in sync.
+"""Stamp container images from versions.yaml, or verify they are in sync.
 
-Skills are standalone: they carry literal container URIs and wheel pins instead
+Resources carry literal container URIs instead
 of resolving ``versions.yaml`` at runtime. Each embedded literal is annotated
 with the versions.yaml key it came from, so this script can re-stamp every
 site on a release bump and CI can verify nothing drifted:
 
-    container_image: cosmos-framework:local  # versions-key: images.containers.pyt
-    export COSMOS_DS_IMAGE=cosmos-framework:local  # versions-key: images.containers.data_services
+    container_image: cosmos-framework:local  # versions-key: images.containers.cosmos_framework
+    export COSMOS_DS_IMAGE=cosmos-framework:local  # versions-key: images.containers.cosmos_framework
 
 Rules enforced:
   * A line carrying ``# versions-key: <dotted.key>`` must contain exactly the
@@ -22,20 +22,19 @@ Rules enforced:
     scan. Formats that cannot carry a trailing comment (Dockerfile ``ARG``
     lines, YAML values consumed verbatim) may put the annotation on the line
     immediately above the pin.
-  * Stray scan: image references with an explicit tag, or nvidia-cosmos-* wheel
-    pins, on lines with neither annotation are reported. ``.json`` files are
+  * Stray scan: registry image references with explicit tags on lines with
+    neither annotation are reported. ``.json`` files are
     exempt (JSON cannot carry annotations; pins there are recorded artifacts,
-    not templates). The 7.1.0 stray backlog is cleared: CI runs
-    ``--check --strict-strays``, so a new unannotated pin fails the pipeline.
+    not templates). Use ``--check --strict-strays`` in CI to reject new pins.
   * Scan scope: model/data/execution/service resources, templates, and scripts (so pins embedded
     in CI helpers and test fixtures are covered too — a stale duplicate there is
     exactly how a marked pin can drift unnoticed). The versions-key tooling
-    itself (``stamp_versions.py``, ``migrate-to-version-keys.py``) is skipped
+    itself (``stamp_versions.py``) is skipped
     because its docstrings document the marker format with example pins.
 
 versions.yaml is parsed with a minimal indentation-based reader (2-space
 indents, scalar leaves) so this script has no third-party dependencies and can
-run in both the GitLab CI image and the Jenkins release pod.
+run without installing the Framework runtime.
 
 Usage:
     scripts/stamp_versions.py               # rewrite marked lines in place
@@ -49,16 +48,13 @@ import argparse
 import os
 import re
 import sys
+from pathlib import Path
 
 MARKER_RE = re.compile(r"(?:#|<!--)\s*versions-key:\s*([A-Za-z0-9_.]+)")
 UNPINNED_RE = re.compile(r"(?:#|<!--)\s*unpinned:\s*\S")
 # An image reference with an explicit tag (registry host / path : tag).
 IMAGE_RE = re.compile(r"[A-Za-z0-9.-]+\.[A-Za-z]{2,}/[A-Za-z0-9_./-]+:[A-Za-z0-9][A-Za-z0-9_.-]*")
 LOCAL_IMAGE_RE = re.compile(r"(?<![A-Za-z0-9_./-])[A-Za-z0-9][A-Za-z0-9_./-]*:[A-Za-z0-9][A-Za-z0-9_.-]*(?!//)")
-# A pinned wheel spec, optionally with extras: name[extra]==1.2.3 / name==1.2.3rc4
-WHEEL_RE = re.compile(r"[A-Za-z0-9._-]+(?:\[[A-Za-z0-9_,-]+\])?==[A-Za-z0-9.]+")
-# nvidia-cosmos-* wheels are the only release-cadenced wheels; strays scan just those.
-STRAY_WHEEL_RE = re.compile(r"nvidia-cosmos-[a-z-]+(?:\[[A-Za-z0-9_,-]+\])?==[A-Za-z0-9.]+")
 # Bare dotted key as the whole value (first-time stamping of key-form fields).
 DOTTED_KEY_VALUE_RE = re.compile(r"^(\s*[A-Za-z_]+:\s*)([A-Za-z0-9_]+(?:\.[A-Za-z0-9_]+)+)(\s*#.*)$")
 
@@ -68,11 +64,12 @@ SCAN_EXTENSIONS = {".md", ".yaml", ".yml", ".sh", ".py", ".config", ".json", ".t
 # and example ``# versions-key:`` comments in its own docstrings. Those examples
 # are not live pins, so scanning them would raise spurious drift/stray reports —
 # skip these files by basename.
-SKIP_BASENAMES = {"stamp_versions.py", "migrate-to-version-keys.py"}
+SKIP_BASENAMES = {"stamp_versions.py"}
+WORKFLOW_ROOT = Path(__file__).resolve().parents[1]
 
 
 def parse_versions(path: str) -> dict[str, str]:
-    """Flatten versions.yaml into {'images.containers.pyt': 'nvcr.io/...', ...}.
+    """Flatten versions.yaml into {'images.containers.cosmos_framework': 'nvcr.io/...', ...}.
 
     Minimal reader for this file's known shape: nested mappings by 2-space
     indentation with scalar string leaves. Comments and blanks ignored.
@@ -120,9 +117,6 @@ def replace_value(line: str, new_value: str) -> tuple[str, bool]:
     m = LOCAL_IMAGE_RE.search(code)
     if m:
         return line[: m.start()] + new_value + line[m.end() :], True
-    m = WHEEL_RE.search(code)
-    if m:
-        return line[: m.start()] + new_value + line[m.end() :], True
     m = DOTTED_KEY_VALUE_RE.match(line)
     if m:  # first-time stamp of a bare key-form value
         return f"{m.group(1)}{new_value}{m.group(3)}", True
@@ -135,12 +129,10 @@ def main() -> int:
     ap.add_argument(
         "--strict-strays", action="store_true", help="unannotated image/wheel pins are errors, not warnings"
     )
-    ap.add_argument("--versions-file", default="versions.yaml")
+    ap.add_argument("--versions-file", default=str(WORKFLOW_ROOT / "versions.yaml"))
     ap.add_argument(
         "--resources-dir",
-        "--skills-dir",
-        dest="skills_dir",
-        default=".",
+        default=None,
         help="resource tree to scan; default scans all maintained component directories",
     )
     args = ap.parse_args()
@@ -155,9 +147,9 @@ def main() -> int:
     stamped = 0
 
     scan_dirs = (
-        [d for d in ("models", "data", "execution", "inference-service", "templates", "scripts") if os.path.isdir(d)]
-        if args.skills_dir == "."
-        else [args.skills_dir]
+        [str(WORKFLOW_ROOT / d) for d in ("models", "data", "execution", "inference-service", "templates", "scripts")]
+        if args.resources_dir is None
+        else [args.resources_dir]
     )
     all_files = [p for d in scan_dirs for p in iter_skill_files(d)]
     for path in sorted(all_files):
@@ -198,10 +190,6 @@ def main() -> int:
                 img = IMAGE_RE.search(code)
                 if img and "nvcr.io" in img.group(0):
                     strays.append(f"{path}:{i + 1}: unmarked image pin '{img.group(0)}'")
-                else:
-                    whl = STRAY_WHEEL_RE.search(code)
-                    if whl:
-                        strays.append(f"{path}:{i + 1}: unmarked wheel pin '{whl.group(0)}'")
 
         if changed and not args.check:
             with open(path, "w", encoding="utf-8") as fh:

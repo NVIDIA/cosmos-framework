@@ -18,13 +18,13 @@ credential_groups:
 optional_credentials:
 - name: SLURM_BASE_RESULTS_DIR
   source: env_var
-  only_when: user wants a custom results/staging root instead of the platform default
+  only_when: required for tracked launches; no site default exists
 - name: SLURM_ACCOUNT
   source: env_var
   only_when: the cluster site requires #SBATCH --account
 - name: SLURM_CONTAINER_MOUNTS
   source: env_var
-  only_when: cluster requires container mounts different from the platform default
+  only_when: required explicit host-to-container path mapping
 - name: NGC_KEY
   source: env_var
   only_when: private nvcr.io image pulls require NGC auth
@@ -38,11 +38,9 @@ resource_defaults:
   cpus_per_task: 16
   time_hours: 4
   timeout_hours: 3.8
-  max_time_hours: 4
-  partition: polar,polar3,polar4,grizzly
   container_mounts: runtime-supplied
   use_sqsh: true
-  sqsh_conversion_partition: cpu_long
+  sqsh_conversion_partition: null  # select an available site CPU partition
   sqsh_conversion_timeout_minutes: 120
   sqsh_conversion_cpus_per_task: 4
   sqsh_conversion_memory_mb: 7200

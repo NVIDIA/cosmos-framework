@@ -4,8 +4,7 @@
 """Schema tests for the shared Cosmos execution artifacts.
 
 The spec-bundle cases mirror real skill_info.yaml shapes: the config-mode
-bundle is DINO train (nested spec, array-indexed input pointers); the args-mode
-bundle is a data-services action. The load-bearing rejections: dotted spec keys
+bundle is native SFT (nested TOML); the args-mode bundle is video inference. The load-bearing rejections: dotted spec keys
 at ANY depth (the #1 authoring mistake), mode cross-contamination, unresolved
 image keys, and job-records that skip the results_dir-at-submit invariant.
 """
@@ -47,52 +46,35 @@ def bad(instance, schema):
 # spec-bundle fixtures
 # --------------------------------------------------------------------------- #
 
-DINO_BUNDLE = {
-    "network_arch": "dino",
+TRAIN_BUNDLE = {
+    "network_arch": "cosmos3",
     "action": "train",
     "image": "cosmos-framework:local",  # unpinned: test fixture
     "mode": "config",
-    "command": "dino train -e {config_path}",
-    "config_format": "yaml",
+    "command": "python -m cosmos_framework.scripts.train --sft-toml {config_path}",
+    "config_format": "toml",
     "spec": {
-        "dataset": {
-            "train_data_sources": [
-                {
-                    "image_dir": "/lustre/fsw/portfolios/data/coco/train2017",
-                    "json_file": "/lustre/fsw/portfolios/data/coco/train.json",
-                }
-            ],
-            "batch_size": 4,
-        },
-        "train": {"num_epochs": 12, "num_gpus": 8, "optim": {"lr": 0.0002}},
+        "job": {"task": "vlm", "experiment": "cosmos_video_conversation"},
+        "model": {"backbone": {"safetensors_path": "/models/base"}},
+        "trainer": {"num_epochs": 12},
+        "optimizer": {"lr": 0.0002},
     },
     "declared_inputs": [
-        {
-            "spec_key": "dataset.train_data_sources[0].image_dir",  # dotted POINTER — allowed
-            "type": "folder",
-            "uri": "lustre:///lustre/fsw/portfolios/data/coco/train2017",
-        },
-        {
-            "spec_key": "train.pretrained_model_path",
-            "type": "file",
-            "optional": True,
-            "uri": "ngc://nvidia/cosmos/pretrained_dino_nvimagenet:fan_small",
-        },
+        {"spec_key": "model.backbone.safetensors_path", "type": "folder", "uri": "/models/base"},
     ],
     "declared_outputs": [{"spec_key": "results_dir", "type": "folder"}],
     "upload_excludes": ["inputs/"],
     "compute_shape": {"gpus": 8, "nodes": 1},
-    "gpu_spec_key": "train.num_gpus",
 }
 
 ARGS_BUNDLE = {
-    "network_arch": "data_services",
-    "action": "gap_analysis",
+    "network_arch": "cosmos3",
+    "action": "inference",
     "image": "cosmos-framework:local",  # unpinned: test fixture
     "mode": "args",
-    "command": "gap_analysis vcn_aoi",
-    "args": ["--results-parquet", "/data/results.parquet", "--top-k", "200"],
-    "declared_inputs": [{"spec_key": "results_parquet", "type": "file", "uri": "s3://bkt/exp/results.parquet"}],
+    "command": "python -m cosmos_framework.scripts.inference",
+    "args": ["-i", "/data/input.json", "-o", "/results", "--checkpoint-path", "/models/base", "--seed", "42"],
+    "declared_inputs": [{"spec_key": "input", "type": "file", "uri": "s3://bkt/input.json"}],
     "declared_outputs": [{"spec_key": "results_dir", "type": "folder"}],
     "compute_shape": {"gpus": 0, "nodes": 1},
 }
@@ -103,8 +85,8 @@ ARGS_BUNDLE = {
 # --------------------------------------------------------------------------- #
 
 
-def test_dino_config_bundle_valid(spec_schema):
-    ok(DINO_BUNDLE, spec_schema)
+def test_cosmos3_config_bundle_valid(spec_schema):
+    ok(TRAIN_BUNDLE, spec_schema)
 
 
 def test_args_bundle_valid(spec_schema):
@@ -112,7 +94,7 @@ def test_args_bundle_valid(spec_schema):
 
 
 def test_bundle_accepts_model_owned_action_lifecycle(spec_schema):
-    b = copy.deepcopy(DINO_BUNDLE)
+    b = copy.deepcopy(TRAIN_BUNDLE)
     b["execution"] = {
         "environment": {
             "PYTHONUNBUFFERED": "1",
@@ -143,15 +125,15 @@ def test_bundle_accepts_model_owned_action_lifecycle(spec_schema):
 
 
 def test_bundle_rejects_secret_like_or_unhashed_lifecycle_inputs(spec_schema):
-    b = copy.deepcopy(DINO_BUNDLE)
+    b = copy.deepcopy(TRAIN_BUNDLE)
     b["execution"] = {"environment": {"bad-name": "value"}}
     bad(b, spec_schema)
 
-    b = copy.deepcopy(DINO_BUNDLE)
+    b = copy.deepcopy(TRAIN_BUNDLE)
     b["execution"] = {"supporting_files": [{"source": "scripts/helper.py", "destination": "helper.py"}]}
     bad(b, spec_schema)
 
-    b = copy.deepcopy(DINO_BUNDLE)
+    b = copy.deepcopy(TRAIN_BUNDLE)
     b["execution"] = {
         "supporting_files": [
             {
@@ -166,8 +148,8 @@ def test_bundle_rejects_secret_like_or_unhashed_lifecycle_inputs(spec_schema):
 
 def test_dotted_pointer_allowed_in_declared_inputs(spec_schema):
     # spec_key is a pointer; dots + [0] indices are correct THERE
-    b = copy.deepcopy(DINO_BUNDLE)
-    b["declared_inputs"][0]["spec_key"] = "dataset.val_data_sources[0].json_file"
+    b = copy.deepcopy(TRAIN_BUNDLE)
+    b["declared_inputs"][0]["spec_key"] = "custom.sources[0].json_file"
     ok(b, spec_schema)
 
 
@@ -177,20 +159,20 @@ def test_dotted_pointer_allowed_in_declared_inputs(spec_schema):
 
 
 def test_reject_top_level_dotted_spec_key(spec_schema):
-    b = copy.deepcopy(DINO_BUNDLE)
+    b = copy.deepcopy(TRAIN_BUNDLE)
     b["spec"]["train.num_epochs"] = 12  # the #1 mistake
     bad(b, spec_schema)
 
 
 def test_reject_nested_dotted_spec_key(spec_schema):
-    b = copy.deepcopy(DINO_BUNDLE)
-    b["spec"]["train"]["optim.lr"] = 0.001
+    b = copy.deepcopy(TRAIN_BUNDLE)
+    b["spec"]["optimizer"]["optim.lr"] = 0.001
     bad(b, spec_schema)
 
 
 def test_reject_dotted_key_inside_array_of_objects(spec_schema):
-    b = copy.deepcopy(DINO_BUNDLE)
-    b["spec"]["dataset"]["train_data_sources"][0]["image.dir"] = "/x"
+    b = copy.deepcopy(TRAIN_BUNDLE)
+    b["spec"]["custom"] = {"sources": [{"media.root": "/x"}]}
     bad(b, spec_schema)
 
 
@@ -200,20 +182,20 @@ def test_reject_dotted_key_inside_array_of_objects(spec_schema):
 
 
 def test_reject_config_mode_with_args(spec_schema):
-    b = copy.deepcopy(DINO_BUNDLE)
+    b = copy.deepcopy(TRAIN_BUNDLE)
     b["args"] = ["--foo"]
     bad(b, spec_schema)
 
 
 def test_reject_config_mode_missing_config_format(spec_schema):
-    b = copy.deepcopy(DINO_BUNDLE)
+    b = copy.deepcopy(TRAIN_BUNDLE)
     del b["config_format"]
     bad(b, spec_schema)
 
 
 def test_reject_config_command_without_config_path(spec_schema):
-    b = copy.deepcopy(DINO_BUNDLE)
-    b["command"] = "dino train"
+    b = copy.deepcopy(TRAIN_BUNDLE)
+    b["command"] = "python -m cosmos_framework.scripts.train"
     bad(b, spec_schema)
 
 
@@ -224,7 +206,7 @@ def test_reject_args_mode_with_spec(spec_schema):
 
 
 def test_reject_missing_mode(spec_schema):
-    b = copy.deepcopy(DINO_BUNDLE)
+    b = copy.deepcopy(TRAIN_BUNDLE)
     del b["mode"]
     bad(b, spec_schema)
 
@@ -235,25 +217,25 @@ def test_reject_missing_mode(spec_schema):
 
 
 def test_reject_unresolved_image_key(spec_schema):
-    b = copy.deepcopy(DINO_BUNDLE)
+    b = copy.deepcopy(TRAIN_BUNDLE)
     b["image"] = "containers.pyt"  # a versions.yaml key, not a resolved URI
     bad(b, spec_schema)
 
 
 def test_reject_declared_input_missing_uri(spec_schema):
-    b = copy.deepcopy(DINO_BUNDLE)
+    b = copy.deepcopy(TRAIN_BUNDLE)
     del b["declared_inputs"][0]["uri"]
     bad(b, spec_schema)
 
 
 def test_reject_empty_declared_outputs(spec_schema):
-    b = copy.deepcopy(DINO_BUNDLE)
+    b = copy.deepcopy(TRAIN_BUNDLE)
     b["declared_outputs"] = []
     bad(b, spec_schema)
 
 
 def test_reject_zero_nodes(spec_schema):
-    b = copy.deepcopy(DINO_BUNDLE)
+    b = copy.deepcopy(TRAIN_BUNDLE)
     b["compute_shape"]["nodes"] = 0
     bad(b, spec_schema)
 
@@ -264,13 +246,13 @@ def test_reject_zero_nodes(spec_schema):
 
 RECORD = {
     "schema_version": 1,
-    "id": "dino-train-a1b2c3",
+    "id": "cosmos3-train-a1b2c3",
     "platform": "slurm",
     "backend_ref": None,
     "image": "cosmos-framework:local",  # unpinned: test fixture
-    "network_arch": "dino",
+    "network_arch": "cosmos3",
     "action": "train",
-    "results_dir": "/lustre/fsw/portfolios/users/me/results/dino-train-a1b2c3",
+    "results_dir": "/lustre/fsw/portfolios/users/me/results/cosmos3-train-a1b2c3",
     "storage_tier": "A",
     "upload_excludes": ["inputs/"],
     "submitted_at": "2026-07-09T18:00:00+00:00",

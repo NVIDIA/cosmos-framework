@@ -26,32 +26,32 @@ K8S = REPO / "templates/k8s/indexed-job.yaml.tmpl"
 
 # nodes (2) deliberately != gpus-per-node (8) so NNODES=2 can't be confused with GPUs
 SLURM_VALS = {
-    "JOB_NAME": "dino-train-a1b2c3",
+    "JOB_NAME": "cosmos3-train-a1b2c3",
     "NUM_NODES": "2",
     "GPUS_PER_NODE": "8",
     "CPUS_PER_TASK": "16",
     "TIME": "04:00:00",
-    "LOG_DIR": "/lustre/fsw/users/me/results/dino-train-a1b2c3/slurm-logs",
+    "LOG_DIR": "/lustre/fsw/users/me/results/cosmos3-train-a1b2c3/slurm-logs",
     "SBATCH_EXTRA": "#SBATCH --account=edgeai\n#SBATCH --partition=batch",
     "ENV_FILE": "",
     "EXTRA_ENV": "export NCCL_P2P_DISABLE=1",
     "IMAGE": "/lustre/sqsh/cosmos.sqsh",
     "CONTAINER_MOUNTS": "/lustre",
-    "COMMAND": "dino train -e /lustre/specs/spec.yaml",
+    "COMMAND": "python -m cosmos_framework.scripts.train --sft-toml /lustre/specs/spec.yaml",
 }
 K8S_VALS = {
-    "JOB_NAME": "dino-train-a1b2c3",
+    "JOB_NAME": "cosmos3-train-a1b2c3",
     "NUM_NODES": "2",
     "GPUS_PER_NODE": "8",
     "TTL_SECONDS": "3600",
     "IMAGE_PULL_SECRET": "ngc-pull-secret",
     "IMAGE": "cosmos-framework:local",  # unpinned: test fixture
-    "CRED_SECRET": "cosmos-creds-dino-train-a1b2c3",
-    "RESULTS_DIR": "/data/results/dino-train-a1b2c3",
+    "CRED_SECRET": "cosmos-creds-cosmos3-train-a1b2c3",
+    "RESULTS_DIR": "/data/results/cosmos3-train-a1b2c3",
     "MOUNT_PATH": "/data",
     "SHM_SIZE": "16Gi",
     "PVC_CLAIM": "edgeai-datasets",
-    "COMMAND": "dino train -e /data/specs/spec.yaml",
+    "COMMAND": "python -m cosmos_framework.scripts.train --sft-toml /data/specs/spec.yaml",
 }
 
 
@@ -117,7 +117,7 @@ def test_k8s_all_markers_substituted():
 def test_k8s_two_docs_service_then_job():
     svc, job = k8s_docs()
     assert svc["kind"] == "Service" and svc["spec"]["clusterIP"] == "None"  # headless
-    assert svc["spec"]["selector"]["job-name"] == "dino-train-a1b2c3"
+    assert svc["spec"]["selector"]["job-name"] == "cosmos3-train-a1b2c3"
     assert job["kind"] == "Job"
 
 
@@ -125,7 +125,7 @@ def test_k8s_indexed_completions_parallelism_subdomain():
     _, job = k8s_docs()
     assert job["spec"]["completionMode"] == "Indexed"
     assert job["spec"]["completions"] == 2 and job["spec"]["parallelism"] == 2  # = nodes
-    assert job["spec"]["template"]["spec"]["subdomain"] == "dino-train-a1b2c3"
+    assert job["spec"]["template"]["spec"]["subdomain"] == "cosmos3-train-a1b2c3"
 
 
 def test_k8s_world_size_node_count_and_master_addr():
@@ -133,7 +133,7 @@ def test_k8s_world_size_node_count_and_master_addr():
     env = {e["name"]: e["value"] for e in job["spec"]["template"]["spec"]["containers"][0]["env"]}
     assert env["NNODES"] == "2"  # nodes, not the 8 GPUs
     assert env["NPROC_PER_NODE"] == "8"
-    assert env["MASTER_ADDR"] == "dino-train-a1b2c3-0.dino-train-a1b2c3"  # pod-0 . headless-svc
+    assert env["MASTER_ADDR"] == "cosmos3-train-a1b2c3-0.cosmos3-train-a1b2c3"  # pod-0 . headless-svc
     assert env["MASTER_PORT"] == "29500"
 
 
@@ -147,7 +147,7 @@ def test_k8s_gpu_limit_and_shm_and_secretref():
     _, job = k8s_docs()
     c = job["spec"]["template"]["spec"]["containers"][0]
     assert c["resources"]["limits"]["nvidia.com/gpu"] == "8"  # per node
-    assert c["envFrom"][0]["secretRef"]["name"] == "cosmos-creds-dino-train-a1b2c3"
+    assert c["envFrom"][0]["secretRef"]["name"] == "cosmos-creds-cosmos3-train-a1b2c3"
     vols = {v["name"]: v for v in job["spec"]["template"]["spec"]["volumes"]}
     assert vols["dshm"]["emptyDir"]["sizeLimit"] == "16Gi"
 
@@ -178,7 +178,7 @@ DOCUMENTED_K8S_ENV = {
     "NNODES": "2",  # torchrun spelling of the same node count
     "NPROC_PER_NODE": "8",  # torchrun spelling of GPUs per node
     "MASTER_PORT": "29500",
-    "MASTER_ADDR": "dino-train-a1b2c3-0.dino-train-a1b2c3",
+    "MASTER_ADDR": "cosmos3-train-a1b2c3-0.cosmos3-train-a1b2c3",
 }
 
 
@@ -191,24 +191,22 @@ def test_k8s_documented_rendezvous_var_is_exported(var, expected):
 
 
 def test_k8s_skill_doc_and_template_env_agree():
-    """Every env var the skill's rendezvous table names must exist in the template.
+    """Every documented rendezvous variable must exist in the template.
 
     Catches the drift class directly rather than via a hand-maintained list: if
     someone documents a new var without templating it, this fails.
     """
     doc = (REPO / "execution/platforms/kubernetes/guide.md").read_text(encoding="utf-8")
-    # Rendezvous table rows look like: | `NNODES` | `num_nodes` | torchrun ... |
-    documented = set(re.findall(r"^\s*\|\s*`([A-Z][A-Z0-9_]+)`\s*\|", doc, re.M))
+    section = doc.split("3. A **command wrapper**", 1)[1].split("```bash", 1)[0]
+    documented = set(re.findall(r"`([A-Z][A-Z0-9_]+)`", section))
     documented -= {"JOB_COMPLETION_INDEX"}  # injected by k8s itself, not by us
-    if not documented:
-        pytest.skip("no rendezvous env table found in the k8s skill")
+    assert documented, "rendezvous documentation must name its environment bindings"
     _, job = k8s_docs()
     exported = {e["name"] for e in job["spec"]["template"]["spec"]["containers"][0]["env"]}
     wrapper = job["spec"]["template"]["spec"]["containers"][0]["command"][2]
     missing = {v for v in documented if v not in exported and f"{v}=" not in wrapper}
     assert not missing, (
-        f"documented in cosmos-run-on-kubernetes/SKILL.md but never set by "
-        f"templates/k8s/indexed-job.yaml.tmpl: {sorted(missing)}"
+        f"documented in kubernetes/guide.md but never set by templates/k8s/indexed-job.yaml.tmpl: {sorted(missing)}"
     )
 
 

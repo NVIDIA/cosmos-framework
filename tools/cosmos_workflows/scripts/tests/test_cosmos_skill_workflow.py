@@ -2,7 +2,7 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Regression tests for runtime-only Cosmos backend orchestration."""
+"""Regression tests for Cosmos Framework training orchestration."""
 
 from __future__ import annotations
 
@@ -149,7 +149,6 @@ def make_task_aware_video(tmp_path: Path, split: str) -> tuple[list[Path], Path]
 def args_for(
     tmp_path: Path,
     *,
-    backend: str = "cosmos-framework",
     dataset_family: str = "video_conversation",
     run_mode: str = "full",
     training_mode: str = "dense",
@@ -175,7 +174,6 @@ def args_for(
         "cache",
         "sqsh-cache",
         "framework",
-        "rl",
     ):
         (tmp_path / name).mkdir(exist_ok=True)
     ssh_key = tmp_path / "id_ed25519"
@@ -186,12 +184,8 @@ def args_for(
         "plan",
         "--model",
         model_name,
-        "--backend",
-        backend,
         "--action",
         "train",
-        "--workload",
-        "training",
         "--dataset-family",
         dataset_family,
         "--platform",
@@ -216,21 +210,15 @@ def args_for(
         str(ssh_key),
         "--cosmos-framework-repo",
         str(tmp_path / "framework"),
-        "--build-context",
-        str(tmp_path),
         "--image-tag",
-        f"example/{backend}:test",
+        "example/cosmos-framework:test",
         "--sqsh-path",
         str(sqsh),
         "--cosmos-framework-commit",
         "f" * 40,
         "--cosmos-framework-base-image",
         "nvidia/cuda:13.0.2-cudnn-devel-ubuntu24.04",
-        "--cosmos-framework-source-repository",
-        "https://github.com/example/cosmos-framework.git",
-        "--cosmos-framework-source-branch",
-        "dev/test-framework",
-        "--native-tree",
+        "--framework-tree",
         "b" * 40,
         "--build-timestamp",
         "2026-08-05T00:00:00Z",
@@ -268,19 +256,11 @@ def args_for(
     return workflow.parse_args(values)
 
 
-def attach_decoder_artifact(args, tmp_path: Path) -> None:
-    args.video_override_map = str(tmp_path / "override-map.json")
-    args.video_override_manifest = str(tmp_path / "override-manifest.json")
-    args.video_override_fingerprint = "a" * 64
-    Path(args.video_override_map).write_text("{}")
-    Path(args.video_override_manifest).write_text("{}")
-
-
 def test_checkpoint_helper_dependencies_are_declared_and_import_closed() -> None:
     info = yaml.safe_load((SKILL / "references" / "skill_info.yaml").read_text(encoding="utf-8"))
     declarations = info["workflow_contract"]["action_helper_dependencies"]
     assert declarations["staging_owner"] == "selected_platform"
-    assert declarations["staging_contract"] == ("cosmos-artifacts.spec_bundle.execution.supporting_files")
+    assert declarations["staging_contract"] == ("spec_bundle.execution.supporting_files")
     framework = declarations["framework_checkpoint"]
     assert set(framework["files"]) == {
         "scripts/framework_checkpoint_action.py",
@@ -526,33 +506,32 @@ def test_retry_helper_reuses_sealed_inspection_and_refreshes_job_identity(
     assert plan["planner_request"]["cache_dir"] not in rendered
 
 
-def test_framework_is_the_only_runtime_and_requires_no_selection_flag():
-    for model in ("Cosmos3-Nano", "Cosmos3-Edge"):
-        for action in ("train", "evaluate", "inference", "inference_microservice", "export"):
-            assert workflow.select_backend(model=model, action=action)[0] == "cosmos-framework"
-    assert workflow.parse_args(["resolve"]).backend == "cosmos-framework"
-    with pytest.raises(common.WorkflowError, match="only the cosmos-framework"):
-        workflow.select_backend(model="Cosmos3-Nano", action="train", backend="cosmos-rl")
-    with pytest.raises(SystemExit):
-        workflow.parse_args(["resolve", "--backend", "cosmos-rl"])
-    with pytest.raises(common.WorkflowError, match="only the Framework training"):
-        workflow.select_backend(model="Cosmos3-Nano", action="train", workload="automl")
+@pytest.mark.parametrize("action", ["train", "evaluate", "inference", "inference_microservice", "export"])
+def test_model_actions_are_available_without_target_selection(action):
+    workflow.validate_action(action)
+    args = workflow.parse_args(["resolve", "--action", action])
+    assert not hasattr(args, "backend")
+    assert not hasattr(args, "workload")
 
 
-def test_sealed_foreign_runtime_plan_is_rejected_before_materialization(tmp_path):
+@pytest.mark.parametrize("action", ["quantize", "missing-action"])
+def test_unavailable_actions_are_rejected(action):
+    with pytest.raises(common.WorkflowError, match="unsupported Cosmos action"):
+        workflow.validate_action(action)
+
+
+def test_sealed_training_plan_roundtrips_without_target_metadata(tmp_path):
     args = args_for(tmp_path)
     plan = workflow.build_plan(args)
     workflow.write_spec(args, plan)
-    plan["backend"] = "cosmos-rl"
-    plan["planner_request"] = vars(args).copy()
-    plan["planner_request"]["backend"] = "cosmos-rl"
-    plan["plan_artifact"] = {"schema_version": workflow.PLAN_ARTIFACT_SCHEMA_VERSION}
-    plan["plan_artifact"]["sha256"] = workflow._plan_artifact_sha256(plan)
-    artifact = tmp_path / "foreign-plan.json"
-    artifact.write_text(json.dumps(plan))
-    current = workflow.parse_args(["materialize"])
-    with pytest.raises(common.WorkflowError, match="repository-owned cosmos-framework"):
-        workflow.load_plan_artifact(current, str(artifact))
+    artifact = tmp_path / "plan.json"
+    workflow.save_plan_artifact(args, plan, str(artifact))
+    restored_args, restored = workflow.load_plan_artifact(workflow.parse_args(["materialize"]), str(artifact))
+    assert restored["spec"] == plan["spec"]
+    assert restored_args.platform == args.platform
+    assert not hasattr(restored_args, "backend")
+    assert "backend" not in restored
+    assert "backend_selection_reason" not in restored
 
 
 def test_evaluation_image_preflight_matches_native_source_layout():
@@ -731,7 +710,7 @@ def test_framework_action_model_uri_requires_immutable_revision(tmp_path):
 
 
 def test_framework_action_contract_is_packaged_and_dataset_agnostic():
-    contract = workflow.load_yaml(workflow.BACKEND_FILES["cosmos-framework"])
+    contract = workflow.load_yaml(workflow.TRAINING_CONTRACT)
     pre_action = contract["checkpoint"]["action_preparation"]
     assert pre_action["orchestrator"] == "scripts/framework_checkpoint_action.py"
     assert set(pre_action["applies_before"]) == {
@@ -739,8 +718,9 @@ def test_framework_action_contract_is_packaged_and_dataset_agnostic():
         "inference",
         "inference_microservice",
     }
-    assert contract["actions"]["evaluate"]["pre_action"] == "export_if_framework_dcp"
-    assert contract["actions"]["inference"]["command"].startswith("cosmos-reasoner-inference")
+    actions = workflow.load_yaml(workflow.SKILL_INFO)["actions"]
+    assert actions["evaluate"]["pre_action"] == "scripts/framework_checkpoint_action.py"
+    assert "cosmos-reasoner-inference" in actions["inference"]["command"]
     source = (SKILL / "scripts" / "framework_checkpoint_action.py").read_text(encoding="utf-8")
     assert "cosmos_framework.scripts.export_vlm_dcp" in source
     for forbidden in ("/lustre/", "rarunachalam", "wts", "aetc"):
@@ -909,7 +889,7 @@ def test_video_conversation_framework_dense_spec_and_no_historical_paths(tmp_pat
     args.optimizer_epsilon = 1e-6
     plan = workflow.build_plan(args)
     workflow.write_spec(args, plan)
-    assert plan["backend"] == "cosmos-framework"
+    assert "backend" not in plan
     assert plan["training"]["training_mode"] == "dense"
     assert plan["spec"]["model"]["parallelism"]["data_parallel_shard_degree"] == 8
     assert plan["spec"]["trainer"]["grad_accum_iter"] == 1
@@ -917,10 +897,10 @@ def test_video_conversation_framework_dense_spec_and_no_historical_paths(tmp_pat
     assert plan["training"]["gradient_accumulation"] == 1
     assert plan["spec"]["trainer"]["max_iter"] == 2
     assert plan["training"]["optimizer_epsilon"] == 1e-6
-    assert plan["spec"]["optimizer"]["eps"] == 1e-6
+    assert "eps" not in plan["spec"]["optimizer"]
+    assert "++optimizer.eps=1e-06" in plan["command"]
     assert "lora_enabled" not in plan["spec"]["model"]
-    assert plan["decoder_artifact"]["required"] is False
-    assert plan["decoder_artifact"]["enabled"] is False
+    assert "decoder_artifact" not in plan
     framework_runtime = plan["framework_video_runtime"]
     assert framework_runtime["selected_profile"] == "torchcodec-cuda-on-demand"
     assert framework_runtime["video_decoder"] == "torchcodec"
@@ -978,30 +958,7 @@ def test_task_aware_hybrid_expansion_preserves_native_optimizer_updates(tmp_path
     assert plan["training"]["exposed_train_samples"] == 48
     assert plan["training"]["optimizer_updates"] == 6
     assert plan["spec"]["trainer"]["max_iter"] == 6
-    assert plan["decoder_artifact"]["enabled"] is False
-
-
-def test_framework_rejects_external_decoder_artifact(tmp_path):
-    args = args_for(
-        tmp_path,
-        backend="cosmos-framework",
-        dataset_family="task_aware_video_reasoning",
-    )
-    args.video_override_map = str(tmp_path / "override-map.json")
-    args.video_override_manifest = str(tmp_path / "override-manifest.json")
-    args.video_override_fingerprint = "a" * 64
-    args.video_override_force_video = [str(tmp_path / "train" / "media" / "train-bcq-0.mp4")]
-
-    with pytest.raises(common.WorkflowError, match="external video override artifacts"):
-        workflow.build_plan(args)
-
-
-def test_decoder_artifact_requires_map_manifest_and_fingerprint(tmp_path):
-    args = args_for(tmp_path)
-    args.video_override_map = str(tmp_path / "override-map.json")
-
-    with pytest.raises(common.WorkflowError, match="must be supplied together"):
-        workflow.build_plan(args)
+    assert "decoder_artifact" not in plan
 
 
 def test_framework_task_aware_slurm_uses_native_runtime_without_decoder_artifact(
@@ -1030,7 +987,6 @@ def test_task_aware_constant_schedule_keeps_lr_factor_at_one(tmp_path):
 def test_framework_warmup_epochs_translate_to_optimizer_steps(tmp_path):
     args = args_for(
         tmp_path,
-        backend="cosmos-framework",
         dataset_family="task_aware_video_reasoning",
     )
     args.epochs = 3
@@ -1067,7 +1023,6 @@ def test_materialization_text_result_is_not_misclassified_as_preflight():
 def test_task_aware_smoke_limit_counts_logical_records_before_expansion(tmp_path):
     args = args_for(
         tmp_path,
-        backend="cosmos-framework",
         dataset_family="task_aware_video_reasoning",
         run_mode="smoke",
     )
@@ -1242,17 +1197,15 @@ def test_omni_conversion_uses_platform_checkpoint_storage_and_rebinds_training_m
     assert plan["environment"]["VLM_SAFETENSORS_PATH"] == plan["prepared_model_container_path"]
     assert plan["prepared_model_container_path"] != str(source)
     assert preparation["preparation_sqsh_path"] == args.sqsh_path
-    assert "--backend cosmos-framework" in preparation["platform_action"]["container_command"]
+    assert "--backend" not in preparation["platform_action"]["container_command"]
     workflow.write_spec(args, plan)
     workflow.verify_model_preparation_helper(args, plan)
     args.cosmos_job_id = "cosmos-reason-train-omni-prepare"
     slurm = workflow.render_slurm(args, plan)
-    assert "COSMOS_COSMOS_MODEL_PREPARATION_OK" in slurm
+    assert "COSMOS_MODEL_PREPARATION_OK" in slurm
     assert preparation["platform_action"]["helper_container_path"] in slurm
     assert f"--container-image={args.sqsh_path}" in slurm
-    assert slurm.index("COSMOS_COSMOS_MODEL_PREPARATION_OK") < slurm.index(
-        "Cosmos packaged runtime startup check failed"
-    )
+    assert slurm.index("COSMOS_MODEL_PREPARATION_OK") < slurm.index("Cosmos packaged runtime startup check failed")
 
 
 def test_checkpoint_preparation_targets_the_requested_output_directory(tmp_path):
@@ -1289,7 +1242,6 @@ def test_framework_checkpoint_preparation_uses_native_converter(tmp_path):
     source.mkdir()
     donor.mkdir()
     args = SimpleNamespace(
-        backend="cosmos-framework",
         base_model_path_or_uri=str(source),
         base_model_revision="",
         vlm_architecture_model_path_or_uri=str(donor),
@@ -1368,7 +1320,7 @@ def test_public_edge_checkpoint_uses_skill_runtime_profile(tmp_path, dataset_fam
     args = args_for(tmp_path, dataset_family=dataset_family, model_name="nvidia/Cosmos3-Edge")
     plan = workflow.build_plan(args)
 
-    assert plan["backend"] == "cosmos-framework"
+    assert "backend" not in plan
     assert plan["model_preparation"]["required"] is False
     assert "no processor overlay" in plan["model_preparation"]["reason"]
     assert plan["prepared_model_container_path"] == str((tmp_path / "model").resolve())
@@ -1398,15 +1350,34 @@ def test_public_edge_checkpoint_uses_skill_runtime_profile(tmp_path, dataset_fam
     assert plan["environment"]["COSMOS_VIDEO_MAX_PIXELS"] == str(plan["processor_profile"]["max_video_pixels"])
 
 
-def test_public_edge_uri_is_snapshotted_without_alternate_checkpoint(tmp_path):
+@pytest.mark.parametrize("platform", ["docker", "slurm"])
+def test_public_edge_uri_is_snapshotted_without_alternate_checkpoint(tmp_path, platform):
     args = args_for(tmp_path, model_name="nvidia/Cosmos3-Edge")
+    args.platform = platform
+    args.container_mount = [f"{tmp_path}:/runtime"]
+    args.partition = "gpu"
+    args.account = "project"
     args.base_model_path_or_uri = "nvidia/Cosmos3-Edge"
     args.base_model_revision = "0" * 40
     plan = workflow.build_plan(args)
 
     assert plan["model_preparation"]["kind"] == "immutable_public_checkpoint_snapshot"
     assert plan["model_preparation"]["required"] is True
-    assert "processor overlay" not in plan["model_preparation"]["command"]
+    if platform == "slurm":
+        assert plan["model_preparation"]["command"] is None
+        snapshot = plan["model_preparation"]["platform_action"]
+        assert snapshot["consumer"] == "slurm"
+        assert "snapshot_download" in snapshot["container_command"]
+        assert snapshot["output_container_path"] == plan["prepared_model_container_path"]
+        workflow.write_spec(args, plan)
+        workflow.verify_model_preparation_helper(args, plan)
+        args.cosmos_job_id = "cosmos3-edge-train-snapshot"
+        rendered = workflow.render_slurm(args, plan)
+        assert "snapshot_download" in rendered
+        assert "docker run" not in rendered
+    else:
+        assert "docker run" in plan["model_preparation"]["command"]
+        assert "snapshot_download" in plan["model_preparation"]["command"]
     assert plan["processor_profile"]["checkpoint_mutation"] is False
 
 
@@ -1417,7 +1388,7 @@ def test_model_tier_is_inferred_from_public_checkpoint_identity(tmp_path):
     args.base_model_revision = "0" * 40
     plan = workflow.build_plan(args)
     assert plan["model_name"] == "nvidia/Cosmos3-Edge"
-    assert plan["backend"] == "cosmos-framework"
+    assert "backend" not in plan
 
 
 def test_edge_profile_explicit_override_is_recorded(tmp_path):
@@ -1542,7 +1513,7 @@ def test_slurm_script_is_bash_sqsh_no_requeue_and_preserves_failure(tmp_path):
     assert 'export HOME="/tmp/cosmos-${COSMOS_JOB_ID:?COSMOS_JOB_ID must be set}-${SLURM_PROCID:-0}"' in script
     assert 'mkdir -p -m 700 "$HOME"' in script
     assert "timeout --signal=TERM --kill-after=30s 13680s srun" in script
-    assert "COSMOS_COSMOS_PACKAGED_RUNTIME_STARTUP_OK" in script
+    assert "COSMOS_PACKAGED_RUNTIME_STARTUP_OK" in script
     assert plan["preflight"]["container_runtime"] not in script
     assert script.count("--container-image=") == 1
     assert "export SLURM_EXPORT_ENV=ALL" in script
@@ -1625,7 +1596,6 @@ def test_framework_expands_one_shared_media_root_per_annotation(tmp_path):
     args = args_for(tmp_path)
     environment = workflow._env(
         args,
-        "cosmos-framework",
         "/model",
         ["/train-a.json", "/train-b.json"],
         ["/train-media"],
@@ -1700,7 +1670,7 @@ def test_image_provenance_source_equivalence_and_dirty_rejected():
 
 
 def test_remote_slurm_rejects_unbuilt_local_target_and_accepts_registry_image(tmp_path):
-    args = args_for(tmp_path, backend="cosmos-framework")
+    args = args_for(tmp_path)
     args.platform = "slurm"
     args.partition = "polar3,polar4"
     args.account = "account"
@@ -1993,7 +1963,7 @@ def test_request_and_metadata_schemas_and_no_environment_history():
     assert "model_preparation_image_tag" not in request_schema["properties"]
     assert "model_preparation_sqsh_path" not in request_schema["properties"]
     profile_schema = request_schema["properties"]["training"]["properties"]["video_profile"]
-    assert profile_schema["x_cosmos_native_mapping"]["frames"] == "COSMOS_VIDEO_FRAMES"
+    assert profile_schema["x_cosmos_native_mapping"]["frames"] == "COSMOS_VIDEO_NUM_FRAMES"
     jsonschema.validate({"frames": 8, "max_video_pixels": 81920}, profile_schema)
     with pytest.raises(jsonschema.ValidationError):
         jsonschema.validate({"frames": 8, "fps": 1.0}, profile_schema)
@@ -2061,11 +2031,14 @@ def test_nvbug_task_aware_alias_media_key_fails_closed(tmp_path):
         common.inspect_dataset(dataset_family="auto", annotations=[str(annotation)], media_roots=[str(media)])
 
 
-def test_nvbug_framework_edge_dimensions_reach_environment(tmp_path):
+def test_edge_dimensions_inform_pixel_budget_not_unused_environment(tmp_path):
     args = args_for(tmp_path, dataset_family="task_aware_video_reasoning", model_name="nvidia/Cosmos3-Edge")
     plan = workflow.build_plan(args)
-    assert plan["environment"]["COSMOS_VIDEO_FRAME_WIDTH"] == "1280"
-    assert plan["environment"]["COSMOS_VIDEO_FRAME_HEIGHT"] == "720"
+    assert plan["processor_profile"]["frame_width"] == 1280
+    assert plan["processor_profile"]["frame_height"] == 720
+    assert "COSMOS_VIDEO_FRAME_WIDTH" not in plan["environment"]
+    assert "COSMOS_VIDEO_FRAME_HEIGHT" not in plan["environment"]
+    assert plan["environment"]["COSMOS_VIDEO_MAX_PIXELS"] == str(plan["processor_profile"]["max_video_pixels"])
 
 
 def test_nvbug_local_preflight_rejects_undecodable_media(monkeypatch, tmp_path):

@@ -179,7 +179,7 @@
     },
     {
       "source": "skills/models/tao-finetune-cosmos-reason/references/cosmos-backend-operations.md",
-      "destination": "models/cosmos3-reasoner/references/cosmos-backend-operations.md",
+      "destination": "models/cosmos3-reasoner/references/operations.md",
       "source_sha256": "df4f31170b4b5f83349e4601e8b154a5c0d13216c54a2dc3a016dd648bd3a56a"
     },
     {
@@ -189,7 +189,7 @@
     },
     {
       "source": "skills/models/tao-finetune-cosmos-reason/references/cosmos-framework-backend.yaml",
-      "destination": "models/cosmos3-reasoner/references/cosmos-framework-backend.yaml",
+      "destination": "models/cosmos3-reasoner/references/training-contract.yaml",
       "source_sha256": "79e383c72dac216a7adf4ae3f0596f9fa919e10d08a0039c63192adf5b1e6476"
     },
     {
@@ -223,16 +223,6 @@
       "source_sha256": "4d3f74c0a2478a94cb56e0e92d7a45583ebf0a3d916641811e93ed4934e72cfe"
     },
     {
-      "source": "skills/models/tao-finetune-cosmos-reason/references/spec_template_inference.yaml",
-      "destination": "models/cosmos3-reasoner/references/spec_template_inference.yaml",
-      "source_sha256": "51c82ed408bea7b484078307520d748a2acb448525ee47c4f36a49e6092f5e93"
-    },
-    {
-      "source": "skills/models/tao-finetune-cosmos-reason/references/spec_template_quantize.yaml",
-      "destination": "models/cosmos3-reasoner/references/spec_template_quantize.yaml",
-      "source_sha256": "c159df8b66e0923a9a35c58763a10c8dd0f8c9ccc499348f94db433805cfadf7"
-    },
-    {
       "source": "skills/models/tao-finetune-cosmos-reason/schemas/cosmos-job-metadata.schema.json",
       "destination": "models/cosmos3-reasoner/schemas/cosmos-job-metadata.schema.json",
       "source_sha256": "8ed7594264d31686cadcf4d3d08299034c08c9c3efd934486504381fa74ab9b8"
@@ -251,11 +241,6 @@
       "source": "skills/models/tao-finetune-cosmos-reason/scripts/cosmos_workflow.py",
       "destination": "models/cosmos3-reasoner/scripts/cosmos_workflow.py",
       "source_sha256": "5a775106013a9f2e022a0900a40d5d2926537ba358702cfa48661ea190c96a7f"
-    },
-    {
-      "source": "skills/models/tao-finetune-cosmos-reason/scripts/evaluate_video_conversation_single_gpu.py",
-      "destination": "models/cosmos3-reasoner/scripts/evaluate_video_conversation_single_gpu.py",
-      "source_sha256": "aa0408eee5093d566533f51dfe84d5cfef0637109df46d669a6423cc8452ad39"
     },
     {
       "source": "skills/models/tao-finetune-cosmos-reason/scripts/evaluation_workflow.py",
@@ -522,6 +507,11 @@
   "runtime_provenance": "../../cosmos_framework/licenses/workflows/provenance.json",
   "excluded_resources": [
     {
+      "source": "skills/models/tao-finetune-cosmos-reason/references/spec_template_inference.yaml",
+      "source_sha256": "51c82ed408bea7b484078307520d748a2acb448525ee47c4f36a49e6092f5e93",
+      "reason": "Native reasoner inference accepts CLI arguments, including DCP export options; omit the incomplete TOML compatibility wrapper and archive-staging metadata."
+    },
+    {
       "source": "skills/applications/tao-run-inference-service/references/cosmos-predict2.5.config.json",
       "source_sha256": "97d2f4e62e43055913a0413bbe3d92474893aae0796b55a9175c87f8eaab07d1",
       "reason": "Predict 2.5 serving is outside the migration scope."
@@ -550,6 +540,16 @@
       "source": "skills/models/tao-finetune-cosmos-reason/scripts/train_video_conversation_single_gpu.py",
       "source_sha256": "cfd08a5f4dd0e3c067adc753ff78d05dcc0d99aeab7bff24755decdafafcaf40",
       "reason": "Alternate runtime support is outside the Framework-only migration."
+    },
+    {
+      "source": "skills/models/tao-finetune-cosmos-reason/scripts/evaluate_video_conversation_single_gpu.py",
+      "source_sha256": "aa0408eee5093d566533f51dfe84d5cfef0637109df46d669a6423cc8452ad39",
+      "reason": "Duplicate vLLM monkey-patch evaluator uses APIs absent from Framework; native reasoner evaluation supplies bounded preprocessing."
+    },
+    {
+      "source": "skills/models/tao-finetune-cosmos-reason/references/spec_template_quantize.yaml",
+      "source_sha256": "c159df8b66e0923a9a35c58763a10c8dd0f8c9ccc499348f94db433805cfadf7",
+      "reason": "Standalone quantization does not establish a supported DCP/PEFT action handoff; omit the misleading action template."
     },
     {
       "source": "skills/data/paidf-cosmos-predict/SKILL.md",

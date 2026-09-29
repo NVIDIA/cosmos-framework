@@ -4,17 +4,29 @@ name: Cosmos skills
 on:
   pull_request:
     paths:
+      - AGENTS.md
       - tools/cosmos_workflows/**
       - .agents/skills/**
       - .claude/skills/**
       - .github/workflows/cosmos-skills.yml
+      - cosmos_framework/configs/toml_config/**
+      - cosmos_framework/configs/base/reasoner/**
+      - cosmos_framework/inference/reasoner/**
+      - cosmos_framework/scripts/inference_reasoner.py
+      - pyproject.toml
   push:
     branches: [main]
     paths:
+      - AGENTS.md
       - tools/cosmos_workflows/**
       - .agents/skills/**
       - .claude/skills/**
       - .github/workflows/cosmos-skills.yml
+      - cosmos_framework/configs/toml_config/**
+      - cosmos_framework/configs/base/reasoner/**
+      - cosmos_framework/inference/reasoner/**
+      - cosmos_framework/scripts/inference_reasoner.py
+      - pyproject.toml
 jobs:
   cpu-contracts:
     runs-on: ubuntu-latest
@@ -28,4 +40,4 @@ jobs:
           python-version: '3.11'
       - run: python -m pip install -r requirements-test.txt
       - run: python -m pytest --confcutdir=. -q
-      - run: python scripts/stamp_versions.py --check
+      - run: python scripts/stamp_versions.py --check --strict-strays

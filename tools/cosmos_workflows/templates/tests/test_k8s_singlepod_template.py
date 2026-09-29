@@ -5,7 +5,7 @@
 
 The template exists so the security-critical shape is faithful: creds come from
 a per-job Secret via envFrom.secretRef (NEVER inline plaintext env values — the
-SDK handler's V1EnvVar mistake), GPU is a proper resource limit, /dev/shm is
+Kubernetes V1EnvVar shape), GPU is a proper resource limit, /dev/shm is
 sized (64Mi default silently hangs NCCL), the Job self-cleans via TTL, and a
 rendered instance parses as valid k8s YAML with no unsubstituted markers.
 """
@@ -22,14 +22,14 @@ sys.path.insert(0, str(REPO / "scripts"))
 import redact_secrets  # noqa: E402
 
 BASE = {
-    "JOB_NAME": "dino-train-a1b2c3",
+    "JOB_NAME": "cosmos3-train-a1b2c3",
     "TTL_SECONDS": "3600",
     "IMAGE_PULL_SECRET": "ngc-pull-secret",
     "IMAGE": "cosmos-framework:local",  # unpinned: test fixture
-    "COMMAND": "dino train -e /data/specs/spec.yaml",
+    "COMMAND": "python -m cosmos_framework.scripts.train --sft-toml /data/specs/spec.yaml",
     "NUM_GPUS": "1",
-    "CRED_SECRET": "cosmos-creds-dino-train-a1b2c3",
-    "RESULTS_DIR": "/data/results/dino-train-a1b2c3",
+    "CRED_SECRET": "cosmos-creds-cosmos3-train-a1b2c3",
+    "RESULTS_DIR": "/data/results/cosmos3-train-a1b2c3",
     "MOUNT_PATH": "/data",
     "SHM_SIZE": "16Gi",
     "PVC_CLAIM": "edgeai-datasets",
@@ -54,7 +54,7 @@ def test_all_markers_substituted():
 def test_renders_valid_k8s_job():
     doc = load()
     assert doc["kind"] == "Job"
-    assert doc["metadata"]["name"] == "dino-train-a1b2c3"
+    assert doc["metadata"]["name"] == "cosmos3-train-a1b2c3"
     assert doc["spec"]["backoffLimit"] == 0
     assert doc["spec"]["ttlSecondsAfterFinished"] == 3600
     assert doc["spec"]["template"]["spec"]["restartPolicy"] == "Never"
@@ -74,7 +74,7 @@ def test_dev_shm_sized_memory():
 def test_creds_via_secretref_never_inline():
     c = load()["spec"]["template"]["spec"]["containers"][0]
     # creds arrive via envFrom.secretRef — only the secret NAME, no values
-    assert c["envFrom"][0]["secretRef"]["name"] == "cosmos-creds-dino-train-a1b2c3"
+    assert c["envFrom"][0]["secretRef"]["name"] == "cosmos-creds-cosmos3-train-a1b2c3"
     # the only inline env is the non-secret results root
     inline = {e["name"] for e in c.get("env", [])}
     assert inline == {"COSMOS_RESULTS_ROOT"}

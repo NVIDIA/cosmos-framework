@@ -1,7 +1,7 @@
 # Cosmos SLURM guardrails
 
-When `cosmos3-reasoner` resolves a backend, read that backend
-contract before rendering the SLURM command. Cosmos jobs require a prebuilt,
+Read the reasoner training contract before rendering the SLURM command.
+Cosmos jobs require a prebuilt,
 compute-node-readable `.sqsh`; convert the selected image before the GPU
 allocation and do not substitute a direct registry reference in the training
 job. Use the model planner's explicit post-review `materialize` verb to write
@@ -34,7 +34,7 @@ the validated set in its fresh retry plan. Never edit a rendered directive.
   per node and replicate degree to nodes. Use `--no-container-mount-home`,
   `/workspace/.venv/bin/python`, `ulimit -n 65536`, and disable asynchronous DCP
   for multi-node shared-SLURM runs.
-Preserve the Framework contract preserve the real `srun`/torchrun exit code through
+Preserve the real `srun`/torchrun exit code through
 cleanup and any requeue footer. A zero exit from a later shell command must not
 mask a failed training process. Treat SLURM `COMPLETED` as provisional until
 the Cosmos structured status contains terminal `SUCCESS`; then extract train

@@ -21,7 +21,7 @@ from typing import Any
 
 import yaml
 
-DEFAULT_SKILL_BANK = Path(os.environ.get("COSMOS_WORKFLOWS_ROOT", Path(__file__).resolve().parents[1]))
+DEFAULT_WORKFLOW_ROOT = Path(os.environ.get("COSMOS_WORKFLOWS_ROOT", Path(__file__).resolve().parents[1]))
 REMOTE_SCHEMES = ("s3://", "azure://", "gs://", "http://", "https://")
 DEFAULT_GPU_SMOKE_IMAGE = os.environ.get("COSMOS_GPU_SMOKE_IMAGE", "ubuntu:22.04")
 DEFAULT_LOW_VRAM_THRESHOLD_GB = 50.0
@@ -31,9 +31,9 @@ KNOWN_IMAGE_SMS = {}
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
-        "--skill-bank",
+        "--workflow-root",
         type=Path,
-        default=DEFAULT_SKILL_BANK,
+        default=DEFAULT_WORKFLOW_ROOT,
         help="Path to the packaged Cosmos workflow bundle.",
     )
     parser.add_argument("--platform", required=True, help="Cosmos execution platform.")
@@ -220,7 +220,7 @@ def parse_args() -> argparse.Namespace:
 PLATFORM_ALIASES = {"local-docker": "docker", "remote-docker": "docker"}
 
 
-def resolve_platform(skill_bank: Path, requested: str) -> dict[str, Any]:
+def resolve_platform(workflow_root: Path, requested: str) -> dict[str, Any]:
     """Load the platform record from
     execution/platforms/<name>/references/skill_info.yaml — with no central
     manifest. A credential-free external platform may ship only a guide; then fall back to
@@ -228,7 +228,7 @@ def resolve_platform(skill_bank: Path, requested: str) -> dict[str, Any]:
     Only require-one-of credential groups and numeric wall-time caps genuinely need
     the structured record; a single required env var is checked fine from prose."""
     name = PLATFORM_ALIASES.get(requested.strip().lower(), requested.strip().lower())
-    info = skill_bank.expanduser() / "execution" / "platforms" / name / "references" / "skill_info.yaml"
+    info = workflow_root.expanduser() / "execution" / "platforms" / name / "references" / "skill_info.yaml"
     if info.is_file():
         record = yaml.safe_load(info.read_text(encoding="utf-8")) or {}
         record.setdefault("name", name)
@@ -1736,7 +1736,7 @@ def main() -> int:
     args = parse_args()
     if args.docker_host:
         os.environ["DOCKER_HOST"] = args.docker_host
-    platform = resolve_platform(args.skill_bank, args.platform)
+    platform = resolve_platform(args.workflow_root, args.platform)
     paths = parse_paths(args.path)
     required_json_fields = parse_required_fields(args.json_required_field)
     gpu_arch_allowlists = parse_gpu_arch_allowlists(args.gpu_arch_allowlist)

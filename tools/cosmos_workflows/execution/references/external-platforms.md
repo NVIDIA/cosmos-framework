@@ -2,7 +2,7 @@
 
 There is no registry and no interface file: **a platform skill declares the
 contract by documenting it, and you verify it by reading.** Any installed skill
-(in-bank or external — e.g. a `cosmos-run-on-kratos` from another repo) is a
+(packaged or external — e.g. a `custom-platform` from another repo) is a
 conformant execution platform iff its SKILL.md documents, for its native CLI:
 
 1. **submit** that opens the job record BEFORE launching (record-then-launch)
@@ -20,7 +20,7 @@ allowlist to be edited.
 **Not explicitly conformant? You may INFER the mapping** from the skill's
 native primitives (create/run/inspect/stop), under three rules:
 
-1. The bank's invariants still bind: open the record first, **name/label the
+1. The workflow invariants still bind: open the record first, **name/label the
    backend object after `$JOB_ID`** (what makes inferred status/cancel findable
    later), and enumerate teardown — including what stops **billing** — before
    you submit.

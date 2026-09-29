@@ -77,7 +77,6 @@ def check_listing(
                 source_mismatches[suffix] = absent
     return {
         "schema_version": 1,
-        "backend": "cosmos-framework",
         "image": image,
         "required_profile": "torchcodec-cuda-on-demand",
         "compatible": not missing and not source_mismatches,

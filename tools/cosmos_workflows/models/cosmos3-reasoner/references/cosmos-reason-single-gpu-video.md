@@ -2,7 +2,7 @@
 
 Use the same `scripts/cosmos_workflow.py` planner as multi-GPU training, with
 `--platform docker --nodes 1 --gpus-per-node 1` and an explicitly selected host
-GPU when needed. No backend flag or alternate training wrapper is required.
+GPU when needed.
 Confirm image, data, model, output paths, memory requirements, and launch with
 the user. GPU count alone does not prove that a checkpoint fits.
 

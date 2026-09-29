@@ -2,7 +2,7 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Pure validation and provenance primitives for Cosmos Cosmos workflows.
+"""Pure validation and provenance primitives for Cosmos workflows.
 
 This module deliberately has no machine- or user-specific defaults.  Every
 filesystem location in its output originates in a runtime request.
@@ -520,7 +520,7 @@ def inspect_dataset(
         "answer_type": "letter" if known_task_types == {"mcq"} else "freeform",
         "task_semantics": task_semantics,
         "metric_names": metric_names,
-        "normalization": "cosmos-cosmos-shared-v2",
+        "normalization": "cosmos-shared-v2",
         "requires_user_input": [
             *(["task.type"] if unresolved_accuracy_tasks else []),
             *(["metrics.names"] if set(task_counts) - set(accuracy_tasks) and not metric_names else []),
@@ -674,7 +674,6 @@ def validate_metadata(metadata: Mapping[str, Any]) -> None:
         "experiment_id",
         "dataset",
         "training_mode",
-        "backend",
         "cosmos_job_id",
         "slurm",
         "image",

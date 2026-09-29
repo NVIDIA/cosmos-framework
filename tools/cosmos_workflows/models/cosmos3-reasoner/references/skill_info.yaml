@@ -10,27 +10,12 @@ aliases:
 - Cosmos3 Nano Reasoner
 - Cosmos3-Nano
 - Cosmos3-Edge
-- cosmos-framework
-automl_enabled: false
-backend_contracts:
-  cosmos-framework:
-    path: references/cosmos-framework-backend.yaml
-    container_image: cosmos-framework:local  # versions-key: images.containers.cosmos_framework
-backend_resolver: scripts/cosmos_workflow.py
-backend_selection:
-  policy: repository-owned Cosmos Framework runtime only
-  defaults:
-    train: cosmos-framework
-    export: cosmos-framework
-    evaluate: cosmos-framework
-    inference: cosmos-framework
-    inference_microservice: cosmos-framework
-    quantize: cosmos-framework
+container_image: cosmos-framework:local  # versions-key: images.containers.cosmos_framework
+training_contract: references/training-contract.yaml
 required_credentials: []
 conditional_credentials:
   HF_TOKEN: required only when fetching a gated Hugging Face checkpoint; not required for a complete local checkpoint
   NGC_KEY: required only when pulling or converting an authenticated nvcr.io image; not required for an existing local image or SQSH
-data_format: llava
 gpu_spec_key: model.parallelism.data_parallel_shard_degree
 node_spec_key: model.parallelism.data_parallel_replicate_degree
 runtime_requirements:
@@ -44,7 +29,7 @@ workflow_contract:
     explicit_user_choice_required: true
     choices:
       qwen3_vl: direct_compatible_huggingface_checkpoint
-      cosmos3_omni: backend_packaged_exact_key_conversion_to_qwen3_vl_before_training
+      cosmos3_omni: native_exact_key_conversion_to_qwen3_vl_before_training
     inference_from_checkpoint_or_history: forbidden
     conversion_storage:
       docker: user_owned_checkpoint_dir_on_docker_host
@@ -56,13 +41,11 @@ workflow_contract:
       user_input_required: false
       revision_resolution: automatic_immutable_hub_commit
     preparation_runtime:
-      source: selected_backend_image_and_sqsh
+      source: training_image_or_sqsh
       separate_user_input: forbidden
-      entrypoints:
-        cosmos-framework: cosmos_framework.scripts.convert_model_to_vlm_safetensors
+      entrypoint: cosmos_framework.scripts.convert_model_to_vlm_safetensors
       sqsh_required_entries:
-        cosmos-framework:
-          - cosmos_framework/scripts/convert_model_to_vlm_safetensors.py
+      - cosmos_framework/scripts/convert_model_to_vlm_safetensors.py
     huggingface_revision_resolution:
       user_commit_sha_required: false
       default_requested_ref: main
@@ -77,7 +60,7 @@ workflow_contract:
       files:
       - scripts/framework_checkpoint_action.py
       - scripts/cosmos_common.py
-    staging_contract: cosmos-artifacts.spec_bundle.execution.supporting_files
+    staging_contract: spec_bundle.execution.supporting_files
     staging_owner: selected_platform
   metric_extractor: scripts/extract_cosmos_metrics.py
   diagnostic_subset:
@@ -92,7 +75,7 @@ workflow_contract:
   - checkpoint identity and format
   - frame count
   - optimizer, scheduler, batch size, epochs, and random seed
-  - backend and container digest
+  - container digest
   public_model_profiles:
     cosmos3_edge:
       checkpoint_input: public Hugging Face model ID with automatically resolved immutable commit or complete local snapshot
@@ -161,69 +144,10 @@ workflow_contract:
       deferred_metric_scalar_transfer: validation_end
       prewarm: false
       disk_cache: false
-  backend_action_commands:
-    cosmos-framework:
-      export: python -m cosmos_framework.scripts.export_vlm_dcp
-      evaluate: cosmos-reasoner-evaluate --config {config_path}
-      inference: cosmos-reasoner-inference <arguments>
-      inference_microservice: cosmos-reasoner-serve <arguments>
-      required_pre_action: scripts/framework_checkpoint_action.py prepare
-data_sources:
-  train:
-    source: scripts/cosmos_workflow.py sealed dataset and environment contract
-    train_annotations: COSMOS_VIDEO_TRAIN_ANNOTATIONS
-    train_media_roots: COSMOS_VIDEO_TRAIN_MEDIA_ROOTS
-    validation_annotations: COSMOS_VIDEO_VAL_ANNOTATIONS
-    validation_media_roots: COSMOS_VIDEO_VAL_MEDIA_ROOTS
-  evaluate:
-    dataset.annotation_path:
-      source: eval_dataset
-      multiple_sources: false
-      path: '{eval_dataset_annotation}'
-    dataset.media_dir:
-      source: eval_dataset
-      multiple_sources: false
-      path_from_format:
-        llava:
-        - images.tar.gz
-        - videos.tar.gz
-        '*': videos.tar.gz
-  inference:
-    media:
-      source: inference_dataset
-      multiple_sources: false
-      path_from_format:
-        llava:
-        - videos.tar.gz
-        - images.tar.gz
-        '*': videos.tar.gz
-  quantize:
-    dataset.annotation_path:
-      source: calibration_dataset
-      multiple_sources: false
-      path: '{calibration_dataset_annotation}'
-    dataset.media_dir:
-      source: calibration_dataset
-      multiple_sources: false
-      path_from_format:
-        llava:
-        - videos.tar.gz
-        - images.tar.gz
-        '*': videos.tar.gz
-spec_params:
-  evaluate:
-    model.model_name: parent_model_folder
-    results_dir: output_dir
-  inference:
-    model_path: parent_model_folder
-    results_dir: output_dir
-  quantize:
-    model.model_path: parent_model_folder
-    results_dir: output_dir
-  train:
-    source: scripts/cosmos_workflow.py native Framework TOML and checkpoint contract
 actions:
   evaluate:
+    pre_action: scripts/framework_checkpoint_action.py
+    supported_platforms: [docker, slurm, kubernetes, brev, virtualenv]
     command: cosmos-reasoner-evaluate --config {config_path}
     config_format: toml
     mode: config
@@ -241,6 +165,11 @@ actions:
           format: json
           keys:
           - video
+          - video_id
+          - image
+          - image_id
+          - media
+          - media_path
       model.model_name:
         type: folder
     outputs:
@@ -249,101 +178,36 @@ actions:
     upload_excludes:
     - inputs/
   inference:
-    command: |
-      python - {config_path} <<'PY'
-      import subprocess
-      import sys
-      import tomllib
-
-      cfg = tomllib.load(open(sys.argv[1], "rb"))
-      args = [
-          "cosmos-reasoner-inference",
-          "--model_path", cfg["model_path"],
-          "--torch_dtype", cfg.get("torch_dtype", "auto"),
-          "--device_map", cfg.get("device_map", "auto"),
-          "--type", cfg.get("type", "video"),
-          "--media", cfg["media"],
-          "--prompt", cfg["prompt"],
-          "--max_new_tokens", str(cfg.get("max_new_tokens", 4096)),
-          "--results_dir", cfg["results_dir"],
-          "--enable_lora", str(cfg.get("enable_lora", False)).lower(),
-      ]
-      if cfg.get("num_gpus") not in (None, ""):
-          args.extend(["--num_gpus", str(cfg["num_gpus"])])
-      if cfg.get("fps") not in (None, ""):
-          args.extend(["--fps", str(cfg["fps"])])
-      if cfg.get("num_frames") not in (None, ""):
-          args.extend(["--num_frames", str(cfg["num_frames"])])
-      if cfg.get("total_pixels") not in (None, ""):
-          args.extend(["--total_pixels", str(cfg["total_pixels"])])
-      if cfg.get("base_model_path"):
-          args.extend(["--base_model_path", cfg["base_model_path"]])
-      raise SystemExit(subprocess.call(args))
-      PY
-    config_format: toml
-    mode: config
+    pre_action: scripts/framework_checkpoint_action.py
+    supported_platforms: [docker, slurm, kubernetes, brev, virtualenv]
+    command: cosmos-reasoner-inference
+    mode: args
     inputs:
       model_path:
         type: folder
       media:
-        type: folder
+        type: file
+        description: extracted video/image file; for a directory, declare type folder in the submitted bundle
     outputs:
       results_dir:
         type: folder
     upload_excludes:
     - inputs/
   quantize:
-    command: |
-      python - {config_path} <<'PY'
-      import sys
-      import tomllib
-
-      cfg = tomllib.load(open(sys.argv[1], "rb"))
-      model = cfg.get("model", dict())
-      dataset = cfg.get("dataset", dict())
-      quantize = cfg.get("quantize", dict())
-
-      args = [
-          "--model_path", model["model_path"],
-          "--results_dir", cfg["results_dir"],
-          "--num_calibration_samples", str(quantize.get("num_calibration_samples", 512)),
-          "--max_sequence_length", str(quantize.get("max_sequence_length", 2048)),
-          "--quantization_scheme", quantize.get("quantization_scheme", "FP8_DYNAMIC"),
-          "--kv_precision", quantize.get("kv_precision", "bf16"),
-          "--smoothing_strength", str(quantize.get("smoothing_strength", 0.8)),
-          "--skip_test_generation", str(quantize.get("skip_test_generation", False)).lower(),
-          "--enable_lora", str(model.get("enable_lora", False)).lower(),
-      ]
-      if model.get("base_model_path"):
-          args.extend(["--base_model_path", model["base_model_path"]])
-      if dataset.get("dataset_id"):
-          args.extend(["--dataset_id", dataset["dataset_id"]])
-      if dataset.get("dataset_split"):
-          args.extend(["--dataset_split", dataset["dataset_split"]])
-      if dataset.get("annotation_path"):
-          args.extend(["--annotation_path", dataset["annotation_path"]])
-      if dataset.get("media_dir"):
-          args.extend(["--media_dir", dataset["media_dir"]])
-
-      sys.argv = ["cosmos-reasoner-quantize"] + args
-      from cosmos_framework.scripts.quantize_reasoner import main
-      raise SystemExit(main())
-      PY
-    config_format: toml
-    mode: config
-    inputs:
-      model.model_path:
-        type: folder
-      dataset.annotation_path:
-        type: file
-      dataset.media_dir:
-        type: folder
-    outputs:
-      results_dir:
-        type: folder
-    upload_excludes:
-    - inputs/
+    supported: false
+    reason: no validated DCP or PEFT checkpoint quantization route
+  export:
+    command: python -m cosmos_framework.scripts.export_vlm_dcp
+    mode: args
+    planner: scripts/framework_checkpoint_action.py
+    supported_platforms: [docker, slurm, kubernetes, brev, virtualenv]
+  inference_microservice:
+    command: cosmos-reasoner-serve
+    mode: args
+    pre_action: scripts/framework_checkpoint_action.py
+    supported_platforms: [docker, slurm, kubernetes, brev, virtualenv]
   train:
+    supported_platforms: [docker, slurm]
     command: python -m cosmos_framework.scripts.train --sft-toml={config_path}
     config_format: toml
     mode: config

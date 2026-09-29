@@ -17,10 +17,9 @@ No new skills are added; the four existing skill files are extended in both
 `.agents/skills` and `.claude/skills`. Setup and launch references are read on demand,
 not loaded for unrelated code edits or ordinary native recipe questions.
 
-The helpers default to Framework and support only the repository-owned
-implementation. All five execution options (Docker, SLURM, Kubernetes, Brev,
-virtualenv) remain as supporting references; the model/action contract
-determines which fit. No backend-selection flag is needed.
+The helpers prepare Framework model actions for Docker, SLURM, Kubernetes,
+Brev, and virtualenv. Each action's contract declares its supported platforms;
+the reasoner training planner supports Docker and SLURM.
 
 ## Helpers
 
@@ -41,8 +40,8 @@ Framework-owned helpers use Cosmos names, with job records under
 Render commands take `--cosmos-job-id`; workflow metadata uses `cosmos_job_id`
 and `terminal_runtime_status`. Kubernetes selection uses `COSMOS_K8S_CONTEXT`
 and `COSMOS_K8S_NAMESPACE`. Existing state directories are not moved or deleted.
-External image URIs, package imports, and runtime protocols must match the
-selected backend; changing their spelling does not port their implementation.
+External image URIs, package imports, and service protocols keep their
+upstream identifiers.
 
 The launch reference owns review/approval, nested specs, record-before-submit
 ordering, and backend monitoring. Planning does not authorize jobs, registry
@@ -66,6 +65,12 @@ License headers and metadata remain authoritative; see
 `migration.json`; native runtime attribution lives independently in
 [`cosmos_framework/licenses/workflows/`](../../cosmos_framework/licenses/workflows/).
 
+The planner uses native CUDA TorchCodec decoding. The source's precomputed
+decoder-compatibility artifact workflow and its always-disabled Framework
+branch were omitted; Framework's independent video-override utilities remain
+available in the native package. Inference uses the native CLI, without a
+second TOML adapter or archive-to-spec substitution layer.
+
 ## CPU validation
 
 ```bash
@@ -75,7 +80,7 @@ python -m pytest --confcutdir=. -q
 python scripts/stamp_versions.py --check --strict-strays
 ```
 
-Tests cover model/backend/image resolution, sealed plans, checkpoint/evaluation
+Tests cover model/action/image resolution, sealed plans, checkpoint/evaluation
 handoffs, execution contracts, relocation, and agent integration without model
 weights, GPUs, registry access, or framework GPU fixtures. They do not substitute
 for live training or inference validation.

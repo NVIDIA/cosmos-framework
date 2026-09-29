@@ -6,8 +6,4 @@
 # platforms, or an explicitly materialized SQSH for SLURM.
 images:
   containers:
-    pyt: cosmos-framework:local
-    deploy: cosmos-framework:local
-    data_services: cosmos-framework:local
-    deft_pas_data_services: cosmos-framework:local
     cosmos_framework: cosmos-framework:local

@@ -2,11 +2,10 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Prepare Cosmos3-Nano Omni weights for the selected backend loader.
+"""Prepare Cosmos3-Nano Omni weights with Framework's exact-key converter.
 
-The caller supplies the selected backend runtime. The helper keeps the
-converter implementation and Nano architecture mapping internal and records
-source, runtime, and output checkpoint provenance.
+The helper runs the native converter in the action image and records source,
+image, and output checkpoint provenance.
 """
 
 from __future__ import annotations
@@ -16,6 +15,7 @@ import getpass
 import hashlib
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -23,17 +23,8 @@ from pathlib import Path
 from typing import Any
 
 DEFAULT_NANO_VLM_ARCHITECTURE_MODEL = "Qwen/Qwen3-VL-8B-Instruct"
-CONVERTER_ENTRYPOINT_MODULES = {
-    "cosmos-framework": "cosmos_framework.scripts.convert_model_to_vlm_safetensors",
-}
-
-
-def converter_entrypoint(args: argparse.Namespace) -> str:
-    backend = getattr(args, "backend", "cosmos-framework")
-    try:
-        return CONVERTER_ENTRYPOINT_MODULES[backend]
-    except KeyError as exc:
-        raise ValueError(f"unsupported Cosmos preparation backend: {backend!r}") from exc
+CONVERTER_ENTRYPOINT = "cosmos_framework.scripts.convert_model_to_vlm_safetensors"
+PROVENANCE_FILE = "cosmos_conversion_provenance.json"
 
 
 def sha256(path: Path) -> str:
@@ -45,7 +36,9 @@ def sha256(path: Path) -> str:
 
 
 def is_uri(value: str) -> bool:
-    return "://" in value or ("/" in value and not Path(value).expanduser().exists())
+    if Path(value).expanduser().exists():
+        return False
+    return bool(re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]*/[A-Za-z0-9][A-Za-z0-9_.-]*", huggingface_model_id(value)))
 
 
 def huggingface_model_id(value: str) -> str:
@@ -71,6 +64,8 @@ def validate(path: Path) -> dict[str, Any]:
     if not config_file.is_file():
         raise ValueError(f"prepared checkpoint is missing config.json: {path}")
     config = json.loads(config_file.read_text(encoding="utf-8"))
+    if not isinstance(config, dict):
+        raise ValueError("prepared config.json must be a JSON object")
     if config.get("model_type") != "qwen3_vl":
         raise ValueError(f"prepared model_type must be qwen3_vl, found {config.get('model_type')!r}")
     weights = sorted(path.glob("*.safetensors"))
@@ -78,7 +73,13 @@ def validate(path: Path) -> dict[str, Any]:
     if not weights and not index.is_file():
         raise ValueError("prepared checkpoint has no safetensors weights/index")
     if index.is_file():
-        weight_map = json.loads(index.read_text(encoding="utf-8")).get("weight_map", {})
+        payload = json.loads(index.read_text(encoding="utf-8"))
+        weight_map = payload.get("weight_map") if isinstance(payload, dict) else None
+        if not isinstance(weight_map, dict) or not weight_map:
+            raise ValueError("prepared checkpoint index has no weight_map")
+        for name in weight_map.values():
+            if not isinstance(name, str) or not name or Path(name).is_absolute() or ".." in Path(name).parts:
+                raise ValueError("prepared checkpoint index contains an unsafe weight path")
         missing = sorted({name for name in weight_map.values() if not (path / name).is_file()})
         if missing:
             raise ValueError(f"prepared checkpoint is missing indexed shards: {missing[:10]}")
@@ -88,7 +89,7 @@ def validate(path: Path) -> dict[str, Any]:
         raise ValueError(f"prepared checkpoint is missing tokenizer files: {missing_processor}")
     files = []
     for file in sorted(path.iterdir()):
-        if file.is_file() and (file.suffix in {".json", ".safetensors", ".jinja"}):
+        if file.name != PROVENANCE_FILE and file.is_file() and (file.suffix in {".json", ".safetensors", ".jinja"}):
             files.append({"name": file.name, "size": file.stat().st_size, "sha256": sha256(file)})
     return {
         "model_type": "qwen3_vl",
@@ -111,7 +112,7 @@ def command(args: argparse.Namespace, output: Path, cache: Path) -> list[str]:
     architecture_input = huggingface_model_id(args.vlm_architecture_model_path_or_uri)
     source_mount, source = docker_mount(source_input, "/inputs/base")
     donor_mount, donor = docker_mount(architecture_input, "/inputs/architecture")
-    entrypoint = converter_entrypoint(args)
+    entrypoint = CONVERTER_ENTRYPOINT
     script = f"""
 set -Eeuo pipefail
 source_value="$BASE_MODEL"
@@ -139,7 +140,7 @@ python -m {entrypoint} \
     runtime_user = os.environ.get("USER") or os.environ.get("LOGNAME") or getpass.getuser() or "workflow_status"
     result = [
         # Run as the invoking user so the host-side validation pass can read
-        # the prepared files; the selected backend image keeps its venv readable.
+        # the prepared files; the selected image keeps its venv readable.
         "docker",
         "run",
         "--rm",
@@ -217,7 +218,7 @@ def inside_container_command(
     return [
         sys.executable,
         "-m",
-        converter_entrypoint(args),
+        CONVERTER_ENTRYPOINT,
         "--checkpoint-path",
         source,
         "--output-path",
@@ -229,12 +230,6 @@ def inside_container_command(
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument(
-        "--backend",
-        choices=tuple(CONVERTER_ENTRYPOINT_MODULES),
-        default="cosmos-framework",
-        help="Selected backend whose packaged converter must be used.",
-    )
     parser.add_argument("--base-model-path-or-uri", required=True)
     parser.add_argument("--base-model-revision", default="")
     parser.add_argument(
@@ -249,12 +244,57 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--inside-container",
         action="store_true",
-        help="Run the packaged converter directly in the already selected backend runtime.",
+        help="Run the packaged converter directly in the current container.",
     )
     parser.add_argument("--base-model-identity", default="")
     parser.add_argument("--vlm-architecture-model-identity", default="")
     parser.add_argument("--force", action="store_true")
     return parser.parse_args(argv)
+
+
+def conversion_request(args: argparse.Namespace) -> dict[str, Any]:
+    """Bind reuse to the source bytes/revisions, converter, and selected image."""
+
+    def source(value: str, original: str, revision: str) -> dict[str, Any]:
+        record = {"identity": original or value, "revision": revision or None}
+        if not is_uri(value):
+            root = Path(value).expanduser()
+            files = [
+                (str(path.relative_to(root)), sha256(path))
+                for path in sorted(root.rglob("*"))
+                if path.is_file() and not any(part.startswith(".") for part in path.relative_to(root).parts)
+            ]
+            record["content_sha256"] = hashlib.sha256(json.dumps(files).encode()).hexdigest()
+        return record
+
+    return {
+        "converter": CONVERTER_ENTRYPOINT,
+        "base_model": source(args.base_model_path_or_uri, args.base_model_identity, args.base_model_revision),
+        "architecture_model": source(
+            args.vlm_architecture_model_path_or_uri,
+            args.vlm_architecture_model_identity,
+            args.vlm_architecture_model_revision,
+        ),
+        "image": args.runtime_image,
+        "image_digest": args.runtime_image_digest,
+    }
+
+
+def validate_output_location(args: argparse.Namespace) -> tuple[Path, Path]:
+    """Never replace an input, a cache, or a symlink through --force."""
+    supplied = Path(args.output_path).expanduser()
+    if supplied.is_symlink():
+        raise ValueError("output must not be a symlink")
+    output = supplied.resolve()
+    cache = Path(args.cache_dir).expanduser().resolve()
+    protected = [cache]
+    for value in (args.base_model_path_or_uri, args.vlm_architecture_model_path_or_uri):
+        if not is_uri(value):
+            protected.append(Path(value).expanduser().resolve())
+    for path in protected:
+        if output.is_relative_to(path) or path.is_relative_to(output):
+            raise ValueError(f"output overlaps an input checkpoint or cache: {path}")
+    return output, cache
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -267,17 +307,21 @@ def main(argv: list[str] | None = None) -> int:
             "architecture model",
         ),
     ):
-        if is_uri(value) and not revision:
+        if is_uri(value) and not re.fullmatch(r"[0-9a-fA-F]{40}", revision):
             print(
-                f"ERROR: immutable revision is required for {label} URI {value!r}",
+                f"ERROR: an immutable 40-character Hub commit is required for {label} URI {value!r}",
                 file=sys.stderr,
             )
             return 2
         if not is_uri(value) and not Path(value).expanduser().is_dir():
             print(f"ERROR: local {label} path is inaccessible: {value}", file=sys.stderr)
             return 2
-    output = Path(args.output_path).expanduser()
-    cache = Path(args.cache_dir).expanduser()
+    try:
+        output, cache = validate_output_location(args)
+    except ValueError as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        return 2
+    request = conversion_request(args)
     output.parent.mkdir(parents=True, exist_ok=True)
     cache.mkdir(parents=True, exist_ok=True)
     if output.exists():
@@ -292,8 +336,20 @@ def main(argv: list[str] | None = None) -> int:
                 return 2
             shutil.rmtree(output)
         else:
-            metadata = output / "cosmos_conversion_provenance.json"
+            metadata = output / PROVENANCE_FILE
             if metadata.is_file() and not args.force:
+                try:
+                    recorded = json.loads(metadata.read_text(encoding="utf-8"))
+                except (OSError, ValueError):
+                    recorded = {}
+                if not isinstance(recorded, dict):
+                    recorded = {}
+                if recorded.get("request") != request or recorded.get("prepared") != existing:
+                    print(
+                        "ERROR: conversion provenance or output content does not match; choose a new output or use --force",
+                        file=sys.stderr,
+                    )
+                    return 2
                 print(json.dumps({"status": "reused_verified", **existing}, indent=2))
                 return 0
             if not args.force:
@@ -312,6 +368,7 @@ def main(argv: list[str] | None = None) -> int:
     prepared = validate(output)
     provenance = {
         "schema_version": 1,
+        "request": request,
         "base_model": identity(args.base_model_identity or args.base_model_path_or_uri),
         "base_model_revision": args.base_model_revision or None,
         "architecture_model": identity(args.vlm_architecture_model_identity or args.vlm_architecture_model_path_or_uri),
@@ -323,7 +380,7 @@ def main(argv: list[str] | None = None) -> int:
         "output": identity(str(output)),
         "prepared": prepared,
     }
-    (output / "cosmos_conversion_provenance.json").write_text(json.dumps(provenance, indent=2, sort_keys=True) + "\n")
+    (output / PROVENANCE_FILE).write_text(json.dumps(provenance, indent=2, sort_keys=True) + "\n")
     print(json.dumps(provenance, indent=2, sort_keys=True))
     return 0
 

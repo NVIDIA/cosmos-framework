@@ -44,7 +44,7 @@ Preflight passes only after all of these are true:
 
 If any item is missing, ask for the missing input and stop before generating
 artifacts. This applies to the managed train/evaluate/inference/export and data
-actions retained here; AutoML and DEFT orchestration are not included.
+actions.
 
 When preflight work clears a blocker, keep track of the original user request.
 After the fix, rerun the relevant preflight and continue toward that request;
@@ -59,7 +59,8 @@ platform reference implements them over its native CLI — Docker, SLURM,
 Kubernetes, Brev, and virtualenv under `execution/platforms/`. Any
 externally installed platform skill joins the same contract (§ External
 platform skills); nothing else is platform-specific.
-`$BANK` = `${COSMOS_WORKFLOWS_ROOT}`.
+Source `tools/cosmos_workflows/env.sh` from the repository root to set
+`COSMOS_WORKFLOWS_ROOT` to this checkout’s helper directory.
 
 - **submit(spec-bundle)** — resolve the data question first: if the inputs are
   **already readable from the compute frame** (a local path, an existing mount —
@@ -70,10 +71,10 @@ platform skills); nothing else is platform-specific.
   **open the record and launch, in that order**:
 
   ```bash
-  JOB_ID=$("$BANK/scripts/cosmos_job_record.py" open --platform <p> --image <img> \
+  JOB_ID=$("$COSMOS_WORKFLOWS_ROOT/scripts/cosmos_job_record.py" open --platform <p> --image <img> \
     --network-arch <arch> --action <action> --storage-tier <A|B|C> --results-root <root>)
   # <native launch, naming the backend object after $JOB_ID>
-  "$BANK/scripts/cosmos_job_record.py" mark "$JOB_ID" --state RUNNING --backend-ref <ref>
+  "$COSMOS_WORKFLOWS_ROOT/scripts/cosmos_job_record.py" mark "$JOB_ID" --state RUNNING --backend-ref <ref>
   ```
 
 - **status(id)** — poll the native backend, map to the fixed vocabulary
@@ -103,7 +104,7 @@ secrets, timeouts, ranks, and child-exit preservation remain platform-owned.
 No registry, no interface file: a platform skill **declares the contract by
 documenting the four verbs, and you verify by reading** before first use. A
 skill with only native primitives may be used by **inferring** the mapping
-(bank invariants still bind; the mapping goes in the launch review; persist
+(workflow invariants still bind; the mapping goes in the launch review; persist
 what worked). Rules and the no-equivalent hard floor:
 `references/external-platforms.md`.
 
@@ -159,23 +160,14 @@ When intake inputs are missing, ask with the exact prompt shape in
 `references/intake-prompts.md` (one consolidated ask, concrete examples,
 no invented defaults).
 
-## Implementation Backend Resolution
+## Model action contract
 
-After model ownership resolution, inspect the selected model's
-`references/skill_info.yaml`. If it declares `backend_contracts`, resolve the
-implementation before selecting an image or authoring a spec. An explicit
-backend wins when it supports the model/action; otherwise apply the packaged
-`backend_selection` policy and show its rationale. The selected backend
-metadata in `skill_info.yaml` owns its image. The referenced backend contract
-owns the entrypoint, configuration schema, data mappings, topology, checkpoint
-format, output layout, and status behavior. Never use a legacy top-level image
-fallback for a multi-backend frontend, and never treat one backend as a version
-of another.
-
-Pass action, backend, and workload hints to the model resolver. When metadata
-declares a backend planner, use it. The shared Cosmos frontend, for example,
-uses `scripts/cosmos_workflow.py plan` to generate backend-native TOML and a
-launch sequence.
+Read the resolved model's `references/skill_info.yaml` for the action command,
+configuration format, supported platforms, and declared inputs and outputs.
+Use its planner when provided. The reasoner planner at
+`models/cosmos3-reasoner/scripts/cosmos_workflow.py` generates training TOML,
+environment bindings, image and dataset fingerprints, and preflight commands.
+Checkpoint and evaluation planners consume that sealed training contract.
 
 ## Container Image Confirmation
 
@@ -184,19 +176,17 @@ submitting a job, resolve the image for the selected model/action:
 
 ```bash
 ${COSMOS_WORKFLOWS_ROOT:?}/scripts/resolve_cosmos_image.py \
-  --skill-bank ${COSMOS_WORKFLOWS_ROOT:?} \
-  --model <network> --action <action> --backend <auto-or-explicit> \
-  --workload <workload-hint> --format text
+  --workflow-root ${COSMOS_WORKFLOWS_ROOT:?} \
+  --model <network> --action <action> --format text
 ```
 
-If the helper is unavailable, read `models/<network>/config.json`
+If the helper is unavailable, read `models/<network>/references/skill_info.yaml`
 directly. Resolve image fields in this order:
 
-1. `backend_contracts.<selected-backend>.container_image`, when present
-2. `actions.<action>.container_image`
-3. `actions.<action>.image`
-4. top-level `container_image`
-5. top-level `image`
+1. `actions.<action>.container_image`
+2. top-level `container_image`
+
+Check that the action is supported before resolving its image.
 
 Show the exact image and ask:
 
@@ -210,8 +200,8 @@ Use this image, or provide image=<override>?
 If the user accepts, pass the resolved image as the job `image`. If the user
 overrides, require a non-empty image reference and pass that value instead.
 Do not silently launch on the default image. This confirmation applies to
-training, AutoML recommendations, evaluation, inference, export, TensorRT
-engine generation, and application workflows that submit model containers.
+training, evaluation, inference, export, and data workflows that submit
+containers.
 
 ## Credential Filtering
 
@@ -313,11 +303,8 @@ Before any side-effecting launch, show a concise review:
 - important model/workflow overrides that differ from template defaults
 - estimated runtime and the assumptions behind it
 - monitoring interval and whether chat-side monitoring will stay attached
-- implementation backend and selection rationale when the model exposes more
-  than one backend
 
-Ask for confirmation after this review. AutoML/HPO and DEFT orchestration are
-not part of this core bundle. If the user supplied a time limit, flag any plan that exceeds it
+Ask for confirmation after this review. If the user supplied a time limit, flag any plan that exceeds it
 and offer concrete reductions before launch.
 
 Never end a successful launch review with only “nothing was launched.” End

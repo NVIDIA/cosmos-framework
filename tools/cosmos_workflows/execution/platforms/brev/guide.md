@@ -32,8 +32,9 @@ Or connect the **Brev MCP server** (`https://docs.nvidia.com/brev/_mcp/server`).
 Either one owns login/auth quirks, placement IDs, GPU search, and teardown flags.
 It does **not** cover container execution on the instance — that is this reference.
 
-**Preflight for this reference:** the `brev` CLI is on `PATH` and logged in (headless:
-`brev login --token "$BREV_API_TOKEN"` before any other call), and you can reach a
+**Preflight for this reference:** the `brev` CLI is on `PATH` and already logged in.
+Check access with `brev ls`; if authentication is missing, ask the user to
+complete CLI login outside chat. Never put tokens on argv. You must reach a
 target instance — poll with a **two-word** command until it succeeds before
 issuing real work (a fresh instance reports `RUNNING` before sshd is up):
 
@@ -64,7 +65,7 @@ before deleting the instance**. Instance-local `~/` persists across stop/start b
 Brev is a **compound consumer**: `submit` reaches an instance, then **defers the
 container-how to the four docker verbs** (`execution/platforms/docker/guide.md`) run over
 `brev exec`. It is not a symmetric peer — teardown must additionally delete the
-instance to stop billing. `$BANK` = `${COSMOS_WORKFLOWS_ROOT}`.
+instance to stop billing. `$COSMOS_WORKFLOWS_ROOT` = `${COSMOS_WORKFLOWS_ROOT}`.
 
 - **submit** — reach an instance (provision/reuse via the official Brev skill or
   MCP; reuse an existing instance by its `instance_id`; wait for readiness, above).
@@ -73,12 +74,12 @@ instance to stop billing. `$BANK` = `${COSMOS_WORKFLOWS_ROOT}`.
 
   ```bash
   redact_secrets.py lint <<<"$REMOTE_CMD"     # no inline secrets; creds as -e VAR
-  JOB_ID=$("$BANK/scripts/cosmos_job_record.py" open \
+  JOB_ID=$("$COSMOS_WORKFLOWS_ROOT/scripts/cosmos_job_record.py" open \
     --platform brev --image "$IMG" \
     --network-arch "$ARCH" --action "$ACTION" \
     --storage-tier "$TIER" --results-root "$RESULTS_ROOT")
   brev exec <instance> "docker inspect '$JOB_ID' >/dev/null 2>&1 && { echo '$JOB_ID already submitted'; exit 0; }; docker run -d --name '$JOB_ID' --label 'cosmos-job=$JOB_ID' ..."
-  "$BANK/scripts/cosmos_job_record.py" mark "$JOB_ID" --state RUNNING \
+  "$COSMOS_WORKFLOWS_ROOT/scripts/cosmos_job_record.py" mark "$JOB_ID" --state RUNNING \
     --backend-ref "<instance>/$JOB_ID"       # instance is part of the ref: the
                                              # container is unreachable without it
   ```
@@ -93,7 +94,7 @@ instance to stop billing. `$BANK` = `${COSMOS_WORKFLOWS_ROOT}`.
   ```bash
   brev exec <instance> "docker rm -f $JOB_ID"
   brev delete <instance>                      # ephemeral instances only
-  "$BANK/scripts/cosmos_job_record.py" mark "$JOB_ID" --state CANCELED --source agent
+  "$COSMOS_WORKFLOWS_ROOT/scripts/cosmos_job_record.py" mark "$JOB_ID" --state CANCELED --source agent
   ```
 
 ### `brev exec` argument form
@@ -129,7 +130,7 @@ brev exec <instance> "docker manifest inspect $IMG >/dev/null && echo AUTH_OK ||
 brev exec <instance> "docker image inspect $IMG >/dev/null 2>&1 || docker pull $IMG"
 
 # Run a Cosmos job (the docker `submit` verb, over brev exec)
-brev exec <instance> "docker inspect '$JOB_ID' >/dev/null 2>&1 && { echo '$JOB_ID already submitted'; exit 0; }; docker run -d --name '$JOB_ID' --label 'cosmos-job=$JOB_ID' --gpus all -v ~/data:/data -e NGC_KEY '$IMG' visual_changenet train -e /data/spec.yaml"
+brev exec <instance> "docker inspect '$JOB_ID' >/dev/null 2>&1 && { echo '$JOB_ID already submitted'; exit 0; }; docker run -d --name '$JOB_ID' --label 'cosmos-job=$JOB_ID' --gpus all -v ~/data:/data -e NGC_KEY '$IMG' python -m cosmos_framework.scripts.inference -i /data/input.json -o /data/results --checkpoint-path /data/model --seed 42"
 ```
 
 ## Multi-GPU and multi-node

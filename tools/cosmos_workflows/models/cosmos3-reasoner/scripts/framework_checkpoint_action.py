@@ -267,7 +267,6 @@ def verify_export(
     return {
         "schema_version": 1,
         "status": "VERIFIED",
-        "backend": "cosmos-framework",
         "ok": True,
         "source_checkpoint": str(checkpoint),
         "action_model_path": str(output),
@@ -294,7 +293,6 @@ def build_plan(args: argparse.Namespace) -> dict[str, Any]:
             raise WorkflowError("an immutable revision is required for a model URI/identifier")
         return {
             "schema_version": 1,
-            "backend": "cosmos-framework",
             "action": args.action,
             "checkpoint_kind": "model_uri",
             "checkpoint": {"original": args.checkpoint_path, "resolved": None},
@@ -309,7 +307,6 @@ def build_plan(args: argparse.Namespace) -> dict[str, Any]:
     if is_hf_checkpoint(checkpoint):
         return {
             "schema_version": 1,
-            "backend": "cosmos-framework",
             "action": args.action,
             "checkpoint_kind": "hf_safetensors",
             "checkpoint": path_identity(args.checkpoint_path),
@@ -368,7 +365,6 @@ def build_plan(args: argparse.Namespace) -> dict[str, Any]:
             validation_error = str(exc)
     return {
         "schema_version": 1,
-        "backend": "cosmos-framework",
         "action": args.action,
         "checkpoint_kind": "framework_dcp",
         "checkpoint": path_identity(args.checkpoint_path),

@@ -3,7 +3,7 @@
 #
 # Cosmos MULTI-NODE Kubernetes template — the single-pod template's superset: a
 # headless Service (created FIRST so DNS resolves when pods come up) + an Indexed
-# Job + a rank/master rendezvous block. cosmos-run-on-kubernetes renders it by
+# Job + a rank/master rendezvous block. kubernetes renders it by
 # substituting @@<NAME>@@ (command uses single quotes only).
 #
 # REQUIRES k8s >= 1.28 (PodIndexLabel gives each pod the stable hostname

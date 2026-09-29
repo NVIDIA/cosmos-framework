@@ -1,14 +1,13 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://nvidia.com/cosmos/schemas/cosmos-job-metadata-v1.json",
-  "title": "Cosmos Cosmos job metadata",
+  "title": "Cosmos Framework job metadata",
   "type": "object",
   "required": [
     "schema_version",
     "experiment_id",
     "dataset",
     "training_mode",
-    "backend",
     "cosmos_job_id",
     "slurm",
     "image",
@@ -49,12 +48,6 @@
         "dense",
         "peft"
       ]
-    },
-    "backend": {
-      "enum": [
-        "cosmos-framework"
-      ],
-      "default": "cosmos-framework"
     },
     "slurm": {
       "type": "object",

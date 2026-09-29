@@ -18,9 +18,9 @@ agent, exactly like every other platform.
 - The workload is a **plain Python script** (its dependencies pip-installed in
   a venv), not a model container action.
 - **No docker** on the host, or container startup cost isn't worth it (fast
-  smokes, AutoML trial loops over lightweight models).
+  CPU checks and lightweight data preparation).
 - Single node only. For model container actions use `execution/platforms/docker/guide.md`; for
-  clusters use `-slurm` / `-kubernetes`.
+  clusters use [SLURM](../slurm/guide.md) or [Kubernetes](../kubernetes/guide.md).
 
 ## Preflight
 
@@ -45,8 +45,8 @@ in the job record's `results_dir`, which IS the runner's `--job-dir`.
 
 ## Execution — the four verbs
 
-`$BANK` = `${COSMOS_WORKFLOWS_ROOT}`; `$RUNNER` =
-`$BANK/execution/platforms/virtualenv/references/virtualenv_runner.py`.
+`$COSMOS_WORKFLOWS_ROOT` = `${COSMOS_WORKFLOWS_ROOT}`; `$RUNNER` =
+`$COSMOS_WORKFLOWS_ROOT/execution/platforms/virtualenv/references/virtualenv_runner.py`.
 
 ### submit
 
@@ -56,7 +56,7 @@ in the job record's `results_dir`, which IS the runner's `--job-dir`.
 2. **Open the record — mints the id, binds `results_dir` BEFORE launch:**
 
    ```bash
-   JOB_ID=$("$BANK/scripts/cosmos_job_record.py" open --platform virtualenv \
+   JOB_ID=$("$COSMOS_WORKFLOWS_ROOT/scripts/cosmos_job_record.py" open --platform virtualenv \
      --image "$VENV/bin/python" --network-arch "$ARCH" --action "$ACTION" \
      --storage-tier A --results-root "$RESULTS_ROOT")
    RESULTS_DIR="$RESULTS_ROOT/$JOB_ID"
@@ -80,7 +80,7 @@ in the job record's `results_dir`, which IS the runner's `--job-dir`.
 4. **Record RUNNING** with the pid the runner printed:
 
    ```bash
-   "$BANK/scripts/cosmos_job_record.py" mark "$JOB_ID" --state RUNNING --backend-ref "pid:<pid>"
+   "$COSMOS_WORKFLOWS_ROOT/scripts/cosmos_job_record.py" mark "$JOB_ID" --state RUNNING --backend-ref "pid:<pid>"
    ```
 
 One submit per job dir — a retry gets a NEW record (`--retry-of`), never a
@@ -108,7 +108,7 @@ python3 "$RUNNER" logs --job-dir "$RESULTS_DIR" --tail 200
 
 ```bash
 python3 "$RUNNER" cancel --job-dir "$RESULTS_DIR"
-"$BANK/scripts/cosmos_job_record.py" mark "$JOB_ID" --state CANCELED --source agent
+"$COSMOS_WORKFLOWS_ROOT/scripts/cosmos_job_record.py" mark "$JOB_ID" --state CANCELED --source agent
 ```
 
 Cancel marks first (a not-yet-started wrapper self-cancels at its start gate),

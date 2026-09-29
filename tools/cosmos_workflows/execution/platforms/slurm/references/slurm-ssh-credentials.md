@@ -1,6 +1,8 @@
 # SLURM SSH Setup, Credentials, And Storage
 
-SSH preflight detail, prerequisite setup, the full credential list, backend details, storage rules, and the SSH failure remediation prompt. If this reference conflicts with `guide.md`, `skill_info.yaml`, schemas, or platform/model skills, the compact/current source wins.
+SSH access, Enroot registry authentication, and credential handling for the
+native SLURM commands. For shared paths and job records, see
+[Storage](slurm-preflight-storage.md).
 
 ## Preflight
 
@@ -63,8 +65,7 @@ Set this up once per (host, login node, user) tuple:
 
 1. Ensure an SSH keypair exists for the service user (e.g. `~/.ssh/id_ed25519`).
    Create one with `ssh-keygen -t ed25519 -N "" -f ~/.ssh/id_ed25519` if it is
-   missing. The handler defaults to the same locations described under
-   `SSH_KEY_PATH` in [Credentials](#credentials).
+   missing. Select the key path explicitly; do not overwrite an existing key.
 2. Install the public key on each login node:
 
    ```bash
@@ -82,8 +83,8 @@ Set this up once per (host, login node, user) tuple:
    ```
 
 3. Trust the host key so SSH does not stall on the "authenticity of host" prompt
-   inside the handler. Either log in once interactively to accept the prompt,
-   or pre-populate `~/.ssh/known_hosts` with `ssh-keyscan -H <login-host> >> ~/.ssh/known_hosts`.
+   inside the handler. Verify the host-key fingerprint with the cluster administrator before accepting
+   it or adding a scanned key to `~/.ssh/known_hosts`.
 4. Verify the result is fully non-interactive for at least one listed login
    host:
 
@@ -94,10 +95,9 @@ Set this up once per (host, login node, user) tuple:
 
    `BatchMode=yes` forces failure if SSH would otherwise prompt; this command
    must succeed before the SLURM platform is usable.
-5. When the service runs in a container (microservices deployment), mount the
+5. When the submission client runs in a container, mount the
    private key into the container at the path referenced by `SSH_KEY_PATH`, with
-   `chmod 600` and matching ownership for the in-container user. The handler
-   refuses keys with world-readable permissions.
+   `chmod 600` and matching ownership for the in-container user. Verify these permissions before use.
 
 For convenience, a per-host alias in `~/.ssh/config` lets you reference a short
 name everywhere:
@@ -117,77 +117,17 @@ handler via `SSH_AUTH_SOCK`.
 
 ## Credentials
 
-- **SLURM_USER** (required): SSH username for the login node. In microservices
-  workspace metadata this is `cloud_specific_details.slurm_user`.
-- **SLURM_HOSTNAME** (required): Comma-separated login hostnames for failover.
-  Microservices schema stores this as the list field
-  `cloud_specific_details.slurm_hostname`.
-- **SLURM_PARTITION** (required): Partition list for GPU job submission. Ask
-  for this in the mandatory SLURM intake list. The packaged default is
-  `polar,polar3,polar4,grizzly`, which are treated as 4-hour queues.
-- **SSH_KEY_PATH** (preferred and expected before launch): private key path for
-  non-interactive public-key auth to the login node. If passwordless SSH fails,
-  ask the user for `SSH_KEY_PATH=/path/to/private_key` and show the setup steps
-  below; do not bury this behind several alternate choices.
-- **SSH_AUTH_SOCK** (advanced fallback): SSH agent socket with an accepted key
-  already loaded. Prefer `SSH_KEY_PATH` in user-facing remediation prompts.
-- **SLURM_BASE_RESULTS_DIR** (required for tracked Cosmos workflows): Base
-  shared filesystem path supplied explicitly at runtime; there is no site default.
-- **SLURM_ACCOUNT** (usually required by site policy): Account charged by
-  `#SBATCH --account`.
+- **SLURM_USER**: login username.
+- **SLURM_HOSTNAME**: comma-separated login hosts for failover.
+- **SSH_KEY_PATH**: private-key path for non-interactive public-key auth;
+  **SSH_AUTH_SOCK** is an alternative when an accepted key is already loaded.
+- **NGC_KEY**: needed only for authenticated registry pulls. Use stdin when
+  installing Enroot credentials after approval; never log credential contents.
 
-Do not ask for `SLURM_ACCOUNT` or `SLURM_BASE_RESULTS_DIR` in the initial
-intake unless the user says their site requires an account, wants a custom
-results root, or the workflow cannot proceed without overriding defaults.
-
-## Backend Details
-
-Use `backend_details.backend_type = "slurm"` when routing a job to this
-platform. Supported backend details from the microservices schema:
-
-```json
-{
-  "backend_type": "slurm",
-  "partition": "polar,polar3,polar4,grizzly",
-  "cluster_name": "optional-name"
-}
-```
-
-Runtime metadata is stored under `backend_details.slurm_metadata`, especially
-`slurm_job_id` and `job_dir`. Do not invent these values. They are written
-after `sbatch` returns a scheduler job id.
-
-## Storage
-
-SLURM jobs run on the cluster, so local paths from the API host are not valid
-dataset paths. Prefer shared filesystem URIs:
-
-- Use `lustre:///absolute/path` for user-provided datasets on Lustre.
-- `slurm://` paths may appear in microservices metadata and are converted to
-  actual Lustre paths before the container starts.
-- Use absolute shared-filesystem paths verified on compute nodes. A login-host
-  path is not proof that GPU nodes can read it; resolve logical storage URIs
-  through data staging before passing native paths to the model command.
-
-Accept either dataset roots or direct spec-key paths:
-
-- Root mode: `<SHARED_TRAIN_ROOT>`, which model skills map to required
-  files such as `<root>/annotations.json` and `<root>` as media path.
-- Direct spec mode: exact fields such as
-  `custom.train_dataset.annotation_path=<TRAIN_ANNOTATION_PATH>` and
-  `custom.train_dataset.media_path=<TRAIN_MEDIA_PATH>`.
-
-After passwordless SSH succeeds and before generating scripts, validate each
-required dataset file/path from the login host:
-
-```bash
-ssh -o BatchMode=yes <SLURM_USER>@<working-login-host> \
-  'test -e <ANNOTATION_PATH> && test -e <MEDIA_PATH>'
-```
-
-If the remote `test -e` fails, stop and ask for corrected paths or for the data
-to be staged onto shared cluster storage. Do not create runner scripts that will
-fail inside the first training job.
+Cluster partition/account selection and shared output roots belong to the
+[platform launch intake](../guide.md#required-inputs), not a credential or
+microservice schema. Credentials stay in the session environment or an approved
+env file. Do not ask for their values in chat.
 
 ## SSH Failure Remediation Prompt
 
@@ -204,7 +144,7 @@ If you have not set up passwordless access yet:
 2. Install the public key on one login host:
    ssh-copy-id -i ~/.ssh/id_ed25519.pub <SLURM_USER>@<login-host>
 3. Trust the host key:
-   ssh-keyscan -H <login-host> >> ~/.ssh/known_hosts
+   Verify the host-key fingerprint with your administrator, then accept it on first login.
 4. Lock private-key permissions:
    chmod 600 ~/.ssh/id_ed25519
 5. Verify it works without prompts:
@@ -212,12 +152,3 @@ If you have not set up passwordless access yet:
 
 After that, rerun with SSH_KEY_PATH=~/.ssh/id_ed25519.
 ```
-
-Results are supplied at runtime, for example:
-
-```text
-<SHARED_RESULTS_ROOT>/<job_id>
-```
-
-The runner sets `COSMOS_API_RESULTS_DIR` to the supplied parent results directory because
-container code appends the job id when writing status and artifacts.

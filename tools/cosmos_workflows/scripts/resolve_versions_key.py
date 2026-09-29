@@ -11,7 +11,7 @@ docs so the YAML schema is known in exactly one place.
 
 Examples
 --------
-    resolve_versions_key.py images.containers.pyt
+    resolve_versions_key.py images.containers.cosmos_framework
 """
 
 from __future__ import annotations
@@ -24,11 +24,9 @@ from typing import Any
 
 import yaml
 
-# The bank this script is part of, so resolution works from a git clone, a plugin
-# install, or anywhere else the tree is unpacked. $COSMOS_WORKFLOWS_ROOT overrides it
-# for the case where the caller means a different bank than the one it lives in.
-_BUNDLED_SKILL_BANK = Path(__file__).resolve().parents[1]
-DEFAULT_SKILL_BANK = Path(os.environ.get("COSMOS_WORKFLOWS_ROOT") or _BUNDLED_SKILL_BANK)
+# Resolve resources relative to this checkout, with an optional explicit root override.
+_BUNDLED_WORKFLOW_ROOT = Path(__file__).resolve().parents[1]
+DEFAULT_WORKFLOW_ROOT = Path(os.environ.get("COSMOS_WORKFLOWS_ROOT") or _BUNDLED_WORKFLOW_ROOT)
 
 
 def parse_args() -> argparse.Namespace:
@@ -36,12 +34,12 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "key",
-        help="Dotted key path, e.g. 'images.containers.pyt'.",
+        help="Dotted key path, e.g. 'images.containers.cosmos_framework'.",
     )
     parser.add_argument(
-        "--skill-bank",
+        "--workflow-root",
         type=Path,
-        default=DEFAULT_SKILL_BANK,
+        default=DEFAULT_WORKFLOW_ROOT,
         help="Path to the packaged Cosmos workflow bundle (defaults to $COSMOS_WORKFLOWS_ROOT).",
     )
     return parser.parse_args()
@@ -68,7 +66,7 @@ def resolve(versions_path: Path, dotted_key: str) -> str:
 def main() -> int:
     """Print the resolved value or exit non-zero with a diagnostic."""
     args = parse_args()
-    versions_path = args.skill_bank.expanduser() / "versions.yaml"
+    versions_path = args.workflow_root.expanduser() / "versions.yaml"
     if not versions_path.exists():
         print(f"versions.yaml not found at {versions_path}", file=sys.stderr)
         return 2

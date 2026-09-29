@@ -57,7 +57,7 @@ Persists in `~/.docker/config.json` across reboots. Re-run on `unauthorized` err
 Run a spec-bundle by implementing exactly these four verbs, mutating only the
 job-record. Status values are the fixed vocabulary from `execution/artifacts/guide.md`
 (`PENDING RUNNING COMPLETE ERROR CANCELED UNKNOWN`); native docker states map
-below, with the raw state carried in the transition `message`. `$BANK` =
+below, with the raw state carried in the transition `message`. `$COSMOS_WORKFLOWS_ROOT` =
 `${COSMOS_WORKFLOWS_ROOT}`.
 
 ### submit
@@ -72,7 +72,7 @@ below, with the raw state carried in the transition `message`. `$BANK` =
 3. **Open the record — this mints the id and binds `results_dir` BEFORE launch:**
 
    ```bash
-   JOB_ID=$("$BANK/scripts/cosmos_job_record.py" open \
+   JOB_ID=$("$COSMOS_WORKFLOWS_ROOT/scripts/cosmos_job_record.py" open \
      --platform docker --image "$IMAGE" \
      --network-arch "$ARCH" --action "$ACTION" \
      --storage-tier "$TIER" --results-root "$RESULTS_ROOT")
@@ -91,7 +91,7 @@ below, with the raw state carried in the transition `message`. `$BANK` =
    ```
 
 5. **Record RUNNING:**
-   `"$BANK/scripts/cosmos_job_record.py" mark "$JOB_ID" --state RUNNING --backend-ref "$CID"`.
+   `"$COSMOS_WORKFLOWS_ROOT/scripts/cosmos_job_record.py" mark "$JOB_ID" --state RUNNING --backend-ref "$CID"`.
 
 A submit that skipped step 3 has no id, so it cannot launch — that is the
 record-then-launch invariant.
@@ -123,7 +123,7 @@ docker logs --tail "${N:-200}" "$JOB_ID"    # add -f to follow in-turn
 
 ```bash
 docker rm -f "$JOB_ID"
-"$BANK/scripts/cosmos_job_record.py" mark "$JOB_ID" --state CANCELED --source agent
+"$COSMOS_WORKFLOWS_ROOT/scripts/cosmos_job_record.py" mark "$JOB_ID" --state CANCELED --source agent
 ```
 
 ## Local vs remote (DOCKER_HOST)

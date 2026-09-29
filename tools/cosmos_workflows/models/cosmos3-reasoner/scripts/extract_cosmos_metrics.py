@@ -165,7 +165,6 @@ def load_evaluation(path: Path | None) -> dict[str, Any]:
 def summarize_records(
     records: list[dict[str, Any]],
     evaluation: Mapping[str, Any] | None = None,
-    backend: str = "cosmos-framework",
     require_complete: bool = True,
 ) -> dict[str, Any]:
     train_events: list[dict[str, Any]] = []
@@ -174,9 +173,6 @@ def summarize_records(
     failures: list[str] = []
     states: list[str] = []
     visual_gradient_events: list[dict[str, Any]] = []
-    if backend not in {"auto", "cosmos-framework"}:
-        raise MetricError("only Framework metrics are supported")
-    inferred = "cosmos-framework"
     for record in records:
         message = str(record.get("message", ""))
         status = str(record.get("status", "")).upper()
@@ -219,7 +215,6 @@ def summarize_records(
         raise MetricError("completed metric report is incomplete: " + ", ".join(missing))
     return {
         "schema_version": 2,
-        "backend": inferred,
         "terminal_status": terminal,
         "average_training_loss": train_events[-1] if train_events else None,
         "average_validation_loss": validation_events[-1] if validation_events else None,
@@ -254,9 +249,6 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--status-file", type=Path, required=True)
     parser.add_argument("--evaluation-json", type=Path)
     parser.add_argument("--log-file", type=Path)
-    parser.add_argument(
-        "--backend", choices=("auto", "cosmos-framework"), default="cosmos-framework", help=argparse.SUPPRESS
-    )
     parser.add_argument("--allow-incomplete", action="store_true")
     parser.add_argument("--format", choices=("json", "text"), default="json")
     return parser.parse_args(argv)
@@ -267,7 +259,7 @@ def main(argv: list[str] | None = None) -> int:
     try:
         evaluation = load_evaluation(args.evaluation_json)
         summary = summarize_records(
-            records_from_jsonl(args.status_file), evaluation, args.backend, not args.allow_incomplete
+            records_from_jsonl(args.status_file), evaluation, require_complete=not args.allow_incomplete
         )
         if args.log_file:
             summary["diagnostics"] = diagnostic_log(args.log_file)

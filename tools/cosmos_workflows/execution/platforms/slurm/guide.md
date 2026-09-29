@@ -47,8 +47,8 @@ remediation prompt.
 `ssh + sbatch/squeue/sacct/scancel`, mutating only the job-record. Storage is
 **tier A** (Lustre) — the dataset is staged to a shared path *before* submit and
 read through Pyxis; never fetch S3 inside the allocation (the scheduler-idle
-timeout kills GPU-idle jobs and bills the wasted time). `$BANK` =
-`${COSMOS_WORKFLOWS_ROOT}`; `$LOGIN` = a resolved `SLURM_HOSTNAME`.
+timeout kills GPU-idle jobs and bills the wasted time). `$COSMOS_WORKFLOWS_ROOT` comes from `env.sh`; `$LOGIN` is the selected
+`SLURM_USER@SLURM_HOSTNAME`.
 
 ### submit
 
@@ -60,7 +60,8 @@ timeout kills GPU-idle jobs and bills the wasted time). `$BANK` =
      reference those paths; `execution/data-io/guide.md` stages *only* a small auxiliary input
      that is not there yet — never re-stage existing data, and never the training
      set inside the allocation.
-   Then author the spec at `<job_dir>/specs/spec.yaml` on Lustre with those paths.
+   Then stage the model-owned config format (native SFT uses `train.toml`)
+   under `<job_dir>/specs/` with those paths.
 2. **Credentials → sidecar (never inline):** if the run needs session creds
    (e.g. `HF_TOKEN`), write them to a mode-600 sidecar on Lustre and let the
    template shred it on exit; NGC image pulls use the one-time
@@ -75,7 +76,7 @@ timeout kills GPU-idle jobs and bills the wasted time). `$BANK` =
 3. **Open the record — mints the id, binds `results_dir` on Lustre, before launch:**
 
    ```bash
-   JOB_ID=$("$BANK/scripts/cosmos_job_record.py" open --platform slurm --image "$IMAGE" \
+   JOB_ID=$("$COSMOS_WORKFLOWS_ROOT/scripts/cosmos_job_record.py" open --platform slurm --image "$IMAGE" \
      --network-arch "$ARCH" --action "$ACTION" --storage-tier A --results-root "$SLURM_BASE_RESULTS_DIR")
    ```
 
@@ -95,7 +96,7 @@ timeout kills GPU-idle jobs and bills the wasted time). `$BANK` =
 
    ```bash
    SLURM_ID=$(ssh $LOGIN "sbatch --parsable <job_dir>/sbatch/job_$JOB_ID.sbatch")
-   "$BANK/scripts/cosmos_job_record.py" mark "$JOB_ID" --state RUNNING --backend-ref "$SLURM_ID"
+   "$COSMOS_WORKFLOWS_ROOT/scripts/cosmos_job_record.py" mark "$JOB_ID" --state RUNNING --backend-ref "$SLURM_ID"
    ```
 
 A submit that skipped the gate or the open has no id — so it cannot launch.
@@ -134,7 +135,7 @@ ssh $LOGIN "tail -n ${N:-200} <log_dir>/$JOB_ID-$SLURM_ID/main.out"   # SLURM au
 
 ```bash
 ssh $LOGIN "scancel $SLURM_ID"
-"$BANK/scripts/cosmos_job_record.py" mark "$JOB_ID" --state CANCELED --source agent
+"$COSMOS_WORKFLOWS_ROOT/scripts/cosmos_job_record.py" mark "$JOB_ID" --state CANCELED --source agent
 ```
 
 Treat an already-terminated SLURM job as a successful cancel.
@@ -149,11 +150,8 @@ Same four verbs, with three additions at submit:
    change it to a global-rank count.
 2. **NCCL probe first** — before the real job, run a cheap 2-node all-reduce
    (`scripts/nccl_allreduce_probe.py` under the container's torchrun) with a
-   ~120s timeout. Before invoking torchrun, preserve the container rendezvous values
-   as `COSMOS_NODE_COUNT=$NNODES`,
-   `COSMOS_GPUS_PER_NODE=$NPROC_PER_NODE`, and
-   `COSMOS_NODE_RANK=$SLURM_PROCID`; torchrun overwrites its standard
-   `WORLD_SIZE` with the global process count. `NCCL_PROBE_OK` → proceed.
+   ~120s timeout. The probe reads torchrun's standard global and local rank
+   variables directly. `NCCL_PROBE_OK` → proceed.
    **Timed out** (the collective hung)
    → set the cluster's NCCL knob in `EXTRA_ENV` and re-probe — on CS-OCI-ORD that
    is `export NCCL_P2P_DISABLE=1` (the intra-node P2P hang), often with
@@ -162,7 +160,7 @@ Same four verbs, with three additions at submit:
    the P2P hang triggers on a single node with 2+ GPUs.
 3. Tier-A Lustre, sidecar creds, record, and lint are unchanged.
 
-### Cosmos backend guardrails
+### Framework launch guardrails
 
 Read [`references/cosmos-slurm-guardrails.md`](references/cosmos-slurm-guardrails.md)
 before rendering a Cosmos command. It defines image staging, planner
@@ -177,17 +175,13 @@ these paths on the login/compute host and maps them through explicit container
 mounts. Do not add `lustre://`, `slurm://`, or `file://` prefixes to planner
 annotation, media, checkpoint, cache, or results paths.
 
-Legacy microservice/SDK payloads may separately require `lustre:///...` or
-`slurm://` storage URIs. Apply that encoding only at a consumer that declares
-it; it is not the native Cosmos planner's input format. Follow the selected
-model's contract when constructing each payload.
 
 Accept either dataset roots (model skills map them to required files) or direct
 spec-key paths. After SSH succeeds and before generating scripts, `test -e` each
 required dataset path from the login host; if it fails, stop and ask for
 corrected paths or staged data rather than producing scripts that fail in the
-first training job. See `references/slurm-ssh-credentials.md` for root vs.
-direct-spec modes, backend details, and the results-dir default.
+first training job. See `references/slurm-preflight-storage.md` for input staging
+and `references/slurm-ssh-credentials.md` for host access.
 
 ## Container execution
 
@@ -242,9 +236,10 @@ srun --container-image=<sqsh> ...
 The same rule governs data: stage it to Lustre before submit (tier A) rather
 than fetching inside the allocation.
 
-CS-OCI-ORD conversion uses `cpu_long`, 4 CPUs, 7200M memory, no exclusive node,
-node-local Enroot temp paths, and at least 120 minutes. The execution reference
-records the evidence and `QOSGrpMemLimit` recovery contract.
+Select an available CPU partition explicitly and check its wall-time and memory
+limits. The 4 CPU / 7200M / 120 minute conversion profile is a starting point,
+not a cluster guarantee. Do not inherit a multi-GPU training resource request;
+check `QOSGrpMemLimit` and other scheduler limits if conversion stays pending.
 
 Partial conversions are self-detecting: the SQSH is validated by `hsqs` magic,
 so a truncated file is rejected rather than silently used. Conversion runs once
@@ -273,7 +268,7 @@ Diagnostic: if a job is unexpectedly slow to produce output, check what
   user asked to detach/stop or the job reached terminal state.
 - Logs are read over SSH from
   `<job_dir>/slurm-logs/<slurm_job_name>-<slurm_job_id>/main.out` and `.err`.
-- Cancel by looking up `backend_details.slurm_metadata.slurm_job_id` and running
+- Cancel by looking up the job record’s `backend_ref` and running
   `scancel <slurm_job_id>` over SSH. Treat missing or already terminated jobs as
   successful cancellation.
 
@@ -293,22 +288,21 @@ Status mapping:
 ## Required inputs
 
 Ask for these in the SLURM intake; see `references/slurm-ssh-credentials.md`
-for the full credential list, microservices schema keys, and defaults.
+for SSH and Enroot credential handling.
 
 - **SLURM_USER** (required): SSH username for the login node.
 - **SLURM_HOSTNAME** (required): Comma-separated login hostnames for failover.
-- **SLURM_PARTITION** (required): Partition list for GPU submission. Packaged
-  default `polar,polar3,polar4,grizzly`, treated as 4-hour queues.
+- **SLURM_PARTITION**: the user-selected GPU partition(s), or explicitly use
+  the scheduler default; no site-specific queue is assumed.
 - **SSH_KEY_PATH** (preferred, expected before launch): private key for
   non-interactive public-key auth. Ask for this first in remediation; prefer it
   over the `SSH_AUTH_SOCK` agent-socket fallback.
-- **SLURM_BASE_RESULTS_DIR** (optional): base shared-filesystem path; default
-  a shared-storage root supplied and verified at runtime.
+- **SLURM_BASE_RESULTS_DIR** (required for tracked launches): user-supplied,
+  compute-verified shared results root.
 - **SLURM_ACCOUNT** (usually required by site policy): account for `#SBATCH --account`.
 
-Do not ask for `SLURM_ACCOUNT` or `SLURM_BASE_RESULTS_DIR` in the initial
-intake unless the user says their site requires an account, wants a custom
-results root, or the workflow cannot proceed without overriding defaults.
+Collect the shared output root and any account required by the site before
+launch. Reuse values already supplied; do not assume personal directories.
 
 ## Resource defaults
 
@@ -320,17 +314,13 @@ Generic template defaults (model contracts and explicit user resources override 
 - `cpus_per_task`: 16
 - `time_hours`: 4
 - `timeout_hours`: 3.8
-- `max_time_hours`: 4
 - `container_mounts`: explicit source-to-target mounts supplied at runtime
-- `use_requeue`: true
+- `use_requeue`: false for reasoner training
 - `use_sqsh`: true
 
-Launchers must use the packaged 4-hour wall and 3.8-hour child-timeout
-defaults, never 12 hours. If the user supplies a longer
-`SLURM_TIME_HOURS`, verify that the selected partition supports it before
-submitting. For the packaged default partition list
-`polar,polar3,polar4,grizzly`, reject requests above 4 hours and ask for a
-different partition only if the user actually wants a longer wall time.
+Review the requested wall time against the selected partition’s current limit.
+Keep the child timeout below that wall time so termination/status cleanup can
+finish. These duration defaults are not a hard limit on other clusters.
 
 At or above `max_num_gpus_per_node`, allocate exclusive nodes and derive their
 count from total GPUs.
@@ -373,7 +363,7 @@ Lustre-not-S3 rule in full, and the failure-mode checklist.
 ## References
 
 - `references/slurm-ssh-credentials.md` — preflight script, SSH/key setup,
-  enroot credentials, full credential list, backend details, storage rules,
+  enroot credentials, credential-presence checks,
   SSH remediation prompt.
 - `references/slurm-container-execution.md` — container execution steps,
   monitoring, status mapping, cancellation, multi-node detail,

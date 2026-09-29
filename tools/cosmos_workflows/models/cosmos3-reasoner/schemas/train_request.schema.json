@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://nvidia.com/cosmos/schemas/cosmos3-train-request-v3.json",
-  "title": "Cosmos3 Cosmos training request",
+  "title": "Cosmos3 reasoner SLURM intake reference",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -13,12 +13,6 @@
     "slurm"
   ],
   "properties": {
-    "backend": {
-      "enum": [
-        "cosmos-framework"
-      ],
-      "default": "cosmos-framework"
-    },
     "base_model_path_or_uri": {
       "type": "string",
       "minLength": 1,
@@ -142,11 +136,13 @@
             },
             "frame_width": {
               "type": "integer",
-              "minimum": 1
+              "minimum": 1,
+              "description": "Geometry for pixel-budget planning, not an explicit native resize."
             },
             "frame_height": {
               "type": "integer",
-              "minimum": 1
+              "minimum": 1,
+              "description": "Geometry for pixel-budget planning, not an explicit native resize."
             },
             "max_video_pixels": {
               "type": "integer",
@@ -178,9 +174,7 @@
             }
           },
           "x_cosmos_native_mapping": {
-            "frames": "COSMOS_VIDEO_FRAMES",
-            "frame_width": "COSMOS_VIDEO_FRAME_WIDTH",
-            "frame_height": "COSMOS_VIDEO_FRAME_HEIGHT",
+            "frames": "COSMOS_VIDEO_NUM_FRAMES",
             "max_video_pixels": "COSMOS_VIDEO_MAX_PIXELS"
           }
         },
@@ -323,7 +317,7 @@
     },
     "source": {
       "type": "object",
-      "description": "Advanced source-build inputs. Omit for an existing SQSH or packaged backend image.",
+      "description": "Advanced source-build inputs. Omit for an existing SQSH or packaged image.",
       "additionalProperties": false,
       "required": [
         "framework_repository"
@@ -337,7 +331,7 @@
     },
     "image": {
       "type": "object",
-      "description": "Optional runtime override. Omit to use the packaged backend image; sqsh_path selects an existing SLURM artifact directly.",
+      "description": "Optional runtime override. Omit to use the packaged image; sqsh_path selects an existing SLURM artifact directly.",
       "additionalProperties": false,
       "properties": {
         "runtime_mode": {
@@ -349,10 +343,6 @@
           ]
         },
         "tag": {
-          "type": "string",
-          "minLength": 1
-        },
-        "build_context": {
           "type": "string",
           "minLength": 1
         },
@@ -455,12 +445,12 @@
         "properties": {
           "image": {
             "required": [
-              "tag",
-              "build_context"
+              "tag"
             ]
           }
         }
       }
     }
-  ]
+  ],
+  "description": "Optional structured SLURM intake checklist, not a planner input file. The planner CLI also supports Docker; consult plan --help."
 }

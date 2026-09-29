@@ -45,12 +45,12 @@ manifest of source, destination, SHA256, and size. Reuse only a byte-identical
 manifest; never overwrite a different bundle. These are orchestration inputs,
 not permission to shadow packages in the image or add a startup source patch.
 
-### CS-OCI-ORD SQSH conversion profile
+### SQSH conversion resources
 
-Use partition `cpu_long`, not `cpu`; the latter's roughly 30-minute wall can
-kill container conversion and leave a truncated file. Request 4 CPUs, 7200M memory,
-no exclusive node, and a timeout of at least 120 minutes. This profile is
-preserved from successful conversion job `32370651` (21m28s elapsed).
+Choose a site-supported CPU partition and verify its wall-time, CPU, and memory
+limits. Four CPUs, 7200M, and 120 minutes are planning starting points; request
+more time/resources when the image or site needs them. Preserve failure on an
+incomplete conversion and inspect the resulting SQSH before GPU submission.
 
 Set `TMPDIR=/tmp` and both `ENROOT_TEMP_PATH` and
 `SLURM_ENROOT_TEMP_PATH` to job-unique
@@ -97,7 +97,7 @@ Status mapping:
 
 ## Cancellation
 
-Cancel by looking up `backend_details.slurm_metadata.slurm_job_id` and running
+Cancel by looking up the job record’s `backend_ref` and running
 `scancel <slurm_job_id>` over SSH. Treat missing or already terminated SLURM
 jobs as successful cancellation.
 
@@ -113,11 +113,10 @@ rendezvous env vars below. For example, `NUM_GPUS=8` (GPUs per node) with
 ```bash
 torchrun --nnodes=$NNODES --nproc-per-node=$NPROC_PER_NODE \
   --node-rank=$NODE_RANK --master-addr=$MASTER_ADDR --master-port=$MASTER_PORT \
-  train.py
+  -m cosmos_framework.scripts.train --sft-toml=/data/train.toml
 ```
 
-(packaged entrypoints such as `dino train -e spec.yaml` build the torchrun invocation
-internally from `NNODES` + `NPROC_PER_NODE`.)
+Framework training consumes the structured TOML recipe; torchrun owns worker launch.
 
 ### What the rendered template generates
 

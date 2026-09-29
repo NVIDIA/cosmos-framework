@@ -9,7 +9,7 @@ Prefer the packaged preflight helper when the needed inputs are available:
 
 ```bash
 ${COSMOS_WORKFLOWS_ROOT:?}/scripts/check_cosmos_launch_preflight.py \
-  --skill-bank ${COSMOS_WORKFLOWS_ROOT:?} \
+  --workflow-root ${COSMOS_WORKFLOWS_ROOT:?} \
   --platform <platform> \
   --container-image <selected-image> \
   --path train_annotation=<path> \
@@ -28,7 +28,7 @@ the rerun verifies the paths.
 When the selected model skill warns that large S3 media should be staged, copy
 or extract the data once to platform-visible storage before creating launch
 artifacts, then validate those staged paths with the same preflight helper.
-Record the source URI and staged path in the run workspace so AutoML summaries
+Record the source URI and staged path in the run workspace so workflow summaries
 can distinguish data staging time from training/evaluation time.
 
 For `local-docker` and `remote-docker`, always pass the selected image with
@@ -68,9 +68,8 @@ For SLURM:
    default partition, pass an empty partition/omit the partition directive; do
    not substitute a site-specific value such as `batch`.
    Use the selected platform helper's `Resource defaults` for runtime values.
-   For the packaged SLURM defaults, generate launchers with
-   `SLURM_TIME_HOURS=4` and `SLURM_TIMEOUT_HOURS=3.8`; never invent a
-   12-hour default for the 4-hour partition list.
+   Verify the selected partition’s wall-time limit and keep the child timeout
+   below it; do not assume another site’s queues or limits.
    Launching the orchestrator with `nohup` or in the background is allowed for
    durability, but it does not satisfy chat monitoring by itself. After launch,
    keep a foreground chat-side polling loop attached until terminal state or
@@ -80,9 +79,10 @@ For SLURM:
 3. If SSH fails, do not offer several equivalent choices. Ask for
    `SSH_KEY_PATH=/path/to/private_key` and show the passwordless setup steps:
    create a key if needed with
-   `ssh-keygen -t ed25519 -N "" -f ~/.ssh/id_ed25519`; install it with
-   `ssh-copy-id -i ~/.ssh/id_ed25519.pub <SLURM_USER>@<login-host>`; trust the
-   host with `ssh-keyscan -H <login-host> >> ~/.ssh/known_hosts`; set
+   `ssh-keygen -t ed25519 -N "" -f ~/.ssh/id_ed25519` without overwriting an
+   existing key; install it with
+   `ssh-copy-id -i ~/.ssh/id_ed25519.pub <SLURM_USER>@<login-host>`; verify the
+   host-key fingerprint with the cluster administrator before trusting it; set
    `chmod 600 ~/.ssh/id_ed25519`; verify with
    `ssh -o BatchMode=yes -i ~/.ssh/id_ed25519 <SLURM_USER>@<login-host> 'hostname'`;
    then rerun with `SSH_KEY_PATH=~/.ssh/id_ed25519`.
@@ -93,14 +93,14 @@ For SLURM:
    `execution/platforms/slurm/guide.md` platform skill emits this in the sbatch launcher). Do not
    generate manual `--gpus=<N>` sbatch snippets; that can spread GPUs across
    nodes and leave allocated GPUs idle.
-7. For full-matrix or multi-node launches, submit one smoke job first. Launch
-   the full matrix only after the smoke reaches training, emits the requested
-   metric/status record, and shows expected GPU utilization.
+7. Complete the model's image, decoder, and NCCL preflight before a multi-node
+   launch. A separate diagnostic training job is opt-in: submit it only if the
+   user requests and approves it. Do not silently turn a full-run request into
+   a smoke run or change its sample limits.
 
-For AutoML status, prefer structured controller/brain state and job metadata
-(`active_jobs.json`, `.automl/controller/*.json`, result JSON, and
-`results_dir/train/status.json`) before scanning raw logs. Parse logs only as a
-fallback or when the user specifically asks for log-level investigation.
+Poll the execution platform for live state and use Framework structured status
+records for training progress. Consult logs for diagnostics, not as a substitute
+for terminal status and child exit codes.
 
 For local Docker, validate Docker/GPU access and local dataset paths before
 writing launch artifacts. For Brev and Kubernetes, validate API or

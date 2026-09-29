@@ -25,7 +25,6 @@ from cosmos_common import inspect_dataset, stable_hash  # noqa: E402
 def _sealed_plan(
     tmp_path: Path,
     *,
-    backend: str = "cosmos-framework",
     mode: str = "dense",
     prompt: str = "training prompt",
     max_video_pixels: int | None = 4096,
@@ -38,7 +37,6 @@ def _sealed_plan(
         "schema_version": 2,
         "experiment_id": "training-job",
         "action": "train",
-        "backend": backend,
         "training": {
             "training_mode": mode,
             "precision": "bfloat16",
@@ -75,8 +73,7 @@ def _sealed_plan(
             "model_tier": model_tier,
         },
         "compute": {"total_gpus": 8},
-        "image": {"tag": f"example.invalid/cosmos/{backend}:test"},
-        "decoder_artifact": {"enabled": False},
+        "image": {"tag": "example.invalid/cosmos/framework:test"},
         "evaluation_contract": {
             "schema_version": 1,
             "validation_dataset_fingerprint": "validation-fingerprint",
@@ -106,19 +103,18 @@ def _sealed_plan(
             "checkpoint_selection": None,
         },
     }
-    if backend == "cosmos-framework":
-        plan["framework_video_runtime"] = {
-            "selected_profile": "torchcodec-cuda-on-demand",
-            "decoder_device_binding": "explicit_local_rank",
-            "decoder_device": "cuda",
-            "decoder_threads": 1,
-            "sft_process_threads": 8,
-            "video_cache_size": 341,
-            "dataloader_num_workers": 1,
-            "dataloader_prefetch_factor": 2,
-            "dataloader_multiprocessing_context": "spawn",
-            "dataloader_persistent_workers": True,
-        }
+    plan["framework_video_runtime"] = {
+        "selected_profile": "torchcodec-cuda-on-demand",
+        "decoder_device_binding": "explicit_local_rank",
+        "decoder_device": "cuda",
+        "decoder_threads": 1,
+        "sft_process_threads": 8,
+        "video_cache_size": 341,
+        "dataloader_num_workers": 1,
+        "dataloader_prefetch_factor": 2,
+        "dataloader_multiprocessing_context": "spawn",
+        "dataloader_persistent_workers": True,
+    }
     if annotation_sha256 is not None:
         plan["datasets"]["validation"]["annotation_manifest"] = [
             {
@@ -173,7 +169,6 @@ def _framework_checkpoint_manifest(tmp_path: Path, *, source: str, action: str) 
             {
                 "schema_version": 1,
                 "status": "VERIFIED",
-                "backend": "cosmos-framework",
                 "source_checkpoint": source,
                 "action_model_path": action,
                 "verification": {
@@ -191,7 +186,6 @@ def _framework_checkpoint_manifest(tmp_path: Path, *, source: str, action: str) 
 def _run(
     tmp_path: Path,
     *,
-    backend: str = "cosmos-framework",
     mode: str = "dense",
     multiple: bool = False,
     prompt: str = "training prompt",
@@ -212,7 +206,6 @@ def _run(
         str(
             _sealed_plan(
                 tmp_path,
-                backend=backend,
                 mode=mode,
                 prompt=prompt,
                 max_video_pixels=max_video_pixels,
@@ -245,7 +238,7 @@ def _run(
                 str(manifest_path),
             ]
         )
-    elif backend == "cosmos-framework" and "--action-model-path" in extra:
+    elif "--action-model-path" in extra:
         index = extra.index("--action-model-path")
         action_model_path = extra[index + 1]
         source = f"/runtime/checkpoints/epoch_{selected_epoch}"
@@ -499,7 +492,7 @@ def test_recorded_empty_system_prompt_is_inherited_not_reported_missing(tmp_path
 
 
 def test_framework_export_is_automated_not_user_intake(tmp_path: Path) -> None:
-    result, plan_path, config_path = _run(tmp_path, backend="cosmos-framework", mode="peft", prepare_checkpoint=False)
+    result, plan_path, config_path = _run(tmp_path, mode="peft", prepare_checkpoint=False)
     assert result.returncode == 3, result.stderr
     unresolved = json.loads(plan_path.read_text(encoding="utf-8"))
 
@@ -514,7 +507,6 @@ def test_framework_export_is_automated_not_user_intake(tmp_path: Path) -> None:
 
     rerun, resolved_path, resolved_config = _run(
         tmp_path,
-        backend="cosmos-framework",
         mode="peft",
         extra=["--action-model-path", "/runtime/exported-checkpoint"],
     )

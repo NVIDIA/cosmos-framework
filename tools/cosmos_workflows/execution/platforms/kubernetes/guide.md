@@ -88,7 +88,7 @@ is not sufficient proof.
 `execution/platforms/kubernetes/guide.md` is a platform **consumer**: it runs a spec-bundle via
 `kubectl`, mutating only the job-record. No service SDK —
 jobs are submitted with plain `kubectl apply`.
-`$BANK` = `${COSMOS_WORKFLOWS_ROOT}`.
+`$COSMOS_WORKFLOWS_ROOT` = `${COSMOS_WORKFLOWS_ROOT}`.
 
 ### submit
 
@@ -121,7 +121,7 @@ jobs are submitted with plain `kubectl apply`.
 3. **Open the record — mints the id, binds `results_dir`, before launch:**
 
    ```bash
-   JOB_ID=$("$BANK/scripts/cosmos_job_record.py" open --platform kubernetes --image "$IMAGE" \
+   JOB_ID=$("$COSMOS_WORKFLOWS_ROOT/scripts/cosmos_job_record.py" open --platform kubernetes --image "$IMAGE" \
      --network-arch "$ARCH" --action "$ACTION" --storage-tier "$TIER" --results-dir "$RESULTS_DIR")
    ```
 
@@ -170,7 +170,7 @@ kubectl delete job "$K8S_JOB_NAME" -n "$NAMESPACE" --cascade=foreground
 if [ -n "${CRED_SECRET:-}" ]; then
   kubectl delete secret "$CRED_SECRET" -n "$NAMESPACE" --ignore-not-found
 fi
-"$BANK/scripts/cosmos_job_record.py" mark "$JOB_ID" --state CANCELED --source agent
+"$COSMOS_WORKFLOWS_ROOT/scripts/cosmos_job_record.py" mark "$JOB_ID" --state CANCELED --source agent
 ```
 
 ### Multi-node (nodes > 1)
@@ -246,27 +246,15 @@ steps above) to run distributed training across N pods. Rendering
 
 1. A **headless Service** named after the Job (selector: `job-name=<job-name>`, `clusterIP: None`, `publishNotReadyAddresses: true` so pods can rendezvous before they're all Ready).
 2. An **Indexed Job** with `parallelism = completions = num_nodes`, `completionMode: Indexed`. Each pod gets `JOB_COMPLETION_INDEX` injected by k8s automatically (= the node rank).
-3. A **command wrapper** that exports the rendezvous env vars before invoking the user command. Two naming conventions are exported simultaneously:
-
-   | Env var          | Value                                   | Read by                                    |
-   | ---------------- | --------------------------------------- | ------------------------------------------ |
-   | `NNODES`         | `num_nodes`                             | `torchrun` and PyTorch-standard rendezvous |
-   | `NPROC_PER_NODE` | `gpu_count`                             | `torchrun`                                 |
-   | `NODE_RANK`      | `$JOB_COMPLETION_INDEX`                 | both                                       |
-   | `MASTER_ADDR`    | `<job-name>-0.<job-name>` (pod-0's DNS) | both                                       |
-   | `MASTER_PORT`    | `29500`                                 | both (the container default)               |
-
-   Both naming conventions are set so packaged entrypoints (`dino train`, etc.) and raw `torchrun` commands work without modification.
-
-For a packaged entrypoint, the container reads `spec.train.num_nodes` and the wired
-env vars — e.g. `dino train -e /tmp/spec.yaml` with `gpu_count=8`, `num_nodes=4`
-(4 × 8 = 32 GPUs total).
-
-For raw `torchrun`-based commands (non-model containers), the wrapper invokes:
+3. A **command wrapper** exports `NNODES`, `NPROC_PER_NODE`,
+   `NODE_RANK`, `MASTER_ADDR`, and `MASTER_PORT`. The submitted command must
+   pass these to torchrun; Framework's training module does not spawn workers
+   itself. For a native recipe:
 
 ```bash
 torchrun --nnodes=$NNODES --nproc-per-node=$NPROC_PER_NODE --node-rank=$NODE_RANK \
-  --master-addr=$MASTER_ADDR --master-port=$MASTER_PORT train.py
+  --master-addr=$MASTER_ADDR --master-port=$MASTER_PORT \
+  -m cosmos_framework.scripts.train --sft-toml=/data/train.toml
 ```
 
 The capacity check sums across nodes: `gpu_count × num_nodes` ≤ cluster's allocatable `nvidia.com/gpu`.

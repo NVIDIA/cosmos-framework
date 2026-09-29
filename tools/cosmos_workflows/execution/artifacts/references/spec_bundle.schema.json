@@ -104,7 +104,7 @@
         "uri": {
           "type": "string",
           "minLength": 1,
-          "description": "Source location: s3://, hf://, ngc://, lustre:///, or an absolute compute-frame path (strategy A). NO storage_tier here — the tier is chosen by cosmos-data-io at stage time and stamped into the job-record."
+          "description": "Source location: s3://, hf://, ngc://, lustre:///, or an absolute compute-frame path (strategy A). NO storage_tier here — the tier is chosen by data staging at stage time and stamped into the job-record."
         }
       }
     },

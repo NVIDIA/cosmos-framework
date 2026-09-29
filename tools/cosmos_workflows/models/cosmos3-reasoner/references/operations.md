@@ -1,8 +1,7 @@
 # Framework runtime operations
 
-All helpers in this repository use Cosmos Framework. The optional hidden
-`--backend cosmos-framework` compatibility argument is redundant; examples
-omit it. Unsupported runtime requests fail closed.
+The helpers prepare images, checkpoints, and distributed execution for the
+Framework reasoner recipes.
 
 ## Image identity
 
@@ -26,6 +25,10 @@ Omni conversion uses `cosmos_framework.scripts.convert_model_to_vlm_safetensors`
 inside the same Framework runtime and writes into the selected compute-frame
 checkpoint directory without mutating the source. Hub references resolve to
 immutable revisions; private access requires only credential-presence checks.
+The converter requires a full Hub commit for remote inputs, or hashes local
+checkpoint contents. A missing filesystem path is not a Hub model ID. Its
+output must be separate from both inputs and the cache; even `--force` cannot
+replace those directories or follow an output symlink.
 
 Framework training emits DCP. Before evaluate/inference/serving, use
 `framework_checkpoint_action.py` to plan, prepare, and verify exact-key HF

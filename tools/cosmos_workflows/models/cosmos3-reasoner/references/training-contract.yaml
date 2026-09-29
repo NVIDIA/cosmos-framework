@@ -2,10 +2,8 @@
 # SPDX-License-Identifier: Apache-2.0
 
 schema_version: 2
-backend: cosmos-framework
 display_name: Cosmos Framework
-native_source_repository: cosmos-framework
-runtime_implementation_repository: cosmos-framework
+source_repository: cosmos-framework
 runtime_image_selection:
   explicit_sqsh_precedence: true
   packaged_default_when_omitted: true
@@ -43,7 +41,11 @@ runtime:
     batcher: resume_safe_contiguous
     sft_process_threads: 8
     decoder_threads: 1
-    dataloader: {workers: 1, prefetch_factor: 2, multiprocessing_context: spawn, persistent_workers: true}
+    dataloader:
+      workers: 1
+      prefetch_factor: {video_conversation: 4, task_aware_video_reasoning: 2}
+      multiprocessing_context: spawn
+      persistent_workers: true
     actual_device_attestation: first_successful_decode_per_rank
     actual_device_requirement: resolved_device_equals_cuda_local_rank
     prewarm: false
@@ -100,43 +102,21 @@ status:
   - val/loss_numerator
   - val/valid_label_count
   events: [started, validation_complete, checkpoint_complete, training_complete, success, failure]
-actions:
-  train: {supported: true, implementation: native}
-  export:
-    supported: true
-    implementation: native_exact_key_exporter
-    orchestrator: scripts/framework_checkpoint_action.py
-    command: python -m cosmos_framework.scripts.export_vlm_dcp
-  evaluate:
-    supported: true
-    implementation: framework_owned_adapter_after_verified_export
-    pre_action: export_if_framework_dcp
-    command: cosmos-reasoner-evaluate --config <config>
-    execution_contract: evaluation_workflow.spec_bundle.execution
-    checkpoint_action_manifest: terminal_verified_required
-    image_capability_attestation: baked_framework_evaluator_runtime_required
-    video_runtime:
-      profile: torchcodec-cuda-on-demand
-      decoder: cosmos_framework.utils.generator.torchcodec_video.TorchCodecVideoReader
-      device_binding: explicit_local_rank
-      decoded_frame_cache: rank_local_memory_populated_on_demand
-      cache_capacity: inherited_from_sealed_training_unique_media_working_set
-      preprocessing_threads: 8
-      ordering: preserved
-      decoder_threads: 1
-      dataloader: {workers: 1, prefetch_factor: 2, multiprocessing_context: spawn, persistent_workers: true}
-      decoding_scope: current_inference_batch_only
-  inference:
-    supported: true
-    implementation: framework_owned_adapter_after_verified_export
-    pre_action: export_if_framework_dcp
-    command: cosmos-reasoner-inference <arguments>
-  inference_microservice:
-    supported: true
-    implementation: framework_owned_adapter_after_verified_export
-    pre_action: export_if_framework_dcp
-    command: cosmos-reasoner-serve <arguments>
-  quantize: {supported: false, reason: no validated Framework checkpoint quantization route}
+evaluation:
+  execution_contract: evaluation_workflow.spec_bundle.execution
+  checkpoint_action_manifest: terminal_verified_required
+  image_capability_attestation: baked_framework_evaluator_runtime_required
+  video_runtime:
+    profile: torchcodec-cuda-on-demand
+    decoder: cosmos_framework.utils.generator.torchcodec_video.TorchCodecVideoReader
+    device_binding: explicit_local_rank
+    decoded_frame_cache: rank_local_memory_populated_on_demand
+    cache_capacity: inherited_from_sealed_training_unique_media_working_set
+    preprocessing_threads: 8
+    ordering: preserved
+    decoder_threads: 1
+    dataloader: {workers: 1, prefetch_factor: 2, multiprocessing_context: spawn, persistent_workers: true}
+    decoding_scope: current_inference_batch_only
 compatibility:
   a100_qwen3_vl_patch_embed: native_per_model_linear_equivalent
   worker_zero_prefetch: num_workers_zero_and_prefetch_none

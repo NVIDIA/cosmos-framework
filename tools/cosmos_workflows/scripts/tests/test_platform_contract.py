@@ -1,22 +1,11 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Cross-platform contract tests for the SDK-free platform skills.
+"""Cross-check platform guides against their scripts, templates, and metadata.
 
-Every regression these guard against shipped in the 7.1.0 -> main merge and was
-invisible to CI, because nothing cross-checked a skill's prose against the
-scripts, templates, and metadata it describes:
-
-  * a preflight referencing a path that does not exist (the k8s SETUP_SCRIPT
-    dropped its ``skills/`` segment, so preflight always failed "file not found")
-  * a platform silently losing job-record integration, so its jobs became
-    untrackable while every sibling platform stayed consistent (Brev)
-  * frontmatter advertising narrower capability than the body implements, so a
-    router never selects the platform for the case it actually supports (k8s
-    said "single-pod" while documenting Indexed-Job multi-node)
-
-These are static: no GPU, no cluster, no credentials. They run on every MR.
-Live execution smokes belong in the nightly platform pipeline instead.
+These static tests verify referenced paths, job tracking, and declared execution
+contracts. They use no GPU, cluster, or credentials and do not prove live launch
+compatibility.
 """
 
 from __future__ import annotations
@@ -31,14 +20,14 @@ import pytest
 REPO = Path(__file__).resolve().parents[2]
 PLATFORM_DIR = REPO / "execution/platforms"
 
-# Platforms that implement the four-verb execution contract. cosmos-data-io (S3
+# Platforms that implement the four-verb execution contract. data staging (S3
 # layer) and cosmos-setup-gpu-host (host preflight) launch nothing by design.
 RUN_PLATFORMS = [
-    "cosmos-run-on-docker",
-    "cosmos-run-on-kubernetes",
-    "cosmos-run-on-slurm",
-    "cosmos-run-on-brev",
-    "cosmos-run-on-virtualenv",
+    "docker",
+    "kubernetes",
+    "slurm",
+    "brev",
+    "virtualenv",
 ]
 
 VERB_PATTERNS = {
@@ -50,7 +39,7 @@ VERB_PATTERNS = {
 
 
 def _skill_text(name: str) -> str:
-    return (PLATFORM_DIR / name.removeprefix("cosmos-run-on-") / "guide.md").read_text(encoding="utf-8")
+    return (PLATFORM_DIR / name / "guide.md").read_text(encoding="utf-8")
 
 
 @pytest.mark.parametrize("platform", RUN_PLATFORMS)
@@ -58,7 +47,7 @@ def _skill_text(name: str) -> str:
 def test_platform_documents_every_verb(platform, verb):
     """Each run platform must document all four verbs of the execution contract."""
     assert VERB_PATTERNS[verb].search(_skill_text(platform)), (
-        f"{platform}/SKILL.md never mentions the '{verb}' verb; the four-verb "
+        f"{platform}/guide.md never mentions the '{verb}' verb; the four-verb "
         f"contract requires submit/status/logs/cancel on every run platform"
     )
 
@@ -68,34 +57,33 @@ def test_platform_wires_the_job_record(platform):
     """Every run platform must mint and update a job record, not just describe one.
 
     Brev regressed to prose ("open the record") with no command, which makes its
-    jobs untrackable across invocations — the capability the SDK's Job handles
-    used to provide.
+    jobs untrackable across invocations.
     """
     text = _skill_text(platform)
     assert "cosmos_job_record.py" in text, (
-        f"{platform}/SKILL.md never invokes scripts/cosmos_job_record.py — jobs "
+        f"{platform}/guide.md never invokes scripts/cosmos_job_record.py — jobs "
         f"launched by this platform cannot be tracked across invocations"
     )
     assert re.search(r"cosmos_job_record\.py[\"']?\s+open", text), (
-        f"{platform}/SKILL.md never calls `cosmos_job_record.py open` to mint a job id"
+        f"{platform}/guide.md never calls `cosmos_job_record.py open` to mint a job id"
     )
     assert re.search(r"cosmos_job_record\.py[\"']?\s+mark", text), (
-        f"{platform}/SKILL.md never calls `cosmos_job_record.py mark` to update state"
+        f"{platform}/guide.md never calls `cosmos_job_record.py mark` to update state"
     )
 
 
 def test_brev_submit_contract_is_idempotent():
     """The normative Brev submit verb must guard against CLI command replay."""
-    text = _skill_text("cosmos-run-on-brev")
+    text = _skill_text("brev")
     execution = text.split("## Execution — the four verbs", 1)[1].split("### `brev exec` argument form", 1)[0]
     assert "docker inspect '$JOB_ID'" in execution
     assert "$JOB_ID already submitted" in execution
 
 
-# Shell-assigned paths that point into the bank, e.g.
+# Shell-assigned paths that point into the workflow bundle, e.g.
 #   SETUP_SCRIPT="${COSMOS_WORKFLOWS_ROOT}/execution/platforms/.../setup.sh"
-BANK_PATH_RE = re.compile(
-    r"\$\{(?:COSMOS_WORKFLOWS_ROOT|COSMOS_WORKFLOWS_ROOT|SB|BANK)(?::-[^}]*)?\}"
+WORKFLOW_PATH_RE = re.compile(
+    r"\$\{COSMOS_WORKFLOWS_ROOT(?::-[^}]*)?\}"
     r"(/[A-Za-z0-9_./-]+\.(?:sh|py|tmpl|yaml|json|md))"
 )
 
@@ -105,18 +93,20 @@ BANK_PATH_RE = re.compile(
     sorted(p for p in PLATFORM_DIR.rglob("*.md") if "__pycache__" not in p.parts),
     ids=lambda p: str(p.relative_to(PLATFORM_DIR)),
 )
-def test_bank_relative_paths_resolve(skill_md):
-    """A `$BANK/...`-anchored path in a platform skill must exist in the repo.
+def test_workflow_relative_paths_resolve(skill_md):
+    """A `$COSMOS_WORKFLOWS_ROOT/...`-anchored path in a platform skill must exist in the repo.
 
     Catches the dropped-path-segment class directly: the k8s preflight pointed at
     `${COSMOS_WORKFLOWS_ROOT}/platform/...` (missing `skills/`) and could never run.
     """
     missing = []
-    for rel in BANK_PATH_RE.findall(skill_md.read_text(encoding="utf-8")):
+    for rel in WORKFLOW_PATH_RE.findall(skill_md.read_text(encoding="utf-8")):
         target = REPO / rel.lstrip("/")
         if not target.exists():
             missing.append(rel)
-    assert not missing, f"{skill_md.relative_to(REPO)} references bank paths that do not exist: {sorted(set(missing))}"
+    assert not missing, (
+        f"{skill_md.relative_to(REPO)} references workflow paths that do not exist: {sorted(set(missing))}"
+    )
 
 
 def test_slurm_enroot_conversion_uses_job_unique_node_local_temp():
@@ -126,22 +116,19 @@ def test_slurm_enroot_conversion_uses_job_unique_node_local_temp():
     allocation.  Enroot then fails during whiteout conversion with ``getcwd``
     and ``failed to resolve path`` errors after all image layers were fetched.
     """
-    text = _skill_text("cosmos-run-on-slurm")
+    text = _skill_text("slurm")
     assert "ENROOT_TEMP_PATH=/tmp/enroot-cosmos-\\${SLURM_JOB_ID}" in text
     assert "SLURM_ENROOT_TEMP_PATH=\\${ENROOT_TEMP_PATH}" in text
     assert "--chdir=/tmp" in text
 
 
-def test_slurm_sqsh_conversion_uses_validated_cpu_long_resource_profile():
-    """Keep image conversion under the CS-OCI QOS memory ceiling.
-
-    SLURM job 32370651 established this profile. Inheriting an eight-GPU
-    training job's CPU request multiplies the site's implicit per-CPU memory
-    and leaves conversion pending under ``QOSGrpMemLimit``.
-    """
-    text = _skill_text("cosmos-run-on-slurm")
+def test_slurm_sqsh_conversion_uses_explicit_site_partition_and_cpu_resources():
+    """Conversion needs explicit site selection, separate from GPU resources."""
+    text = _skill_text("slurm")
     info = (PLATFORM_DIR / "slurm" / "references" / "skill_info.yaml").read_text()
-    assert "sqsh_conversion_partition: cpu_long" in info
+    assert "sqsh_conversion_partition: null" in info
+    assert "polar" not in info
+    assert "max_time_hours:" not in info
     assert "sqsh_conversion_timeout_minutes: 120" in info
     assert "sqsh_conversion_cpus_per_task: 4" in info
     assert "sqsh_conversion_memory_mb: 7200" in info
@@ -150,9 +137,9 @@ def test_slurm_sqsh_conversion_uses_validated_cpu_long_resource_profile():
 
 
 def test_slurm_consumes_model_action_lifecycle_without_private_renderers():
-    text = _skill_text("cosmos-run-on-slurm") + (
-        PLATFORM_DIR / "slurm" / "references" / "slurm-container-execution.md"
-    ).read_text(encoding="utf-8")
+    text = _skill_text("slurm") + (PLATFORM_DIR / "slurm" / "references" / "slurm-container-execution.md").read_text(
+        encoding="utf-8"
+    )
     guardrails = (PLATFORM_DIR / "slurm" / "references" / "cosmos-slurm-guardrails.md").read_text(encoding="utf-8")
     for term in (
         "pre_commands",
@@ -188,12 +175,12 @@ def test_documented_job_record_open_has_required_flags(platform):
     """
     text = _skill_text(platform)
     invocations = OPEN_INVOCATION_RE.findall(text)
-    assert invocations, f"{platform}/SKILL.md documents no `cosmos_job_record.py open` call"
+    assert invocations, f"{platform}/guide.md documents no `cosmos_job_record.py open` call"
     for args in invocations:
         flat = args.replace("\\\n", " ")
         missing = [f for f in JOB_RECORD_OPEN_REQUIRED if f not in flat]
         assert not missing, (
-            f"{platform}/SKILL.md: `cosmos_job_record.py open` example is missing "
+            f"{platform}/guide.md: `cosmos_job_record.py open` example is missing "
             f"required flag(s) {missing} — it would exit 2 at runtime"
         )
 
@@ -209,12 +196,10 @@ def test_job_record_required_flags_match_the_script():
         )
 
 
-# Scripts the platform skills invoke DIRECTLY (as `"$BANK/scripts/x.py" ...`
+# Scripts the platform skills invoke DIRECTLY (as `"$COSMOS_WORKFLOWS_ROOT/scripts/x.py" ...`
 # rather than `python3 .../x.py`) must carry the executable bit, or every
 # documented submit sequence dies at step one with "permission denied".
-DIRECT_EXEC_RE = re.compile(
-    r'"?\$\{?(?:BANK|COSMOS_WORKFLOWS_ROOT|COSMOS_WORKFLOWS_ROOT)\}?/(scripts/[A-Za-z0-9_./-]+\.(?:py|sh))"?\s'
-)
+DIRECT_EXEC_RE = re.compile(r'"?\$\{?COSMOS_WORKFLOWS_ROOT\}?/(scripts/[A-Za-z0-9_./-]+\.(?:py|sh))"?\s')
 
 
 def test_directly_invoked_scripts_are_executable():
@@ -242,7 +227,7 @@ def test_directly_invoked_scripts_are_executable():
         if "__pycache__" in skill_md.parts:
             continue
         referenced.update(DIRECT_EXEC_RE.findall(skill_md.read_text(encoding="utf-8")))
-    assert referenced, "no directly-invoked bank scripts found — has the invocation style changed?"
+    assert referenced, "no directly-invoked workflow scripts found — has the invocation style changed?"
 
     missing = sorted(r for r in referenced if not (REPO / r).is_file())
     assert not missing, f"platform skills reference scripts that do not exist: {missing}"
