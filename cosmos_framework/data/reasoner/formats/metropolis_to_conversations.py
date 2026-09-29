@@ -1,5 +1,5 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: OpenMDW-1.1
 
 """Converter: ``metropolis-v3.0`` scene annotations → ``cosmos-reason-v1.0`` training format.
 
