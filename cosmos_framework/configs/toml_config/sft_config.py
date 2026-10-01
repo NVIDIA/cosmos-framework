@@ -578,6 +578,55 @@ class TAOStatusCallbackConfig(BaseModel):
     )
 
 
+class LossSpikeRollbackCallback(BaseModel):
+    """Gradient-norm spike guard. Rewinds past a spike instead of training through it."""
+
+    model_config = _PYDANTIC_MODEL_CONFIG
+
+    enabled: bool = Field(
+        default=False,
+        description=(
+            "Rewind the model when the gradient norm spikes. Defaults off because the snapshot "
+            "ring scales with the TRAINABLE parameter count: roughly 1.2GB for a rank-64 LoRA "
+            "adapter, but hundreds of GB for full fine-tuning of an 8B model. Turn on for PEFT."
+        ),
+    )
+    grad_norm_factor: float = Field(
+        default=10.0,
+        description=(
+            "Trip when the gradient norm exceeds this multiple of the median of the recent window. "
+            "Relative rather than absolute because the healthy norm drifts over a run."
+        ),
+    )
+    window: int = Field(default=50, description="Number of recent gradient norms the median is taken over.")
+    min_observations: int = Field(
+        default=12,
+        description=(
+            "Steps to observe before the guard arms. Too high and an early spike passes unseen; "
+            "a 30-step arming window missed a real spike at step 27."
+        ),
+    )
+    rollback_depth: int = Field(
+        default=4,
+        description=(
+            "Snapshots retained. Restoring the OLDEST discards the several steps before the spike "
+            "as well, which is deliberate: the gradient norm leads the loss, so by the time it "
+            "trips, nearby earlier steps are already contaminated."
+        ),
+    )
+    max_consecutive: int = Field(
+        default=8,
+        description=(
+            "Consecutive rollbacks before standing down. Once a run has genuinely diverged every "
+            "norm looks like a spike, and a guard that never yields freezes training instead of "
+            "rescuing it."
+        ),
+    )
+    lr_backoff: float = Field(default=0.5, description="Learning-rate multiplier applied on each rollback.")
+    lr_recovery: float = Field(default=1.02, description="Per-clean-step multiplier walking the rate back to base.")
+    lr_min_scale: float = Field(default=0.1, description="Floor on the learning-rate scale, as a fraction of base.")
+
+
 class TrainerCallbacksConfig(BaseModel):
     """Callbacks surfaced by the structured TOML schema. The full
     callbacks dict (norm_monitor, mfu, heart_beat, …) stays in the
@@ -588,6 +637,7 @@ class TrainerCallbacksConfig(BaseModel):
 
     compile_tokenizer: CompileTokenizerCallback = Field(default_factory=CompileTokenizerCallback)
     grad_clip: GradClipCallback = Field(default_factory=GradClipCallback)
+    loss_spike_rollback: LossSpikeRollbackCallback = Field(default_factory=LossSpikeRollbackCallback)
     tao: TAOStatusCallbackConfig = Field(default_factory=TAOStatusCallbackConfig)
 
 
