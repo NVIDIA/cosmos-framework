@@ -6,8 +6,8 @@
 from __future__ import annotations
 
 import hashlib
-import importlib.metadata
 import importlib
+import importlib.metadata
 import json
 import os
 import platform
@@ -30,11 +30,41 @@ def _version(distribution: str) -> str | None:
         return None
 
 
+def _source_provenance() -> dict:
+    """Validate explicit release provenance; ordinary builds remain unverified.
+
+    Supplying any source metadata opts into the complete, clean-source
+    contract. REQUIRE_SOURCE_PROVENANCE also enforces it when no arguments
+    were supplied. Never label an ordinary build as verified.
+    """
+    source = {
+        "commit": os.environ.get("SOURCE_COMMIT") or None,
+        "tree": os.environ.get("SOURCE_TREE") or None,
+        "build_timestamp": os.environ.get("BUILD_TIMESTAMP") or None,
+        "dirty": os.environ.get("SOURCE_DIRTY", "1") != "0",
+    }
+    supplied = any(source[key] for key in ("commit", "tree", "build_timestamp"))
+    required = os.environ.get("REQUIRE_SOURCE_PROVENANCE", "0").lower() in {"1", "true", "yes"}
+    if supplied or required:
+        if not all(source[key] for key in ("commit", "tree", "build_timestamp")):
+            raise RuntimeError("SOURCE_COMMIT, SOURCE_TREE, and BUILD_TIMESTAMP build arguments are required")
+        if source["dirty"]:
+            raise RuntimeError("A reproducibility image requires SOURCE_DIRTY=0 from a verified clean source tree")
+    source["verified"] = supplied and not source["dirty"]
+    return source
+
+
 def main() -> int:
+    source = _source_provenance()
     workspace = Path(os.environ.get("PROVENANCE_WORKSPACE", "/workspace")).resolve(strict=True)
-    output_dir = Path(os.environ.get("PROVENANCE_OUTPUT_DIR", "/opt/tao")).resolve()
+    output_dir = Path(os.environ.get("PROVENANCE_OUTPUT_DIR", "/opt/cosmos")).resolve()
     output_dir.mkdir(parents=True, exist_ok=True)
-    roots = [workspace / "cosmos_framework", workspace / "pyproject.toml", workspace / "uv.lock", workspace / "Dockerfile"]
+    roots = [
+        workspace / "cosmos_framework",
+        workspace / "pyproject.toml",
+        workspace / "uv.lock",
+        workspace / "Dockerfile",
+    ]
     files: list[Path] = []
     for root in roots:
         if root.is_file():
@@ -48,20 +78,21 @@ def main() -> int:
     payload = {
         "schema_version": 1,
         "repository": "cosmos-framework",
-        "repository_commit": os.environ.get("SOURCE_COMMIT"),
-        "repository_tree": os.environ.get("SOURCE_TREE"),
-        "source_dirty": os.environ.get("SOURCE_DIRTY") == "1",
+        "repository_commit": source["commit"],
+        "repository_tree": source["tree"],
+        "source_dirty": source["dirty"],
+        "source_provenance_verified": source["verified"],
         "repositories": {
             "cosmos-framework": {
-                "commit": os.environ.get("SOURCE_COMMIT"),
-                "tree": os.environ.get("SOURCE_TREE"),
-                "dirty": os.environ.get("SOURCE_DIRTY") == "1",
+                "commit": source["commit"],
+                "tree": source["tree"],
+                "dirty": source["dirty"],
             }
         },
         "source_manifest_sha256": manifest_sha256,
         "dependency_lock_sha256": _sha256(workspace / "uv.lock"),
         "dockerfile_sha256": _sha256(workspace / "Dockerfile"),
-        "build_timestamp": os.environ.get("BUILD_TIMESTAMP"),
+        "build_timestamp": source["build_timestamp"],
         "base_image": os.environ.get("PROVENANCE_BASE_IMAGE"),
         "cuda_build_version": os.environ.get("CUDA_VERSION"),
         "python": {"executable": sys.executable, "version": platform.python_version()},
@@ -77,10 +108,6 @@ def main() -> int:
     (output_dir / "image-provenance.json").write_text(
         json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8"
     )
-    if payload["source_dirty"]:
-        raise RuntimeError("A reproducibility image cannot be built from a dirty source tree")
-    if not payload["repository_commit"] or not payload["repository_tree"] or not payload["build_timestamp"]:
-        raise RuntimeError("SOURCE_COMMIT, SOURCE_TREE, and BUILD_TIMESTAMP build arguments are required")
     return 0
 
 

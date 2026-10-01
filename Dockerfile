@@ -11,16 +11,18 @@ ARG SOURCE_COMMIT
 ARG SOURCE_TREE
 ARG SOURCE_DIRTY=1
 ARG BUILD_TIMESTAMP
+ARG REQUIRE_SOURCE_PROVENANCE=0
 ARG BASE_IMAGE
 ARG CUDA_VERSION
 LABEL org.opencontainers.image.revision="${SOURCE_COMMIT}" \
       org.opencontainers.image.created="${BUILD_TIMESTAMP}" \
-      com.nvidia.tao.source-tree="${SOURCE_TREE}" \
-      com.nvidia.tao.backend="cosmos-framework"
+      com.nvidia.cosmos.source-tree="${SOURCE_TREE}" \
+      com.nvidia.cosmos.backend="cosmos-framework"
 ENV SOURCE_COMMIT="${SOURCE_COMMIT}" \
     SOURCE_TREE="${SOURCE_TREE}" \
     SOURCE_DIRTY="${SOURCE_DIRTY}" \
     BUILD_TIMESTAMP="${BUILD_TIMESTAMP}" \
+    REQUIRE_SOURCE_PROVENANCE="${REQUIRE_SOURCE_PROVENANCE}" \
     PROVENANCE_BASE_IMAGE="${BASE_IMAGE}" \
     CUDA_VERSION="${CUDA_VERSION}"
 
@@ -93,7 +95,7 @@ RUN --mount=type=cache,target=/root/.cache/uv \
 
 RUN /workspace/.venv/bin/python /workspace/docker/write_image_provenance.py && \
     chmod a+rx /workspace /workspace/docker /workspace/docker/entrypoint.sh && \
-    chmod -R a+rX /opt/tao /workspace/.venv /workspace/cosmos_framework /workspace && \
+    chmod -R a+rX /opt/cosmos /workspace/.venv /workspace/cosmos_framework /workspace && \
     test -x /workspace/docker/entrypoint.sh && \
     test -x /workspace/.venv/bin/python
 
