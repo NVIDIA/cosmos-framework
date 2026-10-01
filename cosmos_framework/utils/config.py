@@ -23,11 +23,15 @@ try:
 
     USE_MEGATRON = True
 except ImportError:
+    # attrs/cattrs resolve postponed annotations even when this optional
+    # backend is unavailable; its only valid configuration then is None.
+    from types import NoneType as ModelParallelConfig
+
     USE_MEGATRON = False
 
+from cosmos_framework.utils import distributed
 from cosmos_framework.utils.lazy_config import LazyCall as L
 from cosmos_framework.utils.lazy_config import LazyDict
-from cosmos_framework.utils import distributed
 from cosmos_framework.utils.misc import Color
 
 T = TypeVar("T")
@@ -289,6 +293,9 @@ class CheckpointConfig:
 
     # Save the checkpoint every N iterations.
     save_iter: int = 999999999
+    # Save every N completed epochs when trainer.steps_per_epoch is configured.
+    # A positive value takes priority over save_iter.
+    save_freq_in_epoch: int = 0
 
     # Load state_dict to the models in strict mode. If True, `allow_partial_load` in dcp
     # planner will be set to False. DCP will raise an error if there are missing keys.
@@ -455,6 +462,10 @@ class TrainerConfig:
     grad_scaler_args: dict = attrs.field(factory=lambda: dict(enabled=False))
     # Maximum number of iterations to train the model.
     max_iter: int = 999999999
+    # Native epoch schedule. When both values are positive, the trainer runs
+    # num_epochs * steps_per_epoch optimizer updates and reports epoch progress.
+    num_epochs: int | None = None
+    steps_per_epoch: int | None = None
     # Maximum number of iterations to validate the model. If None, validate on the entire dataset.
     max_val_iter: int | None = None
     # How often we log the training stats.
@@ -463,6 +474,9 @@ class TrainerConfig:
     run_validation: bool = True
     # How often we evaluate on the validation set.
     validation_iter: int = 999999999
+    # Validate every N completed epochs. A positive value takes priority over
+    # validation_iter when steps_per_epoch is configured.
+    validation_freq_in_epoch: int = 0
     # Keep a bounded validation iterator alive so its worker can prefetch between validation calls.
     prefetch_validation: bool = False
     # Whether to run the validation on the start of the training.
@@ -508,11 +522,12 @@ class Config:
     # Trainer configs.
     trainer: TrainerConfig = attrs.field(factory=TrainerConfig)
 
+    model_parallel: ModelParallelConfig | None
     if USE_MEGATRON:
         # Megatron-Core configs
-        model_parallel: ModelParallelConfig = attrs.field(factory=ModelParallelConfig)
+        model_parallel = attrs.field(factory=ModelParallelConfig)
     else:
-        model_parallel: None = None
+        model_parallel = None
 
     # Checkpointer configs.
     checkpoint: CheckpointConfig = attrs.field(factory=CheckpointConfig)
