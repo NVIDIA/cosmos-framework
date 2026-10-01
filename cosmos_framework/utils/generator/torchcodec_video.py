@@ -143,6 +143,7 @@ class TorchCodecVideoReader:
             resize_size=resize_size,
             output_dtype=output_dtype,
         )
+        self.last_output_device: str | None = None
         self.metadata = _metadata_from_frame(self._decoder, include_dimensions=include_dimensions)
 
     def __len__(self) -> int:
@@ -155,8 +156,9 @@ class TorchCodecVideoReader:
         return self.metadata.average_fps
 
     def get_frames_tchw_uint8(self, indices: list[int]) -> torch.Tensor:
-        frames_tchw = self._decoder.get_frames_at(indices).data.cpu()  # [T,C,H,W]
-        return frames_tchw  # [T,C,H,W]
+        frames_tchw = self._decoder.get_frames_at(indices).data  # [T,C,H,W]
+        self.last_output_device = str(frames_tchw.device)
+        return frames_tchw.cpu()  # [T,C,H,W]
 
     def get_frames_nhwc_uint8(self, indices: list[int]) -> np.ndarray:
         frames_tchw = self.get_frames_tchw_uint8(indices)  # [T,C,H,W]
