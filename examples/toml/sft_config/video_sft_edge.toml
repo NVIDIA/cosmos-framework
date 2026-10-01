@@ -1,24 +1,20 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: OpenMDW-1.1
 
-# WTS video-QA SFT through the migrated Cosmos Framework VLM trainer.
-# Required environment:
-#   WTS_TRAIN_ANNOTATION, WTS_TRAIN_MEDIA
-#   WTS_VAL_ANNOTATION, WTS_VAL_MEDIA
-#   VLM_SAFETENSORS_PATH (Cosmos3-Nano converted to Qwen3-VL safetensors)
+# Video-conversation SFT on the native Cosmos3-Edge reasoner checkpoint.
 # This checked-in recipe is a 10-step-per-epoch smoke run. Set
 # trainer.steps_per_epoch to the distributed update count for a production dataset.
 
 [job]
 task       = "vlm"
-experiment = "wts_vlm"
+experiment = "cosmos_video_conversation_edge"
 project    = "cosmos3_reasoner"
-group      = "wts_sft"
-name       = "wts_vlm"
+group      = "cosmos_video_conversation_edge_sft"
+name       = "cosmos_video_conversation_edge"
 wandb_mode = "disabled"
 
 [model]
-attn_implementation = "cosmos"
+attn_implementation = "flash_attention_2"
 precision = "bfloat16"
 
 [model.backbone]
@@ -82,9 +78,9 @@ enabled = false
 clip_norm = 1.0
 force_finite = false
 
-[trainer.callbacks.tao]
+[trainer.callbacks.workflow_status]
 enabled = true
-experiment_name = "Cosmos Framework WTS SFT"
+experiment_name = "Cosmos Framework video-conversation Edge SFT"
 logging_interval = 1
 validation_heartbeat_interval = 1
 
@@ -96,4 +92,4 @@ save_freq_in_epoch = 2
 
 [dataloader_train]
 max_samples_per_batch = 1
-max_sequence_length = 81920
+max_sequence_length = 16000

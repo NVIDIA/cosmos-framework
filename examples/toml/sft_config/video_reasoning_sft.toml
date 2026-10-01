@@ -1,20 +1,20 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: OpenMDW-1.1
 
-# AETC dense SFT through the internal NVIDIA TAO DAFT data contract.
+# Task-aware video reasoning SFT through the Framework-native dataset contract.
 # Required environment:
-#   AETC_TRAIN_ANNOTATIONS: JSON array of tao-vl-reason-v1.0 files
-#   AETC_TRAIN_MEDIA: shared media root for the training annotations
-#   AETC_VAL_ANNOTATIONS: JSON array of validation files
-#   AETC_VAL_MEDIA: shared media root for validation
+#   COSMOS_VIDEO_TRAIN_ANNOTATIONS: JSON array of cosmos-video-reasoning-v1.0 files
+#   COSMOS_VIDEO_TRAIN_MEDIA_ROOTS: shared media root for the training annotations
+#   COSMOS_VIDEO_VAL_ANNOTATIONS: JSON array of validation files
+#   COSMOS_VIDEO_VAL_MEDIA_ROOTS: shared media root for validation
 #   VLM_SAFETENSORS_PATH: Cosmos3-Nano checkpoint
 
 [job]
 task       = "vlm"
-experiment = "aetc_daft_vlm"
+experiment = "cosmos_task_aware_video_reasoning"
 project    = "cosmos3_reasoner"
-group      = "aetc_daft_sft"
-name       = "aetc_daft_vlm"
+group      = "cosmos_task_aware_video_reasoning_sft"
+name       = "cosmos_task_aware_video_reasoning"
 wandb_mode = "disabled"
 
 [model]
@@ -82,9 +82,9 @@ enabled = false
 clip_norm = 1.0
 force_finite = false
 
-[trainer.callbacks.tao]
+[trainer.callbacks.workflow_status]
 enabled = true
-experiment_name = "Cosmos Framework AETC DAFT SFT"
+experiment_name = "Cosmos Framework task-aware video SFT"
 logging_interval = 1
 validation_heartbeat_interval = 1
 
