@@ -85,9 +85,9 @@ import torch
 import torch.distributed as dist
 import tyro
 
-from cosmos_framework.utils.config import load_config
-from cosmos_framework.utils.lazy_config import instantiate
+from cosmos_framework.data.generator.sequence_packing import SequencePlan
 from cosmos_framework.utils import distributed, log, misc
+from cosmos_framework.utils.config import load_config
 from cosmos_framework.utils.generator.cost_model.estimator import (
     PEAK_TFLOPS_BY_DEVICE,
     BucketMeasurement,
@@ -98,17 +98,8 @@ from cosmos_framework.utils.generator.cost_model.estimator import (
     flops_per_sample,
 )
 from cosmos_framework.utils.generator.cost_model.spec import SampleSpec
-from cosmos_framework.data.generator.sequence_packing import SequencePlan
 from cosmos_framework.utils.generator.method_timer import MethodTimer
-
-# NCCL reads this at communicator creation (inside distributed.init() below), so it must
-# be set before that call, not just before the timed region. Production sets the same
-# value for real jobs via submit_helper.py's SlurmExecutor env (NVLink SHARP causes job
-# failures on GB200 clusters); this benchmark is launched directly with torchrun rather
-# than through that launcher, so without this it would default to NVLS enabled and time
-# a communication pattern real training never runs. setdefault so an explicit
-# NCCL_NVLS_ENABLE in the launching shell still wins.
-os.environ.setdefault("NCCL_NVLS_ENABLE", "0")
+from cosmos_framework.utils.lazy_config import instantiate
 
 CONFIG_PATH = "cosmos_framework/configs/base/config.py"
 DEFAULT_EXPERIMENT = "t2w_mot_exp306_006_qwen3_vl_8b_ratio_sample_balancing"
@@ -695,6 +686,11 @@ def main(args: BenchmarkConfig) -> None:
     if args.log_recompiles:
         torch._logging.set_logs(recompiles=True)
 
+    # NCCL reads this when the communicator is created. Match the training
+    # launcher's NVLS policy for this CLI, while allowing an explicit shell
+    # override. Importing the reusable benchmark helpers must not change the
+    # calling application's process-wide NCCL configuration.
+    os.environ.setdefault("NCCL_NVLS_ENABLE", "0")
     distributed.init()
     world_size = dist.get_world_size() if dist.is_initialized() else 1
     rank = dist.get_rank() if dist.is_initialized() else 0
