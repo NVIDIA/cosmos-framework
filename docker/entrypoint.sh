@@ -5,8 +5,6 @@
 
 # Docker entrypoint script.
 
-set -e
-
-uv pip install --no-deps -e . || true
+set -euo pipefail
 
 exec "$@"
