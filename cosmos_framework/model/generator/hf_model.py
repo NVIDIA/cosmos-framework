@@ -154,7 +154,7 @@ class _ValidationVideoFeatureCache:
         self.misses += len(missing)
         if call_hits and not self.hit_attested:
             print(
-                "TAO_FRAMEWORK_VALIDATION_FEATURE_CACHE_HIT_ATTESTATION "
+                "COSMOS_FRAMEWORK_VALIDATION_FEATURE_CACHE_HIT_ATTESTATION "
                 f"rank={os.environ.get('RANK', '0')} capacity={self.capacity} hits={call_hits}",
                 flush=True,
             )
@@ -379,9 +379,9 @@ class HFModel(nn.Module):
         if n_cast:
             log.info(f"HFModel: normalized {n_cast} param(s) to {dtype} post-from_config")
 
-        self._tao_validation_video_cache_keys = None
-        self._tao_validation_video_cache_active = False
-        self._tao_validation_video_feature_cache = None
+        self._cosmos_validation_video_cache_keys = None
+        self._cosmos_validation_video_cache_active = False
+        self._cosmos_validation_video_feature_cache = None
 
         if hf_config.model_type == "qwen3_5":
             configure_qwen35_caption_model(
@@ -427,7 +427,7 @@ class HFModel(nn.Module):
         elif hf_config.model_type == "qwen3_vl" and hasattr(self.model, "model"):
             # Preserve the parent's batched fallback for sdpa/eager without
             # replacing the upstream cosmos varlen attention implementation.
-            if os.environ.get("TAO_FRAMEWORK_BATCH_VISION_ATTENTION", "1") not in {"0", "false", "no"}:
+            if os.environ.get("COSMOS_FRAMEWORK_BATCH_VISION_ATTENTION", "1") not in {"0", "false", "no"}:
                 from cosmos_framework.utils.generator.monkey_patch import patch_qwen3_vl_vision_attention
 
                 patch_qwen3_vl_vision_attention(self.model.model)
@@ -443,9 +443,9 @@ class HFModel(nn.Module):
         self._configure_validation_video_feature_cache()
 
     def _configure_validation_video_feature_cache(self) -> None:
-        capacity = int(os.environ.get("TAO_FRAMEWORK_VALIDATION_VIDEO_FEATURE_CACHE_SIZE", "0"))
+        capacity = int(os.environ.get("COSMOS_FRAMEWORK_VALIDATION_VIDEO_FEATURE_CACHE_SIZE", "0"))
         if capacity < 0:
-            raise ValueError("TAO_FRAMEWORK_VALIDATION_VIDEO_FEATURE_CACHE_SIZE must be non-negative")
+            raise ValueError("COSMOS_FRAMEWORK_VALIDATION_VIDEO_FEATURE_CACHE_SIZE must be non-negative")
         if capacity == 0:
             return
         if self.hf_config.model_type != "qwen3_vl":
@@ -460,10 +460,10 @@ class HFModel(nn.Module):
 
         def cached_visual_forward(visual_self, pixel_values, grid_thw=None):
             del visual_self
-            if not self._tao_validation_video_cache_active:
+            if not self._cosmos_validation_video_cache_active:
                 return original(pixel_values, grid_thw)
             return cache.get_or_encode(
-                self._tao_validation_video_cache_keys,
+                self._cosmos_validation_video_cache_keys,
                 pixel_values,
                 grid_thw,
                 original,
@@ -478,22 +478,22 @@ class HFModel(nn.Module):
         # ``get_or_encode``: if any rank misses, every rank enters the native
         # visual stack once; only a global all-hit batch skips it collectively.
         visual.forward = MethodType(cached_visual_forward, visual)
-        self._tao_validation_video_feature_cache = cache
+        self._cosmos_validation_video_feature_cache = cache
         print(
-            "TAO_FRAMEWORK_VALIDATION_FEATURE_CACHE_ENABLED_ATTESTATION "
+            "COSMOS_FRAMEWORK_VALIDATION_FEATURE_CACHE_ENABLED_ATTESTATION "
             f"rank={os.environ.get('RANK', '0')} capacity={capacity} boundary=visual_forward",
             flush=True,
         )
 
     def clear_validation_video_feature_cache(self) -> dict[str, int] | None:
-        if self._tao_validation_video_feature_cache is None:
+        if self._cosmos_validation_video_feature_cache is None:
             return None
-        return self._tao_validation_video_feature_cache.clear()
+        return self._cosmos_validation_video_feature_cache.clear()
 
     def train(self, mode: bool = True) -> "HFModel":
         """Keep immutable audio modules in eval mode while training the Reasoner."""
-        if mode and self._tao_validation_video_feature_cache is not None:
-            if self._tao_validation_video_feature_cache.entries:
+        if mode and self._cosmos_validation_video_feature_cache is not None:
+            if self._cosmos_validation_video_feature_cache.entries:
                 self.clear_validation_video_feature_cache()
         super().train(mode)
         if self.sound_und:
@@ -729,7 +729,7 @@ class HFModel(nn.Module):
         right-padding + causal attention, valid tokens never attend to padding tokens
         regardless, so dropping attention_mask is equivalent and avoids the shape mismatch.
         """
-        cache_keys = kwargs.pop("tao_video_cache_keys", None)
+        cache_keys = kwargs.pop("cosmos_video_cache_keys", None)
         probe_step = kwargs.pop("_probe_step", None)
         probe_tag = kwargs.pop("_probe_tag", None)
         forward_keys = self._forward_keys
@@ -742,14 +742,14 @@ class HFModel(nn.Module):
             filtered.pop("attention_mask", None)
         filtered["use_cache"] = False
         maybe_dump_pre_forward(self.model, filtered, probe_step, probe_tag)
-        cache = self._tao_validation_video_feature_cache
-        self._tao_validation_video_cache_active = (
+        cache = self._cosmos_validation_video_feature_cache
+        self._cosmos_validation_video_cache_active = (
             cache is not None and not self.training and not torch.is_grad_enabled()
         )
-        self._tao_validation_video_cache_keys = cache_keys
+        self._cosmos_validation_video_cache_keys = cache_keys
         try:
             out = self.model(**filtered)
         finally:
-            self._tao_validation_video_cache_keys = None
-            self._tao_validation_video_cache_active = False
+            self._cosmos_validation_video_cache_keys = None
+            self._cosmos_validation_video_cache_active = False
         return out if isinstance(out, Qwen35CaptionLoss) else out.logits

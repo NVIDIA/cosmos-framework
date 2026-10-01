@@ -79,7 +79,7 @@ class TestSchemaValidation:
     def test_native_epoch_schedule_fields_validate(self) -> None:
         cfg = SFTExperimentConfig.model_validate(
             {
-                "job": {"task": "vlm", "experiment": "wts_vlm"},
+                "job": {"task": "vlm", "experiment": "cosmos_video_conversation"},
                 "trainer": {
                     "num_epochs": 2,
                     "steps_per_epoch": 108,
@@ -100,7 +100,7 @@ class TestSchemaValidation:
 
         overrides = build_hydra_overrides(
             {
-                "job": {"task": "vlm", "experiment": "wts_vlm"},
+                "job": {"task": "vlm", "experiment": "cosmos_video_conversation"},
                 "checkpoint": {"dcp_async_mode_enabled": False},
             }
         )
@@ -109,7 +109,7 @@ class TestSchemaValidation:
     def test_vlm_peft_fields_are_explicit_and_validated(self) -> None:
         cfg = SFTExperimentConfig.model_validate(
             {
-                "job": {"task": "vlm", "experiment": "wts_vlm"},
+                "job": {"task": "vlm", "experiment": "cosmos_video_conversation"},
                 "model": {
                     "lora_enabled": True,
                     "lora_rank": 8,
@@ -131,7 +131,7 @@ class TestSchemaValidation:
     def test_vlm_peft_fields_reach_policy_overrides(self) -> None:
         overrides = build_hydra_overrides(
             {
-                "job": {"task": "vlm", "experiment": "wts_vlm"},
+                "job": {"task": "vlm", "experiment": "cosmos_video_conversation"},
                 "model": {
                     "lora_enabled": True,
                     "lora_rank": 8,

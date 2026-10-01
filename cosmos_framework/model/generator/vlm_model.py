@@ -373,7 +373,7 @@ class VLMModel(ImaginaireModel):
             parameter.numel() for parameter in self.model.parameters() if parameter.requires_grad
         )
         total_parameters = sum(parameter.numel() for parameter in self.model.parameters())
-        peft_summary = getattr(self.model.model, "_tao_peft_parameter_summary", None)
+        peft_summary = getattr(self.model.model, "_cosmos_peft_parameter_summary", None)
         self.parameter_summary = peft_summary or {
             "training_mode": "dense_sft",
             "trainable_parameters": trainable_parameters,
@@ -999,7 +999,7 @@ class VLMModel(ImaginaireModel):
             "labels": labels,
             "train_objective_numerator": train_objective_numerator,
             "train_objective_denominator": train_objective_denominator,
-            # TAO's status callback reports the unweighted token CE independently
+            # Cosmos's status callback reports the unweighted token CE independently
             # of the optimized objective (weighted CE or MoE auxiliary terms).
             "loss_numerator": loss_stats.token_ce_sum,
             "loss_denominator": loss_stats.valid_token_count,

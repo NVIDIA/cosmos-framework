@@ -3,7 +3,7 @@
 
 """Export a Framework Cosmos3 VLM DCP checkpoint to native HF safetensors.
 
-This is intentionally repository-owned: action images and the TAO skill call
+This is intentionally repository-owned: action images and the Cosmos skill call
 this entry point, but do not carry a private copy or patch checkpoint keys.
 """
 
@@ -96,11 +96,7 @@ def fingerprint_model_files(path: str | Path) -> dict[str, Any]:
         "preprocessor_config.json",
         "chat_template.json",
     )
-    files = {
-        name: _sha256_file(root / name)
-        for name in names
-        if (root / name).is_file()
-    }
+    files = {name: _sha256_file(root / name) for name in names if (root / name).is_file()}
     weights = sorted(root.glob("*.safetensors"))
     files.update({item.name: _sha256_file(item) for item in weights})
     manifest_bytes = json.dumps(files, sort_keys=True, separators=(",", ":")).encode()

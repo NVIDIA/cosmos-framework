@@ -10,6 +10,8 @@ Dataset with per-epoch shuffle + slice sharding (resume lands in a later plan).
 
 from __future__ import annotations
 
+import os
+from collections import OrderedDict
 from typing import Any, Iterator
 
 from cosmos_framework.data.generator.dataflow.base import DataDistributor
@@ -176,3 +178,123 @@ class MixtureDistributor(DataDistributor):
             except StopIteration:
                 iters[idx] = self._dists[idx].stream(dp_rank, dp_world_size, worker_id, num_workers)
                 yield next(iters[idx])
+
+
+class MediaGroupedMapDistributor(MapDistributor):
+    """Group repeated validation media while preserving the padded multiset.
+
+    Every DP-rank/worker stream receives exactly ``ceil(N / streams)`` records.
+    Whole media groups are assigned first and split only when required to fill
+    equal stream capacities, so FSDP ranks execute the same number of forwards.
+    The validation stream is finite so ``drop_last=False`` can emit one equal
+    partial final batch per rank without pulling records from the next epoch.
+    """
+
+    finite_validation_stream = True
+
+    @staticmethod
+    def _staged_cache_frontload(
+        rank_groups: OrderedDict[str, list[int]],
+        batch_size: int,
+        unique_per_batch: int,
+    ) -> list[int]:
+        """Bound unseen media per early batch while preserving every index."""
+        if batch_size <= 0 or unique_per_batch <= 0 or unique_per_batch > batch_size:
+            raise ValueError(
+                "staged validation cache frontloading requires positive batch and unique counts with unique <= batch"
+            )
+        remaining = OrderedDict((key, list(group)) for key, group in rank_groups.items())
+        group_keys = list(remaining)
+        active_keys: list[str] = []
+        ordered: list[int] = []
+
+        for start in range(0, len(group_keys), unique_per_batch):
+            new_keys = group_keys[start : start + unique_per_batch]
+            active_keys.extend(new_keys)
+            batch = [remaining[key].pop(0) for key in new_keys]
+            while len(batch) < batch_size:
+                made_progress = False
+                for key in active_keys:
+                    if remaining[key]:
+                        batch.append(remaining[key].pop(0))
+                        made_progress = True
+                        if len(batch) == batch_size:
+                            break
+                if not made_progress:
+                    break
+            ordered.extend(batch)
+
+        for group in remaining.values():
+            ordered.extend(group)
+        return ordered
+
+    @staticmethod
+    def _assign_groups(dataset: Any, total_streams: int) -> list[list[int]]:
+        n = len(dataset)
+        per_stream = (n + total_streams - 1) // total_streams
+        padded = list(range(n))
+        padded.extend(padded[: per_stream * total_streams - n])
+
+        groups: OrderedDict[str, list[int]] = OrderedDict()
+        for index in padded:
+            groups.setdefault(dataset.media_identity(index), []).append(index)
+
+        assignments = [[] for _ in range(total_streams)]
+        remaining = [per_stream] * total_streams
+        ordered_groups = sorted(enumerate(groups.values()), key=lambda item: (-len(item[1]), item[0]))
+        for _, original_group in ordered_groups:
+            group = list(original_group)
+            while group:
+                fitting = [stream for stream, capacity in enumerate(remaining) if capacity >= len(group)]
+                if fitting:
+                    stream = max(fitting, key=lambda value: (remaining[value], -value))
+                    take = len(group)
+                else:
+                    stream = max(range(total_streams), key=lambda value: (remaining[value], -value))
+                    take = remaining[stream]
+                if take <= 0:
+                    raise RuntimeError("media-grouped validation sharding exhausted stream capacity")
+                assignments[stream].extend(group[:take])
+                remaining[stream] -= take
+                del group[:take]
+
+        if any(remaining) or any(len(indices) != per_stream for indices in assignments):
+            raise RuntimeError("media-grouped validation sharding did not produce equal stream lengths")
+
+        batch_size = int(os.environ.get("COSMOS_FRAMEWORK_VALIDATION_BATCH_SIZE", "1"))
+        unique_per_batch = int(
+            os.environ.get(
+                "COSMOS_FRAMEWORK_VALIDATION_CACHE_FRONTLOAD_UNIQUE_PER_BATCH",
+                str(max(1, batch_size // 2)),
+            )
+        )
+        staged_assignments: list[list[int]] = []
+        for assignment in assignments:
+            rank_groups: OrderedDict[str, list[int]] = OrderedDict()
+            for index in assignment:
+                rank_groups.setdefault(dataset.media_identity(index), []).append(index)
+            staged = MediaGroupedMapDistributor._staged_cache_frontload(
+                rank_groups,
+                batch_size,
+                unique_per_batch,
+            )
+            if len(staged) != per_stream or sorted(staged) != sorted(assignment):
+                raise RuntimeError("staged validation cache frontloading changed the rank-local multiset")
+            staged_assignments.append(staged)
+        assignments = staged_assignments
+        return assignments
+
+    def stream(self, dp_rank, dp_world_size, worker_id, num_workers):
+        if self._shuffle:
+            raise ValueError("MediaGroupedMapDistributor is validation-only and requires shuffle=False")
+        stream_id = dp_rank * num_workers + worker_id
+        total_streams = dp_world_size * num_workers
+        assignments = self._assign_groups(self._dataset, total_streams)
+        if stream_id >= len(assignments):
+            return
+        for position, index in enumerate(assignments[stream_id]):
+            item = self._dataset[index]
+            if isinstance(item, dict):
+                yield {"_dp_epoch": 0, "_dp_stream_pos": position, **item}
+            else:
+                yield item

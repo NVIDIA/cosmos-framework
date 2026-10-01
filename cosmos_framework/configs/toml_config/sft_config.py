@@ -549,27 +549,27 @@ class GradClipCallback(BaseModel):
     )
 
 
-class TAOStatusCallbackConfig(BaseModel):
-    """TAO-compatible lifecycle and training/validation metric logging."""
+class WorkflowStatusCallbackConfig(BaseModel):
+    """Cosmos-compatible lifecycle and training/validation metric logging."""
 
     model_config = _PYDANTIC_MODEL_CONFIG
 
-    enabled: bool = Field(default=False, description="Enable TAO status.json logging.")
+    enabled: bool = Field(default=False, description="Enable Cosmos status.json logging.")
     status_file_path: Optional[str] = Field(
         default=None,
         description=(
-            "Explicit status.json path. When unset, TAO_JOB_ID/TAO_RESULTS_ROOT, "
-            "legacy TAO API variables, then job.path_local are used."
+            "Explicit status.json path. When unset, COSMOS_JOB_ID/COSMOS_RESULTS_ROOT, "
+            "legacy Cosmos API variables, then job.path_local are used."
         ),
     )
     experiment_name: str = Field(
         default="",
-        description="TAO component name. Empty uses job.name.",
+        description="Cosmos component name. Empty uses job.name.",
     )
     logging_interval: int = Field(
         default=1,
         ge=1,
-        description="Multiplier applied to trainer.logging_iter for TAO training records.",
+        description="Multiplier applied to trainer.logging_iter for Cosmos training records.",
     )
     validation_heartbeat_interval: int = Field(
         default=1,
@@ -638,7 +638,7 @@ class TrainerCallbacksConfig(BaseModel):
     compile_tokenizer: CompileTokenizerCallback = Field(default_factory=CompileTokenizerCallback)
     grad_clip: GradClipCallback = Field(default_factory=GradClipCallback)
     loss_spike_rollback: LossSpikeRollbackCallback = Field(default_factory=LossSpikeRollbackCallback)
-    tao: TAOStatusCallbackConfig = Field(default_factory=TAOStatusCallbackConfig)
+    workflow_status: WorkflowStatusCallbackConfig = Field(default_factory=WorkflowStatusCallbackConfig)
 
 
 class TrainerConfig(BaseModel):

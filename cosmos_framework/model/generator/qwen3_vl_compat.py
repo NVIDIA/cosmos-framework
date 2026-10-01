@@ -18,7 +18,7 @@ def _linear_patch_embed_forward(self, hidden_states: torch.Tensor) -> torch.Tens
     return F.linear(flat_input, flat_weight, self.proj.bias)
 
 
-_linear_patch_embed_forward._tao_channels_last_3d = True  # type: ignore[attr-defined]
+_linear_patch_embed_forward._cosmos_channels_last_3d = True  # type: ignore[attr-defined]
 
 
 def should_use_linear_patch_embed(mode: str, *, device_capability: tuple[int, int] | None = None) -> bool:

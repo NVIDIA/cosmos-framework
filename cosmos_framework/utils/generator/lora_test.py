@@ -39,7 +39,7 @@ def test_vlm_lora_preserves_base_keys_and_reports_trainable_scope() -> None:
     assert model.q_proj.bias.requires_grad is True
     assert model.lm_head.weight.requires_grad is True
     assert model.q_proj.lora_A.weight.requires_grad is True
-    assert model._tao_peft_parameter_summary == {
+    assert model._cosmos_peft_parameter_summary == {
         "training_mode": "peft",
         "trainable_parameters": 23,
         "total_parameters": 35,
@@ -56,7 +56,7 @@ def test_vlm_lora_preserves_base_keys_and_reports_trainable_scope() -> None:
         lora_bias="lora_only",
         lora_modules_to_save="lm_head",
     )
-    assert summary == model._tao_peft_parameter_summary
+    assert summary == model._cosmos_peft_parameter_summary
     assert model.q_proj.weight.requires_grad is False
     assert model.q_proj.bias.requires_grad is True
     assert model.lm_head.weight.requires_grad is True

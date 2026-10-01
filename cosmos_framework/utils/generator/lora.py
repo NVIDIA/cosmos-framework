@@ -188,15 +188,10 @@ def apply_lora_trainable_scope(
             or parent_name.endswith(f".{suffix}")
             for suffix in modules_to_save
         )
-        is_target_bias = name.endswith(".bias") and any(
-            f".{target}." in f".{name}" for target in target_modules
-        )
+        is_target_bias = name.endswith(".bias") and any(f".{target}." in f".{name}" for target in target_modules)
         is_trainable_bias = lora_bias == "all" and name.endswith(".bias")
         trainable = (
-            "lora_" in name
-            or is_module_to_save
-            or is_trainable_bias
-            or (lora_bias == "lora_only" and is_target_bias)
+            "lora_" in name or is_module_to_save or is_trainable_bias or (lora_bias == "lora_only" and is_target_bias)
         )
         parameter.requires_grad_(trainable)
         if trainable:
@@ -205,9 +200,7 @@ def apply_lora_trainable_scope(
         else:
             frozen_parameters += parameter.numel()
 
-    adapter_modules = sorted(
-        name for name, module in network.named_modules() if isinstance(module, LoraInjectedLinear)
-    )
+    adapter_modules = sorted(name for name, module in network.named_modules() if isinstance(module, LoraInjectedLinear))
     summary: dict[str, object] = {
         "training_mode": "peft",
         "trainable_parameters": trainable_parameters,
@@ -217,7 +210,7 @@ def apply_lora_trainable_scope(
         "adapter_module_count": len(adapter_modules),
         "adapter_modules": adapter_modules,
     }
-    network._tao_peft_parameter_summary = summary
+    network._cosmos_peft_parameter_summary = summary
     return summary
 
 

@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: OpenMDW-1.1
 
-"""TAO-compatible lifecycle and metric logging for Cosmos Framework training."""
+"""Cosmos-compatible lifecycle and metric logging for Cosmos Framework training."""
 
 from __future__ import annotations
 
@@ -43,29 +43,12 @@ def _to_json_value(value: Any) -> Any:
     return value
 
 
-class _TAOStatusWriter:
-    """Use TAO Core when available, with a compatible JSON-lines fallback."""
+class _WorkflowStatusWriter:
+    """Write lifecycle records directly; no external logging package is required."""
 
     def __init__(self, filename: str) -> None:
         self.filename = filename
         Path(filename).parent.mkdir(parents=True, exist_ok=True)
-        self._tao_logger = None
-        self._tao_status = None
-        self._tao_verbosity = None
-
-        try:
-            from nvidia_tao_core.loggers.logging import Status, StatusLogger, Verbosity
-        except ImportError:
-            log.warning(f"nvidia_tao_core is not installed; writing TAO-compatible JSON records directly to {filename}")
-        else:
-            self._tao_status = Status
-            self._tao_verbosity = Verbosity
-            self._tao_logger = StatusLogger(
-                filename=filename,
-                is_master=True,
-                verbosity=Verbosity.INFO,
-                append=True,
-            )
 
     def write(
         self,
@@ -78,18 +61,6 @@ class _TAOStatusWriter:
     ) -> None:
         data = _to_json_value(data or {})
         kpi = _to_json_value(kpi or {})
-
-        if self._tao_logger is not None:
-            status_level = getattr(self._tao_status, status)
-            verbosity_level = getattr(self._tao_verbosity, verbosity)
-            self._tao_logger.kpi = kpi
-            self._tao_logger.write(
-                data=data,
-                status_level=status_level,
-                verbosity_level=verbosity_level,
-                message=message,
-            )
-            return
 
         now = datetime.now()
         payload: dict[str, Any] = {
@@ -107,25 +78,25 @@ class _TAOStatusWriter:
 
 
 def write_early_failure(error: BaseException) -> bool:
-    """Write a terminal TAO record before the callback/config exists.
+    """Write a terminal Cosmos record before the callback/config exists.
 
-    The orchestration layer supplies ``TAO_STATUS_FILE`` for direct launches,
-    or the normal TAO job/result variables. No implicit host path is used.
+    The orchestration layer supplies ``COSMOS_STATUS_FILE`` for direct launches,
+    or the normal Cosmos job/result variables. No implicit host path is used.
     """
-    status_path = os.environ.get("TAO_STATUS_FILE")
+    status_path = os.environ.get("COSMOS_STATUS_FILE")
     if not status_path:
-        job_id = os.environ.get("TAO_JOB_ID")
-        results_root = os.environ.get("TAO_RESULTS_ROOT")
+        job_id = os.environ.get("COSMOS_JOB_ID")
+        results_root = os.environ.get("COSMOS_RESULTS_ROOT")
         if job_id and results_root:
             status_path = os.path.join(results_root, job_id, "status.json")
     if not status_path:
-        api_job_id = os.environ.get("TAO_API_JOB_ID")
-        results_root = os.environ.get("TAO_API_RESULTS_DIR")
+        api_job_id = os.environ.get("COSMOS_API_JOB_ID")
+        results_root = os.environ.get("COSMOS_API_RESULTS_DIR")
         if api_job_id and results_root:
             status_path = os.path.join(results_root, api_job_id, "status.json")
     if not status_path:
         return False
-    _TAOStatusWriter(status_path).write(
+    _WorkflowStatusWriter(status_path).write(
         status="FAILURE",
         verbosity="ERROR",
         message=f"Cosmos Framework training failed before callback initialization: {error}",
@@ -134,14 +105,14 @@ def write_early_failure(error: BaseException) -> bool:
     return True
 
 
-class TAOStatusCallback(Callback):
-    """Write TAO lifecycle, training, and validation records from rank zero.
+class WorkflowStatusCallback(Callback):
+    """Write Cosmos lifecycle, training, and validation records from rank zero.
 
     The output path is resolved in this order:
 
     1. ``status_file_path`` when explicitly configured.
-    2. ``$TAO_RESULTS_ROOT/$TAO_JOB_ID/status.json`` (TAO SDK).
-    3. ``$TAO_API_RESULTS_DIR/$TAO_API_JOB_ID/status.json`` (TAO API).
+    2. ``$COSMOS_RESULTS_ROOT/$COSMOS_JOB_ID/status.json`` (Cosmos SDK).
+    3. ``$COSMOS_API_RESULTS_DIR/$COSMOS_API_JOB_ID/status.json`` (Cosmos API).
     4. ``<job.path_local>/status.json`` for direct launches.
     """
 
@@ -162,7 +133,7 @@ class TAOStatusCallback(Callback):
         self.experiment_name = experiment_name
         self.logging_interval = logging_interval
         self.validation_heartbeat_interval = validation_heartbeat_interval
-        self._writer: _TAOStatusWriter | None = None
+        self._writer: _WorkflowStatusWriter | None = None
         self._train_start_time = 0.0
         self._step_start_time = 0.0
         self._validation_batches = 0
@@ -189,27 +160,27 @@ class TAOStatusCallback(Callback):
         if self.status_file_path:
             return self.status_file_path
 
-        job_id = os.environ.get("TAO_JOB_ID")
+        job_id = os.environ.get("COSMOS_JOB_ID")
         if job_id:
-            results_root = os.environ.get("TAO_RESULTS_ROOT")
+            results_root = os.environ.get("COSMOS_RESULTS_ROOT")
             if not results_root:
-                raise RuntimeError("TAO_RESULTS_ROOT is required when TAO_JOB_ID is set")
+                raise RuntimeError("COSMOS_RESULTS_ROOT is required when COSMOS_JOB_ID is set")
             return os.path.join(results_root, job_id, "status.json")
 
-        api_job_id = os.environ.get("TAO_API_JOB_ID")
+        api_job_id = os.environ.get("COSMOS_API_JOB_ID")
         if api_job_id:
-            results_root = os.environ.get("TAO_API_RESULTS_DIR")
+            results_root = os.environ.get("COSMOS_API_RESULTS_DIR")
             if not results_root:
-                raise RuntimeError("TAO_API_RESULTS_DIR is required when TAO_API_JOB_ID is set")
+                raise RuntimeError("COSMOS_API_RESULTS_DIR is required when COSMOS_API_JOB_ID is set")
             return os.path.join(results_root, api_job_id, "status.json")
 
         return os.path.join(self.config.job.path_local, "status.json")
 
-    def _get_writer(self) -> _TAOStatusWriter | None:
+    def _get_writer(self) -> _WorkflowStatusWriter | None:
         if not self.enabled or not self._is_rank_zero():
             return None
         if self._writer is None:
-            self._writer = _TAOStatusWriter(self._resolve_status_file())
+            self._writer = _WorkflowStatusWriter(self._resolve_status_file())
         return self._writer
 
     def _progress_data(self, iteration: int, seconds_per_step: float | None = None) -> dict[str, Any]:
@@ -323,7 +294,7 @@ class TAOStatusCallback(Callback):
                     "parameter_summary": getattr(model, "parameter_summary", None),
                 },
             )
-            log.info(f"TAO status will be logged to {writer.filename}")
+            log.info(f"Cosmos status will be logged to {writer.filename}")
 
     def on_training_step_start(self, model: Any, data: dict[str, Any], iteration: int = 0) -> None:
         self._step_start_time = time.monotonic()
@@ -437,20 +408,12 @@ class TAOStatusCallback(Callback):
             # Preserve the historical Python-float accumulation order exactly,
             # while replacing one CUDA synchronization per scalar per batch
             # with one bounded transfer at validation end.
-            local_numerators = (
-                torch.stack(self._validation_local_numerators).detach().cpu().tolist()
-            )
-            local_denominators = (
-                torch.stack(self._validation_local_denominators).detach().cpu().tolist()
-            )
-            self._validation_loss_numerator = sum(
-                float(value) for value in local_numerators
-            )
-            self._validation_loss_denominator = sum(
-                int(value) for value in local_denominators
-            )
+            local_numerators = torch.stack(self._validation_local_numerators).detach().cpu().tolist()
+            local_denominators = torch.stack(self._validation_local_denominators).detach().cpu().tolist()
+            self._validation_loss_numerator = sum(float(value) for value in local_numerators)
+            self._validation_loss_denominator = sum(int(value) for value in local_denominators)
             print(
-                "TAO_FRAMEWORK_VALIDATION_STATUS_REDUCTION_ATTESTATION "
+                "COSMOS_FRAMEWORK_VALIDATION_STATUS_REDUCTION_ATTESTATION "
                 f"mode=deferred_scalar_transfer batches={self._validation_batches} "
                 f"rank={os.environ.get('RANK', os.environ.get('LOCAL_RANK', '0'))}",
                 flush=True,
@@ -461,7 +424,7 @@ class TAOStatusCallback(Callback):
             self._validation_loss_numerator, self._validation_loss_denominator
         )
         if denominator == 0:
-            log.warning("TAO validation logging saw zero samples; no val/loss record was written")
+            log.warning("Cosmos validation logging saw zero samples; no val/loss record was written")
             return
 
         self.last_validation_loss = numerator / denominator
@@ -517,7 +480,7 @@ class TAOStatusCallback(Callback):
     def on_train_end(self, model: Any, iteration: int = 0) -> None:
         numerator, denominator = self._reduce_accumulator(self._train_loss_numerator, self._train_loss_denominator)
         if denominator == 0:
-            raise RuntimeError("TAO metric collection observed zero valid training labels")
+            raise RuntimeError("Cosmos metric collection observed zero valid training labels")
         self.last_training_loss = numerator / denominator
         writer = self._get_writer()
         if writer is not None:

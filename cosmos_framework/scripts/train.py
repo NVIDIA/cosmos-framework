@@ -217,7 +217,7 @@ def launch(config: Config, args: argparse.Namespace) -> None:
         dataloader_val = instantiate(config.dataloader_val)
 
     # Start training. Give callbacks a final failure hook so external
-    # orchestrators (including TAO) receive a terminal status record.
+    # orchestrators (including Cosmos) receive a terminal status record.
     try:
         trainer.train(
             model,
@@ -312,7 +312,7 @@ def main() -> int:
                 sys.stderr.flush()
                 os._exit(0)
     except BaseException as error:
-        from cosmos_framework.callbacks.tao_status import write_early_failure
+        from cosmos_framework.callbacks.workflow_status import write_early_failure
 
         write_early_failure(error)
         raise

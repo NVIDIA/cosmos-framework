@@ -8,11 +8,11 @@ from types import SimpleNamespace
 
 import torch
 
-from cosmos_framework.callbacks.tao_status import TAOStatusCallback
+from cosmos_framework.callbacks.workflow_status import WorkflowStatusCallback
 
 
-def _callback(tmp_path) -> TAOStatusCallback:
-    callback = TAOStatusCallback(
+def _callback(tmp_path) -> WorkflowStatusCallback:
+    callback = WorkflowStatusCallback(
         enabled=True,
         status_file_path=str(tmp_path / "status.json"),
         experiment_name="test",
@@ -29,7 +29,7 @@ def _records(tmp_path) -> list[dict]:
     return [json.loads(line) for line in (tmp_path / "status.json").read_text(encoding="utf-8").splitlines()]
 
 
-def test_tao_status_callback_writes_training_validation_and_success(tmp_path) -> None:
+def test_workflow_status_callback_writes_training_validation_and_success(tmp_path) -> None:
     callback = _callback(tmp_path)
     callback.on_train_start(model=None, iteration=0)
     callback.on_training_step_start(model=None, data={}, iteration=0)
@@ -92,7 +92,7 @@ def test_tao_status_callback_writes_training_validation_and_success(tmp_path) ->
     assert records[-1]["completed_epochs"] == 2
 
 
-def test_tao_status_callback_reports_checkpoint_event(tmp_path) -> None:
+def test_workflow_status_callback_reports_checkpoint_event(tmp_path) -> None:
     callback = _callback(tmp_path)
     checkpoint = tmp_path / "checkpoints" / "epoch_1"
     checkpoint.mkdir(parents=True)
@@ -136,7 +136,7 @@ def test_validation_stats_defer_scalar_transfer_until_end(tmp_path) -> None:
     assert callback._validation_local_denominators == []
 
 
-def test_tao_status_callback_ignores_dcp_marker_nul_padding(tmp_path) -> None:
+def test_workflow_status_callback_ignores_dcp_marker_nul_padding(tmp_path) -> None:
     callback = _callback(tmp_path)
     checkpoint = tmp_path / "checkpoints" / "epoch_1"
     checkpoint.mkdir(parents=True)
@@ -149,7 +149,7 @@ def test_tao_status_callback_ignores_dcp_marker_nul_padding(tmp_path) -> None:
     assert record["checkpoint_path"] == str(checkpoint.resolve())
 
 
-def test_tao_status_callback_writes_failure(tmp_path) -> None:
+def test_workflow_status_callback_writes_failure(tmp_path) -> None:
     callback = _callback(tmp_path)
     callback.on_train_start(model=None, iteration=0)
     callback.on_exception(RuntimeError("boom"))

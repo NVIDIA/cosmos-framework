@@ -17,10 +17,10 @@ from cosmos_framework.callbacks.loss_spike_rollback import LossSpikeRollback
 from cosmos_framework.callbacks.manual_gc import ManualGarbageCollection
 from cosmos_framework.callbacks.param_count import ParamCount
 from cosmos_framework.callbacks.sampled_media_recorder import SampledMediaRecorder
-from cosmos_framework.callbacks.tao_status import TAOStatusCallback
 from cosmos_framework.callbacks.tokens_per_sec import VLMTokensPerSec
 from cosmos_framework.callbacks.wandb_log import WandbCallback as WandBCallbackMultiplier
 from cosmos_framework.callbacks.wandb_vis import VisualizationLoggingCallback
+from cosmos_framework.callbacks.workflow_status import WorkflowStatusCallback
 from cosmos_framework.configs.base.defaults.job_monitor import JOB_MONITOR_CALLBACKS
 from cosmos_framework.utils.callback import LowPrecisionCallback, WandBCallback
 from cosmos_framework.utils.lazy_config import PLACEHOLDER
@@ -57,7 +57,7 @@ def register_callbacks():
             config=PLACEHOLDER,
             trainer=PLACEHOLDER,
         ),  # reads model.precision; no extra kwarg needed
-        tao=L(TAOStatusCallback)(
+        workflow_status=L(WorkflowStatusCallback)(
             enabled=False,
             status_file_path=None,
             experiment_name="",
