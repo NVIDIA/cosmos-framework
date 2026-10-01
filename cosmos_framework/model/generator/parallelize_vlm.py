@@ -28,7 +28,6 @@ from torch.utils.checkpoint import (
     create_selective_checkpoint_contexts,
 )
 
-from cosmos_framework.utils import log
 from cosmos_framework.configs.base.defaults.activation_checkpointing import ActivationCheckpointingConfig
 from cosmos_framework.configs.base.defaults.compile import CompileConfig
 from cosmos_framework.configs.base.defaults.parallelism import (
@@ -37,6 +36,7 @@ from cosmos_framework.configs.base.defaults.parallelism import (
 )
 from cosmos_framework.model.generator.hf_model import HFModel
 from cosmos_framework.model.generator.reasoner.qwen35_caption import qwen35_fp32_decay_modules
+from cosmos_framework.utils import log
 from cosmos_framework.utils.generator.parallelism import ParallelDims, fsdp_mesh
 
 # (parent, attribute name, module) — the module currently registered at that slot, plus what
@@ -417,7 +417,35 @@ def apply_fsdp(
                             (``"bfloat16"``, ``"float16"``, or ``"float32"``).
     """
     if not parallel_dims.dp_enabled:
-        log.info("parallelize: no data-parallel axis (dp_shard == dp_replicate == 1) — skipping FSDP2 wrapping")
+        # ``precision`` is normally delivered through MixedPrecisionPolicy, which
+        # only gets attached by ``fully_shard`` below. Returning here leaves the
+        # network in whatever dtype the checkpoint loaded as -- fp32 for a
+        # Qwen3-VL base -- so every matmul dispatches to SIMT fp32 CUTLASS
+        # kernels instead of tensor cores. On a GB300 that measured 3.97ms
+        # against 0.14ms for the same bf16 GEMM, and fp32 ``aten::mm`` accounted
+        # for 89% of training CUDA time. Multi-GPU runs never saw it because
+        # dp_shard > 1 attaches the policy.
+        #
+        # Cast the FROZEN parameters to the configured compute dtype. Trainable
+        # parameters are deliberately untouched so optimizer state keeps the
+        # precision it was built with, which mirrors what MixedPrecisionPolicy
+        # does for master weights.
+        target_dtype = PRECISION_TO_TORCH_DTYPE[precision]
+        converted = 0
+        with torch.no_grad():
+            for parameter in model.parameters():
+                if (
+                    not parameter.requires_grad
+                    and parameter.dtype.is_floating_point
+                    and parameter.dtype != target_dtype
+                ):
+                    parameter.data = parameter.data.to(target_dtype)
+                    converted += 1
+        log.info(
+            f"parallelize: no data-parallel axis — skipping FSDP2 wrapping; cast "
+            f"{converted} frozen parameters to {precision} so the compute dtype "
+            f"still matches the configured precision"
+        )
         return
 
     # ``fsdp_reduce_dtype`` overrides the gradient-reduction dtype; ``None`` follows the
