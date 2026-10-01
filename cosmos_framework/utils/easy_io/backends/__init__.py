@@ -17,10 +17,15 @@ __all__ = [
 ]
 
 if TRAINING:
-    from cosmos_framework.utils.easy_io.backends.boto3_backend import Boto3Backend
-    from cosmos_framework.utils.easy_io.backends.msc_backend import MSCBackend
-
-    __all__ += [
-        "Boto3Backend",
-        "MSCBackend",
-    ]
+    try:
+        from cosmos_framework.utils.easy_io.backends.boto3_backend import Boto3Backend
+    except ImportError:
+        pass
+    else:
+        __all__.append("Boto3Backend")
+    try:
+        from cosmos_framework.utils.easy_io.backends.msc_backend import MSCBackend
+    except ImportError:
+        pass
+    else:
+        __all__.append("MSCBackend")

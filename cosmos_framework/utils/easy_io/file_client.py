@@ -73,11 +73,14 @@ class FileClient:
     }
 
     if TRAINING:
-        from cosmos_framework.utils.easy_io.backends.msc_backend import MSCBackend
-
-        _backends["s3"] = MSCBackend
-        _backends["msc"] = MSCBackend
-        _prefix_to_backends["s3"] = MSCBackend
+        try:
+            from cosmos_framework.utils.easy_io.backends.msc_backend import MSCBackend
+        except ImportError:
+            pass
+        else:
+            _backends["s3"] = MSCBackend
+            _backends["msc"] = MSCBackend
+            _prefix_to_backends["s3"] = MSCBackend
 
     _instances: dict = {}
 
