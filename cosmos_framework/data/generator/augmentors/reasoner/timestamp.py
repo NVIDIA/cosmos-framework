@@ -35,9 +35,14 @@ class _TimestampProcessor(Protocol):
 
 
 def compute_timestamps(frame_index: int, fps: float, processor: _TimestampProcessor | None) -> float:
-    if processor is not None and "Qwen3" in processor.name:
-        frame_index_start = frame_index // processor.merge_size * processor.merge_size
-        frame_index_end = frame_index_start + processor.merge_size - 1
+    if processor is not None and (
+        getattr(processor, "USES_TEMPORAL_PATCH_TIMESTAMPS", False) or "Qwen3" in processor.name
+    ):
+        # Snapshot paths may be arbitrary hashes. Use the processor's temporal
+        # contract, not its directory name or spatial merge size, for this clock.
+        patch_size = getattr(processor, "temporal_patch_size", processor.merge_size)
+        frame_index_start = frame_index // patch_size * patch_size
+        frame_index_end = frame_index_start + patch_size - 1
         timestamps_start = frame_index_start / fps
         timestamps_end = frame_index_end / fps
         timestamps = (timestamps_start + timestamps_end) / 2

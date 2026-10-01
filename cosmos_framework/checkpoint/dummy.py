@@ -22,6 +22,7 @@ class Checkpointer(AbstractCheckpointer):
         scheduler: torch.optim.lr_scheduler.LRScheduler,
         grad_scaler: torch.amp.GradScaler,
         iteration: int,
+        epoch: int | None = None,
     ) -> None:
         pass
 

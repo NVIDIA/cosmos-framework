@@ -18,5 +18,6 @@ from cosmos_framework.model.generator.mot.unified_mot import (  # noqa: F401  # 
     Qwen3VLTextConfig,
     Qwen3VLTextForCausalLM,
     Qwen3VLTextModel,
-    Qwen3VLTextMoTDecoderLayer,
 )
+
+Qwen3VLTextMoTDecoderLayer = MoTDecoderLayer

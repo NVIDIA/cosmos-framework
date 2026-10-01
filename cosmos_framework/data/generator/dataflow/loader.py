@@ -8,11 +8,13 @@ each DataLoader worker. The canonical training dataloader.
 
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
+from itertools import islice
+
+import numpy as np
 import torch
 import torch.utils.data
-import numpy as np
 
-from cosmos_framework.utils import log
 from cosmos_framework.data.generator.dataflow.base import (
     BatchCollator,
     DataDistributor,
@@ -21,6 +23,7 @@ from cosmos_framework.data.generator.dataflow.base import (
 )
 from cosmos_framework.data.generator.dataflow.batchers import SimpleBatcher
 from cosmos_framework.data.generator.dataflow.collators import DefaultBatchCollator
+from cosmos_framework.utils import log
 
 
 class _DataflowIterableDataset(torch.utils.data.IterableDataset):
@@ -34,6 +37,7 @@ class _DataflowIterableDataset(torch.utils.data.IterableDataset):
         collator: BatchCollator,
         dp_rank: int,
         dp_world_size: int,
+        processing_threads: int,
     ):
         super().__init__()
         self._distributor = distributor
@@ -42,40 +46,60 @@ class _DataflowIterableDataset(torch.utils.data.IterableDataset):
         self._collator = collator
         self._dp_rank = dp_rank
         self._dp_world_size = dp_world_size
+        self._processing_threads = processing_threads
 
     def __iter__(self):
         info = torch.utils.data.get_worker_info()
         worker_id, num_workers = (info.id, info.num_workers) if info else (0, 1)
         raw = self._distributor.stream(self._dp_rank, self._dp_world_size, worker_id, num_workers)
 
+        def _process_one(item):
+            if isinstance(item, dict):
+                meta = {k: item.pop(k) for k in list(item) if k.startswith("_dp_")}
+            else:
+                meta = {}
+            sample = self._processor.process(item)
+            if meta and isinstance(sample, dict):
+                sample.update(meta)
+            return sample
+
         def _processed():
-            for item in raw:
-                if isinstance(item, dict):
-                    meta = {k: item.pop(k) for k in list(item) if k.startswith("_dp_")}
-                else:
-                    meta = {}
-                s = self._processor.process(item)
-                if meta and isinstance(s, dict):
-                    s.update(meta)
-                yield s
+            if self._processing_threads == 1:
+                for item in raw:
+                    yield _process_one(item)
+                return
+
+            # Keep one small, bounded in-process pool per DataLoader worker.
+            # executor.map preserves source order, so sharding, packing, and
+            # checkpoint/resume positions remain identical to serial processing.
+            with ThreadPoolExecutor(max_workers=self._processing_threads) as executor:
+                while True:
+                    chunk = list(islice(raw, self._processing_threads))
+                    if not chunk:
+                        return
+                    yield from executor.map(_process_one, chunk)
 
         for group in self._batcher.batches(_processed()):
             has_meta = bool(group) and isinstance(group[0], dict) and "_dp_epoch" in group[0]
             if has_meta:
                 epochs = [s["_dp_epoch"] for s in group]
                 positions = [s["_dp_stream_pos"] for s in group]
-                max_epoch = max(epochs)
-                max_pos = max(positions)
-                # Resume records (max_epoch, max_pos) and fast-forwards to max_pos+1 —
-                # bit-for-bit with the legacy collate_batch. That is gap-free only when
-                # this batch is a single sample (max_batch_size=1, all live recipes) or a
-                # single-epoch contiguous run (sequential packing). A reordering batcher
-                # (pool packing) at batch_size>1, or a batch spanning an epoch boundary,
-                # would leave buffered lower positions unrecorded and skip them on resume.
-                # Fail loudly rather than silently drop samples in that unsupported combo.
-                if len(group) > 1:
-                    contiguous = min(epochs) == max_epoch and sorted(positions) == list(
-                        range(min(positions), max_pos + 1)
+                if self._batcher.preserves_source_order:
+                    # The final emitted sample is the exact stream cursor even
+                    # when a large fixed batch spans one or more short epochs.
+                    # Independent maxima are invalid across an epoch boundary
+                    # because positions restart at zero in each epoch.
+                    cursor_epoch = group[-1]["_dp_epoch"]
+                    cursor_pos = group[-1]["_dp_stream_pos"]
+                else:
+                    cursor_epoch = max(epochs)
+                    cursor_pos = max(positions)
+                # A reordering batcher can leave lower positions buffered when
+                # yielding a multi-sample group. Preserve the existing strict
+                # rejection for that unsupported resume combination.
+                if len(group) > 1 and not self._batcher.preserves_source_order:
+                    contiguous = min(epochs) == cursor_epoch and sorted(positions) == list(
+                        range(min(positions), cursor_pos + 1)
                     )
                     if not contiguous:
                         raise ValueError(
@@ -88,8 +112,8 @@ class _DataflowIterableDataset(torch.utils.data.IterableDataset):
                 clean = [{k: v for k, v in s.items() if not k.startswith("_dp_")} for s in group]
                 batch = self._collator.collate(clean)
                 batch["sample_worker_id"] = torch.tensor([worker_id] * len(group))
-                batch["sample_epoch"] = torch.tensor([max_epoch] * len(group))
-                batch["sample_index"] = torch.tensor([max_pos] * len(group))
+                batch["sample_epoch"] = torch.tensor([cursor_epoch] * len(group))
+                batch["sample_index"] = torch.tensor([cursor_pos] * len(group))
             else:
                 batch = self._collator.collate(group)
             yield batch
@@ -116,6 +140,8 @@ class CosmosDataLoader(torch.utils.data.DataLoader):
         prefetch_factor: int | None = None,
         persistent_workers: bool = False,
         pin_memory: bool = False,
+        multiprocessing_context: str | None = None,
+        processing_threads: int = 1,
         parallel_dims=None,
     ):
         if batch_size is not None and batcher is not None:
@@ -128,6 +154,20 @@ class CosmosDataLoader(torch.utils.data.DataLoader):
             batcher = SimpleBatcher(batch_size=batch_size)
         if collator is None:
             collator = DefaultBatchCollator()
+        num_workers = int(num_workers)
+        processing_threads = int(processing_threads)
+        if prefetch_factor is not None:
+            prefetch_factor = int(prefetch_factor)
+            if prefetch_factor < 1:
+                raise ValueError(
+                    "CosmosDataLoader: prefetch_factor must be >= 1 when configured, "
+                    f"got {prefetch_factor}"
+                )
+        if processing_threads < 1:
+            raise ValueError(
+                "CosmosDataLoader: processing_threads must be >= 1, "
+                f"got {processing_threads}"
+            )
 
         if parallel_dims is not None:
             dp_rank, dp_world_size = parallel_dims.dp_coord
@@ -150,6 +190,7 @@ class CosmosDataLoader(torch.utils.data.DataLoader):
             collator=collator,
             dp_rank=dp_rank,
             dp_world_size=dp_world_size,
+            processing_threads=processing_threads,
         )
 
         from cosmos_framework.data.generator.dataflow.distributors import MapDistributor
@@ -176,6 +217,8 @@ class CosmosDataLoader(torch.utils.data.DataLoader):
         )
         if num_workers > 0 and prefetch_factor is not None:
             loader_kwargs["prefetch_factor"] = prefetch_factor
+        if num_workers > 0 and multiprocessing_context is not None:
+            loader_kwargs["multiprocessing_context"] = multiprocessing_context
         super().__init__(dataset, batch_size=None, **loader_kwargs)
 
 

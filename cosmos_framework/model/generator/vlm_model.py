@@ -28,14 +28,15 @@ import torch
 import torch.nn as nn
 from torch.nn.modules.module import _IncompatibleKeys
 
-from cosmos_framework.utils.lazy_config import instantiate
-from cosmos_framework.model._base import ImaginaireModel
-from cosmos_framework.utils import log
-from cosmos_framework.model.generator.algorithm.loss.cross_entropy import cross_entropy_loss, weighted_cross_entropy_loss
-from cosmos_framework.model.generator.algorithm.loss.load_balancing import compute_load_balancing_loss
 from cosmos_framework.configs.base.defaults.parallelism import PRECISION_TO_TORCH_DTYPE
 from cosmos_framework.configs.base.defaults.reasoner import validate_sound_understanding_config
 from cosmos_framework.configs.base.reasoner.defaults.policy_config import VLMModelConfig
+from cosmos_framework.model._base import ImaginaireModel
+from cosmos_framework.model.generator.algorithm.loss.cross_entropy import (
+    cross_entropy_loss,
+    weighted_cross_entropy_loss,
+)
+from cosmos_framework.model.generator.algorithm.loss.load_balancing import compute_load_balancing_loss
 from cosmos_framework.model.generator.hf_model import HFModel
 from cosmos_framework.model.generator.parallelize_vlm import parallelize
 from cosmos_framework.model.generator.reasoner.qwen35_caption import (
@@ -44,6 +45,7 @@ from cosmos_framework.model.generator.reasoner.qwen35_caption import (
 )
 from cosmos_framework.model.generator.utils.moe_utils import collect_hf_moe_lbl_metadata, set_hf_moe_token_mask
 from cosmos_framework.model.generator.utils.safetensors_loader import load_vlm_model
+from cosmos_framework.utils import log
 from cosmos_framework.utils.generator.input_probe import (
     maybe_dump_forward_result,
     maybe_dump_gradients,
@@ -60,6 +62,7 @@ from cosmos_framework.utils.generator.reasoner.true_packing import (
     TRUE_PACKING_CPU_PREPARED_KEY,
     assert_packing_temporal_inputs_supported,
 )
+from cosmos_framework.utils.lazy_config import instantiate
 
 # Model-type dispatch sets. Using hf_config.model_type (stable HF-defined string)
 # rather than backbone.model_name avoids the brittleness of substring-matching a local
@@ -343,7 +346,18 @@ class VLMModel(ImaginaireModel):
 
         # Apply freeze before the optimizer is built — ``build_optimizer`` reads
         # ``requires_grad`` off ``named_parameters``.
-        n_trainable = _apply_freeze_config(self.model.model, self.hf_config.model_type, self.config.freeze)
+        if self.config.policy.lora_enabled:
+            from cosmos_framework.utils.generator.lora import apply_lora_trainable_scope
+
+            peft_summary = apply_lora_trainable_scope(
+                self.model.model,
+                lora_target_modules=self.config.policy.lora_target_modules,
+                lora_bias=self.config.policy.lora_bias,
+                lora_modules_to_save=self.config.policy.lora_modules_to_save,
+            )
+            n_trainable = int(peft_summary["trainable_parameter_tensors"])
+        else:
+            n_trainable = _apply_freeze_config(self.model.model, self.hf_config.model_type, self.config.freeze)
         if config.sound_und:
             # The standalone artifact is the sole source of encoder weights.
             # Keep it immutable even when a broad trainable_params expression
@@ -355,9 +369,19 @@ class VLMModel(ImaginaireModel):
                 self.model.model.sound_und_model.projector.eval()
             n_trainable = sum(parameter.requires_grad for parameter in self.model.model.parameters())
             assert n_trainable > 0, "audio freeze policy left 0 trainable parameters — check freeze patterns"
-        log.info(
-            f"freeze config applied (model_type={self.hf_config.model_type}): {n_trainable} trainable parameter tensors"
+        trainable_parameters = sum(
+            parameter.numel() for parameter in self.model.parameters() if parameter.requires_grad
         )
+        total_parameters = sum(parameter.numel() for parameter in self.model.parameters())
+        peft_summary = getattr(self.model.model, "_cosmos_peft_parameter_summary", None)
+        self.parameter_summary = peft_summary or {
+            "training_mode": "dense_sft",
+            "trainable_parameters": trainable_parameters,
+            "total_parameters": total_parameters,
+            "frozen_parameters": total_parameters - trainable_parameters,
+            "trainable_parameter_tensors": n_trainable,
+        }
+        log.info(f"freeze config applied (model_type={self.hf_config.model_type}): {self.parameter_summary}")
 
         if self.parallel_dims is not None and self.parallel_dims.cp_enabled:
             # Both CE variants normalize over every rank in the world, which is only the
@@ -445,6 +469,32 @@ class VLMModel(ImaginaireModel):
             enable_fused_weighted_ce=policy.enable_fused_weighted_ce,
             weighted_ce_exponent=policy.weighted_ce_exponent,
         )
+
+        from cosmos_framework.model.generator.qwen3_vl_compat import apply_qwen3_vl_patch_embed_compat
+
+        patch_embed_changed = apply_qwen3_vl_patch_embed_compat(
+            hf_model.model,
+            model_type=hf_model.hf_config.model_type,
+            mode=policy.qwen3_vl_patch_embed,
+        )
+        if patch_embed_changed:
+            log.info("Using repository-owned linear Qwen3-VL PatchEmbed compatibility path")
+
+        if policy.lora_enabled:
+            from cosmos_framework.utils.generator.lora import inject_lora_pre_fsdp
+
+            inject_lora_pre_fsdp(
+                hf_model.model,
+                lora_rank=policy.lora_rank,
+                lora_alpha=policy.lora_alpha,
+                lora_dropout=policy.lora_dropout,
+                lora_target_modules=policy.lora_target_modules,
+                lora_bias=policy.lora_bias,
+                lora_use_rslora=policy.lora_use_rslora,
+                lora_modules_to_save=policy.lora_modules_to_save,
+                lora_precision=policy.lora_precision,
+            )
+
         # ── b.1. Early family-gate for backbone.pretrained_weights ──
         # Fail-fast on unsupported VLM families BEFORE any expensive work
         # (parallelize, materialize, base-weight load, overlay download).
@@ -547,10 +597,12 @@ class VLMModel(ImaginaireModel):
             else:
                 safetensors_local_path = local_path
 
+            base_skip_patterns = [r".*\.lora_[AB]\.weight"] if policy.lora_enabled else None
             hf_model.load_weights(
                 checkpoint_path=safetensors_local_path,
                 credential_path=None,  # local path after download
                 parallel_dims=parallel_dims if torch.distributed.is_initialized() else None,
+                extra_skip_patterns=base_skip_patterns,
             )
 
             # ── g.2. Optional LLM overlay (backbone.pretrained_weights) ──
@@ -576,7 +628,7 @@ class VLMModel(ImaginaireModel):
                     checkpoint_path=llm_local_path,
                     credential_path=None,
                     parallel_dims=parallel_dims if torch.distributed.is_initialized() else None,
-                    extra_skip_patterns=overlay_skip_patterns,
+                    extra_skip_patterns=overlay_skip_patterns + (base_skip_patterns or []),
                 )
                 lm_loaded = {k for k in keys_loaded if is_lm_key(k)}
                 if not lm_loaded:
@@ -605,10 +657,23 @@ class VLMModel(ImaginaireModel):
                 f"{audio_config.encoder_checkpoint_path}"
             )
 
+        if policy.lora_enabled:
+            from cosmos_framework.utils.generator.lora import init_lora_weights_post_materialization
+
+            init_lora_weights_post_materialization(hf_model.model)
+
         self.model = hf_model
         self.parallel_dims = parallel_dims
         self.model_name_or_path = local_path
         self.hf_config = hf_model.hf_config
+
+        trainable = sum(p.numel() for p in hf_model.parameters() if p.requires_grad)
+        total = sum(p.numel() for p in hf_model.parameters())
+        log.info(
+            "parameter summary: "
+            f"mode={'peft' if policy.lora_enabled else 'dense_sft'}, "
+            f"trainable={trainable}, total={total}, frozen={total - trainable}"
+        )
 
     def on_train_start(self, memory_format) -> None:
         """Called by trainer after model.to("cuda"). No device move needed here."""
@@ -934,6 +999,10 @@ class VLMModel(ImaginaireModel):
             "labels": labels,
             "train_objective_numerator": train_objective_numerator,
             "train_objective_denominator": train_objective_denominator,
+            # Cosmos's status callback reports the unweighted token CE independently
+            # of the optimized objective (weighted CE or MoE auxiliary terms).
+            "loss_numerator": loss_stats.token_ce_sum,
+            "loss_denominator": loss_stats.valid_token_count,
         }
         if backward_loss is not loss:
             output["_backward_loss"] = backward_loss
@@ -977,5 +1046,7 @@ class VLMModel(ImaginaireModel):
             "val_objective_denominator": stats.objective_denominator,
             "val_token_ce_sum": stats.token_ce_sum,
             "val_n_valid_tokens": stats.valid_token_count,
+            "loss_numerator": stats.token_ce_sum,
+            "loss_denominator": stats.valid_token_count,
         }
         return output, loss

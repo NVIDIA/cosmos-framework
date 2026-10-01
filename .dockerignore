@@ -1,5 +1,7 @@
 .venv
 .git
+**/__pycache__
+**/*.pyc
 /checkpoints
 /datasets
 /output

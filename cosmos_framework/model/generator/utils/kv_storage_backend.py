@@ -32,6 +32,22 @@ _decode_fp8_kv_many_kernel: Any = None
 if triton is not None and tl is not None:
 
     @triton.jit
+    def _decode_e4m3fn_bytes(values):
+        # Ampere lacks native E4M3 conversions. All finite E4M3 values are
+        # exactly representable in BF16, including the subnormal range.
+        bits = values.to(tl.uint16)
+        sign = (bits & 0x80) << 8
+        exponent = (bits >> 3) & 0xF
+        mantissa = bits & 0x7
+        normal_bits = sign | ((exponent + 120) << 7) | (mantissa << 4)
+        normal = normal_bits.to(tl.uint16).to(tl.bfloat16, bitcast=True)
+        subnormal = (mantissa.to(tl.float32) * (1.0 / 512.0)).to(tl.bfloat16)
+        subnormal_bits = subnormal.to(tl.uint16, bitcast=True) | sign
+        subnormal = subnormal_bits.to(tl.bfloat16, bitcast=True)
+        decoded = tl.where(exponent == 0, subnormal, normal)
+        return tl.where((bits & 0x7F) == 0x7F, float("nan"), decoded).to(tl.bfloat16)
+
+    @triton.jit
     def _decode_fp8_kv_many_kernel_impl(
         k_value_ptrs,
         v_value_ptrs,
@@ -46,6 +62,7 @@ if triton is not None and tl is not None:
         num_heads: tl.constexpr,  # pyright: ignore[reportInvalidTypeForm]
         head_dim: tl.constexpr,  # pyright: ignore[reportInvalidTypeForm]
         block_size: tl.constexpr,  # pyright: ignore[reportInvalidTypeForm]
+        native_fp8: tl.constexpr,  # pyright: ignore[reportInvalidTypeForm]
     ) -> None:
         entry_ord = tl.program_id(1)  # []
         slot = tl.load(ordered_slots + entry_ord)  # []
@@ -63,12 +80,20 @@ if triton is not None and tl is not None:
             (batch_idx * total_seq + seq_start + seq_idx) * num_heads + head_idx
         ) * head_dim + dim_idx  # [block_size]
 
-        k_base = tl.load(k_value_ptrs + slot).to(tl.pointer_type(tl.float8e4nv))  # []
-        v_base = tl.load(v_value_ptrs + slot).to(tl.pointer_type(tl.float8e4nv))  # []
         k_scale = tl.load(k_scales + slot).to(tl.bfloat16)  # []
         v_scale = tl.load(v_scales + slot).to(tl.bfloat16)  # []
-        k_fp8 = tl.load(k_base + offsets, mask=mask).to(tl.bfloat16)  # [block_size]
-        v_fp8 = tl.load(v_base + offsets, mask=mask).to(tl.bfloat16)  # [block_size]
+        if native_fp8:
+            k_base = tl.load(k_value_ptrs + slot).to(tl.pointer_type(tl.float8e4nv))  # []
+            v_base = tl.load(v_value_ptrs + slot).to(tl.pointer_type(tl.float8e4nv))  # []
+            # Masked lanes are never stored. Leave them unspecified, avoiding
+            # Triton's unsupported integer-to-FP8 masked-fill conversion.
+            k_fp8 = tl.load(k_base + offsets, mask=mask).to(tl.bfloat16)  # [block_size]
+            v_fp8 = tl.load(v_base + offsets, mask=mask).to(tl.bfloat16)  # [block_size]
+        else:
+            k_base = tl.load(k_value_ptrs + slot).to(tl.pointer_type(tl.uint8))  # []
+            v_base = tl.load(v_value_ptrs + slot).to(tl.pointer_type(tl.uint8))  # []
+            k_fp8 = _decode_e4m3fn_bytes(tl.load(k_base + offsets, mask=mask, other=0))  # [block_size]
+            v_fp8 = _decode_e4m3fn_bytes(tl.load(v_base + offsets, mask=mask, other=0))  # [block_size]
         tl.store(out_k + out_offsets, k_fp8 * k_scale, mask=mask)
         tl.store(out_v + out_offsets, v_fp8 * v_scale, mask=mask)
 
@@ -165,6 +190,7 @@ def decode_fp8_kv_many_triton(
             num_heads,
             head_dim,
             block_size,
+            torch.cuda.get_device_capability(k_value_ptrs.device) >= (8, 9),
         )
     except Exception as exc:
         # Preserve the original launch error as the cause for kernel debugging.

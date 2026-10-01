@@ -7,23 +7,24 @@ Based on projects/cosmos/ar/v1/configs/registry.py
 
 from hydra.core.config_store import ConfigStore
 
-from cosmos_framework.callbacks.manual_gc import ManualGarbageCollection
-from cosmos_framework.utils.lazy_config import PLACEHOLDER
-from cosmos_framework.utils.lazy_config import LazyCall as L
-from cosmos_framework.utils.callback import LowPrecisionCallback, WandBCallback
 from cosmos_framework.callbacks.dataloader_state import DataLoaderStateCallback
-
 from cosmos_framework.callbacks.grad_clip import GradClip
 from cosmos_framework.callbacks.hf_export import HFExportCallback
 from cosmos_framework.callbacks.iter_speed import IterSpeed
 from cosmos_framework.callbacks.learning_rate_logger import LearningRateLogger
 from cosmos_framework.callbacks.log_tensor_shape import LogTensorShapeCallback
+from cosmos_framework.callbacks.loss_spike_rollback import LossSpikeRollback
+from cosmos_framework.callbacks.manual_gc import ManualGarbageCollection
 from cosmos_framework.callbacks.param_count import ParamCount
 from cosmos_framework.callbacks.sampled_media_recorder import SampledMediaRecorder
 from cosmos_framework.callbacks.tokens_per_sec import VLMTokensPerSec
 from cosmos_framework.callbacks.wandb_log import WandbCallback as WandBCallbackMultiplier
 from cosmos_framework.callbacks.wandb_vis import VisualizationLoggingCallback
+from cosmos_framework.callbacks.workflow_status import WorkflowStatusCallback
 from cosmos_framework.configs.base.defaults.job_monitor import JOB_MONITOR_CALLBACKS
+from cosmos_framework.utils.callback import LowPrecisionCallback, WandBCallback
+from cosmos_framework.utils.lazy_config import PLACEHOLDER
+from cosmos_framework.utils.lazy_config import LazyCall as L
 
 # from cosmos_framework.utils.callback import NVTXCallback
 
@@ -47,12 +48,22 @@ def register_callbacks():
             save_s3="${upload_reproducible_setup}",
         ),
         grad_clip=L(GradClip)(clip_norm=1.0, force_finite=False),  # use model
+        # Registered after grad_clip only for readability; the guard reads the gradient
+        # norm in on_after_backward, which runs before any clipping regardless of order.
+        loss_spike_rollback=L(LossSpikeRollback)(enabled=False),  # use model + optimizer
         learning_rate_logger=L(LearningRateLogger)(every_n=10),
         low_precision=L(LowPrecisionCallback)(
             update_iter=1,
             config=PLACEHOLDER,
             trainer=PLACEHOLDER,
         ),  # reads model.precision; no extra kwarg needed
+        workflow_status=L(WorkflowStatusCallback)(
+            enabled=False,
+            status_file_path=None,
+            experiment_name="",
+            logging_interval=1,
+            validation_heartbeat_interval=1,
+        ),
         sampled_media=L(SampledMediaRecorder)(
             enabled=False,
             output_uri=(

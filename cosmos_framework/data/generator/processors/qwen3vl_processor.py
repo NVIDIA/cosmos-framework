@@ -1,12 +1,12 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: OpenMDW-1.1
 
+import json
+from pathlib import Path
 from typing import Optional
 
 import numpy as np
 import torch
-import transformers
-from packaging.version import Version
 
 from cosmos_framework.data.generator.processors.base import (
     BaseVLMProcessor,
@@ -16,9 +16,17 @@ from cosmos_framework.data.generator.processors.base import (
 )
 
 
-class Qwen3VLProcessor(
-    BaseVLMProcessor
-):
+def _is_local_qwen35_snapshot(path: str) -> bool:
+    """Recognize Qwen3.5 metadata independently of a snapshot's directory name."""
+    config_path = Path(path) / "config.json"
+    if not config_path.is_file():
+        return False
+    with config_path.open() as config_file:
+        config = json.load(config_file)
+    return config.get("model_type") in {"qwen3_5", "qwen3_5_moe"}
+
+
+class Qwen3VLProcessor(BaseVLMProcessor):
     """Wrapper around the HuggingFace ``AutoProcessor`` for Qwen3-VL models."""
 
     # Qwen3-VL does not expose a single vision-end token in its vocabulary, so
@@ -26,6 +34,7 @@ class Qwen3VLProcessor(
     # which silently resolved to the UNK token id.
     VISION_END_TOKEN: Optional[str] = None
     USES_SOURCE_VIDEO_TIMESTAMPS: bool = True
+    USES_TEMPORAL_PATCH_TIMESTAMPS: bool = True
 
     def __init__(
         self,
@@ -43,7 +52,9 @@ class Qwen3VLProcessor(
         self.merge_size = self.processor.video_processor.merge_size
         self.use_smart_resize = True
         normalized_name = f"{name} {type(self.processor).__name__}".lower()
-        self.retain_mm_token_type_ids: bool = "qwen3.5" in normalized_name or "qwen3_5" in normalized_name
+        self.retain_mm_token_type_ids: bool = (
+            "qwen3.5" in normalized_name or "qwen3_5" in normalized_name or _is_local_qwen35_snapshot(name)
+        )
 
     def apply_chat_template(
         self,
@@ -92,16 +103,16 @@ class Qwen3VLProcessor(
                 "do_sample_frames": False,
                 "video_metadata": video_metadata[0] if num_video == 1 else video_metadata,
             }
-        chat_template_kwargs = (
-            {"processor_kwargs": kwargs} if Version(transformers.__version__) >= Version("5.0") else kwargs
-        )
+        # Both Transformers 4.x and 5.x forward modality kwargs directly to
+        # the processor. Nesting them in ``processor_kwargs`` silently loses
+        # frame indices, FPS and the request to keep already-sampled frames.
         inputs = self.processor.apply_chat_template(
             messages,
             tokenize=tokenize,
             add_generation_prompt=add_generation_prompt,
             return_dict=True,
             return_tensors=return_tensors,
-            **chat_template_kwargs,
+            **kwargs,
         )
 
         # Convert batch features into single features

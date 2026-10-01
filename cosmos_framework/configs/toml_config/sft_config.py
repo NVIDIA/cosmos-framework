@@ -11,7 +11,7 @@ override list, ``PATH_REMAPS``, etc.) lives in ``toml_config_helper.py``.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Literal, Optional
 
 import tomllib
 from pydantic import BaseModel, ConfigDict, Field
@@ -357,8 +357,7 @@ class ModelConfig(BaseModel):
     lora_rank: int = Field(
         default=16,
         description=(
-            "LoRA rank `r`. Adapter shape is (rank × hidden_dim) per target "
-            "module. Standard values are 4, 8, 16, 32."
+            "LoRA rank `r`. Adapter shape is (rank × hidden_dim) per target module. Standard values are 4, 8, 16, 32."
         ),
     )
     lora_alpha: int = Field(
@@ -375,13 +374,20 @@ class ModelConfig(BaseModel):
             "adapter. Defaults target the four MoE-gen projection matrices."
         ),
     )
+    lora_dropout: float = Field(default=0.0, ge=0.0, lt=1.0)
+    lora_bias: Literal["none", "all", "lora_only"] = "none"
+    lora_use_rslora: bool = False
+    lora_modules_to_save: str = Field(
+        default="",
+        description="Comma-separated module-name suffixes trained and saved with LoRA adapters.",
+    )
+    lora_precision: Literal["float32", "float16", "bfloat16"] | None = None
+    qwen3_vl_patch_embed: Literal["auto", "linear", "conv3d"] = "auto"
 
     ema: EMAConfig = Field(default_factory=EMAConfig)
     parallelism: ParallelismConfig = Field(default_factory=ParallelismConfig)
     compile: CompileConfig = Field(default_factory=CompileConfig)
-    activation_checkpointing: ActivationCheckpointingConfig = Field(
-        default_factory=ActivationCheckpointingConfig
-    )
+    activation_checkpointing: ActivationCheckpointingConfig = Field(default_factory=ActivationCheckpointingConfig)
     tokenizer: ModelTokenizerConfig = Field(default_factory=ModelTokenizerConfig)
     backbone: BackboneConfig = Field(default_factory=BackboneConfig)
 
@@ -473,15 +479,12 @@ class SchedulerConfig(BaseModel):
     )
     f_start: list[float] = Field(
         default_factory=lambda: [1.0e-6],
-        description=(
-            "Initial LR multiplier at step 0, before warmup ramps up."
-        ),
+        description=("Initial LR multiplier at step 0, before warmup ramps up."),
     )
     verbosity_interval: int = Field(
         default=0,
         description=(
-            "How often the scheduler logs the current LR (in optimizer "
-            "steps). 0 = silent. VFM only — skipped on VLM."
+            "How often the scheduler logs the current LR (in optimizer steps). 0 = silent. VFM only — skipped on VLM."
         ),
     )
     warm_up_steps: list[int] = Field(
@@ -533,8 +536,7 @@ class GradClipCallback(BaseModel):
     clip_norm: float = Field(
         default=1.0,
         description=(
-            "Maximum global L2 norm of the gradient. Steps with a larger "
-            "norm are rescaled so ||grad|| ≤ clip_norm."
+            "Maximum global L2 norm of the gradient. Steps with a larger norm are rescaled so ||grad|| ≤ clip_norm."
         ),
     )
     force_finite: bool = Field(
@@ -547,8 +549,86 @@ class GradClipCallback(BaseModel):
     )
 
 
+class WorkflowStatusCallbackConfig(BaseModel):
+    """Cosmos-compatible lifecycle and training/validation metric logging."""
+
+    model_config = _PYDANTIC_MODEL_CONFIG
+
+    enabled: bool = Field(default=False, description="Enable Cosmos status.json logging.")
+    status_file_path: Optional[str] = Field(
+        default=None,
+        description=(
+            "Explicit status.json path. When unset, COSMOS_JOB_ID/COSMOS_RESULTS_ROOT, "
+            "legacy Cosmos API variables, then job.path_local are used."
+        ),
+    )
+    experiment_name: str = Field(
+        default="",
+        description="Cosmos component name. Empty uses job.name.",
+    )
+    logging_interval: int = Field(
+        default=1,
+        ge=1,
+        description="Multiplier applied to trainer.logging_iter for Cosmos training records.",
+    )
+    validation_heartbeat_interval: int = Field(
+        default=1,
+        ge=1,
+        description="Write validation progress every N validation batches.",
+    )
+
+
+class LossSpikeRollbackCallback(BaseModel):
+    """Gradient-norm spike guard. Rewinds past a spike instead of training through it."""
+
+    model_config = _PYDANTIC_MODEL_CONFIG
+
+    enabled: bool = Field(
+        default=False,
+        description=(
+            "Rewind the model when the gradient norm spikes. Defaults off because the snapshot "
+            "ring scales with the TRAINABLE parameter count: roughly 1.2GB for a rank-64 LoRA "
+            "adapter, but hundreds of GB for full fine-tuning of an 8B model. Turn on for PEFT."
+        ),
+    )
+    grad_norm_factor: float = Field(
+        default=10.0,
+        description=(
+            "Trip when the gradient norm exceeds this multiple of the median of the recent window. "
+            "Relative rather than absolute because the healthy norm drifts over a run."
+        ),
+    )
+    window: int = Field(default=50, description="Number of recent gradient norms the median is taken over.")
+    min_observations: int = Field(
+        default=12,
+        description=(
+            "Steps to observe before the guard arms. Too high and an early spike passes unseen; "
+            "a 30-step arming window missed a real spike at step 27."
+        ),
+    )
+    rollback_depth: int = Field(
+        default=4,
+        description=(
+            "Snapshots retained. Restoring the OLDEST discards the several steps before the spike "
+            "as well, which is deliberate: the gradient norm leads the loss, so by the time it "
+            "trips, nearby earlier steps are already contaminated."
+        ),
+    )
+    max_consecutive: int = Field(
+        default=8,
+        description=(
+            "Consecutive rollbacks before standing down. Once a run has genuinely diverged every "
+            "norm looks like a spike, and a guard that never yields freezes training instead of "
+            "rescuing it."
+        ),
+    )
+    lr_backoff: float = Field(default=0.5, description="Learning-rate multiplier applied on each rollback.")
+    lr_recovery: float = Field(default=1.02, description="Per-clean-step multiplier walking the rate back to base.")
+    lr_min_scale: float = Field(default=0.1, description="Floor on the learning-rate scale, as a fraction of base.")
+
+
 class TrainerCallbacksConfig(BaseModel):
-    """Only the two callbacks the schema currently surfaces. The full
+    """Callbacks surfaced by the structured TOML schema. The full
     callbacks dict (norm_monitor, mfu, heart_beat, …) stays in the
     experiment Python.
     """
@@ -557,6 +637,8 @@ class TrainerCallbacksConfig(BaseModel):
 
     compile_tokenizer: CompileTokenizerCallback = Field(default_factory=CompileTokenizerCallback)
     grad_clip: GradClipCallback = Field(default_factory=GradClipCallback)
+    loss_spike_rollback: LossSpikeRollbackCallback = Field(default_factory=LossSpikeRollbackCallback)
+    workflow_status: WorkflowStatusCallbackConfig = Field(default_factory=WorkflowStatusCallbackConfig)
 
 
 class TrainerConfig(BaseModel):
@@ -567,8 +649,7 @@ class TrainerConfig(BaseModel):
     distributed_parallelism: str = Field(
         default="fsdp",
         description=(
-            "Distributed strategy. 'fsdp' (the only supported value today) "
-            "routes through cosmos's FSDP wrapper."
+            "Distributed strategy. 'fsdp' (the only supported value today) routes through cosmos's FSDP wrapper."
         ),
     )
     grad_accum_iter: int = Field(
@@ -586,6 +667,39 @@ class TrainerConfig(BaseModel):
     max_iter: int = Field(
         default=500,
         description="Total number of optimizer steps the run will execute.",
+    )
+    num_epochs: Optional[int] = Field(
+        default=None,
+        ge=1,
+        description="Number of complete training epochs. Requires steps_per_epoch and takes priority over max_iter.",
+    )
+    steps_per_epoch: Optional[int] = Field(
+        default=None,
+        ge=1,
+        description="Optimizer updates in one training epoch.",
+    )
+    max_val_iter: Optional[int] = Field(
+        default=None,
+        ge=1,
+        description="Maximum validation batches per validation pass. None consumes a finite validation loader.",
+    )
+    run_validation: bool = Field(
+        default=False,
+        description="Enable validation during training.",
+    )
+    validation_iter: int = Field(
+        default=100,
+        ge=1,
+        description="Run validation every N optimizer steps.",
+    )
+    validation_freq_in_epoch: int = Field(
+        default=0,
+        ge=0,
+        description="Validate every N completed epochs; 0 uses validation_iter.",
+    )
+    run_validation_on_start: bool = Field(
+        default=False,
+        description="Run one validation pass before the first training step.",
     )
     callbacks: TrainerCallbacksConfig = Field(default_factory=TrainerCallbacksConfig)
 
@@ -617,6 +731,18 @@ class CheckpointConfig(BaseModel):
     save_iter: int = Field(
         default=100,
         description="Save a new checkpoint every N optimizer steps.",
+    )
+    save_freq_in_epoch: int = Field(
+        default=0,
+        ge=0,
+        description="Save every N completed epochs; 0 uses save_iter.",
+    )
+    dcp_async_mode_enabled: bool = Field(
+        default=True,
+        description=(
+            "Stage distributed checkpoints to a background process. Set false "
+            "for synchronous checkpoint completion before training continues."
+        ),
     )
 
 
@@ -658,10 +784,7 @@ class DataloaderTrainConfig(BaseModel):
     )
     seed: int = Field(
         default=42,
-        description=(
-            "Dataloader RNG seed. Skipped on VLM (CosmosDataLoader has "
-            "no seed ctor kwarg there)."
-        ),
+        description=("Dataloader RNG seed. Skipped on VLM (CosmosDataLoader has no seed ctor kwarg there)."),
     )
 
 
@@ -746,8 +869,7 @@ def load_experiment_from_toml(
         base_config_path = TASK_TO_BASE_CONFIG[task]
     except KeyError as e:
         raise ValueError(
-            f"{toml_path}: [job].task={task!r} is not supported. "
-            f"Valid values: {sorted(TASK_TO_BASE_CONFIG)}"
+            f"{toml_path}: [job].task={task!r} is not supported. Valid values: {sorted(TASK_TO_BASE_CONFIG)}"
         ) from e
 
     overrides = build_hydra_overrides(raw)
@@ -759,10 +881,7 @@ def load_experiment_from_toml(
             if not o or o == "--":
                 continue
             if "=" not in o:
-                raise ValueError(
-                    f"extra override {o!r} must be Hydra dotted-path syntax "
-                    f"(e.g. 'optimizer.lr=1e-5')."
-                )
+                raise ValueError(f"extra override {o!r} must be Hydra dotted-path syntax (e.g. 'optimizer.lr=1e-5').")
             overrides.append(o)
 
     # Import lazily so this module stays cheap to import in non-training contexts.

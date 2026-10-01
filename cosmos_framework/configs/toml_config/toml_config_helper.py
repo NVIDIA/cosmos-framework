@@ -52,6 +52,12 @@ PATH_REMAPS: dict[str, dict[tuple[str, ...], "tuple[str, ...] | None"]] = {
         ("job", "upload_reproducible_setup"): ("upload_reproducible_setup",),
         ("model", "attn_implementation"): None,
         ("model", "backbone"): None,                                           # VLM-only — VFM has no model.config.backbone
+        ("model", "lora_dropout"): None,
+        ("model", "lora_bias"): None,
+        ("model", "lora_use_rslora"): None,
+        ("model", "lora_modules_to_save"): None,
+        ("model", "lora_precision"): None,
+        ("model", "qwen3_vl_patch_embed"): None,
         # Per-caption token cap lives on the nested SFT dataset, not a top-level
         # dataloader scalar — route it to the get_sft_dataset node.
         ("dataloader_train", "max_caption_tokens"): (
@@ -72,10 +78,16 @@ PATH_REMAPS: dict[str, dict[tuple[str, ...], "tuple[str, ...] | None"]] = {
         # No VLM analog — skip these leaves
         ("model", "max_num_tokens_after_packing"): None,
         ("model", "joint_attn_implementation"): None,
-        ("model", "lora_enabled"): None,
-        ("model", "lora_rank"): None,
-        ("model", "lora_alpha"): None,
-        ("model", "lora_target_modules"): None,
+        ("model", "lora_enabled"): ("model", "config", "policy", "lora_enabled"),
+        ("model", "lora_rank"): ("model", "config", "policy", "lora_rank"),
+        ("model", "lora_alpha"): ("model", "config", "policy", "lora_alpha"),
+        ("model", "lora_dropout"): ("model", "config", "policy", "lora_dropout"),
+        ("model", "lora_target_modules"): ("model", "config", "policy", "lora_target_modules"),
+        ("model", "lora_bias"): ("model", "config", "policy", "lora_bias"),
+        ("model", "lora_use_rslora"): ("model", "config", "policy", "lora_use_rslora"),
+        ("model", "lora_modules_to_save"): ("model", "config", "policy", "lora_modules_to_save"),
+        ("model", "lora_precision"): ("model", "config", "policy", "lora_precision"),
+        ("model", "qwen3_vl_patch_embed"): ("model", "config", "policy", "qwen3_vl_patch_embed"),
         ("model", "tokenizer"): None,                                          # blocks model.tokenizer.*
         ("dataloader_train", "seed"): None,
         ("optimizer", "eps"): None,                                            # VLM_OPTIMIZER_KWARGS has no eps field
@@ -208,5 +220,3 @@ def _hydra_format(v: Any, in_list: bool = False) -> str:
             return f"'{v}'"
         return v
     return str(v)
-
-

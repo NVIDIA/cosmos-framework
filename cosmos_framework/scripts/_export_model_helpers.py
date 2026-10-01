@@ -409,6 +409,13 @@ def read_framework_commit(start: Path | None = None) -> str | None:
     current = (start or Path(__file__)).resolve()
     for parent in [current, *current.parents]:
         git_dir = parent / ".git"
+        if git_dir.is_file():
+            try:
+                directive = git_dir.read_text().strip()
+            except OSError:
+                return None
+            if directive.startswith("gitdir:"):
+                git_dir = (parent / directive.removeprefix("gitdir:").strip()).resolve()
         if git_dir.is_dir():
             return _read_git_head(git_dir)
     return None
@@ -422,6 +429,13 @@ def _read_git_head(git_dir: Path) -> str | None:
     if not head.startswith("ref:"):
         return head or None
     ref = head.removeprefix("ref:").strip()
+    # Linked worktrees keep HEAD locally but share branch refs and packed refs.
+    common_dir_file = git_dir / "commondir"
+    if common_dir_file.is_file():
+        try:
+            git_dir = (git_dir / common_dir_file.read_text().strip()).resolve()
+        except OSError:
+            return None
     ref_file = git_dir / ref
     if ref_file.is_file():
         return ref_file.read_text().strip() or None
