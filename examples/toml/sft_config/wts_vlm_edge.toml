@@ -1,0 +1,95 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: OpenMDW-1.1
+
+# WTS video-QA SFT on the native Cosmos3-Edge reasoner checkpoint.
+# This checked-in recipe is a 10-step-per-epoch smoke run. Set
+# trainer.steps_per_epoch to the distributed update count for a production dataset.
+
+[job]
+task       = "vlm"
+experiment = "wts_vlm_edge"
+project    = "cosmos3_reasoner"
+group      = "wts_edge_sft"
+name       = "wts_vlm_edge"
+wandb_mode = "disabled"
+
+[model]
+attn_implementation = "flash_attention_2"
+precision = "bfloat16"
+
+[model.backbone]
+model_name = "${oc.env:VLM_SAFETENSORS_PATH}"
+safetensors_path = "${oc.env:VLM_SAFETENSORS_PATH}"
+
+[model.ema]
+enabled = false
+rate = 0.1
+iteration_shift = 0
+
+[model.parallelism]
+data_parallel_shard_degree = 4
+data_parallel_replicate_degree = 1
+context_parallel_shard_degree = 1
+cfg_parallel_shard_degree = 1
+
+[model.compile]
+enabled = false
+compile_dynamic = true
+
+[model.activation_checkpointing]
+mode = "full"
+save_ops_regex = ["fmha"]
+preserve_rng_state = true
+determinism_check = "default"
+
+[optimizer]
+betas = [0.9, 0.999]
+eps = 1.0e-8
+fused = true
+lr = 1.0e-4
+weight_decay = 0.01
+
+[scheduler]
+cycle_lengths = [20]
+f_max = [1.0]
+f_min = [0.0]
+f_start = [0.0]
+verbosity_interval = 0
+warm_up_steps = [0]
+
+[trainer]
+distributed_parallelism = "fsdp"
+grad_accum_iter = 1
+logging_iter = 1
+max_iter = 20
+num_epochs = 2
+steps_per_epoch = 10
+max_val_iter = 10
+run_validation = true
+validation_iter = 10
+validation_freq_in_epoch = 1
+run_validation_on_start = false
+
+[trainer.callbacks.compile_tokenizer]
+compile_after_iterations = 3
+enabled = false
+
+[trainer.callbacks.grad_clip]
+clip_norm = 1.0
+force_finite = false
+
+[trainer.callbacks.tao]
+enabled = true
+experiment_name = "Cosmos Framework WTS Edge SFT"
+logging_interval = 1
+validation_heartbeat_interval = 1
+
+[checkpoint]
+keys_to_skip_loading = []
+load_path = "???"
+save_iter = 100
+save_freq_in_epoch = 2
+
+[dataloader_train]
+max_samples_per_batch = 1
+max_sequence_length = 16000
