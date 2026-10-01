@@ -214,12 +214,11 @@ def _fused_linear_ce_sum(
     hidden: torch.Tensor, weight: torch.Tensor, labels: torch.Tensor, ignore_index: int
 ) -> torch.Tensor:
     """Use Liger's scalar reduction; reduction='none' has incompatible backward semantics."""
-    from liger_kernel.ops.fused_linear_cross_entropy import LigerFusedLinearCrossEntropyFunction
+    from liger_kernel.transformers.functional import liger_fused_linear_cross_entropy
 
-    loss, _, _ = LigerFusedLinearCrossEntropyFunction.apply(
-        hidden, weight, labels, None, None, ignore_index, 0.0, 0.0, "sum", None, False, torch.float32, False, False
+    return liger_fused_linear_cross_entropy(
+        hidden, weight, labels, ignore_index=ignore_index, reduction="sum", accum_dtype=torch.float32
     )
-    return loss
 
 
 def fused_weighted_cross_entropy_loss(
