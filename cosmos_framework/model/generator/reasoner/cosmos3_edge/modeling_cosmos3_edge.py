@@ -523,8 +523,13 @@ class Cosmos3EdgeModel(Cosmos3EdgePreTrainedModel):
                 mrope_position_deltas.append(llm_positions.max() + 1 - len(input_ids))
             mrope_position_deltas = torch.tensor(mrope_position_deltas, device=input_ids.device).unsqueeze(1)
             if cu_seqlens is None:
-                # Batching on second dim (batch) for batch seq
-                position_ids = pad_sequence(position_ids, batch_first=False, padding_value=1)
+                # Batching on second dim (batch) for batch seq. Each entry is
+                # (3, L_i); pad_sequence needs the variable length first, so
+                # transpose to (L_i, 3), pad to (L_max, batch, 3), and permute
+                # back to (3, batch, L_max).
+                position_ids = pad_sequence(
+                    [p.transpose(0, 1) for p in position_ids], batch_first=False, padding_value=1
+                ).permute(2, 1, 0)
             else:
                 # Concat on last dim (seq_len) for packing seq
                 position_ids = torch.cat(position_ids, dim=-1)
