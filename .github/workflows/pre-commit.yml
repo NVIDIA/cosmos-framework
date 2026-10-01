@@ -19,4 +19,22 @@ jobs:
       - uses: actions/setup-python@v6
       - uses: astral-sh/setup-uv@v7
       - run: uvx pre-commit@4.5.1 run -a -c ci/.pre-commit-config-base.yaml
+      # The pinned hook requires rumdl 0.1.62, which has no PyPI distribution.
+      # Build the genuine release without changing the hook or formatter version.
+      - name: Build pinned rumdl wheel
+        env:
+          RUSTUP_HOME: ${{ runner.temp }}/rumdl-rustup
+          CARGO_HOME: ${{ runner.temp }}/rumdl-cargo
+          RUSTUP_TOOLCHAIN: '1.94.0'
+        run: |
+          git init "$RUNNER_TEMP/rumdl-source"
+          git -C "$RUNNER_TEMP/rumdl-source" fetch --depth=1 https://github.com/rvben/rumdl.git 8e22c9b16f49c7209355106f731500cc1aacef20
+          git -C "$RUNNER_TEMP/rumdl-source" checkout --detach FETCH_HEAD
+          rustup toolchain install "$RUSTUP_TOOLCHAIN" --profile minimal --no-self-update
+          uvx maturin@1.15.0 build --release --locked \
+            --manifest-path "$RUNNER_TEMP/rumdl-source/Cargo.toml" \
+            --out "$RUNNER_TEMP/rumdl-wheels"
+          uvx --no-index --find-links "$RUNNER_TEMP/rumdl-wheels" rumdl@0.1.62 --version
       - run: uvx pre-commit@4.5.1 run -a
+        env:
+          PIP_FIND_LINKS: ${{ runner.temp }}/rumdl-wheels
