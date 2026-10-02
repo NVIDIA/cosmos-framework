@@ -146,3 +146,46 @@ Eval parity — the client/server already handle these; verify if accuracy is lo
   rotates them back.
 - **Normalization** — start the server with `--action-normalization quantile_rot`
   and the bundled rot6d stats, or actions come out at the wrong scale.
+
+## 5. Cosmos3-Edge variant
+
+`action_policy_libero_edge` is the same libero_10 recipe on the public
+`nvidia/Cosmos3-Edge` base (dense Nemotron-2B-Dense-VL backbone). It differs
+from `action_policy_libero_nano` only in the model config (`EDGE_MODEL_CONFIG`)
+and one extra trainable key, `k_norm_und_for_gen`, as in `vision_sft_edge`.
+
+| Piece      | Path                                                                                             |
+| ---------- | ------------------------------------------------------------------------------------------------ |
+| Experiment | `cosmos_framework/configs/base/experiment/action/posttrain_config/action_policy_libero_edge.py` |
+| Run TOML   | `examples/toml/sft_config/action_policy_libero_10_edge.toml`                                     |
+| Launch     | `examples/launch_sft_action_policy_libero_10_edge.sh`                                            |
+
+```bash
+python -m cosmos_framework.scripts.convert_model_to_dcp \
+  -o examples/checkpoints/Cosmos3-Edge \
+  --checkpoint-path Cosmos3-Edge
+
+export BASE_CHECKPOINT_PATH=examples/checkpoints/Cosmos3-Edge
+export LIBERO_ROOT=<nfs>/LIBERO_LeRobot_v3/libero_10
+bash examples/launch_sft_action_policy_libero_10_edge.sh    # HSDP 2x8, as the Nano preset A
+```
+
+**One 8-GPU node:** set `data_parallel_replicate_degree = 1` and
+`grad_accum_iter = 2` in the TOML; the global batch stays 2048.
+
+**Validated so far:** a 50-iteration single-node smoke run (8× RTX PRO 6000
+Blackwell 96 GB, replicate 1, grad_accum 2, global batch 2048) trained at about
+79 s/iteration; loss went from 15.3 (iteration 1) to 3.6 (iteration 50) and the
+DCP checkpoint saved. A full 2000-iteration run and the closed-loop libero_10
+success rate have not been measured for Edge yet.
+
+**Outside the Docker image:** the data loader decodes LIBERO's AV1 videos with
+`torchcodec`, which dlopens NPP and FFmpeg shared libraries that the container
+provides on the system path. In a plain `uv sync` environment:
+
+- NPP: add `.venv/lib/python3.13/site-packages/nvidia/cu13/lib` to `LD_LIBRARY_PATH`
+  (otherwise `libnppicc.so.13: cannot open shared object file`).
+- FFmpeg with an AV1 decoder (`dav1d`): install system FFmpeg, or point
+  `LD_LIBRARY_PATH` at an FFmpeg 8 build that includes `libdav1d`. The FFmpeg
+  bundled in `opencv-python` has no AV1 decoder and fails with
+  `Could not push packet to decoder: Function not implemented`.
