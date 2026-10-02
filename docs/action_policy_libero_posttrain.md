@@ -154,11 +154,11 @@ Eval parity — the client/server already handle these; verify if accuracy is lo
 from `action_policy_libero_nano` only in the model config (`EDGE_MODEL_CONFIG`)
 and one extra trainable key, `k_norm_und_for_gen`, as in `vision_sft_edge`.
 
-| Piece      | Path                                                                                             |
-| ---------- | ------------------------------------------------------------------------------------------------ |
+| Piece      | Path                                                                                            |
+| ---------- | ----------------------------------------------------------------------------------------------- |
 | Experiment | `cosmos_framework/configs/base/experiment/action/posttrain_config/action_policy_libero_edge.py` |
-| Run TOML   | `examples/toml/sft_config/action_policy_libero_10_edge.toml`                                     |
-| Launch     | `examples/launch_sft_action_policy_libero_10_edge.sh`                                            |
+| Run TOML   | `examples/toml/sft_config/action_policy_libero_10_edge.toml`                                    |
+| Launch     | `examples/launch_sft_action_policy_libero_10_edge.sh`                                           |
 
 ```bash
 python -m cosmos_framework.scripts.convert_model_to_dcp \
