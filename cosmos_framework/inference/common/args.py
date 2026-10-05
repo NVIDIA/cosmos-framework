@@ -894,6 +894,7 @@ class SetupArgs(ABC, CheckpointArgs, ParallelismArgs, QuantizationArgs, Guardrai
     num_iterations: pydantic.PositiveInt
     max_model_len: pydantic.PositiveInt | None
     max_num_seqs: pydantic.PositiveInt | None
+    use_batched_cfg: bool
     diffusion_cache: bool
     diffusion_cache_thresh: float | None
     diffusion_cache_residual_order: int | None
@@ -950,6 +951,19 @@ class SetupOverrides(ABC, CheckpointOverrides, ParallelismOverrides, Quantizatio
     max_num_seqs: pydantic.PositiveInt | None = 1
     """Maximum number of sequences per batch.  When set, samples are packed into
     batches by number of sequences."""
+    use_batched_cfg: bool = False
+    """Run the conditional and unconditional CFG branches as a single batched
+    forward of size 2N instead of two sequential N-forwards.
+
+    This does not reduce the FLOPs CFG costs, so it only helps while a single
+    N-forward still leaves the GPU underutilized -- small images, short clips,
+    low step counts. Long or high-resolution workloads already saturate the
+    device, where batching gives nothing back and raises peak activation memory.
+    Disabled by default for that reason; enable with ``--use-batched-cfg`` once
+    you have measured the workload you care about.
+
+    Overridden to off when cfg-parallel (``cfgp_size > 1``) is selected, which
+    splits the same two branches across GPUs and takes precedence."""
     diffusion_cache: bool = False
     """Enable the diffusion-time inference cache.
     Shared inference setup disables the cache by default. The inference CLI enables

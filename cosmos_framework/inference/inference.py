@@ -1753,6 +1753,7 @@ class OmniInference(Inference):
                     has_negative_prompt=neg_key in data_batch,
                     n_sample=n_sample,
                     normalize_cfg=_getattr(sample_args_list, "normalize_cfg"),
+                    use_batched_cfg=self.setup_args.use_batched_cfg,
                     upsample_task=upsample_task,
                     upsample_max_new_tokens=_getattr(omni_sample_args_list, "prompt_upsampler_max_tokens"),
                     upsample_temperature=_getattr(omni_sample_args_list, "prompt_upsampler_temperature"),
