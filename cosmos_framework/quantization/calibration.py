@@ -244,7 +244,7 @@ def build_filter(
     """Return ``module_name -> True`` if its quantizers should be disabled."""
     tokens = [_BASE_SKIP_TOKENS_NO_LM if quantize_language_model else _BASE_SKIP_TOKENS]
     if skip_generation_quant:
-        tokens.append(r"gen_layers\.")
+        tokens.append(r"moe_gen")
     pattern = re.compile(r".*(" + "|".join(tokens) + r").*")
 
     def filter_func(name: str) -> bool:
