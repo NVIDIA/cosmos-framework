@@ -156,6 +156,44 @@ def test_build_parallelism(monkeypatch: pytest.MonkeyPatch):
     assert parallelism_args.compile_dynamic is False
 
 
+def test_batched_cfg_defaults_off_and_survives_single_gpu(tmp_path: Path) -> None:
+    """The flag reaches ``SetupArgs`` untouched when cfg-parallelism is absent."""
+    assert (
+        OmniSetupOverrides(checkpoint_path=DEFAULT_CHECKPOINT_NAME, output_dir=tmp_path / "outputs")
+        .build_setup(world_size=1, local_world_size=1, device_memory_bytes=_H100_MEMORY_BYTES)
+        .use_batched_cfg
+        is False
+    )
+    assert (
+        OmniSetupOverrides(
+            checkpoint_path=DEFAULT_CHECKPOINT_NAME,
+            output_dir=tmp_path / "outputs",
+            use_batched_cfg=True,
+        )
+        .build_setup(world_size=1, local_world_size=1, device_memory_bytes=_H100_MEMORY_BYTES)
+        .use_batched_cfg
+        is True
+    )
+
+
+def test_cfg_parallelism_overrides_batched_cfg() -> None:
+    """The two share the same cond/uncond pair, so only one may claim it.
+
+    The ``latency`` preset raises ``cfgp_size`` on its own, so a user who asked
+    for batched CFG can land here without having touched cfgp at all.
+    """
+    overrides = OmniSetupOverrides(
+        checkpoint_path=DEFAULT_CHECKPOINT_NAME,
+        output_dir="outputs",
+        model_memory_bytes=MODEL_MEMORY_BYTES_BY_SIZE["8B"],
+        parallelism_preset="latency",
+        use_batched_cfg=True,
+    )
+    overrides.build_parallelism(world_size=16, device_memory_bytes=_H100_MEMORY_BYTES)
+    assert overrides.cfgp_size == 2
+    assert overrides.use_batched_cfg is False
+
+
 def test_get_nvml_device_memory_info_prefers_v2(monkeypatch: pytest.MonkeyPatch):
     from cosmos_framework.inference import args
 

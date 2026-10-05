@@ -1432,6 +1432,9 @@ class OmniSetupOverrides(SetupOverrides):
             self.model_memory_bytes = MODEL_MEMORY_BYTES_BY_SIZE[self.model_size]
         self._build_model_parallelism(world_size=world_size, device_memory_bytes=device_memory_bytes)
         self._build_context_parallelism(world_size=world_size)
+        if self.cfgp_size > 1 and self.use_batched_cfg:
+            log.warning("CFG parallelism takes precedence over batched CFG; disabling batched CFG.")
+            self.use_batched_cfg = False
 
     @override
     def build_setup(
