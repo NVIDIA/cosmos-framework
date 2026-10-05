@@ -162,7 +162,11 @@ def test_migration_adds_no_new_skill_entrypoints(relocated):
     assert {p.parent.name for p in skills} == NEW_SKILLS
     for discovery in (".agents", ".claude"):
         links = (relocated.parents[1] / discovery / "skills").iterdir()
-        assert {link.name for link in links if link.is_symlink()} == NEW_SKILLS
+        # Other native Framework features may own independent discovery links.
+        # This migration must expose exactly its own distinct capabilities.
+        assert {
+            link.name for link in links if link.is_symlink() and link.resolve().is_relative_to(relocated)
+        } == NEW_SKILLS
     for skill in skills:
         frontmatter = yaml.safe_load(skill.read_text().split("---", 2)[1])
         assert frontmatter["name"] == skill.parent.name

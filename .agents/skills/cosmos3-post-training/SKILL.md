@@ -23,6 +23,7 @@ description: >
 
 ## When to use this skill
 
+- For bounded hyperparameter search across prepared reasoner SFT trials, use **cosmos-automl**. This skill remains the entrypoint for preparing or running an individual training recipe.
 - User wants to fine-tune Cosmos3-Nano (or Cosmos3-Super via LoRA) on the example Bridge video dataset or a custom video dataset (SFT)
 - User asks which fields in a recipe TOML to override (`[model.parallelism].data_parallel_shard_degree`, `[dataloader_train].max_samples_per_batch`, `[optimizer].lr`, `[trainer].max_iter`, `[checkpoint].load_path`, ...) or which experiment SKU to pick
 - User wants to convert a base Hugging Face checkpoint to DCP, or convert a trained DCP back to safetensors
